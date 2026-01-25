@@ -20,7 +20,7 @@ vi.mock('node:os', async () => {
 });
 
 // Mock the prompt to avoid interactive input
-vi.mock('../interactive/prompt.js', () => ({
+vi.mock('../prompt/index.js', () => ({
   selectOptionWithDefault: vi.fn().mockResolvedValue('ja'),
 }));
 

@@ -115,4 +115,12 @@ steps:
 - Strict TypeScript with `noUncheckedIndexedAccess`
 - Zod schemas for runtime validation (`src/models/schemas.ts`)
 - Uses `@anthropic-ai/claude-agent-sdk` for Claude integration
-- React/Ink for interactive terminal UI (`src/interactive/`)
+- Simple CLI prompts in `src/prompt/` for user interaction
+
+## Command Design Principles
+
+**Keep commands minimal.** Avoid proliferating commands. One command per concept.
+
+- Use a single command with arguments/modes instead of multiple similar commands
+- Example: `/config` opens permission mode selection. No need for `/sacrifice`, `/safe`, `/confirm`, etc.
+- Before adding a new command, consider if existing commands can be extended

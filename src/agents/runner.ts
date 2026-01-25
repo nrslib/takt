@@ -100,10 +100,11 @@ export async function runCustomAgent(
 
   // Custom agent with prompt
   const systemPrompt = loadAgentPrompt(agentConfig);
+  const tools = agentConfig.allowedTools || ['Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch'];
   const callOptions: ClaudeCallOptions = {
     cwd: options.cwd,
     sessionId: options.sessionId,
-    allowedTools: agentConfig.allowedTools || ['Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch'],
+    allowedTools: tools,
     model: options.model || agentConfig.model,
     statusPatterns: agentConfig.statusPatterns,
     onStream: options.onStream,

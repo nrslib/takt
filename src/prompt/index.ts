@@ -13,7 +13,7 @@ import chalk from 'chalk';
  */
 export async function selectOption<T extends string>(
   message: string,
-  options: { label: string; value: T }[]
+  options: { label: string; value: T; description?: string; details?: string[] }[]
 ): Promise<T | null> {
   const rl = readline.createInterface({
     input: process.stdin,
@@ -26,6 +26,16 @@ export async function selectOption<T extends string>(
 
   options.forEach((opt, idx) => {
     console.log(chalk.yellow(`  ${idx + 1}. `) + opt.label);
+    // Display description if provided
+    if (opt.description) {
+      console.log(chalk.gray(`     ${opt.description}`));
+    }
+    // Display additional details if provided
+    if (opt.details && opt.details.length > 0) {
+      opt.details.forEach((detail) => {
+        console.log(chalk.dim(`       • ${detail}`));
+      });
+    }
   });
   console.log(chalk.gray(`  0. Cancel`));
   console.log();

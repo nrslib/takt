@@ -10,6 +10,7 @@
  *   takt /switch      - Switch workflow interactively
  *   takt /clear       - Clear agent conversation sessions
  *   takt /help        - Show help
+ *   takt /config      - Select permission mode interactively
  */
 
 import { Command } from 'commander';
@@ -27,9 +28,10 @@ import {
   runAllTasks,
   showHelp,
   switchWorkflow,
+  switchConfig,
 } from './commands/index.js';
 import { listWorkflows } from './config/workflowLoader.js';
-import { selectOptionWithDefault } from './interactive/prompt.js';
+import { selectOptionWithDefault } from './prompt/index.js';
 import { DEFAULT_WORKFLOW_NAME } from './constants.js';
 
 const log = createLogger('cli');
@@ -97,9 +99,13 @@ program
           showHelp();
           return;
 
+        case 'config':
+          await switchConfig(cwd, args[0]);
+          return;
+
         default:
           error(`Unknown command: /${command}`);
-          info('Available: /run-tasks, /switch, /clear, /help');
+          info('Available: /run-tasks, /switch, /clear, /help, /config');
           process.exit(1);
       }
     }

@@ -8,7 +8,7 @@
 import { existsSync } from 'node:fs';
 import type { Language } from '../models/types.js';
 import { DEFAULT_LANGUAGE } from '../constants.js';
-import { selectOptionWithDefault } from '../interactive/prompt.js';
+import { selectOptionWithDefault } from '../prompt/index.js';
 import {
   getGlobalConfigDir,
   getGlobalAgentsDir,

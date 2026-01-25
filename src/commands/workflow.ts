@@ -5,7 +5,7 @@
 import { listWorkflows, loadWorkflow, getBuiltinWorkflow } from '../config/index.js';
 import { getCurrentWorkflow, setCurrentWorkflow } from '../config/paths.js';
 import { info, success, error } from '../utils/ui.js';
-import { selectOption } from '../interactive/prompt.js';
+import { selectOption } from '../prompt/index.js';
 
 /**
  * Get all available workflow options
