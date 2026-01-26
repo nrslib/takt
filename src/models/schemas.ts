@@ -23,7 +23,18 @@ export const StatusSchema = z.enum([
   'interrupted',
 ]);
 
-/** Transition condition schema */
+/**
+ * Transition condition schema
+ *
+ * WARNING: Do NOT add new values carelessly.
+ * Use existing values creatively in workflow design:
+ * - done: Task completed (minor fixes, successful completion)
+ * - blocked: Cannot proceed (needs plan rework)
+ * - approved: Review passed
+ * - rejected: Review failed, needs major rework
+ * - improve: Needs improvement (security concerns, quality issues)
+ * - always: Unconditional transition
+ */
 export const TransitionConditionSchema = z.enum([
   'done',
   'blocked',

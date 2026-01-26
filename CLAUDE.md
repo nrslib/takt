@@ -141,3 +141,11 @@ steps:
 ## Design Principles
 
 **Keep commands minimal.** One command per concept. Use arguments/modes instead of multiple similar commands. Before adding a new command, consider if existing commands can be extended.
+
+**Do NOT expand schemas carelessly.** The `TransitionConditionSchema` defines allowed condition values for workflow transitions. Do NOT add new values without strong justification. Use existing values creatively:
+- `done` - Task completed (minor fixes, successful completion)
+- `blocked` - Cannot proceed (needs plan rework)
+- `approved` - Review passed
+- `rejected` - Review failed, needs major rework
+- `improve` - Needs improvement (security concerns, quality issues)
+- `always` - Unconditional transition

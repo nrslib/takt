@@ -557,17 +557,17 @@ steps:
       ## 修正完了時の判断
       修正が完了したら、**変更の影響範囲**を判断して適切なタグを出力してください：
 
-      - `[CODER:MINOR]` - 軽微な修正（セキュリティレビューのみ再実施）
+      - `[CODER:DONE]` - 軽微な修正（セキュリティレビューのみ再実施）
         - 例: バリデーション追加、エスケープ処理追加、設定変更
-      - `[CODER:MAJOR]` - 大きな修正（CQRS+ESレビューからやり直し）
+      - `[CODER:REJECT]` - 大きな修正（CQRS+ESレビューからやり直し）
         - 例: データフロー変更、API設計変更、認証方式変更、ドメインモデル変更
 
       進行できない場合は [CODER:BLOCKED] を含めてください。
     pass_previous_response: true
     transitions:
-      - condition: minor
+      - condition: done
         next_step: security_review
-      - condition: major
+      - condition: rejected
         next_step: cqrs_es_review
       - condition: blocked
         next_step: plan
@@ -669,21 +669,21 @@ steps:
       ## 修正完了時の判断
       修正が完了したら、**変更の影響範囲**を判断して適切なタグを出力してください：
 
-      - `[CODER:MINOR]` - 軽微な修正（QAレビューのみ再実施）
+      - `[CODER:DONE]` - 軽微な修正（QAレビューのみ再実施）
         - 例: テスト追加、ドキュメント追加、ログ追加、コメント追加
-      - `[CODER:SECURITY]` - セキュリティに影響する修正（セキュリティレビューからやり直し）
+      - `[CODER:IMPROVE]` - セキュリティに影響する修正（セキュリティレビューからやり直し）
         - 例: エラーハンドリング変更（エラーメッセージの内容変更）、入力検証の変更
-      - `[CODER:MAJOR]` - 大きな修正（CQRS+ESレビューからやり直し）
+      - `[CODER:REJECT]` - 大きな修正（CQRS+ESレビューからやり直し）
         - 例: ビジネスロジック変更、データモデル変更、API変更
 
       進行できない場合は [CODER:BLOCKED] を含めてください。
     pass_previous_response: true
     transitions:
-      - condition: minor
+      - condition: done
         next_step: qa_review
-      - condition: security
+      - condition: improve
         next_step: security_review
-      - condition: major
+      - condition: rejected
         next_step: cqrs_es_review
       - condition: blocked
         next_step: plan

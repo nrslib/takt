@@ -557,17 +557,17 @@ steps:
       ## Completion: Determine Change Impact
       When fix is complete, judge the **impact scope of changes** and output the appropriate tag:
 
-      - `[CODER:MINOR]` - Minor fix (re-run security review only)
+      - `[CODER:DONE]` - Minor fix (re-run security review only)
         - Examples: Add validation, add escaping, configuration changes
-      - `[CODER:MAJOR]` - Major fix (restart from CQRS+ES review)
+      - `[CODER:REJECT]` - Major fix (restart from CQRS+ES review)
         - Examples: Data flow changes, API design changes, auth method changes, domain model changes
 
       Include [CODER:BLOCKED] if unable to proceed.
     pass_previous_response: true
     transitions:
-      - condition: minor
+      - condition: done
         next_step: security_review
-      - condition: major
+      - condition: rejected
         next_step: cqrs_es_review
       - condition: blocked
         next_step: plan
@@ -669,21 +669,21 @@ steps:
       ## Completion: Determine Change Impact
       When fix is complete, judge the **impact scope of changes** and output the appropriate tag:
 
-      - `[CODER:MINOR]` - Minor fix (re-run QA review only)
+      - `[CODER:DONE]` - Minor fix (re-run QA review only)
         - Examples: Add tests, add documentation, add logs, add comments
-      - `[CODER:SECURITY]` - Security-impacting fix (restart from security review)
+      - `[CODER:IMPROVE]` - Security-impacting fix (restart from security review)
         - Examples: Error handling changes (error message content changes), input validation changes
-      - `[CODER:MAJOR]` - Major fix (restart from CQRS+ES review)
+      - `[CODER:REJECT]` - Major fix (restart from CQRS+ES review)
         - Examples: Business logic changes, data model changes, API changes
 
       Include [CODER:BLOCKED] if unable to proceed.
     pass_previous_response: true
     transitions:
-      - condition: minor
+      - condition: done
         next_step: qa_review
-      - condition: security
+      - condition: improve
         next_step: security_review
-      - condition: major
+      - condition: rejected
         next_step: cqrs_es_review
       - condition: blocked
         next_step: plan
