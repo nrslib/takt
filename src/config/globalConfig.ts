@@ -30,6 +30,7 @@ export function loadGlobalConfig(): GlobalConfig {
     defaultWorkflow: parsed.default_workflow,
     logLevel: parsed.log_level,
     provider: parsed.provider,
+    model: parsed.model,
     debug: parsed.debug ? {
       enabled: parsed.debug.enabled,
       logFile: parsed.debug.log_file,
@@ -47,6 +48,9 @@ export function saveGlobalConfig(config: GlobalConfig): void {
     log_level: config.logLevel,
     provider: config.provider,
   };
+  if (config.model) {
+    raw.model = config.model;
+  }
   if (config.debug) {
     raw.debug = {
       enabled: config.debug.enabled,

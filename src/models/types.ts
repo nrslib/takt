@@ -66,6 +66,8 @@ export interface WorkflowStep {
   agentPath?: string;
   /** Provider override for this step */
   provider?: 'claude' | 'codex';
+  /** Model override for this step */
+  model?: string;
   instructionTemplate: string;
   transitions: WorkflowTransition[];
   passPreviousResponse: boolean;
@@ -143,6 +145,7 @@ export interface GlobalConfig {
   defaultWorkflow: string;
   logLevel: 'debug' | 'info' | 'warn' | 'error';
   provider?: 'claude' | 'codex';
+  model?: string;
   debug?: DebugConfig;
 }
 

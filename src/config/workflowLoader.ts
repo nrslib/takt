@@ -68,6 +68,7 @@ function normalizeWorkflowConfig(raw: unknown, workflowDir: string): WorkflowCon
     agentPath: resolveAgentPathForWorkflow(step.agent, workflowDir),
     allowedTools: step.allowed_tools,
     provider: step.provider,
+    model: step.model,
     instructionTemplate: step.instruction_template || step.instruction || '{task}',
     transitions: step.transitions.map((t) => ({
       condition: t.condition,

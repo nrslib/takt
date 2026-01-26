@@ -6,6 +6,7 @@
   "types": "dist/index.d.ts",
   "bin": {
     "takt": "./bin/takt",
+    "takt-dev": "./bin/takt",
     "takt-cli": "./dist/cli.js"
   },
   "scripts": {

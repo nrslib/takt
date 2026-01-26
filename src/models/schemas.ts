@@ -61,6 +61,7 @@ export const WorkflowStepRawSchema = z.object({
   agent_name: z.string().optional(),
   allowed_tools: z.array(z.string()).optional(),
   provider: z.enum(['claude', 'codex']).optional(),
+  model: z.string().optional(),
   instruction: z.string().optional(),
   instruction_template: z.string().optional(),
   pass_previous_response: z.boolean().optional().default(true),
@@ -115,6 +116,7 @@ export const GlobalConfigSchema = z.object({
   default_workflow: z.string().optional().default('default'),
   log_level: z.enum(['debug', 'info', 'warn', 'error']).optional().default('info'),
   provider: z.enum(['claude', 'codex']).optional().default('claude'),
+  model: z.string().optional(),
   debug: DebugConfigSchema.optional(),
 });
 

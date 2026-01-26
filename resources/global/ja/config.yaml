@@ -16,6 +16,11 @@ log_level: info
 # プロバイダー: claude または codex
 provider: claude
 
+# デフォルトモデル (オプション)
+# Claude: opus, sonnet, haiku, opusplan, default, またはフルモデル名
+# Codex: gpt-5.2-codex, gpt-5.1-codex など
+# model: sonnet
+
 # デバッグ設定 (オプション)
 # debug:
 #   enabled: false

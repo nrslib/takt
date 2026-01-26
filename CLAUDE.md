@@ -107,6 +107,8 @@ steps:
   - name: step-name
     agent: ~/.takt/agents/default/coder.md  # Path to agent prompt
     agent_name: coder                       # Display name (optional)
+    provider: codex                         # claude|codex (optional)
+    model: opus                             # Model name (optional)
     instruction_template: |
       {task}
       {previous_response}
@@ -130,6 +132,21 @@ steps:
 | `{user_inputs}` | Accumulated user inputs during workflow |
 | `{git_diff}` | Current git diff (uncommitted changes) |
 | `{report_dir}` | Report directory name (e.g., `20250126-143052-task-summary`) |
+
+### Model Resolution
+
+Model is resolved in the following priority order:
+
+1. **Workflow step `model`** - Highest priority (specified in step YAML)
+2. **Custom agent `model`** - Agent-level model in `.takt/agents.yaml`
+3. **Global config `model`** - Default model in `~/.takt/config.yaml`
+4. **Provider default** - Falls back to provider's default (Claude: sonnet, Codex: gpt-5.2-codex)
+
+Example `~/.takt/config.yaml`:
+```yaml
+provider: claude
+model: opus          # Default model for all steps (unless overridden)
+```
 
 ## TypeScript Notes
 

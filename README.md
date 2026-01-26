@@ -1,12 +1,18 @@
 # TAKT
 
-**T**ask **A**gent **K**oordination **T**ool - Multi-agent orchestration system for Claude Code (Codex support planned).
+🇯🇵 [日本語ドキュメント](./docs/README.ja.md)
+
+**T**ask **A**gent **K**oordination **T**ool - Multi-agent orchestration system for Claude Code and OpenAI Codex.
 
 > **Note**: This project is developed at my own pace. See [Disclaimer](#disclaimer) for details.
 
+TAKT is built with TAKT (dogfooding).
+
 ## Requirements
 
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) must be installed and configured
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or Codex must be installed and configured
+
+TAKT supports both Claude Code and Codex as providers; you can choose the provider during setup.
 
 ## Installation
 
@@ -50,8 +56,20 @@ name: default
 max_iterations: 10
 
 steps:
+  - name: plan
+    agent: planner
+    provider: claude         # Optional: claude or codex
+    model: opus              # Claude: opus/sonnet/haiku, Codex: gpt-5.2-codex/gpt-5.1-codex
+    instruction_template: |
+      {task}
+    transitions:
+      - condition: done
+        next_step: implement
+
   - name: implement
     agent: coder
+    provider: codex
+    model: gpt-5.2-codex     # Codex model example
     instruction_template: |
       {task}
     transitions:
@@ -62,6 +80,7 @@ steps:
 
   - name: review
     agent: architect
+    model: sonnet            # Model alias (no provider = uses global default)
     transitions:
       - condition: approved
         next_step: COMPLETE
@@ -84,19 +103,75 @@ agents:
   - name: my-reviewer
     prompt_file: .takt/prompts/reviewer.md
     allowed_tools: [Read, Glob, Grep]
+    provider: claude             # Optional: claude or codex
+    model: opus                  # Claude: opus/sonnet/haiku or full name (claude-opus-4-5-20251101)
     status_patterns:
       approved: "\\[APPROVE\\]"
       rejected: "\\[REJECT\\]"
+
+  - name: my-codex-agent
+    prompt_file: .takt/prompts/analyzer.md
+    provider: codex
+    model: gpt-5.2-codex         # Codex: gpt-5.2-codex, gpt-5.1-codex, etc.
 ```
+
+## Model Selection
+
+### Claude Models
+
+You can specify models using either **aliases** or **full model names**:
+
+**Aliases** (recommended for simplicity):
+- `opus` - Claude Opus 4.5 (highest reasoning capability)
+- `sonnet` - Claude Sonnet 4.5 (balanced, best for most tasks)
+- `haiku` - Claude Haiku 4.5 (fast and efficient)
+- `opusplan` - Opus for planning, Sonnet for execution
+- `default` - Recommended model for your account type
+
+**Full model names** (recommended for production):
+- `claude-opus-4-5-20251101`
+- `claude-sonnet-4-5-20250929`
+- `claude-haiku-4-5-20250101`
+
+### Codex Models
+
+Available Codex models:
+- `gpt-5.2-codex` - Latest agentic coding model (default)
+- `gpt-5.1-codex` - Previous generation
+- `gpt-5.1-codex-max` - Optimized for long-running tasks
+- `gpt-5.1-codex-mini` - Smaller, cost-effective version
+- `codex-1` - Specialized model aligned with coding preferences
 
 ## Project Structure
 
 ```
 ~/.takt/
-├── config.yaml          # Global config
+├── config.yaml          # Global config (provider, model, workflows, etc.)
 ├── workflows/           # Workflow definitions
 └── agents/              # Agent prompt files
 ```
+
+### Global Configuration
+
+Configure default provider and model in `~/.takt/config.yaml`:
+
+```yaml
+# ~/.takt/config.yaml
+language: en
+default_workflow: default
+log_level: info
+provider: claude         # Default provider: claude or codex
+model: sonnet            # Default model (optional)
+trusted_directories:
+  - /path/to/trusted/dir
+```
+
+**Model Resolution Priority:**
+1. Workflow step `model` (highest priority)
+2. Custom agent `model`
+3. Global config `model`
+4. Provider default (Claude: sonnet, Codex: gpt-5.2-codex)
+
 
 ## Practical Usage Guide
 
@@ -296,7 +371,6 @@ This ensures the project works correctly in a clean Node.js 20 environment.
 
 ## Documentation
 
-- 🇯🇵 [日本語ドキュメント](./docs/README.ja.md) - Japanese documentation
 - [Workflow Guide](./docs/workflows.md) - Create and customize workflows
 - [Agent Guide](./docs/agents.md) - Configure custom agents
 - [Changelog](./CHANGELOG.md) - Version history

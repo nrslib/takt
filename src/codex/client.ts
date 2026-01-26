@@ -367,6 +367,7 @@ export async function callCodex(
 
     const { events } = await thread.runStreamed(fullPrompt);
     let content = '';
+    const contentOffsets = new Map<string, number>();
     let success = true;
     let failureMessage = '';
     const startedItems = new Set<string>();
@@ -406,6 +407,20 @@ export async function callCodex(
       if (event.type === 'item.updated') {
         const item = event.item as CodexItem | undefined;
         if (item) {
+          if (item.type === 'agent_message' && typeof item.text === 'string') {
+            const itemId = item.id;
+            const text = item.text;
+            if (itemId) {
+              const prev = contentOffsets.get(itemId) ?? 0;
+              if (text.length > prev) {
+                if (prev === 0 && content.length > 0) {
+                  content += '\n';
+                }
+                content += text.slice(prev);
+                contentOffsets.set(itemId, text.length);
+              }
+            }
+          }
           emitCodexItemUpdate(item, options.onStream, startedItems, outputOffsets, textOffsets, thinkingOffsets);
         }
         continue;
@@ -415,7 +430,23 @@ export async function callCodex(
         const item = event.item as CodexItem | undefined;
         if (item) {
           if (item.type === 'agent_message' && typeof item.text === 'string') {
-            content = item.text;
+            const itemId = item.id;
+            const text = item.text;
+            if (itemId) {
+              const prev = contentOffsets.get(itemId) ?? 0;
+              if (text.length > prev) {
+                if (prev === 0 && content.length > 0) {
+                  content += '\n';
+                }
+                content += text.slice(prev);
+                contentOffsets.set(itemId, text.length);
+              }
+            } else if (text) {
+              if (content.length > 0) {
+                content += '\n';
+              }
+              content += text;
+            }
           }
           emitCodexItemCompleted(
             item,

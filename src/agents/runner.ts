@@ -54,6 +54,18 @@ function resolveProvider(cwd: string, options?: RunAgentOptions, agentConfig?: C
   return 'claude';
 }
 
+function resolveModel(cwd: string, options?: RunAgentOptions, agentConfig?: CustomAgentConfig): string | undefined {
+  if (options?.model) return options.model;
+  if (agentConfig?.model) return agentConfig.model;
+  try {
+    const globalConfig = loadGlobalConfig();
+    if (globalConfig.model) return globalConfig.model;
+  } catch {
+    // Ignore missing global config
+  }
+  return undefined;
+}
+
 /** Get git diff for review context */
 export function getGitDiff(cwd: string): string {
   try {
@@ -91,7 +103,7 @@ export async function runCustomAgent(
       cwd: options.cwd,
       sessionId: options.sessionId,
       allowedTools,
-      model: options.model || agentConfig.model,
+      model: resolveModel(options.cwd, options, agentConfig),
       onStream: options.onStream,
       onPermissionRequest: options.onPermissionRequest,
       onAskUserQuestion: options.onAskUserQuestion,
@@ -106,7 +118,7 @@ export async function runCustomAgent(
       cwd: options.cwd,
       sessionId: options.sessionId,
       allowedTools,
-      model: options.model || agentConfig.model,
+      model: resolveModel(options.cwd, options, agentConfig),
       onStream: options.onStream,
       onPermissionRequest: options.onPermissionRequest,
       onAskUserQuestion: options.onAskUserQuestion,
@@ -119,11 +131,12 @@ export async function runCustomAgent(
   const systemPrompt = loadAgentPrompt(agentConfig);
   const tools = allowedTools;
   const provider = resolveProvider(options.cwd, options, agentConfig);
+  const model = resolveModel(options.cwd, options, agentConfig);
   if (provider === 'codex') {
     const callOptions: CodexCallOptions = {
       cwd: options.cwd,
       sessionId: options.sessionId,
-      model: options.model || agentConfig.model,
+      model,
       statusPatterns: agentConfig.statusPatterns,
       onStream: options.onStream,
     };
@@ -134,7 +147,7 @@ export async function runCustomAgent(
       cwd: options.cwd,
       sessionId: options.sessionId,
       allowedTools: tools,
-      model: options.model || agentConfig.model,
+      model,
       statusPatterns: agentConfig.statusPatterns,
     onStream: options.onStream,
     onPermissionRequest: options.onPermissionRequest,
@@ -196,12 +209,13 @@ export async function runAgent(
     const systemPrompt = loadAgentPromptFromPath(options.agentPath);
     const tools = options.allowedTools;
     const provider = resolveProvider(options.cwd, options);
+    const model = resolveModel(options.cwd, options);
 
     if (provider === 'codex') {
       const callOptions: CodexCallOptions = {
         cwd: options.cwd,
         sessionId: options.sessionId,
-        model: options.model,
+        model,
         systemPrompt,
         onStream: options.onStream,
       };
@@ -212,7 +226,7 @@ export async function runAgent(
       cwd: options.cwd,
       sessionId: options.sessionId,
       allowedTools: tools,
-      model: options.model,
+      model,
       systemPrompt,
       onStream: options.onStream,
       onPermissionRequest: options.onPermissionRequest,
