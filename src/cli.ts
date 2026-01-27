@@ -29,6 +29,7 @@ import {
   showHelp,
   switchWorkflow,
   switchConfig,
+  addTask,
 } from './commands/index.js';
 import { listWorkflows } from './config/workflowLoader.js';
 import { selectOptionWithDefault } from './prompt/index.js';
@@ -104,9 +105,13 @@ program
           await switchConfig(cwd, args[0]);
           return;
 
+        case 'add-task':
+          await addTask(cwd, args);
+          return;
+
         default:
           error(`Unknown command: /${command}`);
-          info('Available: /run-tasks, /switch, /clear, /help, /config');
+          info('Available: /run-tasks, /add-task, /switch, /clear, /help, /config');
           process.exit(1);
       }
     }

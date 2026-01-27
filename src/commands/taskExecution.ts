@@ -3,7 +3,8 @@
  */
 
 import { loadWorkflow } from '../config/index.js';
-import { TaskRunner } from '../task/index.js';
+import { TaskRunner, type TaskInfo } from '../task/index.js';
+import { createWorktree } from '../task/worktree.js';
 import {
   header,
   info,
@@ -61,7 +62,7 @@ export async function runAllTasks(
 
   if (!task) {
     info('No pending tasks in .takt/tasks/');
-    info('Create task files as .takt/tasks/*.md');
+    info('Create task files as .takt/tasks/*.yaml or use takt /add-task');
     return;
   }
 
@@ -79,7 +80,10 @@ export async function runAllTasks(
     const executionLog: string[] = [];
 
     try {
-      const taskSuccess = await executeTask(task.content, cwd, workflowName);
+      // Resolve execution directory and workflow from task data
+      const { execCwd, execWorkflow } = resolveTaskExecution(task, cwd, workflowName);
+
+      const taskSuccess = await executeTask(task.content, execCwd, execWorkflow);
       const completedAt = new Date().toISOString();
 
       taskRunner.completeTask({
@@ -126,4 +130,39 @@ export async function runAllTasks(
   if (failCount > 0) {
     status('Failed', String(failCount), 'red');
   }
+}
+
+/**
+ * Resolve execution directory and workflow from task data.
+ * If the task has worktree settings, create a worktree and use it as cwd.
+ */
+function resolveTaskExecution(
+  task: TaskInfo,
+  defaultCwd: string,
+  defaultWorkflow: string
+): { execCwd: string; execWorkflow: string } {
+  const data = task.data;
+
+  // No structured data: use defaults
+  if (!data) {
+    return { execCwd: defaultCwd, execWorkflow: defaultWorkflow };
+  }
+
+  let execCwd = defaultCwd;
+
+  // Handle worktree
+  if (data.worktree) {
+    const result = createWorktree(defaultCwd, {
+      worktree: data.worktree,
+      branch: data.branch,
+      taskSlug: task.name,
+    });
+    execCwd = result.path;
+    info(`Worktree created: ${result.path} (branch: ${result.branch})`);
+  }
+
+  // Handle workflow override
+  const execWorkflow = data.workflow || defaultWorkflow;
+
+  return { execCwd, execWorkflow };
 }

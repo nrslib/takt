@@ -24,7 +24,8 @@ export function showTaskList(runner: TaskRunner): void {
   if (tasks.length === 0) {
     console.log();
     info('実行待ちのタスクはありません。');
-    console.log(chalk.gray(`\n${runner.getTasksDir()}/ にタスクファイル（.md）を配置してください。`));
+    console.log(chalk.gray(`\n${runner.getTasksDir()}/ にタスクファイル（.yaml/.md）を配置してください。`));
+    console.log(chalk.gray(`または takt /add-task でタスクを追加できます。`));
     return;
   }
 
@@ -37,12 +38,30 @@ export function showTaskList(runner: TaskRunner): void {
       const firstLine = task.content.trim().split('\n')[0]?.slice(0, 60) ?? '';
       console.log(chalk.cyan.bold(`  [${i + 1}] ${task.name}`));
       console.log(chalk.gray(`      ${firstLine}...`));
+
+      // Show worktree/branch info for YAML tasks
+      if (task.data) {
+        const extras: string[] = [];
+        if (task.data.worktree) {
+          extras.push(`worktree: ${typeof task.data.worktree === 'string' ? task.data.worktree : 'auto'}`);
+        }
+        if (task.data.branch) {
+          extras.push(`branch: ${task.data.branch}`);
+        }
+        if (task.data.workflow) {
+          extras.push(`workflow: ${task.data.workflow}`);
+        }
+        if (extras.length > 0) {
+          console.log(chalk.dim(`      [${extras.join(', ')}]`));
+        }
+      }
     }
   }
 
   console.log();
   divider('=', 60);
   console.log(chalk.yellow.bold('使用方法:'));
+  console.log(chalk.gray('  /add-task           タスクを追加'));
   console.log(chalk.gray('  /task run           次のタスクを実行'));
   console.log(chalk.gray('  /task run <name>    指定したタスクを実行'));
 }
