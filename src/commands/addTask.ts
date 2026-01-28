@@ -8,10 +8,12 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { stringify as stringifyYaml } from 'yaml';
-import { promptInput, confirm } from '../prompt/index.js';
+import { promptInput, confirm, selectOption } from '../prompt/index.js';
 import { success, info } from '../utils/ui.js';
 import { slugify } from '../utils/slug.js';
 import { createLogger } from '../utils/debug.js';
+import { listWorkflows } from '../config/workflowLoader.js';
+import { getCurrentWorkflow } from '../config/paths.js';
 import type { TaskFileData } from '../task/schema.js';
 
 const log = createLogger('add-task');
@@ -75,10 +77,21 @@ export async function addTask(cwd: string, args: string[]): Promise<void> {
     }
   }
 
-  // Ask about workflow
-  const customWorkflow = await promptInput('Workflow name (Enter for default)');
-  if (customWorkflow) {
-    workflow = customWorkflow;
+  // Ask about workflow using interactive selector
+  const availableWorkflows = listWorkflows();
+  if (availableWorkflows.length > 0) {
+    const currentWorkflow = getCurrentWorkflow(cwd);
+    const defaultWorkflow = availableWorkflows.includes(currentWorkflow)
+      ? currentWorkflow
+      : availableWorkflows[0]!;
+    const options = availableWorkflows.map((name) => ({
+      label: name === currentWorkflow ? `${name} (current)` : name,
+      value: name,
+    }));
+    const selected = await selectOption('Select workflow:', options);
+    if (selected && selected !== defaultWorkflow) {
+      workflow = selected;
+    }
   }
 
   // Build task data
