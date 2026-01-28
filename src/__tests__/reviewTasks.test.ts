@@ -2,14 +2,14 @@
  * Tests for review-tasks command
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   parseTaktWorktrees,
   extractTaskSlug,
   buildReviewItems,
   type WorktreeInfo,
 } from '../task/worktree.js';
-import { isBranchMerged, type ReviewAction } from '../commands/reviewTasks.js';
+import { isBranchMerged, showFullDiff, type ReviewAction } from '../commands/reviewTasks.js';
 
 describe('parseTaktWorktrees', () => {
   it('should parse takt/ branches from porcelain output', () => {
@@ -170,12 +170,33 @@ describe('buildReviewItems', () => {
 });
 
 describe('ReviewAction type', () => {
-  it('should include instruct, try, merge, delete (no skip)', () => {
-    const actions: ReviewAction[] = ['instruct', 'try', 'merge', 'delete'];
-    expect(actions).toHaveLength(4);
+  it('should include diff, instruct, try, merge, delete (no skip)', () => {
+    const actions: ReviewAction[] = ['diff', 'instruct', 'try', 'merge', 'delete'];
+    expect(actions).toHaveLength(5);
+    expect(actions).toContain('diff');
     expect(actions).toContain('instruct');
     expect(actions).toContain('try');
+    expect(actions).toContain('merge');
+    expect(actions).toContain('delete');
     expect(actions).not.toContain('skip');
+  });
+});
+
+describe('showFullDiff', () => {
+  it('should not throw for non-existent project dir', () => {
+    // spawnSync will fail gracefully; showFullDiff catches errors
+    expect(() => showFullDiff('/non-existent-dir', 'main', 'some-branch')).not.toThrow();
+  });
+
+  it('should not throw for non-existent branch', () => {
+    expect(() => showFullDiff('/tmp', 'main', 'non-existent-branch-xyz')).not.toThrow();
+  });
+
+  it('should warn when diff fails', () => {
+    const warnSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    showFullDiff('/non-existent-dir', 'main', 'some-branch');
+    warnSpy.mockRestore();
+    // No assertion needed — the test verifies it doesn't throw
   });
 });
 

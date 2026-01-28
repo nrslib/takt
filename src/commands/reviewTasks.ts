@@ -5,7 +5,7 @@
  * try merge, merge & cleanup, or delete actions.
  */
 
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import chalk from 'chalk';
 import {
   removeWorktree,
@@ -26,7 +26,7 @@ import { DEFAULT_WORKFLOW_NAME } from '../constants.js';
 const log = createLogger('review-tasks');
 
 /** Actions available for a reviewed worktree */
-export type ReviewAction = 'try' | 'merge' | 'delete' | 'instruct';
+export type ReviewAction = 'diff' | 'instruct' | 'try' | 'merge' | 'delete';
 
 /**
  * Check if a branch has already been merged into HEAD.
@@ -41,6 +41,28 @@ export function isBranchMerged(projectDir: string, branch: string): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Show full diff in an interactive pager (less).
+ * Falls back to direct output if pager is unavailable.
+ */
+export function showFullDiff(
+  cwd: string,
+  defaultBranch: string,
+  branch: string,
+): void {
+  try {
+    const result = spawnSync(
+      'git', ['diff', '--color=always', `${defaultBranch}...${branch}`],
+      { cwd, stdio: ['inherit', 'inherit', 'inherit'], env: { ...process.env, GIT_PAGER: 'less -R' } },
+    );
+    if (result.status !== 0) {
+      warn('Could not display diff');
+    }
+  } catch {
+    warn('Could not display diff');
   }
 }
 
@@ -71,6 +93,7 @@ async function showDiffAndPromptAction(
   const action = await selectOption<ReviewAction>(
     `Action for ${item.info.branch}:`,
     [
+      { label: 'View diff', value: 'diff', description: 'Show full diff in pager' },
       { label: 'Instruct', value: 'instruct', description: 'Give additional instructions to modify this worktree' },
       { label: 'Try merge', value: 'try', description: 'Merge without cleanup (keep worktree & branch)' },
       { label: 'Merge & cleanup', value: 'merge', description: 'Merge (if needed) and remove worktree & branch' },
@@ -294,7 +317,15 @@ export async function reviewTasks(cwd: string): Promise<void> {
     const item = items[selectedIdx];
     if (!item) continue;
 
-    const action = await showDiffAndPromptAction(cwd, defaultBranch, item);
+    // Action loop: re-show menu after viewing diff
+    let action: ReviewAction | null;
+    do {
+      action = await showDiffAndPromptAction(cwd, defaultBranch, item);
+
+      if (action === 'diff') {
+        showFullDiff(cwd, defaultBranch, item.info.branch);
+      }
+    } while (action === 'diff');
 
     if (action === null) continue;
 
