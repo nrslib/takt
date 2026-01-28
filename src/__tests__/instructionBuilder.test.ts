@@ -47,7 +47,7 @@ describe('instruction-builder', () => {
       expect(result).toContain('Do some work');
     });
 
-    it('should include Project Root and Mode when cwd !== projectCwd', () => {
+    it('should NOT include Project Root even when cwd !== projectCwd', () => {
       const step = createMinimalStep('Do some work');
       const context = createMinimalContext({
         cwd: '/worktree-path',
@@ -58,34 +58,9 @@ describe('instruction-builder', () => {
 
       expect(result).toContain('## Execution Context');
       expect(result).toContain('Working Directory: /worktree-path');
-      expect(result).toContain('Project Root: /project-path');
-      expect(result).toContain('Mode: worktree');
+      expect(result).not.toContain('Project Root');
+      expect(result).not.toContain('Mode:');
       expect(result).toContain('Do some work');
-    });
-
-    it('should NOT include Project Root or Mode when cwd === projectCwd', () => {
-      const step = createMinimalStep('Do some work');
-      const context = createMinimalContext({
-        cwd: '/project',
-        projectCwd: '/project',
-      });
-
-      const result = buildInstruction(step, context);
-
-      expect(result).toContain('Working Directory: /project');
-      expect(result).not.toContain('Project Root');
-      expect(result).not.toContain('Mode:');
-    });
-
-    it('should NOT include Project Root or Mode when projectCwd is not set', () => {
-      const step = createMinimalStep('Do some work');
-      const context = createMinimalContext({ cwd: '/project' });
-
-      const result = buildInstruction(step, context);
-
-      expect(result).toContain('Working Directory: /project');
-      expect(result).not.toContain('Project Root');
-      expect(result).not.toContain('Mode:');
     });
 
     it('should prepend metadata before the instruction body', () => {
@@ -133,7 +108,8 @@ describe('instruction-builder', () => {
         '- Report: /project/.takt/reports/20260128-worktree-report/00-plan.md'
       );
       expect(result).toContain('Working Directory: /project/.takt/worktrees/my-task');
-      expect(result).toContain('Project Root: /project');
+      // Project Root should NOT be included in metadata (to avoid agent confusion)
+      expect(result).not.toContain('Project Root');
     });
 
     it('should replace multiple .takt/reports/{report_dir} occurrences', () => {
@@ -183,15 +159,14 @@ describe('instruction-builder', () => {
   });
 
   describe('buildExecutionMetadata', () => {
-    it('should set workingDirectory and omit projectRoot in normal mode', () => {
+    it('should set workingDirectory', () => {
       const context = createMinimalContext({ cwd: '/project' });
       const metadata = buildExecutionMetadata(context);
 
       expect(metadata.workingDirectory).toBe('/project');
-      expect(metadata.projectRoot).toBeUndefined();
     });
 
-    it('should set projectRoot in worktree mode', () => {
+    it('should use cwd as workingDirectory even in worktree mode', () => {
       const context = createMinimalContext({
         cwd: '/worktree-path',
         projectCwd: '/project-path',
@@ -199,27 +174,6 @@ describe('instruction-builder', () => {
       const metadata = buildExecutionMetadata(context);
 
       expect(metadata.workingDirectory).toBe('/worktree-path');
-      expect(metadata.projectRoot).toBe('/project-path');
-    });
-
-    it('should omit projectRoot when projectCwd is not set', () => {
-      const context = createMinimalContext({ cwd: '/project' });
-      // projectCwd is undefined by default
-      const metadata = buildExecutionMetadata(context);
-
-      expect(metadata.workingDirectory).toBe('/project');
-      expect(metadata.projectRoot).toBeUndefined();
-    });
-
-    it('should omit projectRoot when cwd equals projectCwd', () => {
-      const context = createMinimalContext({
-        cwd: '/same-path',
-        projectCwd: '/same-path',
-      });
-      const metadata = buildExecutionMetadata(context);
-
-      expect(metadata.workingDirectory).toBe('/same-path');
-      expect(metadata.projectRoot).toBeUndefined();
     });
 
     it('should default language to en when not specified', () => {
@@ -238,26 +192,13 @@ describe('instruction-builder', () => {
   });
 
   describe('renderExecutionMetadata', () => {
-    it('should render normal mode without Project Root or Mode', () => {
+    it('should render Working Directory only', () => {
       const rendered = renderExecutionMetadata({ workingDirectory: '/project', language: 'en' });
 
       expect(rendered).toContain('## Execution Context');
       expect(rendered).toContain('- Working Directory: /project');
       expect(rendered).not.toContain('Project Root');
       expect(rendered).not.toContain('Mode:');
-    });
-
-    it('should render worktree mode with Project Root and Mode', () => {
-      const rendered = renderExecutionMetadata({
-        workingDirectory: '/worktree',
-        projectRoot: '/project',
-        language: 'en',
-      });
-
-      expect(rendered).toContain('## Execution Context');
-      expect(rendered).toContain('- Working Directory: /worktree');
-      expect(rendered).toContain('- Project Root: /project');
-      expect(rendered).toContain('- Mode: worktree');
     });
 
     it('should end with a trailing empty line', () => {
@@ -273,17 +214,6 @@ describe('instruction-builder', () => {
       expect(rendered).toContain('- 作業ディレクトリ: /project');
       expect(rendered).not.toContain('Execution Context');
       expect(rendered).not.toContain('Working Directory');
-    });
-
-    it('should render worktree mode in Japanese', () => {
-      const rendered = renderExecutionMetadata({
-        workingDirectory: '/worktree',
-        projectRoot: '/project',
-        language: 'ja',
-      });
-
-      expect(rendered).toContain('- プロジェクトルート: /project');
-      expect(rendered).toContain('モード: worktree');
     });
 
     it('should include English note only for en, not for ja', () => {

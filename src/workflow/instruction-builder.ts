@@ -39,8 +39,6 @@ export interface InstructionContext {
 export interface ExecutionMetadata {
   /** The agent's working directory (may be a worktree) */
   readonly workingDirectory: string;
-  /** Project root where .takt/ lives. Present only in worktree mode. */
-  readonly projectRoot?: string;
   /** Language for metadata rendering */
   readonly language: Language;
 }
@@ -49,15 +47,10 @@ export interface ExecutionMetadata {
  * Build execution metadata from instruction context.
  *
  * Pure function: InstructionContext → ExecutionMetadata.
- * Sets `projectRoot` only when cwd differs from projectCwd (worktree mode).
  */
 export function buildExecutionMetadata(context: InstructionContext): ExecutionMetadata {
-  const projectRoot = context.projectCwd ?? context.cwd;
-  const isWorktree = context.cwd !== projectRoot;
-
   return {
     workingDirectory: context.cwd,
-    ...(isWorktree ? { projectRoot } : {}),
     language: context.language ?? 'en',
   };
 }
@@ -67,15 +60,11 @@ const METADATA_STRINGS = {
   en: {
     heading: '## Execution Context',
     workingDirectory: 'Working Directory',
-    projectRoot: 'Project Root',
-    mode: 'Mode: worktree (source edits in Working Directory, reports in Project Root)',
     note: 'Note: This section is metadata. Follow the language used in the rest of the prompt.',
   },
   ja: {
     heading: '## 実行コンテキスト',
     workingDirectory: '作業ディレクトリ',
-    projectRoot: 'プロジェクトルート',
-    mode: 'モード: worktree（ソース編集は作業ディレクトリ、レポートはプロジェクトルート）',
     note: '',
   },
 } as const;
@@ -85,7 +74,6 @@ const METADATA_STRINGS = {
  *
  * Pure function: ExecutionMetadata → string.
  * Always includes heading + Working Directory.
- * Adds Project Root and Mode only in worktree mode (when projectRoot is present).
  * Language determines the output language; 'en' includes a note about language consistency.
  */
 export function renderExecutionMetadata(metadata: ExecutionMetadata): string {
@@ -94,10 +82,6 @@ export function renderExecutionMetadata(metadata: ExecutionMetadata): string {
     strings.heading,
     `- ${strings.workingDirectory}: ${metadata.workingDirectory}`,
   ];
-  if (metadata.projectRoot !== undefined) {
-    lines.push(`- ${strings.projectRoot}: ${metadata.projectRoot}`);
-    lines.push(`- ${strings.mode}`);
-  }
   if (strings.note) {
     lines.push('');
     lines.push(strings.note);
