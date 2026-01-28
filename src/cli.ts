@@ -35,10 +35,40 @@ import {
   reviewTasks,
 } from './commands/index.js';
 import { listWorkflows } from './config/workflowLoader.js';
-import { selectOptionWithDefault } from './prompt/index.js';
+import { selectOptionWithDefault, confirm } from './prompt/index.js';
+import { createWorktree } from './task/worktree.js';
+import { autoCommitWorktree } from './task/autoCommit.js';
 import { DEFAULT_WORKFLOW_NAME } from './constants.js';
 
 const log = createLogger('cli');
+
+export interface WorktreeConfirmationResult {
+  execCwd: string;
+  isWorktree: boolean;
+}
+
+/**
+ * Ask user whether to create a worktree, and create one if confirmed.
+ * Returns the execution directory and whether a worktree was created.
+ */
+export async function confirmAndCreateWorktree(
+  cwd: string,
+  task: string,
+): Promise<WorktreeConfirmationResult> {
+  const useWorktree = await confirm('Create worktree?', false);
+
+  if (!useWorktree) {
+    return { execCwd: cwd, isWorktree: false };
+  }
+
+  const result = createWorktree(cwd, {
+    worktree: true,
+    taskSlug: task,
+  });
+  info(`Worktree created: ${result.path} (branch: ${result.branch})`);
+
+  return { execCwd: result.path, isWorktree: true };
+}
 
 const program = new Command();
 
@@ -183,8 +213,21 @@ program
         selectedWorkflow = selected;
       }
 
-      log.info('Starting task execution', { task, workflow: selectedWorkflow });
-      const taskSuccess = await executeTask(task, cwd, selectedWorkflow);
+      // Ask whether to create a worktree
+      const { execCwd, isWorktree } = await confirmAndCreateWorktree(cwd, task);
+
+      log.info('Starting task execution', { task, workflow: selectedWorkflow, worktree: isWorktree });
+      const taskSuccess = await executeTask(task, execCwd, selectedWorkflow);
+
+      if (taskSuccess && isWorktree) {
+        const commitResult = autoCommitWorktree(execCwd, task);
+        if (commitResult.success && commitResult.commitHash) {
+          success(`Auto-committed: ${commitResult.commitHash}`);
+        } else if (!commitResult.success) {
+          error(`Auto-commit failed: ${commitResult.message}`);
+        }
+      }
+
       if (!taskSuccess) {
         process.exit(1);
       }
