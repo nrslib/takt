@@ -74,7 +74,7 @@ export async function executeAndCompleteTask(
   const executionLog: string[] = [];
 
   try {
-    const { execCwd, execWorkflow, isWorktree, branch } = await resolveTaskExecution(task, cwd, workflowName);
+    const { execCwd, execWorkflow, isWorktree } = await resolveTaskExecution(task, cwd, workflowName);
 
     // cwd is always the project root; pass it as projectCwd so reports/sessions go there
     const taskSuccess = await executeTask(task.content, execCwd, execWorkflow, cwd);

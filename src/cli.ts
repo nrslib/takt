@@ -12,6 +12,7 @@
  *   takt /config      - Select permission mode interactively
  */
 
+import { createRequire } from 'node:module';
 import { Command } from 'commander';
 import { resolve } from 'node:path';
 import {
@@ -41,6 +42,9 @@ import { autoCommitAndPush } from './task/autoCommit.js';
 import { summarizeTaskName } from './task/summarize.js';
 import { DEFAULT_WORKFLOW_NAME } from './constants.js';
 import { checkForUpdates } from './utils/updateNotifier.js';
+
+const require = createRequire(import.meta.url);
+const { version: cliVersion } = require('../package.json') as { version: string };
 
 const log = createLogger('cli');
 
@@ -85,7 +89,7 @@ const program = new Command();
 program
   .name('takt')
   .description('TAKT: Task Agent Koordination Tool')
-  .version('0.1.0');
+  .version(cliVersion);
 
 program
   .argument('[task]', 'Task to execute or slash command')
@@ -119,7 +123,7 @@ program
     }
 
     log.info('TAKT CLI starting', {
-      version: '0.1.0',
+      version: cliVersion,
       cwd,
       task: task || null,
       verbose,
@@ -226,7 +230,7 @@ program
       }
 
       // Ask whether to create a worktree
-      const { execCwd, isWorktree, branch } = await confirmAndCreateWorktree(cwd, task);
+      const { execCwd, isWorktree } = await confirmAndCreateWorktree(cwd, task);
 
       log.info('Starting task execution', { task, workflow: selectedWorkflow, worktree: isWorktree });
       const taskSuccess = await executeTask(task, execCwd, selectedWorkflow, cwd);
