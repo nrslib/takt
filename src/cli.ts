@@ -36,7 +36,7 @@ import {
 } from './commands/index.js';
 import { listWorkflows } from './config/workflowLoader.js';
 import { selectOptionWithDefault, confirm } from './prompt/index.js';
-import { createSharedClone, removeClone, removeCloneMeta } from './task/clone.js';
+import { createSharedClone } from './task/clone.js';
 import { autoCommitAndPush } from './task/autoCommit.js';
 import { summarizeTaskName } from './task/summarize.js';
 import { DEFAULT_WORKFLOW_NAME } from './constants.js';
@@ -235,12 +235,6 @@ program
         } else if (!commitResult.success) {
           error(`Auto-commit failed: ${commitResult.message}`);
         }
-      }
-
-      // Remove clone after task completion (success or failure)
-      if (isWorktree) {
-        removeClone(execCwd);
-        if (branch) removeCloneMeta(cwd, branch);
       }
 
       if (!taskSuccess) {

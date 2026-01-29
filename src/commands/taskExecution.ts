@@ -4,7 +4,7 @@
 
 import { loadWorkflow, loadGlobalConfig } from '../config/index.js';
 import { TaskRunner, type TaskInfo } from '../task/index.js';
-import { createSharedClone, removeClone, removeCloneMeta } from '../task/clone.js';
+import { createSharedClone } from '../task/clone.js';
 import { autoCommitAndPush } from '../task/autoCommit.js';
 import { summarizeTaskName } from '../task/summarize.js';
 import {
@@ -87,12 +87,6 @@ export async function executeAndCompleteTask(
       } else if (!commitResult.success) {
         error(`Auto-commit failed: ${commitResult.message}`);
       }
-    }
-
-    // Remove clone after task completion (success or failure)
-    if (isWorktree) {
-      removeClone(execCwd);
-      if (branch) removeCloneMeta(cwd, branch);
     }
 
     const taskResult = {
