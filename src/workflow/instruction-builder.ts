@@ -1,11 +1,14 @@
 /**
  * Instruction template builder for workflow steps
  *
- * Builds the instruction string for agent execution by replacing
- * template placeholders with actual values.
+ * Builds the instruction string for agent execution by:
+ * 1. Auto-injecting standard sections (Execution Context, Workflow Context,
+ *    User Request, Previous Response, Additional User Inputs, Instructions header)
+ * 2. Replacing template placeholders with actual values
+ * 3. Appending auto-generated status rules from workflow rules
  */
 
-import type { WorkflowStep, WorkflowRule, AgentResponse, Language } from '../models/types.js';
+import type { WorkflowStep, WorkflowRule, AgentResponse, Language, ReportConfig } from '../models/types.js';
 import { getGitDiff } from '../agents/runner.js';
 
 /**
@@ -213,76 +216,207 @@ function escapeTemplateChars(str: string): string {
   return str.replace(/\{/g, '｛').replace(/\}/g, '｝');
 }
 
+/** Localized strings for auto-injected sections */
+const SECTION_STRINGS = {
+  en: {
+    workflowContext: '## Workflow Context',
+    iteration: 'Iteration',
+    iterationWorkflowWide: '(workflow-wide)',
+    stepIteration: 'Step Iteration',
+    stepIterationTimes: '(times this step has run)',
+    step: 'Step',
+    reportDirectory: 'Report Directory',
+    reportFile: 'Report File',
+    reportFiles: 'Report Files',
+    userRequest: '## User Request',
+    previousResponse: '## Previous Response',
+    additionalUserInputs: '## Additional User Inputs',
+    instructions: '## Instructions',
+  },
+  ja: {
+    workflowContext: '## Workflow Context',
+    iteration: 'Iteration',
+    iterationWorkflowWide: '（ワークフロー全体）',
+    stepIteration: 'Step Iteration',
+    stepIterationTimes: '（このステップの実行回数）',
+    step: 'Step',
+    reportDirectory: 'Report Directory',
+    reportFile: 'Report File',
+    reportFiles: 'Report Files',
+    userRequest: '## User Request',
+    previousResponse: '## Previous Response',
+    additionalUserInputs: '## Additional User Inputs',
+    instructions: '## Instructions',
+  },
+} as const;
+
 /**
- * Build instruction from template with context values.
- *
- * Supported placeholders:
- * - {task} - The main task/prompt
- * - {iteration} - Current iteration number (workflow-wide turn count)
- * - {max_iterations} - Maximum iterations allowed
- * - {step_iteration} - Current step's iteration number (how many times this step has been executed)
- * - {previous_response} - Output from previous step (if passPreviousResponse is true)
- * - {git_diff} - Current git diff output
- * - {user_inputs} - Accumulated user inputs
- * - {report_dir} - Report directory name (e.g., "20250126-143052-task-summary")
+ * Render the Workflow Context section.
  */
-export function buildInstruction(
+function renderWorkflowContext(
   step: WorkflowStep,
-  context: InstructionContext
+  context: InstructionContext,
+  language: Language,
 ): string {
-  let instruction = step.instructionTemplate;
+  const s = SECTION_STRINGS[language];
+  const lines: string[] = [
+    s.workflowContext,
+    `- ${s.iteration}: ${context.iteration}/${context.maxIterations}${s.iterationWorkflowWide}`,
+    `- ${s.stepIteration}: ${context.stepIteration}${s.stepIterationTimes}`,
+    `- ${s.step}: ${step.name}`,
+  ];
+
+  // Report info (only if step has report config AND reportDir is available)
+  if (step.report && context.reportDir) {
+    lines.push(`- ${s.reportDirectory}: .takt/reports/${context.reportDir}/`);
+
+    if (typeof step.report === 'string') {
+      // Single file
+      lines.push(`- ${s.reportFile}: .takt/reports/${context.reportDir}/${step.report}`);
+    } else {
+      // Multiple files
+      lines.push(`- ${s.reportFiles}:`);
+      for (const file of step.report as ReportConfig[]) {
+        lines.push(`  - ${file.label}: .takt/reports/${context.reportDir}/${file.path}`);
+      }
+    }
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * Replace template placeholders in the instruction_template body.
+ *
+ * These placeholders may still be used in instruction_template for
+ * backward compatibility or special cases (e.g., {git_diff} in review steps).
+ */
+function replaceTemplatePlaceholders(
+  template: string,
+  step: WorkflowStep,
+  context: InstructionContext,
+): string {
+  let result = template;
+
+  // These placeholders are also covered by auto-injected sections
+  // (User Request, Previous Response, Additional User Inputs), but kept here
+  // for backward compatibility with workflows that still embed them in
+  // instruction_template (e.g., research.yaml, magi.yaml).
+  // New workflows should NOT use {task} or {user_inputs} in instruction_template
+  // since they are auto-injected as separate sections.
 
   // Replace {task}
-  instruction = instruction.replace(/\{task\}/g, escapeTemplateChars(context.task));
+  result = result.replace(/\{task\}/g, escapeTemplateChars(context.task));
 
   // Replace {iteration}, {max_iterations}, and {step_iteration}
-  instruction = instruction.replace(/\{iteration\}/g, String(context.iteration));
-  instruction = instruction.replace(/\{max_iterations\}/g, String(context.maxIterations));
-  instruction = instruction.replace(/\{step_iteration\}/g, String(context.stepIteration));
+  result = result.replace(/\{iteration\}/g, String(context.iteration));
+  result = result.replace(/\{max_iterations\}/g, String(context.maxIterations));
+  result = result.replace(/\{step_iteration\}/g, String(context.stepIteration));
 
   // Replace {previous_response}
   if (step.passPreviousResponse) {
     if (context.previousOutput) {
-      instruction = instruction.replace(
+      result = result.replace(
         /\{previous_response\}/g,
-        escapeTemplateChars(context.previousOutput.content)
+        escapeTemplateChars(context.previousOutput.content),
       );
     } else {
-      instruction = instruction.replace(/\{previous_response\}/g, '');
+      result = result.replace(/\{previous_response\}/g, '');
     }
   }
 
   // Replace {git_diff}
   const gitDiff = getGitDiff(context.cwd);
-  instruction = instruction.replace(/\{git_diff\}/g, gitDiff);
+  result = result.replace(/\{git_diff\}/g, gitDiff);
 
   // Replace {user_inputs}
   const userInputsStr = context.userInputs.join('\n');
-  instruction = instruction.replace(
+  result = result.replace(
     /\{user_inputs\}/g,
-    escapeTemplateChars(userInputsStr)
+    escapeTemplateChars(userInputsStr),
   );
 
-  // Replace {report_dir} with the directory name, keeping paths relative.
-  // In worktree mode, a symlink from cwd/.takt/reports → projectCwd/.takt/reports
-  // ensures the relative path resolves correctly without embedding absolute paths
-  // that could cause agents to operate on the wrong repository.
+  // Replace {report_dir}
   if (context.reportDir) {
-    instruction = instruction.replace(/\{report_dir\}/g, context.reportDir);
+    result = result.replace(/\{report_dir\}/g, context.reportDir);
   }
 
-  // Append auto-generated status rules from rules
+  return result;
+}
+
+/**
+ * Build instruction from template with context values.
+ *
+ * Generates a complete instruction by auto-injecting standard sections
+ * around the step-specific instruction_template content:
+ *
+ * 1. Execution Context (working directory, rules) — always
+ * 2. Workflow Context (iteration, step, report info) — always
+ * 3. User Request ({task}) — unless template contains {task}
+ * 4. Previous Response — if passPreviousResponse and has content, unless template contains {previous_response}
+ * 5. Additional User Inputs — unless template contains {user_inputs}
+ * 6. Instructions header + instruction_template content — always
+ * 7. Status Output Rules — if rules exist
+ *
+ * Template placeholders ({task}, {git_diff}, etc.) are still replaced
+ * within the instruction_template body for backward compatibility.
+ * When a placeholder is present in the template, the corresponding
+ * auto-injected section is skipped to avoid duplication.
+ */
+export function buildInstruction(
+  step: WorkflowStep,
+  context: InstructionContext,
+): string {
   const language = context.language ?? 'en';
+  const s = SECTION_STRINGS[language];
+  const sections: string[] = [];
+
+  // 1. Execution context metadata (working directory + rules)
+  const metadata = buildExecutionMetadata(context);
+  sections.push(renderExecutionMetadata(metadata));
+
+  // 2. Workflow Context (iteration, step, report info)
+  sections.push(renderWorkflowContext(step, context, language));
+
+  // Skip auto-injection for sections whose placeholders exist in the template,
+  // to avoid duplicate content. Templates using placeholders handle their own layout.
+  const tmpl = step.instructionTemplate;
+  const hasTaskPlaceholder = tmpl.includes('{task}');
+  const hasPreviousResponsePlaceholder = tmpl.includes('{previous_response}');
+  const hasUserInputsPlaceholder = tmpl.includes('{user_inputs}');
+
+  // 3. User Request (skip if template embeds {task} directly)
+  if (!hasTaskPlaceholder) {
+    sections.push(`${s.userRequest}\n${escapeTemplateChars(context.task)}`);
+  }
+
+  // 4. Previous Response (skip if template embeds {previous_response} directly)
+  if (step.passPreviousResponse && context.previousOutput && !hasPreviousResponsePlaceholder) {
+    sections.push(
+      `${s.previousResponse}\n${escapeTemplateChars(context.previousOutput.content)}`,
+    );
+  }
+
+  // 5. Additional User Inputs (skip if template embeds {user_inputs} directly)
+  if (!hasUserInputsPlaceholder) {
+    const userInputsStr = context.userInputs.join('\n');
+    sections.push(`${s.additionalUserInputs}\n${escapeTemplateChars(userInputsStr)}`);
+  }
+
+  // 6. Instructions header + instruction_template content
+  const processedTemplate = replaceTemplatePlaceholders(
+    step.instructionTemplate,
+    step,
+    context,
+  );
+  sections.push(`${s.instructions}\n${processedTemplate}`);
+
+  // 7. Status rules (auto-generated from rules)
   if (step.rules && step.rules.length > 0) {
     const statusHeader = renderStatusRulesHeader(language);
     const generatedPrompt = generateStatusRulesFromRules(step.name, step.rules, language);
-    instruction = `${instruction}\n\n${statusHeader}\n${generatedPrompt}`;
+    sections.push(`${statusHeader}\n${generatedPrompt}`);
   }
 
-  // Prepend execution context metadata so agents see it first.
-  // Now language-aware, so no need to hide it at the end.
-  const metadata = buildExecutionMetadata(context);
-  instruction = `${renderExecutionMetadata(metadata)}\n${instruction}`;
-
-  return instruction;
+  return sections.join('\n\n');
 }

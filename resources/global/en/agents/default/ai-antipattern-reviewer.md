@@ -126,7 +126,54 @@ AI is confidently wrong—code that looks plausible but doesn't work, solutions 
 2. Check whether each fallback has a legitimate reason
 3. REJECT if even one unjustified fallback exists
 
-### 7. Decision Traceability Review
+### 7. Unused Code Detection
+
+**AI tends to generate unnecessary code "for future extensibility", "for symmetry", or "just in case". Delete code that is not called anywhere at present.**
+
+| Judgment | Criteria |
+|----------|----------|
+| **REJECT** | Public function/method not called from anywhere |
+| **REJECT** | Setter/getter created "for symmetry" but never used |
+| **REJECT** | Interface or option prepared for future extension |
+| **REJECT** | Exported but grep finds no usage |
+| OK | Implicitly called by framework (lifecycle hooks, etc.) |
+| OK | Intentionally published as public package API |
+
+**Verification approach:**
+1. Verify with grep that no references exist to changed/deleted code
+2. Verify that public module (index files, etc.) export lists match actual implementations
+3. Check that old code corresponding to newly added code has been removed
+
+### 8. Unnecessary Backward Compatibility Code Detection
+
+**AI tends to leave unnecessary code "for backward compatibility." Don't overlook this.**
+
+Code that should be deleted:
+
+| Pattern | Example | Judgment |
+|---------|---------|----------|
+| deprecated + unused | `@deprecated` annotation with no callers | **Delete immediately** |
+| Both new and old API exist | New function exists but old function remains | **Delete old** |
+| Migrated wrappers | Created for compatibility but migration complete | **Delete** |
+| Comments saying "delete later" | `// TODO: remove after migration` left unattended | **Delete now** |
+| Excessive proxy/adapter usage | Complexity added only for backward compatibility | **Replace with simple** |
+
+Code that should be kept:
+
+| Pattern | Example | Judgment |
+|---------|---------|----------|
+| Externally published API | npm package exports | Consider carefully |
+| Config file compatibility | Can read old format configs | Maintain until major version |
+| During data migration | DB schema migration in progress | Maintain until migration complete |
+
+**Decision criteria:**
+1. **Are there any usage sites?** → Verify with grep/search. Delete if none
+2. **Is it externally published?** → If internal only, can delete immediately
+3. **Is migration complete?** → If complete, delete
+
+**Be suspicious when AI says "for backward compatibility."** Verify if it's really needed.
+
+### 9. Decision Traceability Review
 
 **Verify that Coder's decision log is reasonable.**
 

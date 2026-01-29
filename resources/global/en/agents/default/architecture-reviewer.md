@@ -191,73 +191,6 @@ if (status === 'interrupted') {
 }
 ```
 
-**Fallback Value Overuse Detection Criteria:**
-
-Fallback values (`??`, `||`, default arguments) silently swallow "value is missing" cases. They hide what should be errors.
-
-| Judgment | Criteria |
-|----------|----------|
-| **REJECT** | Fallback hides a bug where a missing value indicates data inconsistency |
-| **REJECT** | Uses meaningless values like `'unknown'`, `'default'`, `''`, `0` as cover |
-| **REJECT** | All call sites rely on fallback — no one passes the actual value |
-| OK | Defensive default for external input (user input, API responses) |
-| OK | Reasonable initial value for optional configuration |
-
-```typescript
-// ❌ REJECT - Fallback hiding a bug
-const userName = user.name ?? 'unknown';  // Missing name is data inconsistency
-const stepName = step?.name ?? 'default'; // Missing step is a caller bug
-
-// ❌ REJECT - Option that all call sites omit
-function runStep(step: Step, options?: { maxRetries?: number }) {
-  const retries = options?.maxRetries ?? 3; // No call site passes options
-}
-
-// ✅ OK - Optional user setting with reasonable default
-const logLevel = config.logLevel ?? 'info';  // Default if not in config file
-const language = userPreference.lang ?? 'en'; // Default if not set
-
-// ✅ OK - Defensive default for external API
-const displayName = apiResponse.nickname ?? apiResponse.email; // Fallback if no nickname
-```
-
-**Unused Code Detection Criteria:**
-
-AI tends to generate unnecessary code "for future extensibility", "for symmetry", or "just in case". Delete code that is not called anywhere at present.
-
-| Judgment | Criteria |
-|----------|----------|
-| **REJECT** | Public function/method not called from anywhere |
-| **REJECT** | Setter/getter created "for symmetry" but never used |
-| **REJECT** | Interface or option prepared for future extension |
-| **REJECT** | Exported but grep finds no usage |
-| OK | Implicitly called by framework (lifecycle hooks, etc.) |
-| OK | Intentionally published as public package API |
-
-```typescript
-// ❌ REJECT - Setter "for symmetry" (only get is used)
-class WorkflowState {
-  private _status: Status;
-  getStatus(): Status { return this._status; }
-  setStatus(s: Status) { this._status = s; }  // No one calls this
-}
-
-// ❌ REJECT - Options for "future extension"
-interface EngineOptions {
-  maxIterations: number;
-  enableParallel?: boolean;  // Not implemented. Not referenced anywhere
-  pluginHooks?: PluginHook[];  // Not implemented. No plugin system exists
-}
-
-// ❌ REJECT - Exported but unused
-export function formatStepName(name: string): string { ... } // grep result: 0 hits
-
-// ✅ OK - Called by framework
-class MyComponent extends React.Component {
-  componentDidMount() { ... }  // Called by React
-}
-```
-
 **Direct State Mutation Detection Criteria:**
 
 Directly mutating objects or arrays makes changes hard to track and causes unexpected side effects. Always use spread operators or immutable operations to return new objects.
@@ -379,36 +312,7 @@ function createUser(data: UserData) {
 }
 ```
 
-### 7. Unnecessary Backward Compatibility Code Detection
-
-**AI tends to leave unnecessary code "for backward compatibility." Don't overlook this.**
-
-Code that should be deleted:
-
-| Pattern | Example | Judgment |
-|---------|---------|----------|
-| deprecated + unused | `@deprecated` annotation with no callers | **Delete immediately** |
-| Both new and old API exist | New function exists but old function remains | **Delete old** |
-| Migrated wrappers | Created for compatibility but migration complete | **Delete** |
-| Comments saying "delete later" | `// TODO: remove after migration` left unattended | **Delete now** |
-| Excessive proxy/adapter usage | Complexity added only for backward compatibility | **Replace with simple** |
-
-Code that should be kept:
-
-| Pattern | Example | Judgment |
-|---------|---------|----------|
-| Externally published API | npm package exports | Consider carefully |
-| Config file compatibility | Can read old format configs | Maintain until major version |
-| During data migration | DB schema migration in progress | Maintain until migration complete |
-
-**Decision criteria:**
-1. **Are there any usage sites?** → Verify with grep/search. Delete if none
-2. **Is it externally published?** → If internal only, can delete immediately
-3. **Is migration complete?** → If complete, delete
-
-**Be suspicious when AI says "for backward compatibility."** Verify if it's really needed.
-
-### 8. Workaround Detection
+### 7. Workaround Detection
 
 **Don't overlook compromises made to "just make it work."**
 
@@ -423,7 +327,7 @@ Code that should be kept:
 
 **Always point these out.** Temporary fixes become permanent.
 
-### 9. Quality Attributes
+### 8. Quality Attributes
 
 | Attribute | Review Point |
 |-----------|--------------|
@@ -431,7 +335,7 @@ Code that should be kept:
 | Maintainability | Easy to modify and fix |
 | Observability | Logging and monitoring enabled |
 
-### 10. Big Picture
+### 9. Big Picture
 
 **Caution**: Don't get lost in minor "clean code" nitpicks.
 
@@ -442,7 +346,7 @@ Verify:
 - Does it align with business requirements
 - Is naming consistent with the domain
 
-### 11. Change Scope Assessment
+### 10. Change Scope Assessment
 
 **Check change scope and include in report (non-blocking).**
 
@@ -461,7 +365,7 @@ Verify:
 **Include as suggestions (non-blocking):**
 - If splittable, present splitting proposal
 
-### 12. Circular Review Detection
+### 11. Circular Review Detection
 
 When review count is provided (e.g., "Review count: 3rd"), adjust judgment accordingly.
 

@@ -2,13 +2,16 @@
 # Review workflow with Architecture, Frontend, Security, and QA experts
 #
 # Flow:
-# plan -> implement -> architect_review -> frontend_review -> ai_review -> security_review -> qa_review -> supervise -> COMPLETE
-#                          ↓                   ↓                 ↓              ↓                ↓            ↓
-#                     fix_architect       fix_frontend        ai_fix       fix_security       fix_qa    fix_supervisor
+# plan -> implement -> ai_review -> architect_review -> frontend_review -> security_review -> qa_review -> supervise -> COMPLETE
+#                          ↓            ↓                    ↓                  ↓                ↓            ↓            ↓
+#                        ai_fix    fix_architect       fix_frontend        fix_security       fix_qa    fix_supervisor
+#
+# AI review runs immediately after implementation to catch AI-specific issues early,
+# before expert reviews begin.
 #
 # Fix destination is determined by Coder based on change impact:
-# - fix_security: MINOR→security_review, MAJOR→architect_review
-# - fix_qa: MINOR→qa_review, SECURITY→security_review, MAJOR→architect_review
+# - fix_security: MINOR->security_review, MAJOR->architect_review
+# - fix_qa: MINOR->qa_review, SECURITY->security_review, MAJOR->architect_review
 #
 # Template Variables:
 #   {iteration}      - Workflow-wide turn count (total steps executed across all agents)
@@ -23,7 +26,7 @@
 name: expert
 description: Architecture, Frontend, Security, QA Expert Review
 
-max_iterations: 20
+max_iterations: 30
 
 initial_step: plan
 
@@ -33,6 +36,7 @@ steps:
   # ===========================================
   - name: plan
     agent: ~/.takt/agents/default/planner.md
+    report: 00-plan.md
     allowed_tools:
       - Read
       - Glob
@@ -42,20 +46,9 @@ steps:
       - WebSearch
       - WebFetch
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations} (workflow-wide)
-      - Step Iteration: {step_iteration} (times this step has run)
-      - Step: plan (Task Analysis)
-      - Report Directory: .takt/reports/{report_dir}/
-      - Report File: .takt/reports/{report_dir}/00-plan.md
-
-      ## User Request
-      {task}
-
       ## Previous Response (when returned from implement)
       {previous_response}
 
-      ## Instructions
       Analyze the task and create an implementation plan.
 
       **Note:** If returned from implement step (Previous Response exists),
@@ -66,7 +59,7 @@ steps:
       2. Identify impact scope
       3. Decide implementation approach
 
-      **Report output:** Output to the `Report File` specified above.
+      **Report output:** Output to `.takt/reports/{report_dir}/00-plan.md`.
       - If file does not exist: Create new file
       - If file exists: Append with `## Iteration {step_iteration}` section
 
@@ -103,6 +96,9 @@ steps:
   # ===========================================
   - name: implement
     agent: ~/.takt/agents/default/coder.md
+    report:
+      - Scope: 01-coder-scope.md
+      - Decisions: 02-coder-decisions.md
     allowed_tools:
       - Read
       - Glob
@@ -113,26 +109,12 @@ steps:
       - WebSearch
       - WebFetch
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations} (workflow-wide)
-      - Step Iteration: {step_iteration} (times this step has run)
-      - Step: implement
-      - Report Directory: .takt/reports/{report_dir}/
-      - Report Files:
-        - Scope: .takt/reports/{report_dir}/01-coder-scope.md
-        - Decisions: .takt/reports/{report_dir}/02-coder-decisions.md
-
-      ## User Request
-      {task}
-
-      ## Additional User Inputs
-      {user_inputs}
-
-      ## Instructions
       Follow the plan from the plan step and implement.
       Refer to the plan report (00-plan.md) and proceed with implementation.
 
-      **Report output:** Output to the `Report Files` specified above.
+      **Report output:** Output to the report files specified below.
+      - Scope: `.takt/reports/{report_dir}/01-coder-scope.md`
+      - Decisions: `.takt/reports/{report_dir}/02-coder-decisions.md`
       - If file does not exist: Create new file
       - If file exists: Append with `## Iteration {step_iteration}` section
 
@@ -167,15 +149,16 @@ steps:
       ```
     rules:
       - condition: Implementation is complete
-        next: architect_review
+        next: ai_review
       - condition: Cannot proceed with implementation
         next: plan
 
   # ===========================================
-  # Phase 2: Architecture Review
+  # Phase 2: AI Review
   # ===========================================
-  - name: architect_review
-    agent: ~/.takt/agents/default/architecture-reviewer.md
+  - name: ai_review
+    agent: ~/.takt/agents/default/ai-antipattern-reviewer.md
+    report: 03-ai-review.md
     allowed_tools:
       - Read
       - Glob
@@ -184,22 +167,100 @@ steps:
       - WebSearch
       - WebFetch
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations} (workflow-wide)
-      - Step Iteration: {step_iteration} (times this step has run)
-      - Step: architect_review (Architecture Review)
-      - Report Directory: .takt/reports/{report_dir}/
-      - Report File: .takt/reports/{report_dir}/03-architect-review.md
-
-      ## Original User Request
-      {task}
-
       ## Git Diff
       ```diff
       {git_diff}
       ```
 
-      ## Instructions
+      Review the code for AI-specific issues:
+      - Assumption validation
+      - Plausible but wrong patterns
+      - Context fit with existing codebase
+      - Scope creep detection
+
+      **Report output:** Output to `.takt/reports/{report_dir}/03-ai-review.md`.
+      - If file does not exist: Create new file
+      - If file exists: Append with `## Iteration {step_iteration}` section
+
+      **Report format:**
+      ```markdown
+      # AI-Generated Code Review
+
+      ## Result: APPROVE / REJECT
+
+      ## Summary
+      {One sentence summarizing result}
+
+      ## Verified Items
+      | Aspect | Result | Notes |
+      |--------|--------|-------|
+      | Assumption validity | ✅ | - |
+      | API/Library existence | ✅ | - |
+      | Context fit | ✅ | - |
+      | Scope | ✅ | - |
+
+      ## Issues (if REJECT)
+      | # | Category | Location | Issue |
+      |---|----------|----------|-------|
+      | 1 | Hallucinated API | `src/file.ts:23` | Non-existent method |
+      ```
+
+      **Cognitive load reduction rules:**
+      - No issues -> Summary 1 line + check table only (10 lines or less)
+      - Issues found -> + Issues in table format (25 lines or less)
+    rules:
+      - condition: No AI-specific issues found
+        next: architect_review
+      - condition: AI-specific issues detected
+        next: ai_fix
+
+  - name: ai_fix
+    agent: ~/.takt/agents/default/coder.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    instruction_template: |
+      ## AI Review Feedback (This is the latest instruction - prioritize this)
+      {previous_response}
+
+      **Important**: Address the AI Reviewer's feedback.
+      Focus on:
+      - Correcting incorrect assumptions
+      - Fixing plausible-but-wrong implementations
+      - Aligning with existing codebase patterns
+      - Removing scope creep
+    pass_previous_response: true
+    rules:
+      - condition: AI Reviewer's issues have been fixed
+        next: ai_review
+      - condition: Unable to proceed with fixes
+        next: plan
+
+  # ===========================================
+  # Phase 3: Architecture Review
+  # ===========================================
+  - name: architect_review
+    agent: ~/.takt/agents/default/architecture-reviewer.md
+    report: 04-architect-review.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Write
+      - WebSearch
+      - WebFetch
+    instruction_template: |
+      ## Git Diff
+      ```diff
+      {git_diff}
+      ```
+
       Focus on **architecture and design** review.
 
       **Review Criteria:**
@@ -210,7 +271,7 @@ steps:
       - Dead code
       - Call chain verification
 
-      **Report output:** Output to the `Report File` specified above.
+      **Report output:** Output to `.takt/reports/{report_dir}/04-architect-review.md`.
       - If file does not exist: Create new file
       - If file exists: Append with `## Iteration {step_iteration}` section
 
@@ -241,9 +302,9 @@ steps:
       ```
 
       **Cognitive load reduction rules:**
-      - APPROVE + no issues → Summary only (5 lines or less)
-      - APPROVE + minor suggestions → Summary + suggestions (15 lines or less)
-      - REJECT → Issues in table format (30 lines or less)
+      - APPROVE + no issues -> Summary only (5 lines or less)
+      - APPROVE + minor suggestions -> Summary + suggestions (15 lines or less)
+      - REJECT -> Issues in table format (30 lines or less)
     rules:
       - condition: No architecture or design issues found
         next: frontend_review
@@ -265,21 +326,9 @@ steps:
       - WebFetch
     permission_mode: acceptEdits
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations} (workflow-wide)
-      - Step Iteration: {step_iteration} (times this step has run)
-      - Step: fix_architect
-
       ## Architect Feedback (This is the latest instruction - prioritize this)
       {previous_response}
 
-      ## Original User Request (Initial request - for reference)
-      {task}
-
-      ## Additional User Inputs
-      {user_inputs}
-
-      ## Instructions
       **Important**: Address the Architect's feedback.
       "Original User Request" is for reference; it's not the latest instruction.
       Review the session conversation history and fix the Architect's issues.
@@ -291,10 +340,11 @@ steps:
         next: plan
 
   # ===========================================
-  # Phase 3: Frontend Review
+  # Phase 4: Frontend Review
   # ===========================================
   - name: frontend_review
     agent: ~/.takt/agents/expert/frontend-reviewer.md
+    report: 05-frontend-review.md
     allowed_tools:
       - Read
       - Glob
@@ -303,22 +353,11 @@ steps:
       - WebSearch
       - WebFetch
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations} (workflow-wide)
-      - Step Iteration: {step_iteration} (times this step has run)
-      - Step: frontend_review (Frontend Expert Review)
-      - Report Directory: .takt/reports/{report_dir}/
-      - Report File: .takt/reports/{report_dir}/04-frontend-review.md
-
-      ## Original User Request
-      {task}
-
       ## Git Diff
       ```diff
       {git_diff}
       ```
 
-      ## Instructions
       Review the changes above from the frontend development perspective.
 
       **Review Criteria:**
@@ -332,7 +371,7 @@ steps:
       **Note**: If this project does not include frontend code,
       approve and proceed to the next step.
 
-      **Report output:** Output to the `Report File` specified above.
+      **Report output:** Output to `.takt/reports/{report_dir}/05-frontend-review.md`.
       - If file does not exist: Create new file
       - If file exists: Append with `## Iteration {step_iteration}` section
 
@@ -361,7 +400,7 @@ steps:
       ```
     rules:
       - condition: Frontend design is sound with no issues
-        next: ai_review
+        next: security_review
       - condition: Frontend design issues found
         next: fix_frontend
 
@@ -377,21 +416,9 @@ steps:
       - WebSearch
       - WebFetch
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations} (workflow-wide)
-      - Step Iteration: {step_iteration} (times this step has run)
-      - Step: fix_frontend
-
       ## Frontend Review Feedback (This is the latest instruction - prioritize this)
       {previous_response}
 
-      ## Original User Request (Initial request - for reference)
-      {task}
-
-      ## Additional User Inputs
-      {user_inputs}
-
-      ## Instructions
       **Important**: Fix the issues pointed out by the frontend expert.
 
       Areas of concern:
@@ -408,121 +435,11 @@ steps:
         next: plan
 
   # ===========================================
-  # Phase 4: AI Review
-  # ===========================================
-  - name: ai_review
-    agent: ~/.takt/agents/default/ai-antipattern-reviewer.md
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - Write
-      - WebSearch
-      - WebFetch
-    instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations} (workflow-wide)
-      - Step Iteration: {step_iteration} (times this step has run)
-      - Step: ai_review (AI-Generated Code Review)
-      - Report Directory: .takt/reports/{report_dir}/
-      - Report File: .takt/reports/{report_dir}/05-ai-review.md
-
-      ## Original User Request (Initial request from workflow start)
-      {task}
-
-      ## Git Diff
-      ```diff
-      {git_diff}
-      ```
-
-      ## Instructions
-      Review the code for AI-specific issues:
-      - Assumption validation
-      - Plausible but wrong patterns
-      - Context fit with existing codebase
-      - Scope creep detection
-
-      **Report output:** Output to the `Report File` specified above.
-      - If file does not exist: Create new file
-      - If file exists: Append with `## Iteration {step_iteration}` section
-
-      **Report format:**
-      ```markdown
-      # AI-Generated Code Review
-
-      ## Result: APPROVE / REJECT
-
-      ## Summary
-      {One sentence summarizing result}
-
-      ## Verified Items
-      | Aspect | Result | Notes |
-      |--------|--------|-------|
-      | Assumption validity | ✅ | - |
-      | API/Library existence | ✅ | - |
-      | Context fit | ✅ | - |
-      | Scope | ✅ | - |
-
-      ## Issues (if REJECT)
-      | # | Category | Location | Issue |
-      |---|----------|----------|-------|
-      | 1 | Hallucinated API | `src/file.ts:23` | Non-existent method |
-      ```
-
-      **Cognitive load reduction rules:**
-      - No issues → Summary 1 line + check table only (10 lines or less)
-      - Issues found → + Issues in table format (25 lines or less)
-    rules:
-      - condition: No AI-specific issues found
-        next: security_review
-      - condition: AI-specific issues detected
-        next: ai_fix
-
-  - name: ai_fix
-    agent: ~/.takt/agents/default/coder.md
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - Edit
-      - Write
-      - Bash
-      - WebSearch
-      - WebFetch
-    instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations} (workflow-wide)
-      - Step Iteration: {step_iteration} (times this step has run)
-      - Step: ai_fix
-
-      ## AI Review Feedback (This is the latest instruction - prioritize this)
-      {previous_response}
-
-      ## Original User Request (Initial request from workflow start - for reference)
-      {task}
-
-      ## Additional User Inputs
-      {user_inputs}
-
-      ## Instructions
-      **Important**: Address the AI Reviewer's feedback.
-      Focus on:
-      - Correcting incorrect assumptions
-      - Fixing plausible-but-wrong implementations
-      - Aligning with existing codebase patterns
-      - Removing scope creep
-    pass_previous_response: true
-    rules:
-      - condition: AI Reviewer's issues have been fixed
-        next: ai_review
-      - condition: Unable to proceed with fixes
-        next: plan
-
-  # ===========================================
   # Phase 5: Security Review
   # ===========================================
   - name: security_review
     agent: ~/.takt/agents/expert/security-reviewer.md
+    report: 06-security-review.md
     allowed_tools:
       - Read
       - Glob
@@ -531,22 +448,11 @@ steps:
       - WebSearch
       - WebFetch
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations} (workflow-wide)
-      - Step Iteration: {step_iteration} (times this step has run)
-      - Step: security_review (Security Expert Review)
-      - Report Directory: .takt/reports/{report_dir}/
-      - Report File: .takt/reports/{report_dir}/06-security-review.md
-
-      ## Original User Request
-      {task}
-
       ## Git Diff
       ```diff
       {git_diff}
       ```
 
-      ## Instructions
       Review the changes above from the security perspective.
 
       **Review Criteria:**
@@ -556,7 +462,7 @@ steps:
       - Encryption appropriateness
       - OWASP Top 10
 
-      **Report output:** Output to the `Report File` specified above.
+      **Report output:** Output to `.takt/reports/{report_dir}/06-security-review.md`.
       - If file does not exist: Create new file
       - If file exists: Append with `## Iteration {step_iteration}` section
 
@@ -602,21 +508,9 @@ steps:
       - WebSearch
       - WebFetch
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations} (workflow-wide)
-      - Step Iteration: {step_iteration} (times this step has run)
-      - Step: fix_security
-
       ## Security Review Feedback (This is the latest instruction - prioritize this)
       {previous_response}
 
-      ## Original User Request (Initial request - for reference)
-      {task}
-
-      ## Additional User Inputs
-      {user_inputs}
-
-      ## Instructions
       **Important**: Fix the issues pointed out by the security expert.
       Security issues should be addressed with highest priority.
 
@@ -647,6 +541,7 @@ steps:
   # ===========================================
   - name: qa_review
     agent: ~/.takt/agents/expert/qa-reviewer.md
+    report: 07-qa-review.md
     allowed_tools:
       - Read
       - Glob
@@ -655,22 +550,11 @@ steps:
       - WebSearch
       - WebFetch
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations} (workflow-wide)
-      - Step Iteration: {step_iteration} (times this step has run)
-      - Step: qa_review (QA Expert Review)
-      - Report Directory: .takt/reports/{report_dir}/
-      - Report File: .takt/reports/{report_dir}/07-qa-review.md
-
-      ## Original User Request
-      {task}
-
       ## Git Diff
       ```diff
       {git_diff}
       ```
 
-      ## Instructions
       Review the changes above from the quality assurance perspective.
 
       **Review Criteria:**
@@ -681,7 +565,7 @@ steps:
       - Logging and monitoring
       - Maintainability
 
-      **Report output:** Output to the `Report File` specified above.
+      **Report output:** Output to `.takt/reports/{report_dir}/07-qa-review.md`.
       - If file does not exist: Create new file
       - If file exists: Append with `## Iteration {step_iteration}` section
 
@@ -726,21 +610,9 @@ steps:
       - WebSearch
       - WebFetch
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations} (workflow-wide)
-      - Step Iteration: {step_iteration} (times this step has run)
-      - Step: fix_qa
-
       ## QA Review Feedback (This is the latest instruction - prioritize this)
       {previous_response}
 
-      ## Original User Request (Initial request - for reference)
-      {task}
-
-      ## Additional User Inputs
-      {user_inputs}
-
-      ## Instructions
       **Important**: Fix the issues pointed out by the QA expert.
 
       Areas of concern:
@@ -775,6 +647,9 @@ steps:
   # ===========================================
   - name: supervise
     agent: ~/.takt/agents/expert/supervisor.md
+    report:
+      - Validation: 08-supervisor-validation.md
+      - Summary: summary.md
     allowed_tools:
       - Read
       - Glob
@@ -783,18 +658,6 @@ steps:
       - WebSearch
       - WebFetch
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations} (workflow-wide)
-      - Step Iteration: {step_iteration} (times this step has run)
-      - Step: supervise (Final Review)
-      - Report Directory: .takt/reports/{report_dir}/
-      - Report Files:
-        - Validation: .takt/reports/{report_dir}/08-supervisor-validation.md
-        - Summary: .takt/reports/{report_dir}/summary.md
-
-      ## Original User Request
-      {task}
-
       ## Git Diff
       ```diff
       {git_diff}
@@ -808,7 +671,6 @@ steps:
       - Security Review: APPROVED
       - QA Review: APPROVED
 
-      ## Instructions
       Run tests, verify the build, and perform final approval.
 
       **Workflow Overall Review:**
@@ -819,7 +681,9 @@ steps:
       **Review Reports:** Read all reports in Report Directory and
       check for any unaddressed improvement suggestions.
 
-      **Report output:** Output to the `Report Files` specified above.
+      **Report output:** Output to the report files specified below.
+      - Validation: `.takt/reports/{report_dir}/08-supervisor-validation.md`
+      - Summary: `.takt/reports/{report_dir}/summary.md`
       - If file does not exist: Create new file
       - If file exists: Append with `## Iteration {step_iteration}` section
 
@@ -896,21 +760,9 @@ steps:
       - WebSearch
       - WebFetch
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations} (workflow-wide)
-      - Step Iteration: {step_iteration} (times this step has run)
-      - Step: fix_supervisor
-
       ## Supervisor Feedback (This is the latest instruction - prioritize this)
       {previous_response}
 
-      ## Original User Request (Initial request - for reference)
-      {task}
-
-      ## Additional User Inputs
-      {user_inputs}
-
-      ## Instructions
       **Important**: Fix the issues pointed out by the supervisor.
 
       The supervisor has identified issues from a big-picture perspective.

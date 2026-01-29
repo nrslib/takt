@@ -1,19 +1,24 @@
 # Simple TAKT Workflow
-# Plan -> Coder -> Architect Review -> AI Review -> Supervisor Approval
-# (Simplified version of default - removed improve, fix, ai_fix, security_review, security_fix)
+# Plan -> Implement -> AI Review -> Architect Review -> Supervisor Approval
 #
-# Template Variables:
-#   {iteration}      - Workflow-wide turn count (total steps executed across all agents)
-#   {max_iterations} - Maximum iterations allowed for the workflow
-#   {step_iteration} - Per-step iteration count (how many times THIS step has been executed)
-#   {task}           - Original user request
-#   {previous_response} - Output from the previous step
-#   {git_diff}       - Current uncommitted changes (git diff)
-#   {user_inputs}    - Accumulated user inputs during workflow
-#   {report_dir}     - Report directory name (e.g., "20250126-143052-task-summary")
+# Template Variables (auto-injected by engine):
+#   {iteration}          - Workflow-wide turn count
+#   {max_iterations}     - Maximum iterations allowed
+#   {step_iteration}     - Per-step iteration count
+#   {task}               - Original user request
+#   {previous_response}  - Output from the previous step
+#   {git_diff}           - Current uncommitted changes (git diff)
+#   {user_inputs}        - Accumulated user inputs during workflow
+#   {report_dir}         - Report directory name
+#
+# Auto-injected sections (do NOT include in instruction_template):
+#   ## Workflow Context       - iteration, step_iteration, report info
+#   ## User Request           - {task}
+#   ## Previous Response      - {previous_response}
+#   ## Additional User Inputs - {user_inputs}
 
 name: simple
-description: Simplified development workflow (plan -> implement -> review -> ai_review -> supervise)
+description: Simplified development workflow (plan -> implement -> ai_review -> review -> supervise)
 
 max_iterations: 20
 
@@ -22,6 +27,7 @@ initial_step: plan
 steps:
   - name: plan
     agent: ~/.takt/agents/default/planner.md
+    report: 00-plan.md
     allowed_tools:
       - Read
       - Glob
@@ -39,20 +45,9 @@ steps:
         next: ABORT
     pass_previous_response: true
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations} (workflow-wide)
-      - Step Iteration: {step_iteration} (times this step has run)
-      - Step: plan (Task Analysis)
-      - Report Directory: .takt/reports/{report_dir}/
-      - Report File: .takt/reports/{report_dir}/00-plan.md
-
-      ## User Request
-      {task}
-
       ## Previous Response (when returned from implement)
       {previous_response}
 
-      ## Instructions
       Analyze the task and create an implementation plan.
 
       **Note:** If returned from implement step (Previous Response exists),
@@ -91,6 +86,9 @@ steps:
 
   - name: implement
     agent: ~/.takt/agents/default/coder.md
+    report:
+      - Scope: 01-coder-scope.md
+      - Decisions: 02-coder-decisions.md
     allowed_tools:
       - Read
       - Glob
@@ -103,26 +101,10 @@ steps:
     permission_mode: acceptEdits
     rules:
       - condition: Implementation complete
-        next: review
+        next: ai_review
       - condition: Cannot proceed, insufficient info
         next: plan
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations} (workflow-wide)
-      - Step Iteration: {step_iteration} (times this step has run)
-      - Step: implement
-      - Report Directory: .takt/reports/{report_dir}/
-      - Report Files:
-        - Scope: .takt/reports/{report_dir}/01-coder-scope.md
-        - Decisions: .takt/reports/{report_dir}/02-coder-decisions.md
-
-      ## User Request
-      {task}
-
-      ## Additional User Inputs
-      {user_inputs}
-
-      ## Instructions
       Follow the plan from the plan step and implement.
       Refer to the plan report (00-plan.md) and proceed with implementation.
 
@@ -160,8 +142,67 @@ steps:
       - **Reason**: {Why this option was chosen}
       ```
 
+  - name: ai_review
+    agent: ~/.takt/agents/default/ai-antipattern-reviewer.md
+    report: 03-ai-review.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Write
+      - WebSearch
+      - WebFetch
+    rules:
+      - condition: No AI-specific issues
+        next: review
+      - condition: AI-specific issues found
+        next: plan
+    instruction_template: |
+      ## Git Diff
+      ```diff
+      {git_diff}
+      ```
+
+      Review the code for AI-specific issues:
+      - Assumption validation
+      - Plausible but wrong patterns
+      - Context fit with existing codebase
+      - Scope creep detection
+
+      **Report output:** Output to the `Report File` specified above.
+      - If file does not exist: Create new file
+      - If file exists: Append with `## Iteration {step_iteration}` section
+
+      **Report format:**
+      ```markdown
+      # AI-Generated Code Review
+
+      ## Result: APPROVE / REJECT
+
+      ## Summary
+      {One sentence summarizing result}
+
+      ## Verified Items
+      | Aspect | Result | Notes |
+      |--------|--------|-------|
+      | Assumption validity | ✅ | - |
+      | API/Library existence | ✅ | - |
+      | Context fit | ✅ | - |
+      | Scope | ✅ | - |
+
+      ## Issues (if REJECT)
+      | # | Category | Location | Issue |
+      |---|----------|----------|-------|
+      | 1 | Hallucinated API | `src/file.ts:23` | Non-existent method |
+      ```
+
+      **Cognitive load reduction rules:**
+      - No issues -> Summary 1 line + check table only (10 lines or less)
+      - Issues found -> + Issues in table format (25 lines or less)
+
   - name: review
     agent: ~/.takt/agents/default/architecture-reviewer.md
+    report: 04-architect-review.md
     allowed_tools:
       - Read
       - Glob
@@ -171,27 +212,16 @@ steps:
       - WebFetch
     rules:
       - condition: No issues found
-        next: ai_review
+        next: supervise
       - condition: Structural fix required
         next: plan
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations} (workflow-wide)
-      - Step Iteration: {step_iteration} (times this step has run)
-      - Step: review (Architecture Review)
-      - Report Directory: .takt/reports/{report_dir}/
-      - Report File: .takt/reports/{report_dir}/03-architect-review.md
-
-      ## Original User Request (Initial request from workflow start)
-      {task}
-
       ## Git Diff
       ```diff
       {git_diff}
       ```
 
-      ## Instructions
-      Focus on **architecture and design** review. Do NOT review AI-specific issues (that's the next step).
+      Focus on **architecture and design** review. Do NOT review AI-specific issues (that's already done).
 
       Review the changes and provide feedback.
 
@@ -230,76 +260,11 @@ steps:
       - APPROVE + minor suggestions -> Summary + suggestions (15 lines or less)
       - REJECT -> Issues in table format (30 lines or less)
 
-  - name: ai_review
-    agent: ~/.takt/agents/default/ai-antipattern-reviewer.md
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - Write
-      - WebSearch
-      - WebFetch
-    rules:
-      - condition: No AI-specific issues
-        next: supervise
-      - condition: AI-specific issues found
-        next: plan
-    instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations} (workflow-wide)
-      - Step Iteration: {step_iteration} (times this step has run)
-      - Step: ai_review (AI-Generated Code Review)
-      - Report Directory: .takt/reports/{report_dir}/
-      - Report File: .takt/reports/{report_dir}/04-ai-review.md
-
-      ## Original User Request (Initial request from workflow start)
-      {task}
-
-      ## Git Diff
-      ```diff
-      {git_diff}
-      ```
-
-      ## Instructions
-      Review the code for AI-specific issues:
-      - Assumption validation
-      - Plausible but wrong patterns
-      - Context fit with existing codebase
-      - Scope creep detection
-
-      **Report output:** Output to the `Report File` specified above.
-      - If file does not exist: Create new file
-      - If file exists: Append with `## Iteration {step_iteration}` section
-
-      **Report format:**
-      ```markdown
-      # AI-Generated Code Review
-
-      ## Result: APPROVE / REJECT
-
-      ## Summary
-      {One sentence summarizing result}
-
-      ## Verified Items
-      | Aspect | Result | Notes |
-      |--------|--------|-------|
-      | Assumption validity | ✅ | - |
-      | API/Library existence | ✅ | - |
-      | Context fit | ✅ | - |
-      | Scope | ✅ | - |
-
-      ## Issues (if REJECT)
-      | # | Category | Location | Issue |
-      |---|----------|----------|-------|
-      | 1 | Hallucinated API | `src/file.ts:23` | Non-existent method |
-      ```
-
-      **Cognitive load reduction rules:**
-      - No issues -> Summary 1 line + check table only (10 lines or less)
-      - Issues found -> + Issues in table format (25 lines or less)
-
   - name: supervise
     agent: ~/.takt/agents/default/supervisor.md
+    report:
+      - Validation: 05-supervisor-validation.md
+      - Summary: summary.md
     allowed_tools:
       - Read
       - Glob
@@ -314,24 +279,11 @@ steps:
       - condition: Requirements unmet, tests failing
         next: plan
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations} (workflow-wide)
-      - Step Iteration: {step_iteration} (times this step has run)
-      - Step: supervise (final verification)
-      - Report Directory: .takt/reports/{report_dir}/
-      - Report Files:
-        - Validation: .takt/reports/{report_dir}/05-supervisor-validation.md
-        - Summary: .takt/reports/{report_dir}/summary.md
-
-      ## Original User Request
-      {task}
-
       ## Git Diff
       ```diff
       {git_diff}
       ```
 
-      ## Instructions
       Run tests, verify the build, and perform final approval.
 
       **Workflow Overall Review:**
@@ -388,8 +340,8 @@ steps:
       ## Review Results
       | Review | Result |
       |--------|--------|
-      | Architect | ✅ APPROVE |
       | AI Review | ✅ APPROVE |
+      | Architect | ✅ APPROVE |
       | Supervisor | ✅ APPROVE |
 
       ## Verification Commands

@@ -1,26 +1,36 @@
 # Default TAKT Workflow
-# Plan -> Coder -> Architect Review -> AI Review -> Security Review -> Supervisor Approval
+# Plan -> Coder -> AI Review -> Architect Review -> Security Review -> Supervisor Approval
 #
-# Template Variables:
-#   {iteration}      - Workflow-wide turn count (total steps executed across all agents)
-#   {max_iterations} - Maximum iterations allowed for the workflow
-#   {step_iteration} - Per-step iteration count (how many times THIS step has been executed)
-#   {task}           - Original user request
-#   {previous_response} - Output from the previous step
-#   {git_diff}       - Current uncommitted changes (git diff)
-#   {user_inputs}    - Accumulated user inputs during workflow
-#   {report_dir}     - Report directory name (e.g., "20250126-143052-task-summary")
+# Boilerplate sections (Workflow Context, User Request, Previous Response,
+# Additional User Inputs, Instructions heading) are auto-injected by buildInstruction().
+# Only step-specific content belongs in instruction_template.
+#
+# Template Variables (available in instruction_template):
+#   {iteration}         - Workflow-wide turn count (total steps executed across all agents)
+#   {max_iterations}    - Maximum iterations allowed for the workflow
+#   {step_iteration}    - Per-step iteration count (how many times THIS step has been executed)
+#   {previous_response} - Output from the previous step (only when pass_previous_response: true)
+#   {git_diff}          - Current uncommitted changes (git diff)
+#   {report_dir}        - Report directory name (e.g., "20250126-143052-task-summary")
+#
+# Step-level Fields:
+#   report:  - Report file(s) for the step (auto-injected as Report File/Files in Workflow Context)
+#              Single: report: 00-plan.md
+#              Multiple: report:
+#                          - Scope: 01-coder-scope.md
+#                          - Decisions: 02-coder-decisions.md
 
 name: default
 description: Standard development workflow with planning and specialized reviews
 
-max_iterations: 20
+max_iterations: 30
 
 initial_step: plan
 
 steps:
   - name: plan
     agent: ~/.takt/agents/default/planner.md
+    report: 00-plan.md
     allowed_tools:
       - Read
       - Glob
@@ -42,20 +52,9 @@ steps:
           - {Question 2}
     pass_previous_response: true
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations} (workflow-wide)
-      - Step Iteration: {step_iteration} (times this step has run)
-      - Step: plan (Task Analysis)
-      - Report Directory: .takt/reports/{report_dir}/
-      - Report File: .takt/reports/{report_dir}/00-plan.md
-
-      ## User Request
-      {task}
-
       ## Previous Response (when returned from implement)
       {previous_response}
 
-      ## Instructions
       Analyze the task and create an implementation plan.
 
       **Note:** If returned from implement step (Previous Response exists),
@@ -94,6 +93,9 @@ steps:
 
   - name: implement
     agent: ~/.takt/agents/default/coder.md
+    report:
+      - Scope: 01-coder-scope.md
+      - Decisions: 02-coder-decisions.md
     allowed_tools:
       - Read
       - Glob
@@ -106,26 +108,10 @@ steps:
     permission_mode: acceptEdits
     rules:
       - condition: Implementation complete
-        next: review
+        next: ai_review
       - condition: Cannot proceed, insufficient info
         next: plan
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations} (workflow-wide)
-      - Step Iteration: {step_iteration} (times this step has run)
-      - Step: implement
-      - Report Directory: .takt/reports/{report_dir}/
-      - Report Files:
-        - Scope: .takt/reports/{report_dir}/01-coder-scope.md
-        - Decisions: .takt/reports/{report_dir}/02-coder-decisions.md
-
-      ## User Request
-      {task}
-
-      ## Additional User Inputs
-      {user_inputs}
-
-      ## Instructions
       Follow the plan from the plan step and implement.
       Refer to the plan report (00-plan.md) and proceed with implementation.
 
@@ -163,120 +149,9 @@ steps:
       - **Reason**: {Why this option was chosen}
       ```
 
-  - name: review
-    agent: ~/.takt/agents/default/architecture-reviewer.md
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - Write
-      - WebSearch
-      - WebFetch
-    rules:
-      - condition: No issues found
-        next: ai_review
-      - condition: Minor improvements needed
-        next: improve
-      - condition: Structural fix required
-        next: fix
-    instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations} (workflow-wide)
-      - Step Iteration: {step_iteration} (times this step has run)
-      - Step: review (Architecture Review)
-      - Report Directory: .takt/reports/{report_dir}/
-      - Report File: .takt/reports/{report_dir}/03-architect-review.md
-
-      ## Original User Request (Initial request from workflow start)
-      {task}
-
-      ## Git Diff
-      ```diff
-      {git_diff}
-      ```
-
-      ## Instructions
-      Focus on **architecture and design** review. Do NOT review AI-specific issues (that's the next step).
-
-      Review the changes and provide feedback.
-
-      **Report output:** Output to the `Report File` specified above.
-      - If file does not exist: Create new file
-      - If file exists: Append with `## Iteration {step_iteration}` section
-
-      **Report format:**
-      ```markdown
-      # Architecture Review
-
-      ## Result: APPROVE / IMPROVE / REJECT
-
-      ## Summary
-      {1-2 sentences summarizing result}
-
-      ## Reviewed Perspectives
-      - [x] Structure & Design
-      - [x] Code Quality
-      - [x] Change Scope
-
-      ## Issues (if REJECT)
-      | # | Location | Issue | Fix |
-      |---|----------|-------|-----|
-      | 1 | `src/file.ts:42` | Issue description | Fix method |
-
-      ## Improvement Suggestions (optional, non-blocking)
-      - {Future improvement suggestions}
-      ```
-
-      **Cognitive load reduction rules:**
-      - APPROVE + no issues -> Summary only (5 lines or less)
-      - APPROVE + minor suggestions -> Summary + suggestions (15 lines or less)
-      - REJECT -> Issues in table format (30 lines or less)
-
-  - name: improve
-    agent: ~/.takt/agents/default/coder.md
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - Edit
-      - Write
-      - Bash
-      - WebSearch
-      - WebFetch
-    permission_mode: acceptEdits
-    rules:
-      - condition: Improvements complete
-        next: review
-      - condition: Cannot proceed, insufficient info
-        next: plan
-    instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations} (workflow-wide)
-      - Step Iteration: {step_iteration} (times this step has run)
-      - Step: improve
-
-      ## Architect Feedback (This is the latest instruction - prioritize this)
-      {previous_response}
-
-      ## Original User Request (Initial request from workflow start - for reference)
-      {task}
-
-      ## Additional User Inputs
-      {user_inputs}
-
-      ## Instructions
-      **Important**: Address the Architect's improvement suggestions.
-      These are minor improvements, not major design issues.
-
-      Make improvements such as:
-      - Naming improvements
-      - Small refactoring
-      - Adding/fixing comments
-      - Code organization
-    pass_previous_response: true
-
   - name: ai_review
     agent: ~/.takt/agents/default/ai-antipattern-reviewer.md
+    report: 03-ai-review.md
     allowed_tools:
       - Read
       - Glob
@@ -286,26 +161,15 @@ steps:
       - WebFetch
     rules:
       - condition: No AI-specific issues
-        next: security_review
+        next: review
       - condition: AI-specific issues found
         next: ai_fix
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations} (workflow-wide)
-      - Step Iteration: {step_iteration} (times this step has run)
-      - Step: ai_review (AI-Generated Code Review)
-      - Report Directory: .takt/reports/{report_dir}/
-      - Report File: .takt/reports/{report_dir}/04-ai-review.md
-
-      ## Original User Request (Initial request from workflow start)
-      {task}
-
       ## Git Diff
       ```diff
       {git_diff}
       ```
 
-      ## Instructions
       Review the code for AI-specific issues:
       - Assumption validation
       - Plausible but wrong patterns
@@ -361,21 +225,9 @@ steps:
       - condition: Cannot proceed, insufficient info
         next: plan
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations} (workflow-wide)
-      - Step Iteration: {step_iteration} (times this step has run)
-      - Step: ai_fix
-
       ## AI Review Feedback (This is the latest instruction - prioritize this)
       {previous_response}
 
-      ## Original User Request (Initial request from workflow start - for reference)
-      {task}
-
-      ## Additional User Inputs
-      {user_inputs}
-
-      ## Instructions
       **Important**: Address the AI Reviewer's feedback.
       Focus on:
       - Correcting incorrect assumptions
@@ -384,8 +236,125 @@ steps:
       - Removing scope creep
     pass_previous_response: true
 
+  - name: review
+    agent: ~/.takt/agents/default/architecture-reviewer.md
+    report: 04-architect-review.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Write
+      - WebSearch
+      - WebFetch
+    rules:
+      - condition: No issues found
+        next: security_review
+      - condition: Minor improvements needed
+        next: improve
+      - condition: Structural fix required
+        next: fix
+    instruction_template: |
+      ## Git Diff
+      ```diff
+      {git_diff}
+      ```
+
+      Focus on **architecture and design** review. Do NOT review AI-specific issues (that's the ai_review step).
+
+      Review the changes and provide feedback.
+
+      **Report output:** Output to the `Report File` specified above.
+      - If file does not exist: Create new file
+      - If file exists: Append with `## Iteration {step_iteration}` section
+
+      **Report format:**
+      ```markdown
+      # Architecture Review
+
+      ## Result: APPROVE / IMPROVE / REJECT
+
+      ## Summary
+      {1-2 sentences summarizing result}
+
+      ## Reviewed Perspectives
+      - [x] Structure & Design
+      - [x] Code Quality
+      - [x] Change Scope
+
+      ## Issues (if REJECT)
+      | # | Location | Issue | Fix |
+      |---|----------|-------|-----|
+      | 1 | `src/file.ts:42` | Issue description | Fix method |
+
+      ## Improvement Suggestions (optional, non-blocking)
+      - {Future improvement suggestions}
+      ```
+
+      **Cognitive load reduction rules:**
+      - APPROVE + no issues -> Summary only (5 lines or less)
+      - APPROVE + minor suggestions -> Summary + suggestions (15 lines or less)
+      - REJECT -> Issues in table format (30 lines or less)
+
+  - name: improve
+    agent: ~/.takt/agents/default/coder.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    permission_mode: acceptEdits
+    rules:
+      - condition: Improvements complete
+        next: review
+      - condition: Cannot proceed, insufficient info
+        next: plan
+    instruction_template: |
+      ## Architect Feedback (This is the latest instruction - prioritize this)
+      {previous_response}
+
+      **Important**: Address the Architect's improvement suggestions.
+      These are minor improvements, not major design issues.
+
+      Make improvements such as:
+      - Naming improvements
+      - Small refactoring
+      - Adding/fixing comments
+      - Code organization
+    pass_previous_response: true
+
+  - name: fix
+    agent: ~/.takt/agents/default/coder.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    permission_mode: acceptEdits
+    rules:
+      - condition: Architect feedback addressed
+        next: review
+      - condition: Cannot proceed, insufficient info
+        next: plan
+    instruction_template: |
+      ## Architect Feedback (This is the latest instruction - prioritize this)
+      {previous_response}
+
+      **Important**: Address the Architect's feedback.
+      The "Original User Request" is reference information, not the latest instruction.
+      Review the session conversation history and fix the issues raised by the Architect.
+    pass_previous_response: true
+
   - name: security_review
     agent: ~/.takt/agents/default/security-reviewer.md
+    report: 05-security-review.md
     allowed_tools:
       - Read
       - Glob
@@ -399,22 +368,11 @@ steps:
       - condition: Vulnerabilities require fix
         next: security_fix
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations} (workflow-wide)
-      - Step Iteration: {step_iteration} (times this step has run)
-      - Step: security_review
-      - Report Directory: .takt/reports/{report_dir}/
-      - Report File: .takt/reports/{report_dir}/05-security-review.md
-
-      ## Original User Request (Initial request from workflow start)
-      {task}
-
       ## Git Diff
       ```diff
       {git_diff}
       ```
 
-      ## Instructions
       Perform security review on the changes. Check for vulnerabilities including:
       - Injection attacks (SQL, Command, XSS)
       - Authentication/Authorization issues
@@ -473,65 +431,18 @@ steps:
       - condition: Cannot proceed, insufficient info
         next: plan
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations} (workflow-wide)
-      - Step Iteration: {step_iteration} (times this step has run)
-      - Step: security_fix
-
       ## Security Review Feedback (This is the latest instruction - prioritize this)
       {previous_response}
 
-      ## Original User Request (Initial request from workflow start - for reference)
-      {task}
-
-      ## Additional User Inputs
-      {user_inputs}
-
-      ## Instructions
       **Important**: Fix the vulnerabilities identified in the security review.
       Security issues require highest priority.
     pass_previous_response: true
 
-  - name: fix
-    agent: ~/.takt/agents/default/coder.md
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - Edit
-      - Write
-      - Bash
-      - WebSearch
-      - WebFetch
-    permission_mode: acceptEdits
-    rules:
-      - condition: Architect feedback addressed
-        next: review
-      - condition: Cannot proceed, insufficient info
-        next: plan
-    instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations} (workflow-wide)
-      - Step Iteration: {step_iteration} (times this step has run)
-      - Step: fix
-
-      ## Architect Feedback (This is the latest instruction - prioritize this)
-      {previous_response}
-
-      ## Original User Request (Initial request from workflow start - for reference)
-      {task}
-
-      ## Additional User Inputs
-      {user_inputs}
-
-      ## Instructions
-      **Important**: Address the Architect's feedback.
-      The "Original User Request" is reference information, not the latest instruction.
-      Review the session conversation history and fix the issues raised by the Architect.
-    pass_previous_response: true
-
   - name: supervise
     agent: ~/.takt/agents/default/supervisor.md
+    report:
+      - Validation: 06-supervisor-validation.md
+      - Summary: summary.md
     allowed_tools:
       - Read
       - Glob
@@ -546,24 +457,11 @@ steps:
       - condition: Requirements unmet, tests failing, build errors
         next: plan
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations} (workflow-wide)
-      - Step Iteration: {step_iteration} (times this step has run)
-      - Step: supervise (final verification)
-      - Report Directory: .takt/reports/{report_dir}/
-      - Report Files:
-        - Validation: .takt/reports/{report_dir}/06-supervisor-validation.md
-        - Summary: .takt/reports/{report_dir}/summary.md
-
-      ## Original User Request
-      {task}
-
       ## Git Diff
       ```diff
       {git_diff}
       ```
 
-      ## Instructions
       Run tests, verify the build, and perform final approval.
 
       **Workflow Overall Review:**

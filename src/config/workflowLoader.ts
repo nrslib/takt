@@ -8,7 +8,7 @@ import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { WorkflowConfigRawSchema } from '../models/schemas.js';
-import type { WorkflowConfig, WorkflowStep, WorkflowRule } from '../models/types.js';
+import type { WorkflowConfig, WorkflowStep, WorkflowRule, ReportConfig } from '../models/types.js';
 import { getGlobalWorkflowsDir } from './paths.js';
 
 /** Get builtin workflow by name */
@@ -55,6 +55,28 @@ function extractAgentDisplayName(agentPath: string): string {
 }
 
 /**
+ * Normalize the raw report field from YAML into internal format.
+ *
+ * YAML formats:
+ *   report: "00-plan.md"                  → string (single file)
+ *   report:                               → ReportConfig[] (multiple files)
+ *     - Scope: 01-scope.md
+ *     - Decisions: 02-decisions.md
+ *
+ * Array items are parsed as single-key objects: [{Scope: "01-scope.md"}, ...]
+ */
+function normalizeReport(
+  raw: string | Record<string, string>[] | undefined,
+): string | ReportConfig[] | undefined {
+  if (raw == null) return undefined;
+  if (typeof raw === 'string') return raw;
+  // Convert [{Scope: "01-scope.md"}, ...] to [{label: "Scope", path: "01-scope.md"}, ...]
+  return raw.flatMap((entry) =>
+    Object.entries(entry).map(([label, path]) => ({ label, path })),
+  );
+}
+
+/**
  * Convert raw YAML workflow config to internal format.
  * Agent paths are resolved relative to the workflow directory.
  */
@@ -79,6 +101,7 @@ function normalizeWorkflowConfig(raw: unknown, workflowDir: string): WorkflowCon
       permissionMode: step.permission_mode,
       instructionTemplate: step.instruction_template || step.instruction || '{task}',
       rules,
+      report: normalizeReport(step.report),
       passPreviousResponse: step.pass_previous_response,
     };
   });

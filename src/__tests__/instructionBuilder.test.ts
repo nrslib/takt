@@ -344,6 +344,205 @@ describe('instruction-builder', () => {
     });
   });
 
+  describe('auto-injected Workflow Context section', () => {
+    it('should include iteration, step iteration, and step name', () => {
+      const step = createMinimalStep('Do work');
+      step.name = 'implement';
+      const context = createMinimalContext({
+        iteration: 3,
+        maxIterations: 20,
+        stepIteration: 2,
+        language: 'en',
+      });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('## Workflow Context');
+      expect(result).toContain('- Iteration: 3/20');
+      expect(result).toContain('- Step Iteration: 2');
+      expect(result).toContain('- Step: implement');
+    });
+
+    it('should include single report file when report is a string', () => {
+      const step = createMinimalStep('Do work');
+      step.name = 'plan';
+      step.report = '00-plan.md';
+      const context = createMinimalContext({
+        reportDir: '20260129-test',
+        language: 'en',
+      });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('- Report Directory: .takt/reports/20260129-test/');
+      expect(result).toContain('- Report File: .takt/reports/20260129-test/00-plan.md');
+      expect(result).not.toContain('Report Files:');
+    });
+
+    it('should include multiple report files when report is ReportConfig[]', () => {
+      const step = createMinimalStep('Do work');
+      step.name = 'implement';
+      step.report = [
+        { label: 'Scope', path: '01-scope.md' },
+        { label: 'Decisions', path: '02-decisions.md' },
+      ];
+      const context = createMinimalContext({
+        reportDir: '20260129-test',
+        language: 'en',
+      });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('- Report Directory: .takt/reports/20260129-test/');
+      expect(result).toContain('- Report Files:');
+      expect(result).toContain('  - Scope: .takt/reports/20260129-test/01-scope.md');
+      expect(result).toContain('  - Decisions: .takt/reports/20260129-test/02-decisions.md');
+      expect(result).not.toContain('Report File:');
+    });
+
+    it('should NOT include report info when reportDir is undefined', () => {
+      const step = createMinimalStep('Do work');
+      step.report = '00-plan.md';
+      const context = createMinimalContext({ language: 'en' });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('## Workflow Context');
+      expect(result).not.toContain('Report Directory');
+      expect(result).not.toContain('Report File');
+    });
+
+    it('should NOT include report info when step has no report', () => {
+      const step = createMinimalStep('Do work');
+      const context = createMinimalContext({
+        reportDir: '20260129-test',
+        language: 'en',
+      });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('## Workflow Context');
+      expect(result).not.toContain('Report Directory');
+      expect(result).not.toContain('Report File');
+    });
+
+    it('should render Japanese step iteration suffix', () => {
+      const step = createMinimalStep('Do work');
+      const context = createMinimalContext({
+        stepIteration: 3,
+        language: 'ja',
+      });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('- Step Iteration: 3（このステップの実行回数）');
+    });
+  });
+
+  describe('auto-injected User Request and Additional User Inputs sections', () => {
+    it('should include User Request section with task', () => {
+      const step = createMinimalStep('Do work');
+      const context = createMinimalContext({ task: 'Build the feature', language: 'en' });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('## User Request\n');
+    });
+
+    it('should include Additional User Inputs section', () => {
+      const step = createMinimalStep('Do work');
+      const context = createMinimalContext({
+        userInputs: ['input1', 'input2'],
+        language: 'en',
+      });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('## Additional User Inputs\n');
+    });
+
+    it('should include Previous Response when passPreviousResponse is true and output exists', () => {
+      const step = createMinimalStep('Do work');
+      step.passPreviousResponse = true;
+      const context = createMinimalContext({
+        previousOutput: { content: 'Previous result', tag: '[TEST:1]' },
+        language: 'en',
+      });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('## Previous Response\n');
+    });
+
+    it('should NOT include Previous Response when passPreviousResponse is false', () => {
+      const step = createMinimalStep('Do work');
+      step.passPreviousResponse = false;
+      const context = createMinimalContext({
+        previousOutput: { content: 'Previous result', tag: '[TEST:1]' },
+        language: 'en',
+      });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).not.toContain('## Previous Response');
+    });
+
+    it('should include Instructions header before template content', () => {
+      const step = createMinimalStep('My specific instructions here');
+      const context = createMinimalContext({ language: 'en' });
+
+      const result = buildInstruction(step, context);
+
+      const instructionsIdx = result.indexOf('## Instructions');
+      const contentIdx = result.indexOf('My specific instructions here');
+      expect(instructionsIdx).toBeGreaterThan(-1);
+      expect(contentIdx).toBeGreaterThan(instructionsIdx);
+    });
+
+    it('should skip auto-injected User Request when template contains {task}', () => {
+      const step = createMinimalStep('Process this: {task}');
+      const context = createMinimalContext({ task: 'My task', language: 'en' });
+
+      const result = buildInstruction(step, context);
+
+      // Auto-injected section should NOT appear
+      expect(result).not.toContain('## User Request');
+      // But template placeholder should be replaced
+      expect(result).toContain('Process this: My task');
+    });
+
+    it('should skip auto-injected Previous Response when template contains {previous_response}', () => {
+      const step = createMinimalStep('## Feedback\n{previous_response}\n\nFix the issues.');
+      step.passPreviousResponse = true;
+      const context = createMinimalContext({
+        previousOutput: { content: 'Review feedback here', tag: '[TEST:1]' },
+        language: 'en',
+      });
+
+      const result = buildInstruction(step, context);
+
+      // Auto-injected section should NOT appear
+      expect(result).not.toContain('## Previous Response\n');
+      // But template placeholder should be replaced with content
+      expect(result).toContain('## Feedback\nReview feedback here');
+    });
+
+    it('should skip auto-injected Additional User Inputs when template contains {user_inputs}', () => {
+      const step = createMinimalStep('Inputs: {user_inputs}');
+      const context = createMinimalContext({
+        userInputs: ['extra info'],
+        language: 'en',
+      });
+
+      const result = buildInstruction(step, context);
+
+      // Auto-injected section should NOT appear
+      expect(result).not.toContain('## Additional User Inputs');
+      // But template placeholder should be replaced
+      expect(result).toContain('Inputs: extra info');
+    });
+  });
+
   describe('basic placeholder replacement', () => {
     it('should replace {task} placeholder', () => {
       const step = createMinimalStep('Execute: {task}');

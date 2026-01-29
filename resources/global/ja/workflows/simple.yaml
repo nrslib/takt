@@ -1,19 +1,19 @@
 # Simple TAKT Workflow
-# Plan -> Coder -> Architect Review -> AI Review -> Supervisor Approval
+# Plan -> Implement -> AI Review -> Architect Review -> Supervisor Approval
 # (defaultの簡略版 - improve, fix, ai_fix, security_review, security_fix を削除)
 #
-# Template Variables:
+# Template Variables (auto-injected):
 #   {iteration}      - Workflow-wide turn count (total steps executed across all agents)
 #   {max_iterations} - Maximum iterations allowed for the workflow
 #   {step_iteration} - Per-step iteration count (how many times THIS step has been executed)
-#   {task}           - Original user request
-#   {previous_response} - Output from the previous step
+#   {task}           - Original user request (auto-injected)
+#   {previous_response} - Output from the previous step (auto-injected)
 #   {git_diff}       - Current uncommitted changes (git diff)
-#   {user_inputs}    - Accumulated user inputs during workflow
+#   {user_inputs}    - Accumulated user inputs during workflow (auto-injected)
 #   {report_dir}     - Report directory name (e.g., "20250126-143052-task-summary")
 
 name: simple
-description: Simplified development workflow (plan -> implement -> review -> ai_review -> supervise)
+description: Simplified development workflow (plan -> implement -> ai_review -> review -> supervise)
 
 max_iterations: 20
 
@@ -22,6 +22,7 @@ initial_step: plan
 steps:
   - name: plan
     agent: ~/.takt/agents/default/planner.md
+    report: 00-plan.md
     allowed_tools:
       - Read
       - Glob
@@ -31,20 +32,9 @@ steps:
       - WebSearch
       - WebFetch
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations}（ワークフロー全体）
-      - Step Iteration: {step_iteration}（このステップの実行回数）
-      - Step: plan (タスク分析)
-      - Report Directory: .takt/reports/{report_dir}/
-      - Report File: .takt/reports/{report_dir}/00-plan.md
-
-      ## User Request
-      {task}
-
       ## Previous Response (implementからの差し戻し時)
       {previous_response}
 
-      ## Instructions
       タスクを分析し、実装方針を立ててください。
 
       **注意:** Previous Responseがある場合は差し戻しのため、
@@ -54,10 +44,6 @@ steps:
       1. タスクの要件を理解する
       2. 影響範囲を特定する
       3. 実装アプローチを決める
-
-      **レポート出力:** 上記の `Report File` に出力してください。
-      - ファイルが存在しない場合: 新規作成
-      - ファイルが存在する場合: `## Iteration {step_iteration}` セクションを追記
 
       **レポートフォーマット:**
       ```markdown
@@ -95,6 +81,9 @@ steps:
 
   - name: implement
     agent: ~/.takt/agents/default/coder.md
+    report:
+      - Scope: 01-coder-scope.md
+      - Decisions: 02-coder-decisions.md
     allowed_tools:
       - Read
       - Glob
@@ -106,28 +95,8 @@ steps:
       - WebFetch
     permission_mode: acceptEdits
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations}（ワークフロー全体）
-      - Step Iteration: {step_iteration}（このステップの実行回数）
-      - Step: implement
-      - Report Directory: .takt/reports/{report_dir}/
-      - Report Files:
-        - Scope: .takt/reports/{report_dir}/01-coder-scope.md
-        - Decisions: .takt/reports/{report_dir}/02-coder-decisions.md
-
-      ## User Request
-      {task}
-
-      ## Additional User Inputs
-      {user_inputs}
-
-      ## Instructions
       planステップで立てた計画に従って実装してください。
       計画レポート（00-plan.md）を参照し、実装を進めてください。
-
-      **レポート出力:** 上記の `Report Files` に出力してください。
-      - ファイルが存在しない場合: 新規作成
-      - ファイルが存在する場合: `## Iteration {step_iteration}` セクションを追記
 
       **Scopeレポートフォーマット（実装開始時に作成）:**
       ```markdown
@@ -160,12 +129,13 @@ steps:
       ```
     rules:
       - condition: "実装完了"
-        next: review
+        next: ai_review
       - condition: "判断できない、情報不足"
         next: plan
 
-  - name: review
-    agent: ~/.takt/agents/default/architecture-reviewer.md
+  - name: ai_review
+    agent: ~/.takt/agents/default/ai-antipattern-reviewer.md
+    report: 03-ai-review.md
     allowed_tools:
       - Read
       - Glob
@@ -174,32 +144,71 @@ steps:
       - WebSearch
       - WebFetch
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations}（ワークフロー全体）
-      - Step Iteration: {step_iteration}（このステップの実行回数）
-      - Step: review (アーキテクチャレビュー)
-      - Report Directory: .takt/reports/{report_dir}/
-      - Report File: .takt/reports/{report_dir}/03-architect-review.md
-
-      ## Original User Request (ワークフロー開始時の元の要求)
-      {task}
-
       ## Git Diff
       ```diff
       {git_diff}
       ```
 
-      ## Instructions
-      **アーキテクチャと設計**のレビューに集中してください。AI特有の問題はレビューしないでください（次のステップで行います）。
+      AI特有の問題についてコードをレビューしてください:
+      - 仮定の検証
+      - もっともらしいが間違っているパターン
+      - 既存コードベースとの適合性
+      - スコープクリープの検出
+
+      **レポートフォーマット:**
+      ```markdown
+      # AI生成コードレビュー
+
+      ## 結果: APPROVE / REJECT
+
+      ## サマリー
+      {1文で結果を要約}
+
+      ## 検証した項目
+      | 観点 | 結果 | 備考 |
+      |------|------|------|
+      | 仮定の妥当性 | ✅ | - |
+      | API/ライブラリの実在 | ✅ | - |
+      | コンテキスト適合 | ✅ | - |
+      | スコープ | ✅ | - |
+
+      ## 問題点（REJECTの場合）
+      | # | カテゴリ | 場所 | 問題 |
+      |---|---------|------|------|
+      | 1 | 幻覚API | `src/file.ts:23` | 存在しないメソッド |
+      ```
+
+      **認知負荷軽減ルール:**
+      - 問題なし → サマリー1文 + チェック表のみ（10行以内）
+      - 問題あり → + 問題を表形式で（25行以内）
+    rules:
+      - condition: "AI特有の問題なし"
+        next: review
+      - condition: "AI特有の問題あり"
+        next: plan
+
+  - name: review
+    agent: ~/.takt/agents/default/architecture-reviewer.md
+    report: 04-architect-review.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Write
+      - WebSearch
+      - WebFetch
+    instruction_template: |
+      ## Git Diff
+      ```diff
+      {git_diff}
+      ```
+
+      **アーキテクチャと設計**のレビューに集中してください。AI特有の問題はレビューしないでください（前のステップで完了済み）。
 
       変更をレビューしてフィードバックを提供してください。
 
       **注意:** simpleワークフローではIMPROVE判定は使用しません。
       軽微な改善提案がある場合は APPROVE + コメントとしてください。
-
-      **レポート出力:** 上記の `Report File` に出力してください。
-      - ファイルが存在しない場合: 新規作成
-      - ファイルが存在する場合: `## Iteration {step_iteration}` セクションを追記
 
       **レポートフォーマット:**
       ```markdown
@@ -230,80 +239,15 @@ steps:
       - REJECT → 問題点を表形式で（30行以内）
     rules:
       - condition: "問題なし"
-        next: ai_review
-      - condition: "構造的な修正必要"
-        next: plan
-
-  - name: ai_review
-    agent: ~/.takt/agents/default/ai-antipattern-reviewer.md
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - Write
-      - WebSearch
-      - WebFetch
-    instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations}（ワークフロー全体）
-      - Step Iteration: {step_iteration}（このステップの実行回数）
-      - Step: ai_review (AI生成コードレビュー)
-      - Report Directory: .takt/reports/{report_dir}/
-      - Report File: .takt/reports/{report_dir}/04-ai-review.md
-
-      ## Original User Request (ワークフロー開始時の元の要求)
-      {task}
-
-      ## Git Diff
-      ```diff
-      {git_diff}
-      ```
-
-      ## Instructions
-      AI特有の問題についてコードをレビューしてください:
-      - 仮定の検証
-      - もっともらしいが間違っているパターン
-      - 既存コードベースとの適合性
-      - スコープクリープの検出
-
-      **レポート出力:** 上記の `Report File` に出力してください。
-      - ファイルが存在しない場合: 新規作成
-      - ファイルが存在する場合: `## Iteration {step_iteration}` セクションを追記
-
-      **レポートフォーマット:**
-      ```markdown
-      # AI生成コードレビュー
-
-      ## 結果: APPROVE / REJECT
-
-      ## サマリー
-      {1文で結果を要約}
-
-      ## 検証した項目
-      | 観点 | 結果 | 備考 |
-      |------|------|------|
-      | 仮定の妥当性 | ✅ | - |
-      | API/ライブラリの実在 | ✅ | - |
-      | コンテキスト適合 | ✅ | - |
-      | スコープ | ✅ | - |
-
-      ## 問題点（REJECTの場合）
-      | # | カテゴリ | 場所 | 問題 |
-      |---|---------|------|------|
-      | 1 | 幻覚API | `src/file.ts:23` | 存在しないメソッド |
-      ```
-
-      **認知負荷軽減ルール:**
-      - 問題なし → サマリー1文 + チェック表のみ（10行以内）
-      - 問題あり → + 問題を表形式で（25行以内）
-    rules:
-      - condition: "AI特有の問題なし"
         next: supervise
-      - condition: "AI特有の問題あり"
+      - condition: "構造的な修正必要"
         next: plan
 
   - name: supervise
     agent: ~/.takt/agents/default/supervisor.md
+    report:
+      - Validation: 05-supervisor-validation.md
+      - Summary: summary.md
     allowed_tools:
       - Read
       - Glob
@@ -313,24 +257,11 @@ steps:
       - WebSearch
       - WebFetch
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations}（ワークフロー全体）
-      - Step Iteration: {step_iteration}（このステップの実行回数）
-      - Step: supervise (final verification)
-      - Report Directory: .takt/reports/{report_dir}/
-      - Report Files:
-        - Validation: .takt/reports/{report_dir}/05-supervisor-validation.md
-        - Summary: .takt/reports/{report_dir}/summary.md
-
-      ## Original User Request
-      {task}
-
       ## Git Diff
       ```diff
       {git_diff}
       ```
 
-      ## Instructions
       テスト実行、ビルド確認、最終承認を行ってください。
 
       **ワークフロー全体の確認:**
@@ -340,10 +271,6 @@ steps:
 
       **レポートの確認:** Report Directory内の全レポートを読み、
       未対応の改善提案がないか確認してください。
-
-      **レポート出力:** 上記の `Report Files` に出力してください。
-      - ファイルが存在しない場合: 新規作成
-      - ファイルが存在する場合: `## Iteration {step_iteration}` セクションを追記
 
       **Validationレポートフォーマット:**
       ```markdown
@@ -387,8 +314,8 @@ steps:
       ## レビュー結果
       | レビュー | 結果 |
       |---------|------|
-      | Architect | ✅ APPROVE |
       | AI Review | ✅ APPROVE |
+      | Architect | ✅ APPROVE |
       | Supervisor | ✅ APPROVE |
 
       ## 確認コマンド

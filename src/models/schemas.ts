@@ -27,6 +27,22 @@ export const StatusSchema = z.enum([
 /** Permission mode schema for tool execution */
 export const PermissionModeSchema = z.enum(['default', 'acceptEdits', 'bypassPermissions']);
 
+/**
+ * Report field schema.
+ *
+ * YAML formats:
+ *   report: 00-plan.md          # single file
+ *   report:                     # multiple files (label: path map entries)
+ *     - Scope: 01-scope.md
+ *     - Decisions: 02-decisions.md
+ *
+ * Array items are parsed as single-key objects: [{Scope: "01-scope.md"}, ...]
+ */
+export const ReportFieldSchema = z.union([
+  z.string().min(1),
+  z.array(z.record(z.string(), z.string())).min(1),
+]);
+
 /** Rule-based transition schema (new unified format) */
 export const WorkflowRuleSchema = z.object({
   /** Human-readable condition text */
@@ -52,6 +68,8 @@ export const WorkflowStepRawSchema = z.object({
   instruction_template: z.string().optional(),
   /** Rules for step routing */
   rules: z.array(WorkflowRuleSchema).optional(),
+  /** Report file(s) for this step */
+  report: ReportFieldSchema.optional(),
   pass_previous_response: z.boolean().optional().default(true),
 });
 

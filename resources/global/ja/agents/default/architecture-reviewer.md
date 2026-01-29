@@ -191,73 +191,6 @@ if (status === 'interrupted') {
 }
 ```
 
-**フォールバック値の乱用の判定基準:**
-
-フォールバック値（`??`, `||`, デフォルト引数）は「値が無いケース」を握りつぶす。本来エラーにすべき箇所を隠してしまう。
-
-| 判定 | 基準 |
-|------|------|
-| **REJECT** | 値が無い状態がバグであるのにフォールバックで隠している |
-| **REJECT** | `'unknown'`, `'default'`, `''`, `0` など意味のない値でごまかしている |
-| **REJECT** | 全呼び出し元がフォールバックに頼り、本来の値を渡していない |
-| OK | 外部入力（ユーザー入力、API応答）に対する防御的デフォルト |
-| OK | オプショナルな設定項目に対する合理的な初期値 |
-
-```typescript
-// ❌ REJECT - バグを隠すフォールバック
-const userName = user.name ?? 'unknown';  // name が無いのはデータ不整合
-const stepName = step?.name ?? 'default'; // step が無いのは呼び出し元のバグ
-
-// ❌ REJECT - 全呼び出し元が省略しているオプション
-function runStep(step: Step, options?: { maxRetries?: number }) {
-  const retries = options?.maxRetries ?? 3; // 全呼び出し元が options を渡していない
-}
-
-// ✅ OK - ユーザー設定のオプショナルなデフォルト
-const logLevel = config.logLevel ?? 'info';  // 設定ファイルに無ければ info
-const language = userPreference.lang ?? 'en'; // 未設定なら英語
-
-// ✅ OK - 外部APIの防御的デフォルト
-const displayName = apiResponse.nickname ?? apiResponse.email; // ニックネーム未設定の場合
-```
-
-**未使用コードの判定基準:**
-
-AIは「将来の拡張性」「対称性」「念のため」で不要なコードを生成しがちである。現時点で呼ばれていないコードは削除する。
-
-| 判定 | 基準 |
-|------|------|
-| **REJECT** | 現在どこからも呼ばれていないpublic関数・メソッド |
-| **REJECT** | 「対称性のため」に作られたが使われていないsetter/getter |
-| **REJECT** | 将来の拡張のために用意されたインターフェースやオプション |
-| **REJECT** | exportされているが、grep で使用箇所が見つからない |
-| OK | フレームワークが暗黙的に呼び出す（ライフサイクルフック等） |
-| OK | 公開パッケージのAPIとして意図的に公開している |
-
-```typescript
-// ❌ REJECT - 「対称性のため」のsetter（getしか使っていない）
-class WorkflowState {
-  private _status: Status;
-  getStatus(): Status { return this._status; }
-  setStatus(s: Status) { this._status = s; }  // 誰も呼んでいない
-}
-
-// ❌ REJECT - 「将来の拡張」のためのオプション
-interface EngineOptions {
-  maxIterations: number;
-  enableParallel?: boolean;  // 未実装。どこからも参照されていない
-  pluginHooks?: PluginHook[];  // 未実装。プラグイン機構は存在しない
-}
-
-// ❌ REJECT - exportされているが使われていない
-export function formatStepName(name: string): string { ... } // grep 結果: 0件
-
-// ✅ OK - フレームワークが呼ぶ
-class MyComponent extends React.Component {
-  componentDidMount() { ... }  // Reactが呼ぶ
-}
-```
-
 **状態の直接変更の判定基準:**
 
 オブジェクトや配列を直接変更すると、変更の追跡が困難になり、予期しない副作用を生む。常にスプレッド演算子やイミュータブルな操作で新しいオブジェクトを返す。
@@ -378,35 +311,6 @@ function createUser(data: UserData) {
   await userRepository.save(data);  // 詳細は隠蔽
 }
 ```
-
-### 7. 不要な後方互換コードの検出
-
-**AIは「後方互換のために」不要なコードを残しがちである。これを見逃さない。**
-
-削除すべき後方互換コード:
-
-| パターン | 例 | 判定 |
-|---------|-----|------|
-| deprecated + 使用箇所なし | `@deprecated` アノテーション付きで誰も使っていない | **即削除** |
-| 新APIと旧API両方存在 | 新関数があるのに旧関数も残っている | 旧を**削除** |
-| 移行済みのラッパー | 互換のために作ったが移行完了済み | **削除** |
-| コメントで「将来削除」 | `// TODO: remove after migration` が放置 | **今すぐ削除** |
-| Proxy/アダプタの過剰使用 | 後方互換のためだけに複雑化 | **シンプルに置換** |
-
-残すべき後方互換コード:
-
-| パターン | 例 | 判定 |
-|---------|-----|------|
-| 外部公開API | npm パッケージのエクスポート | 慎重に検討 |
-| 設定ファイル互換 | 旧形式の設定を読める | メジャーバージョンまで維持 |
-| データ移行中 | DBスキーマ移行の途中 | 移行完了まで維持 |
-
-**判断基準:**
-1. **使用箇所があるか？** → grep/検索で確認。なければ削除
-2. **外部に公開しているか？** → 内部のみなら即削除可能
-3. **移行は完了したか？** → 完了なら削除
-
-**AIが「後方互換のため」と言ったら疑う。** 本当に必要か確認せよ。
 
 ### 7. その場しのぎの検出
 
