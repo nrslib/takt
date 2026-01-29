@@ -1,10 +1,10 @@
 /**
- * Git shared clone management
+ * Git clone management
  *
- * Creates and removes git shared clones for task isolation.
- * Uses `git clone --shared` instead of worktrees so each clone
- * has an independent .git directory, preventing Claude Code from
- * traversing gitdir back to the main repository.
+ * Creates and removes git clones for task isolation.
+ * Uses `git clone --reference --dissociate` instead of worktrees so
+ * each clone has a fully independent .git directory with no alternates
+ * link, preventing Claude Code from traversing back to the main repository.
  */
 
 import * as fs from 'node:fs';
@@ -131,8 +131,8 @@ export function createSharedClone(projectDir: string, options: WorktreeOptions):
   // Ensure parent directory exists
   fs.mkdirSync(path.dirname(clonePath), { recursive: true });
 
-  // Create shared clone
-  execFileSync('git', ['clone', '--shared', projectDir, clonePath], {
+  // Create independent clone (--reference + --dissociate = no alternates link back)
+  execFileSync('git', ['clone', '--reference', projectDir, '--dissociate', projectDir, clonePath], {
     cwd: projectDir,
     stdio: 'pipe',
   });
@@ -150,7 +150,7 @@ export function createSharedClone(projectDir: string, options: WorktreeOptions):
     });
   }
 
-  log.info('Shared clone created', { path: clonePath, branch });
+  log.info('Clone created', { path: clonePath, branch });
 
   return { path: clonePath, branch };
 }
@@ -180,7 +180,7 @@ export function createTempCloneForBranch(projectDir: string, branch: string): Wo
 
   fs.mkdirSync(path.dirname(clonePath), { recursive: true });
 
-  execFileSync('git', ['clone', '--shared', projectDir, clonePath], {
+  execFileSync('git', ['clone', '--reference', projectDir, '--dissociate', projectDir, clonePath], {
     cwd: projectDir,
     stdio: 'pipe',
   });
