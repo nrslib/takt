@@ -1,5 +1,5 @@
 # Default TAKT Workflow
-# Plan -> Coder -> AI Review -> Architect Review -> Security Review -> Supervisor Approval
+# Plan -> Coder -> AI Review -> Reviewers (parallel: Architect + Security) -> Supervisor Approval
 #
 # Boilerplate sections (Workflow Context, User Request, Previous Response,
 # Additional User Inputs, Instructions heading) are auto-injected by buildInstruction().
@@ -182,7 +182,7 @@ steps:
       - WebFetch
     rules:
       - condition: No AI-specific issues
-        next: review
+        next: reviewers
       - condition: AI-specific issues found
         next: ai_fix
     instruction_template: |
@@ -207,7 +207,7 @@ steps:
     permission_mode: acceptEdits
     rules:
       - condition: AI issues fixed
-        next: review
+        next: reviewers
       - condition: Cannot proceed, insufficient info
         next: plan
     instruction_template: |
@@ -222,88 +222,110 @@ steps:
       - Removing scope creep
     pass_previous_response: true
 
-  - name: review
-    edit: false
-    agent: ../agents/default/architecture-reviewer.md
-    report:
-      name: 04-architect-review.md
-      format: |
-        ```markdown
-        # Architecture Review
+  - name: reviewers
+    parallel:
+      - name: arch-review
+        edit: false
+        agent: ../agents/default/architecture-reviewer.md
+        report:
+          name: 04-architect-review.md
+          format: |
+            ```markdown
+            # Architecture Review
 
-        ## Result: APPROVE / IMPROVE / REJECT
+            ## Result: APPROVE / IMPROVE / REJECT
 
-        ## Summary
-        {1-2 sentences summarizing result}
+            ## Summary
+            {1-2 sentences summarizing result}
 
-        ## Reviewed Perspectives
-        - [x] Structure & Design
-        - [x] Code Quality
-        - [x] Change Scope
+            ## Reviewed Perspectives
+            - [x] Structure & Design
+            - [x] Code Quality
+            - [x] Change Scope
 
-        ## Issues (if REJECT)
-        | # | Location | Issue | Fix |
-        |---|----------|-------|-----|
-        | 1 | `src/file.ts:42` | Issue description | Fix method |
+            ## Issues (if REJECT)
+            | # | Location | Issue | Fix |
+            |---|----------|-------|-----|
+            | 1 | `src/file.ts:42` | Issue description | Fix method |
 
-        ## Improvement Suggestions (optional, non-blocking)
-        - {Future improvement suggestions}
-        ```
+            ## Improvement Suggestions (optional, non-blocking)
+            - {Future improvement suggestions}
+            ```
 
-        **Cognitive load reduction rules:**
-        - APPROVE + no issues -> Summary only (5 lines or less)
-        - APPROVE + minor suggestions -> Summary + suggestions (15 lines or less)
-        - REJECT -> Issues in table format (30 lines or less)
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - Write
-      - WebSearch
-      - WebFetch
+            **Cognitive load reduction rules:**
+            - APPROVE + no issues -> Summary only (5 lines or less)
+            - APPROVE + minor suggestions -> Summary + suggestions (15 lines or less)
+            - REJECT -> Issues in table format (30 lines or less)
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Write
+          - WebSearch
+          - WebFetch
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        instruction_template: |
+          Focus on **architecture and design** review. Do NOT review AI-specific issues (that's the ai_review step).
+
+          Review the changes and provide feedback.
+
+      - name: security-review
+        edit: false
+        agent: ../agents/default/security-reviewer.md
+        report:
+          name: 05-security-review.md
+          format: |
+            ```markdown
+            # Security Review
+
+            ## Result: APPROVE / REJECT
+
+            ## Severity: None / Low / Medium / High / Critical
+
+            ## Check Results
+            | Category | Result | Notes |
+            |----------|--------|-------|
+            | Injection | ✅ | - |
+            | Auth/Authz | ✅ | - |
+            | Data Protection | ✅ | - |
+            | Dependencies | ✅ | - |
+
+            ## Vulnerabilities (if REJECT)
+            | # | Severity | Type | Location | Fix |
+            |---|----------|------|----------|-----|
+            | 1 | High | SQLi | `src/db.ts:42` | Use parameterized query |
+
+            ## Warnings (non-blocking)
+            - {Security recommendations}
+            ```
+
+            **Cognitive load reduction rules:**
+            - No issues -> Check table only (10 lines or less)
+            - Warnings -> + Warnings 1-2 lines (15 lines or less)
+            - Vulnerabilities -> + Table format (30 lines or less)
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Write
+          - WebSearch
+          - WebFetch
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        instruction_template: |
+          Perform security review on the changes. Check for vulnerabilities including:
+          - Injection attacks (SQL, Command, XSS)
+          - Authentication/Authorization issues
+          - Data exposure risks
+          - Cryptographic weaknesses
     rules:
-      - condition: No issues found
-        next: security_review
-      - condition: Minor improvements needed
-        next: improve
-      - condition: Structural fix required
+      - condition: all("approved")
+        next: supervise
+      - condition: any("needs_fix")
         next: fix
-    instruction_template: |
-      Focus on **architecture and design** review. Do NOT review AI-specific issues (that's the ai_review step).
-
-      Review the changes and provide feedback.
-
-  - name: improve
-    edit: true
-    agent: ../agents/default/coder.md
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - Edit
-      - Write
-      - Bash
-      - WebSearch
-      - WebFetch
-    permission_mode: acceptEdits
-    rules:
-      - condition: Improvements complete
-        next: review
-      - condition: Cannot proceed, insufficient info
-        next: plan
-    instruction_template: |
-      ## Architect Feedback (This is the latest instruction - prioritize this)
-      {previous_response}
-
-      **Important**: Address the Architect's improvement suggestions.
-      These are minor improvements, not major design issues.
-
-      Make improvements such as:
-      - Naming improvements
-      - Small refactoring
-      - Adding/fixing comments
-      - Code organization
-    pass_previous_response: true
 
   - name: fix
     edit: true
@@ -319,96 +341,17 @@ steps:
       - WebFetch
     permission_mode: acceptEdits
     rules:
-      - condition: Architect feedback addressed
-        next: review
+      - condition: Fix complete
+        next: reviewers
       - condition: Cannot proceed, insufficient info
         next: plan
     instruction_template: |
-      ## Architect Feedback (This is the latest instruction - prioritize this)
+      ## Review Feedback (This is the latest instruction - prioritize this)
       {previous_response}
 
-      **Important**: Address the Architect's feedback.
+      **Important**: Address the feedback from the reviewers.
       The "Original User Request" is reference information, not the latest instruction.
-      Review the session conversation history and fix the issues raised by the Architect.
-    pass_previous_response: true
-
-  - name: security_review
-    edit: false
-    agent: ../agents/default/security-reviewer.md
-    report:
-      name: 05-security-review.md
-      format: |
-        ```markdown
-        # Security Review
-
-        ## Result: APPROVE / REJECT
-
-        ## Severity: None / Low / Medium / High / Critical
-
-        ## Check Results
-        | Category | Result | Notes |
-        |----------|--------|-------|
-        | Injection | ✅ | - |
-        | Auth/Authz | ✅ | - |
-        | Data Protection | ✅ | - |
-        | Dependencies | ✅ | - |
-
-        ## Vulnerabilities (if REJECT)
-        | # | Severity | Type | Location | Fix |
-        |---|----------|------|----------|-----|
-        | 1 | High | SQLi | `src/db.ts:42` | Use parameterized query |
-
-        ## Warnings (non-blocking)
-        - {Security recommendations}
-        ```
-
-        **Cognitive load reduction rules:**
-        - No issues -> Check table only (10 lines or less)
-        - Warnings -> + Warnings 1-2 lines (15 lines or less)
-        - Vulnerabilities -> + Table format (30 lines or less)
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - Write
-      - WebSearch
-      - WebFetch
-    rules:
-      - condition: No security issues
-        next: supervise
-      - condition: Vulnerabilities require fix
-        next: security_fix
-    instruction_template: |
-      Perform security review on the changes. Check for vulnerabilities including:
-      - Injection attacks (SQL, Command, XSS)
-      - Authentication/Authorization issues
-      - Data exposure risks
-      - Cryptographic weaknesses
-
-  - name: security_fix
-    edit: true
-    agent: ../agents/default/coder.md
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - Edit
-      - Write
-      - Bash
-      - WebSearch
-      - WebFetch
-    permission_mode: acceptEdits
-    rules:
-      - condition: Security fix complete
-        next: security_review
-      - condition: Cannot proceed, insufficient info
-        next: plan
-    instruction_template: |
-      ## Security Review Feedback (This is the latest instruction - prioritize this)
-      {previous_response}
-
-      **Important**: Fix the vulnerabilities identified in the security review.
-      Security issues require highest priority.
+      Review the session conversation history and fix the issues raised by the reviewers.
     pass_previous_response: true
 
   - name: supervise

@@ -46,13 +46,27 @@ Always verify information used in your analysis against the source of truth:
 
 **Don't guess.** Always verify names, values, and behaviors against actual code.
 
-### 4. Implementation Approach
+### 4. Spec & Constraint Verification
+
+**Always** verify specifications related to the change target:
+
+| What to Check | How to Check |
+|---------------|-------------|
+| Project specs (CLAUDE.md, etc.) | Read the file to understand constraints and schemas |
+| Type definitions / schemas | Check related type definition files |
+| Config file specifications | Check YAML/JSON schemas and existing config examples |
+| Existing patterns / conventions | Check how similar files are written |
+
+**Don't plan against the specs.** If specs are unclear, explicitly state so.
+
+### 5. Implementation Approach
 
 Determine the implementation direction:
 
 - What steps to follow
 - Points to be careful about
 - Items requiring confirmation
+- **Spec constraints** (schemas, formats, ignored fields, etc.)
 
 ## Important
 

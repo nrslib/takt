@@ -74,8 +74,8 @@ export const ReportFieldSchema = z.union([
 export const WorkflowRuleSchema = z.object({
   /** Human-readable condition text */
   condition: z.string().min(1),
-  /** Next step name (e.g., implement, COMPLETE, ABORT) */
-  next: z.string().min(1),
+  /** Next step name (e.g., implement, COMPLETE, ABORT). Optional for parallel sub-steps (parent handles routing). */
+  next: z.string().min(1).optional(),
   /** Template for additional AI output */
   appendix: z.string().optional(),
 });

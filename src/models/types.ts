@@ -53,8 +53,8 @@ export interface SessionState {
 export interface WorkflowRule {
   /** Human-readable condition text */
   condition: string;
-  /** Next step name (e.g., implement, COMPLETE, ABORT) */
-  next: string;
+  /** Next step name (e.g., implement, COMPLETE, ABORT). Optional for parallel sub-steps. */
+  next?: string;
   /** Template for additional AI output */
   appendix?: string;
   /** Whether this condition uses ai() expression (set by loader) */

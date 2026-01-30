@@ -1,5 +1,5 @@
 # Default TAKT Workflow
-# Plan -> Implement -> AI Review -> Architect Review -> Security Review -> Supervisor Approval
+# Plan -> Implement -> AI Review -> Reviewers (parallel: Architect + Security) -> Supervisor Approval
 #
 # Template Variables (auto-injected by buildInstruction):
 #   {iteration}      - Workflow-wide turn count (total steps executed across all agents)
@@ -178,7 +178,7 @@ steps:
       - WebFetch
     rules:
       - condition: AI特有の問題なし
-        next: review
+        next: reviewers
       - condition: AI特有の問題あり
         next: ai_fix
     instruction_template: |
@@ -203,7 +203,7 @@ steps:
     permission_mode: acceptEdits
     rules:
       - condition: AI問題の修正完了
-        next: review
+        next: reviewers
       - condition: 判断できない、情報不足
         next: plan
     instruction_template: |
@@ -218,99 +218,121 @@ steps:
       - スコープクリープの除去
     pass_previous_response: true
 
-  - name: review
-    edit: false
-    agent: ../agents/default/architecture-reviewer.md
-    report:
-      name: 04-architect-review.md
-      format: |
-        ```markdown
-        # アーキテクチャレビュー
+  - name: reviewers
+    parallel:
+      - name: arch-review
+        edit: false
+        agent: ../agents/default/architecture-reviewer.md
+        report:
+          name: 04-architect-review.md
+          format: |
+            ```markdown
+            # アーキテクチャレビュー
 
-        ## 結果: APPROVE / IMPROVE / REJECT
+            ## 結果: APPROVE / IMPROVE / REJECT
 
-        ## サマリー
-        {1-2文で結果を要約}
+            ## サマリー
+            {1-2文で結果を要約}
 
-        ## 確認した観点
-        - [x] 構造・設計
-        - [x] コード品質
-        - [x] 変更スコープ
-        - [x] テストカバレッジ
-        - [x] デッドコード
-        - [x] 呼び出しチェーン検証
+            ## 確認した観点
+            - [x] 構造・設計
+            - [x] コード品質
+            - [x] 変更スコープ
+            - [x] テストカバレッジ
+            - [x] デッドコード
+            - [x] 呼び出しチェーン検証
 
-        ## 問題点（REJECTの場合）
-        | # | 場所 | 問題 | 修正案 |
-        |---|------|------|--------|
-        | 1 | `src/file.ts:42` | 問題の説明 | 修正方法 |
+            ## 問題点（REJECTの場合）
+            | # | 場所 | 問題 | 修正案 |
+            |---|------|------|--------|
+            | 1 | `src/file.ts:42` | 問題の説明 | 修正方法 |
 
-        ## 改善提案（任意・ブロッキングではない）
-        - {将来的な改善提案}
-        ```
+            ## 改善提案（任意・ブロッキングではない）
+            - {将来的な改善提案}
+            ```
 
-        **認知負荷軽減ルール:**
-        - APPROVE + 問題なし → サマリーのみ（5行以内）
-        - APPROVE + 軽微な提案 → サマリー + 改善提案（15行以内）
-        - REJECT → 問題点を表形式で（30行以内）
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - Write
-      - WebSearch
-      - WebFetch
+            **認知負荷軽減ルール:**
+            - APPROVE + 問題なし → サマリーのみ（5行以内）
+            - APPROVE + 軽微な提案 → サマリー + 改善提案（15行以内）
+            - REJECT → 問題点を表形式で（30行以内）
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Write
+          - WebSearch
+          - WebFetch
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        instruction_template: |
+          **アーキテクチャと設計**のレビューに集中してください。AI特有の問題はレビューしないでください（ai_reviewステップで行います）。
+
+          変更をレビューしてフィードバックを提供してください。
+
+          **レビュー観点:**
+          - 構造・設計の妥当性
+          - コード品質
+          - 変更スコープの適切性
+          - テストカバレッジ
+          - デッドコード
+          - 呼び出しチェーン検証
+
+      - name: security-review
+        edit: false
+        agent: ../agents/default/security-reviewer.md
+        report:
+          name: 05-security-review.md
+          format: |
+            ```markdown
+            # セキュリティレビュー
+
+            ## 結果: APPROVE / REJECT
+
+            ## 重大度: None / Low / Medium / High / Critical
+
+            ## チェック結果
+            | カテゴリ | 結果 | 備考 |
+            |---------|------|------|
+            | インジェクション | ✅ | - |
+            | 認証・認可 | ✅ | - |
+            | データ保護 | ✅ | - |
+            | 依存関係 | ✅ | - |
+
+            ## 脆弱性（REJECTの場合）
+            | # | 重大度 | 種類 | 場所 | 修正案 |
+            |---|--------|------|------|--------|
+            | 1 | High | SQLi | `src/db.ts:42` | パラメータ化クエリを使用 |
+
+            ## 警告（ブロッキングではない）
+            - {セキュリティに関する推奨事項}
+            ```
+
+            **認知負荷軽減ルール:**
+            - 問題なし → チェック表のみ（10行以内）
+            - 警告あり → + 警告を1-2行（15行以内）
+            - 脆弱性あり → + 表形式で（30行以内）
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Write
+          - WebSearch
+          - WebFetch
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        instruction_template: |
+          変更に対してセキュリティレビューを行ってください。以下の脆弱性を確認してください:
+          - インジェクション攻撃（SQL, コマンド, XSS）
+          - 認証・認可の問題
+          - データ露出リスク
+          - 暗号化の弱点
     rules:
-      - condition: 問題なし
-        next: security_review
-      - condition: 改善すべき点がある（軽微）
-        next: improve
-      - condition: 構造的な修正が必要
+      - condition: all("approved")
+        next: supervise
+      - condition: any("needs_fix")
         next: fix
-    instruction_template: |
-      **アーキテクチャと設計**のレビューに集中してください。AI特有の問題はレビューしないでください（次のステップで行います）。
-
-      変更をレビューしてフィードバックを提供してください。
-
-      **レビュー観点:**
-      - 構造・設計の妥当性
-      - コード品質
-      - 変更スコープの適切性
-      - テストカバレッジ
-      - デッドコード
-      - 呼び出しチェーン検証
-
-  - name: improve
-    edit: true
-    agent: ../agents/default/coder.md
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - Edit
-      - Write
-      - Bash
-      - WebSearch
-      - WebFetch
-    permission_mode: acceptEdits
-    rules:
-      - condition: 改善完了
-        next: review
-      - condition: 判断できない、情報不足
-        next: plan
-    instruction_template: |
-      ## Architect Feedback (これが最新の指示です - 優先して対応してください)
-      {previous_response}
-
-      **重要**: Architectの改善提案に対応してください。
-      これらは軽微な改善であり、設計上の大きな問題ではありません。
-
-      以下のような改善を行ってください:
-      - 命名の改善
-      - 小さなリファクタリング
-      - コメントの追加・修正
-      - コードの整理
-    pass_previous_response: true
 
   - name: fix
     edit: true
@@ -326,95 +348,16 @@ steps:
       - WebFetch
     permission_mode: acceptEdits
     rules:
-      - condition: Architectの指摘を修正完了
-        next: review
+      - condition: 修正完了
+        next: reviewers
       - condition: 判断できない、情報不足
         next: plan
     instruction_template: |
-      ## Architect Feedback (これが最新の指示です - 優先して対応してください)
+      ## Review Feedback (これが最新の指示です - 優先して対応してください)
       {previous_response}
 
-      **重要**: Architectのフィードバックに対応してください。
-      セッションの会話履歴を確認し、Architectの指摘事項を修正してください。
-    pass_previous_response: true
-
-  - name: security_review
-    edit: false
-    agent: ../agents/default/security-reviewer.md
-    report:
-      name: 05-security-review.md
-      format: |
-        ```markdown
-        # セキュリティレビュー
-
-        ## 結果: APPROVE / REJECT
-
-        ## 重大度: None / Low / Medium / High / Critical
-
-        ## チェック結果
-        | カテゴリ | 結果 | 備考 |
-        |---------|------|------|
-        | インジェクション | ✅ | - |
-        | 認証・認可 | ✅ | - |
-        | データ保護 | ✅ | - |
-        | 依存関係 | ✅ | - |
-
-        ## 脆弱性（REJECTの場合）
-        | # | 重大度 | 種類 | 場所 | 修正案 |
-        |---|--------|------|------|--------|
-        | 1 | High | SQLi | `src/db.ts:42` | パラメータ化クエリを使用 |
-
-        ## 警告（ブロッキングではない）
-        - {セキュリティに関する推奨事項}
-        ```
-
-        **認知負荷軽減ルール:**
-        - 問題なし → チェック表のみ（10行以内）
-        - 警告あり → + 警告を1-2行（15行以内）
-        - 脆弱性あり → + 表形式で（30行以内）
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - Write
-      - WebSearch
-      - WebFetch
-    rules:
-      - condition: セキュリティ問題なし
-        next: supervise
-      - condition: 脆弱性があり修正が必要
-        next: security_fix
-    instruction_template: |
-      変更に対してセキュリティレビューを行ってください。以下の脆弱性を確認してください:
-      - インジェクション攻撃（SQL, コマンド, XSS）
-      - 認証・認可の問題
-      - データ露出リスク
-      - 暗号化の弱点
-
-  - name: security_fix
-    edit: true
-    agent: ../agents/default/coder.md
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - Edit
-      - Write
-      - Bash
-      - WebSearch
-      - WebFetch
-    permission_mode: acceptEdits
-    rules:
-      - condition: セキュリティ修正完了
-        next: security_review
-      - condition: 判断できない、情報不足
-        next: plan
-    instruction_template: |
-      ## Security Review Feedback (これが最新の指示です - 優先して対応してください)
-      {previous_response}
-
-      **重要**: セキュリティレビューで指摘された脆弱性を修正してください。
-      セキュリティの問題は最優先で対応が必要です。
+      **重要**: レビュアーのフィードバックに対応してください。
+      セッションの会話履歴を確認し、レビュアーの指摘事項を修正してください。
     pass_previous_response: true
 
   - name: supervise

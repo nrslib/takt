@@ -110,7 +110,7 @@ export class WorkflowEngine extends EventEmitter {
     for (const step of this.config.steps) {
       if (step.rules) {
         for (const rule of step.rules) {
-          if (!stepNames.has(rule.next)) {
+          if (rule.next && !stepNames.has(rule.next)) {
             throw new Error(
               `Invalid rule in step "${step.name}": target step "${rule.next}" does not exist`
             );

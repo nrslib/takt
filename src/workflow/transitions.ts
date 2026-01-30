@@ -20,7 +20,7 @@ export function determineNextStepByRules(
   if (!rule) {
     return null;
   }
-  return rule.next;
+  return rule.next ?? null;
 }
 
 /**

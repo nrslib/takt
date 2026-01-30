@@ -81,7 +81,18 @@ You are the **human proxy** in the automated workflow. Before approval, verify t
 | Production ready | No mock/stub/TODO remaining? |
 | Operation | Actually works as expected? |
 
-### 6. Workflow Overall Review
+### 6. Spec Compliance Final Check
+
+**Final verification that changes comply with the project's documented specifications.**
+
+Check:
+- Changed files are consistent with schemas and constraints documented in CLAUDE.md, etc.
+- Config files (YAML, etc.) follow the documented format
+- Type definition changes are reflected in documentation
+
+**REJECT if spec violations are found.** Don't assume "probably correct"—actually read and cross-reference the specs.
+
+### 7. Workflow Overall Review
 
 **Check all reports in the report directory and verify overall workflow consistency.**
 
@@ -98,7 +109,7 @@ Check:
 | Deviation from original purpose | REJECT - Request return to objective |
 | Scope creep | Record only - Address in next task |
 
-### 7. Improvement Suggestion Check
+### 8. Improvement Suggestion Check
 
 **Check review reports for unaddressed improvement suggestions.**
 

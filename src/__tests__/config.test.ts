@@ -48,6 +48,113 @@ describe('getBuiltinWorkflow', () => {
   });
 });
 
+describe('default workflow parallel reviewers step', () => {
+  it('should have a reviewers step with parallel sub-steps', () => {
+    const workflow = getBuiltinWorkflow('default');
+    expect(workflow).not.toBeNull();
+
+    const reviewersStep = workflow!.steps.find((s) => s.name === 'reviewers');
+    expect(reviewersStep).toBeDefined();
+    expect(reviewersStep!.parallel).toBeDefined();
+    expect(reviewersStep!.parallel).toHaveLength(2);
+  });
+
+  it('should have arch-review and security-review as parallel sub-steps', () => {
+    const workflow = getBuiltinWorkflow('default');
+    const reviewersStep = workflow!.steps.find((s) => s.name === 'reviewers')!;
+    const subStepNames = reviewersStep.parallel!.map((s) => s.name);
+
+    expect(subStepNames).toContain('arch-review');
+    expect(subStepNames).toContain('security-review');
+  });
+
+  it('should have aggregate conditions on the reviewers parent step', () => {
+    const workflow = getBuiltinWorkflow('default');
+    const reviewersStep = workflow!.steps.find((s) => s.name === 'reviewers')!;
+
+    expect(reviewersStep.rules).toBeDefined();
+    expect(reviewersStep.rules).toHaveLength(2);
+
+    const allRule = reviewersStep.rules!.find((r) => r.isAggregateCondition && r.aggregateType === 'all');
+    expect(allRule).toBeDefined();
+    expect(allRule!.aggregateConditionText).toBe('approved');
+    expect(allRule!.next).toBe('supervise');
+
+    const anyRule = reviewersStep.rules!.find((r) => r.isAggregateCondition && r.aggregateType === 'any');
+    expect(anyRule).toBeDefined();
+    expect(anyRule!.aggregateConditionText).toBe('needs_fix');
+    expect(anyRule!.next).toBe('fix');
+  });
+
+  it('should have matching conditions on sub-steps for aggregation', () => {
+    const workflow = getBuiltinWorkflow('default');
+    const reviewersStep = workflow!.steps.find((s) => s.name === 'reviewers')!;
+
+    for (const subStep of reviewersStep.parallel!) {
+      expect(subStep.rules).toBeDefined();
+      const conditions = subStep.rules!.map((r) => r.condition);
+      expect(conditions).toContain('approved');
+      expect(conditions).toContain('needs_fix');
+    }
+  });
+
+  it('should have ai_review transitioning to reviewers step', () => {
+    const workflow = getBuiltinWorkflow('default');
+    const aiReviewStep = workflow!.steps.find((s) => s.name === 'ai_review')!;
+
+    const approveRule = aiReviewStep.rules!.find((r) => r.next === 'reviewers');
+    expect(approveRule).toBeDefined();
+  });
+
+  it('should have ai_fix transitioning to reviewers step', () => {
+    const workflow = getBuiltinWorkflow('default');
+    const aiFixStep = workflow!.steps.find((s) => s.name === 'ai_fix')!;
+
+    const fixedRule = aiFixStep.rules!.find((r) => r.next === 'reviewers');
+    expect(fixedRule).toBeDefined();
+  });
+
+  it('should have fix step transitioning back to reviewers', () => {
+    const workflow = getBuiltinWorkflow('default');
+    const fixStep = workflow!.steps.find((s) => s.name === 'fix')!;
+
+    const fixedRule = fixStep.rules!.find((r) => r.next === 'reviewers');
+    expect(fixedRule).toBeDefined();
+  });
+
+  it('should not have old separate review/security_review/improve steps', () => {
+    const workflow = getBuiltinWorkflow('default');
+    const stepNames = workflow!.steps.map((s) => s.name);
+
+    expect(stepNames).not.toContain('review');
+    expect(stepNames).not.toContain('security_review');
+    expect(stepNames).not.toContain('improve');
+    expect(stepNames).not.toContain('security_fix');
+  });
+
+  it('should have sub-steps with correct agents', () => {
+    const workflow = getBuiltinWorkflow('default');
+    const reviewersStep = workflow!.steps.find((s) => s.name === 'reviewers')!;
+
+    const archReview = reviewersStep.parallel!.find((s) => s.name === 'arch-review')!;
+    expect(archReview.agent).toContain('architecture-reviewer');
+
+    const secReview = reviewersStep.parallel!.find((s) => s.name === 'security-review')!;
+    expect(secReview.agent).toContain('security-reviewer');
+  });
+
+  it('should have reports configured on sub-steps', () => {
+    const workflow = getBuiltinWorkflow('default');
+    const reviewersStep = workflow!.steps.find((s) => s.name === 'reviewers')!;
+
+    const archReview = reviewersStep.parallel!.find((s) => s.name === 'arch-review')!;
+    expect(archReview.report).toBeDefined();
+
+    const secReview = reviewersStep.parallel!.find((s) => s.name === 'security-review')!;
+    expect(secReview.report).toBeDefined();
+  });
+});
+
 describe('loadAllWorkflows', () => {
   let testDir: string;
 

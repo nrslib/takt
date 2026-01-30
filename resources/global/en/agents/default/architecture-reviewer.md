@@ -327,7 +327,44 @@ function createUser(data: UserData) {
 
 **Always point these out.** Temporary fixes become permanent.
 
-### 8. Quality Attributes
+### 8. Spec Compliance Verification
+
+**Verify that changes comply with the project's documented specifications.**
+
+**Verification targets:**
+
+| Target | What to Check |
+|--------|---------------|
+| CLAUDE.md / README.md | Conforms to schema definitions, design principles, constraints |
+| Type definitions / Zod schemas | New fields reflected in schemas |
+| YAML/JSON config files | Follows documented format |
+| Existing patterns | Consistent with similar files |
+
+**Specific checks:**
+
+1. When config files (YAML, etc.) are modified or added:
+   - Cross-reference with schema definitions in CLAUDE.md, etc.
+   - No ignored or invalid fields present
+   - No required fields missing
+
+2. When type definitions or interfaces are modified:
+   - Documentation schema descriptions are updated
+   - Existing config files are compatible with new schema
+
+3. When workflow definitions are modified:
+   - Correct fields used for step type (normal vs. parallel)
+   - No unnecessary fields remaining (e.g., `next` on parallel sub-steps)
+
+**REJECT when these patterns are found:**
+
+| Pattern | Problem |
+|---------|---------|
+| Fields not in the spec | Ignored or unexpected behavior |
+| Invalid values per spec | Runtime error or silently ignored |
+| Violation of documented constraints | Against design intent |
+| Step type / field mismatch | Sign of copy-paste error |
+
+### 9. Quality Attributes
 
 | Attribute | Review Point |
 |-----------|--------------|
@@ -335,7 +372,7 @@ function createUser(data: UserData) {
 | Maintainability | Easy to modify and fix |
 | Observability | Logging and monitoring enabled |
 
-### 9. Big Picture
+### 10. Big Picture
 
 **Caution**: Don't get lost in minor "clean code" nitpicks.
 
@@ -346,7 +383,7 @@ Verify:
 - Does it align with business requirements
 - Is naming consistent with the domain
 
-### 10. Change Scope Assessment
+### 11. Change Scope Assessment
 
 **Check change scope and include in report (non-blocking).**
 
@@ -365,7 +402,7 @@ Verify:
 **Include as suggestions (non-blocking):**
 - If splittable, present splitting proposal
 
-### 11. Circular Review Detection
+### 12. Circular Review Detection
 
 When review count is provided (e.g., "Review count: 3rd"), adjust judgment accordingly.
 
