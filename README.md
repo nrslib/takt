@@ -26,6 +26,9 @@ npm install -g takt
 # Run a task (will prompt for workflow selection and optional isolated clone)
 takt "Add a login feature"
 
+# Run a GitHub issue as a task
+takt "#6"
+
 # Add a task to the queue
 takt /add-task "Fix the login bug"
 
@@ -75,7 +78,7 @@ Choose `y` to run in a `git clone --shared` isolated environment, keeping your w
 
 | Workflow | Best for |
 |----------|----------|
-| `default` | Full development tasks. Used for TAKT's own development. Multi-stage review with fix loops. |
+| `default` | Full development tasks. Used for TAKT's own development. Multi-stage review with parallel architect + security review. |
 | `simple` | Lightweight tasks like README updates or small fixes. Reviews without fix loops. |
 | `expert-review` / `expert-cqrs` | Web development projects. Multi-expert review (CQRS, Frontend, Security, QA). |
 | `research` | Research and investigation. Autonomous research without asking questions. |
@@ -86,59 +89,103 @@ Choose `y` to run in a `git clone --shared` isolated environment, keeping your w
 | Command | Alias | Description |
 |---------|-------|-------------|
 | `takt "task"` | | Execute task with current workflow (session auto-continued) |
+| `takt "#N"` | | Execute GitHub issue #N as a task |
 | `takt /run-tasks` | `/run` | Run all pending tasks from `.takt/tasks/` |
 | `takt /watch` | | Watch `.takt/tasks/` and auto-execute tasks (stays resident) |
 | `takt /add-task` | `/add` | Add a new task interactively (YAML format, multiline supported) |
 | `takt /list-tasks` | `/list` | List task branches (try merge, merge & cleanup, or delete) |
 | `takt /switch` | `/sw` | Switch workflow interactively |
 | `takt /clear` | | Clear agent conversation sessions |
+| `takt /eject` | | Copy builtin workflow/agents to `~/.takt/` for customization |
 | `takt /refresh-builtin` | | Update builtin agents/workflows to latest version |
 | `takt /config` | | Configure permission mode |
 | `takt /help` | | Show help |
 
 ## Workflows
 
-TAKT uses YAML-based workflow definitions. Place them in:
-- `~/.takt/workflows/*.yaml`
+TAKT uses YAML-based workflow definitions with rule-based routing. Builtin workflows are embedded in the package; user workflows in `~/.takt/workflows/` take priority. Use `/eject` to copy a builtin to `~/.takt/` for customization.
 
 ### Example Workflow
 
 ```yaml
 name: default
 max_iterations: 10
+initial_step: plan
 
 steps:
   - name: plan
-    agent: planner
-    provider: claude         # Optional: claude or codex
-    model: opus              # Claude: opus/sonnet/haiku, Codex: gpt-5.2-codex/gpt-5.1-codex
+    agent: ../agents/default/planner.md
+    model: opus
+    edit: false
+    rules:
+      - condition: Plan complete
+        next: implement
     instruction_template: |
-      {task}
-    transitions:
-      - condition: done
-        next_step: implement
+      Analyze the request and create an implementation plan.
 
   - name: implement
-    agent: coder
-    provider: codex
-    model: gpt-5.2-codex     # Codex model example
+    agent: ../agents/default/coder.md
+    edit: true
+    permission_mode: acceptEdits
+    rules:
+      - condition: Implementation complete
+        next: review
+      - condition: Cannot proceed
+        next: ABORT
     instruction_template: |
-      {task}
-    transitions:
-      - condition: done
-        next_step: review
-      - condition: blocked
-        next_step: ABORT
+      Implement based on the plan.
 
   - name: review
-    agent: architect
-    model: sonnet            # Model alias (no provider = uses global default)
-    transitions:
-      - condition: approved
-        next_step: COMPLETE
-      - condition: rejected
-        next_step: implement
+    agent: ../agents/default/architecture-reviewer.md
+    edit: false
+    rules:
+      - condition: Approved
+        next: COMPLETE
+      - condition: Needs fix
+        next: implement
+    instruction_template: |
+      Review the implementation for architecture and code quality.
 ```
+
+### Parallel Steps
+
+Steps can execute sub-steps concurrently with aggregate evaluation:
+
+```yaml
+  - name: reviewers
+    parallel:
+      - name: arch-review
+        agent: ../agents/default/architecture-reviewer.md
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        instruction_template: |
+          Review architecture and code quality.
+      - name: security-review
+        agent: ../agents/default/security-reviewer.md
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        instruction_template: |
+          Review for security vulnerabilities.
+    rules:
+      - condition: all("approved")
+        next: supervise
+      - condition: any("needs_fix")
+        next: fix
+```
+
+- `all("X")`: true if ALL sub-steps matched condition X
+- `any("X")`: true if ANY sub-step matched condition X
+- Sub-step `rules` define possible outcomes; `next` is optional (parent handles routing)
+
+### Rule Condition Types
+
+| Type | Syntax | Description |
+|------|--------|-------------|
+| Tag-based | `"condition text"` | Agent outputs `[STEP:N]` tag, matched by index |
+| AI judge | `ai("condition text")` | AI evaluates the condition against agent output |
+| Aggregate | `all("X")` / `any("X")` | Aggregates parallel sub-step results |
 
 ## Built-in Workflows
 
@@ -146,7 +193,7 @@ TAKT ships with several built-in workflows:
 
 | Workflow | Description |
 |----------|-------------|
-| `default` | Full development workflow: plan → implement → architect review → AI review → security review → supervisor approval. Includes fix loops for each review stage. |
+| `default` | Full development workflow: plan → implement → AI review → parallel reviewers (architect + security) → supervisor approval. Includes fix loops for each review stage. |
 | `simple` | Simplified version of default: plan → implement → architect review → AI review → supervisor. No intermediate fix steps. |
 | `research` | Research workflow: planner → digger → supervisor. Autonomously researches topics without asking questions. |
 | `expert-review` | Comprehensive review with domain experts: CQRS+ES, Frontend, AI, Security, QA reviews with fix loops. |
@@ -158,9 +205,9 @@ Switch between workflows with `takt /switch`.
 ## Built-in Agents
 
 - **coder** - Implements features and fixes bugs
-- **architect** - Reviews code and provides feedback
-- **supervisor** - Final verification and approval
-- **planner** - Task analysis and implementation planning
+- **architect** - Reviews architecture and code quality, verifies spec compliance
+- **supervisor** - Final verification, validation, and approval
+- **planner** - Task analysis, spec investigation, and implementation planning
 - **ai-reviewer** - AI-generated code quality review
 - **security** - Security vulnerability assessment
 
@@ -175,14 +222,19 @@ agents:
     allowed_tools: [Read, Glob, Grep]
     provider: claude             # Optional: claude or codex
     model: opus                  # Claude: opus/sonnet/haiku or full name (claude-opus-4-5-20251101)
-    status_patterns:
-      approved: "\\[APPROVE\\]"
-      rejected: "\\[REJECT\\]"
+```
 
-  - name: my-codex-agent
-    prompt_file: .takt/prompts/analyzer.md
-    provider: codex
-    model: gpt-5.2-codex         # Codex: gpt-5.2-codex, gpt-5.1-codex, etc.
+Or create agent prompt files as Markdown:
+
+```markdown
+# ~/.takt/agents/my-agents/reviewer.md
+
+You are a code reviewer focused on security.
+
+## Your Role
+- Check for security vulnerabilities
+- Verify input validation
+- Review authentication logic
 ```
 
 ## Model Selection
@@ -217,21 +269,21 @@ Available Codex models:
 ```
 ~/.takt/
 ├── config.yaml          # Global config (provider, model, workflows, etc.)
-├── workflows/           # Workflow definitions
-└── agents/              # Agent prompt files
+├── workflows/           # User workflow definitions (override builtins)
+└── agents/              # User agent prompt files
 
 .takt/                   # Project-level config
 ├── agents.yaml          # Custom agent definitions
 ├── tasks/               # Pending task files (.yaml, .md)
 ├── completed/           # Completed tasks with reports
-├── worktree-meta/       # Metadata for task branches
-├── worktree-sessions/   # Per-clone agent session storage
 ├── reports/             # Execution reports (auto-generated)
-└── logs/                # Session logs (incremental)
+└── logs/                # Session logs in NDJSON format
     ├── latest.json      # Pointer to current/latest session
     ├── previous.json    # Pointer to previous session
-    └── {sessionId}.json # Full session log per workflow run
+    └── {sessionId}.jsonl # NDJSON session log per workflow run
 ```
+
+Builtin resources are embedded in the npm package (`dist/resources/`). User files in `~/.takt/` take priority.
 
 ### Global Configuration
 
@@ -268,65 +320,57 @@ This interactive flow ensures each task runs with the right workflow and isolati
 
 ### Adding Custom Workflows
 
-Create your own workflow by adding YAML files to `~/.takt/workflows/`:
+Create your own workflow by adding YAML files to `~/.takt/workflows/`, or use `/eject` to customize a builtin:
+
+```bash
+# Copy the default workflow to ~/.takt/workflows/ for editing
+takt /eject default
+```
 
 ```yaml
 # ~/.takt/workflows/my-workflow.yaml
 name: my-workflow
 description: My custom workflow
-
 max_iterations: 5
+initial_step: analyze
 
 steps:
   - name: analyze
     agent: ~/.takt/agents/my-agents/analyzer.md
+    edit: false
+    rules:
+      - condition: Analysis complete
+        next: implement
     instruction_template: |
-      Analyze this request: {task}
-    transitions:
-      - condition: done
-        next_step: implement
+      Analyze this request thoroughly.
 
   - name: implement
     agent: ~/.takt/agents/default/coder.md
-    instruction_template: |
-      Implement based on the analysis: {previous_response}
+    edit: true
+    permission_mode: acceptEdits
     pass_previous_response: true
-    transitions:
-      - condition: done
-        next_step: COMPLETE
+    rules:
+      - condition: Done
+        next: COMPLETE
+    instruction_template: |
+      Implement based on the analysis.
 ```
+
+> **Note**: `{task}`, `{previous_response}`, and `{user_inputs}` are auto-injected into instructions. You only need explicit placeholders if you want to control their position in the template.
 
 ### Specifying Agents by Path
 
 Agents are specified using file paths in workflow definitions:
 
 ```yaml
-# Use built-in agents
+# Relative to workflow file directory
+agent: ../agents/default/coder.md
+
+# Home directory
 agent: ~/.takt/agents/default/coder.md
-agent: ~/.takt/agents/magi/melchior.md
 
-# Use project-local agents
-agent: ./.takt/agents/my-reviewer.md
-
-# Use absolute paths
+# Absolute paths
 agent: /path/to/custom/agent.md
-```
-
-Create custom agent prompts as Markdown files:
-
-```markdown
-# ~/.takt/agents/my-agents/reviewer.md
-
-You are a code reviewer focused on security.
-
-## Your Role
-- Check for security vulnerabilities
-- Verify input validation
-- Review authentication logic
-
-## Output Format
-- [REVIEWER:APPROVE] if code is secure
-- [REVIEWER:REJECT] if issues found (list them)
 ```
 
 ### Task Management
@@ -338,6 +382,9 @@ TAKT supports batch task processing through task files in `.takt/tasks/`. Both `
 ```bash
 # Quick add (no isolation)
 takt /add-task "Add authentication feature"
+
+# Add a GitHub issue as a task
+takt /add-task "#6"
 
 # Interactive mode (prompts for isolation, branch, workflow options)
 takt /add-task
@@ -416,11 +463,13 @@ Lists all `takt/`-prefixed branches with file change counts. For each branch you
 
 ### Session Logs
 
-TAKT writes session logs incrementally to `.takt/logs/`. Logs are saved at workflow start, after each step, and at workflow end — so even if the process crashes mid-execution, partial logs are preserved.
+TAKT writes session logs in NDJSON (`.jsonl`) format to `.takt/logs/`. Each record is appended atomically, so even if the process crashes mid-execution, partial logs are preserved and logs can be tailed in real-time with `tail -f`.
 
 - `.takt/logs/latest.json` - Pointer to the current (or most recent) session
 - `.takt/logs/previous.json` - Pointer to the previous session
-- `.takt/logs/{sessionId}.json` - Full session log with step history
+- `.takt/logs/{sessionId}.jsonl` - NDJSON session log with step history
+
+Record types: `workflow_start`, `step_start`, `step_complete`, `workflow_complete`, `workflow_abort`.
 
 Agents can read `previous.json` to pick up context from a prior run. Session continuity is automatic — simply run `takt "task"` to continue where the previous session left off.
 
@@ -430,57 +479,48 @@ Available variables in `instruction_template`:
 
 | Variable | Description |
 |----------|-------------|
-| `{task}` | Original user request |
+| `{task}` | Original user request (auto-injected if not in template) |
 | `{iteration}` | Workflow-wide turn count (total steps executed) |
 | `{max_iterations}` | Maximum iterations allowed |
 | `{step_iteration}` | Per-step iteration count (how many times THIS step has run) |
-| `{previous_response}` | Previous step's output (requires `pass_previous_response: true`) |
-| `{user_inputs}` | Additional user inputs during workflow |
+| `{previous_response}` | Previous step's output (auto-injected if not in template) |
+| `{user_inputs}` | Additional user inputs during workflow (auto-injected if not in template) |
 | `{report_dir}` | Report directory name (e.g., `20250126-143052-task-summary`) |
 
 ### Designing Workflows
 
-Each workflow step requires three key elements:
+Each workflow step requires:
 
 **1. Agent** - A Markdown file containing the system prompt:
 
 ```yaml
-agent: ~/.takt/agents/default/coder.md    # Path to agent prompt file
-agent_name: coder                          # Display name (optional)
+agent: ../agents/default/coder.md    # Path to agent prompt file
+agent_name: coder                    # Display name (optional)
 ```
 
-**2. Status Rules** - Define how the agent signals completion. Agents output status markers like `[CODER:DONE]` or `[ARCHITECT:REJECT]` that TAKT detects to drive transitions:
+**2. Rules** - Define how the step routes to the next step. The instruction builder auto-injects status output rules so agents know what tags to output:
 
 ```yaml
-status_rules_prompt: |
-  Your final output MUST include a status tag:
-  - `[CODER:DONE]` if implementation is complete
-  - `[CODER:BLOCKED]` if you cannot proceed
+rules:
+  - condition: "Implementation complete"
+    next: review
+  - condition: "Cannot proceed"
+    next: ABORT
 ```
 
-**3. Transitions** - Route to the next step based on status:
+Special `next` values: `COMPLETE` (success), `ABORT` (failure).
 
-```yaml
-transitions:
-  - condition: done        # Maps to status tag DONE
-    next_step: review      # Go to review step
-  - condition: blocked     # Maps to status tag BLOCKED
-    next_step: ABORT       # End workflow with failure
-```
-
-Available transition conditions: `done`, `blocked`, `approved`, `rejected`, `improve`, `answer`, `always`.
-Special next_step values: `COMPLETE` (success), `ABORT` (failure).
-
-**Step options:**
+**3. Step options:**
 
 | Option | Default | Description |
 |--------|---------|-------------|
+| `edit` | - | Whether the step can edit project files (`true`/`false`) |
 | `pass_previous_response` | `true` | Pass previous step's output to `{previous_response}` |
-| `on_no_status` | - | Behavior when no status is detected: `complete`, `continue`, `stay` |
 | `allowed_tools` | - | List of tools the agent can use (Read, Glob, Grep, Edit, Write, Bash, etc.) |
 | `provider` | - | Override provider for this step (`claude` or `codex`) |
 | `model` | - | Override model for this step |
 | `permission_mode` | `default` | Permission mode: `default`, `acceptEdits`, or `bypassPermissions` |
+| `report` | - | Report file configuration (name, format) for auto-generated reports |
 
 ## API Usage
 

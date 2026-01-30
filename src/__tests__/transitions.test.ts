@@ -60,4 +60,22 @@ describe('determineNextStepByRules', () => {
 
     expect(determineNextStepByRules(step, 0)).toBe('COMPLETE');
   });
+
+  it('should return null when rule exists but next is undefined', () => {
+    // Parallel sub-step rules may omit `next` (optional field)
+    const step: WorkflowStep = {
+      name: 'sub-step',
+      agent: 'test-agent',
+      agentDisplayName: 'Test Agent',
+      instructionTemplate: '{task}',
+      passPreviousResponse: false,
+      rules: [
+        { condition: 'approved' },
+        { condition: 'needs_fix' },
+      ],
+    };
+
+    expect(determineNextStepByRules(step, 0)).toBeNull();
+    expect(determineNextStepByRules(step, 1)).toBeNull();
+  });
 });
