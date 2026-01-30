@@ -252,6 +252,227 @@ describe('ai() condition regex parsing', () => {
   });
 });
 
+describe('all()/any() aggregate condition regex parsing', () => {
+  const AGGREGATE_CONDITION_REGEX = /^(all|any)\("(.+)"\)$/;
+
+  it('should match all() condition', () => {
+    const match = 'all("approved")'.match(AGGREGATE_CONDITION_REGEX);
+    expect(match).not.toBeNull();
+    expect(match![1]).toBe('all');
+    expect(match![2]).toBe('approved');
+  });
+
+  it('should match any() condition', () => {
+    const match = 'any("rejected")'.match(AGGREGATE_CONDITION_REGEX);
+    expect(match).not.toBeNull();
+    expect(match![1]).toBe('any');
+    expect(match![2]).toBe('rejected');
+  });
+
+  it('should match with Japanese text', () => {
+    const match = 'all("承認済み")'.match(AGGREGATE_CONDITION_REGEX);
+    expect(match).not.toBeNull();
+    expect(match![1]).toBe('all');
+    expect(match![2]).toBe('承認済み');
+  });
+
+  it('should not match regular condition text', () => {
+    expect('approved'.match(AGGREGATE_CONDITION_REGEX)).toBeNull();
+  });
+
+  it('should not match ai() condition', () => {
+    expect('ai("something")'.match(AGGREGATE_CONDITION_REGEX)).toBeNull();
+  });
+
+  it('should not match invalid patterns', () => {
+    expect('all(missing quotes)'.match(AGGREGATE_CONDITION_REGEX)).toBeNull();
+    expect('all("")'.match(AGGREGATE_CONDITION_REGEX)).toBeNull();
+    expect('not all("text")'.match(AGGREGATE_CONDITION_REGEX)).toBeNull();
+    expect('all("text") extra'.match(AGGREGATE_CONDITION_REGEX)).toBeNull();
+    expect('ALL("text")'.match(AGGREGATE_CONDITION_REGEX)).toBeNull();
+  });
+
+  it('should match with special characters in text', () => {
+    const match = 'any("issues found (critical)")'.match(AGGREGATE_CONDITION_REGEX);
+    expect(match).not.toBeNull();
+    expect(match![2]).toBe('issues found (critical)');
+  });
+});
+
+describe('all()/any() condition in WorkflowStepRawSchema', () => {
+  it('should accept all() condition as a string', () => {
+    const raw = {
+      name: 'parallel-review',
+      parallel: [
+        { name: 'arch-review', agent: 'reviewer.md', instruction_template: 'Review' },
+      ],
+      rules: [
+        { condition: 'all("approved")', next: 'COMPLETE' },
+        { condition: 'any("rejected")', next: 'fix' },
+      ],
+    };
+
+    const result = WorkflowStepRawSchema.safeParse(raw);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.rules?.[0].condition).toBe('all("approved")');
+      expect(result.data.rules?.[1].condition).toBe('any("rejected")');
+    }
+  });
+
+  it('should accept mixed regular, ai(), and all()/any() conditions', () => {
+    const raw = {
+      name: 'mixed-rules',
+      parallel: [
+        { name: 'sub', agent: 'agent.md' },
+      ],
+      rules: [
+        { condition: 'all("approved")', next: 'COMPLETE' },
+        { condition: 'any("rejected")', next: 'fix' },
+        { condition: 'ai("Difficult judgment")', next: 'manual-review' },
+      ],
+    };
+
+    const result = WorkflowStepRawSchema.safeParse(raw);
+    expect(result.success).toBe(true);
+  });
+});
+
+describe('aggregate condition evaluation logic', () => {
+  // Simulate the evaluation logic from engine.ts
+  type SubResult = { name: string; matchedRuleIndex?: number; rules?: { condition: string }[] };
+
+  function evaluateAggregate(
+    aggregateType: 'all' | 'any',
+    targetCondition: string,
+    subSteps: SubResult[],
+  ): boolean {
+    if (subSteps.length === 0) return false;
+
+    if (aggregateType === 'all') {
+      return subSteps.every((sub) => {
+        if (sub.matchedRuleIndex == null || !sub.rules) return false;
+        const matchedRule = sub.rules[sub.matchedRuleIndex];
+        return matchedRule?.condition === targetCondition;
+      });
+    }
+    // 'any'
+    return subSteps.some((sub) => {
+      if (sub.matchedRuleIndex == null || !sub.rules) return false;
+      const matchedRule = sub.rules[sub.matchedRuleIndex];
+      return matchedRule?.condition === targetCondition;
+    });
+  }
+
+  const rules = [
+    { condition: 'approved' },
+    { condition: 'rejected' },
+  ];
+
+  it('all(): true when all sub-steps match', () => {
+    const subs: SubResult[] = [
+      { name: 'a', matchedRuleIndex: 0, rules },
+      { name: 'b', matchedRuleIndex: 0, rules },
+    ];
+    expect(evaluateAggregate('all', 'approved', subs)).toBe(true);
+  });
+
+  it('all(): false when some sub-steps do not match', () => {
+    const subs: SubResult[] = [
+      { name: 'a', matchedRuleIndex: 0, rules },
+      { name: 'b', matchedRuleIndex: 1, rules },
+    ];
+    expect(evaluateAggregate('all', 'approved', subs)).toBe(false);
+  });
+
+  it('all(): false when sub-step has no matched rule', () => {
+    const subs: SubResult[] = [
+      { name: 'a', matchedRuleIndex: 0, rules },
+      { name: 'b', matchedRuleIndex: undefined, rules },
+    ];
+    expect(evaluateAggregate('all', 'approved', subs)).toBe(false);
+  });
+
+  it('all(): false when sub-step has no rules', () => {
+    const subs: SubResult[] = [
+      { name: 'a', matchedRuleIndex: 0, rules },
+      { name: 'b', matchedRuleIndex: 0, rules: undefined },
+    ];
+    expect(evaluateAggregate('all', 'approved', subs)).toBe(false);
+  });
+
+  it('all(): false with zero sub-steps', () => {
+    expect(evaluateAggregate('all', 'approved', [])).toBe(false);
+  });
+
+  it('any(): true when one sub-step matches', () => {
+    const subs: SubResult[] = [
+      { name: 'a', matchedRuleIndex: 0, rules },
+      { name: 'b', matchedRuleIndex: 1, rules },
+    ];
+    expect(evaluateAggregate('any', 'rejected', subs)).toBe(true);
+  });
+
+  it('any(): true when all sub-steps match', () => {
+    const subs: SubResult[] = [
+      { name: 'a', matchedRuleIndex: 1, rules },
+      { name: 'b', matchedRuleIndex: 1, rules },
+    ];
+    expect(evaluateAggregate('any', 'rejected', subs)).toBe(true);
+  });
+
+  it('any(): false when no sub-steps match', () => {
+    const subs: SubResult[] = [
+      { name: 'a', matchedRuleIndex: 0, rules },
+      { name: 'b', matchedRuleIndex: 0, rules },
+    ];
+    expect(evaluateAggregate('any', 'rejected', subs)).toBe(false);
+  });
+
+  it('any(): false with zero sub-steps', () => {
+    expect(evaluateAggregate('any', 'rejected', [])).toBe(false);
+  });
+
+  it('any(): skips sub-steps without matched rule (does not count as match)', () => {
+    const subs: SubResult[] = [
+      { name: 'a', matchedRuleIndex: undefined, rules },
+      { name: 'b', matchedRuleIndex: 1, rules },
+    ];
+    expect(evaluateAggregate('any', 'rejected', subs)).toBe(true);
+  });
+
+  it('any(): false when only unmatched sub-steps exist', () => {
+    const subs: SubResult[] = [
+      { name: 'a', matchedRuleIndex: undefined, rules },
+      { name: 'b', matchedRuleIndex: undefined, rules },
+    ];
+    expect(evaluateAggregate('any', 'rejected', subs)).toBe(false);
+  });
+
+  it('evaluation priority: first matching aggregate rule wins', () => {
+    const parentRules = [
+      { type: 'all' as const, condition: 'approved' },
+      { type: 'any' as const, condition: 'rejected' },
+    ];
+    const subs: SubResult[] = [
+      { name: 'a', matchedRuleIndex: 0, rules },
+      { name: 'b', matchedRuleIndex: 0, rules },
+    ];
+
+    // Find the first matching rule
+    let matchedIndex = -1;
+    for (let i = 0; i < parentRules.length; i++) {
+      const r = parentRules[i]!;
+      if (evaluateAggregate(r.type, r.condition, subs)) {
+        matchedIndex = i;
+        break;
+      }
+    }
+
+    expect(matchedIndex).toBe(0); // all("approved") matches first
+  });
+});
+
 describe('parallel step aggregation format', () => {
   it('should aggregate sub-step outputs in the expected format', () => {
     // Mirror the aggregation logic from engine.ts

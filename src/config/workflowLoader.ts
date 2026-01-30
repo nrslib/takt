@@ -123,21 +123,38 @@ function normalizeReport(
 /** Regex to detect ai("...") condition expressions */
 const AI_CONDITION_REGEX = /^ai\("(.+)"\)$/;
 
+/** Regex to detect all("...")/any("...") aggregate condition expressions */
+const AGGREGATE_CONDITION_REGEX = /^(all|any)\("(.+)"\)$/;
+
 /**
- * Parse a rule's condition for ai() expressions.
- * If condition is `ai("some text")`, sets isAiCondition and aiConditionText.
+ * Parse a rule's condition for ai() and all()/any() expressions.
+ * - `ai("text")` → sets isAiCondition and aiConditionText
+ * - `all("text")` / `any("text")` → sets isAggregateCondition, aggregateType, aggregateConditionText
  */
 function normalizeRule(r: { condition: string; next: string; appendix?: string }): WorkflowRule {
-  const match = r.condition.match(AI_CONDITION_REGEX);
-  if (match?.[1]) {
+  const aiMatch = r.condition.match(AI_CONDITION_REGEX);
+  if (aiMatch?.[1]) {
     return {
       condition: r.condition,
       next: r.next,
       appendix: r.appendix,
       isAiCondition: true,
-      aiConditionText: match[1],
+      aiConditionText: aiMatch[1],
     };
   }
+
+  const aggMatch = r.condition.match(AGGREGATE_CONDITION_REGEX);
+  if (aggMatch?.[1] && aggMatch[2]) {
+    return {
+      condition: r.condition,
+      next: r.next,
+      appendix: r.appendix,
+      isAggregateCondition: true,
+      aggregateType: aggMatch[1] as 'all' | 'any',
+      aggregateConditionText: aggMatch[2],
+    };
+  }
+
   return {
     condition: r.condition,
     next: r.next,

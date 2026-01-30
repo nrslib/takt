@@ -6,13 +6,14 @@ import { describe, it, expect } from 'vitest';
 import {
   buildInstruction,
   buildReportInstruction,
+  buildStatusJudgmentInstruction,
   buildExecutionMetadata,
   renderExecutionMetadata,
-  renderStatusRulesHeader,
   generateStatusRulesFromRules,
   isReportObjectConfig,
   type InstructionContext,
   type ReportInstructionContext,
+  type StatusJudgmentContext,
 } from '../workflow/instruction-builder.js';
 import type { WorkflowStep, WorkflowRule } from '../models/types.js';
 
@@ -296,30 +297,6 @@ describe('instruction-builder', () => {
     });
   });
 
-  describe('renderStatusRulesHeader', () => {
-    it('should render Japanese header when language is ja', () => {
-      const header = renderStatusRulesHeader('ja');
-
-      expect(header).toContain('# ⚠️ 必須: ステータス出力ルール ⚠️');
-      expect(header).toContain('このタグがないとワークフローが停止します');
-      expect(header).toContain('最終出力には必ず以下のルールに従ったステータスタグを含めてください');
-    });
-
-    it('should render English header when language is en', () => {
-      const header = renderStatusRulesHeader('en');
-
-      expect(header).toContain('# ⚠️ Required: Status Output Rules ⚠️');
-      expect(header).toContain('The workflow will stop without this tag');
-      expect(header).toContain('Your final output MUST include a status tag');
-    });
-
-    it('should end with trailing empty line', () => {
-      const header = renderStatusRulesHeader('en');
-
-      expect(header).toMatch(/\n$/);
-    });
-  });
-
   describe('generateStatusRulesFromRules', () => {
     const rules: WorkflowRule[] = [
       { condition: '要件が明確で実装可能', next: 'implement' },
@@ -385,8 +362,8 @@ describe('instruction-builder', () => {
     });
   });
 
-  describe('buildInstruction with rules', () => {
-    it('should auto-generate status rules from rules', () => {
+  describe('buildInstruction with rules (Phase 1 — no status tags)', () => {
+    it('should NOT include status rules even when rules exist (phase separation)', () => {
       const step = createMinimalStep('Do work');
       step.name = 'plan';
       step.rules = [
@@ -397,12 +374,10 @@ describe('instruction-builder', () => {
 
       const result = buildInstruction(step, context);
 
-      // Should contain status header
-      expect(result).toContain('⚠️ Required: Status Output Rules ⚠️');
-      // Should contain auto-generated criteria table
-      expect(result).toContain('## Decision Criteria');
-      expect(result).toContain('`[PLAN:1]`');
-      expect(result).toContain('`[PLAN:2]`');
+      // Phase 1 should NOT contain status header or criteria
+      expect(result).not.toContain('Status Output Rules');
+      expect(result).not.toContain('Decision Criteria');
+      expect(result).not.toContain('[PLAN:');
     });
 
     it('should not add status rules when rules do not exist', () => {
@@ -411,7 +386,7 @@ describe('instruction-builder', () => {
 
       const result = buildInstruction(step, context);
 
-      expect(result).not.toContain('⚠️ Required');
+      expect(result).not.toContain('Status Output Rules');
       expect(result).not.toContain('Decision Criteria');
     });
 
@@ -422,7 +397,7 @@ describe('instruction-builder', () => {
 
       const result = buildInstruction(step, context);
 
-      expect(result).not.toContain('⚠️ Required');
+      expect(result).not.toContain('Status Output Rules');
       expect(result).not.toContain('Decision Criteria');
     });
   });
@@ -884,8 +859,8 @@ describe('instruction-builder', () => {
     });
   });
 
-  describe('ai() condition status tag skip', () => {
-    it('should skip status rules when ALL rules are ai() conditions', () => {
+  describe('phase separation — buildInstruction never includes status rules', () => {
+    it('should NOT include status rules even with ai() conditions', () => {
       const step = createMinimalStep('Do work');
       step.rules = [
         { condition: 'ai("No issues")', next: 'COMPLETE', isAiCondition: true, aiConditionText: 'No issues' },
@@ -899,7 +874,7 @@ describe('instruction-builder', () => {
       expect(result).not.toContain('[TEST-STEP:');
     });
 
-    it('should include status rules when some rules are NOT ai() conditions', () => {
+    it('should NOT include status rules with mixed regular and ai() conditions', () => {
       const step = createMinimalStep('Do work');
       step.rules = [
         { condition: 'Error occurred', next: 'ABORT' },
@@ -909,10 +884,10 @@ describe('instruction-builder', () => {
 
       const result = buildInstruction(step, context);
 
-      expect(result).toContain('Status Output Rules');
+      expect(result).not.toContain('Status Output Rules');
     });
 
-    it('should include status rules when no rules are ai() conditions', () => {
+    it('should NOT include status rules with regular conditions only', () => {
       const step = createMinimalStep('Do work');
       step.rules = [
         { condition: 'Done', next: 'COMPLETE' },
@@ -922,7 +897,47 @@ describe('instruction-builder', () => {
 
       const result = buildInstruction(step, context);
 
-      expect(result).toContain('Status Output Rules');
+      expect(result).not.toContain('Status Output Rules');
+    });
+
+    it('should NOT include status rules with aggregate conditions', () => {
+      const step = createMinimalStep('Do work');
+      step.rules = [
+        { condition: 'all("approved")', next: 'COMPLETE', isAggregateCondition: true, aggregateType: 'all' as const, aggregateConditionText: 'approved' },
+        { condition: 'any("rejected")', next: 'fix', isAggregateCondition: true, aggregateType: 'any' as const, aggregateConditionText: 'rejected' },
+      ];
+      const context = createMinimalContext({ language: 'en' });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).not.toContain('Status Output Rules');
+    });
+
+    it('should NOT include status rules with mixed ai() and aggregate conditions', () => {
+      const step = createMinimalStep('Do work');
+      step.rules = [
+        { condition: 'all("approved")', next: 'COMPLETE', isAggregateCondition: true, aggregateType: 'all' as const, aggregateConditionText: 'approved' },
+        { condition: 'any("rejected")', next: 'fix', isAggregateCondition: true, aggregateType: 'any' as const, aggregateConditionText: 'rejected' },
+        { condition: 'ai("Judgment needed")', next: 'manual', isAiCondition: true, aiConditionText: 'Judgment needed' },
+      ];
+      const context = createMinimalContext({ language: 'en' });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).not.toContain('Status Output Rules');
+    });
+
+    it('should NOT include status rules with mixed aggregate and regular conditions', () => {
+      const step = createMinimalStep('Do work');
+      step.rules = [
+        { condition: 'all("approved")', next: 'COMPLETE', isAggregateCondition: true, aggregateType: 'all' as const, aggregateConditionText: 'approved' },
+        { condition: 'Error occurred', next: 'ABORT' },
+      ];
+      const context = createMinimalContext({ language: 'en' });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).not.toContain('Status Output Rules');
     });
   });
 
@@ -941,6 +956,119 @@ describe('instruction-builder', () => {
 
     it('should return false for ReportConfig[] (array)', () => {
       expect(isReportObjectConfig([{ label: 'Scope', path: '01-scope.md' }])).toBe(false);
+    });
+  });
+
+  describe('buildStatusJudgmentInstruction (Phase 3)', () => {
+    function createJudgmentContext(overrides: Partial<StatusJudgmentContext> = {}): StatusJudgmentContext {
+      return {
+        language: 'en',
+        ...overrides,
+      };
+    }
+
+    it('should include header instruction (en)', () => {
+      const step = createMinimalStep('Do work');
+      step.name = 'plan';
+      step.rules = [
+        { condition: 'Clear requirements', next: 'implement' },
+        { condition: 'Unclear', next: 'ABORT' },
+      ];
+      const ctx = createJudgmentContext();
+
+      const result = buildStatusJudgmentInstruction(step, ctx);
+
+      expect(result).toContain('Review your work results and determine the status');
+      expect(result).toContain('Do NOT perform any additional work');
+    });
+
+    it('should include header instruction (ja)', () => {
+      const step = createMinimalStep('Do work');
+      step.name = 'plan';
+      step.rules = [
+        { condition: '要件が明確', next: 'implement' },
+        { condition: '不明確', next: 'ABORT' },
+      ];
+      const ctx = createJudgmentContext({ language: 'ja' });
+
+      const result = buildStatusJudgmentInstruction(step, ctx);
+
+      expect(result).toContain('作業結果を振り返り、ステータスを判定してください');
+      expect(result).toContain('追加の作業は行わないでください');
+    });
+
+    it('should include criteria table with tags', () => {
+      const step = createMinimalStep('Do work');
+      step.name = 'plan';
+      step.rules = [
+        { condition: 'Clear requirements', next: 'implement' },
+        { condition: 'Unclear', next: 'ABORT' },
+      ];
+      const ctx = createJudgmentContext();
+
+      const result = buildStatusJudgmentInstruction(step, ctx);
+
+      expect(result).toContain('## Decision Criteria');
+      expect(result).toContain('`[PLAN:1]`');
+      expect(result).toContain('`[PLAN:2]`');
+    });
+
+    it('should include output format section', () => {
+      const step = createMinimalStep('Do work');
+      step.name = 'review';
+      step.rules = [
+        { condition: 'Approved', next: 'COMPLETE' },
+        { condition: 'Rejected', next: 'fix' },
+      ];
+      const ctx = createJudgmentContext();
+
+      const result = buildStatusJudgmentInstruction(step, ctx);
+
+      expect(result).toContain('## Output Format');
+      expect(result).toContain('`[REVIEW:1]` — Approved');
+      expect(result).toContain('`[REVIEW:2]` — Rejected');
+    });
+
+    it('should throw error when step has no rules', () => {
+      const step = createMinimalStep('Do work');
+      const ctx = createJudgmentContext();
+
+      expect(() => buildStatusJudgmentInstruction(step, ctx)).toThrow('no rules');
+    });
+
+    it('should throw error when step has empty rules', () => {
+      const step = createMinimalStep('Do work');
+      step.rules = [];
+      const ctx = createJudgmentContext();
+
+      expect(() => buildStatusJudgmentInstruction(step, ctx)).toThrow('no rules');
+    });
+
+    it('should default language to en', () => {
+      const step = createMinimalStep('Do work');
+      step.name = 'test';
+      step.rules = [{ condition: 'Done', next: 'COMPLETE' }];
+      const ctx: StatusJudgmentContext = {};
+
+      const result = buildStatusJudgmentInstruction(step, ctx);
+
+      expect(result).toContain('Review your work results');
+      expect(result).toContain('## Decision Criteria');
+    });
+
+    it('should include appendix template when rules have appendix', () => {
+      const step = createMinimalStep('Do work');
+      step.name = 'plan';
+      step.rules = [
+        { condition: 'Done', next: 'COMPLETE' },
+        { condition: 'Blocked', next: 'ABORT', appendix: '確認事項:\n- {質問1}' },
+      ];
+      const ctx = createJudgmentContext();
+
+      const result = buildStatusJudgmentInstruction(step, ctx);
+
+      expect(result).toContain('Appendix Template');
+      expect(result).toContain('確認事項:');
     });
   });
 });

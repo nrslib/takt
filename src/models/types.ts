@@ -8,7 +8,6 @@ export type AgentType = 'coder' | 'architect' | 'supervisor' | 'custom';
 /** Execution status for agents and workflows */
 export type Status =
   | 'pending'
-  | 'in_progress'
   | 'done'
   | 'blocked'
   | 'approved'
@@ -52,6 +51,12 @@ export interface WorkflowRule {
   isAiCondition?: boolean;
   /** The condition text inside ai("...") for AI judge evaluation (set by loader) */
   aiConditionText?: string;
+  /** Whether this condition uses all()/any() aggregate expression (set by loader) */
+  isAggregateCondition?: boolean;
+  /** Aggregate type: 'all' requires all sub-steps match, 'any' requires at least one (set by loader) */
+  aggregateType?: 'all' | 'any';
+  /** The condition text inside all("...")/any("...") to match against sub-step results (set by loader) */
+  aggregateConditionText?: string;
 }
 
 /** Report file configuration for a workflow step (label: path pair) */

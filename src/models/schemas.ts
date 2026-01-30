@@ -13,7 +13,6 @@ export const AgentTypeSchema = z.enum(['coder', 'architect', 'supervisor', 'cust
 /** Status schema */
 export const StatusSchema = z.enum([
   'pending',
-  'in_progress',
   'done',
   'blocked',
   'approved',

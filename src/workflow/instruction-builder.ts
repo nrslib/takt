@@ -5,7 +5,8 @@
  * 1. Auto-injecting standard sections (Execution Context, Workflow Context,
  *    User Request, Previous Response, Additional User Inputs, Instructions header)
  * 2. Replacing template placeholders with actual values
- * 3. Appending auto-generated status rules from workflow rules
+ *
+ * Status judgment is handled separately in Phase 3 (buildStatusJudgmentInstruction).
  */
 
 import type { WorkflowStep, WorkflowRule, AgentResponse, Language, ReportConfig, ReportObjectConfig } from '../models/types.js';
@@ -58,29 +59,6 @@ export function buildExecutionMetadata(context: InstructionContext, edit?: boole
     language: context.language ?? 'en',
     edit,
   };
-}
-
-/** Localized strings for status rules header */
-const STATUS_RULES_HEADER_STRINGS = {
-  en: {
-    heading: '# ⚠️ Required: Status Output Rules ⚠️',
-    warning: '**The workflow will stop without this tag.**',
-    instruction: 'Your final output MUST include a status tag following the rules below.',
-  },
-  ja: {
-    heading: '# ⚠️ 必須: ステータス出力ルール ⚠️',
-    warning: '**このタグがないとワークフローが停止します。**',
-    instruction: '最終出力には必ず以下のルールに従ったステータスタグを含めてください。',
-  },
-} as const;
-
-/**
- * Render status rules header.
- * Prepended to auto-generated status rules from workflow rules.
- */
-export function renderStatusRulesHeader(language: Language): string {
-  const strings = STATUS_RULES_HEADER_STRINGS[language];
-  return [strings.heading, '', strings.warning, strings.instruction, ''].join('\n');
 }
 
 /** Localized strings for rules-based status prompt */
@@ -428,7 +406,8 @@ function replaceTemplatePlaceholders(
  * 4. Previous Response — if passPreviousResponse and has content, unless template contains {previous_response}
  * 5. Additional User Inputs — unless template contains {user_inputs}
  * 6. Instructions header + instruction_template content — always
- * 7. Status Output Rules — if rules exist
+ *
+ * Status judgment is handled separately in Phase 3 (buildStatusJudgmentInstruction).
  *
  * Template placeholders ({task}, {previous_response}, etc.) are still replaced
  * within the instruction_template body for backward compatibility.
@@ -482,17 +461,6 @@ export function buildInstruction(
     context,
   );
   sections.push(`${s.instructions}\n${processedTemplate}`);
-
-  // 7. Status rules (auto-generated from rules)
-  // Skip when ALL rules are ai() conditions — agent doesn't need to output status tags
-  if (step.rules && step.rules.length > 0) {
-    const allAiConditions = step.rules.every((r) => r.isAiCondition);
-    if (!allAiConditions) {
-      const statusHeader = renderStatusRulesHeader(language);
-      const generatedPrompt = generateStatusRulesFromRules(step.name, step.rules, language);
-      sections.push(`${statusHeader}\n${generatedPrompt}`);
-    }
-  }
 
   return sections.join('\n\n');
 }
@@ -610,6 +578,56 @@ export function buildReportInstruction(
   }
 
   sections.push(instrParts.join('\n'));
+
+  return sections.join('\n\n');
+}
+
+/** Localized strings for status judgment phase (Phase 3) */
+const STATUS_JUDGMENT_STRINGS = {
+  en: {
+    header: 'Review your work results and determine the status. Do NOT perform any additional work.',
+  },
+  ja: {
+    header: '作業結果を振り返り、ステータスを判定してください。追加の作業は行わないでください。',
+  },
+} as const;
+
+/**
+ * Context for building status judgment instruction (Phase 3).
+ */
+export interface StatusJudgmentContext {
+  /** Language */
+  language?: Language;
+}
+
+/**
+ * Build instruction for Phase 3 (status judgment).
+ *
+ * Resumes the agent session and asks it to evaluate its work
+ * and output the appropriate status tag. No tools are allowed.
+ *
+ * Includes:
+ * - Header instruction (review and determine status)
+ * - Status rules (criteria table + output format) from generateStatusRulesFromRules()
+ */
+export function buildStatusJudgmentInstruction(
+  step: WorkflowStep,
+  context: StatusJudgmentContext,
+): string {
+  if (!step.rules || step.rules.length === 0) {
+    throw new Error(`buildStatusJudgmentInstruction called for step "${step.name}" which has no rules`);
+  }
+
+  const language = context.language ?? 'en';
+  const s = STATUS_JUDGMENT_STRINGS[language];
+  const sections: string[] = [];
+
+  // Header
+  sections.push(s.header);
+
+  // Status rules (criteria table + output format)
+  const generatedPrompt = generateStatusRulesFromRules(step.name, step.rules, language);
+  sections.push(generatedPrompt);
 
   return sections.join('\n\n');
 }
