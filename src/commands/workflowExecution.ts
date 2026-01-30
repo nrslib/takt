@@ -24,10 +24,15 @@ import {
 import {
   generateSessionId,
   createSessionLog,
-  addToSessionLog,
   finalizeSessionLog,
-  saveSessionLog,
   updateLatestPointer,
+  initNdjsonLog,
+  appendNdjsonLine,
+  type NdjsonStepStart,
+  type NdjsonStepComplete,
+  type NdjsonStream,
+  type NdjsonWorkflowComplete,
+  type NdjsonWorkflowAbort,
 } from '../utils/session.js';
 import { createLogger } from '../utils/debug.js';
 import { notifySuccess, notifyError } from '../utils/notification.js';
@@ -91,19 +96,34 @@ export async function executeWorkflow(
   header(`${headerPrefix} ${workflowConfig.name}`);
 
   const workflowSessionId = generateSessionId();
-  const sessionLog = createSessionLog(task, projectCwd, workflowConfig.name);
+  let sessionLog = createSessionLog(task, projectCwd, workflowConfig.name);
 
-  // Persist initial log + pointer at workflow start (enables crash recovery)
-  saveSessionLog(sessionLog, workflowSessionId, projectCwd);
+  // Initialize NDJSON log file + pointer at workflow start
+  const ndjsonLogPath = initNdjsonLog(workflowSessionId, task, workflowConfig.name, projectCwd);
   updateLatestPointer(sessionLog, workflowSessionId, projectCwd, { copyToPrevious: true });
+
+  // Track current step name for stream log records
+  const stepRef: { current: string } = { current: '' };
 
   // Track current display for streaming
   const displayRef: { current: StreamDisplay | null } = { current: null };
 
-  // Create stream handler that delegates to current display
+  // Create stream handler that delegates to UI display + writes NDJSON log
   const streamHandler = (
     event: Parameters<ReturnType<StreamDisplay['createHandler']>>[0]
   ): void => {
+    // Write stream event to NDJSON log (real-time)
+    if (stepRef.current) {
+      const record: NdjsonStream = {
+        type: 'stream',
+        step: stepRef.current,
+        event,
+        timestamp: new Date().toISOString(),
+      };
+      appendNdjsonLine(ndjsonLogPath, record);
+    }
+
+    // Delegate to UI display
     if (!displayRef.current) return;
     if (event.type === 'result') return;
     displayRef.current.createHandler()(event);
@@ -183,6 +203,17 @@ export async function executeWorkflow(
     log.debug('Step starting', { step: step.name, agent: step.agentDisplayName, iteration });
     info(`[${iteration}/${workflowConfig.maxIterations}] ${step.name} (${step.agentDisplayName})`);
     displayRef.current = new StreamDisplay(step.agentDisplayName);
+    stepRef.current = step.name;
+
+    // Write step_start record to NDJSON log
+    const record: NdjsonStepStart = {
+      type: 'step_start',
+      step: step.name,
+      agent: step.agentDisplayName,
+      iteration,
+      timestamp: new Date().toISOString(),
+    };
+    appendNdjsonLine(ndjsonLogPath, record);
   });
 
   engine.on('step:complete', (step, response, instruction) => {
@@ -219,10 +250,24 @@ export async function executeWorkflow(
     if (response.sessionId) {
       status('Session', response.sessionId);
     }
-    addToSessionLog(sessionLog, step.name, response, instruction);
 
-    // Incremental save after each step
-    saveSessionLog(sessionLog, workflowSessionId, projectCwd);
+    // Write step_complete record to NDJSON log
+    const record: NdjsonStepComplete = {
+      type: 'step_complete',
+      step: step.name,
+      agent: response.agent,
+      status: response.status,
+      content: response.content,
+      instruction,
+      ...(response.matchedRuleIndex != null ? { matchedRuleIndex: response.matchedRuleIndex } : {}),
+      ...(response.matchedRuleMethod ? { matchedRuleMethod: response.matchedRuleMethod } : {}),
+      ...(response.error ? { error: response.error } : {}),
+      timestamp: response.timestamp.toISOString(),
+    };
+    appendNdjsonLine(ndjsonLogPath, record);
+
+    // Update in-memory log for pointer metadata (immutable)
+    sessionLog = { ...sessionLog, iterations: sessionLog.iterations + 1 };
     updateLatestPointer(sessionLog, workflowSessionId, projectCwd);
   });
 
@@ -234,9 +279,15 @@ export async function executeWorkflow(
 
   engine.on('workflow:complete', (state) => {
     log.info('Workflow completed successfully', { iterations: state.iteration });
-    finalizeSessionLog(sessionLog, 'completed');
-    // Save log to project root so user can find it easily
-    const logPath = saveSessionLog(sessionLog, workflowSessionId, projectCwd);
+    sessionLog = finalizeSessionLog(sessionLog, 'completed');
+
+    // Write workflow_complete record to NDJSON log
+    const record: NdjsonWorkflowComplete = {
+      type: 'workflow_complete',
+      iterations: state.iteration,
+      endTime: new Date().toISOString(),
+    };
+    appendNdjsonLine(ndjsonLogPath, record);
     updateLatestPointer(sessionLog, workflowSessionId, projectCwd);
 
     const elapsed = sessionLog.endTime
@@ -245,7 +296,7 @@ export async function executeWorkflow(
     const elapsedDisplay = elapsed ? `, ${elapsed}` : '';
 
     success(`Workflow completed (${state.iteration} iterations${elapsedDisplay})`);
-    info(`Session log: ${logPath}`);
+    info(`Session log: ${ndjsonLogPath}`);
     notifySuccess('TAKT', `ワークフロー完了 (${state.iteration} iterations)`);
   });
 
@@ -256,9 +307,16 @@ export async function executeWorkflow(
       displayRef.current = null;
     }
     abortReason = reason;
-    finalizeSessionLog(sessionLog, 'aborted');
-    // Save log to project root so user can find it easily
-    const logPath = saveSessionLog(sessionLog, workflowSessionId, projectCwd);
+    sessionLog = finalizeSessionLog(sessionLog, 'aborted');
+
+    // Write workflow_abort record to NDJSON log
+    const record: NdjsonWorkflowAbort = {
+      type: 'workflow_abort',
+      iterations: state.iteration,
+      reason,
+      endTime: new Date().toISOString(),
+    };
+    appendNdjsonLine(ndjsonLogPath, record);
     updateLatestPointer(sessionLog, workflowSessionId, projectCwd);
 
     const elapsed = sessionLog.endTime
@@ -267,7 +325,7 @@ export async function executeWorkflow(
     const elapsedDisplay = elapsed ? ` (${elapsed})` : '';
 
     error(`Workflow aborted after ${state.iteration} iterations${elapsedDisplay}: ${reason}`);
-    info(`Session log: ${logPath}`);
+    info(`Session log: ${ndjsonLogPath}`);
     notifyError('TAKT', `中断: ${reason}`);
   });
 

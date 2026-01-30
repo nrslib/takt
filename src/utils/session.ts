@@ -2,9 +2,9 @@
  * Session management utilities
  */
 
-import { existsSync, readFileSync, copyFileSync } from 'node:fs';
+import { existsSync, readFileSync, copyFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { AgentResponse, WorkflowState } from '../models/types.js';
+import type { StreamEvent } from '../claude/types.js';
 import { getProjectLogsDir, getGlobalLogsDir, ensureDir, writeFileAtomic } from '../config/paths.js';
 
 /** Session log entry */
@@ -29,6 +29,176 @@ export interface SessionLog {
     /** How the rule match was detected */
     matchedRuleMethod?: string;
   }>;
+}
+
+// --- NDJSON log types ---
+
+/** NDJSON record: workflow started */
+export interface NdjsonWorkflowStart {
+  type: 'workflow_start';
+  task: string;
+  workflowName: string;
+  startTime: string;
+}
+
+/** NDJSON record: step started */
+export interface NdjsonStepStart {
+  type: 'step_start';
+  step: string;
+  agent: string;
+  iteration: number;
+  timestamp: string;
+}
+
+/** NDJSON record: streaming chunk received */
+export interface NdjsonStream {
+  type: 'stream';
+  step: string;
+  event: StreamEvent;
+  timestamp: string;
+}
+
+/** NDJSON record: step completed */
+export interface NdjsonStepComplete {
+  type: 'step_complete';
+  step: string;
+  agent: string;
+  status: string;
+  content: string;
+  instruction: string;
+  matchedRuleIndex?: number;
+  matchedRuleMethod?: string;
+  error?: string;
+  timestamp: string;
+}
+
+/** NDJSON record: workflow completed successfully */
+export interface NdjsonWorkflowComplete {
+  type: 'workflow_complete';
+  iterations: number;
+  endTime: string;
+}
+
+/** NDJSON record: workflow aborted */
+export interface NdjsonWorkflowAbort {
+  type: 'workflow_abort';
+  iterations: number;
+  reason: string;
+  endTime: string;
+}
+
+/** Union of all NDJSON record types */
+export type NdjsonRecord =
+  | NdjsonWorkflowStart
+  | NdjsonStepStart
+  | NdjsonStream
+  | NdjsonStepComplete
+  | NdjsonWorkflowComplete
+  | NdjsonWorkflowAbort;
+
+/**
+ * Append a single NDJSON line to a log file.
+ * Uses appendFileSync for atomic open→write→close (no file lock held).
+ */
+export function appendNdjsonLine(filepath: string, record: NdjsonRecord): void {
+  appendFileSync(filepath, JSON.stringify(record) + '\n', 'utf-8');
+}
+
+/**
+ * Initialize an NDJSON log file with the workflow_start record.
+ * Creates the logs directory if needed and returns the file path.
+ */
+export function initNdjsonLog(
+  sessionId: string,
+  task: string,
+  workflowName: string,
+  projectDir?: string,
+): string {
+  const logsDir = projectDir
+    ? getProjectLogsDir(projectDir)
+    : getGlobalLogsDir();
+  ensureDir(logsDir);
+
+  const filepath = join(logsDir, `${sessionId}.jsonl`);
+  const record: NdjsonWorkflowStart = {
+    type: 'workflow_start',
+    task,
+    workflowName,
+    startTime: new Date().toISOString(),
+  };
+  appendNdjsonLine(filepath, record);
+  return filepath;
+}
+
+/**
+ * Load an NDJSON log file and convert it to a SessionLog for backward compatibility.
+ * Parses each line as a JSON record and reconstructs the SessionLog structure.
+ */
+export function loadNdjsonLog(filepath: string): SessionLog | null {
+  if (!existsSync(filepath)) {
+    return null;
+  }
+
+  const content = readFileSync(filepath, 'utf-8');
+  const lines = content.trim().split('\n').filter((line) => line.length > 0);
+  if (lines.length === 0) return null;
+
+  let sessionLog: SessionLog | null = null;
+
+  for (const line of lines) {
+    const record = JSON.parse(line) as NdjsonRecord;
+
+    switch (record.type) {
+      case 'workflow_start':
+        sessionLog = {
+          task: record.task,
+          projectDir: '',
+          workflowName: record.workflowName,
+          iterations: 0,
+          startTime: record.startTime,
+          status: 'running',
+          history: [],
+        };
+        break;
+
+      case 'step_complete':
+        if (sessionLog) {
+          sessionLog.history.push({
+            step: record.step,
+            agent: record.agent,
+            instruction: record.instruction,
+            status: record.status,
+            timestamp: record.timestamp,
+            content: record.content,
+            ...(record.error ? { error: record.error } : {}),
+            ...(record.matchedRuleIndex != null ? { matchedRuleIndex: record.matchedRuleIndex } : {}),
+            ...(record.matchedRuleMethod ? { matchedRuleMethod: record.matchedRuleMethod } : {}),
+          });
+          sessionLog.iterations++;
+        }
+        break;
+
+      case 'workflow_complete':
+        if (sessionLog) {
+          sessionLog.status = 'completed';
+          sessionLog.endTime = record.endTime;
+        }
+        break;
+
+      case 'workflow_abort':
+        if (sessionLog) {
+          sessionLog.status = 'aborted';
+          sessionLog.endTime = record.endTime;
+        }
+        break;
+
+      // stream and step_start records are not stored in SessionLog
+      default:
+        break;
+    }
+  }
+
+  return sessionLog;
 }
 
 /** Generate a session ID */
@@ -77,56 +247,25 @@ export function createSessionLog(
   };
 }
 
-/** Add agent response to session log */
-export function addToSessionLog(
-  log: SessionLog,
-  stepName: string,
-  response: AgentResponse,
-  instruction: string
-): void {
-  log.history.push({
-    step: stepName,
-    agent: response.agent,
-    instruction,
-    status: response.status,
-    timestamp: response.timestamp.toISOString(),
-    content: response.content,
-    ...(response.error ? { error: response.error } : {}),
-    ...(response.matchedRuleIndex != null ? { matchedRuleIndex: response.matchedRuleIndex } : {}),
-    ...(response.matchedRuleMethod ? { matchedRuleMethod: response.matchedRuleMethod } : {}),
-  });
-  log.iterations++;
-}
-
-/** Finalize session log */
+/** Create a finalized copy of a session log (immutable — does not modify the original) */
 export function finalizeSessionLog(
   log: SessionLog,
   status: 'completed' | 'aborted'
-): void {
-  log.status = status;
-  log.endTime = new Date().toISOString();
+): SessionLog {
+  return {
+    ...log,
+    status,
+    endTime: new Date().toISOString(),
+  };
 }
 
-/** Save session log to file */
-export function saveSessionLog(
-  log: SessionLog,
-  sessionId: string,
-  projectDir?: string
-): string {
-  const logsDir = projectDir
-    ? getProjectLogsDir(projectDir)
-    : getGlobalLogsDir();
-  ensureDir(logsDir);
-
-  const filename = `${sessionId}.json`;
-  const filepath = join(logsDir, filename);
-
-  writeFileAtomic(filepath, JSON.stringify(log, null, 2));
-  return filepath;
-}
-
-/** Load session log from file */
+/** Load session log from file (supports both .json and .jsonl formats) */
 export function loadSessionLog(filepath: string): SessionLog | null {
+  // Try NDJSON format for .jsonl files
+  if (filepath.endsWith('.jsonl')) {
+    return loadNdjsonLog(filepath);
+  }
+
   if (!existsSync(filepath)) {
     return null;
   }
@@ -191,7 +330,7 @@ export function updateLatestPointer(
 
   const pointer: LatestLogPointer = {
     sessionId,
-    logFile: `${sessionId}.json`,
+    logFile: `${sessionId}.jsonl`,
     task: log.task,
     workflowName: log.workflowName,
     status: log.status,
@@ -203,32 +342,3 @@ export function updateLatestPointer(
   writeFileAtomic(latestPath, JSON.stringify(pointer, null, 2));
 }
 
-/** Convert workflow state to session log */
-export function workflowStateToSessionLog(
-  state: WorkflowState,
-  task: string,
-  projectDir: string
-): SessionLog {
-  const log: SessionLog = {
-    task,
-    projectDir,
-    workflowName: state.workflowName,
-    iterations: state.iteration,
-    startTime: new Date().toISOString(),
-    status: state.status === 'running' ? 'running' : state.status === 'completed' ? 'completed' : 'aborted',
-    history: [],
-  };
-
-  for (const [stepName, response] of state.stepOutputs) {
-    log.history.push({
-      step: stepName,
-      agent: response.agent,
-      instruction: '',
-      status: response.status,
-      timestamp: response.timestamp.toISOString(),
-      content: response.content,
-    });
-  }
-
-  return log;
-}
