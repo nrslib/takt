@@ -64,7 +64,7 @@ export class WorkflowEngine extends EventEmitter {
     this.options = options;
     this.language = options.language;
     this.loopDetector = new LoopDetector(config.loopDetection);
-    this.reportDir = generateReportDir(task);
+    this.reportDir = `.takt/reports/${generateReportDir(task)}`;
     this.ensureReportDirExists();
     this.validateConfig();
     this.state = createInitialState(config, options);
@@ -78,7 +78,7 @@ export class WorkflowEngine extends EventEmitter {
 
   /** Ensure report directory exists (always in project root, not clone) */
   private ensureReportDirExists(): void {
-    const reportDirPath = join(this.projectCwd, '.takt', 'reports', this.reportDir);
+    const reportDirPath = join(this.projectCwd, this.reportDir);
     if (!existsSync(reportDirPath)) {
       mkdirSync(reportDirPath, { recursive: true });
     }
@@ -176,7 +176,7 @@ export class WorkflowEngine extends EventEmitter {
    */
   private emitStepReports(step: WorkflowStep): void {
     if (!step.report || !this.reportDir) return;
-    const baseDir = join(this.projectCwd, '.takt', 'reports', this.reportDir);
+    const baseDir = join(this.projectCwd, this.reportDir);
 
     if (typeof step.report === 'string') {
       this.emitIfReportExists(step, baseDir, step.report);

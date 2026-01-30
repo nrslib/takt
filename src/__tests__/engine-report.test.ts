@@ -14,6 +14,8 @@ import type { WorkflowStep, ReportObjectConfig, ReportConfig } from '../models/t
 /**
  * Extracted emitStepReports logic for unit testing.
  * Mirrors engine.ts emitStepReports + emitIfReportExists.
+ *
+ * reportDir already includes the `.takt/reports/` prefix (set by engine constructor).
  */
 function emitStepReports(
   emitter: EventEmitter,
@@ -22,7 +24,7 @@ function emitStepReports(
   projectCwd: string,
 ): void {
   if (!step.report || !reportDir) return;
-  const baseDir = join(projectCwd, '.takt', 'reports', reportDir);
+  const baseDir = join(projectCwd, reportDir);
 
   if (typeof step.report === 'string') {
     emitIfReportExists(emitter, step, baseDir, step.report);
@@ -62,11 +64,12 @@ function createStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
 describe('emitStepReports', () => {
   let tmpDir: string;
   let reportBaseDir: string;
-  const reportDirName = 'test-report-dir';
+  // reportDir now includes .takt/reports/ prefix (matches engine constructor behavior)
+  const reportDirName = '.takt/reports/test-report-dir';
 
   beforeEach(() => {
     tmpDir = join(tmpdir(), `takt-report-test-${Date.now()}`);
-    reportBaseDir = join(tmpDir, '.takt', 'reports', reportDirName);
+    reportBaseDir = join(tmpDir, reportDirName);
     mkdirSync(reportBaseDir, { recursive: true });
   });
 
