@@ -291,14 +291,10 @@ describe('addTask', () => {
     expect(content).not.toContain('workflow:');
   });
 
-  it('should fetch issue and summarize with AI when given issue reference', async () => {
+  it('should fetch issue and use directly as task content when given issue reference', async () => {
     // Given: issue reference "#99"
     const issueText = 'Issue #99: Fix login timeout\n\nThe login page times out after 30 seconds.';
-    const summarized = '# ログインタイムアウト修正\nログインページの30秒タイムアウトを修正する';
     mockResolveIssueTask.mockReturnValue(issueText);
-
-    const mockProviderCall = vi.fn().mockResolvedValue({ content: summarized });
-    mockGetProvider.mockReturnValue({ call: mockProviderCall } as any);
 
     mockSummarizeTaskName.mockResolvedValue('fix-login-timeout');
     mockConfirm.mockResolvedValue(false);
@@ -313,29 +309,16 @@ describe('addTask', () => {
     // Then: resolveIssueTask was called
     expect(mockResolveIssueTask).toHaveBeenCalledWith('#99');
 
-    // Then: summarizeConversation was called with issue text
-    expect(mockProviderCall).toHaveBeenCalledWith(
-      'task-summarizer',
-      issueText,
-      expect.objectContaining({
-        cwd: testDir,
-        maxTurns: 1,
-        allowedTools: [],
-      }),
-    );
-
-    // Then: task file created with summarized content
+    // Then: task file created with issue text directly (no AI summarization)
     const taskFile = path.join(testDir, '.takt', 'tasks', 'fix-login-timeout.yaml');
     expect(fs.existsSync(taskFile)).toBe(true);
     const content = fs.readFileSync(taskFile, 'utf-8');
-    expect(content).toContain('ログインタイムアウト修正');
+    expect(content).toContain('Fix login timeout');
   });
 
-  it('should proceed to worktree/workflow settings after issue summarization', async () => {
+  it('should proceed to worktree/workflow settings after issue fetch', async () => {
     // Given: issue with worktree enabled
     mockResolveIssueTask.mockReturnValue('Issue text');
-    const mockProviderCall = vi.fn().mockResolvedValue({ content: 'Summarized issue' });
-    mockGetProvider.mockReturnValue({ call: mockProviderCall } as any);
     mockSummarizeTaskName.mockResolvedValue('issue-task');
     mockConfirm.mockResolvedValue(true);
     mockPromptInput.mockResolvedValue('');

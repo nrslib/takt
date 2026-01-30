@@ -82,18 +82,16 @@ export async function addTask(cwd: string, task?: string): Promise<void> {
   let taskContent: string;
 
   if (task && isIssueReference(task)) {
-    // Issue reference: fetch issue and summarize with AI
+    // Issue reference: fetch issue and use directly as task content
     info('Fetching GitHub Issue...');
-    let issueText: string;
     try {
-      issueText = resolveIssueTask(task);
+      taskContent = resolveIssueTask(task);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       log.error('Failed to fetch GitHub Issue', { task, error: msg });
       info(`Failed to fetch issue ${task}: ${msg}`);
       return;
     }
-    taskContent = await summarizeConversation(cwd, issueText);
   } else {
     // Interactive mode: AI conversation to refine task
     const result = await interactiveMode(cwd);
