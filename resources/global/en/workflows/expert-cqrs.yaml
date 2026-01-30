@@ -16,7 +16,6 @@
 #   {step_iteration} - Per-step iteration count (how many times THIS step has been executed)
 #   {task}           - Original user request
 #   {previous_response} - Output from the previous step
-#   {git_diff}       - Current uncommitted changes (git diff)
 #   {user_inputs}    - Accumulated user inputs during workflow
 #   {report_dir}     - Report directory name (e.g., "20250126-143052-task-summary")
 
@@ -33,7 +32,33 @@ steps:
   # ===========================================
   - name: plan
     agent: ~/.takt/agents/default/planner.md
-    report: 00-plan.md
+    report:
+      name: 00-plan.md
+      order: |
+        **Report output:** Output to the `Report File` specified above.
+        - If file does not exist: Create new file
+        - If file exists: Append with `## Iteration {step_iteration}` section
+      format: |
+        ```markdown
+        # Task Plan
+
+        ## Original Request
+        {User's request as-is}
+
+        ## Analysis Results
+
+        ### Objective
+        {What needs to be achieved}
+
+        ### Scope
+        {Impact scope}
+
+        ### Implementation Approach
+        {How to proceed}
+
+        ## Clarifications Needed (if any)
+        - {Unclear points or items requiring confirmation}
+        ```
     allowed_tools:
       - Read
       - Glob
@@ -55,32 +80,6 @@ steps:
       1. Understand the requirements
       2. Identify impact scope
       3. Decide implementation approach
-
-      **Report output:** Output to the `Report File` specified above.
-      - If file does not exist: Create new file
-      - If file exists: Append with `## Iteration {step_iteration}` section
-
-      **Report format:**
-      ```markdown
-      # Task Plan
-
-      ## Original Request
-      {User's request as-is}
-
-      ## Analysis Results
-
-      ### Objective
-      {What needs to be achieved}
-
-      ### Scope
-      {Impact scope}
-
-      ### Implementation Approach
-      {How to proceed}
-
-      ## Clarifications Needed (if any)
-      - {Unclear points or items requiring confirmation}
-      ```
     pass_previous_response: true
     rules:
       - condition: Task analysis and planning is complete
@@ -153,7 +152,38 @@ steps:
   # ===========================================
   - name: ai_review
     agent: ~/.takt/agents/default/ai-antipattern-reviewer.md
-    report: 03-ai-review.md
+    report:
+      name: 03-ai-review.md
+      order: |
+        **Report output:** Output to the `Report File` specified above.
+        - If file does not exist: Create new file
+        - If file exists: Append with `## Iteration {step_iteration}` section
+      format: |
+        ```markdown
+        # AI-Generated Code Review
+
+        ## Result: APPROVE / REJECT
+
+        ## Summary
+        {One sentence summarizing result}
+
+        ## Verified Items
+        | Aspect | Result | Notes |
+        |--------|--------|-------|
+        | Assumption validity | ✅ | - |
+        | API/Library existence | ✅ | - |
+        | Context fit | ✅ | - |
+        | Scope | ✅ | - |
+
+        ## Issues (if REJECT)
+        | # | Category | Location | Issue |
+        |---|----------|----------|-------|
+        | 1 | Hallucinated API | `src/file.ts:23` | Non-existent method |
+        ```
+
+        **Cognitive load reduction rules:**
+        - No issues → Summary 1 line + check table only (10 lines or less)
+        - Issues found → + Issues in table format (25 lines or less)
     allowed_tools:
       - Read
       - Glob
@@ -162,47 +192,11 @@ steps:
       - WebSearch
       - WebFetch
     instruction_template: |
-      ## Git Diff
-      ```diff
-      {git_diff}
-      ```
-
       Review the code for AI-specific issues:
       - Assumption validation
       - Plausible but wrong patterns
       - Context fit with existing codebase
       - Scope creep detection
-
-      **Report output:** Output to the `Report File` specified above.
-      - If file does not exist: Create new file
-      - If file exists: Append with `## Iteration {step_iteration}` section
-
-      **Report format:**
-      ```markdown
-      # AI-Generated Code Review
-
-      ## Result: APPROVE / REJECT
-
-      ## Summary
-      {One sentence summarizing result}
-
-      ## Verified Items
-      | Aspect | Result | Notes |
-      |--------|--------|-------|
-      | Assumption validity | ✅ | - |
-      | API/Library existence | ✅ | - |
-      | Context fit | ✅ | - |
-      | Scope | ✅ | - |
-
-      ## Issues (if REJECT)
-      | # | Category | Location | Issue |
-      |---|----------|----------|-------|
-      | 1 | Hallucinated API | `src/file.ts:23` | Non-existent method |
-      ```
-
-      **Cognitive load reduction rules:**
-      - No issues → Summary 1 line + check table only (10 lines or less)
-      - Issues found → + Issues in table format (25 lines or less)
     rules:
       - condition: No AI-specific issues found
         next: cqrs_es_review
@@ -242,7 +236,35 @@ steps:
   # ===========================================
   - name: cqrs_es_review
     agent: ~/.takt/agents/expert-cqrs/cqrs-es-reviewer.md
-    report: 04-cqrs-es-review.md
+    report:
+      name: 04-cqrs-es-review.md
+      order: |
+        **Report output:** Output to the `Report File` specified above.
+        - If file does not exist: Create new file
+        - If file exists: Append with `## Iteration {step_iteration}` section
+      format: |
+        ```markdown
+        # CQRS+ES Review
+
+        ## Result: APPROVE / REJECT
+
+        ## Summary
+        {1-2 sentences summarizing result}
+
+        ## Reviewed Perspectives
+        | Perspective | Result | Notes |
+        |-------------|--------|-------|
+        | Aggregate Design | ✅ | - |
+        | Event Design | ✅ | - |
+        | Command/Query Separation | ✅ | - |
+        | Projections | ✅ | - |
+        | Eventual Consistency | ✅ | - |
+
+        ## Issues (if REJECT)
+        | # | Location | Issue | Fix |
+        |---|----------|-------|-----|
+        | 1 | `src/file.ts:42` | Issue description | Fix method |
+        ```
     allowed_tools:
       - Read
       - Glob
@@ -251,11 +273,6 @@ steps:
       - WebSearch
       - WebFetch
     instruction_template: |
-      ## Git Diff
-      ```diff
-      {git_diff}
-      ```
-
       Review the changes above from the CQRS (Command Query Responsibility Segregation)
       and Event Sourcing perspective.
 
@@ -268,34 +285,6 @@ steps:
 
       **Note**: If this project does not use CQRS+ES patterns,
       review from a general domain design perspective.
-
-      **Report output:** Output to the `Report File` specified above.
-      - If file does not exist: Create new file
-      - If file exists: Append with `## Iteration {step_iteration}` section
-
-      **Report format:**
-      ```markdown
-      # CQRS+ES Review
-
-      ## Result: APPROVE / REJECT
-
-      ## Summary
-      {1-2 sentences summarizing result}
-
-      ## Reviewed Perspectives
-      | Perspective | Result | Notes |
-      |-------------|--------|-------|
-      | Aggregate Design | ✅ | - |
-      | Event Design | ✅ | - |
-      | Command/Query Separation | ✅ | - |
-      | Projections | ✅ | - |
-      | Eventual Consistency | ✅ | - |
-
-      ## Issues (if REJECT)
-      | # | Location | Issue | Fix |
-      |---|----------|-------|-----|
-      | 1 | `src/file.ts:42` | Issue description | Fix method |
-      ```
     rules:
       - condition: CQRS+ES design is sound with no issues
         next: frontend_review
@@ -337,7 +326,35 @@ steps:
   # ===========================================
   - name: frontend_review
     agent: ~/.takt/agents/expert/frontend-reviewer.md
-    report: 05-frontend-review.md
+    report:
+      name: 05-frontend-review.md
+      order: |
+        **Report output:** Output to the `Report File` specified above.
+        - If file does not exist: Create new file
+        - If file exists: Append with `## Iteration {step_iteration}` section
+      format: |
+        ```markdown
+        # Frontend Review
+
+        ## Result: APPROVE / REJECT
+
+        ## Summary
+        {1-2 sentences summarizing result}
+
+        ## Reviewed Perspectives
+        | Perspective | Result | Notes |
+        |-------------|--------|-------|
+        | Component Design | ✅ | - |
+        | State Management | ✅ | - |
+        | Performance | ✅ | - |
+        | Accessibility | ✅ | - |
+        | Type Safety | ✅ | - |
+
+        ## Issues (if REJECT)
+        | # | Location | Issue | Fix |
+        |---|----------|-------|-----|
+        | 1 | `src/file.tsx:42` | Issue description | Fix method |
+        ```
     allowed_tools:
       - Read
       - Glob
@@ -346,11 +363,6 @@ steps:
       - WebSearch
       - WebFetch
     instruction_template: |
-      ## Git Diff
-      ```diff
-      {git_diff}
-      ```
-
       Review the changes above from the frontend development perspective.
 
       **Review Criteria:**
@@ -363,34 +375,6 @@ steps:
 
       **Note**: If this project does not include frontend code,
       approve and proceed to the next step.
-
-      **Report output:** Output to the `Report File` specified above.
-      - If file does not exist: Create new file
-      - If file exists: Append with `## Iteration {step_iteration}` section
-
-      **Report format:**
-      ```markdown
-      # Frontend Review
-
-      ## Result: APPROVE / REJECT
-
-      ## Summary
-      {1-2 sentences summarizing result}
-
-      ## Reviewed Perspectives
-      | Perspective | Result | Notes |
-      |-------------|--------|-------|
-      | Component Design | ✅ | - |
-      | State Management | ✅ | - |
-      | Performance | ✅ | - |
-      | Accessibility | ✅ | - |
-      | Type Safety | ✅ | - |
-
-      ## Issues (if REJECT)
-      | # | Location | Issue | Fix |
-      |---|----------|-------|-----|
-      | 1 | `src/file.tsx:42` | Issue description | Fix method |
-      ```
     rules:
       - condition: Frontend design is sound with no issues
         next: security_review
@@ -432,7 +416,36 @@ steps:
   # ===========================================
   - name: security_review
     agent: ~/.takt/agents/expert/security-reviewer.md
-    report: 06-security-review.md
+    report:
+      name: 06-security-review.md
+      order: |
+        **Report output:** Output to the `Report File` specified above.
+        - If file does not exist: Create new file
+        - If file exists: Append with `## Iteration {step_iteration}` section
+      format: |
+        ```markdown
+        # Security Review
+
+        ## Result: APPROVE / REJECT
+
+        ## Severity: None / Low / Medium / High / Critical
+
+        ## Check Results
+        | Category | Result | Notes |
+        |----------|--------|-------|
+        | Injection | ✅ | - |
+        | Auth/Authz | ✅ | - |
+        | Data Protection | ✅ | - |
+        | Dependencies | ✅ | - |
+
+        ## Vulnerabilities (if REJECT)
+        | # | Severity | Type | Location | Fix |
+        |---|----------|------|----------|-----|
+        | 1 | High | SQLi | `src/db.ts:42` | Use parameterized query |
+
+        ## Warnings (non-blocking)
+        - {Security recommendations}
+        ```
     allowed_tools:
       - Read
       - Glob
@@ -441,11 +454,6 @@ steps:
       - WebSearch
       - WebFetch
     instruction_template: |
-      ## Git Diff
-      ```diff
-      {git_diff}
-      ```
-
       Review the changes above from the security perspective.
 
       **Review Criteria:**
@@ -454,35 +462,6 @@ steps:
       - Sensitive information handling
       - Encryption appropriateness
       - OWASP Top 10
-
-      **Report output:** Output to the `Report File` specified above.
-      - If file does not exist: Create new file
-      - If file exists: Append with `## Iteration {step_iteration}` section
-
-      **Report format:**
-      ```markdown
-      # Security Review
-
-      ## Result: APPROVE / REJECT
-
-      ## Severity: None / Low / Medium / High / Critical
-
-      ## Check Results
-      | Category | Result | Notes |
-      |----------|--------|-------|
-      | Injection | ✅ | - |
-      | Auth/Authz | ✅ | - |
-      | Data Protection | ✅ | - |
-      | Dependencies | ✅ | - |
-
-      ## Vulnerabilities (if REJECT)
-      | # | Severity | Type | Location | Fix |
-      |---|----------|------|----------|-----|
-      | 1 | High | SQLi | `src/db.ts:42` | Use parameterized query |
-
-      ## Warnings (non-blocking)
-      - {Security recommendations}
-      ```
     rules:
       - condition: No security issues found
         next: qa_review
@@ -534,7 +513,35 @@ steps:
   # ===========================================
   - name: qa_review
     agent: ~/.takt/agents/expert/qa-reviewer.md
-    report: 07-qa-review.md
+    report:
+      name: 07-qa-review.md
+      order: |
+        **Report output:** Output to the `Report File` specified above.
+        - If file does not exist: Create new file
+        - If file exists: Append with `## Iteration {step_iteration}` section
+      format: |
+        ```markdown
+        # QA Review
+
+        ## Result: APPROVE / REJECT
+
+        ## Summary
+        {1-2 sentences summarizing result}
+
+        ## Reviewed Perspectives
+        | Perspective | Result | Notes |
+        |-------------|--------|-------|
+        | Test Coverage | ✅ | - |
+        | Test Quality | ✅ | - |
+        | Error Handling | ✅ | - |
+        | Documentation | ✅ | - |
+        | Maintainability | ✅ | - |
+
+        ## Issues (if REJECT)
+        | # | Category | Issue | Fix |
+        |---|----------|-------|-----|
+        | 1 | Testing | Issue description | Fix method |
+        ```
     allowed_tools:
       - Read
       - Glob
@@ -543,11 +550,6 @@ steps:
       - WebSearch
       - WebFetch
     instruction_template: |
-      ## Git Diff
-      ```diff
-      {git_diff}
-      ```
-
       Review the changes above from the quality assurance perspective.
 
       **Review Criteria:**
@@ -557,34 +559,6 @@ steps:
       - Error handling
       - Logging and monitoring
       - Maintainability
-
-      **Report output:** Output to the `Report File` specified above.
-      - If file does not exist: Create new file
-      - If file exists: Append with `## Iteration {step_iteration}` section
-
-      **Report format:**
-      ```markdown
-      # QA Review
-
-      ## Result: APPROVE / REJECT
-
-      ## Summary
-      {1-2 sentences summarizing result}
-
-      ## Reviewed Perspectives
-      | Perspective | Result | Notes |
-      |-------------|--------|-------|
-      | Test Coverage | ✅ | - |
-      | Test Quality | ✅ | - |
-      | Error Handling | ✅ | - |
-      | Documentation | ✅ | - |
-      | Maintainability | ✅ | - |
-
-      ## Issues (if REJECT)
-      | # | Category | Issue | Fix |
-      |---|----------|-------|-----|
-      | 1 | Testing | Issue description | Fix method |
-      ```
     rules:
       - condition: Quality standards are met
         next: supervise
@@ -651,11 +625,6 @@ steps:
       - WebSearch
       - WebFetch
     instruction_template: |
-      ## Git Diff
-      ```diff
-      {git_diff}
-      ```
-
       ## Previous Reviews Summary
       Reaching this step means all the following reviews have been APPROVED:
       - AI Review: APPROVED

@@ -436,7 +436,6 @@ Available variables in `instruction_template`:
 | `{step_iteration}` | Per-step iteration count (how many times THIS step has run) |
 | `{previous_response}` | Previous step's output (requires `pass_previous_response: true`) |
 | `{user_inputs}` | Additional user inputs during workflow |
-| `{git_diff}` | Current git diff (uncommitted changes) |
 | `{report_dir}` | Report directory name (e.g., `20250126-143052-task-summary`) |
 
 ### Designing Workflows

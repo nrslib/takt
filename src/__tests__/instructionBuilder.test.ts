@@ -13,6 +13,7 @@ import {
 } from '../workflow/instruction-builder.js';
 import type { WorkflowStep, WorkflowRule } from '../models/types.js';
 
+
 function createMinimalStep(template: string): WorkflowStep {
   return {
     name: 'test-step',

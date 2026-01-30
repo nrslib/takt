@@ -7,7 +7,6 @@
 #   {step_iteration} - Per-step iteration count (how many times THIS step has been executed)
 #   {task}           - Original user request
 #   {previous_response} - Output from the previous step
-#   {git_diff}       - Current uncommitted changes (git diff)
 #   {user_inputs}    - Accumulated user inputs during workflow
 #   {report_dir}     - Report directory name (e.g., "20250126-143052-task-summary")
 
@@ -21,7 +20,33 @@ initial_step: plan
 steps:
   - name: plan
     agent: ~/.takt/agents/default/planner.md
-    report: 00-plan.md
+    report:
+      name: 00-plan.md
+      order: |
+        **レポート出力:** `Report File` に出力してください。
+        - ファイルが存在しない場合: 新規作成
+        - ファイルが存在する場合: `## Iteration {step_iteration}` セクションを追記
+      format: |
+        ```markdown
+        # タスク計画
+
+        ## 元の要求
+        {ユーザーの要求をそのまま記載}
+
+        ## 分析結果
+
+        ### 目的
+        {達成すべきこと}
+
+        ### スコープ
+        {影響範囲}
+
+        ### 実装アプローチ
+        {どう進めるか}
+
+        ## 確認事項（あれば）
+        - {不明点や確認が必要な点}
+        ```
     allowed_tools:
       - Read
       - Glob
@@ -30,8 +55,6 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
-
-
     rules:
       - condition: 要件が明確で実装可能
         next: implement
@@ -57,32 +80,6 @@ steps:
       1. タスクの要件を理解する
       2. 影響範囲を特定する
       3. 実装アプローチを決める
-
-      **レポート出力:** Report File に出力してください。
-      - ファイルが存在しない場合: 新規作成
-      - ファイルが存在する場合: `## Iteration {step_iteration}` セクションを追記
-
-      **レポートフォーマット:**
-      ```markdown
-      # タスク計画
-
-      ## 元の要求
-      {ユーザーの要求をそのまま記載}
-
-      ## 分析結果
-
-      ### 目的
-      {達成すべきこと}
-
-      ### スコープ
-      {影響範囲}
-
-      ### 実装アプローチ
-      {どう進めるか}
-
-      ## 確認事項（あれば）
-      - {不明点や確認が必要な点}
-      ```
 
   - name: implement
     agent: ~/.takt/agents/default/coder.md
@@ -149,7 +146,38 @@ steps:
 
   - name: ai_review
     agent: ~/.takt/agents/default/ai-antipattern-reviewer.md
-    report: 03-ai-review.md
+    report:
+      name: 03-ai-review.md
+      order: |
+        **レポート出力:** `Report File` に出力してください。
+        - ファイルが存在しない場合: 新規作成
+        - ファイルが存在する場合: `## Iteration {step_iteration}` セクションを追記
+      format: |
+        ```markdown
+        # AI生成コードレビュー
+
+        ## 結果: APPROVE / REJECT
+
+        ## サマリー
+        {1文で結果を要約}
+
+        ## 検証した項目
+        | 観点 | 結果 | 備考 |
+        |------|------|------|
+        | 仮定の妥当性 | ✅ | - |
+        | API/ライブラリの実在 | ✅ | - |
+        | コンテキスト適合 | ✅ | - |
+        | スコープ | ✅ | - |
+
+        ## 問題点（REJECTの場合）
+        | # | カテゴリ | 場所 | 問題 |
+        |---|---------|------|------|
+        | 1 | 幻覚API | `src/file.ts:23` | 存在しないメソッド |
+        ```
+
+        **認知負荷軽減ルール:**
+        - 問題なし → サマリー1文 + チェック表のみ（10行以内）
+        - 問題あり → + 問題を表形式で（25行以内）
     allowed_tools:
       - Read
       - Glob
@@ -163,47 +191,11 @@ steps:
       - condition: AI特有の問題あり
         next: ai_fix
     instruction_template: |
-      ## Git Diff
-      ```diff
-      {git_diff}
-      ```
-
       AI特有の問題についてコードをレビューしてください:
       - 仮定の検証
       - もっともらしいが間違っているパターン
       - 既存コードベースとの適合性
       - スコープクリープの検出
-
-      **レポート出力:** Report File に出力してください。
-      - ファイルが存在しない場合: 新規作成
-      - ファイルが存在する場合: `## Iteration {step_iteration}` セクションを追記
-
-      **レポートフォーマット:**
-      ```markdown
-      # AI生成コードレビュー
-
-      ## 結果: APPROVE / REJECT
-
-      ## サマリー
-      {1文で結果を要約}
-
-      ## 検証した項目
-      | 観点 | 結果 | 備考 |
-      |------|------|------|
-      | 仮定の妥当性 | ✅ | - |
-      | API/ライブラリの実在 | ✅ | - |
-      | コンテキスト適合 | ✅ | - |
-      | スコープ | ✅ | - |
-
-      ## 問題点（REJECTの場合）
-      | # | カテゴリ | 場所 | 問題 |
-      |---|---------|------|------|
-      | 1 | 幻覚API | `src/file.ts:23` | 存在しないメソッド |
-      ```
-
-      **認知負荷軽減ルール:**
-      - 問題なし → サマリー1文 + チェック表のみ（10行以内）
-      - 問題あり → + 問題を表形式で（25行以内）
 
   - name: ai_fix
     agent: ~/.takt/agents/default/coder.md
@@ -236,7 +228,42 @@ steps:
 
   - name: review
     agent: ~/.takt/agents/default/architecture-reviewer.md
-    report: 04-architect-review.md
+    report:
+      name: 04-architect-review.md
+      order: |
+        **レポート出力:** `Report File` に出力してください。
+        - ファイルが存在しない場合: 新規作成
+        - ファイルが存在する場合: `## Iteration {step_iteration}` セクションを追記
+      format: |
+        ```markdown
+        # アーキテクチャレビュー
+
+        ## 結果: APPROVE / IMPROVE / REJECT
+
+        ## サマリー
+        {1-2文で結果を要約}
+
+        ## 確認した観点
+        - [x] 構造・設計
+        - [x] コード品質
+        - [x] 変更スコープ
+        - [x] テストカバレッジ
+        - [x] デッドコード
+        - [x] 呼び出しチェーン検証
+
+        ## 問題点（REJECTの場合）
+        | # | 場所 | 問題 | 修正案 |
+        |---|------|------|--------|
+        | 1 | `src/file.ts:42` | 問題の説明 | 修正方法 |
+
+        ## 改善提案（任意・ブロッキングではない）
+        - {将来的な改善提案}
+        ```
+
+        **認知負荷軽減ルール:**
+        - APPROVE + 問題なし → サマリーのみ（5行以内）
+        - APPROVE + 軽微な提案 → サマリー + 改善提案（15行以内）
+        - REJECT → 問題点を表形式で（30行以内）
     allowed_tools:
       - Read
       - Glob
@@ -252,11 +279,6 @@ steps:
       - condition: 構造的な修正が必要
         next: fix
     instruction_template: |
-      ## Git Diff
-      ```diff
-      {git_diff}
-      ```
-
       **アーキテクチャと設計**のレビューに集中してください。AI特有の問題はレビューしないでください（次のステップで行います）。
 
       変更をレビューしてフィードバックを提供してください。
@@ -268,41 +290,6 @@ steps:
       - テストカバレッジ
       - デッドコード
       - 呼び出しチェーン検証
-
-      **レポート出力:** Report File に出力してください。
-      - ファイルが存在しない場合: 新規作成
-      - ファイルが存在する場合: `## Iteration {step_iteration}` セクションを追記
-
-      **レポートフォーマット:**
-      ```markdown
-      # アーキテクチャレビュー
-
-      ## 結果: APPROVE / IMPROVE / REJECT
-
-      ## サマリー
-      {1-2文で結果を要約}
-
-      ## 確認した観点
-      - [x] 構造・設計
-      - [x] コード品質
-      - [x] 変更スコープ
-      - [x] テストカバレッジ
-      - [x] デッドコード
-      - [x] 呼び出しチェーン検証
-
-      ## 問題点（REJECTの場合）
-      | # | 場所 | 問題 | 修正案 |
-      |---|------|------|--------|
-      | 1 | `src/file.ts:42` | 問題の説明 | 修正方法 |
-
-      ## 改善提案（任意・ブロッキングではない）
-      - {将来的な改善提案}
-      ```
-
-      **認知負荷軽減ルール:**
-      - APPROVE + 問題なし → サマリーのみ（5行以内）
-      - APPROVE + 軽微な提案 → サマリー + 改善提案（15行以内）
-      - REJECT → 問題点を表形式で（30行以内）
 
   - name: improve
     agent: ~/.takt/agents/default/coder.md
@@ -362,7 +349,41 @@ steps:
 
   - name: security_review
     agent: ~/.takt/agents/default/security-reviewer.md
-    report: 05-security-review.md
+    report:
+      name: 05-security-review.md
+      order: |
+        **レポート出力:** `Report File` に出力してください。
+        - ファイルが存在しない場合: 新規作成
+        - ファイルが存在する場合: `## Iteration {step_iteration}` セクションを追記
+      format: |
+        ```markdown
+        # セキュリティレビュー
+
+        ## 結果: APPROVE / REJECT
+
+        ## 重大度: None / Low / Medium / High / Critical
+
+        ## チェック結果
+        | カテゴリ | 結果 | 備考 |
+        |---------|------|------|
+        | インジェクション | ✅ | - |
+        | 認証・認可 | ✅ | - |
+        | データ保護 | ✅ | - |
+        | 依存関係 | ✅ | - |
+
+        ## 脆弱性（REJECTの場合）
+        | # | 重大度 | 種類 | 場所 | 修正案 |
+        |---|--------|------|------|--------|
+        | 1 | High | SQLi | `src/db.ts:42` | パラメータ化クエリを使用 |
+
+        ## 警告（ブロッキングではない）
+        - {セキュリティに関する推奨事項}
+        ```
+
+        **認知負荷軽減ルール:**
+        - 問題なし → チェック表のみ（10行以内）
+        - 警告あり → + 警告を1-2行（15行以内）
+        - 脆弱性あり → + 表形式で（30行以内）
     allowed_tools:
       - Read
       - Glob
@@ -376,50 +397,11 @@ steps:
       - condition: 脆弱性があり修正が必要
         next: security_fix
     instruction_template: |
-      ## Git Diff
-      ```diff
-      {git_diff}
-      ```
-
       変更に対してセキュリティレビューを行ってください。以下の脆弱性を確認してください:
       - インジェクション攻撃（SQL, コマンド, XSS）
       - 認証・認可の問題
       - データ露出リスク
       - 暗号化の弱点
-
-      **レポート出力:** Report File に出力してください。
-      - ファイルが存在しない場合: 新規作成
-      - ファイルが存在する場合: `## Iteration {step_iteration}` セクションを追記
-
-      **レポートフォーマット:**
-      ```markdown
-      # セキュリティレビュー
-
-      ## 結果: APPROVE / REJECT
-
-      ## 重大度: None / Low / Medium / High / Critical
-
-      ## チェック結果
-      | カテゴリ | 結果 | 備考 |
-      |---------|------|------|
-      | インジェクション | ✅ | - |
-      | 認証・認可 | ✅ | - |
-      | データ保護 | ✅ | - |
-      | 依存関係 | ✅ | - |
-
-      ## 脆弱性（REJECTの場合）
-      | # | 重大度 | 種類 | 場所 | 修正案 |
-      |---|--------|------|------|--------|
-      | 1 | High | SQLi | `src/db.ts:42` | パラメータ化クエリを使用 |
-
-      ## 警告（ブロッキングではない）
-      - {セキュリティに関する推奨事項}
-      ```
-
-      **認知負荷軽減ルール:**
-      - 問題なし → チェック表のみ（10行以内）
-      - 警告あり → + 警告を1-2行（15行以内）
-      - 脆弱性あり → + 表形式で（30行以内）
 
   - name: security_fix
     agent: ~/.takt/agents/default/coder.md
@@ -465,11 +447,6 @@ steps:
       - condition: 要求未達成、テスト失敗、ビルドエラー
         next: plan
     instruction_template: |
-      ## Git Diff
-      ```diff
-      {git_diff}
-      ```
-
       テスト実行、ビルド確認、最終承認を行ってください。
 
       **ワークフロー全体の確認:**

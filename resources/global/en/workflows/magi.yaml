@@ -8,7 +8,6 @@
 #   {step_iteration} - Per-step iteration count (how many times THIS step has been executed)
 #   {task}           - Original user request
 #   {previous_response} - Output from the previous step
-#   {git_diff}       - Current uncommitted changes (git diff)
 #   {user_inputs}    - Accumulated user inputs during workflow
 #   {report_dir}     - Report directory name (e.g., "20250126-143052-task-summary")
 

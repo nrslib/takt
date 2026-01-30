@@ -48,7 +48,6 @@ steps:
 | `{max_iterations}` | Maximum allowed iterations |
 | `{previous_response}` | Previous step's output |
 | `{user_inputs}` | Additional inputs during workflow |
-| `{git_diff}` | Current uncommitted changes |
 
 ## Transitions
 

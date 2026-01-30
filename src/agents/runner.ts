@@ -2,7 +2,6 @@
  * Agent execution runners
  */
 
-import { execSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 import {
@@ -68,28 +67,6 @@ function resolveModel(cwd: string, options?: RunAgentOptions, agentConfig?: Cust
   return undefined;
 }
 
-/** Get git diff for review context */
-export function getGitDiff(cwd: string): string {
-  try {
-    // First check if HEAD exists (new repos may not have any commits)
-    try {
-      execSync('git rev-parse HEAD', { cwd, encoding: 'utf-8', stdio: 'pipe' });
-    } catch {
-      // No commits yet, return empty diff
-      return '';
-    }
-
-    const diff = execSync('git diff HEAD', {
-      cwd,
-      encoding: 'utf-8',
-      maxBuffer: 1024 * 1024 * 10, // 10MB
-      stdio: 'pipe',
-    });
-    return diff.trim();
-  } catch {
-    return '';
-  }
-}
 
 /** Run a custom agent */
 export async function runCustomAgent(

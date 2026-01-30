@@ -7,7 +7,6 @@
 #   {step_iteration}     - Per-step iteration count
 #   {task}               - Original user request
 #   {previous_response}  - Output from the previous step
-#   {git_diff}           - Current uncommitted changes (git diff)
 #   {user_inputs}        - Accumulated user inputs during workflow
 #   {report_dir}         - Report directory name
 #
@@ -27,7 +26,33 @@ initial_step: plan
 steps:
   - name: plan
     agent: ~/.takt/agents/default/planner.md
-    report: 00-plan.md
+    report:
+      name: 00-plan.md
+      order: |
+        **Report output:** Output to the `Report File` specified above.
+        - If file does not exist: Create new file
+        - If file exists: Append with `## Iteration {step_iteration}` section
+      format: |
+        ```markdown
+        # Task Plan
+
+        ## Original Request
+        {User's request as-is}
+
+        ## Analysis Results
+
+        ### Objective
+        {What needs to be achieved}
+
+        ### Scope
+        {Impact scope}
+
+        ### Implementation Approach
+        {How to proceed}
+
+        ## Clarifications Needed (if any)
+        - {Unclear points or items requiring confirmation}
+        ```
     allowed_tools:
       - Read
       - Glob
@@ -57,32 +82,6 @@ steps:
       1. Understand the requirements
       2. Identify impact scope
       3. Decide implementation approach
-
-      **Report output:** Output to the `Report File` specified above.
-      - If file does not exist: Create new file
-      - If file exists: Append with `## Iteration {step_iteration}` section
-
-      **Report format:**
-      ```markdown
-      # Task Plan
-
-      ## Original Request
-      {User's request as-is}
-
-      ## Analysis Results
-
-      ### Objective
-      {What needs to be achieved}
-
-      ### Scope
-      {Impact scope}
-
-      ### Implementation Approach
-      {How to proceed}
-
-      ## Clarifications Needed (if any)
-      - {Unclear points or items requiring confirmation}
-      ```
 
   - name: implement
     agent: ~/.takt/agents/default/coder.md
@@ -144,7 +143,38 @@ steps:
 
   - name: ai_review
     agent: ~/.takt/agents/default/ai-antipattern-reviewer.md
-    report: 03-ai-review.md
+    report:
+      name: 03-ai-review.md
+      order: |
+        **Report output:** Output to the `Report File` specified above.
+        - If file does not exist: Create new file
+        - If file exists: Append with `## Iteration {step_iteration}` section
+      format: |
+        ```markdown
+        # AI-Generated Code Review
+
+        ## Result: APPROVE / REJECT
+
+        ## Summary
+        {One sentence summarizing result}
+
+        ## Verified Items
+        | Aspect | Result | Notes |
+        |--------|--------|-------|
+        | Assumption validity | ✅ | - |
+        | API/Library existence | ✅ | - |
+        | Context fit | ✅ | - |
+        | Scope | ✅ | - |
+
+        ## Issues (if REJECT)
+        | # | Category | Location | Issue |
+        |---|----------|----------|-------|
+        | 1 | Hallucinated API | `src/file.ts:23` | Non-existent method |
+        ```
+
+        **Cognitive load reduction rules:**
+        - No issues -> Summary 1 line + check table only (10 lines or less)
+        - Issues found -> + Issues in table format (25 lines or less)
     allowed_tools:
       - Read
       - Glob
@@ -158,51 +188,47 @@ steps:
       - condition: AI-specific issues found
         next: plan
     instruction_template: |
-      ## Git Diff
-      ```diff
-      {git_diff}
-      ```
-
       Review the code for AI-specific issues:
       - Assumption validation
       - Plausible but wrong patterns
       - Context fit with existing codebase
       - Scope creep detection
 
-      **Report output:** Output to the `Report File` specified above.
-      - If file does not exist: Create new file
-      - If file exists: Append with `## Iteration {step_iteration}` section
-
-      **Report format:**
-      ```markdown
-      # AI-Generated Code Review
-
-      ## Result: APPROVE / REJECT
-
-      ## Summary
-      {One sentence summarizing result}
-
-      ## Verified Items
-      | Aspect | Result | Notes |
-      |--------|--------|-------|
-      | Assumption validity | ✅ | - |
-      | API/Library existence | ✅ | - |
-      | Context fit | ✅ | - |
-      | Scope | ✅ | - |
-
-      ## Issues (if REJECT)
-      | # | Category | Location | Issue |
-      |---|----------|----------|-------|
-      | 1 | Hallucinated API | `src/file.ts:23` | Non-existent method |
-      ```
-
-      **Cognitive load reduction rules:**
-      - No issues -> Summary 1 line + check table only (10 lines or less)
-      - Issues found -> + Issues in table format (25 lines or less)
-
   - name: review
     agent: ~/.takt/agents/default/architecture-reviewer.md
-    report: 04-architect-review.md
+    report:
+      name: 04-architect-review.md
+      order: |
+        **Report output:** Output to the `Report File` specified above.
+        - If file does not exist: Create new file
+        - If file exists: Append with `## Iteration {step_iteration}` section
+      format: |
+        ```markdown
+        # Architecture Review
+
+        ## Result: APPROVE / REJECT
+
+        ## Summary
+        {1-2 sentences summarizing result}
+
+        ## Reviewed Perspectives
+        - [x] Structure & Design
+        - [x] Code Quality
+        - [x] Change Scope
+
+        ## Issues (if REJECT)
+        | # | Location | Issue | Fix |
+        |---|----------|-------|-----|
+        | 1 | `src/file.ts:42` | Issue description | Fix method |
+
+        ## Improvement Suggestions (optional, non-blocking)
+        - {Future improvement suggestions}
+        ```
+
+        **Cognitive load reduction rules:**
+        - APPROVE + no issues -> Summary only (5 lines or less)
+        - APPROVE + minor suggestions -> Summary + suggestions (15 lines or less)
+        - REJECT -> Issues in table format (30 lines or less)
     allowed_tools:
       - Read
       - Glob
@@ -216,49 +242,12 @@ steps:
       - condition: Structural fix required
         next: plan
     instruction_template: |
-      ## Git Diff
-      ```diff
-      {git_diff}
-      ```
-
       Focus on **architecture and design** review. Do NOT review AI-specific issues (that's already done).
 
       Review the changes and provide feedback.
 
       **Note:** In simple workflow, IMPROVE judgment is not used.
       If there are minor suggestions, use APPROVE + comments.
-
-      **Report output:** Output to the `Report File` specified above.
-      - If file does not exist: Create new file
-      - If file exists: Append with `## Iteration {step_iteration}` section
-
-      **Report format:**
-      ```markdown
-      # Architecture Review
-
-      ## Result: APPROVE / REJECT
-
-      ## Summary
-      {1-2 sentences summarizing result}
-
-      ## Reviewed Perspectives
-      - [x] Structure & Design
-      - [x] Code Quality
-      - [x] Change Scope
-
-      ## Issues (if REJECT)
-      | # | Location | Issue | Fix |
-      |---|----------|-------|-----|
-      | 1 | `src/file.ts:42` | Issue description | Fix method |
-
-      ## Improvement Suggestions (optional, non-blocking)
-      - {Future improvement suggestions}
-      ```
-
-      **Cognitive load reduction rules:**
-      - APPROVE + no issues -> Summary only (5 lines or less)
-      - APPROVE + minor suggestions -> Summary + suggestions (15 lines or less)
-      - REJECT -> Issues in table format (30 lines or less)
 
   - name: supervise
     agent: ~/.takt/agents/default/supervisor.md
@@ -279,11 +268,6 @@ steps:
       - condition: Requirements unmet, tests failing
         next: plan
     instruction_template: |
-      ## Git Diff
-      ```diff
-      {git_diff}
-      ```
-
       Run tests, verify the build, and perform final approval.
 
       **Workflow Overall Review:**

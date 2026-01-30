@@ -9,7 +9,7 @@
  */
 
 import type { WorkflowStep, WorkflowRule, AgentResponse, Language, ReportConfig, ReportObjectConfig } from '../models/types.js';
-import { getGitDiff } from '../agents/runner.js';
+
 
 /**
  * Context for building instruction from template.
@@ -299,7 +299,7 @@ function renderWorkflowContext(
  * Replace template placeholders in the instruction_template body.
  *
  * These placeholders may still be used in instruction_template for
- * backward compatibility or special cases (e.g., {git_diff} in review steps).
+ * backward compatibility or special cases.
  */
 function replaceTemplatePlaceholders(
   template: string,
@@ -334,10 +334,6 @@ function replaceTemplatePlaceholders(
       result = result.replace(/\{previous_response\}/g, '');
     }
   }
-
-  // Replace {git_diff}
-  const gitDiff = getGitDiff(context.cwd);
-  result = result.replace(/\{git_diff\}/g, gitDiff);
 
   // Replace {user_inputs}
   const userInputsStr = context.userInputs.join('\n');
@@ -375,7 +371,7 @@ function replaceTemplatePlaceholders(
  * 6. Instructions header + instruction_template content — always
  * 7. Status Output Rules — if rules exist
  *
- * Template placeholders ({task}, {git_diff}, etc.) are still replaced
+ * Template placeholders ({task}, {previous_response}, etc.) are still replaced
  * within the instruction_template body for backward compatibility.
  * When a placeholder is present in the template, the corresponding
  * auto-injected section is skipped to avoid duplication.

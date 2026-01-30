@@ -149,7 +149,6 @@ steps:
 | `{max_iterations}` | Maximum iterations |
 | `{previous_response}` | Previous step output (requires `pass_previous_response: true`) |
 | `{user_inputs}` | Accumulated user inputs during workflow |
-| `{git_diff}` | Current git diff (uncommitted changes) |
 | `{report_dir}` | Report directory name (e.g., `20250126-143052-task-summary`) |
 
 ### Model Resolution

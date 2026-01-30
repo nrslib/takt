@@ -10,7 +10,6 @@
 #   {max_iterations}    - Maximum iterations allowed for the workflow
 #   {step_iteration}    - Per-step iteration count (how many times THIS step has been executed)
 #   {previous_response} - Output from the previous step (only when pass_previous_response: true)
-#   {git_diff}          - Current uncommitted changes (git diff)
 #   {report_dir}        - Report directory name (e.g., "20250126-143052-task-summary")
 #
 # Step-level Fields:
@@ -30,7 +29,33 @@ initial_step: plan
 steps:
   - name: plan
     agent: ~/.takt/agents/default/planner.md
-    report: 00-plan.md
+    report:
+      name: 00-plan.md
+      order: |
+        **Report output:** Output to the `Report File` specified above.
+        - If file does not exist: Create new file
+        - If file exists: Append with `## Iteration {step_iteration}` section
+      format: |
+        ```markdown
+        # Task Plan
+
+        ## Original Request
+        {User's request as-is}
+
+        ## Analysis Results
+
+        ### Objective
+        {What needs to be achieved}
+
+        ### Scope
+        {Impact scope}
+
+        ### Implementation Approach
+        {How to proceed}
+
+        ## Clarifications Needed (if any)
+        - {Unclear points or items requiring confirmation}
+        ```
     allowed_tools:
       - Read
       - Glob
@@ -64,32 +89,6 @@ steps:
       1. Understand the requirements
       2. Identify impact scope
       3. Decide implementation approach
-
-      **Report output:** Output to the `Report File` specified above.
-      - If file does not exist: Create new file
-      - If file exists: Append with `## Iteration {step_iteration}` section
-
-      **Report format:**
-      ```markdown
-      # Task Plan
-
-      ## Original Request
-      {User's request as-is}
-
-      ## Analysis Results
-
-      ### Objective
-      {What needs to be achieved}
-
-      ### Scope
-      {Impact scope}
-
-      ### Implementation Approach
-      {How to proceed}
-
-      ## Clarifications Needed (if any)
-      - {Unclear points or items requiring confirmation}
-      ```
 
   - name: implement
     agent: ~/.takt/agents/default/coder.md
@@ -151,7 +150,38 @@ steps:
 
   - name: ai_review
     agent: ~/.takt/agents/default/ai-antipattern-reviewer.md
-    report: 03-ai-review.md
+    report:
+      name: 03-ai-review.md
+      order: |
+        **Report output:** Output to the `Report File` specified above.
+        - If file does not exist: Create new file
+        - If file exists: Append with `## Iteration {step_iteration}` section
+      format: |
+        ```markdown
+        # AI-Generated Code Review
+
+        ## Result: APPROVE / REJECT
+
+        ## Summary
+        {One sentence summarizing result}
+
+        ## Verified Items
+        | Aspect | Result | Notes |
+        |--------|--------|-------|
+        | Assumption validity | ✅ | - |
+        | API/Library existence | ✅ | - |
+        | Context fit | ✅ | - |
+        | Scope | ✅ | - |
+
+        ## Issues (if REJECT)
+        | # | Category | Location | Issue |
+        |---|----------|----------|-------|
+        | 1 | Hallucinated API | `src/file.ts:23` | Non-existent method |
+        ```
+
+        **Cognitive load reduction rules:**
+        - No issues -> Summary 1 line + check table only (10 lines or less)
+        - Issues found -> + Issues in table format (25 lines or less)
     allowed_tools:
       - Read
       - Glob
@@ -165,47 +195,11 @@ steps:
       - condition: AI-specific issues found
         next: ai_fix
     instruction_template: |
-      ## Git Diff
-      ```diff
-      {git_diff}
-      ```
-
       Review the code for AI-specific issues:
       - Assumption validation
       - Plausible but wrong patterns
       - Context fit with existing codebase
       - Scope creep detection
-
-      **Report output:** Output to the `Report File` specified above.
-      - If file does not exist: Create new file
-      - If file exists: Append with `## Iteration {step_iteration}` section
-
-      **Report format:**
-      ```markdown
-      # AI-Generated Code Review
-
-      ## Result: APPROVE / REJECT
-
-      ## Summary
-      {One sentence summarizing result}
-
-      ## Verified Items
-      | Aspect | Result | Notes |
-      |--------|--------|-------|
-      | Assumption validity | ✅ | - |
-      | API/Library existence | ✅ | - |
-      | Context fit | ✅ | - |
-      | Scope | ✅ | - |
-
-      ## Issues (if REJECT)
-      | # | Category | Location | Issue |
-      |---|----------|----------|-------|
-      | 1 | Hallucinated API | `src/file.ts:23` | Non-existent method |
-      ```
-
-      **Cognitive load reduction rules:**
-      - No issues -> Summary 1 line + check table only (10 lines or less)
-      - Issues found -> + Issues in table format (25 lines or less)
 
   - name: ai_fix
     agent: ~/.takt/agents/default/coder.md
@@ -238,7 +232,39 @@ steps:
 
   - name: review
     agent: ~/.takt/agents/default/architecture-reviewer.md
-    report: 04-architect-review.md
+    report:
+      name: 04-architect-review.md
+      order: |
+        **Report output:** Output to the `Report File` specified above.
+        - If file does not exist: Create new file
+        - If file exists: Append with `## Iteration {step_iteration}` section
+      format: |
+        ```markdown
+        # Architecture Review
+
+        ## Result: APPROVE / IMPROVE / REJECT
+
+        ## Summary
+        {1-2 sentences summarizing result}
+
+        ## Reviewed Perspectives
+        - [x] Structure & Design
+        - [x] Code Quality
+        - [x] Change Scope
+
+        ## Issues (if REJECT)
+        | # | Location | Issue | Fix |
+        |---|----------|-------|-----|
+        | 1 | `src/file.ts:42` | Issue description | Fix method |
+
+        ## Improvement Suggestions (optional, non-blocking)
+        - {Future improvement suggestions}
+        ```
+
+        **Cognitive load reduction rules:**
+        - APPROVE + no issues -> Summary only (5 lines or less)
+        - APPROVE + minor suggestions -> Summary + suggestions (15 lines or less)
+        - REJECT -> Issues in table format (30 lines or less)
     allowed_tools:
       - Read
       - Glob
@@ -254,46 +280,9 @@ steps:
       - condition: Structural fix required
         next: fix
     instruction_template: |
-      ## Git Diff
-      ```diff
-      {git_diff}
-      ```
-
       Focus on **architecture and design** review. Do NOT review AI-specific issues (that's the ai_review step).
 
       Review the changes and provide feedback.
-
-      **Report output:** Output to the `Report File` specified above.
-      - If file does not exist: Create new file
-      - If file exists: Append with `## Iteration {step_iteration}` section
-
-      **Report format:**
-      ```markdown
-      # Architecture Review
-
-      ## Result: APPROVE / IMPROVE / REJECT
-
-      ## Summary
-      {1-2 sentences summarizing result}
-
-      ## Reviewed Perspectives
-      - [x] Structure & Design
-      - [x] Code Quality
-      - [x] Change Scope
-
-      ## Issues (if REJECT)
-      | # | Location | Issue | Fix |
-      |---|----------|-------|-----|
-      | 1 | `src/file.ts:42` | Issue description | Fix method |
-
-      ## Improvement Suggestions (optional, non-blocking)
-      - {Future improvement suggestions}
-      ```
-
-      **Cognitive load reduction rules:**
-      - APPROVE + no issues -> Summary only (5 lines or less)
-      - APPROVE + minor suggestions -> Summary + suggestions (15 lines or less)
-      - REJECT -> Issues in table format (30 lines or less)
 
   - name: improve
     agent: ~/.takt/agents/default/coder.md
@@ -354,7 +343,41 @@ steps:
 
   - name: security_review
     agent: ~/.takt/agents/default/security-reviewer.md
-    report: 05-security-review.md
+    report:
+      name: 05-security-review.md
+      order: |
+        **Report output:** Output to the `Report File` specified above.
+        - If file does not exist: Create new file
+        - If file exists: Append with `## Iteration {step_iteration}` section
+      format: |
+        ```markdown
+        # Security Review
+
+        ## Result: APPROVE / REJECT
+
+        ## Severity: None / Low / Medium / High / Critical
+
+        ## Check Results
+        | Category | Result | Notes |
+        |----------|--------|-------|
+        | Injection | ✅ | - |
+        | Auth/Authz | ✅ | - |
+        | Data Protection | ✅ | - |
+        | Dependencies | ✅ | - |
+
+        ## Vulnerabilities (if REJECT)
+        | # | Severity | Type | Location | Fix |
+        |---|----------|------|----------|-----|
+        | 1 | High | SQLi | `src/db.ts:42` | Use parameterized query |
+
+        ## Warnings (non-blocking)
+        - {Security recommendations}
+        ```
+
+        **Cognitive load reduction rules:**
+        - No issues -> Check table only (10 lines or less)
+        - Warnings -> + Warnings 1-2 lines (15 lines or less)
+        - Vulnerabilities -> + Table format (30 lines or less)
     allowed_tools:
       - Read
       - Glob
@@ -368,50 +391,11 @@ steps:
       - condition: Vulnerabilities require fix
         next: security_fix
     instruction_template: |
-      ## Git Diff
-      ```diff
-      {git_diff}
-      ```
-
       Perform security review on the changes. Check for vulnerabilities including:
       - Injection attacks (SQL, Command, XSS)
       - Authentication/Authorization issues
       - Data exposure risks
       - Cryptographic weaknesses
-
-      **Report output:** Output to the `Report File` specified above.
-      - If file does not exist: Create new file
-      - If file exists: Append with `## Iteration {step_iteration}` section
-
-      **Report format:**
-      ```markdown
-      # Security Review
-
-      ## Result: APPROVE / REJECT
-
-      ## Severity: None / Low / Medium / High / Critical
-
-      ## Check Results
-      | Category | Result | Notes |
-      |----------|--------|-------|
-      | Injection | ✅ | - |
-      | Auth/Authz | ✅ | - |
-      | Data Protection | ✅ | - |
-      | Dependencies | ✅ | - |
-
-      ## Vulnerabilities (if REJECT)
-      | # | Severity | Type | Location | Fix |
-      |---|----------|------|----------|-----|
-      | 1 | High | SQLi | `src/db.ts:42` | Use parameterized query |
-
-      ## Warnings (non-blocking)
-      - {Security recommendations}
-      ```
-
-      **Cognitive load reduction rules:**
-      - No issues -> Check table only (10 lines or less)
-      - Warnings -> + Warnings 1-2 lines (15 lines or less)
-      - Vulnerabilities -> + Table format (30 lines or less)
 
   - name: security_fix
     agent: ~/.takt/agents/default/coder.md
@@ -457,11 +441,6 @@ steps:
       - condition: Requirements unmet, tests failing, build errors
         next: plan
     instruction_template: |
-      ## Git Diff
-      ```diff
-      {git_diff}
-      ```
-
       Run tests, verify the build, and perform final approval.
 
       **Workflow Overall Review:**

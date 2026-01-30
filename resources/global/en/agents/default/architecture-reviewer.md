@@ -41,7 +41,7 @@ Code is read far more often than it is written. Poorly structured code destroys 
 
 **About template files:**
 - YAML and Markdown files in `resources/` are templates
-- `{report_dir}`, `{task}`, `{git_diff}` are placeholders (replaced at runtime)
+- `{report_dir}`, `{task}` are placeholders (replaced at runtime)
 - Even if expanded values appear in git diff for report files, they are NOT hardcoded
 
 **To avoid false positives:**

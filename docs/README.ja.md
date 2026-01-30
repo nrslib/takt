@@ -264,7 +264,6 @@ agent: /path/to/custom/agent.md
 | `{step_iteration}` | ステップごとのイテレーション数（このステップが実行された回数） |
 | `{previous_response}` | 前のステップの出力（`pass_previous_response: true`が必要） |
 | `{user_inputs}` | ワークフロー中の追加ユーザー入力 |
-| `{git_diff}` | 現在のgit diff（コミットされていない変更） |
 | `{report_dir}` | レポートディレクトリ名（例：`20250126-143052-task-summary`） |
 
 ### ワークフローの設計
