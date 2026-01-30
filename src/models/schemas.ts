@@ -92,6 +92,8 @@ export const WorkflowStepRawSchema = z.object({
   model: z.string().optional(),
   /** Permission mode for tool execution in this step */
   permission_mode: PermissionModeSchema.optional(),
+  /** Whether this step is allowed to edit project files */
+  edit: z.boolean().optional(),
   instruction: z.string().optional(),
   instruction_template: z.string().optional(),
   /** Rules for step routing */

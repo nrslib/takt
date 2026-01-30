@@ -9,6 +9,7 @@ import {
   renderExecutionMetadata,
   renderStatusRulesHeader,
   generateStatusRulesFromRules,
+  isReportObjectConfig,
   type InstructionContext,
 } from '../workflow/instruction-builder.js';
 import type { WorkflowStep, WorkflowRule } from '../models/types.js';
@@ -74,6 +75,34 @@ describe('instruction-builder', () => {
       const bodyIndex = result.indexOf('Do some work');
 
       expect(metadataIndex).toBeLessThan(bodyIndex);
+    });
+
+    it('should include edit enabled prompt when step.edit is true', () => {
+      const step = { ...createMinimalStep('Implement feature'), edit: true as const };
+      const context = createMinimalContext({ cwd: '/project' });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('Editing is ENABLED');
+    });
+
+    it('should include edit disabled prompt when step.edit is false', () => {
+      const step = { ...createMinimalStep('Review code'), edit: false as const };
+      const context = createMinimalContext({ cwd: '/project' });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('Editing is DISABLED');
+    });
+
+    it('should not include edit prompt when step.edit is undefined', () => {
+      const step = createMinimalStep('Do some work');
+      const context = createMinimalContext({ cwd: '/project' });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).not.toContain('Editing is ENABLED');
+      expect(result).not.toContain('Editing is DISABLED');
     });
   });
 
@@ -176,6 +205,20 @@ describe('instruction-builder', () => {
 
       expect(metadata.language).toBe('ja');
     });
+
+    it('should propagate edit field when provided', () => {
+      const context = createMinimalContext({ cwd: '/project' });
+
+      expect(buildExecutionMetadata(context, true).edit).toBe(true);
+      expect(buildExecutionMetadata(context, false).edit).toBe(false);
+    });
+
+    it('should leave edit undefined when not provided', () => {
+      const context = createMinimalContext({ cwd: '/project' });
+      const metadata = buildExecutionMetadata(context);
+
+      expect(metadata.edit).toBeUndefined();
+    });
   });
 
   describe('renderExecutionMetadata', () => {
@@ -211,6 +254,43 @@ describe('instruction-builder', () => {
 
       expect(enRendered).toContain('Note:');
       expect(jaRendered).not.toContain('Note:');
+    });
+
+    it('should include edit enabled prompt when edit is true (en)', () => {
+      const rendered = renderExecutionMetadata({ workingDirectory: '/project', language: 'en', edit: true });
+
+      expect(rendered).toContain('Editing is ENABLED');
+      expect(rendered).not.toContain('Editing is DISABLED');
+    });
+
+    it('should include edit disabled prompt when edit is false (en)', () => {
+      const rendered = renderExecutionMetadata({ workingDirectory: '/project', language: 'en', edit: false });
+
+      expect(rendered).toContain('Editing is DISABLED');
+      expect(rendered).not.toContain('Editing is ENABLED');
+    });
+
+    it('should not include edit prompt when edit is undefined', () => {
+      const rendered = renderExecutionMetadata({ workingDirectory: '/project', language: 'en' });
+
+      expect(rendered).not.toContain('Editing is ENABLED');
+      expect(rendered).not.toContain('Editing is DISABLED');
+      expect(rendered).not.toContain('編集が許可');
+      expect(rendered).not.toContain('編集が禁止');
+    });
+
+    it('should render edit enabled prompt in Japanese when language is ja', () => {
+      const rendered = renderExecutionMetadata({ workingDirectory: '/project', language: 'ja', edit: true });
+
+      expect(rendered).toContain('編集が許可されています');
+      expect(rendered).not.toContain('編集が禁止');
+    });
+
+    it('should render edit disabled prompt in Japanese when language is ja', () => {
+      const rendered = renderExecutionMetadata({ workingDirectory: '/project', language: 'ja', edit: false });
+
+      expect(rendered).toContain('編集が禁止されています');
+      expect(rendered).not.toContain('編集が許可');
     });
   });
 
@@ -744,6 +824,24 @@ describe('instruction-builder', () => {
       const result = buildInstruction(step, context);
 
       expect(result).toContain('Run #2');
+    });
+  });
+
+  describe('isReportObjectConfig', () => {
+    it('should return true for ReportObjectConfig', () => {
+      expect(isReportObjectConfig({ name: '00-plan.md' })).toBe(true);
+    });
+
+    it('should return true for ReportObjectConfig with order/format', () => {
+      expect(isReportObjectConfig({ name: '00-plan.md', order: 'output to...', format: '# Plan' })).toBe(true);
+    });
+
+    it('should return false for string', () => {
+      expect(isReportObjectConfig('00-plan.md')).toBe(false);
+    });
+
+    it('should return false for ReportConfig[] (array)', () => {
+      expect(isReportObjectConfig([{ label: 'Scope', path: '01-scope.md' }])).toBe(false);
     });
   });
 });

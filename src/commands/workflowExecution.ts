@@ -2,6 +2,7 @@
  * Workflow execution logic
  */
 
+import { readFileSync } from 'node:fs';
 import { WorkflowEngine } from '../workflow/engine.js';
 import type { WorkflowConfig, Language } from '../models/types.js';
 import type { IterationLimitRequest } from '../workflow/types.js';
@@ -221,6 +222,12 @@ export async function executeWorkflow(
     // Incremental save after each step
     saveSessionLog(sessionLog, workflowSessionId, projectCwd);
     updateLatestPointer(sessionLog, workflowSessionId, projectCwd);
+  });
+
+  engine.on('step:report', (_step, filePath, fileName) => {
+    const content = readFileSync(filePath, 'utf-8');
+    console.log(`\n📄 Report: ${fileName}\n`);
+    console.log(content);
   });
 
   engine.on('workflow:complete', (state) => {

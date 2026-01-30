@@ -55,6 +55,31 @@ function extractAgentDisplayName(agentPath: string): string {
 }
 
 /**
+ * Resolve a string value that may be a file path.
+ * If the value ends with .md and the file exists (resolved relative to workflowDir),
+ * read and return the file contents. Otherwise return the value as-is.
+ */
+function resolveContentPath(value: string | undefined, workflowDir: string): string | undefined {
+  if (value == null) return undefined;
+  if (value.endsWith('.md')) {
+    // Resolve path relative to workflow directory
+    let resolvedPath = value;
+    if (value.startsWith('./')) {
+      resolvedPath = join(workflowDir, value.slice(2));
+    } else if (value.startsWith('~')) {
+      const homedir = process.env.HOME || process.env.USERPROFILE || '';
+      resolvedPath = join(homedir, value.slice(1));
+    } else if (!value.startsWith('/')) {
+      resolvedPath = join(workflowDir, value);
+    }
+    if (existsSync(resolvedPath)) {
+      return readFileSync(resolvedPath, 'utf-8');
+    }
+  }
+  return value;
+}
+
+/**
  * Check if a raw report value is the object form (has 'name' property).
  */
 function isReportObject(raw: unknown): raw is { name: string; order?: string; format?: string } {
@@ -78,11 +103,16 @@ function isReportObject(raw: unknown): raw is { name: string; order?: string; fo
  */
 function normalizeReport(
   raw: string | Record<string, string>[] | { name: string; order?: string; format?: string } | undefined,
+  workflowDir: string,
 ): string | ReportConfig[] | ReportObjectConfig | undefined {
   if (raw == null) return undefined;
   if (typeof raw === 'string') return raw;
   if (isReportObject(raw)) {
-    return { name: raw.name, order: raw.order, format: raw.format };
+    return {
+      name: raw.name,
+      order: resolveContentPath(raw.order, workflowDir),
+      format: resolveContentPath(raw.format, workflowDir),
+    };
   }
   // Convert [{Scope: "01-scope.md"}, ...] to [{label: "Scope", path: "01-scope.md"}, ...]
   return (raw as Record<string, string>[]).flatMap((entry) =>
@@ -113,9 +143,10 @@ function normalizeWorkflowConfig(raw: unknown, workflowDir: string): WorkflowCon
       provider: step.provider,
       model: step.model,
       permissionMode: step.permission_mode,
-      instructionTemplate: step.instruction_template || step.instruction || '{task}',
+      edit: step.edit,
+      instructionTemplate: resolveContentPath(step.instruction_template, workflowDir) || step.instruction || '{task}',
       rules,
-      report: normalizeReport(step.report),
+      report: normalizeReport(step.report, workflowDir),
       passPreviousResponse: step.pass_previous_response,
     };
   });

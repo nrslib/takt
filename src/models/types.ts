@@ -88,6 +88,8 @@ export interface WorkflowStep {
   model?: string;
   /** Permission mode for tool execution in this step */
   permissionMode?: PermissionMode;
+  /** Whether this step is allowed to edit project files (true=allowed, false=prohibited, undefined=no prompt) */
+  edit?: boolean;
   instructionTemplate: string;
   /** Rules for step routing */
   rules?: WorkflowRule[];

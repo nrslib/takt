@@ -25,6 +25,7 @@ initial_step: plan
 
 steps:
   - name: plan
+    edit: false
     agent: ~/.takt/agents/default/planner.md
     report:
       name: 00-plan.md
@@ -84,6 +85,7 @@ steps:
       3. Decide implementation approach
 
   - name: implement
+    edit: true
     agent: ~/.takt/agents/default/coder.md
     report:
       - Scope: 01-coder-scope.md
@@ -142,6 +144,7 @@ steps:
       ```
 
   - name: ai_review
+    edit: false
     agent: ~/.takt/agents/default/ai-antipattern-reviewer.md
     report:
       name: 03-ai-review.md
@@ -195,6 +198,7 @@ steps:
       - Scope creep detection
 
   - name: review
+    edit: false
     agent: ~/.takt/agents/default/architecture-reviewer.md
     report:
       name: 04-architect-review.md
@@ -250,6 +254,7 @@ steps:
       If there are minor suggestions, use APPROVE + comments.
 
   - name: supervise
+    edit: false
     agent: ~/.takt/agents/default/supervisor.md
     report:
       - Validation: 05-supervisor-validation.md

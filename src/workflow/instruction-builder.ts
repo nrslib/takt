@@ -43,17 +43,20 @@ export interface ExecutionMetadata {
   readonly workingDirectory: string;
   /** Language for metadata rendering */
   readonly language: Language;
+  /** Whether file editing is allowed for this step (undefined = no prompt) */
+  readonly edit?: boolean;
 }
 
 /**
- * Build execution metadata from instruction context.
+ * Build execution metadata from instruction context and step config.
  *
- * Pure function: InstructionContext → ExecutionMetadata.
+ * Pure function: (InstructionContext, edit?) → ExecutionMetadata.
  */
-export function buildExecutionMetadata(context: InstructionContext): ExecutionMetadata {
+export function buildExecutionMetadata(context: InstructionContext, edit?: boolean): ExecutionMetadata {
   return {
     workingDirectory: context.cwd,
     language: context.language ?? 'en',
+    edit,
   };
 }
 
@@ -172,6 +175,8 @@ const METADATA_STRINGS = {
     rulesHeading: '## Execution Rules',
     noCommit: '**Do NOT run git commit.** Commits are handled automatically by the system after workflow completion.',
     noCd: '**Do NOT use `cd` in Bash commands.** Your working directory is already set correctly. Run commands directly without changing directories.',
+    editEnabled: '**Editing is ENABLED for this step.** You may create, modify, and delete files as needed to fulfill the user\'s request.',
+    editDisabled: '**Editing is DISABLED for this step.** Do NOT create, modify, or delete any project source files. You may only read/search code and write to report files in the Report Directory.',
     note: 'Note: This section is metadata. Follow the language used in the rest of the prompt.',
   },
   ja: {
@@ -180,6 +185,8 @@ const METADATA_STRINGS = {
     rulesHeading: '## 実行ルール',
     noCommit: '**git commit を実行しないでください。** コミットはワークフロー完了後にシステムが自動で行います。',
     noCd: '**Bashコマンドで `cd` を使用しないでください。** 作業ディレクトリは既に正しく設定されています。ディレクトリを変更せずにコマンドを実行してください。',
+    editEnabled: '**このステップでは編集が許可されています。** ユーザーの要求に応じて、ファイルの作成・変更・削除を行ってください。',
+    editDisabled: '**このステップでは編集が禁止されています。** プロジェクトのソースファイルを作成・変更・削除しないでください。コードの読み取り・検索と、Report Directoryへのレポート出力のみ行えます。',
     note: '',
   },
 } as const;
@@ -201,6 +208,11 @@ export function renderExecutionMetadata(metadata: ExecutionMetadata): string {
     `- ${strings.noCommit}`,
     `- ${strings.noCd}`,
   ];
+  if (metadata.edit === true) {
+    lines.push(`- ${strings.editEnabled}`);
+  } else if (metadata.edit === false) {
+    lines.push(`- ${strings.editDisabled}`);
+  }
   if (strings.note) {
     lines.push('');
     lines.push(strings.note);
@@ -219,7 +231,7 @@ function escapeTemplateChars(str: string): string {
 /**
  * Check if a report config is the object form (ReportObjectConfig).
  */
-function isReportObjectConfig(report: string | ReportConfig[] | ReportObjectConfig): report is ReportObjectConfig {
+export function isReportObjectConfig(report: string | ReportConfig[] | ReportObjectConfig): report is ReportObjectConfig {
   return typeof report === 'object' && !Array.isArray(report) && 'name' in report;
 }
 
@@ -384,8 +396,8 @@ export function buildInstruction(
   const s = SECTION_STRINGS[language];
   const sections: string[] = [];
 
-  // 1. Execution context metadata (working directory + rules)
-  const metadata = buildExecutionMetadata(context);
+  // 1. Execution context metadata (working directory + rules + edit permission)
+  const metadata = buildExecutionMetadata(context, step.edit);
   sections.push(renderExecutionMetadata(metadata));
 
   // 2. Workflow Context (iteration, step, report info)

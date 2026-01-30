@@ -16,7 +16,7 @@ import { COMPLETE_STEP, ABORT_STEP, ERROR_MESSAGES } from './constants.js';
 import type { WorkflowEngineOptions } from './types.js';
 import { determineNextStepByRules } from './transitions.js';
 import { detectRuleIndex } from '../claude/client.js';
-import { buildInstruction as buildInstructionFromTemplate } from './instruction-builder.js';
+import { buildInstruction as buildInstructionFromTemplate, isReportObjectConfig } from './instruction-builder.js';
 import { LoopDetector } from './loop-detector.js';
 import { handleBlocked } from './blocked-handler.js';
 import {
@@ -168,6 +168,34 @@ export class WorkflowEngine extends EventEmitter {
     return step;
   }
 
+  /**
+   * Emit step:report events for each report file that exists after step completion.
+   * The UI layer (workflowExecution.ts) listens and displays the content.
+   */
+  private emitStepReports(step: WorkflowStep): void {
+    if (!step.report || !this.reportDir) return;
+    const baseDir = join(this.projectCwd, '.takt', 'reports', this.reportDir);
+
+    if (typeof step.report === 'string') {
+      this.emitIfReportExists(step, baseDir, step.report);
+    } else if (isReportObjectConfig(step.report)) {
+      this.emitIfReportExists(step, baseDir, step.report.name);
+    } else {
+      // ReportConfig[] (array)
+      for (const rc of step.report) {
+        this.emitIfReportExists(step, baseDir, rc.path);
+      }
+    }
+  }
+
+  /** Emit step:report if the report file exists */
+  private emitIfReportExists(step: WorkflowStep, baseDir: string, fileName: string): void {
+    const filePath = join(baseDir, fileName);
+    if (existsSync(filePath)) {
+      this.emit('step:report', step, filePath, fileName);
+    }
+  }
+
   /** Run a single step */
   private async runStep(step: WorkflowStep): Promise<{ response: AgentResponse; instruction: string }> {
     const stepIteration = incrementStepIteration(this.state, step.name);
@@ -214,6 +242,7 @@ export class WorkflowEngine extends EventEmitter {
     }
 
     this.state.stepOutputs.set(step.name, response);
+    this.emitStepReports(step);
     return { response, instruction };
   }
 

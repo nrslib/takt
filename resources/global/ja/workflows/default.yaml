@@ -19,6 +19,7 @@ initial_step: plan
 
 steps:
   - name: plan
+    edit: false
     agent: ~/.takt/agents/default/planner.md
     report:
       name: 00-plan.md
@@ -82,6 +83,7 @@ steps:
       3. 実装アプローチを決める
 
   - name: implement
+    edit: true
     agent: ~/.takt/agents/default/coder.md
     report:
       - Scope: 01-coder-scope.md
@@ -145,6 +147,7 @@ steps:
       ```
 
   - name: ai_review
+    edit: false
     agent: ~/.takt/agents/default/ai-antipattern-reviewer.md
     report:
       name: 03-ai-review.md
@@ -198,6 +201,7 @@ steps:
       - スコープクリープの検出
 
   - name: ai_fix
+    edit: true
     agent: ~/.takt/agents/default/coder.md
     allowed_tools:
       - Read
@@ -227,6 +231,7 @@ steps:
     pass_previous_response: true
 
   - name: review
+    edit: false
     agent: ~/.takt/agents/default/architecture-reviewer.md
     report:
       name: 04-architect-review.md
@@ -292,6 +297,7 @@ steps:
       - 呼び出しチェーン検証
 
   - name: improve
+    edit: true
     agent: ~/.takt/agents/default/coder.md
     allowed_tools:
       - Read
@@ -323,6 +329,7 @@ steps:
     pass_previous_response: true
 
   - name: fix
+    edit: true
     agent: ~/.takt/agents/default/coder.md
     allowed_tools:
       - Read
@@ -348,6 +355,7 @@ steps:
     pass_previous_response: true
 
   - name: security_review
+    edit: false
     agent: ~/.takt/agents/default/security-reviewer.md
     report:
       name: 05-security-review.md
@@ -404,6 +412,7 @@ steps:
       - 暗号化の弱点
 
   - name: security_fix
+    edit: true
     agent: ~/.takt/agents/default/coder.md
     allowed_tools:
       - Read
@@ -429,6 +438,7 @@ steps:
     pass_previous_response: true
 
   - name: supervise
+    edit: false
     agent: ~/.takt/agents/default/supervisor.md
     report:
       - Validation: 06-supervisor-validation.md

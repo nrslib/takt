@@ -43,6 +43,7 @@ steps:
   # Phase 0: Planning
   # ===========================================
   - name: plan
+    edit: false
     agent: ~/.takt/agents/default/planner.md
     report:
       name: 00-plan.md
@@ -103,6 +104,7 @@ steps:
   # Phase 1: Implementation
   # ===========================================
   - name: implement
+    edit: true
     agent: ~/.takt/agents/default/coder.md
     report:
       - Scope: 01-coder-scope.md
@@ -163,6 +165,7 @@ steps:
   # Phase 2: AI Review
   # ===========================================
   - name: ai_review
+    edit: false
     agent: ~/.takt/agents/default/ai-antipattern-reviewer.md
     report:
       name: 03-ai-review.md
@@ -216,6 +219,7 @@ steps:
         next: ai_fix
 
   - name: ai_fix
+    edit: true
     agent: ~/.takt/agents/default/coder.md
     allowed_tools:
       - Read
@@ -247,6 +251,7 @@ steps:
   # Phase 3: Architecture Review
   # ===========================================
   - name: architect_review
+    edit: false
     agent: ~/.takt/agents/default/architecture-reviewer.md
     report:
       name: 04-architect-review.md
@@ -310,6 +315,7 @@ steps:
         next: fix_architect
 
   - name: fix_architect
+    edit: true
     agent: ~/.takt/agents/default/coder.md
     allowed_tools:
       - Read
@@ -339,6 +345,7 @@ steps:
   # Phase 4: Frontend Review
   # ===========================================
   - name: frontend_review
+    edit: false
     agent: ~/.takt/agents/expert/frontend-reviewer.md
     report:
       name: 05-frontend-review.md
@@ -396,6 +403,7 @@ steps:
         next: fix_frontend
 
   - name: fix_frontend
+    edit: true
     agent: ~/.takt/agents/default/coder.md
     allowed_tools:
       - Read
@@ -429,6 +437,7 @@ steps:
   # Phase 5: Security Review
   # ===========================================
   - name: security_review
+    edit: false
     agent: ~/.takt/agents/expert/security-reviewer.md
     report:
       name: 06-security-review.md
@@ -483,6 +492,7 @@ steps:
         next: fix_security
 
   - name: fix_security
+    edit: true
     agent: ~/.takt/agents/default/coder.md
     allowed_tools:
       - Read
@@ -526,6 +536,7 @@ steps:
   # Phase 6: QA Review
   # ===========================================
   - name: qa_review
+    edit: false
     agent: ~/.takt/agents/expert/qa-reviewer.md
     report:
       name: 07-qa-review.md
@@ -580,6 +591,7 @@ steps:
         next: fix_qa
 
   - name: fix_qa
+    edit: true
     agent: ~/.takt/agents/default/coder.md
     allowed_tools:
       - Read
@@ -627,6 +639,7 @@ steps:
   # Phase 7: Supervision
   # ===========================================
   - name: supervise
+    edit: false
     agent: ~/.takt/agents/expert/supervisor.md
     report:
       - Validation: 08-supervisor-validation.md
@@ -723,6 +736,7 @@ steps:
         next: fix_supervisor
 
   - name: fix_supervisor
+    edit: true
     agent: ~/.takt/agents/default/coder.md
     allowed_tools:
       - Read
