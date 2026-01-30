@@ -31,6 +31,8 @@ export interface RunAgentOptions {
   agentPath?: string;
   /** Allowed tools for this agent run */
   allowedTools?: string[];
+  /** Maximum number of agentic turns */
+  maxTurns?: number;
   /** Permission mode for tool execution (from workflow step) */
   permissionMode?: PermissionMode;
   onStream?: StreamCallback;
@@ -82,6 +84,7 @@ export async function runCustomAgent(
       cwd: options.cwd,
       sessionId: options.sessionId,
       allowedTools,
+      maxTurns: options.maxTurns,
       model: resolveModel(options.cwd, options, agentConfig),
       permissionMode: options.permissionMode,
       onStream: options.onStream,
@@ -98,6 +101,7 @@ export async function runCustomAgent(
       cwd: options.cwd,
       sessionId: options.sessionId,
       allowedTools,
+      maxTurns: options.maxTurns,
       model: resolveModel(options.cwd, options, agentConfig),
       permissionMode: options.permissionMode,
       onStream: options.onStream,
@@ -118,6 +122,7 @@ export async function runCustomAgent(
     cwd: options.cwd,
     sessionId: options.sessionId,
     allowedTools,
+    maxTurns: options.maxTurns,
     model: resolveModel(options.cwd, options, agentConfig),
     permissionMode: options.permissionMode,
     onStream: options.onStream,
@@ -195,6 +200,7 @@ export async function runAgent(
       cwd: options.cwd,
       sessionId: options.sessionId,
       allowedTools: options.allowedTools,
+      maxTurns: options.maxTurns,
       model: resolveModel(options.cwd, options),
       systemPrompt,
       permissionMode: options.permissionMode,

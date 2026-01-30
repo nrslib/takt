@@ -18,6 +18,8 @@ export interface ProviderCallOptions {
   model?: string;
   systemPrompt?: string;
   allowedTools?: string[];
+  /** Maximum number of agentic turns */
+  maxTurns?: number;
   /** Permission mode for tool execution (from workflow step) */
   permissionMode?: PermissionMode;
   onStream?: StreamCallback;

@@ -323,22 +323,31 @@ function renderWorkflowContext(
     `- ${s.step}: ${step.name}`,
   ];
 
-  // Report info (only if step has report config AND reportDir is available)
-  if (step.report && context.reportDir) {
-    lines.push(`- ${s.reportDirectory}: ${context.reportDir}/`);
+  return lines.join('\n');
+}
 
-    if (typeof step.report === 'string') {
-      // Single file (string form)
-      lines.push(`- ${s.reportFile}: ${context.reportDir}/${step.report}`);
-    } else if (isReportObjectConfig(step.report)) {
-      // Object form (name + order + format)
-      lines.push(`- ${s.reportFile}: ${context.reportDir}/${step.report.name}`);
-    } else {
-      // Multiple files (ReportConfig[] form)
-      lines.push(`- ${s.reportFiles}:`);
-      for (const file of step.report as ReportConfig[]) {
-        lines.push(`  - ${file.label}: ${context.reportDir}/${file.path}`);
-      }
+/**
+ * Render report info for the Workflow Context section.
+ * Used only by buildReportInstruction() (phase 2).
+ */
+function renderReportContext(
+  report: string | ReportConfig[] | ReportObjectConfig,
+  reportDir: string,
+  language: Language,
+): string {
+  const s = SECTION_STRINGS[language];
+  const lines: string[] = [
+    `- ${s.reportDirectory}: ${reportDir}/`,
+  ];
+
+  if (typeof report === 'string') {
+    lines.push(`- ${s.reportFile}: ${reportDir}/${report}`);
+  } else if (isReportObjectConfig(report)) {
+    lines.push(`- ${s.reportFile}: ${reportDir}/${report.name}`);
+  } else {
+    lines.push(`- ${s.reportFiles}:`);
+    for (const file of report) {
+      lines.push(`  - ${file.label}: ${reportDir}/${file.path}`);
     }
   }
 
@@ -466,32 +475,13 @@ export function buildInstruction(
     sections.push(`${s.additionalUserInputs}\n${escapeTemplateChars(userInputsStr)}`);
   }
 
-  // 6a. Report output instruction (auto-generated from step.report)
-  // If ReportObjectConfig has an explicit `order:`, use that (backward compat).
-  // Otherwise, auto-generate from the report declaration.
-  if (step.report && isReportObjectConfig(step.report) && step.report.order) {
-    const processedOrder = replaceTemplatePlaceholders(step.report.order.trimEnd(), step, context);
-    sections.push(processedOrder);
-  } else {
-    const reportInstruction = renderReportOutputInstruction(step, context, language);
-    if (reportInstruction) {
-      sections.push(reportInstruction);
-    }
-  }
-
-  // 6b. Instructions header + instruction_template content
+  // 6. Instructions header + instruction_template content
   const processedTemplate = replaceTemplatePlaceholders(
     step.instructionTemplate,
     step,
     context,
   );
   sections.push(`${s.instructions}\n${processedTemplate}`);
-
-  // 6c. Report format (appended after instruction_template, from ReportObjectConfig)
-  if (step.report && isReportObjectConfig(step.report) && step.report.format) {
-    const processedFormat = replaceTemplatePlaceholders(step.report.format.trimEnd(), step, context);
-    sections.push(processedFormat);
-  }
 
   // 7. Status rules (auto-generated from rules)
   // Skip when ALL rules are ai() conditions — agent doesn't need to output status tags
@@ -503,6 +493,123 @@ export function buildInstruction(
       sections.push(`${statusHeader}\n${generatedPrompt}`);
     }
   }
+
+  return sections.join('\n\n');
+}
+
+/** Localized strings for report phase execution rules */
+const REPORT_PHASE_STRINGS = {
+  en: {
+    noSourceEdit: '**Do NOT modify project source files.** Only output report files.',
+    instructionBody: 'Output the results of your previous work as a report.',
+  },
+  ja: {
+    noSourceEdit: '**プロジェクトのソースファイルを変更しないでください。** レポートファイルのみ出力してください。',
+    instructionBody: '前のステップの作業結果をレポートとして出力してください。',
+  },
+} as const;
+
+/**
+ * Context for building report phase instruction.
+ */
+export interface ReportInstructionContext {
+  /** Working directory */
+  cwd: string;
+  /** Report directory path */
+  reportDir: string;
+  /** Step iteration (for {step_iteration} replacement) */
+  stepIteration: number;
+  /** Language */
+  language?: Language;
+}
+
+/**
+ * Build instruction for phase 2 (report output).
+ *
+ * Separate from buildInstruction() — only includes:
+ * - Execution Context (cwd + rules)
+ * - Workflow Context (report info only)
+ * - Report output instruction + format
+ *
+ * Does NOT include: User Request, Previous Response, User Inputs,
+ * Status rules, instruction_template.
+ */
+export function buildReportInstruction(
+  step: WorkflowStep,
+  context: ReportInstructionContext,
+): string {
+  if (!step.report) {
+    throw new Error(`buildReportInstruction called for step "${step.name}" which has no report config`);
+  }
+
+  const language = context.language ?? 'en';
+  const s = SECTION_STRINGS[language];
+  const r = REPORT_PHASE_STRINGS[language];
+  const m = METADATA_STRINGS[language];
+  const sections: string[] = [];
+
+  // 1. Execution Context
+  const execLines = [
+    m.heading,
+    `- ${m.workingDirectory}: ${context.cwd}`,
+    '',
+    m.rulesHeading,
+    `- ${m.noCommit}`,
+    `- ${m.noCd}`,
+    `- ${r.noSourceEdit}`,
+  ];
+  if (m.note) {
+    execLines.push('');
+    execLines.push(m.note);
+  }
+  execLines.push('');
+  sections.push(execLines.join('\n'));
+
+  // 2. Workflow Context (report info only)
+  const workflowLines = [
+    s.workflowContext,
+    renderReportContext(step.report, context.reportDir, language),
+  ];
+  sections.push(workflowLines.join('\n'));
+
+  // 3. Instructions + report output instruction + format
+  const instrParts: string[] = [
+    `${s.instructions}`,
+    r.instructionBody,
+  ];
+
+  // Report output instruction (auto-generated or explicit order)
+  const reportContext: InstructionContext = {
+    task: '',
+    iteration: 0,
+    maxIterations: 0,
+    stepIteration: context.stepIteration,
+    cwd: context.cwd,
+    userInputs: [],
+    reportDir: context.reportDir,
+    language,
+  };
+
+  if (isReportObjectConfig(step.report) && step.report.order) {
+    const processedOrder = replaceTemplatePlaceholders(step.report.order.trimEnd(), step, reportContext);
+    instrParts.push('');
+    instrParts.push(processedOrder);
+  } else {
+    const reportInstruction = renderReportOutputInstruction(step, reportContext, language);
+    if (reportInstruction) {
+      instrParts.push('');
+      instrParts.push(reportInstruction);
+    }
+  }
+
+  // Report format
+  if (isReportObjectConfig(step.report) && step.report.format) {
+    const processedFormat = replaceTemplatePlaceholders(step.report.format.trimEnd(), step, reportContext);
+    instrParts.push('');
+    instrParts.push(processedFormat);
+  }
+
+  sections.push(instrParts.join('\n'));
 
   return sections.join('\n\n');
 }

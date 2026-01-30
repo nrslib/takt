@@ -16,7 +16,7 @@ import { COMPLETE_STEP, ABORT_STEP, ERROR_MESSAGES } from './constants.js';
 import type { WorkflowEngineOptions } from './types.js';
 import { determineNextStepByRules } from './transitions.js';
 import { detectRuleIndex, callAiJudge } from '../claude/client.js';
-import { buildInstruction as buildInstructionFromTemplate, isReportObjectConfig } from './instruction-builder.js';
+import { buildInstruction as buildInstructionFromTemplate, buildReportInstruction as buildReportInstructionFromTemplate, isReportObjectConfig } from './instruction-builder.js';
 import { LoopDetector } from './loop-detector.js';
 import { handleBlocked } from './blocked-handler.js';
 import {
@@ -206,11 +206,16 @@ export class WorkflowEngine extends EventEmitter {
 
   /** Build RunAgentOptions from a step's configuration */
   private buildAgentOptions(step: WorkflowStep): RunAgentOptions {
+    // Phase 1: exclude Write from allowedTools when step has report config
+    const allowedTools = step.report
+      ? step.allowedTools?.filter((t) => t !== 'Write')
+      : step.allowedTools;
+
     return {
       cwd: this.cwd,
       sessionId: this.state.agentSessions.get(step.agent),
       agentPath: step.agentPath,
-      allowedTools: step.allowedTools,
+      allowedTools,
       provider: step.provider,
       model: step.model,
       permissionMode: step.permissionMode,
@@ -266,11 +271,17 @@ export class WorkflowEngine extends EventEmitter {
       sessionId: this.state.agentSessions.get(step.agent) ?? 'new',
     });
 
+    // Phase 1: main execution (Write excluded if step has report)
     const agentOptions = this.buildAgentOptions(step);
     let response = await runAgent(step.agent, instruction, agentOptions);
-
     this.updateAgentSession(step.agent, response.sessionId);
 
+    // Phase 2: report output (resume same session, Write only)
+    if (step.report) {
+      await this.runReportPhase(step, stepIteration);
+    }
+
+    // Status detection uses phase 1 response
     const matchedRuleIndex = await this.detectMatchedRule(step, response.content);
     if (matchedRuleIndex != null) {
       response = { ...response, matchedRuleIndex };
@@ -279,6 +290,50 @@ export class WorkflowEngine extends EventEmitter {
     this.state.stepOutputs.set(step.name, response);
     this.emitStepReports(step);
     return { response, instruction };
+  }
+
+  /**
+   * Phase 2: Report output.
+   * Resumes the agent session with Write-only tools to output reports.
+   * The response is discarded — only sessionId is updated.
+   */
+  private async runReportPhase(step: WorkflowStep, stepIteration: number): Promise<void> {
+    const sessionId = this.state.agentSessions.get(step.agent);
+    if (!sessionId) {
+      log.debug('Skipping report phase: no sessionId to resume', { step: step.name });
+      return;
+    }
+
+    log.debug('Running report phase', { step: step.name, sessionId });
+
+    const reportInstruction = buildReportInstructionFromTemplate(step, {
+      cwd: this.cwd,
+      reportDir: this.reportDir,
+      stepIteration,
+      language: this.language,
+    });
+
+    const reportOptions: RunAgentOptions = {
+      cwd: this.cwd,
+      sessionId,
+      agentPath: step.agentPath,
+      allowedTools: ['Write'],
+      maxTurns: 3,
+      provider: step.provider,
+      model: step.model,
+      permissionMode: step.permissionMode,
+      onStream: this.options.onStream,
+      onPermissionRequest: this.options.onPermissionRequest,
+      onAskUserQuestion: this.options.onAskUserQuestion,
+      bypassPermissions: this.options.bypassPermissions,
+    };
+
+    const reportResponse = await runAgent(step.agent, reportInstruction, reportOptions);
+
+    // Update session (phase 2 may update it)
+    this.updateAgentSession(step.agent, reportResponse.sessionId);
+
+    log.debug('Report phase complete', { step: step.name, status: reportResponse.status });
   }
 
   /**
@@ -300,10 +355,15 @@ export class WorkflowEngine extends EventEmitter {
         const subIteration = incrementStepIteration(this.state, subStep.name);
         const subInstruction = this.buildInstruction(subStep, subIteration);
 
+        // Phase 1: main execution (Write excluded if sub-step has report)
         const agentOptions = this.buildAgentOptions(subStep);
         const subResponse = await runAgent(subStep.agent, subInstruction, agentOptions);
-
         this.updateAgentSession(subStep.agent, subResponse.sessionId);
+
+        // Phase 2: report output for sub-step
+        if (subStep.report) {
+          await this.runReportPhase(subStep, subIteration);
+        }
 
         // Detect sub-step rule matches (tag detection + ai() fallback)
         const matchedRuleIndex = await this.detectMatchedRule(subStep, subResponse.content);
