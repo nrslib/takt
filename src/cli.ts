@@ -260,7 +260,8 @@ program
   .option('--repo <owner/repo>', 'Repository (defaults to current)')
   .option('--provider <name>', 'Override agent provider (claude|codex|mock)')
   .option('--model <name>', 'Override agent model')
-  .option('-t, --task <string>', 'Task content (triggers pipeline/non-interactive mode)')
+  .option('-t, --task <string>', 'Task content (as alternative to GitHub issue)')
+  .option('--pipeline', 'Pipeline mode: non-interactive, no worktree, direct branch creation')
   .option('--skip-git', 'Skip branch creation, commit, and push (pipeline mode)')
   .option('--create-worktree <yes|no>', 'Skip the worktree prompt by explicitly specifying yes or no');
 
@@ -268,9 +269,9 @@ program
 program.hook('preAction', async () => {
   resolvedCwd = resolve(process.cwd());
 
-  // Pipeline mode: triggered by --task (non-interactive)
+  // Pipeline mode: triggered by --pipeline flag
   const rootOpts = program.opts();
-  pipelineMode = rootOpts.task !== undefined;
+  pipelineMode = rootOpts.pipeline === true;
 
   await initGlobalDirs({ nonInteractive: pipelineMode });
   initProjectDirs(resolvedCwd);
@@ -390,11 +391,11 @@ program
       createWorktree: createWorktreeOverride,
     };
 
-    // --- Pipeline mode (non-interactive): triggered by --task ---
+    // --- Pipeline mode (non-interactive): triggered by --pipeline ---
     if (pipelineMode) {
       const exitCode = await executePipeline({
         issueNumber: opts.issue as number | undefined,
-        task: opts.task as string,
+        task: opts.task as string | undefined,
         workflow: (opts.workflow as string | undefined) ?? DEFAULT_WORKFLOW_NAME,
         branch: opts.branch as string | undefined,
         autoPr: opts.autoPr === true,
@@ -412,6 +413,13 @@ program
     }
 
     // --- Normal (interactive) mode ---
+
+    // Resolve --task option to task text
+    const taskFromOption = opts.task as string | undefined;
+    if (taskFromOption) {
+      await selectAndExecuteTask(resolvedCwd, taskFromOption, selectOptions, agentOverrides);
+      return;
+    }
 
     // Resolve --issue N to task text (same as #N)
     const issueFromOption = opts.issue as number | undefined;
