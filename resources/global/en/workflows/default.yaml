@@ -208,7 +208,7 @@ steps:
     permission_mode: acceptEdits
     rules:
       - condition: AI issues fixed
-        next: reviewers
+        next: ai_review
       - condition: Cannot proceed, insufficient info
         next: plan
     instruction_template: |

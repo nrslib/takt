@@ -195,7 +195,10 @@ export function loadNdjsonLog(filepath: string): SessionLog | null {
 
 /** Generate a session ID */
 export function generateSessionId(): string {
-  const timestamp = Date.now().toString(36);
+  const now = new Date();
+  const timestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(
+    now.getHours(),
+  ).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
   const random = Math.random().toString(36).slice(2, 8);
   return `${timestamp}-${random}`;
 }
@@ -333,4 +336,3 @@ export function updateLatestPointer(
 
   writeFileAtomic(latestPath, JSON.stringify(pointer, null, 2));
 }
-
