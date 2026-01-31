@@ -345,4 +345,57 @@ describe('executePipeline', () => {
       );
     });
   });
+
+  describe('--skip-git', () => {
+    it('should skip branch creation, commit, push when skipGit is true', async () => {
+      mockExecuteTask.mockResolvedValueOnce(true);
+
+      const exitCode = await executePipeline({
+        task: 'Fix the bug',
+        workflow: 'default',
+        autoPr: false,
+        skipGit: true,
+        cwd: '/tmp/test',
+      });
+
+      expect(exitCode).toBe(0);
+      expect(mockExecuteTask).toHaveBeenCalledWith('Fix the bug', '/tmp/test', 'default');
+
+      // No git operations should have been called
+      const gitCalls = mockExecFileSync.mock.calls.filter(
+        (call: unknown[]) => call[0] === 'git',
+      );
+      expect(gitCalls).toHaveLength(0);
+      expect(mockPushBranch).not.toHaveBeenCalled();
+    });
+
+    it('should ignore --auto-pr when skipGit is true', async () => {
+      mockExecuteTask.mockResolvedValueOnce(true);
+
+      const exitCode = await executePipeline({
+        task: 'Fix the bug',
+        workflow: 'default',
+        autoPr: true,
+        skipGit: true,
+        cwd: '/tmp/test',
+      });
+
+      expect(exitCode).toBe(0);
+      expect(mockCreatePullRequest).not.toHaveBeenCalled();
+    });
+
+    it('should still return workflow failure exit code when skipGit is true', async () => {
+      mockExecuteTask.mockResolvedValueOnce(false);
+
+      const exitCode = await executePipeline({
+        task: 'Fix the bug',
+        workflow: 'default',
+        autoPr: false,
+        skipGit: true,
+        cwd: '/tmp/test',
+      });
+
+      expect(exitCode).toBe(3);
+    });
+  });
 });

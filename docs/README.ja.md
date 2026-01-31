@@ -125,6 +125,9 @@ takt --task "バグを修正" -w magi -b feat/fix-bug
 
 # リポジトリ指定（PR作成時）
 takt --task "バグを修正" --auto-pr --repo owner/repo
+
+# ワークフロー実行のみ（ブランチ作成・commit・pushをスキップ）
+takt --task "バグを修正" --skip-git
 ```
 
 パイプラインモードでは `--auto-pr` を指定しない限りPRは作成されません。
@@ -152,6 +155,7 @@ takt --task "バグを修正" --auto-pr --repo owner/repo
 | `-w, --workflow <name>` | ワークフロー指定 |
 | `-b, --branch <name>` | ブランチ名指定（省略時は自動生成） |
 | `--auto-pr` | PR作成（対話: 確認スキップ、パイプライン: PR有効化） |
+| `--skip-git` | ブランチ作成・commit・pushをスキップ（パイプラインモード、ワークフロー実行のみ） |
 | `--repo <owner/repo>` | リポジトリ指定（PR作成時） |
 
 ## ワークフロー

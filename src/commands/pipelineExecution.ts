@@ -39,6 +39,8 @@ export interface PipelineExecutionOptions {
   autoPr: boolean;
   /** Repository in owner/repo format */
   repo?: string;
+  /** Skip branch creation, commit, and push (workflow-only execution) */
+  skipGit?: boolean;
   /** Working directory */
   cwd: string;
 }
@@ -135,7 +137,7 @@ function buildPipelinePrBody(
  * Returns a process exit code (0 on success, 2-5 on specific failures).
  */
 export async function executePipeline(options: PipelineExecutionOptions): Promise<number> {
-  const { cwd, workflow, autoPr } = options;
+  const { cwd, workflow, autoPr, skipGit } = options;
   const globalConfig = loadGlobalConfig();
   const pipelineConfig = globalConfig.pipeline;
   let issue: GitHubIssue | undefined;
@@ -164,20 +166,23 @@ export async function executePipeline(options: PipelineExecutionOptions): Promis
     return EXIT_ISSUE_FETCH_FAILED;
   }
 
-  // --- Step 2: Create branch ---
-  const branch = options.branch ?? generatePipelineBranchName(pipelineConfig, options.issueNumber);
-  info(`Creating branch: ${branch}`);
-  try {
-    createBranch(cwd, branch);
-    success(`Branch created: ${branch}`);
-  } catch (err) {
-    error(`Failed to create branch: ${err instanceof Error ? err.message : String(err)}`);
-    return EXIT_GIT_OPERATION_FAILED;
+  // --- Step 2: Create branch (skip if --skip-git) ---
+  let branch: string | undefined;
+  if (!skipGit) {
+    branch = options.branch ?? generatePipelineBranchName(pipelineConfig, options.issueNumber);
+    info(`Creating branch: ${branch}`);
+    try {
+      createBranch(cwd, branch);
+      success(`Branch created: ${branch}`);
+    } catch (err) {
+      error(`Failed to create branch: ${err instanceof Error ? err.message : String(err)}`);
+      return EXIT_GIT_OPERATION_FAILED;
+    }
   }
 
   // --- Step 3: Run workflow ---
   info(`Running workflow: ${workflow}`);
-  log.info('Pipeline workflow execution starting', { workflow, branch, issueNumber: options.issueNumber });
+  log.info('Pipeline workflow execution starting', { workflow, branch, skipGit, issueNumber: options.issueNumber });
 
   const taskSuccess = await executeTask(task, cwd, workflow);
 
@@ -187,52 +192,58 @@ export async function executePipeline(options: PipelineExecutionOptions): Promis
   }
   success(`Workflow '${workflow}' completed`);
 
-  // --- Step 4: Commit & push ---
-  const commitMessage = buildCommitMessage(pipelineConfig, issue, options.task);
+  // --- Step 4: Commit & push (skip if --skip-git) ---
+  if (!skipGit && branch) {
+    const commitMessage = buildCommitMessage(pipelineConfig, issue, options.task);
 
-  info('Committing changes...');
-  try {
-    const commitHash = commitChanges(cwd, commitMessage);
-    if (commitHash) {
-      success(`Changes committed: ${commitHash}`);
-    } else {
-      info('No changes to commit');
+    info('Committing changes...');
+    try {
+      const commitHash = commitChanges(cwd, commitMessage);
+      if (commitHash) {
+        success(`Changes committed: ${commitHash}`);
+      } else {
+        info('No changes to commit');
+      }
+
+      info(`Pushing to origin/${branch}...`);
+      pushBranch(cwd, branch);
+      success(`Pushed to origin/${branch}`);
+    } catch (err) {
+      error(`Git operation failed: ${err instanceof Error ? err.message : String(err)}`);
+      return EXIT_GIT_OPERATION_FAILED;
     }
-
-    info(`Pushing to origin/${branch}...`);
-    pushBranch(cwd, branch);
-    success(`Pushed to origin/${branch}`);
-  } catch (err) {
-    error(`Git operation failed: ${err instanceof Error ? err.message : String(err)}`);
-    return EXIT_GIT_OPERATION_FAILED;
   }
 
   // --- Step 5: Create PR (if --auto-pr) ---
   if (autoPr) {
-    info('Creating pull request...');
-    const prTitle = issue ? issue.title : (options.task ?? 'Pipeline task');
-    const report = `Workflow \`${workflow}\` completed successfully.`;
-    const prBody = buildPipelinePrBody(pipelineConfig, issue, report);
+    if (skipGit) {
+      info('--auto-pr is ignored when --skip-git is specified (no push was performed)');
+    } else if (branch) {
+      info('Creating pull request...');
+      const prTitle = issue ? issue.title : (options.task ?? 'Pipeline task');
+      const report = `Workflow \`${workflow}\` completed successfully.`;
+      const prBody = buildPipelinePrBody(pipelineConfig, issue, report);
 
-    const prResult = createPullRequest(cwd, {
-      branch,
-      title: prTitle,
-      body: prBody,
-      repo: options.repo,
-    });
+      const prResult = createPullRequest(cwd, {
+        branch,
+        title: prTitle,
+        body: prBody,
+        repo: options.repo,
+      });
 
-    if (prResult.success) {
-      success(`PR created: ${prResult.url}`);
-    } else {
-      error(`PR creation failed: ${prResult.error}`);
-      return EXIT_PR_CREATION_FAILED;
+      if (prResult.success) {
+        success(`PR created: ${prResult.url}`);
+      } else {
+        error(`PR creation failed: ${prResult.error}`);
+        return EXIT_PR_CREATION_FAILED;
+      }
     }
   }
 
   // --- Summary ---
   console.log();
   status('Issue', issue ? `#${issue.number} "${issue.title}"` : 'N/A');
-  status('Branch', branch);
+  status('Branch', branch ?? '(current)');
   status('Workflow', workflow);
   status('Result', 'Success', 'green');
 

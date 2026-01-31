@@ -198,7 +198,8 @@ program
   .option('-b, --branch <name>', 'Branch name (auto-generated if omitted)')
   .option('--auto-pr', 'Create PR after successful execution')
   .option('--repo <owner/repo>', 'Repository (defaults to current)')
-  .option('-t, --task <string>', 'Task content (triggers pipeline/non-interactive mode)');
+  .option('-t, --task <string>', 'Task content (triggers pipeline/non-interactive mode)')
+  .option('--skip-git', 'Skip branch creation, commit, and push (pipeline mode)');
 
 // Common initialization for all commands
 program.hook('preAction', async () => {
@@ -327,6 +328,7 @@ program
         branch: opts.branch as string | undefined,
         autoPr: opts.autoPr === true,
         repo: opts.repo as string | undefined,
+        skipGit: opts.skipGit === true,
         cwd: resolvedCwd,
       });
 

@@ -127,6 +127,9 @@ takt --task "fix the auth bug" -w magi -b feat/fix-auth
 
 # Specify repository (for PR creation)
 takt --task "fix the auth bug" --auto-pr --repo owner/repo
+
+# Run workflow only — skip branch creation, commit, and push
+takt --task "fix the auth bug" --skip-git
 ```
 
 In pipeline mode, PRs are **not** created unless `--auto-pr` is explicitly specified.
@@ -154,6 +157,7 @@ In pipeline mode, PRs are **not** created unless `--auto-pr` is explicitly speci
 | `-w, --workflow <name>` | Workflow to use |
 | `-b, --branch <name>` | Branch name (auto-generated if omitted) |
 | `--auto-pr` | Create PR after execution (interactive: skip confirmation, pipeline: enable PR) |
+| `--skip-git` | Skip branch creation, commit, and push (pipeline mode, workflow-only) |
 | `--repo <owner/repo>` | Repository for PR creation |
 
 ## Workflows
