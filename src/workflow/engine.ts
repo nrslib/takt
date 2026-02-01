@@ -28,6 +28,7 @@ import {
   incrementStepIteration,
 } from './state-manager.js';
 import { generateReportDir } from '../utils/session.js';
+import { getErrorMessage } from '../utils/error.js';
 import { createLogger } from '../utils/debug.js';
 import { interruptAllQueries } from '../claude/query-manager.js';
 
@@ -57,10 +58,10 @@ export class WorkflowEngine extends EventEmitter {
   private reportDir: string;
   private abortRequested = false;
 
-  constructor(config: WorkflowConfig, cwd: string, task: string, options: WorkflowEngineOptions = {}) {
+  constructor(config: WorkflowConfig, cwd: string, task: string, options: WorkflowEngineOptions) {
     super();
     this.config = config;
-    this.projectCwd = options.projectCwd ?? cwd;
+    this.projectCwd = options.projectCwd;
     this.cwd = cwd;
     this.task = task;
     this.options = options;
@@ -553,7 +554,7 @@ export class WorkflowEngine extends EventEmitter {
         if (this.abortRequested) {
           this.emit('workflow:abort', this.state, 'Workflow interrupted by user (SIGINT)');
         } else {
-          const message = error instanceof Error ? error.message : String(error);
+          const message = getErrorMessage(error);
           this.emit('workflow:abort', this.state, ERROR_MESSAGES.STEP_EXECUTION_FAILED(message));
         }
         break;

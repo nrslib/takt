@@ -4,6 +4,39 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.8] - 2026-02-02
+
+### Added
+
+- CLI option to specify workflow/config file paths: `--workflow <path>` and `--config <path>` (#81)
+- CI-friendly quiet mode for minimal log output (#70)
+- Mock scenario support for testing workflow execution
+- Comprehensive integration tests (7 test files, ~3000 lines of test coverage)
+
+### Changed
+
+- Rule evaluation improved: `detectRuleIndex` now uses last match instead of first match (#25)
+- `ai_fix` step significantly improved:
+  - Added `{step_iteration}` counter to show retry attempt number
+  - Explicit fix procedure defined (Read → Grep → Edit → Test → Report)
+  - Coder agent now prioritizes reviewer feedback over assumptions
+- README and docs updated with clearer CLI usage and CI/CD examples
+
+### Fixed
+
+- Workflow loading priority corrected (user workflows now take precedence over builtins)
+- Test stability improvements (flaky tests skipped, ai_fix test updated)
+- Slack notification configuration fixed
+
+### Internal
+
+- Refactored instruction builder: extracted context assembly and status rules logic (#44)
+- Introduced `src/task/git.ts` for DRY git commit operations
+- Unified error handling with `getErrorMessage()`
+- Made `projectCwd` required throughout codebase
+- Removed deprecated `sacrificeMode`
+- 35 files updated for consistency (`console.log` → `blankLine()`, etc.)
+
 ## [0.3.7] - 2026-02-01
 
 ### Added

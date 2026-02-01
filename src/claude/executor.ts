@@ -15,6 +15,7 @@ import {
   type PermissionMode,
 } from '@anthropic-ai/claude-agent-sdk';
 import { createLogger } from '../utils/debug.js';
+import { getErrorMessage } from '../utils/error.js';
 import {
   generateQueryId,
   registerQuery,
@@ -220,7 +221,7 @@ function handleQueryError(
     };
   }
 
-  const errorMessage = error instanceof Error ? error.message : String(error);
+  const errorMessage = getErrorMessage(error);
 
   if (hasResultMessage && success) {
     log.info('Claude query completed with post-completion error (ignoring)', {

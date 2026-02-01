@@ -41,13 +41,14 @@ import {
   interactiveMode,
   executePipeline,
 } from './commands/index.js';
-import { listWorkflows } from './config/workflowLoader.js';
+import { listWorkflows, isWorkflowPath } from './config/workflowLoader.js';
 import { selectOptionWithDefault, confirm } from './prompt/index.js';
 import { createSharedClone } from './task/clone.js';
 import { autoCommitAndPush } from './task/autoCommit.js';
 import { summarizeTaskName } from './task/summarize.js';
 import { DEFAULT_WORKFLOW_NAME } from './constants.js';
 import { checkForUpdates } from './utils/updateNotifier.js';
+import { getErrorMessage } from './utils/error.js';
 import { resolveIssueTask, isIssueReference } from './github/issue.js';
 import { createPullRequest, buildPrBody } from './github/pr.js';
 import type { TaskExecutionOptions } from './commands/taskExecution.js';
@@ -66,6 +67,9 @@ let resolvedCwd = '';
 /** Whether pipeline mode is active (--task specified, set in preAction) */
 let pipelineMode = false;
 
+/** Whether quiet mode is active (--quiet flag or config, set in preAction) */
+let quietMode = false;
+
 export interface WorktreeConfirmationResult {
   execCwd: string;
   isWorktree: boolean;
@@ -77,7 +81,7 @@ export interface WorktreeConfirmationResult {
  * Returns the selected workflow name, or null if cancelled.
  */
 async function selectWorkflow(cwd: string): Promise<string | null> {
-  const availableWorkflows = listWorkflows();
+  const availableWorkflows = listWorkflows(cwd);
   const currentWorkflow = getCurrentWorkflow(cwd);
 
   if (availableWorkflows.length === 0) {
@@ -120,9 +124,9 @@ async function selectAndExecuteTask(
   options?: SelectAndExecuteOptions,
   agentOverrides?: TaskExecutionOptions,
 ): Promise<void> {
-  const selectedWorkflow = await determineWorkflow(cwd, options?.workflow);
+  const workflowIdentifier = await determineWorkflow(cwd, options?.workflow);
 
-  if (selectedWorkflow === null) {
+  if (workflowIdentifier === null) {
     info('Cancelled');
     return;
   }
@@ -133,8 +137,14 @@ async function selectAndExecuteTask(
     options?.createWorktree,
   );
 
-  log.info('Starting task execution', { workflow: selectedWorkflow, worktree: isWorktree });
-  const taskSuccess = await executeTask(task, execCwd, selectedWorkflow, cwd, agentOverrides);
+  log.info('Starting task execution', { workflow: workflowIdentifier, worktree: isWorktree });
+  const taskSuccess = await executeTask({
+    task,
+    cwd: execCwd,
+    workflowIdentifier,
+    projectCwd: cwd,
+    agentOverrides,
+  });
 
   if (taskSuccess && isWorktree) {
     const commitResult = autoCommitAndPush(execCwd, task, cwd);
@@ -149,7 +159,7 @@ async function selectAndExecuteTask(
       const shouldCreatePr = options?.autoPr === true || await confirm('Create pull request?', false);
       if (shouldCreatePr) {
         info('Creating pull request...');
-        const prBody = buildPrBody(undefined, `Workflow \`${selectedWorkflow}\` completed successfully.`);
+        const prBody = buildPrBody(undefined, `Workflow \`${workflowIdentifier}\` completed successfully.`);
         const prResult = createPullRequest(execCwd, {
           branch,
           title: task.length > 100 ? `${task.slice(0, 97)}...` : task,
@@ -171,13 +181,20 @@ async function selectAndExecuteTask(
 }
 
 /**
- * Ask user whether to create a shared clone, and create one if confirmed.
- * Returns the execution directory and whether a clone was created.
- * Task name is summarized to English by AI for use in branch/clone names.
+ * Determine workflow to use.
+ *
+ * - If override looks like a path (isWorkflowPath), return it directly (validation is done at load time).
+ * - If override is a name, validate it exists in available workflows.
+ * - If no override, prompt user to select interactively.
  */
 async function determineWorkflow(cwd: string, override?: string): Promise<string | null> {
   if (override) {
-    const availableWorkflows = listWorkflows();
+    // Path-based: skip name validation (loader handles existence check)
+    if (isWorkflowPath(override)) {
+      return override;
+    }
+    // Name-based: validate workflow name exists
+    const availableWorkflows = listWorkflows(cwd);
     const knownWorkflows = availableWorkflows.length === 0 ? [DEFAULT_WORKFLOW_NAME] : availableWorkflows;
     if (!knownWorkflows.includes(override)) {
       error(`Workflow not found: ${override}`);
@@ -254,7 +271,7 @@ program
 // --- Global options ---
 program
   .option('-i, --issue <number>', 'GitHub issue number (equivalent to #N)', (val: string) => parseInt(val, 10))
-  .option('-w, --workflow <name>', 'Workflow to use')
+  .option('-w, --workflow <name>', 'Workflow name or path to workflow file')
   .option('-b, --branch <name>', 'Branch name (auto-generated if omitted)')
   .option('--auto-pr', 'Create PR after successful execution')
   .option('--repo <owner/repo>', 'Repository (defaults to current)')
@@ -263,7 +280,8 @@ program
   .option('-t, --task <string>', 'Task content (as alternative to GitHub issue)')
   .option('--pipeline', 'Pipeline mode: non-interactive, no worktree, direct branch creation')
   .option('--skip-git', 'Skip branch creation, commit, and push (pipeline mode)')
-  .option('--create-worktree <yes|no>', 'Skip the worktree prompt by explicitly specifying yes or no');
+  .option('--create-worktree <yes|no>', 'Skip the worktree prompt by explicitly specifying yes or no')
+  .option('-q, --quiet', 'Minimal output mode: suppress AI output (for CI)');
 
 // Common initialization for all commands
 program.hook('preAction', async () => {
@@ -285,16 +303,26 @@ program.hook('preAction', async () => {
 
   initDebugLogger(debugConfig, resolvedCwd);
 
+  // Load config once for both log level and quiet mode
+  const config = loadGlobalConfig();
+
   if (verbose) {
     setVerboseConsole(true);
     setLogLevel('debug');
   } else {
-    const config = loadGlobalConfig();
     setLogLevel(config.logLevel);
   }
 
-  log.info('TAKT CLI starting', { version: cliVersion, cwd: resolvedCwd, verbose, pipelineMode });
+  // Quiet mode: CLI flag takes precedence over config
+  quietMode = rootOpts.quiet === true || config.minimalOutput === true;
+
+  log.info('TAKT CLI starting', { version: cliVersion, cwd: resolvedCwd, verbose, pipelineMode, quietMode });
 });
+
+/** Get whether quiet mode is active (CLI flag or config, resolved in preAction) */
+export function isQuietMode(): boolean {
+  return quietMode;
+}
 
 // --- Subcommands ---
 
@@ -428,7 +456,7 @@ program
         const resolvedTask = resolveIssueTask(`#${issueFromOption}`);
         await selectAndExecuteTask(resolvedCwd, resolvedTask, selectOptions, agentOverrides);
       } catch (e) {
-        error(e instanceof Error ? e.message : String(e));
+        error(getErrorMessage(e));
         process.exit(1);
       }
       return;
@@ -442,7 +470,7 @@ program
           info('Fetching GitHub Issue...');
           resolvedTask = resolveIssueTask(task);
         } catch (e) {
-          error(e instanceof Error ? e.message : String(e));
+          error(getErrorMessage(e));
           process.exit(1);
         }
       }

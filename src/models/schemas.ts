@@ -185,6 +185,8 @@ export const GlobalConfigSchema = z.object({
   openai_api_key: z.string().optional(),
   /** Pipeline execution settings */
   pipeline: PipelineConfigSchema.optional(),
+  /** Minimal output mode for CI - suppress AI output to prevent sensitive information leaks */
+  minimal_output: z.boolean().optional().default(false),
 });
 
 /** Project config schema */

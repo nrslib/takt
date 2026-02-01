@@ -13,6 +13,7 @@ import {
   info,
   success,
   status,
+  blankLine,
 } from '../utils/ui.js';
 import { executeAndCompleteTask } from './taskExecution.js';
 import { DEFAULT_WORKFLOW_NAME } from '../constants.js';
@@ -35,11 +36,11 @@ export async function watchTasks(cwd: string, options?: TaskExecutionOptions): P
   info(`Workflow: ${workflowName}`);
   info(`Watching: ${taskRunner.getTasksDir()}`);
   info('Waiting for tasks... (Ctrl+C to stop)');
-  console.log();
+  blankLine();
 
   // Graceful shutdown on SIGINT
   const onSigInt = () => {
-    console.log();
+    blankLine();
     info('Stopping watch...');
     watcher.stop();
   };
@@ -48,9 +49,9 @@ export async function watchTasks(cwd: string, options?: TaskExecutionOptions): P
   try {
     await watcher.watch(async (task: TaskInfo) => {
       taskCount++;
-      console.log();
+      blankLine();
       info(`=== Task ${taskCount}: ${task.name} ===`);
-      console.log();
+      blankLine();
 
       const taskSuccess = await executeAndCompleteTask(task, taskRunner, cwd, workflowName, options);
 
@@ -60,7 +61,7 @@ export async function watchTasks(cwd: string, options?: TaskExecutionOptions): P
         failCount++;
       }
 
-      console.log();
+      blankLine();
       info('Waiting for tasks... (Ctrl+C to stop)');
     });
   } finally {
@@ -69,7 +70,7 @@ export async function watchTasks(cwd: string, options?: TaskExecutionOptions): P
 
   // Summary on exit
   if (taskCount > 0) {
-    console.log();
+    blankLine();
     header('Watch Summary');
     status('Total', String(taskCount));
     status('Success', String(successCount), successCount === taskCount ? 'green' : undefined);

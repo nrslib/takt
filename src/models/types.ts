@@ -207,6 +207,8 @@ export interface GlobalConfig {
   openaiApiKey?: string;
   /** Pipeline execution settings */
   pipeline?: PipelineConfig;
+  /** Minimal output mode for CI - suppress AI output to prevent sensitive information leaks */
+  minimalOutput?: boolean;
 }
 
 /** Project-level configuration */

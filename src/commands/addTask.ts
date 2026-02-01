@@ -14,6 +14,7 @@ import { summarizeTaskName } from '../task/summarize.js';
 import { loadGlobalConfig } from '../config/globalConfig.js';
 import { getProvider, type ProviderType } from '../providers/index.js';
 import { createLogger } from '../utils/debug.js';
+import { getErrorMessage } from '../utils/error.js';
 import { listWorkflows } from '../config/workflowLoader.js';
 import { getCurrentWorkflow } from '../config/paths.js';
 import { interactiveMode } from './interactive.js';
@@ -92,7 +93,7 @@ export async function addTask(cwd: string, task?: string): Promise<void> {
         issueNumber = numbers[0];
       }
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = getErrorMessage(e);
       log.error('Failed to fetch GitHub Issue', { task, error: msg });
       info(`Failed to fetch issue ${task}: ${msg}`);
       return;
@@ -129,7 +130,7 @@ export async function addTask(cwd: string, task?: string): Promise<void> {
     }
   }
 
-  const availableWorkflows = listWorkflows();
+  const availableWorkflows = listWorkflows(cwd);
   if (availableWorkflows.length > 0) {
     const currentWorkflow = getCurrentWorkflow(cwd);
     const defaultWorkflow = availableWorkflows.includes(currentWorkflow)

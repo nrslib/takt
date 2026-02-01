@@ -62,6 +62,7 @@ describe('WorkflowEngine agent overrides', () => {
     mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
 
     const engine = new WorkflowEngine(config, '/tmp/project', 'override task', {
+      projectCwd: '/tmp/project',
       provider: 'codex',
       model: 'cli-model',
     });
@@ -90,6 +91,7 @@ describe('WorkflowEngine agent overrides', () => {
     mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
 
     const engine = new WorkflowEngine(config, '/tmp/project', 'override task', {
+      projectCwd: '/tmp/project',
       provider: 'codex',
       model: 'cli-model',
     });
@@ -119,7 +121,7 @@ describe('WorkflowEngine agent overrides', () => {
     ]);
     mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
 
-    const engine = new WorkflowEngine(config, '/tmp/project', 'step task');
+    const engine = new WorkflowEngine(config, '/tmp/project', 'step task', { projectCwd: '/tmp/project' });
     await engine.run();
 
     const options = vi.mocked(runAgent).mock.calls[0][2];

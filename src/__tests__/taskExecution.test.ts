@@ -6,7 +6,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock dependencies before importing the module under test
 vi.mock('../config/index.js', () => ({
-  loadWorkflow: vi.fn(),
+  loadWorkflowByIdentifier: vi.fn(),
+  isWorkflowPath: vi.fn(() => false),
   loadGlobalConfig: vi.fn(() => ({})),
 }));
 
@@ -33,6 +34,7 @@ vi.mock('../utils/ui.js', () => ({
   error: vi.fn(),
   success: vi.fn(),
   status: vi.fn(),
+  blankLine: vi.fn(),
 }));
 
 vi.mock('../utils/debug.js', () => ({
@@ -49,6 +51,10 @@ vi.mock('../utils/error.js', () => ({
 
 vi.mock('./workflowExecution.js', () => ({
   executeWorkflow: vi.fn(),
+}));
+
+vi.mock('../cli.js', () => ({
+  isQuietMode: vi.fn(() => false),
 }));
 
 vi.mock('../constants.js', () => ({

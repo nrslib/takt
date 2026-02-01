@@ -11,196 +11,16 @@
  * and also used in Phase 3 (buildStatusJudgmentInstruction) as a dedicated follow-up.
  */
 
-import type { WorkflowStep, WorkflowRule, AgentResponse, Language, ReportConfig, ReportObjectConfig } from '../models/types.js';
+import type { WorkflowStep, Language, ReportConfig, ReportObjectConfig } from '../models/types.js';
 import { hasTagBasedRules } from './rule-utils.js';
+import type { InstructionContext } from './instruction-context.js';
+import { buildExecutionMetadata, renderExecutionMetadata, METADATA_STRINGS } from './instruction-context.js';
+import { generateStatusRulesFromRules } from './status-rules.js';
 
-
-/**
- * Context for building instruction from template.
- */
-export interface InstructionContext {
-  /** The main task/prompt */
-  task: string;
-  /** Current iteration number (workflow-wide turn count) */
-  iteration: number;
-  /** Maximum iterations allowed */
-  maxIterations: number;
-  /** Current step's iteration number (how many times this step has been executed) */
-  stepIteration: number;
-  /** Working directory (agent work dir, may be a clone) */
-  cwd: string;
-  /** Project root directory (where .takt/ lives). Defaults to cwd. */
-  projectCwd?: string;
-  /** User inputs accumulated during workflow */
-  userInputs: string[];
-  /** Previous step output if available */
-  previousOutput?: AgentResponse;
-  /** Report directory path */
-  reportDir?: string;
-  /** Language for metadata rendering. Defaults to 'en'. */
-  language?: Language;
-}
-
-/** Execution environment metadata prepended to agent instructions */
-export interface ExecutionMetadata {
-  /** The agent's working directory (may be a clone) */
-  readonly workingDirectory: string;
-  /** Language for metadata rendering */
-  readonly language: Language;
-  /** Whether file editing is allowed for this step (undefined = no prompt) */
-  readonly edit?: boolean;
-}
-
-/**
- * Build execution metadata from instruction context and step config.
- *
- * Pure function: (InstructionContext, edit?) → ExecutionMetadata.
- */
-export function buildExecutionMetadata(context: InstructionContext, edit?: boolean): ExecutionMetadata {
-  return {
-    workingDirectory: context.cwd,
-    language: context.language ?? 'en',
-    edit,
-  };
-}
-
-/** Localized strings for rules-based status prompt */
-const RULES_PROMPT_STRINGS = {
-  en: {
-    criteriaHeading: '## Decision Criteria',
-    headerNum: '#',
-    headerCondition: 'Condition',
-    headerTag: 'Tag',
-    outputHeading: '## Output Format',
-    outputInstruction: 'Output the tag corresponding to your decision:',
-    appendixHeading: '### Appendix Template',
-    appendixInstruction: 'When outputting `[{tag}]`, append the following:',
-  },
-  ja: {
-    criteriaHeading: '## 判定基準',
-    headerNum: '#',
-    headerCondition: '状況',
-    headerTag: 'タグ',
-    outputHeading: '## 出力フォーマット',
-    outputInstruction: '判定に対応するタグを出力してください:',
-    appendixHeading: '### 追加出力テンプレート',
-    appendixInstruction: '`[{tag}]` を出力する場合、以下を追記してください:',
-  },
-} as const;
-
-/**
- * Generate status rules prompt from rules configuration.
- * Creates a structured prompt that tells the agent which numbered tags to output.
- *
- * Example output for step "plan" with 3 rules:
- *   ## 判定基準
- *   | # | 状況 | タグ |
- *   |---|------|------|
- *   | 1 | 要件が明確で実装可能 | `[PLAN:1]` |
- *   | 2 | ユーザーが質問をしている | `[PLAN:2]` |
- *   | 3 | 要件が不明確、情報不足 | `[PLAN:3]` |
- */
-export function generateStatusRulesFromRules(
-  stepName: string,
-  rules: WorkflowRule[],
-  language: Language,
-): string {
-  const tag = stepName.toUpperCase();
-  const strings = RULES_PROMPT_STRINGS[language];
-
-  const lines: string[] = [];
-
-  // Criteria table
-  lines.push(strings.criteriaHeading);
-  lines.push('');
-  lines.push(`| ${strings.headerNum} | ${strings.headerCondition} | ${strings.headerTag} |`);
-  lines.push('|---|------|------|');
-  for (const [i, rule] of rules.entries()) {
-    lines.push(`| ${i + 1} | ${rule.condition} | \`[${tag}:${i + 1}]\` |`);
-  }
-  lines.push('');
-
-  // Output format
-  lines.push(strings.outputHeading);
-  lines.push('');
-  lines.push(strings.outputInstruction);
-  lines.push('');
-  for (const [i, rule] of rules.entries()) {
-    lines.push(`- \`[${tag}:${i + 1}]\` — ${rule.condition}`);
-  }
-
-  // Appendix templates (if any rules have appendix)
-  const rulesWithAppendix = rules.filter((r) => r.appendix);
-  if (rulesWithAppendix.length > 0) {
-    lines.push('');
-    lines.push(strings.appendixHeading);
-    for (const [i, rule] of rules.entries()) {
-      if (!rule.appendix) continue;
-      const tagStr = `[${tag}:${i + 1}]`;
-      lines.push('');
-      lines.push(strings.appendixInstruction.replace('{tag}', tagStr));
-      lines.push('```');
-      lines.push(rule.appendix.trimEnd());
-      lines.push('```');
-    }
-  }
-
-  return lines.join('\n');
-}
-
-/** Localized strings for execution metadata rendering */
-const METADATA_STRINGS = {
-  en: {
-    heading: '## Execution Context',
-    workingDirectory: 'Working Directory',
-    rulesHeading: '## Execution Rules',
-    noCommit: '**Do NOT run git commit.** Commits are handled automatically by the system after workflow completion.',
-    noCd: '**Do NOT use `cd` in Bash commands.** Your working directory is already set correctly. Run commands directly without changing directories.',
-    editEnabled: '**Editing is ENABLED for this step.** You may create, modify, and delete files as needed to fulfill the user\'s request.',
-    editDisabled: '**Editing is DISABLED for this step.** Do NOT create, modify, or delete any project source files. You may only read/search code and write to report files in the Report Directory.',
-    note: 'Note: This section is metadata. Follow the language used in the rest of the prompt.',
-  },
-  ja: {
-    heading: '## 実行コンテキスト',
-    workingDirectory: '作業ディレクトリ',
-    rulesHeading: '## 実行ルール',
-    noCommit: '**git commit を実行しないでください。** コミットはワークフロー完了後にシステムが自動で行います。',
-    noCd: '**Bashコマンドで `cd` を使用しないでください。** 作業ディレクトリは既に正しく設定されています。ディレクトリを変更せずにコマンドを実行してください。',
-    editEnabled: '**このステップでは編集が許可されています。** ユーザーの要求に応じて、ファイルの作成・変更・削除を行ってください。',
-    editDisabled: '**このステップでは編集が禁止されています。** プロジェクトのソースファイルを作成・変更・削除しないでください。コードの読み取り・検索と、Report Directoryへのレポート出力のみ行えます。',
-    note: '',
-  },
-} as const;
-
-/**
- * Render execution metadata as a markdown string.
- *
- * Pure function: ExecutionMetadata → string.
- * Always includes heading + Working Directory + Execution Rules.
- * Language determines the output language; 'en' includes a note about language consistency.
- */
-export function renderExecutionMetadata(metadata: ExecutionMetadata): string {
-  const strings = METADATA_STRINGS[metadata.language];
-  const lines = [
-    strings.heading,
-    `- ${strings.workingDirectory}: ${metadata.workingDirectory}`,
-    '',
-    strings.rulesHeading,
-    `- ${strings.noCommit}`,
-    `- ${strings.noCd}`,
-  ];
-  if (metadata.edit === true) {
-    lines.push(`- ${strings.editEnabled}`);
-  } else if (metadata.edit === false) {
-    lines.push(`- ${strings.editDisabled}`);
-  }
-  if (strings.note) {
-    lines.push('');
-    lines.push(strings.note);
-  }
-  lines.push('');
-  return lines.join('\n');
-}
+// Re-export from sub-modules for backward compatibility
+export type { InstructionContext, ExecutionMetadata } from './instruction-context.js';
+export { buildExecutionMetadata, renderExecutionMetadata } from './instruction-context.js';
+export { generateStatusRulesFromRules } from './status-rules.js';
 
 /**
  * Escape special characters in dynamic content to prevent template injection.
@@ -562,6 +382,7 @@ export function buildReportInstruction(
     maxIterations: 0,
     stepIteration: context.stepIteration,
     cwd: context.cwd,
+    projectCwd: context.cwd,
     userInputs: [],
     reportDir: context.reportDir,
     language,

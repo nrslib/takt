@@ -12,10 +12,12 @@
 import { execFileSync } from 'node:child_process';
 import { fetchIssue, formatIssueAsTask, checkGhCli, type GitHubIssue } from '../github/issue.js';
 import { createPullRequest, pushBranch, buildPrBody } from '../github/pr.js';
+import { stageAndCommit } from '../task/git.js';
 import { executeTask, type TaskExecutionOptions } from './taskExecution.js';
 import { loadGlobalConfig } from '../config/globalConfig.js';
-import { info, error, success, status } from '../utils/ui.js';
+import { info, error, success, status, blankLine } from '../utils/ui.js';
 import { createLogger } from '../utils/debug.js';
+import { getErrorMessage } from '../utils/error.js';
 import type { PipelineConfig } from '../models/types.js';
 import {
   EXIT_ISSUE_FETCH_FAILED,
@@ -32,7 +34,7 @@ export interface PipelineExecutionOptions {
   issueNumber?: number;
   /** Task content (alternative to issue) */
   task?: string;
-  /** Workflow name */
+  /** Workflow name or path to workflow file */
   workflow: string;
   /** Branch name (auto-generated if omitted) */
   branch?: string;
@@ -72,29 +74,6 @@ function createBranch(cwd: string, branch: string): void {
     cwd,
     stdio: 'pipe',
   });
-}
-
-/** Stage all changes and create a commit */
-function commitChanges(cwd: string, message: string): string | undefined {
-  execFileSync('git', ['add', '-A'], { cwd, stdio: 'pipe' });
-
-  const statusOutput = execFileSync('git', ['status', '--porcelain'], {
-    cwd,
-    stdio: 'pipe',
-    encoding: 'utf-8',
-  });
-
-  if (!statusOutput.trim()) {
-    return undefined;
-  }
-
-  execFileSync('git', ['commit', '-m', message], { cwd, stdio: 'pipe' });
-
-  return execFileSync('git', ['rev-parse', '--short', 'HEAD'], {
-    cwd,
-    stdio: 'pipe',
-    encoding: 'utf-8',
-  }).trim();
 }
 
 /** Build commit message from template or defaults */
@@ -159,7 +138,7 @@ export async function executePipeline(options: PipelineExecutionOptions): Promis
       task = formatIssueAsTask(issue);
       success(`Issue #${options.issueNumber} fetched: "${issue.title}"`);
     } catch (err) {
-      error(`Failed to fetch issue #${options.issueNumber}: ${err instanceof Error ? err.message : String(err)}`);
+      error(`Failed to fetch issue #${options.issueNumber}: ${getErrorMessage(err)}`);
       return EXIT_ISSUE_FETCH_FAILED;
     }
   } else if (options.task) {
@@ -178,7 +157,7 @@ export async function executePipeline(options: PipelineExecutionOptions): Promis
       createBranch(cwd, branch);
       success(`Branch created: ${branch}`);
     } catch (err) {
-      error(`Failed to create branch: ${err instanceof Error ? err.message : String(err)}`);
+      error(`Failed to create branch: ${getErrorMessage(err)}`);
       return EXIT_GIT_OPERATION_FAILED;
     }
   }
@@ -191,7 +170,13 @@ export async function executePipeline(options: PipelineExecutionOptions): Promis
     ? { provider: options.provider, model: options.model }
     : undefined;
 
-  const taskSuccess = await executeTask(task, cwd, workflow, undefined, agentOverrides);
+  const taskSuccess = await executeTask({
+    task,
+    cwd,
+    workflowIdentifier: workflow,
+    projectCwd: cwd,
+    agentOverrides,
+  });
 
   if (!taskSuccess) {
     error(`Workflow '${workflow}' failed`);
@@ -205,7 +190,7 @@ export async function executePipeline(options: PipelineExecutionOptions): Promis
 
     info('Committing changes...');
     try {
-      const commitHash = commitChanges(cwd, commitMessage);
+      const commitHash = stageAndCommit(cwd, commitMessage);
       if (commitHash) {
         success(`Changes committed: ${commitHash}`);
       } else {
@@ -216,7 +201,7 @@ export async function executePipeline(options: PipelineExecutionOptions): Promis
       pushBranch(cwd, branch);
       success(`Pushed to origin/${branch}`);
     } catch (err) {
-      error(`Git operation failed: ${err instanceof Error ? err.message : String(err)}`);
+      error(`Git operation failed: ${getErrorMessage(err)}`);
       return EXIT_GIT_OPERATION_FAILED;
     }
   }
@@ -248,7 +233,7 @@ export async function executePipeline(options: PipelineExecutionOptions): Promis
   }
 
   // --- Summary ---
-  console.log();
+  blankLine();
   status('Issue', issue ? `#${issue.number} "${issue.title}"` : 'N/A');
   status('Branch', branch ?? '(current)');
   status('Workflow', workflow);

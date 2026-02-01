@@ -8,6 +8,7 @@
 import { randomUUID } from 'node:crypto';
 import type { StreamCallback, StreamEvent } from '../claude/process.js';
 import type { AgentResponse } from '../models/types.js';
+import { getScenarioQueue } from './scenario.js';
 
 /** Options for mock calls */
 export interface MockCallOptions {
@@ -36,9 +37,13 @@ export async function callMock(
   options: MockCallOptions
 ): Promise<AgentResponse> {
   const sessionId = options.sessionId ?? generateMockSessionId();
-  const status = options.mockStatus ?? 'done';
+
+  // Scenario queue takes priority over explicit options
+  const scenarioEntry = getScenarioQueue()?.consume(agentName);
+
+  const status = scenarioEntry?.status ?? options.mockStatus ?? 'done';
   const statusMarker = `[MOCK:${status.toUpperCase()}]`;
-  const content = options.mockResponse ??
+  const content = scenarioEntry?.content ?? options.mockResponse ??
     `${statusMarker}\n\nMock response for agent "${agentName}".\nPrompt: ${prompt.slice(0, 100)}${prompt.length > 100 ? '...' : ''}`;
 
   // Emit stream events if callback is provided

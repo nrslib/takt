@@ -22,8 +22,9 @@ import {
 } from '../task/branchList.js';
 import { autoCommitAndPush } from '../task/autoCommit.js';
 import { selectOption, confirm, promptInput } from '../prompt/index.js';
-import { info, success, error as logError, warn } from '../utils/ui.js';
+import { info, success, error as logError, warn, header, blankLine } from '../utils/ui.js';
 import { createLogger } from '../utils/debug.js';
+import { getErrorMessage } from '../utils/error.js';
 import { executeTask, type TaskExecutionOptions } from './taskExecution.js';
 import { listWorkflows } from '../config/workflowLoader.js';
 import { getCurrentWorkflow } from '../config/paths.js';
@@ -80,12 +81,11 @@ async function showDiffAndPromptAction(
   defaultBranch: string,
   item: BranchListItem,
 ): Promise<ListAction | null> {
-  console.log();
-  console.log(chalk.bold.cyan(`=== ${item.info.branch} ===`));
+  header(item.info.branch);
   if (item.originalInstruction) {
     console.log(chalk.dim(`  ${item.originalInstruction}`));
   }
-  console.log();
+  blankLine();
 
   // Show diff stat
   try {
@@ -132,7 +132,7 @@ export function tryMergeBranch(projectDir: string, item: BranchListItem): boolea
     log.info('Try-merge (squash) completed', { branch });
     return true;
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = getErrorMessage(err);
     logError(`Squash merge failed: ${msg}`);
     logError('You may need to resolve conflicts manually.');
     log.error('Try-merge (squash) failed', { branch, error: msg });
@@ -180,7 +180,7 @@ export function mergeBranch(projectDir: string, item: BranchListItem): boolean {
     log.info('Branch merged & cleaned up', { branch, alreadyMerged });
     return true;
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = getErrorMessage(err);
     logError(`Merge failed: ${msg}`);
     logError('You may need to resolve conflicts manually.');
     log.error('Merge & cleanup failed', { branch, error: msg });
@@ -210,7 +210,7 @@ export function deleteBranch(projectDir: string, item: BranchListItem): boolean 
     log.info('Branch deleted', { branch });
     return true;
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = getErrorMessage(err);
     logError(`Delete failed: ${msg}`);
     log.error('Delete failed', { branch, error: msg });
     return false;
@@ -222,7 +222,7 @@ export function deleteBranch(projectDir: string, item: BranchListItem): boolean 
  * If multiple workflows available, prompt user to select.
  */
 async function selectWorkflowForInstruction(projectDir: string): Promise<string | null> {
-  const availableWorkflows = listWorkflows();
+  const availableWorkflows = listWorkflows(projectDir);
   const currentWorkflow = getCurrentWorkflow(projectDir);
 
   if (availableWorkflows.length === 0) {
@@ -324,7 +324,13 @@ export async function instructBranch(
       : instruction;
 
     // 5. Execute task on temp clone
-    const taskSuccess = await executeTask(fullInstruction, clone.path, selectedWorkflow, projectDir, options);
+    const taskSuccess = await executeTask({
+      task: fullInstruction,
+      cwd: clone.path,
+      workflowIdentifier: selectedWorkflow,
+      projectCwd: projectDir,
+      agentOverrides: options,
+    });
 
     // 6. Auto-commit+push if successful
     if (taskSuccess) {

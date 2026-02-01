@@ -9,7 +9,7 @@ import { existsSync, readdirSync, statSync, readFileSync, writeFileSync, mkdirSy
 import { join, dirname } from 'node:path';
 import { getGlobalWorkflowsDir, getGlobalAgentsDir, getBuiltinWorkflowsDir, getBuiltinAgentsDir } from '../config/paths.js';
 import { getLanguage } from '../config/globalConfig.js';
-import { header, success, info, warn, error } from '../utils/ui.js';
+import { header, success, info, warn, error, blankLine } from '../utils/ui.js';
 
 /**
  * Eject a builtin workflow to user space for customization.
@@ -90,7 +90,7 @@ function listAvailableBuiltins(builtinWorkflowsDir: string): void {
   }
 
   info('Available builtin workflows:');
-  console.log();
+  blankLine();
 
   for (const entry of readdirSync(builtinWorkflowsDir).sort()) {
     if (!entry.endsWith('.yaml') && !entry.endsWith('.yml')) continue;
@@ -100,7 +100,7 @@ function listAvailableBuiltins(builtinWorkflowsDir: string): void {
     info(`  ${name}`);
   }
 
-  console.log();
+  blankLine();
   info('Usage: takt eject {name}');
 }
 

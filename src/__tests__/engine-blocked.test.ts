@@ -59,7 +59,7 @@ describe('WorkflowEngine Integration: Blocked Handling', () => {
 
   it('should abort when blocked and no onUserInput callback', async () => {
     const config = buildDefaultWorkflowConfig();
-    const engine = new WorkflowEngine(config, tmpDir, 'test task');
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
     mockRunAgentSequence([
       makeResponse({ agent: 'plan', status: 'blocked', content: 'Need clarification' }),
@@ -84,7 +84,7 @@ describe('WorkflowEngine Integration: Blocked Handling', () => {
   it('should abort when blocked and onUserInput returns null', async () => {
     const config = buildDefaultWorkflowConfig();
     const onUserInput = vi.fn().mockResolvedValue(null);
-    const engine = new WorkflowEngine(config, tmpDir, 'test task', { onUserInput });
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, onUserInput });
 
     mockRunAgentSequence([
       makeResponse({ agent: 'plan', status: 'blocked', content: 'Need info' }),
@@ -103,7 +103,7 @@ describe('WorkflowEngine Integration: Blocked Handling', () => {
   it('should continue when blocked and onUserInput provides input', async () => {
     const config = buildDefaultWorkflowConfig();
     const onUserInput = vi.fn().mockResolvedValueOnce('User provided clarification');
-    const engine = new WorkflowEngine(config, tmpDir, 'test task', { onUserInput });
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, onUserInput });
 
     mockRunAgentSequence([
       // First: plan is blocked

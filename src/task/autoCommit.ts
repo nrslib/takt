@@ -9,6 +9,8 @@
 
 import { execFileSync } from 'node:child_process';
 import { createLogger } from '../utils/debug.js';
+import { getErrorMessage } from '../utils/error.js';
+import { stageAndCommit } from './git.js';
 
 const log = createLogger('autoCommit');
 
@@ -38,37 +40,13 @@ export function autoCommitAndPush(cloneCwd: string, taskName: string, projectDir
   log.info('Auto-commit starting', { cwd: cloneCwd, taskName });
 
   try {
-    // Stage all changes
-    execFileSync('git', ['add', '-A'], {
-      cwd: cloneCwd,
-      stdio: 'pipe',
-    });
+    const commitMessage = `takt: ${taskName}`;
+    const commitHash = stageAndCommit(cloneCwd, commitMessage);
 
-    // Check if there are staged changes
-    const statusOutput = execFileSync('git', ['status', '--porcelain'], {
-      cwd: cloneCwd,
-      stdio: 'pipe',
-      encoding: 'utf-8',
-    });
-
-    if (!statusOutput.trim()) {
+    if (!commitHash) {
       log.info('No changes to commit');
       return { success: true, message: 'No changes to commit' };
     }
-
-    // Create commit (no co-author)
-    const commitMessage = `takt: ${taskName}`;
-    execFileSync('git', ['commit', '-m', commitMessage], {
-      cwd: cloneCwd,
-      stdio: 'pipe',
-    });
-
-    // Get the short commit hash
-    const commitHash = execFileSync('git', ['rev-parse', '--short', 'HEAD'], {
-      cwd: cloneCwd,
-      stdio: 'pipe',
-      encoding: 'utf-8',
-    }).trim();
 
     log.info('Auto-commit created', { commitHash, message: commitMessage });
 
@@ -86,7 +64,7 @@ export function autoCommitAndPush(cloneCwd: string, taskName: string, projectDir
       message: `Committed & pushed: ${commitHash} - ${commitMessage}`,
     };
   } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
+    const errorMessage = getErrorMessage(err);
     log.error('Auto-commit failed', { error: errorMessage });
 
     return {

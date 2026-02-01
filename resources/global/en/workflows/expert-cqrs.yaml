@@ -64,9 +64,6 @@ steps:
       - WebSearch
       - WebFetch
     instruction_template: |
-      ## Previous Response (when returned from implement)
-      {previous_response}
-
       Analyze the task and create an implementation plan.
 
       **Note:** If returned from implement step (Previous Response exists),
@@ -146,6 +143,7 @@ steps:
   - name: ai_review
     edit: false
     agent: ../agents/default/ai-antipattern-reviewer.md
+    pass_previous_response: true
     report:
       name: 03-ai-review.md
       format: |
@@ -206,15 +204,31 @@ steps:
       - WebSearch
       - WebFetch
     instruction_template: |
-      ## AI Review Feedback (This is the latest instruction - prioritize this)
-      {previous_response}
+      **This is AI Review iteration {step_iteration}.**
 
-      **Important**: Address the AI Reviewer's feedback.
-      Focus on:
-      - Correcting incorrect assumptions
-      - Fixing plausible-but-wrong implementations
-      - Aligning with existing codebase patterns
-      - Removing scope creep
+      If this is iteration 2 or later, it means your previous fixes were not actually applied.
+      **Your belief that you "already fixed it" is wrong.**
+
+      **First, acknowledge:**
+      - Files you thought were "fixed" are actually not fixed
+      - Your understanding of previous work is incorrect
+      - You need to start from zero
+
+      **Required actions:**
+      1. Open all flagged files with Read tool (drop assumptions, verify facts)
+      2. Search for problem code with grep to confirm it exists
+      3. Fix confirmed problems with Edit tool
+      4. Run tests to verify (`./gradlew :backend:test` etc.)
+      5. Report specifically "what you checked and what you fixed"
+
+      **Report format:**
+      - ❌ "Already fixed"
+      - ✅ "Checked file X at L123, found problem Y, fixed to Z"
+
+      **Absolutely prohibited:**
+      - Reporting "fixed" without opening files
+      - Judging based on assumptions
+      - Leaving problems that AI Reviewer REJECTED
     pass_previous_response: true
     rules:
       - condition: AI Reviewer's issues have been fixed
@@ -251,9 +265,14 @@ steps:
             | Eventual Consistency | ✅ | - |
 
             ## Issues (if REJECT)
-            | # | Location | Issue | Fix |
-            |---|----------|-------|-----|
-            | 1 | `src/file.ts:42` | Issue description | Fix method |
+            | # | Scope | Location | Issue | Fix |
+            |---|-------|----------|-------|-----|
+            | 1 | In-scope | `src/file.ts:42` | Issue description | Fix method |
+
+            Scope: "In-scope" (fixable now) / "Out-of-scope" (existing issue, non-blocking)
+
+            ## Existing Issues (informational, non-blocking)
+            - {Record of existing issues unrelated to current change}
             ```
         allowed_tools:
           - Read
@@ -455,10 +474,7 @@ steps:
       - condition: Cannot proceed, insufficient info
         next: plan
     instruction_template: |
-      ## Review Feedback (This is the latest instruction - prioritize this)
-      {previous_response}
-
-      **Important**: Address the feedback from the reviewers.
+      Address the feedback from the reviewers.
       The "Original User Request" is reference information, not the latest instruction.
       Review the session conversation history and fix the issues raised by the reviewers.
     pass_previous_response: true
@@ -572,10 +588,7 @@ steps:
       - WebSearch
       - WebFetch
     instruction_template: |
-      ## Supervisor Feedback (This is the latest instruction - prioritize this)
-      {previous_response}
-
-      **Important**: Fix the issues pointed out by the supervisor.
+      Fix the issues pointed out by the supervisor.
 
       The supervisor has identified issues from a big-picture perspective.
       Address items in priority order.

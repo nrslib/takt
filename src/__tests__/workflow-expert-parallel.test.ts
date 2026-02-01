@@ -14,7 +14,7 @@ import { describe, it, expect } from 'vitest';
 import { loadWorkflow } from '../config/loader.js';
 
 describe('expert workflow parallel structure', () => {
-  const workflow = loadWorkflow('expert');
+  const workflow = loadWorkflow('expert', process.cwd());
 
   it('should load successfully', () => {
     expect(workflow).not.toBeNull();
@@ -95,7 +95,7 @@ describe('expert workflow parallel structure', () => {
 });
 
 describe('expert-cqrs workflow parallel structure', () => {
-  const workflow = loadWorkflow('expert-cqrs');
+  const workflow = loadWorkflow('expert-cqrs', process.cwd());
 
   it('should load successfully', () => {
     expect(workflow).not.toBeNull();

@@ -20,6 +20,10 @@ vi.mock('../utils/debug.js', () => ({
   }),
 }));
 
+vi.mock('../cli.js', () => ({
+  isQuietMode: vi.fn(() => false),
+}));
+
 vi.mock('../config/paths.js', () => ({
   loadAgentSessions: vi.fn(() => ({})),
   updateAgentSession: vi.fn(),
@@ -27,6 +31,8 @@ vi.mock('../config/paths.js', () => ({
 
 vi.mock('../utils/ui.js', () => ({
   info: vi.fn(),
+  error: vi.fn(),
+  blankLine: vi.fn(),
   StreamDisplay: vi.fn().mockImplementation(() => ({
     createHandler: vi.fn(() => vi.fn()),
     flush: vi.fn(),

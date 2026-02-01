@@ -2,7 +2,7 @@
  * Task execution logic
  */
 
-import { loadWorkflow, loadGlobalConfig } from '../config/index.js';
+import { loadWorkflowByIdentifier, isWorkflowPath, loadGlobalConfig } from '../config/index.js';
 import { TaskRunner, type TaskInfo } from '../task/index.js';
 import { createSharedClone } from '../task/clone.js';
 import { autoCommitAndPush } from '../task/autoCommit.js';
@@ -13,6 +13,7 @@ import {
   error,
   success,
   status,
+  blankLine,
 } from '../utils/ui.js';
 import { createLogger } from '../utils/debug.js';
 import { getErrorMessage } from '../utils/error.js';
@@ -27,40 +28,48 @@ export interface TaskExecutionOptions {
   model?: string;
 }
 
+export interface ExecuteTaskOptions {
+  /** Task content */
+  task: string;
+  /** Working directory (may be a clone path) */
+  cwd: string;
+  /** Workflow name or path (auto-detected by isWorkflowPath) */
+  workflowIdentifier: string;
+  /** Project root (where .takt/ lives) */
+  projectCwd: string;
+  /** Agent provider/model overrides */
+  agentOverrides?: TaskExecutionOptions;
+}
+
 /**
- * Execute a single task with workflow
- * @param task - Task content
- * @param cwd - Working directory (may be a clone path)
- * @param workflowName - Workflow to use
- * @param projectCwd - Project root (where .takt/ lives). Defaults to cwd.
+ * Execute a single task with workflow.
  */
-export async function executeTask(
-  task: string,
-  cwd: string,
-  workflowName: string = DEFAULT_WORKFLOW_NAME,
-  projectCwd?: string,
-  options?: TaskExecutionOptions
-): Promise<boolean> {
-  const workflowConfig = loadWorkflow(workflowName);
+export async function executeTask(options: ExecuteTaskOptions): Promise<boolean> {
+  const { task, cwd, workflowIdentifier, projectCwd, agentOverrides } = options;
+  const workflowConfig = loadWorkflowByIdentifier(workflowIdentifier, projectCwd);
 
   if (!workflowConfig) {
-    error(`Workflow "${workflowName}" not found.`);
-    info('Available workflows are in ~/.takt/workflows/');
-    info('Use "takt switch" to select a workflow.');
+    if (isWorkflowPath(workflowIdentifier)) {
+      error(`Workflow file not found: ${workflowIdentifier}`);
+    } else {
+      error(`Workflow "${workflowIdentifier}" not found.`);
+      info('Available workflows are in ~/.takt/workflows/ or .takt/workflows/');
+      info('Use "takt switch" to select a workflow.');
+    }
     return false;
   }
 
   log.debug('Running workflow', {
     name: workflowConfig.name,
-    steps: workflowConfig.steps.map(s => s.name),
+    steps: workflowConfig.steps.map((s: { name: string }) => s.name),
   });
 
   const globalConfig = loadGlobalConfig();
   const result = await executeWorkflow(workflowConfig, task, cwd, {
     projectCwd,
     language: globalConfig.language,
-    provider: options?.provider,
-    model: options?.model,
+    provider: agentOverrides?.provider,
+    model: agentOverrides?.model,
   });
   return result.success;
 }
@@ -87,7 +96,13 @@ export async function executeAndCompleteTask(
     const { execCwd, execWorkflow, isWorktree } = await resolveTaskExecution(task, cwd, workflowName);
 
     // cwd is always the project root; pass it as projectCwd so reports/sessions go there
-    const taskSuccess = await executeTask(task.content, execCwd, execWorkflow, cwd, options);
+    const taskSuccess = await executeTask({
+      task: task.content,
+      cwd: execCwd,
+      workflowIdentifier: execWorkflow,
+      projectCwd: cwd,
+      agentOverrides: options,
+    });
     const completedAt = new Date().toISOString();
 
     if (taskSuccess && isWorktree) {
@@ -162,9 +177,9 @@ export async function runAllTasks(
   let failCount = 0;
 
   while (task) {
-    console.log();
+    blankLine();
     info(`=== Task: ${task.name} ===`);
-    console.log();
+    blankLine();
 
     const taskSuccess = await executeAndCompleteTask(task, taskRunner, cwd, workflowName, options);
 
@@ -179,7 +194,7 @@ export async function runAllTasks(
   }
 
   const totalCount = successCount + failCount;
-  console.log();
+  blankLine();
   header('Tasks Summary');
   status('Total', String(totalCount));
   status('Success', String(successCount), successCount === totalCount ? 'green' : undefined);

@@ -128,26 +128,70 @@ AIは自信を持って間違える——もっともらしく見えるが動か
 2. 公開モジュール（index ファイル等）のエクスポート一覧と実体が一致しているか確認
 3. 新規追加されたコードに対応する古いコードが残っていないか確認
 
-### 7. フォールバック禁止レビュー（REJECT基準）
+### 7. フォールバック・デフォルト引数禁止レビュー（REJECT基準）
 
-**AIは不確実性を隠すためにフォールバックを多用する。これは原則REJECT。**
+**AIは不確実性を隠すためにフォールバックやデフォルト引数を多用する。値の流れが不明瞭になるため、原則REJECT。**
 
-| パターン | 例 | 判定 |
-|---------|-----|------|
-| デフォルト値で握りつぶし | `?? 'unknown'`、`\|\| 'default'`、`?? []` | REJECT |
-| try-catch で空値返却 | `catch { return ''; }` `catch { return 0; }` | REJECT |
-| 条件分岐でサイレント無視 | `if (!x) return;` で本来エラーの状況をスキップ | REJECT |
-| 多段フォールバック | `a ?? b ?? c ?? d` | REJECT |
+**問題の本質:** ロジックを追わないと何の値が来るか分からない「ハックコード」になる。
+
+| パターン | 例 | 問題 | 判定 |
+|---------|-----|------|------|
+| 必須データへのフォールバック | `user?.id ?? 'unknown'` | 本来エラーの状態で処理が進む | **REJECT** |
+| デフォルト引数の濫用 | `function f(x = 'default')` で全呼び出し元が省略 | 値の流れが不明瞭 | **REJECT** |
+| null合体で渡す口がない | `options?.cwd ?? process.cwd()` で options に渡す経路なし | 常にフォールバックになる | **REJECT** |
+| try-catch で空値返却 | `catch { return ''; }` | エラーを握りつぶす | **REJECT** |
+| 多段フォールバック | `a ?? b ?? c ?? d` | 値の決定ロジックが複雑 | **REJECT** |
+| 条件分岐でサイレント無視 | `if (!x) return;` で本来エラーをスキップ | バグを隠蔽 | **REJECT** |
+
+**デフォルト引数の具体例:**
+
+```typescript
+// ❌ 悪い例 - 全呼び出し元が省略している
+function loadWorkflow(name: string, cwd = process.cwd()) { ... }
+// 全呼び出し元: loadWorkflow('default')  ← cwd を渡していない
+// 問題: cwd の値がどこから来るか、呼び出し元を見ても分からない
+// 修正: cwd を必須引数にし、呼び出し元で明示的に渡す
+
+// ✅ 良い例 - 一部の呼び出し元のみ省略
+function query(sql: string, timeout = 30000) { ... }
+// 呼び出し元A: query(sql)  ← デフォルト使用
+// 呼び出し元B: query(sql, 60000)  ← 明示的に指定
+// 理由: timeout は明示的にオプショナルな設定値
+```
+
+**null合体演算子の具体例:**
+
+```typescript
+// ❌ 悪い例 - 上位から値を渡す口がない
+class Engine {
+  constructor(config, cwd, task, options?) {
+    this.projectCwd = options?.projectCwd ?? cwd
+    // 問題: options が { } で渡され、projectCwd が常に undefined
+    //       結果、常に cwd が使われる（フォールバックの意味がない）
+  }
+}
+// 修正: 上位の関数シグネチャを修正し、options.projectCwd を渡せるようにする
+
+// ✅ 良い例 - 上位から値を渡す経路が存在する
+function execute(task, options?: { projectCwd?: string }) {
+  const cwd = options?.projectCwd ?? process.cwd()
+  // 理由: options.projectCwd を渡すかどうかは呼び出し元の選択
+}
+```
 
 **例外（REJECTしない）:**
 - 外部入力（ユーザー入力、API応答）のバリデーション時のデフォルト値
 - 明示的にコメントで理由が記載されているフォールバック
 - 設定ファイルのオプショナル値に対するデフォルト
+- 一部の呼び出し元のみがデフォルト引数を使用（全員が省略している場合はREJECT）
 
 **検証アプローチ:**
-1. 変更差分で `??`、`||`、`catch` を grep
-2. 各フォールバックに正当な理由があるか確認
-3. 理由なしのフォールバックが1つでもあれば REJECT
+1. 変更差分で `??`、`||`、`= defaultValue`、`catch` を grep
+2. 各フォールバック・デフォルト引数について:
+   - 必須データか？ → REJECT
+   - 全呼び出し元が省略しているか？ → REJECT
+   - 上位から値を渡す経路があるか？ → なければ REJECT
+3. 理由なしのフォールバック・デフォルト引数が1つでもあれば REJECT
 
 ### 8. 未使用コードの検出
 

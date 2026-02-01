@@ -29,6 +29,11 @@ function shouldLog(level: LogLevel): boolean {
   return LOG_PRIORITIES[level] >= LOG_PRIORITIES[currentLogLevel];
 }
 
+/** Print a blank line */
+export function blankLine(): void {
+  console.log();
+}
+
 /** Log a debug message */
 export function debug(message: string): void {
   if (shouldLog('debug')) {
@@ -166,10 +171,14 @@ export class StreamDisplay {
   private spinnerFrames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
   private spinnerFrame = 0;
 
-  constructor(private agentName = 'Claude') {}
+  constructor(
+    private agentName = 'Claude',
+    private quiet = false,
+  ) {}
 
   /** Display initialization event */
   showInit(model: string): void {
+    if (this.quiet) return;
     console.log(chalk.gray(`[${this.agentName}] Model: ${model}`));
   }
 
@@ -202,6 +211,8 @@ export class StreamDisplay {
 
   /** Display tool use event */
   showToolUse(tool: string, input: Record<string, unknown>): void {
+    if (this.quiet) return;
+
     // Clear any buffered text first
     this.flushText();
 
@@ -216,6 +227,7 @@ export class StreamDisplay {
 
   /** Display tool output streaming */
   showToolOutput(output: string, tool?: string): void {
+    if (this.quiet) return;
     if (!output) return;
     this.stopToolSpinner();
     this.flushThinking();
@@ -238,8 +250,21 @@ export class StreamDisplay {
 
   /** Display tool result event */
   showToolResult(content: string, isError: boolean): void {
-    // Stop the spinner first
+    // Stop the spinner first (always, even in quiet mode to prevent spinner artifacts)
     this.stopToolSpinner();
+
+    if (this.quiet) {
+      // In quiet mode: show errors but suppress success messages
+      if (isError) {
+        const toolName = this.lastToolUse || 'Tool';
+        const errorContent = content || 'Unknown error';
+        console.log(chalk.red(`  ✗ ${toolName}:`), chalk.red(truncate(errorContent, 70)));
+      }
+      this.lastToolUse = null;
+      this.currentToolInputPreview = null;
+      this.toolOutputPrinted = false;
+      return;
+    }
 
     if (this.toolOutputBuffer) {
       this.printToolOutputLines([this.toolOutputBuffer], this.lastToolUse ?? undefined);
@@ -264,6 +289,8 @@ export class StreamDisplay {
 
   /** Display streaming thinking (Claude's internal reasoning) */
   showThinking(thinking: string): void {
+    if (this.quiet) return;
+
     // Stop spinner if running
     this.stopToolSpinner();
     // Flush any regular text first
@@ -292,6 +319,8 @@ export class StreamDisplay {
 
   /** Display streaming text (accumulated) */
   showText(text: string): void {
+    if (this.quiet) return;
+
     // Stop spinner if running
     this.stopToolSpinner();
     // Flush any thinking first

@@ -90,7 +90,7 @@ describe('WorkflowEngine: Abort (SIGINT)', () => {
   describe('abort() before run loop iteration', () => {
     it('should abort immediately when abort() called before step execution', async () => {
       const config = makeSimpleConfig();
-      const engine = new WorkflowEngine(config, tmpDir, 'test task');
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       const abortFn = vi.fn();
       engine.on('workflow:abort', abortFn);
@@ -112,7 +112,7 @@ describe('WorkflowEngine: Abort (SIGINT)', () => {
   describe('abort() during step execution', () => {
     it('should abort when abort() is called during runAgent', async () => {
       const config = makeSimpleConfig();
-      const engine = new WorkflowEngine(config, tmpDir, 'test task');
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       // Simulate abort during step execution: runAgent rejects after abort() is called
       vi.mocked(runAgent).mockImplementation(async () => {
@@ -135,7 +135,7 @@ describe('WorkflowEngine: Abort (SIGINT)', () => {
   describe('abort() calls interruptAllQueries', () => {
     it('should call interruptAllQueries when abort() is called', () => {
       const config = makeSimpleConfig();
-      const engine = new WorkflowEngine(config, tmpDir, 'test task');
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       engine.abort();
 
@@ -146,7 +146,7 @@ describe('WorkflowEngine: Abort (SIGINT)', () => {
   describe('abort() idempotency', () => {
     it('should only call interruptAllQueries once on multiple abort() calls', () => {
       const config = makeSimpleConfig();
-      const engine = new WorkflowEngine(config, tmpDir, 'test task');
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       engine.abort();
       engine.abort();
@@ -159,14 +159,14 @@ describe('WorkflowEngine: Abort (SIGINT)', () => {
   describe('isAbortRequested()', () => {
     it('should return false initially', () => {
       const config = makeSimpleConfig();
-      const engine = new WorkflowEngine(config, tmpDir, 'test task');
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       expect(engine.isAbortRequested()).toBe(false);
     });
 
     it('should return true after abort()', () => {
       const config = makeSimpleConfig();
-      const engine = new WorkflowEngine(config, tmpDir, 'test task');
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       engine.abort();
 
@@ -177,7 +177,7 @@ describe('WorkflowEngine: Abort (SIGINT)', () => {
   describe('abort between steps', () => {
     it('should stop after completing current step when abort() is called', async () => {
       const config = makeSimpleConfig();
-      const engine = new WorkflowEngine(config, tmpDir, 'test task');
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       // First step completes normally, but abort is called during it
       vi.mocked(runAgent).mockImplementation(async () => {

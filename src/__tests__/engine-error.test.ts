@@ -68,7 +68,7 @@ describe('WorkflowEngine Integration: Error Handling', () => {
   describe('No rule matched', () => {
     it('should abort when detectMatchedRule returns undefined', async () => {
       const config = buildDefaultWorkflowConfig();
-      const engine = new WorkflowEngine(config, tmpDir, 'test task');
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({ agent: 'plan', content: 'Unclear output' }),
@@ -94,7 +94,7 @@ describe('WorkflowEngine Integration: Error Handling', () => {
   describe('runAgent throws', () => {
     it('should abort when runAgent throws an error', async () => {
       const config = buildDefaultWorkflowConfig();
-      const engine = new WorkflowEngine(config, tmpDir, 'test task');
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       vi.mocked(runAgent).mockRejectedValueOnce(new Error('API connection failed'));
 
@@ -126,7 +126,7 @@ describe('WorkflowEngine Integration: Error Handling', () => {
         ],
       });
 
-      const engine = new WorkflowEngine(config, tmpDir, 'test task');
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       for (let i = 0; i < 5; i++) {
         vi.mocked(runAgent).mockResolvedValueOnce(
@@ -156,7 +156,7 @@ describe('WorkflowEngine Integration: Error Handling', () => {
   describe('Iteration limit', () => {
     it('should abort when max iterations reached without onIterationLimit callback', async () => {
       const config = buildDefaultWorkflowConfig({ maxIterations: 2 });
-      const engine = new WorkflowEngine(config, tmpDir, 'test task');
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({ agent: 'plan', content: 'Plan done' }),
@@ -190,6 +190,7 @@ describe('WorkflowEngine Integration: Error Handling', () => {
       const onIterationLimit = vi.fn().mockResolvedValueOnce(10);
 
       const engine = new WorkflowEngine(config, tmpDir, 'test task', {
+        projectCwd: tmpDir,
         onIterationLimit,
       });
 

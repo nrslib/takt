@@ -32,7 +32,7 @@ vi.mock('../config/paths.js', async (importOriginal) => {
 });
 
 // Import after mocking
-const { loadGlobalConfig, saveGlobalConfig, resolveAnthropicApiKey, resolveOpenaiApiKey } = await import('../config/globalConfig.js');
+const { loadGlobalConfig, saveGlobalConfig, resolveAnthropicApiKey, resolveOpenaiApiKey, invalidateGlobalConfigCache } = await import('../config/globalConfig.js');
 
 describe('GlobalConfigSchema API key fields', () => {
   it('should accept config without API keys', () => {
@@ -72,6 +72,7 @@ describe('GlobalConfigSchema API key fields', () => {
 
 describe('GlobalConfig load/save with API keys', () => {
   beforeEach(() => {
+    invalidateGlobalConfigCache();
     mkdirSync(taktDir, { recursive: true });
   });
 
@@ -155,6 +156,7 @@ describe('resolveAnthropicApiKey', () => {
   const originalEnv = process.env['TAKT_ANTHROPIC_API_KEY'];
 
   beforeEach(() => {
+    invalidateGlobalConfigCache();
     mkdirSync(taktDir, { recursive: true });
   });
 
@@ -228,6 +230,7 @@ describe('resolveOpenaiApiKey', () => {
   const originalEnv = process.env['TAKT_OPENAI_API_KEY'];
 
   beforeEach(() => {
+    invalidateGlobalConfigCache();
     mkdirSync(taktDir, { recursive: true });
   });
 

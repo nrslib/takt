@@ -60,7 +60,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
 
   it('should aggregate sub-step outputs with ## headers and --- separators', async () => {
     const config = buildDefaultWorkflowConfig();
-    const engine = new WorkflowEngine(config, tmpDir, 'test task');
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
     mockRunAgentSequence([
       makeResponse({ agent: 'plan', content: 'Plan done' }),
@@ -97,7 +97,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
 
   it('should store individual sub-step outputs in stepOutputs', async () => {
     const config = buildDefaultWorkflowConfig();
-    const engine = new WorkflowEngine(config, tmpDir, 'test task');
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
     mockRunAgentSequence([
       makeResponse({ agent: 'plan', content: 'Plan' }),
@@ -129,7 +129,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
 
   it('should execute sub-steps concurrently (both runAgent calls happen)', async () => {
     const config = buildDefaultWorkflowConfig();
-    const engine = new WorkflowEngine(config, tmpDir, 'test task');
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
     mockRunAgentSequence([
       makeResponse({ agent: 'plan', content: 'Plan' }),

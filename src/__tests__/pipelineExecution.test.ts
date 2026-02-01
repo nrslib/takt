@@ -49,6 +49,7 @@ vi.mock('../utils/ui.js', () => ({
   error: vi.fn(),
   success: vi.fn(),
   status: vi.fn(),
+  blankLine: vi.fn(),
 }));
 
 // Mock debug logger
@@ -146,13 +147,13 @@ describe('executePipeline', () => {
     });
 
     expect(exitCode).toBe(0);
-    expect(mockExecuteTask).toHaveBeenCalledWith(
-      'Fix the bug',
-      '/tmp/test',
-      'default',
-      undefined,
-      undefined,
-    );
+    expect(mockExecuteTask).toHaveBeenCalledWith({
+      task: 'Fix the bug',
+      cwd: '/tmp/test',
+      workflowIdentifier: 'default',
+      projectCwd: '/tmp/test',
+      agentOverrides: undefined,
+    });
   });
 
   it('passes provider/model overrides to task execution', async () => {
@@ -168,13 +169,13 @@ describe('executePipeline', () => {
     });
 
     expect(exitCode).toBe(0);
-    expect(mockExecuteTask).toHaveBeenCalledWith(
-      'Fix the bug',
-      '/tmp/test',
-      'default',
-      undefined,
-      { provider: 'codex', model: 'codex-model' },
-    );
+    expect(mockExecuteTask).toHaveBeenCalledWith({
+      task: 'Fix the bug',
+      cwd: '/tmp/test',
+      workflowIdentifier: 'default',
+      projectCwd: '/tmp/test',
+      agentOverrides: { provider: 'codex', model: 'codex-model' },
+    });
   });
 
   it('should return exit code 5 when PR creation fails', async () => {
@@ -225,13 +226,13 @@ describe('executePipeline', () => {
     });
 
     expect(exitCode).toBe(0);
-    expect(mockExecuteTask).toHaveBeenCalledWith(
-      'From --task flag',
-      '/tmp/test',
-      'magi',
-      undefined,
-      undefined,
-    );
+    expect(mockExecuteTask).toHaveBeenCalledWith({
+      task: 'From --task flag',
+      cwd: '/tmp/test',
+      workflowIdentifier: 'magi',
+      projectCwd: '/tmp/test',
+      agentOverrides: undefined,
+    });
   });
 
   describe('PipelineConfig template expansion', () => {
@@ -385,13 +386,13 @@ describe('executePipeline', () => {
       });
 
       expect(exitCode).toBe(0);
-      expect(mockExecuteTask).toHaveBeenCalledWith(
-        'Fix the bug',
-        '/tmp/test',
-        'default',
-        undefined,
-        undefined,
-      );
+      expect(mockExecuteTask).toHaveBeenCalledWith({
+        task: 'Fix the bug',
+        cwd: '/tmp/test',
+        workflowIdentifier: 'default',
+        projectCwd: '/tmp/test',
+        agentOverrides: undefined,
+      });
 
       // No git operations should have been called
       const gitCalls = mockExecFileSync.mock.calls.filter(

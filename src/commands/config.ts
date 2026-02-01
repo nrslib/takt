@@ -75,13 +75,8 @@ function getPermissionModeOptions(currentMode: PermissionMode): {
  */
 export function getCurrentPermissionMode(cwd: string): PermissionMode {
   const config = loadProjectConfig(cwd);
-  // Support both old sacrificeMode boolean and new permissionMode string
   if (config.permissionMode) {
     return config.permissionMode as PermissionMode;
-  }
-  // Legacy: convert sacrificeMode boolean to new format
-  if (config.sacrificeMode) {
-    return 'sacrifice-my-pc';
   }
   return 'default';
 }
@@ -91,8 +86,6 @@ export function getCurrentPermissionMode(cwd: string): PermissionMode {
  */
 export function setPermissionMode(cwd: string, mode: PermissionMode): void {
   updateProjectConfig(cwd, 'permissionMode', mode);
-  // @deprecated TODO: Remove in v1.0 - legacy sacrificeMode for backwards compatibility
-  updateProjectConfig(cwd, 'sacrificeMode', mode === 'sacrifice-my-pc');
 }
 
 /**

@@ -8,6 +8,7 @@ import { Codex } from '@openai/codex-sdk';
 import type { AgentResponse, Status } from '../models/types.js';
 import type { StreamCallback } from '../claude/process.js';
 import { createLogger } from '../utils/debug.js';
+import { getErrorMessage } from '../utils/error.js';
 
 const log = createLogger('codex-sdk');
 
@@ -486,7 +487,7 @@ export async function callCodex(
       sessionId: threadId,
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = getErrorMessage(error);
     emitResult(options.onStream, false, message, threadId);
 
     return {

@@ -6,6 +6,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { createLogger } from '../utils/debug.js';
+import { getErrorMessage } from '../utils/error.js';
 import { checkGhCli, type GitHubIssue } from './issue.js';
 
 const log = createLogger('github-pr');
@@ -81,7 +82,7 @@ export function createPullRequest(cwd: string, options: CreatePrOptions): Create
 
     return { success: true, url };
   } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
+    const errorMessage = getErrorMessage(err);
     log.error('PR creation failed', { error: errorMessage });
     return { success: false, error: errorMessage };
   }

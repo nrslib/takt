@@ -72,8 +72,8 @@ export interface WorkflowEngineOptions {
   onIterationLimit?: IterationLimitCallback;
   /** Bypass all permission checks (sacrifice-my-pc mode) */
   bypassPermissions?: boolean;
-  /** Project root directory (where .takt/ lives). Defaults to cwd if not specified. */
-  projectCwd?: string;
+  /** Project root directory (where .takt/ lives). */
+  projectCwd: string;
   /** Language for instruction metadata. Defaults to 'en'. */
   language?: Language;
   provider?: ProviderType;

@@ -28,8 +28,6 @@ export interface ProjectLocalConfig {
   provider?: 'claude' | 'codex';
   /** Permission mode setting */
   permissionMode?: PermissionMode;
-  /** @deprecated Use permissionMode instead. Auto-approve all permissions in this project */
-  sacrificeMode?: boolean;
   /** Verbose output mode */
   verbose?: boolean;
   /** Custom settings */

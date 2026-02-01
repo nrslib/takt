@@ -20,11 +20,12 @@ vi.mock('node:os', async () => {
 });
 
 // Import after mocks are set up
-const { loadGlobalConfig, saveGlobalConfig } = await import('../config/globalConfig.js');
+const { loadGlobalConfig, saveGlobalConfig, invalidateGlobalConfigCache } = await import('../config/globalConfig.js');
 const { getGlobalConfigPath } = await import('../config/paths.js');
 
 describe('loadGlobalConfig', () => {
   beforeEach(() => {
+    invalidateGlobalConfigCache();
     mkdirSync(testHomeDir, { recursive: true });
   });
 
@@ -47,12 +48,20 @@ describe('loadGlobalConfig', () => {
     expect(config.pipeline).toBeUndefined();
   });
 
-  it('should return a fresh copy each time (no shared reference)', () => {
+  it('should return the same cached object on subsequent calls', () => {
     const config1 = loadGlobalConfig();
     const config2 = loadGlobalConfig();
 
-    config1.trustedDirectories.push('/tmp/test');
-    expect(config2.trustedDirectories).toEqual([]);
+    expect(config1).toBe(config2);
+  });
+
+  it('should return a fresh object after cache invalidation', () => {
+    const config1 = loadGlobalConfig();
+    invalidateGlobalConfigCache();
+    const config2 = loadGlobalConfig();
+
+    expect(config1).not.toBe(config2);
+    expect(config1).toEqual(config2);
   });
 
   it('should load from config.yaml when it exists', () => {
@@ -105,10 +114,41 @@ describe('loadGlobalConfig', () => {
       commitMessageTemplate: 'feat: {title} (#{issue})',
     };
     saveGlobalConfig(config);
+    invalidateGlobalConfigCache();
 
     const reloaded = loadGlobalConfig();
     expect(reloaded.pipeline).toBeDefined();
     expect(reloaded.pipeline!.defaultBranchPrefix).toBe('takt/');
     expect(reloaded.pipeline!.commitMessageTemplate).toBe('feat: {title} (#{issue})');
+  });
+
+  it('should read from cache without hitting disk on second call', () => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(
+      getGlobalConfigPath(),
+      'language: ja\nprovider: codex\n',
+      'utf-8',
+    );
+
+    const config1 = loadGlobalConfig();
+    expect(config1.language).toBe('ja');
+
+    // Overwrite file on disk - cached result should still be returned
+    writeFileSync(
+      getGlobalConfigPath(),
+      'language: en\nprovider: claude\n',
+      'utf-8',
+    );
+
+    const config2 = loadGlobalConfig();
+    expect(config2.language).toBe('ja');
+    expect(config2).toBe(config1);
+
+    // After invalidation, the new file content is read
+    invalidateGlobalConfigCache();
+    const config3 = loadGlobalConfig();
+    expect(config3.language).toBe('en');
+    expect(config3).not.toBe(config1);
   });
 });
