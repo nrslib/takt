@@ -24,3 +24,4 @@ jobs:
           anthropic_api_key: ${{ secrets.TAKT_ANTHROPIC_API_KEY }}
           model: ${{ vars.TAKT_MODEL }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          log_output: ${{ vars.TAKT_LOG_OUTPUT || 'false' }}
