@@ -23,6 +23,8 @@ export interface WorktreeOptions {
   branch?: string;
   /** Task slug for auto-generated paths/branches */
   taskSlug: string;
+  /** GitHub Issue number (optional, for formatting branch/path) */
+  issueNumber?: number;
 }
 
 export interface WorktreeResult {
@@ -57,11 +59,22 @@ function resolveCloneBaseDir(projectDir: string): string {
  * 1. Custom path in options.worktree (string)
  * 2. worktree_dir from config.yaml (if set)
  * 3. Default: ../{dir-name}
+ *
+ * Format with issue: {timestamp}-{issue}-{slug}
+ * Format without issue: {timestamp}-{slug}
  */
 function resolveClonePath(projectDir: string, options: WorktreeOptions): string {
   const timestamp = generateTimestamp();
   const slug = slugify(options.taskSlug);
-  const dirName = slug ? `${timestamp}-${slug}` : timestamp;
+
+  let dirName: string;
+  if (options.issueNumber !== undefined && slug) {
+    dirName = `${timestamp}-${options.issueNumber}-${slug}`;
+  } else if (slug) {
+    dirName = `${timestamp}-${slug}`;
+  } else {
+    dirName = timestamp;
+  }
 
   if (typeof options.worktree === 'string') {
     return path.isAbsolute(options.worktree)
@@ -72,12 +85,25 @@ function resolveClonePath(projectDir: string, options: WorktreeOptions): string 
   return path.join(resolveCloneBaseDir(projectDir), dirName);
 }
 
+/**
+ * Resolve branch name from options.
+ *
+ * Format with issue: takt/#{issue}/{slug}
+ * Format without issue: takt/{timestamp}-{slug}
+ * Custom branch: use as-is
+ */
 function resolveBranchName(options: WorktreeOptions): string {
   if (options.branch) {
     return options.branch;
   }
-  const timestamp = generateTimestamp();
+
   const slug = slugify(options.taskSlug);
+
+  if (options.issueNumber !== undefined && slug) {
+    return `takt/#${options.issueNumber}/${slug}`;
+  }
+
+  const timestamp = generateTimestamp();
   return slug ? `takt/${timestamp}-${slug}` : `takt/${timestamp}`;
 }
 

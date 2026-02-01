@@ -29,6 +29,7 @@ export const TaskFileSchema = z.object({
   worktree: z.union([z.boolean(), z.string()]).optional(),
   branch: z.string().optional(),
   workflow: z.string().optional(),
+  issue: z.number().int().positive().optional(),
 });
 
 export type TaskFileData = z.infer<typeof TaskFileSchema>;
