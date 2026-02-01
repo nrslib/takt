@@ -1,3 +1,5 @@
+[![npm version](https://badge.fury.io/js/%40nrslib%2Ftakt.svg)](https://www.npmjs.com/package/@nrslib/takt)
+
 # TAKT
 
 🇯🇵 [日本語ドキュメント](./docs/README.ja.md)
