@@ -233,7 +233,7 @@ function normalizeWorkflowConfig(raw: unknown, workflowDir: string): WorkflowCon
  * Load a workflow from a YAML file.
  * @param filePath Path to the workflow YAML file
  */
-export function loadWorkflowFromFile(filePath: string): WorkflowConfig {
+function loadWorkflowFromFile(filePath: string): WorkflowConfig {
   if (!existsSync(filePath)) {
     throw new Error(`Workflow file not found: ${filePath}`);
   }
@@ -266,14 +266,14 @@ function resolvePath(pathInput: string, basePath: string = process.cwd()): strin
 }
 
 /**
- * Load workflow from a file path (explicit path-based loading).
- * Use this when user explicitly specifies a workflow file path via --workflow-path.
+ * Load workflow from a file path.
+ * Called internally by loadWorkflowByIdentifier when the identifier is detected as a path.
  *
  * @param filePath Path to workflow file (absolute, relative, or home-dir prefixed with ~)
  * @param basePath Base directory for resolving relative paths (default: cwd)
  * @returns WorkflowConfig or null if file not found
  */
-export function loadWorkflowFromPath(
+function loadWorkflowFromPath(
   filePath: string,
   basePath: string = process.cwd()
 ): WorkflowConfig | null {
@@ -319,55 +319,61 @@ export function loadWorkflow(
   return getBuiltinWorkflow(name);
 }
 
-/** Load all workflows with descriptions (for switch command) */
-export function loadAllWorkflows(): Map<string, WorkflowConfig> {
+/**
+ * Load all workflows with descriptions (for switch command).
+ *
+ * Priority (later entries override earlier):
+ *   1. Builtin workflows
+ *   2. User workflows (~/.takt/workflows/)
+ *   3. Project-local workflows (.takt/workflows/)
+ */
+export function loadAllWorkflows(cwd: string): Map<string, WorkflowConfig> {
   const workflows = new Map<string, WorkflowConfig>();
   const disabled = getDisabledBuiltins();
 
-  // 1. Builtin workflows (lower priority — will be overridden by user)
+  // 1. Builtin workflows (lowest priority)
   const lang = getLanguage();
   const builtinDir = getBuiltinWorkflowsDir(lang);
-  if (existsSync(builtinDir)) {
-    for (const entry of readdirSync(builtinDir)) {
-      if (!entry.endsWith('.yaml') && !entry.endsWith('.yml')) continue;
+  loadWorkflowsFromDir(builtinDir, workflows, disabled);
 
-      const entryPath = join(builtinDir, entry);
-      if (statSync(entryPath).isFile()) {
-        const workflowName = entry.replace(/\.ya?ml$/, '');
-        if (disabled.includes(workflowName)) continue;
-        try {
-          workflows.set(workflowName, loadWorkflowFromFile(entryPath));
-        } catch {
-          // Skip invalid workflows
-        }
-      }
-    }
-  }
-
-  // 2. User workflows (higher priority — overrides builtins)
+  // 2. User workflows (overrides builtins)
   const globalWorkflowsDir = getGlobalWorkflowsDir();
-  if (existsSync(globalWorkflowsDir)) {
-    for (const entry of readdirSync(globalWorkflowsDir)) {
-      if (!entry.endsWith('.yaml') && !entry.endsWith('.yml')) continue;
+  loadWorkflowsFromDir(globalWorkflowsDir, workflows);
 
-      const entryPath = join(globalWorkflowsDir, entry);
-      if (statSync(entryPath).isFile()) {
-        try {
-          const workflow = loadWorkflowFromFile(entryPath);
-          const workflowName = entry.replace(/\.ya?ml$/, '');
-          workflows.set(workflowName, workflow);
-        } catch {
-          // Skip invalid workflows
-        }
-      }
-    }
-  }
+  // 3. Project-local workflows (highest priority)
+  const projectWorkflowsDir = join(getProjectConfigDir(cwd), 'workflows');
+  loadWorkflowsFromDir(projectWorkflowsDir, workflows);
 
   return workflows;
 }
 
-/** List available workflows (user + builtin, excluding disabled) */
-export function listWorkflows(): string[] {
+/** Load workflow files from a directory into a Map (later calls override earlier entries) */
+function loadWorkflowsFromDir(
+  dir: string,
+  target: Map<string, WorkflowConfig>,
+  disabled?: string[],
+): void {
+  if (!existsSync(dir)) return;
+  for (const entry of readdirSync(dir)) {
+    if (!entry.endsWith('.yaml') && !entry.endsWith('.yml')) continue;
+    const entryPath = join(dir, entry);
+    if (!statSync(entryPath).isFile()) continue;
+    const workflowName = entry.replace(/\.ya?ml$/, '');
+    if (disabled?.includes(workflowName)) continue;
+    try {
+      target.set(workflowName, loadWorkflowFromFile(entryPath));
+    } catch {
+      // Skip invalid workflows
+    }
+  }
+}
+
+/**
+ * List available workflow names (builtin + user + project-local, excluding disabled).
+ *
+ * @param cwd Project root directory (used to scan project-local .takt/workflows/).
+ */
+export function listWorkflows(cwd: string): string[] {
   const workflows = new Set<string>();
   const disabled = getDisabledBuiltins();
 
@@ -380,7 +386,51 @@ export function listWorkflows(): string[] {
   const globalWorkflowsDir = getGlobalWorkflowsDir();
   scanWorkflowDir(globalWorkflowsDir, workflows);
 
+  // 3. Project-local workflows
+  const projectWorkflowsDir = join(getProjectConfigDir(cwd), 'workflows');
+  scanWorkflowDir(projectWorkflowsDir, workflows);
+
   return Array.from(workflows).sort();
+}
+
+/**
+ * Check if a workflow identifier looks like a file path (vs a workflow name).
+ *
+ * Path indicators:
+ * - Starts with `/` (absolute path)
+ * - Starts with `~` (home directory)
+ * - Starts with `./` or `../` (relative path)
+ * - Ends with `.yaml` or `.yml` (file extension)
+ */
+export function isWorkflowPath(identifier: string): boolean {
+  return (
+    identifier.startsWith('/') ||
+    identifier.startsWith('~') ||
+    identifier.startsWith('./') ||
+    identifier.startsWith('../') ||
+    identifier.endsWith('.yaml') ||
+    identifier.endsWith('.yml')
+  );
+}
+
+/**
+ * Load workflow by identifier (auto-detects name vs path).
+ *
+ * If the identifier looks like a path (see isWorkflowPath), loads from file.
+ * Otherwise, loads by name with the standard priority chain:
+ *   project-local → user → builtin.
+ *
+ * @param identifier Workflow name or file path
+ * @param projectCwd Project root directory (for project-local resolution and relative path base)
+ */
+export function loadWorkflowByIdentifier(
+  identifier: string,
+  projectCwd: string
+): WorkflowConfig | null {
+  if (isWorkflowPath(identifier)) {
+    return loadWorkflowFromPath(identifier, projectCwd);
+  }
+  return loadWorkflow(identifier, projectCwd);
 }
 
 /** Scan a directory for .yaml/.yml files and add names to the set */

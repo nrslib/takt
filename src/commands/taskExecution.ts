@@ -2,7 +2,7 @@
  * Task execution logic
  */
 
-import { loadWorkflow, loadWorkflowFromPath, loadGlobalConfig } from '../config/index.js';
+import { loadWorkflowByIdentifier, isWorkflowPath, loadGlobalConfig } from '../config/index.js';
 import { TaskRunner, type TaskInfo } from '../task/index.js';
 import { createSharedClone } from '../task/clone.js';
 import { autoCommitAndPush } from '../task/autoCommit.js';
@@ -28,29 +28,26 @@ export interface TaskExecutionOptions {
 }
 
 /**
- * Execute a single task with workflow
+ * Execute a single task with workflow.
+ *
  * @param task - Task content
  * @param cwd - Working directory (may be a clone path)
- * @param workflowIdentifier - Workflow name or path
- * @param isPathBased - True if workflowIdentifier is a file path, false if it's a name
+ * @param workflowIdentifier - Workflow name or path (auto-detected by isWorkflowPath)
  * @param projectCwd - Project root (where .takt/ lives). Defaults to cwd.
  */
 export async function executeTask(
   task: string,
   cwd: string,
   workflowIdentifier: string = DEFAULT_WORKFLOW_NAME,
-  isPathBased: boolean = false,
   projectCwd?: string,
   options?: TaskExecutionOptions
 ): Promise<boolean> {
   const effectiveProjectCwd = projectCwd || cwd;
 
-  const workflowConfig = isPathBased
-    ? loadWorkflowFromPath(workflowIdentifier, effectiveProjectCwd)
-    : loadWorkflow(workflowIdentifier, effectiveProjectCwd);
+  const workflowConfig = loadWorkflowByIdentifier(workflowIdentifier, effectiveProjectCwd);
 
   if (!workflowConfig) {
-    if (isPathBased) {
+    if (isWorkflowPath(workflowIdentifier)) {
       error(`Workflow file not found: ${workflowIdentifier}`);
     } else {
       error(`Workflow "${workflowIdentifier}" not found.`);
@@ -97,7 +94,7 @@ export async function executeAndCompleteTask(
     const { execCwd, execWorkflow, isWorktree } = await resolveTaskExecution(task, cwd, workflowName);
 
     // cwd is always the project root; pass it as projectCwd so reports/sessions go there
-    const taskSuccess = await executeTask(task.content, execCwd, execWorkflow, false, cwd, options);
+    const taskSuccess = await executeTask(task.content, execCwd, execWorkflow, cwd, options);
     const completedAt = new Date().toISOString();
 
     if (taskSuccess && isWorktree) {

@@ -6,7 +6,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock dependencies before importing the module under test
 vi.mock('../config/index.js', () => ({
-  loadWorkflow: vi.fn(),
+  loadWorkflowByIdentifier: vi.fn(),
+  isWorkflowPath: vi.fn(() => false),
   loadGlobalConfig: vi.fn(() => ({})),
 }));
 

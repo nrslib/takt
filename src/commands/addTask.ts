@@ -124,7 +124,7 @@ export async function addTask(cwd: string, task?: string): Promise<void> {
     }
   }
 
-  const availableWorkflows = listWorkflows();
+  const availableWorkflows = listWorkflows(cwd);
   if (availableWorkflows.length > 0) {
     const currentWorkflow = getCurrentWorkflow(cwd);
     const defaultWorkflow = availableWorkflows.includes(currentWorkflow)

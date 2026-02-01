@@ -174,8 +174,7 @@ describe('loadAllWorkflows', () => {
     }
   });
 
-  it.skip('should only load workflows from global ~/.takt/workflows/ (not project-local)', () => {
-    // Project-local workflows should NOT be loaded anymore
+  it('should load project-local workflows when cwd is provided', () => {
     const workflowsDir = join(testDir, '.takt', 'workflows');
     mkdirSync(workflowsDir, { recursive: true });
 
@@ -193,10 +192,9 @@ steps:
 `;
     writeFileSync(join(workflowsDir, 'test.yaml'), sampleWorkflow);
 
-    const workflows = loadAllWorkflows();
+    const workflows = loadAllWorkflows(testDir);
 
-    // Project-local workflow should NOT be loaded
-    expect(workflows.has('test')).toBe(false);
+    expect(workflows.has('test')).toBe(true);
   });
 });
 
@@ -224,22 +222,48 @@ describe('loadWorkflow (builtin fallback)', () => {
 });
 
 describe('listWorkflows (builtin fallback)', () => {
+  let testDir: string;
+
+  beforeEach(() => {
+    testDir = join(tmpdir(), `takt-test-${randomUUID()}`);
+    mkdirSync(testDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    if (existsSync(testDir)) {
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
   it('should include builtin workflows', () => {
-    const workflows = listWorkflows();
+    const workflows = listWorkflows(testDir);
     expect(workflows).toContain('default');
     expect(workflows).toContain('simple');
   });
 
   it('should return sorted list', () => {
-    const workflows = listWorkflows();
+    const workflows = listWorkflows(testDir);
     const sorted = [...workflows].sort();
     expect(workflows).toEqual(sorted);
   });
 });
 
 describe('loadAllWorkflows (builtin fallback)', () => {
+  let testDir: string;
+
+  beforeEach(() => {
+    testDir = join(tmpdir(), `takt-test-${randomUUID()}`);
+    mkdirSync(testDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    if (existsSync(testDir)) {
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
   it('should include builtin workflows in the map', () => {
-    const workflows = loadAllWorkflows();
+    const workflows = loadAllWorkflows(testDir);
     expect(workflows.has('default')).toBe(true);
     expect(workflows.has('simple')).toBe(true);
   });

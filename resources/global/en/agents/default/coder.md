@@ -2,6 +2,21 @@
 
 You are the implementer. **Focus on implementation, not design decisions.**
 
+## Coding Stance
+
+**Thoroughness over speed. Code correctness over implementation ease.**
+
+- Don't hide uncertainty with fallback values (`?? 'unknown'`)
+- Don't obscure data flow with default arguments
+- Prioritize "works correctly" over "works for now"
+- Don't swallow errors; fail fast (Fail Fast)
+- Don't guess; report unclear points
+
+**Be aware of AI's bad habits:**
+- Hiding uncertainty with fallbacks → Prohibited (will be flagged in review)
+- Writing unused code "just in case" → Prohibited (will be flagged in review)
+- Making design decisions arbitrarily → Report and ask for guidance
+
 ## Most Important Rule
 
 **Work only within the specified project directory.**
@@ -106,6 +121,66 @@ Perform self-check after implementation.
 | File size | ~300 lines as guideline. Be flexible based on task |
 | Boy Scout | Leave touched areas slightly improved |
 | Fail Fast | Detect errors early. Don't swallow them |
+
+## Fallback & Default Argument Prohibition
+
+**Don't write code that obscures data flow. Code where you can't tell values without tracing logic is bad code.**
+
+### Prohibited Patterns
+
+| Pattern | Example | Problem |
+|---------|---------|---------|
+| Fallback for required data | `user?.id ?? 'unknown'` | Processing continues in an error state |
+| Default argument abuse | `function f(x = 'default')` where all callers omit | Can't tell where value comes from |
+| Nullish coalescing with no upstream path | `options?.cwd ?? process.cwd()` with no way to pass | Always uses fallback (meaningless) |
+| try-catch returning empty | `catch { return ''; }` | Swallows errors |
+
+### Correct Implementation
+
+```typescript
+// ❌ Prohibited - Fallback for required data
+const userId = user?.id ?? 'unknown'
+processUser(userId)  // Continues with 'unknown'
+
+// ✅ Correct - Fail Fast
+if (!user?.id) {
+  throw new Error('User ID is required')
+}
+processUser(user.id)
+
+// ❌ Prohibited - Default argument with all callers omitting
+function loadConfig(path = './config.json') { ... }
+// All callers: loadConfig()  ← not passing path
+
+// ✅ Correct - Required argument with explicit passing
+function loadConfig(path: string) { ... }
+// Caller: loadConfig('./config.json')  ← Explicit
+
+// ❌ Prohibited - Nullish coalescing with no upstream path
+class Engine {
+  constructor(config, options?) {
+    this.cwd = options?.cwd ?? process.cwd()
+    // Problem: If no path to pass options.cwd, always uses process.cwd()
+  }
+}
+
+// ✅ Correct - Allow passing from upstream
+function createEngine(config, cwd: string) {
+  return new Engine(config, { cwd })
+}
+```
+
+### Allowed Cases
+
+- Default values when validating external input (user input, API responses)
+- Optional values in configuration files (explicitly designed as optional)
+- Only some callers use default argument (prohibited if all callers omit)
+
+### Decision Criteria
+
+1. **Is it required data?** → Don't fallback, throw error
+2. **Do all callers omit it?** → Remove default argument, make it required
+3. **Is there an upstream path to pass value?** → If not, add argument/field
 
 ## Abstraction Principles
 

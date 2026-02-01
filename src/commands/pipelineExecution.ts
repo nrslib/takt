@@ -32,7 +32,7 @@ export interface PipelineExecutionOptions {
   issueNumber?: number;
   /** Task content (alternative to issue) */
   task?: string;
-  /** Workflow name */
+  /** Workflow name or path to workflow file */
   workflow: string;
   /** Branch name (auto-generated if omitted) */
   branch?: string;
@@ -191,7 +191,7 @@ export async function executePipeline(options: PipelineExecutionOptions): Promis
     ? { provider: options.provider, model: options.model }
     : undefined;
 
-  const taskSuccess = await executeTask(task, cwd, workflow, false, undefined, agentOverrides);
+  const taskSuccess = await executeTask(task, cwd, workflow, cwd, agentOverrides);
 
   if (!taskSuccess) {
     error(`Workflow '${workflow}' failed`);

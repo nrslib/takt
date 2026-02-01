@@ -41,7 +41,7 @@ import {
   interactiveMode,
   executePipeline,
 } from './commands/index.js';
-import { listWorkflows } from './config/workflowLoader.js';
+import { listWorkflows, isWorkflowPath } from './config/workflowLoader.js';
 import { selectOptionWithDefault, confirm } from './prompt/index.js';
 import { createSharedClone } from './task/clone.js';
 import { autoCommitAndPush } from './task/autoCommit.js';
@@ -77,7 +77,7 @@ export interface WorktreeConfirmationResult {
  * Returns the selected workflow name, or null if cancelled.
  */
 async function selectWorkflow(cwd: string): Promise<string | null> {
-  const availableWorkflows = listWorkflows();
+  const availableWorkflows = listWorkflows(cwd);
   const currentWorkflow = getCurrentWorkflow(cwd);
 
   if (availableWorkflows.length === 0) {
@@ -111,7 +111,6 @@ export interface SelectAndExecuteOptions {
   autoPr?: boolean;
   repo?: string;
   workflow?: string;
-  workflowPath?: string;
   createWorktree?: boolean | undefined;
 }
 
@@ -121,22 +120,7 @@ async function selectAndExecuteTask(
   options?: SelectAndExecuteOptions,
   agentOverrides?: TaskExecutionOptions,
 ): Promise<void> {
-  // Validate that only one workflow option is specified
-  if (options?.workflow && options?.workflowPath) {
-    error('Cannot specify both --workflow and --workflow-path');
-    process.exit(1);
-  }
-
-  let workflowIdentifier: string | null;
-  let isPathBased = false;
-
-  if (options?.workflowPath) {
-    workflowIdentifier = await determineWorkflowPath(cwd, options.workflowPath);
-    isPathBased = true;
-  } else {
-    workflowIdentifier = await determineWorkflow(cwd, options?.workflow);
-    isPathBased = false;
-  }
+  const workflowIdentifier = await determineWorkflow(cwd, options?.workflow);
 
   if (workflowIdentifier === null) {
     info('Cancelled');
@@ -149,8 +133,8 @@ async function selectAndExecuteTask(
     options?.createWorktree,
   );
 
-  log.info('Starting task execution', { workflow: workflowIdentifier, worktree: isWorktree, pathBased: isPathBased });
-  const taskSuccess = await executeTask(task, execCwd, workflowIdentifier, isPathBased, cwd, agentOverrides);
+  log.info('Starting task execution', { workflow: workflowIdentifier, worktree: isWorktree });
+  const taskSuccess = await executeTask(task, execCwd, workflowIdentifier, cwd, agentOverrides);
 
   if (taskSuccess && isWorktree) {
     const commitResult = autoCommitAndPush(execCwd, task, cwd);
@@ -188,17 +172,19 @@ async function selectAndExecuteTask(
 
 /**
  * Determine workflow to use.
- * If override is provided, validate it (either as a name or path).
- * Otherwise, prompt user to select interactively.
- */
-/**
- * Determine workflow to use (name-based only).
- * For path-based loading, use determineWorkflowPath() instead.
+ *
+ * - If override looks like a path (isWorkflowPath), return it directly (validation is done at load time).
+ * - If override is a name, validate it exists in available workflows.
+ * - If no override, prompt user to select interactively.
  */
 async function determineWorkflow(cwd: string, override?: string): Promise<string | null> {
   if (override) {
-    // Validate workflow name exists
-    const availableWorkflows = listWorkflows();
+    // Path-based: skip name validation (loader handles existence check)
+    if (isWorkflowPath(override)) {
+      return override;
+    }
+    // Name-based: validate workflow name exists
+    const availableWorkflows = listWorkflows(cwd);
     const knownWorkflows = availableWorkflows.length === 0 ? [DEFAULT_WORKFLOW_NAME] : availableWorkflows;
     if (!knownWorkflows.includes(override)) {
       error(`Workflow not found: ${override}`);
@@ -207,34 +193,6 @@ async function determineWorkflow(cwd: string, override?: string): Promise<string
     return override;
   }
   return selectWorkflow(cwd);
-}
-
-/**
- * Determine workflow path (path-based loading).
- * Validates that the file exists.
- */
-async function determineWorkflowPath(cwd: string, workflowPath: string): Promise<string | null> {
-  const { existsSync } = await import('node:fs');
-  const { resolve: resolvePath, isAbsolute } = await import('node:path');
-  const { homedir } = await import('node:os');
-
-  let resolvedPath = workflowPath;
-
-  // Handle home directory
-  if (workflowPath.startsWith('~')) {
-    const home = homedir();
-    resolvedPath = resolvePath(home, workflowPath.slice(1).replace(/^\//, ''));
-  } else if (!isAbsolute(workflowPath)) {
-    // Relative path
-    resolvedPath = resolvePath(cwd, workflowPath);
-  }
-
-  if (!existsSync(resolvedPath)) {
-    error(`Workflow file not found: ${workflowPath}`);
-    return null;
-  }
-
-  return workflowPath; // Return original path (loader will resolve it)
 }
 
 export async function confirmAndCreateWorktree(
@@ -303,8 +261,7 @@ program
 // --- Global options ---
 program
   .option('-i, --issue <number>', 'GitHub issue number (equivalent to #N)', (val: string) => parseInt(val, 10))
-  .option('-w, --workflow <name>', 'Workflow name to use')
-  .option('--workflow-path <path>', 'Path to workflow file (alternative to --workflow)')
+  .option('-w, --workflow <name>', 'Workflow name or path to workflow file')
   .option('-b, --branch <name>', 'Branch name (auto-generated if omitted)')
   .option('--auto-pr', 'Create PR after successful execution')
   .option('--repo <owner/repo>', 'Repository (defaults to current)')
@@ -438,7 +395,6 @@ program
       autoPr: opts.autoPr === true,
       repo: opts.repo as string | undefined,
       workflow: opts.workflow as string | undefined,
-      workflowPath: opts.workflowPath as string | undefined,
       createWorktree: createWorktreeOverride,
     };
 

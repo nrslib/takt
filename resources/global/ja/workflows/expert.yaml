@@ -64,9 +64,6 @@ steps:
       - WebSearch
       - WebFetch
     instruction_template: |
-      ## Previous Response (implementからの差し戻し時)
-      {previous_response}
-
       タスクを分析し、実装方針を立ててください。
 
       **注意:** Previous Responseがある場合は差し戻しのため、
@@ -146,6 +143,7 @@ steps:
   - name: ai_review
     edit: false
     agent: ../agents/default/ai-antipattern-reviewer.md
+    pass_previous_response: true
     report:
       name: 03-ai-review.md
       format: |
@@ -206,10 +204,7 @@ steps:
       - WebSearch
       - WebFetch
     instruction_template: |
-      ## AI Review Feedback (これが最新の指示です - 優先して対応してください)
-      {previous_response}
-
-      **重要**: AI Reviewerのフィードバックに対応してください。
+      AI Reviewerのフィードバックに対応してください。
       以下に集中してください:
       - 間違った仮定の修正
       - もっともらしいが間違っている実装の修正
@@ -236,7 +231,7 @@ steps:
             ```markdown
             # アーキテクチャレビュー
 
-            ## 結果: APPROVE / IMPROVE / REJECT
+            ## 結果: APPROVE / REJECT
 
             ## サマリー
             {1-2文で結果を要約}
@@ -250,17 +245,18 @@ steps:
             - [x] 呼び出しチェーン検証
 
             ## 問題点（REJECTの場合）
-            | # | 場所 | 問題 | 修正案 |
-            |---|------|------|--------|
-            | 1 | `src/file.ts:42` | 問題の説明 | 修正方法 |
+            | # | スコープ | 場所 | 問題 | 修正案 |
+            |---|---------|------|------|--------|
+            | 1 | スコープ内 | `src/file.ts:42` | 問題の説明 | 修正方法 |
 
-            ## 改善提案（任意・ブロッキングではない）
-            - {将来的な改善提案}
+            スコープ: 「スコープ内」（今回修正可能）/ 「スコープ外」（既存問題・非ブロッキング）
+
+            ## 既存問題（参考・非ブロッキング）
+            - {既存問題の記録。今回の変更と無関係な問題}
             ```
 
             **認知負荷軽減ルール:**
-            - APPROVE + 問題なし → サマリーのみ（5行以内）
-            - APPROVE + 軽微な提案 → サマリー + 改善提案（15行以内）
+            - APPROVE → サマリーのみ（5行以内）
             - REJECT → 問題点を表形式で（30行以内）
         allowed_tools:
           - Read
@@ -459,10 +455,7 @@ steps:
       - condition: 修正を進行できない
         next: plan
     instruction_template: |
-      ## Review Feedback (これが最新の指示です - 優先して対応してください)
-      {previous_response}
-
-      **重要**: レビュアーからのフィードバックに対応してください。
+      レビュアーからのフィードバックに対応してください。
       「Original User Request」は参考情報であり、最新の指示ではありません。
       セッションの会話履歴を確認し、レビュアーの指摘事項を修正してください。
     pass_previous_response: true
@@ -576,10 +569,7 @@ steps:
       - WebSearch
       - WebFetch
     instruction_template: |
-      ## Supervisor Feedback (これが最新の指示です - 優先して対応してください)
-      {previous_response}
-
-      **重要**: 監督者からの指摘を修正してください。
+      監督者からの指摘を修正してください。
 
       監督者は全体を俯瞰した視点から問題を指摘しています。
       優先度の高い項目から順に対応してください。

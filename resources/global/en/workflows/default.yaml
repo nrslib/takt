@@ -74,9 +74,6 @@ steps:
           - {Question 2}
     pass_previous_response: true
     instruction_template: |
-      ## Previous Response (when returned from implement)
-      {previous_response}
-
       Analyze the task and create an implementation plan.
 
       **Note:** If returned from implement step (Previous Response exists),
@@ -212,10 +209,7 @@ steps:
       - condition: Cannot proceed, insufficient info
         next: plan
     instruction_template: |
-      ## AI Review Feedback (This is the latest instruction - prioritize this)
-      {previous_response}
-
-      **Important**: Address the AI Reviewer's feedback.
+      Address the AI Reviewer's feedback.
       Focus on:
       - Correcting incorrect assumptions
       - Fixing plausible-but-wrong implementations
@@ -234,7 +228,7 @@ steps:
             ```markdown
             # Architecture Review
 
-            ## Result: APPROVE / IMPROVE / REJECT
+            ## Result: APPROVE / REJECT
 
             ## Summary
             {1-2 sentences summarizing result}
@@ -245,17 +239,18 @@ steps:
             - [x] Change Scope
 
             ## Issues (if REJECT)
-            | # | Location | Issue | Fix |
-            |---|----------|-------|-----|
-            | 1 | `src/file.ts:42` | Issue description | Fix method |
+            | # | Scope | Location | Issue | Fix |
+            |---|-------|----------|-------|-----|
+            | 1 | In-scope | `src/file.ts:42` | Issue description | Fix method |
 
-            ## Improvement Suggestions (optional, non-blocking)
-            - {Future improvement suggestions}
+            Scope: "In-scope" (fixable now) / "Out-of-scope" (existing issue, non-blocking)
+
+            ## Existing Issues (informational, non-blocking)
+            - {Record of existing issues unrelated to current change}
             ```
 
             **Cognitive load reduction rules:**
-            - APPROVE + no issues -> Summary only (5 lines or less)
-            - APPROVE + minor suggestions -> Summary + suggestions (15 lines or less)
+            - APPROVE -> Summary only (5 lines or less)
             - REJECT -> Issues in table format (30 lines or less)
         allowed_tools:
           - Read
@@ -347,10 +342,7 @@ steps:
       - condition: Cannot proceed, insufficient info
         next: plan
     instruction_template: |
-      ## Review Feedback (This is the latest instruction - prioritize this)
-      {previous_response}
-
-      **Important**: Address the feedback from the reviewers.
+      Address the feedback from the reviewers.
       The "Original User Request" is reference information, not the latest instruction.
       Review the session conversation history and fix the issues raised by the reviewers.
     pass_previous_response: true

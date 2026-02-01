@@ -64,9 +64,6 @@ steps:
       - WebSearch
       - WebFetch
     instruction_template: |
-      ## Previous Response (when returned from implement)
-      {previous_response}
-
       Analyze the task and create an implementation plan.
 
       **Note:** If returned from implement step (Previous Response exists),
@@ -146,6 +143,7 @@ steps:
   - name: ai_review
     edit: false
     agent: ../agents/default/ai-antipattern-reviewer.md
+    pass_previous_response: true
     report:
       name: 03-ai-review.md
       format: |
@@ -206,10 +204,7 @@ steps:
       - WebSearch
       - WebFetch
     instruction_template: |
-      ## AI Review Feedback (This is the latest instruction - prioritize this)
-      {previous_response}
-
-      **Important**: Address the AI Reviewer's feedback.
+      Address the AI Reviewer's feedback.
       Focus on:
       - Correcting incorrect assumptions
       - Fixing plausible-but-wrong implementations
@@ -251,9 +246,14 @@ steps:
             | Eventual Consistency | ✅ | - |
 
             ## Issues (if REJECT)
-            | # | Location | Issue | Fix |
-            |---|----------|-------|-----|
-            | 1 | `src/file.ts:42` | Issue description | Fix method |
+            | # | Scope | Location | Issue | Fix |
+            |---|-------|----------|-------|-----|
+            | 1 | In-scope | `src/file.ts:42` | Issue description | Fix method |
+
+            Scope: "In-scope" (fixable now) / "Out-of-scope" (existing issue, non-blocking)
+
+            ## Existing Issues (informational, non-blocking)
+            - {Record of existing issues unrelated to current change}
             ```
         allowed_tools:
           - Read
@@ -455,10 +455,7 @@ steps:
       - condition: Cannot proceed, insufficient info
         next: plan
     instruction_template: |
-      ## Review Feedback (This is the latest instruction - prioritize this)
-      {previous_response}
-
-      **Important**: Address the feedback from the reviewers.
+      Address the feedback from the reviewers.
       The "Original User Request" is reference information, not the latest instruction.
       Review the session conversation history and fix the issues raised by the reviewers.
     pass_previous_response: true
@@ -572,10 +569,7 @@ steps:
       - WebSearch
       - WebFetch
     instruction_template: |
-      ## Supervisor Feedback (This is the latest instruction - prioritize this)
-      {previous_response}
-
-      **Important**: Fix the issues pointed out by the supervisor.
+      Fix the issues pointed out by the supervisor.
 
       The supervisor has identified issues from a big-picture perspective.
       Address items in priority order.

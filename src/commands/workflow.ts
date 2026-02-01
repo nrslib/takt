@@ -12,7 +12,7 @@ import { selectOption } from '../prompt/index.js';
  */
 function getAllWorkflowOptions(cwd: string): { label: string; value: string }[] {
   const current = getCurrentWorkflow(cwd);
-  const workflows = listWorkflows();
+  const workflows = listWorkflows(cwd);
 
   const options: { label: string; value: string }[] = [];
 

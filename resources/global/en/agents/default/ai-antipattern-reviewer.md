@@ -105,26 +105,70 @@ AI is confidently wrong—code that looks plausible but doesn't work, solutions 
 
 **Principle:** The best code is the minimum code that solves the problem.
 
-### 6. Fallback Prohibition Review (REJECT criteria)
+### 6. Fallback & Default Argument Prohibition Review (REJECT criteria)
 
-**AI overuses fallbacks to hide uncertainty. This is a REJECT by default.**
+**AI overuses fallbacks and default arguments to hide uncertainty. Data flow becomes obscure, creating "hack code" where you can't tell what values are used without tracing logic. This is a REJECT by default.**
 
-| Pattern | Example | Verdict |
-|---------|---------|---------|
-| Swallowing with defaults | `?? 'unknown'`, `\|\| 'default'`, `?? []` | REJECT |
-| try-catch returning empty | `catch { return ''; }` `catch { return 0; }` | REJECT |
-| Silent skip via conditionals | `if (!x) return;` skipping what should be an error | REJECT |
-| Multi-level fallback chains | `a ?? b ?? c ?? d` | REJECT |
+**Core problem:** You can't understand what values are being used without tracing the entire logic path.
+
+| Pattern | Example | Problem | Verdict |
+|---------|---------|---------|---------|
+| Fallback for required data | `user?.id ?? 'unknown'` | Processing continues in an error state | **REJECT** |
+| Default argument abuse | `function f(x = 'default')` where all callers omit | Data flow obscured | **REJECT** |
+| Nullish coalescing with no upstream path | `options?.cwd ?? process.cwd()` with no way to pass | Always uses fallback (meaningless) | **REJECT** |
+| try-catch returning empty | `catch { return ''; }` | Swallows errors | **REJECT** |
+| Multi-level fallback | `a ?? b ?? c ?? d` | Complex value determination logic | **REJECT** |
+| Silent skip via conditionals | `if (!x) return;` skipping error | Hides bugs | **REJECT** |
+
+**Default argument examples:**
+
+```typescript
+// ❌ Bad example - All callers omit
+function loadWorkflow(name: string, cwd = process.cwd()) { ... }
+// All callers: loadWorkflow('default')  ← not passing cwd
+// Problem: Can't tell where cwd value comes from by reading call sites
+// Fix: Make cwd required, pass explicitly at call sites
+
+// ✅ Good example - Only some callers omit
+function query(sql: string, timeout = 30000) { ... }
+// Caller A: query(sql)  ← Uses default
+// Caller B: query(sql, 60000)  ← Explicit
+// Reason: timeout is explicitly optional configuration
+```
+
+**Nullish coalescing examples:**
+
+```typescript
+// ❌ Bad example - No upstream path to pass value
+class Engine {
+  constructor(config, cwd, task, options?) {
+    this.projectCwd = options?.projectCwd ?? cwd
+    // Problem: If options is passed as { }, projectCwd is always undefined
+    //          Result: always uses cwd (fallback is meaningless)
+  }
+}
+// Fix: Modify upstream function signatures to allow passing options.projectCwd
+
+// ✅ Good example - Upstream path exists
+function execute(task, options?: { projectCwd?: string }) {
+  const cwd = options?.projectCwd ?? process.cwd()
+  // Reason: Caller chooses whether to pass options.projectCwd
+}
+```
 
 **Exceptions (do NOT reject):**
 - Default values when validating external input (user input, API responses)
 - Fallbacks with an explicit comment explaining the reason
-- Defaults for optional values in configuration files
+- Defaults for optional values in configuration files (explicitly designed as optional)
+- Only some callers use default argument (REJECT if all callers omit)
 
 **Verification approach:**
-1. Grep the diff for `??`, `||`, `catch`
-2. Check whether each fallback has a legitimate reason
-3. REJECT if even one unjustified fallback exists
+1. Grep the diff for `??`, `||`, `= defaultValue`, `catch`
+2. For each fallback/default argument:
+   - Is it required data? → REJECT
+   - Do all callers omit it? → REJECT
+   - Is there an upstream path to pass value? → If not, REJECT
+3. REJECT if even one unjustified fallback/default argument exists
 
 ### 7. Unused Code Detection
 

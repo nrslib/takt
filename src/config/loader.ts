@@ -7,9 +7,9 @@
 // Workflow loading
 export {
   getBuiltinWorkflow,
-  loadWorkflowFromFile,
-  loadWorkflowFromPath,
   loadWorkflow,
+  loadWorkflowByIdentifier,
+  isWorkflowPath,
   loadAllWorkflows,
   listWorkflows,
 } from './workflowLoader.js';

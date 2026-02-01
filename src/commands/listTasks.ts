@@ -222,7 +222,7 @@ export function deleteBranch(projectDir: string, item: BranchListItem): boolean 
  * If multiple workflows available, prompt user to select.
  */
 async function selectWorkflowForInstruction(projectDir: string): Promise<string | null> {
-  const availableWorkflows = listWorkflows();
+  const availableWorkflows = listWorkflows(projectDir);
   const currentWorkflow = getCurrentWorkflow(projectDir);
 
   if (availableWorkflows.length === 0) {
@@ -324,7 +324,7 @@ export async function instructBranch(
       : instruction;
 
     // 5. Execute task on temp clone
-    const taskSuccess = await executeTask(fullInstruction, clone.path, selectedWorkflow, false, projectDir, options);
+    const taskSuccess = await executeTask(fullInstruction, clone.path, selectedWorkflow, projectDir, options);
 
     // 6. Auto-commit+push if successful
     if (taskSuccess) {
