@@ -66,4 +66,13 @@ describe('detectRuleIndex', () => {
     expect(detectRuleIndex('[AI_REVIEW:1]', 'ai_review')).toBe(0);
     expect(detectRuleIndex('[SECURITY_FIX:2]', 'security_fix')).toBe(1);
   });
+
+  it('should detect last occurrence when multiple tags exist', () => {
+    const content = 'Previous: [AI_REVIEW:1]\n\nActual result:\n[AI_REVIEW:2]';
+    expect(detectRuleIndex(content, 'ai_review')).toBe(1);
+  });
+
+  it('should detect last match with multiple occurrences', () => {
+    expect(detectRuleIndex('[PLAN:1] then [PLAN:2] finally [PLAN:3]', 'plan')).toBe(2);
+  });
 });
