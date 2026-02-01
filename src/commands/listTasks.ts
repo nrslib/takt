@@ -324,7 +324,7 @@ export async function instructBranch(
       : instruction;
 
     // 5. Execute task on temp clone
-    const taskSuccess = await executeTask(fullInstruction, clone.path, selectedWorkflow, projectDir, options);
+    const taskSuccess = await executeTask(fullInstruction, clone.path, selectedWorkflow, false, projectDir, options);
 
     // 6. Auto-commit+push if successful
     if (taskSuccess) {

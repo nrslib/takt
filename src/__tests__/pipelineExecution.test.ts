@@ -150,6 +150,7 @@ describe('executePipeline', () => {
       'Fix the bug',
       '/tmp/test',
       'default',
+      false,
       undefined,
       undefined,
     );
@@ -172,6 +173,7 @@ describe('executePipeline', () => {
       'Fix the bug',
       '/tmp/test',
       'default',
+      false,
       undefined,
       { provider: 'codex', model: 'codex-model' },
     );
@@ -229,6 +231,7 @@ describe('executePipeline', () => {
       'From --task flag',
       '/tmp/test',
       'magi',
+      false,
       undefined,
       undefined,
     );
@@ -389,6 +392,7 @@ describe('executePipeline', () => {
         'Fix the bug',
         '/tmp/test',
         'default',
+        false,
         undefined,
         undefined,
       );

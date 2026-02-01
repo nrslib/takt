@@ -48,7 +48,7 @@ export async function switchWorkflow(cwd: string, workflowName?: string): Promis
   }
 
   // Check if workflow exists
-  const config = getBuiltinWorkflow(workflowName) || loadWorkflow(workflowName);
+  const config = getBuiltinWorkflow(workflowName) || loadWorkflow(workflowName, cwd);
 
   if (!config) {
     error(`Workflow "${workflowName}" not found`);

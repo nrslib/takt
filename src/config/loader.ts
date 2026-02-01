@@ -8,6 +8,7 @@
 export {
   getBuiltinWorkflow,
   loadWorkflowFromFile,
+  loadWorkflowFromPath,
   loadWorkflow,
   loadAllWorkflows,
   listWorkflows,

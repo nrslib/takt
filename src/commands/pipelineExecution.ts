@@ -191,7 +191,7 @@ export async function executePipeline(options: PipelineExecutionOptions): Promis
     ? { provider: options.provider, model: options.model }
     : undefined;
 
-  const taskSuccess = await executeTask(task, cwd, workflow, undefined, agentOverrides);
+  const taskSuccess = await executeTask(task, cwd, workflow, false, undefined, agentOverrides);
 
   if (!taskSuccess) {
     error(`Workflow '${workflow}' failed`);

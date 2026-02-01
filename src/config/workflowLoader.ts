@@ -1,17 +1,20 @@
 /**
  * Workflow configuration loader
  *
- * Loads workflows with user → builtin fallback:
- * 1. User workflows: ~/.takt/workflows/{name}.yaml
- * 2. Builtin workflows: resources/global/{lang}/workflows/{name}.yaml
+ * Loads workflows with the following priority:
+ * 1. Path-based input (absolute, relative, or home-dir) → load directly from file
+ * 2. Project-local workflows: .takt/workflows/{name}.yaml
+ * 3. User workflows: ~/.takt/workflows/{name}.yaml
+ * 4. Builtin workflows: resources/global/{lang}/workflows/{name}.yaml
  */
 
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
-import { join, dirname, basename } from 'node:path';
+import { join, dirname, basename, resolve, isAbsolute } from 'node:path';
+import { homedir } from 'node:os';
 import { parse as parseYaml } from 'yaml';
 import { WorkflowConfigRawSchema } from '../models/schemas.js';
 import type { WorkflowConfig, WorkflowStep, WorkflowRule, ReportConfig, ReportObjectConfig } from '../models/types.js';
-import { getGlobalWorkflowsDir, getBuiltinWorkflowsDir } from './paths.js';
+import { getGlobalWorkflowsDir, getBuiltinWorkflowsDir, getProjectConfigDir } from './paths.js';
 import { getLanguage, getDisabledBuiltins } from './globalConfig.js';
 
 /** Get builtin workflow by name */
@@ -241,18 +244,78 @@ export function loadWorkflowFromFile(filePath: string): WorkflowConfig {
 }
 
 /**
- * Load workflow by name.
- * Priority: user (~/.takt/workflows/) → builtin (resources/global/{lang}/workflows/)
+ * Resolve a path that may be relative, absolute, or home-directory-relative.
+ * @param pathInput Path to resolve
+ * @param basePath Base directory for relative paths (defaults to cwd)
+ * @returns Absolute resolved path
  */
-export function loadWorkflow(name: string): WorkflowConfig | null {
-  // 1. User workflow
+function resolvePath(pathInput: string, basePath: string = process.cwd()): string {
+  // Home directory expansion
+  if (pathInput.startsWith('~')) {
+    const home = homedir();
+    return resolve(home, pathInput.slice(1).replace(/^\//, ''));
+  }
+
+  // Absolute path
+  if (isAbsolute(pathInput)) {
+    return pathInput;
+  }
+
+  // Relative path
+  return resolve(basePath, pathInput);
+}
+
+/**
+ * Load workflow from a file path (explicit path-based loading).
+ * Use this when user explicitly specifies a workflow file path via --workflow-path.
+ *
+ * @param filePath Path to workflow file (absolute, relative, or home-dir prefixed with ~)
+ * @param basePath Base directory for resolving relative paths (default: cwd)
+ * @returns WorkflowConfig or null if file not found
+ */
+export function loadWorkflowFromPath(
+  filePath: string,
+  basePath: string = process.cwd()
+): WorkflowConfig | null {
+  const resolvedPath = resolvePath(filePath, basePath);
+
+  if (!existsSync(resolvedPath)) {
+    return null;
+  }
+
+  return loadWorkflowFromFile(resolvedPath);
+}
+
+/**
+ * Load workflow by name (name-based loading only, no path detection).
+ *
+ * Priority:
+ * 1. Project-local workflows → .takt/workflows/{name}.yaml
+ * 2. User workflows → ~/.takt/workflows/{name}.yaml
+ * 3. Builtin workflows → resources/global/{lang}/workflows/{name}.yaml
+ *
+ * @param name Workflow name (not a file path)
+ * @param projectCwd Project root directory (default: cwd, for project-local workflow resolution)
+ */
+export function loadWorkflow(
+  name: string,
+  projectCwd: string = process.cwd()
+): WorkflowConfig | null {
+  // 1. Project-local workflow (.takt/workflows/{name}.yaml)
+  const projectWorkflowsDir = join(getProjectConfigDir(projectCwd), 'workflows');
+  const projectWorkflowPath = join(projectWorkflowsDir, `${name}.yaml`);
+  if (existsSync(projectWorkflowPath)) {
+    return loadWorkflowFromFile(projectWorkflowPath);
+  }
+
+  // 2. User workflow (~/.takt/workflows/{name}.yaml)
   const globalWorkflowsDir = getGlobalWorkflowsDir();
   const workflowYamlPath = join(globalWorkflowsDir, `${name}.yaml`);
   if (existsSync(workflowYamlPath)) {
     return loadWorkflowFromFile(workflowYamlPath);
   }
 
-  // 2. Builtin fallback
+  // 3. Builtin fallback
   return getBuiltinWorkflow(name);
 }
 
