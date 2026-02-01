@@ -219,6 +219,7 @@ export async function resolveTaskExecution(
       worktree: data.worktree,
       branch: data.branch,
       taskSlug,
+      issueNumber: data.issue,
     });
     execCwd = result.path;
     branch = result.branch;

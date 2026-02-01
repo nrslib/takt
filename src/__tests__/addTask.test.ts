@@ -54,6 +54,16 @@ vi.mock('../config/paths.js', () => ({
 vi.mock('../github/issue.js', () => ({
   isIssueReference: vi.fn((s: string) => /^#\d+$/.test(s)),
   resolveIssueTask: vi.fn(),
+  parseIssueNumbers: vi.fn((args: string[]) => {
+    const numbers: number[] = [];
+    for (const arg of args) {
+      const match = arg.match(/^#(\d+)$/);
+      if (match?.[1]) {
+        numbers.push(Number.parseInt(match[1], 10));
+      }
+    }
+    return numbers;
+  }),
 }));
 
 import { interactiveMode } from '../commands/interactive.js';
@@ -347,6 +357,24 @@ describe('addTask', () => {
     const files = fs.readdirSync(tasksDir);
     expect(files.length).toBe(0);
     expect(mockGetProvider).not.toHaveBeenCalled();
+  });
+
+  it('should include issue number in task file when issue reference is used', async () => {
+    // Given: issue reference "#99"
+    const issueText = 'Issue #99: Fix login timeout';
+    mockResolveIssueTask.mockReturnValue(issueText);
+    mockSummarizeTaskName.mockResolvedValue('fix-login-timeout');
+    mockConfirm.mockResolvedValue(false);
+    mockListWorkflows.mockReturnValue([]);
+
+    // When
+    await addTask(testDir, '#99');
+
+    // Then: task file contains issue field
+    const taskFile = path.join(testDir, '.takt', 'tasks', 'fix-login-timeout.yaml');
+    expect(fs.existsSync(taskFile)).toBe(true);
+    const content = fs.readFileSync(taskFile, 'utf-8');
+    expect(content).toContain('issue: 99');
   });
 });
 

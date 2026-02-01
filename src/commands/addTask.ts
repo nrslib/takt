@@ -17,7 +17,7 @@ import { createLogger } from '../utils/debug.js';
 import { listWorkflows } from '../config/workflowLoader.js';
 import { getCurrentWorkflow } from '../config/paths.js';
 import { interactiveMode } from './interactive.js';
-import { isIssueReference, resolveIssueTask } from '../github/issue.js';
+import { isIssueReference, resolveIssueTask, parseIssueNumbers } from '../github/issue.js';
 import type { TaskFileData } from '../task/schema.js';
 
 const log = createLogger('add-task');
@@ -80,12 +80,17 @@ export async function addTask(cwd: string, task?: string): Promise<void> {
   fs.mkdirSync(tasksDir, { recursive: true });
 
   let taskContent: string;
+  let issueNumber: number | undefined;
 
   if (task && isIssueReference(task)) {
     // Issue reference: fetch issue and use directly as task content
     info('Fetching GitHub Issue...');
     try {
       taskContent = resolveIssueTask(task);
+      const numbers = parseIssueNumbers([task]);
+      if (numbers.length > 0) {
+        issueNumber = numbers[0];
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       log.error('Failed to fetch GitHub Issue', { task, error: msg });
@@ -154,6 +159,9 @@ export async function addTask(cwd: string, task?: string): Promise<void> {
   }
   if (workflow) {
     taskData.workflow = workflow;
+  }
+  if (issueNumber !== undefined) {
+    taskData.issue = issueNumber;
   }
 
   const filePath = path.join(tasksDir, filename);
