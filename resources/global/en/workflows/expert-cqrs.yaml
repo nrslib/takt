@@ -204,12 +204,31 @@ steps:
       - WebSearch
       - WebFetch
     instruction_template: |
-      Address the AI Reviewer's feedback.
-      Focus on:
-      - Correcting incorrect assumptions
-      - Fixing plausible-but-wrong implementations
-      - Aligning with existing codebase patterns
-      - Removing scope creep
+      **This is AI Review iteration {step_iteration}.**
+
+      If this is iteration 2 or later, it means your previous fixes were not actually applied.
+      **Your belief that you "already fixed it" is wrong.**
+
+      **First, acknowledge:**
+      - Files you thought were "fixed" are actually not fixed
+      - Your understanding of previous work is incorrect
+      - You need to start from zero
+
+      **Required actions:**
+      1. Open all flagged files with Read tool (drop assumptions, verify facts)
+      2. Search for problem code with grep to confirm it exists
+      3. Fix confirmed problems with Edit tool
+      4. Run tests to verify (`./gradlew :backend:test` etc.)
+      5. Report specifically "what you checked and what you fixed"
+
+      **Report format:**
+      - ❌ "Already fixed"
+      - ✅ "Checked file X at L123, found problem Y, fixed to Z"
+
+      **Absolutely prohibited:**
+      - Reporting "fixed" without opening files
+      - Judging based on assumptions
+      - Leaving problems that AI Reviewer REJECTED
     pass_previous_response: true
     rules:
       - condition: AI Reviewer's issues have been fixed
