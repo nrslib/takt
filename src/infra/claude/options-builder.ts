@@ -74,9 +74,9 @@ export class SdkOptionsBuilder {
       };
     }
 
-    if (this.options.onStream) {
-      sdkOptions.includePartialMessages = true;
-    }
+    // Always enable — QueryExecutor uses the async iterator (`for await`)
+    // which only yields when this flag is true.
+    sdkOptions.includePartialMessages = true;
 
     if (this.options.sessionId) {
       sdkOptions.resume = this.options.sessionId;

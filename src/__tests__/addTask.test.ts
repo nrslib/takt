@@ -24,7 +24,6 @@ vi.mock('../infra/config/global/globalConfig.js', () => ({
 vi.mock('../shared/prompt/index.js', () => ({
   promptInput: vi.fn(),
   confirm: vi.fn(),
-  selectOption: vi.fn(),
 }));
 
 vi.mock('../infra/task/summarize.js', () => ({
@@ -46,12 +45,12 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   }),
 }));
 
-vi.mock('../infra/config/loaders/workflowLoader.js', () => ({
-  listWorkflows: vi.fn(),
+vi.mock('../features/tasks/execute/selectAndExecute.js', () => ({
+  determineWorkflow: vi.fn(),
 }));
 
-vi.mock('../infra/config/paths.js', async (importOriginal) => ({ ...(await importOriginal<Record<string, unknown>>()),
-  getCurrentWorkflow: vi.fn(() => 'default'),
+vi.mock('../infra/config/loaders/workflowResolver.js', () => ({
+  getWorkflowDescription: vi.fn(() => ({ name: 'default', description: '' })),
 }));
 
 vi.mock('../infra/github/issue.js', () => ({
@@ -71,9 +70,10 @@ vi.mock('../infra/github/issue.js', () => ({
 
 import { interactiveMode } from '../features/interactive/index.js';
 import { getProvider } from '../infra/providers/index.js';
-import { promptInput, confirm, selectOption } from '../shared/prompt/index.js';
+import { promptInput, confirm } from '../shared/prompt/index.js';
 import { summarizeTaskName } from '../infra/task/summarize.js';
-import { listWorkflows } from '../infra/config/loaders/workflowLoader.js';
+import { determineWorkflow } from '../features/tasks/execute/selectAndExecute.js';
+import { getWorkflowDescription } from '../infra/config/loaders/workflowResolver.js';
 import { resolveIssueTask } from '../infra/github/issue.js';
 import { addTask, summarizeConversation } from '../features/tasks/index.js';
 
@@ -83,9 +83,9 @@ const mockInteractiveMode = vi.mocked(interactiveMode);
 const mockGetProvider = vi.mocked(getProvider);
 const mockPromptInput = vi.mocked(promptInput);
 const mockConfirm = vi.mocked(confirm);
-const mockSelectOption = vi.mocked(selectOption);
 const mockSummarizeTaskName = vi.mocked(summarizeTaskName);
-const mockListWorkflows = vi.mocked(listWorkflows);
+const mockDetermineWorkflow = vi.mocked(determineWorkflow);
+const mockGetWorkflowDescription = vi.mocked(getWorkflowDescription);
 
 /** Helper: set up mocks for the full happy path */
 function setupFullFlowMocks(overrides?: {
@@ -97,6 +97,8 @@ function setupFullFlowMocks(overrides?: {
   const summary = overrides?.summaryContent ?? '# 認証機能追加\nJWT認証を実装する';
   const slug = overrides?.slug ?? 'add-auth';
 
+  mockDetermineWorkflow.mockResolvedValue('default');
+  mockGetWorkflowDescription.mockReturnValue({ name: 'default', description: '' });
   mockInteractiveMode.mockResolvedValue({ confirmed: true, task });
 
   const mockProviderCall = vi.fn().mockResolvedValue({ content: summary });
@@ -104,7 +106,6 @@ function setupFullFlowMocks(overrides?: {
 
   mockSummarizeTaskName.mockResolvedValue(slug);
   mockConfirm.mockResolvedValue(false);
-  mockListWorkflows.mockReturnValue([]);
 
   return { mockProviderCall };
 }
@@ -114,7 +115,8 @@ let testDir: string;
 beforeEach(() => {
   vi.clearAllMocks();
   testDir = fs.mkdtempSync(path.join(tmpdir(), 'takt-test-'));
-  mockListWorkflows.mockReturnValue([]);
+  mockDetermineWorkflow.mockResolvedValue('default');
+  mockGetWorkflowDescription.mockReturnValue({ name: 'default', description: '' });
   mockConfirm.mockResolvedValue(false);
 });
 
@@ -127,6 +129,7 @@ afterEach(() => {
 describe('addTask', () => {
   it('should cancel when interactive mode is not confirmed', async () => {
     // Given: user cancels interactive mode
+    mockDetermineWorkflow.mockResolvedValue('default');
     mockInteractiveMode.mockResolvedValue({ confirmed: false, task: '' });
 
     // When
@@ -257,11 +260,11 @@ describe('addTask', () => {
   });
 
   it('should include workflow selection in task file', async () => {
-    // Given: multiple workflows available
+    // Given: determineWorkflow returns a non-default workflow
     setupFullFlowMocks({ slug: 'with-workflow' });
-    mockListWorkflows.mockReturnValue(['default', 'review']);
+    mockDetermineWorkflow.mockResolvedValue('review');
+    mockGetWorkflowDescription.mockReturnValue({ name: 'review', description: 'Code review workflow' });
     mockConfirm.mockResolvedValue(false);
-    mockSelectOption.mockResolvedValue('review');
 
     // When
     await addTask(testDir);
@@ -273,11 +276,8 @@ describe('addTask', () => {
   });
 
   it('should cancel when workflow selection returns null', async () => {
-    // Given: workflows available but user cancels selection
-    setupFullFlowMocks({ slug: 'cancelled' });
-    mockListWorkflows.mockReturnValue(['default', 'review']);
-    mockConfirm.mockResolvedValue(false);
-    mockSelectOption.mockResolvedValue(null);
+    // Given: user cancels workflow selection
+    mockDetermineWorkflow.mockResolvedValue(null);
 
     // When
     await addTask(testDir);
@@ -288,20 +288,19 @@ describe('addTask', () => {
     expect(files.length).toBe(0);
   });
 
-  it('should not include workflow when current workflow is selected', async () => {
-    // Given: current workflow selected (no need to record it)
+  it('should always include workflow from determineWorkflow', async () => {
+    // Given: determineWorkflow returns 'default'
     setupFullFlowMocks({ slug: 'default-wf' });
-    mockListWorkflows.mockReturnValue(['default', 'review']);
+    mockDetermineWorkflow.mockResolvedValue('default');
     mockConfirm.mockResolvedValue(false);
-    mockSelectOption.mockResolvedValue('default');
 
     // When
     await addTask(testDir);
 
-    // Then: workflow field should not be in the YAML
+    // Then: workflow field is included
     const taskFile = path.join(testDir, '.takt', 'tasks', 'default-wf.yaml');
     const content = fs.readFileSync(taskFile, 'utf-8');
-    expect(content).not.toContain('workflow:');
+    expect(content).toContain('workflow: default');
   });
 
   it('should fetch issue and use directly as task content when given issue reference', async () => {
@@ -311,7 +310,6 @@ describe('addTask', () => {
 
     mockSummarizeTaskName.mockResolvedValue('fix-login-timeout');
     mockConfirm.mockResolvedValue(false);
-    mockListWorkflows.mockReturnValue([]);
 
     // When
     await addTask(testDir, '#99');
@@ -329,13 +327,14 @@ describe('addTask', () => {
     expect(content).toContain('Fix login timeout');
   });
 
-  it('should proceed to worktree/workflow settings after issue fetch', async () => {
+  it('should proceed to worktree settings after issue fetch', async () => {
     // Given: issue with worktree enabled
     mockResolveIssueTask.mockReturnValue('Issue text');
     mockSummarizeTaskName.mockResolvedValue('issue-task');
     mockConfirm.mockResolvedValue(true);
-    mockPromptInput.mockResolvedValue('');
-    mockListWorkflows.mockReturnValue([]);
+    mockPromptInput
+      .mockResolvedValueOnce('')  // worktree path (auto)
+      .mockResolvedValueOnce(''); // branch name (auto)
 
     // When
     await addTask(testDir, '#42');
@@ -368,7 +367,6 @@ describe('addTask', () => {
     mockResolveIssueTask.mockReturnValue(issueText);
     mockSummarizeTaskName.mockResolvedValue('fix-login-timeout');
     mockConfirm.mockResolvedValue(false);
-    mockListWorkflows.mockReturnValue([]);
 
     // When
     await addTask(testDir, '#99');

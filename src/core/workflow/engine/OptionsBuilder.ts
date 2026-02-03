@@ -45,9 +45,12 @@ export class OptionsBuilder {
       ? step.allowedTools?.filter((t) => t !== 'Write')
       : step.allowedTools;
 
+    // Skip session resume when cwd !== projectCwd (worktree execution) to avoid cross-directory contamination
+    const shouldResumeSession = step.session !== 'refresh' && this.getCwd() === this.getProjectCwd();
+
     return {
       ...this.buildBaseOptions(step),
-      sessionId: step.session === 'refresh' ? undefined : this.getSessionId(step.agent ?? step.name),
+      sessionId: shouldResumeSession ? this.getSessionId(step.agent ?? step.name) : undefined,
       allowedTools,
     };
   }

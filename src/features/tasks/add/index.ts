@@ -8,10 +8,11 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { stringify as stringifyYaml } from 'yaml';
-import { promptInput, confirm, selectOption } from '../../../shared/prompt/index.js';
+import { promptInput, confirm } from '../../../shared/prompt/index.js';
 import { success, info } from '../../../shared/ui/index.js';
 import { summarizeTaskName, type TaskFileData } from '../../../infra/task/index.js';
-import { loadGlobalConfig, listWorkflows, getCurrentWorkflow } from '../../../infra/config/index.js';
+import { loadGlobalConfig, getWorkflowDescription } from '../../../infra/config/index.js';
+import { determineWorkflow } from '../execute/selectAndExecute.js';
 import { getProvider, type ProviderType } from '../../../infra/providers/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { getPrompt } from '../../../shared/prompts/index.js';
@@ -62,18 +63,21 @@ async function generateFilename(tasksDir: string, taskContent: string, cwd: stri
  * add command handler
  *
  * Flow:
- *   1. AI対話モードでタスクを詰める
- *   2. 会話履歴からAIがタスク要約を生成
- *   3. 要約からファイル名をAIで生成
- *   4. ワークツリー/ブランチ/ワークフロー設定
- *   5. YAMLファイル作成
+ *   1. ワークフロー選択
+ *   2. AI対話モードでタスクを詰める
+ *   3. 会話履歴からAIがタスク要約を生成
+ *   4. 要約からファイル名をAIで生成
+ *   5. ワークツリー/ブランチ設定
+ *   6. YAMLファイル作成
  */
 export async function addTask(cwd: string, task?: string): Promise<void> {
   const tasksDir = path.join(cwd, '.takt', 'tasks');
   fs.mkdirSync(tasksDir, { recursive: true });
 
+  // 1. ワークフロー選択（Issue参照以外の場合、対話モードの前に実施）
   let taskContent: string;
   let issueNumber: number | undefined;
+  let workflow: string | undefined;
 
   if (task && isIssueReference(task)) {
     // Issue reference: fetch issue and use directly as task content
@@ -91,8 +95,18 @@ export async function addTask(cwd: string, task?: string): Promise<void> {
       return;
     }
   } else {
+    // ワークフロー選択を先に行い、結果を対話モードに渡す
+    const workflowId = await determineWorkflow(cwd);
+    if (workflowId === null) {
+      info('Cancelled.');
+      return;
+    }
+    workflow = workflowId;
+
+    const workflowContext = getWorkflowDescription(workflowId, cwd);
+
     // Interactive mode: AI conversation to refine task
-    const result = await interactiveMode(cwd);
+    const result = await interactiveMode(cwd, undefined, workflowContext);
     if (!result.confirmed) {
       info('Cancelled.');
       return;
@@ -106,10 +120,9 @@ export async function addTask(cwd: string, task?: string): Promise<void> {
   const firstLine = taskContent.split('\n')[0] || taskContent;
   const filename = await generateFilename(tasksDir, firstLine, cwd);
 
-  // 4. ワークツリー/ブランチ/ワークフロー設定
+  // 4. ワークツリー/ブランチ設定
   let worktree: boolean | string | undefined;
   let branch: string | undefined;
-  let workflow: string | undefined;
 
   const useWorktree = await confirm('Create worktree?', true);
   if (useWorktree) {
@@ -119,26 +132,6 @@ export async function addTask(cwd: string, task?: string): Promise<void> {
     const customBranch = await promptInput('Branch name (Enter for auto)');
     if (customBranch) {
       branch = customBranch;
-    }
-  }
-
-  const availableWorkflows = listWorkflows(cwd);
-  if (availableWorkflows.length > 0) {
-    const currentWorkflow = getCurrentWorkflow(cwd);
-    const defaultWorkflow = availableWorkflows.includes(currentWorkflow)
-      ? currentWorkflow
-      : availableWorkflows[0]!;
-    const options = availableWorkflows.map((name) => ({
-      label: name === currentWorkflow ? `${name} (current)` : name,
-      value: name,
-    }));
-    const selected = await selectOption('Select workflow:', options);
-    if (selected === null) {
-      info('Cancelled.');
-      return;
-    }
-    if (selected !== defaultWorkflow) {
-      workflow = selected;
     }
   }
 
