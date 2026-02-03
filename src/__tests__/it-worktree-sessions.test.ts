@@ -55,6 +55,10 @@ describe('worktree-sessions recognition', () => {
     // Create shared clone
     execFileSync('git', ['clone', '--shared', testDir, worktreeDir]);
 
+    // Configure git user in worktree (shared clones don't inherit config)
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: worktreeDir });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: worktreeDir });
+
     // Create and checkout takt branch in worktree
     const branchName = `takt/${branchSlug}`;
     execFileSync('git', ['checkout', '-b', branchName], { cwd: worktreeDir });
@@ -108,6 +112,10 @@ describe('worktree-sessions recognition', () => {
     const branchSlug = '20260203T0851-unify-debug-log';
     worktreeDir = join(tmpdir(), branchSlug);
     execFileSync('git', ['clone', '--shared', testDir, worktreeDir]);
+
+    // Configure git user in worktree (shared clones don't inherit config)
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: worktreeDir });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: worktreeDir });
 
     const branchName = `takt/${branchSlug}`;
     execFileSync('git', ['checkout', '-b', branchName], { cwd: worktreeDir });
