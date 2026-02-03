@@ -13,37 +13,12 @@ import { success, info } from '../../../shared/ui/index.js';
 import { summarizeTaskName, type TaskFileData } from '../../../infra/task/index.js';
 import { loadGlobalConfig, getWorkflowDescription } from '../../../infra/config/index.js';
 import { determineWorkflow } from '../execute/selectAndExecute.js';
-import { getProvider, type ProviderType } from '../../../infra/providers/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
-import { getPrompt } from '../../../shared/prompts/index.js';
 import { isIssueReference, resolveIssueTask, parseIssueNumbers } from '../../../infra/github/index.js';
 import { interactiveMode } from '../../interactive/index.js';
 
 const log = createLogger('add-task');
 
-/**
- * Summarize conversation history into a task description using AI.
- */
-export async function summarizeConversation(cwd: string, conversationText: string): Promise<string> {
-  const globalConfig = loadGlobalConfig();
-  const providerType = (globalConfig.provider as ProviderType) ?? 'claude';
-  const provider = getProvider(providerType);
-
-  info('Summarizing task from conversation...');
-
-  const response = await provider.call('task-summarizer', conversationText, {
-    cwd,
-    maxTurns: 1,
-    allowedTools: [],
-    systemPrompt: getPrompt('summarize.conversationSummarizer'),
-  });
-
-  return response.content;
-}
-
-/**
- * Generate a unique task filename with AI-summarized slug
- */
 async function generateFilename(tasksDir: string, taskContent: string, cwd: string): Promise<string> {
   info('Generating task filename...');
   const slug = await summarizeTaskName(taskContent, { cwd });
@@ -112,8 +87,8 @@ export async function addTask(cwd: string, task?: string): Promise<void> {
       return;
     }
 
-    // 会話履歴からタスク要約を生成
-    taskContent = await summarizeConversation(cwd, result.task);
+    // interactiveMode already returns a summarized task from conversation
+    taskContent = result.task;
   }
 
   // 3. 要約からファイル名生成

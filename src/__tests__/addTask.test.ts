@@ -69,45 +69,33 @@ vi.mock('../infra/github/issue.js', () => ({
 }));
 
 import { interactiveMode } from '../features/interactive/index.js';
-import { getProvider } from '../infra/providers/index.js';
 import { promptInput, confirm } from '../shared/prompt/index.js';
 import { summarizeTaskName } from '../infra/task/summarize.js';
 import { determineWorkflow } from '../features/tasks/execute/selectAndExecute.js';
 import { getWorkflowDescription } from '../infra/config/loaders/workflowResolver.js';
 import { resolveIssueTask } from '../infra/github/issue.js';
-import { addTask, summarizeConversation } from '../features/tasks/index.js';
+import { addTask } from '../features/tasks/index.js';
 
 const mockResolveIssueTask = vi.mocked(resolveIssueTask);
-
 const mockInteractiveMode = vi.mocked(interactiveMode);
-const mockGetProvider = vi.mocked(getProvider);
 const mockPromptInput = vi.mocked(promptInput);
 const mockConfirm = vi.mocked(confirm);
 const mockSummarizeTaskName = vi.mocked(summarizeTaskName);
 const mockDetermineWorkflow = vi.mocked(determineWorkflow);
 const mockGetWorkflowDescription = vi.mocked(getWorkflowDescription);
 
-/** Helper: set up mocks for the full happy path */
 function setupFullFlowMocks(overrides?: {
-  conversationTask?: string;
-  summaryContent?: string;
+  task?: string;
   slug?: string;
 }) {
-  const task = overrides?.conversationTask ?? 'User: 認証機能を追加したい\n\nAssistant: 了解です。';
-  const summary = overrides?.summaryContent ?? '# 認証機能追加\nJWT認証を実装する';
+  const task = overrides?.task ?? '# 認証機能追加\nJWT認証を実装する';
   const slug = overrides?.slug ?? 'add-auth';
 
   mockDetermineWorkflow.mockResolvedValue('default');
   mockGetWorkflowDescription.mockReturnValue({ name: 'default', description: '' });
   mockInteractiveMode.mockResolvedValue({ confirmed: true, task });
-
-  const mockProviderCall = vi.fn().mockResolvedValue({ content: summary });
-  mockGetProvider.mockReturnValue({ call: mockProviderCall } as any);
-
   mockSummarizeTaskName.mockResolvedValue(slug);
   mockConfirm.mockResolvedValue(false);
-
-  return { mockProviderCall };
 }
 
 let testDir: string;
@@ -135,11 +123,9 @@ describe('addTask', () => {
     // When
     await addTask(testDir);
 
-    // Then: no task file created
     const tasksDir = path.join(testDir, '.takt', 'tasks');
     const files = fs.existsSync(tasksDir) ? fs.readdirSync(tasksDir) : [];
     expect(files.length).toBe(0);
-    expect(mockGetProvider).not.toHaveBeenCalled();
     expect(mockSummarizeTaskName).not.toHaveBeenCalled();
   });
 
@@ -160,38 +146,14 @@ describe('addTask', () => {
     expect(content).toContain('JWT認証を実装する');
   });
 
-  it('should summarize conversation via provider.call', async () => {
-    // Given
-    const { mockProviderCall } = setupFullFlowMocks({
-      conversationTask: 'User: バグ修正して\n\nAssistant: どのバグですか？',
-    });
-
-    // When
-    await addTask(testDir);
-
-    // Then: provider.call was called with conversation text
-    expect(mockProviderCall).toHaveBeenCalledWith(
-      'task-summarizer',
-      'User: バグ修正して\n\nAssistant: どのバグですか？',
-      expect.objectContaining({
-        cwd: testDir,
-        maxTurns: 1,
-        allowedTools: [],
-      }),
-    );
-  });
-
-  it('should use first line of summary for filename generation', async () => {
-    // Given: summary with multiple lines
+  it('should use first line of task for filename generation', async () => {
     setupFullFlowMocks({
-      summaryContent: 'First line summary\nSecond line details',
+      task: 'First line summary\nSecond line details',
       slug: 'first-line',
     });
 
-    // When
     await addTask(testDir);
 
-    // Then: summarizeTaskName receives only the first line
     expect(mockSummarizeTaskName).toHaveBeenCalledWith('First line summary', { cwd: testDir });
   });
 
@@ -354,11 +316,9 @@ describe('addTask', () => {
     // When
     await addTask(testDir, '#99');
 
-    // Then: no task file created, no crash
     const tasksDir = path.join(testDir, '.takt', 'tasks');
     const files = fs.readdirSync(tasksDir);
     expect(files.length).toBe(0);
-    expect(mockGetProvider).not.toHaveBeenCalled();
   });
 
   it('should include issue number in task file when issue reference is used', async () => {
@@ -376,29 +336,5 @@ describe('addTask', () => {
     expect(fs.existsSync(taskFile)).toBe(true);
     const content = fs.readFileSync(taskFile, 'utf-8');
     expect(content).toContain('issue: 99');
-  });
-});
-
-describe('summarizeConversation', () => {
-  it('should call provider with summarize system prompt', async () => {
-    // Given
-    const mockCall = vi.fn().mockResolvedValue({ content: 'Summary text' });
-    mockGetProvider.mockReturnValue({ call: mockCall } as any);
-
-    // When
-    const result = await summarizeConversation('/project', 'conversation text');
-
-    // Then
-    expect(result).toBe('Summary text');
-    expect(mockCall).toHaveBeenCalledWith(
-      'task-summarizer',
-      'conversation text',
-      expect.objectContaining({
-        cwd: '/project',
-        maxTurns: 1,
-        allowedTools: [],
-        systemPrompt: expect.stringContaining('会話履歴からタスクの要件をまとめてください'),
-      }),
-    );
   });
 });

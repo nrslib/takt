@@ -96,12 +96,6 @@ summarize:
     worktreeを作るときブランチ名をAIで生成 → ai-branch-naming
     レビュー画面に元の指示を表示する → show-original-instruction
 
-  conversationSummarizer: |
-    会話履歴からタスクの要件をまとめてください。
-    タスク実行エージェントへの指示として使われます。
-    具体的・簡潔に、必要な情報をすべて含めてください。
-    マークダウン形式で出力してください。
-
 # ===== Claude Client =====
 claude:
   agentDefault: "You are the {agentName} agent. Follow the standard {agentName} workflow."
