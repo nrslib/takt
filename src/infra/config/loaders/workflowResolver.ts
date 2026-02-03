@@ -10,14 +10,33 @@ import { join, resolve, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import type { WorkflowConfig } from '../../../core/models/index.js';
 import { getGlobalWorkflowsDir, getBuiltinWorkflowsDir, getProjectConfigDir } from '../paths.js';
-import { getLanguage, getDisabledBuiltins } from '../global/globalConfig.js';
+import { getLanguage, getDisabledBuiltins, getBuiltinWorkflowsEnabled } from '../global/globalConfig.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { loadWorkflowFromFile } from './workflowParser.js';
 
 const log = createLogger('workflow-resolver');
 
+export type WorkflowSource = 'builtin' | 'user' | 'project';
+
+export interface WorkflowWithSource {
+  config: WorkflowConfig;
+  source: WorkflowSource;
+}
+
+export function listBuiltinWorkflowNames(options?: { includeDisabled?: boolean }): string[] {
+  const lang = getLanguage();
+  const dir = getBuiltinWorkflowsDir(lang);
+  const disabled = options?.includeDisabled ? undefined : getDisabledBuiltins();
+  const names = new Set<string>();
+  for (const entry of iterateWorkflowDir(dir, 'builtin', disabled)) {
+    names.add(entry.name);
+  }
+  return Array.from(names);
+}
+
 /** Get builtin workflow by name */
 export function getBuiltinWorkflow(name: string): WorkflowConfig | null {
+  if (!getBuiltinWorkflowsEnabled()) return null;
   const lang = getLanguage();
   const disabled = getDisabledBuiltins();
   if (disabled.includes(name)) return null;
@@ -126,6 +145,24 @@ export function loadWorkflowByIdentifier(
   return loadWorkflow(identifier, projectCwd);
 }
 
+/**
+ * Get workflow description by identifier.
+ * Returns the workflow name and description (if available).
+ */
+export function getWorkflowDescription(
+  identifier: string,
+  projectCwd: string,
+): { name: string; description: string } {
+  const workflow = loadWorkflowByIdentifier(identifier, projectCwd);
+  if (!workflow) {
+    return { name: identifier, description: '' };
+  }
+  return {
+    name: workflow.name,
+    description: workflow.description ?? '',
+  };
+}
+
 /** Entry for a workflow file found in a directory */
 export interface WorkflowDirEntry {
   /** Workflow name (e.g. "react") */
@@ -134,6 +171,8 @@ export interface WorkflowDirEntry {
   path: string;
   /** Category (subdirectory name), undefined for root-level workflows */
   category?: string;
+  /** Workflow source (builtin, user, project) */
+  source: WorkflowSource;
 }
 
 /**
@@ -143,6 +182,7 @@ export interface WorkflowDirEntry {
  */
 function* iterateWorkflowDir(
   dir: string,
+  source: WorkflowSource,
   disabled?: string[],
 ): Generator<WorkflowDirEntry> {
   if (!existsSync(dir)) return;
@@ -153,7 +193,7 @@ function* iterateWorkflowDir(
     if (stat.isFile() && (entry.endsWith('.yaml') || entry.endsWith('.yml'))) {
       const workflowName = entry.replace(/\.ya?ml$/, '');
       if (disabled?.includes(workflowName)) continue;
-      yield { name: workflowName, path: entryPath };
+      yield { name: workflowName, path: entryPath, source };
       continue;
     }
 
@@ -167,21 +207,47 @@ function* iterateWorkflowDir(
         const workflowName = subEntry.replace(/\.ya?ml$/, '');
         const qualifiedName = `${category}/${workflowName}`;
         if (disabled?.includes(qualifiedName)) continue;
-        yield { name: qualifiedName, path: subEntryPath, category };
+        yield { name: qualifiedName, path: subEntryPath, category, source };
       }
     }
   }
 }
 
 /** Get the 3-layer directory list (builtin → user → project-local) */
-function getWorkflowDirs(cwd: string): { dir: string; disabled?: string[] }[] {
+function getWorkflowDirs(cwd: string): { dir: string; source: WorkflowSource; disabled?: string[] }[] {
   const disabled = getDisabledBuiltins();
   const lang = getLanguage();
-  return [
-    { dir: getBuiltinWorkflowsDir(lang), disabled },
-    { dir: getGlobalWorkflowsDir() },
-    { dir: join(getProjectConfigDir(cwd), 'workflows') },
-  ];
+  const dirs: { dir: string; source: WorkflowSource; disabled?: string[] }[] = [];
+  if (getBuiltinWorkflowsEnabled()) {
+    dirs.push({ dir: getBuiltinWorkflowsDir(lang), disabled, source: 'builtin' });
+  }
+  dirs.push({ dir: getGlobalWorkflowsDir(), source: 'user' });
+  dirs.push({ dir: join(getProjectConfigDir(cwd), 'workflows'), source: 'project' });
+  return dirs;
+}
+
+/**
+ * Load all workflows with source metadata.
+ *
+ * Priority (later entries override earlier):
+ *   1. Builtin workflows
+ *   2. User workflows (~/.takt/workflows/)
+ *   3. Project-local workflows (.takt/workflows/)
+ */
+export function loadAllWorkflowsWithSources(cwd: string): Map<string, WorkflowWithSource> {
+  const workflows = new Map<string, WorkflowWithSource>();
+
+  for (const { dir, source, disabled } of getWorkflowDirs(cwd)) {
+    for (const entry of iterateWorkflowDir(dir, source, disabled)) {
+      try {
+        workflows.set(entry.name, { config: loadWorkflowFromFile(entry.path), source: entry.source });
+      } catch (err) {
+        log.debug('Skipping invalid workflow file', { path: entry.path, error: getErrorMessage(err) });
+      }
+    }
+  }
+
+  return workflows;
 }
 
 /**
@@ -194,17 +260,10 @@ function getWorkflowDirs(cwd: string): { dir: string; disabled?: string[] }[] {
  */
 export function loadAllWorkflows(cwd: string): Map<string, WorkflowConfig> {
   const workflows = new Map<string, WorkflowConfig>();
-
-  for (const { dir, disabled } of getWorkflowDirs(cwd)) {
-    for (const entry of iterateWorkflowDir(dir, disabled)) {
-      try {
-        workflows.set(entry.name, loadWorkflowFromFile(entry.path));
-      } catch (err) {
-        log.debug('Skipping invalid workflow file', { path: entry.path, error: getErrorMessage(err) });
-      }
-    }
+  const withSources = loadAllWorkflowsWithSources(cwd);
+  for (const [name, entry] of withSources) {
+    workflows.set(name, entry.config);
   }
-
   return workflows;
 }
 
@@ -215,8 +274,8 @@ export function loadAllWorkflows(cwd: string): Map<string, WorkflowConfig> {
 export function listWorkflows(cwd: string): string[] {
   const workflows = new Set<string>();
 
-  for (const { dir, disabled } of getWorkflowDirs(cwd)) {
-    for (const entry of iterateWorkflowDir(dir, disabled)) {
+  for (const { dir, source, disabled } of getWorkflowDirs(cwd)) {
+    for (const entry of iterateWorkflowDir(dir, source, disabled)) {
       workflows.add(entry.name);
     }
   }
@@ -235,8 +294,8 @@ export function listWorkflowEntries(cwd: string): WorkflowDirEntry[] {
   // Later entries override earlier (project-local > user > builtin)
   const workflows = new Map<string, WorkflowDirEntry>();
 
-  for (const { dir, disabled } of getWorkflowDirs(cwd)) {
-    for (const entry of iterateWorkflowDir(dir, disabled)) {
+  for (const { dir, source, disabled } of getWorkflowDirs(cwd)) {
+    for (const entry of iterateWorkflowDir(dir, source, disabled)) {
       workflows.set(entry.name, entry);
     }
   }

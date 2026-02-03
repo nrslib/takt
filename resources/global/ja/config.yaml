@@ -16,6 +16,9 @@ log_level: info
 # プロバイダー: claude または codex
 provider: claude
 
+# ビルトインワークフローの読み込み (resources/global/{lang}/workflows)
+# enable_builtin_workflows: true
+
 # デフォルトモデル (オプション)
 # Claude: opus, sonnet, haiku, opusplan, default, またはフルモデル名
 # Codex: gpt-5.2-codex, gpt-5.1-codex など

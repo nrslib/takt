@@ -8,9 +8,10 @@
 import { info, error } from '../../shared/ui/index.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
 import { resolveIssueTask, isIssueReference } from '../../infra/github/index.js';
-import { selectAndExecuteTask, type SelectAndExecuteOptions } from '../../features/tasks/index.js';
+import { selectAndExecuteTask, determineWorkflow, type SelectAndExecuteOptions } from '../../features/tasks/index.js';
 import { executePipeline } from '../../features/pipeline/index.js';
-import { interactiveMode } from '../../features/interactive/index.js';
+import { interactiveMode, type WorkflowContext } from '../../features/interactive/index.js';
+import { getWorkflowDescription } from '../../infra/config/index.js';
 import { DEFAULT_WORKFLOW_NAME } from '../../shared/constants.js';
 import { program, resolvedCwd, pipelineMode } from './program.js';
 import { resolveAgentOverrides, parseCreateWorktreeOption, isDirectTask } from './helpers.js';
@@ -88,12 +89,20 @@ program
     }
 
     // Short single word or no task → interactive mode (with optional initial input)
-    const result = await interactiveMode(resolvedCwd, task);
+    const workflowId = await determineWorkflow(resolvedCwd, selectOptions.workflow);
+    if (workflowId === null) {
+      info('Cancelled');
+      return;
+    }
+
+    const workflowContext = getWorkflowDescription(workflowId, resolvedCwd);
+    const result = await interactiveMode(resolvedCwd, task, workflowContext);
 
     if (!result.confirmed) {
       return;
     }
 
     selectOptions.interactiveUserInput = true;
+    selectOptions.workflow = workflowId;
     await selectAndExecuteTask(resolvedCwd, result.task, selectOptions, agentOverrides);
   });

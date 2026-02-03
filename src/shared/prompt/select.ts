@@ -86,6 +86,7 @@ export type KeyInputResult =
   | { action: 'confirm'; selectedIndex: number }
   | { action: 'cancel'; cancelIndex: number }
   | { action: 'bookmark'; selectedIndex: number }
+  | { action: 'remove_bookmark'; selectedIndex: number }
   | { action: 'exit' }
   | { action: 'none' };
 
@@ -118,15 +119,18 @@ export function handleKeyInput(
   if (key === 'b') {
     return { action: 'bookmark', selectedIndex: currentIndex };
   }
+  if (key === 'r') {
+    return { action: 'remove_bookmark', selectedIndex: currentIndex };
+  }
   return { action: 'none' };
 }
 
 /** Print the menu header (message + hint). */
-function printHeader(message: string, showBookmarkHint: boolean): void {
+function printHeader(message: string, hasCustomKeyHandler: boolean): void {
   console.log();
   console.log(chalk.cyan(message));
-  const hint = showBookmarkHint
-    ? '  (↑↓ to move, Enter to select, b to bookmark)'
+  const hint = hasCustomKeyHandler
+    ? '  (↑↓ to move, Enter to select, b to bookmark, r to remove)'
     : '  (↑↓ to move, Enter to select)';
   console.log(chalk.gray(hint));
   console.log();
@@ -165,7 +169,13 @@ function redrawMenu<T extends string>(
 
 /** Callbacks for interactive select behavior */
 export interface InteractiveSelectCallbacks<T extends string> {
-  /** Called when 'b' key is pressed. Returns updated options for re-render. */
+  /**
+   * Custom key handler called before default key handling.
+   * Return updated options to handle the key and re-render.
+   * Return null to delegate to default handler.
+   */
+  onKeyPress?: (key: string, value: T, index: number) => SelectOptionItem<T>[] | null;
+  /** Called when 'b' key is pressed. Returns updated options for re-render. @deprecated Use onKeyPress instead */
   onBookmark?: (value: T, index: number) => SelectOptionItem<T>[];
   /** Custom label for cancel option (default: "Cancel") */
   cancelLabel?: string;
@@ -191,7 +201,7 @@ function interactiveSelect<T extends string>(
     let selectedIndex = initialIndex;
     const cancelLabel = callbacks?.cancelLabel ?? 'Cancel';
 
-    printHeader(message, !!callbacks?.onBookmark);
+    printHeader(message, !!callbacks?.onKeyPress || !!callbacks?.onBookmark);
 
     process.stdout.write('\x1B[?7l');
 
@@ -213,8 +223,29 @@ function interactiveSelect<T extends string>(
     };
 
     const onKeypress = (data: Buffer): void => {
+      const key = data.toString();
+
+      // Try custom key handler first
+      if (callbacks?.onKeyPress && selectedIndex < currentOptions.length) {
+        const item = currentOptions[selectedIndex];
+        if (item) {
+          const customResult = callbacks.onKeyPress(key, item.value, selectedIndex);
+          if (customResult !== null) {
+            // Custom handler processed the key
+            const currentValue = item.value;
+            currentOptions = customResult;
+            totalItems = hasCancelOption ? currentOptions.length + 1 : currentOptions.length;
+            const newIdx = currentOptions.findIndex((o) => o.value === currentValue);
+            selectedIndex = newIdx >= 0 ? newIdx : Math.min(selectedIndex, currentOptions.length - 1);
+            totalLines = redrawMenu(currentOptions, selectedIndex, hasCancelOption, totalLines, cancelLabel);
+            return;
+          }
+        }
+      }
+
+      // Delegate to default handler
       const result = handleKeyInput(
-        data.toString(),
+        key,
         selectedIndex,
         totalItems,
         hasCancelOption,
@@ -250,6 +281,9 @@ function interactiveSelect<T extends string>(
           totalLines = redrawMenu(currentOptions, selectedIndex, hasCancelOption, totalLines, cancelLabel);
           break;
         }
+        case 'remove_bookmark':
+          // Ignore - should be handled by custom onKeyPress
+          break;
         case 'exit':
           cleanup(onKeypress);
           process.exit(130);

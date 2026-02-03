@@ -21,7 +21,15 @@ vi.mock('../infra/claude/client.js', async (importOriginal) => {
   const original = await importOriginal<typeof import('../infra/claude/client.js')>();
   return {
     ...original,
-    callAiJudge: vi.fn().mockResolvedValue(-1),
+    callAiJudge: vi.fn().mockImplementation(async (rules: { condition: string }[], content: string) => {
+      // Simple text matching: return index of first rule whose condition appears in content
+      for (let i = 0; i < rules.length; i++) {
+        if (content.includes(rules[i]!.condition)) {
+          return i;
+        }
+      }
+      return -1;
+    }),
   };
 });
 
@@ -41,6 +49,7 @@ vi.mock('../infra/config/global/globalConfig.js', () => ({
   loadGlobalConfig: vi.fn().mockReturnValue({}),
   getLanguage: vi.fn().mockReturnValue('en'),
   getDisabledBuiltins: vi.fn().mockReturnValue([]),
+  getBuiltinWorkflowsEnabled: vi.fn().mockReturnValue(true),
 }));
 
 vi.mock('../infra/config/project/projectConfig.js', () => ({
@@ -88,9 +97,9 @@ describe('Workflow Patterns IT: minimal workflow', () => {
     expect(config).not.toBeNull();
 
     setMockScenario([
-      { agent: 'coder', status: 'done', content: '[IMPLEMENT:0]\n\nImplementation complete.' },
-      { agent: 'ai-antipattern-reviewer', status: 'done', content: '[AI_REVIEW:0]\n\nNo AI-specific issues.' },
-      { agent: 'supervisor', status: 'done', content: '[SUPERVISE:0]\n\nAll checks passed.' },
+      { agent: 'coder', status: 'done', content: 'Implementation complete.' },
+      { agent: 'ai-antipattern-reviewer', status: 'done', content: 'No AI-specific issues.' },
+      { agent: 'supervisor', status: 'done', content: 'All checks passed.' },
     ]);
 
     const engine = createEngine(config!, testDir, 'Test task');
@@ -104,7 +113,7 @@ describe('Workflow Patterns IT: minimal workflow', () => {
     const config = loadWorkflow('minimal', testDir);
 
     setMockScenario([
-      { agent: 'coder', status: 'done', content: '[IMPLEMENT:1]\n\nCannot proceed, insufficient info.' },
+      { agent: 'coder', status: 'done', content: 'Cannot proceed, insufficient info.' },
     ]);
 
     const engine = createEngine(config!, testDir, 'Vague task');

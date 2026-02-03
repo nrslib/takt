@@ -11,16 +11,11 @@ import {
   listWorkflows,
   listWorkflowEntries,
   isWorkflowPath,
-  loadAllWorkflows,
+  loadAllWorkflowsWithSources,
   getWorkflowCategories,
   buildCategorizedWorkflows,
 } from '../../../infra/config/index.js';
-import {
-  getBookmarkedWorkflows,
-  toggleBookmark,
-} from '../../../infra/config/global/index.js';
-import { selectOption, confirm } from '../../../shared/prompt/index.js';
-import type { SelectOptionItem } from '../../../shared/prompt/index.js';
+import { confirm } from '../../../shared/prompt/index.js';
 import { createSharedClone, autoCommitAndPush, summarizeTaskName } from '../../../infra/task/index.js';
 import { DEFAULT_WORKFLOW_NAME } from '../../../shared/constants.js';
 import { info, error, success } from '../../../shared/ui/index.js';
@@ -29,14 +24,9 @@ import { createPullRequest, buildPrBody } from '../../../infra/github/index.js';
 import { executeTask } from './taskExecution.js';
 import type { TaskExecutionOptions, WorktreeConfirmationResult, SelectAndExecuteOptions } from './types.js';
 import {
-  buildWorkflowSelectionItems,
-  buildTopLevelSelectOptions,
-  parseCategorySelection,
-  buildCategoryWorkflowOptions,
-  applyBookmarks,
   warnMissingWorkflows,
   selectWorkflowFromCategorizedWorkflows,
-  type SelectionOption,
+  selectWorkflowFromEntries,
 } from '../../workflowSelection/index.js';
 
 export type { WorktreeConfirmationResult, SelectAndExecuteOptions };
@@ -60,70 +50,7 @@ async function selectWorkflowWithDirectoryCategories(cwd: string): Promise<strin
   }
 
   const entries = listWorkflowEntries(cwd);
-  const items = buildWorkflowSelectionItems(entries);
-
-  const hasCategories = items.some((item) => item.type === 'category');
-
-  if (!hasCategories) {
-    const baseOptions: SelectionOption[] = availableWorkflows.map((name) => ({
-      label: name === currentWorkflow ? `${name} (current)` : name,
-      value: name,
-    }));
-
-    const buildFlatOptions = (): SelectionOption[] =>
-      applyBookmarks(baseOptions, getBookmarkedWorkflows());
-
-    return selectOption<string>('Select workflow:', buildFlatOptions(), {
-      onBookmark: (value: string): SelectOptionItem<string>[] => {
-        toggleBookmark(value);
-        return buildFlatOptions();
-      },
-    });
-  }
-
-  const createTopLevelBookmarkCallback = (): ((value: string) => SelectOptionItem<string>[]) => {
-    return (value: string): SelectOptionItem<string>[] => {
-      if (parseCategorySelection(value)) {
-        return applyBookmarks(buildTopLevelSelectOptions(items, currentWorkflow), getBookmarkedWorkflows());
-      }
-      toggleBookmark(value);
-      return applyBookmarks(buildTopLevelSelectOptions(items, currentWorkflow), getBookmarkedWorkflows());
-    };
-  };
-
-  // Loop until user selects a workflow or cancels at top level
-  while (true) {
-    const baseOptions = buildTopLevelSelectOptions(items, currentWorkflow);
-    const topLevelOptions = applyBookmarks(baseOptions, getBookmarkedWorkflows());
-
-    const selected = await selectOption<string>('Select workflow:', topLevelOptions, {
-      onBookmark: createTopLevelBookmarkCallback(),
-    });
-    if (!selected) return null;
-
-    const categoryName = parseCategorySelection(selected);
-    if (categoryName) {
-      const categoryOptions = buildCategoryWorkflowOptions(items, categoryName, currentWorkflow);
-      if (!categoryOptions) continue;
-      const bookmarkedCategoryOptions = applyBookmarks(categoryOptions, getBookmarkedWorkflows());
-      const workflowSelection = await selectOption<string>(`Select workflow in ${categoryName}:`, bookmarkedCategoryOptions, {
-        cancelLabel: '← Go back',
-        onBookmark: (value: string): SelectOptionItem<string>[] => {
-          toggleBookmark(value);
-          return applyBookmarks(
-            buildCategoryWorkflowOptions(items, categoryName, currentWorkflow) as SelectionOption[],
-            getBookmarkedWorkflows(),
-          );
-        },
-      });
-
-      // If workflow selected, return it. If cancelled (null), go back to top level
-      if (workflowSelection) return workflowSelection;
-      continue;
-    }
-
-    return selected;
-  }
+  return selectWorkflowFromEntries(entries, currentWorkflow);
 }
 
 
@@ -134,7 +61,7 @@ async function selectWorkflow(cwd: string): Promise<string | null> {
   const categoryConfig = getWorkflowCategories(cwd);
   if (categoryConfig) {
     const current = getCurrentWorkflow(cwd);
-    const allWorkflows = loadAllWorkflows(cwd);
+    const allWorkflows = loadAllWorkflowsWithSources(cwd);
     if (allWorkflows.size === 0) {
       info(`No workflows found. Using default: ${DEFAULT_WORKFLOW_NAME}`);
       return DEFAULT_WORKFLOW_NAME;
@@ -153,7 +80,7 @@ async function selectWorkflow(cwd: string): Promise<string | null> {
  * - If override is a name, validate it exists in available workflows.
  * - If no override, prompt user to select interactively.
  */
-async function determineWorkflow(cwd: string, override?: string): Promise<string | null> {
+export async function determineWorkflow(cwd: string, override?: string): Promise<string | null> {
   if (override) {
     if (isWorkflowPath(override)) {
       return override;

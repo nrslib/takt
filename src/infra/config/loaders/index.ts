@@ -7,10 +7,14 @@ export {
   loadWorkflow,
   loadWorkflowByIdentifier,
   isWorkflowPath,
+  getWorkflowDescription,
   loadAllWorkflows,
+  loadAllWorkflowsWithSources,
   listWorkflows,
   listWorkflowEntries,
   type WorkflowDirEntry,
+  type WorkflowSource,
+  type WorkflowWithSource,
 } from './workflowLoader.js';
 
 export {
@@ -21,6 +25,7 @@ export {
   type CategoryConfig,
   type CategorizedWorkflows,
   type MissingWorkflow,
+  type WorkflowCategoryNode,
 } from './workflowCategories.js';
 
 export {

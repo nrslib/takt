@@ -1,25 +1,29 @@
 workflow_categories:
   "🚀 クイックスタート":
-    - minimal
-    - default
+    workflows:
+      - default
+      - minimal
 
   "🔍 レビュー＆修正":
-    - review-fix-minimal
+    workflows:
+      - review-fix-minimal
 
   "🎨 フロントエンド":
-    []
+    {}
 
   "⚙️ バックエンド":
-    []
+    {}
 
   "🔧 フルスタック":
-    - expert
-    - expert-cqrs
+    workflows:
+      - expert
+      - expert-cqrs
 
   "その他":
-    - research
-    - magi
-    - review-only
+    workflows:
+      - research
+      - magi
+      - review-only
 
 show_others_category: true
 others_category_name: "その他"

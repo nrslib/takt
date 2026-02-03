@@ -15,8 +15,12 @@ export {
   loadWorkflow,
   isWorkflowPath,
   loadWorkflowByIdentifier,
+  getWorkflowDescription,
   loadAllWorkflows,
+  loadAllWorkflowsWithSources,
   listWorkflows,
   listWorkflowEntries,
   type WorkflowDirEntry,
+  type WorkflowSource,
+  type WorkflowWithSource,
 } from './workflowResolver.js';

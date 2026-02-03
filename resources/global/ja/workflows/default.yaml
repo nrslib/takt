@@ -1,5 +1,5 @@
 # Default TAKT Workflow
-# Plan -> Implement -> AI Review -> Reviewers (parallel: Architect + Security) -> Supervisor Approval
+# Plan -> Architect -> Implement -> AI Review -> Reviewers (parallel: Architect + Security) -> Supervisor Approval
 #
 # Template Variables (auto-injected by buildInstruction):
 #   {iteration}      - Workflow-wide turn count (total steps executed across all agents)
@@ -54,7 +54,7 @@ steps:
       - WebFetch
     rules:
       - condition: 要件が明確で実装可能
-        next: implement
+        next: architect
       - condition: ユーザーが質問をしている（実装タスクではない）
         next: COMPLETE
       - condition: 要件が不明確、情報不足
@@ -75,13 +75,79 @@ steps:
       2. 影響範囲を特定する
       3. 実装アプローチを決める
 
+  - name: architect
+    edit: false
+    agent: ../agents/default/architect.md
+    report:
+      name: 01-architecture.md
+      format: |
+        ```markdown
+        # アーキテクチャ設計
+
+        ## タスク規模
+        Small / Medium / Large
+
+        ## 設計判断
+
+        ### ファイル構成
+        | ファイル | 役割 |
+        |---------|------|
+        | `src/example.ts` | 概要 |
+
+        ### 技術選定
+        - {選定した技術・ライブラリとその理由}
+
+        ### 設計パターン
+        - {採用するパターンと適用箇所}
+
+        ## 実装ガイドライン
+        - {Coderが実装時に従うべき指針}
+        ```
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Write
+      - WebSearch
+      - WebFetch
+    rules:
+      - condition: 小規模タスク（設計不要）
+        next: implement
+      - condition: 設計完了
+        next: implement
+      - condition: 情報不足、判断できない
+        next: ABORT
+    pass_previous_response: true
+    instruction_template: |
+      計画レポート（{report:00-plan.md}）を読み、アーキテクチャ設計を行ってください。
+
+      **小規模タスクの判断基準:**
+      - 1-2ファイルの変更のみ
+      - 既存パターンの踏襲で済む
+      - 技術選定が不要
+
+      小規模タスクの場合は設計レポートを作成せず、「小規模タスク（設計不要）」のルールに対応してください。
+
+      **設計が必要なタスク:**
+      - 3ファイル以上の変更
+      - 新しいモジュール・機能の追加
+      - 技術選定が必要
+      - アーキテクチャパターンの決定が必要
+
+      **やること:**
+      1. タスクの規模を評価
+      2. ファイル構成を決定
+      3. 技術選定（必要な場合）
+      4. 設計パターンの選択
+      5. Coderへの実装ガイドライン作成
+
   - name: implement
     edit: true
     agent: ../agents/default/coder.md
     session: refresh
     report:
-      - Scope: 01-coder-scope.md
-      - Decisions: 02-coder-decisions.md
+      - Scope: 02-coder-scope.md
+      - Decisions: 03-coder-decisions.md
     allowed_tools:
       - Read
       - Glob
@@ -104,9 +170,16 @@ steps:
         requires_user_input: true
         interactive_only: true
     instruction_template: |
-      planステップで立てた計画に従って実装してください。
-      計画レポート（{report:00-plan.md}）を参照し、実装を進めてください。
+      planステップで立てた計画と、architectステップで決定した設計に従って実装してください。
+
+      **参照するレポート:**
+      - 計画: {report:00-plan.md}
+      - 設計: {report:01-architecture.md}（存在する場合）
+
       Workflow Contextに示されたReport Directory内のファイルのみ参照してください。他のレポートディレクトリは検索/参照しないでください。
+
+      **重要:** 設計判断はせず、architectステップで決定された設計に従ってください。
+      不明点や設計の変更が必要な場合は報告してください。
 
       **重要**: 実装と同時に単体テストを追加してください。
       - 新規作成したクラス・関数には単体テストを追加
@@ -157,7 +230,7 @@ steps:
     agent: ../agents/default/ai-antipattern-reviewer.md
     pass_previous_response: true
     report:
-      name: 03-ai-review.md
+      name: 04-ai-review.md
       format: |
         ```markdown
         # AI生成コードレビュー
@@ -273,7 +346,7 @@ steps:
         edit: false
         agent: ../agents/default/architecture-reviewer.md
         report:
-          name: 04-architect-review.md
+          name: 05-architect-review.md
           format: |
             ```markdown
             # アーキテクチャレビュー
@@ -316,23 +389,28 @@ steps:
           - condition: approved
           - condition: needs_fix
         instruction_template: |
-          **アーキテクチャと設計**のレビューに集中してください。AI特有の問題はレビューしないでください（ai_reviewステップで行います）。
+          **実装がarchitectステップの設計に従っているか**を確認してください。
+          AI特有の問題はレビューしないでください（ai_reviewステップで行います）。
 
-          変更をレビューしてフィードバックを提供してください。
+          **参照するレポート:**
+          - 設計: {report:01-architecture.md}（存在する場合）
+          - 実装スコープ: {report:02-coder-scope.md}
 
           **レビュー観点:**
-          - 構造・設計の妥当性
+          - 設計との整合性（architectが定めたファイル構成・パターンに従っているか）
           - コード品質
           - 変更スコープの適切性
           - テストカバレッジ
           - デッドコード
           - 呼び出しチェーン検証
 
+          **注意:** architectステップをスキップした小規模タスクの場合は、従来通り設計の妥当性も確認してください。
+
       - name: security-review
         edit: false
         agent: ../agents/default/security-reviewer.md
         report:
-          name: 05-security-review.md
+          name: 06-security-review.md
           format: |
             ```markdown
             # セキュリティレビュー
@@ -422,7 +500,7 @@ steps:
     edit: false
     agent: ../agents/default/supervisor.md
     report:
-      - Validation: 06-supervisor-validation.md
+      - Validation: 07-supervisor-validation.md
       - Summary: summary.md
     allowed_tools:
       - Read
@@ -441,7 +519,7 @@ steps:
       テスト実行、ビルド確認、最終承認を行ってください。
 
       **ワークフロー全体の確認:**
-      1. 計画（{report:00-plan.md}）と実装結果が一致しているか
+      1. 計画（{report:00-plan.md}）と設計（{report:01-architecture.md}、存在する場合）に従った実装か
       2. 各レビューステップの指摘が対応されているか
       3. 元のタスク目的が達成されているか
 
@@ -490,8 +568,9 @@ steps:
       ## レビュー結果
       | レビュー | 結果 |
       |---------|------|
-      | Architect | ✅ APPROVE |
+      | Architecture Design | ✅ 完了 |
       | AI Review | ✅ APPROVE |
+      | Architect Review | ✅ APPROVE |
       | Security | ✅ APPROVE |
       | Supervisor | ✅ APPROVE |
 

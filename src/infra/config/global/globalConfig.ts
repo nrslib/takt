@@ -21,6 +21,7 @@ function createDefaultGlobalConfig(): GlobalConfig {
     defaultWorkflow: 'default',
     logLevel: 'info',
     provider: 'claude',
+    enableBuiltinWorkflows: true,
   };
 }
 
@@ -78,6 +79,7 @@ export class GlobalConfigManager {
       } : undefined,
       worktreeDir: parsed.worktree_dir,
       disabledBuiltins: parsed.disabled_builtins,
+      enableBuiltinWorkflows: parsed.enable_builtin_workflows,
       anthropicApiKey: parsed.anthropic_api_key,
       openaiApiKey: parsed.openai_api_key,
       pipeline: parsed.pipeline ? {
@@ -86,10 +88,8 @@ export class GlobalConfigManager {
         prBodyTemplate: parsed.pipeline.pr_body_template,
       } : undefined,
       minimalOutput: parsed.minimal_output,
-      bookmarkedWorkflows: parsed.bookmarked_workflows,
-      workflowCategories: parsed.workflow_categories,
-      showOthersCategory: parsed.show_others_category,
-      othersCategoryName: parsed.others_category_name,
+      bookmarksFile: parsed.bookmarks_file,
+      workflowCategoriesFile: parsed.workflow_categories_file,
     };
     this.cachedConfig = config;
     return config;
@@ -120,6 +120,9 @@ export class GlobalConfigManager {
     if (config.disabledBuiltins && config.disabledBuiltins.length > 0) {
       raw.disabled_builtins = config.disabledBuiltins;
     }
+    if (config.enableBuiltinWorkflows !== undefined) {
+      raw.enable_builtin_workflows = config.enableBuiltinWorkflows;
+    }
     if (config.anthropicApiKey) {
       raw.anthropic_api_key = config.anthropicApiKey;
     }
@@ -138,17 +141,11 @@ export class GlobalConfigManager {
     if (config.minimalOutput !== undefined) {
       raw.minimal_output = config.minimalOutput;
     }
-    if (config.bookmarkedWorkflows && config.bookmarkedWorkflows.length > 0) {
-      raw.bookmarked_workflows = config.bookmarkedWorkflows;
+    if (config.bookmarksFile) {
+      raw.bookmarks_file = config.bookmarksFile;
     }
-    if (config.workflowCategories !== undefined) {
-      raw.workflow_categories = config.workflowCategories;
-    }
-    if (config.showOthersCategory !== undefined) {
-      raw.show_others_category = config.showOthersCategory;
-    }
-    if (config.othersCategoryName !== undefined) {
-      raw.others_category_name = config.othersCategoryName;
+    if (config.workflowCategoriesFile) {
+      raw.workflow_categories_file = config.workflowCategoriesFile;
     }
     writeFileSync(configPath, stringifyYaml(raw), 'utf-8');
     this.invalidateCache();
@@ -175,6 +172,15 @@ export function getDisabledBuiltins(): string[] {
     return config.disabledBuiltins ?? [];
   } catch {
     return [];
+  }
+}
+
+export function getBuiltinWorkflowsEnabled(): boolean {
+  try {
+    const config = loadGlobalConfig();
+    return config.enableBuiltinWorkflows !== false;
+  } catch {
+    return true;
   }
 }
 
@@ -287,25 +293,3 @@ export function getEffectiveDebugConfig(projectDir?: string): DebugConfig | unde
   return debugConfig;
 }
 
-/** Get bookmarked workflow names */
-export function getBookmarkedWorkflows(): string[] {
-  const config = loadGlobalConfig();
-  return config.bookmarkedWorkflows ?? [];
-}
-
-/**
- * Toggle a workflow bookmark (add if not present, remove if present).
- * Persists to ~/.takt/config.yaml and returns the updated bookmarks list.
- */
-export function toggleBookmark(workflowName: string): string[] {
-  const config = loadGlobalConfig();
-  const bookmarks = [...(config.bookmarkedWorkflows ?? [])];
-  const index = bookmarks.indexOf(workflowName);
-  if (index >= 0) {
-    bookmarks.splice(index, 1);
-  } else {
-    bookmarks.push(workflowName);
-  }
-  saveGlobalConfig({ ...config, bookmarkedWorkflows: bookmarks });
-  return bookmarks;
-}

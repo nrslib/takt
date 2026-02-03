@@ -198,6 +198,20 @@ export const PipelineConfigSchema = z.object({
   pr_body_template: z.string().optional(),
 });
 
+/** Workflow category config schema (recursive) */
+export type WorkflowCategoryConfigNode = {
+  workflows?: string[];
+  [key: string]: WorkflowCategoryConfigNode | string[] | undefined;
+};
+
+export const WorkflowCategoryConfigNodeSchema: z.ZodType<WorkflowCategoryConfigNode> = z.lazy(() =>
+  z.object({
+    workflows: z.array(z.string()).optional(),
+  }).catchall(WorkflowCategoryConfigNodeSchema)
+);
+
+export const WorkflowCategoryConfigSchema = z.record(z.string(), WorkflowCategoryConfigNodeSchema);
+
 /** Global config schema */
 export const GlobalConfigSchema = z.object({
   language: LanguageSchema.optional().default(DEFAULT_LANGUAGE),
@@ -211,6 +225,8 @@ export const GlobalConfigSchema = z.object({
   worktree_dir: z.string().optional(),
   /** List of builtin workflow/agent names to exclude from fallback loading */
   disabled_builtins: z.array(z.string()).optional().default([]),
+  /** Enable builtin workflows from resources/global/{lang}/workflows */
+  enable_builtin_workflows: z.boolean().optional(),
   /** Anthropic API key for Claude Code SDK (overridden by TAKT_ANTHROPIC_API_KEY env var) */
   anthropic_api_key: z.string().optional(),
   /** OpenAI API key for Codex SDK (overridden by TAKT_OPENAI_API_KEY env var) */
@@ -219,14 +235,10 @@ export const GlobalConfigSchema = z.object({
   pipeline: PipelineConfigSchema.optional(),
   /** Minimal output mode for CI - suppress AI output to prevent sensitive information leaks */
   minimal_output: z.boolean().optional().default(false),
-  /** Bookmarked workflow names for quick access in selection UI */
-  bookmarked_workflows: z.array(z.string()).optional().default([]),
-  /** Workflow categories (name -> workflow list) */
-  workflow_categories: z.record(z.string(), z.array(z.string())).optional(),
-  /** Show uncategorized workflows under Others category */
-  show_others_category: z.boolean().optional(),
-  /** Display name for Others category */
-  others_category_name: z.string().min(1).optional(),
+  /** Path to bookmarks file (default: ~/.takt/preferences/bookmarks.yaml) */
+  bookmarks_file: z.string().optional(),
+  /** Path to workflow categories file (default: ~/.takt/preferences/workflow-categories.yaml) */
+  workflow_categories_file: z.string().optional(),
 });
 
 /** Project config schema */

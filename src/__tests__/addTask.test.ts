@@ -18,6 +18,7 @@ vi.mock('../infra/providers/index.js', () => ({
 
 vi.mock('../infra/config/global/globalConfig.js', () => ({
   loadGlobalConfig: vi.fn(() => ({ provider: 'claude' })),
+  getBuiltinWorkflowsEnabled: vi.fn().mockReturnValue(true),
 }));
 
 vi.mock('../shared/prompt/index.js', () => ({

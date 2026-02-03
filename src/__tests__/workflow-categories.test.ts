@@ -127,9 +127,11 @@ describe('workflow categories - listWorkflowEntries', () => {
 
     expect(simpleEntry).toBeDefined();
     expect(simpleEntry!.category).toBeUndefined();
+    expect(simpleEntry!.source).toBe('project');
 
     expect(reactEntry).toBeDefined();
     expect(reactEntry!.category).toBe('frontend');
+    expect(reactEntry!.source).toBe('project');
   });
 });
 
@@ -199,10 +201,10 @@ describe('workflow categories - loadWorkflow', () => {
 describe('buildWorkflowSelectionItems', () => {
   it('should separate root workflows and categories', () => {
     const entries: WorkflowDirEntry[] = [
-      { name: 'simple', path: '/tmp/simple.yaml' },
-      { name: 'frontend/react', path: '/tmp/frontend/react.yaml', category: 'frontend' },
-      { name: 'frontend/vue', path: '/tmp/frontend/vue.yaml', category: 'frontend' },
-      { name: 'backend/api', path: '/tmp/backend/api.yaml', category: 'backend' },
+      { name: 'simple', path: '/tmp/simple.yaml', source: 'project' },
+      { name: 'frontend/react', path: '/tmp/frontend/react.yaml', category: 'frontend', source: 'project' },
+      { name: 'frontend/vue', path: '/tmp/frontend/vue.yaml', category: 'frontend', source: 'project' },
+      { name: 'backend/api', path: '/tmp/backend/api.yaml', category: 'backend', source: 'project' },
     ];
 
     const items = buildWorkflowSelectionItems(entries);
@@ -225,9 +227,9 @@ describe('buildWorkflowSelectionItems', () => {
 
   it('should sort items alphabetically', () => {
     const entries: WorkflowDirEntry[] = [
-      { name: 'zebra', path: '/tmp/zebra.yaml' },
-      { name: 'alpha', path: '/tmp/alpha.yaml' },
-      { name: 'misc/playground', path: '/tmp/misc/playground.yaml', category: 'misc' },
+      { name: 'zebra', path: '/tmp/zebra.yaml', source: 'project' },
+      { name: 'alpha', path: '/tmp/alpha.yaml', source: 'project' },
+      { name: 'misc/playground', path: '/tmp/misc/playground.yaml', category: 'misc', source: 'project' },
     ];
 
     const items = buildWorkflowSelectionItems(entries);

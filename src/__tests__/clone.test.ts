@@ -32,6 +32,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 vi.mock('../infra/config/global/globalConfig.js', () => ({
   loadGlobalConfig: vi.fn(() => ({})),
+  getBuiltinWorkflowsEnabled: vi.fn().mockReturnValue(true),
 }));
 
 import { execFileSync } from 'node:child_process';

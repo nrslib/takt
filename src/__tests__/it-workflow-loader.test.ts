@@ -19,6 +19,7 @@ vi.mock('../infra/config/global/globalConfig.js', () => ({
   loadGlobalConfig: vi.fn().mockReturnValue({}),
   getLanguage: vi.fn().mockReturnValue('en'),
   getDisabledBuiltins: vi.fn().mockReturnValue([]),
+  getBuiltinWorkflowsEnabled: vi.fn().mockReturnValue(true),
 }));
 
 // --- Imports (after mocks) ---
@@ -189,13 +190,13 @@ describe('Workflow Loader IT: rule syntax parsing', () => {
     const config = loadWorkflow('minimal', testDir);
     expect(config).not.toBeNull();
 
-    const planStep = config!.steps.find((s) => s.name === 'plan');
-    expect(planStep).toBeDefined();
-    expect(planStep!.rules).toBeDefined();
-    expect(planStep!.rules!.length).toBeGreaterThan(0);
+    const implementStep = config!.steps.find((s) => s.name === 'implement');
+    expect(implementStep).toBeDefined();
+    expect(implementStep!.rules).toBeDefined();
+    expect(implementStep!.rules!.length).toBeGreaterThan(0);
 
     // Each rule should have condition and next
-    for (const rule of planStep!.rules!) {
+    for (const rule of implementStep!.rules!) {
       expect(typeof rule.condition).toBe('string');
       expect(rule.condition.length).toBeGreaterThan(0);
     }
@@ -320,10 +321,10 @@ describe('Workflow Loader IT: report config loading', () => {
   });
 
   it('should load single report config', () => {
-    const config = loadWorkflow('minimal', testDir);
+    const config = loadWorkflow('default', testDir);
     expect(config).not.toBeNull();
 
-    // simple workflow: plan step has a report config
+    // default workflow: plan step has a report config
     const planStep = config!.steps.find((s) => s.name === 'plan');
     expect(planStep).toBeDefined();
     expect(planStep!.report).toBeDefined();

@@ -10,6 +10,7 @@ export type { PipelineExecutionOptions } from './execute/types.js';
 export {
   selectAndExecuteTask,
   confirmAndCreateWorktree,
+  determineWorkflow,
   type SelectAndExecuteOptions,
   type WorktreeConfirmationResult,
 } from './execute/selectAndExecute.js';

@@ -2,6 +2,8 @@
  * Configuration types (global and project)
  */
 
+import type { WorkflowCategoryConfigNode } from './schemas.js';
+
 /** Custom agent configuration */
 export interface CustomAgentConfig {
   name: string;
@@ -46,6 +48,8 @@ export interface GlobalConfig {
   worktreeDir?: string;
   /** List of builtin workflow/agent names to exclude from fallback loading */
   disabledBuiltins?: string[];
+  /** Enable builtin workflows from resources/global/{lang}/workflows */
+  enableBuiltinWorkflows?: boolean;
   /** Anthropic API key for Claude Code SDK (overridden by TAKT_ANTHROPIC_API_KEY env var) */
   anthropicApiKey?: string;
   /** OpenAI API key for Codex SDK (overridden by TAKT_OPENAI_API_KEY env var) */
@@ -54,14 +58,10 @@ export interface GlobalConfig {
   pipeline?: PipelineConfig;
   /** Minimal output mode for CI - suppress AI output to prevent sensitive information leaks */
   minimalOutput?: boolean;
-  /** Bookmarked workflow names for quick access in selection UI */
-  bookmarkedWorkflows?: string[];
-  /** Workflow category configuration (name -> workflow list) */
-  workflowCategories?: Record<string, string[]>;
-  /** Show uncategorized workflows under Others category */
-  showOthersCategory?: boolean;
-  /** Display name for Others category */
-  othersCategoryName?: string;
+  /** Path to bookmarks file (default: ~/.takt/preferences/bookmarks.yaml) */
+  bookmarksFile?: string;
+  /** Path to workflow categories file (default: ~/.takt/preferences/workflow-categories.yaml) */
+  workflowCategoriesFile?: string;
 }
 
 /** Project-level configuration */

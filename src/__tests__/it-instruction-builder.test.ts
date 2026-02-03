@@ -13,6 +13,7 @@ import type { WorkflowStep, WorkflowRule, AgentResponse } from '../core/models/i
 vi.mock('../infra/config/global/globalConfig.js', () => ({
   loadGlobalConfig: vi.fn().mockReturnValue({}),
   getLanguage: vi.fn().mockReturnValue('en'),
+  getBuiltinWorkflowsEnabled: vi.fn().mockReturnValue(true),
 }));
 
 import { InstructionBuilder } from '../core/workflow/index.js';

@@ -2,6 +2,8 @@
  * Config module type definitions
  */
 
+import type { WorkflowCategoryConfigNode } from '../../core/models/schemas.js';
+
 /** Permission mode for the project
  * - default: Uses Agent SDK's acceptEdits mode (auto-accepts file edits, minimal prompts)
  * - sacrifice-my-pc: Auto-approves all permission requests (bypassPermissions)
@@ -24,7 +26,7 @@ export interface ProjectLocalConfig {
   /** Verbose output mode */
   verbose?: boolean;
   /** Workflow categories (name -> workflow list) */
-  workflow_categories?: Record<string, string[]>;
+  workflow_categories?: Record<string, WorkflowCategoryConfigNode>;
   /** Show uncategorized workflows under Others category */
   show_others_category?: boolean;
   /** Display name for Others category */

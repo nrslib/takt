@@ -8,6 +8,7 @@ export {
   loadGlobalConfig,
   saveGlobalConfig,
   getDisabledBuiltins,
+  getBuiltinWorkflowsEnabled,
   getLanguage,
   setLanguage,
   setProvider,
@@ -17,9 +18,23 @@ export {
   resolveOpenaiApiKey,
   loadProjectDebugConfig,
   getEffectiveDebugConfig,
-  getBookmarkedWorkflows,
-  toggleBookmark,
 } from './globalConfig.js';
+
+export {
+  getBookmarkedWorkflows,
+  addBookmark,
+  removeBookmark,
+  isBookmarked,
+} from './bookmarks.js';
+
+export {
+  getWorkflowCategoriesConfig,
+  setWorkflowCategoriesConfig,
+  getShowOthersCategory,
+  setShowOthersCategory,
+  getOthersCategoryName,
+  setOthersCategoryName,
+} from './workflowCategories.js';
 
 export {
   needsLanguageSetup,

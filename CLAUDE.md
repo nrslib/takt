@@ -11,18 +11,20 @@ TAKT (Task Agent Koordination Tool) is a multi-agent orchestration system for Cl
 | Command | Description |
 |---------|-------------|
 | `npm run build` | TypeScript build |
+| `npm run watch` | TypeScript build in watch mode |
 | `npm run test` | Run all tests |
-| `npm run test:watch` | Watch mode |
+| `npm run test:watch` | Run tests in watch mode (alias: `npm run test -- --watch`) |
 | `npm run lint` | ESLint |
 | `npx vitest run src/__tests__/client.test.ts` | Run single test file |
 | `npx vitest run -t "pattern"` | Run tests matching pattern |
+| `npm run prepublishOnly` | Lint, build, and test before publishing |
 
 ## CLI Subcommands
 
 | Command | Description |
 |---------|-------------|
 | `takt {task}` | Execute task with current workflow |
-| `takt` | Interactive task input mode |
+| `takt` | Interactive task input mode (chat with AI to refine requirements) |
 | `takt run` | Execute all pending tasks from `.takt/tasks/` once |
 | `takt watch` | Watch `.takt/tasks/` and auto-execute tasks (resident process) |
 | `takt add` | Add a new task via AI conversation |
@@ -33,7 +35,11 @@ TAKT (Task Agent Koordination Tool) is a multi-agent orchestration system for Cl
 | `takt config` | Configure settings (permission mode) |
 | `takt --help` | Show help message |
 
-GitHub issue references: `takt #6` fetches issue #6 and executes it as a task.
+**Interactive mode:** Running `takt` (without arguments) or `takt {initial message}` starts an interactive planning session. The AI helps refine task requirements through conversation. Type `/go` to execute the task with the selected workflow, or `/cancel` to abort. Implemented in `src/features/interactive/`.
+
+**Pipeline mode:** Specifying `--pipeline` enables non-interactive mode suitable for CI/CD. Automatically creates a branch, runs the workflow, commits, and pushes. Use `--auto-pr` to also create a pull request. Use `--skip-git` to run workflow only (no git operations). Implemented in `src/features/pipeline/`.
+
+**GitHub issue references:** `takt #6` fetches issue #6 and executes it as a task.
 
 ## Architecture
 
@@ -83,7 +89,24 @@ Implemented in `src/core/workflow/evaluation/RuleEvaluator.ts`. The matched meth
 - Emits events: `step:start`, `step:complete`, `step:blocked`, `step:loop_detected`, `workflow:complete`, `workflow:abort`, `iteration:limit`
 - Supports loop detection (`LoopDetector`) and iteration limits
 - Maintains agent sessions per step for conversation continuity
-- Parallel step execution via `runParallelStep()` with `Promise.all()`
+- Delegates to `StepExecutor` (normal steps) and `ParallelRunner` (parallel steps)
+
+**StepExecutor** (`src/core/workflow/engine/StepExecutor.ts`)
+- Executes a single workflow step through the 3-phase model
+- Phase 1: Main agent execution (with tools)
+- Phase 2: Report output (Write-only, optional)
+- Phase 3: Status judgment (no tools, optional)
+- Builds instructions via `InstructionBuilder`, detects matched rules via `RuleEvaluator`
+
+**ParallelRunner** (`src/core/workflow/engine/ParallelRunner.ts`)
+- Executes parallel sub-steps concurrently via `Promise.all()`
+- Aggregates sub-step results for parent rule evaluation
+- Supports `all()` / `any()` aggregate conditions
+
+**RuleEvaluator** (`src/core/workflow/evaluation/RuleEvaluator.ts`)
+- 5-stage fallback evaluation: aggregate → Phase 3 tag → Phase 1 tag → ai() judge → all-conditions AI judge
+- Returns `RuleMatch` with index and detection method (`aggregate`, `phase3_tag`, `phase1_tag`, `ai_judge`, `ai_fallback`)
+- Fail-fast: throws if rules exist but no rule matched
 
 **Instruction Builder** (`src/core/workflow/instruction/InstructionBuilder.ts`)
 - Auto-injects standard sections into every instruction (no need for `{task}` or `{previous_response}` placeholders in templates):
@@ -95,6 +118,7 @@ Implemented in `src/core/workflow/evaluation/RuleEvaluator.ts`. The matched meth
   6. `instruction_template` content
   7. Status output rules (auto-injected for tag-based rules)
 - Localized for `en` and `ja`
+- Related: `ReportInstructionBuilder` (Phase 2), `StatusJudgmentBuilder` (Phase 3)
 
 **Agent Runner** (`src/agents/runner.ts`)
 - Resolves agent specs (name or path) to agent configurations
@@ -105,25 +129,35 @@ Implemented in `src/core/workflow/evaluation/RuleEvaluator.ts`. The matched meth
   - `planner`: Read/Glob/Grep/Bash/WebSearch/WebFetch
 - Custom agents via `.takt/agents.yaml` or prompt files (.md)
 
-**Claude Integration** (`src/claude/`)
-- `client.ts` - High-level API: `callClaude()`, `callClaudeCustom()`, `callClaudeAgent()`, `callClaudeSkill()`
-- `process.ts` - SDK wrapper with `ClaudeProcess` class
-- `executor.ts` - Query execution using `@anthropic-ai/claude-agent-sdk`
-- `query-manager.ts` - Concurrent query tracking with query IDs
+**Provider Integration** (`src/infra/claude/`, `src/infra/codex/`)
+- **Claude** - Uses `@anthropic-ai/claude-agent-sdk`
+  - `client.ts` - High-level API: `callClaude()`, `callClaudeCustom()`, `callClaudeAgent()`, `callClaudeSkill()`
+  - `process.ts` - SDK wrapper with `ClaudeProcess` class
+  - `executor.ts` - Query execution
+  - `query-manager.ts` - Concurrent query tracking with query IDs
+- **Codex** - Direct OpenAI SDK integration
+  - `CodexStreamHandler.ts` - Stream handling and tool execution
 
 **Configuration** (`src/infra/config/`)
-- `loader.ts` - Custom agent loading from `.takt/agents.yaml`
-- `workflowLoader.ts` - YAML workflow parsing with Zod validation; resolves user workflows (`~/.takt/workflows/`) with builtin fallback (`resources/global/{lang}/workflows/`)
-- `agentLoader.ts` - Agent prompt file loading
+- `loaders/loader.ts` - Custom agent loading from `.takt/agents.yaml`
+- `loaders/workflowParser.ts` - YAML parsing, step/rule normalization with Zod validation
+- `loaders/workflowResolver.ts` - 3-layer resolution (builtin → user → project-local)
+- `loaders/workflowCategories.ts` - Workflow categorization and filtering
+- `loaders/agentLoader.ts` - Agent prompt file loading
 - `paths.ts` - Directory structure (`.takt/`, `~/.takt/`), session management
+- `global/globalConfig.ts` - Global configuration (provider, model, trusted dirs)
+- `project/projectConfig.ts` - Project-level configuration
 
-**Task Management** (`src/infra/task/`)
-- `runner.ts` - TaskRunner class for managing task files (`.takt/tasks/`)
-- `watcher.ts` - TaskWatcher class for polling and auto-executing tasks (used by `/watch`)
-- `index.ts` - Task operations (getNextTask, completeTask, addTask)
+**Task Management** (`src/features/tasks/`)
+- `execute/taskExecution.ts` - Main task execution orchestration
+- `execute/workflowExecution.ts` - Workflow execution wrapper
+- `add/index.ts` - Interactive task addition via AI conversation
+- `list/index.ts` - List task branches with merge/delete actions
+- `watch/index.ts` - Watch for task files and auto-execute
 
-**GitHub Integration** (`src/infra/github/issue.ts`)
-- Fetches issues via `gh` CLI, formats as task text with title/body/labels/comments
+**GitHub Integration** (`src/infra/github/`)
+- `issue.ts` - Fetches issues via `gh` CLI, formats as task text with title/body/labels/comments
+- `pr.ts` - Creates pull requests via `gh` CLI
 
 ### Data Flow
 
@@ -240,6 +274,36 @@ Key points about parallel steps:
 | `{user_inputs}` | Accumulated user inputs (auto-injected if not in template) |
 | `{report_dir}` | Report directory name |
 
+### Workflow Categories
+
+Workflows can be organized into categories for better UI presentation. Categories are configured in:
+- `resources/global/{lang}/default-categories.yaml` - Default builtin categories
+- `~/.takt/config.yaml` - User-defined categories (via `workflow_categories` field)
+
+Category configuration supports:
+- Nested categories (unlimited depth)
+- Per-category workflow lists
+- "Others" category for uncategorized workflows (can be disabled via `show_others_category: false`)
+- Builtin workflow filtering (disable via `builtin_workflows_enabled: false`, or selectively via `disabled_builtins: [name1, name2]`)
+
+Example category config:
+```yaml
+workflow_categories:
+  Development:
+    workflows: [default, simple]
+    children:
+      Backend:
+        workflows: [expert-cqrs]
+      Frontend:
+        workflows: [expert]
+  Research:
+    workflows: [research, magi]
+show_others_category: true
+others_category_name: "Other Workflows"
+```
+
+Implemented in `src/infra/config/loaders/workflowCategories.ts`.
+
 ### Model Resolution
 
 Model is resolved in the following priority order:
@@ -280,7 +344,7 @@ Files: `.takt/logs/{sessionId}.jsonl`, with `latest.json` pointer. Legacy `.json
 
 **Keep commands minimal.** One command per concept. Use arguments/modes instead of multiple similar commands. Before adding a new command, consider if existing commands can be extended.
 
-**Do NOT expand schemas carelessly.** Rule conditions are free-form text (not enum-restricted). However, the engine's behavior depends on specific patterns (`ai()`, `all()`, `any()`). Do not add new special syntax without updating the loader's regex parsing in `workflowLoader.ts`.
+**Do NOT expand schemas carelessly.** Rule conditions are free-form text (not enum-restricted). However, the engine's behavior depends on specific patterns (`ai()`, `all()`, `any()`). Do not add new special syntax without updating the loader's regex parsing in `workflowParser.ts`.
 
 **Instruction auto-injection over explicit placeholders.** The instruction builder auto-injects `{task}`, `{previous_response}`, `{user_inputs}`, and status rules. Templates should contain only step-specific instructions, not boilerplate.
 
@@ -297,6 +361,15 @@ What belongs in workflow `instruction_template`:
 - References to other steps or their outputs
 - Specific report file names or formats
 - Comment/output templates with hardcoded review type names
+
+**Separation of concerns in workflow engine:**
+- `WorkflowEngine` - Orchestration, state management, event emission
+- `StepExecutor` - Single step execution (3-phase model)
+- `ParallelRunner` - Parallel step execution
+- `RuleEvaluator` - Rule matching and evaluation
+- `InstructionBuilder` - Instruction template processing
+
+**Session management:** Agent sessions are stored per-cwd in `~/.claude/projects/{encoded-path}/` (Claude Code) or in-memory (Codex). Sessions are resumed across phases (Phase 1 → Phase 2 → Phase 3) to maintain context. When `cwd !== projectCwd` (worktree/clone execution), session resume is skipped to avoid cross-directory contamination.
 
 ## Isolated Execution (Shared Clone)
 
@@ -317,6 +390,28 @@ Key constraints:
 
 `ClaudeResult` (from SDK) has an `error` field. This must be propagated through `AgentResponse.error` → session log history → console output. Without this, SDK failures (exit code 1, rate limits, auth errors) appear as empty `blocked` status with no diagnostic info.
 
+**Error handling flow:**
+1. Provider error (Claude SDK / Codex) → `AgentResponse.error`
+2. `StepExecutor` captures error → `WorkflowEngine` emits `step:complete` with error
+3. Error logged to session log (`.takt/logs/{sessionId}.jsonl`)
+4. Console output shows error details
+5. Workflow transitions to `ABORT` step if error is unrecoverable
+
+## Debugging
+
+**Debug logging:** Set `debug_enabled: true` in `~/.takt/config.yaml` or create a `.takt/debug.yaml` file:
+```yaml
+enabled: true
+```
+
+Debug logs are written to `.takt/logs/debug.log` (ndjson format). Log levels: `debug`, `info`, `warn`, `error`.
+
+**Verbose mode:** Create `.takt/verbose` file (empty file) to enable verbose console output. This automatically enables debug logging and sets log level to `debug`.
+
+**Session logs:** All workflow executions are logged to `.takt/logs/{sessionId}.jsonl`. Use `tail -f .takt/logs/{sessionId}.jsonl` to monitor in real-time.
+
+**Testing with mocks:** Use `--provider mock` to test workflows without calling real AI APIs. Mock responses are deterministic and configurable via test fixtures.
+
 ## Testing Notes
 
 - Vitest for testing framework
@@ -324,3 +419,54 @@ Key constraints:
 - Mock workflows and agent configs for integration tests
 - Test single files: `npx vitest run src/__tests__/filename.test.ts`
 - Pattern matching: `npx vitest run -t "test pattern"`
+- Integration tests: Tests with `it-` prefix are integration tests that simulate full workflow execution
+- Engine tests: Tests with `engine-` prefix test specific WorkflowEngine scenarios (happy path, error handling, parallel execution, etc.)
+
+## Important Implementation Notes
+
+**Agent prompt resolution:**
+- Agent paths in workflow YAML are resolved relative to the workflow file's directory
+- `../agents/default/coder.md` resolves from workflow file location
+- Built-in agents are loaded from `dist/resources/global/{lang}/agents/`
+- User agents are loaded from `~/.takt/agents/` or `.takt/agents.yaml`
+- If agent file doesn't exist, the agent string is used as inline system prompt
+
+**Report directory structure:**
+- Report dirs are created at `.takt/reports/{timestamp}-{slug}/`
+- Report files specified in `step.report` are written relative to report dir
+- Report dir path is available as `{report_dir}` variable in instruction templates
+- When `cwd !== projectCwd` (worktree execution), reports still write to `projectCwd/.takt/reports/`
+
+**Session continuity across phases:**
+- Agent sessions persist across Phase 1 → Phase 2 → Phase 3 for context continuity
+- Session ID is passed via `resumeFrom` in `RunAgentOptions`
+- Sessions are stored per-cwd, so worktree executions create new sessions
+- Use `takt clear` to reset all agent sessions
+
+**Worktree execution gotchas:**
+- `git clone --shared` creates independent `.git` directory (not `git worktree`)
+- Clone cwd ≠ project cwd: agents work in clone, but reports/logs write to project
+- Session resume is skipped when `cwd !== projectCwd` to avoid cross-directory contamination
+- Clones are ephemeral: created → task runs → auto-commit + push → deleted
+- Use `takt list` to manage task branches after clone deletion
+
+**Rule evaluation quirks:**
+- Tag-based rules match by array index (0-based), not by exact condition text
+- `ai()` conditions are evaluated by Claude/Codex, not by string matching
+- Aggregate conditions (`all()`, `any()`) only work in parallel parent steps
+- Fail-fast: if rules exist but no rule matches, workflow aborts
+- Interactive-only rules are skipped in pipeline mode (`rule.interactiveOnly === true`)
+
+**Provider-specific behavior:**
+- Claude: Uses session files in `~/.claude/projects/`, supports skill/agent calls
+- Codex: In-memory sessions, no skill/agent calls
+- Model names are passed directly to provider (no alias resolution in TAKT)
+- Claude supports aliases: `opus`, `sonnet`, `haiku`
+- Codex defaults to `codex` if model not specified
+
+**Permission modes:**
+- `default`: Claude Code default behavior (prompts for file writes)
+- `acceptEdits`: Auto-accept file edits without prompts
+- `bypassPermissions`: Bypass all permission checks
+- Specified at step level (`permission_mode` field) or global config
+- Implemented via `--sandbox-mode` and `--accept-edits` flags passed to Claude Code CLI

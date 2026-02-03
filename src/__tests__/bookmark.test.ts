@@ -45,27 +45,25 @@ describe('applyBookmarks', () => {
     { label: 'delta', value: 'delta' },
   ];
 
-  it('should move bookmarked items to the top with ★ prefix', () => {
+  it('should add [*] suffix to bookmarked items without changing order', () => {
     const result = applyBookmarks(options, ['gamma']);
-    expect(result[0]!.label).toBe('★ gamma');
-    expect(result[0]!.value).toBe('gamma');
+    expect(result[2]!.label).toBe('gamma [*]');
+    expect(result[2]!.value).toBe('gamma');
     expect(result).toHaveLength(4);
   });
 
-  it('should preserve order of non-bookmarked items', () => {
+  it('should preserve original order of all items', () => {
     const result = applyBookmarks(options, ['gamma']);
-    const rest = result.slice(1);
-    expect(rest.map((o) => o.value)).toEqual(['alpha', 'beta', 'delta']);
+    expect(result.map((o) => o.value)).toEqual(['alpha', 'beta', 'gamma', 'delta']);
   });
 
-  it('should handle multiple bookmarks preserving their relative order', () => {
+  it('should handle multiple bookmarks preserving original order', () => {
     const result = applyBookmarks(options, ['delta', 'alpha']);
-    // Bookmarked items appear first, in the order they appear in options (not in bookmarks array)
     expect(result[0]!.value).toBe('alpha');
-    expect(result[0]!.label).toBe('★ alpha');
-    expect(result[1]!.value).toBe('delta');
-    expect(result[1]!.label).toBe('★ delta');
-    expect(result.slice(2).map((o) => o.value)).toEqual(['beta', 'gamma']);
+    expect(result[0]!.label).toBe('alpha [*]');
+    expect(result[3]!.value).toBe('delta');
+    expect(result[3]!.label).toBe('delta [*]');
+    expect(result.map((o) => o.value)).toEqual(['alpha', 'beta', 'gamma', 'delta']);
   });
 
   it('should return unchanged options when no bookmarks', () => {
@@ -92,13 +90,13 @@ describe('applyBookmarks', () => {
     ];
     // Only workflow values should match; categories are not bookmarkable
     const result = applyBookmarks(categoryOptions, ['simple']);
-    expect(result[0]!.label).toBe('★ simple');
-    expect(result.slice(1).map((o) => o.value)).toEqual(['__category__:frontend', '__category__:backend']);
+    expect(result[0]!.label).toBe('simple [*]');
+    expect(result.map((o) => o.value)).toEqual(['simple', '__category__:frontend', '__category__:backend']);
   });
 
   it('should handle all items bookmarked', () => {
     const result = applyBookmarks(options, ['alpha', 'beta', 'gamma', 'delta']);
-    expect(result.every((o) => o.label.startsWith('★ '))).toBe(true);
+    expect(result.every((o) => o.label.endsWith(' [*]'))).toBe(true);
     expect(result.map((o) => o.value)).toEqual(['alpha', 'beta', 'gamma', 'delta']);
   });
 });

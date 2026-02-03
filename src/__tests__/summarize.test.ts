@@ -10,6 +10,7 @@ vi.mock('../infra/providers/index.js', () => ({
 
 vi.mock('../infra/config/global/globalConfig.js', () => ({
   loadGlobalConfig: vi.fn(),
+  getBuiltinWorkflowsEnabled: vi.fn().mockReturnValue(true),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({

@@ -1,25 +1,30 @@
 workflow_categories:
   "🚀 Quick Start":
-    - minimal
-    - default
+    workflows:
+      - minimal
+      - default
 
   "🔍 Review & Fix":
-    - review-fix-minimal
+    workflows:
+      - review-fix-minimal
 
   "🎨 Frontend":
-    []
+    {}
 
   "⚙️ Backend":
-    []
+    {}
 
-  "🔧 Full Stack":
-    - expert
-    - expert-cqrs
+  "🔧 Expert":
+    "Full Stack":
+      workflows:
+        - expert
+        - expert-cqrs
 
   "Others":
-    - research
-    - magi
-    - review-only
+    workflows:
+      - research
+      - magi
+      - review-only
 
 show_others_category: true
 others_category_name: "Others"

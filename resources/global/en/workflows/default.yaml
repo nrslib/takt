@@ -1,5 +1,5 @@
 # Default TAKT Workflow
-# Plan -> Coder -> AI Review -> Reviewers (parallel: Architect + Security) -> Supervisor Approval
+# Plan -> Architect -> Implement -> AI Review -> Reviewers (parallel: Architect + Security) -> Supervisor Approval
 #
 # Boilerplate sections (Workflow Context, User Request, Previous Response,
 # Additional User Inputs, Instructions heading) are auto-injected by buildInstruction().
@@ -63,7 +63,7 @@ steps:
       - WebFetch
     rules:
       - condition: Requirements are clear and implementable
-        next: implement
+        next: architect
       - condition: User is asking a question (not an implementation task)
         next: COMPLETE
       - condition: Requirements unclear, insufficient info
@@ -84,13 +84,79 @@ steps:
       2. Identify impact scope
       3. Decide implementation approach
 
+  - name: architect
+    edit: false
+    agent: ../agents/default/architect.md
+    report:
+      name: 01-architecture.md
+      format: |
+        ```markdown
+        # Architecture Design
+
+        ## Task Size
+        Small / Medium / Large
+
+        ## Design Decisions
+
+        ### File Structure
+        | File | Role |
+        |------|------|
+        | `src/example.ts` | Summary |
+
+        ### Technology Selection
+        - {Selected technologies/libraries and reasoning}
+
+        ### Design Patterns
+        - {Patterns to adopt and where to apply}
+
+        ## Implementation Guidelines
+        - {Guidelines for Coder to follow during implementation}
+        ```
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Write
+      - WebSearch
+      - WebFetch
+    rules:
+      - condition: Small task (no design needed)
+        next: implement
+      - condition: Design complete
+        next: implement
+      - condition: Insufficient info, cannot proceed
+        next: ABORT
+    pass_previous_response: true
+    instruction_template: |
+      Read the plan report ({report:00-plan.md}) and perform architecture design.
+
+      **Small task criteria:**
+      - Only 1-2 files to modify
+      - Can follow existing patterns
+      - No technology selection needed
+
+      For small tasks, skip the design report and use the "Small task (no design needed)" rule.
+
+      **Tasks requiring design:**
+      - 3+ files to modify
+      - Adding new modules/features
+      - Technology selection needed
+      - Architecture pattern decisions needed
+
+      **Tasks:**
+      1. Evaluate task size
+      2. Decide file structure
+      3. Select technology (if needed)
+      4. Choose design patterns
+      5. Create implementation guidelines for Coder
+
   - name: implement
     edit: true
     agent: ../agents/default/coder.md
     session: refresh
     report:
-      - Scope: 01-coder-scope.md
-      - Decisions: 02-coder-decisions.md
+      - Scope: 02-coder-scope.md
+      - Decisions: 03-coder-decisions.md
     allowed_tools:
       - Read
       - Glob
@@ -113,9 +179,16 @@ steps:
         requires_user_input: true
         interactive_only: true
     instruction_template: |
-      Follow the plan from the plan step and implement.
-      Refer to the plan report ({report:00-plan.md}) and proceed with implementation.
+      Follow the plan from the plan step and the design from the architect step.
+
+      **Reports to reference:**
+      - Plan: {report:00-plan.md}
+      - Design: {report:01-architecture.md} (if exists)
+
       Use only the Report Directory files shown in Workflow Context. Do not search or open reports outside that directory.
+
+      **Important:** Do not make design decisions; follow the design determined in the architect step.
+      Report if you encounter unclear points or need design changes.
 
       **Scope report format (create at implementation start):**
       ```markdown
@@ -162,7 +235,7 @@ steps:
     agent: ../agents/default/ai-antipattern-reviewer.md
     pass_previous_response: true
     report:
-      name: 03-ai-review.md
+      name: 04-ai-review.md
       format: |
         ```markdown
         # AI-Generated Code Review
@@ -278,7 +351,7 @@ steps:
         edit: false
         agent: ../agents/default/architecture-reviewer.md
         report:
-          name: 04-architect-review.md
+          name: 05-architect-review.md
           format: |
             ```markdown
             # Architecture Review
@@ -318,15 +391,28 @@ steps:
           - condition: approved
           - condition: needs_fix
         instruction_template: |
-          Focus on **architecture and design** review. Do NOT review AI-specific issues (that's the ai_review step).
+          **Verify that the implementation follows the design from the architect step.**
+          Do NOT review AI-specific issues (that's the ai_review step).
 
-          Review the changes and provide feedback.
+          **Reports to reference:**
+          - Design: {report:01-architecture.md} (if exists)
+          - Implementation scope: {report:02-coder-scope.md}
+
+          **Review perspectives:**
+          - Design consistency (does it follow the file structure and patterns defined by architect?)
+          - Code quality
+          - Change scope appropriateness
+          - Test coverage
+          - Dead code
+          - Call chain verification
+
+          **Note:** For small tasks that skipped the architect step, review design validity as usual.
 
       - name: security-review
         edit: false
         agent: ../agents/default/security-reviewer.md
         report:
-          name: 05-security-review.md
+          name: 06-security-review.md
           format: |
             ```markdown
             # Security Review
@@ -417,7 +503,7 @@ steps:
     edit: false
     agent: ../agents/default/supervisor.md
     report:
-      - Validation: 06-supervisor-validation.md
+      - Validation: 07-supervisor-validation.md
       - Summary: summary.md
     allowed_tools:
       - Read
@@ -436,7 +522,7 @@ steps:
       Run tests, verify the build, and perform final approval.
 
       **Workflow Overall Review:**
-      1. Does the implementation match the plan ({report:00-plan.md})?
+      1. Does the implementation match the plan ({report:00-plan.md}) and design ({report:01-architecture.md}, if exists)?
       2. Were all review step issues addressed?
       3. Was the original task objective achieved?
 
@@ -485,8 +571,9 @@ steps:
       ## Review Results
       | Review | Result |
       |--------|--------|
-      | Architect | ✅ APPROVE |
+      | Architecture Design | ✅ Complete |
       | AI Review | ✅ APPROVE |
+      | Architect Review | ✅ APPROVE |
       | Security | ✅ APPROVE |
       | Supervisor | ✅ APPROVE |
 
