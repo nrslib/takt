@@ -143,20 +143,6 @@ export function warnMissingWorkflows(missing: MissingWorkflow[]): void {
   }
 }
 
-function countWorkflowsInTree(categories: WorkflowCategoryNode[]): number {
-  let count = 0;
-  const visit = (nodes: WorkflowCategoryNode[]): void => {
-    for (const node of nodes) {
-      count += node.workflows.length;
-      if (node.children.length > 0) {
-        visit(node.children);
-      }
-    }
-  };
-  visit(categories);
-  return count;
-}
-
 function categoryContainsWorkflow(node: WorkflowCategoryNode, workflow: string): boolean {
   if (node.workflows.includes(workflow)) return true;
   for (const child of node.children) {
@@ -313,7 +299,7 @@ function countWorkflowsIncludingCategories(
   visit(categories);
 
   let count = 0;
-  for (const [name, { source }] of allWorkflows) {
+  for (const [, { source }] of allWorkflows) {
     if (source === sourceFilter) {
       count++;
     }

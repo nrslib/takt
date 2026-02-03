@@ -2,8 +2,6 @@
  * Configuration types (global and project)
  */
 
-import type { WorkflowCategoryConfigNode } from './schemas.js';
-
 /** Custom agent configuration */
 export interface CustomAgentConfig {
   name: string;

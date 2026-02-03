@@ -5,7 +5,7 @@
  * used throughout the Claude integration layer.
  */
 
-import type { PermissionUpdate, AgentDefinition, PermissionMode as SdkPermissionMode } from '@anthropic-ai/claude-agent-sdk';
+import type { PermissionUpdate, AgentDefinition } from '@anthropic-ai/claude-agent-sdk';
 import type { PermissionMode } from '../../core/models/index.js';
 import type { PermissionResult } from '../../core/workflow/index.js';
 
