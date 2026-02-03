@@ -11,16 +11,7 @@
 
 import type { WorkflowStep, Language } from '../../models/types.js';
 import { generateStatusRulesFromRules } from './status-rules.js';
-
-/** Localized strings for status judgment phase */
-const STATUS_JUDGMENT_STRINGS = {
-  en: {
-    header: 'Review your work results and determine the status. Do NOT perform any additional work.',
-  },
-  ja: {
-    header: '作業結果を振り返り、ステータスを判定してください。追加の作業は行わないでください。',
-  },
-} as const;
+import { getPrompt } from '../../../shared/prompts/index.js';
 
 /**
  * Context for building status judgment instruction.
@@ -47,11 +38,10 @@ export class StatusJudgmentBuilder {
     }
 
     const language = this.context.language ?? 'en';
-    const s = STATUS_JUDGMENT_STRINGS[language];
     const sections: string[] = [];
 
     // Header
-    sections.push(s.header);
+    sections.push(getPrompt('instruction.statusJudgment.header', language));
 
     // Status rules (criteria table + output format)
     const generatedPrompt = generateStatusRulesFromRules(

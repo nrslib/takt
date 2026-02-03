@@ -12,35 +12,26 @@
 
 import type { WorkflowStep, Language } from '../../models/types.js';
 import type { InstructionContext } from './instruction-context.js';
-import { METADATA_STRINGS } from './instruction-context.js';
+import { getMetadataStrings } from './instruction-context.js';
 import { replaceTemplatePlaceholders } from './escape.js';
 import { isReportObjectConfig, renderReportContext, renderReportOutputInstruction } from './InstructionBuilder.js';
+import { getPromptObject } from '../../../shared/prompts/index.js';
 
-/** Localized strings for report phase execution rules */
-const REPORT_PHASE_STRINGS = {
-  en: {
-    noSourceEdit: '**Do NOT modify project source files.** Only output report files.',
-    reportDirOnly: '**Use only the Report Directory files shown above.** Do not search or open reports outside that directory.',
-    instructionBody: 'Output the results of your previous work as a report.',
-    reportJsonFormat: 'JSON format is optional. If you use JSON, map report file names to content (file name key only).',
-    reportPlainAllowed: 'You may output plain text. If there are multiple report files, the same content will be written to each file.',
-    reportOnlyOutput: 'Output only the report content (no status tags, no commentary).',
-  },
-  ja: {
-    noSourceEdit: '**プロジェクトのソースファイルを変更しないでください。** レポートファイルのみ出力してください。',
-    reportDirOnly: '**上記のReport Directory内のファイルのみ使用してください。** 他のレポートディレクトリは検索/参照しないでください。',
-    instructionBody: '前のステップの作業結果をレポートとして出力してください。',
-    reportJsonFormat: 'JSON形式は任意です。JSONを使う場合は「レポートファイル名→内容」のオブジェクトにしてください（キーはファイル名のみ）。',
-    reportPlainAllowed: '本文のみの出力も可です。複数ファイルの場合は同じ内容が各ファイルに書き込まれます。',
-    reportOnlyOutput: 'レポート本文のみを出力してください（ステータスタグやコメントは禁止）。',
-  },
-} as const;
+/** Shape of localized report phase strings */
+interface ReportPhaseStrings {
+  noSourceEdit: string;
+  reportDirOnly: string;
+  instructionBody: string;
+  reportJsonFormat: string;
+  reportPlainAllowed: string;
+  reportOnlyOutput: string;
+}
 
-/** Localized section strings (shared subset) */
-const SECTION_STRINGS = {
-  en: { workflowContext: '## Workflow Context', instructions: '## Instructions' },
-  ja: { workflowContext: '## Workflow Context', instructions: '## Instructions' },
-} as const;
+/** Shape of localized report section strings */
+interface ReportSectionStrings {
+  workflowContext: string;
+  instructions: string;
+}
 
 /**
  * Context for building report phase instruction.
@@ -71,9 +62,9 @@ export class ReportInstructionBuilder {
     }
 
     const language = this.context.language ?? 'en';
-    const s = SECTION_STRINGS[language];
-    const r = REPORT_PHASE_STRINGS[language];
-    const m = METADATA_STRINGS[language];
+    const s = getPromptObject<ReportSectionStrings>('instruction.reportSections', language);
+    const r = getPromptObject<ReportPhaseStrings>('instruction.reportPhase', language);
+    const m = getMetadataStrings(language);
     const sections: string[] = [];
 
     // 1. Execution Context

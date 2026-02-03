@@ -8,25 +8,12 @@ import * as wanakana from 'wanakana';
 import { loadGlobalConfig } from '../config/global/globalConfig.js';
 import { getProvider, type ProviderType } from '../providers/index.js';
 import { createLogger } from '../../shared/utils/index.js';
+import { getPrompt } from '../../shared/prompts/index.js';
 import type { SummarizeOptions } from './types.js';
 
 export type { SummarizeOptions };
 
 const log = createLogger('summarize');
-
-const SUMMARIZE_SYSTEM_PROMPT = `You are a slug generator. Given a task description, output ONLY a slug.
-
-NEVER output sentences. NEVER start with "this", "the", "i", "we", or "it".
-ALWAYS start with a verb: add, fix, update, refactor, implement, remove, etc.
-
-Format: verb-noun (lowercase, hyphens, max 30 chars)
-
-Input → Output:
-認証機能を追加する → add-auth
-Fix the login bug → fix-login-bug
-ユーザー登録にメール認証を追加 → add-email-verification
-worktreeを作るときブランチ名をAIで生成 → ai-branch-naming
-レビュー画面に元の指示を表示する → show-original-instruction`;
 
 /**
  * Sanitize a string for use as git branch name and directory name.
@@ -83,7 +70,7 @@ export class TaskSummarizer {
     const response = await provider.call('summarizer', taskName, {
       cwd: options.cwd,
       model,
-      systemPrompt: SUMMARIZE_SYSTEM_PROMPT,
+      systemPrompt: getPrompt('summarize.slugGenerator'),
       allowedTools: [],
     });
 

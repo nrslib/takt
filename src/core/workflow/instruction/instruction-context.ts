@@ -6,6 +6,7 @@
  */
 
 import type { AgentResponse, Language } from '../../models/types.js';
+import { getPromptObject } from '../../../shared/prompts/index.js';
 
 /**
  * Context for building instruction from template.
@@ -58,29 +59,22 @@ export function buildExecutionMetadata(context: InstructionContext, edit?: boole
   };
 }
 
-/** Localized strings for execution metadata rendering */
-export const METADATA_STRINGS = {
-  en: {
-    heading: '## Execution Context',
-    workingDirectory: 'Working Directory',
-    rulesHeading: '## Execution Rules',
-    noCommit: '**Do NOT run git commit.** Commits are handled automatically by the system after workflow completion.',
-    noCd: '**Do NOT use `cd` in Bash commands.** Your working directory is already set correctly. Run commands directly without changing directories.',
-    editEnabled: '**Editing is ENABLED for this step.** You may create, modify, and delete files as needed to fulfill the user\'s request.',
-    editDisabled: '**Editing is DISABLED for this step.** Do NOT create, modify, or delete any project source files. You may only read and search code. Report output will be handled automatically in a later phase.',
-    note: 'Note: This section is metadata. Follow the language used in the rest of the prompt.',
-  },
-  ja: {
-    heading: '## 実行コンテキスト',
-    workingDirectory: '作業ディレクトリ',
-    rulesHeading: '## 実行ルール',
-    noCommit: '**git commit を実行しないでください。** コミットはワークフロー完了後にシステムが自動で行います。',
-    noCd: '**Bashコマンドで `cd` を使用しないでください。** 作業ディレクトリは既に正しく設定されています。ディレクトリを変更せずにコマンドを実行してください。',
-    editEnabled: '**このステップでは編集が許可されています。** ユーザーの要求に応じて、ファイルの作成・変更・削除を行ってください。',
-    editDisabled: '**このステップでは編集が禁止されています。** プロジェクトのソースファイルを作成・変更・削除しないでください。コードの読み取り・検索のみ行ってください。レポート出力は後のフェーズで自動的に行われます。',
-    note: '',
-  },
-} as const;
+/** Shape of localized metadata strings from YAML */
+export interface MetadataStrings {
+  heading: string;
+  workingDirectory: string;
+  rulesHeading: string;
+  noCommit: string;
+  noCd: string;
+  editEnabled: string;
+  editDisabled: string;
+  note: string;
+}
+
+/** Load metadata strings for the given language from YAML */
+export function getMetadataStrings(language: Language): MetadataStrings {
+  return getPromptObject<MetadataStrings>('instruction.metadata', language);
+}
 
 /**
  * Render execution metadata as a markdown string.
@@ -90,7 +84,7 @@ export const METADATA_STRINGS = {
  * Language determines the output language; 'en' includes a note about language consistency.
  */
 export function renderExecutionMetadata(metadata: ExecutionMetadata): string {
-  const strings = METADATA_STRINGS[metadata.language];
+  const strings = getMetadataStrings(metadata.language);
   const lines = [
     strings.heading,
     `- ${strings.workingDirectory}: ${metadata.workingDirectory}`,

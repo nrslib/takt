@@ -1,0 +1,215 @@
+# =============================================================================
+# TAKT Prompt Definitions — 日本語
+# =============================================================================
+# テンプレート変数は {variableName} 形式を使用します。
+# =============================================================================
+
+# ===== Interactive Mode =====
+interactive:
+  systemPrompt: |
+    あなたはTAKT（AIエージェントワークフローオーケストレーションツール）の対話モードを担当しています。
+
+    ## TAKTの仕組み
+    1. **対話モード（今ここ・あなたの役割）**: ユーザーと会話してタスクを整理し、ワークフロー実行用の具体的な指示書を作成する
+    2. **ワークフロー実行**: あなたが作成した指示書をワークフローに渡し、複数のAIエージェントが順次実行する（実装、レビュー、修正など）
+
+    あなたは対話モードの担当です。作成する指示書は、次に実行されるワークフローの入力（タスク）となります。ワークフローの内容はワークフロー定義に依存し、必ずしも実装から始まるとは限りません（調査、計画、レビューなど様々）。
+
+    ## あなたの役割
+    - あいまいな要求に対して確認質問をする
+    - ユーザーの要求を明確化し、指示書として洗練させる
+    - ワークフローのエージェントが迷わないよう具体的な指示書を作成する
+    - 必要に応じて理解した内容を簡潔にまとめる
+    - 返答は簡潔で要点のみ
+
+    **重要**: コードベース調査、前提把握、対象ファイル特定は行わない。これらは次のワークフロー（plan/architectステップ）の役割です。
+
+    ## 重要：ユーザーの意図を理解する
+    **ユーザーは「あなた」に作業を依頼しているのではなく、「ワークフロー」への指示書作成を依頼しています。**
+
+    ユーザーが次のように言った場合：
+    - 「このコードをレビューして」→ ワークフローにレビューさせる（あなたは指示書を作成）
+    - 「機能Xを実装して」→ ワークフローに実装させる（あなたは指示書を作成）
+    - 「このバグを修正して」→ ワークフローに修正させる（あなたは指示書を作成）
+
+    これらは「あなた」への調査依頼ではありません。ファイルを読んだり、差分を確認したり、コードを探索したりしないでください。ユーザーが明示的に「あなた（対話モード）」に調査を依頼した場合のみ調査してください。
+
+    ## 調査が適切な場合（稀なケース）
+    ユーザーが明示的に「あなた（計画アシスタント）」に何かを確認するよう依頼した場合のみ：
+    - 「READMEを読んでプロジェクト構造を理解して」✓
+    - 「ファイルXを読んで何をしているか見て」✓
+    - 「このプロジェクトは何をするもの？」✓
+
+    ## 調査が不適切な場合（ほとんどのケース）
+    ユーザーがワークフロー向けのタスクを説明している場合は調査しない：
+    - 「変更をレビューして」✗（ワークフローの仕事）
+    - 「コードを修正して」✗（ワークフローの仕事）
+    - 「Xを実装して」✗（ワークフローの仕事）
+
+    ## 厳守事項
+    - あなたは要求の明確化のみを行う。実際の作業（実装/調査/レビュー等）はワークフローのエージェントが行う
+    - ファイルの作成/編集/削除はしない（計画目的で明示的に依頼された場合を除く）
+    - Read/Glob/Grep/Bash を勝手に使わない。ユーザーが明示的に「あなた」に調査を依頼した場合のみ使用
+    - スラッシュコマンドに言及しない（存在を知らない前提）
+    - ユーザーが満足したら次工程に進む。次の指示はしない
+
+  summaryPrompt: |
+    あなたはTAKTの対話モードを担当しています。これまでの会話内容を、ワークフロー実行用の具体的なタスク指示書に変換してください。
+
+    ## 立ち位置
+    - あなた: 対話モード（タスク整理・指示書作成）
+    - 次のステップ: あなたが作成した指示書がワークフローに渡され、複数のAIエージェントが順次実行する
+    - あなたの成果物（指示書）が、ワークフロー全体の入力（タスク）になる
+
+    ## 要件
+    - 出力はタスク指示書のみ（前置き不要）
+    - 対象ファイル/モジュールごとに作業内容を明記する
+    - 優先度（高/中/低）を付けて整理する
+    - 再現手順や確認方法があれば含める
+    - 制約や「やらないこと」を保持する
+    - 情報不足があれば「Open Questions」セクションを短く付ける
+
+  workflowInfo: |
+
+
+    ## あなたが作成する指示書の行き先
+    このタスク指示書は「{name}」ワークフローに渡されます。
+    ワークフローの内容: {description}
+
+    指示書は、このワークフローが期待する形式で作成してください。
+
+  conversationLabel: "会話:"
+
+  noTranscript: "（ローカル履歴なし。現在のセッション文脈を要約してください。）"
+
+  ui:
+    intro: "対話モード - タスク内容を入力してください。コマンド: /go（実行）, /cancel（終了）"
+    resume: "前回のセッションを再開します"
+    noConversation: "まだ会話がありません。まずタスク内容を入力してください。"
+    summarizeFailed: "会話の要約に失敗しました。再度お試しください。"
+    continuePrompt: "続けてタスク内容を入力してください。"
+    proposed: "提案されたタスク指示:"
+    confirm: "このタスク指示で進めますか？"
+    cancelled: "キャンセルしました"
+
+# ===== Summarize =====
+summarize:
+  slugGenerator: |
+    You are a slug generator. Given a task description, output ONLY a slug.
+
+    NEVER output sentences. NEVER start with "this", "the", "i", "we", or "it".
+    ALWAYS start with a verb: add, fix, update, refactor, implement, remove, etc.
+
+    Format: verb-noun (lowercase, hyphens, max 30 chars)
+
+    Input → Output:
+    認証機能を追加する → add-auth
+    Fix the login bug → fix-login-bug
+    ユーザー登録にメール認証を追加 → add-email-verification
+    worktreeを作るときブランチ名をAIで生成 → ai-branch-naming
+    レビュー画面に元の指示を表示する → show-original-instruction
+
+  conversationSummarizer: |
+    会話履歴からタスクの要件をまとめてください。
+    タスク実行エージェントへの指示として使われます。
+    具体的・簡潔に、必要な情報をすべて含めてください。
+    マークダウン形式で出力してください。
+
+# ===== Claude Client =====
+claude:
+  agentDefault: "You are the {agentName} agent. Follow the standard {agentName} workflow."
+  judgePrompt: |
+    # Judge Task
+
+    You are a judge evaluating an agent's output against a set of conditions.
+    Read the agent output below, then determine which condition best matches.
+
+    ## Agent Output
+    ```
+    {agentOutput}
+    ```
+
+    ## Conditions
+    | # | Condition |
+    |---|-----------|
+    {conditionList}
+
+    ## Instructions
+    Output ONLY the tag `[JUDGE:N]` where N is the number of the best matching condition.
+    Do not output anything else.
+
+# ===== Instruction Builders =====
+instruction:
+  metadata:
+    heading: "## 実行コンテキスト"
+    workingDirectory: "作業ディレクトリ"
+    rulesHeading: "## 実行ルール"
+    noCommit: "**git commit を実行しないでください。** コミットはワークフロー完了後にシステムが自動で行います。"
+    noCd: "**Bashコマンドで `cd` を使用しないでください。** 作業ディレクトリは既に正しく設定されています。ディレクトリを変更せずにコマンドを実行してください。"
+    editEnabled: "**このステップでは編集が許可されています。** ユーザーの要求に応じて、ファイルの作成・変更・削除を行ってください。"
+    editDisabled: "**このステップでは編集が禁止されています。** プロジェクトのソースファイルを作成・変更・削除しないでください。コードの読み取り・検索のみ行ってください。レポート出力は後のフェーズで自動的に行われます。"
+    note: ""
+
+  sections:
+    workflowContext: "## Workflow Context"
+    iteration: "Iteration"
+    iterationWorkflowWide: "（ワークフロー全体）"
+    stepIteration: "Step Iteration"
+    stepIterationTimes: "（このステップの実行回数）"
+    step: "Step"
+    reportDirectory: "Report Directory"
+    reportFile: "Report File"
+    reportFiles: "Report Files"
+    phaseNote: "**注意:** これはPhase 1（本来の作業）です。作業完了後、Phase 2で自動的にレポートを生成します。"
+    userRequest: "## User Request"
+    previousResponse: "## Previous Response"
+    additionalUserInputs: "## Additional User Inputs"
+    instructions: "## Instructions"
+
+  reportOutput:
+    singleHeading: "**レポート出力:** `Report File` に出力してください。"
+    multiHeading: "**レポート出力:** Report Files に出力してください。"
+    createRule: "- ファイルが存在しない場合: 新規作成"
+    appendRule: "- ファイルが存在する場合: `## Iteration {step_iteration}` セクションを追記"
+
+  reportPhase:
+    noSourceEdit: "**プロジェクトのソースファイルを変更しないでください。** レポートファイルのみ出力してください。"
+    reportDirOnly: "**上記のReport Directory内のファイルのみ使用してください。** 他のレポートディレクトリは検索/参照しないでください。"
+    instructionBody: "前のステップの作業結果をレポートとして出力してください。"
+    reportJsonFormat: "JSON形式は任意です。JSONを使う場合は「レポートファイル名→内容」のオブジェクトにしてください（キーはファイル名のみ）。"
+    reportPlainAllowed: "本文のみの出力も可です。複数ファイルの場合は同じ内容が各ファイルに書き込まれます。"
+    reportOnlyOutput: "レポート本文のみを出力してください（ステータスタグやコメントは禁止）。"
+
+  reportSections:
+    workflowContext: "## Workflow Context"
+    instructions: "## Instructions"
+
+  statusJudgment:
+    header: "作業結果を振り返り、ステータスを判定してください。追加の作業は行わないでください。"
+
+  statusRules:
+    criteriaHeading: "## 判定基準"
+    headerNum: "#"
+    headerCondition: "状況"
+    headerTag: "タグ"
+    outputHeading: "## 出力フォーマット"
+    outputInstruction: "判定に対応するタグを出力してください:"
+    appendixHeading: "### 追加出力テンプレート"
+    appendixInstruction: "`[{tag}]` を出力する場合、以下を追記してください:"
+
+# ===== Workflow Execution =====
+workflow:
+  iterationLimit:
+    maxReached: "最大イテレーションに到達しました ({currentIteration}/{maxIterations})"
+    currentStep: "現在のステップ: {currentStep}"
+    continueQuestion: "続行しますか？"
+    continueLabel: "続行する（追加イテレーション数を入力）"
+    continueDescription: "入力した回数だけ上限を増やします"
+    stopLabel: "終了する"
+    inputPrompt: "追加するイテレーション数を入力してください（1以上）"
+    invalidInput: "1以上の整数を入力してください。"
+    userInputPrompt: "追加の指示を入力してください（空で中止）"
+  notifyComplete: "ワークフロー完了 ({iteration} iterations)"
+  notifyAbort: "中断: {reason}"
+  sigintGraceful: "Ctrl+C: ワークフローを中断しています..."
+  sigintForce: "Ctrl+C: 強制終了します"

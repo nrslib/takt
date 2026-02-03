@@ -6,30 +6,19 @@
  */
 
 import type { WorkflowRule, Language } from '../../models/types.js';
+import { getPromptObject } from '../../../shared/prompts/index.js';
 
-/** Localized strings for rules-based status prompt */
-const RULES_PROMPT_STRINGS = {
-  en: {
-    criteriaHeading: '## Decision Criteria',
-    headerNum: '#',
-    headerCondition: 'Condition',
-    headerTag: 'Tag',
-    outputHeading: '## Output Format',
-    outputInstruction: 'Output the tag corresponding to your decision:',
-    appendixHeading: '### Appendix Template',
-    appendixInstruction: 'When outputting `[{tag}]`, append the following:',
-  },
-  ja: {
-    criteriaHeading: '## 判定基準',
-    headerNum: '#',
-    headerCondition: '状況',
-    headerTag: 'タグ',
-    outputHeading: '## 出力フォーマット',
-    outputInstruction: '判定に対応するタグを出力してください:',
-    appendixHeading: '### 追加出力テンプレート',
-    appendixInstruction: '`[{tag}]` を出力する場合、以下を追記してください:',
-  },
-} as const;
+/** Shape of localized status rules strings */
+interface StatusRulesStrings {
+  criteriaHeading: string;
+  headerNum: string;
+  headerCondition: string;
+  headerTag: string;
+  outputHeading: string;
+  outputInstruction: string;
+  appendixHeading: string;
+  appendixInstruction: string;
+}
 
 /**
  * Generate status rules prompt from rules configuration.
@@ -50,7 +39,7 @@ export function generateStatusRulesFromRules(
   options?: { interactive?: boolean },
 ): string {
   const tag = stepName.toUpperCase();
-  const strings = RULES_PROMPT_STRINGS[language];
+  const strings = getPromptObject<StatusRulesStrings>('instruction.statusRules', language);
   const interactiveEnabled = options?.interactive;
   const visibleRules = rules
     .map((rule, index) => ({ rule, index }))
@@ -86,6 +75,7 @@ export function generateStatusRulesFromRules(
       if (!rule.appendix) continue;
       const tagStr = `[${tag}:${index + 1}]`;
       lines.push('');
+      // appendixInstruction contains {tag} as a domain-specific placeholder, not a YAML template variable
       lines.push(strings.appendixInstruction.replace('{tag}', tagStr));
       lines.push('```');
       lines.push(rule.appendix.trimEnd());

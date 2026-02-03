@@ -6,10 +6,18 @@ TAKTはTAKT自身で開発されています（ドッグフーディング）。
 
 ## 必要条件
 
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) または Codex がインストール・設定済みであること
-- [GitHub CLI](https://cli.github.com/) (`gh`) — `takt "#N"`（GitHub Issue実行）を使う場合のみ必要
+次のいずれかが必要です。
 
-TAKTはClaude CodeとCodexの両方をプロバイダーとしてサポートしています。セットアップ時にプロバイダーを選択できます。
+- **Anthropic API Key** または **OpenAI API Key**
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) または [Codex](https://github.com/openai/codex) がインストール・設定済みであること
+
+追加で必要なもの:
+
+- [GitHub CLI](https://cli.github.com/) (`gh`) — `takt #N`（GitHub Issue実行）を使う場合のみ必要
+
+**料金について**: TAKT は API Key を使用する場合、Claude API（Anthropic）または OpenAI API を直接呼び出します。これは Claude Code や Codex を使った場合と同じ料金体系になります。特に CI/CD で自動実行する場合、API 使用量が増えるため、コストに注意してください。
+
+TAKTは Claude（Anthropic）と Codex（OpenAI）の両方をプロバイダーとしてサポートしています。
 
 ## インストール
 
@@ -23,9 +31,6 @@ npm install -g takt
 # 対話モードでAIとタスク要件を詰めてから実行
 takt
 
-# 最初のメッセージを指定して会話を開始することも可能
-takt こんにちは
-
 # GitHub Issueをタスクとして実行（どちらも同じ）
 takt #6
 takt --issue 6
@@ -34,81 +39,139 @@ takt --issue 6
 takt --pipeline --task "バグを修正して" --auto-pr
 ```
 
-### タスク実行の流れ
+## 使い方
 
-`takt #6` (GitHub Issue参照) を実行すると、以下の対話フローが表示されます:
+### 対話モード
 
-**1. ワークフロー選択**
-
-```
-Select workflow:
-  (↑↓ to move, Enter to select)
-
-  ❯ default (current) (default)
-    expert
-    expert-cqrs
-    magi
-    research
-    simple
-    Cancel
-```
-
-**2. 隔離クローン作成**（オプション）
-
-```
-? Create worktree? (Y/n)
-```
-
-`y` を選ぶと `git clone --shared` で隔離環境を作成し、作業ディレクトリをクリーンに保てます。
-
-**3. 実行** — 選択したワークフローが複数のエージェントを連携させてタスクを完了します。
-
-**4. PR作成**（worktree実行後）
-
-```
-? Create pull request? (y/N)
-```
-
-`--auto-pr` を指定している場合は確認なしで自動作成されます。
-
-### おすすめワークフロー
-
-| ワークフロー | おすすめ用途 |
-|------------|------------|
-| `default` | 本格的な開発タスク。TAKT自身の開発で使用。アーキテクト＋セキュリティの並列レビュー付き多段階レビュー。 |
-| `minimal` | 簡単な修正やシンプルなタスク。基本的なレビュー付きの最小限のワークフロー。 |
-| `review-fix-minimal` | レビュー＆修正ワークフロー。レビューフィードバックに基づく反復的な改善に特化。 |
-| `research` | 調査・リサーチ。質問せずに自律的にリサーチを実行。 |
-
-## コマンド一覧
-
-### 対話モード（デフォルト）
-
-日常の開発で使う基本モード。ワークフロー選択、worktree作成、PR作成を対話的に確認します。
+AI との会話でタスク内容を詰めてから実行するモード。タスクの要件が曖昧な場合や、AI と相談しながら内容を整理したい場合に便利です。
 
 ```bash
-# 対話モードでAIとタスク要件を詰めてから実行
+# 対話モードを開始（引数なし）
 takt
 
-# 最初のメッセージを指定して会話を開始することも可能
-takt こんにちは
+# 最初のメッセージを指定（短い単語のみ）
+takt hello
+```
 
-# GitHub Issueをタスクとして実行（どちらも同じ）
+**注意:** スペースを含む文字列や Issue 参照（`#6`）、`--task` / `--issue` オプションを指定すると、対話モードをスキップして直接タスク実行されます。
+
+**フロー:**
+1. ワークフロー選択
+2. AI との会話でタスク内容を整理
+3. `/go` でタスク指示を確定
+4. 実行（worktree 作成、ワークフロー実行、PR 作成）
+
+#### 実行例
+
+```
+$ takt
+
+Select workflow:
+  ❯ 🎼 default (current)
+    📁 Development/
+    📁 Research/
+    Cancel
+
+対話モード - タスク内容を入力してください。コマンド: /go（実行）, /cancel（終了）
+
+> ユーザー認証機能を追加したい
+
+[AI が要件を確認・整理]
+
+> /go
+
+提案されたタスク指示:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ユーザー認証機能を実装する。
+
+要件:
+- メールアドレスとパスワードによるログイン機能
+- JWT トークンを使った認証
+- パスワードのハッシュ化（bcrypt）
+- ログイン・ログアウト API エンドポイント
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+このタスク指示で進めますか？ (Y/n) y
+
+? Create worktree? (Y/n) y
+
+[ワークフロー実行開始...]
+```
+
+### 直接タスク実行
+
+タスク内容が明確な場合は、対話モードをスキップして直接実行できます。
+
+```bash
+# タスク内容を直接指定（スペースを含む文字列）
+takt "ログイン機能を追加する"
+
+# --task オプションでタスク内容を指定
+takt --task "バグを修正"
+
+# ワークフロー指定
+takt "認証機能を追加" --workflow expert
+
+# PR 自動作成
+takt "バグを修正" --auto-pr
+```
+
+### GitHub Issue タスク
+
+GitHub Issue を直接タスクとして実行できます。Issue のタイトル、本文、ラベル、コメントが自動的にタスク内容として取り込まれます。
+
+```bash
+# Issue番号を指定して実行
 takt #6
 takt --issue 6
 
-# PR自動作成（確認プロンプトをスキップ）
-takt #6 --auto-pr
+# Issue + ワークフロー指定
+takt #6 --workflow expert
 
-# --taskオプションでタスク内容を指定（GitHub Issueの代わり）
-takt --task "ログイン機能を追加"
+# Issue + PR自動作成
+takt #6 --auto-pr
 ```
 
-`--auto-pr` を指定しない場合、worktreeでの実行成功後に「PR作成する？」と確認されます。
+**必要条件:** [GitHub CLI](https://cli.github.com/) (`gh`) がインストールされ、認証済みであること。
 
-### パイプラインモード（`--pipeline`）
+### タスク管理（add / run / watch / list）
 
-`--pipeline` を指定すると非対話のパイプラインモードに入ります。ブランチ作成 → ワークフロー実行 → commit & push を自動で行います。スクリプトやCI連携に適しています。
+タスクファイル（`.takt/tasks/`）を使ったバッチ処理。複数のタスクを積んでおいて、後でまとめて実行する使い方に便利です。
+
+#### タスクを追加（`takt add`）
+
+```bash
+# AI会話でタスクの要件を詰めてからタスクを追加
+takt add
+
+# GitHub IssueからタスクAdd（Issue番号がブランチ名に反映される）
+takt add #28
+```
+
+#### タスクを実行（`takt run`）
+
+```bash
+# .takt/tasks/ の保留中タスクをすべて実行
+takt run
+```
+
+#### タスクを監視（`takt watch`）
+
+```bash
+# .takt/tasks/ を監視してタスクを自動実行（常駐プロセス）
+takt watch
+```
+
+#### タスクブランチを一覧表示（`takt list`）
+
+```bash
+# タスクブランチ一覧（マージ・削除）
+takt list
+```
+
+### パイプラインモード（CI/自動化向け）
+
+`--pipeline` を指定すると非対話のパイプラインモードに入ります。ブランチ作成 → ワークフロー実行 → commit & push を自動で行います。CI/CD での自動化に適しています。
 
 ```bash
 # タスクをパイプライン実行
@@ -128,25 +191,41 @@ takt --pipeline --task "バグを修正" --auto-pr --repo owner/repo
 
 # ワークフロー実行のみ（ブランチ作成・commit・pushをスキップ）
 takt --pipeline --task "バグを修正" --skip-git
+
+# 最小限の出力モード（CI向け）
+takt --pipeline --task "バグを修正" --quiet
 ```
 
-パイプラインモードでは `--auto-pr` を指定しない限りPRは作成されません。
+パイプラインモードでは `--auto-pr` を指定しない限り PR は作成されません。
 
-### サブコマンド
+**GitHub との統合:** GitHub Actions で TAKT を使う場合は、[takt-action](https://github.com/nrslib/takt-action) を参照してください。PR レビューやタスク実行を自動化できます。詳細は [CI/CD 連携](#cicd連携) セクションを参照してください。
 
-| コマンド | 説明 |
-|---------|------|
-| `takt run` | `.takt/tasks/` の保留中タスクをすべて実行 |
-| `takt watch` | `.takt/tasks/` を監視してタスクを自動実行（常駐プロセス） |
-| `takt add` | AI会話で新しいタスクを追加 |
-| `takt list` | タスクブランチ一覧（マージ・削除） |
-| `takt switch` | ワークフローを対話的に切り替え |
-| `takt clear` | エージェントの会話セッションをクリア |
-| `takt eject` | ビルトインのワークフロー/エージェントを`~/.takt/`にコピーしてカスタマイズ |
-| `takt config` | パーミッションモードを設定 |
-| `takt --help` | ヘルプを表示 |
+### その他のコマンド
 
-### オプション
+```bash
+# ワークフローを対話的に切り替え
+takt switch
+
+# ビルトインのワークフロー/エージェントを~/.takt/にコピーしてカスタマイズ
+takt eject
+
+# エージェントの会話セッションをクリア
+takt clear
+
+# パーミッションモードを設定
+takt config
+```
+
+### おすすめワークフロー
+
+| ワークフロー | おすすめ用途 |
+|------------|------------|
+| `default` | 本格的な開発タスク。TAKT自身の開発で使用。アーキテクト＋セキュリティの並列レビュー付き多段階レビュー。 |
+| `minimal` | 簡単な修正やシンプルなタスク。基本的なレビュー付きの最小限のワークフロー。 |
+| `review-fix-minimal` | レビュー＆修正ワークフロー。レビューフィードバックに基づく反復的な改善に特化。 |
+| `research` | 調査・リサーチ。質問せずに自律的にリサーチを実行。 |
+
+### 主要なオプション
 
 | オプション | 説明 |
 |-----------|------|
@@ -162,7 +241,6 @@ takt --pipeline --task "バグを修正" --skip-git
 | `-q, --quiet` | 最小限の出力モード: AIの出力を抑制（CI向け） |
 | `--provider <name>` | エージェントプロバイダーを上書き（claude\|codex\|mock） |
 | `--model <name>` | エージェントモデルを上書き |
-| `--config <path>` | グローバル設定ファイルのパス（デフォルト: `~/.takt/config.yaml`） |
 
 ## ワークフロー
 
@@ -281,13 +359,13 @@ TAKTには複数のビルトインワークフローが同梱されています:
 
 | ワークフロー | 説明 |
 |------------|------|
+| `default` | フル開発ワークフロー: 計画 → アーキテクチャ設計 → 実装 → AI レビュー → 並列レビュー（アーキテクト＋セキュリティ）→ スーパーバイザー承認。各レビュー段階に修正ループあり。 |
 | `minimal` | クイックワークフロー: 計画 → 実装 → レビュー → スーパーバイザー。高速イテレーション向けの最小ステップ。 |
-| `default` | フル開発ワークフロー: 計画 → 実装 → AIレビュー → 並列レビュー（アーキテクト＋セキュリティ）→ スーパーバイザー承認。各レビュー段階に修正ループあり。 |
 | `review-fix-minimal` | レビュー重視ワークフロー: レビュー → 修正 → スーパーバイザー。レビューフィードバックに基づく反復改善向け。 |
 | `research` | リサーチワークフロー: プランナー → ディガー → スーパーバイザー。質問せずに自律的にリサーチを実行。 |
-| `expert` | ドメインエキスパートによる逐次レビュー: アーキテクチャ、フロントエンド、セキュリティ、QAレビューと修正ループ。 |
-| `expert-cqrs` | ドメインエキスパートによる逐次レビュー: CQRS+ES、フロントエンド、セキュリティ、QAレビューと修正ループ。 |
-| `magi` | エヴァンゲリオンにインスパイアされた審議システム。3つのAIペルソナ（MELCHIOR、BALTHASAR、CASPER）が分析し投票。 |
+| `expert` | フルスタック開発ワークフロー: アーキテクチャ、フロントエンド、セキュリティ、QA レビューと修正ループ。 |
+| `expert-cqrs` | フルスタック開発ワークフロー（CQRS+ES特化）: CQRS+ES、フロントエンド、セキュリティ、QA レビューと修正ループ。 |
+| `magi` | エヴァンゲリオンにインスパイアされた審議システム。3つの AI ペルソナ（MELCHIOR、BALTHASAR、CASPER）が分析し投票。 |
 | `review-only` | 変更を加えない読み取り専用のコードレビューワークフロー。 |
 
 `takt switch` でワークフローを切り替えられます。
@@ -305,18 +383,7 @@ TAKTには複数のビルトインワークフローが同梱されています:
 
 ## カスタムエージェント
 
-`.takt/agents.yaml`でカスタムエージェントを定義:
-
-```yaml
-agents:
-  - name: my-reviewer
-    prompt_file: .takt/prompts/reviewer.md
-    allowed_tools: [Read, Glob, Grep]
-    provider: claude             # オプション: claude または codex
-    model: opus                  # Claude: opus/sonnet/haiku、Codex: gpt-5.2-codex 等
-```
-
-またはMarkdownファイルでエージェントプロンプトを作成:
+Markdown ファイルでエージェントプロンプトを作成:
 
 ```markdown
 # ~/.takt/agents/my-agents/reviewer.md
@@ -344,20 +411,23 @@ Claude Code はエイリアス（`opus`、`sonnet`、`haiku`、`opusplan`、`def
 ## プロジェクト構造
 
 ```
-~/.takt/
-├── config.yaml          # グローバル設定（プロバイダー、モデル、ワークフロー等）
-├── workflows/           # ユーザーワークフロー定義（ビルトインを上書き）
-└── agents/              # ユーザーエージェントプロンプトファイル
+~/.takt/                    # グローバル設定ディレクトリ
+├── config.yaml             # グローバル設定（プロバイダー、モデル、ワークフロー等）
+├── workflows/              # ユーザーワークフロー定義（ビルトインを上書き）
+│   └── custom.yaml
+└── agents/                 # ユーザーエージェントプロンプトファイル（.md）
+    └── my-agent.md
 
-.takt/                   # プロジェクトレベルの設定
-├── agents.yaml          # カスタムエージェント定義
-├── tasks/               # 保留中のタスクファイル（.yaml, .md）
-├── completed/           # 完了したタスクとレポート
-├── reports/             # 実行レポート（自動生成）
-└── logs/                # NDJSON形式のセッションログ
-    ├── latest.json      # 現在/最新セッションへのポインタ
-    ├── previous.json    # 前回セッションへのポインタ
-    └── {sessionId}.jsonl # ワークフロー実行ごとのNDJSONセッションログ
+.takt/                      # プロジェクトレベルの設定
+├── config.yaml             # プロジェクト設定（現在のワークフロー等）
+├── tasks/                  # 保留中のタスクファイル（.yaml, .md）
+├── completed/              # 完了したタスクとレポート
+├── reports/                # 実行レポート（自動生成）
+│   └── {timestamp}-{slug}/
+└── logs/                   # NDJSON 形式のセッションログ
+    ├── latest.json         # 現在/最新セッションへのポインタ
+    ├── previous.json       # 前回セッションへのポインタ
+    └── {sessionId}.jsonl   # ワークフロー実行ごとの NDJSON セッションログ
 ```
 
 ビルトインリソースはnpmパッケージ（`dist/resources/`）に埋め込まれています。`~/.takt/` のユーザーファイルが優先されます。
@@ -373,6 +443,12 @@ default_workflow: default
 log_level: info
 provider: claude         # デフォルトプロバイダー: claude または codex
 model: sonnet            # デフォルトモデル（オプション）
+
+# API Key 設定（オプション）
+# 環境変数 TAKT_ANTHROPIC_API_KEY / TAKT_OPENAI_API_KEY で上書き可能
+anthropic_api_key: sk-ant-...  # Claude (Anthropic) を使う場合
+# openai_api_key: sk-...       # Codex (OpenAI) を使う場合
+
 trusted_directories:
   - /path/to/trusted/dir
 
@@ -386,6 +462,24 @@ trusted_directories:
 #     {issue_body}
 #     Closes #{issue}
 ```
+
+**API Key の設定方法:**
+
+1. **環境変数で設定**:
+   ```bash
+   export TAKT_ANTHROPIC_API_KEY=sk-ant-...  # Claude の場合
+   # または
+   export TAKT_OPENAI_API_KEY=sk-...         # Codex の場合
+   ```
+
+2. **設定ファイルで設定**:
+   上記の `~/.takt/config.yaml` に `anthropic_api_key` または `openai_api_key` を記述
+
+優先順位: 環境変数 > `config.yaml` の設定
+
+**注意事項:**
+- API Key を設定した場合、Claude Code や Codex のインストールは不要です。TAKT が直接 Anthropic API または OpenAI API を呼び出します。
+- **セキュリティ**: `config.yaml` に API Key を記述した場合、このファイルを Git にコミットしないよう注意してください。環境変数での設定を使うか、`.gitignore` に `~/.takt/config.yaml` を追加することを検討してください。
 
 **パイプラインテンプレート変数:**
 
@@ -402,35 +496,11 @@ trusted_directories:
 3. グローバル設定の `model`
 4. プロバイダーデフォルト（Claude: sonnet、Codex: codex）
 
-## 実践的な使い方ガイド
+## 詳細ガイド
 
-### 対話ワークフロー
+### タスクファイルの形式
 
-`takt` （対話モード）または `takt #6` （GitHub Issue）を実行すると、以下の流れで案内されます:
-
-1. **ワークフロー選択** - 利用可能なワークフローから選択（矢印キーで移動、ESCでキャンセル）
-2. **隔離クローン作成**（オプション） - `git clone --shared` による隔離環境でタスクを実行
-3. **PR作成**（worktree実行後） - タスクブランチからPRを作成
-
-`--auto-pr` を指定している場合、PR作成の確認はスキップされ自動で作成されます。
-
-### タスク管理
-
-TAKTは`.takt/tasks/`内のタスクファイルによるバッチ処理をサポートしています。`.yaml`/`.yml`と`.md`の両方のファイル形式に対応しています。
-
-#### `takt add` でタスクを追加
-
-```bash
-# AI会話でタスクの要件を詰めてからタスクを追加
-takt add
-
-# GitHub IssueからタスクAdd（Issue番号がブランチ名に反映される）
-takt add #28
-```
-
-`takt add` はAI会話を開始し、タスクの要件を詰めます。`/go` で確定すると、AIが会話を要約してYAMLタスクファイルを作成します。worktree/branch/workflowの設定も対話的に行えます。`takt add #N` を使用すると、Issue番号が自動的にブランチ名に反映されます（例: `takt/issue-28-...`）。
-
-#### タスクファイルの形式
+TAKT は `.takt/tasks/` 内のタスクファイルによるバッチ処理をサポートしています。`.yaml`/`.yml` と `.md` の両方のファイル形式に対応しています。
 
 **YAML形式**（推奨、worktree/branch/workflowオプション対応）:
 
@@ -466,40 +536,7 @@ YAMLタスクファイルで`worktree`を指定すると、各タスクを`git c
 
 > **Note**: YAMLフィールド名は後方互換のため`worktree`のままです。内部的には`git worktree`ではなく`git clone --shared`を使用しています。git worktreeの`.git`ファイルには`gitdir:`でメインリポジトリへのパスが記載されており、Claude Codeがそれを辿ってメインリポジトリをプロジェクトルートと認識してしまうためです。共有クローンは独立した`.git`ディレクトリを持つため、この問題が発生しません。
 
-クローンは使い捨てです。タスク完了後に自動的にコミット＋プッシュし、クローンを削除します。ブランチが唯一の永続的な成果物です。`takt list`でブランチの一覧表示・マージ・削除ができます。
-
-#### `/run-tasks` でタスクを実行
-
-```bash
-takt run
-```
-
-- タスクはアルファベット順に実行されます（`001-`、`002-`のようなプレフィックスで順序を制御）
-- 完了したタスクは実行レポートとともに`.takt/completed/`に移動されます
-- 実行中に追加された新しいタスクも動的に取得されます
-
-#### `/watch` でタスクを監視
-
-```bash
-takt watch
-```
-
-ウォッチモードは`.takt/tasks/`をポーリングし、新しいタスクファイルが現れると自動実行します。`Ctrl+C`で停止する常駐プロセスです。以下のような場合に便利です:
-- タスクファイルを生成するCI/CDパイプライン
-- 外部プロセスがタスクを追加する自動化ワークフロー
-- タスクを順次キューイングする長時間の開発セッション
-
-#### `/list-tasks` でタスクブランチを一覧表示
-
-```bash
-takt list
-```
-
-`takt/`プレフィックスのブランチをファイル変更数とともに一覧表示します。各ブランチに対して以下の操作が可能です:
-- **Try merge** - mainにスカッシュマージ（変更をステージングのみ、コミットなし）
-- **Instruct** - 一時クローン経由で追加指示を与える
-- **Merge & cleanup** - マージしてブランチを削除
-- **Delete** - マージせずにブランチを削除
+クローンは使い捨てです。タスク完了後に自動的にコミット＋プッシュし、クローンを削除します。ブランチが唯一の永続的な成果物です。`takt list` でブランチの一覧表示・マージ・削除ができます。
 
 ### セッションログ
 
@@ -515,7 +552,7 @@ TAKTはセッションログをNDJSON（`.jsonl`）形式で`.takt/logs/`に書�
 
 ### カスタムワークフローの追加
 
-`~/.takt/workflows/`にYAMLファイルを追加するか、`/eject`でビルトインをカスタマイズします:
+`~/.takt/workflows/` に YAML ファイルを追加するか、`takt eject` でビルトインをカスタマイズします:
 
 ```bash
 # defaultワークフローを~/.takt/workflows/にコピーして編集
@@ -689,27 +726,15 @@ npm install -g takt
 takt --pipeline --task "バグ修正" --auto-pr --repo owner/repo
 ```
 
-認証には `ANTHROPIC_API_KEY` または `OPENAI_API_KEY` 環境変数を設定してください。
-
-## Docker サポート
-
-他の環境でのテスト用にDocker環境が提供されています:
+認証には `TAKT_ANTHROPIC_API_KEY` または `TAKT_OPENAI_API_KEY` 環境変数を設定してください（TAKT 独自のプレフィックス付き）。
 
 ```bash
-# Dockerイメージをビルド
-docker compose build
+# Claude (Anthropic) を使う場合
+export TAKT_ANTHROPIC_API_KEY=sk-ant-...
 
-# コンテナでテストを実行
-docker compose run --rm test
-
-# コンテナでlintを実行
-docker compose run --rm lint
-
-# ビルドのみ（テストをスキップ）
-docker compose run --rm build
+# Codex (OpenAI) を使う場合
+export TAKT_OPENAI_API_KEY=sk-...
 ```
-
-これにより、クリーンなNode.js 20環境でプロジェクトが正しく動作することが保証されます。
 
 ## ドキュメント
 

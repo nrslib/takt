@@ -43,6 +43,7 @@ import {
 import { createLogger, notifySuccess, notifyError } from '../../../shared/utils/index.js';
 import { selectOption, promptInput } from '../../../shared/prompt/index.js';
 import { EXIT_SIGINT } from '../../../shared/exitCodes.js';
+import { getPrompt } from '../../../shared/prompts/index.js';
 
 const log = createLogger('workflow');
 
@@ -132,17 +133,20 @@ export async function executeWorkflow(
 
     blankLine();
     warn(
-      `最大イテレーションに到達しました (${request.currentIteration}/${request.maxIterations})`
+      getPrompt('workflow.iterationLimit.maxReached', undefined, {
+        currentIteration: String(request.currentIteration),
+        maxIterations: String(request.maxIterations),
+      })
     );
-    info(`現在のステップ: ${request.currentStep}`);
+    info(getPrompt('workflow.iterationLimit.currentStep', undefined, { currentStep: request.currentStep }));
 
-    const action = await selectOption('続行しますか？', [
+    const action = await selectOption(getPrompt('workflow.iterationLimit.continueQuestion'), [
       {
-        label: '続行する（追加イテレーション数を入力）',
+        label: getPrompt('workflow.iterationLimit.continueLabel'),
         value: 'continue',
-        description: '入力した回数だけ上限を増やします',
+        description: getPrompt('workflow.iterationLimit.continueDescription'),
       },
-      { label: '終了する', value: 'stop' },
+      { label: getPrompt('workflow.iterationLimit.stopLabel'), value: 'stop' },
     ]);
 
     if (action !== 'continue') {
@@ -150,7 +154,7 @@ export async function executeWorkflow(
     }
 
     while (true) {
-      const input = await promptInput('追加するイテレーション数を入力してください（1以上）');
+      const input = await promptInput(getPrompt('workflow.iterationLimit.inputPrompt'));
       if (!input) {
         return null;
       }
@@ -161,7 +165,7 @@ export async function executeWorkflow(
         return additionalIterations;
       }
 
-      warn('1以上の整数を入力してください。');
+      warn(getPrompt('workflow.iterationLimit.invalidInput'));
     }
   };
 
@@ -173,7 +177,7 @@ export async function executeWorkflow(
         }
         blankLine();
         info(request.prompt.trim());
-        const input = await promptInput('追加の指示を入力してください（空で中止）');
+        const input = await promptInput(getPrompt('workflow.iterationLimit.userInputPrompt'));
         return input && input.trim() ? input.trim() : null;
       }
     : undefined;
@@ -302,7 +306,7 @@ export async function executeWorkflow(
 
     success(`Workflow completed (${state.iteration} iterations${elapsedDisplay})`);
     info(`Session log: ${ndjsonLogPath}`);
-    notifySuccess('TAKT', `ワークフロー完了 (${state.iteration} iterations)`);
+    notifySuccess('TAKT', getPrompt('workflow.notifyComplete', undefined, { iteration: String(state.iteration) }));
   });
 
   engine.on('workflow:abort', (state, reason) => {
@@ -332,7 +336,7 @@ export async function executeWorkflow(
 
     error(`Workflow aborted after ${state.iteration} iterations${elapsedDisplay}: ${reason}`);
     info(`Session log: ${ndjsonLogPath}`);
-    notifyError('TAKT', `中断: ${reason}`);
+    notifyError('TAKT', getPrompt('workflow.notifyAbort', undefined, { reason }));
   });
 
   // SIGINT handler: 1st Ctrl+C = graceful abort, 2nd = force exit
@@ -341,11 +345,11 @@ export async function executeWorkflow(
     sigintCount++;
     if (sigintCount === 1) {
       blankLine();
-      warn('Ctrl+C: ワークフローを中断しています...');
+      warn(getPrompt('workflow.sigintGraceful'));
       engine.abort();
     } else {
       blankLine();
-      error('Ctrl+C: 強制終了します');
+      error(getPrompt('workflow.sigintForce'));
       process.exit(EXIT_SIGINT);
     }
   };

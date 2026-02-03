@@ -10,7 +10,7 @@
     "takt-cli": "./dist/app/cli/index.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && mkdir -p dist/shared/prompts && cp src/shared/prompts/prompts_en.yaml src/shared/prompts/prompts_ja.yaml dist/shared/prompts/",
     "watch": "tsc --watch",
     "test": "vitest run",
     "test:watch": "vitest",

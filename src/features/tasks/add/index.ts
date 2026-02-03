@@ -14,15 +14,11 @@ import { summarizeTaskName, type TaskFileData } from '../../../infra/task/index.
 import { loadGlobalConfig, listWorkflows, getCurrentWorkflow } from '../../../infra/config/index.js';
 import { getProvider, type ProviderType } from '../../../infra/providers/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
+import { getPrompt } from '../../../shared/prompts/index.js';
 import { isIssueReference, resolveIssueTask, parseIssueNumbers } from '../../../infra/github/index.js';
 import { interactiveMode } from '../../interactive/index.js';
 
 const log = createLogger('add-task');
-
-const SUMMARIZE_SYSTEM_PROMPT = `会話履歴からタスクの要件をまとめてください。
-タスク実行エージェントへの指示として使われます。
-具体的・簡潔に、必要な情報をすべて含めてください。
-マークダウン形式で出力してください。`;
 
 /**
  * Summarize conversation history into a task description using AI.
@@ -38,7 +34,7 @@ export async function summarizeConversation(cwd: string, conversationText: strin
     cwd,
     maxTurns: 1,
     allowedTools: [],
-    systemPrompt: SUMMARIZE_SYSTEM_PROMPT,
+    systemPrompt: getPrompt('summarize.conversationSummarizer'),
   });
 
   return response.content;

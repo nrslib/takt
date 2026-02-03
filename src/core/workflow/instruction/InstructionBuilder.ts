@@ -14,6 +14,7 @@ import type { InstructionContext } from './instruction-context.js';
 import { buildExecutionMetadata, renderExecutionMetadata } from './instruction-context.js';
 import { generateStatusRulesFromRules } from './status-rules.js';
 import { escapeTemplateChars, replaceTemplatePlaceholders } from './escape.js';
+import { getPromptObject } from '../../../shared/prompts/index.js';
 
 /**
  * Check if a report config is the object form (ReportObjectConfig).
@@ -22,57 +23,31 @@ export function isReportObjectConfig(report: string | ReportConfig[] | ReportObj
   return typeof report === 'object' && !Array.isArray(report) && 'name' in report;
 }
 
-/** Localized strings for auto-injected sections */
-const SECTION_STRINGS = {
-  en: {
-    workflowContext: '## Workflow Context',
-    iteration: 'Iteration',
-    iterationWorkflowWide: '(workflow-wide)',
-    stepIteration: 'Step Iteration',
-    stepIterationTimes: '(times this step has run)',
-    step: 'Step',
-    reportDirectory: 'Report Directory',
-    reportFile: 'Report File',
-    reportFiles: 'Report Files',
-    phaseNote: '**Note:** This is Phase 1 (main work). After you complete your work, Phase 2 will automatically generate the report based on your findings.',
-    userRequest: '## User Request',
-    previousResponse: '## Previous Response',
-    additionalUserInputs: '## Additional User Inputs',
-    instructions: '## Instructions',
-  },
-  ja: {
-    workflowContext: '## Workflow Context',
-    iteration: 'Iteration',
-    iterationWorkflowWide: '（ワークフロー全体）',
-    stepIteration: 'Step Iteration',
-    stepIterationTimes: '（このステップの実行回数）',
-    step: 'Step',
-    reportDirectory: 'Report Directory',
-    reportFile: 'Report File',
-    reportFiles: 'Report Files',
-    phaseNote: '**注意:** これはPhase 1（本来の作業）です。作業完了後、Phase 2で自動的にレポートを生成します。',
-    userRequest: '## User Request',
-    previousResponse: '## Previous Response',
-    additionalUserInputs: '## Additional User Inputs',
-    instructions: '## Instructions',
-  },
-} as const;
+/** Shape of localized section strings */
+interface SectionStrings {
+  workflowContext: string;
+  iteration: string;
+  iterationWorkflowWide: string;
+  stepIteration: string;
+  stepIterationTimes: string;
+  step: string;
+  reportDirectory: string;
+  reportFile: string;
+  reportFiles: string;
+  phaseNote: string;
+  userRequest: string;
+  previousResponse: string;
+  additionalUserInputs: string;
+  instructions: string;
+}
 
-/** Localized strings for auto-generated report output instructions */
-const REPORT_OUTPUT_STRINGS = {
-  en: {
-    singleHeading: '**Report output:** Output to the `Report File` specified above.',
-    multiHeading: '**Report output:** Output to the `Report Files` specified above.',
-    createRule: '- If file does not exist: Create new file',
-    appendRule: '- If file exists: Append with `## Iteration {step_iteration}` section',
-  },
-  ja: {
-    singleHeading: '**レポート出力:** `Report File` に出力してください。',
-    multiHeading: '**レポート出力:** Report Files に出力してください。',
-    createRule: '- ファイルが存在しない場合: 新規作成',
-    appendRule: '- ファイルが存在する場合: `## Iteration {step_iteration}` セクションを追記',
-  },
-} as const;
+/** Shape of localized report output strings */
+interface ReportOutputStrings {
+  singleHeading: string;
+  multiHeading: string;
+  createRule: string;
+  appendRule: string;
+}
 
 /**
  * Builds Phase 1 instructions for agent execution.
@@ -93,7 +68,7 @@ export class InstructionBuilder {
    */
   build(): string {
     const language = this.context.language ?? 'en';
-    const s = SECTION_STRINGS[language];
+    const s = getPromptObject<SectionStrings>('instruction.sections', language);
     const sections: string[] = [];
 
     // 1. Execution context metadata (working directory + rules + edit permission)
@@ -151,7 +126,7 @@ export class InstructionBuilder {
   }
 
   private renderWorkflowContext(language: Language): string {
-    const s = SECTION_STRINGS[language];
+    const s = getPromptObject<SectionStrings>('instruction.sections', language);
     const lines: string[] = [
       s.workflowContext,
       `- ${s.iteration}: ${this.context.iteration}/${this.context.maxIterations}${s.iterationWorkflowWide}`,
@@ -180,7 +155,7 @@ export function renderReportContext(
   reportDir: string,
   language: Language,
 ): string {
-  const s = SECTION_STRINGS[language];
+  const s = getPromptObject<SectionStrings>('instruction.sections', language);
   const lines: string[] = [
     `- ${s.reportDirectory}: ${reportDir}/`,
   ];
@@ -210,7 +185,7 @@ export function renderReportOutputInstruction(
 ): string | undefined {
   if (!step.report || !context.reportDir) return undefined;
 
-  const s = REPORT_OUTPUT_STRINGS[language];
+  const s = getPromptObject<ReportOutputStrings>('instruction.reportOutput', language);
   const isMulti = Array.isArray(step.report);
   const heading = isMulti ? s.multiHeading : s.singleHeading;
   const appendRule = s.appendRule.replace('{step_iteration}', String(context.stepIteration));

@@ -8,10 +8,18 @@ TAKT is built with TAKT (dogfooding).
 
 ## Requirements
 
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or Codex must be installed and configured
+You need one of the following:
+
+- **Anthropic API Key** or **OpenAI API Key**
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [Codex](https://github.com/openai/codex) installed and configured
+
+Additional requirements:
+
 - [GitHub CLI](https://cli.github.com/) (`gh`) — required only for `takt #N` (GitHub Issue execution)
 
-TAKT supports both Claude Code and Codex as providers; you can choose the provider during setup.
+**About pricing**: When using API keys, TAKT calls Claude API (Anthropic) or OpenAI API directly. The pricing is the same as using Claude Code or Codex. Be mindful of costs, especially when running tasks automatically in CI/CD environments, as API usage can accumulate quickly.
+
+TAKT supports both Claude (Anthropic) and Codex (OpenAI) as providers.
 
 ## Installation
 
@@ -375,6 +383,12 @@ default_workflow: default
 log_level: info
 provider: claude         # Default provider: claude or codex
 model: sonnet            # Default model (optional)
+
+# API Key configuration (optional)
+# Can be overridden by TAKT_ANTHROPIC_API_KEY / TAKT_OPENAI_API_KEY env vars
+anthropic_api_key: sk-ant-...  # For Claude (Anthropic)
+# openai_api_key: sk-...       # For Codex (OpenAI)
+
 trusted_directories:
   - /path/to/trusted/dir
 
@@ -388,6 +402,22 @@ trusted_directories:
 #     {issue_body}
 #     Closes #{issue}
 ```
+
+**API Key configuration:**
+
+1. **Using environment variables** (recommended):
+   ```bash
+   export TAKT_ANTHROPIC_API_KEY=sk-ant-...  # For Claude
+   # or
+   export TAKT_OPENAI_API_KEY=sk-...         # For Codex
+   ```
+
+2. **Using config file**:
+   Add `anthropic_api_key` or `openai_api_key` to `~/.takt/config.yaml` as shown above
+
+Priority: Environment variables > `config.yaml` settings
+
+**Note**: When API keys are configured, Claude Code or Codex installation is not required. TAKT will call Anthropic API or OpenAI API directly.
 
 **Pipeline template variables:**
 
@@ -692,7 +722,15 @@ npm install -g takt
 takt --pipeline --task "fix bug" --auto-pr --repo owner/repo
 ```
 
-Set `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` environment variables for authentication.
+Set `TAKT_ANTHROPIC_API_KEY` or `TAKT_OPENAI_API_KEY` environment variables for authentication (TAKT-specific prefixed variables).
+
+```bash
+# For Claude (Anthropic)
+export TAKT_ANTHROPIC_API_KEY=sk-ant-...
+
+# For Codex (OpenAI)
+export TAKT_OPENAI_API_KEY=sk-...
+```
 
 ## Docker Support
 

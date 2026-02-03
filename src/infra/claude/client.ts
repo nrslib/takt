@@ -8,6 +8,7 @@ import { executeClaudeCli } from './process.js';
 import type { ClaudeSpawnOptions, ClaudeCallOptions } from './types.js';
 import type { AgentResponse, Status } from '../../core/models/index.js';
 import { createLogger } from '../../shared/utils/index.js';
+import { getPrompt } from '../../shared/prompts/index.js';
 
 // Re-export for backward compatibility
 export type { ClaudeCallOptions } from './types.js';
@@ -152,7 +153,7 @@ export class ClaudeClient {
     prompt: string,
     options: ClaudeCallOptions,
   ): Promise<AgentResponse> {
-    const systemPrompt = `You are the ${claudeAgentName} agent. Follow the standard ${claudeAgentName} workflow.`;
+    const systemPrompt = getPrompt('claude.agentDefault', undefined, { agentName: claudeAgentName });
     return this.callCustom(claudeAgentName, prompt, systemPrompt, options);
   }
 
@@ -218,26 +219,7 @@ export class ClaudeClient {
       .map((c) => `| ${c.index + 1} | ${c.text} |`)
       .join('\n');
 
-    return [
-      '# Judge Task',
-      '',
-      'You are a judge evaluating an agent\'s output against a set of conditions.',
-      'Read the agent output below, then determine which condition best matches.',
-      '',
-      '## Agent Output',
-      '```',
-      agentOutput,
-      '```',
-      '',
-      '## Conditions',
-      '| # | Condition |',
-      '|---|-----------|',
-      conditionList,
-      '',
-      '## Instructions',
-      'Output ONLY the tag `[JUDGE:N]` where N is the number of the best matching condition.',
-      'Do not output anything else.',
-    ].join('\n');
+    return getPrompt('claude.judgePrompt', undefined, { agentOutput, conditionList });
   }
 
   /**
