@@ -91,7 +91,6 @@ movements:
 
       Reason: {Reason for approval}
       ```
-    pass_previous_response: true
     rules:
       - condition: Judgment completed
         next: casper
@@ -144,7 +143,6 @@ movements:
 
       [Reasoning/Summary]
       ```
-    pass_previous_response: true
     rules:
       - condition: Final judgment completed
         next: COMPLETE

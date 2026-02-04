@@ -242,7 +242,6 @@ movements:
           - WebSearch
           - WebFetch
         permission_mode: edit
-        pass_previous_response: true
         rules:
           - condition: AI Reviewer's issues fixed
           - condition: No fix needed (verified target files/spec)
@@ -302,7 +301,6 @@ movements:
           - WebSearch
           - WebFetch
         permission_mode: edit
-        pass_previous_response: true
         rules:
           - condition: Supervisor's issues fixed
           - condition: Cannot proceed, insufficient info
@@ -341,7 +339,6 @@ movements:
       - WebSearch
       - WebFetch
     permission_mode: edit
-    pass_previous_response: true
     rules:
       - condition: AI Reviewer's issues fixed
         next: reviewers
@@ -404,7 +401,6 @@ movements:
       - WebSearch
       - WebFetch
     permission_mode: edit
-    pass_previous_response: true
     rules:
       - condition: Supervisor's issues fixed
         next: reviewers

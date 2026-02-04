@@ -71,7 +71,6 @@ movements:
           Clarifications needed:
           - {Question 1}
           - {Question 2}
-    pass_previous_response: true
     instruction_template: |
       Analyze the task and create an implementation plan.
 
@@ -124,7 +123,6 @@ movements:
         next: implement
       - condition: Insufficient info, cannot proceed
         next: ABORT
-    pass_previous_response: true
     instruction_template: |
       Read the plan report ({report:00-plan.md}) and perform architecture design.
 
@@ -231,7 +229,6 @@ movements:
   - name: ai_review
     edit: false
     agent: ../agents/default/ai-antipattern-reviewer.md
-    pass_previous_response: true
     report:
       name: 04-ai-review.md
       format: |
@@ -340,7 +337,6 @@ movements:
       - {command and outcome}
       - Judging based on assumptions
       - Leaving problems that AI Reviewer REJECTED
-    pass_previous_response: true
 
   - name: reviewers
     parallel:
@@ -492,7 +488,6 @@ movements:
       - {command and outcome}
       ## Evidence
       - {key files/grep/diff/log evidence you verified}
-    pass_previous_response: true
 
   - name: supervise
     edit: false

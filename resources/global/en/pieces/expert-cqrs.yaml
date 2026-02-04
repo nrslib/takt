@@ -72,7 +72,6 @@ movements:
       1. Understand the requirements
       2. Identify impact scope
       3. Decide implementation approach
-    pass_previous_response: true
     rules:
       - condition: Task analysis and planning is complete
         next: implement
@@ -158,7 +157,6 @@ movements:
   - name: ai_review
     edit: false
     agent: ../agents/default/ai-antipattern-reviewer.md
-    pass_previous_response: true
     report:
       name: 03-ai-review.md
       format: |
@@ -261,7 +259,6 @@ movements:
       - {command and outcome}
 
       **No-implementation handling (required)**
-    pass_previous_response: true
     rules:
       - condition: AI Reviewer's issues have been fixed
         next: ai_review
@@ -522,7 +519,6 @@ movements:
       - {command and outcome}
       ## Evidence
       - {key files/grep/diff/log evidence you verified}
-    pass_previous_response: true
 
   # ===========================================
   # Movement 4: Supervision
@@ -647,7 +643,6 @@ movements:
       - {command and outcome}
       ## Evidence
       - {key files/grep/diff/log evidence you verified}
-    pass_previous_response: true
     rules:
       - condition: Supervisor's issues have been fixed
         next: supervise

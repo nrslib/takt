@@ -51,7 +51,6 @@ movements:
       - 不明点は仮定を置いて進める
       - 複数の解釈がある場合は、すべてを調査対象に含める
       - Supervisorからフィードバックがある場合は、指摘を反映した計画を作成
-    pass_previous_response: true
     rules:
       - condition: 計画が完了した
         next: dig
@@ -93,7 +92,6 @@ movements:
       - GitHub検索（gh コマンド）
       - コードベース検索
       - ファイル読み取り
-    pass_previous_response: true
     rules:
       - condition: 調査が完了した
         next: supervise
@@ -124,7 +122,6 @@ movements:
       調査結果を評価し、元の依頼に対して十分な回答になっているか判断してください。
 
       **重要**: 問題がある場合は、Plannerへの具体的な指示を含めてください。
-    pass_previous_response: true
     rules:
       - condition: 調査結果が元の依頼に対して十分である
         next: COMPLETE

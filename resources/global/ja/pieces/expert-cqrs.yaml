@@ -81,7 +81,6 @@ movements:
       1. タスクの要件を理解する
       2. 影響範囲を特定する
       3. 実装アプローチを決める
-    pass_previous_response: true
     rules:
       - condition: タスク分析と計画が完了した
         next: implement
@@ -167,7 +166,6 @@ movements:
   - name: ai_review
     edit: false
     agent: ../agents/default/ai-antipattern-reviewer.md
-    pass_previous_response: true
     report:
       name: 03-ai-review.md
       format: |
@@ -268,8 +266,6 @@ movements:
       - {変更内容}
       ## テスト結果
       - {実行コマンドと結果}
-
-    pass_previous_response: true
     rules:
       - condition: AI Reviewerの指摘に対する修正が完了した
         next: ai_review
@@ -530,7 +526,6 @@ movements:
       - {実行コマンドと結果}
       ## 証拠
       - {確認したファイル/検索/差分/ログの要点を列挙}
-    pass_previous_response: true
 
   # ===========================================
   # Movement 4: Supervision
@@ -655,7 +650,6 @@ movements:
       - {実行コマンドと結果}
       ## 証拠
       - {確認したファイル/検索/差分/ログの要点を列挙}
-    pass_previous_response: true
     rules:
       - condition: 監督者の指摘に対する修正が完了した
         next: supervise

@@ -47,7 +47,6 @@ movements:
           Clarifications needed:
           - {Question 1}
           - {Question 2}
-    pass_previous_response: true
     instruction_template: |
       ## Previous Response (when returned from supervise)
       {previous_response}
@@ -234,7 +233,6 @@ movements:
         next: COMPLETE
       - condition: rejected
         next: ABORT
-    pass_previous_response: true
     instruction_template: |
       ## Review Results
       {previous_response}
@@ -290,7 +288,6 @@ movements:
         next: COMPLETE
       - condition: Failed to post comments
         next: COMPLETE
-    pass_previous_response: true
     instruction_template: |
       ## Review Summary
       {previous_response}

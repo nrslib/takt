@@ -51,7 +51,6 @@ movements:
       - Make assumptions for unclear points and proceed
       - If multiple interpretations exist, include all in the research scope
       - If there is feedback from Supervisor, incorporate it into the plan
-    pass_previous_response: true
     rules:
       - condition: Planning is complete
         next: dig
@@ -93,7 +92,6 @@ movements:
       - GitHub search (gh command)
       - Codebase search
       - File reading
-    pass_previous_response: true
     rules:
       - condition: Research is complete
         next: supervise
@@ -124,7 +122,6 @@ movements:
       Evaluate the research results and determine if they adequately answer the original request.
 
       **Important**: If there are issues, include specific instructions for the Planner.
-    pass_previous_response: true
     rules:
       - condition: Research results adequately answer the original request
         next: COMPLETE

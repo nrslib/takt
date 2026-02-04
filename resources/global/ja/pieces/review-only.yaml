@@ -47,7 +47,6 @@ movements:
           確認事項:
           - {質問1}
           - {質問2}
-    pass_previous_response: true
     instruction_template: |
       ## Previous Response (superviseからの差し戻し時)
       {previous_response}
@@ -234,7 +233,6 @@ movements:
         next: COMPLETE
       - condition: rejected
         next: ABORT
-    pass_previous_response: true
     instruction_template: |
       ## レビュー結果
       {previous_response}
@@ -291,7 +289,6 @@ movements:
         next: COMPLETE
       - condition: コメント投稿失敗
         next: COMPLETE
-    pass_previous_response: true
     instruction_template: |
       ## レビューサマリー
       {previous_response}

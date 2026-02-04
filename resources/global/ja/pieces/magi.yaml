@@ -91,7 +91,6 @@ movements:
 
       理由: {賛成の理由}
       ```
-    pass_previous_response: true
     rules:
       - condition: 判定を完了した
         next: casper
@@ -144,7 +143,6 @@ movements:
 
       [理由・まとめ]
       ```
-    pass_previous_response: true
     rules:
       - condition: 最終判定を完了した
         next: COMPLETE
