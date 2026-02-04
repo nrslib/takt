@@ -39,7 +39,6 @@ describe('loadGlobalConfig', () => {
     const config = loadGlobalConfig();
 
     expect(config.language).toBe('en');
-    expect(config.trustedDirectories).toEqual([]);
     expect(config.defaultPiece).toBe('default');
     expect(config.logLevel).toBe('info');
     expect(config.provider).toBe('claude');

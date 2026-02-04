@@ -201,7 +201,6 @@ describe('GlobalConfigSchema', () => {
     const config = {};
     const result = GlobalConfigSchema.parse(config);
 
-    expect(result.trusted_directories).toEqual([]);
     expect(result.default_piece).toBe('default');
     expect(result.log_level).toBe('info');
     expect(result.provider).toBe('claude');
@@ -209,13 +208,11 @@ describe('GlobalConfigSchema', () => {
 
   it('should accept valid config', () => {
     const config = {
-      trusted_directories: ['/home/user/projects'],
       default_piece: 'custom',
       log_level: 'debug' as const,
     };
 
     const result = GlobalConfigSchema.parse(config);
-    expect(result.trusted_directories).toHaveLength(1);
     expect(result.log_level).toBe('debug');
   });
 });

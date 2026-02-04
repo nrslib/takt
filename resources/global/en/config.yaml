@@ -4,9 +4,6 @@
 # Language setting (en or ja)
 language: en
 
-# Trusted directories - projects in these directories skip confirmation prompts
-trusted_directories: []
-
 # Default piece to use when no piece is specified
 default_piece: default
 

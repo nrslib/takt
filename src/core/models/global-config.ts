@@ -36,7 +36,6 @@ export interface PipelineConfig {
 /** Global configuration for takt */
 export interface GlobalConfig {
   language: Language;
-  trustedDirectories: string[];
   defaultPiece: string;
   logLevel: 'debug' | 'info' | 'warn' | 'error';
   provider?: 'claude' | 'codex' | 'mock';

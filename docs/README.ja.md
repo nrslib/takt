@@ -472,9 +472,6 @@ model: sonnet            # デフォルトモデル（オプション）
 anthropic_api_key: sk-ant-...  # Claude (Anthropic) を使う場合
 # openai_api_key: sk-...       # Codex (OpenAI) を使う場合
 
-trusted_directories:
-  - /path/to/trusted/dir
-
 # パイプライン実行設定（オプション）
 # ブランチ名、コミットメッセージ、PRの本文をカスタマイズできます。
 # pipeline:
@@ -485,6 +482,8 @@ trusted_directories:
 #     {issue_body}
 #     Closes #{issue}
 ```
+
+**注意:** Codex SDK は Git 管理下のディレクトリでのみ動作します。`--skip-git-repo-check` は Codex CLI 専用です。
 
 **API Key の設定方法:**
 

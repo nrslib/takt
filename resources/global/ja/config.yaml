@@ -1,38 +1,30 @@
-# TAKT グローバル設定
-# takt のデフォルト設定ファイルです。
-
-# 言語設定 (en または ja)
+# TAKT 繧ｰ繝ｭ繝ｼ繝舌Ν險ｭ螳・# takt 縺ｮ繝・ヵ繧ｩ繝ｫ繝郁ｨｭ螳壹ヵ繧｡繧､繝ｫ縺ｧ縺吶・
+# 險隱櫁ｨｭ螳・(en 縺ｾ縺溘・ ja)
 language: ja
 
-# 信頼済みディレクトリ - これらのディレクトリ内のプロジェクトは確認プロンプトをスキップします
-trusted_directories: []
+# 繝・ヵ繧ｩ繝ｫ繝医ヴ繝ｼ繧ｹ - 繝斐・繧ｹ縺梧欠螳壹＆繧後※縺・↑縺・ｴ蜷医↓菴ｿ逕ｨ縺励∪縺・default_piece: default
 
-# デフォルトピース - ピースが指定されていない場合に使用します
-default_piece: default
-
-# ログレベル: debug, info, warn, error
+# 繝ｭ繧ｰ繝ｬ繝吶Ν: debug, info, warn, error
 log_level: info
 
-# プロバイダー: claude または codex
+# 繝励Ο繝舌う繝繝ｼ: claude 縺ｾ縺溘・ codex
 provider: claude
 
-# ビルトインピースの読み込み (resources/global/{lang}/pieces)
+# 繝薙Ν繝医う繝ｳ繝斐・繧ｹ縺ｮ隱ｭ縺ｿ霎ｼ縺ｿ (resources/global/{lang}/pieces)
 # enable_builtin_pieces: true
 
-# デフォルトモデル (オプション)
-# Claude: opus, sonnet, haiku, opusplan, default, またはフルモデル名
-# Codex: gpt-5.2-codex, gpt-5.1-codex など
+# 繝・ヵ繧ｩ繝ｫ繝医Δ繝・Ν (繧ｪ繝励す繝ｧ繝ｳ)
+# Claude: opus, sonnet, haiku, opusplan, default, 縺ｾ縺溘・繝輔Ν繝｢繝・Ν蜷・# Codex: gpt-5.2-codex, gpt-5.1-codex 縺ｪ縺ｩ
 # model: sonnet
 
-# Anthropic APIキー (オプション、環境変数 TAKT_ANTHROPIC_API_KEY で上書き可能)
+# Anthropic API繧ｭ繝ｼ (繧ｪ繝励す繝ｧ繝ｳ縲∫腸蠅・､画焚 TAKT_ANTHROPIC_API_KEY 縺ｧ荳頑嶌縺榊庄閭ｽ)
 # anthropic_api_key: ""
 
-# OpenAI APIキー (オプション、環境変数 TAKT_OPENAI_API_KEY で上書き可能)
+# OpenAI API繧ｭ繝ｼ (繧ｪ繝励す繝ｧ繝ｳ縲∫腸蠅・､画焚 TAKT_OPENAI_API_KEY 縺ｧ荳頑嶌縺榊庄閭ｽ)
 # openai_api_key: ""
 
-# パイプライン実行設定 (オプション)
-# パイプラインモード (--task) のブランチ名、コミットメッセージ、PRの本文をカスタマイズできます。
-# pipeline:
+# 繝代う繝励Λ繧､繝ｳ螳溯｡瑚ｨｭ螳・(繧ｪ繝励す繝ｧ繝ｳ)
+# 繝代う繝励Λ繧､繝ｳ繝｢繝ｼ繝・(--task) 縺ｮ繝悶Λ繝ｳ繝∝錐縲√さ繝溘ャ繝医Γ繝・そ繝ｼ繧ｸ縲￣R縺ｮ譛ｬ譁・ｒ繧ｫ繧ｹ繧ｿ繝槭う繧ｺ縺ｧ縺阪∪縺吶・# pipeline:
 #   default_branch_prefix: "takt/"
 #   commit_message_template: "feat: {title} (#{issue})"
 #   pr_body_template: |
@@ -40,7 +32,7 @@ provider: claude
 #     {issue_body}
 #     Closes #{issue}
 
-# デバッグ設定 (オプション)
+# 繝・ヰ繝・げ險ｭ螳・(繧ｪ繝励す繝ｧ繝ｳ)
 # debug:
 #   enabled: false
 #   log_file: ~/.takt/logs/debug.log

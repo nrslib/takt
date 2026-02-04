@@ -476,9 +476,6 @@ model: sonnet            # Default model (optional)
 anthropic_api_key: sk-ant-...  # For Claude (Anthropic)
 # openai_api_key: sk-...       # For Codex (OpenAI)
 
-trusted_directories:
-  - /path/to/trusted/dir
-
 # Pipeline execution configuration (optional)
 # Customize branch names, commit messages, and PR body.
 # pipeline:
@@ -489,6 +486,8 @@ trusted_directories:
 #     {issue_body}
 #     Closes #{issue}
 ```
+
+**Note:** The Codex SDK requires running inside a Git repository. `--skip-git-repo-check` is only available in the Codex CLI.
 
 **API Key Configuration Methods:**
 

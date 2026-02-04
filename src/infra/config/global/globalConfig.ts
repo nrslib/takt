@@ -6,7 +6,6 @@
  */
 
 import { readFileSync, existsSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { GlobalConfigSchema } from '../../../core/models/index.js';
 import type { GlobalConfig, DebugConfig, Language } from '../../../core/models/index.js';
@@ -17,7 +16,6 @@ import { DEFAULT_LANGUAGE } from '../../../shared/constants.js';
 function createDefaultGlobalConfig(): GlobalConfig {
   return {
     language: DEFAULT_LANGUAGE,
-    trustedDirectories: [],
     defaultPiece: 'default',
     logLevel: 'info',
     provider: 'claude',
@@ -68,7 +66,6 @@ export class GlobalConfigManager {
     const parsed = GlobalConfigSchema.parse(raw);
     const config: GlobalConfig = {
       language: parsed.language,
-      trustedDirectories: parsed.trusted_directories,
       defaultPiece: parsed.default_piece,
       logLevel: parsed.log_level,
       provider: parsed.provider,
@@ -100,7 +97,6 @@ export class GlobalConfigManager {
     const configPath = getGlobalConfigPath();
     const raw: Record<string, unknown> = {
       language: config.language,
-      trusted_directories: config.trustedDirectories,
       default_piece: config.defaultPiece,
       log_level: config.logLevel,
       provider: config.provider,
@@ -203,23 +199,6 @@ export function setProvider(provider: 'claude' | 'codex'): void {
   saveGlobalConfig(config);
 }
 
-export function addTrustedDirectory(dir: string): void {
-  const config = loadGlobalConfig();
-  const resolvedDir = join(dir);
-  if (!config.trustedDirectories.includes(resolvedDir)) {
-    config.trustedDirectories.push(resolvedDir);
-    saveGlobalConfig(config);
-  }
-}
-
-export function isDirectoryTrusted(dir: string): boolean {
-  const config = loadGlobalConfig();
-  const resolvedDir = join(dir);
-  return config.trustedDirectories.some(
-    (trusted) => resolvedDir === trusted || resolvedDir.startsWith(trusted + '/')
-  );
-}
-
 /**
  * Resolve the Anthropic API key.
  * Priority: TAKT_ANTHROPIC_API_KEY env var > config.yaml > undefined (CLI auth fallback)
@@ -290,4 +269,3 @@ export function getEffectiveDebugConfig(projectDir?: string): DebugConfig | unde
 
   return debugConfig;
 }
-

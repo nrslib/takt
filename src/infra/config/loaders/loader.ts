@@ -28,8 +28,6 @@ export {
   loadGlobalConfig,
   saveGlobalConfig,
   invalidateGlobalConfigCache,
-  addTrustedDirectory,
-  isDirectoryTrusted,
   loadProjectDebugConfig,
   getEffectiveDebugConfig,
 } from '../global/globalConfig.js';

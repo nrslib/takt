@@ -40,7 +40,6 @@ beforeEach(() => {
   mockGetProvider.mockReturnValue(mockProvider);
   mockLoadGlobalConfig.mockReturnValue({
     language: 'ja',
-    trustedDirectories: [],
     defaultPiece: 'default',
     logLevel: 'info',
     provider: 'claude',
@@ -49,8 +48,8 @@ beforeEach(() => {
 });
 
 describe('summarizeTaskName', () => {
-  it('should return AI-generated slug for Japanese task name', async () => {
-    // Given: AI returns a slug for Japanese input
+  it('should return AI-generated slug for task name', async () => {
+    // Given: AI returns a slug for input
     mockProviderCall.mockResolvedValue({
       agent: 'summarizer',
       status: 'done',
@@ -59,14 +58,14 @@ describe('summarizeTaskName', () => {
     });
 
     // When
-    const result = await summarizeTaskName('認証機能を追加する', { cwd: '/project' });
+    const result = await summarizeTaskName('long task name for testing', { cwd: '/project' });
 
     // Then
     expect(result).toBe('add-auth');
     expect(mockGetProvider).toHaveBeenCalledWith('claude');
     expect(mockProviderCall).toHaveBeenCalledWith(
       'summarizer',
-      '認証機能を追加する',
+      'long task name for testing',
       expect.objectContaining({
         cwd: '/project',
         model: 'haiku',
@@ -85,7 +84,7 @@ describe('summarizeTaskName', () => {
     });
 
     // When
-    const result = await summarizeTaskName('Fix the login bug', { cwd: '/project' });
+    const result = await summarizeTaskName('long task name for testing', { cwd: '/project' });
 
     // Then
     expect(result).toBe('fix-login-bug');
@@ -101,7 +100,7 @@ describe('summarizeTaskName', () => {
     });
 
     // When
-    const result = await summarizeTaskName('ユーザー認証を追加', { cwd: '/project' });
+    const result = await summarizeTaskName('long task name for testing', { cwd: '/project' });
 
     // Then
     expect(result).toBe('add-user-auth');
@@ -117,7 +116,7 @@ describe('summarizeTaskName', () => {
     });
 
     // When
-    const result = await summarizeTaskName('長いタスク名', { cwd: '/project' });
+    const result = await summarizeTaskName('long task name for testing', { cwd: '/project' });
 
     // Then
     expect(result.length).toBeLessThanOrEqual(30);
@@ -135,7 +134,7 @@ describe('summarizeTaskName', () => {
     });
 
     // When
-    const result = await summarizeTaskName('test', { cwd: '/project' });
+    const result = await summarizeTaskName('long task name for testing', { cwd: '/project' });
 
     // Then
     expect(result).toBe('task');
@@ -167,7 +166,6 @@ describe('summarizeTaskName', () => {
     // Given: config has codex provider
     mockLoadGlobalConfig.mockReturnValue({
       language: 'ja',
-      trustedDirectories: [],
       defaultPiece: 'default',
       logLevel: 'info',
       provider: 'codex',
@@ -204,7 +202,7 @@ describe('summarizeTaskName', () => {
     });
 
     // When
-    const result = await summarizeTaskName('test', { cwd: '/project' });
+    const result = await summarizeTaskName('long task name for testing', { cwd: '/project' });
 
     // Then
     expect(result).toBe('fix-multiple-hyphens');
@@ -220,7 +218,7 @@ describe('summarizeTaskName', () => {
     });
 
     // When
-    const result = await summarizeTaskName('test', { cwd: '/project' });
+    const result = await summarizeTaskName('long task name for testing', { cwd: '/project' });
 
     // Then
     expect(result).toBe('leading-trailing');
@@ -238,7 +236,7 @@ describe('summarizeTaskName', () => {
 
   it('should use romanization when useLLM is false', async () => {
     // When: useLLM is explicitly false
-    const result = await summarizeTaskName('認証機能を追加する', { cwd: '/project', useLLM: false });
+    const result = await summarizeTaskName('romanization test', { cwd: '/project', useLLM: false });
 
     // Then: should not call provider, should return romaji
     expect(mockProviderCall).not.toHaveBeenCalled();
@@ -248,7 +246,7 @@ describe('summarizeTaskName', () => {
 
   it('should handle mixed Japanese/English with romanization', async () => {
     // When
-    const result = await summarizeTaskName('Add 認証機能', { cwd: '/project', useLLM: false });
+    const result = await summarizeTaskName('Add romanization', { cwd: '/project', useLLM: false });
 
     // Then
     expect(result).toMatch(/^[a-z0-9-]+$/);

@@ -75,7 +75,6 @@ describe('executePipeline', () => {
     // Default: no pipeline config
     mockLoadGlobalConfig.mockReturnValue({
       language: 'en',
-      trustedDirectories: [],
       defaultPiece: 'default',
       logLevel: 'info',
       provider: 'claude',
@@ -243,7 +242,6 @@ describe('executePipeline', () => {
     it('should use commit_message_template when configured', async () => {
       mockLoadGlobalConfig.mockReturnValue({
         language: 'en',
-        trustedDirectories: [],
         defaultPiece: 'default',
         logLevel: 'info',
         provider: 'claude',
@@ -280,7 +278,6 @@ describe('executePipeline', () => {
     it('should use default_branch_prefix when configured', async () => {
       mockLoadGlobalConfig.mockReturnValue({
         language: 'en',
-        trustedDirectories: [],
         defaultPiece: 'default',
         logLevel: 'info',
         provider: 'claude',
@@ -317,7 +314,6 @@ describe('executePipeline', () => {
     it('should use pr_body_template when configured for PR creation', async () => {
       mockLoadGlobalConfig.mockReturnValue({
         language: 'en',
-        trustedDirectories: [],
         defaultPiece: 'default',
         logLevel: 'info',
         provider: 'claude',

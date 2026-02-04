@@ -285,6 +285,11 @@ export async function interactiveMode(
 
     const result = await callAIWithRetry(initialInput, prompts.systemPrompt);
     if (result) {
+      if (!result.success) {
+        error(result.content);
+        blankLine();
+        return { confirmed: false, task: '' };
+      }
       history.push({ role: 'assistant', content: result.content });
       blankLine();
     } else {
@@ -332,6 +337,11 @@ export async function interactiveMode(
         info(prompts.ui.summarizeFailed);
         continue;
       }
+      if (!summaryResult.success) {
+        error(summaryResult.content);
+        blankLine();
+        return { confirmed: false, task: '' };
+      }
       const task = summaryResult.content.trim();
       const confirmed = await confirmTask(
         task,
@@ -362,6 +372,12 @@ export async function interactiveMode(
 
     const result = await callAIWithRetry(trimmed, prompts.systemPrompt);
     if (result) {
+      if (!result.success) {
+        error(result.content);
+        blankLine();
+        history.pop();
+        return { confirmed: false, task: '' };
+      }
       history.push({ role: 'assistant', content: result.content });
       blankLine();
     } else {

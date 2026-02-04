@@ -216,7 +216,6 @@ export const PieceCategoryConfigSchema = z.record(z.string(), PieceCategoryConfi
 /** Global config schema */
 export const GlobalConfigSchema = z.object({
   language: LanguageSchema.optional().default(DEFAULT_LANGUAGE),
-  trusted_directories: z.array(z.string()).optional().default([]),
   default_piece: z.string().optional().default('default'),
   log_level: z.enum(['debug', 'info', 'warn', 'error']).optional().default('info'),
   provider: z.enum(['claude', 'codex', 'mock']).optional().default('claude'),

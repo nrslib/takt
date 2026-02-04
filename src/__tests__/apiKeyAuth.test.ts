@@ -83,7 +83,6 @@ describe('GlobalConfig load/save with API keys', () => {
   it('should load config with API keys from YAML', () => {
     const yaml = [
       'language: en',
-      'trusted_directories: []',
       'default_piece: default',
       'log_level: info',
       'provider: claude',
@@ -100,7 +99,6 @@ describe('GlobalConfig load/save with API keys', () => {
   it('should load config without API keys', () => {
     const yaml = [
       'language: en',
-      'trusted_directories: []',
       'default_piece: default',
       'log_level: info',
       'provider: claude',
@@ -116,7 +114,6 @@ describe('GlobalConfig load/save with API keys', () => {
     // Write initial config
     const yaml = [
       'language: en',
-      'trusted_directories: []',
       'default_piece: default',
       'log_level: info',
       'provider: claude',
@@ -136,7 +133,6 @@ describe('GlobalConfig load/save with API keys', () => {
   it('should not persist API keys when not set', () => {
     const yaml = [
       'language: en',
-      'trusted_directories: []',
       'default_piece: default',
       'log_level: info',
       'provider: claude',
@@ -173,7 +169,6 @@ describe('resolveAnthropicApiKey', () => {
     process.env['TAKT_ANTHROPIC_API_KEY'] = 'sk-ant-from-env';
     const yaml = [
       'language: en',
-      'trusted_directories: []',
       'default_piece: default',
       'log_level: info',
       'provider: claude',
@@ -189,7 +184,6 @@ describe('resolveAnthropicApiKey', () => {
     delete process.env['TAKT_ANTHROPIC_API_KEY'];
     const yaml = [
       'language: en',
-      'trusted_directories: []',
       'default_piece: default',
       'log_level: info',
       'provider: claude',
@@ -205,7 +199,6 @@ describe('resolveAnthropicApiKey', () => {
     delete process.env['TAKT_ANTHROPIC_API_KEY'];
     const yaml = [
       'language: en',
-      'trusted_directories: []',
       'default_piece: default',
       'log_level: info',
       'provider: claude',
@@ -247,7 +240,6 @@ describe('resolveOpenaiApiKey', () => {
     process.env['TAKT_OPENAI_API_KEY'] = 'sk-openai-from-env';
     const yaml = [
       'language: en',
-      'trusted_directories: []',
       'default_piece: default',
       'log_level: info',
       'provider: claude',
@@ -263,7 +255,6 @@ describe('resolveOpenaiApiKey', () => {
     delete process.env['TAKT_OPENAI_API_KEY'];
     const yaml = [
       'language: en',
-      'trusted_directories: []',
       'default_piece: default',
       'log_level: info',
       'provider: claude',
@@ -279,7 +270,6 @@ describe('resolveOpenaiApiKey', () => {
     delete process.env['TAKT_OPENAI_API_KEY'];
     const yaml = [
       'language: en',
-      'trusted_directories: []',
       'default_piece: default',
       'log_level: info',
       'provider: claude',

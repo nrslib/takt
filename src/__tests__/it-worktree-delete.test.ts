@@ -156,6 +156,12 @@ describe('worktree branch deletion', () => {
   });
 
   it('should delete regular (non-worktree) branches normally', () => {
+    const defaultBranch = execFileSync('git', ['branch', '--show-current'], {
+      cwd: testDir,
+      encoding: 'utf-8',
+      stdio: 'pipe',
+    }).trim();
+
     // Create a regular local branch
     const branchName = 'takt/20260203T1002-regular-branch';
     execFileSync('git', ['checkout', '-b', branchName], { cwd: testDir });
@@ -166,7 +172,7 @@ describe('worktree branch deletion', () => {
     execFileSync('git', ['commit', '-m', 'Test change'], { cwd: testDir });
 
     // Switch back to main
-    execFileSync('git', ['checkout', 'master'], { cwd: testDir });
+    execFileSync('git', ['checkout', defaultBranch || 'main'], { cwd: testDir });
 
     // Verify branch exists
     const branchesBefore = listTaktBranches(testDir);

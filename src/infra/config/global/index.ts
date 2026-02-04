@@ -12,8 +12,6 @@ export {
   getLanguage,
   setLanguage,
   setProvider,
-  addTrustedDirectory,
-  isDirectoryTrusted,
   resolveAnthropicApiKey,
   resolveOpenaiApiKey,
   loadProjectDebugConfig,
