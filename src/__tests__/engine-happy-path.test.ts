@@ -49,10 +49,12 @@ import {
   mockDetectMatchedRuleSequence,
   createTestTmpDir,
   applyDefaultMocks,
+  cleanupPieceEngine,
 } from './engine-test-helpers.js';
 
 describe('PieceEngine Integration: Happy Path', () => {
   let tmpDir: string;
+  let engine: PieceEngine | null = null;
 
   beforeEach(() => {
     vi.resetAllMocks();
@@ -61,6 +63,10 @@ describe('PieceEngine Integration: Happy Path', () => {
   });
 
   afterEach(() => {
+    if (engine) {
+      cleanupPieceEngine(engine);
+      engine = null;
+    }
     if (existsSync(tmpDir)) {
       rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -72,7 +78,7 @@ describe('PieceEngine Integration: Happy Path', () => {
   describe('Happy path', () => {
     it('should complete: plan → implement → ai_review → reviewers(all approved) → supervise → COMPLETE', async () => {
       const config = buildDefaultPieceConfig();
-      const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({ agent: 'plan', content: 'Plan complete' }),
@@ -111,7 +117,7 @@ describe('PieceEngine Integration: Happy Path', () => {
   describe('Review reject and fix loop', () => {
     it('should handle: reviewers(needs_fix) → fix → reviewers(all approved) → supervise → COMPLETE', async () => {
       const config = buildDefaultPieceConfig();
-      const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({ agent: 'plan', content: 'Plan done' }),
@@ -152,7 +158,7 @@ describe('PieceEngine Integration: Happy Path', () => {
 
     it('should inject latest reviewers output as Previous Response for repeated fix steps', async () => {
       const config = buildDefaultPieceConfig();
-      const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({ agent: 'plan', content: 'Plan done' }),
@@ -221,7 +227,7 @@ describe('PieceEngine Integration: Happy Path', () => {
 
     it('should use the latest movement output across different steps for Previous Response', async () => {
       const config = buildDefaultPieceConfig();
-      const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({ agent: 'plan', content: 'Plan done' }),
@@ -279,7 +285,7 @@ describe('PieceEngine Integration: Happy Path', () => {
   describe('AI review reject and fix', () => {
     it('should handle: ai_review(issues) → ai_fix → reviewers → supervise → COMPLETE', async () => {
       const config = buildDefaultPieceConfig();
-      const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({ agent: 'plan', content: 'Plan done' }),
@@ -316,7 +322,7 @@ describe('PieceEngine Integration: Happy Path', () => {
   describe('ABORT transition', () => {
     it('should abort when movement transitions to ABORT', async () => {
       const config = buildDefaultPieceConfig();
-      const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({ agent: 'plan', content: 'Requirements unclear' }),
@@ -343,7 +349,7 @@ describe('PieceEngine Integration: Happy Path', () => {
   describe('Event emissions', () => {
     it('should emit movement:start and movement:complete for each movement', async () => {
       const config = buildDefaultPieceConfig();
-      const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({ agent: 'plan', content: 'Plan' }),
@@ -390,7 +396,7 @@ describe('PieceEngine Integration: Happy Path', () => {
           }),
         ],
       };
-      const engine = new PieceEngine(simpleConfig, tmpDir, 'test task', { projectCwd: tmpDir });
+      engine = new PieceEngine(simpleConfig, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({ agent: 'plan', content: 'Plan done' }),
@@ -413,7 +419,7 @@ describe('PieceEngine Integration: Happy Path', () => {
 
     it('should pass empty instruction to movement:start for parallel movements', async () => {
       const config = buildDefaultPieceConfig();
-      const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({ agent: 'plan', content: 'Plan' }),
@@ -451,7 +457,7 @@ describe('PieceEngine Integration: Happy Path', () => {
 
     it('should emit iteration:limit when max iterations reached', async () => {
       const config = buildDefaultPieceConfig({ maxIterations: 1 });
-      const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({ agent: 'plan', content: 'Plan' }),
@@ -475,7 +481,7 @@ describe('PieceEngine Integration: Happy Path', () => {
   describe('Movement output tracking', () => {
     it('should store outputs for all executed movements', async () => {
       const config = buildDefaultPieceConfig();
-      const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({ agent: 'plan', content: 'Plan output' }),
@@ -520,7 +526,7 @@ describe('PieceEngine Integration: Happy Path', () => {
           }),
         ],
       };
-      const engine = new PieceEngine(simpleConfig, tmpDir, 'test task', { projectCwd: tmpDir });
+      engine = new PieceEngine(simpleConfig, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({ agent: 'plan', content: 'Plan done' }),
@@ -548,7 +554,7 @@ describe('PieceEngine Integration: Happy Path', () => {
 
     it('should emit phase events for all movements in happy path', async () => {
       const config = buildDefaultPieceConfig();
-      const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({ agent: 'plan', content: 'Plan' }),

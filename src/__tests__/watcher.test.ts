@@ -10,6 +10,7 @@ import type { TaskInfo } from '../infra/task/types.js';
 
 describe('TaskWatcher', () => {
   const testDir = `/tmp/takt-watcher-test-${Date.now()}`;
+  let watcher: TaskWatcher | null = null;
 
   beforeEach(() => {
     mkdirSync(join(testDir, '.takt', 'tasks'), { recursive: true });
@@ -17,6 +18,11 @@ describe('TaskWatcher', () => {
   });
 
   afterEach(() => {
+    // Ensure watcher is stopped before cleanup
+    if (watcher) {
+      watcher.stop();
+      watcher = null;
+    }
     if (existsSync(testDir)) {
       rmSync(testDir, { recursive: true, force: true });
     }
@@ -24,19 +30,19 @@ describe('TaskWatcher', () => {
 
   describe('constructor', () => {
     it('should create watcher with default options', () => {
-      const watcher = new TaskWatcher(testDir);
+      watcher = new TaskWatcher(testDir);
       expect(watcher.isRunning()).toBe(false);
     });
 
     it('should accept custom poll interval', () => {
-      const watcher = new TaskWatcher(testDir, { pollInterval: 500 });
+      watcher = new TaskWatcher(testDir, { pollInterval: 500 });
       expect(watcher.isRunning()).toBe(false);
     });
   });
 
   describe('watch', () => {
     it('should detect and process a task file', async () => {
-      const watcher = new TaskWatcher(testDir, { pollInterval: 50 });
+      watcher = new TaskWatcher(testDir, { pollInterval: 50 });
       const processed: string[] = [];
 
       // Pre-create a task file
@@ -59,7 +65,7 @@ describe('TaskWatcher', () => {
     });
 
     it('should wait when no tasks are available', async () => {
-      const watcher = new TaskWatcher(testDir, { pollInterval: 50 });
+      watcher = new TaskWatcher(testDir, { pollInterval: 50 });
       let pollCount = 0;
 
       // Start watching, add a task after a delay
@@ -81,7 +87,7 @@ describe('TaskWatcher', () => {
     });
 
     it('should process multiple tasks sequentially', async () => {
-      const watcher = new TaskWatcher(testDir, { pollInterval: 50 });
+      watcher = new TaskWatcher(testDir, { pollInterval: 50 });
       const processed: string[] = [];
 
       // Pre-create two task files
@@ -111,7 +117,7 @@ describe('TaskWatcher', () => {
 
   describe('stop', () => {
     it('should stop the watcher gracefully', async () => {
-      const watcher = new TaskWatcher(testDir, { pollInterval: 50 });
+      watcher = new TaskWatcher(testDir, { pollInterval: 50 });
 
       // Start watching, stop after a short delay
       const watchPromise = watcher.watch(async () => {
@@ -127,7 +133,7 @@ describe('TaskWatcher', () => {
     });
 
     it('should abort sleep immediately when stopped', async () => {
-      const watcher = new TaskWatcher(testDir, { pollInterval: 10000 });
+      watcher = new TaskWatcher(testDir, { pollInterval: 10000 });
 
       const start = Date.now();
       const watchPromise = watcher.watch(async () => {});

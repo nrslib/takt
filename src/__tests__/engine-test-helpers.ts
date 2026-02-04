@@ -173,3 +173,13 @@ export function applyDefaultMocks(): void {
   vi.mocked(runStatusJudgmentPhase).mockResolvedValue('');
   vi.mocked(generateReportDir).mockReturnValue('test-report-dir');
 }
+
+/**
+ * Clean up PieceEngine instances to prevent EventEmitter memory leaks.
+ * Call this in afterEach to ensure all event listeners are removed.
+ */
+export function cleanupPieceEngine(engine: any): void {
+  if (engine && typeof engine.removeAllListeners === 'function') {
+    engine.removeAllListeners();
+  }
+}
