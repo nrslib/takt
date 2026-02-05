@@ -149,7 +149,7 @@ describe('Piece Patterns IT: default piece (parallel reviewers)', () => {
       { agent: 'ai-antipattern-reviewer', status: 'done', content: 'No AI-specific issues' },
       // Parallel reviewers: both approved
       { agent: 'architecture-reviewer', status: 'done', content: 'approved' },
-      { agent: 'security-reviewer', status: 'done', content: 'approved' },
+      { agent: 'qa-reviewer', status: 'done', content: 'approved' },
       // Supervisor
       { agent: 'supervisor', status: 'done', content: 'All checks passed' },
     ]);
@@ -168,21 +168,21 @@ describe('Piece Patterns IT: default piece (parallel reviewers)', () => {
       { agent: 'architect', status: 'done', content: 'Design complete' },
       { agent: 'coder', status: 'done', content: 'Implementation complete' },
       { agent: 'ai-antipattern-reviewer', status: 'done', content: 'No AI-specific issues' },
-      // Parallel: arch approved, security needs_fix
+      // Parallel: arch approved, qa needs_fix
       { agent: 'architecture-reviewer', status: 'done', content: 'approved' },
-      { agent: 'security-reviewer', status: 'done', content: 'needs_fix' },
+      { agent: 'qa-reviewer', status: 'done', content: 'needs_fix' },
       // Fix step
       { agent: 'coder', status: 'done', content: 'Fix complete' },
       // AI review after fix
       { agent: 'ai-antipattern-reviewer', status: 'done', content: 'No AI-specific issues' },
       // Re-review: both approved
       { agent: 'architecture-reviewer', status: 'done', content: 'approved' },
-      { agent: 'security-reviewer', status: 'done', content: 'approved' },
+      { agent: 'qa-reviewer', status: 'done', content: 'approved' },
       // Supervisor
       { agent: 'supervisor', status: 'done', content: 'All checks passed' },
     ]);
 
-    const engine = createEngine(config!, testDir, 'Task needing security fix');
+    const engine = createEngine(config!, testDir, 'Task needing QA fix');
     const state = await engine.run();
 
     expect(state.status).toBe('completed');

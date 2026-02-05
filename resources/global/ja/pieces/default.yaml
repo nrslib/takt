@@ -1,5 +1,5 @@
 # Default TAKT Piece
-# Plan -> Architect -> Implement -> AI Review -> Reviewers (parallel: Architect + Security) -> Supervisor Approval
+# Plan -> Architect -> Implement -> AI Review -> Reviewers (parallel: Architect + QA) -> Supervisor Approval
 #
 # Template Variables (auto-injected by buildInstruction):
 #   {iteration}      - Piece-wide turn count (total movements executed across all agents)
@@ -264,6 +264,11 @@ movements:
       - condition: AI特有の問題あり
         next: ai_fix
     instruction_template: |
+      **これは {movement_iteration} 回目のAI Reviewです。**
+
+      初回は網羅的にレビューし、指摘すべき問題をすべて出し切ってください。
+      2回目以降は、前回REJECTした項目が修正されたかの確認を優先してください。
+
       AI特有の問題についてコードをレビューしてください:
       - 仮定の検証
       - もっともらしいが間違っているパターン
@@ -288,9 +293,9 @@ movements:
       - condition: AI問題の修正完了
         next: ai_review
       - condition: 修正不要（指摘対象ファイル/仕様の確認済み）
-        next: plan
+        next: ai_no_fix
       - condition: 判断できない、情報不足
-        next: plan
+        next: ai_no_fix
     instruction_template: |
       **これは {movement_iteration} 回目の AI Review です。**
 
@@ -332,6 +337,34 @@ movements:
       - {実行コマンドと結果}
       - 思い込みで判断
       - AI Reviewer が REJECT した問題の放置
+
+  - name: ai_no_fix
+    edit: false
+    agent: ../agents/default/architecture-reviewer.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+    rules:
+      - condition: ai_reviewの指摘が妥当（修正すべき）
+        next: ai_fix
+      - condition: ai_fixの判断が妥当（修正不要）
+        next: reviewers
+    instruction_template: |
+      ai_review（レビュアー）と ai_fix（コーダー）の意見が食い違っています。
+
+      - ai_review は問題を指摘し REJECT しました
+      - ai_fix は確認の上「修正不要」と判断しました
+
+      両者の出力を確認し、どちらの判断が妥当か裁定してください。
+
+      **参照するレポート:**
+      - AIレビュー結果: {report:04-ai-review.md}
+
+      **判断基準:**
+      - ai_review の指摘が具体的で、コード上の実在する問題を指しているか
+      - ai_fix の反論に根拠（ファイル確認結果、テスト結果）があるか
+      - 指摘が非ブロッキング（記録のみ）レベルか、実際に修正が必要か
 
   - name: reviewers
     parallel:
@@ -398,40 +431,34 @@ movements:
 
           **注意:** architectムーブメントをスキップした小規模タスクの場合は、従来通り設計の妥当性も確認してください。
 
-      - name: security-review
+      - name: qa-review
         edit: false
-        agent: ../agents/default/security-reviewer.md
+        agent: ../agents/default/qa-reviewer.md
         report:
-          name: 06-security-review.md
+          name: 06-qa-review.md
           format: |
             ```markdown
-            # セキュリティレビュー
+            # QAレビュー
 
             ## 結果: APPROVE / REJECT
 
-            ## 重大度: None / Low / Medium / High / Critical
+            ## サマリー
+            {1-2文で結果を要約}
 
-            ## チェック結果
-            | カテゴリ | 結果 | 備考 |
-            |---------|------|------|
-            | インジェクション | ✅ | - |
-            | 認証・認可 | ✅ | - |
-            | データ保護 | ✅ | - |
-            | 依存関係 | ✅ | - |
+            ## レビュー観点
+            | 観点 | 結果 | 備考 |
+            |------|------|------|
+            | テストカバレッジ | ✅ | - |
+            | テスト品質 | ✅ | - |
+            | エラーハンドリング | ✅ | - |
+            | ドキュメント | ✅ | - |
+            | 保守性 | ✅ | - |
 
-            ## 脆弱性（REJECTの場合）
-            | # | 重大度 | 種類 | 場所 | 修正案 |
-            |---|--------|------|------|--------|
-            | 1 | High | SQLi | `src/db.ts:42` | パラメータ化クエリを使用 |
-
-            ## 警告（ブロッキングではない）
-            - {セキュリティに関する推奨事項}
+            ## 問題点（REJECTの場合）
+            | # | カテゴリ | 問題 | 修正案 |
+            |---|---------|------|--------|
+            | 1 | テスト | 問題の説明 | 修正方法 |
             ```
-
-            **認知負荷軽減ルール:**
-            - 問題なし → チェック表のみ（10行以内）
-            - 警告あり → + 警告を1-2行（15行以内）
-            - 脆弱性あり → + 表形式で（30行以内）
         allowed_tools:
           - Read
           - Glob
@@ -442,11 +469,14 @@ movements:
           - condition: approved
           - condition: needs_fix
         instruction_template: |
-          変更に対してセキュリティレビューを行ってください。以下の脆弱性を確認してください:
-          - インジェクション攻撃（SQL, コマンド, XSS）
-          - 認証・認可の問題
-          - データ露出リスク
-          - 暗号化の弱点
+          品質保証の観点から変更をレビューしてください。
+
+          **レビュー観点:**
+          - テストカバレッジと品質
+          - テスト戦略（unit/integration/E2E）
+          - エラーハンドリング
+          - ログとモニタリング
+          - 保守性
     rules:
       - condition: all("approved")
         next: supervise
@@ -560,7 +590,7 @@ movements:
       | Architecture Design | ✅ 完了 |
       | AI Review | ✅ APPROVE |
       | Architect Review | ✅ APPROVE |
-      | Security | ✅ APPROVE |
+      | QA | ✅ APPROVE |
       | Supervisor | ✅ APPROVE |
 
       ## 確認コマンド

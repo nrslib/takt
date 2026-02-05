@@ -204,6 +204,11 @@ movements:
       - WebSearch
       - WebFetch
     instruction_template: |
+      **This is AI Review iteration {movement_iteration}.**
+
+      For the 1st iteration, review thoroughly and report all issues at once.
+      For iteration 2+, prioritize verifying that previously REJECTed items have been fixed.
+
       Review the code for AI-specific issues:
       - Assumption validation
       - Plausible but wrong patterns
@@ -276,9 +281,37 @@ movements:
       - condition: AI Reviewer's issues have been fixed
         next: ai_review
       - condition: No fix needed (verified target files/spec)
-        next: plan
+        next: ai_no_fix
       - condition: Unable to proceed with fixes
-        next: plan
+        next: ai_no_fix
+
+  - name: ai_no_fix
+    edit: false
+    agent: ../agents/default/architecture-reviewer.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+    rules:
+      - condition: ai_review's findings are valid (fix required)
+        next: ai_fix
+      - condition: ai_fix's judgment is valid (no fix needed)
+        next: reviewers
+    instruction_template: |
+      ai_review (reviewer) and ai_fix (coder) disagree.
+
+      - ai_review found issues and REJECTed
+      - ai_fix verified and determined "no fix needed"
+
+      Review both outputs and arbitrate which judgment is correct.
+
+      **Reports to reference:**
+      - AI Review results: {report:03-ai-review.md}
+
+      **Judgment criteria:**
+      - Are ai_review's findings specific and pointing to real issues in the code?
+      - Does ai_fix's rebuttal have evidence (file verification, test results)?
+      - Are the findings non-blocking (record-only) or do they require actual fixes?
 
   # ===========================================
   # Movement 3: Expert Reviews (Parallel)

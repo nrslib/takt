@@ -62,13 +62,13 @@ describe('default piece parallel reviewers movement', () => {
     expect(reviewersMovement!.parallel).toHaveLength(2);
   });
 
-  it('should have arch-review and security-review as parallel sub-movements', () => {
+  it('should have arch-review and qa-review as parallel sub-movements', () => {
     const piece = getBuiltinPiece('default');
     const reviewersMovement = piece!.movements.find((s) => s.name === 'reviewers')!;
     const subMovementNames = reviewersMovement.parallel!.map((s) => s.name);
 
     expect(subMovementNames).toContain('arch-review');
-    expect(subMovementNames).toContain('security-review');
+    expect(subMovementNames).toContain('qa-review');
   });
 
   it('should have aggregate conditions on the reviewers parent movement', () => {
@@ -142,8 +142,8 @@ describe('default piece parallel reviewers movement', () => {
     const archReview = reviewersMovement.parallel!.find((s) => s.name === 'arch-review')!;
     expect(archReview.agent).toContain('architecture-reviewer');
 
-    const secReview = reviewersMovement.parallel!.find((s) => s.name === 'security-review')!;
-    expect(secReview.agent).toContain('security-reviewer');
+    const qaReview = reviewersMovement.parallel!.find((s) => s.name === 'qa-review')!;
+    expect(qaReview.agent).toContain('default/qa-reviewer');
   });
 
   it('should have reports configured on sub-movements', () => {
@@ -153,8 +153,8 @@ describe('default piece parallel reviewers movement', () => {
     const archReview = reviewersMovement.parallel!.find((s) => s.name === 'arch-review')!;
     expect(archReview.report).toBeDefined();
 
-    const secReview = reviewersMovement.parallel!.find((s) => s.name === 'security-review')!;
-    expect(secReview.report).toBeDefined();
+    const qaReview = reviewersMovement.parallel!.find((s) => s.name === 'qa-review')!;
+    expect(qaReview.report).toBeDefined();
   });
 });
 

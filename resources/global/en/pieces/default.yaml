@@ -1,5 +1,5 @@
 # Default TAKT Piece
-# Plan -> Architect -> Implement -> AI Review -> Reviewers (parallel: Architect + Security) -> Supervisor Approval
+# Plan -> Architect -> Implement -> AI Review -> Reviewers (parallel: Architect + QA) -> Supervisor Approval
 #
 # Boilerplate sections (Piece Context, User Request, Previous Response,
 # Additional User Inputs, Instructions heading) are auto-injected by buildInstruction().
@@ -269,6 +269,11 @@ movements:
       - condition: AI-specific issues found
         next: ai_fix
     instruction_template: |
+      **This is AI Review iteration {movement_iteration}.**
+
+      For the 1st iteration, review thoroughly and report all issues at once.
+      For iteration 2+, prioritize verifying that previously REJECTed items have been fixed.
+
       Review the code for AI-specific issues:
       - Assumption validation
       - Plausible but wrong patterns
@@ -293,9 +298,9 @@ movements:
       - condition: AI issues fixed
         next: ai_review
       - condition: No fix needed (verified target files/spec)
-        next: plan
+        next: ai_no_fix
       - condition: Cannot proceed, insufficient info
-        next: plan
+        next: ai_no_fix
     instruction_template: |
       **This is AI Review iteration {movement_iteration}.**
 
@@ -337,6 +342,34 @@ movements:
       - {command and outcome}
       - Judging based on assumptions
       - Leaving problems that AI Reviewer REJECTED
+
+  - name: ai_no_fix
+    edit: false
+    agent: ../agents/default/architecture-reviewer.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+    rules:
+      - condition: ai_review's findings are valid (fix required)
+        next: ai_fix
+      - condition: ai_fix's judgment is valid (no fix needed)
+        next: reviewers
+    instruction_template: |
+      ai_review (reviewer) and ai_fix (coder) disagree.
+
+      - ai_review found issues and REJECTed
+      - ai_fix verified and determined "no fix needed"
+
+      Review both outputs and arbitrate which judgment is correct.
+
+      **Reports to reference:**
+      - AI Review results: {report:04-ai-review.md}
+
+      **Judgment criteria:**
+      - Are ai_review's findings specific and pointing to real issues in the code?
+      - Does ai_fix's rebuttal have evidence (file verification, test results)?
+      - Are the findings non-blocking (record-only) or do they require actual fixes?
 
   - name: reviewers
     parallel:
@@ -400,40 +433,34 @@ movements:
 
           **Note:** For small tasks that skipped the architect movement, review design validity as usual.
 
-      - name: security-review
+      - name: qa-review
         edit: false
-        agent: ../agents/default/security-reviewer.md
+        agent: ../agents/default/qa-reviewer.md
         report:
-          name: 06-security-review.md
+          name: 06-qa-review.md
           format: |
             ```markdown
-            # Security Review
+            # QA Review
 
             ## Result: APPROVE / REJECT
 
-            ## Severity: None / Low / Medium / High / Critical
+            ## Summary
+            {1-2 sentences summarizing result}
 
-            ## Check Results
-            | Category | Result | Notes |
-            |----------|--------|-------|
-            | Injection | ✅ | - |
-            | Auth/Authz | ✅ | - |
-            | Data Protection | ✅ | - |
-            | Dependencies | ✅ | - |
+            ## Reviewed Perspectives
+            | Perspective | Result | Notes |
+            |-------------|--------|-------|
+            | Test Coverage | ✅ | - |
+            | Test Quality | ✅ | - |
+            | Error Handling | ✅ | - |
+            | Documentation | ✅ | - |
+            | Maintainability | ✅ | - |
 
-            ## Vulnerabilities (if REJECT)
-            | # | Severity | Type | Location | Fix |
-            |---|----------|------|----------|-----|
-            | 1 | High | SQLi | `src/db.ts:42` | Use parameterized query |
-
-            ## Warnings (non-blocking)
-            - {Security recommendations}
+            ## Issues (if REJECT)
+            | # | Category | Issue | Fix |
+            |---|----------|-------|-----|
+            | 1 | Testing | Issue description | Fix method |
             ```
-
-            **Cognitive load reduction rules:**
-            - No issues -> Check table only (10 lines or less)
-            - Warnings -> + Warnings 1-2 lines (15 lines or less)
-            - Vulnerabilities -> + Table format (30 lines or less)
         allowed_tools:
           - Read
           - Glob
@@ -444,11 +471,14 @@ movements:
           - condition: approved
           - condition: needs_fix
         instruction_template: |
-          Perform security review on the changes. Check for vulnerabilities including:
-          - Injection attacks (SQL, Command, XSS)
-          - Authentication/Authorization issues
-          - Data exposure risks
-          - Cryptographic weaknesses
+          Review the changes from the quality assurance perspective.
+
+          **Review Criteria:**
+          - Test coverage and quality
+          - Test strategy (unit/integration/E2E)
+          - Error handling
+          - Logging and monitoring
+          - Maintainability
     rules:
       - condition: all("approved")
         next: supervise
@@ -563,7 +593,7 @@ movements:
       | Architecture Design | ✅ Complete |
       | AI Review | ✅ APPROVE |
       | Architect Review | ✅ APPROVE |
-      | Security | ✅ APPROVE |
+      | QA | ✅ APPROVE |
       | Supervisor | ✅ APPROVE |
 
       ## Verification Commands

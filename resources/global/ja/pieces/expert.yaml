@@ -192,6 +192,11 @@ movements:
       - WebSearch
       - WebFetch
     instruction_template: |
+      **これは {movement_iteration} 回目のAI Reviewです。**
+
+      初回は網羅的にレビューし、指摘すべき問題をすべて出し切ってください。
+      2回目以降は、前回REJECTした項目が修正されたかの確認を優先してください。
+
       AI特有の問題についてコードをレビューしてください:
       - 仮定の検証
       - もっともらしいが間違っているパターン
@@ -261,9 +266,37 @@ movements:
       - condition: AI Reviewerの指摘に対する修正が完了した
         next: ai_review
       - condition: 修正不要（指摘対象ファイル/仕様の確認済み）
-        next: plan
+        next: ai_no_fix
       - condition: 修正を進行できない
-        next: plan
+        next: ai_no_fix
+
+  - name: ai_no_fix
+    edit: false
+    agent: ../agents/default/architecture-reviewer.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+    rules:
+      - condition: ai_reviewの指摘が妥当（修正すべき）
+        next: ai_fix
+      - condition: ai_fixの判断が妥当（修正不要）
+        next: reviewers
+    instruction_template: |
+      ai_review（レビュアー）と ai_fix（コーダー）の意見が食い違っています。
+
+      - ai_review は問題を指摘し REJECT しました
+      - ai_fix は確認の上「修正不要」と判断しました
+
+      両者の出力を確認し、どちらの判断が妥当か裁定してください。
+
+      **参照するレポート:**
+      - AIレビュー結果: {report:03-ai-review.md}
+
+      **判断基準:**
+      - ai_review の指摘が具体的で、コード上の実在する問題を指しているか
+      - ai_fix の反論に根拠（ファイル確認結果、テスト結果）があるか
+      - 指摘が非ブロッキング（記録のみ）レベルか、実際に修正が必要か
 
   # ===========================================
   # Movement 3: Expert Reviews (Parallel)
