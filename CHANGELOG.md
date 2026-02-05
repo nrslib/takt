@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.0-rc2] - 2026-02-05
+
+### Fixed
+
+- ai_review ↔ ai_fix 間の無限ループを修正: ai_fix が「修正不要」と判断した場合に plan へ戻ってフルパイプラインが再起動する問題を解消
+  - `ai_no_fix` 調停ステップを追加（architecture-reviewer が ai_review vs ai_fix の対立を判定）
+  - ai_fix の「修正不要」ルートを `plan` → `ai_no_fix` に変更
+  - 対象ピース: default, expert, expert-cqrs（en/ja）
+
+### Changed
+
+- default ピースの並列レビュアーを security-review → qa-review に変更（TAKT 開発向けに最適化）
+- qa-reviewer エージェントを `expert/` から `default/` に移動し、テストカバレッジ重視の内容に書き直し
+- ai_review instruction にイテレーション認識を追加（初回は網羅的レビュー、2回目以降は修正確認を優先）
+
+### Internal
+
+- auto-tag ワークフローを release/ ブランチからのマージのみに制限
+- テスト更新: security-reviewer → qa-reviewer の変更に対応
+
 ## [0.6.0-rc] - 2026-02-05
 
 ### Added
