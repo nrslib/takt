@@ -91,6 +91,9 @@ export class PieceEngine extends EventEmitter {
       (agent) => this.state.agentSessions.get(agent),
       () => this.reportDir,
       () => this.options.language,
+      () => this.config.movements.map(s => ({ name: s.name, description: s.description })),
+      () => this.getPieceName(),
+      () => this.getPieceDescription(),
     );
 
     this.movementExecutor = new MovementExecutor({
@@ -101,6 +104,8 @@ export class PieceEngine extends EventEmitter {
       getLanguage: () => this.options.language,
       getInteractive: () => this.options.interactive === true,
       getPieceMovements: () => this.config.movements.map(s => ({ name: s.name, description: s.description })),
+      getPieceName: () => this.getPieceName(),
+      getPieceDescription: () => this.getPieceDescription(),
       detectRuleIndex: this.detectRuleIndex,
       callAiJudge: this.callAiJudge,
       onPhaseStart: (step, phase, phaseName, instruction) => {
@@ -203,6 +208,16 @@ export class PieceEngine extends EventEmitter {
   /** Get project root directory (where .takt/ lives) */
   getProjectCwd(): string {
     return this.projectCwd;
+  }
+
+  /** Get piece name */
+  private getPieceName(): string {
+    return this.config.name;
+  }
+
+  /** Get piece description */
+  private getPieceDescription(): string | undefined {
+    return this.config.description;
   }
 
   /** Request graceful abort: interrupt running queries and stop after current movement */

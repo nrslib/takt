@@ -89,9 +89,17 @@ export class InstructionBuilder {
       this.context,
     );
 
+    // Piece name and description
+    const pieceName = this.context.pieceName ?? '';
+    const pieceDescription = this.context.pieceDescription ?? '';
+    const hasPieceDescription = !!pieceDescription;
+
     return loadTemplate('perform_phase1_message', language, {
       workingDirectory: this.context.cwd,
       editRule,
+      pieceName,
+      pieceDescription,
+      hasPieceDescription,
       pieceStructure,
       iteration: `${this.context.iteration}/${this.context.maxIterations}`,
       movementIteration: String(this.context.movementIteration),

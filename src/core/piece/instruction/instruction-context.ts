@@ -36,6 +36,10 @@ export interface InstructionContext {
   pieceMovements?: ReadonlyArray<{ name: string; description?: string }>;
   /** Index of the current movement in pieceMovements (0-based) */
   currentMovementIndex?: number;
+  /** Piece name */
+  pieceName?: string;
+  /** Piece description (optional) */
+  pieceDescription?: string;
 }
 
 /**

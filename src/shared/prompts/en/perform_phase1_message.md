@@ -1,9 +1,10 @@
 <!--
   template: perform_phase1_message
   phase: 1 (main execution)
-  vars: workingDirectory, editRule, pieceStructure, iteration, movementIteration,
-        movement, hasReport, reportInfo, phaseNote, hasTaskSection, userRequest,
-        hasPreviousResponse, previousResponse, hasUserInputs, userInputs, instructions
+  vars: workingDirectory, editRule, pieceName, pieceDescription, hasPieceDescription,
+        pieceStructure, iteration, movementIteration, movement, hasReport, reportInfo,
+        phaseNote, hasTaskSection, userRequest, hasPreviousResponse, previousResponse,
+        hasUserInputs, userInputs, instructions
   builder: InstructionBuilder
 -->
 ## Execution Context
@@ -17,7 +18,10 @@
 Note: This section is metadata. Follow the language used in the rest of the prompt.
 
 ## Piece Context
-{{#if pieceStructure}}{{pieceStructure}}
+{{#if pieceName}}- Piece: {{pieceName}}
+{{/if}}{{#if hasPieceDescription}}- Description: {{pieceDescription}}
+
+{{/if}}{{#if pieceStructure}}{{pieceStructure}}
 
 {{/if}}- Iteration: {{iteration}}(piece-wide)
 - Movement Iteration: {{movementIteration}}(times this movement has run)

@@ -1,9 +1,10 @@
 <!--
   template: perform_phase1_message
   phase: 1 (main execution)
-  vars: workingDirectory, editRule, pieceStructure, iteration, movementIteration,
-        movement, hasReport, reportInfo, phaseNote, hasTaskSection, userRequest,
-        hasPreviousResponse, previousResponse, hasUserInputs, userInputs, instructions
+  vars: workingDirectory, editRule, pieceName, pieceDescription, hasPieceDescription,
+        pieceStructure, iteration, movementIteration, movement, hasReport, reportInfo,
+        phaseNote, hasTaskSection, userRequest, hasPreviousResponse, previousResponse,
+        hasUserInputs, userInputs, instructions
   builder: InstructionBuilder
 -->
 ## 実行コンテキスト
@@ -16,7 +17,10 @@
 {{/if}}
 
 ## Piece Context
-{{#if pieceStructure}}{{pieceStructure}}
+{{#if pieceName}}- ピース: {{pieceName}}
+{{/if}}{{#if hasPieceDescription}}- 説明: {{pieceDescription}}
+
+{{/if}}{{#if pieceStructure}}{{pieceStructure}}
 
 {{/if}}- Iteration: {{iteration}}（ピース全体）
 - Movement Iteration: {{movementIteration}}（このムーブメントの実行回数）

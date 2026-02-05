@@ -33,6 +33,8 @@ export interface MovementExecutorDeps {
   readonly getLanguage: () => Language | undefined;
   readonly getInteractive: () => boolean;
   readonly getPieceMovements: () => ReadonlyArray<{ name: string; description?: string }>;
+  readonly getPieceName: () => string;
+  readonly getPieceDescription: () => string | undefined;
   readonly detectRuleIndex: (content: string, movementName: string) => number;
   readonly callAiJudge: (
     agentOutput: string,
@@ -71,6 +73,8 @@ export class MovementExecutor {
       interactive: this.deps.getInteractive(),
       pieceMovements: pieceMovements,
       currentMovementIndex: pieceMovements.findIndex(s => s.name === step.name),
+      pieceName: this.deps.getPieceName(),
+      pieceDescription: this.deps.getPieceDescription(),
     }).build();
   }
 

@@ -10,7 +10,7 @@ interactive:
   conversationLabel: "会話:"
   noTranscript: "（ローカル履歴なし。現在のセッション文脈を要約してください。）"
   ui:
-    intro: "対話モード - タスク内容を入力してください。コマンド: /go（実行）, /cancel（終了）"
+    intro: "対話モード - タスク内容を入力してください。コマンド: /go（実行）, /play（即実行）, /cancel（終了）"
     resume: "前回のセッションを再開します"
     noConversation: "まだ会話がありません。まずタスク内容を入力してください。"
     summarizeFailed: "会話の要約に失敗しました。再度お試しください。"
@@ -18,6 +18,13 @@ interactive:
     proposed: "提案されたタスク指示:"
     confirm: "このタスク指示で進めますか？"
     cancelled: "キャンセルしました"
+    playNoTask: "タスク内容を指定してください: /play <タスク内容>"
+  previousTask:
+    success: "✅ 前回のタスクは正常に完了しました"
+    error: "❌ 前回のタスクはエラーで終了しました: {error}"
+    userStopped: "⚠️ 前回のタスクはユーザーによって中断されました"
+    piece: "使用ピース: {pieceName}"
+    timestamp: "実行時刻: {timestamp}"
 
 # ===== Piece Execution UI =====
 piece:

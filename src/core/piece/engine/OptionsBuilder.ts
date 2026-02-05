@@ -19,10 +19,17 @@ export class OptionsBuilder {
     private readonly getSessionId: (agent: string) => string | undefined,
     private readonly getReportDir: () => string,
     private readonly getLanguage: () => Language | undefined,
+    private readonly getPieceMovements: () => ReadonlyArray<{ name: string; description?: string }>,
+    private readonly getPieceName: () => string,
+    private readonly getPieceDescription: () => string | undefined,
   ) {}
 
   /** Build common RunAgentOptions shared by all phases */
   buildBaseOptions(step: PieceMovement): RunAgentOptions {
+    const movements = this.getPieceMovements();
+    const currentIndex = movements.findIndex((m) => m.name === step.name);
+    const currentPosition = currentIndex >= 0 ? `${currentIndex + 1}/${movements.length}` : '?/?';
+
     return {
       cwd: this.getCwd(),
       agentPath: step.agentPath,
@@ -34,6 +41,13 @@ export class OptionsBuilder {
       onPermissionRequest: this.engineOptions.onPermissionRequest,
       onAskUserQuestion: this.engineOptions.onAskUserQuestion,
       bypassPermissions: this.engineOptions.bypassPermissions,
+      pieceMeta: {
+        pieceName: this.getPieceName(),
+        pieceDescription: this.getPieceDescription(),
+        currentMovement: step.name,
+        movementsList: movements,
+        currentPosition,
+      },
     };
   }
 

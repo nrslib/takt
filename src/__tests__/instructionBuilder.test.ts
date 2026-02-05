@@ -46,6 +46,8 @@ function createMinimalContext(overrides: Partial<InstructionContext> = {}): Inst
     cwd: '/project',
     projectCwd: '/project',
     userInputs: [],
+    pieceName: 'test-piece',
+    pieceDescription: 'Test piece description',
     ...overrides,
   };
 }
@@ -299,6 +301,62 @@ describe('instruction-builder', () => {
   });
 
   describe('auto-injected Piece Context section', () => {
+    it('should include piece name when provided', () => {
+      const step = createMinimalStep('Do work');
+      const context = createMinimalContext({
+        pieceName: 'my-piece',
+        language: 'en',
+      });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('## Piece Context');
+      expect(result).toContain('- Piece: my-piece');
+    });
+
+    it('should include piece description when provided', () => {
+      const step = createMinimalStep('Do work');
+      const context = createMinimalContext({
+        pieceName: 'my-piece',
+        pieceDescription: 'A test piece for validation',
+        language: 'en',
+      });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('## Piece Context');
+      expect(result).toContain('- Piece: my-piece');
+      expect(result).toContain('- Description: A test piece for validation');
+    });
+
+    it('should not show description when not provided', () => {
+      const step = createMinimalStep('Do work');
+      const context = createMinimalContext({
+        pieceName: 'my-piece',
+        pieceDescription: undefined,
+        language: 'en',
+      });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('- Piece: my-piece');
+      expect(result).not.toContain('- Description:');
+    });
+
+    it('should render piece context in Japanese', () => {
+      const step = createMinimalStep('Do work');
+      const context = createMinimalContext({
+        pieceName: 'coding',
+        pieceDescription: 'コーディングピース',
+        language: 'ja',
+      });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('- ピース: coding');
+      expect(result).toContain('- 説明: コーディングピース');
+    });
+
     it('should include iteration, step iteration, and step name', () => {
       const step = createMinimalStep('Do work');
       step.name = 'implement';

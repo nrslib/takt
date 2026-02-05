@@ -16,6 +16,8 @@ import {
   loadWorktreeSessions,
   updateWorktreeSession,
   loadGlobalConfig,
+  saveSessionState,
+  type SessionState,
 } from '../../../infra/config/index.js';
 import { isQuietMode } from '../../../shared/context.js';
 import {
@@ -50,6 +52,16 @@ import { EXIT_SIGINT } from '../../../shared/exitCodes.js';
 import { getLabel } from '../../../shared/i18n/index.js';
 
 const log = createLogger('piece');
+
+/**
+ * Truncate string to maximum length
+ */
+function truncate(str: string, maxLength: number): string {
+  if (str.length <= maxLength) {
+    return str;
+  }
+  return str.slice(0, maxLength) + '...';
+}
 
 /**
  * Format elapsed time in human-readable format
@@ -219,6 +231,8 @@ export async function executePiece(
   });
 
   let abortReason: string | undefined;
+  let lastMovementContent: string | undefined;
+  let lastMovementName: string | undefined;
 
   engine.on('phase:start', (step, phase, phaseName, instruction) => {
     log.debug('Phase starting', { step: step.name, phase, phaseName });
@@ -283,6 +297,11 @@ export async function executePiece(
       sessionId: response.sessionId,
       error: response.error,
     });
+
+    // Capture last movement output for session state
+    lastMovementContent = response.content;
+    lastMovementName = step.name;
+
     if (displayRef.current) {
       displayRef.current.flush();
       displayRef.current = null;
@@ -348,6 +367,21 @@ export async function executePiece(
     appendNdjsonLine(ndjsonLogPath, record);
     updateLatestPointer(sessionLog, pieceSessionId, projectCwd);
 
+    // Save session state for next interactive mode
+    try {
+      const sessionState: SessionState = {
+        status: 'success',
+        taskResult: truncate(lastMovementContent ?? '', 1000),
+        timestamp: new Date().toISOString(),
+        pieceName: pieceConfig.name,
+        taskContent: truncate(task, 200),
+        lastMovement: lastMovementName,
+      };
+      saveSessionState(projectCwd, sessionState);
+    } catch (error) {
+      log.error('Failed to save session state', { error });
+    }
+
     const elapsed = sessionLog.endTime
       ? formatElapsedTime(sessionLog.startTime, sessionLog.endTime)
       : '';
@@ -377,6 +411,21 @@ export async function executePiece(
     };
     appendNdjsonLine(ndjsonLogPath, record);
     updateLatestPointer(sessionLog, pieceSessionId, projectCwd);
+
+    // Save session state for next interactive mode
+    try {
+      const sessionState: SessionState = {
+        status: reason === 'user_interrupted' ? 'user_stopped' : 'error',
+        errorMessage: reason,
+        timestamp: new Date().toISOString(),
+        pieceName: pieceConfig.name,
+        taskContent: truncate(task, 200),
+        lastMovement: lastMovementName,
+      };
+      saveSessionState(projectCwd, sessionState);
+    } catch (error) {
+      log.error('Failed to save session state', { error });
+    }
 
     const elapsed = sessionLog.endTime
       ? formatElapsedTime(sessionLog.startTime, sessionLog.endTime)

@@ -34,3 +34,11 @@ export {
   getClaudeProjectSessionsDir,
   clearClaudeProjectSessions,
 } from './sessionStore.js';
+
+export {
+  type SessionState,
+  getSessionStatePath,
+  loadSessionState,
+  saveSessionState,
+  clearSessionState,
+} from './sessionState.js';

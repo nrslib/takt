@@ -10,7 +10,7 @@ interactive:
   conversationLabel: "Conversation:"
   noTranscript: "(No local transcript. Summarize the current session context.)"
   ui:
-    intro: "Interactive mode - describe your task. Commands: /go (execute), /cancel (exit)"
+    intro: "Interactive mode - describe your task. Commands: /go (execute), /play (run now), /cancel (exit)"
     resume: "Resuming previous session"
     noConversation: "No conversation yet. Please describe your task first."
     summarizeFailed: "Failed to summarize conversation. Please try again."
@@ -18,6 +18,13 @@ interactive:
     proposed: "Proposed task instruction:"
     confirm: "Use this task instruction?"
     cancelled: "Cancelled"
+    playNoTask: "Please specify task content: /play <task>"
+  previousTask:
+    success: "✅ Previous task completed successfully"
+    error: "❌ Previous task failed: {error}"
+    userStopped: "⚠️ Previous task was interrupted by user"
+    piece: "Piece: {pieceName}"
+    timestamp: "Executed: {timestamp}"
 
 # ===== Piece Execution UI =====
 piece:

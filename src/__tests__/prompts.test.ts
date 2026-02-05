@@ -57,14 +57,15 @@ describe('variable substitution', () => {
     expect(result).toContain('| 1 | Success |');
   });
 
-  it('replaces piece info variables in interactive prompt', () => {
+  it('interactive prompt does not contain piece info', () => {
     const result = loadTemplate('score_interactive_system_prompt', 'en', {
       pieceInfo: true,
       pieceName: 'my-piece',
       pieceDescription: 'Test description',
     });
-    expect(result).toContain('"my-piece"');
-    expect(result).toContain('Test description');
+    // ピース情報はインタラクティブプロンプトには含まれない（要約プロンプトにのみ含まれる）
+    expect(result).not.toContain('"my-piece"');
+    expect(result).not.toContain('Test description');
   });
 });
 

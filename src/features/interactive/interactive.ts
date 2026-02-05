@@ -13,7 +13,14 @@
 import * as readline from 'node:readline';
 import chalk from 'chalk';
 import type { Language } from '../../core/models/index.js';
-import { loadGlobalConfig, loadAgentSessions, updateAgentSession } from '../../infra/config/index.js';
+import {
+  loadGlobalConfig,
+  loadAgentSessions,
+  updateAgentSession,
+  loadSessionState,
+  clearSessionState,
+  type SessionState,
+} from '../../infra/config/index.js';
 import { isQuietMode } from '../../shared/context.js';
 import { getProvider, type ProviderType } from '../../infra/providers/index.js';
 import { selectOption } from '../../shared/prompt/index.js';
@@ -33,6 +40,44 @@ interface InteractiveUIText {
   proposed: string;
   confirm: string;
   cancelled: string;
+  playNoTask: string;
+}
+
+/**
+ * Format session state for display
+ */
+function formatSessionStatus(state: SessionState, lang: 'en' | 'ja'): string {
+  const lines: string[] = [];
+
+  // Status line
+  if (state.status === 'success') {
+    lines.push(getLabel('interactive.previousTask.success', lang));
+  } else if (state.status === 'error') {
+    lines.push(
+      getLabel('interactive.previousTask.error', lang, {
+        error: state.errorMessage!,
+      })
+    );
+  } else if (state.status === 'user_stopped') {
+    lines.push(getLabel('interactive.previousTask.userStopped', lang));
+  }
+
+  // Piece name
+  lines.push(
+    getLabel('interactive.previousTask.piece', lang, {
+      pieceName: state.pieceName,
+    })
+  );
+
+  // Timestamp
+  const timestamp = new Date(state.timestamp).toLocaleString(lang === 'ja' ? 'ja-JP' : 'en-US');
+  lines.push(
+    getLabel('interactive.previousTask.timestamp', lang, {
+      timestamp,
+    })
+  );
+
+  return lines.join('\n');
 }
 
 function resolveLanguage(lang?: Language): 'en' | 'ja' {
@@ -40,13 +85,7 @@ function resolveLanguage(lang?: Language): 'en' | 'ja' {
 }
 
 function getInteractivePrompts(lang: 'en' | 'ja', pieceContext?: PieceContext) {
-  const hasPiece = !!pieceContext;
-
-  const systemPrompt = loadTemplate('score_interactive_system_prompt', lang, {
-    pieceInfo: hasPiece,
-    pieceName: pieceContext?.name ?? '',
-    pieceDescription: pieceContext?.description ?? '',
-  });
+  const systemPrompt = loadTemplate('score_interactive_system_prompt', lang, {});
 
   return {
     systemPrompt,
@@ -194,6 +233,8 @@ export interface PieceContext {
   name: string;
   /** Piece description */
   description: string;
+  /** Piece structure (numbered list of movements) */
+  pieceStructure: string;
 }
 
 /**
@@ -224,6 +265,15 @@ export async function interactiveMode(
   const agentName = 'interactive';
   const savedSessions = loadAgentSessions(cwd, providerType);
   let sessionId: string | undefined = savedSessions[agentName];
+
+  // Load and display previous task state
+  const sessionState = loadSessionState(cwd);
+  if (sessionState) {
+    const statusLabel = formatSessionStatus(sessionState, lang);
+    info(statusLabel);
+    blankLine();
+    clearSessionState(cwd);
+  }
 
   info(prompts.ui.intro);
   if (sessionId) {
@@ -315,6 +365,16 @@ export async function interactiveMode(
     }
 
     // Handle slash commands
+    if (trimmed.startsWith('/play')) {
+      const task = trimmed.slice(5).trim();
+      if (!task) {
+        info(prompts.ui.playNoTask);
+        continue;
+      }
+      log.info('Play command', { task });
+      return { confirmed: true, task };
+    }
+
     if (trimmed.startsWith('/go')) {
       const userNote = trimmed.slice(3).trim();
       let summaryPrompt = buildSummaryPrompt(

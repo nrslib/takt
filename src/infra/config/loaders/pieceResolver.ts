@@ -8,7 +8,7 @@
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
-import type { PieceConfig } from '../../../core/models/index.js';
+import type { PieceConfig, PieceMovement } from '../../../core/models/index.js';
 import { getGlobalPiecesDir, getBuiltinPiecesDir, getProjectConfigDir } from '../paths.js';
 import { getLanguage, getDisabledBuiltins, getBuiltinPiecesEnabled } from '../global/globalConfig.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
@@ -146,20 +146,51 @@ export function loadPieceByIdentifier(
 }
 
 /**
+ * Build workflow structure string from piece movements.
+ * Formats as numbered list with indented parallel sub-movements.
+ *
+ * @param movements - Piece movements list
+ * @returns Workflow structure string (newline-separated list)
+ */
+function buildWorkflowString(movements: PieceMovement[]): string {
+  if (!movements || movements.length === 0) return '';
+
+  const lines: string[] = [];
+  let index = 1;
+
+  for (const movement of movements) {
+    const desc = movement.description ? ` (${movement.description})` : '';
+    lines.push(`${index}. ${movement.name}${desc}`);
+
+    if (movement.parallel && movement.parallel.length > 0) {
+      for (const sub of movement.parallel) {
+        const subDesc = sub.description ? ` (${sub.description})` : '';
+        lines.push(`   - ${sub.name}${subDesc}`);
+      }
+    }
+
+    index++;
+  }
+
+  return lines.join('\n');
+}
+
+/**
  * Get piece description by identifier.
- * Returns the piece name and description (if available).
+ * Returns the piece name, description, and workflow structure.
  */
 export function getPieceDescription(
   identifier: string,
   projectCwd: string,
-): { name: string; description: string } {
+): { name: string; description: string; pieceStructure: string } {
   const piece = loadPieceByIdentifier(identifier, projectCwd);
   if (!piece) {
-    return { name: identifier, description: '' };
+    return { name: identifier, description: '', pieceStructure: '' };
   }
   return {
     name: piece.name,
     description: piece.description ?? '',
+    pieceStructure: buildWorkflowString(piece.movements),
   };
 }
 

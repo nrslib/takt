@@ -50,7 +50,11 @@ vi.mock('../features/tasks/execute/selectAndExecute.js', () => ({
 }));
 
 vi.mock('../infra/config/loaders/pieceResolver.js', () => ({
-  getPieceDescription: vi.fn(() => ({ name: 'default', description: '' })),
+  getPieceDescription: vi.fn(() => ({
+    name: 'default',
+    description: '',
+    pieceStructure: '1. implement\n2. review'
+  })),
 }));
 
 vi.mock('../infra/github/issue.js', () => ({
@@ -92,7 +96,7 @@ function setupFullFlowMocks(overrides?: {
   const slug = overrides?.slug ?? 'add-auth';
 
   mockDeterminePiece.mockResolvedValue('default');
-  mockGetPieceDescription.mockReturnValue({ name: 'default', description: '' });
+  mockGetPieceDescription.mockReturnValue({ name: 'default', description: '', pieceStructure: '' });
   mockInteractiveMode.mockResolvedValue({ confirmed: true, task });
   mockSummarizeTaskName.mockResolvedValue(slug);
   mockConfirm.mockResolvedValue(false);
@@ -104,7 +108,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   testDir = fs.mkdtempSync(path.join(tmpdir(), 'takt-test-'));
   mockDeterminePiece.mockResolvedValue('default');
-  mockGetPieceDescription.mockReturnValue({ name: 'default', description: '' });
+  mockGetPieceDescription.mockReturnValue({ name: 'default', description: '', pieceStructure: '' });
   mockConfirm.mockResolvedValue(false);
 });
 
@@ -225,7 +229,7 @@ describe('addTask', () => {
     // Given: determinePiece returns a non-default piece
     setupFullFlowMocks({ slug: 'with-piece' });
     mockDeterminePiece.mockResolvedValue('review');
-    mockGetPieceDescription.mockReturnValue({ name: 'review', description: 'Code review piece' });
+    mockGetPieceDescription.mockReturnValue({ name: 'review', description: 'Code review piece', pieceStructure: '' });
     mockConfirm.mockResolvedValue(false);
 
     // When

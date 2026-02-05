@@ -196,7 +196,20 @@ export class AgentRunner {
     if (options.agentPath) {
       const agentDefinition = AgentRunner.loadAgentPromptFromPath(options.agentPath);
       const language = options.language ?? 'en';
-      const systemPrompt = loadTemplate('perform_agent_system_prompt', language, { agentDefinition });
+      const templateVars: Record<string, string> = { agentDefinition };
+
+      // Add piece meta information if available
+      if (options.pieceMeta) {
+        templateVars.pieceName = options.pieceMeta.pieceName;
+        templateVars.pieceDescription = options.pieceMeta.pieceDescription ?? '';
+        templateVars.currentMovement = options.pieceMeta.currentMovement;
+        templateVars.movementsList = options.pieceMeta.movementsList
+          .map((m, i) => `${i + 1}. ${m.name}${m.description ? ` - ${m.description}` : ''}`)
+          .join('\n');
+        templateVars.currentPosition = options.pieceMeta.currentPosition;
+      }
+
+      const systemPrompt = loadTemplate('perform_agent_system_prompt', language, templateVars);
       const providerType = AgentRunner.resolveProvider(options.cwd, options);
       const provider = getProvider(providerType);
       return provider.call(agentName, task, AgentRunner.buildProviderCallOptions(options, systemPrompt));

@@ -31,6 +31,8 @@ vi.mock('../infra/config/paths.js', async (importOriginal) => ({
   loadAgentSessions: vi.fn(() => ({})),
   updateAgentSession: vi.fn(),
   getProjectConfigDir: vi.fn(() => '/tmp'),
+  loadSessionState: vi.fn(() => null),
+  clearSessionState: vi.fn(),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -278,5 +280,60 @@ describe('interactiveMode', () => {
     // Task still contains all history for downstream use
     expect(result.confirmed).toBe(true);
     expect(result.task).toBe('Fix login page with clarified scope.');
+  });
+
+  describe('/play command', () => {
+    it('should return confirmed=true with task on /play command', async () => {
+      // Given
+      setupInputSequence(['/play implement login feature']);
+      setupMockProvider([]);
+
+      // When
+      const result = await interactiveMode('/project');
+
+      // Then
+      expect(result.confirmed).toBe(true);
+      expect(result.task).toBe('implement login feature');
+    });
+
+    it('should show error when /play has no task content', async () => {
+      // Given: /play without task, then /cancel to exit
+      setupInputSequence(['/play', '/cancel']);
+      setupMockProvider([]);
+
+      // When
+      const result = await interactiveMode('/project');
+
+      // Then: should not confirm (fell through to /cancel)
+      expect(result.confirmed).toBe(false);
+    });
+
+    it('should handle /play with leading/trailing spaces', async () => {
+      // Given
+      setupInputSequence(['/play   test task  ']);
+      setupMockProvider([]);
+
+      // When
+      const result = await interactiveMode('/project');
+
+      // Then
+      expect(result.confirmed).toBe(true);
+      expect(result.task).toBe('test task');
+    });
+
+    it('should skip AI summary when using /play', async () => {
+      // Given
+      setupInputSequence(['/play quick task']);
+      setupMockProvider([]);
+
+      // When
+      const result = await interactiveMode('/project');
+
+      // Then: provider should NOT have been called (no summary needed)
+      const mockProvider = mockGetProvider.mock.results[0]?.value as { call: ReturnType<typeof vi.fn> };
+      expect(mockProvider.call).not.toHaveBeenCalled();
+      expect(result.confirmed).toBe(true);
+      expect(result.task).toBe('quick task');
+    });
   });
 });

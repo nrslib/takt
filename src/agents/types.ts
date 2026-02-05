@@ -28,4 +28,12 @@ export interface RunAgentOptions {
   bypassPermissions?: boolean;
   /** Language for template resolution */
   language?: Language;
+  /** Piece meta information for system prompt template */
+  pieceMeta?: {
+    pieceName: string;
+    pieceDescription?: string;
+    currentMovement: string;
+    movementsList: ReadonlyArray<{ name: string; description?: string }>;
+    currentPosition: string;
+  };
 }
