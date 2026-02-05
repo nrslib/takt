@@ -24,7 +24,6 @@
     "test:e2e:codex": "npm run test:e2e:provider:codex",
     "lint": "eslint src/",
     "prepublishOnly": "npm run lint && npm run build && npm run test",
-    "postversion": "git push --follow-tags"
   },
   "keywords": [
     "claude",
