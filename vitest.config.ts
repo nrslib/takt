@@ -5,6 +5,7 @@ export default defineConfig({
     include: ['src/__tests__/**/*.test.ts'],
     environment: 'node',
     globals: false,
+    setupFiles: ['src/__tests__/test-setup.ts'],
     // Ensure proper cleanup by forcing sequential execution and graceful shutdown
     pool: 'threads',
     poolOptions: {

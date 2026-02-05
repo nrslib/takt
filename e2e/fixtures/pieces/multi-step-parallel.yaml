@@ -1,0 +1,49 @@
+name: e2e-multi-step-parallel
+description: Multi-step piece with parallel sub-movements for E2E testing
+
+max_iterations: 10
+
+initial_movement: plan
+
+movements:
+  - name: plan
+    agent: ../agents/test-coder.md
+    edit: true
+    permission_mode: edit
+    instruction_template: |
+      Create a plan for the task.
+    rules:
+      - condition: "Plan complete"
+        next: review
+
+  - name: review
+    parallel:
+      - name: arch-review
+        agent: ../agents/test-reviewer-a.md
+        instruction_template: |
+          Review the architecture.
+        rules:
+          - condition: approved
+          - condition: needs_fix
+      - name: security-review
+        agent: ../agents/test-reviewer-b.md
+        instruction_template: |
+          Review security.
+        rules:
+          - condition: approved
+          - condition: needs_fix
+    rules:
+      - condition: all("approved")
+        next: COMPLETE
+      - condition: any("needs_fix")
+        next: fix
+
+  - name: fix
+    agent: ../agents/test-coder.md
+    edit: true
+    permission_mode: edit
+    instruction_template: |
+      Fix the issues found in review.
+    rules:
+      - condition: "Fix applied"
+        next: review

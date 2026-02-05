@@ -62,7 +62,11 @@ export function showFullDiff(
   try {
     const result = spawnSync(
       'git', ['diff', '--color=always', `${defaultBranch}...${branch}`],
-      { cwd, stdio: ['inherit', 'inherit', 'inherit'], env: { ...process.env, GIT_PAGER: 'less -R' } },
+      {
+        cwd,
+        stdio: 'inherit',
+        env: { ...process.env, GIT_PAGER: 'less -R' },
+      },
     );
     if (result.status !== 0) {
       warn('Could not display diff');
@@ -148,10 +152,14 @@ export function mergeBranch(projectDir: string, item: BranchListItem): boolean {
       info(`${branch} is already merged, skipping merge.`);
       log.info('Branch already merged, cleanup only', { branch });
     } else {
-      execFileSync('git', ['merge', branch], {
+      execFileSync('git', ['merge', '--no-edit', branch], {
         cwd: projectDir,
         encoding: 'utf-8',
         stdio: 'pipe',
+        env: {
+          ...process.env,
+          GIT_MERGE_AUTOEDIT: 'no',
+        },
       });
     }
 

@@ -11,9 +11,9 @@ import { existsSync, mkdirSync } from 'node:fs';
 import type { Language } from '../../core/models/index.js';
 import { getLanguageResourcesDir } from '../resources/index.js';
 
-/** Get takt global config directory (~/.takt) */
+/** Get takt global config directory (~/.takt or TAKT_CONFIG_DIR) */
 export function getGlobalConfigDir(): string {
-  return join(homedir(), '.takt');
+  return process.env.TAKT_CONFIG_DIR || join(homedir(), '.takt');
 }
 
 /** Get takt global agents directory (~/.takt/agents) */

@@ -186,13 +186,36 @@ function execute(task, options?: { projectCwd?: string }) {
 | **REJECT** | Setter/getter created "for symmetry" but never used |
 | **REJECT** | Interface or option prepared for future extension |
 | **REJECT** | Exported but grep finds no usage |
+| **REJECT** | Defensive code for logically unreachable paths (see below) |
 | OK | Implicitly called by framework (lifecycle hooks, etc.) |
 | OK | Intentionally published as public package API |
 
+**Logically dead defensive code:**
+
+AI tends to add "just in case" guards without analyzing caller constraints. Code that is syntactically reachable but logically unreachable through actual call paths must be removed.
+
+```typescript
+// ❌ REJECT - All callers go through an interactive menu that requires TTY
+// This function can never be called without TTY
+function showFullDiff(cwd: string, branch: string): void {
+  const usePager = process.stdin.isTTY === true;
+  // usePager is always true (callers guarantee TTY)
+  const pager = usePager ? 'less -R' : 'cat';  // else branch is unreachable
+}
+
+// ✅ OK - Understand caller constraints, remove unnecessary branches
+function showFullDiff(cwd: string, branch: string): void {
+  // Only called from interactive menu, TTY is always present
+  spawnSync('git', ['diff', ...], { env: { GIT_PAGER: 'less -R' } });
+}
+```
+
 **Verification approach:**
-1. Verify with grep that no references exist to changed/deleted code
-2. Verify that public module (index files, etc.) export lists match actual implementations
-3. Check that old code corresponding to newly added code has been removed
+1. When you find a defensive branch, grep all callers of that function
+2. If all callers already guarantee the condition, the guard is unnecessary
+3. Verify with grep that no references exist to changed/deleted code
+4. Verify that public module (index files, etc.) export lists match actual implementations
+5. Check that old code corresponding to newly added code has been removed
 
 ### 8. Unnecessary Backward Compatibility Code Detection
 

@@ -42,7 +42,7 @@ export class CodexClient {
       ? mapToCodexSandboxMode(options.permissionMode)
       : 'workspace-write';
     const threadOptions = {
-      model: options.model,
+      ...(options.model ? { model: options.model } : {}),
       workingDirectory: options.cwd,
       sandboxMode,
     };

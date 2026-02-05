@@ -30,8 +30,8 @@ export class BranchManager {
         'git', ['symbolic-ref', 'refs/remotes/origin/HEAD'],
         { cwd, encoding: 'utf-8', stdio: 'pipe' },
       ).trim();
-      const parts = ref.split('/');
-      return parts[parts.length - 1] || 'main';
+      const prefix = 'refs/remotes/origin/';
+      return ref.startsWith(prefix) ? ref.slice(prefix.length) : ref;
     } catch {
       try {
         execFileSync('git', ['rev-parse', '--verify', 'main'], {

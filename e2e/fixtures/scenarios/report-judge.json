@@ -1,0 +1,17 @@
+[
+  {
+    "agent": "test-reporter",
+    "status": "done",
+    "content": "Work completed."
+  },
+  {
+    "agent": "test-reporter",
+    "status": "done",
+    "content": "Report summary: OK"
+  },
+  {
+    "agent": "conductor",
+    "status": "done",
+    "content": "[EXECUTE:1]"
+  }
+]

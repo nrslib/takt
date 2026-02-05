@@ -1,0 +1,15 @@
+[
+  { "agent": "test-coder", "status": "done", "content": "Plan created." },
+
+  { "agent": "test-reviewer-a", "status": "done", "content": "Architecture looks good." },
+  { "agent": "test-reviewer-b", "status": "done", "content": "Security issues found." },
+  { "agent": "conductor", "status": "done", "content": "[ARCH-REVIEW:1] [SECURITY-REVIEW:2]" },
+  { "agent": "conductor", "status": "done", "content": "[ARCH-REVIEW:1] [SECURITY-REVIEW:2]" },
+
+  { "agent": "test-coder", "status": "done", "content": "Fix applied." },
+
+  { "agent": "test-reviewer-a", "status": "done", "content": "Architecture still approved." },
+  { "agent": "test-reviewer-b", "status": "done", "content": "Security now approved." },
+  { "agent": "conductor", "status": "done", "content": "[ARCH-REVIEW:1] [SECURITY-REVIEW:1]" },
+  { "agent": "conductor", "status": "done", "content": "[ARCH-REVIEW:1] [SECURITY-REVIEW:1]" }
+]

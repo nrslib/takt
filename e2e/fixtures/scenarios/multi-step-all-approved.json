@@ -1,0 +1,7 @@
+[
+  { "agent": "test-coder", "status": "done", "content": "Plan created." },
+  { "agent": "test-reviewer-a", "status": "done", "content": "Architecture approved." },
+  { "agent": "test-reviewer-b", "status": "done", "content": "Security approved." },
+  { "agent": "conductor", "status": "done", "content": "[ARCH-REVIEW:1] [SECURITY-REVIEW:1]" },
+  { "agent": "conductor", "status": "done", "content": "[ARCH-REVIEW:1] [SECURITY-REVIEW:1]" }
+]

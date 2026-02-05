@@ -38,8 +38,23 @@ program
 program
   .command('list')
   .description('List task branches (merge/delete)')
-  .action(async () => {
-    await listTasks(resolvedCwd, resolveAgentOverrides(program));
+  .option('--non-interactive', 'Run list in non-interactive mode')
+  .option('--action <action>', 'Non-interactive action (diff|try|merge|delete)')
+  .option('--format <format>', 'Output format for non-interactive list (text|json)')
+  .option('--yes', 'Skip confirmation prompts in non-interactive mode')
+  .action(async (_opts, command) => {
+    const opts = command.optsWithGlobals();
+    await listTasks(
+      resolvedCwd,
+      resolveAgentOverrides(program),
+      {
+        enabled: opts.nonInteractive === true,
+        action: opts.action as string | undefined,
+        branch: opts.branch as string | undefined,
+        format: opts.format as string | undefined,
+        yes: opts.yes === true,
+      },
+    );
   });
 
 program

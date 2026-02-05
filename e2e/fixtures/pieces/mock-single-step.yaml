@@ -1,0 +1,19 @@
+name: e2e-mock-single
+description: Minimal mock-only piece for CLI E2E
+
+max_iterations: 3
+
+movements:
+  - name: execute
+    edit: true
+    agent: ../agents/test-coder.md
+    allowed_tools:
+      - Read
+      - Write
+      - Edit
+    permission_mode: edit
+    instruction_template: |
+      {task}
+    rules:
+      - condition: Done
+        next: COMPLETE

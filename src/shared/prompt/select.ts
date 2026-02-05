@@ -6,6 +6,7 @@
 
 import chalk from 'chalk';
 import { truncateText } from '../utils/index.js';
+import { resolveTtyPolicy, assertTtyIfForced } from './tty.js';
 
 /** Option type for selectOption */
 export interface SelectOptionItem<T extends string> {
@@ -208,7 +209,9 @@ function interactiveSelect<T extends string>(
     const lines = renderMenu(currentOptions, selectedIndex, hasCancelOption, cancelLabel);
     process.stdout.write(lines.join('\n') + '\n');
 
-    if (!process.stdin.isTTY) {
+    const { useTty, forceTouchTty } = resolveTtyPolicy();
+    assertTtyIfForced(forceTouchTty);
+    if (!useTty) {
       process.stdout.write('\x1B[?7h');
       resolve({ selectedIndex: initialIndex, finalOptions: currentOptions });
       return;

@@ -7,12 +7,18 @@
 
 import * as readline from 'node:readline';
 import chalk from 'chalk';
+import { resolveTtyPolicy, assertTtyIfForced } from './tty.js';
 
 /**
  * Prompt user for simple text input
  * @returns User input or null if cancelled
  */
 export async function promptInput(message: string): Promise<string | null> {
+  const { useTty, forceTouchTty } = resolveTtyPolicy();
+  assertTtyIfForced(forceTouchTty);
+  if (!useTty) {
+    return null;
+  }
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
@@ -77,6 +83,11 @@ export function readMultilineFromStream(input: NodeJS.ReadableStream): Promise<s
  * @returns true for yes, false for no
  */
 export async function confirm(message: string, defaultYes = true): Promise<boolean> {
+  const { useTty, forceTouchTty } = resolveTtyPolicy();
+  assertTtyIfForced(forceTouchTty);
+  if (!useTty) {
+    return defaultYes;
+  }
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,

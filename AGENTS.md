@@ -1,40 +1,41 @@
 # Repository Guidelines
-このリポジトリに貢献する際の基本的な構成と期待値をまとめています。短い説明と例で各セクションを完結に示します。
+このドキュメントは、このリポジトリに貢献するための実務的な指針をまとめたものです。短く具体的な説明と例で、作業の迷いを減らします。
 
-## プロジェクト構成とモジュール整理
+## Project Structure & Module Organization
 - 主要ソースは `src/` にあり、エントリポイントは `src/index.ts`、CLI は `src/app/cli/index.ts` です。
-- テストは `src/__tests__/` に置き、ファイル名は対象機能が一目でわかるようにします（例: `client.test.ts`）。
+- テストは `src/__tests__/` に置き、対象が明確になる名前を付けます（例: `client.test.ts`）。
 - ビルド成果物は `dist/`、実行スクリプトは `bin/`、静的リソースは `resources/`、ドキュメントは `docs/` で管理します。
-- 設定やキャッシュを使う際は `~/.takt/` 以下（実行時）や `.takt/`（プロジェクト固有）を参照します。
+- 実行時の設定やキャッシュは `~/.takt/`、プロジェクト固有の設定は `.takt/` を参照します。
 
-## ビルド・テスト・開発コマンド
-```
-npm run build       # TypeScript コンパイルを実行し dist/ を生成
-npm run watch       # ソース変更を監視しつつ再ビルド
-npm run lint        # ESLint で src/ を解析
-npm run test        # Vitest で全テストを実行
-npm run test:watch  # テスト実行をウォッチ
-```
-- 単体テストを個別実行する例: `npx vitest run src/__tests__/client.test.ts`。
+## Build, Test, and Development Commands
+- `npm run build`: TypeScript をコンパイルして `dist/` を生成します。
+- `npm run watch`: ソース変更を監視しながら再ビルドします。
+- `npm run lint`: ESLint で `src/` を解析します。
+- `npm run test`: Vitest で全テストを実行します。
+- `npm run test:watch`: テストをウォッチ実行します。
+- `npx vitest run src/__tests__/client.test.ts`: 単体テストを個別実行する例です。
 
-## コーディングスタイルと命名
-- TypeScript + strict モードを前提にし、可読性や null 安全を優先します。
-- ESM 形式なので `import` の拡張子は `.js` に固定してください。
-- ESLint（`eslint src/`）と prettier ルールを守り、命名は camelCase（関数・変数）および PascalCase（クラス）を採用。
-- クロスファイルの共有型は `src/types/` 風に整理し、既存の命名パターンを踏襲します。
+## Coding Style & Naming Conventions
+- TypeScript + strict を前提に、null 安全と可読性を優先します。
+- ESM 形式のため、`import` の拡張子は `.js` に固定してください。
+- 命名は camelCase（関数・変数）と PascalCase（クラス）を採用します。
+- 共有型は `src/types/` に整理し、既存の命名パターンに合わせます。
+- ESLint と Prettier の規約に従い、修正後は `npm run lint` を実行します。
 
-## テスト指針
-- テストフレームワークは Vitest（`vitest.config.ts` 参照）。全ての新機能・修正には関連テストを追加。
-- テストファイル名は `<対象>.test.ts`、あるいは `<対象>.spec.ts` で統一。
-- コンポーネント依存はモックやスタブを使い、状態を分離したシナリオを心がけます。
+## Testing Guidelines
+- テストフレームワークは Vitest（`vitest.config.ts`）です。
+- 新規機能や修正には関連テストを追加します。
+- ファイル名は `<対象>.test.ts` または `<対象>.spec.ts` を使用します。
+- 依存が重い箇所はモックやスタブで状態を分離します。
 
-## コミットとプルリク
-- 履歴は「短い要約 + 1 行」スタイル。英語・日本語混在可、目的が伝わるよう `feat:`, `fix:` 等のプレフィックスも可。
-- PR には変更概要・テスト結果・関連 Issue（あれば）を含め、小さな対象に絞ってレビュー負荷を抑えます。
-- ドキュメントや設定変更を伴う場合は `CHANGELOG.md` への追記を検討し、スクリーンショットやログがあれば添付します。
+## Commit & Pull Request Guidelines
+- コミットメッセージは短い要約が中心で、日本語・英語どちらも使われています。
+- `fix:`, `hotfix:` などのプレフィックスや、`#32` のような Issue 参照が見られます。必要に応じて付けてください。
+- バージョン更新や変更履歴の更新は明示的なメッセージで行います（例: `0.5.1`, `update CHANGELOG`）。
+- PR には変更概要、テスト結果、関連 Issue を記載し、小さく分割してレビュー負荷を抑えます。UI/ログ変更がある場合はスクリーンショットやログを添付します。
 
-## セキュリティと設定の注意
+## Security & Configuration Tips
 - 脆弱性は公開 Issue ではなくメンテナへ直接報告します。
 - `.takt/logs/` など機密情報を含む可能性のあるファイルは共有しないでください。
 - `~/.takt/config.yaml` の `trusted` ディレクトリは最小限にし、不要なパスは登録しないでください。
-- 新しいピースを追加する場合は `~/.takt/pieces/` の既存スキーマを踏襲し、不要な拡張を避けます。
+- 新しいピースを追加する場合は `~/.takt/pieces/` の既存スキーマに合わせます。

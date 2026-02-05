@@ -260,6 +260,22 @@ function updateConfig(config: Config): Config {
 | Over-generalization | Variants and extension points not currently needed |
 | Hidden Dependencies | Child components implicitly calling APIs etc. |
 | Non-idiomatic | Custom implementation ignoring language/FW conventions |
+| Logically dead defensive code | Guards for conditions already guaranteed by all callers |
+
+**Logically dead defensive code:**
+
+Call chain verification applies not only to "missing wiring" but also to the reverse — **unnecessary guards for conditions that callers already guarantee**.
+
+| Pattern | Problem | Detection |
+|---------|---------|-----------|
+| TTY check when all callers require TTY | Unreachable branch remains | grep all callers' preconditions |
+| Null guard when callers already check null | Redundant defense | Trace caller constraints |
+| Runtime type check when TypeScript types constrain | Not trusting type safety | Check TypeScript type constraints |
+
+**Verification:**
+1. When you find a defensive branch (TTY check, null guard, etc.), grep all callers
+2. If all callers already guarantee the condition, the guard is unnecessary → **REJECT**
+3. If some callers don't guarantee it, keep the guard
 
 ### 6. Abstraction Level Evaluation
 

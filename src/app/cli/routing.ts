@@ -7,7 +7,7 @@
 
 import { info, error } from '../../shared/ui/index.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
-import { resolveIssueTask, isIssueReference } from '../../infra/github/index.js';
+import { resolveIssueTask } from '../../infra/github/index.js';
 import { selectAndExecuteTask, determinePiece, type SelectAndExecuteOptions } from '../../features/tasks/index.js';
 import { executePipeline } from '../../features/pipeline/index.js';
 import { interactiveMode } from '../../features/interactive/index.js';
