@@ -11,9 +11,8 @@ import type { PieceMovement, Language } from '../models/types.js';
 import type { PhaseName } from './types.js';
 import { runAgent, type RunAgentOptions } from '../../agents/runner.js';
 import { ReportInstructionBuilder } from './instruction/ReportInstructionBuilder.js';
-import { StatusJudgmentBuilder } from './instruction/StatusJudgmentBuilder.js';
-import { hasTagBasedRules } from './evaluation/rule-utils.js';
-import { isReportObjectConfig } from './instruction/InstructionBuilder.js';
+import { hasTagBasedRules, getReportFiles } from './evaluation/rule-utils.js';
+import { JudgmentStrategyFactory, type JudgmentContext } from './judgment/index.js';
 import { createLogger } from '../../shared/utils/index.js';
 
 const log = createLogger('phase-runner');
@@ -27,6 +26,8 @@ export interface PhaseRunnerContext {
   language?: Language;
   /** Whether interactive-only rules are enabled */
   interactive?: boolean;
+  /** Last response from Phase 1 */
+  lastResponse?: string;
   /** Get agent session ID */
   getSessionId: (agent: string) => string | undefined;
   /** Build resume options for a movement */
@@ -47,12 +48,6 @@ export function needsStatusJudgmentPhase(step: PieceMovement): boolean {
   return hasTagBasedRules(step);
 }
 
-function getReportFiles(report: PieceMovement['report']): string[] {
-  if (!report) return [];
-  if (typeof report === 'string') return [report];
-  if (isReportObjectConfig(report)) return [report.name];
-  return report.map((rc) => rc.path);
-}
 
 function writeReportFile(reportDir: string, fileName: string, content: string): void {
   const baseDir = resolve(reportDir);
@@ -152,53 +147,54 @@ export async function runReportPhase(
 
 /**
  * Phase 3: Status judgment.
- * Resumes the agent session with no tools to ask the agent to output a status tag.
+ * Uses the 'conductor' agent in a new session to output a status tag.
+ * Implements multi-stage fallback logic to ensure judgment succeeds.
  * Returns the Phase 3 response content (containing the status tag).
  */
 export async function runStatusJudgmentPhase(
   step: PieceMovement,
   ctx: PhaseRunnerContext,
 ): Promise<string> {
+  log.debug('Running status judgment phase', { movement: step.name });
+
+  // フォールバック戦略を順次試行（AutoSelectStrategy含む）
+  const strategies = JudgmentStrategyFactory.createStrategies();
   const sessionKey = step.agent ?? step.name;
-  const sessionId = ctx.getSessionId(sessionKey);
-  if (!sessionId) {
-    throw new Error(`Status judgment phase requires a session to resume, but no sessionId found for agent "${sessionKey}" in movement "${step.name}"`);
-  }
-
-  log.debug('Running status judgment phase', { movement: step.name, sessionId });
-
-  const judgmentInstruction = new StatusJudgmentBuilder(step, {
+  const judgmentContext: JudgmentContext = {
+    step,
+    cwd: ctx.cwd,
     language: ctx.language,
-    interactive: ctx.interactive,
-  }).build();
+    reportDir: ctx.reportDir,
+    lastResponse: ctx.lastResponse,
+    sessionId: ctx.getSessionId(sessionKey),
+  };
 
-  ctx.onPhaseStart?.(step, 3, 'judge', judgmentInstruction);
+  for (const strategy of strategies) {
+    if (!strategy.canApply(judgmentContext)) {
+      log.debug(`Strategy ${strategy.name} not applicable, skipping`);
+      continue;
+    }
 
-  const judgmentOptions = ctx.buildResumeOptions(step, sessionId, {
-    allowedTools: [],
-    maxTurns: 3,
-  });
+    log.debug(`Trying strategy: ${strategy.name}`);
+    ctx.onPhaseStart?.(step, 3, 'judge', `Strategy: ${strategy.name}`);
 
-  let judgmentResponse;
-  try {
-    judgmentResponse = await runAgent(step.agent, judgmentInstruction, judgmentOptions);
-  } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : String(error);
-    ctx.onPhaseComplete?.(step, 3, 'judge', '', 'error', errorMsg);
-    throw error;
+    try {
+      const result = await strategy.execute(judgmentContext);
+      if (result.success) {
+        log.debug(`Strategy ${strategy.name} succeeded`, { tag: result.tag });
+        ctx.onPhaseComplete?.(step, 3, 'judge', result.tag!, 'done');
+        return result.tag!;
+      }
+
+      log.debug(`Strategy ${strategy.name} failed`, { reason: result.reason });
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      log.debug(`Strategy ${strategy.name} threw error`, { error: errorMsg });
+    }
   }
 
-  // Check for errors in status judgment phase
-  if (judgmentResponse.status !== 'done') {
-    const errorMsg = judgmentResponse.error || judgmentResponse.content || 'Unknown error';
-    ctx.onPhaseComplete?.(step, 3, 'judge', judgmentResponse.content, judgmentResponse.status, errorMsg);
-    throw new Error(`Status judgment phase failed: ${errorMsg}`);
-  }
-
-  // Update session (phase 3 may update it)
-  ctx.updateAgentSession(sessionKey, judgmentResponse.sessionId);
-
-  ctx.onPhaseComplete?.(step, 3, 'judge', judgmentResponse.content, judgmentResponse.status);
-  log.debug('Status judgment phase complete', { movement: step.name, status: judgmentResponse.status });
-  return judgmentResponse.content;
+  // 全戦略失敗
+  const errorMsg = 'All judgment strategies failed';
+  ctx.onPhaseComplete?.(step, 3, 'judge', '', 'error', errorMsg);
+  throw new Error(errorMsg);
 }

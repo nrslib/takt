@@ -89,6 +89,7 @@ export class OptionsBuilder {
   /** Build PhaseRunnerContext for Phase 2/3 execution */
   buildPhaseRunnerContext(
     state: PieceState,
+    lastResponse: string | undefined,
     updateAgentSession: (agent: string, sessionId: string | undefined) => void,
     onPhaseStart?: (step: PieceMovement, phase: 1 | 2 | 3, phaseName: PhaseName, instruction: string) => void,
     onPhaseComplete?: (step: PieceMovement, phase: 1 | 2 | 3, phaseName: PhaseName, content: string, status: string, error?: string) => void,
@@ -98,6 +99,7 @@ export class OptionsBuilder {
       reportDir: join(this.getProjectCwd(), this.getReportDir()),
       language: this.getLanguage(),
       interactive: this.engineOptions.interactive,
+      lastResponse,
       getSessionId: (agent: string) => state.agentSessions.get(agent),
       buildResumeOptions: this.buildResumeOptions.bind(this),
       updateAgentSession,

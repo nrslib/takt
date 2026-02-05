@@ -74,7 +74,6 @@ export class ParallelRunner {
         })
       : undefined;
 
-    const phaseCtx = this.deps.optionsBuilder.buildPhaseRunnerContext(state, updateAgentSession, this.deps.onPhaseStart, this.deps.onPhaseComplete);
     const ruleCtx = {
       state,
       cwd: this.deps.getCwd(),
@@ -102,6 +101,9 @@ export class ParallelRunner {
         const subResponse = await runAgent(subMovement.agent, subInstruction, agentOptions);
         updateAgentSession(subSessionKey, subResponse.sessionId);
         this.deps.onPhaseComplete?.(subMovement, 1, 'execute', subResponse.content, subResponse.status, subResponse.error);
+
+        // Build phase context for this sub-movement with its lastResponse
+        const phaseCtx = this.deps.optionsBuilder.buildPhaseRunnerContext(state, subResponse.content, updateAgentSession, this.deps.onPhaseStart, this.deps.onPhaseComplete);
 
         // Phase 2: report output for sub-movement
         if (subMovement.report) {

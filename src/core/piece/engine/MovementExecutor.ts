@@ -112,7 +112,7 @@ export class MovementExecutor {
     updateAgentSession(sessionKey, response.sessionId);
     this.deps.onPhaseComplete?.(step, 1, 'execute', response.content, response.status, response.error);
 
-    const phaseCtx = this.deps.optionsBuilder.buildPhaseRunnerContext(state, updateAgentSession, this.deps.onPhaseStart, this.deps.onPhaseComplete);
+    const phaseCtx = this.deps.optionsBuilder.buildPhaseRunnerContext(state, response.content, updateAgentSession, this.deps.onPhaseStart, this.deps.onPhaseComplete);
 
     // Phase 2: report output (resume same session, Write only)
     if (step.report) {

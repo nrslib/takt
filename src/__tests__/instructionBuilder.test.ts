@@ -1047,6 +1047,7 @@ describe('instruction-builder', () => {
     function createJudgmentContext(overrides: Partial<StatusJudgmentContext> = {}): StatusJudgmentContext {
       return {
         language: 'en',
+        reportContent: '# Test Report\n\nReport content for testing.',
         ...overrides,
       };
     }
@@ -1062,8 +1063,8 @@ describe('instruction-builder', () => {
 
       const result = buildStatusJudgmentInstruction(step, ctx);
 
-      expect(result).toContain('Review your work results and determine the status');
-      expect(result).toContain('Do NOT perform any additional work');
+      expect(result).toContain('Review is already complete');
+      expect(result).toContain('Output exactly one tag corresponding to the judgment result');
     });
 
     it('should include header instruction (ja)', () => {
@@ -1077,8 +1078,8 @@ describe('instruction-builder', () => {
 
       const result = buildStatusJudgmentInstruction(step, ctx);
 
-      expect(result).toContain('作業結果を振り返り、ステータスを判定してください');
-      expect(result).toContain('追加の作業は行わないでください');
+      expect(result).toContain('既にレビューは完了しています');
+      expect(result).toContain('レポートで示された判定結果に対応するタグを1つだけ出力してください');
     });
 
     it('should include criteria table with tags', () => {
@@ -1132,11 +1133,11 @@ describe('instruction-builder', () => {
       const step = createMinimalStep('Do work');
       step.name = 'test';
       step.rules = [{ condition: 'Done', next: 'COMPLETE' }];
-      const ctx: StatusJudgmentContext = {};
+      const ctx: StatusJudgmentContext = { reportContent: 'Test report content' };
 
       const result = buildStatusJudgmentInstruction(step, ctx);
 
-      expect(result).toContain('Review your work results');
+      expect(result).toContain('Review is already complete');
       expect(result).toContain('## Decision Criteria');
     });
 

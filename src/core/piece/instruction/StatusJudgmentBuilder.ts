@@ -1,8 +1,9 @@
 /**
  * Phase 3 instruction builder (status judgment)
  *
- * Resumes the agent session and asks it to evaluate its work
- * and output the appropriate status tag. No tools are allowed.
+ * Builds instructions for the conductor agent to evaluate work results
+ * and output the appropriate status tag. Supports report-based and
+ * response-based input sources.
  *
  * Renders a single complete template combining the judgment header
  * and status rules (criteria table + output format).
@@ -20,6 +21,12 @@ export interface StatusJudgmentContext {
   language?: Language;
   /** Whether interactive-only rules are enabled */
   interactive?: boolean;
+  /** Pre-read report content (from gatherInput) */
+  reportContent?: string;
+  /** Last response from Phase 1 (from gatherInput) */
+  lastResponse?: string;
+  /** Input source type for fallback strategies */
+  inputSource?: 'report' | 'response';
 }
 
 /**
@@ -47,11 +54,42 @@ export class StatusJudgmentBuilder {
       { interactive: this.context.interactive },
     );
 
+    // 情報源に応じた内容を構築
+    const inputSource = this.context.inputSource || 'report';
+    let contentToJudge = '';
+
+    if (inputSource === 'report') {
+      contentToJudge = this.buildFromReport();
+    } else if (inputSource === 'response') {
+      contentToJudge = this.buildFromResponse();
+    }
+
     return loadTemplate('perform_phase3_message', language, {
+      reportContent: contentToJudge,
       criteriaTable: components.criteriaTable,
       outputList: components.outputList,
       hasAppendix: components.hasAppendix,
       appendixContent: components.appendixContent,
     });
+  }
+
+  /**
+   * Build judgment content from pre-read report content.
+   */
+  private buildFromReport(): string {
+    if (!this.context.reportContent) {
+      throw new Error('reportContent is required for report-based judgment');
+    }
+    return this.context.reportContent;
+  }
+
+  /**
+   * Build judgment content from last response.
+   */
+  private buildFromResponse(): string {
+    if (!this.context.lastResponse) {
+      throw new Error('lastResponse is required for response-based judgment');
+    }
+    return `\n## Agent Response\n\n${this.context.lastResponse}`;
   }
 }

@@ -322,7 +322,7 @@ describe('Instruction Builder IT: buildStatusJudgmentInstruction', () => {
       ],
     });
 
-    const result = buildStatusJudgmentInstruction(step, { language: 'en' });
+    const result = buildStatusJudgmentInstruction(step, { language: 'en', reportContent: 'Test report content' });
 
     expect(result).toContain('[PLAN:');
     expect(result).toContain('Clear');
