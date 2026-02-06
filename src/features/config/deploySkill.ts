@@ -12,7 +12,7 @@
  * the directory structure is mirrored.
  */
 
-import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname, relative } from 'node:path';
 
@@ -83,14 +83,17 @@ export async function deploySkill(): Promise<void> {
   // 3. Deploy references/ (engine.md, yaml-schema.md)
   const refsSrcDir = join(skillResourcesDir, 'references');
   const refsDestDir = join(skillDir, 'references');
+  cleanDir(refsDestDir);
   copyDirRecursive(refsSrcDir, refsDestDir, copiedFiles);
 
   // 4. Deploy builtin piece YAMLs → skills/takt/pieces/
   const piecesDestDir = join(skillDir, 'pieces');
+  cleanDir(piecesDestDir);
   copyDirRecursive(builtinPiecesDir, piecesDestDir, copiedFiles);
 
   // 5. Deploy builtin agent .md files → skills/takt/agents/
   const agentsDestDir = join(skillDir, 'agents');
+  cleanDir(agentsDestDir);
   copyDirRecursive(builtinAgentsDir, agentsDestDir, copiedFiles);
 
   // Report results
@@ -132,6 +135,13 @@ export async function deploySkill(): Promise<void> {
     info('例:     /takt passthrough "Hello World テスト"');
   } else {
     info('デプロイするファイルがありませんでした。');
+  }
+}
+
+/** Remove a directory and all its contents so stale files don't persist across deploys. */
+function cleanDir(dir: string): void {
+  if (existsSync(dir)) {
+    rmSync(dir, { recursive: true });
   }
 }
 

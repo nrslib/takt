@@ -1,0 +1,428 @@
+# Review-Fix Minimal TAKT Piece
+# Review -> Fix (if needed) -> Re-review -> Complete
+# (Starts with review, no implementation movement)
+#
+# Template Variables (auto-injected):
+#   {iteration}      - Piece-wide turn count (total movements executed across all agents)
+#   {max_iterations} - Maximum iterations allowed for the piece
+#   {movement_iteration} - Per-movement iteration count (how many times THIS movement has been executed)
+#   {task}           - Original user request (auto-injected)
+#   {previous_response} - Output from the previous movement (auto-injected)
+#   {user_inputs}    - Accumulated user inputs during piece (auto-injected)
+#   {report_dir}     - Report directory name (e.g., "20250126-143052-task-summary")
+
+name: review-fix-minimal-hybrid-codex
+description: Review and fix piece for existing code (starts with review, no implementation) (hybrid: coder=codex)
+
+max_iterations: 20
+
+initial_movement: reviewers
+
+movements:
+  - name: implement
+    edit: true
+    agent: ../agents/default/coder.md
+    provider: codex
+    report:
+      - Scope: 01-coder-scope.md
+      - Decisions: 02-coder-decisions.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    permission_mode: edit
+    instruction_template: |
+      Implement the task.
+      Use only the Report Directory files shown in Piece Context. Do not search or open reports outside that directory.
+
+      **Scope report format (create at implementation start):**
+      ```markdown
+      # Change Scope Declaration
+
+      ## Task
+      {One-line task summary}
+
+      ## Planned Changes
+      | Type | File |
+      |------|------|
+      | Create | `src/example.ts` |
+      | Modify | `src/routes.ts` |
+
+      ## Estimated Size
+      Small / Medium / Large
+
+      ## Impact Scope
+      - {Affected modules or features}
+      ```
+
+      **Decisions report format (on completion, only if decisions were made):**
+      ```markdown
+      # Decision Log
+
+      ## 1. {Decision Content}
+      - **Background**: {Why the decision was needed}
+      - **Options Considered**: {List of options}
+      - **Reason**: {Why this option was chosen}
+      ```
+
+      **Required output (include headings)**
+      ## Work done
+      - {summary of work performed}
+      ## Changes made
+      - {summary of code changes}
+      ## Test results
+      - {command and outcome}
+
+    rules:
+      - condition: Implementation complete
+        next: reviewers
+      - condition: Cannot proceed, insufficient info
+        next: ABORT
+      - condition: User input required because there are items to confirm with the user
+        next: implement
+        requires_user_input: true
+        interactive_only: true
+
+  - name: reviewers
+    parallel:
+      - name: ai_review
+        edit: false
+        agent: ../agents/default/ai-antipattern-reviewer.md
+        report:
+          name: 03-ai-review.md
+          format: |
+            ```markdown
+            # AI-Generated Code Review
+
+            ## Result: APPROVE / REJECT
+
+            ## Summary
+            {One sentence summarizing result}
+
+            ## Verified Items
+            | Aspect | Result | Notes |
+            |--------|--------|-------|
+            | Assumption validity | ✅ | - |
+            | API/Library existence | ✅ | - |
+            | Context fit | ✅ | - |
+            | Scope | ✅ | - |
+
+            ## Issues (if REJECT)
+            | # | Category | Location | Issue |
+            |---|----------|----------|-------|
+            | 1 | Hallucinated API | `src/file.ts:23` | Non-existent method |
+            ```
+
+            **Cognitive load reduction rules:**
+            - No issues -> Summary 1 line + check table only (10 lines or less)
+            - Issues found -> + Issues in table format (25 lines or less)
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+
+          - WebSearch
+          - WebFetch
+        instruction_template: |
+          Review the code for AI-specific issues:
+          - Assumption validation
+          - Plausible but wrong patterns
+          - Context fit with existing codebase
+          - Scope creep detection
+        rules:
+          - condition: No AI-specific issues
+          - condition: AI-specific issues found
+
+      - name: supervise
+        edit: false
+        agent: ../agents/default/supervisor.md
+        report:
+          - Validation: 05-supervisor-validation.md
+          - Summary: summary.md
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+
+          - Bash
+          - WebSearch
+          - WebFetch
+        instruction_template: |
+          Run tests, verify the build, and perform final approval.
+
+          **Piece Overall Review:**
+          1. Does the implementation meet the original request?
+          2. Were AI Review issues addressed?
+          3. Was the original task objective achieved?
+
+          **Review Reports:** Read all reports in Report Directory and
+          check for any unaddressed improvement suggestions.
+
+          **Validation report format:**
+          ```markdown
+          # Final Validation Results
+
+          ## Result: APPROVE / REJECT
+
+          ## Validation Summary
+          | Item | Status | Verification Method |
+          |------|--------|---------------------|
+          | Requirements met | ✅ | Matched against requirements list |
+          | Tests | ✅ | `npm test` (N passed) |
+          | Build | ✅ | `npm run build` succeeded |
+          | Functional check | ✅ | Main flows verified |
+
+          ## Deliverables
+          - Created: {Created files}
+          - Modified: {Modified files}
+
+          ## Incomplete Items (if REJECT)
+          | # | Item | Reason |
+          |---|------|--------|
+          | 1 | {Item} | {Reason} |
+          ```
+
+          **Summary report format (only if APPROVE):**
+          ```markdown
+          # Task Completion Summary
+
+          ## Task
+          {Original request in 1-2 sentences}
+
+          ## Result
+          ✅ Complete
+
+          ## Changes
+          | Type | File | Summary |
+          |------|------|---------|
+          | Create | `src/file.ts` | Summary description |
+
+          ## Review Results
+          | Review | Result |
+          |--------|--------|
+          | AI Review | ✅ APPROVE |
+          | Supervisor | ✅ APPROVE |
+
+          ## Verification Commands
+          ```bash
+          npm test
+          npm run build
+          ```
+          ```
+        rules:
+          - condition: All checks passed
+          - condition: Requirements unmet, tests failing
+
+    rules:
+      - condition: all("No AI-specific issues", "All checks passed")
+        next: COMPLETE
+      - condition: all("AI-specific issues found", "Requirements unmet, tests failing")
+        next: fix_both
+      - condition: any("AI-specific issues found")
+        next: ai_fix
+      - condition: any("Requirements unmet, tests failing")
+        next: supervise_fix
+
+  - name: fix_both
+    parallel:
+      - name: ai_fix_parallel
+        edit: true
+        agent: ../agents/default/coder.md
+        provider: codex
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Edit
+
+          - Bash
+          - WebSearch
+          - WebFetch
+        permission_mode: edit
+        rules:
+          - condition: AI Reviewer's issues fixed
+          - condition: No fix needed (verified target files/spec)
+          - condition: Cannot proceed, insufficient info
+        instruction_template: |
+          **This is AI Review iteration {movement_iteration}.**
+
+          If this is iteration 2 or later, it means your previous fixes were not actually applied.
+          **Your belief that you "already fixed it" is wrong.**
+
+          **First, acknowledge:**
+          - Files you thought were "fixed" are actually not fixed
+          - Your understanding of previous work is incorrect
+          - You need to start from zero
+
+          **Required actions:**
+          1. Open all flagged files with Read tool (drop assumptions, verify facts)
+          2. Search for problem code with grep to confirm it exists
+          3. Fix confirmed problems with Edit tool
+          4. Run tests to verify (e.g., `npm test`, `./gradlew test`)
+          5. Report specifically "what you checked and what you fixed"
+
+          **Report format:**
+          - ❌ "Already fixed"
+          - ✅ "Checked file X at L123, found problem Y, fixed to Z"
+
+          **Absolutely prohibited:**
+          - Reporting "fixed" without opening files
+          - Judging based on assumptions
+          - Leaving problems that AI Reviewer REJECTED
+
+          **Handling "no fix needed" (required)**
+          - Do not claim "no fix needed" unless you can show the checked target file(s) for each AI Review issue
+          - If an issue involves generated code or spec sync, and you cannot verify the source spec, output the tag for "Cannot proceed, insufficient info"
+          - When "no fix needed", output the tag for "Cannot proceed, insufficient info" and include the reason + checked scope
+
+          **Required output (include headings)**
+          ## Files checked
+          - {path:line}
+          ## Searches run
+          - {command and summary}
+          ## Fixes applied
+          - {what changed}
+          ## Test results
+          - {command and outcome}
+
+      - name: supervise_fix_parallel
+        edit: true
+        agent: ../agents/default/coder.md
+        provider: codex
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Edit
+
+          - Bash
+          - WebSearch
+          - WebFetch
+        permission_mode: edit
+        rules:
+          - condition: Supervisor's issues fixed
+          - condition: Cannot proceed, insufficient info
+        instruction_template: |
+          Fix the issues pointed out by the supervisor.
+
+          The supervisor has identified issues from a big-picture perspective.
+          Address items in priority order.
+
+          **Required output (include headings)**
+          ## Work done
+          - {summary of work performed}
+          ## Changes made
+          - {summary of code changes}
+          ## Test results
+          - {command and outcome}
+          ## Evidence
+          - {key files/grep/diff/log evidence you verified}
+
+    rules:
+      - condition: all("AI Reviewer's issues fixed", "Supervisor's issues fixed")
+        next: reviewers
+      - condition: any("No fix needed (verified target files/spec)", "Cannot proceed, insufficient info")
+        next: implement
+
+  - name: ai_fix
+    edit: true
+    agent: ../agents/default/coder.md
+    provider: codex
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    permission_mode: edit
+    rules:
+      - condition: AI Reviewer's issues fixed
+        next: reviewers
+      - condition: No fix needed (verified target files/spec)
+        next: implement
+      - condition: Cannot proceed, insufficient info
+        next: implement
+    instruction_template: |
+      **This is AI Review iteration {movement_iteration}.**
+
+      If this is iteration 2 or later, it means your previous fixes were not actually applied.
+      **Your belief that you "already fixed it" is wrong.**
+
+      **First, acknowledge:**
+      - Files you thought were "fixed" are actually not fixed
+      - Your understanding of previous work is incorrect
+      - You need to start from zero
+
+      **Required actions:**
+      1. Open all flagged files with Read tool (drop assumptions, verify facts)
+      2. Search for problem code with grep to confirm it exists
+      3. Fix confirmed problems with Edit tool
+      4. Run tests to verify (e.g., `npm test`, `./gradlew test`)
+      5. Report specifically "what you checked and what you fixed"
+
+      **Report format:**
+      - ❌ "Already fixed"
+      - ✅ "Checked file X at L123, found problem Y, fixed to Z"
+
+      **Absolutely prohibited:**
+      - Reporting "fixed" without opening files
+      - Judging based on assumptions
+      - Leaving problems that AI Reviewer REJECTED
+
+      **Handling "no fix needed" (required)**
+      - Do not claim "no fix needed" unless you can show the checked target file(s) for each AI Review issue
+      - If an issue involves generated code or spec sync, and you cannot verify the source spec, output the tag for "Cannot proceed, insufficient info"
+      - When "no fix needed", output the tag for "Cannot proceed, insufficient info" and include the reason + checked scope
+
+      **Required output (include headings)**
+      ## Files checked
+      - {path:line}
+      ## Searches run
+      - {command and summary}
+      ## Fixes applied
+      - {what changed}
+      ## Test results
+      - {command and outcome}
+
+  - name: supervise_fix
+    edit: true
+    agent: ../agents/default/coder.md
+    provider: codex
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    permission_mode: edit
+    rules:
+      - condition: Supervisor's issues fixed
+        next: reviewers
+      - condition: Cannot proceed, insufficient info
+        next: implement
+    instruction_template: |
+      Fix the issues pointed out by the supervisor.
+
+      The supervisor has identified issues from a big-picture perspective.
+      Address items in priority order.
+
+      **Required output (include headings)**
+      ## Work done
+      - {summary of work performed}
+      ## Changes made
+      - {summary of code changes}
+      ## Test results
+      - {command and outcome}
+      ## Evidence
+      - {key files/grep/diff/log evidence you verified}

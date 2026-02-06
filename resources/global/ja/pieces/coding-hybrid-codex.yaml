@@ -1,0 +1,359 @@
+# Coding TAKT Piece
+# Architect -> Implement -> Parallel Review (AI + Architecture) -> Fix if needed
+#
+# 設計を重視しながらも、planとsuperviseを省略した軽量な開発ピース。
+# 並列レビュー後、問題がなければ直接完了し、高速なフィードバックループを実現。
+#
+# フロー:
+# architect (設計)
+#   ↓
+# implement (実装)
+#   ↓
+# reviewers (並列レビュー)
+# ├─ ai_review (AI特有問題検出)
+# └─ arch-review (設計準拠性確認)
+#   ↓
+#  [判定]
+#   ├─ all(approved) → COMPLETE
+#   └─ any(needs_fix) → fix → reviewers (再レビュー)
+#
+# Template Variables (auto-injected by buildInstruction):
+#   {iteration}      - Piece-wide turn count (total movements executed across all agents)
+#   {max_iterations} - Maximum iterations allowed for the piece
+#   {movement_iteration} - Per-movement iteration count (how many times THIS movement has been executed)
+#   {task}           - Original user request
+#   {previous_response} - Output from the previous movement
+#   {user_inputs}    - Accumulated user inputs during piece
+#   {report_dir}     - Report directory name (e.g., "20250126-143052-task-summary")
+
+name: coding-hybrid-codex
+description: Architecture-focused development piece with parallel reviews (architect -> implement -> parallel review -> complete) (hybrid: coder=codex)
+
+max_iterations: 20
+
+initial_movement: architect-plan
+
+movements:
+  - name: architect-plan
+    edit: false
+    agent: ../agents/default/architecture-reviewer.md
+    report:
+      name: architecture-reviewer
+      format: |
+        ```markdown
+        # アーキテクチャ設計
+
+        ## タスク規模
+        Small / Medium / Large
+
+        ## 設計判断
+
+        ### ファイル構成
+        | ファイル | 役割 |
+        |---------|------|
+        | `src/example.ts` | 概要 |
+
+        ### 技術選定
+        - {選定した技術・ライブラリとその理由}
+
+        ### 設計パターン
+        - {採用するパターンと適用箇所}
+
+        ## 実装ガイドライン
+        - {Coderが実装時に従うべき指針}
+        ```
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
+    rules:
+      - condition: 小規模タスク（設計不要）
+        next: implement
+      - condition: 設計完了
+        next: implement
+      - condition: 情報不足、判断できない
+        next: ABORT
+    instruction_template: |
+      タスクのアーキテクチャ設計を行ってください。
+
+      **タスク**: {task}
+      **進行状況**: {iteration}/{max_iterations} ターン
+
+      **小規模タスクの判断基準:**
+      - 1-2ファイルの変更のみ
+      - 既存パターンの踏襲で済む
+      - 技術選定が不要
+
+      小規模タスクの場合は設計レポートを作成せず、「小規模タスク（設計不要）」のルールに対応してください。
+
+      **設計が必要なタスク:**
+      - 3ファイル以上の変更
+      - 新しいモジュール・機能の追加
+      - 技術選定が必要
+      - アーキテクチャパターンの決定が必要
+
+      **やること:**
+      1. タスクの規模を評価（Small/Medium/Large）
+      2. 影響を受けるファイル構成を特定
+      3. 必要に応じて技術選定を行う
+      4. 設計パターンの選択
+      5. Coderへの実装ガイドライン作成
+
+      **やらないこと:**
+      - コードの実装（Coderの仕事）
+      - コードレビュー
+
+  - name: implement
+    edit: true
+    agent: ../agents/default/coder.md
+    provider: codex
+    session: refresh
+    report:
+      - Scope: 02-coder-scope.md
+      - Decisions: 03-coder-decisions.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    permission_mode: edit
+    rules:
+      - condition: 実装完了
+        next: reviewers
+      - condition: 実装未着手（レポートのみ）
+        next: reviewers
+      - condition: 判断できない、情報不足
+        next: reviewers
+      - condition: ユーザー入力が必要
+        next: implement
+        requires_user_input: true
+        interactive_only: true
+    instruction_template: |
+      architect-planムーブメントで決定した設計に従って実装してください。
+
+      **参照するレポート:**
+      - 設計: {report:01-architecture.md}（存在する場合）
+
+      Piece Contextに示されたReport Directory内のファイルのみ参照してください。他のレポートディレクトリは検索/参照しないでください。
+
+      **重要:** 設計判断はせず、architect-planムーブメントで決定された設計に従ってください。
+      不明点や設計の変更が必要な場合は報告してください。
+
+      **重要**: 実装と同時に単体テストを追加してください。
+      - 新規作成したクラス・関数には単体テストを追加
+      - 既存コードを変更した場合は該当するテストを更新
+      - テストファイルの配置: プロジェクトの規約に従う（例: `__tests__/`, `*.test.ts`）
+      - **テスト実行は必須です。** 実装完了後、必ずテストを実行して結果を確認してください。
+
+      **Scopeレポートフォーマット（実装開始時に作成）:**
+      ```markdown
+      # 変更スコープ宣言
+
+      ## タスク
+      {タスクの1行要約}
+
+      ## 変更予定
+      | 種別 | ファイル |
+      |------|---------|
+      | 作成 | `src/example.ts` |
+      | 変更 | `src/routes.ts` |
+
+      ## 推定規模
+      Small / Medium / Large
+
+      ## 影響範囲
+      - {影響するモジュールや機能}
+      ```
+
+      **Decisionsレポートフォーマット（実装完了時、決定がある場合のみ）:**
+      ```markdown
+      # 決定ログ
+
+      ## 1. {決定内容}
+      - **背景**: {なぜ決定が必要だったか}
+      - **検討した選択肢**: {選択肢リスト}
+      - **理由**: {選んだ理由}
+      ```
+
+      **必須出力（見出しを含める）**
+      ## 作業結果
+      - {実施内容の要約}
+      ## 変更内容
+      - {変更内容の要約}
+      ## テスト結果
+      - {実行コマンドと結果}
+
+  - name: reviewers
+    parallel:
+      - name: ai_review
+        edit: false
+        agent: ../agents/default/ai-antipattern-reviewer.md
+        report:
+          name: 04-ai-review.md
+          format: |
+            ```markdown
+            # AI生成コードレビュー
+
+            ## 結果: APPROVE / REJECT
+
+            ## サマリー
+            {1文で結果を要約}
+
+            ## 検証した項目
+            | 観点 | 結果 | 備考 |
+            |------|------|------|
+            | 仮定の妥当性 | ✅ | - |
+            | API/ライブラリの実在 | ✅ | - |
+            | コンテキスト適合 | ✅ | - |
+            | スコープ | ✅ | - |
+
+            ## 問題点（REJECTの場合）
+            | # | カテゴリ | 場所 | 問題 |
+            |---|---------|------|------|
+            | 1 | 幻覚API | `src/file.ts:23` | 存在しないメソッド |
+            ```
+
+            **認知負荷軽減ルール:**
+            - 問題なし → サマリー1文 + チェック表のみ（10行以内）
+            - 問題あり → + 問題を表形式で（25行以内）
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - WebSearch
+          - WebFetch
+        rules:
+          - condition: AI特有の問題なし
+          - condition: AI特有の問題あり
+        instruction_template: |
+          AI特有の問題についてコードをレビューしてください:
+          - 仮定の検証
+          - もっともらしいが間違っているパターン
+          - 既存コードベースとの適合性
+          - スコープクリープの検出
+
+          **参照するレポート:**
+          - 実装スコープ: {report:02-coder-scope.md}
+          - 決定ログ: {report:03-coder-decisions.md}（存在する場合）
+
+      - name: arch-review
+        edit: false
+        agent: ../agents/default/architecture-reviewer.md
+        report:
+          name: 05-architect-review.md
+          format: |
+            ```markdown
+            # アーキテクチャレビュー
+
+            ## 結果: APPROVE / REJECT
+
+            ## サマリー
+            {1-2文で結果を要約}
+
+            ## 確認した観点
+            - [x] 構造・設計
+            - [x] コード品質
+            - [x] 変更スコープ
+            - [x] テストカバレッジ
+            - [x] デッドコード
+            - [x] 呼び出しチェーン検証
+
+            ## 問題点（REJECTの場合）
+            | # | スコープ | 場所 | 問題 | 修正案 |
+            |---|---------|------|------|--------|
+            | 1 | スコープ内 | `src/file.ts:42` | 問題の説明 | 修正方法 |
+
+            スコープ: 「スコープ内」（今回修正可能）/ 「スコープ外」（既存問題・非ブロッキング）
+
+            ## 既存問題（参考・非ブロッキング）
+            - {既存問題の記録。今回の変更と無関係な問題}
+            ```
+
+            **認知負荷軽減ルール:**
+            - APPROVE → サマリーのみ（5行以内）
+            - REJECT → 問題点を表形式で（30行以内）
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - WebSearch
+          - WebFetch
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        instruction_template: |
+          **実装がarchitectムーブメントの設計に従っているか**を確認してください。
+          AI特有の問題はレビューしないでください（ai_reviewムーブメントで行います）。
+
+          **参照するレポート:**
+          - 設計: {report:01-architecture.md}（存在する場合）
+          - 実装スコープ: {report:02-coder-scope.md}
+
+          **レビュー観点:**
+          - 設計との整合性（architectが定めたファイル構成・パターンに従っているか）
+          - コード品質（DRY、YAGNI、Fail Fast、イディオマティック）
+          - 変更スコープの適切性
+          - テストカバレッジ
+          - デッドコード
+          - 呼び出しチェーン検証
+
+          **注意:** architectムーブメントをスキップした小規模タスクの場合は、従来通り設計の妥当性も確認してください。
+
+    rules:
+      - condition: all("AI特有の問題なし", "approved")
+        next: COMPLETE
+      - condition: any("AI特有の問題あり", "needs_fix")
+        next: fix
+
+  - name: fix
+    edit: true
+    agent: ../agents/default/coder.md
+    provider: codex
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    permission_mode: edit
+    rules:
+      - condition: 修正完了
+        next: reviewers
+      - condition: 判断できない、情報不足
+        next: ABORT
+    instruction_template: |
+      レビュアーのフィードバックに対応してください。
+
+      **両方のレビュー結果を確認してください:**
+      - AI Review: {report:04-ai-review.md}
+      - Architecture Review: {report:05-architect-review.md}
+
+      **重要:** 両方のレビューで指摘された問題を全て修正してください。
+      - AI Reviewの指摘: 幻覚API、仮定の妥当性、スコープクリープ等
+      - Architecture Reviewの指摘: 設計との整合性、コード品質、テストカバレッジ等
+
+      **必須アクション:**
+      1. 指摘された全ファイルを Read tool で開く
+      2. 問題箇所を確認する
+      3. Edit tool で修正する
+      4. **テストを実行して検証する（必須）**
+      5. 修正内容を具体的に報告する
+
+      **必須出力（見出しを含める）**
+      ## 作業結果
+      - {実施内容の要約}
+      ## 変更内容
+      - {変更内容の要約}
+      ## テスト結果
+      - {実行コマンドと結果}
+      ## 証拠
+      - {確認したファイル/検索/差分/ログの要点を列挙}

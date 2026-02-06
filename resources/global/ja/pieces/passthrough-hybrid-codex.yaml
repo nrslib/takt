@@ -1,0 +1,43 @@
+# Passthrough TAKT Piece
+# タスクをそのままエージェントに渡す最薄ラッパー。
+#
+# フロー:
+# execute (タスク実行)
+#   ↓
+# COMPLETE
+
+name: passthrough-hybrid-codex
+description: Single-agent thin wrapper. Pass task directly to coder as-is. (hybrid: coder=codex)
+
+max_iterations: 10
+
+initial_movement: execute
+
+movements:
+  - name: execute
+    edit: true
+    agent: ../agents/default/coder.md
+    provider: codex
+    report:
+      - Summary: summary.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    permission_mode: edit
+    rules:
+      - condition: タスク完了
+        next: COMPLETE
+      - condition: 進行できない
+        next: ABORT
+      - condition: ユーザー入力が必要
+        next: execute
+        requires_user_input: true
+        interactive_only: true
+    instruction_template: |
+      タスクをこなしてください。

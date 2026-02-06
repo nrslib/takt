@@ -1,42 +1,46 @@
 # TAKT 実行エンジン詳細
 
-## 通常 Movement の実行
+## チームメイトの起動方法
 
-通常の movement（`parallel` フィールドを持たない movement）は、Task tool で1つのエージェントを起動する。
+全ての movement は Task tool でチームメイトを起動して実行する。
+**あなた（Team Lead）が直接作業することは禁止。**
 
 ### Task tool の呼び出し
 
 ```
 Task tool:
   subagent_type: "general-purpose"
-  description: "{movement名} - {ピース名}" （3-5語）
-  prompt: <後述のプロンプト構築で組み立てた内容>
-  mode: <permission_mode から決定>
+  team_name: "takt"
+  name: "{movement_name}"
+  description: "{movement_name} - {piece_name}"
+  prompt: <プロンプト構築で組み立てた内容>
+  mode: permission_mode
 ```
 
-### permission_mode の決定
+### permission_mode
 
-movement の `edit` フィールドと `permission_mode` フィールドから決定する:
+コマンド引数で解析された `permission_mode` をそのまま Task tool の `mode` に渡す。
+- `/takt coding yolo タスク` → `permission_mode = "bypassPermissions"`（確認なし）
+- `/takt coding タスク` → `permission_mode = "default"`（権限確認あり）
 
-| edit | permission_mode | Task tool の mode |
-|------|----------------|-------------------|
-| true | 未指定 | "bypassPermissions" |
-| true | "edit" | "bypassPermissions" |
-| true | "full" | "bypassPermissions" |
-| false | 未指定 | "default" |
-| false | "readonly" | "default" |
+## 通常 Movement の実行
 
-`edit: false` の movement は読み取り専用。`edit: true` の movement はファイル編集が可能。
+通常の movement（`parallel` フィールドを持たない）は、Task tool で1つのチームメイトを起動する。
+
+1. プロンプトを構築する（後述の「プロンプト構築」参照）
+2. Task tool でチームメイトを起動する
+3. チームメイトの出力を受け取る
+4. Rule 評価で次の movement を決定する
 
 ## Parallel Movement の実行
 
-`parallel` フィールドを持つ movement は、複数のサブステップを並列実行する。
+`parallel` フィールドを持つ movement は、複数のチームメイトを並列起動する。
 
 ### 実行手順
 
-1. parallel 配列の各サブステップに対して Task tool を起動する
+1. parallel 配列の各サブステップに対して Task tool を準備する
 2. **全ての Task tool を1つのメッセージで並列に呼び出す**（依存関係がないため）
-3. 全エージェントの完了を待つ
+3. 全チームメイトの完了を待つ
 4. 各サブステップの出力を収集する
 5. 各サブステップの出力に対して、そのサブステップの `rules` で条件マッチを判定する
 6. 親 movement の `rules` で aggregate 評価（all()/any()）を行う
@@ -53,7 +57,7 @@ movement の `edit` フィールドと `permission_mode` フィールドから�
 
 ## プロンプト構築
 
-各 movement のエージェント起動時、以下を結合してプロンプトを組み立てる。
+各チームメイト起動時、以下を結合してプロンプトを組み立てる。
 
 ### 構成要素（上から順に結合）
 
@@ -86,7 +90,7 @@ movement の `edit` フィールドと `permission_mode` フィールドから�
 | 変数 | 値 |
 |-----|-----|
 | `{task}` | ユーザーが入力したタスク内容 |
-| `{previous_response}` | 前の movement のエージェント出力 |
+| `{previous_response}` | 前の movement のチームメイト出力 |
 | `{iteration}` | ピース全体のイテレーション数（1始まり） |
 | `{max_iterations}` | ピースの max_iterations 値 |
 | `{movement_iteration}` | この movement が実行された回数（1始まり） |
@@ -106,7 +110,7 @@ movement の `edit` フィールドと `permission_mode` フィールドから�
 
 ## レポート出力指示の自動注入
 
-movement に `report` フィールドがある場合、プロンプト末尾にレポート出力指示を自動追加する。これにより、takt 本体の Phase 2（レポート出力フェーズ）を1回の呼び出しに統合する。
+movement に `report` フィールドがある場合、プロンプト末尾にレポート出力指示を自動追加する。
 
 ### 形式1: name + format
 
@@ -156,9 +160,10 @@ report:
 
 ### レポートの抽出と保存
 
-エージェントの出力からレポート内容を抽出し、Write tool でレポートディレクトリに保存する。
+チームメイトの出力からレポート内容を抽出し、Write tool でレポートディレクトリに保存する。
+**この作業は Team Lead（あなた）が行う。** チームメイトの出力を受け取った後に実施する。
 
-**レポートディレクトリ**: `.takt/reports/{timestamp}-{slug}/` に作成する（takt 本体と同じ構造）。
+**レポートディレクトリ**: `.takt/reports/{timestamp}-{slug}/` に作成する。
 - `{timestamp}`: `YYYYMMDD-HHmmss` 形式
 - `{slug}`: タスク内容の先頭30文字をスラグ化
 
@@ -169,7 +174,7 @@ report:
 
 ## ステータスタグ出力指示の自動注入
 
-movement に `rules` がある場合、プロンプト末尾にステータスタグ出力指示を自動追加する。これにより、takt 本体の Phase 3（ステータス判定フェーズ）を1回の呼び出しに統合する。
+movement に `rules` がある場合、プロンプト末尾にステータスタグ出力指示を自動追加する。
 
 ### 注入する指示
 
@@ -194,7 +199,7 @@ condition が `ai("条件テキスト")` 形式の場合でも、同じくタグ
 [STEP:1] = 別の条件テキスト
 ```
 
-これにより、エージェントが自ら判断して適切なタグを出力する。ai() の括弧は除去して condition テキストのみを表示する。
+ai() の括弧は除去して condition テキストのみを表示する。
 
 ### サブステップの場合
 
@@ -202,7 +207,7 @@ parallel のサブステップにも同様にタグ出力指示を注入する�
 
 ## Rule 評価
 
-movement 実行後、エージェントの出力テキストからどの rule にマッチするかを判定する。
+チームメイトの出力からどの rule にマッチするかを判定する。
 
 ### 通常 Movement の Rule 評価
 
@@ -210,18 +215,13 @@ movement 実行後、エージェントの出力テキストからどの rule �
 
 #### 1. タグベース検出（優先）
 
-エージェント出力に `[STEP:N]` タグ（N は 0始まりのインデックス）が含まれる場合、そのインデックスに対応する rule を選択する。複数のタグがある場合は **最後のタグ** を採用する。
+チームメイト出力に `[STEP:N]` タグ（N は 0始まりのインデックス）が含まれる場合、そのインデックスに対応する rule を選択する。複数のタグがある場合は **最後のタグ** を採用する。
 
 例: rules が `["タスク完了", "進行できない"]` で出力に `[STEP:0]` → "タスク完了" を選択
 
 #### 2. フォールバック（AI 判定）
 
 タグが出力に含まれない場合、出力テキスト全体を読み、全ての condition と比較して最もマッチするものを選択する。
-
-**出力テキストの判定例**:
-- rules: `["実装完了", "判断できない"]`
-- 出力: 「全てのファイルを修正し、テストもパスしました。」
-- → "実装完了" にマッチ
 
 ### Parallel Movement の Rule 評価（Aggregate）
 
@@ -251,13 +251,6 @@ movement 実行後、エージェントの出力テキストからどの rule �
 ```
 
 いずれかのサブステップのマッチ条件が "needs_fix" であれば true。
-
-```yaml
-- condition: any("AI特有の問題あり")
-  next: ai_fix
-```
-
-**引数が1つ**: いずれかのサブステップが "AI特有の問題あり" にマッチすれば true。
 
 #### Aggregate 評価の順序
 
@@ -308,11 +301,11 @@ loop_monitors:
 ### 検出ロジック
 
 1. movement 遷移履歴を記録する（例: `[plan, implement, ai_review, ai_fix, ai_review, ai_fix, ...]`）
-2. 各 loop_monitor の `cycle` パターン（例: `[ai_review, ai_fix]`）が履歴の末尾に `threshold` 回以上連続で出現するかチェックする
+2. 各 loop_monitor の `cycle` パターンが履歴の末尾に `threshold` 回以上連続で出現するかチェックする
 3. 閾値に達した場合:
    a. judge の `agent` を Read で読み込む
    b. `instruction_template` の `{cycle_count}` を実際のサイクル回数に置換する
-   c. Task tool で judge エージェントを起動する
+   c. Task tool でチームメイト（judge）を起動する
    d. judge の出力を judge の `rules` で評価する
    e. マッチした rule の `next` に遷移する（通常のルール評価をオーバーライドする）
 
@@ -330,7 +323,7 @@ loop_monitors:
 
 ### レポートの保存
 
-エージェント出力からレポート内容を抽出し、Write tool でレポートディレクトリに保存する。
+チームメイト出力からレポート内容を抽出し、Write tool でレポートディレクトリに保存する。
 
 抽出手順:
 1. 出力内の ```markdown ブロックを検索する
@@ -339,36 +332,42 @@ loop_monitors:
 
 ### レポートの参照
 
-後続の movement の `instruction_template` 内で `{report:ファイル名}` として参照すると、engine がそのレポートファイルを Read して内容をプレースホルダーに展開する。
+後続の movement の `instruction_template` 内で `{report:ファイル名}` として参照すると、そのレポートファイルを Read して内容をプレースホルダーに展開する。
 
 ## 状態遷移の全体像
 
 ```
 [開始]
   ↓
+ピースYAML読み込み + エージェント .md 読み込み
+  ↓
+Teammate(spawnTeam) でチーム作成
+  ↓
 レポートディレクトリ作成
   ↓
 initial_movement を取得
   ↓
-┌─→ movement を実行
-│     ├── 通常: Task tool (1エージェント)
+┌─→ Task tool でチームメイト起動
+│     ├── 通常: 1つの Task tool 呼び出し
 │     │     prompt = agent.md + context + instruction + task
 │     │           + previous_response + レポート指示 + タグ指示
-│     └── parallel: Task tool (複数エージェント並列)
-│           各サブステップも同様のプロンプト構築
+│     └── parallel: 複数の Task tool を1メッセージで並列呼び出し
+│           各サブステップを別々のチームメイトとして起動
 │   ↓
-│   出力からレポート抽出 → Write で保存
+│   チームメイトの出力を受け取る
 │   ↓
-│   Loop Monitor チェック（該当サイクルがあれば judge 介入）
+│   出力からレポート抽出 → Write で保存（Team Lead が実施）
 │   ↓
-│   Rule 評価
+│   Loop Monitor チェック（該当サイクルがあれば judge チームメイト介入）
+│   ↓
+│   Rule 評価（Team Lead が実施）
 │     ├── タグ検出 [STEP:N] → rule 選択
 │     └── タグなし → AI フォールバック判定
 │     ├── parallel: サブステップ条件 → aggregate(all/any)
 │   ↓
 │   next を決定
-│     ├── COMPLETE → [成功終了] ユーザーに結果報告
-│     ├── ABORT → [失敗終了] ユーザーにエラー報告
+│     ├── COMPLETE → Teammate(cleanup) → ユーザーに結果報告
+│     ├── ABORT → Teammate(cleanup) → ユーザーにエラー報告
 │     └── movement名 → ループ検出チェック → 次の movement
 │                                              ↓
 └──────────────────────────────────────────────┘
