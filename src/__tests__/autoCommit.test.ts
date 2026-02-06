@@ -152,4 +152,50 @@ describe('autoCommitAndPush', () => {
     );
     expect((commitCall![1] as string[])[2]).toBe('takt: 認証機能を追加する');
   });
+
+  it('should force-add .takt/reports/ to include gitignored reports', () => {
+    mockExecFileSync.mockImplementation((cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'status') {
+        return 'M src/index.ts\n';
+      }
+      if (argsArr[0] === 'rev-parse') {
+        return 'abc1234\n';
+      }
+      return Buffer.from('');
+    });
+
+    autoCommitAndPush('/tmp/clone', 'my-task', '/project');
+
+    // Verify git add -f .takt/reports/ was called
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      'git',
+      ['add', '-f', '.takt/reports/'],
+      expect.objectContaining({ cwd: '/tmp/clone' })
+    );
+  });
+
+  it('should continue even if .takt/reports/ does not exist', () => {
+    let forceAddCalled = false;
+    mockExecFileSync.mockImplementation((cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'add' && argsArr[1] === '-f') {
+        forceAddCalled = true;
+        throw new Error('pathspec .takt/reports/ did not match any files');
+      }
+      if (argsArr[0] === 'status') {
+        return 'M src/index.ts\n';
+      }
+      if (argsArr[0] === 'rev-parse') {
+        return 'abc1234\n';
+      }
+      return Buffer.from('');
+    });
+
+    const result = autoCommitAndPush('/tmp/clone', 'my-task', '/project');
+
+    expect(forceAddCalled).toBe(true);
+    expect(result.success).toBe(true);
+    expect(result.commitHash).toBe('abc1234');
+  });
 });

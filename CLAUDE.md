@@ -404,7 +404,7 @@ Key constraints:
 - **Ephemeral lifecycle**: Clone is created → task runs → auto-commit + push → clone is deleted. Branches are the single source of truth.
 - **Session isolation**: Claude Code sessions are stored per-cwd in `~/.claude/projects/{encoded-path}/`. Sessions from the main project cannot be resumed in a clone. The engine skips session resume when `cwd !== projectCwd`.
 - **No node_modules**: Clones only contain tracked files. `node_modules/` is absent.
-- **Dual cwd**: `cwd` = clone path (where agents run), `projectCwd` = project root (where `.takt/` lives). Reports, logs, and session data always write to `projectCwd`.
+- **Dual cwd**: `cwd` = clone path (where agents run), `projectCwd` = project root. Reports write to `cwd/.takt/reports/` (clone) to prevent agents from discovering the main repository. Logs and session data write to `projectCwd`.
 - **List**: Use `takt list` to list branches. Instruct action creates a temporary clone for the branch, executes, pushes, then removes the clone.
 
 ## Error Propagation
@@ -456,7 +456,7 @@ Debug logs are written to `.takt/logs/debug.log` (ndjson format). Log levels: `d
 - Report dirs are created at `.takt/reports/{timestamp}-{slug}/`
 - Report files specified in `step.report` are written relative to report dir
 - Report dir path is available as `{report_dir}` variable in instruction templates
-- When `cwd !== projectCwd` (worktree execution), reports still write to `projectCwd/.takt/reports/`
+- When `cwd !== projectCwd` (worktree execution), reports write to `cwd/.takt/reports/` (clone dir) to prevent agents from discovering the main repository path
 
 **Session continuity across phases:**
 - Agent sessions persist across Phase 1 → Phase 2 → Phase 3 for context continuity
@@ -466,8 +466,9 @@ Debug logs are written to `.takt/logs/debug.log` (ndjson format). Log levels: `d
 
 **Worktree execution gotchas:**
 - `git clone --shared` creates independent `.git` directory (not `git worktree`)
-- Clone cwd ≠ project cwd: agents work in clone, but reports/logs write to project
+- Clone cwd ≠ project cwd: agents work in clone, reports write to clone, logs write to project
 - Session resume is skipped when `cwd !== projectCwd` to avoid cross-directory contamination
+- Reports write to `cwd/.takt/reports/` (clone) to prevent agents from discovering the main repository path via instruction
 - Clones are ephemeral: created → task runs → auto-commit + push → deleted
 - Use `takt list` to manage task branches after clone deletion
 

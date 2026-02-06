@@ -7,7 +7,7 @@
  */
 
 import { EventEmitter } from 'node:events';
-import { mkdirSync, existsSync, symlinkSync } from 'node:fs';
+import { mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type {
   PieceConfig,
@@ -145,23 +145,11 @@ export class PieceEngine extends EventEmitter {
     });
   }
 
-  /** Ensure report directory exists (always in project root, not clone) */
+  /** Ensure report directory exists (in cwd, which is clone dir in worktree mode) */
   private ensureReportDirExists(): void {
-    const reportDirPath = join(this.projectCwd, this.reportDir);
+    const reportDirPath = join(this.cwd, this.reportDir);
     if (!existsSync(reportDirPath)) {
       mkdirSync(reportDirPath, { recursive: true });
-    }
-
-    // Worktree mode: create symlink so agents can access reports via relative path
-    if (this.cwd !== this.projectCwd) {
-      const cwdReportsDir = join(this.cwd, '.takt', 'reports');
-      if (!existsSync(cwdReportsDir)) {
-        mkdirSync(join(this.cwd, '.takt'), { recursive: true });
-        symlinkSync(
-          join(this.projectCwd, '.takt', 'reports'),
-          cwdReportsDir,
-        );
-      }
     }
   }
 
