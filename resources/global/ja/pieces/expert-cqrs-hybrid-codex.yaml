@@ -1,0 +1,694 @@
+# Expert Review Piece
+# CQRS+ES、フロントエンド、セキュリティ、QAの専門家によるレビューピース
+#
+# フロー:
+# plan -> implement -> ai_review -> reviewers (parallel) -> supervise -> COMPLETE
+#                          ↓              ├─ cqrs-es-review      ↓
+#                        ai_fix           ├─ frontend-review   fix_supervisor
+#                                         ├─ security-review
+#                                         └─ qa-review
+#                                    any("needs_fix") → fix → reviewers
+#
+# ボイラープレートセクション（Piece Context, User Request, Previous Response,
+# Additional User Inputs, Instructions heading）はbuildInstruction()が自動挿入。
+# instruction_templateにはムーブメント固有の内容のみ記述。
+#
+# テンプレート変数（instruction_template内で使用可能）:
+#   {iteration}         - ピース全体のターン数（全エージェントで実行されたムーブメントの合計）
+#   {max_iterations}    - ピースの最大イテレーション数
+#   {movement_iteration}    - ムーブメントごとのイテレーション数（このムーブメントが何回実行されたか）
+#   {previous_response} - 前のムーブメントの出力（pass_previous_response: true の場合のみ）
+#   {report_dir}        - レポートディレクトリ名（例: "20250126-143052-task-summary"）
+#
+# ムーブメントレベルフィールド:
+#   report:  - ムーブメントのレポートファイル（Piece ContextにReport File/Filesとして自動挿入）
+#              単一: report: 00-plan.md
+#              複数: report:
+#                      - Scope: 01-coder-scope.md
+#                      - Decisions: 02-coder-decisions.md
+
+name: expert-cqrs-hybrid-codex
+description: CQRS+ES・フロントエンド・セキュリティ・QA専門家レビュー
+
+max_iterations: 30
+
+initial_movement: plan
+
+movements:
+  # ===========================================
+  # Movement 0: Planning
+  # ===========================================
+  - name: plan
+    edit: false
+    agent: ../agents/default/planner.md
+    report:
+      name: 00-plan.md
+      format: |
+        ```markdown
+        # タスク計画
+
+        ## 元の要求
+        {ユーザーの要求をそのまま記載}
+
+        ## 分析結果
+
+        ### 目的
+        {達成すべきこと}
+
+        ### スコープ
+        {影響範囲}
+
+        ### 実装アプローチ
+        {どう進めるか}
+
+        ## 確認事項（あれば）
+        - {不明点や確認が必要な点}
+        ```
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Bash
+      - WebSearch
+      - WebFetch
+    instruction_template: |
+      タスクを分析し、実装方針を立ててください。
+
+      **注意:** Previous Responseがある場合は差し戻しのため、
+      その内容を踏まえて計画を見直してください（replan）。
+
+      **やること:**
+      1. タスクの要件を理解する
+      2. 影響範囲を特定する
+      3. 実装アプローチを決める
+    rules:
+      - condition: タスク分析と計画が完了した
+        next: implement
+      - condition: 要件が不明確で計画を立てられない
+        next: ABORT
+
+  # ===========================================
+  # Movement 1: Implementation
+  # ===========================================
+  - name: implement
+    edit: true
+    agent: ../agents/default/coder.md
+    provider: codex
+    session: refresh
+    report:
+      - Scope: 01-coder-scope.md
+      - Decisions: 02-coder-decisions.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    instruction_template: |
+      planムーブメントで立てた計画に従って実装してください。
+      計画レポート（{report:00-plan.md}）を参照し、実装を進めてください。
+      Piece Contextに示されたReport Directory内のファイルのみ参照してください。他のレポートディレクトリは検索/参照しないでください。
+
+      **Scopeレポートフォーマット（実装開始時に作成）:**
+      ```markdown
+      # 変更スコープ宣言
+
+      ## タスク
+      {タスクの1行要約}
+
+      ## 変更予定
+      | 種別 | ファイル |
+      |------|---------|
+      | 作成 | `src/example.ts` |
+      | 変更 | `src/routes.ts` |
+
+      ## 推定規模
+      Small / Medium / Large
+
+      ## 影響範囲
+      - {影響するモジュールや機能}
+      ```
+
+      **Decisionsレポートフォーマット（実装完了時、決定がある場合のみ）:**
+      ```markdown
+      # 決定ログ
+
+      ## 1. {決定内容}
+      - **背景**: {なぜ決定が必要だったか}
+      - **検討した選択肢**: {選択肢リスト}
+      - **理由**: {選んだ理由}
+      ```
+
+      **必須出力（見出しを含める）**
+      ## 作業結果
+      - {実施内容の要約}
+      ## 変更内容
+      - {変更内容の要約}
+      ## テスト結果
+      - {実行コマンドと結果}
+    rules:
+      - condition: 実装が完了した
+        next: ai_review
+      - condition: 実装未着手（レポートのみ）
+        next: ai_review
+      - condition: 実装を進行できない
+        next: ai_review
+      - condition: ユーザー入力が必要
+        next: implement
+        requires_user_input: true
+        interactive_only: true
+
+  # ===========================================
+  # Movement 2: AI Review
+  # ===========================================
+  - name: ai_review
+    edit: false
+    agent: ../agents/default/ai-antipattern-reviewer.md
+    report:
+      name: 03-ai-review.md
+      format: |
+        ```markdown
+        # AI生成コードレビュー
+
+        ## 結果: APPROVE / REJECT
+
+        ## サマリー
+        {1文で結果を要約}
+
+        ## 検証した項目
+        | 観点 | 結果 | 備考 |
+        |------|------|------|
+        | 仮定の妥当性 | ✅ | - |
+        | API/ライブラリの実在 | ✅ | - |
+        | コンテキスト適合 | ✅ | - |
+        | スコープ | ✅ | - |
+
+        ## 問題点（REJECTの場合）
+        | # | カテゴリ | 場所 | 問題 |
+        |---|---------|------|------|
+        | 1 | 幻覚API | `src/file.ts:23` | 存在しないメソッド |
+        ```
+
+        **認知負荷軽減ルール:**
+        - 問題なし → サマリー1文 + チェック表のみ（10行以内）
+        - 問題あり → + 問題を表形式で（25行以内）
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
+    instruction_template: |
+      **これは {movement_iteration} 回目のAI Reviewです。**
+
+      初回は網羅的にレビューし、指摘すべき問題をすべて出し切ってください。
+      2回目以降は、前回REJECTした項目が修正されたかの確認を優先してください。
+
+      AI特有の問題についてコードをレビューしてください:
+      - 仮定の検証
+      - もっともらしいが間違っているパターン
+      - 既存コードベースとの適合性
+      - スコープクリープの検出
+    rules:
+      - condition: AI特有の問題が見つからない
+        next: reviewers
+      - condition: AI特有の問題が検出された
+        next: ai_fix
+
+  - name: ai_fix
+    edit: true
+    agent: ../agents/default/coder.md
+    provider: codex
+    session: refresh
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    instruction_template: |
+      **これは {movement_iteration} 回目の AI Review です。**
+
+      2回目以降は、前回の修正が実際には行われていなかったということです。
+      **あなたの「修正済み」という認識が間違っています。**
+
+      **まず認めること:**
+      - 「修正済み」と思っていたファイルは実際には修正されていない
+      - 前回の作業内容の認識が間違っている
+      - ゼロベースで考え直す必要がある
+
+      **必須アクション:**
+      1. 指摘された全ファイルを Read tool で開く（思い込みを捨てて事実確認）
+      2. 問題箇所を grep で検索して実在を確認する
+      3. 確認した問題を Edit tool で修正する
+      4. テストを実行して検証する（`./gradlew :backend:test` 等）
+      5. 「何を確認して、何を修正したか」を具体的に報告する
+
+      **報告フォーマット:**
+      - ❌ 「既に修正されています」
+      - ✅ 「ファイルXのL123を確認した結果、問題Yが存在したため、Zに修正しました」
+
+      **絶対に禁止:**
+      - ファイルを開かずに「修正済み」と報告
+      - 思い込みで判断
+      - AI Reviewer が REJECT した問題の放置
+
+      **修正不要の扱い（必須）**
+      - AI Reviewの指摘ごとに「対象ファイルの確認結果」を示せない場合は修正不要と判断しない
+      - 指摘が「生成物」「仕様同期」に関係する場合は、生成元/仕様の確認ができなければ「修正を進行できない」に対応するタグを出力する
+      - 修正不要の場合は「修正を進行できない」に対応するタグを出力し、理由と確認範囲を明記する
+
+      **必須出力（見出しを含める）**
+      ## 確認したファイル
+      - {ファイルパス:行番号}
+      ## 実行した検索
+      - {コマンドと要約}
+      ## 修正内容
+      - {変更内容}
+      ## テスト結果
+      - {実行コマンドと結果}
+    rules:
+      - condition: AI Reviewerの指摘に対する修正が完了した
+        next: ai_review
+      - condition: 修正不要（指摘対象ファイル/仕様の確認済み）
+        next: ai_no_fix
+      - condition: 修正を進行できない
+        next: ai_no_fix
+
+  - name: ai_no_fix
+    edit: false
+    agent: ../agents/default/architecture-reviewer.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+    rules:
+      - condition: ai_reviewの指摘が妥当（修正すべき）
+        next: ai_fix
+      - condition: ai_fixの判断が妥当（修正不要）
+        next: reviewers
+    instruction_template: |
+      ai_review（レビュアー）と ai_fix（コーダー）の意見が食い違っています。
+
+      - ai_review は問題を指摘し REJECT しました
+      - ai_fix は確認の上「修正不要」と判断しました
+
+      両者の出力を確認し、どちらの判断が妥当か裁定してください。
+
+      **参照するレポート:**
+      - AIレビュー結果: {report:03-ai-review.md}
+
+      **判断基準:**
+      - ai_review の指摘が具体的で、コード上の実在する問題を指しているか
+      - ai_fix の反論に根拠（ファイル確認結果、テスト結果）があるか
+      - 指摘が非ブロッキング（記録のみ）レベルか、実際に修正が必要か
+
+  # ===========================================
+  # Movement 3: Expert Reviews (Parallel)
+  # ===========================================
+  - name: reviewers
+    parallel:
+      - name: cqrs-es-review
+        edit: false
+        agent: ../agents/expert-cqrs/cqrs-es-reviewer.md
+        report:
+          name: 04-cqrs-es-review.md
+          format: |
+            ```markdown
+            # CQRS+ESレビュー
+
+            ## 結果: APPROVE / REJECT
+
+            ## サマリー
+            {1-2文で結果を要約}
+
+            ## 確認した観点
+            | 観点 | 結果 | 備考 |
+            |------|------|------|
+            | Aggregate設計 | ✅ | - |
+            | イベント設計 | ✅ | - |
+            | Command/Query分離 | ✅ | - |
+            | プロジェクション | ✅ | - |
+            | 結果整合性 | ✅ | - |
+
+            ## 問題点（REJECTの場合）
+            | # | スコープ | 場所 | 問題 | 修正案 |
+            |---|---------|------|------|--------|
+            | 1 | スコープ内 | `src/file.ts:42` | 問題の説明 | 修正方法 |
+
+            スコープ: 「スコープ内」（今回修正可能）/ 「スコープ外」（既存問題・非ブロッキング）
+
+            ## 既存問題（参考・非ブロッキング）
+            - {既存問題の記録。今回の変更と無関係な問題}
+            ```
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+
+          - WebSearch
+          - WebFetch
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        instruction_template: |
+          CQRS（コマンドクエリ責務分離）とEvent Sourcing（イベントソーシング）の観点から
+          変更をレビューしてください。AI特有の問題のレビューは不要です（ai_reviewムーブメントで実施済み）。
+
+          **レビュー観点:**
+          - Aggregate設計の妥当性
+          - イベント設計（粒度、命名、スキーマ）
+          - Command/Queryの分離
+          - プロジェクション設計
+          - 結果整合性の考慮
+
+          **注意**: このプロジェクトがCQRS+ESパターンを使用していない場合は、
+          一般的なドメイン設計の観点からレビューしてください。
+
+      - name: frontend-review
+        edit: false
+        agent: ../agents/expert/frontend-reviewer.md
+        report:
+          name: 05-frontend-review.md
+          format: |
+            ```markdown
+            # フロントエンドレビュー
+
+            ## 結果: APPROVE / REJECT
+
+            ## サマリー
+            {1-2文で結果を要約}
+
+            ## 確認した観点
+            | 観点 | 結果 | 備考 |
+            |------|------|------|
+            | コンポーネント設計 | ✅ | - |
+            | 状態管理 | ✅ | - |
+            | パフォーマンス | ✅ | - |
+            | アクセシビリティ | ✅ | - |
+            | 型安全性 | ✅ | - |
+
+            ## 問題点（REJECTの場合）
+            | # | 場所 | 問題 | 修正案 |
+            |---|------|------|--------|
+            | 1 | `src/file.tsx:42` | 問題の説明 | 修正方法 |
+            ```
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+
+          - WebSearch
+          - WebFetch
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        instruction_template: |
+          フロントエンド開発の観点から変更をレビューしてください。
+
+          **レビュー観点:**
+          - コンポーネント設計（責務分離、粒度）
+          - 状態管理（ローカル/グローバルの判断）
+          - パフォーマンス（再レンダリング、メモ化）
+          - アクセシビリティ（キーボード操作、ARIA）
+          - データフェッチパターン
+          - TypeScript型安全性
+
+          **注意**: このプロジェクトがフロントエンドを含まない場合は、
+          問題なしとして次に進んでください。
+
+      - name: security-review
+        edit: false
+        agent: ../agents/expert/security-reviewer.md
+        report:
+          name: 06-security-review.md
+          format: |
+            ```markdown
+            # セキュリティレビュー
+
+            ## 結果: APPROVE / REJECT
+
+            ## 重大度: None / Low / Medium / High / Critical
+
+            ## チェック結果
+            | カテゴリ | 結果 | 備考 |
+            |---------|------|------|
+            | インジェクション | ✅ | - |
+            | 認証・認可 | ✅ | - |
+            | データ保護 | ✅ | - |
+            | 依存関係 | ✅ | - |
+
+            ## 脆弱性（REJECTの場合）
+            | # | 重大度 | 種類 | 場所 | 修正案 |
+            |---|--------|------|------|--------|
+            | 1 | High | SQLi | `src/db.ts:42` | パラメータ化クエリを使用 |
+
+            ## 警告（ブロッキングではない）
+            - {セキュリティに関する推奨事項}
+            ```
+
+            **認知負荷軽減ルール:**
+            - 問題なし → チェック表のみ（10行以内）
+            - 警告 → + 警告1-2行（15行以内）
+            - 脆弱性 → + 表形式（30行以内）
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+
+          - WebSearch
+          - WebFetch
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        instruction_template: |
+          セキュリティの観点から変更をレビューしてください。以下の脆弱性をチェック:
+          - インジェクション攻撃（SQL, コマンド, XSS）
+          - 認証・認可の不備
+          - データ露出リスク
+          - 暗号化の弱点
+
+      - name: qa-review
+        edit: false
+        agent: ../agents/expert/qa-reviewer.md
+        report:
+          name: 07-qa-review.md
+          format: |
+            ```markdown
+            # QAレビュー
+
+            ## 結果: APPROVE / REJECT
+
+            ## サマリー
+            {1-2文で結果を要約}
+
+            ## 確認した観点
+            | 観点 | 結果 | 備考 |
+            |------|------|------|
+            | テストカバレッジ | ✅ | - |
+            | テスト品質 | ✅ | - |
+            | エラーハンドリング | ✅ | - |
+            | ドキュメント | ✅ | - |
+            | 保守性 | ✅ | - |
+
+            ## 問題点（REJECTの場合）
+            | # | カテゴリ | 問題 | 修正案 |
+            |---|---------|------|--------|
+            | 1 | テスト | 問題の説明 | 修正方法 |
+            ```
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+
+          - WebSearch
+          - WebFetch
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        instruction_template: |
+          品質保証の観点から変更をレビューしてください。
+
+          **レビュー観点:**
+          - テストカバレッジと品質
+          - テスト戦略（単体/統合/E2E）
+          - ドキュメント（コード内・外部）
+          - エラーハンドリング
+          - ログとモニタリング
+          - 保守性
+    rules:
+      - condition: all("approved")
+        next: supervise
+      - condition: any("needs_fix")
+        next: fix
+
+  - name: fix
+    edit: true
+    agent: ../agents/default/coder.md
+    provider: codex
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    permission_mode: edit
+    rules:
+      - condition: 修正が完了した
+        next: reviewers
+      - condition: 修正を進行できない
+        next: plan
+    instruction_template: |
+      レビュアーからのフィードバックに対応してください。
+      「Original User Request」は参考情報であり、最新の指示ではありません。
+      セッションの会話履歴を確認し、レビュアーの指摘事項を修正してください。
+
+
+      **必須出力（見出しを含める）**
+      ## 作業結果
+      - {実施内容の要約}
+      ## 変更内容
+      - {変更内容の要約}
+      ## テスト結果
+      - {実行コマンドと結果}
+      ## 証拠
+      - {確認したファイル/検索/差分/ログの要点を列挙}
+
+  # ===========================================
+  # Movement 4: Supervision
+  # ===========================================
+  - name: supervise
+    edit: false
+    agent: ../agents/expert/supervisor.md
+    report:
+      - Validation: 08-supervisor-validation.md
+      - Summary: summary.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
+    instruction_template: |
+      ## Previous Reviews Summary
+      このムーブメントに到達したということは、以下のレビューがすべてAPPROVEされています：
+      - AI Review: APPROVED
+      - CQRS+ES Review: APPROVED
+      - Frontend Review: APPROVED
+      - Security Review: APPROVED
+      - QA Review: APPROVED
+
+      テスト実行、ビルド確認、最終承認を行ってください。
+
+      **ピース全体の確認:**
+      1. 計画（{report:00-plan.md}）と実装結果が一致しているか
+      2. 各レビュームーブメントの指摘が対応されているか
+      3. 元のタスク目的が達成されているか
+
+      **レポートの確認:** Report Directory内の全レポートを読み、
+      未対応の改善提案がないか確認してください。
+
+      **Validationレポートフォーマット:**
+      ```markdown
+      # 最終検証結果
+
+      ## 結果: APPROVE / REJECT
+
+      ## 検証サマリー
+      | 項目 | 状態 | 確認方法 |
+      |------|------|---------|
+      | 要求充足 | ✅ | 要求リストと照合 |
+      | テスト | ✅ | `npm test` (N passed) |
+      | ビルド | ✅ | `npm run build` 成功 |
+      | 動作確認 | ✅ | 主要フロー確認 |
+
+      ## 成果物
+      - 作成: {作成したファイル}
+      - 変更: {変更したファイル}
+
+      ## 未完了項目（REJECTの場合）
+      | # | 項目 | 理由 |
+      |---|------|------|
+      | 1 | {項目} | {理由} |
+      ```
+
+      **Summaryレポートフォーマット（APPROVEの場合のみ）:**
+      ```markdown
+      # タスク完了サマリー
+
+      ## タスク
+      {元の要求を1-2文で}
+
+      ## 結果
+      ✅ 完了
+
+      ## 変更内容
+      | 種別 | ファイル | 概要 |
+      |------|---------|------|
+      | 作成 | `src/file.ts` | 概要説明 |
+
+      ## レビュー結果
+      | レビュー | 結果 |
+      |---------|------|
+      | AI Review | ✅ APPROVE |
+      | CQRS+ES | ✅ APPROVE |
+      | Frontend | ✅ APPROVE |
+      | Security | ✅ APPROVE |
+      | QA | ✅ APPROVE |
+      | Supervisor | ✅ APPROVE |
+
+      ## 確認コマンド
+      ```bash
+      npm test
+      npm run build
+      ```
+      ```
+    rules:
+      - condition: すべての検証が完了し、マージ可能な状態である
+        next: COMPLETE
+      - condition: 問題が検出された
+        next: fix_supervisor
+
+  - name: fix_supervisor
+    edit: true
+    agent: ../agents/default/coder.md
+    provider: codex
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    instruction_template: |
+      監督者からの指摘を修正してください。
+
+      監督者は全体を俯瞰した視点から問題を指摘しています。
+      優先度の高い項目から順に対応してください。
+
+
+      **必須出力（見出しを含める）**
+      ## 作業結果
+      - {実施内容の要約}
+      ## 変更内容
+      - {変更内容の要約}
+      ## テスト結果
+      - {実行コマンドと結果}
+      ## 証拠
+      - {確認したファイル/検索/差分/ログの要点を列挙}
+    rules:
+      - condition: 監督者の指摘に対する修正が完了した
+        next: supervise
+      - condition: 修正を進行できない
+        next: plan

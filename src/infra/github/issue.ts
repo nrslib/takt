@@ -6,10 +6,10 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { createLogger } from '../../shared/utils/index.js';
-import type { GitHubIssue, GhCliStatus } from './types.js';
+import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
+import type { GitHubIssue, GhCliStatus, CreateIssueOptions, CreateIssueResult } from './types.js';
 
-export type { GitHubIssue, GhCliStatus };
+export type { GitHubIssue, GhCliStatus, CreateIssueOptions, CreateIssueResult };
 
 const log = createLogger('github');
 
@@ -171,4 +171,37 @@ export function resolveIssueTask(task: string): string {
 
   const issues = issueNumbers.map((n) => fetchIssue(n));
   return issues.map(formatIssueAsTask).join('\n\n---\n\n');
+}
+
+/**
+ * Create a GitHub Issue via `gh issue create`.
+ */
+export function createIssue(options: CreateIssueOptions): CreateIssueResult {
+  const ghStatus = checkGhCli();
+  if (!ghStatus.available) {
+    return { success: false, error: ghStatus.error };
+  }
+
+  const args = ['issue', 'create', '--title', options.title, '--body', options.body];
+  if (options.labels && options.labels.length > 0) {
+    args.push('--label', options.labels.join(','));
+  }
+
+  log.info('Creating issue', { title: options.title });
+
+  try {
+    const output = execFileSync('gh', args, {
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    const url = output.trim();
+    log.info('Issue created', { url });
+
+    return { success: true, url };
+  } catch (err) {
+    const errorMessage = getErrorMessage(err);
+    log.error('Issue creation failed', { error: errorMessage });
+    return { success: false, error: errorMessage };
+  }
 }

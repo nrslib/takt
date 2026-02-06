@@ -28,7 +28,7 @@ export async function switchPiece(cwd: string, pieceName?: string): Promise<bool
     const current = getCurrentPiece(cwd);
     info(`Current piece: ${current}`);
 
-    const categoryConfig = getPieceCategories(cwd);
+    const categoryConfig = getPieceCategories();
     let selected: string | null;
     if (categoryConfig) {
       const allPieces = loadAllPiecesWithSources(cwd);

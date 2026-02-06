@@ -17,6 +17,30 @@ max_iterations: 30
 
 initial_movement: plan
 
+loop_monitors:
+  - cycle: [ai_review, ai_fix]
+    threshold: 3
+    judge:
+      agent: ../agents/default/supervisor.md
+      instruction_template: |
+        ai_review と ai_fix のループが {cycle_count} 回繰り返されました。
+
+        各サイクルのレポートを確認し、このループが健全（進捗がある）か、
+        非生産的（同じ問題を繰り返している）かを判断してください。
+
+        **参照するレポート:**
+        - AIレビュー結果: {report:04-ai-review.md}
+
+        **判断基準:**
+        - 各サイクルで新しい問題が発見・修正されているか
+        - 同じ指摘が繰り返されていないか
+        - 修正が実際に反映されているか
+      rules:
+        - condition: 健全（進捗あり）
+          next: ai_review
+        - condition: 非生産的（改善なし）
+          next: reviewers
+
 movements:
   - name: plan
     edit: false

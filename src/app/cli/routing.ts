@@ -8,7 +8,7 @@
 import { info, error } from '../../shared/ui/index.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
 import { resolveIssueTask } from '../../infra/github/index.js';
-import { selectAndExecuteTask, determinePiece, type SelectAndExecuteOptions } from '../../features/tasks/index.js';
+import { selectAndExecuteTask, determinePiece, saveTaskFromInteractive, createIssueFromTask, type SelectAndExecuteOptions } from '../../features/tasks/index.js';
 import { executePipeline } from '../../features/pipeline/index.js';
 import { interactiveMode } from '../../features/interactive/index.js';
 import { getPieceDescription } from '../../infra/config/index.js';
@@ -99,14 +99,25 @@ export async function executeDefaultAction(task?: string): Promise<void> {
   const pieceContext = getPieceDescription(pieceId, resolvedCwd);
   const result = await interactiveMode(resolvedCwd, task, pieceContext);
 
-  if (!result.confirmed) {
-    return;
-  }
+  switch (result.action) {
+    case 'execute':
+      selectOptions.interactiveUserInput = true;
+      selectOptions.piece = pieceId;
+      selectOptions.interactiveMetadata = { confirmed: true, task: result.task };
+      await selectAndExecuteTask(resolvedCwd, result.task, selectOptions, agentOverrides);
+      break;
 
-  selectOptions.interactiveUserInput = true;
-  selectOptions.piece = pieceId;
-  selectOptions.interactiveMetadata = { confirmed: result.confirmed, task: result.task };
-  await selectAndExecuteTask(resolvedCwd, result.task, selectOptions, agentOverrides);
+    case 'create_issue':
+      createIssueFromTask(result.task);
+      break;
+
+    case 'save_task':
+      await saveTaskFromInteractive(resolvedCwd, result.task, pieceId);
+      break;
+
+    case 'cancel':
+      break;
+  }
 }
 
 program

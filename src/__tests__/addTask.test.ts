@@ -70,6 +70,7 @@ vi.mock('../infra/github/issue.js', () => ({
     }
     return numbers;
   }),
+  createIssue: vi.fn(),
 }));
 
 import { interactiveMode } from '../features/interactive/index.js';
@@ -77,10 +78,11 @@ import { promptInput, confirm } from '../shared/prompt/index.js';
 import { summarizeTaskName } from '../infra/task/summarize.js';
 import { determinePiece } from '../features/tasks/execute/selectAndExecute.js';
 import { getPieceDescription } from '../infra/config/loaders/pieceResolver.js';
-import { resolveIssueTask } from '../infra/github/issue.js';
+import { resolveIssueTask, createIssue } from '../infra/github/issue.js';
 import { addTask } from '../features/tasks/index.js';
 
 const mockResolveIssueTask = vi.mocked(resolveIssueTask);
+const mockCreateIssue = vi.mocked(createIssue);
 const mockInteractiveMode = vi.mocked(interactiveMode);
 const mockPromptInput = vi.mocked(promptInput);
 const mockConfirm = vi.mocked(confirm);
@@ -97,7 +99,7 @@ function setupFullFlowMocks(overrides?: {
 
   mockDeterminePiece.mockResolvedValue('default');
   mockGetPieceDescription.mockReturnValue({ name: 'default', description: '', pieceStructure: '' });
-  mockInteractiveMode.mockResolvedValue({ confirmed: true, task });
+  mockInteractiveMode.mockResolvedValue({ action: 'execute', task });
   mockSummarizeTaskName.mockResolvedValue(slug);
   mockConfirm.mockResolvedValue(false);
 }
@@ -122,7 +124,7 @@ describe('addTask', () => {
   it('should cancel when interactive mode is not confirmed', async () => {
     // Given: user cancels interactive mode
     mockDeterminePiece.mockResolvedValue('default');
-    mockInteractiveMode.mockResolvedValue({ confirmed: false, task: '' });
+    mockInteractiveMode.mockResolvedValue({ action: 'cancel', task: '' });
 
     // When
     await addTask(testDir);
@@ -340,5 +342,52 @@ describe('addTask', () => {
     expect(fs.existsSync(taskFile)).toBe(true);
     const content = fs.readFileSync(taskFile, 'utf-8');
     expect(content).toContain('issue: 99');
+  });
+
+  describe('create_issue action', () => {
+    it('should call createIssue when create_issue action is selected', async () => {
+      // Given: interactive mode returns create_issue action
+      const task = 'Create a new feature\nWith detailed description';
+      mockDeterminePiece.mockResolvedValue('default');
+      mockInteractiveMode.mockResolvedValue({ action: 'create_issue', task });
+      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/1' });
+
+      // When
+      await addTask(testDir);
+
+      // Then: createIssue is called via createIssueFromTask
+      expect(mockCreateIssue).toHaveBeenCalledWith({
+        title: 'Create a new feature',
+        body: task,
+      });
+    });
+
+    it('should not create task file when create_issue action is selected', async () => {
+      // Given: interactive mode returns create_issue action
+      mockDeterminePiece.mockResolvedValue('default');
+      mockInteractiveMode.mockResolvedValue({ action: 'create_issue', task: 'Some task' });
+      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/1' });
+
+      // When
+      await addTask(testDir);
+
+      // Then: no task file created
+      const tasksDir = path.join(testDir, '.takt', 'tasks');
+      const files = fs.existsSync(tasksDir) ? fs.readdirSync(tasksDir) : [];
+      expect(files.length).toBe(0);
+    });
+
+    it('should not prompt for worktree settings when create_issue action is selected', async () => {
+      // Given: interactive mode returns create_issue action
+      mockDeterminePiece.mockResolvedValue('default');
+      mockInteractiveMode.mockResolvedValue({ action: 'create_issue', task: 'Some task' });
+      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/1' });
+
+      // When
+      await addTask(testDir);
+
+      // Then: confirm (worktree prompt) is never called
+      expect(mockConfirm).not.toHaveBeenCalled();
+    });
   });
 });

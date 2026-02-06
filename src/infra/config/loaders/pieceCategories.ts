@@ -1,21 +1,19 @@
 /**
  * Piece category configuration loader and helpers.
+ *
+ * Categories are loaded from a single source: the user's piece-categories.yaml file.
+ * If the file doesn't exist, it's auto-copied from builtin defaults.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod/v4';
-import { getProjectConfigPath } from '../paths.js';
 import { getLanguage, getBuiltinPiecesEnabled, getDisabledBuiltins } from '../global/globalConfig.js';
-import {
-  getPieceCategoriesConfig,
-  getShowOthersCategory,
-  getOthersCategoryName,
-} from '../global/pieceCategories.js';
+import { ensureUserCategoriesFile } from '../global/pieceCategories.js';
 import { getLanguageResourcesDir } from '../../resources/index.js';
 import { listBuiltinPieceNames } from './pieceResolver.js';
-import type { PieceSource, PieceWithSource } from './pieceResolver.js';
+import type { PieceWithSource } from './pieceResolver.js';
 
 const CategoryConfigSchema = z.object({
   piece_categories: z.record(z.string(), z.unknown()).optional(),
@@ -37,7 +35,6 @@ export interface CategoryConfig {
 
 export interface CategorizedPieces {
   categories: PieceCategoryNode[];
-  builtinCategories: PieceCategoryNode[];
   allPieces: Map<string, PieceWithSource>;
   missingPieces: MissingPiece[];
 }
@@ -152,33 +149,25 @@ function loadCategoryConfigFromPath(path: string, sourceLabel: string): Category
  */
 export function loadDefaultCategories(): CategoryConfig | null {
   const lang = getLanguage();
-  const filePath = join(getLanguageResourcesDir(lang), 'default-categories.yaml');
+  const filePath = join(getLanguageResourcesDir(lang), 'piece-categories.yaml');
   return loadCategoryConfigFromPath(filePath, filePath);
+}
+
+/** Get the path to the builtin default categories file. */
+export function getDefaultCategoriesPath(): string {
+  const lang = getLanguage();
+  return join(getLanguageResourcesDir(lang), 'piece-categories.yaml');
 }
 
 /**
  * Get effective piece categories configuration.
- * Priority: user config -> project config -> default categories.
+ * Reads from user file (~/.takt/preferences/piece-categories.yaml).
+ * Auto-copies from builtin defaults if user file doesn't exist.
  */
-export function getPieceCategories(cwd: string): CategoryConfig | null {
-  // Check user config from separate file (~/.takt/piece-categories.yaml)
-  const userCategoriesNode = getPieceCategoriesConfig();
-  if (userCategoriesNode) {
-    const showOthersCategory = getShowOthersCategory() ?? true;
-    const othersCategoryName = getOthersCategoryName() ?? 'Others';
-    return {
-      pieceCategories: parseCategoryTree(userCategoriesNode, 'user config'),
-      showOthersCategory,
-      othersCategoryName,
-    };
-  }
-
-  const projectConfig = loadCategoryConfigFromPath(getProjectConfigPath(cwd), 'project config');
-  if (projectConfig) {
-    return projectConfig;
-  }
-
-  return loadDefaultCategories();
+export function getPieceCategories(): CategoryConfig | null {
+  const defaultPath = getDefaultCategoriesPath();
+  const userPath = ensureUserCategoriesFile(defaultPath);
+  return loadCategoryConfigFromPath(userPath, userPath);
 }
 
 function collectMissingPieces(
@@ -206,10 +195,9 @@ function collectMissingPieces(
   return missing;
 }
 
-function buildCategoryTreeForSource(
+function buildCategoryTree(
   categories: PieceCategoryNode[],
   allPieces: Map<string, PieceWithSource>,
-  sourceFilter: (source: PieceSource) => boolean,
   categorized: Set<string>,
 ): PieceCategoryNode[] {
   const result: PieceCategoryNode[] = [];
@@ -217,14 +205,12 @@ function buildCategoryTreeForSource(
   for (const node of categories) {
     const pieces: string[] = [];
     for (const pieceName of node.pieces) {
-      const entry = allPieces.get(pieceName);
-      if (!entry) continue;
-      if (!sourceFilter(entry.source)) continue;
+      if (!allPieces.has(pieceName)) continue;
       pieces.push(pieceName);
       categorized.add(pieceName);
     }
 
-    const children = buildCategoryTreeForSource(node.children, allPieces, sourceFilter, categorized);
+    const children = buildCategoryTree(node.children, allPieces, categorized);
     if (pieces.length > 0 || children.length > 0) {
       result.push({ name: node.name, pieces, children });
     }
@@ -237,16 +223,10 @@ function appendOthersCategory(
   categories: PieceCategoryNode[],
   allPieces: Map<string, PieceWithSource>,
   categorized: Set<string>,
-  sourceFilter: (source: PieceSource) => boolean,
   othersCategoryName: string,
 ): PieceCategoryNode[] {
-  if (categories.some((node) => node.name === othersCategoryName)) {
-    return categories;
-  }
-
   const uncategorized: string[] = [];
-  for (const [pieceName, entry] of allPieces.entries()) {
-    if (!sourceFilter(entry.source)) continue;
+  for (const [pieceName] of allPieces.entries()) {
     if (categorized.has(pieceName)) continue;
     uncategorized.push(pieceName);
   }
@@ -255,11 +235,23 @@ function appendOthersCategory(
     return categories;
   }
 
+  // If a category with the same name already exists, merge uncategorized pieces into it
+  const existingIndex = categories.findIndex((node) => node.name === othersCategoryName);
+  if (existingIndex >= 0) {
+    const existing = categories[existingIndex]!;
+    return categories.map((node, i) =>
+      i === existingIndex
+        ? { ...node, pieces: [...existing.pieces, ...uncategorized] }
+        : node,
+    );
+  }
+
   return [...categories, { name: othersCategoryName, pieces: uncategorized, children: [] }];
 }
 
 /**
  * Build categorized pieces map from configuration.
+ * All pieces (user and builtin) are placed in a single category tree.
  */
 export function buildCategorizedPieces(
   allPieces: Map<string, PieceWithSource>,
@@ -282,48 +274,19 @@ export function buildCategorizedPieces(
     ignoreMissing,
   );
 
-  const isBuiltin = (source: PieceSource): boolean => source === 'builtin';
-  const isCustom = (source: PieceSource): boolean => source !== 'builtin';
-
-  const categorizedCustom = new Set<string>();
-  const categories = buildCategoryTreeForSource(
+  const categorized = new Set<string>();
+  const categories = buildCategoryTree(
     config.pieceCategories,
     allPieces,
-    isCustom,
-    categorizedCustom,
-  );
-
-  const categorizedBuiltin = new Set<string>();
-  const builtinCategories = buildCategoryTreeForSource(
-    config.pieceCategories,
-    allPieces,
-    isBuiltin,
-    categorizedBuiltin,
+    categorized,
   );
 
   const finalCategories = config.showOthersCategory
-    ? appendOthersCategory(
-      categories,
-      allPieces,
-      categorizedCustom,
-      isCustom,
-      config.othersCategoryName,
-    )
+    ? appendOthersCategory(categories, allPieces, categorized, config.othersCategoryName)
     : categories;
-
-  const finalBuiltinCategories = config.showOthersCategory
-    ? appendOthersCategory(
-      builtinCategories,
-      allPieces,
-      categorizedBuiltin,
-      isBuiltin,
-      config.othersCategoryName,
-    )
-    : builtinCategories;
 
   return {
     categories: finalCategories,
-    builtinCategories: finalBuiltinCategories,
     allPieces,
     missingPieces,
   };

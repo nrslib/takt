@@ -35,6 +35,9 @@ export { determineNextMovementByRules, extractBlockedPrompt } from './engine/tra
 // Loop detection (engine/)
 export { LoopDetector } from './engine/loop-detector.js';
 
+// Cycle detection (engine/)
+export { CycleDetector, type CycleCheckResult } from './engine/cycle-detector.js';
+
 // State management (engine/)
 export {
   createInitialState,

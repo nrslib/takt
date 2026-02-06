@@ -1,21 +1,23 @@
 /**
  * List tasks command — main entry point.
  *
- * Interactive UI for reviewing branch-based task results.
+ * Interactive UI for reviewing branch-based task results,
+ * pending tasks (.takt/tasks/), and failed tasks (.takt/failed/).
  * Individual actions (merge, delete, instruct, diff) are in taskActions.ts.
+ * Task delete actions are in taskDeleteActions.ts.
+ * Non-interactive mode is in listNonInteractive.ts.
  */
 
-import { execFileSync } from 'node:child_process';
 import {
-  detectDefaultBranch,
   listTaktBranches,
   buildListItems,
+  detectDefaultBranch,
+  TaskRunner,
 } from '../../../infra/task/index.js';
+import type { TaskListItem } from '../../../infra/task/index.js';
 import { selectOption, confirm } from '../../../shared/prompt/index.js';
-import { info } from '../../../shared/ui/index.js';
-import { createLogger } from '../../../shared/utils/index.js';
+import { info, header, blankLine } from '../../../shared/ui/index.js';
 import type { TaskExecutionOptions } from '../execute/types.js';
-import type { BranchListItem } from '../../../infra/task/index.js';
 import {
   type ListAction,
   showFullDiff,
@@ -25,6 +27,10 @@ import {
   deleteBranch,
   instructBranch,
 } from './taskActions.js';
+import { deletePendingTask, deleteFailedTask } from './taskDeleteActions.js';
+import { listTasksNonInteractive, type ListNonInteractiveOptions } from './listNonInteractive.js';
+
+export type { ListNonInteractiveOptions } from './listNonInteractive.js';
 
 export {
   type ListAction,
@@ -36,100 +42,25 @@ export {
   instructBranch,
 } from './taskActions.js';
 
-const log = createLogger('list-tasks');
+/** Task action type for the task action selection menu */
+type TaskAction = 'delete';
 
-export interface ListNonInteractiveOptions {
-  enabled: boolean;
-  action?: string;
-  branch?: string;
-  format?: string;
-  yes?: boolean;
-}
-
-function isValidAction(action: string): action is ListAction {
-  return action === 'diff' || action === 'try' || action === 'merge' || action === 'delete';
-}
-
-function printNonInteractiveList(items: BranchListItem[], format?: string): void {
-  const outputFormat = format ?? 'text';
-  if (outputFormat === 'json') {
-    console.log(JSON.stringify(items, null, 2));
-    return;
+/**
+ * Show task details and prompt for an action.
+ * Returns the selected action, or null if cancelled.
+ */
+async function showTaskAndPromptAction(task: TaskListItem): Promise<TaskAction | null> {
+  header(`[${task.kind}] ${task.name}`);
+  info(`  Created: ${task.createdAt}`);
+  if (task.content) {
+    info(`  ${task.content}`);
   }
+  blankLine();
 
-  for (const item of items) {
-    const worktreeLabel = item.info.worktreePath ? ' (worktree)' : '';
-    const instruction = item.originalInstruction ? ` - ${item.originalInstruction}` : '';
-    console.log(`${item.info.branch}${worktreeLabel} (${item.filesChanged} files)${instruction}`);
-  }
-}
-
-function showDiffStat(projectDir: string, defaultBranch: string, branch: string): void {
-  try {
-    const stat = execFileSync(
-      'git', ['diff', '--stat', `${defaultBranch}...${branch}`],
-      { cwd: projectDir, encoding: 'utf-8', stdio: 'pipe' },
-    );
-    console.log(stat);
-  } catch {
-    info('Could not generate diff stat');
-  }
-}
-
-async function listTasksNonInteractive(
-  cwd: string,
-  _options: TaskExecutionOptions | undefined,
-  nonInteractive: ListNonInteractiveOptions,
-): Promise<void> {
-  const defaultBranch = detectDefaultBranch(cwd);
-  const branches = listTaktBranches(cwd);
-
-  if (branches.length === 0) {
-    info('No tasks to list.');
-    return;
-  }
-
-  const items = buildListItems(cwd, branches, defaultBranch);
-
-  if (!nonInteractive.action) {
-    printNonInteractiveList(items, nonInteractive.format);
-    return;
-  }
-
-  if (!nonInteractive.branch) {
-    info('Missing --branch for non-interactive action.');
-    process.exit(1);
-  }
-
-  if (!isValidAction(nonInteractive.action)) {
-    info('Invalid --action. Use one of: diff, try, merge, delete.');
-    process.exit(1);
-  }
-
-  const item = items.find((entry) => entry.info.branch === nonInteractive.branch);
-  if (!item) {
-    info(`Branch not found: ${nonInteractive.branch}`);
-    process.exit(1);
-  }
-
-  switch (nonInteractive.action) {
-    case 'diff':
-      showDiffStat(cwd, defaultBranch, item.info.branch);
-      return;
-    case 'try':
-      tryMergeBranch(cwd, item);
-      return;
-    case 'merge':
-      mergeBranch(cwd, item);
-      return;
-    case 'delete':
-      if (!nonInteractive.yes) {
-        info('Delete requires --yes in non-interactive mode.');
-        process.exit(1);
-      }
-      deleteBranch(cwd, item);
-      return;
-  }
+  return await selectOption<TaskAction>(
+    `Action for ${task.name}:`,
+    [{ label: 'Delete', value: 'delete', description: 'Remove this task permanently' }],
+  );
 }
 
 /**
@@ -140,39 +71,52 @@ export async function listTasks(
   options?: TaskExecutionOptions,
   nonInteractive?: ListNonInteractiveOptions,
 ): Promise<void> {
-  log.info('Starting list-tasks');
-
   if (nonInteractive?.enabled) {
-    await listTasksNonInteractive(cwd, options, nonInteractive);
+    await listTasksNonInteractive(cwd, nonInteractive);
     return;
   }
 
   const defaultBranch = detectDefaultBranch(cwd);
-  let branches = listTaktBranches(cwd);
-
-  if (branches.length === 0) {
-    info('No tasks to list.');
-    return;
-  }
+  const runner = new TaskRunner(cwd);
 
   // Interactive loop
-  while (branches.length > 0) {
+  while (true) {
+    const branches = listTaktBranches(cwd);
     const items = buildListItems(cwd, branches, defaultBranch);
+    const pendingTasks = runner.listPendingTaskItems();
+    const failedTasks = runner.listFailedTasks();
 
-    const menuOptions = items.map((item, idx) => {
-      const filesSummary = `${item.filesChanged} file${item.filesChanged !== 1 ? 's' : ''} changed`;
-      const description = item.originalInstruction
-        ? `${filesSummary} | ${item.originalInstruction}`
-        : filesSummary;
-      return {
-        label: item.info.branch,
-        value: String(idx),
-        description,
-      };
-    });
+    if (items.length === 0 && pendingTasks.length === 0 && failedTasks.length === 0) {
+      info('No tasks to list.');
+      return;
+    }
+
+    const menuOptions = [
+      ...items.map((item, idx) => {
+        const filesSummary = `${item.filesChanged} file${item.filesChanged !== 1 ? 's' : ''} changed`;
+        const description = item.originalInstruction
+          ? `${filesSummary} | ${item.originalInstruction}`
+          : filesSummary;
+        return {
+          label: item.info.branch,
+          value: `branch:${idx}`,
+          description,
+        };
+      }),
+      ...pendingTasks.map((task, idx) => ({
+        label: `[pending] ${task.name}`,
+        value: `pending:${idx}`,
+        description: task.content,
+      })),
+      ...failedTasks.map((task, idx) => ({
+        label: `[failed] ${task.name}`,
+        value: `failed:${idx}`,
+        description: task.content,
+      })),
+    ];
 
     const selected = await selectOption<string>(
-      'List Tasks (Branches)',
+      'List Tasks',
       menuOptions,
     );
 
@@ -180,47 +124,63 @@ export async function listTasks(
       return;
     }
 
-    const selectedIdx = parseInt(selected, 10);
-    const item = items[selectedIdx];
-    if (!item) continue;
+    const colonIdx = selected.indexOf(':');
+    if (colonIdx === -1) continue;
+    const type = selected.slice(0, colonIdx);
+    const idx = parseInt(selected.slice(colonIdx + 1), 10);
+    if (Number.isNaN(idx)) continue;
 
-    // Action loop: re-show menu after viewing diff
-    let action: ListAction | null;
-    do {
-      action = await showDiffAndPromptAction(cwd, defaultBranch, item);
+    if (type === 'branch') {
+      const item = items[idx];
+      if (!item) continue;
 
-      if (action === 'diff') {
-        showFullDiff(cwd, defaultBranch, item.info.branch);
-      }
-    } while (action === 'diff');
+      // Action loop: re-show menu after viewing diff
+      let action: ListAction | null;
+      do {
+        action = await showDiffAndPromptAction(cwd, defaultBranch, item);
 
-    if (action === null) continue;
-
-    switch (action) {
-      case 'instruct':
-        await instructBranch(cwd, item, options);
-        break;
-      case 'try':
-        tryMergeBranch(cwd, item);
-        break;
-      case 'merge':
-        mergeBranch(cwd, item);
-        break;
-      case 'delete': {
-        const confirmed = await confirm(
-          `Delete ${item.info.branch}? This will discard all changes.`,
-          false,
-        );
-        if (confirmed) {
-          deleteBranch(cwd, item);
+        if (action === 'diff') {
+          showFullDiff(cwd, defaultBranch, item.info.branch);
         }
-        break;
+      } while (action === 'diff');
+
+      if (action === null) continue;
+
+      switch (action) {
+        case 'instruct':
+          await instructBranch(cwd, item, options);
+          break;
+        case 'try':
+          tryMergeBranch(cwd, item);
+          break;
+        case 'merge':
+          mergeBranch(cwd, item);
+          break;
+        case 'delete': {
+          const confirmed = await confirm(
+            `Delete ${item.info.branch}? This will discard all changes.`,
+            false,
+          );
+          if (confirmed) {
+            deleteBranch(cwd, item);
+          }
+          break;
+        }
+      }
+    } else if (type === 'pending') {
+      const task = pendingTasks[idx];
+      if (!task) continue;
+      const taskAction = await showTaskAndPromptAction(task);
+      if (taskAction === 'delete') {
+        await deletePendingTask(task);
+      }
+    } else if (type === 'failed') {
+      const task = failedTasks[idx];
+      if (!task) continue;
+      const taskAction = await showTaskAndPromptAction(task);
+      if (taskAction === 'delete') {
+        await deleteFailedTask(task);
       }
     }
-
-    // Refresh branch list after action
-    branches = listTaktBranches(cwd);
   }
-
-  info('All tasks listed.');
 }

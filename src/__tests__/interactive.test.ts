@@ -123,11 +123,12 @@ function setupMockProvider(responses: string[]): void {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockSelectOption.mockResolvedValue('yes');
+  // selectPostSummaryAction uses selectOption with action values
+  mockSelectOption.mockResolvedValue('execute');
 });
 
 describe('interactiveMode', () => {
-  it('should return confirmed=false when user types /cancel', async () => {
+  it('should return action=cancel when user types /cancel', async () => {
     // Given
     setupInputSequence(['/cancel']);
     setupMockProvider([]);
@@ -136,11 +137,11 @@ describe('interactiveMode', () => {
     const result = await interactiveMode('/project');
 
     // Then
-    expect(result.confirmed).toBe(false);
+    expect(result.action).toBe('cancel');
     expect(result.task).toBe('');
   });
 
-  it('should return confirmed=false on EOF (Ctrl+D)', async () => {
+  it('should return action=cancel on EOF (Ctrl+D)', async () => {
     // Given
     setupInputSequence([null]);
     setupMockProvider([]);
@@ -149,7 +150,7 @@ describe('interactiveMode', () => {
     const result = await interactiveMode('/project');
 
     // Then
-    expect(result.confirmed).toBe(false);
+    expect(result.action).toBe('cancel');
   });
 
   it('should call provider with allowed tools for codebase exploration', async () => {
@@ -172,7 +173,7 @@ describe('interactiveMode', () => {
     );
   });
 
-  it('should return confirmed=true with task on /go after conversation', async () => {
+  it('should return action=execute with task on /go after conversation', async () => {
     // Given
     setupInputSequence(['add auth feature', '/go']);
     setupMockProvider(['What kind of authentication?', 'Implement auth feature with chosen method.']);
@@ -181,7 +182,7 @@ describe('interactiveMode', () => {
     const result = await interactiveMode('/project');
 
     // Then
-    expect(result.confirmed).toBe(true);
+    expect(result.action).toBe('execute');
     expect(result.task).toBe('Implement auth feature with chosen method.');
   });
 
@@ -193,8 +194,8 @@ describe('interactiveMode', () => {
     // When
     const result = await interactiveMode('/project');
 
-    // Then: should not confirm (fell through to /cancel)
-    expect(result.confirmed).toBe(false);
+    // Then: should cancel (fell through to /cancel)
+    expect(result.action).toBe('cancel');
   });
 
   it('should skip empty input', async () => {
@@ -206,7 +207,7 @@ describe('interactiveMode', () => {
     const result = await interactiveMode('/project');
 
     // Then
-    expect(result.confirmed).toBe(true);
+    expect(result.action).toBe('execute');
     const mockProvider = mockGetProvider.mock.results[0]!.value as { call: ReturnType<typeof vi.fn> };
     expect(mockProvider.call).toHaveBeenCalledTimes(2);
   });
@@ -220,7 +221,7 @@ describe('interactiveMode', () => {
     const result = await interactiveMode('/project');
 
     // Then: task should be a summary and prompt should include full history
-    expect(result.confirmed).toBe(true);
+    expect(result.action).toBe('execute');
     expect(result.task).toBe('Summarized task.');
     const mockProvider = mockGetProvider.mock.results[0]!.value as { call: ReturnType<typeof vi.fn> };
     const summaryPrompt = mockProvider.call.mock.calls[2]?.[1] as string;
@@ -259,7 +260,7 @@ describe('interactiveMode', () => {
     expect(mockProvider.call.mock.calls[0]?.[1]).toBe('a');
 
     // /go should work because initialInput already started conversation
-    expect(result.confirmed).toBe(true);
+    expect(result.action).toBe('execute');
     expect(result.task).toBe('Clarify task for "a".');
   });
 
@@ -278,12 +279,12 @@ describe('interactiveMode', () => {
     expect(mockProvider.call.mock.calls[1]?.[1]).toBe('fix the login page');
 
     // Task still contains all history for downstream use
-    expect(result.confirmed).toBe(true);
+    expect(result.action).toBe('execute');
     expect(result.task).toBe('Fix login page with clarified scope.');
   });
 
   describe('/play command', () => {
-    it('should return confirmed=true with task on /play command', async () => {
+    it('should return action=execute with task on /play command', async () => {
       // Given
       setupInputSequence(['/play implement login feature']);
       setupMockProvider([]);
@@ -292,7 +293,7 @@ describe('interactiveMode', () => {
       const result = await interactiveMode('/project');
 
       // Then
-      expect(result.confirmed).toBe(true);
+      expect(result.action).toBe('execute');
       expect(result.task).toBe('implement login feature');
     });
 
@@ -304,8 +305,8 @@ describe('interactiveMode', () => {
       // When
       const result = await interactiveMode('/project');
 
-      // Then: should not confirm (fell through to /cancel)
-      expect(result.confirmed).toBe(false);
+      // Then: should cancel (fell through to /cancel)
+      expect(result.action).toBe('cancel');
     });
 
     it('should handle /play with leading/trailing spaces', async () => {
@@ -317,7 +318,7 @@ describe('interactiveMode', () => {
       const result = await interactiveMode('/project');
 
       // Then
-      expect(result.confirmed).toBe(true);
+      expect(result.action).toBe('execute');
       expect(result.task).toBe('test task');
     });
 
@@ -332,8 +333,64 @@ describe('interactiveMode', () => {
       // Then: provider should NOT have been called (no summary needed)
       const mockProvider = mockGetProvider.mock.results[0]?.value as { call: ReturnType<typeof vi.fn> };
       expect(mockProvider.call).not.toHaveBeenCalled();
-      expect(result.confirmed).toBe(true);
+      expect(result.action).toBe('execute');
       expect(result.task).toBe('quick task');
+    });
+  });
+
+  describe('action selection after /go', () => {
+    it('should return action=create_issue when user selects create issue', async () => {
+      // Given
+      setupInputSequence(['describe task', '/go']);
+      setupMockProvider(['response', 'Summarized task.']);
+      mockSelectOption.mockResolvedValue('create_issue');
+
+      // When
+      const result = await interactiveMode('/project');
+
+      // Then
+      expect(result.action).toBe('create_issue');
+      expect(result.task).toBe('Summarized task.');
+    });
+
+    it('should return action=save_task when user selects save task', async () => {
+      // Given
+      setupInputSequence(['describe task', '/go']);
+      setupMockProvider(['response', 'Summarized task.']);
+      mockSelectOption.mockResolvedValue('save_task');
+
+      // When
+      const result = await interactiveMode('/project');
+
+      // Then
+      expect(result.action).toBe('save_task');
+      expect(result.task).toBe('Summarized task.');
+    });
+
+    it('should continue editing when user selects continue', async () => {
+      // Given: user selects 'continue' first, then cancels
+      setupInputSequence(['describe task', '/go', '/cancel']);
+      setupMockProvider(['response', 'Summarized task.']);
+      mockSelectOption.mockResolvedValueOnce('continue');
+
+      // When
+      const result = await interactiveMode('/project');
+
+      // Then: should fall through to /cancel
+      expect(result.action).toBe('cancel');
+    });
+
+    it('should continue editing when user presses ESC (null)', async () => {
+      // Given: selectOption returns null (ESC), then user cancels
+      setupInputSequence(['describe task', '/go', '/cancel']);
+      setupMockProvider(['response', 'Summarized task.']);
+      mockSelectOption.mockResolvedValueOnce(null);
+
+      // When
+      const result = await interactiveMode('/project');
+
+      // Then: should fall through to /cancel
+      expect(result.action).toBe('cancel');
     });
   });
 });

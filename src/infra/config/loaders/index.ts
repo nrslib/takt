@@ -19,6 +19,7 @@ export {
 
 export {
   loadDefaultCategories,
+  getDefaultCategoriesPath,
   getPieceCategories,
   buildCategorizedPieces,
   findPieceCategories,

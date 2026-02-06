@@ -9,12 +9,12 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { stringify as stringifyYaml } from 'yaml';
 import { promptInput, confirm } from '../../../shared/prompt/index.js';
-import { success, info } from '../../../shared/ui/index.js';
+import { success, info, error } from '../../../shared/ui/index.js';
 import { summarizeTaskName, type TaskFileData } from '../../../infra/task/index.js';
 import { getPieceDescription } from '../../../infra/config/index.js';
 import { determinePiece } from '../execute/selectAndExecute.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
-import { isIssueReference, resolveIssueTask, parseIssueNumbers } from '../../../infra/github/index.js';
+import { isIssueReference, resolveIssueTask, parseIssueNumbers, createIssue } from '../../../infra/github/index.js';
 import { interactiveMode } from '../../interactive/index.js';
 
 const log = createLogger('add-task');
@@ -32,6 +32,74 @@ async function generateFilename(tasksDir: string, taskContent: string, cwd: stri
   }
 
   return filename;
+}
+
+/**
+ * Save a task file to .takt/tasks/ with YAML format.
+ *
+ * Common logic extracted from addTask(). Used by both addTask()
+ * and saveTaskFromInteractive().
+ */
+export async function saveTaskFile(
+  cwd: string,
+  taskContent: string,
+  options?: { piece?: string; issue?: number; worktree?: boolean | string; branch?: string },
+): Promise<string> {
+  const tasksDir = path.join(cwd, '.takt', 'tasks');
+  fs.mkdirSync(tasksDir, { recursive: true });
+
+  const firstLine = taskContent.split('\n')[0] || taskContent;
+  const filename = await generateFilename(tasksDir, firstLine, cwd);
+
+  const taskData: TaskFileData = {
+    task: taskContent,
+    ...(options?.worktree !== undefined && { worktree: options.worktree }),
+    ...(options?.branch && { branch: options.branch }),
+    ...(options?.piece && { piece: options.piece }),
+    ...(options?.issue !== undefined && { issue: options.issue }),
+  };
+
+  const filePath = path.join(tasksDir, filename);
+  const yamlContent = stringifyYaml(taskData);
+  fs.writeFileSync(filePath, yamlContent, 'utf-8');
+
+  log.info('Task created', { filePath, taskData });
+
+  return filePath;
+}
+
+/**
+ * Create a GitHub Issue from a task description.
+ *
+ * Extracts the first line as the issue title (truncated to 100 chars),
+ * uses the full task as the body, and displays success/error messages.
+ */
+export function createIssueFromTask(task: string): void {
+  info('Creating GitHub Issue...');
+  const firstLine = task.split('\n')[0] || task;
+  const title = firstLine.length > 100 ? `${firstLine.slice(0, 97)}...` : firstLine;
+  const issueResult = createIssue({ title, body: task });
+  if (issueResult.success) {
+    success(`Issue created: ${issueResult.url}`);
+  } else {
+    error(`Failed to create issue: ${issueResult.error}`);
+  }
+}
+
+/**
+ * Save a task from interactive mode result.
+ * Does not prompt for worktree/branch settings.
+ */
+export async function saveTaskFromInteractive(
+  cwd: string,
+  task: string,
+  piece?: string,
+): Promise<void> {
+  const filePath = await saveTaskFile(cwd, task, { piece });
+  const filename = path.basename(filePath);
+  success(`Task created: ${filename}`);
+  info(`  Path: ${filePath}`);
+  if (piece) info(`  Piece: ${piece}`);
 }
 
 /**
@@ -82,7 +150,13 @@ export async function addTask(cwd: string, task?: string): Promise<void> {
 
     // Interactive mode: AI conversation to refine task
     const result = await interactiveMode(cwd, undefined, pieceContext);
-    if (!result.confirmed) {
+
+    if (result.action === 'create_issue') {
+      createIssueFromTask(result.task);
+      return;
+    }
+
+    if (result.action !== 'execute' && result.action !== 'save_task') {
       info('Cancelled.');
       return;
     }
@@ -91,11 +165,7 @@ export async function addTask(cwd: string, task?: string): Promise<void> {
     taskContent = result.task;
   }
 
-  // 3. 要約からファイル名生成
-  const firstLine = taskContent.split('\n')[0] || taskContent;
-  const filename = await generateFilename(tasksDir, firstLine, cwd);
-
-  // 4. ワークツリー/ブランチ設定
+  // 3. ワークツリー/ブランチ設定
   let worktree: boolean | string | undefined;
   let branch: string | undefined;
 
@@ -110,27 +180,15 @@ export async function addTask(cwd: string, task?: string): Promise<void> {
     }
   }
 
-  // 5. YAMLファイル作成
-  const taskData: TaskFileData = { task: taskContent };
-  if (worktree !== undefined) {
-    taskData.worktree = worktree;
-  }
-  if (branch) {
-    taskData.branch = branch;
-  }
-  if (piece) {
-    taskData.piece = piece;
-  }
-  if (issueNumber !== undefined) {
-    taskData.issue = issueNumber;
-  }
+  // 4. YAMLファイル作成
+  const filePath = await saveTaskFile(cwd, taskContent, {
+    piece,
+    issue: issueNumber,
+    worktree,
+    branch,
+  });
 
-  const filePath = path.join(tasksDir, filename);
-  const yamlContent = stringifyYaml(taskData);
-  fs.writeFileSync(filePath, yamlContent, 'utf-8');
-
-  log.info('Task created', { filePath, taskData });
-
+  const filename = path.basename(filePath);
   success(`Task created: ${filename}`);
   info(`  Path: ${filePath}`);
   if (worktree) {

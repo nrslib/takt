@@ -66,3 +66,12 @@ export interface SummarizeOptions {
   /** Use LLM for summarization (default: true). If false, uses romanization. */
   useLLM?: boolean;
 }
+
+/** pending/failedタスクのリストアイテム */
+export interface TaskListItem {
+  kind: 'pending' | 'failed';
+  name: string;
+  createdAt: string;
+  filePath: string;
+  content: string;
+}

@@ -58,7 +58,7 @@ async function selectPieceWithDirectoryCategories(cwd: string): Promise<string |
  * Select a piece interactively with 2-stage category support.
  */
 async function selectPiece(cwd: string): Promise<string | null> {
-  const categoryConfig = getPieceCategories(cwd);
+  const categoryConfig = getPieceCategories();
   if (categoryConfig) {
     const current = getCurrentPiece(cwd);
     const allPieces = loadAllPiecesWithSources(cwd);

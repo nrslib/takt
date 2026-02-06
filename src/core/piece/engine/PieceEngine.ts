@@ -14,11 +14,13 @@ import type {
   PieceState,
   PieceMovement,
   AgentResponse,
+  LoopMonitorConfig,
 } from '../../models/types.js';
 import { COMPLETE_MOVEMENT, ABORT_MOVEMENT, ERROR_MESSAGES } from '../constants.js';
 import type { PieceEngineOptions } from '../types.js';
 import { determineNextMovementByRules } from './transitions.js';
 import { LoopDetector } from './loop-detector.js';
+import { CycleDetector } from './cycle-detector.js';
 import { handleBlocked } from './blocked-handler.js';
 import {
   createInitialState,
@@ -51,6 +53,7 @@ export class PieceEngine extends EventEmitter {
   private task: string;
   private options: PieceEngineOptions;
   private loopDetector: LoopDetector;
+  private cycleDetector: CycleDetector;
   private reportDir: string;
   private abortRequested = false;
 
@@ -72,6 +75,7 @@ export class PieceEngine extends EventEmitter {
     this.task = task;
     this.options = options;
     this.loopDetector = new LoopDetector(config.loopDetection);
+    this.cycleDetector = new CycleDetector(config.loopMonitors ?? []);
     this.reportDir = `.takt/reports/${generateReportDir(task)}`;
     this.ensureReportDirExists();
     this.validateConfig();
@@ -178,6 +182,26 @@ export class PieceEngine extends EventEmitter {
           if (rule.next && !movementNames.has(rule.next)) {
             throw new Error(
               `Invalid rule in movement "${movement.name}": target movement "${rule.next}" does not exist`
+            );
+          }
+        }
+      }
+    }
+
+    // Validate loop_monitors
+    if (this.config.loopMonitors) {
+      for (const monitor of this.config.loopMonitors) {
+        for (const cycleName of monitor.cycle) {
+          if (!movementNames.has(cycleName)) {
+            throw new Error(
+              `Invalid loop_monitor: cycle references unknown movement "${cycleName}"`
+            );
+          }
+        }
+        for (const rule of monitor.judge.rules) {
+          if (!movementNames.has(rule.next)) {
+            throw new Error(
+              `Invalid loop_monitor judge rule: target movement "${rule.next}" does not exist`
             );
           }
         }
@@ -300,6 +324,120 @@ export class PieceEngine extends EventEmitter {
     );
   }
 
+  /**
+   * Build the default instruction template for a loop monitor judge.
+   * Used when the monitor config does not specify a custom instruction_template.
+   */
+  private buildDefaultJudgeInstructionTemplate(
+    monitor: LoopMonitorConfig,
+    cycleCount: number,
+    language: string,
+  ): string {
+    const cycleNames = monitor.cycle.join(' → ');
+    const rulesDesc = monitor.judge.rules.map((r) => `- ${r.condition} → ${r.next}`).join('\n');
+
+    if (language === 'ja') {
+      return [
+        `ムーブメントのサイクル [${cycleNames}] が ${cycleCount} 回繰り返されました。`,
+        '',
+        'このループが健全（進捗がある）か、非生産的（同じ問題を繰り返している）かを判断してください。',
+        '',
+        '**判断の選択肢:**',
+        rulesDesc,
+        '',
+        '**判断基準:**',
+        '- 各サイクルで新しい問題が発見・修正されているか',
+        '- 同じ指摘が繰り返されていないか',
+        '- 全体的な進捗があるか',
+      ].join('\n');
+    }
+
+    return [
+      `The movement cycle [${cycleNames}] has repeated ${cycleCount} times.`,
+      '',
+      'Determine whether this loop is healthy (making progress) or unproductive (repeating the same issues).',
+      '',
+      '**Decision options:**',
+      rulesDesc,
+      '',
+      '**Judgment criteria:**',
+      '- Are new issues being found/fixed in each cycle?',
+      '- Are the same findings being repeated?',
+      '- Is there overall progress?',
+    ].join('\n');
+  }
+
+  /**
+   * Execute a loop monitor judge as a synthetic movement.
+   * Returns the next movement name determined by the judge.
+   */
+  private async runLoopMonitorJudge(
+    monitor: LoopMonitorConfig,
+    cycleCount: number,
+  ): Promise<string> {
+    const language = this.options.language ?? 'en';
+    const instructionTemplate = monitor.judge.instructionTemplate
+      ?? this.buildDefaultJudgeInstructionTemplate(monitor, cycleCount, language);
+
+    // Replace {cycle_count} in custom templates
+    const processedTemplate = instructionTemplate.replace(/\{cycle_count\}/g, String(cycleCount));
+
+    // Build a synthetic PieceMovement for the judge
+    const judgeMovement: PieceMovement = {
+      name: `_loop_judge_${monitor.cycle.join('_')}`,
+      agent: monitor.judge.agent,
+      agentPath: monitor.judge.agentPath,
+      agentDisplayName: 'loop-judge',
+      edit: false,
+      instructionTemplate: processedTemplate,
+      rules: monitor.judge.rules.map((r) => ({
+        condition: r.condition,
+        next: r.next,
+      })),
+      passPreviousResponse: true,
+      allowedTools: ['Read', 'Glob', 'Grep'],
+    };
+
+    log.info('Running loop monitor judge', {
+      cycle: monitor.cycle,
+      cycleCount,
+      threshold: monitor.threshold,
+    });
+
+    this.state.iteration++;
+    const movementIteration = incrementMovementIteration(this.state, judgeMovement.name);
+    const prebuiltInstruction = this.movementExecutor.buildInstruction(
+      judgeMovement, movementIteration, this.state, this.task, this.config.maxIterations,
+    );
+
+    this.emit('movement:start', judgeMovement, this.state.iteration, prebuiltInstruction);
+
+    const { response, instruction } = await this.movementExecutor.runNormalMovement(
+      judgeMovement,
+      this.state,
+      this.task,
+      this.config.maxIterations,
+      this.updateAgentSession.bind(this),
+      prebuiltInstruction,
+    );
+    this.emitCollectedReports();
+    this.emit('movement:complete', judgeMovement, response, instruction);
+
+    // Resolve next movement from the judge's rules
+    const nextMovement = this.resolveNextMovement(judgeMovement, response);
+
+    log.info('Loop monitor judge decision', {
+      cycle: monitor.cycle,
+      nextMovement,
+      matchedRuleIndex: response.matchedRuleIndex,
+    });
+
+    // Reset cycle detector to prevent re-triggering immediately
+    this.cycleDetector.reset();
+
+    return nextMovement;
+  }
+
   /** Run the piece to completion */
   async run(): Promise<PieceState> {
     while (this.state.status === 'running') {
@@ -378,7 +516,7 @@ export class PieceEngine extends EventEmitter {
           break;
         }
 
-        const nextMovement = this.resolveNextMovement(movement, response);
+        let nextMovement = this.resolveNextMovement(movement, response);
         log.debug('Movement transition', {
           from: movement.name,
           status: response.status,
@@ -409,6 +547,23 @@ export class PieceEngine extends EventEmitter {
             this.state.currentMovement = movement.name;
             continue;
           }
+        }
+
+        // Check loop monitors (cycle detection) after movement completion
+        const cycleCheck = this.cycleDetector.recordAndCheck(movement.name);
+        if (cycleCheck.triggered && cycleCheck.monitor) {
+          log.info('Loop monitor cycle threshold reached', {
+            cycle: cycleCheck.monitor.cycle,
+            cycleCount: cycleCheck.cycleCount,
+            threshold: cycleCheck.monitor.threshold,
+          });
+          this.emit('movement:cycle_detected', cycleCheck.monitor, cycleCheck.cycleCount);
+
+          // Run the judge to decide what to do
+          nextMovement = await this.runLoopMonitorJudge(
+            cycleCheck.monitor,
+            cycleCheck.cycleCount,
+          );
         }
 
         if (nextMovement === COMPLETE_MOVEMENT) {

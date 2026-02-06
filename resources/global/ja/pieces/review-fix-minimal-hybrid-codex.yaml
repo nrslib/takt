@@ -1,0 +1,428 @@
+# Review-Fix Minimal TAKT Piece
+# Review -> Fix (if needed) -> Re-review -> Complete
+# (レビューから開始、実装ムーブメントなし)
+#
+# Template Variables (auto-injected):
+#   {iteration}      - Piece-wide turn count (total movements executed across all agents)
+#   {max_iterations} - Maximum iterations allowed for the piece
+#   {movement_iteration} - Per-movement iteration count (how many times THIS movement has been executed)
+#   {task}           - Original user request (auto-injected)
+#   {previous_response} - Output from the previous movement (auto-injected)
+#   {user_inputs}    - Accumulated user inputs during piece (auto-injected)
+#   {report_dir}     - Report directory name (e.g., "20250126-143052-task-summary")
+
+name: review-fix-minimal-hybrid-codex
+description: 既存コードのレビューと修正ピース（レビュー開始、実装なし）
+
+max_iterations: 20
+
+initial_movement: reviewers
+
+movements:
+  - name: implement
+    edit: true
+    agent: ../agents/default/coder.md
+    provider: codex
+    report:
+      - Scope: 01-coder-scope.md
+      - Decisions: 02-coder-decisions.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    permission_mode: edit
+    instruction_template: |
+      タスクを実装してください。
+      Piece Contextに示されたReport Directory内のファイルのみ参照してください。他のレポートディレクトリは検索/参照しないでください。
+
+      **Scopeレポートフォーマット（実装開始時に作成）:**
+      ```markdown
+      # 変更スコープ宣言
+
+      ## タスク
+      {タスクの1行要約}
+
+      ## 変更予定
+      | 種別 | ファイル |
+      |------|---------|
+      | 作成 | `src/example.ts` |
+      | 変更 | `src/routes.ts` |
+
+      ## 推定規模
+      Small / Medium / Large
+
+      ## 影響範囲
+      - {影響するモジュールや機能}
+      ```
+
+      **Decisionsレポートフォーマット（実装完了時、決定がある場合のみ）:**
+      ```markdown
+      # 決定ログ
+
+      ## 1. {決定内容}
+      - **背景**: {なぜ決定が必要だったか}
+      - **検討した選択肢**: {選択肢リスト}
+      - **理由**: {選んだ理由}
+      ```
+
+      **必須出力（見出しを含める）**
+      ## 作業結果
+      - {実施内容の要約}
+      ## 変更内容
+      - {変更内容の要約}
+      ## テスト結果
+      - {実行コマンドと結果}
+
+    rules:
+      - condition: 実装が完了した
+        next: reviewers
+      - condition: 実装を進行できない
+        next: ABORT
+      - condition: ユーザーへの確認事項があるためユーザー入力が必要
+        next: implement
+        requires_user_input: true
+        interactive_only: true
+
+  - name: reviewers
+    parallel:
+      - name: ai_review
+        edit: false
+        agent: ../agents/default/ai-antipattern-reviewer.md
+        report:
+          name: 03-ai-review.md
+          format: |
+            ```markdown
+            # AI生成コードレビュー
+
+            ## 結果: APPROVE / REJECT
+
+            ## サマリー
+            {1文で結果を要約}
+
+            ## 検証した項目
+            | 観点 | 結果 | 備考 |
+            |------|------|------|
+            | 仮定の妥当性 | ✅ | - |
+            | API/ライブラリの実在 | ✅ | - |
+            | コンテキスト適合 | ✅ | - |
+            | スコープ | ✅ | - |
+
+            ## 問題点（REJECTの場合）
+            | # | カテゴリ | 場所 | 問題 |
+            |---|---------|------|------|
+            | 1 | 幻覚API | `src/file.ts:23` | 存在しないメソッド |
+            ```
+
+            **認知負荷軽減ルール:**
+            - 問題なし → サマリー1文 + チェック表のみ（10行以内）
+            - 問題あり → + 問題を表形式で（25行以内）
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+
+          - WebSearch
+          - WebFetch
+        instruction_template: |
+          AI特有の問題についてコードをレビューしてください:
+          - 仮定の検証
+          - もっともらしいが間違っているパターン
+          - 既存コードベースとの適合性
+          - スコープクリープの検出
+        rules:
+          - condition: "AI特有の問題なし"
+          - condition: "AI特有の問題あり"
+
+      - name: supervise
+        edit: false
+        agent: ../agents/default/supervisor.md
+        report:
+          - Validation: 05-supervisor-validation.md
+          - Summary: summary.md
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+
+          - Bash
+          - WebSearch
+          - WebFetch
+        instruction_template: |
+          テスト実行、ビルド確認、最終承認を行ってください。
+
+          **ピース全体の確認:**
+          1. 実装結果が元の要求を満たしているか
+          2. AI Reviewの指摘が対応されているか
+          3. 元のタスク目的が達成されているか
+
+          **レポートの確認:** Report Directory内の全レポートを読み、
+          未対応の改善提案がないか確認してください。
+
+          **Validationレポートフォーマット:**
+          ```markdown
+          # 最終検証結果
+
+          ## 結果: APPROVE / REJECT
+
+          ## 検証サマリー
+          | 項目 | 状態 | 確認方法 |
+          |------|------|---------|
+          | 要求充足 | ✅ | 要求リストと照合 |
+          | テスト | ✅ | `npm test` (N passed) |
+          | ビルド | ✅ | `npm run build` 成功 |
+          | 動作確認 | ✅ | 主要フロー確認 |
+
+          ## 成果物
+          - 作成: {作成したファイル}
+          - 変更: {変更したファイル}
+
+          ## 未完了項目（REJECTの場合）
+          | # | 項目 | 理由 |
+          |---|------|------|
+          | 1 | {項目} | {理由} |
+          ```
+
+          **Summaryレポートフォーマット（APPROVEの場合のみ）:**
+          ```markdown
+          # タスク完了サマリー
+
+          ## タスク
+          {元の要求を1-2文で}
+
+          ## 結果
+          ✅ 完了
+
+          ## 変更内容
+          | 種別 | ファイル | 概要 |
+          |------|---------|------|
+          | 作成 | `src/file.ts` | 概要説明 |
+
+          ## レビュー結果
+          | レビュー | 結果 |
+          |---------|------|
+          | AI Review | ✅ APPROVE |
+          | Supervisor | ✅ APPROVE |
+
+          ## 確認コマンド
+          ```bash
+          npm test
+          npm run build
+          ```
+          ```
+        rules:
+          - condition: "すべて問題なし"
+          - condition: "要求未達成、テスト失敗、ビルドエラー"
+
+    rules:
+      - condition: all("AI特有の問題なし", "すべて問題なし")
+        next: COMPLETE
+      - condition: all("AI特有の問題あり", "要求未達成、テスト失敗、ビルドエラー")
+        next: fix_both
+      - condition: any("AI特有の問題あり")
+        next: ai_fix
+      - condition: any("要求未達成、テスト失敗、ビルドエラー")
+        next: supervise_fix
+
+  - name: fix_both
+    parallel:
+      - name: ai_fix_parallel
+        edit: true
+        agent: ../agents/default/coder.md
+        provider: codex
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Edit
+
+          - Bash
+          - WebSearch
+          - WebFetch
+        permission_mode: edit
+        rules:
+          - condition: AI問題の修正完了
+          - condition: 修正不要（指摘対象ファイル/仕様の確認済み）
+          - condition: 判断できない、情報不足
+        instruction_template: |
+          **これは {movement_iteration} 回目の AI Review です。**
+
+          2回目以降は、前回の修正が実際には行われていなかったということです。
+          **あなたの「修正済み」という認識が間違っています。**
+
+          **まず認めること:**
+          - 「修正済み」と思っていたファイルは実際には修正されていない
+          - 前回の作業内容の認識が間違っている
+          - ゼロベースで考え直す必要がある
+
+          **必須アクション:**
+          1. 指摘された全ファイルを Read tool で開く（思い込みを捨てて事実確認）
+          2. 問題箇所を grep で検索して実在を確認する
+          3. 確認した問題を Edit tool で修正する
+          4. テストを実行して検証する（例: `npm test`, `./gradlew test`）
+          5. 「何を確認して、何を修正したか」を具体的に報告する
+
+          **報告フォーマット:**
+          - ❌ 「既に修正されています」
+          - ✅ 「ファイルXのL123を確認した結果、問題Yが存在したため、Zに修正しました」
+
+          **絶対に禁止:**
+          - ファイルを開かずに「修正済み」と報告
+          - 思い込みで判断
+          - AI Reviewer が REJECT した問題の放置
+
+          **修正不要の扱い（必須）**
+          - AI Reviewの指摘ごとに「対象ファイルの確認結果」を示せない場合は修正不要と判断しない
+          - 指摘が「生成物」「仕様同期」に関係する場合は、生成元/仕様の確認ができなければ「判断できない、情報不足」に対応するタグを出力する
+          - 修正不要の場合は「判断できない、情報不足」に対応するタグを出力し、理由と確認範囲を明記する
+
+          **必須出力（見出しを含める）**
+          ## 確認したファイル
+          - {ファイルパス:行番号}
+          ## 実行した検索
+          - {コマンドと要約}
+          ## 修正内容
+          - {変更内容}
+          ## テスト結果
+          - {実行コマンドと結果}
+
+      - name: supervise_fix_parallel
+        edit: true
+        agent: ../agents/default/coder.md
+        provider: codex
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Edit
+
+          - Bash
+          - WebSearch
+          - WebFetch
+        permission_mode: edit
+        rules:
+          - condition: 監督者の指摘に対する修正が完了した
+          - condition: 修正を進行できない
+        instruction_template: |
+          監督者からの指摘を修正してください。
+
+          監督者は全体を俯瞰した視点から問題を指摘しています。
+          優先度の高い項目から順に対応してください。
+
+          **必須出力（見出しを含める）**
+          ## 作業結果
+          - {実施内容の要約}
+          ## 変更内容
+          - {変更内容の要約}
+          ## テスト結果
+          - {実行コマンドと結果}
+          ## 証拠
+          - {確認したファイル/検索/差分/ログの要点を列挙}
+
+    rules:
+      - condition: all("AI問題の修正完了", "監督者の指摘に対する修正が完了した")
+        next: reviewers
+      - condition: any("修正不要（指摘対象ファイル/仕様の確認済み）", "判断できない、情報不足", "修正を進行できない")
+        next: implement
+
+  - name: ai_fix
+    edit: true
+    agent: ../agents/default/coder.md
+    provider: codex
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    permission_mode: edit
+    rules:
+      - condition: AI問題の修正完了
+        next: reviewers
+      - condition: 修正不要（指摘対象ファイル/仕様の確認済み）
+        next: implement
+      - condition: 判断できない、情報不足
+        next: implement
+    instruction_template: |
+      **これは {movement_iteration} 回目の AI Review です。**
+
+      2回目以降は、前回の修正が実際には行われていなかったということです。
+      **あなたの「修正済み」という認識が間違っています。**
+
+      **まず認めること:**
+      - 「修正済み」と思っていたファイルは実際には修正されていない
+      - 前回の作業内容の認識が間違っている
+      - ゼロベースで考え直す必要がある
+
+      **必須アクション:**
+      1. 指摘された全ファイルを Read tool で開く（思い込みを捨てて事実確認）
+      2. 問題箇所を grep で検索して実在を確認する
+      3. 確認した問題を Edit tool で修正する
+      4. テストを実行して検証する（例: `npm test`, `./gradlew test`）
+      5. 「何を確認して、何を修正したか」を具体的に報告する
+
+      **報告フォーマット:**
+      - ❌ 「既に修正されています」
+      - ✅ 「ファイルXのL123を確認した結果、問題Yが存在したため、Zに修正しました」
+
+      **絶対に禁止:**
+      - ファイルを開かずに「修正済み」と報告
+      - 思い込みで判断
+      - AI Reviewer が REJECT した問題の放置
+
+      **修正不要の扱い（必須）**
+      - AI Reviewの指摘ごとに「対象ファイルの確認結果」を示せない場合は修正不要と判断しない
+      - 指摘が「生成物」「仕様同期」に関係する場合は、生成元/仕様の確認ができなければ「判断できない、情報不足」に対応するタグを出力する
+      - 修正不要の場合は「判断できない、情報不足」に対応するタグを出力し、理由と確認範囲を明記する
+
+      **必須出力（見出しを含める）**
+      ## 確認したファイル
+      - {ファイルパス:行番号}
+      ## 実行した検索
+      - {コマンドと要約}
+      ## 修正内容
+      - {変更内容}
+      ## テスト結果
+      - {実行コマンドと結果}
+
+  - name: supervise_fix
+    edit: true
+    agent: ../agents/default/coder.md
+    provider: codex
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    permission_mode: edit
+    rules:
+      - condition: 監督者の指摘に対する修正が完了した
+        next: reviewers
+      - condition: 修正を進行できない
+        next: implement
+    instruction_template: |
+      監督者からの指摘を修正してください。
+
+      監督者は全体を俯瞰した視点から問題を指摘しています。
+      優先度の高い項目から順に対応してください。
+
+      **必須出力（見出しを含める）**
+      ## 作業結果
+      - {実施内容の要約}
+      ## 変更内容
+      - {変更内容の要約}
+      ## テスト結果
+      - {実行コマンドと結果}
+      ## 証拠
+      - {確認したファイル/検索/差分/ログの要点を列挙}

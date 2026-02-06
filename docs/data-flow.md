@@ -355,7 +355,7 @@ TAKTのデータフローは以下の7つの主要なレイヤーで構成され
 
 **データ出力**:
 - `InteractiveModeResult`:
-  - `confirmed: boolean`
+  - `action: InteractiveModeAction` (`'execute' | 'save_task' | 'create_issue' | 'cancel'`)
   - `task: string` (会話履歴全体を結合した文字列)
 
 ---

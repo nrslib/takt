@@ -7,7 +7,7 @@
 import { clearAgentSessions, getCurrentPiece } from '../../infra/config/index.js';
 import { success } from '../../shared/ui/index.js';
 import { runAllTasks, addTask, watchTasks, listTasks } from '../../features/tasks/index.js';
-import { switchPiece, switchConfig, ejectBuiltin } from '../../features/config/index.js';
+import { switchPiece, switchConfig, ejectBuiltin, resetCategoriesToDefault, deploySkill } from '../../features/config/index.js';
 import { previewPrompts } from '../../features/prompt/index.js';
 import { program, resolvedCwd } from './program.js';
 import { resolveAgentOverrides } from './helpers.js';
@@ -75,10 +75,11 @@ program
 
 program
   .command('eject')
-  .description('Copy builtin piece/agents to ~/.takt/ for customization')
+  .description('Copy builtin piece/agents for customization (default: project .takt/)')
   .argument('[name]', 'Specific builtin to eject')
-  .action(async (name?: string) => {
-    await ejectBuiltin(name);
+  .option('--global', 'Eject to ~/.takt/ instead of project .takt/')
+  .action(async (name: string | undefined, opts: { global?: boolean }) => {
+    await ejectBuiltin(name, { global: opts.global, projectDir: resolvedCwd });
   });
 
 program
@@ -89,10 +90,28 @@ program
     await switchConfig(resolvedCwd, key);
   });
 
+const reset = program
+  .command('reset')
+  .description('Reset settings to defaults');
+
+reset
+  .command('categories')
+  .description('Reset piece categories to builtin defaults')
+  .action(async () => {
+    await resetCategoriesToDefault();
+  });
+
 program
   .command('prompt')
   .description('Preview assembled prompts for each movement and phase')
   .argument('[piece]', 'Piece name or path (defaults to current)')
   .action(async (piece?: string) => {
     await previewPrompts(resolvedCwd, piece);
+  });
+
+program
+  .command('export-cc')
+  .description('Export takt pieces/agents as Claude Code Skill (~/.claude/)')
+  .action(async () => {
+    await deploySkill();
   });

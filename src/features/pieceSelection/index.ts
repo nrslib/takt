@@ -16,8 +16,6 @@ import {
   type PieceCategoryNode,
   type CategorizedPieces,
   type MissingPiece,
-  type PieceSource,
-  type PieceWithSource,
 } from '../../infra/config/index.js';
 
 /** Top-level selection item: either a piece or a category containing pieces */
@@ -280,63 +278,21 @@ async function selectPieceFromCategoryTree(
   }
 }
 
-function countPiecesIncludingCategories(
-  categories: PieceCategoryNode[],
-  allPieces: Map<string, PieceWithSource>,
-  sourceFilter: PieceSource,
-): number {
-  const categorizedPieces = new Set<string>();
-  const visit = (nodes: PieceCategoryNode[]): void => {
-    for (const node of nodes) {
-      for (const w of node.pieces) {
-        categorizedPieces.add(w);
-      }
-      if (node.children.length > 0) {
-        visit(node.children);
-      }
-    }
-  };
-  visit(categories);
-
-  let count = 0;
-  for (const [, { source }] of allPieces) {
-    if (source === sourceFilter) {
-      count++;
-    }
-  }
-  return count;
-}
-
 const CURRENT_PIECE_VALUE = '__current__';
-const CUSTOM_UNCATEGORIZED_VALUE = '__custom_uncategorized__';
-const BUILTIN_SOURCE_VALUE = '__builtin__';
 const CUSTOM_CATEGORY_PREFIX = '__custom_category__:';
 
 type TopLevelSelection =
   | { type: 'current' }
   | { type: 'piece'; name: string }
-  | { type: 'custom_category'; node: PieceCategoryNode }
-  | { type: 'custom_uncategorized' }
-  | { type: 'builtin' };
+  | { type: 'category'; node: PieceCategoryNode };
 
 async function selectTopLevelPieceOption(
   categorized: CategorizedPieces,
   currentPiece: string,
 ): Promise<TopLevelSelection | null> {
-  const uncategorizedCustom = getRootLevelPieces(
-    categorized.categories,
-    categorized.allPieces,
-    'user'
-  );
-  const builtinCount = countPiecesIncludingCategories(
-    categorized.builtinCategories,
-    categorized.allPieces,
-    'builtin'
-  );
-
   const buildOptions = (): SelectOptionItem<string>[] => {
     const options: SelectOptionItem<string>[] = [];
-    const bookmarkedPieces = getBookmarkedPieces(); // Get fresh bookmarks on every build
+    const bookmarkedPieces = getBookmarkedPieces();
 
     // 1. Current piece
     if (currentPiece) {
@@ -348,34 +304,18 @@ async function selectTopLevelPieceOption(
 
     // 2. Bookmarked pieces (individual items)
     for (const pieceName of bookmarkedPieces) {
-      if (pieceName === currentPiece) continue; // Skip if already shown as current
+      if (pieceName === currentPiece) continue;
       options.push({
         label: `🎼 ${pieceName} [*]`,
         value: pieceName,
       });
     }
 
-    // 3. User-defined categories
+    // 3. Categories
     for (const category of categorized.categories) {
       options.push({
         label: `📁 ${category.name}/`,
         value: `${CUSTOM_CATEGORY_PREFIX}${category.name}`,
-      });
-    }
-
-    // 4. Builtin pieces
-    if (builtinCount > 0) {
-      options.push({
-        label: `📂 Builtin/ (${builtinCount})`,
-        value: BUILTIN_SOURCE_VALUE,
-      });
-    }
-
-    // 5. Uncategorized custom pieces
-    if (uncategorizedCustom.length > 0) {
-      options.push({
-        label: `📂 Custom/ (${uncategorizedCustom.length})`,
-        value: CUSTOM_UNCATEGORIZED_VALUE,
       });
     }
 
@@ -386,12 +326,8 @@ async function selectTopLevelPieceOption(
 
   const result = await selectOption<string>('Select piece:', buildOptions(), {
     onKeyPress: (key: string, value: string): SelectOptionItem<string>[] | null => {
-      // Don't handle bookmark keys for special values
-      if (value === CURRENT_PIECE_VALUE ||
-          value === CUSTOM_UNCATEGORIZED_VALUE ||
-          value === BUILTIN_SOURCE_VALUE ||
-          value.startsWith(CUSTOM_CATEGORY_PREFIX)) {
-        return null; // Delegate to default handler
+      if (value === CURRENT_PIECE_VALUE || value.startsWith(CUSTOM_CATEGORY_PREFIX)) {
+        return null;
       }
 
       if (key === 'b') {
@@ -404,7 +340,7 @@ async function selectTopLevelPieceOption(
         return buildOptions();
       }
 
-      return null; // Delegate to default handler
+      return null;
     },
   });
 
@@ -414,50 +350,14 @@ async function selectTopLevelPieceOption(
     return { type: 'current' };
   }
 
-  if (result === CUSTOM_UNCATEGORIZED_VALUE) {
-    return { type: 'custom_uncategorized' };
-  }
-
-  if (result === BUILTIN_SOURCE_VALUE) {
-    return { type: 'builtin' };
-  }
-
   if (result.startsWith(CUSTOM_CATEGORY_PREFIX)) {
     const categoryName = result.slice(CUSTOM_CATEGORY_PREFIX.length);
     const node = categorized.categories.find(c => c.name === categoryName);
     if (!node) return null;
-    return { type: 'custom_category', node };
+    return { type: 'category', node };
   }
 
-  // Direct piece selection (bookmarked or other)
   return { type: 'piece', name: result };
-}
-
-function getRootLevelPieces(
-  categories: PieceCategoryNode[],
-  allPieces: Map<string, PieceWithSource>,
-  sourceFilter: PieceSource,
-): string[] {
-  const categorizedPieces = new Set<string>();
-  const visit = (nodes: PieceCategoryNode[]): void => {
-    for (const node of nodes) {
-      for (const w of node.pieces) {
-        categorizedPieces.add(w);
-      }
-      if (node.children.length > 0) {
-        visit(node.children);
-      }
-    }
-  };
-  visit(categories);
-
-  const rootPieces: string[] = [];
-  for (const [name, { source }] of allPieces) {
-    if (source === sourceFilter && !categorizedPieces.has(name)) {
-      rootPieces.push(name);
-    }
-  }
-  return rootPieces.sort();
 }
 
 /**
@@ -469,91 +369,20 @@ export async function selectPieceFromCategorizedPieces(
 ): Promise<string | null> {
   while (true) {
     const selection = await selectTopLevelPieceOption(categorized, currentPiece);
-    if (!selection) {
-      return null;
-    }
+    if (!selection) return null;
 
-    // 1. Current piece selected
-    if (selection.type === 'current') {
-      return currentPiece;
-    }
+    if (selection.type === 'current') return currentPiece;
 
-    // 2. Direct piece selected (e.g., bookmarked piece)
-    if (selection.type === 'piece') {
-      return selection.name;
-    }
+    if (selection.type === 'piece') return selection.name;
 
-    // 3. User-defined category selected
-    if (selection.type === 'custom_category') {
+    if (selection.type === 'category') {
       const piece = await selectPieceFromCategoryTree(
-        [selection.node],
+        selection.node.children,
         currentPiece,
         true,
-        selection.node.pieces
+        selection.node.pieces,
       );
-      if (piece) {
-        return piece;
-      }
-      // null → go back to top-level selection
-      continue;
-    }
-
-    // 4. Builtin pieces selected
-    if (selection.type === 'builtin') {
-      const rootPieces = getRootLevelPieces(
-        categorized.builtinCategories,
-        categorized.allPieces,
-        'builtin'
-      );
-
-      const piece = await selectPieceFromCategoryTree(
-        categorized.builtinCategories,
-        currentPiece,
-        true,
-        rootPieces
-      );
-      if (piece) {
-        return piece;
-      }
-      // null → go back to top-level selection
-      continue;
-    }
-
-    // 5. Custom uncategorized pieces selected
-    if (selection.type === 'custom_uncategorized') {
-      const uncategorizedCustom = getRootLevelPieces(
-        categorized.categories,
-        categorized.allPieces,
-        'user'
-      );
-
-      const baseOptions: SelectionOption[] = uncategorizedCustom.map((name) => ({
-        label: name === currentPiece ? `🎼 ${name} (current)` : `🎼 ${name}`,
-        value: name,
-      }));
-
-      const buildFlatOptions = (): SelectionOption[] =>
-        applyBookmarks(baseOptions, getBookmarkedPieces());
-
-      const piece = await selectOption<string>('Select piece:', buildFlatOptions(), {
-        cancelLabel: '← Go back',
-        onKeyPress: (key: string, value: string): SelectOptionItem<string>[] | null => {
-          if (key === 'b') {
-            addBookmark(value);
-            return buildFlatOptions();
-          }
-          if (key === 'r') {
-            removeBookmark(value);
-            return buildFlatOptions();
-          }
-          return null; // Delegate to default handler
-        },
-      });
-
-      if (piece) {
-        return piece;
-      }
-      // null → go back to top-level selection
+      if (piece) return piece;
       continue;
     }
   }

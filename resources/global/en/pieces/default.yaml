@@ -26,6 +26,30 @@ max_iterations: 30
 
 initial_movement: plan
 
+loop_monitors:
+  - cycle: [ai_review, ai_fix]
+    threshold: 3
+    judge:
+      agent: ../agents/default/supervisor.md
+      instruction_template: |
+        The ai_review ↔ ai_fix loop has repeated {cycle_count} times.
+
+        Review the reports from each cycle and determine whether this loop
+        is healthy (making progress) or unproductive (repeating the same issues).
+
+        **Reports to reference:**
+        - AI Review results: {report:04-ai-review.md}
+
+        **Judgment criteria:**
+        - Are new issues being found/fixed in each cycle?
+        - Are the same findings being repeated?
+        - Are fixes actually being applied?
+      rules:
+        - condition: Healthy (making progress)
+          next: ai_review
+        - condition: Unproductive (no improvement)
+          next: reviewers
+
 movements:
   - name: plan
     edit: false

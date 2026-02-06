@@ -96,7 +96,8 @@ describe('label integrity', () => {
     expect(ui).toHaveProperty('summarizeFailed');
     expect(ui).toHaveProperty('continuePrompt');
     expect(ui).toHaveProperty('proposed');
-    expect(ui).toHaveProperty('confirm');
+    expect(ui).toHaveProperty('actionPrompt');
+    expect(ui).toHaveProperty('actions');
     expect(ui).toHaveProperty('cancelled');
   });
 

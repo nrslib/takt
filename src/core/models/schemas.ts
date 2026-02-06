@@ -158,6 +158,34 @@ export const PieceMovementRawSchema = z.object({
   parallel: z.array(ParallelSubMovementRawSchema).optional(),
 });
 
+/** Loop monitor rule schema */
+export const LoopMonitorRuleSchema = z.object({
+  /** Human-readable condition text */
+  condition: z.string().min(1),
+  /** Next movement name to transition to */
+  next: z.string().min(1),
+});
+
+/** Loop monitor judge schema */
+export const LoopMonitorJudgeSchema = z.object({
+  /** Agent path, inline prompt, or omitted (uses default) */
+  agent: z.string().optional(),
+  /** Custom instruction template for the judge */
+  instruction_template: z.string().optional(),
+  /** Rules for the judge's decision */
+  rules: z.array(LoopMonitorRuleSchema).min(1),
+});
+
+/** Loop monitor configuration schema */
+export const LoopMonitorSchema = z.object({
+  /** Ordered list of movement names forming the cycle to detect */
+  cycle: z.array(z.string().min(1)).min(2),
+  /** Number of complete cycles before triggering the judge (default: 3) */
+  threshold: z.number().int().positive().optional().default(3),
+  /** Judge configuration */
+  judge: LoopMonitorJudgeSchema,
+});
+
 /** Piece configuration schema - raw YAML format */
 export const PieceConfigRawSchema = z.object({
   name: z.string().min(1),
@@ -165,6 +193,7 @@ export const PieceConfigRawSchema = z.object({
   movements: z.array(PieceMovementRawSchema).min(1),
   initial_movement: z.string().optional(),
   max_iterations: z.number().int().positive().optional().default(10),
+  loop_monitors: z.array(LoopMonitorSchema).optional(),
   answer_agent: z.string().optional(),
 });
 

@@ -38,7 +38,13 @@ interface InteractiveUIText {
   summarizeFailed: string;
   continuePrompt: string;
   proposed: string;
-  confirm: string;
+  actionPrompt: string;
+  actions: {
+    execute: string;
+    createIssue: string;
+    saveTask: string;
+    continue: string;
+  };
   cancelled: string;
   playNoTask: string;
 }
@@ -149,15 +155,23 @@ function buildSummaryPrompt(
   });
 }
 
-async function confirmTask(task: string, message: string, confirmLabel: string, yesLabel: string, noLabel: string): Promise<boolean> {
+type PostSummaryAction = InteractiveModeAction | 'continue';
+
+async function selectPostSummaryAction(
+  task: string,
+  proposedLabel: string,
+  ui: InteractiveUIText,
+): Promise<PostSummaryAction | null> {
   blankLine();
-  info(message);
+  info(proposedLabel);
   console.log(task);
-  const decision = await selectOption(confirmLabel, [
-    { label: yesLabel, value: 'yes' },
-    { label: noLabel, value: 'no' },
+
+  return selectOption<PostSummaryAction>(ui.actionPrompt, [
+    { label: ui.actions.execute, value: 'execute' },
+    { label: ui.actions.createIssue, value: 'create_issue' },
+    { label: ui.actions.saveTask, value: 'save_task' },
+    { label: ui.actions.continue, value: 'continue' },
   ]);
-  return decision === 'yes';
 }
 
 /**
@@ -221,10 +235,12 @@ async function callAI(
   return { content: response.content, sessionId: response.sessionId, success };
 }
 
+export type InteractiveModeAction = 'execute' | 'save_task' | 'create_issue' | 'cancel';
+
 export interface InteractiveModeResult {
-  /** Whether the user confirmed with /go */
-  confirmed: boolean;
-  /** The assembled task text (only meaningful when confirmed=true) */
+  /** The action selected by the user */
+  action: InteractiveModeAction;
+  /** The assembled task text (only meaningful when action is not 'cancel') */
   task: string;
 }
 
@@ -338,7 +354,7 @@ export async function interactiveMode(
       if (!result.success) {
         error(result.content);
         blankLine();
-        return { confirmed: false, task: '' };
+        return { action: 'cancel', task: '' };
       }
       history.push({ role: 'assistant', content: result.content });
       blankLine();
@@ -354,7 +370,7 @@ export async function interactiveMode(
     if (input === null) {
       blankLine();
       info('Cancelled');
-      return { confirmed: false, task: '' };
+      return { action: 'cancel', task: '' };
     }
 
     const trimmed = input.trim();
@@ -372,7 +388,7 @@ export async function interactiveMode(
         continue;
       }
       log.info('Play command', { task });
-      return { confirmed: true, task };
+      return { action: 'execute', task };
     }
 
     if (trimmed.startsWith('/go')) {
@@ -400,27 +416,21 @@ export async function interactiveMode(
       if (!summaryResult.success) {
         error(summaryResult.content);
         blankLine();
-        return { confirmed: false, task: '' };
+        return { action: 'cancel', task: '' };
       }
       const task = summaryResult.content.trim();
-      const confirmed = await confirmTask(
-        task,
-        prompts.ui.proposed,
-        prompts.ui.confirm,
-        lang === 'ja' ? 'はい' : 'Yes',
-        lang === 'ja' ? 'いいえ' : 'No',
-      );
-      if (!confirmed) {
+      const selectedAction = await selectPostSummaryAction(task, prompts.ui.proposed, prompts.ui);
+      if (selectedAction === 'continue' || selectedAction === null) {
         info(prompts.ui.continuePrompt);
         continue;
       }
-      log.info('Interactive mode confirmed', { messageCount: history.length });
-      return { confirmed: true, task };
+      log.info('Interactive mode action selected', { action: selectedAction, messageCount: history.length });
+      return { action: selectedAction, task };
     }
 
     if (trimmed === '/cancel') {
       info(prompts.ui.cancelled);
-      return { confirmed: false, task: '' };
+      return { action: 'cancel', task: '' };
     }
 
     // Regular input — send to AI
@@ -436,7 +446,7 @@ export async function interactiveMode(
         error(result.content);
         blankLine();
         history.pop();
-        return { confirmed: false, task: '' };
+        return { action: 'cancel', task: '' };
       }
       history.push({ role: 'assistant', content: result.content });
       blankLine();

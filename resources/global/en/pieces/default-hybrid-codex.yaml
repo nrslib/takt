@@ -1,0 +1,631 @@
+# Default TAKT Piece
+# Plan -> Architect -> Implement -> AI Review -> Reviewers (parallel: Architect + QA) -> Supervisor Approval
+#
+# Boilerplate sections (Piece Context, User Request, Previous Response,
+# Additional User Inputs, Instructions heading) are auto-injected by buildInstruction().
+# Only movement-specific content belongs in instruction_template.
+#
+# Template Variables (available in instruction_template):
+#   {iteration}         - Piece-wide turn count (total movements executed across all agents)
+#   {max_iterations}    - Maximum iterations allowed for the piece
+#   {movement_iteration}    - Per-movement iteration count (how many times THIS movement has been executed)
+#   {previous_response} - Output from the previous movement (only when pass_previous_response: true)
+#   {report_dir}        - Report directory name (e.g., "20250126-143052-task-summary")
+#
+# Movement-level Fields:
+#   report:  - Report file(s) for the movement (auto-injected as Report File/Files in Piece Context)
+#              Single: report: 00-plan.md
+#              Multiple: report:
+#                          - Scope: 01-coder-scope.md
+#                          - Decisions: 02-coder-decisions.md
+
+name: default-hybrid-codex
+description: Standard development piece with planning and specialized reviews
+
+max_iterations: 30
+
+initial_movement: plan
+
+loop_monitors:
+  - cycle: [ai_review, ai_fix]
+    threshold: 3
+    judge:
+      agent: ../agents/default/supervisor.md
+      instruction_template: |
+        The ai_review ↔ ai_fix loop has repeated {cycle_count} times.
+
+        Review the reports from each cycle and determine whether this loop
+        is healthy (making progress) or unproductive (repeating the same issues).
+
+        **Reports to reference:**
+        - AI Review results: {report:04-ai-review.md}
+
+        **Judgment criteria:**
+        - Are new issues being found/fixed in each cycle?
+        - Are the same findings being repeated?
+        - Are fixes actually being applied?
+      rules:
+        - condition: Healthy (making progress)
+          next: ai_review
+        - condition: Unproductive (no improvement)
+          next: reviewers
+
+movements:
+  - name: plan
+    edit: false
+    agent: ../agents/default/planner.md
+    report:
+      name: 00-plan.md
+      format: |
+        ```markdown
+        # Task Plan
+
+        ## Original Request
+        {User's request as-is}
+
+        ## Analysis Results
+
+        ### Objective
+        {What needs to be achieved}
+
+        ### Scope
+        {Impact scope}
+
+        ### Implementation Approach
+        {How to proceed}
+
+        ## Clarifications Needed (if any)
+        - {Unclear points or items requiring confirmation}
+        ```
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Bash
+      - WebSearch
+      - WebFetch
+    rules:
+      - condition: Requirements are clear and implementable
+        next: architect
+      - condition: User is asking a question (not an implementation task)
+        next: COMPLETE
+      - condition: Requirements unclear, insufficient info
+        next: ABORT
+        appendix: |
+          Clarifications needed:
+          - {Question 1}
+          - {Question 2}
+    instruction_template: |
+      Analyze the task and create an implementation plan.
+
+      **Note:** If returned from implement movement (Previous Response exists),
+      review and revise the plan based on that feedback (replan).
+
+      **Tasks (for implementation tasks):**
+      1. Understand the requirements
+      2. Identify impact scope
+      3. Decide implementation approach
+
+  - name: architect
+    edit: false
+    agent: ../agents/default/architect.md
+    report:
+      name: 01-architecture.md
+      format: |
+        ```markdown
+        # Architecture Design
+
+        ## Task Size
+        Small / Medium / Large
+
+        ## Design Decisions
+
+        ### File Structure
+        | File | Role |
+        |------|------|
+        | `src/example.ts` | Summary |
+
+        ### Technology Selection
+        - {Selected technologies/libraries and reasoning}
+
+        ### Design Patterns
+        - {Patterns to adopt and where to apply}
+
+        ## Implementation Guidelines
+        - {Guidelines for Coder to follow during implementation}
+        ```
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
+    rules:
+      - condition: Small task (no design needed)
+        next: implement
+      - condition: Design complete
+        next: implement
+      - condition: Insufficient info, cannot proceed
+        next: ABORT
+    instruction_template: |
+      Read the plan report ({report:00-plan.md}) and perform architecture design.
+
+      **Small task criteria:**
+      - Only 1-2 files to modify
+      - Can follow existing patterns
+      - No technology selection needed
+
+      For small tasks, skip the design report and use the "Small task (no design needed)" rule.
+
+      **Tasks requiring design:**
+      - 3+ files to modify
+      - Adding new modules/features
+      - Technology selection needed
+      - Architecture pattern decisions needed
+
+      **Tasks:**
+      1. Evaluate task size
+      2. Decide file structure
+      3. Select technology (if needed)
+      4. Choose design patterns
+      5. Create implementation guidelines for Coder
+
+  - name: implement
+    edit: true
+    agent: ../agents/default/coder.md
+    provider: codex
+    session: refresh
+    report:
+      - Scope: 02-coder-scope.md
+      - Decisions: 03-coder-decisions.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    permission_mode: edit
+    rules:
+      - condition: Implementation complete
+        next: ai_review
+      - condition: No implementation (report only)
+        next: ai_review
+      - condition: Cannot proceed, insufficient info
+        next: ai_review
+      - condition: User input required
+        next: implement
+        requires_user_input: true
+        interactive_only: true
+    instruction_template: |
+      Follow the plan from the plan movement and the design from the architect movement.
+
+      **Reports to reference:**
+      - Plan: {report:00-plan.md}
+      - Design: {report:01-architecture.md} (if exists)
+
+      Use only the Report Directory files shown in Piece Context. Do not search or open reports outside that directory.
+
+      **Important:** Do not make design decisions; follow the design determined in the architect movement.
+      Report if you encounter unclear points or need design changes.
+
+      **Scope report format (create at implementation start):**
+      ```markdown
+      # Change Scope Declaration
+
+      ## Task
+      {One-line task summary}
+
+      ## Planned Changes
+      | Type | File |
+      |------|------|
+      | Create | `src/example.ts` |
+      | Modify | `src/routes.ts` |
+
+      ## Estimated Size
+      Small / Medium / Large
+
+      ## Impact Scope
+      - {Affected modules or features}
+      ```
+
+      **Decisions report format (on completion, only if decisions were made):**
+      ```markdown
+      # Decision Log
+
+      ## 1. {Decision Content}
+      - **Background**: {Why the decision was needed}
+      - **Options Considered**: {List of options}
+      - **Reason**: {Why this option was chosen}
+      ```
+
+      **Required output (include headings)**
+      ## Work done
+      - {summary of work performed}
+      ## Changes made
+      - {summary of code changes}
+      ## Test results
+      - {command and outcome}
+
+      **No-implementation handling (required)**
+
+  - name: ai_review
+    edit: false
+    agent: ../agents/default/ai-antipattern-reviewer.md
+    report:
+      name: 04-ai-review.md
+      format: |
+        ```markdown
+        # AI-Generated Code Review
+
+        ## Result: APPROVE / REJECT
+
+        ## Summary
+        {One sentence summarizing result}
+
+        ## Verified Items
+        | Aspect | Result | Notes |
+        |--------|--------|-------|
+        | Assumption validity | ✅ | - |
+        | API/Library existence | ✅ | - |
+        | Context fit | ✅ | - |
+        | Scope | ✅ | - |
+
+        ## Issues (if REJECT)
+        | # | Category | Location | Issue |
+        |---|----------|----------|-------|
+        | 1 | Hallucinated API | `src/file.ts:23` | Non-existent method |
+        ```
+
+        **Cognitive load reduction rules:**
+        - No issues -> Summary 1 line + check table only (10 lines or less)
+        - Issues found -> + Issues in table format (25 lines or less)
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
+    rules:
+      - condition: No AI-specific issues
+        next: reviewers
+      - condition: AI-specific issues found
+        next: ai_fix
+    instruction_template: |
+      **This is AI Review iteration {movement_iteration}.**
+
+      For the 1st iteration, review thoroughly and report all issues at once.
+      For iteration 2+, prioritize verifying that previously REJECTed items have been fixed.
+
+      Review the code for AI-specific issues:
+      - Assumption validation
+      - Plausible but wrong patterns
+      - Context fit with existing codebase
+      - Scope creep detection
+
+  - name: ai_fix
+    edit: true
+    agent: ../agents/default/coder.md
+    provider: codex
+    session: refresh
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    permission_mode: edit
+    rules:
+      - condition: AI issues fixed
+        next: ai_review
+      - condition: No fix needed (verified target files/spec)
+        next: ai_no_fix
+      - condition: Cannot proceed, insufficient info
+        next: ai_no_fix
+    instruction_template: |
+      **This is AI Review iteration {movement_iteration}.**
+
+      If this is iteration 2 or later, it means your previous fixes were not actually applied.
+      **Your belief that you "already fixed it" is wrong.**
+
+      **First, acknowledge:**
+      - Files you thought were "fixed" are actually not fixed
+      - Your understanding of previous work is incorrect
+      - You need to start from zero
+
+      **Required actions:**
+      1. Open all flagged files with Read tool (drop assumptions, verify facts)
+      2. Search for problem code with grep to confirm it exists
+      3. Fix confirmed problems with Edit tool
+      4. Run tests to verify (`./gradlew :backend:test` etc.)
+      5. Report specifically "what you checked and what you fixed"
+
+      **Report format:**
+      - ❌ "Already fixed"
+      - ✅ "Checked file X at L123, found problem Y, fixed to Z"
+
+      **Absolutely prohibited:**
+      - Reporting "fixed" without opening files
+
+      **Handling "no fix needed" (required)**
+      - Do not claim "no fix needed" unless you can show the checked target file(s) for each AI Review issue
+      - If an issue involves generated code or spec sync, and you cannot verify the source spec, output the tag for "Unable to proceed with fixes"
+      - When "no fix needed", output the tag for "Unable to proceed with fixes" and include the reason + checked scope
+
+      **Required output (include headings)**
+      ## Files checked
+      - {path:line}
+      ## Searches run
+      - {command and summary}
+      ## Fixes applied
+      - {what changed}
+      ## Test results
+      - {command and outcome}
+      - Judging based on assumptions
+      - Leaving problems that AI Reviewer REJECTED
+
+  - name: ai_no_fix
+    edit: false
+    agent: ../agents/default/architecture-reviewer.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+    rules:
+      - condition: ai_review's findings are valid (fix required)
+        next: ai_fix
+      - condition: ai_fix's judgment is valid (no fix needed)
+        next: reviewers
+    instruction_template: |
+      ai_review (reviewer) and ai_fix (coder) disagree.
+
+      - ai_review found issues and REJECTed
+      - ai_fix verified and determined "no fix needed"
+
+      Review both outputs and arbitrate which judgment is correct.
+
+      **Reports to reference:**
+      - AI Review results: {report:04-ai-review.md}
+
+      **Judgment criteria:**
+      - Are ai_review's findings specific and pointing to real issues in the code?
+      - Does ai_fix's rebuttal have evidence (file verification, test results)?
+      - Are the findings non-blocking (record-only) or do they require actual fixes?
+
+  - name: reviewers
+    parallel:
+      - name: arch-review
+        edit: false
+        agent: ../agents/default/architecture-reviewer.md
+        report:
+          name: 05-architect-review.md
+          format: |
+            ```markdown
+            # Architecture Review
+
+            ## Result: APPROVE / REJECT
+
+            ## Summary
+            {1-2 sentences summarizing result}
+
+            ## Reviewed Perspectives
+            - [x] Structure & Design
+            - [x] Code Quality
+            - [x] Change Scope
+
+            ## Issues (if REJECT)
+            | # | Scope | Location | Issue | Fix |
+            |---|-------|----------|-------|-----|
+            | 1 | In-scope | `src/file.ts:42` | Issue description | Fix method |
+
+            Scope: "In-scope" (fixable now) / "Out-of-scope" (existing issue, non-blocking)
+
+            ## Existing Issues (informational, non-blocking)
+            - {Record of existing issues unrelated to current change}
+            ```
+
+            **Cognitive load reduction rules:**
+            - APPROVE -> Summary only (5 lines or less)
+            - REJECT -> Issues in table format (30 lines or less)
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - WebSearch
+          - WebFetch
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        instruction_template: |
+          **Verify that the implementation follows the design from the architect movement.**
+          Do NOT review AI-specific issues (that's the ai_review movement).
+
+          **Reports to reference:**
+          - Design: {report:01-architecture.md} (if exists)
+          - Implementation scope: {report:02-coder-scope.md}
+
+          **Review perspectives:**
+          - Design consistency (does it follow the file structure and patterns defined by architect?)
+          - Code quality
+          - Change scope appropriateness
+          - Test coverage
+          - Dead code
+          - Call chain verification
+
+          **Note:** For small tasks that skipped the architect movement, review design validity as usual.
+
+      - name: qa-review
+        edit: false
+        agent: ../agents/default/qa-reviewer.md
+        report:
+          name: 06-qa-review.md
+          format: |
+            ```markdown
+            # QA Review
+
+            ## Result: APPROVE / REJECT
+
+            ## Summary
+            {1-2 sentences summarizing result}
+
+            ## Reviewed Perspectives
+            | Perspective | Result | Notes |
+            |-------------|--------|-------|
+            | Test Coverage | ✅ | - |
+            | Test Quality | ✅ | - |
+            | Error Handling | ✅ | - |
+            | Documentation | ✅ | - |
+            | Maintainability | ✅ | - |
+
+            ## Issues (if REJECT)
+            | # | Category | Issue | Fix |
+            |---|----------|-------|-----|
+            | 1 | Testing | Issue description | Fix method |
+            ```
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - WebSearch
+          - WebFetch
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        instruction_template: |
+          Review the changes from the quality assurance perspective.
+
+          **Review Criteria:**
+          - Test coverage and quality
+          - Test strategy (unit/integration/E2E)
+          - Error handling
+          - Logging and monitoring
+          - Maintainability
+    rules:
+      - condition: all("approved")
+        next: supervise
+      - condition: any("needs_fix")
+        next: fix
+
+  - name: fix
+    edit: true
+    agent: ../agents/default/coder.md
+    provider: codex
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    permission_mode: edit
+    rules:
+      - condition: Fix complete
+        next: reviewers
+      - condition: Cannot proceed, insufficient info
+        next: plan
+    instruction_template: |
+      Address the feedback from the reviewers.
+      The "Original User Request" is reference information, not the latest instruction.
+      Review the session conversation history and fix the issues raised by the reviewers.
+
+
+      **Required output (include headings)**
+      ## Work done
+      - {summary of work performed}
+      ## Changes made
+      - {summary of code changes}
+      ## Test results
+      - {command and outcome}
+      ## Evidence
+      - {key files/grep/diff/log evidence you verified}
+
+  - name: supervise
+    edit: false
+    agent: ../agents/default/supervisor.md
+    report:
+      - Validation: 07-supervisor-validation.md
+      - Summary: summary.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Bash
+      - WebSearch
+      - WebFetch
+    rules:
+      - condition: All checks passed
+        next: COMPLETE
+      - condition: Requirements unmet, tests failing, build errors
+        next: plan
+    instruction_template: |
+      Run tests, verify the build, and perform final approval.
+
+      **Piece Overall Review:**
+      1. Does the implementation match the plan ({report:00-plan.md}) and design ({report:01-architecture.md}, if exists)?
+      2. Were all review movement issues addressed?
+      3. Was the original task objective achieved?
+
+      **Review Reports:** Read all reports in Report Directory and
+      check for any unaddressed improvement suggestions.
+
+      **Validation report format:**
+      ```markdown
+      # Final Validation Results
+
+      ## Result: APPROVE / REJECT
+
+      ## Validation Summary
+      | Item | Status | Verification Method |
+      |------|--------|---------------------|
+      | Requirements met | ✅ | Matched against requirements list |
+      | Tests | ✅ | `npm test` (N passed) |
+      | Build | ✅ | `npm run build` succeeded |
+      | Functional check | ✅ | Main flows verified |
+
+      ## Deliverables
+      - Created: {Created files}
+      - Modified: {Modified files}
+
+      ## Incomplete Items (if REJECT)
+      | # | Item | Reason |
+      |---|------|--------|
+      | 1 | {Item} | {Reason} |
+      ```
+
+      **Summary report format (only if APPROVE):**
+      ```markdown
+      # Task Completion Summary
+
+      ## Task
+      {Original request in 1-2 sentences}
+
+      ## Result
+      ✅ Complete
+
+      ## Changes
+      | Type | File | Summary |
+      |------|------|---------|
+      | Create | `src/file.ts` | Summary description |
+
+      ## Review Results
+      | Review | Result |
+      |--------|--------|
+      | Architecture Design | ✅ Complete |
+      | AI Review | ✅ APPROVE |
+      | Architect Review | ✅ APPROVE |
+      | QA | ✅ APPROVE |
+      | Supervisor | ✅ APPROVE |
+
+      ## Verification Commands
+      ```bash
+      npm test
+      npm run build
+      ```
+      ```

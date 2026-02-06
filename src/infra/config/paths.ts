@@ -51,6 +51,16 @@ export function getProjectConfigDir(projectDir: string): string {
   return join(resolve(projectDir), '.takt');
 }
 
+/** Get project pieces directory (.takt/pieces in project) */
+export function getProjectPiecesDir(projectDir: string): string {
+  return join(getProjectConfigDir(projectDir), 'pieces');
+}
+
+/** Get project agents directory (.takt/agents in project) */
+export function getProjectAgentsDir(projectDir: string): string {
+  return join(getProjectConfigDir(projectDir), 'agents');
+}
+
 /** Get project config file path */
 export function getProjectConfigPath(projectDir: string): string {
   return join(getProjectConfigDir(projectDir), 'config.yaml');

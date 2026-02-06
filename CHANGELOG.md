@@ -4,6 +4,41 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.0-alpha.1] - 2026-02-06
+
+### Added
+
+- Hybrid Codex ピース: 全主要ピース（default, minimal, expert, expert-cqrs, passthrough, review-fix-minimal, coding）の Codex バリアントを追加
+  - coder エージェントを Codex プロバイダーで実行するハイブリッド構成
+  - en/ja 両対応
+- `passthrough` ピース: タスクをそのまま coder に渡す最小構成ピース
+- `takt export-cc` コマンド: ビルトインピース・エージェントを Claude Code Skill としてデプロイ
+- `takt list` に delete アクション追加、non-interactive モード分離
+- AI 相談アクション: `takt add` / インタラクティブモードで GitHub Issue 作成・タスクファイル保存が可能に
+- サイクル検出: ai_review ↔ ai_fix 間の無限ループを検出する `CycleDetector` を追加 (#102)
+  - 修正不要時の裁定ステップ（`ai_no_fix`）を default ピースに追加
+- CI: skipped な TAKT Action ランを週次で自動削除するワークフローを追加
+- ピースカテゴリに Hybrid Codex サブカテゴリを追加（en/ja）
+
+### Changed
+
+- カテゴリ設定を簡素化: `default-categories.yaml` を `piece-categories.yaml` に統合し、ユーザーディレクトリへの自動コピー方式に変更
+- ピース選択UIのサブカテゴリナビゲーションを修正（再帰的な階層表示が正しく動作するように）
+- Claude Code Skill を Agent Team ベースに刷新
+- `console.log` を `info()` に統一（list コマンド）
+
+### Fixed
+
+- Hybrid Codex ピースの description に含まれるコロンが YAML パースエラーを起こす問題を修正
+- サブカテゴリ選択時に `selectPieceFromCategoryTree` に不正な引数が渡される問題を修正
+
+### Internal
+
+- `list` コマンドのリファクタリング: `listNonInteractive.ts`, `taskDeleteActions.ts` を分離
+- `cycle-detector.ts` を追加、`PieceEngine` にサイクル検出を統合
+- ピースカテゴリローダーのリファクタリング（`pieceCategories.ts`, `pieceSelection/index.ts`）
+- テスト追加: cycle-detector, engine-loop-monitors, piece-selection, listNonInteractive, taskDeleteActions, createIssue, saveTaskFile
+
 ## [0.6.0] - 2026-02-05
 
 RC1/RC2 の内容を正式リリース。機能変更なし。

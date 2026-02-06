@@ -38,7 +38,7 @@ sequenceDiagram
 
     User->>Interactive: /go コマンド
     Interactive->>Interactive: buildTaskFromHistory()
-    Interactive-->>CLI: { confirmed: true, task: string }
+    Interactive-->>CLI: { action: InteractiveModeAction, task: string }
 
     CLI->>Orchestration: selectAndExecuteTask(cwd, task)
 

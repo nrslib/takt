@@ -35,3 +35,20 @@ export interface CreatePrResult {
   /** Error message on failure */
   error?: string;
 }
+
+export interface CreateIssueOptions {
+  /** Issue title */
+  title: string;
+  /** Issue body (markdown) */
+  body: string;
+  /** Labels to apply */
+  labels?: string[];
+}
+
+export interface CreateIssueResult {
+  success: boolean;
+  /** Issue URL on success */
+  url?: string;
+  /** Error message on failure */
+  error?: string;
+}

@@ -16,7 +16,12 @@ interactive:
     summarizeFailed: "Failed to summarize conversation. Please try again."
     continuePrompt: "Okay, continue describing your task."
     proposed: "Proposed task instruction:"
-    confirm: "Use this task instruction?"
+    actionPrompt: "What would you like to do?"
+    actions:
+      execute: "Execute now"
+      createIssue: "Create GitHub Issue"
+      saveTask: "Save as Task"
+      continue: "Continue editing"
     cancelled: "Cancelled"
     playNoTask: "Please specify task content: /play <task>"
   previousTask:

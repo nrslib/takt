@@ -16,7 +16,12 @@ interactive:
     summarizeFailed: "会話の要約に失敗しました。再度お試しください。"
     continuePrompt: "続けてタスク内容を入力してください。"
     proposed: "提案されたタスク指示:"
-    confirm: "このタスク指示で進めますか？"
+    actionPrompt: "どうしますか？"
+    actions:
+      execute: "実行する"
+      createIssue: "GitHub Issueを建てる"
+      saveTask: "タスクにつむ"
+      continue: "会話を続ける"
     cancelled: "キャンセルしました"
     playNoTask: "タスク内容を指定してください: /play <タスク内容>"
   previousTask:

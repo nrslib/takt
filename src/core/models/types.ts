@@ -30,6 +30,9 @@ export type {
   ReportObjectConfig,
   PieceMovement,
   LoopDetectionConfig,
+  LoopMonitorConfig,
+  LoopMonitorJudge,
+  LoopMonitorRule,
   PieceConfig,
   PieceState,
 } from './piece-types.js';

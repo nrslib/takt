@@ -91,6 +91,36 @@ export interface LoopDetectionConfig {
   action?: 'abort' | 'warn' | 'ignore';
 }
 
+/** Rule for loop monitor judge decision */
+export interface LoopMonitorRule {
+  /** Human-readable condition text */
+  condition: string;
+  /** Next movement name to transition to */
+  next: string;
+}
+
+/** Judge configuration for loop monitor */
+export interface LoopMonitorJudge {
+  /** Agent path, inline prompt, or undefined (uses default) */
+  agent?: string;
+  /** Resolved absolute path to agent prompt file (set by loader) */
+  agentPath?: string;
+  /** Custom instruction template for the judge (uses default if omitted) */
+  instructionTemplate?: string;
+  /** Rules for the judge's decision */
+  rules: LoopMonitorRule[];
+}
+
+/** Loop monitor configuration for detecting cyclic patterns between movements */
+export interface LoopMonitorConfig {
+  /** Ordered list of movement names forming the cycle to detect */
+  cycle: string[];
+  /** Number of complete cycles before triggering the judge (default: 3) */
+  threshold: number;
+  /** Judge configuration for deciding what to do when threshold is reached */
+  judge: LoopMonitorJudge;
+}
+
 /** Piece configuration */
 export interface PieceConfig {
   name: string;
@@ -100,6 +130,8 @@ export interface PieceConfig {
   maxIterations: number;
   /** Loop detection settings */
   loopDetection?: LoopDetectionConfig;
+  /** Loop monitors for detecting cyclic patterns between movements */
+  loopMonitors?: LoopMonitorConfig[];
   /**
    * Agent to use for answering AskUserQuestion prompts automatically.
    * When specified, questions from Claude Code are routed to this agent

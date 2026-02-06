@@ -1,8 +1,11 @@
 /**
  * /eject command implementation
  *
- * Copies a builtin piece (and its agents) to ~/.takt/ for user customization.
- * Once ejected, the user copy takes priority over the builtin version.
+ * Copies a builtin piece (and its agents) for user customization.
+ * Directory structure is mirrored so relative agent paths work as-is.
+ *
+ * Default target: project-local (.takt/)
+ * With --global: user global (~/.takt/)
  */
 
 import { existsSync, readdirSync, statSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
@@ -10,18 +13,25 @@ import { join, dirname } from 'node:path';
 import {
   getGlobalPiecesDir,
   getGlobalAgentsDir,
+  getProjectPiecesDir,
+  getProjectAgentsDir,
   getBuiltinPiecesDir,
   getBuiltinAgentsDir,
   getLanguage,
 } from '../../infra/config/index.js';
 import { header, success, info, warn, error, blankLine } from '../../shared/ui/index.js';
 
+export interface EjectOptions {
+  global?: boolean;
+  projectDir?: string;
+}
+
 /**
- * Eject a builtin piece to user space for customization.
- * Copies the piece YAML and related agent .md files to ~/.takt/.
- * Agent paths in the ejected piece are rewritten from ../agents/ to ~/.takt/agents/.
+ * Eject a builtin piece to project or global space for customization.
+ * Copies the piece YAML and related agent .md files, preserving
+ * the directory structure so relative paths continue to work.
  */
-export async function ejectBuiltin(name?: string): Promise<void> {
+export async function ejectBuiltin(name?: string, options: EjectOptions = {}): Promise<void> {
   header('Eject Builtin');
 
   const lang = getLanguage();
@@ -29,7 +39,7 @@ export async function ejectBuiltin(name?: string): Promise<void> {
 
   if (!name) {
     // List available builtins
-    listAvailableBuiltins(builtinPiecesDir);
+    listAvailableBuiltins(builtinPiecesDir, options.global);
     return;
   }
 
@@ -40,24 +50,24 @@ export async function ejectBuiltin(name?: string): Promise<void> {
     return;
   }
 
-  const userPiecesDir = getGlobalPiecesDir();
-  const userAgentsDir = getGlobalAgentsDir();
+  const projectDir = options.projectDir || process.cwd();
+  const targetPiecesDir = options.global ? getGlobalPiecesDir() : getProjectPiecesDir(projectDir);
+  const targetAgentsDir = options.global ? getGlobalAgentsDir() : getProjectAgentsDir(projectDir);
   const builtinAgentsDir = getBuiltinAgentsDir(lang);
+  const targetLabel = options.global ? 'global (~/.takt/)' : 'project (.takt/)';
 
-  // Copy piece YAML (rewrite agent paths)
-  const pieceDest = join(userPiecesDir, `${name}.yaml`);
+  info(`Ejecting to ${targetLabel}`);
+  blankLine();
+
+  // Copy piece YAML as-is (no path rewriting — directory structure mirrors builtin)
+  const pieceDest = join(targetPiecesDir, `${name}.yaml`);
   if (existsSync(pieceDest)) {
     warn(`User piece already exists: ${pieceDest}`);
     warn('Skipping piece copy (user version takes priority).');
   } else {
     mkdirSync(dirname(pieceDest), { recursive: true });
     const content = readFileSync(builtinPath, 'utf-8');
-    // Rewrite relative agent paths to ~/.takt/agents/
-    const rewritten = content.replace(
-      /agent:\s*\.\.\/agents\//g,
-      'agent: ~/.takt/agents/',
-    );
-    writeFileSync(pieceDest, rewritten, 'utf-8');
+    writeFileSync(pieceDest, content, 'utf-8');
     success(`Ejected piece: ${pieceDest}`);
   }
 
@@ -67,7 +77,7 @@ export async function ejectBuiltin(name?: string): Promise<void> {
 
   for (const relPath of agentPaths) {
     const srcPath = join(builtinAgentsDir, relPath);
-    const destPath = join(userAgentsDir, relPath);
+    const destPath = join(targetAgentsDir, relPath);
 
     if (!existsSync(srcPath)) continue;
 
@@ -88,7 +98,7 @@ export async function ejectBuiltin(name?: string): Promise<void> {
 }
 
 /** List available builtin pieces for ejection */
-function listAvailableBuiltins(builtinPiecesDir: string): void {
+function listAvailableBuiltins(builtinPiecesDir: string, isGlobal?: boolean): void {
   if (!existsSync(builtinPiecesDir)) {
     warn('No builtin pieces found.');
     return;
@@ -106,7 +116,11 @@ function listAvailableBuiltins(builtinPiecesDir: string): void {
   }
 
   blankLine();
-  info('Usage: takt eject {name}');
+  const globalFlag = isGlobal ? ' --global' : '';
+  info(`Usage: takt eject {name}${globalFlag}`);
+  if (!isGlobal) {
+    info('  Add --global to eject to ~/.takt/ instead of .takt/');
+  }
 }
 
 /**

@@ -6,7 +6,7 @@
  */
 
 import type { PermissionResult, PermissionUpdate } from '@anthropic-ai/claude-agent-sdk';
-import type { PieceMovement, AgentResponse, PieceState, Language } from '../models/types.js';
+import type { PieceMovement, AgentResponse, PieceState, Language, LoopMonitorConfig } from '../models/types.js';
 
 export type ProviderType = 'claude' | 'codex' | 'mock';
 
@@ -119,6 +119,7 @@ export interface PieceEvents {
   'piece:abort': (state: PieceState, reason: string) => void;
   'iteration:limit': (iteration: number, maxIterations: number) => void;
   'movement:loop_detected': (step: PieceMovement, consecutiveCount: number) => void;
+  'movement:cycle_detected': (monitor: LoopMonitorConfig, cycleCount: number) => void;
 }
 
 /** User input request for blocked state */

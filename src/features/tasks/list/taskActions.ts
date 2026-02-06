@@ -8,17 +8,16 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { rmSync, existsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
+
 import chalk from 'chalk';
 import {
   createTempCloneForBranch,
   removeClone,
   removeCloneMeta,
   cleanupOrphanedClone,
-} from '../../../infra/task/index.js';
-import {
   detectDefaultBranch,
-  type BranchListItem,
   autoCommitAndPush,
+  type BranchListItem,
 } from '../../../infra/task/index.js';
 import { selectOption, promptInput } from '../../../shared/prompt/index.js';
 import { info, success, error as logError, warn, header, blankLine } from '../../../shared/ui/index.js';
@@ -86,7 +85,7 @@ export async function showDiffAndPromptAction(
 ): Promise<ListAction | null> {
   header(item.info.branch);
   if (item.originalInstruction) {
-    console.log(chalk.dim(`  ${item.originalInstruction}`));
+    info(chalk.dim(`  ${item.originalInstruction}`));
   }
   blankLine();
 
@@ -95,7 +94,7 @@ export async function showDiffAndPromptAction(
       'git', ['diff', '--stat', `${defaultBranch}...${item.info.branch}`],
       { cwd, encoding: 'utf-8', stdio: 'pipe' },
     );
-    console.log(stat);
+    info(stat);
   } catch {
     warn('Could not generate diff stat');
   }
@@ -362,3 +361,4 @@ export async function instructBranch(
     removeCloneMeta(projectDir, branch);
   }
 }
+

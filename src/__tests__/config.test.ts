@@ -45,7 +45,7 @@ describe('getBuiltinPiece', () => {
   });
 
   it('should return null for non-existent piece names', () => {
-    expect(getBuiltinPiece('passthrough')).toBeNull();
+    expect(getBuiltinPiece('nonexistent-piece')).toBeNull();
     expect(getBuiltinPiece('unknown')).toBeNull();
     expect(getBuiltinPiece('')).toBeNull();
   });

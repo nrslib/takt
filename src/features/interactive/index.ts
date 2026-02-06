@@ -2,4 +2,9 @@
  * Interactive mode commands.
  */
 
-export { interactiveMode, type PieceContext, type InteractiveModeResult } from './interactive.js';
+export {
+  interactiveMode,
+  type PieceContext,
+  type InteractiveModeResult,
+  type InteractiveModeAction,
+} from './interactive.js';

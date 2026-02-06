@@ -2,6 +2,8 @@ piece_categories:
   "🚀 クイックスタート":
     pieces:
       - default
+      - passthrough
+      - coding
       - minimal
 
   "🔍 レビュー＆修正":
@@ -18,6 +20,21 @@ piece_categories:
     pieces:
       - expert
       - expert-cqrs
+
+  "🔀 ハイブリッド (Codex Coding)":
+    "🚀 クイックスタート":
+      pieces:
+        - default-hybrid-codex
+        - passthrough-hybrid-codex
+        - coding-hybrid-codex
+        - minimal-hybrid-codex
+    "🔍 レビュー＆修正":
+      pieces:
+        - review-fix-minimal-hybrid-codex
+    "🔧 フルスタック":
+      pieces:
+        - expert-hybrid-codex
+        - expert-cqrs-hybrid-codex
 
   "その他":
     pieces:

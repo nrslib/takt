@@ -2,14 +2,21 @@
  * Tests for list-tasks command
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import * as os from 'node:os';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   parseTaktBranches,
   extractTaskSlug,
   buildListItems,
   type BranchInfo,
 } from '../infra/task/branchList.js';
+import { TaskRunner } from '../infra/task/runner.js';
+import type { TaskListItem } from '../infra/task/types.js';
 import { isBranchMerged, showFullDiff, type ListAction } from '../features/tasks/index.js';
+import { listTasks } from '../features/tasks/list/index.js';
 
 describe('parseTaktBranches', () => {
   it('should parse takt/ branches from git branch output', () => {
@@ -176,5 +183,208 @@ describe('isBranchMerged', () => {
   it('should return false for non-existent branch', () => {
     const result = isBranchMerged('/tmp', 'non-existent-branch-xyz');
     expect(result).toBe(false);
+  });
+});
+
+describe('TaskRunner.listFailedTasks', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-test-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('should return empty array for empty failed directory', () => {
+    const runner = new TaskRunner(tmpDir);
+    const result = runner.listFailedTasks();
+    expect(result).toEqual([]);
+  });
+
+  it('should parse failed task directories correctly', () => {
+    const failedDir = path.join(tmpDir, '.takt', 'failed');
+    const taskDir = path.join(failedDir, '2025-01-15T12-34-56_my-task');
+    fs.mkdirSync(taskDir, { recursive: true });
+    fs.writeFileSync(path.join(taskDir, 'my-task.md'), 'Fix the login bug\nMore details here');
+
+    const runner = new TaskRunner(tmpDir);
+    const result = runner.listFailedTasks();
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEqual({
+      kind: 'failed',
+      name: 'my-task',
+      createdAt: '2025-01-15T12:34:56',
+      filePath: taskDir,
+      content: 'Fix the login bug',
+    });
+  });
+
+  it('should skip malformed directory names', () => {
+    const failedDir = path.join(tmpDir, '.takt', 'failed');
+    // No underscore → malformed, should be skipped
+    fs.mkdirSync(path.join(failedDir, 'malformed-name'), { recursive: true });
+    // Valid one
+    const validDir = path.join(failedDir, '2025-01-15T12-34-56_valid-task');
+    fs.mkdirSync(validDir, { recursive: true });
+    fs.writeFileSync(path.join(validDir, 'valid-task.md'), 'Content');
+
+    const runner = new TaskRunner(tmpDir);
+    const result = runner.listFailedTasks();
+
+    expect(result).toHaveLength(1);
+    expect(result[0]!.name).toBe('valid-task');
+  });
+
+  it('should extract task content from task file in directory', () => {
+    const failedDir = path.join(tmpDir, '.takt', 'failed');
+    const taskDir = path.join(failedDir, '2025-02-01T00-00-00_content-test');
+    fs.mkdirSync(taskDir, { recursive: true });
+    // report.md and log.json should be skipped; the actual task file should be read
+    fs.writeFileSync(path.join(taskDir, 'report.md'), 'Report content');
+    fs.writeFileSync(path.join(taskDir, 'log.json'), '{}');
+    fs.writeFileSync(path.join(taskDir, 'content-test.yaml'), 'task: Do something important');
+
+    const runner = new TaskRunner(tmpDir);
+    const result = runner.listFailedTasks();
+
+    expect(result).toHaveLength(1);
+    expect(result[0]!.content).toBe('task: Do something important');
+  });
+
+  it('should return empty content when no task file exists', () => {
+    const failedDir = path.join(tmpDir, '.takt', 'failed');
+    const taskDir = path.join(failedDir, '2025-02-01T00-00-00_no-task-file');
+    fs.mkdirSync(taskDir, { recursive: true });
+    // Only report.md and log.json, no actual task file
+    fs.writeFileSync(path.join(taskDir, 'report.md'), 'Report content');
+    fs.writeFileSync(path.join(taskDir, 'log.json'), '{}');
+
+    const runner = new TaskRunner(tmpDir);
+    const result = runner.listFailedTasks();
+
+    expect(result).toHaveLength(1);
+    expect(result[0]!.content).toBe('');
+  });
+
+  it('should handle task name with underscores', () => {
+    const failedDir = path.join(tmpDir, '.takt', 'failed');
+    const taskDir = path.join(failedDir, '2025-01-15T12-34-56_my_task_name');
+    fs.mkdirSync(taskDir, { recursive: true });
+
+    const runner = new TaskRunner(tmpDir);
+    const result = runner.listFailedTasks();
+
+    expect(result).toHaveLength(1);
+    expect(result[0]!.name).toBe('my_task_name');
+  });
+
+  it('should skip non-directory entries', () => {
+    const failedDir = path.join(tmpDir, '.takt', 'failed');
+    fs.mkdirSync(failedDir, { recursive: true });
+    // Create a file (not a directory) in the failed dir
+    fs.writeFileSync(path.join(failedDir, '2025-01-15T12-34-56_file-task'), 'content');
+
+    const runner = new TaskRunner(tmpDir);
+    const result = runner.listFailedTasks();
+
+    expect(result).toHaveLength(0);
+  });
+});
+
+describe('TaskRunner.listPendingTaskItems', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-test-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('should return empty array when no pending tasks', () => {
+    const runner = new TaskRunner(tmpDir);
+    const result = runner.listPendingTaskItems();
+    expect(result).toEqual([]);
+  });
+
+  it('should convert TaskInfo to TaskListItem with kind=pending', () => {
+    const tasksDir = path.join(tmpDir, '.takt', 'tasks');
+    fs.mkdirSync(tasksDir, { recursive: true });
+    fs.writeFileSync(path.join(tasksDir, 'my-task.md'), 'Fix the login bug\nMore details here');
+
+    const runner = new TaskRunner(tmpDir);
+    const result = runner.listPendingTaskItems();
+
+    expect(result).toHaveLength(1);
+    expect(result[0]!.kind).toBe('pending');
+    expect(result[0]!.name).toBe('my-task');
+    expect(result[0]!.content).toBe('Fix the login bug');
+  });
+
+  it('should truncate content to first line (max 80 chars)', () => {
+    const tasksDir = path.join(tmpDir, '.takt', 'tasks');
+    fs.mkdirSync(tasksDir, { recursive: true });
+    const longLine = 'A'.repeat(120) + '\nSecond line';
+    fs.writeFileSync(path.join(tasksDir, 'long-task.md'), longLine);
+
+    const runner = new TaskRunner(tmpDir);
+    const result = runner.listPendingTaskItems();
+
+    expect(result).toHaveLength(1);
+    expect(result[0]!.content).toBe('A'.repeat(80));
+  });
+});
+
+describe('listTasks non-interactive JSON output', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-test-json-'));
+    // Initialize as a git repo so detectDefaultBranch works
+    execFileSync('git', ['init', '--initial-branch', 'main'], { cwd: tmpDir, stdio: 'pipe' });
+    execFileSync('git', ['commit', '--allow-empty', '-m', 'init'], { cwd: tmpDir, stdio: 'pipe' });
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('should output JSON as object with branches, pendingTasks, and failedTasks keys', async () => {
+    // Given: a pending task and a failed task
+    const tasksDir = path.join(tmpDir, '.takt', 'tasks');
+    fs.mkdirSync(tasksDir, { recursive: true });
+    fs.writeFileSync(path.join(tasksDir, 'my-task.md'), 'Do something');
+
+    const failedDir = path.join(tmpDir, '.takt', 'failed', '2025-01-15T12-34-56_failed-task');
+    fs.mkdirSync(failedDir, { recursive: true });
+    fs.writeFileSync(path.join(failedDir, 'failed-task.md'), 'This failed');
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    // When: listTasks is called in non-interactive JSON mode
+    await listTasks(tmpDir, undefined, {
+      enabled: true,
+      format: 'json',
+    });
+
+    // Then: output is an object with branches, pendingTasks, failedTasks
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    const output = JSON.parse(logSpy.mock.calls[0]![0] as string);
+    expect(output).toHaveProperty('branches');
+    expect(output).toHaveProperty('pendingTasks');
+    expect(output).toHaveProperty('failedTasks');
+    expect(Array.isArray(output.branches)).toBe(true);
+    expect(Array.isArray(output.pendingTasks)).toBe(true);
+    expect(Array.isArray(output.failedTasks)).toBe(true);
+    expect(output.pendingTasks).toHaveLength(1);
+    expect(output.pendingTasks[0].name).toBe('my-task');
+    expect(output.failedTasks).toHaveLength(1);
+    expect(output.failedTasks[0].name).toBe('failed-task');
+
+    logSpy.mockRestore();
   });
 });

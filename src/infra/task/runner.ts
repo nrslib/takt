@@ -16,9 +16,12 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { parseTaskFiles, parseTaskFile, type ParsedTask } from './parser.js';
-import type { TaskInfo, TaskResult } from './types.js';
+import type { TaskInfo, TaskResult, TaskListItem } from './types.js';
+import { createLogger } from '../../shared/utils/index.js';
 
-export type { TaskInfo, TaskResult };
+export type { TaskInfo, TaskResult, TaskListItem };
+
+const log = createLogger('task-runner');
 
 /**
  * タスク実行管理クラス
@@ -127,6 +130,78 @@ export class TaskRunner {
    */
   failTask(result: TaskResult): string {
     return this.moveTask(result, this.failedDir);
+  }
+
+  /**
+   * pendingタスクを TaskListItem 形式で取得
+   */
+  listPendingTaskItems(): TaskListItem[] {
+    return this.listTasks().map((task) => ({
+      kind: 'pending' as const,
+      name: task.name,
+      createdAt: task.createdAt,
+      filePath: task.filePath,
+      content: task.content.trim().split('\n')[0]?.slice(0, 80) ?? '',
+    }));
+  }
+
+  /**
+   * failedタスクの一覧を取得
+   * .takt/failed/ 内のサブディレクトリを走査し、TaskListItem を返す
+   */
+  listFailedTasks(): TaskListItem[] {
+    this.ensureDirs();
+
+    const entries = fs.readdirSync(this.failedDir);
+
+    return entries
+      .filter((entry) => {
+        const entryPath = path.join(this.failedDir, entry);
+        return fs.statSync(entryPath).isDirectory() && entry.includes('_');
+      })
+      .map((entry) => {
+        const entryPath = path.join(this.failedDir, entry);
+        const underscoreIdx = entry.indexOf('_');
+        const timestampRaw = entry.slice(0, underscoreIdx);
+        const name = entry.slice(underscoreIdx + 1);
+        const createdAt = timestampRaw.replace(
+          /^(\d{4}-\d{2}-\d{2}T\d{2})-(\d{2})-(\d{2})$/,
+          '$1:$2:$3',
+        );
+        const content = this.readFailedTaskContent(entryPath);
+        return { kind: 'failed' as const, name, createdAt, filePath: entryPath, content };
+      })
+      .filter((item) => item.name !== '');
+  }
+
+  /**
+   * failedタスクディレクトリ内のタスクファイルから先頭1行を読み取る
+   */
+  private readFailedTaskContent(dirPath: string): string {
+    const taskExtensions = ['.md', '.yaml', '.yml'];
+    let files: string[];
+    try {
+      files = fs.readdirSync(dirPath);
+    } catch (err) {
+      log.error('Failed to read failed task directory', { dirPath, error: String(err) });
+      return '';
+    }
+
+    for (const file of files) {
+      const ext = path.extname(file);
+      if (file === 'report.md' || file === 'log.json') continue;
+      if (!taskExtensions.includes(ext)) continue;
+
+      try {
+        const raw = fs.readFileSync(path.join(dirPath, file), 'utf-8');
+        return raw.trim().split('\n')[0]?.slice(0, 80) ?? '';
+      } catch (err) {
+        log.error('Failed to read failed task file', { file, dirPath, error: String(err) });
+        continue;
+      }
+    }
+
+    return '';
   }
 
   /**

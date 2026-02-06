@@ -231,6 +231,9 @@ takt eject
 # エージェントの会話セッションをクリア
 takt clear
 
+# ビルトインピース・エージェントを Claude Code Skill としてデプロイ
+takt export-cc
+
 # パーミッションモードを設定
 takt config
 ```
@@ -387,7 +390,10 @@ TAKTには複数のビルトインピースが同梱されています:
 | `expert` | フルスタック開発ピース: アーキテクチャ、フロントエンド、セキュリティ、QA レビューと修正ループ。 |
 | `expert-cqrs` | フルスタック開発ピース（CQRS+ES特化）: CQRS+ES、フロントエンド、セキュリティ、QA レビューと修正ループ。 |
 | `magi` | エヴァンゲリオンにインスパイアされた審議システム。3つの AI ペルソナ（MELCHIOR、BALTHASAR、CASPER）が分析し投票。 |
+| `passthrough` | 最小構成。タスクをそのまま coder に渡す薄いラッパー。レビューなし。 |
 | `review-only` | 変更を加えない読み取り専用のコードレビューピース。 |
+
+**Hybrid Codex バリアント** (`*-hybrid-codex`): 主要ピースごとに、coder エージェントを Codex で実行しレビュアーは Claude を使うハイブリッド構成が用意されています。対象: default, minimal, expert, expert-cqrs, passthrough, review-fix-minimal, coding。
 
 `takt switch` でピースを切り替えられます。
 

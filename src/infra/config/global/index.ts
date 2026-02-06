@@ -26,12 +26,9 @@ export {
 } from './bookmarks.js';
 
 export {
-  getPieceCategoriesConfig,
-  setPieceCategoriesConfig,
-  getShowOthersCategory,
-  setShowOthersCategory,
-  getOthersCategoryName,
-  setOthersCategoryName,
+  getPieceCategoriesPath,
+  ensureUserCategoriesFile,
+  resetPieceCategories,
 } from './pieceCategories.js';
 
 export {

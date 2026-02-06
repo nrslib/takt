@@ -10,7 +10,7 @@ import { join, dirname, basename } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import type { z } from 'zod';
 import { PieceConfigRawSchema, PieceMovementRawSchema } from '../../../core/models/index.js';
-import type { PieceConfig, PieceMovement, PieceRule, ReportConfig, ReportObjectConfig } from '../../../core/models/index.js';
+import type { PieceConfig, PieceMovement, PieceRule, ReportConfig, ReportObjectConfig, LoopMonitorConfig, LoopMonitorJudge } from '../../../core/models/index.js';
 
 /** Parsed movement type from Zod schema (replaces `any`) */
 type RawStep = z.output<typeof PieceMovementRawSchema>;
@@ -211,6 +211,47 @@ function normalizeStepFromRaw(step: RawStep, pieceDir: string): PieceMovement {
 }
 
 /**
+ * Normalize a raw loop monitor judge from YAML into internal format.
+ * Resolves agent paths and instruction_template content paths.
+ */
+function normalizeLoopMonitorJudge(
+  raw: { agent?: string; instruction_template?: string; rules: Array<{ condition: string; next: string }> },
+  pieceDir: string,
+): LoopMonitorJudge {
+  const agentSpec = raw.agent || undefined;
+
+  let agentPath: string | undefined;
+  if (agentSpec) {
+    const resolved = resolveAgentPathForPiece(agentSpec, pieceDir);
+    if (existsSync(resolved)) {
+      agentPath = resolved;
+    }
+  }
+
+  return {
+    agent: agentSpec,
+    agentPath,
+    instructionTemplate: resolveContentPath(raw.instruction_template, pieceDir),
+    rules: raw.rules.map((r) => ({ condition: r.condition, next: r.next })),
+  };
+}
+
+/**
+ * Normalize raw loop monitors from YAML into internal format.
+ */
+function normalizeLoopMonitors(
+  raw: Array<{ cycle: string[]; threshold: number; judge: { agent?: string; instruction_template?: string; rules: Array<{ condition: string; next: string }> } }> | undefined,
+  pieceDir: string,
+): LoopMonitorConfig[] | undefined {
+  if (!raw || raw.length === 0) return undefined;
+  return raw.map((monitor) => ({
+    cycle: monitor.cycle,
+    threshold: monitor.threshold,
+    judge: normalizeLoopMonitorJudge(monitor.judge, pieceDir),
+  }));
+}
+
+/**
  * Convert raw YAML piece config to internal format.
  * Agent paths are resolved relative to the piece directory.
  */
@@ -229,6 +270,7 @@ export function normalizePieceConfig(raw: unknown, pieceDir: string): PieceConfi
     movements,
     initialMovement,
     maxIterations: parsed.max_iterations,
+    loopMonitors: normalizeLoopMonitors(parsed.loop_monitors, pieceDir),
     answerAgent: parsed.answer_agent,
   };
 }

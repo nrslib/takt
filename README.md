@@ -235,6 +235,9 @@ takt eject
 # Clear agent conversation sessions
 takt clear
 
+# Deploy builtin pieces/agents as Claude Code Skill
+takt export-cc
+
 # Configure permission mode
 takt config
 ```
@@ -391,7 +394,10 @@ TAKT includes multiple builtin pieces:
 | `expert` | Full-stack development piece: architecture, frontend, security, QA reviews with fix loops. |
 | `expert-cqrs` | Full-stack development piece (CQRS+ES specialized): CQRS+ES, frontend, security, QA reviews with fix loops. |
 | `magi` | Deliberation system inspired by Evangelion. Three AI personas (MELCHIOR, BALTHASAR, CASPER) analyze and vote. |
+| `passthrough` | Thinnest wrapper. Pass task directly to coder as-is. No review. |
 | `review-only` | Read-only code review piece that makes no changes. |
+
+**Hybrid Codex variants** (`*-hybrid-codex`): Each major piece has a Codex variant where the coder agent runs on Codex while reviewers use Claude. Available for: default, minimal, expert, expert-cqrs, passthrough, review-fix-minimal, coding.
 
 Use `takt switch` to switch pieces.
 
