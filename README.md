@@ -190,6 +190,12 @@ takt watch
 ```bash
 # List task branches (merge/delete)
 takt list
+
+# Non-interactive mode (for CI/scripts)
+takt list --non-interactive
+takt list --non-interactive --action diff --branch takt/my-branch
+takt list --non-interactive --action delete --branch takt/my-branch --yes
+takt list --non-interactive --format json
 ```
 
 ### Pipeline Mode (for CI/Automation)
@@ -229,8 +235,11 @@ In pipeline mode, PRs are not created unless `--auto-pr` is specified.
 # Interactively switch pieces
 takt switch
 
-# Copy builtin pieces/agents to ~/.takt/ for customization
+# Copy builtin pieces/agents to project .takt/ for customization
 takt eject
+
+# Copy to ~/.takt/ (global) instead
+takt eject --global
 
 # Clear agent conversation sessions
 takt clear
@@ -238,8 +247,14 @@ takt clear
 # Deploy builtin pieces/agents as Claude Code Skill
 takt export-cc
 
+# Preview assembled prompts for each movement and phase
+takt prompt [piece]
+
 # Configure permission mode
 takt config
+
+# Reset piece categories to builtin defaults
+takt reset categories
 ```
 
 ### Recommended Pieces
@@ -394,6 +409,7 @@ TAKT includes multiple builtin pieces:
 | `expert` | Full-stack development piece: architecture, frontend, security, QA reviews with fix loops. |
 | `expert-cqrs` | Full-stack development piece (CQRS+ES specialized): CQRS+ES, frontend, security, QA reviews with fix loops. |
 | `magi` | Deliberation system inspired by Evangelion. Three AI personas (MELCHIOR, BALTHASAR, CASPER) analyze and vote. |
+| `coding` | Lightweight development piece: architect-planner → implement → parallel review (AI antipattern + architecture) → fix. Fast feedback loop without supervisor. |
 | `passthrough` | Thinnest wrapper. Pass task directly to coder as-is. No review. |
 | `review-only` | Read-only code review piece that makes no changes. |
 
@@ -406,10 +422,13 @@ Use `takt switch` to switch pieces.
 | Agent | Description |
 |-------|-------------|
 | **planner** | Task analysis, spec investigation, implementation planning |
+| **architect-planner** | Task analysis and design planning: investigates code, resolves unknowns, creates implementation plans |
 | **coder** | Feature implementation, bug fixing |
 | **ai-antipattern-reviewer** | AI-specific antipattern review (non-existent APIs, incorrect assumptions, scope creep) |
 | **architecture-reviewer** | Architecture and code quality review, spec compliance verification |
+| **qa-reviewer** | Test coverage and quality assurance review |
 | **security-reviewer** | Security vulnerability assessment |
+| **conductor** | Phase 3 judgment specialist: reads reports/responses and outputs status tags |
 | **supervisor** | Final validation, approval |
 
 ## Custom Agents

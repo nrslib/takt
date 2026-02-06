@@ -186,6 +186,12 @@ takt watch
 ```bash
 # タスクブランチ一覧（マージ・削除）
 takt list
+
+# 非対話モード（CI/スクリプト向け）
+takt list --non-interactive
+takt list --non-interactive --action diff --branch takt/my-branch
+takt list --non-interactive --action delete --branch takt/my-branch --yes
+takt list --non-interactive --format json
 ```
 
 ### パイプラインモード（CI/自動化向け）
@@ -225,8 +231,11 @@ takt --pipeline --task "バグを修正" --quiet
 # ピースを対話的に切り替え
 takt switch
 
-# ビルトインのピース/エージェントを~/.takt/にコピーしてカスタマイズ
+# ビルトインのピース/エージェントをプロジェクト .takt/ にコピーしてカスタマイズ
 takt eject
+
+# ~/.takt/（グローバル）にコピー
+takt eject --global
 
 # エージェントの会話セッションをクリア
 takt clear
@@ -234,8 +243,14 @@ takt clear
 # ビルトインピース・エージェントを Claude Code Skill としてデプロイ
 takt export-cc
 
+# 各ムーブメント・フェーズの組み立て済みプロンプトをプレビュー
+takt prompt [piece]
+
 # パーミッションモードを設定
 takt config
+
+# ピースカテゴリをビルトインのデフォルトにリセット
+takt reset categories
 ```
 
 ### おすすめピース
@@ -390,6 +405,7 @@ TAKTには複数のビルトインピースが同梱されています:
 | `expert` | フルスタック開発ピース: アーキテクチャ、フロントエンド、セキュリティ、QA レビューと修正ループ。 |
 | `expert-cqrs` | フルスタック開発ピース（CQRS+ES特化）: CQRS+ES、フロントエンド、セキュリティ、QA レビューと修正ループ。 |
 | `magi` | エヴァンゲリオンにインスパイアされた審議システム。3つの AI ペルソナ（MELCHIOR、BALTHASAR、CASPER）が分析し投票。 |
+| `coding` | 軽量開発ピース: architect-planner → 実装 → 並列レビュー（AI アンチパターン＋アーキテクチャ）→ 修正。スーパーバイザーなしの高速フィードバックループ。 |
 | `passthrough` | 最小構成。タスクをそのまま coder に渡す薄いラッパー。レビューなし。 |
 | `review-only` | 変更を加えない読み取り専用のコードレビューピース。 |
 
@@ -402,10 +418,13 @@ TAKTには複数のビルトインピースが同梱されています:
 | エージェント | 説明 |
 |------------|------|
 | **planner** | タスク分析、仕様調査、実装計画 |
+| **architect-planner** | タスク分析と設計計画: コード調査、不明点の解決、実装計画の作成 |
 | **coder** | 機能の実装、バグ修正 |
 | **ai-antipattern-reviewer** | AI特有のアンチパターンレビュー（存在しないAPI、誤った仮定、スコープクリープ） |
 | **architecture-reviewer** | アーキテクチャとコード品質のレビュー、仕様準拠の検証 |
+| **qa-reviewer** | テストカバレッジと品質保証のレビュー |
 | **security-reviewer** | セキュリティ脆弱性の評価 |
+| **conductor** | Phase 3 判定専用: レポートやレスポンスを読み取り、ステータスタグを出力 |
 | **supervisor** | 最終検証、バリデーション、承認 |
 
 ## カスタムエージェント
