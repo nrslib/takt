@@ -96,7 +96,7 @@ function buildPipelinePrBody(
       report,
     });
   }
-  return buildPrBody(issue, report);
+  return buildPrBody(issue ? [issue] : undefined, report);
 }
 
 /**

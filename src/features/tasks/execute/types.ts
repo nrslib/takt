@@ -4,6 +4,7 @@
 
 import type { Language } from '../../../core/models/index.js';
 import type { ProviderType } from '../../../infra/providers/index.js';
+import type { GitHubIssue } from '../../../infra/github/index.js';
 
 /** Result of piece execution */
 export interface PieceExecutionResult {
@@ -93,4 +94,6 @@ export interface SelectAndExecuteOptions {
   interactiveUserInput?: boolean;
   /** Interactive mode result metadata for NDJSON logging */
   interactiveMetadata?: InteractiveMetadata;
+  /** GitHub Issues to associate with the PR (adds "Closes #N" for each issue) */
+  issues?: GitHubIssue[];
 }

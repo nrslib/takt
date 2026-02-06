@@ -168,7 +168,7 @@ export async function selectAndExecuteTask(
       const shouldCreatePr = options?.autoPr === true || await confirm('Create pull request?', false);
       if (shouldCreatePr) {
         info('Creating pull request...');
-        const prBody = buildPrBody(undefined, `Piece \`${pieceIdentifier}\` completed successfully.`);
+        const prBody = buildPrBody(options?.issues, `Piece \`${pieceIdentifier}\` completed successfully.`);
         const prResult = createPullRequest(execCwd, {
           branch,
           title: task.length > 100 ? `${task.slice(0, 97)}...` : task,

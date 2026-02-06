@@ -7,7 +7,7 @@
 
 import { info, error } from '../../shared/ui/index.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
-import { resolveIssueTask } from '../../infra/github/index.js';
+import { fetchIssue, formatIssueAsTask, checkGhCli, parseIssueNumbers } from '../../infra/github/index.js';
 import { selectAndExecuteTask, determinePiece, saveTaskFromInteractive, createIssueFromTask, type SelectAndExecuteOptions } from '../../features/tasks/index.js';
 import { executePipeline } from '../../features/pipeline/index.js';
 import { interactiveMode } from '../../features/interactive/index.js';
@@ -65,7 +65,13 @@ export async function executeDefaultAction(task?: string): Promise<void> {
   const issueFromOption = opts.issue as number | undefined;
   if (issueFromOption) {
     try {
-      const resolvedTask = resolveIssueTask(`#${issueFromOption}`);
+      const ghStatus = checkGhCli();
+      if (!ghStatus.available) {
+        throw new Error(ghStatus.error);
+      }
+      const issue = fetchIssue(issueFromOption);
+      const resolvedTask = formatIssueAsTask(issue);
+      selectOptions.issues = [issue];
       await selectAndExecuteTask(resolvedCwd, resolvedTask, selectOptions, agentOverrides);
     } catch (e) {
       error(getErrorMessage(e));
@@ -75,17 +81,27 @@ export async function executeDefaultAction(task?: string): Promise<void> {
   }
 
   if (task && isDirectTask(task)) {
-    // isDirectTask() returns true only for issue references
-    let resolvedTask: string;
+    // isDirectTask() returns true only for issue references (e.g., "#6" or "#1 #2")
     try {
       info('Fetching GitHub Issue...');
-      resolvedTask = resolveIssueTask(task);
+      const ghStatus = checkGhCli();
+      if (!ghStatus.available) {
+        throw new Error(ghStatus.error);
+      }
+      // Parse all issue numbers from task (supports "#6" and "#1 #2")
+      const tokens = task.trim().split(/\s+/);
+      const issueNumbers = parseIssueNumbers(tokens);
+      if (issueNumbers.length === 0) {
+        throw new Error(`Invalid issue reference: ${task}`);
+      }
+      const issues = issueNumbers.map((n) => fetchIssue(n));
+      const resolvedTask = issues.map(formatIssueAsTask).join('\n\n---\n\n');
+      selectOptions.issues = issues;
+      await selectAndExecuteTask(resolvedCwd, resolvedTask, selectOptions, agentOverrides);
     } catch (e) {
       error(getErrorMessage(e));
       process.exit(1);
     }
-
-    await selectAndExecuteTask(resolvedCwd, resolvedTask, selectOptions, agentOverrides);
     return;
   }
 

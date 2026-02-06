@@ -10,7 +10,7 @@ import { buildPrBody } from '../infra/github/pr.js';
 import type { GitHubIssue } from '../infra/github/types.js';
 
 describe('buildPrBody', () => {
-  it('should build body with issue and report', () => {
+  it('should build body with single issue and report', () => {
     const issue: GitHubIssue = {
       number: 99,
       title: 'Add login feature',
@@ -19,7 +19,7 @@ describe('buildPrBody', () => {
       comments: [],
     };
 
-    const result = buildPrBody(issue, 'Piece `default` completed.');
+    const result = buildPrBody([issue], 'Piece `default` completed.');
 
     expect(result).toContain('## Summary');
     expect(result).toContain('Implement username/password authentication.');
@@ -37,7 +37,7 @@ describe('buildPrBody', () => {
       comments: [],
     };
 
-    const result = buildPrBody(issue, 'Done.');
+    const result = buildPrBody([issue], 'Done.');
 
     expect(result).toContain('Fix bug');
     expect(result).toContain('Closes #10');
@@ -50,5 +50,31 @@ describe('buildPrBody', () => {
     expect(result).toContain('## Execution Report');
     expect(result).toContain('Task completed.');
     expect(result).not.toContain('Closes');
+  });
+
+  it('should support multiple issues', () => {
+    const issues: GitHubIssue[] = [
+      {
+        number: 1,
+        title: 'First issue',
+        body: 'First issue body.',
+        labels: [],
+        comments: [],
+      },
+      {
+        number: 2,
+        title: 'Second issue',
+        body: 'Second issue body.',
+        labels: [],
+        comments: [],
+      },
+    ];
+
+    const result = buildPrBody(issues, 'Done.');
+
+    expect(result).toContain('## Summary');
+    expect(result).toContain('First issue body.');
+    expect(result).toContain('Closes #1');
+    expect(result).toContain('Closes #2');
   });
 });
