@@ -70,15 +70,17 @@ export function createPullRequest(cwd: string, options: CreatePrOptions): Create
 }
 
 /**
- * Build PR body from issue and execution report.
+ * Build PR body from issues and execution report.
+ * Supports multiple issues (adds "Closes #N" for each).
  */
-export function buildPrBody(issue: GitHubIssue | undefined, report: string): string {
+export function buildPrBody(issues: GitHubIssue[] | undefined, report: string): string {
   const parts: string[] = [];
 
   parts.push('## Summary');
-  if (issue) {
+  if (issues && issues.length > 0) {
     parts.push('');
-    parts.push(issue.body || issue.title);
+    // Use the first issue's body/title for summary
+    parts.push(issues[0]!.body || issues[0]!.title);
   }
 
   parts.push('');
@@ -86,9 +88,9 @@ export function buildPrBody(issue: GitHubIssue | undefined, report: string): str
   parts.push('');
   parts.push(report);
 
-  if (issue) {
+  if (issues && issues.length > 0) {
     parts.push('');
-    parts.push(`Closes #${issue.number}`);
+    parts.push(issues.map((issue) => `Closes #${issue.number}`).join('\n'));
   }
 
   return parts.join('\n');
