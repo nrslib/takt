@@ -1,6 +1,6 @@
 {
   "name": "takt",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "TAKT: Task Agent Koordination Tool - AI Agent Piece Orchestration",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
