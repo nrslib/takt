@@ -68,7 +68,7 @@ export class MovementExecutor {
       projectCwd: this.deps.getProjectCwd(),
       userInputs: state.userInputs,
       previousOutput: getPreviousOutput(state),
-      reportDir: join(this.deps.getProjectCwd(), this.deps.getReportDir()),
+      reportDir: join(this.deps.getCwd(), this.deps.getReportDir()),
       language: this.deps.getLanguage(),
       interactive: this.deps.getInteractive(),
       pieceMovements: pieceMovements,
@@ -146,7 +146,7 @@ export class MovementExecutor {
   /** Collect movement:report events for each report file that exists */
   emitMovementReports(step: PieceMovement): void {
     if (!step.report) return;
-    const baseDir = join(this.deps.getProjectCwd(), this.deps.getReportDir());
+    const baseDir = join(this.deps.getCwd(), this.deps.getReportDir());
 
     if (typeof step.report === 'string') {
       this.checkReportFile(step, baseDir, step.report);

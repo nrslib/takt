@@ -1,12 +1,12 @@
 /**
  * Tests for worktree environment: reportDir should use cwd (clone dir), not projectCwd.
  *
- * Issue #67: In worktree mode, the agent's sandbox blocks writes to projectCwd paths.
- * reportDir must be resolved relative to cwd so the agent writes via the symlink.
+ * Issue #113: In worktree mode, reportDir must be resolved relative to cwd (clone) to
+ * prevent agents from discovering and editing the main repository via instruction paths.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, rmSync, mkdirSync, symlinkSync } from 'node:fs';
+import { existsSync, rmSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -51,15 +51,11 @@ function createWorktreeDirs(): { projectCwd: string; cloneCwd: string } {
   const projectCwd = join(base, 'project');
   const cloneCwd = join(base, 'clone');
 
-  // Project side: real .takt/reports directory
+  // Project side: real .takt/reports directory (for non-worktree tests)
   mkdirSync(join(projectCwd, '.takt', 'reports', 'test-report-dir'), { recursive: true });
 
-  // Clone side: .takt directory with symlink to project's reports
-  mkdirSync(join(cloneCwd, '.takt'), { recursive: true });
-  symlinkSync(
-    join(projectCwd, '.takt', 'reports'),
-    join(cloneCwd, '.takt', 'reports'),
-  );
+  // Clone side: .takt/reports directory (reports now written directly to clone)
+  mkdirSync(join(cloneCwd, '.takt', 'reports', 'test-report-dir'), { recursive: true });
 
   return { projectCwd, cloneCwd };
 }
@@ -101,7 +97,7 @@ describe('PieceEngine: worktree reportDir resolution', () => {
     }
   });
 
-  it('should pass projectCwd-based reportDir to phase runner context in worktree mode', async () => {
+  it('should pass cloneCwd-based reportDir to phase runner context in worktree mode', async () => {
     // Given: worktree environment where cwd !== projectCwd
     const config = buildSimpleConfig();
     const engine = new PieceEngine(config, cloneCwd, 'test task', {
@@ -118,20 +114,21 @@ describe('PieceEngine: worktree reportDir resolution', () => {
     // When: run the piece
     await engine.run();
 
-    // Then: runReportPhase was called with context containing projectCwd-based reportDir
+    // Then: runReportPhase was called with context containing cloneCwd-based reportDir
     const reportPhaseMock = vi.mocked(runReportPhase);
     expect(reportPhaseMock).toHaveBeenCalled();
     const phaseCtx = reportPhaseMock.mock.calls[0][2] as { reportDir: string };
 
-    // reportDir should be resolved from projectCwd, not cloneCwd
-    const expectedPath = join(projectCwd, '.takt/reports/test-report-dir');
-    const unexpectedPath = join(cloneCwd, '.takt/reports/test-report-dir');
+    // reportDir should be resolved from cloneCwd (cwd), not projectCwd
+    // This prevents agents from discovering the main repository path via instruction
+    const expectedPath = join(cloneCwd, '.takt/reports/test-report-dir');
+    const unexpectedPath = join(projectCwd, '.takt/reports/test-report-dir');
 
     expect(phaseCtx.reportDir).toBe(expectedPath);
     expect(phaseCtx.reportDir).not.toBe(unexpectedPath);
   });
 
-  it('should pass projectCwd-based reportDir to buildInstruction (used by {report_dir} placeholder)', async () => {
+  it('should pass cloneCwd-based reportDir to buildInstruction (used by {report_dir} placeholder)', async () => {
     // Given: worktree environment with a movement that uses {report_dir} in template
     const config: PieceConfig = {
       name: 'worktree-test',
@@ -163,15 +160,16 @@ describe('PieceEngine: worktree reportDir resolution', () => {
     // When: run the piece
     await engine.run();
 
-    // Then: the instruction should contain projectCwd-based reportDir
+    // Then: the instruction should contain cloneCwd-based reportDir
+    // This prevents agents from discovering the main repository path
     const runAgentMock = vi.mocked(runAgent);
     expect(runAgentMock).toHaveBeenCalled();
     const instruction = runAgentMock.mock.calls[0][1] as string;
 
-    const expectedPath = join(projectCwd, '.takt/reports/test-report-dir');
+    const expectedPath = join(cloneCwd, '.takt/reports/test-report-dir');
     expect(instruction).toContain(expectedPath);
-    // In worktree mode, cloneCwd path should NOT appear
-    expect(instruction).not.toContain(join(cloneCwd, '.takt/reports/test-report-dir'));
+    // In worktree mode, projectCwd path should NOT appear in instruction
+    expect(instruction).not.toContain(join(projectCwd, '.takt/reports/test-report-dir'));
   });
 
   it('should use same path in non-worktree mode (cwd === projectCwd)', async () => {

@@ -96,7 +96,7 @@ export class OptionsBuilder {
   ): PhaseRunnerContext {
     return {
       cwd: this.getCwd(),
-      reportDir: join(this.getProjectCwd(), this.getReportDir()),
+      reportDir: join(this.getCwd(), this.getReportDir()),
       language: this.getLanguage(),
       interactive: this.engineOptions.interactive,
       lastResponse,

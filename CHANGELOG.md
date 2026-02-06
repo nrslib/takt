@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - GitHub Actions でテストが git user 未設定により失敗する問題を修正（listTasks, listNonInteractive）
+- worktree モードでレポートディレクトリがメインリポジトリに設定され、エージェントがメインリポジトリを汚染する問題を修正 (#113)
+  - `reportDir` の構築元を `projectCwd` から `cwd` に変更し、クローン内に `.takt/reports/` を生成
+  - `git add -f .takt/reports/` でレポートをコミットに強制追加（`.takt/` は gitignore されているため）
 
 ## [0.7.0-alpha.1] - 2026-02-06
 
