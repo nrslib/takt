@@ -74,16 +74,21 @@ export async function saveTaskFile(
  *
  * Extracts the first line as the issue title (truncated to 100 chars),
  * uses the full task as the body, and displays success/error messages.
+ *
+ * @param task - The task description (first line becomes title)
+ * @returns true if issue was created successfully, false otherwise
  */
-export function createIssueFromTask(task: string): void {
+export function createIssueFromTask(task: string): boolean {
   info('Creating GitHub Issue...');
   const firstLine = task.split('\n')[0] || task;
   const title = firstLine.length > 100 ? `${firstLine.slice(0, 97)}...` : firstLine;
   const issueResult = createIssue({ title, body: task });
   if (issueResult.success) {
     success(`Issue created: ${issueResult.url}`);
+    return true;
   } else {
     error(`Failed to create issue: ${issueResult.error}`);
+    return false;
   }
 }
 
@@ -161,13 +166,18 @@ export async function addTask(cwd: string, task?: string): Promise<void> {
       return;
     }
 
-    if (result.action !== 'execute' && result.action !== 'save_task') {
+    if (result.action === 'create_issue_and_execute') {
+      const issueCreated = createIssueFromTask(result.task);
+      if (!issueCreated) {
+        return;
+      }
+      taskContent = result.task;
+    } else if (result.action === 'execute' || result.action === 'save_task') {
+      taskContent = result.task;
+    } else {
       info('Cancelled.');
       return;
     }
-
-    // interactiveMode already returns a summarized task from conversation
-    taskContent = result.task;
   }
 
   // ワークツリー/ブランチ/PR設定

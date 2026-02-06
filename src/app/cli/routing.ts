@@ -123,6 +123,18 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       await selectAndExecuteTask(resolvedCwd, result.task, selectOptions, agentOverrides);
       break;
 
+    case 'create_issue_and_execute': {
+      const issueCreated = createIssueFromTask(result.task);
+      if (!issueCreated) {
+        break;
+      }
+      selectOptions.interactiveUserInput = true;
+      selectOptions.piece = pieceId;
+      selectOptions.interactiveMetadata = { confirmed: true, task: result.task };
+      await selectAndExecuteTask(resolvedCwd, result.task, selectOptions, agentOverrides);
+      break;
+    }
+
     case 'create_issue':
       createIssueFromTask(result.task);
       break;

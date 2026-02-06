@@ -392,5 +392,19 @@ describe('interactiveMode', () => {
       // Then: should fall through to /cancel
       expect(result.action).toBe('cancel');
     });
+
+    it('should return action=create_issue_and_execute when user selects create issue and execute', async () => {
+      // Given
+      setupInputSequence(['describe task', '/go']);
+      setupMockProvider(['response', 'Summarized task.']);
+      mockSelectOption.mockResolvedValue('create_issue_and_execute');
+
+      // When
+      const result = await interactiveMode('/project');
+
+      // Then
+      expect(result.action).toBe('create_issue_and_execute');
+      expect(result.task).toBe('Summarized task.');
+    });
   });
 });

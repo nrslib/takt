@@ -41,6 +41,7 @@ interface InteractiveUIText {
   actionPrompt: string;
   actions: {
     execute: string;
+    createIssueAndExecute: string;
     createIssue: string;
     saveTask: string;
     continue: string;
@@ -168,6 +169,7 @@ async function selectPostSummaryAction(
 
   return selectOption<PostSummaryAction>(ui.actionPrompt, [
     { label: ui.actions.execute, value: 'execute' },
+    { label: ui.actions.createIssueAndExecute, value: 'create_issue_and_execute' },
     { label: ui.actions.createIssue, value: 'create_issue' },
     { label: ui.actions.saveTask, value: 'save_task' },
     { label: ui.actions.continue, value: 'continue' },
@@ -235,7 +237,7 @@ async function callAI(
   return { content: response.content, sessionId: response.sessionId, success };
 }
 
-export type InteractiveModeAction = 'execute' | 'save_task' | 'create_issue' | 'cancel';
+export type InteractiveModeAction = 'execute' | 'create_issue_and_execute' | 'save_task' | 'create_issue' | 'cancel';
 
 export interface InteractiveModeResult {
   /** The action selected by the user */

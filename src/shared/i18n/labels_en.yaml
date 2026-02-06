@@ -19,6 +19,7 @@ interactive:
     actionPrompt: "What would you like to do?"
     actions:
       execute: "Execute now"
+      createIssueAndExecute: "Create Issue & Execute"
       createIssue: "Create GitHub Issue"
       saveTask: "Save as Task"
       continue: "Continue editing"
