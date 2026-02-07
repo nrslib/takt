@@ -37,6 +37,9 @@ provider: claude
 #     {issue_body}
 #     Closes #{issue}
 
+# 通知音 (true: 有効 / false: 無効、デフォルト: true)
+# notification_sound: true
+
 # デバッグ設定 (オプション)
 # debug:
 #   enabled: false

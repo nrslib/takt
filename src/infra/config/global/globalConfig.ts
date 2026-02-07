@@ -105,6 +105,7 @@ export class GlobalConfigManager {
       pieceCategoriesFile: parsed.piece_categories_file,
       branchNameStrategy: parsed.branch_name_strategy,
       preventSleep: parsed.prevent_sleep,
+      notificationSound: parsed.notification_sound,
     };
     validateProviderModelCompatibility(config.provider, config.model);
     this.cachedConfig = config;
@@ -170,6 +171,9 @@ export class GlobalConfigManager {
     }
     if (config.preventSleep !== undefined) {
       raw.prevent_sleep = config.preventSleep;
+    }
+    if (config.notificationSound !== undefined) {
+      raw.notification_sound = config.notificationSound;
     }
     writeFileSync(configPath, stringifyYaml(raw), 'utf-8');
     this.invalidateCache();

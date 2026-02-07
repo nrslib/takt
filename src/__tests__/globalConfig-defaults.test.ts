@@ -241,6 +241,52 @@ describe('loadGlobalConfig', () => {
     expect(config.preventSleep).toBeUndefined();
   });
 
+  it('should load notification_sound config from config.yaml', () => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(
+      getGlobalConfigPath(),
+      'language: en\nnotification_sound: false\n',
+      'utf-8',
+    );
+
+    const config = loadGlobalConfig();
+    expect(config.notificationSound).toBe(false);
+  });
+
+  it('should save and reload notification_sound config', () => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
+
+    const config = loadGlobalConfig();
+    config.notificationSound = true;
+    saveGlobalConfig(config);
+    invalidateGlobalConfigCache();
+
+    const reloaded = loadGlobalConfig();
+    expect(reloaded.notificationSound).toBe(true);
+  });
+
+  it('should save notification_sound: false when explicitly set', () => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
+
+    const config = loadGlobalConfig();
+    config.notificationSound = false;
+    saveGlobalConfig(config);
+    invalidateGlobalConfigCache();
+
+    const reloaded = loadGlobalConfig();
+    expect(reloaded.notificationSound).toBe(false);
+  });
+
+  it('should have undefined notificationSound by default', () => {
+    const config = loadGlobalConfig();
+    expect(config.notificationSound).toBeUndefined();
+  });
+
   describe('provider/model compatibility validation', () => {
     it('should throw when provider is codex but model is a Claude alias (opus)', () => {
       const taktDir = join(testHomeDir, '.takt');

@@ -128,6 +128,8 @@ vi.mock('../shared/utils/index.js', () => ({
   }),
   notifySuccess: vi.fn(),
   notifyError: vi.fn(),
+  playWarningSound: vi.fn(),
+  preventSleep: vi.fn(),
 }));
 
 vi.mock('../shared/prompt/index.js', () => ({

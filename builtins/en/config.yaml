@@ -37,6 +37,9 @@ provider: claude
 #     {issue_body}
 #     Closes #{issue}
 
+# Notification sounds (true: enabled, false: disabled, default: true)
+# notification_sound: true
+
 # Debug settings (optional)
 # debug:
 #   enabled: false

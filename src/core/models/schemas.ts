@@ -311,6 +311,8 @@ export const GlobalConfigSchema = z.object({
   branch_name_strategy: z.enum(['romaji', 'ai']).optional(),
   /** Prevent macOS idle sleep during takt execution using caffeinate (default: false) */
   prevent_sleep: z.boolean().optional(),
+  /** Enable notification sounds (default: true when undefined) */
+  notification_sound: z.boolean().optional(),
 });
 
 /** Project config schema */

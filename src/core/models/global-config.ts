@@ -65,6 +65,8 @@ export interface GlobalConfig {
   branchNameStrategy?: 'romaji' | 'ai';
   /** Prevent macOS idle sleep during takt execution using caffeinate (default: false) */
   preventSleep?: boolean;
+  /** Enable notification sounds (default: true when undefined) */
+  notificationSound?: boolean;
 }
 
 /** Project-level configuration */
