@@ -35,6 +35,21 @@ export function getDisplayWidth(text: string): number {
   return width;
 }
 
+// CSI (Control Sequence Introducer): ESC [ ... final_byte
+// OSC (Operating System Command): ESC ] ... (ST | BEL)
+// Other escape: ESC followed by a single character
+// eslint-disable-next-line no-control-regex
+const ANSI_PATTERN = /\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[^[\]]/g;
+
+/**
+ * Strip all ANSI escape sequences from a string.
+ * Removes CSI sequences (colors, cursor movement, etc.),
+ * OSC sequences, and other single-character escape codes.
+ */
+export function stripAnsi(text: string): string {
+  return text.replace(ANSI_PATTERN, '');
+}
+
 /**
  * Truncate plain text to fit within maxWidth display columns.
  * Appends '…' if truncated. The ellipsis itself counts as 1 column.

@@ -145,6 +145,110 @@ describe('StreamDisplay', () => {
     });
   });
 
+  describe('ANSI escape sequence stripping', () => {
+    it('should strip ANSI codes from text before writing to stdout', () => {
+      const display = new StreamDisplay('test-agent', false);
+      display.showText('\x1b[41mRed background\x1b[0m');
+
+      expect(stdoutWriteSpy).toHaveBeenCalledWith('Red background');
+    });
+
+    it('should strip ANSI codes from thinking before writing to stdout', () => {
+      const display = new StreamDisplay('test-agent', false);
+      display.showThinking('\x1b[31mColored thinking\x1b[0m');
+
+      // chalk.gray.italic wraps the stripped text, so check it does NOT contain raw ANSI
+      const writtenText = stdoutWriteSpy.mock.calls[0]?.[0] as string;
+      expect(writtenText).not.toContain('\x1b[41m');
+      expect(writtenText).not.toContain('\x1b[31m');
+      expect(writtenText).toContain('Colored thinking');
+    });
+
+    it('should accumulate stripped text in textBuffer', () => {
+      const display = new StreamDisplay('test-agent', false);
+      display.showText('\x1b[31mRed\x1b[0m');
+      display.showText('\x1b[32m Green\x1b[0m');
+
+      // Flush should work correctly with stripped content
+      display.flushText();
+
+      // After flush, buffer is cleared — verify no crash and text was output
+      expect(stdoutWriteSpy).toHaveBeenCalledWith('Red');
+      expect(stdoutWriteSpy).toHaveBeenCalledWith(' Green');
+    });
+
+    it('should accumulate stripped text in thinkingBuffer', () => {
+      const display = new StreamDisplay('test-agent', false);
+      display.showThinking('\x1b[31mThought 1\x1b[0m');
+      display.showThinking('\x1b[32m Thought 2\x1b[0m');
+
+      display.flushThinking();
+
+      // Verify stripped text was written (wrapped in chalk styling)
+      expect(stdoutWriteSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('should not strip ANSI from text that has no ANSI codes', () => {
+      const display = new StreamDisplay('test-agent', false);
+      display.showText('Plain text');
+
+      expect(stdoutWriteSpy).toHaveBeenCalledWith('Plain text');
+    });
+
+    it('should strip ANSI codes from tool output before buffering', () => {
+      const display = new StreamDisplay('test-agent', false);
+      display.showToolUse('Bash', { command: 'ls' });
+      display.showToolOutput('\x1b[32mgreen output\x1b[0m\n');
+
+      const outputLine = consoleLogSpy.mock.calls.find(
+        (call) => typeof call[0] === 'string' && (call[0] as string).includes('green output'),
+      );
+      expect(outputLine).toBeDefined();
+      expect(outputLine![0]).not.toContain('\x1b[32m');
+    });
+
+    it('should strip ANSI codes from tool output across multiple chunks', () => {
+      const display = new StreamDisplay('test-agent', false);
+      display.showToolUse('Bash', { command: 'ls' });
+      display.showToolOutput('\x1b[31mpartial');
+      display.showToolOutput(' line\x1b[0m\n');
+
+      const outputLine = consoleLogSpy.mock.calls.find(
+        (call) => typeof call[0] === 'string' && (call[0] as string).includes('partial line'),
+      );
+      expect(outputLine).toBeDefined();
+      expect(outputLine![0]).not.toContain('\x1b[31m');
+    });
+
+    it('should strip ANSI codes from tool result content', () => {
+      const display = new StreamDisplay('test-agent', false);
+      display.showToolUse('Read', { file_path: '/test.ts' });
+      display.showToolResult('\x1b[41mResult with red bg\x1b[0m', false);
+
+      const resultLine = consoleLogSpy.mock.calls.find(
+        (call) => typeof call[0] === 'string' && (call[0] as string).includes('✓'),
+      );
+      expect(resultLine).toBeDefined();
+      const fullOutput = resultLine!.join(' ');
+      expect(fullOutput).toContain('Result with red bg');
+      expect(fullOutput).not.toContain('\x1b[41m');
+    });
+
+    it('should strip ANSI codes from tool result error content', () => {
+      const display = new StreamDisplay('test-agent', false);
+      display.showToolUse('Bash', { command: 'fail' });
+      display.showToolResult('\x1b[31mError message\x1b[0m', true);
+
+      const errorLine = consoleLogSpy.mock.calls.find(
+        (call) => typeof call[0] === 'string' && (call[0] as string).includes('✗'),
+      );
+      expect(errorLine).toBeDefined();
+      const fullOutput = errorLine!.join(' ');
+      expect(fullOutput).toContain('Error message');
+      expect(fullOutput).not.toContain('\x1b[31m');
+    });
+  });
+
   describe('progress prefix format', () => {
     it('should format progress as (iteration/max) step index/total', () => {
       const progressInfo: ProgressInfo = {

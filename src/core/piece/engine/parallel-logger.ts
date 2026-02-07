@@ -7,6 +7,7 @@
  */
 
 import type { StreamCallback, StreamEvent } from '../types.js';
+import { stripAnsi } from '../../../shared/utils/text.js';
 
 /** ANSI color codes for sub-movement prefixes (cycled in order) */
 const COLORS = ['\x1b[36m', '\x1b[33m', '\x1b[35m', '\x1b[32m'] as const; // cyan, yellow, magenta, green
@@ -117,7 +118,7 @@ export class ParallelLogger {
    */
   private handleTextEvent(name: string, prefix: string, text: string): void {
     const buffer = this.lineBuffers.get(name) ?? '';
-    const combined = buffer + text;
+    const combined = buffer + stripAnsi(text);
     const parts = combined.split('\n');
 
     // Last part is incomplete (no trailing newline) — keep in buffer
@@ -145,13 +146,13 @@ export class ParallelLogger {
         text = `[tool] ${event.data.tool}`;
         break;
       case 'tool_result':
-        text = event.data.content;
+        text = stripAnsi(event.data.content);
         break;
       case 'tool_output':
-        text = event.data.output;
+        text = stripAnsi(event.data.output);
         break;
       case 'thinking':
-        text = event.data.thinking;
+        text = stripAnsi(event.data.thinking);
         break;
       default:
         return;

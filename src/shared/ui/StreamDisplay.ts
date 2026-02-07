@@ -12,6 +12,7 @@ import chalk from 'chalk';
 // dependent event-data types, which is out of scope for this refactoring.
 import type { StreamEvent, StreamCallback } from '../../core/piece/index.js';
 import { truncate } from './LogManager.js';
+import { stripAnsi } from '../utils/text.js';
 
 /** Progress information for stream display */
 export interface ProgressInfo {
@@ -116,7 +117,7 @@ export class StreamDisplay {
       this.lastToolUse = tool;
     }
 
-    this.toolOutputBuffer += output;
+    this.toolOutputBuffer += stripAnsi(output);
     const lines = this.toolOutputBuffer.split(/\r?\n/);
     this.toolOutputBuffer = lines.pop() ?? '';
 
@@ -129,11 +130,12 @@ export class StreamDisplay {
 
   showToolResult(content: string, isError: boolean): void {
     this.stopToolSpinner();
+    const sanitizedContent = stripAnsi(content);
 
     if (this.quiet) {
       if (isError) {
         const toolName = this.lastToolUse || 'Tool';
-        const errorContent = content || 'Unknown error';
+        const errorContent = sanitizedContent || 'Unknown error';
         console.log(chalk.red(`  ✗ ${toolName}:`), chalk.red(truncate(errorContent, 70)));
       }
       this.lastToolUse = null;
@@ -149,10 +151,10 @@ export class StreamDisplay {
 
     const toolName = this.lastToolUse || 'Tool';
     if (isError) {
-      const errorContent = content || 'Unknown error';
+      const errorContent = sanitizedContent || 'Unknown error';
       console.log(chalk.red(`  ✗ ${toolName}:`), chalk.red(truncate(errorContent, 70)));
-    } else if (content && content.length > 0) {
-      const preview = content.split('\n')[0] || content;
+    } else if (sanitizedContent && sanitizedContent.length > 0) {
+      const preview = sanitizedContent.split('\n')[0] || sanitizedContent;
       console.log(chalk.green(`  ✓ ${toolName}`), chalk.gray(truncate(preview, 60)));
     } else {
       console.log(chalk.green(`  ✓ ${toolName}`));
@@ -174,8 +176,9 @@ export class StreamDisplay {
       console.log(chalk.magenta(`💭 [${this.agentName}]${progressPart} thinking:`));
       this.isFirstThinking = false;
     }
-    process.stdout.write(chalk.gray.italic(thinking));
-    this.thinkingBuffer += thinking;
+    const sanitized = stripAnsi(thinking);
+    process.stdout.write(chalk.gray.italic(sanitized));
+    this.thinkingBuffer += sanitized;
   }
 
   flushThinking(): void {
@@ -200,8 +203,9 @@ export class StreamDisplay {
       console.log(chalk.cyan(`[${this.agentName}]${progressPart}:`));
       this.isFirstText = false;
     }
-    process.stdout.write(text);
-    this.textBuffer += text;
+    const sanitized = stripAnsi(text);
+    process.stdout.write(sanitized);
+    this.textBuffer += sanitized;
   }
 
   flushText(): void {
