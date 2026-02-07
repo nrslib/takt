@@ -57,8 +57,8 @@
     "builtins/"
   ],
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.19",
-    "@openai/codex-sdk": "^0.91.0",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.34",
+    "@openai/codex-sdk": "^0.98.0",
     "chalk": "^5.3.0",
     "commander": "^12.1.0",
     "update-notifier": "^7.3.1",
