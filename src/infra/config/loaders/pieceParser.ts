@@ -122,24 +122,25 @@ function isOutputContractItem(raw: unknown): raw is { name: string; order?: stri
 /**
  * Normalize the raw output_contracts field from YAML into internal format.
  *
- * Input formats (YAML):
+ * Input format (YAML):
  *   output_contracts:
- *     - Scope: 01-scope.md           # label:path format
- *     - name: 00-plan.md             # item format
- *       format: plan
+ *     report:
+ *       - Scope: 01-scope.md           # label:path format
+ *       - name: 00-plan.md             # item format
+ *         format: plan
  *
  * Output: OutputContractEntry[]
  */
 function normalizeOutputContracts(
-  raw: Array<Record<string, string> | { name: string; order?: string; format?: string }> | undefined,
+  raw: { report?: Array<Record<string, string> | { name: string; order?: string; format?: string }> } | undefined,
   pieceDir: string,
   resolvedReportFormats?: Record<string, string>,
 ): OutputContractEntry[] | undefined {
-  if (raw == null || raw.length === 0) return undefined;
+  if (raw?.report == null || raw.report.length === 0) return undefined;
 
   const result: OutputContractEntry[] = [];
 
-  for (const entry of raw) {
+  for (const entry of raw.report) {
     if (isOutputContractItem(entry)) {
       // Item format: {name, order?, format?}
       const item: OutputContractItem = {

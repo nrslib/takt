@@ -46,8 +46,9 @@ movements:
         requires_user_input: true
         interactive_only: true
     output_contracts:
-      - Scope: 01-coder-scope.md
-      - Decisions: 02-coder-decisions.md
+      report:
+        - Scope: 01-coder-scope.md
+        - Decisions: 02-coder-decisions.md
   - name: reviewers
     parallel:
       - name: ai_review
@@ -67,8 +68,9 @@ movements:
           - condition: No AI-specific issues
           - condition: AI-specific issues found
         output_contracts:
-          - name: 03-ai-review.md
-            format: ai-review
+          report:
+            - name: 03-ai-review.md
+              format: ai-review
       - name: supervise
         edit: false
         persona: supervisor
@@ -85,8 +87,9 @@ movements:
           - condition: All checks passed
           - condition: Requirements unmet, tests failing
         output_contracts:
-          - Validation: 05-supervisor-validation.md
-          - Summary: summary.md
+          report:
+            - Validation: 05-supervisor-validation.md
+            - Summary: summary.md
     rules:
       - condition: all("No AI-specific issues", "All checks passed")
         next: COMPLETE

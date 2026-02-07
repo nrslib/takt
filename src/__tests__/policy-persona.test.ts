@@ -556,10 +556,12 @@ describe('section reference resolution', () => {
         name: 'plan',
         persona: 'planner',
         instruction: '{task}',
-        output_contracts: [{
-          name: '00-plan.md',
-          format: 'plan',
-        }],
+        output_contracts: {
+          report: [{
+            name: '00-plan.md',
+            format: 'plan',
+          }],
+        },
       }],
     };
 

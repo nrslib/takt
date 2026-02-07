@@ -55,8 +55,9 @@ movements:
       - condition: Requirements are unclear and planning cannot proceed
         next: ABORT
     output_contracts:
-      - name: 00-plan.md
-        format: plan
+      report:
+        - name: 00-plan.md
+          format: plan
   - name: implement
     edit: true
     persona: coder
@@ -92,8 +93,9 @@ movements:
         requires_user_input: true
         interactive_only: true
     output_contracts:
-      - Scope: 01-coder-scope.md
-      - Decisions: 02-coder-decisions.md
+      report:
+        - Scope: 01-coder-scope.md
+        - Decisions: 02-coder-decisions.md
   - name: ai_review
     edit: false
     persona: ai-antipattern-reviewer
@@ -113,8 +115,9 @@ movements:
       - condition: AI-specific issues detected
         next: ai_fix
     output_contracts:
-      - name: 03-ai-review.md
-        format: ai-review
+      report:
+        - name: 03-ai-review.md
+          format: ai-review
   - name: ai_fix
     edit: true
     persona: coder
@@ -179,8 +182,9 @@ movements:
           - condition: needs_fix
         instruction: review-cqrs-es
         output_contracts:
-          - name: 04-cqrs-es-review.md
-            format: cqrs-es-review
+          report:
+            - name: 04-cqrs-es-review.md
+              format: cqrs-es-review
       - name: frontend-review
         edit: false
         persona: frontend-reviewer
@@ -197,8 +201,9 @@ movements:
           - condition: needs_fix
         instruction: review-frontend
         output_contracts:
-          - name: 05-frontend-review.md
-            format: frontend-review
+          report:
+            - name: 05-frontend-review.md
+              format: frontend-review
       - name: security-review
         edit: false
         persona: security-reviewer
@@ -215,8 +220,9 @@ movements:
           - condition: needs_fix
         instruction: review-security
         output_contracts:
-          - name: 06-security-review.md
-            format: security-review
+          report:
+            - name: 06-security-review.md
+              format: security-review
       - name: qa-review
         edit: false
         persona: qa-reviewer
@@ -234,8 +240,9 @@ movements:
           - condition: needs_fix
         instruction: review-qa
         output_contracts:
-          - name: 07-qa-review.md
-            format: qa-review
+          report:
+            - name: 07-qa-review.md
+              format: qa-review
     rules:
       - condition: all("approved")
         next: supervise
@@ -286,8 +293,9 @@ movements:
       - condition: Issues detected during final review
         next: fix_supervisor
     output_contracts:
-      - Validation: 08-supervisor-validation.md
-      - Summary: summary.md
+      report:
+        - Validation: 08-supervisor-validation.md
+        - Summary: summary.md
   - name: fix_supervisor
     edit: true
     persona: coder

@@ -36,4 +36,5 @@ movements:
     instruction_template: |
       Do the task.
     output_contracts:
-      - Summary: summary.md
+      report:
+        - Summary: summary.md

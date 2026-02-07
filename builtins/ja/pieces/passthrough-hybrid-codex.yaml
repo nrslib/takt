@@ -37,7 +37,8 @@ movements:
     instruction_template: |
       タスクをこなしてください。
     output_contracts:
-      - Summary: summary.md
+      report:
+        - Summary: summary.md
 policies:
   coding: ../policies/coding.md
   testing: ../policies/testing.md

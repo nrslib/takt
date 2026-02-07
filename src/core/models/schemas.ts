@@ -79,25 +79,34 @@ export const OutputContractItemSchema = z.object({
 });
 
 /**
+ * Raw output contract entry — array item in output_contracts.report
+ *
+ * Supports:
+ *   - Label:path format: { Scope: "01-scope.md" }
+ *   - Item format: { name, order?, format? }
+ */
+export const OutputContractEntrySchema = z.union([
+  z.record(z.string(), z.string()),  // {Scope: "01-scope.md"} format
+  OutputContractItemSchema,           // {name, order?, format?} format
+]);
+
+/**
  * Output contracts field schema for movement-level definition.
  *
- * YAML formats:
- *   output_contracts:                     # array of label:path entries
- *     - Scope: 01-scope.md
- *     - Decisions: 02-decisions.md
- *   output_contracts:                     # array of objects (name + order + format)
- *     - name: 00-plan.md
- *       order: ...
- *       format: plan
- *
- * Array items can be single-key objects or full item objects.
+ * YAML format:
+ *   output_contracts:
+ *     report:                           # report array (required if output_contracts is specified)
+ *       - Scope: 01-scope.md            # label:path format
+ *       - Decisions: 02-decisions.md
+ *   output_contracts:
+ *     report:
+ *       - name: 00-plan.md              # name + order + format format
+ *         order: ...
+ *         format: plan
  */
-export const OutputContractsFieldSchema = z.array(
-  z.union([
-    z.record(z.string(), z.string()),  // {Scope: "01-scope.md"} format
-    OutputContractItemSchema,           // {name, order?, format?} format
-  ])
-).optional();
+export const OutputContractsFieldSchema = z.object({
+  report: z.array(OutputContractEntrySchema).optional(),
+}).optional();
 
 /** Quality gates schema - AI directives for movement completion (string array) */
 export const QualityGatesSchema = z.array(z.string()).optional();

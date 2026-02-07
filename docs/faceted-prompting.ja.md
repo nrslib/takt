@@ -370,8 +370,9 @@ movements:
     instruction: review       # 異なる WHAT（共有も可能）
     knowledge: architecture   # 同じ CONTEXT — 再利用
     output_contracts:
-      - name: review.md
-        format: review        # OUTPUT — report_formats.review を参照
+      report:
+        - name: review.md
+          format: review      # OUTPUT — report_formats.review を参照
     edit: false
     rules:
       - condition: Approved

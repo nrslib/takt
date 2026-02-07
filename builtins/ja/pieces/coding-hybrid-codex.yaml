@@ -42,8 +42,9 @@ movements:
         next: ABORT
     instruction: plan
     output_contracts:
-      - name: 00-plan.md
-        format: plan
+      report:
+        - name: 00-plan.md
+          format: plan
   - name: implement
     edit: true
     persona: coder
@@ -76,8 +77,9 @@ movements:
         interactive_only: true
     instruction: implement
     output_contracts:
-      - Scope: 02-coder-scope.md
-      - Decisions: 03-coder-decisions.md
+      report:
+        - Scope: 02-coder-scope.md
+        - Decisions: 03-coder-decisions.md
   - name: reviewers
     parallel:
       - name: ai_review
@@ -97,8 +99,9 @@ movements:
           - condition: AI特有の問題あり
         instruction: ai-review
         output_contracts:
-          - name: 04-ai-review.md
-            format: ai-review
+          report:
+            - name: 04-ai-review.md
+              format: ai-review
       - name: arch-review
         edit: false
         persona: architecture-reviewer
@@ -115,8 +118,9 @@ movements:
           - condition: needs_fix
         instruction: review-arch
         output_contracts:
-          - name: 05-architect-review.md
-            format: architecture-review
+          report:
+            - name: 05-architect-review.md
+              format: architecture-review
     rules:
       - condition: all("AI特有の問題なし", "approved")
         next: COMPLETE

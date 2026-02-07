@@ -53,7 +53,7 @@ export { handleBlocked, type BlockedHandlerResult } from './engine/blocked-handl
 export { ParallelLogger } from './engine/parallel-logger.js';
 
 // Instruction building
-export { InstructionBuilder, isOutputContractItem, isOutputContractLabelPath } from './instruction/InstructionBuilder.js';
+export { InstructionBuilder, isOutputContractItem } from './instruction/InstructionBuilder.js';
 export { ReportInstructionBuilder, type ReportInstructionContext } from './instruction/ReportInstructionBuilder.js';
 export { StatusJudgmentBuilder, type StatusJudgmentContext } from './instruction/StatusJudgmentBuilder.js';
 export { buildEditRule, type InstructionContext } from './instruction/instruction-context.js';

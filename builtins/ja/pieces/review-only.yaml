@@ -72,8 +72,9 @@ movements:
           - condition: needs_fix
         instruction: review-arch
         output_contracts:
-          - name: 01-architect-review.md
-            format: architecture-review
+          report:
+            - name: 01-architect-review.md
+              format: architecture-review
       - name: security-review
         edit: false
         persona: security-reviewer
@@ -90,8 +91,9 @@ movements:
           - condition: needs_fix
         instruction: review-security
         output_contracts:
-          - name: 02-security-review.md
-            format: security-review
+          report:
+            - name: 02-security-review.md
+              format: security-review
       - name: ai-review
         edit: false
         persona: ai-antipattern-reviewer
@@ -109,8 +111,9 @@ movements:
           - condition: needs_fix
         instruction: review-ai
         output_contracts:
-          - name: 03-ai-review.md
-            format: ai-review
+          report:
+            - name: 03-ai-review.md
+              format: ai-review
     rules:
       - condition: all("approved")
         next: supervise
@@ -176,7 +179,8 @@ movements:
       - {全レビューからの統合提案}
       ```
     output_contracts:
-      - Review Summary: 04-review-summary.md
+      report:
+        - Review Summary: 04-review-summary.md
   - name: pr-comment
     edit: false
     persona: pr-commenter

@@ -76,8 +76,9 @@ movement 内では**キー名**で参照する（パスを直接書かない）�
       edit: false
       instruction: review-arch
       output_contracts:
-        - name: 05-architect-review.md
-          format: architecture-review
+        report:
+          - name: 05-architect-review.md
+            format: architecture-review
       rules:
         - condition: "approved"
         - condition: "needs_fix"
@@ -132,14 +133,15 @@ rules:
 
 ## Output Contracts 定義
 
-Movement の出力契約（レポート定義）。配列形式で指定する。
+Movement の出力契約（レポート定義）。`output_contracts.report` 配列形式で指定する。
 
 ### 形式1: name + format（フォーマット参照）
 
 ```yaml
 output_contracts:
-  - name: 01-plan.md
-    format: plan               # report_formats マップのキーを参照
+  report:
+    - name: 01-plan.md
+      format: plan               # report_formats マップのキーを参照
 ```
 
 `format` がキー文字列の場合、トップレベル `report_formats:` セクションから対応する .md ファイルを読み込み、出力契約指示として使用する。
@@ -148,20 +150,22 @@ output_contracts:
 
 ```yaml
 output_contracts:
-  - name: 01-plan.md
-    format: |                  # インラインでフォーマットを記述
-      # レポートタイトル
-      ## セクション
-      {内容}
+  report:
+    - name: 01-plan.md
+      format: |                  # インラインでフォーマットを記述
+        # レポートタイトル
+        ## セクション
+        {内容}
 ```
 
 ### 形式2: label + path（ラベル付きパス）
 
 ```yaml
 output_contracts:
-  - Summary: summary.md
-  - Scope: 01-scope.md
-  - Decisions: 02-decisions.md
+  report:
+    - Summary: summary.md
+    - Scope: 01-scope.md
+    - Decisions: 02-decisions.md
 ```
 
 各要素のキーがレポート種別名（ラベル）、値がファイル名。

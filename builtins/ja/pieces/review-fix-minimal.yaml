@@ -45,8 +45,9 @@ movements:
         requires_user_input: true
         interactive_only: true
     output_contracts:
-      - Scope: 01-coder-scope.md
-      - Decisions: 02-coder-decisions.md
+      report:
+        - Scope: 01-coder-scope.md
+        - Decisions: 02-coder-decisions.md
   - name: reviewers
     parallel:
       - name: ai_review
@@ -66,8 +67,9 @@ movements:
           - condition: AI特有の問題なし
           - condition: AI特有の問題あり
         output_contracts:
-          - name: 03-ai-review.md
-            format: ai-review
+          report:
+            - name: 03-ai-review.md
+              format: ai-review
       - name: supervise
         edit: false
         persona: supervisor
@@ -84,8 +86,9 @@ movements:
           - condition: すべて問題なし
           - condition: 要求未達成、テスト失敗、ビルドエラー
         output_contracts:
-          - Validation: 05-supervisor-validation.md
-          - Summary: summary.md
+          report:
+            - Validation: 05-supervisor-validation.md
+            - Summary: summary.md
     rules:
       - condition: all("AI特有の問題なし", "すべて問題なし")
         next: COMPLETE

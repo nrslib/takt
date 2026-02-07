@@ -5,7 +5,7 @@
  * Assembles template variables and renders a single complete template.
  */
 
-import type { PieceMovement, Language, OutputContractLabelPath, OutputContractItem, OutputContractEntry } from '../../models/types.js';
+import type { PieceMovement, Language, OutputContractItem, OutputContractEntry } from '../../models/types.js';
 import type { InstructionContext } from './instruction-context.js';
 import { buildEditRule } from './instruction-context.js';
 import { escapeTemplateChars, replaceTemplatePlaceholders } from './escape.js';
@@ -16,13 +16,6 @@ import { loadTemplate } from '../../../shared/prompts/index.js';
  */
 export function isOutputContractItem(entry: OutputContractEntry): entry is OutputContractItem {
   return 'name' in entry;
-}
-
-/**
- * Check if an output contract entry is the label-path form (OutputContractLabelPath).
- */
-export function isOutputContractLabelPath(entry: OutputContractEntry): entry is OutputContractLabelPath {
-  return 'label' in entry && 'path' in entry;
 }
 
 /**

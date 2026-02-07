@@ -369,9 +369,10 @@ movements:
     policy: review            # Different RULES
     instruction: review       # Different WHAT (but could share)
     knowledge: architecture   # Same CONTEXT — reused
-    report:
-      name: review.md
-      format: review          # OUTPUT — references output_contracts.review
+    output_contracts:
+      report:
+        - name: review.md
+          format: review      # OUTPUT — references report_formats.review
     edit: false
     rules:
       - condition: Approved

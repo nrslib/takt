@@ -156,7 +156,6 @@ AI tends to generate unnecessary code for "future extensibility", "symmetry", or
 | REJECT | Interfaces or options prepared for future extension |
 | REJECT | Exported but no usage found via grep |
 | OK | Implicitly called by framework (lifecycle hooks, etc.) |
-| OK | Intentionally exposed as public package API |
 
 Verification approach:
 1. Grep to confirm no references to changed/deleted code remain

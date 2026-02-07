@@ -79,8 +79,9 @@ movements:
           - {Question 2}
     instruction: plan
     output_contracts:
-      - name: 00-plan.md
-        format: plan
+      report:
+        - name: 00-plan.md
+          format: plan
   - name: architect
     edit: false
     persona: architect-planner
@@ -99,8 +100,9 @@ movements:
         next: ABORT
     instruction: architect
     output_contracts:
-      - name: 01-architecture.md
-        format: architecture-design
+      report:
+        - name: 01-architecture.md
+          format: architecture-design
   - name: implement
     edit: true
     persona: coder
@@ -134,8 +136,9 @@ movements:
         interactive_only: true
     instruction: implement
     output_contracts:
-      - Scope: 02-coder-scope.md
-      - Decisions: 03-coder-decisions.md
+      report:
+        - Scope: 02-coder-scope.md
+        - Decisions: 03-coder-decisions.md
   - name: ai_review
     edit: false
     persona: ai-antipattern-reviewer
@@ -155,8 +158,9 @@ movements:
         next: ai_fix
     instruction: ai-review
     output_contracts:
-      - name: 04-ai-review.md
-        format: ai-review
+      report:
+        - name: 04-ai-review.md
+          format: ai-review
   - name: ai_fix
     edit: true
     persona: coder
@@ -219,8 +223,9 @@ movements:
           - condition: needs_fix
         instruction: review-arch
         output_contracts:
-          - name: 05-architect-review.md
-            format: architecture-review
+          report:
+            - name: 05-architect-review.md
+              format: architecture-review
       - name: qa-review
         edit: false
         persona: qa-reviewer
@@ -238,8 +243,9 @@ movements:
           - condition: needs_fix
         instruction: review-qa
         output_contracts:
-          - name: 06-qa-review.md
-            format: qa-review
+          report:
+            - name: 06-qa-review.md
+              format: qa-review
     rules:
       - condition: all("approved")
         next: supervise
@@ -288,8 +294,9 @@ movements:
         next: plan
     instruction: supervise
     output_contracts:
-      - Validation: 07-supervisor-validation.md
-      - Summary: summary.md
+      report:
+        - Validation: 07-supervisor-validation.md
+        - Summary: summary.md
 report_formats:
   plan: ../output-contracts/plan.md
   architecture-design: ../output-contracts/architecture-design.md

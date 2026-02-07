@@ -114,7 +114,6 @@ export {
   ParallelLogger,
   InstructionBuilder,
   isOutputContractItem,
-  isOutputContractLabelPath,
   ReportInstructionBuilder,
   StatusJudgmentBuilder,
   buildEditRule,
