@@ -6,6 +6,7 @@
 
 import { existsSync, appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import type { PromptLogRecord } from './types.js';
 /** Debug configuration (duplicated from core/models to avoid shared → core dependency) */
 interface DebugConfig {
   enabled: boolean;
@@ -21,6 +22,7 @@ export class DebugLogger {
 
   private debugEnabled = false;
   private debugLogFile: string | null = null;
+  private debugPromptsLogFile: string | null = null;
   private initialized = false;
   private verboseConsoleEnabled = false;
 
@@ -38,10 +40,10 @@ export class DebugLogger {
     DebugLogger.instance = null;
   }
 
-  /** Get default debug log file path */
-  private static getDefaultLogFile(projectDir: string): string {
+  /** Get default debug log file prefix */
+  private static getDefaultLogPrefix(projectDir: string): string {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    return join(projectDir, '.takt', 'logs', `debug-${timestamp}.log`);
+    return join(projectDir, '.takt', 'logs', `debug-${timestamp}`);
   }
 
   /** Initialize debug logger from config */
@@ -55,8 +57,15 @@ export class DebugLogger {
     if (this.debugEnabled) {
       if (config?.logFile) {
         this.debugLogFile = config.logFile;
+        if (config.logFile.endsWith('.log')) {
+          this.debugPromptsLogFile = config.logFile.slice(0, -4) + '-prompts.jsonl';
+        } else {
+          this.debugPromptsLogFile = `${config.logFile}-prompts.jsonl`;
+        }
       } else if (projectDir) {
-        this.debugLogFile = DebugLogger.getDefaultLogFile(projectDir);
+        const logPrefix = DebugLogger.getDefaultLogPrefix(projectDir);
+        this.debugLogFile = `${logPrefix}.log`;
+        this.debugPromptsLogFile = `${logPrefix}-prompts.jsonl`;
       }
 
       if (this.debugLogFile) {
@@ -76,6 +85,14 @@ export class DebugLogger {
 
         writeFileSync(this.debugLogFile, header, 'utf-8');
       }
+
+      if (this.debugPromptsLogFile) {
+        const promptsLogDir = dirname(this.debugPromptsLogFile);
+        if (!existsSync(promptsLogDir)) {
+          mkdirSync(promptsLogDir, { recursive: true });
+        }
+        writeFileSync(this.debugPromptsLogFile, '', 'utf-8');
+      }
     }
 
     this.initialized = true;
@@ -85,6 +102,7 @@ export class DebugLogger {
   reset(): void {
     this.debugEnabled = false;
     this.debugLogFile = null;
+    this.debugPromptsLogFile = null;
     this.initialized = false;
     this.verboseConsoleEnabled = false;
   }
@@ -153,6 +171,19 @@ export class DebugLogger {
     }
   }
 
+  /** Write a prompt/response debug log entry */
+  writePromptLog(record: PromptLogRecord): void {
+    if (!this.debugEnabled || !this.debugPromptsLogFile) {
+      return;
+    }
+
+    try {
+      appendFileSync(this.debugPromptsLogFile, JSON.stringify(record) + '\n', 'utf-8');
+    } catch {
+      // Silently fail - logging errors should not interrupt main flow
+    }
+  }
+
   /** Create a scoped logger for a component */
   createLogger(component: string) {
     return {
@@ -201,6 +232,10 @@ export function infoLog(component: string, message: string, data?: unknown): voi
 
 export function errorLog(component: string, message: string, data?: unknown): void {
   DebugLogger.getInstance().writeLog('ERROR', component, message, data);
+}
+
+export function writePromptLog(record: PromptLogRecord): void {
+  DebugLogger.getInstance().writePromptLog(record);
 }
 
 export function traceEnter(component: string, funcName: string, args?: Record<string, unknown>): void {

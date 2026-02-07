@@ -128,6 +128,8 @@ vi.mock('../shared/utils/index.js', () => ({
   }),
   notifySuccess: vi.fn(),
   notifyError: vi.fn(),
+  isDebugEnabled: vi.fn().mockReturnValue(false),
+  writePromptLog: vi.fn(),
 }));
 
 vi.mock('../shared/prompt/index.js', () => ({

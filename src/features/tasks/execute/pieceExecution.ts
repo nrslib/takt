@@ -46,7 +46,15 @@ import {
   type NdjsonInteractiveStart,
   type NdjsonInteractiveEnd,
 } from '../../../infra/fs/index.js';
-import { createLogger, notifySuccess, notifyError, preventSleep } from '../../../shared/utils/index.js';
+import {
+  createLogger,
+  notifySuccess,
+  notifyError,
+  preventSleep,
+  isDebugEnabled,
+  writePromptLog,
+} from '../../../shared/utils/index.js';
+import type { PromptLogRecord } from '../../../shared/utils/index.js';
 import { selectOption, promptInput } from '../../../shared/prompt/index.js';
 import { EXIT_SIGINT } from '../../../shared/exitCodes.js';
 import { getLabel } from '../../../shared/i18n/index.js';
@@ -241,6 +249,8 @@ export async function executePiece(
   let abortReason: string | undefined;
   let lastMovementContent: string | undefined;
   let lastMovementName: string | undefined;
+  let currentIteration = 0;
+  const phasePrompts = new Map<string, string>();
 
   engine.on('phase:start', (step, phase, phaseName, instruction) => {
     log.debug('Phase starting', { step: step.name, phase, phaseName });
@@ -253,6 +263,10 @@ export async function executePiece(
       ...(instruction ? { instruction } : {}),
     };
     appendNdjsonLine(ndjsonLogPath, record);
+
+    if (isDebugEnabled()) {
+      phasePrompts.set(`${step.name}:${phase}`, instruction);
+    }
   });
 
   engine.on('phase:complete', (step, phase, phaseName, content, phaseStatus, phaseError) => {
@@ -263,15 +277,34 @@ export async function executePiece(
       phase,
       phaseName,
       status: phaseStatus,
-      content: content ?? '',
+      content,
       timestamp: new Date().toISOString(),
       ...(phaseError ? { error: phaseError } : {}),
     };
     appendNdjsonLine(ndjsonLogPath, record);
+
+    const promptKey = `${step.name}:${phase}`;
+    const prompt = phasePrompts.get(promptKey);
+    phasePrompts.delete(promptKey);
+
+    if (isDebugEnabled()) {
+      if (prompt) {
+        const promptRecord: PromptLogRecord = {
+          movement: step.name,
+          phase,
+          iteration: currentIteration,
+          prompt,
+          response: content,
+          timestamp: new Date().toISOString(),
+        };
+        writePromptLog(promptRecord);
+      }
+    }
   });
 
   engine.on('movement:start', (step, iteration, instruction) => {
     log.debug('Movement starting', { step: step.name, persona: step.personaDisplayName, iteration });
+    currentIteration = iteration;
     info(`[${iteration}/${pieceConfig.maxIterations}] ${step.name} (${step.personaDisplayName})`);
 
     // Log prompt content for debugging
