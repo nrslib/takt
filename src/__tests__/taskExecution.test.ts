@@ -25,6 +25,11 @@ vi.mock('../infra/task/clone.js', async (importOriginal) => ({
   removeClone: vi.fn(),
 }));
 
+vi.mock('../infra/task/git.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  getCurrentBranch: vi.fn(() => 'main'),
+}));
+
 vi.mock('../infra/task/autoCommit.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   autoCommitAndPush: vi.fn(),
@@ -68,12 +73,14 @@ vi.mock('../shared/constants.js', () => ({
 }));
 
 import { createSharedClone } from '../infra/task/clone.js';
+import { getCurrentBranch } from '../infra/task/git.js';
 import { summarizeTaskName } from '../infra/task/summarize.js';
 import { info } from '../shared/ui/index.js';
 import { resolveTaskExecution } from '../features/tasks/index.js';
 import type { TaskInfo } from '../infra/task/index.js';
 
 const mockCreateSharedClone = vi.mocked(createSharedClone);
+const mockGetCurrentBranch = vi.mocked(getCurrentBranch);
 const mockSummarizeTaskName = vi.mocked(summarizeTaskName);
 const mockInfo = vi.mocked(info);
 
@@ -150,11 +157,13 @@ describe('resolveTaskExecution', () => {
       branch: undefined,
       taskSlug: 'add-auth',
     });
+    expect(mockGetCurrentBranch).toHaveBeenCalledWith('/project');
     expect(result).toEqual({
       execCwd: '/project/../20260128T0504-add-auth',
       execPiece: 'default',
       isWorktree: true,
       branch: 'takt/20260128T0504-add-auth',
+      baseBranch: 'main',
     });
   });
 
@@ -395,5 +404,51 @@ describe('resolveTaskExecution', () => {
 
     // Then
     expect(result.autoPr).toBe(false);
+  });
+
+  it('should capture baseBranch from getCurrentBranch when worktree is used', async () => {
+    // Given: Task with worktree, on 'develop' branch
+    mockGetCurrentBranch.mockReturnValue('develop');
+    const task: TaskInfo = {
+      name: 'task-on-develop',
+      content: 'Task on develop branch',
+      filePath: '/tasks/task.yaml',
+      data: {
+        task: 'Task on develop branch',
+        worktree: true,
+      },
+    };
+
+    mockSummarizeTaskName.mockResolvedValue('task-develop');
+    mockCreateSharedClone.mockReturnValue({
+      path: '/project/../task-develop',
+      branch: 'takt/task-develop',
+    });
+
+    // When
+    const result = await resolveTaskExecution(task, '/project', 'default');
+
+    // Then
+    expect(mockGetCurrentBranch).toHaveBeenCalledWith('/project');
+    expect(result.baseBranch).toBe('develop');
+  });
+
+  it('should not set baseBranch when worktree is not used', async () => {
+    // Given: Task without worktree
+    const task: TaskInfo = {
+      name: 'task-no-worktree',
+      content: 'Task without worktree',
+      filePath: '/tasks/task.yaml',
+      data: {
+        task: 'Task without worktree',
+      },
+    };
+
+    // When
+    const result = await resolveTaskExecution(task, '/project', 'default');
+
+    // Then
+    expect(mockGetCurrentBranch).not.toHaveBeenCalled();
+    expect(result.baseBranch).toBeUndefined();
   });
 });

@@ -186,7 +186,7 @@ export async function addTask(cwd: string, task?: string): Promise<void> {
     }
 
     // PR確認（worktreeが有効な場合のみ）
-    autoPr = await confirm('Auto-create PR?', false);
+    autoPr = await confirm('Auto-create PR?', true);
   }
 
   // YAMLファイル作成

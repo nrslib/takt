@@ -386,6 +386,23 @@ describe('addTask', () => {
     expect(mockResolveIssueTask).toHaveBeenCalledWith('#99');
   });
 
+  it('should call auto-PR confirm with default true', async () => {
+    // Given: worktree is confirmed so auto-PR prompt is reached
+    setupFullFlowMocks({ slug: 'auto-pr-default' });
+    mockConfirm.mockResolvedValue(true);
+    mockPromptInput.mockResolvedValue('');
+
+    // When
+    await addTask(testDir);
+
+    // Then: second confirm call (Auto-create PR?) has defaultYes=true
+    const autoPrCall = mockConfirm.mock.calls.find(
+      (call) => call[0] === 'Auto-create PR?',
+    );
+    expect(autoPrCall).toBeDefined();
+    expect(autoPrCall![1]).toBe(true);
+  });
+
   describe('create_issue action', () => {
     it('should call createIssue when create_issue action is selected', async () => {
       // Given: interactive mode returns create_issue action

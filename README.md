@@ -456,10 +456,16 @@ Use `takt switch` to switch pieces.
 | **coder** | Feature implementation, bug fixing |
 | **ai-antipattern-reviewer** | AI-specific antipattern review (non-existent APIs, incorrect assumptions, scope creep) |
 | **architecture-reviewer** | Architecture and code quality review, spec compliance verification |
+| **frontend-reviewer** | Frontend (React/Next.js) code quality and best practices review |
+| **cqrs-es-reviewer** | CQRS+Event Sourcing architecture and implementation review |
 | **qa-reviewer** | Test coverage and quality assurance review |
 | **security-reviewer** | Security vulnerability assessment |
 | **conductor** | Phase 3 judgment specialist: reads reports/responses and outputs status tags |
 | **supervisor** | Final validation, approval |
+| **expert-supervisor** | Expert-level final validation with comprehensive review integration |
+| **research-planner** | Research task planning and scope definition |
+| **research-digger** | Deep investigation and information gathering |
+| **research-supervisor** | Research quality validation and completeness assessment |
 
 ## Custom Personas
 
@@ -523,11 +529,17 @@ default_piece: default
 log_level: info
 provider: claude         # Default provider: claude or codex
 model: sonnet            # Default model (optional)
+branch_name_strategy: romaji  # Branch name generation: 'romaji' (fast) or 'ai' (slow)
+prevent_sleep: false     # Prevent macOS idle sleep during execution (caffeinate)
 
 # API Key configuration (optional)
 # Can be overridden by environment variables TAKT_ANTHROPIC_API_KEY / TAKT_OPENAI_API_KEY
 anthropic_api_key: sk-ant-...  # For Claude (Anthropic)
 # openai_api_key: sk-...       # For Codex (OpenAI)
+
+# Builtin piece filtering (optional)
+# builtin_pieces_enabled: true           # Set false to disable all builtins
+# disabled_builtins: [magi, passthrough] # Disable specific builtin pieces
 
 # Pipeline execution configuration (optional)
 # Customize branch names, commit messages, and PR body.

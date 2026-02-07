@@ -452,10 +452,16 @@ TAKTには複数のビルトインピースが同梱されています:
 | **coder** | 機能の実装、バグ修正 |
 | **ai-antipattern-reviewer** | AI特有のアンチパターンレビュー（存在しないAPI、誤った仮定、スコープクリープ） |
 | **architecture-reviewer** | アーキテクチャとコード品質のレビュー、仕様準拠の検証 |
+| **frontend-reviewer** | フロントエンド（React/Next.js）のコード品質とベストプラクティスのレビュー |
+| **cqrs-es-reviewer** | CQRS+Event Sourcingアーキテクチャと実装のレビュー |
 | **qa-reviewer** | テストカバレッジと品質保証のレビュー |
 | **security-reviewer** | セキュリティ脆弱性の評価 |
 | **conductor** | Phase 3 判定専用: レポートやレスポンスを読み取り、ステータスタグを出力 |
 | **supervisor** | 最終検証、バリデーション、承認 |
+| **expert-supervisor** | 包括的なレビュー統合による専門レベルの最終検証 |
+| **research-planner** | リサーチタスクの計画・スコープ定義 |
+| **research-digger** | 深掘り調査と情報収集 |
+| **research-supervisor** | リサーチ品質の検証と網羅性の評価 |
 
 ## カスタムペルソナ
 
@@ -519,11 +525,17 @@ default_piece: default
 log_level: info
 provider: claude         # デフォルトプロバイダー: claude または codex
 model: sonnet            # デフォルトモデル（オプション）
+branch_name_strategy: romaji  # ブランチ名生成: 'romaji'（高速）または 'ai'（低速）
+prevent_sleep: false     # macOS の実行中スリープ防止（caffeinate）
 
 # API Key 設定（オプション）
 # 環境変数 TAKT_ANTHROPIC_API_KEY / TAKT_OPENAI_API_KEY で上書き可能
 anthropic_api_key: sk-ant-...  # Claude (Anthropic) を使う場合
 # openai_api_key: sk-...       # Codex (OpenAI) を使う場合
+
+# ビルトインピースのフィルタリング（オプション）
+# builtin_pieces_enabled: true           # false でビルトイン全体を無効化
+# disabled_builtins: [magi, passthrough] # 特定のビルトインピースを無効化
 
 # パイプライン実行設定（オプション）
 # ブランチ名、コミットメッセージ、PRの本文をカスタマイズできます。

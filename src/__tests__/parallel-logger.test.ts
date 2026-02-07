@@ -392,6 +392,90 @@ describe('ParallelLogger', () => {
     });
   });
 
+  describe('ANSI escape sequence stripping', () => {
+    it('should strip ANSI codes from text events', () => {
+      const logger = new ParallelLogger({
+        subMovementNames: ['step-a'],
+        writeFn,
+      });
+      const handler = logger.createStreamHandler('step-a', 0);
+
+      handler({ type: 'text', data: { text: '\x1b[41mRed background\x1b[0m\n' } } as StreamEvent);
+
+      expect(output).toHaveLength(1);
+      expect(output[0]).toContain('Red background');
+      expect(output[0]).not.toContain('\x1b[41m');
+    });
+
+    it('should strip ANSI codes from thinking events', () => {
+      const logger = new ParallelLogger({
+        subMovementNames: ['step-a'],
+        writeFn,
+      });
+      const handler = logger.createStreamHandler('step-a', 0);
+
+      handler({
+        type: 'thinking',
+        data: { thinking: '\x1b[31mColored thought\x1b[0m' },
+      } as StreamEvent);
+
+      expect(output).toHaveLength(1);
+      expect(output[0]).toContain('Colored thought');
+      expect(output[0]).not.toContain('\x1b[31m');
+    });
+
+    it('should strip ANSI codes from tool_output events', () => {
+      const logger = new ParallelLogger({
+        subMovementNames: ['step-a'],
+        writeFn,
+      });
+      const handler = logger.createStreamHandler('step-a', 0);
+
+      handler({
+        type: 'tool_output',
+        data: { tool: 'Bash', output: '\x1b[32mGreen output\x1b[0m' },
+      } as StreamEvent);
+
+      expect(output).toHaveLength(1);
+      expect(output[0]).toContain('Green output');
+      expect(output[0]).not.toContain('\x1b[32m');
+    });
+
+    it('should strip ANSI codes from tool_result events', () => {
+      const logger = new ParallelLogger({
+        subMovementNames: ['step-a'],
+        writeFn,
+      });
+      const handler = logger.createStreamHandler('step-a', 0);
+
+      handler({
+        type: 'tool_result',
+        data: { content: '\x1b[31mResult with ANSI\x1b[0m', isError: false },
+      } as StreamEvent);
+
+      expect(output).toHaveLength(1);
+      expect(output[0]).toContain('Result with ANSI');
+      expect(output[0]).not.toContain('\x1b[31m');
+    });
+
+    it('should strip ANSI codes from buffered text across multiple events', () => {
+      const logger = new ParallelLogger({
+        subMovementNames: ['step-a'],
+        writeFn,
+      });
+      const handler = logger.createStreamHandler('step-a', 0);
+
+      handler({ type: 'text', data: { text: '\x1b[31mHello' } } as StreamEvent);
+      handler({ type: 'text', data: { text: ' World\x1b[0m\n' } } as StreamEvent);
+
+      expect(output).toHaveLength(1);
+      expect(output[0]).toContain('Hello World');
+      // The prefix contains its own ANSI codes (\x1b[36m, \x1b[0m), so
+      // verify the AI-originated \x1b[31m was stripped, not the prefix's codes
+      expect(output[0]).not.toContain('\x1b[31m');
+    });
+  });
+
   describe('interleaved output from multiple sub-movements', () => {
     it('should correctly interleave prefixed output', () => {
       const logger = new ParallelLogger({

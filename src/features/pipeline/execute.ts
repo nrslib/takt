@@ -19,7 +19,7 @@ import {
   buildPrBody,
   type GitHubIssue,
 } from '../../infra/github/index.js';
-import { stageAndCommit } from '../../infra/task/index.js';
+import { stageAndCommit, getCurrentBranch } from '../../infra/task/index.js';
 import { executeTask, type TaskExecutionOptions, type PipelineExecutionOptions } from '../tasks/index.js';
 import { loadGlobalConfig } from '../../infra/config/index.js';
 import { info, error, success, status, blankLine } from '../../shared/ui/index.js';
@@ -136,7 +136,9 @@ export async function executePipeline(options: PipelineExecutionOptions): Promis
 
   // --- Step 2: Create branch (skip if --skip-git) ---
   let branch: string | undefined;
+  let baseBranch: string | undefined;
   if (!skipGit) {
+    baseBranch = getCurrentBranch(cwd);
     branch = options.branch ?? generatePipelineBranchName(pipelineConfig, options.issueNumber);
     info(`Creating branch: ${branch}`);
     try {
@@ -206,6 +208,7 @@ export async function executePipeline(options: PipelineExecutionOptions): Promis
         branch,
         title: prTitle,
         body: prBody,
+        base: baseBranch,
         repo: options.repo,
       });
 

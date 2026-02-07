@@ -91,6 +91,7 @@ export interface WorktreeConfirmationResult {
   execCwd: string;
   isWorktree: boolean;
   branch?: string;
+  baseBranch?: string;
 }
 
 export interface SelectAndExecuteOptions {

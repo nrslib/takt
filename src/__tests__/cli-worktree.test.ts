@@ -10,6 +10,11 @@ vi.mock('../shared/prompt/index.js', () => ({
   selectOptionWithDefault: vi.fn(),
 }));
 
+vi.mock('../infra/task/git.js', () => ({
+  stageAndCommit: vi.fn(),
+  getCurrentBranch: vi.fn(() => 'main'),
+}));
+
 vi.mock('../infra/task/clone.js', () => ({
   createSharedClone: vi.fn(),
   removeClone: vi.fn(),

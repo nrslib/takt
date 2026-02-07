@@ -218,6 +218,37 @@ describe('executePipeline', () => {
     );
   });
 
+  it('should pass baseBranch as base to createPullRequest', async () => {
+    // Given: getCurrentBranch returns 'develop' before branch creation
+    mockExecFileSync.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === 'rev-parse' && args[1] === '--abbrev-ref') {
+        return 'develop\n';
+      }
+      return 'abc1234\n';
+    });
+    mockExecuteTask.mockResolvedValueOnce(true);
+    mockCreatePullRequest.mockReturnValueOnce({ success: true, url: 'https://github.com/test/pr/1' });
+
+    // When
+    const exitCode = await executePipeline({
+      task: 'Fix the bug',
+      piece: 'default',
+      branch: 'fix/my-branch',
+      autoPr: true,
+      cwd: '/tmp/test',
+    });
+
+    // Then
+    expect(exitCode).toBe(0);
+    expect(mockCreatePullRequest).toHaveBeenCalledWith(
+      '/tmp/test',
+      expect.objectContaining({
+        branch: 'fix/my-branch',
+        base: 'develop',
+      }),
+    );
+  });
+
   it('should use --task when both --task and positional task are provided', async () => {
     mockExecuteTask.mockResolvedValueOnce(true);
 

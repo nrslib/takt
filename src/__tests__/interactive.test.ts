@@ -2,7 +2,7 @@
  * Tests for interactive mode
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../infra/config/global/globalConfig.js', () => ({
   loadGlobalConfig: vi.fn(() => ({ provider: 'mock', language: 'en' })),
@@ -49,56 +49,118 @@ vi.mock('../shared/prompt/index.js', () => ({
   selectOption: vi.fn(),
 }));
 
-// Mock readline to simulate user input
-vi.mock('node:readline', () => ({
-  createInterface: vi.fn(),
-}));
-
-import { createInterface } from 'node:readline';
 import { getProvider } from '../infra/providers/index.js';
 import { interactiveMode } from '../features/interactive/index.js';
 import { selectOption } from '../shared/prompt/index.js';
 
 const mockGetProvider = vi.mocked(getProvider);
-const mockCreateInterface = vi.mocked(createInterface);
 const mockSelectOption = vi.mocked(selectOption);
 
-/** Helper to set up a sequence of readline inputs */
-function setupInputSequence(inputs: (string | null)[]): void {
-  let callIndex = 0;
+// Store original stdin/stdout properties to restore
+let savedIsTTY: boolean | undefined;
+let savedIsRaw: boolean | undefined;
+let savedSetRawMode: typeof process.stdin.setRawMode | undefined;
+let savedStdoutWrite: typeof process.stdout.write;
+let savedStdinOn: typeof process.stdin.on;
+let savedStdinRemoveListener: typeof process.stdin.removeListener;
+let savedStdinResume: typeof process.stdin.resume;
+let savedStdinPause: typeof process.stdin.pause;
 
-  mockCreateInterface.mockImplementation(() => {
-    const input = callIndex < inputs.length ? inputs[callIndex] : null;
-    callIndex++;
+/**
+ * Captures the current data handler and provides sendData.
+ *
+ * When readMultilineInput registers process.stdin.on('data', handler),
+ * this captures the handler so tests can send raw input data.
+ *
+ * rawInputs: array of raw strings to send sequentially. Each time a new
+ * 'data' listener is registered, the next raw input is sent via queueMicrotask.
+ */
+function setupRawStdin(rawInputs: string[]): void {
+  savedIsTTY = process.stdin.isTTY;
+  savedIsRaw = process.stdin.isRaw;
+  savedSetRawMode = process.stdin.setRawMode;
+  savedStdoutWrite = process.stdout.write;
+  savedStdinOn = process.stdin.on;
+  savedStdinRemoveListener = process.stdin.removeListener;
+  savedStdinResume = process.stdin.resume;
+  savedStdinPause = process.stdin.pause;
 
-    const listeners: Record<string, ((...args: unknown[]) => void)[]> = {};
+  Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
+  Object.defineProperty(process.stdin, 'isRaw', { value: false, configurable: true, writable: true });
+  process.stdin.setRawMode = vi.fn((mode: boolean) => {
+    (process.stdin as unknown as { isRaw: boolean }).isRaw = mode;
+    return process.stdin;
+  }) as unknown as typeof process.stdin.setRawMode;
+  process.stdout.write = vi.fn(() => true) as unknown as typeof process.stdout.write;
+  process.stdin.resume = vi.fn(() => process.stdin) as unknown as typeof process.stdin.resume;
+  process.stdin.pause = vi.fn(() => process.stdin) as unknown as typeof process.stdin.pause;
 
-    const rlMock = {
-      question: vi.fn((_prompt: string, callback: (answer: string) => void) => {
-        if (input === null) {
-          // Simulate EOF (Ctrl+D) — emit close event asynchronously
-          // so that the on('close') listener is registered first
-          queueMicrotask(() => {
-            const closeListeners = listeners['close'] || [];
-            for (const listener of closeListeners) {
-              listener();
-            }
-          });
-        } else {
-          callback(input);
-        }
-      }),
-      close: vi.fn(),
-      on: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
-        if (!listeners[event]) {
-          listeners[event] = [];
-        }
-        listeners[event]!.push(listener);
-        return rlMock;
-      }),
-    } as unknown as ReturnType<typeof createInterface>;
+  let currentHandler: ((data: Buffer) => void) | null = null;
+  let inputIndex = 0;
 
-    return rlMock;
+  process.stdin.on = vi.fn(((event: string, handler: (...args: unknown[]) => void) => {
+    if (event === 'data') {
+      currentHandler = handler as (data: Buffer) => void;
+      // Send next input when handler is registered
+      if (inputIndex < rawInputs.length) {
+        const data = rawInputs[inputIndex]!;
+        inputIndex++;
+        queueMicrotask(() => {
+          if (currentHandler) {
+            currentHandler(Buffer.from(data, 'utf-8'));
+          }
+        });
+      }
+    }
+    return process.stdin;
+  }) as typeof process.stdin.on);
+
+  process.stdin.removeListener = vi.fn(((event: string) => {
+    if (event === 'data') {
+      currentHandler = null;
+    }
+    return process.stdin;
+  }) as typeof process.stdin.removeListener);
+}
+
+function restoreStdin(): void {
+  if (savedIsTTY !== undefined) {
+    Object.defineProperty(process.stdin, 'isTTY', { value: savedIsTTY, configurable: true });
+  }
+  if (savedIsRaw !== undefined) {
+    Object.defineProperty(process.stdin, 'isRaw', { value: savedIsRaw, configurable: true, writable: true });
+  }
+  if (savedSetRawMode) {
+    process.stdin.setRawMode = savedSetRawMode;
+  }
+  if (savedStdoutWrite) {
+    process.stdout.write = savedStdoutWrite;
+  }
+  if (savedStdinOn) {
+    process.stdin.on = savedStdinOn;
+  }
+  if (savedStdinRemoveListener) {
+    process.stdin.removeListener = savedStdinRemoveListener;
+  }
+  if (savedStdinResume) {
+    process.stdin.resume = savedStdinResume;
+  }
+  if (savedStdinPause) {
+    process.stdin.pause = savedStdinPause;
+  }
+}
+
+/**
+ * Convert user-level inputs to raw stdin data.
+ *
+ * Each element is either:
+ * - A string: sent as typed characters + Enter (\r)
+ * - null: sent as Ctrl+D (\x04)
+ */
+function toRawInputs(inputs: (string | null)[]): string[] {
+  return inputs.map((input) => {
+    if (input === null) return '\x04';
+    return input + '\r';
   });
 }
 
@@ -124,14 +186,17 @@ function setupMockProvider(responses: string[]): void {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  // selectPostSummaryAction uses selectOption with action values
   mockSelectOption.mockResolvedValue('execute');
+});
+
+afterEach(() => {
+  restoreStdin();
 });
 
 describe('interactiveMode', () => {
   it('should return action=cancel when user types /cancel', async () => {
     // Given
-    setupInputSequence(['/cancel']);
+    setupRawStdin(toRawInputs(['/cancel']));
     setupMockProvider([]);
 
     // When
@@ -144,7 +209,7 @@ describe('interactiveMode', () => {
 
   it('should return action=cancel on EOF (Ctrl+D)', async () => {
     // Given
-    setupInputSequence([null]);
+    setupRawStdin(toRawInputs([null]));
     setupMockProvider([]);
 
     // When
@@ -156,7 +221,7 @@ describe('interactiveMode', () => {
 
   it('should call provider with allowed tools for codebase exploration', async () => {
     // Given
-    setupInputSequence(['fix the login bug', '/go']);
+    setupRawStdin(toRawInputs(['fix the login bug', '/go']));
     setupMockProvider(['What kind of login bug?']);
 
     // When
@@ -175,7 +240,7 @@ describe('interactiveMode', () => {
 
   it('should return action=execute with task on /go after conversation', async () => {
     // Given
-    setupInputSequence(['add auth feature', '/go']);
+    setupRawStdin(toRawInputs(['add auth feature', '/go']));
     setupMockProvider(['What kind of authentication?', 'Implement auth feature with chosen method.']);
 
     // When
@@ -188,7 +253,7 @@ describe('interactiveMode', () => {
 
   it('should reject /go with no prior conversation', async () => {
     // Given: /go immediately, then /cancel to exit
-    setupInputSequence(['/go', '/cancel']);
+    setupRawStdin(toRawInputs(['/go', '/cancel']));
     setupMockProvider([]);
 
     // When
@@ -199,8 +264,8 @@ describe('interactiveMode', () => {
   });
 
   it('should skip empty input', async () => {
-    // Given: empty line, then actual input, then /go
-    setupInputSequence(['', 'do something', '/go']);
+    // Given: empty line (just Enter), then actual input, then /go
+    setupRawStdin(toRawInputs(['', 'do something', '/go']));
     setupMockProvider(['Sure, what exactly?', 'Do something with the clarified scope.']);
 
     // When
@@ -214,7 +279,7 @@ describe('interactiveMode', () => {
 
   it('should accumulate conversation history across multiple turns', async () => {
     // Given: two user messages before /go
-    setupInputSequence(['first message', 'second message', '/go']);
+    setupRawStdin(toRawInputs(['first message', 'second message', '/go']));
     setupMockProvider(['response to first', 'response to second', 'Summarized task.']);
 
     // When
@@ -234,7 +299,7 @@ describe('interactiveMode', () => {
 
   it('should send only current input per turn (session handles history)', async () => {
     // Given
-    setupInputSequence(['first msg', 'second msg', '/go']);
+    setupRawStdin(toRawInputs(['first msg', 'second msg', '/go']));
     setupMockProvider(['AI reply 1', 'AI reply 2']);
 
     // When
@@ -248,7 +313,7 @@ describe('interactiveMode', () => {
 
   it('should inject policy into user messages', async () => {
     // Given
-    setupInputSequence(['test message', '/cancel']);
+    setupRawStdin(toRawInputs(['test message', '/cancel']));
     setupMockProvider(['response']);
 
     // When
@@ -265,7 +330,7 @@ describe('interactiveMode', () => {
 
   it('should process initialInput as first message before entering loop', async () => {
     // Given: initialInput provided, then user types /go
-    setupInputSequence(['/go']);
+    setupRawStdin(toRawInputs(['/go']));
     setupMockProvider(['What do you mean by "a"?', 'Clarify task for "a".']);
 
     // When
@@ -285,7 +350,7 @@ describe('interactiveMode', () => {
 
   it('should send only current input for subsequent turns after initialInput', async () => {
     // Given: initialInput, then follow-up, then /go
-    setupInputSequence(['fix the login page', '/go']);
+    setupRawStdin(toRawInputs(['fix the login page', '/go']));
     setupMockProvider(['What about "a"?', 'Got it, fixing login page.', 'Fix login page with clarified scope.']);
 
     // When
@@ -307,7 +372,7 @@ describe('interactiveMode', () => {
   describe('/play command', () => {
     it('should return action=execute with task on /play command', async () => {
       // Given
-      setupInputSequence(['/play implement login feature']);
+      setupRawStdin(toRawInputs(['/play implement login feature']));
       setupMockProvider([]);
 
       // When
@@ -320,7 +385,7 @@ describe('interactiveMode', () => {
 
     it('should show error when /play has no task content', async () => {
       // Given: /play without task, then /cancel to exit
-      setupInputSequence(['/play', '/cancel']);
+      setupRawStdin(toRawInputs(['/play', '/cancel']));
       setupMockProvider([]);
 
       // When
@@ -332,7 +397,7 @@ describe('interactiveMode', () => {
 
     it('should handle /play with leading/trailing spaces', async () => {
       // Given
-      setupInputSequence(['/play   test task  ']);
+      setupRawStdin(toRawInputs(['/play   test task  ']));
       setupMockProvider([]);
 
       // When
@@ -345,14 +410,14 @@ describe('interactiveMode', () => {
 
     it('should skip AI summary when using /play', async () => {
       // Given
-      setupInputSequence(['/play quick task']);
+      setupRawStdin(toRawInputs(['/play quick task']));
       setupMockProvider([]);
 
       // When
       const result = await interactiveMode('/project');
 
       // Then: provider should NOT have been called (no summary needed)
-      const mockProvider = mockGetProvider.mock.results[0]?.value as { call: ReturnType<typeof vi.fn> };
+      const mockProvider = mockGetProvider.mock.results[0]?.value as { _call: ReturnType<typeof vi.fn> };
       expect(mockProvider._call).not.toHaveBeenCalled();
       expect(result.action).toBe('execute');
       expect(result.task).toBe('quick task');
@@ -362,7 +427,7 @@ describe('interactiveMode', () => {
   describe('action selection after /go', () => {
     it('should return action=create_issue when user selects create issue', async () => {
       // Given
-      setupInputSequence(['describe task', '/go']);
+      setupRawStdin(toRawInputs(['describe task', '/go']));
       setupMockProvider(['response', 'Summarized task.']);
       mockSelectOption.mockResolvedValue('create_issue');
 
@@ -376,7 +441,7 @@ describe('interactiveMode', () => {
 
     it('should return action=save_task when user selects save task', async () => {
       // Given
-      setupInputSequence(['describe task', '/go']);
+      setupRawStdin(toRawInputs(['describe task', '/go']));
       setupMockProvider(['response', 'Summarized task.']);
       mockSelectOption.mockResolvedValue('save_task');
 
@@ -390,7 +455,7 @@ describe('interactiveMode', () => {
 
     it('should continue editing when user selects continue', async () => {
       // Given: user selects 'continue' first, then cancels
-      setupInputSequence(['describe task', '/go', '/cancel']);
+      setupRawStdin(toRawInputs(['describe task', '/go', '/cancel']));
       setupMockProvider(['response', 'Summarized task.']);
       mockSelectOption.mockResolvedValueOnce('continue');
 
@@ -403,7 +468,7 @@ describe('interactiveMode', () => {
 
     it('should continue editing when user presses ESC (null)', async () => {
       // Given: selectOption returns null (ESC), then user cancels
-      setupInputSequence(['describe task', '/go', '/cancel']);
+      setupRawStdin(toRawInputs(['describe task', '/go', '/cancel']));
       setupMockProvider(['response', 'Summarized task.']);
       mockSelectOption.mockResolvedValueOnce(null);
 
@@ -411,6 +476,165 @@ describe('interactiveMode', () => {
       const result = await interactiveMode('/project');
 
       // Then: should fall through to /cancel
+      expect(result.action).toBe('cancel');
+    });
+  });
+
+  describe('multiline input', () => {
+    it('should handle paste with newlines via bracket paste mode', async () => {
+      // Given: pasted text with newlines, then /cancel
+      // \x1B[200~ starts paste, \x1B[201~ ends paste
+      setupRawStdin([
+        '\x1B[200~line1\nline2\nline3\x1B[201~\r',
+        '/cancel\r',
+      ]);
+      setupMockProvider(['Got multiline input']);
+
+      // When
+      const result = await interactiveMode('/project');
+
+      // Then: the pasted text should have been sent to AI with newlines preserved
+      const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
+      const prompt = mockProvider._call.mock.calls[0]?.[0] as string;
+      expect(prompt).toContain('line1\nline2\nline3');
+      expect(result.action).toBe('cancel');
+    });
+
+    it('should handle Shift+Enter (Kitty protocol) for newline insertion', async () => {
+      // Given: text with Shift+Enter (\x1B[13;2u) for newline
+      setupRawStdin([
+        'hello\x1B[13;2uworld\r',
+        '/cancel\r',
+      ]);
+      setupMockProvider(['Got multiline input']);
+
+      // When
+      const result = await interactiveMode('/project');
+
+      // Then: input should contain a newline between hello and world
+      const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
+      const prompt = mockProvider._call.mock.calls[0]?.[0] as string;
+      expect(prompt).toContain('hello\nworld');
+      expect(result.action).toBe('cancel');
+    });
+
+    it('should handle backspace to delete last character', async () => {
+      // Given: type "ab", backspace (\x7F), type "c", Enter
+      setupRawStdin([
+        'ab\x7Fc\r',
+        '/cancel\r',
+      ]);
+      setupMockProvider(['response']);
+
+      // When
+      const result = await interactiveMode('/project');
+
+      // Then: input should be "ac" (b was deleted by backspace)
+      const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
+      const prompt = mockProvider._call.mock.calls[0]?.[0] as string;
+      expect(prompt).toContain('ac');
+      expect(result.action).toBe('cancel');
+    });
+
+    it('should handle Ctrl+C to cancel input', async () => {
+      // Given: Ctrl+C during input
+      setupRawStdin(['\x03']);
+      setupMockProvider([]);
+
+      // When
+      const result = await interactiveMode('/project');
+
+      // Then: should cancel
+      expect(result.action).toBe('cancel');
+    });
+
+    it('should handle Ctrl+C (Kitty CSI-u) to cancel input', async () => {
+      // Given: Ctrl+C reported as Kitty keyboard protocol sequence
+      setupRawStdin(['\x1B[99;5u']);
+      setupMockProvider([]);
+
+      // When
+      const result = await interactiveMode('/project');
+
+      // Then: should cancel
+      expect(result.action).toBe('cancel');
+    });
+
+    it('should handle Ctrl+D to cancel input', async () => {
+      // Given: Ctrl+D during input
+      setupRawStdin(['\x04']);
+      setupMockProvider([]);
+
+      // When
+      const result = await interactiveMode('/project');
+
+      // Then: should cancel
+      expect(result.action).toBe('cancel');
+    });
+
+    it('should handle Ctrl+D (Kitty CSI-u) to cancel input', async () => {
+      // Given: Ctrl+D reported as Kitty keyboard protocol sequence
+      setupRawStdin(['\x1B[100;5u']);
+      setupMockProvider([]);
+
+      // When
+      const result = await interactiveMode('/project');
+
+      // Then: should cancel
+      expect(result.action).toBe('cancel');
+    });
+
+    it('should handle Ctrl+C (xterm modifyOtherKeys) to cancel input', async () => {
+      // Given: Ctrl+C reported as xterm modifyOtherKeys sequence
+      setupRawStdin(['\x1B[27;5;99~']);
+      setupMockProvider([]);
+
+      // When
+      const result = await interactiveMode('/project');
+
+      // Then: should cancel
+      expect(result.action).toBe('cancel');
+    });
+
+    it('should handle Ctrl+D (xterm modifyOtherKeys) to cancel input', async () => {
+      // Given: Ctrl+D reported as xterm modifyOtherKeys sequence
+      setupRawStdin(['\x1B[27;5;100~']);
+      setupMockProvider([]);
+
+      // When
+      const result = await interactiveMode('/project');
+
+      // Then: should cancel
+      expect(result.action).toBe('cancel');
+    });
+
+    it('should ignore arrow keys in normal mode', async () => {
+      // Given: text with arrow keys interspersed (arrows are ignored)
+      setupRawStdin([
+        'he\x1B[Dllo\x1B[C\r',
+        '/cancel\r',
+      ]);
+      setupMockProvider(['response']);
+
+      // When
+      const result = await interactiveMode('/project');
+
+      // Then: arrows are ignored, text is "hello"
+      const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
+      const prompt = mockProvider._call.mock.calls[0]?.[0] as string;
+      expect(prompt).toContain('hello');
+      expect(result.action).toBe('cancel');
+    });
+
+    it('should handle empty input on Enter', async () => {
+      // Given: just Enter (empty), then /cancel
+      setupRawStdin(toRawInputs(['', '/cancel']));
+      setupMockProvider([]);
+
+      // When
+      const result = await interactiveMode('/project');
+
+      // Then: empty input is skipped, falls through to /cancel
       expect(result.action).toBe('cancel');
     });
   });

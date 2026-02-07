@@ -3,7 +3,7 @@
  */
 
 import { loadPieceByIdentifier, isPiecePath, loadGlobalConfig } from '../../../infra/config/index.js';
-import { TaskRunner, type TaskInfo, createSharedClone, autoCommitAndPush, summarizeTaskName } from '../../../infra/task/index.js';
+import { TaskRunner, type TaskInfo, createSharedClone, autoCommitAndPush, summarizeTaskName, getCurrentBranch } from '../../../infra/task/index.js';
 import {
   header,
   info,
@@ -78,7 +78,7 @@ export async function executeAndCompleteTask(
   const executionLog: string[] = [];
 
   try {
-    const { execCwd, execPiece, isWorktree, branch, startMovement, retryNote, autoPr } = await resolveTaskExecution(task, cwd, pieceName);
+    const { execCwd, execPiece, isWorktree, branch, baseBranch, startMovement, retryNote, autoPr } = await resolveTaskExecution(task, cwd, pieceName);
 
     // cwd is always the project root; pass it as projectCwd so reports/sessions go there
     const taskSuccess = await executeTask({
@@ -115,6 +115,7 @@ export async function executeAndCompleteTask(
           branch,
           title: task.name.length > 100 ? `${task.name.slice(0, 97)}...` : task.name,
           body: prBody,
+          base: baseBranch,
         });
         if (prResult.success) {
           success(`PR created: ${prResult.url}`);
@@ -222,7 +223,7 @@ export async function resolveTaskExecution(
   task: TaskInfo,
   defaultCwd: string,
   defaultPiece: string
-): Promise<{ execCwd: string; execPiece: string; isWorktree: boolean; branch?: string; startMovement?: string; retryNote?: string; autoPr?: boolean }> {
+): Promise<{ execCwd: string; execPiece: string; isWorktree: boolean; branch?: string; baseBranch?: string; startMovement?: string; retryNote?: string; autoPr?: boolean }> {
   const data = task.data;
 
   // No structured data: use defaults
@@ -233,9 +234,11 @@ export async function resolveTaskExecution(
   let execCwd = defaultCwd;
   let isWorktree = false;
   let branch: string | undefined;
+  let baseBranch: string | undefined;
 
   // Handle worktree (now creates a shared clone)
   if (data.worktree) {
+    baseBranch = getCurrentBranch(defaultCwd);
     // Summarize task content to English slug using AI
     info('Generating branch name...');
     const taskSlug = await summarizeTaskName(task.content, { cwd: defaultCwd });
@@ -271,5 +274,5 @@ export async function resolveTaskExecution(
     autoPr = globalConfig.autoPr;
   }
 
-  return { execCwd, execPiece, isWorktree, branch, startMovement, retryNote, autoPr };
+  return { execCwd, execPiece, isWorktree, branch, baseBranch, startMovement, retryNote, autoPr };
 }

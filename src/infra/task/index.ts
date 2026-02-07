@@ -43,7 +43,7 @@ export {
   getOriginalInstruction,
   buildListItems,
 } from './branchList.js';
-export { stageAndCommit } from './git.js';
+export { stageAndCommit, getCurrentBranch } from './git.js';
 export { autoCommitAndPush, type AutoCommitResult } from './autoCommit.js';
 export { summarizeTaskName } from './summarize.js';
 export { TaskWatcher, type TaskWatcherOptions } from './watcher.js';

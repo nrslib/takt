@@ -176,36 +176,248 @@ async function selectPostSummaryAction(
   ]);
 }
 
+/** Escape sequences for terminal protocol control */
+const PASTE_BRACKET_ENABLE = '\x1B[?2004h';
+const PASTE_BRACKET_DISABLE = '\x1B[?2004l';
+// flag 1: Disambiguate escape codes — modified keys (e.g. Shift+Enter) are reported as CSI sequences while unmodified keys (e.g. Enter) remain as legacy codes (\r)
+const KITTY_KB_ENABLE = '\x1B[>1u';
+const KITTY_KB_DISABLE = '\x1B[<u';
+
+/** Known escape sequence prefixes for matching */
+const ESC_PASTE_START = '[200~';
+const ESC_PASTE_END = '[201~';
+const ESC_SHIFT_ENTER = '[13;2u';
+
+type InputState = 'normal' | 'paste';
+
 /**
- * Read a single line of input from the user.
- * Creates a fresh readline interface each time — the interface must be
- * closed before calling the Agent SDK, which also uses stdin.
- * Returns null on EOF (Ctrl+D).
+ * Decode Kitty CSI-u key sequence into a control character.
+ * Example: "[99;5u" (Ctrl+C) -> "\x03"
  */
-function readLine(prompt: string): Promise<string | null> {
-  return new Promise((resolve) => {
-    if (process.stdin.readable && !process.stdin.destroyed) {
-      process.stdin.resume();
+function decodeCtrlKey(rest: string): { ch: string; consumed: number } | null {
+  // Kitty CSI-u: [codepoint;modifiersu
+  const kittyMatch = rest.match(/^\[(\d+);(\d+)u/);
+  if (kittyMatch) {
+    const codepoint = Number.parseInt(kittyMatch[1]!, 10);
+    const modifiers = Number.parseInt(kittyMatch[2]!, 10);
+    // Kitty modifiers are 1-based; Ctrl bit is 4 in 0-based flags.
+    const ctrlPressed = (((modifiers - 1) & 4) !== 0);
+    if (!ctrlPressed) return null;
+
+    const key = String.fromCodePoint(codepoint);
+    if (!/^[A-Za-z]$/.test(key)) return null;
+
+    const upper = key.toUpperCase();
+    const controlCode = upper.charCodeAt(0) & 0x1f;
+    return { ch: String.fromCharCode(controlCode), consumed: kittyMatch[0].length };
+  }
+
+  // xterm modifyOtherKeys: [27;modifiers;codepoint~
+  const xtermMatch = rest.match(/^\[27;(\d+);(\d+)~/);
+  if (!xtermMatch) return null;
+
+  const modifiers = Number.parseInt(xtermMatch[1]!, 10);
+  const codepoint = Number.parseInt(xtermMatch[2]!, 10);
+  const ctrlPressed = (((modifiers - 1) & 4) !== 0);
+  if (!ctrlPressed) return null;
+
+  const key = String.fromCodePoint(codepoint);
+  if (!/^[A-Za-z]$/.test(key)) return null;
+
+  const upper = key.toUpperCase();
+  const controlCode = upper.charCodeAt(0) & 0x1f;
+  return { ch: String.fromCharCode(controlCode), consumed: xtermMatch[0].length };
+}
+
+/**
+ * Parse raw stdin data and process each character/sequence.
+ *
+ * Handles escape sequences for paste bracket mode (start/end),
+ * Kitty keyboard protocol (Shift+Enter), and arrow keys (ignored).
+ * Regular characters are passed to the onChar callback.
+ */
+function parseInputData(
+  data: string,
+  callbacks: {
+    onPasteStart: () => void;
+    onPasteEnd: () => void;
+    onShiftEnter: () => void;
+    onChar: (ch: string) => void;
+  },
+): void {
+  let i = 0;
+  while (i < data.length) {
+    const ch = data[i]!;
+
+    if (ch === '\x1B') {
+      // Try to match known escape sequences
+      const rest = data.slice(i + 1);
+
+      if (rest.startsWith(ESC_PASTE_START)) {
+        callbacks.onPasteStart();
+        i += 1 + ESC_PASTE_START.length;
+        continue;
+      }
+      if (rest.startsWith(ESC_PASTE_END)) {
+        callbacks.onPasteEnd();
+        i += 1 + ESC_PASTE_END.length;
+        continue;
+      }
+      if (rest.startsWith(ESC_SHIFT_ENTER)) {
+        callbacks.onShiftEnter();
+        i += 1 + ESC_SHIFT_ENTER.length;
+        continue;
+      }
+      const ctrlKey = decodeCtrlKey(rest);
+      if (ctrlKey) {
+        callbacks.onChar(ctrlKey.ch);
+        i += 1 + ctrlKey.consumed;
+        continue;
+      }
+      // Arrow keys and other CSI sequences: skip \x1B[ + letter/params
+      if (rest.startsWith('[')) {
+        const csiMatch = rest.match(/^\[[0-9;]*[A-Za-z~]/);
+        if (csiMatch) {
+          i += 1 + csiMatch[0].length;
+          continue;
+        }
+      }
+      // Unrecognized escape: skip the \x1B
+      i++;
+      continue;
     }
 
-    const rl = readline.createInterface({
-      input: process.stdin,
-      output: process.stdout,
+    callbacks.onChar(ch);
+    i++;
+  }
+}
+
+/**
+ * Read multiline input from the user using raw mode.
+ *
+ * Supports:
+ * - Enter (\r) to confirm and submit input
+ * - Shift+Enter (Kitty keyboard protocol) to insert a newline
+ * - Paste bracket mode for correctly handling pasted text with newlines
+ * - Backspace (\x7F) to delete the last character
+ * - Ctrl+C (\x03) and Ctrl+D (\x04) to cancel (returns null)
+ *
+ * Falls back to readline.question() in non-TTY environments.
+ */
+function readMultilineInput(prompt: string): Promise<string | null> {
+  // Non-TTY fallback: use readline for pipe/CI environments
+  if (!process.stdin.isTTY) {
+    return new Promise((resolve) => {
+      if (process.stdin.readable && !process.stdin.destroyed) {
+        process.stdin.resume();
+      }
+
+      const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout,
+      });
+
+      let answered = false;
+
+      rl.question(prompt, (answer) => {
+        answered = true;
+        rl.close();
+        resolve(answer);
+      });
+
+      rl.on('close', () => {
+        if (!answered) {
+          resolve(null);
+        }
+      });
     });
+  }
 
-    let answered = false;
+  return new Promise((resolve) => {
+    let buffer = '';
+    let state: InputState = 'normal';
 
-    rl.question(prompt, (answer) => {
-      answered = true;
-      rl.close();
-      resolve(answer);
-    });
+    const wasRaw = process.stdin.isRaw;
+    process.stdin.setRawMode(true);
+    process.stdin.resume();
 
-    rl.on('close', () => {
-      if (!answered) {
+    // Enable paste bracket mode and Kitty keyboard protocol
+    process.stdout.write(PASTE_BRACKET_ENABLE);
+    process.stdout.write(KITTY_KB_ENABLE);
+
+    // Display the prompt
+    process.stdout.write(prompt);
+
+    function cleanup(): void {
+      process.stdin.removeListener('data', onData);
+      process.stdout.write(PASTE_BRACKET_DISABLE);
+      process.stdout.write(KITTY_KB_DISABLE);
+      process.stdin.setRawMode(wasRaw ?? false);
+      process.stdin.pause();
+    }
+
+    function onData(data: Buffer): void {
+      try {
+        const str = data.toString('utf-8');
+
+        parseInputData(str, {
+          onPasteStart() {
+            state = 'paste';
+          },
+          onPasteEnd() {
+            state = 'normal';
+          },
+          onShiftEnter() {
+            buffer += '\n';
+            process.stdout.write('\n');
+          },
+          onChar(ch: string) {
+            if (state === 'paste') {
+              if (ch === '\r' || ch === '\n') {
+                buffer += '\n';
+                process.stdout.write('\n');
+              } else {
+                buffer += ch;
+                process.stdout.write(ch);
+              }
+              return;
+            }
+
+            // NORMAL state
+            if (ch === '\r') {
+              // Enter: confirm input
+              process.stdout.write('\n');
+              cleanup();
+              resolve(buffer);
+              return;
+            }
+            if (ch === '\x03' || ch === '\x04') {
+              // Ctrl+C or Ctrl+D: cancel
+              process.stdout.write('\n');
+              cleanup();
+              resolve(null);
+              return;
+            }
+            if (ch === '\x7F') {
+              // Backspace: delete last character
+              if (buffer.length > 0) {
+                buffer = buffer.slice(0, -1);
+                process.stdout.write('\b \b');
+              }
+              return;
+            }
+            // Regular character
+            buffer += ch;
+            process.stdout.write(ch);
+          },
+        });
+      } catch {
+        cleanup();
         resolve(null);
       }
-    });
+    }
+
+    process.stdin.on('data', onData);
   });
 }
 
@@ -381,7 +593,7 @@ export async function interactiveMode(
   }
 
   while (true) {
-    const input = await readLine(chalk.green('> '));
+    const input = await readMultilineInput(chalk.green('> '));
 
     // EOF (Ctrl+D)
     if (input === null) {
@@ -451,7 +663,6 @@ export async function interactiveMode(
     }
 
     // Regular input — send to AI
-    // readline is already closed at this point, so stdin is free for SDK
     history.push({ role: 'user', content: trimmed });
 
     log.debug('Sending to AI', { messageCount: history.length, sessionId });

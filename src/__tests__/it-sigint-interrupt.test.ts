@@ -130,6 +130,8 @@ vi.mock('../shared/utils/index.js', () => ({
   notifyError: vi.fn(),
   playWarningSound: vi.fn(),
   preventSleep: vi.fn(),
+  isDebugEnabled: vi.fn().mockReturnValue(false),
+  writePromptLog: vi.fn(),
 }));
 
 vi.mock('../shared/prompt/index.js', () => ({

@@ -65,6 +65,7 @@ vi.mock('../infra/github/pr.js', () => ({
 
 vi.mock('../infra/task/git.js', () => ({
   stageAndCommit: vi.fn().mockReturnValue('abc1234'),
+  getCurrentBranch: vi.fn().mockReturnValue('main'),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({

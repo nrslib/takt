@@ -129,3 +129,13 @@ export interface LatestLogPointer {
   updatedAt: string;
   iterations: number;
 }
+
+/** Record for debug prompt/response log (debug-*-prompts.jsonl) */
+export interface PromptLogRecord {
+  movement: string;
+  phase: 1 | 2 | 3;
+  iteration: number;
+  prompt: string;
+  response: string;
+  timestamp: string;
+}

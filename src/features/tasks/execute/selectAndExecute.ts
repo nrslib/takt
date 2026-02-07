@@ -17,7 +17,7 @@ import {
   loadGlobalConfig,
 } from '../../../infra/config/index.js';
 import { confirm } from '../../../shared/prompt/index.js';
-import { createSharedClone, autoCommitAndPush, summarizeTaskName } from '../../../infra/task/index.js';
+import { createSharedClone, autoCommitAndPush, summarizeTaskName, getCurrentBranch } from '../../../infra/task/index.js';
 import { DEFAULT_PIECE_NAME } from '../../../shared/constants.js';
 import { info, error, success } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
@@ -111,6 +111,8 @@ export async function confirmAndCreateWorktree(
     return { execCwd: cwd, isWorktree: false };
   }
 
+  const baseBranch = getCurrentBranch(cwd);
+
   info('Generating branch name...');
   const taskSlug = await summarizeTaskName(task, { cwd });
 
@@ -121,7 +123,7 @@ export async function confirmAndCreateWorktree(
   });
   info(`Clone created: ${result.path} (branch: ${result.branch})`);
 
-  return { execCwd: result.path, isWorktree: true, branch: result.branch };
+  return { execCwd: result.path, isWorktree: true, branch: result.branch, baseBranch };
 }
 
 /**
@@ -141,7 +143,7 @@ async function resolveAutoPr(optionAutoPr: boolean | undefined): Promise<boolean
   }
 
   // Fall back to interactive prompt
-  return confirm('Create pull request?', false);
+  return confirm('Create pull request?', true);
 }
 
 /**
@@ -161,7 +163,7 @@ export async function selectAndExecuteTask(
     return;
   }
 
-  const { execCwd, isWorktree, branch } = await confirmAndCreateWorktree(
+  const { execCwd, isWorktree, branch, baseBranch } = await confirmAndCreateWorktree(
     cwd,
     task,
     options?.createWorktree,
@@ -206,6 +208,7 @@ export async function selectAndExecuteTask(
         branch,
         title: task.length > 100 ? `${task.slice(0, 97)}...` : task,
         body: prBody,
+        base: baseBranch,
         repo: options?.repo,
       });
       if (prResult.success) {
