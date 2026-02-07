@@ -5,7 +5,7 @@
  * - Piece YAML files (EN/JA) load and pass schema validation
  * - Piece structure: plan -> reviewers (parallel) -> supervise -> pr-comment
  * - All movements have edit: false
- * - pr-commenter agent has Bash in allowed_tools
+ * - pr-commenter persona has Bash in allowed_tools
  * - Routing rules for local vs PR comment flows
  */
 
@@ -186,9 +186,9 @@ describe('review-only piece (JA)', () => {
   });
 });
 
-describe('pr-commenter agent files', () => {
+describe('pr-commenter persona files', () => {
   it('should exist for EN with domain knowledge', () => {
-    const filePath = join(RESOURCES_DIR, 'en', 'agents', 'review', 'pr-commenter.md');
+    const filePath = join(RESOURCES_DIR, 'en', 'personas', 'pr-commenter.md');
     const content = readFileSync(filePath, 'utf-8');
     expect(content).toContain('PR Commenter');
     expect(content).toContain('gh api');
@@ -196,7 +196,7 @@ describe('pr-commenter agent files', () => {
   });
 
   it('should exist for JA with domain knowledge', () => {
-    const filePath = join(RESOURCES_DIR, 'ja', 'agents', 'review', 'pr-commenter.md');
+    const filePath = join(RESOURCES_DIR, 'ja', 'personas', 'pr-commenter.md');
     const content = readFileSync(filePath, 'utf-8');
     expect(content).toContain('PR Commenter');
     expect(content).toContain('gh api');
@@ -204,21 +204,21 @@ describe('pr-commenter agent files', () => {
   });
 
   it('should NOT contain piece-specific report names (EN)', () => {
-    const filePath = join(RESOURCES_DIR, 'en', 'agents', 'review', 'pr-commenter.md');
+    const filePath = join(RESOURCES_DIR, 'en', 'personas', 'pr-commenter.md');
     const content = readFileSync(filePath, 'utf-8');
-    // Agent should not reference specific review-only piece report files
+    // Persona should not reference specific review-only piece report files
     expect(content).not.toContain('01-architect-review.md');
     expect(content).not.toContain('02-security-review.md');
     expect(content).not.toContain('03-ai-review.md');
     expect(content).not.toContain('04-review-summary.md');
-    // Agent should not reference specific reviewer names from review-only piece
+    // Persona should not reference specific reviewer names from review-only piece
     expect(content).not.toContain('Architecture review report');
     expect(content).not.toContain('Security review report');
     expect(content).not.toContain('AI antipattern review report');
   });
 
   it('should NOT contain piece-specific report names (JA)', () => {
-    const filePath = join(RESOURCES_DIR, 'ja', 'agents', 'review', 'pr-commenter.md');
+    const filePath = join(RESOURCES_DIR, 'ja', 'personas', 'pr-commenter.md');
     const content = readFileSync(filePath, 'utf-8');
     expect(content).not.toContain('01-architect-review.md');
     expect(content).not.toContain('02-security-review.md');

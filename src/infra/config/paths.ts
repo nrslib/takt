@@ -16,7 +16,12 @@ export function getGlobalConfigDir(): string {
   return process.env.TAKT_CONFIG_DIR || join(homedir(), '.takt');
 }
 
-/** Get takt global agents directory (~/.takt/agents) */
+/** Get takt global personas directory (~/.takt/personas) */
+export function getGlobalPersonasDir(): string {
+  return join(getGlobalConfigDir(), 'personas');
+}
+
+/** @deprecated Use getGlobalPersonasDir(). Kept for backward compat with ~/.takt/agents/ */
 export function getGlobalAgentsDir(): string {
   return join(getGlobalConfigDir(), 'agents');
 }
@@ -41,9 +46,9 @@ export function getBuiltinPiecesDir(lang: Language): string {
   return join(getLanguageResourcesDir(lang), 'pieces');
 }
 
-/** Get builtin agents directory (resources/global/{lang}/agents) */
-export function getBuiltinAgentsDir(lang: Language): string {
-  return join(getLanguageResourcesDir(lang), 'agents');
+/** Get builtin personas directory (resources/global/{lang}/personas) */
+export function getBuiltinPersonasDir(lang: Language): string {
+  return join(getLanguageResourcesDir(lang), 'personas');
 }
 
 /** Get project takt config directory (.takt in project) */
@@ -56,9 +61,9 @@ export function getProjectPiecesDir(projectDir: string): string {
   return join(getProjectConfigDir(projectDir), 'pieces');
 }
 
-/** Get project agents directory (.takt/agents in project) */
-export function getProjectAgentsDir(projectDir: string): string {
-  return join(getProjectConfigDir(projectDir), 'agents');
+/** Get project personas directory (.takt/personas in project) */
+export function getProjectPersonasDir(projectDir: string): string {
+  return join(getProjectConfigDir(projectDir), 'personas');
 }
 
 /** Get project config file path */

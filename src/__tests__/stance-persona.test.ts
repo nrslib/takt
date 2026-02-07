@@ -2,7 +2,7 @@
  * Tests for stance and persona features.
  *
  * Covers:
- * - persona/persona_name as aliases for agent/agent_name in piece YAML
+ * - persona/persona_name fields in piece YAML (with agent/agent_name backward compat)
  * - Piece-level stances definition and resolution
  * - Movement-level stance references
  * - Stance injection in InstructionBuilder

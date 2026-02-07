@@ -194,8 +194,9 @@ Implemented in `src/core/piece/evaluation/RuleEvaluator.ts`. The matched method 
 ```
 ~/.takt/                  # Global user config (created on first run)
   config.yaml             # Trusted dirs, default piece, log level, language
-  pieces/              # User piece YAML files (override builtins)
-  agents/                 # User agent prompt files (.md)
+  pieces/                 # User piece YAML files (override builtins)
+  personas/               # User persona prompt files (.md)
+  agents/                 # Legacy persona prompts (backward compat)
 
 .takt/                    # Project-level config
   agents.yaml             # Custom agent definitions
@@ -205,8 +206,8 @@ Implemented in `src/core/piece/evaluation/RuleEvaluator.ts`. The matched method 
 
 resources/                # Bundled defaults (builtin, read from dist/ at runtime)
   global/
-    en/                   # English agents and pieces
-    ja/                   # Japanese agents and pieces
+    en/                   # English personas, stances, instructions, and pieces
+    ja/                   # Japanese personas, stances, instructions, and pieces
 ```
 
 Builtin resources are embedded in the npm package (`dist/resources/`). User files in `~/.takt/` take priority. Use `/eject` to copy builtins to `~/.takt/` for customization.
@@ -222,8 +223,8 @@ initial_step: plan        # First step to execute
 steps:
   # Normal step
   - name: step-name
-    agent: ../agents/default/coder.md   # Path to agent prompt
-    agent_name: coder                   # Display name (optional)
+    persona: ../personas/coder.md       # Path to persona prompt
+    persona_name: coder                 # Display name (optional)
     provider: codex                     # claude|codex (optional)
     model: opus                         # Model name (optional)
     edit: true                          # Whether step can edit files
@@ -249,14 +250,14 @@ steps:
   - name: reviewers
     parallel:
       - name: arch-review
-        agent: ../agents/default/architecture-reviewer.md
+        persona: ../personas/architecture-reviewer.md
         rules:
           - condition: approved       # next is optional for sub-steps
           - condition: needs_fix
         instruction_template: |
           Review architecture...
       - name: security-review
-        agent: ../agents/default/security-reviewer.md
+        persona: ../personas/security-reviewer.md
         rules:
           - condition: approved
           - condition: needs_fix
@@ -369,9 +370,9 @@ Files: `.takt/logs/{sessionId}.jsonl`, with `latest.json` pointer. Legacy `.json
 
 **Instruction auto-injection over explicit placeholders.** The instruction builder auto-injects `{task}`, `{previous_response}`, `{user_inputs}`, and status rules. Templates should contain only step-specific instructions, not boilerplate.
 
-**Agent prompts contain only domain knowledge.** Agent prompt files (`resources/global/{lang}/agents/**/*.md`) must contain only domain expertise and behavioral principles — never piece-specific procedures. Piece-specific details (which reports to read, step routing, specific templates with hardcoded step names) belong in the piece YAML's `instruction_template`. This keeps agents reusable across different pieces.
+**Persona prompts contain only domain knowledge.** Persona prompt files (`resources/global/{lang}/personas/*.md`) must contain only domain expertise and behavioral principles — never piece-specific procedures. Piece-specific details (which reports to read, step routing, specific templates with hardcoded step names) belong in the piece YAML's `instruction_template`. This keeps personas reusable across different pieces.
 
-What belongs in agent prompts:
+What belongs in persona prompts:
 - Role definition ("You are a ... specialist")
 - Domain expertise, review criteria, judgment standards
 - Do / Don't behavioral rules
@@ -445,12 +446,12 @@ Debug logs are written to `.takt/logs/debug.log` (ndjson format). Log levels: `d
 
 ## Important Implementation Notes
 
-**Agent prompt resolution:**
-- Agent paths in piece YAML are resolved relative to the piece file's directory
-- `../agents/default/coder.md` resolves from piece file location
-- Built-in agents are loaded from `dist/resources/global/{lang}/agents/`
-- User agents are loaded from `~/.takt/agents/` or `.takt/agents.yaml`
-- If agent file doesn't exist, the agent string is used as inline system prompt
+**Persona prompt resolution:**
+- Persona paths in piece YAML are resolved relative to the piece file's directory
+- `../personas/coder.md` resolves from piece file location
+- Built-in personas are loaded from `dist/resources/global/{lang}/personas/`
+- User personas are loaded from `~/.takt/personas/` (legacy: `~/.takt/agents/`)
+- If persona file doesn't exist, the persona string is used as inline system prompt
 
 **Report directory structure:**
 - Report dirs are created at `.takt/reports/{timestamp}-{slug}/`

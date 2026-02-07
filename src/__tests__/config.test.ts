@@ -16,7 +16,7 @@ import {
   getCurrentPiece,
   setCurrentPiece,
   getProjectConfigDir,
-  getBuiltinAgentsDir,
+  getBuiltinPersonasDir,
   loadInputHistory,
   saveInputHistory,
   addToInputHistory,
@@ -268,13 +268,13 @@ describe('loadAllPieces (builtin fallback)', () => {
 });
 
 describe('loadPersonaPromptFromPath (builtin paths)', () => {
-  it('should load agent prompt from builtin resources path', () => {
+  it('should load persona prompt from builtin resources path', () => {
     const lang = getLanguage();
-    const builtinAgentsDir = getBuiltinAgentsDir(lang);
-    const agentPath = join(builtinAgentsDir, 'default', 'coder.md');
+    const builtinPersonasDir = getBuiltinPersonasDir(lang);
+    const personaPath = join(builtinPersonasDir, 'coder.md');
 
-    if (existsSync(agentPath)) {
-      const prompt = loadPersonaPromptFromPath(agentPath);
+    if (existsSync(personaPath)) {
+      const prompt = loadPersonaPromptFromPath(personaPath);
       expect(prompt).toBeTruthy();
       expect(typeof prompt).toBe('string');
     }

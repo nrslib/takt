@@ -1,7 +1,7 @@
 /**
  * Session storage for takt
  *
- * Manages agent sessions and input history persistence.
+ * Manages persona sessions and input history persistence.
  */
 
 import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync, readdirSync, rmSync } from 'node:fs';
@@ -88,12 +88,12 @@ import type { PersonaSessionData } from '../types.js';
 
 export type { PersonaSessionData };
 
-/** Get path for storing agent sessions */
+/** Get path for storing persona sessions */
 export function getPersonaSessionsPath(projectDir: string): string {
   return join(getProjectConfigDir(projectDir), 'persona_sessions.json');
 }
 
-/** Load saved agent sessions. Returns empty if provider has changed. */
+/** Load saved persona sessions. Returns empty if provider has changed. */
 export function loadPersonaSessions(projectDir: string, currentProvider?: string): Record<string, string> {
   const path = getPersonaSessionsPath(projectDir);
   if (existsSync(path)) {
@@ -112,7 +112,7 @@ export function loadPersonaSessions(projectDir: string, currentProvider?: string
   return {};
 }
 
-/** Save agent sessions (atomic write) */
+/** Save persona sessions (atomic write) */
 export function savePersonaSessions(
   projectDir: string,
   sessions: Record<string, string>,
@@ -169,7 +169,7 @@ export function updatePersonaSession(
   writeFileAtomic(path, JSON.stringify(data, null, 2));
 }
 
-/** Clear all saved agent sessions */
+/** Clear all saved persona sessions */
 export function clearPersonaSessions(projectDir: string): void {
   const path = getPersonaSessionsPath(projectDir);
   ensureDir(getProjectConfigDir(projectDir));
@@ -203,7 +203,7 @@ export function getWorktreeSessionPath(projectDir: string, worktreePath: string)
   return join(dir, `${encoded}.json`);
 }
 
-/** Load saved agent sessions for a worktree. Returns empty if provider has changed. */
+/** Load saved persona sessions for a worktree. Returns empty if provider has changed. */
 export function loadWorktreeSessions(
   projectDir: string,
   worktreePath: string,
@@ -225,7 +225,7 @@ export function loadWorktreeSessions(
   return {};
 }
 
-/** Update a single agent session for a worktree (atomic) */
+/** Update a single persona session for a worktree (atomic) */
 export function updateWorktreeSession(
   projectDir: string,
   worktreePath: string,

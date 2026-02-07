@@ -1,14 +1,14 @@
 /**
- * takt export-cc — Deploy takt pieces and agents as Claude Code Skill.
+ * takt export-cc — Deploy takt pieces and personas as Claude Code Skill.
  *
  * Copies the following to ~/.claude/:
  *   commands/takt.md          — /takt command entry point
  *   skills/takt/SKILL.md      — Engine overview
  *   skills/takt/references/   — Engine logic + YAML schema
  *   skills/takt/pieces/       — Builtin piece YAML files
- *   skills/takt/agents/       — Builtin agent .md files
+ *   skills/takt/personas/     — Builtin persona .md files
  *
- * Piece YAML agent paths (../agents/...) work as-is because
+ * Piece YAML persona paths (../personas/...) work as-is because
  * the directory structure is mirrored.
  */
 
@@ -18,7 +18,7 @@ import { join, dirname, relative } from 'node:path';
 
 import {
   getBuiltinPiecesDir,
-  getBuiltinAgentsDir,
+  getBuiltinPersonasDir,
   getLanguage,
 } from '../../infra/config/index.js';
 import { getResourcesDir } from '../../infra/resources/index.js';
@@ -46,7 +46,7 @@ export async function deploySkill(): Promise<void> {
   const lang = getLanguage();
   const skillResourcesDir = join(getResourcesDir(), 'skill');
   const builtinPiecesDir = getBuiltinPiecesDir(lang);
-  const builtinAgentsDir = getBuiltinAgentsDir(lang);
+  const builtinPersonasDir = getBuiltinPersonasDir(lang);
   const skillDir = getSkillDir();
   const commandDir = getCommandDir();
 
@@ -91,10 +91,10 @@ export async function deploySkill(): Promise<void> {
   cleanDir(piecesDestDir);
   copyDirRecursive(builtinPiecesDir, piecesDestDir, copiedFiles);
 
-  // 5. Deploy builtin agent .md files → skills/takt/agents/
-  const agentsDestDir = join(skillDir, 'agents');
-  cleanDir(agentsDestDir);
-  copyDirRecursive(builtinAgentsDir, agentsDestDir, copiedFiles);
+  // 5. Deploy builtin persona .md files → skills/takt/personas/
+  const personasDestDir = join(skillDir, 'personas');
+  cleanDir(personasDestDir);
+  copyDirRecursive(builtinPersonasDir, personasDestDir, copiedFiles);
 
   // Report results
   blankLine();
@@ -106,10 +106,10 @@ export async function deploySkill(): Promise<void> {
     const skillBase = join(homedir(), '.claude');
     const commandFiles = copiedFiles.filter((f) => f.startsWith(commandDir));
     const skillFiles = copiedFiles.filter(
-      (f) => f.startsWith(skillDir) && !f.includes('/pieces/') && !f.includes('/agents/'),
+      (f) => f.startsWith(skillDir) && !f.includes('/pieces/') && !f.includes('/personas/'),
     );
     const pieceFiles = copiedFiles.filter((f) => f.includes('/pieces/'));
-    const agentFiles = copiedFiles.filter((f) => f.includes('/agents/'));
+    const personaFiles = copiedFiles.filter((f) => f.includes('/personas/'));
 
     if (commandFiles.length > 0) {
       info(`  コマンド: ${commandFiles.length} ファイル`);
@@ -126,8 +126,8 @@ export async function deploySkill(): Promise<void> {
     if (pieceFiles.length > 0) {
       info(`  ピース:   ${pieceFiles.length} ファイル`);
     }
-    if (agentFiles.length > 0) {
-      info(`  エージェント: ${agentFiles.length} ファイル`);
+    if (personaFiles.length > 0) {
+      info(`  ペルソナ:   ${personaFiles.length} ファイル`);
     }
 
     blankLine();

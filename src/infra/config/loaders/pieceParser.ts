@@ -2,7 +2,7 @@
  * Piece YAML parsing and normalization.
  *
  * Converts raw YAML structures into internal PieceConfig format,
- * resolving agent paths, content paths, and rule conditions.
+ * resolving persona paths, content paths, and rule conditions.
  */
 
 import { readFileSync, existsSync } from 'node:fs';
@@ -16,9 +16,9 @@ import type { PieceConfig, PieceMovement, PieceRule, ReportConfig, ReportObjectC
 type RawStep = z.output<typeof PieceMovementRawSchema>;
 
 /**
- * Resolve agent path from piece specification.
- * - Relative path (./agent.md): relative to piece directory
- * - Absolute path (/path/to/agent.md or ~/...): use as-is
+ * Resolve persona path from piece specification.
+ * - Relative path (./persona.md): relative to piece directory
+ * - Absolute path (/path/to/persona.md or ~/...): use as-is
  */
 function resolvePersonaPathForPiece(personaSpec: string, pieceDir: string): string {
   if (personaSpec.startsWith('./')) {
@@ -36,7 +36,7 @@ function resolvePersonaPathForPiece(personaSpec: string, pieceDir: string): stri
 
 /**
  * Extract display name from persona path.
- * e.g., "~/.takt/agents/default/coder.md" -> "coder"
+ * e.g., "~/.takt/personas/coder.md" -> "coder"
  */
 function extractPersonaDisplayName(personaPath: string): string {
   return basename(personaPath, '.md');

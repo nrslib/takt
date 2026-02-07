@@ -1,8 +1,8 @@
 /**
  * /eject command implementation
  *
- * Copies a builtin piece (and its agents) for user customization.
- * Directory structure is mirrored so relative agent paths work as-is.
+ * Copies a builtin piece (and its personas/stances/instructions) for user customization.
+ * Directory structure is mirrored so relative paths work as-is.
  *
  * Default target: project-local (.takt/)
  * With --global: user global (~/.takt/)
@@ -12,9 +12,9 @@ import { existsSync, readdirSync, statSync, readFileSync, writeFileSync, mkdirSy
 import { join, dirname } from 'node:path';
 import {
   getGlobalPiecesDir,
-  getGlobalAgentsDir,
+  getGlobalPersonasDir,
   getProjectPiecesDir,
-  getProjectAgentsDir,
+  getProjectPersonasDir,
   getBuiltinPiecesDir,
   getLanguage,
 } from '../../infra/config/index.js';
@@ -52,7 +52,7 @@ export async function ejectBuiltin(name?: string, options: EjectOptions = {}): P
 
   const projectDir = options.projectDir || process.cwd();
   const targetPiecesDir = options.global ? getGlobalPiecesDir() : getProjectPiecesDir(projectDir);
-  const targetBaseDir = options.global ? dirname(getGlobalAgentsDir()) : dirname(getProjectAgentsDir(projectDir));
+  const targetBaseDir = options.global ? dirname(getGlobalPersonasDir()) : dirname(getProjectPersonasDir(projectDir));
   const builtinBaseDir = getLanguageResourcesDir(lang);
   const targetLabel = options.global ? 'global (~/.takt/)' : 'project (.takt/)';
 
@@ -125,14 +125,14 @@ function listAvailableBuiltins(builtinPiecesDir: string, isGlobal?: boolean): vo
 
 /** Resource reference extracted from piece YAML */
 interface ResourceRef {
-  /** Resource type directory (agents, personas, stances, instructions, report-formats) */
+  /** Resource type directory (personas, stances, instructions, report-formats) */
   type: string;
   /** Relative path within the resource type directory */
   path: string;
 }
 
 /** Known resource type directories that can be referenced from piece YAML */
-const RESOURCE_TYPES = ['agents', 'personas', 'stances', 'instructions', 'report-formats'];
+const RESOURCE_TYPES = ['personas', 'stances', 'instructions', 'report-formats'];
 
 /**
  * Extract resource relative paths from a builtin piece YAML.
