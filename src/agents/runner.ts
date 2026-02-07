@@ -102,6 +102,7 @@ export class AgentRunner {
       cwd: options.cwd,
       sessionId: options.sessionId,
       allowedTools: options.allowedTools ?? agentConfig?.allowedTools,
+      mcpServers: options.mcpServers,
       maxTurns: options.maxTurns,
       model: AgentRunner.resolveModel(resolvedProvider, options, agentConfig),
       permissionMode: options.permissionMode,

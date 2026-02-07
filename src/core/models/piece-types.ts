@@ -53,6 +53,31 @@ export interface OutputContractItem {
 /** Union type for output contract entries */
 export type OutputContractEntry = OutputContractLabelPath | OutputContractItem;
 
+/** MCP server configuration for stdio transport */
+export interface McpStdioServerConfig {
+  type?: 'stdio';
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+}
+
+/** MCP server configuration for SSE transport */
+export interface McpSseServerConfig {
+  type: 'sse';
+  url: string;
+  headers?: Record<string, string>;
+}
+
+/** MCP server configuration for HTTP transport */
+export interface McpHttpServerConfig {
+  type: 'http';
+  url: string;
+  headers?: Record<string, string>;
+}
+
+/** MCP server configuration (union of all YAML-configurable transports) */
+export type McpServerConfig = McpStdioServerConfig | McpSseServerConfig | McpHttpServerConfig;
+
 /** Single movement in a piece */
 export interface PieceMovement {
   name: string;
@@ -66,6 +91,8 @@ export interface PieceMovement {
   personaDisplayName: string;
   /** Allowed tools for this movement (optional, passed to agent execution) */
   allowedTools?: string[];
+  /** MCP servers configuration for this movement */
+  mcpServers?: Record<string, McpServerConfig>;
   /** Resolved absolute path to persona prompt file (set by loader) */
   personaPath?: string;
   /** Provider override for this movement */

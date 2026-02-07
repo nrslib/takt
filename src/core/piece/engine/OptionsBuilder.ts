@@ -68,6 +68,7 @@ export class OptionsBuilder {
       ...this.buildBaseOptions(step),
       sessionId: shouldResumeSession ? this.getSessionId(step.persona ?? step.name) : undefined,
       allowedTools,
+      mcpServers: step.mcpServers,
     };
   }
 

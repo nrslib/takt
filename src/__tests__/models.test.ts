@@ -8,6 +8,7 @@ import {
   StatusSchema,
   PermissionModeSchema,
   PieceConfigRawSchema,
+  McpServerConfigSchema,
   CustomAgentConfigSchema,
   GlobalConfigSchema,
 } from '../core/models/index.js';
@@ -142,6 +143,210 @@ describe('PieceConfigRawSchema', () => {
     };
 
     expect(() => PieceConfigRawSchema.parse(config)).toThrow();
+  });
+
+  it('should parse movement with stdio mcp_servers', () => {
+    const config = {
+      name: 'test-piece',
+      movements: [
+        {
+          name: 'e2e-test',
+          persona: 'coder',
+          mcp_servers: {
+            playwright: {
+              command: 'npx',
+              args: ['-y', '@anthropic-ai/mcp-server-playwright'],
+            },
+          },
+          allowed_tools: ['mcp__playwright__*'],
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    const result = PieceConfigRawSchema.parse(config);
+    expect(result.movements![0]?.mcp_servers).toEqual({
+      playwright: {
+        command: 'npx',
+        args: ['-y', '@anthropic-ai/mcp-server-playwright'],
+      },
+    });
+  });
+
+  it('should parse movement with sse mcp_servers', () => {
+    const config = {
+      name: 'test-piece',
+      movements: [
+        {
+          name: 'step1',
+          persona: 'coder',
+          mcp_servers: {
+            remote: {
+              type: 'sse',
+              url: 'http://localhost:8080/sse',
+              headers: { Authorization: 'Bearer token' },
+            },
+          },
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    const result = PieceConfigRawSchema.parse(config);
+    expect(result.movements![0]?.mcp_servers).toEqual({
+      remote: {
+        type: 'sse',
+        url: 'http://localhost:8080/sse',
+        headers: { Authorization: 'Bearer token' },
+      },
+    });
+  });
+
+  it('should parse movement with http mcp_servers', () => {
+    const config = {
+      name: 'test-piece',
+      movements: [
+        {
+          name: 'step1',
+          persona: 'coder',
+          mcp_servers: {
+            api: {
+              type: 'http',
+              url: 'http://localhost:3000/mcp',
+            },
+          },
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    const result = PieceConfigRawSchema.parse(config);
+    expect(result.movements![0]?.mcp_servers).toEqual({
+      api: {
+        type: 'http',
+        url: 'http://localhost:3000/mcp',
+      },
+    });
+  });
+
+  it('should allow omitting mcp_servers', () => {
+    const config = {
+      name: 'test-piece',
+      movements: [
+        {
+          name: 'step1',
+          persona: 'coder',
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    const result = PieceConfigRawSchema.parse(config);
+    expect(result.movements![0]?.mcp_servers).toBeUndefined();
+  });
+
+  it('should reject invalid mcp_servers (missing command for stdio)', () => {
+    const config = {
+      name: 'test-piece',
+      movements: [
+        {
+          name: 'step1',
+          persona: 'coder',
+          mcp_servers: {
+            broken: { args: ['--flag'] },
+          },
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    expect(() => PieceConfigRawSchema.parse(config)).toThrow();
+  });
+
+  it('should reject invalid mcp_servers (missing url for sse)', () => {
+    const config = {
+      name: 'test-piece',
+      movements: [
+        {
+          name: 'step1',
+          persona: 'coder',
+          mcp_servers: {
+            broken: { type: 'sse' },
+          },
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    expect(() => PieceConfigRawSchema.parse(config)).toThrow();
+  });
+});
+
+describe('McpServerConfigSchema', () => {
+  it('should parse stdio config', () => {
+    const config = { command: 'npx', args: ['-y', 'some-server'], env: { NODE_ENV: 'test' } };
+    const result = McpServerConfigSchema.parse(config);
+    expect(result).toEqual(config);
+  });
+
+  it('should parse stdio config with command only', () => {
+    const config = { command: 'mcp-server' };
+    const result = McpServerConfigSchema.parse(config);
+    expect(result).toEqual(config);
+  });
+
+  it('should parse stdio config with explicit type', () => {
+    const config = { type: 'stdio' as const, command: 'npx', args: ['-y', 'some-server'] };
+    const result = McpServerConfigSchema.parse(config);
+    expect(result).toEqual(config);
+  });
+
+  it('should parse sse config', () => {
+    const config = { type: 'sse' as const, url: 'http://localhost:8080/sse' };
+    const result = McpServerConfigSchema.parse(config);
+    expect(result).toEqual(config);
+  });
+
+  it('should parse sse config with headers', () => {
+    const config = { type: 'sse' as const, url: 'http://example.com', headers: { 'X-Key': 'val' } };
+    const result = McpServerConfigSchema.parse(config);
+    expect(result).toEqual(config);
+  });
+
+  it('should parse http config', () => {
+    const config = { type: 'http' as const, url: 'http://localhost:3000/mcp' };
+    const result = McpServerConfigSchema.parse(config);
+    expect(result).toEqual(config);
+  });
+
+  it('should parse http config with headers', () => {
+    const config = { type: 'http' as const, url: 'http://example.com', headers: { Authorization: 'Bearer x' } };
+    const result = McpServerConfigSchema.parse(config);
+    expect(result).toEqual(config);
+  });
+
+  it('should reject empty command for stdio', () => {
+    expect(() => McpServerConfigSchema.parse({ command: '' })).toThrow();
+  });
+
+  it('should reject missing url for sse', () => {
+    expect(() => McpServerConfigSchema.parse({ type: 'sse' })).toThrow();
+  });
+
+  it('should reject missing url for http', () => {
+    expect(() => McpServerConfigSchema.parse({ type: 'http' })).toThrow();
+  });
+
+  it('should reject empty url for sse', () => {
+    expect(() => McpServerConfigSchema.parse({ type: 'sse', url: '' })).toThrow();
+  });
+
+  it('should reject unknown type', () => {
+    expect(() => McpServerConfigSchema.parse({ type: 'websocket', url: 'ws://localhost' })).toThrow();
+  });
+
+  it('should reject empty object', () => {
+    expect(() => McpServerConfigSchema.parse({})).toThrow();
   });
 });
 

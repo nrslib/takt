@@ -447,6 +447,131 @@ movements:
   });
 });
 
+describe('Piece Loader IT: mcp_servers parsing', () => {
+  let testDir: string;
+
+  beforeEach(() => {
+    testDir = createTestDir();
+  });
+
+  afterEach(() => {
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('should parse mcp_servers from YAML to PieceMovement.mcpServers', () => {
+    const piecesDir = join(testDir, '.takt', 'pieces');
+    mkdirSync(piecesDir, { recursive: true });
+
+    writeFileSync(join(piecesDir, 'with-mcp.yaml'), `
+name: with-mcp
+description: Piece with MCP servers
+max_iterations: 5
+initial_movement: e2e-test
+
+movements:
+  - name: e2e-test
+    persona: coder
+    mcp_servers:
+      playwright:
+        command: npx
+        args: ["-y", "@anthropic-ai/mcp-server-playwright"]
+    allowed_tools:
+      - Read
+      - Bash
+      - mcp__playwright__*
+    rules:
+      - condition: Done
+        next: COMPLETE
+    instruction: "Run E2E tests"
+`);
+
+    const config = loadPiece('with-mcp', testDir);
+
+    expect(config).not.toBeNull();
+    const e2eStep = config!.movements.find((s) => s.name === 'e2e-test');
+    expect(e2eStep).toBeDefined();
+    expect(e2eStep!.mcpServers).toEqual({
+      playwright: {
+        command: 'npx',
+        args: ['-y', '@anthropic-ai/mcp-server-playwright'],
+      },
+    });
+  });
+
+  it('should allow movement without mcp_servers', () => {
+    const piecesDir = join(testDir, '.takt', 'pieces');
+    mkdirSync(piecesDir, { recursive: true });
+
+    writeFileSync(join(piecesDir, 'no-mcp.yaml'), `
+name: no-mcp
+description: Piece without MCP servers
+max_iterations: 5
+initial_movement: implement
+
+movements:
+  - name: implement
+    persona: coder
+    rules:
+      - condition: Done
+        next: COMPLETE
+    instruction: "Implement the feature"
+`);
+
+    const config = loadPiece('no-mcp', testDir);
+
+    expect(config).not.toBeNull();
+    const implementStep = config!.movements.find((s) => s.name === 'implement');
+    expect(implementStep).toBeDefined();
+    expect(implementStep!.mcpServers).toBeUndefined();
+  });
+
+  it('should parse mcp_servers with multiple servers and transports', () => {
+    const piecesDir = join(testDir, '.takt', 'pieces');
+    mkdirSync(piecesDir, { recursive: true });
+
+    writeFileSync(join(piecesDir, 'multi-mcp.yaml'), `
+name: multi-mcp
+description: Piece with multiple MCP servers
+max_iterations: 5
+initial_movement: test
+
+movements:
+  - name: test
+    persona: coder
+    mcp_servers:
+      playwright:
+        command: npx
+        args: ["-y", "@anthropic-ai/mcp-server-playwright"]
+      remote-api:
+        type: http
+        url: http://localhost:3000/mcp
+        headers:
+          Authorization: "Bearer token123"
+    rules:
+      - condition: Done
+        next: COMPLETE
+    instruction: "Run tests"
+`);
+
+    const config = loadPiece('multi-mcp', testDir);
+
+    expect(config).not.toBeNull();
+    const testStep = config!.movements.find((s) => s.name === 'test');
+    expect(testStep).toBeDefined();
+    expect(testStep!.mcpServers).toEqual({
+      playwright: {
+        command: 'npx',
+        args: ['-y', '@anthropic-ai/mcp-server-playwright'],
+      },
+      'remote-api': {
+        type: 'http',
+        url: 'http://localhost:3000/mcp',
+        headers: { Authorization: 'Bearer token123' },
+      },
+    });
+  });
+});
+
 describe('Piece Loader IT: invalid YAML handling', () => {
   let testDir: string;
 

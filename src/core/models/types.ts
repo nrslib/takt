@@ -29,6 +29,7 @@ export type {
   OutputContractLabelPath,
   OutputContractItem,
   OutputContractEntry,
+  McpServerConfig,
   PieceMovement,
   LoopDetectionConfig,
   LoopMonitorConfig,

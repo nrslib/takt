@@ -6,113 +6,22 @@
  */
 
 import { readFileSync, existsSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join, dirname, basename } from 'node:path';
+import { dirname } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import type { z } from 'zod';
 import { PieceConfigRawSchema, PieceMovementRawSchema } from '../../../core/models/index.js';
 import type { PieceConfig, PieceMovement, PieceRule, OutputContractEntry, OutputContractLabelPath, OutputContractItem, LoopMonitorConfig, LoopMonitorJudge } from '../../../core/models/index.js';
+import {
+  type PieceSections,
+  resolveResourceContent,
+  resolveRefToContent,
+  resolveRefList,
+  resolveSectionMap,
+  extractPersonaDisplayName,
+  resolvePersona,
+} from './resource-resolver.js';
 
 type RawStep = z.output<typeof PieceMovementRawSchema>;
-
-/** Resolve a resource spec to an absolute file path. */
-function resolveResourcePath(spec: string, pieceDir: string): string {
-  if (spec.startsWith('./')) return join(pieceDir, spec.slice(2));
-  if (spec.startsWith('~')) return join(homedir(), spec.slice(1));
-  if (spec.startsWith('/')) return spec;
-  return join(pieceDir, spec);
-}
-
-/**
- * Resolve a resource spec to its file content.
- * If the spec ends with .md and the file exists, returns file content.
- * Otherwise returns the spec as-is (treated as inline content).
- */
-function resolveResourceContent(spec: string | undefined, pieceDir: string): string | undefined {
-  if (spec == null) return undefined;
-  if (spec.endsWith('.md')) {
-    const resolved = resolveResourcePath(spec, pieceDir);
-    if (existsSync(resolved)) return readFileSync(resolved, 'utf-8');
-  }
-  return spec;
-}
-
-/**
- * Resolve a section reference to content.
- * Looks up ref in resolvedMap first, then falls back to resolveResourceContent.
- */
-function resolveRefToContent(
-  ref: string,
-  resolvedMap: Record<string, string> | undefined,
-  pieceDir: string,
-): string | undefined {
-  const mapped = resolvedMap?.[ref];
-  if (mapped) return mapped;
-  return resolveResourceContent(ref, pieceDir);
-}
-
-/** Resolve multiple references to content strings (for fields that accept string | string[]). */
-function resolveRefList(
-  refs: string | string[] | undefined,
-  resolvedMap: Record<string, string> | undefined,
-  pieceDir: string,
-): string[] | undefined {
-  if (refs == null) return undefined;
-  const list = Array.isArray(refs) ? refs : [refs];
-  const contents: string[] = [];
-  for (const ref of list) {
-    const content = resolveRefToContent(ref, resolvedMap, pieceDir);
-    if (content) contents.push(content);
-  }
-  return contents.length > 0 ? contents : undefined;
-}
-
-/** Resolve a piece-level section map (each value resolved to file content or inline). */
-function resolveSectionMap(
-  raw: Record<string, string> | undefined,
-  pieceDir: string,
-): Record<string, string> | undefined {
-  if (!raw) return undefined;
-  const resolved: Record<string, string> = {};
-  for (const [name, value] of Object.entries(raw)) {
-    const content = resolveResourceContent(value, pieceDir);
-    if (content) resolved[name] = content;
-  }
-  return Object.keys(resolved).length > 0 ? resolved : undefined;
-}
-
-/** Extract display name from persona path (e.g., "coder.md" → "coder"). */
-function extractPersonaDisplayName(personaPath: string): string {
-  return basename(personaPath, '.md');
-}
-
-/** Resolve persona from YAML field to spec + absolute path. */
-function resolvePersona(
-  rawPersona: string | undefined,
-  sections: PieceSections,
-  pieceDir: string,
-): { personaSpec?: string; personaPath?: string } {
-  if (!rawPersona) return {};
-  const personaSpec = sections.personas?.[rawPersona] ?? rawPersona;
-
-  const resolved = resolveResourcePath(personaSpec, pieceDir);
-  const personaPath = existsSync(resolved) ? resolved : undefined;
-  return { personaSpec, personaPath };
-}
-
-/** Pre-resolved section maps passed to movement normalization. */
-interface PieceSections {
-  /** Persona name → file path (raw, not content-resolved) */
-  personas?: Record<string, string>;
-  /** Policy name → resolved content */
-  resolvedPolicies?: Record<string, string>;
-  /** Knowledge name → resolved content */
-  resolvedKnowledge?: Record<string, string>;
-  /** Instruction name → resolved content */
-  resolvedInstructions?: Record<string, string>;
-  /** Report format name → resolved content */
-  resolvedReportFormats?: Record<string, string>;
-}
 
 /** Check if a raw output contract item is the object form (has 'name' property). */
 function isOutputContractItem(raw: unknown): raw is { name: string; order?: string; format?: string } {
@@ -271,6 +180,7 @@ function normalizeStepFromRaw(
     personaDisplayName: displayName || (personaSpec ? extractPersonaDisplayName(personaSpec) : step.name),
     personaPath,
     allowedTools: step.allowed_tools,
+    mcpServers: step.mcp_servers,
     provider: step.provider,
     model: step.model,
     permissionMode: step.permission_mode,

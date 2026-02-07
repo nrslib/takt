@@ -12,6 +12,7 @@ function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
     cwd: options.cwd,
     sessionId: options.sessionId,
     allowedTools: options.allowedTools,
+    mcpServers: options.mcpServers,
     model: options.model,
     maxTurns: options.maxTurns,
     permissionMode: options.permissionMode,

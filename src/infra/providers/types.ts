@@ -3,7 +3,7 @@
  */
 
 import type { StreamCallback, PermissionHandler, AskUserQuestionHandler } from '../claude/index.js';
-import type { AgentResponse, PermissionMode } from '../../core/models/index.js';
+import type { AgentResponse, PermissionMode, McpServerConfig } from '../../core/models/index.js';
 
 /** Agent setup configuration — determines HOW the provider invokes the agent */
 export interface AgentSetup {
@@ -23,6 +23,8 @@ export interface ProviderCallOptions {
   sessionId?: string;
   model?: string;
   allowedTools?: string[];
+  /** MCP servers configuration */
+  mcpServers?: Record<string, McpServerConfig>;
   /** Maximum number of agentic turns */
   maxTurns?: number;
   /** Permission mode for tool execution (from piece step) */

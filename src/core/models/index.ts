@@ -7,6 +7,7 @@ export type {
   OutputContractLabelPath,
   OutputContractItem,
   OutputContractEntry,
+  McpServerConfig,
   AgentResponse,
   SessionState,
   PieceRule,

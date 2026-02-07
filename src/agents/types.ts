@@ -3,7 +3,7 @@
  */
 
 import type { StreamCallback, PermissionHandler, AskUserQuestionHandler } from '../infra/claude/index.js';
-import type { PermissionMode, Language } from '../core/models/index.js';
+import type { PermissionMode, Language, McpServerConfig } from '../core/models/index.js';
 
 export type { StreamCallback };
 
@@ -17,6 +17,8 @@ export interface RunAgentOptions {
   personaPath?: string;
   /** Allowed tools for this agent run */
   allowedTools?: string[];
+  /** MCP servers for this agent run */
+  mcpServers?: Record<string, McpServerConfig>;
   /** Maximum number of agentic turns */
   maxTurns?: number;
   /** Permission mode for tool execution (from piece step) */
