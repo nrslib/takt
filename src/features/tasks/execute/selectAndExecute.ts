@@ -141,7 +141,7 @@ async function resolveAutoPr(optionAutoPr: boolean | undefined): Promise<boolean
   }
 
   // Fall back to interactive prompt
-  return confirm('Create pull request?', false);
+  return confirm('Create pull request?', true);
 }
 
 /**
