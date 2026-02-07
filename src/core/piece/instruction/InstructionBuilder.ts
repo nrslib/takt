@@ -102,7 +102,6 @@ export class InstructionBuilder {
     const policyContents = this.context.policyContents ?? this.step.policyContents;
     const hasPolicy = !!(policyContents && policyContents.length > 0);
     const policyContent = hasPolicy ? policyContents!.join('\n\n---\n\n') : '';
-    const policyReminder = ''; // Reminder text is in the template itself
 
     // Knowledge injection (domain-specific knowledge, no reminder needed)
     const knowledgeContents = this.context.knowledgeContents ?? this.step.knowledgeContents;
@@ -132,7 +131,6 @@ export class InstructionBuilder {
       retryNote,
       hasPolicy,
       policyContent,
-      policyReminder,
       hasKnowledge,
       knowledgeContent,
       instructions,

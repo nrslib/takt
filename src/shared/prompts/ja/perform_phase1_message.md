@@ -5,7 +5,7 @@
         pieceStructure, iteration, movementIteration, movement, hasReport, reportInfo,
         phaseNote, hasTaskSection, userRequest, hasPreviousResponse, previousResponse,
         hasUserInputs, userInputs, hasRetryNote, retryNote, hasPolicy, policyContent,
-        policyReminder, hasKnowledge, knowledgeContent, instructions
+        hasKnowledge, knowledgeContent, instructions
   builder: InstructionBuilder
 -->
 ## 実行コンテキスト
@@ -16,13 +16,6 @@
 - **git add を実行しないでください。** ステージングもシステムが自動で行います。新規ファイルが未追跡（`??`）でも正常です。
 - **Bashコマンドで `cd` を使用しないでください。** 作業ディレクトリは既に正しく設定されています。ディレクトリを変更せずにコマンドを実行してください。
 {{#if editRule}}- {{editRule}}
-{{/if}}
-{{#if hasPolicy}}
-
-## Policy
-以下のポリシーはこのムーブメントに適用される行動規範です。必ず遵守してください。
-
-{{policyContent}}
 {{/if}}
 {{#if hasKnowledge}}
 
@@ -69,6 +62,8 @@
 {{instructions}}
 {{#if hasPolicy}}
 
----
-**Policy Reminder:** 上記の Policy セクションで定義されたポリシー規範を遵守してください。{{policyReminder}}
+## Policy
+以下のポリシーはこのムーブメントに適用される行動規範です。必ず遵守してください。
+
+{{policyContent}}
 {{/if}}

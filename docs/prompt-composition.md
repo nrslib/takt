@@ -37,6 +37,275 @@ knowledge/       # CONTEXT — reference materials
 output-contracts/ # OUTPUT — output contract templates
 ```
 
+### Placement and Typical Examples
+
+An LLM has only two slots: **system prompt** and **user message**. The five concerns map to these two slots.
+
+```
+System Prompt:
+  ┌──────────────────────────────────────────────────┐
+  │ Persona  — agent's role, expertise, principles   │
+  └──────────────────────────────────────────────────┘
+
+User Message:
+  ┌──────────────────────────────────────────────────┐
+  │ Policy   — rules, prohibitions, quality standards │
+  │ Knowledge — reference materials for judgment      │
+  │ Instruction — step-specific procedures            │
+  │ Output Contract — output structure definition     │
+  └──────────────────────────────────────────────────┘
+```
+
+Persona is the agent's **identity** — it doesn't change across tasks. Placing it in the system prompt shapes all LLM responses. The remaining four change per step and are composed into the user message.
+
+Below are typical file examples for each facet.
+
+#### Persona — `personas/architecture-reviewer.md`
+
+Placed in the system prompt. Contains only role definition, boundaries, and behavioral principles.
+
+```markdown
+# Architecture Reviewer
+
+You are a software architecture specialist.
+You evaluate code structure, design, and maintainability.
+
+## Role Boundaries
+
+**Do:**
+- Validate structural and design soundness
+- Evaluate code quality
+- Verify change scope appropriateness
+
+**Don't:**
+- Review security vulnerabilities (Security Reviewer's job)
+- Write code yourself
+
+## Behavioral Principles
+
+- Don't demand perfect design. Judge whether it's the best under current constraints
+- Respect existing codebase conventions
+```
+
+The following four are all placed in the user message.
+
+#### Policy — `policies/coding.md`
+
+Shared rules that apply across tasks. Prescriptive ("you must").
+
+```markdown
+# Coding Policy
+
+## Principles
+
+| Principle | Standard |
+|-----------|----------|
+| DRY | 3+ duplications → REJECT |
+| Fail Fast | Reject invalid state early |
+| Least Privilege | Minimal scope necessary |
+
+## Prohibitions
+
+- **Unused code** — no "just in case" methods, no future-use fields
+- **Direct object mutation** — create new objects with spread operators
+- **Fallback abuse** — don't hide uncertainty with `?? 'default'`
+```
+
+#### Knowledge — `knowledge/architecture.md`
+
+Reference information for judgment. Descriptive ("this is how it works").
+
+```markdown
+# Architecture Knowledge
+
+## Layer Structure
+
+Dependency direction: upper layers → lower layers (reverse prohibited)
+
+| Layer | Responsibility | Depends On |
+|-------|---------------|------------|
+| Controller | HTTP request handling | Service |
+| Service | Business logic | Repository |
+| Repository | Data access | None |
+
+## File Organization
+
+| Criteria | Judgment |
+|----------|----------|
+| File exceeds 300 lines | Consider splitting |
+| Multiple responsibilities in one file | REJECT |
+| Circular dependencies | REJECT |
+```
+
+#### Instruction — `instructions/implement.md`
+
+Step-specific procedures. Imperative voice.
+
+```markdown
+Implement the task based on the plan.
+
+**Steps:**
+1. Declare the change scope
+2. Implement the code
+3. Write and run tests
+4. Record decision log
+
+**Note:** If Previous Response exists, this is a rework.
+Address the feedback and fix accordingly.
+```
+
+#### Output Contract — `output-contracts/review.md`
+
+Defines output structure. The agent follows this format when producing output.
+
+````markdown
+```markdown
+# Architecture Review
+
+## Result: APPROVE / REJECT
+
+## Summary
+{1-2 sentence summary of the result}
+
+## Reviewed Aspects
+| Aspect | Result | Notes |
+|--------|--------|-------|
+| Structure & Design | ✅ | - |
+| Code Quality | ✅ | - |
+| Test Coverage | ✅ | - |
+
+## Issues (if REJECT)
+| # | Location | Issue | Fix |
+|---|----------|-------|-----|
+| 1 | `src/file.ts:42` | Issue description | How to fix |
+```
+````
+
+#### Assembled Prompt — Complete Example
+
+The engine composes the five files above into the final prompt sent to the LLM.
+
+**System Prompt:**
+
+```markdown
+# Architecture Reviewer
+
+You are a software architecture specialist.
+You evaluate code structure, design, and maintainability.
+
+## Role Boundaries
+
+**Do:**
+- Validate structural and design soundness
+- Evaluate code quality
+- Verify change scope appropriateness
+
+**Don't:**
+- Review security vulnerabilities (Security Reviewer's job)
+- Write code yourself
+
+## Behavioral Principles
+
+- Don't demand perfect design. Judge whether it's the best under current constraints
+- Respect existing codebase conventions
+```
+
+**User Message:**
+
+```markdown
+## Policy
+
+# Coding Policy
+
+## Principles
+
+| Principle | Standard |
+|-----------|----------|
+| DRY | 3+ duplications → REJECT |
+| Fail Fast | Reject invalid state early |
+| Least Privilege | Minimal scope necessary |
+
+## Prohibitions
+
+- **Unused code** — no "just in case" methods, no future-use fields
+- **Direct object mutation** — create new objects with spread operators
+- **Fallback abuse** — don't hide uncertainty with `?? 'default'`
+
+---
+
+## Knowledge
+
+# Architecture Knowledge
+
+## Layer Structure
+
+Dependency direction: upper layers → lower layers (reverse prohibited)
+
+| Layer | Responsibility | Depends On |
+|-------|---------------|------------|
+| Controller | HTTP request handling | Service |
+| Service | Business logic | Repository |
+| Repository | Data access | None |
+
+## File Organization
+
+| Criteria | Judgment |
+|----------|----------|
+| File exceeds 300 lines | Consider splitting |
+| Multiple responsibilities in one file | REJECT |
+| Circular dependencies | REJECT |
+
+---
+
+## User Request
+
+Add JWT token verification to the user authentication module.
+
+---
+
+## Instructions
+
+Implement the task based on the plan.
+
+**Steps:**
+1. Declare the change scope
+2. Implement the code
+3. Write and run tests
+4. Record decision log
+
+**Note:** If Previous Response exists, this is a rework.
+Address the feedback and fix accordingly.
+
+---
+
+## Output Contract
+
+Output your report in the following format.
+
+\```markdown
+# Architecture Review
+
+## Result: APPROVE / REJECT
+
+## Summary
+{1-2 sentence summary of the result}
+
+## Reviewed Aspects
+| Aspect | Result | Notes |
+|--------|--------|-------|
+| Structure & Design | ✅ | - |
+| Code Quality | ✅ | - |
+| Test Coverage | ✅ | - |
+
+## Issues (if REJECT)
+| # | Location | Issue | Fix |
+|---|----------|-------|-----|
+| 1 | `src/file.ts:42` | Issue description | How to fix |
+\```
+```
+
+Independent files are assembled into a single prompt at runtime. Change a file's content and the prompt changes; point to different files and the combination changes.
+
 ### Why These Five?
 
 **Persona** and **Instruction** are the minimum — you need to define who the agent is and what it should do. But in practice, three more concerns emerge as independent axes:

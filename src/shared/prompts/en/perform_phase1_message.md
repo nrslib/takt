@@ -5,7 +5,7 @@
         pieceStructure, iteration, movementIteration, movement, hasReport, reportInfo,
         phaseNote, hasTaskSection, userRequest, hasPreviousResponse, previousResponse,
         hasUserInputs, userInputs, hasRetryNote, retryNote, hasPolicy, policyContent,
-        policyReminder, hasKnowledge, knowledgeContent, instructions
+        hasKnowledge, knowledgeContent, instructions
   builder: InstructionBuilder
 -->
 ## Execution Context
@@ -18,13 +18,6 @@
 {{#if editRule}}- {{editRule}}
 {{/if}}
 Note: This section is metadata. Follow the language used in the rest of the prompt.
-{{#if hasPolicy}}
-
-## Policy
-The following policies are behavioral standards applied to this movement. You MUST comply with them.
-
-{{policyContent}}
-{{/if}}
 {{#if hasKnowledge}}
 
 ## Knowledge
@@ -70,6 +63,8 @@ The following knowledge is domain-specific information for this movement. Use it
 {{instructions}}
 {{#if hasPolicy}}
 
----
-**Policy Reminder:** Comply with the policy standards defined in the Policy section above.{{policyReminder}}
+## Policy
+The following policies are behavioral standards applied to this movement. You MUST comply with them.
+
+{{policyContent}}
 {{/if}}
