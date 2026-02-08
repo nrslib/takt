@@ -61,6 +61,8 @@ export interface GlobalConfig {
   bookmarksFile?: string;
   /** Path to piece categories file (default: ~/.takt/preferences/piece-categories.yaml) */
   pieceCategoriesFile?: string;
+  /** Per-persona provider overrides (e.g., { coder: 'codex' }) */
+  personaProviders?: Record<string, 'claude' | 'codex' | 'mock'>;
   /** Branch name generation strategy: 'romaji' (fast, default) or 'ai' (slow) */
   branchNameStrategy?: 'romaji' | 'ai';
   /** Prevent macOS idle sleep during takt execution using caffeinate (default: false) */

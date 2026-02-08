@@ -318,6 +318,8 @@ export const GlobalConfigSchema = z.object({
   bookmarks_file: z.string().optional(),
   /** Path to piece categories file (default: ~/.takt/preferences/piece-categories.yaml) */
   piece_categories_file: z.string().optional(),
+  /** Per-persona provider overrides (e.g., { coder: 'codex' }) */
+  persona_providers: z.record(z.string(), z.enum(['claude', 'codex', 'mock'])).optional(),
   /** Branch name generation strategy: 'romaji' (fast, default) or 'ai' (slow) */
   branch_name_strategy: z.enum(['romaji', 'ai']).optional(),
   /** Prevent macOS idle sleep during takt execution using caffeinate (default: false) */

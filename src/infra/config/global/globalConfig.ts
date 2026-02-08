@@ -106,6 +106,7 @@ export class GlobalConfigManager {
       minimalOutput: parsed.minimal_output,
       bookmarksFile: parsed.bookmarks_file,
       pieceCategoriesFile: parsed.piece_categories_file,
+      personaProviders: parsed.persona_providers,
       branchNameStrategy: parsed.branch_name_strategy,
       preventSleep: parsed.prevent_sleep,
       notificationSound: parsed.notification_sound,
@@ -171,6 +172,9 @@ export class GlobalConfigManager {
     }
     if (config.pieceCategoriesFile) {
       raw.piece_categories_file = config.pieceCategoriesFile;
+    }
+    if (config.personaProviders && Object.keys(config.personaProviders).length > 0) {
+      raw.persona_providers = config.personaProviders;
     }
     if (config.branchNameStrategy) {
       raw.branch_name_strategy = config.branchNameStrategy;

@@ -328,6 +328,7 @@ export async function executePiece(
     language: options.language,
     provider: options.provider,
     model: options.model,
+    personaProviders: options.personaProviders,
     interactive: interactiveUserInput,
     detectRuleIndex,
     callAiJudge,

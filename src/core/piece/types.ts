@@ -177,6 +177,8 @@ export interface PieceEngineOptions {
   language?: Language;
   provider?: ProviderType;
   model?: string;
+  /** Per-persona provider overrides (e.g., { coder: 'codex' }) */
+  personaProviders?: Record<string, ProviderType>;
   /** Enable interactive-only rules and user-input transitions */
   interactive?: boolean;
   /** Rule tag index detector (required for rules evaluation) */

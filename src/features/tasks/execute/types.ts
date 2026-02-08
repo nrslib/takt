@@ -30,6 +30,8 @@ export interface PieceExecutionOptions {
   language?: Language;
   provider?: ProviderType;
   model?: string;
+  /** Per-persona provider overrides (e.g., { coder: 'codex' }) */
+  personaProviders?: Record<string, ProviderType>;
   /** Enable interactive user input during step transitions */
   interactiveUserInput?: boolean;
   /** Interactive mode result metadata for NDJSON logging */

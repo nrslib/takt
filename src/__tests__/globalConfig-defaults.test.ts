@@ -336,6 +336,63 @@ describe('loadGlobalConfig', () => {
     expect(config.interactivePreviewMovements).toBe(0);
   });
 
+  describe('persona_providers', () => {
+    it('should load persona_providers from config.yaml', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(
+        getGlobalConfigPath(),
+        [
+          'language: en',
+          'persona_providers:',
+          '  coder: codex',
+          '  reviewer: claude',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      const config = loadGlobalConfig();
+
+      expect(config.personaProviders).toEqual({
+        coder: 'codex',
+        reviewer: 'claude',
+      });
+    });
+
+    it('should save and reload persona_providers', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
+
+      const config = loadGlobalConfig();
+      config.personaProviders = { coder: 'codex' };
+      saveGlobalConfig(config);
+      invalidateGlobalConfigCache();
+
+      const reloaded = loadGlobalConfig();
+      expect(reloaded.personaProviders).toEqual({ coder: 'codex' });
+    });
+
+    it('should have undefined personaProviders by default', () => {
+      const config = loadGlobalConfig();
+      expect(config.personaProviders).toBeUndefined();
+    });
+
+    it('should not save persona_providers when empty', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
+
+      const config = loadGlobalConfig();
+      config.personaProviders = {};
+      saveGlobalConfig(config);
+      invalidateGlobalConfigCache();
+
+      const reloaded = loadGlobalConfig();
+      expect(reloaded.personaProviders).toBeUndefined();
+    });
+  });
+
   describe('provider/model compatibility validation', () => {
     it('should throw when provider is codex but model is a Claude alias (opus)', () => {
       const taktDir = join(testHomeDir, '.takt');

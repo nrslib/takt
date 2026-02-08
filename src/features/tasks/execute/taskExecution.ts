@@ -77,6 +77,7 @@ export async function executeTask(options: ExecuteTaskOptions): Promise<boolean>
     language: globalConfig.language,
     provider: agentOverrides?.provider,
     model: agentOverrides?.model,
+    personaProviders: globalConfig.personaProviders,
     interactiveUserInput,
     interactiveMetadata,
     startMovement,
