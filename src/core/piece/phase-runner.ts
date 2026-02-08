@@ -14,6 +14,7 @@ import { ReportInstructionBuilder } from './instruction/ReportInstructionBuilder
 import { hasTagBasedRules, getReportFiles } from './evaluation/rule-utils.js';
 import { JudgmentStrategyFactory, type JudgmentContext } from './judgment/index.js';
 import { createLogger } from '../../shared/utils/index.js';
+import { buildSessionKey } from './session-key.js';
 
 const log = createLogger('phase-runner');
 
@@ -75,7 +76,7 @@ export async function runReportPhase(
   movementIteration: number,
   ctx: PhaseRunnerContext,
 ): Promise<void> {
-  const sessionKey = step.persona ?? step.name;
+  const sessionKey = buildSessionKey(step);
   let currentSessionId = ctx.getSessionId(sessionKey);
   if (!currentSessionId) {
     throw new Error(`Report phase requires a session to resume, but no sessionId found for persona "${sessionKey}" in movement "${step.name}"`);
@@ -159,7 +160,7 @@ export async function runStatusJudgmentPhase(
 
   // フォールバック戦略を順次試行（AutoSelectStrategy含む）
   const strategies = JudgmentStrategyFactory.createStrategies();
-  const sessionKey = step.persona ?? step.name;
+  const sessionKey = buildSessionKey(step);
   const judgmentContext: JudgmentContext = {
     step,
     cwd: ctx.cwd,

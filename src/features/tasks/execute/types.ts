@@ -38,6 +38,10 @@ export interface PieceExecutionOptions {
   startMovement?: string;
   /** Retry note explaining why task is being retried */
   retryNote?: string;
+  /** External abort signal for parallel execution — when provided, SIGINT handling is delegated to caller */
+  abortSignal?: AbortSignal;
+  /** Task name prefix for parallel execution output (e.g. "[task-name] output...") */
+  taskPrefix?: string;
 }
 
 export interface TaskExecutionOptions {
@@ -64,6 +68,10 @@ export interface ExecuteTaskOptions {
   startMovement?: string;
   /** Retry note explaining why task is being retried */
   retryNote?: string;
+  /** External abort signal for parallel execution — when provided, SIGINT handling is delegated to caller */
+  abortSignal?: AbortSignal;
+  /** Task name prefix for parallel execution output (e.g. "[task-name] output...") */
+  taskPrefix?: string;
 }
 
 export interface PipelineExecutionOptions {

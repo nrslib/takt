@@ -31,6 +31,7 @@ export class TaskRunner {
   private tasksDir: string;
   private completedDir: string;
   private failedDir: string;
+  private claimedPaths = new Set<string>();
 
   constructor(projectDir: string) {
     this.projectDir = projectDir;
@@ -103,6 +104,22 @@ export class TaskRunner {
   getNextTask(): TaskInfo | null {
     const tasks = this.listTasks();
     return tasks[0] ?? null;
+  }
+
+  /**
+   * 予約付きタスク取得
+   *
+   * claimed 済みのタスクを除外して返し、返したタスクを claimed に追加する。
+   * 並列実行時に同一タスクが複数ワーカーに返されることを防ぐ。
+   */
+  claimNextTasks(count: number): TaskInfo[] {
+    const allTasks = this.listTasks();
+    const unclaimed = allTasks.filter((t) => !this.claimedPaths.has(t.filePath));
+    const claimed = unclaimed.slice(0, count);
+    for (const task of claimed) {
+      this.claimedPaths.add(task.filePath);
+    }
+    return claimed;
   }
 
   /**
@@ -309,6 +326,8 @@ export class TaskRunner {
     const originalExt = path.extname(result.task.filePath);
     const movedTaskFile = path.join(taskTargetDir, `${result.task.name}${originalExt}`);
     fs.renameSync(result.task.filePath, movedTaskFile);
+
+    this.claimedPaths.delete(result.task.filePath);
 
     // レポートを生成
     const reportFile = path.join(taskTargetDir, 'report.md');

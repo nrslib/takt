@@ -10,6 +10,7 @@ import type { PieceMovement, PieceState, Language } from '../../models/types.js'
 import type { RunAgentOptions } from '../../../agents/runner.js';
 import type { PhaseRunnerContext } from '../phase-runner.js';
 import type { PieceEngineOptions, PhaseName } from '../types.js';
+import { buildSessionKey } from '../session-key.js';
 
 export class OptionsBuilder {
   constructor(
@@ -66,7 +67,7 @@ export class OptionsBuilder {
 
     return {
       ...this.buildBaseOptions(step),
-      sessionId: shouldResumeSession ? this.getSessionId(step.persona ?? step.name) : undefined,
+      sessionId: shouldResumeSession ? this.getSessionId(buildSessionKey(step)) : undefined,
       allowedTools,
       mcpServers: step.mcpServers,
     };
