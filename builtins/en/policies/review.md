@@ -17,6 +17,7 @@ Define the shared judgment criteria and behavioral principles for all reviewers.
 | Situation | Verdict | Action |
 |-----------|---------|--------|
 | Problem introduced by this change | Blocking | REJECT |
+| Code made unused by this change (arguments, imports, variables, functions) | Blocking | REJECT (change-induced problem) |
 | Existing problem in a changed file | Blocking | REJECT (Boy Scout rule) |
 | Structural problem in the changed module | Blocking | REJECT if within scope |
 | Problem in an unchanged file | Non-blocking | Record only (informational) |
@@ -107,9 +108,17 @@ Leave it better than you found it.
 | Redundant expression (a shorter equivalent exists) | REJECT |
 | Unnecessary branch/condition (unreachable or always the same result) | REJECT |
 | Fixable in seconds to minutes | REJECT (do not mark as "non-blocking") |
+| Code made unused as a result of the change (arguments, imports, etc.) | REJECT — change-induced, not an "existing problem" |
 | Fix requires refactoring (large scope) | Record only (technical debt) |
 
 Do not tolerate problems just because existing code does the same. If existing code is bad, improve it rather than match it.
+
+## Judgment Rules
+
+- All issues detected in changed files are blocking (REJECT targets), even if the code existed before the change
+- Only issues in files NOT targeted by the change may be classified as "existing problems" or "non-blocking"
+- "The code itself existed before" is not a valid reason for non-blocking. As long as it is in a changed file, the Boy Scout rule applies
+- If even one issue exists, REJECT. "APPROVE with warnings" or "APPROVE with suggestions" is prohibited
 
 ## Detecting Circular Arguments
 

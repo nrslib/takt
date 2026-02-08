@@ -5,9 +5,11 @@ piece_categories:
       - passthrough
       - coding
       - minimal
-  🔍 Review & Fix:
+      - compound-eye
+  🔍 Review:
     pieces:
       - review-fix-minimal
+      - review-only
   🎨 Frontend: {}
   ⚙️ Backend: {}
   🔧 Expert:
@@ -33,6 +35,5 @@ piece_categories:
     pieces:
       - research
       - magi
-      - review-only
 show_others_category: true
 others_category_name: Others

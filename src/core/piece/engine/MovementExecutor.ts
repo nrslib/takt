@@ -19,6 +19,7 @@ import { runAgent } from '../../../agents/runner.js';
 import { InstructionBuilder, isOutputContractItem } from '../instruction/InstructionBuilder.js';
 import { needsStatusJudgmentPhase, runReportPhase, runStatusJudgmentPhase } from '../phase-runner.js';
 import { detectMatchedRule } from '../evaluation/index.js';
+import { buildSessionKey } from '../session-key.js';
 import { incrementMovementIteration, getPreviousOutput } from './state-manager.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
@@ -100,7 +101,7 @@ export class MovementExecutor {
       ? state.movementIterations.get(step.name) ?? 1
       : incrementMovementIteration(state, step.name);
     const instruction = prebuiltInstruction ?? this.buildInstruction(step, movementIteration, state, task, maxIterations);
-    const sessionKey = step.persona ?? step.name;
+    const sessionKey = buildSessionKey(step);
     log.debug('Running movement', {
       movement: step.name,
       persona: step.persona ?? '(none)',

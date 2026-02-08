@@ -12,7 +12,6 @@ knowledge:
   architecture: ../knowledge/architecture.md
 personas:
   planner: ../personas/planner.md
-  architect-planner: ../personas/architect-planner.md
   coder: ../personas/coder.md
   ai-antipattern-reviewer: ../personas/ai-antipattern-reviewer.md
   architecture-reviewer: ../personas/architecture-reviewer.md
@@ -20,7 +19,6 @@ personas:
   supervisor: ../personas/supervisor.md
 instructions:
   plan: ../instructions/plan.md
-  architect: ../instructions/architect.md
   implement: ../instructions/implement.md
   ai-review: ../instructions/ai-review.md
   ai-fix: ../instructions/ai-fix.md
@@ -59,6 +57,7 @@ movements:
   - name: plan
     edit: false
     persona: planner
+    knowledge: architecture
     allowed_tools:
       - Read
       - Glob
@@ -68,7 +67,7 @@ movements:
       - WebFetch
     rules:
       - condition: Requirements are clear and implementable
-        next: architect
+        next: implement
       - condition: User is asking a question (not an implementation task)
         next: COMPLETE
       - condition: Requirements unclear, insufficient info
@@ -82,27 +81,7 @@ movements:
       report:
         - name: 00-plan.md
           format: plan
-  - name: architect
-    edit: false
-    persona: architect-planner
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - WebSearch
-      - WebFetch
-    rules:
-      - condition: Small task (no design needed)
-        next: implement
-      - condition: Design complete
-        next: implement
-      - condition: Insufficient info, cannot proceed
-        next: ABORT
-    instruction: architect
-    output_contracts:
-      report:
-        - name: 01-architecture.md
-          format: architecture-design
+
   - name: implement
     edit: true
     persona: coder
@@ -139,6 +118,7 @@ movements:
       report:
         - Scope: 02-coder-scope.md
         - Decisions: 03-coder-decisions.md
+
   - name: ai_review
     edit: false
     persona: ai-antipattern-reviewer
@@ -161,6 +141,7 @@ movements:
       report:
         - name: 04-ai-review.md
           format: ai-review
+
   - name: ai_fix
     edit: true
     persona: coder
@@ -189,6 +170,7 @@ movements:
       - condition: Cannot proceed, insufficient info
         next: ai_no_fix
     instruction: ai-fix
+
   - name: ai_no_fix
     edit: false
     persona: architecture-reviewer
@@ -203,6 +185,7 @@ movements:
       - condition: ai_fix's judgment is valid (no fix needed)
         next: reviewers
     instruction: arbitrate
+
   - name: reviewers
     parallel:
       - name: arch-review
@@ -251,6 +234,7 @@ movements:
         next: supervise
       - condition: any("needs_fix")
         next: fix
+
   - name: fix
     edit: true
     persona: coder
@@ -276,6 +260,7 @@ movements:
       - condition: Cannot proceed, insufficient info
         next: plan
     instruction: fix
+
   - name: supervise
     edit: false
     persona: supervisor
@@ -299,7 +284,6 @@ movements:
         - Summary: summary.md
 report_formats:
   plan: ../output-contracts/plan.md
-  architecture-design: ../output-contracts/architecture-design.md
   ai-review: ../output-contracts/ai-review.md
   architecture-review: ../output-contracts/architecture-review.md
   qa-review: ../output-contracts/qa-review.md

@@ -15,7 +15,8 @@ import { ParallelLogger } from './parallel-logger.js';
 import { needsStatusJudgmentPhase, runReportPhase, runStatusJudgmentPhase } from '../phase-runner.js';
 import { detectMatchedRule } from '../evaluation/index.js';
 import { incrementMovementIteration } from './state-manager.js';
-import { createLogger } from '../../../shared/utils/index.js';
+import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
+import { buildSessionKey } from '../session-key.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { MovementExecutor } from './MovementExecutor.js';
 import type { PieceEngineOptions, PhaseName } from '../types.js';
@@ -86,11 +87,16 @@ export class ParallelRunner {
       callAiJudge: this.deps.callAiJudge,
     };
 
-    // Run all sub-movements concurrently
-    const subResults = await Promise.all(
+    // Run all sub-movements concurrently (failures are captured, not thrown)
+    const settled = await Promise.allSettled(
       subMovements.map(async (subMovement, index) => {
         const subIteration = incrementMovementIteration(state, subMovement.name);
         const subInstruction = this.deps.movementExecutor.buildInstruction(subMovement, subIteration, state, task, maxIterations);
+
+        // Session key uses buildSessionKey (persona:provider) — same as normal movements.
+        // This ensures sessions are shared across movements with the same persona+provider,
+        // while different providers (e.g., claude-eye vs codex-eye) get separate sessions.
+        const subSessionKey = buildSessionKey(subMovement);
 
         // Phase 1: main execution (Write excluded if sub-movement has report)
         const baseOptions = this.deps.optionsBuilder.buildAgentOptions(subMovement);
@@ -100,13 +106,12 @@ export class ParallelRunner {
           ? { ...baseOptions, onStream: parallelLogger.createStreamHandler(subMovement.name, index) }
           : baseOptions;
 
-        const subSessionKey = subMovement.persona ?? subMovement.name;
         this.deps.onPhaseStart?.(subMovement, 1, 'execute', subInstruction);
         const subResponse = await runAgent(subMovement.persona, subInstruction, agentOptions);
         updatePersonaSession(subSessionKey, subResponse.sessionId);
         this.deps.onPhaseComplete?.(subMovement, 1, 'execute', subResponse.content, subResponse.status, subResponse.error);
 
-        // Build phase context for this sub-movement with its lastResponse
+        // Phase 2/3 context — no overrides needed, phase-runner uses buildSessionKey internally
         const phaseCtx = this.deps.optionsBuilder.buildPhaseRunnerContext(state, subResponse.content, updatePersonaSession, this.deps.onPhaseStart, this.deps.onPhaseComplete);
 
         // Phase 2: report output for sub-movement
@@ -131,6 +136,32 @@ export class ParallelRunner {
         return { subMovement, response: finalResponse, instruction: subInstruction };
       }),
     );
+
+    // Map settled results: fulfilled → as-is, rejected → blocked AgentResponse
+    const subResults = settled.map((result, index) => {
+      if (result.status === 'fulfilled') {
+        return result.value;
+      }
+      const failedMovement = subMovements[index]!;
+      const errorMsg = getErrorMessage(result.reason);
+      log.error('Sub-movement failed', { movement: failedMovement.name, error: errorMsg });
+      const blockedResponse: AgentResponse = {
+        persona: failedMovement.name,
+        status: 'blocked',
+        content: '',
+        timestamp: new Date(),
+        error: errorMsg,
+      };
+      state.movementOutputs.set(failedMovement.name, blockedResponse);
+      return { subMovement: failedMovement, response: blockedResponse, instruction: '' };
+    });
+
+    // If all sub-movements failed (error-originated), throw
+    const allFailed = subResults.every(r => r.response.error != null);
+    if (allFailed) {
+      const errors = subResults.map(r => `${r.subMovement.name}: ${r.response.error}`).join('; ');
+      throw new Error(`All parallel sub-movements failed: ${errors}`);
+    }
 
     // Print completion summary
     if (parallelLogger) {

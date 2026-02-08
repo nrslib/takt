@@ -320,6 +320,8 @@ export const GlobalConfigSchema = z.object({
   notification_sound: z.boolean().optional(),
   /** Number of movement previews to inject into interactive mode (0 to disable, max 10) */
   interactive_preview_movements: z.number().int().min(0).max(10).optional().default(3),
+  /** Number of tasks to run concurrently in takt run (default: 1 = sequential, max: 10) */
+  concurrency: z.number().int().min(1).max(10).optional().default(1),
 });
 
 /** Project config schema */

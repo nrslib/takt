@@ -1,0 +1,110 @@
+name: compound-eye
+description: 複眼レビュー - 同じ指示を Claude と Codex に同時に投げ、両者の回答を統合する
+max_iterations: 10
+knowledge:
+  architecture: ../knowledge/architecture.md
+personas:
+  coder: ../personas/coder.md
+  supervisor: ../personas/supervisor.md
+initial_movement: evaluate
+
+movements:
+  - name: evaluate
+    parallel:
+      - name: claude-eye
+        edit: false
+        persona: coder
+        provider: claude
+        knowledge: architecture
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Bash
+          - WebSearch
+          - WebFetch
+        rules:
+          - condition: done
+          - condition: failed
+        output_contracts:
+          report:
+            - name: 01-claude.md
+
+      - name: codex-eye
+        edit: false
+        persona: coder
+        provider: codex
+        knowledge: architecture
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Bash
+          - WebSearch
+          - WebFetch
+        rules:
+          - condition: done
+          - condition: failed
+        output_contracts:
+          report:
+            - name: 02-codex.md
+    rules:
+      - condition: any("done")
+        next: synthesize
+
+  - name: synthesize
+    edit: false
+    persona: supervisor
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+    rules:
+      - condition: 統合完了
+        next: COMPLETE
+    instruction_template: |
+      2つのモデル（Claude / Codex）が同じ指示に対して独立に回答しました。
+      両者の回答を統合してください。
+
+      **やること:**
+      1. Report Directory 内のレポートを読む
+         - `01-claude.md`（Claude の回答）
+         - `02-codex.md`（Codex の回答）
+         ※ 片方が存在しない場合（エラーで失敗した場合）、存在するレポートのみで統合する
+      2. 両方のレポートがある場合は比較し、以下を明示する
+         - 一致している点
+         - 相違している点
+         - 片方だけが指摘・言及している点
+      3. 統合した結論を出す
+
+      **出力フォーマット:**
+      ```markdown
+      # 複眼レビュー統合
+
+      ## 結論
+      {統合した結論}
+
+      ## 回答状況
+      | モデル | 状態 |
+      |--------|------|
+      | Claude | ✅ / ❌ |
+      | Codex | ✅ / ❌ |
+
+      ## 一致点
+      - {両モデルが同じ見解を示した点}
+
+      ## 相違点
+      | 論点 | Claude | Codex |
+      |------|--------|-------|
+      | {論点} | {Claudeの見解} | {Codexの見解} |
+
+      ## 片方のみの指摘
+      - **Claude のみ:** {Claudeだけが言及した点}
+      - **Codex のみ:** {Codexだけが言及した点}
+
+      ## 総合評価
+      {両者の回答を踏まえた総合的な評価}
+      ```
+    output_contracts:
+      report:
+        - Summary: 03-synthesis.md

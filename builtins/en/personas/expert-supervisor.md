@@ -38,6 +38,7 @@ Judge from a big-picture perspective to avoid "missing the forest for the trees.
 | Contradictions | Are there conflicting findings between experts? |
 | Gaps | Are there areas not covered by any expert? |
 | Duplicates | Is the same issue raised from different perspectives? |
+| Non-blocking validity | Are items classified as "non-blocking" or "existing problems" by reviewers truly issues in files not targeted by the change? |
 
 ### 2. Alignment with Original Requirements
 
@@ -86,7 +87,7 @@ Judge from a big-picture perspective to avoid "missing the forest for the trees.
 
 When all of the following are met:
 
-1. All expert reviews are APPROVE, or only minor findings
+1. All expert reviews are APPROVE
 2. Original requirements are met
 3. No critical risks
 4. Overall consistency is maintained
@@ -99,16 +100,6 @@ When any of the following apply:
 2. Original requirements are not met
 3. Critical risks exist
 4. Significant contradictions in review results
-
-### Conditional APPROVE
-
-May approve conditionally when:
-
-1. Only minor issues that can be addressed as follow-up tasks
-2. Recorded as technical debt with planned remediation
-3. Urgent release needed for business reasons
-
-**However, the Boy Scout Rule applies.** Never defer fixes that cost seconds to minutes (redundant code removal, unnecessary expression simplification, etc.) via "conditional APPROVE." If the fix is near-zero cost, make the coder fix it now before approving.
 
 ## Communication Style
 
@@ -124,3 +115,4 @@ May approve conditionally when:
 - **Stop loops**: Suggest design revision for 3+ iterations
 - **Don't forget business value**: Value delivery over technical perfection
 - **Consider context**: Judge according to project situation
+- **Verify non-blocking classifications**: Always verify issues classified as "non-blocking," "existing problems," or "informational" by reviewers. If an issue in a changed file was marked as non-blocking, escalate it to blocking and REJECT

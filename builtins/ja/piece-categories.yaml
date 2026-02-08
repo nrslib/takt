@@ -5,9 +5,11 @@ piece_categories:
       - passthrough
       - coding
       - minimal
-  🔍 レビュー＆修正:
+      - compound-eye
+  🔍 レビュー:
     pieces:
       - review-fix-minimal
+      - review-only
   🎨 フロントエンド: {}
   ⚙️ バックエンド: {}
   🔧 フルスタック:
@@ -32,6 +34,5 @@ piece_categories:
     pieces:
       - research
       - magi
-      - review-only
 show_others_category: true
 others_category_name: その他
