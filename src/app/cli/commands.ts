@@ -1,7 +1,7 @@
 /**
  * CLI subcommand definitions
  *
- * Registers all named subcommands (run, watch, add, list, switch, clear, eject, config, prompt).
+ * Registers all named subcommands (run, watch, add, list, switch, clear, eject, config, prompt, catalog).
  */
 
 import { clearPersonaSessions, getCurrentPiece } from '../../infra/config/index.js';
@@ -9,6 +9,7 @@ import { success } from '../../shared/ui/index.js';
 import { runAllTasks, addTask, watchTasks, listTasks } from '../../features/tasks/index.js';
 import { switchPiece, switchConfig, ejectBuiltin, resetCategoriesToDefault, deploySkill } from '../../features/config/index.js';
 import { previewPrompts } from '../../features/prompt/index.js';
+import { showCatalog } from '../../features/catalog/index.js';
 import { program, resolvedCwd } from './program.js';
 import { resolveAgentOverrides } from './helpers.js';
 
@@ -114,4 +115,12 @@ program
   .description('Export takt pieces/agents as Claude Code Skill (~/.claude/)')
   .action(async () => {
     await deploySkill();
+  });
+
+program
+  .command('catalog')
+  .description('List available facets (personas, policies, knowledge, instructions, output-contracts)')
+  .argument('[type]', 'Facet type to list')
+  .action((type?: string) => {
+    showCatalog(resolvedCwd, type);
   });

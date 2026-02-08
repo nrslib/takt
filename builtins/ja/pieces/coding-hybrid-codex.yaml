@@ -7,7 +7,7 @@ max_iterations: 20
 knowledge:
   architecture: ../knowledge/architecture.md
 personas:
-  architect-planner: ../personas/architect-planner.md
+  planner: ../personas/planner.md
   coder: ../personas/coder.md
   ai-antipattern-reviewer: ../personas/ai-antipattern-reviewer.md
   architecture-reviewer: ../personas/architecture-reviewer.md
@@ -25,7 +25,8 @@ initial_movement: plan
 movements:
   - name: plan
     edit: false
-    persona: architect-planner
+    persona: planner
+    knowledge: architecture
     allowed_tools:
       - Read
       - Glob
