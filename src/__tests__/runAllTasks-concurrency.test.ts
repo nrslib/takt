@@ -225,11 +225,11 @@ describe('runAllTasks concurrency', () => {
 
       // Then: Task names displayed with prefix in stdout
       const allOutput = stdoutChunks.join('');
-      expect(allOutput).toContain('[task-1]');
+      expect(allOutput).toContain('[task]');
       expect(allOutput).toContain('=== Task: task-1 ===');
-      expect(allOutput).toContain('[task-2]');
+      expect(allOutput).toContain('[task]');
       expect(allOutput).toContain('=== Task: task-2 ===');
-      expect(allOutput).toContain('[task-3]');
+      expect(allOutput).toContain('[task]');
       expect(allOutput).toContain('=== Task: task-3 ===');
       expect(mockStatus).toHaveBeenCalledWith('Total', '3');
     });

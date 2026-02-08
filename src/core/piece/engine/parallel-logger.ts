@@ -30,6 +30,14 @@ export interface ParallelLoggerOptions {
   writeFn?: (text: string) => void;
   /** Progress information for display */
   progressInfo?: ParallelProgressInfo;
+  /** Task label for rich parallel prefix display */
+  taskLabel?: string;
+  /** Task color index for rich parallel prefix display */
+  taskColorIndex?: number;
+  /** Parent movement name for rich parallel prefix display */
+  parentMovementName?: string;
+  /** Parent movement iteration count for rich parallel prefix display */
+  movementIteration?: number;
 }
 
 /**
@@ -47,6 +55,10 @@ export class ParallelLogger {
   private readonly writeFn: (text: string) => void;
   private readonly progressInfo?: ParallelProgressInfo;
   private readonly totalSubMovements: number;
+  private readonly taskLabel?: string;
+  private readonly taskColorIndex?: number;
+  private readonly parentMovementName?: string;
+  private readonly movementIteration?: number;
 
   constructor(options: ParallelLoggerOptions) {
     this.maxNameLength = Math.max(...options.subMovementNames.map((n) => n.length));
@@ -54,6 +66,10 @@ export class ParallelLogger {
     this.writeFn = options.writeFn ?? ((text: string) => process.stdout.write(text));
     this.progressInfo = options.progressInfo;
     this.totalSubMovements = options.subMovementNames.length;
+    this.taskLabel = options.taskLabel ? options.taskLabel.slice(0, 4) : undefined;
+    this.taskColorIndex = options.taskColorIndex;
+    this.parentMovementName = options.parentMovementName;
+    this.movementIteration = options.movementIteration;
 
     for (const name of options.subMovementNames) {
       this.lineBuffers.set(name, '');
@@ -65,6 +81,12 @@ export class ParallelLogger {
    * Format: `\x1b[COLORm[name](iteration/max) step index/total\x1b[0m` + padding spaces
    */
   buildPrefix(name: string, index: number): string {
+    if (this.taskLabel && this.parentMovementName && this.progressInfo && this.movementIteration != null && this.taskColorIndex != null) {
+      const taskColor = COLORS[this.taskColorIndex % COLORS.length];
+      const { iteration, maxIterations } = this.progressInfo;
+      return `${taskColor}[${this.taskLabel}]${RESET}[${this.parentMovementName}][${name}](${iteration}/${maxIterations})(${this.movementIteration}) `;
+    }
+
     const color = COLORS[index % COLORS.length];
     const padding = ' '.repeat(this.maxNameLength - name.length);
 

@@ -27,6 +27,13 @@ export interface TaskPrefixWriterOptions {
   writeFn?: (text: string) => void;
 }
 
+export interface MovementPrefixContext {
+  movementName: string;
+  iteration: number;
+  maxIterations: number;
+  movementIteration: number;
+}
+
 /**
  * Prefixed line writer for a single parallel task.
  *
@@ -35,14 +42,29 @@ export interface TaskPrefixWriterOptions {
  * non-empty output line.
  */
 export class TaskPrefixWriter {
-  private readonly prefix: string;
+  private readonly taskPrefix: string;
   private readonly writeFn: (text: string) => void;
+  private movementContext: MovementPrefixContext | undefined;
   private lineBuffer = '';
 
   constructor(options: TaskPrefixWriterOptions) {
     const color = TASK_COLORS[options.colorIndex % TASK_COLORS.length];
-    this.prefix = `${color}[${options.taskName}]${RESET} `;
+    const taskLabel = options.taskName.slice(0, 4);
+    this.taskPrefix = `${color}[${taskLabel}]${RESET}`;
     this.writeFn = options.writeFn ?? ((text: string) => process.stdout.write(text));
+  }
+
+  setMovementContext(context: MovementPrefixContext): void {
+    this.movementContext = context;
+  }
+
+  private buildPrefix(): string {
+    if (!this.movementContext) {
+      return `${this.taskPrefix} `;
+    }
+
+    const { movementName, iteration, maxIterations, movementIteration } = this.movementContext;
+    return `${this.taskPrefix}[${movementName}](${iteration}/${maxIterations})(${movementIteration}) `;
   }
 
   /**
@@ -57,7 +79,7 @@ export class TaskPrefixWriter {
       if (line === '') {
         this.writeFn('\n');
       } else {
-        this.writeFn(`${this.prefix}${line}\n`);
+        this.writeFn(`${this.buildPrefix()}${line}\n`);
       }
     }
   }
@@ -78,7 +100,7 @@ export class TaskPrefixWriter {
       if (line === '') {
         this.writeFn('\n');
       } else {
-        this.writeFn(`${this.prefix}${line}\n`);
+        this.writeFn(`${this.buildPrefix()}${line}\n`);
       }
     }
   }
@@ -88,7 +110,7 @@ export class TaskPrefixWriter {
    */
   flush(): void {
     if (this.lineBuffer !== '') {
-      this.writeFn(`${this.prefix}${this.lineBuffer}\n`);
+      this.writeFn(`${this.buildPrefix()}${this.lineBuffer}\n`);
       this.lineBuffer = '';
     }
   }

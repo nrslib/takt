@@ -69,6 +69,7 @@ export class PieceEngine extends EventEmitter {
 
   constructor(config: PieceConfig, cwd: string, task: string, options: PieceEngineOptions) {
     super();
+    this.assertTaskPrefixPair(options.taskPrefix, options.taskColorIndex);
     this.config = config;
     this.projectCwd = options.projectCwd;
     this.cwd = cwd;
@@ -144,6 +145,14 @@ export class PieceEngine extends EventEmitter {
       initialMovement: config.initialMovement,
       maxIterations: config.maxIterations,
     });
+  }
+
+  private assertTaskPrefixPair(taskPrefix: string | undefined, taskColorIndex: number | undefined): void {
+    const hasTaskPrefix = taskPrefix != null;
+    const hasTaskColorIndex = taskColorIndex != null;
+    if (hasTaskPrefix !== hasTaskColorIndex) {
+      throw new Error('taskPrefix and taskColorIndex must be provided together');
+    }
   }
 
   /** Ensure report directory exists (in cwd, which is clone dir in worktree mode) */

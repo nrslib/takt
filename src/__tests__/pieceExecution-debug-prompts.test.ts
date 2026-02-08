@@ -14,10 +14,12 @@ const { mockIsDebugEnabled, mockWritePromptLog, MockPieceEngine } = vi.hoisted((
 
   class MockPieceEngine extends EE {
     private config: PieceConfig;
+    private task: string;
 
-    constructor(config: PieceConfig, _cwd: string, _task: string, _options: unknown) {
+    constructor(config: PieceConfig, _cwd: string, task: string, _options: unknown) {
       super();
       this.config = config;
+      this.task = task;
     }
 
     abort(): void {}
@@ -26,6 +28,7 @@ const { mockIsDebugEnabled, mockWritePromptLog, MockPieceEngine } = vi.hoisted((
       const step = this.config.movements[0]!;
       const timestamp = new Date('2026-02-07T00:00:00.000Z');
 
+      const shouldRepeatMovement = this.task === 'repeat-movement-task';
       this.emit('movement:start', step, 1, 'movement instruction');
       this.emit('phase:start', step, 1, 'execute', 'phase prompt');
       this.emit('phase:complete', step, 1, 'execute', 'phase response', 'done');
@@ -40,9 +43,23 @@ const { mockIsDebugEnabled, mockWritePromptLog, MockPieceEngine } = vi.hoisted((
         },
         'movement instruction'
       );
+      if (shouldRepeatMovement) {
+        this.emit('movement:start', step, 2, 'movement instruction repeat');
+        this.emit(
+          'movement:complete',
+          step,
+          {
+            persona: step.personaDisplayName,
+            status: 'done',
+            content: 'movement response repeat',
+            timestamp,
+          },
+          'movement instruction repeat'
+        );
+      }
       this.emit('piece:complete', { status: 'completed', iteration: 1 });
 
-      return { status: 'completed', iteration: 1 };
+      return { status: 'completed', iteration: shouldRepeatMovement ? 2 : 1 };
     }
   }
 
@@ -186,5 +203,33 @@ describe('executePiece debug prompts logging', () => {
     });
 
     expect(mockWritePromptLog).not.toHaveBeenCalled();
+  });
+
+  it('should update movement prefix context on each movement:start event', async () => {
+    const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+
+    try {
+      await executePiece(makeConfig(), 'repeat-movement-task', '/tmp/project', {
+        projectCwd: '/tmp/project',
+        taskPrefix: 'override-persona-provider',
+        taskColorIndex: 0,
+      });
+
+      const output = stdoutSpy.mock.calls.map((call) => String(call[0])).join('');
+      const normalizedOutput = output.replace(/\x1b\[[0-9;]*m/g, '');
+      expect(normalizedOutput).toContain('[over][implement](1/5)(1) [INFO] [1/5] implement (coder)');
+      expect(normalizedOutput).toContain('[over][implement](2/5)(2) [INFO] [2/5] implement (coder)');
+    } finally {
+      stdoutSpy.mockRestore();
+    }
+  });
+
+  it('should fail fast when taskPrefix is provided without taskColorIndex', async () => {
+    await expect(
+      executePiece(makeConfig(), 'task', '/tmp/project', {
+        projectCwd: '/tmp/project',
+        taskPrefix: 'override-persona-provider',
+      })
+    ).rejects.toThrow('taskPrefix and taskColorIndex must be provided together');
   });
 });

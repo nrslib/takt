@@ -78,6 +78,17 @@ interface OutputFns {
   logLine: (text: string) => void;
 }
 
+function assertTaskPrefixPair(
+  taskPrefix: string | undefined,
+  taskColorIndex: number | undefined
+): void {
+  const hasTaskPrefix = taskPrefix != null;
+  const hasTaskColorIndex = taskColorIndex != null;
+  if (hasTaskPrefix !== hasTaskColorIndex) {
+    throw new Error('taskPrefix and taskColorIndex must be provided together');
+  }
+}
+
 function createOutputFns(prefixWriter: TaskPrefixWriter | undefined): OutputFns {
   if (!prefixWriter) {
     return {
@@ -181,10 +192,11 @@ export async function executePiece(
 
   // projectCwd is where .takt/ lives (project root, not the clone)
   const projectCwd = options.projectCwd;
+  assertTaskPrefixPair(options.taskPrefix, options.taskColorIndex);
 
   // When taskPrefix is set (parallel execution), route all output through TaskPrefixWriter
-  const prefixWriter = options.taskPrefix
-    ? new TaskPrefixWriter({ taskName: options.taskPrefix, colorIndex: options.taskColorIndex ?? 0 })
+  const prefixWriter = options.taskPrefix != null
+    ? new TaskPrefixWriter({ taskName: options.taskPrefix, colorIndex: options.taskColorIndex! })
     : undefined;
   const out = createOutputFns(prefixWriter);
 
@@ -334,6 +346,8 @@ export async function executePiece(
     callAiJudge,
     startMovement: options.startMovement,
     retryNote: options.retryNote,
+    taskPrefix: options.taskPrefix,
+    taskColorIndex: options.taskColorIndex,
   });
 
   let abortReason: string | undefined;
@@ -341,6 +355,7 @@ export async function executePiece(
   let lastMovementName: string | undefined;
   let currentIteration = 0;
   const phasePrompts = new Map<string, string>();
+  const movementIterations = new Map<string, number>();
 
   engine.on('phase:start', (step, phase, phaseName, instruction) => {
     log.debug('Phase starting', { step: step.name, phase, phaseName });
@@ -395,6 +410,14 @@ export async function executePiece(
   engine.on('movement:start', (step, iteration, instruction) => {
     log.debug('Movement starting', { step: step.name, persona: step.personaDisplayName, iteration });
     currentIteration = iteration;
+    const movementIteration = (movementIterations.get(step.name) ?? 0) + 1;
+    movementIterations.set(step.name, movementIteration);
+    prefixWriter?.setMovementContext({
+      movementName: step.name,
+      iteration,
+      maxIterations: pieceConfig.maxIterations,
+      movementIteration,
+    });
     out.info(`[${iteration}/${pieceConfig.maxIterations}] ${step.name} (${step.personaDisplayName})`);
 
     // Log prompt content for debugging

@@ -42,13 +42,13 @@ describe('TaskPrefixWriter', () => {
   });
 
   describe('writeLine', () => {
-    it('should output single line with prefix', () => {
+    it('should output single line with truncated task prefix', () => {
       const writer = new TaskPrefixWriter({ taskName: 'my-task', colorIndex: 0, writeFn });
 
       writer.writeLine('Hello World');
 
       expect(output).toHaveLength(1);
-      expect(output[0]).toContain('[my-task]');
+      expect(output[0]).toContain('[my-t]');
       expect(output[0]).toContain('Hello World');
       expect(output[0]).toMatch(/\n$/);
     });
@@ -94,7 +94,7 @@ describe('TaskPrefixWriter', () => {
 
       writer.writeChunk(' World\n');
       expect(output).toHaveLength(1);
-      expect(output[0]).toContain('[task-a]');
+      expect(output[0]).toContain('[task]');
       expect(output[0]).toContain('Hello World');
     });
 
@@ -154,7 +154,7 @@ describe('TaskPrefixWriter', () => {
       writer.flush();
 
       expect(output).toHaveLength(1);
-      expect(output[0]).toContain('[task-a]');
+      expect(output[0]).toContain('[task]');
       expect(output[0]).toContain('partial content');
       expect(output[0]).toMatch(/\n$/);
     });
@@ -178,6 +178,25 @@ describe('TaskPrefixWriter', () => {
 
       writer.flush();
       expect(output).toHaveLength(0);
+    });
+  });
+
+  describe('setMovementContext', () => {
+    it('should include movement context in prefix after context update', () => {
+      const writer = new TaskPrefixWriter({ taskName: 'override-persona-provider', colorIndex: 0, writeFn });
+
+      writer.setMovementContext({
+        movementName: 'implement',
+        iteration: 4,
+        maxIterations: 30,
+        movementIteration: 2,
+      });
+      writer.writeLine('content');
+
+      expect(output).toHaveLength(1);
+      expect(output[0]).toContain('[over]');
+      expect(output[0]).toContain('[implement](4/30)(2)');
+      expect(output[0]).toContain('content');
     });
   });
 

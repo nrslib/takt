@@ -20,6 +20,7 @@ import { buildSessionKey } from '../session-key.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { MovementExecutor } from './MovementExecutor.js';
 import type { PieceEngineOptions, PhaseName } from '../types.js';
+import type { ParallelLoggerOptions } from './parallel-logger.js';
 
 const log = createLogger('parallel-runner');
 
@@ -69,14 +70,7 @@ export class ParallelRunner {
 
     // Create parallel logger for prefixed output (only when streaming is enabled)
     const parallelLogger = this.deps.engineOptions.onStream
-      ? new ParallelLogger({
-          subMovementNames: subMovements.map((s) => s.name),
-          parentOnStream: this.deps.engineOptions.onStream,
-          progressInfo: {
-            iteration: state.iteration,
-            maxIterations,
-          },
-        })
+      ? new ParallelLogger(this.buildParallelLoggerOptions(step.name, movementIteration, subMovements.map((s) => s.name), state.iteration, maxIterations))
       : undefined;
 
     const ruleCtx = {
@@ -200,6 +194,35 @@ export class ParallelRunner {
     state.lastOutput = aggregatedResponse;
     this.deps.movementExecutor.emitMovementReports(step);
     return { response: aggregatedResponse, instruction: aggregatedInstruction };
+  }
+
+  private buildParallelLoggerOptions(
+    movementName: string,
+    movementIteration: number,
+    subMovementNames: string[],
+    iteration: number,
+    maxIterations: number,
+  ): ParallelLoggerOptions {
+    const options: ParallelLoggerOptions = {
+      subMovementNames,
+      parentOnStream: this.deps.engineOptions.onStream,
+      progressInfo: {
+        iteration,
+        maxIterations,
+      },
+    };
+
+    if (this.deps.engineOptions.taskPrefix != null && this.deps.engineOptions.taskColorIndex != null) {
+      return {
+        ...options,
+        taskLabel: this.deps.engineOptions.taskPrefix,
+        taskColorIndex: this.deps.engineOptions.taskColorIndex,
+        parentMovementName: movementName,
+        movementIteration,
+      };
+    }
+
+    return options;
   }
 
 }

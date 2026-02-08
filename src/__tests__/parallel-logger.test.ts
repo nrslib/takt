@@ -67,6 +67,29 @@ describe('ParallelLogger', () => {
       // No padding needed (0 spaces)
       expect(prefix).toMatch(/\x1b\[0m $/);
     });
+
+    it('should build rich prefix with task and parent movement for parallel task mode', () => {
+      const logger = new ParallelLogger({
+        subMovementNames: ['arch-review'],
+        writeFn,
+        progressInfo: {
+          iteration: 4,
+          maxIterations: 30,
+        },
+        taskLabel: 'override-persona-provider',
+        taskColorIndex: 0,
+        parentMovementName: 'reviewers',
+        movementIteration: 1,
+      });
+
+      const prefix = logger.buildPrefix('arch-review', 0);
+      expect(prefix).toContain('\x1b[36m');
+      expect(prefix).toContain('[over]');
+      expect(prefix).toContain('[reviewers]');
+      expect(prefix).toContain('[arch-review]');
+      expect(prefix).toContain('(4/30)(1)');
+      expect(prefix).not.toContain('step 1/1');
+    });
   });
 
   describe('text event line buffering', () => {

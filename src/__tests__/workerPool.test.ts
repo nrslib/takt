@@ -118,7 +118,7 @@ describe('runWithWorkerPool', () => {
     // Then: Task names appear in prefixed stdout output
     writeSpy.mockRestore();
     const allOutput = stdoutChunks.join('');
-    expect(allOutput).toContain('[alpha]');
+    expect(allOutput).toContain('[alph]');
     expect(allOutput).toContain('=== Task: alpha ===');
     expect(allOutput).toContain('[beta]');
     expect(allOutput).toContain('=== Task: beta ===');

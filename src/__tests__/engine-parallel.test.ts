@@ -160,4 +160,71 @@ describe('PieceEngine Integration: Parallel Movement Aggregation', () => {
     expect(calledAgents).toContain('../personas/arch-review.md');
     expect(calledAgents).toContain('../personas/security-review.md');
   });
+
+  it('should output rich parallel prefix when taskPrefix/taskColorIndex are provided', async () => {
+    const config = buildDefaultPieceConfig();
+    const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const parentOnStream = vi.fn();
+
+    const responsesByPersona = new Map<string, ReturnType<typeof makeResponse>>([
+      ['../personas/plan.md', makeResponse({ persona: 'plan', content: 'Plan done' })],
+      ['../personas/implement.md', makeResponse({ persona: 'implement', content: 'Impl done' })],
+      ['../personas/ai_review.md', makeResponse({ persona: 'ai_review', content: 'OK' })],
+      ['../personas/arch-review.md', makeResponse({ persona: 'arch-review', content: 'Architecture review content' })],
+      ['../personas/security-review.md', makeResponse({ persona: 'security-review', content: 'Security review content' })],
+      ['../personas/supervise.md', makeResponse({ persona: 'supervise', content: 'All passed' })],
+    ]);
+
+    vi.mocked(runAgent).mockImplementation(async (persona, _task, options) => {
+      const response = responsesByPersona.get(persona ?? '');
+      if (!response) {
+        throw new Error(`Unexpected persona: ${persona}`);
+      }
+
+      if (persona === '../personas/arch-review.md') {
+        options.onStream?.({ type: 'text', data: { text: 'arch stream line\n' } });
+      }
+      if (persona === '../personas/security-review.md') {
+        options.onStream?.({ type: 'text', data: { text: 'security stream line\n' } });
+      }
+
+      return response;
+    });
+
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'aggregate' },
+      { index: 0, method: 'phase1_tag' },
+    ]);
+
+    const engine = new PieceEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      onStream: parentOnStream,
+      taskPrefix: 'override-persona-provider',
+      taskColorIndex: 0,
+    });
+
+    try {
+      const state = await engine.run();
+      expect(state.status).toBe('completed');
+
+      const output = stdoutSpy.mock.calls.map((call) => String(call[0])).join('');
+      expect(output).toContain('[over]');
+      expect(output).toContain('[reviewers][arch-review](4/30)(1) arch stream line');
+      expect(output).toContain('[reviewers][security-review](4/30)(1) security stream line');
+    } finally {
+      stdoutSpy.mockRestore();
+    }
+  });
+
+  it('should fail fast when taskPrefix is provided without taskColorIndex', () => {
+    const config = buildDefaultPieceConfig();
+    expect(
+      () => new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, taskPrefix: 'override-persona-provider' })
+    ).toThrow('taskPrefix and taskColorIndex must be provided together');
+  });
 });
