@@ -53,7 +53,8 @@ vi.mock('../infra/config/loaders/pieceResolver.js', () => ({
   getPieceDescription: vi.fn(() => ({
     name: 'default',
     description: '',
-    pieceStructure: '1. implement\n2. review'
+    pieceStructure: '1. implement\n2. review',
+    movementPreviews: [],
   })),
 }));
 

@@ -11,7 +11,7 @@ import { fetchIssue, formatIssueAsTask, checkGhCli, parseIssueNumbers } from '..
 import { selectAndExecuteTask, determinePiece, saveTaskFromInteractive, createIssueFromTask, type SelectAndExecuteOptions } from '../../features/tasks/index.js';
 import { executePipeline } from '../../features/pipeline/index.js';
 import { interactiveMode } from '../../features/interactive/index.js';
-import { getPieceDescription } from '../../infra/config/index.js';
+import { getPieceDescription, loadGlobalConfig } from '../../infra/config/index.js';
 import { DEFAULT_PIECE_NAME } from '../../shared/constants.js';
 import { program, resolvedCwd, pipelineMode } from './program.js';
 import { resolveAgentOverrides, parseCreateWorktreeOption, isDirectTask } from './helpers.js';
@@ -112,7 +112,9 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     return;
   }
 
-  const pieceContext = getPieceDescription(pieceId, resolvedCwd);
+  const globalConfig = loadGlobalConfig();
+  const previewCount = globalConfig.interactivePreviewMovements;
+  const pieceContext = getPieceDescription(pieceId, resolvedCwd, previewCount);
   const result = await interactiveMode(resolvedCwd, task, pieceContext);
 
   switch (result.action) {

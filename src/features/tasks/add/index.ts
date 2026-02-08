@@ -11,7 +11,7 @@ import { stringify as stringifyYaml } from 'yaml';
 import { promptInput, confirm } from '../../../shared/prompt/index.js';
 import { success, info, error } from '../../../shared/ui/index.js';
 import { summarizeTaskName, type TaskFileData } from '../../../infra/task/index.js';
-import { getPieceDescription } from '../../../infra/config/index.js';
+import { getPieceDescription, loadGlobalConfig } from '../../../infra/config/index.js';
 import { determinePiece } from '../execute/selectAndExecute.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { isIssueReference, resolveIssueTask, parseIssueNumbers, createIssue } from '../../../infra/github/index.js';
@@ -151,7 +151,9 @@ export async function addTask(cwd: string, task?: string): Promise<void> {
     }
     piece = pieceId;
 
-    const pieceContext = getPieceDescription(pieceId, cwd);
+    const globalConfig = loadGlobalConfig();
+    const previewCount = globalConfig.interactivePreviewMovements;
+    const pieceContext = getPieceDescription(pieceId, cwd, previewCount);
 
     // Interactive mode: AI conversation to refine task
     const result = await interactiveMode(cwd, undefined, pieceContext);

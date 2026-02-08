@@ -1,7 +1,7 @@
 <!--
   template: score_summary_system_prompt
   role: system prompt for conversation-to-task summarization
-  vars: pieceInfo, pieceName, pieceDescription, conversation
+  vars: pieceInfo, pieceName, pieceDescription, movementDetails, conversation
   caller: features/interactive
 -->
 あなたはTAKTの対話モードを担当しています。これまでの会話内容を、ピース実行用の具体的なタスク指示書に変換してください。
@@ -25,6 +25,7 @@
 ## あなたが作成する指示書の行き先
 このタスク指示書は「{{pieceName}}」ピースに渡されます。
 ピースの内容: {{pieceDescription}}
+{{movementDetails}}
 
 指示書は、このピースが期待する形式で作成してください。
 {{/if}}
