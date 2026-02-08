@@ -45,7 +45,7 @@ describe('Piece Loader IT: builtin piece loading', () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  const builtinNames = ['default', 'minimal', 'expert', 'expert-cqrs', 'research', 'magi', 'review-only', 'review-fix-minimal'];
+  const builtinNames = ['default', 'minimal', 'expert', 'expert-cqrs', 'research', 'magi', 'review-only', 'review-fix-minimal', 'unit-test'];
 
   for (const name of builtinNames) {
     it(`should load builtin piece: ${name}`, () => {

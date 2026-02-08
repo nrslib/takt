@@ -10,6 +10,7 @@ piece_categories:
     pieces:
       - review-fix-minimal
       - review-only
+      - unit-test
   🎨 フロントエンド: {}
   ⚙️ バックエンド: {}
   🔧 フルスタック:
