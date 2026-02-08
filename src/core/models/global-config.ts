@@ -67,6 +67,8 @@ export interface GlobalConfig {
   preventSleep?: boolean;
   /** Enable notification sounds (default: true when undefined) */
   notificationSound?: boolean;
+  /** Number of tasks to run concurrently in takt run (default: 1 = sequential) */
+  concurrency: number;
 }
 
 /** Project-level configuration */

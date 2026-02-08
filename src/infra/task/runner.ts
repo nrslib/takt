@@ -106,6 +106,14 @@ export class TaskRunner {
   }
 
   /**
+   * 次に実行すべきタスクを指定数分取得
+   */
+  getNextTasks(count: number): TaskInfo[] {
+    const tasks = this.listTasks();
+    return tasks.slice(0, count);
+  }
+
+  /**
    * タスクを完了としてマーク
    *
    * タスクファイルを .takt/completed に移動し、
