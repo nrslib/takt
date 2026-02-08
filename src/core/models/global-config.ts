@@ -71,6 +71,8 @@ export interface GlobalConfig {
   interactivePreviewMovements?: number;
   /** Number of tasks to run concurrently in takt run (default: 1 = sequential) */
   concurrency: number;
+  /** Polling interval in ms for picking up new tasks during takt run (default: 500, range: 100-5000) */
+  taskPollIntervalMs: number;
 }
 
 /** Project-level configuration */

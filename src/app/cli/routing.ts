@@ -7,10 +7,19 @@
 
 import { info, error } from '../../shared/ui/index.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
+import { getLabel } from '../../shared/i18n/index.js';
 import { fetchIssue, formatIssueAsTask, checkGhCli, parseIssueNumbers, type GitHubIssue } from '../../infra/github/index.js';
 import { selectAndExecuteTask, determinePiece, saveTaskFromInteractive, createIssueFromTask, type SelectAndExecuteOptions } from '../../features/tasks/index.js';
 import { executePipeline } from '../../features/pipeline/index.js';
-import { interactiveMode } from '../../features/interactive/index.js';
+import {
+  interactiveMode,
+  selectInteractiveMode,
+  passthroughMode,
+  quietMode,
+  personaMode,
+  resolveLanguage,
+  type InteractiveModeResult,
+} from '../../features/interactive/index.js';
 import { getPieceDescription, loadGlobalConfig } from '../../infra/config/index.js';
 import { DEFAULT_PIECE_NAME } from '../../shared/constants.js';
 import { program, resolvedCwd, pipelineMode } from './program.js';
@@ -118,16 +127,57 @@ export async function executeDefaultAction(task?: string): Promise<void> {
   }
 
   // All paths below go through interactive mode
+  const globalConfig = loadGlobalConfig();
+  const lang = resolveLanguage(globalConfig.language);
+
   const pieceId = await determinePiece(resolvedCwd, selectOptions.piece);
   if (pieceId === null) {
-    info('Cancelled');
+    info(getLabel('interactive.ui.cancelled', lang));
     return;
   }
 
-  const globalConfig = loadGlobalConfig();
   const previewCount = globalConfig.interactivePreviewMovements;
-  const pieceContext = getPieceDescription(pieceId, resolvedCwd, previewCount);
-  const result = await interactiveMode(resolvedCwd, initialInput, pieceContext);
+  const pieceDesc = getPieceDescription(pieceId, resolvedCwd, previewCount);
+
+  // Mode selection after piece selection
+  const selectedMode = await selectInteractiveMode(lang, pieceDesc.interactiveMode);
+  if (selectedMode === null) {
+    info(getLabel('interactive.ui.cancelled', lang));
+    return;
+  }
+
+  const pieceContext = {
+    name: pieceDesc.name,
+    description: pieceDesc.description,
+    pieceStructure: pieceDesc.pieceStructure,
+    movementPreviews: pieceDesc.movementPreviews,
+  };
+
+  let result: InteractiveModeResult;
+
+  switch (selectedMode) {
+    case 'assistant':
+      result = await interactiveMode(resolvedCwd, initialInput, pieceContext);
+      break;
+
+    case 'passthrough':
+      result = await passthroughMode(lang, initialInput);
+      break;
+
+    case 'quiet':
+      result = await quietMode(resolvedCwd, initialInput, pieceContext);
+      break;
+
+    case 'persona': {
+      if (!pieceDesc.firstMovement) {
+        info(getLabel('interactive.ui.personaFallback', lang));
+        result = await interactiveMode(resolvedCwd, initialInput, pieceContext);
+      } else {
+        result = await personaMode(resolvedCwd, pieceDesc.firstMovement, initialInput, pieceContext);
+      }
+      break;
+    }
+  }
 
   switch (result.action) {
     case 'execute':

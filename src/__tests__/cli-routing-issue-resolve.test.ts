@@ -45,6 +45,11 @@ vi.mock('../features/pipeline/index.js', () => ({
 
 vi.mock('../features/interactive/index.js', () => ({
   interactiveMode: vi.fn(),
+  selectInteractiveMode: vi.fn(() => 'assistant'),
+  passthroughMode: vi.fn(),
+  quietMode: vi.fn(),
+  personaMode: vi.fn(),
+  resolveLanguage: vi.fn(() => 'en'),
 }));
 
 vi.mock('../infra/config/index.js', () => ({

@@ -37,6 +37,7 @@ function createDefaultGlobalConfig(): GlobalConfig {
     enableBuiltinPieces: true,
     interactivePreviewMovements: 3,
     concurrency: 1,
+    taskPollIntervalMs: 500,
   };
 }
 
@@ -110,6 +111,7 @@ export class GlobalConfigManager {
       notificationSound: parsed.notification_sound,
       interactivePreviewMovements: parsed.interactive_preview_movements,
       concurrency: parsed.concurrency,
+      taskPollIntervalMs: parsed.task_poll_interval_ms,
     };
     validateProviderModelCompatibility(config.provider, config.model);
     this.cachedConfig = config;
@@ -184,6 +186,9 @@ export class GlobalConfigManager {
     }
     if (config.concurrency !== undefined && config.concurrency > 1) {
       raw.concurrency = config.concurrency;
+    }
+    if (config.taskPollIntervalMs !== undefined && config.taskPollIntervalMs !== 500) {
+      raw.task_poll_interval_ms = config.taskPollIntervalMs;
     }
     writeFileSync(configPath, stringifyYaml(raw), 'utf-8');
     this.invalidateCache();

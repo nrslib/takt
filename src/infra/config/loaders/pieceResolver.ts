@@ -8,7 +8,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
-import type { PieceConfig, PieceMovement } from '../../../core/models/index.js';
+import type { PieceConfig, PieceMovement, InteractiveMode } from '../../../core/models/index.js';
 import { getGlobalPiecesDir, getBuiltinPiecesDir, getProjectConfigDir } from '../paths.js';
 import { getLanguage, getDisabledBuiltins, getBuiltinPiecesEnabled } from '../global/globalConfig.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
@@ -219,24 +219,10 @@ function buildMovementPreviews(piece: PieceConfig, maxCount: number): MovementPr
     const movement = movementMap.get(currentName);
     if (!movement) break;
 
-    let personaContent = '';
-    if (movement.personaPath) {
-      try {
-        personaContent = readFileSync(movement.personaPath, 'utf-8');
-      } catch (err) {
-        log.debug('Failed to read persona file for preview', {
-          path: movement.personaPath,
-          error: getErrorMessage(err),
-        });
-      }
-    } else if (movement.persona) {
-      personaContent = movement.persona;
-    }
-
     previews.push({
       name: movement.name,
       personaDisplayName: movement.personaDisplayName,
-      personaContent,
+      personaContent: readMovementPersona(movement),
       instructionContent: movement.instructionTemplate,
       allowedTools: movement.allowedTools ?? [],
       canEdit: movement.edit === true,
@@ -251,25 +237,85 @@ function buildMovementPreviews(piece: PieceConfig, maxCount: number): MovementPr
 }
 
 /**
+ * Read persona content from a movement.
+ * When personaPath is set, reads from file (returns empty on failure).
+ * Otherwise uses inline persona string.
+ */
+function readMovementPersona(movement: PieceMovement): string {
+  if (movement.personaPath) {
+    try {
+      return readFileSync(movement.personaPath, 'utf-8');
+    } catch (err) {
+      log.debug('Failed to read persona file', {
+        path: movement.personaPath,
+        error: getErrorMessage(err),
+      });
+      return '';
+    }
+  }
+  return movement.persona ?? '';
+}
+
+/** First movement info for persona mode */
+export interface FirstMovementInfo {
+  /** Persona prompt content */
+  personaContent: string;
+  /** Persona display name */
+  personaDisplayName: string;
+  /** Allowed tools for this movement */
+  allowedTools: string[];
+}
+
+/**
  * Get piece description by identifier.
- * Returns the piece name, description, workflow structure, and optional movement previews.
+ * Returns the piece name, description, workflow structure, optional movement previews,
+ * piece-level interactive mode default, and first movement info for persona mode.
  */
 export function getPieceDescription(
   identifier: string,
   projectCwd: string,
   previewCount?: number,
-): { name: string; description: string; pieceStructure: string; movementPreviews: MovementPreview[] } {
+): {
+  name: string;
+  description: string;
+  pieceStructure: string;
+  movementPreviews: MovementPreview[];
+  interactiveMode?: InteractiveMode;
+  firstMovement?: FirstMovementInfo;
+} {
   const piece = loadPieceByIdentifier(identifier, projectCwd);
   if (!piece) {
     return { name: identifier, description: '', pieceStructure: '', movementPreviews: [] };
   }
+
+  const previews = previewCount && previewCount > 0
+    ? buildMovementPreviews(piece, previewCount)
+    : [];
+
+  const firstMovement = buildFirstMovementInfo(piece);
+
   return {
     name: piece.name,
     description: piece.description ?? '',
     pieceStructure: buildWorkflowString(piece.movements),
-    movementPreviews: previewCount && previewCount > 0
-      ? buildMovementPreviews(piece, previewCount)
-      : [],
+    movementPreviews: previews,
+    interactiveMode: piece.interactiveMode,
+    firstMovement,
+  };
+}
+
+/**
+ * Build first movement info for persona mode.
+ * Reads persona content from the initial movement.
+ */
+function buildFirstMovementInfo(piece: PieceConfig): FirstMovementInfo | undefined {
+  const movement = piece.movements.find((m) => m.name === piece.initialMovement);
+  if (!movement) return undefined;
+
+  return {
+    personaContent: readMovementPersona(movement),
+    personaDisplayName: movement.personaDisplayName,
+    allowedTools: movement.allowedTools ?? [],
   };
 }
 

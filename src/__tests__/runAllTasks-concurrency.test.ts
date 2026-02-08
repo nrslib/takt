@@ -14,6 +14,7 @@ vi.mock('../infra/config/index.js', () => ({
     defaultPiece: 'default',
     logLevel: 'info',
     concurrency: 1,
+    taskPollIntervalMs: 500,
   })),
 }));
 
@@ -142,6 +143,7 @@ describe('runAllTasks concurrency', () => {
         defaultPiece: 'default',
         logLevel: 'info',
         concurrency: 1,
+        taskPollIntervalMs: 500,
       });
     });
 
@@ -182,6 +184,7 @@ describe('runAllTasks concurrency', () => {
         defaultPiece: 'default',
         logLevel: 'info',
         concurrency: 3,
+        taskPollIntervalMs: 500,
       });
     });
 
@@ -257,6 +260,7 @@ describe('runAllTasks concurrency', () => {
         defaultPiece: 'default',
         logLevel: 'info',
         concurrency: 1,
+        taskPollIntervalMs: 500,
       });
 
       const task1 = createTask('task-1');
@@ -289,6 +293,7 @@ describe('runAllTasks concurrency', () => {
         defaultPiece: 'default',
         logLevel: 'info',
         concurrency: 3,
+        taskPollIntervalMs: 500,
       });
       // Return a valid piece config so executeTask reaches executePiece
       mockLoadPieceByIdentifier.mockReturnValue(fakePieceConfig as never);
@@ -335,6 +340,7 @@ describe('runAllTasks concurrency', () => {
         defaultPiece: 'default',
         logLevel: 'info',
         concurrency: 2,
+        taskPollIntervalMs: 500,
       });
 
       const task1 = createTask('fast');
@@ -424,6 +430,7 @@ describe('runAllTasks concurrency', () => {
         defaultPiece: 'default',
         logLevel: 'info',
         concurrency: 1,
+        taskPollIntervalMs: 500,
       });
 
       const task1 = createTask('sequential-task');
