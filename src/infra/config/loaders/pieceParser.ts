@@ -11,8 +11,10 @@ import { parse as parseYaml } from 'yaml';
 import type { z } from 'zod';
 import { PieceConfigRawSchema, PieceMovementRawSchema } from '../../../core/models/index.js';
 import type { PieceConfig, PieceMovement, PieceRule, OutputContractEntry, OutputContractLabelPath, OutputContractItem, LoopMonitorConfig, LoopMonitorJudge } from '../../../core/models/index.js';
+import { getLanguage } from '../global/globalConfig.js';
 import {
   type PieceSections,
+  type FacetResolutionContext,
   resolveResourceContent,
   resolveRefToContent,
   resolveRefList,
@@ -44,6 +46,7 @@ function normalizeOutputContracts(
   raw: { report?: Array<Record<string, string> | { name: string; order?: string; format?: string }> } | undefined,
   pieceDir: string,
   resolvedReportFormats?: Record<string, string>,
+  context?: FacetResolutionContext,
 ): OutputContractEntry[] | undefined {
   if (raw?.report == null || raw.report.length === 0) return undefined;
 
@@ -54,8 +57,8 @@ function normalizeOutputContracts(
       // Item format: {name, order?, format?}
       const item: OutputContractItem = {
         name: entry.name,
-        order: entry.order ? resolveRefToContent(entry.order, resolvedReportFormats, pieceDir) : undefined,
-        format: entry.format ? resolveRefToContent(entry.format, resolvedReportFormats, pieceDir) : undefined,
+        order: entry.order ? resolveRefToContent(entry.order, resolvedReportFormats, pieceDir, 'output-contracts', context) : undefined,
+        format: entry.format ? resolveRefToContent(entry.format, resolvedReportFormats, pieceDir, 'output-contracts', context) : undefined,
       };
       result.push(item);
     } else {
@@ -153,23 +156,24 @@ function normalizeStepFromRaw(
   step: RawStep,
   pieceDir: string,
   sections: PieceSections,
+  context?: FacetResolutionContext,
 ): PieceMovement {
   const rules: PieceRule[] | undefined = step.rules?.map(normalizeRule);
 
   const rawPersona = (step as Record<string, unknown>).persona as string | undefined;
-  const { personaSpec, personaPath } = resolvePersona(rawPersona, sections, pieceDir);
+  const { personaSpec, personaPath } = resolvePersona(rawPersona, sections, pieceDir, context);
 
   const displayName: string | undefined = (step as Record<string, unknown>).persona_name as string
     || undefined;
 
   const policyRef = (step as Record<string, unknown>).policy as string | string[] | undefined;
-  const policyContents = resolveRefList(policyRef, sections.resolvedPolicies, pieceDir);
+  const policyContents = resolveRefList(policyRef, sections.resolvedPolicies, pieceDir, 'policies', context);
 
   const knowledgeRef = (step as Record<string, unknown>).knowledge as string | string[] | undefined;
-  const knowledgeContents = resolveRefList(knowledgeRef, sections.resolvedKnowledge, pieceDir);
+  const knowledgeContents = resolveRefList(knowledgeRef, sections.resolvedKnowledge, pieceDir, 'knowledge', context);
 
   const expandedInstruction = step.instruction
-    ? resolveRefToContent(step.instruction, sections.resolvedInstructions, pieceDir)
+    ? resolveRefToContent(step.instruction, sections.resolvedInstructions, pieceDir, 'instructions', context)
     : undefined;
 
   const result: PieceMovement = {
@@ -187,7 +191,7 @@ function normalizeStepFromRaw(
     edit: step.edit,
     instructionTemplate: resolveResourceContent(step.instruction_template, pieceDir) || expandedInstruction || '{task}',
     rules,
-    outputContracts: normalizeOutputContracts(step.output_contracts, pieceDir, sections.resolvedReportFormats),
+    outputContracts: normalizeOutputContracts(step.output_contracts, pieceDir, sections.resolvedReportFormats, context),
     qualityGates: step.quality_gates,
     passPreviousResponse: step.pass_previous_response ?? true,
     policyContents,
@@ -195,7 +199,7 @@ function normalizeStepFromRaw(
   };
 
   if (step.parallel && step.parallel.length > 0) {
-    result.parallel = step.parallel.map((sub: RawStep) => normalizeStepFromRaw(sub, pieceDir, sections));
+    result.parallel = step.parallel.map((sub: RawStep) => normalizeStepFromRaw(sub, pieceDir, sections, context));
   }
 
   return result;
@@ -206,8 +210,9 @@ function normalizeLoopMonitorJudge(
   raw: { persona?: string; instruction_template?: string; rules: Array<{ condition: string; next: string }> },
   pieceDir: string,
   sections: PieceSections,
+  context?: FacetResolutionContext,
 ): LoopMonitorJudge {
-  const { personaSpec, personaPath } = resolvePersona(raw.persona, sections, pieceDir);
+  const { personaSpec, personaPath } = resolvePersona(raw.persona, sections, pieceDir, context);
 
   return {
     persona: personaSpec,
@@ -224,17 +229,22 @@ function normalizeLoopMonitors(
   raw: Array<{ cycle: string[]; threshold: number; judge: { persona?: string; instruction_template?: string; rules: Array<{ condition: string; next: string }> } }> | undefined,
   pieceDir: string,
   sections: PieceSections,
+  context?: FacetResolutionContext,
 ): LoopMonitorConfig[] | undefined {
   if (!raw || raw.length === 0) return undefined;
   return raw.map((monitor) => ({
     cycle: monitor.cycle,
     threshold: monitor.threshold,
-    judge: normalizeLoopMonitorJudge(monitor.judge, pieceDir, sections),
+    judge: normalizeLoopMonitorJudge(monitor.judge, pieceDir, sections, context),
   }));
 }
 
 /** Convert raw YAML piece config to internal format. */
-export function normalizePieceConfig(raw: unknown, pieceDir: string): PieceConfig {
+export function normalizePieceConfig(
+  raw: unknown,
+  pieceDir: string,
+  context?: FacetResolutionContext,
+): PieceConfig {
   const parsed = PieceConfigRawSchema.parse(raw);
 
   const resolvedPolicies = resolveSectionMap(parsed.policies, pieceDir);
@@ -251,7 +261,7 @@ export function normalizePieceConfig(raw: unknown, pieceDir: string): PieceConfi
   };
 
   const movements: PieceMovement[] = parsed.movements.map((step) =>
-    normalizeStepFromRaw(step, pieceDir, sections),
+    normalizeStepFromRaw(step, pieceDir, sections, context),
   );
 
   // Schema guarantees movements.min(1)
@@ -268,7 +278,7 @@ export function normalizePieceConfig(raw: unknown, pieceDir: string): PieceConfi
     movements,
     initialMovement,
     maxIterations: parsed.max_iterations,
-    loopMonitors: normalizeLoopMonitors(parsed.loop_monitors, pieceDir, sections),
+    loopMonitors: normalizeLoopMonitors(parsed.loop_monitors, pieceDir, sections, context),
     answerAgent: parsed.answer_agent,
   };
 }
@@ -276,13 +286,20 @@ export function normalizePieceConfig(raw: unknown, pieceDir: string): PieceConfi
 /**
  * Load a piece from a YAML file.
  * @param filePath Path to the piece YAML file
+ * @param projectDir Optional project directory for 3-layer facet resolution
  */
-export function loadPieceFromFile(filePath: string): PieceConfig {
+export function loadPieceFromFile(filePath: string, projectDir?: string): PieceConfig {
   if (!existsSync(filePath)) {
     throw new Error(`Piece file not found: ${filePath}`);
   }
   const content = readFileSync(filePath, 'utf-8');
   const raw = parseYaml(content);
   const pieceDir = dirname(filePath);
-  return normalizePieceConfig(raw, pieceDir);
+
+  let context: FacetResolutionContext | undefined;
+  if (projectDir) {
+    context = { projectDir, lang: getLanguage() };
+  }
+
+  return normalizePieceConfig(raw, pieceDir, context);
 }

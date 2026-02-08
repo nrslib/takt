@@ -11,6 +11,9 @@ import { existsSync, mkdirSync } from 'node:fs';
 import type { Language } from '../../core/models/index.js';
 import { getLanguageResourcesDir } from '../resources/index.js';
 
+/** Facet types used in layer resolution */
+export type FacetType = 'personas' | 'policies' | 'knowledge' | 'instructions' | 'output-contracts';
+
 /** Get takt global config directory (~/.takt or TAKT_CONFIG_DIR) */
 export function getGlobalConfigDir(): string {
   return process.env.TAKT_CONFIG_DIR || join(homedir(), '.takt');
@@ -56,11 +59,6 @@ export function getProjectPiecesDir(projectDir: string): string {
   return join(getProjectConfigDir(projectDir), 'pieces');
 }
 
-/** Get project personas directory (.takt/personas in project) */
-export function getProjectPersonasDir(projectDir: string): string {
-  return join(getProjectConfigDir(projectDir), 'personas');
-}
-
 /** Get project config file path */
 export function getProjectConfigPath(projectDir: string): string {
   return join(getProjectConfigDir(projectDir), 'config.yaml');
@@ -86,6 +84,21 @@ export function ensureDir(dirPath: string): void {
   if (!existsSync(dirPath)) {
     mkdirSync(dirPath, { recursive: true });
   }
+}
+
+/** Get project facet directory (.takt/{facetType} in project) */
+export function getProjectFacetDir(projectDir: string, facetType: FacetType): string {
+  return join(getProjectConfigDir(projectDir), facetType);
+}
+
+/** Get global facet directory (~/.takt/{facetType}) */
+export function getGlobalFacetDir(facetType: FacetType): string {
+  return join(getGlobalConfigDir(), facetType);
+}
+
+/** Get builtin facet directory (builtins/{lang}/{facetType}) */
+export function getBuiltinFacetDir(lang: Language, facetType: FacetType): string {
+  return join(getLanguageResourcesDir(lang), facetType);
 }
 
 /** Validate path is safe (no directory traversal) */
