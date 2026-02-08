@@ -1,0 +1,714 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TAKT Prompt Log Viewer</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #1e1e1e;
+      color: #d4d4d4;
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 1800px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      font-size: 24px;
+      margin-bottom: 20px;
+      color: #ffffff;
+    }
+
+    .drop-zone {
+      border: 2px dashed #007acc;
+      border-radius: 8px;
+      padding: 40px;
+      text-align: center;
+      background: #252526;
+      cursor: pointer;
+      transition: all 0.3s;
+      margin-bottom: 20px;
+    }
+
+    .drop-zone:hover,
+    .drop-zone.drag-over {
+      background: #2d2d30;
+      border-color: #0098ff;
+    }
+
+    .drop-zone-text {
+      font-size: 16px;
+      color: #858585;
+    }
+
+    .quick-actions {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 20px;
+      justify-content: center;
+    }
+
+    .action-btn {
+      padding: 10px 20px;
+      background: #007acc;
+      color: #ffffff;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      transition: all 0.2s;
+    }
+
+    .action-btn:hover {
+      background: #005a9e;
+    }
+
+    .action-btn:disabled {
+      background: #3e3e42;
+      color: #858585;
+      cursor: not-allowed;
+    }
+
+    .action-btn.secondary {
+      background: #252526;
+      border: 1px solid #3e3e42;
+    }
+
+    .action-btn.secondary:hover:not(:disabled) {
+      background: #2d2d30;
+      border-color: #007acc;
+    }
+
+    .navigation {
+      display: none;
+      background: #252526;
+      padding: 15px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .navigation.active {
+      display: flex;
+    }
+
+    .nav-buttons {
+      display: flex;
+      gap: 8px;
+    }
+
+    .nav-btn {
+      padding: 6px 12px;
+      background: #1e1e1e;
+      color: #d4d4d4;
+      border: 1px solid #3e3e42;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+      transition: all 0.2s;
+    }
+
+    .nav-btn:hover:not(:disabled) {
+      background: #2d2d30;
+      border-color: #007acc;
+    }
+
+    .nav-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .current-file {
+      flex: 1;
+      text-align: center;
+      font-size: 14px;
+      color: #9cdcfe;
+    }
+
+    .file-info {
+      background: #252526;
+      padding: 15px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      display: none;
+    }
+
+    .file-info.active {
+      display: block;
+    }
+
+    .stats {
+      display: flex;
+      gap: 20px;
+      flex-wrap: wrap;
+    }
+
+    .stat {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .stat-label {
+      font-size: 12px;
+      color: #858585;
+    }
+
+    .stat-value {
+      font-size: 16px;
+      font-weight: 600;
+      color: #ffffff;
+    }
+
+    .records {
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    /* --- Record card --- */
+    .record {
+      background: #252526;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .record-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 16px;
+      background: #2d2d30;
+      border-bottom: 1px solid #3e3e42;
+    }
+
+    .movement-name {
+      font-weight: 700;
+      font-size: 15px;
+      color: #4ec9b0;
+    }
+
+    .phase-badge {
+      padding: 2px 10px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .phase-badge.phase-1 {
+      background: #264f78;
+      color: #9cdcfe;
+    }
+
+    .phase-badge.phase-2 {
+      background: #4d3800;
+      color: #dcdcaa;
+    }
+
+    .phase-badge.phase-3 {
+      background: #2d4a27;
+      color: #608b4e;
+    }
+
+    .iteration-badge {
+      font-size: 12px;
+      color: #858585;
+    }
+
+    .timestamp {
+      font-size: 12px;
+      color: #858585;
+      margin-left: auto;
+    }
+
+    /* --- Side-by-side columns --- */
+    .columns {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+    }
+
+    .column {
+      min-width: 0;
+    }
+
+    .column-header {
+      padding: 8px 16px;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      border-bottom: 1px solid #3e3e42;
+    }
+
+    .column.prompt .column-header {
+      background: #1a2a3a;
+      color: #569cd6;
+    }
+
+    .column.response .column-header {
+      background: #1a2a1a;
+      color: #608b4e;
+      border-left: 1px solid #3e3e42;
+    }
+
+    .column-body {
+      padding: 12px 16px;
+      font-family: 'Courier New', Consolas, monospace;
+      font-size: 13px;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow-x: auto;
+      max-height: 800px;
+      overflow-y: auto;
+    }
+
+    .column.response .column-body {
+      border-left: 1px solid #3e3e42;
+    }
+
+    .column.prompt .column-body {
+      color: #c8c8c8;
+    }
+
+    .column.response .column-body {
+      color: #d4d4d4;
+    }
+
+    .hidden {
+      display: none;
+    }
+
+    .error {
+      background: #f48771;
+      color: #1e1e1e;
+      padding: 10px;
+      border-radius: 4px;
+      margin-top: 10px;
+    }
+
+    /* --- Scrollbar --- */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: #1e1e1e;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: #3e3e42;
+      border-radius: 4px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: #4e4e52;
+    }
+
+    /* Filter controls */
+    .controls {
+      background: #252526;
+      padding: 15px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      display: none;
+    }
+
+    .controls.active {
+      display: block;
+    }
+
+    .filter-group {
+      margin-bottom: 10px;
+    }
+
+    .filter-label {
+      font-size: 14px;
+      font-weight: 600;
+      color: #9cdcfe;
+      margin-bottom: 8px;
+      display: block;
+    }
+
+    .filter-buttons {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .filter-btn {
+      padding: 6px 12px;
+      border: 1px solid #3e3e42;
+      border-radius: 4px;
+      background: #1e1e1e;
+      color: #d4d4d4;
+      cursor: pointer;
+      font-size: 12px;
+      transition: all 0.2s;
+    }
+
+    .filter-btn:hover {
+      background: #2d2d30;
+      border-color: #007acc;
+    }
+
+    .filter-btn.active {
+      background: #007acc;
+      border-color: #007acc;
+      color: #ffffff;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>TAKT Prompt Log Viewer</h1>
+
+    <div class="drop-zone" id="dropZone">
+      <div class="drop-zone-text">
+        ここに <code>*-prompts.jsonl</code> ファイルをドラッグ&ドロップ<br>
+        またはクリックしてファイルを選択
+      </div>
+      <input type="file" id="fileInput" accept=".jsonl" style="display: none;">
+    </div>
+
+    <div class="quick-actions">
+      <button class="action-btn" id="loadLatestBtn">📂 ログディレクトリを指定する</button>
+      <button class="action-btn secondary" id="clearDirBtn" style="display: none;">🗑️ 保存したディレクトリをクリア</button>
+    </div>
+
+    <div class="navigation" id="navigation">
+      <div class="nav-buttons">
+        <button class="nav-btn" id="oldestBtn">⏮️ 最古</button>
+        <button class="nav-btn" id="prevBtn">◀️ Prev</button>
+      </div>
+      <div class="current-file" id="currentFile">-</div>
+      <div class="nav-buttons">
+        <button class="nav-btn" id="nextBtn">Next ▶️</button>
+        <button class="nav-btn" id="latestBtn">最新 ⏭️</button>
+      </div>
+    </div>
+
+    <div class="controls" id="controls">
+      <div class="filter-group">
+        <label class="filter-label">Movement</label>
+        <div class="filter-buttons" id="movementFilters"></div>
+      </div>
+      <div class="filter-group">
+        <label class="filter-label">Phase</label>
+        <div class="filter-buttons" id="phaseFilters"></div>
+      </div>
+    </div>
+
+    <div class="file-info" id="fileInfo">
+      <div class="stats" id="stats"></div>
+    </div>
+
+    <div class="records" id="records"></div>
+  </div>
+
+  <script>
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    const loadLatestBtn = document.getElementById('loadLatestBtn');
+    const clearDirBtn = document.getElementById('clearDirBtn');
+    const navigation = document.getElementById('navigation');
+    const currentFileDiv = document.getElementById('currentFile');
+    const oldestBtn = document.getElementById('oldestBtn');
+    const prevBtn = document.getElementById('prevBtn');
+    const nextBtn = document.getElementById('nextBtn');
+    const latestBtn = document.getElementById('latestBtn');
+    const controlsDiv = document.getElementById('controls');
+    const fileInfo = document.getElementById('fileInfo');
+    const statsDiv = document.getElementById('stats');
+    const recordsDiv = document.getElementById('records');
+    const movementFiltersDiv = document.getElementById('movementFilters');
+    const phaseFiltersDiv = document.getElementById('phaseFilters');
+
+    let promptFiles = [];
+    let currentFileIndex = -1;
+    let allRecords = [];
+    let activeMovements = new Set();
+    let activePhases = new Set([1, 2, 3]);
+
+    // --- IndexedDB ---
+    const DB_NAME = 'TaktPromptViewerDB';
+    const DB_VERSION = 1;
+    const STORE_NAME = 'directories';
+    let db = null;
+
+    async function initDB() {
+      return new Promise((resolve, reject) => {
+        const request = indexedDB.open(DB_NAME, DB_VERSION);
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => { db = request.result; resolve(db); };
+        request.onupgradeneeded = (event) => {
+          const db = event.target.result;
+          if (!db.objectStoreNames.contains(STORE_NAME)) {
+            db.createObjectStore(STORE_NAME);
+          }
+        };
+      });
+    }
+
+    async function saveDirectoryHandle(handle) {
+      if (!db) await initDB();
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      tx.objectStore(STORE_NAME).put(handle, 'promptLogDirectory');
+    }
+
+    async function getDirectoryHandle() {
+      if (!db) await initDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE_NAME, 'readonly');
+        const req = tx.objectStore(STORE_NAME).get('promptLogDirectory');
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function clearDirectoryHandle() {
+      if (!db) await initDB();
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      tx.objectStore(STORE_NAME).delete('promptLogDirectory');
+    }
+
+    // --- Events ---
+    dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+    dropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('drag-over');
+      const file = e.dataTransfer.files[0];
+      if (file) handleFile(file);
+    });
+    fileInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file) handleFile(file);
+    });
+
+    oldestBtn.addEventListener('click', () => loadFileByIndex(promptFiles.length - 1));
+    prevBtn.addEventListener('click', () => loadFileByIndex(currentFileIndex + 1));
+    nextBtn.addEventListener('click', () => loadFileByIndex(currentFileIndex - 1));
+    latestBtn.addEventListener('click', () => loadFileByIndex(0));
+
+    clearDirBtn.addEventListener('click', async () => {
+      await clearDirectoryHandle();
+      clearDirBtn.style.display = 'none';
+      loadLatestBtn.textContent = '📂 ログディレクトリを指定する';
+      promptFiles = [];
+      currentFileIndex = -1;
+      navigation.classList.remove('active');
+      controlsDiv.classList.remove('active');
+      fileInfo.classList.remove('active');
+      recordsDiv.innerHTML = '';
+    });
+
+    loadLatestBtn.addEventListener('click', async () => {
+      try {
+        if (!('showDirectoryPicker' in window)) {
+          alert('お使いのブラウザはこの機能に対応していません。Chrome / Edge / Brave をご使用ください。');
+          return;
+        }
+
+        const savedHandle = await getDirectoryHandle();
+        let dirHandle;
+
+        if (savedHandle) {
+          try {
+            const perm = await savedHandle.queryPermission({ mode: 'read' });
+            if (perm === 'granted') {
+              dirHandle = savedHandle;
+            } else {
+              const newPerm = await savedHandle.requestPermission({ mode: 'read' });
+              if (newPerm === 'granted') dirHandle = savedHandle;
+            }
+          } catch { /* saved handle invalid */ }
+        }
+
+        if (!dirHandle) {
+          dirHandle = await window.showDirectoryPicker({ id: 'takt-prompt-logs', startIn: 'documents', mode: 'read' });
+          await saveDirectoryHandle(dirHandle);
+          clearDirBtn.style.display = 'inline-block';
+          loadLatestBtn.textContent = '🔄 最新のログを読み込む';
+        }
+
+        await loadFromDirectoryHandle(dirHandle);
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          console.error(err);
+          recordsDiv.innerHTML = `<div class="error">Error: ${err.message}</div>`;
+        }
+      }
+    });
+
+    // --- Init ---
+    initDB().then(async () => {
+      const saved = await getDirectoryHandle();
+      if (saved) {
+        clearDirBtn.style.display = 'inline-block';
+        loadLatestBtn.textContent = '🔄 最新のログを読み込む';
+        try { await loadFromDirectoryHandle(saved); } catch { /* ignore */ }
+      }
+    });
+
+    // --- Directory loading ---
+    async function loadFromDirectoryHandle(dirHandle) {
+      promptFiles = [];
+      for await (const entry of dirHandle.values()) {
+        if (entry.kind === 'file' && entry.name.endsWith('-prompts.jsonl')) {
+          const file = await entry.getFile();
+          promptFiles.push({ name: entry.name, file, modifiedTime: file.lastModified });
+        }
+      }
+
+      if (promptFiles.length === 0) {
+        alert('*-prompts.jsonl ファイルが見つかりませんでした。');
+        return;
+      }
+
+      promptFiles.sort((a, b) => b.modifiedTime - a.modifiedTime);
+      loadFileByIndex(0);
+    }
+
+    function loadFileByIndex(index) {
+      if (index < 0 || index >= promptFiles.length) return;
+      currentFileIndex = index;
+      handleFile(promptFiles[index].file);
+      updateNavigation();
+    }
+
+    function updateNavigation() {
+      if (promptFiles.length === 0) { navigation.classList.remove('active'); return; }
+      navigation.classList.add('active');
+      const f = promptFiles[currentFileIndex];
+      const date = new Date(f.modifiedTime).toLocaleString('ja-JP');
+      currentFileDiv.textContent = `${f.name} (${currentFileIndex + 1}/${promptFiles.length}) — ${date}`;
+      oldestBtn.disabled = currentFileIndex === promptFiles.length - 1;
+      prevBtn.disabled = currentFileIndex === promptFiles.length - 1;
+      nextBtn.disabled = currentFileIndex === 0;
+      latestBtn.disabled = currentFileIndex === 0;
+    }
+
+    // --- File handling ---
+    function handleFile(file) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const lines = e.target.result.trim().split('\n');
+          allRecords = lines.filter(l => l.trim()).map(l => JSON.parse(l));
+          buildFilters();
+          displayRecords();
+        } catch (err) {
+          recordsDiv.innerHTML = `<div class="error">Error parsing JSONL: ${err.message}</div>`;
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    // --- Filters ---
+    function buildFilters() {
+      const movements = [...new Set(allRecords.map(r => r.movement))];
+      const phases = [...new Set(allRecords.map(r => r.phase))].sort();
+      activeMovements = new Set(movements);
+      activePhases = new Set(phases);
+
+      movementFiltersDiv.innerHTML = movements.map(m =>
+        `<button class="filter-btn active" data-movement="${m}" onclick="toggleMovement('${m}')">${m}</button>`
+      ).join('');
+
+      const phaseLabels = { 1: 'Phase 1 (Execute)', 2: 'Phase 2 (Report)', 3: 'Phase 3 (Judge)' };
+      phaseFiltersDiv.innerHTML = phases.map(p =>
+        `<button class="filter-btn active" data-phase="${p}" onclick="togglePhase(${p})">${phaseLabels[p] || 'Phase ' + p}</button>`
+      ).join('');
+
+      controlsDiv.classList.add('active');
+
+      // Stats
+      const p1 = allRecords.filter(r => r.phase === 1).length;
+      const p2 = allRecords.filter(r => r.phase === 2).length;
+      const p3 = allRecords.filter(r => r.phase === 3).length;
+      statsDiv.innerHTML = `
+        <div class="stat"><span class="stat-label">Total Records</span><span class="stat-value">${allRecords.length}</span></div>
+        <div class="stat"><span class="stat-label">Movements</span><span class="stat-value">${movements.length}</span></div>
+        <div class="stat"><span class="stat-label">Phase 1</span><span class="stat-value">${p1}</span></div>
+        <div class="stat"><span class="stat-label">Phase 2</span><span class="stat-value">${p2}</span></div>
+        <div class="stat"><span class="stat-label">Phase 3</span><span class="stat-value">${p3}</span></div>
+      `;
+      fileInfo.classList.add('active');
+    }
+
+    function toggleMovement(name) {
+      if (activeMovements.has(name)) activeMovements.delete(name); else activeMovements.add(name);
+      document.querySelector(`[data-movement="${name}"]`).classList.toggle('active');
+      applyFilters();
+    }
+
+    function togglePhase(phase) {
+      if (activePhases.has(phase)) activePhases.delete(phase); else activePhases.add(phase);
+      document.querySelector(`[data-phase="${phase}"]`).classList.toggle('active');
+      applyFilters();
+    }
+
+    function applyFilters() {
+      document.querySelectorAll('.record').forEach((el, i) => {
+        const r = allRecords[i];
+        if (activeMovements.has(r.movement) && activePhases.has(r.phase)) {
+          el.classList.remove('hidden');
+        } else {
+          el.classList.add('hidden');
+        }
+      });
+    }
+
+    // --- Render ---
+    function displayRecords() {
+      const phaseLabels = { 1: 'Phase 1 (Execute)', 2: 'Phase 2 (Report)', 3: 'Phase 3 (Judge)' };
+
+      recordsDiv.innerHTML = allRecords.map((r, i) => {
+        const ts = r.timestamp ? new Date(r.timestamp).toLocaleTimeString('ja-JP') : '';
+        const phaseClass = `phase-${r.phase}`;
+        const phaseLabel = phaseLabels[r.phase] || `Phase ${r.phase}`;
+
+        return `
+          <div class="record" data-index="${i}">
+            <div class="record-header">
+              <span class="movement-name">${escapeHtml(r.movement)}</span>
+              <span class="phase-badge ${phaseClass}">${phaseLabel}</span>
+              <span class="iteration-badge">iter: ${r.iteration}</span>
+              <span class="timestamp">${ts}</span>
+            </div>
+            <div class="columns">
+              <div class="column prompt">
+                <div class="column-header">Prompt</div>
+                <div class="column-body">${escapeHtml(r.prompt?.trim() ?? '')}</div>
+              </div>
+              <div class="column response">
+                <div class="column-header">Response</div>
+                <div class="column-body">${escapeHtml(r.response?.trim() ?? '')}</div>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function escapeHtml(text) {
+      if (typeof text !== 'string') return String(text);
+      return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                 .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+    }
+  </script>
+</body>
+</html>
