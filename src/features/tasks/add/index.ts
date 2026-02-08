@@ -87,19 +87,52 @@ export function createIssueFromTask(task: string): void {
   }
 }
 
+interface WorktreeSettings {
+  worktree?: boolean | string;
+  branch?: string;
+  autoPr?: boolean;
+}
+
+async function promptWorktreeSettings(): Promise<WorktreeSettings> {
+  const useWorktree = await confirm('Create worktree?', true);
+  if (!useWorktree) {
+    return {};
+  }
+
+  const customPath = await promptInput('Worktree path (Enter for auto)');
+  const worktree: boolean | string = customPath || true;
+
+  const customBranch = await promptInput('Branch name (Enter for auto)');
+  const branch = customBranch || undefined;
+
+  const autoPr = await confirm('Auto-create PR?', true);
+
+  return { worktree, branch, autoPr };
+}
+
 /**
  * Save a task from interactive mode result.
- * Does not prompt for worktree/branch settings.
+ * Prompts for worktree/branch/auto_pr settings before saving.
  */
 export async function saveTaskFromInteractive(
   cwd: string,
   task: string,
   piece?: string,
 ): Promise<void> {
-  const filePath = await saveTaskFile(cwd, task, { piece });
+  const settings = await promptWorktreeSettings();
+  const filePath = await saveTaskFile(cwd, task, { piece, ...settings });
   const filename = path.basename(filePath);
   success(`Task created: ${filename}`);
   info(`  Path: ${filePath}`);
+  if (settings.worktree) {
+    info(`  Worktree: ${typeof settings.worktree === 'string' ? settings.worktree : 'auto'}`);
+  }
+  if (settings.branch) {
+    info(`  Branch: ${settings.branch}`);
+  }
+  if (settings.autoPr) {
+    info(`  Auto-PR: yes`);
+  }
   if (piece) info(`  Piece: ${piece}`);
 }
 
@@ -173,43 +206,25 @@ export async function addTask(cwd: string, task?: string): Promise<void> {
   }
 
   // 3. ワークツリー/ブランチ/PR設定
-  let worktree: boolean | string | undefined;
-  let branch: string | undefined;
-  let autoPr: boolean | undefined;
-
-  const useWorktree = await confirm('Create worktree?', true);
-  if (useWorktree) {
-    const customPath = await promptInput('Worktree path (Enter for auto)');
-    worktree = customPath || true;
-
-    const customBranch = await promptInput('Branch name (Enter for auto)');
-    if (customBranch) {
-      branch = customBranch;
-    }
-
-    // PR確認（worktreeが有効な場合のみ）
-    autoPr = await confirm('Auto-create PR?', true);
-  }
+  const settings = await promptWorktreeSettings();
 
   // YAMLファイル作成
   const filePath = await saveTaskFile(cwd, taskContent, {
     piece,
     issue: issueNumber,
-    worktree,
-    branch,
-    autoPr,
+    ...settings,
   });
 
   const filename = path.basename(filePath);
   success(`Task created: ${filename}`);
   info(`  Path: ${filePath}`);
-  if (worktree) {
-    info(`  Worktree: ${typeof worktree === 'string' ? worktree : 'auto'}`);
+  if (settings.worktree) {
+    info(`  Worktree: ${typeof settings.worktree === 'string' ? settings.worktree : 'auto'}`);
   }
-  if (branch) {
-    info(`  Branch: ${branch}`);
+  if (settings.branch) {
+    info(`  Branch: ${settings.branch}`);
   }
-  if (autoPr) {
+  if (settings.autoPr) {
     info(`  Auto-PR: yes`);
   }
   if (piece) {
