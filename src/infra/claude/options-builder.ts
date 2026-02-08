@@ -85,6 +85,10 @@ export class SdkOptionsBuilder {
       sdkOptions.continue = false;
     }
 
+    if (this.options.onStderr) {
+      sdkOptions.stderr = this.options.onStderr;
+    }
+
     return sdkOptions;
   }
 

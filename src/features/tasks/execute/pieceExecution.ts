@@ -322,9 +322,10 @@ export async function executePiece(
     const movementIndex = pieceConfig.movements.findIndex((m) => m.name === step.name);
     const totalMovements = pieceConfig.movements.length;
 
-    // Use quiet mode: forced quiet in parallel execution, or CLI/config setting
-    const quiet = options.quiet === true || isQuietMode();
-    displayRef.current = new StreamDisplay(step.personaDisplayName, quiet, {
+    const quiet = isQuietMode();
+    const prefix = options.taskPrefix;
+    const agentLabel = prefix ? `${prefix}:${step.personaDisplayName}` : step.personaDisplayName;
+    displayRef.current = new StreamDisplay(agentLabel, quiet, {
       iteration,
       maxIterations: pieceConfig.maxIterations,
       movementIndex: movementIndex >= 0 ? movementIndex : 0,

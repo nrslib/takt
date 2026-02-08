@@ -144,49 +144,114 @@ describe('TaskRunner', () => {
     });
   });
 
-  describe('getNextTasks', () => {
+  describe('claimNextTasks', () => {
     it('should return empty array when no tasks', () => {
-      const tasks = runner.getNextTasks(3);
+      const tasks = runner.claimNextTasks(3);
       expect(tasks).toEqual([]);
     });
 
-    it('should return all tasks when count exceeds available tasks', () => {
+    it('should return tasks up to the requested count', () => {
       const tasksDir = join(testDir, '.takt', 'tasks');
       mkdirSync(tasksDir, { recursive: true });
-      writeFileSync(join(tasksDir, 'b-task.md'), 'B');
       writeFileSync(join(tasksDir, 'a-task.md'), 'A');
-
-      const tasks = runner.getNextTasks(5);
-      expect(tasks).toHaveLength(2);
-      expect(tasks[0]?.name).toBe('a-task');
-      expect(tasks[1]?.name).toBe('b-task');
-    });
-
-    it('should return only count tasks when more are available', () => {
-      const tasksDir = join(testDir, '.takt', 'tasks');
-      mkdirSync(tasksDir, { recursive: true });
+      writeFileSync(join(tasksDir, 'b-task.md'), 'B');
       writeFileSync(join(tasksDir, 'c-task.md'), 'C');
-      writeFileSync(join(tasksDir, 'b-task.md'), 'B');
-      writeFileSync(join(tasksDir, 'a-task.md'), 'A');
 
-      const tasks = runner.getNextTasks(2);
+      const tasks = runner.claimNextTasks(2);
       expect(tasks).toHaveLength(2);
       expect(tasks[0]?.name).toBe('a-task');
       expect(tasks[1]?.name).toBe('b-task');
     });
 
-    it('should return tasks in same sort order as getNextTask', () => {
+    it('should not return already claimed tasks on subsequent calls', () => {
       const tasksDir = join(testDir, '.takt', 'tasks');
       mkdirSync(tasksDir, { recursive: true });
-      writeFileSync(join(tasksDir, '02-second.md'), 'Second');
-      writeFileSync(join(tasksDir, '01-first.md'), 'First');
-      writeFileSync(join(tasksDir, '03-third.md'), 'Third');
+      writeFileSync(join(tasksDir, 'a-task.md'), 'A');
+      writeFileSync(join(tasksDir, 'b-task.md'), 'B');
+      writeFileSync(join(tasksDir, 'c-task.md'), 'C');
 
-      const nextTask = runner.getNextTask();
-      const nextTasks = runner.getNextTasks(1);
+      // Given: first call claims a-task
+      const first = runner.claimNextTasks(1);
+      expect(first).toHaveLength(1);
+      expect(first[0]?.name).toBe('a-task');
 
-      expect(nextTasks).toHaveLength(1);
-      expect(nextTasks[0]?.name).toBe(nextTask?.name);
+      // When: second call should skip a-task
+      const second = runner.claimNextTasks(1);
+      expect(second).toHaveLength(1);
+      expect(second[0]?.name).toBe('b-task');
+
+      // When: third call should skip a-task and b-task
+      const third = runner.claimNextTasks(1);
+      expect(third).toHaveLength(1);
+      expect(third[0]?.name).toBe('c-task');
+
+      // When: fourth call should return empty (all claimed)
+      const fourth = runner.claimNextTasks(1);
+      expect(fourth).toEqual([]);
+    });
+
+    it('should release claim after completeTask', () => {
+      const tasksDir = join(testDir, '.takt', 'tasks');
+      mkdirSync(tasksDir, { recursive: true });
+      writeFileSync(join(tasksDir, 'task-a.md'), 'Task A content');
+
+      // Given: claim the task
+      const claimed = runner.claimNextTasks(1);
+      expect(claimed).toHaveLength(1);
+
+      // When: complete the task (file is moved away)
+      runner.completeTask({
+        task: claimed[0]!,
+        success: true,
+        response: 'Done',
+        executionLog: [],
+        startedAt: '2024-01-01T00:00:00.000Z',
+        completedAt: '2024-01-01T00:01:00.000Z',
+      });
+
+      // Then: claim set no longer blocks (but file is moved, so no tasks anyway)
+      const next = runner.claimNextTasks(1);
+      expect(next).toEqual([]);
+    });
+
+    it('should release claim after failTask', () => {
+      const tasksDir = join(testDir, '.takt', 'tasks');
+      mkdirSync(tasksDir, { recursive: true });
+      writeFileSync(join(tasksDir, 'task-a.md'), 'Task A content');
+
+      // Given: claim the task
+      const claimed = runner.claimNextTasks(1);
+      expect(claimed).toHaveLength(1);
+
+      // When: fail the task (file is moved away)
+      runner.failTask({
+        task: claimed[0]!,
+        success: false,
+        response: 'Error',
+        executionLog: [],
+        startedAt: '2024-01-01T00:00:00.000Z',
+        completedAt: '2024-01-01T00:01:00.000Z',
+      });
+
+      // Then: claim set no longer blocks
+      const next = runner.claimNextTasks(1);
+      expect(next).toEqual([]);
+    });
+
+    it('should not affect getNextTask (unclaimed access)', () => {
+      const tasksDir = join(testDir, '.takt', 'tasks');
+      mkdirSync(tasksDir, { recursive: true });
+      writeFileSync(join(tasksDir, 'a-task.md'), 'A');
+      writeFileSync(join(tasksDir, 'b-task.md'), 'B');
+
+      // Given: claim a-task via claimNextTasks
+      runner.claimNextTasks(1);
+
+      // When: getNextTask is called (no claim filtering)
+      const task = runner.getNextTask();
+
+      // Then: getNextTask still returns first task (including claimed)
+      expect(task?.name).toBe('a-task');
     });
   });
 

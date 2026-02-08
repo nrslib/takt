@@ -1,5 +1,5 @@
 /**
- * Tests for runAllTasks concurrency support
+ * Tests for runAllTasks concurrency support (worker pool)
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -21,7 +21,7 @@ import { loadGlobalConfig } from '../infra/config/index.js';
 const mockLoadGlobalConfig = vi.mocked(loadGlobalConfig);
 
 const mockGetNextTask = vi.fn();
-const mockGetNextTasks = vi.fn();
+const mockClaimNextTasks = vi.fn();
 const mockCompleteTask = vi.fn();
 const mockFailTask = vi.fn();
 
@@ -29,7 +29,7 @@ vi.mock('../infra/task/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   TaskRunner: vi.fn().mockImplementation(() => ({
     getNextTask: mockGetNextTask,
-    getNextTasks: mockGetNextTasks,
+    claimNextTasks: mockClaimNextTasks,
     completeTask: mockCompleteTask,
     failTask: mockFailTask,
   })),
@@ -147,7 +147,7 @@ describe('runAllTasks concurrency', () => {
 
     it('should show no-tasks message when no tasks exist', async () => {
       // Given: No pending tasks
-      mockGetNextTasks.mockReturnValue([]);
+      mockClaimNextTasks.mockReturnValue([]);
 
       // When
       await runAllTasks('/project');
@@ -156,21 +156,21 @@ describe('runAllTasks concurrency', () => {
       expect(mockInfo).toHaveBeenCalledWith('No pending tasks in .takt/tasks/');
     });
 
-    it('should execute tasks sequentially when concurrency is 1', async () => {
+    it('should execute tasks sequentially via worker pool when concurrency is 1', async () => {
       // Given: Two tasks available sequentially
       const task1 = createTask('task-1');
       const task2 = createTask('task-2');
 
-      mockGetNextTasks.mockReturnValueOnce([task1]);
-      mockGetNextTask
-        .mockReturnValueOnce(task2)
-        .mockReturnValueOnce(null);
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1])
+        .mockReturnValueOnce([task2])
+        .mockReturnValueOnce([]);
 
       // When
       await runAllTasks('/project');
 
-      // Then: Sequential execution uses getNextTask in the while loop
-      expect(mockGetNextTask).toHaveBeenCalled();
+      // Then: Worker pool uses claimNextTasks for fetching more tasks
+      expect(mockClaimNextTasks).toHaveBeenCalled();
       expect(mockStatus).toHaveBeenCalledWith('Total', '2');
     });
   });
@@ -188,7 +188,7 @@ describe('runAllTasks concurrency', () => {
     it('should display concurrency info when concurrency > 1', async () => {
       // Given: Tasks available
       const task1 = createTask('task-1');
-      mockGetNextTasks
+      mockClaimNextTasks
         .mockReturnValueOnce([task1])
         .mockReturnValueOnce([]);
 
@@ -199,29 +199,32 @@ describe('runAllTasks concurrency', () => {
       expect(mockInfo).toHaveBeenCalledWith('Concurrency: 3');
     });
 
-    it('should execute tasks in batch when concurrency > 1', async () => {
-      // Given: 3 tasks available in first batch
+    it('should execute tasks using worker pool when concurrency > 1', async () => {
+      // Given: 3 tasks available
       const task1 = createTask('task-1');
       const task2 = createTask('task-2');
       const task3 = createTask('task-3');
 
-      mockGetNextTasks
+      mockClaimNextTasks
         .mockReturnValueOnce([task1, task2, task3])
         .mockReturnValueOnce([]);
 
       // When
       await runAllTasks('/project');
 
-      // Then: Batch info shown
-      expect(mockInfo).toHaveBeenCalledWith('=== Running batch of 3 task(s) ===');
+      // Then: Task names displayed
+      expect(mockInfo).toHaveBeenCalledWith('=== Task: task-1 ===');
+      expect(mockInfo).toHaveBeenCalledWith('=== Task: task-2 ===');
+      expect(mockInfo).toHaveBeenCalledWith('=== Task: task-3 ===');
       expect(mockStatus).toHaveBeenCalledWith('Total', '3');
     });
 
-    it('should process multiple batches', async () => {
-      // Given: 5 tasks, concurrency=3 → batch1 (3 tasks), batch2 (2 tasks)
+    it('should fill slots as tasks complete (worker pool behavior)', async () => {
+      // Given: 5 tasks, concurrency=3
+      // Worker pool should start 3, then fill slots as tasks complete
       const tasks = Array.from({ length: 5 }, (_, i) => createTask(`task-${i + 1}`));
 
-      mockGetNextTasks
+      mockClaimNextTasks
         .mockReturnValueOnce(tasks.slice(0, 3))
         .mockReturnValueOnce(tasks.slice(3, 5))
         .mockReturnValueOnce([]);
@@ -229,41 +232,8 @@ describe('runAllTasks concurrency', () => {
       // When
       await runAllTasks('/project');
 
-      // Then: Both batches shown
-      expect(mockInfo).toHaveBeenCalledWith('=== Running batch of 3 task(s) ===');
-      expect(mockInfo).toHaveBeenCalledWith('=== Running batch of 2 task(s) ===');
+      // Then: All 5 tasks executed
       expect(mockStatus).toHaveBeenCalledWith('Total', '5');
-    });
-
-    it('should not use getNextTask in parallel mode', async () => {
-      // Given: Tasks in parallel mode
-      const task1 = createTask('task-1');
-      mockGetNextTasks
-        .mockReturnValueOnce([task1])
-        .mockReturnValueOnce([]);
-
-      // When
-      await runAllTasks('/project');
-
-      // Then: getNextTask should not be called (parallel uses getNextTasks)
-      expect(mockGetNextTask).not.toHaveBeenCalled();
-    });
-
-    it('should list task names in batch output', async () => {
-      // Given: Tasks with specific names
-      const task1 = createTask('auth-feature');
-      const task2 = createTask('db-migration');
-
-      mockGetNextTasks
-        .mockReturnValueOnce([task1, task2])
-        .mockReturnValueOnce([]);
-
-      // When
-      await runAllTasks('/project');
-
-      // Then
-      expect(mockInfo).toHaveBeenCalledWith('  - auth-feature');
-      expect(mockInfo).toHaveBeenCalledWith('  - db-migration');
     });
   });
 
@@ -278,8 +248,9 @@ describe('runAllTasks concurrency', () => {
       });
 
       const task1 = createTask('task-1');
-      mockGetNextTasks.mockReturnValueOnce([task1]);
-      mockGetNextTask.mockReturnValueOnce(null);
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1])
+        .mockReturnValueOnce([]);
 
       // When
       await runAllTasks('/project');
@@ -311,7 +282,7 @@ describe('runAllTasks concurrency', () => {
       mockLoadPieceByIdentifier.mockReturnValue(fakePieceConfig as never);
     });
 
-    it('should run batch tasks concurrently, not sequentially', async () => {
+    it('should run tasks concurrently, not sequentially', async () => {
       // Given: 2 tasks with delayed execution to verify concurrency
       const task1 = createTask('slow-1');
       const task2 = createTask('slow-2');
@@ -329,7 +300,7 @@ describe('runAllTasks concurrency', () => {
         });
       });
 
-      mockGetNextTasks
+      mockClaimNextTasks
         .mockReturnValueOnce([task1, task2])
         .mockReturnValueOnce([]);
 
@@ -345,7 +316,48 @@ describe('runAllTasks concurrency', () => {
       expect(elapsed).toBeLessThan(150);
     });
 
-    it('should count partial failures correctly in a batch', async () => {
+    it('should fill slots immediately when a task completes (no batch waiting)', async () => {
+      // Given: 3 tasks, concurrency=2, task1 finishes quickly, task2 takes longer
+      mockLoadGlobalConfig.mockReturnValue({
+        language: 'en',
+        defaultPiece: 'default',
+        logLevel: 'info',
+        concurrency: 2,
+      });
+
+      const task1 = createTask('fast');
+      const task2 = createTask('slow');
+      const task3 = createTask('after-fast');
+
+      const executionOrder: string[] = [];
+
+      mockExecutePiece.mockImplementation((_config, task) => {
+        executionOrder.push(`start:${task}`);
+        const delay = (task as string).includes('slow') ? 80 : 20;
+        return new Promise((resolve) => {
+          setTimeout(() => {
+            executionOrder.push(`end:${task}`);
+            resolve({ success: true });
+          }, delay);
+        });
+      });
+
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1, task2])
+        .mockReturnValueOnce([task3])
+        .mockReturnValueOnce([]);
+
+      // When
+      await runAllTasks('/project');
+
+      // Then: task3 starts before task2 finishes (slot filled immediately)
+      const task3StartIdx = executionOrder.indexOf('start:Task: after-fast');
+      const task2EndIdx = executionOrder.indexOf('end:Task: slow');
+      expect(task3StartIdx).toBeLessThan(task2EndIdx);
+      expect(mockStatus).toHaveBeenCalledWith('Total', '3');
+    });
+
+    it('should count partial failures correctly', async () => {
       // Given: 3 tasks, 1 fails, 2 succeed
       const task1 = createTask('pass-1');
       const task2 = createTask('fail-1');
@@ -358,7 +370,7 @@ describe('runAllTasks concurrency', () => {
         return Promise.resolve({ success: callIndex !== 2 });
       });
 
-      mockGetNextTasks
+      mockClaimNextTasks
         .mockReturnValueOnce([task1, task2, task3])
         .mockReturnValueOnce([]);
 
@@ -371,29 +383,29 @@ describe('runAllTasks concurrency', () => {
       expect(mockStatus).toHaveBeenCalledWith('Failed', '1', 'red');
     });
 
-    it('should pass abortSignal and quiet=true to executePiece in parallel mode', async () => {
+    it('should pass abortSignal and taskPrefix to executePiece in parallel mode', async () => {
       // Given: One task in parallel mode
       const task1 = createTask('parallel-task');
 
       mockExecutePiece.mockResolvedValue({ success: true });
 
-      mockGetNextTasks
+      mockClaimNextTasks
         .mockReturnValueOnce([task1])
         .mockReturnValueOnce([]);
 
       // When
       await runAllTasks('/project');
 
-      // Then: executePiece received abortSignal and quiet options
+      // Then: executePiece received abortSignal and taskPrefix options
       expect(mockExecutePiece).toHaveBeenCalledTimes(1);
       const callArgs = mockExecutePiece.mock.calls[0];
       const pieceOptions = callArgs?.[3]; // 4th argument is options
       expect(pieceOptions).toHaveProperty('abortSignal');
       expect(pieceOptions?.abortSignal).toBeInstanceOf(AbortSignal);
-      expect(pieceOptions).toHaveProperty('quiet', true);
+      expect(pieceOptions).toHaveProperty('taskPrefix', 'parallel-task');
     });
 
-    it('should not pass abortSignal or quiet in sequential mode', async () => {
+    it('should not pass abortSignal or taskPrefix in sequential mode', async () => {
       // Given: Sequential mode
       mockLoadGlobalConfig.mockReturnValue({
         language: 'en',
@@ -406,18 +418,19 @@ describe('runAllTasks concurrency', () => {
       mockExecutePiece.mockResolvedValue({ success: true });
       mockLoadPieceByIdentifier.mockReturnValue(fakePieceConfig as never);
 
-      mockGetNextTasks.mockReturnValueOnce([task1]);
-      mockGetNextTask.mockReturnValueOnce(null);
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1])
+        .mockReturnValueOnce([]);
 
       // When
       await runAllTasks('/project');
 
-      // Then: executePiece should not have abortSignal or quiet
+      // Then: executePiece should not have abortSignal or taskPrefix
       expect(mockExecutePiece).toHaveBeenCalledTimes(1);
       const callArgs = mockExecutePiece.mock.calls[0];
       const pieceOptions = callArgs?.[3];
       expect(pieceOptions?.abortSignal).toBeUndefined();
-      expect(pieceOptions?.quiet).toBeFalsy();
+      expect(pieceOptions?.taskPrefix).toBeUndefined();
     });
   });
 });

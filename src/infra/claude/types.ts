@@ -166,4 +166,6 @@ export interface ClaudeSpawnOptions {
   bypassPermissions?: boolean;
   /** Anthropic API key to inject via env (bypasses CLI auth) */
   anthropicApiKey?: string;
+  /** Callback for stderr output from the Claude Code process */
+  onStderr?: (data: string) => void;
 }

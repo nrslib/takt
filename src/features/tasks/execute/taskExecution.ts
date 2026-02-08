@@ -17,7 +17,7 @@ import { executePiece } from './pieceExecution.js';
 import { DEFAULT_PIECE_NAME } from '../../../shared/constants.js';
 import type { TaskExecutionOptions, ExecuteTaskOptions } from './types.js';
 import { createPullRequest, buildPrBody, pushBranch } from '../../../infra/github/index.js';
-import { runParallel } from './parallelExecution.js';
+import { runWithWorkerPool } from './parallelExecution.js';
 import { resolveTaskExecution } from './resolveTask.js';
 
 export type { TaskExecutionOptions, ExecuteTaskOptions };
@@ -28,7 +28,7 @@ const log = createLogger('task');
  * Execute a single task with piece.
  */
 export async function executeTask(options: ExecuteTaskOptions): Promise<boolean> {
-  const { task, cwd, pieceIdentifier, projectCwd, agentOverrides, interactiveUserInput, interactiveMetadata, startMovement, retryNote, abortSignal, quiet } = options;
+  const { task, cwd, pieceIdentifier, projectCwd, agentOverrides, interactiveUserInput, interactiveMetadata, startMovement, retryNote, abortSignal, taskPrefix } = options;
   const pieceConfig = loadPieceByIdentifier(pieceIdentifier, projectCwd);
 
   if (!pieceConfig) {
@@ -58,7 +58,7 @@ export async function executeTask(options: ExecuteTaskOptions): Promise<boolean>
     startMovement,
     retryNote,
     abortSignal,
-    quiet,
+    taskPrefix,
   });
   return result.success;
 }
@@ -77,7 +77,7 @@ export async function executeAndCompleteTask(
   cwd: string,
   pieceName: string,
   options?: TaskExecutionOptions,
-  parallelOptions?: { abortSignal: AbortSignal },
+  parallelOptions?: { abortSignal?: AbortSignal; taskPrefix?: string },
 ): Promise<boolean> {
   const startedAt = new Date().toISOString();
   const executionLog: string[] = [];
@@ -95,7 +95,7 @@ export async function executeAndCompleteTask(
       startMovement,
       retryNote,
       abortSignal: parallelOptions?.abortSignal,
-      quiet: parallelOptions !== undefined,
+      taskPrefix: parallelOptions?.taskPrefix,
     });
     const completedAt = new Date().toISOString();
 
@@ -168,43 +168,10 @@ export async function executeAndCompleteTask(
 }
 
 /**
- * Run tasks sequentially, fetching one at a time.
- */
-async function runSequential(
-  taskRunner: TaskRunner,
-  initialTask: TaskInfo,
-  cwd: string,
-  pieceName: string,
-  options?: TaskExecutionOptions,
-): Promise<{ success: number; fail: number }> {
-  let successCount = 0;
-  let failCount = 0;
-
-  let task: TaskInfo | undefined = initialTask;
-  while (task) {
-    blankLine();
-    info(`=== Task: ${task.name} ===`);
-    blankLine();
-
-    const taskSuccess = await executeAndCompleteTask(task, taskRunner, cwd, pieceName, options);
-
-    if (taskSuccess) {
-      successCount++;
-    } else {
-      failCount++;
-    }
-
-    task = taskRunner.getNextTask() ?? undefined;
-  }
-
-  return { success: successCount, fail: failCount };
-}
-
-/**
  * Run all pending tasks from .takt/tasks/
  *
- * concurrency=1: 逐次実行（従来動作）
- * concurrency=N (N>1): 最大N個のタスクをバッチ並列実行
+ * Uses a worker pool for both sequential (concurrency=1) and parallel
+ * (concurrency>1) execution through the same code path.
  */
 export async function runAllTasks(
   cwd: string,
@@ -215,7 +182,7 @@ export async function runAllTasks(
   const globalConfig = loadGlobalConfig();
   const concurrency = globalConfig.concurrency;
 
-  const initialTasks = taskRunner.getNextTasks(concurrency);
+  const initialTasks = taskRunner.claimNextTasks(concurrency);
 
   if (initialTasks.length === 0) {
     info('No pending tasks in .takt/tasks/');
@@ -228,10 +195,7 @@ export async function runAllTasks(
     info(`Concurrency: ${concurrency}`);
   }
 
-  // initialTasks is guaranteed non-empty at this point (early return above)
-  const result = concurrency <= 1
-    ? await runSequential(taskRunner, initialTasks[0]!, cwd, pieceName, options)
-    : await runParallel(taskRunner, initialTasks, concurrency, cwd, pieceName, options);
+  const result = await runWithWorkerPool(taskRunner, initialTasks, concurrency, cwd, pieceName, options);
 
   const totalCount = result.success + result.fail;
   blankLine();

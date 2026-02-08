@@ -40,8 +40,8 @@ export interface PieceExecutionOptions {
   retryNote?: string;
   /** External abort signal for parallel execution — when provided, SIGINT handling is delegated to caller */
   abortSignal?: AbortSignal;
-  /** Force quiet mode for streaming output (used in parallel execution to prevent interleaving) */
-  quiet?: boolean;
+  /** Task name prefix for parallel execution output (e.g. "[task-name] output...") */
+  taskPrefix?: string;
 }
 
 export interface TaskExecutionOptions {
@@ -70,8 +70,8 @@ export interface ExecuteTaskOptions {
   retryNote?: string;
   /** External abort signal for parallel execution — when provided, SIGINT handling is delegated to caller */
   abortSignal?: AbortSignal;
-  /** Force quiet mode for streaming output (used in parallel execution to prevent interleaving) */
-  quiet?: boolean;
+  /** Task name prefix for parallel execution output (e.g. "[task-name] output...") */
+  taskPrefix?: string;
 }
 
 export interface PipelineExecutionOptions {

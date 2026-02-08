@@ -35,8 +35,36 @@ const log = createLogger('claude-sdk');
 export class QueryExecutor {
   /**
    * Execute a Claude query.
+   * If session resume fails with a process exit error, retries without resume.
    */
   async execute(
+    prompt: string,
+    options: ClaudeSpawnOptions,
+  ): Promise<ClaudeResult> {
+    const result = await this.executeOnce(prompt, options);
+
+    // Retry without session resume if it appears to be a session resume failure
+    if (
+      result.error
+      && options.sessionId
+      && result.error.includes('exited with code')
+      && !result.content
+    ) {
+      log.info('Session resume may have failed, retrying without resume', {
+        sessionId: options.sessionId,
+        error: result.error,
+      });
+      const retryOptions: ClaudeSpawnOptions = { ...options, sessionId: undefined };
+      return this.executeOnce(prompt, retryOptions);
+    }
+
+    return result;
+  }
+
+  /**
+   * Execute a single Claude query attempt.
+   */
+  private async executeOnce(
     prompt: string,
     options: ClaudeSpawnOptions,
   ): Promise<ClaudeResult> {
@@ -50,7 +78,16 @@ export class QueryExecutor {
       allowedTools: options.allowedTools,
     });
 
-    const sdkOptions = new SdkOptionsBuilder(options).build();
+    const stderrChunks: string[] = [];
+    const optionsWithStderr: ClaudeSpawnOptions = {
+      ...options,
+      onStderr: (data: string) => {
+        stderrChunks.push(data);
+        log.debug('Claude stderr', { queryId, data: data.trimEnd() });
+        options.onStderr?.(data);
+      },
+    };
+    const sdkOptions = new SdkOptionsBuilder(optionsWithStderr).build();
 
     let sessionId: string | undefined;
     let success = false;
@@ -115,7 +152,7 @@ export class QueryExecutor {
       };
     } catch (error) {
       unregisterQuery(queryId);
-      return QueryExecutor.handleQueryError(error, queryId, sessionId, hasResultMessage, success, resultContent);
+      return QueryExecutor.handleQueryError(error, queryId, sessionId, hasResultMessage, success, resultContent, stderrChunks);
     }
   }
 
@@ -130,6 +167,7 @@ export class QueryExecutor {
     hasResultMessage: boolean,
     success: boolean,
     resultContent: string | undefined,
+    stderrChunks: string[],
   ): ClaudeResult {
     if (error instanceof AbortError) {
       log.info('Claude query was interrupted', { queryId });
@@ -170,7 +208,11 @@ export class QueryExecutor {
       return { success: false, content: '', error: 'Request timed out. Please try again.' };
     }
 
-    return { success: false, content: '', error: errorMessage };
+    const stderrOutput = stderrChunks.join('').trim();
+    const errorWithStderr = stderrOutput
+      ? `${errorMessage}\nstderr: ${stderrOutput}`
+      : errorMessage;
+    return { success: false, content: '', error: errorWithStderr };
   }
 }
 

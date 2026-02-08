@@ -8,6 +8,7 @@
  */
 
 import * as readline from 'node:readline';
+import { StringDecoder } from 'node:string_decoder';
 import { stripAnsi, getDisplayWidth } from '../../shared/utils/text.js';
 
 /** Escape sequences for terminal protocol control */
@@ -418,9 +419,12 @@ export function readMultilineInput(prompt: string): Promise<string | null> {
 
     // --- Input dispatch ---
 
+    const utf8Decoder = new StringDecoder('utf8');
+
     function onData(data: Buffer): void {
       try {
-        const str = data.toString('utf-8');
+        const str = utf8Decoder.write(data);
+        if (!str) return;
 
         parseInputData(str, {
           onPasteStart() { state = 'paste'; },
