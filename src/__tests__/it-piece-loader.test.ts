@@ -25,6 +25,7 @@ vi.mock('../infra/config/global/globalConfig.js', () => ({
 // --- Imports (after mocks) ---
 
 import { loadPiece } from '../infra/config/index.js';
+import { listBuiltinPieceNames } from '../infra/config/loaders/pieceResolver.js';
 
 // --- Test helpers ---
 
@@ -45,7 +46,7 @@ describe('Piece Loader IT: builtin piece loading', () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  const builtinNames = ['default', 'minimal', 'expert', 'expert-cqrs', 'coding', 'passthrough', 'compound-eye', 'research', 'magi', 'review-only', 'review-fix-minimal', 'structural-reform', 'unit-test'];
+  const builtinNames = listBuiltinPieceNames({ includeDisabled: true });
 
   for (const name of builtinNames) {
     it(`should load builtin piece: ${name}`, () => {
