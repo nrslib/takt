@@ -144,6 +144,52 @@ describe('TaskRunner', () => {
     });
   });
 
+  describe('getNextTasks', () => {
+    it('should return empty array when no tasks', () => {
+      const tasks = runner.getNextTasks(3);
+      expect(tasks).toEqual([]);
+    });
+
+    it('should return all tasks when count exceeds available tasks', () => {
+      const tasksDir = join(testDir, '.takt', 'tasks');
+      mkdirSync(tasksDir, { recursive: true });
+      writeFileSync(join(tasksDir, 'b-task.md'), 'B');
+      writeFileSync(join(tasksDir, 'a-task.md'), 'A');
+
+      const tasks = runner.getNextTasks(5);
+      expect(tasks).toHaveLength(2);
+      expect(tasks[0]?.name).toBe('a-task');
+      expect(tasks[1]?.name).toBe('b-task');
+    });
+
+    it('should return only count tasks when more are available', () => {
+      const tasksDir = join(testDir, '.takt', 'tasks');
+      mkdirSync(tasksDir, { recursive: true });
+      writeFileSync(join(tasksDir, 'c-task.md'), 'C');
+      writeFileSync(join(tasksDir, 'b-task.md'), 'B');
+      writeFileSync(join(tasksDir, 'a-task.md'), 'A');
+
+      const tasks = runner.getNextTasks(2);
+      expect(tasks).toHaveLength(2);
+      expect(tasks[0]?.name).toBe('a-task');
+      expect(tasks[1]?.name).toBe('b-task');
+    });
+
+    it('should return tasks in same sort order as getNextTask', () => {
+      const tasksDir = join(testDir, '.takt', 'tasks');
+      mkdirSync(tasksDir, { recursive: true });
+      writeFileSync(join(tasksDir, '02-second.md'), 'Second');
+      writeFileSync(join(tasksDir, '01-first.md'), 'First');
+      writeFileSync(join(tasksDir, '03-third.md'), 'Third');
+
+      const nextTask = runner.getNextTask();
+      const nextTasks = runner.getNextTasks(1);
+
+      expect(nextTasks).toHaveLength(1);
+      expect(nextTasks[0]?.name).toBe(nextTask?.name);
+    });
+  });
+
   describe('completeTask', () => {
     it('should move task to completed directory', () => {
       const tasksDir = join(testDir, '.takt', 'tasks');

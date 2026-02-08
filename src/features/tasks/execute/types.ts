@@ -38,6 +38,10 @@ export interface PieceExecutionOptions {
   startMovement?: string;
   /** Retry note explaining why task is being retried */
   retryNote?: string;
+  /** External abort signal for parallel execution — when provided, SIGINT handling is delegated to caller */
+  abortSignal?: AbortSignal;
+  /** Force quiet mode for streaming output (used in parallel execution to prevent interleaving) */
+  quiet?: boolean;
 }
 
 export interface TaskExecutionOptions {
@@ -64,6 +68,10 @@ export interface ExecuteTaskOptions {
   startMovement?: string;
   /** Retry note explaining why task is being retried */
   retryNote?: string;
+  /** External abort signal for parallel execution — when provided, SIGINT handling is delegated to caller */
+  abortSignal?: AbortSignal;
+  /** Force quiet mode for streaming output (used in parallel execution to prevent interleaving) */
+  quiet?: boolean;
 }
 
 export interface PipelineExecutionOptions {

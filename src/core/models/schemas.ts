@@ -318,6 +318,8 @@ export const GlobalConfigSchema = z.object({
   prevent_sleep: z.boolean().optional(),
   /** Enable notification sounds (default: true when undefined) */
   notification_sound: z.boolean().optional(),
+  /** Number of tasks to run concurrently in takt run (default: 1 = sequential, max: 10) */
+  concurrency: z.number().int().min(1).max(10).optional().default(1),
 });
 
 /** Project config schema */
