@@ -451,4 +451,41 @@ describe('resolveTaskExecution', () => {
     expect(mockGetCurrentBranch).not.toHaveBeenCalled();
     expect(result.baseBranch).toBeUndefined();
   });
+
+  it('should return issueNumber from task data when specified', async () => {
+    // Given: Task with issue number
+    const task: TaskInfo = {
+      name: 'task-with-issue',
+      content: 'Fix authentication bug',
+      filePath: '/tasks/task.yaml',
+      data: {
+        task: 'Fix authentication bug',
+        issue: 131,
+      },
+    };
+
+    // When
+    const result = await resolveTaskExecution(task, '/project', 'default');
+
+    // Then
+    expect(result.issueNumber).toBe(131);
+  });
+
+  it('should return undefined issueNumber when task data has no issue', async () => {
+    // Given: Task without issue
+    const task: TaskInfo = {
+      name: 'task-no-issue',
+      content: 'Task content',
+      filePath: '/tasks/task.yaml',
+      data: {
+        task: 'Task content',
+      },
+    };
+
+    // When
+    const result = await resolveTaskExecution(task, '/project', 'default');
+
+    // Then
+    expect(result.issueNumber).toBeUndefined();
+  });
 });

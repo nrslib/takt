@@ -16,13 +16,37 @@ import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { executePiece } from './pieceExecution.js';
 import { DEFAULT_PIECE_NAME } from '../../../shared/constants.js';
 import type { TaskExecutionOptions, ExecuteTaskOptions } from './types.js';
-import { createPullRequest, buildPrBody, pushBranch } from '../../../infra/github/index.js';
+import { createPullRequest, buildPrBody, pushBranch, fetchIssue, checkGhCli } from '../../../infra/github/index.js';
 import { runWithWorkerPool } from './parallelExecution.js';
 import { resolveTaskExecution } from './resolveTask.js';
 
 export type { TaskExecutionOptions, ExecuteTaskOptions };
 
 const log = createLogger('task');
+
+/**
+ * Resolve a GitHub issue from task data's issue number.
+ * Returns issue array for buildPrBody, or undefined if no issue or gh CLI unavailable.
+ */
+function resolveTaskIssue(issueNumber: number | undefined): ReturnType<typeof fetchIssue>[] | undefined {
+  if (issueNumber === undefined) {
+    return undefined;
+  }
+
+  const ghStatus = checkGhCli();
+  if (!ghStatus.available) {
+    log.info('gh CLI unavailable, skipping issue resolution for PR body', { issueNumber });
+    return undefined;
+  }
+
+  try {
+    const issue = fetchIssue(issueNumber);
+    return [issue];
+  } catch (e) {
+    log.info('Failed to fetch issue for PR body, continuing without issue info', { issueNumber, error: getErrorMessage(e) });
+    return undefined;
+  }
+}
 
 /**
  * Execute a single task with piece.
@@ -83,7 +107,7 @@ export async function executeAndCompleteTask(
   const executionLog: string[] = [];
 
   try {
-    const { execCwd, execPiece, isWorktree, branch, baseBranch, startMovement, retryNote, autoPr } = await resolveTaskExecution(task, cwd, pieceName);
+    const { execCwd, execPiece, isWorktree, branch, baseBranch, startMovement, retryNote, autoPr, issueNumber } = await resolveTaskExecution(task, cwd, pieceName);
 
     // cwd is always the project root; pass it as projectCwd so reports/sessions go there
     const taskSuccess = await executeTask({
@@ -117,7 +141,8 @@ export async function executeAndCompleteTask(
           // Branch may already be pushed, continue to PR creation
           log.info('Branch push from project cwd failed (may already exist)', { error: pushError });
         }
-        const prBody = buildPrBody(undefined, `Task "${task.name}" completed successfully.`);
+        const issues = resolveTaskIssue(issueNumber);
+        const prBody = buildPrBody(issues, `Piece \`${execPiece}\` completed successfully.`);
         const prResult = createPullRequest(cwd, {
           branch,
           title: task.name.length > 100 ? `${task.name.slice(0, 97)}...` : task.name,

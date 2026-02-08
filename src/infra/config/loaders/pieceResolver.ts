@@ -35,7 +35,7 @@ export function listBuiltinPieceNames(options?: { includeDisabled?: boolean }): 
 }
 
 /** Get builtin piece by name */
-export function getBuiltinPiece(name: string): PieceConfig | null {
+export function getBuiltinPiece(name: string, projectCwd?: string): PieceConfig | null {
   if (!getBuiltinPiecesEnabled()) return null;
   const lang = getLanguage();
   const disabled = getDisabledBuiltins();
@@ -44,7 +44,7 @@ export function getBuiltinPiece(name: string): PieceConfig | null {
   const builtinDir = getBuiltinPiecesDir(lang);
   const yamlPath = join(builtinDir, `${name}.yaml`);
   if (existsSync(yamlPath)) {
-    return loadPieceFromFile(yamlPath);
+    return loadPieceFromFile(yamlPath, projectCwd);
   }
   return null;
 }
@@ -69,12 +69,13 @@ function resolvePath(pathInput: string, basePath: string): string {
 function loadPieceFromPath(
   filePath: string,
   basePath: string,
+  projectCwd?: string,
 ): PieceConfig | null {
   const resolvedPath = resolvePath(filePath, basePath);
   if (!existsSync(resolvedPath)) {
     return null;
   }
-  return loadPieceFromFile(resolvedPath);
+  return loadPieceFromFile(resolvedPath, projectCwd);
 }
 
 /**
@@ -106,16 +107,16 @@ export function loadPiece(
   const projectPiecesDir = join(getProjectConfigDir(projectCwd), 'pieces');
   const projectMatch = resolvePieceFile(projectPiecesDir, name);
   if (projectMatch) {
-    return loadPieceFromFile(projectMatch);
+    return loadPieceFromFile(projectMatch, projectCwd);
   }
 
   const globalPiecesDir = getGlobalPiecesDir();
   const globalMatch = resolvePieceFile(globalPiecesDir, name);
   if (globalMatch) {
-    return loadPieceFromFile(globalMatch);
+    return loadPieceFromFile(globalMatch, projectCwd);
   }
 
-  return getBuiltinPiece(name);
+  return getBuiltinPiece(name, projectCwd);
 }
 
 /**
@@ -140,7 +141,7 @@ export function loadPieceByIdentifier(
   projectCwd: string,
 ): PieceConfig | null {
   if (isPiecePath(identifier)) {
-    return loadPieceFromPath(identifier, projectCwd);
+    return loadPieceFromPath(identifier, projectCwd, projectCwd);
   }
   return loadPiece(identifier, projectCwd);
 }
@@ -349,7 +350,7 @@ export function loadAllPiecesWithSources(cwd: string): Map<string, PieceWithSour
   for (const { dir, source, disabled } of getPieceDirs(cwd)) {
     for (const entry of iteratePieceDir(dir, source, disabled)) {
       try {
-        pieces.set(entry.name, { config: loadPieceFromFile(entry.path), source: entry.source });
+        pieces.set(entry.name, { config: loadPieceFromFile(entry.path, cwd), source: entry.source });
       } catch (err) {
         log.debug('Skipping invalid piece file', { path: entry.path, error: getErrorMessage(err) });
       }

@@ -15,6 +15,7 @@ export interface ResolvedTaskExecution {
   startMovement?: string;
   retryNote?: string;
   autoPr?: boolean;
+  issueNumber?: number;
 }
 
 /**
@@ -68,5 +69,5 @@ export async function resolveTaskExecution(
     autoPr = globalConfig.autoPr;
   }
 
-  return { execCwd, execPiece, isWorktree, branch, baseBranch, startMovement, retryNote, autoPr };
+  return { execCwd, execPiece, isWorktree, branch, baseBranch, startMovement, retryNote, autoPr, issueNumber: data.issue };
 }
