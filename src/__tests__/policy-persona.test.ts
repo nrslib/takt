@@ -616,7 +616,7 @@ describe('section reference resolution', () => {
     };
 
     const config = normalizePieceConfig(raw, testDir);
-    expect(config.personas).toEqual({ coder: './personas/coder.md' });
+    expect(config.personas).toEqual({ coder: { path: './personas/coder.md' } });
     expect(config.policies).toEqual({ coding: '# Coding Policy\nWrite clean code.' });
     expect(config.instructions).toEqual({ implement: 'Implement the feature.' });
     expect(config.reportFormats).toEqual({ plan: '# Plan Report\n## Goal\n{goal}' });

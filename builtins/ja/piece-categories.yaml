@@ -25,16 +25,19 @@ piece_categories:
     🚀 クイックスタート:
       pieces:
         - coding-hybrid-codex
+        - compound-eye-hybrid-codex
         - default-hybrid-codex
         - minimal-hybrid-codex
         - passthrough-hybrid-codex
-    🔧 フルスタック:
+    🔧 エキスパート:
       pieces:
         - expert-cqrs-hybrid-codex
         - expert-hybrid-codex
-    🔍 レビュー＆修正:
+        - structural-reform-hybrid-codex
+    🔍 レビュー:
       pieces:
         - review-fix-minimal-hybrid-codex
+        - unit-test-hybrid-codex
   その他:
     pieces:
       - research

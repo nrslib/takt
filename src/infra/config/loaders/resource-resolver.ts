@@ -9,7 +9,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, basename } from 'node:path';
-import type { Language } from '../../../core/models/index.js';
+import type { Language, PersonaDefinition } from '../../../core/models/index.js';
 import type { FacetType } from '../paths.js';
 import { getProjectFacetDir, getGlobalFacetDir, getBuiltinFacetDir } from '../paths.js';
 
@@ -21,8 +21,8 @@ export interface FacetResolutionContext {
 
 /** Pre-resolved section maps passed to movement normalization. */
 export interface PieceSections {
-  /** Persona name → file path (raw, not content-resolved) */
-  personas?: Record<string, string>;
+  /** Persona name → PersonaDefinition (normalized: path + optional provider/model) */
+  personas?: Record<string, PersonaDefinition>;
   /** Policy name → resolved content */
   resolvedPolicies?: Record<string, string>;
   /** Knowledge name → resolved content */
@@ -194,9 +194,10 @@ export function resolvePersona(
   // If section map has explicit mapping, use it (path-based)
   const sectionMapping = sections.personas?.[rawPersona];
   if (sectionMapping) {
-    const resolved = resolveResourcePath(sectionMapping, pieceDir);
+    const pathSpec = sectionMapping.path;
+    const resolved = resolveResourcePath(pathSpec, pieceDir);
     const personaPath = existsSync(resolved) ? resolved : undefined;
-    return { personaSpec: sectionMapping, personaPath };
+    return { personaSpec: pathSpec, personaPath };
   }
 
   // If rawPersona is a path, resolve it directly

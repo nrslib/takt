@@ -299,7 +299,7 @@ describe('resolvePersona with layer resolution', () => {
     writeFileSync(personaFile, 'Explicit persona');
 
     const sections: PieceSections = {
-      personas: { 'my-persona': './explicit.md' },
+      personas: { 'my-persona': { path: './explicit.md' } },
     };
 
     const result = resolvePersona('my-persona', sections, tempDir, context);

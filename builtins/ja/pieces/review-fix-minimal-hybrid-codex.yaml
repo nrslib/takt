@@ -5,7 +5,9 @@ name: review-fix-minimal-hybrid-codex
 description: 既存コードのレビューと修正ピース（レビュー開始、実装なし）
 max_iterations: 20
 personas:
-  coder: ../personas/coder.md
+  coder:
+    path: ../personas/coder.md
+    provider: codex
   ai-antipattern-reviewer: ../personas/ai-antipattern-reviewer.md
   supervisor: ../personas/supervisor.md
 instructions:
@@ -21,7 +23,6 @@ movements:
   - name: implement
     edit: true
     persona: coder
-    provider: codex
     policy:
       - coding
       - testing
@@ -104,7 +105,6 @@ movements:
       - name: ai_fix_parallel
         edit: true
         persona: coder
-        provider: codex
         policy:
           - coding
           - testing
@@ -125,7 +125,6 @@ movements:
       - name: supervise_fix_parallel
         edit: true
         persona: coder
-        provider: codex
         policy:
           - coding
           - testing
@@ -150,7 +149,6 @@ movements:
   - name: ai_fix
     edit: true
     persona: coder
-    provider: codex
     policy:
       - coding
       - testing
@@ -175,7 +173,6 @@ movements:
   - name: supervise_fix
     edit: true
     persona: coder
-    provider: codex
     policy:
       - coding
       - testing

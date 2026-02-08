@@ -4,6 +4,7 @@ export type {
   Status,
   RuleMatchMethod,
   PermissionMode,
+  PersonaDefinition,
   OutputContractLabelPath,
   OutputContractItem,
   OutputContractEntry,

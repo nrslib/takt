@@ -222,12 +222,22 @@ export const LoopMonitorSchema = z.object({
 /** Interactive mode schema for piece-level default */
 export const InteractiveModeSchema = z.enum(INTERACTIVE_MODES);
 
+/** Persona definition — either a path string or an object with path + provider/model overrides */
+export const PersonaDefinitionSchema = z.union([
+  z.string(),
+  z.object({
+    path: z.string().min(1),
+    provider: z.enum(['claude', 'codex', 'mock']).optional(),
+    model: z.string().optional(),
+  }),
+]);
+
 /** Piece configuration schema - raw YAML format */
 export const PieceConfigRawSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
-  /** Piece-level persona definitions — map of name to .md file path or inline content */
-  personas: z.record(z.string(), z.string()).optional(),
+  /** Piece-level persona definitions — map of name to path string or object with path + overrides */
+  personas: z.record(z.string(), PersonaDefinitionSchema).optional(),
   /** Piece-level policy definitions — map of name to .md file path or inline content */
   policies: z.record(z.string(), z.string()).optional(),
   /** Piece-level knowledge definitions — map of name to .md file path or inline content */

@@ -25,6 +25,7 @@ piece_categories:
     🚀 Quick Start:
       pieces:
         - coding-hybrid-codex
+        - compound-eye-hybrid-codex
         - default-hybrid-codex
         - minimal-hybrid-codex
         - passthrough-hybrid-codex
@@ -32,9 +33,11 @@ piece_categories:
       pieces:
         - expert-cqrs-hybrid-codex
         - expert-hybrid-codex
-    🔍 Review & Fix:
+        - structural-reform-hybrid-codex
+    🔍 Review:
       pieces:
         - review-fix-minimal-hybrid-codex
+        - unit-test-hybrid-codex
   Others:
     pieces:
       - research

@@ -1,14 +1,14 @@
-# Auto-generated from default.yaml by tools/generate-hybrid-codex.mjs
+# Auto-generated from unit-test.yaml by tools/generate-hybrid-codex.mjs
 # Do not edit manually. Edit the source piece and re-run the generator.
 
-name: default-hybrid-codex
-description: Standard development piece with planning and specialized reviews
-max_iterations: 30
+name: unit-test-hybrid-codex
+description: Unit test focused piece (test analysis → test implementation → review → fix)
+max_iterations: 20
 knowledge:
-  backend: ../knowledge/backend.md
   architecture: ../knowledge/architecture.md
+  backend: ../knowledge/backend.md
 personas:
-  planner: ../personas/planner.md
+  test-planner: ../personas/test-planner.md
   coder:
     path: ../personas/coder.md
     provider: codex
@@ -17,23 +17,21 @@ personas:
   qa-reviewer: ../personas/qa-reviewer.md
   supervisor: ../personas/supervisor.md
 instructions:
-  plan: ../instructions/plan.md
-  implement: ../instructions/implement.md
+  plan-test: ../instructions/plan-test.md
+  implement-test: ../instructions/implement-test.md
   ai-review: ../instructions/ai-review.md
   ai-fix: ../instructions/ai-fix.md
   arbitrate: ../instructions/arbitrate.md
-  review-arch: ../instructions/review-arch.md
-  review-qa: ../instructions/review-qa.md
+  review-test: ../instructions/review-test.md
   fix: ../instructions/fix.md
   supervise: ../instructions/supervise.md
 report_formats:
-  plan: ../output-contracts/plan.md
+  test-plan: ../output-contracts/test-plan.md
   ai-review: ../output-contracts/ai-review.md
-  architecture-review: ../output-contracts/architecture-review.md
   qa-review: ../output-contracts/qa-review.md
   validation: ../output-contracts/validation.md
   summary: ../output-contracts/summary.md
-initial_movement: plan
+initial_movement: plan_test
 loop_monitors:
   - cycle:
       - ai_review
@@ -58,12 +56,15 @@ loop_monitors:
         - condition: Healthy (making progress)
           next: ai_review
         - condition: Unproductive (no improvement)
-          next: reviewers
+          next: review_test
 movements:
-  - name: plan
+  - name: plan_test
     edit: false
-    persona: planner
-    knowledge: architecture
+    persona: test-planner
+    policy: testing
+    knowledge:
+      - architecture
+      - backend
     allowed_tools:
       - Read
       - Glob
@@ -72,9 +73,9 @@ movements:
       - WebSearch
       - WebFetch
     rules:
-      - condition: Requirements are clear and implementable
-        next: implement
-      - condition: User is asking a question (not an implementation task)
+      - condition: Test plan complete
+        next: implement_test
+      - condition: User is asking a question (not a test task)
         next: COMPLETE
       - condition: Requirements unclear, insufficient info
         next: ABORT
@@ -82,12 +83,12 @@ movements:
           Clarifications needed:
           - {Question 1}
           - {Question 2}
-    instruction: plan
+    instruction: plan-test
     output_contracts:
       report:
-        - name: 00-plan.md
-          format: plan
-  - name: implement
+        - name: 00-test-plan.md
+          format: test-plan
+  - name: implement_test
     edit: true
     persona: coder
     policy:
@@ -108,17 +109,17 @@ movements:
       - WebFetch
     permission_mode: edit
     rules:
-      - condition: Implementation complete
+      - condition: Test implementation complete
         next: ai_review
       - condition: No implementation (report only)
         next: ai_review
       - condition: Cannot proceed, insufficient info
         next: ai_review
       - condition: User input required
-        next: implement
+        next: implement_test
         requires_user_input: true
         interactive_only: true
-    instruction: implement
+    instruction: implement-test
     output_contracts:
       report:
         - Scope: 02-coder-scope.md
@@ -137,7 +138,7 @@ movements:
       - WebFetch
     rules:
       - condition: No AI-specific issues
-        next: reviewers
+        next: review_test
       - condition: AI-specific issues found
         next: ai_fix
     instruction: ai-review
@@ -185,62 +186,37 @@ movements:
       - condition: ai_review's findings are valid (fix required)
         next: ai_fix
       - condition: ai_fix's judgment is valid (no fix needed)
-        next: reviewers
+        next: review_test
     instruction: arbitrate
-  - name: reviewers
-    parallel:
-      - name: arch-review
-        edit: false
-        persona: architecture-reviewer
-        policy: review
-        knowledge:
-          - architecture
-          - backend
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - WebSearch
-          - WebFetch
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        instruction: review-arch
-        output_contracts:
-          report:
-            - name: 05-architect-review.md
-              format: architecture-review
-      - name: qa-review
-        edit: false
-        persona: qa-reviewer
-        policy:
-          - review
-          - qa
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - WebSearch
-          - WebFetch
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        instruction: review-qa
-        output_contracts:
-          report:
-            - name: 06-qa-review.md
-              format: qa-review
+  - name: review_test
+    edit: false
+    persona: qa-reviewer
+    policy:
+      - review
+      - qa
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
     rules:
-      - condition: all("approved")
+      - condition: approved
         next: supervise
-      - condition: any("needs_fix")
+      - condition: needs_fix
         next: fix
+    instruction: review-test
+    output_contracts:
+      report:
+        - name: 05-qa-review.md
+          format: qa-review
   - name: fix
     edit: true
     persona: coder
     policy:
       - coding
       - testing
+    session: refresh
     knowledge:
       - backend
       - architecture
@@ -256,9 +232,9 @@ movements:
     permission_mode: edit
     rules:
       - condition: Fix complete
-        next: reviewers
+        next: review_test
       - condition: Cannot proceed, insufficient info
-        next: plan
+        next: plan_test
     instruction: fix
   - name: supervise
     edit: false
@@ -275,11 +251,11 @@ movements:
       - condition: All checks passed
         next: COMPLETE
       - condition: Requirements unmet, tests failing, build errors
-        next: plan
+        next: plan_test
     instruction: supervise
     output_contracts:
       report:
-        - Validation: 07-supervisor-validation.md
+        - Validation: 06-supervisor-validation.md
         - Summary: summary.md
 policies:
   coding: ../policies/coding.md

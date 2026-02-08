@@ -5,13 +5,14 @@ name: passthrough-hybrid-codex
 description: Single-agent thin wrapper. Pass task directly to coder as-is.
 max_iterations: 10
 personas:
-  coder: ../personas/coder.md
+  coder:
+    path: ../personas/coder.md
+    provider: codex
 initial_movement: execute
 movements:
   - name: execute
     edit: true
     persona: coder
-    provider: codex
     policy:
       - coding
       - testing

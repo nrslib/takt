@@ -25,6 +25,7 @@ export type {
 
 // Piece configuration and runtime state
 export type {
+  PersonaDefinition,
   PieceRule,
   OutputContractLabelPath,
   OutputContractItem,

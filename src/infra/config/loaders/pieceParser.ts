@@ -10,7 +10,7 @@ import { dirname } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import type { z } from 'zod';
 import { PieceConfigRawSchema, PieceMovementRawSchema } from '../../../core/models/index.js';
-import type { PieceConfig, PieceMovement, PieceRule, OutputContractEntry, OutputContractLabelPath, OutputContractItem, LoopMonitorConfig, LoopMonitorJudge } from '../../../core/models/index.js';
+import type { PieceConfig, PieceMovement, PieceRule, OutputContractEntry, OutputContractLabelPath, OutputContractItem, LoopMonitorConfig, LoopMonitorJudge, PersonaDefinition } from '../../../core/models/index.js';
 import { getLanguage } from '../global/globalConfig.js';
 import {
   type PieceSections,
@@ -24,6 +24,26 @@ import {
 } from './resource-resolver.js';
 
 type RawStep = z.output<typeof PieceMovementRawSchema>;
+
+/** Normalize raw personas map (string | object) to Record<string, PersonaDefinition>. */
+export function normalizePersonas(
+  raw: Record<string, string | { path: string; provider?: string; model?: string }> | undefined,
+): Record<string, PersonaDefinition> | undefined {
+  if (!raw) return undefined;
+  const result: Record<string, PersonaDefinition> = {};
+  for (const [name, value] of Object.entries(raw)) {
+    if (typeof value === 'string') {
+      result[name] = { path: value };
+    } else {
+      result[name] = {
+        path: value.path,
+        provider: value.provider as PersonaDefinition['provider'],
+        model: value.model,
+      };
+    }
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
 
 /** Check if a raw output contract item is the object form (has 'name' property). */
 function isOutputContractItem(raw: unknown): raw is { name: string; order?: string; format?: string } {
@@ -163,6 +183,9 @@ function normalizeStepFromRaw(
   const rawPersona = (step as Record<string, unknown>).persona as string | undefined;
   const { personaSpec, personaPath } = resolvePersona(rawPersona, sections, pieceDir, context);
 
+  // Look up persona definition for provider/model merge
+  const personaDef = rawPersona ? sections.personas?.[rawPersona] : undefined;
+
   const displayName: string | undefined = (step as Record<string, unknown>).persona_name as string
     || undefined;
 
@@ -185,8 +208,8 @@ function normalizeStepFromRaw(
     personaPath,
     allowedTools: step.allowed_tools,
     mcpServers: step.mcp_servers,
-    provider: step.provider,
-    model: step.model,
+    provider: step.provider ?? personaDef?.provider,
+    model: step.model ?? personaDef?.model,
     permissionMode: step.permission_mode,
     edit: step.edit,
     instructionTemplate: resolveResourceContent(step.instruction_template, pieceDir) || expandedInstruction || '{task}',
@@ -247,13 +270,14 @@ export function normalizePieceConfig(
 ): PieceConfig {
   const parsed = PieceConfigRawSchema.parse(raw);
 
+  const normalizedPersonas = normalizePersonas(parsed.personas);
   const resolvedPolicies = resolveSectionMap(parsed.policies, pieceDir);
   const resolvedKnowledge = resolveSectionMap(parsed.knowledge, pieceDir);
   const resolvedInstructions = resolveSectionMap(parsed.instructions, pieceDir);
   const resolvedReportFormats = resolveSectionMap(parsed.report_formats, pieceDir);
 
   const sections: PieceSections = {
-    personas: parsed.personas,
+    personas: normalizedPersonas,
     resolvedPolicies,
     resolvedKnowledge,
     resolvedInstructions,
@@ -270,7 +294,7 @@ export function normalizePieceConfig(
   return {
     name: parsed.name,
     description: parsed.description,
-    personas: parsed.personas,
+    personas: normalizedPersonas,
     policies: resolvedPolicies,
     knowledge: resolvedKnowledge,
     instructions: resolvedInstructions,

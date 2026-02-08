@@ -54,6 +54,16 @@ export interface OutputContractItem {
 /** Union type for output contract entries */
 export type OutputContractEntry = OutputContractLabelPath | OutputContractItem;
 
+/** Persona definition with optional provider/model overrides */
+export interface PersonaDefinition {
+  /** Path to persona prompt file or inline content */
+  path: string;
+  /** Provider override for this persona */
+  provider?: 'claude' | 'codex' | 'mock';
+  /** Model override for this persona */
+  model?: string;
+}
+
 /** MCP server configuration for stdio transport */
 export interface McpStdioServerConfig {
   type?: 'stdio';
@@ -162,8 +172,8 @@ export interface LoopMonitorConfig {
 export interface PieceConfig {
   name: string;
   description?: string;
-  /** Persona definitions — map of name to file path or inline content (raw, not content-resolved) */
-  personas?: Record<string, string>;
+  /** Persona definitions — map of name to PersonaDefinition (normalized at parse time) */
+  personas?: Record<string, PersonaDefinition>;
   /** Resolved policy definitions — map of name to file content (resolved at parse time) */
   policies?: Record<string, string>;
   /** Resolved knowledge definitions — map of name to file content (resolved at parse time) */

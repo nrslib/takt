@@ -4,7 +4,7 @@
  *
  * For each standard piece (not already -hybrid-codex, not in skip list):
  *   1. Parse the YAML
- *   2. Add `provider: codex` to all coder movements (including parallel sub-movements)
+ *   2. Set `provider: codex` on the coder persona definition
  *   3. Change name to {name}-hybrid-codex
  *   4. Write the hybrid-codex YAML file
  *   5. Update piece-categories.yaml to include generated hybrids
@@ -31,7 +31,7 @@ const CODER_PERSONA = 'coder';
 const dryRun = process.argv.includes('--dry-run');
 
 // ─────────────────────────────────────────
-// Movement transformation
+// Persona transformation
 // ─────────────────────────────────────────
 
 function hasCoderPersona(movement) {
@@ -41,38 +41,21 @@ function hasCoderPersona(movement) {
 }
 
 /**
- * Insert a field into an object after specified anchor fields (preserves key order).
- * If anchor not found, appends at end.
+ * Set `provider: codex` on the coder persona in the personas section.
+ * Converts coder persona from string format to object format with provider.
  */
-function insertFieldAfter(obj, key, value, anchorFields) {
-  if (obj[key] === value) return obj;
+function addCodexToCoderPersona(personas) {
+  if (!personas) return personas;
   const result = {};
-  let inserted = false;
-  for (const [k, v] of Object.entries(obj)) {
-    if (k === key) continue; // Remove existing (will re-insert)
-    result[k] = v;
-    if (!inserted && anchorFields.includes(k)) {
-      result[key] = value;
-      inserted = true;
+  for (const [name, value] of Object.entries(personas)) {
+    if (name === CODER_PERSONA) {
+      const path = typeof value === 'string' ? value : value.path;
+      result[name] = { path, provider: 'codex' };
+    } else {
+      result[name] = value;
     }
   }
-  if (!inserted) result[key] = value;
   return result;
-}
-
-/**
- * Add `provider: codex` to all coder movements (recursively handles parallel).
- */
-function addCodexToCoders(movements) {
-  return movements.map(m => {
-    if (m.parallel) {
-      return { ...m, parallel: addCodexToCoders(m.parallel) };
-    }
-    if (m.persona === CODER_PERSONA) {
-      return insertFieldAfter(m, 'provider', 'codex', ['knowledge', 'stance', 'persona']);
-    }
-    return m;
-  });
 }
 
 // ─────────────────────────────────────────
@@ -91,8 +74,8 @@ function buildHybrid(parsed) {
   for (const field of TOP_FIELD_ORDER) {
     if (field === 'name') {
       hybrid.name = `${parsed.name}-hybrid-codex`;
-    } else if (field === 'movements') {
-      hybrid.movements = addCodexToCoders(parsed.movements);
+    } else if (field === 'personas') {
+      hybrid.personas = addCodexToCoderPersona(parsed.personas);
     } else if (parsed[field] != null) {
       hybrid[field] = parsed[field];
     }

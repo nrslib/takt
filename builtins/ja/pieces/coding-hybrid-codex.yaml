@@ -8,7 +8,9 @@ knowledge:
   architecture: ../knowledge/architecture.md
 personas:
   planner: ../personas/planner.md
-  coder: ../personas/coder.md
+  coder:
+    path: ../personas/coder.md
+    provider: codex
   ai-antipattern-reviewer: ../personas/ai-antipattern-reviewer.md
   architecture-reviewer: ../personas/architecture-reviewer.md
 instructions:
@@ -49,7 +51,6 @@ movements:
   - name: implement
     edit: true
     persona: coder
-    provider: codex
     policy:
       - coding
       - testing
@@ -130,7 +131,6 @@ movements:
   - name: fix
     edit: true
     persona: coder
-    provider: codex
     policy:
       - coding
       - testing

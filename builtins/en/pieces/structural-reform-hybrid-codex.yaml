@@ -1,0 +1,454 @@
+# Auto-generated from structural-reform.yaml by tools/generate-hybrid-codex.mjs
+# Do not edit manually. Edit the source piece and re-run the generator.
+
+name: structural-reform-hybrid-codex
+description: Full project review and structural reform - iterative codebase restructuring with staged file splits
+max_iterations: 50
+knowledge:
+  backend: ../knowledge/backend.md
+  architecture: ../knowledge/architecture.md
+personas:
+  planner: ../personas/planner.md
+  coder:
+    path: ../personas/coder.md
+    provider: codex
+  architecture-reviewer: ../personas/architecture-reviewer.md
+  qa-reviewer: ../personas/qa-reviewer.md
+  supervisor: ../personas/supervisor.md
+instructions:
+  implement: ../instructions/implement.md
+  review-arch: ../instructions/review-arch.md
+  review-qa: ../instructions/review-qa.md
+  fix: ../instructions/fix.md
+report_formats:
+  plan: ../output-contracts/plan.md
+  architecture-review: ../output-contracts/architecture-review.md
+  qa-review: ../output-contracts/qa-review.md
+  validation: ../output-contracts/validation.md
+  summary: ../output-contracts/summary.md
+initial_movement: review
+loop_monitors:
+  - cycle:
+      - implement
+      - fix
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction_template: |
+        The implement -> reviewers -> fix loop has repeated {cycle_count} times for the current reform target.
+
+        Review the reports from each cycle and determine whether this loop
+        is making progress or repeating the same issues.
+
+        **Reports to reference:**
+        - Architect review: {report:04-architect-review.md}
+        - QA review: {report:05-qa-review.md}
+
+        **Judgment criteria:**
+        - Are review findings being addressed in each fix cycle?
+        - Are the same issues recurring without resolution?
+        - Is the implementation converging toward approval?
+      rules:
+        - condition: Healthy (making progress toward approval)
+          next: implement
+        - condition: Unproductive (same issues recurring, no convergence)
+          next: next_target
+movements:
+  - name: review
+    edit: false
+    persona: architecture-reviewer
+    policy: review
+    knowledge:
+      - architecture
+      - backend
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
+    instruction_template: |
+      ## Piece Status
+      - Iteration: {iteration}/{max_iterations} (piece-wide)
+      - Movement Iteration: {movement_iteration} (times this movement has run)
+      - Movement: review (full project review)
+
+      ## User Request
+      {task}
+
+      ## Instructions
+      Conduct a comprehensive structural review of the entire project codebase.
+
+      **Focus areas:**
+      1. **God Classes/Functions**: Files exceeding 300 lines, classes with multiple responsibilities
+      2. **Coupling**: Circular dependencies, tight coupling between modules
+      3. **Cohesion**: Low-cohesion modules mixing unrelated concerns
+      4. **Testability**: Untestable code due to tight coupling or side effects
+      5. **Layer violations**: Wrong dependency directions, domain logic in adapters
+      6. **DRY violations**: Duplicated logic across 3+ locations
+
+      **For each issue found, report:**
+      - File path and line count
+      - Problem category (God Class, Low Cohesion, etc.)
+      - Severity (Critical / High / Medium)
+      - Specific responsibilities that should be separated
+      - Dependencies that would be affected by splitting
+
+      **Output format:**
+
+      ```markdown
+      # Full Project Structural Review
+
+      ## Summary
+      - Total files reviewed: N
+      - Issues found: N (Critical: N, High: N, Medium: N)
+
+      ## Critical Issues
+
+      ### 1. {File path} ({line count} lines)
+      - **Problem**: {category}
+      - **Severity**: Critical
+      - **Responsibilities found**:
+        1. {responsibility 1}
+        2. {responsibility 2}
+      - **Proposed split**:
+        - `{new-file-1}.ts`: {responsibility}
+        - `{new-file-2}.ts`: {responsibility}
+      - **Affected dependents**: {files that import this module}
+
+      ## High Priority Issues
+      ...
+
+      ## Medium Priority Issues
+      ...
+
+      ## Dependency Graph Concerns
+      - {circular dependencies, layering violations}
+
+      ## Recommended Reform Order
+      1. {file} - {reason for priority}
+      2. {file} - {reason for priority}
+      ```
+    rules:
+      - condition: Full review is complete with findings
+        next: plan_reform
+      - condition: No structural issues found
+        next: COMPLETE
+    output_contracts:
+      report:
+        - name: 00-full-review.md
+  - name: plan_reform
+    edit: false
+    persona: planner
+    knowledge: architecture
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Bash
+      - WebSearch
+      - WebFetch
+    instruction_template: |
+      ## Piece Status
+      - Iteration: {iteration}/{max_iterations} (piece-wide)
+      - Movement Iteration: {movement_iteration} (times this movement has run)
+      - Movement: plan_reform (reform plan creation)
+
+      ## User Request
+      {task}
+
+      ## Full Review Results
+      {previous_response}
+
+      ## Additional User Inputs
+      {user_inputs}
+
+      ## Instructions
+      Based on the full review results, create a concrete reform execution plan.
+
+      **Planning principles:**
+      - One file split per iteration (keep changes manageable)
+      - Order by dependency: split leaf nodes first, then work inward
+      - Each split must leave tests and build passing
+      - No backward compatibility concerns (per user instruction)
+
+      **For each reform target, specify:**
+      1. Target file and current line count
+      2. Proposed new files with responsibilities
+      3. Expected changes to imports in dependent files
+      4. Test strategy (new tests needed, existing tests to update)
+      5. Risk assessment (what could break)
+
+      **Output format:**
+
+      ```markdown
+      # Structural Reform Plan
+
+      ## Reform Targets (ordered by execution priority)
+
+      ### Target 1: {file path}
+      - **Current state**: {line count} lines, {N} responsibilities
+      - **Proposed split**:
+        | New file | Responsibility | Estimated lines |
+        |----------|---------------|-----------------|
+        | `{path}` | {responsibility} | ~{N} |
+      - **Dependent files**: {list of files that import this}
+      - **Test plan**: {what tests to add/update}
+      - **Risk**: {Low/Medium/High} - {description}
+
+      ### Target 2: {file path}
+      ...
+
+      ## Execution Order Rationale
+      {Why this order minimizes risk and dependency conflicts}
+
+      ## Success Criteria
+      - All tests pass after each split
+      - Build succeeds after each split
+      - No file exceeds 300 lines
+      - Each file has single responsibility
+      ```
+    rules:
+      - condition: Reform plan is complete and ready to execute
+        next: implement
+      - condition: No actionable reforms identified
+        next: COMPLETE
+      - condition: Requirements unclear, need user input
+        next: ABORT
+        appendix: |
+          Clarifications needed:
+          - {Question 1}
+          - {Question 2}
+    output_contracts:
+      report:
+        - name: 01-reform-plan.md
+          format: plan
+  - name: implement
+    edit: true
+    persona: coder
+    policy:
+      - coding
+      - testing
+    session: refresh
+    knowledge:
+      - backend
+      - architecture
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    permission_mode: edit
+    instruction: implement
+    rules:
+      - condition: Implementation complete
+        next: reviewers
+      - condition: Cannot proceed, insufficient info
+        next: reviewers
+      - condition: User input required
+        next: implement
+        requires_user_input: true
+        interactive_only: true
+    output_contracts:
+      report:
+        - Scope: 02-coder-scope.md
+        - Decisions: 03-coder-decisions.md
+  - name: reviewers
+    parallel:
+      - name: arch-review
+        edit: false
+        persona: architecture-reviewer
+        policy: review
+        knowledge:
+          - architecture
+          - backend
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - WebSearch
+          - WebFetch
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        instruction: review-arch
+        output_contracts:
+          report:
+            - name: 04-architect-review.md
+              format: architecture-review
+      - name: qa-review
+        edit: false
+        persona: qa-reviewer
+        policy:
+          - review
+          - qa
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - WebSearch
+          - WebFetch
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        instruction: review-qa
+        output_contracts:
+          report:
+            - name: 05-qa-review.md
+              format: qa-review
+    rules:
+      - condition: all("approved")
+        next: verify
+      - condition: any("needs_fix")
+        next: fix
+  - name: fix
+    edit: true
+    persona: coder
+    policy:
+      - coding
+      - testing
+    knowledge:
+      - backend
+      - architecture
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    permission_mode: edit
+    rules:
+      - condition: Fix complete
+        next: reviewers
+      - condition: Cannot proceed, insufficient info
+        next: plan_reform
+    instruction: fix
+  - name: verify
+    edit: false
+    persona: supervisor
+    policy: review
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Bash
+      - WebSearch
+      - WebFetch
+    instruction_template: |
+      ## Piece Status
+      - Iteration: {iteration}/{max_iterations} (piece-wide)
+      - Movement Iteration: {movement_iteration} (times this movement has run)
+      - Movement: verify (build and test verification)
+
+      ## Instructions
+      Verify that the current reform step has been completed successfully.
+
+      **Verification checklist:**
+      1. **Build**: Run the build command and confirm it passes
+      2. **Tests**: Run the test suite and confirm all tests pass
+      3. **File sizes**: Confirm no new file exceeds 300 lines
+      4. **Single responsibility**: Confirm each new file has a clear, single purpose
+      5. **Import consistency**: Confirm all imports are updated correctly
+
+      **Report format:**
+
+      ```markdown
+      # Verification Results
+
+      ## Result: PASS / FAIL
+
+      | Check | Status | Details |
+      |-------|--------|---------|
+      | Build | PASS/FAIL | {output summary} |
+      | Tests | PASS/FAIL | {N passed, N failed} |
+      | File sizes | PASS/FAIL | {any file > 300 lines} |
+      | Single responsibility | PASS/FAIL | {assessment} |
+      | Import consistency | PASS/FAIL | {any broken imports} |
+
+      ## Issues (if FAIL)
+      1. {issue description}
+      ```
+    rules:
+      - condition: All verifications passed
+        next: next_target
+      - condition: Verification failed
+        next: fix
+    output_contracts:
+      report:
+        - name: 06-verification.md
+          format: validation
+  - name: next_target
+    edit: false
+    persona: planner
+    knowledge: architecture
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Bash
+      - WebSearch
+      - WebFetch
+    instruction_template: |
+      ## Piece Status
+      - Iteration: {iteration}/{max_iterations} (piece-wide)
+      - Movement Iteration: {movement_iteration} (times this movement has run)
+      - Movement: next_target (progress check and next target selection)
+
+      ## Original Reform Plan
+      {report:01-reform-plan.md}
+
+      ## Latest Verification
+      {previous_response}
+
+      ## Instructions
+      Assess the progress of the structural reform and determine the next action.
+
+      **Steps:**
+      1. Review the reform plan and identify which targets have been completed
+      2. Check the current codebase state against the plan
+      3. Determine if there are remaining reform targets
+
+      **Output format:**
+
+      ```markdown
+      # Reform Progress
+
+      ## Completed Targets
+      | # | Target | Status |
+      |---|--------|--------|
+      | 1 | {file} | Completed |
+      | 2 | {file} | Completed |
+
+      ## Remaining Targets
+      | # | Target | Priority |
+      |---|--------|----------|
+      | 3 | {file} | Next |
+      | 4 | {file} | Pending |
+
+      ## Next Action
+      - **Target**: {next file to reform}
+      - **Plan**: {brief description of the split}
+
+      ## Overall Progress
+      {N}/{total} targets completed. Estimated remaining iterations: {N}
+      ```
+    rules:
+      - condition: More reform targets remain
+        next: implement
+      - condition: All reform targets completed
+        next: COMPLETE
+    output_contracts:
+      report:
+        - name: 07-progress.md
+policies:
+  coding: ../policies/coding.md
+  review: ../policies/review.md
+  testing: ../policies/testing.md
+  qa: ../policies/qa.md
