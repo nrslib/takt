@@ -220,7 +220,7 @@ export async function runAllTasks(
     info(`Concurrency: ${concurrency}`);
   }
 
-  const result = await runWithWorkerPool(taskRunner, initialTasks, concurrency, cwd, pieceName, options);
+  const result = await runWithWorkerPool(taskRunner, initialTasks, concurrency, cwd, pieceName, options, globalConfig.taskPollIntervalMs);
 
   const totalCount = result.success + result.fail;
   blankLine();

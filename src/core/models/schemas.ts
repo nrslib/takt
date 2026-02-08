@@ -322,6 +322,8 @@ export const GlobalConfigSchema = z.object({
   interactive_preview_movements: z.number().int().min(0).max(10).optional().default(3),
   /** Number of tasks to run concurrently in takt run (default: 1 = sequential, max: 10) */
   concurrency: z.number().int().min(1).max(10).optional().default(1),
+  /** Polling interval in ms for picking up new tasks during takt run (default: 500, range: 100-5000) */
+  task_poll_interval_ms: z.number().int().min(100).max(5000).optional().default(500),
 });
 
 /** Project config schema */
