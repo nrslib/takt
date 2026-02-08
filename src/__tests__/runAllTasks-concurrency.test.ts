@@ -209,13 +209,25 @@ describe('runAllTasks concurrency', () => {
         .mockReturnValueOnce([task1, task2, task3])
         .mockReturnValueOnce([]);
 
+      // In parallel mode, task start messages go through TaskPrefixWriter → process.stdout.write
+      const stdoutChunks: string[] = [];
+      const writeSpy = vi.spyOn(process.stdout, 'write').mockImplementation((chunk: unknown) => {
+        stdoutChunks.push(String(chunk));
+        return true;
+      });
+
       // When
       await runAllTasks('/project');
+      writeSpy.mockRestore();
 
-      // Then: Task names displayed
-      expect(mockInfo).toHaveBeenCalledWith('=== Task: task-1 ===');
-      expect(mockInfo).toHaveBeenCalledWith('=== Task: task-2 ===');
-      expect(mockInfo).toHaveBeenCalledWith('=== Task: task-3 ===');
+      // Then: Task names displayed with prefix in stdout
+      const allOutput = stdoutChunks.join('');
+      expect(allOutput).toContain('[task-1]');
+      expect(allOutput).toContain('=== Task: task-1 ===');
+      expect(allOutput).toContain('[task-2]');
+      expect(allOutput).toContain('=== Task: task-2 ===');
+      expect(allOutput).toContain('[task-3]');
+      expect(allOutput).toContain('=== Task: task-3 ===');
       expect(mockStatus).toHaveBeenCalledWith('Total', '3');
     });
 

@@ -42,6 +42,8 @@ export interface PieceExecutionOptions {
   abortSignal?: AbortSignal;
   /** Task name prefix for parallel execution output (e.g. "[task-name] output...") */
   taskPrefix?: string;
+  /** Color index for task prefix (cycled mod 4 across concurrent tasks) */
+  taskColorIndex?: number;
 }
 
 export interface TaskExecutionOptions {
@@ -72,6 +74,8 @@ export interface ExecuteTaskOptions {
   abortSignal?: AbortSignal;
   /** Task name prefix for parallel execution output (e.g. "[task-name] output...") */
   taskPrefix?: string;
+  /** Color index for task prefix (cycled mod 4 across concurrent tasks) */
+  taskColorIndex?: number;
 }
 
 export interface PipelineExecutionOptions {

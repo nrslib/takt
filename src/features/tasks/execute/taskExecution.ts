@@ -52,7 +52,7 @@ function resolveTaskIssue(issueNumber: number | undefined): ReturnType<typeof fe
  * Execute a single task with piece.
  */
 export async function executeTask(options: ExecuteTaskOptions): Promise<boolean> {
-  const { task, cwd, pieceIdentifier, projectCwd, agentOverrides, interactiveUserInput, interactiveMetadata, startMovement, retryNote, abortSignal, taskPrefix } = options;
+  const { task, cwd, pieceIdentifier, projectCwd, agentOverrides, interactiveUserInput, interactiveMetadata, startMovement, retryNote, abortSignal, taskPrefix, taskColorIndex } = options;
   const pieceConfig = loadPieceByIdentifier(pieceIdentifier, projectCwd);
 
   if (!pieceConfig) {
@@ -83,6 +83,7 @@ export async function executeTask(options: ExecuteTaskOptions): Promise<boolean>
     retryNote,
     abortSignal,
     taskPrefix,
+    taskColorIndex,
   });
   return result.success;
 }
@@ -101,7 +102,7 @@ export async function executeAndCompleteTask(
   cwd: string,
   pieceName: string,
   options?: TaskExecutionOptions,
-  parallelOptions?: { abortSignal?: AbortSignal; taskPrefix?: string },
+  parallelOptions?: { abortSignal?: AbortSignal; taskPrefix?: string; taskColorIndex?: number },
 ): Promise<boolean> {
   const startedAt = new Date().toISOString();
   const executionLog: string[] = [];
@@ -120,6 +121,7 @@ export async function executeAndCompleteTask(
       retryNote,
       abortSignal: parallelOptions?.abortSignal,
       taskPrefix: parallelOptions?.taskPrefix,
+      taskColorIndex: parallelOptions?.taskColorIndex,
     });
     const completedAt = new Date().toISOString();
 

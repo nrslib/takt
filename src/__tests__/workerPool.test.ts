@@ -91,17 +91,26 @@ describe('runWithWorkerPool', () => {
     expect(result).toEqual({ success: 2, fail: 1 });
   });
 
-  it('should display task name for each task', async () => {
+  it('should display task name for each task via prefix writer in parallel mode', async () => {
     // Given
     const tasks = [createTask('alpha'), createTask('beta')];
     const runner = createMockTaskRunner([]);
+    const stdoutChunks: string[] = [];
+    const writeSpy = vi.spyOn(process.stdout, 'write').mockImplementation((chunk: unknown) => {
+      stdoutChunks.push(String(chunk));
+      return true;
+    });
 
     // When
     await runWithWorkerPool(runner as never, tasks, 2, '/cwd', 'default');
 
-    // Then
-    expect(mockInfo).toHaveBeenCalledWith('=== Task: alpha ===');
-    expect(mockInfo).toHaveBeenCalledWith('=== Task: beta ===');
+    // Then: Task names appear in prefixed stdout output
+    writeSpy.mockRestore();
+    const allOutput = stdoutChunks.join('');
+    expect(allOutput).toContain('[alpha]');
+    expect(allOutput).toContain('=== Task: alpha ===');
+    expect(allOutput).toContain('[beta]');
+    expect(allOutput).toContain('=== Task: beta ===');
   });
 
   it('should pass taskPrefix for parallel execution (concurrency > 1)', async () => {
@@ -118,6 +127,7 @@ describe('runWithWorkerPool', () => {
     expect(parallelOpts).toEqual({
       abortSignal: expect.any(AbortSignal),
       taskPrefix: 'my-task',
+      taskColorIndex: 0,
     });
   });
 
@@ -135,6 +145,7 @@ describe('runWithWorkerPool', () => {
     expect(parallelOpts).toEqual({
       abortSignal: undefined,
       taskPrefix: undefined,
+      taskColorIndex: undefined,
     });
   });
 
