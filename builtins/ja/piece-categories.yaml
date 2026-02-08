@@ -13,10 +13,14 @@ piece_categories:
       - unit-test
   🎨 フロントエンド: {}
   ⚙️ バックエンド: {}
-  🔧 フルスタック:
-    pieces:
-      - expert
-      - expert-cqrs
+  🔧 エキスパート:
+    フルスタック:
+      pieces:
+        - expert
+        - expert-cqrs
+    リファクタリング:
+      pieces:
+        - structural-reform
   🔀 ハイブリッド (Codex Coding):
     🚀 クイックスタート:
       pieces:

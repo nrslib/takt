@@ -12,6 +12,8 @@ export {
   loadAllPiecesWithSources,
   listPieces,
   listPieceEntries,
+  type MovementPreview,
+  type FirstMovementInfo,
   type PieceDirEntry,
   type PieceSource,
   type PieceWithSource,

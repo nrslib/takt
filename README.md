@@ -262,6 +262,14 @@ takt clear
 # Deploy builtin pieces/personas as Claude Code Skill
 takt export-cc
 
+# List available facets across layers
+takt catalog
+takt catalog personas
+
+# Eject a specific facet for customization
+takt eject persona coder
+takt eject instruction plan --global
+
 # Preview assembled prompts for each movement and phase
 takt prompt [piece]
 
@@ -432,15 +440,16 @@ TAKT includes multiple builtin pieces:
 
 | Piece | Description |
 |----------|-------------|
-| `default` | Full development piece: plan → architecture design → implement → AI review → parallel review (architect + security) → supervisor approval. Includes fix loops at each review stage. |
+| `default` | Full development piece: plan → implement → AI review → parallel review (architect + QA) → supervisor approval. Includes fix loops at each review stage. |
 | `minimal` | Quick piece: plan → implement → review → supervisor. Minimal steps for fast iteration. |
 | `review-fix-minimal` | Review-focused piece: review → fix → supervisor. For iterative improvement based on review feedback. |
 | `research` | Research piece: planner → digger → supervisor. Autonomously executes research without asking questions. |
 | `expert` | Full-stack development piece: architecture, frontend, security, QA reviews with fix loops. |
 | `expert-cqrs` | Full-stack development piece (CQRS+ES specialized): CQRS+ES, frontend, security, QA reviews with fix loops. |
 | `magi` | Deliberation system inspired by Evangelion. Three AI personas (MELCHIOR, BALTHASAR, CASPER) analyze and vote. |
-| `coding` | Lightweight development piece: architect-planner → implement → parallel review (AI antipattern + architecture) → fix. Fast feedback loop without supervisor. |
+| `coding` | Lightweight development piece: planner → implement → parallel review (AI antipattern + architecture) → fix. Fast feedback loop without supervisor. |
 | `passthrough` | Thinnest wrapper. Pass task directly to coder as-is. No review. |
+| `compound-eye` | Multi-model review: sends the same instruction to Claude and Codex simultaneously, then synthesizes both responses. |
 | `review-only` | Read-only code review piece that makes no changes. |
 
 **Hybrid Codex variants** (`*-hybrid-codex`): Each major piece has a Codex variant where the coder agent runs on Codex while reviewers use Claude. Available for: default, minimal, expert, expert-cqrs, passthrough, review-fix-minimal, coding.
@@ -466,6 +475,7 @@ Use `takt switch` to switch pieces.
 | **research-planner** | Research task planning and scope definition |
 | **research-digger** | Deep investigation and information gathering |
 | **research-supervisor** | Research quality validation and completeness assessment |
+| **pr-commenter** | Posts review findings as GitHub PR comments |
 
 ## Custom Personas
 
@@ -531,6 +541,9 @@ provider: claude         # Default provider: claude or codex
 model: sonnet            # Default model (optional)
 branch_name_strategy: romaji  # Branch name generation: 'romaji' (fast) or 'ai' (slow)
 prevent_sleep: false     # Prevent macOS idle sleep during execution (caffeinate)
+notification_sound: true # Enable/disable notification sounds
+concurrency: 1           # Parallel task count for takt run (1-10, default: 1 = sequential)
+interactive_preview_movements: 3  # Movement previews in interactive mode (0-10, default: 3)
 
 # API Key configuration (optional)
 # Can be overridden by environment variables TAKT_ANTHROPIC_API_KEY / TAKT_OPENAI_API_KEY
@@ -746,6 +759,7 @@ Special `next` values: `COMPLETE` (success), `ABORT` (failure)
 | `permission_mode` | - | Permission mode: `readonly`, `edit`, `full` (provider-independent) |
 | `output_contracts` | - | Output contract definitions for report files |
 | `quality_gates` | - | AI directives for movement completion requirements |
+| `mcp_servers` | - | MCP (Model Context Protocol) server configuration (stdio/SSE/HTTP) |
 
 ## API Usage Example
 

@@ -250,19 +250,13 @@ export function readMultilineInput(prompt: string): Promise<string | null> {
 
     // --- Buffer position helpers ---
 
-    function getLineStart(): number {
-      const lastNl = buffer.lastIndexOf('\n', cursorPos - 1);
-      return lastNl + 1;
-    }
-
-    function getLineEnd(): number {
-      const nextNl = buffer.indexOf('\n', cursorPos);
-      return nextNl >= 0 ? nextNl : buffer.length;
-    }
-
     function getLineStartAt(pos: number): number {
       const lastNl = buffer.lastIndexOf('\n', pos - 1);
       return lastNl + 1;
+    }
+
+    function getLineStart(): number {
+      return getLineStartAt(cursorPos);
     }
 
     function getLineEndAt(pos: number): number {
@@ -270,26 +264,89 @@ export function readMultilineInput(prompt: string): Promise<string | null> {
       return nextNl >= 0 ? nextNl : buffer.length;
     }
 
-    /** Display width from line start to cursor */
-    function getDisplayColumn(): number {
-      return getDisplayWidth(buffer.slice(getLineStart(), cursorPos));
+    function getLineEnd(): number {
+      return getLineEndAt(cursorPos);
     }
 
     const promptWidth = getDisplayWidth(stripAnsi(prompt));
 
-    /** Terminal column (1-based) for a given buffer position */
-    function getTerminalColumn(pos: number): number {
-      const lineStart = getLineStartAt(pos);
-      const col = getDisplayWidth(buffer.slice(lineStart, pos));
-      const isFirstLine = lineStart === 0;
-      return isFirstLine ? promptWidth + col + 1 : col + 1;
+    // --- Display row helpers (soft-wrap awareness) ---
+
+    function getTermWidth(): number {
+      return process.stdout.columns || 80;
     }
 
-    /** Find the buffer position in a line that matches a target display column */
-    function findPositionByDisplayColumn(lineStart: number, lineEnd: number, targetDisplayCol: number): number {
+    /** Buffer position of the display row start that contains `pos` */
+    function getDisplayRowStart(pos: number): number {
+      const logicalStart = getLineStartAt(pos);
+      const termWidth = getTermWidth();
+      const isFirstLogicalLine = logicalStart === 0;
+      let firstRowWidth = isFirstLogicalLine ? termWidth - promptWidth : termWidth;
+      if (firstRowWidth <= 0) firstRowWidth = 1;
+
+      let rowStart = logicalStart;
+      let accumulated = 0;
+      let available = firstRowWidth;
+      let i = logicalStart;
+      for (const ch of buffer.slice(logicalStart, pos)) {
+        const w = getDisplayWidth(ch);
+        if (accumulated + w > available) {
+          rowStart = i;
+          accumulated = w;
+          available = termWidth;
+        } else {
+          accumulated += w;
+          // Row exactly filled — next position starts a new display row
+          if (accumulated === available) {
+            rowStart = i + ch.length;
+            accumulated = 0;
+            available = termWidth;
+          }
+        }
+        i += ch.length;
+      }
+      return rowStart;
+    }
+
+    /** Buffer position of the display row end that contains `pos` */
+    function getDisplayRowEnd(pos: number): number {
+      const logicalEnd = getLineEndAt(pos);
+      const rowStart = getDisplayRowStart(pos);
+      const termWidth = getTermWidth();
+      // The first display row of the first logical line has reduced width
+      const isFirstDisplayRow = rowStart === 0;
+      const available = isFirstDisplayRow ? termWidth - promptWidth : termWidth;
+
+      let accumulated = 0;
+      let i = rowStart;
+      for (const ch of buffer.slice(rowStart, logicalEnd)) {
+        const w = getDisplayWidth(ch);
+        if (accumulated + w > available) return i;
+        accumulated += w;
+        i += ch.length;
+      }
+      return logicalEnd;
+    }
+
+    /** Display column (0-based) within the display row that contains `pos` */
+    function getDisplayRowColumn(pos: number): number {
+      return getDisplayWidth(buffer.slice(getDisplayRowStart(pos), pos));
+    }
+
+    /** Terminal column (1-based) for a given buffer position */
+    function getTerminalColumn(pos: number): number {
+      const displayRowStart = getDisplayRowStart(pos);
+      const col = getDisplayWidth(buffer.slice(displayRowStart, pos));
+      // Only the first display row of the first logical line has the prompt offset
+      const isFirstDisplayRow = displayRowStart === 0;
+      return isFirstDisplayRow ? promptWidth + col + 1 : col + 1;
+    }
+
+    /** Find the buffer position in a range that matches a target display column */
+    function findPositionByDisplayColumn(rangeStart: number, rangeEnd: number, targetDisplayCol: number): number {
       let displayCol = 0;
-      let pos = lineStart;
-      for (const ch of buffer.slice(lineStart, lineEnd)) {
+      let pos = rangeStart;
+      for (const ch of buffer.slice(rangeStart, rangeEnd)) {
         const w = getDisplayWidth(ch);
         if (displayCol + w > targetDisplayCol) break;
         displayCol += w;
@@ -322,21 +379,75 @@ export function readMultilineInput(prompt: string): Promise<string | null> {
 
     // --- Cursor movement ---
 
-    function moveCursorToLineStart(): void {
-      const displayOffset = getDisplayColumn();
+    function moveCursorToDisplayRowStart(): void {
+      const displayRowStart = getDisplayRowStart(cursorPos);
+      const displayOffset = getDisplayRowColumn(cursorPos);
       if (displayOffset > 0) {
-        cursorPos = getLineStart();
+        cursorPos = displayRowStart;
         process.stdout.write(`\x1B[${displayOffset}D`);
       }
     }
 
-    function moveCursorToLineEnd(): void {
-      const lineEnd = getLineEnd();
-      const displayOffset = getDisplayWidth(buffer.slice(cursorPos, lineEnd));
+    function moveCursorToDisplayRowEnd(): void {
+      const displayRowEnd = getDisplayRowEnd(cursorPos);
+      const displayOffset = getDisplayWidth(buffer.slice(cursorPos, displayRowEnd));
       if (displayOffset > 0) {
-        cursorPos = lineEnd;
+        cursorPos = displayRowEnd;
         process.stdout.write(`\x1B[${displayOffset}C`);
       }
+    }
+
+    /** Move cursor to a target display row, positioning at the given display column */
+    function moveCursorToDisplayRow(
+      targetRowStart: number,
+      targetRowEnd: number,
+      displayCol: number,
+      direction: 'A' | 'B',
+    ): void {
+      cursorPos = findPositionByDisplayColumn(targetRowStart, targetRowEnd, displayCol);
+      const termCol = getTerminalColumn(cursorPos);
+      process.stdout.write(`\x1B[${direction}`);
+      process.stdout.write(`\x1B[${termCol}G`);
+    }
+
+    /** Count how many display rows lie between two buffer positions in the same logical line */
+    function countDisplayRowsBetween(from: number, to: number): number {
+      if (from === to) return 0;
+      const start = Math.min(from, to);
+      const end = Math.max(from, to);
+      let count = 0;
+      let pos = start;
+      while (pos < end) {
+        const nextRowStart = getDisplayRowEnd(pos);
+        if (nextRowStart >= end) break;
+        pos = nextRowStart;
+        count++;
+      }
+      return count;
+    }
+
+    function moveCursorToLogicalLineStart(): void {
+      const lineStart = getLineStart();
+      if (cursorPos === lineStart) return;
+      const rowDiff = countDisplayRowsBetween(lineStart, cursorPos);
+      cursorPos = lineStart;
+      if (rowDiff > 0) {
+        process.stdout.write(`\x1B[${rowDiff}A`);
+      }
+      const termCol = getTerminalColumn(cursorPos);
+      process.stdout.write(`\x1B[${termCol}G`);
+    }
+
+    function moveCursorToLogicalLineEnd(): void {
+      const lineEnd = getLineEnd();
+      if (cursorPos === lineEnd) return;
+      const rowDiff = countDisplayRowsBetween(cursorPos, lineEnd);
+      cursorPos = lineEnd;
+      if (rowDiff > 0) {
+        process.stdout.write(`\x1B[${rowDiff}B`);
+      }
+      const termCol = getTerminalColumn(cursorPos);
+      process.stdout.write(`\x1B[${termCol}G`);
     }
 
     // --- Buffer editing ---
@@ -461,27 +572,40 @@ export function readMultilineInput(prompt: string): Promise<string | null> {
           },
           onArrowUp() {
             if (state !== 'normal') return;
-            const lineStart = getLineStart();
-            if (lineStart === 0) return;
-            const displayCol = getDisplayColumn();
-            const prevLineStart = getLineStartAt(lineStart - 1);
-            const prevLineEnd = lineStart - 1;
-            cursorPos = findPositionByDisplayColumn(prevLineStart, prevLineEnd, displayCol);
-            const termCol = getTerminalColumn(cursorPos);
-            process.stdout.write('\x1B[A');
-            process.stdout.write(`\x1B[${termCol}G`);
+            const logicalLineStart = getLineStart();
+            const displayRowStart = getDisplayRowStart(cursorPos);
+            const displayCol = getDisplayRowColumn(cursorPos);
+
+            if (displayRowStart > logicalLineStart) {
+              // Move to previous display row within the same logical line
+              const prevRowStart = getDisplayRowStart(displayRowStart - 1);
+              const prevRowEnd = getDisplayRowEnd(displayRowStart - 1);
+              moveCursorToDisplayRow(prevRowStart, prevRowEnd, displayCol, 'A');
+            } else if (logicalLineStart > 0) {
+              // Move to the last display row of the previous logical line
+              const prevLogicalLineEnd = logicalLineStart - 1;
+              const prevRowStart = getDisplayRowStart(prevLogicalLineEnd);
+              const prevRowEnd = getDisplayRowEnd(prevLogicalLineEnd);
+              moveCursorToDisplayRow(prevRowStart, prevRowEnd, displayCol, 'A');
+            }
           },
           onArrowDown() {
             if (state !== 'normal') return;
-            const lineEnd = getLineEnd();
-            if (lineEnd >= buffer.length) return;
-            const displayCol = getDisplayColumn();
-            const nextLineStart = lineEnd + 1;
-            const nextLineEnd = getLineEndAt(nextLineStart);
-            cursorPos = findPositionByDisplayColumn(nextLineStart, nextLineEnd, displayCol);
-            const termCol = getTerminalColumn(cursorPos);
-            process.stdout.write('\x1B[B');
-            process.stdout.write(`\x1B[${termCol}G`);
+            const logicalLineEnd = getLineEnd();
+            const displayRowEnd = getDisplayRowEnd(cursorPos);
+            const displayCol = getDisplayRowColumn(cursorPos);
+
+            if (displayRowEnd < logicalLineEnd) {
+              // Move to next display row within the same logical line
+              const nextRowStart = displayRowEnd;
+              const nextRowEnd = getDisplayRowEnd(displayRowEnd);
+              moveCursorToDisplayRow(nextRowStart, nextRowEnd, displayCol, 'B');
+            } else if (logicalLineEnd < buffer.length) {
+              // Move to the first display row of the next logical line
+              const nextLineStart = logicalLineEnd + 1;
+              const nextRowEnd = getDisplayRowEnd(nextLineStart);
+              moveCursorToDisplayRow(nextLineStart, nextRowEnd, displayCol, 'B');
+            }
           },
           onWordLeft() {
             if (state !== 'normal') return;
@@ -507,11 +631,11 @@ export function readMultilineInput(prompt: string): Promise<string | null> {
           },
           onHome() {
             if (state !== 'normal') return;
-            moveCursorToLineStart();
+            moveCursorToLogicalLineStart();
           },
           onEnd() {
             if (state !== 'normal') return;
-            moveCursorToLineEnd();
+            moveCursorToLogicalLineEnd();
           },
           onChar(ch: string) {
             if (state === 'paste') {
@@ -543,8 +667,8 @@ export function readMultilineInput(prompt: string): Promise<string | null> {
             }
             // Editing
             if (ch === '\x7F' || ch === '\x08') { deleteCharBefore(); return; }
-            if (ch === '\x01') { moveCursorToLineStart(); return; }
-            if (ch === '\x05') { moveCursorToLineEnd(); return; }
+            if (ch === '\x01') { moveCursorToDisplayRowStart(); return; }
+            if (ch === '\x05') { moveCursorToDisplayRowEnd(); return; }
             if (ch === '\x0B') { deleteToLineEnd(); return; }
             if (ch === '\x15') { deleteToLineStart(); return; }
             if (ch === '\x17') { deleteWord(); return; }

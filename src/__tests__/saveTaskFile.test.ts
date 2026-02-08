@@ -17,6 +17,11 @@ vi.mock('../shared/ui/index.js', () => ({
   blankLine: vi.fn(),
 }));
 
+vi.mock('../shared/prompt/index.js', () => ({
+  confirm: vi.fn(),
+  promptInput: vi.fn(),
+}));
+
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   createLogger: () => ({
@@ -28,11 +33,14 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 import { summarizeTaskName } from '../infra/task/summarize.js';
 import { success, info } from '../shared/ui/index.js';
+import { confirm, promptInput } from '../shared/prompt/index.js';
 import { saveTaskFile, saveTaskFromInteractive } from '../features/tasks/add/index.js';
 
 const mockSummarizeTaskName = vi.mocked(summarizeTaskName);
 const mockSuccess = vi.mocked(success);
 const mockInfo = vi.mocked(info);
+const mockConfirm = vi.mocked(confirm);
+const mockPromptInput = vi.mocked(promptInput);
 
 let testDir: string;
 
@@ -163,16 +171,82 @@ describe('saveTaskFile', () => {
 });
 
 describe('saveTaskFromInteractive', () => {
-  it('should save task and display success message', async () => {
+  it('should save task with worktree settings when user confirms worktree', async () => {
+    // Given: user confirms worktree, accepts defaults, confirms auto-PR
+    mockConfirm.mockResolvedValueOnce(true);   // Create worktree? → Yes
+    mockPromptInput.mockResolvedValueOnce('');  // Worktree path → auto
+    mockPromptInput.mockResolvedValueOnce('');  // Branch name → auto
+    mockConfirm.mockResolvedValueOnce(true);   // Auto-create PR? → Yes
+
     // When
     await saveTaskFromInteractive(testDir, 'Task content');
 
     // Then
     expect(mockSuccess).toHaveBeenCalledWith('Task created: test-task.yaml');
     expect(mockInfo).toHaveBeenCalledWith(expect.stringContaining('Path:'));
+    const tasksDir = path.join(testDir, '.takt', 'tasks');
+    const files = fs.readdirSync(tasksDir);
+    const content = fs.readFileSync(path.join(tasksDir, files[0]!), 'utf-8');
+    expect(content).toContain('worktree: true');
+    expect(content).toContain('auto_pr: true');
+  });
+
+  it('should save task without worktree settings when user declines worktree', async () => {
+    // Given: user declines worktree
+    mockConfirm.mockResolvedValueOnce(false);  // Create worktree? → No
+
+    // When
+    await saveTaskFromInteractive(testDir, 'Task content');
+
+    // Then
+    expect(mockSuccess).toHaveBeenCalledWith('Task created: test-task.yaml');
+    const tasksDir = path.join(testDir, '.takt', 'tasks');
+    const files = fs.readdirSync(tasksDir);
+    const content = fs.readFileSync(path.join(tasksDir, files[0]!), 'utf-8');
+    expect(content).not.toContain('worktree:');
+    expect(content).not.toContain('branch:');
+    expect(content).not.toContain('auto_pr:');
+  });
+
+  it('should save custom worktree path and branch when specified', async () => {
+    // Given: user specifies custom path and branch
+    mockConfirm.mockResolvedValueOnce(true);              // Create worktree? → Yes
+    mockPromptInput.mockResolvedValueOnce('/custom/path'); // Worktree path
+    mockPromptInput.mockResolvedValueOnce('feat/branch');  // Branch name
+    mockConfirm.mockResolvedValueOnce(false);              // Auto-create PR? → No
+
+    // When
+    await saveTaskFromInteractive(testDir, 'Task content');
+
+    // Then
+    const tasksDir = path.join(testDir, '.takt', 'tasks');
+    const files = fs.readdirSync(tasksDir);
+    const content = fs.readFileSync(path.join(tasksDir, files[0]!), 'utf-8');
+    expect(content).toContain('worktree: /custom/path');
+    expect(content).toContain('branch: feat/branch');
+    expect(content).toContain('auto_pr: false');
+  });
+
+  it('should display worktree/branch/auto-PR info when settings are provided', async () => {
+    // Given
+    mockConfirm.mockResolvedValueOnce(true);              // Create worktree? → Yes
+    mockPromptInput.mockResolvedValueOnce('/my/path');     // Worktree path
+    mockPromptInput.mockResolvedValueOnce('my-branch');    // Branch name
+    mockConfirm.mockResolvedValueOnce(true);               // Auto-create PR? → Yes
+
+    // When
+    await saveTaskFromInteractive(testDir, 'Task content');
+
+    // Then
+    expect(mockInfo).toHaveBeenCalledWith('  Worktree: /my/path');
+    expect(mockInfo).toHaveBeenCalledWith('  Branch: my-branch');
+    expect(mockInfo).toHaveBeenCalledWith('  Auto-PR: yes');
   });
 
   it('should display piece info when specified', async () => {
+    // Given
+    mockConfirm.mockResolvedValueOnce(false);  // Create worktree? → No
+
     // When
     await saveTaskFromInteractive(testDir, 'Task content', 'review');
 
@@ -181,6 +255,9 @@ describe('saveTaskFromInteractive', () => {
   });
 
   it('should include piece in saved YAML', async () => {
+    // Given
+    mockConfirm.mockResolvedValueOnce(false);  // Create worktree? → No
+
     // When
     await saveTaskFromInteractive(testDir, 'Task content', 'custom');
 
@@ -193,6 +270,9 @@ describe('saveTaskFromInteractive', () => {
   });
 
   it('should not display piece info when not specified', async () => {
+    // Given
+    mockConfirm.mockResolvedValueOnce(false);  // Create worktree? → No
+
     // When
     await saveTaskFromInteractive(testDir, 'Task content');
 
@@ -201,5 +281,19 @@ describe('saveTaskFromInteractive', () => {
       (call) => typeof call[0] === 'string' && call[0].includes('Piece:')
     );
     expect(pieceInfoCalls.length).toBe(0);
+  });
+
+  it('should display auto worktree info when no custom path', async () => {
+    // Given
+    mockConfirm.mockResolvedValueOnce(true);   // Create worktree? → Yes
+    mockPromptInput.mockResolvedValueOnce('');  // Worktree path → auto
+    mockPromptInput.mockResolvedValueOnce('');  // Branch name → auto
+    mockConfirm.mockResolvedValueOnce(true);   // Auto-create PR? → Yes
+
+    // When
+    await saveTaskFromInteractive(testDir, 'Task content');
+
+    // Then
+    expect(mockInfo).toHaveBeenCalledWith('  Worktree: auto');
   });
 });

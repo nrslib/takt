@@ -35,6 +35,9 @@ export * from './config.js';
 // Re-export from schemas.ts
 export * from './schemas.js';
 
+// Re-export from interactive-mode.ts
+export { INTERACTIVE_MODES, DEFAULT_INTERACTIVE_MODE, type InteractiveMode } from './interactive-mode.js';
+
 // Re-export from session.ts (functions only, not types)
 export {
   createSessionState,

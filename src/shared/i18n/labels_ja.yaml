@@ -24,6 +24,17 @@ interactive:
       continue: "会話を続ける"
     cancelled: "キャンセルしました"
     playNoTask: "タスク内容を指定してください: /play <タスク内容>"
+    personaFallback: "先頭ムーブメントにペルソナがありません。アシスタントモードにフォールバックします。"
+  modeSelection:
+    prompt: "対話モードを選択してください:"
+    assistant: "アシスタント"
+    assistantDescription: "確認質問をしてから指示書を作成"
+    persona: "ペルソナ"
+    personaDescription: "先頭エージェントのペルソナで対話"
+    quiet: "クワイエット"
+    quietDescription: "質問なしでベストエフォートの指示書を生成"
+    passthrough: "パススルー"
+    passthroughDescription: "入力をそのままタスクとして渡す"
   previousTask:
     success: "✅ 前回のタスクは正常に完了しました"
     error: "❌ 前回のタスクはエラーで終了しました: {error}"

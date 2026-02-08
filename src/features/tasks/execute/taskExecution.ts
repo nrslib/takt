@@ -16,7 +16,7 @@ import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { executePiece } from './pieceExecution.js';
 import { DEFAULT_PIECE_NAME } from '../../../shared/constants.js';
 import type { TaskExecutionOptions, ExecuteTaskOptions } from './types.js';
-import { createPullRequest, buildPrBody, pushBranch } from '../../../infra/github/index.js';
+import { createPullRequest, buildPrBody, pushBranch, fetchIssue, checkGhCli } from '../../../infra/github/index.js';
 import { runWithWorkerPool } from './parallelExecution.js';
 import { resolveTaskExecution } from './resolveTask.js';
 
@@ -25,10 +25,34 @@ export type { TaskExecutionOptions, ExecuteTaskOptions };
 const log = createLogger('task');
 
 /**
+ * Resolve a GitHub issue from task data's issue number.
+ * Returns issue array for buildPrBody, or undefined if no issue or gh CLI unavailable.
+ */
+function resolveTaskIssue(issueNumber: number | undefined): ReturnType<typeof fetchIssue>[] | undefined {
+  if (issueNumber === undefined) {
+    return undefined;
+  }
+
+  const ghStatus = checkGhCli();
+  if (!ghStatus.available) {
+    log.info('gh CLI unavailable, skipping issue resolution for PR body', { issueNumber });
+    return undefined;
+  }
+
+  try {
+    const issue = fetchIssue(issueNumber);
+    return [issue];
+  } catch (e) {
+    log.info('Failed to fetch issue for PR body, continuing without issue info', { issueNumber, error: getErrorMessage(e) });
+    return undefined;
+  }
+}
+
+/**
  * Execute a single task with piece.
  */
 export async function executeTask(options: ExecuteTaskOptions): Promise<boolean> {
-  const { task, cwd, pieceIdentifier, projectCwd, agentOverrides, interactiveUserInput, interactiveMetadata, startMovement, retryNote, abortSignal, taskPrefix } = options;
+  const { task, cwd, pieceIdentifier, projectCwd, agentOverrides, interactiveUserInput, interactiveMetadata, startMovement, retryNote, abortSignal, taskPrefix, taskColorIndex } = options;
   const pieceConfig = loadPieceByIdentifier(pieceIdentifier, projectCwd);
 
   if (!pieceConfig) {
@@ -59,6 +83,7 @@ export async function executeTask(options: ExecuteTaskOptions): Promise<boolean>
     retryNote,
     abortSignal,
     taskPrefix,
+    taskColorIndex,
   });
   return result.success;
 }
@@ -77,13 +102,13 @@ export async function executeAndCompleteTask(
   cwd: string,
   pieceName: string,
   options?: TaskExecutionOptions,
-  parallelOptions?: { abortSignal?: AbortSignal; taskPrefix?: string },
+  parallelOptions?: { abortSignal?: AbortSignal; taskPrefix?: string; taskColorIndex?: number },
 ): Promise<boolean> {
   const startedAt = new Date().toISOString();
   const executionLog: string[] = [];
 
   try {
-    const { execCwd, execPiece, isWorktree, branch, baseBranch, startMovement, retryNote, autoPr } = await resolveTaskExecution(task, cwd, pieceName);
+    const { execCwd, execPiece, isWorktree, branch, baseBranch, startMovement, retryNote, autoPr, issueNumber } = await resolveTaskExecution(task, cwd, pieceName);
 
     // cwd is always the project root; pass it as projectCwd so reports/sessions go there
     const taskSuccess = await executeTask({
@@ -96,6 +121,7 @@ export async function executeAndCompleteTask(
       retryNote,
       abortSignal: parallelOptions?.abortSignal,
       taskPrefix: parallelOptions?.taskPrefix,
+      taskColorIndex: parallelOptions?.taskColorIndex,
     });
     const completedAt = new Date().toISOString();
 
@@ -117,7 +143,8 @@ export async function executeAndCompleteTask(
           // Branch may already be pushed, continue to PR creation
           log.info('Branch push from project cwd failed (may already exist)', { error: pushError });
         }
-        const prBody = buildPrBody(undefined, `Task "${task.name}" completed successfully.`);
+        const issues = resolveTaskIssue(issueNumber);
+        const prBody = buildPrBody(issues, `Piece \`${execPiece}\` completed successfully.`);
         const prResult = createPullRequest(cwd, {
           branch,
           title: task.name.length > 100 ? `${task.name.slice(0, 97)}...` : task.name,
@@ -195,7 +222,7 @@ export async function runAllTasks(
     info(`Concurrency: ${concurrency}`);
   }
 
-  const result = await runWithWorkerPool(taskRunner, initialTasks, concurrency, cwd, pieceName, options);
+  const result = await runWithWorkerPool(taskRunner, initialTasks, concurrency, cwd, pieceName, options, globalConfig.taskPollIntervalMs);
 
   const totalCount = result.success + result.fail;
   blankLine();

@@ -14,6 +14,7 @@ vi.mock('../infra/config/index.js', () => ({
     defaultPiece: 'default',
     logLevel: 'info',
     concurrency: 1,
+    taskPollIntervalMs: 500,
   })),
 }));
 
@@ -142,6 +143,7 @@ describe('runAllTasks concurrency', () => {
         defaultPiece: 'default',
         logLevel: 'info',
         concurrency: 1,
+        taskPollIntervalMs: 500,
       });
     });
 
@@ -182,6 +184,7 @@ describe('runAllTasks concurrency', () => {
         defaultPiece: 'default',
         logLevel: 'info',
         concurrency: 3,
+        taskPollIntervalMs: 500,
       });
     });
 
@@ -209,13 +212,25 @@ describe('runAllTasks concurrency', () => {
         .mockReturnValueOnce([task1, task2, task3])
         .mockReturnValueOnce([]);
 
+      // In parallel mode, task start messages go through TaskPrefixWriter → process.stdout.write
+      const stdoutChunks: string[] = [];
+      const writeSpy = vi.spyOn(process.stdout, 'write').mockImplementation((chunk: unknown) => {
+        stdoutChunks.push(String(chunk));
+        return true;
+      });
+
       // When
       await runAllTasks('/project');
+      writeSpy.mockRestore();
 
-      // Then: Task names displayed
-      expect(mockInfo).toHaveBeenCalledWith('=== Task: task-1 ===');
-      expect(mockInfo).toHaveBeenCalledWith('=== Task: task-2 ===');
-      expect(mockInfo).toHaveBeenCalledWith('=== Task: task-3 ===');
+      // Then: Task names displayed with prefix in stdout
+      const allOutput = stdoutChunks.join('');
+      expect(allOutput).toContain('[task-1]');
+      expect(allOutput).toContain('=== Task: task-1 ===');
+      expect(allOutput).toContain('[task-2]');
+      expect(allOutput).toContain('=== Task: task-2 ===');
+      expect(allOutput).toContain('[task-3]');
+      expect(allOutput).toContain('=== Task: task-3 ===');
       expect(mockStatus).toHaveBeenCalledWith('Total', '3');
     });
 
@@ -245,6 +260,7 @@ describe('runAllTasks concurrency', () => {
         defaultPiece: 'default',
         logLevel: 'info',
         concurrency: 1,
+        taskPollIntervalMs: 500,
       });
 
       const task1 = createTask('task-1');
@@ -277,6 +293,7 @@ describe('runAllTasks concurrency', () => {
         defaultPiece: 'default',
         logLevel: 'info',
         concurrency: 3,
+        taskPollIntervalMs: 500,
       });
       // Return a valid piece config so executeTask reaches executePiece
       mockLoadPieceByIdentifier.mockReturnValue(fakePieceConfig as never);
@@ -323,6 +340,7 @@ describe('runAllTasks concurrency', () => {
         defaultPiece: 'default',
         logLevel: 'info',
         concurrency: 2,
+        taskPollIntervalMs: 500,
       });
 
       const task1 = createTask('fast');
@@ -412,6 +430,7 @@ describe('runAllTasks concurrency', () => {
         defaultPiece: 'default',
         logLevel: 'info',
         concurrency: 1,
+        taskPollIntervalMs: 500,
       });
 
       const task1 = createTask('sequential-task');

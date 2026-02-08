@@ -1,14 +1,15 @@
 /**
  * CLI subcommand definitions
  *
- * Registers all named subcommands (run, watch, add, list, switch, clear, eject, config, prompt).
+ * Registers all named subcommands (run, watch, add, list, switch, clear, eject, config, prompt, catalog).
  */
 
 import { clearPersonaSessions, getCurrentPiece } from '../../infra/config/index.js';
 import { success } from '../../shared/ui/index.js';
 import { runAllTasks, addTask, watchTasks, listTasks } from '../../features/tasks/index.js';
-import { switchPiece, switchConfig, ejectBuiltin, resetCategoriesToDefault, deploySkill } from '../../features/config/index.js';
+import { switchPiece, switchConfig, ejectBuiltin, ejectFacet, parseFacetType, VALID_FACET_TYPES, resetCategoriesToDefault, deploySkill } from '../../features/config/index.js';
 import { previewPrompts } from '../../features/prompt/index.js';
+import { showCatalog } from '../../features/catalog/index.js';
 import { program, resolvedCwd } from './program.js';
 import { resolveAgentOverrides } from './helpers.js';
 
@@ -75,11 +76,24 @@ program
 
 program
   .command('eject')
-  .description('Copy builtin piece/agents for customization (default: project .takt/)')
-  .argument('[name]', 'Specific builtin to eject')
+  .description('Copy builtin piece or facet for customization (default: project .takt/)')
+  .argument('[typeOrName]', `Piece name, or facet type (${VALID_FACET_TYPES.join(', ')})`)
+  .argument('[facetName]', 'Facet name (when first arg is a facet type)')
   .option('--global', 'Eject to ~/.takt/ instead of project .takt/')
-  .action(async (name: string | undefined, opts: { global?: boolean }) => {
-    await ejectBuiltin(name, { global: opts.global, projectDir: resolvedCwd });
+  .action(async (typeOrName: string | undefined, facetName: string | undefined, opts: { global?: boolean }) => {
+    const ejectOptions = { global: opts.global, projectDir: resolvedCwd };
+
+    if (typeOrName && facetName) {
+      const facetType = parseFacetType(typeOrName);
+      if (!facetType) {
+        console.error(`Invalid facet type: ${typeOrName}. Valid types: ${VALID_FACET_TYPES.join(', ')}`);
+        process.exitCode = 1;
+        return;
+      }
+      await ejectFacet(facetType, facetName, ejectOptions);
+    } else {
+      await ejectBuiltin(typeOrName, ejectOptions);
+    }
   });
 
 program
@@ -114,4 +128,12 @@ program
   .description('Export takt pieces/agents as Claude Code Skill (~/.claude/)')
   .action(async () => {
     await deploySkill();
+  });
+
+program
+  .command('catalog')
+  .description('List available facets (personas, policies, knowledge, instructions, output-contracts)')
+  .argument('[type]', 'Facet type to list')
+  .action((type?: string) => {
+    showCatalog(resolvedCwd, type);
   });

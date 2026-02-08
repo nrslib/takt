@@ -35,7 +35,9 @@ function createDefaultGlobalConfig(): GlobalConfig {
     logLevel: 'info',
     provider: 'claude',
     enableBuiltinPieces: true,
+    interactivePreviewMovements: 3,
     concurrency: 1,
+    taskPollIntervalMs: 500,
   };
 }
 
@@ -107,7 +109,9 @@ export class GlobalConfigManager {
       branchNameStrategy: parsed.branch_name_strategy,
       preventSleep: parsed.prevent_sleep,
       notificationSound: parsed.notification_sound,
+      interactivePreviewMovements: parsed.interactive_preview_movements,
       concurrency: parsed.concurrency,
+      taskPollIntervalMs: parsed.task_poll_interval_ms,
     };
     validateProviderModelCompatibility(config.provider, config.model);
     this.cachedConfig = config;
@@ -177,8 +181,14 @@ export class GlobalConfigManager {
     if (config.notificationSound !== undefined) {
       raw.notification_sound = config.notificationSound;
     }
+    if (config.interactivePreviewMovements !== undefined) {
+      raw.interactive_preview_movements = config.interactivePreviewMovements;
+    }
     if (config.concurrency !== undefined && config.concurrency > 1) {
       raw.concurrency = config.concurrency;
+    }
+    if (config.taskPollIntervalMs !== undefined && config.taskPollIntervalMs !== 500) {
+      raw.task_poll_interval_ms = config.taskPollIntervalMs;
     }
     writeFileSync(configPath, stringifyYaml(raw), 'utf-8');
     this.invalidateCache();

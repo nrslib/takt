@@ -258,6 +258,14 @@ takt clear
 # ビルトインピース・エージェントを Claude Code Skill としてデプロイ
 takt export-cc
 
+# 利用可能なファセットをレイヤー別に一覧表示
+takt catalog
+takt catalog personas
+
+# 特定のファセットをカスタマイズ用にコピー
+takt eject persona coder
+takt eject instruction plan --global
+
 # 各ムーブメント・フェーズの組み立て済みプロンプトをプレビュー
 takt prompt [piece]
 
@@ -428,15 +436,16 @@ TAKTには複数のビルトインピースが同梱されています:
 
 | ピース | 説明 |
 |------------|------|
-| `default` | フル開発ピース: 計画 → アーキテクチャ設計 → 実装 → AI レビュー → 並列レビュー（アーキテクト＋セキュリティ）→ スーパーバイザー承認。各レビュー段階に修正ループあり。 |
+| `default` | フル開発ピース: 計画 → 実装 → AI レビュー → 並列レビュー（アーキテクト＋QA）→ スーパーバイザー承認。各レビュー段階に修正ループあり。 |
 | `minimal` | クイックピース: 計画 → 実装 → レビュー → スーパーバイザー。高速イテレーション向けの最小構成。 |
 | `review-fix-minimal` | レビュー重視ピース: レビュー → 修正 → スーパーバイザー。レビューフィードバックに基づく反復改善向け。 |
 | `research` | リサーチピース: プランナー → ディガー → スーパーバイザー。質問せずに自律的にリサーチを実行。 |
 | `expert` | フルスタック開発ピース: アーキテクチャ、フロントエンド、セキュリティ、QA レビューと修正ループ。 |
 | `expert-cqrs` | フルスタック開発ピース（CQRS+ES特化）: CQRS+ES、フロントエンド、セキュリティ、QA レビューと修正ループ。 |
 | `magi` | エヴァンゲリオンにインスパイアされた審議システム。3つの AI ペルソナ（MELCHIOR、BALTHASAR、CASPER）が分析し投票。 |
-| `coding` | 軽量開発ピース: architect-planner → 実装 → 並列レビュー（AI アンチパターン＋アーキテクチャ）→ 修正。スーパーバイザーなしの高速フィードバックループ。 |
+| `coding` | 軽量開発ピース: planner → 実装 → 並列レビュー（AI アンチパターン＋アーキテクチャ）→ 修正。スーパーバイザーなしの高速フィードバックループ。 |
 | `passthrough` | 最小構成。タスクをそのまま coder に渡す薄いラッパー。レビューなし。 |
+| `compound-eye` | マルチモデルレビュー: Claude と Codex に同じ指示を同時送信し、両方の回答を統合。 |
 | `review-only` | 変更を加えない読み取り専用のコードレビューピース。 |
 
 **Hybrid Codex バリアント** (`*-hybrid-codex`): 主要ピースごとに、coder エージェントを Codex で実行しレビュアーは Claude を使うハイブリッド構成が用意されています。対象: default, minimal, expert, expert-cqrs, passthrough, review-fix-minimal, coding。
@@ -462,6 +471,7 @@ TAKTには複数のビルトインピースが同梱されています:
 | **research-planner** | リサーチタスクの計画・スコープ定義 |
 | **research-digger** | 深掘り調査と情報収集 |
 | **research-supervisor** | リサーチ品質の検証と網羅性の評価 |
+| **pr-commenter** | レビュー結果を GitHub PR にコメントとして投稿 |
 
 ## カスタムペルソナ
 
@@ -527,6 +537,9 @@ provider: claude         # デフォルトプロバイダー: claude または c
 model: sonnet            # デフォルトモデル（オプション）
 branch_name_strategy: romaji  # ブランチ名生成: 'romaji'（高速）または 'ai'（低速）
 prevent_sleep: false     # macOS の実行中スリープ防止（caffeinate）
+notification_sound: true # 通知音の有効/無効
+concurrency: 1           # takt run の並列タスク数（1-10、デフォルト: 1 = 逐次実行）
+interactive_preview_movements: 3  # 対話モードでのムーブメントプレビュー数（0-10、デフォルト: 3）
 
 # API Key 設定（オプション）
 # 環境変数 TAKT_ANTHROPIC_API_KEY / TAKT_OPENAI_API_KEY で上書き可能
@@ -742,6 +755,7 @@ rules:
 | `permission_mode` | - | パーミッションモード: `readonly`、`edit`、`full`（プロバイダー非依存） |
 | `output_contracts` | - | レポートファイルの出力契約定義 |
 | `quality_gates` | - | ムーブメント完了要件のAIディレクティブ |
+| `mcp_servers` | - | MCP（Model Context Protocol）サーバー設定（stdio/SSE/HTTP） |
 
 ## API使用例
 

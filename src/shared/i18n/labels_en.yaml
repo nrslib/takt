@@ -24,6 +24,17 @@ interactive:
       continue: "Continue editing"
     cancelled: "Cancelled"
     playNoTask: "Please specify task content: /play <task>"
+    personaFallback: "No persona available for the first movement. Falling back to assistant mode."
+  modeSelection:
+    prompt: "Select interactive mode:"
+    assistant: "Assistant"
+    assistantDescription: "Ask clarifying questions before generating instructions"
+    persona: "Persona"
+    personaDescription: "Converse as the first agent's persona"
+    quiet: "Quiet"
+    quietDescription: "Generate instructions without asking questions"
+    passthrough: "Passthrough"
+    passthroughDescription: "Pass your input directly as task text"
   previousTask:
     success: "✅ Previous task completed successfully"
     error: "❌ Previous task failed: {error}"

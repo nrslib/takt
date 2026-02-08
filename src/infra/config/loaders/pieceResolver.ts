@@ -5,10 +5,10 @@
  * using the priority chain: project-local → user → builtin.
  */
 
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
-import type { PieceConfig, PieceMovement } from '../../../core/models/index.js';
+import type { PieceConfig, PieceMovement, InteractiveMode } from '../../../core/models/index.js';
 import { getGlobalPiecesDir, getBuiltinPiecesDir, getProjectConfigDir } from '../paths.js';
 import { getLanguage, getDisabledBuiltins, getBuiltinPiecesEnabled } from '../global/globalConfig.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
@@ -35,7 +35,7 @@ export function listBuiltinPieceNames(options?: { includeDisabled?: boolean }): 
 }
 
 /** Get builtin piece by name */
-export function getBuiltinPiece(name: string): PieceConfig | null {
+export function getBuiltinPiece(name: string, projectCwd?: string): PieceConfig | null {
   if (!getBuiltinPiecesEnabled()) return null;
   const lang = getLanguage();
   const disabled = getDisabledBuiltins();
@@ -44,7 +44,7 @@ export function getBuiltinPiece(name: string): PieceConfig | null {
   const builtinDir = getBuiltinPiecesDir(lang);
   const yamlPath = join(builtinDir, `${name}.yaml`);
   if (existsSync(yamlPath)) {
-    return loadPieceFromFile(yamlPath);
+    return loadPieceFromFile(yamlPath, projectCwd);
   }
   return null;
 }
@@ -69,12 +69,13 @@ function resolvePath(pathInput: string, basePath: string): string {
 function loadPieceFromPath(
   filePath: string,
   basePath: string,
+  projectCwd?: string,
 ): PieceConfig | null {
   const resolvedPath = resolvePath(filePath, basePath);
   if (!existsSync(resolvedPath)) {
     return null;
   }
-  return loadPieceFromFile(resolvedPath);
+  return loadPieceFromFile(resolvedPath, projectCwd);
 }
 
 /**
@@ -106,16 +107,16 @@ export function loadPiece(
   const projectPiecesDir = join(getProjectConfigDir(projectCwd), 'pieces');
   const projectMatch = resolvePieceFile(projectPiecesDir, name);
   if (projectMatch) {
-    return loadPieceFromFile(projectMatch);
+    return loadPieceFromFile(projectMatch, projectCwd);
   }
 
   const globalPiecesDir = getGlobalPiecesDir();
   const globalMatch = resolvePieceFile(globalPiecesDir, name);
   if (globalMatch) {
-    return loadPieceFromFile(globalMatch);
+    return loadPieceFromFile(globalMatch, projectCwd);
   }
 
-  return getBuiltinPiece(name);
+  return getBuiltinPiece(name, projectCwd);
 }
 
 /**
@@ -140,7 +141,7 @@ export function loadPieceByIdentifier(
   projectCwd: string,
 ): PieceConfig | null {
   if (isPiecePath(identifier)) {
-    return loadPieceFromPath(identifier, projectCwd);
+    return loadPieceFromPath(identifier, projectCwd, projectCwd);
   }
   return loadPiece(identifier, projectCwd);
 }
@@ -175,22 +176,146 @@ function buildWorkflowString(movements: PieceMovement[]): string {
   return lines.join('\n');
 }
 
+export interface MovementPreview {
+  /** Movement name (e.g., "plan") */
+  name: string;
+  /** Persona display name (e.g., "Planner") */
+  personaDisplayName: string;
+  /** Persona prompt content (read from personaPath file) */
+  personaContent: string;
+  /** Instruction template content (already resolved at parse time) */
+  instructionContent: string;
+  /** Allowed tools for this movement */
+  allowedTools: string[];
+  /** Whether this movement can edit files */
+  canEdit: boolean;
+}
+
+/**
+ * Build movement previews for the first N movements of a piece.
+ * Follows the execution order: initialMovement → rules[0].next → ...
+ *
+ * @param piece - Loaded PieceConfig
+ * @param maxCount - Maximum number of previews to build
+ * @returns Array of MovementPreview (may be shorter than maxCount)
+ */
+function buildMovementPreviews(piece: PieceConfig, maxCount: number): MovementPreview[] {
+  if (maxCount <= 0 || piece.movements.length === 0) return [];
+
+  const movementMap = new Map<string, PieceMovement>();
+  for (const m of piece.movements) {
+    movementMap.set(m.name, m);
+  }
+
+  const previews: MovementPreview[] = [];
+  const visited = new Set<string>();
+  let currentName: string | undefined = piece.initialMovement;
+
+  while (currentName && previews.length < maxCount) {
+    if (currentName === 'COMPLETE' || currentName === 'ABORT') break;
+    if (visited.has(currentName)) break;
+    visited.add(currentName);
+
+    const movement = movementMap.get(currentName);
+    if (!movement) break;
+
+    previews.push({
+      name: movement.name,
+      personaDisplayName: movement.personaDisplayName,
+      personaContent: readMovementPersona(movement),
+      instructionContent: movement.instructionTemplate,
+      allowedTools: movement.allowedTools ?? [],
+      canEdit: movement.edit === true,
+    });
+
+    const nextName = movement.rules?.[0]?.next;
+    if (!nextName) break;
+    currentName = nextName;
+  }
+
+  return previews;
+}
+
+/**
+ * Read persona content from a movement.
+ * When personaPath is set, reads from file (returns empty on failure).
+ * Otherwise uses inline persona string.
+ */
+function readMovementPersona(movement: PieceMovement): string {
+  if (movement.personaPath) {
+    try {
+      return readFileSync(movement.personaPath, 'utf-8');
+    } catch (err) {
+      log.debug('Failed to read persona file', {
+        path: movement.personaPath,
+        error: getErrorMessage(err),
+      });
+      return '';
+    }
+  }
+  return movement.persona ?? '';
+}
+
+/** First movement info for persona mode */
+export interface FirstMovementInfo {
+  /** Persona prompt content */
+  personaContent: string;
+  /** Persona display name */
+  personaDisplayName: string;
+  /** Allowed tools for this movement */
+  allowedTools: string[];
+}
+
 /**
  * Get piece description by identifier.
- * Returns the piece name, description, and workflow structure.
+ * Returns the piece name, description, workflow structure, optional movement previews,
+ * piece-level interactive mode default, and first movement info for persona mode.
  */
 export function getPieceDescription(
   identifier: string,
   projectCwd: string,
-): { name: string; description: string; pieceStructure: string } {
+  previewCount?: number,
+): {
+  name: string;
+  description: string;
+  pieceStructure: string;
+  movementPreviews: MovementPreview[];
+  interactiveMode?: InteractiveMode;
+  firstMovement?: FirstMovementInfo;
+} {
   const piece = loadPieceByIdentifier(identifier, projectCwd);
   if (!piece) {
-    return { name: identifier, description: '', pieceStructure: '' };
+    return { name: identifier, description: '', pieceStructure: '', movementPreviews: [] };
   }
+
+  const previews = previewCount && previewCount > 0
+    ? buildMovementPreviews(piece, previewCount)
+    : [];
+
+  const firstMovement = buildFirstMovementInfo(piece);
+
   return {
     name: piece.name,
     description: piece.description ?? '',
     pieceStructure: buildWorkflowString(piece.movements),
+    movementPreviews: previews,
+    interactiveMode: piece.interactiveMode,
+    firstMovement,
+  };
+}
+
+/**
+ * Build first movement info for persona mode.
+ * Reads persona content from the initial movement.
+ */
+function buildFirstMovementInfo(piece: PieceConfig): FirstMovementInfo | undefined {
+  const movement = piece.movements.find((m) => m.name === piece.initialMovement);
+  if (!movement) return undefined;
+
+  return {
+    personaContent: readMovementPersona(movement),
+    personaDisplayName: movement.personaDisplayName,
+    allowedTools: movement.allowedTools ?? [],
   };
 }
 
@@ -271,7 +396,7 @@ export function loadAllPiecesWithSources(cwd: string): Map<string, PieceWithSour
   for (const { dir, source, disabled } of getPieceDirs(cwd)) {
     for (const entry of iteratePieceDir(dir, source, disabled)) {
       try {
-        pieces.set(entry.name, { config: loadPieceFromFile(entry.path), source: entry.source });
+        pieces.set(entry.name, { config: loadPieceFromFile(entry.path, cwd), source: entry.source });
       } catch (err) {
         log.debug('Skipping invalid piece file', { path: entry.path, error: getErrorMessage(err) });
       }

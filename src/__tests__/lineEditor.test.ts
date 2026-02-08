@@ -131,9 +131,11 @@ describe('readMultilineInput cursor navigation', () => {
   let savedStdinRemoveListener: typeof process.stdin.removeListener;
   let savedStdinResume: typeof process.stdin.resume;
   let savedStdinPause: typeof process.stdin.pause;
+  let savedColumns: number | undefined;
+  let columnsOverridden = false;
   let stdoutCalls: string[];
 
-  function setupRawStdin(rawInputs: string[]): void {
+  function setupRawStdin(rawInputs: string[], termColumns?: number): void {
     savedIsTTY = process.stdin.isTTY;
     savedIsRaw = process.stdin.isRaw;
     savedSetRawMode = process.stdin.setRawMode;
@@ -142,6 +144,13 @@ describe('readMultilineInput cursor navigation', () => {
     savedStdinRemoveListener = process.stdin.removeListener;
     savedStdinResume = process.stdin.resume;
     savedStdinPause = process.stdin.pause;
+    savedColumns = process.stdout.columns;
+    columnsOverridden = false;
+
+    if (termColumns !== undefined) {
+      Object.defineProperty(process.stdout, 'columns', { value: termColumns, configurable: true, writable: true });
+      columnsOverridden = true;
+    }
 
     Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
     Object.defineProperty(process.stdin, 'isRaw', { value: false, configurable: true, writable: true });
@@ -197,6 +206,10 @@ describe('readMultilineInput cursor navigation', () => {
     if (savedStdinRemoveListener) process.stdin.removeListener = savedStdinRemoveListener;
     if (savedStdinResume) process.stdin.resume = savedStdinResume;
     if (savedStdinPause) process.stdin.pause = savedStdinPause;
+    if (columnsOverridden) {
+      Object.defineProperty(process.stdout, 'columns', { value: savedColumns, configurable: true, writable: true });
+      columnsOverridden = false;
+    }
   }
 
   beforeEach(() => {
@@ -609,6 +622,340 @@ describe('readMultilineInput cursor navigation', () => {
 
       // Then
       expect(result).toBe('abc\ndef\nghiX');
+    });
+  });
+
+  describe('soft-wrap: arrow up within wrapped line', () => {
+    it('should move to previous display row within same logical line', async () => {
+      // Given: termWidth=20, prompt "> " (2 cols), first display row = 18 chars, second = 20 chars
+      // Type 30 chars "abcdefghijklmnopqrstuvwxyz1234" → wraps at pos 18
+      // Display row 1: "abcdefghijklmnopqr" (18 chars, cols 3-20 with prompt)
+      // Display row 2: "stuvwxyz1234" (12 chars, cols 1-12)
+      // Cursor at end (pos 30, display col 12), press ↑ → display col 12 in row 1 → pos 12
+      // Insert "X" → "abcdefghijklXmnopqrstuvwxyz1234"
+      setupRawStdin([
+        'abcdefghijklmnopqrstuvwxyz1234\x1B[AX\r',
+      ], 20);
+
+      // When
+      const result = await callReadMultilineInput('> ');
+
+      // Then
+      expect(result).toBe('abcdefghijklXmnopqrstuvwxyz1234');
+    });
+
+    it('should do nothing when on first display row of first logical line', async () => {
+      // Given: termWidth=20, prompt "> " (2 cols), type "abcdefghij" (10 chars, fits in first row of 18 cols)
+      // Cursor at end (pos 10, first display row), press ↑ → no previous row, nothing happens
+      // Insert "X" → "abcdefghijX"
+      setupRawStdin([
+        'abcdefghij\x1B[AX\r',
+      ], 20);
+
+      // When
+      const result = await callReadMultilineInput('> ');
+
+      // Then
+      expect(result).toBe('abcdefghijX');
+    });
+  });
+
+  describe('soft-wrap: arrow down within wrapped line', () => {
+    it('should move to next display row within same logical line', async () => {
+      // Given: termWidth=20, prompt "> " (2 cols), first row = 18 chars
+      // Type 30 chars, Home → pos 0, then ↓ → display col 0 in row 2 → pos 18
+      // Insert "X" → "abcdefghijklmnopqrXstuvwxyz1234"
+      setupRawStdin([
+        'abcdefghijklmnopqrstuvwxyz1234\x1B[H\x1B[BX\r',
+      ], 20);
+
+      // When
+      const result = await callReadMultilineInput('> ');
+
+      // Then
+      expect(result).toBe('abcdefghijklmnopqrXstuvwxyz1234');
+    });
+
+    it('should do nothing when on last display row of last logical line', async () => {
+      // Given: termWidth=20, prompt "> " (2 cols), type 30 chars (wraps into 2 display rows)
+      // Cursor at end (last display row), press ↓ → nothing happens
+      // Insert "X" → "abcdefghijklmnopqrstuvwxyz1234X"
+      setupRawStdin([
+        'abcdefghijklmnopqrstuvwxyz1234\x1B[BX\r',
+      ], 20);
+
+      // When
+      const result = await callReadMultilineInput('> ');
+
+      // Then
+      expect(result).toBe('abcdefghijklmnopqrstuvwxyz1234X');
+    });
+  });
+
+  describe('soft-wrap: Ctrl+A moves to display row start', () => {
+    it('should move to display row start on wrapped second row', async () => {
+      // Given: termWidth=20, prompt "> " (2 cols), type 30 chars
+      // Cursor at end (pos 30), Ctrl+A → display row start (pos 18), insert "X"
+      // Result: "abcdefghijklmnopqrXstuvwxyz1234"
+      setupRawStdin([
+        'abcdefghijklmnopqrstuvwxyz1234\x01X\r',
+      ], 20);
+
+      // When
+      const result = await callReadMultilineInput('> ');
+
+      // Then
+      expect(result).toBe('abcdefghijklmnopqrXstuvwxyz1234');
+    });
+
+    it('should move to display row start on first row', async () => {
+      // Given: termWidth=20, prompt "> " (2 cols), type 30 chars
+      // Move cursor to middle of first display row (Home, Right*5 → pos 5)
+      // Ctrl+A → pos 0, insert "X"
+      // Result: "Xabcdefghijklmnopqrstuvwxyz1234"
+      setupRawStdin([
+        'abcdefghijklmnopqrstuvwxyz1234\x1B[H\x1B[C\x1B[C\x1B[C\x1B[C\x1B[C\x01X\r',
+      ], 20);
+
+      // When
+      const result = await callReadMultilineInput('> ');
+
+      // Then
+      expect(result).toBe('Xabcdefghijklmnopqrstuvwxyz1234');
+    });
+  });
+
+  describe('soft-wrap: Ctrl+E moves to display row end', () => {
+    it('should move to display row end on first row', async () => {
+      // Given: termWidth=20, prompt "> " (2 cols), type 30 chars
+      // Home → pos 0, Ctrl+E → end of first display row (pos 18), insert "X"
+      // Result: "abcdefghijklmnopqrXstuvwxyz1234"
+      setupRawStdin([
+        'abcdefghijklmnopqrstuvwxyz1234\x1B[H\x05X\r',
+      ], 20);
+
+      // When
+      const result = await callReadMultilineInput('> ');
+
+      // Then
+      expect(result).toBe('abcdefghijklmnopqrXstuvwxyz1234');
+    });
+  });
+
+  describe('soft-wrap: Home moves to logical line start', () => {
+    it('should move from wrapped second row to logical line start', async () => {
+      // Given: termWidth=20, prompt "> " (2 cols), first row = 18 chars
+      // Type 30 chars, cursor at end (pos 30, second display row)
+      // Home → logical line start (pos 0), insert "X"
+      // Result: "Xabcdefghijklmnopqrstuvwxyz1234"
+      setupRawStdin([
+        'abcdefghijklmnopqrstuvwxyz1234\x1B[HX\r',
+      ], 20);
+
+      // When
+      const result = await callReadMultilineInput('> ');
+
+      // Then
+      expect(result).toBe('Xabcdefghijklmnopqrstuvwxyz1234');
+    });
+
+    it('should emit cursor up sequence when crossing display rows', async () => {
+      // Given: termWidth=20, prompt "> " (2 cols), type 30 chars (wraps into 2 rows)
+      // Cursor at end (second display row), Home → pos 0 (first display row)
+      setupRawStdin([
+        'abcdefghijklmnopqrstuvwxyz1234\x1B[H\r',
+      ], 20);
+
+      // When
+      await callReadMultilineInput('> ');
+
+      // Then: should contain \x1B[{n}A for moving up display rows
+      const hasUpMove = stdoutCalls.some(c => /^\x1B\[\d+A$/.test(c));
+      expect(hasUpMove).toBe(true);
+    });
+  });
+
+  describe('soft-wrap: End moves to logical line end', () => {
+    it('should move from first display row to logical line end', async () => {
+      // Given: termWidth=20, prompt "> " (2 cols), first row = 18 chars
+      // Type 30 chars, Home → pos 0, End → logical line end (pos 30), insert "X"
+      // Result: "abcdefghijklmnopqrstuvwxyz1234X"
+      setupRawStdin([
+        'abcdefghijklmnopqrstuvwxyz1234\x1B[H\x1B[FX\r',
+      ], 20);
+
+      // When
+      const result = await callReadMultilineInput('> ');
+
+      // Then
+      expect(result).toBe('abcdefghijklmnopqrstuvwxyz1234X');
+    });
+
+    it('should emit cursor down sequence when crossing display rows', async () => {
+      // Given: termWidth=20, prompt "> " (2 cols), type 30 chars (wraps into 2 rows)
+      // Home → pos 0 (first display row), End → pos 30 (second display row)
+      setupRawStdin([
+        'abcdefghijklmnopqrstuvwxyz1234\x1B[H\x1B[F\r',
+      ], 20);
+
+      // When
+      await callReadMultilineInput('> ');
+
+      // Then: should contain \x1B[{n}B for moving down display rows
+      const hasDownMove = stdoutCalls.some(c => /^\x1B\[\d+B$/.test(c));
+      expect(hasDownMove).toBe(true);
+    });
+
+    it('should stay at end when already at logical line end on last display row', async () => {
+      // Given: termWidth=20, prompt "> " (2 cols), type 30 chars
+      // Cursor at end (pos 30, already at logical line end), End → nothing changes, insert "X"
+      // Result: "abcdefghijklmnopqrstuvwxyz1234X"
+      setupRawStdin([
+        'abcdefghijklmnopqrstuvwxyz1234\x1B[FX\r',
+      ], 20);
+
+      // When
+      const result = await callReadMultilineInput('> ');
+
+      // Then
+      expect(result).toBe('abcdefghijklmnopqrstuvwxyz1234X');
+    });
+  });
+
+  describe('soft-wrap: non-wrapped text retains original behavior', () => {
+    it('should not affect arrow up on short single-line text', async () => {
+      // Given: termWidth=80, short text "abc" (no wrap), ↑ does nothing
+      setupRawStdin([
+        'abc\x1B[AX\r',
+      ], 80);
+
+      // When
+      const result = await callReadMultilineInput('> ');
+
+      // Then
+      expect(result).toBe('abcX');
+    });
+
+    it('should not affect arrow down on short single-line text', async () => {
+      // Given: termWidth=80, short text "abc" (no wrap), ↓ does nothing
+      setupRawStdin([
+        'abc\x1B[BX\r',
+      ], 80);
+
+      // When
+      const result = await callReadMultilineInput('> ');
+
+      // Then
+      expect(result).toBe('abcX');
+    });
+
+    it('should still navigate between logical lines with arrow up', async () => {
+      // Given: termWidth=80, "abcde\nfgh" (no wrap), cursor at end of "fgh", ↑ → "abcde" at col 3
+      setupRawStdin([
+        'abcde\x1B[13;2ufgh\x1B[AX\r',
+      ], 80);
+
+      // When
+      const result = await callReadMultilineInput('> ');
+
+      // Then
+      expect(result).toBe('abcXde\nfgh');
+    });
+  });
+
+  describe('soft-wrap: full-width characters', () => {
+    it('should calculate display row boundaries with full-width chars', async () => {
+      // Given: termWidth=10, prompt "> " (2 cols), first row available = 8 cols
+      // Type "あいうえ" (4 full-width chars = 8 display cols = fills first row exactly)
+      // Then type "お" (2 cols, starts second row)
+      // Cursor at end (after "お"), Ctrl+A → display row start (pos 4, start of "お")
+      // Insert "X"
+      // Result: "あいうえXお"
+      setupRawStdin([
+        'あいうえお\x01X\r',
+      ], 10);
+
+      // When
+      const result = await callReadMultilineInput('> ');
+
+      // Then
+      expect(result).toBe('あいうえXお');
+    });
+
+    it('should push full-width char to next row when only 1 column remains', async () => {
+      // Given: termWidth=10, prompt "> " (2 cols), first row available = 8 cols
+      // Type "abcdefg" (7 cols) then "あ" (2 cols) → 7+2=9 > 8, "あ" goes to row 2
+      // Cursor at end (after "あ"), Ctrl+A → display row start at "あ" (pos 7)
+      // Insert "X"
+      // Result: "abcdefgXあ"
+      setupRawStdin([
+        'abcdefgあ\x01X\r',
+      ], 10);
+
+      // When
+      const result = await callReadMultilineInput('> ');
+
+      // Then
+      expect(result).toBe('abcdefgXあ');
+    });
+  });
+
+  describe('soft-wrap: prompt width consideration', () => {
+    it('should account for prompt width in first display row', async () => {
+      // Given: termWidth=10, prompt "> " (2 cols), first row = 8 chars
+      // Type "12345678" (8 chars = fills first row) then "9" (starts row 2)
+      // Cursor at "9" (pos 9), ↑ → row 1 at display col 1, but only 8 chars available
+      // Display col 1 → pos 1
+      // Insert "X" → "1X234567890" ... wait, let me recalculate.
+      // Actually: cursor at end of "123456789" (pos 9, display col 1 in row 2)
+      // ↑ → display col 1 in row 1 → pos 1
+      // Insert "X" → "1X23456789"
+      setupRawStdin([
+        '123456789\x1B[AX\r',
+      ], 10);
+
+      // When
+      const result = await callReadMultilineInput('> ');
+
+      // Then
+      expect(result).toBe('1X23456789');
+    });
+
+    it('should not add prompt offset for second logical line', async () => {
+      // Given: termWidth=10, prompt "> " (2 cols)
+      // Type "ab\n123456789" → second logical line "123456789" (9 chars, fits in 10 col row)
+      // Cursor at end (pos 12), ↑ → "ab" at display col 9 → clamped to col 2 → pos 2 (end of "ab")
+      // Insert "X" → "abX\n123456789"
+      setupRawStdin([
+        'ab\x1B[13;2u123456789\x1B[AX\r',
+      ], 10);
+
+      // When
+      const result = await callReadMultilineInput('> ');
+
+      // Then
+      expect(result).toBe('abX\n123456789');
+    });
+  });
+
+  describe('soft-wrap: cross logical line with display rows', () => {
+    it('should move from wrapped logical line to previous logical line last display row', async () => {
+      // Given: termWidth=20, prompt "> " (2 cols)
+      // Line 1: "abcdefghijklmnopqrstuvwx" (24 chars) → wraps: row 1 (18 chars) + row 2 (6 chars)
+      // Line 2: "123"
+      // Cursor at end of "123" (display col 3), ↑ → last display row of line 1 (row 2: "uvwx", 6 chars)
+      // Display col 3 → pos 21 ("v" position... let me calculate)
+      // Row 2 of line 1 starts at pos 18 ("stuvwx"), display col 3 → pos 21
+      // Insert "X" → "abcdefghijklmnopqrstuXvwx\n123"
+      setupRawStdin([
+        'abcdefghijklmnopqrstuvwx\x1B[13;2u123\x1B[AX\r',
+      ], 20);
+
+      // When
+      const result = await callReadMultilineInput('> ');
+
+      // Then
+      expect(result).toBe('abcdefghijklmnopqrstuXvwx\n123');
     });
   });
 });

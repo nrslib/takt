@@ -4,6 +4,41 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.0] - 2026-02-08
+
+### Added
+
+- **`takt catalog` command**: List available facets (personas, policies, knowledge, instructions, output-contracts) across layers (builtin/user/project)
+- **`compound-eye` builtin piece**: Multi-model review — sends the same instruction to Claude and Codex simultaneously, then synthesizes both responses
+- **Parallel task execution**: `takt run` now uses a worker pool for concurrent task execution (controlled by `concurrency` config, default: 1)
+- **Rich line editor in interactive mode**: Shift+Enter for multiline input, cursor movement (arrow keys, Home/End), Option+Arrow word movement, Ctrl+A/E/K/U/W editing, paste bracket mode support
+- **Movement preview in interactive mode**: Injects piece movement structure (persona + instruction) into the AI planner for improved task analysis (`interactive_preview_movements` config, default: 3)
+- **MCP server configuration**: Per-movement MCP (Model Context Protocol) server settings with stdio/SSE/HTTP transport support
+- **Facet-level eject**: `takt eject persona coder` — eject individual facets by type and name for customization
+- **3-layer facet resolution**: Personas, policies, and other facets resolved via project → user → builtin lookup (name-based references supported)
+- **`pr-commenter` persona**: Specialized persona for posting review findings as GitHub PR comments
+- **`notification_sound` config**: Enable/disable notification sounds (default: true)
+- **Prompt log viewer**: `tools/prompt-log-viewer.html` for visualizing prompt-response pairs during debugging
+- Auto-PR base branch now set to the current branch before branch creation
+
+### Changed
+
+- Unified planner and architect-planner: extracted design knowledge into knowledge facets, merged into planner. Removed architect movement from default/coding pieces (plan → implement direct transition)
+- Replaced readline with raw-mode line editor in interactive mode (cursor management, inter-line movement, Kitty keyboard protocol)
+- Unified interactive mode `save_task` with `takt add` worktree setup flow
+- Added `-d` flag to caffeinate to prevent App Nap process freezing during display sleep
+- Issue references now routed through interactive mode (previously executed directly, now used as initial input)
+- SDK update: `@anthropic-ai/claude-agent-sdk` v0.2.34 → v0.2.37
+- Enhanced interactive session scoring prompts with piece structure information
+
+### Internal
+
+- Extracted `resource-resolver.ts` for facet resolution logic (separated from `pieceParser.ts`)
+- Extracted `parallelExecution.ts` (worker pool), `resolveTask.ts` (task resolution), `sigintHandler.ts` (shared SIGINT handler)
+- Unified session key generation via `session-key.ts`
+- New `lineEditor.ts` (raw-mode terminal input, escape sequence parsing, cursor management)
+- Extensive test additions: catalog, facet-resolution, eject-facet, lineEditor, formatMovementPreviews, models, debug, strip-ansi, workerPool, runAllTasks-concurrency, session-key, interactive (major expansion), cli-routing-issue-resolve, parallel-logger, engine-parallel-failure, StreamDisplay, getCurrentBranch, globalConfig-defaults, pieceExecution-debug-prompts, selectAndExecute-autoPr, it-notification-sound, it-piece-loader, permission-mode (expansion)
+
 ## [0.8.0] - 2026-02-08
 
 alpha.1 の内容を正式リリース。機能変更なし。
