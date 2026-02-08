@@ -158,6 +158,21 @@ describe('resolveRefToContent with layer resolution', () => {
     // No context, no file — returns the spec as-is (inline content behavior)
     expect(content).toBe('some-name');
   });
+
+  it('should fall back to resolveResourceContent when facet not found with context', () => {
+    // Given: facetType and context provided, but no matching facet file exists
+    // When: resolveRefToContent is called with a name that has no facet file
+    const content = resolveRefToContent(
+      'nonexistent-facet-xyz',
+      undefined,
+      tempDir,
+      'policies',
+      context,
+    );
+
+    // Then: falls back to resolveResourceContent, which returns the ref as inline content
+    expect(content).toBe('nonexistent-facet-xyz');
+  });
 });
 
 describe('resolveRefList with layer resolution', () => {

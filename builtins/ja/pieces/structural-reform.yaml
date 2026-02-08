@@ -1,0 +1,455 @@
+name: structural-reform
+description: プロジェクト全体レビューと構造改革 - 段階的なファイル分割による反復的コードベース再構築
+max_iterations: 50
+policies:
+  coding: ../policies/coding.md
+  review: ../policies/review.md
+  testing: ../policies/testing.md
+  qa: ../policies/qa.md
+knowledge:
+  backend: ../knowledge/backend.md
+  architecture: ../knowledge/architecture.md
+personas:
+  planner: ../personas/planner.md
+  coder: ../personas/coder.md
+  architecture-reviewer: ../personas/architecture-reviewer.md
+  qa-reviewer: ../personas/qa-reviewer.md
+  supervisor: ../personas/supervisor.md
+instructions:
+  implement: ../instructions/implement.md
+  review-arch: ../instructions/review-arch.md
+  review-qa: ../instructions/review-qa.md
+  fix: ../instructions/fix.md
+initial_movement: review
+loop_monitors:
+  - cycle:
+      - implement
+      - fix
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction_template: |
+        implement → reviewers → fix のループが現在の改革ターゲットに対して {cycle_count} 回繰り返されました。
+
+        各サイクルのレポートを確認し、このループが進捗しているか、
+        同じ問題を繰り返しているかを判断してください。
+
+        **参照するレポート:**
+        - アーキテクチャレビュー: {report:04-architect-review.md}
+        - QAレビュー: {report:05-qa-review.md}
+
+        **判断基準:**
+        - 各修正サイクルでレビュー指摘が解消されているか
+        - 同じ問題が解決されずに繰り返されていないか
+        - 実装が承認に向かって収束しているか
+      rules:
+        - condition: 健全（承認に向けて進捗あり）
+          next: implement
+        - condition: 非生産的（同じ問題が繰り返され、収束なし）
+          next: next_target
+movements:
+  - name: review
+    edit: false
+    persona: architecture-reviewer
+    policy: review
+    knowledge:
+      - architecture
+      - backend
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
+    instruction_template: |
+      ## ピースステータス
+      - イテレーション: {iteration}/{max_iterations}（ピース全体）
+      - ムーブメントイテレーション: {movement_iteration}（このムーブメントの実行回数）
+      - ムーブメント: review（プロジェクト全体レビュー）
+
+      ## ユーザーリクエスト
+      {task}
+
+      ## 指示
+      プロジェクトのコードベース全体に対して、包括的な構造レビューを実施してください。
+
+      **重点領域:**
+      1. **God Class/Function**: 300行を超えるファイル、複数の責務を持つクラス
+      2. **結合度**: 循環依存、モジュール間の密結合
+      3. **凝集度**: 無関係な関心事が混在した低凝集モジュール
+      4. **テスタビリティ**: 密結合や副作用によるテスト困難なコード
+      5. **レイヤー違反**: 依存方向の誤り、アダプター層にドメインロジック
+      6. **DRY違反**: 3箇所以上の重複ロジック
+
+      **発見した問題ごとに報告:**
+      - ファイルパスと行数
+      - 問題カテゴリ（God Class、低凝集など）
+      - 深刻度（Critical / High / Medium）
+      - 分離すべき具体的な責務
+      - 分割により影響を受ける依存先
+
+      **出力フォーマット:**
+
+      ```markdown
+      # プロジェクト全体構造レビュー
+
+      ## サマリー
+      - レビュー対象ファイル数: N
+      - 検出された問題: N（Critical: N, High: N, Medium: N）
+
+      ## Critical Issues
+
+      ### 1. {ファイルパス}（{行数}行）
+      - **問題**: {カテゴリ}
+      - **深刻度**: Critical
+      - **検出された責務**:
+        1. {責務1}
+        2. {責務2}
+      - **分割提案**:
+        - `{新ファイル1}.ts`: {責務}
+        - `{新ファイル2}.ts`: {責務}
+      - **影響を受ける依存先**: {このモジュールをインポートしているファイル}
+
+      ## High Priority Issues
+      ...
+
+      ## Medium Priority Issues
+      ...
+
+      ## 依存グラフの懸念事項
+      - {循環依存、レイヤー違反}
+
+      ## 推奨改革順序
+      1. {ファイル} - {優先理由}
+      2. {ファイル} - {優先理由}
+      ```
+    rules:
+      - condition: 全体レビューが完了し、問題が検出された
+        next: plan_reform
+      - condition: 構造的な問題は見つからなかった
+        next: COMPLETE
+    output_contracts:
+      report:
+        - name: 00-full-review.md
+
+  - name: plan_reform
+    edit: false
+    persona: planner
+    knowledge: architecture
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Bash
+      - WebSearch
+      - WebFetch
+    instruction_template: |
+      ## ピースステータス
+      - イテレーション: {iteration}/{max_iterations}（ピース全体）
+      - ムーブメントイテレーション: {movement_iteration}（このムーブメントの実行回数）
+      - ムーブメント: plan_reform（改革計画策定）
+
+      ## ユーザーリクエスト
+      {task}
+
+      ## 全体レビュー結果
+      {previous_response}
+
+      ## ユーザー追加入力
+      {user_inputs}
+
+      ## 指示
+      全体レビュー結果を基に、具体的な改革実行計画を策定してください。
+
+      **計画の原則:**
+      - 1イテレーションにつき1ファイルの分割（変更を管理可能に保つ）
+      - 依存順に実行：まずリーフノードを分割し、内側に向かって進む
+      - 各分割後にテストとビルドが通ること
+      - 後方互換は不要（ユーザー指示通り）
+
+      **各改革ターゲットについて指定:**
+      1. 対象ファイルと現在の行数
+      2. 提案する新ファイルと責務
+      3. 依存先ファイルのインポート変更予定
+      4. テスト戦略（新規テスト、既存テストの更新）
+      5. リスク評価（何が壊れる可能性があるか）
+
+      **出力フォーマット:**
+
+      ```markdown
+      # 構造改革計画
+
+      ## 改革ターゲット（実行優先順）
+
+      ### ターゲット1: {ファイルパス}
+      - **現状**: {行数}行、{N}個の責務
+      - **分割提案**:
+        | 新ファイル | 責務 | 推定行数 |
+        |----------|------|---------|
+        | `{パス}` | {責務} | ~{N} |
+      - **依存先ファイル**: {このモジュールをインポートしているファイル一覧}
+      - **テスト計画**: {追加・更新すべきテスト}
+      - **リスク**: {Low/Medium/High} - {説明}
+
+      ### ターゲット2: {ファイルパス}
+      ...
+
+      ## 実行順序の根拠
+      {この順序がリスクと依存関係の競合を最小化する理由}
+
+      ## 成功基準
+      - 各分割後に全テストが通る
+      - 各分割後にビルドが成功する
+      - 300行を超えるファイルがない
+      - 各ファイルが単一責務を持つ
+      ```
+    rules:
+      - condition: 改革計画が完成し、実行可能な状態
+        next: implement
+      - condition: 実行可能な改革が特定されなかった
+        next: COMPLETE
+      - condition: 要件が不明確、ユーザー入力が必要
+        next: ABORT
+        appendix: |
+          確認事項:
+          - {質問1}
+          - {質問2}
+    output_contracts:
+      report:
+        - name: 01-reform-plan.md
+          format: plan
+
+  - name: implement
+    edit: true
+    persona: coder
+    policy:
+      - coding
+      - testing
+    session: refresh
+    knowledge:
+      - backend
+      - architecture
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    permission_mode: edit
+    instruction: implement
+    rules:
+      - condition: 実装完了
+        next: reviewers
+      - condition: 判断できない、情報不足
+        next: reviewers
+      - condition: ユーザー入力が必要
+        next: implement
+        requires_user_input: true
+        interactive_only: true
+    output_contracts:
+      report:
+        - Scope: 02-coder-scope.md
+        - Decisions: 03-coder-decisions.md
+
+  - name: reviewers
+    parallel:
+      - name: arch-review
+        edit: false
+        persona: architecture-reviewer
+        policy: review
+        knowledge:
+          - architecture
+          - backend
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - WebSearch
+          - WebFetch
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        instruction: review-arch
+        output_contracts:
+          report:
+            - name: 04-architect-review.md
+              format: architecture-review
+      - name: qa-review
+        edit: false
+        persona: qa-reviewer
+        policy:
+          - review
+          - qa
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - WebSearch
+          - WebFetch
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        instruction: review-qa
+        output_contracts:
+          report:
+            - name: 05-qa-review.md
+              format: qa-review
+    rules:
+      - condition: all("approved")
+        next: verify
+      - condition: any("needs_fix")
+        next: fix
+
+  - name: fix
+    edit: true
+    persona: coder
+    policy:
+      - coding
+      - testing
+    knowledge:
+      - backend
+      - architecture
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    permission_mode: edit
+    rules:
+      - condition: 修正完了
+        next: reviewers
+      - condition: 判断できない、情報不足
+        next: plan_reform
+    instruction: fix
+
+  - name: verify
+    edit: false
+    persona: supervisor
+    policy: review
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Bash
+      - WebSearch
+      - WebFetch
+    instruction_template: |
+      ## ピースステータス
+      - イテレーション: {iteration}/{max_iterations}（ピース全体）
+      - ムーブメントイテレーション: {movement_iteration}（このムーブメントの実行回数）
+      - ムーブメント: verify（ビルド・テスト検証）
+
+      ## 指示
+      現在の改革ステップが正常に完了したことを検証してください。
+
+      **検証チェックリスト:**
+      1. **ビルド**: ビルドコマンドを実行し、成功することを確認
+      2. **テスト**: テストスイートを実行し、全テストが通ることを確認
+      3. **ファイルサイズ**: 新しいファイルが300行を超えていないことを確認
+      4. **単一責務**: 各新ファイルが明確な単一の目的を持つことを確認
+      5. **インポート整合性**: すべてのインポートが正しく更新されていることを確認
+
+      **レポートフォーマット:**
+
+      ```markdown
+      # 検証結果
+
+      ## 結果: PASS / FAIL
+
+      | チェック項目 | 状態 | 詳細 |
+      |------------|------|------|
+      | ビルド | PASS/FAIL | {出力サマリー} |
+      | テスト | PASS/FAIL | {N passed, N failed} |
+      | ファイルサイズ | PASS/FAIL | {300行超のファイルの有無} |
+      | 単一責務 | PASS/FAIL | {評価} |
+      | インポート整合性 | PASS/FAIL | {壊れたインポートの有無} |
+
+      ## 問題点（FAILの場合）
+      1. {問題の説明}
+      ```
+    rules:
+      - condition: すべての検証に合格
+        next: next_target
+      - condition: 検証に失敗
+        next: fix
+    output_contracts:
+      report:
+        - name: 06-verification.md
+          format: validation
+
+  - name: next_target
+    edit: false
+    persona: planner
+    knowledge: architecture
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Bash
+      - WebSearch
+      - WebFetch
+    instruction_template: |
+      ## ピースステータス
+      - イテレーション: {iteration}/{max_iterations}（ピース全体）
+      - ムーブメントイテレーション: {movement_iteration}（このムーブメントの実行回数）
+      - ムーブメント: next_target（進捗確認と次ターゲット選択）
+
+      ## 改革計画
+      {report:01-reform-plan.md}
+
+      ## 最新の検証結果
+      {previous_response}
+
+      ## 指示
+      構造改革の進捗を評価し、次のアクションを決定してください。
+
+      **手順:**
+      1. 改革計画を確認し、完了したターゲットを特定
+      2. 現在のコードベースの状態を計画と照合
+      3. 残りの改革ターゲットがあるか判断
+
+      **出力フォーマット:**
+
+      ```markdown
+      # 改革進捗
+
+      ## 完了ターゲット
+      | # | ターゲット | 状態 |
+      |---|----------|------|
+      | 1 | {ファイル} | 完了 |
+      | 2 | {ファイル} | 完了 |
+
+      ## 残りターゲット
+      | # | ターゲット | 優先度 |
+      |---|----------|-------|
+      | 3 | {ファイル} | 次 |
+      | 4 | {ファイル} | 保留 |
+
+      ## 次のアクション
+      - **ターゲット**: {次に改革するファイル}
+      - **計画**: {分割の概要}
+
+      ## 全体進捗
+      {N}/{合計}ターゲット完了。残りの推定イテレーション数: {N}
+      ```
+    rules:
+      - condition: まだ改革ターゲットが残っている
+        next: implement
+      - condition: すべての改革ターゲットが完了
+        next: COMPLETE
+    output_contracts:
+      report:
+        - name: 07-progress.md
+report_formats:
+  plan: ../output-contracts/plan.md
+  architecture-review: ../output-contracts/architecture-review.md
+  qa-review: ../output-contracts/qa-review.md
+  validation: ../output-contracts/validation.md
+  summary: ../output-contracts/summary.md

@@ -17,6 +17,9 @@ piece_categories:
       pieces:
         - expert
         - expert-cqrs
+    Refactoring:
+      pieces:
+        - structural-reform
   🔀 Hybrid (Codex Coding):
     🚀 Quick Start:
       pieces:

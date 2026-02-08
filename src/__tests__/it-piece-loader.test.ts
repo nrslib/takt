@@ -45,7 +45,7 @@ describe('Piece Loader IT: builtin piece loading', () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  const builtinNames = ['default', 'minimal', 'expert', 'expert-cqrs', 'research', 'magi', 'review-only', 'review-fix-minimal'];
+  const builtinNames = ['default', 'minimal', 'expert', 'expert-cqrs', 'coding', 'passthrough', 'compound-eye', 'research', 'magi', 'review-only', 'review-fix-minimal', 'structural-reform'];
 
   for (const name of builtinNames) {
     it(`should load builtin piece: ${name}`, () => {
@@ -569,6 +569,139 @@ movements:
         headers: { Authorization: 'Bearer token123' },
       },
     });
+  });
+});
+
+describe('Piece Loader IT: structural-reform piece', () => {
+  let testDir: string;
+
+  beforeEach(() => {
+    testDir = createTestDir();
+  });
+
+  afterEach(() => {
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('should load structural-reform with 7 movements', () => {
+    const config = loadPiece('structural-reform', testDir);
+
+    expect(config).not.toBeNull();
+    expect(config!.name).toBe('structural-reform');
+    expect(config!.movements.length).toBe(7);
+    expect(config!.maxIterations).toBe(50);
+    expect(config!.initialMovement).toBe('review');
+  });
+
+  it('should have expected movement names in order', () => {
+    const config = loadPiece('structural-reform', testDir);
+    expect(config).not.toBeNull();
+
+    const movementNames = config!.movements.map((m) => m.name);
+    expect(movementNames).toEqual([
+      'review',
+      'plan_reform',
+      'implement',
+      'reviewers',
+      'fix',
+      'verify',
+      'next_target',
+    ]);
+  });
+
+  it('should have review as read-only with instruction_template', () => {
+    const config = loadPiece('structural-reform', testDir);
+    expect(config).not.toBeNull();
+
+    const review = config!.movements.find((m) => m.name === 'review');
+    expect(review).toBeDefined();
+    expect(review!.edit).not.toBe(true);
+    expect(review!.instructionTemplate).toBeDefined();
+    expect(review!.instructionTemplate).toContain('{task}');
+  });
+
+  it('should have implement with edit: true and session: refresh', () => {
+    const config = loadPiece('structural-reform', testDir);
+    expect(config).not.toBeNull();
+
+    const implement = config!.movements.find((m) => m.name === 'implement');
+    expect(implement).toBeDefined();
+    expect(implement!.edit).toBe(true);
+    expect(implement!.session).toBe('refresh');
+  });
+
+  it('should have 2 parallel reviewers (arch-review and qa-review)', () => {
+    const config = loadPiece('structural-reform', testDir);
+    expect(config).not.toBeNull();
+
+    const reviewers = config!.movements.find(
+      (m) => m.parallel && m.parallel.length > 0,
+    );
+    expect(reviewers).toBeDefined();
+    expect(reviewers!.parallel!.length).toBe(2);
+
+    const subNames = reviewers!.parallel!.map((s) => s.name);
+    expect(subNames).toContain('arch-review');
+    expect(subNames).toContain('qa-review');
+  });
+
+  it('should have aggregate rules on reviewers movement', () => {
+    const config = loadPiece('structural-reform', testDir);
+    expect(config).not.toBeNull();
+
+    const reviewers = config!.movements.find(
+      (m) => m.parallel && m.parallel.length > 0,
+    );
+    expect(reviewers).toBeDefined();
+
+    const allRule = reviewers!.rules?.find(
+      (r) => r.isAggregateCondition && r.aggregateType === 'all',
+    );
+    expect(allRule).toBeDefined();
+    expect(allRule!.aggregateConditionText).toBe('approved');
+    expect(allRule!.next).toBe('verify');
+
+    const anyRule = reviewers!.rules?.find(
+      (r) => r.isAggregateCondition && r.aggregateType === 'any',
+    );
+    expect(anyRule).toBeDefined();
+    expect(anyRule!.aggregateConditionText).toBe('needs_fix');
+    expect(anyRule!.next).toBe('fix');
+  });
+
+  it('should have verify movement with instruction_template', () => {
+    const config = loadPiece('structural-reform', testDir);
+    expect(config).not.toBeNull();
+
+    const verify = config!.movements.find((m) => m.name === 'verify');
+    expect(verify).toBeDefined();
+    expect(verify!.edit).not.toBe(true);
+    expect(verify!.instructionTemplate).toBeDefined();
+  });
+
+  it('should have next_target movement routing to implement or COMPLETE', () => {
+    const config = loadPiece('structural-reform', testDir);
+    expect(config).not.toBeNull();
+
+    const nextTarget = config!.movements.find((m) => m.name === 'next_target');
+    expect(nextTarget).toBeDefined();
+    expect(nextTarget!.edit).not.toBe(true);
+
+    const nextValues = nextTarget!.rules?.map((r) => r.next);
+    expect(nextValues).toContain('implement');
+    expect(nextValues).toContain('COMPLETE');
+  });
+
+  it('should have loop_monitors for implement-fix cycle', () => {
+    const config = loadPiece('structural-reform', testDir);
+    expect(config).not.toBeNull();
+    expect(config!.loopMonitors).toBeDefined();
+    expect(config!.loopMonitors!.length).toBe(1);
+
+    const monitor = config!.loopMonitors![0]!;
+    expect(monitor.cycle).toEqual(['implement', 'fix']);
+    expect(monitor.threshold).toBe(3);
+    expect(monitor.judge).toBeDefined();
   });
 });
 
