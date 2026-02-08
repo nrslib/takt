@@ -563,3 +563,215 @@ movements:
     expect(result.movementPreviews[0].personaDisplayName).toBe('Custom Agent Name');
   });
 });
+
+describe('getPieceDescription interactiveMode field', () => {
+  let tempDir: string;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'takt-test-interactive-mode-'));
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('should return interactiveMode when piece defines interactive_mode', () => {
+    const pieceYaml = `name: test-mode
+initial_movement: step1
+max_iterations: 1
+interactive_mode: quiet
+
+movements:
+  - name: step1
+    persona: agent
+    instruction: "Do something"
+`;
+
+    const piecePath = join(tempDir, 'test-mode.yaml');
+    writeFileSync(piecePath, pieceYaml);
+
+    const result = getPieceDescription(piecePath, tempDir);
+
+    expect(result.interactiveMode).toBe('quiet');
+  });
+
+  it('should return undefined interactiveMode when piece omits interactive_mode', () => {
+    const pieceYaml = `name: test-no-mode
+initial_movement: step1
+max_iterations: 1
+
+movements:
+  - name: step1
+    persona: agent
+    instruction: "Do something"
+`;
+
+    const piecePath = join(tempDir, 'test-no-mode.yaml');
+    writeFileSync(piecePath, pieceYaml);
+
+    const result = getPieceDescription(piecePath, tempDir);
+
+    expect(result.interactiveMode).toBeUndefined();
+  });
+
+  it('should return interactiveMode for each valid mode value', () => {
+    for (const mode of ['assistant', 'persona', 'quiet', 'passthrough'] as const) {
+      const pieceYaml = `name: test-${mode}
+initial_movement: step1
+max_iterations: 1
+interactive_mode: ${mode}
+
+movements:
+  - name: step1
+    persona: agent
+    instruction: "Do something"
+`;
+
+      const piecePath = join(tempDir, `test-${mode}.yaml`);
+      writeFileSync(piecePath, pieceYaml);
+
+      const result = getPieceDescription(piecePath, tempDir);
+
+      expect(result.interactiveMode).toBe(mode);
+    }
+  });
+});
+
+describe('getPieceDescription firstMovement field', () => {
+  let tempDir: string;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'takt-test-first-movement-'));
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('should return firstMovement with inline persona content', () => {
+    const pieceYaml = `name: test-first
+initial_movement: plan
+max_iterations: 1
+
+movements:
+  - name: plan
+    persona: You are a planner.
+    persona_name: Planner
+    instruction: "Plan the task"
+    allowed_tools:
+      - Read
+      - Glob
+`;
+
+    const piecePath = join(tempDir, 'test-first.yaml');
+    writeFileSync(piecePath, pieceYaml);
+
+    const result = getPieceDescription(piecePath, tempDir);
+
+    expect(result.firstMovement).toBeDefined();
+    expect(result.firstMovement!.personaContent).toBe('You are a planner.');
+    expect(result.firstMovement!.personaDisplayName).toBe('Planner');
+    expect(result.firstMovement!.allowedTools).toEqual(['Read', 'Glob']);
+  });
+
+  it('should return firstMovement with persona file content', () => {
+    const personaContent = '# Expert Planner\nYou plan tasks with precision.';
+    const personaPath = join(tempDir, 'planner-persona.md');
+    writeFileSync(personaPath, personaContent);
+
+    const pieceYaml = `name: test-persona-file
+initial_movement: plan
+max_iterations: 1
+
+personas:
+  planner: ./planner-persona.md
+
+movements:
+  - name: plan
+    persona: planner
+    persona_name: Planner
+    instruction: "Plan the task"
+`;
+
+    const piecePath = join(tempDir, 'test-persona-file.yaml');
+    writeFileSync(piecePath, pieceYaml);
+
+    const result = getPieceDescription(piecePath, tempDir);
+
+    expect(result.firstMovement).toBeDefined();
+    expect(result.firstMovement!.personaContent).toBe(personaContent);
+  });
+
+  it('should return undefined firstMovement when initialMovement not found', () => {
+    const pieceYaml = `name: test-missing
+initial_movement: nonexistent
+max_iterations: 1
+
+movements:
+  - name: step1
+    persona: agent
+    instruction: "Do something"
+`;
+
+    const piecePath = join(tempDir, 'test-missing.yaml');
+    writeFileSync(piecePath, pieceYaml);
+
+    const result = getPieceDescription(piecePath, tempDir);
+
+    expect(result.firstMovement).toBeUndefined();
+  });
+
+  it('should return empty allowedTools array when movement has no tools', () => {
+    const pieceYaml = `name: test-no-tools
+initial_movement: step1
+max_iterations: 1
+
+movements:
+  - name: step1
+    persona: agent
+    persona_name: Agent
+    instruction: "Do something"
+`;
+
+    const piecePath = join(tempDir, 'test-no-tools.yaml');
+    writeFileSync(piecePath, pieceYaml);
+
+    const result = getPieceDescription(piecePath, tempDir);
+
+    expect(result.firstMovement).toBeDefined();
+    expect(result.firstMovement!.allowedTools).toEqual([]);
+  });
+
+  it('should fallback to inline persona when personaPath is unreadable', () => {
+    const personaPath = join(tempDir, 'unreadable.md');
+    writeFileSync(personaPath, '# Persona');
+    chmodSync(personaPath, 0o000);
+
+    const pieceYaml = `name: test-fallback
+initial_movement: step1
+max_iterations: 1
+
+personas:
+  myagent: ./unreadable.md
+
+movements:
+  - name: step1
+    persona: myagent
+    persona_name: Agent
+    instruction: "Do something"
+`;
+
+    const piecePath = join(tempDir, 'test-fallback.yaml');
+    writeFileSync(piecePath, pieceYaml);
+
+    try {
+      const result = getPieceDescription(piecePath, tempDir);
+
+      expect(result.firstMovement).toBeDefined();
+      // personaPath is unreadable, so fallback to empty (persona was resolved to a path)
+      expect(result.firstMovement!.personaContent).toBe('');
+    } finally {
+      chmodSync(personaPath, 0o644);
+    }
+  });
+});

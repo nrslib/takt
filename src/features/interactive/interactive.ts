@@ -10,29 +10,23 @@
  *   /cancel - Cancel and exit
  */
 
-import chalk from 'chalk';
 import type { Language } from '../../core/models/index.js';
 import {
-  loadGlobalConfig,
-  loadPersonaSessions,
-  updatePersonaSession,
-  loadSessionState,
-  clearSessionState,
   type SessionState,
   type MovementPreview,
 } from '../../infra/config/index.js';
-import { isQuietMode } from '../../shared/context.js';
-import { getProvider, type ProviderType } from '../../infra/providers/index.js';
 import { selectOption } from '../../shared/prompt/index.js';
-import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
-import { info, error, blankLine, StreamDisplay } from '../../shared/ui/index.js';
+import { info, blankLine } from '../../shared/ui/index.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
-import { readMultilineInput } from './lineEditor.js';
-const log = createLogger('interactive');
+import {
+  initializeSession,
+  displayAndClearSessionState,
+  runConversationLoop,
+} from './conversationLoop.js';
 
 /** Shape of interactive UI text */
-interface InteractiveUIText {
+export interface InteractiveUIText {
   intro: string;
   resume: string;
   noConversation: string;
@@ -53,7 +47,7 @@ interface InteractiveUIText {
 /**
  * Format session state for display
  */
-function formatSessionStatus(state: SessionState, lang: 'en' | 'ja'): string {
+export function formatSessionStatus(state: SessionState, lang: 'en' | 'ja'): string {
   const lines: string[] = [];
 
   // Status line
@@ -87,7 +81,7 @@ function formatSessionStatus(state: SessionState, lang: 'en' | 'ja'): string {
   return lines.join('\n');
 }
 
-function resolveLanguage(lang?: Language): 'en' | 'ja' {
+export function resolveLanguage(lang?: Language): 'en' | 'ja' {
   return lang === 'ja' ? 'ja' : 'en';
 }
 
@@ -122,35 +116,9 @@ export function formatMovementPreviews(previews: MovementPreview[], lang: 'en' |
   }).join('\n\n');
 }
 
-function getInteractivePrompts(lang: 'en' | 'ja', pieceContext?: PieceContext) {
-  const hasPreview = !!pieceContext?.movementPreviews?.length;
-  const systemPrompt = loadTemplate('score_interactive_system_prompt', lang, {
-    hasPiecePreview: hasPreview,
-    pieceStructure: pieceContext?.pieceStructure ?? '',
-    movementDetails: hasPreview ? formatMovementPreviews(pieceContext!.movementPreviews!, lang) : '',
-  });
-  const policyContent = loadTemplate('score_interactive_policy', lang, {});
-
-  return {
-    systemPrompt,
-    policyContent,
-    lang,
-    pieceContext,
-    conversationLabel: getLabel('interactive.conversationLabel', lang),
-    noTranscript: getLabel('interactive.noTranscript', lang),
-    ui: getLabelObject<InteractiveUIText>('interactive.ui', lang),
-  };
-}
-
-interface ConversationMessage {
+export interface ConversationMessage {
   role: 'user' | 'assistant';
   content: string;
-}
-
-interface CallAIResult {
-  content: string;
-  sessionId?: string;
-  success: boolean;
 }
 
 /**
@@ -167,7 +135,7 @@ function buildTaskFromHistory(history: ConversationMessage[]): string {
  * Renders the complete score_summary_system_prompt template with conversation data.
  * Returns empty string if there is no conversation to summarize.
  */
-function buildSummaryPrompt(
+export function buildSummaryPrompt(
   history: ConversationMessage[],
   hasSession: boolean,
   lang: 'en' | 'ja',
@@ -199,9 +167,9 @@ function buildSummaryPrompt(
   });
 }
 
-type PostSummaryAction = InteractiveModeAction | 'continue';
+export type PostSummaryAction = InteractiveModeAction | 'continue';
 
-async function selectPostSummaryAction(
+export async function selectPostSummaryAction(
   task: string,
   proposedLabel: string,
   ui: InteractiveUIText,
@@ -216,34 +184,6 @@ async function selectPostSummaryAction(
     { label: ui.actions.saveTask, value: 'save_task' },
     { label: ui.actions.continue, value: 'continue' },
   ]);
-}
-
-/**
- * Call AI with the same pattern as piece execution.
- * The key requirement is passing onStream — the Agent SDK requires
- * includePartialMessages to be true for the async iterator to yield.
- */
-async function callAI(
-  provider: ReturnType<typeof getProvider>,
-  prompt: string,
-  cwd: string,
-  model: string | undefined,
-  sessionId: string | undefined,
-  display: StreamDisplay,
-  systemPrompt: string,
-): Promise<CallAIResult> {
-  const agent = provider.setup({ name: 'interactive', systemPrompt });
-  const response = await agent.call(prompt, {
-    cwd,
-    model,
-    sessionId,
-    allowedTools: ['Read', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch'],
-    onStream: display.createHandler(),
-  });
-
-  display.flush();
-  const success = response.status !== 'blocked';
-  return { content: response.content, sessionId: response.sessionId, success };
 }
 
 export type InteractiveModeAction = 'execute' | 'save_task' | 'create_issue' | 'cancel';
@@ -266,6 +206,8 @@ export interface PieceContext {
   movementPreviews?: MovementPreview[];
 }
 
+export const DEFAULT_INTERACTIVE_TOOLS = ['Read', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch'];
+
 /**
  * Run the interactive task input mode.
  *
@@ -280,206 +222,37 @@ export async function interactiveMode(
   initialInput?: string,
   pieceContext?: PieceContext,
 ): Promise<InteractiveModeResult> {
-  const globalConfig = loadGlobalConfig();
-  const lang = resolveLanguage(globalConfig.language);
-  const prompts = getInteractivePrompts(lang, pieceContext);
-  if (!globalConfig.provider) {
-    throw new Error('Provider is not configured.');
-  }
-  const providerType = globalConfig.provider as ProviderType;
-  const provider = getProvider(providerType);
-  const model = (globalConfig.model as string | undefined);
+  const ctx = initializeSession(cwd, 'interactive');
 
-  const history: ConversationMessage[] = [];
-  const personaName = 'interactive';
-  const savedSessions = loadPersonaSessions(cwd, providerType);
-  let sessionId: string | undefined = savedSessions[personaName];
+  displayAndClearSessionState(cwd, ctx.lang);
 
-  // Load and display previous task state
-  const sessionState = loadSessionState(cwd);
-  if (sessionState) {
-    const statusLabel = formatSessionStatus(sessionState, lang);
-    info(statusLabel);
-    blankLine();
-    clearSessionState(cwd);
-  }
-
-  info(prompts.ui.intro);
-  if (sessionId) {
-    info(prompts.ui.resume);
-  }
-  blankLine();
-
-  /** Call AI with automatic retry on session error (stale/invalid session ID). */
-  async function callAIWithRetry(prompt: string, systemPrompt: string): Promise<CallAIResult | null> {
-    const display = new StreamDisplay('assistant', isQuietMode());
-    try {
-      const result = await callAI(
-        provider,
-        prompt,
-        cwd,
-        model,
-        sessionId,
-        display,
-        systemPrompt,
-      );
-      // If session failed, clear it and retry without session
-      if (!result.success && sessionId) {
-        log.info('Session invalid, retrying without session');
-        sessionId = undefined;
-        const retryDisplay = new StreamDisplay('assistant', isQuietMode());
-        const retry = await callAI(
-          provider,
-          prompt,
-          cwd,
-          model,
-          undefined,
-          retryDisplay,
-          systemPrompt,
-        );
-        if (retry.sessionId) {
-          sessionId = retry.sessionId;
-          updatePersonaSession(cwd, personaName, sessionId, providerType);
-        }
-        return retry;
-      }
-      if (result.sessionId) {
-        sessionId = result.sessionId;
-        updatePersonaSession(cwd, personaName, sessionId, providerType);
-      }
-      return result;
-    } catch (e) {
-      const msg = getErrorMessage(e);
-      log.error('AI call failed', { error: msg });
-      error(msg);
-      blankLine();
-      return null;
-    }
-  }
+  const hasPreview = !!pieceContext?.movementPreviews?.length;
+  const systemPrompt = loadTemplate('score_interactive_system_prompt', ctx.lang, {
+    hasPiecePreview: hasPreview,
+    pieceStructure: pieceContext?.pieceStructure ?? '',
+    movementDetails: hasPreview ? formatMovementPreviews(pieceContext!.movementPreviews!, ctx.lang) : '',
+  });
+  const policyContent = loadTemplate('score_interactive_policy', ctx.lang, {});
+  const ui = getLabelObject<InteractiveUIText>('interactive.ui', ctx.lang);
 
   /**
    * Inject policy into user message for AI call.
    * Follows the same pattern as piece execution (perform_phase1_message.md).
    */
   function injectPolicy(userMessage: string): string {
-    const policyIntro = lang === 'ja'
+    const policyIntro = ctx.lang === 'ja'
       ? '以下のポリシーは行動規範です。必ず遵守してください。'
       : 'The following policy defines behavioral guidelines. Please follow them.';
-    const reminderLabel = lang === 'ja'
+    const reminderLabel = ctx.lang === 'ja'
       ? '上記の Policy セクションで定義されたポリシー規範を遵守してください。'
       : 'Please follow the policy guidelines defined in the Policy section above.';
-    return `## Policy\n${policyIntro}\n\n${prompts.policyContent}\n\n---\n\n${userMessage}\n\n---\n**Policy Reminder:** ${reminderLabel}`;
+    return `## Policy\n${policyIntro}\n\n${policyContent}\n\n---\n\n${userMessage}\n\n---\n**Policy Reminder:** ${reminderLabel}`;
   }
 
-  // Process initial input if provided (e.g. from `takt a`)
-  if (initialInput) {
-    history.push({ role: 'user', content: initialInput });
-    log.debug('Processing initial input', { initialInput, sessionId });
-
-    const promptWithPolicy = injectPolicy(initialInput);
-    const result = await callAIWithRetry(promptWithPolicy, prompts.systemPrompt);
-    if (result) {
-      if (!result.success) {
-        error(result.content);
-        blankLine();
-        return { action: 'cancel', task: '' };
-      }
-      history.push({ role: 'assistant', content: result.content });
-      blankLine();
-    } else {
-      history.pop();
-    }
-  }
-
-  while (true) {
-    const input = await readMultilineInput(chalk.green('> '));
-
-    // EOF (Ctrl+D)
-    if (input === null) {
-      blankLine();
-      info('Cancelled');
-      return { action: 'cancel', task: '' };
-    }
-
-    const trimmed = input.trim();
-
-    // Empty input — skip
-    if (!trimmed) {
-      continue;
-    }
-
-    // Handle slash commands
-    if (trimmed.startsWith('/play')) {
-      const task = trimmed.slice(5).trim();
-      if (!task) {
-        info(prompts.ui.playNoTask);
-        continue;
-      }
-      log.info('Play command', { task });
-      return { action: 'execute', task };
-    }
-
-    if (trimmed.startsWith('/go')) {
-      const userNote = trimmed.slice(3).trim();
-      let summaryPrompt = buildSummaryPrompt(
-        history,
-        !!sessionId,
-        prompts.lang,
-        prompts.noTranscript,
-        prompts.conversationLabel,
-        prompts.pieceContext,
-      );
-      if (!summaryPrompt) {
-        info(prompts.ui.noConversation);
-        continue;
-      }
-      if (userNote) {
-        summaryPrompt = `${summaryPrompt}\n\nUser Note:\n${userNote}`;
-      }
-      const summaryResult = await callAIWithRetry(summaryPrompt, summaryPrompt);
-      if (!summaryResult) {
-        info(prompts.ui.summarizeFailed);
-        continue;
-      }
-      if (!summaryResult.success) {
-        error(summaryResult.content);
-        blankLine();
-        return { action: 'cancel', task: '' };
-      }
-      const task = summaryResult.content.trim();
-      const selectedAction = await selectPostSummaryAction(task, prompts.ui.proposed, prompts.ui);
-      if (selectedAction === 'continue' || selectedAction === null) {
-        info(prompts.ui.continuePrompt);
-        continue;
-      }
-      log.info('Interactive mode action selected', { action: selectedAction, messageCount: history.length });
-      return { action: selectedAction, task };
-    }
-
-    if (trimmed === '/cancel') {
-      info(prompts.ui.cancelled);
-      return { action: 'cancel', task: '' };
-    }
-
-    // Regular input — send to AI
-    history.push({ role: 'user', content: trimmed });
-
-    log.debug('Sending to AI', { messageCount: history.length, sessionId });
-    process.stdin.pause();
-
-    const promptWithPolicy = injectPolicy(trimmed);
-    const result = await callAIWithRetry(promptWithPolicy, prompts.systemPrompt);
-    if (result) {
-      if (!result.success) {
-        error(result.content);
-        blankLine();
-        history.pop();
-        return { action: 'cancel', task: '' };
-      }
-      history.push({ role: 'assistant', content: result.content });
-      blankLine();
-    } else {
-      history.pop();
-    }
-  }
+  return runConversationLoop(cwd, ctx, {
+    systemPrompt,
+    allowedTools: DEFAULT_INTERACTIVE_TOOLS,
+    transformPrompt: injectPolicy,
+    introMessage: ui.intro,
+  }, pieceContext, initialInput);
 }

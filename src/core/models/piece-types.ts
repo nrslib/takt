@@ -4,6 +4,7 @@
 
 import type { PermissionMode } from './status.js';
 import type { AgentResponse } from './response.js';
+import type { InteractiveMode } from './interactive-mode.js';
 
 /** Rule-based transition configuration (unified format) */
 export interface PieceRule {
@@ -184,6 +185,8 @@ export interface PieceConfig {
    * instead of prompting the user interactively.
    */
   answerAgent?: string;
+  /** Default interactive mode for this piece (overrides user default) */
+  interactiveMode?: InteractiveMode;
 }
 
 /** Runtime state of a piece execution */

@@ -7,6 +7,7 @@
 import { z } from 'zod/v4';
 import { DEFAULT_LANGUAGE } from '../../shared/constants.js';
 import { McpServersSchema } from './mcp-schemas.js';
+import { INTERACTIVE_MODES } from './interactive-mode.js';
 
 export { McpServerConfigSchema, McpServersSchema } from './mcp-schemas.js';
 
@@ -218,6 +219,9 @@ export const LoopMonitorSchema = z.object({
   judge: LoopMonitorJudgeSchema,
 });
 
+/** Interactive mode schema for piece-level default */
+export const InteractiveModeSchema = z.enum(INTERACTIVE_MODES);
+
 /** Piece configuration schema - raw YAML format */
 export const PieceConfigRawSchema = z.object({
   name: z.string().min(1),
@@ -237,6 +241,8 @@ export const PieceConfigRawSchema = z.object({
   max_iterations: z.number().int().positive().optional().default(10),
   loop_monitors: z.array(LoopMonitorSchema).optional(),
   answer_agent: z.string().optional(),
+  /** Default interactive mode for this piece (overrides user default) */
+  interactive_mode: InteractiveModeSchema.optional(),
 });
 
 /** Custom agent configuration schema */
