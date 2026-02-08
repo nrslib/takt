@@ -287,6 +287,55 @@ describe('loadGlobalConfig', () => {
     expect(config.notificationSound).toBeUndefined();
   });
 
+  it('should load interactive_preview_movements config from config.yaml', () => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(
+      getGlobalConfigPath(),
+      'language: en\ninteractive_preview_movements: 5\n',
+      'utf-8',
+    );
+
+    const config = loadGlobalConfig();
+    expect(config.interactivePreviewMovements).toBe(5);
+  });
+
+  it('should save and reload interactive_preview_movements config', () => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
+
+    const config = loadGlobalConfig();
+    config.interactivePreviewMovements = 7;
+    saveGlobalConfig(config);
+    invalidateGlobalConfigCache();
+
+    const reloaded = loadGlobalConfig();
+    expect(reloaded.interactivePreviewMovements).toBe(7);
+  });
+
+  it('should default interactive_preview_movements to 3', () => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
+
+    const config = loadGlobalConfig();
+    expect(config.interactivePreviewMovements).toBe(3);
+  });
+
+  it('should accept interactive_preview_movements: 0 to disable', () => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(
+      getGlobalConfigPath(),
+      'language: en\ninteractive_preview_movements: 0\n',
+      'utf-8',
+    );
+
+    const config = loadGlobalConfig();
+    expect(config.interactivePreviewMovements).toBe(0);
+  });
+
   describe('provider/model compatibility validation', () => {
     it('should throw when provider is codex but model is a Claude alias (opus)', () => {
       const taktDir = join(testHomeDir, '.takt');

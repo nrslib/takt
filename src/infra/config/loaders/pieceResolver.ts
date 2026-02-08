@@ -5,7 +5,7 @@
  * using the priority chain: project-local → user → builtin.
  */
 
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import type { PieceConfig, PieceMovement } from '../../../core/models/index.js';
@@ -175,22 +175,100 @@ function buildWorkflowString(movements: PieceMovement[]): string {
   return lines.join('\n');
 }
 
+export interface MovementPreview {
+  /** Movement name (e.g., "plan") */
+  name: string;
+  /** Persona display name (e.g., "Planner") */
+  personaDisplayName: string;
+  /** Persona prompt content (read from personaPath file) */
+  personaContent: string;
+  /** Instruction template content (already resolved at parse time) */
+  instructionContent: string;
+  /** Allowed tools for this movement */
+  allowedTools: string[];
+  /** Whether this movement can edit files */
+  canEdit: boolean;
+}
+
+/**
+ * Build movement previews for the first N movements of a piece.
+ * Follows the execution order: initialMovement → rules[0].next → ...
+ *
+ * @param piece - Loaded PieceConfig
+ * @param maxCount - Maximum number of previews to build
+ * @returns Array of MovementPreview (may be shorter than maxCount)
+ */
+function buildMovementPreviews(piece: PieceConfig, maxCount: number): MovementPreview[] {
+  if (maxCount <= 0 || piece.movements.length === 0) return [];
+
+  const movementMap = new Map<string, PieceMovement>();
+  for (const m of piece.movements) {
+    movementMap.set(m.name, m);
+  }
+
+  const previews: MovementPreview[] = [];
+  const visited = new Set<string>();
+  let currentName: string | undefined = piece.initialMovement;
+
+  while (currentName && previews.length < maxCount) {
+    if (currentName === 'COMPLETE' || currentName === 'ABORT') break;
+    if (visited.has(currentName)) break;
+    visited.add(currentName);
+
+    const movement = movementMap.get(currentName);
+    if (!movement) break;
+
+    let personaContent = '';
+    if (movement.personaPath) {
+      try {
+        personaContent = readFileSync(movement.personaPath, 'utf-8');
+      } catch (err) {
+        log.debug('Failed to read persona file for preview', {
+          path: movement.personaPath,
+          error: getErrorMessage(err),
+        });
+      }
+    } else if (movement.persona) {
+      personaContent = movement.persona;
+    }
+
+    previews.push({
+      name: movement.name,
+      personaDisplayName: movement.personaDisplayName,
+      personaContent,
+      instructionContent: movement.instructionTemplate,
+      allowedTools: movement.allowedTools ?? [],
+      canEdit: movement.edit === true,
+    });
+
+    const nextName = movement.rules?.[0]?.next;
+    if (!nextName) break;
+    currentName = nextName;
+  }
+
+  return previews;
+}
+
 /**
  * Get piece description by identifier.
- * Returns the piece name, description, and workflow structure.
+ * Returns the piece name, description, workflow structure, and optional movement previews.
  */
 export function getPieceDescription(
   identifier: string,
   projectCwd: string,
-): { name: string; description: string; pieceStructure: string } {
+  previewCount?: number,
+): { name: string; description: string; pieceStructure: string; movementPreviews: MovementPreview[] } {
   const piece = loadPieceByIdentifier(identifier, projectCwd);
   if (!piece) {
-    return { name: identifier, description: '', pieceStructure: '' };
+    return { name: identifier, description: '', pieceStructure: '', movementPreviews: [] };
   }
   return {
     name: piece.name,
     description: piece.description ?? '',
     pieceStructure: buildWorkflowString(piece.movements),
+    movementPreviews: previewCount && previewCount > 0
+      ? buildMovementPreviews(piece, previewCount)
+      : [],
   };
 }
 

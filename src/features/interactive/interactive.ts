@@ -20,6 +20,7 @@ import {
   loadSessionState,
   clearSessionState,
   type SessionState,
+  type MovementPreview,
 } from '../../infra/config/index.js';
 import { isQuietMode } from '../../shared/context.js';
 import { getProvider, type ProviderType } from '../../infra/providers/index.js';
@@ -90,8 +91,44 @@ function resolveLanguage(lang?: Language): 'en' | 'ja' {
   return lang === 'ja' ? 'ja' : 'en';
 }
 
+/**
+ * Format MovementPreview[] into a Markdown string for template injection.
+ * Each movement is rendered with its persona and instruction content.
+ */
+export function formatMovementPreviews(previews: MovementPreview[], lang: 'en' | 'ja'): string {
+  return previews.map((p, i) => {
+    const toolsStr = p.allowedTools.length > 0
+      ? p.allowedTools.join(', ')
+      : (lang === 'ja' ? 'なし' : 'None');
+    const editStr = p.canEdit
+      ? (lang === 'ja' ? '可' : 'Yes')
+      : (lang === 'ja' ? '不可' : 'No');
+    const personaLabel = lang === 'ja' ? 'ペルソナ' : 'Persona';
+    const instructionLabel = lang === 'ja' ? 'インストラクション' : 'Instruction';
+    const toolsLabel = lang === 'ja' ? 'ツール' : 'Tools';
+    const editLabel = lang === 'ja' ? '編集' : 'Edit';
+
+    const lines = [
+      `### ${i + 1}. ${p.name} (${p.personaDisplayName})`,
+    ];
+    if (p.personaContent) {
+      lines.push(`**${personaLabel}:**`, p.personaContent);
+    }
+    if (p.instructionContent) {
+      lines.push(`**${instructionLabel}:**`, p.instructionContent);
+    }
+    lines.push(`**${toolsLabel}:** ${toolsStr}`, `**${editLabel}:** ${editStr}`);
+    return lines.join('\n');
+  }).join('\n\n');
+}
+
 function getInteractivePrompts(lang: 'en' | 'ja', pieceContext?: PieceContext) {
-  const systemPrompt = loadTemplate('score_interactive_system_prompt', lang, {});
+  const hasPreview = !!pieceContext?.movementPreviews?.length;
+  const systemPrompt = loadTemplate('score_interactive_system_prompt', lang, {
+    hasPiecePreview: hasPreview,
+    pieceStructure: pieceContext?.pieceStructure ?? '',
+    movementDetails: hasPreview ? formatMovementPreviews(pieceContext!.movementPreviews!, lang) : '',
+  });
   const policyContent = loadTemplate('score_interactive_policy', lang, {});
 
   return {
@@ -149,10 +186,15 @@ function buildSummaryPrompt(
   }
 
   const hasPiece = !!pieceContext;
+  const hasPreview = !!pieceContext?.movementPreviews?.length;
+  const summaryMovementDetails = hasPreview
+    ? `\n### ${lang === 'ja' ? '処理するエージェント' : 'Processing Agents'}\n${formatMovementPreviews(pieceContext!.movementPreviews!, lang)}`
+    : '';
   return loadTemplate('score_summary_system_prompt', lang, {
     pieceInfo: hasPiece,
     pieceName: pieceContext?.name ?? '',
     pieceDescription: pieceContext?.description ?? '',
+    movementDetails: summaryMovementDetails,
     conversation,
   });
 }
@@ -465,6 +507,8 @@ export interface PieceContext {
   description: string;
   /** Piece structure (numbered list of movements) */
   pieceStructure: string;
+  /** Movement previews (persona + instruction content for first N movements) */
+  movementPreviews?: MovementPreview[];
 }
 
 /**

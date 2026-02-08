@@ -35,6 +35,7 @@ function createDefaultGlobalConfig(): GlobalConfig {
     logLevel: 'info',
     provider: 'claude',
     enableBuiltinPieces: true,
+    interactivePreviewMovements: 3,
   };
 }
 
@@ -106,6 +107,7 @@ export class GlobalConfigManager {
       branchNameStrategy: parsed.branch_name_strategy,
       preventSleep: parsed.prevent_sleep,
       notificationSound: parsed.notification_sound,
+      interactivePreviewMovements: parsed.interactive_preview_movements,
     };
     validateProviderModelCompatibility(config.provider, config.model);
     this.cachedConfig = config;
@@ -174,6 +176,9 @@ export class GlobalConfigManager {
     }
     if (config.notificationSound !== undefined) {
       raw.notification_sound = config.notificationSound;
+    }
+    if (config.interactivePreviewMovements !== undefined) {
+      raw.interactive_preview_movements = config.interactivePreviewMovements;
     }
     writeFileSync(configPath, stringifyYaml(raw), 'utf-8');
     this.invalidateCache();

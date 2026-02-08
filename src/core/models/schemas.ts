@@ -318,6 +318,8 @@ export const GlobalConfigSchema = z.object({
   prevent_sleep: z.boolean().optional(),
   /** Enable notification sounds (default: true when undefined) */
   notification_sound: z.boolean().optional(),
+  /** Number of movement previews to inject into interactive mode (0 to disable, max 10) */
+  interactive_preview_movements: z.number().int().min(0).max(10).optional().default(3),
 });
 
 /** Project config schema */
