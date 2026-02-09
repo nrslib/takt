@@ -10,6 +10,8 @@ piece_categories:
     pieces:
       - review-fix-minimal
       - review-only
+  🧪 テスト:
+    pieces:
       - unit-test
       - e2e-test
   🎨 フロントエンド: {}
