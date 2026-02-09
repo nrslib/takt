@@ -4,6 +4,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { determineNextMovementByRules } from '../core/piece/index.js';
+import { extractBlockedPrompt } from '../core/piece/engine/transitions.js';
 import type { PieceMovement } from '../core/models/index.js';
 
 function createMovementWithRules(rules: { condition: string; next: string }[]): PieceMovement {
@@ -77,5 +78,42 @@ describe('determineNextMovementByRules', () => {
 
     expect(determineNextMovementByRules(step, 0)).toBeNull();
     expect(determineNextMovementByRules(step, 1)).toBeNull();
+  });
+});
+
+describe('extractBlockedPrompt', () => {
+  it('should extract prompt after "必要な情報:" pattern', () => {
+    const content = '処理がブロックされました。\n必要な情報: デプロイ先の環境を教えてください';
+    expect(extractBlockedPrompt(content)).toBe('デプロイ先の環境を教えてください');
+  });
+
+  it('should extract prompt after "質問:" pattern', () => {
+    const content = '質問: どのブランチにマージしますか？';
+    expect(extractBlockedPrompt(content)).toBe('どのブランチにマージしますか？');
+  });
+
+  it('should extract prompt after "理由:" pattern', () => {
+    const content = '理由: 権限が不足しています';
+    expect(extractBlockedPrompt(content)).toBe('権限が不足しています');
+  });
+
+  it('should extract prompt after "確認:" pattern', () => {
+    const content = '確認: この変更を続けてもよいですか？';
+    expect(extractBlockedPrompt(content)).toBe('この変更を続けてもよいですか？');
+  });
+
+  it('should support full-width colon', () => {
+    const content = '必要な情報：ファイルパスを指定してください';
+    expect(extractBlockedPrompt(content)).toBe('ファイルパスを指定してください');
+  });
+
+  it('should return full content when no pattern matches', () => {
+    const content = 'Something went wrong and I need help';
+    expect(extractBlockedPrompt(content)).toBe('Something went wrong and I need help');
+  });
+
+  it('should return first matching pattern when multiple exist', () => {
+    const content = '質問: 最初の質問\n確認: 二番目の質問';
+    expect(extractBlockedPrompt(content)).toBe('最初の質問');
   });
 });
