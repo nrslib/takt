@@ -1,0 +1,236 @@
+name: e2e-test
+description: E2E test focused piece (E2E analysis → E2E implementation → review → fix)
+max_iterations: 20
+initial_movement: plan_test
+loop_monitors:
+  - cycle:
+      - ai_review
+      - ai_fix
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction_template: |
+        The ai_review ↔ ai_fix loop has repeated {cycle_count} times.
+
+        Review the reports from each cycle and determine whether this loop
+        is healthy (making progress) or unproductive (repeating the same issues).
+
+        **Reports to reference:**
+        - AI Review results: {report:04-ai-review.md}
+
+        **Judgment criteria:**
+        - Are new issues being found/fixed in each cycle?
+        - Are the same findings being repeated?
+        - Are fixes actually being applied?
+      rules:
+        - condition: Healthy (making progress)
+          next: ai_review
+        - condition: Unproductive (no improvement)
+          next: review_test
+movements:
+  - name: plan_test
+    edit: false
+    persona: test-planner
+    policy: testing
+    knowledge:
+      - architecture
+      - backend
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Bash
+      - WebSearch
+      - WebFetch
+    rules:
+      - condition: Test plan complete
+        next: implement_test
+      - condition: User is asking a question (not an E2E test task)
+        next: COMPLETE
+      - condition: Requirements unclear, insufficient info
+        next: ABORT
+        appendix: |
+          Clarifications needed:
+          - {Question 1}
+          - {Question 2}
+    instruction: plan-e2e-test
+    output_contracts:
+      report:
+        - name: 00-test-plan.md
+          format: test-plan
+
+  - name: implement_test
+    edit: true
+    persona: coder
+    policy:
+      - coding
+      - testing
+    session: refresh
+    knowledge:
+      - backend
+      - architecture
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    permission_mode: edit
+    rules:
+      - condition: Test implementation complete
+        next: ai_review
+      - condition: No implementation (report only)
+        next: ai_review
+      - condition: Cannot proceed, insufficient info
+        next: ai_review
+      - condition: User input required
+        next: implement_test
+        requires_user_input: true
+        interactive_only: true
+    instruction: implement-e2e-test
+    output_contracts:
+      report:
+        - Scope: 02-coder-scope.md
+        - Decisions: 03-coder-decisions.md
+
+  - name: ai_review
+    edit: false
+    persona: ai-antipattern-reviewer
+    policy:
+      - review
+      - ai-antipattern
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
+    rules:
+      - condition: No AI-specific issues
+        next: review_test
+      - condition: AI-specific issues found
+        next: ai_fix
+    instruction: ai-review
+    output_contracts:
+      report:
+        - name: 04-ai-review.md
+          format: ai-review
+
+  - name: ai_fix
+    edit: true
+    persona: coder
+    policy:
+      - coding
+      - testing
+    session: refresh
+    knowledge:
+      - backend
+      - architecture
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    permission_mode: edit
+    rules:
+      - condition: AI issues fixed
+        next: ai_review
+      - condition: No fix needed (verified target files/spec)
+        next: ai_no_fix
+      - condition: Cannot proceed, insufficient info
+        next: ai_no_fix
+    instruction: ai-fix
+
+  - name: ai_no_fix
+    edit: false
+    persona: architecture-reviewer
+    policy: review
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+    rules:
+      - condition: ai_review's findings are valid (fix required)
+        next: ai_fix
+      - condition: ai_fix's judgment is valid (no fix needed)
+        next: review_test
+    instruction: arbitrate
+
+  - name: review_test
+    edit: false
+    persona: qa-reviewer
+    policy:
+      - review
+      - qa
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
+    rules:
+      - condition: approved
+        next: supervise
+      - condition: needs_fix
+        next: fix
+    instruction: review-test
+    output_contracts:
+      report:
+        - name: 05-qa-review.md
+          format: qa-review
+
+  - name: fix
+    edit: true
+    persona: coder
+    policy:
+      - coding
+      - testing
+    session: refresh
+    knowledge:
+      - backend
+      - architecture
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    permission_mode: edit
+    rules:
+      - condition: Fix complete
+        next: review_test
+      - condition: Cannot proceed, insufficient info
+        next: plan_test
+    instruction: fix
+
+  - name: supervise
+    edit: false
+    persona: supervisor
+    policy: review
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Bash
+      - WebSearch
+      - WebFetch
+    rules:
+      - condition: All checks passed
+        next: COMPLETE
+      - condition: Requirements unmet, tests failing, build errors
+        next: plan_test
+    instruction: supervise
+    output_contracts:
+      report:
+        - Validation: 06-supervisor-validation.md
+        - Summary: summary.md

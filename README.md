@@ -465,6 +465,7 @@ TAKT includes multiple builtin pieces:
 | `review-only` | Read-only code review piece that makes no changes. |
 | `structural-reform` | Full project review and structural reform: iterative codebase restructuring with staged file splits. |
 | `unit-test` | Unit test focused piece: test analysis → test implementation → review → fix. |
+| `e2e-test` | E2E test focused piece: E2E analysis → E2E implementation → review → fix (Vitest-based E2E flow). |
 
 **Per-persona provider overrides:** Use `persona_providers` in config to route specific personas to different providers (e.g., coder on Codex, reviewers on Claude) without duplicating pieces.
 

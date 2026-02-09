@@ -14,10 +14,11 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 // --- Mocks ---
+const languageState = vi.hoisted(() => ({ value: 'en' as 'en' | 'ja' }));
 
 vi.mock('../infra/config/global/globalConfig.js', () => ({
   loadGlobalConfig: vi.fn().mockReturnValue({}),
-  getLanguage: vi.fn().mockReturnValue('en'),
+  getLanguage: vi.fn(() => languageState.value),
   getDisabledBuiltins: vi.fn().mockReturnValue([]),
   getBuiltinPiecesEnabled: vi.fn().mockReturnValue(true),
 }));
@@ -40,6 +41,7 @@ describe('Piece Loader IT: builtin piece loading', () => {
 
   beforeEach(() => {
     testDir = createTestDir();
+    languageState.value = 'en';
   });
 
   afterEach(() => {
@@ -63,6 +65,39 @@ describe('Piece Loader IT: builtin piece loading', () => {
   it('should return null for non-existent piece', () => {
     const config = loadPiece('non-existent-piece-xyz', testDir);
     expect(config).toBeNull();
+  });
+
+  it('should include and load e2e-test as a builtin piece', () => {
+    expect(builtinNames).toContain('e2e-test');
+
+    const config = loadPiece('e2e-test', testDir);
+    expect(config).not.toBeNull();
+
+    const planMovement = config!.movements.find((movement) => movement.name === 'plan_test');
+    const implementMovement = config!.movements.find((movement) => movement.name === 'implement_test');
+
+    expect(planMovement).toBeDefined();
+    expect(implementMovement).toBeDefined();
+    expect(planMovement!.instructionTemplate).toContain('missing E2E tests');
+    expect(implementMovement!.instructionTemplate).toContain('npm run test:e2e:mock');
+  });
+
+  it('should load e2e-test as a builtin piece in ja locale', () => {
+    languageState.value = 'ja';
+
+    const jaBuiltinNames = listBuiltinPieceNames({ includeDisabled: true });
+    expect(jaBuiltinNames).toContain('e2e-test');
+
+    const config = loadPiece('e2e-test', testDir);
+    expect(config).not.toBeNull();
+
+    const planMovement = config!.movements.find((movement) => movement.name === 'plan_test');
+    const implementMovement = config!.movements.find((movement) => movement.name === 'implement_test');
+
+    expect(planMovement).toBeDefined();
+    expect(implementMovement).toBeDefined();
+    expect(planMovement!.instructionTemplate).toContain('E2Eテスト');
+    expect(implementMovement!.instructionTemplate).toContain('npm run test:e2e:mock');
   });
 });
 

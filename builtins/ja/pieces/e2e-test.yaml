@@ -1,0 +1,236 @@
+name: e2e-test
+description: E2Eテスト追加に特化したピース（E2E分析→E2E実装→レビュー→修正）
+max_iterations: 20
+initial_movement: plan_test
+loop_monitors:
+  - cycle:
+      - ai_review
+      - ai_fix
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction_template: |
+        ai_review と ai_fix のループが {cycle_count} 回繰り返されました。
+
+        各サイクルのレポートを確認し、このループが健全（進捗がある）か、
+        非生産的（同じ問題を繰り返している）かを判断してください。
+
+        **参照するレポート:**
+        - AIレビュー結果: {report:04-ai-review.md}
+
+        **判断基準:**
+        - 各サイクルで新しい問題が発見・修正されているか
+        - 同じ指摘が繰り返されていないか
+        - 修正が実際に反映されているか
+      rules:
+        - condition: 健全（進捗あり）
+          next: ai_review
+        - condition: 非生産的（改善なし）
+          next: review_test
+movements:
+  - name: plan_test
+    edit: false
+    persona: test-planner
+    policy: testing
+    knowledge:
+      - architecture
+      - backend
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Bash
+      - WebSearch
+      - WebFetch
+    rules:
+      - condition: テスト計画が完了
+        next: implement_test
+      - condition: ユーザーが質問をしている（E2Eテスト追加タスクではない）
+        next: COMPLETE
+      - condition: 要件が不明確、情報不足
+        next: ABORT
+        appendix: |
+          確認事項:
+          - {質問1}
+          - {質問2}
+    instruction: plan-e2e-test
+    output_contracts:
+      report:
+        - name: 00-test-plan.md
+          format: test-plan
+
+  - name: implement_test
+    edit: true
+    persona: coder
+    policy:
+      - coding
+      - testing
+    session: refresh
+    knowledge:
+      - backend
+      - architecture
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    permission_mode: edit
+    rules:
+      - condition: テスト実装完了
+        next: ai_review
+      - condition: 実装未着手（レポートのみ）
+        next: ai_review
+      - condition: 判断できない、情報不足
+        next: ai_review
+      - condition: ユーザー入力が必要
+        next: implement_test
+        requires_user_input: true
+        interactive_only: true
+    instruction: implement-e2e-test
+    output_contracts:
+      report:
+        - Scope: 02-coder-scope.md
+        - Decisions: 03-coder-decisions.md
+
+  - name: ai_review
+    edit: false
+    persona: ai-antipattern-reviewer
+    policy:
+      - review
+      - ai-antipattern
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
+    rules:
+      - condition: AI特有の問題なし
+        next: review_test
+      - condition: AI特有の問題あり
+        next: ai_fix
+    instruction: ai-review
+    output_contracts:
+      report:
+        - name: 04-ai-review.md
+          format: ai-review
+
+  - name: ai_fix
+    edit: true
+    persona: coder
+    policy:
+      - coding
+      - testing
+    session: refresh
+    knowledge:
+      - backend
+      - architecture
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    permission_mode: edit
+    rules:
+      - condition: AI問題の修正完了
+        next: ai_review
+      - condition: 修正不要（指摘対象ファイル/仕様の確認済み）
+        next: ai_no_fix
+      - condition: 判断できない、情報不足
+        next: ai_no_fix
+    instruction: ai-fix
+
+  - name: ai_no_fix
+    edit: false
+    persona: architecture-reviewer
+    policy: review
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+    rules:
+      - condition: ai_reviewの指摘が妥当（修正すべき）
+        next: ai_fix
+      - condition: ai_fixの判断が妥当（修正不要）
+        next: review_test
+    instruction: arbitrate
+
+  - name: review_test
+    edit: false
+    persona: qa-reviewer
+    policy:
+      - review
+      - qa
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
+    rules:
+      - condition: approved
+        next: supervise
+      - condition: needs_fix
+        next: fix
+    instruction: review-test
+    output_contracts:
+      report:
+        - name: 05-qa-review.md
+          format: qa-review
+
+  - name: fix
+    edit: true
+    persona: coder
+    policy:
+      - coding
+      - testing
+    session: refresh
+    knowledge:
+      - backend
+      - architecture
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    permission_mode: edit
+    rules:
+      - condition: 修正完了
+        next: review_test
+      - condition: 判断できない、情報不足
+        next: plan_test
+    instruction: fix
+
+  - name: supervise
+    edit: false
+    persona: supervisor
+    policy: review
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Bash
+      - WebSearch
+      - WebFetch
+    rules:
+      - condition: すべて問題なし
+        next: COMPLETE
+      - condition: 要求未達成、テスト失敗、ビルドエラー
+        next: plan_test
+    instruction: supervise
+    output_contracts:
+      report:
+        - Validation: 06-supervisor-validation.md
+        - Summary: summary.md

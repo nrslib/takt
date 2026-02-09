@@ -9,8 +9,12 @@ import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import type { PieceWithSource } from '../infra/config/index.js';
 
+const languageState = vi.hoisted(() => ({
+  value: 'en' as 'en' | 'ja',
+}));
+
 const pathsState = vi.hoisted(() => ({
-  resourcesDir: '',
+  resourcesRoot: '',
   userCategoriesPath: '',
 }));
 
@@ -18,7 +22,7 @@ vi.mock('../infra/config/global/globalConfig.js', async (importOriginal) => {
   const original = await importOriginal() as Record<string, unknown>;
   return {
     ...original,
-    getLanguage: () => 'en',
+    getLanguage: () => languageState.value,
     getBuiltinPiecesEnabled: () => true,
     getDisabledBuiltins: () => [],
   };
@@ -28,7 +32,7 @@ vi.mock('../infra/resources/index.js', async (importOriginal) => {
   const original = await importOriginal() as Record<string, unknown>;
   return {
     ...original,
-    getLanguageResourcesDir: () => pathsState.resourcesDir,
+    getLanguageResourcesDir: (lang: string) => join(pathsState.resourcesRoot, lang),
   };
 });
 
@@ -74,10 +78,12 @@ describe('piece category config loading', () => {
 
   beforeEach(() => {
     testDir = join(tmpdir(), `takt-cat-config-${randomUUID()}`);
-    resourcesDir = join(testDir, 'resources');
+    resourcesDir = join(testDir, 'resources', 'en');
 
     mkdirSync(resourcesDir, { recursive: true });
-    pathsState.resourcesDir = resourcesDir;
+    mkdirSync(join(testDir, 'resources', 'ja'), { recursive: true });
+    pathsState.resourcesRoot = join(testDir, 'resources');
+    languageState.value = 'en';
     pathsState.userCategoriesPath = join(testDir, 'user-piece-categories.yaml');
   });
 
@@ -142,6 +148,7 @@ piece_categories:
   Review:
     pieces:
       - review-only
+      - e2e-test
 show_others_category: true
 others_category_name: Others
 `);
@@ -168,7 +175,7 @@ others_category_name: Unclassified
           { name: 'Child', pieces: ['nested'], children: [] },
         ],
       },
-      { name: 'Review', pieces: ['review-only'], children: [] },
+      { name: 'Review', pieces: ['review-only', 'e2e-test'], children: [] },
       { name: 'My Team', pieces: ['team-flow'], children: [] },
     ]);
     expect(config!.builtinPieceCategories).toEqual([
@@ -179,7 +186,7 @@ others_category_name: Unclassified
           { name: 'Child', pieces: ['nested'], children: [] },
         ],
       },
-      { name: 'Review', pieces: ['review-only'], children: [] },
+      { name: 'Review', pieces: ['review-only', 'e2e-test'], children: [] },
     ]);
     expect(config!.userPieceCategories).toEqual([
       { name: 'Main', pieces: ['custom'], children: [] },
@@ -187,6 +194,24 @@ others_category_name: Unclassified
     ]);
     expect(config!.showOthersCategory).toBe(false);
     expect(config!.othersCategoryName).toBe('Unclassified');
+  });
+
+  it('should load ja builtin categories and include e2e-test under レビュー', () => {
+    languageState.value = 'ja';
+
+    writeYaml(join(testDir, 'resources', 'ja', 'piece-categories.yaml'), `
+piece_categories:
+  レビュー:
+    pieces:
+      - review-only
+      - e2e-test
+`);
+
+    const config = getPieceCategories();
+    expect(config).not.toBeNull();
+    expect(config!.pieceCategories).toEqual([
+      { name: 'レビュー', pieces: ['review-only', 'e2e-test'], children: [] },
+    ]);
   });
 
   it('should override others settings without replacing categories when user overlay has no piece_categories', () => {

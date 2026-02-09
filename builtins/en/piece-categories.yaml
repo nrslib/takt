@@ -11,6 +11,7 @@ piece_categories:
       - review-fix-minimal
       - review-only
       - unit-test
+      - e2e-test
   🎨 Frontend: {}
   ⚙️ Backend: {}
   🔧 Expert:
