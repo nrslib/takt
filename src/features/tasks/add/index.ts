@@ -48,15 +48,22 @@ export async function saveTaskFile(
  * Extracts the first line as the issue title (truncated to 100 chars),
  * uses the full task as the body, and displays success/error messages.
  */
-export function createIssueFromTask(task: string): void {
+export function createIssueFromTask(task: string): number | undefined {
   info('Creating GitHub Issue...');
   const firstLine = task.split('\n')[0] || task;
   const title = firstLine.length > 100 ? `${firstLine.slice(0, 97)}...` : firstLine;
   const issueResult = createIssue({ title, body: task });
   if (issueResult.success) {
     success(`Issue created: ${issueResult.url}`);
+    const num = Number(issueResult.url!.split('/').pop());
+    if (Number.isNaN(num)) {
+      error('Failed to extract issue number from URL');
+      return undefined;
+    }
+    return num;
   } else {
     error(`Failed to create issue: ${issueResult.error}`);
+    return undefined;
   }
 }
 
@@ -64,6 +71,38 @@ interface WorktreeSettings {
   worktree?: boolean | string;
   branch?: string;
   autoPr?: boolean;
+}
+
+function displayTaskCreationResult(
+  created: { taskName: string; tasksFile: string },
+  settings: WorktreeSettings,
+  piece?: string,
+): void {
+  success(`Task created: ${created.taskName}`);
+  info(`  File: ${created.tasksFile}`);
+  if (settings.worktree) {
+    info(`  Worktree: ${typeof settings.worktree === 'string' ? settings.worktree : 'auto'}`);
+  }
+  if (settings.branch) {
+    info(`  Branch: ${settings.branch}`);
+  }
+  if (settings.autoPr) {
+    info(`  Auto-PR: yes`);
+  }
+  if (piece) info(`  Piece: ${piece}`);
+}
+
+/**
+ * Create a GitHub Issue and save the task to .takt/tasks.yaml.
+ *
+ * Combines issue creation and task saving into a single workflow.
+ * If issue creation fails, no task is saved.
+ */
+export async function createIssueAndSaveTask(cwd: string, task: string, piece?: string): Promise<void> {
+  const issueNumber = createIssueFromTask(task);
+  if (issueNumber !== undefined) {
+    await saveTaskFromInteractive(cwd, task, piece, { issue: issueNumber });
+  }
 }
 
 async function promptWorktreeSettings(): Promise<WorktreeSettings> {
@@ -91,21 +130,11 @@ export async function saveTaskFromInteractive(
   cwd: string,
   task: string,
   piece?: string,
+  options?: { issue?: number },
 ): Promise<void> {
   const settings = await promptWorktreeSettings();
-  const created = await saveTaskFile(cwd, task, { piece, ...settings });
-  success(`Task created: ${created.taskName}`);
-  info(`  File: ${created.tasksFile}`);
-  if (settings.worktree) {
-    info(`  Worktree: ${typeof settings.worktree === 'string' ? settings.worktree : 'auto'}`);
-  }
-  if (settings.branch) {
-    info(`  Branch: ${settings.branch}`);
-  }
-  if (settings.autoPr) {
-    info(`  Auto-PR: yes`);
-  }
-  if (piece) info(`  Piece: ${piece}`);
+  const created = await saveTaskFile(cwd, task, { piece, issue: options?.issue, ...settings });
+  displayTaskCreationResult(created, settings, piece);
 }
 
 /**
@@ -161,7 +190,7 @@ export async function addTask(cwd: string, task?: string): Promise<void> {
     const result = await interactiveMode(cwd, undefined, pieceContext);
 
     if (result.action === 'create_issue') {
-      createIssueFromTask(result.task);
+      await createIssueAndSaveTask(cwd, result.task, piece);
       return;
     }
 
@@ -184,18 +213,5 @@ export async function addTask(cwd: string, task?: string): Promise<void> {
     ...settings,
   });
 
-  success(`Task created: ${created.taskName}`);
-  info(`  File: ${created.tasksFile}`);
-  if (settings.worktree) {
-    info(`  Worktree: ${typeof settings.worktree === 'string' ? settings.worktree : 'auto'}`);
-  }
-  if (settings.branch) {
-    info(`  Branch: ${settings.branch}`);
-  }
-  if (settings.autoPr) {
-    info(`  Auto-PR: yes`);
-  }
-  if (piece) {
-    info(`  Piece: ${piece}`);
-  }
+  displayTaskCreationResult(created, settings, piece);
 }

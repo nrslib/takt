@@ -14,7 +14,7 @@ export {
   type SelectAndExecuteOptions,
   type WorktreeConfirmationResult,
 } from './execute/selectAndExecute.js';
-export { addTask, saveTaskFile, saveTaskFromInteractive, createIssueFromTask } from './add/index.js';
+export { addTask, saveTaskFile, saveTaskFromInteractive, createIssueFromTask, createIssueAndSaveTask } from './add/index.js';
 export { watchTasks } from './watch/index.js';
 export {
   listTasks,

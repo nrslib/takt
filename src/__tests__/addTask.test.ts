@@ -66,7 +66,7 @@ vi.mock('../infra/github/issue.js', () => ({
 import { interactiveMode } from '../features/interactive/index.js';
 import { promptInput, confirm } from '../shared/prompt/index.js';
 import { determinePiece } from '../features/tasks/execute/selectAndExecute.js';
-import { resolveIssueTask } from '../infra/github/issue.js';
+import { resolveIssueTask, createIssue } from '../infra/github/issue.js';
 import { addTask } from '../features/tasks/index.js';
 
 const mockResolveIssueTask = vi.mocked(resolveIssueTask);
@@ -74,6 +74,7 @@ const mockInteractiveMode = vi.mocked(interactiveMode);
 const mockPromptInput = vi.mocked(promptInput);
 const mockConfirm = vi.mocked(confirm);
 const mockDeterminePiece = vi.mocked(determinePiece);
+const mockCreateIssue = vi.mocked(createIssue);
 
 let testDir: string;
 
@@ -136,6 +137,34 @@ describe('addTask', () => {
 
     await addTask(testDir);
 
+    expect(fs.existsSync(path.join(testDir, '.takt', 'tasks.yaml'))).toBe(false);
+  });
+
+  it('should create issue and save task when create_issue action is chosen', async () => {
+    // Given
+    mockInteractiveMode.mockResolvedValue({ action: 'create_issue', task: 'New feature' });
+    mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/55' });
+    mockConfirm.mockResolvedValue(false);
+
+    // When
+    await addTask(testDir);
+
+    // Then
+    const tasks = loadTasks(testDir).tasks;
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]?.issue).toBe(55);
+    expect(tasks[0]?.content).toContain('New feature');
+  });
+
+  it('should not save task when issue creation fails in create_issue action', async () => {
+    // Given
+    mockInteractiveMode.mockResolvedValue({ action: 'create_issue', task: 'New feature' });
+    mockCreateIssue.mockReturnValue({ success: false, error: 'auth failed' });
+
+    // When
+    await addTask(testDir);
+
+    // Then
     expect(fs.existsSync(path.join(testDir, '.takt', 'tasks.yaml'))).toBe(false);
   });
 });

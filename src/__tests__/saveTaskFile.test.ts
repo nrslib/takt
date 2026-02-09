@@ -122,4 +122,16 @@ describe('saveTaskFromInteractive', () => {
 
     expect(mockInfo).toHaveBeenCalledWith('  Piece: review');
   });
+
+  it('should record issue number in tasks.yaml when issue option is provided', async () => {
+    // Given: user declines worktree
+    mockConfirm.mockResolvedValueOnce(false);
+
+    // When
+    await saveTaskFromInteractive(testDir, 'Fix login bug', 'default', { issue: 42 });
+
+    // Then
+    const task = loadTasks(testDir).tasks[0]!;
+    expect(task.issue).toBe(42);
+  });
 });
