@@ -19,29 +19,61 @@ beforeEach(() => {
 });
 
 describe('getOriginalInstruction', () => {
-  it('should extract instruction from takt-prefixed commit message', () => {
-    mockExecFileSync.mockReturnValue('takt: 認証機能を追加する\ntakt: fix-auth\n');
+  it('should extract instruction from branch entry commit via reflog', () => {
+    mockExecFileSync
+      .mockReturnValueOnce('last789\nfirst456\nbase123\n')
+      .mockReturnValueOnce('takt: 認証機能を追加する\n');
 
     const result = getOriginalInstruction('/project', 'main', 'takt/20260128-fix-auth');
 
     expect(result).toBe('認証機能を追加する');
     expect(mockExecFileSync).toHaveBeenCalledWith(
       'git',
-      ['log', '--format=%s', '--reverse', 'main..takt/20260128-fix-auth'],
+      ['reflog', 'show', '--format=%H', 'takt/20260128-fix-auth'],
+      expect.objectContaining({ cwd: '/project', encoding: 'utf-8' }),
+    );
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      'git',
+      ['show', '-s', '--format=%s', 'first456'],
       expect.objectContaining({ cwd: '/project', encoding: 'utf-8' }),
     );
   });
 
-  it('should return first commit message without takt prefix if not present', () => {
-    mockExecFileSync.mockReturnValue('Initial implementation\n');
+  it('should infer base from refs when reflog is unavailable', () => {
+    mockExecFileSync
+      .mockImplementationOnce(() => {
+        throw new Error('reflog unavailable');
+      })
+      .mockReturnValueOnce('develop\n')
+      .mockReturnValueOnce('base123\n')
+      .mockReturnValueOnce('2\n')
+      .mockReturnValueOnce('takt: Initial implementation\nfollow-up\n')
+      .mockReturnValueOnce('first456\ttakt: Initial implementation\n');
 
     const result = getOriginalInstruction('/project', 'main', 'takt/20260128-fix-auth');
 
     expect(result).toBe('Initial implementation');
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      'git',
+      ['for-each-ref', '--format=%(refname:short)', 'refs/heads', 'refs/remotes'],
+      expect.objectContaining({ cwd: '/project', encoding: 'utf-8' }),
+    );
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      'git',
+      ['merge-base', 'develop', 'takt/20260128-fix-auth'],
+      expect.objectContaining({ cwd: '/project', encoding: 'utf-8' }),
+    );
   });
 
   it('should return empty string when no commits on branch', () => {
-    mockExecFileSync.mockReturnValue('');
+    mockExecFileSync
+      .mockImplementationOnce(() => {
+        throw new Error('reflog unavailable');
+      })
+      .mockReturnValueOnce('abc123\n')
+      .mockReturnValueOnce('')
+      .mockReturnValueOnce('abc123\n')
+      .mockReturnValueOnce('');
 
     const result = getOriginalInstruction('/project', 'main', 'takt/20260128-fix-auth');
 
@@ -59,7 +91,9 @@ describe('getOriginalInstruction', () => {
   });
 
   it('should handle multi-line commit messages (use only first line)', () => {
-    mockExecFileSync.mockReturnValue('takt: Fix the login bug\ntakt: follow-up fix\n');
+    mockExecFileSync
+      .mockReturnValueOnce('f00dbabe\ndeadbeef\nbase123\n')
+      .mockReturnValueOnce('takt: Fix the login bug\n');
 
     const result = getOriginalInstruction('/project', 'main', 'takt/20260128-fix-login');
 
@@ -67,8 +101,9 @@ describe('getOriginalInstruction', () => {
   });
 
   it('should return empty string when takt prefix has no content', () => {
-    // "takt: \n" trimmed → "takt:", starts with "takt:" → slice + trim → ""
-    mockExecFileSync.mockReturnValue('takt: \n');
+    mockExecFileSync
+      .mockReturnValueOnce('cafebabe\nbase123\n')
+      .mockReturnValueOnce('takt:\n');
 
     const result = getOriginalInstruction('/project', 'main', 'takt/20260128-task');
 
@@ -76,22 +111,22 @@ describe('getOriginalInstruction', () => {
   });
 
   it('should return instruction text when takt prefix has content', () => {
-    mockExecFileSync.mockReturnValue('takt: add search feature\n');
+    mockExecFileSync
+      .mockReturnValueOnce('beadface\nbase123\n')
+      .mockReturnValueOnce('takt: add search feature\n');
 
     const result = getOriginalInstruction('/project', 'main', 'takt/20260128-task');
 
     expect(result).toBe('add search feature');
   });
 
-  it('should use correct git range with custom default branch', () => {
-    mockExecFileSync.mockReturnValue('takt: Add search feature\n');
+  it('should return original subject when branch entry commit has no takt prefix', () => {
+    mockExecFileSync
+      .mockReturnValueOnce('last789\nfirst456\nbase123\n')
+      .mockReturnValueOnce('Initial implementation\n');
 
-    getOriginalInstruction('/project', 'master', 'takt/20260128-add-search');
+    const result = getOriginalInstruction('/project', 'main', 'takt/20260128-fix-auth');
 
-    expect(mockExecFileSync).toHaveBeenCalledWith(
-      'git',
-      ['log', '--format=%s', '--reverse', 'master..takt/20260128-add-search'],
-      expect.objectContaining({ cwd: '/project' }),
-    );
+    expect(result).toBe('Initial implementation');
   });
 });

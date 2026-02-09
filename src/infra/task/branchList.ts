@@ -7,8 +7,12 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
 import { createLogger } from '../../shared/utils/index.js';
+import {
+  findFirstTaktCommit,
+  resolveBranchBaseCommit,
+  resolveGitCwd,
+} from './branchGitResolver.js';
 
 import type { BranchInfo, BranchListItem } from './types.js';
 
@@ -31,19 +35,22 @@ export class BranchManager {
       ).trim();
       const prefix = 'refs/remotes/origin/';
       return ref.startsWith(prefix) ? ref.slice(prefix.length) : ref;
-    } catch {
+    } catch (error) {
+      log.debug('detectDefaultBranch symbolic-ref failed', { error: String(error), cwd });
       try {
         execFileSync('git', ['rev-parse', '--verify', 'main'], {
           cwd, encoding: 'utf-8', stdio: 'pipe',
         });
         return 'main';
-      } catch {
+      } catch (mainError) {
+        log.debug('detectDefaultBranch main lookup failed', { error: String(mainError), cwd });
         try {
           execFileSync('git', ['rev-parse', '--verify', 'master'], {
             cwd, encoding: 'utf-8', stdio: 'pipe',
           });
           return 'master';
-        } catch {
+        } catch (masterError) {
+          log.debug('detectDefaultBranch master lookup failed', { error: String(masterError), cwd });
           return 'main';
         }
       }
@@ -110,16 +117,19 @@ export class BranchManager {
     return entries;
   }
 
-  /** Get the number of files changed between the default branch and a given branch */
+  /** Get the number of files changed between a branch and its inferred base commit */
   getFilesChanged(cwd: string, defaultBranch: string, branch: string, worktreePath?: string): number {
     try {
-      // If worktreePath is provided, use it for git diff (for worktree-sessions branches)
-      const gitCwd = worktreePath && existsSync(worktreePath) ? worktreePath : cwd;
+      const gitCwd = resolveGitCwd(cwd, worktreePath);
+      const baseCommit = resolveBranchBaseCommit(gitCwd, defaultBranch, branch);
+      if (!baseCommit) {
+        throw new Error(`Failed to resolve base commit for branch: ${branch}`);
+      }
 
-      log.debug('getFilesChanged', { gitCwd, defaultBranch, branch, worktreePath });
+      log.debug('getFilesChanged', { gitCwd, baseCommit, branch, worktreePath });
 
       const output = execFileSync(
-        'git', ['diff', '--numstat', `${defaultBranch}...${branch}`],
+        'git', ['diff', '--numstat', `${baseCommit}..${branch}`],
         { cwd: gitCwd, encoding: 'utf-8', stdio: 'pipe' },
       );
 
@@ -150,9 +160,23 @@ export class BranchManager {
     branch: string,
   ): string {
     try {
+      const firstTaktCommit = findFirstTaktCommit(cwd, defaultBranch, branch);
+      if (firstTaktCommit) {
+        const TAKT_COMMIT_PREFIX = 'takt:';
+        if (firstTaktCommit.subject.startsWith(TAKT_COMMIT_PREFIX)) {
+          return firstTaktCommit.subject.slice(TAKT_COMMIT_PREFIX.length).trim();
+        }
+        return firstTaktCommit.subject;
+      }
+
+      const baseCommit = resolveBranchBaseCommit(cwd, defaultBranch, branch);
+      if (!baseCommit) {
+        throw new Error(`Failed to resolve base commit for branch: ${branch}`);
+      }
+
       const output = execFileSync(
         'git',
-        ['log', '--format=%s', '--reverse', `${defaultBranch}..${branch}`],
+        ['log', '--format=%s', '--reverse', `${baseCommit}..${branch}`],
         { cwd, encoding: 'utf-8', stdio: 'pipe' },
       ).trim();
 
@@ -165,7 +189,8 @@ export class BranchManager {
       }
 
       return firstLine;
-    } catch {
+    } catch (error) {
+      log.debug('getOriginalInstruction failed', { error: String(error), cwd, defaultBranch, branch });
       return '';
     }
   }
