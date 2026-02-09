@@ -61,6 +61,49 @@ describe('branchGitResolver performance', () => {
     );
   });
 
+  it('should skip full ref scan when default branch candidate resolves without takt prefix', () => {
+    mockExecFileSync.mockImplementation((cmd, args) => {
+      if (cmd !== 'git') {
+        throw new Error('unexpected command');
+      }
+
+      if (args[0] === 'reflog') {
+        throw new Error('reflog unavailable');
+      }
+
+      if (args[0] === 'merge-base' && args[1] === 'main') {
+        return 'base-main';
+      }
+
+      if (args[0] === 'merge-base' && args[1] === 'origin/main') {
+        throw new Error('origin/main not available');
+      }
+
+      if (args[0] === 'rev-list') {
+        return '3';
+      }
+
+      if (args[0] === 'log' && args[1] === '--format=%s') {
+        return 'feat: add new feature';
+      }
+
+      if (args[0] === 'for-each-ref') {
+        throw new Error('for-each-ref should not be called');
+      }
+
+      throw new Error(`unexpected git args: ${args.join(' ')}`);
+    });
+
+    const baseCommit = resolveBranchBaseCommit('/project', 'main', 'takt/feature-a');
+
+    expect(baseCommit).toBe('base-main');
+    expect(mockExecFileSync).not.toHaveBeenCalledWith(
+      'git',
+      ['for-each-ref', '--format=%(refname:short)', 'refs/heads', 'refs/remotes'],
+      expect.anything(),
+    );
+  });
+
   it('should reuse ref list cache across branch resolutions', () => {
     mockExecFileSync.mockImplementation((cmd, args) => {
       if (cmd !== 'git') {

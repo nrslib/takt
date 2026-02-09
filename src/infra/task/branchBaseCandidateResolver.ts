@@ -111,12 +111,12 @@ export function resolveBranchBaseCommitFromRefs(
   }
 
   const priorityBest = chooseBestBaseCandidate(priorityCandidates);
-  if (priorityBest && priorityBest.firstSubject.startsWith(TAKT_COMMIT_PREFIX)) {
+  if (priorityBest) {
     return priorityBest.baseCommit;
   }
 
   const refs = listCandidateRefs(gitCwd, branch, cache).filter(ref => !priorityRefs.includes(ref));
-  const candidates: BaseRefCandidate[] = [...priorityCandidates];
+  const candidates: BaseRefCandidate[] = [];
 
   for (const ref of refs) {
     const candidate = resolveBaseCandidate(gitCwd, ref, branch);

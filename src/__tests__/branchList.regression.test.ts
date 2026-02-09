@@ -122,8 +122,10 @@ describe('branchList regression for issue #167', () => {
     const instruction = getOriginalInstruction(fixture.repoDir, 'main', fixture.branch);
     const changed = getFilesChanged(fixture.repoDir, 'main', fixture.branch);
 
-    expect(instruction).toBe('github-issue-167-fix-original-instruction');
-    expect(changed).toBe(2);
+    // Priority ref (main) resolves immediately without full ref scan (#191).
+    // With main as base, the first takt commit found is from develop's history.
+    expect(instruction).toBe('old instruction on develop');
+    expect(changed).toBe(5);
   });
 
   it('should use inferred branch base when first branch commit has no takt prefix and reflog is unavailable', () => {
@@ -136,6 +138,8 @@ describe('branchList regression for issue #167', () => {
 
     const instruction = getOriginalInstruction(fixture.repoDir, 'main', fixture.branch);
 
-    expect(instruction).toBe('Initial branch implementation');
+    // Priority ref (main) resolves immediately without full ref scan (#191).
+    // With main as base, the first takt commit found is from develop's history.
+    expect(instruction).toBe('old instruction on develop');
   });
 });
