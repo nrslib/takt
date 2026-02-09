@@ -15,7 +15,6 @@ import { getLanguage } from '../global/globalConfig.js';
 import {
   type PieceSections,
   type FacetResolutionContext,
-  resolveResourceContent,
   resolveRefToContent,
   resolveRefList,
   resolveSectionMap,
@@ -189,7 +188,9 @@ function normalizeStepFromRaw(
     model: step.model,
     permissionMode: step.permission_mode,
     edit: step.edit,
-    instructionTemplate: resolveResourceContent(step.instruction_template, pieceDir) || expandedInstruction || '{task}',
+    instructionTemplate: (step.instruction_template
+      ? resolveRefToContent(step.instruction_template, sections.resolvedInstructions, pieceDir, 'instructions', context)
+      : undefined) || expandedInstruction || '{task}',
     rules,
     outputContracts: normalizeOutputContracts(step.output_contracts, pieceDir, sections.resolvedReportFormats, context),
     qualityGates: step.quality_gates,
@@ -217,7 +218,9 @@ function normalizeLoopMonitorJudge(
   return {
     persona: personaSpec,
     personaPath,
-    instructionTemplate: resolveResourceContent(raw.instruction_template, pieceDir),
+    instructionTemplate: raw.instruction_template
+      ? resolveRefToContent(raw.instruction_template, sections.resolvedInstructions, pieceDir, 'instructions', context)
+      : undefined,
     rules: raw.rules.map((r) => ({ condition: r.condition, next: r.next })),
   };
 }

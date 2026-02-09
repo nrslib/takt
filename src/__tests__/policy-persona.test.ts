@@ -548,6 +548,86 @@ describe('section reference resolution', () => {
     expect(config.movements[0]!.instructionTemplate).toBe('Implement the feature.');
   });
 
+  it('should resolve instruction_template from instructions section by name', () => {
+    const raw = {
+      name: 'test-piece',
+      instructions: { implement: './instructions/implement.md' },
+      movements: [{
+        name: 'impl',
+        persona: 'coder',
+        instruction_template: 'implement',
+      }],
+    };
+
+    const config = normalizePieceConfig(raw, testDir);
+    expect(config.movements[0]!.instructionTemplate).toBe('Implement the feature.');
+  });
+
+  it('should resolve instruction_template by bare name via 3-layer facet resolution', () => {
+    const projectInstructionsDir = join(testDir, '.takt', 'instructions');
+    mkdirSync(projectInstructionsDir, { recursive: true });
+    writeFileSync(join(projectInstructionsDir, 'implement.md'), 'Project implement instruction.');
+
+    const raw = {
+      name: 'test-piece',
+      movements: [{
+        name: 'impl',
+        persona: 'coder',
+        instruction_template: 'implement',
+      }],
+    };
+
+    const config = normalizePieceConfig(raw, testDir, { projectDir: testDir, lang: 'ja' });
+    expect(config.movements[0]!.instructionTemplate).toBe('Project implement instruction.');
+  });
+
+  it('should resolve loop_monitors judge instruction_template from instructions section by name', () => {
+    const raw = {
+      name: 'test-piece',
+      instructions: { implement: './instructions/implement.md' },
+      movements: [{
+        name: 'impl',
+        instruction: '{task}',
+      }],
+      loop_monitors: [{
+        cycle: ['impl', 'fix'],
+        threshold: 2,
+        judge: {
+          instruction_template: 'implement',
+          rules: [{ condition: 'continue', next: 'impl' }],
+        },
+      }],
+    };
+
+    const config = normalizePieceConfig(raw, testDir);
+    expect(config.loopMonitors?.[0]?.judge.instructionTemplate).toBe('Implement the feature.');
+  });
+
+  it('should resolve loop_monitors judge instruction_template by bare name via 3-layer facet resolution', () => {
+    const projectInstructionsDir = join(testDir, '.takt', 'instructions');
+    mkdirSync(projectInstructionsDir, { recursive: true });
+    writeFileSync(join(projectInstructionsDir, 'implement.md'), 'Project loop monitor instruction.');
+
+    const raw = {
+      name: 'test-piece',
+      movements: [{
+        name: 'impl',
+        instruction: '{task}',
+      }],
+      loop_monitors: [{
+        cycle: ['impl', 'fix'],
+        threshold: 2,
+        judge: {
+          instruction_template: 'implement',
+          rules: [{ condition: 'continue', next: 'impl' }],
+        },
+      }],
+    };
+
+    const config = normalizePieceConfig(raw, testDir, { projectDir: testDir, lang: 'ja' });
+    expect(config.loopMonitors?.[0]?.judge.instructionTemplate).toBe('Project loop monitor instruction.');
+  });
+
   it('should resolve output contract from report_formats section by name', () => {
     const raw = {
       name: 'test-piece',

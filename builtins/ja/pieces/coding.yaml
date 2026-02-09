@@ -1,24 +1,6 @@
 name: coding
 description: Lightweight development piece with planning and parallel reviews (plan -> implement -> parallel review -> complete)
 max_iterations: 20
-policies:
-  coding: ../policies/coding.md
-  review: ../policies/review.md
-  testing: ../policies/testing.md
-  ai-antipattern: ../policies/ai-antipattern.md
-knowledge:
-  architecture: ../knowledge/architecture.md
-personas:
-  planner: ../personas/planner.md
-  coder: ../personas/coder.md
-  ai-antipattern-reviewer: ../personas/ai-antipattern-reviewer.md
-  architecture-reviewer: ../personas/architecture-reviewer.md
-instructions:
-  plan: ../instructions/plan.md
-  implement: ../instructions/implement.md
-  ai-review: ../instructions/ai-review.md
-  review-arch: ../instructions/review-arch.md
-  fix: ../instructions/fix.md
 initial_movement: plan
 movements:
   - name: plan
@@ -150,7 +132,3 @@ movements:
       - condition: 判断できない、情報不足
         next: ABORT
     instruction: fix
-report_formats:
-  plan: ../output-contracts/plan.md
-  ai-review: ../output-contracts/ai-review.md
-  architecture-review: ../output-contracts/architecture-review.md

@@ -1,10 +1,6 @@
 name: research
 description: Research piece - autonomously executes research without asking questions
 max_iterations: 10
-personas:
-  research-planner: ../personas/research-planner.md
-  research-digger: ../personas/research-digger.md
-  research-supervisor: ../personas/research-supervisor.md
 initial_movement: plan
 movements:
   - name: plan

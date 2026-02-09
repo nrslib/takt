@@ -1,25 +1,6 @@
 name: structural-reform
 description: プロジェクト全体レビューと構造改革 - 段階的なファイル分割による反復的コードベース再構築
 max_iterations: 50
-policies:
-  coding: ../policies/coding.md
-  review: ../policies/review.md
-  testing: ../policies/testing.md
-  qa: ../policies/qa.md
-knowledge:
-  backend: ../knowledge/backend.md
-  architecture: ../knowledge/architecture.md
-personas:
-  planner: ../personas/planner.md
-  coder: ../personas/coder.md
-  architecture-reviewer: ../personas/architecture-reviewer.md
-  qa-reviewer: ../personas/qa-reviewer.md
-  supervisor: ../personas/supervisor.md
-instructions:
-  implement: ../instructions/implement.md
-  review-arch: ../instructions/review-arch.md
-  review-qa: ../instructions/review-qa.md
-  fix: ../instructions/fix.md
 initial_movement: review
 loop_monitors:
   - cycle:
@@ -447,9 +428,3 @@ movements:
     output_contracts:
       report:
         - name: 07-progress.md
-report_formats:
-  plan: ../output-contracts/plan.md
-  architecture-review: ../output-contracts/architecture-review.md
-  qa-review: ../output-contracts/qa-review.md
-  validation: ../output-contracts/validation.md
-  summary: ../output-contracts/summary.md

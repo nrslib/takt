@@ -1,41 +1,6 @@
 name: expert-cqrs
 description: CQRS+ES・フロントエンド・セキュリティ・QA専門家レビュー
 max_iterations: 30
-policies:
-  coding: ../policies/coding.md
-  review: ../policies/review.md
-  testing: ../policies/testing.md
-  ai-antipattern: ../policies/ai-antipattern.md
-  qa: ../policies/qa.md
-knowledge:
-  frontend: ../knowledge/frontend.md
-  backend: ../knowledge/backend.md
-  cqrs-es: ../knowledge/cqrs-es.md
-  security: ../knowledge/security.md
-  architecture: ../knowledge/architecture.md
-personas:
-  planner: ../personas/planner.md
-  coder: ../personas/coder.md
-  ai-antipattern-reviewer: ../personas/ai-antipattern-reviewer.md
-  architecture-reviewer: ../personas/architecture-reviewer.md
-  cqrs-es-reviewer: ../personas/cqrs-es-reviewer.md
-  frontend-reviewer: ../personas/frontend-reviewer.md
-  security-reviewer: ../personas/security-reviewer.md
-  qa-reviewer: ../personas/qa-reviewer.md
-  expert-supervisor: ../personas/expert-supervisor.md
-instructions:
-  plan: ../instructions/plan.md
-  implement: ../instructions/implement.md
-  ai-review: ../instructions/ai-review.md
-  ai-fix: ../instructions/ai-fix.md
-  arbitrate: ../instructions/arbitrate.md
-  review-cqrs-es: ../instructions/review-cqrs-es.md
-  review-frontend: ../instructions/review-frontend.md
-  review-security: ../instructions/review-security.md
-  review-qa: ../instructions/review-qa.md
-  fix: ../instructions/fix.md
-  supervise: ../instructions/supervise.md
-  fix-supervisor: ../instructions/fix-supervisor.md
 initial_movement: plan
 movements:
   - name: plan
@@ -323,12 +288,3 @@ movements:
         next: supervise
       - condition: 修正を進行できない
         next: plan
-report_formats:
-  plan: ../output-contracts/plan.md
-  ai-review: ../output-contracts/ai-review.md
-  cqrs-es-review: ../output-contracts/cqrs-es-review.md
-  frontend-review: ../output-contracts/frontend-review.md
-  security-review: ../output-contracts/security-review.md
-  qa-review: ../output-contracts/qa-review.md
-  validation: ../output-contracts/validation.md
-  summary: ../output-contracts/summary.md

@@ -1,10 +1,6 @@
 name: research
 description: 調査ピース - 質問せずに自律的に調査を実行
 max_iterations: 10
-personas:
-  research-planner: ../personas/research-planner.md
-  research-digger: ../personas/research-digger.md
-  research-supervisor: ../personas/research-supervisor.md
 initial_movement: plan
 movements:
   - name: plan

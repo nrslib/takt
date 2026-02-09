@@ -1,32 +1,6 @@
 name: default
 description: Standard development piece with planning and specialized reviews
 max_iterations: 30
-policies:
-  coding: ../policies/coding.md
-  review: ../policies/review.md
-  testing: ../policies/testing.md
-  ai-antipattern: ../policies/ai-antipattern.md
-  qa: ../policies/qa.md
-knowledge:
-  architecture: ../knowledge/architecture.md
-  backend: ../knowledge/backend.md
-personas:
-  planner: ../personas/planner.md
-  coder: ../personas/coder.md
-  ai-antipattern-reviewer: ../personas/ai-antipattern-reviewer.md
-  architecture-reviewer: ../personas/architecture-reviewer.md
-  qa-reviewer: ../personas/qa-reviewer.md
-  supervisor: ../personas/supervisor.md
-instructions:
-  plan: ../instructions/plan.md
-  implement: ../instructions/implement.md
-  ai-review: ../instructions/ai-review.md
-  ai-fix: ../instructions/ai-fix.md
-  arbitrate: ../instructions/arbitrate.md
-  review-arch: ../instructions/review-arch.md
-  review-qa: ../instructions/review-qa.md
-  fix: ../instructions/fix.md
-  supervise: ../instructions/supervise.md
 initial_movement: plan
 loop_monitors:
   - cycle:
@@ -282,10 +256,3 @@ movements:
       report:
         - Validation: 07-supervisor-validation.md
         - Summary: summary.md
-report_formats:
-  plan: ../output-contracts/plan.md
-  ai-review: ../output-contracts/ai-review.md
-  architecture-review: ../output-contracts/architecture-review.md
-  qa-review: ../output-contracts/qa-review.md
-  validation: ../output-contracts/validation.md
-  summary: ../output-contracts/summary.md

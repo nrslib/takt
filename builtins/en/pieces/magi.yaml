@@ -1,10 +1,6 @@
 name: magi
 description: MAGI Deliberation System - Analyze from 3 perspectives and decide by majority
 max_iterations: 5
-personas:
-  melchior: ../personas/melchior.md
-  balthasar: ../personas/balthasar.md
-  casper: ../personas/casper.md
 initial_movement: melchior
 movements:
   - name: melchior

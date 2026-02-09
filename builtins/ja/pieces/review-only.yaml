@@ -1,23 +1,6 @@
 name: review-only
 description: レビュー専用ピース - コードをレビューするだけで編集は行わない
 max_iterations: 10
-policies:
-  review: ../policies/review.md
-  ai-antipattern: ../policies/ai-antipattern.md
-knowledge:
-  architecture: ../knowledge/architecture.md
-  security: ../knowledge/security.md
-personas:
-  planner: ../personas/planner.md
-  architecture-reviewer: ../personas/architecture-reviewer.md
-  security-reviewer: ../personas/security-reviewer.md
-  ai-antipattern-reviewer: ../personas/ai-antipattern-reviewer.md
-  supervisor: ../personas/supervisor.md
-  pr-commenter: ../personas/pr-commenter.md
-instructions:
-  review-arch: ../instructions/review-arch.md
-  review-security: ../instructions/review-security.md
-  review-ai: ../instructions/review-ai.md
 initial_movement: plan
 movements:
   - name: plan
@@ -231,8 +214,3 @@ movements:
       ---
       *[takt](https://github.com/toruticas/takt) review-only ピースで生成*
       ```
-report_formats:
-  architecture-review: ../output-contracts/architecture-review.md
-  security-review: ../output-contracts/security-review.md
-  ai-review: ../output-contracts/ai-review.md
-  review-summary: ../output-contracts/review-summary.md

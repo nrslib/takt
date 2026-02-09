@@ -55,14 +55,14 @@ movement 内では**キー名**で参照する（パスを直接書かない）�
   session: refresh             # セッション管理（任意）
   pass_previous_response: true # 前の出力を渡すか（デフォルト: true）
   allowed_tools: [...]         # 許可ツール一覧（任意、参考情報）
-  instruction_template: |      # インライン指示テンプレート（instruction キーの代替、任意）
+  instruction_template: |      # 指示テンプレート（参照解決またはインライン、任意）
     指示内容...
   output_contracts: [...]      # 出力契約設定（任意）
   quality_gates: [...]         # 品質ゲート（AIへの指示、任意）
   rules: [...]                 # 遷移ルール（必須）
 ```
 
-**`instruction` vs `instruction_template`**: `instruction` はトップレベル `instructions:` セクションのキー参照。`instruction_template` はインラインで指示を記述。どちらか一方を使用する。
+**`instruction` vs `instruction_template`**: どちらも同じ参照解決ルート（セクションマップ → パス → 3-layer facet → インライン）を使う。`instruction_template` はインライン文字列もそのまま使える。通常はどちらか一方を使用する。
 
 ### Parallel Movement
 

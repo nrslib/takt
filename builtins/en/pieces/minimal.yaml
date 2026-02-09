@@ -1,21 +1,6 @@
 name: minimal
 description: Minimal development piece (implement -> parallel review -> fix if needed -> complete)
 max_iterations: 20
-policies:
-  coding: ../policies/coding.md
-  review: ../policies/review.md
-  testing: ../policies/testing.md
-  ai-antipattern: ../policies/ai-antipattern.md
-personas:
-  coder: ../personas/coder.md
-  ai-antipattern-reviewer: ../personas/ai-antipattern-reviewer.md
-  supervisor: ../personas/supervisor.md
-instructions:
-  implement: ../instructions/implement.md
-  review-ai: ../instructions/review-ai.md
-  ai-fix: ../instructions/ai-fix.md
-  supervise: ../instructions/supervise.md
-  fix-supervisor: ../instructions/fix-supervisor.md
 initial_movement: implement
 movements:
   - name: implement
@@ -190,5 +175,3 @@ movements:
       - condition: Cannot proceed, insufficient info
         next: implement
     instruction: fix-supervisor
-report_formats:
-  ai-review: ../output-contracts/ai-review.md
