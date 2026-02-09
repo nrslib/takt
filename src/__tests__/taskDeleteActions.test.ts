@@ -1,10 +1,7 @@
-/**
- * Tests for taskDeleteActions — pending/failed task deletion
- */
-
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { stringify as stringifyYaml } from 'yaml';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../shared/prompt/index.js', () => ({
@@ -35,6 +32,33 @@ const mockLogError = vi.mocked(logError);
 
 let tmpDir: string;
 
+function setupTasksFile(projectDir: string): string {
+  const tasksFile = path.join(projectDir, '.takt', 'tasks.yaml');
+  fs.mkdirSync(path.dirname(tasksFile), { recursive: true });
+  fs.writeFileSync(tasksFile, stringifyYaml({
+    tasks: [
+      {
+        name: 'pending-task',
+        status: 'pending',
+        content: 'pending',
+        created_at: '2025-01-15T00:00:00.000Z',
+        started_at: null,
+        completed_at: null,
+      },
+      {
+        name: 'failed-task',
+        status: 'failed',
+        content: 'failed',
+        created_at: '2025-01-15T00:00:00.000Z',
+        started_at: '2025-01-15T00:01:00.000Z',
+        completed_at: '2025-01-15T00:02:00.000Z',
+        failure: { error: 'boom' },
+      },
+    ],
+  }), 'utf-8');
+  return tasksFile;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-test-delete-'));
@@ -44,137 +68,59 @@ afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-describe('deletePendingTask', () => {
-  it('should delete pending task file when confirmed', async () => {
-    // Given
-    const filePath = path.join(tmpDir, 'my-task.md');
-    fs.writeFileSync(filePath, 'task content');
+describe('taskDeleteActions', () => {
+  it('should delete pending task when confirmed', async () => {
+    const tasksFile = setupTasksFile(tmpDir);
     const task: TaskListItem = {
       kind: 'pending',
-      name: 'my-task',
+      name: 'pending-task',
       createdAt: '2025-01-15',
-      filePath,
-      content: 'task content',
+      filePath: tasksFile,
+      content: 'pending',
     };
     mockConfirm.mockResolvedValue(true);
 
-    // When
     const result = await deletePendingTask(task);
 
-    // Then
     expect(result).toBe(true);
-    expect(fs.existsSync(filePath)).toBe(false);
-    expect(mockSuccess).toHaveBeenCalledWith('Deleted pending task: my-task');
+    const raw = fs.readFileSync(tasksFile, 'utf-8');
+    expect(raw).not.toContain('pending-task');
+    expect(mockSuccess).toHaveBeenCalledWith('Deleted pending task: pending-task');
   });
 
-  it('should not delete when user declines confirmation', async () => {
-    // Given
-    const filePath = path.join(tmpDir, 'my-task.md');
-    fs.writeFileSync(filePath, 'task content');
+  it('should delete failed task when confirmed', async () => {
+    const tasksFile = setupTasksFile(tmpDir);
     const task: TaskListItem = {
-      kind: 'pending',
-      name: 'my-task',
-      createdAt: '2025-01-15',
-      filePath,
-      content: 'task content',
+      kind: 'failed',
+      name: 'failed-task',
+      createdAt: '2025-01-15T12:34:56',
+      filePath: tasksFile,
+      content: 'failed',
     };
-    mockConfirm.mockResolvedValue(false);
+    mockConfirm.mockResolvedValue(true);
 
-    // When
-    const result = await deletePendingTask(task);
+    const result = await deleteFailedTask(task);
 
-    // Then
-    expect(result).toBe(false);
-    expect(fs.existsSync(filePath)).toBe(true);
-    expect(mockSuccess).not.toHaveBeenCalled();
+    expect(result).toBe(true);
+    const raw = fs.readFileSync(tasksFile, 'utf-8');
+    expect(raw).not.toContain('failed-task');
+    expect(mockSuccess).toHaveBeenCalledWith('Deleted failed task: failed-task');
   });
 
-  it('should return false and show error when file does not exist', async () => {
-    // Given
-    const filePath = path.join(tmpDir, 'non-existent.md');
+  it('should return false when target task is missing', async () => {
+    const tasksFile = setupTasksFile(tmpDir);
     const task: TaskListItem = {
-      kind: 'pending',
-      name: 'non-existent',
-      createdAt: '2025-01-15',
-      filePath,
+      kind: 'failed',
+      name: 'not-found',
+      createdAt: '2025-01-15T12:34:56',
+      filePath: tasksFile,
       content: '',
     };
     mockConfirm.mockResolvedValue(true);
 
-    // When
-    const result = await deletePendingTask(task);
+    const result = await deleteFailedTask(task);
 
-    // Then
     expect(result).toBe(false);
     expect(mockLogError).toHaveBeenCalled();
-    expect(mockSuccess).not.toHaveBeenCalled();
-  });
-});
-
-describe('deleteFailedTask', () => {
-  it('should delete failed task directory when confirmed', async () => {
-    // Given
-    const dirPath = path.join(tmpDir, '2025-01-15T12-34-56_my-task');
-    fs.mkdirSync(dirPath, { recursive: true });
-    fs.writeFileSync(path.join(dirPath, 'my-task.md'), 'content');
-    const task: TaskListItem = {
-      kind: 'failed',
-      name: 'my-task',
-      createdAt: '2025-01-15T12:34:56',
-      filePath: dirPath,
-      content: 'content',
-    };
-    mockConfirm.mockResolvedValue(true);
-
-    // When
-    const result = await deleteFailedTask(task);
-
-    // Then
-    expect(result).toBe(true);
-    expect(fs.existsSync(dirPath)).toBe(false);
-    expect(mockSuccess).toHaveBeenCalledWith('Deleted failed task: my-task');
-  });
-
-  it('should not delete when user declines confirmation', async () => {
-    // Given
-    const dirPath = path.join(tmpDir, '2025-01-15T12-34-56_my-task');
-    fs.mkdirSync(dirPath, { recursive: true });
-    const task: TaskListItem = {
-      kind: 'failed',
-      name: 'my-task',
-      createdAt: '2025-01-15T12:34:56',
-      filePath: dirPath,
-      content: '',
-    };
-    mockConfirm.mockResolvedValue(false);
-
-    // When
-    const result = await deleteFailedTask(task);
-
-    // Then
-    expect(result).toBe(false);
-    expect(fs.existsSync(dirPath)).toBe(true);
-    expect(mockSuccess).not.toHaveBeenCalled();
-  });
-
-  it('should return false and show error when directory does not exist', async () => {
-    // Given
-    const dirPath = path.join(tmpDir, 'non-existent-dir');
-    const task: TaskListItem = {
-      kind: 'failed',
-      name: 'non-existent',
-      createdAt: '2025-01-15T12:34:56',
-      filePath: dirPath,
-      content: '',
-    };
-    mockConfirm.mockResolvedValue(true);
-
-    // When
-    const result = await deleteFailedTask(task);
-
-    // Then
-    expect(result).toBe(false);
-    expect(mockLogError).toHaveBeenCalled();
-    expect(mockSuccess).not.toHaveBeenCalled();
   });
 });

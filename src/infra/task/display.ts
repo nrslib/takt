@@ -24,8 +24,8 @@ export function showTaskList(runner: TaskRunner): void {
   if (tasks.length === 0) {
     console.log();
     info('実行待ちのタスクはありません。');
-    console.log(chalk.gray(`\n${runner.getTasksDir()}/ にタスクファイル（.yaml/.md）を配置してください。`));
-    console.log(chalk.gray(`または takt add でタスクを追加できます。`));
+    console.log(chalk.gray(`\n${runner.getTasksDir()} を確認してください。`));
+    console.log(chalk.gray('takt add でタスクを追加できます。'));
     return;
   }
 
@@ -39,7 +39,6 @@ export function showTaskList(runner: TaskRunner): void {
       console.log(chalk.cyan.bold(`  [${i + 1}] ${task.name}`));
       console.log(chalk.gray(`      ${firstLine}...`));
 
-      // Show worktree/branch info for YAML tasks
       if (task.data) {
         const extras: string[] = [];
         if (task.data.worktree) {

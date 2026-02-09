@@ -647,6 +647,8 @@ export async function executePiece(
     return {
       success: finalState.status === 'completed',
       reason: abortReason,
+      lastMovement: lastMovementName,
+      lastMessage: lastMovementContent,
     };
   } finally {
     prefixWriter?.flush();

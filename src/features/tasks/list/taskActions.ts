@@ -37,16 +37,21 @@ export type ListAction = 'diff' | 'instruct' | 'try' | 'merge' | 'delete';
  * Check if a branch has already been merged into HEAD.
  */
 export function isBranchMerged(projectDir: string, branch: string): boolean {
-  try {
-    execFileSync('git', ['merge-base', '--is-ancestor', branch, 'HEAD'], {
-      cwd: projectDir,
-      encoding: 'utf-8',
-      stdio: 'pipe',
+  const result = spawnSync('git', ['merge-base', '--is-ancestor', branch, 'HEAD'], {
+    cwd: projectDir,
+    encoding: 'utf-8',
+    stdio: 'pipe',
+  });
+
+  if (result.error) {
+    log.error('Failed to check if branch is merged', {
+      branch,
+      error: getErrorMessage(result.error),
     });
-    return true;
-  } catch {
     return false;
   }
+
+  return result.status === 0;
 }
 
 /**
@@ -70,8 +75,13 @@ export function showFullDiff(
     if (result.status !== 0) {
       warn('Could not display diff');
     }
-  } catch {
+  } catch (err) {
     warn('Could not display diff');
+    log.error('Failed to display full diff', {
+      branch,
+      defaultBranch,
+      error: getErrorMessage(err),
+    });
   }
 }
 
@@ -95,8 +105,13 @@ export async function showDiffAndPromptAction(
       { cwd, encoding: 'utf-8', stdio: 'pipe' },
     );
     info(stat);
-  } catch {
+  } catch (err) {
     warn('Could not generate diff stat');
+    log.error('Failed to generate diff stat', {
+      branch: item.info.branch,
+      defaultBranch,
+      error: getErrorMessage(err),
+    });
   }
 
   const action = await selectOption<ListAction>(
@@ -168,8 +183,12 @@ export function mergeBranch(projectDir: string, item: BranchListItem): boolean {
         encoding: 'utf-8',
         stdio: 'pipe',
       });
-    } catch {
+    } catch (err) {
       warn(`Could not delete branch ${branch}. You may delete it manually.`);
+      log.error('Failed to delete merged branch', {
+        branch,
+        error: getErrorMessage(err),
+      });
     }
 
     cleanupOrphanedClone(projectDir, branch);
@@ -276,8 +295,12 @@ function getBranchContext(projectDir: string, branch: string): string {
       lines.push(diffStat);
       lines.push('```');
     }
-  } catch {
-    // Ignore errors
+  } catch (err) {
+    log.debug('Failed to collect branch diff stat for instruction context', {
+      branch,
+      defaultBranch,
+      error: getErrorMessage(err),
+    });
   }
 
   try {
@@ -292,8 +315,12 @@ function getBranchContext(projectDir: string, branch: string): string {
       lines.push(commitLog);
       lines.push('```');
     }
-  } catch {
-    // Ignore errors
+  } catch (err) {
+    log.debug('Failed to collect branch commit log for instruction context', {
+      branch,
+      defaultBranch,
+      error: getErrorMessage(err),
+    });
   }
 
   return lines.length > 0 ? lines.join('\n') + '\n\n' : '';
@@ -361,4 +388,3 @@ export async function instructBranch(
     removeCloneMeta(projectDir, branch);
   }
 }
-

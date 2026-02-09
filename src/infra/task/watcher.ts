@@ -1,7 +1,7 @@
 /**
  * Task directory watcher
  *
- * Polls .takt/tasks/ for new task files and invokes a callback when found.
+ * Polls .takt/tasks.yaml for pending tasks and invokes a callback when found.
  * Uses polling (not fs.watch) for cross-platform reliability.
  */
 
@@ -40,7 +40,8 @@ export class TaskWatcher {
     log.info('Watch started', { pollInterval: this.pollInterval });
 
     while (this.running) {
-      const task = this.runner.getNextTask();
+      const claimed = this.runner.claimNextTasks(1);
+      const task = claimed[0];
 
       if (task) {
         log.info('Task found', { name: task.name });

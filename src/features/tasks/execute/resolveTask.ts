@@ -29,7 +29,6 @@ export async function resolveTaskExecution(
   defaultPiece: string,
 ): Promise<ResolvedTaskExecution> {
   const data = task.data;
-
   if (!data) {
     return { execCwd: defaultCwd, execPiece: defaultPiece, isWorktree: false };
   }

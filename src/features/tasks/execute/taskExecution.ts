@@ -15,7 +15,7 @@ import {
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { executePiece } from './pieceExecution.js';
 import { DEFAULT_PIECE_NAME } from '../../../shared/constants.js';
-import type { TaskExecutionOptions, ExecuteTaskOptions } from './types.js';
+import type { TaskExecutionOptions, ExecuteTaskOptions, PieceExecutionResult } from './types.js';
 import { createPullRequest, buildPrBody, pushBranch, fetchIssue, checkGhCli } from '../../../infra/github/index.js';
 import { runWithWorkerPool } from './parallelExecution.js';
 import { resolveTaskExecution } from './resolveTask.js';
@@ -48,22 +48,20 @@ function resolveTaskIssue(issueNumber: number | undefined): ReturnType<typeof fe
   }
 }
 
-/**
- * Execute a single task with piece.
- */
-export async function executeTask(options: ExecuteTaskOptions): Promise<boolean> {
+async function executeTaskWithResult(options: ExecuteTaskOptions): Promise<PieceExecutionResult> {
   const { task, cwd, pieceIdentifier, projectCwd, agentOverrides, interactiveUserInput, interactiveMetadata, startMovement, retryNote, abortSignal, taskPrefix, taskColorIndex } = options;
   const pieceConfig = loadPieceByIdentifier(pieceIdentifier, projectCwd);
 
   if (!pieceConfig) {
     if (isPiecePath(pieceIdentifier)) {
       error(`Piece file not found: ${pieceIdentifier}`);
+      return { success: false, reason: `Piece file not found: ${pieceIdentifier}` };
     } else {
       error(`Piece "${pieceIdentifier}" not found.`);
       info('Available pieces are in ~/.takt/pieces/ or .takt/pieces/');
       info('Use "takt switch" to select a piece.');
+      return { success: false, reason: `Piece "${pieceIdentifier}" not found.` };
     }
-    return false;
   }
 
   log.debug('Running piece', {
@@ -72,7 +70,7 @@ export async function executeTask(options: ExecuteTaskOptions): Promise<boolean>
   });
 
   const globalConfig = loadGlobalConfig();
-  const result = await executePiece(pieceConfig, task, cwd, {
+  return await executePiece(pieceConfig, task, cwd, {
     projectCwd,
     language: globalConfig.language,
     provider: agentOverrides?.provider,
@@ -86,6 +84,13 @@ export async function executeTask(options: ExecuteTaskOptions): Promise<boolean>
     taskPrefix,
     taskColorIndex,
   });
+}
+
+/**
+ * Execute a single task with piece.
+ */
+export async function executeTask(options: ExecuteTaskOptions): Promise<boolean> {
+  const result = await executeTaskWithResult(options);
   return result.success;
 }
 
@@ -106,7 +111,6 @@ export async function executeAndCompleteTask(
   parallelOptions?: { abortSignal?: AbortSignal; taskPrefix?: string; taskColorIndex?: number },
 ): Promise<boolean> {
   const startedAt = new Date().toISOString();
-  const executionLog: string[] = [];
   const taskAbortController = new AbortController();
   const externalAbortSignal = parallelOptions?.abortSignal;
   const taskAbortSignal = externalAbortSignal ? taskAbortController.signal : undefined;
@@ -127,7 +131,7 @@ export async function executeAndCompleteTask(
     const { execCwd, execPiece, isWorktree, branch, baseBranch, startMovement, retryNote, autoPr, issueNumber } = await resolveTaskExecution(task, cwd, pieceName);
 
     // cwd is always the project root; pass it as projectCwd so reports/sessions go there
-    const taskRunPromise = executeTask({
+    const taskRunResult = await executeTaskWithResult({
       task: task.content,
       cwd: execCwd,
       pieceIdentifier: execPiece,
@@ -140,7 +144,11 @@ export async function executeAndCompleteTask(
       taskColorIndex: parallelOptions?.taskColorIndex,
     });
 
-    const taskSuccess = await taskRunPromise;
+    if (!taskRunResult.success && !taskRunResult.reason) {
+      throw new Error('Task failed without reason');
+    }
+
+    const taskSuccess = taskRunResult.success;
     const completedAt = new Date().toISOString();
 
     if (taskSuccess && isWorktree) {
@@ -180,8 +188,10 @@ export async function executeAndCompleteTask(
     const taskResult = {
       task,
       success: taskSuccess,
-      response: taskSuccess ? 'Task completed successfully' : 'Task failed',
-      executionLog,
+      response: taskSuccess ? 'Task completed successfully' : taskRunResult.reason!,
+      executionLog: taskRunResult.lastMessage ? [taskRunResult.lastMessage] : [],
+      failureMovement: taskRunResult.lastMovement,
+      failureLastMessage: taskRunResult.lastMessage,
       startedAt,
       completedAt,
     };
@@ -202,7 +212,7 @@ export async function executeAndCompleteTask(
       task,
       success: false,
       response: getErrorMessage(err),
-      executionLog,
+      executionLog: [],
       startedAt,
       completedAt,
     });
@@ -230,12 +240,16 @@ export async function runAllTasks(
   const taskRunner = new TaskRunner(cwd);
   const globalConfig = loadGlobalConfig();
   const concurrency = globalConfig.concurrency;
+  const recovered = taskRunner.recoverInterruptedRunningTasks();
+  if (recovered > 0) {
+    info(`Recovered ${recovered} interrupted running task(s) to pending.`);
+  }
 
   const initialTasks = taskRunner.claimNextTasks(concurrency);
 
   if (initialTasks.length === 0) {
-    info('No pending tasks in .takt/tasks/');
-    info('Create task files as .takt/tasks/*.yaml or use takt add');
+    info('No pending tasks in .takt/tasks.yaml');
+    info('Use takt add to append tasks.');
     return;
   }
 

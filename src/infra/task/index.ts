@@ -24,8 +24,19 @@ export { TaskRunner } from './runner.js';
 
 export { showTaskList } from './display.js';
 
-export { TaskFileSchema, type TaskFileData } from './schema.js';
-export { parseTaskFile, parseTaskFiles, type ParsedTask } from './parser.js';
+export {
+  TaskFileSchema,
+  type TaskFileData,
+  TaskExecutionConfigSchema,
+  TaskStatusSchema,
+  type TaskStatus,
+  TaskFailureSchema,
+  type TaskFailure,
+  TaskRecordSchema,
+  type TaskRecord,
+  TasksFileSchema,
+  type TasksFileData,
+} from './schema.js';
 export {
   createSharedClone,
   removeClone,

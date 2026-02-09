@@ -21,18 +21,18 @@ vi.mock('../infra/config/index.js', () => ({
 import { loadGlobalConfig } from '../infra/config/index.js';
 const mockLoadGlobalConfig = vi.mocked(loadGlobalConfig);
 
-const mockGetNextTask = vi.fn();
 const mockClaimNextTasks = vi.fn();
 const mockCompleteTask = vi.fn();
 const mockFailTask = vi.fn();
+const mockRecoverInterruptedRunningTasks = vi.fn();
 
 vi.mock('../infra/task/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   TaskRunner: vi.fn().mockImplementation(() => ({
-    getNextTask: mockGetNextTask,
     claimNextTasks: mockClaimNextTasks,
     completeTask: mockCompleteTask,
     failTask: mockFailTask,
+    recoverInterruptedRunningTasks: mockRecoverInterruptedRunningTasks,
   })),
 }));
 
@@ -128,11 +128,15 @@ function createTask(name: string): TaskInfo {
     name,
     content: `Task: ${name}`,
     filePath: `/tasks/${name}.yaml`,
+    createdAt: '2026-02-09T00:00:00.000Z',
+    status: 'pending',
+    data: null,
   };
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockRecoverInterruptedRunningTasks.mockReturnValue(0);
 });
 
 describe('runAllTasks concurrency', () => {
@@ -155,7 +159,7 @@ describe('runAllTasks concurrency', () => {
       await runAllTasks('/project');
 
       // Then
-      expect(mockInfo).toHaveBeenCalledWith('No pending tasks in .takt/tasks/');
+      expect(mockInfo).toHaveBeenCalledWith('No pending tasks in .takt/tasks.yaml');
     });
 
     it('should execute tasks sequentially via worker pool when concurrency is 1', async () => {
@@ -399,6 +403,28 @@ describe('runAllTasks concurrency', () => {
       expect(mockStatus).toHaveBeenCalledWith('Total', '3');
       expect(mockStatus).toHaveBeenCalledWith('Success', '2', undefined);
       expect(mockStatus).toHaveBeenCalledWith('Failed', '1', 'red');
+    });
+
+    it('should persist failure reason and movement when piece aborts', async () => {
+      const task1 = createTask('fail-with-detail');
+
+      mockExecutePiece.mockResolvedValue({
+        success: false,
+        reason: 'blocked_by_review',
+        lastMovement: 'review',
+        lastMessage: 'security check failed',
+      });
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1])
+        .mockReturnValueOnce([]);
+
+      await runAllTasks('/project');
+
+      expect(mockFailTask).toHaveBeenCalledWith(expect.objectContaining({
+        response: 'blocked_by_review',
+        failureMovement: 'review',
+        failureLastMessage: 'security check failed',
+      }));
     });
 
     it('should pass abortSignal and taskPrefix to executePiece in parallel mode', async () => {

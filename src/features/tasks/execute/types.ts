@@ -10,6 +10,8 @@ import type { GitHubIssue } from '../../../infra/github/index.js';
 export interface PieceExecutionResult {
   success: boolean;
   reason?: string;
+  lastMovement?: string;
+  lastMessage?: string;
 }
 
 /** Metadata from interactive mode, passed through to NDJSON logging */

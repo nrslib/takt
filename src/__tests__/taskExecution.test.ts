@@ -95,6 +95,9 @@ describe('resolveTaskExecution', () => {
       name: 'simple-task',
       content: 'Simple task content',
       filePath: '/tasks/simple-task.yaml',
+      createdAt: '2026-02-09T00:00:00.000Z',
+      status: 'pending',
+      data: null,
     };
 
     // When

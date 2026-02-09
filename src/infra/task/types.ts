@@ -3,6 +3,7 @@
  */
 
 import type { TaskFileData } from './schema.js';
+import type { TaskFailure, TaskStatus } from './schema.js';
 
 /** タスク情報 */
 export interface TaskInfo {
@@ -10,7 +11,7 @@ export interface TaskInfo {
   name: string;
   content: string;
   createdAt: string;
-  /** Structured data from YAML files (null for .md files) */
+  status: TaskStatus;
   data: TaskFileData | null;
 }
 
@@ -20,6 +21,8 @@ export interface TaskResult {
   success: boolean;
   response: string;
   executionLog: string[];
+  failureMovement?: string;
+  failureLastMessage?: string;
   startedAt: string;
   completedAt: string;
 }
@@ -74,4 +77,6 @@ export interface TaskListItem {
   createdAt: string;
   filePath: string;
   content: string;
+  data?: TaskFileData;
+  failure?: TaskFailure;
 }

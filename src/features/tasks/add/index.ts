@@ -2,15 +2,13 @@
  * add command implementation
  *
  * Starts an AI conversation to refine task requirements,
- * then creates a task file in .takt/tasks/ with YAML format.
+ * then appends a task record to .takt/tasks.yaml.
  */
 
-import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { stringify as stringifyYaml } from 'yaml';
 import { promptInput, confirm } from '../../../shared/prompt/index.js';
 import { success, info, error } from '../../../shared/ui/index.js';
-import { summarizeTaskName, type TaskFileData } from '../../../infra/task/index.js';
+import { TaskRunner, type TaskFileData } from '../../../infra/task/index.js';
 import { getPieceDescription, loadGlobalConfig } from '../../../infra/config/index.js';
 import { determinePiece } from '../execute/selectAndExecute.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
@@ -19,23 +17,8 @@ import { interactiveMode } from '../../interactive/index.js';
 
 const log = createLogger('add-task');
 
-async function generateFilename(tasksDir: string, taskContent: string, cwd: string): Promise<string> {
-  info('Generating task filename...');
-  const slug = await summarizeTaskName(taskContent, { cwd });
-  const base = slug || 'task';
-  let filename = `${base}.yaml`;
-  let counter = 1;
-
-  while (fs.existsSync(path.join(tasksDir, filename))) {
-    filename = `${base}-${counter}.yaml`;
-    counter++;
-  }
-
-  return filename;
-}
-
 /**
- * Save a task file to .takt/tasks/ with YAML format.
+ * Save a task entry to .takt/tasks.yaml.
  *
  * Common logic extracted from addTask(). Used by both addTask()
  * and saveTaskFromInteractive().
@@ -44,29 +27,19 @@ export async function saveTaskFile(
   cwd: string,
   taskContent: string,
   options?: { piece?: string; issue?: number; worktree?: boolean | string; branch?: string; autoPr?: boolean },
-): Promise<string> {
-  const tasksDir = path.join(cwd, '.takt', 'tasks');
-  fs.mkdirSync(tasksDir, { recursive: true });
-
-  const firstLine = taskContent.split('\n')[0] || taskContent;
-  const filename = await generateFilename(tasksDir, firstLine, cwd);
-
-  const taskData: TaskFileData = {
-    task: taskContent,
+): Promise<{ taskName: string; tasksFile: string }> {
+  const runner = new TaskRunner(cwd);
+  const config: Omit<TaskFileData, 'task'> = {
     ...(options?.worktree !== undefined && { worktree: options.worktree }),
     ...(options?.branch && { branch: options.branch }),
     ...(options?.piece && { piece: options.piece }),
     ...(options?.issue !== undefined && { issue: options.issue }),
     ...(options?.autoPr !== undefined && { auto_pr: options.autoPr }),
   };
-
-  const filePath = path.join(tasksDir, filename);
-  const yamlContent = stringifyYaml(taskData);
-  fs.writeFileSync(filePath, yamlContent, 'utf-8');
-
-  log.info('Task created', { filePath, taskData });
-
-  return filePath;
+  const created = runner.addTask(taskContent, config);
+  const tasksFile = path.join(cwd, '.takt', 'tasks.yaml');
+  log.info('Task created', { taskName: created.name, tasksFile, config });
+  return { taskName: created.name, tasksFile };
 }
 
 /**
@@ -120,10 +93,9 @@ export async function saveTaskFromInteractive(
   piece?: string,
 ): Promise<void> {
   const settings = await promptWorktreeSettings();
-  const filePath = await saveTaskFile(cwd, task, { piece, ...settings });
-  const filename = path.basename(filePath);
-  success(`Task created: ${filename}`);
-  info(`  Path: ${filePath}`);
+  const created = await saveTaskFile(cwd, task, { piece, ...settings });
+  success(`Task created: ${created.taskName}`);
+  info(`  File: ${created.tasksFile}`);
   if (settings.worktree) {
     info(`  Worktree: ${typeof settings.worktree === 'string' ? settings.worktree : 'auto'}`);
   }
@@ -144,9 +116,6 @@ export async function saveTaskFromInteractive(
  *   B) それ以外: ピース選択 → AI対話モード → ワークツリー設定 → YAML作成
  */
 export async function addTask(cwd: string, task?: string): Promise<void> {
-  const tasksDir = path.join(cwd, '.takt', 'tasks');
-  fs.mkdirSync(tasksDir, { recursive: true });
-
   // ピース選択とタスク内容の決定
   let taskContent: string;
   let issueNumber: number | undefined;
@@ -209,15 +178,14 @@ export async function addTask(cwd: string, task?: string): Promise<void> {
   const settings = await promptWorktreeSettings();
 
   // YAMLファイル作成
-  const filePath = await saveTaskFile(cwd, taskContent, {
+  const created = await saveTaskFile(cwd, taskContent, {
     piece,
     issue: issueNumber,
     ...settings,
   });
 
-  const filename = path.basename(filePath);
-  success(`Task created: ${filename}`);
-  info(`  Path: ${filePath}`);
+  success(`Task created: ${created.taskName}`);
+  info(`  File: ${created.tasksFile}`);
   if (settings.worktree) {
     info(`  Worktree: ${typeof settings.worktree === 'string' ? settings.worktree : 'auto'}`);
   }

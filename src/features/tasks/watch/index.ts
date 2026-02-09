@@ -1,7 +1,7 @@
 /**
  * /watch command implementation
  *
- * Watches .takt/tasks/ for new task files and executes them automatically.
+ * Watches .takt/tasks.yaml for pending tasks and executes them automatically.
  * Stays resident until Ctrl+C (SIGINT).
  */
 
@@ -26,6 +26,7 @@ export async function watchTasks(cwd: string, options?: TaskExecutionOptions): P
   const pieceName = getCurrentPiece(cwd) || DEFAULT_PIECE_NAME;
   const taskRunner = new TaskRunner(cwd);
   const watcher = new TaskWatcher(cwd);
+  const recovered = taskRunner.recoverInterruptedRunningTasks();
 
   let taskCount = 0;
   let successCount = 0;
@@ -34,6 +35,9 @@ export async function watchTasks(cwd: string, options?: TaskExecutionOptions): P
   header('TAKT Watch Mode');
   info(`Piece: ${pieceName}`);
   info(`Watching: ${taskRunner.getTasksDir()}`);
+  if (recovered > 0) {
+    info(`Recovered ${recovered} interrupted running task(s) to pending.`);
+  }
   info('Waiting for tasks... (Ctrl+C to stop)');
   blankLine();
 

@@ -1,59 +1,34 @@
-/**
- * Task runner tests
- */
-
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, writeFileSync, existsSync, rmSync, readFileSync, readdirSync } from 'node:fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdirSync, writeFileSync, existsSync, rmSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { TaskRunner } from '../infra/task/runner.js';
-import { isTaskFile, parseTaskFiles } from '../infra/task/parser.js';
+import { TaskRecordSchema } from '../infra/task/schema.js';
 
-describe('isTaskFile', () => {
-  it('should accept .yaml files', () => {
-    expect(isTaskFile('task.yaml')).toBe(true);
-  });
+function loadTasksFile(testDir: string): { tasks: Array<Record<string, unknown>> } {
+  const raw = readFileSync(join(testDir, '.takt', 'tasks.yaml'), 'utf-8');
+  return parseYaml(raw) as { tasks: Array<Record<string, unknown>> };
+}
 
-  it('should accept .yml files', () => {
-    expect(isTaskFile('task.yml')).toBe(true);
-  });
+function writeTasksFile(testDir: string, tasks: Array<Record<string, unknown>>): void {
+  mkdirSync(join(testDir, '.takt'), { recursive: true });
+  writeFileSync(join(testDir, '.takt', 'tasks.yaml'), stringifyYaml({ tasks }), 'utf-8');
+}
 
-  it('should accept .md files', () => {
-    expect(isTaskFile('task.md')).toBe(true);
-  });
+function createPendingRecord(overrides: Record<string, unknown>): Record<string, unknown> {
+  return TaskRecordSchema.parse({
+    name: 'task-a',
+    status: 'pending',
+    content: 'Do work',
+    created_at: '2026-02-09T00:00:00.000Z',
+    started_at: null,
+    completed_at: null,
+    owner_pid: null,
+    ...overrides,
+  }) as unknown as Record<string, unknown>;
+}
 
-  it('should reject extensionless files like TASK-FORMAT', () => {
-    expect(isTaskFile('TASK-FORMAT')).toBe(false);
-  });
-
-  it('should reject .txt files', () => {
-    expect(isTaskFile('readme.txt')).toBe(false);
-  });
-});
-
-describe('parseTaskFiles', () => {
-  const testDir = `/tmp/takt-parse-test-${Date.now()}`;
-
-  beforeEach(() => {
-    mkdirSync(testDir, { recursive: true });
-  });
-
-  afterEach(() => {
-    if (existsSync(testDir)) {
-      rmSync(testDir, { recursive: true, force: true });
-    }
-  });
-
-  it('should ignore extensionless files like TASK-FORMAT', () => {
-    writeFileSync(join(testDir, 'TASK-FORMAT'), 'Format documentation');
-    writeFileSync(join(testDir, 'real-task.md'), 'Real task');
-
-    const tasks = parseTaskFiles(testDir);
-    expect(tasks).toHaveLength(1);
-    expect(tasks[0]?.name).toBe('real-task');
-  });
-});
-
-describe('TaskRunner', () => {
+describe('TaskRunner (tasks.yaml)', () => {
   const testDir = `/tmp/takt-task-test-${Date.now()}`;
   let runner: TaskRunner;
 
@@ -68,465 +43,245 @@ describe('TaskRunner', () => {
     }
   });
 
-  describe('ensureDirs', () => {
-    it('should create tasks, completed, and failed directories', () => {
-      runner.ensureDirs();
-      expect(existsSync(join(testDir, '.takt', 'tasks'))).toBe(true);
-      expect(existsSync(join(testDir, '.takt', 'completed'))).toBe(true);
-      expect(existsSync(join(testDir, '.takt', 'failed'))).toBe(true);
-    });
+  it('should add tasks to .takt/tasks.yaml', () => {
+    const task = runner.addTask('Fix login flow', { piece: 'default' });
+    expect(task.name).toContain('fix-login-flow');
+    expect(existsSync(join(testDir, '.takt', 'tasks.yaml'))).toBe(true);
   });
 
-  describe('listTasks', () => {
-    it('should return empty array when no tasks', () => {
-      const tasks = runner.listTasks();
-      expect(tasks).toEqual([]);
-    });
+  it('should list only pending tasks', () => {
+    runner.addTask('Task A');
+    runner.addTask('Task B');
 
-    it('should list tasks sorted by name', () => {
-      const tasksDir = join(testDir, '.takt', 'tasks');
-      mkdirSync(tasksDir, { recursive: true });
-      writeFileSync(join(tasksDir, '02-second.md'), 'Second task');
-      writeFileSync(join(tasksDir, '01-first.md'), 'First task');
-      writeFileSync(join(tasksDir, '03-third.md'), 'Third task');
-
-      const tasks = runner.listTasks();
-      expect(tasks).toHaveLength(3);
-      expect(tasks[0]?.name).toBe('01-first');
-      expect(tasks[1]?.name).toBe('02-second');
-      expect(tasks[2]?.name).toBe('03-third');
-    });
-
-    it('should only list .md files', () => {
-      const tasksDir = join(testDir, '.takt', 'tasks');
-      mkdirSync(tasksDir, { recursive: true });
-      writeFileSync(join(tasksDir, 'task.md'), 'Task content');
-      writeFileSync(join(tasksDir, 'readme.txt'), 'Not a task');
-
-      const tasks = runner.listTasks();
-      expect(tasks).toHaveLength(1);
-      expect(tasks[0]?.name).toBe('task');
-    });
+    const tasks = runner.listTasks();
+    expect(tasks).toHaveLength(2);
+    expect(tasks.every((task) => task.status === 'pending')).toBe(true);
   });
 
-  describe('getTask', () => {
-    it('should return null for non-existent task', () => {
-      const task = runner.getTask('non-existent');
-      expect(task).toBeNull();
-    });
+  it('should claim tasks and mark them running', () => {
+    runner.addTask('Task A');
+    runner.addTask('Task B');
 
-    it('should return task info for existing task', () => {
-      const tasksDir = join(testDir, '.takt', 'tasks');
-      mkdirSync(tasksDir, { recursive: true });
-      writeFileSync(join(tasksDir, 'my-task.md'), 'Task content');
+    const claimed = runner.claimNextTasks(1);
+    expect(claimed).toHaveLength(1);
+    expect(claimed[0]?.status).toBe('running');
 
-      const task = runner.getTask('my-task');
-      expect(task).not.toBeNull();
-      expect(task?.name).toBe('my-task');
-      expect(task?.content).toBe('Task content');
-    });
+    const file = loadTasksFile(testDir);
+    expect(file.tasks.some((task) => task.status === 'running')).toBe(true);
   });
 
-  describe('getNextTask', () => {
-    it('should return null when no tasks', () => {
-      const task = runner.getNextTask();
-      expect(task).toBeNull();
-    });
+  it('should recover interrupted running tasks to pending', () => {
+    runner.addTask('Task A');
+    runner.claimNextTasks(1);
+    const current = loadTasksFile(testDir);
+    const running = current.tasks[0] as Record<string, unknown>;
+    running.owner_pid = 999999999;
+    writeFileSync(join(testDir, '.takt', 'tasks.yaml'), stringifyYaml(current), 'utf-8');
 
-    it('should return first task (alphabetically)', () => {
-      const tasksDir = join(testDir, '.takt', 'tasks');
-      mkdirSync(tasksDir, { recursive: true });
-      writeFileSync(join(tasksDir, 'b-task.md'), 'B');
-      writeFileSync(join(tasksDir, 'a-task.md'), 'A');
+    const recovered = runner.recoverInterruptedRunningTasks();
+    expect(recovered).toBe(1);
 
-      const task = runner.getNextTask();
-      expect(task?.name).toBe('a-task');
-    });
+    const tasks = runner.listTasks();
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]?.status).toBe('pending');
   });
 
-  describe('claimNextTasks', () => {
-    it('should return empty array when no tasks', () => {
-      const tasks = runner.claimNextTasks(3);
-      expect(tasks).toEqual([]);
-    });
+  it('should keep running tasks owned by a live process', () => {
+    runner.addTask('Task A');
+    runner.claimNextTasks(1);
 
-    it('should return tasks up to the requested count', () => {
-      const tasksDir = join(testDir, '.takt', 'tasks');
-      mkdirSync(tasksDir, { recursive: true });
-      writeFileSync(join(tasksDir, 'a-task.md'), 'A');
-      writeFileSync(join(tasksDir, 'b-task.md'), 'B');
-      writeFileSync(join(tasksDir, 'c-task.md'), 'C');
-
-      const tasks = runner.claimNextTasks(2);
-      expect(tasks).toHaveLength(2);
-      expect(tasks[0]?.name).toBe('a-task');
-      expect(tasks[1]?.name).toBe('b-task');
-    });
-
-    it('should not return already claimed tasks on subsequent calls', () => {
-      const tasksDir = join(testDir, '.takt', 'tasks');
-      mkdirSync(tasksDir, { recursive: true });
-      writeFileSync(join(tasksDir, 'a-task.md'), 'A');
-      writeFileSync(join(tasksDir, 'b-task.md'), 'B');
-      writeFileSync(join(tasksDir, 'c-task.md'), 'C');
-
-      // Given: first call claims a-task
-      const first = runner.claimNextTasks(1);
-      expect(first).toHaveLength(1);
-      expect(first[0]?.name).toBe('a-task');
-
-      // When: second call should skip a-task
-      const second = runner.claimNextTasks(1);
-      expect(second).toHaveLength(1);
-      expect(second[0]?.name).toBe('b-task');
-
-      // When: third call should skip a-task and b-task
-      const third = runner.claimNextTasks(1);
-      expect(third).toHaveLength(1);
-      expect(third[0]?.name).toBe('c-task');
-
-      // When: fourth call should return empty (all claimed)
-      const fourth = runner.claimNextTasks(1);
-      expect(fourth).toEqual([]);
-    });
-
-    it('should release claim after completeTask', () => {
-      const tasksDir = join(testDir, '.takt', 'tasks');
-      mkdirSync(tasksDir, { recursive: true });
-      writeFileSync(join(tasksDir, 'task-a.md'), 'Task A content');
-
-      // Given: claim the task
-      const claimed = runner.claimNextTasks(1);
-      expect(claimed).toHaveLength(1);
-
-      // When: complete the task (file is moved away)
-      runner.completeTask({
-        task: claimed[0]!,
-        success: true,
-        response: 'Done',
-        executionLog: [],
-        startedAt: '2024-01-01T00:00:00.000Z',
-        completedAt: '2024-01-01T00:01:00.000Z',
-      });
-
-      // Then: claim set no longer blocks (but file is moved, so no tasks anyway)
-      const next = runner.claimNextTasks(1);
-      expect(next).toEqual([]);
-    });
-
-    it('should release claim after failTask', () => {
-      const tasksDir = join(testDir, '.takt', 'tasks');
-      mkdirSync(tasksDir, { recursive: true });
-      writeFileSync(join(tasksDir, 'task-a.md'), 'Task A content');
-
-      // Given: claim the task
-      const claimed = runner.claimNextTasks(1);
-      expect(claimed).toHaveLength(1);
-
-      // When: fail the task (file is moved away)
-      runner.failTask({
-        task: claimed[0]!,
-        success: false,
-        response: 'Error',
-        executionLog: [],
-        startedAt: '2024-01-01T00:00:00.000Z',
-        completedAt: '2024-01-01T00:01:00.000Z',
-      });
-
-      // Then: claim set no longer blocks
-      const next = runner.claimNextTasks(1);
-      expect(next).toEqual([]);
-    });
-
-    it('should not affect getNextTask (unclaimed access)', () => {
-      const tasksDir = join(testDir, '.takt', 'tasks');
-      mkdirSync(tasksDir, { recursive: true });
-      writeFileSync(join(tasksDir, 'a-task.md'), 'A');
-      writeFileSync(join(tasksDir, 'b-task.md'), 'B');
-
-      // Given: claim a-task via claimNextTasks
-      runner.claimNextTasks(1);
-
-      // When: getNextTask is called (no claim filtering)
-      const task = runner.getNextTask();
-
-      // Then: getNextTask still returns first task (including claimed)
-      expect(task?.name).toBe('a-task');
-    });
+    const recovered = runner.recoverInterruptedRunningTasks();
+    expect(recovered).toBe(0);
   });
 
-  describe('completeTask', () => {
-    it('should move task to completed directory', () => {
-      const tasksDir = join(testDir, '.takt', 'tasks');
-      mkdirSync(tasksDir, { recursive: true });
-      const taskFile = join(tasksDir, 'test-task.md');
-      writeFileSync(taskFile, 'Test task content');
+  it('should take over stale lock file with invalid pid', () => {
+    mkdirSync(join(testDir, '.takt'), { recursive: true });
+    writeFileSync(join(testDir, '.takt', 'tasks.yaml.lock'), 'invalid-pid', 'utf-8');
 
-      const task = runner.getTask('test-task')!;
-      const result = {
-        task,
-        success: true,
-        response: 'Task completed successfully',
-        executionLog: ['Started', 'Done'],
-        startedAt: '2024-01-01T00:00:00.000Z',
-        completedAt: '2024-01-01T00:01:00.000Z',
-      };
+    const task = runner.addTask('Task with stale lock');
 
-      const reportFile = runner.completeTask(result);
-
-      // Original task file should be moved
-      expect(existsSync(taskFile)).toBe(false);
-
-      // Report should be created
-      expect(existsSync(reportFile)).toBe(true);
-      const reportContent = readFileSync(reportFile, 'utf-8');
-      expect(reportContent).toContain('# タスク実行レポート');
-      expect(reportContent).toContain('test-task');
-      expect(reportContent).toContain('成功');
-
-      // Log file should be created
-      const logFile = reportFile.replace('report.md', 'log.json');
-      expect(existsSync(logFile)).toBe(true);
-      const logData = JSON.parse(readFileSync(logFile, 'utf-8'));
-      expect(logData.taskName).toBe('test-task');
-      expect(logData.success).toBe(true);
-    });
-
-    it('should throw error when called with a failed result', () => {
-      const tasksDir = join(testDir, '.takt', 'tasks');
-      mkdirSync(tasksDir, { recursive: true });
-      writeFileSync(join(tasksDir, 'fail-task.md'), 'Will fail');
-
-      const task = runner.getTask('fail-task')!;
-      const result = {
-        task,
-        success: false,
-        response: 'Error occurred',
-        executionLog: ['Error'],
-        startedAt: '2024-01-01T00:00:00.000Z',
-        completedAt: '2024-01-01T00:01:00.000Z',
-      };
-
-      expect(() => runner.completeTask(result)).toThrow(
-        'Cannot complete a failed task. Use failTask() instead.'
-      );
-    });
+    expect(task.name).toContain('task-with-stale-lock');
+    expect(existsSync(join(testDir, '.takt', 'tasks.yaml.lock'))).toBe(false);
   });
 
-  describe('failTask', () => {
-    it('should move task to failed directory', () => {
-      const tasksDir = join(testDir, '.takt', 'tasks');
-      mkdirSync(tasksDir, { recursive: true });
-      const taskFile = join(tasksDir, 'fail-task.md');
-      writeFileSync(taskFile, 'Task that will fail');
+  it('should timeout when lock file is held by a live process', () => {
+    mkdirSync(join(testDir, '.takt'), { recursive: true });
+    writeFileSync(join(testDir, '.takt', 'tasks.yaml.lock'), String(process.pid), 'utf-8');
 
-      const task = runner.getTask('fail-task')!;
-      const result = {
-        task,
-        success: false,
-        response: 'Error occurred',
-        executionLog: ['Started', 'Error'],
-        startedAt: '2024-01-01T00:00:00.000Z',
-        completedAt: '2024-01-01T00:01:00.000Z',
-      };
+    const dateNowSpy = vi.spyOn(Date, 'now');
+    dateNowSpy.mockReturnValueOnce(0);
+    dateNowSpy.mockReturnValue(5_000);
 
-      const reportFile = runner.failTask(result);
-
-      // Original task file should be removed from tasks dir
-      expect(existsSync(taskFile)).toBe(false);
-
-      // Report should be in .takt/failed/ (not .takt/completed/)
-      expect(reportFile).toContain(join('.takt', 'failed'));
-      expect(reportFile).not.toContain(join('.takt', 'completed'));
-      expect(existsSync(reportFile)).toBe(true);
-
-      const reportContent = readFileSync(reportFile, 'utf-8');
-      expect(reportContent).toContain('# タスク実行レポート');
-      expect(reportContent).toContain('fail-task');
-      expect(reportContent).toContain('失敗');
-
-      // Log file should be created in failed dir
-      const logFile = reportFile.replace('report.md', 'log.json');
-      expect(existsSync(logFile)).toBe(true);
-      const logData = JSON.parse(readFileSync(logFile, 'utf-8'));
-      expect(logData.taskName).toBe('fail-task');
-      expect(logData.success).toBe(false);
-    });
-
-    it('should not move failed task to completed directory', () => {
-      const tasksDir = join(testDir, '.takt', 'tasks');
-      const completedDir = join(testDir, '.takt', 'completed');
-      mkdirSync(tasksDir, { recursive: true });
-      const taskFile = join(tasksDir, 'another-fail.md');
-      writeFileSync(taskFile, 'Another failing task');
-
-      const task = runner.getTask('another-fail')!;
-      const result = {
-        task,
-        success: false,
-        response: 'Something went wrong',
-        executionLog: [],
-        startedAt: '2024-01-01T00:00:00.000Z',
-        completedAt: '2024-01-01T00:01:00.000Z',
-      };
-
-      runner.failTask(result);
-
-      // completed directory should be empty (only the dir itself exists)
-      mkdirSync(completedDir, { recursive: true });
-      const completedContents = readdirSync(completedDir);
-      expect(completedContents).toHaveLength(0);
-    });
+    try {
+      expect(() => runner.listTasks()).toThrow('Failed to acquire tasks lock within 5000ms');
+    } finally {
+      dateNowSpy.mockRestore();
+      rmSync(join(testDir, '.takt', 'tasks.yaml.lock'), { force: true });
+    }
   });
 
-  describe('getTasksDir', () => {
-    it('should return tasks directory path', () => {
-      expect(runner.getTasksDir()).toBe(join(testDir, '.takt', 'tasks'));
-    });
+  it('should recover from corrupted tasks.yaml and allow adding tasks again', () => {
+    mkdirSync(join(testDir, '.takt'), { recursive: true });
+    writeFileSync(join(testDir, '.takt', 'tasks.yaml'), 'tasks:\n  - name: [broken', 'utf-8');
+
+    expect(() => runner.listTasks()).not.toThrow();
+    expect(runner.listTasks()).toEqual([]);
+    expect(existsSync(join(testDir, '.takt', 'tasks.yaml'))).toBe(false);
+
+    const task = runner.addTask('Task after recovery');
+    expect(task.name).toContain('task-after-recovery');
+    expect(existsSync(join(testDir, '.takt', 'tasks.yaml'))).toBe(true);
+    expect(runner.listTasks()).toHaveLength(1);
   });
 
-  describe('requeueFailedTask', () => {
-    it('should copy task file from failed to tasks directory', () => {
-      runner.ensureDirs();
+  it('should load pending content from relative content_file', () => {
+    mkdirSync(join(testDir, 'fixtures'), { recursive: true });
+    writeFileSync(join(testDir, 'fixtures', 'task.txt'), 'Task from file\nsecond line', 'utf-8');
+    writeTasksFile(testDir, [createPendingRecord({
+      content: undefined,
+      content_file: 'fixtures/task.txt',
+    })]);
 
-      // Create a failed task directory
-      const failedDir = join(testDir, '.takt', 'failed', '2026-01-31T12-00-00_my-task');
-      mkdirSync(failedDir, { recursive: true });
-      writeFileSync(join(failedDir, 'my-task.yaml'), 'task: Do something\n');
-      writeFileSync(join(failedDir, 'report.md'), '# Report');
-      writeFileSync(join(failedDir, 'log.json'), '{}');
+    const tasks = runner.listTasks();
+    const pendingItems = runner.listPendingTaskItems();
 
-      const result = runner.requeueFailedTask(failedDir);
+    expect(tasks[0]?.content).toBe('Task from file\nsecond line');
+    expect(pendingItems[0]?.content).toBe('Task from file');
+  });
 
-      // Task file should be copied to tasks dir
-      expect(existsSync(result)).toBe(true);
-      expect(result).toBe(join(testDir, '.takt', 'tasks', 'my-task.yaml'));
+  it('should load pending content from absolute content_file', () => {
+    const contentPath = join(testDir, 'absolute-task.txt');
+    writeFileSync(contentPath, 'Absolute task content', 'utf-8');
+    writeTasksFile(testDir, [createPendingRecord({
+      content: undefined,
+      content_file: contentPath,
+    })]);
 
-      // Original failed directory should still exist
-      expect(existsSync(failedDir)).toBe(true);
+    const tasks = runner.listTasks();
+    expect(tasks[0]?.content).toBe('Absolute task content');
+  });
 
-      // Task content should be preserved
-      const content = readFileSync(result, 'utf-8');
-      expect(content).toBe('task: Do something\n');
+  it('should prefer inline content over content_file', () => {
+    writeTasksFile(testDir, [createPendingRecord({
+      content: 'Inline content',
+      content_file: 'missing-content-file.txt',
+    })]);
+
+    const tasks = runner.listTasks();
+    expect(tasks[0]?.content).toBe('Inline content');
+  });
+
+  it('should throw when content_file target is missing', () => {
+    writeTasksFile(testDir, [createPendingRecord({
+      content: undefined,
+      content_file: 'missing-content-file.txt',
+    })]);
+
+    expect(() => runner.listTasks()).toThrow(/ENOENT|no such file/i);
+  });
+
+  it('should mark claimed task as completed', () => {
+    runner.addTask('Task A');
+    const task = runner.claimNextTasks(1)[0]!;
+
+    runner.completeTask({
+      task,
+      success: true,
+      response: 'Done',
+      executionLog: [],
+      startedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
     });
 
-    it('should add start_movement to YAML task file when specified', () => {
-      runner.ensureDirs();
+    const file = loadTasksFile(testDir);
+    expect(file.tasks[0]?.status).toBe('completed');
+  });
 
-      const failedDir = join(testDir, '.takt', 'failed', '2026-01-31T12-00-00_retry-task');
-      mkdirSync(failedDir, { recursive: true });
-      writeFileSync(join(failedDir, 'retry-task.yaml'), 'task: Retry me\npiece: default\n');
+  it('should mark claimed task as failed with failure detail', () => {
+    runner.addTask('Task A');
+    const task = runner.claimNextTasks(1)[0]!;
 
-      const result = runner.requeueFailedTask(failedDir, 'implement');
-
-      const content = readFileSync(result, 'utf-8');
-      expect(content).toContain('start_movement: implement');
-      expect(content).toContain('task: Retry me');
-      expect(content).toContain('piece: default');
+    runner.failTask({
+      task,
+      success: false,
+      response: 'Boom',
+      executionLog: ['last message'],
+      failureMovement: 'review',
+      failureLastMessage: 'last message',
+      startedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
     });
 
-    it('should replace existing start_movement in YAML task file', () => {
-      runner.ensureDirs();
+    const failed = runner.listFailedTasks();
+    expect(failed).toHaveLength(1);
+    expect(failed[0]?.failure?.error).toBe('Boom');
+    expect(failed[0]?.failure?.movement).toBe('review');
+    expect(failed[0]?.failure?.last_message).toBe('last message');
+  });
 
-      const failedDir = join(testDir, '.takt', 'failed', '2026-01-31T12-00-00_replace-task');
-      mkdirSync(failedDir, { recursive: true });
-      writeFileSync(join(failedDir, 'replace-task.yaml'), 'task: Replace me\nstart_movement: plan\n');
-
-      const result = runner.requeueFailedTask(failedDir, 'ai_review');
-
-      const content = readFileSync(result, 'utf-8');
-      expect(content).toContain('start_movement: ai_review');
-      expect(content).not.toContain('start_movement: plan');
+  it('should requeue failed task to pending with retry metadata', () => {
+    runner.addTask('Task A');
+    const task = runner.claimNextTasks(1)[0]!;
+    runner.failTask({
+      task,
+      success: false,
+      response: 'Boom',
+      executionLog: [],
+      startedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
     });
 
-    it('should not modify markdown task files even with startMovement', () => {
-      runner.ensureDirs();
+    runner.requeueFailedTask(task.name, 'implement', 'retry note');
 
-      const failedDir = join(testDir, '.takt', 'failed', '2026-01-31T12-00-00_md-task');
-      mkdirSync(failedDir, { recursive: true });
-      writeFileSync(join(failedDir, 'md-task.md'), '# Task\nDo something');
+    const pending = runner.listTasks();
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.data?.start_movement).toBe('implement');
+    expect(pending[0]?.data?.retry_note).toBe('retry note');
+  });
 
-      const result = runner.requeueFailedTask(failedDir, 'implement');
+  it('should delete pending and failed tasks', () => {
+    const pending = runner.addTask('Task A');
+    runner.deletePendingTask(pending.name);
+    expect(runner.listTasks()).toHaveLength(0);
 
-      const content = readFileSync(result, 'utf-8');
-      // Markdown files should not have start_movement added
-      expect(content).toBe('# Task\nDo something');
-      expect(content).not.toContain('start_movement');
+    const failed = runner.addTask('Task B');
+    const running = runner.claimNextTasks(1)[0]!;
+    runner.failTask({
+      task: running,
+      success: false,
+      response: 'Boom',
+      executionLog: [],
+      startedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
     });
+    runner.deleteFailedTask(failed.name);
+    expect(runner.listFailedTasks()).toHaveLength(0);
+  });
+});
 
-    it('should throw error when no task file found', () => {
-      runner.ensureDirs();
+describe('TaskRecordSchema', () => {
+  it('should reject failed record without failure details', () => {
+    expect(() => TaskRecordSchema.parse({
+      name: 'task-a',
+      status: 'failed',
+      content: 'Do work',
+      created_at: '2026-02-09T00:00:00.000Z',
+      started_at: '2026-02-09T00:01:00.000Z',
+      completed_at: '2026-02-09T00:02:00.000Z',
+    })).toThrow();
+  });
 
-      const failedDir = join(testDir, '.takt', 'failed', '2026-01-31T12-00-00_no-task');
-      mkdirSync(failedDir, { recursive: true });
-      writeFileSync(join(failedDir, 'report.md'), '# Report');
-
-      expect(() => runner.requeueFailedTask(failedDir)).toThrow(
-        /No task file found in failed directory/
-      );
-    });
-
-    it('should throw error when failed directory does not exist', () => {
-      runner.ensureDirs();
-
-      expect(() => runner.requeueFailedTask('/nonexistent/path')).toThrow(
-        /Failed to read failed task directory/
-      );
-    });
-
-    it('should add retry_note to YAML task file when specified', () => {
-      runner.ensureDirs();
-
-      const failedDir = join(testDir, '.takt', 'failed', '2026-01-31T12-00-00_note-task');
-      mkdirSync(failedDir, { recursive: true });
-      writeFileSync(join(failedDir, 'note-task.yaml'), 'task: Task with note\n');
-
-      const result = runner.requeueFailedTask(failedDir, undefined, 'Fixed the ENOENT error');
-
-      const content = readFileSync(result, 'utf-8');
-      expect(content).toContain('retry_note: "Fixed the ENOENT error"');
-      expect(content).toContain('task: Task with note');
-    });
-
-    it('should escape double quotes in retry_note', () => {
-      runner.ensureDirs();
-
-      const failedDir = join(testDir, '.takt', 'failed', '2026-01-31T12-00-00_quote-task');
-      mkdirSync(failedDir, { recursive: true });
-      writeFileSync(join(failedDir, 'quote-task.yaml'), 'task: Task with quotes\n');
-
-      const result = runner.requeueFailedTask(failedDir, undefined, 'Fixed "spawn node ENOENT" error');
-
-      const content = readFileSync(result, 'utf-8');
-      expect(content).toContain('retry_note: "Fixed \\"spawn node ENOENT\\" error"');
-    });
-
-    it('should add both start_movement and retry_note when both specified', () => {
-      runner.ensureDirs();
-
-      const failedDir = join(testDir, '.takt', 'failed', '2026-01-31T12-00-00_both-task');
-      mkdirSync(failedDir, { recursive: true });
-      writeFileSync(join(failedDir, 'both-task.yaml'), 'task: Task with both\n');
-
-      const result = runner.requeueFailedTask(failedDir, 'implement', 'Retrying from implement');
-
-      const content = readFileSync(result, 'utf-8');
-      expect(content).toContain('start_movement: implement');
-      expect(content).toContain('retry_note: "Retrying from implement"');
-    });
-
-    it('should not add retry_note to markdown task files', () => {
-      runner.ensureDirs();
-
-      const failedDir = join(testDir, '.takt', 'failed', '2026-01-31T12-00-00_md-note-task');
-      mkdirSync(failedDir, { recursive: true });
-      writeFileSync(join(failedDir, 'md-note-task.md'), '# Task\nDo something');
-
-      const result = runner.requeueFailedTask(failedDir, undefined, 'Should be ignored');
-
-      const content = readFileSync(result, 'utf-8');
-      expect(content).toBe('# Task\nDo something');
-      expect(content).not.toContain('retry_note');
-    });
+  it('should reject completed record with failure details', () => {
+    expect(() => TaskRecordSchema.parse({
+      name: 'task-a',
+      status: 'completed',
+      content: 'Do work',
+      created_at: '2026-02-09T00:00:00.000Z',
+      started_at: '2026-02-09T00:01:00.000Z',
+      completed_at: '2026-02-09T00:02:00.000Z',
+      failure: {
+        error: 'unexpected',
+      },
+    })).toThrow();
   });
 });

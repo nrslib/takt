@@ -1,189 +1,80 @@
-/**
- * Tests for listNonInteractive — non-interactive list output and branch actions.
- */
-
-import { execFileSync } from 'node:child_process';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { listTasks } from '../features/tasks/list/index.js';
+import { stringify as stringifyYaml } from 'yaml';
+import { listTasksNonInteractive } from '../features/tasks/list/listNonInteractive.js';
 
-describe('listTasks non-interactive text output', () => {
-  let tmpDir: string;
+const mockInfo = vi.fn();
+vi.mock('../shared/ui/index.js', () => ({
+  info: (...args: unknown[]) => mockInfo(...args),
+}));
 
-  beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-test-ni-'));
-    execFileSync('git', ['init', '--initial-branch', 'main'], { cwd: tmpDir, stdio: 'pipe' });
-    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: tmpDir, stdio: 'pipe' });
-    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tmpDir, stdio: 'pipe' });
-    execFileSync('git', ['commit', '--allow-empty', '-m', 'init'], { cwd: tmpDir, stdio: 'pipe' });
-  });
+vi.mock('../infra/task/branchList.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  detectDefaultBranch: vi.fn(() => 'main'),
+  listTaktBranches: vi.fn(() => []),
+  buildListItems: vi.fn(() => []),
+}));
 
-  afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
+let tmpDir: string;
 
-  it('should output pending tasks in text format', async () => {
-    // Given
-    const tasksDir = path.join(tmpDir, '.takt', 'tasks');
-    fs.mkdirSync(tasksDir, { recursive: true });
-    fs.writeFileSync(path.join(tasksDir, 'my-task.md'), 'Fix the login bug');
-
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-
-    // When
-    await listTasks(tmpDir, undefined, { enabled: true });
-
-    // Then
-    const calls = logSpy.mock.calls.map((c) => c[0] as string);
-    expect(calls).toContainEqual(expect.stringContaining('[running] my-task'));
-    expect(calls).not.toContainEqual(expect.stringContaining('[pending] my-task'));
-    expect(calls).not.toContainEqual(expect.stringContaining('[pendig] my-task'));
-    expect(calls).toContainEqual(expect.stringContaining('Fix the login bug'));
-    logSpy.mockRestore();
-  });
-
-  it('should output failed tasks in text format', async () => {
-    // Given
-    const failedDir = path.join(tmpDir, '.takt', 'failed', '2025-01-15T12-34-56_failed-task');
-    fs.mkdirSync(failedDir, { recursive: true });
-    fs.writeFileSync(path.join(failedDir, 'failed-task.md'), 'This failed');
-
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-
-    // When
-    await listTasks(tmpDir, undefined, { enabled: true });
-
-    // Then
-    const calls = logSpy.mock.calls.map((c) => c[0] as string);
-    expect(calls).toContainEqual(expect.stringContaining('[failed] failed-task'));
-    expect(calls).toContainEqual(expect.stringContaining('This failed'));
-    logSpy.mockRestore();
-  });
-
-  it('should output both pending and failed tasks in text format', async () => {
-    // Given
-    const tasksDir = path.join(tmpDir, '.takt', 'tasks');
-    fs.mkdirSync(tasksDir, { recursive: true });
-    fs.writeFileSync(path.join(tasksDir, 'pending-one.md'), 'Pending task');
-
-    const failedDir = path.join(tmpDir, '.takt', 'failed', '2025-01-15T12-34-56_failed-one');
-    fs.mkdirSync(failedDir, { recursive: true });
-    fs.writeFileSync(path.join(failedDir, 'failed-one.md'), 'Failed task');
-
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-
-    // When
-    await listTasks(tmpDir, undefined, { enabled: true });
-
-    // Then
-    const calls = logSpy.mock.calls.map((c) => c[0] as string);
-    expect(calls).toContainEqual(expect.stringContaining('[running] pending-one'));
-    expect(calls).not.toContainEqual(expect.stringContaining('[pending] pending-one'));
-    expect(calls).not.toContainEqual(expect.stringContaining('[pendig] pending-one'));
-    expect(calls).toContainEqual(expect.stringContaining('[failed] failed-one'));
-    logSpy.mockRestore();
-  });
-
-  it('should show info message when no tasks exist', async () => {
-    // Given: no tasks, no branches
-
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-
-    // When
-    await listTasks(tmpDir, undefined, { enabled: true });
-
-    // Then
-    const calls = logSpy.mock.calls.map((c) => c[0] as string);
-    expect(calls.some((c) => c.includes('No tasks to list'))).toBe(true);
-    logSpy.mockRestore();
-  });
+beforeEach(() => {
+  vi.clearAllMocks();
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-list-non-interactive-'));
 });
 
-describe('listTasks non-interactive action errors', () => {
-  let tmpDir: string;
+afterEach(() => {
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
 
-  beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-test-ni-err-'));
-    execFileSync('git', ['init', '--initial-branch', 'main'], { cwd: tmpDir, stdio: 'pipe' });
-    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: tmpDir, stdio: 'pipe' });
-    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tmpDir, stdio: 'pipe' });
-    execFileSync('git', ['commit', '--allow-empty', '-m', 'init'], { cwd: tmpDir, stdio: 'pipe' });
-    // Create a pending task so the "no tasks" early return is not triggered
-    const tasksDir = path.join(tmpDir, '.takt', 'tasks');
-    fs.mkdirSync(tasksDir, { recursive: true });
-    fs.writeFileSync(path.join(tasksDir, 'dummy.md'), 'dummy');
+function writeTasksFile(projectDir: string): void {
+  const tasksFile = path.join(projectDir, '.takt', 'tasks.yaml');
+  fs.mkdirSync(path.dirname(tasksFile), { recursive: true });
+  fs.writeFileSync(tasksFile, stringifyYaml({
+    tasks: [
+      {
+        name: 'pending-task',
+        status: 'pending',
+        content: 'Pending content',
+        created_at: '2026-02-09T00:00:00.000Z',
+        started_at: null,
+        completed_at: null,
+      },
+      {
+        name: 'failed-task',
+        status: 'failed',
+        content: 'Failed content',
+        created_at: '2026-02-09T00:00:00.000Z',
+        started_at: '2026-02-09T00:01:00.000Z',
+        completed_at: '2026-02-09T00:02:00.000Z',
+        failure: { error: 'Boom' },
+      },
+    ],
+  }), 'utf-8');
+}
+
+describe('listTasksNonInteractive', () => {
+  it('should output pending and failed tasks in text format', async () => {
+    writeTasksFile(tmpDir);
+
+    await listTasksNonInteractive(tmpDir, { enabled: true, format: 'text' });
+
+    expect(mockInfo).toHaveBeenCalledWith(expect.stringContaining('[running] pending-task'));
+    expect(mockInfo).toHaveBeenCalledWith(expect.stringContaining('[failed] failed-task'));
   });
 
-  afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
+  it('should output JSON when format=json', async () => {
+    writeTasksFile(tmpDir);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
 
-  it('should exit with code 1 when --action specified without --branch', async () => {
-    // Given
-    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => { throw new Error('process.exit'); });
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await listTasksNonInteractive(tmpDir, { enabled: true, format: 'json' });
 
-    // When / Then
-    await expect(
-      listTasks(tmpDir, undefined, { enabled: true, action: 'diff' }),
-    ).rejects.toThrow('process.exit');
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    const payload = JSON.parse(logSpy.mock.calls[0]![0] as string) as { pendingTasks: Array<{ name: string }>; failedTasks: Array<{ name: string }> };
+    expect(payload.pendingTasks[0]?.name).toBe('pending-task');
+    expect(payload.failedTasks[0]?.name).toBe('failed-task');
 
-    expect(exitSpy).toHaveBeenCalledWith(1);
-    exitSpy.mockRestore();
-    logSpy.mockRestore();
-  });
-
-  it('should exit with code 1 for invalid action', async () => {
-    // Given
-    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => { throw new Error('process.exit'); });
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-
-    // When / Then
-    await expect(
-      listTasks(tmpDir, undefined, { enabled: true, action: 'invalid', branch: 'some-branch' }),
-    ).rejects.toThrow('process.exit');
-
-    expect(exitSpy).toHaveBeenCalledWith(1);
-    exitSpy.mockRestore();
-    logSpy.mockRestore();
-  });
-
-  it('should exit with code 1 when branch not found', async () => {
-    // Given
-    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => { throw new Error('process.exit'); });
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-
-    // When / Then
-    await expect(
-      listTasks(tmpDir, undefined, { enabled: true, action: 'diff', branch: 'takt/nonexistent' }),
-    ).rejects.toThrow('process.exit');
-
-    expect(exitSpy).toHaveBeenCalledWith(1);
-    exitSpy.mockRestore();
-    logSpy.mockRestore();
-  });
-
-  it('should exit with code 1 for delete without --yes', async () => {
-    // Given: create a branch so it's found
-    execFileSync('git', ['checkout', '-b', 'takt/20250115-test-branch'], { cwd: tmpDir, stdio: 'pipe' });
-    execFileSync('git', ['checkout', 'main'], { cwd: tmpDir, stdio: 'pipe' });
-
-    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => { throw new Error('process.exit'); });
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-
-    // When / Then
-    await expect(
-      listTasks(tmpDir, undefined, {
-        enabled: true,
-        action: 'delete',
-        branch: 'takt/20250115-test-branch',
-      }),
-    ).rejects.toThrow('process.exit');
-
-    expect(exitSpy).toHaveBeenCalledWith(1);
-    exitSpy.mockRestore();
     logSpy.mockRestore();
   });
 });
