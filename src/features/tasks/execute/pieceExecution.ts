@@ -309,7 +309,7 @@ export async function executePiece(
 
       const additionalIterations = Number.parseInt(input, 10);
       if (Number.isInteger(additionalIterations) && additionalIterations > 0) {
-        pieceConfig.maxIterations += additionalIterations;
+        pieceConfig.maxIterations = request.maxIterations + additionalIterations;
         return additionalIterations;
       }
 

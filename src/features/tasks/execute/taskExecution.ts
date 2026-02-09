@@ -23,7 +23,6 @@ import { resolveTaskExecution } from './resolveTask.js';
 export type { TaskExecutionOptions, ExecuteTaskOptions };
 
 const log = createLogger('task');
-const TASK_TIMEOUT_MS = 60 * 60 * 1000;
 
 /**
  * Resolve a GitHub issue from task data's issue number.
@@ -110,9 +109,7 @@ export async function executeAndCompleteTask(
   const executionLog: string[] = [];
   const taskAbortController = new AbortController();
   const externalAbortSignal = parallelOptions?.abortSignal;
-  const taskTimeoutMs = externalAbortSignal ? TASK_TIMEOUT_MS : undefined;
   const taskAbortSignal = externalAbortSignal ? taskAbortController.signal : undefined;
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
   const onExternalAbort = (): void => {
     taskAbortController.abort();
@@ -143,21 +140,7 @@ export async function executeAndCompleteTask(
       taskColorIndex: parallelOptions?.taskColorIndex,
     });
 
-    const timeoutPromise = taskTimeoutMs && taskTimeoutMs > 0
-      ? new Promise<boolean>((_, reject) => {
-        timeoutId = setTimeout(() => {
-          taskAbortController.abort();
-          reject(new Error(`Task timed out after ${Math.floor(taskTimeoutMs / 60000)} minutes`));
-        }, taskTimeoutMs);
-      })
-      : undefined;
-
-    const taskSuccess = timeoutPromise
-      ? await Promise.race<boolean>([
-        taskRunPromise,
-        timeoutPromise,
-      ])
-      : await taskRunPromise;
+    const taskSuccess = await taskRunPromise;
     const completedAt = new Date().toISOString();
 
     if (taskSuccess && isWorktree) {
@@ -227,9 +210,6 @@ export async function executeAndCompleteTask(
     error(`Task "${task.name}" error: ${getErrorMessage(err)}`);
     return false;
   } finally {
-    if (timeoutId !== undefined) {
-      clearTimeout(timeoutId);
-    }
     if (externalAbortSignal) {
       externalAbortSignal.removeEventListener('abort', onExternalAbort);
     }
