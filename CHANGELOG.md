@@ -4,6 +4,37 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.0] - 2026-02-10
+
+### Added
+
+- **`e2e-test` ビルトインピース**: E2Eテスト特化のピースを新規追加 — E2E分析 → E2E実装 → レビュー → 修正のフロー（VitestベースのE2Eテスト向け）
+- **`error` ステータス**: プロバイダーエラーを `blocked` から分離し、エラー状態を明確に区別可能に。Codex にリトライ機構を追加
+- **タスク YAML 一元管理**: タスクファイルの管理を `tasks.yaml` に統合。`TaskRecordSchema` による構造化されたタスクライフサイクル管理（pending/running/completed/failed）
+- **タスク指示書ドキュメント**: タスク指示書の構造と目的を明文化 (#174)
+- **レビューポリシー**: 共通レビューポリシーファセット（`builtins/{lang}/policies/review.md`）を追加
+- **SIGINT グレースフルシャットダウンの E2E テスト**: 並列実行中の Ctrl+C 動作を検証する E2E テストを追加
+
+### Changed
+
+- **ビルトインピース簡素化**: 全ビルトインピースからトップレベルの `policies`/`personas`/`knowledge`/`instructions`/`report_formats` 宣言を削除し、名前ベースの暗黙的解決に移行。ピース YAML がよりシンプルに
+- **ピースカテゴリ仕様更新**: カテゴリの設定・表示ロジックを改善。グローバル設定でのカテゴリ管理を強化 (#184)
+- **`takt list` の優先度・参照改善**: ブランチ解決のパフォーマンス最適化。ベースコミットキャッシュの導入 (#186, #195, #196)
+- **Ctrl+C シグナルハンドリング改善**: 並列実行中の SIGINT 処理を安定化
+- **ループ防止ポリシー強化**: エージェントの無限ループを防止するためのポリシーを強化
+
+### Fixed
+
+- オリジナル指示の差分処理が正しく動作しない問題を修正 (#181)
+- タスク指示書のゴールが不適切にスコープ拡張される問題を修正 — ゴールを常に実装・実行に固定
+
+### Internal
+
+- タスク管理コードの大規模リファクタリング: `parser.ts` を廃止し `store.ts`/`mapper.ts`/`schema.ts`/`naming.ts` に分離。`branchGitResolver.ts`/`branchBaseCandidateResolver.ts`/`branchBaseRefCache.ts`/`branchEntryPointResolver.ts` でブランチ解決を細分化
+- テストの大幅な拡充・リファクタリング: aggregate-evaluator, blocked-handler, branchGitResolver-performance, branchList-regression, buildListItems-performance, error-utils, escape, facet-resolution, getFilesChanged, global-pieceCategories, instruction-context, instruction-helpers, judgment-strategies, listTasksInteractivePendingLabel, loop-detector, naming, reportDir, resetCategories, rule-evaluator, rule-utils, slug, state-manager, switchPiece, task-schema, text, transitions, watchTasks 等を新規追加
+- Codex クライアントのリファクタリング
+- ピースパーサーのファセット解決ロジック改善
+
 ## [0.10.0] - 2026-02-09
 
 ### Added

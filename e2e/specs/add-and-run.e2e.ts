@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parse as parseYaml } from 'yaml';
 import { createIsolatedEnv, type IsolatedEnv } from '../helpers/isolated-env';
 import { createTestRepo, type TestRepo } from '../helpers/test-repo';
 import { runTakt } from '../helpers/takt-runner';
@@ -35,15 +36,22 @@ describe('E2E: Add task and run (takt add → takt run)', () => {
   it('should add a task file and execute it with takt run', () => {
     const piecePath = resolve(__dirname, '../fixtures/pieces/simple.yaml');
 
-    // Step 1: Create a task file in .takt/tasks/ (simulates `takt add`)
-    const tasksDir = join(testRepo.path, '.takt', 'tasks');
-    mkdirSync(tasksDir, { recursive: true });
+    // Step 1: Create a pending task in .takt/tasks.yaml (simulates `takt add`)
+    const taktDir = join(testRepo.path, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    const tasksFile = join(taktDir, 'tasks.yaml');
 
     const taskYaml = [
-      'task: "Add a single line \\"E2E test passed\\" to README.md"',
-      `piece: "${piecePath}"`,
+      'tasks:',
+      '  - name: e2e-test-task',
+      '    status: pending',
+      '    content: "Add a single line \\"E2E test passed\\" to README.md"',
+      `    piece: "${piecePath}"`,
+      `    created_at: "${new Date().toISOString()}"`,
+      '    started_at: null',
+      '    completed_at: null',
     ].join('\n');
-    writeFileSync(join(tasksDir, 'e2e-test-task.yaml'), taskYaml, 'utf-8');
+    writeFileSync(tasksFile, taskYaml, 'utf-8');
 
     // Step 2: Run `takt run` to execute the pending task
     const result = runTakt({
@@ -66,7 +74,10 @@ describe('E2E: Add task and run (takt add → takt run)', () => {
     const readme = readFileSync(readmePath, 'utf-8');
     expect(readme).toContain('E2E test passed');
 
-    // Verify task file was moved out of tasks/ (completed or failed)
-    expect(existsSync(join(tasksDir, 'e2e-test-task.yaml'))).toBe(false);
+    // Verify task status became completed
+    const tasksRaw = readFileSync(tasksFile, 'utf-8');
+    const parsed = parseYaml(tasksRaw) as { tasks?: Array<{ name?: string; status?: string }> };
+    const executed = parsed.tasks?.find((task) => task.name === 'e2e-test-task');
+    expect(executed?.status).toBe('completed');
   }, 240_000);
 });

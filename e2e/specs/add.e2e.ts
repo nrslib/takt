@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parse as parseYaml } from 'yaml';
 import { createIsolatedEnv, type IsolatedEnv } from '../helpers/isolated-env';
 import { createTestRepo, type TestRepo } from '../helpers/test-repo';
 import { runTakt } from '../helpers/takt-runner';
@@ -84,12 +85,10 @@ describe('E2E: Add task from GitHub issue (takt add)', () => {
 
     expect(result.exitCode).toBe(0);
 
-    const tasksDir = join(testRepo.path, '.takt', 'tasks');
-    const files = readdirSync(tasksDir).filter((file) => file.endsWith('.yaml'));
-    expect(files.length).toBe(1);
-
-    const taskFile = join(tasksDir, files[0] ?? '');
-    const content = readFileSync(taskFile, 'utf-8');
-    expect(content).toContain('issue:');
+    const tasksFile = join(testRepo.path, '.takt', 'tasks.yaml');
+    const content = readFileSync(tasksFile, 'utf-8');
+    const parsed = parseYaml(content) as { tasks?: Array<{ issue?: number }> };
+    expect(parsed.tasks?.length).toBe(1);
+    expect(parsed.tasks?.[0]?.issue).toBe(Number(issueNumber));
   }, 240_000);
 });

@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawn } from 'node:child_process';
-import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parse as parseYaml } from 'yaml';
 import { createIsolatedEnv, type IsolatedEnv } from '../helpers/isolated-env';
 import { createTestRepo, type TestRepo } from '../helpers/test-repo';
 
@@ -51,16 +52,21 @@ describe('E2E: Watch tasks (takt watch)', () => {
       stdout += chunk.toString();
     });
 
-    const tasksDir = join(testRepo.path, '.takt', 'tasks');
-    mkdirSync(tasksDir, { recursive: true });
-
+    const taktDir = join(testRepo.path, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    const tasksFile = join(taktDir, 'tasks.yaml');
+    const createdAt = new Date().toISOString();
     const taskYaml = [
-      'task: "Add a single line \\\"watch test\\\" to README.md"',
-      `piece: "${piecePath}"`,
+      'tasks:',
+      '  - name: watch-task',
+      '    status: pending',
+      '    content: "Add a single line \\"watch test\\" to README.md"',
+      `    piece: "${piecePath}"`,
+      `    created_at: "${createdAt}"`,
+      '    started_at: null',
+      '    completed_at: null',
     ].join('\n');
-
-    const taskPath = join(tasksDir, 'watch-task.yaml');
-    writeFileSync(taskPath, taskYaml, 'utf-8');
+    writeFileSync(tasksFile, taskYaml, 'utf-8');
 
     const completed = await new Promise<boolean>((resolvePromise) => {
       const timeout = setTimeout(() => resolvePromise(false), 240_000);
@@ -87,6 +93,9 @@ describe('E2E: Watch tasks (takt watch)', () => {
     });
 
     expect(completed).toBe(true);
-    expect(existsSync(taskPath)).toBe(false);
+    const tasksRaw = readFileSync(tasksFile, 'utf-8');
+    const parsed = parseYaml(tasksRaw) as { tasks?: Array<{ name?: string; status?: string }> };
+    const watchTask = parsed.tasks?.find((task) => task.name === 'watch-task');
+    expect(watchTask?.status).toBe('completed');
   }, 240_000);
 });
