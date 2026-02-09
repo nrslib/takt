@@ -27,7 +27,6 @@ export {
 
 export {
   getPieceCategoriesPath,
-  ensureUserCategoriesFile,
   resetPieceCategories,
 } from './pieceCategories.js';
 

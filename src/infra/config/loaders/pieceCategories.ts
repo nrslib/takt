@@ -1,8 +1,9 @@
 /**
  * Piece category configuration loader and helpers.
  *
- * Categories are loaded from a single source: the user's piece-categories.yaml file.
- * If the file doesn't exist, it's auto-copied from builtin defaults.
+ * Categories are built from 2 layers:
+ * - builtin base categories (read-only)
+ * - user overlay categories (optional)
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -10,7 +11,7 @@ import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod/v4';
 import { getLanguage, getBuiltinPiecesEnabled, getDisabledBuiltins } from '../global/globalConfig.js';
-import { ensureUserCategoriesFile } from '../global/pieceCategories.js';
+import { getPieceCategoriesPath } from '../global/pieceCategories.js';
 import { getLanguageResourcesDir } from '../../resources/index.js';
 import { listBuiltinPieceNames } from './pieceResolver.js';
 import type { PieceWithSource } from './pieceResolver.js';
@@ -29,6 +30,8 @@ export interface PieceCategoryNode {
 
 export interface CategoryConfig {
   pieceCategories: PieceCategoryNode[];
+  builtinPieceCategories: PieceCategoryNode[];
+  userPieceCategories: PieceCategoryNode[];
   showOthersCategory: boolean;
   othersCategoryName: string;
 }
@@ -42,12 +45,26 @@ export interface CategorizedPieces {
 export interface MissingPiece {
   categoryPath: string[];
   pieceName: string;
+  source: 'builtin' | 'user';
 }
 
 interface RawCategoryConfig {
   piece_categories?: Record<string, unknown>;
   show_others_category?: boolean;
   others_category_name?: string;
+}
+
+interface ParsedCategoryNode {
+  name: string;
+  pieces: string[];
+  hasPieces: boolean;
+  children: ParsedCategoryNode[];
+}
+
+interface ParsedCategoryConfig {
+  pieceCategories?: ParsedCategoryNode[];
+  showOthersCategory?: boolean;
+  othersCategoryName?: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -59,6 +76,7 @@ function parsePieces(raw: unknown, sourceLabel: string, path: string[]): string[
   if (!Array.isArray(raw)) {
     throw new Error(`pieces must be an array in ${sourceLabel} at ${path.join(' > ')}`);
   }
+
   const pieces: string[] = [];
   for (const item of raw) {
     if (typeof item !== 'string' || item.trim().length === 0) {
@@ -74,13 +92,14 @@ function parseCategoryNode(
   raw: unknown,
   sourceLabel: string,
   path: string[],
-): PieceCategoryNode {
+): ParsedCategoryNode {
   if (!isRecord(raw)) {
     throw new Error(`category "${name}" must be an object in ${sourceLabel} at ${path.join(' > ')}`);
   }
 
+  const hasPieces = Object.prototype.hasOwnProperty.call(raw, 'pieces');
   const pieces = parsePieces(raw.pieces, sourceLabel, path);
-  const children: PieceCategoryNode[] = [];
+  const children: ParsedCategoryNode[] = [];
 
   for (const [key, value] of Object.entries(raw)) {
     if (key === 'pieces') continue;
@@ -90,57 +109,123 @@ function parseCategoryNode(
     children.push(parseCategoryNode(key, value, sourceLabel, [...path, key]));
   }
 
-  return { name, pieces, children };
+  return { name, pieces, hasPieces, children };
 }
 
-function parseCategoryTree(raw: unknown, sourceLabel: string): PieceCategoryNode[] {
+function parseCategoryTree(raw: unknown, sourceLabel: string): ParsedCategoryNode[] {
   if (!isRecord(raw)) {
     throw new Error(`piece_categories must be an object in ${sourceLabel}`);
   }
-  const categories: PieceCategoryNode[] = [];
+
+  const categories: ParsedCategoryNode[] = [];
   for (const [name, value] of Object.entries(raw)) {
     categories.push(parseCategoryNode(name, value, sourceLabel, [name]));
   }
   return categories;
 }
 
-function parseCategoryConfig(raw: unknown, sourceLabel: string): CategoryConfig | null {
+function parseCategoryConfig(raw: unknown, sourceLabel: string): ParsedCategoryConfig | null {
   if (!raw || typeof raw !== 'object') {
     return null;
   }
 
-  const hasPieceCategories = Object.prototype.hasOwnProperty.call(raw, 'piece_categories');
-  if (!hasPieceCategories) {
+  const parsed = CategoryConfigSchema.parse(raw) as RawCategoryConfig;
+  const hasPieceCategories = Object.prototype.hasOwnProperty.call(parsed, 'piece_categories');
+
+  const result: ParsedCategoryConfig = {};
+  if (hasPieceCategories) {
+    if (!parsed.piece_categories) {
+      throw new Error(`piece_categories must be an object in ${sourceLabel}`);
+    }
+    result.pieceCategories = parseCategoryTree(parsed.piece_categories, sourceLabel);
+  }
+
+  if (parsed.show_others_category !== undefined) {
+    result.showOthersCategory = parsed.show_others_category;
+  }
+  if (parsed.others_category_name !== undefined) {
+    result.othersCategoryName = parsed.others_category_name;
+  }
+
+  if (
+    result.pieceCategories === undefined
+    && result.showOthersCategory === undefined
+    && result.othersCategoryName === undefined
+  ) {
     return null;
   }
 
-  const parsed = CategoryConfigSchema.parse(raw) as RawCategoryConfig;
-  if (!parsed.piece_categories) {
-    throw new Error(`piece_categories is required in ${sourceLabel}`);
-  }
-
-  const showOthersCategory = parsed.show_others_category === undefined
-    ? true
-    : parsed.show_others_category;
-
-  const othersCategoryName = parsed.others_category_name === undefined
-    ? 'Others'
-    : parsed.others_category_name;
-
-  return {
-    pieceCategories: parseCategoryTree(parsed.piece_categories, sourceLabel),
-    showOthersCategory,
-    othersCategoryName,
-  };
+  return result;
 }
 
-function loadCategoryConfigFromPath(path: string, sourceLabel: string): CategoryConfig | null {
+function loadCategoryConfigFromPath(path: string, sourceLabel: string): ParsedCategoryConfig | null {
   if (!existsSync(path)) {
     return null;
   }
+
   const content = readFileSync(path, 'utf-8');
   const raw = parseYaml(content);
   return parseCategoryConfig(raw, sourceLabel);
+}
+
+function convertParsedNodes(nodes: ParsedCategoryNode[]): PieceCategoryNode[] {
+  return nodes.map((node) => ({
+    name: node.name,
+    pieces: node.pieces,
+    children: convertParsedNodes(node.children),
+  }));
+}
+
+function mergeCategoryNodes(baseNodes: ParsedCategoryNode[], overlayNodes: ParsedCategoryNode[]): ParsedCategoryNode[] {
+  const overlayByName = new Map<string, ParsedCategoryNode>();
+  for (const overlayNode of overlayNodes) {
+    overlayByName.set(overlayNode.name, overlayNode);
+  }
+
+  const merged: ParsedCategoryNode[] = [];
+  for (const baseNode of baseNodes) {
+    const overlayNode = overlayByName.get(baseNode.name);
+    if (!overlayNode) {
+      merged.push(baseNode);
+      continue;
+    }
+
+    overlayByName.delete(baseNode.name);
+
+    const mergedNode: ParsedCategoryNode = {
+      name: baseNode.name,
+      pieces: overlayNode.hasPieces ? overlayNode.pieces : baseNode.pieces,
+      hasPieces: baseNode.hasPieces || overlayNode.hasPieces,
+      children: mergeCategoryNodes(baseNode.children, overlayNode.children),
+    };
+    merged.push(mergedNode);
+  }
+
+  for (const overlayNode of overlayByName.values()) {
+    merged.push(overlayNode);
+  }
+
+  return merged;
+}
+
+function resolveShowOthersCategory(defaultConfig: ParsedCategoryConfig, userConfig: ParsedCategoryConfig | null): boolean {
+  if (userConfig?.showOthersCategory !== undefined) {
+    return userConfig.showOthersCategory;
+  }
+  if (defaultConfig.showOthersCategory !== undefined) {
+    return defaultConfig.showOthersCategory;
+  }
+  return true;
+}
+
+function resolveOthersCategoryName(defaultConfig: ParsedCategoryConfig, userConfig: ParsedCategoryConfig | null): string {
+  if (userConfig?.othersCategoryName !== undefined) {
+    return userConfig.othersCategoryName;
+  }
+  if (defaultConfig.othersCategoryName !== undefined) {
+    return defaultConfig.othersCategoryName;
+  }
+  return 'Others';
 }
 
 /**
@@ -150,7 +235,23 @@ function loadCategoryConfigFromPath(path: string, sourceLabel: string): Category
 export function loadDefaultCategories(): CategoryConfig | null {
   const lang = getLanguage();
   const filePath = join(getLanguageResourcesDir(lang), 'piece-categories.yaml');
-  return loadCategoryConfigFromPath(filePath, filePath);
+  const parsed = loadCategoryConfigFromPath(filePath, filePath);
+
+  if (!parsed?.pieceCategories) {
+    return null;
+  }
+
+  const builtinPieceCategories = convertParsedNodes(parsed.pieceCategories);
+  const showOthersCategory = parsed.showOthersCategory ?? true;
+  const othersCategoryName = parsed.othersCategoryName ?? 'Others';
+
+  return {
+    pieceCategories: builtinPieceCategories,
+    builtinPieceCategories,
+    userPieceCategories: [],
+    showOthersCategory,
+    othersCategoryName,
+  };
 }
 
 /** Get the path to the builtin default categories file. */
@@ -161,28 +262,49 @@ export function getDefaultCategoriesPath(): string {
 
 /**
  * Get effective piece categories configuration.
- * Reads from user file (~/.takt/preferences/piece-categories.yaml).
- * Auto-copies from builtin defaults if user file doesn't exist.
+ * Built from builtin categories and optional user overlay.
  */
 export function getPieceCategories(): CategoryConfig | null {
   const defaultPath = getDefaultCategoriesPath();
-  const userPath = ensureUserCategoriesFile(defaultPath);
-  return loadCategoryConfigFromPath(userPath, userPath);
+  const defaultConfig = loadCategoryConfigFromPath(defaultPath, defaultPath);
+  if (!defaultConfig?.pieceCategories) {
+    return null;
+  }
+
+  const userPath = getPieceCategoriesPath();
+  const userConfig = loadCategoryConfigFromPath(userPath, userPath);
+
+  const merged = userConfig?.pieceCategories
+    ? mergeCategoryNodes(defaultConfig.pieceCategories, userConfig.pieceCategories)
+    : defaultConfig.pieceCategories;
+
+  const builtinPieceCategories = convertParsedNodes(defaultConfig.pieceCategories);
+  const userPieceCategories = convertParsedNodes(userConfig?.pieceCategories ?? []);
+
+  return {
+    pieceCategories: convertParsedNodes(merged),
+    builtinPieceCategories,
+    userPieceCategories,
+    showOthersCategory: resolveShowOthersCategory(defaultConfig, userConfig),
+    othersCategoryName: resolveOthersCategoryName(defaultConfig, userConfig),
+  };
 }
 
 function collectMissingPieces(
   categories: PieceCategoryNode[],
   allPieces: Map<string, PieceWithSource>,
   ignorePieces: Set<string>,
+  source: 'builtin' | 'user',
 ): MissingPiece[] {
   const missing: MissingPiece[] = [];
+
   const visit = (nodes: PieceCategoryNode[], path: string[]): void => {
     for (const node of nodes) {
       const nextPath = [...path, node.name];
       for (const pieceName of node.pieces) {
         if (ignorePieces.has(pieceName)) continue;
         if (!allPieces.has(pieceName)) {
-          missing.push({ categoryPath: nextPath, pieceName });
+          missing.push({ categoryPath: nextPath, pieceName, source });
         }
       }
       if (node.children.length > 0) {
@@ -235,7 +357,6 @@ function appendOthersCategory(
     return categories;
   }
 
-  // If a category with the same name already exists, merge uncategorized pieces into it
   const existingIndex = categories.findIndex((node) => node.name === othersCategoryName);
   if (existingIndex >= 0) {
     const existing = categories[existingIndex]!;
@@ -250,8 +371,7 @@ function appendOthersCategory(
 }
 
 /**
- * Build categorized pieces map from configuration.
- * All pieces (user and builtin) are placed in a single category tree.
+ * Build categorized pieces map from effective configuration.
  */
 export function buildCategorizedPieces(
   allPieces: Map<string, PieceWithSource>,
@@ -268,18 +388,13 @@ export function buildCategorizedPieces(
     }
   }
 
-  const missingPieces = collectMissingPieces(
-    config.pieceCategories,
-    allPieces,
-    ignoreMissing,
-  );
+  const missingPieces = [
+    ...collectMissingPieces(config.builtinPieceCategories, allPieces, ignoreMissing, 'builtin'),
+    ...collectMissingPieces(config.userPieceCategories, allPieces, ignoreMissing, 'user'),
+  ];
 
   const categorized = new Set<string>();
-  const categories = buildCategoryTree(
-    config.pieceCategories,
-    allPieces,
-    categorized,
-  );
+  const categories = buildCategoryTree(config.pieceCategories, allPieces, categorized);
 
   const finalCategories = config.showOthersCategory
     ? appendOthersCategory(categories, allPieces, categorized, config.othersCategoryName)

@@ -68,7 +68,7 @@ async function selectPiece(cwd: string): Promise<string | null> {
       return DEFAULT_PIECE_NAME;
     }
     const categorized = buildCategorizedPieces(allPieces, categoryConfig);
-    warnMissingPieces(categorized.missingPieces);
+    warnMissingPieces(categorized.missingPieces.filter((missing) => missing.source === 'user'));
     return selectPieceFromCategorizedPieces(categorized, current);
   }
   return selectPieceWithDirectoryCategories(cwd);

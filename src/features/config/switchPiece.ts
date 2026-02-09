@@ -37,7 +37,7 @@ export async function switchPiece(cwd: string, pieceName?: string): Promise<bool
         selected = null;
       } else {
         const categorized = buildCategorizedPieces(allPieces, categoryConfig);
-        warnMissingPieces(categorized.missingPieces);
+        warnMissingPieces(categorized.missingPieces.filter((missing) => missing.source === 'user'));
         selected = await selectPieceFromCategorizedPieces(categorized, current);
       }
     } else {

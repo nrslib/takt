@@ -58,13 +58,26 @@ vi.mock('../features/pieceSelection/index.js', () => ({
 }));
 
 import { confirm } from '../shared/prompt/index.js';
+import {
+  getCurrentPiece,
+  loadAllPiecesWithSources,
+  getPieceCategories,
+  buildCategorizedPieces,
+} from '../infra/config/index.js';
 import { createSharedClone, autoCommitAndPush, summarizeTaskName } from '../infra/task/index.js';
-import { selectAndExecuteTask } from '../features/tasks/execute/selectAndExecute.js';
+import { warnMissingPieces, selectPieceFromCategorizedPieces } from '../features/pieceSelection/index.js';
+import { selectAndExecuteTask, determinePiece } from '../features/tasks/execute/selectAndExecute.js';
 
 const mockConfirm = vi.mocked(confirm);
+const mockGetCurrentPiece = vi.mocked(getCurrentPiece);
+const mockLoadAllPiecesWithSources = vi.mocked(loadAllPiecesWithSources);
+const mockGetPieceCategories = vi.mocked(getPieceCategories);
+const mockBuildCategorizedPieces = vi.mocked(buildCategorizedPieces);
 const mockCreateSharedClone = vi.mocked(createSharedClone);
 const mockAutoCommitAndPush = vi.mocked(autoCommitAndPush);
 const mockSummarizeTaskName = vi.mocked(summarizeTaskName);
+const mockWarnMissingPieces = vi.mocked(warnMissingPieces);
+const mockSelectPieceFromCategorizedPieces = vi.mocked(selectPieceFromCategorizedPieces);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -101,5 +114,46 @@ describe('resolveAutoPr default in selectAndExecuteTask', () => {
     );
     expect(autoPrCall).toBeDefined();
     expect(autoPrCall![1]).toBe(true);
+  });
+
+  it('should warn only user-origin missing pieces during interactive selection', async () => {
+    // Given: category selection is enabled and both builtin/user missing pieces exist
+    mockGetCurrentPiece.mockReturnValue('default');
+    mockLoadAllPiecesWithSources.mockReturnValue(new Map([
+      ['default', {
+        source: 'builtin',
+        config: {
+          name: 'default',
+          movements: [],
+          initialMovement: 'start',
+          maxIterations: 1,
+        },
+      }],
+    ]));
+    mockGetPieceCategories.mockReturnValue({
+      pieceCategories: [],
+      builtinPieceCategories: [],
+      userPieceCategories: [],
+      showOthersCategory: true,
+      othersCategoryName: 'Others',
+    });
+    mockBuildCategorizedPieces.mockReturnValue({
+      categories: [],
+      allPieces: new Map(),
+      missingPieces: [
+        { categoryPath: ['Quick Start'], pieceName: 'default', source: 'builtin' },
+        { categoryPath: ['Custom'], pieceName: 'my-missing', source: 'user' },
+      ],
+    });
+    mockSelectPieceFromCategorizedPieces.mockResolvedValue('default');
+
+    // When
+    const selected = await determinePiece('/project');
+
+    // Then
+    expect(selected).toBe('default');
+    expect(mockWarnMissingPieces).toHaveBeenCalledWith([
+      { categoryPath: ['Custom'], pieceName: 'my-missing', source: 'user' },
+    ]);
   });
 });
