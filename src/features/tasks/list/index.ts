@@ -30,6 +30,7 @@ import {
 import { deletePendingTask, deleteFailedTask } from './taskDeleteActions.js';
 import { retryFailedTask } from './taskRetryActions.js';
 import { listTasksNonInteractive, type ListNonInteractiveOptions } from './listNonInteractive.js';
+import { formatTaskStatusLabel } from './taskStatusLabel.js';
 
 export type { ListNonInteractiveOptions } from './listNonInteractive.js';
 
@@ -54,7 +55,7 @@ type FailedTaskAction = 'retry' | 'delete';
  * Returns the selected action, or null if cancelled.
  */
 async function showPendingTaskAndPromptAction(task: TaskListItem): Promise<PendingTaskAction | null> {
-  header(`[${task.kind}] ${task.name}`);
+  header(formatTaskStatusLabel(task));
   info(`  Created: ${task.createdAt}`);
   if (task.content) {
     info(`  ${task.content}`);
@@ -72,7 +73,7 @@ async function showPendingTaskAndPromptAction(task: TaskListItem): Promise<Pendi
  * Returns the selected action, or null if cancelled.
  */
 async function showFailedTaskAndPromptAction(task: TaskListItem): Promise<FailedTaskAction | null> {
-  header(`[${task.kind}] ${task.name}`);
+  header(formatTaskStatusLabel(task));
   info(`  Failed at: ${task.createdAt}`);
   if (task.content) {
     info(`  ${task.content}`);
@@ -129,12 +130,12 @@ export async function listTasks(
         };
       }),
       ...pendingTasks.map((task, idx) => ({
-        label: `[pending] ${task.name}`,
+        label: formatTaskStatusLabel(task),
         value: `pending:${idx}`,
         description: task.content,
       })),
       ...failedTasks.map((task, idx) => ({
-        label: `[failed] ${task.name}`,
+        label: formatTaskStatusLabel(task),
         value: `failed:${idx}`,
         description: task.content,
       })),

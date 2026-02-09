@@ -37,7 +37,9 @@ describe('listTasks non-interactive text output', () => {
 
     // Then
     const calls = logSpy.mock.calls.map((c) => c[0] as string);
-    expect(calls).toContainEqual(expect.stringContaining('[pending] my-task'));
+    expect(calls).toContainEqual(expect.stringContaining('[running] my-task'));
+    expect(calls).not.toContainEqual(expect.stringContaining('[pending] my-task'));
+    expect(calls).not.toContainEqual(expect.stringContaining('[pendig] my-task'));
     expect(calls).toContainEqual(expect.stringContaining('Fix the login bug'));
     logSpy.mockRestore();
   });
@@ -77,7 +79,9 @@ describe('listTasks non-interactive text output', () => {
 
     // Then
     const calls = logSpy.mock.calls.map((c) => c[0] as string);
-    expect(calls).toContainEqual(expect.stringContaining('[pending] pending-one'));
+    expect(calls).toContainEqual(expect.stringContaining('[running] pending-one'));
+    expect(calls).not.toContainEqual(expect.stringContaining('[pending] pending-one'));
+    expect(calls).not.toContainEqual(expect.stringContaining('[pendig] pending-one'));
     expect(calls).toContainEqual(expect.stringContaining('[failed] failed-one'));
     logSpy.mockRestore();
   });

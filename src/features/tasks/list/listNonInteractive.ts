@@ -20,6 +20,7 @@ import {
   mergeBranch,
   deleteBranch,
 } from './taskActions.js';
+import { formatTaskStatusLabel } from './taskStatusLabel.js';
 
 export interface ListNonInteractiveOptions {
   enabled: boolean;
@@ -56,11 +57,11 @@ function printNonInteractiveList(
   }
 
   for (const task of pendingTasks) {
-    info(`[pending] ${task.name} - ${task.content}`);
+    info(`${formatTaskStatusLabel(task)} - ${task.content}`);
   }
 
   for (const task of failedTasks) {
-    info(`[failed] ${task.name} - ${task.content}`);
+    info(`${formatTaskStatusLabel(task)} - ${task.content}`);
   }
 }
 
