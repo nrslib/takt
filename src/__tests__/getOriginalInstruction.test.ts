@@ -40,15 +40,54 @@ describe('getOriginalInstruction', () => {
   });
 
   it('should infer base from refs when reflog is unavailable', () => {
-    mockExecFileSync
-      .mockImplementationOnce(() => {
+    let developMergeBaseCalls = 0;
+    mockExecFileSync.mockImplementation((cmd, args) => {
+      if (cmd !== 'git') {
+        throw new Error('unexpected command');
+      }
+
+      if (args[0] === 'reflog') {
         throw new Error('reflog unavailable');
-      })
-      .mockReturnValueOnce('develop\n')
-      .mockReturnValueOnce('base123\n')
-      .mockReturnValueOnce('2\n')
-      .mockReturnValueOnce('takt: Initial implementation\nfollow-up\n')
-      .mockReturnValueOnce('first456\ttakt: Initial implementation\n');
+      }
+
+      if (args[0] === 'merge-base' && args[1] === 'main') {
+        throw new Error('priority main failed');
+      }
+
+      if (args[0] === 'merge-base' && args[1] === 'origin/main') {
+        throw new Error('priority origin/main failed');
+      }
+
+      if (args[0] === 'rev-parse' && args[1] === '--git-common-dir') {
+        return '.git\n';
+      }
+
+      if (args[0] === 'for-each-ref') {
+        return 'develop\n';
+      }
+
+      if (args[0] === 'merge-base' && args[1] === 'develop') {
+        developMergeBaseCalls += 1;
+        if (developMergeBaseCalls === 1) {
+          return 'base123\n';
+        }
+        throw new Error('unexpected second develop merge-base');
+      }
+
+      if (args[0] === 'rev-list') {
+        return '2\n';
+      }
+
+      if (args[0] === 'log' && args[1] === '--format=%s') {
+        return 'takt: Initial implementation\nfollow-up\n';
+      }
+
+      if (args[0] === 'log' && args[1] === '--format=%H\t%s') {
+        return 'first456\ttakt: Initial implementation\n';
+      }
+
+      throw new Error(`Unexpected git args: ${args.join(' ')}`);
+    });
 
     const result = getOriginalInstruction('/project', 'main', 'takt/20260128-fix-auth');
 
@@ -67,12 +106,7 @@ describe('getOriginalInstruction', () => {
 
   it('should return empty string when no commits on branch', () => {
     mockExecFileSync
-      .mockImplementationOnce(() => {
-        throw new Error('reflog unavailable');
-      })
-      .mockReturnValueOnce('abc123\n')
-      .mockReturnValueOnce('')
-      .mockReturnValueOnce('abc123\n')
+      .mockReturnValueOnce('last789\nfirst456\nbase123\n')
       .mockReturnValueOnce('');
 
     const result = getOriginalInstruction('/project', 'main', 'takt/20260128-fix-auth');

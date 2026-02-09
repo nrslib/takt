@@ -31,15 +31,50 @@ describe('getFilesChanged', () => {
   });
 
   it('should infer base from refs when reflog is unavailable', () => {
-    mockExecFileSync
-      .mockImplementationOnce(() => {
+    let developMergeBaseCalls = 0;
+    mockExecFileSync.mockImplementation((cmd, args) => {
+      if (cmd !== 'git') {
+        throw new Error('unexpected command');
+      }
+
+      if (args[0] === 'reflog') {
         throw new Error('reflog unavailable');
-      })
-      .mockReturnValueOnce('develop\n')
-      .mockReturnValueOnce('base999\n')
-      .mockReturnValueOnce('1\n')
-      .mockReturnValueOnce('takt: fix auth\n')
-      .mockReturnValueOnce('1\t0\tfile1.ts\n');
+      }
+
+      if (args[0] === 'merge-base' && args[1] === 'develop') {
+        developMergeBaseCalls += 1;
+        if (developMergeBaseCalls === 1) {
+          throw new Error('priority develop failed');
+        }
+        return 'base999\n';
+      }
+
+      if (args[0] === 'merge-base' && args[1] === 'origin/develop') {
+        throw new Error('priority origin/develop failed');
+      }
+
+      if (args[0] === 'rev-parse' && args[1] === '--git-common-dir') {
+        return '.git\n';
+      }
+
+      if (args[0] === 'for-each-ref') {
+        return 'develop\n';
+      }
+
+      if (args[0] === 'rev-list') {
+        return '1\n';
+      }
+
+      if (args[0] === 'log' && args[1] === '--format=%s') {
+        return 'takt: initial\n';
+      }
+
+      if (args[0] === 'diff' && args[1] === '--numstat') {
+        return '1\t0\tfile1.ts\n';
+      }
+
+      throw new Error(`Unexpected git args: ${args.join(' ')}`);
+    });
 
     const result = getFilesChanged('/project', 'develop', 'takt/20260128-fix-auth');
 
