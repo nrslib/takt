@@ -558,6 +558,12 @@ model: sonnet            # デフォルトモデル（オプション）
 branch_name_strategy: romaji  # ブランチ名生成: 'romaji'（高速）または 'ai'（低速）
 prevent_sleep: false     # macOS の実行中スリープ防止（caffeinate）
 notification_sound: true # 通知音の有効/無効
+notification_sound_events: # タイミング別の通知音制御
+  iteration_limit: false
+  piece_complete: true
+  piece_abort: true
+  run_complete: true # 未設定時は有効。false を指定すると無効
+  run_abort: true    # 未設定時は有効。false を指定すると無効
 concurrency: 1           # takt run の並列タスク数（1-10、デフォルト: 1 = 逐次実行）
 task_poll_interval_ms: 500  # takt run 中の新タスク検出ポーリング間隔（100-5000、デフォルト: 500）
 interactive_preview_movements: 3  # 対話モードでのムーブメントプレビュー数（0-10、デフォルト: 3）

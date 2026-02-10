@@ -1,0 +1,11 @@
+provider: claude
+language: en
+log_level: info
+default_piece: default
+notification_sound: true
+notification_sound_events:
+  iteration_limit: false
+  piece_complete: false
+  piece_abort: false
+  run_complete: true
+  run_abort: true

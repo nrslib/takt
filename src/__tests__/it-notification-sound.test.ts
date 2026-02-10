@@ -270,6 +270,22 @@ describe('executePiece: notification sound behavior', () => {
 
       expect(mockNotifySuccess).not.toHaveBeenCalled();
     });
+
+    it('should NOT call notifySuccess when piece_complete event is disabled', async () => {
+      mockLoadGlobalConfig.mockReturnValue({
+        provider: 'claude',
+        notificationSound: true,
+        notificationSoundEvents: { pieceComplete: false },
+      });
+
+      const resultPromise = executePiece(makeConfig(), 'test task', tmpDir, { projectCwd: tmpDir });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      MockPieceEngine.latestInstance!.complete();
+      await resultPromise;
+
+      expect(mockNotifySuccess).not.toHaveBeenCalled();
+    });
   });
 
   describe('notifyError on piece:abort', () => {
@@ -299,6 +315,22 @@ describe('executePiece: notification sound behavior', () => {
 
     it('should NOT call notifyError when notificationSound is false', async () => {
       mockLoadGlobalConfig.mockReturnValue({ provider: 'claude', notificationSound: false });
+
+      const resultPromise = executePiece(makeConfig(), 'test task', tmpDir, { projectCwd: tmpDir });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      MockPieceEngine.latestInstance!.abort();
+      await resultPromise;
+
+      expect(mockNotifyError).not.toHaveBeenCalled();
+    });
+
+    it('should NOT call notifyError when piece_abort event is disabled', async () => {
+      mockLoadGlobalConfig.mockReturnValue({
+        provider: 'claude',
+        notificationSound: true,
+        notificationSoundEvents: { pieceAbort: false },
+      });
 
       const resultPromise = executePiece(makeConfig(), 'test task', tmpDir, { projectCwd: tmpDir });
       await new Promise((resolve) => setTimeout(resolve, 10));
@@ -339,6 +371,23 @@ describe('executePiece: notification sound behavior', () => {
 
     it('should NOT call playWarningSound when notificationSound is false', async () => {
       mockLoadGlobalConfig.mockReturnValue({ provider: 'claude', notificationSound: false });
+
+      const resultPromise = executePiece(makeConfig(), 'test task', tmpDir, { projectCwd: tmpDir });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      await MockPieceEngine.latestInstance!.triggerIterationLimit();
+      MockPieceEngine.latestInstance!.abort();
+      await resultPromise;
+
+      expect(mockPlayWarningSound).not.toHaveBeenCalled();
+    });
+
+    it('should NOT call playWarningSound when iteration_limit event is disabled', async () => {
+      mockLoadGlobalConfig.mockReturnValue({
+        provider: 'claude',
+        notificationSound: true,
+        notificationSoundEvents: { iterationLimit: false },
+      });
 
       const resultPromise = executePiece(makeConfig(), 'test task', tmpDir, { projectCwd: tmpDir });
       await new Promise((resolve) => setTimeout(resolve, 10));

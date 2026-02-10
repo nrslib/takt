@@ -3,7 +3,11 @@ import { spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createIsolatedEnv, type IsolatedEnv } from '../helpers/isolated-env';
+import {
+  createIsolatedEnv,
+  updateIsolatedConfig,
+  type IsolatedEnv,
+} from '../helpers/isolated-env';
 import { createTestRepo, type TestRepo } from '../helpers/test-repo';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -50,18 +54,12 @@ describe('E2E: Run tasks graceful shutdown on SIGINT (parallel)', () => {
     isolatedEnv = createIsolatedEnv();
     testRepo = createTestRepo();
 
-    writeFileSync(
-      join(isolatedEnv.taktDir, 'config.yaml'),
-      [
-        'provider: mock',
-        'model: mock-model',
-        'language: en',
-        'log_level: info',
-        'default_piece: default',
-        'concurrency: 2',
-        'task_poll_interval_ms: 100',
-      ].join('\n'),
-    );
+    updateIsolatedConfig(isolatedEnv.taktDir, {
+      provider: 'mock',
+      model: 'mock-model',
+      concurrency: 2,
+      task_poll_interval_ms: 100,
+    });
   });
 
   afterEach(() => {

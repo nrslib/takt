@@ -558,6 +558,12 @@ model: sonnet            # Default model (optional)
 branch_name_strategy: romaji  # Branch name generation: 'romaji' (fast) or 'ai' (slow)
 prevent_sleep: false     # Prevent macOS idle sleep during execution (caffeinate)
 notification_sound: true # Enable/disable notification sounds
+notification_sound_events: # Optional per-event toggles
+  iteration_limit: false
+  piece_complete: true
+  piece_abort: true
+  run_complete: true # Enabled by default; set false to disable
+  run_abort: true    # Enabled by default; set false to disable
 concurrency: 1           # Parallel task count for takt run (1-10, default: 1 = sequential)
 task_poll_interval_ms: 500  # Polling interval for new tasks during takt run (100-5000, default: 500)
 interactive_preview_movements: 3  # Movement previews in interactive mode (0-10, default: 3)

@@ -58,3 +58,7 @@ piece:
   notifyAbort: "中断: {reason}"
   sigintGraceful: "Ctrl+C: ピースを中断しています..."
   sigintForce: "Ctrl+C: 強制終了します"
+
+run:
+  notifyComplete: "run完了 ({total} tasks)"
+  notifyAbort: "runはエラー終了 ({failed})"

@@ -247,6 +247,10 @@ export async function executePiece(
   const isWorktree = cwd !== projectCwd;
   const globalConfig = loadGlobalConfig();
   const shouldNotify = globalConfig.notificationSound !== false;
+  const notificationSoundEvents = globalConfig.notificationSoundEvents;
+  const shouldNotifyIterationLimit = shouldNotify && notificationSoundEvents?.iterationLimit !== false;
+  const shouldNotifyPieceComplete = shouldNotify && notificationSoundEvents?.pieceComplete !== false;
+  const shouldNotifyPieceAbort = shouldNotify && notificationSoundEvents?.pieceAbort !== false;
   const currentProvider = globalConfig.provider ?? 'claude';
 
   // Prevent macOS idle sleep if configured
@@ -284,7 +288,7 @@ export async function executePiece(
     );
     out.info(getLabel('piece.iterationLimit.currentMovement', undefined, { currentMovement: request.currentMovement }));
 
-    if (shouldNotify) {
+    if (shouldNotifyIterationLimit) {
       playWarningSound();
     }
 
@@ -559,7 +563,7 @@ export async function executePiece(
 
     out.success(`Piece completed (${state.iteration} iterations${elapsedDisplay})`);
     out.info(`Session log: ${ndjsonLogPath}`);
-    if (shouldNotify) {
+    if (shouldNotifyPieceComplete) {
       notifySuccess('TAKT', getLabel('piece.notifyComplete', undefined, { iteration: String(state.iteration) }));
     }
   });
@@ -607,7 +611,7 @@ export async function executePiece(
 
     out.error(`Piece aborted after ${state.iteration} iterations${elapsedDisplay}: ${reason}`);
     out.info(`Session log: ${ndjsonLogPath}`);
-    if (shouldNotify) {
+    if (shouldNotifyPieceAbort) {
       notifyError('TAKT', getLabel('piece.notifyAbort', undefined, { reason }));
     }
   });

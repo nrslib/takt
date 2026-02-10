@@ -1,10 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
-import { createIsolatedEnv, type IsolatedEnv } from '../helpers/isolated-env';
+import {
+  createIsolatedEnv,
+  updateIsolatedConfig,
+  type IsolatedEnv,
+} from '../helpers/isolated-env';
 import { createTestRepo, type TestRepo } from '../helpers/test-repo';
 import { runTakt } from '../helpers/takt-runner';
 
@@ -22,16 +26,10 @@ describe('E2E: Add task from GitHub issue (takt add)', () => {
     testRepo = createTestRepo();
 
     // Use mock provider to stabilize summarizer
-    writeFileSync(
-      join(isolatedEnv.taktDir, 'config.yaml'),
-      [
-        'provider: mock',
-        'model: mock-model',
-        'language: en',
-        'log_level: info',
-        'default_piece: default',
-      ].join('\n'),
-    );
+    updateIsolatedConfig(isolatedEnv.taktDir, {
+      provider: 'mock',
+      model: 'mock-model',
+    });
 
     const createOutput = execFileSync(
       'gh',

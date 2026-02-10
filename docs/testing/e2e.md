@@ -13,6 +13,13 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
   - リポジトリクローン: `$(os.tmpdir())/takt-e2e-repo-<random>/`
   - 実行環境: `$(os.tmpdir())/takt-e2e-<runId>-<random>/`
 
+## E2E用config.yaml
+- E2Eのグローバル設定は `e2e/fixtures/config.e2e.yaml` を基準に生成する。
+- `createIsolatedEnv()` は毎回一時ディレクトリ配下（`$TAKT_CONFIG_DIR/config.yaml`）にこの基準設定を書き出す。
+- 通知音は `notification_sound_events` でタイミング別に制御し、E2E既定では道中（`iteration_limit` / `piece_complete` / `piece_abort`）をOFF、全体終了時（`run_complete` / `run_abort`）のみONにする。
+- 各スペックで `provider` や `concurrency` を変更する場合は、`updateIsolatedConfig()` を使って差分のみ上書きする。
+- `~/.takt/config.yaml` はE2Eでは参照されないため、通常実行の設定には影響しない。
+
 ## 実行コマンド
 - `npm run test:e2e`: E2E全体を実行。
 - `npm run test:e2e:mock`: mock固定のE2Eのみ実行。

@@ -12,7 +12,8 @@ import {
   status,
   blankLine,
 } from '../../../shared/ui/index.js';
-import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
+import { createLogger, getErrorMessage, notifyError, notifySuccess } from '../../../shared/utils/index.js';
+import { getLabel } from '../../../shared/i18n/index.js';
 import { executePiece } from './pieceExecution.js';
 import { DEFAULT_PIECE_NAME } from '../../../shared/constants.js';
 import type { TaskExecutionOptions, ExecuteTaskOptions, PieceExecutionResult } from './types.js';
@@ -239,6 +240,10 @@ export async function runAllTasks(
 ): Promise<void> {
   const taskRunner = new TaskRunner(cwd);
   const globalConfig = loadGlobalConfig();
+  const shouldNotifyRunComplete = globalConfig.notificationSound !== false
+    && globalConfig.notificationSoundEvents?.runComplete !== false;
+  const shouldNotifyRunAbort = globalConfig.notificationSound !== false
+    && globalConfig.notificationSoundEvents?.runAbort !== false;
   const concurrency = globalConfig.concurrency;
   const recovered = taskRunner.recoverInterruptedRunningTasks();
   if (recovered > 0) {
@@ -258,15 +263,30 @@ export async function runAllTasks(
     info(`Concurrency: ${concurrency}`);
   }
 
-  const result = await runWithWorkerPool(taskRunner, initialTasks, concurrency, cwd, pieceName, options, globalConfig.taskPollIntervalMs);
+  try {
+    const result = await runWithWorkerPool(taskRunner, initialTasks, concurrency, cwd, pieceName, options, globalConfig.taskPollIntervalMs);
 
-  const totalCount = result.success + result.fail;
-  blankLine();
-  header('Tasks Summary');
-  status('Total', String(totalCount));
-  status('Success', String(result.success), result.success === totalCount ? 'green' : undefined);
-  if (result.fail > 0) {
-    status('Failed', String(result.fail), 'red');
+    const totalCount = result.success + result.fail;
+    blankLine();
+    header('Tasks Summary');
+    status('Total', String(totalCount));
+    status('Success', String(result.success), result.success === totalCount ? 'green' : undefined);
+    if (result.fail > 0) {
+      status('Failed', String(result.fail), 'red');
+      if (shouldNotifyRunAbort) {
+        notifyError('TAKT', getLabel('run.notifyAbort', undefined, { failed: String(result.fail) }));
+      }
+      return;
+    }
+
+    if (shouldNotifyRunComplete) {
+      notifySuccess('TAKT', getLabel('run.notifyComplete', undefined, { total: String(totalCount) }));
+    }
+  } catch (e) {
+    if (shouldNotifyRunAbort) {
+      notifyError('TAKT', getLabel('run.notifyAbort', undefined, { failed: getErrorMessage(e) }));
+    }
+    throw e;
   }
 }
 
