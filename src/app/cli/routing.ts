@@ -14,6 +14,7 @@ import { executePipeline } from '../../features/pipeline/index.js';
 import {
   interactiveMode,
   selectInteractiveMode,
+  selectRecentSession,
   passthroughMode,
   quietMode,
   personaMode,
@@ -162,9 +163,18 @@ export async function executeDefaultAction(task?: string): Promise<void> {
   let result: InteractiveModeResult;
 
   switch (selectedMode) {
-    case 'assistant':
-      result = await interactiveMode(resolvedCwd, initialInput, pieceContext);
+    case 'assistant': {
+      let selectedSessionId: string | undefined;
+      const provider = globalConfig.provider;
+      if (provider === 'claude') {
+        const sessionId = await selectRecentSession(resolvedCwd, lang);
+        if (sessionId) {
+          selectedSessionId = sessionId;
+        }
+      }
+      result = await interactiveMode(resolvedCwd, initialInput, pieceContext, selectedSessionId);
       break;
+    }
 
     case 'passthrough':
       result = await passthroughMode(lang, initialInput);

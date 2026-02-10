@@ -15,6 +15,7 @@ export {
 } from './interactive.js';
 
 export { selectInteractiveMode } from './modeSelection.js';
+export { selectRecentSession } from './sessionSelector.js';
 export { passthroughMode } from './passthroughMode.js';
 export { quietMode } from './quietMode.js';
 export { personaMode } from './personaMode.js';

@@ -70,3 +70,4 @@ export {
   detectRuleIndex,
   isRegexSafe,
 } from './client.js';
+

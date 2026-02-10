@@ -35,6 +35,12 @@ interactive:
     quietDescription: "Generate instructions without asking questions"
     passthrough: "Passthrough"
     passthroughDescription: "Pass your input directly as task text"
+  sessionSelector:
+    prompt: "Resume from a recent session?"
+    newSession: "New session"
+    newSessionDescription: "Start a fresh conversation"
+    lastResponse: "Last: {response}"
+    messages: "{count} messages"
   previousTask:
     success: "✅ Previous task completed successfully"
     error: "❌ Previous task failed: {error}"

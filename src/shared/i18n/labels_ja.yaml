@@ -35,6 +35,12 @@ interactive:
     quietDescription: "質問なしでベストエフォートの指示書を生成"
     passthrough: "パススルー"
     passthroughDescription: "入力をそのままタスクとして渡す"
+  sessionSelector:
+    prompt: "直近のセッションを引き継ぎますか？"
+    newSession: "新しいセッション"
+    newSessionDescription: "新しい会話を始める"
+    lastResponse: "最後: {response}"
+    messages: "{count}メッセージ"
   previousTask:
     success: "✅ 前回のタスクは正常に完了しました"
     error: "❌ 前回のタスクはエラーで終了しました: {error}"

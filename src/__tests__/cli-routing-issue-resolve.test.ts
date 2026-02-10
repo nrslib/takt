@@ -47,6 +47,7 @@ vi.mock('../features/pipeline/index.js', () => ({
 vi.mock('../features/interactive/index.js', () => ({
   interactiveMode: vi.fn(),
   selectInteractiveMode: vi.fn(() => 'assistant'),
+  selectRecentSession: vi.fn(() => null),
   passthroughMode: vi.fn(),
   quietMode: vi.fn(),
   personaMode: vi.fn(),
@@ -85,7 +86,8 @@ vi.mock('../app/cli/helpers.js', () => ({
 
 import { checkGhCli, fetchIssue, formatIssueAsTask, parseIssueNumbers } from '../infra/github/issue.js';
 import { selectAndExecuteTask, determinePiece, createIssueAndSaveTask } from '../features/tasks/index.js';
-import { interactiveMode } from '../features/interactive/index.js';
+import { interactiveMode, selectRecentSession } from '../features/interactive/index.js';
+import { loadGlobalConfig } from '../infra/config/index.js';
 import { isDirectTask } from '../app/cli/helpers.js';
 import { executeDefaultAction } from '../app/cli/routing.js';
 import type { GitHubIssue } from '../infra/github/types.js';
@@ -98,6 +100,8 @@ const mockSelectAndExecuteTask = vi.mocked(selectAndExecuteTask);
 const mockDeterminePiece = vi.mocked(determinePiece);
 const mockCreateIssueAndSaveTask = vi.mocked(createIssueAndSaveTask);
 const mockInteractiveMode = vi.mocked(interactiveMode);
+const mockSelectRecentSession = vi.mocked(selectRecentSession);
+const mockLoadGlobalConfig = vi.mocked(loadGlobalConfig);
 const mockIsDirectTask = vi.mocked(isDirectTask);
 
 function createMockIssue(number: number): GitHubIssue {
@@ -144,6 +148,7 @@ describe('Issue resolution in routing', () => {
         '/test/cwd',
         '## GitHub Issue #131: Issue #131',
         expect.anything(),
+        undefined,
       );
 
       // Then: selectAndExecuteTask should receive issues in options
@@ -196,6 +201,7 @@ describe('Issue resolution in routing', () => {
         '/test/cwd',
         '## GitHub Issue #131: Issue #131',
         expect.anything(),
+        undefined,
       );
 
       // Then: selectAndExecuteTask should receive issues
@@ -220,6 +226,7 @@ describe('Issue resolution in routing', () => {
         '/test/cwd',
         'refactor the code',
         expect.anything(),
+        undefined,
       );
 
       // Then: no issue fetching should occur
@@ -239,6 +246,7 @@ describe('Issue resolution in routing', () => {
         '/test/cwd',
         undefined,
         expect.anything(),
+        undefined,
       );
 
       // Then: no issue fetching should occur
@@ -289,6 +297,47 @@ describe('Issue resolution in routing', () => {
 
       // Then: selectAndExecuteTask should NOT be called
       expect(mockSelectAndExecuteTask).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('session selection with provider=claude', () => {
+    it('should pass selected session ID to interactiveMode when provider is claude', async () => {
+      // Given
+      mockLoadGlobalConfig.mockReturnValue({ interactivePreviewMovements: 3, provider: 'claude' });
+      mockSelectRecentSession.mockResolvedValue('session-xyz');
+
+      // When
+      await executeDefaultAction();
+
+      // Then: selectRecentSession should be called
+      expect(mockSelectRecentSession).toHaveBeenCalledWith('/test/cwd', 'en');
+
+      // Then: interactiveMode should receive the session ID as 4th argument
+      expect(mockInteractiveMode).toHaveBeenCalledWith(
+        '/test/cwd',
+        undefined,
+        expect.anything(),
+        'session-xyz',
+      );
+    });
+
+    it('should not call selectRecentSession when provider is not claude', async () => {
+      // Given
+      mockLoadGlobalConfig.mockReturnValue({ interactivePreviewMovements: 3, provider: 'openai' });
+
+      // When
+      await executeDefaultAction();
+
+      // Then: selectRecentSession should NOT be called
+      expect(mockSelectRecentSession).not.toHaveBeenCalled();
+
+      // Then: interactiveMode should be called with undefined session ID
+      expect(mockInteractiveMode).toHaveBeenCalledWith(
+        '/test/cwd',
+        undefined,
+        expect.anything(),
+        undefined,
+      );
     });
   });
 });
