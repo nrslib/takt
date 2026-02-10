@@ -1,19 +1,16 @@
 /**
  * add command implementation
  *
- * Starts an AI conversation to refine task requirements,
- * then appends a task record to .takt/tasks.yaml.
+ * Appends a task record to .takt/tasks.yaml.
  */
 
 import * as path from 'node:path';
 import { promptInput, confirm } from '../../../shared/prompt/index.js';
 import { success, info, error } from '../../../shared/ui/index.js';
 import { TaskRunner, type TaskFileData } from '../../../infra/task/index.js';
-import { getPieceDescription, loadGlobalConfig } from '../../../infra/config/index.js';
 import { determinePiece } from '../execute/selectAndExecute.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { isIssueReference, resolveIssueTask, parseIssueNumbers, createIssue } from '../../../infra/github/index.js';
-import { interactiveMode } from '../../interactive/index.js';
 
 const log = createLogger('add-task');
 
@@ -141,66 +138,44 @@ export async function saveTaskFromInteractive(
  * add command handler
  *
  * Flow:
- *   A) Issue参照の場合: issue取得 → ピース選択 → ワークツリー設定 → YAML作成
- *   B) それ以外: ピース選択 → AI対話モード → ワークツリー設定 → YAML作成
+ *   A) 引数なし: Usage表示して終了
+ *   B) Issue参照の場合: issue取得 → ピース選択 → ワークツリー設定 → YAML作成
+ *   C) 通常入力: 引数をそのまま保存
  */
 export async function addTask(cwd: string, task?: string): Promise<void> {
-  // ピース選択とタスク内容の決定
+  const rawTask = task ?? '';
+  const trimmedTask = rawTask.trim();
+  if (!trimmedTask) {
+    info('Usage: takt add <task>');
+    return;
+  }
+
   let taskContent: string;
   let issueNumber: number | undefined;
-  let piece: string | undefined;
 
-  if (task && isIssueReference(task)) {
+  if (isIssueReference(trimmedTask)) {
     // Issue reference: fetch issue and use directly as task content
     info('Fetching GitHub Issue...');
     try {
-      taskContent = resolveIssueTask(task);
-      const numbers = parseIssueNumbers([task]);
+      taskContent = resolveIssueTask(trimmedTask);
+      const numbers = parseIssueNumbers([trimmedTask]);
       if (numbers.length > 0) {
         issueNumber = numbers[0];
       }
     } catch (e) {
       const msg = getErrorMessage(e);
-      log.error('Failed to fetch GitHub Issue', { task, error: msg });
-      info(`Failed to fetch issue ${task}: ${msg}`);
+      log.error('Failed to fetch GitHub Issue', { task: trimmedTask, error: msg });
+      info(`Failed to fetch issue ${trimmedTask}: ${msg}`);
       return;
     }
-
-    // ピース選択（issue取得成功後）
-    const pieceId = await determinePiece(cwd);
-    if (pieceId === null) {
-      info('Cancelled.');
-      return;
-    }
-    piece = pieceId;
   } else {
-    // ピース選択を先に行い、結果を対話モードに渡す
-    const pieceId = await determinePiece(cwd);
-    if (pieceId === null) {
-      info('Cancelled.');
-      return;
-    }
-    piece = pieceId;
+    taskContent = rawTask;
+  }
 
-    const globalConfig = loadGlobalConfig();
-    const previewCount = globalConfig.interactivePreviewMovements;
-    const pieceContext = getPieceDescription(pieceId, cwd, previewCount);
-
-    // Interactive mode: AI conversation to refine task
-    const result = await interactiveMode(cwd, undefined, pieceContext);
-
-    if (result.action === 'create_issue') {
-      await createIssueAndSaveTask(cwd, result.task, piece);
-      return;
-    }
-
-    if (result.action !== 'execute' && result.action !== 'save_task') {
-      info('Cancelled.');
-      return;
-    }
-
-    // interactiveMode already returns a summarized task from conversation
-    taskContent = result.task;
+  const piece = await determinePiece(cwd);
+  if (piece === null) {
+    info('Cancelled.');
+    return;
   }
 
   // 3. ワークツリー/ブランチ/PR設定

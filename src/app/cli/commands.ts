@@ -30,7 +30,7 @@ program
 
 program
   .command('add')
-  .description('Add a new task (interactive AI conversation)')
+  .description('Add a new task')
   .argument('[task]', 'Task description or GitHub issue reference (e.g. "#28")')
   .action(async (task?: string) => {
     await addTask(resolvedCwd, task);

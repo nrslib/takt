@@ -8,11 +8,6 @@ vi.mock('../features/interactive/index.js', () => ({
   interactiveMode: vi.fn(),
 }));
 
-vi.mock('../infra/config/global/globalConfig.js', () => ({
-  loadGlobalConfig: vi.fn(() => ({ provider: 'claude' })),
-  getBuiltinPiecesEnabled: vi.fn().mockReturnValue(true),
-}));
-
 vi.mock('../shared/prompt/index.js', () => ({
   promptInput: vi.fn(),
   confirm: vi.fn(),
@@ -38,15 +33,6 @@ vi.mock('../features/tasks/execute/selectAndExecute.js', () => ({
   determinePiece: vi.fn(),
 }));
 
-vi.mock('../infra/config/loaders/pieceResolver.js', () => ({
-  getPieceDescription: vi.fn(() => ({
-    name: 'default',
-    description: '',
-    pieceStructure: '1. implement\n2. review',
-    movementPreviews: [],
-  })),
-}));
-
 vi.mock('../infra/github/issue.js', () => ({
   isIssueReference: vi.fn((s: string) => /^#\d+$/.test(s)),
   resolveIssueTask: vi.fn(),
@@ -65,16 +51,17 @@ vi.mock('../infra/github/issue.js', () => ({
 
 import { interactiveMode } from '../features/interactive/index.js';
 import { promptInput, confirm } from '../shared/prompt/index.js';
+import { info } from '../shared/ui/index.js';
 import { determinePiece } from '../features/tasks/execute/selectAndExecute.js';
-import { resolveIssueTask, createIssue } from '../infra/github/issue.js';
+import { resolveIssueTask } from '../infra/github/issue.js';
 import { addTask } from '../features/tasks/index.js';
 
-const mockResolveIssueTask = vi.mocked(resolveIssueTask);
 const mockInteractiveMode = vi.mocked(interactiveMode);
 const mockPromptInput = vi.mocked(promptInput);
 const mockConfirm = vi.mocked(confirm);
+const mockInfo = vi.mocked(info);
 const mockDeterminePiece = vi.mocked(determinePiece);
-const mockCreateIssue = vi.mocked(createIssue);
+const mockResolveIssueTask = vi.mocked(resolveIssueTask);
 
 let testDir: string;
 
@@ -97,23 +84,36 @@ afterEach(() => {
 });
 
 describe('addTask', () => {
-  it('should create task entry from interactive result', async () => {
-    mockInteractiveMode.mockResolvedValue({ action: 'execute', task: '# 認証機能追加\nJWT認証を実装する' });
-
+  it('should show usage and exit when task is missing', async () => {
     await addTask(testDir);
 
-    const tasks = loadTasks(testDir).tasks;
-    expect(tasks).toHaveLength(1);
-    expect(tasks[0]?.content).toContain('JWT認証を実装する');
-    expect(tasks[0]?.piece).toBe('default');
+    expect(mockInfo).toHaveBeenCalledWith('Usage: takt add <task>');
+    expect(mockDeterminePiece).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(testDir, '.takt', 'tasks.yaml'))).toBe(false);
+  });
+
+  it('should show usage and exit when task is blank', async () => {
+    await addTask(testDir, '   ');
+
+    expect(mockInfo).toHaveBeenCalledWith('Usage: takt add <task>');
+    expect(mockDeterminePiece).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(testDir, '.takt', 'tasks.yaml'))).toBe(false);
+  });
+
+  it('should save plain text task without interactive mode', async () => {
+    await addTask(testDir, '  JWT認証を実装する  ');
+
+    expect(mockInteractiveMode).not.toHaveBeenCalled();
+    const task = loadTasks(testDir).tasks[0]!;
+    expect(task.content).toBe('  JWT認証を実装する  ');
+    expect(task.piece).toBe('default');
   });
 
   it('should include worktree settings when enabled', async () => {
-    mockInteractiveMode.mockResolvedValue({ action: 'execute', task: 'Task content' });
     mockConfirm.mockResolvedValue(true);
     mockPromptInput.mockResolvedValueOnce('/custom/path').mockResolvedValueOnce('feat/branch');
 
-    await addTask(testDir);
+    await addTask(testDir, 'Task content');
 
     const task = loadTasks(testDir).tasks[0]!;
     expect(task.worktree).toBe('/custom/path');
@@ -122,7 +122,6 @@ describe('addTask', () => {
 
   it('should create task from issue reference without interactive mode', async () => {
     mockResolveIssueTask.mockReturnValue('Issue #99: Fix login timeout');
-    mockConfirm.mockResolvedValue(false);
 
     await addTask(testDir, '#99');
 
@@ -135,36 +134,8 @@ describe('addTask', () => {
   it('should not create task when piece selection is cancelled', async () => {
     mockDeterminePiece.mockResolvedValue(null);
 
-    await addTask(testDir);
+    await addTask(testDir, 'Task content');
 
-    expect(fs.existsSync(path.join(testDir, '.takt', 'tasks.yaml'))).toBe(false);
-  });
-
-  it('should create issue and save task when create_issue action is chosen', async () => {
-    // Given
-    mockInteractiveMode.mockResolvedValue({ action: 'create_issue', task: 'New feature' });
-    mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/55' });
-    mockConfirm.mockResolvedValue(false);
-
-    // When
-    await addTask(testDir);
-
-    // Then
-    const tasks = loadTasks(testDir).tasks;
-    expect(tasks).toHaveLength(1);
-    expect(tasks[0]?.issue).toBe(55);
-    expect(tasks[0]?.content).toContain('New feature');
-  });
-
-  it('should not save task when issue creation fails in create_issue action', async () => {
-    // Given
-    mockInteractiveMode.mockResolvedValue({ action: 'create_issue', task: 'New feature' });
-    mockCreateIssue.mockReturnValue({ success: false, error: 'auth failed' });
-
-    // When
-    await addTask(testDir);
-
-    // Then
     expect(fs.existsSync(path.join(testDir, '.takt', 'tasks.yaml'))).toBe(false);
   });
 });
