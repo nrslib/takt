@@ -2,7 +2,7 @@
  * Integration test for stageAndCommit
  *
  * Tests that gitignored files are NOT included in commits.
- * Regression test for c89ac4c where `git add -f .takt/reports/` caused
+ * Regression test for c89ac4c where `git add -f .takt/runs/` caused
  * gitignored report files to be committed.
  */
 
@@ -36,15 +36,15 @@ describe('stageAndCommit', () => {
     }
   });
 
-  it('should not commit gitignored .takt/reports/ files', () => {
+  it('should not commit gitignored .takt/runs/ files', () => {
     // Setup: .takt/ is gitignored
     writeFileSync(join(testDir, '.gitignore'), '.takt/\n');
     execFileSync('git', ['add', '.gitignore'], { cwd: testDir });
     execFileSync('git', ['commit', '-m', 'Add gitignore'], { cwd: testDir });
 
-    // Create .takt/reports/ with a report file
-    mkdirSync(join(testDir, '.takt', 'reports', 'test-report'), { recursive: true });
-    writeFileSync(join(testDir, '.takt', 'reports', 'test-report', '00-plan.md'), '# Plan');
+    // Create .takt/runs/ with a report file
+    mkdirSync(join(testDir, '.takt', 'runs', 'test-report', 'reports'), { recursive: true });
+    writeFileSync(join(testDir, '.takt', 'runs', 'test-report', 'reports', '00-plan.md'), '# Plan');
 
     // Also create a tracked file change to ensure commit happens
     writeFileSync(join(testDir, 'src.ts'), 'export const x = 1;');
@@ -52,7 +52,7 @@ describe('stageAndCommit', () => {
     const hash = stageAndCommit(testDir, 'test commit');
     expect(hash).toBeDefined();
 
-    // Verify .takt/reports/ is NOT in the commit
+    // Verify .takt/runs/ is NOT in the commit
     const committedFiles = execFileSync('git', ['diff-tree', '--no-commit-id', '-r', '--name-only', 'HEAD'], {
       cwd: testDir,
       encoding: 'utf-8',
@@ -60,7 +60,7 @@ describe('stageAndCommit', () => {
     }).trim();
 
     expect(committedFiles).toContain('src.ts');
-    expect(committedFiles).not.toContain('.takt/reports/');
+    expect(committedFiles).not.toContain('.takt/runs/');
   });
 
   it('should commit normally when no gitignored files exist', () => {

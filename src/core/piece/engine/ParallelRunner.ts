@@ -192,6 +192,12 @@ export class ParallelRunner {
 
     state.movementOutputs.set(step.name, aggregatedResponse);
     state.lastOutput = aggregatedResponse;
+    this.deps.movementExecutor.persistPreviousResponseSnapshot(
+      state,
+      step.name,
+      movementIteration,
+      aggregatedResponse.content,
+    );
     this.deps.movementExecutor.emitMovementReports(step);
     return { response: aggregatedResponse, instruction: aggregatedInstruction };
   }

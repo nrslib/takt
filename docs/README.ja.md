@@ -230,7 +230,7 @@ takt list --non-interactive --format json
 1. `takt add` を実行して `.takt/tasks.yaml` に pending レコードが作られることを確認する。
 2. 生成された `.takt/tasks/{slug}/order.md` を開き、必要なら仕様や参考資料を追記する。
 3. `takt run`（または `takt watch`）で `tasks.yaml` の pending タスクを実行する。
-4. `task_dir` と同じスラッグの `.takt/reports/{slug}/` を確認する。
+4. `task_dir` と同じスラッグの `.takt/runs/{slug}/reports/` を確認する。
 
 ### パイプラインモード（CI/自動化向け）
 
@@ -541,12 +541,12 @@ Claude Code はエイリアス（`opus`、`sonnet`、`haiku`、`opusplan`、`def
 ├── config.yaml             # プロジェクト設定（現在のピース等）
 ├── tasks/                  # タスク入力ディレクトリ（.takt/tasks/{slug}/order.md など）
 ├── tasks.yaml              # 保留中タスクのメタデータ（task_dir, piece, worktree など）
-├── reports/                # 実行レポート（自動生成）
-│   └── {timestamp}-{slug}/
-└── logs/                   # NDJSON 形式のセッションログ
-    ├── latest.json         # 現在/最新セッションへのポインタ
-    ├── previous.json       # 前回セッションへのポインタ
-    └── {sessionId}.jsonl   # ピース実行ごとの NDJSON セッションログ
+└── runs/                   # 実行単位の成果物
+    └── {slug}/
+        ├── reports/        # 実行レポート（自動生成）
+        ├── context/        # knowledge/policy/previous_response のスナップショット
+        ├── logs/           # この実行専用の NDJSON セッションログ
+        └── meta.json       # run メタデータ
 ```
 
 ビルトインリソースはnpmパッケージ（`builtins/`）に埋め込まれています。`~/.takt/` のユーザーファイルが優先されます。
@@ -646,8 +646,9 @@ TAKT は `.takt/tasks.yaml` にタスクのメタデータを保存し、長文�
       schema.sql
       wireframe.png
   tasks.yaml
-  reports/
+  runs/
     20260201-015714-foptng/
+      reports/
 ```
 
 **tasks.yaml レコード例**:
@@ -680,15 +681,14 @@ YAMLタスクファイルで`worktree`を指定すると、各タスクを`git c
 
 ### セッションログ
 
-TAKTはセッションログをNDJSON（`.jsonl`）形式で`.takt/logs/`に書き込みます。各レコードはアトミックに追記されるため、プロセスが途中でクラッシュしても部分的なログが保持され、`tail -f`でリアルタイムに追跡できます。
+TAKTはセッションログをNDJSON（`.jsonl`）形式で`.takt/runs/{slug}/logs/`に書き込みます。各レコードはアトミックに追記されるため、プロセスが途中でクラッシュしても部分的なログが保持され、`tail -f`でリアルタイムに追跡できます。
 
-- `.takt/logs/latest.json` - 現在（または最新の）セッションへのポインタ
-- `.takt/logs/previous.json` - 前回セッションへのポインタ
-- `.takt/logs/{sessionId}.jsonl` - ピース実行ごとのNDJSONセッションログ
+- `.takt/runs/{slug}/logs/{sessionId}.jsonl` - ピース実行ごとのNDJSONセッションログ
+- `.takt/runs/{slug}/meta.json` - run メタデータ（`task`, `piece`, `start/end`, `status` など）
 
 レコード種別: `piece_start`, `step_start`, `step_complete`, `piece_complete`, `piece_abort`
 
-エージェントは`previous.json`を読み取って前回の実行コンテキストを引き継ぐことができます。セッション継続は自動的に行われます — `takt "タスク"`を実行するだけで前回のセッションから続行されます。
+最新の previous response は `.takt/runs/{slug}/context/previous_responses/latest.md` に保存され、実行時に自動的に引き継がれます。
 
 ### カスタムピースの追加
 
@@ -757,7 +757,7 @@ personas:
 | `{movement_iteration}` | ムーブメントごとのイテレーション数（このムーブメントが実行された回数） |
 | `{previous_response}` | 前のムーブメントの出力（テンプレートになければ自動注入） |
 | `{user_inputs}` | ピース中の追加ユーザー入力（テンプレートになければ自動注入） |
-| `{report_dir}` | レポートディレクトリパス（例: `.takt/reports/20250126-143052-task-summary`） |
+| `{report_dir}` | レポートディレクトリパス（例: `.takt/runs/20250126-143052-task-summary/reports`） |
 | `{report:filename}` | `{report_dir}/filename` に展開（例: `{report:00-plan.md}`） |
 
 ### ピースの設計

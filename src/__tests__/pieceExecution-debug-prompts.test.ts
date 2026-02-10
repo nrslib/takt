@@ -18,6 +18,9 @@ const { mockIsDebugEnabled, mockWritePromptLog, MockPieceEngine } = vi.hoisted((
 
     constructor(config: PieceConfig, _cwd: string, task: string, _options: unknown) {
       super();
+      if (task === 'constructor-throw-task') {
+        throw new Error('mock constructor failure');
+      }
       this.config = config;
       this.task = task;
     }
@@ -27,6 +30,7 @@ const { mockIsDebugEnabled, mockWritePromptLog, MockPieceEngine } = vi.hoisted((
     async run(): Promise<{ status: string; iteration: number }> {
       const step = this.config.movements[0]!;
       const timestamp = new Date('2026-02-07T00:00:00.000Z');
+      const shouldAbort = this.task === 'abort-task';
 
       const shouldRepeatMovement = this.task === 'repeat-movement-task';
       this.emit('movement:start', step, 1, 'movement instruction');
@@ -57,8 +61,11 @@ const { mockIsDebugEnabled, mockWritePromptLog, MockPieceEngine } = vi.hoisted((
           'movement instruction repeat'
         );
       }
+      if (shouldAbort) {
+        this.emit('piece:abort', { status: 'aborted', iteration: 1 }, 'user_interrupted');
+        return { status: 'aborted', iteration: shouldRepeatMovement ? 2 : 1 };
+      }
       this.emit('piece:complete', { status: 'completed', iteration: 1 });
-
       return { status: 'completed', iteration: shouldRepeatMovement ? 2 : 1 };
     }
   }
@@ -83,6 +90,8 @@ vi.mock('../infra/config/index.js', () => ({
   updateWorktreeSession: vi.fn(),
   loadGlobalConfig: vi.fn().mockReturnValue({ provider: 'claude' }),
   saveSessionState: vi.fn(),
+  ensureDir: vi.fn(),
+  writeFileAtomic: vi.fn(),
 }));
 
 vi.mock('../shared/context.js', () => ({
@@ -114,7 +123,6 @@ vi.mock('../infra/fs/index.js', () => ({
     status,
     endTime: new Date().toISOString(),
   })),
-  updateLatestPointer: vi.fn(),
   initNdjsonLog: vi.fn().mockReturnValue('/tmp/test-log.jsonl'),
   appendNdjsonLine: vi.fn(),
 }));
@@ -131,6 +139,8 @@ vi.mock('../shared/utils/index.js', () => ({
   preventSleep: vi.fn(),
   isDebugEnabled: mockIsDebugEnabled,
   writePromptLog: mockWritePromptLog,
+  generateReportDir: vi.fn().mockReturnValue('test-report-dir'),
+  isValidReportDirName: vi.fn().mockImplementation((value: string) => /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value)),
 }));
 
 vi.mock('../shared/prompt/index.js', () => ({
@@ -147,6 +157,7 @@ vi.mock('../shared/exitCodes.js', () => ({
 }));
 
 import { executePiece } from '../features/tasks/execute/pieceExecution.js';
+import { ensureDir, writeFileAtomic } from '../infra/config/index.js';
 
 describe('executePiece debug prompts logging', () => {
   beforeEach(() => {
@@ -231,5 +242,70 @@ describe('executePiece debug prompts logging', () => {
         taskPrefix: 'override-persona-provider',
       })
     ).rejects.toThrow('taskPrefix and taskColorIndex must be provided together');
+  });
+
+  it('should fail fast for invalid reportDirName before run directory writes', async () => {
+    await expect(
+      executePiece(makeConfig(), 'task', '/tmp/project', {
+        projectCwd: '/tmp/project',
+        reportDirName: '..',
+      })
+    ).rejects.toThrow('Invalid reportDirName: ..');
+
+    expect(vi.mocked(ensureDir)).not.toHaveBeenCalled();
+    expect(vi.mocked(writeFileAtomic)).not.toHaveBeenCalled();
+  });
+
+  it('should update meta status from running to completed', async () => {
+    await executePiece(makeConfig(), 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+      reportDirName: 'test-report-dir',
+    });
+
+    const calls = vi.mocked(writeFileAtomic).mock.calls;
+    expect(calls).toHaveLength(2);
+
+    const firstMeta = JSON.parse(String(calls[0]![1])) as { status: string; endTime?: string };
+    const secondMeta = JSON.parse(String(calls[1]![1])) as { status: string; endTime?: string };
+    expect(firstMeta.status).toBe('running');
+    expect(firstMeta.endTime).toBeUndefined();
+    expect(secondMeta.status).toBe('completed');
+    expect(secondMeta.endTime).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it('should update meta status from running to aborted', async () => {
+    await executePiece(makeConfig(), 'abort-task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+      reportDirName: 'test-report-dir',
+    });
+
+    const calls = vi.mocked(writeFileAtomic).mock.calls;
+    expect(calls).toHaveLength(2);
+
+    const firstMeta = JSON.parse(String(calls[0]![1])) as { status: string; endTime?: string };
+    const secondMeta = JSON.parse(String(calls[1]![1])) as { status: string; endTime?: string };
+    expect(firstMeta.status).toBe('running');
+    expect(firstMeta.endTime).toBeUndefined();
+    expect(secondMeta.status).toBe('aborted');
+    expect(secondMeta.endTime).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it('should finalize meta as aborted when PieceEngine constructor throws', async () => {
+    await expect(
+      executePiece(makeConfig(), 'constructor-throw-task', '/tmp/project', {
+        projectCwd: '/tmp/project',
+        reportDirName: 'test-report-dir',
+      })
+    ).rejects.toThrow('mock constructor failure');
+
+    const calls = vi.mocked(writeFileAtomic).mock.calls;
+    expect(calls).toHaveLength(2);
+
+    const firstMeta = JSON.parse(String(calls[0]![1])) as { status: string; endTime?: string };
+    const secondMeta = JSON.parse(String(calls[1]![1])) as { status: string; endTime?: string };
+    expect(firstMeta.status).toBe('running');
+    expect(firstMeta.endTime).toBeUndefined();
+    expect(secondMeta.status).toBe('aborted');
+    expect(secondMeta.endTime).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 });

@@ -8,7 +8,6 @@
 
 import { EventEmitter } from 'node:events';
 import { mkdirSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
 import type {
   PieceConfig,
   PieceState,
@@ -32,6 +31,7 @@ import { OptionsBuilder } from './OptionsBuilder.js';
 import { MovementExecutor } from './MovementExecutor.js';
 import { ParallelRunner } from './ParallelRunner.js';
 import { ArpeggioRunner } from './ArpeggioRunner.js';
+import { buildRunPaths, type RunPaths } from '../run/run-paths.js';
 
 const log = createLogger('engine');
 
@@ -56,6 +56,7 @@ export class PieceEngine extends EventEmitter {
   private loopDetector: LoopDetector;
   private cycleDetector: CycleDetector;
   private reportDir: string;
+  private runPaths: RunPaths;
   private abortRequested = false;
 
   private readonly optionsBuilder: OptionsBuilder;
@@ -83,8 +84,9 @@ export class PieceEngine extends EventEmitter {
       throw new Error(`Invalid reportDirName: ${options.reportDirName}`);
     }
     const reportDirName = options.reportDirName ?? generateReportDir(task);
-    this.reportDir = `.takt/reports/${reportDirName}`;
-    this.ensureReportDirExists();
+    this.runPaths = buildRunPaths(this.cwd, reportDirName);
+    this.reportDir = this.runPaths.reportsRel;
+    this.ensureRunDirsExist();
     this.validateConfig();
     this.state = createInitialState(config, options);
     this.detectRuleIndex = options.detectRuleIndex ?? (() => {
@@ -112,6 +114,7 @@ export class PieceEngine extends EventEmitter {
       getCwd: () => this.cwd,
       getProjectCwd: () => this.projectCwd,
       getReportDir: () => this.reportDir,
+      getRunPaths: () => this.runPaths,
       getLanguage: () => this.options.language,
       getInteractive: () => this.options.interactive === true,
       getPieceMovements: () => this.config.movements.map(s => ({ name: s.name, description: s.description })),
@@ -147,6 +150,7 @@ export class PieceEngine extends EventEmitter {
 
     this.arpeggioRunner = new ArpeggioRunner({
       optionsBuilder: this.optionsBuilder,
+      movementExecutor: this.movementExecutor,
       getCwd: () => this.cwd,
       getInteractive: () => this.options.interactive === true,
       detectRuleIndex: this.detectRuleIndex,
@@ -175,11 +179,21 @@ export class PieceEngine extends EventEmitter {
     }
   }
 
-  /** Ensure report directory exists (in cwd, which is clone dir in worktree mode) */
-  private ensureReportDirExists(): void {
-    const reportDirPath = join(this.cwd, this.reportDir);
-    if (!existsSync(reportDirPath)) {
-      mkdirSync(reportDirPath, { recursive: true });
+  /** Ensure run directories exist (in cwd, which is clone dir in worktree mode) */
+  private ensureRunDirsExist(): void {
+    const requiredDirs = [
+      this.runPaths.runRootAbs,
+      this.runPaths.reportsAbs,
+      this.runPaths.contextAbs,
+      this.runPaths.contextKnowledgeAbs,
+      this.runPaths.contextPolicyAbs,
+      this.runPaths.contextPreviousResponsesAbs,
+      this.runPaths.logsAbs,
+    ];
+    for (const dir of requiredDirs) {
+      if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true });
+      }
     }
   }
 

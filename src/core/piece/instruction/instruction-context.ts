@@ -26,6 +26,10 @@ export interface InstructionContext {
   userInputs: string[];
   /** Previous movement output if available */
   previousOutput?: AgentResponse;
+  /** Source path for previous response snapshot */
+  previousResponseSourcePath?: string;
+  /** Preprocessed previous response text for template placeholder replacement */
+  previousResponseText?: string;
   /** Report directory path */
   reportDir?: string;
   /** Language for metadata rendering. Defaults to 'en'. */
@@ -44,8 +48,12 @@ export interface InstructionContext {
   retryNote?: string;
   /** Resolved policy content strings for injection into instruction */
   policyContents?: string[];
+  /** Source path for policy snapshot */
+  policySourcePath?: string;
   /** Resolved knowledge content strings for injection into instruction */
   knowledgeContents?: string[];
+  /** Source path for knowledge snapshot */
+  knowledgeSourcePath?: string;
 }
 
 /**

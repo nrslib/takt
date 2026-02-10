@@ -38,7 +38,7 @@ Fields:
 
 - `takt add` creates `.takt/tasks/{slug}/order.md` automatically.
 - `takt run` and `takt watch` read `.takt/tasks.yaml` and resolve `task_dir`.
-- Report output is written to `.takt/reports/{slug}/`.
+- Report output is written to `.takt/runs/{slug}/reports/`.
 
 ## Commands
 

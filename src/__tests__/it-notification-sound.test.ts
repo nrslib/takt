@@ -117,6 +117,8 @@ vi.mock('../infra/config/index.js', () => ({
   updateWorktreeSession: vi.fn(),
   loadGlobalConfig: mockLoadGlobalConfig,
   saveSessionState: vi.fn(),
+  ensureDir: vi.fn(),
+  writeFileAtomic: vi.fn(),
 }));
 
 vi.mock('../shared/context.js', () => ({
@@ -148,23 +150,30 @@ vi.mock('../infra/fs/index.js', () => ({
     status: _status,
     endTime: new Date().toISOString(),
   })),
-  updateLatestPointer: vi.fn(),
   initNdjsonLog: vi.fn().mockReturnValue('/tmp/test-log.jsonl'),
   appendNdjsonLine: vi.fn(),
 }));
 
-vi.mock('../shared/utils/index.js', () => ({
-  createLogger: vi.fn().mockReturnValue({
-    debug: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-  }),
-  notifySuccess: mockNotifySuccess,
-  notifyError: mockNotifyError,
-  playWarningSound: mockPlayWarningSound,
-  preventSleep: vi.fn(),
-}));
+vi.mock('../shared/utils/index.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../shared/utils/index.js')>();
+  return {
+    ...original,
+    createLogger: vi.fn().mockReturnValue({
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    }),
+    notifySuccess: mockNotifySuccess,
+    notifyError: mockNotifyError,
+    playWarningSound: mockPlayWarningSound,
+    preventSleep: vi.fn(),
+    isDebugEnabled: vi.fn().mockReturnValue(false),
+    writePromptLog: vi.fn(),
+    generateReportDir: vi.fn().mockReturnValue('test-report-dir'),
+    isValidReportDirName: vi.fn().mockImplementation((value: string) => /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value)),
+  };
+});
 
 vi.mock('../shared/prompt/index.js', () => ({
   selectOption: mockSelectOption,

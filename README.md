@@ -230,7 +230,7 @@ takt list --non-interactive --format json
 1. Run `takt add` and confirm a pending record is created in `.takt/tasks.yaml`.
 2. Open the generated `.takt/tasks/{slug}/order.md` and add detailed specifications/references as needed.
 3. Run `takt run` (or `takt watch`) to execute pending tasks from `tasks.yaml`.
-4. Verify outputs in `.takt/reports/{slug}/` using the same slug as `task_dir`.
+4. Verify outputs in `.takt/runs/{slug}/reports/` using the same slug as `task_dir`.
 
 ### Pipeline Mode (for CI/Automation)
 
@@ -541,12 +541,12 @@ The model string is passed to the Codex SDK. If unspecified, defaults to `codex`
 ├── config.yaml             # Project config (current piece, etc.)
 ├── tasks/                  # Task input directories (.takt/tasks/{slug}/order.md, etc.)
 ├── tasks.yaml              # Pending tasks metadata (task_dir, piece, worktree, etc.)
-├── reports/                # Execution reports (auto-generated)
-│   └── {timestamp}-{slug}/
-└── logs/                   # NDJSON format session logs
-    ├── latest.json         # Pointer to current/latest session
-    ├── previous.json       # Pointer to previous session
-    └── {sessionId}.jsonl   # NDJSON session log per piece execution
+└── runs/                   # Run-scoped artifacts
+    └── {slug}/
+        ├── reports/        # Execution reports (auto-generated)
+        ├── context/        # knowledge/policy/previous_response snapshots
+        ├── logs/           # NDJSON session logs for this run
+        └── meta.json       # Run metadata
 ```
 
 Builtin resources are embedded in the npm package (`builtins/`). User files in `~/.takt/` take priority.
@@ -646,8 +646,9 @@ TAKT stores task metadata in `.takt/tasks.yaml`, and each task's long specificat
       schema.sql
       wireframe.png
   tasks.yaml
-  reports/
+  runs/
     20260201-015714-foptng/
+      reports/
 ```
 
 **tasks.yaml record**:
@@ -680,15 +681,14 @@ Clones are ephemeral. After task completion, they auto-commit + push, then delet
 
 ### Session Logs
 
-TAKT writes session logs in NDJSON (`.jsonl`) format to `.takt/logs/`. Each record is atomically appended, so partial logs are preserved even if the process crashes, and you can track in real-time with `tail -f`.
+TAKT writes session logs in NDJSON (`.jsonl`) format to `.takt/runs/{slug}/logs/`. Each record is atomically appended, so partial logs are preserved even if the process crashes, and you can track in real-time with `tail -f`.
 
-- `.takt/logs/latest.json` - Pointer to current (or latest) session
-- `.takt/logs/previous.json` - Pointer to previous session
-- `.takt/logs/{sessionId}.jsonl` - NDJSON session log per piece execution
+- `.takt/runs/{slug}/logs/{sessionId}.jsonl` - NDJSON session log per piece execution
+- `.takt/runs/{slug}/meta.json` - Run metadata (`task`, `piece`, `start/end`, `status`, etc.)
 
 Record types: `piece_start`, `step_start`, `step_complete`, `piece_complete`, `piece_abort`
 
-Agents can read `previous.json` to inherit context from the previous execution. Session continuation is automatic — just run `takt "task"` to continue from the previous session.
+The latest previous response is stored at `.takt/runs/{slug}/context/previous_responses/latest.md` and inherited automatically.
 
 ### Adding Custom Pieces
 
@@ -757,7 +757,7 @@ Variables available in `instruction_template`:
 | `{movement_iteration}` | Per-movement iteration count (times this movement has been executed) |
 | `{previous_response}` | Output from previous movement (auto-injected if not in template) |
 | `{user_inputs}` | Additional user inputs during piece (auto-injected if not in template) |
-| `{report_dir}` | Report directory path (e.g., `.takt/reports/20250126-143052-task-summary`) |
+| `{report_dir}` | Report directory path (e.g., `.takt/runs/20250126-143052-task-summary/reports`) |
 | `{report:filename}` | Expands to `{report_dir}/filename` (e.g., `{report:00-plan.md}`) |
 
 ### Piece Design
