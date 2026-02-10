@@ -178,25 +178,27 @@ export function applyDefaultMocks(): void {
   vi.mocked(generateReportDir).mockReturnValue('test-report-dir');
 }
 
+type RemovableListeners = {
+  removeAllListeners: () => void;
+};
+
+function hasRemovableListeners(value: unknown): value is RemovableListeners {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  if (!('removeAllListeners' in value)) {
+    return false;
+  }
+  const candidate = value as { removeAllListeners: unknown };
+  return typeof candidate.removeAllListeners === 'function';
+}
+
 /**
  * Clean up PieceEngine instances to prevent EventEmitter memory leaks.
  * Call this in afterEach to ensure all event listeners are removed.
  */
-type ListenerCleanupTarget = {
-  removeAllListeners: () => void;
-};
-
-function isListenerCleanupTarget(value: unknown): value is ListenerCleanupTarget {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    'removeAllListeners' in value &&
-    typeof value.removeAllListeners === 'function'
-  );
-}
-
 export function cleanupPieceEngine(engine: unknown): void {
-  if (isListenerCleanupTarget(engine)) {
+  if (hasRemovableListeners(engine)) {
     engine.removeAllListeners();
   }
 }
