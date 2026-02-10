@@ -180,7 +180,7 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(() => runner.listTasks()).toThrow(/ENOENT|no such file/i);
   });
 
-  it('should mark claimed task as completed', () => {
+  it('should remove completed task record from tasks.yaml', () => {
     runner.addTask('Task A');
     const task = runner.claimNextTasks(1)[0]!;
 
@@ -194,7 +194,27 @@ describe('TaskRunner (tasks.yaml)', () => {
     });
 
     const file = loadTasksFile(testDir);
-    expect(file.tasks[0]?.status).toBe('completed');
+    expect(file.tasks).toHaveLength(0);
+  });
+
+  it('should remove only the completed task when multiple tasks exist', () => {
+    runner.addTask('Task A');
+    runner.addTask('Task B');
+    const task = runner.claimNextTasks(1)[0]!;
+
+    runner.completeTask({
+      task,
+      success: true,
+      response: 'Done',
+      executionLog: [],
+      startedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+    });
+
+    const file = loadTasksFile(testDir);
+    expect(file.tasks).toHaveLength(1);
+    expect(file.tasks[0]?.name).toContain('task-b');
+    expect(file.tasks[0]?.status).toBe('pending');
   });
 
   it('should mark claimed task as failed with failure detail', () => {

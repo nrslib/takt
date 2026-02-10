@@ -119,17 +119,9 @@ export class TaskRunner {
         throw new Error(`Task not found: ${result.task.name}`);
       }
 
-      const target = current.tasks[index]!;
-      const updated: TaskRecord = {
-        ...target,
-        status: 'completed',
-        completed_at: result.completedAt,
-        owner_pid: null,
-        failure: undefined,
+      return {
+        tasks: current.tasks.filter((_, i) => i !== index),
       };
-      const tasks = [...current.tasks];
-      tasks[index] = updated;
-      return { tasks };
     });
 
     return this.tasksFile;
