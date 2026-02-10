@@ -1,0 +1,15 @@
+name: e2e-mock-no-match
+description: Piece with a strict rule condition that will not match mock output
+
+max_iterations: 3
+
+movements:
+  - name: execute
+    edit: true
+    persona: ../agents/test-coder.md
+    permission_mode: edit
+    instruction_template: |
+      {task}
+    rules:
+      - condition: SpecificMatchThatWillNotOccur
+        next: COMPLETE

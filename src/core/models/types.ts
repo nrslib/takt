@@ -31,6 +31,8 @@ export type {
   OutputContractEntry,
   McpServerConfig,
   PieceMovement,
+  ArpeggioMovementConfig,
+  ArpeggioMergeMovementConfig,
   LoopDetectionConfig,
   LoopMonitorConfig,
   LoopMonitorJudge,

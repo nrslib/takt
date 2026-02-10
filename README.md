@@ -186,7 +186,7 @@ takt #6 --auto-pr
 
 ### Task Management (add / run / watch / list)
 
-Batch processing using task files (`.takt/tasks/`). Useful for accumulating multiple tasks and executing them together later.
+Batch processing using `.takt/tasks.yaml` with task directories under `.takt/tasks/{slug}/`. Useful for accumulating multiple tasks and executing them together later.
 
 #### Add Task (`takt add`)
 
@@ -201,14 +201,14 @@ takt add #28
 #### Execute Tasks (`takt run`)
 
 ```bash
-# Execute all pending tasks in .takt/tasks/
+# Execute all pending tasks in .takt/tasks.yaml
 takt run
 ```
 
 #### Watch Tasks (`takt watch`)
 
 ```bash
-# Monitor .takt/tasks/ and auto-execute tasks (resident process)
+# Monitor .takt/tasks.yaml and auto-execute tasks (resident process)
 takt watch
 ```
 
@@ -224,6 +224,13 @@ takt list --non-interactive --action diff --branch takt/my-branch
 takt list --non-interactive --action delete --branch takt/my-branch --yes
 takt list --non-interactive --format json
 ```
+
+#### Task Directory Workflow (Create / Run / Verify)
+
+1. Run `takt add` and confirm a pending record is created in `.takt/tasks.yaml`.
+2. Open the generated `.takt/tasks/{slug}/order.md` and add detailed specifications/references as needed.
+3. Run `takt run` (or `takt watch`) to execute pending tasks from `tasks.yaml`.
+4. Verify outputs in `.takt/runs/{slug}/reports/` using the same slug as `task_dir`.
 
 ### Pipeline Mode (for CI/Automation)
 
@@ -532,14 +539,14 @@ The model string is passed to the Codex SDK. If unspecified, defaults to `codex`
 
 .takt/                      # Project-level configuration
 ├── config.yaml             # Project config (current piece, etc.)
-├── tasks/                  # Pending task files (.yaml, .md)
-├── completed/              # Completed tasks and reports
-├── reports/                # Execution reports (auto-generated)
-│   └── {timestamp}-{slug}/
-└── logs/                   # NDJSON format session logs
-    ├── latest.json         # Pointer to current/latest session
-    ├── previous.json       # Pointer to previous session
-    └── {sessionId}.jsonl   # NDJSON session log per piece execution
+├── tasks/                  # Task input directories (.takt/tasks/{slug}/order.md, etc.)
+├── tasks.yaml              # Pending tasks metadata (task_dir, piece, worktree, etc.)
+└── runs/                   # Run-scoped artifacts
+    └── {slug}/
+        ├── reports/        # Execution reports (auto-generated)
+        ├── context/        # knowledge/policy/previous_response snapshots
+        ├── logs/           # NDJSON session logs for this run
+        └── meta.json       # Run metadata
 ```
 
 Builtin resources are embedded in the npm package (`builtins/`). User files in `~/.takt/` take priority.
@@ -625,32 +632,39 @@ Priority: Environment variables > `config.yaml` settings
 
 ## Detailed Guides
 
-### Task File Formats
+### Task Directory Format
 
-TAKT supports batch processing with task files in `.takt/tasks/`. Both `.yaml`/`.yml` and `.md` file formats are supported.
+TAKT stores task metadata in `.takt/tasks.yaml`, and each task's long specification in `.takt/tasks/{slug}/`.
 
-**YAML format** (recommended, supports worktree/branch/piece options):
+**Recommended layout**:
+
+```text
+.takt/
+  tasks/
+    20260201-015714-foptng/
+      order.md
+      schema.sql
+      wireframe.png
+  tasks.yaml
+  runs/
+    20260201-015714-foptng/
+      reports/
+```
+
+**tasks.yaml record**:
 
 ```yaml
-# .takt/tasks/add-auth.yaml
-task: "Add authentication feature"
-worktree: true                  # Execute in isolated shared clone
-branch: "feat/add-auth"         # Branch name (auto-generated if omitted)
-piece: "default"             # Piece specification (uses current if omitted)
+tasks:
+  - name: add-auth-feature
+    status: pending
+    task_dir: .takt/tasks/20260201-015714-foptng
+    piece: default
+    created_at: "2026-02-01T01:57:14.000Z"
+    started_at: null
+    completed_at: null
 ```
 
-**Markdown format** (simple, backward compatible):
-
-```markdown
-# .takt/tasks/add-login-feature.md
-
-Add login feature to the application.
-
-Requirements:
-- Username and password fields
-- Form validation
-- Error handling on failure
-```
+`takt add` creates `.takt/tasks/{slug}/order.md` automatically and saves `task_dir` to `tasks.yaml`.
 
 #### Isolated Execution with Shared Clone
 
@@ -667,15 +681,14 @@ Clones are ephemeral. After task completion, they auto-commit + push, then delet
 
 ### Session Logs
 
-TAKT writes session logs in NDJSON (`.jsonl`) format to `.takt/logs/`. Each record is atomically appended, so partial logs are preserved even if the process crashes, and you can track in real-time with `tail -f`.
+TAKT writes session logs in NDJSON (`.jsonl`) format to `.takt/runs/{slug}/logs/`. Each record is atomically appended, so partial logs are preserved even if the process crashes, and you can track in real-time with `tail -f`.
 
-- `.takt/logs/latest.json` - Pointer to current (or latest) session
-- `.takt/logs/previous.json` - Pointer to previous session
-- `.takt/logs/{sessionId}.jsonl` - NDJSON session log per piece execution
+- `.takt/runs/{slug}/logs/{sessionId}.jsonl` - NDJSON session log per piece execution
+- `.takt/runs/{slug}/meta.json` - Run metadata (`task`, `piece`, `start/end`, `status`, etc.)
 
 Record types: `piece_start`, `step_start`, `step_complete`, `piece_complete`, `piece_abort`
 
-Agents can read `previous.json` to inherit context from the previous execution. Session continuation is automatic — just run `takt "task"` to continue from the previous session.
+The latest previous response is stored at `.takt/runs/{slug}/context/previous_responses/latest.md` and inherited automatically.
 
 ### Adding Custom Pieces
 

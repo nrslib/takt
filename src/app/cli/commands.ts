@@ -15,7 +15,7 @@ import { resolveAgentOverrides } from './helpers.js';
 
 program
   .command('run')
-  .description('Run all pending tasks from .takt/tasks/')
+  .description('Run all pending tasks from .takt/tasks.yaml')
   .action(async () => {
     const piece = getCurrentPiece(resolvedCwd);
     await runAllTasks(resolvedCwd, piece, resolveAgentOverrides(program));

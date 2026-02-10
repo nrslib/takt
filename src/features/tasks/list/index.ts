@@ -2,7 +2,7 @@
  * List tasks command — main entry point.
  *
  * Interactive UI for reviewing branch-based task results,
- * pending tasks (.takt/tasks/), and failed tasks (.takt/failed/).
+ * pending tasks (.takt/tasks.yaml), and failed tasks.
  * Individual actions (merge, delete, instruct, diff) are in taskActions.ts.
  * Task delete actions are in taskDeleteActions.ts.
  * Non-interactive mode is in listNonInteractive.ts.

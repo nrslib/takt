@@ -7,7 +7,7 @@
  * (concurrency>1) execution through the same code path.
  *
  * Polls for newly added tasks at a configurable interval so that tasks
- * added to .takt/tasks/ during execution are picked up without waiting
+ * added to .takt/tasks.yaml during execution are picked up without waiting
  * for an active task to complete.
  */
 

@@ -112,6 +112,23 @@ describe('replaceTemplatePlaceholders', () => {
     expect(result).toBe('Previous: previous output text');
   });
 
+  it('should prefer preprocessed previous response text when provided', () => {
+    const step = makeMovement({ passPreviousResponse: true });
+    const ctx = makeContext({
+      previousOutput: {
+        persona: 'coder',
+        status: 'done',
+        content: 'raw previous output',
+        timestamp: new Date(),
+      },
+      previousResponseText: 'processed previous output',
+    });
+    const template = 'Previous: {previous_response}';
+
+    const result = replaceTemplatePlaceholders(template, step, ctx);
+    expect(result).toBe('Previous: processed previous output');
+  });
+
   it('should replace {previous_response} with empty string when no previous output', () => {
     const step = makeMovement({ passPreviousResponse: true });
     const ctx = makeContext();

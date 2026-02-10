@@ -148,7 +148,7 @@ movement の `instruction:` キーから指示テンプレートファイルを�
 | `{iteration}` | ピース全体のイテレーション数（1始まり） |
 | `{max_iterations}` | ピースの max_iterations 値 |
 | `{movement_iteration}` | この movement が実行された回数（1始まり） |
-| `{report_dir}` | レポートディレクトリパス |
+| `{report_dir}` | レポートディレクトリパス（`.takt/runs/{slug}/reports`） |
 | `{report:ファイル名}` | 指定レポートファイルの内容（Read で取得） |
 
 ### {report:ファイル名} の処理
@@ -212,7 +212,10 @@ report:
 チームメイトの出力からレポート内容を抽出し、Write tool でレポートディレクトリに保存する。
 **この作業は Team Lead（あなた）が行う。** チームメイトの出力を受け取った後に実施する。
 
-**レポートディレクトリ**: `.takt/reports/{timestamp}-{slug}/` に作成する。
+**実行ディレクトリ**: `.takt/runs/{timestamp}-{slug}/` に作成する。
+- レポートは `.takt/runs/{timestamp}-{slug}/reports/` に保存する。
+- `Knowledge` / `Policy` / `Previous Response` は `.takt/runs/{timestamp}-{slug}/context/` 配下に保存する。
+- 最新の previous response は `.takt/runs/{timestamp}-{slug}/context/previous_responses/latest.md` とする。
 - `{timestamp}`: `YYYYMMDD-HHmmss` 形式
 - `{slug}`: タスク内容の先頭30文字をスラグ化
 
@@ -358,17 +361,24 @@ loop_monitors:
    d. judge の出力を judge の `rules` で評価する
    e. マッチした rule の `next` に遷移する（通常のルール評価をオーバーライドする）
 
-## レポート管理
+## 実行アーティファクト管理
 
-### レポートディレクトリの作成
+### 実行ディレクトリの作成
 
-ピース実行開始時にレポートディレクトリを作成する:
+ピース実行開始時に実行ディレクトリを作成する:
 
 ```
-.takt/reports/{YYYYMMDD-HHmmss}-{slug}/
+.takt/runs/{YYYYMMDD-HHmmss}-{slug}/
+  reports/
+  context/
+    knowledge/
+    policy/
+    previous_responses/
+  logs/
+  meta.json
 ```
 
-このパスを `{report_dir}` 変数として全 movement から参照可能にする。
+このうち `reports/` のパスを `{report_dir}` 変数として全 movement から参照可能にする。
 
 ### レポートの保存
 
@@ -392,7 +402,7 @@ loop_monitors:
   ↓
 TeamCreate でチーム作成
   ↓
-レポートディレクトリ作成
+実行ディレクトリ作成
   ↓
 initial_movement を取得
   ↓

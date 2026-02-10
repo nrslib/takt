@@ -1,0 +1,14 @@
+[
+  {
+    "status": "done",
+    "content": "Task 1 completed successfully."
+  },
+  {
+    "status": "error",
+    "content": "Task 2 encountered an error."
+  },
+  {
+    "status": "done",
+    "content": "Task 3 completed successfully."
+  }
+]

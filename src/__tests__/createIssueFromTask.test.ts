@@ -114,6 +114,42 @@ describe('createIssueFromTask', () => {
     expect(mockSuccess).not.toHaveBeenCalled();
   });
 
+  describe('return value', () => {
+    it('should return issue number when creation succeeds', () => {
+      // Given
+      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/42' });
+
+      // When
+      const result = createIssueFromTask('Test task');
+
+      // Then
+      expect(result).toBe(42);
+    });
+
+    it('should return undefined when creation fails', () => {
+      // Given
+      mockCreateIssue.mockReturnValue({ success: false, error: 'auth failed' });
+
+      // When
+      const result = createIssueFromTask('Test task');
+
+      // Then
+      expect(result).toBeUndefined();
+    });
+
+    it('should return undefined and display error when URL has non-numeric suffix', () => {
+      // Given
+      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/abc' });
+
+      // When
+      const result = createIssueFromTask('Test task');
+
+      // Then
+      expect(result).toBeUndefined();
+      expect(mockError).toHaveBeenCalledWith('Failed to extract issue number from URL');
+    });
+  });
+
   it('should use first line as title and full text as body for multi-line task', () => {
     // Given: multi-line task
     const task = 'First line title\nSecond line details\nThird line more info';

@@ -1,0 +1,27 @@
+name: e2e-mock-max-iter
+description: Piece with max_iterations=2 that loops between two steps
+
+max_iterations: 2
+
+initial_movement: step-a
+
+movements:
+  - name: step-a
+    edit: true
+    persona: ../agents/test-coder.md
+    permission_mode: edit
+    instruction_template: |
+      {task}
+    rules:
+      - condition: Done
+        next: step-b
+
+  - name: step-b
+    edit: true
+    persona: ../agents/test-coder.md
+    permission_mode: edit
+    instruction_template: |
+      Continue the task.
+    rules:
+      - condition: Done
+        next: step-a

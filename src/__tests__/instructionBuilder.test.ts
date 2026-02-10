@@ -128,13 +128,13 @@ describe('instruction-builder', () => {
       );
       const context = createMinimalContext({
         cwd: '/project',
-        reportDir: '/project/.takt/reports/20260128-test-report',
+        reportDir: '/project/.takt/runs/20260128-test-report/reports',
       });
 
       const result = buildInstruction(step, context);
 
       expect(result).toContain(
-        '- Report Directory: /project/.takt/reports/20260128-test-report/'
+        '- Report Directory: /project/.takt/runs/20260128-test-report/reports/'
       );
     });
 
@@ -145,14 +145,14 @@ describe('instruction-builder', () => {
       const context = createMinimalContext({
         cwd: '/clone/my-task',
         projectCwd: '/project',
-        reportDir: '/project/.takt/reports/20260128-worktree-report',
+        reportDir: '/project/.takt/runs/20260128-worktree-report/reports',
       });
 
       const result = buildInstruction(step, context);
 
       // reportDir is now absolute, pointing to projectCwd
       expect(result).toContain(
-        '- Report: /project/.takt/reports/20260128-worktree-report/00-plan.md'
+        '- Report: /project/.takt/runs/20260128-worktree-report/reports/00-plan.md'
       );
       expect(result).toContain('Working Directory: /clone/my-task');
     });
@@ -164,13 +164,13 @@ describe('instruction-builder', () => {
       const context = createMinimalContext({
         projectCwd: '/project',
         cwd: '/worktree',
-        reportDir: '/project/.takt/reports/20260128-multi',
+        reportDir: '/project/.takt/runs/20260128-multi/reports',
       });
 
       const result = buildInstruction(step, context);
 
-      expect(result).toContain('/project/.takt/reports/20260128-multi/01-scope.md');
-      expect(result).toContain('/project/.takt/reports/20260128-multi/02-decisions.md');
+      expect(result).toContain('/project/.takt/runs/20260128-multi/reports/01-scope.md');
+      expect(result).toContain('/project/.takt/runs/20260128-multi/reports/02-decisions.md');
     });
 
     it('should replace standalone {report_dir} with absolute path', () => {
@@ -178,12 +178,108 @@ describe('instruction-builder', () => {
         'Report dir name: {report_dir}'
       );
       const context = createMinimalContext({
-        reportDir: '/project/.takt/reports/20260128-standalone',
+        reportDir: '/project/.takt/runs/20260128-standalone/reports',
       });
 
       const result = buildInstruction(step, context);
 
-      expect(result).toContain('Report dir name: /project/.takt/reports/20260128-standalone');
+      expect(result).toContain('Report dir name: /project/.takt/runs/20260128-standalone/reports');
+    });
+  });
+
+  describe('context length control and source path injection', () => {
+    it('should truncate previous response and inject source path with conflict notice', () => {
+      const step = createMinimalStep('Continue work');
+      step.passPreviousResponse = true;
+      const longResponse = 'x'.repeat(2100);
+      const context = createMinimalContext({
+        previousOutput: {
+          persona: 'coder',
+          status: 'done',
+          content: longResponse,
+          timestamp: new Date(),
+        },
+        previousResponseSourcePath: '.takt/runs/test/context/previous_responses/latest.md',
+      });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('...TRUNCATED...');
+      expect(result).toContain('Source: .takt/runs/test/context/previous_responses/latest.md');
+      expect(result).toContain('If prompt content conflicts with source files, source files take precedence.');
+    });
+
+    it('should always inject source paths when content is not truncated', () => {
+      const step = createMinimalStep('Do work');
+      step.passPreviousResponse = true;
+      const context = createMinimalContext({
+        previousOutput: {
+          persona: 'reviewer',
+          status: 'done',
+          content: 'short previous response',
+          timestamp: new Date(),
+        },
+        previousResponseSourcePath: '.takt/runs/test/context/previous_responses/latest.md',
+        knowledgeContents: ['short knowledge'],
+        knowledgeSourcePath: '.takt/runs/test/context/knowledge/implement.1.20260210T010203Z.md',
+        policyContents: ['short policy'],
+        policySourcePath: '.takt/runs/test/context/policy/implement.1.20260210T010203Z.md',
+      });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('Knowledge Source: .takt/runs/test/context/knowledge/implement.1.20260210T010203Z.md');
+      expect(result).toContain('Policy Source: .takt/runs/test/context/policy/implement.1.20260210T010203Z.md');
+      expect(result).toContain('Source: .takt/runs/test/context/previous_responses/latest.md');
+      expect(result).not.toContain('...TRUNCATED...');
+      expect(result).not.toContain('Knowledge is truncated.');
+      expect(result).not.toContain('Policy is authoritative. If truncated');
+      expect(result).not.toContain('Previous Response is truncated.');
+    });
+
+    it('should not truncate when content length is exactly 2000 chars', () => {
+      const step = createMinimalStep('Do work');
+      step.passPreviousResponse = true;
+      const exactBoundary = 'x'.repeat(2000);
+      const context = createMinimalContext({
+        previousOutput: {
+          persona: 'reviewer',
+          status: 'done',
+          content: exactBoundary,
+          timestamp: new Date(),
+        },
+        previousResponseSourcePath: '.takt/runs/test/context/previous_responses/latest.md',
+        knowledgeContents: [exactBoundary],
+        knowledgeSourcePath: '.takt/runs/test/context/knowledge/implement.1.20260210T010203Z.md',
+        policyContents: [exactBoundary],
+        policySourcePath: '.takt/runs/test/context/policy/implement.1.20260210T010203Z.md',
+      });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('Knowledge Source: .takt/runs/test/context/knowledge/implement.1.20260210T010203Z.md');
+      expect(result).toContain('Policy Source: .takt/runs/test/context/policy/implement.1.20260210T010203Z.md');
+      expect(result).toContain('Source: .takt/runs/test/context/previous_responses/latest.md');
+      expect(result).not.toContain('...TRUNCATED...');
+    });
+
+    it('should inject required truncated warning and source path for knowledge/policy', () => {
+      const step = createMinimalStep('Do work');
+      const longKnowledge = 'k'.repeat(2200);
+      const longPolicy = 'p'.repeat(2200);
+      const context = createMinimalContext({
+        knowledgeContents: [longKnowledge],
+        knowledgeSourcePath: '.takt/runs/test/context/knowledge/implement.1.20260210T010203Z.md',
+        policyContents: [longPolicy],
+        policySourcePath: '.takt/runs/test/context/policy/implement.1.20260210T010203Z.md',
+      });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('Knowledge is truncated. You MUST consult the source files before making decisions.');
+      expect(result).toContain('Policy is authoritative. If truncated, you MUST read the full policy file and follow it strictly.');
+      expect(result).toContain('Knowledge Source: .takt/runs/test/context/knowledge/implement.1.20260210T010203Z.md');
+      expect(result).toContain('Policy Source: .takt/runs/test/context/policy/implement.1.20260210T010203Z.md');
     });
   });
 
@@ -380,7 +476,7 @@ describe('instruction-builder', () => {
       step.name = 'plan';
       step.outputContracts = [{ name: '00-plan.md' }];
       const context = createMinimalContext({
-        reportDir: '/project/.takt/reports/20260129-test',
+        reportDir: '/project/.takt/runs/20260129-test/reports',
         language: 'en',
       });
 
@@ -399,7 +495,7 @@ describe('instruction-builder', () => {
         { label: 'Decisions', path: '02-decisions.md' },
       ];
       const context = createMinimalContext({
-        reportDir: '/project/.takt/reports/20260129-test',
+        reportDir: '/project/.takt/runs/20260129-test/reports',
         language: 'en',
       });
 
@@ -414,7 +510,7 @@ describe('instruction-builder', () => {
       const step = createMinimalStep('Do work');
       step.outputContracts = [{ name: '00-plan.md' }];
       const context = createMinimalContext({
-        reportDir: '/project/.takt/reports/20260129-test',
+        reportDir: '/project/.takt/runs/20260129-test/reports',
         language: 'en',
       });
 
@@ -559,7 +655,7 @@ describe('instruction-builder', () => {
       const step = createMinimalStep('Do work');
       step.outputContracts = [{ name: '00-plan.md' }];
       const context = createMinimalContext({
-        reportDir: '/project/.takt/reports/20260129-test',
+        reportDir: '/project/.takt/runs/20260129-test/reports',
         language: 'en',
       });
 
@@ -579,7 +675,7 @@ describe('instruction-builder', () => {
       const step = createMinimalStep('Do work');
       step.outputContracts = [{ name: '00-plan.md', format: '**Format:**\n# Plan' }];
       const context = createMinimalContext({
-        reportDir: '/project/.takt/reports/20260129-test',
+        reportDir: '/project/.takt/runs/20260129-test/reports',
         language: 'en',
       });
 
@@ -595,7 +691,7 @@ describe('instruction-builder', () => {
         order: 'Custom order instruction',
       }];
       const context = createMinimalContext({
-        reportDir: '/project/.takt/reports/20260129-test',
+        reportDir: '/project/.takt/runs/20260129-test/reports',
         language: 'en',
       });
 
@@ -607,13 +703,13 @@ describe('instruction-builder', () => {
     it('should still replace {report:filename} in instruction_template', () => {
       const step = createMinimalStep('Write to {report:00-plan.md}');
       const context = createMinimalContext({
-        reportDir: '/project/.takt/reports/20260129-test',
+        reportDir: '/project/.takt/runs/20260129-test/reports',
         language: 'en',
       });
 
       const result = buildInstruction(step, context);
 
-      expect(result).toContain('Write to /project/.takt/reports/20260129-test/00-plan.md');
+      expect(result).toContain('Write to /project/.takt/runs/20260129-test/reports/00-plan.md');
       expect(result).not.toContain('{report:00-plan.md}');
     });
   });
@@ -622,7 +718,7 @@ describe('instruction-builder', () => {
     function createReportContext(overrides: Partial<ReportInstructionContext> = {}): ReportInstructionContext {
       return {
         cwd: '/project',
-        reportDir: '/project/.takt/reports/20260129-test',
+        reportDir: '/project/.takt/runs/20260129-test/reports',
         movementIteration: 1,
         language: 'en',
         ...overrides,
@@ -663,12 +759,12 @@ describe('instruction-builder', () => {
     it('should include report directory and file for string report', () => {
       const step = createMinimalStep('Do work');
       step.outputContracts = [{ name: '00-plan.md' }];
-      const ctx = createReportContext({ reportDir: '/project/.takt/reports/20260130-test' });
+      const ctx = createReportContext({ reportDir: '/project/.takt/runs/20260130-test/reports' });
 
       const result = buildReportInstruction(step, ctx);
 
-      expect(result).toContain('- Report Directory: /project/.takt/reports/20260130-test/');
-      expect(result).toContain('- Report File: /project/.takt/reports/20260130-test/00-plan.md');
+      expect(result).toContain('- Report Directory: /project/.takt/runs/20260130-test/reports/');
+      expect(result).toContain('- Report File: /project/.takt/runs/20260130-test/reports/00-plan.md');
     });
 
     it('should include report files for OutputContractEntry[] report', () => {
@@ -681,10 +777,10 @@ describe('instruction-builder', () => {
 
       const result = buildReportInstruction(step, ctx);
 
-      expect(result).toContain('- Report Directory: /project/.takt/reports/20260129-test/');
+      expect(result).toContain('- Report Directory: /project/.takt/runs/20260129-test/reports/');
       expect(result).toContain('- Report Files:');
-      expect(result).toContain('  - Scope: /project/.takt/reports/20260129-test/01-scope.md');
-      expect(result).toContain('  - Decisions: /project/.takt/reports/20260129-test/02-decisions.md');
+      expect(result).toContain('  - Scope: /project/.takt/runs/20260129-test/reports/01-scope.md');
+      expect(result).toContain('  - Decisions: /project/.takt/runs/20260129-test/reports/02-decisions.md');
     });
 
     it('should include report file for OutputContractItem report', () => {
@@ -694,7 +790,7 @@ describe('instruction-builder', () => {
 
       const result = buildReportInstruction(step, ctx);
 
-      expect(result).toContain('- Report File: /project/.takt/reports/20260129-test/00-plan.md');
+      expect(result).toContain('- Report File: /project/.takt/runs/20260129-test/reports/00-plan.md');
     });
 
     it('should include auto-generated report output instruction', () => {
@@ -719,7 +815,7 @@ describe('instruction-builder', () => {
 
       const result = buildReportInstruction(step, ctx);
 
-      expect(result).toContain('Output to /project/.takt/reports/20260129-test/00-plan.md file.');
+      expect(result).toContain('Output to /project/.takt/runs/20260129-test/reports/00-plan.md file.');
       expect(result).not.toContain('**Report output:**');
     });
 
@@ -893,6 +989,24 @@ describe('instruction-builder', () => {
       expect(result).not.toContain('## Previous Response\n');
       // But template placeholder should be replaced with content
       expect(result).toContain('## Feedback\nReview feedback here');
+    });
+
+    it('should apply truncation and source path when {previous_response} placeholder is used', () => {
+      const step = createMinimalStep('## Feedback\n{previous_response}\n\nFix the issues.');
+      step.passPreviousResponse = true;
+      const context = createMinimalContext({
+        previousOutput: { content: 'x'.repeat(2100), tag: '[TEST:1]' },
+        previousResponseSourcePath: '.takt/runs/test/context/previous_responses/latest.md',
+        language: 'en',
+      });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).not.toContain('## Previous Response\n');
+      expect(result).toContain('## Feedback');
+      expect(result).toContain('...TRUNCATED...');
+      expect(result).toContain('Source: .takt/runs/test/context/previous_responses/latest.md');
+      expect(result).toContain('If prompt content conflicts with source files, source files take precedence.');
     });
 
     it('should skip auto-injected Additional User Inputs when template contains {user_inputs}', () => {

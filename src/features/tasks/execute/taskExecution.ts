@@ -49,7 +49,7 @@ function resolveTaskIssue(issueNumber: number | undefined): ReturnType<typeof fe
 }
 
 async function executeTaskWithResult(options: ExecuteTaskOptions): Promise<PieceExecutionResult> {
-  const { task, cwd, pieceIdentifier, projectCwd, agentOverrides, interactiveUserInput, interactiveMetadata, startMovement, retryNote, abortSignal, taskPrefix, taskColorIndex } = options;
+  const { task, cwd, pieceIdentifier, projectCwd, agentOverrides, interactiveUserInput, interactiveMetadata, startMovement, retryNote, reportDirName, abortSignal, taskPrefix, taskColorIndex } = options;
   const pieceConfig = loadPieceByIdentifier(pieceIdentifier, projectCwd);
 
   if (!pieceConfig) {
@@ -80,6 +80,7 @@ async function executeTaskWithResult(options: ExecuteTaskOptions): Promise<Piece
     interactiveMetadata,
     startMovement,
     retryNote,
+    reportDirName,
     abortSignal,
     taskPrefix,
     taskColorIndex,
@@ -128,7 +129,7 @@ export async function executeAndCompleteTask(
   }
 
   try {
-    const { execCwd, execPiece, isWorktree, branch, baseBranch, startMovement, retryNote, autoPr, issueNumber } = await resolveTaskExecution(task, cwd, pieceName, taskAbortSignal);
+    const { execCwd, execPiece, isWorktree, reportDirName, branch, baseBranch, startMovement, retryNote, autoPr, issueNumber } = await resolveTaskExecution(task, cwd, pieceName, taskAbortSignal);
 
     // cwd is always the project root; pass it as projectCwd so reports/sessions go there
     const taskRunResult = await executeTaskWithResult({
@@ -139,6 +140,7 @@ export async function executeAndCompleteTask(
       agentOverrides: options,
       startMovement,
       retryNote,
+      reportDirName,
       abortSignal: taskAbortSignal,
       taskPrefix: parallelOptions?.taskPrefix,
       taskColorIndex: parallelOptions?.taskColorIndex,
@@ -227,7 +229,7 @@ export async function executeAndCompleteTask(
 }
 
 /**
- * Run all pending tasks from .takt/tasks/
+ * Run all pending tasks from .takt/tasks.yaml
  *
  * Uses a worker pool for both sequential (concurrency=1) and parallel
  * (concurrency>1) execution through the same code path.

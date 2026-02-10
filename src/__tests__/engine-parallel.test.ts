@@ -8,7 +8,8 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, rmSync, readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 // --- Mock setup (must be before imports that use these modules) ---
 
@@ -126,6 +127,46 @@ describe('PieceEngine Integration: Parallel Movement Aggregation', () => {
     expect(state.movementOutputs.has('reviewers')).toBe(true);
     expect(state.movementOutputs.get('arch-review')!.content).toBe('Arch content');
     expect(state.movementOutputs.get('security-review')!.content).toBe('Sec content');
+  });
+
+  it('should persist aggregated previous_response snapshot for parallel parent movement', async () => {
+    const config = buildDefaultPieceConfig();
+    const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+
+    mockRunAgentSequence([
+      makeResponse({ persona: 'plan', content: 'Plan' }),
+      makeResponse({ persona: 'implement', content: 'Impl' }),
+      makeResponse({ persona: 'ai_review', content: 'OK' }),
+      makeResponse({ persona: 'arch-review', content: 'Arch content' }),
+      makeResponse({ persona: 'security-review', content: 'Sec content' }),
+      makeResponse({ persona: 'supervise', content: 'Pass' }),
+    ]);
+
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'aggregate' },
+      { index: 0, method: 'phase1_tag' },
+    ]);
+
+    const state = await engine.run();
+    const reviewersOutput = state.movementOutputs.get('reviewers')!.content;
+    const previousDir = join(tmpDir, '.takt', 'runs', 'test-report-dir', 'context', 'previous_responses');
+    const previousFiles = readdirSync(previousDir);
+
+    expect(state.previousResponseSourcePath).toMatch(/^\.takt\/runs\/test-report-dir\/context\/previous_responses\/supervise\.1\.\d{8}T\d{6}Z\.md$/);
+    expect(previousFiles).toContain('latest.md');
+    expect(previousFiles.some((name) => /^reviewers\.1\.\d{8}T\d{6}Z\.md$/.test(name))).toBe(true);
+    expect(readFileSync(join(previousDir, 'latest.md'), 'utf-8')).toBe('Pass');
+    expect(
+      previousFiles.some((name) => {
+        if (!/^reviewers\.1\.\d{8}T\d{6}Z\.md$/.test(name)) return false;
+        return readFileSync(join(previousDir, name), 'utf-8') === reviewersOutput;
+      })
+    ).toBe(true);
   });
 
   it('should execute sub-movements concurrently (both runAgent calls happen)', async () => {

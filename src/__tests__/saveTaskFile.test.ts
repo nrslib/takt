@@ -42,10 +42,13 @@ function loadTasks(testDir: string): { tasks: Array<Record<string, unknown>> } {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2026-02-10T04:40:00.000Z'));
   testDir = fs.mkdtempSync(path.join(tmpdir(), 'takt-test-save-'));
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   if (testDir && fs.existsSync(testDir)) {
     fs.rmSync(testDir, { recursive: true });
   }
@@ -61,7 +64,11 @@ describe('saveTaskFile', () => {
 
     const tasks = loadTasks(testDir).tasks;
     expect(tasks).toHaveLength(1);
-    expect(tasks[0]?.content).toContain('Implement feature X');
+    expect(tasks[0]?.content).toBeUndefined();
+    expect(tasks[0]?.task_dir).toBeTypeOf('string');
+    const taskDir = path.join(testDir, String(tasks[0]?.task_dir));
+    expect(fs.existsSync(path.join(taskDir, 'order.md'))).toBe(true);
+    expect(fs.readFileSync(path.join(taskDir, 'order.md'), 'utf-8')).toContain('Implement feature X');
   });
 
   it('should include optional fields', async () => {
@@ -79,6 +86,7 @@ describe('saveTaskFile', () => {
     expect(task.worktree).toBe(true);
     expect(task.branch).toBe('feat/my-branch');
     expect(task.auto_pr).toBe(false);
+    expect(task.task_dir).toBeTypeOf('string');
   });
 
   it('should generate unique names on duplicates', async () => {
@@ -86,6 +94,13 @@ describe('saveTaskFile', () => {
     const second = await saveTaskFile(testDir, 'Same title');
 
     expect(first.taskName).not.toBe(second.taskName);
+
+    const tasks = loadTasks(testDir).tasks;
+    expect(tasks).toHaveLength(2);
+    expect(tasks[0]?.task_dir).toBe('.takt/tasks/20260210-044000-same-title');
+    expect(tasks[1]?.task_dir).toBe('.takt/tasks/20260210-044000-same-title-2');
+    expect(fs.readFileSync(path.join(testDir, String(tasks[0]?.task_dir), 'order.md'), 'utf-8')).toContain('Same title');
+    expect(fs.readFileSync(path.join(testDir, String(tasks[1]?.task_dir), 'order.md'), 'utf-8')).toContain('Same title');
   });
 });
 
@@ -121,5 +136,17 @@ describe('saveTaskFromInteractive', () => {
     await saveTaskFromInteractive(testDir, 'Task content', 'review');
 
     expect(mockInfo).toHaveBeenCalledWith('  Piece: review');
+  });
+
+  it('should record issue number in tasks.yaml when issue option is provided', async () => {
+    // Given: user declines worktree
+    mockConfirm.mockResolvedValueOnce(false);
+
+    // When
+    await saveTaskFromInteractive(testDir, 'Fix login bug', 'default', { issue: 42 });
+
+    // Then
+    const task = loadTasks(testDir).tasks[0]!;
+    expect(task.issue).toBe(42);
   });
 });

@@ -36,7 +36,7 @@ vi.mock('../features/tasks/index.js', () => ({
   selectAndExecuteTask: vi.fn(),
   determinePiece: vi.fn(),
   saveTaskFromInteractive: vi.fn(),
-  createIssueFromTask: vi.fn(),
+  createIssueAndSaveTask: vi.fn(),
 }));
 
 vi.mock('../features/pipeline/index.js', () => ({
@@ -83,7 +83,7 @@ vi.mock('../app/cli/helpers.js', () => ({
 }));
 
 import { checkGhCli, fetchIssue, formatIssueAsTask, parseIssueNumbers } from '../infra/github/issue.js';
-import { selectAndExecuteTask, determinePiece } from '../features/tasks/index.js';
+import { selectAndExecuteTask, determinePiece, createIssueAndSaveTask } from '../features/tasks/index.js';
 import { interactiveMode } from '../features/interactive/index.js';
 import { isDirectTask } from '../app/cli/helpers.js';
 import { executeDefaultAction } from '../app/cli/routing.js';
@@ -95,6 +95,7 @@ const mockFormatIssueAsTask = vi.mocked(formatIssueAsTask);
 const mockParseIssueNumbers = vi.mocked(parseIssueNumbers);
 const mockSelectAndExecuteTask = vi.mocked(selectAndExecuteTask);
 const mockDeterminePiece = vi.mocked(determinePiece);
+const mockCreateIssueAndSaveTask = vi.mocked(createIssueAndSaveTask);
 const mockInteractiveMode = vi.mocked(interactiveMode);
 const mockIsDirectTask = vi.mocked(isDirectTask);
 
@@ -258,6 +259,34 @@ describe('Issue resolution in routing', () => {
       await executeDefaultAction();
 
       // Then
+      expect(mockSelectAndExecuteTask).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('create_issue action', () => {
+    it('should delegate to createIssueAndSaveTask with cwd, task, and pieceId', async () => {
+      // Given
+      mockInteractiveMode.mockResolvedValue({ action: 'create_issue', task: 'New feature request' });
+
+      // When
+      await executeDefaultAction();
+
+      // Then: createIssueAndSaveTask should be called with correct args
+      expect(mockCreateIssueAndSaveTask).toHaveBeenCalledWith(
+        '/test/cwd',
+        'New feature request',
+        'default',
+      );
+    });
+
+    it('should not call selectAndExecuteTask when create_issue action is chosen', async () => {
+      // Given
+      mockInteractiveMode.mockResolvedValue({ action: 'create_issue', task: 'New feature request' });
+
+      // When
+      await executeDefaultAction();
+
+      // Then: selectAndExecuteTask should NOT be called
       expect(mockSelectAndExecuteTask).not.toHaveBeenCalled();
     });
   });

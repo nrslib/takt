@@ -1,37 +1,48 @@
-TAKT Task File Format
-=====================
+TAKT Task Directory Format
+==========================
 
-Tasks placed in this directory (.takt/tasks/) will be processed by TAKT.
+`.takt/tasks/` is the task input directory. Each task uses one subdirectory.
 
-## YAML Format (Recommended)
+## Directory Layout (Recommended)
 
-  # .takt/tasks/my-task.yaml
-  task: "Task description"
-  worktree: true                  # (optional) true | "/path/to/dir"
-  branch: "feat/my-feature"      # (optional) branch name
-  piece: "default"             # (optional) piece name
+  .takt/
+    tasks/
+      20260201-015714-foptng/
+        order.md
+        schema.sql
+        wireframe.png
+
+- Directory name should match the report directory slug.
+- `order.md` is required.
+- Other files are optional reference materials.
+
+## tasks.yaml Format
+
+Store task metadata in `.takt/tasks.yaml`, and point to the task directory with `task_dir`.
+
+  tasks:
+    - name: add-auth-feature
+      status: pending
+      task_dir: .takt/tasks/20260201-015714-foptng
+      piece: default
+      created_at: "2026-02-01T01:57:14.000Z"
+      started_at: null
+      completed_at: null
 
 Fields:
-  task      (required)  Task description (string)
-  worktree  (optional)  true: create shared clone, "/path": clone at path
-  branch    (optional)  Branch name (auto-generated if omitted: takt/{timestamp}-{slug})
-  piece  (optional)  Piece name (uses current piece if omitted)
+  task_dir   (recommended)  Path to task directory that contains `order.md`
+  content    (legacy)       Inline task text (kept for compatibility)
+  content_file (legacy)     Path to task text file (kept for compatibility)
 
-## Markdown Format (Simple)
+## Command Behavior
 
-  # .takt/tasks/my-task.md
-
-  Entire file content becomes the task description.
-  Supports multiline. No structured options available.
-
-## Supported Extensions
-
-  .yaml, .yml  ->  YAML format (parsed and validated)
-  .md          ->  Markdown format (plain text, backward compatible)
+- `takt add` creates `.takt/tasks/{slug}/order.md` automatically.
+- `takt run` and `takt watch` read `.takt/tasks.yaml` and resolve `task_dir`.
+- Report output is written to `.takt/runs/{slug}/reports/`.
 
 ## Commands
 
-  takt /add-task     Add a task interactively
-  takt /run-tasks    Run all pending tasks
-  takt /watch        Watch and auto-run tasks
-  takt /list-tasks   List task branches (merge/delete)
+  takt add     Add a task and create task directory
+  takt run     Run all pending tasks in tasks.yaml
+  takt watch   Watch tasks.yaml and run pending tasks
+  takt list    List task branches (merge/delete)

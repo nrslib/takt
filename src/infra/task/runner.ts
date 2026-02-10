@@ -29,13 +29,17 @@ export class TaskRunner {
     return this.tasksFile;
   }
 
-  addTask(content: string, options?: Omit<TaskFileData, 'task'>): TaskInfo {
+  addTask(
+    content: string,
+    options?: Omit<TaskFileData, 'task'> & { content_file?: string; task_dir?: string },
+  ): TaskInfo {
     const state = this.store.update((current) => {
       const name = this.generateTaskName(content, current.tasks.map((task) => task.name));
+      const contentValue = options?.task_dir ? undefined : content;
       const record: TaskRecord = TaskRecordSchema.parse({
         name,
         status: 'pending',
-        content,
+        content: contentValue,
         created_at: nowIso(),
         started_at: null,
         completed_at: null,
@@ -119,17 +123,9 @@ export class TaskRunner {
         throw new Error(`Task not found: ${result.task.name}`);
       }
 
-      const target = current.tasks[index]!;
-      const updated: TaskRecord = {
-        ...target,
-        status: 'completed',
-        completed_at: result.completedAt,
-        owner_pid: null,
-        failure: undefined,
+      return {
+        tasks: current.tasks.filter((_, i) => i !== index),
       };
-      const tasks = [...current.tasks];
-      tasks[index] = updated;
-      return { tasks };
     });
 
     return this.tasksFile;

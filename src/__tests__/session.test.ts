@@ -7,14 +7,11 @@ import { existsSync, readFileSync, mkdirSync, rmSync, writeFileSync } from 'node
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
-  createSessionLog,
-  updateLatestPointer,
   initNdjsonLog,
   appendNdjsonLine,
   loadNdjsonLog,
   loadSessionLog,
   extractFailureInfo,
-  type LatestLogPointer,
   type SessionLog,
   type NdjsonRecord,
   type NdjsonStepComplete,
@@ -26,121 +23,18 @@ import {
   type NdjsonInteractiveEnd,
 } from '../infra/fs/session.js';
 
-/** Create a temp project directory with .takt/logs structure */
+/** Create a temp project directory for each test */
 function createTempProject(): string {
   const dir = join(tmpdir(), `takt-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   mkdirSync(dir, { recursive: true });
   return dir;
 }
 
-describe('updateLatestPointer', () => {
-  let projectDir: string;
-
-  beforeEach(() => {
-    projectDir = createTempProject();
-  });
-
-  afterEach(() => {
-    rmSync(projectDir, { recursive: true, force: true });
-  });
-
-  it('should create latest.json with pointer data', () => {
-    const log = createSessionLog('my task', projectDir, 'default');
-    const sessionId = 'abc-123';
-
-    updateLatestPointer(log, sessionId, projectDir);
-
-    const latestPath = join(projectDir, '.takt', 'logs', 'latest.json');
-    expect(existsSync(latestPath)).toBe(true);
-
-    const pointer = JSON.parse(readFileSync(latestPath, 'utf-8')) as LatestLogPointer;
-    expect(pointer.sessionId).toBe('abc-123');
-    expect(pointer.logFile).toBe('abc-123.jsonl');
-    expect(pointer.task).toBe('my task');
-    expect(pointer.pieceName).toBe('default');
-    expect(pointer.status).toBe('running');
-    expect(pointer.iterations).toBe(0);
-    expect(pointer.startTime).toBeDefined();
-    expect(pointer.updatedAt).toBeDefined();
-  });
-
-  it('should not create previous.json when copyToPrevious is false', () => {
-    const log = createSessionLog('task', projectDir, 'wf');
-    updateLatestPointer(log, 'sid-1', projectDir);
-
-    const previousPath = join(projectDir, '.takt', 'logs', 'previous.json');
-    expect(existsSync(previousPath)).toBe(false);
-  });
-
-  it('should not create previous.json when copyToPrevious is true but latest.json does not exist', () => {
-    const log = createSessionLog('task', projectDir, 'wf');
-    updateLatestPointer(log, 'sid-1', projectDir, { copyToPrevious: true });
-
-    const previousPath = join(projectDir, '.takt', 'logs', 'previous.json');
-    // latest.json didn't exist before this call, so previous.json should not be created
-    expect(existsSync(previousPath)).toBe(false);
-  });
-
-  it('should copy latest.json to previous.json when copyToPrevious is true and latest exists', () => {
-    const log1 = createSessionLog('first task', projectDir, 'wf1');
-    updateLatestPointer(log1, 'sid-first', projectDir);
-
-    // Simulate a second piece starting
-    const log2 = createSessionLog('second task', projectDir, 'wf2');
-    updateLatestPointer(log2, 'sid-second', projectDir, { copyToPrevious: true });
-
-    const logsDir = join(projectDir, '.takt', 'logs');
-    const latest = JSON.parse(readFileSync(join(logsDir, 'latest.json'), 'utf-8')) as LatestLogPointer;
-    const previous = JSON.parse(readFileSync(join(logsDir, 'previous.json'), 'utf-8')) as LatestLogPointer;
-
-    // latest should point to second session
-    expect(latest.sessionId).toBe('sid-second');
-    expect(latest.task).toBe('second task');
-
-    // previous should point to first session
-    expect(previous.sessionId).toBe('sid-first');
-    expect(previous.task).toBe('first task');
-  });
-
-  it('should not update previous.json on step-complete calls (no copyToPrevious)', () => {
-    // Piece 1 creates latest
-    const log1 = createSessionLog('first', projectDir, 'wf');
-    updateLatestPointer(log1, 'sid-1', projectDir);
-
-    // Piece 2 starts → copies latest to previous
-    const log2 = createSessionLog('second', projectDir, 'wf');
-    updateLatestPointer(log2, 'sid-2', projectDir, { copyToPrevious: true });
-
-    // Step completes → updates only latest (no copyToPrevious)
-    log2.iterations = 1;
-    updateLatestPointer(log2, 'sid-2', projectDir);
-
-    const logsDir = join(projectDir, '.takt', 'logs');
-    const previous = JSON.parse(readFileSync(join(logsDir, 'previous.json'), 'utf-8')) as LatestLogPointer;
-
-    // previous should still point to first session
-    expect(previous.sessionId).toBe('sid-1');
-  });
-
-  it('should update iterations and status in latest.json on subsequent calls', () => {
-    const log = createSessionLog('task', projectDir, 'wf');
-    updateLatestPointer(log, 'sid-1', projectDir, { copyToPrevious: true });
-
-    // Simulate step completion
-    log.iterations = 2;
-    updateLatestPointer(log, 'sid-1', projectDir);
-
-    // Simulate piece completion
-    log.status = 'completed';
-    log.iterations = 3;
-    updateLatestPointer(log, 'sid-1', projectDir);
-
-    const latestPath = join(projectDir, '.takt', 'logs', 'latest.json');
-    const pointer = JSON.parse(readFileSync(latestPath, 'utf-8')) as LatestLogPointer;
-    expect(pointer.status).toBe('completed');
-    expect(pointer.iterations).toBe(3);
-  });
-});
+function initTestNdjsonLog(sessionId: string, task: string, pieceName: string, projectDir: string): string {
+  const logsDir = join(projectDir, '.takt', 'runs', 'test-run', 'logs');
+  mkdirSync(logsDir, { recursive: true });
+  return initNdjsonLog(sessionId, task, pieceName, { logsDir });
+}
 
 describe('NDJSON log', () => {
   let projectDir: string;
@@ -155,7 +49,7 @@ describe('NDJSON log', () => {
 
   describe('initNdjsonLog', () => {
     it('should create a .jsonl file with piece_start record', () => {
-      const filepath = initNdjsonLog('sess-001', 'my task', 'default', projectDir);
+      const filepath = initTestNdjsonLog('sess-001', 'my task', 'default', projectDir);
 
       expect(filepath).toContain('sess-001.jsonl');
       expect(existsSync(filepath)).toBe(true);
@@ -176,7 +70,7 @@ describe('NDJSON log', () => {
 
   describe('appendNdjsonLine', () => {
     it('should append records as individual lines', () => {
-      const filepath = initNdjsonLog('sess-002', 'task', 'wf', projectDir);
+      const filepath = initTestNdjsonLog('sess-002', 'task', 'wf', projectDir);
 
       const stepStart: NdjsonRecord = {
         type: 'step_start',
@@ -224,7 +118,7 @@ describe('NDJSON log', () => {
 
   describe('loadNdjsonLog', () => {
     it('should reconstruct SessionLog from NDJSON file', () => {
-      const filepath = initNdjsonLog('sess-003', 'build app', 'default', projectDir);
+      const filepath = initTestNdjsonLog('sess-003', 'build app', 'default', projectDir);
 
       // Add step_start + step_complete
       appendNdjsonLine(filepath, {
@@ -270,7 +164,7 @@ describe('NDJSON log', () => {
     });
 
     it('should handle aborted piece', () => {
-      const filepath = initNdjsonLog('sess-004', 'failing task', 'wf', projectDir);
+      const filepath = initTestNdjsonLog('sess-004', 'failing task', 'wf', projectDir);
 
       appendNdjsonLine(filepath, {
         type: 'step_start',
@@ -321,7 +215,7 @@ describe('NDJSON log', () => {
     });
 
     it('should skip step_start records when reconstructing SessionLog', () => {
-      const filepath = initNdjsonLog('sess-005', 'task', 'wf', projectDir);
+      const filepath = initTestNdjsonLog('sess-005', 'task', 'wf', projectDir);
 
       // Add various records
       appendNdjsonLine(filepath, {
@@ -358,7 +252,7 @@ describe('NDJSON log', () => {
 
   describe('loadSessionLog with .jsonl extension', () => {
     it('should delegate to loadNdjsonLog for .jsonl files', () => {
-      const filepath = initNdjsonLog('sess-006', 'jsonl task', 'wf', projectDir);
+      const filepath = initTestNdjsonLog('sess-006', 'jsonl task', 'wf', projectDir);
 
       appendNdjsonLine(filepath, {
         type: 'step_complete',
@@ -406,7 +300,7 @@ describe('NDJSON log', () => {
 
   describe('appendNdjsonLine real-time characteristics', () => {
     it('should append without overwriting previous content', () => {
-      const filepath = initNdjsonLog('sess-007', 'task', 'wf', projectDir);
+      const filepath = initTestNdjsonLog('sess-007', 'task', 'wf', projectDir);
 
       // Read after init
       const after1 = readFileSync(filepath, 'utf-8').trim().split('\n');
@@ -428,7 +322,7 @@ describe('NDJSON log', () => {
     });
 
     it('should produce valid JSON on each line', () => {
-      const filepath = initNdjsonLog('sess-008', 'task', 'wf', projectDir);
+      const filepath = initTestNdjsonLog('sess-008', 'task', 'wf', projectDir);
 
       for (let i = 0; i < 5; i++) {
         appendNdjsonLine(filepath, {
@@ -453,7 +347,7 @@ describe('NDJSON log', () => {
 
   describe('phase NDJSON records', () => {
     it('should serialize and append phase_start records', () => {
-      const filepath = initNdjsonLog('sess-phase-001', 'task', 'wf', projectDir);
+      const filepath = initTestNdjsonLog('sess-phase-001', 'task', 'wf', projectDir);
 
       const record: NdjsonPhaseStart = {
         type: 'phase_start',
@@ -480,7 +374,7 @@ describe('NDJSON log', () => {
     });
 
     it('should serialize and append phase_complete records', () => {
-      const filepath = initNdjsonLog('sess-phase-002', 'task', 'wf', projectDir);
+      const filepath = initTestNdjsonLog('sess-phase-002', 'task', 'wf', projectDir);
 
       const record: NdjsonPhaseComplete = {
         type: 'phase_complete',
@@ -509,7 +403,7 @@ describe('NDJSON log', () => {
     });
 
     it('should serialize phase_complete with error', () => {
-      const filepath = initNdjsonLog('sess-phase-003', 'task', 'wf', projectDir);
+      const filepath = initTestNdjsonLog('sess-phase-003', 'task', 'wf', projectDir);
 
       const record: NdjsonPhaseComplete = {
         type: 'phase_complete',
@@ -534,7 +428,7 @@ describe('NDJSON log', () => {
     });
 
     it('should be skipped by loadNdjsonLog (default case)', () => {
-      const filepath = initNdjsonLog('sess-phase-004', 'task', 'wf', projectDir);
+      const filepath = initTestNdjsonLog('sess-phase-004', 'task', 'wf', projectDir);
 
       // Add phase records
       appendNdjsonLine(filepath, {
@@ -577,7 +471,7 @@ describe('NDJSON log', () => {
 
   describe('interactive NDJSON records', () => {
     it('should serialize and append interactive_start records', () => {
-      const filepath = initNdjsonLog('sess-interactive-001', 'task', 'wf', projectDir);
+      const filepath = initTestNdjsonLog('sess-interactive-001', 'task', 'wf', projectDir);
 
       const record: NdjsonInteractiveStart = {
         type: 'interactive_start',
@@ -597,7 +491,7 @@ describe('NDJSON log', () => {
     });
 
     it('should serialize and append interactive_end records', () => {
-      const filepath = initNdjsonLog('sess-interactive-002', 'task', 'wf', projectDir);
+      const filepath = initTestNdjsonLog('sess-interactive-002', 'task', 'wf', projectDir);
 
       const record: NdjsonInteractiveEnd = {
         type: 'interactive_end',
@@ -620,7 +514,7 @@ describe('NDJSON log', () => {
     });
 
     it('should be skipped by loadNdjsonLog (default case)', () => {
-      const filepath = initNdjsonLog('sess-interactive-003', 'task', 'wf', projectDir);
+      const filepath = initTestNdjsonLog('sess-interactive-003', 'task', 'wf', projectDir);
 
       appendNdjsonLine(filepath, {
         type: 'interactive_start',
@@ -647,7 +541,7 @@ describe('NDJSON log', () => {
     });
 
     it('should extract failure info from aborted piece log', () => {
-      const filepath = initNdjsonLog('20260205-120000-abc123', 'failing task', 'wf', projectDir);
+      const filepath = initTestNdjsonLog('20260205-120000-abc123', 'failing task', 'wf', projectDir);
 
       // Add step_start for plan
       appendNdjsonLine(filepath, {
@@ -696,7 +590,7 @@ describe('NDJSON log', () => {
     });
 
     it('should handle log with only completed movements (no abort)', () => {
-      const filepath = initNdjsonLog('sess-success-001', 'task', 'wf', projectDir);
+      const filepath = initTestNdjsonLog('sess-success-001', 'task', 'wf', projectDir);
 
       appendNdjsonLine(filepath, {
         type: 'step_start',
@@ -731,7 +625,7 @@ describe('NDJSON log', () => {
     });
 
     it('should handle log with no step_complete records', () => {
-      const filepath = initNdjsonLog('sess-fail-early-001', 'task', 'wf', projectDir);
+      const filepath = initTestNdjsonLog('sess-fail-early-001', 'task', 'wf', projectDir);
 
       appendNdjsonLine(filepath, {
         type: 'step_start',

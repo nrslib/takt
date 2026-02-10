@@ -10,6 +10,7 @@ export interface TaskInfo {
   filePath: string;
   name: string;
   content: string;
+  taskDir?: string;
   createdAt: string;
   status: TaskStatus;
   data: TaskFileData | null;

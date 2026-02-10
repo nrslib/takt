@@ -154,13 +154,17 @@ export function mockDetectMatchedRuleSequence(matches: (RuleMatch | undefined)[]
 // --- Test environment setup ---
 
 /**
- * Create a temporary directory with the required .takt/runs report structure.
+ * Create a temporary directory with the required .takt/runs structure.
  * Returns the tmpDir path. Caller is responsible for cleanup.
  */
 export function createTestTmpDir(): string {
   const tmpDir = join(tmpdir(), `takt-engine-test-${randomUUID()}`);
   mkdirSync(tmpDir, { recursive: true });
   mkdirSync(join(tmpDir, '.takt', 'runs', 'test-report-dir', 'reports'), { recursive: true });
+  mkdirSync(join(tmpDir, '.takt', 'runs', 'test-report-dir', 'context', 'knowledge'), { recursive: true });
+  mkdirSync(join(tmpDir, '.takt', 'runs', 'test-report-dir', 'context', 'policy'), { recursive: true });
+  mkdirSync(join(tmpDir, '.takt', 'runs', 'test-report-dir', 'context', 'previous_responses'), { recursive: true });
+  mkdirSync(join(tmpDir, '.takt', 'runs', 'test-report-dir', 'logs'), { recursive: true });
   return tmpDir;
 }
 

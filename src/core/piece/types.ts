@@ -190,6 +190,8 @@ export interface PieceEngineOptions {
   startMovement?: string;
   /** Retry note explaining why task is being retried */
   retryNote?: string;
+  /** Override report directory name (without parent path). */
+  reportDirName?: string;
   /** Task name prefix for parallel task execution output */
   taskPrefix?: string;
   /** Color index for task prefix (cycled across tasks) */

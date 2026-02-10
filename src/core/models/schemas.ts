@@ -130,6 +130,46 @@ export const PieceRuleSchema = z.object({
   interactive_only: z.boolean().optional(),
 });
 
+/** Arpeggio merge configuration schema */
+export const ArpeggioMergeRawSchema = z.object({
+  /** Merge strategy: 'concat' or 'custom' */
+  strategy: z.enum(['concat', 'custom']).optional().default('concat'),
+  /** Inline JS function body for custom merge */
+  inline_js: z.string().optional(),
+  /** External JS file path for custom merge */
+  file: z.string().optional(),
+  /** Separator for concat strategy */
+  separator: z.string().optional(),
+}).refine(
+  (data) => data.strategy !== 'custom' || data.inline_js != null || data.file != null,
+  { message: "Custom merge strategy requires either 'inline_js' or 'file'" }
+).refine(
+  (data) => data.strategy !== 'concat' || (data.inline_js == null && data.file == null),
+  { message: "Concat merge strategy does not accept 'inline_js' or 'file'" }
+);
+
+/** Arpeggio configuration schema for data-driven batch processing */
+export const ArpeggioConfigRawSchema = z.object({
+  /** Data source type (e.g., 'csv') */
+  source: z.string().min(1),
+  /** Path to the data source file */
+  source_path: z.string().min(1),
+  /** Number of rows per batch (default: 1) */
+  batch_size: z.number().int().positive().optional().default(1),
+  /** Number of concurrent LLM calls (default: 1) */
+  concurrency: z.number().int().positive().optional().default(1),
+  /** Path to prompt template file */
+  template: z.string().min(1),
+  /** Merge configuration */
+  merge: ArpeggioMergeRawSchema.optional(),
+  /** Maximum retry attempts per batch (default: 2) */
+  max_retries: z.number().int().min(0).optional().default(2),
+  /** Delay between retries in ms (default: 1000) */
+  retry_delay_ms: z.number().int().min(0).optional().default(1000),
+  /** Optional output file path */
+  output_path: z.string().optional(),
+});
+
 /** Sub-movement schema for parallel execution */
 export const ParallelSubMovementRawSchema = z.object({
   name: z.string().min(1),
@@ -190,6 +230,8 @@ export const PieceMovementRawSchema = z.object({
   pass_previous_response: z.boolean().optional().default(true),
   /** Sub-movements to execute in parallel */
   parallel: z.array(ParallelSubMovementRawSchema).optional(),
+  /** Arpeggio configuration for data-driven batch processing */
+  arpeggio: ArpeggioConfigRawSchema.optional(),
 });
 
 /** Loop monitor rule schema */

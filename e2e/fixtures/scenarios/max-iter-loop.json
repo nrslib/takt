@@ -1,0 +1,18 @@
+[
+  {
+    "status": "done",
+    "content": "Step A output."
+  },
+  {
+    "status": "done",
+    "content": "Step B output."
+  },
+  {
+    "status": "done",
+    "content": "Step A output again."
+  },
+  {
+    "status": "done",
+    "content": "Step B output again."
+  }
+]

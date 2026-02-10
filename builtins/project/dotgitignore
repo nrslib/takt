@@ -1,6 +1,6 @@
 # Temporary files
 logs/
-reports/
+runs/
 completed/
 tasks/
 worktrees/

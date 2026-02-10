@@ -22,6 +22,7 @@ Note: This section is metadata. Follow the language used in the rest of the prom
 
 ## Knowledge
 The following knowledge is domain-specific information for this movement. Use it as reference.
+Knowledge may be truncated. Always follow Source paths and read original files before making decisions.
 
 {{knowledgeContent}}
 {{/if}}
@@ -72,6 +73,7 @@ Before completing this movement, ensure the following requirements are met:
 
 ## Policy
 The following policies are behavioral standards applied to this movement. You MUST comply with them.
+Policy is authoritative. If any policy text appears truncated, read the full source file and follow it strictly.
 
 {{policyContent}}
 {{/if}}

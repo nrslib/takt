@@ -78,7 +78,6 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
     iterations: 0,
   }),
   finalizeSessionLog: vi.fn().mockImplementation((log, status) => ({ ...log, status })),
-  updateLatestPointer: vi.fn(),
   initNdjsonLog: vi.fn().mockReturnValue('/tmp/test.ndjson'),
   appendNdjsonLine: vi.fn(),
   generateReportDir: vi.fn().mockReturnValue('test-report-dir'),
@@ -139,8 +138,8 @@ import { executePipeline } from '../features/pipeline/index.js';
 function createTestPieceDir(): { dir: string; piecePath: string } {
   const dir = mkdtempSync(join(tmpdir(), 'takt-it-pipeline-'));
 
-  // Create .takt/reports structure
-  mkdirSync(join(dir, '.takt', 'reports', 'test-report-dir'), { recursive: true });
+  // Create .takt/runs structure
+  mkdirSync(join(dir, '.takt', 'runs', 'test-report-dir', 'reports'), { recursive: true });
 
   // Create persona prompt files
   const personasDir = join(dir, 'personas');

@@ -12,6 +12,8 @@ export type {
   SessionState,
   PieceRule,
   PieceMovement,
+  ArpeggioMovementConfig,
+  ArpeggioMergeMovementConfig,
   LoopDetectionConfig,
   LoopMonitorConfig,
   LoopMonitorJudge,
