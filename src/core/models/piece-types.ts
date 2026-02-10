@@ -114,10 +114,46 @@ export interface PieceMovement {
   passPreviousResponse: boolean;
   /** Sub-movements to execute in parallel. When set, this movement runs all sub-movements concurrently. */
   parallel?: PieceMovement[];
+  /** Arpeggio configuration for data-driven batch processing. When set, this movement reads from a data source, expands templates, and calls LLM per batch. */
+  arpeggio?: ArpeggioMovementConfig;
   /** Resolved policy content strings (from piece-level policies map, resolved at parse time) */
   policyContents?: string[];
   /** Resolved knowledge content strings (from piece-level knowledge map, resolved at parse time) */
   knowledgeContents?: string[];
+}
+
+/** Merge configuration for arpeggio results */
+export interface ArpeggioMergeMovementConfig {
+  /** Merge strategy: 'concat' (default), 'custom' */
+  readonly strategy: 'concat' | 'custom';
+  /** Inline JS merge function body (for custom strategy) */
+  readonly inlineJs?: string;
+  /** Path to external JS merge file (for custom strategy, resolved to absolute) */
+  readonly filePath?: string;
+  /** Separator for concat strategy (default: '\n') */
+  readonly separator?: string;
+}
+
+/** Arpeggio configuration for data-driven batch processing movements */
+export interface ArpeggioMovementConfig {
+  /** Data source type (e.g., 'csv') */
+  readonly source: string;
+  /** Path to the data source file (resolved to absolute) */
+  readonly sourcePath: string;
+  /** Number of rows per batch (default: 1) */
+  readonly batchSize: number;
+  /** Number of concurrent LLM calls (default: 1) */
+  readonly concurrency: number;
+  /** Path to prompt template file (resolved to absolute) */
+  readonly templatePath: string;
+  /** Merge configuration */
+  readonly merge: ArpeggioMergeMovementConfig;
+  /** Maximum retry attempts per batch (default: 2) */
+  readonly maxRetries: number;
+  /** Delay between retries in ms (default: 1000) */
+  readonly retryDelayMs: number;
+  /** Optional output file path (resolved to absolute) */
+  readonly outputPath?: string;
 }
 
 /** Loop detection configuration */

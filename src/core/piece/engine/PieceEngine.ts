@@ -31,6 +31,7 @@ import { generateReportDir, getErrorMessage, createLogger } from '../../../share
 import { OptionsBuilder } from './OptionsBuilder.js';
 import { MovementExecutor } from './MovementExecutor.js';
 import { ParallelRunner } from './ParallelRunner.js';
+import { ArpeggioRunner } from './ArpeggioRunner.js';
 
 const log = createLogger('engine');
 
@@ -60,6 +61,7 @@ export class PieceEngine extends EventEmitter {
   private readonly optionsBuilder: OptionsBuilder;
   private readonly movementExecutor: MovementExecutor;
   private readonly parallelRunner: ParallelRunner;
+  private readonly arpeggioRunner: ArpeggioRunner;
   private readonly detectRuleIndex: (content: string, movementName: string) => number;
   private readonly callAiJudge: (
     agentOutput: string,
@@ -128,6 +130,20 @@ export class PieceEngine extends EventEmitter {
       engineOptions: this.options,
       getCwd: () => this.cwd,
       getReportDir: () => this.reportDir,
+      getInteractive: () => this.options.interactive === true,
+      detectRuleIndex: this.detectRuleIndex,
+      callAiJudge: this.callAiJudge,
+      onPhaseStart: (step, phase, phaseName, instruction) => {
+        this.emit('phase:start', step, phase, phaseName, instruction);
+      },
+      onPhaseComplete: (step, phase, phaseName, content, phaseStatus, error) => {
+        this.emit('phase:complete', step, phase, phaseName, content, phaseStatus, error);
+      },
+    });
+
+    this.arpeggioRunner = new ArpeggioRunner({
+      optionsBuilder: this.optionsBuilder,
+      getCwd: () => this.cwd,
       getInteractive: () => this.options.interactive === true,
       detectRuleIndex: this.detectRuleIndex,
       callAiJudge: this.callAiJudge,
@@ -290,7 +306,7 @@ export class PieceEngine extends EventEmitter {
     }
   }
 
-  /** Run a single movement (delegates to ParallelRunner if movement has parallel sub-movements) */
+  /** Run a single movement (delegates to ParallelRunner, ArpeggioRunner, or MovementExecutor) */
   private async runMovement(step: PieceMovement, prebuiltInstruction?: string): Promise<{ response: AgentResponse; instruction: string }> {
     const updateSession = this.updatePersonaSession.bind(this);
     let result: { response: AgentResponse; instruction: string };
@@ -298,6 +314,10 @@ export class PieceEngine extends EventEmitter {
     if (step.parallel && step.parallel.length > 0) {
       result = await this.parallelRunner.runParallelMovement(
         step, this.state, this.task, this.config.maxIterations, updateSession,
+      );
+    } else if (step.arpeggio) {
+      result = await this.arpeggioRunner.runArpeggioMovement(
+        step, this.state,
       );
     } else {
       result = await this.movementExecutor.runNormalMovement(
@@ -492,10 +512,11 @@ export class PieceEngine extends EventEmitter {
 
       this.state.iteration++;
 
-      // Build instruction before emitting movement:start so listeners can log it
-      const isParallel = movement.parallel && movement.parallel.length > 0;
+      // Build instruction before emitting movement:start so listeners can log it.
+      // Parallel and arpeggio movements handle iteration incrementing internally.
+      const isDelegated = (movement.parallel && movement.parallel.length > 0) || !!movement.arpeggio;
       let prebuiltInstruction: string | undefined;
-      if (!isParallel) {
+      if (!isDelegated) {
         const movementIteration = incrementMovementIteration(this.state, movement.name);
         prebuiltInstruction = this.movementExecutor.buildInstruction(
           movement, movementIteration, this.state, this.task, this.config.maxIterations,

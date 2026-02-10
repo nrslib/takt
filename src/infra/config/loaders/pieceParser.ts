@@ -6,11 +6,11 @@
  */
 
 import { readFileSync, existsSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import type { z } from 'zod';
 import { PieceConfigRawSchema, PieceMovementRawSchema } from '../../../core/models/index.js';
-import type { PieceConfig, PieceMovement, PieceRule, OutputContractEntry, OutputContractLabelPath, OutputContractItem, LoopMonitorConfig, LoopMonitorJudge } from '../../../core/models/index.js';
+import type { PieceConfig, PieceMovement, PieceRule, OutputContractEntry, OutputContractLabelPath, OutputContractItem, LoopMonitorConfig, LoopMonitorJudge, ArpeggioMovementConfig, ArpeggioMergeMovementConfig } from '../../../core/models/index.js';
 import { getLanguage } from '../global/globalConfig.js';
 import {
   type PieceSections,
@@ -150,6 +150,35 @@ function normalizeRule(r: {
   };
 }
 
+/** Normalize raw arpeggio config from YAML into internal format. */
+function normalizeArpeggio(
+  raw: RawStep['arpeggio'],
+  pieceDir: string,
+): ArpeggioMovementConfig | undefined {
+  if (!raw) return undefined;
+
+  const merge: ArpeggioMergeMovementConfig = raw.merge
+    ? {
+        strategy: raw.merge.strategy,
+        inlineJs: raw.merge.inline_js,
+        filePath: raw.merge.file ? resolve(pieceDir, raw.merge.file) : undefined,
+        separator: raw.merge.separator,
+      }
+    : { strategy: 'concat' };
+
+  return {
+    source: raw.source,
+    sourcePath: resolve(pieceDir, raw.source_path),
+    batchSize: raw.batch_size,
+    concurrency: raw.concurrency,
+    templatePath: resolve(pieceDir, raw.template),
+    merge,
+    maxRetries: raw.max_retries,
+    retryDelayMs: raw.retry_delay_ms,
+    outputPath: raw.output_path ? resolve(pieceDir, raw.output_path) : undefined,
+  };
+}
+
 /** Normalize a raw step into internal PieceMovement format. */
 function normalizeStepFromRaw(
   step: RawStep,
@@ -201,6 +230,11 @@ function normalizeStepFromRaw(
 
   if (step.parallel && step.parallel.length > 0) {
     result.parallel = step.parallel.map((sub: RawStep) => normalizeStepFromRaw(sub, pieceDir, sections, context));
+  }
+
+  const arpeggioConfig = normalizeArpeggio(step.arpeggio, pieceDir);
+  if (arpeggioConfig) {
+    result.arpeggio = arpeggioConfig;
   }
 
   return result;
