@@ -25,7 +25,7 @@ A piece is a YAML file that defines a sequence of steps executed by AI agents. E
 ```yaml
 name: my-piece
 description: Optional description
-max_iterations: 10
+max_movements: 10
 initial_step: first-step  # Optional, defaults to first step
 
 steps:
@@ -55,7 +55,7 @@ steps:
 |----------|-------------|
 | `{task}` | Original user request (auto-injected if not in template) |
 | `{iteration}` | Piece-wide turn count (total steps executed) |
-| `{max_iterations}` | Maximum iterations allowed |
+| `{max_movements}` | Maximum movements allowed |
 | `{step_iteration}` | Per-step iteration count (how many times THIS step has run) |
 | `{previous_response}` | Previous step's output (auto-injected if not in template) |
 | `{user_inputs}` | Additional user inputs during piece (auto-injected if not in template) |
@@ -170,7 +170,7 @@ report:
 
 ```yaml
 name: simple-impl
-max_iterations: 5
+max_movements: 5
 
 steps:
   - name: implement
@@ -191,7 +191,7 @@ steps:
 
 ```yaml
 name: with-review
-max_iterations: 10
+max_movements: 10
 
 steps:
   - name: implement

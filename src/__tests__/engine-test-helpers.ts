@@ -70,7 +70,7 @@ export function buildDefaultPieceConfig(overrides: Partial<PieceConfig> = {}): P
   return {
     name: 'test-default',
     description: 'Test piece',
-    maxIterations: 30,
+    maxMovements: 30,
     initialMovement: 'plan',
     movements: [
       makeMovement('plan', {

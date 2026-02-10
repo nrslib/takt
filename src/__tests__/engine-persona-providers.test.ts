@@ -55,7 +55,7 @@ describe('PieceEngine persona_providers override', () => {
       name: 'persona-provider-test',
       movements: [movement],
       initialMovement: 'implement',
-      maxIterations: 1,
+      maxMovements: 1,
     };
 
     mockRunAgentSequence([
@@ -84,7 +84,7 @@ describe('PieceEngine persona_providers override', () => {
       name: 'persona-provider-nomatch',
       movements: [movement],
       initialMovement: 'plan',
-      maxIterations: 1,
+      maxMovements: 1,
     };
 
     mockRunAgentSequence([
@@ -114,7 +114,7 @@ describe('PieceEngine persona_providers override', () => {
       name: 'movement-over-persona',
       movements: [movement],
       initialMovement: 'implement',
-      maxIterations: 1,
+      maxMovements: 1,
     };
 
     mockRunAgentSequence([
@@ -143,7 +143,7 @@ describe('PieceEngine persona_providers override', () => {
       name: 'no-persona-providers',
       movements: [movement],
       initialMovement: 'plan',
-      maxIterations: 1,
+      maxMovements: 1,
     };
 
     mockRunAgentSequence([
@@ -175,7 +175,7 @@ describe('PieceEngine persona_providers override', () => {
       name: 'multi-persona-providers',
       movements: [planMovement, implementMovement],
       initialMovement: 'plan',
-      maxIterations: 3,
+      maxMovements: 3,
     };
 
     mockRunAgentSequence([

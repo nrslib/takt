@@ -117,7 +117,7 @@ describe('PieceEngine Integration: Error Handling', () => {
   describe('Loop detection', () => {
     it('should abort when loop detected with action: abort', async () => {
       const config = buildDefaultPieceConfig({
-        maxIterations: 100,
+        maxMovements: 100,
         loopDetection: { maxConsecutiveSameStep: 3, action: 'abort' },
         initialMovement: 'loop-step',
         movements: [
@@ -156,7 +156,7 @@ describe('PieceEngine Integration: Error Handling', () => {
   // =====================================================
   describe('Iteration limit', () => {
     it('should abort when max iterations reached without onIterationLimit callback', async () => {
-      const config = buildDefaultPieceConfig({ maxIterations: 2 });
+      const config = buildDefaultPieceConfig({ maxMovements: 2 });
       const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
@@ -182,11 +182,11 @@ describe('PieceEngine Integration: Error Handling', () => {
       expect(limitFn).toHaveBeenCalledWith(2, 2);
       expect(abortFn).toHaveBeenCalledOnce();
       const reason = abortFn.mock.calls[0]![1] as string;
-      expect(reason).toContain('Max iterations');
+      expect(reason).toContain('Max movements');
     });
 
     it('should extend iterations when onIterationLimit provides additional iterations', async () => {
-      const config = buildDefaultPieceConfig({ maxIterations: 2 });
+      const config = buildDefaultPieceConfig({ maxMovements: 2 });
 
       const onIterationLimit = vi.fn().mockResolvedValueOnce(10);
 

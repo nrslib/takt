@@ -48,7 +48,7 @@ export async function previewPrompts(cwd: string, pieceIdentifier?: string): Pro
     const context: InstructionContext = {
       task: '<task content>',
       iteration: 1,
-      maxIterations: config.maxIterations,
+      maxMovements: config.maxMovements,
       movementIteration: 1,
       cwd,
       projectCwd: cwd,

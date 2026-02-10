@@ -1,6 +1,6 @@
 name: structural-reform
 description: Full project review and structural reform - iterative codebase restructuring with staged file splits
-max_iterations: 50
+max_movements: 50
 initial_movement: review
 loop_monitors:
   - cycle:
@@ -44,7 +44,7 @@ movements:
       - WebFetch
     instruction_template: |
       ## Piece Status
-      - Iteration: {iteration}/{max_iterations} (piece-wide)
+      - Iteration: {iteration}/{max_movements} (piece-wide)
       - Movement Iteration: {movement_iteration} (times this movement has run)
       - Movement: review (full project review)
 
@@ -126,7 +126,7 @@ movements:
       - WebFetch
     instruction_template: |
       ## Piece Status
-      - Iteration: {iteration}/{max_iterations} (piece-wide)
+      - Iteration: {iteration}/{max_movements} (piece-wide)
       - Movement Iteration: {movement_iteration} (times this movement has run)
       - Movement: plan_reform (reform plan creation)
 
@@ -323,7 +323,7 @@ movements:
       - WebFetch
     instruction_template: |
       ## Piece Status
-      - Iteration: {iteration}/{max_iterations} (piece-wide)
+      - Iteration: {iteration}/{max_movements} (piece-wide)
       - Movement Iteration: {movement_iteration} (times this movement has run)
       - Movement: verify (build and test verification)
 
@@ -378,7 +378,7 @@ movements:
       - WebFetch
     instruction_template: |
       ## Piece Status
-      - Iteration: {iteration}/{max_iterations} (piece-wide)
+      - Iteration: {iteration}/{max_movements} (piece-wide)
       - Movement Iteration: {movement_iteration} (times this movement has run)
       - Movement: next_target (progress check and next target selection)
 

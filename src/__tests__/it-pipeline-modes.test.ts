@@ -171,7 +171,7 @@ function createTestPieceDir(): { dir: string; piecePath: string } {
   const pieceYaml = `
 name: it-pipeline
 description: Pipeline test piece
-max_iterations: 10
+max_movements: 10
 initial_movement: plan
 
 movements:

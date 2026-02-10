@@ -1,6 +1,6 @@
 name: passthrough
 description: Single-agent thin wrapper. Pass task directly to coder as-is.
-max_iterations: 10
+max_movements: 10
 initial_movement: execute
 movements:
   - name: execute

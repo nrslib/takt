@@ -335,7 +335,7 @@ TAKT uses YAML-based piece definitions and rule-based routing. Builtin pieces ar
 
 ```yaml
 name: default
-max_iterations: 10
+max_movements: 10
 initial_movement: plan
 
 # Section maps — key: file path (relative to this YAML)
@@ -709,7 +709,7 @@ takt eject default
 # ~/.takt/pieces/my-piece.yaml
 name: my-piece
 description: Custom piece
-max_iterations: 5
+max_movements: 5
 initial_movement: analyze
 
 personas:
@@ -759,7 +759,7 @@ Variables available in `instruction_template`:
 |----------|-------------|
 | `{task}` | Original user request (auto-injected if not in template) |
 | `{iteration}` | Piece-wide turn count (total steps executed) |
-| `{max_iterations}` | Maximum iteration count |
+| `{max_movements}` | Maximum iteration count |
 | `{movement_iteration}` | Per-movement iteration count (times this movement has been executed) |
 | `{previous_response}` | Output from previous movement (auto-injected if not in template) |
 | `{user_inputs}` | Additional user inputs during piece (auto-injected if not in template) |

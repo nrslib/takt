@@ -1,7 +1,7 @@
 name: e2e-report-judge
 description: E2E piece that exercises report + judge phases
 
-max_iterations: 3
+max_movements: 3
 
 movements:
   - name: execute

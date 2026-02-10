@@ -54,7 +54,7 @@ function buildParallelOnlyConfig(): PieceConfig {
   return {
     name: 'test-parallel-failure',
     description: 'Test parallel failure handling',
-    maxIterations: 10,
+    maxMovements: 10,
     initialMovement: 'reviewers',
     movements: [
       makeMovement('reviewers', {

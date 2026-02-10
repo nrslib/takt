@@ -74,7 +74,7 @@ const {
       if (this.onIterationLimit) {
         await this.onIterationLimit({
           currentIteration: 10,
-          maxIterations: 10,
+          maxMovements: 10,
           currentMovement: 'step1',
         });
       }
@@ -201,7 +201,7 @@ import type { PieceConfig } from '../core/models/index.js';
 function makeConfig(): PieceConfig {
   return {
     name: 'test-notify',
-    maxIterations: 10,
+    maxMovements: 10,
     initialMovement: 'step1',
     movements: [
       {

@@ -1,6 +1,6 @@
 name: review-fix-minimal
 description: Review and fix piece for existing code (starts with review, no implementation)
-max_iterations: 20
+max_movements: 20
 initial_movement: reviewers
 movements:
   - name: implement

@@ -30,7 +30,7 @@ export interface TaskPrefixWriterOptions {
 export interface MovementPrefixContext {
   movementName: string;
   iteration: number;
-  maxIterations: number;
+  maxMovements: number;
   movementIteration: number;
 }
 
@@ -63,8 +63,8 @@ export class TaskPrefixWriter {
       return `${this.taskPrefix} `;
     }
 
-    const { movementName, iteration, maxIterations, movementIteration } = this.movementContext;
-    return `${this.taskPrefix}[${movementName}](${iteration}/${maxIterations})(${movementIteration}) `;
+    const { movementName, iteration, maxMovements, movementIteration } = this.movementContext;
+    return `${this.taskPrefix}[${movementName}](${iteration}/${maxMovements})(${movementIteration}) `;
   }
 
   /**

@@ -188,7 +188,7 @@ describe('NDJSON log', () => {
       const abort: NdjsonPieceAbort = {
         type: 'piece_abort',
         iterations: 1,
-        reason: 'Max iterations reached',
+        reason: 'Max movements reached',
         endTime: '2025-01-01T00:00:03.000Z',
       };
       appendNdjsonLine(filepath, abort);

@@ -1,6 +1,6 @@
 name: research
 description: Research piece - autonomously executes research without asking questions
-max_iterations: 10
+max_movements: 10
 initial_movement: plan
 movements:
   - name: plan
@@ -13,7 +13,7 @@ movements:
       - WebFetch
     instruction_template: |
       ## Piece Status
-      - Iteration: {iteration}/{max_iterations} (piece-wide)
+      - Iteration: {iteration}/{max_movements} (piece-wide)
       - Movement Iteration: {movement_iteration} (times this movement has run)
       - Movement: plan
 
@@ -48,7 +48,7 @@ movements:
       - WebFetch
     instruction_template: |
       ## Piece Status
-      - Iteration: {iteration}/{max_iterations} (piece-wide)
+      - Iteration: {iteration}/{max_movements} (piece-wide)
       - Movement Iteration: {movement_iteration} (times this movement has run)
       - Movement: dig
 
@@ -88,7 +88,7 @@ movements:
       - WebFetch
     instruction_template: |
       ## Piece Status
-      - Iteration: {iteration}/{max_iterations} (piece-wide)
+      - Iteration: {iteration}/{max_movements} (piece-wide)
       - Movement Iteration: {movement_iteration} (times this movement has run)
       - Movement: supervise (research quality evaluation)
 

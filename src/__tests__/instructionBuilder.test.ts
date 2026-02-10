@@ -41,7 +41,7 @@ function createMinimalContext(overrides: Partial<InstructionContext> = {}): Inst
   return {
     task: 'Test task',
     iteration: 1,
-    maxIterations: 10,
+    maxMovements: 10,
     movementIteration: 1,
     cwd: '/project',
     projectCwd: '/project',
@@ -458,7 +458,7 @@ describe('instruction-builder', () => {
       step.name = 'implement';
       const context = createMinimalContext({
         iteration: 3,
-        maxIterations: 20,
+        maxMovements: 20,
         movementIteration: 2,
         language: 'en',
       });
@@ -1035,9 +1035,9 @@ describe('instruction-builder', () => {
       expect(result).toContain('Build the app');
     });
 
-    it('should replace {iteration} and {max_iterations}', () => {
-      const step = createMinimalStep('Step {iteration}/{max_iterations}');
-      const context = createMinimalContext({ iteration: 3, maxIterations: 20 });
+    it('should replace {iteration} and {max_movements}', () => {
+      const step = createMinimalStep('Step {iteration}/{max_movements}');
+      const context = createMinimalContext({ iteration: 3, maxMovements: 20 });
 
       const result = buildInstruction(step, context);
 

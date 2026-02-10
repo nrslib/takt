@@ -1,6 +1,6 @@
 name: minimal
 description: Minimal development piece (implement -> parallel review -> fix if needed -> complete)
-max_iterations: 20
+max_movements: 20
 initial_movement: implement
 movements:
   - name: implement

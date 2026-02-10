@@ -331,7 +331,7 @@ Key properties:
 
 ```yaml
 name: my-workflow
-max_iterations: 10
+max_movements: 10
 initial_movement: plan
 
 movements:

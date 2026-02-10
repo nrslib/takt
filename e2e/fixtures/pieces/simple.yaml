@@ -1,7 +1,7 @@
 name: e2e-simple
 description: Minimal E2E test piece
 
-max_iterations: 5
+max_movements: 5
 
 movements:
   - name: execute

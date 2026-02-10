@@ -311,7 +311,7 @@ describe('runAllTasks concurrency', () => {
       name: 'default',
       movements: [{ name: 'implement', personaDisplayName: 'coder' }],
       initialMovement: 'implement',
-      maxIterations: 10,
+      maxMovements: 10,
     };
 
     beforeEach(() => {

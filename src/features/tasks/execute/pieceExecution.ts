@@ -332,7 +332,7 @@ export async function executePiece(
     out.warn(
       getLabel('piece.iterationLimit.maxReached', undefined, {
         currentIteration: String(request.currentIteration),
-        maxIterations: String(request.maxIterations),
+        maxMovements: String(request.maxMovements),
       })
     );
     out.info(getLabel('piece.iterationLimit.currentMovement', undefined, { currentMovement: request.currentMovement }));
@@ -362,7 +362,7 @@ export async function executePiece(
 
       const additionalIterations = Number.parseInt(input, 10);
       if (Number.isInteger(additionalIterations) && additionalIterations > 0) {
-        pieceConfig.maxIterations = request.maxIterations + additionalIterations;
+        pieceConfig.maxMovements = request.maxMovements + additionalIterations;
         return additionalIterations;
       }
 
@@ -475,10 +475,10 @@ export async function executePiece(
     prefixWriter?.setMovementContext({
       movementName: step.name,
       iteration,
-      maxIterations: pieceConfig.maxIterations,
+      maxMovements: pieceConfig.maxMovements,
       movementIteration,
     });
-    out.info(`[${iteration}/${pieceConfig.maxIterations}] ${step.name} (${step.personaDisplayName})`);
+    out.info(`[${iteration}/${pieceConfig.maxMovements}] ${step.name} (${step.personaDisplayName})`);
 
     // Log prompt content for debugging
     if (instruction) {
@@ -496,7 +496,7 @@ export async function executePiece(
       const agentLabel = step.personaDisplayName;
       displayRef.current = new StreamDisplay(agentLabel, quiet, {
         iteration,
-        maxIterations: pieceConfig.maxIterations,
+        maxMovements: pieceConfig.maxMovements,
         movementIndex: movementIndex >= 0 ? movementIndex : 0,
         totalMovements,
       });

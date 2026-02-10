@@ -131,7 +131,7 @@ export class MovementExecutor {
     movementIteration: number,
     state: PieceState,
     task: string,
-    maxIterations: number,
+    maxMovements: number,
   ): string {
     this.ensurePreviousResponseSnapshot(state, step.name, movementIteration);
     const policySnapshot = this.writeFacetSnapshot(
@@ -150,7 +150,7 @@ export class MovementExecutor {
     return new InstructionBuilder(step, {
       task,
       iteration: state.iteration,
-      maxIterations,
+      maxMovements,
       movementIteration,
       cwd: this.deps.getCwd(),
       projectCwd: this.deps.getProjectCwd(),
@@ -182,14 +182,14 @@ export class MovementExecutor {
     step: PieceMovement,
     state: PieceState,
     task: string,
-    maxIterations: number,
+    maxMovements: number,
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
     prebuiltInstruction?: string,
   ): Promise<{ response: AgentResponse; instruction: string }> {
     const movementIteration = prebuiltInstruction
       ? state.movementIterations.get(step.name) ?? 1
       : incrementMovementIteration(state, step.name);
-    const instruction = prebuiltInstruction ?? this.buildInstruction(step, movementIteration, state, task, maxIterations);
+    const instruction = prebuiltInstruction ?? this.buildInstruction(step, movementIteration, state, task, maxMovements);
     const sessionKey = buildSessionKey(step);
     log.debug('Running movement', {
       movement: step.name,

@@ -133,7 +133,7 @@ describe('Three-Phase Execution IT: phase1 only (no report, no tag rules)', () =
     const config: PieceConfig = {
       name: 'it-phase1-only',
       description: 'Test',
-      maxIterations: 5,
+      maxMovements: 5,
       initialMovement: 'step',
       movements: [
         makeMovement('step', agentPath, [
@@ -185,7 +185,7 @@ describe('Three-Phase Execution IT: phase1 + phase2 (report defined)', () => {
     const config: PieceConfig = {
       name: 'it-phase1-2',
       description: 'Test',
-      maxIterations: 5,
+      maxMovements: 5,
       initialMovement: 'step',
       movements: [
         makeMovement('step', agentPath, [
@@ -215,7 +215,7 @@ describe('Three-Phase Execution IT: phase1 + phase2 (report defined)', () => {
     const config: PieceConfig = {
       name: 'it-phase1-2-multi',
       description: 'Test',
-      maxIterations: 5,
+      maxMovements: 5,
       initialMovement: 'step',
       movements: [
         makeMovement('step', agentPath, [
@@ -266,7 +266,7 @@ describe('Three-Phase Execution IT: phase1 + phase3 (tag rules defined)', () => 
     const config: PieceConfig = {
       name: 'it-phase1-3',
       description: 'Test',
-      maxIterations: 5,
+      maxMovements: 5,
       initialMovement: 'step',
       movements: [
         makeMovement('step', agentPath, [
@@ -317,7 +317,7 @@ describe('Three-Phase Execution IT: all three phases', () => {
     const config: PieceConfig = {
       name: 'it-all-phases',
       description: 'Test',
-      maxIterations: 5,
+      maxMovements: 5,
       initialMovement: 'step',
       movements: [
         makeMovement('step', agentPath, [
@@ -377,7 +377,7 @@ describe('Three-Phase Execution IT: phase3 tag → rule match', () => {
     const config: PieceConfig = {
       name: 'it-phase3-tag',
       description: 'Test',
-      maxIterations: 5,
+      maxMovements: 5,
       initialMovement: 'step1',
       movements: [
         makeMovement('step1', agentPath, [

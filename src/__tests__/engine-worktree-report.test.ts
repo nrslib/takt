@@ -64,7 +64,7 @@ function buildSimpleConfig(): PieceConfig {
   return {
     name: 'worktree-test',
     description: 'Test piece for worktree',
-    maxIterations: 10,
+    maxMovements: 10,
     initialMovement: 'review',
     movements: [
       makeMovement('review', {
@@ -133,7 +133,7 @@ describe('PieceEngine: worktree reportDir resolution', () => {
     const config: PieceConfig = {
       name: 'worktree-test',
       description: 'Test',
-      maxIterations: 10,
+      maxMovements: 10,
       initialMovement: 'review',
       movements: [
         makeMovement('review', {
@@ -247,7 +247,7 @@ describe('PieceEngine: worktree reportDir resolution', () => {
     const config: PieceConfig = {
       name: 'snapshot-test',
       description: 'Test',
-      maxIterations: 10,
+      maxMovements: 10,
       initialMovement: 'implement',
       movements: [
         makeMovement('implement', {

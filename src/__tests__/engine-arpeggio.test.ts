@@ -75,7 +75,7 @@ function buildArpeggioPieceConfig(arpeggioConfig: ArpeggioMovementConfig, tmpDir
   return {
     name: 'test-arpeggio',
     description: 'Test arpeggio piece',
-    maxIterations: 10,
+    maxMovements: 10,
     initialMovement: 'process',
     movements: [
       {

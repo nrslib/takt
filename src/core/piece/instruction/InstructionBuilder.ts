@@ -202,7 +202,7 @@ export class InstructionBuilder {
       pieceDescription,
       hasPieceDescription,
       pieceStructure,
-      iteration: `${this.context.iteration}/${this.context.maxIterations}`,
+      iteration: `${this.context.iteration}/${this.context.maxMovements}`,
       movementIteration: String(this.context.movementIteration),
       movement: this.step.name,
       hasReport,

@@ -18,8 +18,8 @@ import { stripAnsi } from '../utils/text.js';
 export interface ProgressInfo {
   /** Current iteration (1-indexed) */
   iteration: number;
-  /** Maximum iterations allowed */
-  maxIterations: number;
+  /** Maximum movements allowed */
+  maxMovements: number;
   /** Current movement index within piece (0-indexed) */
   movementIndex: number;
   /** Total number of movements in piece */
@@ -52,16 +52,16 @@ export class StreamDisplay {
 
   /**
    * Build progress prefix string for display.
-   * Format: `(iteration/maxIterations) step movementIndex/totalMovements`
+   * Format: `(iteration/maxMovements) step movementIndex/totalMovements`
    * Example: `(3/10) step 2/4`
    */
   private buildProgressPrefix(): string {
     if (!this.progressInfo) {
       return '';
     }
-    const { iteration, maxIterations, movementIndex, totalMovements } = this.progressInfo;
+    const { iteration, maxMovements, movementIndex, totalMovements } = this.progressInfo;
     // movementIndex is 0-indexed, display as 1-indexed
-    return `(${iteration}/${maxIterations}) step ${movementIndex + 1}/${totalMovements}`;
+    return `(${iteration}/${maxMovements}) step ${movementIndex + 1}/${totalMovements}`;
   }
 
   showInit(model: string): void {

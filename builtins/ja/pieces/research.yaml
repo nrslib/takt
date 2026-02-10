@@ -1,6 +1,6 @@
 name: research
 description: 調査ピース - 質問せずに自律的に調査を実行
-max_iterations: 10
+max_movements: 10
 initial_movement: plan
 movements:
   - name: plan
@@ -13,7 +13,7 @@ movements:
       - WebFetch
     instruction_template: |
       ## ピース状況
-      - イテレーション: {iteration}/{max_iterations}（ピース全体）
+      - イテレーション: {iteration}/{max_movements}（ピース全体）
       - ムーブメント実行回数: {movement_iteration}（このムーブメントの実行回数）
       - ムーブメント: plan
 
@@ -48,7 +48,7 @@ movements:
       - WebFetch
     instruction_template: |
       ## ピース状況
-      - イテレーション: {iteration}/{max_iterations}（ピース全体）
+      - イテレーション: {iteration}/{max_movements}（ピース全体）
       - ムーブメント実行回数: {movement_iteration}（このムーブメントの実行回数）
       - ムーブメント: dig
 
@@ -88,7 +88,7 @@ movements:
       - WebFetch
     instruction_template: |
       ## ピース状況
-      - イテレーション: {iteration}/{max_iterations}（ピース全体）
+      - イテレーション: {iteration}/{max_movements}（ピース全体）
       - ムーブメント実行回数: {movement_iteration}（このムーブメントの実行回数）
       - ムーブメント: supervise (調査品質評価)
 

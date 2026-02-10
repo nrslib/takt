@@ -196,7 +196,7 @@ describe('executePiece: SIGINT handler integration', () => {
   function makeConfig(): PieceConfig {
     return {
       name: 'test-sigint',
-      maxIterations: 10,
+      maxMovements: 10,
       initialMovement: 'step1',
       movements: [
         {

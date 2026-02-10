@@ -78,7 +78,7 @@ function createPieceMap(entries: { name: string; source: 'user' | 'builtin' }[])
         name: e.name,
         movements: [],
         initialMovement: 'start',
-        maxIterations: 1,
+        maxMovements: 1,
       },
     });
   }

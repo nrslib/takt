@@ -1,6 +1,6 @@
 name: compound-eye
 description: Multi-model review - send the same instruction to Claude and Codex simultaneously, synthesize both responses
-max_iterations: 10
+max_movements: 10
 initial_movement: evaluate
 movements:
   - name: evaluate

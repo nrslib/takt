@@ -36,8 +36,8 @@ describe('review-only piece (EN)', () => {
     expect(raw.initial_movement).toBe('plan');
   });
 
-  it('should have max_iterations of 10', () => {
-    expect(raw.max_iterations).toBe(10);
+  it('should have max_movements of 10', () => {
+    expect(raw.max_movements).toBe(10);
   });
 
   it('should have 4 movements: plan, reviewers, supervise, pr-comment', () => {

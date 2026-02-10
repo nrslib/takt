@@ -314,7 +314,7 @@ export function normalizePieceConfig(
     reportFormats: resolvedReportFormats,
     movements,
     initialMovement,
-    maxIterations: parsed.max_iterations,
+    maxMovements: parsed.max_movements,
     loopMonitors: normalizeLoopMonitors(parsed.loop_monitors, pieceDir, sections, context),
     answerAgent: parsed.answer_agent,
     interactiveMode: parsed.interactive_mode,

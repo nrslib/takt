@@ -1,6 +1,6 @@
 name: coding
 description: Lightweight development piece with planning and parallel reviews (plan -> implement -> parallel review -> complete)
-max_iterations: 20
+max_movements: 20
 initial_movement: plan
 movements:
   - name: plan

@@ -1,6 +1,6 @@
 name: expert
 description: Architecture, Frontend, Security, QA Expert Review
-max_iterations: 30
+max_movements: 30
 initial_movement: plan
 movements:
   - name: plan

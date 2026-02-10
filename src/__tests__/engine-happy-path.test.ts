@@ -388,7 +388,7 @@ describe('PieceEngine Integration: Happy Path', () => {
     it('should pass instruction to movement:start for normal movements', async () => {
       const simpleConfig: PieceConfig = {
         name: 'test',
-        maxIterations: 10,
+        maxMovements: 10,
         initialMovement: 'plan',
         movements: [
           makeMovement('plan', {
@@ -456,7 +456,7 @@ describe('PieceEngine Integration: Happy Path', () => {
     });
 
     it('should emit iteration:limit when max iterations reached', async () => {
-      const config = buildDefaultPieceConfig({ maxIterations: 1 });
+      const config = buildDefaultPieceConfig({ maxMovements: 1 });
       engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
@@ -518,7 +518,7 @@ describe('PieceEngine Integration: Happy Path', () => {
     it('should emit phase:start and phase:complete events for Phase 1', async () => {
       const simpleConfig: PieceConfig = {
         name: 'test',
-        maxIterations: 10,
+        maxMovements: 10,
         initialMovement: 'plan',
         movements: [
           makeMovement('plan', {
@@ -609,7 +609,7 @@ describe('PieceEngine Integration: Happy Path', () => {
     it('should throw when rule references nonexistent movement', () => {
       const config: PieceConfig = {
         name: 'test',
-        maxIterations: 10,
+        maxMovements: 10,
         initialMovement: 'step1',
         movements: [
           makeMovement('step1', {

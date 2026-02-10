@@ -23,7 +23,7 @@ describe('getPieceDescription', () => {
     const pieceYaml = `name: test-piece
 description: Test piece for workflow
 initial_movement: plan
-max_iterations: 3
+max_movements: 3
 
 movements:
   - name: plan
@@ -56,7 +56,7 @@ movements:
     const pieceYaml = `name: coding
 description: Full coding workflow
 initial_movement: plan
-max_iterations: 10
+max_movements: 10
 
 movements:
   - name: plan
@@ -98,7 +98,7 @@ movements:
   it('should handle movements without descriptions', () => {
     const pieceYaml = `name: minimal
 initial_movement: step1
-max_iterations: 1
+max_movements: 1
 
 movements:
   - name: step1
@@ -132,7 +132,7 @@ movements:
   it('should handle parallel movements without descriptions', () => {
     const pieceYaml = `name: test-parallel
 initial_movement: parent
-max_iterations: 1
+max_movements: 1
 
 movements:
   - name: parent
@@ -174,7 +174,7 @@ describe('getPieceDescription with movementPreviews', () => {
     const pieceYaml = `name: preview-test
 description: Test piece
 initial_movement: plan
-max_iterations: 5
+max_movements: 5
 
 movements:
   - name: plan
@@ -237,7 +237,7 @@ movements:
   it('should return empty previews when previewCount is 0', () => {
     const pieceYaml = `name: test
 initial_movement: step1
-max_iterations: 1
+max_movements: 1
 
 movements:
   - name: step1
@@ -256,7 +256,7 @@ movements:
   it('should return empty previews when previewCount is not specified', () => {
     const pieceYaml = `name: test
 initial_movement: step1
-max_iterations: 1
+max_movements: 1
 
 movements:
   - name: step1
@@ -275,7 +275,7 @@ movements:
   it('should stop at COMPLETE movement', () => {
     const pieceYaml = `name: test-complete
 initial_movement: step1
-max_iterations: 3
+max_movements: 3
 
 movements:
   - name: step1
@@ -301,7 +301,7 @@ movements:
   it('should stop at ABORT movement', () => {
     const pieceYaml = `name: test-abort
 initial_movement: step1
-max_iterations: 3
+max_movements: 3
 
 movements:
   - name: step1
@@ -331,7 +331,7 @@ movements:
 
     const pieceYaml = `name: test-persona-file
 initial_movement: plan
-max_iterations: 1
+max_movements: 1
 
 personas:
   planner: ./planner.md
@@ -355,7 +355,7 @@ movements:
   it('should limit previews to maxCount', () => {
     const pieceYaml = `name: test-limit
 initial_movement: step1
-max_iterations: 5
+max_movements: 5
 
 movements:
   - name: step1
@@ -388,7 +388,7 @@ movements:
   it('should handle movements without rules (stop after first)', () => {
     const pieceYaml = `name: test-no-rules
 initial_movement: step1
-max_iterations: 3
+max_movements: 3
 
 movements:
   - name: step1
@@ -411,7 +411,7 @@ movements:
   it('should return empty previews when initial movement not found in list', () => {
     const pieceYaml = `name: test-missing-initial
 initial_movement: nonexistent
-max_iterations: 1
+max_movements: 1
 
 movements:
   - name: step1
@@ -430,7 +430,7 @@ movements:
   it('should handle self-referencing rule (prevent infinite loop)', () => {
     const pieceYaml = `name: test-self-ref
 initial_movement: step1
-max_iterations: 5
+max_movements: 5
 
 movements:
   - name: step1
@@ -453,7 +453,7 @@ movements:
   it('should handle multi-node cycle A→B→A (prevent duplicate previews)', () => {
     const pieceYaml = `name: test-cycle
 initial_movement: stepA
-max_iterations: 10
+max_movements: 10
 
 movements:
   - name: stepA
@@ -489,7 +489,7 @@ movements:
   it('should use inline persona content when no personaPath', () => {
     const pieceYaml = `name: test-inline
 initial_movement: step1
-max_iterations: 1
+max_movements: 1
 
 movements:
   - name: step1
@@ -515,7 +515,7 @@ movements:
 
     const pieceYaml = `name: test-unreadable-persona
 initial_movement: plan
-max_iterations: 1
+max_movements: 1
 
 personas:
   planner: ./unreadable-persona.md
@@ -545,7 +545,7 @@ movements:
   it('should include personaDisplayName in previews', () => {
     const pieceYaml = `name: test-display
 initial_movement: step1
-max_iterations: 1
+max_movements: 1
 
 movements:
   - name: step1
@@ -578,7 +578,7 @@ describe('getPieceDescription interactiveMode field', () => {
   it('should return interactiveMode when piece defines interactive_mode', () => {
     const pieceYaml = `name: test-mode
 initial_movement: step1
-max_iterations: 1
+max_movements: 1
 interactive_mode: quiet
 
 movements:
@@ -598,7 +598,7 @@ movements:
   it('should return undefined interactiveMode when piece omits interactive_mode', () => {
     const pieceYaml = `name: test-no-mode
 initial_movement: step1
-max_iterations: 1
+max_movements: 1
 
 movements:
   - name: step1
@@ -618,7 +618,7 @@ movements:
     for (const mode of ['assistant', 'persona', 'quiet', 'passthrough'] as const) {
       const pieceYaml = `name: test-${mode}
 initial_movement: step1
-max_iterations: 1
+max_movements: 1
 interactive_mode: ${mode}
 
 movements:
@@ -651,7 +651,7 @@ describe('getPieceDescription firstMovement field', () => {
   it('should return firstMovement with inline persona content', () => {
     const pieceYaml = `name: test-first
 initial_movement: plan
-max_iterations: 1
+max_movements: 1
 
 movements:
   - name: plan
@@ -681,7 +681,7 @@ movements:
 
     const pieceYaml = `name: test-persona-file
 initial_movement: plan
-max_iterations: 1
+max_movements: 1
 
 personas:
   planner: ./planner-persona.md
@@ -705,7 +705,7 @@ movements:
   it('should return undefined firstMovement when initialMovement not found', () => {
     const pieceYaml = `name: test-missing
 initial_movement: nonexistent
-max_iterations: 1
+max_movements: 1
 
 movements:
   - name: step1
@@ -724,7 +724,7 @@ movements:
   it('should return empty allowedTools array when movement has no tools', () => {
     const pieceYaml = `name: test-no-tools
 initial_movement: step1
-max_iterations: 1
+max_movements: 1
 
 movements:
   - name: step1
@@ -749,7 +749,7 @@ movements:
 
     const pieceYaml = `name: test-fallback
 initial_movement: step1
-max_iterations: 1
+max_movements: 1
 
 personas:
   myagent: ./unreadable.md

@@ -22,7 +22,7 @@ function makeConfig(overrides: Partial<PieceConfig> = {}): PieceConfig {
     name: 'test-piece',
     movements: [],
     initialMovement: 'start',
-    maxIterations: 10,
+    maxMovements: 10,
     ...overrides,
   };
 }

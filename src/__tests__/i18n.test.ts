@@ -37,7 +37,7 @@ describe('getLabel', () => {
     it('replaces {variableName} placeholders with provided values', () => {
       const result = getLabel('piece.iterationLimit.maxReached', undefined, {
         currentIteration: '5',
-        maxIterations: '10',
+        maxMovements: '10',
       });
       expect(result).toContain('(5/10)');
     });

@@ -1,7 +1,7 @@
 name: e2e-mock-slow-multi-step
 description: Multi-step mock piece to keep tasks in-flight long enough for SIGINT E2E
 
-max_iterations: 20
+max_movements: 20
 
 initial_movement: step-1
 

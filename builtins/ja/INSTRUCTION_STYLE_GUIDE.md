@@ -82,7 +82,7 @@ InstructionBuilder が instruction_template 内の `{変数名}` を展開する
 | 変数 | 内容 |
 |------|------|
 | `{iteration}` | ピース全体のイテレーション数 |
-| `{max_iterations}` | 最大イテレーション数 |
+| `{max_movements}` | 最大イテレーション数 |
 | `{movement_iteration}` | ムーブメント単位のイテレーション数 |
 | `{report_dir}` | レポートディレクトリ名（`.takt/runs/{slug}/reports`） |
 | `{report:filename}` | 指定レポートの内容展開（ファイルが存在する場合） |

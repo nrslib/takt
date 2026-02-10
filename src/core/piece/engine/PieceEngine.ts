@@ -167,7 +167,7 @@ export class PieceEngine extends EventEmitter {
       piece: config.name,
       movements: config.movements.map(s => s.name),
       initialMovement: config.initialMovement,
-      maxIterations: config.maxIterations,
+      maxMovements: config.maxMovements,
     });
   }
 
@@ -331,7 +331,7 @@ export class PieceEngine extends EventEmitter {
 
     if (step.parallel && step.parallel.length > 0) {
       result = await this.parallelRunner.runParallelMovement(
-        step, this.state, this.task, this.config.maxIterations, updateSession,
+        step, this.state, this.task, this.config.maxMovements, updateSession,
       );
     } else if (step.arpeggio) {
       result = await this.arpeggioRunner.runArpeggioMovement(
@@ -339,7 +339,7 @@ export class PieceEngine extends EventEmitter {
       );
     } else {
       result = await this.movementExecutor.runNormalMovement(
-        step, this.state, this.task, this.config.maxIterations, updateSession, prebuiltInstruction,
+        step, this.state, this.task, this.config.maxMovements, updateSession, prebuiltInstruction,
       );
     }
 
@@ -364,7 +364,7 @@ export class PieceEngine extends EventEmitter {
   /** Build instruction (public, used by pieceExecution.ts for logging) */
   buildInstruction(step: PieceMovement, movementIteration: number): string {
     return this.movementExecutor.buildInstruction(
-      step, movementIteration, this.state, this.task, this.config.maxIterations,
+      step, movementIteration, this.state, this.task, this.config.maxMovements,
     );
   }
 
@@ -451,7 +451,7 @@ export class PieceEngine extends EventEmitter {
     this.state.iteration++;
     const movementIteration = incrementMovementIteration(this.state, judgeMovement.name);
     const prebuiltInstruction = this.movementExecutor.buildInstruction(
-      judgeMovement, movementIteration, this.state, this.task, this.config.maxIterations,
+      judgeMovement, movementIteration, this.state, this.task, this.config.maxMovements,
     );
 
     this.emit('movement:start', judgeMovement, this.state.iteration, prebuiltInstruction);
@@ -460,7 +460,7 @@ export class PieceEngine extends EventEmitter {
       judgeMovement,
       this.state,
       this.task,
-      this.config.maxIterations,
+      this.config.maxMovements,
       this.updatePersonaSession.bind(this),
       prebuiltInstruction,
     );
@@ -491,27 +491,27 @@ export class PieceEngine extends EventEmitter {
         break;
       }
 
-      if (this.state.iteration >= this.config.maxIterations) {
-        this.emit('iteration:limit', this.state.iteration, this.config.maxIterations);
+      if (this.state.iteration >= this.config.maxMovements) {
+        this.emit('iteration:limit', this.state.iteration, this.config.maxMovements);
 
         if (this.options.onIterationLimit) {
           const additionalIterations = await this.options.onIterationLimit({
             currentIteration: this.state.iteration,
-            maxIterations: this.config.maxIterations,
+            maxMovements: this.config.maxMovements,
             currentMovement: this.state.currentMovement,
           });
 
           if (additionalIterations !== null && additionalIterations > 0) {
             this.config = {
               ...this.config,
-              maxIterations: this.config.maxIterations + additionalIterations,
+              maxMovements: this.config.maxMovements + additionalIterations,
             };
             continue;
           }
         }
 
         this.state.status = 'aborted';
-        this.emit('piece:abort', this.state, ERROR_MESSAGES.MAX_ITERATIONS_REACHED);
+        this.emit('piece:abort', this.state, ERROR_MESSAGES.MAX_MOVEMENTS_REACHED);
         break;
       }
 
@@ -537,7 +537,7 @@ export class PieceEngine extends EventEmitter {
       if (!isDelegated) {
         const movementIteration = incrementMovementIteration(this.state, movement.name);
         prebuiltInstruction = this.movementExecutor.buildInstruction(
-          movement, movementIteration, this.state, this.task, this.config.maxIterations,
+          movement, movementIteration, this.state, this.task, this.config.maxMovements,
         );
       }
       this.emit('movement:start', movement, this.state.iteration, prebuiltInstruction ?? '');

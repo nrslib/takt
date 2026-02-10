@@ -57,7 +57,7 @@ function makeContext(overrides: Partial<InstructionContext> = {}): InstructionCo
   return {
     task: 'Test task description',
     iteration: 3,
-    maxIterations: 30,
+    maxMovements: 30,
     movementIteration: 2,
     cwd: '/tmp/test-project',
     projectCwd: '/tmp/test-project',
@@ -176,11 +176,11 @@ describe('Instruction Builder IT: user_inputs auto-injection', () => {
 });
 
 describe('Instruction Builder IT: iteration variables', () => {
-  it('should replace {iteration}, {max_iterations}, {movement_iteration} in template', () => {
+  it('should replace {iteration}, {max_movements}, {movement_iteration} in template', () => {
     const step = makeMovement({
-      instructionTemplate: 'Iter: {iteration}/{max_iterations}, movement iter: {movement_iteration}',
+      instructionTemplate: 'Iter: {iteration}/{max_movements}, movement iter: {movement_iteration}',
     });
-    const ctx = makeContext({ iteration: 5, maxIterations: 30, movementIteration: 2 });
+    const ctx = makeContext({ iteration: 5, maxMovements: 30, movementIteration: 2 });
 
     const result = buildInstruction(step, ctx);
 
@@ -189,7 +189,7 @@ describe('Instruction Builder IT: iteration variables', () => {
 
   it('should include iteration in Piece Context section', () => {
     const step = makeMovement();
-    const ctx = makeContext({ iteration: 7, maxIterations: 20, movementIteration: 3 });
+    const ctx = makeContext({ iteration: 7, maxMovements: 20, movementIteration: 3 });
 
     const result = buildInstruction(step, ctx);
 

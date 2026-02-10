@@ -133,7 +133,7 @@ movement の `instruction:` キーから指示テンプレートファイルを�
 - ワーキングディレクトリ: {cwd}
 - ピース: {piece_name}
 - Movement: {movement_name}
-- イテレーション: {iteration} / {max_iterations}
+- イテレーション: {iteration} / {max_movements}
 - Movement イテレーション: {movement_iteration} 回目
 ```
 
@@ -146,7 +146,7 @@ movement の `instruction:` キーから指示テンプレートファイルを�
 | `{task}` | ユーザーが入力したタスク内容 |
 | `{previous_response}` | 前の movement のチームメイト出力 |
 | `{iteration}` | ピース全体のイテレーション数（1始まり） |
-| `{max_iterations}` | ピースの max_iterations 値 |
+| `{max_movements}` | ピースの max_movements 値 |
 | `{movement_iteration}` | この movement が実行された回数（1始まり） |
 | `{report_dir}` | レポートディレクトリパス（`.takt/runs/{slug}/reports`） |
 | `{report:ファイル名}` | 指定レポートファイルの内容（Read で取得） |
@@ -317,7 +317,7 @@ parallel のサブステップにも同様にタグ出力指示を注入する�
 ### 基本ルール
 
 - 同じ movement が連続3回以上実行されたら警告を表示する
-- `max_iterations` に到達したら強制終了（ABORT）する
+- `max_movements` に到達したら強制終了（ABORT）する
 
 ### カウンター管理
 

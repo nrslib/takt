@@ -26,7 +26,7 @@ function makeContext(overrides: Partial<InstructionContext> = {}): InstructionCo
   return {
     task: 'test task',
     iteration: 1,
-    maxIterations: 10,
+    maxMovements: 10,
     movementIteration: 1,
     cwd: '/tmp/test',
     projectCwd: '/tmp/project',
@@ -78,10 +78,10 @@ describe('replaceTemplatePlaceholders', () => {
     expect(result).toBe('fix ｛bug｝ in code');
   });
 
-  it('should replace {iteration} and {max_iterations}', () => {
+  it('should replace {iteration} and {max_movements}', () => {
     const step = makeMovement();
-    const ctx = makeContext({ iteration: 3, maxIterations: 20 });
-    const template = 'Iteration {iteration}/{max_iterations}';
+    const ctx = makeContext({ iteration: 3, maxMovements: 20 });
+    const template = 'Iteration {iteration}/{max_movements}';
 
     const result = replaceTemplatePlaceholders(template, step, ctx);
     expect(result).toBe('Iteration 3/20');
@@ -186,11 +186,11 @@ describe('replaceTemplatePlaceholders', () => {
     const ctx = makeContext({
       task: 'test task',
       iteration: 2,
-      maxIterations: 5,
+      maxMovements: 5,
       movementIteration: 1,
       reportDir: '/reports',
     });
-    const template = '{task} - iter {iteration}/{max_iterations} - mv {movement_iteration} - dir {report_dir}';
+    const template = '{task} - iter {iteration}/{max_movements} - mv {movement_iteration} - dir {report_dir}';
 
     const result = replaceTemplatePlaceholders(template, step, ctx);
     expect(result).toBe('test task - iter 2/5 - mv 1 - dir /reports');

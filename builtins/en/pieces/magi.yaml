@@ -1,6 +1,6 @@
 name: magi
 description: MAGI Deliberation System - Analyze from 3 perspectives and decide by majority
-max_iterations: 5
+max_movements: 5
 initial_movement: melchior
 movements:
   - name: melchior

@@ -1,7 +1,7 @@
 name: e2e-mock-single
 description: Minimal mock-only piece for CLI E2E
 
-max_iterations: 3
+max_movements: 3
 
 movements:
   - name: execute

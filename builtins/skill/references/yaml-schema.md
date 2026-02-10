@@ -7,7 +7,7 @@
 ```yaml
 name: piece-name              # ピース名（必須）
 description: 説明テキスト      # ピースの説明（任意）
-max_iterations: 10            # 最大イテレーション数（必須）
+max_movements: 10            # 最大イテレーション数（必須）
 initial_movement: plan        # 最初に実行する movement 名（必須）
 
 # セクションマップ（キー → ファイルパスの対応表）
@@ -192,7 +192,7 @@ quality_gates:
 | `{task}` | ユーザーのタスク入力（template に含まれない場合は自動追加） |
 | `{previous_response}` | 前の movement の出力（pass_previous_response: true 時、自動追加） |
 | `{iteration}` | ピース全体のイテレーション数 |
-| `{max_iterations}` | 最大イテレーション数 |
+| `{max_movements}` | 最大イテレーション数 |
 | `{movement_iteration}` | この movement の実行回数 |
 | `{report_dir}` | レポートディレクトリ名 |
 | `{report:ファイル名}` | 指定レポートファイルの内容を展開 |

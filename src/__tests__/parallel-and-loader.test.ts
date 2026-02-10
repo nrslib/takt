@@ -145,7 +145,7 @@ describe('PieceConfigRawSchema with parallel movements', () => {
         },
       ],
       initial_movement: 'plan',
-      max_iterations: 10,
+      max_movements: 10,
     };
 
     const result = PieceConfigRawSchema.safeParse(raw);

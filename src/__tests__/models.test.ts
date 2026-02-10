@@ -81,7 +81,7 @@ describe('PieceConfigRawSchema', () => {
     expect(result.name).toBe('test-piece');
     expect(result.movements).toHaveLength(1);
     expect(result.movements![0]?.allowed_tools).toEqual(['Read', 'Grep']);
-    expect(result.max_iterations).toBe(10);
+    expect(result.max_movements).toBe(10);
   });
 
   it('should parse movement with permission_mode', () => {

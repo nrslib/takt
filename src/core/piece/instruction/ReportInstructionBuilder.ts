@@ -59,7 +59,7 @@ export class ReportInstructionBuilder {
     const instrContext: InstructionContext = {
       task: '',
       iteration: 0,
-      maxIterations: 0,
+      maxMovements: 0,
       movementIteration: this.context.movementIteration,
       cwd: this.context.cwd,
       projectCwd: this.context.cwd,

@@ -210,7 +210,7 @@ export interface PieceConfig {
   reportFormats?: Record<string, string>;
   movements: PieceMovement[];
   initialMovement: string;
-  maxIterations: number;
+  maxMovements: number;
   /** Loop detection settings */
   loopDetection?: LoopDetectionConfig;
   /** Loop monitors for detecting cyclic patterns between movements */

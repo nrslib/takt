@@ -117,7 +117,7 @@ export interface PieceEvents {
   'phase:complete': (step: PieceMovement, phase: 1 | 2 | 3, phaseName: PhaseName, content: string, status: string, error?: string) => void;
   'piece:complete': (state: PieceState) => void;
   'piece:abort': (state: PieceState, reason: string) => void;
-  'iteration:limit': (iteration: number, maxIterations: number) => void;
+  'iteration:limit': (iteration: number, maxMovements: number) => void;
   'movement:loop_detected': (step: PieceMovement, consecutiveCount: number) => void;
   'movement:cycle_detected': (monitor: LoopMonitorConfig, cycleCount: number) => void;
 }
@@ -136,8 +136,8 @@ export interface UserInputRequest {
 export interface IterationLimitRequest {
   /** Current iteration count */
   currentIteration: number;
-  /** Current max iterations */
-  maxIterations: number;
+  /** Current max movements */
+  maxMovements: number;
   /** Current movement name */
   currentMovement: string;
 }

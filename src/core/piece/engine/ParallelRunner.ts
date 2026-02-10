@@ -54,7 +54,7 @@ export class ParallelRunner {
     step: PieceMovement,
     state: PieceState,
     task: string,
-    maxIterations: number,
+    maxMovements: number,
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
   ): Promise<{ response: AgentResponse; instruction: string }> {
     if (!step.parallel) {
@@ -70,7 +70,7 @@ export class ParallelRunner {
 
     // Create parallel logger for prefixed output (only when streaming is enabled)
     const parallelLogger = this.deps.engineOptions.onStream
-      ? new ParallelLogger(this.buildParallelLoggerOptions(step.name, movementIteration, subMovements.map((s) => s.name), state.iteration, maxIterations))
+      ? new ParallelLogger(this.buildParallelLoggerOptions(step.name, movementIteration, subMovements.map((s) => s.name), state.iteration, maxMovements))
       : undefined;
 
     const ruleCtx = {
@@ -85,7 +85,7 @@ export class ParallelRunner {
     const settled = await Promise.allSettled(
       subMovements.map(async (subMovement, index) => {
         const subIteration = incrementMovementIteration(state, subMovement.name);
-        const subInstruction = this.deps.movementExecutor.buildInstruction(subMovement, subIteration, state, task, maxIterations);
+        const subInstruction = this.deps.movementExecutor.buildInstruction(subMovement, subIteration, state, task, maxMovements);
 
         // Session key uses buildSessionKey (persona:provider) — same as normal movements.
         // This ensures sessions are shared across movements with the same persona+provider,
@@ -207,14 +207,14 @@ export class ParallelRunner {
     movementIteration: number,
     subMovementNames: string[],
     iteration: number,
-    maxIterations: number,
+    maxMovements: number,
   ): ParallelLoggerOptions {
     const options: ParallelLoggerOptions = {
       subMovementNames,
       parentOnStream: this.deps.engineOptions.onStream,
       progressInfo: {
         iteration,
-        maxIterations,
+        maxMovements,
       },
     };
 

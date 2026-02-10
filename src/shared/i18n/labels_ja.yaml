@@ -45,7 +45,7 @@ interactive:
 # ===== Piece Execution UI =====
 piece:
   iterationLimit:
-    maxReached: "最大イテレーションに到達しました ({currentIteration}/{maxIterations})"
+    maxReached: "最大イテレーションに到達しました ({currentIteration}/{maxMovements})"
     currentMovement: "現在のムーブメント: {currentMovement}"
     continueQuestion: "続行しますか？"
     continueLabel: "続行する（追加イテレーション数を入力）"

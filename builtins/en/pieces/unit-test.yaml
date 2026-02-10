@@ -1,6 +1,6 @@
 name: unit-test
 description: Unit test focused piece (test analysis → test implementation → review → fix)
-max_iterations: 20
+max_movements: 20
 initial_movement: plan_test
 loop_monitors:
   - cycle:

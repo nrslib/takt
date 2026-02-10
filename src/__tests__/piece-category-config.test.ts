@@ -65,7 +65,7 @@ function createPieceMap(entries: { name: string; source: 'builtin' | 'user' | 'p
         name: entry.name,
         movements: [],
         initialMovement: 'start',
-        maxIterations: 1,
+        maxMovements: 1,
       },
     });
   }

@@ -14,8 +14,8 @@ export interface InstructionContext {
   task: string;
   /** Current iteration number (piece-wide turn count) */
   iteration: number;
-  /** Maximum iterations allowed */
-  maxIterations: number;
+  /** Maximum movements allowed */
+  maxMovements: number;
   /** Current movement's iteration number (how many times this movement has been executed) */
   movementIteration: number;
   /** Working directory (agent work dir, may be a clone) */

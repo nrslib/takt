@@ -69,15 +69,15 @@ describe('E2E: Piece error handling (mock)', () => {
     expect(combined).toMatch(/failed|aborted|error/i);
   }, 240_000);
 
-  it('should abort when max_iterations is reached', () => {
-    // Given: a piece with max_iterations=2 that loops between step-a and step-b
+  it('should abort when max_movements is reached', () => {
+    // Given: a piece with max_movements=2 that loops between step-a and step-b
     const piecePath = resolve(__dirname, '../fixtures/pieces/mock-max-iter.yaml');
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/max-iter-loop.json');
 
     // When: executing the piece
     const result = runTakt({
       args: [
-        '--task', 'Test max iterations',
+        '--task', 'Test max movements',
         '--piece', piecePath,
         '--create-worktree', 'no',
         '--provider', 'mock',
@@ -93,7 +93,7 @@ describe('E2E: Piece error handling (mock)', () => {
     // Then: piece aborts due to iteration limit
     expect(result.exitCode).not.toBe(0);
     const combined = result.stdout + result.stderr;
-    expect(combined).toMatch(/Max iterations|iteration|aborted/i);
+    expect(combined).toMatch(/Max movements|iteration|aborted/i);
   }, 240_000);
 
   it('should pass previous response between sequential steps', () => {

@@ -105,7 +105,7 @@ function buildSimplePiece(agentPaths: Record<string, string>): PieceConfig {
   return {
     name: 'it-simple',
     description: 'IT simple piece',
-    maxIterations: 15,
+    maxMovements: 15,
     initialMovement: 'plan',
     movements: [
       makeMovement('plan', agentPaths.planner, [
@@ -128,7 +128,7 @@ function buildLoopPiece(agentPaths: Record<string, string>): PieceConfig {
   return {
     name: 'it-loop',
     description: 'IT piece with fix loop',
-    maxIterations: 20,
+    maxMovements: 20,
     initialMovement: 'plan',
     movements: [
       makeMovement('plan', agentPaths.planner, [
@@ -286,7 +286,7 @@ describe('Piece Engine IT: Max Iterations', () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  it('should abort when maxIterations exceeded in infinite loop', async () => {
+  it('should abort when maxMovements exceeded in infinite loop', async () => {
     // Create an infinite loop: plan always goes to implement, implement always goes back to plan
     const infiniteScenario = Array.from({ length: 10 }, (_, i) => ({
       status: 'done' as const,
@@ -295,7 +295,7 @@ describe('Piece Engine IT: Max Iterations', () => {
     setMockScenario(infiniteScenario);
 
     const config = buildSimplePiece(agentPaths);
-    config.maxIterations = 5;
+    config.maxMovements = 5;
 
     const engine = new PieceEngine(config, testDir, 'Looping task', {
       ...buildEngineOptions(testDir),

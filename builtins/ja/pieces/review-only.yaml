@@ -1,6 +1,6 @@
 name: review-only
 description: レビュー専用ピース - コードをレビューするだけで編集は行わない
-max_iterations: 10
+max_movements: 10
 initial_movement: plan
 movements:
   - name: plan

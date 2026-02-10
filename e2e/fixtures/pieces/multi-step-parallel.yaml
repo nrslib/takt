@@ -1,7 +1,7 @@
 name: e2e-multi-step-parallel
 description: Multi-step piece with parallel sub-movements for E2E testing
 
-max_iterations: 10
+max_movements: 10
 
 initial_movement: plan
 

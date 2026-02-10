@@ -74,7 +74,7 @@ describe('ParallelLogger', () => {
         writeFn,
         progressInfo: {
           iteration: 4,
-          maxIterations: 30,
+          maxMovements: 30,
         },
         taskLabel: 'override-persona-provider',
         taskColorIndex: 0,
@@ -529,7 +529,7 @@ describe('ParallelLogger', () => {
         writeFn,
         progressInfo: {
           iteration: 3,
-          maxIterations: 10,
+          maxMovements: 10,
         },
       });
 
@@ -545,7 +545,7 @@ describe('ParallelLogger', () => {
         writeFn,
         progressInfo: {
           iteration: 5,
-          maxIterations: 20,
+          maxMovements: 20,
         },
       });
 
@@ -576,7 +576,7 @@ describe('ParallelLogger', () => {
         writeFn,
         progressInfo: {
           iteration: 2,
-          maxIterations: 5,
+          maxMovements: 5,
         },
       });
       const handler = logger.createStreamHandler('step-a', 0);

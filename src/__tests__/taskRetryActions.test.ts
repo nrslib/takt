@@ -51,7 +51,7 @@ const defaultPieceConfig: PieceConfig = {
   name: 'default',
   description: 'Default piece',
   initialMovement: 'plan',
-  maxIterations: 30,
+  maxMovements: 30,
   movements: [
     { name: 'plan', persona: 'planner', instruction: '' },
     { name: 'implement', persona: 'coder', instruction: '' },

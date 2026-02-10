@@ -45,7 +45,7 @@ interactive:
 # ===== Piece Execution UI =====
 piece:
   iterationLimit:
-    maxReached: "Reached max iterations ({currentIteration}/{maxIterations})"
+    maxReached: "Reached max iterations ({currentIteration}/{maxMovements})"
     currentMovement: "Current movement: {currentMovement}"
     continueQuestion: "Continue?"
     continueLabel: "Continue (enter additional iterations)"

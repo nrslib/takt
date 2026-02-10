@@ -218,7 +218,7 @@ Builtin resources are embedded in the npm package (`builtins/`). User files in `
 ```yaml
 name: piece-name
 description: Optional description
-max_iterations: 10
+max_movements: 10
 initial_step: plan        # First step to execute
 
 steps:
@@ -291,7 +291,7 @@ Key points about parallel steps:
 |----------|-------------|
 | `{task}` | Original user request (auto-injected if not in template) |
 | `{iteration}` | Piece-wide iteration count |
-| `{max_iterations}` | Maximum iterations allowed |
+| `{max_movements}` | Maximum movements allowed |
 | `{step_iteration}` | Per-step iteration count |
 | `{previous_response}` | Previous step output (auto-injected if not in template) |
 | `{user_inputs}` | Accumulated user inputs (auto-injected if not in template) |

@@ -188,7 +188,7 @@ describe('TaskPrefixWriter', () => {
       writer.setMovementContext({
         movementName: 'implement',
         iteration: 4,
-        maxIterations: 30,
+        maxMovements: 30,
         movementIteration: 2,
       });
       writer.writeLine('content');

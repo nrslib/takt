@@ -24,7 +24,7 @@ import {
 const SAMPLE_PIECE = `name: test-piece
 description: Test piece
 initial_movement: step1
-max_iterations: 1
+max_movements: 1
 
 movements:
   - name: step1

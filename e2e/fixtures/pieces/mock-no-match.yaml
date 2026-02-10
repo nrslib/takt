@@ -1,7 +1,7 @@
 name: e2e-mock-no-match
 description: Piece with a strict rule condition that will not match mock output
 
-max_iterations: 3
+max_movements: 3
 
 movements:
   - name: execute

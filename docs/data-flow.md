@@ -498,7 +498,7 @@ TAKTのデータフローは以下の7つの主要なレイヤーで構成され
    while (state.status === 'running') {
      // 1. Abort & Iteration チェック
      if (abortRequested) { ... }
-     if (iteration >= maxIterations) { ... }
+     if (iteration >= maxMovements) { ... }
 
      // 2. ステップ取得
      const step = getStep(state.currentStep);
@@ -646,7 +646,7 @@ const match = await detectMatchedRule(step, response.content, tagContent, {...})
 - `{previous_response}`: 前ステップの出力
 - `{user_inputs}`: 追加ユーザー入力
 - `{iteration}`: ピース全体のイテレーション
-- `{max_iterations}`: 最大イテレーション
+- `{max_movements}`: 最大イテレーション
 - `{step_iteration}`: ステップのイテレーション
 - `{report_dir}`: レポートディレクトリ
 
@@ -824,7 +824,7 @@ new PieceEngine(pieceConfig, cwd, task, {
 
 1. **コンテキスト収集**:
    - `task`: 元のユーザーリクエスト
-   - `iteration`, `maxIterations`: イテレーション情報
+   - `iteration`, `maxMovements`: イテレーション情報
    - `stepIteration`: ステップごとの実行回数
    - `cwd`, `projectCwd`: ディレクトリ情報
    - `userInputs`: blocked時の追加入力

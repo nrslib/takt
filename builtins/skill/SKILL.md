@@ -83,7 +83,7 @@ $ARGUMENTS を以下のように解析する:
 3. 見つからない場合: 上記2ディレクトリを Glob で列挙し、AskUserQuestion で選択させる
 
 YAMLから以下を抽出する（→ references/yaml-schema.md 参照）:
-- `name`, `max_iterations`, `initial_movement`, `movements` 配列
+- `name`, `max_movements`, `initial_movement`, `movements` 配列
 - セクションマップ: `personas`, `policies`, `instructions`, `output_contracts`, `knowledge`
 
 ### 手順 2: セクションリソースの事前読み込み
@@ -130,7 +130,7 @@ TeamCreate tool を呼ぶ:
 
 ### 手順 5: チームメイト起動
 
-**iteration が max_iterations を超えていたら → 手順 8（ABORT: イテレーション上限）に進む。**
+**iteration が max_movements を超えていたら → 手順 8（ABORT: イテレーション上限）に進む。**
 
 current_movement のプロンプトを構築する（→ references/engine.md のプロンプト構築を参照）。
 

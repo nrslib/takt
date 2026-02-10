@@ -19,5 +19,5 @@ export const ERROR_MESSAGES = {
     `Loop detected: movement "${movementName}" ran ${count} times consecutively without progress.`,
   UNKNOWN_MOVEMENT: (movementName: string) => `Unknown movement: ${movementName}`,
   MOVEMENT_EXECUTION_FAILED: (message: string) => `Movement execution failed: ${message}`,
-  MAX_ITERATIONS_REACHED: 'Max iterations reached',
+  MAX_MOVEMENTS_REACHED: 'Max movements reached',
 };

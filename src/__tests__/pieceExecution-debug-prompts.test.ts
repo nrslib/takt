@@ -170,7 +170,7 @@ describe('executePiece debug prompts logging', () => {
   function makeConfig(): PieceConfig {
     return {
       name: 'test-piece',
-      maxIterations: 5,
+      maxMovements: 5,
       initialMovement: 'implement',
       movements: [
         {

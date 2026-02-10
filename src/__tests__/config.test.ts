@@ -188,7 +188,7 @@ describe('loadAllPieces', () => {
     const samplePiece = `
 name: test-piece
 description: Test piece
-max_iterations: 10
+max_movements: 10
 movements:
   - name: step1
     persona: coder

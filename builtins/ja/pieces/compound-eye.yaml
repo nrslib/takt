@@ -1,6 +1,6 @@
 name: compound-eye
 description: 複眼レビュー - 同じ指示を Claude と Codex に同時に投げ、両者の回答を統合する
-max_iterations: 10
+max_movements: 10
 initial_movement: evaluate
 
 movements:

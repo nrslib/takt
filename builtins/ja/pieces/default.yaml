@@ -1,6 +1,6 @@
 name: default
 description: Standard development piece with planning and specialized reviews
-max_iterations: 30
+max_movements: 30
 initial_movement: plan
 loop_monitors:
   - cycle:

@@ -60,7 +60,7 @@ function buildConfigWithLoopMonitor(
   return {
     name: 'test-loop-monitor',
     description: 'Test piece with loop monitors',
-    maxIterations: 30,
+    maxMovements: 30,
     initialMovement: 'implement',
     loopMonitors: [
       {

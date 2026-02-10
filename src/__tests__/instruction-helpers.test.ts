@@ -27,7 +27,7 @@ function makeContext(overrides: Partial<InstructionContext> = {}): InstructionCo
   return {
     task: 'test task',
     iteration: 1,
-    maxIterations: 10,
+    maxMovements: 10,
     movementIteration: 1,
     cwd: '/tmp/test',
     projectCwd: '/tmp/project',

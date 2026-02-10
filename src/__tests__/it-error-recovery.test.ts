@@ -99,11 +99,11 @@ function buildEngineOptions(projectCwd: string) {
   };
 }
 
-function buildPiece(agentPaths: Record<string, string>, maxIterations: number): PieceConfig {
+function buildPiece(agentPaths: Record<string, string>, maxMovements: number): PieceConfig {
   return {
     name: 'it-error',
     description: 'IT error recovery piece',
-    maxIterations,
+    maxMovements,
     initialMovement: 'plan',
     movements: [
       makeMovement('plan', agentPaths.plan, [

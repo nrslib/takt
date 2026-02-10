@@ -281,7 +281,7 @@ export const PieceConfigRawSchema = z.object({
   report_formats: z.record(z.string(), z.string()).optional(),
   movements: z.array(PieceMovementRawSchema).min(1),
   initial_movement: z.string().optional(),
-  max_iterations: z.number().int().positive().optional().default(10),
+  max_movements: z.number().int().positive().optional().default(10),
   loop_monitors: z.array(LoopMonitorSchema).optional(),
   answer_agent: z.string().optional(),
   /** Default interactive mode for this piece (overrides user default) */

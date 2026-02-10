@@ -152,7 +152,7 @@ function createTestPieceDir(): { dir: string; piecePath: string } {
   const pieceYaml = `
 name: it-simple
 description: Integration test piece
-max_iterations: 10
+max_movements: 10
 initial_movement: plan
 
 movements:

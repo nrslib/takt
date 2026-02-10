@@ -54,7 +54,7 @@ describe('PieceEngine agent overrides', () => {
       name: 'override-test',
       movements: [movement],
       initialMovement: 'plan',
-      maxIterations: 1,
+      maxMovements: 1,
     };
 
     mockRunAgentSequence([
@@ -83,7 +83,7 @@ describe('PieceEngine agent overrides', () => {
       name: 'override-fallback',
       movements: [movement],
       initialMovement: 'plan',
-      maxIterations: 1,
+      maxMovements: 1,
     };
 
     mockRunAgentSequence([
@@ -114,7 +114,7 @@ describe('PieceEngine agent overrides', () => {
       name: 'movement-defaults',
       movements: [movement],
       initialMovement: 'plan',
-      maxIterations: 1,
+      maxMovements: 1,
     };
 
     mockRunAgentSequence([

@@ -22,7 +22,7 @@ describe('StreamDisplay', () => {
   describe('progress info display', () => {
     const progressInfo: ProgressInfo = {
       iteration: 3,
-      maxIterations: 10,
+      maxMovements: 10,
       movementIndex: 1,
       totalMovements: 4,
     };
@@ -253,7 +253,7 @@ describe('StreamDisplay', () => {
     it('should format progress as (iteration/max) step index/total', () => {
       const progressInfo: ProgressInfo = {
         iteration: 5,
-        maxIterations: 20,
+        maxMovements: 20,
         movementIndex: 2,
         totalMovements: 6,
       };
@@ -267,7 +267,7 @@ describe('StreamDisplay', () => {
     it('should convert 0-indexed movementIndex to 1-indexed display', () => {
       const progressInfo: ProgressInfo = {
         iteration: 1,
-        maxIterations: 10,
+        maxMovements: 10,
         movementIndex: 0, // First movement (0-indexed)
         totalMovements: 4,
       };

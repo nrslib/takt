@@ -131,7 +131,7 @@ describe('resolveAutoPr default in selectAndExecuteTask', () => {
           name: 'default',
           movements: [],
           initialMovement: 'start',
-          maxIterations: 1,
+          maxMovements: 1,
         },
       }],
     ]));

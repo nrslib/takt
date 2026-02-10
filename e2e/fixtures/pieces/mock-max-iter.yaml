@@ -1,7 +1,7 @@
 name: e2e-mock-max-iter
-description: Piece with max_iterations=2 that loops between two steps
+description: Piece with max_movements=2 that loops between two steps
 
-max_iterations: 2
+max_movements: 2
 
 initial_movement: step-a
 

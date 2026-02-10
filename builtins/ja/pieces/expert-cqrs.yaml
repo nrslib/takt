@@ -1,6 +1,6 @@
 name: expert-cqrs
 description: CQRS+ES・フロントエンド・セキュリティ・QA専門家レビュー
-max_iterations: 30
+max_movements: 30
 initial_movement: plan
 movements:
   - name: plan

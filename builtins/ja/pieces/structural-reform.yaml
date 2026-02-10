@@ -1,6 +1,6 @@
 name: structural-reform
 description: プロジェクト全体レビューと構造改革 - 段階的なファイル分割による反復的コードベース再構築
-max_iterations: 50
+max_movements: 50
 initial_movement: review
 loop_monitors:
   - cycle:
@@ -44,7 +44,7 @@ movements:
       - WebFetch
     instruction_template: |
       ## ピースステータス
-      - イテレーション: {iteration}/{max_iterations}（ピース全体）
+      - イテレーション: {iteration}/{max_movements}（ピース全体）
       - ムーブメントイテレーション: {movement_iteration}（このムーブメントの実行回数）
       - ムーブメント: review（プロジェクト全体レビュー）
 
@@ -126,7 +126,7 @@ movements:
       - WebFetch
     instruction_template: |
       ## ピースステータス
-      - イテレーション: {iteration}/{max_iterations}（ピース全体）
+      - イテレーション: {iteration}/{max_movements}（ピース全体）
       - ムーブメントイテレーション: {movement_iteration}（このムーブメントの実行回数）
       - ムーブメント: plan_reform（改革計画策定）
 
@@ -323,7 +323,7 @@ movements:
       - WebFetch
     instruction_template: |
       ## ピースステータス
-      - イテレーション: {iteration}/{max_iterations}（ピース全体）
+      - イテレーション: {iteration}/{max_movements}（ピース全体）
       - ムーブメントイテレーション: {movement_iteration}（このムーブメントの実行回数）
       - ムーブメント: verify（ビルド・テスト検証）
 
@@ -378,7 +378,7 @@ movements:
       - WebFetch
     instruction_template: |
       ## ピースステータス
-      - イテレーション: {iteration}/{max_iterations}（ピース全体）
+      - イテレーション: {iteration}/{max_movements}（ピース全体）
       - ムーブメントイテレーション: {movement_iteration}（このムーブメントの実行回数）
       - ムーブメント: next_target（進捗確認と次ターゲット選択）
 

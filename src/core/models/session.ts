@@ -12,7 +12,7 @@ export interface SessionState {
   task: string;
   projectDir: string;
   iteration: number;
-  maxIterations: number;
+  maxMovements: number;
   coderStatus: Status;
   architectStatus: Status;
   supervisorStatus: Status;
@@ -32,7 +32,7 @@ export function createSessionState(
     task,
     projectDir,
     iteration: 0,
-    maxIterations: 10,
+    maxMovements: 10,
     coderStatus: 'pending',
     architectStatus: 'pending',
     supervisorStatus: 'pending',

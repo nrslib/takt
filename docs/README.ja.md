@@ -335,7 +335,7 @@ TAKTはYAMLベースのピース定義とルールベースルーティングを
 
 ```yaml
 name: default
-max_iterations: 10
+max_movements: 10
 initial_movement: plan
 
 # セクションマップ — キー: ファイルパス（このYAMLからの相対パス）
@@ -709,7 +709,7 @@ takt eject default
 # ~/.takt/pieces/my-piece.yaml
 name: my-piece
 description: カスタムピース
-max_iterations: 5
+max_movements: 5
 initial_movement: analyze
 
 personas:
@@ -759,7 +759,7 @@ personas:
 |------|------|
 | `{task}` | 元のユーザーリクエスト（テンプレートになければ自動注入） |
 | `{iteration}` | ピース全体のターン数（実行された全ムーブメント数） |
-| `{max_iterations}` | 最大イテレーション数 |
+| `{max_movements}` | 最大イテレーション数 |
 | `{movement_iteration}` | ムーブメントごとのイテレーション数（このムーブメントが実行された回数） |
 | `{previous_response}` | 前のムーブメントの出力（テンプレートになければ自動注入） |
 | `{user_inputs}` | ピース中の追加ユーザー入力（テンプレートになければ自動注入） |

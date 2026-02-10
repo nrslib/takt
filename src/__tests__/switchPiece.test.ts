@@ -57,7 +57,7 @@ describe('switchPiece', () => {
           name: 'default',
           movements: [],
           initialMovement: 'start',
-          maxIterations: 1,
+          maxMovements: 1,
         },
       }],
     ]));

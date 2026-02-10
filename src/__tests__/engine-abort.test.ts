@@ -65,7 +65,7 @@ describe('PieceEngine: Abort (SIGINT)', () => {
   function makeSimpleConfig(): PieceConfig {
     return {
       name: 'test',
-      maxIterations: 10,
+      maxMovements: 10,
       initialMovement: 'step1',
       movements: [
         makeMovement('step1', {

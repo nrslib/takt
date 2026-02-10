@@ -58,7 +58,7 @@ describe('Piece Loader IT: builtin piece loading', () => {
       expect(config!.name).toBe(name);
       expect(config!.movements.length).toBeGreaterThan(0);
       expect(config!.initialMovement).toBeDefined();
-      expect(config!.maxIterations).toBeGreaterThan(0);
+      expect(config!.maxMovements).toBeGreaterThan(0);
     });
   }
 
@@ -123,7 +123,7 @@ describe('Piece Loader IT: project-local piece override', () => {
     writeFileSync(join(piecesDir, 'custom-wf.yaml'), `
 name: custom-wf
 description: Custom project piece
-max_iterations: 5
+max_movements: 5
 initial_movement: start
 
 movements:
@@ -250,11 +250,11 @@ describe('Piece Loader IT: piece config validation', () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  it('should set max_iterations from YAML', () => {
+  it('should set max_movements from YAML', () => {
     const config = loadPiece('minimal', testDir);
     expect(config).not.toBeNull();
-    expect(typeof config!.maxIterations).toBe('number');
-    expect(config!.maxIterations).toBeGreaterThan(0);
+    expect(typeof config!.maxMovements).toBe('number');
+    expect(config!.maxMovements).toBeGreaterThan(0);
   });
 
   it('should set initial_movement from YAML', () => {
@@ -397,7 +397,7 @@ describe('Piece Loader IT: quality_gates loading', () => {
     writeFileSync(join(piecesDir, 'with-gates.yaml'), `
 name: with-gates
 description: Piece with quality gates
-max_iterations: 5
+max_movements: 5
 initial_movement: implement
 
 movements:
@@ -434,7 +434,7 @@ movements:
     writeFileSync(join(piecesDir, 'no-gates.yaml'), `
 name: no-gates
 description: Piece without quality gates
-max_iterations: 5
+max_movements: 5
 initial_movement: implement
 
 movements:
@@ -461,7 +461,7 @@ movements:
     writeFileSync(join(piecesDir, 'empty-gates.yaml'), `
 name: empty-gates
 description: Piece with empty quality gates
-max_iterations: 5
+max_movements: 5
 initial_movement: implement
 
 movements:
@@ -501,7 +501,7 @@ describe('Piece Loader IT: mcp_servers parsing', () => {
     writeFileSync(join(piecesDir, 'with-mcp.yaml'), `
 name: with-mcp
 description: Piece with MCP servers
-max_iterations: 5
+max_movements: 5
 initial_movement: e2e-test
 
 movements:
@@ -541,7 +541,7 @@ movements:
     writeFileSync(join(piecesDir, 'no-mcp.yaml'), `
 name: no-mcp
 description: Piece without MCP servers
-max_iterations: 5
+max_movements: 5
 initial_movement: implement
 
 movements:
@@ -568,7 +568,7 @@ movements:
     writeFileSync(join(piecesDir, 'multi-mcp.yaml'), `
 name: multi-mcp
 description: Piece with multiple MCP servers
-max_iterations: 5
+max_movements: 5
 initial_movement: test
 
 movements:
@@ -625,7 +625,7 @@ describe('Piece Loader IT: structural-reform piece', () => {
     expect(config).not.toBeNull();
     expect(config!.name).toBe('structural-reform');
     expect(config!.movements.length).toBe(7);
-    expect(config!.maxIterations).toBe(50);
+    expect(config!.maxMovements).toBe(50);
     expect(config!.initialMovement).toBe('review');
   });
 
