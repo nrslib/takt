@@ -217,21 +217,21 @@ export function renderReportOutputInstruction(
 
   let heading: string;
   let createRule: string;
-  let appendRule: string;
+  let overwriteRule: string;
 
   if (language === 'ja') {
     heading = isMulti
       ? '**レポート出力:** Report Files に出力してください。'
       : '**レポート出力:** `Report File` に出力してください。';
     createRule = '- ファイルが存在しない場合: 新規作成';
-    appendRule = `- ファイルが存在する場合: \`## Iteration ${context.movementIteration}\` セクションを追記`;
+    overwriteRule = '- ファイルが存在する場合: 既存内容を `logs/reports-history/` に退避し、最新内容で上書き';
   } else {
     heading = isMulti
       ? '**Report output:** Output to the `Report Files` specified above.'
       : '**Report output:** Output to the `Report File` specified above.';
     createRule = '- If file does not exist: Create new file';
-    appendRule = `- If file exists: Append with \`## Iteration ${context.movementIteration}\` section`;
+    overwriteRule = '- If file exists: Move current content to `logs/reports-history/` and overwrite with latest report';
   }
 
-  return `${heading}\n${createRule}\n${appendRule}`;
+  return `${heading}\n${createRule}\n${overwriteRule}`;
 }

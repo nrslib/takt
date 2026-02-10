@@ -77,7 +77,7 @@ export class PieceEngine extends EventEmitter {
     this.options = options;
     this.loopDetector = new LoopDetector(config.loopDetection);
     this.cycleDetector = new CycleDetector(config.loopMonitors ?? []);
-    this.reportDir = `.takt/reports/${generateReportDir(task)}`;
+    this.reportDir = `.takt/runs/${generateReportDir(task)}/reports`;
     this.ensureReportDirExists();
     this.validateConfig();
     this.state = createInitialState(config, options);

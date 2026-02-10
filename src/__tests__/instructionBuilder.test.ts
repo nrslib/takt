@@ -706,7 +706,7 @@ describe('instruction-builder', () => {
 
       expect(result).toContain('**Report output:** Output to the `Report File` specified above.');
       expect(result).toContain('- If file does not exist: Create new file');
-      expect(result).toContain('Append with `## Iteration 1` section');
+      expect(result).toContain('- If file exists: Move current content to `logs/reports-history/` and overwrite with latest report');
     });
 
     it('should include explicit order instead of auto-generated', () => {
@@ -737,14 +737,14 @@ describe('instruction-builder', () => {
       expect(result).toContain('# Plan');
     });
 
-    it('should replace {movement_iteration} in report output instruction', () => {
+    it('should include overwrite-and-archive rule in report output instruction', () => {
       const step = createMinimalStep('Do work');
       step.outputContracts = [{ name: '00-plan.md' }];
       const ctx = createReportContext({ movementIteration: 5 });
 
       const result = buildReportInstruction(step, ctx);
 
-      expect(result).toContain('Append with `## Iteration 5` section');
+      expect(result).toContain('Move current content to `logs/reports-history/` and overwrite with latest report');
     });
 
     it('should include instruction body text', () => {

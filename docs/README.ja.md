@@ -744,7 +744,7 @@ personas:
 | `{movement_iteration}` | ムーブメントごとのイテレーション数（このムーブメントが実行された回数） |
 | `{previous_response}` | 前のムーブメントの出力（テンプレートになければ自動注入） |
 | `{user_inputs}` | ピース中の追加ユーザー入力（テンプレートになければ自動注入） |
-| `{report_dir}` | レポートディレクトリパス（例: `.takt/reports/20250126-143052-task-summary`） |
+| `{report_dir}` | レポートディレクトリパス（例: `.takt/runs/20250126-143052-task-summary/reports`） |
 | `{report:filename}` | `{report_dir}/filename` に展開（例: `{report:00-plan.md}`） |
 
 ### ピースの設計

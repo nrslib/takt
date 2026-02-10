@@ -154,13 +154,13 @@ export function mockDetectMatchedRuleSequence(matches: (RuleMatch | undefined)[]
 // --- Test environment setup ---
 
 /**
- * Create a temporary directory with the required .takt/reports structure.
+ * Create a temporary directory with the required .takt/runs report structure.
  * Returns the tmpDir path. Caller is responsible for cleanup.
  */
 export function createTestTmpDir(): string {
   const tmpDir = join(tmpdir(), `takt-engine-test-${randomUUID()}`);
   mkdirSync(tmpDir, { recursive: true });
-  mkdirSync(join(tmpDir, '.takt', 'reports', 'test-report-dir'), { recursive: true });
+  mkdirSync(join(tmpDir, '.takt', 'runs', 'test-report-dir', 'reports'), { recursive: true });
   return tmpDir;
 }
 
@@ -174,12 +174,27 @@ export function applyDefaultMocks(): void {
   vi.mocked(generateReportDir).mockReturnValue('test-report-dir');
 }
 
+type RemovableListeners = {
+  removeAllListeners: () => void;
+};
+
+function hasRemovableListeners(value: unknown): value is RemovableListeners {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  if (!('removeAllListeners' in value)) {
+    return false;
+  }
+  const candidate = value as { removeAllListeners: unknown };
+  return typeof candidate.removeAllListeners === 'function';
+}
+
 /**
  * Clean up PieceEngine instances to prevent EventEmitter memory leaks.
  * Call this in afterEach to ensure all event listeners are removed.
  */
-export function cleanupPieceEngine(engine: any): void {
-  if (engine && typeof engine.removeAllListeners === 'function') {
+export function cleanupPieceEngine(engine: unknown): void {
+  if (hasRemovableListeners(engine)) {
     engine.removeAllListeners();
   }
 }

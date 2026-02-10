@@ -744,7 +744,7 @@ Variables available in `instruction_template`:
 | `{movement_iteration}` | Per-movement iteration count (times this movement has been executed) |
 | `{previous_response}` | Output from previous movement (auto-injected if not in template) |
 | `{user_inputs}` | Additional user inputs during piece (auto-injected if not in template) |
-| `{report_dir}` | Report directory path (e.g., `.takt/reports/20250126-143052-task-summary`) |
+| `{report_dir}` | Report directory path (e.g., `.takt/runs/20250126-143052-task-summary/reports`) |
 | `{report:filename}` | Expands to `{report_dir}/filename` (e.g., `{report:00-plan.md}`) |
 
 ### Piece Design

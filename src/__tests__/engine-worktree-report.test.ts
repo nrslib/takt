@@ -51,11 +51,11 @@ function createWorktreeDirs(): { projectCwd: string; cloneCwd: string } {
   const projectCwd = join(base, 'project');
   const cloneCwd = join(base, 'clone');
 
-  // Project side: real .takt/reports directory (for non-worktree tests)
-  mkdirSync(join(projectCwd, '.takt', 'reports', 'test-report-dir'), { recursive: true });
+  // Project side: real .takt/runs report directory (for non-worktree tests)
+  mkdirSync(join(projectCwd, '.takt', 'runs', 'test-report-dir', 'reports'), { recursive: true });
 
-  // Clone side: .takt/reports directory (reports now written directly to clone)
-  mkdirSync(join(cloneCwd, '.takt', 'reports', 'test-report-dir'), { recursive: true });
+  // Clone side: .takt/runs report directory (reports now written directly to clone)
+  mkdirSync(join(cloneCwd, '.takt', 'runs', 'test-report-dir', 'reports'), { recursive: true });
 
   return { projectCwd, cloneCwd };
 }
@@ -121,8 +121,8 @@ describe('PieceEngine: worktree reportDir resolution', () => {
 
     // reportDir should be resolved from cloneCwd (cwd), not projectCwd
     // This prevents agents from discovering the main repository path via instruction
-    const expectedPath = join(cloneCwd, '.takt/reports/test-report-dir');
-    const unexpectedPath = join(projectCwd, '.takt/reports/test-report-dir');
+    const expectedPath = join(cloneCwd, '.takt/runs/test-report-dir/reports');
+    const unexpectedPath = join(projectCwd, '.takt/runs/test-report-dir/reports');
 
     expect(phaseCtx.reportDir).toBe(expectedPath);
     expect(phaseCtx.reportDir).not.toBe(unexpectedPath);
@@ -166,10 +166,10 @@ describe('PieceEngine: worktree reportDir resolution', () => {
     expect(runAgentMock).toHaveBeenCalled();
     const instruction = runAgentMock.mock.calls[0][1] as string;
 
-    const expectedPath = join(cloneCwd, '.takt/reports/test-report-dir');
+    const expectedPath = join(cloneCwd, '.takt/runs/test-report-dir/reports');
     expect(instruction).toContain(expectedPath);
     // In worktree mode, projectCwd path should NOT appear in instruction
-    expect(instruction).not.toContain(join(projectCwd, '.takt/reports/test-report-dir'));
+    expect(instruction).not.toContain(join(projectCwd, '.takt/runs/test-report-dir/reports'));
   });
 
   it('should use same path in non-worktree mode (cwd === projectCwd)', async () => {
@@ -195,7 +195,7 @@ describe('PieceEngine: worktree reportDir resolution', () => {
     expect(reportPhaseMock).toHaveBeenCalled();
     const phaseCtx = reportPhaseMock.mock.calls[0][2] as { reportDir: string };
 
-    const expectedPath = join(normalDir, '.takt/reports/test-report-dir');
+    const expectedPath = join(normalDir, '.takt/runs/test-report-dir/reports');
     expect(phaseCtx.reportDir).toBe(expectedPath);
   });
 });
