@@ -3,8 +3,12 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import type { PieceMovement } from '../core/models/types.js';
 import type { JudgmentContext } from '../core/piece/judgment/FallbackStrategy.js';
+import { runAgent } from '../agents/runner.js';
 import {
   AutoSelectStrategy,
   ReportBasedStrategy,
@@ -87,6 +91,48 @@ describe('JudgmentStrategies', () => {
       const strategy = new ReportBasedStrategy();
       // mockStep has no outputContracts field → getReportFiles returns []
       expect(strategy.canApply(mockContext)).toBe(false);
+    });
+
+    it('should use only latest report file from reports directory', async () => {
+      const tmpRoot = mkdtempSync(join(tmpdir(), 'takt-judgment-report-'));
+      try {
+        const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+        const historyDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'logs', 'reports-history');
+        mkdirSync(reportDir, { recursive: true });
+        mkdirSync(historyDir, { recursive: true });
+
+        const latestFile = '05-architect-review.md';
+        writeFileSync(join(reportDir, latestFile), 'LATEST-ONLY-CONTENT');
+        writeFileSync(join(historyDir, '05-architect-review.20260210T061143Z.md'), 'OLD-HISTORY-CONTENT');
+
+        const stepWithOutputContracts: PieceMovement = {
+          ...mockStep,
+          outputContracts: [{ name: latestFile }],
+        };
+
+        const runAgentMock = vi.mocked(runAgent);
+        runAgentMock.mockResolvedValue({
+          persona: 'conductor',
+          status: 'done',
+          content: '[TEST-MOVEMENT:1]',
+          timestamp: new Date('2026-02-10T07:11:43Z'),
+        });
+
+        const strategy = new ReportBasedStrategy();
+        const result = await strategy.execute({
+          ...mockContext,
+          step: stepWithOutputContracts,
+          reportDir,
+        });
+
+        expect(result.success).toBe(true);
+        expect(runAgentMock).toHaveBeenCalledTimes(1);
+        const instruction = runAgentMock.mock.calls[0]?.[1];
+        expect(instruction).toContain('LATEST-ONLY-CONTENT');
+        expect(instruction).not.toContain('OLD-HISTORY-CONTENT');
+      } finally {
+        rmSync(tmpRoot, { recursive: true, force: true });
+      }
     });
   });
 

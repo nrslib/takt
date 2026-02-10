@@ -6,6 +6,18 @@ piece_categories:
       - coding
       - minimal
       - compound-eye
+  🎨 Frontend:
+    pieces:
+      - frontend
+  ⚙️ Backend: {}
+  🔧 Expert:
+    Full Stack:
+      pieces:
+        - expert
+        - expert-cqrs
+  🛠️ Refactoring:
+    pieces:
+      - structural-reform
   🔍 Review:
     pieces:
       - review-fix-minimal
@@ -14,16 +26,6 @@ piece_categories:
     pieces:
       - unit-test
       - e2e-test
-  🎨 Frontend: {}
-  ⚙️ Backend: {}
-  🔧 Expert:
-    Full Stack:
-      pieces:
-        - expert
-        - expert-cqrs
-    Refactoring:
-      pieces:
-        - structural-reform
   Others:
     pieces:
       - research

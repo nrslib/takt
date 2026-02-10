@@ -6,16 +6,29 @@
  */
 
 import * as path from 'node:path';
+import * as fs from 'node:fs';
 import { promptInput, confirm } from '../../../shared/prompt/index.js';
 import { success, info, error } from '../../../shared/ui/index.js';
 import { TaskRunner, type TaskFileData } from '../../../infra/task/index.js';
 import { getPieceDescription, loadGlobalConfig } from '../../../infra/config/index.js';
 import { determinePiece } from '../execute/selectAndExecute.js';
-import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
+import { createLogger, getErrorMessage, generateReportDir } from '../../../shared/utils/index.js';
 import { isIssueReference, resolveIssueTask, parseIssueNumbers, createIssue } from '../../../infra/github/index.js';
 import { interactiveMode } from '../../interactive/index.js';
 
 const log = createLogger('add-task');
+
+function resolveUniqueTaskSlug(cwd: string, baseSlug: string): string {
+  let sequence = 1;
+  let slug = baseSlug;
+  let taskDir = path.join(cwd, '.takt', 'tasks', slug);
+  while (fs.existsSync(taskDir)) {
+    sequence += 1;
+    slug = `${baseSlug}-${sequence}`;
+    taskDir = path.join(cwd, '.takt', 'tasks', slug);
+  }
+  return slug;
+}
 
 /**
  * Save a task entry to .takt/tasks.yaml.
@@ -29,6 +42,12 @@ export async function saveTaskFile(
   options?: { piece?: string; issue?: number; worktree?: boolean | string; branch?: string; autoPr?: boolean },
 ): Promise<{ taskName: string; tasksFile: string }> {
   const runner = new TaskRunner(cwd);
+  const taskSlug = resolveUniqueTaskSlug(cwd, generateReportDir(taskContent));
+  const taskDir = path.join(cwd, '.takt', 'tasks', taskSlug);
+  const taskDirRelative = `.takt/tasks/${taskSlug}`;
+  const orderPath = path.join(taskDir, 'order.md');
+  fs.mkdirSync(taskDir, { recursive: true });
+  fs.writeFileSync(orderPath, taskContent, 'utf-8');
   const config: Omit<TaskFileData, 'task'> = {
     ...(options?.worktree !== undefined && { worktree: options.worktree }),
     ...(options?.branch && { branch: options.branch }),
@@ -36,7 +55,10 @@ export async function saveTaskFile(
     ...(options?.issue !== undefined && { issue: options.issue }),
     ...(options?.autoPr !== undefined && { auto_pr: options.autoPr }),
   };
-  const created = runner.addTask(taskContent, config);
+  const created = runner.addTask(taskContent, {
+    ...config,
+    task_dir: taskDirRelative,
+  });
   const tasksFile = path.join(cwd, '.takt', 'tasks.yaml');
   log.info('Task created', { taskName: created.name, tasksFile, config });
   return { taskName: created.name, tasksFile };

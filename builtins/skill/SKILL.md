@@ -116,7 +116,15 @@ TeamCreate tool を呼ぶ:
 - `permission_mode = コマンドで解析された権限モード（"bypassPermissions" / "acceptEdits" / "default"）`
 - `movement_history = []`（遷移履歴。Loop Monitor 用）
 
-**レポートディレクトリ**: いずれかの movement に `report` フィールドがある場合、`.takt/reports/{YYYYMMDD-HHmmss}-{slug}/` を作成し、パスを `report_dir` 変数に保持する。
+**実行ディレクトリ**: いずれかの movement に `report` フィールドがある場合、`.takt/runs/{YYYYMMDD-HHmmss}-{slug}/` を作成し、以下を配置する。
+- `reports/`（レポート出力）
+- `context/knowledge/`（Knowledge スナップショット）
+- `context/policy/`（Policy スナップショット）
+- `context/previous_responses/`（Previous Response 履歴 + `latest.md`）
+- `logs/`（実行ログ）
+- `meta.json`（run メタデータ）
+
+レポート出力先パスを `report_dir` 変数（`.takt/runs/{slug}/reports`）として保持する。
 
 次に **手順 5** に進む。
 

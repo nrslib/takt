@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 // Mock external dependencies before importing
@@ -94,6 +94,7 @@ function buildArpeggioPieceConfig(arpeggioConfig: ArpeggioMovementConfig, tmpDir
 function createEngineOptions(tmpDir: string): PieceEngineOptions {
   return {
     projectCwd: tmpDir,
+    reportDirName: 'test-report-dir',
     detectRuleIndex: () => 0,
     callAiJudge: async () => 0,
   };
@@ -142,6 +143,12 @@ describe('ArpeggioRunner integration', () => {
     const output = state.movementOutputs.get('process');
     expect(output).toBeDefined();
     expect(output!.content).toBe('Processed Alice\nProcessed Bob\nProcessed Charlie');
+
+    const previousDir = join(tmpDir, '.takt', 'runs', 'test-report-dir', 'context', 'previous_responses');
+    const previousFiles = readdirSync(previousDir);
+    expect(state.previousResponseSourcePath).toMatch(/^\.takt\/runs\/test-report-dir\/context\/previous_responses\/process\.1\.\d{8}T\d{6}Z\.md$/);
+    expect(previousFiles).toContain('latest.md');
+    expect(readFileSync(join(previousDir, 'latest.md'), 'utf-8')).toBe('Processed Alice\nProcessed Bob\nProcessed Charlie');
   });
 
   it('should handle batch_size > 1', async () => {

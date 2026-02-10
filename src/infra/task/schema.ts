@@ -3,6 +3,7 @@
  */
 
 import { z } from 'zod/v4';
+import { isValidTaskDir } from '../../shared/utils/taskPaths.js';
 
 /**
  * Per-task execution config schema.
@@ -40,19 +41,35 @@ export type TaskFailure = z.infer<typeof TaskFailureSchema>;
 export const TaskRecordSchema = TaskExecutionConfigSchema.extend({
   name: z.string().min(1),
   status: TaskStatusSchema,
-  content: z.string().optional(),
-  content_file: z.string().optional(),
+  content: z.string().min(1).optional(),
+  content_file: z.string().min(1).optional(),
+  task_dir: z.string().optional(),
   created_at: z.string().min(1),
   started_at: z.string().nullable(),
   completed_at: z.string().nullable(),
   owner_pid: z.number().int().positive().nullable().optional(),
   failure: TaskFailureSchema.optional(),
 }).superRefine((value, ctx) => {
-  if (!value.content && !value.content_file) {
+  const sourceFields = [value.content, value.content_file, value.task_dir].filter((field) => field !== undefined);
+  if (sourceFields.length === 0) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['content'],
-      message: 'Either content or content_file is required.',
+      message: 'Either content, content_file, or task_dir is required.',
+    });
+  }
+  if (sourceFields.length > 1) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['content'],
+      message: 'Exactly one of content, content_file, or task_dir must be set.',
+    });
+  }
+  if (value.task_dir !== undefined && !isValidTaskDir(value.task_dir)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['task_dir'],
+      message: 'task_dir must match .takt/tasks/<slug> format.',
     });
   }
 

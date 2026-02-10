@@ -15,12 +15,13 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setMockScenario, resetScenario } from '../infra/mock/index.js';
 import type { PieceConfig, PieceMovement, PieceRule } from '../core/models/index.js';
-import { callAiJudge, detectRuleIndex } from '../infra/claude/index.js';
+import { detectRuleIndex } from '../infra/claude/index.js';
+import { callAiJudge } from '../agents/ai-judge.js';
 
 // --- Mocks ---
 
-vi.mock('../infra/claude/client.js', async (importOriginal) => {
-  const original = await importOriginal<typeof import('../infra/claude/client.js')>();
+vi.mock('../agents/ai-judge.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../agents/ai-judge.js')>();
   return {
     ...original,
     callAiJudge: vi.fn().mockResolvedValue(-1),

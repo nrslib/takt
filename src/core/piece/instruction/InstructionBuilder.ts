@@ -11,6 +11,72 @@ import { buildEditRule } from './instruction-context.js';
 import { escapeTemplateChars, replaceTemplatePlaceholders } from './escape.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 
+const CONTEXT_MAX_CHARS = 2000;
+
+interface PreparedContextBlock {
+  readonly content: string;
+  readonly truncated: boolean;
+}
+
+function trimContextContent(content: string): PreparedContextBlock {
+  if (content.length <= CONTEXT_MAX_CHARS) {
+    return { content, truncated: false };
+  }
+  return {
+    content: `${content.slice(0, CONTEXT_MAX_CHARS)}\n...TRUNCATED...`,
+    truncated: true,
+  };
+}
+
+function renderConflictNotice(): string {
+  return 'If prompt content conflicts with source files, source files take precedence.';
+}
+
+function prepareKnowledgeContent(content: string, sourcePath?: string): string {
+  const prepared = trimContextContent(content);
+  const lines: string[] = [prepared.content];
+  if (prepared.truncated && sourcePath) {
+    lines.push(
+      '',
+      `Knowledge is truncated. You MUST consult the source files before making decisions. Source: ${sourcePath}`,
+    );
+  }
+  if (sourcePath) {
+    lines.push('', `Knowledge Source: ${sourcePath}`);
+  }
+  lines.push('', renderConflictNotice());
+  return lines.join('\n');
+}
+
+function preparePolicyContent(content: string, sourcePath?: string): string {
+  const prepared = trimContextContent(content);
+  const lines: string[] = [prepared.content];
+  if (prepared.truncated && sourcePath) {
+    lines.push(
+      '',
+      `Policy is authoritative. If truncated, you MUST read the full policy file and follow it strictly. Source: ${sourcePath}`,
+    );
+  }
+  if (sourcePath) {
+    lines.push('', `Policy Source: ${sourcePath}`);
+  }
+  lines.push('', renderConflictNotice());
+  return lines.join('\n');
+}
+
+function preparePreviousResponseContent(content: string, sourcePath?: string): string {
+  const prepared = trimContextContent(content);
+  const lines: string[] = [prepared.content];
+  if (prepared.truncated && sourcePath) {
+    lines.push('', `Previous Response is truncated. Source: ${sourcePath}`);
+  }
+  if (sourcePath) {
+    lines.push('', `Source: ${sourcePath}`);
+  }
+  lines.push('', renderConflictNotice());
+  return lines.join('\n');
+}
+
 /**
  * Check if an output contract entry is the item form (OutputContractItem).
  */
@@ -72,8 +138,14 @@ export class InstructionBuilder {
       this.context.previousOutput &&
       !hasPreviousResponsePlaceholder
     );
-    const previousResponse = hasPreviousResponse && this.context.previousOutput
-      ? escapeTemplateChars(this.context.previousOutput.content)
+    const previousResponsePrepared = this.step.passPreviousResponse && this.context.previousOutput
+      ? preparePreviousResponseContent(
+          this.context.previousOutput.content,
+          this.context.previousResponseSourcePath,
+        )
+      : '';
+    const previousResponse = hasPreviousResponse
+      ? escapeTemplateChars(previousResponsePrepared)
       : '';
 
     // User Inputs
@@ -86,7 +158,10 @@ export class InstructionBuilder {
     const instructions = replaceTemplatePlaceholders(
       this.step.instructionTemplate,
       this.step,
-      this.context,
+      {
+        ...this.context,
+        previousResponseText: previousResponsePrepared || undefined,
+      },
     );
 
     // Piece name and description
@@ -101,12 +176,18 @@ export class InstructionBuilder {
     // Policy injection (top + bottom reminder per "Lost in the Middle" research)
     const policyContents = this.context.policyContents ?? this.step.policyContents;
     const hasPolicy = !!(policyContents && policyContents.length > 0);
-    const policyContent = hasPolicy ? policyContents!.join('\n\n---\n\n') : '';
+    const policyJoined = hasPolicy ? policyContents!.join('\n\n---\n\n') : '';
+    const policyContent = hasPolicy
+      ? preparePolicyContent(policyJoined, this.context.policySourcePath)
+      : '';
 
     // Knowledge injection (domain-specific knowledge, no reminder needed)
     const knowledgeContents = this.context.knowledgeContents ?? this.step.knowledgeContents;
     const hasKnowledge = !!(knowledgeContents && knowledgeContents.length > 0);
-    const knowledgeContent = hasKnowledge ? knowledgeContents!.join('\n\n---\n\n') : '';
+    const knowledgeJoined = hasKnowledge ? knowledgeContents!.join('\n\n---\n\n') : '';
+    const knowledgeContent = hasKnowledge
+      ? prepareKnowledgeContent(knowledgeJoined, this.context.knowledgeSourcePath)
+      : '';
 
     // Quality gates injection (AI directives for movement completion)
     const hasQualityGates = !!(this.step.qualityGates && this.step.qualityGates.length > 0);
@@ -217,21 +298,21 @@ export function renderReportOutputInstruction(
 
   let heading: string;
   let createRule: string;
-  let appendRule: string;
+  let overwriteRule: string;
 
   if (language === 'ja') {
     heading = isMulti
       ? '**レポート出力:** Report Files に出力してください。'
       : '**レポート出力:** `Report File` に出力してください。';
     createRule = '- ファイルが存在しない場合: 新規作成';
-    appendRule = `- ファイルが存在する場合: \`## Iteration ${context.movementIteration}\` セクションを追記`;
+    overwriteRule = '- ファイルが存在する場合: 既存内容を `logs/reports-history/` に退避し、最新内容で上書き';
   } else {
     heading = isMulti
       ? '**Report output:** Output to the `Report Files` specified above.'
       : '**Report output:** Output to the `Report File` specified above.';
     createRule = '- If file does not exist: Create new file';
-    appendRule = `- If file exists: Append with \`## Iteration ${context.movementIteration}\` section`;
+    overwriteRule = '- If file exists: Move current content to `logs/reports-history/` and overwrite with latest report';
   }
 
-  return `${heading}\n${createRule}\n${appendRule}`;
+  return `${heading}\n${createRule}\n${overwriteRule}`;
 }

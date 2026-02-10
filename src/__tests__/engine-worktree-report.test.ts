@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, rmSync, mkdirSync } from 'node:fs';
+import { existsSync, rmSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -51,11 +51,11 @@ function createWorktreeDirs(): { projectCwd: string; cloneCwd: string } {
   const projectCwd = join(base, 'project');
   const cloneCwd = join(base, 'clone');
 
-  // Project side: real .takt/reports directory (for non-worktree tests)
-  mkdirSync(join(projectCwd, '.takt', 'reports', 'test-report-dir'), { recursive: true });
+  // Project side: real .takt/runs directory (for non-worktree tests)
+  mkdirSync(join(projectCwd, '.takt', 'runs', 'test-report-dir', 'reports'), { recursive: true });
 
-  // Clone side: .takt/reports directory (reports now written directly to clone)
-  mkdirSync(join(cloneCwd, '.takt', 'reports', 'test-report-dir'), { recursive: true });
+  // Clone side: .takt/runs directory (reports now written directly to clone)
+  mkdirSync(join(cloneCwd, '.takt', 'runs', 'test-report-dir', 'reports'), { recursive: true });
 
   return { projectCwd, cloneCwd };
 }
@@ -121,8 +121,8 @@ describe('PieceEngine: worktree reportDir resolution', () => {
 
     // reportDir should be resolved from cloneCwd (cwd), not projectCwd
     // This prevents agents from discovering the main repository path via instruction
-    const expectedPath = join(cloneCwd, '.takt/reports/test-report-dir');
-    const unexpectedPath = join(projectCwd, '.takt/reports/test-report-dir');
+    const expectedPath = join(cloneCwd, '.takt/runs/test-report-dir/reports');
+    const unexpectedPath = join(projectCwd, '.takt/runs/test-report-dir/reports');
 
     expect(phaseCtx.reportDir).toBe(expectedPath);
     expect(phaseCtx.reportDir).not.toBe(unexpectedPath);
@@ -166,10 +166,10 @@ describe('PieceEngine: worktree reportDir resolution', () => {
     expect(runAgentMock).toHaveBeenCalled();
     const instruction = runAgentMock.mock.calls[0][1] as string;
 
-    const expectedPath = join(cloneCwd, '.takt/reports/test-report-dir');
+    const expectedPath = join(cloneCwd, '.takt/runs/test-report-dir/reports');
     expect(instruction).toContain(expectedPath);
     // In worktree mode, projectCwd path should NOT appear in instruction
-    expect(instruction).not.toContain(join(projectCwd, '.takt/reports/test-report-dir'));
+    expect(instruction).not.toContain(join(projectCwd, '.takt/runs/test-report-dir/reports'));
   });
 
   it('should use same path in non-worktree mode (cwd === projectCwd)', async () => {
@@ -195,7 +195,100 @@ describe('PieceEngine: worktree reportDir resolution', () => {
     expect(reportPhaseMock).toHaveBeenCalled();
     const phaseCtx = reportPhaseMock.mock.calls[0][2] as { reportDir: string };
 
-    const expectedPath = join(normalDir, '.takt/reports/test-report-dir');
+    const expectedPath = join(normalDir, '.takt/runs/test-report-dir/reports');
     expect(phaseCtx.reportDir).toBe(expectedPath);
+  });
+
+  it('should use explicit reportDirName when provided', async () => {
+    const normalDir = projectCwd;
+    const config = buildSimpleConfig();
+    const engine = new PieceEngine(config, normalDir, 'test task', {
+      projectCwd: normalDir,
+      reportDirName: '20260201-015714-foptng',
+    });
+
+    mockRunAgentSequence([
+      makeResponse({ persona: 'review', content: 'Review done' }),
+    ]);
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'tag' as const },
+    ]);
+
+    await engine.run();
+
+    const reportPhaseMock = vi.mocked(runReportPhase);
+    expect(reportPhaseMock).toHaveBeenCalled();
+    const phaseCtx = reportPhaseMock.mock.calls[0][2] as { reportDir: string };
+    expect(phaseCtx.reportDir).toBe(join(normalDir, '.takt/runs/20260201-015714-foptng/reports'));
+  });
+
+  it('should reject invalid explicit reportDirName', () => {
+    const normalDir = projectCwd;
+    const config = buildSimpleConfig();
+
+    expect(() => new PieceEngine(config, normalDir, 'test task', {
+      projectCwd: normalDir,
+      reportDirName: '..',
+    })).toThrow('Invalid reportDirName: ..');
+
+    expect(() => new PieceEngine(config, normalDir, 'test task', {
+      projectCwd: normalDir,
+      reportDirName: '.',
+    })).toThrow('Invalid reportDirName: .');
+
+    expect(() => new PieceEngine(config, normalDir, 'test task', {
+      projectCwd: normalDir,
+      reportDirName: '',
+    })).toThrow('Invalid reportDirName: ');
+  });
+
+  it('should persist context snapshots and update latest previous response', async () => {
+    const normalDir = projectCwd;
+    const config: PieceConfig = {
+      name: 'snapshot-test',
+      description: 'Test',
+      maxIterations: 10,
+      initialMovement: 'implement',
+      movements: [
+        makeMovement('implement', {
+          policyContents: ['Policy content'],
+          knowledgeContents: ['Knowledge content'],
+          rules: [makeRule('go-review', 'review')],
+        }),
+        makeMovement('review', {
+          rules: [makeRule('approved', 'COMPLETE')],
+        }),
+      ],
+    };
+    const engine = new PieceEngine(config, normalDir, 'test task', {
+      projectCwd: normalDir,
+      reportDirName: 'test-report-dir',
+    });
+
+    mockRunAgentSequence([
+      makeResponse({ persona: 'implement', content: 'implement output' }),
+      makeResponse({ persona: 'review', content: 'review output' }),
+    ]);
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'tag' as const },
+      { index: 0, method: 'tag' as const },
+    ]);
+
+    await engine.run();
+
+    const base = join(normalDir, '.takt', 'runs', 'test-report-dir', 'context');
+    const knowledgeDir = join(base, 'knowledge');
+    const policyDir = join(base, 'policy');
+    const previousResponsesDir = join(base, 'previous_responses');
+
+    const knowledgeFiles = readdirSync(knowledgeDir);
+    const policyFiles = readdirSync(policyDir);
+    const previousResponseFiles = readdirSync(previousResponsesDir);
+
+    expect(knowledgeFiles.some((name) => name.endsWith('.md'))).toBe(true);
+    expect(policyFiles.some((name) => name.endsWith('.md'))).toBe(true);
+    expect(previousResponseFiles).toContain('latest.md');
+    expect(previousResponseFiles.filter((name) => name.endsWith('.md')).length).toBe(3);
+    expect(readFileSync(join(previousResponsesDir, 'latest.md'), 'utf-8')).toBe('review output');
   });
 });

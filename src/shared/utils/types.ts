@@ -116,20 +116,6 @@ export type NdjsonRecord =
   | NdjsonInteractiveStart
   | NdjsonInteractiveEnd;
 
-// --- Conversation log types ---
-
-/** Pointer metadata for latest/previous log files */
-export interface LatestLogPointer {
-  sessionId: string;
-  logFile: string;
-  task: string;
-  pieceName: string;
-  status: SessionLog['status'];
-  startTime: string;
-  updatedAt: string;
-  iterations: number;
-}
-
 /** Record for debug prompt/response log (debug-*-prompts.jsonl) */
 export interface PromptLogRecord {
   movement: string;

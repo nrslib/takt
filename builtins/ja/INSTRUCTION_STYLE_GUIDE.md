@@ -84,7 +84,7 @@ InstructionBuilder が instruction_template 内の `{変数名}` を展開する
 | `{iteration}` | ピース全体のイテレーション数 |
 | `{max_iterations}` | 最大イテレーション数 |
 | `{movement_iteration}` | ムーブメント単位のイテレーション数 |
-| `{report_dir}` | レポートディレクトリ名 |
+| `{report_dir}` | レポートディレクトリ名（`.takt/runs/{slug}/reports`） |
 | `{report:filename}` | 指定レポートの内容展開（ファイルが存在する場合） |
 | `{cycle_count}` | ループモニターで検出されたサイクル回数（`loop_monitors` 専用） |
 
@@ -222,7 +222,7 @@ InstructionBuilder が instruction_template 内の `{変数名}` を展開する
 
 # 非許容
 **参照するレポート:**
-- .takt/reports/20250101-task/ai-review.md  ← パスのハードコード
+- .takt/runs/20250101-task/reports/ai-review.md  ← パスのハードコード
 ```
 
 ---

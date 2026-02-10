@@ -161,14 +161,49 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(tasks[0]?.content).toBe('Absolute task content');
   });
 
-  it('should prefer inline content over content_file', () => {
+  it('should build task instruction from task_dir and expose taskDir on TaskInfo', () => {
+    mkdirSync(join(testDir, '.takt', 'tasks', '20260201-000000-demo'), { recursive: true });
+    writeFileSync(
+      join(testDir, '.takt', 'tasks', '20260201-000000-demo', 'order.md'),
+      'Detailed long spec',
+      'utf-8',
+    );
     writeTasksFile(testDir, [createPendingRecord({
-      content: 'Inline content',
-      content_file: 'missing-content-file.txt',
+      content: undefined,
+      task_dir: '.takt/tasks/20260201-000000-demo',
     })]);
 
     const tasks = runner.listTasks();
-    expect(tasks[0]?.content).toBe('Inline content');
+    expect(tasks[0]?.taskDir).toBe('.takt/tasks/20260201-000000-demo');
+    expect(tasks[0]?.content).toContain('Implement using only the files');
+    expect(tasks[0]?.content).toContain('.takt/tasks/20260201-000000-demo');
+    expect(tasks[0]?.content).toContain('.takt/tasks/20260201-000000-demo/order.md');
+  });
+
+  it('should throw when task_dir order.md is missing', () => {
+    mkdirSync(join(testDir, '.takt', 'tasks', '20260201-000000-missing'), { recursive: true });
+    writeTasksFile(testDir, [createPendingRecord({
+      content: undefined,
+      task_dir: '.takt/tasks/20260201-000000-missing',
+    })]);
+
+    expect(() => runner.listTasks()).toThrow(/Task spec file is missing/i);
+  });
+
+  it('should reset tasks file when both content and content_file are set', () => {
+    writeTasksFile(testDir, [{
+      name: 'task-a',
+      status: 'pending',
+      content: 'Inline content',
+      content_file: 'missing-content-file.txt',
+      created_at: '2026-02-09T00:00:00.000Z',
+      started_at: null,
+      completed_at: null,
+      owner_pid: null,
+    }]);
+
+    expect(runner.listTasks()).toEqual([]);
+    expect(existsSync(join(testDir, '.takt', 'tasks.yaml'))).toBe(false);
   });
 
   it('should throw when content_file target is missing', () => {

@@ -31,8 +31,8 @@ const {
   mockPushBranch: vi.fn(),
 }));
 
-vi.mock('../infra/claude/client.js', async (importOriginal) => {
-  const original = await importOriginal<typeof import('../infra/claude/client.js')>();
+vi.mock('../agents/ai-judge.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../agents/ai-judge.js')>();
   return {
     ...original,
     callAiJudge: vi.fn().mockImplementation(async (content: string, conditions: { index: number; text: string }[]) => {
@@ -96,7 +96,6 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
     iterations: 0,
   }),
   finalizeSessionLog: vi.fn().mockImplementation((log, status) => ({ ...log, status })),
-  updateLatestPointer: vi.fn(),
   initNdjsonLog: vi.fn().mockReturnValue('/tmp/test.ndjson'),
   appendNdjsonLine: vi.fn(),
   generateReportDir: vi.fn().mockReturnValue('test-report-dir'),

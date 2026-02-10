@@ -111,8 +111,11 @@ vi.mock('../infra/github/index.js', () => ({
 
 vi.mock('../infra/claude/index.js', () => ({
   interruptAllQueries: vi.fn(),
-  callAiJudge: vi.fn(),
   detectRuleIndex: vi.fn(),
+}));
+
+vi.mock('../agents/ai-judge.js', () => ({
+  callAiJudge: vi.fn(),
 }));
 
 vi.mock('../shared/exitCodes.js', () => ({

@@ -203,11 +203,11 @@ describe('Instruction Builder IT: report_dir expansion', () => {
     const step = makeMovement({
       instructionTemplate: 'Read the plan from {report_dir}/00-plan.md',
     });
-    const ctx = makeContext({ reportDir: '/tmp/test-project/.takt/reports/20250126-task' });
+    const ctx = makeContext({ reportDir: '/tmp/test-project/.takt/runs/20250126-task/reports' });
 
     const result = buildInstruction(step, ctx);
 
-    expect(result).toContain('Read the plan from /tmp/test-project/.takt/reports/20250126-task/00-plan.md');
+    expect(result).toContain('Read the plan from /tmp/test-project/.takt/runs/20250126-task/reports/00-plan.md');
   });
 
   it('should replace {report:filename} with full path', () => {
@@ -289,13 +289,13 @@ describe('Instruction Builder IT: buildReportInstruction', () => {
 
     const result = buildReportInstruction(step, {
       cwd: '/tmp/test',
-      reportDir: '/tmp/test/.takt/reports/test-dir',
+      reportDir: '/tmp/test/.takt/runs/test-dir/reports',
       movementIteration: 1,
       language: 'en',
     });
 
     expect(result).toContain('00-plan.md');
-    expect(result).toContain('/tmp/test/.takt/reports/test-dir');
+    expect(result).toContain('/tmp/test/.takt/runs/test-dir/reports');
     expect(result).toContain('report');
   });
 

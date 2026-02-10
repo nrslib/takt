@@ -216,8 +216,38 @@ describe('TaskRecordSchema', () => {
       expect(() => TaskRecordSchema.parse(record)).not.toThrow();
     });
 
-    it('should reject record with neither content nor content_file', () => {
+    it('should accept record with task_dir', () => {
+      const record = { ...makePendingRecord(), content: undefined, task_dir: '.takt/tasks/20260201-000000-task' };
+      expect(() => TaskRecordSchema.parse(record)).not.toThrow();
+    });
+
+    it('should reject record with neither content, content_file, nor task_dir', () => {
       const record = { ...makePendingRecord(), content: undefined };
+      expect(() => TaskRecordSchema.parse(record)).toThrow();
+    });
+
+    it('should reject record with both content and task_dir', () => {
+      const record = { ...makePendingRecord(), task_dir: '.takt/tasks/20260201-000000-task' };
+      expect(() => TaskRecordSchema.parse(record)).toThrow();
+    });
+
+    it('should reject record with invalid task_dir format', () => {
+      const record = { ...makePendingRecord(), content: undefined, task_dir: '.takt/reports/invalid' };
+      expect(() => TaskRecordSchema.parse(record)).toThrow();
+    });
+
+    it('should reject record with parent-directory task_dir', () => {
+      const record = { ...makePendingRecord(), content: undefined, task_dir: '.takt/tasks/..' };
+      expect(() => TaskRecordSchema.parse(record)).toThrow();
+    });
+
+    it('should reject record with empty content', () => {
+      const record = { ...makePendingRecord(), content: '' };
+      expect(() => TaskRecordSchema.parse(record)).toThrow();
+    });
+
+    it('should reject record with empty content_file', () => {
+      const record = { ...makePendingRecord(), content: undefined, content_file: '' };
       expect(() => TaskRecordSchema.parse(record)).toThrow();
     });
   });

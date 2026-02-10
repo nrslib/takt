@@ -2,15 +2,14 @@
  * Session management utilities
  */
 
-import { existsSync, readFileSync, copyFileSync, appendFileSync } from 'node:fs';
+import { existsSync, readFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { getProjectLogsDir, getGlobalLogsDir, ensureDir, writeFileAtomic } from '../config/index.js';
+import { ensureDir } from '../config/index.js';
 import { generateReportDir as buildReportDir } from '../../shared/utils/index.js';
 import type {
   SessionLog,
   NdjsonRecord,
   NdjsonPieceStart,
-  LatestLogPointer,
 } from '../../shared/utils/index.js';
 
 export type {
@@ -25,7 +24,6 @@ export type {
   NdjsonInteractiveStart,
   NdjsonInteractiveEnd,
   NdjsonRecord,
-  LatestLogPointer,
 } from '../../shared/utils/index.js';
 
 /** Failure information extracted from session log */
@@ -44,7 +42,7 @@ export interface FailureInfo {
 
 /**
  * Manages session lifecycle: ID generation, NDJSON logging,
- * session log creation/loading, and latest pointer maintenance.
+ * and session log creation/loading.
  */
 export class SessionManager {
   /** Append a single NDJSON line to a log file */
@@ -58,11 +56,9 @@ export class SessionManager {
     sessionId: string,
     task: string,
     pieceName: string,
-    projectDir?: string,
+    options: { logsDir: string },
   ): string {
-    const logsDir = projectDir
-      ? getProjectLogsDir(projectDir)
-      : getGlobalLogsDir();
+    const { logsDir } = options;
     ensureDir(logsDir);
 
     const filepath = join(logsDir, `${sessionId}.jsonl`);
@@ -218,38 +214,6 @@ export class SessionManager {
     return contextParts.join('\n\n---\n\n');
   }
 
-  /** Update latest.json pointer file */
-  updateLatestPointer(
-    log: SessionLog,
-    sessionId: string,
-    projectDir?: string,
-    options?: { copyToPrevious?: boolean },
-  ): void {
-    const logsDir = projectDir
-      ? getProjectLogsDir(projectDir)
-      : getGlobalLogsDir();
-    ensureDir(logsDir);
-
-    const latestPath = join(logsDir, 'latest.json');
-    const previousPath = join(logsDir, 'previous.json');
-
-    if (options?.copyToPrevious && existsSync(latestPath)) {
-      copyFileSync(latestPath, previousPath);
-    }
-
-    const pointer: LatestLogPointer = {
-      sessionId,
-      logFile: `${sessionId}.jsonl`,
-      task: log.task,
-      pieceName: log.pieceName,
-      status: log.status,
-      startTime: log.startTime,
-      updatedAt: new Date().toISOString(),
-      iterations: log.iterations,
-    };
-
-    writeFileAtomic(latestPath, JSON.stringify(pointer, null, 2));
-  }
 }
 
 const defaultManager = new SessionManager();
@@ -262,9 +226,9 @@ export function initNdjsonLog(
   sessionId: string,
   task: string,
   pieceName: string,
-  projectDir?: string,
+  options: { logsDir: string },
 ): string {
-  return defaultManager.initNdjsonLog(sessionId, task, pieceName, projectDir);
+  return defaultManager.initNdjsonLog(sessionId, task, pieceName, options);
 }
 
 
@@ -302,15 +266,6 @@ export function loadSessionLog(filepath: string): SessionLog | null {
 
 export function loadProjectContext(projectDir: string): string {
   return defaultManager.loadProjectContext(projectDir);
-}
-
-export function updateLatestPointer(
-  log: SessionLog,
-  sessionId: string,
-  projectDir?: string,
-  options?: { copyToPrevious?: boolean },
-): void {
-  defaultManager.updateLatestPointer(log, sessionId, projectDir, options);
 }
 
 /**

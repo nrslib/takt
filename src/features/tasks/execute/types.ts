@@ -42,6 +42,8 @@ export interface PieceExecutionOptions {
   startMovement?: string;
   /** Retry note explaining why task is being retried */
   retryNote?: string;
+  /** Override report directory name (e.g. "20260201-015714-foptng") */
+  reportDirName?: string;
   /** External abort signal for parallel execution — when provided, SIGINT handling is delegated to caller */
   abortSignal?: AbortSignal;
   /** Task name prefix for parallel execution output (e.g. "[task-name] output...") */
@@ -74,6 +76,8 @@ export interface ExecuteTaskOptions {
   startMovement?: string;
   /** Retry note explaining why task is being retried */
   retryNote?: string;
+  /** Override report directory name (e.g. "20260201-015714-foptng") */
+  reportDirName?: string;
   /** External abort signal for parallel execution — when provided, SIGINT handling is delegated to caller */
   abortSignal?: AbortSignal;
   /** Task name prefix for parallel execution output (e.g. "[task-name] output...") */

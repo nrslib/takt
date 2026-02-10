@@ -14,7 +14,6 @@ export type {
   NdjsonInteractiveStart,
   NdjsonInteractiveEnd,
   NdjsonRecord,
-  LatestLogPointer,
 } from './session.js';
 
 export {
@@ -28,5 +27,4 @@ export {
   finalizeSessionLog,
   loadSessionLog,
   loadProjectContext,
-  updateLatestPointer,
 } from './session.js';

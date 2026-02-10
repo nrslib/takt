@@ -6,6 +6,18 @@ piece_categories:
       - coding
       - minimal
       - compound-eye
+  🎨 フロントエンド:
+    pieces:
+      - frontend
+  ⚙️ バックエンド: {}
+  🔧 エキスパート:
+    フルスタック:
+      pieces:
+        - expert
+        - expert-cqrs
+  🛠️ リファクタリング:
+    pieces:
+      - structural-reform
   🔍 レビュー:
     pieces:
       - review-fix-minimal
@@ -14,16 +26,6 @@ piece_categories:
     pieces:
       - unit-test
       - e2e-test
-  🎨 フロントエンド: {}
-  ⚙️ バックエンド: {}
-  🔧 エキスパート:
-    フルスタック:
-      pieces:
-        - expert
-        - expert-cqrs
-    リファクタリング:
-      pieces:
-        - structural-reform
   その他:
     pieces:
       - research

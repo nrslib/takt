@@ -40,6 +40,7 @@ export class StateManager {
       iteration: 0,
       movementOutputs: new Map(),
       lastOutput: undefined,
+      previousResponseSourcePath: undefined,
       userInputs,
       personaSessions,
       movementIterations: new Map(),

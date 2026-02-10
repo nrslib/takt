@@ -1,0 +1,286 @@
+name: frontend
+description: フロントエンド・セキュリティ・QA専門家レビュー
+max_iterations: 30
+initial_movement: plan
+movements:
+  - name: plan
+    edit: false
+    persona: planner
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Bash
+      - WebSearch
+      - WebFetch
+    instruction: plan
+    rules:
+      - condition: タスク分析と計画が完了した
+        next: implement
+      - condition: 要件が不明確で計画を立てられない
+        next: ABORT
+    output_contracts:
+      report:
+        - name: 00-plan.md
+          format: plan
+  - name: implement
+    edit: true
+    persona: coder
+    pass_previous_response: false
+    policy:
+      - coding
+      - testing
+    session: refresh
+    knowledge:
+      - frontend
+      - security
+      - architecture
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    instruction: implement
+    rules:
+      - condition: 実装が完了した
+        next: ai_review
+      - condition: 実装未着手（レポートのみ）
+        next: ai_review
+      - condition: 実装を進行できない
+        next: ai_review
+      - condition: ユーザー入力が必要
+        next: implement
+        requires_user_input: true
+        interactive_only: true
+    output_contracts:
+      report:
+        - Scope: 01-coder-scope.md
+        - Decisions: 02-coder-decisions.md
+  - name: ai_review
+    edit: false
+    persona: ai-antipattern-reviewer
+    policy:
+      - review
+      - ai-antipattern
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
+    instruction: ai-review
+    rules:
+      - condition: AI特有の問題が見つからない
+        next: reviewers
+      - condition: AI特有の問題が検出された
+        next: ai_fix
+    output_contracts:
+      report:
+        - name: 03-ai-review.md
+          format: ai-review
+  - name: ai_fix
+    edit: true
+    persona: coder
+    pass_previous_response: false
+    policy:
+      - coding
+      - testing
+    session: refresh
+    knowledge:
+      - frontend
+      - security
+      - architecture
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    instruction: ai-fix
+    rules:
+      - condition: AI Reviewerの指摘に対する修正が完了した
+        next: ai_review
+      - condition: 修正不要（指摘対象ファイル/仕様の確認済み）
+        next: ai_no_fix
+      - condition: 修正を進行できない
+        next: ai_no_fix
+  - name: ai_no_fix
+    edit: false
+    persona: architecture-reviewer
+    policy: review
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+    rules:
+      - condition: ai_reviewの指摘が妥当（修正すべき）
+        next: ai_fix
+      - condition: ai_fixの判断が妥当（修正不要）
+        next: reviewers
+    instruction: arbitrate
+  - name: reviewers
+    parallel:
+      - name: arch-review
+        edit: false
+        persona: architecture-reviewer
+        policy: review
+        knowledge:
+          - architecture
+          - frontend
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - WebSearch
+          - WebFetch
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        instruction: review-arch
+        output_contracts:
+          report:
+            - name: 04-architect-review.md
+              format: architecture-review
+      - name: frontend-review
+        edit: false
+        persona: frontend-reviewer
+        policy: review
+        knowledge: frontend
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - WebSearch
+          - WebFetch
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        instruction: review-frontend
+        output_contracts:
+          report:
+            - name: 05-frontend-review.md
+              format: frontend-review
+      - name: security-review
+        edit: false
+        persona: security-reviewer
+        policy: review
+        knowledge: security
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - WebSearch
+          - WebFetch
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        instruction: review-security
+        output_contracts:
+          report:
+            - name: 06-security-review.md
+              format: security-review
+      - name: qa-review
+        edit: false
+        persona: qa-reviewer
+        policy:
+          - review
+          - qa
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - WebSearch
+          - WebFetch
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        instruction: review-qa
+        output_contracts:
+          report:
+            - name: 07-qa-review.md
+              format: qa-review
+    rules:
+      - condition: all("approved")
+        next: supervise
+      - condition: any("needs_fix")
+        next: fix
+  - name: fix
+    edit: true
+    persona: coder
+    pass_previous_response: false
+    policy:
+      - coding
+      - testing
+    knowledge:
+      - frontend
+      - security
+      - architecture
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    permission_mode: edit
+    rules:
+      - condition: 修正が完了した
+        next: reviewers
+      - condition: 修正を進行できない
+        next: plan
+    instruction: fix
+  - name: supervise
+    edit: false
+    persona: expert-supervisor
+    policy: review
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
+    instruction: supervise
+    rules:
+      - condition: すべての検証が完了し、マージ可能な状態である
+        next: COMPLETE
+      - condition: 問題が検出された
+        next: fix_supervisor
+    output_contracts:
+      report:
+        - Validation: 08-supervisor-validation.md
+        - Summary: summary.md
+  - name: fix_supervisor
+    edit: true
+    persona: coder
+    pass_previous_response: false
+    policy:
+      - coding
+      - testing
+    knowledge:
+      - frontend
+      - security
+      - architecture
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    instruction: fix-supervisor
+    rules:
+      - condition: 監督者の指摘に対する修正が完了した
+        next: supervise
+      - condition: 修正を進行できない
+        next: plan
