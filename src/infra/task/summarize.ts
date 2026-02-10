@@ -70,10 +70,11 @@ export class TaskSummarizer {
       name: 'summarizer',
       systemPrompt: loadTemplate('score_slug_system_prompt', 'en'),
     });
-    const response = await agent.call(taskName, {
+    const prompt = loadTemplate('score_slug_user_prompt', 'en', { taskDescription: taskName });
+    const response = await agent.call(prompt, {
       cwd: options.cwd,
       model,
-      allowedTools: [],
+      permissionMode: 'readonly',
     });
 
     const slug = sanitizeSlug(response.content);

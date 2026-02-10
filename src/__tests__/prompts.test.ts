@@ -130,6 +130,7 @@ describe('template file existence', () => {
     'score_interactive_policy',
     'score_summary_system_prompt',
     'score_slug_system_prompt',
+    'score_slug_user_prompt',
     'perform_phase1_message',
     'perform_phase2_message',
     'perform_phase3_message',

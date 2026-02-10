@@ -63,11 +63,16 @@ describe('summarizeTaskName', () => {
     // Then
     expect(result).toBe('add-auth');
     expect(mockGetProvider).toHaveBeenCalledWith('claude');
+    const callPrompt = mockProviderCall.mock.calls[0]?.[0];
+    expect(callPrompt).toContain('Generate a slug from the task description below.');
+    expect(callPrompt).toContain('<task_description>');
+    expect(callPrompt).toContain('long task name for testing');
+    expect(callPrompt).toContain('</task_description>');
     expect(mockProviderCall).toHaveBeenCalledWith(
-      'long task name for testing',
+      expect.any(String),
       expect.objectContaining({
         cwd: '/project',
-        allowedTools: [],
+        permissionMode: 'readonly',
       })
     );
   });
