@@ -118,3 +118,27 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
     - `takt list --non-interactive --action diff --branch <branch>` で差分統計が出力されることを確認する。
     - `takt list --non-interactive --action try --branch <branch>` で変更がステージされることを確認する。
     - `takt list --non-interactive --action merge --branch <branch>` でブランチがマージされ削除されることを確認する。
+- Config permission mode（`e2e/specs/cli-config.e2e.ts`）
+  - 目的: `takt config` でパーミッションモードの切り替えと永続化を確認。
+  - LLM: 呼び出さない（LLM不使用の操作のみ）
+  - 手順（ユーザー行動/コマンド）:
+    - `takt config default` を実行し、`Switched to: default` が出力されることを確認する。
+    - `takt config sacrifice-my-pc` を実行し、`Switched to: sacrifice-my-pc` が出力されることを確認する。
+    - `takt config sacrifice-my-pc` 実行後、`.takt/config.yaml` に `permissionMode: sacrifice-my-pc` が保存されていることを確認する。
+    - `takt config invalid-mode` を実行し、`Invalid mode` が出力されることを確認する。
+- Reset categories（`e2e/specs/cli-reset-categories.e2e.ts`）
+  - 目的: `takt reset categories` でカテゴリオーバーレイのリセットを確認。
+  - LLM: 呼び出さない（LLM不使用の操作のみ）
+  - 手順（ユーザー行動/コマンド）:
+    - `takt reset categories` を実行する。
+    - 出力に `reset` を含むことを確認する。
+    - `$TAKT_CONFIG_DIR/preferences/piece-categories.yaml` が存在し `piece_categories: {}` を含むことを確認する。
+- Export Claude Code Skill（`e2e/specs/cli-export-cc.e2e.ts`）
+  - 目的: `takt export-cc` でClaude Code Skillのデプロイを確認。
+  - LLM: 呼び出さない（LLM不使用の操作のみ）
+  - 手順（ユーザー行動/コマンド）:
+    - `HOME` を一時ディレクトリに設定する。
+    - `takt export-cc` を実行する。
+    - 出力に `ファイルをデプロイしました` を含むことを確認する。
+    - `$HOME/.claude/skills/takt/SKILL.md` が存在することを確認する。
+    - `$HOME/.claude/skills/takt/pieces/` および `$HOME/.claude/skills/takt/personas/` ディレクトリが存在し、それぞれ少なくとも1ファイルを含むことを確認する。
