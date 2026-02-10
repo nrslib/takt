@@ -64,4 +64,4 @@ export { RuleEvaluator, type RuleMatch, type RuleEvaluatorContext, detectMatched
 export { AggregateEvaluator } from './evaluation/AggregateEvaluator.js';
 
 // Phase runner
-export { needsStatusJudgmentPhase, runReportPhase, runStatusJudgmentPhase } from './phase-runner.js';
+export { needsStatusJudgmentPhase, runReportPhase, runStatusJudgmentPhase, type ReportPhaseBlockedResult } from './phase-runner.js';

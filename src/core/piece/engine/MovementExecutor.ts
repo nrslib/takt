@@ -209,8 +209,15 @@ export class MovementExecutor {
     const phaseCtx = this.deps.optionsBuilder.buildPhaseRunnerContext(state, response.content, updatePersonaSession, this.deps.onPhaseStart, this.deps.onPhaseComplete);
 
     // Phase 2: report output (resume same session, Write only)
+    // When report phase returns blocked, propagate to PieceEngine's handleBlocked flow
     if (step.outputContracts && step.outputContracts.length > 0) {
-      await runReportPhase(step, movementIteration, phaseCtx);
+      const reportResult = await runReportPhase(step, movementIteration, phaseCtx);
+      if (reportResult?.blocked) {
+        response = { ...response, status: 'blocked', content: reportResult.response.content };
+        state.movementOutputs.set(step.name, response);
+        state.lastOutput = response;
+        return { response, instruction };
+      }
     }
 
     // Phase 3: status judgment (resume session, no tools, output status tag)

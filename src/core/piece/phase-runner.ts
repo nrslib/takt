@@ -7,7 +7,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, parse, resolve, sep } from 'node:path';
-import type { PieceMovement, Language } from '../models/types.js';
+import type { PieceMovement, Language, AgentResponse } from '../models/types.js';
 import type { PhaseName } from './types.js';
 import { runAgent, type RunAgentOptions } from '../../agents/runner.js';
 import { ReportInstructionBuilder } from './instruction/ReportInstructionBuilder.js';
@@ -17,6 +17,9 @@ import { createLogger } from '../../shared/utils/index.js';
 import { buildSessionKey } from './session-key.js';
 
 const log = createLogger('phase-runner');
+
+/** Result when Phase 2 encounters a blocked status */
+export type ReportPhaseBlockedResult = { blocked: true; response: AgentResponse };
 
 export interface PhaseRunnerContext {
   /** Working directory (agent work dir, may be a clone) */
@@ -107,7 +110,7 @@ export async function runReportPhase(
   step: PieceMovement,
   movementIteration: number,
   ctx: PhaseRunnerContext,
-): Promise<void> {
+): Promise<ReportPhaseBlockedResult | void> {
   const sessionKey = buildSessionKey(step);
   let currentSessionId = ctx.getSessionId(sessionKey);
   if (!currentSessionId) {
@@ -151,6 +154,11 @@ export async function runReportPhase(
       const errorMsg = error instanceof Error ? error.message : String(error);
       ctx.onPhaseComplete?.(step, 2, 'report', '', 'error', errorMsg);
       throw error;
+    }
+
+    if (reportResponse.status === 'blocked') {
+      ctx.onPhaseComplete?.(step, 2, 'report', reportResponse.content, reportResponse.status);
+      return { blocked: true, response: reportResponse };
     }
 
     if (reportResponse.status !== 'done') {
