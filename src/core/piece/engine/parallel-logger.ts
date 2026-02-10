@@ -190,6 +190,19 @@ export class ParallelLogger {
   }
 
   /**
+   * Build the prefix string for summary lines (no sub-movement name).
+   * Returns empty string in non-rich mode (no task-level prefix needed).
+   */
+  private buildSummaryPrefix(): string {
+    if (this.taskLabel && this.parentMovementName && this.progressInfo && this.movementIteration != null && this.taskColorIndex != null) {
+      const taskColor = COLORS[this.taskColorIndex % COLORS.length];
+      const { iteration, maxMovements } = this.progressInfo;
+      return `${taskColor}[${this.taskLabel}]${RESET}[${this.parentMovementName}](${iteration}/${maxMovements})(${this.movementIteration}) `;
+    }
+    return '';
+  }
+
+  /**
    * Flush remaining line buffers for all sub-movements.
    * Call after all sub-movements complete to output any trailing partial lines.
    */
@@ -243,10 +256,11 @@ export class ParallelLogger {
     const headerLine = `${'─'.repeat(sideWidth)}${headerText}${'─'.repeat(sideWidth)}`;
     const footerLine = '─'.repeat(headerLine.length);
 
-    this.writeFn(`${headerLine}\n`);
+    const summaryPrefix = this.buildSummaryPrefix();
+    this.writeFn(`${summaryPrefix}${headerLine}\n`);
     for (const line of resultLines) {
-      this.writeFn(`${line}\n`);
+      this.writeFn(`${summaryPrefix}${line}\n`);
     }
-    this.writeFn(`${footerLine}\n`);
+    this.writeFn(`${summaryPrefix}${footerLine}\n`);
   }
 }

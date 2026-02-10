@@ -393,6 +393,63 @@ describe('ParallelLogger', () => {
       expect(doneIndex0).toBe(doneIndex1);
     });
 
+    it('should prepend task prefix to all summary lines in rich mode', () => {
+      const logger = new ParallelLogger({
+        subMovementNames: ['arch-review', 'security-review'],
+        writeFn,
+        progressInfo: { iteration: 5, maxMovements: 30 },
+        taskLabel: 'override-persona-provider',
+        taskColorIndex: 0,
+        parentMovementName: 'reviewers',
+        movementIteration: 1,
+      });
+
+      logger.printSummary('reviewers', [
+        { name: 'arch-review', condition: 'approved' },
+        { name: 'security-review', condition: 'needs_fix' },
+      ]);
+
+      // Every output line should have the task prefix
+      for (const line of output) {
+        expect(line).toContain('[over]');
+        expect(line).toContain('[reviewers]');
+        expect(line).toContain('(5/30)(1)');
+      }
+
+      // Verify task color (cyan for index 0)
+      expect(output[0]).toContain('\x1b[36m');
+
+      // Verify summary content is still present
+      const fullOutput = output.join('');
+      expect(fullOutput).toContain('reviewers results');
+      expect(fullOutput).toContain('arch-review:');
+      expect(fullOutput).toContain('approved');
+      expect(fullOutput).toContain('security-review:');
+      expect(fullOutput).toContain('needs_fix');
+    });
+
+    it('should not prepend task prefix to summary lines in non-rich mode', () => {
+      const logger = new ParallelLogger({
+        subMovementNames: ['arch-review'],
+        writeFn,
+      });
+
+      logger.printSummary('reviewers', [
+        { name: 'arch-review', condition: 'approved' },
+      ]);
+
+      // No task prefix should appear
+      for (const line of output) {
+        expect(line).not.toContain('[over]');
+      }
+
+      // Summary content is present
+      const fullOutput = output.join('');
+      expect(fullOutput).toContain('reviewers results');
+      expect(fullOutput).toContain('arch-review:');
+      expect(fullOutput).toContain('approved');
+    });
+
     it('should flush remaining buffers before printing summary', () => {
       const logger = new ParallelLogger({
         subMovementNames: ['step-a'],
