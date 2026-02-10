@@ -218,8 +218,9 @@ export async function executePiece(
     : undefined;
   const out = createOutputFns(prefixWriter);
 
-  // Always continue from previous sessions (use /clear to reset)
-  log.debug('Continuing session (use /clear to reset)');
+  // Retry reuses saved sessions; normal runs start fresh
+  const isRetry = Boolean(options.startMovement || options.retryNote);
+  log.debug('Session mode', { isRetry, isWorktree: cwd !== projectCwd });
 
   out.header(`${headerPrefix} ${pieceConfig.name}`);
 
@@ -292,7 +293,7 @@ export async function executePiece(
         displayRef.current.createHandler()(event);
       };
 
-  // Load saved agent sessions for continuity (from project root or clone-specific storage)
+  // Load saved agent sessions only on retry; normal runs start with empty sessions
   const isWorktree = cwd !== projectCwd;
   const globalConfig = loadGlobalConfig();
   const shouldNotify = globalConfig.notificationSound !== false;
@@ -306,9 +307,11 @@ export async function executePiece(
   if (globalConfig.preventSleep) {
     preventSleep();
   }
-  const savedSessions = isWorktree
-    ? loadWorktreeSessions(projectCwd, cwd, currentProvider)
-    : loadPersonaSessions(projectCwd, currentProvider);
+  const savedSessions = isRetry
+    ? (isWorktree
+        ? loadWorktreeSessions(projectCwd, cwd, currentProvider)
+        : loadPersonaSessions(projectCwd, currentProvider))
+    : {};
 
   // Session update handler - persist session IDs when they change
   // Clone sessions are stored separately per clone path
