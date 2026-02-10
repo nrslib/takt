@@ -154,60 +154,6 @@ export class ClaudeClient {
     };
   }
 
-  /**
-   * Detect judge rule index from [JUDGE:N] tag pattern.
-   * Returns 0-based rule index, or -1 if no match.
-   */
-  static detectJudgeIndex(content: string): number {
-    const regex = /\[JUDGE:(\d+)\]/i;
-    const match = content.match(regex);
-    if (match?.[1]) {
-      const index = Number.parseInt(match[1], 10) - 1;
-      return index >= 0 ? index : -1;
-    }
-    return -1;
-  }
-
-  /**
-   * Build the prompt for the AI judge that evaluates agent output against ai() conditions.
-   */
-  static buildJudgePrompt(
-    agentOutput: string,
-    aiConditions: { index: number; text: string }[],
-  ): string {
-    const conditionList = aiConditions
-      .map((c) => `| ${c.index + 1} | ${c.text} |`)
-      .join('\n');
-
-    return loadTemplate('perform_judge_message', 'en', { agentOutput, conditionList });
-  }
-
-  /**
-   * Call AI judge to evaluate agent output against ai() conditions.
-   * Uses a lightweight model (haiku) for cost efficiency.
-   * Returns 0-based index of the matched ai() condition, or -1 if no match.
-   */
-  async callAiJudge(
-    agentOutput: string,
-    aiConditions: { index: number; text: string }[],
-    options: { cwd: string },
-  ): Promise<number> {
-    const prompt = ClaudeClient.buildJudgePrompt(agentOutput, aiConditions);
-
-    const spawnOptions: ClaudeSpawnOptions = {
-      cwd: options.cwd,
-      model: 'haiku',
-      maxTurns: 1,
-    };
-
-    const result = await executeClaudeCli(prompt, spawnOptions);
-    if (!result.success) {
-      log.error('AI judge call failed', { error: result.error });
-      return -1;
-    }
-
-    return ClaudeClient.detectJudgeIndex(result.content);
-  }
 }
 
 // ---- Module-level functions ----
@@ -247,21 +193,3 @@ export async function callClaudeSkill(
   return defaultClient.callSkill(skillName, prompt, options);
 }
 
-export function detectJudgeIndex(content: string): number {
-  return ClaudeClient.detectJudgeIndex(content);
-}
-
-export function buildJudgePrompt(
-  agentOutput: string,
-  aiConditions: { index: number; text: string }[],
-): string {
-  return ClaudeClient.buildJudgePrompt(agentOutput, aiConditions);
-}
-
-export async function callAiJudge(
-  agentOutput: string,
-  aiConditions: { index: number; text: string }[],
-  options: { cwd: string },
-): Promise<number> {
-  return defaultClient.callAiJudge(agentOutput, aiConditions, options);
-}

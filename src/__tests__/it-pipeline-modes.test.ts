@@ -31,8 +31,8 @@ const {
   mockPushBranch: vi.fn(),
 }));
 
-vi.mock('../infra/claude/client.js', async (importOriginal) => {
-  const original = await importOriginal<typeof import('../infra/claude/client.js')>();
+vi.mock('../agents/ai-judge.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../agents/ai-judge.js')>();
   return {
     ...original,
     callAiJudge: vi.fn().mockImplementation(async (content: string, conditions: { index: number; text: string }[]) => {

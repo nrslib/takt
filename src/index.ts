@@ -65,10 +65,7 @@ export {
   callClaudeCustom,
   callClaudeAgent,
   callClaudeSkill,
-  callAiJudge,
   detectRuleIndex,
-  detectJudgeIndex,
-  buildJudgePrompt,
   isRegexSafe,
 } from './infra/claude/index.js';
 export type {

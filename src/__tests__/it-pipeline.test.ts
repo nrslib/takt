@@ -16,9 +16,9 @@ import { setMockScenario, resetScenario } from '../infra/mock/index.js';
 
 // --- Mocks ---
 
-// Safety net: prevent callAiJudge from calling real Claude CLI.
-vi.mock('../infra/claude/client.js', async (importOriginal) => {
-  const original = await importOriginal<typeof import('../infra/claude/client.js')>();
+// Safety net: prevent callAiJudge from calling real agent.
+vi.mock('../agents/ai-judge.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../agents/ai-judge.js')>();
   return {
     ...original,
     callAiJudge: vi.fn().mockImplementation(async (content: string, conditions: { index: number; text: string }[]) => {

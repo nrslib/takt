@@ -105,9 +105,12 @@ vi.mock('../core/piece/index.js', () => ({
 }));
 
 vi.mock('../infra/claude/index.js', () => ({
-  callAiJudge: vi.fn(),
   detectRuleIndex: vi.fn(),
   interruptAllQueries: mockInterruptAllQueries,
+}));
+
+vi.mock('../agents/ai-judge.js', () => ({
+  callAiJudge: vi.fn(),
 }));
 
 vi.mock('../infra/config/index.js', () => ({

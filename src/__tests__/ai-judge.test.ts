@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { detectJudgeIndex, buildJudgePrompt } from '../infra/claude/client.js';
+import { detectJudgeIndex, buildJudgePrompt } from '../agents/ai-judge.js';
 
 describe('detectJudgeIndex', () => {
   it('should detect [JUDGE:1] as index 0', () => {

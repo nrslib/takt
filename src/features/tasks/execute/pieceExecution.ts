@@ -6,7 +6,8 @@ import { readFileSync } from 'node:fs';
 import { PieceEngine, type IterationLimitRequest, type UserInputRequest } from '../../../core/piece/index.js';
 import type { PieceConfig } from '../../../core/models/index.js';
 import type { PieceExecutionResult, PieceExecutionOptions } from './types.js';
-import { callAiJudge, detectRuleIndex, interruptAllQueries } from '../../../infra/claude/index.js';
+import { detectRuleIndex, interruptAllQueries } from '../../../infra/claude/index.js';
+import { callAiJudge } from '../../../agents/ai-judge.js';
 
 export type { PieceExecutionResult, PieceExecutionOptions };
 

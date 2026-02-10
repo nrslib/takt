@@ -15,15 +15,16 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setMockScenario, resetScenario } from '../infra/mock/index.js';
 import type { PieceConfig, PieceMovement, PieceRule } from '../core/models/index.js';
-import { callAiJudge, detectRuleIndex } from '../infra/claude/index.js';
+import { detectRuleIndex } from '../infra/claude/index.js';
+import { callAiJudge } from '../agents/ai-judge.js';
 
 // --- Mocks (minimal — only infrastructure, not core logic) ---
 
-// Safety net: prevent callAiJudge from calling real Claude CLI.
+// Safety net: prevent callAiJudge from calling real agent.
 // Tag-based detection should always match in these tests; if it doesn't,
 // this mock surfaces the failure immediately instead of timing out.
-vi.mock('../infra/claude/client.js', async (importOriginal) => {
-  const original = await importOriginal<typeof import('../infra/claude/client.js')>();
+vi.mock('../agents/ai-judge.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../agents/ai-judge.js')>();
   return {
     ...original,
     callAiJudge: vi.fn().mockResolvedValue(-1),
