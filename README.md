@@ -186,7 +186,7 @@ takt #6 --auto-pr
 
 ### Task Management (add / run / watch / list)
 
-Batch processing using task files (`.takt/tasks/`). Useful for accumulating multiple tasks and executing them together later.
+Batch processing using `.takt/tasks.yaml` with task directories under `.takt/tasks/{slug}/`. Useful for accumulating multiple tasks and executing them together later.
 
 #### Add Task (`takt add`)
 
@@ -201,14 +201,14 @@ takt add #28
 #### Execute Tasks (`takt run`)
 
 ```bash
-# Execute all pending tasks in .takt/tasks/
+# Execute all pending tasks in .takt/tasks.yaml
 takt run
 ```
 
 #### Watch Tasks (`takt watch`)
 
 ```bash
-# Monitor .takt/tasks/ and auto-execute tasks (resident process)
+# Monitor .takt/tasks.yaml and auto-execute tasks (resident process)
 takt watch
 ```
 
@@ -224,6 +224,13 @@ takt list --non-interactive --action diff --branch takt/my-branch
 takt list --non-interactive --action delete --branch takt/my-branch --yes
 takt list --non-interactive --format json
 ```
+
+#### Task Directory Workflow (Create / Run / Verify)
+
+1. Run `takt add` and confirm a pending record is created in `.takt/tasks.yaml`.
+2. Open the generated `.takt/tasks/{slug}/order.md` and add detailed specifications/references as needed.
+3. Run `takt run` (or `takt watch`) to execute pending tasks from `tasks.yaml`.
+4. Verify outputs in `.takt/reports/{slug}/` using the same slug as `task_dir`.
 
 ### Pipeline Mode (for CI/Automation)
 
@@ -532,8 +539,8 @@ The model string is passed to the Codex SDK. If unspecified, defaults to `codex`
 
 .takt/                      # Project-level configuration
 ├── config.yaml             # Project config (current piece, etc.)
-├── tasks/                  # Pending task files (.yaml, .md)
-├── completed/              # Completed tasks and reports
+├── tasks/                  # Task input directories (.takt/tasks/{slug}/order.md, etc.)
+├── tasks.yaml              # Pending tasks metadata (task_dir, piece, worktree, etc.)
 ├── reports/                # Execution reports (auto-generated)
 │   └── {timestamp}-{slug}/
 └── logs/                   # NDJSON format session logs
@@ -625,32 +632,38 @@ Priority: Environment variables > `config.yaml` settings
 
 ## Detailed Guides
 
-### Task File Formats
+### Task Directory Format
 
-TAKT supports batch processing with task files in `.takt/tasks/`. Both `.yaml`/`.yml` and `.md` file formats are supported.
+TAKT stores task metadata in `.takt/tasks.yaml`, and each task's long specification in `.takt/tasks/{slug}/`.
 
-**YAML format** (recommended, supports worktree/branch/piece options):
+**Recommended layout**:
+
+```text
+.takt/
+  tasks/
+    20260201-015714-foptng/
+      order.md
+      schema.sql
+      wireframe.png
+  tasks.yaml
+  reports/
+    20260201-015714-foptng/
+```
+
+**tasks.yaml record**:
 
 ```yaml
-# .takt/tasks/add-auth.yaml
-task: "Add authentication feature"
-worktree: true                  # Execute in isolated shared clone
-branch: "feat/add-auth"         # Branch name (auto-generated if omitted)
-piece: "default"             # Piece specification (uses current if omitted)
+tasks:
+  - name: add-auth-feature
+    status: pending
+    task_dir: .takt/tasks/20260201-015714-foptng
+    piece: default
+    created_at: "2026-02-01T01:57:14.000Z"
+    started_at: null
+    completed_at: null
 ```
 
-**Markdown format** (simple, backward compatible):
-
-```markdown
-# .takt/tasks/add-login-feature.md
-
-Add login feature to the application.
-
-Requirements:
-- Username and password fields
-- Form validation
-- Error handling on failure
-```
+`takt add` creates `.takt/tasks/{slug}/order.md` automatically and saves `task_dir` to `tasks.yaml`.
 
 #### Isolated Execution with Shared Clone
 

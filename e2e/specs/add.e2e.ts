@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
@@ -87,8 +87,12 @@ describe('E2E: Add task from GitHub issue (takt add)', () => {
 
     const tasksFile = join(testRepo.path, '.takt', 'tasks.yaml');
     const content = readFileSync(tasksFile, 'utf-8');
-    const parsed = parseYaml(content) as { tasks?: Array<{ issue?: number }> };
+    const parsed = parseYaml(content) as { tasks?: Array<{ issue?: number; task_dir?: string }> };
     expect(parsed.tasks?.length).toBe(1);
     expect(parsed.tasks?.[0]?.issue).toBe(Number(issueNumber));
+    expect(parsed.tasks?.[0]?.task_dir).toBeTypeOf('string');
+    const orderPath = join(testRepo.path, String(parsed.tasks?.[0]?.task_dir), 'order.md');
+    expect(existsSync(orderPath)).toBe(true);
+    expect(readFileSync(orderPath, 'utf-8')).toContain('E2E Add Issue');
   }, 240_000);
 });

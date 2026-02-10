@@ -97,6 +97,10 @@ afterEach(() => {
 });
 
 describe('addTask', () => {
+  function readOrderContent(dir: string, taskDir: unknown): string {
+    return fs.readFileSync(path.join(dir, String(taskDir), 'order.md'), 'utf-8');
+  }
+
   it('should create task entry from interactive result', async () => {
     mockInteractiveMode.mockResolvedValue({ action: 'execute', task: '# 認証機能追加\nJWT認証を実装する' });
 
@@ -104,7 +108,9 @@ describe('addTask', () => {
 
     const tasks = loadTasks(testDir).tasks;
     expect(tasks).toHaveLength(1);
-    expect(tasks[0]?.content).toContain('JWT認証を実装する');
+    expect(tasks[0]?.content).toBeUndefined();
+    expect(tasks[0]?.task_dir).toBeTypeOf('string');
+    expect(readOrderContent(testDir, tasks[0]?.task_dir)).toContain('JWT認証を実装する');
     expect(tasks[0]?.piece).toBe('default');
   });
 
@@ -128,7 +134,8 @@ describe('addTask', () => {
 
     expect(mockInteractiveMode).not.toHaveBeenCalled();
     const task = loadTasks(testDir).tasks[0]!;
-    expect(task.content).toContain('Fix login timeout');
+    expect(task.content).toBeUndefined();
+    expect(readOrderContent(testDir, task.task_dir)).toContain('Fix login timeout');
     expect(task.issue).toBe(99);
   });
 
@@ -153,7 +160,8 @@ describe('addTask', () => {
     const tasks = loadTasks(testDir).tasks;
     expect(tasks).toHaveLength(1);
     expect(tasks[0]?.issue).toBe(55);
-    expect(tasks[0]?.content).toContain('New feature');
+    expect(tasks[0]?.content).toBeUndefined();
+    expect(readOrderContent(testDir, tasks[0]?.task_dir)).toContain('New feature');
   });
 
   it('should not save task when issue creation fails in create_issue action', async () => {

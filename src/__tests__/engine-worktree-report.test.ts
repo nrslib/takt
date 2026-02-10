@@ -198,4 +198,47 @@ describe('PieceEngine: worktree reportDir resolution', () => {
     const expectedPath = join(normalDir, '.takt/reports/test-report-dir');
     expect(phaseCtx.reportDir).toBe(expectedPath);
   });
+
+  it('should use explicit reportDirName when provided', async () => {
+    const normalDir = projectCwd;
+    const config = buildSimpleConfig();
+    const engine = new PieceEngine(config, normalDir, 'test task', {
+      projectCwd: normalDir,
+      reportDirName: '20260201-015714-foptng',
+    });
+
+    mockRunAgentSequence([
+      makeResponse({ persona: 'review', content: 'Review done' }),
+    ]);
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'tag' as const },
+    ]);
+
+    await engine.run();
+
+    const reportPhaseMock = vi.mocked(runReportPhase);
+    expect(reportPhaseMock).toHaveBeenCalled();
+    const phaseCtx = reportPhaseMock.mock.calls[0][2] as { reportDir: string };
+    expect(phaseCtx.reportDir).toBe(join(normalDir, '.takt/reports/20260201-015714-foptng'));
+  });
+
+  it('should reject invalid explicit reportDirName', () => {
+    const normalDir = projectCwd;
+    const config = buildSimpleConfig();
+
+    expect(() => new PieceEngine(config, normalDir, 'test task', {
+      projectCwd: normalDir,
+      reportDirName: '..',
+    })).toThrow('Invalid reportDirName: ..');
+
+    expect(() => new PieceEngine(config, normalDir, 'test task', {
+      projectCwd: normalDir,
+      reportDirName: '.',
+    })).toThrow('Invalid reportDirName: .');
+
+    expect(() => new PieceEngine(config, normalDir, 'test task', {
+      projectCwd: normalDir,
+      reportDirName: '',
+    })).toThrow('Invalid reportDirName: ');
+  });
 });

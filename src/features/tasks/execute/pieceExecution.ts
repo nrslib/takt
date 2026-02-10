@@ -347,6 +347,7 @@ export async function executePiece(
     callAiJudge,
     startMovement: options.startMovement,
     retryNote: options.retryNote,
+    reportDirName: options.reportDirName,
     taskPrefix: options.taskPrefix,
     taskColorIndex: options.taskColorIndex,
   });

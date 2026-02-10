@@ -27,7 +27,7 @@ import {
   addUserInput as addUserInputToState,
   incrementMovementIteration,
 } from './state-manager.js';
-import { generateReportDir, getErrorMessage, createLogger } from '../../../shared/utils/index.js';
+import { generateReportDir, getErrorMessage, createLogger, isValidReportDirName } from '../../../shared/utils/index.js';
 import { OptionsBuilder } from './OptionsBuilder.js';
 import { MovementExecutor } from './MovementExecutor.js';
 import { ParallelRunner } from './ParallelRunner.js';
@@ -79,7 +79,11 @@ export class PieceEngine extends EventEmitter {
     this.options = options;
     this.loopDetector = new LoopDetector(config.loopDetection);
     this.cycleDetector = new CycleDetector(config.loopMonitors ?? []);
-    this.reportDir = `.takt/reports/${generateReportDir(task)}`;
+    if (options.reportDirName !== undefined && !isValidReportDirName(options.reportDirName)) {
+      throw new Error(`Invalid reportDirName: ${options.reportDirName}`);
+    }
+    const reportDirName = options.reportDirName ?? generateReportDir(task);
+    this.reportDir = `.takt/reports/${reportDirName}`;
     this.ensureReportDirExists();
     this.validateConfig();
     this.state = createInitialState(config, options);

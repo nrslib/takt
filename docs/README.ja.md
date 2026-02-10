@@ -186,7 +186,7 @@ takt #6 --auto-pr
 
 ### タスク管理（add / run / watch / list）
 
-タスクファイル（`.takt/tasks/`）を使ったバッチ処理。複数のタスクを積んでおいて、後でまとめて実行する使い方に便利です。
+`.takt/tasks.yaml` と `.takt/tasks/{slug}/` を使ったバッチ処理。複数のタスクを積んでおいて、後でまとめて実行する使い方に便利です。
 
 #### タスクを追加（`takt add`）
 
@@ -201,14 +201,14 @@ takt add #28
 #### タスクを実行（`takt run`）
 
 ```bash
-# .takt/tasks/ の保留中タスクをすべて実行
+# .takt/tasks.yaml の保留中タスクをすべて実行
 takt run
 ```
 
 #### タスクを監視（`takt watch`）
 
 ```bash
-# .takt/tasks/ を監視してタスクを自動実行（常駐プロセス）
+# .takt/tasks.yaml を監視してタスクを自動実行（常駐プロセス）
 takt watch
 ```
 
@@ -224,6 +224,13 @@ takt list --non-interactive --action diff --branch takt/my-branch
 takt list --non-interactive --action delete --branch takt/my-branch --yes
 takt list --non-interactive --format json
 ```
+
+#### タスクディレクトリ運用（作成・実行・確認）
+
+1. `takt add` を実行して `.takt/tasks.yaml` に pending レコードが作られることを確認する。
+2. 生成された `.takt/tasks/{slug}/order.md` を開き、必要なら仕様や参考資料を追記する。
+3. `takt run`（または `takt watch`）で `tasks.yaml` の pending タスクを実行する。
+4. `task_dir` と同じスラッグの `.takt/reports/{slug}/` を確認する。
 
 ### パイプラインモード（CI/自動化向け）
 
@@ -532,8 +539,8 @@ Claude Code はエイリアス（`opus`、`sonnet`、`haiku`、`opusplan`、`def
 
 .takt/                      # プロジェクトレベルの設定
 ├── config.yaml             # プロジェクト設定（現在のピース等）
-├── tasks/                  # 保留中のタスクファイル（.yaml, .md）
-├── completed/              # 完了したタスクとレポート
+├── tasks/                  # タスク入力ディレクトリ（.takt/tasks/{slug}/order.md など）
+├── tasks.yaml              # 保留中タスクのメタデータ（task_dir, piece, worktree など）
 ├── reports/                # 実行レポート（自動生成）
 │   └── {timestamp}-{slug}/
 └── logs/                   # NDJSON 形式のセッションログ
@@ -625,32 +632,38 @@ anthropic_api_key: sk-ant-...  # Claude (Anthropic) を使う場合
 
 ## 詳細ガイド
 
-### タスクファイルの形式
+### タスクディレクトリ形式
 
-TAKT は `.takt/tasks/` 内のタスクファイルによるバッチ処理をサポートしています。`.yaml`/`.yml` と `.md` の両方のファイル形式に対応しています。
+TAKT は `.takt/tasks.yaml` にタスクのメタデータを保存し、長文仕様は `.takt/tasks/{slug}/` に分離して管理します。
 
-**YAML形式**（推奨、worktree/branch/pieceオプション対応）:
+**推奨構成**:
+
+```text
+.takt/
+  tasks/
+    20260201-015714-foptng/
+      order.md
+      schema.sql
+      wireframe.png
+  tasks.yaml
+  reports/
+    20260201-015714-foptng/
+```
+
+**tasks.yaml レコード例**:
 
 ```yaml
-# .takt/tasks/add-auth.yaml
-task: "認証機能を追加する"
-worktree: true                  # 隔離された共有クローンで実行
-branch: "feat/add-auth"         # ブランチ名（省略時は自動生成）
-piece: "default"             # ピース指定（省略時は現在のもの）
+tasks:
+  - name: add-auth-feature
+    status: pending
+    task_dir: .takt/tasks/20260201-015714-foptng
+    piece: default
+    created_at: "2026-02-01T01:57:14.000Z"
+    started_at: null
+    completed_at: null
 ```
 
-**Markdown形式**（シンプル、後方互換）:
-
-```markdown
-# .takt/tasks/add-login-feature.md
-
-アプリケーションにログイン機能を追加する。
-
-要件:
-- ユーザー名とパスワードフィールド
-- フォームバリデーション
-- 失敗時のエラーハンドリング
-```
+`takt add` は `.takt/tasks/{slug}/order.md` を自動生成し、`tasks.yaml` には `task_dir` を保存します。
 
 #### 共有クローンによる隔離実行
 
