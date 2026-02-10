@@ -17,6 +17,7 @@ import {
   type OpenCodeTextPart,
   createStreamTrackingState,
   emitInit,
+  emitText,
   emitResult,
   handlePartUpdated,
 } from './OpenCodeStreamHandler.js';
@@ -39,6 +40,31 @@ const OPENCODE_RETRYABLE_ERROR_PATTERNS = [
   'fetch failed',
   'failed to start server on port',
 ];
+
+function getCommonPrefixLength(a: string, b: string): number {
+  const max = Math.min(a.length, b.length);
+  let i = 0;
+  while (i < max && a[i] === b[i]) {
+    i += 1;
+  }
+  return i;
+}
+
+function stripPromptEcho(
+  chunk: string,
+  echoState: { remainingPrompt: string },
+): string {
+  if (!chunk) return '';
+  if (!echoState.remainingPrompt) return chunk;
+
+  const consumeLength = getCommonPrefixLength(chunk, echoState.remainingPrompt);
+  if (consumeLength > 0) {
+    echoState.remainingPrompt = echoState.remainingPrompt.slice(consumeLength);
+    return chunk.slice(consumeLength);
+  }
+
+  return chunk;
+}
 
 async function getFreePort(): Promise<number> {
   return new Promise<number>((resolve, reject) => {
@@ -197,6 +223,8 @@ export class OpenCodeClient {
         let success = true;
         let failureMessage = '';
         const state = createStreamTrackingState();
+        const echoState = { remainingPrompt: fullPrompt };
+        const textOffsets = new Map<string, number>();
         const textContentParts = new Map<string, string>();
 
         for await (const event of stream) {
@@ -212,7 +240,21 @@ export class OpenCodeClient {
 
             if (part.type === 'text') {
               const textPart = part as OpenCodeTextPart;
-              textContentParts.set(textPart.id, textPart.text);
+              const prev = textOffsets.get(textPart.id) ?? 0;
+              const rawDelta = delta
+                ?? (textPart.text.length > prev ? textPart.text.slice(prev) : '');
+
+              textOffsets.set(textPart.id, textPart.text.length);
+
+              if (rawDelta) {
+                const visibleDelta = stripPromptEcho(rawDelta, echoState);
+                if (visibleDelta) {
+                  emitText(options.onStream, visibleDelta);
+                  const previous = textContentParts.get(textPart.id) ?? '';
+                  textContentParts.set(textPart.id, `${previous}${visibleDelta}`);
+                }
+              }
+              continue;
             }
 
             handlePartUpdated(part, delta, options.onStream, state);
