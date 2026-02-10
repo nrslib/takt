@@ -148,5 +148,8 @@ export * from './shared/constants.js';
 export * from './shared/context.js';
 export * from './shared/exitCodes.js';
 
+// Slug generator
+export * from './slug-generator.js';
+
 // Resources (embedded prompts and templates)
 export * from './infra/resources/index.js';
