@@ -369,6 +369,14 @@ export const GlobalConfigSchema = z.object({
   prevent_sleep: z.boolean().optional(),
   /** Enable notification sounds (default: true when undefined) */
   notification_sound: z.boolean().optional(),
+  /** Notification sound toggles per event timing */
+  notification_sound_events: z.object({
+    iteration_limit: z.boolean().optional(),
+    piece_complete: z.boolean().optional(),
+    piece_abort: z.boolean().optional(),
+    run_complete: z.boolean().optional(),
+    run_abort: z.boolean().optional(),
+  }).optional(),
   /** Number of movement previews to inject into interactive mode (0 to disable, max 10) */
   interactive_preview_movements: z.number().int().min(0).max(10).optional().default(3),
   /** Number of tasks to run concurrently in takt run (default: 1 = sequential, max: 10) */

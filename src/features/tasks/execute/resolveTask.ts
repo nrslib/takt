@@ -5,11 +5,13 @@
 import { loadGlobalConfig } from '../../../infra/config/index.js';
 import { type TaskInfo, createSharedClone, summarizeTaskName, getCurrentBranch } from '../../../infra/task/index.js';
 import { info } from '../../../shared/ui/index.js';
+import { getTaskSlugFromTaskDir } from '../../../shared/utils/taskPaths.js';
 
 export interface ResolvedTaskExecution {
   execCwd: string;
   execPiece: string;
   isWorktree: boolean;
+  reportDirName?: string;
   branch?: string;
   baseBranch?: string;
   startMovement?: string;
@@ -44,8 +46,16 @@ export async function resolveTaskExecution(
 
   let execCwd = defaultCwd;
   let isWorktree = false;
+  let reportDirName: string | undefined;
   let branch: string | undefined;
   let baseBranch: string | undefined;
+  if (task.taskDir) {
+    const taskSlug = getTaskSlugFromTaskDir(task.taskDir);
+    if (!taskSlug) {
+      throw new Error(`Invalid task_dir format: ${task.taskDir}`);
+    }
+    reportDirName = taskSlug;
+  }
 
   if (data.worktree) {
     throwIfAborted(abortSignal);
@@ -80,5 +90,16 @@ export async function resolveTaskExecution(
     autoPr = globalConfig.autoPr;
   }
 
-  return { execCwd, execPiece, isWorktree, branch, baseBranch, startMovement, retryNote, autoPr, issueNumber: data.issue };
+  return {
+    execCwd,
+    execPiece,
+    isWorktree,
+    ...(reportDirName ? { reportDirName } : {}),
+    ...(branch ? { branch } : {}),
+    ...(baseBranch ? { baseBranch } : {}),
+    ...(startMovement ? { startMovement } : {}),
+    ...(retryNote ? { retryNote } : {}),
+    ...(autoPr !== undefined ? { autoPr } : {}),
+    ...(data.issue !== undefined ? { issueNumber: data.issue } : {}),
+  };
 }

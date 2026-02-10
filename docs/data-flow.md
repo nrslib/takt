@@ -431,7 +431,7 @@ TAKTのデータフローは以下の7つの主要なレイヤーで構成され
 2. **ログ初期化**:
    - `createSessionLog()`: セッションログオブジェクト作成
    - `initNdjsonLog()`: NDJSON形式のログファイル初期化
-   - `updateLatestPointer()`: `latest.json` ポインタ更新
+   - `meta.json` 更新: 実行ステータス（running/completed/aborted）と時刻を保存
 
 3. **PieceEngine初期化**:
    ```typescript
@@ -619,6 +619,7 @@ const match = await detectMatchedRule(step, response.content, tagContent, {...})
    - Step Iteration (per-step)
    - Step name
    - Report Directory/File info
+   - Run Source Paths (`.takt/runs/{slug}/context/...`)
 
 3. **User Request** (タスク本文):
    - `{task}` プレースホルダーがテンプレートにない場合のみ自動注入
@@ -626,6 +627,8 @@ const match = await detectMatchedRule(step, response.content, tagContent, {...})
 4. **Previous Response** (前ステップの出力):
    - `step.passPreviousResponse === true` かつ
    - `{previous_response}` プレースホルダーがテンプレートにない場合のみ自動注入
+   - 長さ制御（2000 chars）と `...TRUNCATED...` を適用
+   - Source Path を常時注入
 
 5. **Additional User Inputs** (blocked時の追加入力):
    - `{user_inputs}` プレースホルダーがテンプレートにない場合のみ自動注入

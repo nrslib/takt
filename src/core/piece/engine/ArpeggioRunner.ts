@@ -20,12 +20,14 @@ import { detectMatchedRule } from '../evaluation/index.js';
 import { incrementMovementIteration } from './state-manager.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
+import type { MovementExecutor } from './MovementExecutor.js';
 import type { PhaseName } from '../types.js';
 
 const log = createLogger('arpeggio-runner');
 
 export interface ArpeggioRunnerDeps {
   readonly optionsBuilder: OptionsBuilder;
+  readonly movementExecutor: MovementExecutor;
   readonly getCwd: () => string;
   readonly getInteractive: () => boolean;
   readonly detectRuleIndex: (content: string, movementName: string) => number;
@@ -224,6 +226,12 @@ export class ArpeggioRunner {
 
     state.movementOutputs.set(step.name, aggregatedResponse);
     state.lastOutput = aggregatedResponse;
+    this.deps.movementExecutor.persistPreviousResponseSnapshot(
+      state,
+      step.name,
+      movementIteration,
+      aggregatedResponse.content,
+    );
 
     const instruction = `[Arpeggio] ${step.name}: ${batches.length} batches, source=${arpeggioConfig.source}`;
 

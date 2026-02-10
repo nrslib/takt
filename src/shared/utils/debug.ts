@@ -43,7 +43,8 @@ export class DebugLogger {
   /** Get default debug log file prefix */
   private static getDefaultLogPrefix(projectDir: string): string {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    return join(projectDir, '.takt', 'logs', `debug-${timestamp}`);
+    const runSlug = `debug-${timestamp}`;
+    return join(projectDir, '.takt', 'runs', runSlug, 'logs', runSlug);
   }
 
   /** Initialize debug logger from config */

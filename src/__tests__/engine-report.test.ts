@@ -15,7 +15,7 @@ import type { PieceMovement, OutputContractItem, OutputContractLabelPath, Output
  * Extracted emitMovementReports logic for unit testing.
  * Mirrors engine.ts emitMovementReports + emitIfReportExists.
  *
- * reportDir already includes the `.takt/reports/` prefix (set by engine constructor).
+ * reportDir already includes the `.takt/runs/{slug}/reports` path (set by engine constructor).
  */
 function emitMovementReports(
   emitter: EventEmitter,
@@ -59,8 +59,8 @@ function createMovement(overrides: Partial<PieceMovement> = {}): PieceMovement {
 describe('emitMovementReports', () => {
   let tmpDir: string;
   let reportBaseDir: string;
-  // reportDir now includes .takt/reports/ prefix (matches engine constructor behavior)
-  const reportDirName = '.takt/reports/test-report-dir';
+  // reportDir now includes .takt/runs/{slug}/reports path (matches engine constructor behavior)
+  const reportDirName = '.takt/runs/test-report-dir/reports';
 
   beforeEach(() => {
     tmpDir = join(tmpdir(), `takt-report-test-${Date.now()}`);

@@ -33,6 +33,20 @@ export interface PipelineConfig {
   prBodyTemplate?: string;
 }
 
+/** Notification sound toggles per event timing */
+export interface NotificationSoundEventsConfig {
+  /** Warning when iteration limit is reached */
+  iterationLimit?: boolean;
+  /** Success notification when piece execution completes */
+  pieceComplete?: boolean;
+  /** Error notification when piece execution aborts */
+  pieceAbort?: boolean;
+  /** Success notification when runAllTasks finishes without failures */
+  runComplete?: boolean;
+  /** Error notification when runAllTasks finishes with failures or aborts */
+  runAbort?: boolean;
+}
+
 /** Global configuration for takt */
 export interface GlobalConfig {
   language: Language;
@@ -69,6 +83,8 @@ export interface GlobalConfig {
   preventSleep?: boolean;
   /** Enable notification sounds (default: true when undefined) */
   notificationSound?: boolean;
+  /** Notification sound toggles per event timing */
+  notificationSoundEvents?: NotificationSoundEventsConfig;
   /** Number of movement previews to inject into interactive mode (0 to disable, max 10) */
   interactivePreviewMovements?: number;
   /** Number of tasks to run concurrently in takt run (default: 1 = sequential) */

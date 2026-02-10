@@ -58,3 +58,7 @@ piece:
   notifyAbort: "Aborted: {reason}"
   sigintGraceful: "Ctrl+C: Aborting piece..."
   sigintForce: "Ctrl+C: Force exit"
+
+run:
+  notifyComplete: "Run complete ({total} tasks)"
+  notifyAbort: "Run finished with errors ({failed})"

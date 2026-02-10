@@ -233,6 +233,8 @@ export interface PieceState {
   movementOutputs: Map<string, AgentResponse>;
   /** Most recent movement output (used for Previous Response injection) */
   lastOutput?: AgentResponse;
+  /** Source path of the latest previous response snapshot */
+  previousResponseSourcePath?: string;
   userInputs: string[];
   personaSessions: Map<string, string>;
   /** Per-movement iteration counters (how many times each movement has been executed) */

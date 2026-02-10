@@ -287,6 +287,59 @@ describe('loadGlobalConfig', () => {
     expect(config.notificationSound).toBeUndefined();
   });
 
+  it('should load notification_sound_events config from config.yaml', () => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(
+      getGlobalConfigPath(),
+      [
+        'language: en',
+        'notification_sound_events:',
+        '  iteration_limit: false',
+        '  piece_complete: true',
+        '  piece_abort: true',
+        '  run_complete: true',
+        '  run_abort: false',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const config = loadGlobalConfig();
+    expect(config.notificationSoundEvents).toEqual({
+      iterationLimit: false,
+      pieceComplete: true,
+      pieceAbort: true,
+      runComplete: true,
+      runAbort: false,
+    });
+  });
+
+  it('should save and reload notification_sound_events config', () => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
+
+    const config = loadGlobalConfig();
+    config.notificationSoundEvents = {
+      iterationLimit: false,
+      pieceComplete: true,
+      pieceAbort: false,
+      runComplete: true,
+      runAbort: true,
+    };
+    saveGlobalConfig(config);
+    invalidateGlobalConfigCache();
+
+    const reloaded = loadGlobalConfig();
+    expect(reloaded.notificationSoundEvents).toEqual({
+      iterationLimit: false,
+      pieceComplete: true,
+      pieceAbort: false,
+      runComplete: true,
+      runAbort: true,
+    });
+  });
+
   it('should load interactive_preview_movements config from config.yaml', () => {
     const taktDir = join(testHomeDir, '.takt');
     mkdirSync(taktDir, { recursive: true });

@@ -84,6 +84,10 @@ afterEach(() => {
 });
 
 describe('addTask', () => {
+  function readOrderContent(dir: string, taskDir: unknown): string {
+    return fs.readFileSync(path.join(dir, String(taskDir), 'order.md'), 'utf-8');
+  }
+
   it('should show usage and exit when task is missing', async () => {
     await addTask(testDir);
 
@@ -105,7 +109,9 @@ describe('addTask', () => {
 
     expect(mockInteractiveMode).not.toHaveBeenCalled();
     const task = loadTasks(testDir).tasks[0]!;
-    expect(task.content).toBe('  JWT認証を実装する  ');
+    expect(task.content).toBeUndefined();
+    expect(task.task_dir).toBeTypeOf('string');
+    expect(readOrderContent(testDir, task.task_dir)).toContain('JWT認証を実装する');
     expect(task.piece).toBe('default');
   });
 
@@ -127,7 +133,8 @@ describe('addTask', () => {
 
     expect(mockInteractiveMode).not.toHaveBeenCalled();
     const task = loadTasks(testDir).tasks[0]!;
-    expect(task.content).toContain('Fix login timeout');
+    expect(task.content).toBeUndefined();
+    expect(readOrderContent(testDir, task.task_dir)).toContain('Fix login timeout');
     expect(task.issue).toBe(99);
   });
 

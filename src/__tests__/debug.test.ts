@@ -63,7 +63,7 @@ describe('debug logging', () => {
       }
     });
 
-    it('should write debug log to project .takt/logs/ directory', () => {
+    it('should write debug log to project .takt/runs/*/logs/ directory', () => {
       const projectDir = join(tmpdir(), 'takt-test-debug-project-' + Date.now());
       mkdirSync(projectDir, { recursive: true });
 
@@ -71,7 +71,9 @@ describe('debug logging', () => {
         initDebugLogger({ enabled: true }, projectDir);
         const logFile = getDebugLogFile();
         expect(logFile).not.toBeNull();
-        expect(logFile!).toContain(join(projectDir, '.takt', 'logs'));
+        expect(logFile!).toContain(join(projectDir, '.takt', 'runs'));
+        expect(logFile!).toContain(`${join(projectDir, '.takt', 'runs')}/`);
+        expect(logFile!).toContain('/logs/');
         expect(logFile!).toMatch(/debug-.*\.log$/);
         expect(existsSync(logFile!)).toBe(true);
       } finally {
@@ -86,7 +88,8 @@ describe('debug logging', () => {
       try {
         initDebugLogger({ enabled: true }, projectDir);
         const promptsLogFile = resolvePromptsLogFilePath();
-        expect(promptsLogFile).toContain(join(projectDir, '.takt', 'logs'));
+        expect(promptsLogFile).toContain(join(projectDir, '.takt', 'runs'));
+        expect(promptsLogFile).toContain('/logs/');
         expect(promptsLogFile).toMatch(/debug-.*-prompts\.jsonl$/);
         expect(existsSync(promptsLogFile)).toBe(true);
       } finally {

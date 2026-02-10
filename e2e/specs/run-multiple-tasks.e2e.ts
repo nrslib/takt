@@ -5,7 +5,11 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
-import { createIsolatedEnv, type IsolatedEnv } from '../helpers/isolated-env';
+import {
+  createIsolatedEnv,
+  updateIsolatedConfig,
+  type IsolatedEnv,
+} from '../helpers/isolated-env';
 import { runTakt } from '../helpers/takt-runner';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -39,15 +43,9 @@ describe('E2E: Run multiple tasks (takt run)', () => {
     repo = createLocalRepo();
 
     // Override config to use mock provider
-    writeFileSync(
-      join(isolatedEnv.taktDir, 'config.yaml'),
-      [
-        'provider: mock',
-        'language: en',
-        'log_level: info',
-        'default_piece: default',
-      ].join('\n'),
-    );
+    updateIsolatedConfig(isolatedEnv.taktDir, {
+      provider: 'mock',
+    });
   });
 
   afterEach(() => {

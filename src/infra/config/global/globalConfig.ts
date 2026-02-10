@@ -110,6 +110,13 @@ export class GlobalConfigManager {
       branchNameStrategy: parsed.branch_name_strategy,
       preventSleep: parsed.prevent_sleep,
       notificationSound: parsed.notification_sound,
+      notificationSoundEvents: parsed.notification_sound_events ? {
+        iterationLimit: parsed.notification_sound_events.iteration_limit,
+        pieceComplete: parsed.notification_sound_events.piece_complete,
+        pieceAbort: parsed.notification_sound_events.piece_abort,
+        runComplete: parsed.notification_sound_events.run_complete,
+        runAbort: parsed.notification_sound_events.run_abort,
+      } : undefined,
       interactivePreviewMovements: parsed.interactive_preview_movements,
       concurrency: parsed.concurrency,
       taskPollIntervalMs: parsed.task_poll_interval_ms,
@@ -184,6 +191,27 @@ export class GlobalConfigManager {
     }
     if (config.notificationSound !== undefined) {
       raw.notification_sound = config.notificationSound;
+    }
+    if (config.notificationSoundEvents) {
+      const eventRaw: Record<string, unknown> = {};
+      if (config.notificationSoundEvents.iterationLimit !== undefined) {
+        eventRaw.iteration_limit = config.notificationSoundEvents.iterationLimit;
+      }
+      if (config.notificationSoundEvents.pieceComplete !== undefined) {
+        eventRaw.piece_complete = config.notificationSoundEvents.pieceComplete;
+      }
+      if (config.notificationSoundEvents.pieceAbort !== undefined) {
+        eventRaw.piece_abort = config.notificationSoundEvents.pieceAbort;
+      }
+      if (config.notificationSoundEvents.runComplete !== undefined) {
+        eventRaw.run_complete = config.notificationSoundEvents.runComplete;
+      }
+      if (config.notificationSoundEvents.runAbort !== undefined) {
+        eventRaw.run_abort = config.notificationSoundEvents.runAbort;
+      }
+      if (Object.keys(eventRaw).length > 0) {
+        raw.notification_sound_events = eventRaw;
+      }
     }
     if (config.interactivePreviewMovements !== undefined) {
       raw.interactive_preview_movements = config.interactivePreviewMovements;

@@ -67,9 +67,6 @@ export {
   callClaudeCustom,
   callClaudeAgent,
   callClaudeSkill,
-  callAiJudge,
   detectRuleIndex,
-  detectJudgeIndex,
-  buildJudgePrompt,
   isRegexSafe,
 } from './client.js';

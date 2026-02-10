@@ -13,6 +13,13 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
   - リポジトリクローン: `$(os.tmpdir())/takt-e2e-repo-<random>/`
   - 実行環境: `$(os.tmpdir())/takt-e2e-<runId>-<random>/`
 
+## E2E用config.yaml
+- E2Eのグローバル設定は `e2e/fixtures/config.e2e.yaml` を基準に生成する。
+- `createIsolatedEnv()` は毎回一時ディレクトリ配下（`$TAKT_CONFIG_DIR/config.yaml`）にこの基準設定を書き出す。
+- 通知音は `notification_sound_events` でタイミング別に制御し、E2E既定では道中（`iteration_limit` / `piece_complete` / `piece_abort`）をOFF、全体終了時（`run_complete` / `run_abort`）のみONにする。
+- 各スペックで `provider` や `concurrency` を変更する場合は、`updateIsolatedConfig()` を使って差分のみ上書きする。
+- `~/.takt/config.yaml` はE2Eでは参照されないため、通常実行の設定には影響しない。
+
 ## 実行コマンド
 - `npm run test:e2e`: E2E全体を実行。
 - `npm run test:e2e:mock`: mock固定のE2Eのみ実行。
@@ -26,13 +33,13 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
 
 ## シナリオ一覧
 - Add task and run（`e2e/specs/add-and-run.e2e.ts`）
-  - 目的: `.takt/tasks/` にタスクYAMLを配置し、`takt run` が実行できることを確認。
+  - 目的: `.takt/tasks.yaml` に pending タスクを配置し、`takt run` が実行できることを確認。
   - LLM: 条件付き（`TAKT_E2E_PROVIDER` が `claude` / `codex` の場合に呼び出す）
   - 手順（ユーザー行動/コマンド）:
-    - `.takt/tasks/e2e-test-task.yaml` にタスクを作成（`piece` は `e2e/fixtures/pieces/simple.yaml` を指定）。
+    - `.takt/tasks.yaml` にタスクを作成（`piece` は `e2e/fixtures/pieces/simple.yaml` を指定）。
     - `takt run` を実行する。
     - `README.md` に行が追加されることを確認する。
-    - タスクファイルが `tasks/` から移動されることを確認する。
+    - 実行後にタスクが `tasks.yaml` から消えることを確認する。
 - Worktree/Clone isolation（`e2e/specs/worktree.e2e.ts`）
   - 目的: `--create-worktree yes` 指定で隔離環境に実行されることを確認。
   - LLM: 条件付き（`TAKT_E2E_PROVIDER` が `claude` / `codex` の場合に呼び出す）
@@ -83,13 +90,13 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
     - `gh issue create ...` でIssueを作成する。
     - `TAKT_MOCK_SCENARIO=e2e/fixtures/scenarios/add-task.json` を設定する。
     - `takt add '#<issue>'` を実行し、`Create worktree?` に `n` で回答する。
-    - `.takt/tasks/` にYAMLが生成されることを確認する。
+    - `.takt/tasks.yaml` に `task_dir` が保存され、`.takt/tasks/{slug}/order.md` が生成されることを確認する。
 - Watch tasks（`e2e/specs/watch.e2e.ts`）
   - 目的: `takt watch` が監視中に追加されたタスクを実行できることを確認。
   - LLM: 呼び出さない（`--provider mock` 固定）
   - 手順（ユーザー行動/コマンド）:
     - `takt watch --provider mock` を起動する。
-    - `.takt/tasks/` にタスクYAMLを追加する（`piece` に `e2e/fixtures/pieces/mock-single-step.yaml` を指定）。
+    - `.takt/tasks.yaml` に pending タスクを追加する（`piece` に `e2e/fixtures/pieces/mock-single-step.yaml` を指定）。
     - 出力に `Task "watch-task" completed` が含まれることを確認する。
     - `Ctrl+C` で終了する。
 - Run tasks graceful shutdown on SIGINT（`e2e/specs/run-sigint-graceful.e2e.ts`）

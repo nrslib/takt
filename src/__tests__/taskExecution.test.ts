@@ -511,4 +511,52 @@ describe('resolveTaskExecution', () => {
     expect(mockSummarizeTaskName).not.toHaveBeenCalled();
     expect(mockCreateSharedClone).not.toHaveBeenCalled();
   });
+
+  it('should return reportDirName from taskDir basename', async () => {
+    const task: TaskInfo = {
+      name: 'task-with-dir',
+      content: 'Task content',
+      taskDir: '.takt/tasks/20260201-015714-foptng',
+      filePath: '/tasks/task.yaml',
+      data: {
+        task: 'Task content',
+      },
+    };
+
+    const result = await resolveTaskExecution(task, '/project', 'default');
+
+    expect(result.reportDirName).toBe('20260201-015714-foptng');
+  });
+
+  it('should throw when taskDir format is invalid', async () => {
+    const task: TaskInfo = {
+      name: 'task-with-invalid-dir',
+      content: 'Task content',
+      taskDir: '.takt/reports/20260201-015714-foptng',
+      filePath: '/tasks/task.yaml',
+      data: {
+        task: 'Task content',
+      },
+    };
+
+    await expect(resolveTaskExecution(task, '/project', 'default')).rejects.toThrow(
+      'Invalid task_dir format: .takt/reports/20260201-015714-foptng',
+    );
+  });
+
+  it('should throw when taskDir contains parent directory segment', async () => {
+    const task: TaskInfo = {
+      name: 'task-with-parent-dir',
+      content: 'Task content',
+      taskDir: '.takt/tasks/..',
+      filePath: '/tasks/task.yaml',
+      data: {
+        task: 'Task content',
+      },
+    };
+
+    await expect(resolveTaskExecution(task, '/project', 'default')).rejects.toThrow(
+      'Invalid task_dir format: .takt/tasks/..',
+    );
+  });
 });

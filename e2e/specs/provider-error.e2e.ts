@@ -5,7 +5,11 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
-import { createIsolatedEnv, type IsolatedEnv } from '../helpers/isolated-env';
+import {
+  createIsolatedEnv,
+  updateIsolatedConfig,
+  type IsolatedEnv,
+} from '../helpers/isolated-env';
 import { runTakt } from '../helpers/takt-runner';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -44,15 +48,9 @@ describe('E2E: Provider error handling (mock)', () => {
 
   it('should override config provider with --provider flag', () => {
     // Given: config.yaml has provider: claude, but CLI flag specifies mock
-    writeFileSync(
-      join(isolatedEnv.taktDir, 'config.yaml'),
-      [
-        'provider: claude',
-        'language: en',
-        'log_level: info',
-        'default_piece: default',
-      ].join('\n'),
-    );
+    updateIsolatedConfig(isolatedEnv.taktDir, {
+      provider: 'claude',
+    });
 
     const piecePath = resolve(__dirname, '../fixtures/pieces/mock-single-step.yaml');
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/execute-done.json');

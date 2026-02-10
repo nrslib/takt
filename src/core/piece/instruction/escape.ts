@@ -37,7 +37,12 @@ export function replaceTemplatePlaceholders(
 
   // Replace {previous_response}
   if (step.passPreviousResponse) {
-    if (context.previousOutput) {
+    if (context.previousResponseText !== undefined) {
+      result = result.replace(
+        /\{previous_response\}/g,
+        escapeTemplateChars(context.previousResponseText),
+      );
+    } else if (context.previousOutput) {
       result = result.replace(
         /\{previous_response\}/g,
         escapeTemplateChars(context.previousOutput.content),
