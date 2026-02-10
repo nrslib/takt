@@ -183,7 +183,7 @@ export const ParallelSubMovementRawSchema = z.object({
   knowledge: z.union([z.string(), z.array(z.string())]).optional(),
   allowed_tools: z.array(z.string()).optional(),
   mcp_servers: McpServersSchema,
-  provider: z.enum(['claude', 'codex', 'mock']).optional(),
+  provider: z.enum(['claude', 'codex', 'opencode', 'mock']).optional(),
   model: z.string().optional(),
   permission_mode: PermissionModeSchema.optional(),
   edit: z.boolean().optional(),
@@ -213,7 +213,7 @@ export const PieceMovementRawSchema = z.object({
   knowledge: z.union([z.string(), z.array(z.string())]).optional(),
   allowed_tools: z.array(z.string()).optional(),
   mcp_servers: McpServersSchema,
-  provider: z.enum(['claude', 'codex', 'mock']).optional(),
+  provider: z.enum(['claude', 'codex', 'opencode', 'mock']).optional(),
   model: z.string().optional(),
   /** Permission mode for tool execution in this movement */
   permission_mode: PermissionModeSchema.optional(),
@@ -296,7 +296,7 @@ export const CustomAgentConfigSchema = z.object({
   allowed_tools: z.array(z.string()).optional(),
   claude_agent: z.string().optional(),
   claude_skill: z.string().optional(),
-  provider: z.enum(['claude', 'codex', 'mock']).optional(),
+  provider: z.enum(['claude', 'codex', 'opencode', 'mock']).optional(),
   model: z.string().optional(),
 }).refine(
   (data) => data.prompt_file || data.prompt || data.claude_agent || data.claude_skill,
@@ -338,7 +338,7 @@ export const GlobalConfigSchema = z.object({
   language: LanguageSchema.optional().default(DEFAULT_LANGUAGE),
   default_piece: z.string().optional().default('default'),
   log_level: z.enum(['debug', 'info', 'warn', 'error']).optional().default('info'),
-  provider: z.enum(['claude', 'codex', 'mock']).optional().default('claude'),
+  provider: z.enum(['claude', 'codex', 'opencode', 'mock']).optional().default('claude'),
   model: z.string().optional(),
   debug: DebugConfigSchema.optional(),
   /** Directory for shared clones (worktree_dir in config). If empty, uses ../{clone-name} relative to project */
@@ -353,6 +353,8 @@ export const GlobalConfigSchema = z.object({
   anthropic_api_key: z.string().optional(),
   /** OpenAI API key for Codex SDK (overridden by TAKT_OPENAI_API_KEY env var) */
   openai_api_key: z.string().optional(),
+  /** OpenCode API key for OpenCode SDK (overridden by TAKT_OPENCODE_API_KEY env var) */
+  opencode_api_key: z.string().optional(),
   /** Pipeline execution settings */
   pipeline: PipelineConfigSchema.optional(),
   /** Minimal output mode for CI - suppress AI output to prevent sensitive information leaks */
@@ -362,7 +364,7 @@ export const GlobalConfigSchema = z.object({
   /** Path to piece categories file (default: ~/.takt/preferences/piece-categories.yaml) */
   piece_categories_file: z.string().optional(),
   /** Per-persona provider overrides (e.g., { coder: 'codex' }) */
-  persona_providers: z.record(z.string(), z.enum(['claude', 'codex', 'mock'])).optional(),
+  persona_providers: z.record(z.string(), z.enum(['claude', 'codex', 'opencode', 'mock'])).optional(),
   /** Branch name generation strategy: 'romaji' (fast, default) or 'ai' (slow) */
   branch_name_strategy: z.enum(['romaji', 'ai']).optional(),
   /** Prevent macOS idle sleep during takt execution using caffeinate (default: false) */
@@ -389,5 +391,5 @@ export const GlobalConfigSchema = z.object({
 export const ProjectConfigSchema = z.object({
   piece: z.string().optional(),
   agents: z.array(CustomAgentConfigSchema).optional(),
-  provider: z.enum(['claude', 'codex', 'mock']).optional(),
+  provider: z.enum(['claude', 'codex', 'opencode', 'mock']).optional(),
 });

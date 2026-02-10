@@ -19,10 +19,10 @@ const CLAUDE_MODEL_ALIASES = new Set(['opus', 'sonnet', 'haiku']);
 function validateProviderModelCompatibility(provider: string | undefined, model: string | undefined): void {
   if (!provider || !model) return;
 
-  if (provider === 'codex' && CLAUDE_MODEL_ALIASES.has(model)) {
+  if ((provider === 'codex' || provider === 'opencode') && CLAUDE_MODEL_ALIASES.has(model)) {
     throw new Error(
       `Configuration error: model '${model}' is a Claude model alias but provider is '${provider}'. ` +
-      `Either change the provider to 'claude' or specify a Codex-compatible model.`
+      `Either change the provider to 'claude' or specify a ${provider}-compatible model.`
     );
   }
 }
@@ -98,6 +98,7 @@ export class GlobalConfigManager {
       enableBuiltinPieces: parsed.enable_builtin_pieces,
       anthropicApiKey: parsed.anthropic_api_key,
       openaiApiKey: parsed.openai_api_key,
+      opencodeApiKey: parsed.opencode_api_key,
       pipeline: parsed.pipeline ? {
         defaultBranchPrefix: parsed.pipeline.default_branch_prefix,
         commitMessageTemplate: parsed.pipeline.commit_message_template,
@@ -161,6 +162,9 @@ export class GlobalConfigManager {
     }
     if (config.openaiApiKey) {
       raw.openai_api_key = config.openaiApiKey;
+    }
+    if (config.opencodeApiKey) {
+      raw.opencode_api_key = config.opencodeApiKey;
     }
     if (config.pipeline) {
       const pipelineRaw: Record<string, unknown> = {};
@@ -272,7 +276,7 @@ export function setLanguage(language: Language): void {
   saveGlobalConfig(config);
 }
 
-export function setProvider(provider: 'claude' | 'codex'): void {
+export function setProvider(provider: 'claude' | 'codex' | 'opencode'): void {
   const config = loadGlobalConfig();
   config.provider = provider;
   saveGlobalConfig(config);
@@ -305,6 +309,22 @@ export function resolveOpenaiApiKey(): string | undefined {
   try {
     const config = loadGlobalConfig();
     return config.openaiApiKey;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Resolve the OpenCode API key.
+ * Priority: TAKT_OPENCODE_API_KEY env var > config.yaml > undefined
+ */
+export function resolveOpencodeApiKey(): string | undefined {
+  const envKey = process.env['TAKT_OPENCODE_API_KEY'];
+  if (envKey) return envKey;
+
+  try {
+    const config = loadGlobalConfig();
+    return config.opencodeApiKey;
   } catch {
     return undefined;
   }

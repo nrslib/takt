@@ -46,7 +46,7 @@ program
   .option('-b, --branch <name>', 'Branch name (auto-generated if omitted)')
   .option('--auto-pr', 'Create PR after successful execution')
   .option('--repo <owner/repo>', 'Repository (defaults to current)')
-  .option('--provider <name>', 'Override agent provider (claude|codex|mock)')
+  .option('--provider <name>', 'Override agent provider (claude|codex|opencode|mock)')
   .option('--model <name>', 'Override agent model')
   .option('-t, --task <string>', 'Task content (as alternative to GitHub issue)')
   .option('--pipeline', 'Pipeline mode: non-interactive, no worktree, direct branch creation')

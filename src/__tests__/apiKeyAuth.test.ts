@@ -32,7 +32,7 @@ vi.mock('../infra/config/paths.js', async (importOriginal) => {
 });
 
 // Import after mocking
-const { loadGlobalConfig, saveGlobalConfig, resolveAnthropicApiKey, resolveOpenaiApiKey, invalidateGlobalConfigCache } = await import('../infra/config/global/globalConfig.js');
+const { loadGlobalConfig, saveGlobalConfig, resolveAnthropicApiKey, resolveOpenaiApiKey, resolveOpencodeApiKey, invalidateGlobalConfigCache } = await import('../infra/config/global/globalConfig.js');
 
 describe('GlobalConfigSchema API key fields', () => {
   it('should accept config without API keys', () => {
@@ -277,6 +277,68 @@ describe('resolveOpenaiApiKey', () => {
     writeFileSync(configPath, yaml, 'utf-8');
 
     const key = resolveOpenaiApiKey();
+    expect(key).toBeUndefined();
+  });
+});
+
+describe('resolveOpencodeApiKey', () => {
+  const originalEnv = process.env['TAKT_OPENCODE_API_KEY'];
+
+  beforeEach(() => {
+    invalidateGlobalConfigCache();
+    mkdirSync(taktDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    if (originalEnv !== undefined) {
+      process.env['TAKT_OPENCODE_API_KEY'] = originalEnv;
+    } else {
+      delete process.env['TAKT_OPENCODE_API_KEY'];
+    }
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('should return env var when set', () => {
+    process.env['TAKT_OPENCODE_API_KEY'] = 'sk-opencode-from-env';
+    const yaml = [
+      'language: en',
+      'default_piece: default',
+      'log_level: info',
+      'provider: claude',
+      'opencode_api_key: sk-opencode-from-yaml',
+    ].join('\n');
+    writeFileSync(configPath, yaml, 'utf-8');
+
+    const key = resolveOpencodeApiKey();
+    expect(key).toBe('sk-opencode-from-env');
+  });
+
+  it('should fall back to config when env var is not set', () => {
+    delete process.env['TAKT_OPENCODE_API_KEY'];
+    const yaml = [
+      'language: en',
+      'default_piece: default',
+      'log_level: info',
+      'provider: claude',
+      'opencode_api_key: sk-opencode-from-yaml',
+    ].join('\n');
+    writeFileSync(configPath, yaml, 'utf-8');
+
+    const key = resolveOpencodeApiKey();
+    expect(key).toBe('sk-opencode-from-yaml');
+  });
+
+  it('should return undefined when neither env var nor config is set', () => {
+    delete process.env['TAKT_OPENCODE_API_KEY'];
+    const yaml = [
+      'language: en',
+      'default_piece: default',
+      'log_level: info',
+      'provider: claude',
+    ].join('\n');
+    writeFileSync(configPath, yaml, 'utf-8');
+
+    const key = resolveOpencodeApiKey();
     expect(key).toBeUndefined();
   });
 });

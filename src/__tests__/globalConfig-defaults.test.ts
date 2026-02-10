@@ -518,5 +518,65 @@ describe('loadGlobalConfig', () => {
 
       expect(() => loadGlobalConfig()).not.toThrow();
     });
+
+    it('should throw when provider is opencode but model is a Claude alias (opus)', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(
+        getGlobalConfigPath(),
+        'provider: opencode\nmodel: opus\n',
+        'utf-8',
+      );
+
+      expect(() => loadGlobalConfig()).toThrow(/model 'opus' is a Claude model alias but provider is 'opencode'/);
+    });
+
+    it('should throw when provider is opencode but model is sonnet', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(
+        getGlobalConfigPath(),
+        'provider: opencode\nmodel: sonnet\n',
+        'utf-8',
+      );
+
+      expect(() => loadGlobalConfig()).toThrow(/model 'sonnet' is a Claude model alias but provider is 'opencode'/);
+    });
+
+    it('should throw when provider is opencode but model is haiku', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(
+        getGlobalConfigPath(),
+        'provider: opencode\nmodel: haiku\n',
+        'utf-8',
+      );
+
+      expect(() => loadGlobalConfig()).toThrow(/model 'haiku' is a Claude model alias but provider is 'opencode'/);
+    });
+
+    it('should not throw when provider is opencode with a compatible model', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(
+        getGlobalConfigPath(),
+        'provider: opencode\nmodel: gpt-4o\n',
+        'utf-8',
+      );
+
+      expect(() => loadGlobalConfig()).not.toThrow();
+    });
+
+    it('should not throw when provider is opencode without a model', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(
+        getGlobalConfigPath(),
+        'provider: opencode\n',
+        'utf-8',
+      );
+
+      expect(() => loadGlobalConfig()).not.toThrow();
+    });
   });
 });

@@ -38,6 +38,8 @@ export interface ProviderCallOptions {
   anthropicApiKey?: string;
   /** OpenAI API key for Codex provider */
   openaiApiKey?: string;
+  /** OpenCode API key for OpenCode provider */
+  opencodeApiKey?: string;
 }
 
 /** A configured agent ready to be called */
@@ -51,4 +53,4 @@ export interface Provider {
 }
 
 /** Provider type */
-export type ProviderType = 'claude' | 'codex' | 'mock';
+export type ProviderType = 'claude' | 'codex' | 'opencode' | 'mock';

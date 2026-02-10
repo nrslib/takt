@@ -17,7 +17,7 @@ export interface ProjectLocalConfig {
   /** Current piece name */
   piece?: string;
   /** Provider selection for agent runtime */
-  provider?: 'claude' | 'codex';
+  provider?: 'claude' | 'codex' | 'opencode';
   /** Permission mode setting */
   permissionMode?: PermissionMode;
   /** Verbose output mode */

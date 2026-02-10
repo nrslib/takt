@@ -13,7 +13,7 @@ export interface RunAgentOptions {
   abortSignal?: AbortSignal;
   sessionId?: string;
   model?: string;
-  provider?: 'claude' | 'codex' | 'mock';
+  provider?: 'claude' | 'codex' | 'opencode' | 'mock';
   /** Resolved path to persona prompt file */
   personaPath?: string;
   /** Allowed tools for this agent run */

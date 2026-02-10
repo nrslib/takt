@@ -10,7 +10,7 @@ export interface CustomAgentConfig {
   allowedTools?: string[];
   claudeAgent?: string;
   claudeSkill?: string;
-  provider?: 'claude' | 'codex' | 'mock';
+  provider?: 'claude' | 'codex' | 'opencode' | 'mock';
   model?: string;
 }
 
@@ -52,7 +52,7 @@ export interface GlobalConfig {
   language: Language;
   defaultPiece: string;
   logLevel: 'debug' | 'info' | 'warn' | 'error';
-  provider?: 'claude' | 'codex' | 'mock';
+  provider?: 'claude' | 'codex' | 'opencode' | 'mock';
   model?: string;
   debug?: DebugConfig;
   /** Directory for shared clones (worktree_dir in config). If empty, uses ../{clone-name} relative to project */
@@ -67,6 +67,8 @@ export interface GlobalConfig {
   anthropicApiKey?: string;
   /** OpenAI API key for Codex SDK (overridden by TAKT_OPENAI_API_KEY env var) */
   openaiApiKey?: string;
+  /** OpenCode API key for OpenCode SDK (overridden by TAKT_OPENCODE_API_KEY env var) */
+  opencodeApiKey?: string;
   /** Pipeline execution settings */
   pipeline?: PipelineConfig;
   /** Minimal output mode for CI - suppress AI output to prevent sensitive information leaks */
@@ -76,7 +78,7 @@ export interface GlobalConfig {
   /** Path to piece categories file (default: ~/.takt/preferences/piece-categories.yaml) */
   pieceCategoriesFile?: string;
   /** Per-persona provider overrides (e.g., { coder: 'codex' }) */
-  personaProviders?: Record<string, 'claude' | 'codex' | 'mock'>;
+  personaProviders?: Record<string, 'claude' | 'codex' | 'opencode' | 'mock'>;
   /** Branch name generation strategy: 'romaji' (fast, default) or 'ai' (slow) */
   branchNameStrategy?: 'romaji' | 'ai';
   /** Prevent macOS idle sleep during takt execution using caffeinate (default: false) */
@@ -97,5 +99,5 @@ export interface GlobalConfig {
 export interface ProjectConfig {
   piece?: string;
   agents?: CustomAgentConfig[];
-  provider?: 'claude' | 'codex' | 'mock';
+  provider?: 'claude' | 'codex' | 'opencode' | 'mock';
 }

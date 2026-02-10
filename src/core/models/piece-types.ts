@@ -97,7 +97,7 @@ export interface PieceMovement {
   /** Resolved absolute path to persona prompt file (set by loader) */
   personaPath?: string;
   /** Provider override for this movement */
-  provider?: 'claude' | 'codex' | 'mock';
+  provider?: 'claude' | 'codex' | 'opencode' | 'mock';
   /** Model override for this movement */
   model?: string;
   /** Permission mode for tool execution in this movement */

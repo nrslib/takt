@@ -8,7 +8,7 @@
 import type { PermissionResult, PermissionUpdate } from '@anthropic-ai/claude-agent-sdk';
 import type { PieceMovement, AgentResponse, PieceState, Language, LoopMonitorConfig } from '../models/types.js';
 
-export type ProviderType = 'claude' | 'codex' | 'mock';
+export type ProviderType = 'claude' | 'codex' | 'opencode' | 'mock';
 
 export interface StreamInitEventData {
   model: string;
