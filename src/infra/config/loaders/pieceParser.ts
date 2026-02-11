@@ -10,7 +10,7 @@ import { dirname, resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import type { z } from 'zod';
 import { PieceConfigRawSchema, PieceMovementRawSchema } from '../../../core/models/index.js';
-import type { PieceConfig, PieceMovement, PieceRule, OutputContractEntry, OutputContractLabelPath, OutputContractItem, LoopMonitorConfig, LoopMonitorJudge, ArpeggioMovementConfig, ArpeggioMergeMovementConfig } from '../../../core/models/index.js';
+import type { PieceConfig, PieceMovement, PieceRule, OutputContractEntry, OutputContractLabelPath, OutputContractItem, LoopMonitorConfig, LoopMonitorJudge, ArpeggioMovementConfig, ArpeggioMergeMovementConfig, TeamLeaderConfig } from '../../../core/models/index.js';
 import { getLanguage } from '../global/globalConfig.js';
 import {
   type PieceSections,
@@ -179,6 +179,31 @@ function normalizeArpeggio(
   };
 }
 
+/** Normalize raw team_leader config from YAML into internal format. */
+function normalizeTeamLeader(
+  raw: RawStep['team_leader'],
+  pieceDir: string,
+  sections: PieceSections,
+  context?: FacetResolutionContext,
+): TeamLeaderConfig | undefined {
+  if (!raw) return undefined;
+
+  const { personaSpec, personaPath } = resolvePersona(raw.persona, sections, pieceDir, context);
+  const { personaSpec: subtaskPersona, personaPath: subtaskPersonaPath } = resolvePersona(raw.subtask_persona, sections, pieceDir, context);
+
+  return {
+    persona: personaSpec,
+    personaPath,
+    maxSubtasks: raw.max_subtasks,
+    timeoutMs: raw.timeout_ms,
+    subtaskPersona,
+    subtaskPersonaPath,
+    subtaskAllowedTools: raw.subtask_allowed_tools,
+    subtaskEdit: raw.subtask_edit,
+    subtaskPermissionMode: raw.subtask_permission_mode,
+  };
+}
+
 /** Normalize a raw step into internal PieceMovement format. */
 function normalizeStepFromRaw(
   step: RawStep,
@@ -235,6 +260,11 @@ function normalizeStepFromRaw(
   const arpeggioConfig = normalizeArpeggio(step.arpeggio, pieceDir);
   if (arpeggioConfig) {
     result.arpeggio = arpeggioConfig;
+  }
+
+  const teamLeaderConfig = normalizeTeamLeader(step.team_leader, pieceDir, sections, context);
+  if (teamLeaderConfig) {
+    result.teamLeader = teamLeaderConfig;
   }
 
   return result;

@@ -31,6 +31,7 @@ import { OptionsBuilder } from './OptionsBuilder.js';
 import { MovementExecutor } from './MovementExecutor.js';
 import { ParallelRunner } from './ParallelRunner.js';
 import { ArpeggioRunner } from './ArpeggioRunner.js';
+import { TeamLeaderRunner } from './TeamLeaderRunner.js';
 import { buildRunPaths, type RunPaths } from '../run/run-paths.js';
 
 const log = createLogger('engine');
@@ -63,6 +64,7 @@ export class PieceEngine extends EventEmitter {
   private readonly movementExecutor: MovementExecutor;
   private readonly parallelRunner: ParallelRunner;
   private readonly arpeggioRunner: ArpeggioRunner;
+  private readonly teamLeaderRunner: TeamLeaderRunner;
   private readonly detectRuleIndex: (content: string, movementName: string) => number;
   private readonly callAiJudge: (
     agentOutput: string,
@@ -151,6 +153,22 @@ export class PieceEngine extends EventEmitter {
     this.arpeggioRunner = new ArpeggioRunner({
       optionsBuilder: this.optionsBuilder,
       movementExecutor: this.movementExecutor,
+      getCwd: () => this.cwd,
+      getInteractive: () => this.options.interactive === true,
+      detectRuleIndex: this.detectRuleIndex,
+      callAiJudge: this.callAiJudge,
+      onPhaseStart: (step, phase, phaseName, instruction) => {
+        this.emit('phase:start', step, phase, phaseName, instruction);
+      },
+      onPhaseComplete: (step, phase, phaseName, content, phaseStatus, error) => {
+        this.emit('phase:complete', step, phase, phaseName, content, phaseStatus, error);
+      },
+    });
+
+    this.teamLeaderRunner = new TeamLeaderRunner({
+      optionsBuilder: this.optionsBuilder,
+      movementExecutor: this.movementExecutor,
+      engineOptions: this.options,
       getCwd: () => this.cwd,
       getInteractive: () => this.options.interactive === true,
       detectRuleIndex: this.detectRuleIndex,
@@ -336,6 +354,10 @@ export class PieceEngine extends EventEmitter {
     } else if (step.arpeggio) {
       result = await this.arpeggioRunner.runArpeggioMovement(
         step, this.state,
+      );
+    } else if (step.teamLeader) {
+      result = await this.teamLeaderRunner.runTeamLeaderMovement(
+        step, this.state, this.task, this.config.maxMovements, updateSession,
       );
     } else {
       result = await this.movementExecutor.runNormalMovement(
@@ -531,8 +553,8 @@ export class PieceEngine extends EventEmitter {
       this.state.iteration++;
 
       // Build instruction before emitting movement:start so listeners can log it.
-      // Parallel and arpeggio movements handle iteration incrementing internally.
-      const isDelegated = (movement.parallel && movement.parallel.length > 0) || !!movement.arpeggio;
+      // Parallel/arpeggio/team_leader movements handle iteration incrementing internally.
+      const isDelegated = (movement.parallel && movement.parallel.length > 0) || !!movement.arpeggio || !!movement.teamLeader;
       let prebuiltInstruction: string | undefined;
       if (!isDelegated) {
         const movementIteration = incrementMovementIteration(this.state, movement.name);

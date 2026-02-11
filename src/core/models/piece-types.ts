@@ -5,6 +5,7 @@
 import type { PermissionMode } from './status.js';
 import type { AgentResponse } from './response.js';
 import type { InteractiveMode } from './interactive-mode.js';
+import type { TeamLeaderConfig } from './subtask.js';
 
 /** Rule-based transition configuration (unified format) */
 export interface PieceRule {
@@ -116,6 +117,8 @@ export interface PieceMovement {
   parallel?: PieceMovement[];
   /** Arpeggio configuration for data-driven batch processing. When set, this movement reads from a data source, expands templates, and calls LLM per batch. */
   arpeggio?: ArpeggioMovementConfig;
+  /** Team leader configuration for dynamic subtask decomposition + parallel execution */
+  teamLeader?: TeamLeaderConfig;
   /** Resolved policy content strings (from piece-level policies map, resolved at parse time) */
   policyContents?: string[];
   /** Resolved knowledge content strings (from piece-level knowledge map, resolved at parse time) */
