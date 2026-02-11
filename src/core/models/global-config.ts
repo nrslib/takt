@@ -22,7 +22,7 @@ export interface DebugConfig {
 
 /** Observability configuration for runtime event logs */
 export interface ObservabilityConfig {
-  /** Enable provider stream event logging (default: true when undefined) */
+  /** Enable provider stream event logging (default: false when undefined) */
   providerEvents?: boolean;
 }
 

@@ -20,10 +20,13 @@ describe('providerEventLogger', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('should enable provider events by default', () => {
-    expect(isProviderEventsEnabled()).toBe(true);
-    expect(isProviderEventsEnabled({})).toBe(true);
-    expect(isProviderEventsEnabled({ observability: {} })).toBe(true);
+  it('should disable provider events by default', () => {
+    expect(isProviderEventsEnabled()).toBe(false);
+    expect(isProviderEventsEnabled({})).toBe(false);
+    expect(isProviderEventsEnabled({ observability: {} })).toBe(false);
+  });
+
+  it('should enable provider events only when explicitly true', () => {
     expect(isProviderEventsEnabled({ observability: { providerEvents: true } })).toBe(true);
   });
 

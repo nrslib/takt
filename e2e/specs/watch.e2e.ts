@@ -96,6 +96,6 @@ describe('E2E: Watch tasks (takt watch)', () => {
     const tasksRaw = readFileSync(tasksFile, 'utf-8');
     const parsed = parseYaml(tasksRaw) as { tasks?: Array<{ name?: string; status?: string }> };
     const watchTask = parsed.tasks?.find((task) => task.name === 'watch-task');
-    expect(watchTask?.status).toBe('completed');
+    expect(watchTask).toBeUndefined();
   }, 240_000);
 });

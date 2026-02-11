@@ -133,5 +133,5 @@ export function isProviderEventsEnabled(config?: {
     providerEvents?: boolean;
   };
 }): boolean {
-  return config?.observability?.providerEvents !== false;
+  return config?.observability?.providerEvents === true;
 }
