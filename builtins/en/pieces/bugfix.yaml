@@ -1,0 +1,104 @@
+name: bugfix
+description: Bugfix focused piece (analyze root cause -> implement fix -> verify -> iterate)
+max_movements: 15
+initial_movement: analyze
+loop_monitors:
+  - cycle:
+      - fix
+      - verify
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction_template: |
+        The fix ↔ verify loop has repeated {cycle_count} times.
+
+        Review recent reports and determine whether this cycle is still productive.
+
+        **Reports to reference:**
+        - Bug analysis: {report:00-bug-analysis.md}
+        - Verification: {report:02-verification.md}
+
+        **Judgment criteria:**
+        - Is each cycle reducing unresolved issues?
+        - Are the same failures repeating without meaningful change?
+        - Is there enough new evidence to continue?
+      rules:
+        - condition: Healthy (making progress)
+          next: fix
+        - condition: Unproductive (no improvement)
+          next: COMPLETE
+movements:
+  - name: analyze
+    edit: false
+    persona: bugfix-analyst
+    knowledge: architecture
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Bash
+      - WebSearch
+      - WebFetch
+    rules:
+      - condition: Root cause identified and fix strategy is clear
+        next: fix
+      - condition: Bug cannot be analyzed due to insufficient information
+        next: ABORT
+        appendix: |
+          Missing information:
+          - {Missing information 1}
+          - {Missing information 2}
+    instruction: analyze-bug
+    output_contracts:
+      report:
+        - name: 00-bug-analysis.md
+          format: bug-analysis
+
+  - name: fix
+    edit: true
+    persona: coder
+    policy:
+      - coding
+      - testing
+    session: refresh
+    knowledge:
+      - backend
+      - architecture
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    permission_mode: edit
+    rules:
+      - condition: Fix complete
+        next: verify
+      - condition: Cannot proceed, insufficient info
+        next: analyze
+    instruction: fix
+
+  - name: verify
+    edit: false
+    persona: supervisor
+    policy: review
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Bash
+      - WebSearch
+      - WebFetch
+    rules:
+      - condition: All checks passed
+        next: COMPLETE
+      - condition: Requirements unmet, tests failing, build errors
+        next: fix
+    instruction: supervise
+    output_contracts:
+      report:
+        - Validation: 02-verification.md
+        - Summary: summary.md

@@ -1,0 +1,104 @@
+name: bugfix
+description: バグ修正特化ピース（原因分析 -> 修正実装 -> 検証 -> 反復）
+max_movements: 15
+initial_movement: analyze
+loop_monitors:
+  - cycle:
+      - fix
+      - verify
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction_template: |
+        fix と verify のループが {cycle_count} 回繰り返されました。
+
+        最新のレポートを確認し、このサイクルがまだ有効か判断してください。
+
+        **参照するレポート:**
+        - バグ分析: {report:00-bug-analysis.md}
+        - 検証結果: {report:02-verification.md}
+
+        **判断基準:**
+        - サイクルごとに未解決事項が減っているか
+        - 同じ失敗を意味のある変化なく繰り返していないか
+        - 継続するための新しい根拠があるか
+      rules:
+        - condition: 健全（進捗あり）
+          next: fix
+        - condition: 非生産的（改善なし）
+          next: COMPLETE
+movements:
+  - name: analyze
+    edit: false
+    persona: bugfix-analyst
+    knowledge: architecture
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Bash
+      - WebSearch
+      - WebFetch
+    rules:
+      - condition: 根本原因を特定し修正方針が明確
+        next: fix
+      - condition: 情報不足で分析不能
+        next: ABORT
+        appendix: |
+          不足している情報:
+          - {不足情報1}
+          - {不足情報2}
+    instruction: analyze-bug
+    output_contracts:
+      report:
+        - name: 00-bug-analysis.md
+          format: bug-analysis
+
+  - name: fix
+    edit: true
+    persona: coder
+    policy:
+      - coding
+      - testing
+    session: refresh
+    knowledge:
+      - backend
+      - architecture
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    permission_mode: edit
+    rules:
+      - condition: 修正完了
+        next: verify
+      - condition: 判断できない、情報不足
+        next: analyze
+    instruction: fix
+
+  - name: verify
+    edit: false
+    persona: supervisor
+    policy: review
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Bash
+      - WebSearch
+      - WebFetch
+    rules:
+      - condition: すべて問題なし
+        next: COMPLETE
+      - condition: 要求未達成、テスト失敗、ビルドエラー
+        next: fix
+    instruction: supervise
+    output_contracts:
+      report:
+        - Validation: 02-verification.md
+        - Summary: summary.md

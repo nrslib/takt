@@ -2,6 +2,7 @@ piece_categories:
   🚀 Quick Start:
     pieces:
       - default
+      - bugfix
       - passthrough
       - coding
       - minimal

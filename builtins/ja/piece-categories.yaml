@@ -2,6 +2,7 @@ piece_categories:
   🚀 クイックスタート:
     pieces:
       - default
+      - bugfix
       - passthrough
       - coding
       - minimal
