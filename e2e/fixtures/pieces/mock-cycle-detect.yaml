@@ -1,0 +1,37 @@
+name: e2e-cycle-detect
+description: Piece with loop_monitors for cycle detection E2E testing
+
+max_movements: 20
+initial_movement: review
+
+loop_monitors:
+  - cycle: [review, fix]
+    threshold: 2
+    judge:
+      persona: ../agents/test-reviewer-b.md
+      rules:
+        - condition: continue
+          next: review
+        - condition: abort_loop
+          next: ABORT
+
+movements:
+  - name: review
+    persona: ../agents/test-reviewer-a.md
+    instruction_template: |
+      Review the code.
+    rules:
+      - condition: approved
+        next: COMPLETE
+      - condition: needs_fix
+        next: fix
+
+  - name: fix
+    persona: ../agents/test-coder.md
+    edit: true
+    permission_mode: edit
+    instruction_template: |
+      Fix the issues found in review.
+    rules:
+      - condition: fixed
+        next: review
