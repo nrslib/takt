@@ -218,7 +218,7 @@ describe('OpenCodeClient stream cleanup', () => {
     );
   });
 
-  it('should fail fast when question.asked is received without handler', async () => {
+  it('should reject question.asked without handler and continue processing', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const stream = new MockEventStream([
       {
@@ -234,6 +234,17 @@ describe('OpenCodeClient stream cleanup', () => {
             },
           ],
         },
+      },
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: { id: 'p-q1', type: 'text', text: 'continued response' },
+          delta: 'continued response',
+        },
+      },
+      {
+        type: 'session.idle',
+        properties: { sessionID: 'session-4' },
       },
     ]);
 
@@ -260,8 +271,8 @@ describe('OpenCodeClient stream cleanup', () => {
       model: 'opencode/big-pickle',
     });
 
-    expect(result.status).toBe('error');
-    expect(result.content).toContain('no question handler');
+    expect(result.status).toBe('done');
+    expect(result.content).toBe('continued response');
     expect(questionReject).toHaveBeenCalledWith(
       {
         requestID: 'q-1',

@@ -411,9 +411,7 @@ export class OpenCodeClient {
                   OPENCODE_INTERACTION_TIMEOUT_MS,
                   'OpenCode question reject timed out',
                 );
-                success = false;
-                failureMessage = 'OpenCode asked a question, but no question handler is configured';
-                break;
+                continue;
               }
 
               try {

@@ -12,6 +12,7 @@ import {
   emitToolResult,
   emitResult,
   handlePartUpdated,
+  type OpenCodeStreamEvent,
   type OpenCodeTextPart,
   type OpenCodeReasoningPart,
   type OpenCodeToolPart,
@@ -349,5 +350,37 @@ describe('handlePartUpdated', () => {
 
     const part: OpenCodeTextPart = { id: 'p1', type: 'text', text: 'Hello' };
     handlePartUpdated(part, 'Hello', undefined, state);
+  });
+});
+
+describe('OpenCodeStreamEvent typing', () => {
+  it('should accept message.completed event shape', () => {
+    const event: OpenCodeStreamEvent = {
+      type: 'message.completed',
+      properties: {
+        info: {
+          sessionID: 'session-1',
+          role: 'assistant',
+          error: undefined,
+        },
+      },
+    };
+
+    expect(event.type).toBe('message.completed');
+  });
+
+  it('should accept message.failed event shape', () => {
+    const event: OpenCodeStreamEvent = {
+      type: 'message.failed',
+      properties: {
+        info: {
+          sessionID: 'session-2',
+          role: 'assistant',
+          error: { message: 'failed' },
+        },
+      },
+    };
+
+    expect(event.type).toBe('message.failed');
   });
 });

@@ -75,6 +75,28 @@ export interface OpenCodeMessageUpdatedEvent {
   };
 }
 
+export interface OpenCodeMessageCompletedEvent {
+  type: 'message.completed';
+  properties: {
+    info: {
+      sessionID: string;
+      role: 'assistant' | 'user';
+      error?: unknown;
+    };
+  };
+}
+
+export interface OpenCodeMessageFailedEvent {
+  type: 'message.failed';
+  properties: {
+    info: {
+      sessionID: string;
+      role: 'assistant' | 'user';
+      error?: unknown;
+    };
+  };
+}
+
 export interface OpenCodePermissionAskedEvent {
   type: 'permission.asked';
   properties: {
@@ -107,6 +129,8 @@ export interface OpenCodeQuestionAskedEvent {
 export type OpenCodeStreamEvent =
   | OpenCodeMessagePartUpdatedEvent
   | OpenCodeMessageUpdatedEvent
+  | OpenCodeMessageCompletedEvent
+  | OpenCodeMessageFailedEvent
   | OpenCodeSessionStatusEvent
   | OpenCodeSessionIdleEvent
   | OpenCodeSessionErrorEvent
