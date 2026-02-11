@@ -12,7 +12,7 @@ import {
   status,
   blankLine,
 } from '../../../shared/ui/index.js';
-import { createLogger, getErrorMessage, notifyError, notifySuccess } from '../../../shared/utils/index.js';
+import { createLogger, getErrorMessage, getSlackWebhookUrl, notifyError, notifySuccess, sendSlackNotification } from '../../../shared/utils/index.js';
 import { getLabel } from '../../../shared/i18n/index.js';
 import { executePiece } from './pieceExecution.js';
 import { DEFAULT_PIECE_NAME } from '../../../shared/constants.js';
@@ -259,6 +259,7 @@ export async function runAllTasks(
   const shouldNotifyRunAbort = globalConfig.notificationSound !== false
     && globalConfig.notificationSoundEvents?.runAbort !== false;
   const concurrency = globalConfig.concurrency;
+  const slackWebhookUrl = getSlackWebhookUrl();
   const recovered = taskRunner.recoverInterruptedRunningTasks();
   if (recovered > 0) {
     info(`Recovered ${recovered} interrupted running task(s) to pending.`);
@@ -290,15 +291,24 @@ export async function runAllTasks(
       if (shouldNotifyRunAbort) {
         notifyError('TAKT', getLabel('run.notifyAbort', undefined, { failed: String(result.fail) }));
       }
+      if (slackWebhookUrl) {
+        await sendSlackNotification(slackWebhookUrl, `TAKT Run finished with errors: ${String(result.fail)} failed out of ${String(totalCount)} tasks`);
+      }
       return;
     }
 
     if (shouldNotifyRunComplete) {
       notifySuccess('TAKT', getLabel('run.notifyComplete', undefined, { total: String(totalCount) }));
     }
+    if (slackWebhookUrl) {
+      await sendSlackNotification(slackWebhookUrl, `TAKT Run complete: ${String(totalCount)} tasks succeeded`);
+    }
   } catch (e) {
     if (shouldNotifyRunAbort) {
       notifyError('TAKT', getLabel('run.notifyAbort', undefined, { failed: getErrorMessage(e) }));
+    }
+    if (slackWebhookUrl) {
+      await sendSlackNotification(slackWebhookUrl, `TAKT Run error: ${getErrorMessage(e)}`);
     }
     throw e;
   }

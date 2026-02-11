@@ -28,6 +28,8 @@ const {
   mockRecoverInterruptedRunningTasks,
   mockNotifySuccess,
   mockNotifyError,
+  mockSendSlackNotification,
+  mockGetSlackWebhookUrl,
 } = vi.hoisted(() => ({
   mockClaimNextTasks: vi.fn(),
   mockCompleteTask: vi.fn(),
@@ -35,6 +37,8 @@ const {
   mockRecoverInterruptedRunningTasks: vi.fn(),
   mockNotifySuccess: vi.fn(),
   mockNotifyError: vi.fn(),
+  mockSendSlackNotification: vi.fn(),
+  mockGetSlackWebhookUrl: vi.fn(),
 }));
 
 vi.mock('../infra/task/index.js', async (importOriginal) => ({
@@ -88,6 +92,8 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   getErrorMessage: vi.fn((e) => e.message),
   notifySuccess: mockNotifySuccess,
   notifyError: mockNotifyError,
+  sendSlackNotification: mockSendSlackNotification,
+  getSlackWebhookUrl: mockGetSlackWebhookUrl,
 }));
 
 vi.mock('../features/tasks/execute/pieceExecution.js', () => ({
@@ -653,6 +659,101 @@ describe('runAllTasks concurrency', () => {
       await expect(runAllTasks('/project')).rejects.toThrow('worker pool crashed');
       expect(mockNotifyError).toHaveBeenCalledTimes(1);
       expect(mockNotifyError).toHaveBeenCalledWith('TAKT', 'run.notifyAbort');
+    });
+  });
+
+  describe('Slack webhook notification', () => {
+    const webhookUrl = 'https://hooks.slack.com/services/T00/B00/xxx';
+    const fakePieceConfig = {
+      name: 'default',
+      movements: [{ name: 'implement', personaDisplayName: 'coder' }],
+      initialMovement: 'implement',
+      maxMovements: 10,
+    };
+
+    beforeEach(() => {
+      mockLoadGlobalConfig.mockReturnValue({
+        language: 'en',
+        defaultPiece: 'default',
+        logLevel: 'info',
+        concurrency: 1,
+        taskPollIntervalMs: 500,
+      });
+      mockLoadPieceByIdentifier.mockReturnValue(fakePieceConfig as never);
+    });
+
+    it('should send Slack notification on success when webhook URL is set', async () => {
+      // Given
+      mockGetSlackWebhookUrl.mockReturnValue(webhookUrl);
+      const task1 = createTask('task-1');
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1])
+        .mockReturnValueOnce([]);
+
+      // When
+      await runAllTasks('/project');
+
+      // Then
+      expect(mockSendSlackNotification).toHaveBeenCalledOnce();
+      expect(mockSendSlackNotification).toHaveBeenCalledWith(
+        webhookUrl,
+        'TAKT Run complete: 1 tasks succeeded',
+      );
+    });
+
+    it('should send Slack notification on failure when webhook URL is set', async () => {
+      // Given
+      mockGetSlackWebhookUrl.mockReturnValue(webhookUrl);
+      const task1 = createTask('task-1');
+      mockExecutePiece.mockResolvedValueOnce({ success: false, reason: 'failed' });
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1])
+        .mockReturnValueOnce([]);
+
+      // When
+      await runAllTasks('/project');
+
+      // Then
+      expect(mockSendSlackNotification).toHaveBeenCalledOnce();
+      expect(mockSendSlackNotification).toHaveBeenCalledWith(
+        webhookUrl,
+        'TAKT Run finished with errors: 1 failed out of 1 tasks',
+      );
+    });
+
+    it('should send Slack notification on exception when webhook URL is set', async () => {
+      // Given
+      mockGetSlackWebhookUrl.mockReturnValue(webhookUrl);
+      const task1 = createTask('task-1');
+      const poolError = new Error('worker pool crashed');
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1])
+        .mockImplementationOnce(() => {
+          throw poolError;
+        });
+
+      // When / Then
+      await expect(runAllTasks('/project')).rejects.toThrow('worker pool crashed');
+      expect(mockSendSlackNotification).toHaveBeenCalledOnce();
+      expect(mockSendSlackNotification).toHaveBeenCalledWith(
+        webhookUrl,
+        'TAKT Run error: worker pool crashed',
+      );
+    });
+
+    it('should not send Slack notification when webhook URL is not set', async () => {
+      // Given
+      mockGetSlackWebhookUrl.mockReturnValue(undefined);
+      const task1 = createTask('task-1');
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1])
+        .mockReturnValueOnce([]);
+
+      // When
+      await runAllTasks('/project');
+
+      // Then
+      expect(mockSendSlackNotification).not.toHaveBeenCalled();
     });
   });
 });
