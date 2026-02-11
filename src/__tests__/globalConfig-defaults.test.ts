@@ -314,6 +314,43 @@ describe('loadGlobalConfig', () => {
     });
   });
 
+  it('should load observability.provider_events config from config.yaml', () => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(
+      getGlobalConfigPath(),
+      [
+        'language: en',
+        'observability:',
+        '  provider_events: false',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const config = loadGlobalConfig();
+    expect(config.observability).toEqual({
+      providerEvents: false,
+    });
+  });
+
+  it('should save and reload observability.provider_events config', () => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
+
+    const config = loadGlobalConfig();
+    config.observability = {
+      providerEvents: false,
+    };
+    saveGlobalConfig(config);
+    invalidateGlobalConfigCache();
+
+    const reloaded = loadGlobalConfig();
+    expect(reloaded.observability).toEqual({
+      providerEvents: false,
+    });
+  });
+
   it('should save and reload notification_sound_events config', () => {
     const taktDir = join(testHomeDir, '.takt');
     mkdirSync(taktDir, { recursive: true });

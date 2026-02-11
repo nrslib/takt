@@ -20,6 +20,12 @@ export interface DebugConfig {
   logFile?: string;
 }
 
+/** Observability configuration for runtime event logs */
+export interface ObservabilityConfig {
+  /** Enable provider stream event logging (default: true when undefined) */
+  providerEvents?: boolean;
+}
+
 /** Language setting for takt */
 export type Language = 'en' | 'ja';
 
@@ -55,6 +61,7 @@ export interface GlobalConfig {
   provider?: 'claude' | 'codex' | 'opencode' | 'mock';
   model?: string;
   debug?: DebugConfig;
+  observability?: ObservabilityConfig;
   /** Directory for shared clones (worktree_dir in config). If empty, uses ../{clone-name} relative to project */
   worktreeDir?: string;
   /** Auto-create PR after worktree execution (default: prompt in interactive mode) */

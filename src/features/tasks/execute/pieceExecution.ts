@@ -59,6 +59,10 @@ import {
   isValidReportDirName,
 } from '../../../shared/utils/index.js';
 import type { PromptLogRecord } from '../../../shared/utils/index.js';
+import {
+  createProviderEventLogger,
+  isProviderEventsEnabled,
+} from '../../../shared/utils/providerEventLogger.js';
 import { selectOption, promptInput } from '../../../shared/prompt/index.js';
 import { getLabel } from '../../../shared/i18n/index.js';
 import { installSigIntHandler } from './sigintHandler.js';
@@ -303,6 +307,14 @@ export async function executePiece(
   const shouldNotifyPieceComplete = shouldNotify && notificationSoundEvents?.pieceComplete !== false;
   const shouldNotifyPieceAbort = shouldNotify && notificationSoundEvents?.pieceAbort !== false;
   const currentProvider = globalConfig.provider ?? 'claude';
+  const providerEventLogger = createProviderEventLogger({
+    logsDir: runPaths.logsAbs,
+    sessionId: pieceSessionId,
+    runId: runSlug,
+    provider: currentProvider,
+    movement: options.startMovement ?? pieceConfig.initialMovement,
+    enabled: isProviderEventsEnabled(globalConfig),
+  });
 
   // Prevent macOS idle sleep if configured
   if (globalConfig.preventSleep) {
@@ -402,7 +414,7 @@ export async function executePiece(
   try {
     engine = new PieceEngine(pieceConfig, cwd, task, {
       abortSignal: runAbortController.signal,
-      onStream: streamHandler,
+      onStream: providerEventLogger.wrapCallback(streamHandler),
       onUserInput,
       initialSessions: savedSessions,
       onSessionUpdate: sessionUpdateHandler,
@@ -492,6 +504,8 @@ export async function executePiece(
     });
     const movementProvider = resolved.provider ?? currentProvider;
     const movementModel = resolved.model ?? globalConfig.model ?? '(default)';
+    providerEventLogger.setMovement(step.name);
+    providerEventLogger.setProvider(movementProvider);
     out.info(`Provider: ${movementProvider}`);
     out.info(`Model: ${movementModel}`);
 

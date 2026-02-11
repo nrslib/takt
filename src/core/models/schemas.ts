@@ -309,6 +309,10 @@ export const DebugConfigSchema = z.object({
   log_file: z.string().optional(),
 });
 
+export const ObservabilityConfigSchema = z.object({
+  provider_events: z.boolean().optional(),
+});
+
 /** Language setting schema */
 export const LanguageSchema = z.enum(['en', 'ja']);
 
@@ -341,6 +345,7 @@ export const GlobalConfigSchema = z.object({
   provider: z.enum(['claude', 'codex', 'opencode', 'mock']).optional().default('claude'),
   model: z.string().optional(),
   debug: DebugConfigSchema.optional(),
+  observability: ObservabilityConfigSchema.optional(),
   /** Directory for shared clones (worktree_dir in config). If empty, uses ../{clone-name} relative to project */
   worktree_dir: z.string().optional(),
   /** Auto-create PR after worktree execution (default: prompt in interactive mode) */

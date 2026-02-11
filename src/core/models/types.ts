@@ -45,6 +45,7 @@ export type {
 export type {
   CustomAgentConfig,
   DebugConfig,
+  ObservabilityConfig,
   Language,
   PipelineConfig,
   GlobalConfig,

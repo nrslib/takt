@@ -105,6 +105,9 @@ export class GlobalConfigManager {
         enabled: parsed.debug.enabled,
         logFile: parsed.debug.log_file,
       } : undefined,
+      observability: parsed.observability ? {
+        providerEvents: parsed.observability.provider_events,
+      } : undefined,
       worktreeDir: parsed.worktree_dir,
       autoPr: parsed.auto_pr,
       disabledBuiltins: parsed.disabled_builtins,
@@ -156,6 +159,11 @@ export class GlobalConfigManager {
       raw.debug = {
         enabled: config.debug.enabled,
         log_file: config.debug.logFile,
+      };
+    }
+    if (config.observability && config.observability.providerEvents !== undefined) {
+      raw.observability = {
+        provider_events: config.observability.providerEvents,
       };
     }
     if (config.worktreeDir) {

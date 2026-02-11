@@ -5,6 +5,7 @@
 export * from './debug.js';
 export * from './error.js';
 export * from './notification.js';
+export * from './providerEventLogger.js';
 export * from './reportDir.js';
 export * from './sleep.js';
 export * from './slug.js';
