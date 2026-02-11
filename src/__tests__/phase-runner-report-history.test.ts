@@ -32,6 +32,10 @@ function createContext(reportDir: string): PhaseRunnerContext {
       _sessionId,
       _overrides,
     ) => ({ cwd: reportDir }),
+    buildNewSessionReportOptions: (
+      _step,
+      _overrides,
+    ) => ({ cwd: reportDir }),
     updatePersonaSession: (_persona, sessionId) => {
       if (sessionId) {
         currentSessionId = sessionId;

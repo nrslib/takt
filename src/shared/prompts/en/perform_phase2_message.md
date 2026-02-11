@@ -1,7 +1,7 @@
 <!--
   template: perform_phase2_message
   phase: 2 (report output)
-  vars: workingDirectory, reportContext, hasReportOutput, reportOutput,
+  vars: workingDirectory, reportContext, hasLastResponse, lastResponse, hasReportOutput, reportOutput,
         hasOutputContract, outputContract
   builder: ReportInstructionBuilder
 -->
@@ -17,6 +17,13 @@ Note: This section is metadata. Follow the language used in the rest of the prom
 
 ## Piece Context
 {{reportContext}}
+{{#if hasLastResponse}}
+
+## Previous Work Context
+The following is the output from Phase 1 (your main work). Use this as context to generate the report:
+
+{{lastResponse}}
+{{/if}}
 
 ## Instructions
 Respond with the results of the work you just completed as a report. **Tools are not available in this phase. Respond with the report content directly as text.**
