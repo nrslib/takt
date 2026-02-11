@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { runReportPhase, type PhaseRunnerContext } from '../core/piece/phase-runner.js';
 import type { PieceMovement } from '../core/models/types.js';
+import type { RunAgentOptions } from '../agents/runner.js';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -21,7 +22,10 @@ function createStep(fileName: string): PieceMovement {
   };
 }
 
-function createContext(reportDir: string): PhaseRunnerContext {
+function createContext(
+  reportDir: string,
+  onBuildResumeOptions?: (overrides: Pick<RunAgentOptions, 'maxTurns'>) => void,
+): PhaseRunnerContext {
   let currentSessionId = 'session-1';
   return {
     cwd: reportDir,
@@ -30,8 +34,11 @@ function createContext(reportDir: string): PhaseRunnerContext {
     buildResumeOptions: (
       _step,
       _sessionId,
-      _overrides,
-    ) => ({ cwd: reportDir }),
+      overrides,
+    ) => {
+      onBuildResumeOptions?.(overrides);
+      return { cwd: reportDir };
+    },
     updatePersonaSession: (_persona, sessionId) => {
       if (sessionId) {
         currentSessionId = sessionId;
@@ -139,5 +146,29 @@ describe('runReportPhase report history behavior', () => {
       '06-qa-review.20260210T061143Z.1.md',
       '06-qa-review.20260210T061143Z.md',
     ]);
+  });
+
+  it('should build report resume options with maxTurns override only', async () => {
+    // Given
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('07-permissions-check.md');
+    const capturedOverrides: Array<Pick<RunAgentOptions, 'maxTurns'>> = [];
+    const ctx = createContext(reportDir, (overrides) => {
+      capturedOverrides.push(overrides);
+    });
+    const runAgentMock = vi.mocked(runAgent);
+    runAgentMock.mockResolvedValueOnce({
+      persona: 'reviewers',
+      status: 'done',
+      content: 'Permission-based report execution',
+      timestamp: new Date('2026-02-10T06:21:17Z'),
+      sessionId: 'session-2',
+    });
+
+    // When
+    await runReportPhase(step, 1, ctx);
+
+    // Then
+    expect(capturedOverrides).toEqual([{ maxTurns: 3 }]);
   });
 });

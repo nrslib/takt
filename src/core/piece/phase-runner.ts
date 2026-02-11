@@ -35,7 +35,7 @@ export interface PhaseRunnerContext {
   /** Get persona session ID */
   getSessionId: (persona: string) => string | undefined;
   /** Build resume options for a movement */
-  buildResumeOptions: (step: PieceMovement, sessionId: string, overrides: Pick<RunAgentOptions, 'allowedTools' | 'maxTurns'>) => RunAgentOptions;
+  buildResumeOptions: (step: PieceMovement, sessionId: string, overrides: Pick<RunAgentOptions, 'maxTurns'>) => RunAgentOptions;
   /** Update persona session after a phase run */
   updatePersonaSession: (persona: string, sessionId: string | undefined) => void;
   /** Callback for phase lifecycle logging */
@@ -143,7 +143,6 @@ export async function runReportPhase(
     ctx.onPhaseStart?.(step, 2, 'report', reportInstruction);
 
     const reportOptions = ctx.buildResumeOptions(step, currentSessionId, {
-      allowedTools: [],
       maxTurns: 3,
     });
 
