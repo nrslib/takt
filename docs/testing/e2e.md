@@ -102,6 +102,20 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
     - `.takt/tasks.yaml` に pending タスクを追加する（`piece` に `e2e/fixtures/pieces/mock-single-step.yaml` を指定）。
     - 出力に `Task "watch-task" completed` が含まれることを確認する。
     - `Ctrl+C` で終了する。
+- Run recovery and high-priority run flows（`e2e/specs/run-recovery.e2e.ts`）
+  - 目的: 高優先度ユースケース（異常終了リカバリー、並列実行、初期化〜add〜run）をまとめて確認。
+  - LLM: 呼び出さない（`--provider mock` 固定）
+  - 手順（ユーザー行動/コマンド）:
+    - 異常終了リカバリー:
+      - `.takt/tasks.yaml` に pending タスク2件を投入し、`takt run --provider mock` 実行中にプロセスを強制終了する。
+      - 再度 `takt run --provider mock` を実行し、`Recovered 1 interrupted running task(s) to pending.` が出力されることを確認する。
+      - 復旧対象を含む全タスクが完了し、`.takt/tasks.yaml` が空になることを確認する。
+    - 高並列実行:
+      - `concurrency: 10` を設定し、pending タスク12件を投入して `takt run --provider mock` を実行する。
+      - 出力に `Concurrency: 10` と `Tasks Summary` が含まれること、および `.takt/tasks.yaml` が空になることを確認する。
+    - 初期化〜add〜run:
+      - グローバル `config.yaml` 不在の環境で `takt add` を2回実行し、`takt run --provider mock` を実行する。
+      - タスク実行完了後に `.takt/tasks/` 配下の2タスクディレクトリ生成、`.takt/.gitignore` 生成、`.takt/tasks.yaml` の空状態を確認する。
 - Run tasks graceful shutdown on SIGINT（`e2e/specs/run-sigint-graceful.e2e.ts`）
   - 目的: `takt run` を並列実行中に `Ctrl+C` した際、新規クローン投入を止めてグレースフルに終了することを確認。
   - LLM: 呼び出さない（`--provider mock` 固定）
