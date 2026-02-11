@@ -12,6 +12,8 @@ const {
   mockBlankLine,
   mockStatus,
   mockSuccess,
+  mockWarn,
+  mockError,
   mockGetCurrentPiece,
 } = vi.hoisted(() => ({
   mockRecoverInterruptedRunningTasks: vi.fn(),
@@ -24,6 +26,8 @@ const {
   mockBlankLine: vi.fn(),
   mockStatus: vi.fn(),
   mockSuccess: vi.fn(),
+  mockWarn: vi.fn(),
+  mockError: vi.fn(),
   mockGetCurrentPiece: vi.fn(),
 }));
 
@@ -45,9 +49,15 @@ vi.mock('../features/tasks/execute/taskExecution.js', () => ({
 vi.mock('../shared/ui/index.js', () => ({
   header: mockHeader,
   info: mockInfo,
+  warn: mockWarn,
+  error: mockError,
   success: mockSuccess,
   status: mockStatus,
   blankLine: mockBlankLine,
+}));
+
+vi.mock('../shared/i18n/index.js', () => ({
+  getLabel: vi.fn((key: string) => key),
 }));
 
 vi.mock('../infra/config/index.js', () => ({

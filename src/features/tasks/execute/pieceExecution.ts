@@ -65,7 +65,8 @@ import {
 } from '../../../shared/utils/providerEventLogger.js';
 import { selectOption, promptInput } from '../../../shared/prompt/index.js';
 import { getLabel } from '../../../shared/i18n/index.js';
-import { installSigIntHandler } from './sigintHandler.js';
+import { EXIT_SIGINT } from '../../../shared/exitCodes.js';
+import { ShutdownManager } from './shutdownManager.js';
 import { buildRunPaths } from '../../../core/piece/run/run-paths.js';
 import { resolveMovementProviderModel } from '../../../core/piece/provider-resolution.js';
 import { writeFileAtomic, ensureDir } from '../../../infra/config/index.js';
@@ -407,7 +408,7 @@ export async function executePiece(
   const movementIterations = new Map<string, number>();
   let engine: PieceEngine | null = null;
   let onAbortSignal: (() => void) | undefined;
-  let sigintCleanup: (() => void) | undefined;
+  let shutdownManager: ShutdownManager | undefined;
   let onEpipe: ((err: NodeJS.ErrnoException) => void) | undefined;
   const runAbortController = new AbortController();
 
@@ -730,8 +731,13 @@ export async function executePiece(
         options.abortSignal!.addEventListener('abort', onAbortSignal, { once: true });
       }
     } else {
-      const handler = installSigIntHandler(abortEngine);
-      sigintCleanup = handler.cleanup;
+      shutdownManager = new ShutdownManager({
+        callbacks: {
+          onGraceful: abortEngine,
+          onForceKill: () => process.exit(EXIT_SIGINT),
+        },
+      });
+      shutdownManager.install();
     }
 
     const finalState = await engine.run();
@@ -749,7 +755,7 @@ export async function executePiece(
     throw error;
   } finally {
     prefixWriter?.flush();
-    sigintCleanup?.();
+    shutdownManager?.cleanup();
     if (onAbortSignal && options.abortSignal) {
       options.abortSignal.removeEventListener('abort', onAbortSignal);
     }

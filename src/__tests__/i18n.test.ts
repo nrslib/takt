@@ -114,6 +114,7 @@ describe('label integrity', () => {
     expect(() => getLabel('piece.notifyComplete')).not.toThrow();
     expect(() => getLabel('piece.notifyAbort')).not.toThrow();
     expect(() => getLabel('piece.sigintGraceful')).not.toThrow();
+    expect(() => getLabel('piece.sigintTimeout')).not.toThrow();
     expect(() => getLabel('piece.sigintForce')).not.toThrow();
   });
 

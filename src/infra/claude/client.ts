@@ -38,6 +38,7 @@ export class ClaudeClient {
   private static toSpawnOptions(options: ClaudeCallOptions): ClaudeSpawnOptions {
     return {
       cwd: options.cwd,
+      abortSignal: options.abortSignal,
       sessionId: options.sessionId,
       allowedTools: options.allowedTools,
       mcpServers: options.mcpServers,
@@ -125,6 +126,7 @@ export class ClaudeClient {
     const fullPrompt = `/${skillName}\n\n${prompt}`;
     const spawnOptions: ClaudeSpawnOptions = {
       cwd: options.cwd,
+      abortSignal: options.abortSignal,
       sessionId: options.sessionId,
       allowedTools: options.allowedTools,
       mcpServers: options.mcpServers,
@@ -192,4 +194,3 @@ export async function callClaudeSkill(
 ): Promise<AgentResponse> {
   return defaultClient.callSkill(skillName, prompt, options);
 }
-

@@ -10,6 +10,7 @@ import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from '.
 function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
   return {
     cwd: options.cwd,
+    abortSignal: options.abortSignal,
     sessionId: options.sessionId,
     allowedTools: options.allowedTools,
     mcpServers: options.mcpServers,

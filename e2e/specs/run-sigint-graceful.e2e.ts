@@ -171,4 +171,85 @@ describe('E2E: Run tasks graceful shutdown on SIGINT (parallel)', () => {
       expect(stderr).not.toContain('UnhandledPromiseRejection');
     }
   }, 120_000);
+
+  it('should force exit immediately on second SIGINT', async () => {
+    const binPath = resolve(__dirname, '../../bin/takt');
+    const piecePath = resolve(__dirname, '../fixtures/pieces/mock-slow-multi-step.yaml');
+    const scenarioPath = resolve(__dirname, '../fixtures/scenarios/run-sigint-parallel.json');
+
+    const tasksFile = join(testRepo.path, '.takt', 'tasks.yaml');
+    mkdirSync(join(testRepo.path, '.takt'), { recursive: true });
+
+    const now = new Date().toISOString();
+    writeFileSync(
+      tasksFile,
+      [
+        'tasks:',
+        '  - name: sigint-a',
+        '    status: pending',
+        '    content: "E2E SIGINT task A"',
+        `    piece: "${piecePath}"`,
+        '    worktree: true',
+        `    created_at: "${now}"`,
+        '    started_at: null',
+        '    completed_at: null',
+        '    owner_pid: null',
+        '  - name: sigint-b',
+        '    status: pending',
+        '    content: "E2E SIGINT task B"',
+        `    piece: "${piecePath}"`,
+        '    worktree: true',
+        `    created_at: "${now}"`,
+        '    started_at: null',
+        '    completed_at: null',
+        '    owner_pid: null',
+        '  - name: sigint-c',
+        '    status: pending',
+        '    content: "E2E SIGINT task C"',
+        `    piece: "${piecePath}"`,
+        '    worktree: true',
+        `    created_at: "${now}"`,
+        '    started_at: null',
+        '    completed_at: null',
+        '    owner_pid: null',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const child = spawn('node', [binPath, 'run', '--provider', 'mock'], {
+      cwd: testRepo.path,
+      env: {
+        ...isolatedEnv.env,
+        TAKT_MOCK_SCENARIO: scenarioPath,
+        TAKT_E2E_SELF_SIGINT_TWICE: '1',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.on('data', (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr?.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+
+    const workersFilled = await waitFor(
+      () => stdout.includes('=== Task: sigint-b ==='),
+      30_000,
+      20,
+    );
+    expect(workersFilled, `stdout:\n${stdout}\n\nstderr:\n${stderr}`).toBe(true);
+
+    const exit = await waitForClose(child, 60_000);
+    expect(
+      exit.signal === 'SIGINT' || exit.code === 130,
+      `unexpected exit: code=${exit.code}, signal=${exit.signal}`,
+    ).toBe(true);
+
+    if (stderr.trim().length > 0) {
+      expect(stderr).not.toContain('UnhandledPromiseRejection');
+    }
+  }, 120_000);
 });

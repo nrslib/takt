@@ -16,6 +16,8 @@ import {
 } from '../../../shared/ui/index.js';
 import { executeAndCompleteTask } from '../execute/taskExecution.js';
 import { DEFAULT_PIECE_NAME } from '../../../shared/constants.js';
+import { EXIT_SIGINT } from '../../../shared/exitCodes.js';
+import { ShutdownManager } from '../execute/shutdownManager.js';
 import type { TaskExecutionOptions } from '../execute/types.js';
 
 /**
@@ -41,13 +43,20 @@ export async function watchTasks(cwd: string, options?: TaskExecutionOptions): P
   info('Waiting for tasks... (Ctrl+C to stop)');
   blankLine();
 
-  // Graceful shutdown on SIGINT
-  const onSigInt = () => {
-    blankLine();
-    info('Stopping watch...');
-    watcher.stop();
-  };
-  process.on('SIGINT', onSigInt);
+  const shutdownManager = new ShutdownManager({
+    callbacks: {
+      onGraceful: () => {
+        blankLine();
+        info('Stopping watch...');
+        watcher.stop();
+      },
+      onForceKill: () => {
+        watcher.stop();
+        process.exit(EXIT_SIGINT);
+      },
+    },
+  });
+  shutdownManager.install();
 
   try {
     await watcher.watch(async (task: TaskInfo) => {
@@ -68,7 +77,7 @@ export async function watchTasks(cwd: string, options?: TaskExecutionOptions): P
       info('Waiting for tasks... (Ctrl+C to stop)');
     });
   } finally {
-    process.removeListener('SIGINT', onSigInt);
+    shutdownManager.cleanup();
   }
 
   // Summary on exit
