@@ -2,11 +2,9 @@
   {"persona": "agents/test-reviewer-a", "status": "done", "content": "[REVIEW:2]\n\nNeeds fix."},
   {"persona": "conductor", "status": "done", "content": "[REVIEW:2]"},
   {"persona": "agents/test-coder", "status": "done", "content": "[FIX:1]\n\nFixed."},
-  {"persona": "conductor", "status": "done", "content": "[FIX:1]"},
   {"persona": "agents/test-reviewer-a", "status": "done", "content": "[REVIEW:2]\n\nStill needs fix."},
   {"persona": "conductor", "status": "done", "content": "[REVIEW:2]"},
   {"persona": "agents/test-coder", "status": "done", "content": "[FIX:1]\n\nFixed again."},
-  {"persona": "conductor", "status": "done", "content": "[FIX:1]"},
   {"persona": "agents/test-reviewer-b", "status": "done", "content": "[_LOOP_JUDGE_REVIEW_FIX:2]\n\nAbort this loop."},
   {"persona": "conductor", "status": "done", "content": "[_LOOP_JUDGE_REVIEW_FIX:2]"}
 ]
