@@ -35,12 +35,12 @@ function buildTeamLeaderConfig(): PieceConfig {
         instructionTemplate: 'Task: {task}',
         teamLeader: {
           persona: '../personas/team-leader.md',
-          maxSubtasks: 3,
+          maxParts: 3,
           timeoutMs: 10000,
-          subtaskPersona: '../personas/coder.md',
-          subtaskAllowedTools: ['Read', 'Edit', 'Write'],
-          subtaskEdit: true,
-          subtaskPermissionMode: 'edit',
+          partPersona: '../personas/coder.md',
+          partAllowedTools: ['Read', 'Edit', 'Write'],
+          partEdit: true,
+          partPermissionMode: 'edit',
         },
         rules: [makeRule('done', 'COMPLETE')],
       }),
@@ -63,7 +63,7 @@ describe('PieceEngine Integration: TeamLeaderRunner', () => {
     }
   });
 
-  it('team leaderが分解したサブタスクを並列実行し集約する', async () => {
+  it('team leaderが分解したパートを並列実行し集約する', async () => {
     const config = buildTeamLeaderConfig();
     const engine = new PieceEngine(config, tmpDir, 'implement feature', { projectCwd: tmpDir });
 
@@ -72,7 +72,7 @@ describe('PieceEngine Integration: TeamLeaderRunner', () => {
         persona: 'team-leader',
         content: [
           '```json',
-          '[{"id":"sub-1","title":"API","instruction":"Implement API"},{"id":"sub-2","title":"Test","instruction":"Add tests"}]',
+          '[{"id":"part-1","title":"API","instruction":"Implement API"},{"id":"part-2","title":"Test","instruction":"Add tests"}]',
           '```',
         ].join('\n'),
       }))
@@ -88,13 +88,13 @@ describe('PieceEngine Integration: TeamLeaderRunner', () => {
     const output = state.movementOutputs.get('implement');
     expect(output).toBeDefined();
     expect(output!.content).toContain('## decomposition');
-    expect(output!.content).toContain('## sub-1: API');
+    expect(output!.content).toContain('## part-1: API');
     expect(output!.content).toContain('API done');
-    expect(output!.content).toContain('## sub-2: Test');
+    expect(output!.content).toContain('## part-2: Test');
     expect(output!.content).toContain('Tests done');
   });
 
-  it('全サブタスクが失敗した場合はムーブメント失敗として中断する', async () => {
+  it('全パートが失敗した場合はムーブメント失敗として中断する', async () => {
     const config = buildTeamLeaderConfig();
     const engine = new PieceEngine(config, tmpDir, 'implement feature', { projectCwd: tmpDir });
 
@@ -103,7 +103,7 @@ describe('PieceEngine Integration: TeamLeaderRunner', () => {
         persona: 'team-leader',
         content: [
           '```json',
-          '[{"id":"sub-1","title":"API","instruction":"Implement API"},{"id":"sub-2","title":"Test","instruction":"Add tests"}]',
+          '[{"id":"part-1","title":"API","instruction":"Implement API"},{"id":"part-2","title":"Test","instruction":"Add tests"}]',
           '```',
         ].join('\n'),
       }))
@@ -113,5 +113,60 @@ describe('PieceEngine Integration: TeamLeaderRunner', () => {
     const state = await engine.run();
 
     expect(state.status).toBe('aborted');
+  });
+
+  it('一部パートが失敗しても成功パートがあれば集約結果は完了する', async () => {
+    const config = buildTeamLeaderConfig();
+    const engine = new PieceEngine(config, tmpDir, 'implement feature', { projectCwd: tmpDir });
+
+    vi.mocked(runAgent)
+      .mockResolvedValueOnce(makeResponse({
+        persona: 'team-leader',
+        content: [
+          '```json',
+          '[{"id":"part-1","title":"API","instruction":"Implement API"},{"id":"part-2","title":"Test","instruction":"Add tests"}]',
+          '```',
+        ].join('\n'),
+      }))
+      .mockResolvedValueOnce(makeResponse({ persona: 'coder', content: 'API done' }))
+      .mockResolvedValueOnce(makeResponse({ persona: 'coder', status: 'error', error: 'test failed' }));
+
+    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    const output = state.movementOutputs.get('implement');
+    expect(output).toBeDefined();
+    expect(output!.content).toContain('## part-1: API');
+    expect(output!.content).toContain('API done');
+    expect(output!.content).toContain('## part-2: Test');
+    expect(output!.content).toContain('[ERROR] test failed');
+  });
+
+  it('パート失敗時にerrorがなくてもcontentの詳細をエラー表示に使う', async () => {
+    const config = buildTeamLeaderConfig();
+    const engine = new PieceEngine(config, tmpDir, 'implement feature', { projectCwd: tmpDir });
+
+    vi.mocked(runAgent)
+      .mockResolvedValueOnce(makeResponse({
+        persona: 'team-leader',
+        content: [
+          '```json',
+          '[{"id":"part-1","title":"API","instruction":"Implement API"},{"id":"part-2","title":"Test","instruction":"Add tests"}]',
+          '```',
+        ].join('\n'),
+      }))
+      .mockResolvedValueOnce(makeResponse({ persona: 'coder', status: 'error', content: 'api failed from content' }))
+      .mockResolvedValueOnce(makeResponse({ persona: 'coder', content: 'Tests done' }));
+
+    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    const output = state.movementOutputs.get('implement');
+    expect(output).toBeDefined();
+    expect(output!.content).toContain('[ERROR] api failed from content');
   });
 });

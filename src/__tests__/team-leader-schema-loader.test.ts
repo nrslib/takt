@@ -4,12 +4,12 @@ import { PieceMovementRawSchema } from '../core/models/schemas.js';
 import { normalizePieceConfig } from '../infra/config/loaders/pieceParser.js';
 
 describe('team_leader schema', () => {
-  it('max_subtasks <= 3 の設定を受け付ける', () => {
+  it('max_parts <= 3 の設定を受け付ける', () => {
     const raw = {
       name: 'implement',
       team_leader: {
         persona: 'team-leader',
-        max_subtasks: 3,
+        max_parts: 3,
         timeout_ms: 120000,
       },
       instruction_template: 'decompose',
@@ -19,11 +19,11 @@ describe('team_leader schema', () => {
     expect(result.success).toBe(true);
   });
 
-  it('max_subtasks > 3 は拒否する', () => {
+  it('max_parts > 3 は拒否する', () => {
     const raw = {
       name: 'implement',
       team_leader: {
-        max_subtasks: 4,
+        max_parts: 4,
       },
       instruction_template: 'decompose',
     };
@@ -37,7 +37,7 @@ describe('team_leader schema', () => {
       name: 'implement',
       parallel: [{ name: 'sub', instruction_template: 'x' }],
       team_leader: {
-        max_subtasks: 2,
+        max_parts: 2,
       },
       instruction_template: 'decompose',
     };
@@ -55,7 +55,7 @@ describe('team_leader schema', () => {
         template: './prompt.md',
       },
       team_leader: {
-        max_subtasks: 2,
+        max_parts: 2,
       },
       instruction_template: 'decompose',
     };
@@ -75,12 +75,12 @@ describe('normalizePieceConfig team_leader', () => {
           name: 'implement',
           team_leader: {
             persona: 'team-leader',
-            max_subtasks: 2,
+            max_parts: 2,
             timeout_ms: 90000,
-            subtask_persona: 'coder',
-            subtask_allowed_tools: ['Read', 'Edit'],
-            subtask_edit: true,
-            subtask_permission_mode: 'edit',
+            part_persona: 'coder',
+            part_allowed_tools: ['Read', 'Edit'],
+            part_edit: true,
+            part_permission_mode: 'edit',
           },
           instruction_template: 'decompose',
         },
@@ -93,13 +93,13 @@ describe('normalizePieceConfig team_leader', () => {
     expect(movement!.teamLeader).toEqual({
       persona: 'team-leader',
       personaPath: undefined,
-      maxSubtasks: 2,
+      maxParts: 2,
       timeoutMs: 90000,
-      subtaskPersona: 'coder',
-      subtaskPersonaPath: undefined,
-      subtaskAllowedTools: ['Read', 'Edit'],
-      subtaskEdit: true,
-      subtaskPermissionMode: 'edit',
+      partPersona: 'coder',
+      partPersonaPath: undefined,
+      partAllowedTools: ['Read', 'Edit'],
+      partEdit: true,
+      partPermissionMode: 'edit',
     });
   });
 });

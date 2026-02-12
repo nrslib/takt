@@ -189,18 +189,18 @@ function normalizeTeamLeader(
   if (!raw) return undefined;
 
   const { personaSpec, personaPath } = resolvePersona(raw.persona, sections, pieceDir, context);
-  const { personaSpec: subtaskPersona, personaPath: subtaskPersonaPath } = resolvePersona(raw.subtask_persona, sections, pieceDir, context);
+  const { personaSpec: partPersona, personaPath: partPersonaPath } = resolvePersona(raw.part_persona, sections, pieceDir, context);
 
   return {
     persona: personaSpec,
     personaPath,
-    maxSubtasks: raw.max_subtasks,
+    maxParts: raw.max_parts,
     timeoutMs: raw.timeout_ms,
-    subtaskPersona,
-    subtaskPersonaPath,
-    subtaskAllowedTools: raw.subtask_allowed_tools,
-    subtaskEdit: raw.subtask_edit,
-    subtaskPermissionMode: raw.subtask_permission_mode,
+    partPersona,
+    partPersonaPath,
+    partAllowedTools: raw.part_allowed_tools,
+    partEdit: raw.part_edit,
+    partPermissionMode: raw.part_permission_mode,
   };
 }
 

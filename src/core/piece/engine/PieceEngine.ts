@@ -584,7 +584,7 @@ export class PieceEngine extends EventEmitter {
         }
 
         if (response.status === 'error') {
-          const detail = response.error ?? response.content ?? `Movement "${movement.name}" returned error status`;
+          const detail = response.error ?? response.content;
           this.state.status = 'aborted';
           this.emit('piece:abort', this.state, `Movement "${movement.name}" failed: ${detail}`);
           break;

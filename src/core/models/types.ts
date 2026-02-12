@@ -23,12 +23,12 @@ export type {
   SessionState,
 } from './session.js';
 
-// Subtask decomposition
+// Part decomposition
 export type {
-  SubtaskDefinition,
-  SubtaskResult,
+  PartDefinition,
+  PartResult,
   TeamLeaderConfig,
-} from './subtask.js';
+} from './part.js';
 
 // Piece configuration and runtime state
 export type {

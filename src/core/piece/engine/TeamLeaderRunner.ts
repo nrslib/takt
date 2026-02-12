@@ -3,14 +3,14 @@ import type {
   PieceMovement,
   PieceState,
   AgentResponse,
-  SubtaskDefinition,
-  SubtaskResult,
+  PartDefinition,
+  PartResult,
 } from '../../models/types.js';
 import { detectMatchedRule } from '../evaluation/index.js';
 import { buildSessionKey } from '../session-key.js';
 import { ParallelLogger } from './parallel-logger.js';
 import { incrementMovementIteration } from './state-manager.js';
-import { parseSubtasks } from './task-decomposer.js';
+import { parseParts } from './task-decomposer.js';
 import { buildAbortSignal } from './abort-signal.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
@@ -19,6 +19,14 @@ import type { PieceEngineOptions, PhaseName } from '../types.js';
 import type { ParallelLoggerOptions } from './parallel-logger.js';
 
 const log = createLogger('team-leader-runner');
+
+function resolvePartErrorDetail(partResult: PartResult): string {
+  const detail = partResult.response.error ?? partResult.response.content;
+  if (!detail) {
+    throw new Error(`Part "${partResult.part.id}" failed without error detail`);
+  }
+  return detail;
+}
 
 export interface TeamLeaderRunnerDeps {
   readonly optionsBuilder: OptionsBuilder;
@@ -36,25 +44,25 @@ export interface TeamLeaderRunnerDeps {
   readonly onPhaseComplete?: (step: PieceMovement, phase: 1 | 2 | 3, phaseName: PhaseName, content: string, status: string, error?: string) => void;
 }
 
-function createSubtaskMovement(step: PieceMovement, subtask: SubtaskDefinition): PieceMovement {
+function createPartMovement(step: PieceMovement, part: PartDefinition): PieceMovement {
   if (!step.teamLeader) {
     throw new Error(`Movement "${step.name}" has no teamLeader configuration`);
   }
 
   return {
-    name: `${step.name}.${subtask.id}`,
-    description: subtask.title,
-    persona: step.teamLeader.subtaskPersona ?? step.persona,
-    personaPath: step.teamLeader.subtaskPersonaPath ?? step.personaPath,
-    personaDisplayName: `${step.name}:${subtask.id}`,
+    name: `${step.name}.${part.id}`,
+    description: part.title,
+    persona: step.teamLeader.partPersona ?? step.persona,
+    personaPath: step.teamLeader.partPersonaPath ?? step.personaPath,
+    personaDisplayName: `${step.name}:${part.id}`,
     session: 'refresh',
-    allowedTools: step.teamLeader.subtaskAllowedTools ?? step.allowedTools,
+    allowedTools: step.teamLeader.partAllowedTools ?? step.allowedTools,
     mcpServers: step.mcpServers,
     provider: step.provider,
     model: step.model,
-    permissionMode: step.teamLeader.subtaskPermissionMode ?? step.permissionMode,
-    edit: step.teamLeader.subtaskEdit ?? step.edit,
-    instructionTemplate: subtask.instruction,
+    permissionMode: step.teamLeader.partPermissionMode ?? step.permissionMode,
+    edit: step.teamLeader.partEdit ?? step.edit,
+    instructionTemplate: part.instruction,
     passPreviousResponse: false,
   };
 }
@@ -106,31 +114,31 @@ export class TeamLeaderRunner {
       leaderResponse.error,
     );
     if (leaderResponse.status === 'error') {
-      const detail = leaderResponse.error ?? leaderResponse.content ?? 'unknown error';
+      const detail = leaderResponse.error ?? leaderResponse.content;
       throw new Error(`Team leader failed: ${detail}`);
     }
 
-    const subtasks = parseSubtasks(leaderResponse.content, teamLeaderConfig.maxSubtasks);
-    log.debug('Team leader decomposed subtasks', {
+    const parts = parseParts(leaderResponse.content, teamLeaderConfig.maxParts);
+    log.debug('Team leader decomposed parts', {
       movement: step.name,
-      subtaskCount: subtasks.length,
-      subtaskIds: subtasks.map((subtask) => subtask.id),
+      partCount: parts.length,
+      partIds: parts.map((part) => part.id),
     });
 
     const parallelLogger = this.deps.engineOptions.onStream
       ? new ParallelLogger(this.buildParallelLoggerOptions(
           step.name,
           movementIteration,
-          subtasks.map((subtask) => subtask.id),
+          parts.map((part) => part.id),
           state.iteration,
           maxMovements,
         ))
       : undefined;
 
     const settled = await Promise.allSettled(
-      subtasks.map((subtask, index) => this.runSingleSubtask(
+      parts.map((part, index) => this.runSinglePart(
         step,
-        subtask,
+        part,
         index,
         teamLeaderConfig.timeoutMs,
         updatePersonaSession,
@@ -138,10 +146,10 @@ export class TeamLeaderRunner {
       )),
     );
 
-    const subtaskResults: SubtaskResult[] = settled.map((result, index) => {
-      const subtask = subtasks[index];
-      if (!subtask) {
-        throw new Error(`Missing subtask at index ${index}`);
+    const partResults: PartResult[] = settled.map((result, index) => {
+      const part = parts[index];
+      if (!part) {
+        throw new Error(`Missing part at index ${index}`);
       }
 
       if (result.status === 'fulfilled') {
@@ -151,36 +159,36 @@ export class TeamLeaderRunner {
 
       const errorMsg = getErrorMessage(result.reason);
       const errorResponse: AgentResponse = {
-        persona: `${step.name}.${subtask.id}`,
+        persona: `${step.name}.${part.id}`,
         status: 'error',
         content: '',
         timestamp: new Date(),
         error: errorMsg,
       };
       state.movementOutputs.set(errorResponse.persona, errorResponse);
-      return { subtask, response: errorResponse };
+      return { part, response: errorResponse };
     });
 
-    const allFailed = subtaskResults.every((result) => result.response.status === 'error');
+    const allFailed = partResults.every((result) => result.response.status === 'error');
     if (allFailed) {
-      const errors = subtaskResults.map((result) => `${result.subtask.id}: ${result.response.error}`).join('; ');
-      throw new Error(`All team leader subtasks failed: ${errors}`);
+      const errors = partResults.map((result) => `${result.part.id}: ${resolvePartErrorDetail(result)}`).join('; ');
+      throw new Error(`All team leader parts failed: ${errors}`);
     }
 
     if (parallelLogger) {
       parallelLogger.printSummary(
         step.name,
-        subtaskResults.map((result) => ({ name: result.subtask.id, condition: undefined })),
+        partResults.map((result) => ({ name: result.part.id, condition: undefined })),
       );
     }
 
     const aggregatedContent = [
       '## decomposition',
       leaderResponse.content,
-      ...subtaskResults.map((result) => [
-        `## ${result.subtask.id}: ${result.subtask.title}`,
+      ...partResults.map((result) => [
+        `## ${result.part.id}: ${result.part.title}`,
         result.response.status === 'error'
-          ? `[ERROR] ${result.response.error ?? 'unknown error'}`
+          ? `[ERROR] ${resolvePartErrorDetail(result)}`
           : result.response.content,
       ].join('\n')),
     ].join('\n\n---\n\n');
@@ -215,30 +223,30 @@ export class TeamLeaderRunner {
     return { response: aggregatedResponse, instruction };
   }
 
-  private async runSingleSubtask(
+  private async runSinglePart(
     step: PieceMovement,
-    subtask: SubtaskDefinition,
-    subtaskIndex: number,
+    part: PartDefinition,
+    partIndex: number,
     defaultTimeoutMs: number,
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
     parallelLogger: ParallelLogger | undefined,
-  ): Promise<SubtaskResult> {
-    const subtaskMovement = createSubtaskMovement(step, subtask);
-    const baseOptions = this.deps.optionsBuilder.buildAgentOptions(subtaskMovement);
-    const timeoutMs = subtask.timeoutMs ?? defaultTimeoutMs;
+  ): Promise<PartResult> {
+    const partMovement = createPartMovement(step, part);
+    const baseOptions = this.deps.optionsBuilder.buildAgentOptions(partMovement);
+    const timeoutMs = part.timeoutMs ?? defaultTimeoutMs;
     const { signal, dispose } = buildAbortSignal(timeoutMs, baseOptions.abortSignal);
     const options = parallelLogger
-      ? { ...baseOptions, abortSignal: signal, onStream: parallelLogger.createStreamHandler(subtask.id, subtaskIndex) }
+      ? { ...baseOptions, abortSignal: signal, onStream: parallelLogger.createStreamHandler(part.id, partIndex) }
       : { ...baseOptions, abortSignal: signal };
 
     try {
-      const response = await runAgent(subtaskMovement.persona, subtask.instruction, options);
-      updatePersonaSession(buildSessionKey(subtaskMovement), response.sessionId);
+      const response = await runAgent(partMovement.persona, part.instruction, options);
+      updatePersonaSession(buildSessionKey(partMovement), response.sessionId);
       return {
-        subtask,
+        part,
         response: {
           ...response,
-          persona: subtaskMovement.name,
+          persona: partMovement.name,
         },
       };
     } finally {
