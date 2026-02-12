@@ -35,7 +35,7 @@ export interface PhaseRunnerContext {
   /** Get persona session ID */
   getSessionId: (persona: string) => string | undefined;
   /** Build resume options for a movement */
-  buildResumeOptions: (step: PieceMovement, sessionId: string, overrides: Pick<RunAgentOptions, 'allowedTools' | 'maxTurns'>) => RunAgentOptions;
+  buildResumeOptions: (step: PieceMovement, sessionId: string, overrides: Pick<RunAgentOptions, 'maxTurns'>) => RunAgentOptions;
   /** Build options for report phase retry in a new session */
   buildNewSessionReportOptions: (step: PieceMovement, overrides: Pick<RunAgentOptions, 'allowedTools' | 'maxTurns'>) => RunAgentOptions;
   /** Update persona session after a phase run */
@@ -143,7 +143,6 @@ export async function runReportPhase(
     }).build();
 
     const reportOptions = ctx.buildResumeOptions(step, currentSessionId, {
-      allowedTools: [],
       maxTurns: 3,
     });
     const firstAttempt = await runSingleReportAttempt(step, reportInstruction, reportOptions, ctx);

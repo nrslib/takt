@@ -85,14 +85,14 @@ export class OptionsBuilder {
   buildResumeOptions(
     step: PieceMovement,
     sessionId: string,
-    overrides: Pick<RunAgentOptions, 'allowedTools' | 'maxTurns'>,
+    overrides: Pick<RunAgentOptions, 'maxTurns'>,
   ): RunAgentOptions {
     return {
       ...this.buildBaseOptions(step),
       // Report/status phases are read-only regardless of movement settings.
       permissionMode: 'readonly',
       sessionId,
-      allowedTools: overrides.allowedTools,
+      allowedTools: [],
       maxTurns: overrides.maxTurns,
     };
   }
