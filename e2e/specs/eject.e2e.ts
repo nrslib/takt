@@ -1,40 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { existsSync, readFileSync, mkdirSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
-import { execFileSync } from 'node:child_process';
 import { createIsolatedEnv, type IsolatedEnv } from '../helpers/isolated-env';
 import { runTakt } from '../helpers/takt-runner';
-
-/**
- * Create a minimal local git repository for eject tests.
- * No GitHub access needed — just a local git init.
- */
-function createLocalRepo(): { path: string; cleanup: () => void } {
-  const repoPath = mkdtempSync(join(tmpdir(), 'takt-eject-e2e-'));
-  execFileSync('git', ['init'], { cwd: repoPath, stdio: 'pipe' });
-  execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repoPath, stdio: 'pipe' });
-  execFileSync('git', ['config', 'user.name', 'Test'], { cwd: repoPath, stdio: 'pipe' });
-  // Create initial commit so branch exists
-  writeFileSync(join(repoPath, 'README.md'), '# test\n');
-  execFileSync('git', ['add', '.'], { cwd: repoPath, stdio: 'pipe' });
-  execFileSync('git', ['commit', '-m', 'init'], { cwd: repoPath, stdio: 'pipe' });
-  return {
-    path: repoPath,
-    cleanup: () => {
-      try {
-        rmSync(repoPath, { recursive: true, force: true });
-      } catch {
-        // best-effort
-      }
-    },
-  };
-}
+import { createLocalRepo, type LocalRepo } from '../helpers/test-repo';
 
 // E2E更新時は docs/testing/e2e.md も更新すること
 describe('E2E: Eject builtin pieces (takt eject)', () => {
   let isolatedEnv: IsolatedEnv;
-  let repo: { path: string; cleanup: () => void };
+  let repo: LocalRepo;
 
   beforeEach(() => {
     isolatedEnv = createIsolatedEnv();

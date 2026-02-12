@@ -9,31 +9,7 @@ import {
   escapeTemplateChars,
   replaceTemplatePlaceholders,
 } from '../core/piece/instruction/escape.js';
-import type { PieceMovement } from '../core/models/types.js';
-import type { InstructionContext } from '../core/piece/instruction/instruction-context.js';
-
-function makeMovement(overrides: Partial<PieceMovement> = {}): PieceMovement {
-  return {
-    name: 'test-movement',
-    personaDisplayName: 'tester',
-    instructionTemplate: '',
-    passPreviousResponse: false,
-    ...overrides,
-  };
-}
-
-function makeContext(overrides: Partial<InstructionContext> = {}): InstructionContext {
-  return {
-    task: 'test task',
-    iteration: 1,
-    maxMovements: 10,
-    movementIteration: 1,
-    cwd: '/tmp/test',
-    projectCwd: '/tmp/project',
-    userInputs: [],
-    ...overrides,
-  };
-}
+import { makeMovement, makeInstructionContext } from './test-helpers.js';
 
 describe('escapeTemplateChars', () => {
   it('should replace curly braces with full-width equivalents', () => {
@@ -62,7 +38,7 @@ describe('escapeTemplateChars', () => {
 describe('replaceTemplatePlaceholders', () => {
   it('should replace {task} placeholder', () => {
     const step = makeMovement();
-    const ctx = makeContext({ task: 'implement feature X' });
+    const ctx = makeInstructionContext({ task: 'implement feature X' });
     const template = 'Your task is: {task}';
 
     const result = replaceTemplatePlaceholders(template, step, ctx);
@@ -71,7 +47,7 @@ describe('replaceTemplatePlaceholders', () => {
 
   it('should escape braces in task content', () => {
     const step = makeMovement();
-    const ctx = makeContext({ task: 'fix {bug} in code' });
+    const ctx = makeInstructionContext({ task: 'fix {bug} in code' });
     const template = '{task}';
 
     const result = replaceTemplatePlaceholders(template, step, ctx);
@@ -80,7 +56,7 @@ describe('replaceTemplatePlaceholders', () => {
 
   it('should replace {iteration} and {max_movements}', () => {
     const step = makeMovement();
-    const ctx = makeContext({ iteration: 3, maxMovements: 20 });
+    const ctx = makeInstructionContext({ iteration: 3, maxMovements: 20 });
     const template = 'Iteration {iteration}/{max_movements}';
 
     const result = replaceTemplatePlaceholders(template, step, ctx);
@@ -89,7 +65,7 @@ describe('replaceTemplatePlaceholders', () => {
 
   it('should replace {movement_iteration}', () => {
     const step = makeMovement();
-    const ctx = makeContext({ movementIteration: 5 });
+    const ctx = makeInstructionContext({ movementIteration: 5 });
     const template = 'Movement run #{movement_iteration}';
 
     const result = replaceTemplatePlaceholders(template, step, ctx);
@@ -98,7 +74,7 @@ describe('replaceTemplatePlaceholders', () => {
 
   it('should replace {previous_response} when passPreviousResponse is true', () => {
     const step = makeMovement({ passPreviousResponse: true });
-    const ctx = makeContext({
+    const ctx = makeInstructionContext({
       previousOutput: {
         persona: 'coder',
         status: 'done',
@@ -114,7 +90,7 @@ describe('replaceTemplatePlaceholders', () => {
 
   it('should prefer preprocessed previous response text when provided', () => {
     const step = makeMovement({ passPreviousResponse: true });
-    const ctx = makeContext({
+    const ctx = makeInstructionContext({
       previousOutput: {
         persona: 'coder',
         status: 'done',
@@ -131,7 +107,7 @@ describe('replaceTemplatePlaceholders', () => {
 
   it('should replace {previous_response} with empty string when no previous output', () => {
     const step = makeMovement({ passPreviousResponse: true });
-    const ctx = makeContext();
+    const ctx = makeInstructionContext();
     const template = 'Previous: {previous_response}';
 
     const result = replaceTemplatePlaceholders(template, step, ctx);
@@ -140,7 +116,7 @@ describe('replaceTemplatePlaceholders', () => {
 
   it('should not replace {previous_response} when passPreviousResponse is false', () => {
     const step = makeMovement({ passPreviousResponse: false });
-    const ctx = makeContext({
+    const ctx = makeInstructionContext({
       previousOutput: {
         persona: 'coder',
         status: 'done',
@@ -156,7 +132,7 @@ describe('replaceTemplatePlaceholders', () => {
 
   it('should replace {user_inputs} with joined inputs', () => {
     const step = makeMovement();
-    const ctx = makeContext({ userInputs: ['input 1', 'input 2', 'input 3'] });
+    const ctx = makeInstructionContext({ userInputs: ['input 1', 'input 2', 'input 3'] });
     const template = 'Inputs: {user_inputs}';
 
     const result = replaceTemplatePlaceholders(template, step, ctx);
@@ -165,7 +141,7 @@ describe('replaceTemplatePlaceholders', () => {
 
   it('should replace {report_dir} with report directory', () => {
     const step = makeMovement();
-    const ctx = makeContext({ reportDir: '/tmp/reports/run-1' });
+    const ctx = makeInstructionContext({ reportDir: '/tmp/reports/run-1' });
     const template = 'Reports: {report_dir}';
 
     const result = replaceTemplatePlaceholders(template, step, ctx);
@@ -174,7 +150,7 @@ describe('replaceTemplatePlaceholders', () => {
 
   it('should replace {report:filename} with full path', () => {
     const step = makeMovement();
-    const ctx = makeContext({ reportDir: '/tmp/reports' });
+    const ctx = makeInstructionContext({ reportDir: '/tmp/reports' });
     const template = 'Read {report:review.md} and {report:plan.md}';
 
     const result = replaceTemplatePlaceholders(template, step, ctx);
@@ -183,7 +159,7 @@ describe('replaceTemplatePlaceholders', () => {
 
   it('should handle template with multiple different placeholders', () => {
     const step = makeMovement();
-    const ctx = makeContext({
+    const ctx = makeInstructionContext({
       task: 'test task',
       iteration: 2,
       maxMovements: 5,
@@ -198,7 +174,7 @@ describe('replaceTemplatePlaceholders', () => {
 
   it('should leave unreplaced placeholders when reportDir is undefined', () => {
     const step = makeMovement();
-    const ctx = makeContext({ reportDir: undefined });
+    const ctx = makeInstructionContext({ reportDir: undefined });
     const template = 'Dir: {report_dir} File: {report:test.md}';
 
     const result = replaceTemplatePlaceholders(template, step, ctx);

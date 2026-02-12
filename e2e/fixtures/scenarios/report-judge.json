@@ -1,11 +1,11 @@
 [
   {
-    "persona": "test-reporter",
+    "persona": "agents/test-reporter",
     "status": "done",
     "content": "Work completed."
   },
   {
-    "persona": "test-reporter",
+    "persona": "agents/test-reporter",
     "status": "done",
     "content": "Report summary: OK"
   },

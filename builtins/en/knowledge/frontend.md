@@ -224,6 +224,54 @@ Signs to make separate components:
 - Added variant is clearly different from original component's purpose
 - Props specification becomes complex on the usage side
 
+### Theme Differences and Design Tokens
+
+When you need different visuals with the same functional components, manage it with design tokens + theme scope.
+
+Principles:
+- Define color, spacing, radius, shadow, and typography as tokens (CSS variables)
+- Apply role/page-specific differences by overriding tokens in a theme scope (e.g. `.consumer-theme`, `.admin-theme`)
+- Do not hardcode hex colors (`#xxxxxx`) in feature components
+- Keep logic differences (API/state) separate from visual differences (tokens)
+
+```css
+/* tokens.css */
+:root {
+  --color-bg-page: #f3f4f6;
+  --color-surface: #ffffff;
+  --color-text-primary: #1f2937;
+  --color-border: #d1d5db;
+  --color-accent: #2563eb;
+}
+
+.consumer-theme {
+  --color-bg-page: #f7f8fa;
+  --color-accent: #4daca1;
+}
+```
+
+```tsx
+// same component, different look by scope
+<div className="consumer-theme">
+  <Button variant="primary">Submit</Button>
+</div>
+```
+
+Operational rules:
+- Implement shared UI primitives (Button/Card/Input/Tabs) using tokens only
+- In feature views, use theme-common utility classes (e.g. `surface`, `title`, `chip`) to avoid duplicated styling logic
+- For a new theme, follow: "add tokens -> override by scope -> reuse existing components"
+
+Review checklist:
+- No copy-pasted hardcoded colors/spacings
+- No duplicated components per theme for the same UI behavior
+- No API/state-management changes made solely for visual adjustments
+
+Anti-patterns:
+- Creating `ButtonConsumer`, `ButtonAdmin` for styling only
+- Hardcoding colors in each feature component
+- Changing response shaping logic when only the theme changed
+
 ## Abstraction Level Evaluation
 
 **Conditional branch bloat detection:**

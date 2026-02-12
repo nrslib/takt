@@ -10,31 +10,8 @@ import {
   renderReportContext,
   renderReportOutputInstruction,
 } from '../core/piece/instruction/InstructionBuilder.js';
-import type { PieceMovement, OutputContractEntry } from '../core/models/types.js';
-import type { InstructionContext } from '../core/piece/instruction/instruction-context.js';
-
-function makeMovement(overrides: Partial<PieceMovement> = {}): PieceMovement {
-  return {
-    name: 'test-movement',
-    personaDisplayName: 'tester',
-    instructionTemplate: '',
-    passPreviousResponse: false,
-    ...overrides,
-  };
-}
-
-function makeContext(overrides: Partial<InstructionContext> = {}): InstructionContext {
-  return {
-    task: 'test task',
-    iteration: 1,
-    maxMovements: 10,
-    movementIteration: 1,
-    cwd: '/tmp/test',
-    projectCwd: '/tmp/project',
-    userInputs: [],
-    ...overrides,
-  };
-}
+import type { OutputContractEntry } from '../core/models/types.js';
+import { makeMovement, makeInstructionContext } from './test-helpers.js';
 
 describe('isOutputContractItem', () => {
   it('should return true for OutputContractItem (has name)', () => {
@@ -84,19 +61,19 @@ describe('renderReportContext', () => {
 describe('renderReportOutputInstruction', () => {
   it('should return empty string when no output contracts', () => {
     const step = makeMovement();
-    const ctx = makeContext({ reportDir: '/tmp/reports' });
+    const ctx = makeInstructionContext({ reportDir: '/tmp/reports' });
     expect(renderReportOutputInstruction(step, ctx, 'en')).toBe('');
   });
 
   it('should return empty string when no reportDir', () => {
     const step = makeMovement({ outputContracts: [{ name: 'report.md' }] });
-    const ctx = makeContext();
+    const ctx = makeInstructionContext();
     expect(renderReportOutputInstruction(step, ctx, 'en')).toBe('');
   });
 
   it('should render English single-file instruction', () => {
     const step = makeMovement({ outputContracts: [{ name: 'report.md' }] });
-    const ctx = makeContext({ reportDir: '/tmp/reports', movementIteration: 2 });
+    const ctx = makeInstructionContext({ reportDir: '/tmp/reports', movementIteration: 2 });
 
     const result = renderReportOutputInstruction(step, ctx, 'en');
     expect(result).toContain('Report output');
@@ -108,7 +85,7 @@ describe('renderReportOutputInstruction', () => {
     const step = makeMovement({
       outputContracts: [{ name: 'plan.md' }, { name: 'review.md' }],
     });
-    const ctx = makeContext({ reportDir: '/tmp/reports' });
+    const ctx = makeInstructionContext({ reportDir: '/tmp/reports' });
 
     const result = renderReportOutputInstruction(step, ctx, 'en');
     expect(result).toContain('Report Files');
@@ -116,7 +93,7 @@ describe('renderReportOutputInstruction', () => {
 
   it('should render Japanese single-file instruction', () => {
     const step = makeMovement({ outputContracts: [{ name: 'report.md' }] });
-    const ctx = makeContext({ reportDir: '/tmp/reports', movementIteration: 1 });
+    const ctx = makeInstructionContext({ reportDir: '/tmp/reports', movementIteration: 1 });
 
     const result = renderReportOutputInstruction(step, ctx, 'ja');
     expect(result).toContain('レポート出力');
@@ -128,7 +105,7 @@ describe('renderReportOutputInstruction', () => {
     const step = makeMovement({
       outputContracts: [{ name: 'plan.md' }, { name: 'review.md' }],
     });
-    const ctx = makeContext({ reportDir: '/tmp/reports' });
+    const ctx = makeInstructionContext({ reportDir: '/tmp/reports' });
 
     const result = renderReportOutputInstruction(step, ctx, 'ja');
     expect(result).toContain('Report Files');

@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os';
 import { setMockScenario, resetScenario } from '../infra/mock/index.js';
 import type { PieceConfig, PieceMovement, PieceRule } from '../core/models/index.js';
 import { detectRuleIndex } from '../infra/claude/index.js';
+import { makeRule } from './test-helpers.js';
 import { callAiJudge } from '../agents/ai-judge.js';
 
 // --- Mocks ---
@@ -60,10 +61,6 @@ vi.mock('../infra/config/project/projectConfig.js', () => ({
 import { PieceEngine } from '../core/piece/index.js';
 
 // --- Test helpers ---
-
-function makeRule(condition: string, next: string): PieceRule {
-  return { condition, next };
-}
 
 function createTestEnv(): { dir: string; agentPath: string } {
   const dir = mkdtempSync(join(tmpdir(), 'takt-it-3ph-'));

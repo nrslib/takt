@@ -369,6 +369,54 @@ export function StepperButton(props) {
 - 追加したvariantが元のコンポーネントの用途と明らかに違う
 - 使う側のprops指定が複雑になる
 
+### テーマ差分とデザイントークン
+
+同じ機能コンポーネントを再利用しつつ見た目だけ変える場合は、デザイントークン + テーマスコープで管理する。
+
+原則:
+- 色・余白・角丸・影・タイポをトークン（CSS Variables）として定義する
+- 画面/ロール別の差分はテーマスコープ（例: `.consumer-theme`, `.admin-theme`）で上書きする
+- コンポーネント内に16進カラー値（`#xxxxxx`）を直書きしない
+- ロジック差分（API・状態管理）と見た目差分（トークン）を混在させない
+
+```css
+/* tokens.css */
+:root {
+  --color-bg-page: #f3f4f6;
+  --color-surface: #ffffff;
+  --color-text-primary: #1f2937;
+  --color-border: #d1d5db;
+  --color-accent: #2563eb;
+}
+
+.consumer-theme {
+  --color-bg-page: #f7f8fa;
+  --color-accent: #4daca1;
+}
+```
+
+```tsx
+// same component, different look by scope
+<div className="consumer-theme">
+  <Button variant="primary">Submit</Button>
+</div>
+```
+
+運用ルール:
+- 共通UI（Button/Card/Input/Tabs）はトークン参照のみで実装する
+- feature側はテーマ共通クラス（例: `surface`, `title`, `chip`）を利用し、装飾ロジックを重複させない
+- 追加テーマ実装時は「トークン追加 → スコープ上書き → 既存コンポーネント流用」の順で進める
+
+レビュー観点:
+- 直書き色・直書き余白のコピペがないか
+- 同一UIパターンがテーマごとに別コンポーネント化されていないか
+- 見た目変更のためにデータ取得/状態管理が改変されていないか
+
+NG例:
+- 見た目差分のために `ButtonConsumer`, `ButtonAdmin` を乱立
+- featureコンポーネントごとに色を直書き
+- テーマ切り替えのたびにAPIレスポンス整形ロジックを変更
+
 ## 抽象化レベルの評価
 
 ### 条件分岐の肥大化検出

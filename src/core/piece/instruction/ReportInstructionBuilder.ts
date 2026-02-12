@@ -25,6 +25,8 @@ export interface ReportInstructionContext {
   language?: Language;
   /** Target report file name (when generating a single report) */
   targetFile?: string;
+  /** Last response from Phase 1 (used when report phase retries in a new session) */
+  lastResponse?: string;
 }
 
 /**
@@ -45,7 +47,6 @@ export class ReportInstructionBuilder {
 
     const language = this.context.language ?? 'en';
 
-    // Build report context for Piece Context section
     let reportContext: string;
     if (this.context.targetFile) {
       reportContext = `- Report Directory: ${this.context.reportDir}/\n- Report File: ${this.context.reportDir}/${this.context.targetFile}`;
@@ -53,7 +54,6 @@ export class ReportInstructionBuilder {
       reportContext = renderReportContext(this.step.outputContracts, this.context.reportDir);
     }
 
-    // Build report output instruction
     let reportOutput = '';
     let hasReportOutput = false;
     const instrContext: InstructionContext = {
@@ -68,7 +68,6 @@ export class ReportInstructionBuilder {
       language,
     };
 
-    // Check for order instruction in first output contract item
     const firstContract = this.step.outputContracts[0];
     if (firstContract && isOutputContractItem(firstContract) && firstContract.order) {
       reportOutput = replaceTemplatePlaceholders(firstContract.order.trimEnd(), this.step, instrContext);
@@ -81,7 +80,6 @@ export class ReportInstructionBuilder {
       }
     }
 
-    // Build output contract (from first item's format)
     let outputContract = '';
     let hasOutputContract = false;
     if (firstContract && isOutputContractItem(firstContract) && firstContract.format) {
@@ -92,6 +90,8 @@ export class ReportInstructionBuilder {
     return loadTemplate('perform_phase2_message', language, {
       workingDirectory: this.context.cwd,
       reportContext,
+      hasLastResponse: this.context.lastResponse != null && this.context.lastResponse.trim().length > 0,
+      lastResponse: this.context.lastResponse ?? '',
       hasReportOutput,
       reportOutput,
       hasOutputContract,

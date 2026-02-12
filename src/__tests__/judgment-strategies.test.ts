@@ -15,17 +15,7 @@ import {
   JudgmentStrategyFactory,
   type JudgmentContext,
 } from '../core/piece/judgment/FallbackStrategy.js';
-import type { PieceMovement } from '../core/models/types.js';
-
-function makeMovement(overrides: Partial<PieceMovement> = {}): PieceMovement {
-  return {
-    name: 'test-movement',
-    personaDisplayName: 'tester',
-    instructionTemplate: '',
-    passPreviousResponse: false,
-    ...overrides,
-  };
-}
+import { makeMovement } from './test-helpers.js';
 
 function makeContext(overrides: Partial<JudgmentContext> = {}): JudgmentContext {
   return {

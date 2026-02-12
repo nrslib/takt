@@ -94,10 +94,27 @@ export class QueryExecutor {
     let resultContent: string | undefined;
     let hasResultMessage = false;
     let accumulatedAssistantText = '';
+    let onExternalAbort: (() => void) | undefined;
 
     try {
       const q = query({ prompt, options: sdkOptions });
       registerQuery(queryId, q);
+      if (options.abortSignal) {
+        const interruptQuery = () => {
+          void q.interrupt().catch((interruptError: unknown) => {
+            log.debug('Failed to interrupt Claude query', {
+              queryId,
+              error: getErrorMessage(interruptError),
+            });
+          });
+        };
+        if (options.abortSignal.aborted) {
+          interruptQuery();
+        } else {
+          onExternalAbort = interruptQuery;
+          options.abortSignal.addEventListener('abort', onExternalAbort, { once: true });
+        }
+      }
 
       for await (const message of q) {
         if ('session_id' in message) {
@@ -133,6 +150,9 @@ export class QueryExecutor {
       }
 
       unregisterQuery(queryId);
+      if (onExternalAbort && options.abortSignal) {
+        options.abortSignal.removeEventListener('abort', onExternalAbort);
+      }
 
       const finalContent = resultContent || accumulatedAssistantText;
 
@@ -151,6 +171,9 @@ export class QueryExecutor {
         fullContent: accumulatedAssistantText.trim(),
       };
     } catch (error) {
+      if (onExternalAbort && options.abortSignal) {
+        options.abortSignal.removeEventListener('abort', onExternalAbort);
+      }
       unregisterQuery(queryId);
       return QueryExecutor.handleQueryError(error, queryId, sessionId, hasResultMessage, success, resultContent, stderrChunks);
     }

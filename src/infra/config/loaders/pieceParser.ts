@@ -10,7 +10,7 @@ import { dirname, resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import type { z } from 'zod';
 import { PieceConfigRawSchema, PieceMovementRawSchema } from '../../../core/models/index.js';
-import type { PieceConfig, PieceMovement, PieceRule, OutputContractEntry, OutputContractLabelPath, OutputContractItem, LoopMonitorConfig, LoopMonitorJudge, ArpeggioMovementConfig, ArpeggioMergeMovementConfig } from '../../../core/models/index.js';
+import type { PieceConfig, PieceMovement, PieceRule, OutputContractEntry, OutputContractLabelPath, OutputContractItem, LoopMonitorConfig, LoopMonitorJudge, ArpeggioMovementConfig, ArpeggioMergeMovementConfig, TeamLeaderConfig } from '../../../core/models/index.js';
 import { getLanguage } from '../global/globalConfig.js';
 import {
   type PieceSections,
@@ -179,6 +179,31 @@ function normalizeArpeggio(
   };
 }
 
+/** Normalize raw team_leader config from YAML into internal format. */
+function normalizeTeamLeader(
+  raw: RawStep['team_leader'],
+  pieceDir: string,
+  sections: PieceSections,
+  context?: FacetResolutionContext,
+): TeamLeaderConfig | undefined {
+  if (!raw) return undefined;
+
+  const { personaSpec, personaPath } = resolvePersona(raw.persona, sections, pieceDir, context);
+  const { personaSpec: partPersona, personaPath: partPersonaPath } = resolvePersona(raw.part_persona, sections, pieceDir, context);
+
+  return {
+    persona: personaSpec,
+    personaPath,
+    maxParts: raw.max_parts,
+    timeoutMs: raw.timeout_ms,
+    partPersona,
+    partPersonaPath,
+    partAllowedTools: raw.part_allowed_tools,
+    partEdit: raw.part_edit,
+    partPermissionMode: raw.part_permission_mode,
+  };
+}
+
 /** Normalize a raw step into internal PieceMovement format. */
 function normalizeStepFromRaw(
   step: RawStep,
@@ -235,6 +260,11 @@ function normalizeStepFromRaw(
   const arpeggioConfig = normalizeArpeggio(step.arpeggio, pieceDir);
   if (arpeggioConfig) {
     result.arpeggio = arpeggioConfig;
+  }
+
+  const teamLeaderConfig = normalizeTeamLeader(step.team_leader, pieceDir, sections, context);
+  if (teamLeaderConfig) {
+    result.teamLeader = teamLeaderConfig;
   }
 
   return result;

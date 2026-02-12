@@ -119,6 +119,7 @@ export interface ClaudeResultWithQueryId extends ClaudeResult {
 /** Options for calling Claude (high-level, used by client/providers/agents) */
 export interface ClaudeCallOptions {
   cwd: string;
+  abortSignal?: AbortSignal;
   sessionId?: string;
   allowedTools?: string[];
   /** MCP servers configuration */
@@ -145,6 +146,7 @@ export interface ClaudeCallOptions {
 /** Options for spawning a Claude SDK query (low-level, used by executor/process) */
 export interface ClaudeSpawnOptions {
   cwd: string;
+  abortSignal?: AbortSignal;
   sessionId?: string;
   allowedTools?: string[];
   /** MCP servers configuration */

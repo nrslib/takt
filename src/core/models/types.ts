@@ -23,6 +23,13 @@ export type {
   SessionState,
 } from './session.js';
 
+// Part decomposition
+export type {
+  PartDefinition,
+  PartResult,
+  TeamLeaderConfig,
+} from './part.js';
+
 // Piece configuration and runtime state
 export type {
   PieceRule,

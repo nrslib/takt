@@ -10,7 +10,8 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
-import type { PieceConfig, PieceMovement, AgentResponse, PieceRule } from '../core/models/index.js';
+import type { PieceConfig, PieceMovement, AgentResponse } from '../core/models/index.js';
+import { makeRule } from './test-helpers.js';
 
 // --- Mock imports (consumers must call vi.mock before importing this) ---
 
@@ -22,6 +23,8 @@ import { generateReportDir } from '../shared/utils/index.js';
 
 // --- Factory functions ---
 
+export { makeRule };
+
 export function makeResponse(overrides: Partial<AgentResponse> = {}): AgentResponse {
   return {
     persona: 'test-agent',
@@ -31,10 +34,6 @@ export function makeResponse(overrides: Partial<AgentResponse> = {}): AgentRespo
     sessionId: `session-${randomUUID()}`,
     ...overrides,
   };
-}
-
-export function makeRule(condition: string, next: string, extra: Partial<PieceRule> = {}): PieceRule {
-  return { condition, next, ...extra };
 }
 
 export function makeMovement(name: string, overrides: Partial<PieceMovement> = {}): PieceMovement {

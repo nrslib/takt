@@ -1,14 +1,38 @@
-import { rmSync } from 'node:fs';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
+
+export interface LocalRepo {
+  path: string;
+  cleanup: () => void;
+}
 
 export interface TestRepo {
   path: string;
   repoName: string;
   branch: string;
   cleanup: () => void;
+}
+
+/**
+ * Create a local git repository in a temporary directory.
+ * Use this for tests that don't need a remote (GitHub) repository.
+ */
+export function createLocalRepo(): LocalRepo {
+  const repoPath = mkdtempSync(join(tmpdir(), 'takt-e2e-'));
+  execFileSync('git', ['init'], { cwd: repoPath, stdio: 'pipe' });
+  execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repoPath, stdio: 'pipe' });
+  execFileSync('git', ['config', 'user.name', 'Test'], { cwd: repoPath, stdio: 'pipe' });
+  writeFileSync(join(repoPath, 'README.md'), '# test\n');
+  execFileSync('git', ['add', '.'], { cwd: repoPath, stdio: 'pipe' });
+  execFileSync('git', ['commit', '-m', 'init'], { cwd: repoPath, stdio: 'pipe' });
+  return {
+    path: repoPath,
+    cleanup: () => {
+      rmSync(repoPath, { recursive: true, force: true });
+    },
+  };
 }
 
 export interface CreateTestRepoOptions {

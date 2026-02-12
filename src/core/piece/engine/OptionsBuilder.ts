@@ -97,6 +97,19 @@ export class OptionsBuilder {
     };
   }
 
+  /** Build RunAgentOptions for Phase 2 retry with a new session */
+  buildNewSessionReportOptions(
+    step: PieceMovement,
+    overrides: Pick<RunAgentOptions, 'allowedTools' | 'maxTurns'>,
+  ): RunAgentOptions {
+    return {
+      ...this.buildBaseOptions(step),
+      permissionMode: 'readonly',
+      allowedTools: overrides.allowedTools,
+      maxTurns: overrides.maxTurns,
+    };
+  }
+
   /** Build PhaseRunnerContext for Phase 2/3 execution */
   buildPhaseRunnerContext(
     state: PieceState,
@@ -113,6 +126,7 @@ export class OptionsBuilder {
       lastResponse,
       getSessionId: (persona: string) => state.personaSessions.get(persona),
       buildResumeOptions: this.buildResumeOptions.bind(this),
+      buildNewSessionReportOptions: this.buildNewSessionReportOptions.bind(this),
       updatePersonaSession,
       onPhaseStart,
       onPhaseComplete,

@@ -6,17 +6,8 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { RuleEvaluator, type RuleEvaluatorContext } from '../core/piece/evaluation/RuleEvaluator.js';
-import type { PieceMovement, PieceState } from '../core/models/types.js';
-
-function makeMovement(overrides: Partial<PieceMovement> = {}): PieceMovement {
-  return {
-    name: 'test-movement',
-    personaDisplayName: 'tester',
-    instructionTemplate: '',
-    passPreviousResponse: false,
-    ...overrides,
-  };
-}
+import type { PieceState } from '../core/models/types.js';
+import { makeMovement } from './test-helpers.js';
 
 function makeState(): PieceState {
   return {

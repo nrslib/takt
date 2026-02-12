@@ -6,17 +6,9 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { handleBlocked } from '../core/piece/engine/blocked-handler.js';
-import type { PieceMovement, AgentResponse } from '../core/models/types.js';
+import type { AgentResponse } from '../core/models/types.js';
 import type { PieceEngineOptions } from '../core/piece/types.js';
-
-function makeMovement(): PieceMovement {
-  return {
-    name: 'test-movement',
-    personaDisplayName: 'tester',
-    instructionTemplate: '',
-    passPreviousResponse: false,
-  };
-}
+import { makeMovement } from './test-helpers.js';
 
 function makeResponse(content: string): AgentResponse {
   return {

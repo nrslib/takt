@@ -65,6 +65,7 @@ piece:
   notifyComplete: "Piece complete ({iteration} iterations)"
   notifyAbort: "Aborted: {reason}"
   sigintGraceful: "Ctrl+C: Aborting piece..."
+  sigintTimeout: "Graceful shutdown timed out after {timeoutMs}ms"
   sigintForce: "Ctrl+C: Force exit"
 
 run:

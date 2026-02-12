@@ -65,6 +65,7 @@ piece:
   notifyComplete: "ピース完了 ({iteration} iterations)"
   notifyAbort: "中断: {reason}"
   sigintGraceful: "Ctrl+C: ピースを中断しています..."
+  sigintTimeout: "graceful停止がタイムアウトしました ({timeoutMs}ms)"
   sigintForce: "Ctrl+C: 強制終了します"
 
 run:

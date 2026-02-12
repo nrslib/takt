@@ -170,6 +170,24 @@ export const ArpeggioConfigRawSchema = z.object({
   output_path: z.string().optional(),
 });
 
+/** Team leader configuration schema for dynamic part decomposition */
+export const TeamLeaderConfigRawSchema = z.object({
+  /** Persona reference for team leader agent */
+  persona: z.string().optional(),
+  /** Maximum number of parts (must be <= 3) */
+  max_parts: z.number().int().positive().max(3).optional().default(3),
+  /** Default timeout per part in milliseconds */
+  timeout_ms: z.number().int().positive().optional().default(600000),
+  /** Persona reference for part agents */
+  part_persona: z.string().optional(),
+  /** Allowed tools for part agents */
+  part_allowed_tools: z.array(z.string()).optional(),
+  /** Whether part agents can edit files */
+  part_edit: z.boolean().optional(),
+  /** Permission mode for part agents */
+  part_permission_mode: PermissionModeSchema.optional(),
+});
+
 /** Sub-movement schema for parallel execution */
 export const ParallelSubMovementRawSchema = z.object({
   name: z.string().min(1),
@@ -232,7 +250,15 @@ export const PieceMovementRawSchema = z.object({
   parallel: z.array(ParallelSubMovementRawSchema).optional(),
   /** Arpeggio configuration for data-driven batch processing */
   arpeggio: ArpeggioConfigRawSchema.optional(),
-});
+  /** Team leader configuration for dynamic part decomposition */
+  team_leader: TeamLeaderConfigRawSchema.optional(),
+}).refine(
+  (data) => [data.parallel, data.arpeggio, data.team_leader].filter((v) => v != null).length <= 1,
+  {
+    message: "'parallel', 'arpeggio', and 'team_leader' are mutually exclusive",
+    path: ['parallel'],
+  },
+);
 
 /** Loop monitor rule schema */
 export const LoopMonitorRuleSchema = z.object({

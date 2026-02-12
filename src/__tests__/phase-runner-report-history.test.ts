@@ -39,6 +39,10 @@ function createContext(
       onBuildResumeOptions?.(overrides);
       return { cwd: reportDir };
     },
+    buildNewSessionReportOptions: (
+      _step,
+      _overrides,
+    ) => ({ cwd: reportDir }),
     updatePersonaSession: (_persona, sessionId) => {
       if (sessionId) {
         currentSessionId = sessionId;

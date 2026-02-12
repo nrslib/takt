@@ -16,6 +16,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { PieceMovement, PieceState, PieceRule, AgentResponse } from '../core/models/index.js';
+import { makeRule } from './test-helpers.js';
 
 // --- Mocks ---
 
@@ -38,10 +39,6 @@ import { detectRuleIndex } from '../infra/claude/index.js';
 import type { RuleMatch, RuleEvaluatorContext } from '../core/piece/index.js';
 
 // --- Test helpers ---
-
-function makeRule(condition: string, next: string, extra?: Partial<PieceRule>): PieceRule {
-  return { condition, next, ...extra };
-}
 
 function makeMovement(
   name: string,

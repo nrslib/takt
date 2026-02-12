@@ -12,17 +12,8 @@ import {
   getAutoSelectedTag,
   getReportFiles,
 } from '../core/piece/evaluation/rule-utils.js';
-import type { PieceMovement, OutputContractEntry } from '../core/models/types.js';
-
-function makeMovement(overrides: Partial<PieceMovement> = {}): PieceMovement {
-  return {
-    name: 'test-movement',
-    personaDisplayName: 'tester',
-    instructionTemplate: '',
-    passPreviousResponse: false,
-    ...overrides,
-  };
-}
+import type { OutputContractEntry } from '../core/models/types.js';
+import { makeMovement } from './test-helpers.js';
 
 describe('hasTagBasedRules', () => {
   it('should return false when movement has no rules', () => {

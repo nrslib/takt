@@ -8,7 +8,8 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import type { PieceMovement, PieceRule, AgentResponse } from '../core/models/index.js';
+import type { PieceMovement, AgentResponse } from '../core/models/index.js';
+import { makeRule } from './test-helpers.js';
 
 vi.mock('../infra/config/global/globalConfig.js', () => ({
   loadGlobalConfig: vi.fn().mockReturnValue({}),
@@ -33,10 +34,6 @@ function buildStatusJudgmentInstruction(movement: PieceMovement, ctx: StatusJudg
 }
 
 // --- Test helpers ---
-
-function makeRule(condition: string, next: string, extra?: Partial<PieceRule>): PieceRule {
-  return { condition, next, ...extra };
-}
 
 function makeMovement(overrides: Partial<PieceMovement> = {}): PieceMovement {
   return {

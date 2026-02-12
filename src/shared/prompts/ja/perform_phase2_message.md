@@ -1,7 +1,7 @@
 <!--
   template: perform_phase2_message
   phase: 2 (report output)
-  vars: workingDirectory, reportContext, hasReportOutput, reportOutput,
+  vars: workingDirectory, reportContext, hasLastResponse, lastResponse, hasReportOutput, reportOutput,
         hasOutputContract, outputContract
   builder: ReportInstructionBuilder
 -->
@@ -16,6 +16,13 @@
 
 ## Piece Context
 {{reportContext}}
+{{#if hasLastResponse}}
+
+## Previous Work Context
+以下はPhase 1（本来の作業）の出力です。レポート生成の文脈として使用してください:
+
+{{lastResponse}}
+{{/if}}
 
 ## Instructions
 あなたが今行った作業の結果をレポートとして回答してください。**このフェーズではツールは使えません。レポート内容をテキストとして直接回答してください。**

@@ -14,9 +14,10 @@
 import type { TaskRunner, TaskInfo } from '../../../infra/task/index.js';
 import { info, blankLine } from '../../../shared/ui/index.js';
 import { TaskPrefixWriter } from '../../../shared/ui/TaskPrefixWriter.js';
+import { EXIT_SIGINT } from '../../../shared/exitCodes.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import { executeAndCompleteTask } from './taskExecution.js';
-import { installSigIntHandler } from './sigintHandler.js';
+import { ShutdownManager } from './shutdownManager.js';
 import type { TaskExecutionOptions } from './types.js';
 
 const log = createLogger('worker-pool');
@@ -96,8 +97,15 @@ export async function runWithWorkerPool(
   pollIntervalMs: number,
 ): Promise<WorkerPoolResult> {
   const abortController = new AbortController();
-  const { cleanup } = installSigIntHandler(() => abortController.abort());
+  const shutdownManager = new ShutdownManager({
+    callbacks: {
+      onGraceful: () => abortController.abort(),
+      onForceKill: () => process.exit(EXIT_SIGINT),
+    },
+  });
+  shutdownManager.install();
   const selfSigintOnce = process.env.TAKT_E2E_SELF_SIGINT_ONCE === '1';
+  const selfSigintTwice = process.env.TAKT_E2E_SELF_SIGINT_TWICE === '1';
   let selfSigintInjected = false;
 
   let successCount = 0;
@@ -111,9 +119,12 @@ export async function runWithWorkerPool(
     while (queue.length > 0 || active.size > 0) {
       if (!abortController.signal.aborted) {
         fillSlots(queue, active, concurrency, taskRunner, cwd, pieceName, options, abortController, colorCounter);
-        if (selfSigintOnce && !selfSigintInjected && active.size > 0) {
+        if ((selfSigintOnce || selfSigintTwice) && !selfSigintInjected && active.size > 0) {
           selfSigintInjected = true;
           process.emit('SIGINT');
+          if (selfSigintTwice) {
+            process.emit('SIGINT');
+          }
         }
       }
 
@@ -169,7 +180,7 @@ export async function runWithWorkerPool(
       }
     }
   } finally {
-    cleanup();
+    shutdownManager.cleanup();
   }
 
   return { success: successCount, fail: failCount };
