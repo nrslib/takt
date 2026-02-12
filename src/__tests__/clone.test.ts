@@ -207,7 +207,7 @@ describe('branch and worktree path formatting with issue numbers', () => {
     });
   }
 
-  it('should format branch as takt/#{issue}/{slug} when issue number is provided', () => {
+  it('should format branch as takt/{issue}/{slug} when issue number is provided', () => {
     // Given: issue number 99 with slug
     setupMockForPathTest();
 
@@ -219,7 +219,7 @@ describe('branch and worktree path formatting with issue numbers', () => {
     });
 
     // Then: branch should use issue format
-    expect(result.branch).toBe('takt/#99/fix-login-timeout');
+    expect(result.branch).toBe('takt/99/fix-login-timeout');
   });
 
   it('should format branch as takt/{timestamp}-{slug} when no issue number', () => {

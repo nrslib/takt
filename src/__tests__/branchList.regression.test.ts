@@ -46,7 +46,7 @@ function setupRepoForIssue167(options?: { disableReflog?: boolean; firstBranchCo
   writeAndCommit(repoDir, 'develop-takt.txt', 'develop takt\n', 'takt: old instruction on develop');
   writeAndCommit(repoDir, 'develop-b.txt', 'develop b\n', 'develop commit B');
 
-  const taktBranch = 'takt/#167/fix-original-instruction';
+  const taktBranch = 'takt/167/fix-original-instruction';
   runGit(repoDir, ['checkout', '-b', taktBranch]);
   const firstBranchCommitMessage = options?.firstBranchCommitMessage ?? 'takt: github-issue-167-fix-original-instruction';
   writeAndCommit(repoDir, 'task-1.txt', 'task1\n', firstBranchCommitMessage);

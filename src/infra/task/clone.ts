@@ -77,7 +77,7 @@ export class CloneManager {
     const slug = slugify(options.taskSlug);
 
     if (options.issueNumber !== undefined && slug) {
-      return `takt/#${options.issueNumber}/${slug}`;
+      return `takt/${options.issueNumber}/${slug}`;
     }
 
     const timestamp = CloneManager.generateTimestamp();
@@ -124,13 +124,24 @@ export class CloneManager {
     return projectDir;
   }
 
-  /** Clone a repository and remove origin to isolate from the main repo */
-  private static cloneAndIsolate(projectDir: string, clonePath: string): void {
+  /** Clone a repository and remove origin to isolate from the main repo.
+   *  When `branch` is specified, `--branch` is passed to `git clone` so the
+   *  branch is checked out as a local branch *before* origin is removed.
+   *  Without this, non-default branches are lost when `git remote remove origin`
+   *  deletes the remote-tracking refs.
+   */
+  private static cloneAndIsolate(projectDir: string, clonePath: string, branch?: string): void {
     const referenceRepo = CloneManager.resolveMainRepo(projectDir);
 
     fs.mkdirSync(path.dirname(clonePath), { recursive: true });
 
-    execFileSync('git', ['clone', '--reference', referenceRepo, '--dissociate', projectDir, clonePath], {
+    const cloneArgs = ['clone', '--reference', referenceRepo, '--dissociate'];
+    if (branch) {
+      cloneArgs.push('--branch', branch);
+    }
+    cloneArgs.push(projectDir, clonePath);
+
+    execFileSync('git', cloneArgs, {
       cwd: projectDir,
       stdio: 'pipe',
     });
@@ -174,11 +185,10 @@ export class CloneManager {
 
     log.info('Creating shared clone', { path: clonePath, branch });
 
-    CloneManager.cloneAndIsolate(projectDir, clonePath);
-
-    if (CloneManager.branchExists(clonePath, branch)) {
-      execFileSync('git', ['checkout', branch], { cwd: clonePath, stdio: 'pipe' });
+    if (CloneManager.branchExists(projectDir, branch)) {
+      CloneManager.cloneAndIsolate(projectDir, clonePath, branch);
     } else {
+      CloneManager.cloneAndIsolate(projectDir, clonePath);
       execFileSync('git', ['checkout', '-b', branch], { cwd: clonePath, stdio: 'pipe' });
     }
 
@@ -195,8 +205,7 @@ export class CloneManager {
 
     log.info('Creating temp clone for branch', { path: clonePath, branch });
 
-    CloneManager.cloneAndIsolate(projectDir, clonePath);
-    execFileSync('git', ['checkout', branch], { cwd: clonePath, stdio: 'pipe' });
+    CloneManager.cloneAndIsolate(projectDir, clonePath, branch);
 
     this.saveCloneMeta(projectDir, branch, clonePath);
     log.info('Temp clone created', { path: clonePath, branch });
