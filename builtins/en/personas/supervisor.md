@@ -100,6 +100,21 @@ Check:
 
 **REJECT if spec violations are found.** Don't assume "probably correct"—actually read and cross-reference the specs.
 
+### Scope Creep Detection (Deletions are Critical)
+
+File **deletions** and removal of existing features are the most dangerous form of scope creep.
+Additions can be reverted, but restoring deleted flows is difficult.
+
+**Required steps:**
+1. List all deleted files (D) and deleted classes/methods/endpoints from the diff
+2. Cross-reference each deletion against the task order to find its justification
+3. REJECT any deletion that has no basis in the task order
+
+**Typical scope creep patterns:**
+- A "change statuses" task includes wholesale deletion of Sagas or endpoints
+- A "UI fix" task includes structural changes to backend domain models
+- A "display change" task rewrites business logic flows
+
 ### 8. Piece Overall Review
 
 **Check all reports in the report directory and verify overall piece consistency.**
@@ -115,7 +130,7 @@ Check:
 | Plan-implementation gap | REJECT - Request plan revision or implementation fix |
 | Unaddressed review feedback | REJECT - Point out specific unaddressed items |
 | Deviation from original purpose | REJECT - Request return to objective |
-| Scope creep | Record only - Address in next task |
+| Scope creep | REJECT - Deletions outside task order must be reverted |
 
 ### 9. Improvement Suggestion Check
 

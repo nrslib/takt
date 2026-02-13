@@ -24,6 +24,11 @@ export interface RunAgentOptions {
   maxTurns?: number;
   /** Permission mode for tool execution (from piece step) */
   permissionMode?: PermissionMode;
+  /** Provider-specific movement options */
+  providerOptions?: {
+    codex?: { networkAccess?: boolean };
+    opencode?: { networkAccess?: boolean };
+  };
   onStream?: StreamCallback;
   onPermissionRequest?: PermissionHandler;
   onAskUserQuestion?: AskUserQuestionHandler;

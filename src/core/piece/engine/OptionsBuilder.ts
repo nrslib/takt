@@ -38,6 +38,7 @@ export class OptionsBuilder {
       provider: resolved.provider,
       model: resolved.model,
       permissionMode: step.permissionMode,
+      providerOptions: step.providerOptions,
       language: this.getLanguage(),
       onStream: this.engineOptions.onStream,
       onPermissionRequest: this.engineOptions.onPermissionRequest,

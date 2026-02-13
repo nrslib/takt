@@ -1,5 +1,12 @@
 name: structural-reform
 description: Full project review and structural reform - iterative codebase restructuring with staged file splits
+piece_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+
 max_movements: 50
 initial_movement: review
 loop_monitors:

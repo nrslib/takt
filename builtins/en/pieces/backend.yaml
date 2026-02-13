@@ -1,5 +1,12 @@
 name: backend
 description: Backend, Security, QA Expert Review
+piece_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+
 max_movements: 30
 initial_movement: plan
 movements:

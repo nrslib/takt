@@ -1,5 +1,12 @@
 name: e2e-report-judge
 description: E2E piece that exercises report + judge phases
+piece_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+
 
 max_movements: 3
 

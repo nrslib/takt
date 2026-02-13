@@ -95,6 +95,7 @@ export class CodexClient {
       ...(options.model ? { model: options.model } : {}),
       workingDirectory: options.cwd,
       sandboxMode,
+      ...(options.networkAccess === undefined ? {} : { networkAccessEnabled: options.networkAccess }),
     };
     let threadId = options.sessionId;
 

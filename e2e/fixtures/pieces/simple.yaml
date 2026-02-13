@@ -1,5 +1,12 @@
 name: e2e-simple
 description: Minimal E2E test piece
+piece_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+
 
 max_movements: 5
 

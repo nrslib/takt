@@ -803,9 +803,21 @@ Special `next` values: `COMPLETE` (success), `ABORT` (failure)
 | `provider` | - | Override provider for this movement (`claude`, `codex`, or `opencode`) |
 | `model` | - | Override model for this movement |
 | `permission_mode` | - | Permission mode: `readonly`, `edit`, `full` (provider-independent) |
+| `provider_options` | - | Provider-specific options (e.g. `codex.network_access`, `opencode.network_access`) |
 | `output_contracts` | - | Output contract definitions for report files |
 | `quality_gates` | - | AI directives for movement completion requirements |
 | `mcp_servers` | - | MCP (Model Context Protocol) server configuration (stdio/SSE/HTTP) |
+
+Piece-level defaults can be set with `piece_config.provider_options`, and movement-level `provider_options` overrides them.
+
+```yaml
+piece_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+```
 
 ## API Usage Example
 

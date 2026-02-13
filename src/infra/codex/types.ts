@@ -27,6 +27,8 @@ export interface CodexCallOptions {
   systemPrompt?: string;
   /** Permission mode for sandbox configuration */
   permissionMode?: PermissionMode;
+  /** Enable network access for workspace-write sandbox */
+  networkAccess?: boolean;
   /** Enable streaming mode with callback (best-effort) */
   onStream?: StreamCallback;
   /** OpenAI API key (bypasses CLI auth) */

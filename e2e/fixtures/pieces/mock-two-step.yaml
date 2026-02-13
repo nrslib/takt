@@ -1,5 +1,12 @@
 name: e2e-mock-two-step
 description: Two-step sequential piece for E2E testing
+piece_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+
 
 max_movements: 5
 

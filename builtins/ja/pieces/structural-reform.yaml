@@ -1,5 +1,12 @@
 name: structural-reform
 description: プロジェクト全体レビューと構造改革 - 段階的なファイル分割による反復的コードベース再構築
+piece_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+
 max_movements: 50
 initial_movement: review
 loop_monitors:

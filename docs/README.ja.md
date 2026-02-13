@@ -803,9 +803,21 @@ rules:
 | `provider` | - | このムーブメントのプロバイダーを上書き（`claude`、`codex`、または`opencode`） |
 | `model` | - | このムーブメントのモデルを上書き |
 | `permission_mode` | - | パーミッションモード: `readonly`、`edit`、`full`（プロバイダー非依存） |
+| `provider_options` | - | プロバイダー固有オプション（例: `codex.network_access`、`opencode.network_access`） |
 | `output_contracts` | - | レポートファイルの出力契約定義 |
 | `quality_gates` | - | ムーブメント完了要件のAIディレクティブ |
 | `mcp_servers` | - | MCP（Model Context Protocol）サーバー設定（stdio/SSE/HTTP） |
+
+ピース全体のデフォルトは `piece_config.provider_options` で設定でき、ムーブメント側 `provider_options` で上書きできます。
+
+```yaml
+piece_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+```
 
 ## API使用例
 

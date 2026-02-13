@@ -311,7 +311,7 @@ export class OpenCodeClient {
         const parsedModel = parseProviderModel(options.model, 'OpenCode model');
         const fullModel = `${parsedModel.providerID}/${parsedModel.modelID}`;
         const port = await getFreePort();
-        const permission = buildOpenCodePermissionConfig(options.permissionMode);
+        const permission = buildOpenCodePermissionConfig(options.permissionMode, options.networkAccess);
         const config = {
           model: fullModel,
           small_model: fullModel,
@@ -332,7 +332,7 @@ export class OpenCodeClient {
           ? { data: { id: options.sessionId } }
           : await client.session.create({
             directory: options.cwd,
-            permission: buildOpenCodePermissionRuleset(options.permissionMode),
+            permission: buildOpenCodePermissionRuleset(options.permissionMode, options.networkAccess),
           });
 
         const sessionId = sessionResult.data?.id;

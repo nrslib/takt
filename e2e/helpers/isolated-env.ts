@@ -123,6 +123,7 @@ export function createIsolatedEnv(): IsolatedEnv {
     TAKT_CONFIG_DIR: taktDir,
     GIT_CONFIG_GLOBAL: gitConfigPath,
     TAKT_NO_TTY: '1',
+    TAKT_NOTIFY_WEBHOOK: undefined,
   };
 
   return {

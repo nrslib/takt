@@ -1,5 +1,12 @@
 name: e2e-test
 description: E2E test focused piece (E2E analysis → E2E implementation → review → fix)
+piece_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+
 max_movements: 20
 initial_movement: plan_test
 loop_monitors:

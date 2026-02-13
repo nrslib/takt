@@ -1,5 +1,12 @@
 name: magi
 description: MAGI合議システム - 3つの観点から分析し多数決で判定
+piece_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+
 max_movements: 5
 initial_movement: melchior
 movements:

@@ -107,6 +107,7 @@ export class AgentRunner {
       maxTurns: options.maxTurns,
       model: AgentRunner.resolveModel(resolvedProvider, options, agentConfig),
       permissionMode: options.permissionMode,
+      providerOptions: options.providerOptions,
       onStream: options.onStream,
       onPermissionRequest: options.onPermissionRequest,
       onAskUserQuestion: options.onAskUserQuestion,

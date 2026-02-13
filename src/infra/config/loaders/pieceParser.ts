@@ -24,6 +24,36 @@ import {
 
 type RawStep = z.output<typeof PieceMovementRawSchema>;
 
+function normalizeProviderOptions(
+  raw: RawStep['provider_options'],
+): PieceMovement['providerOptions'] {
+  if (!raw) return undefined;
+
+  const codex = raw.codex?.network_access === undefined
+    ? undefined
+    : { networkAccess: raw.codex.network_access };
+  const opencode = raw.opencode?.network_access === undefined
+    ? undefined
+    : { networkAccess: raw.opencode.network_access };
+
+  if (!codex && !opencode) return undefined;
+  return { ...(codex ? { codex } : {}), ...(opencode ? { opencode } : {}) };
+}
+
+function mergeProviderOptions(
+  base: PieceMovement['providerOptions'],
+  override: PieceMovement['providerOptions'],
+): PieceMovement['providerOptions'] {
+  const codexNetworkAccess = override?.codex?.networkAccess ?? base?.codex?.networkAccess;
+  const opencodeNetworkAccess = override?.opencode?.networkAccess ?? base?.opencode?.networkAccess;
+
+  const codex = codexNetworkAccess === undefined ? undefined : { networkAccess: codexNetworkAccess };
+  const opencode = opencodeNetworkAccess === undefined ? undefined : { networkAccess: opencodeNetworkAccess };
+
+  if (!codex && !opencode) return undefined;
+  return { ...(codex ? { codex } : {}), ...(opencode ? { opencode } : {}) };
+}
+
 /** Check if a raw output contract item is the object form (has 'name' property). */
 function isOutputContractItem(raw: unknown): raw is { name: string; order?: string; format?: string } {
   return typeof raw === 'object' && raw !== null && !Array.isArray(raw) && 'name' in raw;
@@ -209,6 +239,7 @@ function normalizeStepFromRaw(
   step: RawStep,
   pieceDir: string,
   sections: PieceSections,
+  inheritedProviderOptions?: PieceMovement['providerOptions'],
   context?: FacetResolutionContext,
 ): PieceMovement {
   const rules: PieceRule[] | undefined = step.rules?.map(normalizeRule);
@@ -241,6 +272,7 @@ function normalizeStepFromRaw(
     provider: step.provider,
     model: step.model,
     permissionMode: step.permission_mode,
+    providerOptions: mergeProviderOptions(inheritedProviderOptions, normalizeProviderOptions(step.provider_options)),
     edit: step.edit,
     instructionTemplate: (step.instruction_template
       ? resolveRefToContent(step.instruction_template, sections.resolvedInstructions, pieceDir, 'instructions', context)
@@ -254,7 +286,9 @@ function normalizeStepFromRaw(
   };
 
   if (step.parallel && step.parallel.length > 0) {
-    result.parallel = step.parallel.map((sub: RawStep) => normalizeStepFromRaw(sub, pieceDir, sections, context));
+    result.parallel = step.parallel.map((sub: RawStep) =>
+      normalizeStepFromRaw(sub, pieceDir, sections, inheritedProviderOptions, context),
+    );
   }
 
   const arpeggioConfig = normalizeArpeggio(step.arpeggio, pieceDir);
@@ -327,8 +361,10 @@ export function normalizePieceConfig(
     resolvedReportFormats,
   };
 
+  const pieceProviderOptions = normalizeProviderOptions(parsed.piece_config?.provider_options as RawStep['provider_options']);
+
   const movements: PieceMovement[] = parsed.movements.map((step) =>
-    normalizeStepFromRaw(step, pieceDir, sections, context),
+    normalizeStepFromRaw(step, pieceDir, sections, pieceProviderOptions, context),
   );
 
   // Schema guarantees movements.min(1)
@@ -337,6 +373,7 @@ export function normalizePieceConfig(
   return {
     name: parsed.name,
     description: parsed.description,
+    providerOptions: pieceProviderOptions,
     personas: parsed.personas,
     policies: resolvedPolicies,
     knowledge: resolvedKnowledge,

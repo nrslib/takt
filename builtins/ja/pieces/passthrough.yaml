@@ -1,5 +1,12 @@
 name: passthrough
 description: Single-agent thin wrapper. Pass task directly to coder as-is.
+piece_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+
 max_movements: 10
 initial_movement: execute
 movements:

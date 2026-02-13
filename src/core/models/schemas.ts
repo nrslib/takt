@@ -59,6 +59,20 @@ export const StatusSchema = z.enum([
 
 /** Permission mode schema for tool execution */
 export const PermissionModeSchema = z.enum(['readonly', 'edit', 'full']);
+/** Provider-specific movement options schema */
+export const MovementProviderOptionsSchema = z.object({
+  codex: z.object({
+    network_access: z.boolean().optional(),
+  }).optional(),
+  opencode: z.object({
+    network_access: z.boolean().optional(),
+  }).optional(),
+}).optional();
+
+/** Piece-level provider options schema */
+export const PieceProviderOptionsSchema = z.object({
+  provider_options: MovementProviderOptionsSchema,
+}).optional();
 
 /**
  * Output contract item schema (new structured format).
@@ -204,6 +218,7 @@ export const ParallelSubMovementRawSchema = z.object({
   provider: z.enum(['claude', 'codex', 'opencode', 'mock']).optional(),
   model: z.string().optional(),
   permission_mode: PermissionModeSchema.optional(),
+  provider_options: MovementProviderOptionsSchema,
   edit: z.boolean().optional(),
   instruction: z.string().optional(),
   instruction_template: z.string().optional(),
@@ -235,6 +250,8 @@ export const PieceMovementRawSchema = z.object({
   model: z.string().optional(),
   /** Permission mode for tool execution in this movement */
   permission_mode: PermissionModeSchema.optional(),
+  /** Provider-specific movement options */
+  provider_options: MovementProviderOptionsSchema,
   /** Whether this movement is allowed to edit project files */
   edit: z.boolean().optional(),
   instruction: z.string().optional(),
@@ -295,6 +312,7 @@ export const InteractiveModeSchema = z.enum(INTERACTIVE_MODES);
 export const PieceConfigRawSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
+  piece_config: PieceProviderOptionsSchema,
   /** Piece-level persona definitions — map of name to .md file path or inline content */
   personas: z.record(z.string(), z.string()).optional(),
   /** Piece-level policy definitions — map of name to .md file path or inline content */

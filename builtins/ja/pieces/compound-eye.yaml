@@ -1,5 +1,12 @@
 name: compound-eye
 description: 複眼レビュー - 同じ指示を Claude と Codex に同時に投げ、両者の回答を統合する
+piece_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+
 max_movements: 10
 initial_movement: evaluate
 

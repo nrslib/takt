@@ -1,5 +1,12 @@
 name: e2e-mock-no-match
 description: Piece with a strict rule condition that will not match mock output
+piece_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+
 
 max_movements: 3
 

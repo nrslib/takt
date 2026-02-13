@@ -14,11 +14,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // ===== Codex SDK mock =====
 
 let mockEvents: Array<Record<string, unknown>> = [];
+let lastThreadOptions: Record<string, unknown> | undefined;
 
 vi.mock('@openai/codex-sdk', () => {
   return {
     Codex: class MockCodex {
-      async startThread() {
+      async startThread(options?: Record<string, unknown>) {
+        lastThreadOptions = options;
         return {
           id: 'thread-mock',
           runStreamed: async () => ({
@@ -44,6 +46,7 @@ describe('CodexClient — structuredOutput 抽出', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockEvents = [];
+    lastThreadOptions = undefined;
   });
 
   it('outputSchema 指定時に agent_message の JSON テキストを structuredOutput として返す', async () => {
@@ -148,5 +151,22 @@ describe('CodexClient — structuredOutput 抽出', () => {
     });
 
     expect(result.structuredOutput).toEqual({ step: 1 });
+  });
+
+  it('provider_options.codex.network_access が ThreadOptions に反映される', async () => {
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+
+    const client = new CodexClient();
+    await client.call('coder', 'prompt', {
+      cwd: '/tmp',
+      networkAccess: true,
+    });
+
+    expect(lastThreadOptions).toMatchObject({
+      networkAccessEnabled: true,
+    });
   });
 });

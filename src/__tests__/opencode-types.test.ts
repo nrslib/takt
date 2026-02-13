@@ -84,4 +84,16 @@ describe('OpenCode permissions', () => {
       action: 'deny',
     });
   });
+
+  it('should force allow web tools when networkAccess=true', () => {
+    const ruleset = buildOpenCodePermissionRuleset('readonly', true);
+    expect(ruleset.find((rule) => rule.permission === 'webfetch')?.action).toBe('allow');
+    expect(ruleset.find((rule) => rule.permission === 'websearch')?.action).toBe('allow');
+  });
+
+  it('should force deny web tools when networkAccess=false', () => {
+    const ruleset = buildOpenCodePermissionRuleset('full', false);
+    expect(ruleset.find((rule) => rule.permission === 'webfetch')?.action).toBe('deny');
+    expect(ruleset.find((rule) => rule.permission === 'websearch')?.action).toBe('deny');
+  });
 });

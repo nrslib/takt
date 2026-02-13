@@ -1,5 +1,12 @@
 name: magi
 description: MAGI Deliberation System - Analyze from 3 perspectives and decide by majority
+piece_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+
 max_movements: 5
 initial_movement: melchior
 movements:

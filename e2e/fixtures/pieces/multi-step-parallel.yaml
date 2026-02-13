@@ -1,5 +1,12 @@
 name: e2e-multi-step-parallel
 description: Multi-step piece with parallel sub-movements for E2E testing
+piece_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+
 
 max_movements: 10
 

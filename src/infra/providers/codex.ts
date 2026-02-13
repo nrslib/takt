@@ -31,6 +31,7 @@ function toCodexOptions(options: ProviderCallOptions): CodexCallOptions {
     sessionId: options.sessionId,
     model: options.model,
     permissionMode: options.permissionMode,
+    networkAccess: options.providerOptions?.codex?.networkAccess,
     onStream: options.onStream,
     openaiApiKey: options.openaiApiKey ?? resolveOpenaiApiKey(),
     outputSchema: options.outputSchema,

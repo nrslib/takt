@@ -1,5 +1,12 @@
 name: compound-eye
 description: Multi-model review - send the same instruction to Claude and Codex simultaneously, synthesize both responses
+piece_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+
 max_movements: 10
 initial_movement: evaluate
 movements:

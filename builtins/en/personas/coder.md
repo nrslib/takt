@@ -35,3 +35,4 @@ You are the implementer. Focus on implementation, not design decisions.
 - Adding backward compatibility or legacy support without being asked → Absolutely prohibited
 - Leaving replaced code/exports after refactoring → Prohibited (remove unless explicitly told to keep)
 - Layering workarounds that bypass safety mechanisms on top of a root cause fix → Prohibited
+- Deleting existing features or structural changes not in the task order as a "side effect" → Prohibited (report even if included in the plan, when there's no basis in the task order for large-scale deletions)

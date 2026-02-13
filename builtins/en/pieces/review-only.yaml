@@ -1,5 +1,12 @@
 name: review-only
 description: Review-only piece - reviews code without making edits
+piece_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+
 max_movements: 10
 initial_movement: plan
 movements:

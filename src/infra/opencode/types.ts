@@ -100,14 +100,38 @@ function buildPermissionMap(mode?: PermissionMode): OpenCodePermissionMap {
   };
 }
 
-export function buildOpenCodePermissionConfig(mode?: PermissionMode): OpenCodePermissionAction | Record<string, OpenCodePermissionAction> {
-  if (mode === 'readonly') return 'deny';
-  if (mode === 'full') return 'allow';
-  return buildPermissionMap(mode);
+function applyNetworkAccessOverride(
+  map: OpenCodePermissionMap,
+  networkAccess?: boolean,
+): OpenCodePermissionMap {
+  if (networkAccess === undefined) {
+    return map;
+  }
+
+  const action: OpenCodePermissionAction = networkAccess ? 'allow' : 'deny';
+  return {
+    ...map,
+    webfetch: action,
+    websearch: action,
+  };
 }
 
-export function buildOpenCodePermissionRuleset(mode?: PermissionMode): Array<{ permission: string; pattern: string; action: OpenCodePermissionAction }> {
-  const permissionMap = buildPermissionMap(mode);
+export function buildOpenCodePermissionConfig(
+  mode?: PermissionMode,
+  networkAccess?: boolean,
+): OpenCodePermissionAction | Record<string, OpenCodePermissionAction> {
+  if (networkAccess === undefined) {
+    if (mode === 'readonly') return 'deny';
+    if (mode === 'full') return 'allow';
+  }
+  return applyNetworkAccessOverride(buildPermissionMap(mode), networkAccess);
+}
+
+export function buildOpenCodePermissionRuleset(
+  mode?: PermissionMode,
+  networkAccess?: boolean,
+): Array<{ permission: string; pattern: string; action: OpenCodePermissionAction }> {
+  const permissionMap = applyNetworkAccessOverride(buildPermissionMap(mode), networkAccess);
   return OPEN_CODE_PERMISSION_KEYS.map((permission) => ({
     permission,
     pattern: '**',
@@ -165,6 +189,8 @@ export interface OpenCodeCallOptions {
   allowedTools?: string[];
   /** Permission mode for automatic permission handling */
   permissionMode?: PermissionMode;
+  /** Override network access (webfetch/websearch) */
+  networkAccess?: boolean;
   /** Enable streaming mode with callback (best-effort) */
   onStream?: StreamCallback;
   onAskUserQuestion?: AskUserQuestionHandler;

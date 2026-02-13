@@ -1,5 +1,12 @@
 name: e2e-mock-max-iter
 description: Piece with max_movements=2 that loops between two steps
+piece_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+
 
 max_movements: 2
 

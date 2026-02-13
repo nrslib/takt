@@ -1,5 +1,12 @@
 name: e2e-mock-slow-multi-step
 description: Multi-step mock piece to keep tasks in-flight long enough for SIGINT E2E
+piece_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+
 
 max_movements: 20
 

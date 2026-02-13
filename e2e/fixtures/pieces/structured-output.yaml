@@ -1,5 +1,12 @@
 name: e2e-structured-output
 description: E2E piece to verify structured output rule matching
+piece_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+
 
 max_movements: 5
 

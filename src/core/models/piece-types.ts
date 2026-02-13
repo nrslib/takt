@@ -80,6 +80,24 @@ export interface McpHttpServerConfig {
 /** MCP server configuration (union of all YAML-configurable transports) */
 export type McpServerConfig = McpStdioServerConfig | McpSseServerConfig | McpHttpServerConfig;
 
+/** Codex provider-specific options */
+export interface CodexProviderOptions {
+  /** Enable network access for Codex workspace-write sandbox */
+  networkAccess?: boolean;
+}
+
+/** OpenCode provider-specific options */
+export interface OpenCodeProviderOptions {
+  /** Enable/disable network tools (webfetch/websearch) */
+  networkAccess?: boolean;
+}
+
+/** Provider-specific movement options */
+export interface MovementProviderOptions {
+  codex?: CodexProviderOptions;
+  opencode?: OpenCodeProviderOptions;
+}
+
 /** Single movement in a piece */
 export interface PieceMovement {
   name: string;
@@ -103,6 +121,8 @@ export interface PieceMovement {
   model?: string;
   /** Permission mode for tool execution in this movement */
   permissionMode?: PermissionMode;
+  /** Provider-specific movement options */
+  providerOptions?: MovementProviderOptions;
   /** Whether this movement is allowed to edit project files (true=allowed, false=prohibited, undefined=no prompt) */
   edit?: boolean;
   instructionTemplate: string;
@@ -201,6 +221,8 @@ export interface LoopMonitorConfig {
 export interface PieceConfig {
   name: string;
   description?: string;
+  /** Piece-level default provider options (used as movement defaults) */
+  providerOptions?: MovementProviderOptions;
   /** Persona definitions — map of name to file path or inline content (raw, not content-resolved) */
   personas?: Record<string, string>;
   /** Resolved policy definitions — map of name to file content (resolved at parse time) */

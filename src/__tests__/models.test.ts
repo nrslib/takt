@@ -105,6 +105,54 @@ describe('PieceConfigRawSchema', () => {
     expect(result.movements![0]?.permission_mode).toBe('edit');
   });
 
+  it('should parse movement with provider_options', () => {
+    const config = {
+      name: 'test-piece',
+      movements: [
+        {
+          name: 'implement',
+          provider: 'codex',
+          provider_options: {
+            codex: { network_access: true },
+            opencode: { network_access: false },
+          },
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    const result = PieceConfigRawSchema.parse(config);
+    expect(result.movements![0]?.provider_options).toEqual({
+      codex: { network_access: true },
+      opencode: { network_access: false },
+    });
+  });
+
+  it('should parse piece-level piece_config.provider_options', () => {
+    const config = {
+      name: 'test-piece',
+      piece_config: {
+        provider_options: {
+          codex: { network_access: true },
+        },
+      },
+      movements: [
+        {
+          name: 'implement',
+          provider: 'codex',
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    const result = PieceConfigRawSchema.parse(config);
+    expect(result.piece_config).toEqual({
+      provider_options: {
+        codex: { network_access: true },
+      },
+    });
+  });
+
   it('should allow omitting permission_mode', () => {
     const config = {
       name: 'test-piece',
