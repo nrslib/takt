@@ -22,6 +22,7 @@ import {
   resolveLanguage,
   type InteractiveModeResult,
 } from '../../features/interactive/index.js';
+import { dispatchConversationAction } from '../../features/interactive/actionDispatcher.js';
 import { getPieceDescription, loadGlobalConfig } from '../../infra/config/index.js';
 import { DEFAULT_PIECE_NAME } from '../../shared/constants.js';
 import { program, resolvedCwd, pipelineMode } from './program.js';
@@ -202,33 +203,27 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     }
   }
 
-  switch (result.action) {
-    case 'execute':
+  await dispatchConversationAction(result, {
+    execute: async ({ task: confirmedTask }) => {
       selectOptions.interactiveUserInput = true;
       selectOptions.piece = pieceId;
-      selectOptions.interactiveMetadata = { confirmed: true, task: result.task };
-      await selectAndExecuteTask(resolvedCwd, result.task, selectOptions, agentOverrides);
-      break;
-
-    case 'create_issue':
-      {
-        const issueNumber = createIssueFromTask(result.task);
-        if (issueNumber !== undefined) {
-          await saveTaskFromInteractive(resolvedCwd, result.task, pieceId, {
-            issue: issueNumber,
-            confirmAtEndMessage: 'Add this issue to tasks?',
-          });
-        }
+      selectOptions.interactiveMetadata = { confirmed: true, task: confirmedTask };
+      await selectAndExecuteTask(resolvedCwd, confirmedTask, selectOptions, agentOverrides);
+    },
+    create_issue: async ({ task: confirmedTask }) => {
+      const issueNumber = createIssueFromTask(confirmedTask);
+      if (issueNumber !== undefined) {
+        await saveTaskFromInteractive(resolvedCwd, confirmedTask, pieceId, {
+          issue: issueNumber,
+          confirmAtEndMessage: 'Add this issue to tasks?',
+        });
       }
-      break;
-
-    case 'save_task':
-      await saveTaskFromInteractive(resolvedCwd, result.task, pieceId);
-      break;
-
-    case 'cancel':
-      break;
-  }
+    },
+    save_task: async ({ task: confirmedTask }) => {
+      await saveTaskFromInteractive(resolvedCwd, confirmedTask, pieceId);
+    },
+    cancel: () => undefined,
+  });
 }
 
 program

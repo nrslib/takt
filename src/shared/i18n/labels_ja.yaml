@@ -68,6 +68,22 @@ piece:
   sigintTimeout: "graceful停止がタイムアウトしました ({timeoutMs}ms)"
   sigintForce: "Ctrl+C: 強制終了します"
 
+# ===== Instruct Mode UI (takt list -> instruct) =====
+instruct:
+  ui:
+    intro: "指示モード - 追加指示を入力してください。コマンド: /go（要約）, /cancel（終了）"
+    resume: "前回のセッションを再開します"
+    noConversation: "まだ会話がありません。まず追加指示を入力してください。"
+    summarizeFailed: "会話の要約に失敗しました。再度お試しください。"
+    continuePrompt: "続けて追加指示を入力してください。"
+    proposed: "提案された追加指示:"
+    actionPrompt: "どうしますか？"
+    actions:
+      execute: "実行する"
+      saveTask: "タスクにつむ"
+      continue: "会話を続ける"
+    cancelled: "キャンセルしました"
+
 run:
   notifyComplete: "run完了 ({total} tasks)"
   notifyAbort: "runはエラー終了 ({failed})"

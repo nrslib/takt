@@ -92,10 +92,24 @@ export interface OpenCodeProviderOptions {
   networkAccess?: boolean;
 }
 
+/** Claude sandbox settings (maps to SDK SandboxSettings) */
+export interface ClaudeSandboxSettings {
+  /** Allow all Bash commands to run outside the sandbox */
+  allowUnsandboxedCommands?: boolean;
+  /** Specific commands to exclude from sandbox (e.g., ["./gradlew", "npm test"]) */
+  excludedCommands?: string[];
+}
+
+/** Claude provider-specific options */
+export interface ClaudeProviderOptions {
+  sandbox?: ClaudeSandboxSettings;
+}
+
 /** Provider-specific movement options */
 export interface MovementProviderOptions {
   codex?: CodexProviderOptions;
   opencode?: OpenCodeProviderOptions;
+  claude?: ClaudeProviderOptions;
 }
 
 /** Single movement in a piece */

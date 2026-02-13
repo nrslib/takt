@@ -28,6 +28,7 @@ import {
   type InteractiveModeResult,
   type InteractiveUIText,
   type ConversationMessage,
+  type PostSummaryAction,
   resolveLanguage,
   buildSummaryPrompt,
   selectPostSummaryAction,
@@ -171,6 +172,8 @@ export async function callAIWithRetry(
   }
 }
 
+export type { PostSummaryAction } from './interactive.js';
+
 /** Strategy for customizing conversation loop behavior */
 export interface ConversationStrategy {
   /** System prompt for AI calls */
@@ -181,6 +184,8 @@ export interface ConversationStrategy {
   transformPrompt: (userMessage: string) => string;
   /** Intro message displayed at start */
   introMessage: string;
+  /** Custom action selector (optional). If not provided, uses default selectPostSummaryAction. */
+  selectAction?: (task: string, lang: 'en' | 'ja') => Promise<PostSummaryAction | null>;
 }
 
 /**
@@ -284,7 +289,9 @@ export async function runConversationLoop(
         return { action: 'cancel', task: '' };
       }
       const task = summaryResult.content.trim();
-      const selectedAction = await selectPostSummaryAction(task, ui.proposed, ui);
+      const selectedAction = strategy.selectAction
+        ? await strategy.selectAction(task, ctx.lang)
+        : await selectPostSummaryAction(task, ui.proposed, ui);
       if (selectedAction === 'continue' || selectedAction === null) {
         info(ui.continuePrompt);
         continue;

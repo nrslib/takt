@@ -59,6 +59,12 @@ export const StatusSchema = z.enum([
 
 /** Permission mode schema for tool execution */
 export const PermissionModeSchema = z.enum(['readonly', 'edit', 'full']);
+/** Claude sandbox settings schema */
+export const ClaudeSandboxSchema = z.object({
+  allow_unsandboxed_commands: z.boolean().optional(),
+  excluded_commands: z.array(z.string()).optional(),
+}).optional();
+
 /** Provider-specific movement options schema */
 export const MovementProviderOptionsSchema = z.object({
   codex: z.object({
@@ -66,6 +72,9 @@ export const MovementProviderOptionsSchema = z.object({
   }).optional(),
   opencode: z.object({
     network_access: z.boolean().optional(),
+  }).optional(),
+  claude: z.object({
+    sandbox: ClaudeSandboxSchema,
   }).optional(),
 }).optional();
 
@@ -414,6 +423,8 @@ export const GlobalConfigSchema = z.object({
   piece_categories_file: z.string().optional(),
   /** Per-persona provider overrides (e.g., { coder: 'codex' }) */
   persona_providers: z.record(z.string(), z.enum(['claude', 'codex', 'opencode', 'mock'])).optional(),
+  /** Global provider-specific options (lowest priority) */
+  provider_options: MovementProviderOptionsSchema,
   /** Branch name generation strategy: 'romaji' (fast, default) or 'ai' (slow) */
   branch_name_strategy: z.enum(['romaji', 'ai']).optional(),
   /** Prevent macOS idle sleep during takt execution using caffeinate (default: false) */
@@ -441,4 +452,5 @@ export const ProjectConfigSchema = z.object({
   piece: z.string().optional(),
   agents: z.array(CustomAgentConfigSchema).optional(),
   provider: z.enum(['claude', 'codex', 'opencode', 'mock']).optional(),
+  provider_options: MovementProviderOptionsSchema,
 });

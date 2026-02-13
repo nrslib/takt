@@ -33,7 +33,19 @@ vi.mock('../infra/config/index.js', async (importOriginal) => {
   return actual;
 });
 
-const { selectPieceFromEntries, selectPieceFromCategorizedPieces } = await import('../features/pieceSelection/index.js');
+const configMock = vi.hoisted(() => ({
+  listPieces: vi.fn(),
+  listPieceEntries: vi.fn(),
+  loadAllPiecesWithSources: vi.fn(),
+  getPieceCategories: vi.fn(),
+  buildCategorizedPieces: vi.fn(),
+  getCurrentPiece: vi.fn(),
+  findPieceCategories: vi.fn(() => []),
+}));
+
+vi.mock('../infra/config/index.js', () => configMock);
+
+const { selectPieceFromEntries, selectPieceFromCategorizedPieces, selectPiece } = await import('../features/pieceSelection/index.js');
 
 describe('selectPieceFromEntries', () => {
   beforeEach(() => {
@@ -229,5 +241,95 @@ describe('selectPieceFromCategorizedPieces', () => {
     expect(labels.some((l) => l.includes('base-piece'))).toBe(true);
     // Should NOT contain the parent category again
     expect(labels.some((l) => l.includes('Dev'))).toBe(false);
+  });
+});
+
+describe('selectPiece', () => {
+  const entries: PieceDirEntry[] = [
+    { name: 'custom-flow', path: '/tmp/custom.yaml', source: 'user' },
+    { name: 'builtin-flow', path: '/tmp/builtin.yaml', source: 'builtin' },
+  ];
+
+  beforeEach(() => {
+    selectOptionMock.mockReset();
+    bookmarkState.bookmarks = [];
+    configMock.listPieces.mockReset();
+    configMock.listPieceEntries.mockReset();
+    configMock.loadAllPiecesWithSources.mockReset();
+    configMock.getPieceCategories.mockReset();
+    configMock.buildCategorizedPieces.mockReset();
+    configMock.getCurrentPiece.mockReset();
+  });
+
+  it('should return default piece when no pieces found and fallbackToDefault is true', async () => {
+    configMock.getPieceCategories.mockReturnValue(null);
+    configMock.listPieces.mockReturnValue([]);
+    configMock.getCurrentPiece.mockReturnValue('default');
+
+    const result = await selectPiece('/cwd');
+
+    expect(result).toBe('default');
+  });
+
+  it('should return null when no pieces found and fallbackToDefault is false', async () => {
+    configMock.getPieceCategories.mockReturnValue(null);
+    configMock.listPieces.mockReturnValue([]);
+    configMock.getCurrentPiece.mockReturnValue('default');
+
+    const result = await selectPiece('/cwd', { fallbackToDefault: false });
+
+    expect(result).toBeNull();
+  });
+
+  it('should prompt selection even when only one piece exists', async () => {
+    configMock.getPieceCategories.mockReturnValue(null);
+    configMock.listPieces.mockReturnValue(['only-piece']);
+    configMock.listPieceEntries.mockReturnValue([
+      { name: 'only-piece', path: '/tmp/only-piece.yaml', source: 'user' },
+    ]);
+    configMock.getCurrentPiece.mockReturnValue('only-piece');
+    selectOptionMock.mockResolvedValueOnce('only-piece');
+
+    const result = await selectPiece('/cwd');
+
+    expect(result).toBe('only-piece');
+    expect(selectOptionMock).toHaveBeenCalled();
+  });
+
+  it('should use category-based selection when category config exists', async () => {
+    const pieceMap = createPieceMap([{ name: 'my-piece', source: 'user' }]);
+    const categorized: CategorizedPieces = {
+      categories: [{ name: 'Dev', pieces: ['my-piece'], children: [] }],
+      allPieces: pieceMap,
+      missingPieces: [],
+    };
+
+    configMock.getPieceCategories.mockReturnValue({ categories: ['Dev'] });
+    configMock.loadAllPiecesWithSources.mockReturnValue(pieceMap);
+    configMock.buildCategorizedPieces.mockReturnValue(categorized);
+    configMock.getCurrentPiece.mockReturnValue('my-piece');
+
+    selectOptionMock.mockResolvedValueOnce('__current__');
+
+    const result = await selectPiece('/cwd');
+
+    expect(result).toBe('my-piece');
+    expect(configMock.buildCategorizedPieces).toHaveBeenCalled();
+  });
+
+  it('should use directory-based selection when no category config', async () => {
+    configMock.getPieceCategories.mockReturnValue(null);
+    configMock.listPieces.mockReturnValue(['piece-a', 'piece-b']);
+    configMock.listPieceEntries.mockReturnValue(entries);
+    configMock.getCurrentPiece.mockReturnValue('piece-a');
+
+    selectOptionMock
+      .mockResolvedValueOnce('custom')
+      .mockResolvedValueOnce('custom-flow');
+
+    const result = await selectPiece('/cwd');
+
+    expect(result).toBe('custom-flow');
+    expect(configMock.listPieceEntries).toHaveBeenCalled();
   });
 });

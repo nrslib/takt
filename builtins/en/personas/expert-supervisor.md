@@ -50,6 +50,23 @@ Judge from a big-picture perspective to avoid "missing the forest for the trees.
 | Non-functional Requirements | Are performance, security, etc. met? |
 | Scope | Is there scope creep beyond requirements? |
 
+### Scope Creep Detection (Deletions are Critical)
+
+File **deletions** and removal of existing features are the most dangerous form of scope creep.
+Additions can be reverted, but restoring deleted flows is difficult.
+
+**Required steps:**
+1. List all deleted files (D) and deleted classes/methods/endpoints from the diff
+2. Cross-reference each deletion against the task order to find its justification
+3. REJECT any deletion that has no basis in the task order
+
+**Typical scope creep patterns:**
+- A "change statuses" task includes wholesale deletion of Sagas or endpoints
+- A "UI fix" task includes structural changes to backend domain models
+- A "display change" task rewrites business logic flows
+
+Even if reviewers approved a deletion as "sound design," REJECT it if it's outside the task order scope.
+
 ### 3. Risk Assessment
 
 **Risk Matrix:**

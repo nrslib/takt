@@ -24,34 +24,61 @@ import {
 
 type RawStep = z.output<typeof PieceMovementRawSchema>;
 
-function normalizeProviderOptions(
+import type { MovementProviderOptions } from '../../../core/models/piece-types.js';
+
+/** Convert raw YAML provider_options (snake_case) to internal format (camelCase). */
+export function normalizeProviderOptions(
   raw: RawStep['provider_options'],
-): PieceMovement['providerOptions'] {
+): MovementProviderOptions | undefined {
   if (!raw) return undefined;
 
-  const codex = raw.codex?.network_access === undefined
-    ? undefined
-    : { networkAccess: raw.codex.network_access };
-  const opencode = raw.opencode?.network_access === undefined
-    ? undefined
-    : { networkAccess: raw.opencode.network_access };
-
-  if (!codex && !opencode) return undefined;
-  return { ...(codex ? { codex } : {}), ...(opencode ? { opencode } : {}) };
+  const result: MovementProviderOptions = {};
+  if (raw.codex?.network_access !== undefined) {
+    result.codex = { networkAccess: raw.codex.network_access };
+  }
+  if (raw.opencode?.network_access !== undefined) {
+    result.opencode = { networkAccess: raw.opencode.network_access };
+  }
+  if (raw.claude?.sandbox) {
+    result.claude = {
+      sandbox: {
+        ...(raw.claude.sandbox.allow_unsandboxed_commands !== undefined
+          ? { allowUnsandboxedCommands: raw.claude.sandbox.allow_unsandboxed_commands }
+          : {}),
+        ...(raw.claude.sandbox.excluded_commands !== undefined
+          ? { excludedCommands: raw.claude.sandbox.excluded_commands }
+          : {}),
+      },
+    };
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
 }
 
-function mergeProviderOptions(
-  base: PieceMovement['providerOptions'],
-  override: PieceMovement['providerOptions'],
-): PieceMovement['providerOptions'] {
-  const codexNetworkAccess = override?.codex?.networkAccess ?? base?.codex?.networkAccess;
-  const opencodeNetworkAccess = override?.opencode?.networkAccess ?? base?.opencode?.networkAccess;
+/**
+ * Deep merge provider options. Later sources override earlier ones.
+ * Exported for reuse in runner.ts (4-layer resolution).
+ */
+export function mergeProviderOptions(
+  ...layers: (MovementProviderOptions | undefined)[]
+): MovementProviderOptions | undefined {
+  const result: MovementProviderOptions = {};
 
-  const codex = codexNetworkAccess === undefined ? undefined : { networkAccess: codexNetworkAccess };
-  const opencode = opencodeNetworkAccess === undefined ? undefined : { networkAccess: opencodeNetworkAccess };
+  for (const layer of layers) {
+    if (!layer) continue;
+    if (layer.codex) {
+      result.codex = { ...result.codex, ...layer.codex };
+    }
+    if (layer.opencode) {
+      result.opencode = { ...result.opencode, ...layer.opencode };
+    }
+    if (layer.claude?.sandbox) {
+      result.claude = {
+        sandbox: { ...result.claude?.sandbox, ...layer.claude.sandbox },
+      };
+    }
+  }
 
-  if (!codex && !opencode) return undefined;
-  return { ...(codex ? { codex } : {}), ...(opencode ? { opencode } : {}) };
+  return Object.keys(result).length > 0 ? result : undefined;
 }
 
 /** Check if a raw output contract item is the object form (has 'name' property). */

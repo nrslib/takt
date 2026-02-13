@@ -9,6 +9,7 @@ import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { GlobalConfigSchema } from '../../../core/models/index.js';
 import type { GlobalConfig, DebugConfig, Language } from '../../../core/models/index.js';
+import { normalizeProviderOptions } from '../loaders/pieceParser.js';
 import { getGlobalConfigPath, getProjectConfigPath } from '../paths.js';
 import { DEFAULT_LANGUAGE } from '../../../shared/constants.js';
 import { parseProviderModel } from '../../../shared/utils/providerModel.js';
@@ -124,6 +125,7 @@ export class GlobalConfigManager {
       bookmarksFile: parsed.bookmarks_file,
       pieceCategoriesFile: parsed.piece_categories_file,
       personaProviders: parsed.persona_providers,
+      providerOptions: normalizeProviderOptions(parsed.provider_options),
       branchNameStrategy: parsed.branch_name_strategy,
       preventSleep: parsed.prevent_sleep,
       notificationSound: parsed.notification_sound,

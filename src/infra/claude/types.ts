@@ -5,8 +5,10 @@
  * used throughout the Claude integration layer.
  */
 
-import type { PermissionUpdate, AgentDefinition } from '@anthropic-ai/claude-agent-sdk';
+import type { PermissionUpdate, AgentDefinition, SandboxSettings } from '@anthropic-ai/claude-agent-sdk';
 import type { PermissionMode, McpServerConfig } from '../../core/models/index.js';
+
+export type { SandboxSettings };
 import type { PermissionResult } from '../../core/piece/index.js';
 
 // Re-export PermissionResult for convenience
@@ -145,6 +147,8 @@ export interface ClaudeCallOptions {
   anthropicApiKey?: string;
   /** JSON Schema for structured output */
   outputSchema?: Record<string, unknown>;
+  /** Sandbox settings for Claude SDK */
+  sandbox?: SandboxSettings;
 }
 
 /** Options for spawning a Claude SDK query (low-level, used by executor/process) */
@@ -176,4 +180,6 @@ export interface ClaudeSpawnOptions {
   outputSchema?: Record<string, unknown>;
   /** Callback for stderr output from the Claude Code process */
   onStderr?: (data: string) => void;
+  /** Sandbox settings for Claude SDK */
+  sandbox?: SandboxSettings;
 }

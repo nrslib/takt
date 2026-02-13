@@ -14,6 +14,7 @@ export type {
   PartResult,
   TeamLeaderConfig,
   PieceRule,
+  MovementProviderOptions,
   PieceMovement,
   ArpeggioMovementConfig,
   ArpeggioMergeMovementConfig,

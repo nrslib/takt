@@ -52,6 +52,7 @@ export class ClaudeClient {
       bypassPermissions: options.bypassPermissions,
       anthropicApiKey: options.anthropicApiKey,
       outputSchema: options.outputSchema,
+      sandbox: options.sandbox,
     };
   }
 

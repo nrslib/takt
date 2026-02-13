@@ -12,11 +12,18 @@ import {
 } from '../../infra/config/global/index.js';
 import {
   findPieceCategories,
+  listPieces,
+  listPieceEntries,
+  loadAllPiecesWithSources,
+  getPieceCategories,
+  buildCategorizedPieces,
+  getCurrentPiece,
   type PieceDirEntry,
   type PieceCategoryNode,
   type CategorizedPieces,
   type MissingPiece,
 } from '../../infra/config/index.js';
+import { DEFAULT_PIECE_NAME } from '../../shared/constants.js';
 
 /** Top-level selection item: either a piece or a category containing pieces */
 export type PieceSelectionItem =
@@ -503,4 +510,45 @@ export async function selectPieceFromEntries(
 
   const entriesToUse = customEntries.length > 0 ? customEntries : builtinEntries;
   return selectPieceFromEntriesWithCategories(entriesToUse, currentPiece);
+}
+
+export interface SelectPieceOptions {
+  fallbackToDefault?: boolean;
+}
+
+export async function selectPiece(
+  cwd: string,
+  options?: SelectPieceOptions,
+): Promise<string | null> {
+  const fallbackToDefault = options?.fallbackToDefault !== false;
+  const categoryConfig = getPieceCategories();
+  const currentPiece = getCurrentPiece(cwd);
+
+  if (categoryConfig) {
+    const allPieces = loadAllPiecesWithSources(cwd);
+    if (allPieces.size === 0) {
+      if (fallbackToDefault) {
+        info(`No pieces found. Using default: ${DEFAULT_PIECE_NAME}`);
+        return DEFAULT_PIECE_NAME;
+      }
+      info('No pieces found.');
+      return null;
+    }
+    const categorized = buildCategorizedPieces(allPieces, categoryConfig);
+    warnMissingPieces(categorized.missingPieces.filter((missing) => missing.source === 'user'));
+    return selectPieceFromCategorizedPieces(categorized, currentPiece);
+  }
+
+  const availablePieces = listPieces(cwd);
+  if (availablePieces.length === 0) {
+    if (fallbackToDefault) {
+      info(`No pieces found. Using default: ${DEFAULT_PIECE_NAME}`);
+      return DEFAULT_PIECE_NAME;
+    }
+    info('No pieces found.');
+    return null;
+  }
+
+  const entries = listPieceEntries(cwd);
+  return selectPieceFromEntries(entries, currentPiece);
 }
