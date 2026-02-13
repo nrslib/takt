@@ -68,6 +68,22 @@ piece:
   sigintTimeout: "Graceful shutdown timed out after {timeoutMs}ms"
   sigintForce: "Ctrl+C: Force exit"
 
+# ===== Instruct Mode UI (takt list -> instruct) =====
+instruct:
+  ui:
+    intro: "Instruct mode - describe additional instructions. Commands: /go (summarize), /cancel (exit)"
+    resume: "Resuming previous session"
+    noConversation: "No conversation yet. Please describe your instructions first."
+    summarizeFailed: "Failed to summarize conversation. Please try again."
+    continuePrompt: "Okay, continue describing your instructions."
+    proposed: "Proposed additional instructions:"
+    actionPrompt: "What would you like to do?"
+    actions:
+      execute: "Execute now"
+      saveTask: "Save as Task"
+      continue: "Continue editing"
+    cancelled: "Cancelled"
+
 run:
   notifyComplete: "Run complete ({total} tasks)"
   notifyAbort: "Run finished with errors ({failed})"

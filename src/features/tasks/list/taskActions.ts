@@ -19,7 +19,7 @@ import {
   autoCommitAndPush,
   type BranchListItem,
 } from '../../../infra/task/index.js';
-import { selectOption, promptInput } from '../../../shared/prompt/index.js';
+import { selectOption } from '../../../shared/prompt/index.js';
 import { info, success, error as logError, warn, header, blankLine } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { executeTask } from '../execute/taskExecution.js';
@@ -27,6 +27,8 @@ import type { TaskExecutionOptions } from '../execute/types.js';
 import { listPieces, getCurrentPiece } from '../../../infra/config/index.js';
 import { DEFAULT_PIECE_NAME } from '../../../shared/constants.js';
 import { encodeWorktreePath } from '../../../infra/config/project/sessionStore.js';
+import { runInstructMode } from './instructMode.js';
+import { saveTaskFile } from '../add/index.js';
 
 const log = createLogger('list-tasks');
 
@@ -327,8 +329,8 @@ function getBranchContext(projectDir: string, branch: string): string {
 }
 
 /**
- * Instruct branch: create a temp clone, give additional instructions,
- * auto-commit+push, then remove clone.
+ * Instruct branch: create a temp clone, give additional instructions via
+ * interactive conversation, then auto-commit+push or save as task file.
  */
 export async function instructBranch(
   projectDir: string,
@@ -337,8 +339,10 @@ export async function instructBranch(
 ): Promise<boolean> {
   const { branch } = item.info;
 
-  const instruction = await promptInput('Enter instruction');
-  if (!instruction) {
+  const branchContext = getBranchContext(projectDir, branch);
+  const result = await runInstructMode(projectDir, branchContext, branch);
+
+  if (result.action === 'cancel') {
     info('Cancelled');
     return false;
   }
@@ -349,16 +353,23 @@ export async function instructBranch(
     return false;
   }
 
+  if (result.action === 'save_task') {
+    const created = await saveTaskFile(projectDir, result.task, { piece: selectedPiece });
+    success(`Task saved: ${created.taskName}`);
+    info(`  File: ${created.tasksFile}`);
+    log.info('Task saved from instruct mode', { branch, piece: selectedPiece });
+    return true;
+  }
+
   log.info('Instructing branch via temp clone', { branch, piece: selectedPiece });
   info(`Running instruction on ${branch}...`);
 
   const clone = createTempCloneForBranch(projectDir, branch);
 
   try {
-    const branchContext = getBranchContext(projectDir, branch);
     const fullInstruction = branchContext
-      ? `${branchContext}## 追加指示\n${instruction}`
-      : instruction;
+      ? `${branchContext}## 追加指示\n${result.task}`
+      : result.task;
 
     const taskSuccess = await executeTask({
       task: fullInstruction,
