@@ -44,6 +44,12 @@ export {
   instructBranch,
 } from './taskActions.js';
 
+export {
+  type InstructModeAction,
+  type InstructModeResult,
+  runInstructMode,
+} from './instructMode.js';
+
 /** Task action type for pending task action selection menu */
 type PendingTaskAction = 'delete';
 
