@@ -3,7 +3,7 @@
  */
 
 import type { StreamCallback, PermissionHandler, AskUserQuestionHandler } from '../infra/claude/types.js';
-import type { PermissionMode, Language, McpServerConfig } from '../core/models/index.js';
+import type { PermissionMode, Language, McpServerConfig, MovementProviderOptions } from '../core/models/index.js';
 
 export type { StreamCallback };
 
@@ -25,10 +25,7 @@ export interface RunAgentOptions {
   /** Permission mode for tool execution (from piece step) */
   permissionMode?: PermissionMode;
   /** Provider-specific movement options */
-  providerOptions?: {
-    codex?: { networkAccess?: boolean };
-    opencode?: { networkAccess?: boolean };
-  };
+  providerOptions?: MovementProviderOptions;
   onStream?: StreamCallback;
   onPermissionRequest?: PermissionHandler;
   onAskUserQuestion?: AskUserQuestionHandler;

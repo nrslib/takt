@@ -95,6 +95,10 @@ export class SdkOptionsBuilder {
       sdkOptions.stderr = this.options.onStderr;
     }
 
+    if (this.options.sandbox) {
+      sdkOptions.sandbox = this.options.sandbox;
+    }
+
     return sdkOptions;
   }
 

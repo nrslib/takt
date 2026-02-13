@@ -37,6 +37,7 @@ export type {
   OutputContractItem,
   OutputContractEntry,
   McpServerConfig,
+  MovementProviderOptions,
   PieceMovement,
   ArpeggioMovementConfig,
   ArpeggioMergeMovementConfig,

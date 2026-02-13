@@ -86,11 +86,22 @@ Based on investigation and design, determine the implementation direction:
 - Points to be careful about
 - Spec constraints
 
+## Scope Discipline
+
+Only plan work that is explicitly stated in the task order. Do not include implicit "improvements."
+
+**Deletion criteria:**
+- **Code made newly unused by this task's changes** → OK to plan deletion (e.g., renamed old variable)
+- **Existing features, flows, endpoints, Sagas, events** → Do NOT delete unless explicitly instructed in the task order
+
+"Change statuses to 5 values" means "rewrite enum values," NOT "delete flows that seem unnecessary."
+Do not over-interpret the task order. Plan only what is written.
+
 ## Design Principles
 
 **Backward Compatibility:**
 - Do not include backward compatibility code unless explicitly instructed
-- Plan to delete things that are unused
+- Delete code that was made newly unused by this task's changes
 
 **Don't Generate Unnecessary Code:**
 - Don't plan "just in case" code, future fields, or unused methods
