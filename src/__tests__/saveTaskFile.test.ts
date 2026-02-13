@@ -139,14 +139,43 @@ describe('saveTaskFromInteractive', () => {
   });
 
   it('should record issue number in tasks.yaml when issue option is provided', async () => {
-    // Given: user declines worktree
     mockConfirm.mockResolvedValueOnce(false);
 
-    // When
     await saveTaskFromInteractive(testDir, 'Fix login bug', 'default', { issue: 42 });
 
-    // Then
     const task = loadTasks(testDir).tasks[0]!;
     expect(task.issue).toBe(42);
+  });
+
+  describe('with confirmAtEndMessage', () => {
+    it('should not save task when user declines confirmAtEndMessage', async () => {
+      mockConfirm.mockResolvedValueOnce(false);
+
+      await saveTaskFromInteractive(testDir, 'Task content', 'default', {
+        issue: 42,
+        confirmAtEndMessage: 'Add this issue to tasks?',
+      });
+
+      expect(fs.existsSync(path.join(testDir, '.takt', 'tasks.yaml'))).toBe(false);
+    });
+
+    it('should prompt worktree settings after confirming confirmAtEndMessage', async () => {
+      mockConfirm.mockResolvedValueOnce(true);
+      mockPromptInput.mockResolvedValueOnce('');
+      mockPromptInput.mockResolvedValueOnce('');
+      mockConfirm.mockResolvedValueOnce(true);
+      mockConfirm.mockResolvedValueOnce(false);
+
+      await saveTaskFromInteractive(testDir, 'Task content', 'default', {
+        issue: 42,
+        confirmAtEndMessage: 'Add this issue to tasks?',
+      });
+
+      expect(mockConfirm).toHaveBeenNthCalledWith(1, 'Add this issue to tasks?', true);
+      expect(mockConfirm).toHaveBeenNthCalledWith(2, 'Create worktree?', true);
+      const task = loadTasks(testDir).tasks[0]!;
+      expect(task.issue).toBe(42);
+      expect(task.worktree).toBe(true);
+    });
   });
 });

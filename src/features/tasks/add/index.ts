@@ -151,13 +151,13 @@ export async function saveTaskFromInteractive(
   piece?: string,
   options?: { issue?: number; confirmAtEndMessage?: string },
 ): Promise<void> {
-  const settings = await promptWorktreeSettings();
   if (options?.confirmAtEndMessage) {
     const approved = await confirm(options.confirmAtEndMessage, true);
     if (!approved) {
       return;
     }
   }
+  const settings = await promptWorktreeSettings();
   const created = await saveTaskFile(cwd, task, { piece, issue: options?.issue, ...settings });
   displayTaskCreationResult(created, settings, piece);
 }
