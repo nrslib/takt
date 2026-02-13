@@ -169,21 +169,90 @@ export function buildSummaryPrompt(
 
 export type PostSummaryAction = InteractiveModeAction | 'continue';
 
-export async function selectPostSummaryAction(
+export type SummaryActionValue = 'execute' | 'create_issue' | 'save_task' | 'continue';
+
+export interface SummaryActionOption {
+  label: string;
+  value: SummaryActionValue;
+}
+
+export type SummaryActionLabels = {
+  execute: string;
+  createIssue?: string;
+  saveTask: string;
+  continue: string;
+};
+
+export const BASE_SUMMARY_ACTIONS: readonly SummaryActionValue[] = [
+  'execute',
+  'save_task',
+  'continue',
+];
+
+export function buildSummaryActionOptions(
+  labels: SummaryActionLabels,
+  append: readonly SummaryActionValue[] = [],
+): SummaryActionOption[] {
+  const order = [...BASE_SUMMARY_ACTIONS, ...append];
+  const seen = new Set<SummaryActionValue>();
+  const options: SummaryActionOption[] = [];
+
+  for (const action of order) {
+    if (seen.has(action)) continue;
+    seen.add(action);
+
+    if (action === 'execute') {
+      options.push({ label: labels.execute, value: action });
+      continue;
+    }
+    if (action === 'create_issue') {
+      if (labels.createIssue) {
+        options.push({ label: labels.createIssue, value: action });
+      }
+      continue;
+    }
+    if (action === 'save_task') {
+      options.push({ label: labels.saveTask, value: action });
+      continue;
+    }
+    options.push({ label: labels.continue, value: action });
+  }
+
+  return options;
+}
+
+export async function selectSummaryAction(
   task: string,
   proposedLabel: string,
-  ui: InteractiveUIText,
+  actionPrompt: string,
+  options: SummaryActionOption[],
 ): Promise<PostSummaryAction | null> {
   blankLine();
   info(proposedLabel);
   console.log(task);
 
-  return selectOption<PostSummaryAction>(ui.actionPrompt, [
-    { label: ui.actions.execute, value: 'execute' },
-    { label: ui.actions.createIssue, value: 'create_issue' },
-    { label: ui.actions.saveTask, value: 'save_task' },
-    { label: ui.actions.continue, value: 'continue' },
-  ]);
+  return selectOption<PostSummaryAction>(actionPrompt, options);
+}
+
+export async function selectPostSummaryAction(
+  task: string,
+  proposedLabel: string,
+  ui: InteractiveUIText,
+): Promise<PostSummaryAction | null> {
+  return selectSummaryAction(
+    task,
+    proposedLabel,
+    ui.actionPrompt,
+    buildSummaryActionOptions(
+      {
+        execute: ui.actions.execute,
+        createIssue: ui.actions.createIssue,
+        saveTask: ui.actions.saveTask,
+        continue: ui.actions.continue,
+      },
+      ['create_issue'],
+    ),
+  );
 }
 
 export type InteractiveModeAction = 'execute' | 'save_task' | 'create_issue' | 'cancel';

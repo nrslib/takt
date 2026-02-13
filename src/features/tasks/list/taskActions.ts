@@ -28,6 +28,7 @@ import { encodeWorktreePath } from '../../../infra/config/project/sessionStore.j
 import { runInstructMode } from './instructMode.js';
 import { saveTaskFile } from '../add/index.js';
 import { selectPiece } from '../../pieceSelection/index.js';
+import { dispatchConversationAction } from '../../interactive/actionDispatcher.js';
 
 const log = createLogger('list-tasks');
 
@@ -316,61 +317,79 @@ export async function instructBranch(
 
   const branchContext = getBranchContext(projectDir, branch);
   const result = await runInstructMode(projectDir, branchContext, branch);
+  let selectedPiece: string | null = null;
 
-  if (result.action === 'cancel') {
-    info('Cancelled');
-    return false;
-  }
-
-  const selectedPiece = await selectPiece(projectDir);
-  if (!selectedPiece) {
-    info('Cancelled');
-    return false;
-  }
-
-  if (result.action === 'save_task') {
-    const created = await saveTaskFile(projectDir, result.task, { piece: selectedPiece });
-    success(`Task saved: ${created.taskName}`);
-    info(`  File: ${created.tasksFile}`);
-    log.info('Task saved from instruct mode', { branch, piece: selectedPiece });
-    return true;
-  }
-
-  log.info('Instructing branch via temp clone', { branch, piece: selectedPiece });
-  info(`Running instruction on ${branch}...`);
-
-  const clone = createTempCloneForBranch(projectDir, branch);
-
-  try {
-    const fullInstruction = branchContext
-      ? `${branchContext}## 追加指示\n${result.task}`
-      : result.task;
-
-    const taskSuccess = await executeTask({
-      task: fullInstruction,
-      cwd: clone.path,
-      pieceIdentifier: selectedPiece,
-      projectCwd: projectDir,
-      agentOverrides: options,
-    });
-
-    if (taskSuccess) {
-      const commitResult = autoCommitAndPush(clone.path, item.taskSlug, projectDir);
-      if (commitResult.success && commitResult.commitHash) {
-        info(`Auto-committed & pushed: ${commitResult.commitHash}`);
-      } else if (!commitResult.success) {
-        warn(`Auto-commit skipped: ${commitResult.message}`);
-      }
-      success(`Instruction completed on ${branch}`);
-      log.info('Instruction completed', { branch });
-    } else {
-      logError(`Instruction failed on ${branch}`);
-      log.error('Instruction failed', { branch });
+  const ensurePieceSelected = async (): Promise<string | null> => {
+    if (selectedPiece) {
+      return selectedPiece;
     }
+    selectedPiece = await selectPiece(projectDir);
+    if (!selectedPiece) {
+      info('Cancelled');
+      return null;
+    }
+    return selectedPiece;
+  };
 
-    return taskSuccess;
-  } finally {
-    removeClone(clone.path);
-    removeCloneMeta(projectDir, branch);
-  }
+  return dispatchConversationAction(result, {
+    cancel: () => {
+      info('Cancelled');
+      return false;
+    },
+    save_task: async ({ task }) => {
+      const piece = await ensurePieceSelected();
+      if (!piece) {
+        return false;
+      }
+      const created = await saveTaskFile(projectDir, task, { piece });
+      success(`Task saved: ${created.taskName}`);
+      info(`  File: ${created.tasksFile}`);
+      log.info('Task saved from instruct mode', { branch, piece });
+      return true;
+    },
+    execute: async ({ task }) => {
+      const piece = await ensurePieceSelected();
+      if (!piece) {
+        return false;
+      }
+
+      log.info('Instructing branch via temp clone', { branch, piece });
+      info(`Running instruction on ${branch}...`);
+
+      const clone = createTempCloneForBranch(projectDir, branch);
+
+      try {
+        const fullInstruction = branchContext
+          ? `${branchContext}## 追加指示\n${task}`
+          : task;
+
+        const taskSuccess = await executeTask({
+          task: fullInstruction,
+          cwd: clone.path,
+          pieceIdentifier: piece,
+          projectCwd: projectDir,
+          agentOverrides: options,
+        });
+
+        if (taskSuccess) {
+          const commitResult = autoCommitAndPush(clone.path, item.taskSlug, projectDir);
+          if (commitResult.success && commitResult.commitHash) {
+            info(`Auto-committed & pushed: ${commitResult.commitHash}`);
+          } else if (!commitResult.success) {
+            warn(`Auto-commit skipped: ${commitResult.message}`);
+          }
+          success(`Instruction completed on ${branch}`);
+          log.info('Instruction completed', { branch });
+        } else {
+          logError(`Instruction failed on ${branch}`);
+          log.error('Instruction failed', { branch });
+        }
+
+        return taskSuccess;
+      } finally {
+        removeClone(clone.path);
+        removeCloneMeta(projectDir, branch);
+      }
+    },
+  });
 }

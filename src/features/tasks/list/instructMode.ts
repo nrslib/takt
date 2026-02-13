@@ -15,9 +15,9 @@ import {
 } from '../../interactive/conversationLoop.js';
 import {
   resolveLanguage,
+  buildSummaryActionOptions,
+  selectSummaryAction,
 } from '../../interactive/interactive.js';
-import { selectOption } from '../../../shared/prompt/index.js';
-import { info, blankLine } from '../../../shared/ui/index.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import { getLabelObject } from '../../../shared/i18n/index.js';
 import { loadGlobalConfig } from '../../../infra/config/index.js';
@@ -49,16 +49,16 @@ const INSTRUCT_TOOLS = ['Read', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch']
 
 function createSelectInstructAction(ui: InstructUIText): (task: string, lang: 'en' | 'ja') => Promise<PostSummaryAction | null> {
   return async (task: string, _lang: 'en' | 'ja'): Promise<PostSummaryAction | null> => {
-    blankLine();
-    info(ui.proposed);
-    console.log(task);
-
-    const action = await selectOption<PostSummaryAction>(ui.actionPrompt, [
-      { label: ui.actions.execute, value: 'execute' },
-      { label: ui.actions.saveTask, value: 'save_task' },
-      { label: ui.actions.continue, value: 'continue' },
-    ]);
-    return action;
+    return selectSummaryAction(
+      task,
+      ui.proposed,
+      ui.actionPrompt,
+      buildSummaryActionOptions({
+        execute: ui.actions.execute,
+        saveTask: ui.actions.saveTask,
+        continue: ui.actions.continue,
+      }),
+    );
   };
 }
 
