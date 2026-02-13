@@ -549,10 +549,6 @@ export async function selectPiece(
     return null;
   }
 
-  if (availablePieces.length === 1 && availablePieces[0]) {
-    return availablePieces[0];
-  }
-
   const entries = listPieceEntries(cwd);
   return selectPieceFromEntries(entries, currentPiece);
 }

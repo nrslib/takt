@@ -281,15 +281,19 @@ describe('selectPiece', () => {
     expect(result).toBeNull();
   });
 
-  it('should auto-select when only one piece exists', async () => {
+  it('should prompt selection even when only one piece exists', async () => {
     configMock.getPieceCategories.mockReturnValue(null);
     configMock.listPieces.mockReturnValue(['only-piece']);
+    configMock.listPieceEntries.mockReturnValue([
+      { name: 'only-piece', path: '/tmp/only-piece.yaml', source: 'user' },
+    ]);
     configMock.getCurrentPiece.mockReturnValue('only-piece');
+    selectOptionMock.mockResolvedValueOnce('only-piece');
 
     const result = await selectPiece('/cwd');
 
     expect(result).toBe('only-piece');
-    expect(selectOptionMock).not.toHaveBeenCalled();
+    expect(selectOptionMock).toHaveBeenCalled();
   });
 
   it('should use category-based selection when category config exists', async () => {
