@@ -1,10 +1,10 @@
 /**
  * Tests for persona_providers config-level provider override.
  *
- * Verifies the provider resolution priority:
+ * Verifies movement-level provider resolution for stepProvider:
  *   1. Movement YAML provider (highest)
  *   2. persona_providers[personaDisplayName]
- *   3. CLI/global provider (lowest)
+ *   3. CLI provider (lowest)
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -72,7 +72,8 @@ describe('PieceEngine persona_providers override', () => {
     await engine.run();
 
     const options = vi.mocked(runAgent).mock.calls[0][2];
-    expect(options.provider).toBe('codex');
+    expect(options.provider).toBe('claude');
+    expect(options.stepProvider).toBe('codex');
   });
 
   it('should use global provider when persona is not in persona_providers', async () => {
@@ -102,6 +103,7 @@ describe('PieceEngine persona_providers override', () => {
 
     const options = vi.mocked(runAgent).mock.calls[0][2];
     expect(options.provider).toBe('claude');
+    expect(options.stepProvider).toBe('claude');
   });
 
   it('should prioritize movement provider over persona_providers', async () => {
@@ -131,7 +133,8 @@ describe('PieceEngine persona_providers override', () => {
     await engine.run();
 
     const options = vi.mocked(runAgent).mock.calls[0][2];
-    expect(options.provider).toBe('claude');
+    expect(options.provider).toBe('mock');
+    expect(options.stepProvider).toBe('claude');
   });
 
   it('should work without persona_providers (undefined)', async () => {
@@ -160,6 +163,7 @@ describe('PieceEngine persona_providers override', () => {
 
     const options = vi.mocked(runAgent).mock.calls[0][2];
     expect(options.provider).toBe('claude');
+    expect(options.stepProvider).toBe('claude');
   });
 
   it('should apply different providers to different personas in a multi-movement piece', async () => {
@@ -196,9 +200,11 @@ describe('PieceEngine persona_providers override', () => {
     await engine.run();
 
     const calls = vi.mocked(runAgent).mock.calls;
-    // Plan movement: planner not in persona_providers → claude
+    // Plan movement: planner not in persona_providers → stepProvider は claude
     expect(calls[0][2].provider).toBe('claude');
-    // Implement movement: coder in persona_providers → codex
-    expect(calls[1][2].provider).toBe('codex');
+    expect(calls[0][2].stepProvider).toBe('claude');
+    // Implement movement: coder in persona_providers → stepProvider は codex
+    expect(calls[1][2].provider).toBe('claude');
+    expect(calls[1][2].stepProvider).toBe('codex');
   });
 });

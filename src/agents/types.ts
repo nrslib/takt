@@ -14,6 +14,8 @@ export interface RunAgentOptions {
   sessionId?: string;
   model?: string;
   provider?: 'claude' | 'codex' | 'opencode' | 'mock';
+  stepModel?: string;
+  stepProvider?: 'claude' | 'codex' | 'opencode' | 'mock';
   personaPath?: string;
   allowedTools?: string[];
   mcpServers?: Record<string, McpServerConfig>;

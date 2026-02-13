@@ -5,9 +5,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 import { loadCustomAgents, loadAgentPrompt, loadGlobalConfig, loadProjectConfig } from '../infra/config/index.js';
-import { mergeProviderOptions } from '../infra/config/loaders/pieceParser.js';
 import { getProvider, type ProviderType, type ProviderCallOptions } from '../infra/providers/index.js';
-import type { AgentResponse, CustomAgentConfig, MovementProviderOptions } from '../core/models/index.js';
+import type { AgentResponse, CustomAgentConfig } from '../core/models/index.js';
 import { createLogger } from '../shared/utils/index.js';
 import { loadTemplate } from '../shared/prompts/index.js';
 import type { RunAgentOptions } from './types.js';
@@ -30,14 +29,15 @@ export class AgentRunner {
     agentConfig?: CustomAgentConfig,
   ): ProviderType {
     if (options?.provider) return options.provider;
-    if (agentConfig?.provider) return agentConfig.provider;
     const projectConfig = loadProjectConfig(cwd);
     if (projectConfig.provider) return projectConfig.provider;
+    if (options?.stepProvider) return options.stepProvider;
+    if (agentConfig?.provider) return agentConfig.provider;
     try {
       const globalConfig = loadGlobalConfig();
       if (globalConfig.provider) return globalConfig.provider;
-    } catch {
-      // Ignore missing global config; fallback below
+    } catch (error) {
+      log.debug('Global config not available for provider resolution', { error });
     }
     return 'claude';
   }
@@ -53,6 +53,7 @@ export class AgentRunner {
     agentConfig?: CustomAgentConfig,
   ): string | undefined {
     if (options?.model) return options.model;
+    if (options?.stepModel) return options.stepModel;
     if (agentConfig?.model) return agentConfig.model;
     try {
       const globalConfig = loadGlobalConfig();
@@ -60,8 +61,8 @@ export class AgentRunner {
         const globalProvider = globalConfig.provider ?? 'claude';
         if (globalProvider === resolvedProvider) return globalConfig.model;
       }
-    } catch {
-      // Ignore missing global config
+    } catch (error) {
+      log.debug('Global config not available for model resolution', { error });
     }
     return undefined;
   }
@@ -93,24 +94,6 @@ export class AgentRunner {
     return `${dir}/${name}`;
   }
 
-  /**
-   * Resolve provider options with 4-layer priority: Global < Local < Step (piece+movement merged).
-   * Step already contains the piece+movement merge result from pieceParser.
-   */
-  private static resolveProviderOptions(
-    cwd: string,
-    stepOptions?: MovementProviderOptions,
-  ): MovementProviderOptions | undefined {
-    let globalOptions: MovementProviderOptions | undefined;
-    try {
-      globalOptions = loadGlobalConfig().providerOptions;
-    } catch { /* ignore */ }
-
-    const localOptions = loadProjectConfig(cwd).provider_options;
-
-    return mergeProviderOptions(globalOptions, localOptions, stepOptions);
-  }
-
   /** Build ProviderCallOptions from RunAgentOptions */
   private static buildCallOptions(
     resolvedProvider: ProviderType,
@@ -126,7 +109,7 @@ export class AgentRunner {
       maxTurns: options.maxTurns,
       model: AgentRunner.resolveModel(resolvedProvider, options, agentConfig),
       permissionMode: options.permissionMode,
-      providerOptions: AgentRunner.resolveProviderOptions(options.cwd, options.providerOptions),
+      providerOptions: options.providerOptions,
       onStream: options.onStream,
       onPermissionRequest: options.onPermissionRequest,
       onAskUserQuestion: options.onAskUserQuestion,
