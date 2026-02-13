@@ -7,13 +7,8 @@
  */
 
 import {
-  getCurrentPiece,
   listPieces,
-  listPieceEntries,
   isPiecePath,
-  loadAllPiecesWithSources,
-  getPieceCategories,
-  buildCategorizedPieces,
   loadGlobalConfig,
 } from '../../../infra/config/index.js';
 import { confirm } from '../../../shared/prompt/index.js';
@@ -24,63 +19,12 @@ import { createLogger } from '../../../shared/utils/index.js';
 import { createPullRequest, buildPrBody, pushBranch } from '../../../infra/github/index.js';
 import { executeTask } from './taskExecution.js';
 import type { TaskExecutionOptions, WorktreeConfirmationResult, SelectAndExecuteOptions } from './types.js';
-import {
-  warnMissingPieces,
-  selectPieceFromCategorizedPieces,
-  selectPieceFromEntries,
-} from '../../pieceSelection/index.js';
+import { selectPiece } from '../../pieceSelection/index.js';
 
 export type { WorktreeConfirmationResult, SelectAndExecuteOptions };
 
 const log = createLogger('selectAndExecute');
 
-/**
- * Select a piece interactively with directory categories and bookmarks.
- */
-async function selectPieceWithDirectoryCategories(cwd: string): Promise<string | null> {
-  const availablePieces = listPieces(cwd);
-  const currentPiece = getCurrentPiece(cwd);
-
-  if (availablePieces.length === 0) {
-    info(`No pieces found. Using default: ${DEFAULT_PIECE_NAME}`);
-    return DEFAULT_PIECE_NAME;
-  }
-
-  if (availablePieces.length === 1 && availablePieces[0]) {
-    return availablePieces[0];
-  }
-
-  const entries = listPieceEntries(cwd);
-  return selectPieceFromEntries(entries, currentPiece);
-}
-
-
-/**
- * Select a piece interactively with 2-stage category support.
- */
-async function selectPiece(cwd: string): Promise<string | null> {
-  const categoryConfig = getPieceCategories();
-  if (categoryConfig) {
-    const current = getCurrentPiece(cwd);
-    const allPieces = loadAllPiecesWithSources(cwd);
-    if (allPieces.size === 0) {
-      info(`No pieces found. Using default: ${DEFAULT_PIECE_NAME}`);
-      return DEFAULT_PIECE_NAME;
-    }
-    const categorized = buildCategorizedPieces(allPieces, categoryConfig);
-    warnMissingPieces(categorized.missingPieces.filter((missing) => missing.source === 'user'));
-    return selectPieceFromCategorizedPieces(categorized, current);
-  }
-  return selectPieceWithDirectoryCategories(cwd);
-}
-
-/**
- * Determine piece to use.
- *
- * - If override looks like a path (isPiecePath), return it directly (validation is done at load time).
- * - If override is a name, validate it exists in available pieces.
- * - If no override, prompt user to select interactively.
- */
 export async function determinePiece(cwd: string, override?: string): Promise<string | null> {
   if (override) {
     if (isPiecePath(override)) {

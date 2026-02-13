@@ -5,19 +5,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../infra/config/index.js', () => ({
-  listPieceEntries: vi.fn(() => []),
-  loadAllPiecesWithSources: vi.fn(() => new Map()),
-  getPieceCategories: vi.fn(() => null),
-  buildCategorizedPieces: vi.fn(),
   loadPiece: vi.fn(() => null),
   getCurrentPiece: vi.fn(() => 'default'),
   setCurrentPiece: vi.fn(),
 }));
 
 vi.mock('../features/pieceSelection/index.js', () => ({
-  warnMissingPieces: vi.fn(),
-  selectPieceFromCategorizedPieces: vi.fn(),
-  selectPieceFromEntries: vi.fn(),
+  selectPiece: vi.fn(),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -26,65 +20,41 @@ vi.mock('../shared/ui/index.js', () => ({
   error: vi.fn(),
 }));
 
-import {
-  loadAllPiecesWithSources,
-  getPieceCategories,
-  buildCategorizedPieces,
-} from '../infra/config/index.js';
-import {
-  warnMissingPieces,
-  selectPieceFromCategorizedPieces,
-} from '../features/pieceSelection/index.js';
+import { getCurrentPiece, loadPiece, setCurrentPiece } from '../infra/config/index.js';
+import { selectPiece } from '../features/pieceSelection/index.js';
 import { switchPiece } from '../features/config/switchPiece.js';
 
-const mockLoadAllPiecesWithSources = vi.mocked(loadAllPiecesWithSources);
-const mockGetPieceCategories = vi.mocked(getPieceCategories);
-const mockBuildCategorizedPieces = vi.mocked(buildCategorizedPieces);
-const mockWarnMissingPieces = vi.mocked(warnMissingPieces);
-const mockSelectPieceFromCategorizedPieces = vi.mocked(selectPieceFromCategorizedPieces);
+const mockGetCurrentPiece = vi.mocked(getCurrentPiece);
+const mockLoadPiece = vi.mocked(loadPiece);
+const mockSetCurrentPiece = vi.mocked(setCurrentPiece);
+const mockSelectPiece = vi.mocked(selectPiece);
 
 describe('switchPiece', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('should warn only user-origin missing pieces during interactive switch', async () => {
-    // Given
-    mockLoadAllPiecesWithSources.mockReturnValue(new Map([
-      ['default', {
-        source: 'builtin',
-        config: {
-          name: 'default',
-          movements: [],
-          initialMovement: 'start',
-          maxMovements: 1,
-        },
-      }],
-    ]));
-    mockGetPieceCategories.mockReturnValue({
-      pieceCategories: [],
-      builtinPieceCategories: [],
-      userPieceCategories: [],
-      showOthersCategory: true,
-      othersCategoryName: 'Others',
-    });
-    mockBuildCategorizedPieces.mockReturnValue({
-      categories: [],
-      allPieces: new Map(),
-      missingPieces: [
-        { categoryPath: ['Quick Start'], pieceName: 'default', source: 'builtin' },
-        { categoryPath: ['Custom'], pieceName: 'my-missing', source: 'user' },
-      ],
-    });
-    mockSelectPieceFromCategorizedPieces.mockResolvedValue(null);
+  it('should call selectPiece with fallbackToDefault: false', async () => {
+    mockSelectPiece.mockResolvedValue(null);
 
-    // When
     const switched = await switchPiece('/project');
 
-    // Then
     expect(switched).toBe(false);
-    expect(mockWarnMissingPieces).toHaveBeenCalledWith([
-      { categoryPath: ['Custom'], pieceName: 'my-missing', source: 'user' },
-    ]);
+    expect(mockSelectPiece).toHaveBeenCalledWith('/project', { fallbackToDefault: false });
+  });
+
+  it('should switch to selected piece', async () => {
+    mockSelectPiece.mockResolvedValue('new-piece');
+    mockLoadPiece.mockReturnValue({
+      name: 'new-piece',
+      movements: [],
+      initialMovement: 'start',
+      maxMovements: 1,
+    });
+
+    const switched = await switchPiece('/project');
+
+    expect(switched).toBe(true);
+    expect(mockSetCurrentPiece).toHaveBeenCalledWith('/project', 'new-piece');
   });
 });
