@@ -24,13 +24,11 @@ import { info, success, error as logError, warn, header, blankLine } from '../..
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { executeTask } from '../execute/taskExecution.js';
 import type { TaskExecutionOptions } from '../execute/types.js';
-import { listPieces, getCurrentPiece } from '../../../infra/config/index.js';
-import { DEFAULT_PIECE_NAME } from '../../../shared/constants.js';
 import { encodeWorktreePath } from '../../../infra/config/project/sessionStore.js';
+import { selectPiece } from '../../pieceSelection/index.js';
 
 const log = createLogger('list-tasks');
 
-/** Actions available for a listed branch */
 export type ListAction = 'diff' | 'instruct' | 'try' | 'merge' | 'delete';
 
 /**
@@ -255,29 +253,6 @@ export function deleteBranch(projectDir: string, item: BranchListItem): boolean 
 }
 
 /**
- * Get the piece to use for instruction.
- */
-async function selectPieceForInstruction(projectDir: string): Promise<string | null> {
-  const availablePieces = listPieces(projectDir);
-  const currentPiece = getCurrentPiece(projectDir);
-
-  if (availablePieces.length === 0) {
-    return DEFAULT_PIECE_NAME;
-  }
-
-  if (availablePieces.length === 1 && availablePieces[0]) {
-    return availablePieces[0];
-  }
-
-  const options = availablePieces.map((name) => ({
-    label: name === currentPiece ? `${name} (current)` : name,
-    value: name,
-  }));
-
-  return await selectOption('Select piece:', options);
-}
-
-/**
  * Get branch context: diff stat and commit log from main branch.
  */
 function getBranchContext(projectDir: string, branch: string): string {
@@ -343,7 +318,7 @@ export async function instructBranch(
     return false;
   }
 
-  const selectedPiece = await selectPieceForInstruction(projectDir);
+  const selectedPiece = await selectPiece(projectDir);
   if (!selectedPiece) {
     info('Cancelled');
     return false;
