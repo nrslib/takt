@@ -36,6 +36,7 @@ const OPENCODE_STREAM_ABORTED_MESSAGE = 'OpenCode execution aborted';
 const OPENCODE_RETRY_MAX_ATTEMPTS = 3;
 const OPENCODE_RETRY_BASE_DELAY_MS = 250;
 const OPENCODE_INTERACTION_TIMEOUT_MS = 5000;
+const OPENCODE_SERVER_START_TIMEOUT_MS = 30000;
 const OPENCODE_RETRYABLE_ERROR_PATTERNS = [
   'stream disconnected before completion',
   'transport error',
@@ -324,6 +325,7 @@ export class OpenCodeClient {
           port,
           signal: streamAbortController.signal,
           config,
+          timeout: OPENCODE_SERVER_START_TIMEOUT_MS,
         });
         opencodeApiClient = client;
         serverClose = server.close;
