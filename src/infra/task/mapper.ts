@@ -70,6 +70,7 @@ export function toTaskInfo(projectDir: string, tasksFile: string, task: TaskReco
     taskDir: task.task_dir,
     createdAt: task.created_at,
     status: task.status,
+    worktreePath: task.worktree_path,
     data: TaskFileSchema.parse({
       task: content,
       worktree: task.worktree,
@@ -86,22 +87,53 @@ export function toTaskInfo(projectDir: string, tasksFile: string, task: TaskReco
 export function toPendingTaskItem(projectDir: string, tasksFile: string, task: TaskRecord): TaskListItem {
   return {
     kind: 'pending',
-    name: task.name,
-    createdAt: task.created_at,
-    filePath: tasksFile,
-    content: firstLine(resolveTaskContent(projectDir, task)),
-    data: toTaskData(projectDir, task),
+    ...toBaseTaskListItem(projectDir, tasksFile, task),
   };
 }
 
 export function toFailedTaskItem(projectDir: string, tasksFile: string, task: TaskRecord): TaskListItem {
   return {
     kind: 'failed',
-    name: task.name,
-    createdAt: task.completed_at ?? task.created_at,
-    filePath: tasksFile,
-    content: firstLine(resolveTaskContent(projectDir, task)),
-    data: toTaskData(projectDir, task),
+    ...toBaseTaskListItem(projectDir, tasksFile, task),
     failure: task.failure,
   };
+}
+
+function toRunningTaskItem(projectDir: string, tasksFile: string, task: TaskRecord): TaskListItem {
+  return {
+    kind: 'running',
+    ...toBaseTaskListItem(projectDir, tasksFile, task),
+  };
+}
+
+function toCompletedTaskItem(projectDir: string, tasksFile: string, task: TaskRecord): TaskListItem {
+  return {
+    kind: 'completed',
+    ...toBaseTaskListItem(projectDir, tasksFile, task),
+  };
+}
+
+function toBaseTaskListItem(projectDir: string, tasksFile: string, task: TaskRecord): Omit<TaskListItem, 'kind' | 'failure'> {
+  return {
+    name: task.name,
+    createdAt: task.created_at,
+    filePath: tasksFile,
+    content: firstLine(resolveTaskContent(projectDir, task)),
+    branch: task.branch,
+    worktreePath: task.worktree_path,
+    data: toTaskData(projectDir, task),
+  };
+}
+
+export function toTaskListItem(projectDir: string, tasksFile: string, task: TaskRecord): TaskListItem {
+  switch (task.status) {
+    case 'pending':
+      return toPendingTaskItem(projectDir, tasksFile, task);
+    case 'running':
+      return toRunningTaskItem(projectDir, tasksFile, task);
+    case 'completed':
+      return toCompletedTaskItem(projectDir, tasksFile, task);
+    case 'failed':
+      return toFailedTaskItem(projectDir, tasksFile, task);
+  }
 }

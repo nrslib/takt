@@ -3,7 +3,7 @@ import { formatTaskStatusLabel } from '../features/tasks/list/taskStatusLabel.js
 import type { TaskListItem } from '../infra/task/types.js';
 
 describe('formatTaskStatusLabel', () => {
-  it("should format pending task as '[running] name'", () => {
+  it("should format pending task as '[pending] name'", () => {
     // Given: pending タスク
     const task: TaskListItem = {
       kind: 'pending',
@@ -16,8 +16,8 @@ describe('formatTaskStatusLabel', () => {
     // When: ステータスラベルを生成する
     const result = formatTaskStatusLabel(task);
 
-    // Then: pending は running 表示になる
-    expect(result).toBe('[running] implement test');
+    // Then: pending は pending 表示になる
+    expect(result).toBe('[pending] implement test');
   });
 
   it("should format failed task as '[failed] name'", () => {

@@ -12,8 +12,6 @@ vi.mock('../shared/ui/index.js', () => ({
 
 vi.mock('../infra/task/branchList.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  listTaktBranches: vi.fn(() => []),
-  buildListItems: vi.fn(() => []),
   detectDefaultBranch: vi.fn(() => 'main'),
 }));
 
@@ -74,7 +72,7 @@ describe('TaskRunner list APIs', () => {
 });
 
 describe('listTasks non-interactive JSON output', () => {
-  it('should output JSON object with branches, pendingTasks, and failedTasks', async () => {
+  it('should output JSON object with tasks', async () => {
     writeTasksFile(tmpDir);
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
 
@@ -82,13 +80,13 @@ describe('listTasks non-interactive JSON output', () => {
 
     expect(logSpy).toHaveBeenCalledTimes(1);
     const payload = JSON.parse(logSpy.mock.calls[0]![0] as string) as {
-      branches: unknown[];
-      pendingTasks: Array<{ name: string }>;
-      failedTasks: Array<{ name: string }>;
+      tasks: Array<{ name: string; kind: string }>;
     };
-    expect(Array.isArray(payload.branches)).toBe(true);
-    expect(payload.pendingTasks[0]?.name).toBe('pending-one');
-    expect(payload.failedTasks[0]?.name).toBe('failed-one');
+    expect(Array.isArray(payload.tasks)).toBe(true);
+    expect(payload.tasks[0]?.name).toBe('pending-one');
+    expect(payload.tasks[0]?.kind).toBe('pending');
+    expect(payload.tasks[1]?.name).toBe('failed-one');
+    expect(payload.tasks[1]?.kind).toBe('failed');
 
     logSpy.mockRestore();
   });

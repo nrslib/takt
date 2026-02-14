@@ -21,9 +21,14 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   }),
 }));
 
+const mockDeleteBranch = vi.fn();
+vi.mock('../features/tasks/list/taskActions.js', () => ({
+  deleteBranch: (...args: unknown[]) => mockDeleteBranch(...args),
+}));
+
 import { confirm } from '../shared/prompt/index.js';
 import { success, error as logError } from '../shared/ui/index.js';
-import { deletePendingTask, deleteFailedTask } from '../features/tasks/list/taskDeleteActions.js';
+import { deletePendingTask, deleteFailedTask, deleteCompletedTask } from '../features/tasks/list/taskDeleteActions.js';
 import type { TaskListItem } from '../infra/task/types.js';
 
 const mockConfirm = vi.mocked(confirm);
@@ -54,6 +59,16 @@ function setupTasksFile(projectDir: string): string {
         completed_at: '2025-01-15T00:02:00.000Z',
         failure: { error: 'boom' },
       },
+      {
+        name: 'completed-task',
+        status: 'completed',
+        content: 'completed',
+        branch: 'takt/completed-task',
+        worktree_path: '/tmp/takt/completed-task',
+        created_at: '2025-01-15T00:00:00.000Z',
+        started_at: '2025-01-15T00:01:00.000Z',
+        completed_at: '2025-01-15T00:02:00.000Z',
+      },
     ],
   }), 'utf-8');
   return tasksFile;
@@ -61,6 +76,7 @@ function setupTasksFile(projectDir: string): string {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockDeleteBranch.mockReturnValue(true);
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-test-delete-'));
 });
 
@@ -107,6 +123,50 @@ describe('taskDeleteActions', () => {
     expect(mockSuccess).toHaveBeenCalledWith('Deleted failed task: failed-task');
   });
 
+  it('should cleanup branch before deleting failed task when branch exists', async () => {
+    const tasksFile = setupTasksFile(tmpDir);
+    const task: TaskListItem = {
+      kind: 'failed',
+      name: 'failed-task',
+      createdAt: '2025-01-15T12:34:56',
+      filePath: tasksFile,
+      content: 'failed',
+      branch: 'takt/failed-task',
+      worktreePath: '/tmp/takt/failed-task',
+    };
+    mockConfirm.mockResolvedValue(true);
+
+    const result = await deleteFailedTask(task);
+
+    expect(result).toBe(true);
+    expect(mockDeleteBranch).toHaveBeenCalledWith(tmpDir, task);
+    const raw = fs.readFileSync(tasksFile, 'utf-8');
+    expect(raw).not.toContain('failed-task');
+    expect(mockSuccess).toHaveBeenCalledWith('Deleted failed task: failed-task');
+  });
+
+  it('should keep failed task record when branch cleanup fails', async () => {
+    const tasksFile = setupTasksFile(tmpDir);
+    const task: TaskListItem = {
+      kind: 'failed',
+      name: 'failed-task',
+      createdAt: '2025-01-15T12:34:56',
+      filePath: tasksFile,
+      content: 'failed',
+      branch: 'takt/failed-task',
+      worktreePath: '/tmp/takt/failed-task',
+    };
+    mockConfirm.mockResolvedValue(true);
+    mockDeleteBranch.mockReturnValue(false);
+
+    const result = await deleteFailedTask(task);
+
+    expect(result).toBe(false);
+    expect(mockDeleteBranch).toHaveBeenCalledWith(tmpDir, task);
+    const raw = fs.readFileSync(tasksFile, 'utf-8');
+    expect(raw).toContain('failed-task');
+  });
+
   it('should return false when target task is missing', async () => {
     const tasksFile = setupTasksFile(tmpDir);
     const task: TaskListItem = {
@@ -122,5 +182,27 @@ describe('taskDeleteActions', () => {
 
     expect(result).toBe(false);
     expect(mockLogError).toHaveBeenCalled();
+  });
+
+  it('should delete completed task and cleanup worktree when confirmed', async () => {
+    const tasksFile = setupTasksFile(tmpDir);
+    const task: TaskListItem = {
+      kind: 'completed',
+      name: 'completed-task',
+      createdAt: '2025-01-15T12:34:56',
+      filePath: tasksFile,
+      content: 'completed',
+      branch: 'takt/completed-task',
+      worktreePath: '/tmp/takt/completed-task',
+    };
+    mockConfirm.mockResolvedValue(true);
+
+    const result = await deleteCompletedTask(task);
+
+    expect(result).toBe(true);
+    expect(mockDeleteBranch).toHaveBeenCalledWith(tmpDir, task);
+    const raw = fs.readFileSync(tasksFile, 'utf-8');
+    expect(raw).not.toContain('completed-task');
+    expect(mockSuccess).toHaveBeenCalledWith('Deleted completed task: completed-task');
   });
 });

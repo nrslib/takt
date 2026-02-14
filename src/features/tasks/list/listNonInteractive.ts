@@ -6,11 +6,9 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import type { TaskListItem, BranchListItem } from '../../../infra/task/index.js';
+import type { TaskListItem } from '../../../infra/task/index.js';
 import {
   detectDefaultBranch,
-  listTaktBranches,
-  buildListItems,
   TaskRunner,
 } from '../../../infra/task/index.js';
 import { info } from '../../../shared/ui/index.js';
@@ -34,34 +32,18 @@ function isValidAction(action: string): action is ListAction {
   return action === 'diff' || action === 'try' || action === 'merge' || action === 'delete';
 }
 
-function printNonInteractiveList(
-  items: BranchListItem[],
-  pendingTasks: TaskListItem[],
-  failedTasks: TaskListItem[],
-  format?: string,
-): void {
+function printNonInteractiveList(tasks: TaskListItem[], format?: string): void {
   const outputFormat = format ?? 'text';
   if (outputFormat === 'json') {
     // stdout に直接出力（JSON パース用途のため UI ヘルパーを経由しない）
     console.log(JSON.stringify({
-      branches: items,
-      pendingTasks,
-      failedTasks,
+      tasks,
     }, null, 2));
     return;
   }
 
-  for (const item of items) {
-    const instruction = item.originalInstruction ? ` - ${item.originalInstruction}` : '';
-    info(`${item.info.branch} (${item.filesChanged} files)${instruction}`);
-  }
-
-  for (const task of pendingTasks) {
-    info(`${formatTaskStatusLabel(task)} - ${task.content}`);
-  }
-
-  for (const task of failedTasks) {
-    info(`${formatTaskStatusLabel(task)} - ${task.content}`);
+  for (const task of tasks) {
+    info(`${formatTaskStatusLabel(task)} - ${task.content} (${task.createdAt})`);
   }
 }
 
@@ -85,24 +67,20 @@ export async function listTasksNonInteractive(
   nonInteractive: ListNonInteractiveOptions,
 ): Promise<void> {
   const defaultBranch = detectDefaultBranch(cwd);
-  const branches = listTaktBranches(cwd);
   const runner = new TaskRunner(cwd);
-  const pendingTasks = runner.listPendingTaskItems();
-  const failedTasks = runner.listFailedTasks();
+  const tasks = runner.listAllTaskItems();
 
-  const items = buildListItems(cwd, branches, defaultBranch);
-
-  if (items.length === 0 && pendingTasks.length === 0 && failedTasks.length === 0) {
+  if (tasks.length === 0) {
     info('No tasks to list.');
     return;
   }
 
   if (!nonInteractive.action) {
-    printNonInteractiveList(items, pendingTasks, failedTasks, nonInteractive.format);
+    printNonInteractiveList(tasks, nonInteractive.format);
     return;
   }
 
-  // Branch-targeted action (--branch)
+  // Completed-task branch-targeted action (--branch)
   if (!nonInteractive.branch) {
     info('Missing --branch for non-interactive action.');
     process.exit(1);
@@ -113,28 +91,32 @@ export async function listTasksNonInteractive(
     process.exit(1);
   }
 
-  const item = items.find((entry) => entry.info.branch === nonInteractive.branch);
-  if (!item) {
+  const task = tasks.find((entry) => entry.kind === 'completed' && entry.branch === nonInteractive.branch);
+  if (!task) {
     info(`Branch not found: ${nonInteractive.branch}`);
     process.exit(1);
   }
 
   switch (nonInteractive.action) {
     case 'diff':
-      showDiffStat(cwd, defaultBranch, item.info.branch);
+      showDiffStat(cwd, defaultBranch, nonInteractive.branch);
       return;
     case 'try':
-      tryMergeBranch(cwd, item);
+      tryMergeBranch(cwd, task);
       return;
     case 'merge':
-      mergeBranch(cwd, item);
+      if (mergeBranch(cwd, task)) {
+        runner.deleteCompletedTask(task.name);
+      }
       return;
     case 'delete':
       if (!nonInteractive.yes) {
         info('Delete requires --yes in non-interactive mode.');
         process.exit(1);
       }
-      deleteBranch(cwd, item);
+      if (deleteBranch(cwd, task)) {
+        runner.deleteCompletedTask(task.name);
+      }
       return;
   }
 }

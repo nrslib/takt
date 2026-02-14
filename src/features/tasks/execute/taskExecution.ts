@@ -8,7 +8,6 @@ import {
   header,
   info,
   error,
-  success,
   status,
   blankLine,
 } from '../../../shared/ui/index.js';
@@ -21,6 +20,7 @@ import { fetchIssue, checkGhCli } from '../../../infra/github/index.js';
 import { runWithWorkerPool } from './parallelExecution.js';
 import { resolveTaskExecution } from './resolveTask.js';
 import { postExecutionFlow } from './postExecution.js';
+import { buildTaskResult, persistTaskError, persistTaskResult } from './taskResultHandler.js';
 
 export type { TaskExecutionOptions, ExecuteTaskOptions };
 
@@ -138,6 +138,7 @@ export async function executeAndCompleteTask(
       taskPrompt,
       reportDirName,
       branch,
+      worktreePath,
       baseBranch,
       startMovement,
       retryNote,
@@ -160,10 +161,6 @@ export async function executeAndCompleteTask(
       taskColorIndex: parallelOptions?.taskColorIndex,
     });
 
-    if (!taskRunResult.success && !taskRunResult.reason) {
-      throw new Error('Task failed without reason');
-    }
-
     const taskSuccess = taskRunResult.success;
     const completedAt = new Date().toISOString();
 
@@ -181,39 +178,20 @@ export async function executeAndCompleteTask(
       });
     }
 
-    const taskResult = {
+    const taskResult = buildTaskResult({
       task,
-      success: taskSuccess,
-      response: taskSuccess ? 'Task completed successfully' : taskRunResult.reason!,
-      executionLog: taskRunResult.lastMessage ? [taskRunResult.lastMessage] : [],
-      failureMovement: taskRunResult.lastMovement,
-      failureLastMessage: taskRunResult.lastMessage,
+      runResult: taskRunResult,
       startedAt,
       completedAt,
-    };
-
-    if (taskSuccess) {
-      taskRunner.completeTask(taskResult);
-      success(`Task "${task.name}" completed`);
-    } else {
-      taskRunner.failTask(taskResult);
-      error(`Task "${task.name}" failed`);
-    }
+      branch,
+      worktreePath,
+    });
+    persistTaskResult(taskRunner, taskResult);
 
     return taskSuccess;
   } catch (err) {
     const completedAt = new Date().toISOString();
-
-    taskRunner.failTask({
-      task,
-      success: false,
-      response: getErrorMessage(err),
-      executionLog: [],
-      startedAt,
-      completedAt,
-    });
-
-    error(`Task "${task.name}" error: ${getErrorMessage(err)}`);
+    persistTaskError(taskRunner, task, startedAt, completedAt, err);
     return false;
   } finally {
     if (externalAbortSignal) {

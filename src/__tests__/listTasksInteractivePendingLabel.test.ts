@@ -6,38 +6,27 @@ const {
   mockHeader,
   mockInfo,
   mockBlankLine,
-  mockConfirm,
-  mockListPendingTaskItems,
-  mockListFailedTasks,
+  mockListAllTaskItems,
   mockDeletePendingTask,
 } = vi.hoisted(() => ({
   mockSelectOption: vi.fn(),
   mockHeader: vi.fn(),
   mockInfo: vi.fn(),
   mockBlankLine: vi.fn(),
-  mockConfirm: vi.fn(),
-  mockListPendingTaskItems: vi.fn(),
-  mockListFailedTasks: vi.fn(),
+  mockListAllTaskItems: vi.fn(),
   mockDeletePendingTask: vi.fn(),
 }));
 
 vi.mock('../infra/task/index.js', () => ({
-  listTaktBranches: vi.fn(() => []),
-  buildListItems: vi.fn(() => []),
-  detectDefaultBranch: vi.fn(() => 'main'),
   TaskRunner: class {
-    listPendingTaskItems() {
-      return mockListPendingTaskItems();
-    }
-    listFailedTasks() {
-      return mockListFailedTasks();
+    listAllTaskItems() {
+      return mockListAllTaskItems();
     }
   },
 }));
 
 vi.mock('../shared/prompt/index.js', () => ({
   selectOption: mockSelectOption,
-  confirm: mockConfirm,
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -48,7 +37,7 @@ vi.mock('../shared/ui/index.js', () => ({
 
 vi.mock('../features/tasks/list/taskActions.js', () => ({
   showFullDiff: vi.fn(),
-  showDiffAndPromptAction: vi.fn(),
+  showDiffAndPromptActionForTask: vi.fn(),
   tryMergeBranch: vi.fn(),
   mergeBranch: vi.fn(),
   deleteBranch: vi.fn(),
@@ -58,6 +47,7 @@ vi.mock('../features/tasks/list/taskActions.js', () => ({
 vi.mock('../features/tasks/list/taskDeleteActions.js', () => ({
   deletePendingTask: mockDeletePendingTask,
   deleteFailedTask: vi.fn(),
+  deleteCompletedTask: vi.fn(),
 }));
 
 vi.mock('../features/tasks/list/taskRetryActions.js', () => ({
@@ -77,23 +67,22 @@ describe('listTasks interactive pending label regression', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockListPendingTaskItems.mockReturnValue([pendingTask]);
-    mockListFailedTasks.mockReturnValue([]);
+    mockListAllTaskItems.mockReturnValue([pendingTask]);
   });
 
-  it('should show [running] in interactive menu for pending tasks', async () => {
+  it('should show [pending] in interactive menu for pending tasks', async () => {
     mockSelectOption.mockResolvedValueOnce(null);
 
     await listTasks('/project');
 
     expect(mockSelectOption).toHaveBeenCalledTimes(1);
     const menuOptions = mockSelectOption.mock.calls[0]![1] as Array<{ label: string; value: string }>;
-    expect(menuOptions).toContainEqual(expect.objectContaining({ label: '[running] my-task', value: 'pending:0' }));
-    expect(menuOptions.some((opt) => opt.label.includes('[pending]'))).toBe(false);
+    expect(menuOptions).toContainEqual(expect.objectContaining({ label: '[pending] my-task', value: 'pending:0' }));
+    expect(menuOptions.some((opt) => opt.label.includes('[running]'))).toBe(false);
     expect(menuOptions.some((opt) => opt.label.includes('[pendig]'))).toBe(false);
   });
 
-  it('should show [running] header when pending task is selected', async () => {
+  it('should show [pending] header when pending task is selected', async () => {
     mockSelectOption
       .mockResolvedValueOnce('pending:0')
       .mockResolvedValueOnce(null)
@@ -101,9 +90,9 @@ describe('listTasks interactive pending label regression', () => {
 
     await listTasks('/project');
 
-    expect(mockHeader).toHaveBeenCalledWith('[running] my-task');
+    expect(mockHeader).toHaveBeenCalledWith('[pending] my-task');
     const headerTexts = mockHeader.mock.calls.map(([text]) => String(text));
-    expect(headerTexts.some((text) => text.includes('[pending]'))).toBe(false);
+    expect(headerTexts.some((text) => text.includes('[running]'))).toBe(false);
     expect(headerTexts.some((text) => text.includes('[pendig]'))).toBe(false);
   });
 });

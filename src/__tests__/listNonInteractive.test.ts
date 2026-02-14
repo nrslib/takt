@@ -13,8 +13,6 @@ vi.mock('../shared/ui/index.js', () => ({
 vi.mock('../infra/task/branchList.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   detectDefaultBranch: vi.fn(() => 'main'),
-  listTaktBranches: vi.fn(() => []),
-  buildListItems: vi.fn(() => []),
 }));
 
 let tmpDir: string;
@@ -60,7 +58,7 @@ describe('listTasksNonInteractive', () => {
 
     await listTasksNonInteractive(tmpDir, { enabled: true, format: 'text' });
 
-    expect(mockInfo).toHaveBeenCalledWith(expect.stringContaining('[running] pending-task'));
+    expect(mockInfo).toHaveBeenCalledWith(expect.stringContaining('[pending] pending-task'));
     expect(mockInfo).toHaveBeenCalledWith(expect.stringContaining('[failed] failed-task'));
   });
 
@@ -71,9 +69,11 @@ describe('listTasksNonInteractive', () => {
     await listTasksNonInteractive(tmpDir, { enabled: true, format: 'json' });
 
     expect(logSpy).toHaveBeenCalledTimes(1);
-    const payload = JSON.parse(logSpy.mock.calls[0]![0] as string) as { pendingTasks: Array<{ name: string }>; failedTasks: Array<{ name: string }> };
-    expect(payload.pendingTasks[0]?.name).toBe('pending-task');
-    expect(payload.failedTasks[0]?.name).toBe('failed-task');
+    const payload = JSON.parse(logSpy.mock.calls[0]![0] as string) as { tasks: Array<{ name: string; kind: string }> };
+    expect(payload.tasks[0]?.name).toBe('pending-task');
+    expect(payload.tasks[0]?.kind).toBe('pending');
+    expect(payload.tasks[1]?.name).toBe('failed-task');
+    expect(payload.tasks[1]?.kind).toBe('failed');
 
     logSpy.mockRestore();
   });

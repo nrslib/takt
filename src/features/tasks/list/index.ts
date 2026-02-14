@@ -9,25 +9,21 @@
  */
 
 import {
-  listTaktBranches,
-  buildListItems,
-  detectDefaultBranch,
   TaskRunner,
 } from '../../../infra/task/index.js';
 import type { TaskListItem } from '../../../infra/task/index.js';
-import { selectOption, confirm } from '../../../shared/prompt/index.js';
+import { selectOption } from '../../../shared/prompt/index.js';
 import { info, header, blankLine } from '../../../shared/ui/index.js';
 import type { TaskExecutionOptions } from '../execute/types.js';
 import {
   type ListAction,
   showFullDiff,
-  showDiffAndPromptAction,
+  showDiffAndPromptActionForTask,
   tryMergeBranch,
   mergeBranch,
-  deleteBranch,
   instructBranch,
 } from './taskActions.js';
-import { deletePendingTask, deleteFailedTask } from './taskDeleteActions.js';
+import { deletePendingTask, deleteFailedTask, deleteCompletedTask } from './taskDeleteActions.js';
 import { retryFailedTask } from './taskRetryActions.js';
 import { listTasksNonInteractive, type ListNonInteractiveOptions } from './listNonInteractive.js';
 import { formatTaskStatusLabel } from './taskStatusLabel.js';
@@ -55,6 +51,7 @@ type PendingTaskAction = 'delete';
 
 /** Task action type for failed task action selection menu */
 type FailedTaskAction = 'retry' | 'delete';
+type CompletedTaskAction = ListAction;
 
 /**
  * Show pending task details and prompt for an action.
@@ -80,7 +77,7 @@ async function showPendingTaskAndPromptAction(task: TaskListItem): Promise<Pendi
  */
 async function showFailedTaskAndPromptAction(task: TaskListItem): Promise<FailedTaskAction | null> {
   header(formatTaskStatusLabel(task));
-  info(`  Failed at: ${task.createdAt}`);
+  info(`  Created: ${task.createdAt}`);
   if (task.content) {
     info(`  ${task.content}`);
   }
@@ -93,6 +90,17 @@ async function showFailedTaskAndPromptAction(task: TaskListItem): Promise<Failed
       { label: 'Delete', value: 'delete', description: 'Remove this task permanently' },
     ],
   );
+}
+
+async function showCompletedTaskAndPromptAction(cwd: string, task: TaskListItem): Promise<CompletedTaskAction | null> {
+  header(formatTaskStatusLabel(task));
+  info(`  Created: ${task.createdAt}`);
+  if (task.content) {
+    info(`  ${task.content}`);
+  }
+  blankLine();
+
+  return await showDiffAndPromptActionForTask(cwd, task);
 }
 
 /**
@@ -108,44 +116,22 @@ export async function listTasks(
     return;
   }
 
-  const defaultBranch = detectDefaultBranch(cwd);
   const runner = new TaskRunner(cwd);
 
   // Interactive loop
   while (true) {
-    const branches = listTaktBranches(cwd);
-    const items = buildListItems(cwd, branches, defaultBranch);
-    const pendingTasks = runner.listPendingTaskItems();
-    const failedTasks = runner.listFailedTasks();
+    const tasks = runner.listAllTaskItems();
 
-    if (items.length === 0 && pendingTasks.length === 0 && failedTasks.length === 0) {
+    if (tasks.length === 0) {
       info('No tasks to list.');
       return;
     }
 
-    const menuOptions = [
-      ...items.map((item, idx) => {
-        const filesSummary = `${item.filesChanged} file${item.filesChanged !== 1 ? 's' : ''} changed`;
-        const description = item.originalInstruction
-          ? `${filesSummary} | ${item.originalInstruction}`
-          : filesSummary;
-        return {
-          label: item.info.branch,
-          value: `branch:${idx}`,
-          description,
-        };
-      }),
-      ...pendingTasks.map((task, idx) => ({
-        label: formatTaskStatusLabel(task),
-        value: `pending:${idx}`,
-        description: task.content,
-      })),
-      ...failedTasks.map((task, idx) => ({
-        label: formatTaskStatusLabel(task),
-        value: `failed:${idx}`,
-        description: task.content,
-      })),
-    ];
+    const menuOptions = tasks.map((task, idx) => ({
+      label: formatTaskStatusLabel(task),
+      value: `${task.kind}:${idx}`,
+      description: `${task.content} | ${task.createdAt}`,
+    }));
 
     const selected = await selectOption<string>(
       'List Tasks',
@@ -162,52 +148,55 @@ export async function listTasks(
     const idx = parseInt(selected.slice(colonIdx + 1), 10);
     if (Number.isNaN(idx)) continue;
 
-    if (type === 'branch') {
-      const item = items[idx];
-      if (!item) continue;
-
-      // Action loop: re-show menu after viewing diff
-      let action: ListAction | null;
-      do {
-        action = await showDiffAndPromptAction(cwd, defaultBranch, item);
-
-        if (action === 'diff') {
-          showFullDiff(cwd, defaultBranch, item.info.branch);
-        }
-      } while (action === 'diff');
-
-      if (action === null) continue;
-
-      switch (action) {
-        case 'instruct':
-          await instructBranch(cwd, item, options);
-          break;
-        case 'try':
-          tryMergeBranch(cwd, item);
-          break;
-        case 'merge':
-          mergeBranch(cwd, item);
-          break;
-        case 'delete': {
-          const confirmed = await confirm(
-            `Delete ${item.info.branch}? This will discard all changes.`,
-            false,
-          );
-          if (confirmed) {
-            deleteBranch(cwd, item);
-          }
-          break;
-        }
-      }
-    } else if (type === 'pending') {
-      const task = pendingTasks[idx];
+    if (type === 'pending') {
+      const task = tasks[idx];
       if (!task) continue;
       const taskAction = await showPendingTaskAndPromptAction(task);
       if (taskAction === 'delete') {
         await deletePendingTask(task);
       }
+    } else if (type === 'running') {
+      const task = tasks[idx];
+      if (!task) continue;
+      header(formatTaskStatusLabel(task));
+      info(`  Created: ${task.createdAt}`);
+      if (task.content) {
+        info(`  ${task.content}`);
+      }
+      blankLine();
+      info('Running task is read-only.');
+      blankLine();
+    } else if (type === 'completed') {
+      const task = tasks[idx];
+      if (!task) continue;
+      if (!task.branch) {
+        info(`Branch is missing for completed task: ${task.name}`);
+        continue;
+      }
+      const taskAction = await showCompletedTaskAndPromptAction(cwd, task);
+      if (taskAction === null) continue;
+
+      switch (taskAction) {
+        case 'diff':
+          showFullDiff(cwd, task.branch);
+          break;
+        case 'instruct':
+          await instructBranch(cwd, task, options);
+          break;
+        case 'try':
+          tryMergeBranch(cwd, task);
+          break;
+        case 'merge':
+          if (mergeBranch(cwd, task)) {
+            runner.deleteCompletedTask(task.name);
+          }
+          break;
+        case 'delete':
+          await deleteCompletedTask(task);
+          break;
+      }
     } else if (type === 'failed') {
-      const task = failedTasks[idx];
+      const task = tasks[idx];
       if (!task) continue;
       const taskAction = await showFailedTaskAndPromptAction(task);
       if (taskAction === 'retry') {

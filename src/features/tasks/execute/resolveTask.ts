@@ -16,6 +16,7 @@ export interface ResolvedTaskExecution {
   taskPrompt?: string;
   reportDirName?: string;
   branch?: string;
+  worktreePath?: string;
   baseBranch?: string;
   startMovement?: string;
   retryNote?: string;
@@ -82,6 +83,7 @@ export async function resolveTaskExecution(
   let reportDirName: string | undefined;
   let taskPrompt: string | undefined;
   let branch: string | undefined;
+  let worktreePath: string | undefined;
   let baseBranch: string | undefined;
   if (task.taskDir) {
     const taskSlug = getTaskSlugFromTaskDir(task.taskDir);
@@ -114,6 +116,7 @@ export async function resolveTaskExecution(
     throwIfAborted(abortSignal);
     execCwd = result.path;
     branch = result.branch;
+    worktreePath = result.path;
     isWorktree = true;
   }
 
@@ -141,6 +144,7 @@ export async function resolveTaskExecution(
     ...(taskPrompt ? { taskPrompt } : {}),
     ...(reportDirName ? { reportDirName } : {}),
     ...(branch ? { branch } : {}),
+    ...(worktreePath ? { worktreePath } : {}),
     ...(baseBranch ? { baseBranch } : {}),
     ...(startMovement ? { startMovement } : {}),
     ...(retryNote ? { retryNote } : {}),

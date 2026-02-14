@@ -180,6 +180,7 @@ describe('resolveTaskExecution', () => {
       isWorktree: true,
       autoPr: false,
       branch: 'takt/20260128T0504-add-auth',
+      worktreePath: '/project/../20260128T0504-add-auth',
       baseBranch: 'main',
     });
   });

@@ -215,7 +215,7 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(() => runner.listTasks()).toThrow(/ENOENT|no such file/i);
   });
 
-  it('should remove completed task record from tasks.yaml', () => {
+  it('should keep completed task record in tasks.yaml', () => {
     runner.addTask('Task A');
     const task = runner.claimNextTasks(1)[0]!;
 
@@ -229,10 +229,11 @@ describe('TaskRunner (tasks.yaml)', () => {
     });
 
     const file = loadTasksFile(testDir);
-    expect(file.tasks).toHaveLength(0);
+    expect(file.tasks).toHaveLength(1);
+    expect(file.tasks[0]?.status).toBe('completed');
   });
 
-  it('should remove only the completed task when multiple tasks exist', () => {
+  it('should update only target task to completed when multiple tasks exist', () => {
     runner.addTask('Task A');
     runner.addTask('Task B');
     const task = runner.claimNextTasks(1)[0]!;
@@ -247,9 +248,11 @@ describe('TaskRunner (tasks.yaml)', () => {
     });
 
     const file = loadTasksFile(testDir);
-    expect(file.tasks).toHaveLength(1);
-    expect(file.tasks[0]?.name).toContain('task-b');
-    expect(file.tasks[0]?.status).toBe('pending');
+    expect(file.tasks).toHaveLength(2);
+    expect(file.tasks[0]?.name).toContain('task-a');
+    expect(file.tasks[0]?.status).toBe('completed');
+    expect(file.tasks[1]?.name).toContain('task-b');
+    expect(file.tasks[1]?.status).toBe('pending');
   });
 
   it('should mark claimed task as failed with failure detail', () => {
@@ -272,6 +275,29 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(failed[0]?.failure?.error).toBe('Boom');
     expect(failed[0]?.failure?.movement).toBe('review');
     expect(failed[0]?.failure?.last_message).toBe('last message');
+  });
+
+  it('should mark pending task as failed with started_at and branch', () => {
+    const task = runner.addTask('Task C', { branch: 'takt/task-c' });
+    const startedAt = new Date().toISOString();
+    const completedAt = new Date().toISOString();
+
+    runner.failTask({
+      task,
+      success: false,
+      response: 'Boom',
+      executionLog: [],
+      startedAt,
+      completedAt,
+      branch: 'takt/task-c-updated',
+    });
+
+    const file = loadTasksFile(testDir);
+    const failed = file.tasks[0];
+    expect(failed?.status).toBe('failed');
+    expect(failed?.started_at).toBe(startedAt);
+    expect(failed?.completed_at).toBe(completedAt);
+    expect(failed?.branch).toBe('takt/task-c-updated');
   });
 
   it('should requeue failed task to pending with retry metadata', () => {

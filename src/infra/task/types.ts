@@ -13,6 +13,7 @@ export interface TaskInfo {
   taskDir?: string;
   createdAt: string;
   status: TaskStatus;
+  worktreePath?: string;
   data: TaskFileData | null;
 }
 
@@ -26,6 +27,8 @@ export interface TaskResult {
   failureLastMessage?: string;
   startedAt: string;
   completedAt: string;
+  branch?: string;
+  worktreePath?: string;
 }
 
 export interface WorktreeOptions {
@@ -73,11 +76,13 @@ export interface SummarizeOptions {
 
 /** pending/failedタスクのリストアイテム */
 export interface TaskListItem {
-  kind: 'pending' | 'failed';
+  kind: 'pending' | 'running' | 'completed' | 'failed';
   name: string;
   createdAt: string;
   filePath: string;
   content: string;
+  branch?: string;
+  worktreePath?: string;
   data?: TaskFileData;
   failure?: TaskFailure;
 }
