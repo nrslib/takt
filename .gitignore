@@ -34,3 +34,6 @@ coverage/
 task_planning/
 
 OPENCODE_CONFIG_CONTENT
+
+# Local editor/agent settings
+.claude/

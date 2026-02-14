@@ -14,7 +14,7 @@
     "watch": "tsc --watch",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "npm run test:e2e:mock; code=$?; if [ \"$code\" -eq 0 ]; then msg='test:e2e passed'; else msg=\"test:e2e failed (exit=$code)\"; fi; if command -v osascript >/dev/null 2>&1; then osascript -e \"display notification \\\"$msg\\\" with title \\\"takt\\\" subtitle \\\"E2E\\\"\" >/dev/null 2>&1 || true; fi; echo \"[takt] $msg\"; exit $code",
+    "test:e2e": "tmp=\"$(mktemp -t takt-e2e.XXXXXX)\"; npm run test:e2e:mock >\"$tmp\" 2>&1; code=$?; cat \"$tmp\"; if grep -q \"error connecting to api.github.com\" \"$tmp\"; then echo \"[takt] GitHub connectivity error detected in E2E output\"; code=1; fi; rm -f \"$tmp\"; if [ \"$code\" -eq 0 ]; then msg='test:e2e passed'; else msg=\"test:e2e failed (exit=$code)\"; fi; if command -v osascript >/dev/null 2>&1; then osascript -e \"display notification \\\"$msg\\\" with title \\\"takt\\\" subtitle \\\"E2E\\\"\" >/dev/null 2>&1 || true; fi; echo \"[takt] $msg\"; exit $code",
     "test:e2e:mock": "TAKT_E2E_PROVIDER=mock vitest run --config vitest.config.e2e.mock.ts --reporter=verbose",
     "test:e2e:all": "npm run test:e2e:mock && npm run test:e2e:provider",
     "test:e2e:provider": "npm run test:e2e:provider:claude && npm run test:e2e:provider:codex",

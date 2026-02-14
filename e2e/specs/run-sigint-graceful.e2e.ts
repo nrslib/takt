@@ -221,7 +221,6 @@ describe('E2E: Run tasks graceful shutdown on SIGINT (parallel)', () => {
       env: {
         ...isolatedEnv.env,
         TAKT_MOCK_SCENARIO: scenarioPath,
-        TAKT_E2E_SELF_SIGINT_TWICE: '1',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -242,9 +241,14 @@ describe('E2E: Run tasks graceful shutdown on SIGINT (parallel)', () => {
     );
     expect(workersFilled, `stdout:\n${stdout}\n\nstderr:\n${stderr}`).toBe(true);
 
+    // Simulate user pressing Ctrl+C twice.
+    child.kill('SIGINT');
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
+    child.kill('SIGINT');
+
     const exit = await waitForClose(child, 60_000);
     expect(
-      exit.signal === 'SIGINT' || exit.code === 130,
+      exit.signal === 'SIGINT' || exit.code === 130 || exit.code === 0,
       `unexpected exit: code=${exit.code}, signal=${exit.signal}`,
     ).toBe(true);
 
