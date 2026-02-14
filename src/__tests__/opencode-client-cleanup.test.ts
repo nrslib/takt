@@ -57,8 +57,10 @@ vi.mock('@opencode-ai/sdk/v2', () => ({
 }));
 
 describe('OpenCodeClient stream cleanup', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
+    const { resetSharedServer } = await import('../infra/opencode/client.js');
+    resetSharedServer();
   });
 
   it('should close SSE stream when session.idle is received', async () => {
@@ -445,52 +447,6 @@ describe('OpenCodeClient stream cleanup', () => {
     );
   });
 
-  it('should configure allow permissions for edit mode', async () => {
-    const { OpenCodeClient } = await import('../infra/opencode/client.js');
-    const stream = new MockEventStream([
-      {
-        type: 'message.updated',
-        properties: {
-          info: {
-            sessionID: 'session-perm',
-            role: 'assistant',
-            time: { created: Date.now(), completed: Date.now() + 1 },
-          },
-        },
-      },
-    ]);
-
-    const promptAsync = vi.fn().mockResolvedValue(undefined);
-    const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-perm' } });
-    const disposeInstance = vi.fn().mockResolvedValue({ data: {} });
-    const subscribe = vi.fn().mockResolvedValue({ stream });
-
-    createOpencodeMock.mockResolvedValue({
-      client: {
-        instance: { dispose: disposeInstance },
-        session: { create: sessionCreate, promptAsync },
-        event: { subscribe },
-        permission: { reply: vi.fn() },
-      },
-      server: { close: vi.fn() },
-    });
-
-    const client = new OpenCodeClient();
-    await client.call('coder', 'hello', {
-      cwd: '/tmp',
-      model: 'opencode/big-pickle',
-      permissionMode: 'edit',
-    });
-
-    const createCallArgs = createOpencodeMock.mock.calls[0]?.[0] as { config?: Record<string, unknown> };
-    const permission = createCallArgs.config?.permission as Record<string, string>;
-    expect(permission.read).toBe('allow');
-    expect(permission.edit).toBe('allow');
-    expect(permission.write).toBe('allow');
-    expect(permission.bash).toBe('allow');
-    expect(permission.question).toBe('deny');
-  });
-
   it('should pass permission ruleset to session.create', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const stream = new MockEventStream([
@@ -577,5 +533,86 @@ describe('OpenCodeClient stream cleanup', () => {
 
     expect(result.status).toBe('error');
     expect(result.content).toContain('permission reply timed out');
+  });
+
+  it('should reuse shared server for parallel calls with same config', async () => {
+    const { OpenCodeClient, resetSharedServer } = await import('../infra/opencode/client.js');
+    resetSharedServer();
+
+    let callCount = 0;
+    const sessionCreate = vi.fn().mockImplementation(() => {
+      callCount += 1;
+      return Promise.resolve({ data: { id: `session-${callCount}` } });
+    });
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    const disposeInstance = vi.fn().mockResolvedValue({ data: {} });
+    const serverClose = vi.fn();
+
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: disposeInstance },
+        session: { create: sessionCreate, promptAsync },
+        event: { subscribe: vi.fn().mockImplementation(() => {
+          const events = [{ type: 'session.idle', properties: { sessionID: `session-${callCount}` } }];
+          return Promise.resolve({ stream: new MockEventStream(events) });
+        }) },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: serverClose },
+    });
+
+    const client = new OpenCodeClient();
+
+    const [result1, result2, result3] = await Promise.all([
+      client.call('coder', 'task1', { cwd: '/tmp', model: 'opencode/big-pickle' }),
+      client.call('coder', 'task2', { cwd: '/tmp', model: 'opencode/big-pickle' }),
+      client.call('coder', 'task3', { cwd: '/tmp', model: 'opencode/big-pickle' }),
+    ]);
+
+    expect(createOpencodeMock).toHaveBeenCalledTimes(1);
+    expect(sessionCreate).toHaveBeenCalledTimes(3);
+    expect(result1.status).toBe('done');
+    expect(result2.status).toBe('done');
+    expect(result3.status).toBe('done');
+    expect(serverClose).not.toHaveBeenCalled();
+  });
+
+  it('should create new server when model changes', async () => {
+    const { OpenCodeClient, resetSharedServer } = await import('../infra/opencode/client.js');
+    resetSharedServer();
+
+    const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-1' } });
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    const disposeInstance = vi.fn().mockResolvedValue({ data: {} });
+    const serverClose1 = vi.fn();
+    const serverClose2 = vi.fn();
+
+    createOpencodeMock.mockResolvedValueOnce({
+      client: {
+        instance: { dispose: disposeInstance },
+        session: { create: sessionCreate, promptAsync },
+        event: { subscribe: vi.fn().mockResolvedValue({ stream: new MockEventStream([{ type: 'session.idle', properties: { sessionID: 'session-1' } }]) }) },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: serverClose1 },
+    }).mockResolvedValueOnce({
+      client: {
+        instance: { dispose: disposeInstance },
+        session: { create: sessionCreate, promptAsync },
+        event: { subscribe: vi.fn().mockResolvedValue({ stream: new MockEventStream([{ type: 'session.idle', properties: { sessionID: 'session-2' } }]) }) },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: serverClose2 },
+    });
+
+    const client = new OpenCodeClient();
+
+    const result1 = await client.call('coder', 'task1', { cwd: '/tmp', model: 'opencode/model-a' });
+    const result2 = await client.call('coder', 'task2', { cwd: '/tmp', model: 'opencode/model-b' });
+
+    expect(createOpencodeMock).toHaveBeenCalledTimes(2);
+    expect(serverClose1).toHaveBeenCalled();
+    expect(result1.status).toBe('done');
+    expect(result2.status).toBe('done');
   });
 });
