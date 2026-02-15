@@ -217,10 +217,10 @@ describe('loadPiece (builtin fallback)', () => {
     expect(piece).toBeNull();
   });
 
-  it('should load builtin pieces like minimal, research, e2e-test', () => {
-    const minimal = loadPiece('minimal', process.cwd());
-    expect(minimal).not.toBeNull();
-    expect(minimal!.name).toBe('minimal');
+  it('should load builtin pieces like default-mini, research, e2e-test', () => {
+    const mini = loadPiece('default-mini', process.cwd());
+    expect(mini).not.toBeNull();
+    expect(mini!.name).toBe('default-mini');
 
     const research = loadPiece('research', process.cwd());
     expect(research).not.toBeNull();
@@ -249,7 +249,7 @@ describe('listPieces (builtin fallback)', () => {
   it('should include builtin pieces', () => {
     const pieces = listPieces(testDir);
     expect(pieces).toContain('default');
-    expect(pieces).toContain('minimal');
+    expect(pieces).toContain('default-mini');
     expect(pieces).toContain('e2e-test');
   });
 
@@ -277,7 +277,7 @@ describe('loadAllPieces (builtin fallback)', () => {
   it('should include builtin pieces in the map', () => {
     const pieces = loadAllPieces(testDir);
     expect(pieces.has('default')).toBe(true);
-    expect(pieces.has('minimal')).toBe(true);
+    expect(pieces.has('default-mini')).toBe(true);
   });
 });
 

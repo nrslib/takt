@@ -3,10 +3,22 @@
 
 ## Result: APPROVE / REJECT
 
+## Requirements Fulfillment Check
+
+Extract requirements from the task spec and verify each one individually against actual code.
+
+| # | Requirement (extracted from task spec) | Met | Evidence (file:line) |
+|---|---------------------------------------|-----|---------------------|
+| 1 | {requirement 1} | ✅/❌ | `src/file.ts:42` |
+| 2 | {requirement 2} | ✅/❌ | `src/file.ts:55` |
+
+- If any ❌ exists, REJECT is mandatory
+- ✅ without evidence is invalid (must verify against actual code)
+- Do not rely on plan report's judgment; independently verify each requirement
+
 ## Validation Summary
 | Item | Status | Verification Method |
 |------|--------|-------------------|
-| Requirements met | ✅ | Checked against requirements list |
 | Tests | ✅ | `npm test` (N passed) |
 | Build | ✅ | `npm run build` succeeded |
 | Functional check | ✅ | Main flow verified |

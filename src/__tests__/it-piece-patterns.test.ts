@@ -80,7 +80,7 @@ function createEngine(config: PieceConfig, dir: string, task: string): PieceEngi
   });
 }
 
-describe('Piece Patterns IT: minimal piece', () => {
+describe('Piece Patterns IT: default-mini piece', () => {
   let testDir: string;
 
   beforeEach(() => {
@@ -93,11 +93,12 @@ describe('Piece Patterns IT: minimal piece', () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  it('should complete: implement → reviewers (parallel: ai_review + supervise) → COMPLETE', async () => {
-    const config = loadPiece('minimal', testDir);
+  it('should complete: plan → implement → reviewers (parallel: ai_review + supervise) → COMPLETE', async () => {
+    const config = loadPiece('default-mini', testDir);
     expect(config).not.toBeNull();
 
     setMockScenario([
+      { persona: 'planner', status: 'done', content: 'Requirements are clear and implementation is possible.' },
       { persona: 'coder', status: 'done', content: 'Implementation complete.' },
       { persona: 'ai-antipattern-reviewer', status: 'done', content: 'No AI-specific issues.' },
       { persona: 'supervisor', status: 'done', content: 'All checks passed.' },
@@ -107,13 +108,14 @@ describe('Piece Patterns IT: minimal piece', () => {
     const state = await engine.run();
 
     expect(state.status).toBe('completed');
-    expect(state.iteration).toBe(2);
+    expect(state.iteration).toBe(3);
   });
 
   it('should ABORT when implement cannot proceed', async () => {
-    const config = loadPiece('minimal', testDir);
+    const config = loadPiece('default-mini', testDir);
 
     setMockScenario([
+      { persona: 'planner', status: 'done', content: 'Requirements are clear and implementation is possible.' },
       { persona: 'coder', status: 'done', content: 'Cannot proceed, insufficient info.' },
     ]);
 
@@ -121,7 +123,7 @@ describe('Piece Patterns IT: minimal piece', () => {
     const state = await engine.run();
 
     expect(state.status).toBe('aborted');
-    expect(state.iteration).toBe(1);
+    expect(state.iteration).toBe(2);
   });
 
 });

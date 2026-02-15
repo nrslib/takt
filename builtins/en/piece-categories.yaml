@@ -1,23 +1,31 @@
 piece_categories:
   🚀 Quick Start:
     pieces:
+      - default-mini
+      - frontend-mini
+      - backend-mini
       - default
-      - passthrough
-      - coding
-      - minimal
       - compound-eye
+  ⚡ Mini:
+    pieces:
+      - default-mini
+      - frontend-mini
+      - backend-mini
+      - backend-cqrs-mini
   🎨 Frontend:
     pieces:
       - frontend
+      - frontend-mini
   ⚙️ Backend:
     pieces:
       - backend
+      - backend-mini
       - backend-cqrs
+      - backend-cqrs-mini
   🔧 Expert:
-    Full Stack:
-      pieces:
-        - expert
-        - expert-cqrs
+    pieces:
+      - expert
+      - expert-cqrs
   🛠️ Refactoring:
     pieces:
       - structural-reform

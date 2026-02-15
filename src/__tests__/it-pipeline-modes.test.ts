@@ -282,6 +282,7 @@ describe('Pipeline Modes IT: --task + --piece name (builtin)', () => {
 
   it('should load and execute builtin minimal piece by name', async () => {
     setMockScenario([
+      { persona: 'planner', status: 'done', content: 'Requirements are clear and implementation is possible.' },
       { persona: 'coder', status: 'done', content: 'Implementation complete' },
       { persona: 'ai-antipattern-reviewer', status: 'done', content: 'No AI-specific issues' },
       { persona: 'supervisor', status: 'done', content: 'All checks passed' },
@@ -289,7 +290,7 @@ describe('Pipeline Modes IT: --task + --piece name (builtin)', () => {
 
     const exitCode = await executePipeline({
       task: 'Add a feature',
-      piece: 'minimal',
+      piece: 'default-mini',
       autoPr: false,
       skipGit: true,
       cwd: testDir,

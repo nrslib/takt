@@ -1,5 +1,5 @@
-name: minimal
-description: Minimal development piece (implement -> parallel review -> fix if needed -> complete)
+name: backend-mini
+description: バックエンド向けMini開発ピース（plan → implement → 並列レビュー → 修正 → 完了）
 piece_config:
   provider_options:
     codex:
@@ -7,14 +7,44 @@ piece_config:
     opencode:
       network_access: true
 max_movements: 20
-initial_movement: implement
+initial_movement: plan
 movements:
+  - name: plan
+    edit: false
+    persona: planner
+    knowledge:
+      - backend
+      - security
+      - architecture
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Bash
+      - WebSearch
+      - WebFetch
+    rules:
+      - condition: 要件が明確で実装可能
+        next: implement
+      - condition: ユーザーが質問をしている（実装タスクではない）
+        next: COMPLETE
+      - condition: 要件が不明確、情報不足
+        next: ABORT
+    instruction: plan
+    output_contracts:
+      report:
+        - name: 00-plan.md
+          format: plan
   - name: implement
     edit: true
     persona: coder
     policy:
       - coding
       - testing
+    knowledge:
+      - backend
+      - security
+      - architecture
     allowed_tools:
       - Read
       - Glob
@@ -27,11 +57,11 @@ movements:
     required_permission_mode: edit
     instruction: implement
     rules:
-      - condition: Implementation complete
+      - condition: 実装が完了した
         next: reviewers
-      - condition: Cannot proceed, insufficient info
+      - condition: 実装を進行できない
         next: ABORT
-      - condition: User input required because there are items to confirm with the user
+      - condition: ユーザーへの確認事項があるためユーザー入力が必要
         next: implement
         requires_user_input: true
         interactive_only: true
@@ -57,8 +87,8 @@ movements:
           - WebFetch
         instruction: review-ai
         rules:
-          - condition: No AI-specific issues
-          - condition: AI-specific issues found
+          - condition: AI特有の問題なし
+          - condition: AI特有の問題あり
         output_contracts:
           report:
             - name: 03-ai-review.md
@@ -67,6 +97,10 @@ movements:
         edit: false
         persona: supervisor
         policy: review
+        knowledge:
+          - backend
+          - security
+          - architecture
         allowed_tools:
           - Read
           - Glob
@@ -76,8 +110,8 @@ movements:
           - WebFetch
         instruction: supervise
         rules:
-          - condition: All checks passed
-          - condition: Requirements unmet, tests failing
+          - condition: すべて問題なし
+          - condition: 要求未達成、テスト失敗、ビルドエラー
         output_contracts:
           report:
             - name: supervisor-validation.md
@@ -86,13 +120,13 @@ movements:
               format: summary
               use_judge: false
     rules:
-      - condition: all("No AI-specific issues", "All checks passed")
+      - condition: all("AI特有の問題なし", "すべて問題なし")
         next: COMPLETE
-      - condition: all("AI-specific issues found", "Requirements unmet, tests failing")
+      - condition: all("AI特有の問題あり", "要求未達成、テスト失敗、ビルドエラー")
         next: fix_both
-      - condition: any("AI-specific issues found")
+      - condition: any("AI特有の問題あり")
         next: ai_fix
-      - condition: any("Requirements unmet, tests failing")
+      - condition: any("要求未達成、テスト失敗、ビルドエラー")
         next: supervise_fix
   - name: fix_both
     parallel:
@@ -102,6 +136,10 @@ movements:
         policy:
           - coding
           - testing
+        knowledge:
+          - backend
+          - security
+          - architecture
         allowed_tools:
           - Read
           - Glob
@@ -112,9 +150,9 @@ movements:
           - WebFetch
         required_permission_mode: edit
         rules:
-          - condition: AI Reviewer's issues fixed
-          - condition: No fix needed (verified target files/spec)
-          - condition: Cannot proceed, insufficient info
+          - condition: AI問題の修正完了
+          - condition: 修正不要（指摘対象ファイル/仕様の確認済み）
+          - condition: 判断できない、情報不足
         instruction: ai-fix
       - name: supervise_fix_parallel
         edit: true
@@ -122,6 +160,10 @@ movements:
         policy:
           - coding
           - testing
+        knowledge:
+          - backend
+          - security
+          - architecture
         allowed_tools:
           - Read
           - Glob
@@ -132,13 +174,13 @@ movements:
           - WebFetch
         required_permission_mode: edit
         rules:
-          - condition: Supervisor's issues fixed
-          - condition: Cannot proceed, insufficient info
+          - condition: 監督者の指摘に対する修正が完了した
+          - condition: 修正を進行できない
         instruction: fix-supervisor
     rules:
-      - condition: all("AI Reviewer's issues fixed", "Supervisor's issues fixed")
+      - condition: all("AI問題の修正完了", "監督者の指摘に対する修正が完了した")
         next: reviewers
-      - condition: any("No fix needed (verified target files/spec)", "Cannot proceed, insufficient info")
+      - condition: any("修正不要（指摘対象ファイル/仕様の確認済み）", "判断できない、情報不足", "修正を進行できない")
         next: implement
   - name: ai_fix
     edit: true
@@ -146,6 +188,10 @@ movements:
     policy:
       - coding
       - testing
+    knowledge:
+      - backend
+      - security
+      - architecture
     allowed_tools:
       - Read
       - Glob
@@ -158,11 +204,11 @@ movements:
     required_permission_mode: edit
     pass_previous_response: false
     rules:
-      - condition: AI Reviewer's issues fixed
+      - condition: AI問題の修正完了
         next: reviewers
-      - condition: No fix needed (verified target files/spec)
+      - condition: 修正不要（指摘対象ファイル/仕様の確認済み）
         next: implement
-      - condition: Cannot proceed, insufficient info
+      - condition: 判断できない、情報不足
         next: implement
     instruction: ai-fix
   - name: supervise_fix
@@ -171,6 +217,10 @@ movements:
     policy:
       - coding
       - testing
+    knowledge:
+      - backend
+      - security
+      - architecture
     allowed_tools:
       - Read
       - Glob
@@ -183,8 +233,8 @@ movements:
     required_permission_mode: edit
     pass_previous_response: false
     rules:
-      - condition: Supervisor's issues fixed
+      - condition: 監督者の指摘に対する修正が完了した
         next: reviewers
-      - condition: Cannot proceed, insufficient info
+      - condition: 修正を進行できない
         next: implement
     instruction: fix-supervisor

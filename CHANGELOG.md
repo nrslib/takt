@@ -4,6 +4,32 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.17.0] - 2026-02-15
+
+### Added
+
+- **mini ピースシリーズ**: `default-mini`、`frontend-mini`、`backend-mini`、`backend-cqrs-mini` を追加 — `coding`/`minimal` の後継として、並列レビュー（AI アンチパターン＋スーパーバイザー）付きの軽量開発ピースを提供
+- ピースカテゴリに「⚡ Mini」カテゴリを追加
+- `supervisor-validation` 出力契約を追加 — 要件充足チェックテーブル（Requirements Fulfillment Check）で要件ごとにコード根拠を提示する形式
+- `getJudgmentReportFiles()`: `use_judge` フラグにより Phase 3 ステータス判定の対象レポートをフィルタリング可能に
+- Output contract に finding_id トラッキングを追加（new/persists/resolved セクションによる指摘の追跡）
+
+### Changed
+
+- **BREAKING: `coding` ピースと `minimal` ピースを削除** — mini ピースシリーズに置き換え。`coding` → `default-mini`、`minimal` → `default-mini` への移行を推奨
+- **BREAKING: Output contract を item 形式に統一** — `use_judge`（boolean）と `format`（string）フィールドを必須化し、`OutputContractLabelPath`（label:path 形式）を廃止
+- ランタイム環境ディレクトリを `.runtime` から `.takt/.runtime` に移動
+- スーパーバイザーの要件充足検証を強化: 要件を個別に抽出し、コード（file:line）に対して1件ずつ検証する方式に変更 — 「おおむね完了」は APPROVE の根拠にならない
+
+### Fixed
+
+- クローン/worktree ディレクトリの削除にリトライ機構を追加（`maxRetries: 3`, `retryDelay: 200`）— ファイルロックによる一時的な削除失敗を軽減
+
+### Internal
+
+- `review-summary` 出力契約を削除（`supervisor-validation` に統合）
+- 全ビルトインピース、e2e フィクスチャ、テストを output contract の新形式に更新
+
 ## [0.16.0] - 2026-02-15
 
 ### Added

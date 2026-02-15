@@ -228,10 +228,11 @@ describe('Pipeline Integration Tests', () => {
   });
 
   it('should complete pipeline with piece name + skip-git + mock scenario', async () => {
-    // Use builtin 'minimal' piece
+    // Use builtin 'default-mini' piece
     // persona field: extractPersonaName result (from .md filename)
     // tag in content: [MOVEMENT_NAME:N] where MOVEMENT_NAME is the movement name uppercased
     setMockScenario([
+      { persona: 'planner', status: 'done', content: 'Requirements are clear and implementation is possible.' },
       { persona: 'coder', status: 'done', content: 'Implementation complete' },
       { persona: 'ai-antipattern-reviewer', status: 'done', content: 'No AI-specific issues' },
       { persona: 'supervisor', status: 'done', content: 'All checks passed' },
@@ -239,7 +240,7 @@ describe('Pipeline Integration Tests', () => {
 
     const exitCode = await executePipeline({
       task: 'Add a hello world function',
-      piece: 'minimal',
+      piece: 'default-mini',
       autoPr: false,
       skipGit: true,
       cwd: testDir,

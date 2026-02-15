@@ -105,7 +105,7 @@ export function deleteBranch(projectDir: string, target: BranchActionTarget): bo
   try {
     if (worktreePath) {
       if (existsSync(worktreePath)) {
-        rmSync(worktreePath, { recursive: true, force: true });
+        rmSync(worktreePath, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
         log.info('Removed worktree directory', { worktreePath });
       }
 

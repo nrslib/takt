@@ -304,7 +304,7 @@ takt reset categories
 | Piece | Recommended Use |
 |----------|-----------------|
 | `default` | Serious development tasks. Used for TAKT's own development. Multi-stage review with parallel reviews (architect + security). |
-| `minimal` | Simple fixes and straightforward tasks. Minimal piece with basic review. |
+| `default-mini` | Simple fixes and straightforward tasks. Lightweight piece with AI antipattern review + supervisor. |
 | `review-fix-minimal` | Review & fix piece. Specialized for iterative improvement based on review feedback. |
 | `research` | Investigation and research. Autonomously executes research without asking questions. |
 
@@ -460,13 +460,15 @@ TAKT includes multiple builtin pieces:
 | Piece | Description |
 |----------|-------------|
 | `default` | Full development piece: plan → implement → AI review → parallel review (architect + QA) → supervisor approval. Includes fix loops at each review stage. |
-| `minimal` | Quick piece: plan → implement → review → supervisor. Minimal steps for fast iteration. |
+| `default-mini` | Mini development piece: plan → implement → parallel review (AI antipattern + supervisor) → fix if needed. Lightweight with review. |
+| `frontend-mini` | Mini frontend piece: plan → implement → parallel review (AI antipattern + supervisor) with frontend knowledge injection. |
+| `backend-mini` | Mini backend piece: plan → implement → parallel review (AI antipattern + supervisor) with backend knowledge injection. |
+| `backend-cqrs-mini` | Mini CQRS+ES piece: plan → implement → parallel review (AI antipattern + supervisor) with CQRS+ES knowledge injection. |
 | `review-fix-minimal` | Review-focused piece: review → fix → supervisor. For iterative improvement based on review feedback. |
 | `research` | Research piece: planner → digger → supervisor. Autonomously executes research without asking questions. |
 | `expert` | Full-stack development piece: architecture, frontend, security, QA reviews with fix loops. |
 | `expert-cqrs` | Full-stack development piece (CQRS+ES specialized): CQRS+ES, frontend, security, QA reviews with fix loops. |
 | `magi` | Deliberation system inspired by Evangelion. Three AI personas (MELCHIOR, BALTHASAR, CASPER) analyze and vote. |
-| `coding` | Lightweight development piece: planner → implement → parallel review (AI antipattern + architecture) → fix. Fast feedback loop without supervisor. |
 | `passthrough` | Thinnest wrapper. Pass task directly to coder as-is. No review. |
 | `compound-eye` | Multi-model review: sends the same instruction to Claude and Codex simultaneously, then synthesizes both responses. |
 | `review-only` | Read-only code review piece that makes no changes. |

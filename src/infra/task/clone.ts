@@ -217,7 +217,7 @@ export class CloneManager {
   removeClone(clonePath: string): void {
     log.info('Removing clone', { path: clonePath });
     try {
-      fs.rmSync(clonePath, { recursive: true, force: true });
+      fs.rmSync(clonePath, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
       log.info('Clone removed', { path: clonePath });
     } catch (err) {
       log.error('Failed to remove clone', { path: clonePath, error: String(err) });

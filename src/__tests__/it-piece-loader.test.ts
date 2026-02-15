@@ -156,7 +156,7 @@ describe('Piece Loader IT: agent path resolution', () => {
   });
 
   it('should resolve relative agent paths from piece YAML location', () => {
-    const config = loadPiece('minimal', testDir);
+    const config = loadPiece('default-mini', testDir);
     expect(config).not.toBeNull();
 
     for (const movement of config!.movements) {
@@ -223,7 +223,7 @@ describe('Piece Loader IT: rule syntax parsing', () => {
   });
 
   it('should parse standard rules with next movement', () => {
-    const config = loadPiece('minimal', testDir);
+    const config = loadPiece('default-mini', testDir);
     expect(config).not.toBeNull();
 
     const implementStep = config!.movements.find((s) => s.name === 'implement');
@@ -251,14 +251,14 @@ describe('Piece Loader IT: piece config validation', () => {
   });
 
   it('should set max_movements from YAML', () => {
-    const config = loadPiece('minimal', testDir);
+    const config = loadPiece('default-mini', testDir);
     expect(config).not.toBeNull();
     expect(typeof config!.maxMovements).toBe('number');
     expect(config!.maxMovements).toBeGreaterThan(0);
   });
 
   it('should set initial_movement from YAML', () => {
-    const config = loadPiece('minimal', testDir);
+    const config = loadPiece('default-mini', testDir);
     expect(config).not.toBeNull();
     expect(typeof config!.initialMovement).toBe('string');
 
@@ -290,7 +290,7 @@ describe('Piece Loader IT: piece config validation', () => {
   });
 
   it('should set passPreviousResponse from YAML', () => {
-    const config = loadPiece('minimal', testDir);
+    const config = loadPiece('default-mini', testDir);
     expect(config).not.toBeNull();
 
     // At least some movements should have passPreviousResponse set
