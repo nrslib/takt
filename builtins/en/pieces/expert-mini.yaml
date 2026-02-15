@@ -1,0 +1,247 @@
+name: expert-mini
+description: Expert-focused mini development piece (plan -> implement -> parallel review -> fix if needed -> complete)
+piece_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+max_movements: 20
+initial_movement: plan
+movements:
+  - name: plan
+    edit: false
+    persona: planner
+    knowledge:
+      - frontend
+      - backend
+      - security
+      - architecture
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Bash
+      - WebSearch
+      - WebFetch
+    rules:
+      - condition: Requirements are clear and implementation is possible
+        next: implement
+      - condition: User is asking a question (not an implementation task)
+        next: COMPLETE
+      - condition: Requirements are unclear, insufficient information
+        next: ABORT
+    instruction: plan
+    output_contracts:
+      report:
+        - name: 00-plan.md
+          format: plan
+  - name: implement
+    edit: true
+    persona: coder
+    policy:
+      - coding
+      - testing
+    knowledge:
+      - frontend
+      - backend
+      - security
+      - architecture
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    required_permission_mode: edit
+    instruction: implement
+    rules:
+      - condition: Implementation complete
+        next: reviewers
+      - condition: Cannot proceed, insufficient info
+        next: ABORT
+      - condition: User input required because there are items to confirm with the user
+        next: implement
+        requires_user_input: true
+        interactive_only: true
+    output_contracts:
+      report:
+        - name: coder-scope.md
+          format: coder-scope
+        - name: coder-decisions.md
+          format: coder-decisions
+  - name: reviewers
+    parallel:
+      - name: ai_review
+        edit: false
+        persona: ai-antipattern-reviewer
+        policy:
+          - review
+          - ai-antipattern
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - WebSearch
+          - WebFetch
+        instruction: review-ai
+        rules:
+          - condition: No AI-specific issues
+          - condition: AI-specific issues found
+        output_contracts:
+          report:
+            - name: 03-ai-review.md
+              format: ai-review
+      - name: supervise
+        edit: false
+        persona: expert-supervisor
+        policy: review
+        knowledge:
+          - frontend
+          - backend
+          - security
+          - architecture
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Bash
+          - WebSearch
+          - WebFetch
+        instruction: supervise
+        rules:
+          - condition: All checks passed
+          - condition: Requirements unmet, tests failing
+        output_contracts:
+          report:
+            - name: supervisor-validation.md
+              format: supervisor-validation
+            - name: summary.md
+              format: summary
+              use_judge: false
+    rules:
+      - condition: all("No AI-specific issues", "All checks passed")
+        next: COMPLETE
+      - condition: all("AI-specific issues found", "Requirements unmet, tests failing")
+        next: fix_both
+      - condition: any("AI-specific issues found")
+        next: ai_fix
+      - condition: any("Requirements unmet, tests failing")
+        next: supervise_fix
+  - name: fix_both
+    parallel:
+      - name: ai_fix_parallel
+        edit: true
+        persona: coder
+        policy:
+          - coding
+          - testing
+        knowledge:
+          - frontend
+          - backend
+          - security
+          - architecture
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Edit
+          - Bash
+          - WebSearch
+          - WebFetch
+        required_permission_mode: edit
+        rules:
+          - condition: AI Reviewer's issues fixed
+          - condition: No fix needed (verified target files/spec)
+          - condition: Cannot proceed, insufficient info
+        instruction: ai-fix
+      - name: supervise_fix_parallel
+        edit: true
+        persona: coder
+        policy:
+          - coding
+          - testing
+        knowledge:
+          - frontend
+          - backend
+          - security
+          - architecture
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Edit
+          - Bash
+          - WebSearch
+          - WebFetch
+        required_permission_mode: edit
+        rules:
+          - condition: Supervisor's issues fixed
+          - condition: Cannot proceed, insufficient info
+        instruction: fix-supervisor
+    rules:
+      - condition: all("AI Reviewer's issues fixed", "Supervisor's issues fixed")
+        next: reviewers
+      - condition: any("No fix needed (verified target files/spec)", "Cannot proceed, insufficient info")
+        next: implement
+  - name: ai_fix
+    edit: true
+    persona: coder
+    policy:
+      - coding
+      - testing
+    knowledge:
+      - frontend
+      - backend
+      - security
+      - architecture
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    required_permission_mode: edit
+    pass_previous_response: false
+    rules:
+      - condition: AI Reviewer's issues fixed
+        next: reviewers
+      - condition: No fix needed (verified target files/spec)
+        next: implement
+      - condition: Cannot proceed, insufficient info
+        next: implement
+    instruction: ai-fix
+  - name: supervise_fix
+    edit: true
+    persona: coder
+    policy:
+      - coding
+      - testing
+    knowledge:
+      - frontend
+      - backend
+      - security
+      - architecture
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    required_permission_mode: edit
+    pass_previous_response: false
+    rules:
+      - condition: Supervisor's issues fixed
+        next: reviewers
+      - condition: Cannot proceed, insufficient info
+        next: implement
+    instruction: fix-supervisor

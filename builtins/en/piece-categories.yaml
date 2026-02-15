@@ -12,6 +12,8 @@ piece_categories:
       - frontend-mini
       - backend-mini
       - backend-cqrs-mini
+      - expert-mini
+      - expert-cqrs-mini
   🎨 Frontend:
     pieces:
       - frontend
@@ -25,7 +27,9 @@ piece_categories:
   🔧 Expert:
     pieces:
       - expert
+      - expert-mini
       - expert-cqrs
+      - expert-cqrs-mini
   🛠️ Refactoring:
     pieces:
       - structural-reform

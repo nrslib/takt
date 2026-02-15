@@ -63,10 +63,7 @@ export function resolveMovementPermissionMode(input: ResolvePermissionModeInput)
     return input.requiredPermissionMode;
   }
 
-  throw new Error(
-    `Unable to resolve permission mode for movement "${input.movementName}" and provider "${input.provider}": ` +
-    'define provider_profiles defaults/overrides or movement.required_permission_mode.',
-  );
+  return 'readonly';
 }
 
 const PERMISSION_MODE_RANK: Record<PermissionMode, number> = {

@@ -43,11 +43,13 @@ describe('resolveMovementPermissionMode', () => {
     expect(mode).toBe('full');
   });
 
-  it('throws when unresolved', () => {
-    expect(() => resolveMovementPermissionMode({
+  it('falls back to readonly when unresolved', () => {
+    const mode = resolveMovementPermissionMode({
       movementName: 'fix',
       provider: 'codex',
-    })).toThrow(/Unable to resolve permission mode/);
+    });
+
+    expect(mode).toBe('readonly');
   });
 
   it('resolves from required_permission_mode when provider is omitted', () => {
