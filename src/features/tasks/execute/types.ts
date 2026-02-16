@@ -57,6 +57,8 @@ export interface PieceExecutionOptions {
   abortSignal?: AbortSignal;
   /** Task name prefix for parallel execution output (e.g. "[task-name] output...") */
   taskPrefix?: string;
+  /** Optional full task label used instead of taskName truncation when prefixed output is rendered */
+  taskDisplayLabel?: string;
   /** Color index for task prefix (cycled mod 4 across concurrent tasks) */
   taskColorIndex?: number;
 }
@@ -91,6 +93,8 @@ export interface ExecuteTaskOptions {
   abortSignal?: AbortSignal;
   /** Task name prefix for parallel execution output (e.g. "[task-name] output...") */
   taskPrefix?: string;
+  /** Optional full task label used instead of taskName truncation when prefixed output is rendered */
+  taskDisplayLabel?: string;
   /** Color index for task prefix (cycled mod 4 across concurrent tasks) */
   taskColorIndex?: number;
 }

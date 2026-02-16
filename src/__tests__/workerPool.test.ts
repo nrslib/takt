@@ -45,11 +45,17 @@ const mockInfo = vi.mocked(info);
 
 const TEST_POLL_INTERVAL_MS = 50;
 
-function createTask(name: string): TaskInfo {
+function createTask(name: string, options?: { issue?: number }): TaskInfo {
   return {
     name,
     content: `Task: ${name}`,
     filePath: `/tasks/${name}.yaml`,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    status: 'pending',
+    data: {
+      task: `Task: ${name}`,
+      ...(options?.issue !== undefined ? { issue: options.issue } : {}),
+    },
   };
 }
 
@@ -135,9 +141,40 @@ describe('runWithWorkerPool', () => {
     // Then
     expect(mockExecuteAndCompleteTask).toHaveBeenCalledTimes(1);
     const parallelOpts = mockExecuteAndCompleteTask.mock.calls[0]?.[5];
-    expect(parallelOpts).toEqual({
+    expect(parallelOpts).toMatchObject({
       abortSignal: expect.any(AbortSignal),
       taskPrefix: 'my-task',
+      taskColorIndex: 0,
+      taskDisplayLabel: undefined,
+    });
+  });
+
+  it('should use full issue number as taskPrefix label when task has issue in parallel execution', async () => {
+    // Given: task with 5-digit issue number should not be truncated
+    const issueNumber = 12345;
+    const tasks = [createTask('issue-task', { issue: issueNumber })];
+    const runner = createMockTaskRunner([]);
+    const stdoutChunks: string[] = [];
+    const writeSpy = vi.spyOn(process.stdout, 'write').mockImplementation((chunk: unknown) => {
+      stdoutChunks.push(String(chunk));
+      return true;
+    });
+
+    // When
+    await runWithWorkerPool(runner as never, tasks, 2, '/cwd', 'default', undefined, TEST_POLL_INTERVAL_MS);
+
+    // Then: Issue label is used instead of truncated task name
+    writeSpy.mockRestore();
+    const allOutput = stdoutChunks.join('');
+    expect(allOutput).toContain('[#12345]');
+    expect(allOutput).not.toContain('[#123]');
+
+    expect(mockExecuteAndCompleteTask).toHaveBeenCalledTimes(1);
+    const parallelOpts = mockExecuteAndCompleteTask.mock.calls[0]?.[5];
+    expect(parallelOpts).toEqual({
+      abortSignal: expect.any(AbortSignal),
+      taskPrefix: `#${issueNumber}`,
+      taskDisplayLabel: `#${issueNumber}`,
       taskColorIndex: 0,
     });
   });
@@ -153,10 +190,11 @@ describe('runWithWorkerPool', () => {
     // Then
     expect(mockExecuteAndCompleteTask).toHaveBeenCalledTimes(1);
     const parallelOpts = mockExecuteAndCompleteTask.mock.calls[0]?.[5];
-    expect(parallelOpts).toEqual({
+    expect(parallelOpts).toMatchObject({
       abortSignal: expect.any(AbortSignal),
       taskPrefix: undefined,
       taskColorIndex: undefined,
+      taskDisplayLabel: undefined,
     });
   });
 

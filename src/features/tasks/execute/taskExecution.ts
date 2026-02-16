@@ -51,7 +51,22 @@ function resolveTaskIssue(issueNumber: number | undefined): ReturnType<typeof fe
 }
 
 async function executeTaskWithResult(options: ExecuteTaskOptions): Promise<PieceExecutionResult> {
-  const { task, cwd, pieceIdentifier, projectCwd, agentOverrides, interactiveUserInput, interactiveMetadata, startMovement, retryNote, reportDirName, abortSignal, taskPrefix, taskColorIndex } = options;
+  const {
+    task,
+    cwd,
+    pieceIdentifier,
+    projectCwd,
+    agentOverrides,
+    interactiveUserInput,
+    interactiveMetadata,
+    startMovement,
+    retryNote,
+    reportDirName,
+    abortSignal,
+    taskPrefix,
+    taskColorIndex,
+    taskDisplayLabel,
+  } = options;
   const pieceConfig = loadPieceByIdentifier(pieceIdentifier, projectCwd);
 
   if (!pieceConfig) {
@@ -91,8 +106,9 @@ async function executeTaskWithResult(options: ExecuteTaskOptions): Promise<Piece
     abortSignal,
     taskPrefix,
     taskColorIndex,
+    taskDisplayLabel,
   });
-}
+  }
 
 /**
  * Execute a single task with piece.
@@ -116,7 +132,7 @@ export async function executeAndCompleteTask(
   cwd: string,
   pieceName: string,
   options?: TaskExecutionOptions,
-  parallelOptions?: { abortSignal?: AbortSignal; taskPrefix?: string; taskColorIndex?: number },
+  parallelOptions?: { abortSignal?: AbortSignal; taskPrefix?: string; taskColorIndex?: number; taskDisplayLabel?: string },
 ): Promise<boolean> {
   const startedAt = new Date().toISOString();
   const taskAbortController = new AbortController();
@@ -164,6 +180,7 @@ export async function executeAndCompleteTask(
       abortSignal: taskAbortSignal,
       taskPrefix: parallelOptions?.taskPrefix,
       taskColorIndex: parallelOptions?.taskColorIndex,
+      taskDisplayLabel: parallelOptions?.taskDisplayLabel,
     });
 
     const taskSuccess = taskRunResult.success;

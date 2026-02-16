@@ -232,7 +232,11 @@ export async function executePiece(
 
   // When taskPrefix is set (parallel execution), route all output through TaskPrefixWriter
   const prefixWriter = options.taskPrefix != null
-    ? new TaskPrefixWriter({ taskName: options.taskPrefix, colorIndex: options.taskColorIndex! })
+    ? new TaskPrefixWriter({
+      taskName: options.taskPrefix,
+      colorIndex: options.taskColorIndex!,
+      displayLabel: options.taskDisplayLabel,
+    })
     : undefined;
   const out = createOutputFns(prefixWriter);
 
