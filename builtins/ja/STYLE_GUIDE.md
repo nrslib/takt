@@ -6,6 +6,7 @@
 |---------|--------|--------|
 | ペルソナ | [PERSONA_STYLE_GUIDE.md](PERSONA_STYLE_GUIDE.md) | system prompt（`{{agentDefinition}}`） |
 | ポリシー | [POLICY_STYLE_GUIDE.md](POLICY_STYLE_GUIDE.md) | user message（instruction 内） |
+| ナレッジ | [KNOWLEDGE_STYLE_GUIDE.md](KNOWLEDGE_STYLE_GUIDE.md) | user message（instruction 内） |
 | インストラクション | [INSTRUCTION_STYLE_GUIDE.md](INSTRUCTION_STYLE_GUIDE.md) | Phase 1 メッセージ（`{{instructions}}`） |
 | 出力契約 | [OUTPUT_CONTRACT_STYLE_GUIDE.md](OUTPUT_CONTRACT_STYLE_GUIDE.md) | `report.format` |
 
@@ -61,7 +62,8 @@ User Message (Phase 1):
 ```
 この内容は…
 ├── 特定のエージェントだけが必要 → ペルソナ
-├── 複数のエージェントが共有 → ポリシー
+├── 「〜すべき」行動規範 → ポリシー
+├── 「〜はこう動く」「〜はこういう設計にすべき」ドメイン知識 → ナレッジ
 ├── ムーブメント固有の手順 → インストラクション
 └── エージェント出力の構造定義 → 出力契約
 ```
