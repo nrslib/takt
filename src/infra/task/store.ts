@@ -5,23 +5,15 @@ import { TasksFileSchema, type TasksFileData } from './schema.js';
 import { createLogger } from '../../shared/utils/index.js';
 
 const log = createLogger('task-store');
-const LOCK_WAIT_MS = 5_000;
-const LOCK_POLL_MS = 50;
-
-function sleepSync(ms: number): void {
-  const arr = new Int32Array(new SharedArrayBuffer(4));
-  Atomics.wait(arr, 0, 0, ms);
-}
 
 export class TaskStore {
   private readonly tasksFile: string;
-  private readonly lockFile: string;
   private readonly taktDir: string;
+  private locked = false;
 
   constructor(private readonly projectDir: string) {
     this.taktDir = path.join(projectDir, '.takt');
     this.tasksFile = path.join(this.taktDir, 'tasks.yaml');
-    this.lockFile = path.join(this.taktDir, 'tasks.yaml.lock');
   }
 
   getTasksFilePath(): string {
@@ -79,103 +71,14 @@ export class TaskStore {
   }
 
   private withLock<T>(fn: () => T): T {
-    this.acquireLock();
+    if (this.locked) {
+      throw new Error('TaskStore: reentrant lock detected');
+    }
+    this.locked = true;
     try {
       return fn();
     } finally {
-      this.releaseLock();
-    }
-  }
-
-  private acquireLock(): void {
-    this.ensureDirs();
-    const start = Date.now();
-
-    while (true) {
-      try {
-        fs.writeFileSync(this.lockFile, String(process.pid), { encoding: 'utf-8', flag: 'wx' });
-        return;
-      } catch (err) {
-        const nodeErr = err as NodeJS.ErrnoException;
-        if (nodeErr.code !== 'EEXIST') {
-          throw err;
-        }
-      }
-
-      if (this.isStaleLock()) {
-        this.removeStaleLock();
-        continue;
-      }
-
-      if (Date.now() - start >= LOCK_WAIT_MS) {
-        throw new Error(`Failed to acquire tasks lock within ${LOCK_WAIT_MS}ms`);
-      }
-
-      sleepSync(LOCK_POLL_MS);
-    }
-  }
-
-  private isStaleLock(): boolean {
-    let pidRaw: string;
-    try {
-      pidRaw = fs.readFileSync(this.lockFile, 'utf-8').trim();
-    } catch (err) {
-      const nodeErr = err as NodeJS.ErrnoException;
-      if (nodeErr.code === 'ENOENT') {
-        return false;
-      }
-      throw err;
-    }
-
-    const pid = Number.parseInt(pidRaw, 10);
-    if (!Number.isInteger(pid) || pid <= 0) {
-      return true;
-    }
-
-    return !this.isProcessAlive(pid);
-  }
-
-  private removeStaleLock(): void {
-    try {
-      fs.unlinkSync(this.lockFile);
-    } catch (err) {
-      const nodeErr = err as NodeJS.ErrnoException;
-      if (nodeErr.code !== 'ENOENT') {
-        log.debug('Failed to remove stale lock, retrying.', { lockFile: this.lockFile, error: String(err) });
-      }
-    }
-  }
-
-  private isProcessAlive(pid: number): boolean {
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch (err) {
-      const nodeErr = err as NodeJS.ErrnoException;
-      if (nodeErr.code === 'ESRCH') {
-        return false;
-      }
-      if (nodeErr.code === 'EPERM') {
-        return true;
-      }
-      throw err;
-    }
-  }
-
-  private releaseLock(): void {
-    try {
-      const holder = fs.readFileSync(this.lockFile, 'utf-8').trim();
-      if (holder !== String(process.pid)) {
-        return;
-      }
-      fs.unlinkSync(this.lockFile);
-    } catch (err) {
-      const nodeErr = err as NodeJS.ErrnoException;
-      if (nodeErr.code === 'ENOENT') {
-        return;
-      }
-      log.debug('Failed to release tasks lock.', { lockFile: this.lockFile, error: String(err) });
-      throw err;
+      this.locked = false;
     }
   }
 }

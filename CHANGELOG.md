@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.17.3] - 2026-02-16
+
+### Added
+
+- ビルトインの AI アンチパターンポリシーとフロントエンドナレッジに API クライアント生成の一貫性ルールを追加 — 生成ツール（Orval 等）が存在するプロジェクトでの手書きクライアント混在を検出
+
+### Fixed
+
+- タスクストアのロック解放時に EPERM クラッシュが発生する問題を修正 — ファイルベースロックからインメモリガードに置き換え
+
+### Internal
+
+- e2e テストの vitest 設定を共通化し、forceExit オプション追加でゾンビワーカーを防止
+
 ## [0.17.2] - 2026-02-15
 
 ### Added

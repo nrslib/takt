@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, writeFileSync, existsSync, rmSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
@@ -92,32 +92,6 @@ describe('TaskRunner (tasks.yaml)', () => {
 
     const recovered = runner.recoverInterruptedRunningTasks();
     expect(recovered).toBe(0);
-  });
-
-  it('should take over stale lock file with invalid pid', () => {
-    mkdirSync(join(testDir, '.takt'), { recursive: true });
-    writeFileSync(join(testDir, '.takt', 'tasks.yaml.lock'), 'invalid-pid', 'utf-8');
-
-    const task = runner.addTask('Task with stale lock');
-
-    expect(task.name).toContain('task-with-stale-lock');
-    expect(existsSync(join(testDir, '.takt', 'tasks.yaml.lock'))).toBe(false);
-  });
-
-  it('should timeout when lock file is held by a live process', () => {
-    mkdirSync(join(testDir, '.takt'), { recursive: true });
-    writeFileSync(join(testDir, '.takt', 'tasks.yaml.lock'), String(process.pid), 'utf-8');
-
-    const dateNowSpy = vi.spyOn(Date, 'now');
-    dateNowSpy.mockReturnValueOnce(0);
-    dateNowSpy.mockReturnValue(5_000);
-
-    try {
-      expect(() => runner.listTasks()).toThrow('Failed to acquire tasks lock within 5000ms');
-    } finally {
-      dateNowSpy.mockRestore();
-      rmSync(join(testDir, '.takt', 'tasks.yaml.lock'), { force: true });
-    }
   });
 
   it('should recover from corrupted tasks.yaml and allow adding tasks again', () => {

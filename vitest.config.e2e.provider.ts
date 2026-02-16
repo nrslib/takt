@@ -1,7 +1,9 @@
 import { defineConfig } from 'vitest/config';
+import { e2eBaseTestConfig } from './vitest.config.e2e.base';
 
 export default defineConfig({
   test: {
+    ...e2eBaseTestConfig,
     include: [
       'e2e/specs/add-and-run.e2e.ts',
       'e2e/specs/worktree.e2e.ts',
@@ -9,16 +11,5 @@ export default defineConfig({
       'e2e/specs/github-issue.e2e.ts',
       'e2e/specs/structured-output.e2e.ts',
     ],
-    environment: 'node',
-    globals: false,
-    testTimeout: 240000,
-    hookTimeout: 60000,
-    teardownTimeout: 30000,
-    pool: 'threads',
-    poolOptions: {
-      threads: {
-        singleThread: true,
-      },
-    },
   },
 });

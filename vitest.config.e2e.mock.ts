@@ -1,7 +1,9 @@
 import { defineConfig } from 'vitest/config';
+import { e2eBaseTestConfig } from './vitest.config.e2e.base';
 
 export default defineConfig({
   test: {
+    ...e2eBaseTestConfig,
     include: [
       'e2e/specs/direct-task.e2e.ts',
       'e2e/specs/pipeline-skip-git.e2e.ts',
@@ -34,16 +36,5 @@ export default defineConfig({
       'e2e/specs/quiet-mode.e2e.ts',
       'e2e/specs/task-content-file.e2e.ts',
     ],
-    environment: 'node',
-    globals: false,
-    testTimeout: 240000,
-    hookTimeout: 60000,
-    teardownTimeout: 30000,
-    pool: 'threads',
-    poolOptions: {
-      threads: {
-        singleThread: true,
-      },
-    },
   },
 });
