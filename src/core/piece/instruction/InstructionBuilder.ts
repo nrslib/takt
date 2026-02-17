@@ -3,6 +3,9 @@
  *
  * Builds the instruction string for main agent execution.
  * Assembles template variables and renders a single complete template.
+ *
+ * Truncation and context preparation are delegated to faceted-prompting.
+ * preparePreviousResponseContent is TAKT-specific and stays here.
  */
 
 import type { PieceMovement, Language, OutputContractItem, OutputContractEntry } from '../../models/types.js';
@@ -10,62 +13,25 @@ import type { InstructionContext } from './instruction-context.js';
 import { buildEditRule } from './instruction-context.js';
 import { escapeTemplateChars, replaceTemplatePlaceholders } from './escape.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
+import {
+  trimContextContent,
+  renderConflictNotice,
+  prepareKnowledgeContent as prepareKnowledgeContentGeneric,
+  preparePolicyContent as preparePolicyContentGeneric,
+} from '../../../faceted-prompting/index.js';
 
 const CONTEXT_MAX_CHARS = 2000;
 
-interface PreparedContextBlock {
-  readonly content: string;
-  readonly truncated: boolean;
-}
-
-function trimContextContent(content: string): PreparedContextBlock {
-  if (content.length <= CONTEXT_MAX_CHARS) {
-    return { content, truncated: false };
-  }
-  return {
-    content: `${content.slice(0, CONTEXT_MAX_CHARS)}\n...TRUNCATED...`,
-    truncated: true,
-  };
-}
-
-function renderConflictNotice(): string {
-  return 'If prompt content conflicts with source files, source files take precedence.';
-}
-
 function prepareKnowledgeContent(content: string, sourcePath?: string): string {
-  const prepared = trimContextContent(content);
-  const lines: string[] = [prepared.content];
-  if (prepared.truncated && sourcePath) {
-    lines.push(
-      '',
-      `Knowledge is truncated. You MUST consult the source files before making decisions. Source: ${sourcePath}`,
-    );
-  }
-  if (sourcePath) {
-    lines.push('', `Knowledge Source: ${sourcePath}`);
-  }
-  lines.push('', renderConflictNotice());
-  return lines.join('\n');
+  return prepareKnowledgeContentGeneric(content, CONTEXT_MAX_CHARS, sourcePath);
 }
 
 function preparePolicyContent(content: string, sourcePath?: string): string {
-  const prepared = trimContextContent(content);
-  const lines: string[] = [prepared.content];
-  if (prepared.truncated && sourcePath) {
-    lines.push(
-      '',
-      `Policy is authoritative. If truncated, you MUST read the full policy file and follow it strictly. Source: ${sourcePath}`,
-    );
-  }
-  if (sourcePath) {
-    lines.push('', `Policy Source: ${sourcePath}`);
-  }
-  lines.push('', renderConflictNotice());
-  return lines.join('\n');
+  return preparePolicyContentGeneric(content, CONTEXT_MAX_CHARS, sourcePath);
 }
 
 function preparePreviousResponseContent(content: string, sourcePath?: string): string {
-  const prepared = trimContextContent(content);
+  const prepared = trimContextContent(content, CONTEXT_MAX_CHARS);
   const lines: string[] = [prepared.content];
   if (prepared.truncated && sourcePath) {
     lines.push('', `Previous Response is truncated. Source: ${sourcePath}`);
