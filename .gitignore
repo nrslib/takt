@@ -32,6 +32,16 @@ coverage/
 .takt/
 !.takt/pieces/
 !.takt/pieces/**
+!.takt/personas/
+!.takt/personas/**
+!.takt/policies/
+!.takt/policies/**
+!.takt/knowledge/
+!.takt/knowledge/**
+!.takt/instructions/
+!.takt/instructions/**
+!.takt/output-contracts/
+!.takt/output-contracts/**
 
 task_planning/
 
