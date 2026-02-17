@@ -1,12 +1,12 @@
-name: research
-description: Research piece - autonomously executes research without asking questions
+name: deep-research
+description: 深掘り調査ピース - 発見駆動で新たな問いを追跡し、多角的に調査する
 piece_config:
   provider_options:
     codex:
       network_access: true
     opencode:
       network_access: true
-max_movements: 10
+max_movements: 15
 initial_movement: plan
 movements:
   - name: plan
@@ -21,9 +21,9 @@ movements:
       - WebSearch
       - WebFetch
     rules:
-      - condition: Planning is complete
+      - condition: 計画が完了した
         next: dig
-      - condition: Insufficient information to create a plan
+      - condition: 情報が不足しており計画を立てられない
         next: ABORT
   - name: dig
     persona: research-digger
@@ -37,10 +37,26 @@ movements:
       - WebSearch
       - WebFetch
     rules:
-      - condition: Research is complete
-        next: supervise
-      - condition: Unable to conduct research
+      - condition: 調査が完了した
+        next: analyze
+      - condition: 調査を実行できない
         next: ABORT
+  - name: analyze
+    persona: research-analyzer
+    policy: research
+    knowledge: research
+    instruction: research-analyze
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
+    rules:
+      - condition: 新たな問いがあり追加調査が必要
+        next: dig
+      - condition: 十分に掘り下げた
+        next: supervise
   - name: supervise
     persona: research-supervisor
     policy: research
@@ -53,7 +69,7 @@ movements:
       - WebSearch
       - WebFetch
     rules:
-      - condition: Research results adequately answer the original request
+      - condition: 調査結果が元の依頼に対して十分である
         next: COMPLETE
-      - condition: Research results are insufficient and replanning is needed
+      - condition: 調査結果が不十分であり、計画からやり直す必要がある
         next: plan

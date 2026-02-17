@@ -25,6 +25,10 @@ movements:
   - name: plan
     edit: false
     persona: planner
+    knowledge:
+      - frontend
+      - backend
+      - architecture
     allowed_tools:
       - Read
       - Glob

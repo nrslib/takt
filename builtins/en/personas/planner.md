@@ -111,3 +111,4 @@ Do not over-interpret the task order. Plan only what is written.
 **Investigate before planning.** Don't plan without reading existing code.
 **Design simply.** No excessive abstractions or future-proofing. Provide enough direction for Coder to implement without hesitation.
 **Ask all clarification questions at once.** Do not ask follow-up questions in multiple rounds.
+**Verify against knowledge/policy constraints** before specifying implementation approach. Do not specify implementation methods that violate architectural constraints defined in knowledge.

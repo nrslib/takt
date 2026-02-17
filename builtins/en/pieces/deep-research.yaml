@@ -1,12 +1,12 @@
-name: research
-description: Research piece - autonomously executes research without asking questions
+name: deep-research
+description: Deep research piece - discovery-driven investigation that follows emerging questions with multi-perspective analysis
 piece_config:
   provider_options:
     codex:
       network_access: true
     opencode:
       network_access: true
-max_movements: 10
+max_movements: 15
 initial_movement: plan
 movements:
   - name: plan
@@ -38,9 +38,25 @@ movements:
       - WebFetch
     rules:
       - condition: Research is complete
-        next: supervise
+        next: analyze
       - condition: Unable to conduct research
         next: ABORT
+  - name: analyze
+    persona: research-analyzer
+    policy: research
+    knowledge: research
+    instruction: research-analyze
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
+    rules:
+      - condition: New questions exist and additional research is needed
+        next: dig
+      - condition: Sufficiently investigated
+        next: supervise
   - name: supervise
     persona: research-supervisor
     policy: research

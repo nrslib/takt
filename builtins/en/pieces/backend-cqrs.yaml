@@ -12,6 +12,10 @@ movements:
   - name: plan
     edit: false
     persona: planner
+    knowledge:
+      - backend
+      - cqrs-es
+      - architecture
     allowed_tools:
       - Read
       - Glob

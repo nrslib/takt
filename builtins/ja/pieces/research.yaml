@@ -11,34 +11,15 @@ initial_movement: plan
 movements:
   - name: plan
     persona: research-planner
+    policy: research
+    knowledge: research
+    instruction: research-plan
     allowed_tools:
       - Read
       - Glob
       - Grep
       - WebSearch
       - WebFetch
-    instruction_template: |
-      ## ピース状況
-      - イテレーション: {iteration}/{max_movements}（ピース全体）
-      - ムーブメント実行回数: {movement_iteration}（このムーブメントの実行回数）
-      - ムーブメント: plan
-
-      ## 調査依頼
-      {task}
-
-      ## Supervisorからのフィードバック（再計画の場合）
-      {previous_response}
-
-      ## 追加のユーザー入力
-      {user_inputs}
-
-      ## 指示
-      上記の調査依頼について、調査計画を立ててください。
-
-      **重要**: ユーザーに質問しないでください。
-      - 不明点は仮定を置いて進める
-      - 複数の解釈がある場合は、すべてを調査対象に含める
-      - Supervisorからフィードバックがある場合は、指摘を反映した計画を作成
     rules:
       - condition: 計画が完了した
         next: dig
@@ -46,39 +27,15 @@ movements:
         next: ABORT
   - name: dig
     persona: research-digger
+    policy: research
+    knowledge: research
+    instruction: research-dig
     allowed_tools:
       - Read
       - Glob
       - Grep
       - WebSearch
       - WebFetch
-    instruction_template: |
-      ## ピース状況
-      - イテレーション: {iteration}/{max_movements}（ピース全体）
-      - ムーブメント実行回数: {movement_iteration}（このムーブメントの実行回数）
-      - ムーブメント: dig
-
-      ## 元の調査依頼
-      {task}
-
-      ## 調査計画
-      {previous_response}
-
-      ## 追加のユーザー入力
-      {user_inputs}
-
-      ## 指示
-      上記の調査計画に従って、実際に調査を実行してください。
-
-      **重要**: ユーザーに質問しないでください。
-      - 調査できる範囲で調査する
-      - 調査できなかった項目は「調査不可」と報告
-
-      利用可能なツール:
-      - Web検索
-      - GitHub検索（gh コマンド）
-      - コードベース検索
-      - ファイル読み取り
     rules:
       - condition: 調査が完了した
         next: supervise
@@ -86,29 +43,15 @@ movements:
         next: ABORT
   - name: supervise
     persona: research-supervisor
+    policy: research
+    knowledge: research
+    instruction: research-supervise
     allowed_tools:
       - Read
       - Glob
       - Grep
       - WebSearch
       - WebFetch
-    instruction_template: |
-      ## ピース状況
-      - イテレーション: {iteration}/{max_movements}（ピース全体）
-      - ムーブメント実行回数: {movement_iteration}（このムーブメントの実行回数）
-      - ムーブメント: supervise (調査品質評価)
-
-      ## 元の調査依頼
-      {task}
-
-      ## Digger の調査結果
-      {previous_response}
-
-      ## 指示
-      調査結果を評価し、元の依頼に対して十分な回答になっているか判断してください。
-
-      **重要**: 問題がある場合は、Plannerへの具体的な指示を含めてください。
-    pass_previous_response: false
     rules:
       - condition: 調査結果が元の依頼に対して十分である
         next: COMPLETE
