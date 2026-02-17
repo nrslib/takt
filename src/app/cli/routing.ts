@@ -86,6 +86,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
   const createWorktreeOverride = parseCreateWorktreeOption(opts.createWorktree as string | undefined);
   const selectOptions: SelectAndExecuteOptions = {
     autoPr: opts.autoPr === true,
+    autoPrDraft: opts.autoPrDraft === true ? true : undefined,
     repo: opts.repo as string | undefined,
     piece: opts.piece as string | undefined,
     createWorktree: createWorktreeOverride,
@@ -99,6 +100,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       piece: (opts.piece as string | undefined) ?? DEFAULT_PIECE_NAME,
       branch: opts.branch as string | undefined,
       autoPr: opts.autoPr === true,
+      autoPrDraft: opts.autoPrDraft === true ? true : undefined,
       repo: opts.repo as string | undefined,
       skipGit: opts.skipGit === true,
       cwd: resolvedCwd,

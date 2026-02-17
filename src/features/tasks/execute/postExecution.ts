@@ -15,20 +15,35 @@ import type { GitHubIssue } from '../../../infra/github/index.js';
 
 const log = createLogger('postExecution');
 
+async function resolveBooleanOption(
+  cliValue: boolean | undefined,
+  configValue: boolean | undefined,
+  promptText: string,
+): Promise<boolean> {
+  if (typeof cliValue === 'boolean') {
+    return cliValue;
+  }
+  if (typeof configValue === 'boolean') {
+    return configValue;
+  }
+  return confirm(promptText, true);
+}
+
 /**
  * Resolve auto-PR setting with priority: CLI option > config > prompt.
  */
 export async function resolveAutoPr(optionAutoPr: boolean | undefined): Promise<boolean> {
-  if (typeof optionAutoPr === 'boolean') {
-    return optionAutoPr;
-  }
-
   const globalConfig = loadGlobalConfig();
-  if (typeof globalConfig.autoPr === 'boolean') {
-    return globalConfig.autoPr;
-  }
+  return resolveBooleanOption(optionAutoPr, globalConfig.autoPr, 'Create pull request?');
+}
 
-  return confirm('Create pull request?', true);
+/**
+ * Resolve auto-PR draft setting with priority: CLI option > config > prompt.
+ * Only called when auto-PR is enabled.
+ */
+export async function resolveAutoPrDraft(optionAutoPrDraft: boolean | undefined): Promise<boolean> {
+  const globalConfig = loadGlobalConfig();
+  return resolveBooleanOption(optionAutoPrDraft, globalConfig.autoPrDraft, 'Create as draft?');
 }
 
 export interface PostExecutionOptions {
@@ -38,6 +53,7 @@ export interface PostExecutionOptions {
   branch?: string;
   baseBranch?: string;
   shouldCreatePr: boolean;
+  draft?: boolean;
   pieceIdentifier?: string;
   issues?: GitHubIssue[];
   repo?: string;
@@ -47,7 +63,7 @@ export interface PostExecutionOptions {
  * Auto-commit, push, and optionally create a PR after successful task execution.
  */
 export async function postExecutionFlow(options: PostExecutionOptions): Promise<void> {
-  const { execCwd, projectCwd, task, branch, baseBranch, shouldCreatePr, pieceIdentifier, issues, repo } = options;
+  const { execCwd, projectCwd, task, branch, baseBranch, shouldCreatePr, draft, pieceIdentifier, issues, repo } = options;
 
   const commitResult = autoCommitAndPush(execCwd, task, projectCwd);
   if (commitResult.success && commitResult.commitHash) {
@@ -57,7 +73,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
   }
 
   if (commitResult.success && commitResult.commitHash && branch && shouldCreatePr) {
-    info('Creating pull request...');
+    info(draft ? 'Creating draft pull request...' : 'Creating pull request...');
     try {
       pushBranch(projectCwd, branch);
     } catch (pushError) {
@@ -71,9 +87,10 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
       body: prBody,
       base: baseBranch,
       repo,
+      draft,
     });
     if (prResult.success) {
-      success(`PR created: ${prResult.url}`);
+      success(draft ? `Draft PR created: ${prResult.url}` : `PR created: ${prResult.url}`);
     } else {
       error(`PR creation failed: ${prResult.error}`);
     }

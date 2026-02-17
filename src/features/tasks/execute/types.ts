@@ -106,6 +106,8 @@ export interface PipelineExecutionOptions {
   branch?: string;
   /** Whether to create a PR after successful execution */
   autoPr: boolean;
+  /** Whether to create the PR as a draft */
+  autoPrDraft?: boolean;
   /** Repository in owner/repo format */
   repo?: string;
   /** Skip branch creation, commit, and push (piece-only execution) */
@@ -125,6 +127,7 @@ export interface WorktreeConfirmationResult {
 
 export interface SelectAndExecuteOptions {
   autoPr?: boolean;
+  autoPrDraft?: boolean;
   repo?: string;
   piece?: string;
   createWorktree?: boolean | undefined;

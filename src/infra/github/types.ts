@@ -26,6 +26,8 @@ export interface CreatePrOptions {
   base?: string;
   /** Repository in owner/repo format (optional, uses current repo if omitted) */
   repo?: string;
+  /** Create as draft PR */
+  draft?: boolean;
 }
 
 export interface CreatePrResult {

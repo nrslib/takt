@@ -17,6 +17,7 @@ export const TaskExecutionConfigSchema = z.object({
   start_movement: z.string().optional(),
   retry_note: z.string().optional(),
   auto_pr: z.boolean().optional(),
+  auto_pr_draft: z.boolean().optional(),
 });
 
 /**

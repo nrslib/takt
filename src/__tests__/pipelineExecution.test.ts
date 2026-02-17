@@ -214,6 +214,32 @@ describe('executePipeline', () => {
       expect.objectContaining({
         branch: 'fix/my-branch',
         repo: 'owner/repo',
+        draft: false,
+      }),
+    );
+  });
+
+  it('should create draft PR when --auto-pr-draft is specified', async () => {
+    mockExecuteTask.mockResolvedValueOnce(true);
+    mockCreatePullRequest.mockReturnValueOnce({ success: true, url: 'https://github.com/test/pr/2' });
+
+    const exitCode = await executePipeline({
+      task: 'Fix the bug',
+      piece: 'default',
+      branch: 'fix/my-branch',
+      autoPr: true,
+      autoPrDraft: true,
+      repo: 'owner/repo',
+      cwd: '/tmp/test',
+    });
+
+    expect(exitCode).toBe(0);
+    expect(mockCreatePullRequest).toHaveBeenCalledWith(
+      '/tmp/test',
+      expect.objectContaining({
+        branch: 'fix/my-branch',
+        repo: 'owner/repo',
+        draft: true,
       }),
     );
   });

@@ -21,6 +21,7 @@ export interface ResolvedTaskExecution {
   startMovement?: string;
   retryNote?: string;
   autoPr: boolean;
+  autoPrDraft: boolean;
   issueNumber?: number;
 }
 
@@ -75,7 +76,7 @@ export async function resolveTaskExecution(
 
   const data = task.data;
   if (!data) {
-    return { execCwd: defaultCwd, execPiece: defaultPiece, isWorktree: false, autoPr: false };
+    return { execCwd: defaultCwd, execPiece: defaultPiece, isWorktree: false, autoPr: false, autoPrDraft: false };
   }
 
   let execCwd = defaultCwd;
@@ -128,12 +129,20 @@ export async function resolveTaskExecution(
   const startMovement = data.start_movement;
   const retryNote = data.retry_note;
 
+  const globalConfig = loadGlobalConfig();
+
   let autoPr: boolean;
   if (data.auto_pr !== undefined) {
     autoPr = data.auto_pr;
   } else {
-    const globalConfig = loadGlobalConfig();
     autoPr = globalConfig.autoPr ?? false;
+  }
+
+  let autoPrDraft: boolean;
+  if (data.auto_pr_draft !== undefined) {
+    autoPrDraft = data.auto_pr_draft;
+  } else {
+    autoPrDraft = globalConfig.autoPrDraft ?? false;
   }
 
   return {
@@ -141,6 +150,7 @@ export async function resolveTaskExecution(
     execPiece,
     isWorktree,
     autoPr,
+    autoPrDraft,
     ...(taskPrompt ? { taskPrompt } : {}),
     ...(reportDirName ? { reportDirName } : {}),
     ...(branch ? { branch } : {}),

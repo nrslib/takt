@@ -121,6 +121,7 @@ describe('resolveTaskExecution', () => {
       execPiece: 'default',
       isWorktree: false,
       autoPr: false,
+      autoPrDraft: false,
     });
     expect(mockSummarizeTaskName).not.toHaveBeenCalled();
     expect(mockCreateSharedClone).not.toHaveBeenCalled();
@@ -179,6 +180,7 @@ describe('resolveTaskExecution', () => {
       execPiece: 'default',
       isWorktree: true,
       autoPr: false,
+      autoPrDraft: false,
       branch: 'takt/20260128T0504-add-auth',
       worktreePath: '/project/../20260128T0504-add-auth',
       baseBranch: 'main',
@@ -331,6 +333,44 @@ describe('resolveTaskExecution', () => {
     expect(result.autoPr).toBe(true);
   });
 
+  it('should return autoPrDraft from task YAML when specified', async () => {
+    // Given: Task with auto_pr_draft option
+    const task: TaskInfo = {
+      name: 'task-with-auto-pr-draft',
+      content: 'Task content',
+      filePath: '/tasks/task.yaml',
+      data: {
+        task: 'Task content',
+        auto_pr_draft: true,
+      },
+    };
+
+    // When
+    const result = await resolveTaskExecution(task, '/project', 'default');
+
+    // Then
+    expect(result.autoPrDraft).toBe(true);
+  });
+
+  it('should return autoPrDraft: false from task YAML when specified as false', async () => {
+    // Given: Task with auto_pr_draft: false
+    const task: TaskInfo = {
+      name: 'task-no-auto-pr-draft',
+      content: 'Task content',
+      filePath: '/tasks/task.yaml',
+      data: {
+        task: 'Task content',
+        auto_pr_draft: false,
+      },
+    };
+
+    // When
+    const result = await resolveTaskExecution(task, '/project', 'default');
+
+    // Then
+    expect(result.autoPrDraft).toBe(false);
+  });
+
   it('should return autoPr: false from task YAML when specified as false', async () => {
     // Given: Task with auto_pr: false
     const task: TaskInfo = {
@@ -373,6 +413,55 @@ describe('resolveTaskExecution', () => {
 
     // Then
     expect(result.autoPr).toBe(true);
+  });
+
+  it('should fall back to global config autoPrDraft when task YAML does not specify', async () => {
+    // Given: Task without auto_pr_draft, global config has autoPrDraft
+    mockLoadGlobalConfig.mockReturnValue({
+      language: 'en',
+      defaultPiece: 'default',
+      logLevel: 'info',
+      autoPrDraft: true,
+    });
+
+    const task: TaskInfo = {
+      name: 'task-no-auto-pr-draft-setting',
+      content: 'Task content',
+      filePath: '/tasks/task.yaml',
+      data: {
+        task: 'Task content',
+      },
+    };
+
+    // When
+    const result = await resolveTaskExecution(task, '/project', 'default');
+
+    // Then
+    expect(result.autoPrDraft).toBe(true);
+  });
+
+  it('should return false autoPrDraft when neither task nor config specifies', async () => {
+    // Given: Neither task nor config has autoPrDraft
+    mockLoadGlobalConfig.mockReturnValue({
+      language: 'en',
+      defaultPiece: 'default',
+      logLevel: 'info',
+    });
+
+    const task: TaskInfo = {
+      name: 'task-default-draft',
+      content: 'Task content',
+      filePath: '/tasks/task.yaml',
+      data: {
+        task: 'Task content',
+      },
+    };
+
+    // When
+    const result = await resolveTaskExecution(task, '/project', 'default');
+
+    // Then
+    expect(result.autoPrDraft).toBe(false);
   });
 
   it('should return false autoPr when neither task nor config specifies', async () => {

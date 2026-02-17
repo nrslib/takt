@@ -69,6 +69,8 @@ export interface GlobalConfig {
   worktreeDir?: string;
   /** Auto-create PR after worktree execution (default: prompt in interactive mode) */
   autoPr?: boolean;
+  /** Create PR as draft when auto-PR is enabled */
+  autoPrDraft?: boolean;
   /** List of builtin piece/agent names to exclude from fallback loading */
   disabledBuiltins?: string[];
   /** Enable builtin pieces from builtins/{lang}/pieces */

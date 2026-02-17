@@ -199,7 +199,8 @@ export async function executePipeline(options: PipelineExecutionOptions): Promis
     if (skipGit) {
       info('--auto-pr is ignored when --skip-git is specified (no push was performed)');
     } else if (branch) {
-      info('Creating pull request...');
+      const draft = options.autoPrDraft === true;
+      info(draft ? 'Creating draft pull request...' : 'Creating pull request...');
       const prTitle = issue ? issue.title : (options.task ?? 'Pipeline task');
       const report = `Piece \`${piece}\` completed successfully.`;
       const prBody = buildPipelinePrBody(pipelineConfig, issue, report);
@@ -210,10 +211,11 @@ export async function executePipeline(options: PipelineExecutionOptions): Promis
         body: prBody,
         base: baseBranch,
         repo: options.repo,
+        draft,
       });
 
       if (prResult.success) {
-        success(`PR created: ${prResult.url}`);
+        success(draft ? `Draft PR created: ${prResult.url}` : `PR created: ${prResult.url}`);
       } else {
         error(`PR creation failed: ${prResult.error}`);
         return EXIT_PR_CREATION_FAILED;

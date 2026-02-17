@@ -36,7 +36,7 @@ function resolveUniqueTaskSlug(cwd: string, baseSlug: string): string {
 export async function saveTaskFile(
   cwd: string,
   taskContent: string,
-  options?: { piece?: string; issue?: number; worktree?: boolean | string; branch?: string; autoPr?: boolean },
+  options?: { piece?: string; issue?: number; worktree?: boolean | string; branch?: string; autoPr?: boolean; autoPrDraft?: boolean },
 ): Promise<{ taskName: string; tasksFile: string }> {
   const runner = new TaskRunner(cwd);
   const taskSlug = resolveUniqueTaskSlug(cwd, generateReportDir(taskContent));
@@ -51,6 +51,7 @@ export async function saveTaskFile(
     ...(options?.piece && { piece: options.piece }),
     ...(options?.issue !== undefined && { issue: options.issue }),
     ...(options?.autoPr !== undefined && { auto_pr: options.autoPr }),
+    ...(options?.autoPrDraft !== undefined && { auto_pr_draft: options.autoPrDraft }),
   };
   const created = runner.addTask(taskContent, {
     ...config,
@@ -90,6 +91,7 @@ interface WorktreeSettings {
   worktree?: boolean | string;
   branch?: string;
   autoPr?: boolean;
+  autoPrDraft?: boolean;
 }
 
 function displayTaskCreationResult(
@@ -105,7 +107,9 @@ function displayTaskCreationResult(
   if (settings.branch) {
     info(`  Branch: ${settings.branch}`);
   }
-  if (settings.autoPr) {
+  if (settings.autoPr && settings.autoPrDraft) {
+    info(`  Auto-PR: draft`);
+  } else if (settings.autoPr) {
     info(`  Auto-PR: yes`);
   }
   if (piece) info(`  Piece: ${piece}`);
@@ -138,7 +142,12 @@ async function promptWorktreeSettings(): Promise<WorktreeSettings> {
 
   const autoPr = await confirm('Auto-create PR?', true);
 
-  return { worktree, branch, autoPr };
+  let autoPrDraft: boolean | undefined;
+  if (autoPr) {
+    autoPrDraft = await confirm('Create as draft?', true);
+  }
+
+  return { worktree, branch, autoPr, autoPrDraft };
 }
 
 /**

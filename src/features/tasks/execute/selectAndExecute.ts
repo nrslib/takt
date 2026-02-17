@@ -16,7 +16,7 @@ import { DEFAULT_PIECE_NAME } from '../../../shared/constants.js';
 import { info, error, withProgress } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import { executeTask } from './taskExecution.js';
-import { resolveAutoPr, postExecutionFlow } from './postExecution.js';
+import { resolveAutoPr, resolveAutoPrDraft, postExecutionFlow } from './postExecution.js';
 import type { TaskExecutionOptions, WorktreeConfirmationResult, SelectAndExecuteOptions } from './types.js';
 import { selectPiece } from '../../pieceSelection/index.js';
 import { buildBooleanTaskResult, persistTaskError, persistTaskResult } from './taskResultHandler.js';
@@ -100,11 +100,15 @@ export async function selectAndExecuteTask(
 
   // Ask for PR creation BEFORE execution (only if worktree is enabled)
   let shouldCreatePr = false;
+  let shouldDraft = false;
   if (isWorktree) {
     shouldCreatePr = await resolveAutoPr(options?.autoPr);
+    if (shouldCreatePr) {
+      shouldDraft = await resolveAutoPrDraft(options?.autoPrDraft);
+    }
   }
 
-  log.info('Starting task execution', { piece: pieceIdentifier, worktree: isWorktree, autoPr: shouldCreatePr });
+  log.info('Starting task execution', { piece: pieceIdentifier, worktree: isWorktree, autoPr: shouldCreatePr, autoPrDraft: shouldDraft });
   const taskRunner = new TaskRunner(cwd);
   const taskRecord = taskRunner.addTask(task, {
     piece: pieceIdentifier,
@@ -112,6 +116,7 @@ export async function selectAndExecuteTask(
     ...(branch ? { branch } : {}),
     ...(isWorktree ? { worktree_path: execCwd } : {}),
     auto_pr: shouldCreatePr,
+    auto_pr_draft: shouldDraft,
   });
   const startedAt = new Date().toISOString();
 
@@ -156,6 +161,7 @@ export async function selectAndExecuteTask(
       branch,
       baseBranch,
       shouldCreatePr,
+      draft: shouldDraft,
       pieceIdentifier,
       issues: options?.issues,
       repo: options?.repo,

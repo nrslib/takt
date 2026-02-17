@@ -49,7 +49,11 @@ export function createPullRequest(cwd: string, options: CreatePrOptions): Create
     args.push('--repo', options.repo);
   }
 
-  log.info('Creating PR', { branch: options.branch, title: options.title });
+  if (options.draft === true) {
+    args.push('--draft');
+  }
+
+  log.info('Creating PR', { branch: options.branch, title: options.title, draft: options.draft === true });
 
   try {
     const output = execFileSync('gh', args, {

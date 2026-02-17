@@ -182,6 +182,91 @@ describe('resolveAutoPr default in selectAndExecuteTask', () => {
     expect(mockFailTask).not.toHaveBeenCalled();
   });
 
+  it('should call draft confirm with default true when auto-PR is enabled', async () => {
+    // Given: worktree is enabled, auto-PR prompt returns true, draft prompt returns true
+    mockConfirm.mockResolvedValue(true);
+    mockSummarizeTaskName.mockResolvedValue('test-task');
+    mockCreateSharedClone.mockReturnValue({
+      path: '/project/../clone',
+      branch: 'takt/test-task',
+    });
+
+    mockAutoCommitAndPush.mockReturnValue({
+      success: false,
+      message: 'no changes',
+    });
+
+    // When
+    await selectAndExecuteTask('/project', 'test task', {
+      piece: 'default',
+      createWorktree: true,
+    });
+
+    // Then: the 'Create as draft?' confirm is called with default true
+    const draftCall = mockConfirm.mock.calls.find(
+      (call) => call[0] === 'Create as draft?',
+    );
+    expect(draftCall).toBeDefined();
+    expect(draftCall![1]).toBe(true);
+  });
+
+  it('should not call draft confirm when auto-PR is false', async () => {
+    // Given: worktree is enabled, auto-PR option is false
+    mockConfirm.mockResolvedValue(true);
+    mockSummarizeTaskName.mockResolvedValue('test-task');
+    mockCreateSharedClone.mockReturnValue({
+      path: '/project/../clone',
+      branch: 'takt/test-task',
+    });
+    mockExecuteTask.mockResolvedValue(true);
+    mockAutoCommitAndPush.mockReturnValue({
+      success: false,
+      message: 'no changes',
+    });
+
+    // When
+    await selectAndExecuteTask('/project', 'test task', {
+      piece: 'default',
+      createWorktree: true,
+      autoPr: false,
+    });
+
+    // Then: the 'Create as draft?' confirm is NOT called
+    const draftCall = mockConfirm.mock.calls.find(
+      (call) => call[0] === 'Create as draft?',
+    );
+    expect(draftCall).toBeUndefined();
+  });
+
+  it('should skip draft prompt when autoPrDraft CLI option is provided', async () => {
+    // Given: worktree is enabled, both auto-PR and draft are specified via CLI
+    mockConfirm.mockResolvedValue(true);
+    mockSummarizeTaskName.mockResolvedValue('test-task');
+    mockCreateSharedClone.mockReturnValue({
+      path: '/project/../clone',
+      branch: 'takt/test-task',
+    });
+    mockExecuteTask.mockResolvedValue(true);
+    mockAutoCommitAndPush.mockReturnValue({
+      success: false,
+      message: 'no changes',
+    });
+
+    // When
+    await selectAndExecuteTask('/project', 'test task', {
+      piece: 'default',
+      createWorktree: true,
+      autoPr: true,
+      autoPrDraft: true,
+    });
+
+    // Then: the 'Create as draft?' confirm is NOT called (CLI option used)
+    const draftCall = mockConfirm.mock.calls.find(
+      (call) => call[0] === 'Create as draft?',
+    );
+    expect(draftCall).toBeUndefined();
+  });
+
   it('should record task and fail when executeTask returns false', async () => {
     mockConfirm.mockResolvedValue(false);
     mockSummarizeTaskName.mockResolvedValue('test-task');
