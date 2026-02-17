@@ -6,3 +6,6 @@
 
 # Project configuration
 !config.yaml
+!.takt/
+!.takt/pieces/
+!.takt/pieces/**
