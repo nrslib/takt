@@ -30,6 +30,7 @@ coverage/
 
 # TAKT config (user data)
 .takt/
+!.takt/config.yaml
 !.takt/pieces/
 !.takt/pieces/**
 !.takt/personas/
