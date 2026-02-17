@@ -72,8 +72,55 @@ import { buildRunPaths } from '../../../core/piece/run/run-paths.js';
 import { resolveMovementProviderModel } from '../../../core/piece/provider-resolution.js';
 import { resolveRuntimeConfig } from '../../../core/runtime/runtime-environment.js';
 import { writeFileAtomic, ensureDir } from '../../../infra/config/index.js';
+import { readAndExtractFindings, readRecentConversations } from '../../../infra/fs/report-reader.js';
+import type { HealthSnapshot } from '../../../core/piece/health-monitor/types.js';
+import {
+  FindingTracker,
+  runHealthCheck,
+  createDefaultThresholds,
+  formatHealthReport,
+  buildConversationAnalysisPrompt,
+  parseAlignmentResponse,
+  applyMisalignedVerdict,
+} from '../../../core/piece/health-monitor/index.js';
+import { runAgent } from '../../../agents/runner.js';
 
 const log = createLogger('piece');
+
+/** Number of recent movements to include in conversation analysis (spec default: 3) */
+const CONVERSATION_LOG_DEPTH = 3;
+
+/**
+ * Run AI conversation alignment analysis asynchronously.
+ *
+ * Only called when the health verdict is stagnating or looping.
+ * Uses runAgent with readonly permissions and maxTurns: 1 for cost control.
+ */
+async function analyzeConversationAlignment(
+  prompt: string,
+  cwd: string,
+  snapshot: HealthSnapshot,
+  out: OutputFns,
+): Promise<void> {
+  try {
+    const response = await runAgent(undefined, prompt, {
+      cwd,
+      permissionMode: 'readonly',
+      maxTurns: 1,
+    });
+
+    if (response.status !== 'done') return;
+
+    const { misaligned, reason } = parseAlignmentResponse(response.content);
+    if (misaligned) {
+      const updatedSnapshot = applyMisalignedVerdict(snapshot, reason);
+      const report = formatHealthReport(updatedSnapshot);
+      out.logLine(report);
+    }
+  } catch (error) {
+    log.debug('Conversation alignment analysis failed', { error });
+  }
+}
 
 /**
  * Output facade — routes through TaskPrefixWriter when task prefix is active,
@@ -427,6 +474,9 @@ export async function executePiece(
   let shutdownManager: ShutdownManager | undefined;
   let onEpipe: ((err: NodeJS.ErrnoException) => void) | undefined;
   const runAbortController = new AbortController();
+  const healthThresholds = createDefaultThresholds();
+  const findingTracker = new FindingTracker(healthThresholds);
+  let previousActiveFindingCount = 0;
 
   try {
     engine = new PieceEngine(effectivePieceConfig, cwd, task, {
@@ -623,6 +673,42 @@ export async function executePiece(
     };
     appendNdjsonLine(ndjsonLogPath, record);
 
+    try {
+      const rawFindings = readAndExtractFindings(runPaths.reportsAbs);
+      const hasPhaseError = Boolean(response.error);
+      if (rawFindings.length > 0 || findingTracker.getTrackedCount() > 0 || hasPhaseError) {
+        const snapshot = runHealthCheck(
+          findingTracker,
+          rawFindings,
+          previousActiveFindingCount,
+          hasPhaseError,
+          step.name,
+          currentIteration,
+          pieceConfig.maxMovements,
+        );
+        previousActiveFindingCount = snapshot.findings.filter((f) => f.status !== 'resolved').length;
+
+        const verdictValue = snapshot.verdict.verdict;
+        // Conversation analysis — only when stagnating or looping (cost control)
+        if (verdictValue === 'stagnating' || verdictValue === 'looping') {
+          const conversations = readRecentConversations(runPaths.logsAbs, CONVERSATION_LOG_DEPTH);
+          if (conversations.length > 0) {
+            const analysisPrompt = buildConversationAnalysisPrompt(
+              conversations,
+              snapshot.verdict.relatedFindings,
+            );
+            // Fire-and-forget: conversation analysis must not block the engine
+            void analyzeConversationAlignment(analysisPrompt, cwd, snapshot, out);
+          }
+        }
+
+        const report = formatHealthReport(snapshot);
+        out.logLine(report);
+        log.debug('Health monitor', { verdict: verdictValue, findings: snapshot.findings.length });
+      }
+    } catch (healthError) {
+      log.debug('Health monitor failed', { error: healthError });
+    }
 
     // Update in-memory log for pointer metadata (immutable)
     sessionLog = { ...sessionLog, iterations: sessionLog.iterations + 1 };
