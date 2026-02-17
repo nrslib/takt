@@ -488,6 +488,46 @@ describe('interactiveMode', () => {
     });
   });
 
+  describe('/accept command', () => {
+    it('should return action=execute with last assistant message as task', async () => {
+      // Given: user sends message, AI responds, then /accept
+      setupRawStdin(toRawInputs(['describe my task', '/accept']));
+      setupMockProvider(['Here is the task instruction for your request.']);
+
+      // When
+      const result = await interactiveMode('/project');
+
+      // Then
+      expect(result.action).toBe('execute');
+      expect(result.task).toBe('Here is the task instruction for your request.');
+    });
+
+    it('should show error and continue when no assistant response exists', async () => {
+      // Given: /accept immediately (no conversation), then /cancel to exit
+      setupRawStdin(toRawInputs(['/accept', '/cancel']));
+      setupMockProvider([]);
+
+      // When
+      const result = await interactiveMode('/project');
+
+      // Then: should cancel (fell through to /cancel after error)
+      expect(result.action).toBe('cancel');
+    });
+
+    it('should use the most recent assistant message when multiple exist', async () => {
+      // Given: two conversation turns, then /accept
+      setupRawStdin(toRawInputs(['first question', 'second question', '/accept']));
+      setupMockProvider(['first response', 'second response']);
+
+      // When
+      const result = await interactiveMode('/project');
+
+      // Then: should use the last (most recent) assistant response
+      expect(result.action).toBe('execute');
+      expect(result.task).toBe('second response');
+    });
+  });
+
   describe('action selection after /go', () => {
     it('should return action=create_issue when user selects create issue', async () => {
       // Given

@@ -7,6 +7,8 @@
  *
  * Commands:
  *   /go     - Confirm and execute the task
+ *   /play   - Execute a task directly
+ *   /accept - Use last assistant reply as task
  *   /cancel - Cancel and exit
  */
 
@@ -42,6 +44,7 @@ export interface InteractiveUIText {
   };
   cancelled: string;
   playNoTask: string;
+  acceptNoAssistant: string;
 }
 
 /**
@@ -283,6 +286,8 @@ export const DEFAULT_INTERACTIVE_TOOLS = ['Read', 'Glob', 'Grep', 'Bash', 'WebSe
  * Starts a conversation loop where the user can discuss task requirements
  * with AI. The conversation continues until:
  *   /go     → returns the conversation as a task
+ *   /play   → executes the given text as a task directly
+ *   /accept → uses the last assistant reply as a task
  *   /cancel → exits without executing
  *   Ctrl+D  → exits without executing
  */

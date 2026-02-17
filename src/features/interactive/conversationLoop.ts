@@ -5,7 +5,7 @@
  * - Provider/session initialization
  * - AI call with retry on stale session
  * - Session state display/clear
- * - Conversation loop (slash commands, AI messaging, /go summary)
+ * - Conversation loop (slash commands, AI messaging, /go summary, /accept)
  */
 
 import chalk from 'chalk';
@@ -191,7 +191,7 @@ export interface ConversationStrategy {
 /**
  * Run the shared conversation loop.
  *
- * Handles: EOF, /play, /go (summary), /cancel, regular AI messaging.
+ * Handles: EOF, /play, /go (summary), /accept, /cancel, regular AI messaging.
  * The Strategy object controls system prompt, tool access, and prompt transformation.
  */
 export async function runConversationLoop(
@@ -298,6 +298,16 @@ export async function runConversationLoop(
       }
       log.info('Conversation action selected', { action: selectedAction, messageCount: history.length });
       return { action: selectedAction, task };
+    }
+
+    if (trimmed === '/accept') {
+      const lastAssistant = [...history].reverse().find((msg) => msg.role === 'assistant');
+      if (!lastAssistant) {
+        info(ui.acceptNoAssistant);
+        continue;
+      }
+      log.info('Accept command', { taskLength: lastAssistant.content.length });
+      return { action: 'execute', task: lastAssistant.content };
     }
 
     if (trimmed === '/cancel') {

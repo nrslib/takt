@@ -10,7 +10,7 @@ interactive:
   conversationLabel: "会話:"
   noTranscript: "（ローカル履歴なし。現在のセッション文脈を要約してください。）"
   ui:
-    intro: "対話モード - タスク内容を入力してください。コマンド: /go（実行）, /play（即実行）, /cancel（終了）"
+    intro: "対話モード - タスク内容を入力してください。コマンド: /go（実行）, /play（即実行）, /accept（直前の応答を採用）, /cancel（終了）"
     resume: "前回のセッションを再開します"
     noConversation: "まだ会話がありません。まずタスク内容を入力してください。"
     summarizeFailed: "会話の要約に失敗しました。再度お試しください。"
@@ -24,6 +24,7 @@ interactive:
       continue: "会話を続ける"
     cancelled: "キャンセルしました"
     playNoTask: "タスク内容を指定してください: /play <タスク内容>"
+    acceptNoAssistant: "アシスタントの応答が見つかりません。まず会話を行ってください。"
     personaFallback: "先頭ムーブメントにペルソナがありません。アシスタントモードにフォールバックします。"
   modeSelection:
     prompt: "対話モードを選択してください:"
