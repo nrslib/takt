@@ -612,6 +612,11 @@ anthropic_api_key: sk-ant-...  # Claude (Anthropic) を使う場合
 # openai_api_key: sk-...       # Codex (OpenAI) を使う場合
 # opencode_api_key: ...        # OpenCode を使う場合
 
+# Codex CLI パスの上書き（オプション）
+# Codex SDK が使用する CLI バイナリを上書き（実行可能ファイルの絶対パスを指定）
+# 環境変数 TAKT_CODEX_CLI_PATH で上書き可能
+# codex_cli_path: /usr/local/bin/codex
+
 # ビルトインピースのフィルタリング（オプション）
 # builtin_pieces_enabled: true           # false でビルトイン全体を無効化
 # disabled_builtins: [magi, passthrough] # 特定のビルトインピースを無効化
