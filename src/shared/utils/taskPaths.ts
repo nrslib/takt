@@ -1,5 +1,5 @@
 const TASK_SLUG_PATTERN =
-  '[a-z0-9\\u3040-\\u309f\\u30a0-\\u30ff\\u4e00-\\u9faf](?:[a-z0-9\\u3040-\\u309f\\u30a0-\\u30ff\\u4e00-\\u9faf-]*[a-z0-9\\u3040-\\u309f\\u30a0-\\u30ff\\u4e00-\\u9faf])?';
+  '[a-z0-9](?:[a-z0-9-]*[a-z0-9])?';
 const TASK_DIR_PREFIX = '.takt/tasks/';
 const TASK_DIR_PATTERN = new RegExp(`^\\.takt/tasks/${TASK_SLUG_PATTERN}$`);
 const REPORT_DIR_NAME_PATTERN = new RegExp(`^${TASK_SLUG_PATTERN}$`);

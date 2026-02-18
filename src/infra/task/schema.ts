@@ -41,6 +41,8 @@ export type TaskFailure = z.infer<typeof TaskFailureSchema>;
 export const TaskRecordSchema = TaskExecutionConfigSchema.extend({
   name: z.string().min(1),
   status: TaskStatusSchema,
+  slug: z.string().optional(),
+  summary: z.string().optional(),
   worktree_path: z.string().optional(),
   content: z.string().min(1).optional(),
   content_file: z.string().min(1).optional(),

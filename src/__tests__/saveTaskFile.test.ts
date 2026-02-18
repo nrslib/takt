@@ -66,6 +66,8 @@ describe('saveTaskFile', () => {
     expect(tasks).toHaveLength(1);
     expect(tasks[0]?.content).toBeUndefined();
     expect(tasks[0]?.task_dir).toBeTypeOf('string');
+    expect(tasks[0]?.slug).toBeTypeOf('string');
+    expect(tasks[0]?.summary).toBe('Implement feature X');
     const taskDir = path.join(testDir, String(tasks[0]?.task_dir));
     expect(fs.existsSync(path.join(taskDir, 'order.md'))).toBe(true);
     expect(fs.readFileSync(path.join(taskDir, 'order.md'), 'utf-8')).toContain('Implement feature X');

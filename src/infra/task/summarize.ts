@@ -7,7 +7,7 @@
 import * as wanakana from 'wanakana';
 import { loadGlobalConfig } from '../config/global/globalConfig.js';
 import { getProvider, type ProviderType } from '../providers/index.js';
-import { createLogger } from '../../shared/utils/index.js';
+import { createLogger, slugify } from '../../shared/utils/index.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
 import type { SummarizeOptions } from './types.js';
 
@@ -16,26 +16,11 @@ export type { SummarizeOptions };
 const log = createLogger('summarize');
 
 /**
- * Sanitize a string for use as git branch name and directory name.
- * Allows only: a-z, 0-9, hyphen.
- */
-function sanitizeSlug(input: string, maxLength = 30): string {
-  return input
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9-]/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-+/, '')
-    .slice(0, maxLength)
-    .replace(/-+$/, '');
-}
-
-/**
  * Convert Japanese text to romaji slug.
  */
 function toRomajiSlug(text: string): string {
   const romaji = wanakana.toRomaji(text, { customRomajiMapping: {} });
-  return sanitizeSlug(romaji);
+  return slugify(romaji);
 }
 
 /**
@@ -77,7 +62,7 @@ export class TaskSummarizer {
       permissionMode: 'readonly',
     });
 
-    const slug = sanitizeSlug(response.content);
+    const slug = slugify(response.content);
     log.info('Task name summarized', { original: taskName, slug });
 
     return slug || 'task';

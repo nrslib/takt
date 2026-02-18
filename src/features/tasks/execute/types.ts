@@ -125,6 +125,7 @@ export interface WorktreeConfirmationResult {
   isWorktree: boolean;
   branch?: string;
   baseBranch?: string;
+  taskSlug?: string;
 }
 
 export interface SelectAndExecuteOptions {

@@ -3,7 +3,8 @@ import { TaskRecordSchema, type TaskFileData, type TaskRecord, type TaskFailure 
 import type { TaskInfo, TaskResult } from './types.js';
 import { toTaskInfo } from './mapper.js';
 import { TaskStore } from './store.js';
-import { firstLine, nowIso, sanitizeTaskName } from './naming.js';
+import { firstLine, nowIso } from './naming.js';
+import { slugify } from '../../shared/utils/slug.js';
 import { isStaleRunningTask } from './process.js';
 import type { TaskStatus } from './schema.js';
 
@@ -16,13 +17,22 @@ export class TaskLifecycleService {
 
   addTask(
     content: string,
-    options?: Omit<TaskFileData, 'task'> & { content_file?: string; task_dir?: string; worktree_path?: string },
+    options?: Omit<TaskFileData, 'task'> & {
+      content_file?: string;
+      task_dir?: string;
+      worktree_path?: string;
+      slug?: string;
+      summary?: string;
+    },
   ): TaskInfo {
     const state = this.store.update((current) => {
-      const name = this.generateTaskName(content, current.tasks.map((task) => task.name));
+      const slug = options?.slug ?? slugify(firstLine(content));
+      const name = this.generateTaskName(slug, current.tasks.map((task) => task.name));
       const contentValue = options?.task_dir ? undefined : content;
       const record: TaskRecord = TaskRecordSchema.parse({
         name,
+        slug,
+        summary: options?.summary,
         status: 'pending',
         content: contentValue,
         created_at: nowIso(),
@@ -258,8 +268,8 @@ export class TaskLifecycleService {
     return isStaleRunningTask(task.owner_pid ?? undefined);
   }
 
-  private generateTaskName(content: string, existingNames: string[]): string {
-    const base = sanitizeTaskName(firstLine(content));
+  private generateTaskName(slug: string, existingNames: string[]): string {
+    const base = slug || `task-${Date.now()}`;
     let candidate = base;
     let counter = 1;
     while (existingNames.includes(candidate)) {

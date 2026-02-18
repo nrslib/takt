@@ -26,7 +26,7 @@ import {
 import { deletePendingTask, deleteFailedTask, deleteCompletedTask } from './taskDeleteActions.js';
 import { retryFailedTask } from './taskRetryActions.js';
 import { listTasksNonInteractive, type ListNonInteractiveOptions } from './listNonInteractive.js';
-import { formatTaskStatusLabel } from './taskStatusLabel.js';
+import { formatTaskStatusLabel, formatShortDate } from './taskStatusLabel.js';
 
 export type { ListNonInteractiveOptions } from './listNonInteractive.js';
 
@@ -130,7 +130,7 @@ export async function listTasks(
     const menuOptions = tasks.map((task, idx) => ({
       label: formatTaskStatusLabel(task),
       value: `${task.kind}:${idx}`,
-      description: `${task.content} | ${task.createdAt}`,
+      description: `${task.summary ?? task.content} | ${formatShortDate(task.createdAt)}`,
     }));
 
     const selected = await selectOption<string>(

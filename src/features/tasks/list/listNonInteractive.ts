@@ -18,7 +18,7 @@ import {
   mergeBranch,
   deleteBranch,
 } from './taskActions.js';
-import { formatTaskStatusLabel } from './taskStatusLabel.js';
+import { formatTaskStatusLabel, formatShortDate } from './taskStatusLabel.js';
 
 export interface ListNonInteractiveOptions {
   enabled: boolean;
@@ -43,7 +43,7 @@ function printNonInteractiveList(tasks: TaskListItem[], format?: string): void {
   }
 
   for (const task of tasks) {
-    info(`${formatTaskStatusLabel(task)} - ${task.content} (${task.createdAt})`);
+    info(`${formatTaskStatusLabel(task)} - ${task.summary ?? task.content} (${formatShortDate(task.createdAt)})`);
   }
 }
 

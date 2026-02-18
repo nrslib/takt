@@ -104,7 +104,7 @@ export async function resolveTaskExecution(
       worktreePath = task.worktreePath;
       isWorktree = true;
     } else {
-      const taskSlug = await withProgress(
+      const taskSlug = task.slug ?? await withProgress(
         'Generating branch name...',
         (slug) => `Branch name generated: ${slug}`,
         () => summarizeTaskName(task.content, { cwd: defaultCwd }),

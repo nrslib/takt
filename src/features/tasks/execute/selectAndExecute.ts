@@ -72,7 +72,7 @@ export async function confirmAndCreateWorktree(
     }),
   );
 
-  return { execCwd: result.path, isWorktree: true, branch: result.branch, baseBranch };
+  return { execCwd: result.path, isWorktree: true, branch: result.branch, baseBranch, taskSlug };
 }
 
 /**
@@ -92,7 +92,7 @@ export async function selectAndExecuteTask(
     return;
   }
 
-  const { execCwd, isWorktree, branch, baseBranch } = await confirmAndCreateWorktree(
+  const { execCwd, isWorktree, branch, baseBranch, taskSlug } = await confirmAndCreateWorktree(
     cwd,
     task,
     options?.createWorktree,
@@ -112,6 +112,7 @@ export async function selectAndExecuteTask(
     ...(branch ? { branch } : {}),
     ...(isWorktree ? { worktree_path: execCwd } : {}),
     auto_pr: shouldCreatePr,
+    ...(taskSlug ? { slug: taskSlug } : {}),
   });
   const startedAt = new Date().toISOString();
 
