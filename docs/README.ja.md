@@ -76,10 +76,6 @@ takt --pipeline --task "バグを修正して" --auto-pr
 
 ## 使い方
 
-## 実装メモ
-
-- failed タスクの retry とセッション再開: [`docs/implements/retry-and-session.ja.md`](./implements/retry-and-session.ja.md)
-
 ### 対話モード
 
 AI との会話でタスク内容を詰めてから実行するモード。タスクの要件が曖昧な場合や、AI と相談しながら内容を整理したい場合に便利です。
@@ -453,7 +449,7 @@ movements:
 
 | 種類 | 構文 | 説明 |
 |------|------|------|
-| タグベース | `"条件テキスト"` | エージェントが `[STEP:N]` タグを出力し、インデックスでマッチ |
+| タグベース | `"条件テキスト"` | エージェントが `[MOVEMENTNAME:N]` タグを出力し、インデックスでマッチ |
 | AI判定 | `ai("条件テキスト")` | AIが条件をエージェント出力に対して評価 |
 | 集約 | `all("X")` / `any("X")` | パラレルサブムーブメントの結果を集約 |
 
@@ -945,6 +941,7 @@ export TAKT_OPENCODE_API_KEY=...
 - [Faceted Prompting](./faceted-prompting.ja.md) - AIプロンプトへの関心の分離（Persona, Policy, Instruction, Knowledge, Output Contract）
 - [Piece Guide](./pieces.md) - ピースの作成とカスタマイズ
 - [Agent Guide](./agents.md) - カスタムエージェントの設定
+- [Retry and Session](./implements/retry-and-session.ja.md) - failed タスクの retry とセッション再開
 - [Changelog](../CHANGELOG.md) ([日本語](./CHANGELOG.ja.md)) - バージョン履歴
 - [Security Policy](../SECURITY.md) - 脆弱性報告
 - [ブログ: TAKT - AIエージェントオーケストレーション](https://zenn.dev/nrs/articles/c6842288a526d7) - 設計思想と実践的な使い方ガイド

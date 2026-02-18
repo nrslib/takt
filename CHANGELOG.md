@@ -6,6 +6,34 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.19.0] - 2026-02-18
+
+### Added
+
+- Dedicated retry mode for failed tasks — conversation loop with failure context (error details, failed movement, last message), run session data, and piece structure injected into the system prompt
+- Dedicated instruct system prompt for completed/failed task re-instruction — injects task name, content, branch changes, and retry notes directly into the prompt instead of using the generic interactive prompt
+- Direct re-execution from `takt list` — "execute" action now runs the task immediately in the existing worktree instead of only requeuing to pending
+- `startReExecution` atomic task transition — moves a completed/failed task directly to running status, avoiding the requeue → claim race condition
+- Worktree reuse in task execution — reuses existing clone directory when it's still on disk, skipping branch name generation and clone creation
+- Task history injection into interactive and summary system prompts — completed/failed/interrupted task summaries are included for context
+- Previous run reference support in interactive and instruct system prompts — users can reference logs and reports from prior runs
+- `findRunForTask` and `getRunPaths` helpers for automatic run session lookup by task content
+- `isStaleRunningTask` process helper extracted from TaskLifecycleService for reuse
+
+### Changed
+
+- Interactive module split: `interactive.ts` refactored into `interactive-summary.ts`, `runSelector.ts`, `runSessionReader.ts`, and `selectorUtils.ts` for better cohesion
+- `requeueTask` now accepts generic `allowedStatuses` parameter instead of only accepting `failed` tasks
+- Instruct/retry actions in `takt list` use the worktree path for conversation and run data lookup instead of the project root
+- `save_task` action now requeues the task (saves for later execution), while `execute` action runs immediately
+
+### Internal
+
+- Removed `DebugConfig` from models, schemas, and global config — simplified to verbose mode only
+- Added stdin simulation test helpers (`stdinSimulator.ts`) for E2E conversation loop testing
+- Added comprehensive E2E tests for retry mode, interactive routes, and run session injection
+- Added `check:release` npm script for pre-release validation
+
 ## [0.18.2] - 2026-02-18
 
 ### Added

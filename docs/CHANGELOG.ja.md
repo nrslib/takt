@@ -6,6 +6,34 @@
 
 フォーマットは [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) に基づいています。
 
+## [0.19.0] - 2026-02-18
+
+### Added
+
+- 失敗タスク専用のリトライモードを追加 — 失敗コンテキスト（エラー詳細、失敗ムーブメント、最終メッセージ）、実行セッションデータ、ピース構成をシステムプロンプトに注入する対話ループ
+- 完了/失敗タスクの再指示用に専用 instruct システムプロンプトを追加 — タスク名・内容・ブランチ変更・リトライノートを汎用の対話プロンプトではなく直接プロンプトに注入
+- `takt list` からの直接再実行 — "execute" アクションで既存ワークツリー内で即座にタスクを実行（pending への再キューだけでなく）
+- `startReExecution` によるアトミックなタスクステータス遷移 — completed/failed から直接 running に遷移し、requeue → claim のレースコンディションを回避
+- タスク実行時のワークツリー再利用 — 既存のクローンディレクトリがディスク上に残っていればそのまま再利用（ブランチ名生成やクローン作成をスキップ）
+- 対話モードおよびサマリーシステムプロンプトにタスク履歴を注入 — completed/failed/interrupted タスクのサマリーをコンテキストとして提供
+- 対話モードおよび instruct システムプロンプトに前回実行の参照機能 — ログとレポートを参照可能に
+- `findRunForTask` / `getRunPaths` ヘルパー — タスク内容による実行セッションの自動検索
+- `isStaleRunningTask` プロセスヘルパーを TaskLifecycleService から抽出し再利用可能に
+
+### Changed
+
+- interactive モジュール分割: `interactive.ts` を `interactive-summary.ts`、`runSelector.ts`、`runSessionReader.ts`、`selectorUtils.ts` にリファクタリング
+- `requeueTask` が汎用の `allowedStatuses` パラメータを受け取るように変更（`failed` のみだった制約を解除）
+- `takt list` の instruct/retry アクションがプロジェクトルートではなくワークツリーパスを使用して対話と実行データの参照を行うように変更
+- `save_task` アクションはタスクを再キュー（後で実行用に保存）、`execute` アクションは即座に実行
+
+### Internal
+
+- `DebugConfig` をモデル・スキーマ・グローバル設定から削除 — verbose モードのみに簡素化
+- stdin シミュレーションテストヘルパー（`stdinSimulator.ts`）を追加し、E2E 対話ループテストを実現
+- リトライモード、対話ルーティング、実行セッション注入の包括的な E2E テストを追加
+- `check:release` npm スクリプトを追加（リリース前検証用）
+
 ## [0.18.2] - 2026-02-18
 
 ### Added
