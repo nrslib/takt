@@ -58,6 +58,19 @@ describe('variable substitution', () => {
     expect(result).toContain('You are the  agent');
   });
 
+  it('replaces taskHistory variable in score_summary_system_prompt', () => {
+    const result = loadTemplate('score_summary_system_prompt', 'en', {
+      pieceInfo: true,
+      pieceName: 'piece',
+      pieceDescription: 'desc',
+      movementDetails: '',
+      conversation: 'Conversation: User: test',
+      taskHistory: '## Task execution history\n- Worktree ID: wt-1',
+    });
+    expect(result).toContain('## Task execution history');
+    expect(result).toContain('Worktree ID: wt-1');
+  });
+
   it('replaces multiple different variables', () => {
     const result = loadTemplate('perform_judge_message', 'en', {
       agentOutput: 'test output',

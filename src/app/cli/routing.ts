@@ -5,7 +5,7 @@
  * pipeline mode, or interactive mode.
  */
 
-import { info, error, withProgress } from '../../shared/ui/index.js';
+import { info, error as logError, withProgress } from '../../shared/ui/index.js';
 import { confirm } from '../../shared/prompt/index.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
 import { getLabel } from '../../shared/i18n/index.js';
@@ -27,6 +27,7 @@ import { getPieceDescription, loadGlobalConfig } from '../../infra/config/index.
 import { DEFAULT_PIECE_NAME } from '../../shared/constants.js';
 import { program, resolvedCwd, pipelineMode } from './program.js';
 import { resolveAgentOverrides, parseCreateWorktreeOption, isDirectTask } from './helpers.js';
+import { loadTaskHistory } from './taskHistory.js';
 
 /**
  * Resolve issue references from CLI input.
@@ -131,7 +132,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       initialInput = issueResult.initialInput;
     }
   } catch (e) {
-    error(getErrorMessage(e));
+    logError(getErrorMessage(e));
     process.exit(1);
   }
 
@@ -160,6 +161,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     description: pieceDesc.description,
     pieceStructure: pieceDesc.pieceStructure,
     movementPreviews: pieceDesc.movementPreviews,
+    taskHistory: loadTaskHistory(resolvedCwd, lang),
   };
 
   let result: InteractiveModeResult;

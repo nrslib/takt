@@ -94,6 +94,8 @@ takt hello
 
 **注意:** `--task` オプションを指定すると対話モードをスキップして直接タスク実行されます。Issue 参照（`#6`、`--issue`）は対話モードの初期入力として使用されます。
 
+対話開始時には `takt list` の履歴を自動取得し、`failed` / `interrupted` / `completed` の実行結果を `pieceContext` に注入して会話要約へ反映します。要約では `Worktree ID`、`開始/終了時刻`、`最終結果`、`失敗要約`、`ログ参照キー` を参照できます。`takt list` の取得に失敗しても対話は継続されます。
+
 **フロー:**
 1. ピース選択
 2. 対話モード選択（assistant / persona / quiet / passthrough）
@@ -224,6 +226,8 @@ takt list --non-interactive --action diff --branch takt/my-branch
 takt list --non-interactive --action delete --branch takt/my-branch --yes
 takt list --non-interactive --format json
 ```
+
+対話モードでは、上記の実行履歴（`failed` / `interrupted` / `completed`）を起動時に再利用し、失敗事例や中断済み実行を再作業対象として特定しやすくします。
 
 #### タスクディレクトリ運用（作成・実行・確認）
 

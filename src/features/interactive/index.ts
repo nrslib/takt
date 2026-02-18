@@ -10,6 +10,7 @@ export {
   formatMovementPreviews,
   formatSessionStatus,
   type PieceContext,
+  type TaskHistorySummaryItem,
   type InteractiveModeResult,
   type InteractiveModeAction,
 } from './interactive.js';

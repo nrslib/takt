@@ -85,4 +85,7 @@ export interface TaskListItem {
   worktreePath?: string;
   data?: TaskFileData;
   failure?: TaskFailure;
+  startedAt?: string;
+  completedAt?: string;
+  ownerPid?: number;
 }
