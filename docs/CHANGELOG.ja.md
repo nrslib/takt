@@ -6,6 +6,14 @@
 
 フォーマットは [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) に基づいています。
 
+## [0.18.2] - 2026-02-18
+
+### Added
+
+- グローバル設定に `codex_cli_path` オプションと `TAKT_CODEX_CLI_PATH` 環境変数を追加 — Codex SDK が使用する CLI バイナリのパスを上書き可能に (#292)
+  - 厳密なバリデーション付き: 絶対パス、ファイル存在確認、実行権限、制御文字の禁止
+  - 優先順位: `TAKT_CODEX_CLI_PATH` 環境変数 > config.yaml の `codex_cli_path` > SDK 同梱バイナリ
+
 ## [0.18.1] - 2026-02-18
 
 ### Added

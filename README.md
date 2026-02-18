@@ -612,6 +612,11 @@ anthropic_api_key: sk-ant-...  # For Claude (Anthropic)
 # openai_api_key: sk-...       # For Codex (OpenAI)
 # opencode_api_key: ...        # For OpenCode
 
+# Codex CLI path override (optional)
+# Override the Codex CLI binary used by the Codex SDK (must be an absolute path to an executable file)
+# Can be overridden by TAKT_CODEX_CLI_PATH environment variable
+# codex_cli_path: /usr/local/bin/codex
+
 # Builtin piece filtering (optional)
 # builtin_pieces_enabled: true           # Set false to disable all builtins
 # disabled_builtins: [magi, passthrough] # Disable specific builtin pieces

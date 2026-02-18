@@ -6,6 +6,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.18.2] - 2026-02-18
+
+### Added
+
+- Added `codex_cli_path` global config option and `TAKT_CODEX_CLI_PATH` environment variable to override the Codex CLI binary path used by the Codex SDK (#292)
+  - Supports strict validation: absolute path, file existence, executable permission, no control characters
+  - Priority: `TAKT_CODEX_CLI_PATH` env var > `codex_cli_path` in config.yaml > SDK vendored binary
+
 ## [0.18.1] - 2026-02-18
 
 ### Added
