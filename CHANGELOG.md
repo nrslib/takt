@@ -6,6 +6,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.18.1] - 2026-02-18
+
+### Added
+
+- Added multi-tenant data isolation section and authorization-resolver consistency code examples to security knowledge
+- Added "prefer project scripts" rule to coding policy — detects direct tool invocation (e.g., `npx vitest`) when equivalent npm scripts exist
+
 ## [0.18.0] - 2026-02-17
 
 ### Added
