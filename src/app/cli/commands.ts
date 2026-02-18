@@ -4,12 +4,13 @@
  * Registers all named subcommands (run, watch, add, list, switch, clear, eject, config, prompt, catalog).
  */
 
-import { clearPersonaSessions, getCurrentPiece } from '../../infra/config/index.js';
-import { success } from '../../shared/ui/index.js';
+import { clearPersonaSessions, getCurrentPiece, loadGlobalConfig } from '../../infra/config/index.js';
+import { success, info } from '../../shared/ui/index.js';
 import { runAllTasks, addTask, watchTasks, listTasks } from '../../features/tasks/index.js';
 import { switchPiece, switchConfig, ejectBuiltin, ejectFacet, parseFacetType, VALID_FACET_TYPES, resetCategoriesToDefault, deploySkill } from '../../features/config/index.js';
 import { previewPrompts } from '../../features/prompt/index.js';
 import { showCatalog } from '../../features/catalog/index.js';
+import { computeReviewMetrics, formatReviewMetrics, parseSinceDuration, purgeOldEvents, resolveEventsDir } from '../../features/analytics/index.js';
 import { program, resolvedCwd } from './program.js';
 import { resolveAgentOverrides } from './helpers.js';
 
@@ -136,4 +137,36 @@ program
   .argument('[type]', 'Facet type to list')
   .action((type?: string) => {
     showCatalog(resolvedCwd, type);
+  });
+
+const metrics = program
+  .command('metrics')
+  .description('Show analytics metrics (requires debug.enabled)');
+
+metrics
+  .command('review')
+  .description('Show review quality metrics')
+  .option('--since <duration>', 'Time window (e.g. "7d", "30d")', '30d')
+  .action((opts: { since: string }) => {
+    const globalConfig = loadGlobalConfig();
+    const durationMs = parseSinceDuration(opts.since);
+    const sinceMs = Date.now() - durationMs;
+    const result = computeReviewMetrics(resolveEventsDir(globalConfig), sinceMs);
+    info(formatReviewMetrics(result));
+  });
+
+program
+  .command('purge')
+  .description('Purge old analytics event files')
+  .option('--retention-days <days>', 'Retention period in days', '30')
+  .action((opts: { retentionDays: string }) => {
+    const globalConfig = loadGlobalConfig();
+    const retentionDays = globalConfig.analytics?.retentionDays
+      ?? parseInt(opts.retentionDays, 10);
+    const deleted = purgeOldEvents(resolveEventsDir(globalConfig), retentionDays, new Date());
+    if (deleted.length === 0) {
+      info('No files to purge.');
+    } else {
+      success(`Purged ${deleted.length} file(s): ${deleted.join(', ')}`);
+    }
   });
