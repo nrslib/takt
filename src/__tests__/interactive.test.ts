@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { setupRawStdin, restoreStdin, toRawInputs, createMockProvider } from './helpers/stdinSimulator.js';
 
 vi.mock('../infra/config/global/globalConfig.js', () => ({
   loadGlobalConfig: vi.fn(() => ({ provider: 'mock', language: 'en' })),
@@ -56,132 +57,9 @@ import { selectOption } from '../shared/prompt/index.js';
 const mockGetProvider = vi.mocked(getProvider);
 const mockSelectOption = vi.mocked(selectOption);
 
-// Store original stdin/stdout properties to restore
-let savedIsTTY: boolean | undefined;
-let savedIsRaw: boolean | undefined;
-let savedSetRawMode: typeof process.stdin.setRawMode | undefined;
-let savedStdoutWrite: typeof process.stdout.write;
-let savedStdinOn: typeof process.stdin.on;
-let savedStdinRemoveListener: typeof process.stdin.removeListener;
-let savedStdinResume: typeof process.stdin.resume;
-let savedStdinPause: typeof process.stdin.pause;
-
-/**
- * Captures the current data handler and provides sendData.
- *
- * When readMultilineInput registers process.stdin.on('data', handler),
- * this captures the handler so tests can send raw input data.
- *
- * rawInputs: array of raw strings to send sequentially. Each time a new
- * 'data' listener is registered, the next raw input is sent via queueMicrotask.
- */
-function setupRawStdin(rawInputs: string[]): void {
-  savedIsTTY = process.stdin.isTTY;
-  savedIsRaw = process.stdin.isRaw;
-  savedSetRawMode = process.stdin.setRawMode;
-  savedStdoutWrite = process.stdout.write;
-  savedStdinOn = process.stdin.on;
-  savedStdinRemoveListener = process.stdin.removeListener;
-  savedStdinResume = process.stdin.resume;
-  savedStdinPause = process.stdin.pause;
-
-  Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
-  Object.defineProperty(process.stdin, 'isRaw', { value: false, configurable: true, writable: true });
-  process.stdin.setRawMode = vi.fn((mode: boolean) => {
-    (process.stdin as unknown as { isRaw: boolean }).isRaw = mode;
-    return process.stdin;
-  }) as unknown as typeof process.stdin.setRawMode;
-  process.stdout.write = vi.fn(() => true) as unknown as typeof process.stdout.write;
-  process.stdin.resume = vi.fn(() => process.stdin) as unknown as typeof process.stdin.resume;
-  process.stdin.pause = vi.fn(() => process.stdin) as unknown as typeof process.stdin.pause;
-
-  let currentHandler: ((data: Buffer) => void) | null = null;
-  let inputIndex = 0;
-
-  process.stdin.on = vi.fn(((event: string, handler: (...args: unknown[]) => void) => {
-    if (event === 'data') {
-      currentHandler = handler as (data: Buffer) => void;
-      // Send next input when handler is registered
-      if (inputIndex < rawInputs.length) {
-        const data = rawInputs[inputIndex]!;
-        inputIndex++;
-        queueMicrotask(() => {
-          if (currentHandler) {
-            currentHandler(Buffer.from(data, 'utf-8'));
-          }
-        });
-      }
-    }
-    return process.stdin;
-  }) as typeof process.stdin.on);
-
-  process.stdin.removeListener = vi.fn(((event: string) => {
-    if (event === 'data') {
-      currentHandler = null;
-    }
-    return process.stdin;
-  }) as typeof process.stdin.removeListener);
-}
-
-function restoreStdin(): void {
-  if (savedIsTTY !== undefined) {
-    Object.defineProperty(process.stdin, 'isTTY', { value: savedIsTTY, configurable: true });
-  }
-  if (savedIsRaw !== undefined) {
-    Object.defineProperty(process.stdin, 'isRaw', { value: savedIsRaw, configurable: true, writable: true });
-  }
-  if (savedSetRawMode) {
-    process.stdin.setRawMode = savedSetRawMode;
-  }
-  if (savedStdoutWrite) {
-    process.stdout.write = savedStdoutWrite;
-  }
-  if (savedStdinOn) {
-    process.stdin.on = savedStdinOn;
-  }
-  if (savedStdinRemoveListener) {
-    process.stdin.removeListener = savedStdinRemoveListener;
-  }
-  if (savedStdinResume) {
-    process.stdin.resume = savedStdinResume;
-  }
-  if (savedStdinPause) {
-    process.stdin.pause = savedStdinPause;
-  }
-}
-
-/**
- * Convert user-level inputs to raw stdin data.
- *
- * Each element is either:
- * - A string: sent as typed characters + Enter (\r)
- * - null: sent as Ctrl+D (\x04)
- */
-function toRawInputs(inputs: (string | null)[]): string[] {
-  return inputs.map((input) => {
-    if (input === null) return '\x04';
-    return input + '\r';
-  });
-}
-
-/** Create a mock provider that returns given responses */
 function setupMockProvider(responses: string[]): void {
-  let callIndex = 0;
-  const mockCall = vi.fn(async () => {
-    const content = callIndex < responses.length ? responses[callIndex] : 'AI response';
-    callIndex++;
-    return {
-      persona: 'interactive',
-      status: 'done' as const,
-      content: content!,
-      timestamp: new Date(),
-    };
-  });
-  const mockProvider = {
-    setup: () => ({ call: mockCall }),
-    _call: mockCall,
-  };
-  mockGetProvider.mockReturnValue(mockProvider);
+  const { provider } = createMockProvider(responses);
+  mockGetProvider.mockReturnValue(provider);
 }
 
 beforeEach(() => {

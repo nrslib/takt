@@ -69,8 +69,15 @@ function parseMetaJson(metaPath: string): MetaJson | null {
   if (!existsSync(metaPath)) {
     return null;
   }
-  const raw = readFileSync(metaPath, 'utf-8');
-  return JSON.parse(raw) as MetaJson;
+  const raw = readFileSync(metaPath, 'utf-8').trim();
+  if (!raw) {
+    return null;
+  }
+  try {
+    return JSON.parse(raw) as MetaJson;
+  } catch {
+    return null;
+  }
 }
 
 function buildMovementLogs(sessionLog: SessionLog): MovementLogEntry[] {
