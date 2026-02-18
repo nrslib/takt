@@ -15,7 +15,6 @@ vi.mock('../shared/ui/index.js', () => ({
 }));
 
 vi.mock('../shared/prompt/index.js', () => ({
-  confirm: vi.fn(() => true),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -51,7 +50,6 @@ vi.mock('../features/pipeline/index.js', () => ({
 vi.mock('../features/interactive/index.js', () => ({
   interactiveMode: vi.fn(),
   selectInteractiveMode: vi.fn(() => 'assistant'),
-  selectRecentSession: vi.fn(() => null),
   passthroughMode: vi.fn(),
   quietMode: vi.fn(),
   personaMode: vi.fn(),
@@ -77,6 +75,7 @@ vi.mock('../infra/task/index.js', () => ({
 vi.mock('../infra/config/index.js', () => ({
   getPieceDescription: vi.fn(() => ({ name: 'default', description: 'test piece', pieceStructure: '', movementPreviews: [] })),
   loadGlobalConfig: vi.fn(() => ({ interactivePreviewMovements: 3 })),
+  loadPersonaSessions: vi.fn(() => ({})),
 }));
 
 vi.mock('../shared/constants.js', () => ({
@@ -106,11 +105,11 @@ vi.mock('../app/cli/helpers.js', () => ({
 
 import { checkGhCli, fetchIssue, formatIssueAsTask, parseIssueNumbers } from '../infra/github/issue.js';
 import { selectAndExecuteTask, determinePiece, createIssueFromTask, saveTaskFromInteractive } from '../features/tasks/index.js';
-import { interactiveMode, selectRecentSession } from '../features/interactive/index.js';
-import { loadGlobalConfig } from '../infra/config/index.js';
-import { confirm } from '../shared/prompt/index.js';
+import { interactiveMode } from '../features/interactive/index.js';
+import { loadGlobalConfig, loadPersonaSessions } from '../infra/config/index.js';
 import { isDirectTask } from '../app/cli/helpers.js';
 import { executeDefaultAction } from '../app/cli/routing.js';
+import { info } from '../shared/ui/index.js';
 import type { GitHubIssue } from '../infra/github/types.js';
 
 const mockCheckGhCli = vi.mocked(checkGhCli);
@@ -122,10 +121,10 @@ const mockDeterminePiece = vi.mocked(determinePiece);
 const mockCreateIssueFromTask = vi.mocked(createIssueFromTask);
 const mockSaveTaskFromInteractive = vi.mocked(saveTaskFromInteractive);
 const mockInteractiveMode = vi.mocked(interactiveMode);
-const mockSelectRecentSession = vi.mocked(selectRecentSession);
 const mockLoadGlobalConfig = vi.mocked(loadGlobalConfig);
-const mockConfirm = vi.mocked(confirm);
+const mockLoadPersonaSessions = vi.mocked(loadPersonaSessions);
 const mockIsDirectTask = vi.mocked(isDirectTask);
+const mockInfo = vi.mocked(info);
 const mockTaskRunnerListAllTaskItems = vi.mocked(mockListAllTaskItems);
 
 function createMockIssue(number: number): GitHubIssue {
@@ -147,7 +146,6 @@ beforeEach(() => {
   // Default setup
   mockDeterminePiece.mockResolvedValue('default');
   mockInteractiveMode.mockResolvedValue({ action: 'execute', task: 'summarized task' });
-  mockConfirm.mockResolvedValue(true);
   mockIsDirectTask.mockReturnValue(false);
   mockParseIssueNumbers.mockReturnValue([]);
   mockTaskRunnerListAllTaskItems.mockReturnValue([]);
@@ -480,41 +478,43 @@ describe('Issue resolution in routing', () => {
     });
   });
 
-  describe('session selection with provider=claude', () => {
-    it('should pass selected session ID to interactiveMode when provider is claude', async () => {
+  describe('--continue option', () => {
+    it('should load saved session and pass to interactiveMode when --continue is specified', async () => {
       // Given
+      mockOpts.continue = true;
       mockLoadGlobalConfig.mockReturnValue({ interactivePreviewMovements: 3, provider: 'claude' });
-      mockConfirm.mockResolvedValue(true);
-      mockSelectRecentSession.mockResolvedValue('session-xyz');
+      mockLoadPersonaSessions.mockReturnValue({ interactive: 'saved-session-123' });
 
       // When
       await executeDefaultAction();
 
-      // Then: selectRecentSession should be called
-      expect(mockSelectRecentSession).toHaveBeenCalledWith('/test/cwd', 'en');
+      // Then: loadPersonaSessions should be called with provider
+      expect(mockLoadPersonaSessions).toHaveBeenCalledWith('/test/cwd', 'claude');
 
-      // Then: interactiveMode should receive the session ID as 4th argument
+      // Then: interactiveMode should receive the saved session ID
       expect(mockInteractiveMode).toHaveBeenCalledWith(
         '/test/cwd',
         undefined,
         expect.anything(),
-        'session-xyz',
+        'saved-session-123',
       );
-
-      expect(mockConfirm).toHaveBeenCalledWith('Choose a previous session?', false);
     });
 
-    it('should not call selectRecentSession when user selects no in confirmation', async () => {
+    it('should show message and start new session when --continue has no saved session', async () => {
       // Given
+      mockOpts.continue = true;
       mockLoadGlobalConfig.mockReturnValue({ interactivePreviewMovements: 3, provider: 'claude' });
-      mockConfirm.mockResolvedValue(false);
+      mockLoadPersonaSessions.mockReturnValue({});
 
       // When
       await executeDefaultAction();
 
-      // Then
-      expect(mockConfirm).toHaveBeenCalledWith('Choose a previous session?', false);
-      expect(mockSelectRecentSession).not.toHaveBeenCalled();
+      // Then: info message about no session
+      expect(mockInfo).toHaveBeenCalledWith(
+        'No previous assistant session found. Starting a new session.',
+      );
+
+      // Then: interactiveMode should be called with undefined session ID
       expect(mockInteractiveMode).toHaveBeenCalledWith(
         '/test/cwd',
         undefined,
@@ -523,15 +523,12 @@ describe('Issue resolution in routing', () => {
       );
     });
 
-    it('should not call selectRecentSession when provider is not claude', async () => {
-      // Given
-      mockLoadGlobalConfig.mockReturnValue({ interactivePreviewMovements: 3, provider: 'openai' });
-
+    it('should not load persona sessions when --continue is not specified', async () => {
       // When
       await executeDefaultAction();
 
-      // Then: selectRecentSession should NOT be called
-      expect(mockSelectRecentSession).not.toHaveBeenCalled();
+      // Then: loadPersonaSessions should NOT be called
+      expect(mockLoadPersonaSessions).not.toHaveBeenCalled();
 
       // Then: interactiveMode should be called with undefined session ID
       expect(mockInteractiveMode).toHaveBeenCalledWith(
@@ -543,14 +540,11 @@ describe('Issue resolution in routing', () => {
     });
   });
 
-  describe('run session reference', () => {
-    it('should not prompt run session reference in default interactive flow', async () => {
+  describe('default assistant mode (no --continue)', () => {
+    it('should start new session without loading saved sessions', async () => {
       await executeDefaultAction();
 
-      expect(mockConfirm).not.toHaveBeenCalledWith(
-        "Reference a previous run's results?",
-        false,
-      );
+      expect(mockLoadPersonaSessions).not.toHaveBeenCalled();
       expect(mockInteractiveMode).toHaveBeenCalledWith(
         '/test/cwd',
         undefined,

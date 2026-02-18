@@ -123,7 +123,7 @@ export async function runRetryMode(
     throw new Error('Provider is not configured.');
   }
 
-  const baseCtx = initializeSession(cwd, 'retry');
+  const baseCtx = initializeSession('retry');
   const ctx: SessionContext = { ...baseCtx, lang, personaName: 'retry' };
 
   displayAndClearSessionState(cwd, ctx.lang);

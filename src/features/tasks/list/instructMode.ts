@@ -116,7 +116,7 @@ export async function runInstructMode(
     throw new Error('Provider is not configured.');
   }
 
-  const baseCtx = initializeSession(cwd, 'instruct');
+  const baseCtx = initializeSession('instruct');
   const ctx: SessionContext = { ...baseCtx, lang, personaName: 'instruct' };
 
   displayAndClearSessionState(cwd, ctx.lang);

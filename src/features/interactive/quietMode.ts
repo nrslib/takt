@@ -46,7 +46,7 @@ export async function quietMode(
   initialInput?: string,
   pieceContext?: PieceContext,
 ): Promise<InteractiveModeResult> {
-  const ctx = initializeSession(cwd, 'interactive');
+  const ctx = initializeSession('interactive');
 
   let userInput = initialInput;
 
