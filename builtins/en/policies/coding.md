@@ -13,6 +13,7 @@ Prioritize correctness over speed, and code accuracy over ease of implementation
 | File size | ~300 lines as a guideline. Be flexible depending on the task |
 | Boy Scout | Leave touched areas a little better than you found them |
 | Fail Fast | Detect errors early. Never swallow them |
+| Project scripts first | Use project-defined scripts for tool execution. Direct invocation is a last resort |
 
 ## No Fallbacks or Default Arguments
 
@@ -288,3 +289,4 @@ function formatPercentage(value: number): string { ... }
 - **Internal implementation exported from public API** - Only export domain-level functions and types. Do not export infrastructure functions or internal classes
 - **Replaced code surviving after refactoring** - Remove replaced code and exports. Do not keep unless explicitly told to
 - **Workarounds that bypass safety mechanisms** - If the root fix is correct, no additional bypass is needed
+- **Direct tool execution bypassing project scripts** - `npx tool` and similar bypass the lockfile, causing version mismatches. Look for project-defined scripts (npm scripts, Makefile, etc.) first. Only consider direct execution when no script exists

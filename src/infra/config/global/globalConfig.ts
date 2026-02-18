@@ -1,22 +1,59 @@
 /**
  * Global configuration loader
  *
- * Manages ~/.takt/config.yaml and project-level debug settings.
+ * Manages ~/.takt/config.yaml.
  * GlobalConfigManager encapsulates the config cache as a singleton.
  */
 
-import { readFileSync, existsSync, writeFileSync } from 'node:fs';
+import { readFileSync, existsSync, writeFileSync, statSync, accessSync, constants } from 'node:fs';
+import { isAbsolute } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { GlobalConfigSchema } from '../../../core/models/index.js';
-import type { GlobalConfig, DebugConfig, Language } from '../../../core/models/index.js';
+import type { GlobalConfig, Language } from '../../../core/models/index.js';
 import type { ProviderPermissionProfiles } from '../../../core/models/provider-profiles.js';
 import { normalizeProviderOptions } from '../loaders/pieceParser.js';
-import { getGlobalConfigPath, getProjectConfigPath } from '../paths.js';
+import { getGlobalConfigPath } from '../paths.js';
 import { DEFAULT_LANGUAGE } from '../../../shared/constants.js';
 import { parseProviderModel } from '../../../shared/utils/providerModel.js';
 
 /** Claude-specific model aliases that are not valid for other providers */
 const CLAUDE_MODEL_ALIASES = new Set(['opus', 'sonnet', 'haiku']);
+
+function hasControlCharacters(value: string): boolean {
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index);
+    if (code < 32 || code === 127) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function validateCodexCliPath(pathValue: string, sourceName: 'TAKT_CODEX_CLI_PATH' | 'codex_cli_path'): string {
+  const trimmed = pathValue.trim();
+  if (trimmed.length === 0) {
+    throw new Error(`Configuration error: ${sourceName} must not be empty.`);
+  }
+  if (hasControlCharacters(trimmed)) {
+    throw new Error(`Configuration error: ${sourceName} contains control characters.`);
+  }
+  if (!isAbsolute(trimmed)) {
+    throw new Error(`Configuration error: ${sourceName} must be an absolute path: ${trimmed}`);
+  }
+  if (!existsSync(trimmed)) {
+    throw new Error(`Configuration error: ${sourceName} path does not exist: ${trimmed}`);
+  }
+  const stats = statSync(trimmed);
+  if (!stats.isFile()) {
+    throw new Error(`Configuration error: ${sourceName} must point to an executable file: ${trimmed}`);
+  }
+  try {
+    accessSync(trimmed, constants.X_OK);
+  } catch {
+    throw new Error(`Configuration error: ${sourceName} file is not executable: ${trimmed}`);
+  }
+  return trimmed;
+}
 
 /** Validate that provider and model are compatible */
 function validateProviderModelCompatibility(provider: string | undefined, model: string | undefined): void {
@@ -131,10 +168,6 @@ export class GlobalConfigManager {
       logLevel: parsed.log_level,
       provider: parsed.provider,
       model: parsed.model,
-      debug: parsed.debug ? {
-        enabled: parsed.debug.enabled,
-        logFile: parsed.debug.log_file,
-      } : undefined,
       observability: parsed.observability ? {
         providerEvents: parsed.observability.provider_events,
       } : undefined,
@@ -144,6 +177,7 @@ export class GlobalConfigManager {
       enableBuiltinPieces: parsed.enable_builtin_pieces,
       anthropicApiKey: parsed.anthropic_api_key,
       openaiApiKey: parsed.openai_api_key,
+      codexCliPath: parsed.codex_cli_path,
       opencodeApiKey: parsed.opencode_api_key,
       pipeline: parsed.pipeline ? {
         defaultBranchPrefix: parsed.pipeline.default_branch_prefix,
@@ -190,12 +224,6 @@ export class GlobalConfigManager {
     if (config.model) {
       raw.model = config.model;
     }
-    if (config.debug) {
-      raw.debug = {
-        enabled: config.debug.enabled,
-        log_file: config.debug.logFile,
-      };
-    }
     if (config.observability && config.observability.providerEvents !== undefined) {
       raw.observability = {
         provider_events: config.observability.providerEvents,
@@ -218,6 +246,9 @@ export class GlobalConfigManager {
     }
     if (config.openaiApiKey) {
       raw.openai_api_key = config.openaiApiKey;
+    }
+    if (config.codexCliPath) {
+      raw.codex_cli_path = config.codexCliPath;
     }
     if (config.opencodeApiKey) {
       raw.opencode_api_key = config.opencodeApiKey;
@@ -380,6 +411,28 @@ export function resolveOpenaiApiKey(): string | undefined {
 }
 
 /**
+ * Resolve the Codex CLI path override.
+ * Priority: TAKT_CODEX_CLI_PATH env var > config.yaml > undefined (SDK vendored binary fallback)
+ */
+export function resolveCodexCliPath(): string | undefined {
+  const envPath = process.env['TAKT_CODEX_CLI_PATH'];
+  if (envPath !== undefined) {
+    return validateCodexCliPath(envPath, 'TAKT_CODEX_CLI_PATH');
+  }
+
+  let config: GlobalConfig;
+  try {
+    config = loadGlobalConfig();
+  } catch {
+    return undefined;
+  }
+  if (config.codexCliPath === undefined) {
+    return undefined;
+  }
+  return validateCodexCliPath(config.codexCliPath, 'codex_cli_path');
+}
+
+/**
  * Resolve the OpenCode API key.
  * Priority: TAKT_OPENCODE_API_KEY env var > config.yaml > undefined
  */
@@ -395,41 +448,3 @@ export function resolveOpencodeApiKey(): string | undefined {
   }
 }
 
-/** Load project-level debug configuration (from .takt/config.yaml) */
-export function loadProjectDebugConfig(projectDir: string): DebugConfig | undefined {
-  const configPath = getProjectConfigPath(projectDir);
-  if (!existsSync(configPath)) {
-    return undefined;
-  }
-  try {
-    const content = readFileSync(configPath, 'utf-8');
-    const raw = parseYaml(content);
-    if (raw && typeof raw === 'object' && 'debug' in raw) {
-      const debug = raw.debug;
-      if (debug && typeof debug === 'object') {
-        return {
-          enabled: Boolean(debug.enabled),
-          logFile: typeof debug.log_file === 'string' ? debug.log_file : undefined,
-        };
-      }
-    }
-  } catch {
-    // Ignore parse errors
-  }
-  return undefined;
-}
-
-/** Get effective debug config (project overrides global) */
-export function getEffectiveDebugConfig(projectDir?: string): DebugConfig | undefined {
-  const globalConfig = loadGlobalConfig();
-  let debugConfig = globalConfig.debug;
-
-  if (projectDir) {
-    const projectDebugConfig = loadProjectDebugConfig(projectDir);
-    if (projectDebugConfig) {
-      debugConfig = projectDebugConfig;
-    }
-  }
-
-  return debugConfig;
-}

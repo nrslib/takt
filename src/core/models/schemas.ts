@@ -374,12 +374,6 @@ export const CustomAgentConfigSchema = z.object({
   { message: 'Agent must have prompt_file, prompt, claude_agent, or claude_skill' }
 );
 
-/** Debug config schema */
-export const DebugConfigSchema = z.object({
-  enabled: z.boolean().optional().default(false),
-  log_file: z.string().optional(),
-});
-
 export const ObservabilityConfigSchema = z.object({
   provider_events: z.boolean().optional(),
 });
@@ -415,7 +409,6 @@ export const GlobalConfigSchema = z.object({
   log_level: z.enum(['debug', 'info', 'warn', 'error']).optional().default('info'),
   provider: z.enum(['claude', 'codex', 'opencode', 'mock']).optional().default('claude'),
   model: z.string().optional(),
-  debug: DebugConfigSchema.optional(),
   observability: ObservabilityConfigSchema.optional(),
   /** Directory for shared clones (worktree_dir in config). If empty, uses ../{clone-name} relative to project */
   worktree_dir: z.string().optional(),
@@ -429,6 +422,8 @@ export const GlobalConfigSchema = z.object({
   anthropic_api_key: z.string().optional(),
   /** OpenAI API key for Codex SDK (overridden by TAKT_OPENAI_API_KEY env var) */
   openai_api_key: z.string().optional(),
+  /** External Codex CLI path for Codex SDK override (overridden by TAKT_CODEX_CLI_PATH env var) */
+  codex_cli_path: z.string().optional(),
   /** OpenCode API key for OpenCode SDK (overridden by TAKT_OPENCODE_API_KEY env var) */
   opencode_api_key: z.string().optional(),
   /** Pipeline execution settings */

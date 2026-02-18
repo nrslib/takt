@@ -17,8 +17,10 @@ import {
   resolveLanguage,
   buildSummaryActionOptions,
   selectSummaryAction,
+  formatMovementPreviews,
   type PieceContext,
 } from '../../interactive/interactive.js';
+import { type RunSessionContext, formatRunSessionForPrompt } from '../../interactive/runSessionReader.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import { getLabelObject } from '../../../shared/i18n/index.js';
 import { loadGlobalConfig } from '../../../infra/config/index.js';
@@ -63,11 +65,49 @@ function createSelectInstructAction(ui: InstructUIText): (task: string, lang: 'e
   };
 }
 
+function buildInstructTemplateVars(
+  branchContext: string,
+  branchName: string,
+  taskName: string,
+  taskContent: string,
+  retryNote: string,
+  lang: 'en' | 'ja',
+  pieceContext?: PieceContext,
+  runSessionContext?: RunSessionContext,
+): Record<string, string | boolean> {
+  const hasPiecePreview = !!pieceContext?.movementPreviews?.length;
+  const movementDetails = hasPiecePreview
+    ? formatMovementPreviews(pieceContext!.movementPreviews!, lang)
+    : '';
+
+  const hasRunSession = !!runSessionContext;
+  const runPromptVars = hasRunSession
+    ? formatRunSessionForPrompt(runSessionContext)
+    : { runTask: '', runPiece: '', runStatus: '', runMovementLogs: '', runReports: '' };
+
+  return {
+    taskName,
+    taskContent,
+    branchName,
+    branchContext,
+    retryNote,
+    hasPiecePreview,
+    pieceStructure: pieceContext?.pieceStructure ?? '',
+    movementDetails,
+    hasRunSession,
+    ...runPromptVars,
+  };
+}
+
 export async function runInstructMode(
   cwd: string,
   branchContext: string,
   branchName: string,
+  taskName: string,
+  taskContent: string,
+  retryNote: string,
   pieceContext?: PieceContext,
+  runSessionContext?: RunSessionContext,
 ): Promise<InstructModeResult> {
   const globalConfig = loadGlobalConfig();
   const lang = resolveLanguage(globalConfig.language);
@@ -83,17 +123,11 @@ export async function runInstructMode(
 
   const ui = getLabelObject<InstructUIText>('instruct.ui', ctx.lang);
 
-  const systemPrompt = loadTemplate('score_interactive_system_prompt', ctx.lang, {
-    hasPiecePreview: false,
-    pieceStructure: '',
-    movementDetails: '',
-  });
-
-  const branchIntro = ctx.lang === 'ja'
-    ? `## ブランチ: ${branchName}\n\n${branchContext}`
-    : `## Branch: ${branchName}\n\n${branchContext}`;
-
-  const introMessage = `${branchIntro}\n\n${ui.intro}`;
+  const templateVars = buildInstructTemplateVars(
+    branchContext, branchName, taskName, taskContent, retryNote, lang,
+    pieceContext, runSessionContext,
+  );
+  const systemPrompt = loadTemplate('score_instruct_system_prompt', ctx.lang, templateVars);
 
   const policyContent = loadTemplate('score_interactive_policy', ctx.lang, {});
 
@@ -111,7 +145,7 @@ export async function runInstructMode(
     systemPrompt,
     allowedTools: INSTRUCT_TOOLS,
     transformPrompt: injectPolicy,
-    introMessage,
+    introMessage: ui.intro,
     selectAction: createSelectInstructAction(ui),
   };
 

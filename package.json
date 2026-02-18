@@ -1,6 +1,6 @@
 {
   "name": "takt",
-  "version": "0.17.3",
+  "version": "0.19.0",
   "description": "TAKT: TAKT Agent Koordination Topology - AI Agent Piece Orchestration",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -25,6 +25,7 @@
     "test:e2e:codex": "npm run test:e2e:provider:codex",
     "test:e2e:opencode": "npm run test:e2e:provider:opencode",
     "lint": "eslint src/",
+    "check:release": "npm run build && npm run lint && npm run test && npm run test:e2e",
     "prepublishOnly": "npm run lint && npm run build && npm run test"
   },
   "keywords": [
@@ -60,7 +61,7 @@
   ],
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.37",
-    "@openai/codex-sdk": "^0.98.0",
+    "@openai/codex-sdk": "^0.103.0",
     "@opencode-ai/sdk": "^1.1.53",
     "chalk": "^5.3.0",
     "commander": "^12.1.0",

@@ -35,6 +35,10 @@ interactive:
     quietDescription: "質問なしでベストエフォートの指示書を生成"
     passthrough: "パススルー"
     passthroughDescription: "入力をそのままタスクとして渡す"
+  runSelector:
+    confirm: "前回の実行結果を参照しますか？"
+    prompt: "参照するrunを選択してください:"
+    noRuns: "前回のrunが見つかりませんでした。"
   sessionSelector:
     confirm: "前回セッションを選択しますか？"
     prompt: "直近のセッションを引き継ぎますか？"

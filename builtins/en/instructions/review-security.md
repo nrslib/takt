@@ -7,5 +7,6 @@ Review the changes from a security perspective. Check for the following vulnerab
 ## Judgment Procedure
 
 1. Review the change diff and detect issues based on the security criteria above
+   - Cross-check changes against REJECT criteria tables defined in knowledge
 2. For each detected issue, classify as blocking/non-blocking based on Policy's scope determination table and judgment rules
 3. If there is even one blocking issue, judge as REJECT

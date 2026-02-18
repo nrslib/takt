@@ -17,12 +17,6 @@ export interface CustomAgentConfig {
   model?: string;
 }
 
-/** Debug configuration for takt */
-export interface DebugConfig {
-  enabled: boolean;
-  logFile?: string;
-}
-
 /** Observability configuration for runtime event logs */
 export interface ObservabilityConfig {
   /** Enable provider stream event logging (default: false when undefined) */
@@ -63,7 +57,6 @@ export interface GlobalConfig {
   logLevel: 'debug' | 'info' | 'warn' | 'error';
   provider?: 'claude' | 'codex' | 'opencode' | 'mock';
   model?: string;
-  debug?: DebugConfig;
   observability?: ObservabilityConfig;
   /** Directory for shared clones (worktree_dir in config). If empty, uses ../{clone-name} relative to project */
   worktreeDir?: string;
@@ -77,6 +70,8 @@ export interface GlobalConfig {
   anthropicApiKey?: string;
   /** OpenAI API key for Codex SDK (overridden by TAKT_OPENAI_API_KEY env var) */
   openaiApiKey?: string;
+  /** External Codex CLI path for Codex SDK override (overridden by TAKT_CODEX_CLI_PATH env var) */
+  codexCliPath?: string;
   /** OpenCode API key for OpenCode SDK (overridden by TAKT_OPENCODE_API_KEY env var) */
   opencodeApiKey?: string;
   /** Pipeline execution settings */

@@ -17,3 +17,4 @@ For small tasks, skip the design sections in the report.
 3. Identify the impact area
 4. Determine file structure and design patterns (if needed)
 5. Decide on the implementation approach
+   - Verify the implementation approach does not violate knowledge/policy constraints

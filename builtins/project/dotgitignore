@@ -6,16 +6,17 @@
 
 # Project configuration
 !config.yaml
-!.takt/
-!.takt/pieces/
-!.takt/pieces/**
-!.takt/personas/
-!.takt/personas/**
-!.takt/policies/
-!.takt/policies/**
-!.takt/knowledge/
-!.takt/knowledge/**
-!.takt/instructions/
-!.takt/instructions/**
-!.takt/output-contracts/
-!.takt/output-contracts/**
+
+# Facets and pieces (version-controlled)
+!pieces/
+!pieces/**
+!personas/
+!personas/**
+!policies/
+!policies/**
+!knowledge/
+!knowledge/**
+!instructions/
+!instructions/**
+!output-contracts/
+!output-contracts/**

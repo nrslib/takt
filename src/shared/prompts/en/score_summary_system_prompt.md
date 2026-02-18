@@ -1,7 +1,7 @@
 <!--
   template: score_summary_system_prompt
   role: system prompt for conversation-to-task summarization
-  vars: pieceInfo, pieceName, pieceDescription, movementDetails, conversation
+  vars: pieceInfo, pieceName, pieceDescription, movementDetails, taskHistory, conversation
   caller: features/interactive
 -->
 You are a task summarizer. Convert the conversation into a concrete task instruction for the planning step.
@@ -30,4 +30,8 @@ Create the instruction in the format expected by this piece.
 {{#if conversation}}
 
 {{conversation}}
+{{/if}}
+
+{{#if taskHistory}}
+{{taskHistory}}
 {{/if}}

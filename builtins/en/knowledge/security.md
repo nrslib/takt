@@ -148,6 +148,61 @@ if (!safePath.startsWith(path.resolve(baseDir))) {
 - Resource exhaustion attack possibility → Warning
 - Infinite loop possibility → REJECT
 
+## Multi-Tenant Data Isolation
+
+Prevent data access across tenant boundaries. Authorization (who can operate) and scoping (which tenant's data) are separate concerns.
+
+| Criteria | Verdict |
+|----------|---------|
+| Reads are tenant-scoped but writes are not | REJECT |
+| Write operations use client-provided tenant ID | REJECT |
+| Endpoint using tenant resolver has no authorization control | REJECT |
+| Some paths in role-based branching don't account for tenant resolution | REJECT |
+
+### Read-Write Consistency
+
+Apply tenant scoping to both reads and writes. Scoping only one side creates a state where data cannot be viewed but can be modified.
+
+When adding a tenant filter to reads, always add tenant verification to corresponding writes.
+
+### Write-Side Tenant Verification
+
+For write operations, use the tenant ID resolved from the authenticated user, not from the request body.
+
+```kotlin
+// NG - Trusting client-provided tenant ID
+fun create(request: CreateRequest) {
+    service.create(request.tenantId, request.data)
+}
+
+// OK - Resolve tenant from authentication
+fun create(request: CreateRequest) {
+    val tenantId = tenantResolver.resolve()
+    service.create(tenantId, request.data)
+}
+```
+
+### Authorization-Resolver Alignment
+
+When a tenant resolver assumes a specific role (e.g., staff), the endpoint must have corresponding authorization controls. Without authorization, unexpected roles can access the endpoint and cause the resolver to fail.
+
+```kotlin
+// NG - Resolver assumes STAFF but no authorization control
+fun getSettings(): SettingsResponse {
+    val tenantId = tenantResolver.resolve()  // Fails for non-STAFF
+    return settingsService.getByTenant(tenantId)
+}
+
+// OK - Authorization ensures correct role
+@Authorized(roles = ["STAFF"])
+fun getSettings(): SettingsResponse {
+    val tenantId = tenantResolver.resolve()
+    return settingsService.getByTenant(tenantId)
+}
+```
+
+For endpoints with role-based branching, verify that tenant resolution succeeds on all paths.
+
 ## OWASP Top 10 Checklist
 
 | Category | Check Items |

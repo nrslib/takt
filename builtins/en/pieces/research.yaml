@@ -11,34 +11,15 @@ initial_movement: plan
 movements:
   - name: plan
     persona: research-planner
+    policy: research
+    knowledge: research
+    instruction: research-plan
     allowed_tools:
       - Read
       - Glob
       - Grep
       - WebSearch
       - WebFetch
-    instruction_template: |
-      ## Piece Status
-      - Iteration: {iteration}/{max_movements} (piece-wide)
-      - Movement Iteration: {movement_iteration} (times this movement has run)
-      - Movement: plan
-
-      ## Research Request
-      {task}
-
-      ## Supervisor Feedback (for re-planning)
-      {previous_response}
-
-      ## Additional User Inputs
-      {user_inputs}
-
-      ## Instructions
-      Create a research plan for the above request.
-
-      **Important**: Do not ask the user questions.
-      - Make assumptions for unclear points and proceed
-      - If multiple interpretations exist, include all in the research scope
-      - If there is feedback from Supervisor, incorporate it into the plan
     rules:
       - condition: Planning is complete
         next: dig
@@ -46,39 +27,15 @@ movements:
         next: ABORT
   - name: dig
     persona: research-digger
+    policy: research
+    knowledge: research
+    instruction: research-dig
     allowed_tools:
       - Read
       - Glob
       - Grep
       - WebSearch
       - WebFetch
-    instruction_template: |
-      ## Piece Status
-      - Iteration: {iteration}/{max_movements} (piece-wide)
-      - Movement Iteration: {movement_iteration} (times this movement has run)
-      - Movement: dig
-
-      ## Original Research Request
-      {task}
-
-      ## Research Plan
-      {previous_response}
-
-      ## Additional User Inputs
-      {user_inputs}
-
-      ## Instructions
-      Execute the research according to the plan above.
-
-      **Important**: Do not ask the user questions.
-      - Research within the scope of what can be investigated
-      - Report items that could not be researched as "Unable to research"
-
-      Available tools:
-      - Web search
-      - GitHub search (gh command)
-      - Codebase search
-      - File reading
     rules:
       - condition: Research is complete
         next: supervise
@@ -86,29 +43,15 @@ movements:
         next: ABORT
   - name: supervise
     persona: research-supervisor
+    policy: research
+    knowledge: research
+    instruction: research-supervise
     allowed_tools:
       - Read
       - Glob
       - Grep
       - WebSearch
       - WebFetch
-    instruction_template: |
-      ## Piece Status
-      - Iteration: {iteration}/{max_movements} (piece-wide)
-      - Movement Iteration: {movement_iteration} (times this movement has run)
-      - Movement: supervise (research quality evaluation)
-
-      ## Original Research Request
-      {task}
-
-      ## Digger's Research Results
-      {previous_response}
-
-      ## Instructions
-      Evaluate the research results and determine if they adequately answer the original request.
-
-      **Important**: If there are issues, include specific instructions for the Planner.
-    pass_previous_response: false
     rules:
       - condition: Research results adequately answer the original request
         next: COMPLETE

@@ -12,7 +12,6 @@ import {
   initGlobalDirs,
   initProjectDirs,
   loadGlobalConfig,
-  getEffectiveDebugConfig,
   isVerboseMode,
 } from '../../infra/config/index.js';
 import { setQuietMode } from '../../shared/context.js';
@@ -68,13 +67,7 @@ export async function runPreActionHook(): Promise<void> {
   initProjectDirs(resolvedCwd);
 
   const verbose = isVerboseMode(resolvedCwd);
-  let debugConfig = getEffectiveDebugConfig(resolvedCwd);
-
-  if (verbose && (!debugConfig || !debugConfig.enabled)) {
-    debugConfig = { enabled: true };
-  }
-
-  initDebugLogger(debugConfig, resolvedCwd);
+  initDebugLogger(verbose ? { enabled: true } : undefined, resolvedCwd);
 
   const config = loadGlobalConfig();
 

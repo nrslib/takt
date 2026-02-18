@@ -65,7 +65,7 @@ export async function showDiffAndPromptActionForTask(
     `Action for ${branch}:`,
     [
       { label: 'View diff', value: 'diff', description: 'Show full diff in pager' },
-      { label: 'Instruct', value: 'instruct', description: 'Give additional instructions via temp clone' },
+      { label: 'Instruct', value: 'instruct', description: 'Craft additional instructions and requeue this task' },
       { label: 'Try merge', value: 'try', description: 'Squash merge (stage changes without commit)' },
       { label: 'Merge & cleanup', value: 'merge', description: 'Merge and delete branch' },
       { label: 'Delete', value: 'delete', description: 'Discard changes, delete branch' },

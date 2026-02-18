@@ -148,6 +148,61 @@ if (!safePath.startsWith(path.resolve(baseDir))) {
 - リソース枯渇攻撃の可能性 → 警告
 - 無限ループの可能性 → REJECT
 
+## マルチテナントデータ分離
+
+テナント境界を超えたデータアクセスを防ぐ。認可（誰が操作できるか）とスコーピング（どのテナントのデータか）は別の関心事。
+
+| 基準 | 判定 |
+|------|------|
+| 読み取りはテナントスコープだが書き込みはスコープなし | REJECT |
+| 書き込み操作でクライアント提供のテナントIDを使用 | REJECT |
+| テナントリゾルバーを使うエンドポイントに認可制御がない | REJECT |
+| ロール分岐の一部パスでテナント解決が未考慮 | REJECT |
+
+### 読み書きの一貫性
+
+テナントスコーピングは読み取りと書き込みの両方に適用する。片方だけでは、参照できないが変更できる状態が生まれる。
+
+読み取りにテナントフィルタを追加したら、対応する書き込みも必ずテナント検証する。
+
+### 書き込みのテナント検証
+
+書き込み操作では、リクエストボディのテナントIDではなく認証済みユーザーから解決したテナントIDを使う。
+
+```kotlin
+// NG - クライアント提供のテナントIDを信頼
+fun create(request: CreateRequest) {
+    service.create(request.tenantId, request.data)
+}
+
+// OK - 認証情報からテナントを解決
+fun create(request: CreateRequest) {
+    val tenantId = tenantResolver.resolve()
+    service.create(tenantId, request.data)
+}
+```
+
+### 認可とリゾルバーの整合性
+
+テナントリゾルバーが特定ロール（例: スタッフ）を前提とする場合、エンドポイントに対応する認可制御が必要。認可なしだと、前提外のロールがアクセスしてリゾルバーが失敗する。
+
+```kotlin
+// NG - リゾルバーが STAFF を前提とするが認可制御なし
+fun getSettings(): SettingsResponse {
+    val tenantId = tenantResolver.resolve()  // STAFF 以外で失敗
+    return settingsService.getByTenant(tenantId)
+}
+
+// OK - 認可制御でロールを保証
+@Authorized(roles = ["STAFF"])
+fun getSettings(): SettingsResponse {
+    val tenantId = tenantResolver.resolve()
+    return settingsService.getByTenant(tenantId)
+}
+```
+
+ロール分岐があるエンドポイントでは、全パスでテナント解決が成功するか検証する。
+
 ## OWASP Top 10 チェックリスト
 
 | カテゴリ | 確認事項 |

@@ -56,6 +56,7 @@ vi.mock('../infra/opencode/index.js', () => ({
 vi.mock('../infra/config/index.js', () => ({
   resolveAnthropicApiKey: vi.fn(() => undefined),
   resolveOpenaiApiKey: vi.fn(() => undefined),
+  resolveCodexCliPath: vi.fn(() => '/opt/codex/bin/codex'),
   resolveOpencodeApiKey: vi.fn(() => undefined),
 }));
 
@@ -148,6 +149,7 @@ describe('CodexProvider — structured output', () => {
 
     const opts = mockCallCodex.mock.calls[0]?.[2];
     expect(opts).toHaveProperty('outputSchema', SCHEMA);
+    expect(opts).toHaveProperty('codexPathOverride', '/opt/codex/bin/codex');
     expect(result.structuredOutput).toEqual({ step: 2 });
   });
 

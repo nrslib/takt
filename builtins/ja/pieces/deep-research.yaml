@@ -1,0 +1,75 @@
+name: deep-research
+description: 深掘り調査ピース - 発見駆動で新たな問いを追跡し、多角的に調査する
+piece_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+max_movements: 15
+initial_movement: plan
+movements:
+  - name: plan
+    persona: research-planner
+    policy: research
+    knowledge: research
+    instruction: research-plan
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
+    rules:
+      - condition: 計画が完了した
+        next: dig
+      - condition: 情報が不足しており計画を立てられない
+        next: ABORT
+  - name: dig
+    persona: research-digger
+    policy: research
+    knowledge: research
+    instruction: research-dig
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
+    rules:
+      - condition: 調査が完了した
+        next: analyze
+      - condition: 調査を実行できない
+        next: ABORT
+  - name: analyze
+    persona: research-analyzer
+    policy: research
+    knowledge: research
+    instruction: research-analyze
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
+    rules:
+      - condition: 新たな問いがあり追加調査が必要
+        next: dig
+      - condition: 十分に掘り下げた
+        next: supervise
+  - name: supervise
+    persona: research-supervisor
+    policy: research
+    knowledge: research
+    instruction: research-supervise
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
+    rules:
+      - condition: 調査結果が元の依頼に対して十分である
+        next: COMPLETE
+      - condition: 調査結果が不十分であり、計画からやり直す必要がある
+        next: plan

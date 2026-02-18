@@ -14,9 +14,8 @@ export {
   setProvider,
   resolveAnthropicApiKey,
   resolveOpenaiApiKey,
+  resolveCodexCliPath,
   resolveOpencodeApiKey,
-  loadProjectDebugConfig,
-  getEffectiveDebugConfig,
 } from './globalConfig.js';
 
 export {

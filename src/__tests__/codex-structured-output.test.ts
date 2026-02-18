@@ -15,10 +15,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 let mockEvents: Array<Record<string, unknown>> = [];
 let lastThreadOptions: Record<string, unknown> | undefined;
+let lastCodexConstructorOptions: Record<string, unknown> | undefined;
 
 vi.mock('@openai/codex-sdk', () => {
   return {
     Codex: class MockCodex {
+      constructor(options?: Record<string, unknown>) {
+        lastCodexConstructorOptions = options;
+      }
       async startThread(options?: Record<string, unknown>) {
         lastThreadOptions = options;
         return {
@@ -47,6 +51,7 @@ describe('CodexClient — structuredOutput 抽出', () => {
     vi.clearAllMocks();
     mockEvents = [];
     lastThreadOptions = undefined;
+    lastCodexConstructorOptions = undefined;
   });
 
   it('outputSchema 指定時に agent_message の JSON テキストを structuredOutput として返す', async () => {
@@ -167,6 +172,23 @@ describe('CodexClient — structuredOutput 抽出', () => {
 
     expect(lastThreadOptions).toMatchObject({
       networkAccessEnabled: true,
+    });
+  });
+
+  it('codexPathOverride が Codex constructor options に反映される', async () => {
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+
+    const client = new CodexClient();
+    await client.call('coder', 'prompt', {
+      cwd: '/tmp',
+      codexPathOverride: '/opt/codex/bin/codex',
+    });
+
+    expect(lastCodexConstructorOptions).toMatchObject({
+      codexPathOverride: '/opt/codex/bin/codex',
     });
   });
 });

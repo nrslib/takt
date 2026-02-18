@@ -1,23 +1,27 @@
+/**
+ * Instruction actions for completed/failed tasks.
+ *
+ * Uses the existing worktree (clone) for conversation and direct re-execution.
+ * The worktree is preserved after initial execution, so no clone creation is needed.
+ */
+
+import * as fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import {
-  createTempCloneForBranch,
-  removeClone,
-  removeCloneMeta,
   TaskRunner,
+  detectDefaultBranch,
 } from '../../../infra/task/index.js';
 import { loadGlobalConfig, getPieceDescription } from '../../../infra/config/index.js';
-import { info, success, error as logError } from '../../../shared/ui/index.js';
+import { info, error as logError } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
-import { executeTask } from '../execute/taskExecution.js';
-import type { TaskExecutionOptions } from '../execute/types.js';
-import { buildBooleanTaskResult, persistTaskError, persistTaskResult } from '../execute/taskResultHandler.js';
 import { runInstructMode } from './instructMode.js';
-import { saveTaskFile } from '../add/index.js';
 import { selectPiece } from '../../pieceSelection/index.js';
 import { dispatchConversationAction } from '../../interactive/actionDispatcher.js';
 import type { PieceContext } from '../../interactive/interactive.js';
-import { type BranchActionTarget, resolveTargetBranch, resolveTargetWorktreePath } from './taskActionTarget.js';
-import { detectDefaultBranch, autoCommitAndPush } from '../../../infra/task/index.js';
+import { resolveLanguage } from '../../interactive/index.js';
+import { type BranchActionTarget, resolveTargetBranch } from './taskActionTarget.js';
+import { appendRetryNote, selectRunSessionContext } from './requeueHelpers.js';
+import { executeAndCompleteTask } from '../execute/taskExecution.js';
 
 const log = createLogger('list-tasks');
 
@@ -70,10 +74,18 @@ function getBranchContext(projectDir: string, branch: string): string {
 export async function instructBranch(
   projectDir: string,
   target: BranchActionTarget,
-  options?: TaskExecutionOptions,
 ): Promise<boolean> {
+  if (!('kind' in target)) {
+    throw new Error('Instruct requeue requires a task target.');
+  }
+
+  if (!target.worktreePath || !fs.existsSync(target.worktreePath)) {
+    logError(`Worktree directory does not exist for task: ${target.name}`);
+    return false;
+  }
+  const worktreePath = target.worktreePath;
+
   const branch = resolveTargetBranch(target);
-  const worktreePath = resolveTargetWorktreePath(target);
 
   const selectedPiece = await selectPiece(projectDir);
   if (!selectedPiece) {
@@ -90,96 +102,45 @@ export async function instructBranch(
     movementPreviews: pieceDesc.movementPreviews,
   };
 
+  const lang = resolveLanguage(globalConfig.language);
+  // Runs data lives in the worktree (written during previous execution)
+  const runSessionContext = await selectRunSessionContext(worktreePath, lang);
+
   const branchContext = getBranchContext(projectDir, branch);
-  const result = await runInstructMode(projectDir, branchContext, branch, pieceContext);
+
+  const result = await runInstructMode(
+    worktreePath, branchContext, branch,
+    target.name, target.content, target.data?.retry_note ?? '',
+    pieceContext, runSessionContext,
+  );
+
+  const executeWithInstruction = async (instruction: string): Promise<boolean> => {
+    const retryNote = appendRetryNote(target.data?.retry_note, instruction);
+    const runner = new TaskRunner(projectDir);
+    const taskInfo = runner.startReExecution(target.name, ['completed', 'failed'], undefined, retryNote);
+
+    log.info('Starting re-execution of instructed task', {
+      name: target.name,
+      worktreePath,
+      branch,
+      piece: selectedPiece,
+    });
+
+    return executeAndCompleteTask(taskInfo, runner, projectDir, selectedPiece);
+  };
 
   return dispatchConversationAction(result, {
     cancel: () => {
       info('Cancelled');
       return false;
     },
+    execute: async ({ task }) => executeWithInstruction(task),
     save_task: async ({ task }) => {
-      const created = await saveTaskFile(projectDir, task, {
-        piece: selectedPiece,
-        worktree: true,
-        branch,
-        autoPr: false,
-      });
-      success(`Task saved: ${created.taskName}`);
-      info(`  Branch: ${branch}`);
-      log.info('Task saved from instruct mode', { branch, piece: selectedPiece });
-      return true;
-    },
-    execute: async ({ task }) => {
-      log.info('Instructing branch via temp clone', { branch, piece: selectedPiece });
-      info(`Running instruction on ${branch}...`);
-
-      const clone = createTempCloneForBranch(projectDir, branch);
-      const fullInstruction = branchContext
-        ? `${branchContext}## 追加指示\n${task}`
-        : task;
-
+      const retryNote = appendRetryNote(target.data?.retry_note, task);
       const runner = new TaskRunner(projectDir);
-      const taskRecord = runner.addTask(fullInstruction, {
-        piece: selectedPiece,
-        worktree: true,
-        branch,
-        auto_pr: false,
-        ...(worktreePath ? { worktree_path: worktreePath } : {}),
-      });
-      const startedAt = new Date().toISOString();
-
-      try {
-        const taskSuccess = await executeTask({
-          task: fullInstruction,
-          cwd: clone.path,
-          pieceIdentifier: selectedPiece,
-          projectCwd: projectDir,
-          agentOverrides: options,
-        });
-
-        const completedAt = new Date().toISOString();
-        const taskResult = buildBooleanTaskResult({
-          task: taskRecord,
-          taskSuccess,
-          successResponse: 'Instruction completed',
-          failureResponse: 'Instruction failed',
-          startedAt,
-          completedAt,
-          branch,
-          ...(worktreePath ? { worktreePath } : {}),
-        });
-        persistTaskResult(runner, taskResult, { emitStatusLog: false });
-
-        if (taskSuccess) {
-          const commitResult = autoCommitAndPush(clone.path, task, projectDir);
-          if (commitResult.success && commitResult.commitHash) {
-            success(`Auto-committed & pushed: ${commitResult.commitHash}`);
-          } else if (!commitResult.success) {
-            logError(`Auto-commit failed: ${commitResult.message}`);
-          }
-
-          success(`Instruction completed on ${branch}`);
-          log.info('Instruction completed', { branch });
-        } else {
-          logError(`Instruction failed on ${branch}`);
-          log.error('Instruction failed', { branch });
-        }
-
-        return taskSuccess;
-      } catch (err) {
-        const completedAt = new Date().toISOString();
-        persistTaskError(runner, taskRecord, startedAt, completedAt, err, {
-          emitStatusLog: false,
-          responsePrefix: 'Instruction failed: ',
-        });
-        logError(`Instruction failed on ${branch}`);
-        log.error('Instruction crashed', { branch, error: getErrorMessage(err) });
-        throw err;
-      } finally {
-        removeClone(clone.path);
-        removeCloneMeta(projectDir, branch);
-      }
+      runner.requeueTask(target.name, ['completed', 'failed'], undefined, retryNote);
+      info(`Task "${target.name}" has been requeued.`);
+      return true;
     },
   });
 }

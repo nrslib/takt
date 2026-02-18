@@ -181,7 +181,7 @@ export async function listTasks(
           showFullDiff(cwd, task.branch);
           break;
         case 'instruct':
-          await instructBranch(cwd, task, options);
+          await instructBranch(cwd, task);
           break;
         case 'try':
           tryMergeBranch(cwd, task);

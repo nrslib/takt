@@ -466,6 +466,7 @@ TAKT includes multiple builtin pieces:
 | `backend-cqrs-mini` | Mini CQRS+ES piece: plan → implement → parallel review (AI antipattern + supervisor) with CQRS+ES knowledge injection. |
 | `review-fix-minimal` | Review-focused piece: review → fix → supervisor. For iterative improvement based on review feedback. |
 | `research` | Research piece: planner → digger → supervisor. Autonomously executes research without asking questions. |
+| `deep-research` | Deep research piece: plan → dig → analyze → supervise. Discovery-driven investigation that follows emerging questions with multi-perspective analysis. |
 | `expert` | Full-stack development piece: architecture, frontend, security, QA reviews with fix loops. |
 | `expert-mini` | Mini expert piece: plan → implement → parallel review (AI antipattern + expert supervisor) with full-stack knowledge injection. |
 | `expert-cqrs` | Full-stack development piece (CQRS+ES specialized): CQRS+ES, frontend, security, QA reviews with fix loops. |
@@ -502,6 +503,7 @@ Use `takt switch` to switch pieces.
 | **supervisor** | Final validation, approval |
 | **expert-supervisor** | Expert-level final validation with comprehensive review integration |
 | **research-planner** | Research task planning and scope definition |
+| **research-analyzer** | Research result interpretation and additional investigation planning |
 | **research-digger** | Deep investigation and information gathering |
 | **research-supervisor** | Research quality validation and completeness assessment |
 | **test-planner** | Test strategy analysis and comprehensive test planning |
@@ -609,6 +611,11 @@ interactive_preview_movements: 3  # Movement previews in interactive mode (0-10,
 anthropic_api_key: sk-ant-...  # For Claude (Anthropic)
 # openai_api_key: sk-...       # For Codex (OpenAI)
 # opencode_api_key: ...        # For OpenCode
+
+# Codex CLI path override (optional)
+# Override the Codex CLI binary used by the Codex SDK (must be an absolute path to an executable file)
+# Can be overridden by TAKT_CODEX_CLI_PATH environment variable
+# codex_cli_path: /usr/local/bin/codex
 
 # Builtin piece filtering (optional)
 # builtin_pieces_enabled: true           # Set false to disable all builtins
@@ -934,7 +941,7 @@ export TAKT_OPENCODE_API_KEY=...
 - [Faceted Prompting](./docs/faceted-prompting.md) - Separation of Concerns for AI prompts (Persona, Policy, Instruction, Knowledge, Output Contract)
 - [Piece Guide](./docs/pieces.md) - Creating and customizing pieces
 - [Agent Guide](./docs/agents.md) - Configuring custom agents
-- [Changelog](../CHANGELOG.md) - Version history
+- [Changelog](../CHANGELOG.md) ([日本語](./docs/CHANGELOG.ja.md)) - Version history
 - [Security Policy](../SECURITY.md) - Vulnerability reporting
 - [Blog: TAKT - AI Agent Orchestration](https://zenn.dev/nrs/articles/c6842288a526d7) - Design philosophy and practical usage guide (Japanese)
 

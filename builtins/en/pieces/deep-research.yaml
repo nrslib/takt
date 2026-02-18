@@ -1,0 +1,75 @@
+name: deep-research
+description: Deep research piece - discovery-driven investigation that follows emerging questions with multi-perspective analysis
+piece_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+max_movements: 15
+initial_movement: plan
+movements:
+  - name: plan
+    persona: research-planner
+    policy: research
+    knowledge: research
+    instruction: research-plan
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
+    rules:
+      - condition: Planning is complete
+        next: dig
+      - condition: Insufficient information to create a plan
+        next: ABORT
+  - name: dig
+    persona: research-digger
+    policy: research
+    knowledge: research
+    instruction: research-dig
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
+    rules:
+      - condition: Research is complete
+        next: analyze
+      - condition: Unable to conduct research
+        next: ABORT
+  - name: analyze
+    persona: research-analyzer
+    policy: research
+    knowledge: research
+    instruction: research-analyze
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
+    rules:
+      - condition: New questions exist and additional research is needed
+        next: dig
+      - condition: Sufficiently investigated
+        next: supervise
+  - name: supervise
+    persona: research-supervisor
+    policy: research
+    knowledge: research
+    instruction: research-supervise
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
+    rules:
+      - condition: Research results adequately answer the original request
+        next: COMPLETE
+      - condition: Research results are insufficient and replanning is needed
+        next: plan
