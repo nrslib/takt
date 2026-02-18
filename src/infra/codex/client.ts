@@ -104,7 +104,11 @@ export class CodexClient {
       : prompt;
 
     for (let attempt = 1; attempt <= CODEX_RETRY_MAX_ATTEMPTS; attempt++) {
-      const codex = new Codex(options.openaiApiKey ? { apiKey: options.openaiApiKey } : undefined);
+      const codexClientOptions = {
+        ...(options.openaiApiKey ? { apiKey: options.openaiApiKey } : {}),
+        ...(options.codexPathOverride ? { codexPathOverride: options.codexPathOverride } : {}),
+      };
+      const codex = new Codex(Object.keys(codexClientOptions).length > 0 ? codexClientOptions : undefined);
       const thread = threadId
         ? await codex.resumeThread(threadId, threadOptions)
         : await codex.startThread(threadOptions);

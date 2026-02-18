@@ -4,7 +4,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { callCodex, callCodexCustom, type CodexCallOptions } from '../codex/index.js';
-import { resolveOpenaiApiKey } from '../config/index.js';
+import { resolveOpenaiApiKey, resolveCodexCliPath } from '../config/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
 import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from './types.js';
 
@@ -34,6 +34,7 @@ function toCodexOptions(options: ProviderCallOptions): CodexCallOptions {
     networkAccess: options.providerOptions?.codex?.networkAccess,
     onStream: options.onStream,
     openaiApiKey: options.openaiApiKey ?? resolveOpenaiApiKey(),
+    codexPathOverride: resolveCodexCliPath(),
     outputSchema: options.outputSchema,
   };
 }

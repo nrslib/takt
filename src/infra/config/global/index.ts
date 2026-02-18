@@ -14,6 +14,7 @@ export {
   setProvider,
   resolveAnthropicApiKey,
   resolveOpenaiApiKey,
+  resolveCodexCliPath,
   resolveOpencodeApiKey,
   loadProjectDebugConfig,
   getEffectiveDebugConfig,
