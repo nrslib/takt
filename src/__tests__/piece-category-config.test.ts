@@ -22,11 +22,27 @@ vi.mock('../infra/config/global/globalConfig.js', async (importOriginal) => {
   const original = await importOriginal() as Record<string, unknown>;
   return {
     ...original,
-    getLanguage: () => languageState.value,
-    getBuiltinPiecesEnabled: () => true,
-    getDisabledBuiltins: () => [],
+    loadGlobalConfig: () => ({}),
   };
 });
+
+vi.mock('../infra/config/resolveConfigValue.js', () => ({
+  resolveConfigValue: (_cwd: string, key: string) => {
+    if (key === 'language') return languageState.value;
+    if (key === 'enableBuiltinPieces') return true;
+    if (key === 'disabledBuiltins') return [];
+    return undefined;
+  },
+  resolveConfigValues: (_cwd: string, keys: readonly string[]) => {
+    const result: Record<string, unknown> = {};
+    for (const key of keys) {
+      if (key === 'language') result[key] = languageState.value;
+      if (key === 'enableBuiltinPieces') result[key] = true;
+      if (key === 'disabledBuiltins') result[key] = [];
+    }
+    return result;
+  },
+}));
 
 vi.mock('../infra/resources/index.js', async (importOriginal) => {
   const original = await importOriginal() as Record<string, unknown>;
@@ -93,7 +109,7 @@ describe('piece category config loading', () => {
   });
 
   it('should return null when builtin categories file is missing', () => {
-    const config = getPieceCategories();
+    const config = getPieceCategories(testDir);
     expect(config).toBeNull();
   });
 
@@ -105,7 +121,7 @@ piece_categories:
       - default
 `);
 
-    const config = loadDefaultCategories();
+    const config = loadDefaultCategories(testDir);
     expect(config).not.toBeNull();
     expect(config!.pieceCategories).toEqual([
       { name: 'Quick Start', pieces: ['default'], children: [] },
@@ -127,7 +143,7 @@ show_others_category: true
 others_category_name: Others
 `);
 
-    const config = getPieceCategories();
+    const config = getPieceCategories(testDir);
     expect(config).not.toBeNull();
     expect(config!.pieceCategories).toEqual([
       { name: 'Main', pieces: ['default'], children: [] },
@@ -168,7 +184,7 @@ show_others_category: false
 others_category_name: Unclassified
 `);
 
-    const config = getPieceCategories();
+    const config = getPieceCategories(testDir);
     expect(config).not.toBeNull();
     expect(config!.pieceCategories).toEqual([
       { name: 'Main', pieces: ['custom'], children: [] },
@@ -218,7 +234,7 @@ piece_categories:
       - e2e-test
 `);
 
-    const config = getPieceCategories();
+    const config = getPieceCategories(testDir);
     expect(config).not.toBeNull();
     expect(config!.pieceCategories).toEqual([
       { name: 'レビュー', pieces: ['review-only', 'e2e-test'], children: [] },
@@ -243,7 +259,7 @@ show_others_category: false
 others_category_name: Unclassified
 `);
 
-    const config = getPieceCategories();
+    const config = getPieceCategories(testDir);
     expect(config).not.toBeNull();
     expect(config!.pieceCategories).toEqual([
       { name: 'Main', pieces: ['default'], children: [] },
@@ -291,7 +307,7 @@ describe('buildCategorizedPieces', () => {
       othersCategoryName: 'Others',
     };
 
-    const categorized = buildCategorizedPieces(allPieces, config);
+    const categorized = buildCategorizedPieces(allPieces, config, process.cwd());
     expect(categorized.categories).toEqual([
       {
         name: 'Main',
@@ -324,7 +340,7 @@ describe('buildCategorizedPieces', () => {
       othersCategoryName: 'Others',
     };
 
-    const categorized = buildCategorizedPieces(allPieces, config);
+    const categorized = buildCategorizedPieces(allPieces, config, process.cwd());
     expect(categorized.categories).toEqual([
       { name: 'Main', pieces: ['default'], children: [] },
       { name: 'Others', pieces: ['extra'], children: [] },
@@ -349,7 +365,7 @@ describe('buildCategorizedPieces', () => {
       othersCategoryName: 'Others',
     };
 
-    const categorized = buildCategorizedPieces(allPieces, config);
+    const categorized = buildCategorizedPieces(allPieces, config, process.cwd());
     expect(categorized.categories).toEqual([
       { name: 'Main', pieces: ['default'], children: [] },
     ]);

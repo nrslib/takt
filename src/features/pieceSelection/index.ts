@@ -16,7 +16,7 @@ import {
   loadAllPiecesWithSources,
   getPieceCategories,
   buildCategorizedPieces,
-  getCurrentPiece,
+  resolveConfigValue,
   type PieceDirEntry,
   type PieceCategoryNode,
   type CategorizedPieces,
@@ -504,8 +504,8 @@ export async function selectPiece(
   options?: SelectPieceOptions,
 ): Promise<string | null> {
   const fallbackToDefault = options?.fallbackToDefault !== false;
-  const categoryConfig = getPieceCategories();
-  const currentPiece = getCurrentPiece(cwd);
+  const categoryConfig = getPieceCategories(cwd);
+  const currentPiece = resolveConfigValue(cwd, 'piece');
 
   if (categoryConfig) {
     const allPieces = loadAllPiecesWithSources(cwd);
@@ -517,7 +517,7 @@ export async function selectPiece(
       info('No pieces found.');
       return null;
     }
-    const categorized = buildCategorizedPieces(allPieces, categoryConfig);
+    const categorized = buildCategorizedPieces(allPieces, categoryConfig, cwd);
     warnMissingPieces(categorized.missingPieces.filter((missing) => missing.source === 'user'));
     return selectPieceFromCategorizedPieces(categorized, currentPiece);
   }

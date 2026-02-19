@@ -10,10 +10,10 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod/v4';
-import { getLanguage, getBuiltinPiecesEnabled, getDisabledBuiltins } from '../global/globalConfig.js';
 import { getPieceCategoriesPath } from '../global/pieceCategories.js';
 import { getLanguageResourcesDir } from '../../resources/index.js';
 import { listBuiltinPieceNames } from './pieceResolver.js';
+import { resolvePieceConfigValues } from '../resolvePieceConfigValue.js';
 import type { PieceWithSource } from './pieceResolver.js';
 
 const CategoryConfigSchema = z.object({
@@ -201,8 +201,8 @@ function resolveOthersCategoryName(defaultConfig: ParsedCategoryConfig, userConf
  * Load default categories from builtin resource file.
  * Returns null if file doesn't exist or has no piece_categories.
  */
-export function loadDefaultCategories(): CategoryConfig | null {
-  const lang = getLanguage();
+export function loadDefaultCategories(cwd: string): CategoryConfig | null {
+  const { language: lang } = resolvePieceConfigValues(cwd, ['language']);
   const filePath = join(getLanguageResourcesDir(lang), 'piece-categories.yaml');
   const parsed = loadCategoryConfigFromPath(filePath, filePath);
 
@@ -225,8 +225,8 @@ export function loadDefaultCategories(): CategoryConfig | null {
 }
 
 /** Get the path to the builtin default categories file. */
-export function getDefaultCategoriesPath(): string {
-  const lang = getLanguage();
+export function getDefaultCategoriesPath(cwd: string): string {
+  const { language: lang } = resolvePieceConfigValues(cwd, ['language']);
   return join(getLanguageResourcesDir(lang), 'piece-categories.yaml');
 }
 
@@ -246,14 +246,14 @@ function buildSeparatedCategories(
  * Get effective piece categories configuration.
  * Built from builtin categories and optional user overlay.
  */
-export function getPieceCategories(): CategoryConfig | null {
-  const defaultPath = getDefaultCategoriesPath();
+export function getPieceCategories(cwd: string): CategoryConfig | null {
+  const defaultPath = getDefaultCategoriesPath(cwd);
   const defaultConfig = loadCategoryConfigFromPath(defaultPath, defaultPath);
   if (!defaultConfig?.pieceCategories) {
     return null;
   }
 
-  const userPath = getPieceCategoriesPath();
+  const userPath = getPieceCategoriesPath(cwd);
   const userConfig = loadCategoryConfigFromPath(userPath, userPath);
 
   const builtinPieceCategories = convertParsedNodes(defaultConfig.pieceCategories);
@@ -360,14 +360,16 @@ function appendOthersCategory(
 export function buildCategorizedPieces(
   allPieces: Map<string, PieceWithSource>,
   config: CategoryConfig,
+  cwd: string,
 ): CategorizedPieces {
+  const globalConfig = resolvePieceConfigValues(cwd, ['enableBuiltinPieces', 'disabledBuiltins']);
   const ignoreMissing = new Set<string>();
-  if (!getBuiltinPiecesEnabled()) {
-    for (const name of listBuiltinPieceNames({ includeDisabled: true })) {
+  if (globalConfig.enableBuiltinPieces === false) {
+    for (const name of listBuiltinPieceNames(cwd, { includeDisabled: true })) {
       ignoreMissing.add(name);
     }
   } else {
-    for (const name of getDisabledBuiltins()) {
+    for (const name of (globalConfig.disabledBuiltins ?? [])) {
       ignoreMissing.add(name);
     }
   }

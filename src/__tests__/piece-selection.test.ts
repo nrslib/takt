@@ -40,6 +40,7 @@ const configMock = vi.hoisted(() => ({
   getPieceCategories: vi.fn(),
   buildCategorizedPieces: vi.fn(),
   getCurrentPiece: vi.fn(),
+  resolveConfigValue: vi.fn(),
 }));
 
 vi.mock('../infra/config/index.js', () => configMock);
@@ -316,13 +317,13 @@ describe('selectPiece', () => {
     configMock.loadAllPiecesWithSources.mockReset();
     configMock.getPieceCategories.mockReset();
     configMock.buildCategorizedPieces.mockReset();
-    configMock.getCurrentPiece.mockReset();
+    configMock.resolveConfigValue.mockReset();
   });
 
   it('should return default piece when no pieces found and fallbackToDefault is true', async () => {
     configMock.getPieceCategories.mockReturnValue(null);
     configMock.listPieces.mockReturnValue([]);
-    configMock.getCurrentPiece.mockReturnValue('default');
+    configMock.resolveConfigValue.mockReturnValue('default');
 
     const result = await selectPiece('/cwd');
 
@@ -332,7 +333,7 @@ describe('selectPiece', () => {
   it('should return null when no pieces found and fallbackToDefault is false', async () => {
     configMock.getPieceCategories.mockReturnValue(null);
     configMock.listPieces.mockReturnValue([]);
-    configMock.getCurrentPiece.mockReturnValue('default');
+    configMock.resolveConfigValue.mockReturnValue('default');
 
     const result = await selectPiece('/cwd', { fallbackToDefault: false });
 
@@ -345,7 +346,7 @@ describe('selectPiece', () => {
     configMock.listPieceEntries.mockReturnValue([
       { name: 'only-piece', path: '/tmp/only-piece.yaml', source: 'user' },
     ]);
-    configMock.getCurrentPiece.mockReturnValue('only-piece');
+    configMock.resolveConfigValue.mockReturnValue('only-piece');
     selectOptionMock.mockResolvedValueOnce('only-piece');
 
     const result = await selectPiece('/cwd');
@@ -365,7 +366,7 @@ describe('selectPiece', () => {
     configMock.getPieceCategories.mockReturnValue({ categories: ['Dev'] });
     configMock.loadAllPiecesWithSources.mockReturnValue(pieceMap);
     configMock.buildCategorizedPieces.mockReturnValue(categorized);
-    configMock.getCurrentPiece.mockReturnValue('my-piece');
+    configMock.resolveConfigValue.mockReturnValue('my-piece');
 
     selectOptionMock.mockResolvedValueOnce('__current__');
 
@@ -379,7 +380,7 @@ describe('selectPiece', () => {
     configMock.getPieceCategories.mockReturnValue(null);
     configMock.listPieces.mockReturnValue(['piece-a', 'piece-b']);
     configMock.listPieceEntries.mockReturnValue(entries);
-    configMock.getCurrentPiece.mockReturnValue('piece-a');
+    configMock.resolveConfigValue.mockReturnValue('piece-a');
 
     selectOptionMock
       .mockResolvedValueOnce('custom')

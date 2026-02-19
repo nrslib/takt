@@ -17,6 +17,24 @@ vi.mock('../infra/config/global/globalConfig.js', async (importOriginal) => {
   };
 });
 
+vi.mock('../infra/config/resolveConfigValue.js', () => ({
+  resolveConfigValue: (_cwd: string, key: string) => {
+    if (key === 'language') return 'en';
+    if (key === 'enableBuiltinPieces') return false;
+    if (key === 'disabledBuiltins') return [];
+    return undefined;
+  },
+  resolveConfigValues: (_cwd: string, keys: readonly string[]) => {
+    const result: Record<string, unknown> = {};
+    for (const key of keys) {
+      if (key === 'language') result[key] = 'en';
+      if (key === 'enableBuiltinPieces') result[key] = false;
+      if (key === 'disabledBuiltins') result[key] = [];
+    }
+    return result;
+  },
+}));
+
 const { listPieces } = await import('../infra/config/loaders/pieceLoader.js');
 
 const SAMPLE_PIECE = `name: test-piece

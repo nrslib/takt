@@ -91,7 +91,6 @@ vi.mock('../infra/config/paths.js', async (importOriginal) => {
     updatePersonaSession: vi.fn(),
     loadWorktreeSessions: vi.fn().mockReturnValue({}),
     updateWorktreeSession: vi.fn(),
-    getCurrentPiece: vi.fn().mockReturnValue('default'),
     getProjectConfigDir: vi.fn().mockImplementation((cwd: string) => join(cwd, '.takt')),
   };
 });
@@ -100,7 +99,11 @@ vi.mock('../infra/config/global/globalConfig.js', async (importOriginal) => {
   const original = await importOriginal<typeof import('../infra/config/global/globalConfig.js')>();
   return {
     ...original,
-    loadGlobalConfig: vi.fn().mockReturnValue({}),
+    loadGlobalConfig: vi.fn().mockReturnValue({
+      language: 'en',
+      enableBuiltinPieces: true,
+      disabledBuiltins: [],
+    }),
     getLanguage: vi.fn().mockReturnValue('en'),
   };
 });

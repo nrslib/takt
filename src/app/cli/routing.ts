@@ -23,8 +23,7 @@ import {
   dispatchConversationAction,
   type InteractiveModeResult,
 } from '../../features/interactive/index.js';
-import { getPieceDescription, loadGlobalConfig } from '../../infra/config/index.js';
-import { DEFAULT_PIECE_NAME } from '../../shared/constants.js';
+import { getPieceDescription, resolveConfigValue, resolveConfigValues } from '../../infra/config/index.js';
 import { program, resolvedCwd, pipelineMode } from './program.js';
 import { resolveAgentOverrides, parseCreateWorktreeOption, isDirectTask } from './helpers.js';
 import { loadTaskHistory } from './taskHistory.js';
@@ -85,8 +84,12 @@ export async function executeDefaultAction(task?: string): Promise<void> {
   const opts = program.opts();
   const agentOverrides = resolveAgentOverrides(program);
   const createWorktreeOverride = parseCreateWorktreeOption(opts.createWorktree as string | undefined);
+  const resolvedPipelinePiece = (opts.piece as string | undefined) ?? resolveConfigValue(resolvedCwd, 'piece');
+  const resolvedPipelineAutoPr = opts.autoPr === true
+    ? true
+    : (resolveConfigValue(resolvedCwd, 'autoPr') ?? false);
   const selectOptions: SelectAndExecuteOptions = {
-    autoPr: opts.autoPr === true,
+    autoPr: opts.autoPr === true ? true : undefined,
     repo: opts.repo as string | undefined,
     piece: opts.piece as string | undefined,
     createWorktree: createWorktreeOverride,
@@ -97,9 +100,9 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     const exitCode = await executePipeline({
       issueNumber: opts.issue as number | undefined,
       task: opts.task as string | undefined,
-      piece: (opts.piece as string | undefined) ?? DEFAULT_PIECE_NAME,
+      piece: resolvedPipelinePiece,
       branch: opts.branch as string | undefined,
-      autoPr: opts.autoPr === true,
+      autoPr: resolvedPipelineAutoPr,
       repo: opts.repo as string | undefined,
       skipGit: opts.skipGit === true,
       cwd: resolvedCwd,
@@ -137,7 +140,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
   }
 
   // All paths below go through interactive mode
-  const globalConfig = loadGlobalConfig();
+  const globalConfig = resolveConfigValues(resolvedCwd, ['language', 'interactivePreviewMovements', 'provider']);
   const lang = resolveLanguage(globalConfig.language);
 
   const pieceId = await determinePiece(resolvedCwd, selectOptions.piece);

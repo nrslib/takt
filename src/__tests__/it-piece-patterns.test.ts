@@ -57,6 +57,24 @@ vi.mock('../infra/config/project/projectConfig.js', () => ({
   loadProjectConfig: vi.fn().mockReturnValue({}),
 }));
 
+vi.mock('../infra/config/resolveConfigValue.js', () => ({
+  resolveConfigValue: vi.fn((_cwd: string, key: string) => {
+    if (key === 'language') return 'en';
+    if (key === 'enableBuiltinPieces') return true;
+    if (key === 'disabledBuiltins') return [];
+    return undefined;
+  }),
+  resolveConfigValues: vi.fn((_cwd: string, keys: readonly string[]) => {
+    const result: Record<string, unknown> = {};
+    for (const key of keys) {
+      if (key === 'language') result[key] = 'en';
+      if (key === 'enableBuiltinPieces') result[key] = true;
+      if (key === 'disabledBuiltins') result[key] = [];
+    }
+    return result;
+  }),
+}));
+
 // --- Imports (after mocks) ---
 
 import { PieceEngine } from '../core/piece/index.js';
