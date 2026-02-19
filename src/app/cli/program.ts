@@ -11,7 +11,7 @@ import { resolve } from 'node:path';
 import {
   initGlobalDirs,
   initProjectDirs,
-  loadGlobalConfig,
+  resolveConfigValues,
   isVerboseMode,
 } from '../../infra/config/index.js';
 import { setQuietMode } from '../../shared/context.js';
@@ -51,7 +51,8 @@ program
   .option('--pipeline', 'Pipeline mode: non-interactive, no worktree, direct branch creation')
   .option('--skip-git', 'Skip branch creation, commit, and push (pipeline mode)')
   .option('--create-worktree <yes|no>', 'Skip the worktree prompt by explicitly specifying yes or no')
-  .option('-q, --quiet', 'Minimal output mode: suppress AI output (for CI)');
+  .option('-q, --quiet', 'Minimal output mode: suppress AI output (for CI)')
+  .option('-c, --continue', 'Continue from the last assistant session');
 
 /**
  * Run pre-action hook: common initialization for all commands.
@@ -69,7 +70,7 @@ export async function runPreActionHook(): Promise<void> {
   const verbose = isVerboseMode(resolvedCwd);
   initDebugLogger(verbose ? { enabled: true } : undefined, resolvedCwd);
 
-  const config = loadGlobalConfig();
+  const config = resolveConfigValues(resolvedCwd, ['logLevel', 'minimalOutput']);
 
   if (verbose) {
     setVerboseConsole(true);

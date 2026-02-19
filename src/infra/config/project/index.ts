@@ -6,12 +6,12 @@ export {
   loadProjectConfig,
   saveProjectConfig,
   updateProjectConfig,
-  getCurrentPiece,
   setCurrentPiece,
-  isVerboseMode,
-  type PermissionMode,
   type ProjectLocalConfig,
 } from './projectConfig.js';
+export {
+  isVerboseMode,
+} from './resolvedSettings.js';
 
 export {
   writeFileAtomic,

@@ -21,7 +21,7 @@ import { createSelectActionWithoutExecute, buildReplayHint } from '../../interac
 import { type RunSessionContext, formatRunSessionForPrompt } from '../../interactive/runSessionReader.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import { getLabelObject } from '../../../shared/i18n/index.js';
-import { loadGlobalConfig } from '../../../infra/config/index.js';
+import { resolvePieceConfigValues } from '../../../infra/config/index.js';
 
 export type InstructModeAction = 'execute' | 'save_task' | 'cancel';
 
@@ -96,7 +96,7 @@ export async function runInstructMode(
   runSessionContext?: RunSessionContext,
   previousOrderContent?: string | null,
 ): Promise<InstructModeResult> {
-  const globalConfig = loadGlobalConfig();
+  const globalConfig = resolvePieceConfigValues(cwd, ['language', 'provider']);
   const lang = resolveLanguage(globalConfig.language);
 
   if (!globalConfig.provider) {

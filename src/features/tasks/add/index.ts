@@ -8,10 +8,11 @@ import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { promptInput, confirm } from '../../../shared/prompt/index.js';
 import { success, info, error, withProgress } from '../../../shared/ui/index.js';
-import { TaskRunner, type TaskFileData } from '../../../infra/task/index.js';
+import { TaskRunner, type TaskFileData, summarizeTaskName } from '../../../infra/task/index.js';
 import { determinePiece } from '../execute/selectAndExecute.js';
 import { createLogger, getErrorMessage, generateReportDir } from '../../../shared/utils/index.js';
 import { isIssueReference, resolveIssueTask, parseIssueNumbers, createIssue } from '../../../infra/github/index.js';
+import { firstLine } from '../../../infra/task/naming.js';
 
 const log = createLogger('add-task');
 
@@ -39,9 +40,11 @@ export async function saveTaskFile(
   options?: { piece?: string; issue?: number; worktree?: boolean | string; branch?: string; autoPr?: boolean },
 ): Promise<{ taskName: string; tasksFile: string }> {
   const runner = new TaskRunner(cwd);
-  const taskSlug = resolveUniqueTaskSlug(cwd, generateReportDir(taskContent));
-  const taskDir = path.join(cwd, '.takt', 'tasks', taskSlug);
-  const taskDirRelative = `.takt/tasks/${taskSlug}`;
+  const slug = await summarizeTaskName(taskContent, { cwd });
+  const summary = firstLine(taskContent);
+  const taskDirSlug = resolveUniqueTaskSlug(cwd, generateReportDir(taskContent));
+  const taskDir = path.join(cwd, '.takt', 'tasks', taskDirSlug);
+  const taskDirRelative = `.takt/tasks/${taskDirSlug}`;
   const orderPath = path.join(taskDir, 'order.md');
   fs.mkdirSync(taskDir, { recursive: true });
   fs.writeFileSync(orderPath, taskContent, 'utf-8');
@@ -55,6 +58,8 @@ export async function saveTaskFile(
   const created = runner.addTask(taskContent, {
     ...config,
     task_dir: taskDirRelative,
+    slug,
+    summary,
   });
   const tasksFile = path.join(cwd, '.takt', 'tasks.yaml');
   log.info('Task created', { taskName: created.name, tasksFile, config });
@@ -69,8 +74,8 @@ export async function saveTaskFile(
  */
 export function createIssueFromTask(task: string): number | undefined {
   info('Creating GitHub Issue...');
-  const firstLine = task.split('\n')[0] || task;
-  const title = firstLine.length > 100 ? `${firstLine.slice(0, 97)}...` : firstLine;
+  const titleLine = task.split('\n')[0] || task;
+  const title = titleLine.length > 100 ? `${titleLine.slice(0, 97)}...` : titleLine;
   const issueResult = createIssue({ title, body: task });
   if (issueResult.success) {
     success(`Issue created: ${issueResult.url}`);

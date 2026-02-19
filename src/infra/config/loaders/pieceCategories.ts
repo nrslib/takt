@@ -10,10 +10,10 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod/v4';
-import { getLanguage, getBuiltinPiecesEnabled, getDisabledBuiltins } from '../global/globalConfig.js';
 import { getPieceCategoriesPath } from '../global/pieceCategories.js';
 import { getLanguageResourcesDir } from '../../resources/index.js';
 import { listBuiltinPieceNames } from './pieceResolver.js';
+import { resolvePieceConfigValues } from '../resolvePieceConfigValue.js';
 import type { PieceWithSource } from './pieceResolver.js';
 
 const CategoryConfigSchema = z.object({
@@ -21,6 +21,8 @@ const CategoryConfigSchema = z.object({
   show_others_category: z.boolean().optional(),
   others_category_name: z.string().min(1).optional(),
 }).passthrough();
+
+export const BUILTIN_CATEGORY_NAME = 'builtin';
 
 export interface PieceCategoryNode {
   name: string;
@@ -32,6 +34,7 @@ export interface CategoryConfig {
   pieceCategories: PieceCategoryNode[];
   builtinPieceCategories: PieceCategoryNode[];
   userPieceCategories: PieceCategoryNode[];
+  hasUserCategories: boolean;
   showOthersCategory: boolean;
   othersCategoryName: string;
 }
@@ -57,7 +60,6 @@ interface RawCategoryConfig {
 interface ParsedCategoryNode {
   name: string;
   pieces: string[];
-  hasPieces: boolean;
   children: ParsedCategoryNode[];
 }
 
@@ -97,7 +99,6 @@ function parseCategoryNode(
     throw new Error(`category "${name}" must be an object in ${sourceLabel} at ${path.join(' > ')}`);
   }
 
-  const hasPieces = Object.prototype.hasOwnProperty.call(raw, 'pieces');
   const pieces = parsePieces(raw.pieces, sourceLabel, path);
   const children: ParsedCategoryNode[] = [];
 
@@ -109,7 +110,7 @@ function parseCategoryNode(
     children.push(parseCategoryNode(key, value, sourceLabel, [...path, key]));
   }
 
-  return { name, pieces, hasPieces, children };
+  return { name, pieces, children };
 }
 
 function parseCategoryTree(raw: unknown, sourceLabel: string): ParsedCategoryNode[] {
@@ -176,38 +177,6 @@ function convertParsedNodes(nodes: ParsedCategoryNode[]): PieceCategoryNode[] {
   }));
 }
 
-function mergeCategoryNodes(baseNodes: ParsedCategoryNode[], overlayNodes: ParsedCategoryNode[]): ParsedCategoryNode[] {
-  const overlayByName = new Map<string, ParsedCategoryNode>();
-  for (const overlayNode of overlayNodes) {
-    overlayByName.set(overlayNode.name, overlayNode);
-  }
-
-  const merged: ParsedCategoryNode[] = [];
-  for (const baseNode of baseNodes) {
-    const overlayNode = overlayByName.get(baseNode.name);
-    if (!overlayNode) {
-      merged.push(baseNode);
-      continue;
-    }
-
-    overlayByName.delete(baseNode.name);
-
-    const mergedNode: ParsedCategoryNode = {
-      name: baseNode.name,
-      pieces: overlayNode.hasPieces ? overlayNode.pieces : baseNode.pieces,
-      hasPieces: baseNode.hasPieces || overlayNode.hasPieces,
-      children: mergeCategoryNodes(baseNode.children, overlayNode.children),
-    };
-    merged.push(mergedNode);
-  }
-
-  for (const overlayNode of overlayByName.values()) {
-    merged.push(overlayNode);
-  }
-
-  return merged;
-}
-
 function resolveShowOthersCategory(defaultConfig: ParsedCategoryConfig, userConfig: ParsedCategoryConfig | null): boolean {
   if (userConfig?.showOthersCategory !== undefined) {
     return userConfig.showOthersCategory;
@@ -232,8 +201,8 @@ function resolveOthersCategoryName(defaultConfig: ParsedCategoryConfig, userConf
  * Load default categories from builtin resource file.
  * Returns null if file doesn't exist or has no piece_categories.
  */
-export function loadDefaultCategories(): CategoryConfig | null {
-  const lang = getLanguage();
+export function loadDefaultCategories(cwd: string): CategoryConfig | null {
+  const { language: lang } = resolvePieceConfigValues(cwd, ['language']);
   const filePath = join(getLanguageResourcesDir(lang), 'piece-categories.yaml');
   const parsed = loadCategoryConfigFromPath(filePath, filePath);
 
@@ -249,42 +218,57 @@ export function loadDefaultCategories(): CategoryConfig | null {
     pieceCategories: builtinPieceCategories,
     builtinPieceCategories,
     userPieceCategories: [],
+    hasUserCategories: false,
     showOthersCategory,
     othersCategoryName,
   };
 }
 
 /** Get the path to the builtin default categories file. */
-export function getDefaultCategoriesPath(): string {
-  const lang = getLanguage();
+export function getDefaultCategoriesPath(cwd: string): string {
+  const { language: lang } = resolvePieceConfigValues(cwd, ['language']);
   return join(getLanguageResourcesDir(lang), 'piece-categories.yaml');
+}
+
+function buildSeparatedCategories(
+  userCategories: PieceCategoryNode[],
+  builtinCategories: PieceCategoryNode[],
+): PieceCategoryNode[] {
+  const builtinWrapper: PieceCategoryNode = {
+    name: BUILTIN_CATEGORY_NAME,
+    pieces: [],
+    children: builtinCategories,
+  };
+  return [...userCategories, builtinWrapper];
 }
 
 /**
  * Get effective piece categories configuration.
  * Built from builtin categories and optional user overlay.
  */
-export function getPieceCategories(): CategoryConfig | null {
-  const defaultPath = getDefaultCategoriesPath();
+export function getPieceCategories(cwd: string): CategoryConfig | null {
+  const defaultPath = getDefaultCategoriesPath(cwd);
   const defaultConfig = loadCategoryConfigFromPath(defaultPath, defaultPath);
   if (!defaultConfig?.pieceCategories) {
     return null;
   }
 
-  const userPath = getPieceCategoriesPath();
+  const userPath = getPieceCategoriesPath(cwd);
   const userConfig = loadCategoryConfigFromPath(userPath, userPath);
-
-  const merged = userConfig?.pieceCategories
-    ? mergeCategoryNodes(defaultConfig.pieceCategories, userConfig.pieceCategories)
-    : defaultConfig.pieceCategories;
 
   const builtinPieceCategories = convertParsedNodes(defaultConfig.pieceCategories);
   const userPieceCategories = convertParsedNodes(userConfig?.pieceCategories ?? []);
+  const hasUserCategories = userPieceCategories.length > 0;
+
+  const pieceCategories = hasUserCategories
+    ? buildSeparatedCategories(userPieceCategories, builtinPieceCategories)
+    : builtinPieceCategories;
 
   return {
-    pieceCategories: convertParsedNodes(merged),
+    pieceCategories,
     builtinPieceCategories,
     userPieceCategories,
+    hasUserCategories,
     showOthersCategory: resolveShowOthersCategory(defaultConfig, userConfig),
     othersCategoryName: resolveOthersCategoryName(defaultConfig, userConfig),
   };
@@ -376,14 +360,16 @@ function appendOthersCategory(
 export function buildCategorizedPieces(
   allPieces: Map<string, PieceWithSource>,
   config: CategoryConfig,
+  cwd: string,
 ): CategorizedPieces {
+  const globalConfig = resolvePieceConfigValues(cwd, ['enableBuiltinPieces', 'disabledBuiltins']);
   const ignoreMissing = new Set<string>();
-  if (!getBuiltinPiecesEnabled()) {
-    for (const name of listBuiltinPieceNames({ includeDisabled: true })) {
+  if (globalConfig.enableBuiltinPieces === false) {
+    for (const name of listBuiltinPieceNames(cwd, { includeDisabled: true })) {
       ignoreMissing.add(name);
     }
   } else {
-    for (const name of getDisabledBuiltins()) {
+    for (const name of (globalConfig.disabledBuiltins ?? [])) {
       ignoreMissing.add(name);
     }
   }

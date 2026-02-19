@@ -20,6 +20,7 @@ export {
 } from './pieceLoader.js';
 
 export {
+  BUILTIN_CATEGORY_NAME,
   loadDefaultCategories,
   getDefaultCategoriesPath,
   getPieceCategories,

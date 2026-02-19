@@ -10,7 +10,7 @@ interactive:
   conversationLabel: "会話:"
   noTranscript: "（ローカル履歴なし。現在のセッション文脈を要約してください。）"
   ui:
-    intro: "対話モード - タスク内容を入力してください。コマンド: /go（実行）, /play（即実行）, /cancel（終了）"
+    intro: "対話モード - タスク内容を入力してください。コマンド: /go（実行）, /play（即実行）, /resume（セッション読込）, /cancel（終了）"
     resume: "前回のセッションを再開します"
     noConversation: "まだ会話がありません。まずタスク内容を入力してください。"
     summarizeFailed: "会話の要約に失敗しました。再度お試しください。"
@@ -39,8 +39,9 @@ interactive:
     confirm: "前回の実行結果を参照しますか？"
     prompt: "参照するrunを選択してください:"
     noRuns: "前回のrunが見つかりませんでした。"
+  continueNoSession: "前回のアシスタントセッションが見つかりません。新しいセッションで開始します。"
+  resumeSessionLoaded: "セッションを読み込みました。以降のAI呼び出しでこのセッションを使用します。"
   sessionSelector:
-    confirm: "前回セッションを選択しますか？"
     prompt: "直近のセッションを引き継ぎますか？"
     newSession: "新しいセッション"
     newSessionDescription: "新しい会話を始める"

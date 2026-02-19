@@ -4,7 +4,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { loadGlobalConfig } from '../../../infra/config/index.js';
+import { resolvePieceConfigValue } from '../../../infra/config/index.js';
 import { type TaskInfo, createSharedClone, summarizeTaskName, getCurrentBranch } from '../../../infra/task/index.js';
 import { withProgress } from '../../../shared/ui/index.js';
 import { getTaskSlugFromTaskDir } from '../../../shared/utils/taskPaths.js';
@@ -104,7 +104,7 @@ export async function resolveTaskExecution(
       worktreePath = task.worktreePath;
       isWorktree = true;
     } else {
-      const taskSlug = await withProgress(
+      const taskSlug = task.slug ?? await withProgress(
         'Generating branch name...',
         (slug) => `Branch name generated: ${slug}`,
         () => summarizeTaskName(task.content, { cwd: defaultCwd }),
@@ -141,8 +141,7 @@ export async function resolveTaskExecution(
   if (data.auto_pr !== undefined) {
     autoPr = data.auto_pr;
   } else {
-    const globalConfig = loadGlobalConfig();
-    autoPr = globalConfig.autoPr ?? false;
+    autoPr = resolvePieceConfigValue(defaultCwd, 'autoPr') ?? false;
   }
 
   return {

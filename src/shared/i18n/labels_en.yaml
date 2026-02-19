@@ -10,7 +10,7 @@ interactive:
   conversationLabel: "Conversation:"
   noTranscript: "(No local transcript. Summarize the current session context.)"
   ui:
-    intro: "Interactive mode - describe your task. Commands: /go (execute), /play (run now), /cancel (exit)"
+    intro: "Interactive mode - describe your task. Commands: /go (execute), /play (run now), /resume (load session), /cancel (exit)"
     resume: "Resuming previous session"
     noConversation: "No conversation yet. Please describe your task first."
     summarizeFailed: "Failed to summarize conversation. Please try again."
@@ -39,8 +39,9 @@ interactive:
     confirm: "Reference a previous run's results?"
     prompt: "Select a run to reference:"
     noRuns: "No previous runs found."
+  continueNoSession: "No previous assistant session found. Starting a new session."
+  resumeSessionLoaded: "Session loaded. Subsequent AI calls will use this session."
   sessionSelector:
-    confirm: "Choose a previous session?"
     prompt: "Resume from a recent session?"
     newSession: "New session"
     newSessionDescription: "Start a fresh conversation"

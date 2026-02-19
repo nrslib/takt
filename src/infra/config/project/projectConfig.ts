@@ -8,15 +8,16 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parse, stringify } from 'yaml';
 import { copyProjectResourcesToDir } from '../../resources/index.js';
-import type { PermissionMode, ProjectLocalConfig } from '../types.js';
+import type { ProjectLocalConfig } from '../types.js';
 import type { ProviderPermissionProfiles } from '../../../core/models/provider-profiles.js';
+import { applyProjectConfigEnvOverrides } from '../env/config-env-overrides.js';
+import { normalizeProviderOptions } from '../loaders/pieceParser.js';
 
-export type { PermissionMode, ProjectLocalConfig };
+export type { ProjectLocalConfig } from '../types.js';
 
 /** Default project configuration */
 const DEFAULT_PROJECT_CONFIG: ProjectLocalConfig = {
   piece: 'default',
-  permissionMode: 'default',
 };
 
 /**
@@ -63,21 +64,34 @@ function denormalizeProviderProfiles(profiles: ProviderPermissionProfiles | unde
 export function loadProjectConfig(projectDir: string): ProjectLocalConfig {
   const configPath = getConfigPath(projectDir);
 
-  if (!existsSync(configPath)) {
-    return { ...DEFAULT_PROJECT_CONFIG };
+  const parsedConfig: Record<string, unknown> = {};
+  if (existsSync(configPath)) {
+    try {
+      const content = readFileSync(configPath, 'utf-8');
+      const parsed = (parse(content) as Record<string, unknown> | null) ?? {};
+      Object.assign(parsedConfig, parsed);
+    } catch {
+      return { ...DEFAULT_PROJECT_CONFIG };
+    }
   }
 
-  try {
-    const content = readFileSync(configPath, 'utf-8');
-    const parsed = (parse(content) as ProjectLocalConfig | null) ?? {};
-    return {
-      ...DEFAULT_PROJECT_CONFIG,
-      ...parsed,
-      providerProfiles: normalizeProviderProfiles(parsed.provider_profiles as Record<string, { default_permission_mode: unknown; movement_permission_overrides?: Record<string, unknown> }> | undefined),
-    };
-  } catch {
-    return { ...DEFAULT_PROJECT_CONFIG };
-  }
+  applyProjectConfigEnvOverrides(parsedConfig);
+
+  return {
+    ...DEFAULT_PROJECT_CONFIG,
+    ...(parsedConfig as ProjectLocalConfig),
+    providerOptions: normalizeProviderOptions(parsedConfig.provider_options as {
+      codex?: { network_access?: boolean };
+      opencode?: { network_access?: boolean };
+      claude?: {
+        sandbox?: {
+          allow_unsandboxed_commands?: boolean;
+          excluded_commands?: string[];
+        };
+      };
+    } | undefined),
+    providerProfiles: normalizeProviderProfiles(parsedConfig.provider_profiles as Record<string, { default_permission_mode: unknown; movement_permission_overrides?: Record<string, unknown> }> | undefined),
+  };
 }
 
 /**
@@ -103,6 +117,7 @@ export function saveProjectConfig(projectDir: string, config: ProjectLocalConfig
     delete savePayload.provider_profiles;
   }
   delete savePayload.providerProfiles;
+  delete savePayload.providerOptions;
 
   const content = stringify(savePayload, { indent: 2 });
   writeFileSync(configPath, content, 'utf-8');
@@ -122,24 +137,8 @@ export function updateProjectConfig<K extends keyof ProjectLocalConfig>(
 }
 
 /**
- * Get current piece from project config
- */
-export function getCurrentPiece(projectDir: string): string {
-  const config = loadProjectConfig(projectDir);
-  return config.piece || 'default';
-}
-
-/**
  * Set current piece in project config
  */
 export function setCurrentPiece(projectDir: string, piece: string): void {
   updateProjectConfig(projectDir, 'piece', piece);
-}
-
-/**
- * Get verbose mode from project config
- */
-export function isVerboseMode(projectDir: string): boolean {
-  const config = loadProjectConfig(projectDir);
-  return config.verbose === true;
 }

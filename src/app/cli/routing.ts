@@ -6,7 +6,6 @@
  */
 
 import { info, error as logError, withProgress } from '../../shared/ui/index.js';
-import { confirm } from '../../shared/prompt/index.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { fetchIssue, formatIssueAsTask, checkGhCli, parseIssueNumbers, type GitHubIssue } from '../../infra/github/index.js';
@@ -15,7 +14,6 @@ import { executePipeline } from '../../features/pipeline/index.js';
 import {
   interactiveMode,
   selectInteractiveMode,
-  selectRecentSession,
   passthroughMode,
   quietMode,
   personaMode,
@@ -23,8 +21,7 @@ import {
   dispatchConversationAction,
   type InteractiveModeResult,
 } from '../../features/interactive/index.js';
-import { getPieceDescription, loadGlobalConfig } from '../../infra/config/index.js';
-import { DEFAULT_PIECE_NAME } from '../../shared/constants.js';
+import { getPieceDescription, resolveConfigValue, resolveConfigValues, loadPersonaSessions } from '../../infra/config/index.js';
 import { program, resolvedCwd, pipelineMode } from './program.js';
 import { resolveAgentOverrides, parseCreateWorktreeOption, isDirectTask } from './helpers.js';
 import { loadTaskHistory } from './taskHistory.js';
@@ -85,8 +82,12 @@ export async function executeDefaultAction(task?: string): Promise<void> {
   const opts = program.opts();
   const agentOverrides = resolveAgentOverrides(program);
   const createWorktreeOverride = parseCreateWorktreeOption(opts.createWorktree as string | undefined);
+  const resolvedPipelinePiece = (opts.piece as string | undefined) ?? resolveConfigValue(resolvedCwd, 'piece');
+  const resolvedPipelineAutoPr = opts.autoPr === true
+    ? true
+    : (resolveConfigValue(resolvedCwd, 'autoPr') ?? false);
   const selectOptions: SelectAndExecuteOptions = {
-    autoPr: opts.autoPr === true,
+    autoPr: opts.autoPr === true ? true : undefined,
     repo: opts.repo as string | undefined,
     piece: opts.piece as string | undefined,
     createWorktree: createWorktreeOverride,
@@ -97,9 +98,9 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     const exitCode = await executePipeline({
       issueNumber: opts.issue as number | undefined,
       task: opts.task as string | undefined,
-      piece: (opts.piece as string | undefined) ?? DEFAULT_PIECE_NAME,
+      piece: resolvedPipelinePiece,
       branch: opts.branch as string | undefined,
-      autoPr: opts.autoPr === true,
+      autoPr: resolvedPipelineAutoPr,
       repo: opts.repo as string | undefined,
       skipGit: opts.skipGit === true,
       cwd: resolvedCwd,
@@ -137,7 +138,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
   }
 
   // All paths below go through interactive mode
-  const globalConfig = loadGlobalConfig();
+  const globalConfig = resolveConfigValues(resolvedCwd, ['language', 'interactivePreviewMovements', 'provider']);
   const lang = resolveLanguage(globalConfig.language);
 
   const pieceId = await determinePiece(resolvedCwd, selectOptions.piece);
@@ -169,17 +170,14 @@ export async function executeDefaultAction(task?: string): Promise<void> {
   switch (selectedMode) {
     case 'assistant': {
       let selectedSessionId: string | undefined;
-      const provider = globalConfig.provider;
-      if (provider === 'claude') {
-        const shouldSelectSession = await confirm(
-          getLabel('interactive.sessionSelector.confirm', lang),
-          false,
-        );
-        if (shouldSelectSession) {
-          const sessionId = await selectRecentSession(resolvedCwd, lang);
-          if (sessionId) {
-            selectedSessionId = sessionId;
-          }
+      if (opts.continue === true) {
+        const providerType = globalConfig.provider;
+        const savedSessions = loadPersonaSessions(resolvedCwd, providerType);
+        const savedSessionId = savedSessions['interactive'];
+        if (savedSessionId) {
+          selectedSessionId = savedSessionId;
+        } else {
+          info(getLabel('interactive.continueNoSession', lang));
         }
       }
       result = await interactiveMode(resolvedCwd, initialInput, pieceContext, selectedSessionId);

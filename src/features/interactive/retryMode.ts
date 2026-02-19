@@ -21,7 +21,7 @@ import {
 import { resolveLanguage } from './interactive.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
 import { getLabelObject } from '../../shared/i18n/index.js';
-import { loadGlobalConfig } from '../../infra/config/index.js';
+import { resolveConfigValues } from '../../infra/config/index.js';
 import type { InstructModeResult, InstructUIText } from '../tasks/list/instructMode.js';
 
 /** Failure information for a retry task */
@@ -103,7 +103,7 @@ export async function runRetryMode(
   retryContext: RetryContext,
   previousOrderContent: string | null,
 ): Promise<InstructModeResult> {
-  const globalConfig = loadGlobalConfig();
+  const globalConfig = resolveConfigValues(cwd, ['language', 'provider']);
   const lang = resolveLanguage(globalConfig.language);
 
   if (!globalConfig.provider) {

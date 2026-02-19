@@ -11,13 +11,12 @@ import {
   removeBookmark,
 } from '../../infra/config/global/index.js';
 import {
-  findPieceCategories,
   listPieces,
   listPieceEntries,
   loadAllPiecesWithSources,
   getPieceCategories,
   buildCategorizedPieces,
-  getCurrentPiece,
+  resolveConfigValue,
   type PieceDirEntry,
   type PieceCategoryNode,
   type CategorizedPieces,
@@ -160,8 +159,6 @@ function buildCategoryLevelOptions(
   categories: PieceCategoryNode[],
   pieces: string[],
   currentPiece: string,
-  rootCategories: PieceCategoryNode[],
-  currentPathLabel: string,
 ): {
   options: SelectionOption[];
   categoryMap: Map<string, PieceCategoryNode>;
@@ -181,19 +178,7 @@ function buildCategoryLevelOptions(
 
   for (const pieceName of pieces) {
     const isCurrent = pieceName === currentPiece;
-    const alsoIn = findPieceCategories(pieceName, rootCategories)
-      .filter((path) => path !== currentPathLabel);
-    const alsoInLabel = alsoIn.length > 0 ? `also in ${alsoIn.join(', ')}` : '';
-
-    let label = `🎼 ${pieceName}`;
-    if (isCurrent && alsoInLabel) {
-      label = `🎼 ${pieceName} (current, ${alsoInLabel})`;
-    } else if (isCurrent) {
-      label = `🎼 ${pieceName} (current)`;
-    } else if (alsoInLabel) {
-      label = `🎼 ${pieceName} (${alsoInLabel})`;
-    }
-
+    const label = isCurrent ? `🎼 ${pieceName} (current)` : `🎼 ${pieceName}`;
     options.push({ label, value: pieceName });
   }
 
@@ -223,8 +208,6 @@ async function selectPieceFromCategoryTree(
       currentCategories,
       currentPieces,
       currentPiece,
-      categories,
-      currentPathLabel,
     );
 
     if (options.length === 0) {
@@ -521,8 +504,8 @@ export async function selectPiece(
   options?: SelectPieceOptions,
 ): Promise<string | null> {
   const fallbackToDefault = options?.fallbackToDefault !== false;
-  const categoryConfig = getPieceCategories();
-  const currentPiece = getCurrentPiece(cwd);
+  const categoryConfig = getPieceCategories(cwd);
+  const currentPiece = resolveConfigValue(cwd, 'piece');
 
   if (categoryConfig) {
     const allPieces = loadAllPiecesWithSources(cwd);
@@ -534,7 +517,7 @@ export async function selectPiece(
       info('No pieces found.');
       return null;
     }
-    const categorized = buildCategorizedPieces(allPieces, categoryConfig);
+    const categorized = buildCategorizedPieces(allPieces, categoryConfig, cwd);
     warnMissingPieces(categorized.missingPieces.filter((missing) => missing.source === 'user'));
     return selectPieceFromCategorizedPieces(categorized, currentPiece);
   }
