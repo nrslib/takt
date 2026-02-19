@@ -85,6 +85,8 @@ export interface ConversationStrategy {
   selectAction?: (task: string, lang: 'en' | 'ja') => Promise<PostSummaryAction | null>;
   /** Previous order.md content for /replay command (retry/instruct only) */
   previousOrderContent?: string;
+  /** Enable /retry slash command (retry mode only) */
+  enableRetryCommand?: boolean;
 }
 
 /**
@@ -166,6 +168,10 @@ export async function runConversationLoop(
     }
 
     if (trimmed === '/retry') {
+      if (!strategy.enableRetryCommand) {
+        info(ui.retryUnavailable);
+        continue;
+      }
       if (!strategy.previousOrderContent) {
         info(ui.retryNoOrder);
         continue;

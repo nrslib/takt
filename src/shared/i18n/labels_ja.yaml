@@ -10,7 +10,7 @@ interactive:
   conversationLabel: "会話:"
   noTranscript: "（ローカル履歴なし。現在のセッション文脈を要約してください。）"
   ui:
-    intro: "対話モード - タスク内容を入力してください。コマンド: /go（実行）, /play（即実行）, /resume（セッション読込）, /retry（前回の指示書で再実行）, /cancel（終了）"
+    intro: "対話モード - タスク内容を入力してください。コマンド: /go（指示書作成・実行）, /play（即実行）, /resume（セッション読込）, /cancel（終了）"
     resume: "前回のセッションを再開します"
     noConversation: "まだ会話がありません。まずタスク内容を入力してください。"
     summarizeFailed: "会話の要約に失敗しました。再度お試しください。"
@@ -25,6 +25,7 @@ interactive:
     cancelled: "キャンセルしました"
     playNoTask: "タスク内容を指定してください: /play <タスク内容>"
     retryNoOrder: "前回の指示書（order.md）が見つかりません。/retry はリトライ時のみ使用できます。"
+    retryUnavailable: "/retry は `takt list` の Retry モードでのみ使用できます。"
     personaFallback: "先頭ムーブメントにペルソナがありません。アシスタントモードにフォールバックします。"
   modeSelection:
     prompt: "対話モードを選択してください:"
@@ -77,10 +78,10 @@ piece:
 # ===== Instruct Mode UI (takt list -> instruct) =====
 instruct:
   ui:
-    intro: "指示モード - 追加指示を入力してください。コマンド: /go（要約）, /retry（前回の指示書で再実行）, /cancel（終了）"
+    intro: "指示モード - 追加指示を入力してください。コマンド: /go（指示書作成・実行）, /replay（前回の指示書で再投入）, /cancel（終了）"
     resume: "前回のセッションを再開します"
     noConversation: "まだ会話がありません。まず追加指示を入力してください。"
-    summarizeFailed: "会話の要約に失敗しました。再度お試しください。"
+    summarizeFailed: "指示書の作成に失敗しました。再度お試しください。"
     continuePrompt: "続けて追加指示を入力してください。"
     proposed: "提案された追加指示:"
     actionPrompt: "どうしますか？"
@@ -90,6 +91,11 @@ instruct:
       continue: "会話を続ける"
     cancelled: "キャンセルしました"
     replayNoOrder: "前回の指示書（order.md）が見つかりません"
+
+# ===== Retry Mode UI (takt list -> retry) =====
+retry:
+  ui:
+    intro: "リトライモード - 追加指示を入力してください。コマンド: /go（指示書作成・実行）, /retry（前回の指示書で再実行）, /cancel（終了）"
 
 run:
   notifyComplete: "run完了 ({total} tasks)"

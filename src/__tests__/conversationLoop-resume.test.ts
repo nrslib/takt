@@ -77,6 +77,8 @@ vi.mock('../shared/i18n/index.js', () => ({
     proposed: 'Proposed:',
     actionPrompt: 'What next?',
     playNoTask: 'No task for /play',
+    retryNoOrder: 'No previous order found.',
+    retryUnavailable: '/retry is not available in this mode.',
     cancelled: 'Cancelled',
     actions: { execute: 'Execute', saveTask: 'Save', continue: 'Continue' },
   })),
@@ -210,6 +212,17 @@ describe('/resume command', () => {
 
     // Then: AI call should use the resumed session ID
     expect(capture.sessionIds[0]).toBe('resumed-session-xyz');
+    expect(result.action).toBe('cancel');
+  });
+
+  it('should reject /retry in non-retry mode', async () => {
+    setupRawStdin(toRawInputs(['/retry', '/cancel']));
+    setupProvider([]);
+
+    const ctx = createSessionContext();
+    const result = await runConversationLoop('/test', ctx, defaultStrategy, undefined, undefined);
+
+    expect(mockLogInfo).toHaveBeenCalledWith('/retry is not available in this mode.');
     expect(result.action).toBe('cancel');
   });
 });
