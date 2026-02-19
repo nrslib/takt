@@ -9,6 +9,7 @@ import type { TaskFailure, TaskStatus } from './schema.js';
 export interface TaskInfo {
   filePath: string;
   name: string;
+  slug?: string;
   content: string;
   taskDir?: string;
   createdAt: string;
@@ -81,6 +82,7 @@ export interface TaskListItem {
   createdAt: string;
   filePath: string;
   content: string;
+  summary?: string;
   branch?: string;
   worktreePath?: string;
   data?: TaskFileData;

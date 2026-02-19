@@ -2,117 +2,42 @@
 
 🇯🇵 [日本語ドキュメント](./docs/README.ja.md)
 
-**T**AKT **A**gent **K**oordination **T**opology - Define how AI agents coordinate, where humans intervene, and what gets recorded — in YAML
+**T**AKT **A**gent **K**oordination **T**opology — Give your AI coding agents structured review loops, managed prompts, and guardrails — so they deliver quality code, not just code.
 
-TAKT runs multiple AI agents (Claude Code, Codex, OpenCode) through YAML-defined workflows. Each step — who runs, what they see, what's allowed, what happens on failure — is declared in a piece file, not left to the agent.
+TAKT runs AI agents (Claude Code, Codex, OpenCode) through YAML-defined workflows with built-in review cycles. You talk to AI to define what you want, queue tasks, and let TAKT handle the execution — planning, implementation, multi-stage review, and fix loops — all governed by declarative piece files.
 
 TAKT is built with TAKT itself (dogfooding).
 
-## Metaphor
-
-TAKT uses a music metaphor to describe orchestration:
-
-- **Piece**: A task execution definition (what to do and how agents coordinate)
-- **Movement**: A step inside a piece (a single stage in the flow)
-- **Orchestration**: The engine that coordinates agents across movements
-
-You can read every term as standard workflow language (piece = workflow, movement = step), but the metaphor is used to keep the system conceptually consistent.
-
 ## Why TAKT
 
-- AI agents are powerful but non-deterministic — TAKT makes their decisions visible and replayable
-- Multi-agent coordination needs structure — pieces define who does what, in what order, with what permissions
-- CI/CD integration needs guardrails — pipeline mode runs agents non-interactively with full audit logs
+**Batteries included** — Architecture, security, and AI antipattern review criteria are built in. Ship code that meets a quality bar from day one.
 
-## What TAKT Controls and Manages
+**Practical** — A tool for daily development, not demos. Talk to AI to refine requirements, queue tasks, and run them. Automatic worktree isolation, PR creation, and retry on failure.
 
-TAKT **controls** agent execution and **manages** prompt components.
+**Reproducible** — Execution paths are declared in YAML, keeping results consistent. Pieces are shareable — a workflow built by one team member can be used by anyone else to run the same quality process. Every step is logged in NDJSON for full traceability from task to PR.
 
-| | Concern | Description |
-|---|---------|-------------|
-| Control | **Routing** | State transition rules (who runs when) |
-| Control | **Tools & Permissions** | Readonly, edit, full access (what's allowed) |
-| Control | **Recording** | Session logs, reports (what gets captured) |
-| Manage | **Personas** | Agent roles and expertise (who they act as) |
-| Manage | **Policies** | Coding standards, quality criteria, prohibitions (what to uphold) |
-| Manage | **Knowledge** | Domain knowledge, architecture info (what to reference) |
-
-Personas, policies, and knowledge are managed as independent files and freely combined across workflows ([Faceted Prompting](./docs/faceted-prompting.md)). Change a policy in one file and every workflow using it gets the update.
-
-## What TAKT is NOT
-
-- **Not an autonomous engineer** — TAKT coordinates agents but doesn't decide what to build. You provide the task, TAKT governs the execution.
-- **Not a Skill or Swarm replacement** — Skills extend a single agent's knowledge. Swarm parallelizes agents. TAKT defines the workflow structure across agents — which agent runs, in what order, with what rules.
-- **Not fully automatic by default** — Every step can require human approval. Automation is opt-in (pipeline mode), not the default.
+**Multi-agent** — Orchestrate multiple agents with different personas, permissions, and review criteria. Run parallel reviewers, route failures back to implementers, aggregate results with declarative rules. Prompts are managed as independent facets (persona, policy, knowledge, instruction) that compose freely across workflows ([Faceted Prompting](./docs/faceted-prompting.md)).
 
 ## Requirements
 
 Choose one:
 
-- **Use provider CLIs**: [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), or [OpenCode](https://opencode.ai) installed
-- **Use direct API**: **Anthropic API Key**, **OpenAI API Key**, or **OpenCode API Key** (no CLI required)
+- **Provider CLIs**: [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), or [OpenCode](https://opencode.ai) installed
+- **Direct API**: Anthropic / OpenAI / OpenCode API Key (no CLI required)
 
-Additionally required:
+Optional:
 
-- [GitHub CLI](https://cli.github.com/) (`gh`) — Only needed for `takt #N` (GitHub Issue execution)
+- [GitHub CLI](https://cli.github.com/) (`gh`) — for `takt #N` (GitHub Issue tasks)
 
-**Pricing Note**: When using API Keys, TAKT directly calls the Claude API (Anthropic), OpenAI API, or OpenCode API. The pricing structure is the same as using the respective CLI tools. Be mindful of costs, especially when running automated tasks in CI/CD environments, as API usage can accumulate.
+## Quick Start
 
-## Installation
+### Install
 
 ```bash
 npm install -g takt
 ```
 
-## Quick Start
-
-```bash
-# Interactive mode - refine task requirements with AI, then execute
-takt
-
-# Execute GitHub Issue as task (both work the same)
-takt #6
-takt --issue 6
-
-# Pipeline execution (non-interactive, for scripts/CI)
-takt --pipeline --task "Fix the bug" --auto-pr
-```
-
-## Usage
-
-### Interactive Mode
-
-A mode where you refine task content through conversation with AI before execution. Useful when task requirements are ambiguous or when you want to clarify content while consulting with AI.
-
-```bash
-# Start interactive mode (no arguments)
-takt
-
-# Specify initial message (short word only)
-takt hello
-```
-
-**Note:** `--task` option skips interactive mode and executes the task directly. Issue references (`#6`, `--issue`) are used as initial input in interactive mode.
-
-**Flow:**
-1. Select piece
-2. Select interactive mode (assistant / persona / quiet / passthrough)
-3. Refine task content through conversation with AI
-4. Finalize task instructions with `/go` (you can also add additional instructions like `/go additional instructions`), or use `/play <task>` to execute a task immediately
-5. Execute (create worktree, run piece, create PR)
-
-#### Interactive Mode Variants
-
-| Mode | Description |
-|------|-------------|
-| `assistant` | Default. AI asks clarifying questions before generating task instructions. |
-| `persona` | Conversation with the first movement's persona (uses its system prompt and tools). |
-| `quiet` | Generates task instructions without asking questions (best-effort). |
-| `passthrough` | Passes user input directly as task text without AI processing. |
-
-Pieces can set a default mode via the `interactive_mode` field in YAML.
-
-#### Execution Example
+### Talk to AI, then execute
 
 ```
 $ takt
@@ -121,748 +46,190 @@ Select piece:
   ❯ 🎼 default (current)
     📁 Development/
     📁 Research/
-    Cancel
 
-Interactive mode - Enter task content. Commands: /go (execute), /cancel (exit)
+> Add user authentication with JWT
 
-> I want to add user authentication feature
-
-[AI confirms and organizes requirements]
+[AI clarifies requirements and organizes the task]
 
 > /go
-
-Proposed task instructions:
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Implement user authentication feature.
-
-Requirements:
-- Login with email address and password
-- JWT token-based authentication
-- Password hashing (bcrypt)
-- Login/logout API endpoints
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Proceed with these task instructions? (Y/n) y
-
-? Create worktree? (Y/n) y
-
-[Piece execution starts...]
 ```
 
-### Direct Task Execution
+TAKT creates an isolated worktree, runs the piece (plan → implement → review → fix loop), and offers to create a PR when done.
 
-Use the `--task` option to skip interactive mode and execute directly.
+### Queue tasks, then batch execute
 
-```bash
-# Specify task content with --task option
-takt --task "Fix bug"
-
-# Specify piece
-takt --task "Add authentication" --piece expert
-
-# Auto-create PR
-takt --task "Fix bug" --auto-pr
-```
-
-**Note:** Passing a string as an argument (e.g., `takt "Add login feature"`) enters interactive mode with it as the initial message.
-
-### GitHub Issue Tasks
-
-You can execute GitHub Issues directly as tasks. Issue title, body, labels, and comments are automatically incorporated as task content.
+Use `takt` to queue multiple tasks, then execute them all at once:
 
 ```bash
-# Execute by specifying issue number
-takt #6
-takt --issue 6
+# Queue tasks through conversation
+takt
+> Refactor the auth module
+> /go          # queues the task
 
-# Issue + piece specification
-takt #6 --piece expert
+# Or queue from GitHub Issues
+takt add #6
+takt add #12
 
-# Issue + auto-create PR
-takt #6 --auto-pr
-```
-
-**Requirements:** [GitHub CLI](https://cli.github.com/) (`gh`) must be installed and authenticated.
-
-### Task Management (add / run / watch / list)
-
-Batch processing using `.takt/tasks.yaml` with task directories under `.takt/tasks/{slug}/`. Useful for accumulating multiple tasks and executing them together later.
-
-#### Add Task (`takt add`)
-
-```bash
-# Refine task requirements through AI conversation, then add task
-takt add
-
-# Add task from GitHub Issue (issue number reflected in branch name)
-takt add #28
-```
-
-#### Execute Tasks (`takt run`)
-
-```bash
-# Execute all pending tasks in .takt/tasks.yaml
+# Execute all pending tasks
 takt run
 ```
 
-#### Watch Tasks (`takt watch`)
+### Manage results
 
 ```bash
-# Monitor .takt/tasks.yaml and auto-execute tasks (resident process)
-takt watch
-```
-
-#### List Task Branches (`takt list`)
-
-```bash
-# List task branches (merge/delete)
+# List completed/failed task branches — merge, retry, or delete
 takt list
-
-# Non-interactive mode (for CI/scripts)
-takt list --non-interactive
-takt list --non-interactive --action diff --branch takt/my-branch
-takt list --non-interactive --action delete --branch takt/my-branch --yes
-takt list --non-interactive --format json
 ```
 
-#### Task Directory Workflow (Create / Run / Verify)
+## How It Works
 
-1. Run `takt add` and confirm a pending record is created in `.takt/tasks.yaml`.
-2. Open the generated `.takt/tasks/{slug}/order.md` and add detailed specifications/references as needed.
-3. Run `takt run` (or `takt watch`) to execute pending tasks from `tasks.yaml`.
-4. Verify outputs in `.takt/runs/{slug}/reports/` using the same slug as `task_dir`.
+TAKT uses a music metaphor: **piece** = workflow, **movement** = step.
 
-### Pipeline Mode (for CI/Automation)
-
-Specifying `--pipeline` enables non-interactive pipeline mode. Automatically creates branch → runs piece → commits & pushes. Suitable for CI/CD automation.
-
-```bash
-# Execute task in pipeline mode
-takt --pipeline --task "Fix bug"
-
-# Pipeline execution + auto-create PR
-takt --pipeline --task "Fix bug" --auto-pr
-
-# Link issue information
-takt --pipeline --issue 99 --auto-pr
-
-# Specify piece and branch
-takt --pipeline --task "Fix bug" -w magi -b feat/fix-bug
-
-# Specify repository (for PR creation)
-takt --pipeline --task "Fix bug" --auto-pr --repo owner/repo
-
-# Piece execution only (skip branch creation, commit, push)
-takt --pipeline --task "Fix bug" --skip-git
-
-# Minimal output mode (for CI)
-takt --pipeline --task "Fix bug" --quiet
-```
-
-In pipeline mode, PRs are not created unless `--auto-pr` is specified.
-
-**GitHub Integration:** When using TAKT in GitHub Actions, see [takt-action](https://github.com/nrslib/takt-action). You can automate PR reviews and task execution. Refer to the [CI/CD Integration](#cicd-integration) section for details.
-
-### Other Commands
-
-```bash
-# Interactively switch pieces
-takt switch
-
-# Copy builtin pieces/personas to project .takt/ for customization
-takt eject
-
-# Copy to ~/.takt/ (global) instead
-takt eject --global
-
-# Clear agent conversation sessions
-takt clear
-
-# Deploy builtin pieces/personas as Claude Code Skill
-takt export-cc
-
-# List available facets across layers
-takt catalog
-takt catalog personas
-
-# Eject a specific facet for customization
-takt eject persona coder
-takt eject instruction plan --global
-
-# Preview assembled prompts for each movement and phase
-takt prompt [piece]
-
-# Configure permission mode
-takt config
-
-# Reset piece categories to builtin defaults
-takt reset categories
-```
-
-### Recommended Pieces
-
-| Piece | Recommended Use |
-|----------|-----------------|
-| `default` | Serious development tasks. Used for TAKT's own development. Multi-stage review with parallel reviews (architect + security). |
-| `default-mini` | Simple fixes and straightforward tasks. Lightweight piece with AI antipattern review + supervisor. |
-| `review-fix-minimal` | Review & fix piece. Specialized for iterative improvement based on review feedback. |
-| `research` | Investigation and research. Autonomously executes research without asking questions. |
-
-### Main Options
-
-| Option | Description |
-|--------|-------------|
-| `--pipeline` | **Enable pipeline (non-interactive) mode** — Required for CI/automation |
-| `-t, --task <text>` | Task content (alternative to GitHub Issue) |
-| `-i, --issue <N>` | GitHub issue number (same as `#N` in interactive mode) |
-| `-w, --piece <name or path>` | Piece name or path to piece YAML file |
-| `-b, --branch <name>` | Specify branch name (auto-generated if omitted) |
-| `--auto-pr` | Create PR (interactive: skip confirmation, pipeline: enable PR) |
-| `--skip-git` | Skip branch creation, commit, and push (pipeline mode, piece-only) |
-| `--repo <owner/repo>` | Specify repository (for PR creation) |
-| `--create-worktree <yes\|no>` | Skip worktree confirmation prompt |
-| `-q, --quiet` | Minimal output mode: suppress AI output (for CI) |
-| `--provider <name>` | Override agent provider (claude\|codex\|opencode\|mock) |
-| `--model <name>` | Override agent model |
-
-## Pieces
-
-TAKT uses YAML-based piece definitions and rule-based routing. Builtin pieces are embedded in the package, with user pieces in `~/.takt/pieces/` taking priority. Use `takt eject` to copy builtins to `~/.takt/` for customization.
-
-> **Note (v0.4.0)**: Internal terminology has changed from "step" to "movement" for piece components. User-facing piece files remain compatible, but if you customize pieces, you may see `movements:` instead of `steps:` in YAML files. The functionality remains the same.
-
-### Piece Example
+A piece defines a sequence of movements. Each movement specifies a persona (who), permissions (what's allowed), and rules (what happens next). Here's a minimal example:
 
 ```yaml
-name: default
-max_movements: 10
+name: simple
 initial_movement: plan
 
-# Section maps — key: file path (relative to this YAML)
 personas:
   planner: ../personas/planner.md
   coder: ../personas/coder.md
   reviewer: ../personas/architecture-reviewer.md
 
-policies:
-  coding: ../policies/coding.md
-
-knowledge:
-  architecture: ../knowledge/architecture.md
-
 movements:
   - name: plan
     persona: planner
-    model: opus
     edit: false
     rules:
       - condition: Planning complete
         next: implement
-    instruction_template: |
-      Analyze the request and create an implementation plan.
 
   - name: implement
     persona: coder
-    policy: coding
-    knowledge: architecture
     edit: true
-    required_permission_mode: edit
     rules:
       - condition: Implementation complete
         next: review
-      - condition: Blocked
-        next: ABORT
-    instruction_template: |
-      Implement based on the plan.
 
   - name: review
     persona: reviewer
-    knowledge: architecture
     edit: false
     rules:
       - condition: Approved
         next: COMPLETE
       - condition: Needs fix
-        next: implement
-    instruction_template: |
-      Review the implementation from architecture and code quality perspectives.
+        next: implement    # ← fix loop
 ```
 
-### Persona-less Movements
+Rules determine the next movement. `COMPLETE` ends the piece successfully, `ABORT` ends with failure. See the [Piece Guide](./docs/pieces.md) for the full schema, parallel movements, and rule condition types.
 
-The `persona` field is optional. When omitted, the movement executes using only the `instruction_template` without a system prompt. This is useful for simple tasks that don't require persona customization.
+## Recommended Pieces
 
-```yaml
-  - name: summarize
-    # No persona specified — uses instruction_template only
-    edit: false
-    rules:
-      - condition: Summary complete
-        next: COMPLETE
-    instruction_template: |
-      Read the report and provide a concise summary.
-```
+| Piece | Use Case |
+|-------|----------|
+| `default-mini` | Quick fixes. Lightweight plan → implement → parallel review → fix loop. |
+| `frontend-mini` | Frontend-focused mini configuration. |
+| `backend-mini` | Backend-focused mini configuration. |
+| `expert-mini` | Expert-level mini configuration. |
+| `default` | Serious development. Multi-stage review with parallel reviewers. Used for TAKT's own development. |
 
-You can also write an inline system prompt as the `persona` value (if the specified file doesn't exist):
+See the [Builtin Catalog](./docs/builtin-catalog.md) for all pieces and personas.
 
-```yaml
-  - name: review
-    persona: "You are a code reviewer. Focus on readability and maintainability."
-    edit: false
-    instruction_template: |
-      Review code quality.
-```
+## Key Commands
 
-### Parallel Movements
-
-Execute sub-movements in parallel within a movement and evaluate with aggregate conditions:
-
-```yaml
-  - name: reviewers
-    parallel:
-      - name: arch-review
-        persona: reviewer
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        instruction_template: |
-          Review architecture and code quality.
-      - name: security-review
-        persona: security-reviewer
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        instruction_template: |
-          Review for security vulnerabilities.
-    rules:
-      - condition: all("approved")
-        next: supervise
-      - condition: any("needs_fix")
-        next: fix
-```
-
-- `all("X")`: true if ALL sub-movements matched condition X
-- `any("X")`: true if ANY sub-movement matched condition X
-- Sub-movement `rules` define possible outcomes, but `next` is optional (parent controls transition)
-
-### Rule Condition Types
-
-| Type | Syntax | Description |
-|------|--------|-------------|
-| Tag-based | `"condition text"` | Agent outputs `[MOVEMENTNAME:N]` tag, matched by index |
-| AI judge | `ai("condition text")` | AI evaluates condition against agent output |
-| Aggregate | `all("X")` / `any("X")` | Aggregates parallel sub-movement matched conditions |
-
-## Builtin Pieces
-
-TAKT includes multiple builtin pieces:
-
-| Piece | Description |
-|----------|-------------|
-| `default` | Full development piece: plan → implement → AI review → parallel review (architect + QA) → supervisor approval. Includes fix loops at each review stage. |
-| `default-mini` | Mini development piece: plan → implement → parallel review (AI antipattern + supervisor) → fix if needed. Lightweight with review. |
-| `frontend-mini` | Mini frontend piece: plan → implement → parallel review (AI antipattern + supervisor) with frontend knowledge injection. |
-| `backend-mini` | Mini backend piece: plan → implement → parallel review (AI antipattern + supervisor) with backend knowledge injection. |
-| `backend-cqrs-mini` | Mini CQRS+ES piece: plan → implement → parallel review (AI antipattern + supervisor) with CQRS+ES knowledge injection. |
-| `review-fix-minimal` | Review-focused piece: review → fix → supervisor. For iterative improvement based on review feedback. |
-| `research` | Research piece: planner → digger → supervisor. Autonomously executes research without asking questions. |
-| `deep-research` | Deep research piece: plan → dig → analyze → supervise. Discovery-driven investigation that follows emerging questions with multi-perspective analysis. |
-| `expert` | Full-stack development piece: architecture, frontend, security, QA reviews with fix loops. |
-| `expert-mini` | Mini expert piece: plan → implement → parallel review (AI antipattern + expert supervisor) with full-stack knowledge injection. |
-| `expert-cqrs` | Full-stack development piece (CQRS+ES specialized): CQRS+ES, frontend, security, QA reviews with fix loops. |
-| `expert-cqrs-mini` | Mini CQRS+ES expert piece: plan → implement → parallel review (AI antipattern + expert supervisor) with CQRS+ES knowledge injection. |
-| `magi` | Deliberation system inspired by Evangelion. Three AI personas (MELCHIOR, BALTHASAR, CASPER) analyze and vote. |
-| `passthrough` | Thinnest wrapper. Pass task directly to coder as-is. No review. |
-| `compound-eye` | Multi-model review: sends the same instruction to Claude and Codex simultaneously, then synthesizes both responses. |
-| `review-only` | Read-only code review piece that makes no changes. |
-| `structural-reform` | Full project review and structural reform: iterative codebase restructuring with staged file splits. |
-| `unit-test` | Unit test focused piece: test analysis → test implementation → review → fix. |
-| `e2e-test` | E2E test focused piece: E2E analysis → E2E implementation → review → fix (Vitest-based E2E flow). |
-| `frontend` | Frontend-specialized development piece with React/Next.js focused reviews and knowledge injection. |
-| `backend` | Backend-specialized development piece with backend, security, and QA expert reviews. |
-| `backend-cqrs` | CQRS+ES-specialized backend development piece with CQRS+ES, security, and QA expert reviews. |
-
-**Per-persona provider overrides:** Use `persona_providers` in config to route specific personas to different providers (e.g., coder on Codex, reviewers on Claude) without duplicating pieces.
-
-Use `takt switch` to switch pieces.
-
-## Builtin Personas
-
-| Persona | Description |
+| Command | Description |
 |---------|-------------|
-| **planner** | Task analysis, spec investigation, implementation planning |
-| **architect-planner** | Task analysis and design planning: investigates code, resolves unknowns, creates implementation plans |
-| **coder** | Feature implementation, bug fixing |
-| **ai-antipattern-reviewer** | AI-specific antipattern review (non-existent APIs, incorrect assumptions, scope creep) |
-| **architecture-reviewer** | Architecture and code quality review, spec compliance verification |
-| **frontend-reviewer** | Frontend (React/Next.js) code quality and best practices review |
-| **cqrs-es-reviewer** | CQRS+Event Sourcing architecture and implementation review |
-| **qa-reviewer** | Test coverage and quality assurance review |
-| **security-reviewer** | Security vulnerability assessment |
-| **conductor** | Phase 3 judgment specialist: reads reports/responses and outputs status tags |
-| **supervisor** | Final validation, approval |
-| **expert-supervisor** | Expert-level final validation with comprehensive review integration |
-| **research-planner** | Research task planning and scope definition |
-| **research-analyzer** | Research result interpretation and additional investigation planning |
-| **research-digger** | Deep investigation and information gathering |
-| **research-supervisor** | Research quality validation and completeness assessment |
-| **test-planner** | Test strategy analysis and comprehensive test planning |
-| **pr-commenter** | Posts review findings as GitHub PR comments |
+| `takt` | Talk to AI, refine requirements, execute or queue tasks |
+| `takt run` | Execute all pending tasks |
+| `takt list` | Manage task branches (merge, retry, instruct, delete) |
+| `takt #N` | Execute GitHub Issue as task |
+| `takt switch` | Switch active piece |
+| `takt eject` | Copy builtin pieces/personas for customization |
 
-## Custom Personas
+See the [CLI Reference](./docs/cli-reference.md) for all commands and options.
 
-Create persona prompts in Markdown files:
+## Configuration
+
+Minimal `~/.takt/config.yaml`:
+
+```yaml
+provider: claude    # claude, codex, or opencode
+model: sonnet       # passed directly to provider
+language: en        # en or ja
+```
+
+Or use API keys directly (no CLI installation required):
+
+```bash
+export TAKT_ANTHROPIC_API_KEY=sk-ant-...
+```
+
+See the [Configuration Guide](./docs/configuration.md) for all options, provider profiles, and model resolution.
+
+## Customization
+
+### Custom pieces
+
+```bash
+takt eject default    # Copy builtin to ~/.takt/pieces/ and edit
+```
+
+### Custom personas
+
+Create a Markdown file in `~/.takt/personas/`:
 
 ```markdown
 # ~/.takt/personas/my-reviewer.md
-
 You are a code reviewer specialized in security.
-
-## Role
-- Check for security vulnerabilities
-- Verify input validation
-- Review authentication logic
 ```
 
-## Model Selection
+Reference it in your piece: `persona: my-reviewer`
 
-The `model` field (in piece movements, agent config, or global config) is passed directly to the provider (Claude Code CLI / Codex SDK). TAKT does not resolve model aliases.
+See the [Piece Guide](./docs/pieces.md) and [Agent Guide](./docs/agents.md) for details.
 
-### Claude Code
+## CI/CD
 
-Claude Code supports aliases (`opus`, `sonnet`, `haiku`, `opusplan`, `default`) and full model names (e.g., `claude-sonnet-4-5-20250929`). Refer to the [Claude Code documentation](https://docs.anthropic.com/en/docs/claude-code) for available models.
+TAKT provides [takt-action](https://github.com/nrslib/takt-action) for GitHub Actions:
 
-### Codex
+```yaml
+- uses: nrslib/takt-action@main
+  with:
+    anthropic_api_key: ${{ secrets.TAKT_ANTHROPIC_API_KEY }}
+    github_token: ${{ secrets.GITHUB_TOKEN }}
+```
 
-The model string is passed to the Codex SDK. If unspecified, defaults to `codex`. Refer to Codex documentation for available models.
+For other CI systems, use pipeline mode:
+
+```bash
+takt --pipeline --task "Fix the bug" --auto-pr
+```
+
+See the [CI/CD Guide](./docs/ci-cd.md) for full setup instructions.
 
 ## Project Structure
 
 ```
-~/.takt/                    # Global configuration directory
-├── config.yaml             # Global config (provider, model, piece, etc.)
-├── pieces/                 # User piece definitions (override builtins)
-│   └── custom.yaml
-└── personas/               # User persona prompt files (.md)
-    └── my-persona.md
+~/.takt/                    # Global config
+├── config.yaml             # Provider, model, language, etc.
+├── pieces/                 # User piece definitions
+└── personas/               # User persona prompts
 
-.takt/                      # Project-level configuration
-├── config.yaml             # Project config (current piece, etc.)
-├── tasks/                  # Task input directories (.takt/tasks/{slug}/order.md, etc.)
-├── tasks.yaml              # Pending tasks metadata (task_dir, piece, worktree, etc.)
-└── runs/                   # Run-scoped artifacts
-    └── {slug}/
-        ├── reports/        # Execution reports (auto-generated)
-        ├── context/        # knowledge/policy/previous_response snapshots
-        ├── logs/           # NDJSON session logs for this run
-        └── meta.json       # Run metadata
+.takt/                      # Project-level
+├── config.yaml             # Project config
+├── tasks.yaml              # Pending tasks
+├── tasks/                  # Task specifications
+└── runs/                   # Execution reports, logs, context
 ```
 
-Builtin resources are embedded in the npm package (`builtins/`). User files in `~/.takt/` take priority.
-
-### Global Configuration
-
-Configure default provider and model in `~/.takt/config.yaml`:
-
-```yaml
-# ~/.takt/config.yaml
-language: en
-default_piece: default
-log_level: info
-provider: claude         # Default provider: claude, codex, or opencode
-model: sonnet            # Default model (optional)
-branch_name_strategy: romaji  # Branch name generation: 'romaji' (fast) or 'ai' (slow)
-prevent_sleep: false     # Prevent macOS idle sleep during execution (caffeinate)
-notification_sound: true # Enable/disable notification sounds
-notification_sound_events: # Optional per-event toggles
-  iteration_limit: false
-  piece_complete: true
-  piece_abort: true
-  run_complete: true # Enabled by default; set false to disable
-  run_abort: true    # Enabled by default; set false to disable
-concurrency: 1           # Parallel task count for takt run (1-10, default: 1 = sequential)
-task_poll_interval_ms: 500  # Polling interval for new tasks during takt run (100-5000, default: 500)
-interactive_preview_movements: 3  # Movement previews in interactive mode (0-10, default: 3)
-
-# Runtime environment defaults (applies to all pieces unless piece_config.runtime overrides)
-# runtime:
-#   prepare:
-#     - gradle    # Prepare Gradle cache/config in .runtime/
-#     - node      # Prepare npm cache in .runtime/
-
-# Per-persona provider overrides (optional)
-# Route specific personas to different providers without duplicating pieces
-# persona_providers:
-#   coder: codex             # Run coder on Codex
-#   ai-antipattern-reviewer: claude  # Keep reviewers on Claude
-
-# Provider-specific permission profiles (optional)
-# Priority: project override → global override → project default → global default → required_permission_mode (floor)
-# provider_profiles:
-#   codex:
-#     default_permission_mode: full
-#     movement_permission_overrides:
-#       ai_review: readonly
-#   claude:
-#     default_permission_mode: edit
-
-# API Key configuration (optional)
-# Can be overridden by environment variables TAKT_ANTHROPIC_API_KEY / TAKT_OPENAI_API_KEY / TAKT_OPENCODE_API_KEY
-anthropic_api_key: sk-ant-...  # For Claude (Anthropic)
-# openai_api_key: sk-...       # For Codex (OpenAI)
-# opencode_api_key: ...        # For OpenCode
-
-# Codex CLI path override (optional)
-# Override the Codex CLI binary used by the Codex SDK (must be an absolute path to an executable file)
-# Can be overridden by TAKT_CODEX_CLI_PATH environment variable
-# codex_cli_path: /usr/local/bin/codex
-
-# Builtin piece filtering (optional)
-# builtin_pieces_enabled: true           # Set false to disable all builtins
-# disabled_builtins: [magi, passthrough] # Disable specific builtin pieces
-
-# Pipeline execution configuration (optional)
-# Customize branch names, commit messages, and PR body.
-# pipeline:
-#   default_branch_prefix: "takt/"
-#   commit_message_template: "feat: {title} (#{issue})"
-#   pr_body_template: |
-#     ## Summary
-#     {issue_body}
-#     Closes #{issue}
-```
-
-**Note:** The Codex SDK requires running inside a Git repository. `--skip-git-repo-check` is only available in the Codex CLI.
-
-**API Key Configuration Methods:**
-
-1. **Set via environment variables**:
-   ```bash
-   export TAKT_ANTHROPIC_API_KEY=sk-ant-...  # For Claude
-   export TAKT_OPENAI_API_KEY=sk-...         # For Codex
-   export TAKT_OPENCODE_API_KEY=...          # For OpenCode
-   ```
-
-2. **Set in config file**:
-   Write `anthropic_api_key`, `openai_api_key`, or `opencode_api_key` in `~/.takt/config.yaml` as shown above
-
-Priority: Environment variables > `config.yaml` settings
-
-**Notes:**
-- If you set an API Key, installing Claude Code, Codex, or OpenCode is not necessary. TAKT directly calls the respective API.
-- **Security**: If you write API Keys in `config.yaml`, be careful not to commit this file to Git. Consider using environment variables or adding `~/.takt/config.yaml` to `.gitignore`.
-
-**Pipeline Template Variables:**
-
-| Variable | Available In | Description |
-|----------|-------------|-------------|
-| `{title}` | Commit message | Issue title |
-| `{issue}` | Commit message, PR body | Issue number |
-| `{issue_body}` | PR body | Issue body |
-| `{report}` | PR body | Piece execution report |
-
-**Model Resolution Priority:**
-1. Piece movement `model` (highest priority)
-2. Custom agent `model`
-3. Global config `model`
-4. Provider default (Claude: sonnet, Codex: codex, OpenCode: provider default)
-
-## Detailed Guides
-
-### Task Directory Format
-
-TAKT stores task metadata in `.takt/tasks.yaml`, and each task's long specification in `.takt/tasks/{slug}/`.
-
-**Recommended layout**:
-
-```text
-.takt/
-  tasks/
-    20260201-015714-foptng/
-      order.md
-      schema.sql
-      wireframe.png
-  tasks.yaml
-  runs/
-    20260201-015714-foptng/
-      reports/
-```
-
-**tasks.yaml record**:
-
-```yaml
-tasks:
-  - name: add-auth-feature
-    status: pending
-    task_dir: .takt/tasks/20260201-015714-foptng
-    piece: default
-    created_at: "2026-02-01T01:57:14.000Z"
-    started_at: null
-    completed_at: null
-```
-
-`takt add` creates `.takt/tasks/{slug}/order.md` automatically and saves `task_dir` to `tasks.yaml`.
-
-#### Isolated Execution with Shared Clone
-
-Specifying `worktree` in YAML task files executes each task in an isolated clone created with `git clone --shared`, keeping your main working directory clean:
-
-- `worktree: true` - Auto-create shared clone in adjacent directory (or location specified by `worktree_dir` config)
-- `worktree: "/path/to/dir"` - Create at specified path
-- `branch: "feat/xxx"` - Use specified branch (auto-generated as `takt/{timestamp}-{slug}` if omitted)
-- Omit `worktree` - Execute in current directory (default)
-
-> **Note**: The YAML field name remains `worktree` for backward compatibility. Internally, it uses `git clone --shared` instead of `git worktree`. Git worktrees have a `.git` file containing `gitdir:` pointing to the main repository, which Claude Code follows to recognize the main repository as the project root. Shared clones have an independent `.git` directory, preventing this issue.
-
-Clones are ephemeral. After task completion, they auto-commit + push, then delete the clone. Branches are the only persistent artifacts. Use `takt list` to list, merge, or delete branches.
-
-### Session Logs
-
-TAKT writes session logs in NDJSON (`.jsonl`) format to `.takt/runs/{slug}/logs/`. Each record is atomically appended, so partial logs are preserved even if the process crashes, and you can track in real-time with `tail -f`.
-
-- `.takt/runs/{slug}/logs/{sessionId}.jsonl` - NDJSON session log per piece execution
-- `.takt/runs/{slug}/meta.json` - Run metadata (`task`, `piece`, `start/end`, `status`, etc.)
-
-Record types: `piece_start`, `step_start`, `step_complete`, `piece_complete`, `piece_abort`
-
-The latest previous response is stored at `.takt/runs/{slug}/context/previous_responses/latest.md` and inherited automatically.
-
-### Adding Custom Pieces
-
-Add YAML files to `~/.takt/pieces/` or customize builtins with `takt eject`:
-
-```bash
-# Copy default piece to ~/.takt/pieces/ and edit
-takt eject default
-```
-
-```yaml
-# ~/.takt/pieces/my-piece.yaml
-name: my-piece
-description: Custom piece
-max_movements: 5
-initial_movement: analyze
-
-personas:
-  analyzer: ~/.takt/personas/analyzer.md
-  coder: ../personas/coder.md
-
-movements:
-  - name: analyze
-    persona: analyzer
-    edit: false
-    rules:
-      - condition: Analysis complete
-        next: implement
-    instruction_template: |
-      Thoroughly analyze this request.
-
-  - name: implement
-    persona: coder
-    edit: true
-    required_permission_mode: edit
-    pass_previous_response: true
-    rules:
-      - condition: Complete
-        next: COMPLETE
-    instruction_template: |
-      Implement based on the analysis.
-```
-
-> **Note**: `{task}`, `{previous_response}`, `{user_inputs}` are automatically injected into instructions. Explicit placeholders are only needed if you want to control their position in the template.
-
-### Specifying Personas by Path
-
-Map keys to file paths in section maps, then reference keys from movements:
-
-```yaml
-# Section maps (relative to piece file)
-personas:
-  coder: ../personas/coder.md
-  reviewer: ~/.takt/personas/my-reviewer.md
-```
-
-### Piece Variables
-
-Variables available in `instruction_template`:
-
-| Variable | Description |
-|----------|-------------|
-| `{task}` | Original user request (auto-injected if not in template) |
-| `{iteration}` | Piece-wide turn count (total steps executed) |
-| `{max_movements}` | Maximum iteration count |
-| `{movement_iteration}` | Per-movement iteration count (times this movement has been executed) |
-| `{previous_response}` | Output from previous movement (auto-injected if not in template) |
-| `{user_inputs}` | Additional user inputs during piece (auto-injected if not in template) |
-| `{report_dir}` | Report directory path (e.g., `.takt/runs/20250126-143052-task-summary/reports`) |
-| `{report:filename}` | Expands to `{report_dir}/filename` (e.g., `{report:00-plan.md}`) |
-
-### Piece Design
-
-Elements needed for each piece movement:
-
-**1. Persona** - Referenced by section map key (used as system prompt):
-
-```yaml
-persona: coder                       # Key from personas section map
-persona_name: coder                  # Display name (optional)
-```
-
-**2. Rules** - Define routing from movement to next movement. The instruction builder auto-injects status output rules, so agents know which tags to output:
-
-```yaml
-rules:
-  - condition: "Implementation complete"
-    next: review
-  - condition: "Blocked"
-    next: ABORT
-```
-
-Special `next` values: `COMPLETE` (success), `ABORT` (failure)
-
-**3. Movement Options:**
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `edit` | - | Whether movement can edit project files (`true`/`false`) |
-| `pass_previous_response` | `true` | Pass previous movement output to `{previous_response}` |
-| `allowed_tools` | - | List of tools agent can use (Read, Glob, Grep, Edit, Write, Bash, etc.) |
-| `provider` | - | Override provider for this movement (`claude`, `codex`, or `opencode`) |
-| `model` | - | Override model for this movement |
-| `required_permission_mode` | - | Required minimum permission mode: `readonly`, `edit`, `full` (acts as floor; actual mode resolved via `provider_profiles`) |
-| `provider_options` | - | Provider-specific options (e.g. `codex.network_access`, `opencode.network_access`) |
-| `output_contracts` | - | Output contract definitions for report files |
-| `quality_gates` | - | AI directives for movement completion requirements |
-| `mcp_servers` | - | MCP (Model Context Protocol) server configuration (stdio/SSE/HTTP) |
-
-Piece-level defaults can be set with `piece_config.provider_options`, and movement-level `provider_options` overrides them.
-
-```yaml
-piece_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
-  runtime:
-    prepare:
-      - gradle
-      - node
-```
-
-Runtime `prepare` entries can be builtin presets (`gradle`, `node`) or paths to custom shell scripts. Scripts receive `TAKT_RUNTIME_ROOT` and related env vars, and can export additional variables via stdout.
-
-## API Usage Example
+## API Usage
 
 ```typescript
-import { PieceEngine, loadPiece } from 'takt';  // npm install takt
+import { PieceEngine, loadPiece } from 'takt';
 
 const config = loadPiece('default');
-if (!config) {
-  throw new Error('Piece not found');
-}
-const engine = new PieceEngine(config, process.cwd(), 'My task');
+if (!config) throw new Error('Piece not found');
 
+const engine = new PieceEngine(config, process.cwd(), 'My task');
 engine.on('step:complete', (step, response) => {
   console.log(`${step.name}: ${response.status}`);
 });
@@ -870,81 +237,25 @@ engine.on('step:complete', (step, response) => {
 await engine.run();
 ```
 
-## Contributing
-
-See [CONTRIBUTING.md](../CONTRIBUTING.md) for details.
-
-## CI/CD Integration
-
-### GitHub Actions
-
-TAKT provides a GitHub Action for automating PR reviews and task execution. See [takt-action](https://github.com/nrslib/takt-action) for details.
-
-**Piece example** (see [.github/workflows/takt-action.yml](../.github/workflows/takt-action.yml) in this repository):
-
-```yaml
-name: TAKT
-
-on:
-  issue_comment:
-    types: [created]
-
-jobs:
-  takt:
-    if: contains(github.event.comment.body, '@takt')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      issues: write
-      pull-requests: write
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Run TAKT
-        uses: nrslib/takt-action@main
-        with:
-          anthropic_api_key: ${{ secrets.TAKT_ANTHROPIC_API_KEY }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-```
-
-**Cost Warning**: TAKT uses AI APIs (Claude or OpenAI), which can incur significant costs, especially when tasks are auto-executed in CI/CD environments. Monitor API usage and set up billing alerts.
-
-### Other CI Systems
-
-For CI systems other than GitHub, use pipeline mode:
-
-```bash
-# Install takt
-npm install -g takt
-
-# Run in pipeline mode
-takt --pipeline --task "Fix bug" --auto-pr --repo owner/repo
-```
-
-For authentication, set `TAKT_ANTHROPIC_API_KEY`, `TAKT_OPENAI_API_KEY`, or `TAKT_OPENCODE_API_KEY` environment variables (TAKT-specific prefix).
-
-```bash
-# For Claude (Anthropic)
-export TAKT_ANTHROPIC_API_KEY=sk-ant-...
-
-# For Codex (OpenAI)
-export TAKT_OPENAI_API_KEY=sk-...
-
-# For OpenCode
-export TAKT_OPENCODE_API_KEY=...
-```
-
 ## Documentation
 
-- [Faceted Prompting](./docs/faceted-prompting.md) - Separation of Concerns for AI prompts (Persona, Policy, Instruction, Knowledge, Output Contract)
-- [Piece Guide](./docs/pieces.md) - Creating and customizing pieces
-- [Agent Guide](./docs/agents.md) - Configuring custom agents
-- [Changelog](../CHANGELOG.md) ([日本語](./docs/CHANGELOG.ja.md)) - Version history
-- [Security Policy](../SECURITY.md) - Vulnerability reporting
-- [Blog: TAKT - AI Agent Orchestration](https://zenn.dev/nrs/articles/c6842288a526d7) - Design philosophy and practical usage guide (Japanese)
+| Document | Description |
+|----------|-------------|
+| [CLI Reference](./docs/cli-reference.md) | All commands and options |
+| [Configuration](./docs/configuration.md) | Global and project settings |
+| [Piece Guide](./docs/pieces.md) | Creating and customizing pieces |
+| [Agent Guide](./docs/agents.md) | Custom agent configuration |
+| [Builtin Catalog](./docs/builtin-catalog.md) | All builtin pieces and personas |
+| [Faceted Prompting](./docs/faceted-prompting.md) | Prompt design methodology |
+| [Task Management](./docs/task-management.md) | Task queuing, execution, isolation |
+| [CI/CD Integration](./docs/ci-cd.md) | GitHub Actions and pipeline mode |
+| [Changelog](./CHANGELOG.md) ([日本語](./docs/CHANGELOG.ja.md)) | Version history |
+| [Security Policy](./SECURITY.md) | Vulnerability reporting |
+
+## Contributing
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for details.
 
 ## License
 
-MIT - See [LICENSE](../LICENSE) for details.
+MIT — See [LICENSE](./LICENSE) for details.

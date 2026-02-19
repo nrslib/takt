@@ -40,7 +40,7 @@ const configMock = vi.hoisted(() => ({
   getPieceCategories: vi.fn(),
   buildCategorizedPieces: vi.fn(),
   getCurrentPiece: vi.fn(),
-  findPieceCategories: vi.fn(() => []),
+  resolveConfigValue: vi.fn(),
 }));
 
 vi.mock('../infra/config/index.js', () => configMock);
@@ -242,6 +242,65 @@ describe('selectPieceFromCategorizedPieces', () => {
     // Should NOT contain the parent category again
     expect(labels.some((l) => l.includes('Dev'))).toBe(false);
   });
+
+  it('should navigate into builtin wrapper category and select a piece', async () => {
+    const categorized: CategorizedPieces = {
+      categories: [
+        { name: 'My Team', pieces: ['custom'], children: [] },
+        {
+          name: 'builtin',
+          pieces: [],
+          children: [
+            { name: 'Quick Start', pieces: ['default'], children: [] },
+          ],
+        },
+      ],
+      allPieces: createPieceMap([
+        { name: 'custom', source: 'user' },
+        { name: 'default', source: 'builtin' },
+      ]),
+      missingPieces: [],
+    };
+
+    // Select builtin category → Quick Start subcategory → piece
+    selectOptionMock
+      .mockResolvedValueOnce('__custom_category__:builtin')
+      .mockResolvedValueOnce('__category__:Quick Start')
+      .mockResolvedValueOnce('default');
+
+    const selected = await selectPieceFromCategorizedPieces(categorized, '');
+    expect(selected).toBe('default');
+    expect(selectOptionMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('should show builtin wrapper as a folder in top-level options', async () => {
+    const categorized: CategorizedPieces = {
+      categories: [
+        { name: 'My Team', pieces: ['custom'], children: [] },
+        {
+          name: 'builtin',
+          pieces: [],
+          children: [
+            { name: 'Quick Start', pieces: ['default'], children: [] },
+          ],
+        },
+      ],
+      allPieces: createPieceMap([
+        { name: 'custom', source: 'user' },
+        { name: 'default', source: 'builtin' },
+      ]),
+      missingPieces: [],
+    };
+
+    selectOptionMock.mockResolvedValueOnce(null);
+
+    await selectPieceFromCategorizedPieces(categorized, '');
+
+    const firstCallOptions = selectOptionMock.mock.calls[0]![1] as { label: string; value: string }[];
+    const labels = firstCallOptions.map((o) => o.label);
+    expect(labels.some((l) => l.includes('My Team'))).toBe(true);
+    expect(labels.some((l) => l.includes('builtin'))).toBe(true);
+  });
 });
 
 describe('selectPiece', () => {
@@ -258,13 +317,13 @@ describe('selectPiece', () => {
     configMock.loadAllPiecesWithSources.mockReset();
     configMock.getPieceCategories.mockReset();
     configMock.buildCategorizedPieces.mockReset();
-    configMock.getCurrentPiece.mockReset();
+    configMock.resolveConfigValue.mockReset();
   });
 
   it('should return default piece when no pieces found and fallbackToDefault is true', async () => {
     configMock.getPieceCategories.mockReturnValue(null);
     configMock.listPieces.mockReturnValue([]);
-    configMock.getCurrentPiece.mockReturnValue('default');
+    configMock.resolveConfigValue.mockReturnValue('default');
 
     const result = await selectPiece('/cwd');
 
@@ -274,7 +333,7 @@ describe('selectPiece', () => {
   it('should return null when no pieces found and fallbackToDefault is false', async () => {
     configMock.getPieceCategories.mockReturnValue(null);
     configMock.listPieces.mockReturnValue([]);
-    configMock.getCurrentPiece.mockReturnValue('default');
+    configMock.resolveConfigValue.mockReturnValue('default');
 
     const result = await selectPiece('/cwd', { fallbackToDefault: false });
 
@@ -287,7 +346,7 @@ describe('selectPiece', () => {
     configMock.listPieceEntries.mockReturnValue([
       { name: 'only-piece', path: '/tmp/only-piece.yaml', source: 'user' },
     ]);
-    configMock.getCurrentPiece.mockReturnValue('only-piece');
+    configMock.resolveConfigValue.mockReturnValue('only-piece');
     selectOptionMock.mockResolvedValueOnce('only-piece');
 
     const result = await selectPiece('/cwd');
@@ -307,7 +366,7 @@ describe('selectPiece', () => {
     configMock.getPieceCategories.mockReturnValue({ categories: ['Dev'] });
     configMock.loadAllPiecesWithSources.mockReturnValue(pieceMap);
     configMock.buildCategorizedPieces.mockReturnValue(categorized);
-    configMock.getCurrentPiece.mockReturnValue('my-piece');
+    configMock.resolveConfigValue.mockReturnValue('my-piece');
 
     selectOptionMock.mockResolvedValueOnce('__current__');
 
@@ -321,7 +380,7 @@ describe('selectPiece', () => {
     configMock.getPieceCategories.mockReturnValue(null);
     configMock.listPieces.mockReturnValue(['piece-a', 'piece-b']);
     configMock.listPieceEntries.mockReturnValue(entries);
-    configMock.getCurrentPiece.mockReturnValue('piece-a');
+    configMock.resolveConfigValue.mockReturnValue('piece-a');
 
     selectOptionMock
       .mockResolvedValueOnce('custom')

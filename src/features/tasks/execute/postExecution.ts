@@ -5,12 +5,12 @@
  * instructBranch (instruct mode from takt list).
  */
 
-import { loadGlobalConfig } from '../../../infra/config/index.js';
+import { resolvePieceConfigValue } from '../../../infra/config/index.js';
 import { confirm } from '../../../shared/prompt/index.js';
 import { autoCommitAndPush } from '../../../infra/task/index.js';
 import { info, error, success } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
-import { createPullRequest, buildPrBody, pushBranch } from '../../../infra/github/index.js';
+import { createPullRequest, buildPrBody, pushBranch, findExistingPr, commentOnPr } from '../../../infra/github/index.js';
 import type { GitHubIssue } from '../../../infra/github/index.js';
 
 const log = createLogger('postExecution');
@@ -18,16 +18,15 @@ const log = createLogger('postExecution');
 /**
  * Resolve auto-PR setting with priority: CLI option > config > prompt.
  */
-export async function resolveAutoPr(optionAutoPr: boolean | undefined): Promise<boolean> {
+export async function resolveAutoPr(optionAutoPr: boolean | undefined, cwd: string): Promise<boolean> {
   if (typeof optionAutoPr === 'boolean') {
     return optionAutoPr;
   }
 
-  const globalConfig = loadGlobalConfig();
-  if (typeof globalConfig.autoPr === 'boolean') {
-    return globalConfig.autoPr;
+  const autoPr = resolvePieceConfigValue(cwd, 'autoPr');
+  if (typeof autoPr === 'boolean') {
+    return autoPr;
   }
-
   return confirm('Create pull request?', true);
 }
 
@@ -57,25 +56,37 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
   }
 
   if (commitResult.success && commitResult.commitHash && branch && shouldCreatePr) {
-    info('Creating pull request...');
     try {
       pushBranch(projectCwd, branch);
     } catch (pushError) {
       log.info('Branch push from project cwd failed (may already exist)', { error: pushError });
     }
     const report = pieceIdentifier ? `Piece \`${pieceIdentifier}\` completed successfully.` : 'Task completed successfully.';
-    const prBody = buildPrBody(issues, report);
-    const prResult = createPullRequest(projectCwd, {
-      branch,
-      title: task.length > 100 ? `${task.slice(0, 97)}...` : task,
-      body: prBody,
-      base: baseBranch,
-      repo,
-    });
-    if (prResult.success) {
-      success(`PR created: ${prResult.url}`);
+    const existingPr = findExistingPr(projectCwd, branch);
+    if (existingPr) {
+      // PRが既に存在する場合はコメントを追加（push済みなので新コミットはPRに自動反映）
+      const commentBody = buildPrBody(issues, report);
+      const commentResult = commentOnPr(projectCwd, existingPr.number, commentBody);
+      if (commentResult.success) {
+        success(`PR updated with comment: ${existingPr.url}`);
+      } else {
+        error(`PR comment failed: ${commentResult.error}`);
+      }
     } else {
-      error(`PR creation failed: ${prResult.error}`);
+      info('Creating pull request...');
+      const prBody = buildPrBody(issues, report);
+      const prResult = createPullRequest(projectCwd, {
+        branch,
+        title: task.length > 100 ? `${task.slice(0, 97)}...` : task,
+        body: prBody,
+        base: baseBranch,
+        repo,
+      });
+      if (prResult.success) {
+        success(`PR created: ${prResult.url}`);
+      } else {
+        error(`PR creation failed: ${prResult.error}`);
+      }
     }
   }
 }

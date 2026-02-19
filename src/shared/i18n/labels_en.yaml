@@ -10,7 +10,7 @@ interactive:
   conversationLabel: "Conversation:"
   noTranscript: "(No local transcript. Summarize the current session context.)"
   ui:
-    intro: "Interactive mode - describe your task. Commands: /go (execute), /play (run now), /cancel (exit)"
+    intro: "Interactive mode - describe your task. Commands: /go (execute), /play (run now), /resume (load session), /retry (rerun previous order), /cancel (exit)"
     resume: "Resuming previous session"
     noConversation: "No conversation yet. Please describe your task first."
     summarizeFailed: "Failed to summarize conversation. Please try again."
@@ -24,6 +24,7 @@ interactive:
       continue: "Continue editing"
     cancelled: "Cancelled"
     playNoTask: "Please specify task content: /play <task>"
+    retryNoOrder: "No previous order (order.md) found. /retry is only available during retry."
     personaFallback: "No persona available for the first movement. Falling back to assistant mode."
   modeSelection:
     prompt: "Select interactive mode:"
@@ -39,8 +40,9 @@ interactive:
     confirm: "Reference a previous run's results?"
     prompt: "Select a run to reference:"
     noRuns: "No previous runs found."
+  continueNoSession: "No previous assistant session found. Starting a new session."
+  resumeSessionLoaded: "Session loaded. Subsequent AI calls will use this session."
   sessionSelector:
-    confirm: "Choose a previous session?"
     prompt: "Resume from a recent session?"
     newSession: "New session"
     newSessionDescription: "Start a fresh conversation"
@@ -75,7 +77,7 @@ piece:
 # ===== Instruct Mode UI (takt list -> instruct) =====
 instruct:
   ui:
-    intro: "Instruct mode - describe additional instructions. Commands: /go (summarize), /cancel (exit)"
+    intro: "Instruct mode - describe additional instructions. Commands: /go (summarize), /retry (rerun previous order), /cancel (exit)"
     resume: "Resuming previous session"
     noConversation: "No conversation yet. Please describe your instructions first."
     summarizeFailed: "Failed to summarize conversation. Please try again."
@@ -87,6 +89,7 @@ instruct:
       saveTask: "Save as Task"
       continue: "Continue editing"
     cancelled: "Cancelled"
+    replayNoOrder: "Previous order (order.md) not found"
 
 run:
   notifyComplete: "Run complete ({total} tasks)"

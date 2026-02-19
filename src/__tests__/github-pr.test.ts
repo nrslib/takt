@@ -1,13 +1,63 @@
 /**
  * Tests for github/pr module
  *
- * Tests buildPrBody formatting.
- * createPullRequest/pushBranch call `gh`/`git` CLI, not unit-tested here.
+ * Tests buildPrBody formatting and findExistingPr logic.
+ * createPullRequest/pushBranch/commentOnPr call `gh`/`git` CLI, not unit-tested here.
  */
 
-import { describe, it, expect } from 'vitest';
-import { buildPrBody } from '../infra/github/pr.js';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+const mockExecFileSync = vi.fn();
+vi.mock('node:child_process', () => ({
+  execFileSync: (...args: unknown[]) => mockExecFileSync(...args),
+}));
+
+vi.mock('../infra/github/issue.js', () => ({
+  checkGhCli: vi.fn().mockReturnValue({ available: true }),
+}));
+
+vi.mock('../shared/utils/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  createLogger: () => ({
+    info: vi.fn(),
+    debug: vi.fn(),
+    error: vi.fn(),
+  }),
+  getErrorMessage: (e: unknown) => String(e),
+}));
+
+import { buildPrBody, findExistingPr } from '../infra/github/pr.js';
 import type { GitHubIssue } from '../infra/github/types.js';
+
+describe('findExistingPr', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('オープンな PR がある場合はその PR を返す', () => {
+    mockExecFileSync.mockReturnValue(JSON.stringify([{ number: 42, url: 'https://github.com/org/repo/pull/42' }]));
+
+    const result = findExistingPr('/project', 'task/fix-bug');
+
+    expect(result).toEqual({ number: 42, url: 'https://github.com/org/repo/pull/42' });
+  });
+
+  it('PR がない場合は undefined を返す', () => {
+    mockExecFileSync.mockReturnValue(JSON.stringify([]));
+
+    const result = findExistingPr('/project', 'task/fix-bug');
+
+    expect(result).toBeUndefined();
+  });
+
+  it('gh CLI が失敗した場合は undefined を返す', () => {
+    mockExecFileSync.mockImplementation(() => { throw new Error('gh: command not found'); });
+
+    const result = findExistingPr('/project', 'task/fix-bug');
+
+    expect(result).toBeUndefined();
+  });
+});
 
 describe('buildPrBody', () => {
   it('should build body with single issue and report', () => {

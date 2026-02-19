@@ -10,8 +10,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { createLogger, slugify } from '../../shared/utils/index.js';
-import { loadGlobalConfig } from '../config/global/globalConfig.js';
+import { createLogger } from '../../shared/utils/index.js';
+import { resolveConfigValue } from '../config/index.js';
 import type { WorktreeOptions, WorktreeResult } from './types.js';
 
 export type { WorktreeOptions, WorktreeResult };
@@ -36,11 +36,11 @@ export class CloneManager {
    * Returns the configured worktree_dir (resolved to absolute), or ../
    */
   private static resolveCloneBaseDir(projectDir: string): string {
-    const globalConfig = loadGlobalConfig();
-    if (globalConfig.worktreeDir) {
-      return path.isAbsolute(globalConfig.worktreeDir)
-        ? globalConfig.worktreeDir
-        : path.resolve(projectDir, globalConfig.worktreeDir);
+    const worktreeDir = resolveConfigValue(projectDir, 'worktreeDir');
+    if (worktreeDir) {
+      return path.isAbsolute(worktreeDir)
+        ? worktreeDir
+        : path.resolve(projectDir, worktreeDir);
     }
     return path.join(projectDir, '..', 'takt-worktree');
   }
@@ -48,7 +48,7 @@ export class CloneManager {
   /** Resolve the clone path based on options and global config */
   private static resolveClonePath(projectDir: string, options: WorktreeOptions): string {
     const timestamp = CloneManager.generateTimestamp();
-    const slug = slugify(options.taskSlug);
+    const slug = options.taskSlug;
 
     let dirName: string;
     if (options.issueNumber !== undefined && slug) {
@@ -74,7 +74,7 @@ export class CloneManager {
       return options.branch;
     }
 
-    const slug = slugify(options.taskSlug);
+    const slug = options.taskSlug;
 
     if (options.issueNumber !== undefined && slug) {
       return `takt/${options.issueNumber}/${slug}`;

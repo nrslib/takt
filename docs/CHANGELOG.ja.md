@@ -6,6 +6,40 @@
 
 フォーマットは [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) に基づいています。
 
+## [0.20.0] - 2026-02-19
+
+### Added
+
+- **Faceted Prompting モジュール** (`src/faceted-prompting/`): ファセット合成・解決・テンプレートレンダリング・トランケーションのスタンドアロンライブラリ — TAKT 内部への依存ゼロ。プラガブルなファセットストレージのための `DataEngine` インターフェースと `FileDataEngine`、`CompositeDataEngine` 実装を含む
+- **Analytics モジュール** (`src/features/analytics/`): ローカル専用のレビュー品質メトリクス収集 — イベント型（レビュー指摘、修正アクション、ムーブメント結果）、日付ローテーション付き JSONL ライター、レポートパーサー、メトリクス計算
+- **`takt metrics review` コマンド**: レビュー品質メトリクスを表示（再報告カウント、ラウンドトリップ率、解決イテレーション数、ルール別 REJECT カウント、反論解決率）。`--since` で時間枠を設定可能
+- **`takt purge` コマンド**: 古いアナリティクスイベントファイルを削除。`--retention-days` で保持期間を設定可能
+- **`takt reset config` コマンド**: グローバル設定をビルトインテンプレートにリセット（既存設定の自動バックアップ付き）
+- **PR 重複防止**: 現在のブランチに既に PR が存在する場合、新規作成ではなく既存 PR へのプッシュとコメント追加で対応 (#304)
+- リトライ時のムーブメント選択で失敗箇所にカーソルを初期配置
+- run-recovery と config-priority シナリオの E2E テストを追加
+
+### Changed
+
+- **README を大幅改訂**: 約950行から約270行に圧縮 — 詳細情報を専用ドキュメント（`docs/configuration.md`、`docs/cli-reference.md`、`docs/task-management.md`、`docs/ci-cd.md`、`docs/builtin-catalog.md`）に分離し、日本語版も作成。プロダクトコンセプトを4軸（すぐ始められる、実用的、再現可能、マルチエージェント）で再定義
+- **設定システムのリファクタリング**: 設定解決を `resolveConfigValue()` と `loadConfig()` に統一し、コードベース全体に散在していた設定アクセスパターンを解消
+- **`takt config` コマンド削除**: デフォルトへのリセットを行う `takt reset config` に置き換え
+- ビルトイン設定テンプレートのコメントと構造を刷新
+- `@anthropic-ai/claude-agent-sdk` を v0.2.47 に更新
+- タスク再指示のインストラクトモードプロンプトを改善
+
+### Fixed
+
+- ビルトインピースのファイル参照が相対パスではなく絶対パスを使用していた問題を修正 (#304)
+- 複数ファイルにまたがる未使用 import・変数を削除
+
+### Internal
+
+- `loadConfig`、`resolveConfigValue`、ピース設定解決、設定優先順位パスの統一
+- config-priority と run-recovery シナリオの E2E テストを追加
+- PR 作成フローテスト用の `postExecution.test.ts` を追加
+- 未使用 import・変数のクリーンアップ
+
 ## [0.19.0] - 2026-02-18
 
 ### Added

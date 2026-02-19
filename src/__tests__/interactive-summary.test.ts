@@ -6,8 +6,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildSummaryPrompt,
+  buildSummaryActionOptions,
   formatTaskHistorySummary,
   type PieceContext,
+  type SummaryActionLabels,
   type TaskHistorySummaryItem,
 } from '../features/interactive/interactive.js';
 
@@ -98,5 +100,56 @@ describe('buildSummaryPrompt', () => {
     expect(summary).toContain('Worktree ID: wt-1');
     expect(summary).toContain('Conversation:');
     expect(summary).toContain('User: Improve parser');
+  });
+});
+
+describe('buildSummaryActionOptions', () => {
+  const labels: SummaryActionLabels = {
+    execute: 'Execute now',
+    saveTask: 'Save as Task',
+    continue: 'Continue editing',
+  };
+
+  it('should include all base actions when no exclude is given', () => {
+    const options = buildSummaryActionOptions(labels);
+    const values = options.map((o) => o.value);
+
+    expect(values).toEqual(['execute', 'save_task', 'continue']);
+  });
+
+  it('should exclude specified actions', () => {
+    const options = buildSummaryActionOptions(labels, [], ['execute']);
+    const values = options.map((o) => o.value);
+
+    expect(values).toEqual(['save_task', 'continue']);
+    expect(values).not.toContain('execute');
+  });
+
+  it('should exclude multiple actions', () => {
+    const options = buildSummaryActionOptions(labels, [], ['execute', 'continue']);
+    const values = options.map((o) => o.value);
+
+    expect(values).toEqual(['save_task']);
+  });
+
+  it('should handle append and exclude together', () => {
+    const labelsWithIssue: SummaryActionLabels = {
+      ...labels,
+      createIssue: 'Create Issue',
+    };
+    const options = buildSummaryActionOptions(labelsWithIssue, ['create_issue'], ['execute']);
+    const values = options.map((o) => o.value);
+
+    expect(values).toEqual(['save_task', 'continue', 'create_issue']);
+    expect(values).not.toContain('execute');
+  });
+
+  it('should return empty exclude by default (backward compatible)', () => {
+    const options = buildSummaryActionOptions(labels, []);
+    const values = options.map((o) => o.value);
+
+    expect(values).toContain('execute');
+    expect(values).toContain('save_task');
+    expect(values).toContain('continue');
   });
 });

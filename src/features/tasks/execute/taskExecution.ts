@@ -2,7 +2,7 @@
  * Task execution logic
  */
 
-import { loadPieceByIdentifier, isPiecePath, loadGlobalConfig, loadProjectConfig } from '../../../infra/config/index.js';
+import { loadPieceByIdentifier, isPiecePath, resolvePieceConfigValues } from '../../../infra/config/index.js';
 import { TaskRunner, type TaskInfo } from '../../../infra/task/index.js';
 import {
   header,
@@ -51,7 +51,22 @@ function resolveTaskIssue(issueNumber: number | undefined): ReturnType<typeof fe
 }
 
 async function executeTaskWithResult(options: ExecuteTaskOptions): Promise<PieceExecutionResult> {
-  const { task, cwd, pieceIdentifier, projectCwd, agentOverrides, interactiveUserInput, interactiveMetadata, startMovement, retryNote, reportDirName, abortSignal, taskPrefix, taskColorIndex } = options;
+  const {
+    task,
+    cwd,
+    pieceIdentifier,
+    projectCwd,
+    agentOverrides,
+    interactiveUserInput,
+    interactiveMetadata,
+    startMovement,
+    retryNote,
+    reportDirName,
+    abortSignal,
+    taskPrefix,
+    taskColorIndex,
+    taskDisplayLabel,
+  } = options;
   const pieceConfig = loadPieceByIdentifier(pieceIdentifier, projectCwd);
 
   if (!pieceConfig) {
@@ -71,18 +86,22 @@ async function executeTaskWithResult(options: ExecuteTaskOptions): Promise<Piece
     movements: pieceConfig.movements.map((s: { name: string }) => s.name),
   });
 
-  const globalConfig = loadGlobalConfig();
-  const projectConfig = loadProjectConfig(projectCwd);
+  const config = resolvePieceConfigValues(projectCwd, [
+    'language',
+    'provider',
+    'model',
+    'providerOptions',
+    'personaProviders',
+    'providerProfiles',
+  ]);
   return await executePiece(pieceConfig, task, cwd, {
     projectCwd,
-    language: globalConfig.language,
-    provider: agentOverrides?.provider,
-    projectProvider: projectConfig.provider,
-    globalProvider: globalConfig.provider,
-    model: agentOverrides?.model,
-    personaProviders: globalConfig.personaProviders,
-    projectProviderProfiles: projectConfig.providerProfiles,
-    globalProviderProfiles: globalConfig.providerProfiles,
+    language: config.language,
+    provider: agentOverrides?.provider ?? config.provider,
+    model: agentOverrides?.model ?? config.model,
+    providerOptions: config.providerOptions,
+    personaProviders: config.personaProviders,
+    providerProfiles: config.providerProfiles,
     interactiveUserInput,
     interactiveMetadata,
     startMovement,
@@ -91,8 +110,9 @@ async function executeTaskWithResult(options: ExecuteTaskOptions): Promise<Piece
     abortSignal,
     taskPrefix,
     taskColorIndex,
+    taskDisplayLabel,
   });
-}
+  }
 
 /**
  * Execute a single task with piece.
@@ -116,7 +136,7 @@ export async function executeAndCompleteTask(
   cwd: string,
   pieceName: string,
   options?: TaskExecutionOptions,
-  parallelOptions?: { abortSignal?: AbortSignal; taskPrefix?: string; taskColorIndex?: number },
+  parallelOptions?: { abortSignal?: AbortSignal; taskPrefix?: string; taskColorIndex?: number; taskDisplayLabel?: string },
 ): Promise<boolean> {
   const startedAt = new Date().toISOString();
   const taskAbortController = new AbortController();
@@ -164,6 +184,7 @@ export async function executeAndCompleteTask(
       abortSignal: taskAbortSignal,
       taskPrefix: parallelOptions?.taskPrefix,
       taskColorIndex: parallelOptions?.taskColorIndex,
+      taskDisplayLabel: parallelOptions?.taskDisplayLabel,
     });
 
     const taskSuccess = taskRunResult.success;
@@ -217,7 +238,10 @@ export async function runAllTasks(
   options?: TaskExecutionOptions,
 ): Promise<void> {
   const taskRunner = new TaskRunner(cwd);
-  const globalConfig = loadGlobalConfig();
+  const globalConfig = resolvePieceConfigValues(
+    cwd,
+    ['notificationSound', 'notificationSoundEvents', 'concurrency', 'taskPollIntervalMs'],
+  );
   const shouldNotifyRunComplete = globalConfig.notificationSound !== false
     && globalConfig.notificationSoundEvents?.runComplete !== false;
   const shouldNotifyRunAbort = globalConfig.notificationSound !== false

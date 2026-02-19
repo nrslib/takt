@@ -15,6 +15,16 @@ describe('TaskPrefixWriter', () => {
   });
 
   describe('constructor', () => {
+    it('should use issue number when provided', () => {
+      const writer = new TaskPrefixWriter({ taskName: 'my-task', colorIndex: 0, issue: 123, writeFn });
+
+      writer.writeLine('Issue task');
+
+      expect(output).toHaveLength(1);
+      expect(output[0]).toContain('[#123]');
+      expect(output[0]).not.toContain('[my-t]');
+    });
+
     it('should cycle colors for different colorIndex values', () => {
       const writer0 = new TaskPrefixWriter({ taskName: 'task-a', colorIndex: 0, writeFn });
       const writer4 = new TaskPrefixWriter({ taskName: 'task-a', colorIndex: 4, writeFn });
@@ -25,6 +35,16 @@ describe('TaskPrefixWriter', () => {
       // Both index 0 and 4 should use cyan (\x1b[36m)
       expect(output[0]).toContain('\x1b[36m');
       expect(output[1]).toContain('\x1b[36m');
+    });
+
+    it('should use display label when provided', () => {
+      const writer = new TaskPrefixWriter({ taskName: 'my-task', colorIndex: 0, displayLabel: '#12345', writeFn });
+
+      writer.writeLine('Hello World');
+
+      expect(output).toHaveLength(1);
+      expect(output[0]).toContain('[#12345]');
+      expect(output[0]).not.toContain('[my-t]');
     });
 
     it('should assign correct colors in order', () => {

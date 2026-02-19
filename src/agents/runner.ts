@@ -4,7 +4,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
-import { loadCustomAgents, loadAgentPrompt, loadGlobalConfig, loadProjectConfig } from '../infra/config/index.js';
+import { loadCustomAgents, loadAgentPrompt, resolveConfigValues } from '../infra/config/index.js';
 import { getProvider, type ProviderType, type ProviderCallOptions } from '../infra/providers/index.js';
 import type { AgentResponse, CustomAgentConfig } from '../core/models/index.js';
 import { createLogger } from '../shared/utils/index.js';
@@ -29,16 +29,10 @@ export class AgentRunner {
     agentConfig?: CustomAgentConfig,
   ): ProviderType {
     if (options?.provider) return options.provider;
-    const projectConfig = loadProjectConfig(cwd);
-    if (projectConfig.provider) return projectConfig.provider;
+    const config = resolveConfigValues(cwd, ['provider']);
+    if (config.provider) return config.provider;
     if (options?.stepProvider) return options.stepProvider;
     if (agentConfig?.provider) return agentConfig.provider;
-    try {
-      const globalConfig = loadGlobalConfig();
-      if (globalConfig.provider) return globalConfig.provider;
-    } catch (error) {
-      log.debug('Global config not available for provider resolution', { error });
-    }
     return 'claude';
   }
 
@@ -55,14 +49,11 @@ export class AgentRunner {
     if (options?.model) return options.model;
     if (options?.stepModel) return options.stepModel;
     if (agentConfig?.model) return agentConfig.model;
-    try {
-      const globalConfig = loadGlobalConfig();
-      if (globalConfig.model) {
-        const globalProvider = globalConfig.provider ?? 'claude';
-        if (globalProvider === resolvedProvider) return globalConfig.model;
-      }
-    } catch (error) {
-      log.debug('Global config not available for model resolution', { error });
+    if (!options?.cwd) return undefined;
+    const config = resolveConfigValues(options.cwd, ['provider', 'model']);
+    if (config.model) {
+      const defaultProvider = config.provider ?? 'claude';
+      if (defaultProvider === resolvedProvider) return config.model;
     }
     return undefined;
   }
@@ -131,7 +122,7 @@ export class AgentRunner {
       name: agentConfig.name,
       systemPrompt: agentConfig.claudeAgent || agentConfig.claudeSkill
         ? undefined
-        : loadAgentPrompt(agentConfig),
+        : loadAgentPrompt(agentConfig, options.cwd),
       claudeAgent: agentConfig.claudeAgent,
       claudeSkill: agentConfig.claudeSkill,
     });

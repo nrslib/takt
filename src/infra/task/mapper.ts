@@ -1,11 +1,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { TaskFileSchema, type TaskFileData, type TaskRecord } from './schema.js';
+import { firstLine } from './naming.js';
 import type { TaskInfo, TaskListItem } from './types.js';
-
-function firstLine(content: string): string {
-  return content.trim().split('\n')[0]?.slice(0, 80) ?? '';
-}
 
 function toDisplayPath(projectDir: string, targetPath: string): string {
   const relativePath = path.relative(projectDir, targetPath);
@@ -66,6 +63,7 @@ export function toTaskInfo(projectDir: string, tasksFile: string, task: TaskReco
   return {
     filePath: tasksFile,
     name: task.name,
+    slug: task.slug,
     content,
     taskDir: task.task_dir,
     createdAt: task.created_at,
@@ -119,6 +117,7 @@ function toBaseTaskListItem(projectDir: string, tasksFile: string, task: TaskRec
     createdAt: task.created_at,
     filePath: tasksFile,
     content: firstLine(resolveTaskContent(projectDir, task)),
+    summary: task.summary,
     branch: task.branch,
     worktreePath: task.worktree_path,
     startedAt: task.started_at ?? undefined,

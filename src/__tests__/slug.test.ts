@@ -1,7 +1,7 @@
 /**
  * Unit tests for slugify utility
  *
- * Tests URL/filename-safe slug generation with CJK support.
+ * Tests URL/filename-safe slug generation (a-z 0-9 hyphen, max 30 chars).
  */
 
 import { describe, it, expect } from 'vitest';
@@ -25,17 +25,17 @@ describe('slugify', () => {
     expect(slugify('   hello   ')).toBe('hello');
   });
 
-  it('should truncate to 50 characters', () => {
+  it('should truncate to 30 characters', () => {
     const long = 'a'.repeat(100);
-    expect(slugify(long).length).toBeLessThanOrEqual(50);
+    expect(slugify(long).length).toBeLessThanOrEqual(30);
   });
 
-  it('should preserve CJK characters', () => {
-    expect(slugify('タスク指示書')).toBe('タスク指示書');
+  it('should strip CJK characters', () => {
+    expect(slugify('タスク指示書')).toBe('');
   });
 
   it('should handle mixed ASCII and CJK', () => {
-    expect(slugify('Add タスク Feature')).toBe('add-タスク-feature');
+    expect(slugify('Add タスク Feature')).toBe('add-feature');
   });
 
   it('should handle numbers', () => {
@@ -43,11 +43,18 @@ describe('slugify', () => {
   });
 
   it('should handle empty result after stripping', () => {
-    // All special characters → becomes empty string
     expect(slugify('!@#$%')).toBe('');
   });
 
   it('should handle typical GitHub issue titles', () => {
     expect(slugify('Fix: login not working (#42)')).toBe('fix-login-not-working-42');
+  });
+
+  it('should strip trailing hyphen after truncation', () => {
+    // 30 chars of slug that ends with a hyphen after slice
+    const input = 'abcdefghijklmnopqrstuvwxyz-abc-xyz';
+    const result = slugify(input);
+    expect(result.length).toBeLessThanOrEqual(30);
+    expect(result).not.toMatch(/-$/);
   });
 });

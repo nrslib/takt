@@ -3,8 +3,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const {
   mockExistsSync,
   mockSelectPiece,
-  mockSelectOption,
-  mockLoadGlobalConfig,
+  mockSelectOptionWithDefault,
+  mockResolvePieceConfigValue,
   mockLoadPieceByIdentifier,
   mockGetPieceDescription,
   mockRunRetryMode,
@@ -15,8 +15,8 @@ const {
 } = vi.hoisted(() => ({
   mockExistsSync: vi.fn(() => true),
   mockSelectPiece: vi.fn(),
-  mockSelectOption: vi.fn(),
-  mockLoadGlobalConfig: vi.fn(),
+  mockSelectOptionWithDefault: vi.fn(),
+  mockResolvePieceConfigValue: vi.fn(),
   mockLoadPieceByIdentifier: vi.fn(),
   mockGetPieceDescription: vi.fn(() => ({
     name: 'default',
@@ -41,7 +41,7 @@ vi.mock('../features/pieceSelection/index.js', () => ({
 }));
 
 vi.mock('../shared/prompt/index.js', () => ({
-  selectOption: (...args: unknown[]) => mockSelectOption(...args),
+  selectOptionWithDefault: (...args: unknown[]) => mockSelectOptionWithDefault(...args),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -60,7 +60,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 }));
 
 vi.mock('../infra/config/index.js', () => ({
-  loadGlobalConfig: (...args: unknown[]) => mockLoadGlobalConfig(...args),
+  resolvePieceConfigValue: (...args: unknown[]) => mockResolvePieceConfigValue(...args),
   loadPieceByIdentifier: (...args: unknown[]) => mockLoadPieceByIdentifier(...args),
   getPieceDescription: (...args: unknown[]) => mockGetPieceDescription(...args),
 }));
@@ -73,6 +73,7 @@ vi.mock('../features/interactive/index.js', () => ({
     runTask: '', runPiece: '', runStatus: '', runMovementLogs: '', runReports: '',
   })),
   runRetryMode: (...args: unknown[]) => mockRunRetryMode(...args),
+  findPreviousOrderContent: vi.fn(() => null),
 }));
 
 vi.mock('../infra/task/index.js', () => ({
@@ -126,9 +127,9 @@ beforeEach(() => {
   mockExistsSync.mockReturnValue(true);
 
   mockSelectPiece.mockResolvedValue('default');
-  mockLoadGlobalConfig.mockReturnValue({ defaultPiece: 'default' });
+  mockResolvePieceConfigValue.mockReturnValue(3);
   mockLoadPieceByIdentifier.mockReturnValue(defaultPieceConfig);
-  mockSelectOption.mockResolvedValue('plan');
+  mockSelectOptionWithDefault.mockResolvedValue('plan');
   mockRunRetryMode.mockResolvedValue({ action: 'execute', task: '追加指示A' });
   mockStartReExecution.mockReturnValue({
     name: 'my-task',
@@ -151,14 +152,31 @@ describe('retryFailedTask', () => {
       expect.objectContaining({
         failure: expect.objectContaining({ taskName: 'my-task', taskContent: 'Do something' }),
       }),
+      null,
     );
     expect(mockStartReExecution).toHaveBeenCalledWith('my-task', ['failed'], undefined, '追加指示A');
     expect(mockExecuteAndCompleteTask).toHaveBeenCalled();
   });
 
+  it('should pass failed movement as default to selectOptionWithDefault', async () => {
+    const task = makeFailedTask(); // failure.movement = 'review'
+
+    await retryFailedTask(task, '/project');
+
+    expect(mockSelectOptionWithDefault).toHaveBeenCalledWith(
+      'Start from movement:',
+      expect.arrayContaining([
+        expect.objectContaining({ value: 'plan' }),
+        expect.objectContaining({ value: 'implement' }),
+        expect.objectContaining({ value: 'review' }),
+      ]),
+      'review',
+    );
+  });
+
   it('should pass non-initial movement as startMovement', async () => {
     const task = makeFailedTask();
-    mockSelectOption.mockResolvedValue('implement');
+    mockSelectOptionWithDefault.mockResolvedValue('implement');
 
     await retryFailedTask(task, '/project');
 

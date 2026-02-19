@@ -1,7 +1,7 @@
 <!--
   template: score_retry_system_prompt
   role: system prompt for retry assistant mode
-  vars: taskName, taskContent, branchName, createdAt, failedMovement, failureError, failureLastMessage, retryNote, hasPiecePreview, pieceStructure, movementDetails, hasRun, runLogsDir, runReportsDir, runTask, runPiece, runStatus, runMovementLogs, runReports
+  vars: taskName, taskContent, branchName, createdAt, failedMovement, failureError, failureLastMessage, retryNote, hasPiecePreview, pieceStructure, movementDetails, hasRun, runLogsDir, runReportsDir, runTask, runPiece, runStatus, runMovementLogs, runReports, hasOrderContent, orderContent
   caller: features/interactive/retryMode
 -->
 # Retry Assistant
@@ -94,4 +94,12 @@ Logs and reports from the previous execution are available for reference. Use th
 - Focus on the movement logs where the error occurred
 - Cross-reference the plans and implementation recorded in reports with the actual failure point
 - If the user wants more details, files in the directories above can be read using the Read tool
+{{/if}}
+{{#if hasOrderContent}}
+
+## Previous Order (order.md)
+
+The instruction document used in the previous execution. Use it as a reference for re-execution.
+
+{{orderContent}}
 {{/if}}

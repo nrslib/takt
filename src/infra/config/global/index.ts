@@ -31,6 +31,11 @@ export {
 } from './pieceCategories.js';
 
 export {
+  resetGlobalConfigToTemplate,
+  type ResetGlobalConfigResult,
+} from './resetConfig.js';
+
+export {
   needsLanguageSetup,
   promptLanguageSelection,
   promptProviderSelection,

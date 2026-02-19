@@ -13,6 +13,54 @@ export type { CreatePrOptions, CreatePrResult };
 
 const log = createLogger('github-pr');
 
+export interface ExistingPr {
+  number: number;
+  url: string;
+}
+
+/**
+ * Find an open PR for the given branch.
+ * Returns undefined if no PR exists.
+ */
+export function findExistingPr(cwd: string, branch: string): ExistingPr | undefined {
+  const ghStatus = checkGhCli();
+  if (!ghStatus.available) return undefined;
+
+  try {
+    const output = execFileSync(
+      'gh', ['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number,url', '--limit', '1'],
+      { cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
+    );
+    const prs = JSON.parse(output) as ExistingPr[];
+    return prs[0];
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Add a comment to an existing PR.
+ */
+export function commentOnPr(cwd: string, prNumber: number, body: string): CreatePrResult {
+  const ghStatus = checkGhCli();
+  if (!ghStatus.available) {
+    return { success: false, error: ghStatus.error ?? 'gh CLI is not available' };
+  }
+
+  try {
+    execFileSync('gh', ['pr', 'comment', String(prNumber), '--body', body], {
+      cwd,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    return { success: true };
+  } catch (err) {
+    const errorMessage = getErrorMessage(err);
+    log.error('PR comment failed', { error: errorMessage });
+    return { success: false, error: errorMessage };
+  }
+}
+
 /**
  * Push a branch to origin.
  * Throws on failure.

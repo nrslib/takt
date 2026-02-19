@@ -8,9 +8,9 @@
 import * as fs from 'node:fs';
 import type { TaskListItem } from '../../../infra/task/index.js';
 import { TaskRunner } from '../../../infra/task/index.js';
-import { loadPieceByIdentifier, loadGlobalConfig, getPieceDescription } from '../../../infra/config/index.js';
+import { loadPieceByIdentifier, resolvePieceConfigValue, getPieceDescription } from '../../../infra/config/index.js';
 import { selectPiece } from '../../pieceSelection/index.js';
-import { selectOption } from '../../../shared/prompt/index.js';
+import { selectOptionWithDefault } from '../../../shared/prompt/index.js';
 import { info, header, blankLine, status } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import type { PieceConfig } from '../../../core/models/index.js';
@@ -20,6 +20,7 @@ import {
   getRunPaths,
   formatRunSessionForPrompt,
   runRetryMode,
+  findPreviousOrderContent,
   type RetryContext,
   type RetryFailureInfo,
   type RetryRunInfo,
@@ -59,12 +60,12 @@ async function selectStartMovement(
   const effectiveDefault = defaultIdx >= 0 ? movements[defaultIdx] : movements[0];
 
   const options = movements.map((name) => ({
-    label: name === effectiveDefault ? `${name} (default)` : name,
+    label: name,
     value: name,
     description: name === pieceConfig.initialMovement ? 'Initial movement' : undefined,
   }));
 
-  return await selectOption<string>('Start from movement:', options);
+  return await selectOptionWithDefault<string>('Start from movement:', options, effectiveDefault ?? movements[0]!);
 }
 
 function buildRetryFailureInfo(task: TaskListItem): RetryFailureInfo {
@@ -133,7 +134,7 @@ export async function retryFailedTask(
     return false;
   }
 
-  const globalConfig = loadGlobalConfig();
+  const previewCount = resolvePieceConfigValue(projectDir, 'interactivePreviewMovements');
   const pieceConfig = loadPieceByIdentifier(selectedPiece, projectDir);
 
   if (!pieceConfig) {
@@ -145,7 +146,7 @@ export async function retryFailedTask(
     return false;
   }
 
-  const pieceDesc = getPieceDescription(selectedPiece, projectDir, globalConfig.interactivePreviewMovements);
+  const pieceDesc = getPieceDescription(selectedPiece, projectDir, previewCount);
   const pieceContext = {
     name: pieceDesc.name,
     description: pieceDesc.description,
@@ -156,6 +157,7 @@ export async function retryFailedTask(
   // Runs data lives in the worktree (written during previous execution)
   const matchedSlug = findRunForTask(worktreePath, task.content);
   const runInfo = matchedSlug ? buildRetryRunInfo(worktreePath, matchedSlug) : null;
+  const previousOrderContent = findPreviousOrderContent(worktreePath, matchedSlug);
 
   blankLine();
   const branchName = task.branch ?? task.name;
@@ -164,9 +166,10 @@ export async function retryFailedTask(
     branchName,
     pieceContext,
     run: runInfo,
+    previousOrderContent,
   };
 
-  const retryResult = await runRetryMode(worktreePath, retryContext);
+  const retryResult = await runRetryMode(worktreePath, retryContext, previousOrderContent);
   if (retryResult.action === 'cancel') {
     return false;
   }

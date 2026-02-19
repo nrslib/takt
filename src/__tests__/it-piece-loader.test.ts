@@ -4,7 +4,7 @@
  * Tests the 3-tier piece resolution (project-local → user → builtin)
  * and YAML parsing including special rule syntax (ai(), all(), any()).
  *
- * Mocked: globalConfig (for language/builtins)
+ * Mocked: loadConfig (for language/builtins)
  * Not mocked: loadPiece, parsePiece, rule parsing
  */
 
@@ -18,9 +18,24 @@ const languageState = vi.hoisted(() => ({ value: 'en' as 'en' | 'ja' }));
 
 vi.mock('../infra/config/global/globalConfig.js', () => ({
   loadGlobalConfig: vi.fn().mockReturnValue({}),
-  getLanguage: vi.fn(() => languageState.value),
-  getDisabledBuiltins: vi.fn().mockReturnValue([]),
-  getBuiltinPiecesEnabled: vi.fn().mockReturnValue(true),
+}));
+
+vi.mock('../infra/config/resolveConfigValue.js', () => ({
+  resolveConfigValue: vi.fn((_cwd: string, key: string) => {
+    if (key === 'language') return languageState.value;
+    if (key === 'enableBuiltinPieces') return true;
+    if (key === 'disabledBuiltins') return [];
+    return undefined;
+  }),
+  resolveConfigValues: vi.fn((_cwd: string, keys: readonly string[]) => {
+    const result: Record<string, unknown> = {};
+    for (const key of keys) {
+      if (key === 'language') result[key] = languageState.value;
+      if (key === 'enableBuiltinPieces') result[key] = true;
+      if (key === 'disabledBuiltins') result[key] = [];
+    }
+    return result;
+  }),
 }));
 
 // --- Imports (after mocks) ---
@@ -38,6 +53,7 @@ function createTestDir(): string {
 
 describe('Piece Loader IT: builtin piece loading', () => {
   let testDir: string;
+  const builtinNames = listBuiltinPieceNames(process.cwd(), { includeDisabled: true });
 
   beforeEach(() => {
     testDir = createTestDir();
@@ -47,8 +63,6 @@ describe('Piece Loader IT: builtin piece loading', () => {
   afterEach(() => {
     rmSync(testDir, { recursive: true, force: true });
   });
-
-  const builtinNames = listBuiltinPieceNames({ includeDisabled: true });
 
   for (const name of builtinNames) {
     it(`should load builtin piece: ${name}`, () => {
@@ -85,7 +99,7 @@ describe('Piece Loader IT: builtin piece loading', () => {
   it('should load e2e-test as a builtin piece in ja locale', () => {
     languageState.value = 'ja';
 
-    const jaBuiltinNames = listBuiltinPieceNames({ includeDisabled: true });
+    const jaBuiltinNames = listBuiltinPieceNames(testDir, { includeDisabled: true });
     expect(jaBuiltinNames).toContain('e2e-test');
 
     const config = loadPiece('e2e-test', testDir);

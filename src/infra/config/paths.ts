@@ -11,8 +11,12 @@ import { existsSync, mkdirSync } from 'node:fs';
 import type { Language } from '../../core/models/index.js';
 import { getLanguageResourcesDir } from '../resources/index.js';
 
+import type { FacetKind } from '../../faceted-prompting/index.js';
+
 /** Facet types used in layer resolution */
-export type FacetType = 'personas' | 'policies' | 'knowledge' | 'instructions' | 'output-contracts';
+export type { FacetKind as FacetType } from '../../faceted-prompting/index.js';
+
+type FacetType = FacetKind;
 
 /** Get takt global config directory (~/.takt or TAKT_CONFIG_DIR) */
 export function getGlobalConfigDir(): string {
@@ -113,11 +117,12 @@ export {
   loadProjectConfig,
   saveProjectConfig,
   updateProjectConfig,
-  getCurrentPiece,
   setCurrentPiece,
-  isVerboseMode,
   type ProjectLocalConfig,
 } from './project/projectConfig.js';
+export {
+  isVerboseMode,
+} from './project/resolvedSettings.js';
 
 // Re-export session storage functions
 export {

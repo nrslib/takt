@@ -217,6 +217,28 @@ export function loadRunSessionContext(cwd: string, slug: string): RunSessionCont
 }
 
 /**
+ * Load the previous order.md content from the run directory.
+ *
+ * Uses findRunForTask to locate the matching run by task content,
+ * then reads order.md from its context/task directory.
+ *
+ * @returns The order.md content if found, null otherwise.
+ */
+export function loadPreviousOrderContent(cwd: string, taskContent: string): string | null {
+  const slug = findRunForTask(cwd, taskContent);
+  if (!slug) {
+    return null;
+  }
+
+  const orderPath = join(cwd, '.takt', 'runs', slug, 'context', 'task', 'order.md');
+  if (!existsSync(orderPath)) {
+    return null;
+  }
+
+  return readFileSync(orderPath, 'utf-8');
+}
+
+/**
  * Format run session context into a text block for the system prompt.
  */
 export function formatRunSessionForPrompt(ctx: RunSessionContext): {

@@ -22,11 +22,27 @@ vi.mock('../infra/config/global/globalConfig.js', async (importOriginal) => {
   const original = await importOriginal() as Record<string, unknown>;
   return {
     ...original,
-    getLanguage: () => languageState.value,
-    getBuiltinPiecesEnabled: () => true,
-    getDisabledBuiltins: () => [],
+    loadGlobalConfig: () => ({}),
   };
 });
+
+vi.mock('../infra/config/resolveConfigValue.js', () => ({
+  resolveConfigValue: (_cwd: string, key: string) => {
+    if (key === 'language') return languageState.value;
+    if (key === 'enableBuiltinPieces') return true;
+    if (key === 'disabledBuiltins') return [];
+    return undefined;
+  },
+  resolveConfigValues: (_cwd: string, keys: readonly string[]) => {
+    const result: Record<string, unknown> = {};
+    for (const key of keys) {
+      if (key === 'language') result[key] = languageState.value;
+      if (key === 'enableBuiltinPieces') result[key] = true;
+      if (key === 'disabledBuiltins') result[key] = [];
+    }
+    return result;
+  },
+}));
 
 vi.mock('../infra/resources/index.js', async (importOriginal) => {
   const original = await importOriginal() as Record<string, unknown>;
@@ -45,6 +61,7 @@ vi.mock('../infra/config/global/pieceCategories.js', async (importOriginal) => {
 });
 
 const {
+  BUILTIN_CATEGORY_NAME,
   getPieceCategories,
   loadDefaultCategories,
   buildCategorizedPieces,
@@ -92,7 +109,7 @@ describe('piece category config loading', () => {
   });
 
   it('should return null when builtin categories file is missing', () => {
-    const config = getPieceCategories();
+    const config = getPieceCategories(testDir);
     expect(config).toBeNull();
   });
 
@@ -104,7 +121,7 @@ piece_categories:
       - default
 `);
 
-    const config = loadDefaultCategories();
+    const config = loadDefaultCategories(testDir);
     expect(config).not.toBeNull();
     expect(config!.pieceCategories).toEqual([
       { name: 'Quick Start', pieces: ['default'], children: [] },
@@ -113,6 +130,7 @@ piece_categories:
       { name: 'Quick Start', pieces: ['default'], children: [] },
     ]);
     expect(config!.userPieceCategories).toEqual([]);
+    expect(config!.hasUserCategories).toBe(false);
   });
 
   it('should use builtin categories when user overlay file is missing', () => {
@@ -125,17 +143,18 @@ show_others_category: true
 others_category_name: Others
 `);
 
-    const config = getPieceCategories();
+    const config = getPieceCategories(testDir);
     expect(config).not.toBeNull();
     expect(config!.pieceCategories).toEqual([
       { name: 'Main', pieces: ['default'], children: [] },
     ]);
     expect(config!.userPieceCategories).toEqual([]);
+    expect(config!.hasUserCategories).toBe(false);
     expect(config!.showOthersCategory).toBe(true);
     expect(config!.othersCategoryName).toBe('Others');
   });
 
-  it('should merge user overlay categories with builtin categories', () => {
+  it('should separate user categories from builtin categories with builtin wrapper', () => {
     writeYaml(join(resourcesDir, 'piece-categories.yaml'), `
 piece_categories:
   Main:
@@ -165,18 +184,25 @@ show_others_category: false
 others_category_name: Unclassified
 `);
 
-    const config = getPieceCategories();
+    const config = getPieceCategories(testDir);
     expect(config).not.toBeNull();
     expect(config!.pieceCategories).toEqual([
+      { name: 'Main', pieces: ['custom'], children: [] },
+      { name: 'My Team', pieces: ['team-flow'], children: [] },
       {
-        name: 'Main',
-        pieces: ['custom'],
+        name: BUILTIN_CATEGORY_NAME,
+        pieces: [],
         children: [
-          { name: 'Child', pieces: ['nested'], children: [] },
+          {
+            name: 'Main',
+            pieces: ['default', 'coding'],
+            children: [
+              { name: 'Child', pieces: ['nested'], children: [] },
+            ],
+          },
+          { name: 'Review', pieces: ['review-only', 'e2e-test'], children: [] },
         ],
       },
-      { name: 'Review', pieces: ['review-only', 'e2e-test'], children: [] },
-      { name: 'My Team', pieces: ['team-flow'], children: [] },
     ]);
     expect(config!.builtinPieceCategories).toEqual([
       {
@@ -192,6 +218,7 @@ others_category_name: Unclassified
       { name: 'Main', pieces: ['custom'], children: [] },
       { name: 'My Team', pieces: ['team-flow'], children: [] },
     ]);
+    expect(config!.hasUserCategories).toBe(true);
     expect(config!.showOthersCategory).toBe(false);
     expect(config!.othersCategoryName).toBe('Unclassified');
   });
@@ -207,7 +234,7 @@ piece_categories:
       - e2e-test
 `);
 
-    const config = getPieceCategories();
+    const config = getPieceCategories(testDir);
     expect(config).not.toBeNull();
     expect(config!.pieceCategories).toEqual([
       { name: 'レビュー', pieces: ['review-only', 'e2e-test'], children: [] },
@@ -232,7 +259,7 @@ show_others_category: false
 others_category_name: Unclassified
 `);
 
-    const config = getPieceCategories();
+    const config = getPieceCategories(testDir);
     expect(config).not.toBeNull();
     expect(config!.pieceCategories).toEqual([
       { name: 'Main', pieces: ['default'], children: [] },
@@ -243,6 +270,7 @@ others_category_name: Unclassified
       { name: 'Review', pieces: ['review-only'], children: [] },
     ]);
     expect(config!.userPieceCategories).toEqual([]);
+    expect(config!.hasUserCategories).toBe(false);
     expect(config!.showOthersCategory).toBe(false);
     expect(config!.othersCategoryName).toBe('Unclassified');
   });
@@ -274,11 +302,12 @@ describe('buildCategorizedPieces', () => {
       userPieceCategories: [
         { name: 'My Team', pieces: ['missing-user-piece'], children: [] },
       ],
+      hasUserCategories: true,
       showOthersCategory: true,
       othersCategoryName: 'Others',
     };
 
-    const categorized = buildCategorizedPieces(allPieces, config);
+    const categorized = buildCategorizedPieces(allPieces, config, process.cwd());
     expect(categorized.categories).toEqual([
       {
         name: 'Main',
@@ -306,11 +335,12 @@ describe('buildCategorizedPieces', () => {
         { name: 'Main', pieces: ['default'], children: [] },
       ],
       userPieceCategories: [],
+      hasUserCategories: false,
       showOthersCategory: true,
       othersCategoryName: 'Others',
     };
 
-    const categorized = buildCategorizedPieces(allPieces, config);
+    const categorized = buildCategorizedPieces(allPieces, config, process.cwd());
     expect(categorized.categories).toEqual([
       { name: 'Main', pieces: ['default'], children: [] },
       { name: 'Others', pieces: ['extra'], children: [] },
@@ -330,13 +360,60 @@ describe('buildCategorizedPieces', () => {
         { name: 'Main', pieces: ['default'], children: [] },
       ],
       userPieceCategories: [],
+      hasUserCategories: false,
       showOthersCategory: false,
+      othersCategoryName: 'Others',
+    };
+
+    const categorized = buildCategorizedPieces(allPieces, config, process.cwd());
+    expect(categorized.categories).toEqual([
+      { name: 'Main', pieces: ['default'], children: [] },
+    ]);
+  });
+
+  it('should categorize pieces through builtin wrapper node', () => {
+    const allPieces = createPieceMap([
+      { name: 'custom', source: 'user' },
+      { name: 'default', source: 'builtin' },
+      { name: 'review-only', source: 'builtin' },
+      { name: 'extra', source: 'builtin' },
+    ]);
+    const config = {
+      pieceCategories: [
+        { name: 'My Team', pieces: ['custom'], children: [] },
+        {
+          name: BUILTIN_CATEGORY_NAME,
+          pieces: [],
+          children: [
+            { name: 'Quick Start', pieces: ['default'], children: [] },
+            { name: 'Review', pieces: ['review-only'], children: [] },
+          ],
+        },
+      ],
+      builtinPieceCategories: [
+        { name: 'Quick Start', pieces: ['default'], children: [] },
+        { name: 'Review', pieces: ['review-only'], children: [] },
+      ],
+      userPieceCategories: [
+        { name: 'My Team', pieces: ['custom'], children: [] },
+      ],
+      hasUserCategories: true,
+      showOthersCategory: true,
       othersCategoryName: 'Others',
     };
 
     const categorized = buildCategorizedPieces(allPieces, config);
     expect(categorized.categories).toEqual([
-      { name: 'Main', pieces: ['default'], children: [] },
+      { name: 'My Team', pieces: ['custom'], children: [] },
+      {
+        name: BUILTIN_CATEGORY_NAME,
+        pieces: [],
+        children: [
+          { name: 'Quick Start', pieces: ['default'], children: [] },
+          { name: 'Review', pieces: ['review-only'], children: [] },
+        ],
+      },
+      { name: 'Others', pieces: ['extra'], children: [] },
     ]);
   });
 

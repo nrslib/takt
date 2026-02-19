@@ -1,7 +1,7 @@
 <!--
   template: score_instruct_system_prompt
   role: system prompt for instruct assistant mode (completed/failed tasks)
-  vars: taskName, taskContent, branchName, branchContext, retryNote, hasPiecePreview, pieceStructure, movementDetails, hasRunSession, runTask, runPiece, runStatus, runMovementLogs, runReports
+  vars: taskName, taskContent, branchName, branchContext, retryNote, hasPiecePreview, pieceStructure, movementDetails, hasRunSession, runTask, runPiece, runStatus, runMovementLogs, runReports, hasOrderContent, orderContent
   caller: features/tasks/list/instructMode
 -->
 # Additional Instruction Assistant
@@ -84,4 +84,12 @@ The user has selected a previous run for reference. Use this information to help
 - Reference specific movement results when discussing issues or improvements
 - Help the user identify what went wrong or what needs additional work
 - Suggest concrete follow-up instructions based on the run results
+{{/if}}
+{{#if hasOrderContent}}
+
+## Previous Order (order.md)
+
+The instruction document used in the previous execution. Use it as a reference for re-execution.
+
+{{orderContent}}
 {{/if}}

@@ -4,6 +4,18 @@ import * as path from 'node:path';
 import { tmpdir } from 'node:os';
 import { parse as parseYaml } from 'yaml';
 
+vi.mock('../infra/task/summarize.js', () => ({
+  summarizeTaskName: vi.fn().mockImplementation((content: string) => {
+    const slug = content.split('\n')[0]!
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 30)
+      .replace(/-+$/, '');
+    return Promise.resolve(slug || 'task');
+  }),
+}));
+
 vi.mock('../shared/ui/index.js', () => ({
   success: vi.fn(),
   info: vi.fn(),
@@ -66,6 +78,8 @@ describe('saveTaskFile', () => {
     expect(tasks).toHaveLength(1);
     expect(tasks[0]?.content).toBeUndefined();
     expect(tasks[0]?.task_dir).toBeTypeOf('string');
+    expect(tasks[0]?.slug).toBeTypeOf('string');
+    expect(tasks[0]?.summary).toBe('Implement feature X');
     const taskDir = path.join(testDir, String(tasks[0]?.task_dir));
     expect(fs.existsSync(path.join(taskDir, 'order.md'))).toBe(true);
     expect(fs.readFileSync(path.join(taskDir, 'order.md'), 'utf-8')).toContain('Implement feature X');

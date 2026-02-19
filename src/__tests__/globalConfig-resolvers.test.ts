@@ -97,7 +97,6 @@ describe('GlobalConfig load/save with API keys', () => {
   it('should load config with API keys from YAML', () => {
     const yaml = [
       'language: en',
-      'default_piece: default',
       'log_level: info',
       'provider: claude',
       'anthropic_api_key: sk-ant-from-yaml',
@@ -113,7 +112,6 @@ describe('GlobalConfig load/save with API keys', () => {
   it('should load config without API keys', () => {
     const yaml = [
       'language: en',
-      'default_piece: default',
       'log_level: info',
       'provider: claude',
     ].join('\n');
@@ -128,7 +126,6 @@ describe('GlobalConfig load/save with API keys', () => {
     // Write initial config
     const yaml = [
       'language: en',
-      'default_piece: default',
       'log_level: info',
       'provider: claude',
     ].join('\n');
@@ -147,7 +144,6 @@ describe('GlobalConfig load/save with API keys', () => {
   it('should not persist API keys when not set', () => {
     const yaml = [
       'language: en',
-      'default_piece: default',
       'log_level: info',
       'provider: claude',
     ].join('\n');
@@ -183,7 +179,6 @@ describe('resolveAnthropicApiKey', () => {
     process.env['TAKT_ANTHROPIC_API_KEY'] = 'sk-ant-from-env';
     const yaml = [
       'language: en',
-      'default_piece: default',
       'log_level: info',
       'provider: claude',
       'anthropic_api_key: sk-ant-from-yaml',
@@ -198,7 +193,6 @@ describe('resolveAnthropicApiKey', () => {
     delete process.env['TAKT_ANTHROPIC_API_KEY'];
     const yaml = [
       'language: en',
-      'default_piece: default',
       'log_level: info',
       'provider: claude',
       'anthropic_api_key: sk-ant-from-yaml',
@@ -213,7 +207,6 @@ describe('resolveAnthropicApiKey', () => {
     delete process.env['TAKT_ANTHROPIC_API_KEY'];
     const yaml = [
       'language: en',
-      'default_piece: default',
       'log_level: info',
       'provider: claude',
     ].join('\n');
@@ -254,7 +247,6 @@ describe('resolveOpenaiApiKey', () => {
     process.env['TAKT_OPENAI_API_KEY'] = 'sk-openai-from-env';
     const yaml = [
       'language: en',
-      'default_piece: default',
       'log_level: info',
       'provider: claude',
       'openai_api_key: sk-openai-from-yaml',
@@ -269,7 +261,6 @@ describe('resolveOpenaiApiKey', () => {
     delete process.env['TAKT_OPENAI_API_KEY'];
     const yaml = [
       'language: en',
-      'default_piece: default',
       'log_level: info',
       'provider: claude',
       'openai_api_key: sk-openai-from-yaml',
@@ -284,7 +275,6 @@ describe('resolveOpenaiApiKey', () => {
     delete process.env['TAKT_OPENAI_API_KEY'];
     const yaml = [
       'language: en',
-      'default_piece: default',
       'log_level: info',
       'provider: claude',
     ].join('\n');
@@ -318,7 +308,6 @@ describe('resolveCodexCliPath', () => {
     process.env['TAKT_CODEX_CLI_PATH'] = envCodexPath;
     const yaml = [
       'language: en',
-      'default_piece: default',
       'log_level: info',
       'provider: codex',
       `codex_cli_path: ${configCodexPath}`,
@@ -334,7 +323,6 @@ describe('resolveCodexCliPath', () => {
     const configCodexPath = createExecutableFile('config-codex');
     const yaml = [
       'language: en',
-      'default_piece: default',
       'log_level: info',
       'provider: codex',
       `codex_cli_path: ${configCodexPath}`,
@@ -349,7 +337,6 @@ describe('resolveCodexCliPath', () => {
     delete process.env['TAKT_CODEX_CLI_PATH'];
     const yaml = [
       'language: en',
-      'default_piece: default',
       'log_level: info',
       'provider: codex',
     ].join('\n');
@@ -395,7 +382,6 @@ describe('resolveCodexCliPath', () => {
     delete process.env['TAKT_CODEX_CLI_PATH'];
     const yaml = [
       'language: en',
-      'default_piece: default',
       'log_level: info',
       'provider: codex',
       `codex_cli_path: ${join(testDir, 'missing-codex-from-config')}`,
@@ -427,7 +413,6 @@ describe('resolveOpencodeApiKey', () => {
     process.env['TAKT_OPENCODE_API_KEY'] = 'sk-opencode-from-env';
     const yaml = [
       'language: en',
-      'default_piece: default',
       'log_level: info',
       'provider: claude',
       'opencode_api_key: sk-opencode-from-yaml',
@@ -442,7 +427,6 @@ describe('resolveOpencodeApiKey', () => {
     delete process.env['TAKT_OPENCODE_API_KEY'];
     const yaml = [
       'language: en',
-      'default_piece: default',
       'log_level: info',
       'provider: claude',
       'opencode_api_key: sk-opencode-from-yaml',
@@ -457,7 +441,6 @@ describe('resolveOpencodeApiKey', () => {
     delete process.env['TAKT_OPENCODE_API_KEY'];
     const yaml = [
       'language: en',
-      'default_piece: default',
       'log_level: info',
       'provider: claude',
     ].join('\n');

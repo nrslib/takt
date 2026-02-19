@@ -495,7 +495,6 @@ describe('GlobalConfigSchema', () => {
     const config = {};
     const result = GlobalConfigSchema.parse(config);
 
-    expect(result.default_piece).toBe('default');
     expect(result.log_level).toBe('info');
     expect(result.provider).toBe('claude');
     expect(result.observability).toBeUndefined();
@@ -503,7 +502,6 @@ describe('GlobalConfigSchema', () => {
 
   it('should accept valid config', () => {
     const config = {
-      default_piece: 'custom',
       log_level: 'debug' as const,
       observability: {
         provider_events: false,
