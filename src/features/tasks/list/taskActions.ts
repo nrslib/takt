@@ -17,3 +17,5 @@ export {
 } from './taskBranchLifecycleActions.js';
 
 export { instructBranch } from './taskInstructionActions.js';
+
+export { syncBranchWithRoot } from './taskSyncAction.js';

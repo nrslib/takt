@@ -1,6 +1,6 @@
 import type { BranchListItem, TaskListItem } from '../../../infra/task/index.js';
 
-export type ListAction = 'diff' | 'instruct' | 'try' | 'merge' | 'delete';
+export type ListAction = 'diff' | 'instruct' | 'sync' | 'try' | 'merge' | 'delete';
 
 export type BranchActionTarget = TaskListItem | Pick<BranchListItem, 'info' | 'originalInstruction'>;
 

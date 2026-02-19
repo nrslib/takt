@@ -3,7 +3,7 @@
  *
  * Interactive UI for reviewing branch-based task results,
  * pending tasks (.takt/tasks.yaml), and failed tasks.
- * Individual actions (merge, delete, instruct, diff) are in taskActions.ts.
+ * Individual actions (merge, delete, instruct, diff, sync) are in taskActions.ts.
  * Task delete actions are in taskDeleteActions.ts.
  * Non-interactive mode is in listNonInteractive.ts.
  */
@@ -22,6 +22,7 @@ import {
   tryMergeBranch,
   mergeBranch,
   instructBranch,
+  syncBranchWithRoot,
 } from './taskActions.js';
 import { deletePendingTask, deleteFailedTask, deleteCompletedTask } from './taskDeleteActions.js';
 import { retryFailedTask } from './taskRetryActions.js';
@@ -118,7 +119,6 @@ export async function listTasks(
 
   const runner = new TaskRunner(cwd);
 
-  // Interactive loop
   while (true) {
     const tasks = runner.listAllTaskItems();
 
@@ -182,6 +182,9 @@ export async function listTasks(
           break;
         case 'instruct':
           await instructBranch(cwd, task);
+          break;
+        case 'sync':
+          await syncBranchWithRoot(cwd, task, options);
           break;
         case 'try':
           tryMergeBranch(cwd, task);
