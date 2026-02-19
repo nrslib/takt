@@ -6,8 +6,12 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { resolvePieceConfigValue } from '../../../infra/config/index.js';
 import { type TaskInfo, createSharedClone, summarizeTaskName, getCurrentBranch } from '../../../infra/task/index.js';
+import { fetchIssue, checkGhCli } from '../../../infra/github/index.js';
 import { withProgress } from '../../../shared/ui/index.js';
+import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { getTaskSlugFromTaskDir } from '../../../shared/utils/taskPaths.js';
+
+const log = createLogger('task');
 
 export interface ResolvedTaskExecution {
   execCwd: string;
@@ -57,6 +61,30 @@ function stageTaskSpecForExecution(
 function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw new Error('Task execution aborted');
+  }
+}
+
+/**
+ * Resolve a GitHub issue from task data's issue number.
+ * Returns issue array for buildPrBody, or undefined if no issue or gh CLI unavailable.
+ */
+export function resolveTaskIssue(issueNumber: number | undefined): ReturnType<typeof fetchIssue>[] | undefined {
+  if (issueNumber === undefined) {
+    return undefined;
+  }
+
+  const ghStatus = checkGhCli();
+  if (!ghStatus.available) {
+    log.info('gh CLI unavailable, skipping issue resolution for PR body', { issueNumber });
+    return undefined;
+  }
+
+  try {
+    const issue = fetchIssue(issueNumber);
+    return [issue];
+  } catch (e) {
+    log.info('Failed to fetch issue for PR body, continuing without issue info', { issueNumber, error: getErrorMessage(e) });
+    return undefined;
   }
 }
 

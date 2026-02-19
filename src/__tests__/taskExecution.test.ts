@@ -19,6 +19,7 @@ const { mockResolveTaskExecution, mockExecutePiece, mockLoadPieceByIdentifier, m
 
 vi.mock('../features/tasks/execute/resolveTask.js', () => ({
   resolveTaskExecution: (...args: unknown[]) => mockResolveTaskExecution(...args),
+  resolveTaskIssue: vi.fn(),
 }));
 
 vi.mock('../features/tasks/execute/pieceExecution.js', () => ({

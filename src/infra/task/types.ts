@@ -30,6 +30,7 @@ export interface TaskResult {
   completedAt: string;
   branch?: string;
   worktreePath?: string;
+  prUrl?: string;
 }
 
 export interface WorktreeOptions {
@@ -85,6 +86,7 @@ export interface TaskListItem {
   summary?: string;
   branch?: string;
   worktreePath?: string;
+  prUrl?: string;
   data?: TaskFileData;
   failure?: TaskFailure;
   startedAt?: string;
