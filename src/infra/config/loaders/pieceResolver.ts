@@ -10,7 +10,7 @@ import { join, resolve, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import type { PieceConfig, PieceMovement, InteractiveMode } from '../../../core/models/index.js';
 import { getGlobalPiecesDir, getBuiltinPiecesDir, getProjectConfigDir } from '../paths.js';
-import { getLanguage, getDisabledBuiltins, getBuiltinPiecesEnabled } from '../global/globalConfig.js';
+import { resolvePieceConfigValues } from '../resolvePieceConfigValue.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { loadPieceFromFile } from './pieceParser.js';
 
@@ -23,10 +23,11 @@ export interface PieceWithSource {
   source: PieceSource;
 }
 
-export function listBuiltinPieceNames(options?: { includeDisabled?: boolean }): string[] {
-  const lang = getLanguage();
+export function listBuiltinPieceNames(cwd: string, options?: { includeDisabled?: boolean }): string[] {
+  const config = resolvePieceConfigValues(cwd, ['language', 'disabledBuiltins']);
+  const lang = config.language;
   const dir = getBuiltinPiecesDir(lang);
-  const disabled = options?.includeDisabled ? undefined : getDisabledBuiltins();
+  const disabled = options?.includeDisabled ? undefined : (config.disabledBuiltins ?? []);
   const names = new Set<string>();
   for (const entry of iteratePieceDir(dir, 'builtin', disabled)) {
     names.add(entry.name);
@@ -35,10 +36,11 @@ export function listBuiltinPieceNames(options?: { includeDisabled?: boolean }): 
 }
 
 /** Get builtin piece by name */
-export function getBuiltinPiece(name: string, projectCwd?: string): PieceConfig | null {
-  if (!getBuiltinPiecesEnabled()) return null;
-  const lang = getLanguage();
-  const disabled = getDisabledBuiltins();
+export function getBuiltinPiece(name: string, projectCwd: string): PieceConfig | null {
+  const config = resolvePieceConfigValues(projectCwd, ['enableBuiltinPieces', 'language', 'disabledBuiltins']);
+  if (config.enableBuiltinPieces === false) return null;
+  const lang = config.language;
+  const disabled = config.disabledBuiltins ?? [];
   if (disabled.includes(name)) return null;
 
   const builtinDir = getBuiltinPiecesDir(lang);
@@ -69,7 +71,7 @@ function resolvePath(pathInput: string, basePath: string): string {
 function loadPieceFromPath(
   filePath: string,
   basePath: string,
-  projectCwd?: string,
+  projectCwd: string,
 ): PieceConfig | null {
   const resolvedPath = resolvePath(filePath, basePath);
   if (!existsSync(resolvedPath)) {
@@ -371,10 +373,11 @@ function* iteratePieceDir(
 
 /** Get the 3-layer directory list (builtin → user → project-local) */
 function getPieceDirs(cwd: string): { dir: string; source: PieceSource; disabled?: string[] }[] {
-  const disabled = getDisabledBuiltins();
-  const lang = getLanguage();
+  const config = resolvePieceConfigValues(cwd, ['enableBuiltinPieces', 'language', 'disabledBuiltins']);
+  const disabled = config.disabledBuiltins ?? [];
+  const lang = config.language;
   const dirs: { dir: string; source: PieceSource; disabled?: string[] }[] = [];
-  if (getBuiltinPiecesEnabled()) {
+  if (config.enableBuiltinPieces !== false) {
     dirs.push({ dir: getBuiltinPiecesDir(lang), disabled, source: 'builtin' });
   }
   dirs.push({ dir: getGlobalPiecesDir(), source: 'user' });

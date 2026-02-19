@@ -14,7 +14,7 @@ const {
   mockSuccess,
   mockWarn,
   mockError,
-  mockGetCurrentPiece,
+  mockResolveConfigValue,
 } = vi.hoisted(() => ({
   mockRecoverInterruptedRunningTasks: vi.fn(),
   mockGetTasksDir: vi.fn(),
@@ -28,7 +28,7 @@ const {
   mockSuccess: vi.fn(),
   mockWarn: vi.fn(),
   mockError: vi.fn(),
-  mockGetCurrentPiece: vi.fn(),
+  mockResolveConfigValue: vi.fn(),
 }));
 
 vi.mock('../infra/task/index.js', () => ({
@@ -61,7 +61,7 @@ vi.mock('../shared/i18n/index.js', () => ({
 }));
 
 vi.mock('../infra/config/index.js', () => ({
-  getCurrentPiece: mockGetCurrentPiece,
+  resolveConfigValue: mockResolveConfigValue,
 }));
 
 import { watchTasks } from '../features/tasks/watch/index.js';
@@ -69,7 +69,7 @@ import { watchTasks } from '../features/tasks/watch/index.js';
 describe('watchTasks', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockGetCurrentPiece.mockReturnValue('default');
+    mockResolveConfigValue.mockReturnValue('default');
     mockRecoverInterruptedRunningTasks.mockReturnValue(0);
     mockGetTasksDir.mockReturnValue('/project/.takt/tasks.yaml');
     mockExecuteAndCompleteTask.mockResolvedValue(true);

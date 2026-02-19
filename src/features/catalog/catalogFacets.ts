@@ -11,7 +11,7 @@ import chalk from 'chalk';
 import type { PieceSource } from '../../infra/config/loaders/pieceResolver.js';
 import { getLanguageResourcesDir } from '../../infra/resources/index.js';
 import { getGlobalConfigDir, getProjectConfigDir } from '../../infra/config/paths.js';
-import { getLanguage, getBuiltinPiecesEnabled } from '../../infra/config/global/globalConfig.js';
+import { resolvePieceConfigValues } from '../../infra/config/index.js';
 import { section, error as logError, info } from '../../shared/ui/index.js';
 
 const FACET_TYPES = [
@@ -62,10 +62,11 @@ function getFacetDirs(
   facetType: FacetType,
   cwd: string,
 ): { dir: string; source: PieceSource }[] {
+  const config = resolvePieceConfigValues(cwd, ['enableBuiltinPieces', 'language']);
   const dirs: { dir: string; source: PieceSource }[] = [];
 
-  if (getBuiltinPiecesEnabled()) {
-    const lang = getLanguage();
+  if (config.enableBuiltinPieces !== false) {
+    const lang = config.language;
     dirs.push({ dir: join(getLanguageResourcesDir(lang), facetType), source: 'builtin' });
   }
 

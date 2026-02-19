@@ -5,7 +5,7 @@
  */
 
 import * as wanakana from 'wanakana';
-import { loadGlobalConfig } from '../config/global/globalConfig.js';
+import { resolveConfigValues } from '../config/index.js';
 import { getProvider, type ProviderType } from '../providers/index.js';
 import { createLogger, slugify } from '../../shared/utils/index.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
@@ -38,7 +38,7 @@ export class TaskSummarizer {
     taskName: string,
     options: SummarizeOptions,
   ): Promise<string> {
-    const globalConfig = loadGlobalConfig();
+    const globalConfig = resolveConfigValues(options.cwd, ['branchNameStrategy', 'provider', 'model']);
     const useLLM = options.useLLM ?? (globalConfig.branchNameStrategy === 'ai');
     log.info('Summarizing task name', { taskName, useLLM });
 

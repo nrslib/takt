@@ -10,7 +10,7 @@
 
 import chalk from 'chalk';
 import {
-  loadGlobalConfig,
+  resolveConfigValues,
   loadPersonaSessions,
   updatePersonaSession,
   loadSessionState,
@@ -58,7 +58,7 @@ export interface SessionContext {
  * Initialize provider, session, and language for interactive conversation.
  */
 export function initializeSession(cwd: string, personaName: string): SessionContext {
-  const globalConfig = loadGlobalConfig();
+  const globalConfig = resolveConfigValues(cwd, ['language', 'provider', 'model']);
   const lang = resolveLanguage(globalConfig.language);
   if (!globalConfig.provider) {
     throw new Error('Provider is not configured.');

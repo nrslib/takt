@@ -5,12 +5,12 @@
 import { resetPieceCategories, getPieceCategoriesPath } from '../../infra/config/global/pieceCategories.js';
 import { header, success, info } from '../../shared/ui/index.js';
 
-export async function resetCategoriesToDefault(): Promise<void> {
+export async function resetCategoriesToDefault(cwd: string): Promise<void> {
   header('Reset Categories');
 
-  resetPieceCategories();
+  resetPieceCategories(cwd);
 
-  const userPath = getPieceCategoriesPath();
+  const userPath = getPieceCategoriesPath(cwd);
   success('User category overlay reset.');
   info(`  ${userPath}`);
 }
