@@ -42,10 +42,14 @@ export interface PostExecutionOptions {
   repo?: string;
 }
 
+export interface PostExecutionResult {
+  prUrl?: string;
+}
+
 /**
  * Auto-commit, push, and optionally create a PR after successful task execution.
  */
-export async function postExecutionFlow(options: PostExecutionOptions): Promise<void> {
+export async function postExecutionFlow(options: PostExecutionOptions): Promise<PostExecutionResult> {
   const { execCwd, projectCwd, task, branch, baseBranch, shouldCreatePr, pieceIdentifier, issues, repo } = options;
 
   const commitResult = autoCommitAndPush(execCwd, task, projectCwd);
@@ -73,8 +77,11 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
     });
     if (prResult.success) {
       success(`PR created: ${prResult.url}`);
+      return { prUrl: prResult.url };
     } else {
       error(`PR creation failed: ${prResult.error}`);
     }
   }
+
+  return {};
 }

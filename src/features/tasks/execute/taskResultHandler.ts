@@ -10,6 +10,7 @@ interface BuildTaskResultParams {
   completedAt: string;
   branch?: string;
   worktreePath?: string;
+  prUrl?: string;
 }
 
 interface BuildBooleanTaskResultParams {
@@ -33,7 +34,7 @@ interface PersistTaskErrorOptions {
 }
 
 export function buildTaskResult(params: BuildTaskResultParams): TaskResult {
-  const { task, runResult, startedAt, completedAt, branch, worktreePath } = params;
+  const { task, runResult, startedAt, completedAt, branch, worktreePath, prUrl } = params;
   const taskSuccess = runResult.success;
 
   if (!taskSuccess && !runResult.reason) {
@@ -51,6 +52,7 @@ export function buildTaskResult(params: BuildTaskResultParams): TaskResult {
     completedAt,
     ...(branch ? { branch } : {}),
     ...(worktreePath ? { worktreePath } : {}),
+    ...(prUrl ? { prUrl } : {}),
   };
 }
 
