@@ -292,9 +292,6 @@ takt eject instruction plan --global
 # 各ムーブメント・フェーズの組み立て済みプロンプトをプレビュー
 takt prompt [piece]
 
-# パーミッションモードを設定
-takt config
-
 # ピースカテゴリをビルトインのデフォルトにリセット
 takt reset categories
 ```
@@ -562,75 +559,181 @@ Claude Code はエイリアス（`opus`、`sonnet`、`haiku`、`opusplan`、`def
 
 ### グローバル設定
 
-デフォルトのプロバイダーとモデルを `~/.takt/config.yaml` で設定:
+`~/.takt/config.yaml` のサンプルです。  
+コメントで「通常設定」と「ピースにも関わる設定」を分けています。
 
 ```yaml
 # ~/.takt/config.yaml
-language: ja
-default_piece: default
-log_level: info
-provider: claude         # デフォルトプロバイダー: claude、codex、または opencode
-model: sonnet            # デフォルトモデル（オプション）
-branch_name_strategy: romaji  # ブランチ名生成: 'romaji'（高速）または 'ai'（低速）
-prevent_sleep: false     # macOS の実行中スリープ防止（caffeinate）
-notification_sound: true # 通知音の有効/無効
-notification_sound_events: # タイミング別の通知音制御
-  iteration_limit: false
-  piece_complete: true
-  piece_abort: true
-  run_complete: true # 未設定時は有効。false を指定すると無効
-  run_abort: true    # 未設定時は有効。false を指定すると無効
-concurrency: 1           # takt run の並列タスク数（1-10、デフォルト: 1 = 逐次実行）
-task_poll_interval_ms: 500  # takt run 中の新タスク検出ポーリング間隔（100-5000、デフォルト: 500）
-interactive_preview_movements: 3  # 対話モードでのムーブメントプレビュー数（0-10、デフォルト: 3）
 
-# ランタイム環境デフォルト（piece_config.runtime で上書き可能）
-# runtime:
-#   prepare:
-#     - gradle    # Gradle のキャッシュ/設定を .runtime/ に準備
-#     - node      # npm キャッシュを .runtime/ に準備
+# =====================================
+# 通常設定（ピース非依存）
+# =====================================
+language: ja         # 表示言語: ja | en
+log_level: info      # ログレベル: debug | info | warn | error
+provider: claude     # デフォルト実行プロバイダー: claude | codex | opencode | mock
+# model: sonnet      # 省略可。providerに渡すモデル名
 
-# ペルソナ別プロバイダー設定（オプション）
-# ピースを複製せずに特定のペルソナを異なるプロバイダーにルーティング
+# 実行制御
+# worktree_dir: ~/takt-worktrees   # 共有clone作成先ディレクトリ
+# auto_pr: false                   # worktree実行後に自動PR作成するか
+branch_name_strategy: ai       # ブランチ名生成: romaji | ai
+concurrency: 2               # takt run の同時実行数（1-10）
+# task_poll_interval_ms: 500       # takt run のタスク監視間隔ms（100-5000）
+# prevent_sleep: false             # macOS実行中のスリープ防止（caffeinate）
+
+# 出力・通知
+# minimal_output: false            # 出力を最小化（CI向け）
+# verbose: false                   # 詳細ログを有効化
+# notification_sound: true         # 通知音全体のON/OFF
+# notification_sound_events:       # イベント別通知音（未指定はtrue扱い）
+#   iteration_limit: true
+#   piece_complete: true
+#   piece_abort: true
+#   run_complete: true
+#   run_abort: true
+# observability:
+#   provider_events: false         # providerイベントログを記録
+
+# 認証情報（環境変数優先）
+# anthropic_api_key: "sk-ant-..." # Claude APIキー
+# openai_api_key: "sk-..."         # Codex APIキー
+# opencode_api_key: "..."          # OpenCode APIキー
+# codex_cli_path: "/absolute/path/to/codex"  # Codex CLI絶対パス
+
+# パイプライン
+# pipeline:
+#   default_branch_prefix: "takt/"             # pipeline作成ブランチの接頭辞
+#   commit_message_template: "feat: {title} (#{issue})"  # コミット文テンプレート
+#   pr_body_template: |                          # PR本文テンプレート
+#     ## Summary
+#     {issue_body}
+#     Closes #{issue}
+
+# その他
+# bookmarks_file: ~/.takt/preferences/bookmarks.yaml   # ブックマーク保存先
+
+# =====================================
+# ピースにも関わる設定（global defaults）
+# =====================================
+# 1) ペルソナ単位でプロバイダーを切り替える
 # persona_providers:
-#   coder: codex             # coder を Codex で実行
-#   ai-antipattern-reviewer: claude  # レビュアーは Claude のまま
+#   coder: codex         # coderペルソナはcodexで実行
+#   reviewer: claude     # reviewerペルソナはclaudeで実行
 
-# プロバイダー別パーミッションプロファイル（オプション）
-# 優先順: project override → global override → project default → global default → required_permission_mode（下限）
+# 2) provider 固有オプション（global < project < piece）
+# provider_options:
+#   codex:
+#     network_access: true      # Codex実行時のネットワークアクセス許可
+#   opencode:
+#     network_access: true      # OpenCode実行時のネットワークアクセス許可
+#   claude:
+#     sandbox:
+#       allow_unsandboxed_commands: false   # trueで対象コマンドを非サンドボックス実行
+#       excluded_commands:
+#         - "npm publish"                  # 非サンドボックス対象コマンド
+
+# 3) movement の権限ポリシー
+# provider_profiles:
+#   codex:
+#     default_permission_mode: full         # 既定権限: readonly | edit | full
+#     movement_permission_overrides:
+#       ai_review: readonly                 # movement単位の上書き
+#   claude:
+#     default_permission_mode: edit
+
+# 4) 実行前のランタイム準備（推奨: 有効化）
+runtime:
+  prepare:
+    - gradle      # Gradleキャッシュ/環境を .runtime 配下に準備
+    - node        # npmキャッシュ/環境を .runtime 配下に準備
+
+# 5) ピース一覧/カテゴリ
+# enable_builtin_pieces: true                             # builtins/{lang}/pieces を有効化
+# disabled_builtins:
+#   - magi                                                # 無効化するビルトインピース名
+# piece_categories_file: ~/.takt/preferences/piece-categories.yaml  # カテゴリ定義ファイル
+# interactive_preview_movements: 3                        # 対話モードのプレビュー件数（0-10）
+```
+
+主要な設定項目の説明:
+
+**通常設定**
+| 項目 | 説明 |
+|------|------|
+| `language` | 表示言語（`ja` / `en`） |
+| `log_level` | ログレベル（`debug` / `info` / `warn` / `error`） |
+| `provider` | デフォルト実行プロバイダー（`claude` / `codex` / `opencode` / `mock`） |
+| `model` | モデル名（provider にそのまま渡される） |
+| `auto_pr` | worktree 実行後のPR作成挙動 |
+| `concurrency` | `takt run` の同時実行数（1-10） |
+| `task_poll_interval_ms` | `takt run` のタスク監視間隔（100-5000ms） |
+| `minimal_output` | CI向けの簡易出力モード |
+| `verbose` | 詳細ログ出力 |
+| `notification_sound` / `notification_sound_events` | 通知音のON/OFFとイベント別制御 |
+| `pipeline.*` | pipeline 実行時のブランチ/コミット/PRテンプレート |
+
+**ピースにも関わる設定**
+| 項目 | 説明 |
+|------|------|
+| `persona_providers` | ペルソナ単位の provider 上書き |
+| `provider_options` | provider固有オプション（例: `codex.network_access`、`claude.sandbox.*`） |
+| `provider_profiles` | movement ごとの permission mode 解決ルール |
+| `runtime.prepare` | 実行前の環境準備（`gradle` / `node` / 任意スクリプト） |
+| `enable_builtin_pieces` / `disabled_builtins` | ビルトインピースの有効化/除外 |
+| `piece_categories_file` | ピースカテゴリ定義ファイルの場所 |
+| `interactive_preview_movements` | 対話モードで表示する movement プレビュー数 |
+
+### プロジェクトローカル設定
+
+`.takt/config.yaml` のサンプルです。  
+チーム/リポジトリごとの既定値を置く用途です。
+
+```yaml
+# .takt/config.yaml
+
+# =====================================
+# 通常設定（ピース非依存）
+# =====================================
+piece: default        # このプロジェクトで使う既定ピース名
+provider: claude      # プロジェクト既定プロバイダー: claude | codex | opencode | mock
+# verbose: false      # このプロジェクトだけ詳細ログを有効化する場合
+# auto_pr: false      # worktree実行後に自動PR作成するか
+
+# =====================================
+# ピースにも関わる設定（project overrides）
+# =====================================
+# provider_options:
+#   codex:
+#     network_access: true      # グローバル設定をこのプロジェクトで上書き
+#   claude:
+#     sandbox:
+#       allow_unsandboxed_commands: false
+#       excluded_commands:
+#         - "npm publish"
+
 # provider_profiles:
 #   codex:
 #     default_permission_mode: full
 #     movement_permission_overrides:
 #       ai_review: readonly
-#   claude:
-#     default_permission_mode: edit
-
-# API Key 設定（オプション）
-# 環境変数 TAKT_ANTHROPIC_API_KEY / TAKT_OPENAI_API_KEY / TAKT_OPENCODE_API_KEY で上書き可能
-anthropic_api_key: sk-ant-...  # Claude (Anthropic) を使う場合
-# openai_api_key: sk-...       # Codex (OpenAI) を使う場合
-# opencode_api_key: ...        # OpenCode を使う場合
-
-# Codex CLI パスの上書き（オプション）
-# Codex SDK が使用する CLI バイナリを上書き（実行可能ファイルの絶対パスを指定）
-# 環境変数 TAKT_CODEX_CLI_PATH で上書き可能
-# codex_cli_path: /usr/local/bin/codex
-
-# ビルトインピースのフィルタリング（オプション）
-# builtin_pieces_enabled: true           # false でビルトイン全体を無効化
-# disabled_builtins: [magi, passthrough] # 特定のビルトインピースを無効化
-
-# パイプライン実行設定（オプション）
-# ブランチ名、コミットメッセージ、PRの本文をカスタマイズできます。
-# pipeline:
-#   default_branch_prefix: "takt/"
-#   commit_message_template: "feat: {title} (#{issue})"
-#   pr_body_template: |
-#     ## Summary
-#     {issue_body}
-#     Closes #{issue}
 ```
+
+プロジェクトローカルで使える主な項目:
+
+| 項目 | 説明 |
+|------|------|
+| `piece` | プロジェクト既定のピース |
+| `provider` | プロジェクト既定のプロバイダー |
+| `verbose` | ローカル詳細ログ |
+| `auto_pr` | ローカル既定のPR作成挙動 |
+| `provider_options` | provider固有オプションのローカル上書き |
+| `provider_profiles` | movement権限ポリシーのローカル上書き |
+
+設定解決の優先順位（高 → 低）:
+1. 環境変数（`TAKT_*`）
+2. `.takt/config.yaml`（プロジェクトローカル）
+3. `~/.takt/config.yaml`（グローバル）
+4. デフォルト値
 
 **注意:** Codex SDK は Git 管理下のディレクトリでのみ動作します。`--skip-git-repo-check` は Codex CLI 専用です。
 

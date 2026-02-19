@@ -35,7 +35,6 @@ export {
 export {
   saveProjectConfig,
   updateProjectConfig,
-  getCurrentPiece,
   setCurrentPiece,
   isVerboseMode,
   type ProjectLocalConfig,

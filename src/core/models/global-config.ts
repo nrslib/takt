@@ -110,7 +110,6 @@ export interface GlobalConfig {
 /** Project-level configuration */
 export interface ProjectConfig {
   piece?: string;
-  agents?: CustomAgentConfig[];
   provider?: 'claude' | 'codex' | 'opencode' | 'mock';
   providerOptions?: MovementProviderOptions;
   /** Provider-specific permission profiles */

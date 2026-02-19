@@ -1,105 +1,91 @@
 # TAKT global configuration sample
 # Location: ~/.takt/config.yaml
 
-# ---- Core ----
-language: en
-default_piece: default
-log_level: info
+# =====================================
+# General settings (piece-independent)
+# =====================================
+language: en        # UI language: en | ja
+log_level: info     # Log level: debug | info | warn | error
+provider: claude    # Default provider: claude | codex | opencode | mock
+# model: sonnet     # Optional model name passed to provider
 
-# ---- Provider ----
-# provider: claude | codex | opencode | mock
-provider: claude
+# Execution control
+# worktree_dir: ~/takt-worktrees   # Base directory for shared clone execution
+# auto_pr: false                   # Auto-create PR after worktree execution
+branch_name_strategy: ai      # Branch strategy: romaji | ai
+concurrency: 2                  # Concurrent task execution for takt run (1-10)
+# task_poll_interval_ms: 500       # Polling interval in ms during takt run (100-5000)
+# prevent_sleep: false             # Prevent macOS idle sleep while running
 
-# Model (optional)
-# Claude examples: opus, sonnet, haiku
-# Codex examples: gpt-5.2-codex, gpt-5.1-codex
-# OpenCode format: provider/model
-# model: sonnet
-
-# Per-persona provider override
-# persona_providers:
-#   coder: codex
-#   reviewer: claude
-
-# Provider-specific movement permission policy
-# Priority:
-# 1) project provider_profiles override
-# 2) global provider_profiles override
-# 3) project provider_profiles default
-# 4) global provider_profiles default
-# 5) movement.required_permission_mode (minimum floor)
-# provider_profiles:
-#   codex:
-#     default_permission_mode: full
-#     movement_permission_overrides:
-#       ai_review: readonly
-#   claude:
-#     default_permission_mode: edit
-
-# Provider-specific runtime options
-# provider_options:
-#   codex:
-#     network_access: true
-#   claude:
-#     sandbox:
-#       allow_unsandboxed_commands: true
-
-# ---- API Keys ----
-# Environment variables take priority:
-# TAKT_ANTHROPIC_API_KEY / TAKT_OPENAI_API_KEY / TAKT_OPENCODE_API_KEY
-# anthropic_api_key: ""
-# openai_api_key: ""
-# opencode_api_key: ""
-
-# ---- Runtime ----
-# Global runtime preparation (piece_config.runtime overrides this)
-# runtime:
-#   prepare:
-#     - gradle
-#     - node
-
-# ---- Execution ----
-# worktree_dir: ~/takt-worktrees
-# auto_pr: false
-# prevent_sleep: false
-
-# ---- Run Loop ----
-# concurrency: 1
-# task_poll_interval_ms: 500
-# interactive_preview_movements: 3
-# branch_name_strategy: romaji
-
-# ---- Output ----
-# minimal_output: false
-# notification_sound: true
-# notification_sound_events:
+# Output / notifications
+# minimal_output: false            # Minimized output for CI logs
+# verbose: false                   # Verbose output mode
+# notification_sound: true         # Master switch for sounds
+# notification_sound_events:       # Per-event sound toggle (unset means true)
 #   iteration_limit: true
 #   piece_complete: true
 #   piece_abort: true
 #   run_complete: true
 #   run_abort: true
 # observability:
-#   provider_events: true
+#   provider_events: false         # Persist provider stream events
 
-# ---- Builtins ----
-# enable_builtin_pieces: true
-# disabled_builtins:
-#   - magi
+# Credentials (environment variables take priority)
+# anthropic_api_key: "sk-ant-..." # Claude API key
+# openai_api_key: "sk-..."         # Codex/OpenAI API key
+# opencode_api_key: "..."          # OpenCode API key
+# codex_cli_path: "/absolute/path/to/codex"  # Absolute path to Codex CLI
 
-# ---- Pipeline ----
+# Pipeline
 # pipeline:
-#   default_branch_prefix: "takt/"
-#   commit_message_template: "feat: {title} (#{issue})"
-#   pr_body_template: |
+#   default_branch_prefix: "takt/"             # Prefix for pipeline-created branches
+#   commit_message_template: "feat: {title} (#{issue})"  # Commit template
+#   pr_body_template: |                          # PR body template
 #     ## Summary
 #     {issue_body}
 #     Closes #{issue}
 
-# ---- Preferences ----
-# bookmarks_file: ~/.takt/preferences/bookmarks.yaml
-# piece_categories_file: ~/.takt/preferences/piece-categories.yaml
+# Misc
+# bookmarks_file: ~/.takt/preferences/bookmarks.yaml  # Bookmark file location
 
-# ---- Debug ----
-# debug:
-#   enabled: false
-#   log_file: ~/.takt/logs/debug.log
+# =====================================
+# Piece-related settings (global defaults)
+# =====================================
+# 1) Route provider per persona
+# persona_providers:
+#   coder: codex         # Run coder persona on codex
+#   reviewer: claude     # Run reviewer persona on claude
+
+# 2) Provider options (global < project < piece)
+# provider_options:
+#   codex:
+#     network_access: true      # Allow network access for Codex
+#   opencode:
+#     network_access: true      # Allow network access for OpenCode
+#   claude:
+#     sandbox:
+#       allow_unsandboxed_commands: false   # true allows unsandboxed execution for listed commands
+#       excluded_commands:
+#         - "npm publish"                  # Commands excluded from sandbox
+
+# 3) Movement permission policy
+# provider_profiles:
+#   codex:
+#     default_permission_mode: full         # Base permission: readonly | edit | full
+#     movement_permission_overrides:
+#       ai_review: readonly                 # Per-movement override
+#   claude:
+#     default_permission_mode: edit
+
+# 4) Runtime preparation before execution (recommended: enabled)
+runtime:
+  prepare:
+    - gradle      # Prepare Gradle cache/env under .runtime
+    - node        # Prepare npm cache/env under .runtime
+
+# 5) Piece list / categories
+# enable_builtin_pieces: true                             # Enable built-in pieces from builtins/{lang}/pieces
+# disabled_builtins:
+#   - magi                                                # Built-in piece names to disable
+# piece_categories_file: ~/.takt/preferences/piece-categories.yaml  # Category definition file
+# interactive_preview_movements: 3                        # Preview movement count in interactive mode (0-10)

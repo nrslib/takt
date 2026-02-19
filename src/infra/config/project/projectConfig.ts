@@ -137,14 +137,6 @@ export function updateProjectConfig<K extends keyof ProjectLocalConfig>(
 }
 
 /**
- * Get current piece from project config
- */
-export function getCurrentPiece(projectDir: string): string {
-  const config = loadProjectConfig(projectDir);
-  return config.piece || 'default';
-}
-
-/**
  * Set current piece in project config
  */
 export function setCurrentPiece(projectDir: string, piece: string): void {

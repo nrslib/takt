@@ -13,8 +13,6 @@ export interface ProjectLocalConfig {
   provider?: 'claude' | 'codex' | 'opencode' | 'mock';
   /** Auto-create PR after worktree execution */
   auto_pr?: boolean;
-  /** Auto-create PR after worktree execution (camelCase alias) */
-  autoPr?: boolean;
   /** Verbose output mode */
   verbose?: boolean;
   /** Provider-specific options (overrides global, overridden by piece/movement) */

@@ -109,7 +109,6 @@ vi.mock('../infra/config/paths.js', async (importOriginal) => {
     updatePersonaSession: vi.fn(),
     loadWorktreeSessions: vi.fn().mockReturnValue({}),
     updateWorktreeSession: vi.fn(),
-    getCurrentPiece: vi.fn().mockReturnValue('default'),
     getProjectConfigDir: vi.fn().mockImplementation((cwd: string) => join(cwd, '.takt')),
   };
 });

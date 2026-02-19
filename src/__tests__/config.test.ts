@@ -1,5 +1,5 @@
 /**
- * Tests for takt config functions
+ * Tests for config functions
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -13,7 +13,6 @@ import {
   loadPiece,
   listPieces,
   loadPersonaPromptFromPath,
-  getCurrentPiece,
   setCurrentPiece,
   getProjectConfigDir,
   getBuiltinPersonasDir,
@@ -297,47 +296,6 @@ describe('loadPersonaPromptFromPath (builtin paths)', () => {
   });
 });
 
-describe('getCurrentPiece', () => {
-  let testDir: string;
-
-  beforeEach(() => {
-    testDir = join(tmpdir(), `takt-test-${randomUUID()}`);
-    mkdirSync(testDir, { recursive: true });
-  });
-
-  afterEach(() => {
-    if (existsSync(testDir)) {
-      rmSync(testDir, { recursive: true, force: true });
-    }
-  });
-
-  it('should return default when no config exists', () => {
-    const piece = getCurrentPiece(testDir);
-
-    expect(piece).toBe('default');
-  });
-
-  it('should return saved piece name from config.yaml', () => {
-    const configDir = getProjectConfigDir(testDir);
-    mkdirSync(configDir, { recursive: true });
-    writeFileSync(join(configDir, 'config.yaml'), 'piece: default\n');
-
-    const piece = getCurrentPiece(testDir);
-
-    expect(piece).toBe('default');
-  });
-
-  it('should return default for empty config', () => {
-    const configDir = getProjectConfigDir(testDir);
-    mkdirSync(configDir, { recursive: true });
-    writeFileSync(join(configDir, 'config.yaml'), '');
-
-    const piece = getCurrentPiece(testDir);
-
-    expect(piece).toBe('default');
-  });
-});
-
 describe('setCurrentPiece', () => {
   let testDir: string;
 
@@ -373,7 +331,7 @@ describe('setCurrentPiece', () => {
     setCurrentPiece(testDir, 'first');
     setCurrentPiece(testDir, 'second');
 
-    const piece = getCurrentPiece(testDir);
+    const piece = loadProjectConfig(testDir).piece;
 
     expect(piece).toBe('second');
   });
