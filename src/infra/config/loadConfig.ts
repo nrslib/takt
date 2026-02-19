@@ -23,6 +23,7 @@ export function loadConfig(projectDir: string): LoadedConfig {
     piece: project.piece ?? 'default',
     provider,
     autoPr: project.auto_pr ?? global.autoPr,
+    draftPr: project.draft_pr ?? global.draftPr,
     model: resolveModel(global, provider),
     verbose: resolveVerbose(project.verbose, global.verbose),
     providerOptions: mergeProviderOptions(global.providerOptions, project.providerOptions),

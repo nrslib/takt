@@ -421,6 +421,8 @@ export const GlobalConfigSchema = z.object({
   worktree_dir: z.string().optional(),
   /** Auto-create PR after worktree execution (default: prompt in interactive mode) */
   auto_pr: z.boolean().optional(),
+  /** Create PR as draft (default: prompt in interactive mode when auto_pr is true) */
+  draft_pr: z.boolean().optional(),
   /** List of builtin piece/agent names to exclude from fallback loading */
   disabled_builtins: z.array(z.string()).optional().default([]),
   /** Enable builtin pieces from builtins/{lang}/pieces */

@@ -26,7 +26,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   getErrorMessage: (e: unknown) => String(e),
 }));
 
-import { buildPrBody, findExistingPr } from '../infra/github/pr.js';
+import { buildPrBody, findExistingPr, createPullRequest } from '../infra/github/pr.js';
 import type { GitHubIssue } from '../infra/github/types.js';
 
 describe('findExistingPr', () => {
@@ -56,6 +56,53 @@ describe('findExistingPr', () => {
     const result = findExistingPr('/project', 'task/fix-bug');
 
     expect(result).toBeUndefined();
+  });
+});
+
+describe('createPullRequest', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('draft: true の場合、args に --draft が含まれる', () => {
+    mockExecFileSync.mockReturnValue('https://github.com/org/repo/pull/1\n');
+
+    createPullRequest('/project', {
+      branch: 'feat/my-branch',
+      title: 'My PR',
+      body: 'PR body',
+      draft: true,
+    });
+
+    const call = mockExecFileSync.mock.calls[0];
+    expect(call[1]).toContain('--draft');
+  });
+
+  it('draft: false の場合、args に --draft が含まれない', () => {
+    mockExecFileSync.mockReturnValue('https://github.com/org/repo/pull/2\n');
+
+    createPullRequest('/project', {
+      branch: 'feat/my-branch',
+      title: 'My PR',
+      body: 'PR body',
+      draft: false,
+    });
+
+    const call = mockExecFileSync.mock.calls[0];
+    expect(call[1]).not.toContain('--draft');
+  });
+
+  it('draft が未指定の場合、args に --draft が含まれない', () => {
+    mockExecFileSync.mockReturnValue('https://github.com/org/repo/pull/3\n');
+
+    createPullRequest('/project', {
+      branch: 'feat/my-branch',
+      title: 'My PR',
+      body: 'PR body',
+    });
+
+    const call = mockExecFileSync.mock.calls[0];
+    expect(call[1]).not.toContain('--draft');
   });
 });
 

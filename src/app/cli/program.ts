@@ -44,6 +44,7 @@ program
   .option('-w, --piece <name>', 'Piece name or path to piece file')
   .option('-b, --branch <name>', 'Branch name (auto-generated if omitted)')
   .option('--auto-pr', 'Create PR after successful execution')
+  .option('--draft', 'Create PR as draft (requires --auto-pr or auto_pr config)')
   .option('--repo <owner/repo>', 'Repository (defaults to current)')
   .option('--provider <name>', 'Override agent provider (claude|codex|opencode|mock)')
   .option('--model <name>', 'Override agent model')

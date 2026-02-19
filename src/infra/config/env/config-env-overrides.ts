@@ -84,6 +84,7 @@ const GLOBAL_ENV_SPECS: readonly EnvSpec[] = [
   { path: 'observability.provider_events', type: 'boolean' },
   { path: 'worktree_dir', type: 'string' },
   { path: 'auto_pr', type: 'boolean' },
+  { path: 'draft_pr', type: 'boolean' },
   { path: 'disabled_builtins', type: 'json' },
   { path: 'enable_builtin_pieces', type: 'boolean' },
   { path: 'anthropic_api_key', type: 'string' },

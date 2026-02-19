@@ -171,6 +171,7 @@ export class GlobalConfigManager {
       } : undefined,
       worktreeDir: parsed.worktree_dir,
       autoPr: parsed.auto_pr,
+      draftPr: parsed.draft_pr,
       disabledBuiltins: parsed.disabled_builtins,
       enableBuiltinPieces: parsed.enable_builtin_pieces,
       anthropicApiKey: parsed.anthropic_api_key,
@@ -241,6 +242,9 @@ export class GlobalConfigManager {
     }
     if (config.autoPr !== undefined) {
       raw.auto_pr = config.autoPr;
+    }
+    if (config.draftPr !== undefined) {
+      raw.draft_pr = config.draftPr;
     }
     if (config.disabledBuiltins && config.disabledBuiltins.length > 0) {
       raw.disabled_builtins = config.disabledBuiltins;

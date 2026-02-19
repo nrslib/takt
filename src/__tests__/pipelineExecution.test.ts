@@ -218,6 +218,46 @@ describe('executePipeline', () => {
     );
   });
 
+  it('draftPr: true の場合、createPullRequest に draft: true が渡される', async () => {
+    mockExecuteTask.mockResolvedValueOnce(true);
+    mockCreatePullRequest.mockReturnValueOnce({ success: true, url: 'https://github.com/test/pr/1' });
+
+    const exitCode = await executePipeline({
+      task: 'Fix the bug',
+      piece: 'default',
+      branch: 'fix/my-branch',
+      autoPr: true,
+      draftPr: true,
+      cwd: '/tmp/test',
+    });
+
+    expect(exitCode).toBe(0);
+    expect(mockCreatePullRequest).toHaveBeenCalledWith(
+      '/tmp/test',
+      expect.objectContaining({ draft: true }),
+    );
+  });
+
+  it('draftPr: false の場合、createPullRequest に draft: false が渡される', async () => {
+    mockExecuteTask.mockResolvedValueOnce(true);
+    mockCreatePullRequest.mockReturnValueOnce({ success: true, url: 'https://github.com/test/pr/1' });
+
+    const exitCode = await executePipeline({
+      task: 'Fix the bug',
+      piece: 'default',
+      branch: 'fix/my-branch',
+      autoPr: true,
+      draftPr: false,
+      cwd: '/tmp/test',
+    });
+
+    expect(exitCode).toBe(0);
+    expect(mockCreatePullRequest).toHaveBeenCalledWith(
+      '/tmp/test',
+      expect.objectContaining({ draft: false }),
+    );
+  });
+
   it('should pass baseBranch as base to createPullRequest', async () => {
     // Given: getCurrentBranch returns 'develop' before branch creation
     mockExecFileSync.mockImplementation((_cmd: string, args: string[]) => {

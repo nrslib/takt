@@ -127,6 +127,50 @@ describe('resolveAutoPr default in selectAndExecuteTask', () => {
     expect(autoPrCall![1]).toBe(true);
   });
 
+  it('shouldCreatePr=true の場合、"Create as draft?" プロンプトが表示される', async () => {
+    // confirm はすべての呼び出しに対して true を返す（autoPr=true → draftPr prompt）
+    mockConfirm.mockResolvedValue(true);
+    mockSummarizeTaskName.mockResolvedValue('test-task');
+    mockCreateSharedClone.mockReturnValue({
+      path: '/project/../clone',
+      branch: 'takt/test-task',
+    });
+    mockAutoCommitAndPush.mockReturnValue({
+      success: false,
+      message: 'no changes',
+    });
+
+    await selectAndExecuteTask('/project', 'test task', {
+      piece: 'default',
+      createWorktree: true,
+    });
+
+    const draftPrCall = mockConfirm.mock.calls.find((call) => call[0] === 'Create as draft?');
+    expect(draftPrCall).toBeDefined();
+    expect(draftPrCall![1]).toBe(true);
+  });
+
+  it('shouldCreatePr=false の場合、"Create as draft?" プロンプトは表示されない', async () => {
+    mockConfirm.mockResolvedValue(false); // autoPr=false → draft prompt skipped
+    mockSummarizeTaskName.mockResolvedValue('test-task');
+    mockCreateSharedClone.mockReturnValue({
+      path: '/project/../clone',
+      branch: 'takt/test-task',
+    });
+    mockAutoCommitAndPush.mockReturnValue({
+      success: false,
+      message: 'no changes',
+    });
+
+    await selectAndExecuteTask('/project', 'test task', {
+      piece: 'default',
+      createWorktree: true,
+    });
+
+    const draftPrCall = mockConfirm.mock.calls.find((call) => call[0] === 'Create as draft?');
+    expect(draftPrCall).toBeUndefined();
+  });
+
   it('should call selectPiece when no override is provided', async () => {
     mockSelectPiece.mockResolvedValue('selected-piece');
 
@@ -175,6 +219,7 @@ describe('resolveAutoPr default in selectAndExecuteTask', () => {
       branch: 'takt/test-task',
       worktree_path: '/project/../clone',
       auto_pr: true,
+      draft_pr: true,
     }));
     expect(mockCompleteTask).toHaveBeenCalledTimes(1);
     expect(mockFailTask).not.toHaveBeenCalled();
