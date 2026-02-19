@@ -4,6 +4,18 @@ import * as path from 'node:path';
 import { tmpdir } from 'node:os';
 import { parse as parseYaml } from 'yaml';
 
+vi.mock('../infra/task/summarize.js', () => ({
+  summarizeTaskName: vi.fn().mockImplementation((content: string) => {
+    const slug = content.split('\n')[0]!
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 30)
+      .replace(/-+$/, '');
+    return Promise.resolve(slug || 'task');
+  }),
+}));
+
 vi.mock('../shared/ui/index.js', () => ({
   success: vi.fn(),
   info: vi.fn(),

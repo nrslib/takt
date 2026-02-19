@@ -10,7 +10,6 @@
 import chalk from 'chalk';
 import {
   resolveConfigValues,
-  loadPersonaSessions,
   loadSessionState,
   clearSessionState,
 } from '../../infra/config/index.js';
@@ -20,7 +19,6 @@ import { info, error, blankLine } from '../../shared/ui/index.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
 import { readMultilineInput } from './lineEditor.js';
 import { selectRecentSession } from './sessionSelector.js';
-import { EXIT_SIGINT } from '../../shared/exitCodes.js';
 import {
   type PieceContext,
   type InteractiveModeResult,

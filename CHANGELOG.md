@@ -6,6 +6,40 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.20.0] - 2026-02-19
+
+### Added
+
+- **Faceted Prompting module** (`src/faceted-prompting/`): Standalone library for facet composition, resolution, template rendering, and truncation — zero dependencies on TAKT internals. Includes `DataEngine` interface with `FileDataEngine` and `CompositeDataEngine` implementations for pluggable facet storage
+- **Analytics module** (`src/features/analytics/`): Local-only review quality metrics collection — event types (review findings, fix actions, movement results), JSONL writer with date-based rotation, report parser, and metrics computation
+- **`takt metrics review` command**: Display review quality metrics (re-report counts, round-trip ratio, resolution iterations, REJECT counts by rule, rebuttal resolution ratio) with configurable time window (`--since`)
+- **`takt purge` command**: Purge old analytics event files with configurable retention period (`--retention-days`)
+- **`takt reset config` command**: Reset global config to builtin template with automatic backup of the existing config
+- **PR duplicate prevention**: When a PR already exists for the current branch, push and comment on the existing PR instead of creating a duplicate (#304)
+- Retry mode now positions the cursor on the failed movement when selecting which movement to retry
+- E2E tests for run-recovery and config-priority scenarios
+
+### Changed
+
+- **README overhaul**: Compressed from ~950 lines to ~270 lines — details split into dedicated docs (`docs/configuration.md`, `docs/cli-reference.md`, `docs/task-management.md`, `docs/ci-cd.md`, `docs/builtin-catalog.md`) with Japanese equivalents. Redefined product concept around 4 value axes: batteries included, practical, reproducible, multi-agent
+- **Config system refactored**: Unified configuration resolution to `resolveConfigValue()` and `loadConfig()`, eliminating scattered config access patterns across the codebase
+- **`takt config` command removed**: Replaced by `takt reset config` for resetting to defaults
+- Builtin config templates refreshed with updated comments and structure
+- `@anthropic-ai/claude-agent-sdk` updated to v0.2.47
+- Instruct mode prompt improvements for task re-instruction
+
+### Fixed
+
+- Fixed issue where builtin piece file references used absolute path instead of relative (#304)
+- Removed unused imports and variables across multiple files
+
+### Internal
+
+- Unified `loadConfig`, `resolveConfigValue`, piece config resolution, and config priority paths
+- Added E2E tests for config priority and run recovery scenarios
+- Added `postExecution.test.ts` for PR creation flow testing
+- Cleaned up unused imports and variables
+
 ## [0.19.0] - 2026-02-18
 
 ### Added

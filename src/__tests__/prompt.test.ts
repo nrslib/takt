@@ -2,9 +2,10 @@
  * Tests for prompt module (cursor-based interactive menu)
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Readable } from 'node:stream';
 import chalk from 'chalk';
+import { setupRawStdin, restoreStdin } from './helpers/stdinSimulator.js';
 import type { SelectOptionItem, KeyInputResult } from '../shared/prompt/index.js';
 import {
   renderMenu,
@@ -328,6 +329,74 @@ describe('prompt', () => {
       // When options are empty, default is returned (not null)
       const result: string | null = await selectOptionWithDefault('Test:', [], 'fallback');
       expect(result).toBe('fallback');
+    });
+  });
+
+  describe('selectOptionWithDefault (stdin E2E)', () => {
+    afterEach(() => {
+      restoreStdin();
+    });
+
+    it('should place cursor on default value and confirm it with Enter', async () => {
+      // Enter key only — confirms whatever the cursor is on
+      setupRawStdin(['\r']);
+
+      const { selectOptionWithDefault } = await import('../shared/prompt/index.js');
+      const options = [
+        { label: 'plan', value: 'plan' },
+        { label: 'implement', value: 'implement' },
+        { label: 'review', value: 'review' },
+      ];
+
+      const result = await selectOptionWithDefault('Start from:', options, 'review');
+
+      // If cursor starts at 'review' (index 2), Enter should select it
+      expect(result).toBe('review');
+    });
+
+    it('should place cursor on first item when default is the first option', async () => {
+      setupRawStdin(['\r']);
+
+      const { selectOptionWithDefault } = await import('../shared/prompt/index.js');
+      const options = [
+        { label: 'plan', value: 'plan' },
+        { label: 'implement', value: 'implement' },
+        { label: 'review', value: 'review' },
+      ];
+
+      const result = await selectOptionWithDefault('Start from:', options, 'plan');
+
+      expect(result).toBe('plan');
+    });
+
+    it('should place cursor on middle item when default is the middle option', async () => {
+      setupRawStdin(['\r']);
+
+      const { selectOptionWithDefault } = await import('../shared/prompt/index.js');
+      const options = [
+        { label: 'plan', value: 'plan' },
+        { label: 'implement', value: 'implement' },
+        { label: 'review', value: 'review' },
+      ];
+
+      const result = await selectOptionWithDefault('Start from:', options, 'implement');
+
+      expect(result).toBe('implement');
+    });
+
+    it('should fall back to first item when default value does not exist', async () => {
+      setupRawStdin(['\r']);
+
+      const { selectOptionWithDefault } = await import('../shared/prompt/index.js');
+      const options = [
+        { label: 'plan', value: 'plan' },
+        { label: 'implement', value: 'implement' },
+      ];
+
+      const result = await selectOptionWithDefault('Start from:', options, 'nonexistent');
+
+      // defaultValue not found → falls back to index 0
+      expect(result).toBe('plan');
     });
   });
 

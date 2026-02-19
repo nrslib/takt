@@ -69,8 +69,6 @@ function buildInstructTemplateVars(
     ? formatRunSessionForPrompt(runSessionContext)
     : { runTask: '', runPiece: '', runStatus: '', runMovementLogs: '', runReports: '' };
 
-  const hasPreviousOrder = !!previousOrderContent;
-
   return {
     taskName,
     taskContent,

@@ -67,8 +67,6 @@ export function buildRetryTemplateVars(ctx: RetryContext, lang: 'en' | 'ja', pre
     : '';
 
   const hasRun = ctx.run !== null;
-  const hasPreviousOrder = ctx.previousOrderContent !== null;
-
   return {
     taskName: ctx.failure.taskName,
     taskContent: ctx.failure.taskContent,

@@ -10,7 +10,7 @@ import type { TaskListItem } from '../../../infra/task/index.js';
 import { TaskRunner } from '../../../infra/task/index.js';
 import { loadPieceByIdentifier, resolvePieceConfigValue, getPieceDescription } from '../../../infra/config/index.js';
 import { selectPiece } from '../../pieceSelection/index.js';
-import { selectOption } from '../../../shared/prompt/index.js';
+import { selectOptionWithDefault } from '../../../shared/prompt/index.js';
 import { info, header, blankLine, status } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import type { PieceConfig } from '../../../core/models/index.js';
@@ -60,12 +60,12 @@ async function selectStartMovement(
   const effectiveDefault = defaultIdx >= 0 ? movements[defaultIdx] : movements[0];
 
   const options = movements.map((name) => ({
-    label: name === effectiveDefault ? `${name} (default)` : name,
+    label: name,
     value: name,
     description: name === pieceConfig.initialMovement ? 'Initial movement' : undefined,
   }));
 
-  return await selectOption<string>('Start from movement:', options);
+  return await selectOptionWithDefault<string>('Start from movement:', options, effectiveDefault ?? movements[0]!);
 }
 
 function buildRetryFailureInfo(task: TaskListItem): RetryFailureInfo {

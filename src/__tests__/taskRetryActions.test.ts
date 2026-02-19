@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const {
   mockExistsSync,
   mockSelectPiece,
-  mockSelectOption,
+  mockSelectOptionWithDefault,
   mockResolvePieceConfigValue,
   mockLoadPieceByIdentifier,
   mockGetPieceDescription,
@@ -15,7 +15,7 @@ const {
 } = vi.hoisted(() => ({
   mockExistsSync: vi.fn(() => true),
   mockSelectPiece: vi.fn(),
-  mockSelectOption: vi.fn(),
+  mockSelectOptionWithDefault: vi.fn(),
   mockResolvePieceConfigValue: vi.fn(),
   mockLoadPieceByIdentifier: vi.fn(),
   mockGetPieceDescription: vi.fn(() => ({
@@ -41,7 +41,7 @@ vi.mock('../features/pieceSelection/index.js', () => ({
 }));
 
 vi.mock('../shared/prompt/index.js', () => ({
-  selectOption: (...args: unknown[]) => mockSelectOption(...args),
+  selectOptionWithDefault: (...args: unknown[]) => mockSelectOptionWithDefault(...args),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -129,7 +129,7 @@ beforeEach(() => {
   mockSelectPiece.mockResolvedValue('default');
   mockResolvePieceConfigValue.mockReturnValue(3);
   mockLoadPieceByIdentifier.mockReturnValue(defaultPieceConfig);
-  mockSelectOption.mockResolvedValue('plan');
+  mockSelectOptionWithDefault.mockResolvedValue('plan');
   mockRunRetryMode.mockResolvedValue({ action: 'execute', task: '追加指示A' });
   mockStartReExecution.mockReturnValue({
     name: 'my-task',
@@ -158,9 +158,25 @@ describe('retryFailedTask', () => {
     expect(mockExecuteAndCompleteTask).toHaveBeenCalled();
   });
 
+  it('should pass failed movement as default to selectOptionWithDefault', async () => {
+    const task = makeFailedTask(); // failure.movement = 'review'
+
+    await retryFailedTask(task, '/project');
+
+    expect(mockSelectOptionWithDefault).toHaveBeenCalledWith(
+      'Start from movement:',
+      expect.arrayContaining([
+        expect.objectContaining({ value: 'plan' }),
+        expect.objectContaining({ value: 'implement' }),
+        expect.objectContaining({ value: 'review' }),
+      ]),
+      'review',
+    );
+  });
+
   it('should pass non-initial movement as startMovement', async () => {
     const task = makeFailedTask();
-    mockSelectOption.mockResolvedValue('implement');
+    mockSelectOptionWithDefault.mockResolvedValue('implement');
 
     await retryFailedTask(task, '/project');
 

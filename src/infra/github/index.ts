@@ -14,4 +14,5 @@ export {
   createIssue,
 } from './issue.js';
 
-export { pushBranch, createPullRequest, buildPrBody } from './pr.js';
+export type { ExistingPr } from './pr.js';
+export { pushBranch, createPullRequest, buildPrBody, findExistingPr, commentOnPr } from './pr.js';
