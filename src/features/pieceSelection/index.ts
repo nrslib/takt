@@ -11,7 +11,6 @@ import {
   removeBookmark,
 } from '../../infra/config/global/index.js';
 import {
-  findPieceCategories,
   listPieces,
   listPieceEntries,
   loadAllPiecesWithSources,
@@ -160,8 +159,6 @@ function buildCategoryLevelOptions(
   categories: PieceCategoryNode[],
   pieces: string[],
   currentPiece: string,
-  rootCategories: PieceCategoryNode[],
-  currentPathLabel: string,
 ): {
   options: SelectionOption[];
   categoryMap: Map<string, PieceCategoryNode>;
@@ -181,19 +178,7 @@ function buildCategoryLevelOptions(
 
   for (const pieceName of pieces) {
     const isCurrent = pieceName === currentPiece;
-    const alsoIn = findPieceCategories(pieceName, rootCategories)
-      .filter((path) => path !== currentPathLabel);
-    const alsoInLabel = alsoIn.length > 0 ? `also in ${alsoIn.join(', ')}` : '';
-
-    let label = `🎼 ${pieceName}`;
-    if (isCurrent && alsoInLabel) {
-      label = `🎼 ${pieceName} (current, ${alsoInLabel})`;
-    } else if (isCurrent) {
-      label = `🎼 ${pieceName} (current)`;
-    } else if (alsoInLabel) {
-      label = `🎼 ${pieceName} (${alsoInLabel})`;
-    }
-
+    const label = isCurrent ? `🎼 ${pieceName} (current)` : `🎼 ${pieceName}`;
     options.push({ label, value: pieceName });
   }
 
@@ -223,8 +208,6 @@ async function selectPieceFromCategoryTree(
       currentCategories,
       currentPieces,
       currentPiece,
-      categories,
-      currentPathLabel,
     );
 
     if (options.length === 0) {

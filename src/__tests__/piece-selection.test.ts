@@ -40,7 +40,6 @@ const configMock = vi.hoisted(() => ({
   getPieceCategories: vi.fn(),
   buildCategorizedPieces: vi.fn(),
   getCurrentPiece: vi.fn(),
-  findPieceCategories: vi.fn(() => []),
 }));
 
 vi.mock('../infra/config/index.js', () => configMock);
