@@ -5,7 +5,7 @@
  * Useful for debugging and understanding what prompts agents will receive.
  */
 
-import { loadPieceByIdentifier, getCurrentPiece, loadGlobalConfig } from '../../infra/config/index.js';
+import { loadPieceByIdentifier, resolvePieceConfigValue } from '../../infra/config/index.js';
 import { InstructionBuilder } from '../../core/piece/instruction/InstructionBuilder.js';
 import { ReportInstructionBuilder } from '../../core/piece/instruction/ReportInstructionBuilder.js';
 import { StatusJudgmentBuilder } from '../../core/piece/instruction/StatusJudgmentBuilder.js';
@@ -21,7 +21,7 @@ import { header, info, error, blankLine } from '../../shared/ui/index.js';
  * the Phase 1, Phase 2, and Phase 3 prompts with sample variable values.
  */
 export async function previewPrompts(cwd: string, pieceIdentifier?: string): Promise<void> {
-  const identifier = pieceIdentifier ?? getCurrentPiece(cwd);
+  const identifier = pieceIdentifier ?? resolvePieceConfigValue(cwd, 'piece');
   const config = loadPieceByIdentifier(identifier, cwd);
 
   if (!config) {
@@ -29,8 +29,7 @@ export async function previewPrompts(cwd: string, pieceIdentifier?: string): Pro
     return;
   }
 
-  const globalConfig = loadGlobalConfig();
-  const language: Language = globalConfig.language ?? 'en';
+  const language = resolvePieceConfigValue(cwd, 'language') as Language;
 
   header(`Prompt Preview: ${config.name}`);
   info(`Movements: ${config.movements.length}`);

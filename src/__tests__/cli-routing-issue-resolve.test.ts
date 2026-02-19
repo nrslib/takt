@@ -74,7 +74,8 @@ vi.mock('../infra/task/index.js', () => ({
 
 vi.mock('../infra/config/index.js', () => ({
   getPieceDescription: vi.fn(() => ({ name: 'default', description: 'test piece', pieceStructure: '', movementPreviews: [] })),
-  loadGlobalConfig: vi.fn(() => ({ interactivePreviewMovements: 3 })),
+  resolveConfigValue: vi.fn((_: string, key: string) => (key === 'piece' ? 'default' : false)),
+  resolveConfigValues: vi.fn(() => ({ language: 'en', interactivePreviewMovements: 3, provider: 'claude' })),
   loadPersonaSessions: vi.fn(() => ({})),
 }));
 
@@ -106,7 +107,7 @@ vi.mock('../app/cli/helpers.js', () => ({
 import { checkGhCli, fetchIssue, formatIssueAsTask, parseIssueNumbers } from '../infra/github/issue.js';
 import { selectAndExecuteTask, determinePiece, createIssueFromTask, saveTaskFromInteractive } from '../features/tasks/index.js';
 import { interactiveMode } from '../features/interactive/index.js';
-import { loadGlobalConfig, loadPersonaSessions } from '../infra/config/index.js';
+import { resolveConfigValues, loadPersonaSessions } from '../infra/config/index.js';
 import { isDirectTask } from '../app/cli/helpers.js';
 import { executeDefaultAction } from '../app/cli/routing.js';
 import { info } from '../shared/ui/index.js';
@@ -121,8 +122,8 @@ const mockDeterminePiece = vi.mocked(determinePiece);
 const mockCreateIssueFromTask = vi.mocked(createIssueFromTask);
 const mockSaveTaskFromInteractive = vi.mocked(saveTaskFromInteractive);
 const mockInteractiveMode = vi.mocked(interactiveMode);
-const mockLoadGlobalConfig = vi.mocked(loadGlobalConfig);
 const mockLoadPersonaSessions = vi.mocked(loadPersonaSessions);
+const mockResolveConfigValues = vi.mocked(resolveConfigValues);
 const mockIsDirectTask = vi.mocked(isDirectTask);
 const mockInfo = vi.mocked(info);
 const mockTaskRunnerListAllTaskItems = vi.mocked(mockListAllTaskItems);
@@ -482,7 +483,7 @@ describe('Issue resolution in routing', () => {
     it('should load saved session and pass to interactiveMode when --continue is specified', async () => {
       // Given
       mockOpts.continue = true;
-      mockLoadGlobalConfig.mockReturnValue({ interactivePreviewMovements: 3, provider: 'claude' });
+      mockResolveConfigValues.mockReturnValue({ language: 'en', interactivePreviewMovements: 3, provider: 'claude' });
       mockLoadPersonaSessions.mockReturnValue({ interactive: 'saved-session-123' });
 
       // When
@@ -503,7 +504,7 @@ describe('Issue resolution in routing', () => {
     it('should show message and start new session when --continue has no saved session', async () => {
       // Given
       mockOpts.continue = true;
-      mockLoadGlobalConfig.mockReturnValue({ interactivePreviewMovements: 3, provider: 'claude' });
+      mockResolveConfigValues.mockReturnValue({ language: 'en', interactivePreviewMovements: 3, provider: 'claude' });
       mockLoadPersonaSessions.mockReturnValue({});
 
       // When

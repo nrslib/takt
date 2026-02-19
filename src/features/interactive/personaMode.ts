@@ -39,7 +39,7 @@ export async function personaMode(
   initialInput?: string,
   pieceContext?: PieceContext,
 ): Promise<InteractiveModeResult> {
-  const ctx = initializeSession('persona-interactive');
+  const ctx = initializeSession(cwd, 'persona-interactive');
 
   displayAndClearSessionState(cwd, ctx.lang);
 

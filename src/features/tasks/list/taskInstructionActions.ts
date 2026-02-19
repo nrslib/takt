@@ -11,7 +11,7 @@ import {
   TaskRunner,
   detectDefaultBranch,
 } from '../../../infra/task/index.js';
-import { loadGlobalConfig, getPieceDescription } from '../../../infra/config/index.js';
+import { resolvePieceConfigValues, getPieceDescription } from '../../../infra/config/index.js';
 import { info, error as logError } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { runInstructMode } from './instructMode.js';
@@ -93,7 +93,7 @@ export async function instructBranch(
     return false;
   }
 
-  const globalConfig = loadGlobalConfig();
+  const globalConfig = resolvePieceConfigValues(projectDir, ['interactivePreviewMovements', 'language']);
   const pieceDesc = getPieceDescription(selectedPiece, projectDir, globalConfig.interactivePreviewMovements);
   const pieceContext: PieceContext = {
     name: pieceDesc.name,

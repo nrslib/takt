@@ -118,7 +118,7 @@ export async function interactiveMode(
   sessionId?: string,
   runSessionContext?: RunSessionContext,
 ): Promise<InteractiveModeResult> {
-  const baseCtx = initializeSession('interactive');
+  const baseCtx = initializeSession(cwd, 'interactive');
   const ctx = sessionId ? { ...baseCtx, sessionId } : baseCtx;
 
   displayAndClearSessionState(cwd, ctx.lang);

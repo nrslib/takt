@@ -10,7 +10,8 @@
 
 import chalk from 'chalk';
 import {
-  loadGlobalConfig,
+  resolveConfigValues,
+  loadPersonaSessions,
   updatePersonaSession,
   loadSessionState,
   clearSessionState,
@@ -61,8 +62,8 @@ export interface SessionContext {
  * Callers that need session continuity pass sessionId explicitly
  * (e.g., --continue flag or /resume command).
  */
-export function initializeSession(personaName: string): SessionContext {
-  const globalConfig = loadGlobalConfig();
+export function initializeSession(cwd: string, personaName: string): SessionContext {
+  const globalConfig = resolveConfigValues(cwd, ['language', 'provider', 'model']);
   const lang = resolveLanguage(globalConfig.language);
   if (!globalConfig.provider) {
     throw new Error('Provider is not configured.');

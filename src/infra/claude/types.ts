@@ -141,7 +141,7 @@ export interface ClaudeCallOptions {
   onPermissionRequest?: PermissionHandler;
   /** Custom handler for AskUserQuestion tool */
   onAskUserQuestion?: AskUserQuestionHandler;
-  /** Bypass all permission checks (sacrifice-my-pc mode) */
+  /** Bypass all permission checks */
   bypassPermissions?: boolean;
   /** Anthropic API key to inject via env (bypasses CLI auth) */
   anthropicApiKey?: string;
@@ -172,7 +172,7 @@ export interface ClaudeSpawnOptions {
   onPermissionRequest?: PermissionHandler;
   /** Custom handler for AskUserQuestion tool */
   onAskUserQuestion?: AskUserQuestionHandler;
-  /** Bypass all permission checks (sacrifice-my-pc mode) */
+  /** Bypass all permission checks */
   bypassPermissions?: boolean;
   /** Anthropic API key to inject via env (bypasses CLI auth) */
   anthropicApiKey?: string;

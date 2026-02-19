@@ -31,13 +31,14 @@ describe('resetCategoriesToDefault', () => {
 
   it('should reset user category overlay and show updated message', async () => {
     // Given
+    const cwd = '/tmp/test-cwd';
 
     // When
-    await resetCategoriesToDefault();
+    await resetCategoriesToDefault(cwd);
 
     // Then
     expect(mockHeader).toHaveBeenCalledWith('Reset Categories');
-    expect(mockResetPieceCategories).toHaveBeenCalledTimes(1);
+    expect(mockResetPieceCategories).toHaveBeenCalledWith(cwd);
     expect(mockSuccess).toHaveBeenCalledWith('User category overlay reset.');
     expect(mockInfo).toHaveBeenCalledWith('  /tmp/user-piece-categories.yaml');
   });

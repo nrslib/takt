@@ -16,11 +16,11 @@ import {
   getBuiltinPiecesDir,
   isPathSafe,
 } from '../paths.js';
-import { getLanguage } from '../global/globalConfig.js';
+import { resolveConfigValue } from '../resolveConfigValue.js';
 
 /** Get all allowed base directories for persona prompt files */
-function getAllowedPromptBases(): string[] {
-  const lang = getLanguage();
+function getAllowedPromptBases(cwd: string): string[] {
+  const lang = resolveConfigValue(cwd, 'language');
   return [
     getGlobalPersonasDir(),
     getGlobalPiecesDir(),
@@ -63,14 +63,14 @@ export function listCustomAgents(): string[] {
 }
 
 /** Load agent prompt content. */
-export function loadAgentPrompt(agent: CustomAgentConfig): string {
+export function loadAgentPrompt(agent: CustomAgentConfig, cwd: string): string {
   if (agent.prompt) {
     return agent.prompt;
   }
 
   if (agent.promptFile) {
     const promptFile = agent.promptFile;
-    const isValid = getAllowedPromptBases().some((base) => isPathSafe(base, promptFile));
+    const isValid = getAllowedPromptBases(cwd).some((base) => isPathSafe(base, promptFile));
     if (!isValid) {
       throw new Error(`Agent prompt file path is not allowed: ${agent.promptFile}`);
     }
@@ -86,8 +86,8 @@ export function loadAgentPrompt(agent: CustomAgentConfig): string {
 }
 
 /** Load persona prompt from a resolved path. */
-export function loadPersonaPromptFromPath(personaPath: string): string {
-  const isValid = getAllowedPromptBases().some((base) => isPathSafe(base, personaPath));
+export function loadPersonaPromptFromPath(personaPath: string, cwd: string): string {
+  const isValid = getAllowedPromptBases(cwd).some((base) => isPathSafe(base, personaPath));
   if (!isValid) {
     throw new Error(`Persona prompt file path is not allowed: ${personaPath}`);
   }

@@ -137,7 +137,7 @@ afterEach(() => {
 // =================================================================
 describe('initializeSession', () => {
   it('should return sessionId as undefined (no implicit auto-load)', () => {
-    const ctx = initializeSession('interactive');
+    const ctx = initializeSession('/test/cwd', 'interactive');
 
     expect(ctx.sessionId).toBeUndefined();
     expect(ctx.personaName).toBe('interactive');

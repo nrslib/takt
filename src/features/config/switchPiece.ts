@@ -4,7 +4,7 @@
 
 import {
   loadPiece,
-  getCurrentPiece,
+  resolveConfigValue,
   setCurrentPiece,
 } from '../../infra/config/index.js';
 import { info, success, error } from '../../shared/ui/index.js';
@@ -16,7 +16,7 @@ import { selectPiece } from '../pieceSelection/index.js';
  */
 export async function switchPiece(cwd: string, pieceName?: string): Promise<boolean> {
   if (!pieceName) {
-    const current = getCurrentPiece(cwd);
+    const current = resolveConfigValue(cwd, 'piece');
     info(`Current piece: ${current}`);
 
     const selected = await selectPiece(cwd, { fallbackToDefault: false });
