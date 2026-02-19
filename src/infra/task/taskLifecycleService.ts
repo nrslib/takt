@@ -121,6 +121,7 @@ export class TaskLifecycleService {
         failure: undefined,
         branch: result.branch ?? target.branch,
         worktree_path: result.worktreePath ?? target.worktree_path,
+        pr_url: result.prUrl ?? target.pr_url,
       };
       const tasks = [...current.tasks];
       tasks[index] = updated;

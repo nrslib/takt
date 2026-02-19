@@ -46,6 +46,7 @@ export interface InteractiveUIText {
   cancelled: string;
   playNoTask: string;
   retryNoOrder: string;
+  retryUnavailable: string;
 }
 
 /**

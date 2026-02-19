@@ -122,6 +122,7 @@ function toBaseTaskListItem(projectDir: string, tasksFile: string, task: TaskRec
     summary: task.summary,
     branch: task.branch,
     worktreePath: task.worktree_path,
+    prUrl: task.pr_url,
     startedAt: task.started_at ?? undefined,
     completedAt: task.completed_at ?? undefined,
     ownerPid: task.owner_pid ?? undefined,
