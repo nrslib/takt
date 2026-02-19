@@ -1,8 +1,8 @@
 /**
- * Analytics event type definitions for debug-mode metrics collection.
+ * Analytics event type definitions for metrics collection.
  *
  * Three event types capture review findings, fix actions, and movement results
- * for local-only analysis when debug.enabled = true.
+ * for local-only analysis when analytics.enabled = true.
  */
 
 /** Status of a review finding across iterations */

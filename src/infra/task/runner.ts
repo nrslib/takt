@@ -1,5 +1,6 @@
 import type { TaskFileData } from './schema.js';
 import type { TaskInfo, TaskResult, TaskListItem } from './types.js';
+import type { TaskStatus } from './schema.js';
 import { TaskStore } from './store.js';
 import { TaskLifecycleService } from './taskLifecycleService.js';
 import { TaskQueryService } from './taskQueryService.js';
@@ -71,6 +72,24 @@ export class TaskRunner {
 
   requeueFailedTask(taskRef: string, startMovement?: string, retryNote?: string): string {
     return this.lifecycle.requeueFailedTask(taskRef, startMovement, retryNote);
+  }
+
+  requeueTask(
+    taskRef: string,
+    allowedStatuses: readonly TaskStatus[],
+    startMovement?: string,
+    retryNote?: string,
+  ): string {
+    return this.lifecycle.requeueTask(taskRef, allowedStatuses, startMovement, retryNote);
+  }
+
+  startReExecution(
+    taskRef: string,
+    allowedStatuses: readonly TaskStatus[],
+    startMovement?: string,
+    retryNote?: string,
+  ): TaskInfo {
+    return this.lifecycle.startReExecution(taskRef, allowedStatuses, startMovement, retryNote);
   }
 
   deletePendingTask(name: string): void {

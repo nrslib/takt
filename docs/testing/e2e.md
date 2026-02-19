@@ -103,6 +103,20 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
     - `.takt/tasks.yaml` に pending タスクを追加する（`piece` に `e2e/fixtures/pieces/mock-single-step.yaml` を指定）。
     - 出力に `Task "watch-task" completed` が含まれることを確認する。
     - `Ctrl+C` で終了する。
+- Run recovery and high-priority run flows（`e2e/specs/run-recovery.e2e.ts`）
+  - 目的: 高優先度ユースケース（異常終了リカバリー、並列実行、初期化〜add〜run）をまとめて確認。
+  - LLM: 呼び出さない（`--provider mock` 固定）
+  - 手順（ユーザー行動/コマンド）:
+    - 異常終了リカバリー:
+      - `.takt/tasks.yaml` に pending タスク2件を投入し、`takt run --provider mock` 実行中にプロセスを強制終了する。
+      - 再度 `takt run --provider mock` を実行し、`Recovered 1 interrupted running task(s) to pending.` が出力されることを確認する。
+      - 復旧対象を含む全タスクが完了し、`.takt/tasks.yaml` が空になることを確認する。
+    - 高並列実行:
+      - `concurrency: 10` を設定し、pending タスク12件を投入して `takt run --provider mock` を実行する。
+      - 出力に `Concurrency: 10` と `Tasks Summary` が含まれること、および `.takt/tasks.yaml` が空になることを確認する。
+    - 初期化〜add〜run:
+      - グローバル `config.yaml` 不在の環境で `takt add` を2回実行し、`takt run --provider mock` を実行する。
+      - タスク実行完了後に `.takt/tasks/` 配下の2タスクディレクトリ生成、`.takt/.gitignore` 生成、`.takt/tasks.yaml` の空状態を確認する。
 - Run tasks graceful shutdown on SIGINT（`e2e/specs/run-sigint-graceful.e2e.ts`）
   - 目的: `takt run` を並列実行中に `Ctrl+C` した際、新規クローン投入を止めてグレースフルに終了することを確認。
   - LLM: 呼び出さない（`--provider mock` 固定）
@@ -130,14 +144,6 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
     - `takt list --non-interactive --action diff --branch <branch>` で差分統計が出力されることを確認する。
     - `takt list --non-interactive --action try --branch <branch>` で変更がステージされることを確認する。
     - `takt list --non-interactive --action merge --branch <branch>` でブランチがマージされ削除されることを確認する。
-- Config permission mode（`e2e/specs/cli-config.e2e.ts`）
-  - 目的: `takt config` でパーミッションモードの切り替えと永続化を確認。
-  - LLM: 呼び出さない（LLM不使用の操作のみ）
-  - 手順（ユーザー行動/コマンド）:
-    - `takt config default` を実行し、`Switched to: default` が出力されることを確認する。
-    - `takt config sacrifice-my-pc` を実行し、`Switched to: sacrifice-my-pc` が出力されることを確認する。
-    - `takt config sacrifice-my-pc` 実行後、`.takt/config.yaml` に `permissionMode: sacrifice-my-pc` が保存されていることを確認する。
-    - `takt config invalid-mode` を実行し、`Invalid mode` が出力されることを確認する。
 - Reset categories（`e2e/specs/cli-reset-categories.e2e.ts`）
   - 目的: `takt reset categories` でカテゴリオーバーレイのリセットを確認。
   - LLM: 呼び出さない（LLM不使用の操作のみ）
@@ -145,6 +151,15 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
     - `takt reset categories` を実行する。
     - 出力に `reset` を含むことを確認する。
     - `$TAKT_CONFIG_DIR/preferences/piece-categories.yaml` が存在し `piece_categories: {}` を含むことを確認する。
+- Reset config（`e2e/specs/cli-reset-config.e2e.ts`）
+  - 目的: `takt reset config` でグローバル設定をテンプレートへ戻し、旧設定をバックアップすることを確認。
+  - LLM: 呼び出さない（LLM不使用の操作のみ）
+  - 手順（ユーザー行動/コマンド）:
+    - `$TAKT_CONFIG_DIR/config.yaml` に任意の設定を書き込む（例: `language: ja`, `provider: mock`）。
+    - `takt reset config` を実行する。
+    - 出力に `reset` と `backup:` を含むことを確認する。
+    - `$TAKT_CONFIG_DIR/config.yaml` がテンプレート内容（例: `branch_name_strategy: ai`, `concurrency: 2`）に置き換わっていることを確認する。
+    - `$TAKT_CONFIG_DIR/` 直下に `config.yaml.YYYYMMDD-HHmmss.old` 形式のバックアップファイルが1件作成されることを確認する。
 - Export Claude Code Skill（`e2e/specs/cli-export-cc.e2e.ts`）
   - 目的: `takt export-cc` でClaude Code Skillのデプロイを確認。
   - LLM: 呼び出さない（LLM不使用の操作のみ）
@@ -154,3 +169,53 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
     - 出力に `ファイルをデプロイしました` を含むことを確認する。
     - `$HOME/.claude/skills/takt/SKILL.md` が存在することを確認する。
     - `$HOME/.claude/skills/takt/pieces/` および `$HOME/.claude/skills/takt/personas/` ディレクトリが存在し、それぞれ少なくとも1ファイルを含むことを確認する。
+
+## 追記シナリオ（2026-02-19）
+過去にドキュメント未反映だったシナリオを以下に追記する。
+
+- Config priority（`e2e/specs/config-priority.e2e.ts`）
+  - 目的: `piece` と `auto_pr` の優先順位（config/env/CLI）を検証。
+  - 手順（要約）:
+    - `--pipeline` で `--piece` 未指定時に設定値の `piece` が使われることを確認。
+    - `auto_pr` 未設定時は確認デフォルト `true` が反映されることを確認。
+    - `config` と `TAKT_AUTO_PR` の優先を確認。
+- Pipeline --skip-git on local/non-git directories（`e2e/specs/pipeline-local-repo.e2e.ts`）
+  - 目的: ローカルGitリポジトリおよび非Gitディレクトリで `--pipeline --skip-git` が動作することを確認。
+- Task content_file reference（`e2e/specs/task-content-file.e2e.ts`）
+  - 目的: `tasks.yaml` の `content_file` 参照が解決されること、および不正参照時エラーを確認。
+- Task status persistence（`e2e/specs/task-status-persistence.e2e.ts`）
+  - 目的: 成功時/失敗時の `tasks.yaml` 状態遷移（完了消込・失敗記録）を確認。
+- Run multiple tasks（`e2e/specs/run-multiple-tasks.e2e.ts`）
+  - 目的: 複数pendingタスクの連続実行、途中失敗時継続、タスク空時の終了挙動を確認。
+- Session NDJSON log output（`e2e/specs/session-log.e2e.ts`）
+  - 目的: NDJSONログの主要イベント（`piece_complete` / `piece_abort` 等）出力を確認。
+- Structured output rule matching（`e2e/specs/structured-output.e2e.ts`）
+  - 目的: structured output によるルール判定（Phase 3）を確認。
+- Piece error handling（`e2e/specs/piece-error-handling.e2e.ts`）
+  - 目的: エージェントエラー、最大反復到達、前回応答受け渡しの挙動を確認。
+- Multi-step with parallel movements（`e2e/specs/multi-step-parallel.e2e.ts`）
+  - 目的: 並列ムーブメントを含む複数ステップ遷移を確認。
+- Sequential multi-step session log transitions（`e2e/specs/multi-step-sequential.e2e.ts`）
+  - 目的: 逐次ステップでのセッションログ遷移を確認。
+- Cycle detection via loop_monitors（`e2e/specs/cycle-detection.e2e.ts`）
+  - 目的: ループ監視設定による abort/continue の境界を確認。
+- Provider error handling（`e2e/specs/provider-error.e2e.ts`）
+  - 目的: provider上書き、mockシナリオ不足時の挙動、シナリオ不在時エラーを確認。
+- Model override（`e2e/specs/model-override.e2e.ts`）
+  - 目的: `--model` オプションが通常実行/`--pipeline --skip-git` で反映されることを確認。
+- Error handling edge cases（`e2e/specs/error-handling.e2e.ts`）
+  - 目的: 不正引数・存在しないpiece・不正YAMLなど代表エラーケースを確認。
+- Quiet mode（`e2e/specs/quiet-mode.e2e.ts`）
+  - 目的: `--quiet` でAIストリーム出力が抑制されることを確認。
+- Catalog command（`e2e/specs/cli-catalog.e2e.ts`）
+  - 目的: `takt catalog` の一覧表示・型指定・不正型エラーを確認。
+- Prompt preview command（`e2e/specs/cli-prompt.e2e.ts`）
+  - 目的: `takt prompt` のプレビュー出力と不正piece時エラーを確認。
+- Switch piece command（`e2e/specs/cli-switch.e2e.ts`）
+  - 目的: `takt switch` の切替成功・不正piece時エラーを確認。
+- Clear sessions command（`e2e/specs/cli-clear.e2e.ts`）
+  - 目的: `takt clear` でセッション情報が削除されることを確認。
+- Help command（`e2e/specs/cli-help.e2e.ts`）
+  - 目的: `takt --help` と `takt run --help` の表示内容を確認。
+- Eject builtin pieces（`e2e/specs/eject.e2e.ts`）
+  - 目的: `takt eject` のproject/global出力、既存時スキップ、facet個別ejectを確認。

@@ -3,6 +3,7 @@
  */
 
 import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { PieceEngine, type IterationLimitRequest, type UserInputRequest } from '../../../core/piece/index.js';
 import type { PieceConfig } from '../../../core/models/index.js';
 import type { PieceExecutionResult, PieceExecutionOptions } from './types.js';
@@ -17,7 +18,7 @@ import {
   updatePersonaSession,
   loadWorktreeSessions,
   updateWorktreeSession,
-  loadGlobalConfig,
+  resolvePieceConfigValues,
   saveSessionState,
   type SessionState,
 } from '../../../infra/config/index.js';
@@ -72,10 +73,10 @@ import { buildRunPaths } from '../../../core/piece/run/run-paths.js';
 import { resolveMovementProviderModel } from '../../../core/piece/provider-resolution.js';
 import { resolveRuntimeConfig } from '../../../core/runtime/runtime-environment.js';
 import { writeFileAtomic, ensureDir } from '../../../infra/config/index.js';
+import { getGlobalConfigDir } from '../../../infra/config/paths.js';
 import {
   initAnalyticsWriter,
   writeAnalyticsEvent,
-  resolveEventsDir,
   parseFindingsFromReport,
   extractDecisionFromReport,
   inferSeverity,
@@ -243,7 +244,11 @@ export async function executePiece(
 
   // When taskPrefix is set (parallel execution), route all output through TaskPrefixWriter
   const prefixWriter = options.taskPrefix != null
-    ? new TaskPrefixWriter({ taskName: options.taskPrefix, colorIndex: options.taskColorIndex! })
+    ? new TaskPrefixWriter({
+      taskName: options.taskPrefix,
+      colorIndex: options.taskColorIndex!,
+      displayLabel: options.taskDisplayLabel,
+    })
     : undefined;
   const out = createOutputFns(prefixWriter);
 
@@ -324,13 +329,16 @@ export async function executePiece(
 
   // Load saved agent sessions only on retry; normal runs start with empty sessions
   const isWorktree = cwd !== projectCwd;
-  const globalConfig = loadGlobalConfig();
+  const globalConfig = resolvePieceConfigValues(
+    projectCwd,
+    ['notificationSound', 'notificationSoundEvents', 'provider', 'runtime', 'preventSleep', 'model', 'observability', 'analytics'],
+  );
   const shouldNotify = globalConfig.notificationSound !== false;
   const notificationSoundEvents = globalConfig.notificationSoundEvents;
   const shouldNotifyIterationLimit = shouldNotify && notificationSoundEvents?.iterationLimit !== false;
   const shouldNotifyPieceComplete = shouldNotify && notificationSoundEvents?.pieceComplete !== false;
   const shouldNotifyPieceAbort = shouldNotify && notificationSoundEvents?.pieceAbort !== false;
-  const currentProvider = globalConfig.provider ?? 'claude';
+  const currentProvider = globalConfig.provider;
   const effectivePieceConfig: PieceConfig = {
     ...pieceConfig,
     runtime: resolveRuntimeConfig(globalConfig.runtime, pieceConfig.runtime),
@@ -344,9 +352,10 @@ export async function executePiece(
     enabled: isProviderEventsEnabled(globalConfig),
   });
 
-  const debugEnabled = globalConfig.debug?.enabled === true;
-  const analyticsEnabled = debugEnabled && globalConfig.analytics?.enabled !== false;
-  initAnalyticsWriter(analyticsEnabled, resolveEventsDir(globalConfig));
+  const analyticsEnabled = globalConfig.analytics?.enabled === true;
+  const eventsDir = globalConfig.analytics?.eventsPath
+    ?? join(getGlobalConfigDir(), 'analytics', 'events');
+  initAnalyticsWriter(analyticsEnabled, eventsDir);
 
   // Prevent macOS idle sleep if configured
   if (globalConfig.preventSleep) {
@@ -456,12 +465,10 @@ export async function executePiece(
       projectCwd,
       language: options.language,
       provider: options.provider,
-      projectProvider: options.projectProvider,
-      globalProvider: options.globalProvider,
       model: options.model,
+      providerOptions: options.providerOptions,
       personaProviders: options.personaProviders,
-      projectProviderProfiles: options.projectProviderProfiles,
-      globalProviderProfiles: options.globalProviderProfiles,
+      providerProfiles: options.providerProfiles,
       interactive: interactiveUserInput,
       detectRuleIndex,
       callAiJudge,

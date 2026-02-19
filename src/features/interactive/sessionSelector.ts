@@ -9,36 +9,13 @@ import { loadSessionIndex, extractLastAssistantResponse } from '../../infra/clau
 import { selectOption, type SelectOptionItem } from '../../shared/prompt/index.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { info } from '../../shared/ui/index.js';
+import { truncateForLabel, formatDateForSelector } from './selectorUtils.js';
 
 /** Maximum number of sessions to display */
 const MAX_DISPLAY_SESSIONS = 10;
 
 /** Maximum length for last response preview */
 const MAX_RESPONSE_PREVIEW_LENGTH = 200;
-
-/**
- * Format a modified date for display.
- */
-function formatModifiedDate(modified: string, lang: 'en' | 'ja'): string {
-  const date = new Date(modified);
-  return date.toLocaleString(lang === 'ja' ? 'ja-JP' : 'en-US', {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
-
-/**
- * Truncate a single-line string for use as a label.
- */
-function truncateForLabel(text: string, maxLength: number): string {
-  const singleLine = text.replace(/\n/g, ' ').trim();
-  if (singleLine.length <= maxLength) {
-    return singleLine;
-  }
-  return singleLine.slice(0, maxLength) + '…';
-}
 
 /**
  * Prompt user to select from recent Claude Code sessions.
@@ -70,7 +47,7 @@ export async function selectRecentSession(
 
   for (const session of displaySessions) {
     const label = truncateForLabel(session.firstPrompt, 60);
-    const dateStr = formatModifiedDate(session.modified, lang);
+    const dateStr = formatDateForSelector(session.modified, lang);
     const messagesStr = getLabel('interactive.sessionSelector.messages', lang, {
       count: String(session.messageCount),
     });

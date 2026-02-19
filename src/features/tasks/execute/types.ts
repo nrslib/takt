@@ -4,6 +4,7 @@
 
 import type { Language } from '../../../core/models/index.js';
 import type { ProviderPermissionProfiles } from '../../../core/models/provider-profiles.js';
+import type { MovementProviderOptions } from '../../../core/models/piece-types.js';
 import type { ProviderType } from '../../../infra/providers/index.js';
 import type { GitHubIssue } from '../../../infra/github/index.js';
 
@@ -32,17 +33,13 @@ export interface PieceExecutionOptions {
   /** Language for instruction metadata */
   language?: Language;
   provider?: ProviderType;
-  /** Project config provider */
-  projectProvider?: ProviderType;
-  /** Global config provider */
-  globalProvider?: ProviderType;
   model?: string;
+  /** Resolved provider options */
+  providerOptions?: MovementProviderOptions;
   /** Per-persona provider overrides (e.g., { coder: 'codex' }) */
   personaProviders?: Record<string, ProviderType>;
-  /** Project-level provider permission profiles */
-  projectProviderProfiles?: ProviderPermissionProfiles;
-  /** Global-level provider permission profiles */
-  globalProviderProfiles?: ProviderPermissionProfiles;
+  /** Resolved provider permission profiles */
+  providerProfiles?: ProviderPermissionProfiles;
   /** Enable interactive user input during step transitions */
   interactiveUserInput?: boolean;
   /** Interactive mode result metadata for NDJSON logging */
@@ -57,6 +54,8 @@ export interface PieceExecutionOptions {
   abortSignal?: AbortSignal;
   /** Task name prefix for parallel execution output (e.g. "[task-name] output...") */
   taskPrefix?: string;
+  /** Optional full task label used instead of taskName truncation when prefixed output is rendered */
+  taskDisplayLabel?: string;
   /** Color index for task prefix (cycled mod 4 across concurrent tasks) */
   taskColorIndex?: number;
 }
@@ -91,6 +90,8 @@ export interface ExecuteTaskOptions {
   abortSignal?: AbortSignal;
   /** Task name prefix for parallel execution output (e.g. "[task-name] output...") */
   taskPrefix?: string;
+  /** Optional full task label used instead of taskName truncation when prefixed output is rendered */
+  taskDisplayLabel?: string;
   /** Color index for task prefix (cycled mod 4 across concurrent tasks) */
   taskColorIndex?: number;
 }

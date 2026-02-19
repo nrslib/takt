@@ -125,11 +125,6 @@ export async function createIssueAndSaveTask(cwd: string, task: string, piece?: 
 }
 
 async function promptWorktreeSettings(): Promise<WorktreeSettings> {
-  const useWorktree = await confirm('Create worktree?', true);
-  if (!useWorktree) {
-    return {};
-  }
-
   const customPath = await promptInput('Worktree path (Enter for auto)');
   const worktree: boolean | string = customPath || true;
 

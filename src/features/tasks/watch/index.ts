@@ -6,7 +6,7 @@
  */
 
 import { TaskRunner, type TaskInfo, TaskWatcher } from '../../../infra/task/index.js';
-import { getCurrentPiece } from '../../../infra/config/index.js';
+import { resolveConfigValue } from '../../../infra/config/index.js';
 import {
   header,
   info,
@@ -15,7 +15,6 @@ import {
   blankLine,
 } from '../../../shared/ui/index.js';
 import { executeAndCompleteTask } from '../execute/taskExecution.js';
-import { DEFAULT_PIECE_NAME } from '../../../shared/constants.js';
 import { EXIT_SIGINT } from '../../../shared/exitCodes.js';
 import { ShutdownManager } from '../execute/shutdownManager.js';
 import type { TaskExecutionOptions } from '../execute/types.js';
@@ -25,7 +24,7 @@ import type { TaskExecutionOptions } from '../execute/types.js';
  * Runs until Ctrl+C.
  */
 export async function watchTasks(cwd: string, options?: TaskExecutionOptions): Promise<void> {
-  const pieceName = getCurrentPiece(cwd) || DEFAULT_PIECE_NAME;
+  const pieceName = resolveConfigValue(cwd, 'piece');
   const taskRunner = new TaskRunner(cwd);
   const watcher = new TaskWatcher(cwd);
   const recovered = taskRunner.recoverInterruptedRunningTasks();

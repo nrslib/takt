@@ -17,8 +17,17 @@ import {
 
 // Mock external dependencies to isolate unit tests
 vi.mock('../infra/config/global/globalConfig.js', () => ({
-  getLanguage: () => 'en',
-  getBuiltinPiecesEnabled: () => true,
+  loadGlobalConfig: () => ({}),
+}));
+
+vi.mock('../infra/config/loadConfig.js', () => ({
+  loadConfig: () => ({
+    global: {
+      language: 'en',
+      enableBuiltinPieces: true,
+    },
+    project: {},
+  }),
 }));
 
 const mockLogError = vi.fn();

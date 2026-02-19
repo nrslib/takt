@@ -13,17 +13,20 @@
 import type { Language } from '../../core/models/index.js';
 import {
   type SessionState,
-  type MovementPreview,
 } from '../../infra/config/index.js';
-import { selectOption } from '../../shared/prompt/index.js';
-import { info, blankLine } from '../../shared/ui/index.js';
-import { loadTemplate } from '../../shared/prompts/index.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
+import { loadTemplate } from '../../shared/prompts/index.js';
 import {
   initializeSession,
   displayAndClearSessionState,
   runConversationLoop,
 } from './conversationLoop.js';
+import {
+  type PieceContext,
+  formatMovementPreviews,
+  type InteractiveModeAction,
+} from './interactive-summary.js';
+import { type RunSessionContext, formatRunSessionForPrompt } from './runSessionReader.js';
 
 /** Shape of interactive UI text */
 export interface InteractiveUIText {
@@ -57,7 +60,7 @@ export function formatSessionStatus(state: SessionState, lang: 'en' | 'ja'): str
     lines.push(
       getLabel('interactive.previousTask.error', lang, {
         error: state.errorMessage!,
-      })
+      }),
     );
   } else if (state.status === 'user_stopped') {
     lines.push(getLabel('interactive.previousTask.userStopped', lang));
@@ -67,7 +70,7 @@ export function formatSessionStatus(state: SessionState, lang: 'en' | 'ja'): str
   lines.push(
     getLabel('interactive.previousTask.piece', lang, {
       pieceName: state.pieceName,
-    })
+    }),
   );
 
   // Timestamp
@@ -75,7 +78,7 @@ export function formatSessionStatus(state: SessionState, lang: 'en' | 'ja'): str
   lines.push(
     getLabel('interactive.previousTask.timestamp', lang, {
       timestamp,
-    })
+    }),
   );
 
   return lines.join('\n');
@@ -85,197 +88,19 @@ export function resolveLanguage(lang?: Language): 'en' | 'ja' {
   return lang === 'ja' ? 'ja' : 'en';
 }
 
-/**
- * Format MovementPreview[] into a Markdown string for template injection.
- * Each movement is rendered with its persona and instruction content.
- */
-export function formatMovementPreviews(previews: MovementPreview[], lang: 'en' | 'ja'): string {
-  return previews.map((p, i) => {
-    const toolsStr = p.allowedTools.length > 0
-      ? p.allowedTools.join(', ')
-      : (lang === 'ja' ? 'なし' : 'None');
-    const editStr = p.canEdit
-      ? (lang === 'ja' ? '可' : 'Yes')
-      : (lang === 'ja' ? '不可' : 'No');
-    const personaLabel = lang === 'ja' ? 'ペルソナ' : 'Persona';
-    const instructionLabel = lang === 'ja' ? 'インストラクション' : 'Instruction';
-    const toolsLabel = lang === 'ja' ? 'ツール' : 'Tools';
-    const editLabel = lang === 'ja' ? '編集' : 'Edit';
-
-    const lines = [
-      `### ${i + 1}. ${p.name} (${p.personaDisplayName})`,
-    ];
-    if (p.personaContent) {
-      lines.push(`**${personaLabel}:**`, p.personaContent);
-    }
-    if (p.instructionContent) {
-      lines.push(`**${instructionLabel}:**`, p.instructionContent);
-    }
-    lines.push(`**${toolsLabel}:** ${toolsStr}`, `**${editLabel}:** ${editStr}`);
-    return lines.join('\n');
-  }).join('\n\n');
-}
-
-export interface ConversationMessage {
-  role: 'user' | 'assistant';
-  content: string;
-}
-
-/**
- * Build the final task description from conversation history for executeTask.
- */
-function buildTaskFromHistory(history: ConversationMessage[]): string {
-  return history
-    .map((msg) => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`)
-    .join('\n\n');
-}
+/** Default toolset for interactive mode */
+export const DEFAULT_INTERACTIVE_TOOLS = ['Read', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch'];
 
 /**
  * Build the summary prompt (used as both system prompt and user message).
- * Renders the complete score_summary_system_prompt template with conversation data.
- * Returns empty string if there is no conversation to summarize.
  */
-export function buildSummaryPrompt(
-  history: ConversationMessage[],
-  hasSession: boolean,
-  lang: 'en' | 'ja',
-  noTranscriptNote: string,
-  conversationLabel: string,
-  pieceContext?: PieceContext,
-): string {
-  let conversation = '';
-  if (history.length > 0) {
-    const historyText = buildTaskFromHistory(history);
-    conversation = `${conversationLabel}\n${historyText}`;
-  } else if (hasSession) {
-    conversation = `${conversationLabel}\n${noTranscriptNote}`;
-  } else {
-    return '';
-  }
-
-  const hasPiece = !!pieceContext;
-  const hasPreview = !!pieceContext?.movementPreviews?.length;
-  const summaryMovementDetails = hasPreview
-    ? `\n### ${lang === 'ja' ? '処理するエージェント' : 'Processing Agents'}\n${formatMovementPreviews(pieceContext!.movementPreviews!, lang)}`
-    : '';
-  return loadTemplate('score_summary_system_prompt', lang, {
-    pieceInfo: hasPiece,
-    pieceName: pieceContext?.name ?? '',
-    pieceDescription: pieceContext?.description ?? '',
-    movementDetails: summaryMovementDetails,
-    conversation,
-  });
-}
-
-export type PostSummaryAction = InteractiveModeAction | 'continue';
-
-export type SummaryActionValue = 'execute' | 'create_issue' | 'save_task' | 'continue';
-
-export interface SummaryActionOption {
-  label: string;
-  value: SummaryActionValue;
-}
-
-export type SummaryActionLabels = {
-  execute: string;
-  createIssue?: string;
-  saveTask: string;
-  continue: string;
-};
-
-export const BASE_SUMMARY_ACTIONS: readonly SummaryActionValue[] = [
-  'execute',
-  'save_task',
-  'continue',
-];
-
-export function buildSummaryActionOptions(
-  labels: SummaryActionLabels,
-  append: readonly SummaryActionValue[] = [],
-): SummaryActionOption[] {
-  const order = [...BASE_SUMMARY_ACTIONS, ...append];
-  const seen = new Set<SummaryActionValue>();
-  const options: SummaryActionOption[] = [];
-
-  for (const action of order) {
-    if (seen.has(action)) continue;
-    seen.add(action);
-
-    if (action === 'execute') {
-      options.push({ label: labels.execute, value: action });
-      continue;
-    }
-    if (action === 'create_issue') {
-      if (labels.createIssue) {
-        options.push({ label: labels.createIssue, value: action });
-      }
-      continue;
-    }
-    if (action === 'save_task') {
-      options.push({ label: labels.saveTask, value: action });
-      continue;
-    }
-    options.push({ label: labels.continue, value: action });
-  }
-
-  return options;
-}
-
-export async function selectSummaryAction(
-  task: string,
-  proposedLabel: string,
-  actionPrompt: string,
-  options: SummaryActionOption[],
-): Promise<PostSummaryAction | null> {
-  blankLine();
-  info(proposedLabel);
-  console.log(task);
-
-  return selectOption<PostSummaryAction>(actionPrompt, options);
-}
-
-export async function selectPostSummaryAction(
-  task: string,
-  proposedLabel: string,
-  ui: InteractiveUIText,
-): Promise<PostSummaryAction | null> {
-  return selectSummaryAction(
-    task,
-    proposedLabel,
-    ui.actionPrompt,
-    buildSummaryActionOptions(
-      {
-        execute: ui.actions.execute,
-        createIssue: ui.actions.createIssue,
-        saveTask: ui.actions.saveTask,
-        continue: ui.actions.continue,
-      },
-      ['create_issue'],
-    ),
-  );
-}
-
-export type InteractiveModeAction = 'execute' | 'save_task' | 'create_issue' | 'cancel';
-
-export interface InteractiveModeResult {
-  /** The action selected by the user */
-  action: InteractiveModeAction;
-  /** The assembled task text (only meaningful when action is not 'cancel') */
-  task: string;
-}
-
-export interface PieceContext {
-  /** Piece name (e.g. "minimal") */
-  name: string;
-  /** Piece description */
-  description: string;
-  /** Piece structure (numbered list of movements) */
-  pieceStructure: string;
-  /** Movement previews (persona + instruction content for first N movements) */
-  movementPreviews?: MovementPreview[];
-}
-
-export const DEFAULT_INTERACTIVE_TOOLS = ['Read', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch'];
+export {
+  buildSummaryPrompt,
+  formatMovementPreviews,
+  type ConversationMessage,
+  type PieceContext,
+  type TaskHistorySummaryItem,
+} from './interactive-summary.js';
 
 /**
  * Run the interactive task input mode.
@@ -291,6 +116,7 @@ export async function interactiveMode(
   initialInput?: string,
   pieceContext?: PieceContext,
   sessionId?: string,
+  runSessionContext?: RunSessionContext,
 ): Promise<InteractiveModeResult> {
   const baseCtx = initializeSession(cwd, 'interactive');
   const ctx = sessionId ? { ...baseCtx, sessionId } : baseCtx;
@@ -298,10 +124,17 @@ export async function interactiveMode(
   displayAndClearSessionState(cwd, ctx.lang);
 
   const hasPreview = !!pieceContext?.movementPreviews?.length;
+  const hasRunSession = !!runSessionContext;
+  const runPromptVars = hasRunSession
+    ? formatRunSessionForPrompt(runSessionContext)
+    : { runTask: '', runPiece: '', runStatus: '', runMovementLogs: '', runReports: '' };
+
   const systemPrompt = loadTemplate('score_interactive_system_prompt', ctx.lang, {
     hasPiecePreview: hasPreview,
     pieceStructure: pieceContext?.pieceStructure ?? '',
     movementDetails: hasPreview ? formatMovementPreviews(pieceContext!.movementPreviews!, ctx.lang) : '',
+    hasRunSession,
+    ...runPromptVars,
   });
   const policyContent = loadTemplate('score_interactive_policy', ctx.lang, {});
   const ui = getLabelObject<InteractiveUIText>('interactive.ui', ctx.lang);
@@ -326,4 +159,26 @@ export async function interactiveMode(
     transformPrompt: injectPolicy,
     introMessage: ui.intro,
   }, pieceContext, initialInput);
+}
+
+export {
+  type InteractiveModeAction,
+  type InteractiveSummaryUIText,
+  type PostSummaryAction,
+  type SummaryActionLabels,
+  type SummaryActionOption,
+  type SummaryActionValue,
+  selectPostSummaryAction,
+  buildSummaryActionOptions,
+  selectSummaryAction,
+  formatTaskHistorySummary,
+  normalizeTaskHistorySummary,
+  BASE_SUMMARY_ACTIONS,
+} from './interactive-summary.js';
+
+export interface InteractiveModeResult {
+  /** The action selected by the user */
+  action: InteractiveModeAction;
+  /** The assembled task text (only meaningful when action is not 'cancel') */
+  task: string;
 }

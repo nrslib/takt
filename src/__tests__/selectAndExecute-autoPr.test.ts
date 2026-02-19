@@ -9,6 +9,7 @@ const {
   mockCompleteTask,
   mockFailTask,
   mockExecuteTask,
+  mockResolvePieceConfigValue,
 } = vi.hoisted(() => ({
   mockAddTask: vi.fn(() => ({
     name: 'test-task',
@@ -21,6 +22,7 @@ const {
   mockCompleteTask: vi.fn(),
   mockFailTask: vi.fn(),
   mockExecuteTask: vi.fn(),
+  mockResolvePieceConfigValue: vi.fn((_: string, key: string) => (key === 'autoPr' ? undefined : 'default')),
 }));
 
 vi.mock('../shared/prompt/index.js', () => ({
@@ -28,11 +30,10 @@ vi.mock('../shared/prompt/index.js', () => ({
 }));
 
 vi.mock('../infra/config/index.js', () => ({
-  getCurrentPiece: vi.fn(),
+  resolvePieceConfigValue: (...args: unknown[]) => mockResolvePieceConfigValue(...args),
   listPieces: vi.fn(() => ['default']),
   listPieceEntries: vi.fn(() => []),
   isPiecePath: vi.fn(() => false),
-  loadGlobalConfig: vi.fn(() => ({})),
 }));
 
 vi.mock('../infra/task/index.js', () => ({
@@ -102,7 +103,7 @@ beforeEach(() => {
 
 describe('resolveAutoPr default in selectAndExecuteTask', () => {
   it('should call auto-PR confirm with default true when no CLI option or config', async () => {
-    // Given: worktree is enabled via override, no autoPr option, no global config autoPr
+    // Given: worktree is enabled via override, no autoPr option, no config autoPr
     mockConfirm.mockResolvedValue(true);
     mockSummarizeTaskName.mockResolvedValue('test-task');
     mockCreateSharedClone.mockReturnValue({
@@ -121,10 +122,7 @@ describe('resolveAutoPr default in selectAndExecuteTask', () => {
       createWorktree: true,
     });
 
-    // Then: the 'Create pull request?' confirm is called with default true
-    const autoPrCall = mockConfirm.mock.calls.find(
-      (call) => call[0] === 'Create pull request?',
-    );
+    const autoPrCall = mockConfirm.mock.calls.find((call) => call[0] === 'Create pull request?');
     expect(autoPrCall).toBeDefined();
     expect(autoPrCall![1]).toBe(true);
   });

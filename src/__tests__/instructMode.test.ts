@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { setupRawStdin, restoreStdin, toRawInputs, createMockProvider } from './helpers/stdinSimulator.js';
 
 vi.mock('../infra/config/global/globalConfig.js', () => ({
   loadGlobalConfig: vi.fn(() => ({ provider: 'mock', language: 'en' })),
@@ -76,118 +77,16 @@ import { getProvider } from '../infra/providers/index.js';
 import { runInstructMode } from '../features/tasks/list/instructMode.js';
 import { selectOption } from '../shared/prompt/index.js';
 import { info } from '../shared/ui/index.js';
+import { loadTemplate } from '../shared/prompts/index.js';
 
 const mockGetProvider = vi.mocked(getProvider);
 const mockSelectOption = vi.mocked(selectOption);
 const mockInfo = vi.mocked(info);
-
-let savedIsTTY: boolean | undefined;
-let savedIsRaw: boolean | undefined;
-let savedSetRawMode: typeof process.stdin.setRawMode | undefined;
-let savedStdoutWrite: typeof process.stdout.write;
-let savedStdinOn: typeof process.stdin.on;
-let savedStdinRemoveListener: typeof process.stdin.removeListener;
-let savedStdinResume: typeof process.stdin.resume;
-let savedStdinPause: typeof process.stdin.pause;
-
-function setupRawStdin(rawInputs: string[]): void {
-  savedIsTTY = process.stdin.isTTY;
-  savedIsRaw = process.stdin.isRaw;
-  savedSetRawMode = process.stdin.setRawMode;
-  savedStdoutWrite = process.stdout.write;
-  savedStdinOn = process.stdin.on;
-  savedStdinRemoveListener = process.stdin.removeListener;
-  savedStdinResume = process.stdin.resume;
-  savedStdinPause = process.stdin.pause;
-
-  Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
-  Object.defineProperty(process.stdin, 'isRaw', { value: false, configurable: true, writable: true });
-  process.stdin.setRawMode = vi.fn((mode: boolean) => {
-    (process.stdin as unknown as { isRaw: boolean }).isRaw = mode;
-    return process.stdin;
-  }) as unknown as typeof process.stdin.setRawMode;
-  process.stdout.write = vi.fn(() => true) as unknown as typeof process.stdout.write;
-  process.stdin.resume = vi.fn(() => process.stdin) as unknown as typeof process.stdin.resume;
-  process.stdin.pause = vi.fn(() => process.stdin) as unknown as typeof process.stdin.pause;
-
-  let currentHandler: ((data: Buffer) => void) | null = null;
-  let inputIndex = 0;
-
-  process.stdin.on = vi.fn(((event: string, handler: (...args: unknown[]) => void) => {
-    if (event === 'data') {
-      currentHandler = handler as (data: Buffer) => void;
-      if (inputIndex < rawInputs.length) {
-        const data = rawInputs[inputIndex]!;
-        inputIndex++;
-        queueMicrotask(() => {
-          if (currentHandler) {
-            currentHandler(Buffer.from(data, 'utf-8'));
-          }
-        });
-      }
-    }
-    return process.stdin;
-  }) as typeof process.stdin.on);
-
-  process.stdin.removeListener = vi.fn(((event: string) => {
-    if (event === 'data') {
-      currentHandler = null;
-    }
-    return process.stdin;
-  }) as typeof process.stdin.removeListener);
-}
-
-function restoreStdin(): void {
-  if (savedIsTTY !== undefined) {
-    Object.defineProperty(process.stdin, 'isTTY', { value: savedIsTTY, configurable: true });
-  }
-  if (savedIsRaw !== undefined) {
-    Object.defineProperty(process.stdin, 'isRaw', { value: savedIsRaw, configurable: true, writable: true });
-  }
-  if (savedSetRawMode) {
-    process.stdin.setRawMode = savedSetRawMode;
-  }
-  if (savedStdoutWrite) {
-    process.stdout.write = savedStdoutWrite;
-  }
-  if (savedStdinOn) {
-    process.stdin.on = savedStdinOn;
-  }
-  if (savedStdinRemoveListener) {
-    process.stdin.removeListener = savedStdinRemoveListener;
-  }
-  if (savedStdinResume) {
-    process.stdin.resume = savedStdinResume;
-  }
-  if (savedStdinPause) {
-    process.stdin.pause = savedStdinPause;
-  }
-}
-
-function toRawInputs(inputs: (string | null)[]): string[] {
-  return inputs.map((input) => {
-    if (input === null) return '\x04';
-    return input + '\r';
-  });
-}
+const mockLoadTemplate = vi.mocked(loadTemplate);
 
 function setupMockProvider(responses: string[]): void {
-  let callIndex = 0;
-  const mockCall = vi.fn(async () => {
-    const content = callIndex < responses.length ? responses[callIndex] : 'AI response';
-    callIndex++;
-    return {
-      persona: 'instruct',
-      status: 'done' as const,
-      content: content!,
-      timestamp: new Date(),
-    };
-  });
-  const mockProvider = {
-    setup: () => ({ call: mockCall }),
-    _call: mockCall,
-  };
-  mockGetProvider.mockReturnValue(mockProvider);
+  const { provider } = createMockProvider(responses);
+  mockGetProvider.mockReturnValue(provider);
 }
 
 beforeEach(() => {
@@ -204,29 +103,17 @@ describe('runInstructMode', () => {
     setupRawStdin(toRawInputs(['/cancel']));
     setupMockProvider([]);
 
-    const result = await runInstructMode('/project', 'branch context', 'feature-branch');
+    const result = await runInstructMode('/project', 'branch context', 'feature-branch', 'my-task', 'Do something', '');
 
     expect(result.action).toBe('cancel');
     expect(result.task).toBe('');
-  });
-
-  it('should include branch name in intro message', async () => {
-    setupRawStdin(toRawInputs(['/cancel']));
-    setupMockProvider([]);
-
-    await runInstructMode('/project', 'diff stats', 'my-feature-branch');
-
-    const introCall = mockInfo.mock.calls.find((call) =>
-      call[0]?.includes('my-feature-branch')
-    );
-    expect(introCall).toBeDefined();
   });
 
   it('should return action=execute with task on /go after conversation', async () => {
     setupRawStdin(toRawInputs(['add more tests', '/go']));
     setupMockProvider(['What kind of tests?', 'Add unit tests for the feature.']);
 
-    const result = await runInstructMode('/project', 'branch context', 'feature-branch');
+    const result = await runInstructMode('/project', 'branch context', 'feature-branch', 'my-task', 'Do something', '');
 
     expect(result.action).toBe('execute');
     expect(result.task).toBe('Add unit tests for the feature.');
@@ -237,7 +124,7 @@ describe('runInstructMode', () => {
     setupMockProvider(['response', 'Summarized task.']);
     mockSelectOption.mockResolvedValue('save_task');
 
-    const result = await runInstructMode('/project', 'branch context', 'feature-branch');
+    const result = await runInstructMode('/project', 'branch context', 'feature-branch', 'my-task', 'Do something', '');
 
     expect(result.action).toBe('save_task');
     expect(result.task).toBe('Summarized task.');
@@ -248,7 +135,7 @@ describe('runInstructMode', () => {
     setupMockProvider(['response', 'Summarized task.']);
     mockSelectOption.mockResolvedValueOnce('continue');
 
-    const result = await runInstructMode('/project', 'branch context', 'feature-branch');
+    const result = await runInstructMode('/project', 'branch context', 'feature-branch', 'my-task', 'Do something', '');
 
     expect(result.action).toBe('cancel');
   });
@@ -257,7 +144,7 @@ describe('runInstructMode', () => {
     setupRawStdin(toRawInputs(['/go', '/cancel']));
     setupMockProvider([]);
 
-    const result = await runInstructMode('/project', 'branch context', 'feature-branch');
+    const result = await runInstructMode('/project', 'branch context', 'feature-branch', 'my-task', 'Do something', '');
 
     expect(result.action).toBe('cancel');
   });
@@ -266,7 +153,7 @@ describe('runInstructMode', () => {
     setupRawStdin(toRawInputs(['task', '/go']));
     setupMockProvider(['response', 'Task summary.']);
 
-    await runInstructMode('/project', 'branch context', 'feature-branch');
+    await runInstructMode('/project', 'branch context', 'feature-branch', 'my-task', 'Do something', '');
 
     const selectCall = mockSelectOption.mock.calls.find((call) =>
       Array.isArray(call[1])
@@ -278,5 +165,54 @@ describe('runInstructMode', () => {
     expect(values).toContain('save_task');
     expect(values).toContain('continue');
     expect(values).not.toContain('create_issue');
+  });
+
+  it('should use dedicated instruct system prompt with task context', async () => {
+    setupRawStdin(toRawInputs(['/cancel']));
+    setupMockProvider([]);
+
+    await runInstructMode('/project', 'branch context', 'feature-branch', 'my-task', 'Do something', 'existing note');
+
+    expect(mockLoadTemplate).toHaveBeenCalledWith(
+      'score_instruct_system_prompt',
+      'en',
+      expect.objectContaining({
+        taskName: 'my-task',
+        taskContent: 'Do something',
+        branchName: 'feature-branch',
+        branchContext: 'branch context',
+        retryNote: 'existing note',
+      }),
+    );
+  });
+
+  it('should inject selected run context into system prompt variables', async () => {
+    setupRawStdin(toRawInputs(['/cancel']));
+    setupMockProvider([]);
+
+    const runSessionContext = {
+      task: 'Previous run task',
+      piece: 'default',
+      status: 'completed',
+      movementLogs: [
+        { step: 'implement', persona: 'coder', status: 'completed', content: 'done' },
+      ],
+      reports: [
+        { filename: '00-plan.md', content: '# Plan' },
+      ],
+    };
+
+    await runInstructMode('/project', 'branch context', 'feature-branch', 'my-task', 'Do something', '', undefined, runSessionContext);
+
+    expect(mockLoadTemplate).toHaveBeenCalledWith(
+      'score_instruct_system_prompt',
+      'en',
+      expect.objectContaining({
+        hasRunSession: true,
+        runTask: 'Previous run task',
+        runPiece: 'default',
+        runStatus: 'completed',
+      }),
+    );
   });
 });

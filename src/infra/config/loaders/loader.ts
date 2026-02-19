@@ -28,6 +28,4 @@ export {
   loadGlobalConfig,
   saveGlobalConfig,
   invalidateGlobalConfigCache,
-  loadProjectDebugConfig,
-  getEffectiveDebugConfig,
 } from '../global/globalConfig.js';

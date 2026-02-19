@@ -56,11 +56,28 @@ vi.mock('../features/interactive/index.js', () => ({
   quietMode: vi.fn(),
   personaMode: vi.fn(),
   resolveLanguage: vi.fn(() => 'en'),
+  selectRun: vi.fn(() => null),
+  loadRunSessionContext: vi.fn(),
+  listRecentRuns: vi.fn(() => []),
+  normalizeTaskHistorySummary: vi.fn((items: unknown[]) => items),
+  dispatchConversationAction: vi.fn(async (result: { action: string }, handlers: Record<string, (r: unknown) => unknown>) => {
+    return handlers[result.action](result);
+  }),
+}));
+
+const mockListAllTaskItems = vi.fn();
+const mockIsStaleRunningTask = vi.fn();
+vi.mock('../infra/task/index.js', () => ({
+  TaskRunner: vi.fn(() => ({
+    listAllTaskItems: mockListAllTaskItems,
+  })),
+  isStaleRunningTask: (...args: unknown[]) => mockIsStaleRunningTask(...args),
 }));
 
 vi.mock('../infra/config/index.js', () => ({
   getPieceDescription: vi.fn(() => ({ name: 'default', description: 'test piece', pieceStructure: '', movementPreviews: [] })),
-  loadGlobalConfig: vi.fn(() => ({ interactivePreviewMovements: 3 })),
+  resolveConfigValue: vi.fn((_: string, key: string) => (key === 'piece' ? 'default' : false)),
+  resolveConfigValues: vi.fn(() => ({ language: 'en', interactivePreviewMovements: 3, provider: 'claude' })),
 }));
 
 vi.mock('../shared/constants.js', () => ({
@@ -91,7 +108,7 @@ vi.mock('../app/cli/helpers.js', () => ({
 import { checkGhCli, fetchIssue, formatIssueAsTask, parseIssueNumbers } from '../infra/github/issue.js';
 import { selectAndExecuteTask, determinePiece, createIssueFromTask, saveTaskFromInteractive } from '../features/tasks/index.js';
 import { interactiveMode, selectRecentSession } from '../features/interactive/index.js';
-import { loadGlobalConfig } from '../infra/config/index.js';
+import { resolveConfigValues } from '../infra/config/index.js';
 import { confirm } from '../shared/prompt/index.js';
 import { isDirectTask } from '../app/cli/helpers.js';
 import { executeDefaultAction } from '../app/cli/routing.js';
@@ -107,9 +124,10 @@ const mockCreateIssueFromTask = vi.mocked(createIssueFromTask);
 const mockSaveTaskFromInteractive = vi.mocked(saveTaskFromInteractive);
 const mockInteractiveMode = vi.mocked(interactiveMode);
 const mockSelectRecentSession = vi.mocked(selectRecentSession);
-const mockLoadGlobalConfig = vi.mocked(loadGlobalConfig);
+const mockResolveConfigValues = vi.mocked(resolveConfigValues);
 const mockConfirm = vi.mocked(confirm);
 const mockIsDirectTask = vi.mocked(isDirectTask);
+const mockTaskRunnerListAllTaskItems = vi.mocked(mockListAllTaskItems);
 
 function createMockIssue(number: number): GitHubIssue {
   return {
@@ -133,6 +151,8 @@ beforeEach(() => {
   mockConfirm.mockResolvedValue(true);
   mockIsDirectTask.mockReturnValue(false);
   mockParseIssueNumbers.mockReturnValue([]);
+  mockTaskRunnerListAllTaskItems.mockReturnValue([]);
+  mockIsStaleRunningTask.mockReturnValue(false);
 });
 
 describe('Issue resolution in routing', () => {
@@ -262,6 +282,142 @@ describe('Issue resolution in routing', () => {
     });
   });
 
+  describe('task history injection', () => {
+    it('should include failed/completed/interrupted tasks in pieceContext for interactive mode', async () => {
+      const failedTask = {
+        kind: 'failed' as const,
+        name: 'failed-task',
+        createdAt: '2026-02-17T00:00:00.000Z',
+        filePath: '/project/.takt/tasks.yaml',
+        content: 'failed',
+        worktreePath: '/tmp/task/failed',
+        branch: 'takt/failed',
+        startedAt: '2026-02-17T00:00:00.000Z',
+        completedAt: '2026-02-17T00:10:00.000Z',
+        failure: { error: 'syntax error' },
+      };
+      const completedTask = {
+        kind: 'completed' as const,
+        name: 'completed-task',
+        createdAt: '2026-02-16T00:00:00.000Z',
+        filePath: '/project/.takt/tasks.yaml',
+        content: 'done',
+        worktreePath: '/tmp/task/completed',
+        branch: 'takt/completed',
+        startedAt: '2026-02-16T00:00:00.000Z',
+        completedAt: '2026-02-16T00:07:00.000Z',
+      };
+      const runningTask = {
+        kind: 'running' as const,
+        name: 'running-task',
+        createdAt: '2026-02-15T00:00:00.000Z',
+        filePath: '/project/.takt/tasks.yaml',
+        content: 'running',
+        worktreePath: '/tmp/task/interrupted',
+        ownerPid: 555,
+        startedAt: '2026-02-15T00:00:00.000Z',
+      };
+      mockTaskRunnerListAllTaskItems.mockReturnValue([failedTask, completedTask, runningTask]);
+      mockIsStaleRunningTask.mockReturnValue(true);
+
+      // When
+      await executeDefaultAction('add feature');
+
+      // Then
+      expect(mockInteractiveMode).toHaveBeenCalledWith(
+        '/test/cwd',
+        'add feature',
+        expect.objectContaining({
+          taskHistory: expect.arrayContaining([
+            expect.objectContaining({
+              worktreeId: '/tmp/task/failed',
+              status: 'failed',
+              finalResult: 'failed',
+              logKey: 'takt/failed',
+            }),
+            expect.objectContaining({
+              worktreeId: '/tmp/task/completed',
+              status: 'completed',
+              finalResult: 'completed',
+              logKey: 'takt/completed',
+            }),
+            expect.objectContaining({
+              worktreeId: '/tmp/task/interrupted',
+              status: 'interrupted',
+              finalResult: 'interrupted',
+              logKey: '/tmp/task/interrupted',
+            }),
+          ]),
+        }),
+        undefined,
+      );
+    });
+
+    it('should treat running tasks with no ownerPid as interrupted', async () => {
+      const runningTaskWithoutPid = {
+        kind: 'running' as const,
+        name: 'running-task-no-owner',
+        createdAt: '2026-02-15T00:00:00.000Z',
+        filePath: '/project/.takt/tasks.yaml',
+        content: 'running',
+        worktreePath: '/tmp/task/running-no-owner',
+        branch: 'takt/running-no-owner',
+        startedAt: '2026-02-15T00:00:00.000Z',
+      };
+      mockTaskRunnerListAllTaskItems.mockReturnValue([runningTaskWithoutPid]);
+      mockIsStaleRunningTask.mockReturnValue(true);
+
+      await executeDefaultAction('recover interrupted');
+
+      expect(mockIsStaleRunningTask).toHaveBeenCalledWith(undefined);
+      expect(mockInteractiveMode).toHaveBeenCalledWith(
+        '/test/cwd',
+        'recover interrupted',
+        expect.objectContaining({
+          taskHistory: expect.arrayContaining([
+            expect.objectContaining({
+              worktreeId: '/tmp/task/running-no-owner',
+              status: 'interrupted',
+              finalResult: 'interrupted',
+              logKey: 'takt/running-no-owner',
+            }),
+          ]),
+        }),
+        undefined,
+      );
+    });
+
+    it('should continue interactive mode when task list retrieval fails', async () => {
+      mockTaskRunnerListAllTaskItems.mockImplementation(() => {
+        throw new Error('list failed');
+      });
+
+      // When
+      await executeDefaultAction('fix issue');
+
+      // Then
+      expect(mockInteractiveMode).toHaveBeenCalledWith(
+        '/test/cwd',
+        'fix issue',
+        expect.objectContaining({ taskHistory: [] }),
+        undefined,
+      );
+    });
+
+    it('should pass empty taskHistory when task list is empty', async () => {
+      mockTaskRunnerListAllTaskItems.mockReturnValue([]);
+
+      await executeDefaultAction('verify history');
+
+      expect(mockInteractiveMode).toHaveBeenCalledWith(
+        '/test/cwd',
+        'verify history',
+        expect.objectContaining({ taskHistory: [] }),
+        undefined,
+      );
+    });
+  });
+
   describe('interactive mode cancel', () => {
     it('should not call selectAndExecuteTask when interactive mode is cancelled', async () => {
       // Given
@@ -328,7 +484,7 @@ describe('Issue resolution in routing', () => {
   describe('session selection with provider=claude', () => {
     it('should pass selected session ID to interactiveMode when provider is claude', async () => {
       // Given
-      mockLoadGlobalConfig.mockReturnValue({ interactivePreviewMovements: 3, provider: 'claude' });
+      mockResolveConfigValues.mockReturnValue({ language: 'en', interactivePreviewMovements: 3, provider: 'claude' });
       mockConfirm.mockResolvedValue(true);
       mockSelectRecentSession.mockResolvedValue('session-xyz');
 
@@ -351,7 +507,7 @@ describe('Issue resolution in routing', () => {
 
     it('should not call selectRecentSession when user selects no in confirmation', async () => {
       // Given
-      mockLoadGlobalConfig.mockReturnValue({ interactivePreviewMovements: 3, provider: 'claude' });
+      mockResolveConfigValues.mockReturnValue({ language: 'en', interactivePreviewMovements: 3, provider: 'claude' });
       mockConfirm.mockResolvedValue(false);
 
       // When
@@ -370,7 +526,7 @@ describe('Issue resolution in routing', () => {
 
     it('should not call selectRecentSession when provider is not claude', async () => {
       // Given
-      mockLoadGlobalConfig.mockReturnValue({ interactivePreviewMovements: 3, provider: 'openai' });
+      mockResolveConfigValues.mockReturnValue({ language: 'en', interactivePreviewMovements: 3, provider: 'openai' });
 
       // When
       await executeDefaultAction();
@@ -379,6 +535,23 @@ describe('Issue resolution in routing', () => {
       expect(mockSelectRecentSession).not.toHaveBeenCalled();
 
       // Then: interactiveMode should be called with undefined session ID
+      expect(mockInteractiveMode).toHaveBeenCalledWith(
+        '/test/cwd',
+        undefined,
+        expect.anything(),
+        undefined,
+      );
+    });
+  });
+
+  describe('run session reference', () => {
+    it('should not prompt run session reference in default interactive flow', async () => {
+      await executeDefaultAction();
+
+      expect(mockConfirm).not.toHaveBeenCalledWith(
+        "Reference a previous run's results?",
+        false,
+      );
       expect(mockInteractiveMode).toHaveBeenCalledWith(
         '/test/cwd',
         undefined,

@@ -11,8 +11,7 @@ import { resolve } from 'node:path';
 import {
   initGlobalDirs,
   initProjectDirs,
-  loadGlobalConfig,
-  getEffectiveDebugConfig,
+  resolveConfigValues,
   isVerboseMode,
 } from '../../infra/config/index.js';
 import { setQuietMode } from '../../shared/context.js';
@@ -68,15 +67,9 @@ export async function runPreActionHook(): Promise<void> {
   initProjectDirs(resolvedCwd);
 
   const verbose = isVerboseMode(resolvedCwd);
-  let debugConfig = getEffectiveDebugConfig(resolvedCwd);
+  initDebugLogger(verbose ? { enabled: true } : undefined, resolvedCwd);
 
-  if (verbose && (!debugConfig || !debugConfig.enabled)) {
-    debugConfig = { enabled: true };
-  }
-
-  initDebugLogger(debugConfig, resolvedCwd);
-
-  const config = loadGlobalConfig();
+  const config = resolveConfigValues(resolvedCwd, ['logLevel', 'minimalOutput']);
 
   if (verbose) {
     setVerboseConsole(true);

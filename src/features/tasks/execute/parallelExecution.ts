@@ -205,9 +205,17 @@ function fillSlots(
     const task = queue.shift()!;
     const isParallel = concurrency > 1;
     const colorIndex = colorCounter.value++;
+    const issueNumber = task.data?.issue;
+    const taskPrefix = issueNumber === undefined ? task.name : `#${issueNumber}`;
+    const taskDisplayLabel = issueNumber === undefined ? undefined : taskPrefix;
 
     if (isParallel) {
-      const writer = new TaskPrefixWriter({ taskName: task.name, colorIndex });
+      const writer = new TaskPrefixWriter({
+        taskName: task.name,
+        colorIndex,
+        issue: issueNumber,
+        displayLabel: taskDisplayLabel,
+      });
       writer.writeLine(`=== Task: ${task.name} ===`);
     } else {
       blankLine();
@@ -216,8 +224,9 @@ function fillSlots(
 
     const promise = executeAndCompleteTask(task, taskRunner, cwd, pieceName, options, {
       abortSignal: abortController.signal,
-      taskPrefix: isParallel ? task.name : undefined,
+      taskPrefix: isParallel ? taskPrefix : undefined,
       taskColorIndex: isParallel ? colorIndex : undefined,
+      taskDisplayLabel: isParallel ? taskDisplayLabel : undefined,
     });
     active.set(promise, task);
   }

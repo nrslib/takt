@@ -105,8 +105,7 @@ describe('saveTaskFile', () => {
 });
 
 describe('saveTaskFromInteractive', () => {
-  it('should save task with worktree settings when user confirms', async () => {
-    mockConfirm.mockResolvedValueOnce(true);
+  it('should always save task with worktree settings', async () => {
     mockPromptInput.mockResolvedValueOnce('');
     mockPromptInput.mockResolvedValueOnce('');
     mockConfirm.mockResolvedValueOnce(true);
@@ -119,18 +118,22 @@ describe('saveTaskFromInteractive', () => {
     expect(task.auto_pr).toBe(true);
   });
 
-  it('should save task without worktree settings when declined', async () => {
+  it('should keep worktree enabled even when auto-pr is declined', async () => {
+    mockPromptInput.mockResolvedValueOnce('');
+    mockPromptInput.mockResolvedValueOnce('');
     mockConfirm.mockResolvedValueOnce(false);
 
     await saveTaskFromInteractive(testDir, 'Task content');
 
     const task = loadTasks(testDir).tasks[0]!;
-    expect(task.worktree).toBeUndefined();
+    expect(task.worktree).toBe(true);
     expect(task.branch).toBeUndefined();
-    expect(task.auto_pr).toBeUndefined();
+    expect(task.auto_pr).toBe(false);
   });
 
   it('should display piece info when specified', async () => {
+    mockPromptInput.mockResolvedValueOnce('');
+    mockPromptInput.mockResolvedValueOnce('');
     mockConfirm.mockResolvedValueOnce(false);
 
     await saveTaskFromInteractive(testDir, 'Task content', 'review');
@@ -139,6 +142,8 @@ describe('saveTaskFromInteractive', () => {
   });
 
   it('should record issue number in tasks.yaml when issue option is provided', async () => {
+    mockPromptInput.mockResolvedValueOnce('');
+    mockPromptInput.mockResolvedValueOnce('');
     mockConfirm.mockResolvedValueOnce(false);
 
     await saveTaskFromInteractive(testDir, 'Fix login bug', 'default', { issue: 42 });
@@ -163,7 +168,6 @@ describe('saveTaskFromInteractive', () => {
       mockConfirm.mockResolvedValueOnce(true);
       mockPromptInput.mockResolvedValueOnce('');
       mockPromptInput.mockResolvedValueOnce('');
-      mockConfirm.mockResolvedValueOnce(true);
       mockConfirm.mockResolvedValueOnce(false);
 
       await saveTaskFromInteractive(testDir, 'Task content', 'default', {
@@ -172,7 +176,7 @@ describe('saveTaskFromInteractive', () => {
       });
 
       expect(mockConfirm).toHaveBeenNthCalledWith(1, 'Add this issue to tasks?', true);
-      expect(mockConfirm).toHaveBeenNthCalledWith(2, 'Create worktree?', true);
+      expect(mockConfirm).toHaveBeenNthCalledWith(2, 'Auto-create PR?', true);
       const task = loadTasks(testDir).tasks[0]!;
       expect(task.issue).toBe(42);
       expect(task.worktree).toBe(true);

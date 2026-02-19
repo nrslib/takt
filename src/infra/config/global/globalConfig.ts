@@ -1,7 +1,7 @@
 /**
  * Global configuration loader
  *
- * Manages ~/.takt/config.yaml and project-level debug settings.
+ * Manages ~/.takt/config.yaml.
  * GlobalConfigManager encapsulates the config cache as a singleton.
  */
 
@@ -9,12 +9,13 @@ import { readFileSync, existsSync, writeFileSync, statSync, accessSync, constant
 import { isAbsolute } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { GlobalConfigSchema } from '../../../core/models/index.js';
-import type { GlobalConfig, DebugConfig, Language } from '../../../core/models/index.js';
+import type { GlobalConfig, Language } from '../../../core/models/index.js';
 import type { ProviderPermissionProfiles } from '../../../core/models/provider-profiles.js';
 import { normalizeProviderOptions } from '../loaders/pieceParser.js';
-import { getGlobalConfigPath, getProjectConfigPath } from '../paths.js';
+import { getGlobalConfigPath } from '../paths.js';
 import { DEFAULT_LANGUAGE } from '../../../shared/constants.js';
 import { parseProviderModel } from '../../../shared/utils/providerModel.js';
+import { applyGlobalConfigEnvOverrides, envVarNameFromPath } from '../env/config-env-overrides.js';
 
 /** Claude-specific model aliases that are not valid for other providers */
 const CLAUDE_MODEL_ALIASES = new Set(['opus', 'sonnet', 'haiku']);
@@ -107,20 +108,6 @@ function denormalizeProviderProfiles(
   }])) as Record<string, { default_permission_mode: string; movement_permission_overrides?: Record<string, string> }>;
 }
 
-/** Create default global configuration (fresh instance each call) */
-function createDefaultGlobalConfig(): GlobalConfig {
-  return {
-    language: DEFAULT_LANGUAGE,
-    defaultPiece: 'default',
-    logLevel: 'info',
-    provider: 'claude',
-    enableBuiltinPieces: true,
-    interactivePreviewMovements: 3,
-    concurrency: 1,
-    taskPollIntervalMs: 500,
-  };
-}
-
 /**
  * Manages global configuration loading and caching.
  * Singleton — use GlobalConfigManager.getInstance().
@@ -154,24 +141,26 @@ export class GlobalConfigManager {
       return this.cachedConfig;
     }
     const configPath = getGlobalConfigPath();
-    if (!existsSync(configPath)) {
-      const defaultConfig = createDefaultGlobalConfig();
-      this.cachedConfig = defaultConfig;
-      return defaultConfig;
+
+    const rawConfig: Record<string, unknown> = {};
+    if (existsSync(configPath)) {
+      const content = readFileSync(configPath, 'utf-8');
+      const parsedRaw = parseYaml(content);
+      if (parsedRaw && typeof parsedRaw === 'object' && !Array.isArray(parsedRaw)) {
+        Object.assign(rawConfig, parsedRaw as Record<string, unknown>);
+      } else if (parsedRaw != null) {
+        throw new Error('Configuration error: ~/.takt/config.yaml must be a YAML object.');
+      }
     }
-    const content = readFileSync(configPath, 'utf-8');
-    const raw = parseYaml(content);
-    const parsed = GlobalConfigSchema.parse(raw);
+
+    applyGlobalConfigEnvOverrides(rawConfig);
+
+    const parsed = GlobalConfigSchema.parse(rawConfig);
     const config: GlobalConfig = {
       language: parsed.language,
-      defaultPiece: parsed.default_piece,
       logLevel: parsed.log_level,
       provider: parsed.provider,
       model: parsed.model,
-      debug: parsed.debug ? {
-        enabled: parsed.debug.enabled,
-        logFile: parsed.debug.log_file,
-      } : undefined,
       observability: parsed.observability ? {
         providerEvents: parsed.observability.provider_events,
       } : undefined,
@@ -213,6 +202,7 @@ export class GlobalConfigManager {
         runAbort: parsed.notification_sound_events.run_abort,
       } : undefined,
       interactivePreviewMovements: parsed.interactive_preview_movements,
+      verbose: parsed.verbose,
       concurrency: parsed.concurrency,
       taskPollIntervalMs: parsed.task_poll_interval_ms,
     };
@@ -226,18 +216,11 @@ export class GlobalConfigManager {
     const configPath = getGlobalConfigPath();
     const raw: Record<string, unknown> = {
       language: config.language,
-      default_piece: config.defaultPiece,
       log_level: config.logLevel,
       provider: config.provider,
     };
     if (config.model) {
       raw.model = config.model;
-    }
-    if (config.debug) {
-      raw.debug = {
-        enabled: config.debug.enabled,
-        log_file: config.debug.logFile,
-      };
     }
     if (config.observability && config.observability.providerEvents !== undefined) {
       raw.observability = {
@@ -340,6 +323,9 @@ export class GlobalConfigManager {
     if (config.interactivePreviewMovements !== undefined) {
       raw.interactive_preview_movements = config.interactivePreviewMovements;
     }
+    if (config.verbose !== undefined) {
+      raw.verbose = config.verbose;
+    }
     if (config.concurrency !== undefined && config.concurrency > 1) {
       raw.concurrency = config.concurrency;
     }
@@ -407,7 +393,7 @@ export function setProvider(provider: 'claude' | 'codex' | 'opencode'): void {
  * Priority: TAKT_ANTHROPIC_API_KEY env var > config.yaml > undefined (CLI auth fallback)
  */
 export function resolveAnthropicApiKey(): string | undefined {
-  const envKey = process.env['TAKT_ANTHROPIC_API_KEY'];
+  const envKey = process.env[envVarNameFromPath('anthropic_api_key')];
   if (envKey) return envKey;
 
   try {
@@ -423,7 +409,7 @@ export function resolveAnthropicApiKey(): string | undefined {
  * Priority: TAKT_OPENAI_API_KEY env var > config.yaml > undefined (CLI auth fallback)
  */
 export function resolveOpenaiApiKey(): string | undefined {
-  const envKey = process.env['TAKT_OPENAI_API_KEY'];
+  const envKey = process.env[envVarNameFromPath('openai_api_key')];
   if (envKey) return envKey;
 
   try {
@@ -439,7 +425,7 @@ export function resolveOpenaiApiKey(): string | undefined {
  * Priority: TAKT_CODEX_CLI_PATH env var > config.yaml > undefined (SDK vendored binary fallback)
  */
 export function resolveCodexCliPath(): string | undefined {
-  const envPath = process.env['TAKT_CODEX_CLI_PATH'];
+  const envPath = process.env[envVarNameFromPath('codex_cli_path')];
   if (envPath !== undefined) {
     return validateCodexCliPath(envPath, 'TAKT_CODEX_CLI_PATH');
   }
@@ -461,7 +447,7 @@ export function resolveCodexCliPath(): string | undefined {
  * Priority: TAKT_OPENCODE_API_KEY env var > config.yaml > undefined
  */
 export function resolveOpencodeApiKey(): string | undefined {
-  const envKey = process.env['TAKT_OPENCODE_API_KEY'];
+  const envKey = process.env[envVarNameFromPath('opencode_api_key')];
   if (envKey) return envKey;
 
   try {
@@ -470,43 +456,4 @@ export function resolveOpencodeApiKey(): string | undefined {
   } catch {
     return undefined;
   }
-}
-
-/** Load project-level debug configuration (from .takt/config.yaml) */
-export function loadProjectDebugConfig(projectDir: string): DebugConfig | undefined {
-  const configPath = getProjectConfigPath(projectDir);
-  if (!existsSync(configPath)) {
-    return undefined;
-  }
-  try {
-    const content = readFileSync(configPath, 'utf-8');
-    const raw = parseYaml(content);
-    if (raw && typeof raw === 'object' && 'debug' in raw) {
-      const debug = raw.debug;
-      if (debug && typeof debug === 'object') {
-        return {
-          enabled: Boolean(debug.enabled),
-          logFile: typeof debug.log_file === 'string' ? debug.log_file : undefined,
-        };
-      }
-    }
-  } catch {
-    // Ignore parse errors
-  }
-  return undefined;
-}
-
-/** Get effective debug config (project overrides global) */
-export function getEffectiveDebugConfig(projectDir?: string): DebugConfig | undefined {
-  const globalConfig = loadGlobalConfig();
-  let debugConfig = globalConfig.debug;
-
-  if (projectDir) {
-    const projectDebugConfig = loadProjectDebugConfig(projectDir);
-    if (projectDebugConfig) {
-      debugConfig = projectDebugConfig;
-    }
-  }
-
-  return debugConfig;
 }

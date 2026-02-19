@@ -17,12 +17,6 @@ export interface CustomAgentConfig {
   model?: string;
 }
 
-/** Debug configuration for takt */
-export interface DebugConfig {
-  enabled: boolean;
-  logFile?: string;
-}
-
 /** Observability configuration for runtime event logs */
 export interface ObservabilityConfig {
   /** Enable provider stream event logging (default: false when undefined) */
@@ -31,7 +25,7 @@ export interface ObservabilityConfig {
 
 /** Analytics configuration for local metrics collection */
 export interface AnalyticsConfig {
-  /** Whether analytics collection is enabled (requires debug.enabled) */
+  /** Whether analytics collection is enabled */
   enabled?: boolean;
   /** Custom path for analytics events directory (default: ~/.takt/analytics/events) */
   eventsPath?: string;
@@ -69,11 +63,9 @@ export interface NotificationSoundEventsConfig {
 /** Global configuration for takt */
 export interface GlobalConfig {
   language: Language;
-  defaultPiece: string;
   logLevel: 'debug' | 'info' | 'warn' | 'error';
   provider?: 'claude' | 'codex' | 'opencode' | 'mock';
   model?: string;
-  debug?: DebugConfig;
   observability?: ObservabilityConfig;
   analytics?: AnalyticsConfig;
   /** Directory for shared clones (worktree_dir in config). If empty, uses ../{clone-name} relative to project */
@@ -118,6 +110,8 @@ export interface GlobalConfig {
   notificationSoundEvents?: NotificationSoundEventsConfig;
   /** Number of movement previews to inject into interactive mode (0 to disable, max 10) */
   interactivePreviewMovements?: number;
+  /** Verbose output mode */
+  verbose?: boolean;
   /** Number of tasks to run concurrently in takt run (default: 1 = sequential) */
   concurrency: number;
   /** Polling interval in ms for picking up new tasks during takt run (default: 500, range: 100-5000) */
@@ -127,7 +121,6 @@ export interface GlobalConfig {
 /** Project-level configuration */
 export interface ProjectConfig {
   piece?: string;
-  agents?: CustomAgentConfig[];
   provider?: 'claude' | 'codex' | 'opencode' | 'mock';
   providerOptions?: MovementProviderOptions;
   /** Provider-specific permission profiles */

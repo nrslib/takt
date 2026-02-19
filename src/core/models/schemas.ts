@@ -374,12 +374,6 @@ export const CustomAgentConfigSchema = z.object({
   { message: 'Agent must have prompt_file, prompt, claude_agent, or claude_skill' }
 );
 
-/** Debug config schema */
-export const DebugConfigSchema = z.object({
-  enabled: z.boolean().optional().default(false),
-  log_file: z.string().optional(),
-});
-
 export const ObservabilityConfigSchema = z.object({
   provider_events: z.boolean().optional(),
 });
@@ -418,11 +412,9 @@ export const PieceCategoryConfigSchema = z.record(z.string(), PieceCategoryConfi
 /** Global config schema */
 export const GlobalConfigSchema = z.object({
   language: LanguageSchema.optional().default(DEFAULT_LANGUAGE),
-  default_piece: z.string().optional().default('default'),
   log_level: z.enum(['debug', 'info', 'warn', 'error']).optional().default('info'),
   provider: z.enum(['claude', 'codex', 'opencode', 'mock']).optional().default('claude'),
   model: z.string().optional(),
-  debug: DebugConfigSchema.optional(),
   observability: ObservabilityConfigSchema.optional(),
   analytics: AnalyticsConfigSchema.optional(),
   /** Directory for shared clones (worktree_dir in config). If empty, uses ../{clone-name} relative to project */
@@ -473,6 +465,8 @@ export const GlobalConfigSchema = z.object({
   }).optional(),
   /** Number of movement previews to inject into interactive mode (0 to disable, max 10) */
   interactive_preview_movements: z.number().int().min(0).max(10).optional().default(3),
+  /** Verbose output mode */
+  verbose: z.boolean().optional(),
   /** Number of tasks to run concurrently in takt run (default: 1 = sequential, max: 10) */
   concurrency: z.number().int().min(1).max(10).optional().default(1),
   /** Polling interval in ms for picking up new tasks during takt run (default: 500, range: 100-5000) */
@@ -482,7 +476,6 @@ export const GlobalConfigSchema = z.object({
 /** Project config schema */
 export const ProjectConfigSchema = z.object({
   piece: z.string().optional(),
-  agents: z.array(CustomAgentConfigSchema).optional(),
   provider: z.enum(['claude', 'codex', 'opencode', 'mock']).optional(),
   provider_options: MovementProviderOptionsSchema,
   provider_profiles: ProviderPermissionProfilesSchema,

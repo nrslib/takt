@@ -1,8 +1,8 @@
 /**
  * Analytics event writer — JSONL append-only with date-based rotation.
  *
- * Writes to ~/.takt/analytics/events/YYYY-MM-DD.jsonl when debug.enabled = true.
- * Does nothing when disabled. Singleton pattern matches DebugLogger.
+ * Writes to ~/.takt/analytics/events/YYYY-MM-DD.jsonl when analytics.enabled = true.
+ * Does nothing when disabled.
  */
 
 import { appendFileSync, mkdirSync, existsSync } from 'node:fs';
@@ -30,7 +30,7 @@ export class AnalyticsWriter {
 
   /**
    * Initialize writer.
-   * @param enabled Whether analytics collection is active (tied to debug.enabled)
+   * @param enabled Whether analytics collection is active
    * @param eventsDir Absolute path to the events directory (e.g. ~/.takt/analytics/events)
    */
   init(enabled: boolean, eventsDir: string): void {

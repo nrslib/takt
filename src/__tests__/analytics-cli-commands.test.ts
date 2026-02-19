@@ -15,9 +15,7 @@ import {
   formatReviewMetrics,
   parseSinceDuration,
   purgeOldEvents,
-  resolveEventsDir,
 } from '../features/analytics/index.js';
-import type { GlobalConfig } from '../core/models/index.js';
 import type { ReviewFindingEvent } from '../features/analytics/index.js';
 
 describe('metrics review command logic', () => {
@@ -55,29 +53,6 @@ describe('metrics review command logic', () => {
     expect(result.rejectCountsByRule.get('r-1')).toBe(1);
   });
 
-  it('should resolve eventsDir from globalConfig with custom eventsPath', () => {
-    const config: GlobalConfig = {
-      language: 'en',
-      defaultPiece: 'default',
-      logLevel: 'info',
-      analytics: { eventsPath: '/custom/path/events' },
-    };
-
-    expect(resolveEventsDir(config)).toBe('/custom/path/events');
-  });
-
-  it('should resolve eventsDir from globalConfig without custom eventsPath', () => {
-    const config: GlobalConfig = {
-      language: 'en',
-      defaultPiece: 'default',
-      logLevel: 'info',
-    };
-
-    const result = resolveEventsDir(config);
-    expect(result).toContain('analytics');
-    expect(result).toContain('events');
-  });
-
   it('should parse since duration and compute correct time window', () => {
     const durationMs = parseSinceDuration('7d');
     const now = new Date('2026-02-18T12:00:00Z').getTime();
@@ -113,16 +88,10 @@ describe('purge command logic', () => {
   it('should fallback to CLI retentionDays when config has no retentionDays', () => {
     writeFileSync(join(eventsDir, '2025-01-01.jsonl'), '{}', 'utf-8');
 
-    const config: GlobalConfig = {
-      language: 'en',
-      defaultPiece: 'default',
-      logLevel: 'info',
-      analytics: { eventsPath: eventsDir },
-    };
-
     const cliRetentionDays = parseInt('30', 10);
-    const retentionDays = config.analytics?.retentionDays ?? cliRetentionDays;
-    const deleted = purgeOldEvents(resolveEventsDir(config), retentionDays, new Date('2026-02-18T12:00:00Z'));
+    const configRetentionDays = undefined;
+    const retentionDays = configRetentionDays ?? cliRetentionDays;
+    const deleted = purgeOldEvents(eventsDir, retentionDays, new Date('2026-02-18T12:00:00Z'));
 
     expect(deleted).toContain('2025-01-01.jsonl');
   });
@@ -131,16 +100,10 @@ describe('purge command logic', () => {
     writeFileSync(join(eventsDir, '2026-02-10.jsonl'), '{}', 'utf-8');
     writeFileSync(join(eventsDir, '2026-02-18.jsonl'), '{}', 'utf-8');
 
-    const config: GlobalConfig = {
-      language: 'en',
-      defaultPiece: 'default',
-      logLevel: 'info',
-      analytics: { eventsPath: eventsDir, retentionDays: 5 },
-    };
-
     const cliRetentionDays = parseInt('30', 10);
-    const retentionDays = config.analytics?.retentionDays ?? cliRetentionDays;
-    const deleted = purgeOldEvents(resolveEventsDir(config), retentionDays, new Date('2026-02-18T12:00:00Z'));
+    const configRetentionDays = 5;
+    const retentionDays = configRetentionDays ?? cliRetentionDays;
+    const deleted = purgeOldEvents(eventsDir, retentionDays, new Date('2026-02-18T12:00:00Z'));
 
     expect(deleted).toContain('2026-02-10.jsonl');
     expect(deleted).not.toContain('2026-02-18.jsonl');

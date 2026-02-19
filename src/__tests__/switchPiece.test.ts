@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../infra/config/index.js', () => ({
   loadPiece: vi.fn(() => null),
-  getCurrentPiece: vi.fn(() => 'default'),
+  resolveConfigValue: vi.fn(() => 'default'),
   setCurrentPiece: vi.fn(),
 }));
 
@@ -20,11 +20,11 @@ vi.mock('../shared/ui/index.js', () => ({
   error: vi.fn(),
 }));
 
-import { getCurrentPiece, loadPiece, setCurrentPiece } from '../infra/config/index.js';
+import { resolveConfigValue, loadPiece, setCurrentPiece } from '../infra/config/index.js';
 import { selectPiece } from '../features/pieceSelection/index.js';
 import { switchPiece } from '../features/config/switchPiece.js';
 
-const mockGetCurrentPiece = vi.mocked(getCurrentPiece);
+const mockResolveConfigValue = vi.mocked(resolveConfigValue);
 const mockLoadPiece = vi.mocked(loadPiece);
 const mockSetCurrentPiece = vi.mocked(setCurrentPiece);
 const mockSelectPiece = vi.mocked(selectPiece);
@@ -32,6 +32,7 @@ const mockSelectPiece = vi.mocked(selectPiece);
 describe('switchPiece', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockResolveConfigValue.mockReturnValue('default');
   });
 
   it('should call selectPiece with fallbackToDefault: false', async () => {

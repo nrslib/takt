@@ -35,6 +35,10 @@ interactive:
     quietDescription: "Generate instructions without asking questions"
     passthrough: "Passthrough"
     passthroughDescription: "Pass your input directly as task text"
+  runSelector:
+    confirm: "Reference a previous run's results?"
+    prompt: "Select a run to reference:"
+    noRuns: "No previous runs found."
   sessionSelector:
     confirm: "Choose a previous session?"
     prompt: "Resume from a recent session?"

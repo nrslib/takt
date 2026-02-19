@@ -1,5 +1,5 @@
 /**
- * Analytics module — debug-mode event collection and metrics.
+ * Analytics module — event collection and metrics.
  */
 
 export type {
@@ -14,8 +14,6 @@ export {
   isAnalyticsEnabled,
   writeAnalyticsEvent,
 } from './writer.js';
-
-export { resolveEventsDir } from './resolve-events-dir.js';
 
 export {
   parseFindingsFromReport,

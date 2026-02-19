@@ -35,6 +35,16 @@ describe('loadTemplate', () => {
     expect(result).toContain('対話モードポリシー');
   });
 
+  it('loads an English retry system prompt template', () => {
+    const result = loadTemplate('score_retry_system_prompt', 'en');
+    expect(result).toContain('Retry Assistant');
+  });
+
+  it('loads a Japanese retry system prompt template', () => {
+    const result = loadTemplate('score_retry_system_prompt', 'ja');
+    expect(result).toContain('リトライアシスタント');
+  });
+
   it('loads score_slug_system_prompt with explicit lang', () => {
     const result = loadTemplate('score_slug_system_prompt', 'en');
     expect(result).toContain('You are a slug generator');
@@ -56,6 +66,19 @@ describe('variable substitution', () => {
     const result = loadTemplate('perform_builtin_agent_system_prompt', 'en', {});
     expect(result).not.toContain('{{agentName}}');
     expect(result).toContain('You are the  agent');
+  });
+
+  it('replaces taskHistory variable in score_summary_system_prompt', () => {
+    const result = loadTemplate('score_summary_system_prompt', 'en', {
+      pieceInfo: true,
+      pieceName: 'piece',
+      pieceDescription: 'desc',
+      movementDetails: '',
+      conversation: 'Conversation: User: test',
+      taskHistory: '## Task execution history\n- Worktree ID: wt-1',
+    });
+    expect(result).toContain('## Task execution history');
+    expect(result).toContain('Worktree ID: wt-1');
   });
 
   it('replaces multiple different variables', () => {

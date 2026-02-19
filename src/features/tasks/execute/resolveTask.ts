@@ -4,7 +4,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { loadGlobalConfig } from '../../../infra/config/index.js';
+import { resolvePieceConfigValue } from '../../../infra/config/index.js';
 import { type TaskInfo, createSharedClone, summarizeTaskName, getCurrentBranch } from '../../../infra/task/index.js';
 import { withProgress } from '../../../shared/ui/index.js';
 import { getTaskSlugFromTaskDir } from '../../../shared/utils/taskPaths.js';
@@ -96,28 +96,37 @@ export async function resolveTaskExecution(
   if (data.worktree) {
     throwIfAborted(abortSignal);
     baseBranch = getCurrentBranch(defaultCwd);
-    const taskSlug = await withProgress(
-      'Generating branch name...',
-      (slug) => `Branch name generated: ${slug}`,
-      () => summarizeTaskName(task.content, { cwd: defaultCwd }),
-    );
 
-    throwIfAborted(abortSignal);
-    const result = await withProgress(
-      'Creating clone...',
-      (cloneResult) => `Clone created: ${cloneResult.path} (branch: ${cloneResult.branch})`,
-      async () => createSharedClone(defaultCwd, {
-        worktree: data.worktree!,
-        branch: data.branch,
-        taskSlug,
-        issueNumber: data.issue,
-      }),
-    );
-    throwIfAborted(abortSignal);
-    execCwd = result.path;
-    branch = result.branch;
-    worktreePath = result.path;
-    isWorktree = true;
+    if (task.worktreePath && fs.existsSync(task.worktreePath)) {
+      // Reuse existing worktree (clone still on disk from previous execution)
+      execCwd = task.worktreePath;
+      branch = data.branch;
+      worktreePath = task.worktreePath;
+      isWorktree = true;
+    } else {
+      const taskSlug = await withProgress(
+        'Generating branch name...',
+        (slug) => `Branch name generated: ${slug}`,
+        () => summarizeTaskName(task.content, { cwd: defaultCwd }),
+      );
+
+      throwIfAborted(abortSignal);
+      const result = await withProgress(
+        'Creating clone...',
+        (cloneResult) => `Clone created: ${cloneResult.path} (branch: ${cloneResult.branch})`,
+        async () => createSharedClone(defaultCwd, {
+          worktree: data.worktree!,
+          branch: data.branch,
+          taskSlug,
+          issueNumber: data.issue,
+        }),
+      );
+      throwIfAborted(abortSignal);
+      execCwd = result.path;
+      branch = result.branch;
+      worktreePath = result.path;
+      isWorktree = true;
+    }
   }
 
   if (task.taskDir && reportDirName) {
@@ -132,8 +141,7 @@ export async function resolveTaskExecution(
   if (data.auto_pr !== undefined) {
     autoPr = data.auto_pr;
   } else {
-    const globalConfig = loadGlobalConfig();
-    autoPr = globalConfig.autoPr ?? false;
+    autoPr = resolvePieceConfigValue(defaultCwd, 'autoPr') ?? false;
   }
 
   return {

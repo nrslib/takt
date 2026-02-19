@@ -16,8 +16,6 @@ export {
   resolveOpenaiApiKey,
   resolveCodexCliPath,
   resolveOpencodeApiKey,
-  loadProjectDebugConfig,
-  getEffectiveDebugConfig,
 } from './globalConfig.js';
 
 export {
@@ -31,6 +29,11 @@ export {
   getPieceCategoriesPath,
   resetPieceCategories,
 } from './pieceCategories.js';
+
+export {
+  resetGlobalConfigToTemplate,
+  type ResetGlobalConfigResult,
+} from './resetConfig.js';
 
 export {
   needsLanguageSetup,

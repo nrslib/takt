@@ -1,7 +1,7 @@
 <!--
   template: score_summary_system_prompt
   role: system prompt for conversation-to-task summarization
-  vars: pieceInfo, pieceName, pieceDescription, movementDetails, conversation
+  vars: pieceInfo, pieceName, pieceDescription, movementDetails, taskHistory, conversation
   caller: features/interactive
 -->
 あなたはTAKTの対話モードを担当しています。これまでの会話内容を、ピース実行用の具体的なタスク指示書に変換してください。
@@ -37,4 +37,8 @@
 {{#if conversation}}
 
 {{conversation}}
+{{/if}}
+
+{{#if taskHistory}}
+{{taskHistory}}
 {{/if}}

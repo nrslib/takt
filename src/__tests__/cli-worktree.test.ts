@@ -62,12 +62,10 @@ vi.mock('../infra/config/index.js', () => ({
   initGlobalDirs: vi.fn(),
   initProjectDirs: vi.fn(),
   loadGlobalConfig: vi.fn(() => ({ logLevel: 'info' })),
-  getEffectiveDebugConfig: vi.fn(),
 }));
 
 vi.mock('../infra/config/paths.js', () => ({
   clearPersonaSessions: vi.fn(),
-  getCurrentPiece: vi.fn(() => 'default'),
   isVerboseMode: vi.fn(() => false),
 }));
 

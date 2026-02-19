@@ -16,8 +16,8 @@ function createMovement(overrides: Partial<PieceMovement> = {}): PieceMovement {
 function createBuilder(step: PieceMovement, engineOverrides: Partial<PieceEngineOptions> = {}): OptionsBuilder {
   const engineOptions: PieceEngineOptions = {
     projectCwd: '/project',
-    globalProvider: 'codex',
-    globalProviderProfiles: {
+    provider: 'codex',
+    providerProfiles: {
       codex: {
         defaultPermissionMode: 'full',
       },
@@ -60,14 +60,56 @@ describe('OptionsBuilder.buildBaseOptions', () => {
   it('uses default profile when provider_profiles are not provided', () => {
     const step = createMovement();
     const builder = createBuilder(step, {
-      globalProvider: undefined,
-      globalProviderProfiles: undefined,
-      projectProvider: undefined,
       provider: undefined,
+      providerProfiles: undefined,
     });
 
     const options = builder.buildBaseOptions(step);
     expect(options.permissionMode).toBe('edit');
+  });
+
+  it('merges provider options with precedence: global < project < movement', () => {
+    const step = createMovement({
+      providerOptions: {
+        codex: { networkAccess: false },
+        claude: { sandbox: { excludedCommands: ['./gradlew'] } },
+      },
+    });
+    const builder = createBuilder(step, {
+      providerOptions: {
+        codex: { networkAccess: true },
+        claude: { sandbox: { allowUnsandboxedCommands: true } },
+        opencode: { networkAccess: true },
+      },
+    });
+
+    const options = builder.buildBaseOptions(step);
+
+    expect(options.providerOptions).toEqual({
+      codex: { networkAccess: false },
+      opencode: { networkAccess: true },
+      claude: {
+        sandbox: {
+          allowUnsandboxedCommands: true,
+          excludedCommands: ['./gradlew'],
+        },
+      },
+    });
+  });
+
+  it('falls back to global/project provider options when movement has none', () => {
+    const step = createMovement();
+    const builder = createBuilder(step, {
+      providerOptions: {
+        codex: { networkAccess: false },
+      },
+    });
+
+    const options = builder.buildBaseOptions(step);
+
+    expect(options.providerOptions).toEqual({
+      codex: { networkAccess: false },
+    });
   });
 });
 

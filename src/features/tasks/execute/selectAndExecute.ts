@@ -101,7 +101,7 @@ export async function selectAndExecuteTask(
   // Ask for PR creation BEFORE execution (only if worktree is enabled)
   let shouldCreatePr = false;
   if (isWorktree) {
-    shouldCreatePr = await resolveAutoPr(options?.autoPr);
+    shouldCreatePr = await resolveAutoPr(options?.autoPr, cwd);
   }
 
   log.info('Starting task execution', { piece: pieceIdentifier, worktree: isWorktree, autoPr: shouldCreatePr });

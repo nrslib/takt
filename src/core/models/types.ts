@@ -62,7 +62,6 @@ export type {
 // Configuration types (global and project)
 export type {
   CustomAgentConfig,
-  DebugConfig,
   ObservabilityConfig,
   Language,
   PipelineConfig,

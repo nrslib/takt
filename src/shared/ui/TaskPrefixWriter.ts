@@ -21,6 +21,10 @@ const RESET = '\x1b[0m';
 export interface TaskPrefixWriterOptions {
   /** Task name used in the prefix */
   taskName: string;
+  /** Optional pre-computed label used in the prefix (overrides taskName truncation). */
+  displayLabel?: string;
+  /** Optional issue number used in the prefix (overrides taskName and display label). */
+  issue?: number;
   /** Color index for the prefix (cycled mod 4) */
   colorIndex: number;
   /** Override process.stdout.write for testing */
@@ -49,7 +53,8 @@ export class TaskPrefixWriter {
 
   constructor(options: TaskPrefixWriterOptions) {
     const color = TASK_COLORS[options.colorIndex % TASK_COLORS.length];
-    const taskLabel = options.taskName.slice(0, 4);
+    const issueLabel = options.issue == null ? undefined : `#${options.issue}`;
+    const taskLabel = issueLabel ?? options.displayLabel ?? options.taskName.slice(0, 4);
     this.taskPrefix = `${color}[${taskLabel}]${RESET}`;
     this.writeFn = options.writeFn ?? ((text: string) => process.stdout.write(text));
   }

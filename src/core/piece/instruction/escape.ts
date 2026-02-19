@@ -2,17 +2,16 @@
  * Template escaping and placeholder replacement utilities
  *
  * Used by instruction builders to process instruction_template content.
+ *
+ * escapeTemplateChars is re-exported from faceted-prompting.
+ * replaceTemplatePlaceholders is TAKT-specific and stays here.
  */
 
 import type { PieceMovement } from '../../models/types.js';
 import type { InstructionContext } from './instruction-context.js';
+import { escapeTemplateChars } from '../../../faceted-prompting/index.js';
 
-/**
- * Escape special characters in dynamic content to prevent template injection.
- */
-export function escapeTemplateChars(str: string): string {
-  return str.replace(/\{/g, '｛').replace(/\}/g, '｝');
-}
+export { escapeTemplateChars } from '../../../faceted-prompting/index.js';
 
 /**
  * Replace template placeholders in the instruction_template body.

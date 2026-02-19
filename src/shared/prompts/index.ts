@@ -7,12 +7,18 @@
  *
  * Templates are organized in language subdirectories:
  *   {lang}/{name}.md  — localized templates
+ *
+ * Template engine functions (processConditionals, substituteVariables,
+ * renderTemplate) are delegated to faceted-prompting.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Language } from '../../core/models/types.js';
+import { renderTemplate } from '../../faceted-prompting/index.js';
+
+export { renderTemplate } from '../../faceted-prompting/index.js';
 
 /** Cached raw template text (before variable substitution) */
 const templateCache = new Map<string, string>();
@@ -54,66 +60,6 @@ function readTemplate(filePath: string): string {
   const content = stripMetaComments(raw);
   templateCache.set(filePath, content);
   return content;
-}
-
-/**
- * Process {{#if variable}}...{{else}}...{{/if}} conditional blocks.
- *
- * A variable is truthy when:
- * - It is a non-empty string
- * - It is boolean true
- *
- * Nesting is NOT supported (per architecture decision).
- */
-function processConditionals(
-  template: string,
-  vars: Record<string, string | boolean>,
-): string {
-  // Pattern: {{#if varName}}...content...{{else}}...altContent...{{/if}}
-  // or:      {{#if varName}}...content...{{/if}}
-  return template.replace(
-    /\{\{#if\s+(\w+)\}\}([\s\S]*?)\{\{\/if\}\}/g,
-    (_match, varName: string, body: string): string => {
-      const value = vars[varName];
-      const isTruthy = value !== undefined && value !== false && value !== '';
-
-      const elseIndex = body.indexOf('{{else}}');
-      if (isTruthy) {
-        return elseIndex >= 0 ? body.slice(0, elseIndex) : body;
-      }
-      return elseIndex >= 0 ? body.slice(elseIndex + '{{else}}'.length) : '';
-    },
-  );
-}
-
-/**
- * Replace {{variableName}} placeholders with values from vars.
- * Undefined variables are replaced with empty string.
- */
-function substituteVariables(
-  template: string,
-  vars: Record<string, string | boolean>,
-): string {
-  return template.replace(
-    /\{\{(\w+)\}\}/g,
-    (_match, varName: string) => {
-      const value = vars[varName];
-      if (value === undefined || value === false) return '';
-      if (value === true) return 'true';
-      return value;
-    },
-  );
-}
-
-/**
- * Render a template string by processing conditionals then substituting variables.
- */
-export function renderTemplate(
-  template: string,
-  vars: Record<string, string | boolean>,
-): string {
-  const afterConditionals = processConditionals(template, vars);
-  return substituteVariables(afterConditionals, vars);
 }
 
 /**

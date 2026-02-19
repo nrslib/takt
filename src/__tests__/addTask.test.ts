@@ -114,6 +114,7 @@ describe('addTask', () => {
     expect(task.task_dir).toBeTypeOf('string');
     expect(readOrderContent(testDir, task.task_dir)).toContain('JWT認証を実装する');
     expect(task.piece).toBe('default');
+    expect(task.worktree).toBe(true);
   });
 
   it('should include worktree settings when enabled', async () => {
@@ -125,6 +126,7 @@ describe('addTask', () => {
     const task = loadTasks(testDir).tasks[0]!;
     expect(task.worktree).toBe('/custom/path');
     expect(task.branch).toBe('feat/branch');
+    expect(task.auto_pr).toBe(true);
   });
 
   it('should create task from issue reference without interactive mode', async () => {

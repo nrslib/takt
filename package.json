@@ -1,6 +1,6 @@
 {
   "name": "takt",
-  "version": "0.18.2",
+  "version": "0.19.0",
   "description": "TAKT: TAKT Agent Koordination Topology - AI Agent Piece Orchestration",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -25,6 +25,7 @@
     "test:e2e:codex": "npm run test:e2e:provider:codex",
     "test:e2e:opencode": "npm run test:e2e:provider:opencode",
     "lint": "eslint src/",
+    "check:release": "npm run build && npm run lint && npm run test && npm run test:e2e",
     "prepublishOnly": "npm run lint && npm run build && npm run test"
   },
   "keywords": [

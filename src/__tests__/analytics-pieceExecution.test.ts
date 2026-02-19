@@ -1,9 +1,8 @@
 /**
  * Tests for analytics integration in pieceExecution.
  *
- * Validates the analytics initialization logic (debug.enabled gate,
- * analytics.enabled override) and event firing for review_finding
- * and fix_action events.
+ * Validates the analytics initialization logic (analytics.enabled gate)
+ * and event firing for review_finding and fix_action events.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -16,13 +15,11 @@ import {
   isAnalyticsEnabled,
   writeAnalyticsEvent,
 } from '../features/analytics/index.js';
-import { resolveEventsDir } from '../features/analytics/index.js';
 import type {
   MovementResultEvent,
   ReviewFindingEvent,
   FixActionEvent,
 } from '../features/analytics/index.js';
-import type { GlobalConfig } from '../core/models/index.js';
 
 describe('pieceExecution analytics initialization', () => {
   let testDir: string;
@@ -38,78 +35,23 @@ describe('pieceExecution analytics initialization', () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  it('should enable analytics when debug.enabled=true and analytics.enabled is undefined', () => {
-    const globalConfig = {
-      debug: { enabled: true },
-      analytics: { eventsPath: testDir },
-    };
-    const debugEnabled = globalConfig.debug?.enabled === true;
-    const analyticsEnabled = debugEnabled && globalConfig.analytics?.enabled !== false;
-
+  it('should enable analytics when analytics.enabled=true', () => {
+    const analyticsEnabled = true;
     initAnalyticsWriter(analyticsEnabled, testDir);
-
     expect(isAnalyticsEnabled()).toBe(true);
   });
 
-  it('should disable analytics when debug.enabled=true but analytics.enabled=false', () => {
-    const globalConfig = {
-      debug: { enabled: true },
-      analytics: { enabled: false, eventsPath: testDir },
-    };
-    const debugEnabled = globalConfig.debug?.enabled === true;
-    const analyticsEnabled = debugEnabled && globalConfig.analytics?.enabled !== false;
-
+  it('should disable analytics when analytics.enabled=false', () => {
+    const analyticsEnabled = false;
     initAnalyticsWriter(analyticsEnabled, testDir);
-
     expect(isAnalyticsEnabled()).toBe(false);
   });
 
-  it('should disable analytics when debug.enabled=false', () => {
-    const globalConfig = {
-      debug: { enabled: false },
-      analytics: { eventsPath: testDir },
-    };
-    const debugEnabled = globalConfig.debug?.enabled === true;
-    const analyticsEnabled = debugEnabled && globalConfig.analytics?.enabled !== false;
-
+  it('should disable analytics when analytics is undefined', () => {
+    const analytics = undefined;
+    const analyticsEnabled = analytics?.enabled === true;
     initAnalyticsWriter(analyticsEnabled, testDir);
-
     expect(isAnalyticsEnabled()).toBe(false);
-  });
-
-  it('should disable analytics when debug is undefined', () => {
-    const globalConfig = {
-      analytics: { eventsPath: testDir },
-    };
-    const debugEnabled = globalConfig.debug?.enabled === true;
-    const analyticsEnabled = debugEnabled && (globalConfig as { analytics?: { enabled?: boolean } }).analytics?.enabled !== false;
-
-    initAnalyticsWriter(analyticsEnabled, testDir);
-
-    expect(isAnalyticsEnabled()).toBe(false);
-  });
-
-  it('should resolve eventsDir correctly from GlobalConfig', () => {
-    const config: GlobalConfig = {
-      language: 'en',
-      defaultPiece: 'default',
-      logLevel: 'info',
-      analytics: { eventsPath: '/custom/events' },
-    };
-
-    expect(resolveEventsDir(config)).toBe('/custom/events');
-  });
-
-  it('should resolve default eventsDir when analytics.eventsPath is not set', () => {
-    const config: GlobalConfig = {
-      language: 'en',
-      defaultPiece: 'default',
-      logLevel: 'info',
-    };
-
-    const dir = resolveEventsDir(config);
-    expect(dir).toContain('analytics');
-    expect(dir).toContain('events');
   });
 });
 
