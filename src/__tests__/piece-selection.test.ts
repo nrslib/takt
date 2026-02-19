@@ -39,8 +39,8 @@ const configMock = vi.hoisted(() => ({
   loadAllPiecesWithSources: vi.fn(),
   getPieceCategories: vi.fn(),
   buildCategorizedPieces: vi.fn(),
+  getCurrentPiece: vi.fn(),
   resolveConfigValue: vi.fn(),
-  findPieceCategories: vi.fn(() => []),
 }));
 
 vi.mock('../infra/config/index.js', () => configMock);
@@ -241,6 +241,65 @@ describe('selectPieceFromCategorizedPieces', () => {
     expect(labels.some((l) => l.includes('base-piece'))).toBe(true);
     // Should NOT contain the parent category again
     expect(labels.some((l) => l.includes('Dev'))).toBe(false);
+  });
+
+  it('should navigate into builtin wrapper category and select a piece', async () => {
+    const categorized: CategorizedPieces = {
+      categories: [
+        { name: 'My Team', pieces: ['custom'], children: [] },
+        {
+          name: 'builtin',
+          pieces: [],
+          children: [
+            { name: 'Quick Start', pieces: ['default'], children: [] },
+          ],
+        },
+      ],
+      allPieces: createPieceMap([
+        { name: 'custom', source: 'user' },
+        { name: 'default', source: 'builtin' },
+      ]),
+      missingPieces: [],
+    };
+
+    // Select builtin category → Quick Start subcategory → piece
+    selectOptionMock
+      .mockResolvedValueOnce('__custom_category__:builtin')
+      .mockResolvedValueOnce('__category__:Quick Start')
+      .mockResolvedValueOnce('default');
+
+    const selected = await selectPieceFromCategorizedPieces(categorized, '');
+    expect(selected).toBe('default');
+    expect(selectOptionMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('should show builtin wrapper as a folder in top-level options', async () => {
+    const categorized: CategorizedPieces = {
+      categories: [
+        { name: 'My Team', pieces: ['custom'], children: [] },
+        {
+          name: 'builtin',
+          pieces: [],
+          children: [
+            { name: 'Quick Start', pieces: ['default'], children: [] },
+          ],
+        },
+      ],
+      allPieces: createPieceMap([
+        { name: 'custom', source: 'user' },
+        { name: 'default', source: 'builtin' },
+      ]),
+      missingPieces: [],
+    };
+
+    selectOptionMock.mockResolvedValueOnce(null);
+
+    await selectPieceFromCategorizedPieces(categorized, '');
+
+    const firstCallOptions = selectOptionMock.mock.calls[0]![1] as { label: string; value: string }[];
+    const labels = firstCallOptions.map((o) => o.label);
+    expect(labels.some((l) => l.includes('My Team'))).toBe(true);
+    expect(labels.some((l) => l.includes('builtin'))).toBe(true);
   });
 });
 
