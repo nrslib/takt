@@ -23,6 +23,16 @@ export interface ObservabilityConfig {
   providerEvents?: boolean;
 }
 
+/** Analytics configuration for local metrics collection */
+export interface AnalyticsConfig {
+  /** Whether analytics collection is enabled */
+  enabled?: boolean;
+  /** Custom path for analytics events directory (default: ~/.takt/analytics/events) */
+  eventsPath?: string;
+  /** Retention period in days for analytics event files (default: 30) */
+  retentionDays?: number;
+}
+
 /** Language setting for takt */
 export type Language = 'en' | 'ja';
 
@@ -57,6 +67,7 @@ export interface GlobalConfig {
   provider?: 'claude' | 'codex' | 'opencode' | 'mock';
   model?: string;
   observability?: ObservabilityConfig;
+  analytics?: AnalyticsConfig;
   /** Directory for shared clones (worktree_dir in config). If empty, uses ../{clone-name} relative to project */
   worktreeDir?: string;
   /** Auto-create PR after worktree execution (default: prompt in interactive mode) */

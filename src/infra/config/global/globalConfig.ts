@@ -164,6 +164,11 @@ export class GlobalConfigManager {
       observability: parsed.observability ? {
         providerEvents: parsed.observability.provider_events,
       } : undefined,
+      analytics: parsed.analytics ? {
+        enabled: parsed.analytics.enabled,
+        eventsPath: parsed.analytics.events_path,
+        retentionDays: parsed.analytics.retention_days,
+      } : undefined,
       worktreeDir: parsed.worktree_dir,
       autoPr: parsed.auto_pr,
       disabledBuiltins: parsed.disabled_builtins,
@@ -221,6 +226,15 @@ export class GlobalConfigManager {
       raw.observability = {
         provider_events: config.observability.providerEvents,
       };
+    }
+    if (config.analytics) {
+      const analyticsRaw: Record<string, unknown> = {};
+      if (config.analytics.enabled !== undefined) analyticsRaw.enabled = config.analytics.enabled;
+      if (config.analytics.eventsPath) analyticsRaw.events_path = config.analytics.eventsPath;
+      if (config.analytics.retentionDays !== undefined) analyticsRaw.retention_days = config.analytics.retentionDays;
+      if (Object.keys(analyticsRaw).length > 0) {
+        raw.analytics = analyticsRaw;
+      }
     }
     if (config.worktreeDir) {
       raw.worktree_dir = config.worktreeDir;

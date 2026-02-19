@@ -17,6 +17,27 @@ vi.mock('../infra/config/loadConfig.js', () => ({
   loadConfig: loadConfigMock,
 }));
 
+vi.mock('../infra/config/resolvePieceConfigValue.js', () => ({
+  resolvePieceConfigValue: (_projectDir: string, key: string) => {
+    const loaded = loadConfigMock() as Record<string, Record<string, unknown>>;
+    const global = loaded?.global ?? {};
+    const project = loaded?.project ?? {};
+    const merged: Record<string, unknown> = { ...global, ...project };
+    return merged[key];
+  },
+  resolvePieceConfigValues: (_projectDir: string, keys: readonly string[]) => {
+    const loaded = loadConfigMock() as Record<string, Record<string, unknown>>;
+    const global = loaded?.global ?? {};
+    const project = loaded?.project ?? {};
+    const merged: Record<string, unknown> = { ...global, ...project };
+    const result: Record<string, unknown> = {};
+    for (const key of keys) {
+      result[key] = merged[key];
+    }
+    return result;
+  },
+}));
+
 const { getPieceCategoriesPath, resetPieceCategories } = await import(
   '../infra/config/global/pieceCategories.js'
 );

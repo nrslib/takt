@@ -29,6 +29,17 @@ vi.mock('../infra/config/index.js', () => ({
       project: { piece: 'default' },
     };
   },
+  resolvePieceConfigValues: (_projectDir: string, keys: readonly string[]) => {
+    const raw = mockLoadConfigRaw() as Record<string, unknown>;
+    const config = ('global' in raw && 'project' in raw)
+      ? { ...raw.global as Record<string, unknown>, ...raw.project as Record<string, unknown> }
+      : { ...raw, piece: 'default', provider: 'claude', verbose: false };
+    const result: Record<string, unknown> = {};
+    for (const key of keys) {
+      result[key] = config[key];
+    }
+    return result;
+  },
 }));
 
 const mockLoadConfig = mockLoadConfigRaw;

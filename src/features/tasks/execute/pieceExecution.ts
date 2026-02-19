@@ -3,6 +3,7 @@
  */
 
 import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { PieceEngine, type IterationLimitRequest, type UserInputRequest } from '../../../core/piece/index.js';
 import type { PieceConfig } from '../../../core/models/index.js';
 import type { PieceExecutionResult, PieceExecutionOptions } from './types.js';
@@ -72,6 +73,17 @@ import { buildRunPaths } from '../../../core/piece/run/run-paths.js';
 import { resolveMovementProviderModel } from '../../../core/piece/provider-resolution.js';
 import { resolveRuntimeConfig } from '../../../core/runtime/runtime-environment.js';
 import { writeFileAtomic, ensureDir } from '../../../infra/config/index.js';
+import { getGlobalConfigDir } from '../../../infra/config/paths.js';
+import {
+  initAnalyticsWriter,
+  writeAnalyticsEvent,
+  parseFindingsFromReport,
+  extractDecisionFromReport,
+  inferSeverity,
+  emitFixActionEvents,
+  emitRebuttalEvents,
+} from '../../analytics/index.js';
+import type { MovementResultEvent, ReviewFindingEvent } from '../../analytics/index.js';
 
 const log = createLogger('piece');
 
@@ -319,7 +331,7 @@ export async function executePiece(
   const isWorktree = cwd !== projectCwd;
   const globalConfig = resolvePieceConfigValues(
     projectCwd,
-    ['notificationSound', 'notificationSoundEvents', 'provider', 'runtime', 'preventSleep', 'model', 'observability'],
+    ['notificationSound', 'notificationSoundEvents', 'provider', 'runtime', 'preventSleep', 'model', 'observability', 'analytics'],
   );
   const shouldNotify = globalConfig.notificationSound !== false;
   const notificationSoundEvents = globalConfig.notificationSoundEvents;
@@ -339,6 +351,11 @@ export async function executePiece(
     movement: options.startMovement ?? pieceConfig.initialMovement,
     enabled: isProviderEventsEnabled(globalConfig),
   });
+
+  const analyticsEnabled = globalConfig.analytics?.enabled === true;
+  const eventsDir = globalConfig.analytics?.eventsPath
+    ?? join(getGlobalConfigDir(), 'analytics', 'events');
+  initAnalyticsWriter(analyticsEnabled, eventsDir);
 
   // Prevent macOS idle sleep if configured
   if (globalConfig.preventSleep) {
@@ -427,6 +444,8 @@ export async function executePiece(
   let lastMovementContent: string | undefined;
   let lastMovementName: string | undefined;
   let currentIteration = 0;
+  let currentMovementProvider = currentProvider;
+  let currentMovementModel = globalConfig.model ?? '(default)';
   const phasePrompts = new Map<string, string>();
   const movementIterations = new Map<string, number>();
   let engine: PieceEngine | null = null;
@@ -530,6 +549,8 @@ export async function executePiece(
     });
     const movementProvider = resolved.provider ?? currentProvider;
     const movementModel = resolved.model ?? globalConfig.model ?? '(default)';
+    currentMovementProvider = movementProvider;
+    currentMovementModel = movementModel;
     providerEventLogger.setMovement(step.name);
     providerEventLogger.setProvider(movementProvider);
     out.info(`Provider: ${movementProvider}`);
@@ -628,15 +649,60 @@ export async function executePiece(
     };
     appendNdjsonLine(ndjsonLogPath, record);
 
+    const decisionTag = (response.matchedRuleIndex != null && step.rules)
+      ? (step.rules[response.matchedRuleIndex]?.condition ?? response.status)
+      : response.status;
+    const movementResultEvent: MovementResultEvent = {
+      type: 'movement_result',
+      movement: step.name,
+      provider: currentMovementProvider,
+      model: currentMovementModel,
+      decisionTag,
+      iteration: currentIteration,
+      runId: runSlug,
+      timestamp: response.timestamp.toISOString(),
+    };
+    writeAnalyticsEvent(movementResultEvent);
+
+    if (step.edit === true && step.name.includes('fix')) {
+      emitFixActionEvents(response.content, currentIteration, runSlug, response.timestamp);
+    }
+
+    if (step.name.includes('no_fix')) {
+      emitRebuttalEvents(response.content, currentIteration, runSlug, response.timestamp);
+    }
 
     // Update in-memory log for pointer metadata (immutable)
     sessionLog = { ...sessionLog, iterations: sessionLog.iterations + 1 };
   });
 
-    engine.on('movement:report', (_step, filePath, fileName) => {
+    engine.on('movement:report', (step, filePath, fileName) => {
     const content = readFileSync(filePath, 'utf-8');
     out.logLine(`\n📄 Report: ${fileName}\n`);
     out.logLine(content);
+
+    if (step.edit === false) {
+      const decision = extractDecisionFromReport(content);
+      if (decision) {
+        const findings = parseFindingsFromReport(content);
+        for (const finding of findings) {
+          const event: ReviewFindingEvent = {
+            type: 'review_finding',
+            findingId: finding.findingId,
+            status: finding.status,
+            ruleId: finding.ruleId,
+            severity: inferSeverity(finding.findingId),
+            decision,
+            file: finding.file,
+            line: finding.line,
+            iteration: currentIteration,
+            runId: runSlug,
+            timestamp: new Date().toISOString(),
+          };
+          writeAnalyticsEvent(event);
+        }
+      }
+    }
   });
 
     engine.on('piece:complete', (state) => {

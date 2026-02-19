@@ -378,6 +378,13 @@ export const ObservabilityConfigSchema = z.object({
   provider_events: z.boolean().optional(),
 });
 
+/** Analytics config schema */
+export const AnalyticsConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  events_path: z.string().optional(),
+  retention_days: z.number().int().positive().optional(),
+});
+
 /** Language setting schema */
 export const LanguageSchema = z.enum(['en', 'ja']);
 
@@ -409,6 +416,7 @@ export const GlobalConfigSchema = z.object({
   provider: z.enum(['claude', 'codex', 'opencode', 'mock']).optional().default('claude'),
   model: z.string().optional(),
   observability: ObservabilityConfigSchema.optional(),
+  analytics: AnalyticsConfigSchema.optional(),
   /** Directory for shared clones (worktree_dir in config). If empty, uses ../{clone-name} relative to project */
   worktree_dir: z.string().optional(),
   /** Auto-create PR after worktree execution (default: prompt in interactive mode) */
