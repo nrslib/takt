@@ -3,6 +3,7 @@
  */
 
 import type { Language } from '../../../core/models/index.js';
+import type { PersonaProviderEntry } from '../../../core/models/global-config.js';
 import type { ProviderPermissionProfiles } from '../../../core/models/provider-profiles.js';
 import type { MovementProviderOptions } from '../../../core/models/piece-types.js';
 import type { ProviderType } from '../../../infra/providers/index.js';
@@ -36,8 +37,8 @@ export interface PieceExecutionOptions {
   model?: string;
   /** Resolved provider options */
   providerOptions?: MovementProviderOptions;
-  /** Per-persona provider overrides (e.g., { coder: 'codex' }) */
-  personaProviders?: Record<string, ProviderType>;
+  /** Per-persona provider and model overrides (e.g., { coder: { provider: 'codex', model: 'o3-mini' } }) */
+  personaProviders?: Record<string, PersonaProviderEntry>;
   /** Resolved provider permission profiles */
   providerProfiles?: ProviderPermissionProfiles;
   /** Enable interactive user input during step transitions */

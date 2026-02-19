@@ -5,6 +5,11 @@
 import type { MovementProviderOptions, PieceRuntimeConfig } from './piece-types.js';
 import type { ProviderPermissionProfiles } from './provider-profiles.js';
 
+export interface PersonaProviderEntry {
+  provider?: 'claude' | 'codex' | 'opencode' | 'mock';
+  model?: string;
+}
+
 /** Custom agent configuration */
 export interface CustomAgentConfig {
   name: string;
@@ -92,8 +97,8 @@ export interface GlobalConfig {
   bookmarksFile?: string;
   /** Path to piece categories file (default: ~/.takt/preferences/piece-categories.yaml) */
   pieceCategoriesFile?: string;
-  /** Per-persona provider overrides (e.g., { coder: 'codex' }) */
-  personaProviders?: Record<string, 'claude' | 'codex' | 'opencode' | 'mock'>;
+  /** Per-persona provider and model overrides (e.g., { coder: { provider: 'codex', model: 'o3-mini' } }) */
+  personaProviders?: Record<string, PersonaProviderEntry>;
   /** Global provider-specific options (lowest priority) */
   providerOptions?: MovementProviderOptions;
   /** Provider-specific permission profiles */

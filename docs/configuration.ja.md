@@ -34,11 +34,14 @@ interactive_preview_movements: 3  # インタラクティブモードでの move
 #     - gradle    # .runtime/ に Gradle キャッシュ/設定を準備
 #     - node      # .runtime/ に npm キャッシュを準備
 
-# persona ごとの provider 上書き（省略可）
-# piece を複製せずに特定の persona を別の provider にルーティング
+# persona ごとの provider / model 上書き（省略可）
+# piece を複製せずに特定の persona を別の provider / model にルーティング
 # persona_providers:
-#   coder: codex             # coder を Codex で実行
-#   ai-antipattern-reviewer: claude  # レビュアーは Claude のまま
+#   coder:
+#     provider: codex        # coder を Codex で実行
+#     model: o3-mini         # 使用モデル（省略可）
+#   ai-antipattern-reviewer:
+#     provider: claude       # レビュアーは Claude のまま
 
 # provider 固有のパーミッションプロファイル（省略可）
 # 優先順位: プロジェクト上書き > グローバル上書き > プロジェクトデフォルト > グローバルデフォルト > required_permission_mode（下限）
@@ -97,7 +100,7 @@ interactive_preview_movements: 3  # インタラクティブモードでの move
 | `verbose` | boolean | - | 詳細出力モード |
 | `minimal_output` | boolean | `false` | AI 出力を抑制（CI 向け） |
 | `runtime` | object | - | ランタイム環境デフォルト（例: `prepare: [gradle, node]`） |
-| `persona_providers` | object | - | persona ごとの provider 上書き（例: `coder: codex`） |
+| `persona_providers` | object | - | persona ごとの provider / model 上書き（例: `coder: { provider: codex, model: o3-mini }`） |
 | `provider_options` | object | - | グローバルな provider 固有オプション |
 | `provider_profiles` | object | - | provider 固有のパーミッションプロファイル |
 | `anthropic_api_key` | string | - | Claude 用 Anthropic API キー |
@@ -286,16 +289,21 @@ movement の `required_permission_mode` は最低限の下限を設定します�
 
 ### Persona Provider
 
-piece を複製せずに、特定の persona を別の provider にルーティングできます。
+piece を複製せずに、特定の persona を別の provider や model にルーティングできます。
 
 ```yaml
 # ~/.takt/config.yaml
 persona_providers:
-  coder: codex             # coder persona を Codex で実行
-  ai-antipattern-reviewer: claude  # レビュアーは Claude のまま
+  coder:
+    provider: codex        # coder persona を Codex で実行
+    model: o3-mini         # 使用モデル（省略可）
+  ai-antipattern-reviewer:
+    provider: claude       # レビュアーは Claude のまま
 ```
 
-これにより、単一の piece 内で provider を混在させることができます。persona 名は movement 定義の `persona` キーに対してマッチされます。
+`provider` と `model` はいずれも省略可能です。`model` の解決優先度: movement YAML の `model` > `persona_providers[persona].model` > グローバル `model`。
+
+これにより、単一の piece 内で provider や model を混在させることができます。persona 名は movement 定義の `persona` キーに対してマッチされます。
 
 ## Piece カテゴリ
 

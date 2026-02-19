@@ -10,6 +10,7 @@ import { isAbsolute } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { GlobalConfigSchema } from '../../../core/models/index.js';
 import type { GlobalConfig, Language } from '../../../core/models/index.js';
+import type { PersonaProviderEntry } from '../../../core/models/global-config.js';
 import type { ProviderPermissionProfiles } from '../../../core/models/provider-profiles.js';
 import { normalizeProviderOptions } from '../loaders/pieceParser.js';
 import { getGlobalConfigPath } from '../paths.js';
@@ -56,7 +57,6 @@ function validateCodexCliPath(pathValue: string, sourceName: 'TAKT_CODEX_CLI_PAT
   return trimmed;
 }
 
-/** Validate that provider and model are compatible */
 function validateProviderModelCompatibility(provider: string | undefined, model: string | undefined): void {
   if (!provider) return;
 
@@ -78,6 +78,19 @@ function validateProviderModelCompatibility(provider: string | undefined, model:
   if (provider === 'opencode') {
     parseProviderModel(model, "Configuration error: model");
   }
+}
+
+function normalizePersonaProviders(
+  raw: Record<string, NonNullable<PersonaProviderEntry['provider']> | PersonaProviderEntry> | undefined,
+): Record<string, PersonaProviderEntry> | undefined {
+  if (!raw) return undefined;
+  return Object.fromEntries(
+    Object.entries(raw).map(([persona, entry]) => {
+      const normalized: PersonaProviderEntry = typeof entry === 'string' ? { provider: entry } : entry;
+      validateProviderModelCompatibility(normalized.provider, normalized.model);
+      return [persona, normalized];
+    }),
+  );
 }
 
 function normalizeProviderProfiles(
@@ -185,7 +198,7 @@ export class GlobalConfigManager {
       minimalOutput: parsed.minimal_output,
       bookmarksFile: parsed.bookmarks_file,
       pieceCategoriesFile: parsed.piece_categories_file,
-      personaProviders: parsed.persona_providers,
+      personaProviders: normalizePersonaProviders(parsed.persona_providers as Record<string, NonNullable<PersonaProviderEntry['provider']> | PersonaProviderEntry> | undefined),
       providerOptions: normalizeProviderOptions(parsed.provider_options),
       providerProfiles: normalizeProviderProfiles(parsed.provider_profiles as Record<string, { default_permission_mode: unknown; movement_permission_overrides?: Record<string, unknown> }> | undefined),
       runtime: parsed.runtime?.prepare && parsed.runtime.prepare.length > 0

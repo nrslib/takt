@@ -7,6 +7,7 @@
 
 import type { PermissionResult, PermissionUpdate } from '@anthropic-ai/claude-agent-sdk';
 import type { PieceMovement, AgentResponse, PieceState, Language, LoopMonitorConfig } from '../models/types.js';
+import type { PersonaProviderEntry } from '../models/global-config.js';
 import type { ProviderPermissionProfiles } from '../models/provider-profiles.js';
 import type { MovementProviderOptions } from '../models/piece-types.js';
 
@@ -182,8 +183,8 @@ export interface PieceEngineOptions {
   model?: string;
   /** Resolved provider options */
   providerOptions?: MovementProviderOptions;
-  /** Per-persona provider overrides (e.g., { coder: 'codex' }) */
-  personaProviders?: Record<string, ProviderType>;
+  /** Per-persona provider and model overrides (e.g., { coder: { provider: 'codex', model: 'o3-mini' } }) */
+  personaProviders?: Record<string, PersonaProviderEntry>;
   /** Resolved provider permission profiles */
   providerProfiles?: ProviderPermissionProfiles;
   /** Enable interactive-only rules and user-input transitions */

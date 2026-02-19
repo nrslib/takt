@@ -34,11 +34,14 @@ interactive_preview_movements: 3  # Movement previews in interactive mode (0-10,
 #     - gradle    # Prepare Gradle cache/config in .runtime/
 #     - node      # Prepare npm cache in .runtime/
 
-# Per-persona provider overrides (optional)
-# Route specific personas to different providers without duplicating pieces
+# Per-persona provider/model overrides (optional)
+# Route specific personas to different providers and models without duplicating pieces
 # persona_providers:
-#   coder: codex             # Run coder on Codex
-#   ai-antipattern-reviewer: claude  # Keep reviewers on Claude
+#   coder:
+#     provider: codex        # Run coder on Codex
+#     model: o3-mini         # Use o3-mini model (optional)
+#   ai-antipattern-reviewer:
+#     provider: claude       # Keep reviewers on Claude
 
 # Provider-specific permission profiles (optional)
 # Priority: project override > global override > project default > global default > required_permission_mode (floor)
@@ -97,7 +100,7 @@ interactive_preview_movements: 3  # Movement previews in interactive mode (0-10,
 | `verbose` | boolean | - | Verbose output mode |
 | `minimal_output` | boolean | `false` | Suppress AI output (for CI) |
 | `runtime` | object | - | Runtime environment defaults (e.g., `prepare: [gradle, node]`) |
-| `persona_providers` | object | - | Per-persona provider overrides (e.g., `coder: codex`) |
+| `persona_providers` | object | - | Per-persona provider/model overrides (e.g., `coder: { provider: codex, model: o3-mini }`) |
 | `provider_options` | object | - | Global provider-specific options |
 | `provider_profiles` | object | - | Provider-specific permission profiles |
 | `anthropic_api_key` | string | - | Anthropic API key for Claude |
@@ -286,16 +289,21 @@ The `required_permission_mode` on a movement sets the minimum floor. If the reso
 
 ### Persona Providers
 
-Route specific personas to different providers without duplicating pieces:
+Route specific personas to different providers and models without duplicating pieces:
 
 ```yaml
 # ~/.takt/config.yaml
 persona_providers:
-  coder: codex             # Run coder persona on Codex
-  ai-antipattern-reviewer: claude  # Keep reviewers on Claude
+  coder:
+    provider: codex        # Run coder persona on Codex
+    model: o3-mini         # Use o3-mini model (optional)
+  ai-antipattern-reviewer:
+    provider: claude       # Keep reviewers on Claude
 ```
 
-This allows mixing providers within a single piece. The persona name is matched against the `persona` key in the movement definition.
+Both `provider` and `model` are optional. `model` resolution priority: movement YAML `model` > `persona_providers[persona].model` > global `model`.
+
+This allows mixing providers and models within a single piece. The persona name is matched against the `persona` key in the movement definition.
 
 ## Piece Categories
 

@@ -1,10 +1,10 @@
 /**
- * Tests for persona_providers config-level provider override.
+ * Tests for persona_providers config-level provider/model override.
  *
- * Verifies movement-level provider resolution for stepProvider:
+ * Verifies movement-level provider/model resolution for stepProvider/stepModel:
  *   1. Movement YAML provider (highest)
- *   2. persona_providers[personaDisplayName]
- *   3. CLI provider (lowest)
+ *   2. persona_providers[personaDisplayName].provider / .model
+ *   3. CLI provider / model (lowest)
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -46,7 +46,7 @@ describe('PieceEngine persona_providers override', () => {
     applyDefaultMocks();
   });
 
-  it('should use persona_providers when movement has no provider and persona matches', async () => {
+  it('should use persona_providers.provider when movement has no provider and persona matches', async () => {
     const movement = makeMovement('implement', {
       personaDisplayName: 'coder',
       rules: [makeRule('done', 'COMPLETE')],
@@ -66,7 +66,7 @@ describe('PieceEngine persona_providers override', () => {
     const engine = new PieceEngine(config, '/tmp/project', 'test task', {
       projectCwd: '/tmp/project',
       provider: 'claude',
-      personaProviders: { coder: 'codex' },
+      personaProviders: { coder: { provider: 'codex' } },
     });
 
     await engine.run();
@@ -96,7 +96,7 @@ describe('PieceEngine persona_providers override', () => {
     const engine = new PieceEngine(config, '/tmp/project', 'test task', {
       projectCwd: '/tmp/project',
       provider: 'claude',
-      personaProviders: { coder: 'codex' },
+      personaProviders: { coder: { provider: 'codex' } },
     });
 
     await engine.run();
@@ -127,7 +127,7 @@ describe('PieceEngine persona_providers override', () => {
     const engine = new PieceEngine(config, '/tmp/project', 'test task', {
       projectCwd: '/tmp/project',
       provider: 'mock',
-      personaProviders: { coder: 'codex' },
+      personaProviders: { coder: { provider: 'codex' } },
     });
 
     await engine.run();
@@ -194,7 +194,7 @@ describe('PieceEngine persona_providers override', () => {
     const engine = new PieceEngine(config, '/tmp/project', 'test task', {
       projectCwd: '/tmp/project',
       provider: 'claude',
-      personaProviders: { coder: 'codex' },
+      personaProviders: { coder: { provider: 'codex' } },
     });
 
     await engine.run();
@@ -206,5 +206,67 @@ describe('PieceEngine persona_providers override', () => {
     // Implement movement: coder in persona_providers → stepProvider は codex
     expect(calls[1][2].provider).toBe('claude');
     expect(calls[1][2].stepProvider).toBe('codex');
+  });
+
+  it('should use persona_providers.model as stepModel when step.model is undefined', async () => {
+    const movement = makeMovement('implement', {
+      personaDisplayName: 'coder',
+      rules: [makeRule('done', 'COMPLETE')],
+    });
+    const config: PieceConfig = {
+      name: 'persona-model-test',
+      movements: [movement],
+      initialMovement: 'implement',
+      maxMovements: 1,
+    };
+
+    mockRunAgentSequence([
+      makeResponse({ persona: movement.persona, content: 'done' }),
+    ]);
+    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+
+    const engine = new PieceEngine(config, '/tmp/project', 'test task', {
+      projectCwd: '/tmp/project',
+      provider: 'claude',
+      model: 'global-model',
+      personaProviders: { coder: { provider: 'codex', model: 'o3-mini' } },
+    });
+
+    await engine.run();
+
+    const options = vi.mocked(runAgent).mock.calls[0][2];
+    expect(options.stepProvider).toBe('codex');
+    expect(options.stepModel).toBe('o3-mini');
+  });
+
+  it('should fallback to input.model when persona_providers.model is not set', async () => {
+    const movement = makeMovement('implement', {
+      personaDisplayName: 'coder',
+      rules: [makeRule('done', 'COMPLETE')],
+    });
+    const config: PieceConfig = {
+      name: 'persona-model-fallback',
+      movements: [movement],
+      initialMovement: 'implement',
+      maxMovements: 1,
+    };
+
+    mockRunAgentSequence([
+      makeResponse({ persona: movement.persona, content: 'done' }),
+    ]);
+    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+
+    const engine = new PieceEngine(config, '/tmp/project', 'test task', {
+      projectCwd: '/tmp/project',
+      provider: 'claude',
+      model: 'global-model',
+      personaProviders: { coder: { provider: 'codex' } },
+    });
+
+    await engine.run();
+
+    const options = vi.mocked(runAgent).mock.calls[0][2];
+    expect(options.stepProvider).toBe('codex');
+    expect(options.stepModel).toBe('global-model');
   });
 });
