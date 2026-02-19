@@ -42,6 +42,15 @@ describe('config env overrides', () => {
     });
   });
 
+  it('TAKT_DRAFT_PR が draft_pr に反映される', () => {
+    process.env.TAKT_DRAFT_PR = 'true';
+
+    const raw: Record<string, unknown> = {};
+    applyGlobalConfigEnvOverrides(raw);
+
+    expect(raw.draft_pr).toBe(true);
+  });
+
   it('should apply project env overrides from generated env names', () => {
     process.env.TAKT_VERBOSE = 'true';
 

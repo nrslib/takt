@@ -168,6 +168,7 @@ export async function executeAndCompleteTask(
       startMovement,
       retryNote,
       autoPr,
+      draftPr,
       issueNumber,
     } = await resolveTaskExecution(task, cwd, pieceName, taskAbortSignal);
 
@@ -199,6 +200,7 @@ export async function executeAndCompleteTask(
         branch,
         baseBranch,
         shouldCreatePr: autoPr,
+        draftPr,
         pieceIdentifier: execPiece,
         issues,
       });

@@ -86,8 +86,12 @@ export async function executeDefaultAction(task?: string): Promise<void> {
   const resolvedPipelineAutoPr = opts.autoPr === true
     ? true
     : (resolveConfigValue(resolvedCwd, 'autoPr') ?? false);
+  const resolvedPipelineDraftPr = opts.draft === true
+    ? true
+    : (resolveConfigValue(resolvedCwd, 'draftPr') ?? false);
   const selectOptions: SelectAndExecuteOptions = {
     autoPr: opts.autoPr === true ? true : undefined,
+    draftPr: opts.draft === true ? true : undefined,
     repo: opts.repo as string | undefined,
     piece: opts.piece as string | undefined,
     createWorktree: createWorktreeOverride,
@@ -101,6 +105,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       piece: resolvedPipelinePiece,
       branch: opts.branch as string | undefined,
       autoPr: resolvedPipelineAutoPr,
+      draftPr: resolvedPipelineDraftPr,
       repo: opts.repo as string | undefined,
       skipGit: opts.skipGit === true,
       cwd: resolvedCwd,
