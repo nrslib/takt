@@ -33,7 +33,13 @@ export class TaskRunner {
 
   addTask(
     content: string,
-    options?: Omit<TaskFileData, 'task'> & { content_file?: string; task_dir?: string; worktree_path?: string },
+    options?: Omit<TaskFileData, 'task'> & {
+      content_file?: string;
+      task_dir?: string;
+      worktree_path?: string;
+      slug?: string;
+      summary?: string;
+    },
   ): TaskInfo {
     return this.lifecycle.addTask(content, options);
   }

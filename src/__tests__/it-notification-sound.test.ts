@@ -118,6 +118,19 @@ vi.mock('../infra/config/index.js', () => ({
   loadWorktreeSessions: vi.fn().mockReturnValue({}),
   updateWorktreeSession: vi.fn(),
   loadGlobalConfig: mockLoadGlobalConfig,
+  loadConfig: vi.fn().mockImplementation(() => ({
+    global: mockLoadGlobalConfig(),
+    project: {},
+  })),
+  resolvePieceConfigValues: (_projectDir: string, keys: readonly string[]) => {
+    const global = mockLoadGlobalConfig() as Record<string, unknown>;
+    const config = { ...global, piece: 'default', provider: global.provider ?? 'claude', verbose: false };
+    const result: Record<string, unknown> = {};
+    for (const key of keys) {
+      result[key] = config[key];
+    }
+    return result;
+  },
   saveSessionState: vi.fn(),
   ensureDir: vi.fn(),
   writeFileAtomic: vi.fn(),

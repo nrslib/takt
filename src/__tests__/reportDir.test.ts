@@ -37,12 +37,13 @@ describe('generateReportDir', () => {
     vi.useRealTimers();
   });
 
-  it('should preserve Japanese characters in summary', () => {
+  it('should strip CJK characters from summary', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2025-06-01T12:00:00.000Z'));
 
     const result = generateReportDir('タスク指示書の実装');
-    expect(result).toContain('タスク指示書の実装');
+    // CJK characters are removed by slugify, leaving empty → falls back to 'task'
+    expect(result).toBe('20250601-120000-task');
 
     vi.useRealTimers();
   });
@@ -53,7 +54,7 @@ describe('generateReportDir', () => {
 
     const result = generateReportDir('Fix: bug (#42)');
     const slug = result.replace(/^20250101-000000-/, '');
-    expect(slug).not.toMatch(/[^a-z0-9\u3040-\u309f\u30a0-\u30ff\u4e00-\u9faf-]/);
+    expect(slug).not.toMatch(/[^a-z0-9-]/);
 
     vi.useRealTimers();
   });

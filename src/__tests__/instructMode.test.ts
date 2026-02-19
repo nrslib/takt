@@ -149,9 +149,10 @@ describe('runInstructMode', () => {
     expect(result.action).toBe('cancel');
   });
 
-  it('should use custom action selector without create_issue option', async () => {
+  it('should exclude execute from action selector options', async () => {
     setupRawStdin(toRawInputs(['task', '/go']));
     setupMockProvider(['response', 'Task summary.']);
+    mockSelectOption.mockResolvedValue('save_task');
 
     await runInstructMode('/project', 'branch context', 'feature-branch', 'my-task', 'Do something', '');
 
@@ -161,7 +162,7 @@ describe('runInstructMode', () => {
     expect(selectCall).toBeDefined();
     const options = selectCall![1] as Array<{ value: string }>;
     const values = options.map((o) => o.value);
-    expect(values).toContain('execute');
+    expect(values).not.toContain('execute');
     expect(values).toContain('save_task');
     expect(values).toContain('continue');
     expect(values).not.toContain('create_issue');
@@ -214,5 +215,64 @@ describe('runInstructMode', () => {
         runStatus: 'completed',
       }),
     );
+  });
+
+  it('should inject previousOrderContent into template variables when provided', async () => {
+    setupRawStdin(toRawInputs(['/cancel']));
+    setupMockProvider([]);
+
+    await runInstructMode('/project', 'branch context', 'feature-branch', 'my-task', 'Do something', '', undefined, undefined, '# Previous Order\nDo the thing');
+
+    expect(mockLoadTemplate).toHaveBeenCalledWith(
+      'score_instruct_system_prompt',
+      'en',
+      expect.objectContaining({
+        hasOrderContent: true,
+        orderContent: '# Previous Order\nDo the thing',
+      }),
+    );
+  });
+
+  it('should set hasOrderContent=false when previousOrderContent is null', async () => {
+    setupRawStdin(toRawInputs(['/cancel']));
+    setupMockProvider([]);
+
+    await runInstructMode('/project', 'branch context', 'feature-branch', 'my-task', 'Do something', '', undefined, undefined, null);
+
+    expect(mockLoadTemplate).toHaveBeenCalledWith(
+      'score_instruct_system_prompt',
+      'en',
+      expect.objectContaining({
+        hasOrderContent: false,
+        orderContent: '',
+      }),
+    );
+  });
+
+  it('should return execute with previous order content on /replay when previousOrderContent is set', async () => {
+    setupRawStdin(toRawInputs(['/replay']));
+    setupMockProvider([]);
+
+    const previousOrder = '# Previous Order\nDo the thing';
+    const result = await runInstructMode(
+      '/project', 'branch context', 'feature-branch', 'my-task', 'Do something', '',
+      undefined, undefined, previousOrder,
+    );
+
+    expect(result.action).toBe('execute');
+    expect(result.task).toBe(previousOrder);
+  });
+
+  it('should show error and continue when /replay is used without previousOrderContent', async () => {
+    setupRawStdin(toRawInputs(['/replay', '/cancel']));
+    setupMockProvider([]);
+
+    const result = await runInstructMode(
+      '/project', 'branch context', 'feature-branch', 'my-task', 'Do something', '',
+      undefined, undefined, null,
+    );
+
+    expect(result.action).toBe('cancel');
+    expect(mockInfo).toHaveBeenCalledWith('Mock label');
   });
 });

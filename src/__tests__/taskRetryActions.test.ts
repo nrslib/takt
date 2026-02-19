@@ -4,7 +4,7 @@ const {
   mockExistsSync,
   mockSelectPiece,
   mockSelectOption,
-  mockLoadGlobalConfig,
+  mockResolvePieceConfigValue,
   mockLoadPieceByIdentifier,
   mockGetPieceDescription,
   mockRunRetryMode,
@@ -16,7 +16,7 @@ const {
   mockExistsSync: vi.fn(() => true),
   mockSelectPiece: vi.fn(),
   mockSelectOption: vi.fn(),
-  mockLoadGlobalConfig: vi.fn(),
+  mockResolvePieceConfigValue: vi.fn(),
   mockLoadPieceByIdentifier: vi.fn(),
   mockGetPieceDescription: vi.fn(() => ({
     name: 'default',
@@ -60,7 +60,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 }));
 
 vi.mock('../infra/config/index.js', () => ({
-  loadGlobalConfig: (...args: unknown[]) => mockLoadGlobalConfig(...args),
+  resolvePieceConfigValue: (...args: unknown[]) => mockResolvePieceConfigValue(...args),
   loadPieceByIdentifier: (...args: unknown[]) => mockLoadPieceByIdentifier(...args),
   getPieceDescription: (...args: unknown[]) => mockGetPieceDescription(...args),
 }));
@@ -73,7 +73,7 @@ vi.mock('../features/interactive/index.js', () => ({
     runTask: '', runPiece: '', runStatus: '', runMovementLogs: '', runReports: '',
   })),
   runRetryMode: (...args: unknown[]) => mockRunRetryMode(...args),
-  loadPreviousOrderContent: vi.fn(() => null),
+  findPreviousOrderContent: vi.fn(() => null),
 }));
 
 vi.mock('../infra/task/index.js', () => ({
@@ -127,7 +127,7 @@ beforeEach(() => {
   mockExistsSync.mockReturnValue(true);
 
   mockSelectPiece.mockResolvedValue('default');
-  mockLoadGlobalConfig.mockReturnValue({ defaultPiece: 'default' });
+  mockResolvePieceConfigValue.mockReturnValue(3);
   mockLoadPieceByIdentifier.mockReturnValue(defaultPieceConfig);
   mockSelectOption.mockResolvedValue('plan');
   mockRunRetryMode.mockResolvedValue({ action: 'execute', task: '追加指示A' });
@@ -152,6 +152,7 @@ describe('retryFailedTask', () => {
       expect.objectContaining({
         failure: expect.objectContaining({ taskName: 'my-task', taskContent: 'Do something' }),
       }),
+      null,
     );
     expect(mockStartReExecution).toHaveBeenCalledWith('my-task', ['failed'], undefined, '追加指示A');
     expect(mockExecuteAndCompleteTask).toHaveBeenCalled();

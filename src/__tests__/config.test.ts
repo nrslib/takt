@@ -1,5 +1,5 @@
 /**
- * Tests for takt config functions
+ * Tests for config functions
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -13,7 +13,6 @@ import {
   loadPiece,
   listPieces,
   loadPersonaPromptFromPath,
-  getCurrentPiece,
   setCurrentPiece,
   getProjectConfigDir,
   getBuiltinPersonasDir,
@@ -35,17 +34,19 @@ import {
   updateWorktreeSession,
   getLanguage,
   loadProjectConfig,
+  isVerboseMode,
+  invalidateGlobalConfigCache,
 } from '../infra/config/index.js';
 
 describe('getBuiltinPiece', () => {
   it('should return builtin piece when it exists in resources', () => {
-    const piece = getBuiltinPiece('default');
+    const piece = getBuiltinPiece('default', process.cwd());
     expect(piece).not.toBeNull();
     expect(piece!.name).toBe('default');
   });
 
   it('should resolve builtin instruction_template without projectCwd', () => {
-    const piece = getBuiltinPiece('default');
+    const piece = getBuiltinPiece('default', process.cwd());
     expect(piece).not.toBeNull();
 
     const planMovement = piece!.movements.find((movement) => movement.name === 'plan');
@@ -54,15 +55,15 @@ describe('getBuiltinPiece', () => {
   });
 
   it('should return null for non-existent piece names', () => {
-    expect(getBuiltinPiece('nonexistent-piece')).toBeNull();
-    expect(getBuiltinPiece('unknown')).toBeNull();
-    expect(getBuiltinPiece('')).toBeNull();
+    expect(getBuiltinPiece('nonexistent-piece', process.cwd())).toBeNull();
+    expect(getBuiltinPiece('unknown', process.cwd())).toBeNull();
+    expect(getBuiltinPiece('', process.cwd())).toBeNull();
   });
 });
 
 describe('default piece parallel reviewers movement', () => {
   it('should have a reviewers movement with parallel sub-movements', () => {
-    const piece = getBuiltinPiece('default');
+    const piece = getBuiltinPiece('default', process.cwd());
     expect(piece).not.toBeNull();
 
     const reviewersMovement = piece!.movements.find((s) => s.name === 'reviewers');
@@ -72,7 +73,7 @@ describe('default piece parallel reviewers movement', () => {
   });
 
   it('should have arch-review and qa-review as parallel sub-movements', () => {
-    const piece = getBuiltinPiece('default');
+    const piece = getBuiltinPiece('default', process.cwd());
     const reviewersMovement = piece!.movements.find((s) => s.name === 'reviewers')!;
     const subMovementNames = reviewersMovement.parallel!.map((s) => s.name);
 
@@ -81,7 +82,7 @@ describe('default piece parallel reviewers movement', () => {
   });
 
   it('should have aggregate conditions on the reviewers parent movement', () => {
-    const piece = getBuiltinPiece('default');
+    const piece = getBuiltinPiece('default', process.cwd());
     const reviewersMovement = piece!.movements.find((s) => s.name === 'reviewers')!;
 
     expect(reviewersMovement.rules).toBeDefined();
@@ -99,7 +100,7 @@ describe('default piece parallel reviewers movement', () => {
   });
 
   it('should have matching conditions on sub-movements for aggregation', () => {
-    const piece = getBuiltinPiece('default');
+    const piece = getBuiltinPiece('default', process.cwd());
     const reviewersMovement = piece!.movements.find((s) => s.name === 'reviewers')!;
 
     for (const subMovement of reviewersMovement.parallel!) {
@@ -111,7 +112,7 @@ describe('default piece parallel reviewers movement', () => {
   });
 
   it('should have ai_review transitioning to reviewers movement', () => {
-    const piece = getBuiltinPiece('default');
+    const piece = getBuiltinPiece('default', process.cwd());
     const aiReviewMovement = piece!.movements.find((s) => s.name === 'ai_review')!;
 
     const approveRule = aiReviewMovement.rules!.find((r) => r.next === 'reviewers');
@@ -119,7 +120,7 @@ describe('default piece parallel reviewers movement', () => {
   });
 
   it('should have ai_fix transitioning to ai_review movement', () => {
-    const piece = getBuiltinPiece('default');
+    const piece = getBuiltinPiece('default', process.cwd());
     const aiFixMovement = piece!.movements.find((s) => s.name === 'ai_fix')!;
 
     const fixedRule = aiFixMovement.rules!.find((r) => r.next === 'ai_review');
@@ -127,7 +128,7 @@ describe('default piece parallel reviewers movement', () => {
   });
 
   it('should have fix movement transitioning back to reviewers', () => {
-    const piece = getBuiltinPiece('default');
+    const piece = getBuiltinPiece('default', process.cwd());
     const fixMovement = piece!.movements.find((s) => s.name === 'fix')!;
 
     const fixedRule = fixMovement.rules!.find((r) => r.next === 'reviewers');
@@ -135,7 +136,7 @@ describe('default piece parallel reviewers movement', () => {
   });
 
   it('should not have old separate review/security_review/improve movements', () => {
-    const piece = getBuiltinPiece('default');
+    const piece = getBuiltinPiece('default', process.cwd());
     const movementNames = piece!.movements.map((s) => s.name);
 
     expect(movementNames).not.toContain('review');
@@ -145,7 +146,7 @@ describe('default piece parallel reviewers movement', () => {
   });
 
   it('should have sub-movements with correct agents', () => {
-    const piece = getBuiltinPiece('default');
+    const piece = getBuiltinPiece('default', process.cwd());
     const reviewersMovement = piece!.movements.find((s) => s.name === 'reviewers')!;
 
     const archReview = reviewersMovement.parallel!.find((s) => s.name === 'arch-review')!;
@@ -156,7 +157,7 @@ describe('default piece parallel reviewers movement', () => {
   });
 
   it('should have output contracts configured on sub-movements', () => {
-    const piece = getBuiltinPiece('default');
+    const piece = getBuiltinPiece('default', process.cwd());
     const reviewersMovement = piece!.movements.find((s) => s.name === 'reviewers')!;
 
     const archReview = reviewersMovement.parallel!.find((s) => s.name === 'arch-review')!;
@@ -288,51 +289,10 @@ describe('loadPersonaPromptFromPath (builtin paths)', () => {
     const personaPath = join(builtinPersonasDir, 'coder.md');
 
     if (existsSync(personaPath)) {
-      const prompt = loadPersonaPromptFromPath(personaPath);
+      const prompt = loadPersonaPromptFromPath(personaPath, process.cwd());
       expect(prompt).toBeTruthy();
       expect(typeof prompt).toBe('string');
     }
-  });
-});
-
-describe('getCurrentPiece', () => {
-  let testDir: string;
-
-  beforeEach(() => {
-    testDir = join(tmpdir(), `takt-test-${randomUUID()}`);
-    mkdirSync(testDir, { recursive: true });
-  });
-
-  afterEach(() => {
-    if (existsSync(testDir)) {
-      rmSync(testDir, { recursive: true, force: true });
-    }
-  });
-
-  it('should return default when no config exists', () => {
-    const piece = getCurrentPiece(testDir);
-
-    expect(piece).toBe('default');
-  });
-
-  it('should return saved piece name from config.yaml', () => {
-    const configDir = getProjectConfigDir(testDir);
-    mkdirSync(configDir, { recursive: true });
-    writeFileSync(join(configDir, 'config.yaml'), 'piece: default\n');
-
-    const piece = getCurrentPiece(testDir);
-
-    expect(piece).toBe('default');
-  });
-
-  it('should return default for empty config', () => {
-    const configDir = getProjectConfigDir(testDir);
-    mkdirSync(configDir, { recursive: true });
-    writeFileSync(join(configDir, 'config.yaml'), '');
-
-    const piece = getCurrentPiece(testDir);
-
-    expect(piece).toBe('default');
   });
 });
 
@@ -371,9 +331,157 @@ describe('setCurrentPiece', () => {
     setCurrentPiece(testDir, 'first');
     setCurrentPiece(testDir, 'second');
 
-    const piece = getCurrentPiece(testDir);
+    const piece = loadProjectConfig(testDir).piece;
 
     expect(piece).toBe('second');
+  });
+});
+
+describe('loadProjectConfig provider_options', () => {
+  let testDir: string;
+
+  beforeEach(() => {
+    testDir = join(tmpdir(), `takt-test-${randomUUID()}`);
+    mkdirSync(testDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    if (existsSync(testDir)) {
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should normalize provider_options into providerOptions (camelCase)', () => {
+    const projectConfigDir = getProjectConfigDir(testDir);
+    mkdirSync(projectConfigDir, { recursive: true });
+    writeFileSync(join(projectConfigDir, 'config.yaml'), [
+      'piece: default',
+      'provider_options:',
+      '  codex:',
+      '    network_access: true',
+      '  claude:',
+      '    sandbox:',
+      '      allow_unsandboxed_commands: true',
+    ].join('\n'));
+
+    const config = loadProjectConfig(testDir);
+
+    expect(config.providerOptions).toEqual({
+      codex: { networkAccess: true },
+      claude: { sandbox: { allowUnsandboxedCommands: true } },
+    });
+  });
+
+  it('should apply TAKT_PROVIDER_OPTIONS_* env overrides for project config', () => {
+    const original = process.env.TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS;
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS = 'false';
+
+    const config = loadProjectConfig(testDir);
+    expect(config.providerOptions).toEqual({
+      codex: { networkAccess: false },
+    });
+
+    if (original === undefined) {
+      delete process.env.TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS;
+    } else {
+      process.env.TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS = original;
+    }
+  });
+});
+
+describe('isVerboseMode', () => {
+  let testDir: string;
+  let originalTaktConfigDir: string | undefined;
+  let originalTaktVerbose: string | undefined;
+
+  beforeEach(() => {
+    testDir = join(tmpdir(), `takt-test-${randomUUID()}`);
+    mkdirSync(testDir, { recursive: true });
+    originalTaktConfigDir = process.env.TAKT_CONFIG_DIR;
+    originalTaktVerbose = process.env.TAKT_VERBOSE;
+    process.env.TAKT_CONFIG_DIR = join(testDir, 'global-takt');
+    delete process.env.TAKT_VERBOSE;
+    invalidateGlobalConfigCache();
+  });
+
+  afterEach(() => {
+    if (originalTaktConfigDir === undefined) {
+      delete process.env.TAKT_CONFIG_DIR;
+    } else {
+      process.env.TAKT_CONFIG_DIR = originalTaktConfigDir;
+    }
+    if (originalTaktVerbose === undefined) {
+      delete process.env.TAKT_VERBOSE;
+    } else {
+      process.env.TAKT_VERBOSE = originalTaktVerbose;
+    }
+
+    if (existsSync(testDir)) {
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should return project verbose when project config has verbose: true', () => {
+    const projectConfigDir = getProjectConfigDir(testDir);
+    mkdirSync(projectConfigDir, { recursive: true });
+    writeFileSync(join(projectConfigDir, 'config.yaml'), 'piece: default\nverbose: true\n');
+
+    const globalConfigDir = process.env.TAKT_CONFIG_DIR!;
+    mkdirSync(globalConfigDir, { recursive: true });
+    writeFileSync(join(globalConfigDir, 'config.yaml'), 'verbose: false\n');
+
+    expect(isVerboseMode(testDir)).toBe(true);
+  });
+
+  it('should return project verbose when project config has verbose: false', () => {
+    const projectConfigDir = getProjectConfigDir(testDir);
+    mkdirSync(projectConfigDir, { recursive: true });
+    writeFileSync(join(projectConfigDir, 'config.yaml'), 'piece: default\nverbose: false\n');
+
+    const globalConfigDir = process.env.TAKT_CONFIG_DIR!;
+    mkdirSync(globalConfigDir, { recursive: true });
+    writeFileSync(join(globalConfigDir, 'config.yaml'), 'verbose: true\n');
+
+    expect(isVerboseMode(testDir)).toBe(false);
+  });
+
+  it('should fallback to global verbose when project verbose is not set', () => {
+    const projectConfigDir = getProjectConfigDir(testDir);
+    mkdirSync(projectConfigDir, { recursive: true });
+    writeFileSync(join(projectConfigDir, 'config.yaml'), 'piece: default\n');
+
+    const globalConfigDir = process.env.TAKT_CONFIG_DIR!;
+    mkdirSync(globalConfigDir, { recursive: true });
+    writeFileSync(join(globalConfigDir, 'config.yaml'), 'verbose: true\n');
+
+    expect(isVerboseMode(testDir)).toBe(true);
+  });
+
+  it('should return false when neither project nor global verbose is set', () => {
+    expect(isVerboseMode(testDir)).toBe(false);
+  });
+
+  it('should prioritize TAKT_VERBOSE over project and global config', () => {
+    const projectConfigDir = getProjectConfigDir(testDir);
+    mkdirSync(projectConfigDir, { recursive: true });
+    writeFileSync(join(projectConfigDir, 'config.yaml'), 'piece: default\nverbose: false\n');
+
+    const globalConfigDir = process.env.TAKT_CONFIG_DIR!;
+    mkdirSync(globalConfigDir, { recursive: true });
+    writeFileSync(join(globalConfigDir, 'config.yaml'), 'verbose: false\n');
+
+    process.env.TAKT_VERBOSE = 'true';
+    expect(isVerboseMode(testDir)).toBe(true);
+  });
+
+  it('should throw on TAKT_VERBOSE=0', () => {
+    process.env.TAKT_VERBOSE = '0';
+    expect(() => isVerboseMode(testDir)).toThrow('TAKT_VERBOSE must be one of: true, false');
+  });
+
+  it('should throw on invalid TAKT_VERBOSE value', () => {
+    process.env.TAKT_VERBOSE = 'yes';
+    expect(() => isVerboseMode(testDir)).toThrow('TAKT_VERBOSE must be one of: true, false');
   });
 });
 

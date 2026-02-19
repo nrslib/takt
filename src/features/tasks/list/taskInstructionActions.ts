@@ -11,14 +11,14 @@ import {
   TaskRunner,
   detectDefaultBranch,
 } from '../../../infra/task/index.js';
-import { loadGlobalConfig, getPieceDescription } from '../../../infra/config/index.js';
+import { resolvePieceConfigValues, getPieceDescription } from '../../../infra/config/index.js';
 import { info, error as logError } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { runInstructMode } from './instructMode.js';
 import { selectPiece } from '../../pieceSelection/index.js';
 import { dispatchConversationAction } from '../../interactive/actionDispatcher.js';
 import type { PieceContext } from '../../interactive/interactive.js';
-import { resolveLanguage, loadPreviousOrderContent } from '../../interactive/index.js';
+import { resolveLanguage, findRunForTask, findPreviousOrderContent } from '../../interactive/index.js';
 import { type BranchActionTarget, resolveTargetBranch } from './taskActionTarget.js';
 import { appendRetryNote, selectRunSessionContext } from './requeueHelpers.js';
 import { executeAndCompleteTask } from '../execute/taskExecution.js';
@@ -93,7 +93,7 @@ export async function instructBranch(
     return false;
   }
 
-  const globalConfig = loadGlobalConfig();
+  const globalConfig = resolvePieceConfigValues(projectDir, ['interactivePreviewMovements', 'language']);
   const pieceDesc = getPieceDescription(selectedPiece, projectDir, globalConfig.interactivePreviewMovements);
   const pieceContext: PieceContext = {
     name: pieceDesc.name,
@@ -105,9 +105,10 @@ export async function instructBranch(
   const lang = resolveLanguage(globalConfig.language);
   // Runs data lives in the worktree (written during previous execution)
   const runSessionContext = await selectRunSessionContext(worktreePath, lang);
+  const matchedSlug = findRunForTask(worktreePath, target.content);
+  const previousOrderContent = findPreviousOrderContent(worktreePath, matchedSlug);
 
   const branchContext = getBranchContext(projectDir, branch);
-  const previousOrderContent = loadPreviousOrderContent(worktreePath, target.content) ?? undefined;
 
   const result = await runInstructMode(
     worktreePath, branchContext, branch,

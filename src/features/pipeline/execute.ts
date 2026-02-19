@@ -21,7 +21,7 @@ import {
 } from '../../infra/github/index.js';
 import { stageAndCommit, getCurrentBranch } from '../../infra/task/index.js';
 import { executeTask, type TaskExecutionOptions, type PipelineExecutionOptions } from '../tasks/index.js';
-import { loadGlobalConfig } from '../../infra/config/index.js';
+import { resolveConfigValues } from '../../infra/config/index.js';
 import { info, error, success, status, blankLine } from '../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import type { PipelineConfig } from '../../core/models/index.js';
@@ -106,7 +106,7 @@ function buildPipelinePrBody(
  */
 export async function executePipeline(options: PipelineExecutionOptions): Promise<number> {
   const { cwd, piece, autoPr, skipGit } = options;
-  const globalConfig = loadGlobalConfig();
+  const globalConfig = resolveConfigValues(cwd, ['pipeline']);
   const pipelineConfig = globalConfig.pipeline;
   let issue: GitHubIssue | undefined;
   let task: string;

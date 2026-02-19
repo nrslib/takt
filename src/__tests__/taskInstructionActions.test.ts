@@ -48,7 +48,7 @@ vi.mock('../infra/task/index.js', () => ({
 }));
 
 vi.mock('../infra/config/index.js', () => ({
-  loadGlobalConfig: vi.fn(() => ({ interactivePreviewMovements: 3, language: 'en' })),
+  resolvePieceConfigValues: vi.fn(() => ({ interactivePreviewMovements: 3, language: 'en' })),
   getPieceDescription: vi.fn(() => ({
     name: 'default',
     description: 'desc',
@@ -82,7 +82,8 @@ vi.mock('../features/interactive/index.js', () => ({
   listRecentRuns: (...args: unknown[]) => mockListRecentRuns(...args),
   selectRun: (...args: unknown[]) => mockSelectRun(...args),
   loadRunSessionContext: (...args: unknown[]) => mockLoadRunSessionContext(...args),
-  loadPreviousOrderContent: vi.fn(() => null),
+  findRunForTask: vi.fn(() => null),
+  findPreviousOrderContent: vi.fn(() => null),
 }));
 
 vi.mock('../features/tasks/execute/taskExecution.js', () => ({
@@ -192,7 +193,7 @@ describe('instructBranch direct execution flow', () => {
       '',
       expect.anything(),
       undefined,
-      undefined,
+      null,
     );
   });
 
@@ -229,7 +230,7 @@ describe('instructBranch direct execution flow', () => {
       '',
       expect.anything(),
       runContext,
-      undefined,
+      null,
     );
   });
 

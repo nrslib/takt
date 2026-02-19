@@ -11,7 +11,7 @@ import { parse as parseYaml } from 'yaml';
 import type { z } from 'zod';
 import { PieceConfigRawSchema, PieceMovementRawSchema } from '../../../core/models/index.js';
 import type { PieceConfig, PieceMovement, PieceRule, OutputContractEntry, OutputContractItem, LoopMonitorConfig, LoopMonitorJudge, ArpeggioMovementConfig, ArpeggioMergeMovementConfig, TeamLeaderConfig } from '../../../core/models/index.js';
-import { getLanguage } from '../global/globalConfig.js';
+import { resolvePieceConfigValue } from '../resolvePieceConfigValue.js';
 import {
   type PieceSections,
   type FacetResolutionContext,
@@ -428,9 +428,9 @@ export function normalizePieceConfig(
 /**
  * Load a piece from a YAML file.
  * @param filePath Path to the piece YAML file
- * @param projectDir Optional project directory for 3-layer facet resolution
+ * @param projectDir Project directory for 3-layer facet resolution
  */
-export function loadPieceFromFile(filePath: string, projectDir?: string): PieceConfig {
+export function loadPieceFromFile(filePath: string, projectDir: string): PieceConfig {
   if (!existsSync(filePath)) {
     throw new Error(`Piece file not found: ${filePath}`);
   }
@@ -439,7 +439,7 @@ export function loadPieceFromFile(filePath: string, projectDir?: string): PieceC
   const pieceDir = dirname(filePath);
 
   const context: FacetResolutionContext = {
-    lang: getLanguage(),
+    lang: resolvePieceConfigValue(projectDir, 'language'),
     projectDir,
   };
 

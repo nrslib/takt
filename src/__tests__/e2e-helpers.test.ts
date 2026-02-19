@@ -85,7 +85,6 @@ describe('createIsolatedEnv', () => {
 
     expect(config.language).toBe('en');
     expect(config.log_level).toBe('info');
-    expect(config.default_piece).toBe('default');
     expect(config.notification_sound).toBe(false);
     expect(config.notification_sound_events).toEqual({
       iteration_limit: false,
@@ -173,7 +172,6 @@ describe('createIsolatedEnv', () => {
       [
         'language: en',
         'log_level: info',
-        'default_piece: default',
         'notification_sound: true',
         'notification_sound_events: true',
       ].join('\n'),

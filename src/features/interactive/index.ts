@@ -25,3 +25,4 @@ export { selectRun } from './runSelector.js';
 export { listRecentRuns, findRunForTask, loadRunSessionContext, formatRunSessionForPrompt, getRunPaths, loadPreviousOrderContent, type RunSessionContext, type RunPaths } from './runSessionReader.js';
 export { runRetryMode, buildRetryTemplateVars, type RetryContext, type RetryFailureInfo, type RetryRunInfo } from './retryMode.js';
 export { dispatchConversationAction, type ConversationActionResult } from './actionDispatcher.js';
+export { findPreviousOrderContent } from './orderReader.js';

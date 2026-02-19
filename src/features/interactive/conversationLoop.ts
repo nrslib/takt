@@ -9,7 +9,7 @@
 
 import chalk from 'chalk';
 import {
-  loadGlobalConfig,
+  resolveConfigValues,
   loadPersonaSessions,
   loadSessionState,
   clearSessionState,
@@ -19,6 +19,8 @@ import { createLogger } from '../../shared/utils/index.js';
 import { info, error, blankLine } from '../../shared/ui/index.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
 import { readMultilineInput } from './lineEditor.js';
+import { selectRecentSession } from './sessionSelector.js';
+import { EXIT_SIGINT } from '../../shared/exitCodes.js';
 import {
   type PieceContext,
   type InteractiveModeResult,
@@ -37,10 +39,14 @@ export { type CallAIResult, type SessionContext, callAIWithRetry } from './aiCal
 const log = createLogger('conversation-loop');
 
 /**
- * Initialize provider, session, and language for interactive conversation.
+ * Initialize provider and language for interactive conversation.
+ *
+ * Session ID is always undefined (new session).
+ * Callers that need session continuity pass sessionId explicitly
+ * (e.g., --continue flag or /resume command).
  */
 export function initializeSession(cwd: string, personaName: string): SessionContext {
-  const globalConfig = loadGlobalConfig();
+  const globalConfig = resolveConfigValues(cwd, ['language', 'provider', 'model']);
   const lang = resolveLanguage(globalConfig.language);
   if (!globalConfig.provider) {
     throw new Error('Provider is not configured.');
@@ -48,10 +54,8 @@ export function initializeSession(cwd: string, personaName: string): SessionCont
   const providerType = globalConfig.provider as ProviderType;
   const provider = getProvider(providerType);
   const model = globalConfig.model as string | undefined;
-  const savedSessions = loadPersonaSessions(cwd, providerType);
-  const sessionId: string | undefined = savedSessions[personaName];
 
-  return { provider, providerType, model, lang, personaName, sessionId };
+  return { provider, providerType, model, lang, personaName, sessionId: undefined };
 }
 
 /**
@@ -81,7 +85,7 @@ export interface ConversationStrategy {
   introMessage: string;
   /** Custom action selector (optional). If not provided, uses default selectPostSummaryAction. */
   selectAction?: (task: string, lang: 'en' | 'ja') => Promise<PostSummaryAction | null>;
-  /** Previous order.md content for /retry command (optional) */
+  /** Previous order.md content for /replay command (retry/instruct only) */
   previousOrderContent?: string;
 }
 
@@ -206,9 +210,28 @@ export async function runConversationLoop(
       return { action: selectedAction, task };
     }
 
+    if (trimmed === '/replay') {
+      if (!strategy.previousOrderContent) {
+        const replayNoOrder = getLabel('instruct.ui.replayNoOrder', ctx.lang);
+        info(replayNoOrder);
+        continue;
+      }
+      log.info('Replay command');
+      return { action: 'execute', task: strategy.previousOrderContent };
+    }
+
     if (trimmed === '/cancel') {
       info(ui.cancelled);
       return { action: 'cancel', task: '' };
+    }
+
+    if (trimmed === '/resume') {
+      const selectedId = await selectRecentSession(cwd, ctx.lang);
+      if (selectedId) {
+        sessionId = selectedId;
+        info(getLabel('interactive.resumeSessionLoaded', ctx.lang));
+      }
+      continue;
     }
 
     history.push({ role: 'user', content: trimmed });

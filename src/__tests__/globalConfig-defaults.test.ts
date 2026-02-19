@@ -39,7 +39,6 @@ describe('loadGlobalConfig', () => {
     const config = loadGlobalConfig();
 
     expect(config.language).toBe('en');
-    expect(config.defaultPiece).toBe('default');
     expect(config.logLevel).toBe('info');
     expect(config.provider).toBe('claude');
     expect(config.model).toBeUndefined();
@@ -77,6 +76,23 @@ describe('loadGlobalConfig', () => {
     expect(config.language).toBe('ja');
     expect(config.provider).toBe('codex');
     expect(config.logLevel).toBe('debug');
+  });
+
+  it('should apply env override for nested provider_options key', () => {
+    const original = process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_SANDBOX_ALLOW_UNSANDBOXED_COMMANDS;
+    try {
+      process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_SANDBOX_ALLOW_UNSANDBOXED_COMMANDS = 'true';
+      invalidateGlobalConfigCache();
+
+      const config = loadGlobalConfig();
+      expect(config.providerOptions?.claude?.sandbox?.allowUnsandboxedCommands).toBe(true);
+    } finally {
+      if (original === undefined) {
+        delete process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_SANDBOX_ALLOW_UNSANDBOXED_COMMANDS;
+      } else {
+        process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_SANDBOX_ALLOW_UNSANDBOXED_COMMANDS = original;
+      }
+    }
   });
 
   it('should load pipeline config from config.yaml', () => {

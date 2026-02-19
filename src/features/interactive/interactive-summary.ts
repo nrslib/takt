@@ -197,13 +197,15 @@ export interface InteractiveSummaryUIText {
 export function buildSummaryActionOptions(
   labels: SummaryActionLabels,
   append: readonly SummaryActionValue[] = [],
+  exclude: readonly SummaryActionValue[] = [],
 ): SummaryActionOption[] {
   const order = [...BASE_SUMMARY_ACTIONS, ...append];
+  const excluded = new Set(exclude);
   const seen = new Set<SummaryActionValue>();
   const options: SummaryActionOption[] = [];
 
   for (const action of order) {
-    if (seen.has(action)) {
+    if (seen.has(action) || excluded.has(action)) {
       continue;
     }
     seen.add(action);
@@ -260,4 +262,53 @@ export function selectPostSummaryAction(
       ['create_issue'],
     ),
   );
+}
+
+/**
+ * Build the /replay command hint for intro messages.
+ *
+ * Returns a hint string when previous order content is available, empty string otherwise.
+ */
+export function buildReplayHint(lang: 'en' | 'ja', hasPreviousOrder: boolean): string {
+  if (!hasPreviousOrder) return '';
+  return lang === 'ja'
+    ? ', /replay（前回の指示書を再投入）'
+    : ', /replay (resubmit previous order)';
+}
+
+/** UI labels required by createSelectActionWithoutExecute */
+export interface ActionWithoutExecuteUIText {
+  proposed: string;
+  actionPrompt: string;
+  actions: {
+    execute: string;
+    saveTask: string;
+    continue: string;
+  };
+}
+
+/**
+ * Create an action selector that excludes the 'execute' option.
+ *
+ * Used by retry and instruct modes where worktree execution is assumed.
+ */
+export function createSelectActionWithoutExecute(
+  ui: ActionWithoutExecuteUIText,
+): (task: string, lang: 'en' | 'ja') => Promise<PostSummaryAction | null> {
+  return async (task: string, _lang: 'en' | 'ja'): Promise<PostSummaryAction | null> => {
+    return selectSummaryAction(
+      task,
+      ui.proposed,
+      ui.actionPrompt,
+      buildSummaryActionOptions(
+        {
+          execute: ui.actions.execute,
+          saveTask: ui.actions.saveTask,
+          continue: ui.actions.continue,
+        },
+        [],
+        ['execute'],
+      ),
+    );
+  };
 }

@@ -1,11 +1,11 @@
 /**
  * Unit tests for task naming utilities
  *
- * Tests nowIso, firstLine, and sanitizeTaskName functions.
+ * Tests nowIso and firstLine functions.
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { nowIso, firstLine, sanitizeTaskName } from '../infra/task/naming.js';
+import { nowIso, firstLine } from '../infra/task/naming.js';
 
 describe('nowIso', () => {
   afterEach(() => {
@@ -52,36 +52,5 @@ describe('firstLine', () => {
 
   it('should handle whitespace-only input', () => {
     expect(firstLine('   \n  ')).toBe('');
-  });
-});
-
-describe('sanitizeTaskName', () => {
-  it('should lowercase the input', () => {
-    expect(sanitizeTaskName('Hello World')).toBe('hello-world');
-  });
-
-  it('should replace special characters with spaces then hyphens', () => {
-    expect(sanitizeTaskName('task@name#123')).toBe('task-name-123');
-  });
-
-  it('should collapse multiple hyphens', () => {
-    expect(sanitizeTaskName('a---b')).toBe('a-b');
-  });
-
-  it('should trim leading/trailing whitespace', () => {
-    expect(sanitizeTaskName('  hello  ')).toBe('hello');
-  });
-
-  it('should handle typical task names', () => {
-    expect(sanitizeTaskName('Fix: login bug (#42)')).toBe('fix-login-bug-42');
-  });
-
-  it('should generate fallback name for empty result', () => {
-    const result = sanitizeTaskName('!@#$%');
-    expect(result).toMatch(/^task-\d+$/);
-  });
-
-  it('should preserve numbers and lowercase letters', () => {
-    expect(sanitizeTaskName('abc123def')).toBe('abc123def');
   });
 });

@@ -191,7 +191,7 @@ describe('E2E: Retry mode with failure context injection', () => {
     const retryContext: RetryContext = {
       failure: {
         taskName: 'implement-auth',
-        taskContent: 'Implement auth feature',
+        taskContent: 'Implement authentication feature',
         createdAt: '2026-02-15T10:00:00Z',
         failedMovement: 'review',
         error: 'Timeout after 300s',
@@ -209,7 +209,7 @@ describe('E2E: Retry mode with failure context injection', () => {
       previousOrderContent: null,
     };
 
-    const result = await runRetryMode(tmpDir, retryContext);
+    const result = await runRetryMode(tmpDir, retryContext, null);
 
     // Verify: system prompt contains failure information
     expect(capture.systemPrompts.length).toBeGreaterThan(0);
@@ -254,7 +254,7 @@ describe('E2E: Retry mode with failure context injection', () => {
     const retryContext: RetryContext = {
       failure: {
         taskName: 'build-login',
-        taskContent: 'Build login page',
+        taskContent: 'Build login page with OAuth2',
         createdAt: '2026-02-15T14:00:00Z',
         failedMovement: 'implement',
         error: 'CSS compilation failed',
@@ -280,7 +280,7 @@ describe('E2E: Retry mode with failure context injection', () => {
       previousOrderContent: null,
     };
 
-    const result = await runRetryMode(tmpDir, retryContext);
+    const result = await runRetryMode(tmpDir, retryContext, null);
 
     // Verify: system prompt contains BOTH failure info and run session data
     const systemPrompt = capture.systemPrompts[0]!;
@@ -318,7 +318,7 @@ describe('E2E: Retry mode with failure context injection', () => {
     const retryContext: RetryContext = {
       failure: {
         taskName: 'fix-tests',
-        taskContent: 'Fix failing tests',
+        taskContent: 'Fix failing test suite',
         createdAt: '2026-02-15T16:00:00Z',
         failedMovement: '',
         error: 'Test suite failed',
@@ -336,7 +336,7 @@ describe('E2E: Retry mode with failure context injection', () => {
       previousOrderContent: null,
     };
 
-    await runRetryMode(tmpDir, retryContext);
+    await runRetryMode(tmpDir, retryContext, null);
 
     const systemPrompt = capture.systemPrompts[0]!;
     expect(systemPrompt).toContain('Existing Retry Note');
@@ -354,7 +354,7 @@ describe('E2E: Retry mode with failure context injection', () => {
     const retryContext: RetryContext = {
       failure: {
         taskName: 'some-task',
-        taskContent: 'Some task content',
+        taskContent: 'Complete some task',
         createdAt: '2026-02-15T12:00:00Z',
         failedMovement: 'plan',
         error: 'Unknown error',
@@ -372,7 +372,7 @@ describe('E2E: Retry mode with failure context injection', () => {
       previousOrderContent: null,
     };
 
-    const result = await runRetryMode(tmpDir, retryContext);
+    const result = await runRetryMode(tmpDir, retryContext, null);
 
     expect(result.action).toBe('cancel');
     expect(result.task).toBe('');
@@ -393,7 +393,7 @@ describe('E2E: Retry mode with failure context injection', () => {
     const retryContext: RetryContext = {
       failure: {
         taskName: 'optimize-review',
-        taskContent: 'Optimize review process',
+        taskContent: 'Optimize the review step',
         createdAt: '2026-02-15T18:00:00Z',
         failedMovement: 'review',
         error: 'Timeout',
@@ -411,7 +411,7 @@ describe('E2E: Retry mode with failure context injection', () => {
       previousOrderContent: null,
     };
 
-    const result = await runRetryMode(tmpDir, retryContext);
+    const result = await runRetryMode(tmpDir, retryContext, null);
 
     expect(result.action).toBe('execute');
     expect(result.task).toBe('Increase review timeout to 600s and add retry logic.');

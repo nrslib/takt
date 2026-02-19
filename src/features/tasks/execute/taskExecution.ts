@@ -2,7 +2,7 @@
  * Task execution logic
  */
 
-import { loadPieceByIdentifier, isPiecePath, loadGlobalConfig, loadProjectConfig } from '../../../infra/config/index.js';
+import { loadPieceByIdentifier, isPiecePath, resolvePieceConfigValues } from '../../../infra/config/index.js';
 import { TaskRunner, type TaskInfo } from '../../../infra/task/index.js';
 import {
   header,
@@ -86,18 +86,22 @@ async function executeTaskWithResult(options: ExecuteTaskOptions): Promise<Piece
     movements: pieceConfig.movements.map((s: { name: string }) => s.name),
   });
 
-  const globalConfig = loadGlobalConfig();
-  const projectConfig = loadProjectConfig(projectCwd);
+  const config = resolvePieceConfigValues(projectCwd, [
+    'language',
+    'provider',
+    'model',
+    'providerOptions',
+    'personaProviders',
+    'providerProfiles',
+  ]);
   return await executePiece(pieceConfig, task, cwd, {
     projectCwd,
-    language: globalConfig.language,
-    provider: agentOverrides?.provider,
-    projectProvider: projectConfig.provider,
-    globalProvider: globalConfig.provider,
-    model: agentOverrides?.model,
-    personaProviders: globalConfig.personaProviders,
-    projectProviderProfiles: projectConfig.providerProfiles,
-    globalProviderProfiles: globalConfig.providerProfiles,
+    language: config.language,
+    provider: agentOverrides?.provider ?? config.provider,
+    model: agentOverrides?.model ?? config.model,
+    providerOptions: config.providerOptions,
+    personaProviders: config.personaProviders,
+    providerProfiles: config.providerProfiles,
     interactiveUserInput,
     interactiveMetadata,
     startMovement,
@@ -234,7 +238,10 @@ export async function runAllTasks(
   options?: TaskExecutionOptions,
 ): Promise<void> {
   const taskRunner = new TaskRunner(cwd);
-  const globalConfig = loadGlobalConfig();
+  const globalConfig = resolvePieceConfigValues(
+    cwd,
+    ['notificationSound', 'notificationSoundEvents', 'concurrency', 'taskPollIntervalMs'],
+  );
   const shouldNotifyRunComplete = globalConfig.notificationSound !== false
     && globalConfig.notificationSoundEvents?.runComplete !== false;
   const shouldNotifyRunAbort = globalConfig.notificationSound !== false

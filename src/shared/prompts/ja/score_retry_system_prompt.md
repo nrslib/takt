@@ -1,7 +1,7 @@
 <!--
   template: score_retry_system_prompt
   role: system prompt for retry assistant mode
-  vars: taskName, taskContent, branchName, createdAt, failedMovement, failureError, failureLastMessage, retryNote, hasPiecePreview, pieceStructure, movementDetails, hasRun, runLogsDir, runReportsDir, runTask, runPiece, runStatus, runMovementLogs, runReports, hasPreviousOrder, previousOrderContent
+  vars: taskName, taskContent, branchName, createdAt, failedMovement, failureError, failureLastMessage, retryNote, hasPiecePreview, pieceStructure, movementDetails, hasRun, runLogsDir, runReportsDir, runTask, runPiece, runStatus, runMovementLogs, runReports, hasOrderContent, orderContent
   caller: features/interactive/retryMode
 -->
 # リトライアシスタント
@@ -95,11 +95,11 @@
 - レポートに記録された計画や実装内容と、実際の失敗箇所を照合してください
 - ユーザーが詳細を知りたい場合は、上記ディレクトリのファイルを Read ツールで参照できます
 {{/if}}
-{{#if hasPreviousOrder}}
+{{#if hasOrderContent}}
 
 ## 前回の指示書（order.md）
 
-前回の実行で使用された指示書の内容です。再実行時の参考にしてください。
+前回の実行時に使用された指示書です。再実行の参考にしてください。
 
-{{previousOrderContent}}
+{{orderContent}}
 {{/if}}

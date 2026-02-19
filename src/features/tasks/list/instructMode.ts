@@ -11,19 +11,17 @@ import {
   runConversationLoop,
   type SessionContext,
   type ConversationStrategy,
-  type PostSummaryAction,
 } from '../../interactive/conversationLoop.js';
 import {
   resolveLanguage,
-  buildSummaryActionOptions,
-  selectSummaryAction,
   formatMovementPreviews,
   type PieceContext,
 } from '../../interactive/interactive.js';
+import { createSelectActionWithoutExecute, buildReplayHint } from '../../interactive/interactive-summary.js';
 import { type RunSessionContext, formatRunSessionForPrompt } from '../../interactive/runSessionReader.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import { getLabelObject } from '../../../shared/i18n/index.js';
-import { loadGlobalConfig } from '../../../infra/config/index.js';
+import { resolvePieceConfigValues } from '../../../infra/config/index.js';
 
 export type InstructModeAction = 'execute' | 'save_task' | 'cancel';
 
@@ -50,21 +48,6 @@ export interface InstructUIText {
 
 const INSTRUCT_TOOLS = ['Read', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch'];
 
-function createSelectInstructAction(ui: InstructUIText): (task: string, lang: 'en' | 'ja') => Promise<PostSummaryAction | null> {
-  return async (task: string, _lang: 'en' | 'ja'): Promise<PostSummaryAction | null> => {
-    return selectSummaryAction(
-      task,
-      ui.proposed,
-      ui.actionPrompt,
-      buildSummaryActionOptions({
-        execute: ui.actions.execute,
-        saveTask: ui.actions.saveTask,
-        continue: ui.actions.continue,
-      }),
-    );
-  };
-}
-
 function buildInstructTemplateVars(
   branchContext: string,
   branchName: string,
@@ -74,7 +57,7 @@ function buildInstructTemplateVars(
   lang: 'en' | 'ja',
   pieceContext?: PieceContext,
   runSessionContext?: RunSessionContext,
-  previousOrderContent?: string,
+  previousOrderContent?: string | null,
 ): Record<string, string | boolean> {
   const hasPiecePreview = !!pieceContext?.movementPreviews?.length;
   const movementDetails = hasPiecePreview
@@ -99,8 +82,8 @@ function buildInstructTemplateVars(
     movementDetails,
     hasRunSession,
     ...runPromptVars,
-    hasPreviousOrder,
-    previousOrderContent: hasPreviousOrder ? previousOrderContent : '',
+    hasOrderContent: !!previousOrderContent,
+    orderContent: previousOrderContent ?? '',
   };
 }
 
@@ -113,9 +96,9 @@ export async function runInstructMode(
   retryNote: string,
   pieceContext?: PieceContext,
   runSessionContext?: RunSessionContext,
-  previousOrderContent?: string,
+  previousOrderContent?: string | null,
 ): Promise<InstructModeResult> {
-  const globalConfig = loadGlobalConfig();
+  const globalConfig = resolvePieceConfigValues(cwd, ['language', 'provider']);
   const lang = resolveLanguage(globalConfig.language);
 
   if (!globalConfig.provider) {
@@ -135,6 +118,8 @@ export async function runInstructMode(
   );
   const systemPrompt = loadTemplate('score_instruct_system_prompt', ctx.lang, templateVars);
 
+  const replayHint = buildReplayHint(ctx.lang, !!previousOrderContent);
+
   const policyContent = loadTemplate('score_interactive_policy', ctx.lang, {});
 
   function injectPolicy(userMessage: string): string {
@@ -151,9 +136,9 @@ export async function runInstructMode(
     systemPrompt,
     allowedTools: INSTRUCT_TOOLS,
     transformPrompt: injectPolicy,
-    introMessage: ui.intro,
-    selectAction: createSelectInstructAction(ui),
-    previousOrderContent,
+    introMessage: `${ui.intro}${replayHint}`,
+    selectAction: createSelectActionWithoutExecute(ui),
+    previousOrderContent: previousOrderContent ?? undefined,
   };
 
   const result = await runConversationLoop(cwd, ctx, strategy, pieceContext, undefined);
