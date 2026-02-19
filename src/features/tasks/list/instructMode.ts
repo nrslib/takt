@@ -74,6 +74,7 @@ function buildInstructTemplateVars(
   lang: 'en' | 'ja',
   pieceContext?: PieceContext,
   runSessionContext?: RunSessionContext,
+  previousOrderContent?: string,
 ): Record<string, string | boolean> {
   const hasPiecePreview = !!pieceContext?.movementPreviews?.length;
   const movementDetails = hasPiecePreview
@@ -84,6 +85,8 @@ function buildInstructTemplateVars(
   const runPromptVars = hasRunSession
     ? formatRunSessionForPrompt(runSessionContext)
     : { runTask: '', runPiece: '', runStatus: '', runMovementLogs: '', runReports: '' };
+
+  const hasPreviousOrder = !!previousOrderContent;
 
   return {
     taskName,
@@ -96,6 +99,8 @@ function buildInstructTemplateVars(
     movementDetails,
     hasRunSession,
     ...runPromptVars,
+    hasPreviousOrder,
+    previousOrderContent: hasPreviousOrder ? previousOrderContent : '',
   };
 }
 
@@ -108,6 +113,7 @@ export async function runInstructMode(
   retryNote: string,
   pieceContext?: PieceContext,
   runSessionContext?: RunSessionContext,
+  previousOrderContent?: string,
 ): Promise<InstructModeResult> {
   const globalConfig = loadGlobalConfig();
   const lang = resolveLanguage(globalConfig.language);
@@ -125,7 +131,7 @@ export async function runInstructMode(
 
   const templateVars = buildInstructTemplateVars(
     branchContext, branchName, taskName, taskContent, retryNote, lang,
-    pieceContext, runSessionContext,
+    pieceContext, runSessionContext, previousOrderContent,
   );
   const systemPrompt = loadTemplate('score_instruct_system_prompt', ctx.lang, templateVars);
 
@@ -147,6 +153,7 @@ export async function runInstructMode(
     transformPrompt: injectPolicy,
     introMessage: ui.intro,
     selectAction: createSelectInstructAction(ui),
+    previousOrderContent,
   };
 
   const result = await runConversationLoop(cwd, ctx, strategy, pieceContext, undefined);

@@ -82,6 +82,7 @@ vi.mock('../features/interactive/index.js', () => ({
   listRecentRuns: (...args: unknown[]) => mockListRecentRuns(...args),
   selectRun: (...args: unknown[]) => mockSelectRun(...args),
   loadRunSessionContext: (...args: unknown[]) => mockLoadRunSessionContext(...args),
+  loadPreviousOrderContent: vi.fn(() => null),
 }));
 
 vi.mock('../features/tasks/execute/taskExecution.js', () => ({
@@ -191,6 +192,7 @@ describe('instructBranch direct execution flow', () => {
       '',
       expect.anything(),
       undefined,
+      undefined,
     );
   });
 
@@ -227,6 +229,7 @@ describe('instructBranch direct execution flow', () => {
       '',
       expect.anything(),
       runContext,
+      undefined,
     );
   });
 

@@ -18,7 +18,7 @@ import { runInstructMode } from './instructMode.js';
 import { selectPiece } from '../../pieceSelection/index.js';
 import { dispatchConversationAction } from '../../interactive/actionDispatcher.js';
 import type { PieceContext } from '../../interactive/interactive.js';
-import { resolveLanguage } from '../../interactive/index.js';
+import { resolveLanguage, loadPreviousOrderContent } from '../../interactive/index.js';
 import { type BranchActionTarget, resolveTargetBranch } from './taskActionTarget.js';
 import { appendRetryNote, selectRunSessionContext } from './requeueHelpers.js';
 import { executeAndCompleteTask } from '../execute/taskExecution.js';
@@ -107,11 +107,12 @@ export async function instructBranch(
   const runSessionContext = await selectRunSessionContext(worktreePath, lang);
 
   const branchContext = getBranchContext(projectDir, branch);
+  const previousOrderContent = loadPreviousOrderContent(worktreePath, target.content) ?? undefined;
 
   const result = await runInstructMode(
     worktreePath, branchContext, branch,
     target.name, target.content, target.data?.retry_note ?? '',
-    pieceContext, runSessionContext,
+    pieceContext, runSessionContext, previousOrderContent,
   );
 
   const executeWithInstruction = async (instruction: string): Promise<boolean> => {

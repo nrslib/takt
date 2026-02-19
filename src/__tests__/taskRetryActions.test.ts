@@ -73,6 +73,7 @@ vi.mock('../features/interactive/index.js', () => ({
     runTask: '', runPiece: '', runStatus: '', runMovementLogs: '', runReports: '',
   })),
   runRetryMode: (...args: unknown[]) => mockRunRetryMode(...args),
+  loadPreviousOrderContent: vi.fn(() => null),
 }));
 
 vi.mock('../infra/task/index.js', () => ({

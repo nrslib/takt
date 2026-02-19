@@ -1,7 +1,7 @@
 <!--
   template: score_instruct_system_prompt
   role: system prompt for instruct assistant mode (completed/failed tasks)
-  vars: taskName, taskContent, branchName, branchContext, retryNote, hasPiecePreview, pieceStructure, movementDetails, hasRunSession, runTask, runPiece, runStatus, runMovementLogs, runReports
+  vars: taskName, taskContent, branchName, branchContext, retryNote, hasPiecePreview, pieceStructure, movementDetails, hasRunSession, runTask, runPiece, runStatus, runMovementLogs, runReports, hasPreviousOrder, previousOrderContent
   caller: features/tasks/list/instructMode
 -->
 # 追加指示アシスタント
@@ -84,4 +84,12 @@
 - 問題点や改善点を議論する際は、具体的なムーブメントの結果を参照してください
 - 何がうまくいかなかったか、追加作業が必要な箇所をユーザーが特定できるよう支援してください
 - 実行結果に基づいて、具体的なフォローアップ指示を提案してください
+{{/if}}
+{{#if hasPreviousOrder}}
+
+## 前回の指示書（order.md）
+
+前回の実行で使用された指示書の内容です。追加指示作成の参考にしてください。
+
+{{previousOrderContent}}
 {{/if}}

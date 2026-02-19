@@ -9,6 +9,7 @@ function createRetryContext(overrides?: Partial<RetryContext>): RetryContext {
   return {
     failure: {
       taskName: 'my-task',
+      taskContent: '# Task\nBuild feature',
       createdAt: '2026-02-15T10:00:00Z',
       failedMovement: 'review',
       error: 'Timeout',
@@ -23,6 +24,7 @@ function createRetryContext(overrides?: Partial<RetryContext>): RetryContext {
       movementPreviews: [],
     },
     run: null,
+    previousOrderContent: null,
     ...overrides,
   };
 }
@@ -44,6 +46,7 @@ describe('buildRetryTemplateVars', () => {
     const ctx = createRetryContext({
       failure: {
         taskName: 'task',
+        taskContent: '',
         createdAt: '2026-01-01T00:00:00Z',
         failedMovement: '',
         error: 'Error',
@@ -129,10 +132,27 @@ describe('buildRetryTemplateVars', () => {
     expect(vars.movementDetails).toContain('Architect');
   });
 
+  it('should set hasPreviousOrder=false and empty previousOrderContent when previousOrderContent is null', () => {
+    const ctx = createRetryContext({ previousOrderContent: null });
+    const vars = buildRetryTemplateVars(ctx, 'en');
+
+    expect(vars.hasPreviousOrder).toBe(false);
+    expect(vars.previousOrderContent).toBe('');
+  });
+
+  it('should set hasPreviousOrder=true and populate previousOrderContent when provided', () => {
+    const ctx = createRetryContext({ previousOrderContent: '# Order content' });
+    const vars = buildRetryTemplateVars(ctx, 'en');
+
+    expect(vars.hasPreviousOrder).toBe(true);
+    expect(vars.previousOrderContent).toBe('# Order content');
+  });
+
   it('should include retryNote when present', () => {
     const ctx = createRetryContext({
       failure: {
         taskName: 'task',
+        taskContent: '',
         createdAt: '2026-01-01T00:00:00Z',
         failedMovement: '',
         error: 'Error',
