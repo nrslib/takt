@@ -214,6 +214,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       selectOptions.interactiveUserInput = true;
       selectOptions.piece = pieceId;
       selectOptions.interactiveMetadata = { confirmed: true, task: confirmedTask };
+      selectOptions.skipTaskList = true;
       await selectAndExecuteTask(resolvedCwd, confirmedTask, selectOptions, agentOverrides);
     },
     create_issue: async ({ task: confirmedTask }) => {

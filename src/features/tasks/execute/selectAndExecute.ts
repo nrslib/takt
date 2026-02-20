@@ -108,15 +108,18 @@ export async function selectAndExecuteTask(
 
   log.info('Starting task execution', { piece: pieceIdentifier, worktree: isWorktree, autoPr: shouldCreatePr, draftPr: shouldDraftPr });
   const taskRunner = new TaskRunner(cwd);
-  const taskRecord = taskRunner.addTask(task, {
-    piece: pieceIdentifier,
-    ...(isWorktree ? { worktree: true } : {}),
-    ...(branch ? { branch } : {}),
-    ...(isWorktree ? { worktree_path: execCwd } : {}),
-    auto_pr: shouldCreatePr,
-    draft_pr: shouldDraftPr,
-    ...(taskSlug ? { slug: taskSlug } : {}),
-  });
+  let taskRecord: Awaited<ReturnType<TaskRunner['addTask']>> | null = null;
+  if (options?.skipTaskList !== true) {
+    taskRecord = taskRunner.addTask(task, {
+      piece: pieceIdentifier,
+      ...(isWorktree ? { worktree: true } : {}),
+      ...(branch ? { branch } : {}),
+      ...(isWorktree ? { worktree_path: execCwd } : {}),
+      auto_pr: shouldCreatePr,
+      draft_pr: shouldDraftPr,
+      ...(taskSlug ? { slug: taskSlug } : {}),
+    });
+  }
   const startedAt = new Date().toISOString();
 
   let taskSuccess: boolean;
@@ -132,9 +135,11 @@ export async function selectAndExecuteTask(
     });
   } catch (err) {
     const completedAt = new Date().toISOString();
-    persistTaskError(taskRunner, taskRecord, startedAt, completedAt, err, {
-      responsePrefix: 'Task failed: ',
-    });
+    if (taskRecord) {
+      persistTaskError(taskRunner, taskRecord, startedAt, completedAt, err, {
+        responsePrefix: 'Task failed: ',
+      });
+    }
     throw err;
   }
 
@@ -160,17 +165,19 @@ export async function selectAndExecuteTask(
   }
 
   const effectiveSuccess = taskSuccess && !prFailed;
-  const taskResult = buildBooleanTaskResult({
-    task: taskRecord,
-    taskSuccess: effectiveSuccess,
-    successResponse: 'Task completed successfully',
-    failureResponse: prFailed ? `PR creation failed: ${prError}` : 'Task failed',
-    startedAt,
-    completedAt,
-    branch,
-    ...(isWorktree ? { worktreePath: execCwd } : {}),
-  });
-  persistTaskResult(taskRunner, taskResult);
+  if (taskRecord) {
+    const taskResult = buildBooleanTaskResult({
+      task: taskRecord,
+      taskSuccess: effectiveSuccess,
+      successResponse: 'Task completed successfully',
+      failureResponse: prFailed ? `PR creation failed: ${prError}` : 'Task failed',
+      startedAt,
+      completedAt,
+      branch,
+      ...(isWorktree ? { worktreePath: execCwd } : {}),
+    });
+    persistTaskResult(taskRunner, taskResult);
+  }
 
   if (!effectiveSuccess) {
     process.exit(1);
