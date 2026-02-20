@@ -9,6 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../infra/github/issue.js', () => ({
   createIssue: vi.fn(),
+  generateIssueTitle: vi.fn(),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -26,11 +27,24 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   }),
 }));
 
-import { createIssue } from '../infra/github/issue.js';
+vi.mock('../infra/config/index.js', () => ({
+  resolveConfigValues: () => ({}),
+}));
+
+vi.mock('../infra/providers/index.js', () => ({
+  getProvider: () => ({
+    setup: () => ({
+      call: vi.fn().mockResolvedValue({ content: 'Generated title' }),
+    }),
+  }),
+}));
+
+import { createIssue, generateIssueTitle } from '../infra/github/issue.js';
 import { success, error } from '../shared/ui/index.js';
 import { createIssueFromTask } from '../features/tasks/index.js';
 
 const mockCreateIssue = vi.mocked(createIssue);
+const mockGenerateIssueTitle = vi.mocked(generateIssueTitle);
 const mockSuccess = vi.mocked(success);
 const mockError = vi.mocked(error);
 
@@ -40,45 +54,36 @@ beforeEach(() => {
 
 describe('createIssueFromTask', () => {
   describe('title truncation boundary', () => {
-    it('should use title as-is when exactly 99 characters', () => {
-      // Given: 99-character first line
+    it('should use title as-is when exactly 99 characters', async () => {
       const title99 = 'a'.repeat(99);
       mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/1' });
 
-      // When
-      createIssueFromTask(title99);
+      await createIssueFromTask(title99);
 
-      // Then: title passed without truncation
       expect(mockCreateIssue).toHaveBeenCalledWith({
         title: title99,
         body: title99,
       });
     });
 
-    it('should use title as-is when exactly 100 characters', () => {
-      // Given: 100-character first line
+    it('should use title as-is when exactly 100 characters', async () => {
       const title100 = 'a'.repeat(100);
       mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/1' });
 
-      // When
-      createIssueFromTask(title100);
+      await createIssueFromTask(title100);
 
-      // Then: title passed without truncation
       expect(mockCreateIssue).toHaveBeenCalledWith({
         title: title100,
         body: title100,
       });
     });
 
-    it('should truncate title to 97 chars + ellipsis when 101 characters', () => {
-      // Given: 101-character first line
+    it('should truncate title to 97 chars + ellipsis when 101 characters', async () => {
       const title101 = 'a'.repeat(101);
       mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/1' });
 
-      // When
-      createIssueFromTask(title101);
+      await createIssueFromTask(title101);
 
-      // Then: title truncated to 97 chars + "..."
       const expectedTitle = `${'a'.repeat(97)}...`;
       expect(expectedTitle).toHaveLength(100);
       expect(mockCreateIssue).toHaveBeenCalledWith({
@@ -88,80 +93,126 @@ describe('createIssueFromTask', () => {
     });
   });
 
-  it('should display success message with URL when issue creation succeeds', () => {
-    // Given
+  it('should display success message with URL when issue creation succeeds', async () => {
     const url = 'https://github.com/owner/repo/issues/42';
     mockCreateIssue.mockReturnValue({ success: true, url });
 
-    // When
-    createIssueFromTask('Test task');
+    await createIssueFromTask('Test task');
 
-    // Then
     expect(mockSuccess).toHaveBeenCalledWith(`Issue created: ${url}`);
     expect(mockError).not.toHaveBeenCalled();
   });
 
-  it('should display error message when issue creation fails', () => {
-    // Given
+  it('should display error message when issue creation fails', async () => {
     const errorMsg = 'repo not found';
     mockCreateIssue.mockReturnValue({ success: false, error: errorMsg });
 
-    // When
-    createIssueFromTask('Test task');
+    await createIssueFromTask('Test task');
 
-    // Then
     expect(mockError).toHaveBeenCalledWith(`Failed to create issue: ${errorMsg}`);
     expect(mockSuccess).not.toHaveBeenCalled();
   });
 
   describe('return value', () => {
-    it('should return issue number when creation succeeds', () => {
-      // Given
+    it('should return issue number when creation succeeds', async () => {
       mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/42' });
 
-      // When
-      const result = createIssueFromTask('Test task');
+      const result = await createIssueFromTask('Test task');
 
-      // Then
       expect(result).toBe(42);
     });
 
-    it('should return undefined when creation fails', () => {
-      // Given
+    it('should return undefined when creation fails', async () => {
       mockCreateIssue.mockReturnValue({ success: false, error: 'auth failed' });
 
-      // When
-      const result = createIssueFromTask('Test task');
+      const result = await createIssueFromTask('Test task');
 
-      // Then
       expect(result).toBeUndefined();
     });
 
-    it('should return undefined and display error when URL has non-numeric suffix', () => {
-      // Given
+    it('should return undefined and display error when URL has non-numeric suffix', async () => {
       mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/abc' });
 
-      // When
-      const result = createIssueFromTask('Test task');
+      const result = await createIssueFromTask('Test task');
 
-      // Then
       expect(result).toBeUndefined();
       expect(mockError).toHaveBeenCalledWith('Failed to extract issue number from URL');
     });
   });
 
-  it('should use first line as title and full text as body for multi-line task', () => {
-    // Given: multi-line task
+  it('should use first line as title and full text as body for multi-line task', async () => {
     const task = 'First line title\nSecond line details\nThird line more info';
     mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/1' });
 
-    // When
-    createIssueFromTask(task);
+    await createIssueFromTask(task);
 
-    // Then: first line → title, full text → body
     expect(mockCreateIssue).toHaveBeenCalledWith({
       title: 'First line title',
       body: task,
+    });
+  });
+
+  describe('user-provided title', () => {
+    it('should use user-provided title when options.title is specified', async () => {
+      const task = 'Task description\nwith multiple lines';
+      const userTitle = 'User specified title';
+      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/1' });
+
+      await createIssueFromTask(task, { title: userTitle });
+
+      expect(mockGenerateIssueTitle).not.toHaveBeenCalled();
+      expect(mockCreateIssue).toHaveBeenCalledWith({
+        title: userTitle,
+        body: task,
+      });
+    });
+  });
+
+  describe('AI-generated title', () => {
+    it('should use AI-generated title when cwd is provided but title is not', async () => {
+      const task = 'Fix the authentication bug where users cannot login';
+      const generatedTitle = 'Fix authentication bug';
+      mockGenerateIssueTitle.mockResolvedValue(generatedTitle);
+      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/1' });
+
+      const result = await createIssueFromTask(task, { cwd: '/tmp' });
+
+      expect(mockGenerateIssueTitle).toHaveBeenCalledWith(task, '/tmp');
+      expect(mockCreateIssue).toHaveBeenCalledWith({
+        title: generatedTitle,
+        body: task,
+      });
+      expect(result).toBe(1);
+    });
+
+    it('should truncate AI-generated title if over 100 characters', async () => {
+      const task = 'Task description';
+      const longTitle = 'a'.repeat(120);
+      const truncatedTitle = `${'a'.repeat(97)}...`;
+      mockGenerateIssueTitle.mockResolvedValue(truncatedTitle);
+      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/1' });
+
+      await createIssueFromTask(task, { cwd: '/tmp' });
+
+      expect(mockGenerateIssueTitle).toHaveBeenCalledWith(task, '/tmp');
+      expect(mockCreateIssue).toHaveBeenCalledWith({
+        title: truncatedTitle,
+        body: task,
+      });
+    });
+
+    it('should fallback to first line when AI generation fails', async () => {
+      const task = 'First line\nSecond line';
+      mockGenerateIssueTitle.mockRejectedValue(new Error('AI error'));
+      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/1' });
+
+      await createIssueFromTask(task, { cwd: '/tmp' });
+
+      expect(mockGenerateIssueTitle).toHaveBeenCalledWith(task, '/tmp');
+      expect(mockCreateIssue).toHaveBeenCalledWith({
+        title: 'First line',
+        body: task,
+      });
     });
   });
 });

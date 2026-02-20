@@ -12,6 +12,7 @@ export {
   isIssueReference,
   resolveIssueTask,
   createIssue,
+  generateIssueTitle,
 } from './issue.js';
 
 export type { ExistingPr } from './pr.js';
