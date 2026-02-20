@@ -1,12 +1,12 @@
 import type { PieceMovement } from '../models/types.js';
-
-export type ProviderType = 'claude' | 'codex' | 'opencode' | 'mock';
+import type { PersonaProviderEntry } from '../models/persisted-global-config.js';
+import type { ProviderType } from './types.js';
 
 export interface MovementProviderModelInput {
   step: Pick<PieceMovement, 'provider' | 'model' | 'personaDisplayName'>;
   provider?: ProviderType;
   model?: string;
-  personaProviders?: Record<string, ProviderType>;
+  personaProviders?: Record<string, PersonaProviderEntry>;
 }
 
 export interface MovementProviderModelOutput {
@@ -15,10 +15,11 @@ export interface MovementProviderModelOutput {
 }
 
 export function resolveMovementProviderModel(input: MovementProviderModelInput): MovementProviderModelOutput {
+  const personaEntry = input.personaProviders?.[input.step.personaDisplayName];
   return {
     provider: input.step.provider
-      ?? input.personaProviders?.[input.step.personaDisplayName]
+      ?? personaEntry?.provider
       ?? input.provider,
-    model: input.step.model ?? input.model,
+    model: input.step.model ?? personaEntry?.model ?? input.model,
   };
 }

@@ -9,13 +9,15 @@ import { readFileSync, existsSync, writeFileSync, statSync, accessSync, constant
 import { isAbsolute } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { GlobalConfigSchema } from '../../../core/models/index.js';
-import type { GlobalConfig, Language } from '../../../core/models/index.js';
+import type { Language } from '../../../core/models/index.js';
+import type { PersistedGlobalConfig, PersonaProviderEntry } from '../../../core/models/persisted-global-config.js';
 import type { ProviderPermissionProfiles } from '../../../core/models/provider-profiles.js';
 import { normalizeProviderOptions } from '../loaders/pieceParser.js';
 import { getGlobalConfigPath } from '../paths.js';
 import { DEFAULT_LANGUAGE } from '../../../shared/constants.js';
 import { parseProviderModel } from '../../../shared/utils/providerModel.js';
 import { applyGlobalConfigEnvOverrides, envVarNameFromPath } from '../env/config-env-overrides.js';
+import { invalidateAllResolvedConfigCache } from '../resolutionCache.js';
 
 /** Claude-specific model aliases that are not valid for other providers */
 const CLAUDE_MODEL_ALIASES = new Set(['opus', 'sonnet', 'haiku']);
@@ -56,7 +58,6 @@ function validateCodexCliPath(pathValue: string, sourceName: 'TAKT_CODEX_CLI_PAT
   return trimmed;
 }
 
-/** Validate that provider and model are compatible */
 function validateProviderModelCompatibility(provider: string | undefined, model: string | undefined): void {
   if (!provider) return;
 
@@ -78,6 +79,19 @@ function validateProviderModelCompatibility(provider: string | undefined, model:
   if (provider === 'opencode') {
     parseProviderModel(model, "Configuration error: model");
   }
+}
+
+function normalizePersonaProviders(
+  raw: Record<string, NonNullable<PersonaProviderEntry['provider']> | PersonaProviderEntry> | undefined,
+): Record<string, PersonaProviderEntry> | undefined {
+  if (!raw) return undefined;
+  return Object.fromEntries(
+    Object.entries(raw).map(([persona, entry]) => {
+      const normalized: PersonaProviderEntry = typeof entry === 'string' ? { provider: entry } : entry;
+      validateProviderModelCompatibility(normalized.provider, normalized.model);
+      return [persona, normalized];
+    }),
+  );
 }
 
 function normalizeProviderProfiles(
@@ -114,7 +128,7 @@ function denormalizeProviderProfiles(
  */
 export class GlobalConfigManager {
   private static instance: GlobalConfigManager | null = null;
-  private cachedConfig: GlobalConfig | null = null;
+  private cachedConfig: PersistedGlobalConfig | null = null;
 
   private constructor() {}
 
@@ -136,7 +150,7 @@ export class GlobalConfigManager {
   }
 
   /** Load global configuration (cached) */
-  load(): GlobalConfig {
+  load(): PersistedGlobalConfig {
     if (this.cachedConfig !== null) {
       return this.cachedConfig;
     }
@@ -156,7 +170,7 @@ export class GlobalConfigManager {
     applyGlobalConfigEnvOverrides(rawConfig);
 
     const parsed = GlobalConfigSchema.parse(rawConfig);
-    const config: GlobalConfig = {
+    const config: PersistedGlobalConfig = {
       language: parsed.language,
       logLevel: parsed.log_level,
       provider: parsed.provider,
@@ -171,6 +185,7 @@ export class GlobalConfigManager {
       } : undefined,
       worktreeDir: parsed.worktree_dir,
       autoPr: parsed.auto_pr,
+      draftPr: parsed.draft_pr,
       disabledBuiltins: parsed.disabled_builtins,
       enableBuiltinPieces: parsed.enable_builtin_pieces,
       anthropicApiKey: parsed.anthropic_api_key,
@@ -185,7 +200,7 @@ export class GlobalConfigManager {
       minimalOutput: parsed.minimal_output,
       bookmarksFile: parsed.bookmarks_file,
       pieceCategoriesFile: parsed.piece_categories_file,
-      personaProviders: parsed.persona_providers,
+      personaProviders: normalizePersonaProviders(parsed.persona_providers as Record<string, NonNullable<PersonaProviderEntry['provider']> | PersonaProviderEntry> | undefined),
       providerOptions: normalizeProviderOptions(parsed.provider_options),
       providerProfiles: normalizeProviderProfiles(parsed.provider_profiles as Record<string, { default_permission_mode: unknown; movement_permission_overrides?: Record<string, unknown> }> | undefined),
       runtime: parsed.runtime?.prepare && parsed.runtime.prepare.length > 0
@@ -212,7 +227,7 @@ export class GlobalConfigManager {
   }
 
   /** Save global configuration to disk and invalidate cache */
-  save(config: GlobalConfig): void {
+  save(config: PersistedGlobalConfig): void {
     const configPath = getGlobalConfigPath();
     const raw: Record<string, unknown> = {
       language: config.language,
@@ -241,6 +256,9 @@ export class GlobalConfigManager {
     }
     if (config.autoPr !== undefined) {
       raw.auto_pr = config.autoPr;
+    }
+    if (config.draftPr !== undefined) {
+      raw.draft_pr = config.draftPr;
     }
     if (config.disabledBuiltins && config.disabledBuiltins.length > 0) {
       raw.disabled_builtins = config.disabledBuiltins;
@@ -334,18 +352,20 @@ export class GlobalConfigManager {
     }
     writeFileSync(configPath, stringifyYaml(raw), 'utf-8');
     this.invalidateCache();
+    invalidateAllResolvedConfigCache();
   }
 }
 
 export function invalidateGlobalConfigCache(): void {
   GlobalConfigManager.getInstance().invalidateCache();
+  invalidateAllResolvedConfigCache();
 }
 
-export function loadGlobalConfig(): GlobalConfig {
+export function loadGlobalConfig(): PersistedGlobalConfig {
   return GlobalConfigManager.getInstance().load();
 }
 
-export function saveGlobalConfig(config: GlobalConfig): void {
+export function saveGlobalConfig(config: PersistedGlobalConfig): void {
   GlobalConfigManager.getInstance().save(config);
 }
 
@@ -430,7 +450,7 @@ export function resolveCodexCliPath(): string | undefined {
     return validateCodexCliPath(envPath, 'TAKT_CODEX_CLI_PATH');
   }
 
-  let config: GlobalConfig;
+  let config: PersistedGlobalConfig;
   try {
     config = loadGlobalConfig();
   } catch {

@@ -359,6 +359,11 @@ export const PieceConfigRawSchema = z.object({
   interactive_mode: InteractiveModeSchema.optional(),
 });
 
+export const PersonaProviderEntrySchema = z.object({
+  provider: z.enum(['claude', 'codex', 'opencode', 'mock']).optional(),
+  model: z.string().optional(),
+});
+
 /** Custom agent configuration schema */
 export const CustomAgentConfigSchema = z.object({
   name: z.string().min(1),
@@ -421,6 +426,8 @@ export const GlobalConfigSchema = z.object({
   worktree_dir: z.string().optional(),
   /** Auto-create PR after worktree execution (default: prompt in interactive mode) */
   auto_pr: z.boolean().optional(),
+  /** Create PR as draft (default: prompt in interactive mode when auto_pr is true) */
+  draft_pr: z.boolean().optional(),
   /** List of builtin piece/agent names to exclude from fallback loading */
   disabled_builtins: z.array(z.string()).optional().default([]),
   /** Enable builtin pieces from builtins/{lang}/pieces */
@@ -441,8 +448,11 @@ export const GlobalConfigSchema = z.object({
   bookmarks_file: z.string().optional(),
   /** Path to piece categories file (default: ~/.takt/preferences/piece-categories.yaml) */
   piece_categories_file: z.string().optional(),
-  /** Per-persona provider overrides (e.g., { coder: 'codex' }) */
-  persona_providers: z.record(z.string(), z.enum(['claude', 'codex', 'opencode', 'mock'])).optional(),
+  /** Per-persona provider and model overrides. */
+  persona_providers: z.record(z.string(), z.union([
+    z.enum(['claude', 'codex', 'opencode', 'mock']),
+    PersonaProviderEntrySchema,
+  ])).optional(),
   /** Global provider-specific options (lowest priority) */
   provider_options: MovementProviderOptionsSchema,
   /** Provider-specific permission profiles */

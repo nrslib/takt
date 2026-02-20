@@ -5,6 +5,11 @@
 import type { MovementProviderOptions, PieceRuntimeConfig } from './piece-types.js';
 import type { ProviderPermissionProfiles } from './provider-profiles.js';
 
+export interface PersonaProviderEntry {
+  provider?: 'claude' | 'codex' | 'opencode' | 'mock';
+  model?: string;
+}
+
 /** Custom agent configuration */
 export interface CustomAgentConfig {
   name: string;
@@ -60,8 +65,8 @@ export interface NotificationSoundEventsConfig {
   runAbort?: boolean;
 }
 
-/** Global configuration for takt */
-export interface GlobalConfig {
+/** Persisted global configuration for ~/.takt/config.yaml */
+export interface PersistedGlobalConfig {
   language: Language;
   logLevel: 'debug' | 'info' | 'warn' | 'error';
   provider?: 'claude' | 'codex' | 'opencode' | 'mock';
@@ -72,6 +77,8 @@ export interface GlobalConfig {
   worktreeDir?: string;
   /** Auto-create PR after worktree execution (default: prompt in interactive mode) */
   autoPr?: boolean;
+  /** Create PR as draft (default: prompt in interactive mode when autoPr is true) */
+  draftPr?: boolean;
   /** List of builtin piece/agent names to exclude from fallback loading */
   disabledBuiltins?: string[];
   /** Enable builtin pieces from builtins/{lang}/pieces */
@@ -92,8 +99,8 @@ export interface GlobalConfig {
   bookmarksFile?: string;
   /** Path to piece categories file (default: ~/.takt/preferences/piece-categories.yaml) */
   pieceCategoriesFile?: string;
-  /** Per-persona provider overrides (e.g., { coder: 'codex' }) */
-  personaProviders?: Record<string, 'claude' | 'codex' | 'opencode' | 'mock'>;
+  /** Per-persona provider and model overrides (e.g., { coder: { provider: 'codex', model: 'o3-mini' } }) */
+  personaProviders?: Record<string, PersonaProviderEntry>;
   /** Global provider-specific options (lowest priority) */
   providerOptions?: MovementProviderOptions;
   /** Provider-specific permission profiles */

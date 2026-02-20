@@ -35,6 +35,7 @@ import {
   getLanguage,
   loadProjectConfig,
   isVerboseMode,
+  resolveConfigValue,
   invalidateGlobalConfigCache,
 } from '../infra/config/index.js';
 
@@ -386,6 +387,117 @@ describe('loadProjectConfig provider_options', () => {
     } else {
       process.env.TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS = original;
     }
+  });
+});
+
+describe('analytics config resolution', () => {
+  let testDir: string;
+  let originalTaktConfigDir: string | undefined;
+  let originalAnalyticsEnabled: string | undefined;
+  let originalAnalyticsEventsPath: string | undefined;
+  let originalAnalyticsRetentionDays: string | undefined;
+
+  beforeEach(() => {
+    testDir = join(tmpdir(), `takt-test-${randomUUID()}`);
+    mkdirSync(testDir, { recursive: true });
+    originalTaktConfigDir = process.env.TAKT_CONFIG_DIR;
+    originalAnalyticsEnabled = process.env.TAKT_ANALYTICS_ENABLED;
+    originalAnalyticsEventsPath = process.env.TAKT_ANALYTICS_EVENTS_PATH;
+    originalAnalyticsRetentionDays = process.env.TAKT_ANALYTICS_RETENTION_DAYS;
+    process.env.TAKT_CONFIG_DIR = join(testDir, 'global-takt');
+    delete process.env.TAKT_ANALYTICS_ENABLED;
+    delete process.env.TAKT_ANALYTICS_EVENTS_PATH;
+    delete process.env.TAKT_ANALYTICS_RETENTION_DAYS;
+    invalidateGlobalConfigCache();
+  });
+
+  afterEach(() => {
+    if (originalTaktConfigDir === undefined) {
+      delete process.env.TAKT_CONFIG_DIR;
+    } else {
+      process.env.TAKT_CONFIG_DIR = originalTaktConfigDir;
+    }
+    if (originalAnalyticsEnabled === undefined) {
+      delete process.env.TAKT_ANALYTICS_ENABLED;
+    } else {
+      process.env.TAKT_ANALYTICS_ENABLED = originalAnalyticsEnabled;
+    }
+    if (originalAnalyticsEventsPath === undefined) {
+      delete process.env.TAKT_ANALYTICS_EVENTS_PATH;
+    } else {
+      process.env.TAKT_ANALYTICS_EVENTS_PATH = originalAnalyticsEventsPath;
+    }
+    if (originalAnalyticsRetentionDays === undefined) {
+      delete process.env.TAKT_ANALYTICS_RETENTION_DAYS;
+    } else {
+      process.env.TAKT_ANALYTICS_RETENTION_DAYS = originalAnalyticsRetentionDays;
+    }
+    invalidateGlobalConfigCache();
+
+    if (existsSync(testDir)) {
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should normalize project analytics config from snake_case', () => {
+    const projectConfigDir = getProjectConfigDir(testDir);
+    mkdirSync(projectConfigDir, { recursive: true });
+    writeFileSync(join(projectConfigDir, 'config.yaml'), [
+      'piece: default',
+      'analytics:',
+      '  enabled: false',
+      '  events_path: .takt/project-analytics/events',
+      '  retention_days: 7',
+    ].join('\n'));
+
+    const config = loadProjectConfig(testDir);
+
+    expect(config.analytics).toEqual({
+      enabled: false,
+      eventsPath: '.takt/project-analytics/events',
+      retentionDays: 7,
+    });
+  });
+
+  it('should apply TAKT_ANALYTICS_* env overrides for project config', () => {
+    process.env.TAKT_ANALYTICS_ENABLED = 'true';
+    process.env.TAKT_ANALYTICS_EVENTS_PATH = '/tmp/project-analytics';
+    process.env.TAKT_ANALYTICS_RETENTION_DAYS = '5';
+
+    const config = loadProjectConfig(testDir);
+    expect(config.analytics).toEqual({
+      enabled: true,
+      eventsPath: '/tmp/project-analytics',
+      retentionDays: 5,
+    });
+  });
+
+  it('should merge analytics as project > global in resolveConfigValue', () => {
+    const globalConfigDir = process.env.TAKT_CONFIG_DIR!;
+    mkdirSync(globalConfigDir, { recursive: true });
+    writeFileSync(join(globalConfigDir, 'config.yaml'), [
+      'language: ja',
+      'analytics:',
+      '  enabled: true',
+      '  events_path: /tmp/global-analytics',
+      '  retention_days: 30',
+    ].join('\n'));
+
+    const projectConfigDir = getProjectConfigDir(testDir);
+    mkdirSync(projectConfigDir, { recursive: true });
+    writeFileSync(join(projectConfigDir, 'config.yaml'), [
+      'piece: default',
+      'analytics:',
+      '  events_path: /tmp/project-analytics',
+      '  retention_days: 14',
+    ].join('\n'));
+
+    const analytics = resolveConfigValue(testDir, 'analytics');
+    expect(analytics).toEqual({
+      enabled: true,
+      eventsPath: '/tmp/project-analytics',
+      retentionDays: 14,
+    });
   });
 });
 

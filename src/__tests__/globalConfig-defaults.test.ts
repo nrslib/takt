@@ -42,7 +42,7 @@ describe('loadGlobalConfig', () => {
     expect(config.logLevel).toBe('info');
     expect(config.provider).toBe('claude');
     expect(config.model).toBeUndefined();
-    expect(config.debug).toBeUndefined();
+    expect(config.verbose).toBeUndefined();
     expect(config.pipeline).toBeUndefined();
   });
 
@@ -451,8 +451,11 @@ describe('loadGlobalConfig', () => {
         [
           'language: en',
           'persona_providers:',
-          '  coder: codex',
-          '  reviewer: claude',
+          '  coder:',
+          '    provider: codex',
+          '  reviewer:',
+          '    provider: claude',
+          '    model: claude-3-5-sonnet-latest',
         ].join('\n'),
         'utf-8',
       );
@@ -460,8 +463,29 @@ describe('loadGlobalConfig', () => {
       const config = loadGlobalConfig();
 
       expect(config.personaProviders).toEqual({
-        coder: 'codex',
-        reviewer: 'claude',
+        coder: { provider: 'codex' },
+        reviewer: { provider: 'claude', model: 'claude-3-5-sonnet-latest' },
+      });
+    });
+
+    it('should load persona_providers with model only (no provider)', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(
+        getGlobalConfigPath(),
+        [
+          'language: en',
+          'persona_providers:',
+          '  coder:',
+          '    model: o3-mini',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      const config = loadGlobalConfig();
+
+      expect(config.personaProviders).toEqual({
+        coder: { model: 'o3-mini' },
       });
     });
 
@@ -471,12 +495,28 @@ describe('loadGlobalConfig', () => {
       writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
 
       const config = loadGlobalConfig();
-      config.personaProviders = { coder: 'codex' };
+      config.personaProviders = { coder: { provider: 'codex', model: 'o3-mini' } };
       saveGlobalConfig(config);
       invalidateGlobalConfigCache();
 
       const reloaded = loadGlobalConfig();
-      expect(reloaded.personaProviders).toEqual({ coder: 'codex' });
+      expect(reloaded.personaProviders).toEqual({ coder: { provider: 'codex', model: 'o3-mini' } });
+    });
+
+    it('should normalize legacy string format to object format', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(
+        getGlobalConfigPath(),
+        'language: en\npersona_providers:\n  coder: codex\n',
+        'utf-8',
+      );
+
+      const config = loadGlobalConfig();
+
+      expect(config.personaProviders).toEqual({
+        coder: { provider: 'codex' },
+      });
     });
 
     it('should have undefined personaProviders by default', () => {
@@ -496,6 +536,42 @@ describe('loadGlobalConfig', () => {
 
       const reloaded = loadGlobalConfig();
       expect(reloaded.personaProviders).toBeUndefined();
+    });
+
+    it('should throw when persona entry has codex provider with Claude model alias', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(
+        getGlobalConfigPath(),
+        'language: en\npersona_providers:\n  coder:\n    provider: codex\n    model: opus\n',
+        'utf-8',
+      );
+
+      expect(() => loadGlobalConfig()).toThrow(/Claude model alias/);
+    });
+
+    it('should throw when persona entry has opencode provider without model', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(
+        getGlobalConfigPath(),
+        'language: en\npersona_providers:\n  reviewer:\n    provider: opencode\n',
+        'utf-8',
+      );
+
+      expect(() => loadGlobalConfig()).toThrow(/requires model/);
+    });
+
+    it('should not throw when persona entry has opencode provider with compatible model', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(
+        getGlobalConfigPath(),
+        'language: en\npersona_providers:\n  coder:\n    provider: opencode\n    model: opencode/big-pickle\n',
+        'utf-8',
+      );
+
+      expect(() => loadGlobalConfig()).not.toThrow();
     });
   });
 

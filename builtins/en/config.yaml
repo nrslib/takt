@@ -29,6 +29,10 @@ concurrency: 2                  # Concurrent task execution for takt run (1-10)
 #   run_abort: true
 # observability:
 #   provider_events: false         # Persist provider stream events
+# analytics:
+#   enabled: true                  # Enable analytics metrics collection
+#   events_path: ~/.takt/analytics/events  # Analytics event directory
+#   retention_days: 30             # Analytics event retention (days)
 
 # Credentials (environment variables take priority)
 # anthropic_api_key: "sk-ant-..." # Claude API key
@@ -51,12 +55,17 @@ concurrency: 2                  # Concurrent task execution for takt run (1-10)
 # =====================================
 # Piece-related settings (global defaults)
 # =====================================
-# 1) Route provider per persona
+# 1) Route provider/model per persona
 # persona_providers:
-#   coder: codex         # Run coder persona on codex
-#   reviewer: claude     # Run reviewer persona on claude
+#   coder:
+#     provider: codex    # Run coder persona on Codex
+#     model: o3-mini     # Use o3-mini model (optional)
+#   reviewer:
+#     provider: claude   # Run reviewer persona on Claude
 
-# 2) Provider options (global < project < piece)
+# 2) Provider options
+#    Priority (for piece-capable keys such as provider/model/provider_options):
+#    global < piece < project < env
 # provider_options:
 #   codex:
 #     network_access: true      # Allow network access for Codex

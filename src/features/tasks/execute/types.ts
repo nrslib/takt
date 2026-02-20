@@ -3,10 +3,12 @@
  */
 
 import type { Language } from '../../../core/models/index.js';
+import type { PersonaProviderEntry } from '../../../core/models/persisted-global-config.js';
 import type { ProviderPermissionProfiles } from '../../../core/models/provider-profiles.js';
 import type { MovementProviderOptions } from '../../../core/models/piece-types.js';
 import type { ProviderType } from '../../../infra/providers/index.js';
 import type { GitHubIssue } from '../../../infra/github/index.js';
+import type { ProviderOptionsSource } from '../../../core/piece/types.js';
 
 /** Result of piece execution */
 export interface PieceExecutionResult {
@@ -36,8 +38,10 @@ export interface PieceExecutionOptions {
   model?: string;
   /** Resolved provider options */
   providerOptions?: MovementProviderOptions;
-  /** Per-persona provider overrides (e.g., { coder: 'codex' }) */
-  personaProviders?: Record<string, ProviderType>;
+  /** Source layer for resolved provider options */
+  providerOptionsSource?: ProviderOptionsSource;
+  /** Per-persona provider and model overrides (e.g., { coder: { provider: 'codex', model: 'o3-mini' } }) */
+  personaProviders?: Record<string, PersonaProviderEntry>;
   /** Resolved provider permission profiles */
   providerProfiles?: ProviderPermissionProfiles;
   /** Enable interactive user input during step transitions */
@@ -107,6 +111,8 @@ export interface PipelineExecutionOptions {
   branch?: string;
   /** Whether to create a PR after successful execution */
   autoPr: boolean;
+  /** Whether to create PR as draft */
+  draftPr?: boolean;
   /** Repository in owner/repo format */
   repo?: string;
   /** Skip branch creation, commit, and push (piece-only execution) */
@@ -127,6 +133,7 @@ export interface WorktreeConfirmationResult {
 
 export interface SelectAndExecuteOptions {
   autoPr?: boolean;
+  draftPr?: boolean;
   repo?: string;
   piece?: string;
   createWorktree?: boolean | undefined;

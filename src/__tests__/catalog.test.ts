@@ -20,16 +20,6 @@ vi.mock('../infra/config/global/globalConfig.js', () => ({
   loadGlobalConfig: () => ({}),
 }));
 
-vi.mock('../infra/config/loadConfig.js', () => ({
-  loadConfig: () => ({
-    global: {
-      language: 'en',
-      enableBuiltinPieces: true,
-    },
-    project: {},
-  }),
-}));
-
 const mockLogError = vi.fn();
 const mockInfo = vi.fn();
 vi.mock('../shared/ui/index.js', () => ({

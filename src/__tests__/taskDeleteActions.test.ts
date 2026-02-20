@@ -28,7 +28,7 @@ vi.mock('../features/tasks/list/taskActions.js', () => ({
 
 import { confirm } from '../shared/prompt/index.js';
 import { success, error as logError } from '../shared/ui/index.js';
-import { deletePendingTask, deleteFailedTask, deleteCompletedTask } from '../features/tasks/list/taskDeleteActions.js';
+import { deletePendingTask, deleteFailedTask, deleteCompletedTask, deleteAllTasks } from '../features/tasks/list/taskDeleteActions.js';
 import type { TaskListItem } from '../infra/task/types.js';
 
 const mockConfirm = vi.mocked(confirm);
@@ -204,5 +204,129 @@ describe('taskDeleteActions', () => {
     const raw = fs.readFileSync(tasksFile, 'utf-8');
     expect(raw).not.toContain('completed-task');
     expect(mockSuccess).toHaveBeenCalledWith('Deleted completed task: completed-task');
+  });
+});
+
+describe('deleteAllTasks', () => {
+  it('should confirm once and delete all non-running tasks', async () => {
+    const tasksFile = setupTasksFile(tmpDir);
+    const tasks: TaskListItem[] = [
+      { kind: 'pending', name: 'pending-task', createdAt: '2025-01-15', filePath: tasksFile, content: 'pending' },
+      { kind: 'failed', name: 'failed-task', createdAt: '2025-01-15', filePath: tasksFile, content: 'failed' },
+      { kind: 'completed', name: 'completed-task', createdAt: '2025-01-15', filePath: tasksFile, content: 'completed', branch: 'takt/completed-task', worktreePath: '/tmp/takt/completed-task' },
+    ];
+    mockConfirm.mockResolvedValue(true);
+
+    const result = await deleteAllTasks(tasks);
+
+    expect(result).toBe(true);
+    expect(mockConfirm).toHaveBeenCalledTimes(1);
+    expect(mockConfirm).toHaveBeenCalledWith('Delete all 3 tasks?', false);
+    const raw = fs.readFileSync(tasksFile, 'utf-8');
+    expect(raw).not.toContain('pending-task');
+    expect(raw).not.toContain('failed-task');
+    expect(raw).not.toContain('completed-task');
+    expect(mockSuccess).toHaveBeenCalledWith('Deleted 3 of 3 tasks.');
+  });
+
+  it('should skip running tasks', async () => {
+    const tasksFile = setupTasksFile(tmpDir);
+    const tasks: TaskListItem[] = [
+      { kind: 'pending', name: 'pending-task', createdAt: '2025-01-15', filePath: tasksFile, content: 'pending' },
+      { kind: 'running', name: 'running-task', createdAt: '2025-01-15', filePath: tasksFile, content: 'running' },
+    ];
+    mockConfirm.mockResolvedValue(true);
+
+    const result = await deleteAllTasks(tasks);
+
+    expect(result).toBe(true);
+    expect(mockConfirm).toHaveBeenCalledWith('Delete all 1 tasks?', false);
+    const raw = fs.readFileSync(tasksFile, 'utf-8');
+    expect(raw).not.toContain('pending-task');
+    expect(mockSuccess).toHaveBeenCalledWith('Deleted 1 of 1 tasks.');
+  });
+
+  it('should return false when user cancels', async () => {
+    const tasksFile = setupTasksFile(tmpDir);
+    const tasks: TaskListItem[] = [
+      { kind: 'pending', name: 'pending-task', createdAt: '2025-01-15', filePath: tasksFile, content: 'pending' },
+    ];
+    mockConfirm.mockResolvedValue(false);
+
+    const result = await deleteAllTasks(tasks);
+
+    expect(result).toBe(false);
+    const raw = fs.readFileSync(tasksFile, 'utf-8');
+    expect(raw).toContain('pending-task');
+    expect(mockSuccess).not.toHaveBeenCalled();
+  });
+
+  it('should return false when no deletable tasks (only running)', async () => {
+    const tasks: TaskListItem[] = [
+      { kind: 'running', name: 'running-task', createdAt: '2025-01-15', filePath: '/tmp/fake', content: 'running' },
+    ];
+
+    const result = await deleteAllTasks(tasks);
+
+    expect(result).toBe(false);
+    expect(mockConfirm).not.toHaveBeenCalled();
+  });
+
+  it('should return false when no tasks', async () => {
+    const result = await deleteAllTasks([]);
+
+    expect(result).toBe(false);
+    expect(mockConfirm).not.toHaveBeenCalled();
+  });
+
+  it('should skip task when branch cleanup fails but continue with others', async () => {
+    const tasksFile = setupTasksFile(tmpDir);
+    const tasks: TaskListItem[] = [
+      { kind: 'pending', name: 'pending-task', createdAt: '2025-01-15', filePath: tasksFile, content: 'pending' },
+      { kind: 'completed', name: 'completed-task', createdAt: '2025-01-15', filePath: tasksFile, content: 'completed', branch: 'takt/completed-task', worktreePath: '/tmp/takt/completed-task' },
+    ];
+    mockConfirm.mockResolvedValue(true);
+    mockDeleteBranch.mockReturnValue(false);
+
+    const result = await deleteAllTasks(tasks);
+
+    expect(result).toBe(true);
+    const raw = fs.readFileSync(tasksFile, 'utf-8');
+    expect(raw).not.toContain('pending-task');
+    expect(raw).toContain('completed-task');
+    expect(mockSuccess).toHaveBeenCalledWith('Deleted 1 of 2 tasks.');
+  });
+
+  it('should return false when all tasks fail branch cleanup', async () => {
+    const tasksFile = setupTasksFile(tmpDir);
+    const tasks: TaskListItem[] = [
+      { kind: 'completed', name: 'completed-task', createdAt: '2025-01-15', filePath: tasksFile, content: 'completed', branch: 'takt/completed-task', worktreePath: '/tmp/takt/completed-task' },
+    ];
+    mockConfirm.mockResolvedValue(true);
+    mockDeleteBranch.mockReturnValue(false);
+
+    const result = await deleteAllTasks(tasks);
+
+    expect(result).toBe(false);
+    expect(mockSuccess).not.toHaveBeenCalled();
+  });
+
+  it('should cleanup branches for completed and failed tasks', async () => {
+    const tasksFile = setupTasksFile(tmpDir);
+    const completedTask: TaskListItem = {
+      kind: 'completed',
+      name: 'completed-task',
+      createdAt: '2025-01-15',
+      filePath: tasksFile,
+      content: 'completed',
+      branch: 'takt/completed-task',
+      worktreePath: '/tmp/takt/completed-task',
+    };
+    const tasks: TaskListItem[] = [completedTask];
+    mockConfirm.mockResolvedValue(true);
+
+    await deleteAllTasks(tasks);
+
+    expect(mockDeleteBranch).toHaveBeenCalledWith(tmpDir, completedTask);
   });
 });

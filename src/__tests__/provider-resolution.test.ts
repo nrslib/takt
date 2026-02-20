@@ -7,7 +7,7 @@ describe('resolveMovementProviderModel', () => {
     const result = resolveMovementProviderModel({
       step: { provider: 'codex', model: undefined, personaDisplayName: 'coder' },
       provider: 'claude',
-      personaProviders: { coder: 'opencode' },
+      personaProviders: { coder: { provider: 'opencode' } },
     });
 
     // When: provider/model を解決する
@@ -15,16 +15,16 @@ describe('resolveMovementProviderModel', () => {
     expect(result.provider).toBe('codex');
   });
 
-  it('should use personaProviders when step.provider is undefined', () => {
+  it('should use personaProviders.provider when step.provider is undefined', () => {
     // Given: step.provider が未定義で personaProviders に対応がある
     const result = resolveMovementProviderModel({
       step: { provider: undefined, model: undefined, personaDisplayName: 'reviewer' },
       provider: 'claude',
-      personaProviders: { reviewer: 'opencode' },
+      personaProviders: { reviewer: { provider: 'opencode' } },
     });
 
     // When: provider/model を解決する
-    // Then: personaProviders の値が使われる
+    // Then: personaProviders の provider が使われる
     expect(result.provider).toBe('opencode');
   });
 
@@ -33,7 +33,7 @@ describe('resolveMovementProviderModel', () => {
     const result = resolveMovementProviderModel({
       step: { provider: undefined, model: undefined, personaDisplayName: 'unknown' },
       provider: 'mock',
-      personaProviders: { reviewer: 'codex' },
+      personaProviders: { reviewer: { provider: 'codex' } },
     });
 
     // When: provider/model を解決する
@@ -54,11 +54,12 @@ describe('resolveMovementProviderModel', () => {
     expect(result.provider).toBeUndefined();
   });
 
-  it('should prefer step.model over input.model', () => {
-    // Given: step.model と input.model が両方指定されている
+  it('should prefer step.model over personaProviders.model and input.model', () => {
+    // Given: step.model と personaProviders.model と input.model が指定されている
     const result = resolveMovementProviderModel({
       step: { provider: undefined, model: 'step-model', personaDisplayName: 'coder' },
       model: 'input-model',
+      personaProviders: { coder: { provider: 'codex', model: 'persona-model' } },
     });
 
     // When: provider/model を解決する
@@ -66,15 +67,54 @@ describe('resolveMovementProviderModel', () => {
     expect(result.model).toBe('step-model');
   });
 
-  it('should fallback to input.model when step.model is undefined', () => {
-    // Given: step.model が未定義で input.model が指定されている
+  it('should use personaProviders.model when step.model is undefined', () => {
+    // Given: step.model が未定義で personaProviders.model が指定されている
     const result = resolveMovementProviderModel({
       step: { provider: undefined, model: undefined, personaDisplayName: 'coder' },
       model: 'input-model',
+      personaProviders: { coder: { provider: 'codex', model: 'persona-model' } },
+    });
+
+    // When: provider/model を解決する
+    // Then: personaProviders.model が使われる
+    expect(result.model).toBe('persona-model');
+  });
+
+  it('should fallback to input.model when step.model and personaProviders.model are undefined', () => {
+    // Given: step.model と personaProviders.model が未定義で input.model が指定されている
+    const result = resolveMovementProviderModel({
+      step: { provider: undefined, model: undefined, personaDisplayName: 'coder' },
+      model: 'input-model',
+      personaProviders: { coder: { provider: 'codex' } },
     });
 
     // When: provider/model を解決する
     // Then: input.model が使われる
     expect(result.model).toBe('input-model');
+  });
+
+  it('should return undefined model when all model candidates are missing', () => {
+    // Given: model の候補がすべて未定義
+    const result = resolveMovementProviderModel({
+      step: { provider: undefined, model: undefined, personaDisplayName: 'coder' },
+      model: undefined,
+      personaProviders: { coder: { provider: 'codex' } },
+    });
+
+    // Then: model は undefined になる
+    expect(result.model).toBeUndefined();
+  });
+
+  it('should resolve provider from personaProviders entry with only model specified', () => {
+    // Given: personaProviders エントリに provider が指定されていない（model のみ）
+    const result = resolveMovementProviderModel({
+      step: { provider: undefined, model: undefined, personaDisplayName: 'coder' },
+      provider: 'claude',
+      personaProviders: { coder: { model: 'o3-mini' } },
+    });
+
+    // Then: provider は input.provider、model は personaProviders.model になる
+    expect(result.provider).toBe('claude');
+    expect(result.model).toBe('o3-mini');
   });
 });

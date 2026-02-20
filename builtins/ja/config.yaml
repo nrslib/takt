@@ -29,6 +29,10 @@ concurrency: 2               # takt run の同時実行数（1-10）
 #   run_abort: true
 # observability:
 #   provider_events: false         # providerイベントログを記録
+# analytics:
+#   enabled: true                  # 分析メトリクスの収集を有効化
+#   events_path: ~/.takt/analytics/events  # 分析イベント保存先
+#   retention_days: 30             # 分析イベント保持日数
 
 # 認証情報（環境変数優先）
 # anthropic_api_key: "sk-ant-..." # Claude APIキー
@@ -51,12 +55,17 @@ concurrency: 2               # takt run の同時実行数（1-10）
 # =====================================
 # ピースにも関わる設定（global defaults）
 # =====================================
-# 1) ペルソナ単位でプロバイダーを切り替える
+# 1) ペルソナ単位でプロバイダー・モデルを切り替える
 # persona_providers:
-#   coder: codex         # coderペルソナはcodexで実行
-#   reviewer: claude     # reviewerペルソナはclaudeで実行
+#   coder:
+#     provider: codex    # coderペルソナはcodexで実行
+#     model: o3-mini     # 使用モデル（省略可）
+#   reviewer:
+#     provider: claude   # reviewerペルソナはclaudeで実行
 
-# 2) provider 固有オプション（global < project < piece）
+# 2) provider 固有オプション
+#    優先順位（provider/model/provider_options 等の piece 対応キー）:
+#    global < piece < project < env
 # provider_options:
 #   codex:
 #     network_access: true      # Codex実行時のネットワークアクセス許可

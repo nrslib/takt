@@ -2,7 +2,7 @@
  * Task execution logic
  */
 
-import { loadPieceByIdentifier, isPiecePath, resolvePieceConfigValues } from '../../../infra/config/index.js';
+import { loadPieceByIdentifier, isPiecePath, resolveConfigValueWithSource, resolvePieceConfigValues } from '../../../infra/config/index.js';
 import { TaskRunner, type TaskInfo } from '../../../infra/task/index.js';
 import {
   header,
@@ -66,16 +66,17 @@ async function executeTaskWithResult(options: ExecuteTaskOptions): Promise<Piece
     'language',
     'provider',
     'model',
-    'providerOptions',
     'personaProviders',
     'providerProfiles',
   ]);
+  const providerOptions = resolveConfigValueWithSource(projectCwd, 'providerOptions');
   return await executePiece(pieceConfig, task, cwd, {
     projectCwd,
     language: config.language,
     provider: agentOverrides?.provider ?? config.provider,
     model: agentOverrides?.model ?? config.model,
-    providerOptions: config.providerOptions,
+    providerOptions: providerOptions.value,
+    providerOptionsSource: providerOptions.source === 'piece' ? 'global' : providerOptions.source,
     personaProviders: config.personaProviders,
     providerProfiles: config.providerProfiles,
     interactiveUserInput,
@@ -144,6 +145,7 @@ export async function executeAndCompleteTask(
       startMovement,
       retryNote,
       autoPr,
+      draftPr,
       issueNumber,
     } = await resolveTaskExecution(task, cwd, pieceName, taskAbortSignal);
 
@@ -176,6 +178,7 @@ export async function executeAndCompleteTask(
         branch,
         baseBranch,
         shouldCreatePr: autoPr,
+        draftPr,
         pieceIdentifier: execPiece,
         issues,
       });

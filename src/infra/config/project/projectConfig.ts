@@ -10,8 +10,10 @@ import { parse, stringify } from 'yaml';
 import { copyProjectResourcesToDir } from '../../resources/index.js';
 import type { ProjectLocalConfig } from '../types.js';
 import type { ProviderPermissionProfiles } from '../../../core/models/provider-profiles.js';
+import type { AnalyticsConfig } from '../../../core/models/persisted-global-config.js';
 import { applyProjectConfigEnvOverrides } from '../env/config-env-overrides.js';
 import { normalizeProviderOptions } from '../loaders/pieceParser.js';
+import { invalidateResolvedConfigCache } from '../resolutionCache.js';
 
 export type { ProjectLocalConfig } from '../types.js';
 
@@ -58,6 +60,31 @@ function denormalizeProviderProfiles(profiles: ProviderPermissionProfiles | unde
   }])) as Record<string, { default_permission_mode: string; movement_permission_overrides?: Record<string, string> }>;
 }
 
+function normalizeAnalytics(raw: Record<string, unknown> | undefined): AnalyticsConfig | undefined {
+  if (!raw) return undefined;
+  const enabled = typeof raw.enabled === 'boolean' ? raw.enabled : undefined;
+  const eventsPath = typeof raw.events_path === 'string'
+    ? raw.events_path
+    : (typeof raw.eventsPath === 'string' ? raw.eventsPath : undefined);
+  const retentionDays = typeof raw.retention_days === 'number'
+    ? raw.retention_days
+    : (typeof raw.retentionDays === 'number' ? raw.retentionDays : undefined);
+
+  if (enabled === undefined && eventsPath === undefined && retentionDays === undefined) {
+    return undefined;
+  }
+  return { enabled, eventsPath, retentionDays };
+}
+
+function denormalizeAnalytics(config: AnalyticsConfig | undefined): Record<string, unknown> | undefined {
+  if (!config) return undefined;
+  const raw: Record<string, unknown> = {};
+  if (config.enabled !== undefined) raw.enabled = config.enabled;
+  if (config.eventsPath) raw.events_path = config.eventsPath;
+  if (config.retentionDays !== undefined) raw.retention_days = config.retentionDays;
+  return Object.keys(raw).length > 0 ? raw : undefined;
+}
+
 /**
  * Load project configuration from .takt/config.yaml
  */
@@ -80,6 +107,7 @@ export function loadProjectConfig(projectDir: string): ProjectLocalConfig {
   return {
     ...DEFAULT_PROJECT_CONFIG,
     ...(parsedConfig as ProjectLocalConfig),
+    analytics: normalizeAnalytics(parsedConfig.analytics as Record<string, unknown> | undefined),
     providerOptions: normalizeProviderOptions(parsedConfig.provider_options as {
       codex?: { network_access?: boolean };
       opencode?: { network_access?: boolean };
@@ -109,7 +137,13 @@ export function saveProjectConfig(projectDir: string, config: ProjectLocalConfig
   // Copy project resources (only copies files that don't exist)
   copyProjectResourcesToDir(configDir);
 
-  const savePayload: ProjectLocalConfig = { ...config };
+  const savePayload: Record<string, unknown> = { ...config };
+  const rawAnalytics = denormalizeAnalytics(config.analytics);
+  if (rawAnalytics) {
+    savePayload.analytics = rawAnalytics;
+  } else {
+    delete savePayload.analytics;
+  }
   const rawProfiles = denormalizeProviderProfiles(config.providerProfiles);
   if (rawProfiles && Object.keys(rawProfiles).length > 0) {
     savePayload.provider_profiles = rawProfiles;
@@ -121,6 +155,7 @@ export function saveProjectConfig(projectDir: string, config: ProjectLocalConfig
 
   const content = stringify(savePayload, { indent: 2 });
   writeFileSync(configPath, content, 'utf-8');
+  invalidateResolvedConfigCache(projectDir);
 }
 
 /**

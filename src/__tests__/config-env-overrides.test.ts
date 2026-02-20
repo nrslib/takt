@@ -42,12 +42,40 @@ describe('config env overrides', () => {
     });
   });
 
+  it('TAKT_DRAFT_PR が draft_pr に反映される', () => {
+    process.env.TAKT_DRAFT_PR = 'true';
+
+    const raw: Record<string, unknown> = {};
+    applyGlobalConfigEnvOverrides(raw);
+
+    expect(raw.draft_pr).toBe(true);
+  });
+
   it('should apply project env overrides from generated env names', () => {
     process.env.TAKT_VERBOSE = 'true';
+    process.env.TAKT_ANALYTICS_EVENTS_PATH = '/tmp/project-analytics';
 
     const raw: Record<string, unknown> = {};
     applyProjectConfigEnvOverrides(raw);
 
     expect(raw.verbose).toBe(true);
+    expect(raw.analytics).toEqual({
+      events_path: '/tmp/project-analytics',
+    });
+  });
+
+  it('should apply analytics env overrides for global config', () => {
+    process.env.TAKT_ANALYTICS_ENABLED = 'true';
+    process.env.TAKT_ANALYTICS_EVENTS_PATH = '/tmp/global-analytics';
+    process.env.TAKT_ANALYTICS_RETENTION_DAYS = '14';
+
+    const raw: Record<string, unknown> = {};
+    applyGlobalConfigEnvOverrides(raw);
+
+    expect(raw.analytics).toEqual({
+      enabled: true,
+      events_path: '/tmp/global-analytics',
+      retention_days: 14,
+    });
   });
 });

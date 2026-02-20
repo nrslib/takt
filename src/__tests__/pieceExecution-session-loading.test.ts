@@ -248,7 +248,7 @@ describe('executePiece session loading', () => {
       projectCwd: '/tmp/project',
       provider: 'codex',
       model: 'gpt-5',
-      personaProviders: { coder: 'opencode' },
+      personaProviders: { coder: { provider: 'opencode' } },
     });
 
     const mockInfo = vi.mocked(info);

@@ -195,6 +195,7 @@ export class TaskLifecycleService {
         ...target,
         status: 'running',
         started_at: nowIso(),
+        completed_at: null,
         owner_pid: process.pid,
         failure: undefined,
         start_movement: startMovement,

@@ -8,9 +8,8 @@ vi.mock('../infra/providers/index.js', () => ({
   getProvider: vi.fn(),
 }));
 
-vi.mock('../infra/config/global/globalConfig.js', () => ({
-  loadGlobalConfig: vi.fn(),
-  getBuiltinPiecesEnabled: vi.fn().mockReturnValue(true),
+vi.mock('../infra/config/index.js', () => ({
+  resolveConfigValues: vi.fn(),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -23,11 +22,11 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 }));
 
 import { getProvider } from '../infra/providers/index.js';
-import { loadGlobalConfig } from '../infra/config/global/globalConfig.js';
+import { resolveConfigValues } from '../infra/config/index.js';
 import { summarizeTaskName } from '../infra/task/summarize.js';
 
 const mockGetProvider = vi.mocked(getProvider);
-const mockLoadGlobalConfig = vi.mocked(loadGlobalConfig);
+const mockResolveConfigValues = vi.mocked(resolveConfigValues);
 
 const mockProviderCall = vi.fn();
 const mockProvider = {
@@ -37,10 +36,7 @@ const mockProvider = {
 beforeEach(() => {
   vi.clearAllMocks();
   mockGetProvider.mockReturnValue(mockProvider);
-  mockLoadGlobalConfig.mockReturnValue({
-    language: 'ja',
-    defaultPiece: 'default',
-    logLevel: 'info',
+  mockResolveConfigValues.mockReturnValue({
     provider: 'claude',
     model: undefined,
     branchNameStrategy: 'ai',
@@ -166,10 +162,7 @@ describe('summarizeTaskName', () => {
 
   it('should use provider from config.yaml', async () => {
     // Given: config has codex provider with branchNameStrategy: 'ai'
-    mockLoadGlobalConfig.mockReturnValue({
-      language: 'ja',
-      defaultPiece: 'default',
-      logLevel: 'info',
+    mockResolveConfigValues.mockReturnValue({
       provider: 'codex',
       model: 'gpt-4',
       branchNameStrategy: 'ai',
@@ -228,7 +221,7 @@ describe('summarizeTaskName', () => {
 
   it('should throw error when config load fails', async () => {
     // Given: config loading throws error
-    mockLoadGlobalConfig.mockImplementation(() => {
+    mockResolveConfigValues.mockImplementation(() => {
       throw new Error('Config not found');
     });
 
@@ -257,10 +250,7 @@ describe('summarizeTaskName', () => {
 
   it('should use romaji by default', async () => {
     // Given: branchNameStrategy is not set (undefined)
-    mockLoadGlobalConfig.mockReturnValue({
-      language: 'ja',
-      defaultPiece: 'default',
-      logLevel: 'info',
+    mockResolveConfigValues.mockReturnValue({
       provider: 'claude',
       model: undefined,
       branchNameStrategy: undefined,
@@ -276,10 +266,7 @@ describe('summarizeTaskName', () => {
 
   it('should use AI when branchNameStrategy is ai', async () => {
     // Given: branchNameStrategy is 'ai'
-    mockLoadGlobalConfig.mockReturnValue({
-      language: 'ja',
-      defaultPiece: 'default',
-      logLevel: 'info',
+    mockResolveConfigValues.mockReturnValue({
       provider: 'claude',
       model: undefined,
       branchNameStrategy: 'ai',
@@ -301,10 +288,7 @@ describe('summarizeTaskName', () => {
 
   it('should use romaji when branchNameStrategy is romaji', async () => {
     // Given: branchNameStrategy is 'romaji'
-    mockLoadGlobalConfig.mockReturnValue({
-      language: 'ja',
-      defaultPiece: 'default',
-      logLevel: 'info',
+    mockResolveConfigValues.mockReturnValue({
       provider: 'claude',
       model: undefined,
       branchNameStrategy: 'romaji',
@@ -320,10 +304,7 @@ describe('summarizeTaskName', () => {
 
   it('should respect explicit useLLM option over config', async () => {
     // Given: branchNameStrategy is 'romaji' but useLLM is explicitly true
-    mockLoadGlobalConfig.mockReturnValue({
-      language: 'ja',
-      defaultPiece: 'default',
-      logLevel: 'info',
+    mockResolveConfigValues.mockReturnValue({
       provider: 'claude',
       model: undefined,
       branchNameStrategy: 'romaji',
@@ -345,10 +326,7 @@ describe('summarizeTaskName', () => {
 
   it('should respect explicit useLLM false over config with ai strategy', async () => {
     // Given: branchNameStrategy is 'ai' but useLLM is explicitly false
-    mockLoadGlobalConfig.mockReturnValue({
-      language: 'ja',
-      defaultPiece: 'default',
-      logLevel: 'info',
+    mockResolveConfigValues.mockReturnValue({
       provider: 'claude',
       model: undefined,
       branchNameStrategy: 'ai',

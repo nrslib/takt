@@ -30,9 +30,6 @@ export {
 } from './infra/config/loaders/index.js';
 export type { PieceSource, PieceWithSource, PieceDirEntry } from './infra/config/loaders/index.js';
 export {
-  loadConfig,
-} from './infra/config/loadConfig.js';
-export {
   saveProjectConfig,
   updateProjectConfig,
   setCurrentPiece,
