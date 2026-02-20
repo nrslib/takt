@@ -211,7 +211,7 @@ export function submitPullRequest(
   options: Pick<PipelineExecutionOptions, 'task' | 'repo' | 'draftPr'>,
 ): string | undefined {
   info('Creating pull request...');
-  const prTitle = taskContent.issue ? taskContent.issue.title : (options.task ?? 'Pipeline task');
+  const prTitle = taskContent.issue ? `[#${taskContent.issue.number}] ${taskContent.issue.title}` : (options.task ?? 'Pipeline task');
   const report = `Piece \`${piece}\` completed successfully.`;
   const prBody = buildPipelinePrBody(pipelineConfig, taskContent.issue, report);
 

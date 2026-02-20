@@ -173,6 +173,63 @@ describe('postExecutionFlow', () => {
     expect(result.prFailed).toBeUndefined();
     expect(result.prUrl).toBe('https://github.com/org/repo/pull/1');
   });
+
+  it('issues が渡された場合、PRタイトルにIssue番号プレフィックスが付与される', async () => {
+    mockFindExistingPr.mockReturnValue(undefined);
+
+    await postExecutionFlow({
+      ...baseOptions,
+      task: 'Fix the bug',
+      issues: [{ number: 123, title: 'This title should not appear in PR', body: '', labels: [], comments: 0 }],
+    });
+
+    expect(mockCreatePullRequest).toHaveBeenCalledWith(
+      '/project',
+      expect.objectContaining({ title: '[#123] Fix the bug' }),
+    );
+  });
+
+  it('issues が空配列の場合、PRタイトルにプレフィックスは付与されない', async () => {
+    mockFindExistingPr.mockReturnValue(undefined);
+
+    await postExecutionFlow({
+      ...baseOptions,
+      issues: [],
+    });
+
+    expect(mockCreatePullRequest).toHaveBeenCalledWith(
+      '/project',
+      expect.objectContaining({ title: 'Fix the bug' }),
+    );
+  });
+
+  it('issues が undefined の場合、PRタイトルにプレフィックスは付与されない', async () => {
+    mockFindExistingPr.mockReturnValue(undefined);
+
+    await postExecutionFlow(baseOptions);
+
+    expect(mockCreatePullRequest).toHaveBeenCalledWith(
+      '/project',
+      expect.objectContaining({ title: 'Fix the bug' }),
+    );
+  });
+
+  it('Issueプレフィックス付きタイトルが100文字を超える場合、適切に省略される', async () => {
+    mockFindExistingPr.mockReturnValue(undefined);
+    const longTask = 'A'.repeat(120);
+    const expectedTitle = `[#123] ${'A'.repeat(90)}...`;
+
+    await postExecutionFlow({
+      ...baseOptions,
+      task: longTask,
+      issues: [{ number: 123, title: 'Long issue', body: '', labels: [], comments: 0 }],
+    });
+
+    expect(mockCreatePullRequest).toHaveBeenCalledWith(
+      '/project',
+      expect.objectContaining({ title: expectedTitle }),
+    );
+  });
 });
 
 describe('resolveDraftPr', () => {

@@ -103,9 +103,13 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
     } else {
       info('Creating pull request...');
       const prBody = buildPrBody(issues, report);
+      const firstIssue = issues?.[0];
+      const issuePrefix = firstIssue ? `[#${firstIssue.number}] ` : '';
+      const truncatedTask = task.length > 100 - issuePrefix.length ? `${task.slice(0, 100 - issuePrefix.length - 3)}...` : task;
+      const prTitle = issuePrefix + truncatedTask;
       const prResult = createPullRequest(projectCwd, {
         branch,
-        title: task.length > 100 ? `${task.slice(0, 97)}...` : task,
+        title: prTitle,
         body: prBody,
         base: baseBranch,
         repo,
