@@ -110,15 +110,19 @@ export async function selectAndExecuteTask(
 
   log.info('Starting task execution', { piece: pieceIdentifier, worktree: isWorktree, autoPr: shouldCreatePr, draftPr: shouldDraftPr });
   const taskRunner = new TaskRunner(cwd);
-  const taskRecord = taskRunner.addTask(task, {
-    piece: pieceIdentifier,
-    ...(isWorktree ? { worktree: true } : {}),
-    ...(branch ? { branch } : {}),
-    ...(isWorktree ? { worktree_path: execCwd } : {}),
-    auto_pr: shouldCreatePr,
-    draft_pr: shouldDraftPr,
-    ...(taskSlug ? { slug: taskSlug } : {}),
-  });
+  const shouldAddToTaskList = options?.skipTaskList !== true;
+  let taskRecord: Awaited<ReturnType<TaskRunner['addTask']>> | null = null;
+  if (shouldAddToTaskList) {
+    taskRecord = taskRunner.addTask(task, {
+      piece: pieceIdentifier,
+      ...(isWorktree ? { worktree: true } : {}),
+      ...(branch ? { branch } : {}),
+      ...(isWorktree ? { worktree_path: execCwd } : {}),
+      auto_pr: shouldCreatePr,
+      draft_pr: shouldDraftPr,
+      ...(taskSlug ? { slug: taskSlug } : {}),
+    });
+  }
   const startedAt = new Date().toISOString();
 
   let taskSuccess: boolean;
@@ -134,25 +138,29 @@ export async function selectAndExecuteTask(
     });
   } catch (err) {
     const completedAt = new Date().toISOString();
-    persistTaskError(taskRunner, taskRecord, startedAt, completedAt, err, {
-      responsePrefix: 'Task failed: ',
-    });
+    if (shouldAddToTaskList && taskRecord) {
+      persistTaskError(taskRunner, taskRecord, startedAt, completedAt, err, {
+        responsePrefix: 'Task failed: ',
+      });
+    }
     throw err;
   }
 
   const completedAt = new Date().toISOString();
 
-  const taskResult = buildBooleanTaskResult({
-    task: taskRecord,
-    taskSuccess,
-    successResponse: 'Task completed successfully',
-    failureResponse: 'Task failed',
-    startedAt,
-    completedAt,
-    branch,
-    ...(isWorktree ? { worktreePath: execCwd } : {}),
-  });
-  persistTaskResult(taskRunner, taskResult);
+  if (shouldAddToTaskList && taskRecord) {
+    const taskResult = buildBooleanTaskResult({
+      task: taskRecord,
+      taskSuccess,
+      successResponse: 'Task completed successfully',
+      failureResponse: 'Task failed',
+      startedAt,
+      completedAt,
+      branch,
+      ...(isWorktree ? { worktreePath: execCwd } : {}),
+    });
+    persistTaskResult(taskRunner, taskResult);
+  }
 
   if (taskSuccess && isWorktree) {
     await postExecutionFlow({
