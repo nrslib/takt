@@ -141,6 +141,38 @@ describe('postExecutionFlow', () => {
       expect.objectContaining({ draft: false }),
     );
   });
+
+  it('PR作成失敗時に prFailed: true を返す', async () => {
+    mockFindExistingPr.mockReturnValue(undefined);
+    mockCreatePullRequest.mockReturnValue({ success: false, error: 'Base ref must be a branch' });
+
+    const result = await postExecutionFlow(baseOptions);
+
+    expect(result.prFailed).toBe(true);
+    expect(result.prError).toBe('Base ref must be a branch');
+    expect(result.prUrl).toBeUndefined();
+  });
+
+  it('PRコメント失敗時に prFailed: true を返す', async () => {
+    mockFindExistingPr.mockReturnValue({ number: 42, url: 'https://github.com/org/repo/pull/42' });
+    mockCommentOnPr.mockReturnValue({ success: false, error: 'Permission denied' });
+
+    const result = await postExecutionFlow(baseOptions);
+
+    expect(result.prFailed).toBe(true);
+    expect(result.prError).toBe('Permission denied');
+    expect(result.prUrl).toBeUndefined();
+  });
+
+  it('PR作成成功時は prFailed を返さない', async () => {
+    mockFindExistingPr.mockReturnValue(undefined);
+    mockCreatePullRequest.mockReturnValue({ success: true, url: 'https://github.com/org/repo/pull/1' });
+
+    const result = await postExecutionFlow(baseOptions);
+
+    expect(result.prFailed).toBeUndefined();
+    expect(result.prUrl).toBe('https://github.com/org/repo/pull/1');
+  });
 });
 
 describe('resolveDraftPr', () => {

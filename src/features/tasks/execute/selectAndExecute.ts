@@ -140,20 +140,10 @@ export async function selectAndExecuteTask(
 
   const completedAt = new Date().toISOString();
 
-  const taskResult = buildBooleanTaskResult({
-    task: taskRecord,
-    taskSuccess,
-    successResponse: 'Task completed successfully',
-    failureResponse: 'Task failed',
-    startedAt,
-    completedAt,
-    branch,
-    ...(isWorktree ? { worktreePath: execCwd } : {}),
-  });
-  persistTaskResult(taskRunner, taskResult);
-
+  let prFailed = false;
+  let prError: string | undefined;
   if (taskSuccess && isWorktree) {
-    await postExecutionFlow({
+    const postResult = await postExecutionFlow({
       execCwd,
       projectCwd: cwd,
       task,
@@ -165,9 +155,24 @@ export async function selectAndExecuteTask(
       issues: options?.issues,
       repo: options?.repo,
     });
+    prFailed = postResult.prFailed ?? false;
+    prError = postResult.prError;
   }
 
-  if (!taskSuccess) {
+  const effectiveSuccess = taskSuccess && !prFailed;
+  const taskResult = buildBooleanTaskResult({
+    task: taskRecord,
+    taskSuccess: effectiveSuccess,
+    successResponse: 'Task completed successfully',
+    failureResponse: prFailed ? `PR creation failed: ${prError}` : 'Task failed',
+    startedAt,
+    completedAt,
+    branch,
+    ...(isWorktree ? { worktreePath: execCwd } : {}),
+  });
+  persistTaskResult(taskRunner, taskResult);
+
+  if (!effectiveSuccess) {
     process.exit(1);
   }
 }
