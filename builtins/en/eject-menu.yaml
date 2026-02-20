@@ -1,0 +1,515 @@
+eject_menu:
+  Pieces:
+    subcategories:
+      🚀 Quick Start:
+        items:
+          - name: default
+            type: piece
+            scope: local
+            description: "Standard development piece"
+          - name: default-mini
+            type: piece
+            scope: local
+            description: "Minimal default piece"
+          - name: compound-eye
+            type: piece
+            scope: local
+            description: "Multi-agent orchestration piece"
+      ⚡ Mini:
+        items:
+          - name: default-mini
+            type: piece
+            scope: local
+            description: "Minimal default piece"
+          - name: frontend-mini
+            type: piece
+            scope: local
+            description: "Minimal frontend piece"
+          - name: backend-mini
+            type: piece
+            scope: local
+            description: "Minimal backend piece"
+          - name: backend-cqrs-mini
+            type: piece
+            scope: local
+            description: "Minimal CQRS backend piece"
+          - name: expert-mini
+            type: piece
+            scope: local
+            description: "Minimal expert piece"
+          - name: expert-cqrs-mini
+            type: piece
+            scope: local
+            description: "Minimal CQRS expert piece"
+      🎨 Frontend:
+        items:
+          - name: frontend
+            type: piece
+            scope: local
+            description: "Frontend development piece"
+          - name: frontend-mini
+            type: piece
+            scope: local
+            description: "Minimal frontend piece"
+      ⚙️ Backend:
+        items:
+          - name: backend
+            type: piece
+            scope: local
+            description: "Backend development piece"
+          - name: backend-mini
+            type: piece
+            scope: local
+            description: "Minimal backend piece"
+          - name: backend-cqrs
+            type: piece
+            scope: local
+            description: "CQRS backend piece"
+          - name: backend-cqrs-mini
+            type: piece
+            scope: local
+            description: "Minimal CQRS backend piece"
+      🔧 Expert:
+        items:
+          - name: expert
+            type: piece
+            scope: local
+            description: "Expert development piece"
+          - name: expert-mini
+            type: piece
+            scope: local
+            description: "Minimal expert piece"
+          - name: expert-cqrs
+            type: piece
+            scope: local
+            description: "CQRS expert piece"
+          - name: expert-cqrs-mini
+            type: piece
+            scope: local
+            description: "Minimal CQRS expert piece"
+      🛠️ Refactoring:
+        items:
+          - name: structural-reform
+            type: piece
+            scope: local
+            description: "Structural refactoring piece"
+      🔍 Review:
+        items:
+          - name: review-fix-minimal
+            type: piece
+            scope: local
+            description: "Minimal review and fix piece"
+          - name: review-only
+            type: piece
+            scope: local
+            description: "Review-only piece"
+      🧪 Testing:
+        items:
+          - name: unit-test
+            type: piece
+            scope: local
+            description: "Unit testing piece"
+          - name: e2e-test
+            type: piece
+            scope: local
+            description: "E2E testing piece"
+      Others:
+        items:
+          - name: research
+            type: piece
+            scope: local
+            description: "Research piece"
+          - name: deep-research
+            type: piece
+            scope: local
+            description: "Deep research piece"
+          - name: magi
+            type: piece
+            scope: local
+            description: "Magi research piece"
+          - name: passthrough
+            type: piece
+            scope: local
+            description: "Passthrough piece"
+  Facets:
+    subcategories:
+      Personas:
+        items:
+          - name: architect-planner
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "Architect planner persona"
+          - name: ai-antipattern-reviewer
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "AI antipattern reviewer persona"
+          - name: architecture-reviewer
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "Architecture reviewer persona"
+          - name: balthasar
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "Balthasar persona"
+          - name: casper
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "Casper persona"
+          - name: coder
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "Coder persona"
+          - name: conductor
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "Conductor persona"
+          - name: cqrs-es-reviewer
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "CQRS-ES reviewer persona"
+          - name: expert-supervisor
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "Expert supervisor persona"
+          - name: frontend-reviewer
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "Frontend reviewer persona"
+          - name: melchior
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "Melchior persona"
+          - name: planner
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "Planner persona"
+          - name: pr-commenter
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "PR commenter persona"
+          - name: qa-reviewer
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "QA reviewer persona"
+          - name: research-analyzer
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "Research analyzer persona"
+          - name: research-digger
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "Research digger persona"
+          - name: research-planner
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "Research planner persona"
+          - name: research-supervisor
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "Research supervisor persona"
+          - name: security-reviewer
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "Security reviewer persona"
+          - name: supervisor
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "Supervisor persona"
+          - name: test-planner
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "Test planner persona"
+      Policies:
+        items:
+          - name: ai-antipattern
+            type: facet
+            facet_type: policy
+            scope: local
+            description: "AI antipattern policy"
+          - name: coding
+            type: facet
+            facet_type: policy
+            scope: local
+            description: "Coding policy"
+          - name: qa
+            type: facet
+            facet_type: policy
+            scope: local
+            description: "QA policy"
+          - name: research
+            type: facet
+            facet_type: policy
+            scope: local
+            description: "Research policy"
+          - name: review
+            type: facet
+            facet_type: policy
+            scope: local
+            description: "Review policy"
+          - name: testing
+            type: facet
+            facet_type: policy
+            scope: local
+            description: "Testing policy"
+      Knowledge:
+        items:
+          - name: architecture
+            type: facet
+            facet_type: knowledge
+            scope: local
+            description: "Architecture knowledge"
+          - name: backend
+            type: facet
+            facet_type: knowledge
+            scope: local
+            description: "Backend knowledge"
+          - name: cqrs-es
+            type: facet
+            facet_type: knowledge
+            scope: local
+            description: "CQRS-ES knowledge"
+          - name: frontend
+            type: facet
+            facet_type: knowledge
+            scope: local
+            description: "Frontend knowledge"
+          - name: research
+            type: facet
+            facet_type: knowledge
+            scope: local
+            description: "Research knowledge"
+          - name: research-comparative
+            type: facet
+            facet_type: knowledge
+            scope: local
+            description: "Research comparative knowledge"
+          - name: security
+            type: facet
+            facet_type: knowledge
+            scope: local
+            description: "Security knowledge"
+      Instructions:
+        items:
+          - name: ai-fix
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "AI fix instruction"
+          - name: ai-review
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "AI review instruction"
+          - name: architect
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "Architect instruction"
+          - name: arbitrate
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "Arbitrate instruction"
+          - name: fix
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "Fix instruction"
+          - name: fix-supervisor
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "Fix supervisor instruction"
+          - name: implement
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "Implement instruction"
+          - name: implement-e2e-test
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "Implement E2E test instruction"
+          - name: implement-test
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "Implement test instruction"
+          - name: loop-monitor-ai-fix
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "Loop monitor AI fix instruction"
+          - name: plan
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "Plan instruction"
+          - name: plan-e2e-test
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "Plan E2E test instruction"
+          - name: plan-investigate
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "Plan investigate instruction"
+          - name: plan-test
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "Plan test instruction"
+          - name: research-analyze
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "Research analyze instruction"
+          - name: research-dig
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "Research dig instruction"
+          - name: research-plan
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "Research plan instruction"
+          - name: research-supervise
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "Research supervise instruction"
+          - name: review-ai
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "Review AI instruction"
+          - name: review-arch
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "Review architecture instruction"
+          - name: review-cqrs-es
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "Review CQRS-ES instruction"
+          - name: review-frontend
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "Review frontend instruction"
+          - name: review-qa
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "Review QA instruction"
+          - name: review-security
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "Review security instruction"
+          - name: review-test
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "Review test instruction"
+          - name: supervise
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "Supervise instruction"
+      Output Contracts:
+        items:
+          - name: ai-review
+            type: facet
+            facet_type: output-contract
+            scope: local
+            description: "AI review output contract"
+          - name: architecture-design
+            type: facet
+            facet_type: output-contract
+            scope: local
+            description: "Architecture design output contract"
+          - name: architecture-review
+            type: facet
+            facet_type: output-contract
+            scope: local
+            description: "Architecture review output contract"
+          - name: coder-decisions
+            type: facet
+            facet_type: output-contract
+            scope: local
+            description: "Coder decisions output contract"
+          - name: coder-scope
+            type: facet
+            facet_type: output-contract
+            scope: local
+            description: "Coder scope output contract"
+          - name: cqrs-es-review
+            type: facet
+            facet_type: output-contract
+            scope: local
+            description: "CQRS-ES review output contract"
+          - name: frontend-review
+            type: facet
+            facet_type: output-contract
+            scope: local
+            description: "Frontend review output contract"
+          - name: plan
+            type: facet
+            facet_type: output-contract
+            scope: local
+            description: "Plan output contract"
+          - name: qa-review
+            type: facet
+            facet_type: output-contract
+            scope: local
+            description: "QA review output contract"
+          - name: security-review
+            type: facet
+            facet_type: output-contract
+            scope: local
+            description: "Security review output contract"
+          - name: summary
+            type: facet
+            facet_type: output-contract
+            scope: local
+            description: "Summary output contract"
+          - name: supervisor-validation
+            type: facet
+            facet_type: output-contract
+            scope: local
+            description: "Supervisor validation output contract"
+          - name: test-plan
+            type: facet
+            facet_type: output-contract
+            scope: local
+            description: "Test plan output contract"
+          - name: validation
+            type: facet
+            facet_type: output-contract
+            scope: local
+            description: "Validation output contract"

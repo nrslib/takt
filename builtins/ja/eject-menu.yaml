@@ -1,0 +1,515 @@
+eject_menu:
+  Pieces:
+    subcategories:
+      🚀 クイックスタート:
+        items:
+          - name: default
+            type: piece
+            scope: local
+            description: "標準開発ピース"
+          - name: default-mini
+            type: piece
+            scope: local
+            description: "最小デフォルトピース"
+          - name: compound-eye
+            type: piece
+            scope: local
+            description: "マルチエージェントオーケストレーション"
+      ⚡ Mini:
+        items:
+          - name: default-mini
+            type: piece
+            scope: local
+            description: "最小デフォルトピース"
+          - name: frontend-mini
+            type: piece
+            scope: local
+            description: "最小フロントエンドピース"
+          - name: backend-mini
+            type: piece
+            scope: local
+            description: "最小バックエンドピース"
+          - name: backend-cqrs-mini
+            type: piece
+            scope: local
+            description: "最小CQRSバックエンドピース"
+          - name: expert-mini
+            type: piece
+            scope: local
+            description: "最小エキスパートピース"
+          - name: expert-cqrs-mini
+            type: piece
+            scope: local
+            description: "最小CQRSエキスパートピース"
+      🎨 フロントエンド:
+        items:
+          - name: frontend
+            type: piece
+            scope: local
+            description: "フロントエンド開発ピース"
+          - name: frontend-mini
+            type: piece
+            scope: local
+            description: "最小フロントエンドピース"
+      ⚙️ バックエンド:
+        items:
+          - name: backend
+            type: piece
+            scope: local
+            description: "バックエンド開発ピース"
+          - name: backend-mini
+            type: piece
+            scope: local
+            description: "最小バックエンドピース"
+          - name: backend-cqrs
+            type: piece
+            scope: local
+            description: "CQRSバックエンドピース"
+          - name: backend-cqrs-mini
+            type: piece
+            scope: local
+            description: "最小CQRSバックエンドピース"
+      🔧 エキスパート:
+        items:
+          - name: expert
+            type: piece
+            scope: local
+            description: "エキスパート開発ピース"
+          - name: expert-mini
+            type: piece
+            scope: local
+            description: "最小エキスパートピース"
+          - name: expert-cqrs
+            type: piece
+            scope: local
+            description: "CQRSエキスパートピース"
+          - name: expert-cqrs-mini
+            type: piece
+            scope: local
+            description: "最小CQRSエキスパー卜ピース"
+      🛠️ リファクタリング:
+        items:
+          - name: structural-reform
+            type: piece
+            scope: local
+            description: "構造的リファクタリングピース"
+      🔍 レビュー:
+        items:
+          - name: review-fix-minimal
+            type: piece
+            scope: local
+            description: "最小レビュー＆修正ピース"
+          - name: review-only
+            type: piece
+            scope: local
+            description: "レビューのみピース"
+      🧪 テスト:
+        items:
+          - name: unit-test
+            type: piece
+            scope: local
+            description: "ユニットテストピース"
+          - name: e2e-test
+            type: piece
+            scope: local
+            description: "E2Eテストピース"
+      その他:
+        items:
+          - name: research
+            type: piece
+            scope: local
+            description: "リサーチピース"
+          - name: deep-research
+            type: piece
+            scope: local
+            description: "ディープリサーチピース"
+          - name: magi
+            type: piece
+            scope: local
+            description: "マギリサーチピース"
+          - name: passthrough
+            type: piece
+            scope: local
+            description: "パススルーピース"
+  Facets:
+    subcategories:
+      Personas:
+        items:
+          - name: architect-planner
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "アーキテクトプランナーペルソナ"
+          - name: ai-antipattern-reviewer
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "AIアンチパターレビュワープersona"
+          - name: architecture-reviewer
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "アーキテクチャレビュワープersona"
+          - name: balthasar
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "バルタザールペルソナ"
+          - name: casper
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "カスパープersona"
+          - name: coder
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "コーダープersona"
+          - name: conductor
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "コンダクターペルソナ"
+          - name: cqrs-es-reviewer
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "CQRS-ESレビュワープersona"
+          - name: expert-supervisor
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "エキスパートスーパーバイザープersona"
+          - name: frontend-reviewer
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "フロントエンドレビュワープersona"
+          - name: melchior
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "メルキオールペルソナ"
+          - name: planner
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "プランナープersona"
+          - name: pr-commenter
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "PRコメントライタープersona"
+          - name: qa-reviewer
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "QAレビュワープersona"
+          - name: research-analyzer
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "リサーチアナライザープersona"
+          - name: research-digger
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "リサーチディガープersona"
+          - name: research-planner
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "リサーチプランナープersona"
+          - name: research-supervisor
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "リサーチスーパーバイザープersona"
+          - name: security-reviewer
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "セキュリティレビュワープersona"
+          - name: supervisor
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "スーパーバイザープersona"
+          - name: test-planner
+            type: facet
+            facet_type: persona
+            scope: local
+            description: "テストプランナープersona"
+      Policies:
+        items:
+          - name: ai-antipattern
+            type: facet
+            facet_type: policy
+            scope: local
+            description: "AIアンチパターンPolicies"
+          - name: coding
+            type: facet
+            facet_type: policy
+            scope: local
+            description: "コーディングポリシー"
+          - name: qa
+            type: facet
+            facet_type: policy
+            scope: local
+            description: "QAポリシー"
+          - name: research
+            type: facet
+            facet_type: policy
+            scope: local
+            description: "リサーチポリシー"
+          - name: review
+            type: facet
+            facet_type: policy
+            scope: local
+            description: "レビューポリシー"
+          - name: testing
+            type: facet
+            facet_type: policy
+            scope: local
+            description: "テストポリシー"
+      Knowledge:
+        items:
+          - name: architecture
+            type: facet
+            facet_type: knowledge
+            scope: local
+            description: "アーキテクチャ知識"
+          - name: backend
+            type: facet
+            facet_type: knowledge
+            scope: local
+            description: "バックエンド知識"
+          - name: cqrs-es
+            type: facet
+            facet_type: knowledge
+            scope: local
+            description: "CQRS-ES知識"
+          - name: frontend
+            type: facet
+            facet_type: knowledge
+            scope: local
+            description: "フロントエンド知識"
+          - name: research
+            type: facet
+            facet_type: knowledge
+            scope: local
+            description: "リサーチ知識"
+          - name: research-comparative
+            type: facet
+            facet_type: knowledge
+            scope: local
+            description: "リサーチ比較知識"
+          - name: security
+            type: facet
+            facet_type: knowledge
+            scope: local
+            description: "セキュリティ知識"
+      Instructions:
+        items:
+          - name: ai-fix
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "AI修正指示"
+          - name: ai-review
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "AIレビュー指示"
+          - name: architect
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "アーキテクト指示"
+          - name: arbitrate
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "仲裁指示"
+          - name: fix
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "修正指示"
+          - name: fix-supervisor
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "修正スーパーバイザー指示"
+          - name: implement
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "実装指示"
+          - name: implement-e2e-test
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "E2Eテスト実装指示"
+          - name: implement-test
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "テスト実装指示"
+          - name: loop-monitor-ai-fix
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "ループモニターAI修正指示"
+          - name: plan
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "計画指示"
+          - name: plan-e2e-test
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "E2Eテスト計画指示"
+          - name: plan-investigate
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "調査計画指示"
+          - name: plan-test
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "テスト計画指示"
+          - name: research-analyze
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "リサーチ分析指示"
+          - name: research-dig
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "リサーチ掘り下げ指示"
+          - name: research-plan
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "リサーチ計画指示"
+          - name: research-supervise
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "リサーチスーパーバイズ指示"
+          - name: review-ai
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "AIレビュー指示"
+          - name: review-arch
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "アーキテクチャレビュー指示"
+          - name: review-cqrs-es
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "CQRS-ESレビュー指示"
+          - name: review-frontend
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "フロントエンドレビュー指示"
+          - name: review-qa
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "QAレビュー指示"
+          - name: review-security
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "セキュリティレビュー指示"
+          - name: review-test
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "テストレビュー指示"
+          - name: supervise
+            type: facet
+            facet_type: instruction
+            scope: local
+            description: "スーパーバイズ指示"
+      Output Contracts:
+        items:
+          - name: ai-review
+            type: facet
+            facet_type: output-contract
+            scope: local
+            description: "AIレビュー出力契約"
+          - name: architecture-design
+            type: facet
+            facet_type: output-contract
+            scope: local
+            description: "アーキテクチャ設計出力契約"
+          - name: architecture-review
+            type: facet
+            facet_type: output-contract
+            scope: local
+            description: "アーキテクチャレビュー出力契約"
+          - name: coder-decisions
+            type: facet
+            facet_type: output-contract
+            scope: local
+            description: "コーダー決定出力契約"
+          - name: coder-scope
+            type: facet
+            facet_type: output-contract
+            scope: local
+            description: "コーダースコープ出力契約"
+          - name: cqrs-es-review
+            type: facet
+            facet_type: output-contract
+            scope: local
+            description: "CQRS-ESレビュー出力契約"
+          - name: frontend-review
+            type: facet
+            facet_type: output-contract
+            scope: local
+            description: "フロントエンドレビュー出力契約"
+          - name: plan
+            type: facet
+            facet_type: output-contract
+            scope: local
+            description: "計画出力契約"
+          - name: qa-review
+            type: facet
+            facet_type: output-contract
+            scope: local
+            description: "QAレビュー出力契約"
+          - name: security-review
+            type: facet
+            facet_type: output-contract
+            scope: local
+            description: "セキュリティレビュー出力契約"
+          - name: summary
+            type: facet
+            facet_type: output-contract
+            scope: local
+            description: "サマリー出力契約"
+          - name: supervisor-validation
+            type: facet
+            facet_type: output-contract
+            scope: local
+            description: "スーパーバイザー検証出力契約"
+          - name: test-plan
+            type: facet
+            facet_type: output-contract
+            scope: local
+            description: "テスト計画出力契約"
+          - name: validation
+            type: facet
+            facet_type: output-contract
+            scope: local
+            description: "検証出力契約"
