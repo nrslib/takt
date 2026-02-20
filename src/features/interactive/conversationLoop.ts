@@ -8,10 +8,13 @@
  */
 
 import chalk from 'chalk';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   resolveConfigValues,
   loadSessionState,
   clearSessionState,
+  loadGlobalConfig,
 } from '../../infra/config/index.js';
 import { getProvider, type ProviderType } from '../../infra/providers/index.js';
 import { createLogger } from '../../shared/utils/index.js';
@@ -36,6 +39,26 @@ export { type CallAIResult, type SessionContext, callAIWithRetry } from './aiCal
 
 const log = createLogger('conversation-loop');
 
+const DEFAULT_INIT_FILES = ['CLAUDE.md', 'AGENT.md', 'TAKT.md'];
+
+export function loadInitialFiles(cwd: string): string {
+  const globalConfig = loadGlobalConfig();
+  const initFiles = globalConfig.assistant?.initFiles;
+
+  const filesToLoad = initFiles && initFiles.length > 0 ? initFiles : DEFAULT_INIT_FILES;
+  const contextParts: string[] = [];
+
+  for (const file of filesToLoad) {
+    const filePath = join(cwd, file);
+    if (existsSync(filePath)) {
+      const content = readFileSync(filePath, 'utf-8');
+      contextParts.push(`\n\n## ${file}\n\n${content}`);
+    }
+  }
+
+  return contextParts.join('\n\n---\n');
+}
+
 /**
  * Initialize provider and language for interactive conversation.
  *
@@ -46,12 +69,20 @@ const log = createLogger('conversation-loop');
 export function initializeSession(cwd: string, personaName: string): SessionContext {
   const globalConfig = resolveConfigValues(cwd, ['language', 'provider', 'model']);
   const lang = resolveLanguage(globalConfig.language);
-  if (!globalConfig.provider) {
+
+  const globalFullConfig = loadGlobalConfig();
+  const assistantProvider = globalFullConfig.assistant?.provider;
+  const assistantModel = globalFullConfig.assistant?.model;
+
+  const effectiveProvider = assistantProvider ?? globalConfig.provider;
+  const effectiveModel = assistantModel ?? globalConfig.model;
+
+  if (!effectiveProvider) {
     throw new Error('Provider is not configured.');
   }
-  const providerType = globalConfig.provider as ProviderType;
+  const providerType = effectiveProvider as ProviderType;
   const provider = getProvider(providerType);
-  const model = globalConfig.model as string | undefined;
+  const model = effectiveModel as string | undefined;
 
   return { provider, providerType, model, lang, personaName, sessionId: undefined };
 }
@@ -114,6 +145,8 @@ export async function runConversationLoop(
   }
   blankLine();
 
+  const initialFilesContent = loadInitialFiles(cwd);
+
   /** Helper: call AI with current session and update session state */
   async function doCallAI(prompt: string, sysPrompt: string, tools: string[]): Promise<CallAIResult | null> {
     const { result, sessionId: newSessionId } = await callAIWithRetry(
@@ -124,10 +157,13 @@ export async function runConversationLoop(
   }
 
   if (initialInput) {
-    history.push({ role: 'user', content: initialInput });
+    const initialContent = initialFilesContent
+      ? `${initialFilesContent}\n\n---\n\nUser Request:\n${initialInput}`
+      : initialInput;
+    history.push({ role: 'user', content: initialContent });
     log.debug('Processing initial input', { initialInput, sessionId });
 
-    const promptWithTransform = strategy.transformPrompt(initialInput);
+    const promptWithTransform = strategy.transformPrompt(initialContent);
     const result = await doCallAI(promptWithTransform, strategy.systemPrompt, strategy.allowedTools);
     if (result) {
       if (!result.success) {

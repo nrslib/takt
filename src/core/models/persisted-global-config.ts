@@ -41,6 +41,16 @@ export interface AnalyticsConfig {
 /** Language setting for takt */
 export type Language = 'en' | 'ja';
 
+/** Assistant (interactive mode) configuration */
+export interface AssistantConfig {
+  /** AI provider for assistant mode */
+  provider?: 'claude' | 'codex' | 'opencode' | 'mock';
+  /** Model for assistant mode */
+  model?: string;
+  /** Custom initial files to load (overrides default files) */
+  initFiles?: string[];
+}
+
 /** Pipeline execution configuration */
 export interface PipelineConfig {
   /** Branch name prefix for pipeline-created branches (default: "takt/") */
@@ -71,6 +81,8 @@ export interface PersistedGlobalConfig {
   logLevel: 'debug' | 'info' | 'warn' | 'error';
   provider?: 'claude' | 'codex' | 'opencode' | 'mock';
   model?: string;
+  /** Assistant (interactive mode) configuration */
+  assistant?: AssistantConfig;
   observability?: ObservabilityConfig;
   analytics?: AnalyticsConfig;
   /** Directory for shared clones (worktree_dir in config). If empty, uses ../{clone-name} relative to project */

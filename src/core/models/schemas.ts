@@ -390,6 +390,13 @@ export const AnalyticsConfigSchema = z.object({
   retention_days: z.number().int().positive().optional(),
 });
 
+/** Assistant configuration schema */
+export const AssistantConfigSchema = z.object({
+  provider: z.enum(['claude', 'codex', 'opencode', 'mock']).optional(),
+  model: z.string().optional(),
+  init_files: z.array(z.string()).optional(),
+});
+
 /** Language setting schema */
 export const LanguageSchema = z.enum(['en', 'ja']);
 
@@ -420,6 +427,8 @@ export const GlobalConfigSchema = z.object({
   log_level: z.enum(['debug', 'info', 'warn', 'error']).optional().default('info'),
   provider: z.enum(['claude', 'codex', 'opencode', 'mock']).optional().default('claude'),
   model: z.string().optional(),
+  /** Assistant (interactive mode) configuration */
+  assistant: AssistantConfigSchema.optional(),
   observability: ObservabilityConfigSchema.optional(),
   analytics: AnalyticsConfigSchema.optional(),
   /** Directory for shared clones (worktree_dir in config). If empty, uses ../{clone-name} relative to project */
