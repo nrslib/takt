@@ -35,9 +35,9 @@ import {
   getLanguage,
   loadProjectConfig,
   isVerboseMode,
+  resolveConfigValue,
   invalidateGlobalConfigCache,
 } from '../infra/config/index.js';
-import { loadConfig } from '../infra/config/loadConfig.js';
 
 describe('getBuiltinPiece', () => {
   it('should return builtin piece when it exists in resources', () => {
@@ -472,7 +472,7 @@ describe('analytics config resolution', () => {
     });
   });
 
-  it('should merge analytics as project > global in loadConfig', () => {
+  it('should merge analytics as project > global in resolveConfigValue', () => {
     const globalConfigDir = process.env.TAKT_CONFIG_DIR!;
     mkdirSync(globalConfigDir, { recursive: true });
     writeFileSync(join(globalConfigDir, 'config.yaml'), [
@@ -492,8 +492,8 @@ describe('analytics config resolution', () => {
       '  retention_days: 14',
     ].join('\n'));
 
-    const config = loadConfig(testDir);
-    expect(config.analytics).toEqual({
+    const analytics = resolveConfigValue(testDir, 'analytics');
+    expect(analytics).toEqual({
       enabled: true,
       eventsPath: '/tmp/project-analytics',
       retentionDays: 14,

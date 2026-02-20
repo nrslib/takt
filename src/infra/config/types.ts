@@ -4,7 +4,7 @@
 
 import type { MovementProviderOptions } from '../../core/models/piece-types.js';
 import type { ProviderPermissionProfiles } from '../../core/models/provider-profiles.js';
-import type { AnalyticsConfig } from '../../core/models/global-config.js';
+import type { AnalyticsConfig } from '../../core/models/persisted-global-config.js';
 
 /** Project configuration stored in .takt/config.yaml */
 export interface ProjectLocalConfig {

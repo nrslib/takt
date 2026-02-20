@@ -31,10 +31,9 @@ vi.mock('../features/tasks/index.js', () => ({
   executeTask: mockExecuteTask,
 }));
 
-// Mock loadGlobalConfig
-const mockLoadGlobalConfig = vi.fn();
-vi.mock('../infra/config/global/globalConfig.js', async (importOriginal) => ({ ...(await importOriginal<Record<string, unknown>>()),
-  loadGlobalConfig: mockLoadGlobalConfig,
+const mockResolveConfigValues = vi.fn();
+vi.mock('../infra/config/index.js', () => ({
+  resolveConfigValues: mockResolveConfigValues,
 }));
 
 // Mock execFileSync for git operations
@@ -73,12 +72,7 @@ describe('executePipeline', () => {
     // Default: git operations succeed
     mockExecFileSync.mockReturnValue('abc1234\n');
     // Default: no pipeline config
-    mockLoadGlobalConfig.mockReturnValue({
-      language: 'en',
-      defaultPiece: 'default',
-      logLevel: 'info',
-      provider: 'claude',
-    });
+    mockResolveConfigValues.mockReturnValue({ pipeline: undefined });
   });
 
   it('should return exit code 2 when neither --issue nor --task is specified', async () => {
@@ -311,11 +305,7 @@ describe('executePipeline', () => {
 
   describe('PipelineConfig template expansion', () => {
     it('should use commit_message_template when configured', async () => {
-      mockLoadGlobalConfig.mockReturnValue({
-        language: 'en',
-        defaultPiece: 'default',
-        logLevel: 'info',
-        provider: 'claude',
+      mockResolveConfigValues.mockReturnValue({
         pipeline: {
           commitMessageTemplate: 'fix: {title} (#{issue})',
         },
@@ -347,11 +337,7 @@ describe('executePipeline', () => {
     });
 
     it('should use default_branch_prefix when configured', async () => {
-      mockLoadGlobalConfig.mockReturnValue({
-        language: 'en',
-        defaultPiece: 'default',
-        logLevel: 'info',
-        provider: 'claude',
+      mockResolveConfigValues.mockReturnValue({
         pipeline: {
           defaultBranchPrefix: 'feat/',
         },
@@ -383,11 +369,7 @@ describe('executePipeline', () => {
     });
 
     it('should use pr_body_template when configured for PR creation', async () => {
-      mockLoadGlobalConfig.mockReturnValue({
-        language: 'en',
-        defaultPiece: 'default',
-        logLevel: 'info',
-        provider: 'claude',
+      mockResolveConfigValues.mockReturnValue({
         pipeline: {
           prBodyTemplate: '## Summary\n{issue_body}\n\nCloses #{issue}',
         },

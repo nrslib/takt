@@ -65,6 +65,5 @@ export type {
   ObservabilityConfig,
   Language,
   PipelineConfig,
-  GlobalConfig,
   ProjectConfig,
-} from './global-config.js';
+} from './persisted-global-config.js';

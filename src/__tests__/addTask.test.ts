@@ -34,6 +34,11 @@ vi.mock('../features/tasks/execute/selectAndExecute.js', () => ({
   determinePiece: vi.fn(),
 }));
 
+vi.mock('../infra/task/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  summarizeTaskName: vi.fn().mockResolvedValue('test-task'),
+}));
+
 vi.mock('../infra/github/issue.js', () => ({
   isIssueReference: vi.fn((s: string) => /^#\d+$/.test(s)),
   resolveIssueTask: vi.fn(),

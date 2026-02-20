@@ -11,6 +11,7 @@ import type { ProviderPermissionProfiles } from '../models/provider-profiles.js'
 import type { MovementProviderOptions } from '../models/piece-types.js';
 
 export type ProviderType = 'claude' | 'codex' | 'opencode' | 'mock';
+export type ProviderOptionsSource = 'env' | 'project' | 'global' | 'default';
 
 export interface StreamInitEventData {
   model: string;
@@ -182,6 +183,8 @@ export interface PieceEngineOptions {
   model?: string;
   /** Resolved provider options */
   providerOptions?: MovementProviderOptions;
+  /** Source layer for resolved provider options */
+  providerOptionsSource?: ProviderOptionsSource;
   /** Per-persona provider overrides (e.g., { coder: 'codex' }) */
   personaProviders?: Record<string, ProviderType>;
   /** Resolved provider permission profiles */

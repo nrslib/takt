@@ -60,7 +60,9 @@ concurrency: 2               # takt run の同時実行数（1-10）
 #   coder: codex         # coderペルソナはcodexで実行
 #   reviewer: claude     # reviewerペルソナはclaudeで実行
 
-# 2) provider 固有オプション（global < project < piece）
+# 2) provider 固有オプション
+#    優先順位（provider/model/provider_options 等の piece 対応キー）:
+#    global < piece < project < env
 # provider_options:
 #   codex:
 #     network_access: true      # Codex実行時のネットワークアクセス許可

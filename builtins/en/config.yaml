@@ -60,7 +60,9 @@ concurrency: 2                  # Concurrent task execution for takt run (1-10)
 #   coder: codex         # Run coder persona on codex
 #   reviewer: claude     # Run reviewer persona on claude
 
-# 2) Provider options (global < project < piece)
+# 2) Provider options
+#    Priority (for piece-capable keys such as provider/model/provider_options):
+#    global < piece < project < env
 # provider_options:
 #   codex:
 #     network_access: true      # Allow network access for Codex

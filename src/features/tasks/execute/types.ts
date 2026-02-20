@@ -7,6 +7,7 @@ import type { ProviderPermissionProfiles } from '../../../core/models/provider-p
 import type { MovementProviderOptions } from '../../../core/models/piece-types.js';
 import type { ProviderType } from '../../../infra/providers/index.js';
 import type { GitHubIssue } from '../../../infra/github/index.js';
+import type { ProviderOptionsSource } from '../../../core/piece/types.js';
 
 /** Result of piece execution */
 export interface PieceExecutionResult {
@@ -36,6 +37,8 @@ export interface PieceExecutionOptions {
   model?: string;
   /** Resolved provider options */
   providerOptions?: MovementProviderOptions;
+  /** Source layer for resolved provider options */
+  providerOptionsSource?: ProviderOptionsSource;
   /** Per-persona provider overrides (e.g., { coder: 'codex' }) */
   personaProviders?: Record<string, ProviderType>;
   /** Resolved provider permission profiles */

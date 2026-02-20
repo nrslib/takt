@@ -10,9 +10,10 @@ import { parse, stringify } from 'yaml';
 import { copyProjectResourcesToDir } from '../../resources/index.js';
 import type { ProjectLocalConfig } from '../types.js';
 import type { ProviderPermissionProfiles } from '../../../core/models/provider-profiles.js';
-import type { AnalyticsConfig } from '../../../core/models/global-config.js';
+import type { AnalyticsConfig } from '../../../core/models/persisted-global-config.js';
 import { applyProjectConfigEnvOverrides } from '../env/config-env-overrides.js';
 import { normalizeProviderOptions } from '../loaders/pieceParser.js';
+import { invalidateResolvedConfigCache } from '../resolutionCache.js';
 
 export type { ProjectLocalConfig } from '../types.js';
 
@@ -154,6 +155,7 @@ export function saveProjectConfig(projectDir: string, config: ProjectLocalConfig
 
   const content = stringify(savePayload, { indent: 2 });
   writeFileSync(configPath, content, 'utf-8');
+  invalidateResolvedConfigCache(projectDir);
 }
 
 /**

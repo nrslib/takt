@@ -60,8 +60,8 @@ export interface NotificationSoundEventsConfig {
   runAbort?: boolean;
 }
 
-/** Global configuration for takt */
-export interface GlobalConfig {
+/** Persisted global configuration for ~/.takt/config.yaml */
+export interface PersistedGlobalConfig {
   language: Language;
   logLevel: 'debug' | 'info' | 'warn' | 'error';
   provider?: 'claude' | 'codex' | 'opencode' | 'mock';

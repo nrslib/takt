@@ -40,6 +40,13 @@ vi.mock('../infra/config/index.js', () => ({
     }
     return result;
   },
+  resolveConfigValueWithSource: (_projectDir: string, key: string) => {
+    const raw = mockLoadConfigRaw() as Record<string, unknown>;
+    const config = ('global' in raw && 'project' in raw)
+      ? { ...raw.global as Record<string, unknown>, ...raw.project as Record<string, unknown> }
+      : { ...raw, piece: 'default', provider: 'claude', verbose: false };
+    return { value: config[key], source: 'project' };
+  },
 }));
 
 const mockLoadConfig = mockLoadConfigRaw;

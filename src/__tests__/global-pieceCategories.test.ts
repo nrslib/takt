@@ -7,32 +7,20 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const loadConfigMock = vi.hoisted(() => vi.fn());
+const resolvedState = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
 
 vi.mock('../infra/config/paths.js', () => ({
   getGlobalConfigDir: () => '/tmp/.takt',
 }));
 
-vi.mock('../infra/config/loadConfig.js', () => ({
-  loadConfig: loadConfigMock,
-}));
-
 vi.mock('../infra/config/resolvePieceConfigValue.js', () => ({
   resolvePieceConfigValue: (_projectDir: string, key: string) => {
-    const loaded = loadConfigMock() as Record<string, Record<string, unknown>>;
-    const global = loaded?.global ?? {};
-    const project = loaded?.project ?? {};
-    const merged: Record<string, unknown> = { ...global, ...project };
-    return merged[key];
+    return resolvedState.value[key];
   },
   resolvePieceConfigValues: (_projectDir: string, keys: readonly string[]) => {
-    const loaded = loadConfigMock() as Record<string, Record<string, unknown>>;
-    const global = loaded?.global ?? {};
-    const project = loaded?.project ?? {};
-    const merged: Record<string, unknown> = { ...global, ...project };
     const result: Record<string, unknown> = {};
     for (const key of keys) {
-      result[key] = merged[key];
+      result[key] = resolvedState.value[key];
     }
     return result;
   },
@@ -49,15 +37,12 @@ function createTempCategoriesPath(): string {
 
 describe('getPieceCategoriesPath', () => {
   beforeEach(() => {
-    loadConfigMock.mockReset();
+    resolvedState.value = {};
   });
 
   it('should return configured path when pieceCategoriesFile is set', () => {
     // Given
-    loadConfigMock.mockReturnValue({
-      global: { pieceCategoriesFile: '/custom/piece-categories.yaml' },
-      project: {},
-    });
+    resolvedState.value = { pieceCategoriesFile: '/custom/piece-categories.yaml' };
 
     // When
     const path = getPieceCategoriesPath(process.cwd());
@@ -68,7 +53,7 @@ describe('getPieceCategoriesPath', () => {
 
   it('should return default path when pieceCategoriesFile is not set', () => {
     // Given
-    loadConfigMock.mockReturnValue({ global: {}, project: {} });
+    resolvedState.value = {};
 
     // When
     const path = getPieceCategoriesPath(process.cwd());
@@ -79,9 +64,11 @@ describe('getPieceCategoriesPath', () => {
 
   it('should rethrow when global config loading fails', () => {
     // Given
-    loadConfigMock.mockImplementation(() => {
-      throw new Error('invalid global config');
-    });
+    resolvedState.value = new Proxy({}, {
+      get() {
+        throw new Error('invalid global config');
+      },
+    }) as Record<string, unknown>;
 
     // When / Then
     expect(() => getPieceCategoriesPath(process.cwd())).toThrow('invalid global config');
@@ -92,7 +79,7 @@ describe('resetPieceCategories', () => {
   const tempRoots: string[] = [];
 
   beforeEach(() => {
-    loadConfigMock.mockReset();
+    resolvedState.value = {};
   });
 
   afterEach(() => {
@@ -106,10 +93,7 @@ describe('resetPieceCategories', () => {
     // Given
     const categoriesPath = createTempCategoriesPath();
     tempRoots.push(dirname(dirname(categoriesPath)));
-    loadConfigMock.mockReturnValue({
-      global: { pieceCategoriesFile: categoriesPath },
-      project: {},
-    });
+    resolvedState.value = { pieceCategoriesFile: categoriesPath };
 
     // When
     resetPieceCategories(process.cwd());
@@ -125,10 +109,7 @@ describe('resetPieceCategories', () => {
     const categoriesDir = dirname(categoriesPath);
     const tempRoot = dirname(categoriesDir);
     tempRoots.push(tempRoot);
-    loadConfigMock.mockReturnValue({
-      global: { pieceCategoriesFile: categoriesPath },
-      project: {},
-    });
+    resolvedState.value = { pieceCategoriesFile: categoriesPath };
     mkdirSync(categoriesDir, { recursive: true });
     writeFileSync(categoriesPath, 'piece_categories:\n  old:\n    - stale-piece\n', 'utf-8');
 
