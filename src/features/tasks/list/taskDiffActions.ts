@@ -66,6 +66,7 @@ export async function showDiffAndPromptActionForTask(
     [
       { label: 'View diff', value: 'diff', description: 'Show full diff in pager' },
       { label: 'Instruct', value: 'instruct', description: 'Craft additional instructions and requeue this task' },
+      { label: 'Sync with root', value: 'sync', description: 'Merge root HEAD into worktree branch; auto-resolve conflicts with AI' },
       { label: 'Try merge', value: 'try', description: 'Squash merge (stage changes without commit)' },
       { label: 'Merge & cleanup', value: 'merge', description: 'Merge and delete branch' },
       { label: 'Delete', value: 'delete', description: 'Discard changes, delete branch' },

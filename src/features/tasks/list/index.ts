@@ -12,6 +12,7 @@ import {
   tryMergeBranch,
   mergeBranch,
   instructBranch,
+  syncBranchWithRoot,
 } from './taskActions.js';
 import { deletePendingTask, deleteFailedTask, deleteCompletedTask, deleteAllTasks } from './taskDeleteActions.js';
 import { retryFailedTask } from './taskRetryActions.js';
@@ -166,6 +167,9 @@ export async function listTasks(
           break;
         case 'instruct':
           await instructBranch(cwd, task);
+          break;
+        case 'sync':
+          await syncBranchWithRoot(cwd, task, options);
           break;
         case 'try':
           tryMergeBranch(cwd, task);
