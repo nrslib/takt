@@ -62,7 +62,7 @@ interface SharedServer {
 let sharedServer: SharedServer | null = null;
 let initPromise: Promise<void> | null = null;
 
-async function acquireClient(model: string, apiKey?: string, signal?: AbortSignal): Promise<{ client: OpencodeClient; release: () => void }> {
+async function acquireClient(model: string, apiKey?: string): Promise<{ client: OpencodeClient; release: () => void }> {
   if (initPromise) {
     await initPromise;
   }
@@ -85,7 +85,6 @@ async function acquireClient(model: string, apiKey?: string, signal?: AbortSigna
     const port = await getFreePort();
     const { client, server } = await createOpencode({
       port,
-      signal,
       config: {
         model,
         small_model: model,
@@ -94,7 +93,15 @@ async function acquireClient(model: string, apiKey?: string, signal?: AbortSigna
       timeout: OPENCODE_SERVER_START_TIMEOUT_MS,
     });
 
-    sharedServer = { client, close: server.close, model, apiKey, queue: [] };
+    const closeServer = (): void => {
+      try {
+        server.close();
+      } catch {
+        // Ignore close errors
+      }
+    };
+
+    sharedServer = { client, close: closeServer, model, apiKey, queue: [] };
     log.debug('OpenCode server started', { model, port });
 
     return { client, release: () => releaseClient() };
@@ -380,7 +387,7 @@ export class OpenCodeClient {
         const parsedModel = parseProviderModel(options.model, 'OpenCode model');
         const fullModel = `${parsedModel.providerID}/${parsedModel.modelID}`;
 
-        const acquired = await acquireClient(fullModel, options.opencodeApiKey, streamAbortController.signal);
+        const acquired = await acquireClient(fullModel, options.opencodeApiKey);
         opencodeApiClient = acquired.client;
         release = acquired.release;
 
@@ -706,22 +713,6 @@ export class OpenCodeClient {
         }
         if (options.abortSignal) {
           options.abortSignal.removeEventListener('abort', onExternalAbort);
-        }
-        if (opencodeApiClient) {
-          const disposeAbortController = new AbortController();
-          const disposeTimeoutId = setTimeout(() => {
-            disposeAbortController.abort();
-          }, 3000);
-          try {
-            await opencodeApiClient.instance.dispose(
-              { directory: options.cwd },
-              { signal: disposeAbortController.signal },
-            );
-          } catch {
-            // Ignore dispose errors during cleanup.
-          } finally {
-            clearTimeout(disposeTimeoutId);
-          }
         }
         release?.();
         if (!streamAbortController.signal.aborted) {

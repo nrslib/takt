@@ -95,10 +95,6 @@ describe('OpenCodeClient stream cleanup', () => {
 
     expect(result.status).toBe('done');
     expect(stream.returnSpy).toHaveBeenCalled();
-    expect(disposeInstance).toHaveBeenCalledWith(
-      { directory: '/tmp' },
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
-    );
     expect(subscribe).toHaveBeenCalledWith(
       { directory: '/tmp' },
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
@@ -141,10 +137,6 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(result.status).toBe('error');
     expect(result.content).toContain('boom');
     expect(stream.returnSpy).toHaveBeenCalled();
-    expect(disposeInstance).toHaveBeenCalledWith(
-      { directory: '/tmp' },
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
-    );
     expect(subscribe).toHaveBeenCalledWith(
       { directory: '/tmp' },
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
@@ -210,10 +202,6 @@ describe('OpenCodeClient stream cleanup', () => {
 
     expect(result.status).toBe('done');
     expect(result.content).toBe('done more');
-    expect(disposeInstance).toHaveBeenCalledWith(
-      { directory: '/tmp' },
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
-    );
     expect(subscribe).toHaveBeenCalledWith(
       { directory: '/tmp' },
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
@@ -614,5 +602,138 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(serverClose1).toHaveBeenCalled();
     expect(result1.status).toBe('done');
     expect(result2.status).toBe('done');
+  });
+
+});
+
+describe('OpenCode conversation via provider (E2E)', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const { resetSharedServer } = await import('../infra/opencode/client.js');
+    resetSharedServer();
+  });
+
+  function makeClientMock(sessionId: string, responses: string[]) {
+    let turnIndex = 0;
+    const sessionCreate = vi.fn().mockResolvedValue({ data: { id: sessionId } });
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    const subscribe = vi.fn().mockImplementation(() => {
+      const text = responses[turnIndex] ?? '';
+      const events: unknown[] = [];
+      if (text) {
+        events.push({
+          type: 'message.part.updated',
+          properties: { part: { id: `p-${turnIndex}`, type: 'text', text }, delta: text },
+        });
+      }
+      events.push({ type: 'session.idle', properties: { sessionID: sessionId } });
+      turnIndex += 1;
+      return Promise.resolve({ stream: new MockEventStream(events) });
+    });
+    return { sessionCreate, promptAsync, subscribe };
+  }
+
+  it('should carry sessionId across turns and reuse server', async () => {
+    const { OpenCodeProvider } = await import('../infra/providers/opencode.js');
+    const { resetSharedServer } = await import('../infra/opencode/client.js');
+    resetSharedServer();
+
+    const { sessionCreate, promptAsync, subscribe } = makeClientMock('conv-session', [
+      'Hello!',
+      'I remember our conversation.',
+    ]);
+
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn() },
+        session: { create: sessionCreate, promptAsync },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const provider = new OpenCodeProvider();
+    const agent = provider.setup({ name: 'coder', systemPrompt: 'You are a helpful assistant.' });
+
+    // 1ターン目
+    const result1 = await agent.call('Hi', { cwd: '/tmp', model: 'opencode/big-pickle' });
+    expect(result1.status).toBe('done');
+    expect(result1.content).toBe('Hello!');
+    expect(result1.sessionId).toBe('conv-session');
+
+    // 2ターン目: conversationLoop と同様に前ターンの sessionId を引き継ぐ
+    const result2 = await agent.call('Do you remember me?', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      sessionId: result1.sessionId,
+    });
+    expect(result2.status).toBe('done');
+    expect(result2.content).toBe('I remember our conversation.');
+    expect(result2.sessionId).toBe('conv-session');
+
+    // サーバーは1回だけ起動（再利用）
+    expect(createOpencodeMock).toHaveBeenCalledTimes(1);
+    // sessionId を引き継いだので session.create は1回だけ
+    expect(sessionCreate).toHaveBeenCalledTimes(1);
+    // 両ターンでプロンプトが送られた
+    expect(promptAsync).toHaveBeenCalledTimes(2);
+    expect(subscribe).toHaveBeenCalledTimes(2);
+  });
+
+  it('should carry sessionId across three turns (multi-turn conversation)', async () => {
+    const { OpenCodeProvider } = await import('../infra/providers/opencode.js');
+    const { resetSharedServer } = await import('../infra/opencode/client.js');
+    resetSharedServer();
+
+    const { sessionCreate, promptAsync, subscribe } = makeClientMock('multi-session', [
+      'Turn 1 response',
+      'Turn 2 response',
+      'Turn 3 response',
+    ]);
+
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn() },
+        session: { create: sessionCreate, promptAsync },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const provider = new OpenCodeProvider();
+    const agent = provider.setup({ name: 'coder' });
+
+    const results = [];
+    let prevSessionId: string | undefined;
+
+    for (let i = 0; i < 3; i++) {
+      const result = await agent.call(`message ${i + 1}`, {
+        cwd: '/tmp',
+        model: 'opencode/big-pickle',
+        sessionId: prevSessionId,
+      });
+      results.push(result);
+      prevSessionId = result.sessionId;
+    }
+
+    expect(results[0].status).toBe('done');
+    expect(results[1].status).toBe('done');
+    expect(results[2].status).toBe('done');
+    expect(results[0].content).toBe('Turn 1 response');
+    expect(results[1].content).toBe('Turn 2 response');
+    expect(results[2].content).toBe('Turn 3 response');
+
+    // サーバーは1回だけ起動
+    expect(createOpencodeMock).toHaveBeenCalledTimes(1);
+    // sessionId を引き継いでいるので session.create は1回のみ
+    expect(sessionCreate).toHaveBeenCalledTimes(1);
+    // 3ターン分のプロンプトが送られた
+    expect(promptAsync).toHaveBeenCalledTimes(3);
+    // すべてのターンで同じ sessionId
+    expect(results[0].sessionId).toBe('multi-session');
+    expect(results[1].sessionId).toBe('multi-session');
+    expect(results[2].sessionId).toBe('multi-session');
   });
 });
