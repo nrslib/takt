@@ -29,9 +29,8 @@ function toRomajiSafely(text: string): string {
       );
     }
     return convertedChunks.join('');
-  } catch {
-    // Avoid blocking branch/task creation on rare parser edge cases or deep recursion
-    // with very long mixed/ASCII inputs.
+  } catch (err) {
+    log.error('Failed to convert to romaji', { error: err, textLength: text.length });
     return text;
   }
 }
