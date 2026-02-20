@@ -92,4 +92,5 @@ export interface TaskListItem {
   startedAt?: string;
   completedAt?: string;
   ownerPid?: number;
+  issueNumber?: number;
 }

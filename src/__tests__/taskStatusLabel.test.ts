@@ -37,6 +37,30 @@ describe('formatTaskStatusLabel', () => {
     const task = makeTask({ kind: 'running', name: 'my-task' });
     expect(formatTaskStatusLabel(task)).toBe('[running] my-task');
   });
+
+  it('should include issue number when present', () => {
+    const task = makeTask({
+      kind: 'pending',
+      name: 'implement-feature',
+      issueNumber: 32,
+    });
+    expect(formatTaskStatusLabel(task)).toBe('[pending] implement-feature #32');
+  });
+
+  it('should include issue number with branch when both present', () => {
+    const task = makeTask({
+      kind: 'completed',
+      name: 'fix-bug',
+      issueNumber: 42,
+      branch: 'takt/42/fix-bug',
+    });
+    expect(formatTaskStatusLabel(task)).toBe('[completed] fix-bug #42 (takt/42/fix-bug)');
+  });
+
+  it('should not include issue number when absent', () => {
+    const task = makeTask({ kind: 'pending', name: 'my-task' });
+    expect(formatTaskStatusLabel(task)).toBe('[pending] my-task');
+  });
 });
 
 describe('formatShortDate', () => {
