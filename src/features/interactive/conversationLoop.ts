@@ -31,6 +31,7 @@ import {
   formatSessionStatus,
 } from './interactive.js';
 import { callAIWithRetry, type CallAIResult, type SessionContext } from './aiCaller.js';
+import { updateSessionIndex, getGitBranch } from '../../infra/claude/index.js';
 
 export { type CallAIResult, type SessionContext, callAIWithRetry } from './aiCaller.js';
 
@@ -120,6 +121,14 @@ export async function runConversationLoop(
       prompt, sysPrompt, tools, cwd, { ...ctx, sessionId },
     );
     sessionId = newSessionId;
+    if (newSessionId && history.length > 0) {
+      const branch = getGitBranch(cwd);
+      try {
+        updateSessionIndex(cwd, newSessionId, history[0]!.content, history.length, branch);
+      } catch (e) {
+        log.info('Failed to update session index', e);
+      }
+    }
     return result;
   }
 
