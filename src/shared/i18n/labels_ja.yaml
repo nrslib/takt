@@ -96,6 +96,9 @@ instruct:
 retry:
   ui:
     intro: "リトライモード - 追加指示を入力してください。コマンド: /go（指示書作成・実行）, /retry（前回の指示書で再実行）, /cancel（終了）"
+  workflowPrompt: "ワークフローを選択:"
+  usePreviousWorkflow: "前回のまま使用"
+  changeWorkflow: "ワークフローを変更"
 
 run:
   notifyComplete: "run完了 ({total} tasks)"
