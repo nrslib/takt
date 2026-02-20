@@ -467,6 +467,7 @@ export async function executePiece(
       provider: options.provider,
       model: options.model,
       providerOptions: options.providerOptions,
+      providerOptionsSource: options.providerOptionsSource,
       personaProviders: options.personaProviders,
       providerProfiles: options.providerProfiles,
       interactive: interactiveUserInput,
@@ -547,8 +548,9 @@ export async function executePiece(
       model: options.model,
       personaProviders: options.personaProviders,
     });
-    const movementProvider = resolved.provider ?? currentProvider;
-    const movementModel = resolved.model ?? globalConfig.model ?? '(default)';
+    const movementProvider = resolved.provider ?? 'claude';
+    const resolvedModel = resolved.model;
+    const movementModel = resolvedModel ?? '(default)';
     currentMovementProvider = movementProvider;
     currentMovementModel = movementModel;
     providerEventLogger.setMovement(step.name);

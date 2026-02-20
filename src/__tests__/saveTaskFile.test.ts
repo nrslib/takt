@@ -103,6 +103,17 @@ describe('saveTaskFile', () => {
     expect(task.task_dir).toBeTypeOf('string');
   });
 
+  it('draftPr: true が draft_pr: true として保存される', async () => {
+    await saveTaskFile(testDir, 'Draft task', {
+      autoPr: true,
+      draftPr: true,
+    });
+
+    const task = loadTasks(testDir).tasks[0]!;
+    expect(task.auto_pr).toBe(true);
+    expect(task.draft_pr).toBe(true);
+  });
+
   it('should generate unique names on duplicates', async () => {
     const first = await saveTaskFile(testDir, 'Same title');
     const second = await saveTaskFile(testDir, 'Same title');
@@ -122,7 +133,8 @@ describe('saveTaskFromInteractive', () => {
   it('should always save task with worktree settings', async () => {
     mockPromptInput.mockResolvedValueOnce('');
     mockPromptInput.mockResolvedValueOnce('');
-    mockConfirm.mockResolvedValueOnce(true);
+    mockConfirm.mockResolvedValueOnce(true);  // auto-create PR?
+    mockConfirm.mockResolvedValueOnce(true);  // create as draft?
 
     await saveTaskFromInteractive(testDir, 'Task content');
 
@@ -130,6 +142,7 @@ describe('saveTaskFromInteractive', () => {
     const task = loadTasks(testDir).tasks[0]!;
     expect(task.worktree).toBe(true);
     expect(task.auto_pr).toBe(true);
+    expect(task.draft_pr).toBe(true);
   });
 
   it('should keep worktree enabled even when auto-pr is declined', async () => {

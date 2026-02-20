@@ -55,6 +55,7 @@ export function toTaskData(projectDir: string, task: TaskRecord): TaskFileData {
     start_movement: task.start_movement,
     retry_note: task.retry_note,
     auto_pr: task.auto_pr,
+    draft_pr: task.draft_pr,
   });
 }
 
@@ -78,6 +79,7 @@ export function toTaskInfo(projectDir: string, tasksFile: string, task: TaskReco
       start_movement: task.start_movement,
       retry_note: task.retry_note,
       auto_pr: task.auto_pr,
+      draft_pr: task.draft_pr,
     }),
   };
 }
@@ -120,6 +122,7 @@ function toBaseTaskListItem(projectDir: string, tasksFile: string, task: TaskRec
     summary: task.summary,
     branch: task.branch,
     worktreePath: task.worktree_path,
+    prUrl: task.pr_url,
     startedAt: task.started_at ?? undefined,
     completedAt: task.completed_at ?? undefined,
     ownerPid: task.owner_pid ?? undefined,

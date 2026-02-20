@@ -30,7 +30,6 @@ export type {
   ObservabilityConfig,
   Language,
   PipelineConfig,
-  GlobalConfig,
   ProjectConfig,
   ProviderProfileName,
   ProviderPermissionProfile,

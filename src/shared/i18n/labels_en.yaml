@@ -10,7 +10,7 @@ interactive:
   conversationLabel: "Conversation:"
   noTranscript: "(No local transcript. Summarize the current session context.)"
   ui:
-    intro: "Interactive mode - describe your task. Commands: /go (execute), /play (run now), /resume (load session), /retry (rerun previous order), /cancel (exit)"
+    intro: "Interactive mode - describe your task. Commands: /go (create instruction & run), /play (run now), /resume (load session), /cancel (exit)"
     resume: "Resuming previous session"
     noConversation: "No conversation yet. Please describe your task first."
     summarizeFailed: "Failed to summarize conversation. Please try again."
@@ -25,6 +25,7 @@ interactive:
     cancelled: "Cancelled"
     playNoTask: "Please specify task content: /play <task>"
     retryNoOrder: "No previous order (order.md) found. /retry is only available during retry."
+    retryUnavailable: "/retry is only available in Retry mode from `takt list`."
     personaFallback: "No persona available for the first movement. Falling back to assistant mode."
   modeSelection:
     prompt: "Select interactive mode:"
@@ -77,10 +78,10 @@ piece:
 # ===== Instruct Mode UI (takt list -> instruct) =====
 instruct:
   ui:
-    intro: "Instruct mode - describe additional instructions. Commands: /go (summarize), /retry (rerun previous order), /cancel (exit)"
+    intro: "Instruct mode - describe additional instructions. Commands: /go (create instruction & run), /replay (resubmit previous order), /cancel (exit)"
     resume: "Resuming previous session"
     noConversation: "No conversation yet. Please describe your instructions first."
-    summarizeFailed: "Failed to summarize conversation. Please try again."
+    summarizeFailed: "Failed to create instruction. Please try again."
     continuePrompt: "Okay, continue describing your instructions."
     proposed: "Proposed additional instructions:"
     actionPrompt: "What would you like to do?"
@@ -90,6 +91,11 @@ instruct:
       continue: "Continue editing"
     cancelled: "Cancelled"
     replayNoOrder: "Previous order (order.md) not found"
+
+# ===== Retry Mode UI (takt list -> retry) =====
+retry:
+  ui:
+    intro: "Retry mode - describe additional instructions. Commands: /go (create instruction & run), /retry (rerun previous order), /cancel (exit)"
 
 run:
   notifyComplete: "Run complete ({total} tasks)"

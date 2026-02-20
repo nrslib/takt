@@ -29,6 +29,17 @@ function mergeProviderOptions(
   return Object.keys(result).length > 0 ? result : undefined;
 }
 
+function resolveMovementProviderOptions(
+  source: 'env' | 'project' | 'global' | 'default' | undefined,
+  resolvedConfigOptions: MovementProviderOptions | undefined,
+  movementOptions: MovementProviderOptions | undefined,
+): MovementProviderOptions | undefined {
+  if (source === 'env' || source === 'project') {
+    return mergeProviderOptions(movementOptions, resolvedConfigOptions);
+  }
+  return mergeProviderOptions(resolvedConfigOptions, movementOptions);
+}
+
 export class OptionsBuilder {
   constructor(
     private readonly engineOptions: PieceEngineOptions,
@@ -53,11 +64,8 @@ export class OptionsBuilder {
       model: this.engineOptions.model,
       personaProviders: this.engineOptions.personaProviders,
     });
-
-    const resolvedProviderForPermissions =
-      this.engineOptions.provider
-      ?? resolved.provider
-      ?? 'claude';
+    const resolvedProvider = resolved.provider ?? this.engineOptions.provider ?? 'claude';
+    const resolvedModel = resolved.model ?? this.engineOptions.model;
 
     return {
       cwd: this.getCwd(),
@@ -65,16 +73,17 @@ export class OptionsBuilder {
       personaPath: step.personaPath,
       provider: this.engineOptions.provider,
       model: this.engineOptions.model,
-      stepProvider: resolved.provider,
-      stepModel: resolved.model,
+      stepProvider: resolvedProvider,
+      stepModel: resolvedModel,
       permissionMode: resolveMovementPermissionMode({
         movementName: step.name,
         requiredPermissionMode: step.requiredPermissionMode,
-        provider: resolvedProviderForPermissions,
+        provider: resolvedProvider,
         projectProviderProfiles: this.engineOptions.providerProfiles,
         globalProviderProfiles: DEFAULT_PROVIDER_PERMISSION_PROFILES,
       }),
-      providerOptions: mergeProviderOptions(
+      providerOptions: resolveMovementProviderOptions(
+        this.engineOptions.providerOptionsSource,
         this.engineOptions.providerOptions,
         step.providerOptions,
       ),

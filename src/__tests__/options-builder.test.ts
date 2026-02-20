@@ -68,7 +68,7 @@ describe('OptionsBuilder.buildBaseOptions', () => {
     expect(options.permissionMode).toBe('edit');
   });
 
-  it('merges provider options with precedence: global < project < movement', () => {
+  it('merges provider options with precedence: global < movement < project', () => {
     const step = createMovement({
       providerOptions: {
         codex: { networkAccess: false },
@@ -76,6 +76,7 @@ describe('OptionsBuilder.buildBaseOptions', () => {
       },
     });
     const builder = createBuilder(step, {
+      providerOptionsSource: 'project',
       providerOptions: {
         codex: { networkAccess: true },
         claude: { sandbox: { allowUnsandboxedCommands: true } },
@@ -86,7 +87,7 @@ describe('OptionsBuilder.buildBaseOptions', () => {
     const options = builder.buildBaseOptions(step);
 
     expect(options.providerOptions).toEqual({
-      codex: { networkAccess: false },
+      codex: { networkAccess: true },
       opencode: { networkAccess: true },
       claude: {
         sandbox: {

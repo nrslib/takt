@@ -17,6 +17,7 @@ export const TaskExecutionConfigSchema = z.object({
   start_movement: z.string().optional(),
   retry_note: z.string().optional(),
   auto_pr: z.boolean().optional(),
+  draft_pr: z.boolean().optional(),
 });
 
 /**
@@ -44,6 +45,7 @@ export const TaskRecordSchema = TaskExecutionConfigSchema.extend({
   slug: z.string().optional(),
   summary: z.string().optional(),
   worktree_path: z.string().optional(),
+  pr_url: z.string().optional(),
   content: z.string().min(1).optional(),
   content_file: z.string().min(1).optional(),
   task_dir: z.string().optional(),

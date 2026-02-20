@@ -105,7 +105,7 @@ function buildPipelinePrBody(
  * Returns a process exit code (0 on success, 2-5 on specific failures).
  */
 export async function executePipeline(options: PipelineExecutionOptions): Promise<number> {
-  const { cwd, piece, autoPr, skipGit } = options;
+  const { cwd, piece, autoPr, draftPr, skipGit } = options;
   const globalConfig = resolveConfigValues(cwd, ['pipeline']);
   const pipelineConfig = globalConfig.pipeline;
   let issue: GitHubIssue | undefined;
@@ -210,6 +210,7 @@ export async function executePipeline(options: PipelineExecutionOptions): Promis
         body: prBody,
         base: baseBranch,
         repo: options.repo,
+        draft: draftPr,
       });
 
       if (prResult.success) {

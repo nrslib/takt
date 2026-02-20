@@ -40,6 +40,13 @@ vi.mock('../infra/config/index.js', () => ({
     }
     return result;
   },
+  resolveConfigValueWithSource: (_projectDir: string, key: string) => {
+    const raw = mockLoadConfigRaw() as Record<string, unknown>;
+    const config = ('global' in raw && 'project' in raw)
+      ? { ...raw.global as Record<string, unknown>, ...raw.project as Record<string, unknown> }
+      : { ...raw, piece: 'default', provider: 'claude', verbose: false };
+    return { value: config[key], source: 'project' };
+  },
 }));
 
 const mockLoadConfig = mockLoadConfigRaw;
@@ -49,6 +56,7 @@ const {
   mockCompleteTask,
   mockFailTask,
   mockRecoverInterruptedRunningTasks,
+  mockListAllTaskItems,
   mockNotifySuccess,
   mockNotifyError,
   mockSendSlackNotification,
@@ -58,6 +66,7 @@ const {
   mockCompleteTask: vi.fn(),
   mockFailTask: vi.fn(),
   mockRecoverInterruptedRunningTasks: vi.fn(),
+  mockListAllTaskItems: vi.fn().mockReturnValue([]),
   mockNotifySuccess: vi.fn(),
   mockNotifyError: vi.fn(),
   mockSendSlackNotification: vi.fn(),
@@ -71,6 +80,7 @@ vi.mock('../infra/task/index.js', async (importOriginal) => ({
     completeTask: mockCompleteTask,
     failTask: mockFailTask,
     recoverInterruptedRunningTasks: mockRecoverInterruptedRunningTasks,
+    listAllTaskItems: mockListAllTaskItems,
   })),
 }));
 
@@ -711,16 +721,37 @@ describe('runAllTasks concurrency', () => {
       mockClaimNextTasks
         .mockReturnValueOnce([task1])
         .mockReturnValueOnce([]);
+      mockListAllTaskItems.mockReturnValue([
+        {
+          kind: 'completed',
+          name: 'task-1',
+          createdAt: '2026-02-19T00:00:00.000Z',
+          filePath: '/tasks/task-1.yaml',
+          content: 'Task: task-1',
+          startedAt: '2026-02-19T00:00:00.000Z',
+          completedAt: '2026-02-19T00:00:30.000Z',
+          branch: 'feat/task-1',
+          prUrl: 'https://github.com/org/repo/pull/10',
+          data: { task: 'task-1', piece: 'default', issue: 42 },
+        },
+      ]);
 
       // When
       await runAllTasks('/project');
 
       // Then
       expect(mockSendSlackNotification).toHaveBeenCalledOnce();
-      expect(mockSendSlackNotification).toHaveBeenCalledWith(
-        webhookUrl,
-        'TAKT Run complete: 1 tasks succeeded',
-      );
+      const [url, message] = mockSendSlackNotification.mock.calls[0]! as [string, string];
+      expect(url).toBe(webhookUrl);
+      expect(message).toContain('TAKT Run');
+      expect(message).toContain('total=1');
+      expect(message).toContain('success=1');
+      expect(message).toContain('failed=0');
+      expect(message).toContain('task-1');
+      expect(message).toContain('piece=default');
+      expect(message).toContain('issue=#42');
+      expect(message).toContain('duration=30s');
+      expect(message).toContain('pr=https://github.com/org/repo/pull/10');
     });
 
     it('should send Slack notification on failure when webhook URL is set', async () => {
@@ -731,16 +762,36 @@ describe('runAllTasks concurrency', () => {
       mockClaimNextTasks
         .mockReturnValueOnce([task1])
         .mockReturnValueOnce([]);
+      mockListAllTaskItems.mockReturnValue([
+        {
+          kind: 'failed',
+          name: 'task-1',
+          createdAt: '2026-02-19T00:00:00.000Z',
+          filePath: '/tasks/task-1.yaml',
+          content: 'Task: task-1',
+          startedAt: '2026-02-19T00:00:00.000Z',
+          completedAt: '2026-02-19T00:00:45.000Z',
+          branch: 'feat/task-1',
+          data: { task: 'task-1', piece: 'review' },
+          failure: { movement: 'ai_review', error: 'Lint failed', last_message: 'Fix attempt timed out' },
+        },
+      ]);
 
       // When
       await runAllTasks('/project');
 
       // Then
       expect(mockSendSlackNotification).toHaveBeenCalledOnce();
-      expect(mockSendSlackNotification).toHaveBeenCalledWith(
-        webhookUrl,
-        'TAKT Run finished with errors: 1 failed out of 1 tasks',
-      );
+      const [url, message] = mockSendSlackNotification.mock.calls[0]! as [string, string];
+      expect(url).toBe(webhookUrl);
+      expect(message).toContain('TAKT Run');
+      expect(message).toContain('total=1');
+      expect(message).toContain('failed=1');
+      expect(message).toContain('task-1');
+      expect(message).toContain('piece=review');
+      expect(message).toContain('duration=45s');
+      expect(message).toContain('movement=ai_review');
+      expect(message).toContain('error=Lint failed');
     });
 
     it('should send Slack notification on exception when webhook URL is set', async () => {
@@ -753,14 +804,28 @@ describe('runAllTasks concurrency', () => {
         .mockImplementationOnce(() => {
           throw poolError;
         });
+      mockListAllTaskItems.mockReturnValue([
+        {
+          kind: 'completed',
+          name: 'task-1',
+          createdAt: '2026-02-19T00:00:00.000Z',
+          filePath: '/tasks/task-1.yaml',
+          content: 'Task: task-1',
+          startedAt: '2026-02-19T00:00:00.000Z',
+          completedAt: '2026-02-19T00:00:15.000Z',
+          data: { task: 'task-1', piece: 'default' },
+        },
+      ]);
 
       // When / Then
       await expect(runAllTasks('/project')).rejects.toThrow('worker pool crashed');
       expect(mockSendSlackNotification).toHaveBeenCalledOnce();
-      expect(mockSendSlackNotification).toHaveBeenCalledWith(
-        webhookUrl,
-        'TAKT Run error: worker pool crashed',
-      );
+      const [url, message] = mockSendSlackNotification.mock.calls[0]! as [string, string];
+      expect(url).toBe(webhookUrl);
+      expect(message).toContain('TAKT Run');
+      expect(message).toContain('task-1');
+      expect(message).toContain('piece=default');
+      expect(message).toContain('duration=15s');
     });
 
     it('should not send Slack notification when webhook URL is not set', async () => {

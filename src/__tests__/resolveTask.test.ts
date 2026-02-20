@@ -48,6 +48,7 @@ describe('resolveTaskExecution', () => {
       execPiece: 'default',
       isWorktree: false,
       autoPr: false,
+      draftPr: false,
     });
   });
 
@@ -76,11 +77,28 @@ describe('resolveTaskExecution', () => {
       execPiece: 'default',
       isWorktree: false,
       autoPr: true,
+      draftPr: false,
       reportDirName: 'issue-task-123',
       issueNumber: 12345,
       taskPrompt: expect.stringContaining('Primary spec: `.takt/runs/issue-task-123/context/task/order.md`'),
     });
     expect(fs.existsSync(expectedReportOrderPath)).toBe(true);
     expect(fs.readFileSync(expectedReportOrderPath, 'utf-8')).toBe('# task instruction');
+  });
+
+  it('draft_pr: true が draftPr: true として解決される', async () => {
+    const root = createTempProjectDir();
+    const task = createTask({
+      data: {
+        task: 'Run draft task',
+        auto_pr: true,
+        draft_pr: true,
+      },
+    });
+
+    const result = await resolveTaskExecution(task, root, 'default');
+
+    expect(result.draftPr).toBe(true);
+    expect(result.autoPr).toBe(true);
   });
 });

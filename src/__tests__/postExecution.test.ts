@@ -51,7 +51,12 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   }),
 }));
 
-import { postExecutionFlow } from '../features/tasks/execute/postExecution.js';
+import { postExecutionFlow, resolveDraftPr } from '../features/tasks/execute/postExecution.js';
+import { resolvePieceConfigValue } from '../infra/config/index.js';
+import { confirm } from '../shared/prompt/index.js';
+
+const mockResolvePieceConfigValue = vi.mocked(resolvePieceConfigValue);
+const mockConfirm = vi.mocked(confirm);
 
 const baseOptions = {
   execCwd: '/clone',
@@ -60,6 +65,7 @@ const baseOptions = {
   branch: 'task/fix-the-bug',
   baseBranch: 'main',
   shouldCreatePr: true,
+  draftPr: false,
   pieceIdentifier: 'default',
 };
 
@@ -112,5 +118,61 @@ describe('postExecutionFlow', () => {
 
     expect(mockFindExistingPr).not.toHaveBeenCalled();
     expect(mockCreatePullRequest).not.toHaveBeenCalled();
+  });
+
+  it('draftPr: true の場合、createPullRequest に draft: true が渡される', async () => {
+    mockFindExistingPr.mockReturnValue(undefined);
+
+    await postExecutionFlow({ ...baseOptions, draftPr: true });
+
+    expect(mockCreatePullRequest).toHaveBeenCalledWith(
+      '/project',
+      expect.objectContaining({ draft: true }),
+    );
+  });
+
+  it('draftPr: false の場合、createPullRequest に draft: false が渡される', async () => {
+    mockFindExistingPr.mockReturnValue(undefined);
+
+    await postExecutionFlow({ ...baseOptions, draftPr: false });
+
+    expect(mockCreatePullRequest).toHaveBeenCalledWith(
+      '/project',
+      expect.objectContaining({ draft: false }),
+    );
+  });
+});
+
+describe('resolveDraftPr', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('CLI オプション true が渡された場合は true を返す', async () => {
+    const result = await resolveDraftPr(true, '/project');
+    expect(result).toBe(true);
+  });
+
+  it('CLI オプション false が渡された場合は false を返す', async () => {
+    const result = await resolveDraftPr(false, '/project');
+    expect(result).toBe(false);
+  });
+
+  it('CLI オプションが未指定で config が true の場合は true を返す', async () => {
+    mockResolvePieceConfigValue.mockReturnValue(true);
+
+    const result = await resolveDraftPr(undefined, '/project');
+
+    expect(result).toBe(true);
+  });
+
+  it('CLI オプション・config ともに未指定の場合はプロンプトを表示する', async () => {
+    mockResolvePieceConfigValue.mockReturnValue(undefined);
+    mockConfirm.mockResolvedValue(false);
+
+    const result = await resolveDraftPr(undefined, '/project');
+
+    expect(mockConfirm).toHaveBeenCalledWith('Create as draft?', true);
+    expect(result).toBe(false);
   });
 });

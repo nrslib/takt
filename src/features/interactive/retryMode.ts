@@ -14,13 +14,12 @@ import {
 } from './conversationLoop.js';
 import {
   createSelectActionWithoutExecute,
-  buildReplayHint,
   formatMovementPreviews,
   type PieceContext,
 } from './interactive-summary.js';
 import { resolveLanguage } from './interactive.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
-import { getLabelObject } from '../../shared/i18n/index.js';
+import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
 import { resolveConfigValues } from '../../infra/config/index.js';
 import type { InstructModeResult, InstructUIText } from '../tasks/list/instructMode.js';
 
@@ -120,10 +119,10 @@ export async function runRetryMode(
   const templateVars = buildRetryTemplateVars(retryContext, lang, previousOrderContent);
   const systemPrompt = loadTemplate('score_retry_system_prompt', ctx.lang, templateVars);
 
-  const replayHint = buildReplayHint(ctx.lang, previousOrderContent !== null);
+  const retryIntro = getLabel('retry.ui.intro', ctx.lang);
   const introLabel = ctx.lang === 'ja'
-    ? `## リトライ: ${retryContext.failure.taskName}\n\nブランチ: ${retryContext.branchName}\n\n${ui.intro}${replayHint}`
-    : `## Retry: ${retryContext.failure.taskName}\n\nBranch: ${retryContext.branchName}\n\n${ui.intro}${replayHint}`;
+    ? `## リトライ: ${retryContext.failure.taskName}\n\nブランチ: ${retryContext.branchName}\n\n${retryIntro}`
+    : `## Retry: ${retryContext.failure.taskName}\n\nBranch: ${retryContext.branchName}\n\n${retryIntro}`;
 
   const policyContent = loadTemplate('score_interactive_policy', ctx.lang, {});
 
@@ -144,6 +143,7 @@ export async function runRetryMode(
     introMessage: introLabel,
     selectAction: createSelectActionWithoutExecute(ui),
     previousOrderContent: previousOrderContent ?? undefined,
+    enableRetryCommand: true,
   };
 
   const result = await runConversationLoop(cwd, ctx, strategy, retryContext.pieceContext, undefined);

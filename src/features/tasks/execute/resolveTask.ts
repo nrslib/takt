@@ -6,8 +6,12 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { resolvePieceConfigValue } from '../../../infra/config/index.js';
 import { type TaskInfo, createSharedClone, summarizeTaskName, getCurrentBranch } from '../../../infra/task/index.js';
+import { fetchIssue, checkGhCli } from '../../../infra/github/index.js';
 import { withProgress } from '../../../shared/ui/index.js';
+import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { getTaskSlugFromTaskDir } from '../../../shared/utils/taskPaths.js';
+
+const log = createLogger('task');
 
 export interface ResolvedTaskExecution {
   execCwd: string;
@@ -21,6 +25,7 @@ export interface ResolvedTaskExecution {
   startMovement?: string;
   retryNote?: string;
   autoPr: boolean;
+  draftPr: boolean;
   issueNumber?: number;
 }
 
@@ -61,6 +66,30 @@ function throwIfAborted(signal?: AbortSignal): void {
 }
 
 /**
+ * Resolve a GitHub issue from task data's issue number.
+ * Returns issue array for buildPrBody, or undefined if no issue or gh CLI unavailable.
+ */
+export function resolveTaskIssue(issueNumber: number | undefined): ReturnType<typeof fetchIssue>[] | undefined {
+  if (issueNumber === undefined) {
+    return undefined;
+  }
+
+  const ghStatus = checkGhCli();
+  if (!ghStatus.available) {
+    log.info('gh CLI unavailable, skipping issue resolution for PR body', { issueNumber });
+    return undefined;
+  }
+
+  try {
+    const issue = fetchIssue(issueNumber);
+    return [issue];
+  } catch (e) {
+    log.info('Failed to fetch issue for PR body, continuing without issue info', { issueNumber, error: getErrorMessage(e) });
+    return undefined;
+  }
+}
+
+/**
  * Resolve execution directory and piece from task data.
  * If the task has worktree settings, create a shared clone and use it as cwd.
  * Task name is summarized to English by AI for use in branch/clone names.
@@ -75,7 +104,7 @@ export async function resolveTaskExecution(
 
   const data = task.data;
   if (!data) {
-    return { execCwd: defaultCwd, execPiece: defaultPiece, isWorktree: false, autoPr: false };
+    return { execCwd: defaultCwd, execPiece: defaultPiece, isWorktree: false, autoPr: false, draftPr: false };
   }
 
   let execCwd = defaultCwd;
@@ -137,18 +166,15 @@ export async function resolveTaskExecution(
   const startMovement = data.start_movement;
   const retryNote = data.retry_note;
 
-  let autoPr: boolean;
-  if (data.auto_pr !== undefined) {
-    autoPr = data.auto_pr;
-  } else {
-    autoPr = resolvePieceConfigValue(defaultCwd, 'autoPr') ?? false;
-  }
+  const autoPr = data.auto_pr ?? resolvePieceConfigValue(defaultCwd, 'autoPr') ?? false;
+  const draftPr = data.draft_pr ?? resolvePieceConfigValue(defaultCwd, 'draftPr') ?? false;
 
   return {
     execCwd,
     execPiece,
     isWorktree,
     autoPr,
+    draftPr,
     ...(taskPrompt ? { taskPrompt } : {}),
     ...(reportDirName ? { reportDirName } : {}),
     ...(branch ? { branch } : {}),
