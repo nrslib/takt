@@ -89,6 +89,10 @@ const { executePipeline } = await import('../features/pipeline/index.js');
 describe('executePipeline', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Ensure no real Slack notifications are sent
+    delete process.env.TAKT_NOTIFY_WEBHOOK;
+    delete process.env.TAKT_SLACK_WEBHOOK_URL;
+    mockGetSlackWebhookUrl.mockReturnValue(undefined);
     // Default: git operations succeed
     mockExecFileSync.mockReturnValue('abc1234\n');
     // Default: no pipeline config
