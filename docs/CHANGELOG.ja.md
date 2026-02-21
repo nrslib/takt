@@ -15,8 +15,6 @@
 - **4層ファセット解決**: 3層（project → user → builtin）から4層（package-local → project → user → builtin）に拡張 — ensemble パッケージのピースは自パッケージ内のファセットを最優先で解決
 - **ピース選択に ensemble カテゴリ追加**: インストール済みの ensemble パッケージがピース選択 UI の「ensemble」カテゴリにサブカテゴリとして自動表示
 - **implement/fix インストラクションにビルドゲート追加**: `implement` と `fix` のビルトインインストラクションでテスト実行前にビルド（型チェック）の実行を必須化
-- **TAKT Pack 仕様** (`docs/takt-pack-spec.md`): TAKT パッケージマニフェストのフォーマット仕様ドキュメント
-
 ### Changed
 
 - **BREAKING: ファセットディレクトリ構造の変更**: 全レイヤーでファセットディレクトリが `facets/` サブディレクトリ配下に移動 — `builtins/{lang}/{facetType}/` → `builtins/{lang}/facets/{facetType}/`、`~/.takt/{facetType}/` → `~/.takt/facets/{facetType}/`、`.takt/{facetType}/` → `.takt/facets/{facetType}/`。マイグレーション: カスタムファセットファイルを新しい `facets/` サブディレクトリに移動してください

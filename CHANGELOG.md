@@ -15,8 +15,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **4-layer facet resolution**: Upgraded from 3-layer (project → user → builtin) to 4-layer (package-local → project → user → builtin) — ensemble package pieces automatically resolve their own facets first
 - **Ensemble category in piece selection**: Installed ensemble packages automatically appear as subcategories under an "ensemble" category in the piece selection UI
 - **Build gate in implement/fix instructions**: `implement` and `fix` builtin instructions now require build (type check) verification before test execution
-- **TAKT Pack specification** (`docs/takt-pack-spec.md`): Documentation for the TAKT package manifest format
-
 ### Changed
 
 - **BREAKING: Facets directory restructured**: Facet directories moved under a `facets/` subdirectory at all levels — `builtins/{lang}/{facetType}/` → `builtins/{lang}/facets/{facetType}/`, `~/.takt/{facetType}/` → `~/.takt/facets/{facetType}/`, `.takt/{facetType}/` → `.takt/facets/{facetType}/`. Migration: move your custom facet files into the new `facets/` subdirectory

@@ -250,7 +250,6 @@ await engine.run();
 | [Agent Guide](./docs/agents.md) | Custom agent configuration |
 | [Builtin Catalog](./docs/builtin-catalog.md) | All builtin pieces and personas |
 | [Faceted Prompting](./docs/faceted-prompting.md) | Prompt design methodology |
-| [TAKT Pack Spec](./docs/takt-pack-spec.md) | Ensemble package format |
 | [Task Management](./docs/task-management.md) | Task queuing, execution, isolation |
 | [CI/CD Integration](./docs/ci-cd.md) | GitHub Actions and pipeline mode |
 | [Changelog](./CHANGELOG.md) ([日本語](./docs/CHANGELOG.ja.md)) | Version history |
