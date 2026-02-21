@@ -109,9 +109,9 @@ export function isVersionCompatible(minVersion: string, currentVersion: string):
  * Throws if neither exists (empty package).
  */
 export function checkPackageHasContent(packageRoot: string): void {
-  const hasFaceted = existsSync(join(packageRoot, 'facets'));
+  const hasFacets = existsSync(join(packageRoot, 'facets'));
   const hasPieces = existsSync(join(packageRoot, 'pieces'));
-  if (!hasFaceted && !hasPieces) {
+  if (!hasFacets && !hasPieces) {
     throw new Error(
       `Package at "${packageRoot}" has neither facets/ nor pieces/ directory — empty package rejected`,
     );
@@ -132,7 +132,7 @@ export function checkPackageHasContentWithContext(
   const hasPieces = existsSync(join(packageRoot, 'pieces'));
   if (hasFacets || hasPieces) return;
 
-  const checkedFaceted = join(packageRoot, 'facets');
+  const checkedFacets = join(packageRoot, 'facets');
   const checkedPieces = join(packageRoot, 'pieces');
   const configuredPath = context.configuredPath ?? '.';
   const manifestPath = context.manifestPath ?? '(unknown)';
@@ -146,7 +146,7 @@ export function checkPackageHasContentWithContext(
       `manifest: ${manifestPath}`,
       `configured path: ${configuredPath}`,
       `resolved package root: ${packageRoot}`,
-      `checked: ${checkedFaceted}`,
+      `checked: ${checkedFacets}`,
       `checked: ${checkedPieces}`,
       hint,
     ].join('\n'),

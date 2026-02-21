@@ -33,16 +33,14 @@ function getSkillDir(): string {
   return join(homedir(), '.claude', 'skills', 'takt');
 }
 
-/** Directories within builtins/{lang}/ to copy as resource types */
-const RESOURCE_DIRS = [
-  'pieces',
-  'personas',
-  'policies',
-  'instructions',
-  'knowledge',
-  'output-contracts',
-  'templates',
-] as const;
+/** Directories directly under builtins/{lang}/ */
+const DIRECT_DIRS = ['pieces', 'templates'] as const;
+
+/** Facet directories under builtins/{lang}/facets/ */
+const FACET_DIRS = ['personas', 'policies', 'instructions', 'knowledge', 'output-contracts'] as const;
+
+/** All resource directory names (used for summary filtering) */
+const RESOURCE_DIRS = [...DIRECT_DIRS, ...FACET_DIRS] as const;
 
 /**
  * Deploy takt skill to Claude Code (~/.claude/).
@@ -89,10 +87,18 @@ export async function deploySkill(): Promise<void> {
   cleanDir(refsDestDir);
   copyDirRecursive(refsSrcDir, refsDestDir, copiedFiles);
 
-  // 3. Deploy all resource directories from builtins/{lang}/
-  for (const resourceDir of RESOURCE_DIRS) {
-    const srcDir = join(langResourcesDir, resourceDir);
-    const destDir = join(skillDir, resourceDir);
+  // 3. Deploy direct resource directories from builtins/{lang}/
+  for (const dir of DIRECT_DIRS) {
+    const srcDir = join(langResourcesDir, dir);
+    const destDir = join(skillDir, dir);
+    cleanDir(destDir);
+    copyDirRecursive(srcDir, destDir, copiedFiles);
+  }
+
+  // 4. Deploy facet directories from builtins/{lang}/facets/
+  for (const dir of FACET_DIRS) {
+    const srcDir = join(langResourcesDir, 'facets', dir);
+    const destDir = join(skillDir, dir);
     cleanDir(destDir);
     copyDirRecursive(srcDir, destDir, copiedFiles);
   }

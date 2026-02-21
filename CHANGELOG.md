@@ -25,6 +25,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - Override piece validation now includes ensemble scope via the resolver
+- `takt export-cc` now reads facets from the new `builtins/{lang}/facets/` directory structure
+- `confirm()` prompt now supports piped stdin (e.g., `echo "y" | takt ensemble add ...`)
 - Suppressed `poll_tick` debug log flooding during iteration input wait
 - Piece resolver `stat()` calls now catch errors gracefully instead of crashing on inaccessible entries
 

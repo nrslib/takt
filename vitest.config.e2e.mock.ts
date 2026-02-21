@@ -37,6 +37,8 @@ export default defineConfig({
       'e2e/specs/task-content-file.e2e.ts',
       'e2e/specs/config-priority.e2e.ts',
       'e2e/specs/ensemble.e2e.ts',
+      'e2e/specs/ensemble-real.e2e.ts',
+      'e2e/specs/piece-selection-branches.e2e.ts',
     ],
   },
 });

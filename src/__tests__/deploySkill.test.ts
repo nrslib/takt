@@ -74,20 +74,20 @@ describe('deploySkill', () => {
     // Create language-specific directories (en/)
     const langDir = join(fakeResourcesDir, 'en');
     mkdirSync(join(langDir, 'pieces'), { recursive: true });
-    mkdirSync(join(langDir, 'personas'), { recursive: true });
-    mkdirSync(join(langDir, 'policies'), { recursive: true });
-    mkdirSync(join(langDir, 'instructions'), { recursive: true });
-    mkdirSync(join(langDir, 'knowledge'), { recursive: true });
-    mkdirSync(join(langDir, 'output-contracts'), { recursive: true });
+    mkdirSync(join(langDir, 'facets', 'personas'), { recursive: true });
+    mkdirSync(join(langDir, 'facets', 'policies'), { recursive: true });
+    mkdirSync(join(langDir, 'facets', 'instructions'), { recursive: true });
+    mkdirSync(join(langDir, 'facets', 'knowledge'), { recursive: true });
+    mkdirSync(join(langDir, 'facets', 'output-contracts'), { recursive: true });
     mkdirSync(join(langDir, 'templates'), { recursive: true });
 
     // Add sample files
     writeFileSync(join(langDir, 'pieces', 'default.yaml'), 'name: default');
-    writeFileSync(join(langDir, 'personas', 'coder.md'), '# Coder');
-    writeFileSync(join(langDir, 'policies', 'coding.md'), '# Coding');
-    writeFileSync(join(langDir, 'instructions', 'init.md'), '# Init');
-    writeFileSync(join(langDir, 'knowledge', 'patterns.md'), '# Patterns');
-    writeFileSync(join(langDir, 'output-contracts', 'summary.md'), '# Summary');
+    writeFileSync(join(langDir, 'facets', 'personas', 'coder.md'), '# Coder');
+    writeFileSync(join(langDir, 'facets', 'policies', 'coding.md'), '# Coding');
+    writeFileSync(join(langDir, 'facets', 'instructions', 'init.md'), '# Init');
+    writeFileSync(join(langDir, 'facets', 'knowledge', 'patterns.md'), '# Patterns');
+    writeFileSync(join(langDir, 'facets', 'output-contracts', 'summary.md'), '# Summary');
     writeFileSync(join(langDir, 'templates', 'task.md'), '# Task');
 
     // Create target directories

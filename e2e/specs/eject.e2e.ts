@@ -153,8 +153,8 @@ describe('E2E: Eject builtin pieces (takt eject)', () => {
 
     expect(result.exitCode).toBe(0);
 
-    // Persona should be copied to project .takt/personas/
-    const personaPath = join(repo.path, '.takt', 'personas', 'coder.md');
+    // Persona should be copied to project .takt/facets/personas/
+    const personaPath = join(repo.path, '.takt', 'facets', 'personas', 'coder.md');
     expect(existsSync(personaPath)).toBe(true);
     const content = readFileSync(personaPath, 'utf-8');
     expect(content.length).toBeGreaterThan(0);
@@ -170,11 +170,11 @@ describe('E2E: Eject builtin pieces (takt eject)', () => {
     expect(result.exitCode).toBe(0);
 
     // Persona should be copied to global dir
-    const personaPath = join(isolatedEnv.taktDir, 'personas', 'coder.md');
+    const personaPath = join(isolatedEnv.taktDir, 'facets', 'personas', 'coder.md');
     expect(existsSync(personaPath)).toBe(true);
 
     // Should NOT be in project dir
-    const projectPersonaPath = join(repo.path, '.takt', 'personas', 'coder.md');
+    const projectPersonaPath = join(repo.path, '.takt', 'facets', 'personas', 'coder.md');
     expect(existsSync(projectPersonaPath)).toBe(false);
   });
 
