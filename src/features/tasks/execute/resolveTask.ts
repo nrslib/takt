@@ -5,7 +5,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { resolvePieceConfigValue } from '../../../infra/config/index.js';
-import { type TaskInfo, createSharedClone, summarizeTaskName, getCurrentBranch } from '../../../infra/task/index.js';
+import { type TaskInfo, createSharedClone, summarizeTaskName, detectDefaultBranch } from '../../../infra/task/index.js';
 import { fetchIssue, checkGhCli } from '../../../infra/github/index.js';
 import { withProgress } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
@@ -124,7 +124,7 @@ export async function resolveTaskExecution(
 
   if (data.worktree) {
     throwIfAborted(abortSignal);
-    baseBranch = getCurrentBranch(defaultCwd);
+    baseBranch = detectDefaultBranch(defaultCwd);
 
     if (task.worktreePath && fs.existsSync(task.worktreePath)) {
       // Reuse existing worktree (clone still on disk from previous execution)

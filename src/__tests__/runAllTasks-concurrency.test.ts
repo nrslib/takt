@@ -90,6 +90,11 @@ vi.mock('../infra/task/clone.js', async (importOriginal) => ({
   removeClone: vi.fn(),
 }));
 
+vi.mock('../infra/task/branchList.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  detectDefaultBranch: vi.fn(() => 'main'),
+}));
+
 vi.mock('../infra/task/git.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   getCurrentBranch: vi.fn(() => 'main'),

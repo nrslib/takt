@@ -11,7 +11,7 @@ import {
   isPiecePath,
 } from '../../../infra/config/index.js';
 import { confirm } from '../../../shared/prompt/index.js';
-import { createSharedClone, summarizeTaskName, getCurrentBranch, TaskRunner } from '../../../infra/task/index.js';
+import { createSharedClone, summarizeTaskName, detectDefaultBranch, TaskRunner } from '../../../infra/task/index.js';
 import { DEFAULT_PIECE_NAME } from '../../../shared/constants.js';
 import { info, error, withProgress } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
@@ -55,7 +55,7 @@ export async function confirmAndCreateWorktree(
     return { execCwd: cwd, isWorktree: false };
   }
 
-  const baseBranch = getCurrentBranch(cwd);
+  const baseBranch = detectDefaultBranch(cwd);
 
   const taskSlug = await withProgress(
     'Generating branch name...',
