@@ -261,6 +261,7 @@ await engine.run();
 | [Agent Guide](./agents.md) | カスタムエージェントの設定 |
 | [Builtin Catalog](./builtin-catalog.ja.md) | ビルトイン piece・persona の一覧 |
 | [Faceted Prompting](./faceted-prompting.ja.md) | プロンプト設計の方法論 |
+| [Ensemble Packages](./ensemble.ja.md) | パッケージのインストール・共有 |
 | [Task Management](./task-management.ja.md) | タスクの追加・実行・隔離 |
 | [CI/CD Integration](./ci-cd.ja.md) | GitHub Actions・パイプラインモード |
 | [Changelog](../CHANGELOG.md) ([日本語](./CHANGELOG.ja.md)) | バージョン履歴 |
