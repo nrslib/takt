@@ -64,6 +64,8 @@ export interface PostExecutionOptions {
 
 export interface PostExecutionResult {
   prUrl?: string;
+  prFailed?: boolean;
+  prError?: string;
 }
 
 /**
@@ -96,6 +98,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
         return { prUrl: existingPr.url };
       } else {
         error(`PR comment failed: ${commentResult.error}`);
+        return { prFailed: true, prError: commentResult.error };
       }
     } else {
       info('Creating pull request...');
@@ -113,6 +116,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
         return { prUrl: prResult.url };
       } else {
         error(`PR creation failed: ${prResult.error}`);
+        return { prFailed: true, prError: prResult.error };
       }
     }
   }

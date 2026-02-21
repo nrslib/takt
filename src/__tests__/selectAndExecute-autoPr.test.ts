@@ -41,6 +41,7 @@ vi.mock('../infra/task/index.js', () => ({
   autoCommitAndPush: vi.fn(),
   summarizeTaskName: vi.fn(),
   getCurrentBranch: vi.fn(() => 'main'),
+  detectDefaultBranch: vi.fn(() => 'main'),
   TaskRunner: vi.fn(() => ({
     addTask: (...args: unknown[]) => mockAddTask(...args),
     completeTask: (...args: unknown[]) => mockCompleteTask(...args),

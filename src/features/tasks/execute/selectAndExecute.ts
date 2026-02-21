@@ -11,7 +11,7 @@ import {
   isPiecePath,
 } from '../../../infra/config/index.js';
 import { confirm } from '../../../shared/prompt/index.js';
-import { createSharedClone, summarizeTaskName, getCurrentBranch, TaskRunner } from '../../../infra/task/index.js';
+import { createSharedClone, summarizeTaskName, detectDefaultBranch, TaskRunner } from '../../../infra/task/index.js';
 import { DEFAULT_PIECE_NAME } from '../../../shared/constants.js';
 import { info, error, withProgress } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
@@ -55,7 +55,7 @@ export async function confirmAndCreateWorktree(
     return { execCwd: cwd, isWorktree: false };
   }
 
-  const baseBranch = getCurrentBranch(cwd);
+  const baseBranch = detectDefaultBranch(cwd);
 
   const taskSlug = await withProgress(
     'Generating branch name...',
@@ -142,20 +142,10 @@ export async function selectAndExecuteTask(
 
   const completedAt = new Date().toISOString();
 
-  const taskResult = buildBooleanTaskResult({
-    task: taskRecord,
-    taskSuccess,
-    successResponse: 'Task completed successfully',
-    failureResponse: 'Task failed',
-    startedAt,
-    completedAt,
-    branch,
-    ...(isWorktree ? { worktreePath: execCwd } : {}),
-  });
-  persistTaskResult(taskRunner, taskResult);
-
+  let prFailed = false;
+  let prError: string | undefined;
   if (taskSuccess && isWorktree) {
-    await postExecutionFlow({
+    const postResult = await postExecutionFlow({
       execCwd,
       projectCwd: cwd,
       task,
@@ -167,9 +157,24 @@ export async function selectAndExecuteTask(
       issues: options?.issues,
       repo: options?.repo,
     });
+    prFailed = postResult.prFailed ?? false;
+    prError = postResult.prError;
   }
 
-  if (!taskSuccess) {
+  const effectiveSuccess = taskSuccess && !prFailed;
+  const taskResult = buildBooleanTaskResult({
+    task: taskRecord,
+    taskSuccess: effectiveSuccess,
+    successResponse: 'Task completed successfully',
+    failureResponse: prFailed ? `PR creation failed: ${prError}` : 'Task failed',
+    startedAt,
+    completedAt,
+    branch,
+    ...(isWorktree ? { worktreePath: execCwd } : {}),
+  });
+  persistTaskResult(taskRunner, taskResult);
+
+  if (!effectiveSuccess) {
     process.exit(1);
   }
 }

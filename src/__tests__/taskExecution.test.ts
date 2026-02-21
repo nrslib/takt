@@ -150,4 +150,74 @@ describe('executeAndCompleteTask', () => {
     });
     expect(pieceExecutionOptions?.providerOptionsSource).toBe('project');
   });
+
+  it('should mark task as failed when PR creation fails', async () => {
+    // Given: worktree mode with autoPr enabled, PR creation fails
+    const task = createTask('task-with-pr-failure');
+    mockResolveTaskExecution.mockResolvedValue({
+      execCwd: '/worktree/clone',
+      execPiece: 'default',
+      isWorktree: true,
+      autoPr: true,
+      draftPr: false,
+      taskPrompt: undefined,
+      reportDirName: undefined,
+      branch: 'takt/task-with-pr-failure',
+      worktreePath: '/worktree/clone',
+      baseBranch: 'main',
+      startMovement: undefined,
+      retryNote: undefined,
+      issueNumber: undefined,
+    });
+    mockExecutePiece.mockResolvedValue({ success: true });
+    mockPostExecutionFlow.mockResolvedValue({ prFailed: true, prError: 'Base ref must be a branch' });
+
+    // When
+    const result = await executeAndCompleteTask(task, {} as never, '/project', 'default');
+
+    // Then: task should be marked as failed
+    expect(result).toBe(false);
+    expect(mockBuildTaskResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runResult: expect.objectContaining({
+          success: false,
+          reason: 'PR creation failed: Base ref must be a branch',
+        }),
+      }),
+    );
+  });
+
+  it('should mark task as completed when PR creation succeeds', async () => {
+    // Given: worktree mode with autoPr enabled, PR creation succeeds
+    const task = createTask('task-with-pr-success');
+    mockResolveTaskExecution.mockResolvedValue({
+      execCwd: '/worktree/clone',
+      execPiece: 'default',
+      isWorktree: true,
+      autoPr: true,
+      draftPr: false,
+      taskPrompt: undefined,
+      reportDirName: undefined,
+      branch: 'takt/task-with-pr-success',
+      worktreePath: '/worktree/clone',
+      baseBranch: 'main',
+      startMovement: undefined,
+      retryNote: undefined,
+      issueNumber: undefined,
+    });
+    mockExecutePiece.mockResolvedValue({ success: true });
+    mockPostExecutionFlow.mockResolvedValue({ prUrl: 'https://github.com/org/repo/pull/1' });
+
+    // When
+    const result = await executeAndCompleteTask(task, {} as never, '/project', 'default');
+
+    // Then: task should be marked as completed
+    expect(result).toBe(true);
+    expect(mockBuildTaskResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runResult: expect.objectContaining({ success: true }),
+        prUrl: 'https://github.com/org/repo/pull/1',
+      }),
+    );
+  });
 });
