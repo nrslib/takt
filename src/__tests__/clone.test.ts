@@ -362,15 +362,18 @@ describe('resolveBaseBranch', () => {
     expect(fetchCalls).toHaveLength(0);
   });
 
-  it('should use current branch as base when no base_branch config', () => {
-    // Given: HEAD is on develop
+  it('should use remote default branch as base when no base_branch config', () => {
+    // Given: remote default branch is develop (via symbolic-ref)
     const cloneCalls: string[][] = [];
 
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
 
+      if (argsArr[0] === 'symbolic-ref' && argsArr[1] === 'refs/remotes/origin/HEAD') {
+        return 'refs/remotes/origin/develop\n';
+      }
       if (argsArr[0] === 'rev-parse' && argsArr[1] === '--abbrev-ref') {
-        return 'develop\n';
+        return 'feature-branch\n';
       }
       if (argsArr[0] === 'clone') {
         cloneCalls.push(argsArr);
@@ -391,10 +394,10 @@ describe('resolveBaseBranch', () => {
     // When
     createSharedClone('/project', {
       worktree: true,
-      taskSlug: 'use-current-branch',
+      taskSlug: 'use-default-branch',
     });
 
-    // Then: clone was called with --branch develop (current branch)
+    // Then: clone was called with --branch develop (remote default branch, not current branch)
     expect(cloneCalls).toHaveLength(1);
     expect(cloneCalls[0]).toContain('--branch');
     expect(cloneCalls[0]).toContain('develop');
