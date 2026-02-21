@@ -23,7 +23,8 @@ import { stageAndCommit, getCurrentBranch } from '../../infra/task/index.js';
 import { executeTask, type TaskExecutionOptions, type PipelineExecutionOptions } from '../tasks/index.js';
 import { resolveConfigValues } from '../../infra/config/index.js';
 import { info, error, success, status, blankLine } from '../../shared/ui/index.js';
-import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
+import { createLogger, getErrorMessage, getSlackWebhookUrl, sendSlackNotification, buildSlackRunSummary } from '../../shared/utils/index.js';
+import { generateRunId } from '../tasks/execute/slackSummaryAdapter.js';
 import type { PipelineConfig } from '../../core/models/index.js';
 import {
   EXIT_ISSUE_FETCH_FAILED,
@@ -109,7 +110,14 @@ export async function executePipeline(options: PipelineExecutionOptions): Promis
   const globalConfig = resolveConfigValues(cwd, ['pipeline']);
   const pipelineConfig = globalConfig.pipeline;
   let issue: GitHubIssue | undefined;
-  let task: string;
+  let task = '';
+  let branch: string | undefined;
+  const startTime = Date.now();
+  const runId = generateRunId();
+
+  let exitCode = 0;
+  let taskSuccess = false;
+  let prUrl: string | undefined;
 
   // --- Step 1: Resolve task content ---
   if (options.issueNumber) {
@@ -118,24 +126,29 @@ export async function executePipeline(options: PipelineExecutionOptions): Promis
       const ghStatus = checkGhCli();
       if (!ghStatus.available) {
         error(ghStatus.error ?? 'gh CLI is not available');
-        return EXIT_ISSUE_FETCH_FAILED;
+        exitCode = EXIT_ISSUE_FETCH_FAILED;
+      } else {
+        issue = fetchIssue(options.issueNumber);
+        task = formatIssueAsTask(issue);
+        success(`Issue #${options.issueNumber} fetched: "${issue.title}"`);
       }
-      issue = fetchIssue(options.issueNumber);
-      task = formatIssueAsTask(issue);
-      success(`Issue #${options.issueNumber} fetched: "${issue.title}"`);
     } catch (err) {
       error(`Failed to fetch issue #${options.issueNumber}: ${getErrorMessage(err)}`);
-      return EXIT_ISSUE_FETCH_FAILED;
+      exitCode = EXIT_ISSUE_FETCH_FAILED;
     }
   } else if (options.task) {
     task = options.task;
   } else {
     error('Either --issue or --task must be specified');
-    return EXIT_ISSUE_FETCH_FAILED;
+    exitCode = EXIT_ISSUE_FETCH_FAILED;
+  }
+
+  if (exitCode !== 0) {
+    await sendPipelineSlackNotification(runId, startTime, false, piece, options.issueNumber, branch, prUrl);
+    return exitCode;
   }
 
   // --- Step 2: Create branch (skip if --skip-git) ---
-  let branch: string | undefined;
   let baseBranch: string | undefined;
   if (!skipGit) {
     baseBranch = getCurrentBranch(cwd);
@@ -146,8 +159,13 @@ export async function executePipeline(options: PipelineExecutionOptions): Promis
       success(`Branch created: ${branch}`);
     } catch (err) {
       error(`Failed to create branch: ${getErrorMessage(err)}`);
-      return EXIT_GIT_OPERATION_FAILED;
+      exitCode = EXIT_GIT_OPERATION_FAILED;
     }
+  }
+
+  if (exitCode !== 0) {
+    await sendPipelineSlackNotification(runId, startTime, false, piece, options.issueNumber, branch, prUrl);
+    return exitCode;
   }
 
   // --- Step 3: Run piece ---
@@ -158,7 +176,7 @@ export async function executePipeline(options: PipelineExecutionOptions): Promis
     ? { provider: options.provider, model: options.model }
     : undefined;
 
-  const taskSuccess = await executeTask({
+  taskSuccess = await executeTask({
     task,
     cwd,
     pieceIdentifier: piece,
@@ -168,9 +186,15 @@ export async function executePipeline(options: PipelineExecutionOptions): Promis
 
   if (!taskSuccess) {
     error(`Piece '${piece}' failed`);
-    return EXIT_PIECE_FAILED;
+    exitCode = EXIT_PIECE_FAILED;
+  } else {
+    success(`Piece '${piece}' completed`);
   }
-  success(`Piece '${piece}' completed`);
+
+  if (exitCode !== 0) {
+    await sendPipelineSlackNotification(runId, startTime, false, piece, options.issueNumber, branch, prUrl);
+    return exitCode;
+  }
 
   // --- Step 4: Commit & push (skip if --skip-git) ---
   if (!skipGit && branch) {
@@ -190,8 +214,13 @@ export async function executePipeline(options: PipelineExecutionOptions): Promis
       success(`Pushed to origin/${branch}`);
     } catch (err) {
       error(`Git operation failed: ${getErrorMessage(err)}`);
-      return EXIT_GIT_OPERATION_FAILED;
+      exitCode = EXIT_GIT_OPERATION_FAILED;
     }
+  }
+
+  if (exitCode !== 0) {
+    await sendPipelineSlackNotification(runId, startTime, false, piece, options.issueNumber, branch, prUrl);
+    return exitCode;
   }
 
   // --- Step 5: Create PR (if --auto-pr) ---
@@ -215,11 +244,17 @@ export async function executePipeline(options: PipelineExecutionOptions): Promis
 
       if (prResult.success) {
         success(`PR created: ${prResult.url}`);
+        prUrl = prResult.url;
       } else {
         error(`PR creation failed: ${prResult.error}`);
-        return EXIT_PR_CREATION_FAILED;
+        exitCode = EXIT_PR_CREATION_FAILED;
       }
     }
+  }
+
+  if (exitCode !== 0) {
+    await sendPipelineSlackNotification(runId, startTime, false, piece, options.issueNumber, branch, prUrl);
+    return exitCode;
   }
 
   // --- Summary ---
@@ -229,5 +264,46 @@ export async function executePipeline(options: PipelineExecutionOptions): Promis
   status('Piece', piece);
   status('Result', 'Success', 'green');
 
+  await sendPipelineSlackNotification(runId, startTime, true, piece, options.issueNumber, branch, prUrl);
+
   return 0;
+}
+
+/**
+ * Send Slack notification for pipeline execution result.
+ */
+async function sendPipelineSlackNotification(
+  runId: string,
+  startTime: number,
+  success: boolean,
+  piece: string,
+  issueNumber: number | undefined,
+  branch: string | undefined,
+  prUrl: string | undefined,
+): Promise<void> {
+  const slackWebhookUrl = getSlackWebhookUrl();
+  if (!slackWebhookUrl) return;
+
+  const durationSec = Math.round((Date.now() - startTime) / 1000);
+  const message = buildSlackRunSummary({
+    runId,
+    total: 1,
+    success: success ? 1 : 0,
+    failed: success ? 0 : 1,
+    durationSec,
+    concurrency: 1,
+    tasks: [
+      {
+        name: 'pipeline',
+        success,
+        piece,
+        issueNumber,
+        durationSec,
+        branch,
+        prUrl,
+      },
+    ],
+  });
+
+  await sendSlackNotification(slackWebhookUrl, message);
 }
