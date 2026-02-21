@@ -61,5 +61,8 @@ export {
   buildSdkOptions,
 } from './options-builder.js';
 
+// Session management
+export { updateSessionIndex, getGitBranch } from './session-writer.js';
+
 
 
