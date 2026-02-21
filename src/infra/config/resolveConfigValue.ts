@@ -79,6 +79,8 @@ const RESOLUTION_REGISTRY: Partial<{ [K in ConfigParameterKey]: ResolutionRule<K
   draftPr: { layers: ['local', 'global'] },
   analytics: { layers: ['local', 'global'], mergeMode: 'analytics' },
   verbose: { layers: ['local', 'global'], defaultValue: false },
+  autoFetch: { layers: ['global'], defaultValue: false },
+  baseBranch: { layers: ['local', 'global'] },
 };
 
 function resolveAnalyticsMerged(
@@ -128,6 +130,8 @@ function getLocalLayerValue<K extends ConfigParameterKey>(
       return project.providerOptions as LoadedConfig[K] | undefined;
     case 'providerProfiles':
       return project.providerProfiles as LoadedConfig[K] | undefined;
+    case 'baseBranch':
+      return (project as Record<string, unknown>).base_branch as LoadedConfig[K] | undefined;
     default:
       return undefined;
   }
