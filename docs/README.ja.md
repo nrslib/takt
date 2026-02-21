@@ -1,6 +1,6 @@
 # TAKT
 
-[English](../README.md)
+[English](../README.md) | 💬 [Discord コミュニティ](https://discord.gg/R2Xz3uYWxD)
 
 **T**AKT **A**gent **K**oordination **T**opology — AI コーディングエージェントにレビューループ・プロンプト管理・ガードレールを与え、「とりあえず動くコード」ではなく「品質の高いコード」を出させるツールです。
 
@@ -266,6 +266,10 @@ await engine.run();
 | [CI/CD Integration](./ci-cd.ja.md) | GitHub Actions・パイプラインモード |
 | [Changelog](../CHANGELOG.md) ([日本語](./CHANGELOG.ja.md)) | バージョン履歴 |
 | [Security Policy](../SECURITY.md) | 脆弱性の報告 |
+
+## コミュニティ
+
+質問・議論・最新情報は [TAKT Discord](https://discord.gg/R2Xz3uYWxD) へどうぞ。
 
 ## コントリビュート
 

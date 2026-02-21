@@ -1,6 +1,6 @@
 # TAKT
 
-🇯🇵 [日本語ドキュメント](./docs/README.ja.md)
+🇯🇵 [日本語ドキュメント](./docs/README.ja.md) | 💬 [Discord Community](https://discord.gg/R2Xz3uYWxD)
 
 **T**AKT **A**gent **K**oordination **T**opology — Give your AI coding agents structured review loops, managed prompts, and guardrails — so they deliver quality code, not just code.
 
@@ -255,6 +255,10 @@ await engine.run();
 | [CI/CD Integration](./docs/ci-cd.md) | GitHub Actions and pipeline mode |
 | [Changelog](./CHANGELOG.md) ([日本語](./docs/CHANGELOG.ja.md)) | Version history |
 | [Security Policy](./SECURITY.md) | Vulnerability reporting |
+
+## Community
+
+Join the [TAKT Discord](https://discord.gg/R2Xz3uYWxD) for questions, discussions, and updates.
 
 ## Contributing
 
