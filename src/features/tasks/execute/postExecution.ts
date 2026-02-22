@@ -100,9 +100,16 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
     } else {
       info('Creating pull request...');
       const prBody = buildPrBody(issues, report);
+      const prTitle = (() => {
+        const baseTitle = task.length > 100 ? `${task.slice(0, 97)}...` : task;
+        if (issues && issues.length > 0 && issues[0]) {
+          return `${baseTitle} (#${issues[0].number})`;
+        }
+        return baseTitle;
+      })();
       const prResult = createPullRequest(projectCwd, {
         branch,
-        title: task.length > 100 ? `${task.slice(0, 97)}...` : task,
+        title: prTitle,
         body: prBody,
         base: baseBranch,
         repo,

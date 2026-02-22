@@ -467,6 +467,12 @@ describe('runAllTasks concurrency', () => {
         .mockReturnValueOnce([task1, task2, task3])
         .mockReturnValueOnce([]);
 
+      mockListAllTaskItems.mockReturnValueOnce([
+        { kind: 'completed', name: 'pass-1', filePath: '', content: '', createdAt: '' },
+        { kind: 'failed', name: 'fail-1', filePath: '', content: '', createdAt: '' },
+        { kind: 'completed', name: 'pass-2', filePath: '', content: '', createdAt: '' },
+      ]);
+
       // When
       await runAllTasks('/project');
 
@@ -476,6 +482,10 @@ describe('runAllTasks concurrency', () => {
       expect(mockStatus).toHaveBeenCalledWith('Failed', '1', 'red');
       expect(mockNotifySuccess).not.toHaveBeenCalled();
       expect(mockNotifyError).toHaveBeenCalledTimes(1);
+      // Task summary shows failed tasks first with ✗, then successful tasks with ✓
+      expect(mockInfo).toHaveBeenCalledWith('fail-1 ✗');
+      expect(mockInfo).toHaveBeenCalledWith('pass-1 ✓');
+      expect(mockInfo).toHaveBeenCalledWith('pass-2 ✓');
     });
 
     it('should persist failure reason and movement when piece aborts', async () => {

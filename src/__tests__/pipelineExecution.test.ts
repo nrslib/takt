@@ -283,6 +283,55 @@ describe('executePipeline', () => {
     );
   });
 
+  it('issue 番号が指定された場合、PR title に issue 番号を含む', async () => {
+    mockExecuteTask.mockResolvedValueOnce(true);
+    mockCreatePullRequest.mockReturnValueOnce({ success: true, url: 'https://github.com/test/pr/1' });
+    mockFetchIssue.mockReturnValueOnce({
+      number: 123,
+      title: 'Test Issue Title',
+      body: 'Issue body',
+      labels: [],
+      comments: [],
+    });
+
+    const exitCode = await executePipeline({
+      piece: 'default',
+      issueNumber: 123,
+      branch: 'fix/my-branch',
+      autoPr: true,
+      cwd: '/tmp/test',
+    });
+
+    expect(exitCode).toBe(0);
+    expect(mockCreatePullRequest).toHaveBeenCalledWith(
+      '/tmp/test',
+      expect.objectContaining({
+        title: 'Test Issue Title (#123)',
+      }),
+    );
+  });
+
+  it('issue 番号がない場合、task が PR title に使用される', async () => {
+    mockExecuteTask.mockResolvedValueOnce(true);
+    mockCreatePullRequest.mockReturnValueOnce({ success: true, url: 'https://github.com/test/pr/1' });
+
+    const exitCode = await executePipeline({
+      task: 'Custom task title',
+      piece: 'default',
+      branch: 'fix/my-branch',
+      autoPr: true,
+      cwd: '/tmp/test',
+    });
+
+    expect(exitCode).toBe(0);
+    expect(mockCreatePullRequest).toHaveBeenCalledWith(
+      '/tmp/test',
+      expect.objectContaining({
+        title: 'Custom task title',
+      }),
+    );
+  });
+
   it('should use --task when both --task and positional task are provided', async () => {
     mockExecuteTask.mockResolvedValueOnce(true);
 

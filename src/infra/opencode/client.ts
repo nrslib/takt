@@ -384,7 +384,11 @@ export class OpenCodeClient {
         const diag = createStreamDiagnostics('opencode-sdk', { agentType, model: options.model, attempt });
         diagRef = diag;
 
-        const parsedModel = parseProviderModel(options.model, 'OpenCode model');
+        let modelToUse = options.model;
+        if (!modelToUse.includes('/')) {
+          modelToUse = `opencode/${modelToUse}`;
+        }
+        const parsedModel = parseProviderModel(modelToUse, 'OpenCode model');
         const fullModel = `${parsedModel.providerID}/${parsedModel.modelID}`;
 
         const acquired = await acquireClient(fullModel, options.opencodeApiKey);

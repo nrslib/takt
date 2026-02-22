@@ -15,7 +15,6 @@ import type { ProviderPermissionProfiles } from '../../../core/models/provider-p
 import { normalizeProviderOptions } from '../loaders/pieceParser.js';
 import { getGlobalConfigPath } from '../paths.js';
 import { DEFAULT_LANGUAGE } from '../../../shared/constants.js';
-import { parseProviderModel } from '../../../shared/utils/providerModel.js';
 import { applyGlobalConfigEnvOverrides, envVarNameFromPath } from '../env/config-env-overrides.js';
 import { invalidateAllResolvedConfigCache } from '../resolutionCache.js';
 
@@ -63,7 +62,7 @@ function validateProviderModelCompatibility(provider: string | undefined, model:
 
   if (provider === 'opencode' && !model) {
     throw new Error(
-      "Configuration error: provider 'opencode' requires model in 'provider/model' format (e.g. 'opencode/big-pickle')."
+      "Configuration error: provider 'opencode' requires a model."
     );
   }
 
@@ -76,9 +75,7 @@ function validateProviderModelCompatibility(provider: string | undefined, model:
     );
   }
 
-  if (provider === 'opencode') {
-    parseProviderModel(model, "Configuration error: model");
-  }
+
 }
 
 function normalizePersonaProviders(

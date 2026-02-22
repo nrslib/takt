@@ -9,7 +9,7 @@ import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from '.
 
 function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
   if (!options.model) {
-    throw new Error("OpenCode provider requires model in 'provider/model' format (e.g. 'opencode/big-pickle').");
+    throw new Error("OpenCode provider requires a model.");
   }
 
   return {

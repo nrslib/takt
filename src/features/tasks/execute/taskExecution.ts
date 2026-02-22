@@ -2,6 +2,7 @@
  * Task execution logic
  */
 
+import chalk from 'chalk';
 import { loadPieceByIdentifier, isPiecePath, resolveConfigValueWithSource, resolvePieceConfigValues } from '../../../infra/config/index.js';
 import { TaskRunner, type TaskInfo } from '../../../infra/task/index.js';
 import {
@@ -278,6 +279,23 @@ export async function runAllTasks(
     status('Success', String(result.success), result.success === totalCount ? 'green' : undefined);
     if (result.fail > 0) {
       status('Failed', String(result.fail), 'red');
+    }
+
+    const allTasks = taskRunner.listAllTaskItems();
+    const completedTasks = allTasks
+      .filter((t) => t.kind === 'completed' || t.kind === 'failed')
+      .sort((a, b) => {
+        if (a.kind === 'failed' && b.kind !== 'failed') return -1;
+        if (a.kind !== 'failed' && b.kind === 'failed') return 1;
+        return 0;
+      });
+
+    for (const task of completedTasks) {
+      const symbol = task.kind === 'failed' ? chalk.red('✗') : chalk.green('✓');
+      info(`${task.name} ${symbol}`);
+    }
+
+    if (result.fail > 0) {
       if (shouldNotifyRunAbort) {
         notifyError('TAKT', getLabel('run.notifyAbort', undefined, { failed: String(result.fail) }));
       }

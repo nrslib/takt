@@ -559,7 +559,7 @@ describe('loadGlobalConfig', () => {
         'utf-8',
       );
 
-      expect(() => loadGlobalConfig()).toThrow(/requires model/);
+      expect(() => loadGlobalConfig()).toThrow(/requires a model/);
     });
 
     it('should not throw when persona entry has opencode provider with compatible model', () => {
@@ -740,10 +740,10 @@ describe('loadGlobalConfig', () => {
         'utf-8',
       );
 
-      expect(() => loadGlobalConfig()).toThrow(/provider 'opencode' requires model in 'provider\/model' format/i);
+      expect(() => loadGlobalConfig()).toThrow(/provider 'opencode' requires a model/i);
     });
 
-    it('should throw when provider is opencode and model is not provider/model format', () => {
+    it('should allow any model string when provider is opencode', () => {
       const taktDir = join(testHomeDir, '.takt');
       mkdirSync(taktDir, { recursive: true });
       writeFileSync(
@@ -752,7 +752,7 @@ describe('loadGlobalConfig', () => {
         'utf-8',
       );
 
-      expect(() => loadGlobalConfig()).toThrow(/must be in 'provider\/model' format/i);
+      expect(() => loadGlobalConfig()).not.toThrow();
     });
   });
 });

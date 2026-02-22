@@ -141,6 +141,64 @@ describe('postExecutionFlow', () => {
       expect.objectContaining({ draft: false }),
     );
   });
+
+  it('issues が指定されている場合、PR title に issue 番号を含む', async () => {
+    mockFindExistingPr.mockReturnValue(undefined);
+
+    await postExecutionFlow({
+      ...baseOptions,
+      issues: [{ number: 123, title: 'Test Issue', body: '', labels: [], comments: [] }],
+    });
+
+    expect(mockCreatePullRequest).toHaveBeenCalledWith(
+      '/project',
+      expect.objectContaining({ title: 'Fix the bug (#123)' }),
+    );
+  });
+
+  it('issues が空の配列の場合、PR title に issue 番号を追加しない', async () => {
+    mockFindExistingPr.mockReturnValue(undefined);
+
+    await postExecutionFlow({
+      ...baseOptions,
+      issues: [],
+    });
+
+    expect(mockCreatePullRequest).toHaveBeenCalledWith(
+      '/project',
+      expect.objectContaining({ title: 'Fix the bug' }),
+    );
+  });
+
+  it('issues が undefined の場合、PR title に issue 番号を追加しない', async () => {
+    mockFindExistingPr.mockReturnValue(undefined);
+
+    await postExecutionFlow({
+      ...baseOptions,
+      issues: undefined,
+    });
+
+    expect(mockCreatePullRequest).toHaveBeenCalledWith(
+      '/project',
+      expect.objectContaining({ title: 'Fix the bug' }),
+    );
+  });
+
+  it('task が 100 文字以上の場合、PR title は省略され issue 番号が追加される', async () => {
+    mockFindExistingPr.mockReturnValue(undefined);
+    const longTask = 'A'.repeat(120);
+
+    await postExecutionFlow({
+      ...baseOptions,
+      task: longTask,
+      issues: [{ number: 456, title: 'Test Issue', body: '', labels: [], comments: [] }],
+    });
+
+    expect(mockCreatePullRequest).toHaveBeenCalledWith(
+      '/project',
+      expect.objectContaining({ title: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA... (#456)' }),
+    );
+  });
 });
 
 describe('resolveDraftPr', () => {

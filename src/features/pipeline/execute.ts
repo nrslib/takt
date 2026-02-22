@@ -200,7 +200,7 @@ export async function executePipeline(options: PipelineExecutionOptions): Promis
       info('--auto-pr is ignored when --skip-git is specified (no push was performed)');
     } else if (branch) {
       info('Creating pull request...');
-      const prTitle = issue ? issue.title : (options.task ?? 'Pipeline task');
+      const prTitle = issue ? `${issue.title} (#${issue.number})` : (options.task ?? 'Pipeline task');
       const report = `Piece \`${piece}\` completed successfully.`;
       const prBody = buildPipelinePrBody(pipelineConfig, issue, report);
 
