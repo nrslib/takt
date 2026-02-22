@@ -34,6 +34,7 @@ import {
   updateWorktreeSession,
   getLanguage,
   loadProjectConfig,
+  saveProjectConfig,
   isVerboseMode,
   resolveConfigValue,
   invalidateGlobalConfigCache,
@@ -498,60 +499,6 @@ describe('analytics config resolution', () => {
       eventsPath: '/tmp/project-analytics',
       retentionDays: 14,
     });
-  });
-});
-
-describe('model config resolution', () => {
-  let testDir: string;
-  let originalTaktConfigDir: string | undefined;
-
-  beforeEach(() => {
-    testDir = join(tmpdir(), `takt-test-${randomUUID()}`);
-    mkdirSync(testDir, { recursive: true });
-    originalTaktConfigDir = process.env.TAKT_CONFIG_DIR;
-    process.env.TAKT_CONFIG_DIR = join(testDir, 'global-takt');
-    invalidateGlobalConfigCache();
-  });
-
-  afterEach(() => {
-    if (originalTaktConfigDir === undefined) {
-      delete process.env.TAKT_CONFIG_DIR;
-    } else {
-      process.env.TAKT_CONFIG_DIR = originalTaktConfigDir;
-    }
-    invalidateGlobalConfigCache();
-
-    if (existsSync(testDir)) {
-      rmSync(testDir, { recursive: true, force: true });
-    }
-  });
-
-  it('should resolve project model over global model', () => {
-    const projectConfigDir = getProjectConfigDir(testDir);
-    mkdirSync(projectConfigDir, { recursive: true });
-    writeFileSync(join(projectConfigDir, 'config.yaml'), 'piece: default\nmodel: project-model\n');
-
-    const globalConfigDir = process.env.TAKT_CONFIG_DIR!;
-    mkdirSync(globalConfigDir, { recursive: true });
-    writeFileSync(join(globalConfigDir, 'config.yaml'), 'model: global-model\n');
-
-    expect(resolveConfigValue(testDir, 'model')).toBe('project-model');
-  });
-
-  it('should fallback to global model when project model is not set', () => {
-    const projectConfigDir = getProjectConfigDir(testDir);
-    mkdirSync(projectConfigDir, { recursive: true });
-    writeFileSync(join(projectConfigDir, 'config.yaml'), 'piece: default\n');
-
-    const globalConfigDir = process.env.TAKT_CONFIG_DIR!;
-    mkdirSync(globalConfigDir, { recursive: true });
-    writeFileSync(join(globalConfigDir, 'config.yaml'), 'model: global-model\n');
-
-    expect(resolveConfigValue(testDir, 'model')).toBe('global-model');
-  });
-
-  it('should return undefined when neither project nor global model is set', () => {
-    expect(resolveConfigValue(testDir, 'model')).toBeUndefined();
   });
 });
 
@@ -1207,5 +1154,159 @@ describe('provider-based session management', () => {
       const data = JSON.parse(readFileSync(sessionPath, 'utf-8')) as PersonaSessionData;
       expect(data.provider).toBe('claude');
     });
+  });
+});
+
+describe('loadProjectConfig snake_case normalization', () => {
+  let testDir: string;
+
+  beforeEach(() => {
+    testDir = join(tmpdir(), `takt-test-${randomUUID()}`);
+    mkdirSync(testDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    if (existsSync(testDir)) {
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should normalize auto_pr → autoPr and remove snake_case key', () => {
+    const projectConfigDir = getProjectConfigDir(testDir);
+    mkdirSync(projectConfigDir, { recursive: true });
+    writeFileSync(join(projectConfigDir, 'config.yaml'), 'auto_pr: true\n');
+
+    const config = loadProjectConfig(testDir);
+
+    expect(config.autoPr).toBe(true);
+    expect((config as Record<string, unknown>).auto_pr).toBeUndefined();
+  });
+
+  it('should normalize draft_pr → draftPr and remove snake_case key', () => {
+    const projectConfigDir = getProjectConfigDir(testDir);
+    mkdirSync(projectConfigDir, { recursive: true });
+    writeFileSync(join(projectConfigDir, 'config.yaml'), 'draft_pr: true\n');
+
+    const config = loadProjectConfig(testDir);
+
+    expect(config.draftPr).toBe(true);
+    expect((config as Record<string, unknown>).draft_pr).toBeUndefined();
+  });
+
+  it('should normalize base_branch → baseBranch and remove snake_case key', () => {
+    const projectConfigDir = getProjectConfigDir(testDir);
+    mkdirSync(projectConfigDir, { recursive: true });
+    writeFileSync(join(projectConfigDir, 'config.yaml'), 'base_branch: main\n');
+
+    const config = loadProjectConfig(testDir);
+
+    expect(config.baseBranch).toBe('main');
+    expect((config as Record<string, unknown>).base_branch).toBeUndefined();
+  });
+});
+
+describe('saveProjectConfig snake_case denormalization', () => {
+  let testDir: string;
+
+  beforeEach(() => {
+    testDir = join(tmpdir(), `takt-test-${randomUUID()}`);
+    mkdirSync(testDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    if (existsSync(testDir)) {
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should persist autoPr as auto_pr and reload correctly', () => {
+    saveProjectConfig(testDir, { piece: 'default', autoPr: true });
+
+    const saved = loadProjectConfig(testDir);
+
+    expect(saved.autoPr).toBe(true);
+    expect((saved as Record<string, unknown>).auto_pr).toBeUndefined();
+  });
+
+  it('should persist draftPr as draft_pr and reload correctly', () => {
+    saveProjectConfig(testDir, { piece: 'default', draftPr: true });
+
+    const saved = loadProjectConfig(testDir);
+
+    expect(saved.draftPr).toBe(true);
+    expect((saved as Record<string, unknown>).draft_pr).toBeUndefined();
+  });
+
+  it('should persist baseBranch as base_branch and reload correctly', () => {
+    saveProjectConfig(testDir, { piece: 'default', baseBranch: 'main' });
+
+    const saved = loadProjectConfig(testDir);
+
+    expect(saved.baseBranch).toBe('main');
+    expect((saved as Record<string, unknown>).base_branch).toBeUndefined();
+  });
+
+  it('should not write camelCase keys to YAML file', () => {
+    saveProjectConfig(testDir, { piece: 'default', autoPr: true, draftPr: false, baseBranch: 'develop' });
+
+    const projectConfigDir = getProjectConfigDir(testDir);
+    const content = readFileSync(join(projectConfigDir, 'config.yaml'), 'utf-8');
+
+    expect(content).toContain('auto_pr:');
+    expect(content).toContain('draft_pr:');
+    expect(content).toContain('base_branch:');
+    expect(content).not.toContain('autoPr:');
+    expect(content).not.toContain('draftPr:');
+    expect(content).not.toContain('baseBranch:');
+  });
+});
+
+describe('resolveConfigValue autoPr/draftPr/baseBranch from project config', () => {
+  let testDir: string;
+  let originalTaktConfigDir: string | undefined;
+
+  beforeEach(() => {
+    testDir = join(tmpdir(), `takt-test-${randomUUID()}`);
+    mkdirSync(testDir, { recursive: true });
+    originalTaktConfigDir = process.env.TAKT_CONFIG_DIR;
+    process.env.TAKT_CONFIG_DIR = join(testDir, 'global-takt');
+    invalidateGlobalConfigCache();
+  });
+
+  afterEach(() => {
+    if (originalTaktConfigDir === undefined) {
+      delete process.env.TAKT_CONFIG_DIR;
+    } else {
+      process.env.TAKT_CONFIG_DIR = originalTaktConfigDir;
+    }
+    invalidateGlobalConfigCache();
+
+    if (existsSync(testDir)) {
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should resolve autoPr from project config written in snake_case YAML', () => {
+    const projectConfigDir = getProjectConfigDir(testDir);
+    mkdirSync(projectConfigDir, { recursive: true });
+    writeFileSync(join(projectConfigDir, 'config.yaml'), 'auto_pr: true\n');
+
+    expect(resolveConfigValue(testDir, 'autoPr')).toBe(true);
+  });
+
+  it('should resolve draftPr from project config written in snake_case YAML', () => {
+    const projectConfigDir = getProjectConfigDir(testDir);
+    mkdirSync(projectConfigDir, { recursive: true });
+    writeFileSync(join(projectConfigDir, 'config.yaml'), 'draft_pr: true\n');
+
+    expect(resolveConfigValue(testDir, 'draftPr')).toBe(true);
+  });
+
+  it('should resolve baseBranch from project config written in snake_case YAML', () => {
+    const projectConfigDir = getProjectConfigDir(testDir);
+    mkdirSync(projectConfigDir, { recursive: true });
+    writeFileSync(join(projectConfigDir, 'config.yaml'), 'base_branch: main\n');
+
+    expect(resolveConfigValue(testDir, 'baseBranch')).toBe('main');
   });
 });

@@ -104,11 +104,24 @@ export function loadProjectConfig(projectDir: string): ProjectLocalConfig {
 
   applyProjectConfigEnvOverrides(parsedConfig);
 
+  const {
+    auto_pr,
+    draft_pr,
+    base_branch,
+    provider_options,
+    provider_profiles,
+    analytics,
+    ...rest
+  } = parsedConfig;
+
   return {
     ...DEFAULT_PROJECT_CONFIG,
-    ...(parsedConfig as ProjectLocalConfig),
-    analytics: normalizeAnalytics(parsedConfig.analytics as Record<string, unknown> | undefined),
-    providerOptions: normalizeProviderOptions(parsedConfig.provider_options as {
+    ...(rest as ProjectLocalConfig),
+    autoPr: auto_pr as boolean | undefined,
+    draftPr: draft_pr as boolean | undefined,
+    baseBranch: base_branch as string | undefined,
+    analytics: normalizeAnalytics(analytics as Record<string, unknown> | undefined),
+    providerOptions: normalizeProviderOptions(provider_options as {
       codex?: { network_access?: boolean };
       opencode?: { network_access?: boolean };
       claude?: {
@@ -118,7 +131,7 @@ export function loadProjectConfig(projectDir: string): ProjectLocalConfig {
         };
       };
     } | undefined),
-    providerProfiles: normalizeProviderProfiles(parsedConfig.provider_profiles as Record<string, { default_permission_mode: unknown; movement_permission_overrides?: Record<string, unknown> }> | undefined),
+    providerProfiles: normalizeProviderProfiles(provider_profiles as Record<string, { default_permission_mode: unknown; movement_permission_overrides?: Record<string, unknown> }> | undefined),
   };
 }
 
@@ -129,21 +142,21 @@ export function saveProjectConfig(projectDir: string, config: ProjectLocalConfig
   const configDir = getConfigDir(projectDir);
   const configPath = getConfigPath(projectDir);
 
-  // Ensure directory exists
   if (!existsSync(configDir)) {
     mkdirSync(configDir, { recursive: true });
   }
 
-  // Copy project resources (only copies files that don't exist)
   copyProjectResourcesToDir(configDir);
 
   const savePayload: Record<string, unknown> = { ...config };
+
   const rawAnalytics = denormalizeAnalytics(config.analytics);
   if (rawAnalytics) {
     savePayload.analytics = rawAnalytics;
   } else {
     delete savePayload.analytics;
   }
+
   const rawProfiles = denormalizeProviderProfiles(config.providerProfiles);
   if (rawProfiles && Object.keys(rawProfiles).length > 0) {
     savePayload.provider_profiles = rawProfiles;
@@ -152,6 +165,13 @@ export function saveProjectConfig(projectDir: string, config: ProjectLocalConfig
   }
   delete savePayload.providerProfiles;
   delete savePayload.providerOptions;
+
+  if (config.autoPr !== undefined) savePayload.auto_pr = config.autoPr;
+  if (config.draftPr !== undefined) savePayload.draft_pr = config.draftPr;
+  if (config.baseBranch !== undefined) savePayload.base_branch = config.baseBranch;
+  delete savePayload.autoPr;
+  delete savePayload.draftPr;
+  delete savePayload.baseBranch;
 
   const content = stringify(savePayload, { indent: 2 });
   writeFileSync(configPath, content, 'utf-8');

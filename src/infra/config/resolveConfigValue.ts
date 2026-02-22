@@ -113,30 +113,7 @@ function getLocalLayerValue<K extends ConfigParameterKey>(
   project: ReturnType<typeof loadProjectConfigCached>,
   key: K,
 ): LoadedConfig[K] | undefined {
-  switch (key) {
-    case 'piece':
-      return project.piece as LoadedConfig[K] | undefined;
-    case 'provider':
-      return project.provider as LoadedConfig[K] | undefined;
-    case 'model':
-      return project.model as LoadedConfig[K] | undefined;
-    case 'autoPr':
-      return project.auto_pr as LoadedConfig[K] | undefined;
-    case 'draftPr':
-      return project.draft_pr as LoadedConfig[K] | undefined;
-    case 'verbose':
-      return project.verbose as LoadedConfig[K] | undefined;
-    case 'analytics':
-      return project.analytics as LoadedConfig[K] | undefined;
-    case 'providerOptions':
-      return project.providerOptions as LoadedConfig[K] | undefined;
-    case 'providerProfiles':
-      return project.providerProfiles as LoadedConfig[K] | undefined;
-    case 'baseBranch':
-      return project.base_branch as LoadedConfig[K] | undefined;
-    default:
-      return undefined;
-  }
+  return project[key as keyof typeof project] as LoadedConfig[K] | undefined;
 }
 
 function getGlobalLayerValue<K extends ConfigParameterKey>(

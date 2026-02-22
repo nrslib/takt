@@ -12,26 +12,20 @@ export interface ProjectLocalConfig {
   piece?: string;
   /** Provider selection for agent runtime */
   provider?: 'claude' | 'codex' | 'opencode' | 'mock';
-  /** Model selection for agent runtime */
-  model?: string;
   /** Auto-create PR after worktree execution */
-  auto_pr?: boolean;
+  autoPr?: boolean;
   /** Create PR as draft */
-  draft_pr?: boolean;
+  draftPr?: boolean;
+  /** Base branch to clone from (overrides global baseBranch) */
+  baseBranch?: string;
   /** Verbose output mode */
   verbose?: boolean;
   /** Project-level analytics overrides */
   analytics?: AnalyticsConfig;
   /** Provider-specific options (overrides global, overridden by piece/movement) */
-  provider_options?: MovementProviderOptions;
-  /** Provider-specific options (camelCase alias) */
   providerOptions?: MovementProviderOptions;
   /** Provider-specific permission profiles (project-level override) */
-  provider_profiles?: ProviderPermissionProfiles;
-  /** Provider-specific permission profiles (camelCase alias) */
   providerProfiles?: ProviderPermissionProfiles;
-  /** Custom settings */
-  [key: string]: unknown;
 }
 
 /** Persona session data for persistence */
