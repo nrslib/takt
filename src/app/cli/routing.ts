@@ -216,7 +216,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       await selectAndExecuteTask(resolvedCwd, confirmedTask, selectOptions, agentOverrides);
     },
     create_issue: async ({ task: confirmedTask }) => {
-      const issueNumber = createIssueFromTask(confirmedTask);
+      const issueNumber = await createIssueFromTask(confirmedTask, { cwd: resolvedCwd });
       if (issueNumber !== undefined) {
         await saveTaskFromInteractive(resolvedCwd, confirmedTask, pieceId, {
           issue: issueNumber,

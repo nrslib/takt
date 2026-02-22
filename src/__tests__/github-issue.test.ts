@@ -6,13 +6,47 @@
  * that call `gh` CLI, so they are not unit-tested here.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   parseIssueNumbers,
   isIssueReference,
   formatIssueAsTask,
+  generateIssueTitle,
   type GitHubIssue,
 } from '../infra/github/issue.js';
+
+vi.mock('../infra/config/index.js', () => ({
+  resolveConfigValues: vi.fn(),
+}));
+
+vi.mock('../infra/providers/index.js', () => ({
+  getProvider: vi.fn(),
+}));
+
+vi.mock('../shared/prompts/index.js', () => ({
+  loadTemplate: vi.fn(),
+}));
+
+vi.mock('../shared/utils/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  createLogger: () => ({
+    info: vi.fn(),
+    debug: vi.fn(),
+    error: vi.fn(),
+  }),
+}));
+
+import { resolveConfigValues } from '../infra/config/index.js';
+import { getProvider } from '../infra/providers/index.js';
+import { loadTemplate } from '../shared/prompts/index.js';
+
+const mockResolveConfigValues = vi.mocked(resolveConfigValues);
+const mockGetProvider = vi.mocked(getProvider);
+const mockLoadTemplate = vi.mocked(loadTemplate);
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 describe('parseIssueNumbers', () => {
   it('should parse single issue reference', () => {
@@ -167,5 +201,99 @@ describe('formatIssueAsTask', () => {
     const result = formatIssueAsTask(issue);
 
     expect(result).toContain('Line 1\nLine 2\n\nLine 4');
+  });
+});
+
+describe('generateIssueTitle', () => {
+  const mockAgent = {
+    call: vi.fn(),
+  };
+
+  const mockProviderSetup = vi.fn().mockReturnValue(mockAgent);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockResolveConfigValues.mockReturnValue({
+      provider: 'claude',
+      model: 'claude-3-5-sonnet-20241022',
+      language: 'en',
+    });
+    mockGetProvider.mockReturnValue({ setup: mockProviderSetup } as unknown as ReturnType<typeof getProvider>);
+    mockLoadTemplate.mockReturnValue('mock prompt');
+  });
+
+  it('should return trimmed title from AI response', async () => {
+    mockAgent.call.mockResolvedValue({ content: '  Fixed authentication bug  ' });
+
+    const result = await generateIssueTitle('Fix login issue', '/tmp');
+
+    expect(result).toBe('Fixed authentication bug');
+  });
+
+  it('should throw error when AI returns empty response', async () => {
+    mockAgent.call.mockResolvedValue({ content: '' });
+
+    await expect(generateIssueTitle('Fix login issue', '/tmp')).rejects.toThrow(
+      'AI returned an empty response for issue title. Please provide a title manually.'
+    );
+  });
+
+  it('should throw error when AI returns whitespace-only response', async () => {
+    mockAgent.call.mockResolvedValue({ content: '   \n\t  ' });
+
+    await expect(generateIssueTitle('Fix login issue', '/tmp')).rejects.toThrow(
+      'AI returned an empty response for issue title. Please provide a title manually.'
+    );
+  });
+
+  it('should truncate title to 97 chars + ellipsis when over 100 characters', async () => {
+    const longTitle = 'a'.repeat(120);
+    mockAgent.call.mockResolvedValue({ content: longTitle });
+
+    const result = await generateIssueTitle('Task description', '/tmp');
+
+    expect(result).toBe(`${'a'.repeat(97)}...`);
+    expect(result).toHaveLength(100);
+  });
+
+  it('should use title as-is when exactly 100 characters', async () => {
+    const title100 = 'a'.repeat(100);
+    mockAgent.call.mockResolvedValue({ content: title100 });
+
+    const result = await generateIssueTitle('Task description', '/tmp');
+
+    expect(result).toBe(title100);
+    expect(result).toHaveLength(100);
+  });
+
+  it('should use title as-is when under 100 characters', async () => {
+    const shortTitle = 'Fix authentication bug';
+    mockAgent.call.mockResolvedValue({ content: shortTitle });
+
+    const result = await generateIssueTitle('Fix login issue', '/tmp');
+
+    expect(result).toBe(shortTitle);
+  });
+
+  it('should throw error when AI call fails', async () => {
+    mockAgent.call.mockRejectedValue(new Error('API rate limit exceeded'));
+
+    await expect(generateIssueTitle('Fix login issue', '/tmp')).rejects.toThrow('API rate limit exceeded');
+  });
+
+  it('should pass correct parameters to provider', async () => {
+    mockAgent.call.mockResolvedValue({ content: 'Test title' });
+
+    await generateIssueTitle('My task description', '/project/cwd');
+
+    expect(mockProviderSetup).toHaveBeenCalledWith({
+      name: 'issue-title-generator',
+      systemPrompt: 'mock prompt',
+    });
+    expect(mockAgent.call).toHaveBeenCalledWith('mock prompt', {
+      cwd: '/project/cwd',
+      model: 'claude-3-5-sonnet-20241022',
+      permissionMode: 'readonly',
+    });
   });
 });

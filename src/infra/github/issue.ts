@@ -8,6 +8,9 @@
 import { execFileSync } from 'node:child_process';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import type { GitHubIssue, GhCliStatus, CreateIssueOptions, CreateIssueResult } from './types.js';
+import { resolveConfigValues } from '../config/index.js';
+import { getProvider, type ProviderType } from '../providers/index.js';
+import { loadTemplate } from '../../shared/prompts/index.js';
 
 export type { GitHubIssue, GhCliStatus, CreateIssueOptions, CreateIssueResult };
 
@@ -37,6 +40,40 @@ export function checkGhCli(): GhCliStatus {
       };
     }
   }
+}
+
+/**
+ * Generate an issue title using AI summarization.
+ * Uses the configured provider (claude/codex/opencode) to generate a concise title.
+ */
+export async function generateIssueTitle(taskDescription: string, cwd: string): Promise<string> {
+  const globalConfig = resolveConfigValues(cwd, ['provider', 'model', 'language']);
+  const providerType = (globalConfig.provider as ProviderType) ?? 'claude';
+  const model = globalConfig.model;
+  const language = globalConfig.language ?? 'en';
+
+  const provider = getProvider(providerType);
+  const agent = provider.setup({
+    name: 'issue-title-generator',
+    systemPrompt: loadTemplate('issue_title_system_prompt', language),
+  });
+  const prompt = loadTemplate('issue_title_user_prompt', language, { taskDescription });
+  const response = await agent.call(prompt, {
+    cwd,
+    model,
+    permissionMode: 'readonly',
+  });
+
+  let title = response.content.trim();
+  if (!title) {
+    throw new Error('AI returned an empty response for issue title. Please provide a title manually.');
+  }
+  if (title.length > 100) {
+    title = `${title.slice(0, 97)}...`;
+  }
+
+  log.info('Issue title generated', { originalLength: taskDescription.length, titleLength: title.length, title });
+  return title;
 }
 
 /**
