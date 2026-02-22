@@ -175,6 +175,11 @@ export class GlobalConfigManager {
       logLevel: parsed.log_level,
       provider: parsed.provider,
       model: parsed.model,
+      assistant: parsed.assistant ? {
+        provider: parsed.assistant.provider,
+        model: parsed.assistant.model,
+        initFiles: parsed.assistant.init_files?.length ? parsed.assistant.init_files : undefined,
+      } : undefined,
       observability: parsed.observability ? {
         providerEvents: parsed.observability.provider_events,
       } : undefined,
@@ -222,6 +227,9 @@ export class GlobalConfigManager {
       taskPollIntervalMs: parsed.task_poll_interval_ms,
     };
     validateProviderModelCompatibility(config.provider, config.model);
+    if (config.assistant) {
+      validateProviderModelCompatibility(config.assistant.provider, config.assistant.model);
+    }
     this.cachedConfig = config;
     return config;
   }
@@ -236,6 +244,17 @@ export class GlobalConfigManager {
     };
     if (config.model) {
       raw.model = config.model;
+    }
+    if (config.assistant) {
+      const assistantRaw: Record<string, unknown> = {};
+      if (config.assistant.provider) assistantRaw.provider = config.assistant.provider;
+      if (config.assistant.model) assistantRaw.model = config.assistant.model;
+      if (config.assistant.initFiles && config.assistant.initFiles.length > 0) {
+        assistantRaw.init_files = config.assistant.initFiles;
+      }
+      if (Object.keys(assistantRaw).length > 0) {
+        raw.assistant = assistantRaw;
+      }
     }
     if (config.observability && config.observability.providerEvents !== undefined) {
       raw.observability = {
