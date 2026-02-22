@@ -27,8 +27,10 @@ vi.mock('../infra/github/pr.js', () => ({
 }));
 
 const mockExecuteTask = vi.fn();
+const mockConfirmAndCreateWorktree = vi.fn();
 vi.mock('../features/tasks/index.js', () => ({
   executeTask: mockExecuteTask,
+  confirmAndCreateWorktree: mockConfirmAndCreateWorktree,
 }));
 
 const mockResolveConfigValues = vi.fn();
@@ -483,6 +485,194 @@ describe('executePipeline', () => {
       });
 
       expect(exitCode).toBe(3);
+    });
+  });
+
+  describe('--create-worktree', () => {
+    it('should create worktree and execute task in worktree directory when createWorktree is true', async () => {
+      mockConfirmAndCreateWorktree.mockResolvedValueOnce({
+        execCwd: '/tmp/test-worktree',
+        isWorktree: true,
+        branch: 'fix/the-bug',
+        baseBranch: 'main',
+        taskSlug: 'fix-the-bug',
+      });
+      mockExecuteTask.mockResolvedValueOnce(true);
+
+      const exitCode = await executePipeline({
+        task: 'Fix the bug',
+        piece: 'default',
+        autoPr: false,
+        cwd: '/tmp/test',
+        createWorktree: true,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(mockConfirmAndCreateWorktree).toHaveBeenCalledWith('/tmp/test', 'Fix the bug', true);
+      expect(mockExecuteTask).toHaveBeenCalledWith({
+        task: 'Fix the bug',
+        cwd: '/tmp/test-worktree',
+        pieceIdentifier: 'default',
+        projectCwd: '/tmp/test',
+        agentOverrides: undefined,
+      });
+    });
+
+    it('should not create worktree when createWorktree is false', async () => {
+      mockExecuteTask.mockResolvedValueOnce(true);
+
+      const exitCode = await executePipeline({
+        task: 'Fix the bug',
+        piece: 'default',
+        autoPr: false,
+        cwd: '/tmp/test',
+        createWorktree: false,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(mockConfirmAndCreateWorktree).not.toHaveBeenCalled();
+      expect(mockExecuteTask).toHaveBeenCalledWith({
+        task: 'Fix the bug',
+        cwd: '/tmp/test',
+        pieceIdentifier: 'default',
+        projectCwd: '/tmp/test',
+        agentOverrides: undefined,
+      });
+    });
+
+    it('should use original cwd when createWorktree is undefined', async () => {
+      mockExecuteTask.mockResolvedValueOnce(true);
+
+      const exitCode = await executePipeline({
+        task: 'Fix the bug',
+        piece: 'default',
+        autoPr: false,
+        cwd: '/tmp/test',
+      });
+
+      expect(exitCode).toBe(0);
+      expect(mockConfirmAndCreateWorktree).not.toHaveBeenCalled();
+      expect(mockExecuteTask).toHaveBeenCalledWith({
+        task: 'Fix the bug',
+        cwd: '/tmp/test',
+        pieceIdentifier: 'default',
+        projectCwd: '/tmp/test',
+        agentOverrides: undefined,
+      });
+    });
+
+    it('should pass provider/model overrides when worktree is created', async () => {
+      mockConfirmAndCreateWorktree.mockResolvedValueOnce({
+        execCwd: '/tmp/test-worktree',
+        isWorktree: true,
+        branch: 'fix/the-bug',
+        baseBranch: 'main',
+        taskSlug: 'fix-the-bug',
+      });
+      mockExecuteTask.mockResolvedValueOnce(true);
+
+      const exitCode = await executePipeline({
+        task: 'Fix the bug',
+        piece: 'default',
+        autoPr: false,
+        cwd: '/tmp/test',
+        createWorktree: true,
+        provider: 'codex',
+        model: 'codex-model',
+      });
+
+      expect(exitCode).toBe(0);
+      expect(mockExecuteTask).toHaveBeenCalledWith({
+        task: 'Fix the bug',
+        cwd: '/tmp/test-worktree',
+        pieceIdentifier: 'default',
+        projectCwd: '/tmp/test',
+        agentOverrides: { provider: 'codex', model: 'codex-model' },
+      });
+    });
+
+    it('should return exit code 4 when worktree creation fails', async () => {
+      mockConfirmAndCreateWorktree.mockRejectedValueOnce(new Error('Failed to create worktree'));
+
+      const exitCode = await executePipeline({
+        task: 'Fix the bug',
+        piece: 'default',
+        autoPr: false,
+        cwd: '/tmp/test',
+        createWorktree: true,
+      });
+
+      expect(exitCode).toBe(4);
+    });
+
+    it('should commit in worktree and push via clone→project→origin', async () => {
+      mockConfirmAndCreateWorktree.mockResolvedValueOnce({
+        execCwd: '/tmp/test-worktree',
+        isWorktree: true,
+        branch: 'fix/the-bug',
+        baseBranch: 'main',
+        taskSlug: 'fix-the-bug',
+      });
+      mockExecuteTask.mockResolvedValueOnce(true);
+
+      const exitCode = await executePipeline({
+        task: 'Fix the bug',
+        piece: 'default',
+        autoPr: false,
+        cwd: '/tmp/test',
+        createWorktree: true,
+      });
+
+      expect(exitCode).toBe(0);
+
+      // Commit should happen in worktree (execCwd), not project cwd
+      const addCall = mockExecFileSync.mock.calls.find(
+        (call: unknown[]) => call[0] === 'git' && (call[1] as string[])[0] === 'add',
+      );
+      expect(addCall).toBeDefined();
+      expect((addCall![2] as { cwd: string }).cwd).toBe('/tmp/test-worktree');
+
+      // Clone→project push: git push /tmp/test HEAD from worktree
+      const pushToProjectCall = mockExecFileSync.mock.calls.find(
+        (call: unknown[]) =>
+          call[0] === 'git' &&
+          (call[1] as string[])[0] === 'push' &&
+          (call[1] as string[])[1] === '/tmp/test',
+      );
+      expect(pushToProjectCall).toBeDefined();
+      expect((pushToProjectCall![2] as { cwd: string }).cwd).toBe('/tmp/test-worktree');
+
+      // Project→origin push
+      expect(mockPushBranch).toHaveBeenCalledWith('/tmp/test', 'fix/the-bug');
+    });
+
+    it('should create PR from project cwd when worktree is used with --auto-pr', async () => {
+      mockConfirmAndCreateWorktree.mockResolvedValueOnce({
+        execCwd: '/tmp/test-worktree',
+        isWorktree: true,
+        branch: 'fix/the-bug',
+        baseBranch: 'main',
+        taskSlug: 'fix-the-bug',
+      });
+      mockExecuteTask.mockResolvedValueOnce(true);
+      mockCreatePullRequest.mockReturnValueOnce({ success: true, url: 'https://github.com/test/pr/1' });
+
+      const exitCode = await executePipeline({
+        task: 'Fix the bug',
+        piece: 'default',
+        autoPr: true,
+        cwd: '/tmp/test',
+        createWorktree: true,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(mockCreatePullRequest).toHaveBeenCalledWith(
+        '/tmp/test',
+        expect.objectContaining({
+          branch: 'fix/the-bug',
+          base: 'main',
+        }),
+      );
     });
   });
 });

@@ -111,6 +111,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       cwd: resolvedCwd,
       provider: agentOverrides?.provider,
       model: agentOverrides?.model,
+      createWorktree: createWorktreeOverride,
     });
 
     if (exitCode !== 0) {

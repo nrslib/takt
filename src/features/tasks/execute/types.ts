@@ -121,6 +121,8 @@ export interface PipelineExecutionOptions {
   cwd: string;
   provider?: ProviderType;
   model?: string;
+  /** Whether to create worktree for task execution */
+  createWorktree?: boolean | undefined;
 }
 
 export interface WorktreeConfirmationResult {

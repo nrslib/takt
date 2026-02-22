@@ -20,7 +20,7 @@ import {
   type GitHubIssue,
 } from '../../infra/github/index.js';
 import { stageAndCommit, resolveBaseBranch } from '../../infra/task/index.js';
-import { executeTask, type TaskExecutionOptions, type PipelineExecutionOptions } from '../tasks/index.js';
+import { executeTask, confirmAndCreateWorktree, type TaskExecutionOptions, type PipelineExecutionOptions } from '../tasks/index.js';
 import { resolveConfigValues } from '../../infra/config/index.js';
 import { info, error, success, status, blankLine } from '../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
@@ -99,6 +99,43 @@ function buildPipelinePrBody(
   return buildPrBody(issue ? [issue] : undefined, report);
 }
 
+interface ExecutionContext {
+  execCwd: string;
+  branch?: string;
+  baseBranch?: string;
+  isWorktree: boolean;
+}
+
+/**
+ * Resolve the execution environment for the pipeline.
+ * Creates a worktree, a branch, or uses the current directory as-is.
+ */
+async function resolveExecutionContext(
+  cwd: string,
+  task: string,
+  options: Pick<PipelineExecutionOptions, 'createWorktree' | 'skipGit' | 'branch' | 'issueNumber'>,
+  pipelineConfig: PipelineConfig | undefined,
+): Promise<ExecutionContext> {
+  if (options.createWorktree) {
+    const result = await confirmAndCreateWorktree(cwd, task, options.createWorktree);
+    if (result.isWorktree) {
+      success(`Worktree created: ${result.execCwd}`);
+    }
+    return { execCwd: result.execCwd, branch: result.branch, baseBranch: result.baseBranch, isWorktree: result.isWorktree };
+  }
+
+  if (options.skipGit) {
+    return { execCwd: cwd, isWorktree: false };
+  }
+
+  const resolved = resolveBaseBranch(cwd);
+  const branch = options.branch ?? generatePipelineBranchName(pipelineConfig, options.issueNumber);
+  info(`Creating branch: ${branch}`);
+  createBranch(cwd, branch);
+  success(`Branch created: ${branch}`);
+  return { execCwd: cwd, branch, baseBranch: resolved.branch, isWorktree: false };
+}
+
 /**
  * Execute the full pipeline.
  *
@@ -134,22 +171,15 @@ export async function executePipeline(options: PipelineExecutionOptions): Promis
     return EXIT_ISSUE_FETCH_FAILED;
   }
 
-  // --- Step 2: Sync & create branch (skip if --skip-git) ---
-  let branch: string | undefined;
-  let baseBranch: string | undefined;
-  if (!skipGit) {
-    const resolved = resolveBaseBranch(cwd);
-    baseBranch = resolved.branch;
-    branch = options.branch ?? generatePipelineBranchName(pipelineConfig, options.issueNumber);
-    info(`Creating branch: ${branch}`);
-    try {
-      createBranch(cwd, branch);
-      success(`Branch created: ${branch}`);
-    } catch (err) {
-      error(`Failed to create branch: ${getErrorMessage(err)}`);
-      return EXIT_GIT_OPERATION_FAILED;
-    }
+  // --- Step 2: Prepare execution environment ---
+  let context: ExecutionContext;
+  try {
+    context = await resolveExecutionContext(cwd, task, options, pipelineConfig);
+  } catch (err) {
+    error(`Failed to prepare execution environment: ${getErrorMessage(err)}`);
+    return EXIT_GIT_OPERATION_FAILED;
   }
+  const { execCwd, branch, baseBranch, isWorktree } = context;
 
   // --- Step 3: Run piece ---
   info(`Running piece: ${piece}`);
@@ -161,7 +191,7 @@ export async function executePipeline(options: PipelineExecutionOptions): Promis
 
   const taskSuccess = await executeTask({
     task,
-    cwd,
+    cwd: execCwd,
     pieceIdentifier: piece,
     projectCwd: cwd,
     agentOverrides,
@@ -179,11 +209,16 @@ export async function executePipeline(options: PipelineExecutionOptions): Promis
 
     info('Committing changes...');
     try {
-      const commitHash = stageAndCommit(cwd, commitMessage);
+      const commitHash = stageAndCommit(execCwd, commitMessage);
       if (commitHash) {
         success(`Changes committed: ${commitHash}`);
       } else {
         info('No changes to commit');
+      }
+
+      if (isWorktree) {
+        // Clone has no origin — push to main project via path, then project pushes to origin
+        execFileSync('git', ['push', cwd, 'HEAD'], { cwd: execCwd, stdio: 'pipe' });
       }
 
       info(`Pushing to origin/${branch}...`);
