@@ -36,6 +36,7 @@ vi.mock('../infra/config/global/globalConfig.js', () => ({
 }));
 
 import { execFileSync } from 'node:child_process';
+import { loadGlobalConfig } from '../infra/config/global/globalConfig.js';
 import { createSharedClone, createTempCloneForBranch } from '../infra/task/clone.js';
 
 const mockExecFileSync = vi.mocked(execFileSync);
@@ -454,5 +455,86 @@ describe('resolveBaseBranch', () => {
     // When/Then: should not throw
     const result = createTempCloneForBranch('/project', 'existing-branch');
     expect(result.branch).toBe('existing-branch');
+  });
+});
+
+describe('autoFetch: true — fetch, rev-parse origin/<branch>, reset --hard', () => {
+  it('should run git fetch, resolve origin/<branch> commit hash, and reset --hard in the clone', () => {
+    // Given: autoFetch is enabled in global config.
+    // resolveBaseBranch calls resolveConfigValue twice (baseBranch then autoFetch),
+    // each triggers one loadGlobalConfig() call — queue two return values.
+    vi.mocked(loadGlobalConfig)
+      .mockReturnValueOnce({ autoFetch: true } as ReturnType<typeof loadGlobalConfig>)
+      .mockReturnValueOnce({ autoFetch: true } as ReturnType<typeof loadGlobalConfig>);
+
+    const fetchCalls: string[][] = [];
+    const revParseOriginCalls: string[][] = [];
+    const resetCalls: string[][] = [];
+
+    mockExecFileSync.mockImplementation((_cmd, args, opts) => {
+      const argsArr = args as string[];
+      const options = opts as { encoding?: string } | undefined;
+
+      // getCurrentBranch: git rev-parse --abbrev-ref HEAD (encoding: 'utf-8')
+      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--abbrev-ref') {
+        return 'main';
+      }
+
+      // git fetch origin
+      if (argsArr[0] === 'fetch') {
+        fetchCalls.push(argsArr);
+        return Buffer.from('');
+      }
+
+      // git rev-parse origin/<branch> (encoding: 'utf-8') — returns fetched commit hash
+      if (argsArr[0] === 'rev-parse' && typeof argsArr[1] === 'string' && argsArr[1].startsWith('origin/')) {
+        revParseOriginCalls.push(argsArr);
+        return options?.encoding ? 'abc123def456' : Buffer.from('abc123def456\n');
+      }
+
+      // git reset --hard <commit>
+      if (argsArr[0] === 'reset' && argsArr[1] === '--hard') {
+        resetCalls.push(argsArr);
+        return Buffer.from('');
+      }
+
+      // git clone
+      if (argsArr[0] === 'clone') return Buffer.from('');
+
+      // git remote remove origin
+      if (argsArr[0] === 'remote') return Buffer.from('');
+
+      // git config --local (reading from source repo — nothing set)
+      if (argsArr[0] === 'config' && argsArr[1] === '--local') throw new Error('not set');
+
+      // git config <key> <value> (writing to clone)
+      if (argsArr[0] === 'config') return Buffer.from('');
+
+      // git rev-parse --verify (branchExists) — branch not found, triggers new branch creation
+      if (argsArr[0] === 'rev-parse') throw new Error('branch not found');
+
+      // git checkout -b
+      if (argsArr[0] === 'checkout') return Buffer.from('');
+
+      return Buffer.from('');
+    });
+
+    // When
+    createSharedClone('/project-autofetch-test', {
+      worktree: true,
+      taskSlug: 'autofetch-task',
+    });
+
+    // Then: git fetch origin was called exactly once
+    expect(fetchCalls).toHaveLength(1);
+    expect(fetchCalls[0]).toEqual(['fetch', 'origin']);
+
+    // Then: remote tracking ref for the base branch was resolved
+    expect(revParseOriginCalls).toHaveLength(1);
+    expect(revParseOriginCalls[0]).toEqual(['rev-parse', 'origin/main']);
+
+    // Then: clone was reset to the fetched commit
+    expect(resetCalls).toHaveLength(1);
+    expect(resetCalls[0]).toEqual(['reset', '--hard', 'abc123def456']);
   });
 });

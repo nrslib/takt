@@ -139,17 +139,17 @@ export class CloneManager {
    *
    * When `auto_fetch` config is true:
    *   1. Runs `git fetch origin` (without modifying local branches)
-   *   2. Resolves base branch from config `base_branch` → current branch fallback
+   *   2. Resolves base branch from config `base_branch` → remote default branch fallback
    *   3. Returns the branch name and the fetched commit hash of `origin/<baseBranch>`
    *
    * When `auto_fetch` is false (default):
-   *   Returns only the branch name (config `base_branch` → current branch fallback)
+   *   Returns only the branch name (config `base_branch` → remote default branch fallback)
    *
    * Any failure (network, no remote, etc.) is non-fatal.
    */
   static resolveBaseBranch(projectDir: string): { branch: string; fetchedCommit?: string } {
-    const configBaseBranch = resolveConfigValue(projectDir, 'baseBranch') as string | undefined;
-    const autoFetch = resolveConfigValue(projectDir, 'autoFetch') as boolean | undefined;
+    const configBaseBranch = resolveConfigValue(projectDir, 'baseBranch');
+    const autoFetch = resolveConfigValue(projectDir, 'autoFetch');
 
     // Determine base branch: config base_branch → remote default branch
     const baseBranch = configBaseBranch ?? detectDefaultBranch(projectDir);
@@ -177,18 +177,6 @@ export class CloneManager {
       // Network errors, no remote, no tracking ref — all non-fatal
       log.info('Failed to fetch from remote, continuing with local state', { baseBranch, error: String(err) });
       return { branch: baseBranch };
-    }
-  }
-
-  /** Get current branch name */
-  private static getCurrentBranch(projectDir: string): string {
-    try {
-      return execFileSync(
-        'git', ['rev-parse', '--abbrev-ref', 'HEAD'],
-        { cwd: projectDir, encoding: 'utf-8', stdio: 'pipe' },
-      ).trim();
-    } catch {
-      return 'main';
     }
   }
 
@@ -275,6 +263,7 @@ export class CloneManager {
 
   /** Create a temporary clone for an existing branch */
   createTempCloneForBranch(projectDir: string, branch: string): WorktreeResult {
+    // fetch の副作用（リモートの最新状態への同期）のために呼び出す
     CloneManager.resolveBaseBranch(projectDir);
 
     const timestamp = CloneManager.generateTimestamp();

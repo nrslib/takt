@@ -133,7 +133,7 @@ function getLocalLayerValue<K extends ConfigParameterKey>(
     case 'providerProfiles':
       return project.providerProfiles as LoadedConfig[K] | undefined;
     case 'baseBranch':
-      return (project as Record<string, unknown>).base_branch as LoadedConfig[K] | undefined;
+      return project.base_branch as LoadedConfig[K] | undefined;
     default:
       return undefined;
   }
