@@ -33,7 +33,10 @@ export class CloneManager {
 
   /**
    * Resolve the base directory for clones from global config.
-   * Returns the configured worktree_dir (resolved to absolute), or ../
+   * Returns the configured worktree_dir (resolved to absolute), or
+   * the default 'takt-worktrees' (plural). Automatically migrates
+   * legacy 'takt-worktree' (singular) to 'takt-worktrees' if only
+   * the legacy directory exists.
    */
   private static resolveCloneBaseDir(projectDir: string): string {
     const worktreeDir = resolveConfigValue(projectDir, 'worktreeDir');
@@ -42,7 +45,13 @@ export class CloneManager {
         ? worktreeDir
         : path.resolve(projectDir, worktreeDir);
     }
-    return path.join(projectDir, '..', 'takt-worktree');
+    const newDir = path.join(projectDir, '..', 'takt-worktrees');
+    const legacyDir = path.join(projectDir, '..', 'takt-worktree');
+    // Auto-migrate: rename legacy singular to plural
+    if (fs.existsSync(legacyDir) && !fs.existsSync(newDir)) {
+      fs.renameSync(legacyDir, newDir);
+    }
+    return newDir;
   }
 
   /** Resolve the clone path based on options and global config */
