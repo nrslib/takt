@@ -143,4 +143,6 @@ export interface SelectAndExecuteOptions {
   interactiveMetadata?: InteractiveMetadata;
   /** GitHub Issues to associate with the PR (adds "Closes #N" for each issue) */
   issues?: GitHubIssue[];
+  /** Skip adding task to tasks.yaml */
+  skipTaskList?: boolean;
 }
