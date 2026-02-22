@@ -96,6 +96,9 @@ instruct:
 retry:
   ui:
     intro: "Retry mode - describe additional instructions. Commands: /go (create instruction & run), /retry (rerun previous order), /cancel (exit)"
+  workflowPrompt: "Select workflow:"
+  usePreviousWorkflow: "Use previous"
+  changeWorkflow: "Change workflow"
 
 run:
   notifyComplete: "Run complete ({total} tasks)"

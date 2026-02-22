@@ -70,7 +70,11 @@ vi.mock('../features/interactive/index.js', () => ({
   loadRunSessionContext: vi.fn(),
   getRunPaths: vi.fn(() => ({ logsDir: '/tmp/logs', reportsDir: '/tmp/reports' })),
   formatRunSessionForPrompt: vi.fn(() => ({
-    runTask: '', runPiece: '', runStatus: '', runMovementLogs: '', runReports: '',
+    runTask: '',
+    runPiece: 'default',
+    runStatus: '',
+    runMovementLogs: '',
+    runReports: '',
   })),
   runRetryMode: (...args: unknown[]) => mockRunRetryMode(...args),
   findPreviousOrderContent: vi.fn(() => null),
@@ -89,6 +93,17 @@ vi.mock('../infra/task/index.js', () => ({
 
 vi.mock('../features/tasks/execute/taskExecution.js', () => ({
   executeAndCompleteTask: (...args: unknown[]) => mockExecuteAndCompleteTask(...args),
+}));
+
+vi.mock('../shared/i18n/index.js', () => ({
+  getLabel: vi.fn((key: string) => {
+    const labels: Record<string, string> = {
+      'retry.workflowPrompt': 'Select workflow:',
+      'retry.usePreviousWorkflow': 'Use previous',
+      'retry.changeWorkflow': 'Change workflow',
+    };
+    return labels[key] ?? key;
+  }),
 }));
 
 import { retryFailedTask } from '../features/tasks/list/taskRetryActions.js';
@@ -261,5 +276,55 @@ describe('retryFailedTask', () => {
     await retryFailedTask(task, '/project');
 
     expect(mockRequeueTask).toHaveBeenCalledWith('my-task', ['failed'], undefined, '既存ノート\n\n追加指示A');
+  });
+
+  describe('when previous workflow exists', () => {
+    beforeEach(() => {
+      mockFindRunForTask.mockReturnValue('run-123');
+    });
+
+    it('should show workflow selection prompt when runInfo.piece exists', async () => {
+      const task = makeFailedTask();
+
+      await retryFailedTask(task, '/project');
+
+      expect(mockSelectOptionWithDefault).toHaveBeenCalledWith(
+        'Select workflow:',
+        expect.arrayContaining([
+          expect.objectContaining({ value: 'use_previous' }),
+          expect.objectContaining({ value: 'change' }),
+        ]),
+        'use_previous',
+      );
+    });
+
+    it('should use previous workflow when use_previous is selected', async () => {
+      const task = makeFailedTask();
+      mockSelectOptionWithDefault.mockResolvedValue('use_previous');
+
+      await retryFailedTask(task, '/project');
+
+      expect(mockSelectPiece).not.toHaveBeenCalled();
+      expect(mockLoadPieceByIdentifier).toHaveBeenCalledWith('default', '/project');
+    });
+
+    it('should call selectPiece when change is selected', async () => {
+      const task = makeFailedTask();
+      mockSelectOptionWithDefault.mockResolvedValue('change');
+
+      await retryFailedTask(task, '/project');
+
+      expect(mockSelectPiece).toHaveBeenCalledWith('/project');
+    });
+
+    it('should return false when workflow selection is cancelled', async () => {
+      const task = makeFailedTask();
+      mockSelectOptionWithDefault.mockResolvedValue(null);
+
+      const result = await retryFailedTask(task, '/project');
+
+      expect(result).toBe(false);
+      expect(mockLoadPieceByIdentifier).not.toHaveBeenCalled();
+    });
   });
 });

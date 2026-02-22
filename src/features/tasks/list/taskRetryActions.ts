@@ -11,6 +11,7 @@ import { TaskRunner } from '../../../infra/task/index.js';
 import { loadPieceByIdentifier, resolvePieceConfigValue, getPieceDescription } from '../../../infra/config/index.js';
 import { selectPiece } from '../../pieceSelection/index.js';
 import { selectOptionWithDefault } from '../../../shared/prompt/index.js';
+import { getLabel } from '../../../shared/i18n/index.js';
 import { info, header, blankLine, status } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import type { PieceConfig } from '../../../core/models/index.js';
@@ -128,10 +129,44 @@ export async function retryFailedTask(
 
   displayFailureInfo(task);
 
-  const selectedPiece = await selectPiece(projectDir);
-  if (!selectedPiece) {
-    info('Cancelled');
-    return false;
+  const matchedSlug = findRunForTask(worktreePath, task.content);
+  const runInfo = matchedSlug ? buildRetryRunInfo(worktreePath, matchedSlug) : null;
+
+  let selectedPiece: string;
+  if (runInfo?.piece) {
+    const usePreviousLabel = getLabel('retry.usePreviousWorkflow');
+    const changeWorkflowLabel = getLabel('retry.changeWorkflow');
+    const choice = await selectOptionWithDefault(
+      getLabel('retry.workflowPrompt'),
+      [
+        { label: `${runInfo.piece} - ${usePreviousLabel}`, value: 'use_previous' },
+        { label: changeWorkflowLabel, value: 'change' },
+      ],
+      'use_previous',
+    );
+
+    if (choice === null) {
+      info('Cancelled');
+      return false;
+    }
+
+    if (choice === 'use_previous') {
+      selectedPiece = runInfo.piece;
+    } else {
+      const selected = await selectPiece(projectDir);
+      if (!selected) {
+        info('Cancelled');
+        return false;
+      }
+      selectedPiece = selected;
+    }
+  } else {
+    const selected = await selectPiece(projectDir);
+    if (!selected) {
+      info('Cancelled');
+      return false;
+    }
+    selectedPiece = selected;
   }
 
   const previewCount = resolvePieceConfigValue(projectDir, 'interactivePreviewMovements');
@@ -155,8 +190,6 @@ export async function retryFailedTask(
   };
 
   // Runs data lives in the worktree (written during previous execution)
-  const matchedSlug = findRunForTask(worktreePath, task.content);
-  const runInfo = matchedSlug ? buildRetryRunInfo(worktreePath, matchedSlug) : null;
   const previousOrderContent = findPreviousOrderContent(worktreePath, matchedSlug);
 
   blankLine();
