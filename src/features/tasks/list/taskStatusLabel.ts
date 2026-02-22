@@ -8,7 +8,10 @@ const TASK_STATUS_BY_KIND: Record<TaskListItem['kind'], string> = {
 };
 
 export function formatTaskStatusLabel(task: TaskListItem): string {
-  const status = `[${TASK_STATUS_BY_KIND[task.kind]}] ${task.name}`;
+  let status = `[${TASK_STATUS_BY_KIND[task.kind]}] ${task.name}`;
+  if (task.issueNumber !== undefined) {
+    status += ` #${task.issueNumber}`;
+  }
   if (task.branch) {
     return `${status} (${task.branch})`;
   }

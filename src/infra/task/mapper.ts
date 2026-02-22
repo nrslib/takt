@@ -127,6 +127,7 @@ function toBaseTaskListItem(projectDir: string, tasksFile: string, task: TaskRec
     completedAt: task.completed_at ?? undefined,
     ownerPid: task.owner_pid ?? undefined,
     data: toTaskData(projectDir, task),
+    issueNumber: task.issue,
   };
 }
 
