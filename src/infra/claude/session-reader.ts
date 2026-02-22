@@ -5,7 +5,7 @@
  * to extract session metadata and last assistant responses.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { getClaudeProjectSessionsDir } from '../config/project/sessionStore.js';
 
@@ -26,6 +26,99 @@ interface SessionsIndex {
   entries: SessionIndexEntry[];
 }
 
+interface SessionMessageContent {
+  type: string;
+  text?: string;
+}
+
+interface SessionMessage {
+  content?: SessionMessageContent[];
+}
+
+interface SessionJsonlRecord {
+  type?: string;
+  sessionId?: string;
+  message?: SessionMessage;
+  timestamp?: string;
+  gitBranch?: string;
+  isSidechain?: boolean;
+}
+
+function buildEntryFromJsonlFile(sessionsDir: string, fileName: string): SessionIndexEntry | null {
+  const fullPath = join(sessionsDir, fileName);
+  const sessionId = fileName.replace(/\.jsonl$/, '');
+
+  if (!sessionId || sessionId === fileName) {
+    return null;
+  }
+
+  let firstPrompt = '';
+  let messageCount = 0;
+  let gitBranch = '';
+  let isSidechain = false;
+
+  try {
+    const content = readFileSync(fullPath, 'utf-8');
+    const lines = content.split('\n').filter((line) => line.trim().length > 0);
+    for (const line of lines) {
+      let record: SessionJsonlRecord;
+      try {
+        record = JSON.parse(line) as SessionJsonlRecord;
+      } catch {
+        continue;
+      }
+
+      if (record.type === 'user' || record.type === 'assistant') {
+        messageCount += 1;
+      }
+
+      if (!gitBranch && typeof record.gitBranch === 'string') {
+        gitBranch = record.gitBranch;
+      }
+
+      if (record.isSidechain === true) {
+        isSidechain = true;
+      }
+
+      if (!firstPrompt && record.type === 'user' && Array.isArray(record.message?.content)) {
+        const textBlock = record.message.content.find((block) => block.type === 'text' && typeof block.text === 'string');
+        if (textBlock?.text) {
+          firstPrompt = textBlock.text.trim();
+        }
+      }
+    }
+  } catch {
+    return null;
+  }
+
+  const modified = statSync(fullPath).mtime.toISOString();
+
+  return {
+    sessionId,
+    firstPrompt: firstPrompt || sessionId,
+    modified,
+    messageCount,
+    gitBranch,
+    isSidechain,
+    fullPath,
+  };
+}
+
+function loadSessionIndexFromJsonl(sessionsDir: string): SessionIndexEntry[] {
+  if (!existsSync(sessionsDir)) {
+    return [];
+  }
+
+  const jsonlFiles = readdirSync(sessionsDir)
+    .filter((name) => name.endsWith('.jsonl'));
+
+  return jsonlFiles
+    .map((fileName) => buildEntryFromJsonlFile(sessionsDir, fileName))
+    .filter((entry): entry is SessionIndexEntry => entry !== null)
+    .filter((entry) => !entry.isSidechain)
+    .sort((a, b) => new Date(b.modified).getTime() - new Date(a.modified).getTime());
+}
+
 /**
  * Load the session index for a project directory.
  *
@@ -37,7 +130,7 @@ export function loadSessionIndex(projectDir: string): SessionIndexEntry[] {
   const indexPath = join(sessionsDir, 'sessions-index.json');
 
   if (!existsSync(indexPath)) {
-    return [];
+    return loadSessionIndexFromJsonl(sessionsDir);
   }
 
   const content = readFileSync(indexPath, 'utf-8');
@@ -46,11 +139,11 @@ export function loadSessionIndex(projectDir: string): SessionIndexEntry[] {
   try {
     index = JSON.parse(content) as SessionsIndex;
   } catch {
-    return [];
+    return loadSessionIndexFromJsonl(sessionsDir);
   }
 
   if (!index.entries || !Array.isArray(index.entries)) {
-    return [];
+    return loadSessionIndexFromJsonl(sessionsDir);
   }
 
   return index.entries

@@ -26,6 +26,30 @@ describe('loadSessionIndex', () => {
     expect(result).toEqual([]);
   });
 
+  it('falls back to jsonl files when sessions-index.json does not exist', () => {
+    const filePath = join(mockSessionsDir, 'fallback-session.jsonl');
+    writeFileSync(filePath, [
+      JSON.stringify({
+        type: 'user',
+        gitBranch: 'develop',
+        message: { content: [{ type: 'text', text: 'Resume me from jsonl fallback' }] },
+        isSidechain: false,
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'Sure' }] },
+      }),
+    ].join('\n'));
+
+    const result = loadSessionIndex('/any');
+
+    expect(result).toHaveLength(1);
+    expect(result[0]!.sessionId).toBe('fallback-session');
+    expect(result[0]!.firstPrompt).toBe('Resume me from jsonl fallback');
+    expect(result[0]!.messageCount).toBe(2);
+    expect(result[0]!.gitBranch).toBe('develop');
+  });
+
   it('reads and parses sessions-index.json correctly', () => {
     const indexData = {
       version: 1,
@@ -104,6 +128,36 @@ describe('loadSessionIndex', () => {
 
     const result = loadSessionIndex('/any');
     expect(result).toEqual([]);
+  });
+
+  it('uses jsonl fallback when sessions-index.json is corrupted', () => {
+    writeFileSync(join(mockSessionsDir, 'sessions-index.json'), '{corrupted json content');
+    writeFileSync(join(mockSessionsDir, 'fallback-on-corrupt.jsonl'), JSON.stringify({
+      type: 'user',
+      message: { content: [{ type: 'text', text: 'Fallback on corrupted index' }] },
+      isSidechain: false,
+    }));
+
+    const result = loadSessionIndex('/any');
+    expect(result).toHaveLength(1);
+    expect(result[0]!.sessionId).toBe('fallback-on-corrupt');
+  });
+
+  it('filters out sidechain sessions in jsonl fallback', () => {
+    writeFileSync(join(mockSessionsDir, 'main-session.jsonl'), JSON.stringify({
+      type: 'user',
+      message: { content: [{ type: 'text', text: 'Main session' }] },
+      isSidechain: false,
+    }));
+    writeFileSync(join(mockSessionsDir, 'sidechain-session.jsonl'), JSON.stringify({
+      type: 'user',
+      message: { content: [{ type: 'text', text: 'Sidechain session' }] },
+      isSidechain: true,
+    }));
+
+    const result = loadSessionIndex('/any');
+    expect(result).toHaveLength(1);
+    expect(result[0]!.sessionId).toBe('main-session');
   });
 });
 
