@@ -18,6 +18,12 @@ vi.mock('../infra/task/git.js', () => ({
 vi.mock('../infra/task/clone.js', () => ({
   createSharedClone: vi.fn(),
   removeClone: vi.fn(),
+  resolveBaseBranch: vi.fn(() => ({ branch: 'main' })),
+}));
+
+vi.mock('../infra/task/branchList.js', () => ({
+  detectDefaultBranch: vi.fn(() => 'main'),
+  BranchManager: vi.fn(),
 }));
 
 vi.mock('../infra/task/autoCommit.js', () => ({

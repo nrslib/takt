@@ -169,6 +169,7 @@ export async function executeAndCompleteTask(
     const completedAt = new Date().toISOString();
 
     let prUrl: string | undefined;
+    let effectiveRunResult = taskRunResult;
     if (taskSuccess && isWorktree) {
       const issues = resolveTaskIssue(issueNumber);
       const postResult = await postExecutionFlow({
@@ -183,11 +184,14 @@ export async function executeAndCompleteTask(
         issues,
       });
       prUrl = postResult.prUrl;
+      if (postResult.prFailed) {
+        effectiveRunResult = { success: false, reason: `PR creation failed: ${postResult.prError}` };
+      }
     }
 
     const taskResult = buildTaskResult({
       task,
-      runResult: taskRunResult,
+      runResult: effectiveRunResult,
       startedAt,
       completedAt,
       branch,
@@ -196,7 +200,7 @@ export async function executeAndCompleteTask(
     });
     persistTaskResult(taskRunner, taskResult);
 
-    return taskSuccess;
+    return effectiveRunResult.success;
   } catch (err) {
     const completedAt = new Date().toISOString();
     persistTaskError(taskRunner, task, startedAt, completedAt, err);

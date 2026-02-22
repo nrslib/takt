@@ -12,6 +12,7 @@ import * as path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createLogger } from '../../shared/utils/index.js';
 import { resolveConfigValue } from '../config/index.js';
+import { detectDefaultBranch } from './branchList.js';
 import type { WorktreeOptions, WorktreeResult } from './types.js';
 
 export type { WorktreeOptions, WorktreeResult };
@@ -150,8 +151,8 @@ export class CloneManager {
     const configBaseBranch = resolveConfigValue(projectDir, 'baseBranch') as string | undefined;
     const autoFetch = resolveConfigValue(projectDir, 'autoFetch') as boolean | undefined;
 
-    // Determine base branch: config base_branch → current branch
-    const baseBranch = configBaseBranch ?? CloneManager.getCurrentBranch(projectDir);
+    // Determine base branch: config base_branch → remote default branch
+    const baseBranch = configBaseBranch ?? detectDefaultBranch(projectDir);
 
     if (!autoFetch) {
       return { branch: baseBranch };

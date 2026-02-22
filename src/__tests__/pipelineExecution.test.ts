@@ -256,10 +256,10 @@ describe('executePipeline', () => {
   });
 
   it('should pass baseBranch as base to createPullRequest', async () => {
-    // Given: getCurrentBranch returns 'develop' before branch creation
+    // Given: detectDefaultBranch returns 'develop' (via symbolic-ref)
     mockExecFileSync.mockImplementation((_cmd: string, args: string[]) => {
-      if (args[0] === 'rev-parse' && args[1] === '--abbrev-ref') {
-        return 'develop\n';
+      if (args[0] === 'symbolic-ref' && args[1] === 'refs/remotes/origin/HEAD') {
+        return 'refs/remotes/origin/develop\n';
       }
       return 'abc1234\n';
     });
