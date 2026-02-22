@@ -15,6 +15,9 @@ import { showCatalog } from '../../features/catalog/index.js';
 import { computeReviewMetrics, formatReviewMetrics, parseSinceDuration, purgeOldEvents } from '../../features/analytics/index.js';
 import { program, resolvedCwd } from './program.js';
 import { resolveAgentOverrides } from './helpers.js';
+import { repertoireAddCommand } from '../../commands/repertoire/add.js';
+import { repertoireRemoveCommand } from '../../commands/repertoire/remove.js';
+import { repertoireListCommand } from '../../commands/repertoire/list.js';
 
 program
   .command('run')
@@ -172,4 +175,31 @@ program
     } else {
       success(`Purged ${deleted.length} file(s): ${deleted.join(', ')}`);
     }
+  });
+
+const repertoire = program
+  .command('repertoire')
+  .description('Manage repertoire packages');
+
+repertoire
+  .command('add')
+  .description('Install a repertoire package from GitHub')
+  .argument('<spec>', 'Package spec (e.g. github:{owner}/{repo}@{ref})')
+  .action(async (spec: string) => {
+    await repertoireAddCommand(spec);
+  });
+
+repertoire
+  .command('remove')
+  .description('Remove an installed repertoire package')
+  .argument('<scope>', 'Package scope (e.g. @{owner}/{repo})')
+  .action(async (scope: string) => {
+    await repertoireRemoveCommand(scope);
+  });
+
+repertoire
+  .command('list')
+  .description('List installed repertoire packages')
+  .action(async () => {
+    await repertoireListCommand();
   });

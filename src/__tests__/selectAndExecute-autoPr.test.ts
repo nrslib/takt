@@ -33,6 +33,7 @@ vi.mock('../infra/config/index.js', () => ({
   resolvePieceConfigValue: (...args: unknown[]) => mockResolvePieceConfigValue(...args),
   listPieces: vi.fn(() => ['default']),
   listPieceEntries: vi.fn(() => []),
+  loadPieceByIdentifier: vi.fn((identifier: string) => (identifier === 'default' ? { name: 'default' } : null)),
   isPiecePath: vi.fn(() => false),
 }));
 
@@ -86,11 +87,13 @@ vi.mock('../features/pieceSelection/index.js', () => ({
 }));
 
 import { confirm } from '../shared/prompt/index.js';
+import { loadPieceByIdentifier } from '../infra/config/index.js';
 import { createSharedClone, autoCommitAndPush, summarizeTaskName } from '../infra/task/index.js';
 import { selectPiece } from '../features/pieceSelection/index.js';
 import { selectAndExecuteTask, determinePiece } from '../features/tasks/execute/selectAndExecute.js';
 
 const mockConfirm = vi.mocked(confirm);
+const mockLoadPieceByIdentifier = vi.mocked(loadPieceByIdentifier);
 const mockCreateSharedClone = vi.mocked(createSharedClone);
 const mockAutoCommitAndPush = vi.mocked(autoCommitAndPush);
 const mockSummarizeTaskName = vi.mocked(summarizeTaskName);
@@ -178,6 +181,14 @@ describe('resolveAutoPr default in selectAndExecuteTask', () => {
 
     expect(selected).toBe('selected-piece');
     expect(mockSelectPiece).toHaveBeenCalledWith('/project');
+  });
+
+  it('should accept repertoire scoped piece override when it exists', async () => {
+    mockLoadPieceByIdentifier.mockReturnValueOnce({ name: '@nrslib/takt-ensembles/critical-thinking' } as never);
+
+    const selected = await determinePiece('/project', '@nrslib/takt-ensembles/critical-thinking');
+
+    expect(selected).toBe('@nrslib/takt-ensembles/critical-thinking');
   });
 
   it('should fail task record when executeTask throws', async () => {

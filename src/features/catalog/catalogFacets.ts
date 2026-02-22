@@ -9,8 +9,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import chalk from 'chalk';
 import type { PieceSource } from '../../infra/config/loaders/pieceResolver.js';
-import { getLanguageResourcesDir } from '../../infra/resources/index.js';
-import { getGlobalConfigDir, getProjectConfigDir } from '../../infra/config/paths.js';
+import { getBuiltinFacetDir, getGlobalFacetDir, getProjectFacetDir } from '../../infra/config/paths.js';
 import { resolvePieceConfigValues } from '../../infra/config/index.js';
 import { section, error as logError, info } from '../../shared/ui/index.js';
 
@@ -67,11 +66,11 @@ function getFacetDirs(
 
   if (config.enableBuiltinPieces !== false) {
     const lang = config.language;
-    dirs.push({ dir: join(getLanguageResourcesDir(lang), facetType), source: 'builtin' });
+    dirs.push({ dir: getBuiltinFacetDir(lang, facetType), source: 'builtin' });
   }
 
-  dirs.push({ dir: join(getGlobalConfigDir(), facetType), source: 'user' });
-  dirs.push({ dir: join(getProjectConfigDir(cwd), facetType), source: 'project' });
+  dirs.push({ dir: getGlobalFacetDir(facetType), source: 'user' });
+  dirs.push({ dir: getProjectFacetDir(cwd, facetType), source: 'project' });
 
   return dirs;
 }
@@ -123,6 +122,8 @@ function colorSourceTag(source: PieceSource): string {
       return chalk.yellow(`[${source}]`);
     case 'project':
       return chalk.green(`[${source}]`);
+    default:
+      return chalk.blue(`[${source}]`);
   }
 }
 

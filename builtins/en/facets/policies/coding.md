@@ -284,6 +284,7 @@ function formatPercentage(value: number): string { ... }
 - **Direct mutation of objects/arrays** - Create new instances with spread operators
 - **console.log** - Do not leave in production code
 - **Hardcoded secrets**
+- **Scattered hardcoded contract strings** - File names and config key names must be defined as constants in one place. Scattered literals are prohibited
 - **Scattered try-catch** - Centralize error handling at the upper layer
 - **Unsolicited backward compatibility / legacy support** - Not needed unless explicitly instructed
 - **Internal implementation exported from public API** - Only export domain-level functions and types. Do not export infrastructure functions or internal classes

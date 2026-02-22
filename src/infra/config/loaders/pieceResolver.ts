@@ -9,14 +9,15 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import type { PieceConfig, PieceMovement, InteractiveMode } from '../../../core/models/index.js';
-import { getGlobalPiecesDir, getBuiltinPiecesDir, getProjectConfigDir } from '../paths.js';
+import { getGlobalPiecesDir, getBuiltinPiecesDir, getProjectConfigDir, getRepertoireDir } from '../paths.js';
+import { isScopeRef, parseScopeRef } from '../../../faceted-prompting/index.js';
 import { resolvePieceConfigValues } from '../resolvePieceConfigValue.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { loadPieceFromFile } from './pieceParser.js';
 
 const log = createLogger('piece-resolver');
 
-export type PieceSource = 'builtin' | 'user' | 'project';
+export type PieceSource = 'builtin' | 'user' | 'project' | 'repertoire';
 
 export interface PieceWithSource {
   config: PieceConfig;
@@ -136,12 +137,15 @@ export function isPiecePath(identifier: string): boolean {
 }
 
 /**
- * Load piece by identifier (auto-detects name vs path).
+ * Load piece by identifier (auto-detects @scope ref, file path, or piece name).
  */
 export function loadPieceByIdentifier(
   identifier: string,
   projectCwd: string,
 ): PieceConfig | null {
+  if (isScopeRef(identifier)) {
+    return loadRepertoirePieceByRef(identifier, projectCwd);
+  }
   if (isPiecePath(identifier)) {
     return loadPieceFromPath(identifier, projectCwd, projectCwd);
   }
@@ -346,7 +350,8 @@ function* iteratePieceDir(
   if (!existsSync(dir)) return;
   for (const entry of readdirSync(dir)) {
     const entryPath = join(dir, entry);
-    const stat = statSync(entryPath);
+    let stat: ReturnType<typeof statSync>;
+    try { stat = statSync(entryPath); } catch (e) { log.debug(`stat failed for ${entryPath}: ${getErrorMessage(e)}`); continue; }
 
     if (stat.isFile() && (entry.endsWith('.yaml') || entry.endsWith('.yml'))) {
       const pieceName = entry.replace(/\.ya?ml$/, '');
@@ -355,13 +360,12 @@ function* iteratePieceDir(
       continue;
     }
 
-    // 1-level subdirectory scan: directory name becomes the category
     if (stat.isDirectory()) {
       const category = entry;
       for (const subEntry of readdirSync(entryPath)) {
         if (!subEntry.endsWith('.yaml') && !subEntry.endsWith('.yml')) continue;
         const subEntryPath = join(entryPath, subEntry);
-        if (!statSync(subEntryPath).isFile()) continue;
+        try { if (!statSync(subEntryPath).isFile()) continue; } catch (e) { log.debug(`stat failed for ${subEntryPath}: ${getErrorMessage(e)}`); continue; }
         const pieceName = subEntry.replace(/\.ya?ml$/, '');
         const qualifiedName = `${category}/${pieceName}`;
         if (disabled?.includes(qualifiedName)) continue;
@@ -369,6 +373,46 @@ function* iteratePieceDir(
       }
     }
   }
+}
+
+/**
+ * Iterate piece YAML files in all repertoire packages.
+ * Qualified name format: @{owner}/{repo}/{piece-name}
+ */
+function* iterateRepertoirePieces(repertoireDir: string): Generator<PieceDirEntry> {
+  if (!existsSync(repertoireDir)) return;
+  for (const ownerEntry of readdirSync(repertoireDir)) {
+    if (!ownerEntry.startsWith('@')) continue;
+    const ownerPath = join(repertoireDir, ownerEntry);
+    try { if (!statSync(ownerPath).isDirectory()) continue; } catch (e) { log.debug(`stat failed for owner dir ${ownerPath}: ${getErrorMessage(e)}`); continue; }
+    const owner = ownerEntry.slice(1);
+    for (const repoEntry of readdirSync(ownerPath)) {
+      const repoPath = join(ownerPath, repoEntry);
+      try { if (!statSync(repoPath).isDirectory()) continue; } catch (e) { log.debug(`stat failed for repo dir ${repoPath}: ${getErrorMessage(e)}`); continue; }
+      const piecesDir = join(repoPath, 'pieces');
+      if (!existsSync(piecesDir)) continue;
+      for (const pieceFile of readdirSync(piecesDir)) {
+        if (!pieceFile.endsWith('.yaml') && !pieceFile.endsWith('.yml')) continue;
+        const piecePath = join(piecesDir, pieceFile);
+        try { if (!statSync(piecePath).isFile()) continue; } catch (e) { log.debug(`stat failed for piece file ${piecePath}: ${getErrorMessage(e)}`); continue; }
+        const pieceName = pieceFile.replace(/\.ya?ml$/, '');
+        yield { name: `@${owner}/${repoEntry}/${pieceName}`, path: piecePath, source: 'repertoire' };
+      }
+    }
+  }
+}
+
+/**
+ * Load a piece by @scope reference (@{owner}/{repo}/{piece-name}).
+ * Resolves to ~/.takt/repertoire/@{owner}/{repo}/pieces/{piece-name}.yaml
+ */
+function loadRepertoirePieceByRef(identifier: string, projectCwd: string): PieceConfig | null {
+  const scopeRef = parseScopeRef(identifier);
+  const repertoireDir = getRepertoireDir();
+  const piecesDir = join(repertoireDir, `@${scopeRef.owner}`, scopeRef.repo, 'pieces');
+  const filePath = resolvePieceFile(piecesDir, scopeRef.name);
+  if (!filePath) return null;
+  return loadPieceFromFile(filePath, projectCwd);
 }
 
 /** Get the 3-layer directory list (builtin → user → project-local) */
@@ -403,6 +447,15 @@ export function loadAllPiecesWithSources(cwd: string): Map<string, PieceWithSour
       } catch (err) {
         log.debug('Skipping invalid piece file', { path: entry.path, error: getErrorMessage(err) });
       }
+    }
+  }
+
+  const repertoireDir = getRepertoireDir();
+  for (const entry of iterateRepertoirePieces(repertoireDir)) {
+    try {
+      pieces.set(entry.name, { config: loadPieceFromFile(entry.path, cwd), source: entry.source });
+    } catch (err) {
+      log.debug('Skipping invalid repertoire piece file', { path: entry.path, error: getErrorMessage(err) });
     }
   }
 

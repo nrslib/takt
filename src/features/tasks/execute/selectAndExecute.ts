@@ -7,12 +7,11 @@
  */
 
 import {
-  listPieces,
+  loadPieceByIdentifier,
   isPiecePath,
 } from '../../../infra/config/index.js';
 import { confirm } from '../../../shared/prompt/index.js';
 import { createSharedClone, summarizeTaskName, getCurrentBranch, TaskRunner } from '../../../infra/task/index.js';
-import { DEFAULT_PIECE_NAME } from '../../../shared/constants.js';
 import { info, error, withProgress } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import { executeTask } from './taskExecution.js';
@@ -30,9 +29,8 @@ export async function determinePiece(cwd: string, override?: string): Promise<st
     if (isPiecePath(override)) {
       return override;
     }
-    const availablePieces = listPieces(cwd);
-    const knownPieces = availablePieces.length === 0 ? [DEFAULT_PIECE_NAME] : availablePieces;
-    if (!knownPieces.includes(override)) {
+    const resolvedPiece = loadPieceByIdentifier(override, cwd);
+    if (!resolvedPiece) {
       error(`Piece not found: ${override}`);
       return null;
     }

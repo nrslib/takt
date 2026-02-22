@@ -156,6 +156,7 @@ movements:
 | `takt #N` | GitHub Issue をタスクとして実行します |
 | `takt switch` | 使う piece を切り替えます |
 | `takt eject` | ビルトインの piece/persona をコピーしてカスタマイズできます |
+| `takt repertoire add` | GitHub から repertoire パッケージをインストールします |
 
 全コマンド・オプションは [CLI Reference](./cli-reference.ja.md) を参照してください。
 
@@ -223,10 +224,12 @@ takt --pipeline --task "バグを修正して" --auto-pr
 ~/.takt/                    # グローバル設定
 ├── config.yaml             # プロバイダー、モデル、言語など
 ├── pieces/                 # ユーザー定義の piece
-└── personas/               # ユーザー定義の persona
+├── facets/                 # ユーザー定義のファセット（personas, policies, knowledge など）
+└── repertoire/               # インストール済み repertoire パッケージ
 
 .takt/                      # プロジェクトレベル
 ├── config.yaml             # プロジェクト設定
+├── facets/                 # プロジェクトのファセット
 ├── tasks.yaml              # 積まれたタスク
 ├── tasks/                  # タスクの仕様書
 └── runs/                   # 実行レポート、ログ、コンテキスト
@@ -258,6 +261,7 @@ await engine.run();
 | [Agent Guide](./agents.md) | カスタムエージェントの設定 |
 | [Builtin Catalog](./builtin-catalog.ja.md) | ビルトイン piece・persona の一覧 |
 | [Faceted Prompting](./faceted-prompting.ja.md) | プロンプト設計の方法論 |
+| [Repertoire Packages](./repertoire.ja.md) | パッケージのインストール・共有 |
 | [Task Management](./task-management.ja.md) | タスクの追加・実行・隔離 |
 | [CI/CD Integration](./ci-cd.ja.md) | GitHub Actions・パイプラインモード |
 | [Changelog](../CHANGELOG.md) ([日本語](./CHANGELOG.ja.md)) | バージョン履歴 |

@@ -423,4 +423,5 @@ describe('executePiece: notification sound behavior', () => {
       expect(mockPlayWarningSound).not.toHaveBeenCalled();
     });
   });
+
 });

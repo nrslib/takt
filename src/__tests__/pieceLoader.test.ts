@@ -11,6 +11,7 @@ import {
   loadPieceByIdentifier,
   listPieces,
   loadAllPieces,
+  loadAllPiecesWithSources,
 } from '../infra/config/loaders/pieceLoader.js';
 
 const SAMPLE_PIECE = `name: test-piece
@@ -186,4 +187,99 @@ movements:
     expect(pieces.get('default')!.name).toBe('project-override');
   });
 
+});
+
+describe('loadPieceByIdentifier with @scope ref (repertoire)', () => {
+  let tempDir: string;
+  let configDir: string;
+  const originalTaktConfigDir = process.env.TAKT_CONFIG_DIR;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'takt-test-'));
+    configDir = mkdtempSync(join(tmpdir(), 'takt-config-'));
+    process.env.TAKT_CONFIG_DIR = configDir;
+  });
+
+  afterEach(() => {
+    if (originalTaktConfigDir !== undefined) {
+      process.env.TAKT_CONFIG_DIR = originalTaktConfigDir;
+    } else {
+      delete process.env.TAKT_CONFIG_DIR;
+    }
+    rmSync(tempDir, { recursive: true, force: true });
+    rmSync(configDir, { recursive: true, force: true });
+  });
+
+  it('should load piece by @scope ref (repertoire)', () => {
+    // Given: repertoire package with a piece file
+    const piecesDir = join(configDir, 'repertoire', '@nrslib', 'takt-ensemble', 'pieces');
+    mkdirSync(piecesDir, { recursive: true });
+    writeFileSync(join(piecesDir, 'expert.yaml'), SAMPLE_PIECE);
+
+    // When: piece is loaded via @scope ref
+    const piece = loadPieceByIdentifier('@nrslib/takt-ensemble/expert', tempDir);
+
+    // Then: the piece is resolved correctly
+    expect(piece).not.toBeNull();
+    expect(piece!.name).toBe('test-piece');
+  });
+
+  it('should return null for non-existent @scope piece', () => {
+    // Given: repertoire dir exists but the requested piece does not
+    const piecesDir = join(configDir, 'repertoire', '@nrslib', 'takt-ensemble', 'pieces');
+    mkdirSync(piecesDir, { recursive: true });
+
+    // When: a non-existent piece is requested
+    const piece = loadPieceByIdentifier('@nrslib/takt-ensemble/no-such-piece', tempDir);
+
+    // Then: null is returned
+    expect(piece).toBeNull();
+  });
+});
+
+describe('loadAllPiecesWithSources with repertoire pieces', () => {
+  let tempDir: string;
+  let configDir: string;
+  const originalTaktConfigDir = process.env.TAKT_CONFIG_DIR;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'takt-test-'));
+    configDir = mkdtempSync(join(tmpdir(), 'takt-config-'));
+    process.env.TAKT_CONFIG_DIR = configDir;
+  });
+
+  afterEach(() => {
+    if (originalTaktConfigDir !== undefined) {
+      process.env.TAKT_CONFIG_DIR = originalTaktConfigDir;
+    } else {
+      delete process.env.TAKT_CONFIG_DIR;
+    }
+    rmSync(tempDir, { recursive: true, force: true });
+    rmSync(configDir, { recursive: true, force: true });
+  });
+
+  it('should include repertoire pieces with @scope qualified names', () => {
+    // Given: repertoire package with a piece file
+    const piecesDir = join(configDir, 'repertoire', '@nrslib', 'takt-ensemble', 'pieces');
+    mkdirSync(piecesDir, { recursive: true });
+    writeFileSync(join(piecesDir, 'expert.yaml'), SAMPLE_PIECE);
+
+    // When: all pieces are loaded
+    const pieces = loadAllPiecesWithSources(tempDir);
+
+    // Then: the repertoire piece is included with 'repertoire' source
+    expect(pieces.has('@nrslib/takt-ensemble/expert')).toBe(true);
+    expect(pieces.get('@nrslib/takt-ensemble/expert')!.source).toBe('repertoire');
+  });
+
+  it('should not throw when repertoire dir does not exist', () => {
+    // Given: no repertoire dir created (configDir/repertoire does not exist)
+
+    // When: all pieces are loaded
+    const pieces = loadAllPiecesWithSources(tempDir);
+
+    // Then: no @scope pieces are present and no error thrown
+    const repertoirePieces = Array.from(pieces.keys()).filter((k) => k.startsWith('@'));
+    expect(repertoirePieces).toHaveLength(0);
+  });
 });

@@ -325,6 +325,40 @@ function buildCategoryTree(
   return result;
 }
 
+/**
+ * Append a "repertoire" category containing all @scope pieces.
+ * Creates one subcategory per @owner/repo package.
+ * Marks repertoire piece names as categorized (prevents them from appearing in "Others").
+ */
+function appendRepertoireCategory(
+  categories: PieceCategoryNode[],
+  allPieces: Map<string, PieceWithSource>,
+  categorized: Set<string>,
+): PieceCategoryNode[] {
+  const packagePieces = new Map<string, string[]>();
+  for (const [pieceName] of allPieces.entries()) {
+    if (!pieceName.startsWith('@')) continue;
+    const withoutAt = pieceName.slice(1);
+    const firstSlash = withoutAt.indexOf('/');
+    if (firstSlash < 0) continue;
+    const secondSlash = withoutAt.indexOf('/', firstSlash + 1);
+    if (secondSlash < 0) continue;
+    const owner = withoutAt.slice(0, firstSlash);
+    const repo = withoutAt.slice(firstSlash + 1, secondSlash);
+    const packageKey = `@${owner}/${repo}`;
+    const piecesList = packagePieces.get(packageKey) ?? [];
+    piecesList.push(pieceName);
+    packagePieces.set(packageKey, piecesList);
+    categorized.add(pieceName);
+  }
+  if (packagePieces.size === 0) return categories;
+  const repertoireChildren: PieceCategoryNode[] = [];
+  for (const [packageKey, pieces] of packagePieces.entries()) {
+    repertoireChildren.push({ name: packageKey, pieces, children: [] });
+  }
+  return [...categories, { name: 'repertoire', pieces: [], children: repertoireChildren }];
+}
+
 function appendOthersCategory(
   categories: PieceCategoryNode[],
   allPieces: Map<string, PieceWithSource>,
@@ -381,10 +415,11 @@ export function buildCategorizedPieces(
 
   const categorized = new Set<string>();
   const categories = buildCategoryTree(config.pieceCategories, allPieces, categorized);
+  const categoriesWithEnsemble = appendRepertoireCategory(categories, allPieces, categorized);
 
   const finalCategories = config.showOthersCategory
-    ? appendOthersCategory(categories, allPieces, categorized, config.othersCategoryName)
-    : categories;
+    ? appendOthersCategory(categoriesWithEnsemble, allPieces, categorized, config.othersCategoryName)
+    : categoriesWithEnsemble;
 
   return {
     categories: finalCategories,

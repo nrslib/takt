@@ -84,7 +84,7 @@ describe('resolveFacetByName', () => {
   });
 
   it('should resolve from project layer over builtin', () => {
-    const projectPersonasDir = join(projectDir, '.takt', 'personas');
+    const projectPersonasDir = join(projectDir, '.takt', 'facets', 'personas');
     mkdirSync(projectPersonasDir, { recursive: true });
     writeFileSync(join(projectPersonasDir, 'coder.md'), 'Project-level coder persona');
 
@@ -98,7 +98,7 @@ describe('resolveFacetByName', () => {
   });
 
   it('should resolve different facet types', () => {
-    const projectPoliciesDir = join(projectDir, '.takt', 'policies');
+    const projectPoliciesDir = join(projectDir, '.takt', 'facets', 'policies');
     mkdirSync(projectPoliciesDir, { recursive: true });
     writeFileSync(join(projectPoliciesDir, 'custom-policy.md'), 'Custom policy content');
 
@@ -108,7 +108,7 @@ describe('resolveFacetByName', () => {
 
   it('should try project before builtin', () => {
     // Create project override
-    const projectPersonasDir = join(projectDir, '.takt', 'personas');
+    const projectPersonasDir = join(projectDir, '.takt', 'facets', 'personas');
     mkdirSync(projectPersonasDir, { recursive: true });
     writeFileSync(join(projectPersonasDir, 'coder.md'), 'OVERRIDE');
 
@@ -137,7 +137,7 @@ describe('resolveRefToContent with layer resolution', () => {
   });
 
   it('should use layer resolution for name refs when not in resolvedMap', () => {
-    const policiesDir = join(tempDir, '.takt', 'policies');
+    const policiesDir = join(tempDir, '.takt', 'facets', 'policies');
     mkdirSync(policiesDir, { recursive: true });
     writeFileSync(join(policiesDir, 'coding.md'), 'Project coding policy');
 
@@ -189,7 +189,7 @@ describe('resolveRefList with layer resolution', () => {
   });
 
   it('should resolve array of name refs via layer resolution', () => {
-    const policiesDir = join(tempDir, '.takt', 'policies');
+    const policiesDir = join(tempDir, '.takt', 'facets', 'policies');
     mkdirSync(policiesDir, { recursive: true });
     writeFileSync(join(policiesDir, 'policy-a.md'), 'Policy A content');
     writeFileSync(join(policiesDir, 'policy-b.md'), 'Policy B content');
@@ -206,7 +206,7 @@ describe('resolveRefList with layer resolution', () => {
   });
 
   it('should handle mixed array of name refs and path refs', () => {
-    const policiesDir = join(tempDir, '.takt', 'policies');
+    const policiesDir = join(tempDir, '.takt', 'facets', 'policies');
     mkdirSync(policiesDir, { recursive: true });
     writeFileSync(join(policiesDir, 'name-policy.md'), 'Name-resolved policy');
 
@@ -230,7 +230,7 @@ describe('resolveRefList with layer resolution', () => {
   });
 
   it('should handle single string ref (not array)', () => {
-    const policiesDir = join(tempDir, '.takt', 'policies');
+    const policiesDir = join(tempDir, '.takt', 'facets', 'policies');
     mkdirSync(policiesDir, { recursive: true });
     writeFileSync(join(policiesDir, 'single.md'), 'Single policy');
 
@@ -284,7 +284,7 @@ describe('resolvePersona with layer resolution', () => {
   });
 
   it('should resolve persona from project layer', () => {
-    const projectPersonasDir = join(projectDir, '.takt', 'personas');
+    const projectPersonasDir = join(projectDir, '.takt', 'facets', 'personas');
     mkdirSync(projectPersonasDir, { recursive: true });
     const personaPath = join(projectPersonasDir, 'custom-persona.md');
     writeFileSync(personaPath, 'Custom persona content');
@@ -416,7 +416,7 @@ describe('normalizePieceConfig with layer resolution', () => {
 
   it('should resolve policy by name when section map is absent', () => {
     // Create project-level policy
-    const policiesDir = join(projectDir, '.takt', 'policies');
+    const policiesDir = join(projectDir, '.takt', 'facets', 'policies');
     mkdirSync(policiesDir, { recursive: true });
     writeFileSync(join(policiesDir, 'custom-policy.md'), '# Custom Policy\nBe nice.');
 
@@ -486,7 +486,7 @@ describe('normalizePieceConfig with layer resolution', () => {
   });
 
   it('should resolve knowledge by name from project layer', () => {
-    const knowledgeDir = join(projectDir, '.takt', 'knowledge');
+    const knowledgeDir = join(projectDir, '.takt', 'facets', 'knowledge');
     mkdirSync(knowledgeDir, { recursive: true });
     writeFileSync(join(knowledgeDir, 'domain-kb.md'), '# Domain Knowledge');
 
@@ -532,7 +532,7 @@ describe('normalizePieceConfig with layer resolution', () => {
   });
 
   it('should resolve instruction_template by name via layer resolution', () => {
-    const instructionsDir = join(projectDir, '.takt', 'instructions');
+    const instructionsDir = join(projectDir, '.takt', 'facets', 'instructions');
     mkdirSync(instructionsDir, { recursive: true });
     writeFileSync(join(instructionsDir, 'implement.md'), 'Project implement template');
 
@@ -576,7 +576,7 @@ Second line remains inline.`;
   });
 
   it('should resolve loop monitor judge instruction_template via layer resolution', () => {
-    const instructionsDir = join(projectDir, '.takt', 'instructions');
+    const instructionsDir = join(projectDir, '.takt', 'facets', 'instructions');
     mkdirSync(instructionsDir, { recursive: true });
     writeFileSync(join(instructionsDir, 'judge-template.md'), 'Project judge template');
 

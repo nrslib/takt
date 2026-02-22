@@ -49,3 +49,14 @@ export {
   extractPersonaDisplayName,
   resolvePersona,
 } from './resolve.js';
+
+// Scope reference resolution
+export type { ScopeRef } from './scope.js';
+export {
+  isScopeRef,
+  parseScopeRef,
+  resolveScopeRef,
+  validateScopeOwner,
+  validateScopeRepo,
+  validateScopeFacetName,
+} from './scope.js';

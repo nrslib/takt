@@ -18,6 +18,7 @@ import { EXIT_SIGINT } from '../../../shared/exitCodes.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import { executeAndCompleteTask } from './taskExecution.js';
 import { ShutdownManager } from './shutdownManager.js';
+import { isInputWaiting } from './inputWait.js';
 import type { TaskExecutionOptions } from './types.js';
 
 const log = createLogger('worker-pool');
@@ -169,7 +170,7 @@ export async function runWithWorkerPool(
         }
       }
 
-      if (!abortController.signal.aborted) {
+      if (!abortController.signal.aborted && !isInputWaiting()) {
         const freeSlots = concurrency - active.size;
         if (freeSlots > 0) {
           const newTasks = taskRunner.claimNextTasks(freeSlots);

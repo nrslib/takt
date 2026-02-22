@@ -12,6 +12,7 @@ import type { Language } from '../../core/models/index.js';
 import { getLanguageResourcesDir } from '../resources/index.js';
 
 import type { FacetKind } from '../../faceted-prompting/index.js';
+import { REPERTOIRE_DIR_NAME } from '../../features/repertoire/constants.js';
 
 /** Facet types used in layer resolution */
 export type { FacetKind as FacetType } from '../../faceted-prompting/index.js';
@@ -48,9 +49,9 @@ export function getBuiltinPiecesDir(lang: Language): string {
   return join(getLanguageResourcesDir(lang), 'pieces');
 }
 
-/** Get builtin personas directory (builtins/{lang}/personas) */
+/** Get builtin personas directory (builtins/{lang}/facets/personas) */
 export function getBuiltinPersonasDir(lang: Language): string {
-  return join(getLanguageResourcesDir(lang), 'personas');
+  return join(getLanguageResourcesDir(lang), 'facets', 'personas');
 }
 
 /** Get project takt config directory (.takt in project) */
@@ -90,19 +91,41 @@ export function ensureDir(dirPath: string): void {
   }
 }
 
-/** Get project facet directory (.takt/{facetType} in project) */
+/** Get project facet directory (.takt/facets/{facetType} in project) */
 export function getProjectFacetDir(projectDir: string, facetType: FacetType): string {
-  return join(getProjectConfigDir(projectDir), facetType);
+  return join(getProjectConfigDir(projectDir), 'facets', facetType);
 }
 
-/** Get global facet directory (~/.takt/{facetType}) */
+/** Get global facet directory (~/.takt/facets/{facetType}) */
 export function getGlobalFacetDir(facetType: FacetType): string {
-  return join(getGlobalConfigDir(), facetType);
+  return join(getGlobalConfigDir(), 'facets', facetType);
 }
 
-/** Get builtin facet directory (builtins/{lang}/{facetType}) */
+/** Get builtin facet directory (builtins/{lang}/facets/{facetType}) */
 export function getBuiltinFacetDir(lang: Language, facetType: FacetType): string {
-  return join(getLanguageResourcesDir(lang), facetType);
+  return join(getLanguageResourcesDir(lang), 'facets', facetType);
+}
+
+/** Get repertoire directory (~/.takt/repertoire/) */
+export function getRepertoireDir(): string {
+  return join(getGlobalConfigDir(), REPERTOIRE_DIR_NAME);
+}
+
+/** Get repertoire package directory (~/.takt/repertoire/@{owner}/{repo}/) */
+export function getRepertoirePackageDir(owner: string, repo: string): string {
+  return join(getRepertoireDir(), `@${owner}`, repo);
+}
+
+/**
+ * Get repertoire facet directory.
+ *
+ * Defaults to the global repertoire dir when repertoireDir is not specified.
+ * Pass repertoireDir explicitly when resolving facets within a custom repertoire root
+ * (e.g. the package-local resolution layer).
+ */
+export function getRepertoireFacetDir(owner: string, repo: string, facetType: FacetType, repertoireDir?: string): string {
+  const base = repertoireDir ?? getRepertoireDir();
+  return join(base, `@${owner}`, repo, 'facets', facetType);
 }
 
 /** Validate path is safe (no directory traversal) */

@@ -14,6 +14,9 @@ import {
   getGlobalPiecesDir,
   getBuiltinPersonasDir,
   getBuiltinPiecesDir,
+  getGlobalFacetDir,
+  getProjectFacetDir,
+  getRepertoireDir,
   isPathSafe,
 } from '../paths.js';
 import { resolveConfigValue } from '../resolveConfigValue.js';
@@ -26,6 +29,9 @@ function getAllowedPromptBases(cwd: string): string[] {
     getGlobalPiecesDir(),
     getBuiltinPersonasDir(lang),
     getBuiltinPiecesDir(lang),
+    getGlobalFacetDir('personas'),
+    getProjectFacetDir(cwd, 'personas'),
+    getRepertoireDir(),
   ];
 }
 

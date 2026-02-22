@@ -10,6 +10,7 @@ import type { PieceExecutionResult, PieceExecutionOptions } from './types.js';
 import { detectRuleIndex } from '../../../shared/utils/ruleIndex.js';
 import { interruptAllQueries } from '../../../infra/claude/query-manager.js';
 import { callAiJudge } from '../../../agents/ai-judge.js';
+import { enterInputWait, leaveInputWait } from './inputWait.js';
 
 export type { PieceExecutionResult, PieceExecutionOptions };
 
@@ -398,32 +399,37 @@ export async function executePiece(
       playWarningSound();
     }
 
-    const action = await selectOption(getLabel('piece.iterationLimit.continueQuestion'), [
-      {
-        label: getLabel('piece.iterationLimit.continueLabel'),
-        value: 'continue',
-        description: getLabel('piece.iterationLimit.continueDescription'),
-      },
-      { label: getLabel('piece.iterationLimit.stopLabel'), value: 'stop' },
-    ]);
+    enterInputWait();
+    try {
+      const action = await selectOption(getLabel('piece.iterationLimit.continueQuestion'), [
+        {
+          label: getLabel('piece.iterationLimit.continueLabel'),
+          value: 'continue',
+          description: getLabel('piece.iterationLimit.continueDescription'),
+        },
+        { label: getLabel('piece.iterationLimit.stopLabel'), value: 'stop' },
+      ]);
 
-    if (action !== 'continue') {
-      return null;
-    }
-
-    while (true) {
-      const input = await promptInput(getLabel('piece.iterationLimit.inputPrompt'));
-      if (!input) {
+      if (action !== 'continue') {
         return null;
       }
 
-      const additionalIterations = Number.parseInt(input, 10);
-      if (Number.isInteger(additionalIterations) && additionalIterations > 0) {
-        pieceConfig.maxMovements = request.maxMovements + additionalIterations;
-        return additionalIterations;
-      }
+      while (true) {
+        const input = await promptInput(getLabel('piece.iterationLimit.inputPrompt'));
+        if (!input) {
+          return null;
+        }
 
-      out.warn(getLabel('piece.iterationLimit.invalidInput'));
+        const additionalIterations = Number.parseInt(input, 10);
+        if (Number.isInteger(additionalIterations) && additionalIterations > 0) {
+          pieceConfig.maxMovements = request.maxMovements + additionalIterations;
+          return additionalIterations;
+        }
+
+        out.warn(getLabel('piece.iterationLimit.invalidInput'));
+      }
+    } finally {
+      leaveInputWait();
     }
   };
 

@@ -188,7 +188,7 @@ describe('review-only piece (JA)', () => {
 
 describe('pr-commenter persona files', () => {
   it('should exist for EN with domain knowledge', () => {
-    const filePath = join(RESOURCES_DIR, 'en', 'personas', 'pr-commenter.md');
+    const filePath = join(RESOURCES_DIR, 'en', 'facets', 'personas', 'pr-commenter.md');
     const content = readFileSync(filePath, 'utf-8');
     expect(content).toContain('PR Commenter');
     expect(content).toContain('gh api');
@@ -196,7 +196,7 @@ describe('pr-commenter persona files', () => {
   });
 
   it('should exist for JA with domain knowledge', () => {
-    const filePath = join(RESOURCES_DIR, 'ja', 'personas', 'pr-commenter.md');
+    const filePath = join(RESOURCES_DIR, 'ja', 'facets', 'personas', 'pr-commenter.md');
     const content = readFileSync(filePath, 'utf-8');
     expect(content).toContain('PR Commenter');
     expect(content).toContain('gh api');
@@ -204,7 +204,7 @@ describe('pr-commenter persona files', () => {
   });
 
   it('should NOT contain piece-specific report names (EN)', () => {
-    const filePath = join(RESOURCES_DIR, 'en', 'personas', 'pr-commenter.md');
+    const filePath = join(RESOURCES_DIR, 'en', 'facets', 'personas', 'pr-commenter.md');
     const content = readFileSync(filePath, 'utf-8');
     // Persona should not reference specific review-only piece report files
     expect(content).not.toContain('01-architect-review.md');
@@ -218,7 +218,7 @@ describe('pr-commenter persona files', () => {
   });
 
   it('should NOT contain piece-specific report names (JA)', () => {
-    const filePath = join(RESOURCES_DIR, 'ja', 'personas', 'pr-commenter.md');
+    const filePath = join(RESOURCES_DIR, 'ja', 'facets', 'personas', 'pr-commenter.md');
     const content = readFileSync(filePath, 'utf-8');
     expect(content).not.toContain('01-architect-review.md');
     expect(content).not.toContain('02-security-review.md');

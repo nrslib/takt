@@ -6,7 +6,9 @@ Use reports in the Report Directory as the primary source of truth. If additiona
 - Add unit tests for newly created classes and functions
 - Update relevant tests when modifying existing code
 - Test file placement: follow the project's conventions
-- Running tests is mandatory. After completing implementation, always run tests and verify results
+- Build verification is mandatory. After completing implementation, run the build (type check) and verify there are no type errors
+- Running tests is mandatory. After build succeeds, always run tests and verify results
+- When introducing new contract strings (file names, config key names, etc.), define them as constants in one place
 
 **Scope output contract (create at the start of implementation):**
 ```markdown
@@ -43,5 +45,7 @@ Small / Medium / Large
 - {Summary of actions taken}
 ## Changes made
 - {Summary of changes}
+## Build results
+- {Build execution results}
 ## Test results
-- {Command executed and results}
+- {Test command executed and results}

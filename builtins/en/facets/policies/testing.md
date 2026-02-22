@@ -10,6 +10,7 @@ Every behavior change requires a corresponding test, and every bug fix requires 
 | One test, one concept | Do not mix multiple concerns in a single test |
 | Test behavior | Test behavior, not implementation details |
 | Independence | Do not depend on other tests or execution order |
+| Type safety | Code must pass the build (type check) |
 | Reproducibility | Do not depend on time or randomness. Same result every run |
 
 ## Coverage Criteria
@@ -19,6 +20,7 @@ Every behavior change requires a corresponding test, and every bug fix requires 
 | New behavior | Test required. REJECT if missing |
 | Bug fix | Regression test required. REJECT if missing |
 | Behavior change | Test update required. REJECT if missing |
+| Build (type check) | Build must succeed. REJECT if it fails |
 | Edge cases / boundary values | Test recommended (Warning) |
 
 ## Test Priority

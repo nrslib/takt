@@ -97,6 +97,10 @@ export async function confirm(message: string, defaultYes = true): Promise<boole
   const { useTty, forceTouchTty } = resolveTtyPolicy();
   assertTtyIfForced(forceTouchTty);
   if (!useTty) {
+    // Support piped stdin (e.g. echo "y" | takt repertoire add ...)
+    if (!process.stdin.isTTY && process.stdin.readable && !process.stdin.destroyed) {
+      return readConfirmFromPipe(defaultYes);
+    }
     return defaultYes;
   }
   const rl = readline.createInterface({
@@ -119,6 +123,32 @@ export async function confirm(message: string, defaultYes = true): Promise<boole
       }
 
       resolve(trimmed === 'y' || trimmed === 'yes');
+    });
+  });
+}
+
+function readConfirmFromPipe(defaultYes: boolean): Promise<boolean> {
+  const rl = readline.createInterface({ input: process.stdin });
+
+  return new Promise((resolve) => {
+    let resolved = false;
+
+    rl.once('line', (line) => {
+      resolved = true;
+      rl.close();
+      pauseStdinSafely();
+      const trimmed = line.trim().toLowerCase();
+      if (!trimmed) {
+        resolve(defaultYes);
+        return;
+      }
+      resolve(trimmed === 'y' || trimmed === 'yes');
+    });
+
+    rl.once('close', () => {
+      if (!resolved) {
+        resolve(defaultYes);
+      }
     });
   });
 }

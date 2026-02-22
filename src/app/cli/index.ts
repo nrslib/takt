@@ -7,6 +7,8 @@
  */
 
 import { checkForUpdates } from '../../shared/utils/index.js';
+import { getErrorMessage } from '../../shared/utils/error.js';
+import { error as errorLog } from '../../shared/ui/index.js';
 
 checkForUpdates();
 
@@ -41,6 +43,6 @@ import { executeDefaultAction } from './routing.js';
     process.exit(0);
   }
 })().catch((err) => {
-  console.error(err);
+  errorLog(getErrorMessage(err));
   process.exit(1);
 });

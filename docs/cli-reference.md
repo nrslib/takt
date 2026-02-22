@@ -300,6 +300,26 @@ takt metrics review
 takt metrics review --since 7d
 ```
 
+### takt repertoire
+
+Manage repertoire packages (external TAKT packages from GitHub).
+
+```bash
+# Install a package from GitHub
+takt repertoire add github:{owner}/{repo}@{ref}
+
+# Install from default branch
+takt repertoire add github:{owner}/{repo}
+
+# List installed packages
+takt repertoire list
+
+# Remove a package
+takt repertoire remove @{owner}/{repo}
+```
+
+Installed packages are stored in `~/.takt/repertoire/` and their pieces/facets become available in piece selection and facet resolution.
+
 ### takt purge
 
 Purge old analytics event files.

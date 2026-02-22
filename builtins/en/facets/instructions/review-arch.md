@@ -8,6 +8,7 @@ Do not review AI-specific issues (already covered by the ai_review movement).
 - Test coverage
 - Dead code
 - Call chain verification
+- Scattered hardcoding of contract strings (file names, config key names)
 
 **Previous finding tracking (required):**
 - First, extract open findings from "Previous Response"
