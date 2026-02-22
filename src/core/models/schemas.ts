@@ -487,6 +487,7 @@ export const GlobalConfigSchema = z.object({
 export const ProjectConfigSchema = z.object({
   piece: z.string().optional(),
   provider: z.enum(['claude', 'codex', 'opencode', 'mock']).optional(),
+  model: z.string().optional(),
   provider_options: MovementProviderOptionsSchema,
   provider_profiles: ProviderPermissionProfilesSchema,
 });

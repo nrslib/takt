@@ -116,6 +116,8 @@ function getLocalLayerValue<K extends ConfigParameterKey>(
       return project.piece as LoadedConfig[K] | undefined;
     case 'provider':
       return project.provider as LoadedConfig[K] | undefined;
+    case 'model':
+      return project.model as LoadedConfig[K] | undefined;
     case 'autoPr':
       return project.auto_pr as LoadedConfig[K] | undefined;
     case 'draftPr':

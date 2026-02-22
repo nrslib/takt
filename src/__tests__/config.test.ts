@@ -501,6 +501,60 @@ describe('analytics config resolution', () => {
   });
 });
 
+describe('model config resolution', () => {
+  let testDir: string;
+  let originalTaktConfigDir: string | undefined;
+
+  beforeEach(() => {
+    testDir = join(tmpdir(), `takt-test-${randomUUID()}`);
+    mkdirSync(testDir, { recursive: true });
+    originalTaktConfigDir = process.env.TAKT_CONFIG_DIR;
+    process.env.TAKT_CONFIG_DIR = join(testDir, 'global-takt');
+    invalidateGlobalConfigCache();
+  });
+
+  afterEach(() => {
+    if (originalTaktConfigDir === undefined) {
+      delete process.env.TAKT_CONFIG_DIR;
+    } else {
+      process.env.TAKT_CONFIG_DIR = originalTaktConfigDir;
+    }
+    invalidateGlobalConfigCache();
+
+    if (existsSync(testDir)) {
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should resolve project model over global model', () => {
+    const projectConfigDir = getProjectConfigDir(testDir);
+    mkdirSync(projectConfigDir, { recursive: true });
+    writeFileSync(join(projectConfigDir, 'config.yaml'), 'piece: default\nmodel: project-model\n');
+
+    const globalConfigDir = process.env.TAKT_CONFIG_DIR!;
+    mkdirSync(globalConfigDir, { recursive: true });
+    writeFileSync(join(globalConfigDir, 'config.yaml'), 'model: global-model\n');
+
+    expect(resolveConfigValue(testDir, 'model')).toBe('project-model');
+  });
+
+  it('should fallback to global model when project model is not set', () => {
+    const projectConfigDir = getProjectConfigDir(testDir);
+    mkdirSync(projectConfigDir, { recursive: true });
+    writeFileSync(join(projectConfigDir, 'config.yaml'), 'piece: default\n');
+
+    const globalConfigDir = process.env.TAKT_CONFIG_DIR!;
+    mkdirSync(globalConfigDir, { recursive: true });
+    writeFileSync(join(globalConfigDir, 'config.yaml'), 'model: global-model\n');
+
+    expect(resolveConfigValue(testDir, 'model')).toBe('global-model');
+  });
+
+  it('should return undefined when neither project nor global model is set', () => {
+    expect(resolveConfigValue(testDir, 'model')).toBeUndefined();
+  });
+});
+
 describe('isVerboseMode', () => {
   let testDir: string;
   let originalTaktConfigDir: string | undefined;
