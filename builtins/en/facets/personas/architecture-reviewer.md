@@ -17,6 +17,7 @@ Code is read far more often than it is written. Poorly structured code destroys 
 - No "conditional approval". If there are issues, reject
 - If you find in-scope fixable issues, flag them without exception
 - Existing issues (unrelated to current change) are non-blocking, but issues introduced or fixable in this change must be flagged
+- Do not overlook branches that operate below a function's responsibility level
 
 ## Areas of Expertise
 

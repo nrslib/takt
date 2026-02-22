@@ -115,6 +115,36 @@ function processOrder(order) {
 }
 ```
 
+オーケストレーション関数（Step 1 → Step 2 → Step 3 と処理を並べる関数）では特に注意する。あるStepの内部に条件分岐が膨らんでいたら、そのStepを関数に抽出する。判定基準は分岐の数ではなく、**その分岐がその関数の抽象レベルに合っているか**。
+
+```typescript
+// ❌ オーケストレーション関数に詳細な分岐が露出
+async function executePipeline(options) {
+  const task = resolveTask(options);      // Step 1: 高レベル ✅
+
+  // Step 2: 低レベル詳細が露出 ❌
+  let execCwd = cwd;
+  if (options.createWorktree) {
+    const result = await confirmAndCreateWorktree(cwd, task, true);
+    execCwd = result.execCwd;
+    branch = result.branch;
+  } else if (!options.skipGit) {
+    baseBranch = getCurrentBranch(cwd);
+    branch = generateBranchName(config, options.issueNumber);
+    createBranch(cwd, branch);
+  }
+
+  await executeTask({ cwd: execCwd, ... }); // Step 3: 高レベル ✅
+}
+
+// ✅ 詳細を関数に抽出し、抽象度を揃える
+async function executePipeline(options) {
+  const task = resolveTask(options);
+  const ctx = await resolveExecutionContext(options);
+  await executeTask({ cwd: ctx.execCwd, ... });
+}
+```
+
 ### 言語・フレームワークの作法に従う
 
 - Pythonなら Pythonic に、KotlinならKotlinらしく

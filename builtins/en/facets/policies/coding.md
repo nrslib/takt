@@ -115,6 +115,36 @@ function processOrder(order) {
 }
 ```
 
+In orchestration functions (Step 1 → Step 2 → Step 3), pay special attention. If an individual step's internals expand with conditional branches, extract that step into a function. The criterion is not the number of branches, but **whether the branch belongs at the function's abstraction level**.
+
+```typescript
+// ❌ Low-level branching exposed in orchestration function
+async function executePipeline(options) {
+  const task = resolveTask(options);      // Step 1: high level ✅
+
+  // Step 2: low-level details exposed ❌
+  let execCwd = cwd;
+  if (options.createWorktree) {
+    const result = await confirmAndCreateWorktree(cwd, task, true);
+    execCwd = result.execCwd;
+    branch = result.branch;
+  } else if (!options.skipGit) {
+    baseBranch = getCurrentBranch(cwd);
+    branch = generateBranchName(config, options.issueNumber);
+    createBranch(cwd, branch);
+  }
+
+  await executeTask({ cwd: execCwd, ... }); // Step 3: high level ✅
+}
+
+// ✅ Extract details, keep abstraction levels consistent
+async function executePipeline(options) {
+  const task = resolveTask(options);
+  const ctx = await resolveExecutionContext(options);
+  await executeTask({ cwd: ctx.execCwd, ... });
+}
+```
+
 ### Follow Language and Framework Conventions
 
 - Write Pythonic Python, idiomatic Kotlin, etc.
