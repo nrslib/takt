@@ -23,7 +23,9 @@ import { stageAndCommit, resolveBaseBranch } from '../../infra/task/index.js';
 import { executeTask, confirmAndCreateWorktree, type TaskExecutionOptions, type PipelineExecutionOptions } from '../tasks/index.js';
 import { resolveConfigValues } from '../../infra/config/index.js';
 import { info, error, success, status, blankLine } from '../../shared/ui/index.js';
-import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
+import { createLogger, getErrorMessage, getSlackWebhookUrl, sendSlackNotification, buildSlackRunSummary } from '../../shared/utils/index.js';
+import type { SlackTaskDetail } from '../../shared/utils/index.js';
+import { generateRunId } from '../tasks/execute/slackSummaryAdapter.js';
 import type { PipelineConfig } from '../../core/models/index.js';
 import {
   EXIT_ISSUE_FETCH_FAILED,
@@ -148,122 +150,170 @@ export async function executePipeline(options: PipelineExecutionOptions): Promis
   let issue: GitHubIssue | undefined;
   let task: string;
 
-  // --- Step 1: Resolve task content ---
-  if (options.issueNumber) {
-    info(`Fetching issue #${options.issueNumber}...`);
-    try {
-      const ghStatus = checkGhCli();
-      if (!ghStatus.available) {
-        error(ghStatus.error ?? 'gh CLI is not available');
+  const startTime = Date.now();
+  const runId = generateRunId();
+  let pipelineResult: PipelineResult = { success: false, piece, issueNumber: options.issueNumber };
+
+  try {
+    // --- Step 1: Resolve task content ---
+    if (options.issueNumber) {
+      info(`Fetching issue #${options.issueNumber}...`);
+      try {
+        const ghStatus = checkGhCli();
+        if (!ghStatus.available) {
+          error(ghStatus.error ?? 'gh CLI is not available');
+          return EXIT_ISSUE_FETCH_FAILED;
+        }
+        issue = fetchIssue(options.issueNumber);
+        task = formatIssueAsTask(issue);
+        success(`Issue #${options.issueNumber} fetched: "${issue.title}"`);
+      } catch (err) {
+        error(`Failed to fetch issue #${options.issueNumber}: ${getErrorMessage(err)}`);
         return EXIT_ISSUE_FETCH_FAILED;
       }
-      issue = fetchIssue(options.issueNumber);
-      task = formatIssueAsTask(issue);
-      success(`Issue #${options.issueNumber} fetched: "${issue.title}"`);
-    } catch (err) {
-      error(`Failed to fetch issue #${options.issueNumber}: ${getErrorMessage(err)}`);
+    } else if (options.task) {
+      task = options.task;
+    } else {
+      error('Either --issue or --task must be specified');
       return EXIT_ISSUE_FETCH_FAILED;
     }
-  } else if (options.task) {
-    task = options.task;
-  } else {
-    error('Either --issue or --task must be specified');
-    return EXIT_ISSUE_FETCH_FAILED;
-  }
 
-  // --- Step 2: Prepare execution environment ---
-  let context: ExecutionContext;
-  try {
-    context = await resolveExecutionContext(cwd, task, options, pipelineConfig);
-  } catch (err) {
-    error(`Failed to prepare execution environment: ${getErrorMessage(err)}`);
-    return EXIT_GIT_OPERATION_FAILED;
-  }
-  const { execCwd, branch, baseBranch, isWorktree } = context;
-
-  // --- Step 3: Run piece ---
-  info(`Running piece: ${piece}`);
-  log.info('Pipeline piece execution starting', { piece, branch, skipGit, issueNumber: options.issueNumber });
-
-  const agentOverrides: TaskExecutionOptions | undefined = (options.provider || options.model)
-    ? { provider: options.provider, model: options.model }
-    : undefined;
-
-  const taskSuccess = await executeTask({
-    task,
-    cwd: execCwd,
-    pieceIdentifier: piece,
-    projectCwd: cwd,
-    agentOverrides,
-  });
-
-  if (!taskSuccess) {
-    error(`Piece '${piece}' failed`);
-    return EXIT_PIECE_FAILED;
-  }
-  success(`Piece '${piece}' completed`);
-
-  // --- Step 4: Commit & push (skip if --skip-git) ---
-  if (!skipGit && branch) {
-    const commitMessage = buildCommitMessage(pipelineConfig, issue, options.task);
-
-    info('Committing changes...');
+    // --- Step 2: Prepare execution environment ---
+    let context: ExecutionContext;
     try {
-      const commitHash = stageAndCommit(execCwd, commitMessage);
-      if (commitHash) {
-        success(`Changes committed: ${commitHash}`);
-      } else {
-        info('No changes to commit');
-      }
-
-      if (isWorktree) {
-        // Clone has no origin — push to main project via path, then project pushes to origin
-        execFileSync('git', ['push', cwd, 'HEAD'], { cwd: execCwd, stdio: 'pipe' });
-      }
-
-      info(`Pushing to origin/${branch}...`);
-      pushBranch(cwd, branch);
-      success(`Pushed to origin/${branch}`);
+      context = await resolveExecutionContext(cwd, task, options, pipelineConfig);
     } catch (err) {
-      error(`Git operation failed: ${getErrorMessage(err)}`);
+      error(`Failed to prepare execution environment: ${getErrorMessage(err)}`);
       return EXIT_GIT_OPERATION_FAILED;
     }
-  }
+    const { execCwd, branch, baseBranch, isWorktree } = context;
+    pipelineResult = { ...pipelineResult, branch };
 
-  // --- Step 5: Create PR (if --auto-pr) ---
-  if (autoPr) {
-    if (skipGit) {
-      info('--auto-pr is ignored when --skip-git is specified (no push was performed)');
-    } else if (branch) {
-      info('Creating pull request...');
-      const prTitle = issue ? issue.title : (options.task ?? 'Pipeline task');
-      const report = `Piece \`${piece}\` completed successfully.`;
-      const prBody = buildPipelinePrBody(pipelineConfig, issue, report);
+    // --- Step 3: Run piece ---
+    info(`Running piece: ${piece}`);
+    log.info('Pipeline piece execution starting', { piece, branch, skipGit, issueNumber: options.issueNumber });
 
-      const prResult = createPullRequest(cwd, {
-        branch,
-        title: prTitle,
-        body: prBody,
-        base: baseBranch,
-        repo: options.repo,
-        draft: draftPr,
-      });
+    const agentOverrides: TaskExecutionOptions | undefined = (options.provider || options.model)
+      ? { provider: options.provider, model: options.model }
+      : undefined;
 
-      if (prResult.success) {
-        success(`PR created: ${prResult.url}`);
-      } else {
-        error(`PR creation failed: ${prResult.error}`);
-        return EXIT_PR_CREATION_FAILED;
+    const taskSuccess = await executeTask({
+      task,
+      cwd: execCwd,
+      pieceIdentifier: piece,
+      projectCwd: cwd,
+      agentOverrides,
+    });
+
+    if (!taskSuccess) {
+      error(`Piece '${piece}' failed`);
+      return EXIT_PIECE_FAILED;
+    }
+    success(`Piece '${piece}' completed`);
+
+    // --- Step 4: Commit & push (skip if --skip-git) ---
+    if (!skipGit && branch) {
+      const commitMessage = buildCommitMessage(pipelineConfig, issue, options.task);
+
+      info('Committing changes...');
+      try {
+        const commitHash = stageAndCommit(execCwd, commitMessage);
+        if (commitHash) {
+          success(`Changes committed: ${commitHash}`);
+        } else {
+          info('No changes to commit');
+        }
+
+        if (isWorktree) {
+          // Clone has no origin — push to main project via path, then project pushes to origin
+          execFileSync('git', ['push', cwd, 'HEAD'], { cwd: execCwd, stdio: 'pipe' });
+        }
+
+        info(`Pushing to origin/${branch}...`);
+        pushBranch(cwd, branch);
+        success(`Pushed to origin/${branch}`);
+      } catch (err) {
+        error(`Git operation failed: ${getErrorMessage(err)}`);
+        return EXIT_GIT_OPERATION_FAILED;
       }
     }
+
+    // --- Step 5: Create PR (if --auto-pr) ---
+    if (autoPr) {
+      if (skipGit) {
+        info('--auto-pr is ignored when --skip-git is specified (no push was performed)');
+      } else if (branch) {
+        info('Creating pull request...');
+        const prTitle = issue ? issue.title : (options.task ?? 'Pipeline task');
+        const report = `Piece \`${piece}\` completed successfully.`;
+        const prBody = buildPipelinePrBody(pipelineConfig, issue, report);
+
+        const prResult = createPullRequest(cwd, {
+          branch,
+          title: prTitle,
+          body: prBody,
+          base: baseBranch,
+          repo: options.repo,
+          draft: draftPr,
+        });
+
+        if (prResult.success) {
+          success(`PR created: ${prResult.url}`);
+          pipelineResult = { ...pipelineResult, prUrl: prResult.url };
+        } else {
+          error(`PR creation failed: ${prResult.error}`);
+          return EXIT_PR_CREATION_FAILED;
+        }
+      }
+    }
+
+    // --- Summary ---
+    blankLine();
+    status('Issue', issue ? `#${issue.number} "${issue.title}"` : 'N/A');
+    status('Branch', branch ?? '(current)');
+    status('Piece', piece);
+    status('Result', 'Success', 'green');
+
+    pipelineResult = { ...pipelineResult, success: true };
+    return 0;
+  } finally {
+    await notifySlack(runId, startTime, pipelineResult);
   }
+}
 
-  // --- Summary ---
-  blankLine();
-  status('Issue', issue ? `#${issue.number} "${issue.title}"` : 'N/A');
-  status('Branch', branch ?? '(current)');
-  status('Piece', piece);
-  status('Result', 'Success', 'green');
+/** Intermediate result tracking for Slack notification */
+interface PipelineResult {
+  success: boolean;
+  piece: string;
+  issueNumber?: number;
+  branch?: string;
+  prUrl?: string;
+}
 
-  return 0;
+/** Send Slack notification if webhook is configured. Never throws. */
+async function notifySlack(runId: string, startTime: number, result: PipelineResult): Promise<void> {
+  const webhookUrl = getSlackWebhookUrl();
+  if (!webhookUrl) return;
+
+  const durationSec = Math.round((Date.now() - startTime) / 1000);
+  const task: SlackTaskDetail = {
+    name: 'pipeline',
+    success: result.success,
+    piece: result.piece,
+    issueNumber: result.issueNumber,
+    durationSec,
+    branch: result.branch,
+    prUrl: result.prUrl,
+  };
+  const message = buildSlackRunSummary({
+    runId,
+    total: 1,
+    success: result.success ? 1 : 0,
+    failed: result.success ? 0 : 1,
+    durationSec,
+    concurrency: 1,
+    tasks: [task],
+  });
+
+  await sendSlackNotification(webhookUrl, message);
 }

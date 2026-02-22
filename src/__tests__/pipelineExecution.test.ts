@@ -57,7 +57,10 @@ vi.mock('../shared/ui/index.js', () => ({
   warn: vi.fn(),
   debug: vi.fn(),
 }));
-// Mock debug logger
+// Mock Slack + utils
+const mockGetSlackWebhookUrl = vi.fn<() => string | undefined>(() => undefined);
+const mockSendSlackNotification = vi.fn<(url: string, message: string) => Promise<void>>();
+const mockBuildSlackRunSummary = vi.fn<(params: unknown) => string>(() => 'TAKT Run Summary');
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   createLogger: () => ({
@@ -65,6 +68,14 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
     debug: vi.fn(),
     error: vi.fn(),
   }),
+  getSlackWebhookUrl: (...args: unknown[]) => mockGetSlackWebhookUrl(...args as []),
+  sendSlackNotification: (...args: unknown[]) => mockSendSlackNotification(...(args as [string, string])),
+  buildSlackRunSummary: (...args: unknown[]) => mockBuildSlackRunSummary(...(args as [unknown])),
+}));
+
+// Mock generateRunId
+vi.mock('../features/tasks/execute/slackSummaryAdapter.js', () => ({
+  generateRunId: () => 'run-20260222-000000',
 }));
 
 const { executePipeline } = await import('../features/pipeline/index.js');
@@ -72,6 +83,8 @@ const { executePipeline } = await import('../features/pipeline/index.js');
 describe('executePipeline', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default: no Slack webhook
+    mockGetSlackWebhookUrl.mockReturnValue(undefined);
     // Default: git operations succeed
     mockExecFileSync.mockReturnValue('abc1234\n');
     // Default: no pipeline config
@@ -671,6 +684,101 @@ describe('executePipeline', () => {
         expect.objectContaining({
           branch: 'fix/the-bug',
           base: 'main',
+        }),
+      );
+    });
+  });
+
+  describe('Slack notification', () => {
+    it('should not send Slack notification when webhook is not configured', async () => {
+      mockGetSlackWebhookUrl.mockReturnValue(undefined);
+      mockExecuteTask.mockResolvedValueOnce(true);
+
+      await executePipeline({
+        task: 'Fix the bug',
+        piece: 'default',
+        autoPr: false,
+        skipGit: true,
+        cwd: '/tmp/test',
+      });
+
+      expect(mockSendSlackNotification).not.toHaveBeenCalled();
+    });
+
+    it('should send success notification when webhook is configured', async () => {
+      mockGetSlackWebhookUrl.mockReturnValue('https://hooks.slack.com/test');
+      mockExecuteTask.mockResolvedValueOnce(true);
+
+      await executePipeline({
+        task: 'Fix the bug',
+        piece: 'default',
+        autoPr: false,
+        skipGit: true,
+        cwd: '/tmp/test',
+      });
+
+      expect(mockBuildSlackRunSummary).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runId: 'run-20260222-000000',
+          total: 1,
+          success: 1,
+          failed: 0,
+          concurrency: 1,
+          tasks: [expect.objectContaining({
+            name: 'pipeline',
+            success: true,
+            piece: 'default',
+          })],
+        }),
+      );
+      expect(mockSendSlackNotification).toHaveBeenCalledWith(
+        'https://hooks.slack.com/test',
+        'TAKT Run Summary',
+      );
+    });
+
+    it('should send failure notification when piece fails', async () => {
+      mockGetSlackWebhookUrl.mockReturnValue('https://hooks.slack.com/test');
+      mockExecuteTask.mockResolvedValueOnce(false);
+
+      await executePipeline({
+        task: 'Fix the bug',
+        piece: 'default',
+        autoPr: false,
+        skipGit: true,
+        cwd: '/tmp/test',
+      });
+
+      expect(mockBuildSlackRunSummary).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: 0,
+          failed: 1,
+          tasks: [expect.objectContaining({
+            success: false,
+          })],
+        }),
+      );
+      expect(mockSendSlackNotification).toHaveBeenCalled();
+    });
+
+    it('should include PR URL in notification when auto-pr succeeds', async () => {
+      mockGetSlackWebhookUrl.mockReturnValue('https://hooks.slack.com/test');
+      mockExecuteTask.mockResolvedValueOnce(true);
+      mockCreatePullRequest.mockReturnValueOnce({ success: true, url: 'https://github.com/test/pr/99' });
+
+      await executePipeline({
+        task: 'Fix the bug',
+        piece: 'default',
+        branch: 'fix/test',
+        autoPr: true,
+        cwd: '/tmp/test',
+      });
+
+      expect(mockBuildSlackRunSummary).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tasks: [expect.objectContaining({
+            prUrl: 'https://github.com/test/pr/99',
+          })],
         }),
       );
     });
