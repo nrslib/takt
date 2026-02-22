@@ -689,6 +689,28 @@ describe('executePipeline', () => {
     });
   });
 
+  it('should return exit code 4 when git commit/push fails', async () => {
+    mockExecuteTask.mockResolvedValueOnce(true);
+    // stageAndCommit calls execFileSync('git', ['add', ...]) then ('git', ['commit', ...])
+    // Make the commit call throw
+    mockExecFileSync.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === 'commit') {
+        throw new Error('nothing to commit');
+      }
+      return 'abc1234\n';
+    });
+
+    const exitCode = await executePipeline({
+      task: 'Fix the bug',
+      piece: 'default',
+      branch: 'fix/my-branch',
+      autoPr: false,
+      cwd: '/tmp/test',
+    });
+
+    expect(exitCode).toBe(4);
+  });
+
   describe('Slack notification', () => {
     it('should not send Slack notification when webhook is not configured', async () => {
       mockGetSlackWebhookUrl.mockReturnValue(undefined);
