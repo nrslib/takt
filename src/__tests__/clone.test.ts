@@ -56,6 +56,11 @@ describe('cloneAndIsolate git config propagation', () => {
       const argsArr = args as string[];
       const options = opts as { cwd?: string };
 
+      // git rev-parse --abbrev-ref HEAD (resolveBaseBranch: getCurrentBranch)
+      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--abbrev-ref' && argsArr[2] === 'HEAD') {
+        return 'main\n';
+      }
+
       // git clone
       if (argsArr[0] === 'clone') {
         return Buffer.from('');
@@ -175,6 +180,11 @@ describe('branch and worktree path formatting with issue numbers', () => {
   function setupMockForPathTest() {
     mockExecFileSync.mockImplementation((cmd, args) => {
       const argsArr = args as string[];
+
+      // git rev-parse --abbrev-ref HEAD (resolveBaseBranch: getCurrentBranch)
+      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--abbrev-ref' && argsArr[2] === 'HEAD') {
+        return 'main\n';
+      }
 
       // git clone
       if (argsArr[0] === 'clone') {
@@ -311,5 +321,135 @@ describe('branch and worktree path formatting with issue numbers', () => {
     // Then: falls back to timestamp format (issue number not included due to empty slug)
     expect(result.branch).toMatch(/^takt\/\d{8}T\d{4}$/);
     expect(result.path).toMatch(/\/\d{8}T\d{4}$/);
+  });
+});
+
+describe('resolveBaseBranch', () => {
+  it('should not fetch when auto_fetch is disabled (default)', () => {
+    // Given: auto_fetch is off (default), HEAD is on main
+    const fetchCalls: string[][] = [];
+
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+
+      if (argsArr[0] === 'fetch') {
+        fetchCalls.push(argsArr);
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--abbrev-ref') {
+        return 'main\n';
+      }
+      if (argsArr[0] === 'clone') return Buffer.from('');
+      if (argsArr[0] === 'remote') return Buffer.from('');
+      if (argsArr[0] === 'config') {
+        if (argsArr[1] === '--local') throw new Error('not set');
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--verify') {
+        throw new Error('branch not found');
+      }
+      if (argsArr[0] === 'checkout') return Buffer.from('');
+      return Buffer.from('');
+    });
+
+    // When
+    createSharedClone('/project', {
+      worktree: true,
+      taskSlug: 'test-no-fetch',
+    });
+
+    // Then: no fetch was performed
+    expect(fetchCalls).toHaveLength(0);
+  });
+
+  it('should use current branch as base when no base_branch config', () => {
+    // Given: HEAD is on develop
+    const cloneCalls: string[][] = [];
+
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+
+      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--abbrev-ref') {
+        return 'develop\n';
+      }
+      if (argsArr[0] === 'clone') {
+        cloneCalls.push(argsArr);
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'remote') return Buffer.from('');
+      if (argsArr[0] === 'config') {
+        if (argsArr[1] === '--local') throw new Error('not set');
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--verify') {
+        throw new Error('branch not found');
+      }
+      if (argsArr[0] === 'checkout') return Buffer.from('');
+      return Buffer.from('');
+    });
+
+    // When
+    createSharedClone('/project', {
+      worktree: true,
+      taskSlug: 'use-current-branch',
+    });
+
+    // Then: clone was called with --branch develop (current branch)
+    expect(cloneCalls).toHaveLength(1);
+    expect(cloneCalls[0]).toContain('--branch');
+    expect(cloneCalls[0]).toContain('develop');
+  });
+
+  it('should continue clone creation when fetch fails (network error)', () => {
+    // Given: fetch throws (no network)
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+
+      if (argsArr[0] === 'fetch') {
+        throw new Error('Could not resolve host: github.com');
+      }
+      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--abbrev-ref') {
+        return 'main\n';
+      }
+      if (argsArr[0] === 'clone') return Buffer.from('');
+      if (argsArr[0] === 'remote') return Buffer.from('');
+      if (argsArr[0] === 'config') {
+        if (argsArr[1] === '--local') throw new Error('not set');
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'rev-parse') throw new Error('branch not found');
+      if (argsArr[0] === 'checkout') return Buffer.from('');
+      return Buffer.from('');
+    });
+
+    // When/Then: should not throw, clone still created
+    const result = createSharedClone('/project', {
+      worktree: true,
+      taskSlug: 'offline-task',
+    });
+
+    expect(result.branch).toMatch(/offline-task$/);
+  });
+
+  it('should also resolve base branch before createTempCloneForBranch', () => {
+    // Given
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+
+      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--abbrev-ref') {
+        return 'main\n';
+      }
+      if (argsArr[0] === 'clone') return Buffer.from('');
+      if (argsArr[0] === 'remote') return Buffer.from('');
+      if (argsArr[0] === 'config') {
+        if (argsArr[1] === '--local') throw new Error('not set');
+        return Buffer.from('');
+      }
+      return Buffer.from('');
+    });
+
+    // When/Then: should not throw
+    const result = createTempCloneForBranch('/project', 'existing-branch');
+    expect(result.branch).toBe('existing-branch');
   });
 });

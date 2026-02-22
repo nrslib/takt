@@ -124,6 +124,8 @@ const GLOBAL_ENV_SPECS: readonly EnvSpec[] = [
   { path: 'verbose', type: 'boolean' },
   { path: 'concurrency', type: 'number' },
   { path: 'task_poll_interval_ms', type: 'number' },
+  { path: 'auto_fetch', type: 'boolean' },
+  { path: 'base_branch', type: 'string' },
 ];
 
 const PROJECT_ENV_SPECS: readonly EnvSpec[] = [
@@ -140,6 +142,7 @@ const PROJECT_ENV_SPECS: readonly EnvSpec[] = [
   { path: 'provider_options.claude.sandbox.allow_unsandboxed_commands', type: 'boolean' },
   { path: 'provider_options.claude.sandbox.excluded_commands', type: 'json' },
   { path: 'provider_profiles', type: 'json' },
+  { path: 'base_branch', type: 'string' },
 ];
 
 export function applyGlobalConfigEnvOverrides(target: Record<string, unknown>): void {

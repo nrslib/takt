@@ -44,6 +44,7 @@ export {
   saveCloneMeta,
   removeCloneMeta,
   cleanupOrphanedClone,
+  resolveBaseBranch,
 } from './clone.js';
 export {
   detectDefaultBranch,

@@ -34,6 +34,7 @@ vi.mock('../features/tasks/index.js', () => ({
 const mockResolveConfigValues = vi.fn();
 vi.mock('../infra/config/index.js', () => ({
   resolveConfigValues: mockResolveConfigValues,
+  resolveConfigValue: vi.fn(() => undefined),
 }));
 
 // Mock execFileSync for git operations

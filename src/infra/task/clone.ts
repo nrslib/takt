@@ -124,6 +124,64 @@ export class CloneManager {
     return projectDir;
   }
 
+  /**
+   * Resolve the base branch for cloning and optionally fetch from remote.
+   *
+   * When `auto_fetch` config is true:
+   *   1. Runs `git fetch origin` (without modifying local branches)
+   *   2. Resolves base branch from config `base_branch` → current branch fallback
+   *   3. Returns the branch name and the fetched commit hash of `origin/<baseBranch>`
+   *
+   * When `auto_fetch` is false (default):
+   *   Returns only the branch name (config `base_branch` → current branch fallback)
+   *
+   * Any failure (network, no remote, etc.) is non-fatal.
+   */
+  static resolveBaseBranch(projectDir: string): { branch: string; fetchedCommit?: string } {
+    const configBaseBranch = resolveConfigValue(projectDir, 'baseBranch') as string | undefined;
+    const autoFetch = resolveConfigValue(projectDir, 'autoFetch') as boolean | undefined;
+
+    // Determine base branch: config base_branch → current branch
+    const baseBranch = configBaseBranch ?? CloneManager.getCurrentBranch(projectDir);
+
+    if (!autoFetch) {
+      return { branch: baseBranch };
+    }
+
+    try {
+      // Fetch only — do not modify any local branch refs
+      execFileSync('git', ['fetch', 'origin'], {
+        cwd: projectDir,
+        stdio: 'pipe',
+      });
+
+      // Get the latest commit hash from the remote-tracking ref
+      const fetchedCommit = execFileSync(
+        'git', ['rev-parse', `origin/${baseBranch}`],
+        { cwd: projectDir, encoding: 'utf-8', stdio: 'pipe' },
+      ).trim();
+
+      log.info('Fetched remote and resolved base branch', { baseBranch, fetchedCommit });
+      return { branch: baseBranch, fetchedCommit };
+    } catch (err) {
+      // Network errors, no remote, no tracking ref — all non-fatal
+      log.info('Failed to fetch from remote, continuing with local state', { baseBranch, error: String(err) });
+      return { branch: baseBranch };
+    }
+  }
+
+  /** Get current branch name */
+  private static getCurrentBranch(projectDir: string): string {
+    try {
+      return execFileSync(
+        'git', ['rev-parse', '--abbrev-ref', 'HEAD'],
+        { cwd: projectDir, encoding: 'utf-8', stdio: 'pipe' },
+      ).trim();
+    } catch {
+      return 'main';
+    }
+  }
+
   /** Clone a repository and remove origin to isolate from the main repo.
    *  When `branch` is specified, `--branch` is passed to `git clone` so the
    *  branch is checked out as a local branch *before* origin is removed.
@@ -180,6 +238,8 @@ export class CloneManager {
 
   /** Create a git clone for a task */
   createSharedClone(projectDir: string, options: WorktreeOptions): WorktreeResult {
+    const { branch: baseBranch, fetchedCommit } = CloneManager.resolveBaseBranch(projectDir);
+
     const clonePath = CloneManager.resolveClonePath(projectDir, options);
     const branch = CloneManager.resolveBranchName(options);
 
@@ -188,7 +248,12 @@ export class CloneManager {
     if (CloneManager.branchExists(projectDir, branch)) {
       CloneManager.cloneAndIsolate(projectDir, clonePath, branch);
     } else {
-      CloneManager.cloneAndIsolate(projectDir, clonePath);
+      // Clone from the base branch so the task starts from latest state
+      CloneManager.cloneAndIsolate(projectDir, clonePath, baseBranch);
+      // If we fetched a newer commit from remote, reset to it
+      if (fetchedCommit) {
+        execFileSync('git', ['reset', '--hard', fetchedCommit], { cwd: clonePath, stdio: 'pipe' });
+      }
       execFileSync('git', ['checkout', '-b', branch], { cwd: clonePath, stdio: 'pipe' });
     }
 
@@ -200,6 +265,8 @@ export class CloneManager {
 
   /** Create a temporary clone for an existing branch */
   createTempCloneForBranch(projectDir: string, branch: string): WorktreeResult {
+    CloneManager.resolveBaseBranch(projectDir);
+
     const timestamp = CloneManager.generateTimestamp();
     const clonePath = path.join(CloneManager.resolveCloneBaseDir(projectDir), `tmp-${timestamp}`);
 
@@ -284,4 +351,8 @@ export function removeCloneMeta(projectDir: string, branch: string): void {
 
 export function cleanupOrphanedClone(projectDir: string, branch: string): void {
   defaultManager.cleanupOrphanedClone(projectDir, branch);
+}
+
+export function resolveBaseBranch(projectDir: string): { branch: string; fetchedCommit?: string } {
+  return CloneManager.resolveBaseBranch(projectDir);
 }

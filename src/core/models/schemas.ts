@@ -481,6 +481,10 @@ export const GlobalConfigSchema = z.object({
   concurrency: z.number().int().min(1).max(10).optional().default(1),
   /** Polling interval in ms for picking up new tasks during takt run (default: 500, range: 100-5000) */
   task_poll_interval_ms: z.number().int().min(100).max(5000).optional().default(500),
+  /** Opt-in: fetch remote before cloning to keep clones up-to-date (default: false) */
+  auto_fetch: z.boolean().optional().default(false),
+  /** Base branch to clone from (default: current branch) */
+  base_branch: z.string().optional(),
 });
 
 /** Project config schema */
@@ -489,4 +493,6 @@ export const ProjectConfigSchema = z.object({
   provider: z.enum(['claude', 'codex', 'opencode', 'mock']).optional(),
   provider_options: MovementProviderOptionsSchema,
   provider_profiles: ProviderPermissionProfilesSchema,
+  /** Base branch to clone from (overrides global base_branch) */
+  base_branch: z.string().optional(),
 });

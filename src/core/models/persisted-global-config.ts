@@ -123,6 +123,10 @@ export interface PersistedGlobalConfig {
   concurrency: number;
   /** Polling interval in ms for picking up new tasks during takt run (default: 500, range: 100-5000) */
   taskPollIntervalMs: number;
+  /** Opt-in: fetch remote before cloning to keep clones up-to-date (default: false) */
+  autoFetch?: boolean;
+  /** Base branch to clone from (default: current branch) */
+  baseBranch?: string;
 }
 
 /** Project-level configuration */
@@ -132,4 +136,6 @@ export interface ProjectConfig {
   providerOptions?: MovementProviderOptions;
   /** Provider-specific permission profiles */
   providerProfiles?: ProviderPermissionProfiles;
+  /** Base branch to clone from (overrides global baseBranch) */
+  baseBranch?: string;
 }

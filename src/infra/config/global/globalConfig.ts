@@ -220,6 +220,8 @@ export class GlobalConfigManager {
       verbose: parsed.verbose,
       concurrency: parsed.concurrency,
       taskPollIntervalMs: parsed.task_poll_interval_ms,
+      autoFetch: parsed.auto_fetch,
+      baseBranch: parsed.base_branch,
     };
     validateProviderModelCompatibility(config.provider, config.model);
     this.cachedConfig = config;
@@ -349,6 +351,12 @@ export class GlobalConfigManager {
     }
     if (config.taskPollIntervalMs !== undefined && config.taskPollIntervalMs !== 500) {
       raw.task_poll_interval_ms = config.taskPollIntervalMs;
+    }
+    if (config.autoFetch !== undefined) {
+      raw.auto_fetch = config.autoFetch;
+    }
+    if (config.baseBranch) {
+      raw.base_branch = config.baseBranch;
     }
     writeFileSync(configPath, stringifyYaml(raw), 'utf-8');
     this.invalidateCache();
