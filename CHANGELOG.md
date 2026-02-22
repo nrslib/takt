@@ -10,30 +10,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- **Ensemble package system** (`takt ensemble add/remove/list`): Import and manage external TAKT packages from GitHub — `takt ensemble add github:{owner}/{repo}@{ref}` downloads packages to `~/.takt/ensemble/` with atomic installation, version compatibility checks, lock files, and package content summary before confirmation
-- **@scope references in piece YAML**: Facet references now support `@{owner}/{repo}/{facet-name}` syntax to reference facets from installed ensemble packages (e.g., `persona: @nrslib/takt-fullstack/expert-coder`)
-- **4-layer facet resolution**: Upgraded from 3-layer (project → user → builtin) to 4-layer (package-local → project → user → builtin) — ensemble package pieces automatically resolve their own facets first
-- **Ensemble category in piece selection**: Installed ensemble packages automatically appear as subcategories under an "ensemble" category in the piece selection UI
+- **Repertoire package system** (`takt repertoire add/remove/list`): Import and manage external TAKT packages from GitHub — `takt repertoire add github:{owner}/{repo}@{ref}` downloads packages to `~/.takt/repertoire/` with atomic installation, version compatibility checks, lock files, and package content summary before confirmation
+- **@scope references in piece YAML**: Facet references now support `@{owner}/{repo}/{facet-name}` syntax to reference facets from installed repertoire packages (e.g., `persona: @nrslib/takt-fullstack/expert-coder`)
+- **4-layer facet resolution**: Upgraded from 3-layer (project → user → builtin) to 4-layer (package-local → project → user → builtin) — repertoire package pieces automatically resolve their own facets first
+- **Repertoire category in piece selection**: Installed repertoire packages automatically appear as subcategories under a "repertoire" category in the piece selection UI
 - **Build gate in implement/fix instructions**: `implement` and `fix` builtin instructions now require build (type check) verification before test execution
+- **Repertoire package documentation**: Added comprehensive docs for the repertoire package system ([en](./docs/repertoire.md), [ja](./docs/repertoire.ja.md))
+
 ### Changed
 
+- **BREAKING: "ensemble" renamed to "repertoire"**: All CLI commands, directories, config keys, and APIs renamed — `takt ensemble` → `takt repertoire`, `~/.takt/ensemble/` → `~/.takt/repertoire/`. Migration: rename your `~/.takt/ensemble/` directory to `~/.takt/repertoire/`
 - **BREAKING: Facets directory restructured**: Facet directories moved under a `facets/` subdirectory at all levels — `builtins/{lang}/{facetType}/` → `builtins/{lang}/facets/{facetType}/`, `~/.takt/{facetType}/` → `~/.takt/facets/{facetType}/`, `.takt/{facetType}/` → `.takt/facets/{facetType}/`. Migration: move your custom facet files into the new `facets/` subdirectory
 - Contract string hardcoding prevention rule added to coding policy and architecture review instruction
 
 ### Fixed
 
-- Override piece validation now includes ensemble scope via the resolver
+- Override piece validation now includes repertoire scope via the resolver
 - `takt export-cc` now reads facets from the new `builtins/{lang}/facets/` directory structure
-- `confirm()` prompt now supports piped stdin (e.g., `echo "y" | takt ensemble add ...`)
+- `confirm()` prompt now supports piped stdin (e.g., `echo "y" | takt repertoire add ...`)
 - Suppressed `poll_tick` debug log flooding during iteration input wait
 - Piece resolver `stat()` calls now catch errors gracefully instead of crashing on inaccessible entries
 
 ### Internal
 
-- Comprehensive ensemble test suite: atomic-update, ensemble-paths, file-filter, github-ref-resolver, github-spec, list, lock-file, pack-summary, package-facet-resolution, remove-reference-check, remove, takt-ensemble-config, tar-parser, takt-ensemble-schema
+- Comprehensive repertoire test suite: atomic-update, repertoire-paths, file-filter, github-ref-resolver, github-spec, list, lock-file, pack-summary, package-facet-resolution, remove-reference-check, remove, takt-repertoire-config, tar-parser, takt-repertoire-schema
 - Added `src/faceted-prompting/scope.ts` for @scope reference parsing, validation, and resolution
 - Added scope-ref tests for the faceted-prompting module
 - Added `inputWait.ts` for shared input-wait state to suppress worker pool log noise
+- Added piece-selection-branches and repertoire e2e tests
 
 ## [0.21.0] - 2026-02-20
 

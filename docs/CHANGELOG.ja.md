@@ -15,8 +15,11 @@
 - **4層ファセット解決**: 3層（project → user → builtin）から4層（package-local → project → user → builtin）に拡張 — repertoire パッケージのピースは自パッケージ内のファセットを最優先で解決
 - **ピース選択に repertoire カテゴリ追加**: インストール済みの repertoire パッケージがピース選択 UI の「repertoire」カテゴリにサブカテゴリとして自動表示
 - **implement/fix インストラクションにビルドゲート追加**: `implement` と `fix` のビルトインインストラクションでテスト実行前にビルド（型チェック）の実行を必須化
+- **Repertoire パッケージドキュメント追加**: repertoire パッケージシステムの包括的なドキュメントを追加（[en](./repertoire.md), [ja](./repertoire.ja.md)）
+
 ### Changed
 
+- **BREAKING: "ensemble" を "repertoire" にリネーム**: 全 CLI コマンド、ディレクトリ、設定キー、API を変更 — `takt ensemble` → `takt repertoire`、`~/.takt/ensemble/` → `~/.takt/repertoire/`。マイグレーション: `~/.takt/ensemble/` ディレクトリを `~/.takt/repertoire/` にリネームしてください
 - **BREAKING: ファセットディレクトリ構造の変更**: 全レイヤーでファセットディレクトリが `facets/` サブディレクトリ配下に移動 — `builtins/{lang}/{facetType}/` → `builtins/{lang}/facets/{facetType}/`、`~/.takt/{facetType}/` → `~/.takt/facets/{facetType}/`、`.takt/{facetType}/` → `.takt/facets/{facetType}/`。マイグレーション: カスタムファセットファイルを新しい `facets/` サブディレクトリに移動してください
 - 契約文字列のハードコード散在防止ルールをコーディングポリシーとアーキテクチャレビューインストラクションに追加
 
@@ -34,6 +37,7 @@
 - `src/faceted-prompting/scope.ts` を追加（@scope 参照のパース・バリデーション・解決）
 - faceted-prompting モジュールの scope-ref テストを追加
 - `inputWait.ts` を追加（ワーカープールのログノイズ抑制のための入力待ち状態共有）
+- piece-selection-branches および repertoire の e2e テストを追加
 
 ## [0.21.0] - 2026-02-20
 
