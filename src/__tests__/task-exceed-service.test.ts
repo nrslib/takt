@@ -4,7 +4,7 @@
  * Covers:
  * - exceedTask: transitions running task to exceeded status with metadata
  * - requeueExceededTask: transitions exceeded task back to pending, preserving metadata
- * - deleteExceededTask: removes exceeded task from the store
+ * - deleteTask('exceeded'): removes exceeded task from the store
  * - listExceededTasks: returns exceeded tasks as TaskListItem list
  */
 
@@ -366,7 +366,7 @@ describe('TaskRunner - requeueExceededTask', () => {
   });
 });
 
-describe('TaskRunner - deleteExceededTask', () => {
+describe('TaskRunner - deleteTask (exceeded)', () => {
   const testDir = `/tmp/takt-delete-exceeded-test-${Date.now()}`;
   let runner: TaskRunner;
 
@@ -385,8 +385,8 @@ describe('TaskRunner - deleteExceededTask', () => {
     // Given: an exceeded task
     writeExceededRecord(testDir, { name: 'task-a' });
 
-    // When: deleteExceededTask is called
-    runner.deleteExceededTask('task-a');
+    // When: deleteTask is called
+    runner.deleteTask('task-a', 'exceeded');
 
     // Then: task is removed
     const file = loadTasksFile(testDir);
@@ -398,14 +398,14 @@ describe('TaskRunner - deleteExceededTask', () => {
     runner.addTask('Task A');
     const taskName = (loadTasksFile(testDir).tasks[0] as Record<string, unknown>).name as string;
 
-    // When/Then: deleteExceededTask throws
-    expect(() => runner.deleteExceededTask(taskName)).toThrow(/not found/i);
+    // When/Then: deleteTask throws
+    expect(() => runner.deleteTask(taskName, 'exceeded')).toThrow(/not found/i);
   });
 
   it('should throw when task does not exist', () => {
     // Given: no task exists
-    // When/Then: deleteExceededTask throws
-    expect(() => runner.deleteExceededTask('nonexistent-task')).toThrow(/not found/i);
+    // When/Then: deleteTask throws
+    expect(() => runner.deleteTask('nonexistent-task', 'exceeded')).toThrow(/not found/i);
   });
 });
 

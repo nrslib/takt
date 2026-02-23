@@ -105,20 +105,12 @@ export class TaskRunner {
     return this.lifecycle.startReExecution(taskRef, allowedStatuses, startMovement, retryNote);
   }
 
-  deletePendingTask(name: string): void {
-    this.deletion.deletePendingTask(name);
-  }
-
-  deleteFailedTask(name: string): void {
-    this.deletion.deleteFailedTask(name);
+  deleteTask(name: string, kind: 'pending' | 'failed' | 'completed' | 'exceeded'): void {
+    this.deletion.deleteTaskByNameAndStatus(name, kind);
   }
 
   deleteCompletedTask(name: string): void {
     this.deletion.deleteCompletedTask(name);
-  }
-
-  deleteExceededTask(name: string): void {
-    this.deletion.deleteExceededTask(name);
   }
 
   exceedTask(taskName: string, options: ExceedTaskOptions): void {

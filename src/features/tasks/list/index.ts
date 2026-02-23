@@ -14,7 +14,7 @@ import {
   instructBranch,
   syncBranchWithRoot,
 } from './taskActions.js';
-import { deletePendingTask, deleteFailedTask, deleteCompletedTask, deleteExceededTask, deleteAllTasks } from './taskDeleteActions.js';
+import { deleteTaskByKind, deleteAllTasks } from './taskDeleteActions.js';
 import { retryFailedTask } from './taskRetryActions.js';
 import { listTasksNonInteractive, type ListNonInteractiveOptions } from './listNonInteractive.js';
 import { formatTaskStatusLabel, formatShortDate } from './taskStatusLabel.js';
@@ -159,7 +159,7 @@ export async function listTasks(
       if (!task) continue;
       const taskAction = await showPendingTaskAndPromptAction(task);
       if (taskAction === 'delete') {
-        await deletePendingTask(task);
+        await deleteTaskByKind(task);
       }
     } else if (type === 'running') {
       const task = tasks[idx];
@@ -201,7 +201,7 @@ export async function listTasks(
           }
           break;
         case 'delete':
-          await deleteCompletedTask(task);
+          await deleteTaskByKind(task);
           break;
       }
     } else if (type === 'failed') {
@@ -211,7 +211,7 @@ export async function listTasks(
       if (taskAction === 'retry') {
         await retryFailedTask(task, cwd);
       } else if (taskAction === 'delete') {
-        await deleteFailedTask(task);
+        await deleteTaskByKind(task);
       }
     } else if (type === 'exceeded') {
       const task = tasks[idx];
@@ -220,7 +220,7 @@ export async function listTasks(
       if (taskAction === 'requeue') {
         runner.requeueExceededTask(task.name);
       } else if (taskAction === 'delete') {
-        await deleteExceededTask(task);
+        await deleteTaskByKind(task);
       }
     }
   }

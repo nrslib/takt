@@ -28,7 +28,7 @@ vi.mock('../features/tasks/list/taskActions.js', () => ({
 
 import { confirm } from '../shared/prompt/index.js';
 import { success, error as logError } from '../shared/ui/index.js';
-import { deletePendingTask, deleteFailedTask, deleteCompletedTask, deleteAllTasks } from '../features/tasks/list/taskDeleteActions.js';
+import { deleteTaskByKind, deleteAllTasks } from '../features/tasks/list/taskDeleteActions.js';
 import type { TaskListItem } from '../infra/task/types.js';
 
 const mockConfirm = vi.mocked(confirm);
@@ -96,7 +96,7 @@ describe('taskDeleteActions', () => {
     };
     mockConfirm.mockResolvedValue(true);
 
-    const result = await deletePendingTask(task);
+    const result = await deleteTaskByKind(task);
 
     expect(result).toBe(true);
     const raw = fs.readFileSync(tasksFile, 'utf-8');
@@ -115,7 +115,7 @@ describe('taskDeleteActions', () => {
     };
     mockConfirm.mockResolvedValue(true);
 
-    const result = await deleteFailedTask(task);
+    const result = await deleteTaskByKind(task);
 
     expect(result).toBe(true);
     const raw = fs.readFileSync(tasksFile, 'utf-8');
@@ -136,7 +136,7 @@ describe('taskDeleteActions', () => {
     };
     mockConfirm.mockResolvedValue(true);
 
-    const result = await deleteFailedTask(task);
+    const result = await deleteTaskByKind(task);
 
     expect(result).toBe(true);
     expect(mockDeleteBranch).toHaveBeenCalledWith(tmpDir, task);
@@ -159,7 +159,7 @@ describe('taskDeleteActions', () => {
     mockConfirm.mockResolvedValue(true);
     mockDeleteBranch.mockReturnValue(false);
 
-    const result = await deleteFailedTask(task);
+    const result = await deleteTaskByKind(task);
 
     expect(result).toBe(false);
     expect(mockDeleteBranch).toHaveBeenCalledWith(tmpDir, task);
@@ -178,7 +178,7 @@ describe('taskDeleteActions', () => {
     };
     mockConfirm.mockResolvedValue(true);
 
-    const result = await deleteFailedTask(task);
+    const result = await deleteTaskByKind(task);
 
     expect(result).toBe(false);
     expect(mockLogError).toHaveBeenCalled();
@@ -197,7 +197,7 @@ describe('taskDeleteActions', () => {
     };
     mockConfirm.mockResolvedValue(true);
 
-    const result = await deleteCompletedTask(task);
+    const result = await deleteTaskByKind(task);
 
     expect(result).toBe(true);
     expect(mockDeleteBranch).toHaveBeenCalledWith(tmpDir, task);
