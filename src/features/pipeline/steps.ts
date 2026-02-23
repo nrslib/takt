@@ -8,7 +8,7 @@
 import { execFileSync } from 'node:child_process';
 import { formatIssueAsTask, buildPrBody } from '../../infra/github/index.js';
 import { getGitProvider, type Issue } from '../../infra/git/index.js';
-import { stageAndCommit, resolveBaseBranch } from '../../infra/task/index.js';
+import { stageAndCommit, resolveBaseBranch, pushBranch } from '../../infra/task/index.js';
 import { executeTask, confirmAndCreateWorktree, type TaskExecutionOptions, type PipelineExecutionOptions } from '../tasks/index.js';
 import { info, error, success } from '../../shared/ui/index.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
@@ -184,7 +184,7 @@ export function commitAndPush(
     }
 
     info(`Pushing to origin/${branch}...`);
-    getGitProvider().pushBranch(projectCwd, branch);
+    pushBranch(projectCwd, branch);
     success(`Pushed to origin/${branch}`);
     return true;
   } catch (err) {

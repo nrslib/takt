@@ -46,6 +46,12 @@ export interface CreatePrResult {
   error?: string;
 }
 
+export interface CommentResult {
+  success: boolean;
+  /** Error message on failure */
+  error?: string;
+}
+
 export interface CreateIssueOptions {
   /** Issue title */
   title: string;
@@ -80,8 +86,5 @@ export interface GitProvider {
   createPullRequest(cwd: string, options: CreatePrOptions): CreatePrResult;
 
   /** Add a comment to an existing PR */
-  commentOnPr(cwd: string, prNumber: number, body: string): CreatePrResult;
-
-  /** Push a branch to origin */
-  pushBranch(cwd: string, branch: string): void;
+  commentOnPr(cwd: string, prNumber: number, body: string): CommentResult;
 }

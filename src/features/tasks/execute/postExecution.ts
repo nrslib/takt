@@ -7,7 +7,7 @@
 
 import { resolvePieceConfigValue } from '../../../infra/config/index.js';
 import { confirm } from '../../../shared/prompt/index.js';
-import { autoCommitAndPush } from '../../../infra/task/index.js';
+import { autoCommitAndPush, pushBranch } from '../../../infra/task/index.js';
 import { info, error, success } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import { buildPrBody } from '../../../infra/github/index.js';
@@ -83,16 +83,16 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
   }
 
   if (commitResult.success && commitResult.commitHash && branch && shouldCreatePr) {
-    const gitProvider = getGitProvider();
     try {
-      gitProvider.pushBranch(projectCwd, branch);
+      pushBranch(projectCwd, branch);
     } catch (pushError) {
       log.info('Branch push from project cwd failed (may already exist)', { error: pushError });
     }
+    const gitProvider = getGitProvider();
     const report = pieceIdentifier ? `Piece \`${pieceIdentifier}\` completed successfully.` : 'Task completed successfully.';
     const existingPr = gitProvider.findExistingPr(projectCwd, branch);
     if (existingPr) {
-      // PRが既に存在する場合はコメントを追加（push済みなので新コミットはPRに自動反映）
+      // push済みなので、新コミットはPRに自動反映される
       const commentBody = buildPrBody(issues, report);
       const commentResult = gitProvider.commentOnPr(projectCwd, existingPr.number, commentBody);
       if (commentResult.success) {

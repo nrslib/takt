@@ -18,11 +18,11 @@ const { mockAutoCommitAndPush, mockPushBranch, mockFindExistingPr, mockCommentOn
 
 vi.mock('../infra/task/index.js', () => ({
   autoCommitAndPush: (...args: unknown[]) => mockAutoCommitAndPush(...args),
+  pushBranch: (...args: unknown[]) => mockPushBranch(...args),
 }));
 
 vi.mock('../infra/git/index.js', () => ({
   getGitProvider: () => ({
-    pushBranch: (...args: unknown[]) => mockPushBranch(...args),
     findExistingPr: (...args: unknown[]) => mockFindExistingPr(...args),
     commentOnPr: (...args: unknown[]) => mockCommentOnPr(...args),
     createPullRequest: (...args: unknown[]) => mockCreatePullRequest(...args),
@@ -185,7 +185,7 @@ describe('postExecutionFlow', () => {
     await postExecutionFlow({
       ...baseOptions,
       task: 'Fix the bug',
-      issues: [{ number: 123, title: 'This title should not appear in PR', body: '', labels: [], comments: 0 }],
+      issues: [{ number: 123, title: 'This title should not appear in PR', body: '', labels: [], comments: [] }],
     });
 
     expect(mockCreatePullRequest).toHaveBeenCalledWith(
@@ -227,7 +227,7 @@ describe('postExecutionFlow', () => {
     await postExecutionFlow({
       ...baseOptions,
       task: longTask,
-      issues: [{ number: 123, title: 'Long issue', body: '', labels: [], comments: 0 }],
+      issues: [{ number: 123, title: 'Long issue', body: '', labels: [], comments: [] }],
     });
 
     expect(mockCreatePullRequest).toHaveBeenCalledWith(

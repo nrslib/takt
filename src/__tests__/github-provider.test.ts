@@ -15,7 +15,6 @@ const {
   mockFindExistingPr,
   mockCommentOnPr,
   mockCreatePullRequest,
-  mockPushBranch,
 } = vi.hoisted(() => ({
   mockCheckGhCli: vi.fn(),
   mockFetchIssue: vi.fn(),
@@ -23,7 +22,6 @@ const {
   mockFindExistingPr: vi.fn(),
   mockCommentOnPr: vi.fn(),
   mockCreatePullRequest: vi.fn(),
-  mockPushBranch: vi.fn(),
 }));
 
 vi.mock('../infra/github/issue.js', () => ({
@@ -36,12 +34,11 @@ vi.mock('../infra/github/pr.js', () => ({
   findExistingPr: (...args: unknown[]) => mockFindExistingPr(...args),
   commentOnPr: (...args: unknown[]) => mockCommentOnPr(...args),
   createPullRequest: (...args: unknown[]) => mockCreatePullRequest(...args),
-  pushBranch: (...args: unknown[]) => mockPushBranch(...args),
 }));
 
-// These imports will fail until implementation exists (expected "fail first" behavior)
 import { GitHubProvider } from '../infra/github/GitHubProvider.js';
 import { getGitProvider } from '../infra/git/index.js';
+import type { CommentResult } from '../infra/git/index.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -176,15 +173,14 @@ describe('GitHubProvider', () => {
       // When
       provider.createPullRequest('/project', opts);
 
-      // Then: draft flag is passed through as-is
+      // Then
       expect(mockCreatePullRequest).toHaveBeenCalledWith('/project', expect.objectContaining({ draft: true }));
     });
   });
 
   describe('commentOnPr', () => {
-    it('commentOnPr(cwd, prNumber, body) に委譲し結果を返す', () => {
-      // Given
-      const commentResult = { success: true };
+    it('commentOnPr(cwd, prNumber, body) に委譲し CommentResult を返す', () => {
+      const commentResult: CommentResult = { success: true };
       mockCommentOnPr.mockReturnValue(commentResult);
       const provider = new GitHubProvider();
 
@@ -198,7 +194,8 @@ describe('GitHubProvider', () => {
 
     it('コメント失敗時はエラー結果を委譲して返す', () => {
       // Given
-      mockCommentOnPr.mockReturnValue({ success: false, error: 'Permission denied' });
+      const commentResult: CommentResult = { success: false, error: 'Permission denied' };
+      mockCommentOnPr.mockReturnValue(commentResult);
       const provider = new GitHubProvider();
 
       // When
@@ -209,20 +206,6 @@ describe('GitHubProvider', () => {
       expect(result.error).toBe('Permission denied');
     });
   });
-
-  describe('pushBranch', () => {
-    it('pushBranch(cwd, branch) に委譲する', () => {
-      // Given
-      mockPushBranch.mockReturnValue(undefined);
-      const provider = new GitHubProvider();
-
-      // When
-      provider.pushBranch('/project', 'feat/my-feature');
-
-      // Then
-      expect(mockPushBranch).toHaveBeenCalledWith('/project', 'feat/my-feature');
-    });
-  });
 });
 
 describe('getGitProvider', () => {
@@ -230,14 +213,13 @@ describe('getGitProvider', () => {
     // When
     const provider = getGitProvider();
 
-    // Then: has all required methods
+    // Then
     expect(typeof provider.checkCliStatus).toBe('function');
     expect(typeof provider.fetchIssue).toBe('function');
     expect(typeof provider.createIssue).toBe('function');
     expect(typeof provider.findExistingPr).toBe('function');
     expect(typeof provider.createPullRequest).toBe('function');
     expect(typeof provider.commentOnPr).toBe('function');
-    expect(typeof provider.pushBranch).toBe('function');
   });
 
   it('呼び出しのたびに同じインスタンスを返す（シングルトン）', () => {

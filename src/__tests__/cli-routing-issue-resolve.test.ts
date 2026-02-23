@@ -43,7 +43,6 @@ vi.mock('../infra/github/issue.js', () => ({
   formatIssueAsTask: vi.fn(),
   isIssueReference: vi.fn(),
   resolveIssueTask: vi.fn(),
-  // checkGhCli, fetchIssue は getGitProvider() 経由に変更済み
 }));
 
 vi.mock('../features/tasks/index.js', () => ({

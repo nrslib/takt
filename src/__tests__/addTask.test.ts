@@ -58,7 +58,6 @@ vi.mock('../infra/github/issue.js', () => ({
     }
     return numbers;
   }),
-  // createIssue は getGitProvider().createIssue() 経由に変更済み
 }));
 
 import { interactiveMode } from '../features/interactive/index.js';

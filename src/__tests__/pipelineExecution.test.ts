@@ -22,8 +22,12 @@ const mockPushBranch = vi.fn();
 const mockBuildPrBody = vi.fn(() => 'Default PR body');
 vi.mock('../infra/github/pr.js', () => ({
   createPullRequest: mockCreatePullRequest,
-  pushBranch: mockPushBranch,
   buildPrBody: mockBuildPrBody,
+}));
+
+vi.mock('../infra/task/git.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  pushBranch: (...args: unknown[]) => mockPushBranch(...args),
 }));
 
 const mockExecuteTask = vi.fn();

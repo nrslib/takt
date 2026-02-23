@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { checkGhCli } from './issue.js';
 import type { GitHubIssue, CreatePrOptions, CreatePrResult } from './types.js';
-import type { ExistingPr } from '../git/types.js';
+import type { ExistingPr, CommentResult } from '../git/types.js';
 
 const log = createLogger('github-pr');
 
@@ -36,7 +36,7 @@ export function findExistingPr(cwd: string, branch: string): ExistingPr | undefi
 /**
  * Add a comment to an existing PR.
  */
-export function commentOnPr(cwd: string, prNumber: number, body: string): CreatePrResult {
+export function commentOnPr(cwd: string, prNumber: number, body: string): CommentResult {
   const ghStatus = checkGhCli();
   if (!ghStatus.available) {
     return { success: false, error: ghStatus.error ?? 'gh CLI is not available' };
@@ -54,18 +54,6 @@ export function commentOnPr(cwd: string, prNumber: number, body: string): Create
     log.error('PR comment failed', { error: errorMessage });
     return { success: false, error: errorMessage };
   }
-}
-
-/**
- * Push a branch to origin.
- * Throws on failure.
- */
-export function pushBranch(cwd: string, branch: string): void {
-  log.info('Pushing branch to origin', { branch });
-  execFileSync('git', ['push', 'origin', branch], {
-    cwd,
-    stdio: 'pipe',
-  });
 }
 
 /**
@@ -126,7 +114,6 @@ export function buildPrBody(issues: GitHubIssue[] | undefined, report: string): 
   parts.push('## Summary');
   if (issues && issues.length > 0) {
     parts.push('');
-    // Use the first issue's body/title for summary
     parts.push(issues[0]!.body || issues[0]!.title);
   }
 

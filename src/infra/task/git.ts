@@ -3,6 +3,9 @@
  */
 
 import { execFileSync } from 'node:child_process';
+import { createLogger } from '../../shared/utils/index.js';
+
+const log = createLogger('git');
 
 /**
  * Get the current branch name.
@@ -39,4 +42,16 @@ export function stageAndCommit(cwd: string, message: string): string | undefined
     stdio: 'pipe',
     encoding: 'utf-8',
   }).trim();
+}
+
+/**
+ * Push a branch to origin.
+ * Throws on failure.
+ */
+export function pushBranch(cwd: string, branch: string): void {
+  log.info('Pushing branch to origin', { branch });
+  execFileSync('git', ['push', 'origin', branch], {
+    cwd,
+    stdio: 'pipe',
+  });
 }
