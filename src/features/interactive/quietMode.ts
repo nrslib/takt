@@ -85,7 +85,8 @@ export async function quietMode(
   }
 
   const { result } = await callAIWithRetry(
-    summaryPrompt, summaryPrompt, DEFAULT_INTERACTIVE_TOOLS, cwd, ctx,
+    summaryPrompt, summaryPrompt, DEFAULT_INTERACTIVE_TOOLS, cwd,
+    { ...ctx, sessionId: undefined },
   );
 
   if (!result) {
