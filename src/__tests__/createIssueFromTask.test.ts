@@ -7,8 +7,14 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('../infra/github/issue.js', () => ({
-  createIssue: vi.fn(),
+const { mockCreateIssue } = vi.hoisted(() => ({
+  mockCreateIssue: vi.fn(),
+}));
+
+vi.mock('../infra/git/index.js', () => ({
+  getGitProvider: () => ({
+    createIssue: (...args: unknown[]) => mockCreateIssue(...args),
+  }),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -26,11 +32,9 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   }),
 }));
 
-import { createIssue } from '../infra/github/issue.js';
 import { success, error } from '../shared/ui/index.js';
 import { createIssueFromTask } from '../features/tasks/index.js';
 
-const mockCreateIssue = vi.mocked(createIssue);
 const mockSuccess = vi.mocked(success);
 const mockError = vi.mocked(error);
 

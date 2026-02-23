@@ -10,8 +10,9 @@ import { confirm } from '../../../shared/prompt/index.js';
 import { autoCommitAndPush } from '../../../infra/task/index.js';
 import { info, error, success } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
-import { createPullRequest, buildPrBody, pushBranch, findExistingPr, commentOnPr } from '../../../infra/github/index.js';
-import type { GitHubIssue } from '../../../infra/github/index.js';
+import { buildPrBody } from '../../../infra/github/index.js';
+import { getGitProvider } from '../../../infra/git/index.js';
+import type { Issue } from '../../../infra/git/index.js';
 
 const log = createLogger('postExecution');
 
@@ -58,7 +59,7 @@ export interface PostExecutionOptions {
   shouldCreatePr: boolean;
   draftPr: boolean;
   pieceIdentifier?: string;
-  issues?: GitHubIssue[];
+  issues?: Issue[];
   repo?: string;
 }
 
@@ -82,17 +83,18 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
   }
 
   if (commitResult.success && commitResult.commitHash && branch && shouldCreatePr) {
+    const gitProvider = getGitProvider();
     try {
-      pushBranch(projectCwd, branch);
+      gitProvider.pushBranch(projectCwd, branch);
     } catch (pushError) {
       log.info('Branch push from project cwd failed (may already exist)', { error: pushError });
     }
     const report = pieceIdentifier ? `Piece \`${pieceIdentifier}\` completed successfully.` : 'Task completed successfully.';
-    const existingPr = findExistingPr(projectCwd, branch);
+    const existingPr = gitProvider.findExistingPr(projectCwd, branch);
     if (existingPr) {
       // PRが既に存在する場合はコメントを追加（push済みなので新コミットはPRに自動反映）
       const commentBody = buildPrBody(issues, report);
-      const commentResult = commentOnPr(projectCwd, existingPr.number, commentBody);
+      const commentResult = gitProvider.commentOnPr(projectCwd, existingPr.number, commentBody);
       if (commentResult.success) {
         success(`PR updated with comment: ${existingPr.url}`);
         return { prUrl: existingPr.url };
@@ -107,7 +109,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
       const issuePrefix = firstIssue ? `[#${firstIssue.number}] ` : '';
       const truncatedTask = task.length > 100 - issuePrefix.length ? `${task.slice(0, 100 - issuePrefix.length - 3)}...` : task;
       const prTitle = issuePrefix + truncatedTask;
-      const prResult = createPullRequest(projectCwd, {
+      const prResult = gitProvider.createPullRequest(projectCwd, {
         branch,
         title: prTitle,
         body: prBody,

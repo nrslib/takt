@@ -20,11 +20,16 @@ vi.mock('../infra/task/index.js', () => ({
   autoCommitAndPush: (...args: unknown[]) => mockAutoCommitAndPush(...args),
 }));
 
+vi.mock('../infra/git/index.js', () => ({
+  getGitProvider: () => ({
+    pushBranch: (...args: unknown[]) => mockPushBranch(...args),
+    findExistingPr: (...args: unknown[]) => mockFindExistingPr(...args),
+    commentOnPr: (...args: unknown[]) => mockCommentOnPr(...args),
+    createPullRequest: (...args: unknown[]) => mockCreatePullRequest(...args),
+  }),
+}));
+
 vi.mock('../infra/github/index.js', () => ({
-  pushBranch: (...args: unknown[]) => mockPushBranch(...args),
-  findExistingPr: (...args: unknown[]) => mockFindExistingPr(...args),
-  commentOnPr: (...args: unknown[]) => mockCommentOnPr(...args),
-  createPullRequest: (...args: unknown[]) => mockCreatePullRequest(...args),
   buildPrBody: (...args: unknown[]) => mockBuildPrBody(...args),
 }));
 

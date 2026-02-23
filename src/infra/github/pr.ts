@@ -8,15 +8,9 @@ import { execFileSync } from 'node:child_process';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { checkGhCli } from './issue.js';
 import type { GitHubIssue, CreatePrOptions, CreatePrResult } from './types.js';
-
-export type { CreatePrOptions, CreatePrResult };
+import type { ExistingPr } from '../git/types.js';
 
 const log = createLogger('github-pr');
-
-export interface ExistingPr {
-  number: number;
-  url: string;
-}
 
 /**
  * Find an open PR for the given branch.
@@ -33,7 +27,8 @@ export function findExistingPr(cwd: string, branch: string): ExistingPr | undefi
     );
     const prs = JSON.parse(output) as ExistingPr[];
     return prs[0];
-  } catch {
+  } catch (e) {
+    log.debug('gh pr list failed, treating as no PR', { error: getErrorMessage(e) });
     return undefined;
   }
 }

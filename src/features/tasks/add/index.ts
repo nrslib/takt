@@ -11,7 +11,8 @@ import { success, info, error, withProgress } from '../../../shared/ui/index.js'
 import { TaskRunner, type TaskFileData, summarizeTaskName } from '../../../infra/task/index.js';
 import { determinePiece } from '../execute/selectAndExecute.js';
 import { createLogger, getErrorMessage, generateReportDir } from '../../../shared/utils/index.js';
-import { isIssueReference, resolveIssueTask, parseIssueNumbers, createIssue } from '../../../infra/github/index.js';
+import { isIssueReference, resolveIssueTask, parseIssueNumbers } from '../../../infra/github/index.js';
+import { getGitProvider } from '../../../infra/git/index.js';
 import { firstLine } from '../../../infra/task/naming.js';
 
 const log = createLogger('add-task');
@@ -77,7 +78,7 @@ export function createIssueFromTask(task: string): number | undefined {
   info('Creating GitHub Issue...');
   const titleLine = task.split('\n')[0] || task;
   const title = titleLine.length > 100 ? `${titleLine.slice(0, 97)}...` : titleLine;
-  const issueResult = createIssue({ title, body: task });
+  const issueResult = getGitProvider().createIssue({ title, body: task });
   if (issueResult.success) {
     success(`Issue created: ${issueResult.url}`);
     const num = Number(issueResult.url!.split('/').pop());
