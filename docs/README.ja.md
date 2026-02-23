@@ -95,7 +95,7 @@ takt list
 
 ## 仕組み
 
-TAKT は音楽のメタファーを使っています。**piece** がワークフロー、**movement** が各ステップにあたります。
+TAKT は音楽のメタファーを使っています。TAKT という名前自体が、オーケストラの指揮で拍を刻む「タクト（Takt）」に由来しています。**piece** がワークフロー、**movement** が各ステップにあたります。音楽の楽曲（piece）が複数の楽章（movement）で構成されるのと同じです。
 
 piece は movement の並びを定義します。各 movement では persona（誰が実行するか）、権限（何を許可するか）、ルール（次にどこへ進むか）を指定します。
 
@@ -142,6 +142,7 @@ movements:
 | `backend-mini` | バックエンド向けの mini 構成です。 |
 | `expert-mini` | エキスパート向けの mini 構成です。 |
 | `default` | 本格的な開発向けです。並列レビュアーによる多段階レビューが付いています。TAKT 自身の開発にも使用しています。 |
+
 全ピース・ペルソナの一覧は [Builtin Catalog](./builtin-catalog.ja.md) を参照してください。
 
 ## 主要コマンド
@@ -263,6 +264,7 @@ await engine.run();
 | [Faceted Prompting](./faceted-prompting.ja.md) | プロンプト設計の方法論 |
 | [Repertoire Packages](./repertoire.ja.md) | パッケージのインストール・共有 |
 | [Task Management](./task-management.ja.md) | タスクの追加・実行・隔離 |
+| [データフロー](./data-flow.md) | 内部データフローとアーキテクチャ図 |
 | [CI/CD Integration](./ci-cd.ja.md) | GitHub Actions・パイプラインモード |
 | [Provider Sandbox](./provider-sandbox.md) | プロバイダーのサンドボックス設定 |
 | [Changelog](../CHANGELOG.md) ([日本語](./CHANGELOG.ja.md)) | バージョン履歴 |

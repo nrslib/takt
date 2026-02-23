@@ -12,6 +12,7 @@ A comprehensive catalog of all builtin pieces and personas included with TAKT.
 | `frontend-mini` | Frontend-focused mini configuration. |
 | `backend-mini` | Backend-focused mini configuration. |
 | `expert-mini` | Expert-level mini configuration. |
+| `default-test-first-mini` | Test-first development. Write tests first, then implement to pass them. |
 | `default` | Serious development. Multi-stage review with parallel reviewers. Used for TAKT's own development. |
 
 ## All Builtin Pieces
@@ -23,6 +24,7 @@ Organized by category.
 | 🚀 Quick Start | `default-mini` | Mini development piece: plan -> implement -> parallel review (AI antipattern + supervisor) -> fix if needed. Lightweight with review. |
 | | `frontend-mini` | Mini frontend piece: plan -> implement -> parallel review (AI antipattern + supervisor) with frontend knowledge injection. |
 | | `backend-mini` | Mini backend piece: plan -> implement -> parallel review (AI antipattern + supervisor) with backend knowledge injection. |
+| | `default-test-first-mini` | Test-first development piece: plan -> write tests -> implement -> parallel review -> fix if needed -> complete. |
 | | `default` | Full development piece: plan -> implement -> AI review -> parallel review (architect + QA) -> supervisor approval. Includes fix loops at each review stage. |
 | | `compound-eye` | Multi-model review: sends the same instruction to Claude and Codex simultaneously, then synthesizes both responses. |
 | ⚡ Mini | `backend-cqrs-mini` | Mini CQRS+ES piece: plan -> implement -> parallel review (AI antipattern + supervisor) with CQRS+ES knowledge injection. |

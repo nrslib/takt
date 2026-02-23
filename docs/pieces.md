@@ -18,7 +18,7 @@ A piece is a YAML file that defines a sequence of movements executed by AI agent
 ## Piece Categories
 
 To organize the piece selection UI into categories, configure `piece_categories`.
-See `docs/piece-categories.md` for details.
+See the [Configuration Guide](./configuration.md#piece-categories) for details.
 
 ## Piece Schema
 

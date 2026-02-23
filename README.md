@@ -83,7 +83,7 @@ takt list
 
 ## How It Works
 
-TAKT uses a music metaphor: **piece** = workflow, **movement** = step.
+TAKT uses a music metaphor — the name itself comes from the German word for "beat" or "baton stroke," used in conducting to keep an orchestra in time. In TAKT, a **piece** is a workflow and a **movement** is a step within it, just as a musical piece is composed of movements.
 
 A piece defines a sequence of movements. Each movement specifies a persona (who), permissions (what's allowed), and rules (what happens next). Here's a minimal example:
 
@@ -252,6 +252,7 @@ await engine.run();
 | [Faceted Prompting](./docs/faceted-prompting.md) | Prompt design methodology |
 | [Repertoire Packages](./docs/repertoire.md) | Installing and sharing packages |
 | [Task Management](./docs/task-management.md) | Task queuing, execution, isolation |
+| [Data Flow](./docs/data-flow.md) | Internal data flow and architecture diagrams |
 | [CI/CD Integration](./docs/ci-cd.md) | GitHub Actions and pipeline mode |
 | [Provider Sandbox](./docs/provider-sandbox.md) | Sandbox configuration for providers |
 | [Changelog](./CHANGELOG.md) ([日本語](./docs/CHANGELOG.ja.md)) | Version history |
