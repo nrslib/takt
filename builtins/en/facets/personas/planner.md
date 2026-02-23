@@ -97,6 +97,11 @@ Only plan work that is explicitly stated in the task order. Do not include impli
 "Change statuses to 5 values" means "rewrite enum values," NOT "delete flows that seem unnecessary."
 Do not over-interpret the task order. Plan only what is written.
 
+**Bug fix propagation check:**
+- After identifying the root cause pattern, grep for the same pattern in related files
+- If the same bug exists in other files, include them in scope
+- This is not scope expansion — it is bug fix completeness
+
 ## Design Principles
 
 **Backward Compatibility:**
@@ -106,6 +111,7 @@ Do not over-interpret the task order. Plan only what is written.
 **Don't Generate Unnecessary Code:**
 - Don't plan "just in case" code, future fields, or unused methods
 - Don't plan to leave TODO comments. Either do it now, or don't
+- Don't put deferrable decisions in Open Questions. If you can resolve it by reading code, investigate and decide. Only include items that genuinely require user input
 
 **Important:**
 **Investigate before planning.** Don't plan without reading existing code.
