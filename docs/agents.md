@@ -2,12 +2,12 @@
 
 This guide explains how to configure and create custom agents in TAKT.
 
-## Built-in Agents
+## Built-in Personas
 
-TAKT includes six built-in agents (located in `resources/global/{lang}/agents/default/`):
+TAKT includes built-in personas (located in `builtins/{lang}/facets/personas/`):
 
-| Agent | Description |
-|-------|-------------|
+| Persona | Description |
+|---------|-------------|
 | **planner** | Task analysis, spec investigation, and implementation planning |
 | **coder** | Implements features and fixes bugs |
 | **ai-antipattern-reviewer** | Reviews for AI-specific anti-patterns (hallucinated APIs, incorrect assumptions, scope creep) |
@@ -15,26 +15,38 @@ TAKT includes six built-in agents (located in `resources/global/{lang}/agents/de
 | **security-reviewer** | Security vulnerability assessment |
 | **supervisor** | Final verification, validation, and approval |
 
-## Specifying Agents
+## Specifying Personas
 
-In piece YAML, agents are specified by file path:
+In piece YAML, personas are specified via section maps:
 
 ```yaml
-# Relative to piece file directory
-agent: ../agents/default/coder.md
+# Section map at top level (key → file path relative to piece YAML)
+personas:
+  coder: ../facets/personas/coder.md
+  reviewer: ../facets/personas/architecture-reviewer.md
 
-# Home directory
-agent: ~/.takt/agents/default/coder.md
-
-# Absolute path
-agent: /path/to/custom/agent.md
+movements:
+  - name: implement
+    persona: coder       # References the key in section map
+  - name: review
+    persona: reviewer    # References the key in section map
 ```
 
-## Creating Custom Agents
+Alternatively, use file paths directly:
 
-### Agent Prompt File
+```yaml
+movements:
+  - name: implement
+    persona: ../facets/personas/coder.md     # Relative to piece file
+  - name: review
+    persona: ~/.takt/facets/personas/my-reviewer.md  # User custom
+```
 
-Create a Markdown file with your agent's instructions:
+## Creating Custom Personas
+
+### Persona Prompt File
+
+Create a Markdown file with your persona's instructions:
 
 ```markdown
 # Security Reviewer
@@ -52,7 +64,7 @@ You are a security-focused code reviewer.
 - Verify proper error handling
 ```
 
-> **Note**: Agents do NOT need to output status markers manually. The piece engine auto-injects status output rules into agent instructions based on the step's `rules` configuration. Agents output `[STEP:N]` tags (where N is the 0-based rule index) which the engine uses for routing.
+> **Note**: Personas do NOT need to output status markers manually. The piece engine auto-injects status output rules into agent instructions based on the movement's `rules` configuration. Agents output `[STEP:N]` tags (where N is the 0-based rule index) which the engine uses for routing.
 
 ### Using agents.yaml
 
@@ -66,7 +78,7 @@ agents:
       - Read
       - Glob
       - Grep
-    provider: claude             # Optional: claude or codex
+    provider: claude             # Optional: claude, codex, or opencode
     model: opus                  # Optional: model alias or full name
 ```
 
@@ -74,13 +86,11 @@ agents:
 
 | Field | Description |
 |-------|-------------|
-| `name` | Agent identifier (referenced in piece steps) |
+| `name` | Agent identifier (referenced in piece movements) |
 | `prompt_file` | Path to Markdown prompt file |
 | `prompt` | Inline prompt text (alternative to `prompt_file`) |
 | `allowed_tools` | List of tools the agent can use |
-| `claude_agent` | Claude Code agent name (for Claude Code native agents) |
-| `claude_skill` | Claude Code skill name (for Claude Code native skills) |
-| `provider` | Provider override: `claude` or `codex` |
+| `provider` | Provider override: `claude`, `codex`, or `opencode` |
 | `model` | Model override (alias or full name) |
 
 ### Available Tools
@@ -100,7 +110,7 @@ agents:
 2. **Minimal tools** — Grant only necessary permissions
 3. **Use `edit: false`** — Review agents should not modify files
 4. **Focused scope** — One agent, one responsibility
-5. **Customize via `/eject`** — Copy builtin agents to `~/.takt/` for modification rather than writing from scratch
+5. **Customize via `/eject`** — Copy builtin personas to `~/.takt/` for modification rather than writing from scratch
 
 ## Example: Multi-Reviewer Setup
 
@@ -114,9 +124,12 @@ agents:
 
 ```yaml
 # piece.yaml
-steps:
+personas:
+  coder: ../facets/personas/coder.md
+
+movements:
   - name: implement
-    agent: ../agents/default/coder.md
+    persona: coder
     edit: true
     rules:
       - condition: Implementation complete
@@ -125,7 +138,7 @@ steps:
         next: ABORT
 
   - name: review
-    agent: performance-reviewer
+    persona: performance-reviewer    # References agents.yaml by name
     edit: false
     rules:
       - condition: Approved

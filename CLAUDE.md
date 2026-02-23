@@ -67,31 +67,31 @@ TAKT (TAKT Agent Koordination Topology) is a multi-agent orchestration system fo
 CLI (cli.ts)
   → Slash commands or executeTask()
     → PieceEngine (piece/engine.ts)
-      → Per step: 3-phase execution
+      → Per movement: 3-phase execution
         Phase 1: runAgent() → main work
-        Phase 2: runReportPhase() → report output (if step.report defined)
+        Phase 2: runReportPhase() → report output (if output_contracts defined)
         Phase 3: runStatusJudgmentPhase() → status tag output (if tag-based rules)
       → detectMatchedRule() → rule evaluation → determineNextStep()
-      → Parallel steps: Promise.all() for sub-steps, aggregate evaluation
+      → Parallel movements: Promise.all() for sub-movements, aggregate evaluation
 ```
 
-### Three-Phase Step Execution
+### Three-Phase Movement Execution
 
-Each step executes in up to 3 phases (session is resumed across phases):
+Each movement executes in up to 3 phases (session is resumed across phases):
 
 | Phase | Purpose | Tools | When |
 |-------|---------|-------|------|
-| Phase 1 | Main work (coding, review, etc.) | Step's allowed_tools (Write excluded if report defined) | Always |
-| Phase 2 | Report output | Write only | When `step.report` is defined |
-| Phase 3 | Status judgment | None (judgment only) | When step has tag-based rules |
+| Phase 1 | Main work (coding, review, etc.) | Movement's allowed_tools (Write excluded if report defined) | Always |
+| Phase 2 | Report output | Write only | When `output_contracts` is defined |
+| Phase 3 | Status judgment | None (judgment only) | When movement has tag-based rules |
 
 Phase 2/3 are implemented in `src/core/piece/engine/phase-runner.ts`. The session is resumed so the agent retains context from Phase 1.
 
 ### Rule Evaluation (5-Stage Fallback)
 
-After step execution, rules are evaluated to determine the next step. Evaluation order (first match wins):
+After movement execution, rules are evaluated to determine the next movement. Evaluation order (first match wins):
 
-1. **Aggregate** (`all()`/`any()`) - For parallel parent steps
+1. **Aggregate** (`all()`/`any()`) - For parallel parent movements
 2. **Phase 3 tag** - `[STEP:N]` tag from status judgment output
 3. **Phase 1 tag** - `[STEP:N]` tag from main execution output (fallback)
 4. **AI judge (ai() only)** - AI evaluates `ai("condition text")` rules
@@ -103,22 +103,22 @@ Implemented in `src/core/piece/evaluation/RuleEvaluator.ts`. The matched method 
 
 **PieceEngine** (`src/core/piece/engine/PieceEngine.ts`)
 - State machine that orchestrates agent execution via EventEmitter
-- Manages step transitions based on rule evaluation results
+- Manages movement transitions based on rule evaluation results
 - Emits events: `step:start`, `step:complete`, `step:blocked`, `step:loop_detected`, `piece:complete`, `piece:abort`, `iteration:limit`
 - Supports loop detection (`LoopDetector`) and iteration limits
-- Maintains agent sessions per step for conversation continuity
+- Maintains agent sessions per movement for conversation continuity
 - Delegates to `StepExecutor` (normal steps) and `ParallelRunner` (parallel steps)
 
 **StepExecutor** (`src/core/piece/engine/StepExecutor.ts`)
-- Executes a single piece step through the 3-phase model
+- Executes a single piece movement through the 3-phase model
 - Phase 1: Main agent execution (with tools)
 - Phase 2: Report output (Write-only, optional)
 - Phase 3: Status judgment (no tools, optional)
 - Builds instructions via `InstructionBuilder`, detects matched rules via `RuleEvaluator`
 
 **ParallelRunner** (`src/core/piece/engine/ParallelRunner.ts`)
-- Executes parallel sub-steps concurrently via `Promise.all()`
-- Aggregates sub-step results for parent rule evaluation
+- Executes parallel sub-movements concurrently via `Promise.all()`
+- Aggregates sub-movement results for parent rule evaluation
 - Supports `all()` / `any()` aggregate conditions
 
 **RuleEvaluator** (`src/core/piece/evaluation/RuleEvaluator.ts`)
@@ -141,7 +141,7 @@ Implemented in `src/core/piece/evaluation/RuleEvaluator.ts`. The matched method 
 
 **Agent Runner** (`src/agents/runner.ts`)
 - Resolves agent specs (name or path) to agent configurations
-- **v0.3.8+:** Agent is optional — steps can execute with `instruction_template` only (no system prompt)
+- **v0.3.8+:** Agent is optional — movements can execute with `instruction_template` only (no system prompt)
 - Built-in agents with default tools:
   - `coder`: Read/Glob/Grep/Edit/Write/Bash/WebSearch/WebFetch
   - `architect`: Read/Glob/Grep/WebSearch/WebFetch
@@ -161,7 +161,7 @@ Implemented in `src/core/piece/evaluation/RuleEvaluator.ts`. The matched method 
 
 **Configuration** (`src/infra/config/`)
 - `loaders/loader.ts` - Custom agent loading from `.takt/agents.yaml`
-- `loaders/pieceParser.ts` - YAML parsing, step/rule normalization with Zod validation
+- `loaders/pieceParser.ts` - YAML parsing, movement/rule normalization with Zod validation
 - `loaders/pieceResolver.ts` - **3-layer resolution with correct priority** (v0.3.8+: user → project → builtin)
 - `loaders/pieceCategories.ts` - Piece categorization and filtering
 - `loaders/agentLoader.ts` - Agent prompt file loading
@@ -184,9 +184,9 @@ Implemented in `src/core/piece/evaluation/RuleEvaluator.ts`. The matched method 
 
 1. User provides task (text or `#N` issue reference) or slash command → CLI
 2. CLI loads piece with **correct priority** (v0.3.8+): user `~/.takt/pieces/` → project `.takt/pieces/` → builtin `builtins/{lang}/pieces/`
-3. PieceEngine starts at `initial_step`
-4. Each step: `buildInstruction()` → Phase 1 (main) → Phase 2 (report) → Phase 3 (status) → `detectMatchedRule()` → `determineNextStep()`
-5. Rule evaluation determines next step name (v0.3.8+: uses **last match** when multiple `[STEP:N]` tags appear)
+3. PieceEngine starts at `initial_movement`
+4. Each movement: `buildInstruction()` → Phase 1 (main) → Phase 2 (report) → Phase 3 (status) → `detectMatchedRule()` → `determineNextStep()`
+5. Rule evaluation determines next movement name (v0.3.8+: uses **last match** when multiple `[STEP:N]` tags appear)
 6. Special transitions: `COMPLETE` ends piece successfully, `ABORT` ends with failure
 
 ## Directory Structure
@@ -195,18 +195,27 @@ Implemented in `src/core/piece/evaluation/RuleEvaluator.ts`. The matched method 
 ~/.takt/                  # Global user config (created on first run)
   config.yaml             # Trusted dirs, default piece, log level, language
   pieces/                 # User piece YAML files (override builtins)
-  personas/               # User persona prompt files (.md)
-  agents/                 # Legacy persona prompts (backward compat)
+  facets/                 # User facets
+    personas/             # User persona prompt files (.md)
+    policies/             # User policy files
+    knowledge/            # User knowledge files
+    instructions/         # User instruction files
+    output-contracts/     # User output contract files
+  repertoire/             # Installed repertoire packages
 
 .takt/                    # Project-level config
+  config.yaml             # Project configuration
   agents.yaml             # Custom agent definitions
+  facets/                 # Project-level facets
   tasks/                  # Task files for /run-tasks
-  reports/                # Execution reports (auto-generated)
+  runs/                   # Execution reports, logs, context
   logs/                   # Session logs in NDJSON format (gitignored)
 
 builtins/                 # Bundled defaults (builtin, read from dist/ at runtime)
-  en/                     # English personas, policies, instructions, and pieces
-  ja/                     # Japanese personas, policies, instructions, and pieces
+  en/                     # English
+    facets/               # Facets (personas, policies, knowledge, instructions, output-contracts)
+    pieces/               # Piece YAML files
+  ja/                     # Japanese (same structure)
   project/                # Project-level template files
   skill/                  # Claude Code skill files
 ```
@@ -219,51 +228,68 @@ Builtin resources are embedded in the npm package (`builtins/`). User files in `
 name: piece-name
 description: Optional description
 max_movements: 10
-initial_step: plan        # First step to execute
+initial_movement: plan    # First movement to execute
 
-steps:
-  # Normal step
-  - name: step-name
-    persona: ../personas/coder.md       # Path to persona prompt
+# Section maps (key → file path relative to piece YAML directory)
+personas:
+  coder: ../facets/personas/coder.md
+  reviewer: ../facets/personas/architecture-reviewer.md
+policies:
+  coding: ../facets/policies/coding.md
+knowledge:
+  architecture: ../facets/knowledge/architecture.md
+instructions:
+  plan: ../facets/instructions/plan.md
+report_formats:
+  plan: ../facets/output-contracts/plan.md
+
+movements:
+  # Normal movement
+  - name: movement-name
+    persona: coder                      # Persona key (references section map)
     persona_name: coder                 # Display name (optional)
-    provider: codex                     # claude|codex (optional)
+    policy: coding                      # Policy key (single or array)
+    knowledge: architecture             # Knowledge key (single or array)
+    instruction: plan                   # Instruction key (references section map)
+    provider: codex                     # claude|codex|opencode (optional)
     model: opus                         # Model name (optional)
-    edit: true                          # Whether step can edit files
+    edit: true                          # Whether movement can edit files
     required_permission_mode: edit       # Required minimum permission mode (optional)
     instruction_template: |
-      Custom instructions for this step.
+      Custom instructions for this movement.
       {task}, {previous_response} are auto-injected if not present as placeholders.
     pass_previous_response: true        # Default: true
-    report:
-      name: 01-plan.md                 # Report file name
-      format: |                         # Output contract template
-        # Plan Report
-        ...
+    output_contracts:
+      report:
+        - name: 01-plan.md             # Report file name
+          format: plan                  # References report_formats map
     rules:
       - condition: "Human-readable condition"
-        next: next-step-name
+        next: next-movement-name
       - condition: ai("AI evaluates this condition text")
-        next: other-step
+        next: other-movement
       - condition: blocked
         next: ABORT
 
-  # Parallel step (sub-steps execute concurrently)
+  # Parallel movement (sub-movements execute concurrently)
   - name: reviewers
     parallel:
       - name: arch-review
-        persona: ../personas/architecture-reviewer.md
+        persona: reviewer
+        policy: review
+        knowledge: architecture
+        edit: false
         rules:
-          - condition: approved       # next is optional for sub-steps
+          - condition: approved       # next is optional for sub-movements
           - condition: needs_fix
-        instruction_template: |
-          Review architecture...
+        instruction: review-arch
       - name: security-review
-        persona: ../personas/security-reviewer.md
+        persona: security-reviewer
+        edit: false
         rules:
           - condition: approved
           - condition: needs_fix
-        instruction_template: |
-          Review security...
+        instruction: review-security
     rules:                            # Parent rules use aggregate conditions
       - condition: all("approved")
         next: supervise
@@ -271,11 +297,11 @@ steps:
         next: fix
 ```
 
-Key points about parallel steps:
-- Sub-step `rules` define possible outcomes but `next` is ignored (parent handles routing)
-- Parent `rules` use `all("X")`/`any("X")` to aggregate sub-step results
-- `all("X")`: true if ALL sub-steps matched condition X
-- `any("X")`: true if ANY sub-step matched condition X
+Key points about parallel movements:
+- Sub-movement `rules` define possible outcomes but `next` is ignored (parent handles routing)
+- Parent `rules` use `all("X")`/`any("X")` to aggregate sub-movement results
+- `all("X")`: true if ALL sub-movements matched condition X
+- `any("X")`: true if ANY sub-movements matched condition X
 
 ### Rule Condition Types
 
@@ -283,7 +309,7 @@ Key points about parallel steps:
 |------|--------|------------|
 | Tag-based | `"condition text"` | Agent outputs `[STEP:N]` tag, matched by index |
 | AI judge | `ai("condition text")` | AI evaluates condition against agent output |
-| Aggregate | `all("X")` / `any("X")` | Aggregates parallel sub-step matched conditions |
+| Aggregate | `all("X")` / `any("X")` | Aggregates parallel sub-movement matched conditions |
 
 ### Template Variables
 
@@ -292,8 +318,8 @@ Key points about parallel steps:
 | `{task}` | Original user request (auto-injected if not in template) |
 | `{iteration}` | Piece-wide iteration count |
 | `{max_movements}` | Maximum movements allowed |
-| `{step_iteration}` | Per-step iteration count |
-| `{previous_response}` | Previous step output (auto-injected if not in template) |
+| `{movement_iteration}` | Per-movement iteration count |
+| `{previous_response}` | Previous movement output (auto-injected if not in template) |
 | `{user_inputs}` | Accumulated user inputs (auto-injected if not in template) |
 | `{report_dir}` | Report directory name |
 
@@ -313,7 +339,7 @@ Example category config:
 ```yaml
 piece_categories:
   Development:
-    pieces: [default, simple]
+    pieces: [default, default-mini]
     children:
       Backend:
         pieces: [expert-cqrs]
@@ -331,7 +357,7 @@ Implemented in `src/infra/config/loaders/pieceCategories.ts`.
 
 Model is resolved in the following priority order:
 
-1. **Piece step `model`** - Highest priority (specified in step YAML)
+1. **Piece movement `model`** - Highest priority (specified in movement YAML)
 2. **Custom agent `model`** - Agent-level model in `.takt/agents.yaml`
 3. **Global config `model`** - Default model in `~/.takt/config.yaml`
 4. **Provider default** - Falls back to provider's default (Claude: sonnet, Codex: gpt-5.2-codex)
@@ -339,7 +365,7 @@ Model is resolved in the following priority order:
 Example `~/.takt/config.yaml`:
 ```yaml
 provider: claude
-model: opus          # Default model for all steps (unless overridden)
+model: opus          # Default model for all movements (unless overridden)
 ```
 
 ## NDJSON Session Logging
@@ -369,16 +395,16 @@ Files: `.takt/logs/{sessionId}.jsonl`, with `latest.json` pointer. Legacy `.json
 
 **Do NOT expand schemas carelessly.** Rule conditions are free-form text (not enum-restricted). However, the engine's behavior depends on specific patterns (`ai()`, `all()`, `any()`). Do not add new special syntax without updating the loader's regex parsing in `pieceParser.ts`.
 
-**Instruction auto-injection over explicit placeholders.** The instruction builder auto-injects `{task}`, `{previous_response}`, `{user_inputs}`, and status rules. Templates should contain only step-specific instructions, not boilerplate.
+**Instruction auto-injection over explicit placeholders.** The instruction builder auto-injects `{task}`, `{previous_response}`, `{user_inputs}`, and status rules. Templates should contain only movement-specific instructions, not boilerplate.
 
 **Faceted prompting: each facet has a dedicated file type.** TAKT assembles agent prompts from 4 facets. Each facet has a distinct role. When adding new rules or knowledge, place content in the correct facet.
 
 ```
-builtins/{lang}/
+builtins/{lang}/facets/
   personas/     — WHO: identity, expertise, behavioral habits
   policies/     — HOW: judgment criteria, REJECT/APPROVE rules, prohibited patterns
   knowledge/    — WHAT TO KNOW: domain patterns, anti-patterns, detailed reasoning with examples
-  instructions/ — WHAT TO DO NOW: step-specific procedures and checklists
+  instructions/ — WHAT TO DO NOW: movement-specific procedures and checklists
 ```
 
 | Deciding where to place content | Facet | Example |
@@ -386,20 +412,20 @@ builtins/{lang}/
 | Role definition, AI habit prevention | Persona | "置き換えたコードを残す → 禁止" |
 | Actionable REJECT/APPROVE criterion | Policy | "内部実装のパブリックAPIエクスポート → REJECT" |
 | Detailed reasoning, REJECT/OK table with examples | Knowledge | "パブリックAPIの公開範囲" section |
-| This-step-only procedure or checklist | Instruction | "レビュー観点: 構造・設計の妥当性..." |
+| This-movement-only procedure or checklist | Instruction | "レビュー観点: 構造・設計の妥当性..." |
 | Workflow structure, facet assignment | Piece YAML | `persona: coder`, `policy: coding`, `knowledge: architecture` |
 
 Key rules:
-- Persona files are reusable across pieces. Never include piece-specific procedures (report names, step references)
+- Persona files are reusable across pieces. Never include piece-specific procedures (report names, movement references)
 - Policy REJECT lists are what reviewers enforce. If a criterion is not in the policy REJECT list, reviewers will not catch it — even if knowledge explains the reasoning
 - Knowledge provides the WHY behind policy criteria. Knowledge alone does not trigger enforcement
-- Instructions are bound to a single piece step. They reference procedures, not principles
-- Piece YAML `instruction_template` is for step-specific details (which reports to read, step routing, output templates)
+- Instructions are bound to a single piece movement. They reference procedures, not principles
+- Piece YAML `instruction_template` is for movement-specific details (which reports to read, movement routing, output templates)
 
 **Separation of concerns in piece engine:**
 - `PieceEngine` - Orchestration, state management, event emission
-- `StepExecutor` - Single step execution (3-phase model)
-- `ParallelRunner` - Parallel step execution
+- `StepExecutor` - Single movement execution (3-phase model)
+- `ParallelRunner` - Parallel movement execution
 - `RuleEvaluator` - Rule matching and evaluation
 - `InstructionBuilder` - Instruction template processing
 
@@ -460,14 +486,14 @@ Debug logs are written to `.takt/logs/debug.log` (ndjson format). Log levels: `d
 
 **Persona prompt resolution:**
 - Persona paths in piece YAML are resolved relative to the piece file's directory
-- `../personas/coder.md` resolves from piece file location
-- Built-in personas are loaded from `builtins/{lang}/personas/`
-- User personas are loaded from `~/.takt/personas/` (legacy: `~/.takt/agents/`)
+- `../facets/personas/coder.md` resolves from piece file location
+- Built-in personas are loaded from `builtins/{lang}/facets/personas/`
+- User personas are loaded from `~/.takt/facets/personas/`
 - If persona file doesn't exist, the persona string is used as inline system prompt
 
 **Report directory structure:**
 - Report dirs are created at `.takt/runs/{timestamp}-{slug}/reports/`
-- Report files specified in `step.report` are written relative to report dir
+- Report files specified in `output_contracts` are written relative to report dir
 - Report dir path is available as `{report_dir}` variable in instruction templates
 - When `cwd !== projectCwd` (worktree execution), reports write to `cwd/.takt/runs/{slug}/reports/` (clone dir) to prevent agents from discovering the main repository path
 
@@ -489,13 +515,13 @@ Debug logs are written to `.takt/logs/debug.log` (ndjson format). Log levels: `d
 - Tag-based rules match by array index (0-based), not by exact condition text
 - **v0.3.8+:** When multiple `[STEP:N]` tags appear in output, **last match wins** (not first)
 - `ai()` conditions are evaluated by Claude/Codex, not by string matching
-- Aggregate conditions (`all()`, `any()`) only work in parallel parent steps
+- Aggregate conditions (`all()`, `any()`) only work in parallel parent movements
 - Fail-fast: if rules exist but no rule matches, piece aborts
 - Interactive-only rules are skipped in pipeline mode (`rule.interactiveOnly === true`)
 
 **Provider-specific behavior:**
-- Claude: Uses session files in `~/.claude/projects/`, supports skill/agent calls
-- Codex: In-memory sessions, no skill/agent calls
+- Claude: Uses session files in `~/.claude/projects/`
+- Codex: In-memory sessions
 - Model names are passed directly to provider (no alias resolution in TAKT)
 - Claude supports aliases: `opus`, `sonnet`, `haiku`
 - Codex defaults to `codex` if model not specified

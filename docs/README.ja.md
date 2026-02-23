@@ -100,13 +100,14 @@ TAKT は音楽のメタファーを使っています。**piece** がワーク�
 piece は movement の並びを定義します。各 movement では persona（誰が実行するか）、権限（何を許可するか）、ルール（次にどこへ進むか）を指定します。
 
 ```yaml
-name: simple
+name: plan-implement-review
 initial_movement: plan
+max_movements: 10
 
 personas:
-  planner: ../personas/planner.md
-  coder: ../personas/coder.md
-  reviewer: ../personas/architecture-reviewer.md
+  planner: ../facets/personas/planner.md
+  coder: ../facets/personas/coder.md
+  reviewer: ../facets/personas/architecture-reviewer.md
 
 movements:
   - name: plan
@@ -119,6 +120,7 @@ movements:
   - name: implement
     persona: coder
     edit: true
+    required_permission_mode: edit
     rules:
       - condition: Implementation complete
         next: review

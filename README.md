@@ -88,13 +88,14 @@ TAKT uses a music metaphor: **piece** = workflow, **movement** = step.
 A piece defines a sequence of movements. Each movement specifies a persona (who), permissions (what's allowed), and rules (what happens next). Here's a minimal example:
 
 ```yaml
-name: simple
+name: plan-implement-review
 initial_movement: plan
+max_movements: 10
 
 personas:
-  planner: ../personas/planner.md
-  coder: ../personas/coder.md
-  reviewer: ../personas/architecture-reviewer.md
+  planner: ../facets/personas/planner.md
+  coder: ../facets/personas/coder.md
+  reviewer: ../facets/personas/architecture-reviewer.md
 
 movements:
   - name: plan
@@ -107,6 +108,7 @@ movements:
   - name: implement
     persona: coder
     edit: true
+    required_permission_mode: edit
     rules:
       - condition: Implementation complete
         next: review
