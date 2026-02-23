@@ -14,7 +14,7 @@ import {
   instructBranch,
   syncBranchWithRoot,
 } from './taskActions.js';
-import { deletePendingTask, deleteFailedTask, deleteCompletedTask, deleteAllTasks } from './taskDeleteActions.js';
+import { deletePendingTask, deleteFailedTask, deleteCompletedTask, deleteExceededTask, deleteAllTasks } from './taskDeleteActions.js';
 import { retryFailedTask } from './taskRetryActions.js';
 import { listTasksNonInteractive, type ListNonInteractiveOptions } from './listNonInteractive.js';
 import { formatTaskStatusLabel, formatShortDate } from './taskStatusLabel.js';
@@ -38,9 +38,30 @@ export {
 } from './instructMode.js';
 
 type PendingTaskAction = 'delete';
+type ExceededTaskAction = 'requeue' | 'delete';
 
 type FailedTaskAction = 'retry' | 'delete';
 type CompletedTaskAction = ListAction;
+
+async function showExceededTaskAndPromptAction(task: TaskListItem): Promise<ExceededTaskAction | null> {
+  header(formatTaskStatusLabel(task));
+  info(`  Created: ${task.createdAt}`);
+  if (task.content) {
+    info(`  ${task.content}`);
+  }
+  if (task.exceededCurrentIteration !== undefined && task.exceededMaxMovements !== undefined) {
+    info(`  Iteration: ${task.exceededCurrentIteration}/${task.exceededMaxMovements}`);
+  }
+  blankLine();
+
+  return await selectOption<ExceededTaskAction>(
+    `Action for ${task.name}:`,
+    [
+      { label: 'Requeue', value: 'requeue', description: 'Resume execution from where it stopped' },
+      { label: 'Delete', value: 'delete', description: 'Remove this task permanently' },
+    ],
+  );
+}
 
 async function showPendingTaskAndPromptAction(task: TaskListItem): Promise<PendingTaskAction | null> {
   header(formatTaskStatusLabel(task));
@@ -191,6 +212,15 @@ export async function listTasks(
         await retryFailedTask(task, cwd);
       } else if (taskAction === 'delete') {
         await deleteFailedTask(task);
+      }
+    } else if (type === 'exceeded') {
+      const task = tasks[idx];
+      if (!task) continue;
+      const taskAction = await showExceededTaskAndPromptAction(task);
+      if (taskAction === 'requeue') {
+        runner.requeueExceededTask(task.name);
+      } else if (taskAction === 'delete') {
+        await deleteExceededTask(task);
       }
     }
   }

@@ -27,6 +27,8 @@ export interface ResolvedTaskExecution {
   autoPr: boolean;
   draftPr: boolean;
   issueNumber?: number;
+  maxMovementsOverride?: number;
+  initialIterationOverride?: number;
 }
 
 function buildRunTaskDirInstruction(reportDirName: string): string {
@@ -165,6 +167,8 @@ export async function resolveTaskExecution(
   const execPiece = data.piece || defaultPiece;
   const startMovement = data.start_movement;
   const retryNote = data.retry_note;
+  const maxMovementsOverride = data.exceeded_max_movements;
+  const initialIterationOverride = data.exceeded_current_iteration;
 
   const autoPr = data.auto_pr ?? resolvePieceConfigValue(defaultCwd, 'autoPr') ?? false;
   const draftPr = data.draft_pr ?? resolvePieceConfigValue(defaultCwd, 'draftPr') ?? false;
@@ -183,5 +187,7 @@ export async function resolveTaskExecution(
     ...(startMovement ? { startMovement } : {}),
     ...(retryNote ? { retryNote } : {}),
     ...(data.issue !== undefined ? { issueNumber: data.issue } : {}),
+    ...(maxMovementsOverride !== undefined ? { maxMovementsOverride } : {}),
+    ...(initialIterationOverride !== undefined ? { initialIterationOverride } : {}),
   };
 }

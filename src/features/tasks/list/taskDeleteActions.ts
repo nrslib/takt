@@ -83,6 +83,27 @@ export async function deleteCompletedTask(task: TaskListItem): Promise<boolean> 
   return true;
 }
 
+export async function deleteExceededTask(task: TaskListItem): Promise<boolean> {
+  const confirmed = await confirm(`Delete exceeded task "${task.name}"?`, false);
+  if (!confirmed) return false;
+  const projectDir = getProjectDir(task);
+  try {
+    if (!cleanupBranchIfPresent(task, projectDir)) {
+      return false;
+    }
+    const runner = new TaskRunner(projectDir);
+    runner.deleteExceededTask(task.name);
+  } catch (err) {
+    const msg = getErrorMessage(err);
+    logError(`Failed to delete exceeded task "${task.name}": ${msg}`);
+    log.error('Failed to delete exceeded task', { name: task.name, filePath: task.filePath, error: msg });
+    return false;
+  }
+  success(`Deleted exceeded task: ${task.name}`);
+  log.info('Deleted exceeded task', { name: task.name, filePath: task.filePath });
+  return true;
+}
+
 export async function deleteAllTasks(tasks: TaskListItem[]): Promise<boolean> {
   const deletable = tasks.filter(t => t.kind !== 'running');
   if (deletable.length === 0) return false;
@@ -106,6 +127,8 @@ export async function deleteAllTasks(tasks: TaskListItem[]): Promise<boolean> {
         runner.deleteFailedTask(task.name);
       } else if (task.kind === 'completed') {
         runner.deleteCompletedTask(task.name);
+      } else if (task.kind === 'exceeded') {
+        runner.deleteExceededTask(task.name);
       }
       deletedCount++;
       log.info('Deleted task in bulk delete', { name: task.name, kind: task.kind });

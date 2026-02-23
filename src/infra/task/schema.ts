@@ -18,6 +18,8 @@ export const TaskExecutionConfigSchema = z.object({
   retry_note: z.string().optional(),
   auto_pr: z.boolean().optional(),
   draft_pr: z.boolean().optional(),
+  exceeded_max_movements: z.number().int().positive().optional(),
+  exceeded_current_iteration: z.number().int().min(0).optional(),
 });
 
 /**
@@ -29,7 +31,7 @@ export const TaskFileSchema = TaskExecutionConfigSchema.extend({
 
 export type TaskFileData = z.infer<typeof TaskFileSchema>;
 
-export const TaskStatusSchema = z.enum(['pending', 'running', 'completed', 'failed']);
+export const TaskStatusSchema = z.enum(['pending', 'running', 'completed', 'failed', 'exceeded']);
 export type TaskStatus = z.infer<typeof TaskStatusSchema>;
 
 export const TaskFailureSchema = z.object({
@@ -194,6 +196,37 @@ export const TaskRecordSchema = TaskExecutionConfigSchema.extend({
         code: z.ZodIssueCode.custom,
         path: ['owner_pid'],
         message: 'Failed task must not have owner_pid.',
+      });
+    }
+  }
+
+  if (value.status === 'exceeded') {
+    if (value.started_at === null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['started_at'],
+        message: 'Exceeded task requires started_at.',
+      });
+    }
+    if (value.completed_at === null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['completed_at'],
+        message: 'Exceeded task requires completed_at.',
+      });
+    }
+    if (hasFailure) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['failure'],
+        message: 'Exceeded task must not have failure.',
+      });
+    }
+    if (hasOwnerPid) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['owner_pid'],
+        message: 'Exceeded task must not have owner_pid.',
       });
     }
   }

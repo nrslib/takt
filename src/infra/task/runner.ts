@@ -5,6 +5,7 @@ import { TaskStore } from './store.js';
 import { TaskLifecycleService } from './taskLifecycleService.js';
 import { TaskQueryService } from './taskQueryService.js';
 import { TaskDeletionService } from './taskDeletionService.js';
+import { TaskExceedService, type ExceedTaskOptions } from './taskExceedService.js';
 
 export type { TaskInfo, TaskResult, TaskListItem };
 
@@ -14,6 +15,7 @@ export class TaskRunner {
   private readonly lifecycle: TaskLifecycleService;
   private readonly query: TaskQueryService;
   private readonly deletion: TaskDeletionService;
+  private readonly exceed: TaskExceedService;
 
   constructor(private readonly projectDir: string) {
     this.store = new TaskStore(projectDir);
@@ -21,6 +23,7 @@ export class TaskRunner {
     this.lifecycle = new TaskLifecycleService(projectDir, this.tasksFile, this.store);
     this.query = new TaskQueryService(projectDir, this.tasksFile, this.store);
     this.deletion = new TaskDeletionService(this.store);
+    this.exceed = new TaskExceedService(this.store);
   }
 
   ensureDirs(): void {
@@ -76,6 +79,10 @@ export class TaskRunner {
     return this.query.listFailedTasks();
   }
 
+  listExceededTasks(): TaskListItem[] {
+    return this.query.listExceededTasks();
+  }
+
   requeueFailedTask(taskRef: string, startMovement?: string, retryNote?: string): string {
     return this.lifecycle.requeueFailedTask(taskRef, startMovement, retryNote);
   }
@@ -108,5 +115,17 @@ export class TaskRunner {
 
   deleteCompletedTask(name: string): void {
     this.deletion.deleteCompletedTask(name);
+  }
+
+  deleteExceededTask(name: string): void {
+    this.deletion.deleteExceededTask(name);
+  }
+
+  exceedTask(taskName: string, options: ExceedTaskOptions): void {
+    this.exceed.exceedTask(taskName, options);
+  }
+
+  requeueExceededTask(taskName: string): void {
+    this.exceed.requeueExceededTask(taskName);
   }
 }

@@ -206,6 +206,8 @@ export interface PieceEngineOptions {
   taskPrefix?: string;
   /** Color index for task prefix (cycled across tasks) */
   taskColorIndex?: number;
+  /** Initial iteration count (for resuming exceeded tasks) */
+  initialIteration?: number;
 }
 
 /** Loop detection result */

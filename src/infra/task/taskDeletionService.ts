@@ -15,7 +15,11 @@ export class TaskDeletionService {
     this.deleteTaskByNameAndStatus(name, 'completed');
   }
 
-  private deleteTaskByNameAndStatus(name: string, status: 'pending' | 'failed' | 'completed'): void {
+  deleteExceededTask(name: string): void {
+    this.deleteTaskByNameAndStatus(name, 'exceeded');
+  }
+
+  private deleteTaskByNameAndStatus(name: string, status: 'pending' | 'failed' | 'completed' | 'exceeded'): void {
     this.store.update((current) => {
       const exists = current.tasks.some((task) => task.name === name && task.status === status);
       if (!exists) {
