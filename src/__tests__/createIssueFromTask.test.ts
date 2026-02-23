@@ -29,6 +29,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 import { createIssue } from '../infra/github/issue.js';
 import { success, error } from '../shared/ui/index.js';
 import { createIssueFromTask } from '../features/tasks/index.js';
+import { extractTitle } from '../features/tasks/add/index.js';
 
 const mockCreateIssue = vi.mocked(createIssue);
 const mockSuccess = vi.mocked(success);
@@ -162,6 +163,152 @@ describe('createIssueFromTask', () => {
     expect(mockCreateIssue).toHaveBeenCalledWith({
       title: 'First line title',
       body: task,
+    });
+  });
+});
+
+describe('extractTitle', () => {
+  describe('Markdown heading extraction', () => {
+    it('should strip # and return text for h1 heading', () => {
+      // Given
+      const task = '# Fix broken title\nDetails here';
+
+      // When
+      const result = extractTitle(task);
+
+      // Then
+      expect(result).toBe('Fix broken title');
+    });
+
+    it('should strip ## and return text for h2 heading', () => {
+      // Given
+      const task = '## Fix broken title\nDetails here';
+
+      // When
+      const result = extractTitle(task);
+
+      // Then
+      expect(result).toBe('Fix broken title');
+    });
+
+    it('should strip ### and return text for h3 heading', () => {
+      // Given
+      const task = '### Fix broken title\nDetails here';
+
+      // When
+      const result = extractTitle(task);
+
+      // Then
+      expect(result).toBe('Fix broken title');
+    });
+
+    it('should prefer first Markdown heading over preceding plain text', () => {
+      // Given: AI preamble followed by heading
+      const task = '失礼しました。修正します。\n## Fix broken title\nDetails here';
+
+      // When
+      const result = extractTitle(task);
+
+      // Then: heading wins over first line
+      expect(result).toBe('Fix broken title');
+    });
+
+    it('should find heading even when multiple empty lines precede it', () => {
+      // Given
+      const task = '\n\n## Fix broken title\nDetails here';
+
+      // When
+      const result = extractTitle(task);
+
+      // Then
+      expect(result).toBe('Fix broken title');
+    });
+  });
+
+  describe('fallback to first non-empty line', () => {
+    it('should return first non-empty line when no Markdown heading exists', () => {
+      // Given: plain text without heading
+      const task = 'Fix broken title\nSecond line details';
+
+      // When
+      const result = extractTitle(task);
+
+      // Then
+      expect(result).toBe('Fix broken title');
+    });
+
+    it('should skip leading empty lines when no heading exists', () => {
+      // Given: leading blank lines
+      const task = '\n\nFix broken title\nDetails here';
+
+      // When
+      const result = extractTitle(task);
+
+      // Then
+      expect(result).toBe('Fix broken title');
+    });
+
+    it('should not treat h4+ headings as Markdown headings', () => {
+      // Given: #### is not matched (only h1-h3 are recognized)
+      const task = '#### h4 heading\nDetails here';
+
+      // When
+      const result = extractTitle(task);
+
+      // Then: falls back to first non-empty line as-is
+      expect(result).toBe('#### h4 heading');
+    });
+
+    it('should not treat heading without space after hash as Markdown heading', () => {
+      // Given: #Title has no space, so not recognized as heading
+      const task = '#NoSpace\nDetails here';
+
+      // When
+      const result = extractTitle(task);
+
+      // Then: falls back to first non-empty line
+      expect(result).toBe('#NoSpace');
+    });
+  });
+
+  describe('title truncation', () => {
+    it('should truncate heading title to 97 chars + ellipsis when over 100 chars', () => {
+      // Given: heading text over 100 characters
+      const longTitle = 'a'.repeat(102);
+      const task = `## ${longTitle}\nDetails here`;
+
+      // When
+      const result = extractTitle(task);
+
+      // Then: truncated to 97 + "..."
+      expect(result).toBe(`${'a'.repeat(97)}...`);
+      expect(result).toHaveLength(100);
+    });
+
+    it('should truncate plain text title to 97 chars + ellipsis when over 100 chars', () => {
+      // Given: plain text over 100 characters
+      const longTitle = 'b'.repeat(102);
+      const task = `${longTitle}\nDetails here`;
+
+      // When
+      const result = extractTitle(task);
+
+      // Then: truncated to 97 + "..."
+      expect(result).toBe(`${'b'.repeat(97)}...`);
+      expect(result).toHaveLength(100);
+    });
+
+    it('should not truncate title of exactly 100 characters', () => {
+      // Given: title exactly 100 chars
+      const title100 = 'c'.repeat(100);
+      const task = `## ${title100}\nDetails here`;
+
+      // When
+      const result = extractTitle(task);
+
+      // Then: not truncated
+      expect(result).toBe(title100);
+      expect(result).toHaveLength(100);
     });
   });
 });
