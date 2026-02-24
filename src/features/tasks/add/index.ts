@@ -9,6 +9,7 @@ import * as fs from 'node:fs';
 import { promptInput, confirm, selectOption } from '../../../shared/prompt/index.js';
 import { success, info, error, withProgress } from '../../../shared/ui/index.js';
 import { getLabel } from '../../../shared/i18n/index.js';
+import type { Language } from '../../../core/models/types.js';
 import { TaskRunner, type TaskFileData, summarizeTaskName } from '../../../infra/task/index.js';
 import { determinePiece } from '../execute/selectAndExecute.js';
 import { createLogger, getErrorMessage, generateReportDir } from '../../../shared/utils/index.js';
@@ -139,10 +140,9 @@ export async function createIssueAndSaveTask(
   cwd: string,
   task: string,
   piece?: string,
-  options?: { confirmAtEndMessage?: string },
+  options?: { confirmAtEndMessage?: string; labels?: string[] },
 ): Promise<void> {
-  const labels = await promptLabelSelection();
-  const issueNumber = createIssueFromTask(task, { labels });
+  const issueNumber = createIssueFromTask(task, { labels: options?.labels });
   if (issueNumber !== undefined) {
     await saveTaskFromInteractive(cwd, task, piece, {
       issue: issueNumber,
@@ -157,20 +157,20 @@ export async function createIssueAndSaveTask(
  * Presents 4 fixed options: None, bug, enhancement, custom input.
  * Returns an array of selected labels (empty if none selected).
  */
-async function promptLabelSelection(): Promise<string[]> {
+export async function promptLabelSelection(lang: Language): Promise<string[]> {
   const selected = await selectOption<string>(
-    getLabel('issue.labelSelection.prompt'),
+    getLabel('issue.labelSelection.prompt', lang),
     [
-      { label: getLabel('issue.labelSelection.none'), value: 'none' },
+      { label: getLabel('issue.labelSelection.none', lang), value: 'none' },
       { label: 'bug', value: 'bug' },
       { label: 'enhancement', value: 'enhancement' },
-      { label: getLabel('issue.labelSelection.custom'), value: 'custom' },
+      { label: getLabel('issue.labelSelection.custom', lang), value: 'custom' },
     ],
   );
 
   if (selected === null || selected === 'none') return [];
   if (selected === 'custom') {
-    const customLabel = await promptInput(getLabel('issue.labelSelection.customPrompt'));
+    const customLabel = await promptInput(getLabel('issue.labelSelection.customPrompt', lang));
     return customLabel?.split(',').map((l) => l.trim()).filter((l) => l.length > 0) ?? [];
   }
   return [selected];

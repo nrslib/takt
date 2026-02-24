@@ -41,6 +41,7 @@ vi.mock('../features/tasks/index.js', () => ({
   determinePiece: vi.fn(),
   saveTaskFromInteractive: vi.fn(),
   createIssueAndSaveTask: vi.fn(),
+  promptLabelSelection: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock('../features/pipeline/index.js', () => ({
@@ -446,7 +447,7 @@ describe('Issue resolution in routing', () => {
         '/test/cwd',
         'New feature request',
         'default',
-        { confirmAtEndMessage: 'Add this issue to tasks?' },
+        { confirmAtEndMessage: 'Add this issue to tasks?', labels: [] },
       );
     });
 
