@@ -9,7 +9,7 @@ import { info, error as logError, withProgress } from '../../shared/ui/index.js'
 import { getErrorMessage } from '../../shared/utils/index.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { fetchIssue, formatIssueAsTask, checkGhCli, parseIssueNumbers, type GitHubIssue } from '../../infra/github/index.js';
-import { selectAndExecuteTask, determinePiece, saveTaskFromInteractive, createIssueFromTask, type SelectAndExecuteOptions } from '../../features/tasks/index.js';
+import { selectAndExecuteTask, determinePiece, saveTaskFromInteractive, createIssueAndSaveTask, type SelectAndExecuteOptions } from '../../features/tasks/index.js';
 import { executePipeline } from '../../features/pipeline/index.js';
 import {
   interactiveMode,
@@ -218,13 +218,9 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       await selectAndExecuteTask(resolvedCwd, confirmedTask, selectOptions, agentOverrides);
     },
     create_issue: async ({ task: confirmedTask }) => {
-      const issueNumber = createIssueFromTask(confirmedTask);
-      if (issueNumber !== undefined) {
-        await saveTaskFromInteractive(resolvedCwd, confirmedTask, pieceId, {
-          issue: issueNumber,
-          confirmAtEndMessage: 'Add this issue to tasks?',
-        });
-      }
+      await createIssueAndSaveTask(resolvedCwd, confirmedTask, pieceId, {
+        confirmAtEndMessage: 'Add this issue to tasks?',
+      });
     },
     save_task: async ({ task: confirmedTask }) => {
       await saveTaskFromInteractive(resolvedCwd, confirmedTask, pieceId);

@@ -62,20 +62,39 @@ describe('createIssue', () => {
     ]);
   });
 
-  it('should include labels when provided', () => {
+  it('should include labels when provided and they exist on the repo', () => {
     // Given
     mockExecFileSync
       .mockReturnValueOnce(Buffer.from('')) // gh auth status
+      .mockReturnValueOnce('bug\npriority:high\n' as unknown as Buffer) // gh label list
       .mockReturnValueOnce('https://github.com/owner/repo/issues/1\n' as unknown as Buffer);
 
     // When
     createIssue({ title: 'Bug', body: 'Fix it', labels: ['bug', 'priority:high'] });
 
     // Then
-    const issueCreateCall = mockExecFileSync.mock.calls[1];
+    const issueCreateCall = mockExecFileSync.mock.calls[2];
     expect(issueCreateCall?.[1]).toEqual([
       'issue', 'create', '--title', 'Bug', '--body', 'Fix it',
       '--label', 'bug,priority:high',
+    ]);
+  });
+
+  it('should skip non-existent labels', () => {
+    // Given
+    mockExecFileSync
+      .mockReturnValueOnce(Buffer.from('')) // gh auth status
+      .mockReturnValueOnce('bug\n' as unknown as Buffer) // gh label list (only bug exists)
+      .mockReturnValueOnce('https://github.com/owner/repo/issues/1\n' as unknown as Buffer);
+
+    // When
+    createIssue({ title: 'Bug', body: 'Fix it', labels: ['bug', 'Docs'] });
+
+    // Then
+    const issueCreateCall = mockExecFileSync.mock.calls[2];
+    expect(issueCreateCall?.[1]).toEqual([
+      'issue', 'create', '--title', 'Bug', '--body', 'Fix it',
+      '--label', 'bug',
     ]);
   });
 
@@ -90,6 +109,21 @@ describe('createIssue', () => {
 
     // Then
     const issueCreateCall = mockExecFileSync.mock.calls[1];
+    expect(issueCreateCall?.[1]).not.toContain('--label');
+  });
+
+  it('should not include --label when all labels are non-existent', () => {
+    // Given
+    mockExecFileSync
+      .mockReturnValueOnce(Buffer.from('')) // gh auth status
+      .mockReturnValueOnce('bug\n' as unknown as Buffer) // gh label list
+      .mockReturnValueOnce('https://github.com/owner/repo/issues/1\n' as unknown as Buffer);
+
+    // When
+    createIssue({ title: 'Title', body: 'Body', labels: ['Docs', 'Chore'] });
+
+    // Then
+    const issueCreateCall = mockExecFileSync.mock.calls[2];
     expect(issueCreateCall?.[1]).not.toContain('--label');
   });
 

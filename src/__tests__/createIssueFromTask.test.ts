@@ -164,4 +164,64 @@ describe('createIssueFromTask', () => {
       body: task,
     });
   });
+
+  describe('labels option', () => {
+    it('should pass labels to createIssue when provided', () => {
+      // Given
+      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/1' });
+
+      // When
+      createIssueFromTask('Test task', { labels: ['bug'] });
+
+      // Then
+      expect(mockCreateIssue).toHaveBeenCalledWith({
+        title: 'Test task',
+        body: 'Test task',
+        labels: ['bug'],
+      });
+    });
+
+    it('should not include labels key when options is undefined', () => {
+      // Given
+      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/1' });
+
+      // When
+      createIssueFromTask('Test task');
+
+      // Then
+      expect(mockCreateIssue).toHaveBeenCalledWith({
+        title: 'Test task',
+        body: 'Test task',
+      });
+    });
+
+    it('should not include labels key when labels is empty array', () => {
+      // Given
+      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/1' });
+
+      // When
+      createIssueFromTask('Test task', { labels: [] });
+
+      // Then
+      expect(mockCreateIssue).toHaveBeenCalledWith({
+        title: 'Test task',
+        body: 'Test task',
+      });
+    });
+
+    it('should filter out empty string labels', () => {
+      // Given
+      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/1' });
+
+      // When
+      createIssueFromTask('Test task', { labels: ['bug', '', 'enhancement'] });
+
+      // Then
+      expect(mockCreateIssue).toHaveBeenCalledWith({
+        title: 'Test task',
+        body: 'Test task',
+        labels: ['bug', 'enhancement'],
+      });
+    });
+  });
 });

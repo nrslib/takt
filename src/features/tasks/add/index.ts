@@ -6,8 +6,9 @@
 
 import * as path from 'node:path';
 import * as fs from 'node:fs';
-import { promptInput, confirm } from '../../../shared/prompt/index.js';
+import { promptInput, confirm, selectOption } from '../../../shared/prompt/index.js';
 import { success, info, error, withProgress } from '../../../shared/ui/index.js';
+import { getLabel } from '../../../shared/i18n/index.js';
 import { TaskRunner, type TaskFileData, summarizeTaskName } from '../../../infra/task/index.js';
 import { determinePiece } from '../execute/selectAndExecute.js';
 import { createLogger, getErrorMessage, generateReportDir } from '../../../shared/utils/index.js';
@@ -73,14 +74,21 @@ export async function saveTaskFile(
  * Extracts the first line as the issue title (truncated to 100 chars),
  * uses the full task as the body, and displays success/error messages.
  */
-export function createIssueFromTask(task: string): number | undefined {
+export function createIssueFromTask(task: string, options?: { labels?: string[] }): number | undefined {
   info('Creating GitHub Issue...');
   const titleLine = task.split('\n')[0] || task;
   const title = titleLine.length > 100 ? `${titleLine.slice(0, 97)}...` : titleLine;
-  const issueResult = createIssue({ title, body: task });
+  const effectiveLabels = options?.labels?.filter((l) => l.length > 0) ?? [];
+  const labels = effectiveLabels.length > 0 ? effectiveLabels : undefined;
+
+  const issueResult = createIssue({ title, body: task, labels });
   if (issueResult.success) {
+    if (!issueResult.url) {
+      error('Failed to extract issue number from URL');
+      return undefined;
+    }
     success(`Issue created: ${issueResult.url}`);
-    const num = Number(issueResult.url!.split('/').pop());
+    const num = Number(issueResult.url.split('/').pop());
     if (Number.isNaN(num)) {
       error('Failed to extract issue number from URL');
       return undefined;
@@ -127,11 +135,45 @@ function displayTaskCreationResult(
  * Combines issue creation and task saving into a single workflow.
  * If issue creation fails, no task is saved.
  */
-export async function createIssueAndSaveTask(cwd: string, task: string, piece?: string): Promise<void> {
-  const issueNumber = createIssueFromTask(task);
+export async function createIssueAndSaveTask(
+  cwd: string,
+  task: string,
+  piece?: string,
+  options?: { confirmAtEndMessage?: string },
+): Promise<void> {
+  const labels = await promptLabelSelection();
+  const issueNumber = createIssueFromTask(task, { labels });
   if (issueNumber !== undefined) {
-    await saveTaskFromInteractive(cwd, task, piece, { issue: issueNumber });
+    await saveTaskFromInteractive(cwd, task, piece, {
+      issue: issueNumber,
+      confirmAtEndMessage: options?.confirmAtEndMessage,
+    });
   }
+}
+
+/**
+ * Prompt user to select a label for the GitHub Issue.
+ *
+ * Presents 4 fixed options: None, bug, enhancement, custom input.
+ * Returns an array of selected labels (empty if none selected).
+ */
+async function promptLabelSelection(): Promise<string[]> {
+  const selected = await selectOption<string>(
+    getLabel('issue.labelSelection.prompt'),
+    [
+      { label: getLabel('issue.labelSelection.none'), value: 'none' },
+      { label: 'bug', value: 'bug' },
+      { label: 'enhancement', value: 'enhancement' },
+      { label: getLabel('issue.labelSelection.custom'), value: 'custom' },
+    ],
+  );
+
+  if (selected === null || selected === 'none') return [];
+  if (selected === 'custom') {
+    const customLabel = await promptInput(getLabel('issue.labelSelection.customPrompt'));
+    return customLabel?.split(',').map((l) => l.trim()).filter((l) => l.length > 0) ?? [];
+  }
+  return [selected];
 }
 
 async function promptWorktreeSettings(): Promise<WorktreeSettings> {
