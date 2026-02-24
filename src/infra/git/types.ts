@@ -73,18 +73,14 @@ export interface GitProvider {
   /** Check CLI tool availability and authentication status */
   checkCliStatus(): CliStatus;
 
-  /** Fetch issue content by number */
   fetchIssue(issueNumber: number): Issue;
 
-  /** Create an issue */
   createIssue(options: CreateIssueOptions): CreateIssueResult;
 
   /** Find an open PR for the given branch. Returns undefined if no PR exists. */
   findExistingPr(cwd: string, branch: string): ExistingPr | undefined;
 
-  /** Create a pull request */
   createPullRequest(cwd: string, options: CreatePrOptions): CreatePrResult;
 
-  /** Add a comment to an existing PR */
   commentOnPr(cwd: string, prNumber: number, body: string): CommentResult;
 }

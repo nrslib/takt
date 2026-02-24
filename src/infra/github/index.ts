@@ -2,8 +2,6 @@
  * GitHub integration - barrel exports
  */
 
-export type { GitHubIssue } from './types.js';
-
 export {
   formatIssueAsTask,
   parseIssueNumbers,

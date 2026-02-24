@@ -7,8 +7,7 @@
 import { execFileSync } from 'node:child_process';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { checkGhCli } from './issue.js';
-import type { GitHubIssue, CreatePrOptions, CreatePrResult } from './types.js';
-import type { ExistingPr, CommentResult } from '../git/types.js';
+import type { Issue, CreatePrOptions, CreatePrResult, ExistingPr, CommentResult } from '../git/types.js';
 
 const log = createLogger('github-pr');
 
@@ -33,9 +32,6 @@ export function findExistingPr(cwd: string, branch: string): ExistingPr | undefi
   }
 }
 
-/**
- * Add a comment to an existing PR.
- */
 export function commentOnPr(cwd: string, prNumber: number, body: string): CommentResult {
   const ghStatus = checkGhCli();
   if (!ghStatus.available) {
@@ -56,9 +52,6 @@ export function commentOnPr(cwd: string, prNumber: number, body: string): Commen
   }
 }
 
-/**
- * Create a Pull Request via `gh pr create`.
- */
 export function createPullRequest(cwd: string, options: CreatePrOptions): CreatePrResult {
   const ghStatus = checkGhCli();
   if (!ghStatus.available) {
@@ -108,7 +101,7 @@ export function createPullRequest(cwd: string, options: CreatePrOptions): Create
  * Build PR body from issues and execution report.
  * Supports multiple issues (adds "Closes #N" for each).
  */
-export function buildPrBody(issues: GitHubIssue[] | undefined, report: string): string {
+export function buildPrBody(issues: Issue[] | undefined, report: string): string {
   const parts: string[] = [];
 
   parts.push('## Summary');

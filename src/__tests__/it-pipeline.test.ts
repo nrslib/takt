@@ -46,7 +46,6 @@ vi.mock('../infra/github/issue.js', () => ({
 
 vi.mock('../infra/github/pr.js', () => ({
   createPullRequest: vi.fn(),
-  pushBranch: vi.fn(),
   buildPrBody: vi.fn().mockReturnValue('PR body'),
 }));
 

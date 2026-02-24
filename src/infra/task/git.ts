@@ -7,9 +7,6 @@ import { createLogger } from '../../shared/utils/index.js';
 
 const log = createLogger('git');
 
-/**
- * Get the current branch name.
- */
 export function getCurrentBranch(cwd: string): string {
   return execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
     cwd,
@@ -19,7 +16,6 @@ export function getCurrentBranch(cwd: string): string {
 }
 
 /**
- * Stage all changes and create a commit.
  * Returns the short commit hash if changes were committed, undefined if no changes.
  */
 export function stageAndCommit(cwd: string, message: string): string | undefined {
@@ -45,7 +41,6 @@ export function stageAndCommit(cwd: string, message: string): string | undefined
 }
 
 /**
- * Push a branch to origin.
  * Throws on failure.
  */
 export function pushBranch(cwd: string, branch: string): void {
