@@ -292,7 +292,7 @@ describe('Piece Patterns IT: magi piece', () => {
   });
 });
 
-describe('Piece Patterns IT: review-only piece', () => {
+describe('Piece Patterns IT: pr-review piece', () => {
   let testDir: string;
 
   beforeEach(() => {
@@ -305,28 +305,30 @@ describe('Piece Patterns IT: review-only piece', () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  it('should complete: plan → reviewers (all approved) → supervise → COMPLETE', async () => {
-    const config = loadPiece('review-only', testDir);
+  it('should complete: gather → reviewers (all approved) → supervise → COMPLETE', async () => {
+    const config = loadPiece('pr-review', testDir);
     expect(config).not.toBeNull();
 
     setMockScenario([
-      { persona: 'planner', status: 'done', content: '[PLAN:1]\n\nReview scope is clear.' },
-      // Parallel reviewers: all approved
+      { persona: 'planner', status: 'done', content: '[GATHER:1]\n\nPR info gathered.' },
+      // Parallel reviewers: all approved (5 reviewers)
       { persona: 'architecture-reviewer', status: 'done', content: '[ARCH-REVIEW:1]\n\napproved' },
       { persona: 'security-reviewer', status: 'done', content: '[SECURITY-REVIEW:1]\n\napproved' },
-      { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-REVIEW:1]\n\napproved' },
-      // Supervisor: approved (local review, no PR)
-      { persona: 'supervisor', status: 'done', content: '[SUPERVISE:2]\n\napproved' },
+      { persona: 'qa-reviewer', status: 'done', content: '[QA-REVIEW:1]\n\napproved' },
+      { persona: 'testing-reviewer', status: 'done', content: '[TESTING-REVIEW:1]\n\napproved' },
+      { persona: 'requirements-reviewer', status: 'done', content: '[REQUIREMENTS-REVIEW:1]\n\napproved' },
+      // Supervisor: synthesis complete
+      { persona: 'supervisor', status: 'done', content: '[SUPERVISE:1]\n\nReview synthesis complete' },
     ]);
 
-    const engine = createEngine(config!, testDir, 'Review the codebase');
+    const engine = createEngine(config!, testDir, 'Review PR #42');
     const state = await engine.run();
 
     expect(state.status).toBe('completed');
   });
 
   it('should verify no movements have edit: true', () => {
-    const config = loadPiece('review-only', testDir);
+    const config = loadPiece('pr-review', testDir);
     expect(config).not.toBeNull();
 
     for (const movement of config!.movements) {

@@ -281,11 +281,11 @@ describe('Piece Loader IT: piece config validation', () => {
     expect(movementNames).toContain(config!.initialMovement);
   });
 
-  it('should preserve edit property on movements (review-only has no edit: true)', () => {
-    const config = loadPiece('review-only', testDir);
+  it('should preserve edit property on movements (pr-review has no edit: true)', () => {
+    const config = loadPiece('pr-review', testDir);
     expect(config).not.toBeNull();
 
-    // review-only: no movement should have edit: true
+    // pr-review: no movement should have edit: true
     for (const movement of config!.movements) {
       expect(movement.edit).not.toBe(true);
       if (movement.parallel) {

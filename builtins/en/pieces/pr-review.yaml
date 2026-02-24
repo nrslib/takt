@@ -1,5 +1,5 @@
-name: review-only
-description: Review-only piece - reviews code without making edits
+name: pr-review
+description: Multi-perspective PR Review - reviews a PR in parallel from 5 perspectives and outputs consolidated results
 piece_config:
   provider_options:
     codex:
@@ -7,42 +7,34 @@ piece_config:
     opencode:
       network_access: true
 max_movements: 10
-initial_movement: plan
+initial_movement: gather
+
 movements:
-  - name: plan
+  - name: gather
     edit: false
     persona: planner
     allowed_tools:
       - Read
       - Glob
       - Grep
+      - Bash
       - WebSearch
       - WebFetch
+    instruction: gather-pr
+    output_contracts:
+      report:
+        - name: 00-pr-info.md
+          format: pr-gather
     rules:
-      - condition: Review scope is clear
+      - condition: PR information gathered
         next: reviewers
-      - condition: User is asking a question (not a review task)
-        next: COMPLETE
-      - condition: Requirements unclear, insufficient info
+      - condition: PR number unidentifiable, insufficient info
         next: ABORT
         appendix: |
           Clarifications needed:
           - {Question 1}
           - {Question 2}
-    instruction_template: |
-      ## Previous Response (when returned from supervise)
-      {previous_response}
 
-      Analyze the review request and create a review plan.
-
-      **This is a review-only piece.** No code edits will be made.
-      Focus on:
-      1. Identify which files/modules to review
-      2. Determine review focus areas (architecture, security, AI patterns, etc.)
-      3. Note any specific concerns mentioned in the request
-
-      **If a PR number is mentioned** (e.g., "PR #42"), include it in your plan
-      so reviewers can focus on the PR's changed files.
   - name: reviewers
     parallel:
       - name: arch-review
@@ -54,16 +46,18 @@ movements:
           - Read
           - Glob
           - Grep
+          - Bash
           - WebSearch
           - WebFetch
-        rules:
-          - condition: approved
-          - condition: needs_fix
         instruction: review-arch
         output_contracts:
           report:
-            - name: 01-architect-review.md
+            - name: 01-architecture-review.md
               format: architecture-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+
       - name: security-review
         edit: false
         persona: security-reviewer
@@ -73,41 +67,88 @@ movements:
           - Read
           - Glob
           - Grep
+          - Bash
           - WebSearch
           - WebFetch
-        rules:
-          - condition: approved
-          - condition: needs_fix
         instruction: review-security
         output_contracts:
           report:
             - name: 02-security-review.md
               format: security-review
-      - name: ai-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+
+      - name: qa-review
         edit: false
-        persona: ai-antipattern-reviewer
+        persona: qa-reviewer
         policy:
           - review
-          - ai-antipattern
+          - qa
         allowed_tools:
           - Read
           - Glob
           - Grep
+          - Bash
           - WebSearch
           - WebFetch
+        instruction: review-qa
+        output_contracts:
+          report:
+            - name: 03-qa-review.md
+              format: qa-review
         rules:
           - condition: approved
           - condition: needs_fix
-        instruction: review-ai
+
+      - name: testing-review
+        edit: false
+        persona: testing-reviewer
+        policy:
+          - review
+          - testing
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Bash
+          - WebSearch
+          - WebFetch
+        instruction: review-test
         output_contracts:
           report:
-            - name: 03-ai-review.md
-              format: ai-review
+            - name: 04-testing-review.md
+              format: testing-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+
+      - name: requirements-review
+        edit: false
+        persona: requirements-reviewer
+        policy: review
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Bash
+          - WebSearch
+          - WebFetch
+        instruction: review-requirements
+        output_contracts:
+          report:
+            - name: 05-requirements-review.md
+              format: requirements-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+
     rules:
       - condition: all("approved")
         next: supervise
       - condition: any("needs_fix")
         next: supervise
+
   - name: supervise
     edit: false
     persona: supervisor
@@ -120,32 +161,29 @@ movements:
       - WebFetch
     pass_previous_response: false
     rules:
-      - condition: approved, PR comment requested
-        next: pr-comment
-      - condition: approved
+      - condition: Review synthesis complete
         next: COMPLETE
-      - condition: rejected
-        next: ABORT
     instruction_template: |
       ## Review Results
       {previous_response}
 
-      **This is a review-only piece.** Do NOT run tests or builds.
+      **This is a PR review-only piece.** Do NOT run tests or builds.
       Your role is to synthesize the review results and produce a final summary.
 
       **Tasks:**
       1. Read all review reports in the Report Directory
-      2. Synthesize findings from architecture, security, and AI reviews
+         - `00-pr-info.md` (PR information)
+         - `01-architecture-review.md` (Architecture review)
+         - `02-security-review.md` (Security review)
+         - `03-qa-review.md` (QA review)
+         - `04-testing-review.md` (Testing review)
+         - `05-requirements-review.md` (Requirements review)
+      2. Synthesize the 5 review results
       3. Produce a consolidated review summary with overall verdict
-      4. Determine routing:
-         - If the task mentions posting to a PR (e.g., "post comments to PR", "comment on PR"),
-           route to `pr-comment` movement (condition: "approved, PR comment requested")
-         - If local review only, route to COMPLETE (condition: "approved")
-         - If critical issues found, route to ABORT (condition: "rejected")
 
       **Review Summary output contract:**
       ```markdown
-      # Review Summary
+      # PR Review Summary
 
       ## Overall Verdict: APPROVE / REJECT
 
@@ -157,7 +195,9 @@ movements:
       |--------|--------|--------------|
       | Architecture | APPROVE/REJECT | {Brief finding} |
       | Security | APPROVE/REJECT | {Brief finding} |
-      | AI Antipattern | APPROVE/REJECT | {Brief finding} |
+      | QA | APPROVE/REJECT | {Brief finding} |
+      | Testing | APPROVE/REJECT | {Brief finding} |
+      | Requirements | APPROVE/REJECT | {Brief finding} |
 
       ## Issues Requiring Attention
       | # | Severity | Source | Location | Issue |
@@ -172,19 +212,21 @@ movements:
         - name: review-summary.md
           format: |
             ```markdown
-            # Review Summary
+            # PR Review Summary
 
             ## Overall Verdict: APPROVE / REJECT
 
             ## Summary
-            {Integrate all review results in 2-3 sentences}
+            {2-3 sentences consolidating all review results}
 
             ## Review Results
             | Review | Result | Key Findings |
-            |--------|--------|-------------|
+            |--------|--------|--------------|
             | Architecture | APPROVE/REJECT | {Overview} |
             | Security | APPROVE/REJECT | {Overview} |
-            | AI Anti-pattern | APPROVE/REJECT | {Overview} |
+            | QA | APPROVE/REJECT | {Overview} |
+            | Testing | APPROVE/REJECT | {Overview} |
+            | Requirements | APPROVE/REJECT | {Overview} |
 
             ## Current Iteration Findings (new)
             | # | finding_id | Severity | Source | Location | Issue | Fix Suggestion |
@@ -208,53 +250,3 @@ movements:
             - REJECT is valid only when at least one finding exists in `new` or `persists`
             - Findings without `finding_id` are invalid
             ```
-  - name: pr-comment
-    edit: false
-    persona: pr-commenter
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - Bash
-    rules:
-      - condition: Comments posted
-        next: COMPLETE
-      - condition: Failed to post comments
-        next: COMPLETE
-    instruction_template: |
-      ## Review Summary
-      {previous_response}
-
-      Post the review results to the PR as comments.
-
-      **Procedure:**
-      1. Extract the PR number from the task description
-      2. Read all review reports in the Report Directory:
-         - `01-architect-review.md` (Architecture review)
-         - `02-security-review.md` (Security review)
-         - `03-ai-review.md` (AI antipattern review)
-         - `review-summary.md` (Consolidated summary)
-      3. Filter findings by severity and post inline comments for Critical/High/Medium
-      4. Post a summary comment with the following format:
-
-      ```
-      ## Automated Review Summary
-
-      {Overall verdict and summary from review-summary.md}
-
-      ### Review Results
-      | Review | Result |
-      |--------|--------|
-      | Architecture | {result} |
-      | Security | {result} |
-      | AI Antipattern | {result} |
-
-      ### Key Findings
-      {Bulleted list of important findings}
-
-      ### Improvement Suggestions
-      {Consolidated suggestions}
-
-      ---
-      *Generated by [takt](https://github.com/toruticas/takt) review-only piece*
-      ```

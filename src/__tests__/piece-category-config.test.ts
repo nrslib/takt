@@ -166,7 +166,7 @@ piece_categories:
         - nested
   Review:
     pieces:
-      - review-only
+      - pr-review
       - e2e-test
 show_others_category: true
 others_category_name: Others
@@ -200,7 +200,7 @@ others_category_name: Unclassified
               { name: 'Child', pieces: ['nested'], children: [] },
             ],
           },
-          { name: 'Review', pieces: ['review-only', 'e2e-test'], children: [] },
+          { name: 'Review', pieces: ['pr-review', 'e2e-test'], children: [] },
         ],
       },
     ]);
@@ -212,7 +212,7 @@ others_category_name: Unclassified
           { name: 'Child', pieces: ['nested'], children: [] },
         ],
       },
-      { name: 'Review', pieces: ['review-only', 'e2e-test'], children: [] },
+      { name: 'Review', pieces: ['pr-review', 'e2e-test'], children: [] },
     ]);
     expect(config!.userPieceCategories).toEqual([
       { name: 'Main', pieces: ['custom'], children: [] },
@@ -230,14 +230,14 @@ others_category_name: Unclassified
 piece_categories:
   レビュー:
     pieces:
-      - review-only
+      - pr-review
       - e2e-test
 `);
 
     const config = getPieceCategories(testDir);
     expect(config).not.toBeNull();
     expect(config!.pieceCategories).toEqual([
-      { name: 'レビュー', pieces: ['review-only', 'e2e-test'], children: [] },
+      { name: 'レビュー', pieces: ['pr-review', 'e2e-test'], children: [] },
     ]);
   });
 
@@ -249,7 +249,7 @@ piece_categories:
       - default
   Review:
     pieces:
-      - review-only
+      - pr-review
 show_others_category: true
 others_category_name: Others
 `);
@@ -263,11 +263,11 @@ others_category_name: Unclassified
     expect(config).not.toBeNull();
     expect(config!.pieceCategories).toEqual([
       { name: 'Main', pieces: ['default'], children: [] },
-      { name: 'Review', pieces: ['review-only'], children: [] },
+      { name: 'Review', pieces: ['pr-review'], children: [] },
     ]);
     expect(config!.builtinPieceCategories).toEqual([
       { name: 'Main', pieces: ['default'], children: [] },
-      { name: 'Review', pieces: ['review-only'], children: [] },
+      { name: 'Review', pieces: ['pr-review'], children: [] },
     ]);
     expect(config!.userPieceCategories).toEqual([]);
     expect(config!.hasUserCategories).toBe(false);
@@ -375,7 +375,7 @@ describe('buildCategorizedPieces', () => {
     const allPieces = createPieceMap([
       { name: 'custom', source: 'user' },
       { name: 'default', source: 'builtin' },
-      { name: 'review-only', source: 'builtin' },
+      { name: 'pr-review', source: 'builtin' },
       { name: 'extra', source: 'builtin' },
     ]);
     const config = {
@@ -386,13 +386,13 @@ describe('buildCategorizedPieces', () => {
           pieces: [],
           children: [
             { name: 'Quick Start', pieces: ['default'], children: [] },
-            { name: 'Review', pieces: ['review-only'], children: [] },
+            { name: 'Review', pieces: ['pr-review'], children: [] },
           ],
         },
       ],
       builtinPieceCategories: [
         { name: 'Quick Start', pieces: ['default'], children: [] },
-        { name: 'Review', pieces: ['review-only'], children: [] },
+        { name: 'Review', pieces: ['pr-review'], children: [] },
       ],
       userPieceCategories: [
         { name: 'My Team', pieces: ['custom'], children: [] },
@@ -410,7 +410,7 @@ describe('buildCategorizedPieces', () => {
         pieces: [],
         children: [
           { name: 'Quick Start', pieces: ['default'], children: [] },
-          { name: 'Review', pieces: ['review-only'], children: [] },
+          { name: 'Review', pieces: ['pr-review'], children: [] },
         ],
       },
       { name: 'Others', pieces: ['extra'], children: [] },
