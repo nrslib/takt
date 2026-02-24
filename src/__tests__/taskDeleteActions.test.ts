@@ -69,6 +69,16 @@ function setupTasksFile(projectDir: string): string {
         started_at: '2025-01-15T00:01:00.000Z',
         completed_at: '2025-01-15T00:02:00.000Z',
       },
+      {
+        name: 'exceeded-task',
+        status: 'exceeded',
+        content: 'exceeded',
+        exceeded_max_movements: 60,
+        exceeded_current_iteration: 30,
+        created_at: '2025-01-15T00:00:00.000Z',
+        started_at: '2025-01-15T00:01:00.000Z',
+        completed_at: '2025-01-15T00:02:00.000Z',
+      },
     ],
   }), 'utf-8');
   return tasksFile;
@@ -182,6 +192,29 @@ describe('taskDeleteActions', () => {
 
     expect(result).toBe(false);
     expect(mockLogError).toHaveBeenCalled();
+  });
+
+  it('should confirm with message containing "exceeded" and delete exceeded task when confirmed', async () => {
+    const tasksFile = setupTasksFile(tmpDir);
+    const task: TaskListItem = {
+      kind: 'exceeded',
+      name: 'exceeded-task',
+      createdAt: '2025-01-15T12:34:56',
+      filePath: tasksFile,
+      content: 'exceeded',
+      branch: 'takt/exceeded-task',
+      worktreePath: '/tmp/takt/exceeded-task',
+    };
+    mockConfirm.mockResolvedValue(true);
+
+    const result = await deleteTaskByKind(task);
+
+    expect(result).toBe(true);
+    expect(mockConfirm).toHaveBeenCalledWith(expect.stringContaining('exceeded'), false);
+    expect(mockDeleteBranch).toHaveBeenCalledWith(tmpDir, task);
+    const raw = fs.readFileSync(tasksFile, 'utf-8');
+    expect(raw).not.toContain('exceeded-task');
+    expect(mockSuccess).toHaveBeenCalledWith('Deleted exceeded task: exceeded-task');
   });
 
   it('should delete completed task and cleanup worktree when confirmed', async () => {
@@ -309,6 +342,29 @@ describe('deleteAllTasks', () => {
 
     expect(result).toBe(false);
     expect(mockSuccess).not.toHaveBeenCalled();
+  });
+
+  it('should include exceeded task in deleteAllTasks (not filtered like running)', async () => {
+    const tasksFile = setupTasksFile(tmpDir);
+    const task: TaskListItem = {
+      kind: 'exceeded',
+      name: 'exceeded-task',
+      createdAt: '2025-01-15',
+      filePath: tasksFile,
+      content: 'exceeded',
+      branch: 'takt/exceeded-task',
+      worktreePath: '/tmp/takt/exceeded-task',
+    };
+    mockConfirm.mockResolvedValue(true);
+
+    const result = await deleteAllTasks([task]);
+
+    expect(result).toBe(true);
+    expect(mockConfirm).toHaveBeenCalledWith('Delete all 1 tasks?', false);
+    expect(mockDeleteBranch).toHaveBeenCalledWith(tmpDir, task);
+    const raw = fs.readFileSync(tasksFile, 'utf-8');
+    expect(raw).not.toContain('exceeded-task');
+    expect(mockSuccess).toHaveBeenCalledWith('Deleted 1 of 1 tasks.');
   });
 
   it('should cleanup branches for completed and failed tasks', async () => {

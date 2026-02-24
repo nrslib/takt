@@ -30,7 +30,7 @@ export class TaskRunner {
     this.store.ensureDirs();
   }
 
-  getTasksDir(): string {
+  getTasksFilePath(): string {
     return this.tasksFile;
   }
 
@@ -107,10 +107,6 @@ export class TaskRunner {
 
   deleteTask(name: string, kind: 'pending' | 'failed' | 'completed' | 'exceeded'): void {
     this.deletion.deleteTaskByNameAndStatus(name, kind);
-  }
-
-  deleteCompletedTask(name: string): void {
-    this.deletion.deleteCompletedTask(name);
   }
 
   exceedTask(taskName: string, options: ExceedTaskOptions): void {

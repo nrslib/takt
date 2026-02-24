@@ -101,13 +101,18 @@ describe('TaskRecordSchema - exceeded status', () => {
       expect(() => TaskRecordSchema.parse(record)).not.toThrow();
     });
 
-    it('should accept exceeded record without exceeded_max_movements (optional)', () => {
+    it('should reject exceeded record with only exceeded_current_iteration set (exceeded_max_movements missing)', () => {
       const record = makeExceededRecord({ exceeded_max_movements: undefined });
-      expect(() => TaskRecordSchema.parse(record)).not.toThrow();
+      expect(() => TaskRecordSchema.parse(record)).toThrow();
     });
 
-    it('should accept exceeded record without exceeded_current_iteration (optional)', () => {
+    it('should reject exceeded record with only exceeded_max_movements set (exceeded_current_iteration missing)', () => {
       const record = makeExceededRecord({ exceeded_current_iteration: undefined });
+      expect(() => TaskRecordSchema.parse(record)).toThrow();
+    });
+
+    it('should accept exceeded record when both exceeded fields are absent (neither field set)', () => {
+      const record = makeExceededRecord({ exceeded_max_movements: undefined, exceeded_current_iteration: undefined });
       expect(() => TaskRecordSchema.parse(record)).not.toThrow();
     });
   });

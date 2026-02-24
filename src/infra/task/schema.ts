@@ -229,6 +229,15 @@ export const TaskRecordSchema = TaskExecutionConfigSchema.extend({
         message: 'Exceeded task must not have owner_pid.',
       });
     }
+    const hasExceededMax = value.exceeded_max_movements !== undefined;
+    const hasExceededIter = value.exceeded_current_iteration !== undefined;
+    if (hasExceededMax !== hasExceededIter) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['exceeded_max_movements'],
+        message: 'exceeded_max_movements and exceeded_current_iteration must both be set or both be absent.',
+      });
+    }
   }
 });
 export type TaskRecord = z.infer<typeof TaskRecordSchema>;

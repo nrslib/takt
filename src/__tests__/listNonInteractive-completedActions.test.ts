@@ -1,13 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
-  mockDeleteCompletedTask,
+  mockDeleteTask,
   mockListAllTaskItems,
   mockMergeBranch,
   mockDeleteBranch,
   mockInfo,
 } = vi.hoisted(() => ({
-  mockDeleteCompletedTask: vi.fn(),
+  mockDeleteTask: vi.fn(),
   mockListAllTaskItems: vi.fn(),
   mockMergeBranch: vi.fn(),
   mockDeleteBranch: vi.fn(),
@@ -20,8 +20,8 @@ vi.mock('../infra/task/index.js', () => ({
     listAllTaskItems() {
       return mockListAllTaskItems();
     }
-    deleteCompletedTask(name: string) {
-      mockDeleteCompletedTask(name);
+    deleteTask(name: string, kind: string) {
+      mockDeleteTask(name, kind);
     }
   },
 }));
@@ -64,7 +64,7 @@ describe('listTasksNonInteractive completed actions', () => {
     });
 
     expect(mockMergeBranch).toHaveBeenCalled();
-    expect(mockDeleteCompletedTask).toHaveBeenCalledWith('completed-task');
+    expect(mockDeleteTask).toHaveBeenCalledWith('completed-task', 'completed');
   });
 
   it('should delete completed record after delete action', async () => {
@@ -78,6 +78,6 @@ describe('listTasksNonInteractive completed actions', () => {
     });
 
     expect(mockDeleteBranch).toHaveBeenCalled();
-    expect(mockDeleteCompletedTask).toHaveBeenCalledWith('completed-task');
+    expect(mockDeleteTask).toHaveBeenCalledWith('completed-task', 'completed');
   });
 });

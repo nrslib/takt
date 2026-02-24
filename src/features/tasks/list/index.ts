@@ -197,7 +197,7 @@ export async function listTasks(
           break;
         case 'merge':
           if (mergeBranch(cwd, task)) {
-            runner.deleteCompletedTask(task.name);
+            runner.deleteTask(task.name, 'completed');
           }
           break;
         case 'delete':
