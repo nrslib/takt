@@ -1,5 +1,5 @@
 /**
- * Tests for pr-review piece
+ * Tests for review piece
  *
  * Covers:
  * - Piece YAML files (EN/JA) load and pass schema validation
@@ -17,14 +17,14 @@ import { PieceConfigRawSchema } from '../core/models/index.js';
 
 const RESOURCES_DIR = join(import.meta.dirname, '../../builtins');
 
-function loadPrReviewYaml(lang: 'en' | 'ja') {
-  const filePath = join(RESOURCES_DIR, lang, 'pieces', 'pr-review.yaml');
+function loadReviewYaml(lang: 'en' | 'ja') {
+  const filePath = join(RESOURCES_DIR, lang, 'pieces', 'review.yaml');
   const content = readFileSync(filePath, 'utf-8');
   return parseYaml(content);
 }
 
-describe('pr-review piece (EN)', () => {
-  const raw = loadPrReviewYaml('en');
+describe('review piece (EN)', () => {
+  const raw = loadReviewYaml('en');
 
   it('should pass schema validation', () => {
     const result = PieceConfigRawSchema.safeParse(raw);
@@ -32,7 +32,7 @@ describe('pr-review piece (EN)', () => {
   });
 
   it('should have correct name and initial_movement', () => {
-    expect(raw.name).toBe('pr-review');
+    expect(raw.name).toBe('review');
     expect(raw.initial_movement).toBe('gather');
   });
 
@@ -119,15 +119,15 @@ describe('pr-review piece (EN)', () => {
     }
   });
 
-  it('should have gather movement with output_contracts for PR info', () => {
+  it('should have gather movement with output_contracts for review target', () => {
     const gather = raw.movements.find((s: { name: string }) => s.name === 'gather');
     expect(gather.output_contracts).toBeDefined();
-    expect(gather.output_contracts.report[0].name).toBe('00-pr-info.md');
+    expect(gather.output_contracts.report[0].name).toBe('00-review-target.md');
   });
 });
 
-describe('pr-review piece (JA)', () => {
-  const raw = loadPrReviewYaml('ja');
+describe('review piece (JA)', () => {
+  const raw = loadReviewYaml('ja');
 
   it('should pass schema validation', () => {
     const result = PieceConfigRawSchema.safeParse(raw);
@@ -135,7 +135,7 @@ describe('pr-review piece (JA)', () => {
   });
 
   it('should have correct name and initial_movement', () => {
-    expect(raw.name).toBe('pr-review');
+    expect(raw.name).toBe('review');
     expect(raw.initial_movement).toBe('gather');
   });
 

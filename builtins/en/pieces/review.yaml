@@ -1,5 +1,5 @@
-name: pr-review
-description: Multi-perspective PR Review - reviews a PR in parallel from 5 perspectives and outputs consolidated results
+name: review
+description: Multi-perspective Code Review - reviews changes in parallel from 5 perspectives and outputs consolidated results
 piece_config:
   provider_options:
     codex:
@@ -20,15 +20,15 @@ movements:
       - Bash
       - WebSearch
       - WebFetch
-    instruction: gather-pr
+    instruction: gather-review
     output_contracts:
       report:
-        - name: 00-pr-info.md
-          format: pr-gather
+        - name: 00-review-target.md
+          format: review-gather
     rules:
-      - condition: PR information gathered
+      - condition: Review target information gathered
         next: reviewers
-      - condition: PR number unidentifiable, insufficient info
+      - condition: Cannot identify review target, insufficient info
         next: ABORT
         appendix: |
           Clarifications needed:
@@ -167,12 +167,12 @@ movements:
       ## Review Results
       {previous_response}
 
-      **This is a PR review-only piece.** Do NOT run tests or builds.
+      **This is a review-only piece.** Do NOT run tests or builds.
       Your role is to synthesize the review results and produce a final summary.
 
       **Tasks:**
       1. Read all review reports in the Report Directory
-         - `00-pr-info.md` (PR information)
+         - `00-review-target.md` (Review target information)
          - `01-architecture-review.md` (Architecture review)
          - `02-security-review.md` (Security review)
          - `03-qa-review.md` (QA review)
@@ -183,7 +183,7 @@ movements:
 
       **Review Summary output contract:**
       ```markdown
-      # PR Review Summary
+      # Review Summary
 
       ## Overall Verdict: APPROVE / REJECT
 
@@ -212,7 +212,7 @@ movements:
         - name: review-summary.md
           format: |
             ```markdown
-            # PR Review Summary
+            # Review Summary
 
             ## Overall Verdict: APPROVE / REJECT
 

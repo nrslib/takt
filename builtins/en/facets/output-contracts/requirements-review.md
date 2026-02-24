@@ -7,7 +7,7 @@
 {Summarize the result in 1-2 sentences}
 
 ## Requirements Cross-Reference
-| # | Requirement (from PR) | Satisfied | Evidence (file:line) |
+| # | Requirement (from task) | Satisfied | Evidence (file:line) |
 |---|----------------------|-----------|----------------------|
 | 1 | {requirement 1} | ✅/❌ | `src/file.ts:42` |
 

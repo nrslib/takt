@@ -1,5 +1,5 @@
-name: pr-review
-description: PR多角レビュー - 5つの観点から並列にPRをレビューし、統合結果を出力する
+name: review
+description: 多角レビュー - 5つの観点から並列にコード変更をレビューし、統合結果を出力する
 piece_config:
   provider_options:
     codex:
@@ -20,15 +20,15 @@ movements:
       - Bash
       - WebSearch
       - WebFetch
-    instruction: gather-pr
+    instruction: gather-review
     output_contracts:
       report:
-        - name: 00-pr-info.md
-          format: pr-gather
+        - name: 00-review-target.md
+          format: review-gather
     rules:
-      - condition: PR情報の収集完了
+      - condition: レビュー対象の情報収集完了
         next: reviewers
-      - condition: PR番号が特定できない、情報不足
+      - condition: レビュー対象を特定できない、情報不足
         next: ABORT
         appendix: |
           確認事項:
@@ -167,12 +167,12 @@ movements:
       ## レビュー結果
       {previous_response}
 
-      **これはPRレビュー専用ピースです。** テスト実行やビルドは行わないでください。
+      **これはレビュー専用ピースです。** テスト実行やビルドは行わないでください。
       レビュー結果を統合し、最終サマリーを作成する役割です。
 
       **やること:**
       1. Report Directory内の全レビューレポートを読む
-         - `00-pr-info.md`（PR情報）
+         - `00-review-target.md`（レビュー対象情報）
          - `01-architecture-review.md`（アーキテクチャレビュー）
          - `02-security-review.md`（セキュリティレビュー）
          - `03-qa-review.md`（QAレビュー）
@@ -185,7 +185,7 @@ movements:
         - name: review-summary.md
           format: |
             ```markdown
-            # PRレビューサマリー
+            # レビューサマリー
 
             ## 総合判定: APPROVE / REJECT
 

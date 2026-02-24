@@ -36,7 +36,7 @@ piece_categories:
       - structural-reform
   🔍 Review:
     pieces:
-      - pr-review
+      - review
   🧪 Testing:
     pieces:
       - unit-test

@@ -292,7 +292,7 @@ describe('Piece Patterns IT: magi piece', () => {
   });
 });
 
-describe('Piece Patterns IT: pr-review piece', () => {
+describe('Piece Patterns IT: review piece', () => {
   let testDir: string;
 
   beforeEach(() => {
@@ -306,7 +306,7 @@ describe('Piece Patterns IT: pr-review piece', () => {
   });
 
   it('should complete: gather → reviewers (all approved) → supervise → COMPLETE', async () => {
-    const config = loadPiece('pr-review', testDir);
+    const config = loadPiece('review', testDir);
     expect(config).not.toBeNull();
 
     setMockScenario([
@@ -328,7 +328,7 @@ describe('Piece Patterns IT: pr-review piece', () => {
   });
 
   it('should verify no movements have edit: true', () => {
-    const config = loadPiece('pr-review', testDir);
+    const config = loadPiece('review', testDir);
     expect(config).not.toBeNull();
 
     for (const movement of config!.movements) {

@@ -13,7 +13,7 @@ Review the changes from a requirements fulfillment perspective.
 
 ## Judgment Procedure
 
-1. Extract requirements one by one from the PR description and task
+1. Extract requirements one by one from the review target report and task
 2. For each requirement, identify the implementing code (file:line)
 3. Confirm that the code satisfies the requirement
 4. Check for any changes not covered by the requirements
