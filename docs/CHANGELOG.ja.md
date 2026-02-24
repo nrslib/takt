@@ -6,6 +6,34 @@
 
 フォーマットは [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) に基づいています。
 
+## [0.24.0] - 2026-02-24
+
+### Added
+
+- AskUserQuestion 対応: AI エージェントが実行中に対話的にユーザーへ質問可能に。単一選択・複数選択・自由入力の TTY UI を提供。ピース実行中は自動的に拒否しエージェントの自律性を維持 (#161, #369)
+- `review` ビルトインピースを3モード自動判定に拡張: PR 番号・ブランチ名・フリーテキストから自動でレビューモード（PR/ブランチ/作業中差分）を判定し、5並列レビュー（arch/security/qa/testing/requirements）を実行
+- `testing-reviewer` と `requirements-reviewer` ビルトインペルソナを追加（専門レビュー観点）
+- `testing` ポリシー: インテグレーションテスト必要条件を追加（3+モジュールのデータフロー、ワークフローへの状態マージ、コールチェーンを通じたオプション伝搬）
+- `gather-review` インストラクションと `review-gather` 出力契約を追加（review ピースの gather ムーブメント用）
+- `requirements-review` インストラクションと出力契約を追加（要件レビュー用）
+- `testing-review` 出力契約を追加（テストレビュー用）
+- SDK オプションに `settingSources: ['project']` を追加: CLAUDE.md の読み込みを Claude SDK に委譲し、プロジェクトレベル設定を適切に解決
+
+### Changed
+
+- **BREAKING:** `review-only` ピースを `review` にリネーム、`review-fix-minimal` ピースを削除 — これらのピース名を参照しているユーザーは `review` に更新が必要
+- `write-tests-first` インストラクションに具体的なインテグレーションテスト判断基準を追加（「適宜 E2E テストを作成」から置き換え）
+
+### Fixed
+
+- planner ペルソナ: バグ修正の波及確認ルール（関連ファイルで同一パターンを grep）と、確認事項の判断保留禁止を追加
+
+### Internal
+
+- ドキュメント整備: 音楽メタファーの由来説明追加、カタログ漏れ・リンク切れ・孤立ドキュメント・イベント名・API Key 参照・eject 説明を修正、YAML 例から不要な personas セクションマップを削除、レガシー用語をコードベースの実態に合わせて修正
+- 新規テストスイート: `StreamDisplay`、`ask-user-question-handler`、`pieceExecution-ask-user-question`、`review-piece`、`opencode-client-cleanup`
+- レガシー `review-only-piece` テストと session モジュールの `loadProjectContext` を削除（CLAUDE.md 読み込みは SDK に委譲）
+
 ## [0.23.0] - 2026-02-23
 
 ### Added

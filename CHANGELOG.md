@@ -6,6 +6,34 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.24.0] - 2026-02-24
+
+### Added
+
+- AskUserQuestion support: AI agents can now ask interactive questions during execution with single-select, multi-select, and free-text input via TTY UI; automatically denied during piece execution to maintain agent autonomy (#161, #369)
+- `review` builtin piece with 3-mode auto-detection: automatically selects PR mode (by PR number), branch mode (by branch name), or working diff mode (by free text) for multi-perspective parallel review
+- `testing-reviewer` and `requirements-reviewer` builtin personas for specialized review perspectives
+- `testing` policy: integration test requirement criteria (3+ module data flow, state merging into workflows, option propagation through call chains)
+- `gather-review` instruction and `review-gather` output contract for the new review piece gather movement
+- `requirements-review` instruction and output contract for requirements-focused review
+- `testing-review` output contract for testing-focused review
+- `settingSources: ['project']` in SDK options: delegates CLAUDE.md loading to the Claude SDK for proper project-level settings resolution
+
+### Changed
+
+- **BREAKING:** `review-only` piece renamed to `review`; `review-fix-minimal` piece removed — users referencing these piece names must update to `review`
+- `write-tests-first` instruction now includes integration test decision criteria instead of a generic "Write E2E tests if appropriate"
+
+### Fixed
+
+- Planner persona: added bug fix propagation check rule (grep for same pattern in related files) and prohibited deferring decidable questions to Open Questions
+
+### Internal
+
+- Docs: fixed music metaphor origin description, catalog gaps, broken links, orphaned documents, event names, API Key references, eject descriptions, removed stale personas section map from YAML example, aligned legacy terminology with current codebase
+- New test suites: `StreamDisplay`, `ask-user-question-handler`, `pieceExecution-ask-user-question`, `review-piece`, `opencode-client-cleanup`
+- Removed legacy `review-only-piece` test and `loadProjectContext` from session module (CLAUDE.md loading now delegated to SDK)
+
 ## [0.23.0] - 2026-02-23
 
 ### Added

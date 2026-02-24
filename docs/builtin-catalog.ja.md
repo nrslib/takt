@@ -36,8 +36,7 @@ TAKT に同梱されているすべてのビルトイン piece と persona の�
 | 🔧 エキスパート | `expert` | フルスタック開発 piece: architecture、frontend、security、QA レビューと修正ループ付き。 |
 | | `expert-cqrs` | フルスタック開発 piece (CQRS+ES 特化): CQRS+ES、frontend、security、QA レビューと修正ループ付き。 |
 | 🛠️ リファクタリング | `structural-reform` | プロジェクト全体のレビューと構造改革: 段階的なファイル分割による反復的なコードベース再構築。 |
-| 🔍 レビュー | `review-fix-minimal` | レビュー特化 piece: review -> fix -> supervisor。レビューフィードバックに基づく反復改善向け。 |
-| | `review-only` | 変更を加えない読み取り専用のコードレビュー piece。 |
+| 🔍 レビュー | `review` | 多角コードレビュー: PR/ブランチ/作業中の差分を自動判定し、5つの並列観点（arch/security/QA/testing/requirements）からレビューして統合結果を出力。 |
 | 🧪 テスト | `unit-test` | ユニットテスト特化 piece: テスト分析 -> テスト実装 -> レビュー -> 修正。 |
 | | `e2e-test` | E2E テスト特化 piece: E2E 分析 -> E2E 実装 -> レビュー -> 修正 (Vitest ベースの E2E フロー)。 |
 | その他 | `research` | リサーチ piece: planner -> digger -> supervisor。質問せずに自律的にリサーチを実行。 |
@@ -68,6 +67,8 @@ TAKT に同梱されているすべてのビルトイン piece と persona の�
 | **research-digger** | 深掘り調査と情報収集 |
 | **research-supervisor** | リサーチ品質の検証と完全性の評価 |
 | **test-planner** | テスト戦略の分析と包括的なテスト計画 |
+| **testing-reviewer** | テスト重視のコードレビューとインテグレーションテスト要件分析 |
+| **requirements-reviewer** | 要件仕様と準拠性のレビュー |
 | **pr-commenter** | レビュー結果を GitHub PR コメントとして投稿 |
 
 ## カスタム Persona
