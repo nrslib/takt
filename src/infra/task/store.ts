@@ -6,38 +6,6 @@ import { createLogger } from '../../shared/utils/index.js';
 
 const log = createLogger('task-store');
 
-function normalizeTaskRecord(record: unknown): unknown {
-  if (!record || typeof record !== 'object' || Array.isArray(record)) {
-    return record;
-  }
-
-  const source = record as Record<string, unknown>;
-  const normalized: Record<string, unknown> = { ...source };
-
-  if (normalized.with_submodules === undefined && normalized['with-submodules'] !== undefined) {
-    normalized.with_submodules = normalized['with-submodules'];
-  }
-  delete normalized['with-submodules'];
-
-  return normalized;
-}
-
-function normalizeTasksFileData(raw: unknown): unknown {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    return raw;
-  }
-
-  const source = raw as Record<string, unknown>;
-  if (!Array.isArray(source.tasks)) {
-    return raw;
-  }
-
-  return {
-    ...source,
-    tasks: source.tasks.map((task) => normalizeTaskRecord(task)),
-  };
-}
-
 export class TaskStore {
   private readonly tasksFile: string;
   private readonly taktDir: string;
@@ -86,7 +54,7 @@ export class TaskStore {
 
     try {
       const parsed = parseYaml(raw) as unknown;
-      return TasksFileSchema.parse(normalizeTasksFileData(parsed));
+      return TasksFileSchema.parse(parsed);
     } catch (err) {
       log.error('tasks.yaml is broken. Resetting file.', { file: this.tasksFile, error: String(err) });
       fs.unlinkSync(this.tasksFile);

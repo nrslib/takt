@@ -77,7 +77,6 @@ Fields:
 | `started_at` | ISO 8601 timestamp (set when execution begins) |
 | `completed_at` | ISO 8601 timestamp (set when execution finishes) |
 
-`with-submodules` is also accepted as an alias for `with_submodules` in `tasks.yaml`.
 `submodules: all` is recommended for all submodules, and is accepted case-insensitively (`ALL`, `All`, etc.).
 Wildcard patterns in `submodules` (for example `["*"]` or `["libs/*"]`) are not supported.
 `submodules: []` means no submodules are initialized (it does not fall back to `with_submodules`).

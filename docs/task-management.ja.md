@@ -77,7 +77,6 @@ tasks:
 | `started_at` | ISO 8601 タイムスタンプ（実行開始時に設定） |
 | `completed_at` | ISO 8601 タイムスタンプ（実行完了時に設定） |
 
-`tasks.yaml` では `with_submodules` に加えて `with-submodules` もエイリアスとして利用できます。
 全件指定は `submodules: all` を推奨し、`ALL` や `All` など大文字小文字違いでも受理されます。
 `submodules` でのワイルドカード（例: `["*"]`, `["libs/*"]`）はサポートされません。
 `submodules: []` は submodule を取得しない指定であり、`with_submodules` にはフォールバックしません。

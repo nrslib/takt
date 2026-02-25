@@ -37,8 +37,6 @@ Fields:
   submodules                Initialize only listed submodule paths (`all` = all submodules, case-insensitive; wildcards unsupported)
                             Empty list means "initialize none" (no fallback to with_submodules)
 
-`with-submodules` is also accepted as an alias for `with_submodules`.
-
 ## Command Behavior
 
 - `takt add` creates `.takt/tasks/{slug}/order.md` automatically.

@@ -135,7 +135,7 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(tasks[0]?.content).toBe('Absolute task content');
   });
 
-  it('should accept with-submodules alias in tasks.yaml and normalize to with_submodules', () => {
+  it('should ignore with-submodules key in tasks.yaml (snake_case only)', () => {
     writeTasksFile(testDir, [{
       name: 'task-a',
       status: 'pending',
@@ -150,7 +150,7 @@ describe('TaskRunner (tasks.yaml)', () => {
 
     const tasks = runner.listTasks();
     expect(tasks).toHaveLength(1);
-    expect(tasks[0]?.data?.with_submodules).toBe(true);
+    expect(tasks[0]?.data?.with_submodules).toBeUndefined();
     expect(tasks[0]?.data?.submodules).toEqual(['libs/shared']);
   });
 
