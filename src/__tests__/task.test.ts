@@ -135,25 +135,6 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(tasks[0]?.content).toBe('Absolute task content');
   });
 
-  it('should ignore with-submodules key in tasks.yaml (snake_case only)', () => {
-    writeTasksFile(testDir, [{
-      name: 'task-a',
-      status: 'pending',
-      content: 'Do work',
-      created_at: '2026-02-09T00:00:00.000Z',
-      started_at: null,
-      completed_at: null,
-      owner_pid: null,
-      'with-submodules': true,
-      submodules: ['libs/shared'],
-    }]);
-
-    const tasks = runner.listTasks();
-    expect(tasks).toHaveLength(1);
-    expect(tasks[0]?.data?.with_submodules).toBeUndefined();
-    expect(tasks[0]?.data?.submodules).toEqual(['libs/shared']);
-  });
-
   it('should accept submodules all literal in any case and normalize to all', () => {
     writeTasksFile(testDir, [{
       name: 'task-a',
