@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { AskUserQuestionDeniedError } from '../core/piece/ask-user-question-error.js';
 
 class MockEventStream implements AsyncGenerator<unknown, void, unknown> {
   private index = 0;
@@ -331,6 +332,67 @@ describe('OpenCodeClient stream cleanup', () => {
         requestID: 'q-2',
         directory: '/tmp',
         answers: [['A']],
+      },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
+
+  it('should reject question via API when handler throws AskUserQuestionDeniedError', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const stream = new MockEventStream([
+      {
+        type: 'question.asked',
+        properties: {
+          id: 'q-deny',
+          sessionID: 'session-deny',
+          questions: [
+            {
+              question: 'Pick one',
+              header: 'Test',
+              options: [{ label: 'A', description: 'desc' }],
+            },
+          ],
+        },
+      },
+      {
+        type: 'session.idle',
+        properties: { sessionID: 'session-deny' },
+      },
+    ]);
+
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-deny' } });
+    const disposeInstance = vi.fn().mockResolvedValue({ data: {} });
+    const questionReject = vi.fn().mockResolvedValue({ data: true });
+
+    const subscribe = vi.fn().mockResolvedValue({ stream });
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: disposeInstance },
+        session: { create: sessionCreate, promptAsync },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+        question: { reject: questionReject, reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const denyHandler = (): never => {
+      throw new AskUserQuestionDeniedError();
+    };
+
+    const client = new OpenCodeClient();
+    const result = await client.call('interactive', 'hello', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      onAskUserQuestion: denyHandler,
+    });
+
+    expect(result.status).toBe('done');
+    expect(questionReject).toHaveBeenCalledWith(
+      {
+        requestID: 'q-deny',
+        directory: '/tmp',
       },
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );

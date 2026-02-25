@@ -6,6 +6,77 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.24.0] - 2026-02-24
+
+### Added
+
+- AskUserQuestion support: AI agents can now ask interactive questions during execution with single-select, multi-select, and free-text input via TTY UI; automatically denied during piece execution to maintain agent autonomy (#161, #369)
+- `review` builtin piece with 3-mode auto-detection: automatically selects PR mode (by PR number), branch mode (by branch name), or working diff mode (by free text) for multi-perspective parallel review
+- `testing-reviewer` and `requirements-reviewer` builtin personas for specialized review perspectives
+- `testing` policy: integration test requirement criteria (3+ module data flow, state merging into workflows, option propagation through call chains)
+- `gather-review` instruction and `review-gather` output contract for the new review piece gather movement
+- `requirements-review` instruction and output contract for requirements-focused review
+- `testing-review` output contract for testing-focused review
+- `settingSources: ['project']` in SDK options: delegates CLAUDE.md loading to the Claude SDK for proper project-level settings resolution
+
+### Changed
+
+- **BREAKING:** `review-only` piece renamed to `review`; `review-fix-minimal` piece removed — users referencing these piece names must update to `review`
+- `write-tests-first` instruction now includes integration test decision criteria instead of a generic "Write E2E tests if appropriate"
+
+### Fixed
+
+- Planner persona: added bug fix propagation check rule (grep for same pattern in related files) and prohibited deferring decidable questions to Open Questions
+
+### Internal
+
+- Docs: fixed music metaphor origin description, catalog gaps, broken links, orphaned documents, event names, API Key references, eject descriptions, removed stale personas section map from YAML example, aligned legacy terminology with current codebase
+- New test suites: `StreamDisplay`, `ask-user-question-handler`, `pieceExecution-ask-user-question`, `review-piece`, `opencode-client-cleanup`
+- Removed legacy `review-only-piece` test and `loadProjectContext` from session module (CLAUDE.md loading now delegated to SDK)
+
+## [0.23.0] - 2026-02-23
+
+### Added
+
+- `default-test-first-mini` builtin piece for test-first development workflow
+- `auto_fetch` global config: opt-in remote fetch before cloning to keep clones up-to-date (`default: false`)
+- `base_branch` config (global/project): specify the base branch for clone creation (defaults to remote default branch)
+- `model` project config: override model at the project level (`.takt/config.yaml`)
+- `concurrency` project config: set parallel task count per project for `takt run`
+- `--create-worktree` support in pipeline mode for worktree-based execution
+- `skipTaskList` option: interactive "Execute" action skips adding to `tasks.yaml`
+- `takt list` now displays GitHub Issue numbers alongside task names
+- Retry failed tasks now offers to reuse the previous piece before prompting piece selection
+- Pipeline mode Slack notifications: sends run summary with task details, duration, branch, and PR URL
+- CI workflow: lint, test, and e2e:mock checks run automatically on PRs (#364)
+
+### Changed
+
+- Provider/model resolution unified via `resolveProviderModelCandidates()` — single resolution function used in both `AgentRunner` and `resolveMovementProviderModel`
+- Pipeline execution refactored into thin orchestrator (`execute.ts`) + step implementations (`steps.ts`)
+- Clone directory default changed from `takt-worktree` (singular) to `takt-worktrees` (plural) with auto-migration of legacy directory
+- PR titles now include issue number prefix (e.g., `[#6] Fix the bug`)
+- Task status now reflects PR creation failure — previously only piece execution success was tracked
+- `auto-tag.yml` tags PR head SHA instead of merge commit for correct hotfix code publishing
+- Session reader falls back to JSONL file scanning when `sessions-index.json` is missing or invalid
+- `ProjectLocalConfig` type normalized to camelCase (`auto_pr`→`autoPr`, `draft_pr`→`draftPr`) — YAML snake_case preserved
+- `getLocalLayerValue` simplified from switch-case to dynamic property lookup
+
+### Fixed
+
+- `repertoire add` pipe stdin: multiple `confirm()` calls failed when reading from piped stdin due to readline destroying buffered lines (#334)
+- Movement provider override precedence in `AgentRunner`: step provider was incorrectly overridden by global config
+- Project-level `model` config was silently ignored — `getLocalLayerValue` was missing the `model` case
+- PR creation failure now properly propagated as task failure with error message (#345)
+- Claude session resume candidates now fall back to JSONL file scanning when `sessions-index.json` is unavailable
+
+### Internal
+
+- CI: PR checks for lint, test, e2e:mock (`ci.yml`)
+- Expanded e2e test coverage for repertoire (#364)
+- New test suites: clone, config, postExecution, session-reader, selectAndExecute-skipTaskList, taskStatusLabel, pipelineExecution
+- Refactored: project config case normalization (#358), clone manager (#359), pipeline steps extraction, confirm pipe reader singleton, provider resolution (#362)
+
 ## [0.22.0] - 2026-02-22
 
 ### Added

@@ -71,16 +71,17 @@ describe('default piece parallel reviewers movement', () => {
     const reviewersMovement = piece!.movements.find((s) => s.name === 'reviewers');
     expect(reviewersMovement).toBeDefined();
     expect(reviewersMovement!.parallel).toBeDefined();
-    expect(reviewersMovement!.parallel).toHaveLength(2);
+    expect(reviewersMovement!.parallel).toHaveLength(3);
   });
 
-  it('should have arch-review and qa-review as parallel sub-movements', () => {
+  it('should have arch-review, qa-review, and testing-review as parallel sub-movements', () => {
     const piece = getBuiltinPiece('default', process.cwd());
     const reviewersMovement = piece!.movements.find((s) => s.name === 'reviewers')!;
     const subMovementNames = reviewersMovement.parallel!.map((s) => s.name);
 
     expect(subMovementNames).toContain('arch-review');
     expect(subMovementNames).toContain('qa-review');
+    expect(subMovementNames).toContain('testing-review');
   });
 
   it('should have aggregate conditions on the reviewers parent movement', () => {

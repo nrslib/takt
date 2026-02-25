@@ -249,6 +249,93 @@ describe('StreamDisplay', () => {
     });
   });
 
+  describe('showToolUse spinner suppression', () => {
+    it('should not start spinner for AskUserQuestion tool', () => {
+      vi.useFakeTimers();
+      try {
+        const display = new StreamDisplay('test-agent', false);
+        display.showToolUse('AskUserQuestion', { questions: [] });
+
+        // Advance time past spinner interval (80ms)
+        vi.advanceTimersByTime(200);
+
+        // Spinner writes to stdout via setInterval — should NOT have been called
+        expect(stdoutWriteSpy).not.toHaveBeenCalled();
+
+        display.flush();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('should start spinner for non-AskUserQuestion tools', () => {
+      vi.useFakeTimers();
+      try {
+        const display = new StreamDisplay('test-agent', false);
+        display.showToolUse('Bash', { command: 'ls' });
+
+        // Advance time past spinner interval (80ms)
+        vi.advanceTimersByTime(200);
+
+        // Spinner should have written to stdout
+        expect(stdoutWriteSpy).toHaveBeenCalled();
+
+        display.flush();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  describe('showToolResult AskUserQuestion content suppression', () => {
+    it('should suppress content preview for AskUserQuestion non-error result', () => {
+      const display = new StreamDisplay('test-agent', false);
+      display.showToolUse('AskUserQuestion', { questions: [] });
+      display.showToolResult('Error: Answer questions?', false);
+
+      // Find the result line with ✓
+      const resultLine = consoleLogSpy.mock.calls.find(
+        (call) => typeof call[0] === 'string' && (call[0] as string).includes('✓'),
+      );
+      expect(resultLine).toBeDefined();
+
+      // Should show only "✓ AskUserQuestion" without content preview
+      const fullOutput = resultLine!.join(' ');
+      expect(fullOutput).toContain('AskUserQuestion');
+      expect(fullOutput).not.toContain('Error:');
+      expect(fullOutput).not.toContain('Answer questions');
+    });
+
+    it('should still show error for AskUserQuestion when isError is true', () => {
+      const display = new StreamDisplay('test-agent', false);
+      display.showToolUse('AskUserQuestion', { questions: [] });
+      display.showToolResult('Something went wrong', true);
+
+      // Find the error line with ✗
+      const errorLine = consoleLogSpy.mock.calls.find(
+        (call) => typeof call[0] === 'string' && (call[0] as string).includes('✗'),
+      );
+      expect(errorLine).toBeDefined();
+      const fullOutput = errorLine!.join(' ');
+      expect(fullOutput).toContain('AskUserQuestion');
+      expect(fullOutput).toContain('Something went wrong');
+    });
+
+    it('should still show content preview for non-AskUserQuestion tools', () => {
+      const display = new StreamDisplay('test-agent', false);
+      display.showToolUse('Read', { file_path: '/test.ts' });
+      display.showToolResult('File content here', false);
+
+      const resultLine = consoleLogSpy.mock.calls.find(
+        (call) => typeof call[0] === 'string' && (call[0] as string).includes('✓'),
+      );
+      expect(resultLine).toBeDefined();
+      const fullOutput = resultLine!.join(' ');
+      expect(fullOutput).toContain('Read');
+      expect(fullOutput).toContain('File content here');
+    });
+  });
+
   describe('progress prefix format', () => {
     it('should format progress as (iteration/max) step index/total', () => {
       const progressInfo: ProgressInfo = {

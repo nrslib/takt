@@ -198,23 +198,6 @@ export class SessionManager {
     return JSON.parse(content) as SessionLog;
   }
 
-  /** Load project context (CLAUDE.md files) */
-  loadProjectContext(projectDir: string): string {
-    const contextParts: string[] = [];
-
-    const rootClaudeMd = join(projectDir, 'CLAUDE.md');
-    if (existsSync(rootClaudeMd)) {
-      contextParts.push(readFileSync(rootClaudeMd, 'utf-8'));
-    }
-
-    const dotClaudeMd = join(projectDir, '.claude', 'CLAUDE.md');
-    if (existsSync(dotClaudeMd)) {
-      contextParts.push(readFileSync(dotClaudeMd, 'utf-8'));
-    }
-
-    return contextParts.join('\n\n---\n\n');
-  }
-
 }
 
 const defaultManager = new SessionManager();
@@ -263,10 +246,6 @@ export function finalizeSessionLog(
 
 export function loadSessionLog(filepath: string): SessionLog | null {
   return defaultManager.loadSessionLog(filepath);
-}
-
-export function loadProjectContext(projectDir: string): string {
-  return defaultManager.loadProjectContext(projectDir);
 }
 
 /**

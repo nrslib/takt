@@ -22,8 +22,8 @@ loop_monitors:
         同じ問題を繰り返しているかを判断してください。
 
         **参照するレポート:**
-        - アーキテクチャレビュー: {report:04-architect-review.md}
-        - QAレビュー: {report:05-qa-review.md}
+        - アーキテクチャレビュー: {report:architect-review.md}
+        - QAレビュー: {report:qa-review.md}
 
         **判断基準:**
         - 各修正サイクルでレビュー指摘が解消されているか
@@ -236,7 +236,7 @@ movements:
           - {質問2}
     output_contracts:
       report:
-        - name: 01-reform-plan.md
+        - name: reform-plan.md
           format: plan
   - name: implement
     edit: true
@@ -295,7 +295,7 @@ movements:
         instruction: review-arch
         output_contracts:
           report:
-            - name: 04-architect-review.md
+            - name: architect-review.md
               format: architecture-review
       - name: qa-review
         edit: false
@@ -315,7 +315,7 @@ movements:
         instruction: review-qa
         output_contracts:
           report:
-            - name: 05-qa-review.md
+            - name: qa-review.md
               format: qa-review
     rules:
       - condition: all("approved")
@@ -400,7 +400,7 @@ movements:
         next: fix
     output_contracts:
       report:
-        - name: 06-verification.md
+        - name: verification.md
           format: validation
   - name: next_target
     edit: false
@@ -420,7 +420,7 @@ movements:
       - ムーブメント: next_target（進捗確認と次ターゲット選択）
 
       ## 改革計画
-      {report:01-reform-plan.md}
+      {report:reform-plan.md}
 
       ## 最新の検証結果
       {previous_response}

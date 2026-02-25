@@ -103,3 +103,11 @@ retry:
 run:
   notifyComplete: "Run complete ({total} tasks)"
   notifyAbort: "Run finished with errors ({failed})"
+
+# ===== Issue Creation UI =====
+issue:
+  labelSelection:
+    prompt: "Label:"
+    none: "None"
+    custom: "Custom input"
+    customPrompt: "Enter label name"

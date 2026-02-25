@@ -31,13 +31,15 @@ piece_categories:
       - expert-mini
       - expert-cqrs
       - expert-cqrs-mini
+  🏗️ インフラストラクチャ:
+    pieces:
+      - terraform
   🛠️ リファクタリング:
     pieces:
       - structural-reform
   🔍 レビュー:
     pieces:
-      - review-fix-minimal
-      - review-only
+      - review
   🧪 テスト:
     pieces:
       - unit-test

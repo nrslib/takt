@@ -11,7 +11,7 @@ import { getLabel } from '../../shared/i18n/index.js';
 import { formatIssueAsTask, parseIssueNumbers } from '../../infra/github/index.js';
 import { getGitProvider } from '../../infra/git/index.js';
 import type { Issue } from '../../infra/git/index.js';
-import { selectAndExecuteTask, determinePiece, saveTaskFromInteractive, createIssueFromTask, type SelectAndExecuteOptions } from '../../features/tasks/index.js';
+import { selectAndExecuteTask, determinePiece, saveTaskFromInteractive, createIssueAndSaveTask, promptLabelSelection, type SelectAndExecuteOptions } from '../../features/tasks/index.js';
 import { executePipeline } from '../../features/pipeline/index.js';
 import {
   interactiveMode,
@@ -127,6 +127,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
   // Resolve --task option to task text (direct execution, no interactive mode)
   const taskFromOption = opts.task as string | undefined;
   if (taskFromOption) {
+    selectOptions.skipTaskList = true;
     await selectAndExecuteTask(resolvedCwd, taskFromOption, selectOptions, agentOverrides);
     return;
   }
@@ -220,13 +221,11 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       await selectAndExecuteTask(resolvedCwd, confirmedTask, selectOptions, agentOverrides);
     },
     create_issue: async ({ task: confirmedTask }) => {
-      const issueNumber = createIssueFromTask(confirmedTask);
-      if (issueNumber !== undefined) {
-        await saveTaskFromInteractive(resolvedCwd, confirmedTask, pieceId, {
-          issue: issueNumber,
-          confirmAtEndMessage: 'Add this issue to tasks?',
-        });
-      }
+      const labels = await promptLabelSelection(lang);
+      await createIssueAndSaveTask(resolvedCwd, confirmedTask, pieceId, {
+        confirmAtEndMessage: 'Add this issue to tasks?',
+        labels,
+      });
     },
     save_task: async ({ task: confirmedTask }) => {
       await saveTaskFromInteractive(resolvedCwd, confirmedTask, pieceId);

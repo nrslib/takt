@@ -2,9 +2,14 @@
  * Tests for persona_providers config-level provider/model override.
  *
  * Verifies movement-level provider/model resolution for stepProvider/stepModel:
- *   1. Movement YAML provider (highest)
- *   2. persona_providers[personaDisplayName].provider / .model
- *   3. CLI provider / model (lowest)
+ *   1. persona_providers[personaDisplayName].provider (highest)
+ *   2. Movement YAML provider
+ *   3. CLI/global provider (lowest in movement resolution)
+ *
+ * Model resolution remains:
+ *   1. persona_providers[personaDisplayName].model
+ *   2. Movement YAML model
+ *   3. CLI/global model
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -106,7 +111,7 @@ describe('PieceEngine persona_providers override', () => {
     expect(options.stepProvider).toBe('claude');
   });
 
-  it('should prioritize movement provider over persona_providers', async () => {
+  it('should prioritize persona_providers provider over movement provider', async () => {
     const movement = makeMovement('implement', {
       personaDisplayName: 'coder',
       provider: 'claude',
@@ -134,7 +139,7 @@ describe('PieceEngine persona_providers override', () => {
 
     const options = vi.mocked(runAgent).mock.calls[0][2];
     expect(options.provider).toBe('mock');
-    expect(options.stepProvider).toBe('claude');
+    expect(options.stepProvider).toBe('codex');
   });
 
   it('should work without persona_providers (undefined)', async () => {
@@ -268,5 +273,37 @@ describe('PieceEngine persona_providers override', () => {
     const options = vi.mocked(runAgent).mock.calls[0][2];
     expect(options.stepProvider).toBe('codex');
     expect(options.stepModel).toBe('global-model');
+  });
+
+  it('should prioritize persona_providers.model over movement model', async () => {
+    const movement = makeMovement('implement', {
+      personaDisplayName: 'coder',
+      model: 'movement-model',
+      rules: [makeRule('done', 'COMPLETE')],
+    });
+    const config: PieceConfig = {
+      name: 'persona-model-over-movement',
+      movements: [movement],
+      initialMovement: 'implement',
+      maxMovements: 1,
+    };
+
+    mockRunAgentSequence([
+      makeResponse({ persona: movement.persona, content: 'done' }),
+    ]);
+    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+
+    const engine = new PieceEngine(config, '/tmp/project', 'test task', {
+      projectCwd: '/tmp/project',
+      provider: 'claude',
+      model: 'global-model',
+      personaProviders: { coder: { provider: 'codex', model: 'persona-model' } },
+    });
+
+    await engine.run();
+
+    const options = vi.mocked(runAgent).mock.calls[0][2];
+    expect(options.stepProvider).toBe('codex');
+    expect(options.stepModel).toBe('persona-model');
   });
 });

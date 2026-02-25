@@ -103,3 +103,11 @@ retry:
 run:
   notifyComplete: "run完了 ({total} tasks)"
   notifyAbort: "runはエラー終了 ({failed})"
+
+# ===== Issue Creation UI =====
+issue:
+  labelSelection:
+    prompt: "ラベル:"
+    none: "なし"
+    custom: "入力（カスタム）"
+    customPrompt: "ラベル名を入力"

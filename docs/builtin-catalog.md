@@ -12,6 +12,7 @@ A comprehensive catalog of all builtin pieces and personas included with TAKT.
 | `frontend-mini` | Frontend-focused mini configuration. |
 | `backend-mini` | Backend-focused mini configuration. |
 | `expert-mini` | Expert-level mini configuration. |
+| `default-test-first-mini` | Test-first development. Write tests first, then implement to pass them. |
 | `default` | Serious development. Multi-stage review with parallel reviewers. Used for TAKT's own development. |
 
 ## All Builtin Pieces
@@ -23,6 +24,7 @@ Organized by category.
 | 🚀 Quick Start | `default-mini` | Mini development piece: plan -> implement -> parallel review (AI antipattern + supervisor) -> fix if needed. Lightweight with review. |
 | | `frontend-mini` | Mini frontend piece: plan -> implement -> parallel review (AI antipattern + supervisor) with frontend knowledge injection. |
 | | `backend-mini` | Mini backend piece: plan -> implement -> parallel review (AI antipattern + supervisor) with backend knowledge injection. |
+| | `default-test-first-mini` | Test-first development piece: plan -> write tests -> implement -> parallel review -> fix if needed -> complete. |
 | | `default` | Full development piece: plan -> implement -> AI review -> parallel review (architect + QA) -> supervisor approval. Includes fix loops at each review stage. |
 | | `compound-eye` | Multi-model review: sends the same instruction to Claude and Codex simultaneously, then synthesizes both responses. |
 | ⚡ Mini | `backend-cqrs-mini` | Mini CQRS+ES piece: plan -> implement -> parallel review (AI antipattern + supervisor) with CQRS+ES knowledge injection. |
@@ -34,8 +36,7 @@ Organized by category.
 | 🔧 Expert | `expert` | Full-stack development piece: architecture, frontend, security, QA reviews with fix loops. |
 | | `expert-cqrs` | Full-stack development piece (CQRS+ES specialized): CQRS+ES, frontend, security, QA reviews with fix loops. |
 | 🛠️ Refactoring | `structural-reform` | Full project review and structural reform: iterative codebase restructuring with staged file splits. |
-| 🔍 Review | `review-fix-minimal` | Review-focused piece: review -> fix -> supervisor. For iterative improvement based on review feedback. |
-| | `review-only` | Read-only code review piece that makes no changes. |
+| 🔍 Review | `review` | Multi-perspective code review: auto-detects PR/branch/working diff, reviews from 5 parallel perspectives (arch/security/QA/testing/requirements), outputs consolidated results. |
 | 🧪 Testing | `unit-test` | Unit test focused piece: test analysis -> test implementation -> review -> fix. |
 | | `e2e-test` | E2E test focused piece: E2E analysis -> E2E implementation -> review -> fix (Vitest-based E2E flow). |
 | Others | `research` | Research piece: planner -> digger -> supervisor. Autonomously executes research without asking questions. |
@@ -66,6 +67,8 @@ Use `takt switch` to switch pieces interactively.
 | **research-digger** | Deep investigation and information gathering |
 | **research-supervisor** | Research quality validation and completeness assessment |
 | **test-planner** | Test strategy analysis and comprehensive test planning |
+| **testing-reviewer** | Testing-focused code review with integration test requirements analysis |
+| **requirements-reviewer** | Requirements specification and compliance review |
 | **pr-commenter** | Posts review findings as GitHub PR comments |
 
 ## Custom Personas
