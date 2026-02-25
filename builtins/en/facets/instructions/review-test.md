@@ -9,6 +9,6 @@ Review the changes from a test quality perspective.
 
 ## Judgment Procedure
 
-1. Cross-reference the test plan report ({report:00-test-plan.md}) with the implemented tests
+1. Cross-reference the test plan/test scope reports in the Report Directory with the implemented tests
 2. For each detected issue, classify as blocking/non-blocking based on Policy's scope determination table and judgment rules
 3. If there is even one blocking issue, judge as REJECT

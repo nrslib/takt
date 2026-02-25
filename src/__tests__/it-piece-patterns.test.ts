@@ -165,12 +165,13 @@ describe('Piece Patterns IT: default piece (parallel reviewers)', () => {
 
     setMockScenario([
       { persona: 'planner', status: 'done', content: 'Requirements are clear and implementable' },
-      { persona: 'architect-planner', status: 'done', content: 'Design complete' },
+      { persona: 'coder', status: 'done', content: 'Tests written successfully' },
       { persona: 'coder', status: 'done', content: 'Implementation complete' },
       { persona: 'ai-antipattern-reviewer', status: 'done', content: 'No AI-specific issues' },
-      // Parallel reviewers: both approved
+      // Parallel reviewers: all approved
       { persona: 'architecture-reviewer', status: 'done', content: 'approved' },
       { persona: 'qa-reviewer', status: 'done', content: 'approved' },
+      { persona: 'testing-reviewer', status: 'done', content: 'approved' },
       // Supervisor
       { persona: 'supervisor', status: 'done', content: 'All checks passed' },
     ]);
@@ -186,19 +187,19 @@ describe('Piece Patterns IT: default piece (parallel reviewers)', () => {
 
     setMockScenario([
       { persona: 'planner', status: 'done', content: 'Requirements are clear and implementable' },
-      { persona: 'architect-planner', status: 'done', content: 'Design complete' },
+      { persona: 'coder', status: 'done', content: 'Tests written successfully' },
       { persona: 'coder', status: 'done', content: 'Implementation complete' },
       { persona: 'ai-antipattern-reviewer', status: 'done', content: 'No AI-specific issues' },
-      // Parallel: arch approved, qa needs_fix
+      // Parallel: arch approved, qa needs_fix, testing approved
       { persona: 'architecture-reviewer', status: 'done', content: 'approved' },
       { persona: 'qa-reviewer', status: 'done', content: 'needs_fix' },
+      { persona: 'testing-reviewer', status: 'done', content: 'approved' },
       // Fix step
       { persona: 'coder', status: 'done', content: 'Fix complete' },
-      // AI review after fix
-      { persona: 'ai-antipattern-reviewer', status: 'done', content: 'No AI-specific issues' },
-      // Re-review: both approved
+      // Re-review: all approved
       { persona: 'architecture-reviewer', status: 'done', content: 'approved' },
       { persona: 'qa-reviewer', status: 'done', content: 'approved' },
+      { persona: 'testing-reviewer', status: 'done', content: 'approved' },
       // Supervisor
       { persona: 'supervisor', status: 'done', content: 'All checks passed' },
     ]);
@@ -292,7 +293,7 @@ describe('Piece Patterns IT: magi piece', () => {
   });
 });
 
-describe('Piece Patterns IT: review-only piece', () => {
+describe('Piece Patterns IT: review piece', () => {
   let testDir: string;
 
   beforeEach(() => {
@@ -305,28 +306,30 @@ describe('Piece Patterns IT: review-only piece', () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  it('should complete: plan → reviewers (all approved) → supervise → COMPLETE', async () => {
-    const config = loadPiece('review-only', testDir);
+  it('should complete: gather → reviewers (all approved) → supervise → COMPLETE', async () => {
+    const config = loadPiece('review', testDir);
     expect(config).not.toBeNull();
 
     setMockScenario([
-      { persona: 'planner', status: 'done', content: '[PLAN:1]\n\nReview scope is clear.' },
-      // Parallel reviewers: all approved
+      { persona: 'planner', status: 'done', content: '[GATHER:1]\n\nPR info gathered.' },
+      // Parallel reviewers: all approved (5 reviewers)
       { persona: 'architecture-reviewer', status: 'done', content: '[ARCH-REVIEW:1]\n\napproved' },
       { persona: 'security-reviewer', status: 'done', content: '[SECURITY-REVIEW:1]\n\napproved' },
-      { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-REVIEW:1]\n\napproved' },
-      // Supervisor: approved (local review, no PR)
-      { persona: 'supervisor', status: 'done', content: '[SUPERVISE:2]\n\napproved' },
+      { persona: 'qa-reviewer', status: 'done', content: '[QA-REVIEW:1]\n\napproved' },
+      { persona: 'testing-reviewer', status: 'done', content: '[TESTING-REVIEW:1]\n\napproved' },
+      { persona: 'requirements-reviewer', status: 'done', content: '[REQUIREMENTS-REVIEW:1]\n\napproved' },
+      // Supervisor: synthesis complete
+      { persona: 'supervisor', status: 'done', content: '[SUPERVISE:1]\n\nReview synthesis complete' },
     ]);
 
-    const engine = createEngine(config!, testDir, 'Review the codebase');
+    const engine = createEngine(config!, testDir, 'Review PR #42');
     const state = await engine.run();
 
     expect(state.status).toBe('completed');
   });
 
   it('should verify no movements have edit: true', () => {
-    const config = loadPiece('review-only', testDir);
+    const config = loadPiece('review', testDir);
     expect(config).not.toBeNull();
 
     for (const movement of config!.movements) {

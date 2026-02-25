@@ -16,7 +16,7 @@ export {
   type WorktreeConfirmationResult,
 } from './execute/selectAndExecute.js';
 export { resolveAutoPr, postExecutionFlow, type PostExecutionOptions } from './execute/postExecution.js';
-export { addTask, saveTaskFile, saveTaskFromInteractive, createIssueFromTask, createIssueAndSaveTask } from './add/index.js';
+export { addTask, saveTaskFile, saveTaskFromInteractive, createIssueFromTask, createIssueAndSaveTask, promptLabelSelection } from './add/index.js';
 export { watchTasks } from './watch/index.js';
 export {
   listTasks,

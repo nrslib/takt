@@ -26,5 +26,4 @@ export {
   createSessionLog,
   finalizeSessionLog,
   loadSessionLog,
-  loadProjectContext,
 } from './session.js';

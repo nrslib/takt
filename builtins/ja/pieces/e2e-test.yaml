@@ -22,7 +22,7 @@ loop_monitors:
         非生産的（同じ問題を繰り返している）かを判断してください。
 
         **参照するレポート:**
-        - AIレビュー結果: {report:04-ai-review.md}
+        - AIレビュー結果: {report:ai-review.md}
 
         **判断基準:**
         - 各サイクルで新しい問題が発見・修正されているか
@@ -62,7 +62,7 @@ movements:
     instruction: plan-e2e-test
     output_contracts:
       report:
-        - name: 00-test-plan.md
+        - name: test-plan.md
           format: test-plan
   - name: implement_test
     edit: true
@@ -122,7 +122,7 @@ movements:
     instruction: ai-review
     output_contracts:
       report:
-        - name: 04-ai-review.md
+        - name: ai-review.md
           format: ai-review
   - name: ai_fix
     edit: true
@@ -187,7 +187,7 @@ movements:
     instruction: review-test
     output_contracts:
       report:
-        - name: 05-qa-review.md
+        - name: qa-review.md
           format: qa-review
   - name: fix
     edit: true

@@ -22,8 +22,8 @@ loop_monitors:
         is making progress or repeating the same issues.
 
         **Reports to reference:**
-        - Architect review: {report:04-architect-review.md}
-        - QA review: {report:05-qa-review.md}
+        - Architect review: {report:architect-review.md}
+        - QA review: {report:qa-review.md}
 
         **Judgment criteria:**
         - Are review findings being addressed in each fix cycle?
@@ -236,7 +236,7 @@ movements:
           - {Question 2}
     output_contracts:
       report:
-        - name: 01-reform-plan.md
+        - name: reform-plan.md
           format: plan
   - name: implement
     edit: true
@@ -295,7 +295,7 @@ movements:
         instruction: review-arch
         output_contracts:
           report:
-            - name: 04-architect-review.md
+            - name: architect-review.md
               format: architecture-review
       - name: qa-review
         edit: false
@@ -315,7 +315,7 @@ movements:
         instruction: review-qa
         output_contracts:
           report:
-            - name: 05-qa-review.md
+            - name: qa-review.md
               format: qa-review
     rules:
       - condition: all("approved")
@@ -400,7 +400,7 @@ movements:
         next: fix
     output_contracts:
       report:
-        - name: 06-verification.md
+        - name: verification.md
           format: validation
   - name: next_target
     edit: false
@@ -420,7 +420,7 @@ movements:
       - Movement: next_target (progress check and next target selection)
 
       ## Original Reform Plan
-      {report:01-reform-plan.md}
+      {report:reform-plan.md}
 
       ## Latest Verification
       {previous_response}

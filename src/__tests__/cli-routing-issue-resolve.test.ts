@@ -26,21 +26,31 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   }),
 }));
 
+const { mockCheckCliStatus, mockFetchIssue } = vi.hoisted(() => ({
+  mockCheckCliStatus: vi.fn(),
+  mockFetchIssue: vi.fn(),
+}));
+
+vi.mock('../infra/git/index.js', () => ({
+  getGitProvider: () => ({
+    checkCliStatus: (...args: unknown[]) => mockCheckCliStatus(...args),
+    fetchIssue: (...args: unknown[]) => mockFetchIssue(...args),
+  }),
+}));
+
 vi.mock('../infra/github/issue.js', () => ({
   parseIssueNumbers: vi.fn(() => []),
-  checkGhCli: vi.fn(),
-  fetchIssue: vi.fn(),
   formatIssueAsTask: vi.fn(),
   isIssueReference: vi.fn(),
   resolveIssueTask: vi.fn(),
-  createIssue: vi.fn(),
 }));
 
 vi.mock('../features/tasks/index.js', () => ({
   selectAndExecuteTask: vi.fn(),
   determinePiece: vi.fn(),
   saveTaskFromInteractive: vi.fn(),
-  createIssueFromTask: vi.fn(),
+  createIssueAndSaveTask: vi.fn(),
+  promptLabelSelection: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock('../features/pipeline/index.js', () => ({
@@ -104,23 +114,20 @@ vi.mock('../app/cli/helpers.js', () => ({
   isDirectTask: vi.fn(() => false),
 }));
 
-import { checkGhCli, fetchIssue, formatIssueAsTask, parseIssueNumbers } from '../infra/github/issue.js';
-import { selectAndExecuteTask, determinePiece, createIssueFromTask, saveTaskFromInteractive } from '../features/tasks/index.js';
+import { formatIssueAsTask, parseIssueNumbers } from '../infra/github/issue.js';
+import { selectAndExecuteTask, determinePiece, createIssueAndSaveTask } from '../features/tasks/index.js';
 import { interactiveMode } from '../features/interactive/index.js';
 import { resolveConfigValues, loadPersonaSessions } from '../infra/config/index.js';
 import { isDirectTask } from '../app/cli/helpers.js';
 import { executeDefaultAction } from '../app/cli/routing.js';
 import { info } from '../shared/ui/index.js';
-import type { GitHubIssue } from '../infra/github/types.js';
+import type { Issue } from '../infra/git/index.js';
 
-const mockCheckGhCli = vi.mocked(checkGhCli);
-const mockFetchIssue = vi.mocked(fetchIssue);
 const mockFormatIssueAsTask = vi.mocked(formatIssueAsTask);
 const mockParseIssueNumbers = vi.mocked(parseIssueNumbers);
 const mockSelectAndExecuteTask = vi.mocked(selectAndExecuteTask);
 const mockDeterminePiece = vi.mocked(determinePiece);
-const mockCreateIssueFromTask = vi.mocked(createIssueFromTask);
-const mockSaveTaskFromInteractive = vi.mocked(saveTaskFromInteractive);
+const mockCreateIssueAndSaveTask = vi.mocked(createIssueAndSaveTask);
 const mockInteractiveMode = vi.mocked(interactiveMode);
 const mockLoadPersonaSessions = vi.mocked(loadPersonaSessions);
 const mockResolveConfigValues = vi.mocked(resolveConfigValues);
@@ -128,7 +135,7 @@ const mockIsDirectTask = vi.mocked(isDirectTask);
 const mockInfo = vi.mocked(info);
 const mockTaskRunnerListAllTaskItems = vi.mocked(mockListAllTaskItems);
 
-function createMockIssue(number: number): GitHubIssue {
+function createMockIssue(number: number): Issue {
   return {
     number,
     title: `Issue #${number}`,
@@ -159,7 +166,7 @@ describe('Issue resolution in routing', () => {
       // Given
       mockOpts.issue = 131;
       const issue131 = createMockIssue(131);
-      mockCheckGhCli.mockReturnValue({ available: true });
+      mockCheckCliStatus.mockReturnValue({ available: true });
       mockFetchIssue.mockReturnValue(issue131);
       mockFormatIssueAsTask.mockReturnValue('## GitHub Issue #131: Issue #131');
 
@@ -191,7 +198,7 @@ describe('Issue resolution in routing', () => {
     it('should exit with error when gh CLI is unavailable for --issue', async () => {
       // Given
       mockOpts.issue = 131;
-      mockCheckGhCli.mockReturnValue({
+      mockCheckCliStatus.mockReturnValue({
         available: false,
         error: 'gh CLI is not installed',
       });
@@ -214,7 +221,7 @@ describe('Issue resolution in routing', () => {
       // Given
       const issue131 = createMockIssue(131);
       mockIsDirectTask.mockReturnValue(true);
-      mockCheckGhCli.mockReturnValue({ available: true });
+      mockCheckCliStatus.mockReturnValue({ available: true });
       mockFetchIssue.mockReturnValue(issue131);
       mockFormatIssueAsTask.mockReturnValue('## GitHub Issue #131: Issue #131');
       mockParseIssueNumbers.mockReturnValue([131]);
@@ -421,7 +428,7 @@ describe('Issue resolution in routing', () => {
       // Given
       mockOpts.issue = 131;
       const issue131 = createMockIssue(131);
-      mockCheckGhCli.mockReturnValue({ available: true });
+      mockCheckCliStatus.mockReturnValue({ available: true });
       mockFetchIssue.mockReturnValue(issue131);
       mockFormatIssueAsTask.mockReturnValue('## GitHub Issue #131');
       mockInteractiveMode.mockResolvedValue({ action: 'cancel', task: '' });
@@ -435,36 +442,20 @@ describe('Issue resolution in routing', () => {
   });
 
   describe('create_issue action', () => {
-    it('should create issue first, then delegate final confirmation to saveTaskFromInteractive', async () => {
+    it('should delegate to createIssueAndSaveTask with confirmAtEndMessage', async () => {
       // Given
       mockInteractiveMode.mockResolvedValue({ action: 'create_issue', task: 'New feature request' });
-      mockCreateIssueFromTask.mockReturnValue(226);
 
       // When
       await executeDefaultAction();
 
       // Then: issue is created first
-      expect(mockCreateIssueFromTask).toHaveBeenCalledWith('New feature request');
-      // Then: saveTaskFromInteractive receives final confirmation message
-      expect(mockSaveTaskFromInteractive).toHaveBeenCalledWith(
+      expect(mockCreateIssueAndSaveTask).toHaveBeenCalledWith(
         '/test/cwd',
         'New feature request',
         'default',
-        { issue: 226, confirmAtEndMessage: 'Add this issue to tasks?' },
+        { confirmAtEndMessage: 'Add this issue to tasks?', labels: [] },
       );
-    });
-
-    it('should skip confirmation and task save when issue creation fails', async () => {
-      // Given
-      mockInteractiveMode.mockResolvedValue({ action: 'create_issue', task: 'New feature request' });
-      mockCreateIssueFromTask.mockReturnValue(undefined);
-
-      // When
-      await executeDefaultAction();
-
-      // Then
-      expect(mockCreateIssueFromTask).toHaveBeenCalledWith('New feature request');
-      expect(mockSaveTaskFromInteractive).not.toHaveBeenCalled();
     });
 
     it('should not call selectAndExecuteTask when create_issue action is chosen', async () => {

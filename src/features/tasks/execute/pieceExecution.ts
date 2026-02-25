@@ -4,7 +4,7 @@
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { PieceEngine, type IterationLimitRequest, type UserInputRequest } from '../../../core/piece/index.js';
+import { PieceEngine, createDenyAskUserQuestionHandler, type IterationLimitRequest, type UserInputRequest } from '../../../core/piece/index.js';
 import type { PieceConfig } from '../../../core/models/index.js';
 import type { PieceExecutionResult, PieceExecutionOptions, ExceededInfo } from './types.js';
 import { detectRuleIndex } from '../../../shared/utils/ruleIndex.js';
@@ -479,6 +479,7 @@ export async function executePiece(
       initialSessions: savedSessions,
       onSessionUpdate: sessionUpdateHandler,
       onIterationLimit: iterationLimitHandler,
+      onAskUserQuestion: createDenyAskUserQuestionHandler(),
       projectCwd,
       language: options.language,
       provider: options.provider,

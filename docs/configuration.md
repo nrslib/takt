@@ -27,6 +27,8 @@ notification_sound_events:    # Optional per-event toggles
 concurrency: 1                # Parallel task count for takt run (1-10, default: 1 = sequential)
 task_poll_interval_ms: 500    # Polling interval for new tasks during takt run (100-5000, default: 500)
 interactive_preview_movements: 3  # Movement previews in interactive mode (0-10, default: 3)
+# auto_fetch: false            # Fetch remote before cloning (default: false)
+# base_branch: main            # Base branch for clone creation (default: remote default branch)
 
 # Runtime environment defaults (applies to all pieces unless piece_config.runtime overrides)
 # runtime:
@@ -111,6 +113,8 @@ interactive_preview_movements: 3  # Movement previews in interactive mode (0-10,
 | `disabled_builtins` | string[] | `[]` | Specific builtin pieces to disable |
 | `pipeline` | object | - | Pipeline template settings |
 | `bookmarks_file` | string | - | Path to bookmarks file |
+| `auto_fetch` | boolean | `false` | Fetch remote before cloning to keep clones up-to-date |
+| `base_branch` | string | - | Base branch for clone creation (defaults to remote default branch) |
 | `piece_categories_file` | string | - | Path to piece categories file |
 
 ## Project Configuration
@@ -121,9 +125,11 @@ Configure project-specific settings in `.takt/config.yaml`. This file is created
 # .takt/config.yaml
 piece: default                # Current piece for this project
 provider: claude              # Override provider for this project
+model: sonnet                 # Override model for this project
 auto_pr: true                 # Auto-create PR after worktree execution
 verbose: false                # Verbose output mode
 concurrency: 2                # Parallel task count for takt run in this project (1-10)
+# base_branch: main           # Base branch for clone creation (overrides global, default: remote default branch)
 
 # Provider-specific options (overrides global, overridden by piece/movement)
 # provider_options:
@@ -144,9 +150,11 @@ concurrency: 2                # Parallel task count for takt run in this project
 |-------|------|---------|-------------|
 | `piece` | string | `"default"` | Current piece name for this project |
 | `provider` | `"claude"` \| `"codex"` \| `"opencode"` \| `"mock"` | - | Override provider |
+| `model` | string | - | Override model name (passed to provider as-is) |
 | `auto_pr` | boolean | - | Auto-create PR after worktree execution |
 | `verbose` | boolean | - | Verbose output mode |
 | `concurrency` | number (1-10) | `1` (from global) | Parallel task count for `takt run` |
+| `base_branch` | string | - | Base branch for clone creation (overrides global, default: remote default branch) |
 | `provider_options` | object | - | Provider-specific options |
 | `provider_profiles` | object | - | Provider-specific permission profiles |
 

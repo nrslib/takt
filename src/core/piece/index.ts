@@ -11,6 +11,9 @@ export { PieceEngine } from './engine/index.js';
 // Constants
 export { COMPLETE_MOVEMENT, ABORT_MOVEMENT, ERROR_MESSAGES } from './constants.js';
 
+// Errors
+export { AskUserQuestionDeniedError, createDenyAskUserQuestionHandler } from './ask-user-question-error.js';
+
 // Types
 export type {
   PieceEvents,

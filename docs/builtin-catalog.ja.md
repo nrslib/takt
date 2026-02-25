@@ -12,6 +12,7 @@ TAKT に同梱されているすべてのビルトイン piece と persona の�
 | `frontend-mini` | フロントエンド向けの mini 構成です。 |
 | `backend-mini` | バックエンド向けの mini 構成です。 |
 | `expert-mini` | エキスパート向けの mini 構成です。 |
+| `default-test-first-mini` | テストファースト開発向けです。テストを先に書き、それを通す実装を行います。 |
 | `default` | 本格的な開発向けです。並列レビュアーによる多段階レビューが付いています。TAKT 自身の開発にも使用しています。 |
 
 ## 全ビルトイン Piece 一覧
@@ -23,6 +24,7 @@ TAKT に同梱されているすべてのビルトイン piece と persona の�
 | 🚀 クイックスタート | `default-mini` | ミニ開発 piece: plan -> implement -> 並列レビュー (AI antipattern + supervisor) -> 必要に応じて修正。レビュー付き軽量版。 |
 | | `frontend-mini` | ミニフロントエンド piece: plan -> implement -> 並列レビュー (AI antipattern + supervisor)。フロントエンドナレッジ注入付き。 |
 | | `backend-mini` | ミニバックエンド piece: plan -> implement -> 並列レビュー (AI antipattern + supervisor)。バックエンドナレッジ注入付き。 |
+| | `default-test-first-mini` | テストファースト開発 piece: plan -> テスト作成 -> 実装 -> 並列レビュー -> 必要に応じて修正 -> 完了。 |
 | | `default` | フル開発 piece: plan -> implement -> AI review -> 並列レビュー (architect + QA) -> supervisor 承認。各レビュー段階に修正ループあり。 |
 | | `compound-eye` | マルチモデルレビュー: 同じ指示を Claude と Codex に同時送信し、両方のレスポンスを統合。 |
 | ⚡ Mini | `backend-cqrs-mini` | ミニ CQRS+ES piece: plan -> implement -> 並列レビュー (AI antipattern + supervisor)。CQRS+ES ナレッジ注入付き。 |
@@ -34,8 +36,7 @@ TAKT に同梱されているすべてのビルトイン piece と persona の�
 | 🔧 エキスパート | `expert` | フルスタック開発 piece: architecture、frontend、security、QA レビューと修正ループ付き。 |
 | | `expert-cqrs` | フルスタック開発 piece (CQRS+ES 特化): CQRS+ES、frontend、security、QA レビューと修正ループ付き。 |
 | 🛠️ リファクタリング | `structural-reform` | プロジェクト全体のレビューと構造改革: 段階的なファイル分割による反復的なコードベース再構築。 |
-| 🔍 レビュー | `review-fix-minimal` | レビュー特化 piece: review -> fix -> supervisor。レビューフィードバックに基づく反復改善向け。 |
-| | `review-only` | 変更を加えない読み取り専用のコードレビュー piece。 |
+| 🔍 レビュー | `review` | 多角コードレビュー: PR/ブランチ/作業中の差分を自動判定し、5つの並列観点（arch/security/QA/testing/requirements）からレビューして統合結果を出力。 |
 | 🧪 テスト | `unit-test` | ユニットテスト特化 piece: テスト分析 -> テスト実装 -> レビュー -> 修正。 |
 | | `e2e-test` | E2E テスト特化 piece: E2E 分析 -> E2E 実装 -> レビュー -> 修正 (Vitest ベースの E2E フロー)。 |
 | その他 | `research` | リサーチ piece: planner -> digger -> supervisor。質問せずに自律的にリサーチを実行。 |
@@ -66,6 +67,8 @@ TAKT に同梱されているすべてのビルトイン piece と persona の�
 | **research-digger** | 深掘り調査と情報収集 |
 | **research-supervisor** | リサーチ品質の検証と完全性の評価 |
 | **test-planner** | テスト戦略の分析と包括的なテスト計画 |
+| **testing-reviewer** | テスト重視のコードレビューとインテグレーションテスト要件分析 |
+| **requirements-reviewer** | 要件仕様と準拠性のレビュー |
 | **pr-commenter** | レビュー結果を GitHub PR コメントとして投稿 |
 
 ## カスタム Persona

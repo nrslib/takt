@@ -103,3 +103,10 @@ describe('SdkOptionsBuilder.build() — mcpServers', () => {
     expect(sdkOptions.permissionMode).toBe('acceptEdits');
   });
 });
+
+describe('SdkOptionsBuilder.build() — settingSources', () => {
+  it('includes project in settingSources', () => {
+    const options = buildSdkOptions({ cwd: '/test' });
+    expect(options.settingSources).toEqual(['project']);
+  });
+});

@@ -190,7 +190,7 @@ export async function listTasks(
           await instructBranch(cwd, task);
           break;
         case 'sync':
-          await syncBranchWithRoot(cwd, task, options);
+          await syncBranchWithRoot(cwd, task);
           break;
         case 'try':
           tryMergeBranch(cwd, task);

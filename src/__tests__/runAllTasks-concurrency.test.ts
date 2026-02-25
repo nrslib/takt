@@ -148,9 +148,7 @@ vi.mock('../shared/constants.js', () => ({
 }));
 
 vi.mock('../infra/github/index.js', () => ({
-  createPullRequest: vi.fn(),
   buildPrBody: vi.fn(),
-  pushBranch: vi.fn(),
 }));
 
 vi.mock('../infra/claude/query-manager.js', () => ({

@@ -6,6 +6,77 @@
 
 フォーマットは [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) に基づいています。
 
+## [0.24.0] - 2026-02-24
+
+### Added
+
+- AskUserQuestion 対応: AI エージェントが実行中に対話的にユーザーへ質問可能に。単一選択・複数選択・自由入力の TTY UI を提供。ピース実行中は自動的に拒否しエージェントの自律性を維持 (#161, #369)
+- `review` ビルトインピースを3モード自動判定に拡張: PR 番号・ブランチ名・フリーテキストから自動でレビューモード（PR/ブランチ/作業中差分）を判定し、5並列レビュー（arch/security/qa/testing/requirements）を実行
+- `testing-reviewer` と `requirements-reviewer` ビルトインペルソナを追加（専門レビュー観点）
+- `testing` ポリシー: インテグレーションテスト必要条件を追加（3+モジュールのデータフロー、ワークフローへの状態マージ、コールチェーンを通じたオプション伝搬）
+- `gather-review` インストラクションと `review-gather` 出力契約を追加（review ピースの gather ムーブメント用）
+- `requirements-review` インストラクションと出力契約を追加（要件レビュー用）
+- `testing-review` 出力契約を追加（テストレビュー用）
+- SDK オプションに `settingSources: ['project']` を追加: CLAUDE.md の読み込みを Claude SDK に委譲し、プロジェクトレベル設定を適切に解決
+
+### Changed
+
+- **BREAKING:** `review-only` ピースを `review` にリネーム、`review-fix-minimal` ピースを削除 — これらのピース名を参照しているユーザーは `review` に更新が必要
+- `write-tests-first` インストラクションに具体的なインテグレーションテスト判断基準を追加（「適宜 E2E テストを作成」から置き換え）
+
+### Fixed
+
+- planner ペルソナ: バグ修正の波及確認ルール（関連ファイルで同一パターンを grep）と、確認事項の判断保留禁止を追加
+
+### Internal
+
+- ドキュメント整備: 音楽メタファーの由来説明追加、カタログ漏れ・リンク切れ・孤立ドキュメント・イベント名・API Key 参照・eject 説明を修正、YAML 例から不要な personas セクションマップを削除、レガシー用語をコードベースの実態に合わせて修正
+- 新規テストスイート: `StreamDisplay`、`ask-user-question-handler`、`pieceExecution-ask-user-question`、`review-piece`、`opencode-client-cleanup`
+- レガシー `review-only-piece` テストと session モジュールの `loadProjectContext` を削除（CLAUDE.md 読み込みは SDK に委譲）
+
+## [0.23.0] - 2026-02-23
+
+### Added
+
+- `default-test-first-mini` ビルトインピースを追加（テストファースト開発ワークフロー）
+- `auto_fetch` グローバル設定: クローン作成前にリモートを fetch してクローンを最新に保つオプション（`default: false`）
+- `base_branch` 設定（グローバル/プロジェクト）: クローン作成のベースブランチを指定（デフォルトはリモートのデフォルトブランチ）
+- `model` プロジェクト設定: プロジェクトレベルでモデルを上書き（`.takt/config.yaml`）
+- `concurrency` プロジェクト設定: プロジェクトごとに `takt run` の並列タスク数を設定
+- パイプラインモードで `--create-worktree` をサポート（worktree ベースの実行）
+- `skipTaskList` オプション: 対話モードの「実行する」アクションで `tasks.yaml` への追加をスキップ
+- `takt list` でタスク名の横に GitHub Issue 番号を表示
+- 失敗タスクのリトライ時、ピース選択の前に前回使用したピースの再利用を提案
+- パイプラインモードの Slack 通知: タスク詳細、実行時間、ブランチ、PR URL を含むサマリを送信
+- CI ワークフロー: PR に対して lint、test、e2e:mock チェックを自動実行 (#364)
+
+### Changed
+
+- Provider/Model 解決を `resolveProviderModelCandidates()` に一元化 — `AgentRunner` と `resolveMovementProviderModel` で同一の解決関数を使用
+- パイプライン実行を薄いオーケストレーター (`execute.ts`) + ステップ実装 (`steps.ts`) にリファクタリング
+- クローンディレクトリのデフォルト名を `takt-worktree`（単数）から `takt-worktrees`（複数）に変更（レガシーディレクトリの自動マイグレーション付き）
+- PR タイトルに Issue 番号プレフィックスを追加（例: `[#6] Fix the bug`）
+- タスクステータスが PR 作成失敗を反映するよう改善 — 以前はピース実行の成功のみを追跡
+- `auto-tag.yml` がマージコミットではなく PR head SHA にタグを付与（ホットフィックスの正しいコード publish のため）
+- セッションリーダーが `sessions-index.json` が欠損・不正な場合に JSONL ファイルスキャンにフォールバック
+- `ProjectLocalConfig` 型をキャメルケースに正規化（`auto_pr`→`autoPr`、`draft_pr`→`draftPr`）— YAML のスネークケースは維持
+- `getLocalLayerValue` を switch-case から動的プロパティルックアップに簡素化
+
+### Fixed
+
+- `repertoire add` のパイプ stdin: readline がバッファ済み行を破棄するため複数の `confirm()` 呼び出しが失敗する問題を修正 (#334)
+- `AgentRunner` での movement provider 上書き優先順位: step provider がグローバル設定に誤って上書きされていた問題を修正
+- プロジェクトレベルの `model` 設定が無視されていた問題 — `getLocalLayerValue` に `model` ケースが欠落していた
+- PR 作成失敗がタスク失敗として適切に伝搬されるよう修正（エラーメッセージ付き）(#345)
+- Claude セッション resume 候補が `sessions-index.json` 利用不可時に JSONL ファイルスキャンにフォールバック
+
+### Internal
+
+- CI: PR チェック用に lint、test、e2e:mock を追加（`ci.yml`）
+- repertoire の e2e テストカバレッジを拡充 (#364)
+- 新規テストスイート: clone、config、postExecution、session-reader、selectAndExecute-skipTaskList、taskStatusLabel、pipelineExecution
+- リファクタリング: プロジェクト設定のケース正規化 (#358)、クローンマネージャー (#359)、パイプラインステップ抽出、confirm パイプリーダーシングルトン、provider 解決 (#362)
+
 ## [0.22.0] - 2026-02-22
 
 ### Added

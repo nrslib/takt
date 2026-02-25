@@ -42,9 +42,13 @@ const { MockPieceEngine, mockLoadPersonaSessions, mockLoadWorktreeSessions } = v
   return { MockPieceEngine, mockLoadPersonaSessions, mockLoadWorktreeSessions };
 });
 
-vi.mock('../core/piece/index.js', () => ({
-  PieceEngine: MockPieceEngine,
-}));
+vi.mock('../core/piece/index.js', async () => {
+  const errorModule = await import('../core/piece/ask-user-question-error.js');
+  return {
+    PieceEngine: MockPieceEngine,
+    createDenyAskUserQuestionHandler: errorModule.createDenyAskUserQuestionHandler,
+  };
+});
 
 vi.mock('../infra/claude/query-manager.js', () => ({
   interruptAllQueries: vi.fn(),

@@ -7,7 +7,11 @@ Refer only to files within the Report Directory shown in the Piece Context. Do n
 1. Review the plan report and understand the planned behavior and interfaces
 2. Examine existing code and tests to learn the project's test patterns
 3. Write unit tests for the planned features
-4. Write E2E tests if appropriate
+4. Determine whether integration tests are needed and create them if so
+   - Does the data flow cross 3+ modules?
+   - Does a new status/state merge into an existing workflow?
+   - Does a new option propagate through a call chain to the endpoint?
+   - If any apply, create integration tests
 5. Run the build (type check) to verify test code has no syntax errors
 
 **Test writing guidelines:**

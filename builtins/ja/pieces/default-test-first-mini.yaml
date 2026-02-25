@@ -30,7 +30,7 @@ movements:
     instruction: plan
     output_contracts:
       report:
-        - name: 00-plan.md
+        - name: plan.md
           format: plan
   - name: write_tests
     edit: true
@@ -61,9 +61,9 @@ movements:
         interactive_only: true
     output_contracts:
       report:
-        - name: 01-test-scope.md
+        - name: test-scope.md
           format: coder-scope
-        - name: 01-test-decisions.md
+        - name: test-decisions.md
           format: coder-decisions
   - name: implement
     edit: true
@@ -118,7 +118,7 @@ movements:
           - condition: AI特有の問題あり
         output_contracts:
           report:
-            - name: 03-ai-review.md
+            - name: ai-review.md
               format: ai-review
       - name: supervise
         edit: false

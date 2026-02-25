@@ -95,18 +95,14 @@ takt list
 
 ## 仕組み
 
-TAKT は音楽のメタファーを使っています。**piece** がワークフロー、**movement** が各ステップにあたります。
+TAKT は音楽のメタファーを使っています。TAKT という名前自体が、オーケストラの指揮で拍を刻む「タクト（Takt）」に由来しています。**piece** がワークフロー、**movement** が各ステップにあたります。音楽の楽曲（piece）が複数の楽章（movement）で構成されるのと同じです。
 
 piece は movement の並びを定義します。各 movement では persona（誰が実行するか）、権限（何を許可するか）、ルール（次にどこへ進むか）を指定します。
 
 ```yaml
-name: simple
+name: plan-implement-review
 initial_movement: plan
-
-personas:
-  planner: ../personas/planner.md
-  coder: ../personas/coder.md
-  reviewer: ../personas/architecture-reviewer.md
+max_movements: 10
 
 movements:
   - name: plan
@@ -119,6 +115,7 @@ movements:
   - name: implement
     persona: coder
     edit: true
+    required_permission_mode: edit
     rules:
       - condition: Implementation complete
         next: review
@@ -140,10 +137,12 @@ movements:
 | Piece | 用途 |
 |-------|------|
 | `default-mini` | ちょっとした修正向けです。計画 → 実装 → 並列レビュー → 修正の軽量構成です。 |
+| `default-test-first-mini` | テストファースト開発向けです。テストを先に書き、それを通す実装を行います。 |
 | `frontend-mini` | フロントエンド向けの mini 構成です。 |
 | `backend-mini` | バックエンド向けの mini 構成です。 |
 | `expert-mini` | エキスパート向けの mini 構成です。 |
 | `default` | 本格的な開発向けです。並列レビュアーによる多段階レビューが付いています。TAKT 自身の開発にも使用しています。 |
+
 全ピース・ペルソナの一覧は [Builtin Catalog](./builtin-catalog.ja.md) を参照してください。
 
 ## 主要コマンド
@@ -155,7 +154,7 @@ movements:
 | `takt list` | タスクブランチを管理します（マージ、リトライ、追加指示、削除） |
 | `takt #N` | GitHub Issue をタスクとして実行します |
 | `takt switch` | 使う piece を切り替えます |
-| `takt eject` | ビルトインの piece/persona をコピーしてカスタマイズできます |
+| `takt eject` | ビルトインの piece/facet をコピーしてカスタマイズできます |
 | `takt repertoire add` | GitHub から repertoire パッケージをインストールします |
 
 全コマンド・オプションは [CLI Reference](./cli-reference.ja.md) を参照してください。
@@ -173,7 +172,9 @@ language: ja        # en or ja
 API Key を直接使う場合は、CLI のインストールは不要です。
 
 ```bash
-export TAKT_ANTHROPIC_API_KEY=sk-ant-...
+export TAKT_ANTHROPIC_API_KEY=sk-ant-...   # Anthropic (Claude)
+export TAKT_OPENAI_API_KEY=sk-...          # OpenAI (Codex)
+export TAKT_OPENCODE_API_KEY=...           # OpenCode
 ```
 
 全設定項目・プロバイダープロファイル・モデル解決の詳細は [Configuration Guide](./configuration.ja.md) を参照してください。
@@ -244,8 +245,8 @@ const config = loadPiece('default');
 if (!config) throw new Error('Piece not found');
 
 const engine = new PieceEngine(config, process.cwd(), 'My task');
-engine.on('step:complete', (step, response) => {
-  console.log(`${step.name}: ${response.status}`);
+engine.on('movement:complete', (movement, response) => {
+  console.log(`${movement.name}: ${response.status}`);
 });
 
 await engine.run();
@@ -263,7 +264,9 @@ await engine.run();
 | [Faceted Prompting](./faceted-prompting.ja.md) | プロンプト設計の方法論 |
 | [Repertoire Packages](./repertoire.ja.md) | パッケージのインストール・共有 |
 | [Task Management](./task-management.ja.md) | タスクの追加・実行・隔離 |
+| [データフロー](./data-flow.md) | 内部データフローとアーキテクチャ図 |
 | [CI/CD Integration](./ci-cd.ja.md) | GitHub Actions・パイプラインモード |
+| [Provider Sandbox](./provider-sandbox.md) | プロバイダーのサンドボックス設定 |
 | [Changelog](../CHANGELOG.md) ([日本語](./CHANGELOG.ja.md)) | バージョン履歴 |
 | [Security Policy](../SECURITY.md) | 脆弱性の報告 |
 

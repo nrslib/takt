@@ -7,6 +7,7 @@ import { basename, dirname } from 'node:path';
 import { loadCustomAgents, loadAgentPrompt, resolveConfigValues } from '../infra/config/index.js';
 import { getProvider, type ProviderType, type ProviderCallOptions } from '../infra/providers/index.js';
 import type { AgentResponse, CustomAgentConfig } from '../core/models/index.js';
+import { resolveProviderModelCandidates } from '../core/piece/provider-resolution.js';
 import { createLogger } from '../shared/utils/index.js';
 import { loadTemplate } from '../shared/prompts/index.js';
 import type { RunAgentOptions } from './types.js';
@@ -22,40 +23,33 @@ const log = createLogger('runner');
  * delegates execution to the appropriate provider.
  */
 export class AgentRunner {
-  /** Resolve provider type from options, agent config, project config, global config */
-  private static resolveProvider(
+  private static resolveProviderAndModel(
     cwd: string,
     options?: RunAgentOptions,
     agentConfig?: CustomAgentConfig,
-  ): ProviderType {
-    if (options?.provider) return options.provider;
-    const config = resolveConfigValues(cwd, ['provider']);
-    if (config.provider) return config.provider;
-    if (options?.stepProvider) return options.stepProvider;
-    if (agentConfig?.provider) return agentConfig.provider;
-    return 'claude';
-  }
+  ): { provider: ProviderType; model: string | undefined } {
+    const config = resolveConfigValues(cwd, ['provider', 'model']);
+    const resolvedProvider = resolveProviderModelCandidates([
+      { provider: options?.provider },
+      { provider: options?.stepProvider },
+      { provider: config.provider },
+      { provider: agentConfig?.provider },
+    ]).provider ?? 'claude';
 
-  /**
-   * Resolve model from options, agent config, global config.
-   * Global config model is only used when its provider matches the resolved provider,
-   * preventing cross-provider model mismatches (e.g., 'opus' sent to Codex).
-   */
-  private static resolveModel(
-    resolvedProvider: ProviderType,
-    options?: RunAgentOptions,
-    agentConfig?: CustomAgentConfig,
-  ): string | undefined {
-    if (options?.model) return options.model;
-    if (options?.stepModel) return options.stepModel;
-    if (agentConfig?.model) return agentConfig.model;
-    if (!options?.cwd) return undefined;
-    const config = resolveConfigValues(options.cwd, ['provider', 'model']);
-    if (config.model) {
-      const defaultProvider = config.provider ?? 'claude';
-      if (defaultProvider === resolvedProvider) return config.model;
-    }
-    return undefined;
+    const configModel = (config.provider ?? 'claude') === resolvedProvider
+      ? config.model
+      : undefined;
+    const resolvedModel = resolveProviderModelCandidates([
+      { model: options?.model },
+      { model: options?.stepModel },
+      { model: agentConfig?.model },
+      { model: configModel },
+    ]).model;
+
+    return {
+      provider: resolvedProvider,
+      model: resolvedModel,
+    };
   }
 
   /** Load persona prompt from file path */
@@ -87,7 +81,7 @@ export class AgentRunner {
 
   /** Build ProviderCallOptions from RunAgentOptions */
   private static buildCallOptions(
-    resolvedProvider: ProviderType,
+    resolvedModel: string | undefined,
     options: RunAgentOptions,
     agentConfig?: CustomAgentConfig,
   ): ProviderCallOptions {
@@ -98,7 +92,7 @@ export class AgentRunner {
       allowedTools: options.allowedTools ?? agentConfig?.allowedTools,
       mcpServers: options.mcpServers,
       maxTurns: options.maxTurns,
-      model: AgentRunner.resolveModel(resolvedProvider, options, agentConfig),
+      model: resolvedModel,
       permissionMode: options.permissionMode,
       providerOptions: options.providerOptions,
       onStream: options.onStream,
@@ -115,7 +109,8 @@ export class AgentRunner {
     task: string,
     options: RunAgentOptions,
   ): Promise<AgentResponse> {
-    const providerType = AgentRunner.resolveProvider(options.cwd, options, agentConfig);
+    const resolved = AgentRunner.resolveProviderAndModel(options.cwd, options, agentConfig);
+    const providerType = resolved.provider;
     const provider = getProvider(providerType);
 
     const agent = provider.setup({
@@ -127,7 +122,7 @@ export class AgentRunner {
       claudeSkill: agentConfig.claudeSkill,
     });
 
-    return agent.call(task, AgentRunner.buildCallOptions(providerType, options, agentConfig));
+    return agent.call(task, AgentRunner.buildCallOptions(resolved.model, options, agentConfig));
   }
 
   /** Run an agent by name, path, inline prompt string, or no agent at all */
@@ -147,9 +142,10 @@ export class AgentRunner {
       permissionMode: options.permissionMode,
     });
 
-    const providerType = AgentRunner.resolveProvider(options.cwd, options);
+    const resolved = AgentRunner.resolveProviderAndModel(options.cwd, options);
+    const providerType = resolved.provider;
     const provider = getProvider(providerType);
-    const callOptions = AgentRunner.buildCallOptions(providerType, options);
+    const callOptions = AgentRunner.buildCallOptions(resolved.model, options);
 
     // 1. If personaPath is provided (resolved file exists), load prompt from file
     //    and wrap it through the perform_agent_system_prompt template

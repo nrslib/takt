@@ -8,8 +8,10 @@
 import { info, error as logError, withProgress } from '../../shared/ui/index.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
 import { getLabel } from '../../shared/i18n/index.js';
-import { fetchIssue, formatIssueAsTask, checkGhCli, parseIssueNumbers, type GitHubIssue } from '../../infra/github/index.js';
-import { selectAndExecuteTask, determinePiece, saveTaskFromInteractive, createIssueFromTask, type SelectAndExecuteOptions } from '../../features/tasks/index.js';
+import { formatIssueAsTask, parseIssueNumbers } from '../../infra/github/index.js';
+import { getGitProvider } from '../../infra/git/index.js';
+import type { Issue } from '../../infra/git/index.js';
+import { selectAndExecuteTask, determinePiece, saveTaskFromInteractive, createIssueAndSaveTask, promptLabelSelection, type SelectAndExecuteOptions } from '../../features/tasks/index.js';
 import { executePipeline } from '../../features/pipeline/index.js';
 import {
   interactiveMode,
@@ -39,22 +41,22 @@ import { loadTaskHistory } from './taskHistory.js';
 async function resolveIssueInput(
   issueOption: number | undefined,
   task: string | undefined,
-): Promise<{ issues: GitHubIssue[]; initialInput: string } | null> {
+): Promise<{ issues: Issue[]; initialInput: string } | null> {
   if (issueOption) {
-    const ghStatus = checkGhCli();
+    const ghStatus = getGitProvider().checkCliStatus();
     if (!ghStatus.available) {
       throw new Error(ghStatus.error);
     }
     const issue = await withProgress(
       'Fetching GitHub Issue...',
       (fetchedIssue) => `GitHub Issue fetched: #${fetchedIssue.number} ${fetchedIssue.title}`,
-      async () => fetchIssue(issueOption),
+      async () => getGitProvider().fetchIssue(issueOption),
     );
     return { issues: [issue], initialInput: formatIssueAsTask(issue) };
   }
 
   if (task && isDirectTask(task)) {
-    const ghStatus = checkGhCli();
+    const ghStatus = getGitProvider().checkCliStatus();
     if (!ghStatus.available) {
       throw new Error(ghStatus.error);
     }
@@ -66,7 +68,7 @@ async function resolveIssueInput(
     const issues = await withProgress(
       'Fetching GitHub Issue...',
       (fetchedIssues) => `GitHub Issues fetched: ${fetchedIssues.map((issue) => `#${issue.number}`).join(', ')}`,
-      async () => issueNumbers.map((n) => fetchIssue(n)),
+      async () => issueNumbers.map((n) => getGitProvider().fetchIssue(n)),
     );
     return { issues, initialInput: issues.map(formatIssueAsTask).join('\n\n---\n\n') };
   }
@@ -125,6 +127,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
   // Resolve --task option to task text (direct execution, no interactive mode)
   const taskFromOption = opts.task as string | undefined;
   if (taskFromOption) {
+    selectOptions.skipTaskList = true;
     await selectAndExecuteTask(resolvedCwd, taskFromOption, selectOptions, agentOverrides);
     return;
   }
@@ -218,13 +221,11 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       await selectAndExecuteTask(resolvedCwd, confirmedTask, selectOptions, agentOverrides);
     },
     create_issue: async ({ task: confirmedTask }) => {
-      const issueNumber = createIssueFromTask(confirmedTask);
-      if (issueNumber !== undefined) {
-        await saveTaskFromInteractive(resolvedCwd, confirmedTask, pieceId, {
-          issue: issueNumber,
-          confirmAtEndMessage: 'Add this issue to tasks?',
-        });
-      }
+      const labels = await promptLabelSelection(lang);
+      await createIssueAndSaveTask(resolvedCwd, confirmedTask, pieceId, {
+        confirmAtEndMessage: 'Add this issue to tasks?',
+        labels,
+      });
     },
     save_task: async ({ task: confirmedTask }) => {
       await saveTaskFromInteractive(resolvedCwd, confirmedTask, pieceId);

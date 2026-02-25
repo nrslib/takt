@@ -68,11 +68,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 }));
 
 vi.mock('../infra/github/index.js', () => ({
-  createPullRequest: vi.fn(),
   buildPrBody: vi.fn(),
-  pushBranch: vi.fn(),
-  findExistingPr: vi.fn(),
-  commentOnPr: vi.fn(),
 }));
 
 vi.mock('../features/tasks/execute/taskExecution.js', () => ({

@@ -98,7 +98,8 @@ export async function confirm(message: string, defaultYes = true): Promise<boole
   assertTtyIfForced(forceTouchTty);
   if (!useTty) {
     // Support piped stdin (e.g. echo "y" | takt repertoire add ...)
-    if (!process.stdin.isTTY && process.stdin.readable && !process.stdin.destroyed) {
+    // Once the pipe queue is initialized, stdin may be destroyed but queued lines remain.
+    if (pipeLineQueue !== null || (!process.stdin.isTTY && process.stdin.readable && !process.stdin.destroyed)) {
       return readConfirmFromPipe(defaultYes);
     }
     return defaultYes;
@@ -127,28 +128,46 @@ export async function confirm(message: string, defaultYes = true): Promise<boole
   });
 }
 
-function readConfirmFromPipe(defaultYes: boolean): Promise<boolean> {
-  const rl = readline.createInterface({ input: process.stdin });
+/**
+ * Shared pipe reader singleton.
+ *
+ * readline.createInterface buffers data from stdin internally.
+ * Creating and closing multiple interfaces loses buffered lines.
+ * This singleton reads all lines once and serves them as a queue.
+ */
+let pipeLineQueue: string[] | null = null;
+let pipeQueueReady: Promise<void> | null = null;
 
-  return new Promise((resolve) => {
-    let resolved = false;
+function ensurePipeQueue(): Promise<void> {
+  if (pipeQueueReady) return pipeQueueReady;
 
-    rl.once('line', (line) => {
-      resolved = true;
-      rl.close();
-      pauseStdinSafely();
-      const trimmed = line.trim().toLowerCase();
-      if (!trimmed) {
-        resolve(defaultYes);
-        return;
-      }
-      resolve(trimmed === 'y' || trimmed === 'yes');
+  pipeQueueReady = new Promise((resolve) => {
+    const lines: string[] = [];
+    const rl = readline.createInterface({ input: process.stdin });
+
+    rl.on('line', (line) => {
+      lines.push(line);
     });
 
-    rl.once('close', () => {
-      if (!resolved) {
-        resolve(defaultYes);
-      }
+    rl.on('close', () => {
+      pipeLineQueue = lines;
+      resolve();
     });
   });
+
+  return pipeQueueReady;
+}
+
+async function readConfirmFromPipe(defaultYes: boolean): Promise<boolean> {
+  await ensurePipeQueue();
+
+  const line = pipeLineQueue!.shift();
+  if (line === undefined) {
+    return defaultYes;
+  }
+  const trimmed = line.trim().toLowerCase();
+  if (!trimmed) {
+    return defaultYes;
+  }
+  return trimmed === 'y' || trimmed === 'yes';
 }

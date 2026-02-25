@@ -99,7 +99,10 @@ export class StreamDisplay {
     if (this.quiet) return;
     this.flushText();
     const inputPreview = this.formatToolInput(tool, input);
-    this.startToolSpinner(tool, inputPreview);
+    // Starting a spinner would corrupt the interactive prompt output.
+    if (tool !== 'AskUserQuestion') {
+      this.startToolSpinner(tool, inputPreview);
+    }
     this.lastToolUse = tool;
     this.currentToolInputPreview = inputPreview;
     this.toolOutputBuffer = '';
@@ -153,6 +156,9 @@ export class StreamDisplay {
     if (isError) {
       const errorContent = sanitizedContent || 'Unknown error';
       console.log(chalk.red(`  ✗ ${toolName}:`), chalk.red(truncate(errorContent, 70)));
+    } else if (toolName === 'AskUserQuestion') {
+      // SDK content preview includes misleading "Error:" text for successful responses.
+      console.log(chalk.green(`  ✓ ${toolName}`));
     } else if (sanitizedContent && sanitizedContent.length > 0) {
       const preview = sanitizedContent.split('\n')[0] || sanitizedContent;
       console.log(chalk.green(`  ✓ ${toolName}`), chalk.gray(truncate(preview, 60)));

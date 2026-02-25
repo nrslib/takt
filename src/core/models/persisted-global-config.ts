@@ -38,6 +38,9 @@ export interface AnalyticsConfig {
   retentionDays?: number;
 }
 
+/** Project-level submodule acquisition selection */
+export type SubmoduleSelection = 'all' | string[];
+
 /** Language setting for takt */
 export type Language = 'en' | 'ja';
 
@@ -141,4 +144,8 @@ export interface ProjectConfig {
   concurrency?: number;
   /** Base branch to clone from (overrides global baseBranch) */
   baseBranch?: string;
+  /** Compatibility flag for full submodule acquisition when submodules is unset */
+  withSubmodules?: boolean;
+  /** Submodule acquisition mode (all or explicit path list) */
+  submodules?: SubmoduleSelection;
 }
