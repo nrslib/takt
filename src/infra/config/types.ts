@@ -4,7 +4,7 @@
 
 import type { MovementProviderOptions } from '../../core/models/piece-types.js';
 import type { ProviderPermissionProfiles } from '../../core/models/provider-profiles.js';
-import type { AnalyticsConfig } from '../../core/models/persisted-global-config.js';
+import type { AnalyticsConfig, PieceOverrides } from '../../core/models/persisted-global-config.js';
 
 /** Project configuration stored in .takt/config.yaml */
 export interface ProjectLocalConfig {
@@ -28,6 +28,8 @@ export interface ProjectLocalConfig {
   providerOptions?: MovementProviderOptions;
   /** Provider-specific permission profiles (project-level override) */
   providerProfiles?: ProviderPermissionProfiles;
+  /** Piece-level overrides (quality_gates, etc.) */
+  pieceOverrides?: PieceOverrides;
 }
 
 /** Persona session data for persistence */
