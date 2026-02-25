@@ -121,13 +121,13 @@ export interface PersistedGlobalConfig {
   /** Number of movement previews to inject into interactive mode (0 to disable, max 10) */
   interactivePreviewMovements?: number;
   /** Verbose output mode */
-  verbose?: boolean;
+  verbose: boolean;
   /** Number of tasks to run concurrently in takt run (default: 1 = sequential) */
   concurrency: number;
   /** Polling interval in ms for picking up new tasks during takt run (default: 500, range: 100-5000) */
   taskPollIntervalMs: number;
   /** Opt-in: fetch remote before cloning to keep clones up-to-date (default: false) */
-  autoFetch?: boolean;
+  autoFetch: boolean;
   /** Base branch to clone from (default: current branch) */
   baseBranch?: string;
 }
