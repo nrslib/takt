@@ -4,7 +4,7 @@
 
 import type { MovementProviderOptions } from '../../core/models/piece-types.js';
 import type { ProviderPermissionProfiles } from '../../core/models/provider-profiles.js';
-import type { AnalyticsConfig } from '../../core/models/persisted-global-config.js';
+import type { AnalyticsConfig, SubmoduleSelection } from '../../core/models/persisted-global-config.js';
 
 /** Project configuration stored in .takt/config.yaml */
 export interface ProjectLocalConfig {
@@ -18,6 +18,10 @@ export interface ProjectLocalConfig {
   draftPr?: boolean;
   /** Base branch to clone from (overrides global baseBranch) */
   baseBranch?: string;
+  /** Submodule acquisition mode (all or explicit path list) */
+  submodules?: SubmoduleSelection;
+  /** Compatibility flag for full submodule acquisition when submodules is unset */
+  withSubmodules?: boolean;
   /** Verbose output mode */
   verbose?: boolean;
   /** Number of tasks to run concurrently in takt run (1-10) */

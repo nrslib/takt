@@ -41,6 +41,29 @@ describe('Schemas accept opencode provider', () => {
     expect(result.concurrency).toBe(3);
   });
 
+  it('should accept submodules all in ProjectConfigSchema', () => {
+    const result = ProjectConfigSchema.parse({ submodules: 'ALL' });
+    expect(result.submodules).toBe('ALL');
+  });
+
+  it('should accept explicit submodule path list in ProjectConfigSchema', () => {
+    const result = ProjectConfigSchema.parse({ submodules: ['path/a', 'path/b'] });
+    expect(result.submodules).toEqual(['path/a', 'path/b']);
+  });
+
+  it('should accept with_submodules in ProjectConfigSchema', () => {
+    const result = ProjectConfigSchema.parse({ with_submodules: true });
+    expect(result.with_submodules).toBe(true);
+  });
+
+  it('should reject wildcard path in ProjectConfigSchema submodules', () => {
+    expect(() => ProjectConfigSchema.parse({ submodules: ['libs/*'] })).toThrow();
+  });
+
+  it('should reject non-all string in ProjectConfigSchema submodules', () => {
+    expect(() => ProjectConfigSchema.parse({ submodules: 'libs' })).toThrow();
+  });
+
   it('should accept opencode in CustomAgentConfigSchema', () => {
     const result = CustomAgentConfigSchema.parse({
       name: 'test',

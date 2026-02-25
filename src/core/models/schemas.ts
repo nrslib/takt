@@ -498,4 +498,15 @@ export const ProjectConfigSchema = z.object({
   concurrency: z.number().int().min(1).max(10).optional(),
   /** Base branch to clone from (overrides global base_branch) */
   base_branch: z.string().optional(),
+  /** Submodule acquisition mode (all or explicit path list) */
+  submodules: z.union([
+    z.string().refine((value) => value.trim().toLowerCase() === 'all', {
+      message: 'submodules string value must be "all"',
+    }),
+    z.array(z.string().min(1)).refine((paths) => paths.every((path) => !path.includes('*')), {
+      message: 'submodules path entries must not include wildcard "*"',
+    }),
+  ]).optional(),
+  /** Compatibility flag for full submodule acquisition when submodules is unset */
+  with_submodules: z.boolean().optional(),
 });
