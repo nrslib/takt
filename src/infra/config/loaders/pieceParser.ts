@@ -317,6 +317,7 @@ function normalizeStepFromRaw(
     outputContracts: normalizeOutputContracts(step.output_contracts, pieceDir, sections.resolvedReportFormats, context),
     qualityGates: step.quality_gates,
     passPreviousResponse: step.pass_previous_response ?? true,
+    vars: step.vars,
     policyContents,
     knowledgeContents,
   };

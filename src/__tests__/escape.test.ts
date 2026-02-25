@@ -180,4 +180,133 @@ describe('replaceTemplatePlaceholders', () => {
     const result = replaceTemplatePlaceholders(template, step, ctx);
     expect(result).toBe('Dir: {report_dir} File: {report:test.md}');
   });
+
+  it('should replace vars placeholders', () => {
+    const step = makeMovement({
+      vars: {
+        test_report: 'test-plan.md',
+        config_file: 'config.yaml',
+      },
+    });
+    const ctx = makeInstructionContext();
+    const template = 'Check {test_report} and {config_file}';
+
+    const result = replaceTemplatePlaceholders(template, step, ctx);
+    expect(result).toBe('Check test-plan.md and config.yaml');
+  });
+
+  it('should escape braces in vars values', () => {
+    const step = makeMovement({
+      vars: {
+        pattern: 'match {x}',
+      },
+    });
+    const ctx = makeInstructionContext();
+    const template = 'Pattern: {pattern}';
+
+    const result = replaceTemplatePlaceholders(template, step, ctx);
+    expect(result).toBe('Pattern: match ｛x｝');
+  });
+
+  it('should leave undefined vars placeholders unchanged', () => {
+    const step = makeMovement({
+      vars: {
+        defined: 'value',
+      },
+    });
+    const ctx = makeInstructionContext();
+    const template = '{defined} and {undefined_var}';
+
+    const result = replaceTemplatePlaceholders(template, step, ctx);
+    expect(result).toBe('value and {undefined_var}');
+  });
+
+  it('should apply vars before report expansion', () => {
+    const step = makeMovement({
+      vars: {
+        test_report: 'test-plan.md',
+      },
+    });
+    const ctx = makeInstructionContext({ reportDir: '/reports' });
+    const template = 'Read {report:{test_report}}';
+
+    const result = replaceTemplatePlaceholders(template, step, ctx);
+    expect(result).toBe('Read /reports/test-plan.md');
+  });
+
+  it('should handle empty vars', () => {
+    const step = makeMovement({ vars: {} });
+    const ctx = makeInstructionContext();
+    const template = 'No vars: {test}';
+
+    const result = replaceTemplatePlaceholders(template, step, ctx);
+    expect(result).toBe('No vars: {test}');
+  });
+
+  it('should handle undefined vars field', () => {
+    const step = makeMovement({ vars: undefined });
+    const ctx = makeInstructionContext();
+    const template = 'No vars: {test}';
+
+    const result = replaceTemplatePlaceholders(template, step, ctx);
+    expect(result).toBe('No vars: {test}');
+  });
+
+  it('should handle vars keys with regex special characters (dots)', () => {
+    const step = makeMovement({
+      vars: {
+        'test.md': 'correct-value',
+      },
+    });
+    const ctx = makeInstructionContext();
+    const template = 'File: {test.md}, Not matched: {testXmd}';
+
+    const result = replaceTemplatePlaceholders(template, step, ctx);
+    expect(result).toBe('File: correct-value, Not matched: {testXmd}');
+  });
+
+  it('should handle vars keys with multiple regex special characters', () => {
+    const step = makeMovement({
+      vars: {
+        'config[prod].yaml': 'prod-config',
+        'pattern.*': 'wildcard-pattern',
+        'version+': 'version-plus',
+        'query?': 'optional-query',
+      },
+    });
+    const ctx = makeInstructionContext();
+    const template = '{config[prod].yaml} {pattern.*} {version+} {query?}';
+
+    const result = replaceTemplatePlaceholders(template, step, ctx);
+    expect(result).toBe('prod-config wildcard-pattern version-plus optional-query');
+  });
+
+  it('should not match similar patterns when key contains regex metacharacters', () => {
+    const step = makeMovement({
+      vars: {
+        'a.b': 'value1',
+      },
+    });
+    const ctx = makeInstructionContext();
+    // Without proper escaping, 'a.b' regex would match 'a_b', 'aXb', etc.
+    const template = '{a.b} {aXb} {a_b}';
+
+    const result = replaceTemplatePlaceholders(template, step, ctx);
+    // Only exact match should be replaced
+    expect(result).toBe('value1 {aXb} {a_b}');
+  });
+
+  it('should handle vars keys with backslashes and pipes', () => {
+    const step = makeMovement({
+      vars: {
+        'path\\file': 'windows-path',
+        'option|default': 'or-pattern',
+      },
+    });
+    const ctx = makeInstructionContext();
+    const template = '{path\\file} and {option|default}';
+
+    const result = replaceTemplatePlaceholders(template, step, ctx);
+    expect(result).toBe('windows-path and or-pattern');
+  });
 });
