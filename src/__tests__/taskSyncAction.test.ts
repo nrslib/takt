@@ -38,7 +38,8 @@ vi.mock('../infra/config/index.js', () => ({
   resolveConfigValues: vi.fn(() => ({ provider: 'claude', model: 'sonnet' })),
 }));
 
-vi.mock('../infra/github/index.js', () => ({
+vi.mock('../infra/task/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   pushBranch: vi.fn(),
 }));
 
@@ -53,7 +54,7 @@ vi.mock('../shared/prompts/index.js', () => ({
 import * as fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { error as logError, success } from '../shared/ui/index.js';
-import { pushBranch } from '../infra/github/index.js';
+import { pushBranch } from '../infra/task/index.js';
 import { getProvider } from '../infra/providers/index.js';
 import { syncBranchWithRoot } from '../features/tasks/list/taskSyncAction.js';
 import type { TaskListItem } from '../infra/task/index.js';
