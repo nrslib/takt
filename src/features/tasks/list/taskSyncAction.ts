@@ -4,7 +4,7 @@ import { success, error as logError, StreamDisplay } from '../../../shared/ui/in
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { getProvider, type ProviderType } from '../../../infra/providers/index.js';
 import { resolveConfigValues } from '../../../infra/config/index.js';
-import { pushBranch } from '../../../infra/github/index.js';
+import { pushBranch } from '../../../infra/task/index.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import { getLanguage } from '../../../infra/config/index.js';
 import { type BranchActionTarget, resolveTargetBranch, resolveTargetInstruction } from './taskActionTarget.js';

@@ -13,7 +13,8 @@ import type { Language } from '../../../core/models/types.js';
 import { TaskRunner, type TaskFileData, summarizeTaskName } from '../../../infra/task/index.js';
 import { determinePiece } from '../execute/selectAndExecute.js';
 import { createLogger, getErrorMessage, generateReportDir } from '../../../shared/utils/index.js';
-import { isIssueReference, resolveIssueTask, parseIssueNumbers, createIssue } from '../../../infra/github/index.js';
+import { isIssueReference, resolveIssueTask, parseIssueNumbers } from '../../../infra/github/index.js';
+import { getGitProvider } from '../../../infra/git/index.js';
 import { firstLine } from '../../../infra/task/naming.js';
 
 const log = createLogger('add-task');
@@ -82,7 +83,7 @@ export function createIssueFromTask(task: string, options?: { labels?: string[] 
   const effectiveLabels = options?.labels?.filter((l) => l.length > 0) ?? [];
   const labels = effectiveLabels.length > 0 ? effectiveLabels : undefined;
 
-  const issueResult = createIssue({ title, body: task, labels });
+  const issueResult = getGitProvider().createIssue({ title, body: task, labels });
   if (issueResult.success) {
     if (!issueResult.url) {
       error('Failed to extract issue number from URL');
