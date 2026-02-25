@@ -8,6 +8,7 @@
 import { createOpencode } from '@opencode-ai/sdk/v2';
 import { createServer } from 'node:net';
 import type { AgentResponse } from '../../core/models/index.js';
+import { AskUserQuestionDeniedError } from '../../core/piece/ask-user-question-error.js';
 import { createLogger, getErrorMessage, createStreamDiagnostics, parseStructuredOutput, type StreamDiagnostics } from '../../shared/utils/index.js';
 import { parseProviderModel } from '../../shared/utils/providerModel.js';
 import {
@@ -506,16 +507,19 @@ export class OpenCodeClient {
           if (sseEvent.type === 'question.asked') {
             const questionProps = sseEvent.properties as OpenCodeQuestionAskedProperties;
             if (questionProps.sessionID === sessionId) {
+              const rejectQuestion = (): Promise<unknown> =>
+                withTimeout(
+                  (signal) => opencodeApiClient!.question.reject({
+                    requestID: questionProps.id,
+                    directory: options.cwd,
+                  }, { signal }),
+                  interactionTimeoutMs,
+                  'OpenCode question reject timed out',
+                );
+
               if (!options.onAskUserQuestion) {
                 try {
-                  await withTimeout(
-                    (signal) => opencodeApiClient!.question.reject({
-                      requestID: questionProps.id,
-                      directory: options.cwd,
-                    }, { signal }),
-                    interactionTimeoutMs,
-                    'OpenCode question reject timed out',
-                  );
+                  await rejectQuestion();
                 } catch (e) {
                   success = false;
                   failureMessage = getErrorMessage(e);
@@ -536,9 +540,19 @@ export class OpenCodeClient {
                   'OpenCode question reply timed out',
                 );
               } catch (e) {
-                success = false;
-                failureMessage = getErrorMessage(e);
-                break;
+                if (e instanceof AskUserQuestionDeniedError) {
+                  try {
+                    await rejectQuestion();
+                  } catch (rejectErr) {
+                    success = false;
+                    failureMessage = getErrorMessage(rejectErr);
+                    break;
+                  }
+                } else {
+                  success = false;
+                  failureMessage = getErrorMessage(e);
+                  break;
+                }
               }
             }
             continue;

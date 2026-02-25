@@ -14,12 +14,43 @@ export interface MovementProviderModelOutput {
   model?: string;
 }
 
+export interface ProviderModelCandidate {
+  provider?: ProviderType;
+  model?: string;
+}
+
+export function resolveProviderModelCandidates(
+  candidates: readonly ProviderModelCandidate[],
+): MovementProviderModelOutput {
+  let provider: ProviderType | undefined;
+  let model: string | undefined;
+
+  for (const candidate of candidates) {
+    if (provider === undefined && candidate.provider !== undefined) {
+      provider = candidate.provider;
+    }
+    if (model === undefined && candidate.model !== undefined) {
+      model = candidate.model;
+    }
+    if (provider !== undefined && model !== undefined) {
+      break;
+    }
+  }
+
+  return { provider, model };
+}
+
 export function resolveMovementProviderModel(input: MovementProviderModelInput): MovementProviderModelOutput {
   const personaEntry = input.personaProviders?.[input.step.personaDisplayName];
-  return {
-    provider: input.step.provider
-      ?? personaEntry?.provider
-      ?? input.provider,
-    model: input.step.model ?? personaEntry?.model ?? input.model,
-  };
+  const provider = resolveProviderModelCandidates([
+    { provider: personaEntry?.provider },
+    { provider: input.step.provider },
+    { provider: input.provider },
+  ]).provider;
+  const model = resolveProviderModelCandidates([
+    { model: personaEntry?.model },
+    { model: input.step.model },
+    { model: input.model },
+  ]).model;
+  return { provider, model };
 }

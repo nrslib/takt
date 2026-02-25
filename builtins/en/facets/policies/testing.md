@@ -70,6 +70,17 @@ Test names describe expected behavior. Use the `should {expected behavior} when 
 - Do not overuse E2E tests for what unit tests can cover
 - If new logic only has E2E tests, propose adding unit tests
 
+### When Integration Tests Are Required
+
+Verify data flow coupling that unit tests alone cannot cover.
+
+| Condition | Verdict |
+|-----------|---------|
+| Data flow crossing 3+ modules | Integration test required |
+| New status/state merging into an existing workflow | Integration test for the full transition flow required |
+| New option propagating through a call chain to the endpoint | End-to-end chain coupling test required |
+| All module-level unit tests pass | Unit tests alone are sufficient (when none of the above apply) |
+
 ## Test Environment Isolation
 
 Tie test infrastructure configuration to test scenario parameters. Hardcoded assumptions break under different scenarios.

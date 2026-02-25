@@ -62,7 +62,7 @@ describe('option resolution order', () => {
     loadTemplateMock.mockReturnValue('template');
   });
 
-  it('should resolve provider in order: CLI > Config(project??global) > stepProvider > default', async () => {
+  it('should resolve provider in order: CLI > stepProvider > Config(project??global) > default', async () => {
     // Given
     loadConfigMock.mockReturnValue({
       project: { provider: 'opencode' },
@@ -79,14 +79,14 @@ describe('option resolution order', () => {
     // Then
     expect(getProviderMock).toHaveBeenLastCalledWith('codex');
 
-    // When: CLI 指定なし（project provider が有効: resolveConfigValues は project.provider ?? global.provider を返す）
+    // When: CLI 指定なし（stepProvider が優先される）
     await runAgent(undefined, 'task', {
       cwd: '/repo',
       stepProvider: 'claude',
     });
 
     // Then
-    expect(getProviderMock).toHaveBeenLastCalledWith('opencode');
+    expect(getProviderMock).toHaveBeenLastCalledWith('claude');
 
     // When: project なし → resolveConfigValues は global.provider を返す（フラットマージ）
     loadConfigMock.mockReturnValue({
@@ -98,8 +98,8 @@ describe('option resolution order', () => {
       stepProvider: 'claude',
     });
 
-    // Then: resolveConfigValues returns 'mock' (global fallback), so stepProvider is not reached
-    expect(getProviderMock).toHaveBeenLastCalledWith('mock');
+    // Then: stepProvider が global fallback より優先される
+    expect(getProviderMock).toHaveBeenLastCalledWith('claude');
 
     // When: stepProvider もなし → 同様に global.provider
     await runAgent(undefined, 'task', { cwd: '/repo' });

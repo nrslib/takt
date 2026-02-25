@@ -250,6 +250,28 @@ export function readMultilineInput(prompt: string): Promise<string | null> {
 
     // --- Buffer position helpers ---
 
+    /** Get the JS string length of the character at buffer position `pos` */
+    function charLengthAt(pos: number): number {
+      if (pos >= buffer.length) return 0;
+      const code = buffer.charCodeAt(pos);
+      if (code >= 0xD800 && code <= 0xDBFF && pos + 1 < buffer.length) {
+        const next = buffer.charCodeAt(pos + 1);
+        if (next >= 0xDC00 && next <= 0xDFFF) return 2;
+      }
+      return 1;
+    }
+
+    /** Get the JS string length of the character immediately before buffer position `pos` */
+    function charLengthBefore(pos: number): number {
+      if (pos === 0) return 0;
+      const code = buffer.charCodeAt(pos - 1);
+      if (code >= 0xDC00 && code <= 0xDFFF && pos >= 2) {
+        const prev = buffer.charCodeAt(pos - 2);
+        if (prev >= 0xD800 && prev <= 0xDBFF) return 2;
+      }
+      return 1;
+    }
+
     function getLineStartAt(pos: number): number {
       const lastNl = buffer.lastIndexOf('\n', pos - 1);
       return lastNl + 1;
@@ -475,9 +497,10 @@ export function readMultilineInput(prompt: string): Promise<string | null> {
 
     function deleteCharBefore(): void {
       if (cursorPos <= getLineStart()) return;
-      const charWidth = getDisplayWidth(buffer[cursorPos - 1]!);
-      deleteRange(cursorPos - 1, cursorPos);
-      cursorPos--;
+      const len = charLengthBefore(cursorPos);
+      const charWidth = getDisplayWidth(buffer.slice(cursorPos - len, cursorPos));
+      deleteRange(cursorPos - len, cursorPos);
+      cursorPos -= len;
       process.stdout.write(`\x1B[${charWidth}D`);
       rerenderFromCursor();
     }
@@ -547,8 +570,9 @@ export function readMultilineInput(prompt: string): Promise<string | null> {
           onArrowLeft() {
             if (state !== 'normal') return;
             if (cursorPos > getLineStart()) {
-              const charWidth = getDisplayWidth(buffer[cursorPos - 1]!);
-              cursorPos--;
+              const len = charLengthBefore(cursorPos);
+              const charWidth = getDisplayWidth(buffer.slice(cursorPos - len, cursorPos));
+              cursorPos -= len;
               process.stdout.write(`\x1B[${charWidth}D`);
             } else if (getLineStart() > 0) {
               cursorPos = getLineStart() - 1;
@@ -560,8 +584,9 @@ export function readMultilineInput(prompt: string): Promise<string | null> {
           onArrowRight() {
             if (state !== 'normal') return;
             if (cursorPos < getLineEnd()) {
-              const charWidth = getDisplayWidth(buffer[cursorPos]!);
-              cursorPos++;
+              const len = charLengthAt(cursorPos);
+              const charWidth = getDisplayWidth(buffer.slice(cursorPos, cursorPos + len));
+              cursorPos += len;
               process.stdout.write(`\x1B[${charWidth}C`);
             } else if (cursorPos < buffer.length && buffer[cursorPos] === '\n') {
               cursorPos++;
@@ -672,6 +697,7 @@ export function readMultilineInput(prompt: string): Promise<string | null> {
             if (ch === '\x0B') { deleteToLineEnd(); return; }
             if (ch === '\x15') { deleteToLineStart(); return; }
             if (ch === '\x17') { deleteWord(); return; }
+            if (ch === '\x0A') { insertNewline(); return; }
             // Ignore unknown control characters
             if (ch.charCodeAt(0) < 0x20) return;
             // Regular character

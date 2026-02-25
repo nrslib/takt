@@ -24,6 +24,7 @@ import type {
   AskUserQuestionHandler,
   ClaudeSpawnOptions,
 } from './types.js';
+import { AskUserQuestionDeniedError, createAskUserQuestionHandler } from './ask-user-question-handler.js';
 
 const log = createLogger('claude-sdk');
 
@@ -46,9 +47,8 @@ export class SdkOptionsBuilder {
       ? SdkOptionsBuilder.createCanUseToolCallback(this.options.onPermissionRequest)
       : undefined;
 
-    const hooks = this.options.onAskUserQuestion
-      ? SdkOptionsBuilder.createAskUserQuestionHooks(this.options.onAskUserQuestion)
-      : undefined;
+    const askHandler = this.options.onAskUserQuestion ?? createAskUserQuestionHandler();
+    const hooks = SdkOptionsBuilder.createAskUserQuestionHooks(askHandler);
 
     const permissionMode = this.resolvePermissionMode();
 
@@ -57,6 +57,7 @@ export class SdkOptionsBuilder {
     const sdkOptions: Options = {
       cwd: this.options.cwd,
       permissionMode,
+      settingSources: ['project'],
     };
 
     if (this.options.model) sdkOptions.model = this.options.model;
@@ -72,7 +73,7 @@ export class SdkOptionsBuilder {
       };
     }
     if (canUseTool) sdkOptions.canUseTool = canUseTool;
-    if (hooks) sdkOptions.hooks = hooks;
+    sdkOptions.hooks = hooks;
 
     if (this.options.anthropicApiKey) {
       sdkOptions.env = {
@@ -176,8 +177,11 @@ export class SdkOptionsBuilder {
             },
           };
         } catch (err) {
+          if (err instanceof AskUserQuestionDeniedError) {
+            return { continue: true, decision: 'block', reason: err.message };
+          }
           log.error('AskUserQuestion handler failed', { error: err });
-          return { continue: true };
+          return { continue: true, decision: 'block', reason: 'Internal error in AskUserQuestion handler' };
         }
       }
       return { continue: true };

@@ -2,7 +2,7 @@
  * Tests for github/pr module
  *
  * Tests buildPrBody formatting and findExistingPr logic.
- * createPullRequest/pushBranch/commentOnPr call `gh`/`git` CLI, not unit-tested here.
+ * createPullRequest/commentOnPr call `gh` CLI, not unit-tested here.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -174,4 +174,5 @@ describe('buildPrBody', () => {
     expect(result).toContain('Closes #1');
     expect(result).toContain('Closes #2');
   });
+
 });

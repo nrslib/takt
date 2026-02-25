@@ -160,16 +160,6 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
     - 出力に `reset` と `backup:` を含むことを確認する。
     - `$TAKT_CONFIG_DIR/config.yaml` がテンプレート内容（例: `branch_name_strategy: ai`, `concurrency: 2`）に置き換わっていることを確認する。
     - `$TAKT_CONFIG_DIR/` 直下に `config.yaml.YYYYMMDD-HHmmss.old` 形式のバックアップファイルが1件作成されることを確認する。
-- Export Claude Code Skill（`e2e/specs/cli-export-cc.e2e.ts`）
-  - 目的: `takt export-cc` でClaude Code Skillのデプロイを確認。
-  - LLM: 呼び出さない（LLM不使用の操作のみ）
-  - 手順（ユーザー行動/コマンド）:
-    - `HOME` を一時ディレクトリに設定する。
-    - `takt export-cc` を実行する。
-    - 出力に `ファイルをデプロイしました` を含むことを確認する。
-    - `$HOME/.claude/skills/takt/SKILL.md` が存在することを確認する。
-    - `$HOME/.claude/skills/takt/pieces/` および `$HOME/.claude/skills/takt/personas/` ディレクトリが存在し、それぞれ少なくとも1ファイルを含むことを確認する。
-
 ## 追記シナリオ（2026-02-19）
 過去にドキュメント未反映だったシナリオを以下に追記する。
 

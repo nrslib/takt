@@ -7,16 +7,9 @@
 import { execFileSync } from 'node:child_process';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { checkGhCli } from './issue.js';
-import type { GitHubIssue, CreatePrOptions, CreatePrResult } from './types.js';
-
-export type { CreatePrOptions, CreatePrResult };
+import type { Issue, CreatePrOptions, CreatePrResult, ExistingPr, CommentResult } from '../git/types.js';
 
 const log = createLogger('github-pr');
-
-export interface ExistingPr {
-  number: number;
-  url: string;
-}
 
 /**
  * Find an open PR for the given branch.
@@ -33,15 +26,13 @@ export function findExistingPr(cwd: string, branch: string): ExistingPr | undefi
     );
     const prs = JSON.parse(output) as ExistingPr[];
     return prs[0];
-  } catch {
+  } catch (e) {
+    log.debug('gh pr list failed, treating as no PR', { error: getErrorMessage(e) });
     return undefined;
   }
 }
 
-/**
- * Add a comment to an existing PR.
- */
-export function commentOnPr(cwd: string, prNumber: number, body: string): CreatePrResult {
+export function commentOnPr(cwd: string, prNumber: number, body: string): CommentResult {
   const ghStatus = checkGhCli();
   if (!ghStatus.available) {
     return { success: false, error: ghStatus.error ?? 'gh CLI is not available' };
@@ -61,21 +52,6 @@ export function commentOnPr(cwd: string, prNumber: number, body: string): Create
   }
 }
 
-/**
- * Push a branch to origin.
- * Throws on failure.
- */
-export function pushBranch(cwd: string, branch: string): void {
-  log.info('Pushing branch to origin', { branch });
-  execFileSync('git', ['push', 'origin', branch], {
-    cwd,
-    stdio: 'pipe',
-  });
-}
-
-/**
- * Create a Pull Request via `gh pr create`.
- */
 export function createPullRequest(cwd: string, options: CreatePrOptions): CreatePrResult {
   const ghStatus = checkGhCli();
   if (!ghStatus.available) {
@@ -125,13 +101,12 @@ export function createPullRequest(cwd: string, options: CreatePrOptions): Create
  * Build PR body from issues and execution report.
  * Supports multiple issues (adds "Closes #N" for each).
  */
-export function buildPrBody(issues: GitHubIssue[] | undefined, report: string): string {
+export function buildPrBody(issues: Issue[] | undefined, report: string): string {
   const parts: string[] = [];
 
   parts.push('## Summary');
   if (issues && issues.length > 0) {
     parts.push('');
-    // Use the first issue's body/title for summary
     parts.push(issues[0]!.body || issues[0]!.title);
   }
 

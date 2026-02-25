@@ -70,7 +70,7 @@ export async function repertoireAddCommand(spec: string): Promise<void> {
         'api',
         `/repos/${owner}/${repo}/tarball/${ref}`,
       ],
-      { stdio: ['inherit', 'pipe', 'pipe'] },
+      { stdio: ['pipe', 'pipe', 'pipe'] },
     );
     writeFileSync(tmpTarPath, tarballBuffer);
 
@@ -160,8 +160,9 @@ export async function repertoireAddCommand(spec: string): Promise<void> {
     const packageDir = getRepertoirePackageDir(owner, repo);
 
     if (existsSync(packageDir)) {
+      info(`⚠ パッケージ @${owner}/${repo} は既にインストールされています`);
       const overwrite = await confirm(
-        `${owner}/${repo} は既にインストールされています。上書きしますか？`,
+        '上書きしますか？',
         false,
       );
       if (!overwrite) {

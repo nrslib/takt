@@ -1,9 +1,32 @@
 import { describe, expect, it } from 'vitest';
-import { resolveMovementProviderModel } from '../core/piece/provider-resolution.js';
+import { resolveMovementProviderModel, resolveProviderModelCandidates } from '../core/piece/provider-resolution.js';
+
+describe('resolveProviderModelCandidates', () => {
+  it('should resolve first defined provider and model independently', () => {
+    const result = resolveProviderModelCandidates([
+      { provider: undefined, model: 'model-1' },
+      { provider: 'codex', model: undefined },
+      { provider: 'claude', model: 'model-2' },
+    ]);
+
+    expect(result.provider).toBe('codex');
+    expect(result.model).toBe('model-1');
+  });
+
+  it('should return undefined fields when all candidates are undefined', () => {
+    const result = resolveProviderModelCandidates([
+      {},
+      { provider: undefined, model: undefined },
+    ]);
+
+    expect(result.provider).toBeUndefined();
+    expect(result.model).toBeUndefined();
+  });
+});
 
 describe('resolveMovementProviderModel', () => {
-  it('should prefer step.provider when step provider is defined', () => {
-    // Given: step.provider が指定されている
+  it('should prefer personaProviders.provider over step.provider when both are defined', () => {
+    // Given: step.provider と personaProviders.provider が両方指定されている
     const result = resolveMovementProviderModel({
       step: { provider: 'codex', model: undefined, personaDisplayName: 'coder' },
       provider: 'claude',
@@ -11,8 +34,8 @@ describe('resolveMovementProviderModel', () => {
     });
 
     // When: provider/model を解決する
-    // Then: step.provider が最優先になる
-    expect(result.provider).toBe('codex');
+    // Then: personaProviders.provider が step.provider を上書きする
+    expect(result.provider).toBe('opencode');
   });
 
   it('should use personaProviders.provider when step.provider is undefined', () => {
@@ -54,7 +77,7 @@ describe('resolveMovementProviderModel', () => {
     expect(result.provider).toBeUndefined();
   });
 
-  it('should prefer step.model over personaProviders.model and input.model', () => {
+  it('should prefer personaProviders.model over step.model and input.model', () => {
     // Given: step.model と personaProviders.model と input.model が指定されている
     const result = resolveMovementProviderModel({
       step: { provider: undefined, model: 'step-model', personaDisplayName: 'coder' },
@@ -63,8 +86,8 @@ describe('resolveMovementProviderModel', () => {
     });
 
     // When: provider/model を解決する
-    // Then: step.model が最優先になる
-    expect(result.model).toBe('step-model');
+    // Then: personaProviders.model が step.model を上書きする
+    expect(result.model).toBe('persona-model');
   });
 
   it('should use personaProviders.model when step.model is undefined', () => {

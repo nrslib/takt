@@ -31,7 +31,7 @@ movements:
         next: ABORT
     output_contracts:
       report:
-        - name: 00-plan.md
+        - name: plan.md
           format: plan
   - name: implement
     edit: true
@@ -92,7 +92,7 @@ movements:
         next: ai_fix
     output_contracts:
       report:
-        - name: 03-ai-review.md
+        - name: ai-review.md
           format: ai-review
   - name: ai_fix
     edit: true
@@ -159,7 +159,7 @@ movements:
         instruction: review-cqrs-es
         output_contracts:
           report:
-            - name: 04-cqrs-es-review.md
+            - name: cqrs-es-review.md
               format: cqrs-es-review
       - name: security-review
         edit: false
@@ -178,7 +178,7 @@ movements:
         instruction: review-security
         output_contracts:
           report:
-            - name: 05-security-review.md
+            - name: security-review.md
               format: security-review
       - name: qa-review
         edit: false
@@ -198,7 +198,7 @@ movements:
         instruction: review-qa
         output_contracts:
           report:
-            - name: 06-qa-review.md
+            - name: qa-review.md
               format: qa-review
     rules:
       - condition: all("approved")

@@ -27,6 +27,8 @@ notification_sound_events:    # イベントごとの通知音切り替え（省
 concurrency: 1                # takt run の並列タスク数（1-10、デフォルト: 1 = 逐次実行）
 task_poll_interval_ms: 500    # takt run での新規タスクポーリング間隔（100-5000、デフォルト: 500）
 interactive_preview_movements: 3  # インタラクティブモードでの movement プレビュー数（0-10、デフォルト: 3）
+# auto_fetch: false            # クローン作成前にリモートを fetch（デフォルト: false）
+# base_branch: main            # クローン作成のベースブランチ（デフォルト: リモートのデフォルトブランチ）
 
 # ランタイム環境デフォルト（piece_config.runtime で上書きしない限りすべての piece に適用）
 # runtime:
@@ -111,6 +113,8 @@ interactive_preview_movements: 3  # インタラクティブモードでの move
 | `disabled_builtins` | string[] | `[]` | 無効化する特定のビルトイン piece |
 | `pipeline` | object | - | pipeline テンプレート設定 |
 | `bookmarks_file` | string | - | ブックマークファイルのパス |
+| `auto_fetch` | boolean | `false` | クローン作成前にリモートを fetch してクローンを最新に保つ |
+| `base_branch` | string | - | クローン作成のベースブランチ（デフォルトはリモートのデフォルトブランチ） |
 | `piece_categories_file` | string | - | piece カテゴリファイルのパス |
 
 ## プロジェクト設定
@@ -121,9 +125,11 @@ interactive_preview_movements: 3  # インタラクティブモードでの move
 # .takt/config.yaml
 piece: default                # このプロジェクトの現在の piece
 provider: claude              # このプロジェクトの provider 上書き
+model: sonnet                 # このプロジェクトのモデル上書き
 auto_pr: true                 # worktree 実行後に PR を自動作成
 verbose: false                # 詳細出力モード
 concurrency: 2                # このプロジェクトでの takt run 並列タスク数（1-10）
+# base_branch: main           # クローン作成のベースブランチ（グローバルを上書き、デフォルト: リモートのデフォルトブランチ）
 
 # provider 固有オプション（グローバルを上書き、piece/movement で上書き可能）
 # provider_options:
@@ -144,9 +150,11 @@ concurrency: 2                # このプロジェクトでの takt run 並列�
 |-----------|------|---------|------|
 | `piece` | string | `"default"` | このプロジェクトの現在の piece 名 |
 | `provider` | `"claude"` \| `"codex"` \| `"opencode"` \| `"mock"` | - | provider 上書き |
+| `model` | string | - | モデル名の上書き（provider にそのまま渡される） |
 | `auto_pr` | boolean | - | worktree 実行後に PR を自動作成 |
 | `verbose` | boolean | - | 詳細出力モード |
 | `concurrency` | number (1-10) | `1`（global 設定由来） | `takt run` の並列タスク数 |
+| `base_branch` | string | - | クローン作成のベースブランチ（グローバルを上書き、デフォルト: リモートのデフォルトブランチ） |
 | `provider_options` | object | - | provider 固有オプション |
 | `provider_profiles` | object | - | provider 固有のパーミッションプロファイル |
 

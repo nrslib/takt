@@ -30,7 +30,7 @@ movements:
     instruction: plan
     output_contracts:
       report:
-        - name: 00-plan.md
+        - name: plan.md
           format: plan
   - name: implement
     edit: true
@@ -85,7 +85,7 @@ movements:
           - condition: AI-specific issues found
         output_contracts:
           report:
-            - name: 03-ai-review.md
+            - name: ai-review.md
               format: ai-review
       - name: supervise
         edit: false

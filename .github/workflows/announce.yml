@@ -1,0 +1,69 @@
+name: Announce
+
+on:
+  workflow_dispatch:
+    inputs:
+      title:
+        description: "タイトル"
+        required: true
+        type: string
+      body:
+        description: "本文（Markdown可、X向けには自動でプレーンテキスト化）"
+        required: true
+        type: string
+      channels:
+        description: "投稿先"
+        required: true
+        type: choice
+        default: "all"
+        options:
+          - all
+          - discussions
+          - discord
+          - twitter
+
+jobs:
+  discussions:
+    if: inputs.channels == 'all' || inputs.channels == 'discussions'
+    runs-on: ubuntu-latest
+    permissions:
+      discussions: write
+    steps:
+      - name: Post to GitHub Discussions
+        uses: abirber/github-create-discussion@v6
+        with:
+          title: ${{ inputs.title }}
+          body: ${{ inputs.body }}
+          repository-id: ${{ github.event.repository.node_id }}
+          category-name: "Announcements"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  discord:
+    if: inputs.channels == 'all' || inputs.channels == 'discord'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post to Discord
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TITLE: ${{ inputs.title }}
+          BODY: ${{ inputs.body }}
+        run: |
+          jq -n \
+            --arg title "$TITLE" \
+            --arg desc "$BODY" \
+            '{embeds: [{title: $title, description: $desc, color: 5814783}]}' \
+          | curl -sf -X POST -H "Content-Type: application/json" -d @- "$DISCORD_WEBHOOK_URL"
+
+  twitter:
+    if: inputs.channels == 'all' || inputs.channels == 'twitter'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post to X
+        uses: ethomson/send-tweet-action@v2
+        with:
+          status: "${{ inputs.title }}\n\n${{ inputs.body }}"
+          consumer-key: ${{ secrets.TWITTER_CONSUMER_API_KEY }}
+          consumer-secret: ${{ secrets.TWITTER_CONSUMER_API_SECRET }}
+          access-token: ${{ secrets.TWITTER_ACCESS_TOKEN }}
+          access-token-secret: ${{ secrets.TWITTER_ACCESS_TOKEN_SECRET }}
