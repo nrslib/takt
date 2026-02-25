@@ -109,7 +109,7 @@ export async function selectAndExecuteTask(
   log.info('Starting task execution', { piece: pieceIdentifier, worktree: isWorktree, autoPr: shouldCreatePr, draftPr: shouldDraftPr });
   const taskRunner = new TaskRunner(cwd);
   let taskRecord: Awaited<ReturnType<TaskRunner['addTask']>> | null = null;
-  if (options?.skipTaskList !== true) {
+  if (options?.skipTaskList !== true || isWorktree) {
     taskRecord = taskRunner.addTask(task, {
       piece: pieceIdentifier,
       ...(isWorktree ? { worktree: true } : {}),
