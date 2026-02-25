@@ -153,6 +153,21 @@ export const OutputContractsFieldSchema = z.object({
 /** Quality gates schema - AI directives for movement completion (string array) */
 export const QualityGatesSchema = z.array(z.string()).optional();
 
+/** Movement-specific quality gates override schema */
+export const MovementQualityGatesOverrideSchema = z.object({
+  quality_gates: QualityGatesSchema,
+}).optional();
+
+/** Piece overrides schema for config-level overrides */
+export const PieceOverridesSchema = z.object({
+  /** Global quality gates applied to all movements */
+  quality_gates: QualityGatesSchema,
+  /** Whether to apply quality_gates only to edit: true movements */
+  quality_gates_edit_only: z.boolean().optional(),
+  /** Movement-specific quality gates overrides */
+  movements: z.record(z.string(), MovementQualityGatesOverrideSchema).optional(),
+}).optional();
+
 /** Rule-based transition schema (new unified format) */
 export const PieceRuleSchema = z.object({
   /** Human-readable condition text */
@@ -485,6 +500,8 @@ export const GlobalConfigSchema = z.object({
   auto_fetch: z.boolean().optional().default(false),
   /** Base branch to clone from (default: current branch) */
   base_branch: z.string().optional(),
+  /** Piece-level overrides (quality_gates, etc.) */
+  piece_overrides: PieceOverridesSchema,
 });
 
 /** Project config schema */
@@ -498,4 +515,6 @@ export const ProjectConfigSchema = z.object({
   concurrency: z.number().int().min(1).max(10).optional(),
   /** Base branch to clone from (overrides global base_branch) */
   base_branch: z.string().optional(),
+  /** Piece-level overrides (quality_gates, etc.) */
+  piece_overrides: PieceOverridesSchema,
 });

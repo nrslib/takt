@@ -28,6 +28,10 @@ type RawPiece = z.output<typeof PieceConfigRawSchema>;
 
 import type { MovementProviderOptions } from '../../../core/models/piece-types.js';
 import type { PieceRuntimeConfig } from '../../../core/models/piece-types.js';
+import type { PieceOverrides } from '../../../core/models/persisted-global-config.js';
+import { applyQualityGateOverrides } from './qualityGateOverrides.js';
+import { loadProjectConfig } from '../project/projectConfig.js';
+import { loadGlobalConfig } from '../global/globalConfig.js';
 
 /** Convert raw YAML provider_options (snake_case) to internal format (camelCase). */
 export function normalizeProviderOptions(
@@ -277,6 +281,8 @@ function normalizeStepFromRaw(
   sections: PieceSections,
   inheritedProviderOptions?: PieceMovement['providerOptions'],
   context?: FacetResolutionContext,
+  projectOverrides?: PieceOverrides,
+  globalOverrides?: PieceOverrides,
 ): PieceMovement {
   const rules: PieceRule[] | undefined = step.rules?.map(normalizeRule);
 
@@ -315,7 +321,13 @@ function normalizeStepFromRaw(
       : undefined) || expandedInstruction || '{task}',
     rules,
     outputContracts: normalizeOutputContracts(step.output_contracts, pieceDir, sections.resolvedReportFormats, context),
-    qualityGates: step.quality_gates,
+    qualityGates: applyQualityGateOverrides(
+      step.name,
+      step.quality_gates,
+      step.edit,
+      projectOverrides,
+      globalOverrides,
+    ),
     passPreviousResponse: step.pass_previous_response ?? true,
     policyContents,
     knowledgeContents,
@@ -323,7 +335,7 @@ function normalizeStepFromRaw(
 
   if (step.parallel && step.parallel.length > 0) {
     result.parallel = step.parallel.map((sub: RawStep) =>
-      normalizeStepFromRaw(sub, pieceDir, sections, inheritedProviderOptions, context),
+      normalizeStepFromRaw(sub, pieceDir, sections, inheritedProviderOptions, context, projectOverrides, globalOverrides),
     );
   }
 
@@ -381,6 +393,8 @@ export function normalizePieceConfig(
   raw: unknown,
   pieceDir: string,
   context?: FacetResolutionContext,
+  projectOverrides?: PieceOverrides,
+  globalOverrides?: PieceOverrides,
 ): PieceConfig {
   const parsed = PieceConfigRawSchema.parse(raw);
 
@@ -401,7 +415,7 @@ export function normalizePieceConfig(
   const pieceRuntime = normalizeRuntimeConfig(parsed.piece_config);
 
   const movements: PieceMovement[] = parsed.movements.map((step) =>
-    normalizeStepFromRaw(step, pieceDir, sections, pieceProviderOptions, context),
+    normalizeStepFromRaw(step, pieceDir, sections, pieceProviderOptions, context, projectOverrides, globalOverrides),
   );
 
   // Schema guarantees movements.min(1)
@@ -446,5 +460,11 @@ export function loadPieceFromFile(filePath: string, projectDir: string): PieceCo
     repertoireDir: getRepertoireDir(),
   };
 
-  return normalizePieceConfig(raw, pieceDir, context);
+  // Load config overrides from project and global configs
+  const projectConfig = loadProjectConfig(projectDir);
+  const globalConfig = loadGlobalConfig();
+  const projectOverrides = projectConfig.pieceOverrides;
+  const globalOverrides = globalConfig.pieceOverrides;
+
+  return normalizePieceConfig(raw, pieceDir, context, projectOverrides, globalOverrides);
 }

@@ -10,7 +10,7 @@ import { parse, stringify } from 'yaml';
 import { copyProjectResourcesToDir } from '../../resources/index.js';
 import type { ProjectLocalConfig } from '../types.js';
 import type { ProviderPermissionProfiles } from '../../../core/models/provider-profiles.js';
-import type { AnalyticsConfig } from '../../../core/models/persisted-global-config.js';
+import type { AnalyticsConfig, PieceOverrides } from '../../../core/models/persisted-global-config.js';
 import { applyProjectConfigEnvOverrides } from '../env/config-env-overrides.js';
 import { normalizeProviderOptions } from '../loaders/pieceParser.js';
 import { invalidateResolvedConfigCache } from '../resolutionCache.js';
@@ -85,6 +85,51 @@ function denormalizeAnalytics(config: AnalyticsConfig | undefined): Record<strin
   return Object.keys(raw).length > 0 ? raw : undefined;
 }
 
+/** Normalize piece_overrides from snake_case (YAML) to camelCase (internal) */
+function normalizePieceOverrides(
+  raw: { quality_gates?: string[]; quality_gates_edit_only?: boolean; movements?: Record<string, { quality_gates?: string[] }> } | undefined,
+): PieceOverrides | undefined {
+  if (!raw) return undefined;
+  return {
+    qualityGates: raw.quality_gates,
+    qualityGatesEditOnly: raw.quality_gates_edit_only,
+    movements: raw.movements
+      ? Object.fromEntries(
+          Object.entries(raw.movements).map(([name, override]) => [
+            name,
+            { qualityGates: override.quality_gates },
+          ])
+        )
+      : undefined,
+  };
+}
+
+/** Denormalize piece_overrides from camelCase (internal) to snake_case (YAML) */
+function denormalizePieceOverrides(
+  overrides: PieceOverrides | undefined,
+): { quality_gates?: string[]; quality_gates_edit_only?: boolean; movements?: Record<string, { quality_gates?: string[] }> } | undefined {
+  if (!overrides) return undefined;
+  const result: { quality_gates?: string[]; quality_gates_edit_only?: boolean; movements?: Record<string, { quality_gates?: string[] }> } = {};
+  if (overrides.qualityGates !== undefined) {
+    result.quality_gates = overrides.qualityGates;
+  }
+  if (overrides.qualityGatesEditOnly !== undefined) {
+    result.quality_gates_edit_only = overrides.qualityGatesEditOnly;
+  }
+  if (overrides.movements) {
+    result.movements = Object.fromEntries(
+      Object.entries(overrides.movements).map(([name, override]) => {
+        const movementOverride: { quality_gates?: string[] } = {};
+        if (override.qualityGates !== undefined) {
+          movementOverride.quality_gates = override.qualityGates;
+        }
+        return [name, movementOverride];
+      })
+    );
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
 /**
  * Load project configuration from .takt/config.yaml
  */
@@ -111,6 +156,7 @@ export function loadProjectConfig(projectDir: string): ProjectLocalConfig {
     provider_options,
     provider_profiles,
     analytics,
+    piece_overrides,
     ...rest
   } = parsedConfig;
 
@@ -132,6 +178,7 @@ export function loadProjectConfig(projectDir: string): ProjectLocalConfig {
       };
     } | undefined),
     providerProfiles: normalizeProviderProfiles(provider_profiles as Record<string, { default_permission_mode: unknown; movement_permission_overrides?: Record<string, unknown> }> | undefined),
+    pieceOverrides: normalizePieceOverrides(piece_overrides as { quality_gates?: string[]; quality_gates_edit_only?: boolean; movements?: Record<string, { quality_gates?: string[] }> } | undefined),
   };
 }
 
@@ -172,6 +219,12 @@ export function saveProjectConfig(projectDir: string, config: ProjectLocalConfig
   delete savePayload.autoPr;
   delete savePayload.draftPr;
   delete savePayload.baseBranch;
+
+  const rawPieceOverrides = denormalizePieceOverrides(config.pieceOverrides);
+  if (rawPieceOverrides) {
+    savePayload.piece_overrides = rawPieceOverrides;
+  }
+  delete savePayload.pieceOverrides;
 
   const content = stringify(savePayload, { indent: 2 });
   writeFileSync(configPath, content, 'utf-8');

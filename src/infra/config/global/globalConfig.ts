@@ -10,7 +10,7 @@ import { isAbsolute } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { GlobalConfigSchema } from '../../../core/models/index.js';
 import type { Language } from '../../../core/models/index.js';
-import type { PersistedGlobalConfig, PersonaProviderEntry } from '../../../core/models/persisted-global-config.js';
+import type { PersistedGlobalConfig, PersonaProviderEntry, PieceOverrides } from '../../../core/models/persisted-global-config.js';
 import type { ProviderPermissionProfiles } from '../../../core/models/provider-profiles.js';
 import { normalizeProviderOptions } from '../loaders/pieceParser.js';
 import { getGlobalConfigPath } from '../paths.js';
@@ -122,6 +122,51 @@ function denormalizeProviderProfiles(
   }])) as Record<string, { default_permission_mode: string; movement_permission_overrides?: Record<string, string> }>;
 }
 
+/** Normalize piece_overrides from snake_case (YAML) to camelCase (internal) */
+function normalizePieceOverrides(
+  raw: { quality_gates?: string[]; quality_gates_edit_only?: boolean; movements?: Record<string, { quality_gates?: string[] }> } | undefined,
+): PieceOverrides | undefined {
+  if (!raw) return undefined;
+  return {
+    qualityGates: raw.quality_gates,
+    qualityGatesEditOnly: raw.quality_gates_edit_only,
+    movements: raw.movements
+      ? Object.fromEntries(
+          Object.entries(raw.movements).map(([name, override]) => [
+            name,
+            { qualityGates: override.quality_gates },
+          ])
+        )
+      : undefined,
+  };
+}
+
+/** Denormalize piece_overrides from camelCase (internal) to snake_case (YAML) */
+function denormalizePieceOverrides(
+  overrides: PieceOverrides | undefined,
+): { quality_gates?: string[]; quality_gates_edit_only?: boolean; movements?: Record<string, { quality_gates?: string[] }> } | undefined {
+  if (!overrides) return undefined;
+  const result: { quality_gates?: string[]; quality_gates_edit_only?: boolean; movements?: Record<string, { quality_gates?: string[] }> } = {};
+  if (overrides.qualityGates !== undefined) {
+    result.quality_gates = overrides.qualityGates;
+  }
+  if (overrides.qualityGatesEditOnly !== undefined) {
+    result.quality_gates_edit_only = overrides.qualityGatesEditOnly;
+  }
+  if (overrides.movements) {
+    result.movements = Object.fromEntries(
+      Object.entries(overrides.movements).map(([name, override]) => {
+        const movementOverride: { quality_gates?: string[] } = {};
+        if (override.qualityGates !== undefined) {
+          movementOverride.quality_gates = override.qualityGates;
+        }
+        return [name, movementOverride];
+      })
+    );
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
 /**
  * Manages global configuration loading and caching.
  * Singleton — use GlobalConfigManager.getInstance().
@@ -222,6 +267,7 @@ export class GlobalConfigManager {
       taskPollIntervalMs: parsed.task_poll_interval_ms,
       autoFetch: parsed.auto_fetch,
       baseBranch: parsed.base_branch,
+      pieceOverrides: normalizePieceOverrides(parsed.piece_overrides as { quality_gates?: string[]; quality_gates_edit_only?: boolean; movements?: Record<string, { quality_gates?: string[] }> } | undefined),
     };
     validateProviderModelCompatibility(config.provider, config.model);
     this.cachedConfig = config;
@@ -357,6 +403,10 @@ export class GlobalConfigManager {
     }
     if (config.baseBranch) {
       raw.base_branch = config.baseBranch;
+    }
+    const denormalizedPieceOverrides = denormalizePieceOverrides(config.pieceOverrides);
+    if (denormalizedPieceOverrides) {
+      raw.piece_overrides = denormalizedPieceOverrides;
     }
     writeFileSync(configPath, stringifyYaml(raw), 'utf-8');
     this.invalidateCache();
