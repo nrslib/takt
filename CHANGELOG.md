@@ -28,6 +28,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `--task` オプションでの直接実行時に tasks.yaml へ不要な記録がされる問題を修正
 - `--task` でワークツリー作成時は tasks.yaml に記録するよう修正（`takt list` でのブランチ管理に必要）
 - Provider resolution: removed implicit fallback to `claude` and switched to fail-fast when provider cannot be resolved (#386)
+- Provider resolution: unified display and execution provider/model resolution via `movement:start` event providerInfo, ensuring displayed provider always matches execution provider (#390)
 - E2E テスト config-priority の不安定性を修正 (#388)
 
 ### Internal

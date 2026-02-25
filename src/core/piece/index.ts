@@ -18,6 +18,7 @@ export { AskUserQuestionDeniedError, createDenyAskUserQuestionHandler } from './
 export type {
   PieceEvents,
   PhaseName,
+  MovementProviderInfo,
   UserInputRequest,
   IterationLimitRequest,
   SessionUpdateCallback,

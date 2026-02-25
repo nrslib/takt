@@ -3,7 +3,7 @@ import type { PieceMovement, PieceState, Language } from '../../models/types.js'
 import type { MovementProviderOptions } from '../../models/piece-types.js';
 import type { RunAgentOptions } from '../../../agents/runner.js';
 import type { PhaseRunnerContext } from '../phase-runner.js';
-import type { PieceEngineOptions, PhaseName } from '../types.js';
+import type { PieceEngineOptions, PhaseName, MovementProviderInfo } from '../types.js';
 import { buildSessionKey } from '../session-key.js';
 import { resolveMovementProviderModel } from '../provider-resolution.js';
 import { DEFAULT_PROVIDER_PERMISSION_PROFILES, resolveMovementPermissionMode } from '../permission-profile-resolution.js';
@@ -53,19 +53,26 @@ export class OptionsBuilder {
     private readonly getPieceDescription: () => string | undefined,
   ) {}
 
-  /** Build common RunAgentOptions shared by all phases */
-  buildBaseOptions(step: PieceMovement): RunAgentOptions {
-    const movements = this.getPieceMovements();
-    const currentIndex = movements.findIndex((m) => m.name === step.name);
-    const currentPosition = currentIndex >= 0 ? `${currentIndex + 1}/${movements.length}` : '?/?';
+  /** Resolve effective provider and model for a movement (same logic as buildBaseOptions) */
+  resolveStepProviderModel(step: PieceMovement): MovementProviderInfo {
     const resolved = resolveMovementProviderModel({
       step,
       provider: this.engineOptions.provider,
       model: this.engineOptions.model,
       personaProviders: this.engineOptions.personaProviders,
     });
-    const resolvedProvider = resolved.provider ?? this.engineOptions.provider;
-    const resolvedModel = resolved.model ?? this.engineOptions.model;
+    return {
+      provider: resolved.provider ?? this.engineOptions.provider,
+      model: resolved.model ?? this.engineOptions.model,
+    };
+  }
+
+  /** Build common RunAgentOptions shared by all phases */
+  buildBaseOptions(step: PieceMovement): RunAgentOptions {
+    const movements = this.getPieceMovements();
+    const currentIndex = movements.findIndex((m) => m.name === step.name);
+    const currentPosition = currentIndex >= 0 ? `${currentIndex + 1}/${movements.length}` : '?/?';
+    const { provider: resolvedProvider, model: resolvedModel } = this.resolveStepProviderModel(step);
 
     return {
       cwd: this.getCwd(),

@@ -28,6 +28,7 @@
 - `--task` オプションでの直接実行時に tasks.yaml へ不要な記録がされる問題を修正
 - `--task` でワークツリー作成時は tasks.yaml に記録するよう修正（`takt list` でのブランチ管理に必要）
 - プロバイダー解決: 暗黙の `claude` フォールバックを廃止し、プロバイダーを解決できない場合は Fail Fast で終了するよう修正 (#386)
+- プロバイダー解決: 表示用と実行用の provider/model 解決を `movement:start` イベントの providerInfo に一元化し、表示されるプロバイダーと実行プロバイダーの一致を構造的に保証 (#390)
 - E2E テスト config-priority の不安定性を修正 (#388)
 
 ### Internal
