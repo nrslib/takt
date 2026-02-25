@@ -11,7 +11,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createLogger } from '../../shared/utils/index.js';
-import { resolveConfigValue } from '../config/index.js';
+import { loadProjectConfig, resolveConfigValue } from '../config/index.js';
 import { detectDefaultBranch } from './branchList.js';
 import type { WorktreeOptions, WorktreeResult } from './types.js';
 
@@ -20,6 +20,33 @@ export type { WorktreeOptions, WorktreeResult };
 const log = createLogger('clone');
 
 const CLONE_META_DIR = 'clone-meta';
+
+function resolveCloneSubmoduleOptions(projectDir: string): { args: string[]; label: string; targets: string } {
+  const config = loadProjectConfig(projectDir);
+  const resolvedSubmodules = config.submodules ?? (config.withSubmodules === true ? 'all' : undefined);
+
+  if (resolvedSubmodules === 'all') {
+    return {
+      args: ['--recurse-submodules'],
+      label: 'with submodule',
+      targets: 'all',
+    };
+  }
+
+  if (Array.isArray(resolvedSubmodules) && resolvedSubmodules.length > 0) {
+    return {
+      args: resolvedSubmodules.map((submodulePath) => `--recurse-submodules=${submodulePath}`),
+      label: 'with submodule',
+      targets: resolvedSubmodules.join(', '),
+    };
+  }
+
+  return {
+    args: [],
+    label: 'without submodule',
+    targets: 'none',
+  };
+}
 
 /**
  * Manages git clone lifecycle for task isolation.
@@ -188,10 +215,12 @@ export class CloneManager {
    */
   private static cloneAndIsolate(projectDir: string, clonePath: string, branch?: string): void {
     const referenceRepo = CloneManager.resolveMainRepo(projectDir);
+    const cloneSubmoduleOptions = resolveCloneSubmoduleOptions(projectDir);
 
     fs.mkdirSync(path.dirname(clonePath), { recursive: true });
 
     const cloneArgs = ['clone', '--reference', referenceRepo, '--dissociate'];
+    cloneArgs.push(...cloneSubmoduleOptions.args);
     if (branch) {
       cloneArgs.push('--branch', branch);
     }
@@ -240,8 +269,12 @@ export class CloneManager {
 
     const clonePath = CloneManager.resolveClonePath(projectDir, options);
     const branch = CloneManager.resolveBranchName(options);
+    const cloneSubmoduleOptions = resolveCloneSubmoduleOptions(projectDir);
 
-    log.info('Creating shared clone', { path: clonePath, branch });
+    log.info(
+      `Creating shared clone (${cloneSubmoduleOptions.label}, targets: ${cloneSubmoduleOptions.targets})`,
+      { path: clonePath, branch }
+    );
 
     if (CloneManager.branchExists(projectDir, branch)) {
       CloneManager.cloneAndIsolate(projectDir, clonePath, branch);

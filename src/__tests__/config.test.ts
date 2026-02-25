@@ -1206,6 +1206,95 @@ describe('loadProjectConfig snake_case normalization', () => {
   });
 });
 
+describe('loadProjectConfig submodules', () => {
+  let testDir: string;
+
+  beforeEach(() => {
+    testDir = join(tmpdir(), `takt-test-${randomUUID()}`);
+    mkdirSync(testDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    if (existsSync(testDir)) {
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should normalize case-insensitive submodules all to canonical all', () => {
+    const projectConfigDir = getProjectConfigDir(testDir);
+    mkdirSync(projectConfigDir, { recursive: true });
+    writeFileSync(join(projectConfigDir, 'config.yaml'), 'submodules: ALL\n');
+
+    const config = loadProjectConfig(testDir);
+
+    expect(config.submodules).toBe('all');
+    expect(config.withSubmodules).toBeUndefined();
+  });
+
+  it('should keep explicit submodule path list as target set', () => {
+    const projectConfigDir = getProjectConfigDir(testDir);
+    mkdirSync(projectConfigDir, { recursive: true });
+    writeFileSync(join(projectConfigDir, 'config.yaml'), [
+      'submodules:',
+      '  - path/a',
+      '  - path/b',
+    ].join('\n'));
+
+    const config = loadProjectConfig(testDir);
+
+    expect(config.submodules).toEqual(['path/a', 'path/b']);
+    expect(config.withSubmodules).toBeUndefined();
+  });
+
+  it('should reject wildcard-only path in submodules', () => {
+    const projectConfigDir = getProjectConfigDir(testDir);
+    mkdirSync(projectConfigDir, { recursive: true });
+    writeFileSync(join(projectConfigDir, 'config.yaml'), [
+      'submodules:',
+      '  - "*"',
+    ].join('\n'));
+
+    expect(() => loadProjectConfig(testDir)).toThrow('Invalid submodules');
+  });
+
+  it('should reject wildcard-like path in submodules', () => {
+    const projectConfigDir = getProjectConfigDir(testDir);
+    mkdirSync(projectConfigDir, { recursive: true });
+    writeFileSync(join(projectConfigDir, 'config.yaml'), [
+      'submodules:',
+      '  - libs/*',
+    ].join('\n'));
+
+    expect(() => loadProjectConfig(testDir)).toThrow('Invalid submodules');
+  });
+
+  it('should prefer submodules over with_submodules', () => {
+    const projectConfigDir = getProjectConfigDir(testDir);
+    mkdirSync(projectConfigDir, { recursive: true });
+    writeFileSync(join(projectConfigDir, 'config.yaml'), [
+      'submodules:',
+      '  - path/a',
+      'with_submodules: true',
+    ].join('\n'));
+
+    const config = loadProjectConfig(testDir);
+
+    expect(config.submodules).toEqual(['path/a']);
+    expect(config.withSubmodules).toBeUndefined();
+  });
+
+  it('should treat with_submodules true as fallback full acquisition when submodules is unset', () => {
+    const projectConfigDir = getProjectConfigDir(testDir);
+    mkdirSync(projectConfigDir, { recursive: true });
+    writeFileSync(join(projectConfigDir, 'config.yaml'), 'with_submodules: true\n');
+
+    const config = loadProjectConfig(testDir);
+
+    expect(config.submodules).toBeUndefined();
+    expect(config.withSubmodules).toBe(true);
+  });
+});
+
 describe('saveProjectConfig snake_case denormalization', () => {
   let testDir: string;
 
@@ -1247,6 +1336,28 @@ describe('saveProjectConfig snake_case denormalization', () => {
     expect((saved as Record<string, unknown>).base_branch).toBeUndefined();
   });
 
+  it('should persist withSubmodules as with_submodules and reload correctly', () => {
+    saveProjectConfig(testDir, { piece: 'default', withSubmodules: true });
+
+    const saved = loadProjectConfig(testDir);
+
+    expect(saved.withSubmodules).toBe(true);
+    expect((saved as Record<string, unknown>).with_submodules).toBeUndefined();
+  });
+
+  it('should persist submodules and ignore with_submodules when both are provided', () => {
+    saveProjectConfig(testDir, { piece: 'default', submodules: ['path/a'], withSubmodules: true });
+
+    const projectConfigDir = getProjectConfigDir(testDir);
+    const content = readFileSync(join(projectConfigDir, 'config.yaml'), 'utf-8');
+    const saved = loadProjectConfig(testDir);
+
+    expect(content).toContain('submodules:');
+    expect(content).not.toContain('with_submodules:');
+    expect(saved.submodules).toEqual(['path/a']);
+    expect(saved.withSubmodules).toBeUndefined();
+  });
+
   it('should persist concurrency and reload correctly', () => {
     saveProjectConfig(testDir, { piece: 'default', concurrency: 3 });
 
@@ -1264,6 +1375,7 @@ describe('saveProjectConfig snake_case denormalization', () => {
     expect(content).toContain('auto_pr:');
     expect(content).toContain('draft_pr:');
     expect(content).toContain('base_branch:');
+    expect(content).not.toContain('withSubmodules:');
     expect(content).not.toContain('autoPr:');
     expect(content).not.toContain('draftPr:');
     expect(content).not.toContain('baseBranch:');

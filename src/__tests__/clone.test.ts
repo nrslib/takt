@@ -4,6 +4,12 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+const { mockLogInfo, mockLogDebug, mockLogError } = vi.hoisted(() => ({
+  mockLogInfo: vi.fn(),
+  mockLogDebug: vi.fn(),
+  mockLogError: vi.fn(),
+}));
+
 vi.mock('node:child_process', () => ({
   execFileSync: vi.fn(),
 }));
@@ -24,9 +30,9 @@ vi.mock('node:fs', () => ({
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   createLogger: () => ({
-    info: vi.fn(),
-    debug: vi.fn(),
-    error: vi.fn(),
+    info: mockLogInfo,
+    debug: mockLogDebug,
+    error: mockLogError,
   }),
 }));
 
@@ -35,14 +41,22 @@ vi.mock('../infra/config/global/globalConfig.js', () => ({
   getBuiltinPiecesEnabled: vi.fn().mockReturnValue(true),
 }));
 
+vi.mock('../infra/config/project/projectConfig.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  loadProjectConfig: vi.fn(() => ({ piece: 'default' })),
+}));
+
 import { execFileSync } from 'node:child_process';
 import { loadGlobalConfig } from '../infra/config/global/globalConfig.js';
+import { loadProjectConfig } from '../infra/config/project/projectConfig.js';
 import { createSharedClone, createTempCloneForBranch } from '../infra/task/clone.js';
 
 const mockExecFileSync = vi.mocked(execFileSync);
+const mockLoadProjectConfig = vi.mocked(loadProjectConfig);
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockLoadProjectConfig.mockReturnValue({ piece: 'default' });
 });
 
 describe('cloneAndIsolate git config propagation', () => {
@@ -455,6 +469,104 @@ describe('resolveBaseBranch', () => {
     // When/Then: should not throw
     const result = createTempCloneForBranch('/project', 'existing-branch');
     expect(result.branch).toBe('existing-branch');
+  });
+});
+
+describe('clone submodule arguments', () => {
+  function setupCloneArgsCapture(): string[][] {
+    const cloneCalls: string[][] = [];
+
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+
+      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--abbrev-ref' && argsArr[2] === 'HEAD') {
+        return 'main\n';
+      }
+      if (argsArr[0] === 'clone') {
+        cloneCalls.push(argsArr);
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'remote') return Buffer.from('');
+      if (argsArr[0] === 'config') {
+        if (argsArr[1] === '--local') throw new Error('not set');
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--verify') {
+        throw new Error('branch not found');
+      }
+      if (argsArr[0] === 'checkout') return Buffer.from('');
+
+      return Buffer.from('');
+    });
+
+    return cloneCalls;
+  }
+
+  it('should append recurse flag when submodules is all', () => {
+    mockLoadProjectConfig.mockReturnValue({ piece: 'default', submodules: 'all' });
+    const cloneCalls = setupCloneArgsCapture();
+
+    createSharedClone('/project', {
+      worktree: true,
+      taskSlug: 'submodule-all',
+    });
+
+    expect(cloneCalls).toHaveLength(1);
+    expect(cloneCalls[0]).toContain('--recurse-submodules');
+  });
+
+  it('should append path-scoped recurse flags when submodules is explicit list', () => {
+    mockLoadProjectConfig.mockReturnValue({ piece: 'default', submodules: ['path/a', 'path/b'] });
+    const cloneCalls = setupCloneArgsCapture();
+
+    createSharedClone('/project', {
+      worktree: true,
+      taskSlug: 'submodule-path-list',
+    });
+
+    expect(cloneCalls).toHaveLength(1);
+    expect(cloneCalls[0]).toContain('--recurse-submodules=path/a');
+    expect(cloneCalls[0]).toContain('--recurse-submodules=path/b');
+    const creatingLog = mockLogInfo.mock.calls.find((call) =>
+      typeof call[0] === 'string' && call[0].includes('Creating shared clone')
+    );
+    expect(creatingLog?.[0]).toContain('targets: path/a, path/b');
+  });
+
+  it('should append recurse flag when withSubmodules is true and submodules is unset', () => {
+    mockLoadProjectConfig.mockReturnValue({ piece: 'default', withSubmodules: true });
+    const cloneCalls = setupCloneArgsCapture();
+
+    createSharedClone('/project', {
+      worktree: true,
+      taskSlug: 'with-submodules-fallback',
+    });
+
+    expect(cloneCalls).toHaveLength(1);
+    expect(cloneCalls[0]).toContain('--recurse-submodules');
+    const creatingLog = mockLogInfo.mock.calls.find((call) =>
+      typeof call[0] === 'string' && call[0].includes('Creating shared clone')
+    );
+    expect(creatingLog?.[0]).toContain('with submodule');
+    expect(creatingLog?.[0]).toContain('targets: all');
+  });
+
+  it('should keep existing clone args when submodule acquisition is disabled', () => {
+    mockLoadProjectConfig.mockReturnValue({ piece: 'default', withSubmodules: false });
+    const cloneCalls = setupCloneArgsCapture();
+
+    createSharedClone('/project', {
+      worktree: true,
+      taskSlug: 'without-submodules',
+    });
+
+    expect(cloneCalls).toHaveLength(1);
+    expect(cloneCalls[0].some((arg) => arg.startsWith('--recurse-submodules'))).toBe(false);
+    const creatingLog = mockLogInfo.mock.calls.find((call) =>
+      typeof call[0] === 'string' && call[0].includes('Creating shared clone')
+    );
+    expect(creatingLog?.[0]).toContain('without submodule');
+    expect(creatingLog?.[0]).toContain('targets: none');
   });
 });
 

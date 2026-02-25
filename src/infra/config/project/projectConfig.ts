@@ -10,7 +10,7 @@ import { parse, stringify } from 'yaml';
 import { copyProjectResourcesToDir } from '../../resources/index.js';
 import type { ProjectLocalConfig } from '../types.js';
 import type { ProviderPermissionProfiles } from '../../../core/models/provider-profiles.js';
-import type { AnalyticsConfig } from '../../../core/models/persisted-global-config.js';
+import type { AnalyticsConfig, SubmoduleSelection } from '../../../core/models/persisted-global-config.js';
 import { applyProjectConfigEnvOverrides } from '../env/config-env-overrides.js';
 import { normalizeProviderOptions } from '../loaders/pieceParser.js';
 import { invalidateResolvedConfigCache } from '../resolutionCache.js';
@@ -21,6 +21,50 @@ export type { ProjectLocalConfig } from '../types.js';
 const DEFAULT_PROJECT_CONFIG: ProjectLocalConfig = {
   piece: 'default',
 };
+
+const SUBMODULES_ALL = 'all';
+
+function normalizeSubmodules(raw: unknown): SubmoduleSelection | undefined {
+  if (raw === undefined) return undefined;
+
+  if (typeof raw === 'string') {
+    const normalized = raw.trim().toLowerCase();
+    if (normalized === SUBMODULES_ALL) {
+      return SUBMODULES_ALL;
+    }
+    throw new Error('Invalid submodules: string value must be "all"');
+  }
+
+  if (Array.isArray(raw)) {
+    if (raw.length === 0) {
+      throw new Error('Invalid submodules: explicit path list must not be empty');
+    }
+
+    const normalizedPaths = raw.map((entry) => {
+      if (typeof entry !== 'string') {
+        throw new Error('Invalid submodules: path entries must be strings');
+      }
+      const trimmed = entry.trim();
+      if (trimmed.length === 0) {
+        throw new Error('Invalid submodules: path entries must not be empty');
+      }
+      if (trimmed.includes('*')) {
+        throw new Error(`Invalid submodules: wildcard is not supported (${trimmed})`);
+      }
+      return trimmed;
+    });
+
+    return normalizedPaths;
+  }
+
+  throw new Error('Invalid submodules: must be "all" or an explicit path list');
+}
+
+function normalizeWithSubmodules(raw: unknown): boolean | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw === 'boolean') return raw;
+  throw new Error('Invalid with_submodules: value must be boolean');
+}
 
 /**
  * Get project takt config directory (.takt in project)
@@ -108,11 +152,17 @@ export function loadProjectConfig(projectDir: string): ProjectLocalConfig {
     auto_pr,
     draft_pr,
     base_branch,
+    submodules,
+    with_submodules,
     provider_options,
     provider_profiles,
     analytics,
     ...rest
   } = parsedConfig;
+
+  const normalizedSubmodules = normalizeSubmodules(submodules);
+  const normalizedWithSubmodules = normalizeWithSubmodules(with_submodules);
+  const effectiveWithSubmodules = normalizedSubmodules === undefined ? normalizedWithSubmodules : undefined;
 
   return {
     ...DEFAULT_PROJECT_CONFIG,
@@ -120,6 +170,8 @@ export function loadProjectConfig(projectDir: string): ProjectLocalConfig {
     autoPr: auto_pr as boolean | undefined,
     draftPr: draft_pr as boolean | undefined,
     baseBranch: base_branch as string | undefined,
+    submodules: normalizedSubmodules,
+    withSubmodules: effectiveWithSubmodules,
     analytics: normalizeAnalytics(analytics as Record<string, unknown> | undefined),
     providerOptions: normalizeProviderOptions(provider_options as {
       codex?: { network_access?: boolean };
@@ -149,6 +201,7 @@ export function saveProjectConfig(projectDir: string, config: ProjectLocalConfig
   copyProjectResourcesToDir(configDir);
 
   const savePayload: Record<string, unknown> = { ...config };
+  const normalizedSubmodules = normalizeSubmodules(config.submodules);
 
   const rawAnalytics = denormalizeAnalytics(config.analytics);
   if (rawAnalytics) {
@@ -169,9 +222,21 @@ export function saveProjectConfig(projectDir: string, config: ProjectLocalConfig
   if (config.autoPr !== undefined) savePayload.auto_pr = config.autoPr;
   if (config.draftPr !== undefined) savePayload.draft_pr = config.draftPr;
   if (config.baseBranch !== undefined) savePayload.base_branch = config.baseBranch;
+  if (normalizedSubmodules !== undefined) {
+    savePayload.submodules = normalizedSubmodules;
+    delete savePayload.with_submodules;
+  } else {
+    delete savePayload.submodules;
+    if (config.withSubmodules !== undefined) {
+      savePayload.with_submodules = config.withSubmodules;
+    } else {
+      delete savePayload.with_submodules;
+    }
+  }
   delete savePayload.autoPr;
   delete savePayload.draftPr;
   delete savePayload.baseBranch;
+  delete savePayload.withSubmodules;
 
   const content = stringify(savePayload, { indent: 2 });
   writeFileSync(configPath, content, 'utf-8');
