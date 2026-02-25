@@ -33,6 +33,11 @@ Fields:
   task_dir   (recommended)  Path to task directory that contains `order.md`
   content    (legacy)       Inline task text (kept for compatibility)
   content_file (legacy)     Path to task text file (kept for compatibility)
+  with_submodules           Clone all submodules recursively when true
+  submodules                Initialize only listed submodule paths (`all` = all submodules, case-insensitive; wildcards unsupported)
+                            Empty list means "initialize none" (no fallback to with_submodules)
+
+`with-submodules` is also accepted as an alias for `with_submodules`.
 
 ## Command Behavior
 

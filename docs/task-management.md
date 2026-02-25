@@ -69,11 +69,18 @@ Fields:
 | `piece` | Piece name to use for execution |
 | `worktree` | `true` (auto), a path string, or omitted (run in current directory) |
 | `branch` | Branch name (auto-generated if omitted) |
+| `with_submodules` | Clone all submodules recursively when `true` |
+| `submodules` | Initialize only specified submodule paths (takes precedence over `with_submodules`; use `all` for all submodules) |
 | `auto_pr` | Whether to auto-create a PR after execution |
 | `issue` | GitHub Issue number (if applicable) |
 | `created_at` | ISO 8601 timestamp |
 | `started_at` | ISO 8601 timestamp (set when execution begins) |
 | `completed_at` | ISO 8601 timestamp (set when execution finishes) |
+
+`with-submodules` is also accepted as an alias for `with_submodules` in `tasks.yaml`.
+`submodules: all` is recommended for all submodules, and is accepted case-insensitively (`ALL`, `All`, etc.).
+Wildcard patterns in `submodules` (for example `["*"]` or `["libs/*"]`) are not supported.
+`submodules: []` means no submodules are initialized (it does not fall back to `with_submodules`).
 
 ### Task Directory Layout
 
@@ -257,6 +264,8 @@ Specifying `worktree` in task configuration executes each task in an isolated cl
 | `worktree: true` | Auto-create shared clone in adjacent directory (or location specified by `worktree_dir` config) |
 | `worktree: "/path/to/dir"` | Create clone at the specified path |
 | `branch: "feat/xxx"` | Use specified branch (auto-generated as `takt/{timestamp}-{slug}` if omitted) |
+| `with_submodules: true` | Clone all submodules recursively |
+| `submodules: ["path/a", "path/b"]` | Initialize only selected submodule paths (`submodules: all` = all submodules) |
 | *(omit `worktree`)* | Execute in current directory (default) |
 
 ### How It Works

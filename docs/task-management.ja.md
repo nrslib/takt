@@ -69,11 +69,18 @@ tasks:
 | `piece` | 実行に使用する piece 名 |
 | `worktree` | `true`（自動）、パス文字列、または省略（カレントディレクトリで実行） |
 | `branch` | ブランチ名（省略時は自動生成） |
+| `with_submodules` | `true` で submodule を再帰的にすべて取得 |
+| `submodules` | 指定した submodule パスのみ取得（`with_submodules` より優先、全件は `all`） |
 | `auto_pr` | 実行後に PR を自動作成するかどうか |
 | `issue` | GitHub Issue 番号（該当する場合） |
 | `created_at` | ISO 8601 タイムスタンプ |
 | `started_at` | ISO 8601 タイムスタンプ（実行開始時に設定） |
 | `completed_at` | ISO 8601 タイムスタンプ（実行完了時に設定） |
+
+`tasks.yaml` では `with_submodules` に加えて `with-submodules` もエイリアスとして利用できます。
+全件指定は `submodules: all` を推奨し、`ALL` や `All` など大文字小文字違いでも受理されます。
+`submodules` でのワイルドカード（例: `["*"]`, `["libs/*"]`）はサポートされません。
+`submodules: []` は submodule を取得しない指定であり、`with_submodules` にはフォールバックしません。
 
 ### タスクディレクトリのレイアウト
 
@@ -257,6 +264,8 @@ takt list --non-interactive --action try --branch takt/my-branch
 | `worktree: true` | 隣接ディレクトリ（または `worktree_dir` 設定で指定した場所）に共有クローンを自動作成 |
 | `worktree: "/path/to/dir"` | 指定パスにクローンを作成 |
 | `branch: "feat/xxx"` | 指定ブランチを使用（省略時は `takt/{timestamp}-{slug}` が自動生成） |
+| `with_submodules: true` | submodule を再帰的にすべて取得 |
+| `submodules: ["path/a", "path/b"]` | 指定した submodule パスのみ取得（`submodules: all` は全 submodule） |
 | *(worktree を省略)* | カレントディレクトリで実行（デフォルト） |
 
 ### 仕組み
