@@ -57,7 +57,7 @@ describe('OptionsBuilder.buildBaseOptions', () => {
     expect(options.permissionMode).toBe('full');
   });
 
-  it('uses default profile when provider_profiles are not provided', () => {
+  it('uses readonly when provider is not configured', () => {
     const step = createMovement();
     const builder = createBuilder(step, {
       provider: undefined,
@@ -65,7 +65,7 @@ describe('OptionsBuilder.buildBaseOptions', () => {
     });
 
     const options = builder.buildBaseOptions(step);
-    expect(options.permissionMode).toBe('edit');
+    expect(options.permissionMode).toBe('readonly');
   });
 
   it('merges provider options with precedence: global < movement < project', () => {

@@ -70,7 +70,10 @@ export async function syncBranchWithRoot(
   const prompt = loadTemplate('sync_conflict_resolver_message', lang, { originalInstruction });
 
   const config = resolveConfigValues(projectDir, ['provider', 'model']);
-  const providerType = (config.provider ?? 'claude') as ProviderType;
+  if (!config.provider) {
+    throw new Error('No provider configured. Set "provider" in ~/.takt/config.yaml');
+  }
+  const providerType = config.provider as ProviderType;
   const provider = getProvider(providerType);
   const agent = provider.setup({ name: 'conflict-resolver', systemPrompt });
 

@@ -64,7 +64,6 @@ const RESOLUTION_REGISTRY: Partial<{ [K in ConfigParameterKey]: ResolutionRule<K
   piece: { layers: ['local', 'global'], defaultValue: 'default' },
   provider: {
     layers: ['local', 'piece', 'global'],
-    defaultValue: 'claude',
     pieceValue: (pieceContext) => pieceContext?.provider,
   },
   model: {

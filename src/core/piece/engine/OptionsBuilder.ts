@@ -64,7 +64,7 @@ export class OptionsBuilder {
       model: this.engineOptions.model,
       personaProviders: this.engineOptions.personaProviders,
     });
-    const resolvedProvider = resolved.provider ?? this.engineOptions.provider ?? 'claude';
+    const resolvedProvider = resolved.provider ?? this.engineOptions.provider;
     const resolvedModel = resolved.model ?? this.engineOptions.model;
 
     return {

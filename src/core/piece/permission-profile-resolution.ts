@@ -30,12 +30,7 @@ export const DEFAULT_PROVIDER_PERMISSION_PROFILES: ProviderPermissionProfiles = 
  */
 export function resolveMovementPermissionMode(input: ResolvePermissionModeInput): PermissionMode {
   if (!input.provider) {
-    if (input.requiredPermissionMode) {
-      return input.requiredPermissionMode;
-    }
-    throw new Error(
-      `Unable to resolve permission mode for movement "${input.movementName}": provider is required when movement.required_permission_mode is omitted.`,
-    );
+    return input.requiredPermissionMode ?? 'readonly';
   }
 
   const projectProfile = input.projectProviderProfiles?.[input.provider];

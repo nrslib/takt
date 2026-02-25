@@ -340,6 +340,9 @@ export async function executePiece(
   const shouldNotifyPieceComplete = shouldNotify && notificationSoundEvents?.pieceComplete !== false;
   const shouldNotifyPieceAbort = shouldNotify && notificationSoundEvents?.pieceAbort !== false;
   const currentProvider = globalConfig.provider;
+  if (!currentProvider) {
+    throw new Error('No provider configured. Set "provider" in ~/.takt/config.yaml');
+  }
   const effectivePieceConfig: PieceConfig = {
     ...pieceConfig,
     runtime: resolveRuntimeConfig(globalConfig.runtime, pieceConfig.runtime),
@@ -555,7 +558,7 @@ export async function executePiece(
       model: options.model,
       personaProviders: options.personaProviders,
     });
-    const movementProvider = resolved.provider ?? 'claude';
+    const movementProvider = resolved.provider ?? options.provider ?? currentProvider;
     const resolvedModel = resolved.model;
     const movementModel = resolvedModel ?? '(default)';
     currentMovementProvider = movementProvider;

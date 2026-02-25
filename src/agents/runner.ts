@@ -34,9 +34,12 @@ export class AgentRunner {
       { provider: options?.stepProvider },
       { provider: config.provider },
       { provider: agentConfig?.provider },
-    ]).provider ?? 'claude';
+    ]).provider;
+    if (!resolvedProvider) {
+      throw new Error('No provider configured. Set "provider" in ~/.takt/config.yaml');
+    }
 
-    const configModel = (config.provider ?? 'claude') === resolvedProvider
+    const configModel = config.provider === resolvedProvider
       ? config.model
       : undefined;
     const resolvedModel = resolveProviderModelCandidates([
