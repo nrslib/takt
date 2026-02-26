@@ -27,6 +27,8 @@ export interface TeamLeaderConfig {
   personaPath?: string;
   /** Maximum number of parts to run in parallel */
   maxParts: number;
+  /** Trigger additional planning when queued parts drop to this threshold or below */
+  refillThreshold: number;
   /** Default timeout for parts in milliseconds */
   timeoutMs: number;
   /** Persona reference for part agents */

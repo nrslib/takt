@@ -31,6 +31,18 @@ movements:
     knowledge: research
     instruction: research-dig
     edit: true
+    team_leader:
+      max_parts: 3
+      part_persona: research-digger
+      part_edit: true
+      part_allowed_tools:
+        - Read
+        - Write
+        - Bash
+        - Glob
+        - Grep
+        - WebSearch
+        - WebFetch
     allowed_tools:
       - Read
       - Write

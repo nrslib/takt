@@ -9,6 +9,7 @@ import {
   evaluateCondition,
   judgeStatus,
   decomposeTask,
+  requestMoreParts,
 } from '../core/piece/agent-usecases.js';
 
 vi.mock('../agents/runner.js', () => ({
@@ -19,6 +20,7 @@ vi.mock('../core/piece/schema-loader.js', () => ({
   loadJudgmentSchema: vi.fn(() => ({ type: 'judgment' })),
   loadEvaluationSchema: vi.fn(() => ({ type: 'evaluation' })),
   loadDecompositionSchema: vi.fn((maxParts: number) => ({ type: 'decomposition', maxParts })),
+  loadMorePartsSchema: vi.fn((maxAdditionalParts: number) => ({ type: 'more-parts', maxAdditionalParts })),
 }));
 
 vi.mock('../core/piece/engine/task-decomposer.js', () => ({
@@ -228,5 +230,51 @@ describe('agent-usecases', () => {
 
     await expect(decomposeTask('instruction', 2, { cwd: '/repo' }))
       .rejects.toThrow('Team leader failed: bad output');
+  });
+
+  it('requestMoreParts は構造化出力をパースして返す', async () => {
+    vi.mocked(runAgent).mockResolvedValue(doneResponse('x', {
+      done: false,
+      reasoning: 'Need one more part',
+      parts: [
+        { id: 'p3', title: 'Part 3', instruction: 'Do 3', timeout_ms: null },
+      ],
+    }));
+
+    const result = await requestMoreParts(
+      'original instruction',
+      [{ id: 'p1', title: 'Part 1', status: 'done', content: 'done' }],
+      ['p1', 'p2'],
+      2,
+      { cwd: '/repo', persona: 'team-leader' },
+    );
+
+    expect(result).toEqual({
+      done: false,
+      reasoning: 'Need one more part',
+      parts: [{ id: 'p3', title: 'Part 3', instruction: 'Do 3', timeoutMs: undefined }],
+    });
+    expect(runAgent).toHaveBeenCalledWith('team-leader', expect.stringContaining('original instruction'), expect.objectContaining({
+      outputSchema: { type: 'more-parts', maxAdditionalParts: 2 },
+      permissionMode: 'readonly',
+    }));
+  });
+
+  it('requestMoreParts は done 以外をエラーにする', async () => {
+    vi.mocked(runAgent).mockResolvedValue({
+      persona: 'team-leader',
+      status: 'error',
+      content: 'feedback failed',
+      error: 'timeout',
+      timestamp: new Date('2026-02-12T00:00:00Z'),
+    });
+
+    await expect(requestMoreParts(
+      'instruction',
+      [{ id: 'p1', title: 'Part 1', status: 'done', content: 'ok' }],
+      ['p1'],
+      1,
+      { cwd: '/repo', persona: 'team-leader' },
+    )).rejects.toThrow('Team leader feedback failed: timeout');
   });
 });

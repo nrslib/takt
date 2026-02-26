@@ -261,6 +261,7 @@ function normalizeTeamLeader(
     persona: personaSpec,
     personaPath,
     maxParts: raw.max_parts,
+    refillThreshold: raw.refill_threshold,
     timeoutMs: raw.timeout_ms,
     partPersona,
     partPersonaPath,
