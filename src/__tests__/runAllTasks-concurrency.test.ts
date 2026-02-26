@@ -142,7 +142,8 @@ vi.mock('../shared/context.js', () => ({
   isQuietMode: vi.fn(() => false),
 }));
 
-vi.mock('../shared/constants.js', () => ({
+vi.mock('../shared/constants.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   DEFAULT_PIECE_NAME: 'default',
   DEFAULT_LANGUAGE: 'en',
 }));

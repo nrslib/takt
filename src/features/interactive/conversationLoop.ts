@@ -19,6 +19,8 @@ import { info, error, blankLine } from '../../shared/ui/index.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
 import { readMultilineInput } from './lineEditor.js';
 import { selectRecentSession } from './sessionSelector.js';
+import { matchSlashCommand } from './commandMatcher.js';
+import { SlashCommand } from '../../shared/constants.js';
 import {
   type PieceContext,
   type InteractiveModeResult,
@@ -157,104 +159,111 @@ export async function runConversationLoop(
       continue;
     }
 
-    if (trimmed.startsWith('/play')) {
-      const task = trimmed.slice(5).trim();
-      if (!task) {
-        info(ui.playNoTask);
-        continue;
-      }
-      log.info('Play command', { task });
-      return { action: 'execute', task };
-    }
+    const match = matchSlashCommand(trimmed);
 
-    if (trimmed === '/retry') {
-      if (!strategy.enableRetryCommand) {
-        info(ui.retryUnavailable);
-        continue;
-      }
-      if (!strategy.previousOrderContent) {
-        info(ui.retryNoOrder);
-        continue;
-      }
-      log.info('Retry command — resubmitting previous order.md');
-      return { action: 'execute', task: strategy.previousOrderContent };
-    }
+    // No slash command detected, treat as regular message
+    if (!match) {
+      history.push({ role: 'user', content: trimmed });
+      log.debug('Sending to AI', { messageCount: history.length, sessionId });
+      process.stdin.pause();
 
-    if (trimmed.startsWith('/go')) {
-      const userNote = trimmed.slice(3).trim();
-      let summaryPrompt = buildSummaryPrompt(
-        history, !!sessionId, ctx.lang, noTranscript, conversationLabel, pieceContext,
-      );
-      if (!summaryPrompt) {
-        info(ui.noConversation);
-        continue;
-      }
-      if (userNote) {
-        summaryPrompt = `${summaryPrompt}\n\nUser Note:\n${userNote}`;
-      }
-      const summaryResult = await doCallAI(summaryPrompt, summaryPrompt, strategy.allowedTools);
-      if (!summaryResult) {
-        info(ui.summarizeFailed);
-        continue;
-      }
-      if (!summaryResult.success) {
-        error(summaryResult.content);
+      const promptWithTransform = strategy.transformPrompt(trimmed);
+      const result = await doCallAI(promptWithTransform, strategy.systemPrompt, strategy.allowedTools);
+      if (result) {
+        if (!result.success) {
+          error(result.content);
+          blankLine();
+          history.pop();
+          return { action: 'cancel', task: '' };
+        }
+        history.push({ role: 'assistant', content: result.content });
         blankLine();
-        return { action: 'cancel', task: '' };
-      }
-      const task = summaryResult.content.trim();
-      const selectedAction = strategy.selectAction
-        ? await strategy.selectAction(task, ctx.lang)
-        : await selectPostSummaryAction(task, ui.proposed, ui);
-      if (selectedAction === 'continue' || selectedAction === null) {
-        info(ui.continuePrompt);
-        continue;
-      }
-      log.info('Conversation action selected', { action: selectedAction, messageCount: history.length });
-      return { action: selectedAction, task };
-    }
-
-    if (trimmed === '/replay') {
-      if (!strategy.previousOrderContent) {
-        const replayNoOrder = getLabel('instruct.ui.replayNoOrder', ctx.lang);
-        info(replayNoOrder);
-        continue;
-      }
-      log.info('Replay command');
-      return { action: 'execute', task: strategy.previousOrderContent };
-    }
-
-    if (trimmed === '/cancel') {
-      info(ui.cancelled);
-      return { action: 'cancel', task: '' };
-    }
-
-    if (trimmed === '/resume') {
-      const selectedId = await selectRecentSession(cwd, ctx.lang);
-      if (selectedId) {
-        sessionId = selectedId;
-        info(getLabel('interactive.resumeSessionLoaded', ctx.lang));
+      } else {
+        history.pop();
       }
       continue;
     }
 
-    history.push({ role: 'user', content: trimmed });
-    log.debug('Sending to AI', { messageCount: history.length, sessionId });
-    process.stdin.pause();
+    switch (match.command) {
+      case SlashCommand.Play: {
+        if (!match.text) {
+          info(ui.playNoTask);
+          continue;
+        }
+        log.info('Play command', { task: match.text });
+        return { action: 'execute', task: match.text };
+      }
 
-    const promptWithTransform = strategy.transformPrompt(trimmed);
-    const result = await doCallAI(promptWithTransform, strategy.systemPrompt, strategy.allowedTools);
-    if (result) {
-      if (!result.success) {
-        error(result.content);
-        blankLine();
-        history.pop();
+      case SlashCommand.Retry: {
+        if (!strategy.enableRetryCommand) {
+          info(ui.retryUnavailable);
+          continue;
+        }
+        if (!strategy.previousOrderContent) {
+          info(ui.retryNoOrder);
+          continue;
+        }
+        log.info('Retry command — resubmitting previous order.md');
+        return { action: 'execute', task: strategy.previousOrderContent };
+      }
+
+      case SlashCommand.Go: {
+        const userNote = match.text;
+        let summaryPrompt = buildSummaryPrompt(
+          history, !!sessionId, ctx.lang, noTranscript, conversationLabel, pieceContext,
+        );
+        if (!summaryPrompt) {
+          info(ui.noConversation);
+          continue;
+        }
+        if (userNote) {
+          summaryPrompt = `${summaryPrompt}\n\nUser Note:\n${userNote}`;
+        }
+        const summaryResult = await doCallAI(summaryPrompt, summaryPrompt, strategy.allowedTools);
+        if (!summaryResult) {
+          info(ui.summarizeFailed);
+          continue;
+        }
+        if (!summaryResult.success) {
+          error(summaryResult.content);
+          blankLine();
+          return { action: 'cancel', task: '' };
+        }
+        const task = summaryResult.content.trim();
+        const selectedAction = strategy.selectAction
+          ? await strategy.selectAction(task, ctx.lang)
+          : await selectPostSummaryAction(task, ui.proposed, ui);
+        if (selectedAction === 'continue' || selectedAction === null) {
+          info(ui.continuePrompt);
+          continue;
+        }
+        log.info('Conversation action selected', { action: selectedAction, messageCount: history.length });
+        return { action: selectedAction, task };
+      }
+
+      case SlashCommand.Replay: {
+        if (!strategy.previousOrderContent) {
+          const replayNoOrder = getLabel('instruct.ui.replayNoOrder', ctx.lang);
+          info(replayNoOrder);
+          continue;
+        }
+        log.info('Replay command');
+        return { action: 'execute', task: strategy.previousOrderContent };
+      }
+
+      case SlashCommand.Cancel: {
+        info(ui.cancelled);
         return { action: 'cancel', task: '' };
       }
-      history.push({ role: 'assistant', content: result.content });
-      blankLine();
-    } else {
-      history.pop();
+
+      case SlashCommand.Resume: {
+        const selectedId = await selectRecentSession(cwd, ctx.lang);
+        if (selectedId) {
+          sessionId = selectedId;
+          info(getLabel('interactive.resumeSessionLoaded', ctx.lang));
+        }
+        continue;
+      }
     }
   }
 }
