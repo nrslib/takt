@@ -164,7 +164,7 @@ takt watch
 
 ### takt list
 
-List task branches and perform actions (merge, delete, sync with root, etc.).
+List task branches and perform actions (merge, delete, merge from root, etc.).
 
 ```bash
 # List task branches (merge/delete)
@@ -177,7 +177,7 @@ takt list --non-interactive --action delete --branch takt/my-branch --yes
 takt list --non-interactive --format json
 ```
 
-In interactive mode, **Sync with root** merges the root repository HEAD into the worktree branch with AI-assisted conflict resolution.
+In interactive mode, **Merge from root** merges the root repository HEAD into the worktree branch with AI-assisted conflict resolution.
 
 ### Task Directory Workflow (Create / Run / Verify)
 
