@@ -122,8 +122,19 @@ export class CloneManager {
   }
 
   private static branchExists(projectDir: string, branch: string): boolean {
+    // Local branch
     try {
       execFileSync('git', ['rev-parse', '--verify', branch], {
+        cwd: projectDir,
+        stdio: 'pipe',
+      });
+      return true;
+    } catch {
+      // not found locally — fall through to remote check
+    }
+    // Remote tracking branch
+    try {
+      execFileSync('git', ['rev-parse', '--verify', `origin/${branch}`], {
         cwd: projectDir,
         stdio: 'pipe',
       });
