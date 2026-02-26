@@ -79,7 +79,7 @@ export const MovementProviderOptionsSchema = z.object({
 }).optional();
 
 /** Provider key schema for profile maps */
-export const ProviderProfileNameSchema = z.enum(['claude', 'codex', 'opencode', 'mock']);
+export const ProviderProfileNameSchema = z.enum(['claude', 'codex', 'opencode', 'cursor', 'mock']);
 
 /** Provider permission profile schema */
 export const ProviderPermissionProfileSchema = z.object({
@@ -92,6 +92,7 @@ export const ProviderPermissionProfilesSchema = z.object({
   claude: ProviderPermissionProfileSchema.optional(),
   codex: ProviderPermissionProfileSchema.optional(),
   opencode: ProviderPermissionProfileSchema.optional(),
+  cursor: ProviderPermissionProfileSchema.optional(),
   mock: ProviderPermissionProfileSchema.optional(),
 }).optional();
 
@@ -238,7 +239,7 @@ export const ParallelSubMovementRawSchema = z.object({
   knowledge: z.union([z.string(), z.array(z.string())]).optional(),
   allowed_tools: z.array(z.string()).optional(),
   mcp_servers: McpServersSchema,
-  provider: z.enum(['claude', 'codex', 'opencode', 'mock']).optional(),
+  provider: z.enum(['claude', 'codex', 'opencode', 'cursor', 'mock']).optional(),
   model: z.string().optional(),
   /** Removed legacy field (no backward compatibility) */
   permission_mode: z.never().optional(),
@@ -271,7 +272,7 @@ export const PieceMovementRawSchema = z.object({
   knowledge: z.union([z.string(), z.array(z.string())]).optional(),
   allowed_tools: z.array(z.string()).optional(),
   mcp_servers: McpServersSchema,
-  provider: z.enum(['claude', 'codex', 'opencode', 'mock']).optional(),
+  provider: z.enum(['claude', 'codex', 'opencode', 'cursor', 'mock']).optional(),
   model: z.string().optional(),
   /** Removed legacy field (no backward compatibility) */
   permission_mode: z.never().optional(),
@@ -360,7 +361,7 @@ export const PieceConfigRawSchema = z.object({
 });
 
 export const PersonaProviderEntrySchema = z.object({
-  provider: z.enum(['claude', 'codex', 'opencode', 'mock']).optional(),
+  provider: z.enum(['claude', 'codex', 'opencode', 'cursor', 'mock']).optional(),
   model: z.string().optional(),
 });
 
@@ -372,7 +373,7 @@ export const CustomAgentConfigSchema = z.object({
   allowed_tools: z.array(z.string()).optional(),
   claude_agent: z.string().optional(),
   claude_skill: z.string().optional(),
-  provider: z.enum(['claude', 'codex', 'opencode', 'mock']).optional(),
+  provider: z.enum(['claude', 'codex', 'opencode', 'cursor', 'mock']).optional(),
   model: z.string().optional(),
 }).refine(
   (data) => data.prompt_file || data.prompt || data.claude_agent || data.claude_skill,
@@ -418,7 +419,7 @@ export const PieceCategoryConfigSchema = z.record(z.string(), PieceCategoryConfi
 export const GlobalConfigSchema = z.object({
   language: LanguageSchema.optional().default(DEFAULT_LANGUAGE),
   log_level: z.enum(['debug', 'info', 'warn', 'error']).optional().default('info'),
-  provider: z.enum(['claude', 'codex', 'opencode', 'mock']).optional().default('claude'),
+  provider: z.enum(['claude', 'codex', 'opencode', 'cursor', 'mock']).optional().default('claude'),
   model: z.string().optional(),
   observability: ObservabilityConfigSchema.optional(),
   analytics: AnalyticsConfigSchema.optional(),
@@ -440,6 +441,8 @@ export const GlobalConfigSchema = z.object({
   codex_cli_path: z.string().optional(),
   /** OpenCode API key for OpenCode SDK (overridden by TAKT_OPENCODE_API_KEY env var) */
   opencode_api_key: z.string().optional(),
+  /** Cursor API key for Cursor Agent CLI/API (overridden by TAKT_CURSOR_API_KEY env var) */
+  cursor_api_key: z.string().optional(),
   /** Pipeline execution settings */
   pipeline: PipelineConfigSchema.optional(),
   /** Minimal output mode for CI - suppress AI output to prevent sensitive information leaks */
@@ -450,7 +453,7 @@ export const GlobalConfigSchema = z.object({
   piece_categories_file: z.string().optional(),
   /** Per-persona provider and model overrides. */
   persona_providers: z.record(z.string(), z.union([
-    z.enum(['claude', 'codex', 'opencode', 'mock']),
+    z.enum(['claude', 'codex', 'opencode', 'cursor', 'mock']),
     PersonaProviderEntrySchema,
   ])).optional(),
   /** Global provider-specific options (lowest priority) */
@@ -490,7 +493,7 @@ export const GlobalConfigSchema = z.object({
 /** Project config schema */
 export const ProjectConfigSchema = z.object({
   piece: z.string().optional(),
-  provider: z.enum(['claude', 'codex', 'opencode', 'mock']).optional(),
+  provider: z.enum(['claude', 'codex', 'opencode', 'cursor', 'mock']).optional(),
   model: z.string().optional(),
   provider_options: MovementProviderOptionsSchema,
   provider_profiles: ProviderPermissionProfilesSchema,

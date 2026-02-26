@@ -78,7 +78,7 @@ agents:
       - Read
       - Glob
       - Grep
-    provider: claude             # Optional: claude, codex, or opencode
+    provider: claude             # Optional: claude, codex, opencode, or cursor
     model: opus                  # Optional: model alias or full name
 ```
 
@@ -90,7 +90,7 @@ agents:
 | `prompt_file` | Path to Markdown prompt file |
 | `prompt` | Inline prompt text (alternative to `prompt_file`) |
 | `allowed_tools` | List of tools the agent can use |
-| `provider` | Provider override: `claude`, `codex`, or `opencode` |
+| `provider` | Provider override: `claude`, `codex`, `opencode`, or `cursor` |
 | `model` | Model override (alias or full name) |
 
 ### Available Tools

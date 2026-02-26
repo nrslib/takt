@@ -27,7 +27,7 @@ export interface DecomposeTaskOptions {
   persona?: string;
   language?: Language;
   model?: string;
-  provider?: 'claude' | 'codex' | 'opencode' | 'mock';
+  provider?: 'claude' | 'codex' | 'opencode' | 'cursor' | 'mock';
 }
 
 function toPartDefinitions(raw: unknown, maxParts: number): PartDefinition[] {

@@ -11,7 +11,7 @@ import type { PersonaProviderEntry } from '../models/persisted-global-config.js'
 import type { ProviderPermissionProfiles } from '../models/provider-profiles.js';
 import type { MovementProviderOptions } from '../models/piece-types.js';
 
-export type ProviderType = 'claude' | 'codex' | 'opencode' | 'mock';
+export type ProviderType = 'claude' | 'codex' | 'opencode' | 'cursor' | 'mock';
 export type ProviderOptionsSource = 'env' | 'project' | 'global' | 'default';
 
 export interface StreamInitEventData {

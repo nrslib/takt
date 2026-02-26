@@ -19,7 +19,7 @@ This document provides a complete reference for all TAKT CLI commands and option
 | `--repo <owner/repo>` | Specify repository (for PR creation) |
 | `--create-worktree <yes\|no>` | Skip worktree confirmation prompt |
 | `-q, --quiet` | Minimal output mode: suppress AI output (for CI) |
-| `--provider <name>` | Override agent provider (claude\|codex\|opencode\|mock) |
+| `--provider <name>` | Override agent provider (claude\|codex\|opencode\|cursor\|mock) |
 | `--model <name>` | Override agent model |
 | `--config <path>` | Path to global config file (default: `~/.takt/config.yaml`) |
 
