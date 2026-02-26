@@ -231,9 +231,8 @@ The path must be an absolute path to an executable file. `TAKT_CODEX_CLI_PATH` t
 The model used for each movement is resolved with the following priority order (highest first):
 
 1. **Piece movement `model`** - Specified in the movement definition in piece YAML
-2. **Custom agent `model`** - Agent-level model in `.takt/agents.yaml`
-3. **Global config `model`** - Default model in `~/.takt/config.yaml`
-4. **Provider default** - Falls back to the provider's built-in default (Claude: `sonnet`, Codex: `codex`, OpenCode: provider default, Cursor: CLI default)
+2. **Global config `model`** - Default model in `~/.takt/config.yaml`
+3. **Provider default** - Falls back to the provider's built-in default (Claude: `sonnet`, Codex: `codex`, OpenCode: provider default, Cursor: CLI default)
 
 ### Provider-specific Model Notes
 

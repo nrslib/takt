@@ -6,6 +6,36 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.25.0] - 2026-02-26
+
+### Added
+
+- Terraform/AWS ピース: IaC 開発用の完全なピースとファセット一式を追加。plan → implement → 並列3レビュー（architect/QA/security）→ supervise → complete の15ムーブメント構成（EN/JA）
+- GitProvider 抽象化: Git/GitHub 操作を `GitProvider` インターフェースに統一し、将来の複数 Git プロバイダー対応の基盤を構築 (#375)
+- プロジェクト設定で submodule の自動取得をサポート: `submodules: all` または `submodules: [path1, path2]` で指定可能に (#387)
+- `takt add` で GitHub Issue 作成時にラベルをインタラクティブに選択可能に (#377, #111)
+- deep-research ピースにデータ保存・レポート出力機能を追加（dig/analyze ムーブメントに Write・Bash ツール許可、supervise に research-report 出力契約）
+- GitHub Discussions・Discord・X への一斉アナウンス GitHub Actions ワークフローを追加
+
+### Changed
+
+- default ピースをテスト先行開発構成に変更: plan の後に `write_tests` ムーブメントを追加し、テストを先に書いてから実装する流れに。並列レビューに testing-review を追加（3→4 レビュアー）。レポートファイル名をセマンティック命名に統一（`00-plan.md` → `plan.md` 等）
+- sync with root をピースエンジン経由からプロバイダー抽象化を利用した単発エージェント呼び出しに簡素化。コンフリクト解決プロンプトをテンプレートファイル化（EN/JA 分離）
+
+### Fixed
+
+- lineEditor でサロゲートペア（絵文字等）のカーソル位置がずれる問題を修正。Ctrl+J による改行挿入を追加
+- `--task` オプションでの直接実行時に tasks.yaml へ不要な記録がされる問題を修正
+- `--task` でワークツリー作成時は tasks.yaml に記録するよう修正（`takt list` でのブランチ管理に必要）
+- Provider resolution: removed implicit fallback to `claude` and switched to fail-fast when provider cannot be resolved (#386)
+- Provider resolution: unified display and execution provider/model resolution via `movement:start` event providerInfo, ensuring displayed provider always matches execution provider (#390)
+- E2E テスト config-priority の不安定性を修正 (#388)
+
+### Internal
+
+- GitProvider 抽象化に伴うテスト追加（github-provider, taskGit）と既存テストのインポート更新
+- CLAUDE.md 更新
+
 ## [0.24.0] - 2026-02-24
 
 ### Added

@@ -177,7 +177,7 @@ takt list --non-interactive --action delete --branch takt/my-branch --yes
 takt list --non-interactive --format json
 ```
 
-インタラクティブモードでは **Sync with root** を選択でき、ルートリポジトリの HEAD をワークツリーブランチにマージします。コンフリクト発生時は AI が自動解決を試みます。
+インタラクティブモードでは **Merge from root** を選択でき、ルートリポジトリの HEAD をワークツリーブランチにマージします。コンフリクト発生時は AI が自動解決を試みます。
 
 ### タスクディレクトリワークフロー（作成 / 実行 / 確認）
 

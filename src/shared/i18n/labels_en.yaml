@@ -59,6 +59,9 @@ interactive:
 
 # ===== Piece Execution UI =====
 piece:
+  teamLeader:
+    decomposeWait: "Team leader is decomposing tasks. This may take some time..."
+    feedbackWait: "Team leader is reviewing results and planning next tasks..."
   iterationLimit:
     maxReached: "Reached max iterations ({currentIteration}/{maxMovements})"
     currentMovement: "Current movement: {currentMovement}"

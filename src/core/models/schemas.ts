@@ -214,6 +214,8 @@ export const TeamLeaderConfigRawSchema = z.object({
   persona: z.string().optional(),
   /** Maximum number of parts (must be <= 3) */
   max_parts: z.number().int().positive().max(3).optional().default(3),
+  /** Trigger additional planning when queue size is this value or below */
+  refill_threshold: z.number().int().min(0).optional().default(0),
   /** Default timeout per part in milliseconds */
   timeout_ms: z.number().int().positive().optional().default(600000),
   /** Persona reference for part agents */
@@ -224,7 +226,13 @@ export const TeamLeaderConfigRawSchema = z.object({
   part_edit: z.boolean().optional(),
   /** Permission mode for part agents */
   part_permission_mode: PermissionModeSchema.optional(),
-});
+}).refine(
+  (data) => data.refill_threshold <= data.max_parts,
+  {
+    message: "'refill_threshold' must be less than or equal to 'max_parts'",
+    path: ['refill_threshold'],
+  },
+);
 
 /** Sub-movement schema for parallel execution */
 export const ParallelSubMovementRawSchema = z.object({
@@ -373,8 +381,6 @@ export const CustomAgentConfigSchema = z.object({
   allowed_tools: z.array(z.string()).optional(),
   claude_agent: z.string().optional(),
   claude_skill: z.string().optional(),
-  provider: z.enum(['claude', 'codex', 'opencode', 'cursor', 'mock']).optional(),
-  model: z.string().optional(),
 }).refine(
   (data) => data.prompt_file || data.prompt || data.claude_agent || data.claude_skill,
   { message: 'Agent must have prompt_file, prompt, claude_agent, or claude_skill' }

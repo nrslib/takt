@@ -231,9 +231,8 @@ codex_cli_path: /usr/local/bin/codex
 各 movement で使用されるモデルは、次の優先順位（高い順）で解決されます。
 
 1. **Piece movement の `model`** - piece YAML の movement 定義で指定
-2. **カスタムエージェントの `model`** - `.takt/agents.yaml` のエージェントレベルのモデル
-3. **グローバル設定の `model`** - `~/.takt/config.yaml` のデフォルトモデル
-4. **Provider デフォルト** - provider のビルトインデフォルトにフォールバック（Claude: `sonnet`、Codex: `codex`、OpenCode: provider デフォルト、Cursor: CLI デフォルト）
+2. **グローバル設定の `model`** - `~/.takt/config.yaml` のデフォルトモデル
+3. **Provider デフォルト** - provider のビルトインデフォルトにフォールバック（Claude: `sonnet`、Codex: `codex`、OpenCode: provider デフォルト、Cursor: CLI デフォルト）
 
 ### Provider 固有のモデルに関する注意
 

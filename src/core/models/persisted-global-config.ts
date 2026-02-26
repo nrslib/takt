@@ -18,8 +18,6 @@ export interface CustomAgentConfig {
   allowedTools?: string[];
   claudeAgent?: string;
   claudeSkill?: string;
-  provider?: 'claude' | 'codex' | 'opencode' | 'cursor' | 'mock';
-  model?: string;
 }
 
 /** Observability configuration for runtime event logs */

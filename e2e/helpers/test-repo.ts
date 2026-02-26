@@ -43,6 +43,7 @@ export interface CreateTestRepoOptions {
 function getGitHubUser(): string {
   const user = execFileSync('gh', ['api', 'user', '--jq', '.login'], {
     encoding: 'utf-8',
+    stdio: 'pipe',
   }).trim();
 
   if (!user) {

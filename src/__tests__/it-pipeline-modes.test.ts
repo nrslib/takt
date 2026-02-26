@@ -115,6 +115,7 @@ vi.mock('../infra/config/global/globalConfig.js', async (importOriginal) => {
     ...original,
     loadGlobalConfig: vi.fn().mockReturnValue({
       language: 'en',
+      provider: 'mock',
       enableBuiltinPieces: true,
       disabledBuiltins: [],
     }),

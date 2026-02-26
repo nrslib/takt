@@ -1,13 +1,25 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { parse as parseYaml } from 'yaml';
 import { createIsolatedEnv, updateIsolatedConfig, type IsolatedEnv } from '../helpers/isolated-env';
 import { createTestRepo, type TestRepo } from '../helpers/test-repo';
 import { runTakt } from '../helpers/takt-runner';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+function readFirstTask(repoPath: string): Record<string, unknown> {
+  const tasksPath = join(repoPath, '.takt', 'tasks.yaml');
+  const raw = readFileSync(tasksPath, 'utf-8');
+  const parsed = parseYaml(raw) as { tasks?: Array<Record<string, unknown>> } | null;
+  const first = parsed?.tasks?.[0];
+  if (!first) {
+    throw new Error(`No task record found in ${tasksPath}`);
+  }
+  return first;
+}
 
 // E2E更新時は docs/testing/e2e.md も更新すること
 describe('E2E: Config priority (piece / autoPr)', () => {
@@ -67,7 +79,7 @@ describe('E2E: Config priority (piece / autoPr)', () => {
     const piecePath = resolve(__dirname, '../fixtures/pieces/mock-single-step.yaml');
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/execute-done.json');
 
-    const result = runTakt({
+    runTakt({
       args: [
         '--task', 'Auto PR default behavior',
         '--piece', piecePath,
@@ -82,10 +94,8 @@ describe('E2E: Config priority (piece / autoPr)', () => {
       timeout: 240_000,
     });
 
-    // auto_pr=true の場合は PR 作成フローに入り、テスト環境では gh 未認証のため失敗する
-    const output = result.stdout + result.stderr;
-    expect(result.exitCode).toBe(1);
-    expect(output).toContain('PR creation failed:');
+    const task = readFirstTask(testRepo.path);
+    expect(task['auto_pr']).toBe(true);
   }, 240_000);
 
   it('should use auto_pr from config when set', () => {
@@ -108,9 +118,9 @@ describe('E2E: Config priority (piece / autoPr)', () => {
       timeout: 240_000,
     });
 
-    const output = result.stdout + result.stderr;
     expect(result.exitCode).toBe(0);
-    expect(output).not.toContain('PR creation failed:');
+    const task = readFirstTask(testRepo.path);
+    expect(task['auto_pr']).toBe(false);
   }, 240_000);
 
   it('should prioritize env auto_pr over config', () => {
@@ -118,7 +128,7 @@ describe('E2E: Config priority (piece / autoPr)', () => {
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/execute-done.json');
     updateIsolatedConfig(isolatedEnv.taktDir, { auto_pr: false });
 
-    const result = runTakt({
+    runTakt({
       args: [
         '--task', 'Auto PR from env override',
         '--piece', piecePath,
@@ -134,9 +144,7 @@ describe('E2E: Config priority (piece / autoPr)', () => {
       timeout: 240_000,
     });
 
-    // env override により auto_pr=true が優先され、PR 作成フローに入る
-    const output = result.stdout + result.stderr;
-    expect(result.exitCode).toBe(1);
-    expect(output).toContain('PR creation failed:');
+    const task = readFirstTask(testRepo.path);
+    expect(task['auto_pr']).toBe(true);
   }, 240_000);
 });
