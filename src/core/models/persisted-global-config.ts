@@ -6,7 +6,7 @@ import type { MovementProviderOptions, PieceRuntimeConfig } from './piece-types.
 import type { ProviderPermissionProfiles } from './provider-profiles.js';
 
 export interface PersonaProviderEntry {
-  provider?: 'claude' | 'codex' | 'opencode' | 'mock';
+  provider?: 'claude' | 'codex' | 'opencode' | 'cursor' | 'mock';
   model?: string;
 }
 
@@ -70,7 +70,7 @@ export interface NotificationSoundEventsConfig {
 export interface PersistedGlobalConfig {
   language: Language;
   logLevel: 'debug' | 'info' | 'warn' | 'error';
-  provider?: 'claude' | 'codex' | 'opencode' | 'mock';
+  provider?: 'claude' | 'codex' | 'opencode' | 'cursor' | 'mock';
   model?: string;
   observability?: ObservabilityConfig;
   analytics?: AnalyticsConfig;
@@ -92,6 +92,8 @@ export interface PersistedGlobalConfig {
   codexCliPath?: string;
   /** OpenCode API key for OpenCode SDK (overridden by TAKT_OPENCODE_API_KEY env var) */
   opencodeApiKey?: string;
+  /** Cursor API key for Cursor Agent CLI/API (overridden by TAKT_CURSOR_API_KEY env var) */
+  cursorApiKey?: string;
   /** Pipeline execution settings */
   pipeline?: PipelineConfig;
   /** Minimal output mode for CI - suppress AI output to prevent sensitive information leaks */
@@ -133,7 +135,7 @@ export interface PersistedGlobalConfig {
 /** Project-level configuration */
 export interface ProjectConfig {
   piece?: string;
-  provider?: 'claude' | 'codex' | 'opencode' | 'mock';
+  provider?: 'claude' | 'codex' | 'opencode' | 'cursor' | 'mock';
   model?: string;
   providerOptions?: MovementProviderOptions;
   /** Provider-specific permission profiles */

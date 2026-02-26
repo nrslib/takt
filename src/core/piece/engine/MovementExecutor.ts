@@ -186,6 +186,11 @@ export class MovementExecutor {
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
   ): Promise<AgentResponse> {
     let nextResponse = response;
+
+    if (nextResponse.status === 'error' || nextResponse.status === 'blocked') {
+      return nextResponse;
+    }
+
     const phaseCtx = this.deps.optionsBuilder.buildPhaseRunnerContext(
       state,
       nextResponse.content,
@@ -195,7 +200,8 @@ export class MovementExecutor {
     );
 
     // Phase 2: report output (resume same session, Write only)
-    if (step.outputContracts && step.outputContracts.length > 0) {
+    // Report generation is only valid after a completed Phase 1 response.
+    if (nextResponse.status === 'done' && step.outputContracts && step.outputContracts.length > 0) {
       const reportResult = await runReportPhase(step, movementIteration, phaseCtx);
       if (reportResult?.blocked) {
         nextResponse = { ...nextResponse, status: 'blocked', content: reportResult.response.content };
@@ -275,6 +281,23 @@ export class MovementExecutor {
     let response = await executeAgent(step.persona, instruction, agentOptions);
     updatePersonaSession(sessionKey, response.sessionId);
     this.deps.onPhaseComplete?.(step, 1, 'execute', response.content, response.status, response.error);
+
+    // Provider failures should abort immediately.
+    if (response.status === 'error') {
+      state.movementOutputs.set(step.name, response);
+      state.lastOutput = response;
+      return { response, instruction };
+    }
+
+    // Blocked responses should be handled by PieceEngine's blocked flow.
+    // Persist snapshot so re-execution receives the latest blocked context.
+    if (response.status === 'blocked') {
+      state.movementOutputs.set(step.name, response);
+      state.lastOutput = response;
+      this.persistPreviousResponseSnapshot(state, step.name, movementIteration, response.content);
+      return { response, instruction };
+    }
+
     response = await this.applyPostExecutionPhases(
       step,
       state,

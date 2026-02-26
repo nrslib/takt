@@ -13,6 +13,7 @@ export const DEFAULT_PROVIDER_PERMISSION_PROFILES: ProviderPermissionProfiles = 
   claude: { defaultPermissionMode: 'edit' },
   codex: { defaultPermissionMode: 'edit' },
   opencode: { defaultPermissionMode: 'edit' },
+  cursor: { defaultPermissionMode: 'edit' },
   mock: { defaultPermissionMode: 'edit' },
 };
 

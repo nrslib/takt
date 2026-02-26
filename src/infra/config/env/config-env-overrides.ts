@@ -95,6 +95,7 @@ const GLOBAL_ENV_SPECS: readonly EnvSpec[] = [
   { path: 'openai_api_key', type: 'string' },
   { path: 'codex_cli_path', type: 'string' },
   { path: 'opencode_api_key', type: 'string' },
+  { path: 'cursor_api_key', type: 'string' },
   { path: 'pipeline', type: 'json' },
   { path: 'pipeline.default_branch_prefix', type: 'string' },
   { path: 'pipeline.commit_message_template', type: 'string' },

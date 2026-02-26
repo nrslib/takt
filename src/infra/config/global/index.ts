@@ -16,6 +16,7 @@ export {
   resolveOpenaiApiKey,
   resolveCodexCliPath,
   resolveOpencodeApiKey,
+  resolveCursorApiKey,
 } from './globalConfig.js';
 
 export {

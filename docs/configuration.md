@@ -13,7 +13,7 @@ Configure TAKT defaults in `~/.takt/config.yaml`. This file is created automatic
 language: en                  # UI language: 'en' or 'ja'
 default_piece: default        # Default piece for new projects
 log_level: info               # Log level: debug, info, warn, error
-provider: claude              # Default provider: claude, codex, or opencode
+provider: claude              # Default provider: claude, codex, opencode, or cursor
 model: sonnet                 # Default model (optional, passed to provider as-is)
 branch_name_strategy: romaji  # Branch name generation: 'romaji' (fast) or 'ai' (slow)
 prevent_sleep: false          # Prevent macOS idle sleep during execution (caffeinate)
@@ -56,10 +56,11 @@ interactive_preview_movements: 3  # Movement previews in interactive mode (0-10,
 #     default_permission_mode: edit
 
 # API Key configuration (optional)
-# Can be overridden by environment variables TAKT_ANTHROPIC_API_KEY / TAKT_OPENAI_API_KEY / TAKT_OPENCODE_API_KEY
+# Can be overridden by environment variables TAKT_ANTHROPIC_API_KEY / TAKT_OPENAI_API_KEY / TAKT_OPENCODE_API_KEY / TAKT_CURSOR_API_KEY
 # anthropic_api_key: sk-ant-...  # For Claude (Anthropic)
 # openai_api_key: sk-...         # For Codex (OpenAI)
 # opencode_api_key: ...          # For OpenCode
+# cursor_api_key: ...            # For Cursor Agent (optional; login session fallback is also supported)
 
 # Codex CLI path override (optional)
 # Override the Codex CLI binary used by the Codex SDK (must be an absolute path to an executable file)
@@ -88,7 +89,7 @@ interactive_preview_movements: 3  # Movement previews in interactive mode (0-10,
 | `language` | `"en"` \| `"ja"` | `"en"` | UI language |
 | `default_piece` | string | `"default"` | Default piece for new projects |
 | `log_level` | `"debug"` \| `"info"` \| `"warn"` \| `"error"` | `"info"` | Log level |
-| `provider` | `"claude"` \| `"codex"` \| `"opencode"` | `"claude"` | Default AI provider |
+| `provider` | `"claude"` \| `"codex"` \| `"opencode"` \| `"cursor"` | `"claude"` | Default AI provider |
 | `model` | string | - | Default model name (passed to provider as-is) |
 | `branch_name_strategy` | `"romaji"` \| `"ai"` | `"romaji"` | Branch name generation strategy |
 | `prevent_sleep` | boolean | `false` | Prevent macOS idle sleep (caffeinate) |
@@ -108,6 +109,7 @@ interactive_preview_movements: 3  # Movement previews in interactive mode (0-10,
 | `anthropic_api_key` | string | - | Anthropic API key for Claude |
 | `openai_api_key` | string | - | OpenAI API key for Codex |
 | `opencode_api_key` | string | - | OpenCode API key |
+| `cursor_api_key` | string | - | Cursor API key (optional; login session fallback supported) |
 | `codex_cli_path` | string | - | Codex CLI binary path override (absolute) |
 | `enable_builtin_pieces` | boolean | `true` | Enable builtin pieces |
 | `disabled_builtins` | string[] | `[]` | Specific builtin pieces to disable |
@@ -149,7 +151,7 @@ concurrency: 2                # Parallel task count for takt run in this project
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `piece` | string | `"default"` | Current piece name for this project |
-| `provider` | `"claude"` \| `"codex"` \| `"opencode"` \| `"mock"` | - | Override provider |
+| `provider` | `"claude"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"mock"` | - | Override provider |
 | `model` | string | - | Override model name (passed to provider as-is) |
 | `auto_pr` | boolean | - | Auto-create PR after worktree execution |
 | `verbose` | boolean | - | Verbose output mode |
@@ -162,7 +164,7 @@ Project config values override global config when both are set.
 
 ## API Key Configuration
 
-TAKT supports three providers, each with its own API key. API keys can be configured via environment variables or `~/.takt/config.yaml`.
+TAKT supports four providers. Claude/Codex/OpenCode use API keys, and Cursor can use either API key or existing `cursor-agent login` session.
 
 ### Environment Variables (Recommended)
 
@@ -175,6 +177,9 @@ export TAKT_OPENAI_API_KEY=sk-...
 
 # For OpenCode
 export TAKT_OPENCODE_API_KEY=...
+
+# For Cursor Agent (optional if cursor-agent login session exists)
+export TAKT_CURSOR_API_KEY=...
 ```
 
 ### Config File
@@ -184,6 +189,7 @@ export TAKT_OPENCODE_API_KEY=...
 anthropic_api_key: sk-ant-...  # For Claude
 openai_api_key: sk-...         # For Codex
 opencode_api_key: ...          # For OpenCode
+cursor_api_key: ...            # For Cursor Agent (optional)
 ```
 
 ### Priority
@@ -195,12 +201,14 @@ Environment variables take precedence over `config.yaml` settings.
 | Claude (Anthropic) | `TAKT_ANTHROPIC_API_KEY` | `anthropic_api_key` |
 | Codex (OpenAI) | `TAKT_OPENAI_API_KEY` | `openai_api_key` |
 | OpenCode | `TAKT_OPENCODE_API_KEY` | `opencode_api_key` |
+| Cursor Agent | `TAKT_CURSOR_API_KEY` | `cursor_api_key` |
 
 ### Security
 
 - If you write API keys in `config.yaml`, be careful not to commit this file to Git.
 - Consider using environment variables instead.
 - Add `~/.takt/config.yaml` to your global `.gitignore` if needed.
+- Cursor provider can run without API key when `cursor-agent login` is already configured.
 - If you set an API key, installing the corresponding CLI tool (Claude Code, Codex, OpenCode) is not necessary. TAKT directly calls the respective API.
 
 ### Codex CLI Path Override
@@ -224,7 +232,7 @@ The model used for each movement is resolved with the following priority order (
 
 1. **Piece movement `model`** - Specified in the movement definition in piece YAML
 2. **Global config `model`** - Default model in `~/.takt/config.yaml`
-3. **Provider default** - Falls back to the provider's built-in default (Claude: `sonnet`, Codex: `codex`, OpenCode: provider default)
+3. **Provider default** - Falls back to the provider's built-in default (Claude: `sonnet`, Codex: `codex`, OpenCode: provider default, Cursor: CLI default)
 
 ### Provider-specific Model Notes
 
@@ -233,6 +241,8 @@ The model used for each movement is resolved with the following priority order (
 **Codex** uses the model string as-is via the Codex SDK. If unspecified, defaults to `codex`. Refer to Codex documentation for available models.
 
 **OpenCode** requires a model in `provider/model` format (e.g., `opencode/big-pickle`). Omitting the model for the OpenCode provider will result in a configuration error.
+
+**Cursor Agent** forwards `model` directly to `cursor-agent --model <model>`. If omitted, Cursor CLI default is used.
 
 ### Example
 
@@ -261,11 +271,11 @@ Provider profiles allow you to set default permission modes and per-movement per
 
 TAKT uses three provider-independent permission modes:
 
-| Mode | Description | Claude | Codex | OpenCode |
-|------|-------------|--------|-------|----------|
-| `readonly` | Read-only access, no file modifications | `default` | `read-only` | `read-only` |
-| `edit` | Allow file edits with confirmation | `acceptEdits` | `workspace-write` | `workspace-write` |
-| `full` | Bypass all permission checks | `bypassPermissions` | `danger-full-access` | `danger-full-access` |
+| Mode | Description | Claude | Codex | OpenCode | Cursor Agent |
+|------|-------------|--------|-------|----------|--------------|
+| `readonly` | Read-only access, no file modifications | `default` | `read-only` | `read-only` | default flags (no `--force`) |
+| `edit` | Allow file edits with confirmation | `acceptEdits` | `workspace-write` | `workspace-write` | default flags (no `--force`) |
+| `full` | Bypass all permission checks | `bypassPermissions` | `danger-full-access` | `danger-full-access` | `--force` |
 
 ### Configuration
 

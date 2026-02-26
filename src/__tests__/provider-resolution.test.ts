@@ -119,6 +119,16 @@ describe('resolveMovementProviderModel', () => {
     expect(result.provider).toBe('claude');
     expect(result.model).toBe('o3-mini');
   });
+
+  it('should resolve cursor provider from personaProviders', () => {
+    const result = resolveMovementProviderModel({
+      step: { provider: undefined, model: undefined, personaDisplayName: 'coder' },
+      provider: 'claude',
+      personaProviders: { coder: { provider: 'cursor' } },
+    });
+
+    expect(result.provider).toBe('cursor');
+  });
 });
 
 describe('resolveAgentProviderModel', () => {

@@ -11,7 +11,7 @@ export interface ProjectLocalConfig {
   /** Current piece name */
   piece?: string;
   /** Provider selection for agent runtime */
-  provider?: 'claude' | 'codex' | 'opencode' | 'mock';
+  provider?: 'claude' | 'codex' | 'opencode' | 'cursor' | 'mock';
   /** Model selection for agent runtime */
   model?: string;
   /** Auto-create PR after worktree execution */
