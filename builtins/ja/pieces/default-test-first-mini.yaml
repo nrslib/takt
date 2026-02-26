@@ -30,7 +30,7 @@ movements:
     instruction: plan
     output_contracts:
       report:
-        - name: 00-plan.md
+        - name: plan.md
           format: plan
   - name: write_tests
     edit: true
@@ -53,6 +53,8 @@ movements:
     rules:
       - condition: テスト作成が完了した
         next: implement
+      - condition: テスト対象が未実装のためテスト作成をスキップする
+        next: implement
       - condition: テスト作成を進行できない
         next: ABORT
       - condition: ユーザーへの確認事項があるためユーザー入力が必要
@@ -61,9 +63,9 @@ movements:
         interactive_only: true
     output_contracts:
       report:
-        - name: 01-test-scope.md
+        - name: test-scope.md
           format: coder-scope
-        - name: 01-test-decisions.md
+        - name: test-decisions.md
           format: coder-decisions
   - name: implement
     edit: true
@@ -118,7 +120,7 @@ movements:
           - condition: AI特有の問題あり
         output_contracts:
           report:
-            - name: 03-ai-review.md
+            - name: ai-review.md
               format: ai-review
       - name: supervise
         edit: false

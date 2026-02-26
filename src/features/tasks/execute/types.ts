@@ -7,7 +7,7 @@ import type { PersonaProviderEntry } from '../../../core/models/persisted-global
 import type { ProviderPermissionProfiles } from '../../../core/models/provider-profiles.js';
 import type { MovementProviderOptions } from '../../../core/models/piece-types.js';
 import type { ProviderType } from '../../../infra/providers/index.js';
-import type { GitHubIssue } from '../../../infra/github/index.js';
+import type { Issue } from '../../../infra/git/index.js';
 import type { ProviderOptionsSource } from '../../../core/piece/types.js';
 
 /** Result of piece execution */
@@ -144,7 +144,7 @@ export interface SelectAndExecuteOptions {
   /** Interactive mode result metadata for NDJSON logging */
   interactiveMetadata?: InteractiveMetadata;
   /** GitHub Issues to associate with the PR (adds "Closes #N" for each issue) */
-  issues?: GitHubIssue[];
+  issues?: Issue[];
   /** Skip adding task to tasks.yaml */
   skipTaskList?: boolean;
 }

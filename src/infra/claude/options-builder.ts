@@ -57,6 +57,7 @@ export class SdkOptionsBuilder {
     const sdkOptions: Options = {
       cwd: this.options.cwd,
       permissionMode,
+      settingSources: ['project'],
     };
 
     if (this.options.model) sdkOptions.model = this.options.model;

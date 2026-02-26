@@ -19,7 +19,7 @@ This document provides a complete reference for all TAKT CLI commands and option
 | `--repo <owner/repo>` | Specify repository (for PR creation) |
 | `--create-worktree <yes\|no>` | Skip worktree confirmation prompt |
 | `-q, --quiet` | Minimal output mode: suppress AI output (for CI) |
-| `--provider <name>` | Override agent provider (claude\|codex\|opencode\|mock) |
+| `--provider <name>` | Override agent provider (claude\|codex\|opencode\|cursor\|mock) |
 | `--model <name>` | Override agent model |
 | `--config <path>` | Path to global config file (default: `~/.takt/config.yaml`) |
 
@@ -164,7 +164,7 @@ takt watch
 
 ### takt list
 
-List task branches and perform actions (merge, delete, sync with root, etc.).
+List task branches and perform actions (merge, delete, merge from root, etc.).
 
 ```bash
 # List task branches (merge/delete)
@@ -177,7 +177,7 @@ takt list --non-interactive --action delete --branch takt/my-branch --yes
 takt list --non-interactive --format json
 ```
 
-In interactive mode, **Sync with root** merges the root repository HEAD into the worktree branch with AI-assisted conflict resolution.
+In interactive mode, **Merge from root** merges the root repository HEAD into the worktree branch with AI-assisted conflict resolution.
 
 ### Task Directory Workflow (Create / Run / Verify)
 

@@ -15,6 +15,19 @@ const { MockPieceEngine, mockLoadPersonaSessions, mockLoadWorktreeSessions } = v
   const mockLoadPersonaSessions = vi.fn().mockReturnValue({ coder: 'saved-session-id' });
   const mockLoadWorktreeSessions = vi.fn().mockReturnValue({ coder: 'worktree-session-id' });
 
+  type PersonaProviderMap = Record<string, { provider?: string; model?: string }>;
+
+  function resolveProviderInfo(
+    step: { personaDisplayName?: string; provider?: string; model?: string },
+    opts: Record<string, unknown>,
+  ): { provider: string | undefined; model: string | undefined } {
+    const personaProviders = opts.personaProviders as PersonaProviderMap | undefined;
+    const personaEntry = personaProviders?.[step.personaDisplayName ?? ''];
+    const provider = personaEntry?.provider ?? step.provider ?? opts.provider as string | undefined;
+    const model = personaEntry?.model ?? step.model ?? opts.model as string | undefined;
+    return { provider, model };
+  }
+
   class MockPieceEngine extends EE {
     static lastInstance: MockPieceEngine;
     readonly receivedOptions: Record<string, unknown>;
@@ -32,7 +45,8 @@ const { MockPieceEngine, mockLoadPersonaSessions, mockLoadWorktreeSessions } = v
     async run(): Promise<{ status: string; iteration: number }> {
       const firstStep = this.config.movements[0];
       if (firstStep) {
-        this.emit('movement:start', firstStep, 1, firstStep.instructionTemplate);
+        const providerInfo = resolveProviderInfo(firstStep, this.receivedOptions);
+        this.emit('movement:start', firstStep, 1, firstStep.instructionTemplate, providerInfo);
       }
       this.emit('piece:complete', { status: 'completed', iteration: 1 });
       return { status: 'completed', iteration: 1 };

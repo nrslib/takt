@@ -31,13 +31,15 @@ piece_categories:
       - expert-mini
       - expert-cqrs
       - expert-cqrs-mini
+  🏗️ Infrastructure:
+    pieces:
+      - terraform
   🛠️ Refactoring:
     pieces:
       - structural-reform
   🔍 Review:
     pieces:
-      - review-fix-minimal
-      - review-only
+      - review
   🧪 Testing:
     pieces:
       - unit-test

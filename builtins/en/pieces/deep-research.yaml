@@ -30,8 +30,23 @@ movements:
     policy: research
     knowledge: research
     instruction: research-dig
+    edit: true
+    team_leader:
+      max_parts: 3
+      part_persona: research-digger
+      part_edit: true
+      part_allowed_tools:
+        - Read
+        - Write
+        - Bash
+        - Glob
+        - Grep
+        - WebSearch
+        - WebFetch
     allowed_tools:
       - Read
+      - Write
+      - Bash
       - Glob
       - Grep
       - WebSearch
@@ -46,8 +61,10 @@ movements:
     policy: research
     knowledge: research
     instruction: research-analyze
+    edit: true
     allowed_tools:
       - Read
+      - Write
       - Glob
       - Grep
       - WebSearch
@@ -68,6 +85,10 @@ movements:
       - Grep
       - WebSearch
       - WebFetch
+    output_contracts:
+      report:
+        - name: research-report.md
+          format: research-report
     rules:
       - condition: Research results adequately answer the original request
         next: COMPLETE

@@ -120,6 +120,26 @@ describe('parseInputData', () => {
       expect(cb.calls).not.toContain('char:f');
     });
   });
+
+  describe('Ctrl+J key detection', () => {
+    it('should emit char event for Ctrl+J', () => {
+      // Given
+      const cb = createCallbacks();
+      // When
+      parseInputData('\x0A', cb);
+      // Then
+      expect(cb.calls).toEqual(['char:\n']);
+    });
+
+    it('should emit char event for Ctrl+J mixed with regular chars', () => {
+      // Given
+      const cb = createCallbacks();
+      // When
+      parseInputData('a\x0Ab', cb);
+      // Then
+      expect(cb.calls).toEqual(['char:a', 'char:\n', 'char:b']);
+    });
+  });
 });
 
 describe('readMultilineInput cursor navigation', () => {
@@ -956,6 +976,87 @@ describe('readMultilineInput cursor navigation', () => {
 
       // Then
       expect(result).toBe('abcdefghijklmnopqrstuXvwx\n123');
+    });
+  });
+
+  describe('surrogate pair (emoji) support', () => {
+    it('should move left past emoji', async () => {
+      // Given
+      setupRawStdin(['🎵\x1B[DX\r']);
+
+      // When
+      const result = await callReadMultilineInput('> ');
+
+      // Then
+      expect(result).toBe('X🎵');
+    });
+
+    it('should move right through emoji', async () => {
+      // Given
+      setupRawStdin(['🎵\x1B[H\x1B[CX\r']);
+
+      // When
+      const result = await callReadMultilineInput('> ');
+
+      // Then
+      expect(result).toBe('🎵X');
+    });
+
+    it('should backspace emoji completely', async () => {
+      // Given
+      setupRawStdin(['🎵\x7F\r']);
+
+      // When
+      const result = await callReadMultilineInput('> ');
+
+      // Then
+      expect(result).toBe('');
+    });
+
+    it('should not leave broken surrogate pair after backspace', async () => {
+      // Given
+      setupRawStdin(['a🎵b\x7FX\r']);
+
+      // When
+      const result = await callReadMultilineInput('> ');
+
+      // Then
+      expect(result).toBe('a🎵X');
+    });
+
+    it('should handle multiple emojis with arrow navigation', async () => {
+      // Given
+      setupRawStdin(['😀🎵\x1B[D\x1B[DX\r']);
+
+      // When
+      const result = await callReadMultilineInput('> ');
+
+      // Then
+      expect(result).toBe('X😀🎵');
+    });
+  });
+
+  describe('Ctrl+J inserts newline', () => {
+    it('should insert newline with Ctrl+J at end of line', async () => {
+      // Given
+      setupRawStdin(['abc\x0Adef\r']);
+
+      // When
+      const result = await callReadMultilineInput('> ');
+
+      // Then
+      expect(result).toBe('abc\ndef');
+    });
+
+    it('should insert newline with Ctrl+J mid-line', async () => {
+      // Given
+      setupRawStdin(['abcdef\x1B[H\x1B[C\x1B[C\x1B[C\x0A\r']);
+
+      // When
+      const result = await callReadMultilineInput('> ');
+
+      // Then
+      expect(result).toBe('abc\ndef');
     });
   });
 });

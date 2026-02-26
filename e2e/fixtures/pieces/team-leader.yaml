@@ -1,0 +1,27 @@
+name: e2e-team-leader
+description: E2E test piece for team_leader movement
+piece_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+max_movements: 5
+movements:
+  - name: execute
+    edit: true
+    persona: ../agents/test-team-leader.md
+    required_permission_mode: edit
+    team_leader:
+      max_parts: 2
+      part_persona: ../agents/test-coder.md
+      part_edit: true
+      part_allowed_tools:
+        - Read
+        - Write
+        - Edit
+    instruction_template: |
+      {task}
+    rules:
+      - condition: Task completed
+        next: COMPLETE

@@ -59,13 +59,13 @@ vi.mock('../infra/github/issue.js', () => ({
 
 vi.mock('../infra/github/pr.js', () => ({
   createPullRequest: mockCreatePullRequest,
-  pushBranch: mockPushBranch,
   buildPrBody: vi.fn().mockReturnValue('PR body'),
 }));
 
 vi.mock('../infra/task/git.js', () => ({
   stageAndCommit: vi.fn().mockReturnValue('abc1234'),
   getCurrentBranch: vi.fn().mockReturnValue('main'),
+  pushBranch: (...args: unknown[]) => mockPushBranch(...args),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -115,6 +115,7 @@ vi.mock('../infra/config/global/globalConfig.js', async (importOriginal) => {
     ...original,
     loadGlobalConfig: vi.fn().mockReturnValue({
       language: 'en',
+      provider: 'mock',
       enableBuiltinPieces: true,
       disabledBuiltins: [],
     }),

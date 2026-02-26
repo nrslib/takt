@@ -219,7 +219,11 @@ export async function runConversationLoop(
         if (userNote) {
           summaryPrompt = `${summaryPrompt}\n\nUser Note:\n${userNote}`;
         }
-        const summaryResult = await doCallAI(summaryPrompt, summaryPrompt, strategy.allowedTools);
+        // Summary AI must not inherit the conversation session to avoid chat-mode behavior.
+        const { result: summaryResult } = await callAIWithRetry(
+          summaryPrompt, summaryPrompt, strategy.allowedTools, cwd,
+          { ...ctx, sessionId: undefined },
+        );
         if (!summaryResult) {
           info(ui.summarizeFailed);
           continue;

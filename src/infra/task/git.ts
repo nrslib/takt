@@ -3,10 +3,10 @@
  */
 
 import { execFileSync } from 'node:child_process';
+import { createLogger } from '../../shared/utils/index.js';
 
-/**
- * Get the current branch name.
- */
+const log = createLogger('git');
+
 export function getCurrentBranch(cwd: string): string {
   return execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
     cwd,
@@ -16,7 +16,6 @@ export function getCurrentBranch(cwd: string): string {
 }
 
 /**
- * Stage all changes and create a commit.
  * Returns the short commit hash if changes were committed, undefined if no changes.
  */
 export function stageAndCommit(cwd: string, message: string): string | undefined {
@@ -39,4 +38,15 @@ export function stageAndCommit(cwd: string, message: string): string | undefined
     stdio: 'pipe',
     encoding: 'utf-8',
   }).trim();
+}
+
+/**
+ * Throws on failure.
+ */
+export function pushBranch(cwd: string, branch: string): void {
+  log.info('Pushing branch to origin', { branch });
+  execFileSync('git', ['push', 'origin', branch], {
+    cwd,
+    stdio: 'pipe',
+  });
 }

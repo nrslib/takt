@@ -2,9 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
   getProviderMock,
-  loadConfigMock,
   loadCustomAgentsMock,
   loadAgentPromptMock,
+  loadProjectConfigMock,
+  loadGlobalConfigMock,
   loadTemplateMock,
   providerSetupMock,
   providerCallMock,
@@ -14,9 +15,10 @@ const {
 
   return {
     getProviderMock: vi.fn(() => ({ setup: providerSetup })),
-    loadConfigMock: vi.fn(),
     loadCustomAgentsMock: vi.fn(),
     loadAgentPromptMock: vi.fn(),
+    loadProjectConfigMock: vi.fn(),
+    loadGlobalConfigMock: vi.fn(),
     loadTemplateMock: vi.fn(),
     providerSetupMock: providerSetup,
     providerCallMock: providerCall,
@@ -28,21 +30,10 @@ vi.mock('../infra/providers/index.js', () => ({
 }));
 
 vi.mock('../infra/config/index.js', () => ({
-  loadConfig: loadConfigMock,
+  loadProjectConfig: loadProjectConfigMock,
+  loadGlobalConfig: loadGlobalConfigMock,
   loadCustomAgents: loadCustomAgentsMock,
   loadAgentPrompt: loadAgentPromptMock,
-  resolveConfigValues: (_projectDir: string, keys: readonly string[]) => {
-    const loaded = loadConfigMock() as Record<string, unknown>;
-    const global = (loaded.global ?? {}) as Record<string, unknown>;
-    const project = (loaded.project ?? {}) as Record<string, unknown>;
-    const provider = (project.provider ?? global.provider ?? 'claude') as string;
-    const config: Record<string, unknown> = { ...global, ...project, provider, piece: project.piece ?? 'default', verbose: false };
-    const result: Record<string, unknown> = {};
-    for (const key of keys) {
-      result[key] = config[key];
-    }
-    return result;
-  },
 }));
 
 vi.mock('../shared/prompts/index.js', () => ({
@@ -56,120 +47,169 @@ describe('option resolution order', () => {
     vi.clearAllMocks();
 
     providerCallMock.mockResolvedValue({ content: 'ok' });
-    loadConfigMock.mockReturnValue({ global: {}, project: {} });
+    loadProjectConfigMock.mockReturnValue({});
+    loadGlobalConfigMock.mockReturnValue({
+      language: 'en',
+      concurrency: 1,
+      taskPollIntervalMs: 500,
+    });
     loadCustomAgentsMock.mockReturnValue(new Map());
     loadAgentPromptMock.mockReturnValue('prompt');
     loadTemplateMock.mockReturnValue('template');
   });
 
-  it('should resolve provider in order: CLI > stepProvider > Config(project??global) > default', async () => {
-    // Given
-    loadConfigMock.mockReturnValue({
-      project: { provider: 'opencode' },
-      global: { provider: 'mock' },
+  it('should resolve provider in order: CLI > stepProvider > local config > global config', async () => {
+    loadProjectConfigMock.mockReturnValue({ provider: 'opencode' });
+    loadGlobalConfigMock.mockReturnValue({
+      provider: 'mock',
+      language: 'en',
+      concurrency: 1,
+      taskPollIntervalMs: 500,
     });
 
-    // When: CLI provider が指定される
     await runAgent(undefined, 'task', {
       cwd: '/repo',
       provider: 'codex',
       stepProvider: 'claude',
     });
-
-    // Then
     expect(getProviderMock).toHaveBeenLastCalledWith('codex');
 
-    // When: CLI 指定なし（stepProvider が優先される）
     await runAgent(undefined, 'task', {
       cwd: '/repo',
       stepProvider: 'claude',
     });
-
-    // Then
     expect(getProviderMock).toHaveBeenLastCalledWith('claude');
 
-    // When: project なし → resolveConfigValues は global.provider を返す（フラットマージ）
-    loadConfigMock.mockReturnValue({
-      project: {},
-      global: { provider: 'mock' },
+    loadProjectConfigMock.mockReturnValue({});
+    loadGlobalConfigMock.mockReturnValue({
+      provider: 'mock',
+      language: 'en',
+      concurrency: 1,
+      taskPollIntervalMs: 500,
     });
     await runAgent(undefined, 'task', {
       cwd: '/repo',
       stepProvider: 'claude',
     });
-
-    // Then: stepProvider が global fallback より優先される
     expect(getProviderMock).toHaveBeenLastCalledWith('claude');
 
-    // When: stepProvider もなし → 同様に global.provider
     await runAgent(undefined, 'task', { cwd: '/repo' });
-
-    // Then
     expect(getProviderMock).toHaveBeenLastCalledWith('mock');
   });
 
-  it('should resolve model in order: CLI > Piece(step) > Global(matching provider)', async () => {
-    // Given
-    loadConfigMock.mockReturnValue({
-      project: { provider: 'claude' },
-      global: { provider: 'claude', model: 'global-model' },
+  it('should apply persona provider override before local/global config', async () => {
+    loadProjectConfigMock.mockReturnValue({ provider: 'opencode' });
+    loadGlobalConfigMock.mockReturnValue({
+      provider: 'mock',
+      personaProviders: {
+        coder: { provider: 'claude' },
+      },
+      language: 'en',
+      concurrency: 1,
+      taskPollIntervalMs: 500,
     });
 
-    // When: CLI model あり
-    await runAgent(undefined, 'task', {
+    await runAgent('coder', 'task', {
+      cwd: '/repo',
+    });
+
+    expect(getProviderMock).toHaveBeenLastCalledWith('claude');
+  });
+
+  it('should resolve model in order: CLI > persona > step > local > global', async () => {
+    loadProjectConfigMock.mockReturnValue({
+      provider: 'claude',
+      model: 'local-model',
+    });
+    loadGlobalConfigMock.mockReturnValue({
+      provider: 'claude',
+      model: 'global-model',
+      language: 'en',
+      concurrency: 1,
+      taskPollIntervalMs: 500,
+      personaProviders: {
+        coder: { model: 'persona-model' },
+      },
+    });
+
+    await runAgent('coder', 'task', {
       cwd: '/repo',
       model: 'cli-model',
       stepModel: 'step-model',
     });
 
-    // Then
     expect(providerCallMock).toHaveBeenLastCalledWith(
       'task',
       expect.objectContaining({ model: 'cli-model' }),
     );
 
-    // When: CLI model なし
     await runAgent(undefined, 'task', {
       cwd: '/repo',
       stepModel: 'step-model',
+      stepProvider: 'claude',
     });
 
-    // Then
     expect(providerCallMock).toHaveBeenLastCalledWith(
       'task',
       expect.objectContaining({ model: 'step-model' }),
     );
 
-    // When: stepModel なし
-    await runAgent(undefined, 'task', { cwd: '/repo' });
+    await runAgent('coder', 'task', {
+      cwd: '/repo',
+      stepProvider: 'claude',
+    });
+    expect(providerCallMock).toHaveBeenLastCalledWith(
+      'task',
+      expect.objectContaining({ model: 'persona-model' }),
+    );
 
-    // Then
+    loadGlobalConfigMock.mockReturnValue({
+      provider: 'codex',
+      model: 'global-model',
+      language: 'en',
+      concurrency: 1,
+      taskPollIntervalMs: 500,
+    });
+    loadProjectConfigMock.mockReturnValue({
+      provider: 'codex',
+    });
+
+    await runAgent(undefined, 'task', {
+      cwd: '/repo',
+      stepProvider: 'codex',
+    });
+
     expect(providerCallMock).toHaveBeenLastCalledWith(
       'task',
       expect.objectContaining({ model: 'global-model' }),
     );
   });
 
-  it('should ignore global model when resolved provider does not match config provider', async () => {
-    // Given: CLI provider overrides config provider, causing mismatch with config.model
-    loadConfigMock.mockReturnValue({
-      project: {},
-      global: { provider: 'claude', model: 'global-model' },
+  it('should ignore local/global model if resolved provider is not matching', async () => {
+    loadProjectConfigMock.mockReturnValue({
+      provider: 'claude',
+      model: 'local-model',
+    });
+    loadGlobalConfigMock.mockReturnValue({
+      provider: 'mock',
+      model: 'global-model',
+      language: 'en',
+      concurrency: 1,
+      taskPollIntervalMs: 500,
     });
 
-    // When: CLI provider='codex' overrides config provider='claude'
-    // resolveModel compares config.provider ('claude') with resolvedProvider ('codex') → mismatch → model ignored
-    await runAgent(undefined, 'task', { cwd: '/repo', provider: 'codex' });
+    await runAgent(undefined, 'task', {
+      cwd: '/repo',
+      stepProvider: 'opencode',
+    });
 
-    // Then
     expect(providerCallMock).toHaveBeenLastCalledWith(
       'task',
       expect.objectContaining({ model: undefined }),
     );
   });
 
-  it('should use providerOptions from piece(step) only', async () => {
-    // Given
+  it('should use providerOptions from piece/step only', async () => {
     const stepProviderOptions = {
       claude: {
         sandbox: {
@@ -178,55 +218,37 @@ describe('option resolution order', () => {
       },
     };
 
-    loadConfigMock.mockReturnValue({
-      project: {
-        provider: 'claude',
-      },
-      global: {
-        provider: 'claude',
-        providerOptions: {
-          claude: { sandbox: { allowUnsandboxedCommands: true } },
-        },
-      },
-    });
-
-    // When
     await runAgent(undefined, 'task', {
       cwd: '/repo',
       provider: 'claude',
       providerOptions: stepProviderOptions,
     });
 
-    // Then
     expect(providerCallMock).toHaveBeenLastCalledWith(
       'task',
       expect.objectContaining({ providerOptions: stepProviderOptions }),
     );
   });
 
-  it('should use custom agent model and prompt when higher-priority values are absent', async () => {
-    // Given: custom agent with provider/model, but no CLI/config override
-    // Note: resolveConfigValues returns provider='claude' by default (loadConfig merges project ?? global ?? 'claude'),
-    // so agentConfig.provider is not reached in resolveProvider (config.provider is always truthy).
-    // However, custom agent model IS used because resolveModel checks agentConfig.model before config.
-    const customAgents = new Map([
-      ['custom', { name: 'custom', prompt: 'agent prompt', provider: 'opencode', model: 'agent-model' }],
-    ]);
-    loadCustomAgentsMock.mockReturnValue(customAgents);
+  it('should ignore custom agent provider/model overrides', async () => {
+    loadProjectConfigMock.mockReturnValue({ provider: 'claude', model: 'project-model' });
+    loadGlobalConfigMock.mockReturnValue({
+      provider: 'mock',
+      language: 'en',
+      concurrency: 1,
+      taskPollIntervalMs: 500,
+    });
 
-    // When
+    loadCustomAgentsMock.mockReturnValue(new Map([
+      ['custom', { name: 'custom', prompt: 'agent prompt' }],
+    ]));
+
     await runAgent('custom', 'task', { cwd: '/repo' });
 
-    // Then: provider falls back to config default ('claude'), not agentConfig.provider
     expect(getProviderMock).toHaveBeenLastCalledWith('claude');
-    // Agent model is used (resolved before config.model in resolveModel)
     expect(providerCallMock).toHaveBeenLastCalledWith(
       'task',
-      expect.objectContaining({ model: 'agent-model' }),
-    );
-    // Agent prompt is still used
-    expect(providerSetupMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ systemPrompt: 'prompt' }),
+      expect.objectContaining({ model: 'project-model' }),
     );
   });
 });

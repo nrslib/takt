@@ -1,5 +1,5 @@
 name: default
-description: Standard development piece with planning and specialized reviews
+description: テスト先行開発ピース（計画 → テスト作成 → 実装 → AIレビュー → 3並列レビュー → 修正 → 監督 → 完了）
 piece_config:
   provider_options:
     codex:
@@ -22,7 +22,7 @@ loop_monitors:
         非生産的（同じ問題を繰り返している）かを判断してください。
 
         **参照するレポート:**
-        - AIレビュー結果: {report:04-ai-review.md}
+        - AIレビュー結果: {report:ai-review.md}
 
         **判断基準:**
         - 各サイクルで新しい問題が発見・修正されているか
@@ -47,7 +47,7 @@ movements:
       - WebFetch
     rules:
       - condition: 要件が明確で実装可能
-        next: implement
+        next: write_tests
       - condition: ユーザーが質問をしている（実装タスクではない）
         next: COMPLETE
       - condition: 要件が不明確、情報不足
@@ -59,8 +59,45 @@ movements:
     instruction: plan
     output_contracts:
       report:
-        - name: 00-plan.md
+        - name: plan.md
           format: plan
+  - name: write_tests
+    edit: true
+    persona: coder
+    policy:
+      - coding
+      - testing
+    knowledge:
+      - backend
+      - architecture
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    required_permission_mode: edit
+    instruction: write-tests-first
+    rules:
+      - condition: テスト作成が完了した
+        next: implement
+      - condition: テスト対象が未実装のためテスト作成をスキップする
+        next: implement
+      - condition: テスト作成を進行できない
+        next: ABORT
+      - condition: ユーザーへの確認事項があるためユーザー入力が必要
+        next: write_tests
+        requires_user_input: true
+        interactive_only: true
+    output_contracts:
+      report:
+        - name: test-scope.md
+          format: coder-scope
+        - name: test-decisions.md
+          format: coder-decisions
   - name: implement
     edit: true
     persona: coder
@@ -92,7 +129,7 @@ movements:
         next: implement
         requires_user_input: true
         interactive_only: true
-    instruction: implement
+    instruction: implement-after-tests
     output_contracts:
       report:
         - name: coder-scope.md
@@ -119,7 +156,7 @@ movements:
     instruction: ai-review
     output_contracts:
       report:
-        - name: 04-ai-review.md
+        - name: ai-review.md
           format: ai-review
   - name: ai_fix
     edit: true
@@ -185,7 +222,7 @@ movements:
         instruction: review-arch
         output_contracts:
           report:
-            - name: 05-architect-review.md
+            - name: architect-review.md
               format: architecture-review
       - name: qa-review
         edit: false
@@ -205,8 +242,28 @@ movements:
         instruction: review-qa
         output_contracts:
           report:
-            - name: 06-qa-review.md
+            - name: qa-review.md
               format: qa-review
+      - name: testing-review
+        edit: false
+        persona: testing-reviewer
+        policy:
+          - review
+          - testing
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - WebSearch
+          - WebFetch
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        instruction: review-test
+        output_contracts:
+          report:
+            - name: testing-review.md
+              format: testing-review
     rules:
       - condition: all("approved")
         next: supervise

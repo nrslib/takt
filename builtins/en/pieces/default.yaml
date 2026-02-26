@@ -1,5 +1,5 @@
 name: default
-description: Standard development piece with planning and specialized reviews
+description: Test-first development piece (plan → write tests → implement → AI review → 3-parallel review → fix → supervise → complete)
 piece_config:
   provider_options:
     codex:
@@ -22,7 +22,7 @@ loop_monitors:
         is healthy (making progress) or unproductive (repeating the same issues).
 
         **Reports to reference:**
-        - AI Review results: {report:04-ai-review.md}
+        - AI Review results: {report:ai-review.md}
 
         **Judgment criteria:**
         - Are new issues being found/fixed in each cycle?
@@ -47,7 +47,7 @@ movements:
       - WebFetch
     rules:
       - condition: Requirements are clear and implementable
-        next: implement
+        next: write_tests
       - condition: User is asking a question (not an implementation task)
         next: COMPLETE
       - condition: Requirements unclear, insufficient info
@@ -59,8 +59,45 @@ movements:
     instruction: plan
     output_contracts:
       report:
-        - name: 00-plan.md
+        - name: plan.md
           format: plan
+  - name: write_tests
+    edit: true
+    persona: coder
+    policy:
+      - coding
+      - testing
+    knowledge:
+      - backend
+      - architecture
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    required_permission_mode: edit
+    instruction: write-tests-first
+    rules:
+      - condition: Tests written successfully
+        next: implement
+      - condition: Cannot proceed because the test target is not implemented yet, so skip test writing
+        next: implement
+      - condition: Cannot proceed with test writing
+        next: ABORT
+      - condition: User input needed for clarification
+        next: write_tests
+        requires_user_input: true
+        interactive_only: true
+    output_contracts:
+      report:
+        - name: test-scope.md
+          format: coder-scope
+        - name: test-decisions.md
+          format: coder-decisions
   - name: implement
     edit: true
     persona: coder
@@ -92,7 +129,7 @@ movements:
         next: implement
         requires_user_input: true
         interactive_only: true
-    instruction: implement
+    instruction: implement-after-tests
     output_contracts:
       report:
         - name: coder-scope.md
@@ -119,7 +156,7 @@ movements:
     instruction: ai-review
     output_contracts:
       report:
-        - name: 04-ai-review.md
+        - name: ai-review.md
           format: ai-review
   - name: ai_fix
     edit: true
@@ -185,7 +222,7 @@ movements:
         instruction: review-arch
         output_contracts:
           report:
-            - name: 05-architect-review.md
+            - name: architect-review.md
               format: architecture-review
       - name: qa-review
         edit: false
@@ -205,8 +242,28 @@ movements:
         instruction: review-qa
         output_contracts:
           report:
-            - name: 06-qa-review.md
+            - name: qa-review.md
               format: qa-review
+      - name: testing-review
+        edit: false
+        persona: testing-reviewer
+        policy:
+          - review
+          - testing
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - WebSearch
+          - WebFetch
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        instruction: review-test
+        output_contracts:
+          report:
+            - name: testing-review.md
+              format: testing-review
     rules:
       - condition: all("approved")
         next: supervise

@@ -79,7 +79,7 @@ describe('E2E: Config priority (piece / autoPr)', () => {
     const piecePath = resolve(__dirname, '../fixtures/pieces/mock-single-step.yaml');
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/execute-done.json');
 
-    const result = runTakt({
+    runTakt({
       args: [
         '--task', 'Auto PR default behavior',
         '--piece', piecePath,
@@ -94,8 +94,6 @@ describe('E2E: Config priority (piece / autoPr)', () => {
       timeout: 240_000,
     });
 
-    // PR creation fails in test env (no gh remote), so exit code 1 is expected
-    // when auto_pr defaults to true. The task record is still persisted.
     const task = readFirstTask(testRepo.path);
     expect(task['auto_pr']).toBe(true);
   }, 240_000);
@@ -130,7 +128,7 @@ describe('E2E: Config priority (piece / autoPr)', () => {
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/execute-done.json');
     updateIsolatedConfig(isolatedEnv.taktDir, { auto_pr: false });
 
-    const result = runTakt({
+    runTakt({
       args: [
         '--task', 'Auto PR from env override',
         '--piece', piecePath,
@@ -146,8 +144,6 @@ describe('E2E: Config priority (piece / autoPr)', () => {
       timeout: 240_000,
     });
 
-    // PR creation fails in test env (no gh remote), so exit code 1 is expected
-    // when auto_pr is overridden to true. The task record is still persisted.
     const task = readFirstTask(testRepo.path);
     expect(task['auto_pr']).toBe(true);
   }, 240_000);

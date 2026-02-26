@@ -192,6 +192,7 @@ export class GlobalConfigManager {
       openaiApiKey: parsed.openai_api_key,
       codexCliPath: parsed.codex_cli_path,
       opencodeApiKey: parsed.opencode_api_key,
+      cursorApiKey: parsed.cursor_api_key,
       pipeline: parsed.pipeline ? {
         defaultBranchPrefix: parsed.pipeline.default_branch_prefix,
         commitMessageTemplate: parsed.pipeline.commit_message_template,
@@ -279,6 +280,9 @@ export class GlobalConfigManager {
     }
     if (config.opencodeApiKey) {
       raw.opencode_api_key = config.opencodeApiKey;
+    }
+    if (config.cursorApiKey) {
+      raw.cursor_api_key = config.cursorApiKey;
     }
     if (config.pipeline) {
       const pipelineRaw: Record<string, unknown> = {};
@@ -410,7 +414,7 @@ export function setLanguage(language: Language): void {
   saveGlobalConfig(config);
 }
 
-export function setProvider(provider: 'claude' | 'codex' | 'opencode'): void {
+export function setProvider(provider: 'claude' | 'codex' | 'opencode' | 'cursor'): void {
   const config = loadGlobalConfig();
   config.provider = provider;
   saveGlobalConfig(config);
@@ -481,6 +485,22 @@ export function resolveOpencodeApiKey(): string | undefined {
   try {
     const config = loadGlobalConfig();
     return config.opencodeApiKey;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Resolve the Cursor API key.
+ * Priority: TAKT_CURSOR_API_KEY env var > config.yaml > undefined (cursor-agent login fallback)
+ */
+export function resolveCursorApiKey(): string | undefined {
+  const envKey = process.env[envVarNameFromPath('cursor_api_key')];
+  if (envKey) return envKey;
+
+  try {
+    const config = loadGlobalConfig();
+    return config.cursorApiKey;
   } catch {
     return undefined;
   }

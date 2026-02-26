@@ -1,6 +1,6 @@
 {
   "name": "takt",
-  "version": "0.23.0",
+  "version": "0.27.0-alpha.1",
   "description": "TAKT: TAKT Agent Koordination Topology - AI Agent Piece Orchestration",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -21,9 +21,11 @@
     "test:e2e:provider:claude": "TAKT_E2E_PROVIDER=claude vitest run --config vitest.config.e2e.provider.ts --reporter=verbose",
     "test:e2e:provider:codex": "TAKT_E2E_PROVIDER=codex vitest run --config vitest.config.e2e.provider.ts --reporter=verbose",
     "test:e2e:provider:opencode": "TAKT_E2E_PROVIDER=opencode vitest run --config vitest.config.e2e.provider.ts --reporter=verbose",
+    "test:e2e:provider:cursor": "TAKT_AUTO_PR=false TAKT_E2E_PROVIDER=cursor vitest run --config vitest.config.e2e.cursor.ts --reporter=verbose",
     "test:e2e:claude": "npm run test:e2e:provider:claude",
     "test:e2e:codex": "npm run test:e2e:provider:codex",
     "test:e2e:opencode": "npm run test:e2e:provider:opencode",
+    "test:e2e:cursor": "npm run test:e2e:provider:cursor",
     "lint": "eslint src/",
     "check:release": "npm run build && npm run lint && npm run test && npm run test:e2e; code=$?; if [ \"$code\" -eq 0 ]; then msg='check:release passed'; else msg=\"check:release failed (exit=$code)\"; fi; if command -v osascript >/dev/null 2>&1; then osascript -e \"display notification \\\"$msg\\\" with title \\\"takt\\\" subtitle \\\"Release Check\\\"\" >/dev/null 2>&1 || true; fi; echo \"[takt] $msg\"; exit $code",
     "prepublishOnly": "npm run lint && npm run build && npm run test"

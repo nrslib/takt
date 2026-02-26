@@ -59,6 +59,9 @@ interactive:
 
 # ===== Piece Execution UI =====
 piece:
+  teamLeader:
+    decomposeWait: "チームリーダーがタスクを分解中です。しばらくお待ちください..."
+    feedbackWait: "チームリーダーが結果を評価して次のタスクを計画中です..."
   iterationLimit:
     maxReached: "最大イテレーションに到達しました ({currentIteration}/{maxMovements})"
     currentMovement: "現在のムーブメント: {currentMovement}"
@@ -103,3 +106,11 @@ retry:
 run:
   notifyComplete: "run完了 ({total} tasks)"
   notifyAbort: "runはエラー終了 ({failed})"
+
+# ===== Issue Creation UI =====
+issue:
+  labelSelection:
+    prompt: "ラベル:"
+    none: "なし"
+    custom: "入力（カスタム）"
+    customPrompt: "ラベル名を入力"

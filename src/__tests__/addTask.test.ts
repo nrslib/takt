@@ -39,6 +39,12 @@ vi.mock('../infra/task/index.js', async (importOriginal) => ({
   summarizeTaskName: vi.fn().mockResolvedValue('test-task'),
 }));
 
+vi.mock('../infra/git/index.js', () => ({
+  getGitProvider: () => ({
+    createIssue: vi.fn(),
+  }),
+}));
+
 vi.mock('../infra/github/issue.js', () => ({
   isIssueReference: vi.fn((s: string) => /^#\d+$/.test(s)),
   resolveIssueTask: vi.fn(),
@@ -52,7 +58,6 @@ vi.mock('../infra/github/issue.js', () => ({
     }
     return numbers;
   }),
-  createIssue: vi.fn(),
 }));
 
 import { interactiveMode } from '../features/interactive/index.js';

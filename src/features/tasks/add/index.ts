@@ -6,12 +6,15 @@
 
 import * as path from 'node:path';
 import * as fs from 'node:fs';
-import { promptInput, confirm } from '../../../shared/prompt/index.js';
+import { promptInput, confirm, selectOption } from '../../../shared/prompt/index.js';
 import { success, info, error, withProgress } from '../../../shared/ui/index.js';
+import { getLabel } from '../../../shared/i18n/index.js';
+import type { Language } from '../../../core/models/types.js';
 import { TaskRunner, type TaskFileData, summarizeTaskName } from '../../../infra/task/index.js';
 import { determinePiece } from '../execute/selectAndExecute.js';
 import { createLogger, getErrorMessage, generateReportDir } from '../../../shared/utils/index.js';
-import { isIssueReference, resolveIssueTask, parseIssueNumbers, createIssue } from '../../../infra/github/index.js';
+import { isIssueReference, resolveIssueTask, parseIssueNumbers } from '../../../infra/github/index.js';
+import { getGitProvider } from '../../../infra/git/index.js';
 import { firstLine } from '../../../infra/task/naming.js';
 
 const log = createLogger('add-task');
@@ -67,20 +70,49 @@ export async function saveTaskFile(
   return { taskName: created.name, tasksFile };
 }
 
+const TITLE_MAX_LENGTH = 100;
+const TITLE_TRUNCATE_LENGTH = 97;
+const MARKDOWN_HEADING_PATTERN = /^#{1,3}\s+\S/;
+
+/**
+ * Extract a clean title from a task description.
+ *
+ * Prefers the first Markdown heading (h1-h3) if present.
+ * Falls back to the first non-empty line otherwise.
+ * Truncates to 100 characters (97 + "...") when exceeded.
+ */
+export function extractTitle(task: string): string {
+  const lines = task.split('\n');
+  const headingLine = lines.find((l) => MARKDOWN_HEADING_PATTERN.test(l));
+  const titleLine = headingLine
+    ? headingLine.replace(/^#{1,3}\s+/, '')
+    : (lines.find((l) => l.trim().length > 0) ?? task);
+  return titleLine.length > TITLE_MAX_LENGTH
+    ? `${titleLine.slice(0, TITLE_TRUNCATE_LENGTH)}...`
+    : titleLine;
+}
+
 /**
  * Create a GitHub Issue from a task description.
  *
- * Extracts the first line as the issue title (truncated to 100 chars),
- * uses the full task as the body, and displays success/error messages.
+ * Extracts the first Markdown heading (h1-h3) as the issue title,
+ * falling back to the first non-empty line. Truncates to 100 chars.
+ * Uses the full task as the body, and displays success/error messages.
  */
-export function createIssueFromTask(task: string): number | undefined {
+export function createIssueFromTask(task: string, options?: { labels?: string[] }): number | undefined {
   info('Creating GitHub Issue...');
-  const titleLine = task.split('\n')[0] || task;
-  const title = titleLine.length > 100 ? `${titleLine.slice(0, 97)}...` : titleLine;
-  const issueResult = createIssue({ title, body: task });
+  const title = extractTitle(task);
+  const effectiveLabels = options?.labels?.filter((l) => l.length > 0) ?? [];
+  const labels = effectiveLabels.length > 0 ? effectiveLabels : undefined;
+
+  const issueResult = getGitProvider().createIssue({ title, body: task, labels });
   if (issueResult.success) {
+    if (!issueResult.url) {
+      error('Failed to extract issue number from URL');
+      return undefined;
+    }
     success(`Issue created: ${issueResult.url}`);
-    const num = Number(issueResult.url!.split('/').pop());
+    const num = Number(issueResult.url.split('/').pop());
     if (Number.isNaN(num)) {
       error('Failed to extract issue number from URL');
       return undefined;
@@ -127,11 +159,44 @@ function displayTaskCreationResult(
  * Combines issue creation and task saving into a single workflow.
  * If issue creation fails, no task is saved.
  */
-export async function createIssueAndSaveTask(cwd: string, task: string, piece?: string): Promise<void> {
-  const issueNumber = createIssueFromTask(task);
+export async function createIssueAndSaveTask(
+  cwd: string,
+  task: string,
+  piece?: string,
+  options?: { confirmAtEndMessage?: string; labels?: string[] },
+): Promise<void> {
+  const issueNumber = createIssueFromTask(task, { labels: options?.labels });
   if (issueNumber !== undefined) {
-    await saveTaskFromInteractive(cwd, task, piece, { issue: issueNumber });
+    await saveTaskFromInteractive(cwd, task, piece, {
+      issue: issueNumber,
+      confirmAtEndMessage: options?.confirmAtEndMessage,
+    });
   }
+}
+
+/**
+ * Prompt user to select a label for the GitHub Issue.
+ *
+ * Presents 4 fixed options: None, bug, enhancement, custom input.
+ * Returns an array of selected labels (empty if none selected).
+ */
+export async function promptLabelSelection(lang: Language): Promise<string[]> {
+  const selected = await selectOption<string>(
+    getLabel('issue.labelSelection.prompt', lang),
+    [
+      { label: getLabel('issue.labelSelection.none', lang), value: 'none' },
+      { label: 'bug', value: 'bug' },
+      { label: 'enhancement', value: 'enhancement' },
+      { label: getLabel('issue.labelSelection.custom', lang), value: 'custom' },
+    ],
+  );
+
+  if (selected === null || selected === 'none') return [];
+  if (selected === 'custom') {
+    const customLabel = await promptInput(getLabel('issue.labelSelection.customPrompt', lang));
+    return customLabel?.split(',').map((l) => l.trim()).filter((l) => l.length > 0) ?? [];
+  }
+  return [selected];
 }
 
 async function promptWorktreeSettings(): Promise<WorktreeSettings> {
@@ -216,7 +281,6 @@ export async function addTask(cwd: string, task?: string): Promise<void> {
     return;
   }
 
-  // 3. ワークツリー/ブランチ/PR設定
   const settings = await promptWorktreeSettings();
 
   // YAMLファイル作成

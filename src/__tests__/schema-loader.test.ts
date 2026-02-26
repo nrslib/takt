@@ -25,6 +25,26 @@ const readFileSyncMock = vi.fn((path: string) => {
       },
     });
   }
+  if (path.endsWith('more-parts.json')) {
+    return JSON.stringify({
+      type: 'object',
+      properties: {
+        done: { type: 'boolean' },
+        reasoning: { type: 'string' },
+        parts: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              title: { type: 'string' },
+              instruction: { type: 'string' },
+            },
+          },
+        },
+      },
+    });
+  }
   throw new Error(`Unexpected schema path: ${path}`);
 });
 
@@ -72,5 +92,26 @@ describe('schema-loader', () => {
 
     expect(() => loadDecompositionSchema(0)).toThrow('maxParts must be a positive integer: 0');
     expect(() => loadDecompositionSchema(-1)).toThrow('maxParts must be a positive integer: -1');
+  });
+
+  it('loadMorePartsSchema は maxItems を注入し、呼び出しごとに独立したオブジェクトを返す', async () => {
+    const { loadMorePartsSchema } = await import('../core/piece/schema-loader.js');
+
+    const first = loadMorePartsSchema(1);
+    const second = loadMorePartsSchema(4);
+
+    const firstParts = (first.properties as Record<string, unknown>).parts as Record<string, unknown>;
+    const secondParts = (second.properties as Record<string, unknown>).parts as Record<string, unknown>;
+
+    expect(firstParts.maxItems).toBe(1);
+    expect(secondParts.maxItems).toBe(4);
+    expect(readFileSyncMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('loadMorePartsSchema は不正な maxAdditionalParts を拒否する', async () => {
+    const { loadMorePartsSchema } = await import('../core/piece/schema-loader.js');
+
+    expect(() => loadMorePartsSchema(0)).toThrow('maxAdditionalParts must be a positive integer: 0');
+    expect(() => loadMorePartsSchema(-1)).toThrow('maxAdditionalParts must be a positive integer: -1');
   });
 });

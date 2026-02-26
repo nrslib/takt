@@ -6,6 +6,110 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.27.0-alpha.1] - 2026-02-27
+
+### Added
+
+- Cursor Agent CLI プロバイダーを追加: `cursor-agent` CLI を介して Cursor を AI プロバイダーとして利用可能に。API キー（`TAKT_CURSOR_API_KEY` / `cursor_api_key`）または `cursor-agent login` セッションで認証、JSON 出力解析、セッション継続（`--resume`）、モデル指定（`--model`）、パーミッション制御（`full` → `--force`）に対応 (#403)
+- Cursor プロバイダーの E2E テスト設定を追加（`vitest.config.e2e.cursor.ts`、`npm run test:e2e:cursor`）
+
+### Fixed
+
+- Phase 1 が error または blocked を返した場合に Phase 2（レポート出力）をスキップするよう修正。Phase 1 失敗時に不要なレポート生成が実行される問題を解消
+
+## [0.26.0] - 2026-02-27
+
+### Added
+
+- TeamLeader に refill threshold と動的パート追加を導入: 実行中のパートが `refill_threshold` 以下になると、リーダーが完了済みパートの結果を評価して追加パートを動的に生成。`max_parts` は同時並行数、`refill_threshold` で追加計画のタイミングを制御（最大合計 20 パートまで）
+- deep-research ピースの dig ムーブメントに `team_leader` 設定を追加し、リサーチの並列実行が可能に
+- TeamLeader が Phase 2（レポート出力）/ Phase 3（ステータス判定）を通常ムーブメントと同様にサポート（`applyPostExecutionPhases` の共通化）
+- ParallelLogger が動的なサブムーブメント追加に対応（`addSubMovement`）し、TeamLeader の動的パート追加時にもストリーミング出力を表示
+- `LineTimeSliceBuffer` を導入し、並列ストリーミング出力のバッファリングを時間スライスベースで最適化
+- プロジェクト設定（`.takt/config.yaml`）で `model` 指定をサポート
+
+### Changed
+
+- BREAKING: カスタムエージェント定義（`.takt/agents.yaml`）から `provider` / `model` フィールドを削除。エージェントのプロバイダー・モデルはピース側の解決ロジック（CLI → persona_providers → ステップ → ローカル → グローバル）に統一 (#390)
+- エージェントの provider/model 解決ロジックを `resolveAgentProviderModel` に一元化し、ムーブメント解決と同じ優先順位チェーンを使用するよう変更 (#386)
+- `movement:start` イベントが `providerInfo` を含むよう変更し、表示側でのプロバイダー再解決を不要に (#390)
+- `takt list` の「Sync with root」を「Merge from root」にリネーム (#394)
+- インタラクティブモードの要約 AI がセッション非継承で実行されるよう修正し、会話コンテキストの汚染を防止 (#368)
+- interactive policy のガイドラインを改善: ユーザーが「自分で調べて」と指示した場合と、ピースへの指示作成を区別するルールを明確化
+
+### Fixed
+
+- default / default-test-first-mini ピースの `write_tests` ムーブメントで、テスト対象が未実装の場合にスキップして implement へ進むルールを追加（従来は ABORT になっていた）(#396)
+- `takt add` の GitHub Issue タイトル抽出を改善: Markdown 見出し（h1-h3）を優先的にタイトルとして使用するよう変更（従来は先頭行がそのまま使われていた）(#368)
+- quiet モードの要約 AI がセッションを引き継がない問題を修正 (#368)
+- `repertoire add` の `gh api` 呼び出しにバッファサイズ上限（100MB）を設定し、大きなリポジトリでのバッファオーバーフローを防止
+- E2E テストで `gh` ユーザー検索が無効な場合にローカルリポジトリへフォールバックするよう修正
+
+### Internal
+
+- TeamLeaderRunner をリファクタリング: 実行ロジック（`team-leader-execution.ts`）、集約（`team-leader-aggregation.ts`）、共通ユーティリティ（`team-leader-common.ts`）、ストリーミング（`team-leader-streaming.ts`）に分離
+- `more-parts.json` スキーマと `loadMorePartsSchema` ローダーを追加
+- AGENTS.md を更新（プロジェクト構成とガイドラインの改訂）
+- テスト拡充: provider/model 解決マトリクス、TeamLeader refill threshold / worker pool / aggregation / execution、OptionsBuilder、stream-buffer、conversationLoop resume、quietMode session、createIssueFromTask、schema-loader
+
+## [0.25.0] - 2026-02-26
+
+### Added
+
+- Terraform/AWS ピース: IaC 開発用の完全なピースとファセット一式を追加。plan → implement → 並列3レビュー（architect/QA/security）→ supervise → complete の15ムーブメント構成（EN/JA）
+- GitProvider 抽象化: Git/GitHub 操作を `GitProvider` インターフェースに統一し、将来の複数 Git プロバイダー対応の基盤を構築 (#375)
+- プロジェクト設定で submodule の自動取得をサポート: `submodules: all` または `submodules: [path1, path2]` で指定可能に (#387)
+- `takt add` で GitHub Issue 作成時にラベルをインタラクティブに選択可能に (#377, #111)
+- deep-research ピースにデータ保存・レポート出力機能を追加（dig/analyze ムーブメントに Write・Bash ツール許可、supervise に research-report 出力契約）
+- GitHub Discussions・Discord・X への一斉アナウンス GitHub Actions ワークフローを追加
+
+### Changed
+
+- default ピースをテスト先行開発構成に変更: plan の後に `write_tests` ムーブメントを追加し、テストを先に書いてから実装する流れに。並列レビューに testing-review を追加（3→4 レビュアー）。レポートファイル名をセマンティック命名に統一（`00-plan.md` → `plan.md` 等）
+- sync with root をピースエンジン経由からプロバイダー抽象化を利用した単発エージェント呼び出しに簡素化。コンフリクト解決プロンプトをテンプレートファイル化（EN/JA 分離）
+
+### Fixed
+
+- lineEditor でサロゲートペア（絵文字等）のカーソル位置がずれる問題を修正。Ctrl+J による改行挿入を追加
+- `--task` オプションでの直接実行時に tasks.yaml へ不要な記録がされる問題を修正
+- `--task` でワークツリー作成時は tasks.yaml に記録するよう修正（`takt list` でのブランチ管理に必要）
+- Provider resolution: removed implicit fallback to `claude` and switched to fail-fast when provider cannot be resolved (#386)
+- Provider resolution: unified display and execution provider/model resolution via `movement:start` event providerInfo, ensuring displayed provider always matches execution provider (#390)
+- E2E テスト config-priority の不安定性を修正 (#388)
+
+### Internal
+
+- GitProvider 抽象化に伴うテスト追加（github-provider, taskGit）と既存テストのインポート更新
+- CLAUDE.md 更新
+
+## [0.24.0] - 2026-02-24
+
+### Added
+
+- AskUserQuestion support: AI agents can now ask interactive questions during execution with single-select, multi-select, and free-text input via TTY UI; automatically denied during piece execution to maintain agent autonomy (#161, #369)
+- `review` builtin piece with 3-mode auto-detection: automatically selects PR mode (by PR number), branch mode (by branch name), or working diff mode (by free text) for multi-perspective parallel review
+- `testing-reviewer` and `requirements-reviewer` builtin personas for specialized review perspectives
+- `testing` policy: integration test requirement criteria (3+ module data flow, state merging into workflows, option propagation through call chains)
+- `gather-review` instruction and `review-gather` output contract for the new review piece gather movement
+- `requirements-review` instruction and output contract for requirements-focused review
+- `testing-review` output contract for testing-focused review
+- `settingSources: ['project']` in SDK options: delegates CLAUDE.md loading to the Claude SDK for proper project-level settings resolution
+
+### Changed
+
+- **BREAKING:** `review-only` piece renamed to `review`; `review-fix-minimal` piece removed — users referencing these piece names must update to `review`
+- `write-tests-first` instruction now includes integration test decision criteria instead of a generic "Write E2E tests if appropriate"
+
+### Fixed
+
+- Planner persona: added bug fix propagation check rule (grep for same pattern in related files) and prohibited deferring decidable questions to Open Questions
+
+### Internal
+
+- Docs: fixed music metaphor origin description, catalog gaps, broken links, orphaned documents, event names, API Key references, eject descriptions, removed stale personas section map from YAML example, aligned legacy terminology with current codebase
+- New test suites: `StreamDisplay`, `ask-user-question-handler`, `pieceExecution-ask-user-question`, `review-piece`, `opencode-client-cleanup`
+- Removed legacy `review-only-piece` test and `loadProjectContext` from session module (CLAUDE.md loading now delegated to SDK)
+
 ## [0.23.0] - 2026-02-23
 
 ### Added

@@ -1,7 +1,7 @@
 /**
  * Tests for API key authentication feature
  *
- * Tests the resolution logic for Anthropic and OpenAI API keys:
+ * Tests the resolution logic for Anthropic/OpenAI/OpenCode/Cursor API keys:
  * - Environment variable priority over config.yaml
  * - Config.yaml fallback when env var is not set
  * - Undefined when neither is set
@@ -46,7 +46,16 @@ vi.mock('../infra/config/paths.js', async (importOriginal) => {
 });
 
 // Import after mocking
-const { loadGlobalConfig, saveGlobalConfig, resolveAnthropicApiKey, resolveOpenaiApiKey, resolveCodexCliPath, resolveOpencodeApiKey, invalidateGlobalConfigCache } = await import('../infra/config/global/globalConfig.js');
+const {
+  loadGlobalConfig,
+  saveGlobalConfig,
+  resolveAnthropicApiKey,
+  resolveOpenaiApiKey,
+  resolveCodexCliPath,
+  resolveOpencodeApiKey,
+  resolveCursorApiKey,
+  invalidateGlobalConfigCache,
+} = await import('../infra/config/global/globalConfig.js');
 
 describe('GlobalConfigSchema API key fields', () => {
   it('should accept config without API keys', () => {
@@ -82,6 +91,14 @@ describe('GlobalConfigSchema API key fields', () => {
     expect(result.anthropic_api_key).toBe('sk-ant-key');
     expect(result.openai_api_key).toBe('sk-openai-key');
   });
+
+  it('should accept config with cursor_api_key', () => {
+    const result = GlobalConfigSchema.parse({
+      language: 'en',
+      cursor_api_key: 'cursor-key',
+    });
+    expect(result.cursor_api_key).toBe('cursor-key');
+  });
 });
 
 describe('GlobalConfig load/save with API keys', () => {
@@ -101,12 +118,14 @@ describe('GlobalConfig load/save with API keys', () => {
       'provider: claude',
       'anthropic_api_key: sk-ant-from-yaml',
       'openai_api_key: sk-openai-from-yaml',
+      'cursor_api_key: cursor-from-yaml',
     ].join('\n');
     writeFileSync(configPath, yaml, 'utf-8');
 
     const config = loadGlobalConfig();
     expect(config.anthropicApiKey).toBe('sk-ant-from-yaml');
     expect(config.openaiApiKey).toBe('sk-openai-from-yaml');
+    expect(config.cursorApiKey).toBe('cursor-from-yaml');
   });
 
   it('should load config without API keys', () => {
@@ -134,11 +153,13 @@ describe('GlobalConfig load/save with API keys', () => {
     const config = loadGlobalConfig();
     config.anthropicApiKey = 'sk-ant-saved';
     config.openaiApiKey = 'sk-openai-saved';
+    config.cursorApiKey = 'cursor-saved';
     saveGlobalConfig(config);
 
     const reloaded = loadGlobalConfig();
     expect(reloaded.anthropicApiKey).toBe('sk-ant-saved');
     expect(reloaded.openaiApiKey).toBe('sk-openai-saved');
+    expect(reloaded.cursorApiKey).toBe('cursor-saved');
   });
 
   it('should not persist API keys when not set', () => {
@@ -155,6 +176,7 @@ describe('GlobalConfig load/save with API keys', () => {
     const content = readFileSync(configPath, 'utf-8');
     expect(content).not.toContain('anthropic_api_key');
     expect(content).not.toContain('openai_api_key');
+    expect(content).not.toContain('cursor_api_key');
   });
 });
 
@@ -447,6 +469,65 @@ describe('resolveOpencodeApiKey', () => {
     writeFileSync(configPath, yaml, 'utf-8');
 
     const key = resolveOpencodeApiKey();
+    expect(key).toBeUndefined();
+  });
+});
+
+describe('resolveCursorApiKey', () => {
+  const originalEnv = process.env['TAKT_CURSOR_API_KEY'];
+
+  beforeEach(() => {
+    invalidateGlobalConfigCache();
+    mkdirSync(taktDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    if (originalEnv !== undefined) {
+      process.env['TAKT_CURSOR_API_KEY'] = originalEnv;
+    } else {
+      delete process.env['TAKT_CURSOR_API_KEY'];
+    }
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('should return env var when set', () => {
+    process.env['TAKT_CURSOR_API_KEY'] = 'cursor-from-env';
+    const yaml = [
+      'language: en',
+      'log_level: info',
+      'provider: cursor',
+      'cursor_api_key: cursor-from-yaml',
+    ].join('\n');
+    writeFileSync(configPath, yaml, 'utf-8');
+
+    const key = resolveCursorApiKey();
+    expect(key).toBe('cursor-from-env');
+  });
+
+  it('should fall back to config when env var is not set', () => {
+    delete process.env['TAKT_CURSOR_API_KEY'];
+    const yaml = [
+      'language: en',
+      'log_level: info',
+      'provider: cursor',
+      'cursor_api_key: cursor-from-yaml',
+    ].join('\n');
+    writeFileSync(configPath, yaml, 'utf-8');
+
+    const key = resolveCursorApiKey();
+    expect(key).toBe('cursor-from-yaml');
+  });
+
+  it('should return undefined when neither env var nor config is set', () => {
+    delete process.env['TAKT_CURSOR_API_KEY'];
+    const yaml = [
+      'language: en',
+      'log_level: info',
+      'provider: cursor',
+    ].join('\n');
+    writeFileSync(configPath, yaml, 'utf-8');
+
+    const key = resolveCursorApiKey();
     expect(key).toBeUndefined();
   });
 });
