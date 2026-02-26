@@ -6,6 +6,17 @@
 
 フォーマットは [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) に基づいています。
 
+## [0.27.0-alpha.1] - 2026-02-27
+
+### Added
+
+- Cursor Agent CLI プロバイダーを追加: `cursor-agent` CLI を介して Cursor を AI プロバイダーとして利用可能に。API キー（`TAKT_CURSOR_API_KEY` / `cursor_api_key`）または `cursor-agent login` セッションで認証、JSON 出力解析、セッション継続（`--resume`）、モデル指定（`--model`）、パーミッション制御（`full` → `--force`）に対応 (#403)
+- Cursor プロバイダーの E2E テスト設定を追加（`vitest.config.e2e.cursor.ts`、`npm run test:e2e:cursor`）
+
+### Fixed
+
+- Phase 1 が error または blocked を返した場合に Phase 2（レポート出力）をスキップするよう修正。Phase 1 失敗時に不要なレポート生成が実行される問題を解消
+
 ## [0.26.0] - 2026-02-27
 
 ### Added

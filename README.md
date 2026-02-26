@@ -4,7 +4,7 @@
 
 **T**AKT **A**gent **K**oordination **T**opology — Give your AI coding agents structured review loops, managed prompts, and guardrails — so they deliver quality code, not just code.
 
-TAKT runs AI agents (Claude Code, Codex, OpenCode) through YAML-defined workflows with built-in review cycles. You talk to AI to define what you want, queue tasks, and let TAKT handle the execution — planning, implementation, multi-stage review, and fix loops — all governed by declarative piece files.
+TAKT runs AI agents (Claude Code, Codex, OpenCode, Cursor) through YAML-defined workflows with built-in review cycles. You talk to AI to define what you want, queue tasks, and let TAKT handle the execution — planning, implementation, multi-stage review, and fix loops — all governed by declarative piece files.
 
 TAKT is built with TAKT itself (dogfooding).
 
@@ -22,8 +22,8 @@ TAKT is built with TAKT itself (dogfooding).
 
 Choose one:
 
-- **Provider CLIs**: [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), or [OpenCode](https://opencode.ai) installed
-- **Direct API**: Anthropic / OpenAI / OpenCode API Key (no CLI required)
+- **Provider CLIs**: [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), [OpenCode](https://opencode.ai), or [Cursor Agent](https://docs.cursor.com/) installed
+- **Direct API**: Anthropic / OpenAI / OpenCode / Cursor API Key (no CLI required)
 
 Optional:
 
@@ -152,7 +152,7 @@ See the [CLI Reference](./docs/cli-reference.md) for all commands and options.
 Minimal `~/.takt/config.yaml`:
 
 ```yaml
-provider: claude    # claude, codex, or opencode
+provider: claude    # claude, codex, opencode, or cursor
 model: sonnet       # passed directly to provider
 language: en        # en or ja
 ```
@@ -163,6 +163,7 @@ Or use API keys directly (no CLI installation required):
 export TAKT_ANTHROPIC_API_KEY=sk-ant-...   # Anthropic (Claude)
 export TAKT_OPENAI_API_KEY=sk-...          # OpenAI (Codex)
 export TAKT_OPENCODE_API_KEY=...           # OpenCode
+export TAKT_CURSOR_API_KEY=...             # Cursor Agent (optional if logged in)
 ```
 
 See the [Configuration Guide](./docs/configuration.md) for all options, provider profiles, and model resolution.
