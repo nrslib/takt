@@ -20,11 +20,13 @@ vi.mock('node:fs', () => ({
     mkdtempSync: vi.fn(),
     writeFileSync: vi.fn(),
     existsSync: vi.fn(),
+    rmSync: vi.fn(),
   },
   mkdirSync: vi.fn(),
   mkdtempSync: vi.fn(),
   writeFileSync: vi.fn(),
   existsSync: vi.fn(),
+  rmSync: vi.fn(),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -648,5 +650,132 @@ describe('autoFetch: true — fetch, rev-parse origin/<branch>, reset --hard', (
     // Then: clone was reset to the fetched commit
     expect(resetCalls).toHaveLength(1);
     expect(resetCalls[0]).toEqual(['reset', '--hard', 'abc123def456']);
+  });
+});
+
+describe('shallow clone fallback', () => {
+  function setupShallowCloneMock(options: {
+    shallowError: boolean;
+    otherError?: string;
+  }): { cloneCalls: string[][] } {
+    const cloneCalls: string[][] = [];
+
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+
+      // git rev-parse --abbrev-ref HEAD
+      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--abbrev-ref' && argsArr[2] === 'HEAD') {
+        return 'main\n';
+      }
+
+      // git clone
+      if (argsArr[0] === 'clone') {
+        cloneCalls.push([...argsArr]);
+        const hasReference = argsArr.includes('--reference');
+
+        if (hasReference && options.shallowError) {
+          const err = new Error('clone failed');
+          (err as unknown as { stderr: Buffer }).stderr = Buffer.from('fatal: reference repository is shallow');
+          throw err;
+        }
+
+        if (hasReference && options.otherError) {
+          const err = new Error('clone failed');
+          (err as unknown as { stderr: Buffer }).stderr = Buffer.from(options.otherError);
+          throw err;
+        }
+
+        return Buffer.from('');
+      }
+
+      // git remote remove origin
+      if (argsArr[0] === 'remote' && argsArr[1] === 'remove') {
+        return Buffer.from('');
+      }
+
+      // git config --local (reading from source repo)
+      if (argsArr[0] === 'config' && argsArr[1] === '--local') {
+        throw new Error('not set');
+      }
+
+      // git config <key> <value> (writing to clone)
+      if (argsArr[0] === 'config') {
+        return Buffer.from('');
+      }
+
+      // git rev-parse --verify (branchExists)
+      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--verify') {
+        throw new Error('branch not found');
+      }
+
+      // git checkout -b
+      if (argsArr[0] === 'checkout') {
+        return Buffer.from('');
+      }
+
+      return Buffer.from('');
+    });
+
+    return { cloneCalls };
+  }
+
+  it('should fall back to clone without --reference when reference repository is shallow', () => {
+    const { cloneCalls } = setupShallowCloneMock({ shallowError: true });
+
+    createSharedClone('/project', {
+      worktree: '/tmp/shallow-test',
+      taskSlug: 'shallow-fallback',
+    });
+
+    // Two clone attempts: first with --reference, then without
+    expect(cloneCalls).toHaveLength(2);
+
+    // First attempt includes --reference and --dissociate
+    expect(cloneCalls[0]).toContain('--reference');
+    expect(cloneCalls[0]).toContain('--dissociate');
+
+    // Second attempt (fallback) does not include --reference or --dissociate
+    expect(cloneCalls[1]).not.toContain('--reference');
+    expect(cloneCalls[1]).not.toContain('--dissociate');
+
+    // Both attempts target the same clone path
+    expect(cloneCalls[0][cloneCalls[0].length - 1]).toBe('/tmp/shallow-test');
+    expect(cloneCalls[1][cloneCalls[1].length - 1]).toBe('/tmp/shallow-test');
+
+    // Fallback was logged
+    expect(mockLogInfo).toHaveBeenCalledWith(
+      'Reference repository is shallow, retrying clone without --reference',
+      expect.objectContaining({ referenceRepo: expect.any(String) }),
+    );
+  });
+
+  it('should not fall back on non-shallow clone errors', () => {
+    setupShallowCloneMock({
+      shallowError: false,
+      otherError: 'fatal: repository does not exist',
+    });
+
+    expect(() => {
+      createSharedClone('/project', {
+        worktree: '/tmp/other-error-test',
+        taskSlug: 'other-error',
+      });
+    }).toThrow('clone failed');
+  });
+
+  it('should attempt --reference --dissociate clone first', () => {
+    const { cloneCalls } = setupShallowCloneMock({ shallowError: false });
+
+    createSharedClone('/project', {
+      worktree: '/tmp/reference-first-test',
+      taskSlug: 'reference-first',
+    });
+
+    // Only one clone call (successful on first attempt)
+    expect(cloneCalls).toHaveLength(1);
+
+    // First (and only) attempt includes --reference and --dissociate
+    expect(cloneCalls[0]).toContain('--reference');
+    expect(cloneCalls[0]).toContain('--dissociate');
   });
 });
