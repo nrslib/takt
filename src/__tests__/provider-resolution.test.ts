@@ -122,6 +122,235 @@ describe('resolveMovementProviderModel', () => {
 });
 
 describe('resolveAgentProviderModel', () => {
+  it.each([
+    {
+      name: 'CLI overrides every other layer and also overrides model',
+      input: {
+        cliProvider: 'codex' as const,
+        cliModel: 'cli-model',
+        personaProviders: {
+          coder: { provider: 'mock' as const, model: 'persona-model' },
+        },
+        personaDisplayName: 'coder',
+        stepProvider: 'claude' as const,
+        stepModel: 'step-model',
+        localProvider: 'opencode' as const,
+        localModel: 'local-model',
+        globalProvider: 'mock' as const,
+        globalModel: 'global-model',
+      },
+      expected: { provider: 'codex' as const, model: 'cli-model' },
+    },
+    {
+      name: 'Step overrides local/global when persona is missing',
+      input: {
+        stepProvider: 'claude' as const,
+        stepModel: 'step-model',
+        localProvider: 'opencode' as const,
+        localModel: 'local-model',
+        globalProvider: 'mock' as const,
+        globalModel: 'global-model',
+      },
+      expected: { provider: 'claude' as const, model: 'step-model' },
+    },
+    {
+      name: 'Persona provider wins when CLI is absent',
+      input: {
+        stepProvider: 'claude' as const,
+        personaProviders: {
+          coder: { provider: 'mock' as const },
+        },
+        personaDisplayName: 'coder',
+        localProvider: 'opencode' as const,
+        localModel: 'local-model',
+        globalProvider: 'mock' as const,
+        globalModel: 'global-model',
+      },
+      expected: { provider: 'mock' as const, model: 'global-model' },
+    },
+    {
+      name: 'Persona model wins when no step model and no CLI model',
+      input: {
+        stepProvider: 'claude' as const,
+        stepModel: undefined,
+        personaProviders: {
+          coder: { model: 'persona-only-model' },
+        },
+        personaDisplayName: 'coder',
+        localProvider: 'opencode' as const,
+        localModel: 'local-model',
+        globalProvider: 'claude' as const,
+        globalModel: 'global-model',
+      },
+      expected: { provider: 'claude' as const, model: 'persona-only-model' },
+    },
+    {
+      name: 'Step provider wins over local/global provider and step model wins over model-only candidates',
+      input: {
+        stepProvider: 'codex' as const,
+        stepModel: 'step-model',
+        personaProviders: {
+          coder: { model: 'persona-model' },
+        },
+        personaDisplayName: 'coder',
+        localProvider: 'claude' as const,
+        localModel: 'local-model',
+        globalProvider: 'mock' as const,
+        globalModel: 'global-model',
+      },
+      expected: { provider: 'codex' as const, model: 'persona-model' },
+    },
+    {
+      name: 'Local provider is used when no higher-priority provider exists',
+      input: {
+        localProvider: 'opencode' as const,
+        localModel: 'local-model',
+        globalProvider: 'mock' as const,
+        globalModel: 'global-model',
+      },
+      expected: { provider: 'opencode' as const, model: 'local-model' },
+    },
+    {
+      name: 'Global is used when local provider is absent',
+      input: {
+        globalProvider: 'mock' as const,
+        globalModel: 'global-model',
+      },
+      expected: { provider: 'mock' as const, model: 'global-model' },
+    },
+    {
+      name: 'No CLI provider or higher layer, CLI model still has model-layer priority',
+      input: {
+        cliModel: 'cli-model',
+        stepModel: 'step-model',
+        localProvider: undefined,
+        localModel: 'local-model',
+        globalProvider: 'mock' as const,
+        globalModel: 'global-model',
+      },
+      expected: { provider: 'mock' as const, model: 'cli-model' },
+    },
+    {
+      name: 'All providers absent, earliest defined model in model order is used',
+      input: {
+        stepModel: 'step-model',
+        localProvider: undefined,
+        localModel: 'local-model',
+        globalProvider: 'mock' as const,
+        globalModel: 'global-model',
+      },
+      expected: { provider: 'mock' as const, model: 'step-model' },
+    },
+    {
+      name: 'Local model is ignored when it does not match resolved provider',
+      input: {
+        stepProvider: 'opencode' as const,
+        localProvider: 'codex' as const,
+        localModel: 'local-model',
+        globalProvider: 'mock' as const,
+        globalModel: 'global-model',
+      },
+      expected: { provider: 'opencode' as const, model: undefined },
+    },
+    {
+      name: 'Global model is used when it matches resolved provider',
+      input: {
+        stepProvider: 'claude' as const,
+        localProvider: 'opencode' as const,
+        localModel: 'local-model',
+        globalProvider: 'claude' as const,
+        globalModel: 'global-model',
+      },
+      expected: { provider: 'claude' as const, model: 'global-model' },
+    },
+    {
+      name: 'Local model is preferred when both local and global providers match',
+      input: {
+        localProvider: 'mock' as const,
+        localModel: 'local-model',
+        globalProvider: 'mock' as const,
+        globalModel: 'global-model',
+      },
+      expected: { provider: 'mock' as const, model: 'local-model' },
+    },
+    {
+      name: 'Global model is used when local exists but does not match resolved provider',
+      input: {
+        stepProvider: 'codex' as const,
+        localProvider: 'opencode' as const,
+        localModel: 'local-model',
+        globalProvider: 'codex' as const,
+        globalModel: 'global-model',
+      },
+      expected: { provider: 'codex' as const, model: 'global-model' },
+    },
+    {
+      name: 'CLI model is used even when provider comes from local and no CLI provider',
+      input: {
+        cliModel: 'cli-model',
+        localProvider: 'mock' as const,
+        localModel: 'local-model',
+        globalProvider: 'mock' as const,
+        globalModel: 'global-model',
+      },
+      expected: { provider: 'mock' as const, model: 'cli-model' },
+    },
+    {
+      name: 'Persona provider resolves provider, persona model still takes model priority',
+      input: {
+        stepProvider: 'codex' as const,
+        stepModel: 'step-model',
+        personaProviders: {
+          coder: {
+            provider: 'mock' as const,
+            model: 'persona-model',
+          },
+        },
+        personaDisplayName: 'coder',
+        localProvider: 'claude' as const,
+        localModel: 'local-model',
+        globalProvider: 'opencode' as const,
+        globalModel: 'global-model',
+      },
+      expected: { provider: 'mock' as const, model: 'persona-model' },
+    },
+    {
+      name: 'Unknown persona name falls back to normal chain without persona model/provider',
+      input: {
+        stepProvider: 'claude' as const,
+        stepModel: 'step-model',
+        personaProviders: {
+          reviewer: { provider: 'mock' as const, model: 'persona-model' },
+        },
+        personaDisplayName: 'coder',
+        localProvider: 'mock' as const,
+        localModel: 'local-model',
+      },
+      expected: { provider: 'claude' as const, model: 'step-model' },
+    },
+    {
+      name: 'No providers defined and no models defined -> all undefined',
+      input: {},
+      expected: { provider: undefined, model: undefined },
+    },
+    {
+      name: 'Only CLI model with persona-only model (no provider match), model remains persona-first',
+      input: {
+        cliModel: 'cli-model',
+        personaProviders: {
+          coder: { model: 'persona-model' },
+        },
+        personaDisplayName: 'coder',
+        stepProvider: 'mock' as const,
+        stepModel: 'step-model',
+      },
+      expected: { provider: 'mock' as const, model: 'cli-model' },
+    },
+  ])('should resolve %s', ({ input, expected }) => {
+    const result = resolveAgentProviderModel(input);
+    expect(result).toEqual(expected);
+  });
+
   it('should resolve provider in order: CLI > persona > movement > local > global', () => {
     const result = resolveAgentProviderModel({
       cliProvider: 'opencode',
