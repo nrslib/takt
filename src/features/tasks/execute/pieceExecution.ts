@@ -339,6 +339,7 @@ export async function executePiece(
   const shouldNotifyPieceComplete = shouldNotify && notificationSoundEvents?.pieceComplete !== false;
   const shouldNotifyPieceAbort = shouldNotify && notificationSoundEvents?.pieceAbort !== false;
   const currentProvider = globalConfig.provider;
+  const configuredModel = options.model ?? globalConfig.model;
   if (!currentProvider) {
     throw new Error('No provider configured. Set "provider" in ~/.takt/config.yaml');
   }
@@ -453,7 +454,7 @@ export async function executePiece(
   let lastMovementName: string | undefined;
   let currentIteration = 0;
   let currentMovementProvider = currentProvider;
-  let currentMovementModel = globalConfig.model ?? '(default)';
+  let currentMovementModel = configuredModel ?? '(default)';
   const phasePrompts = new Map<string, string>();
   const movementIterations = new Map<string, number>();
   let engine: PieceEngine | null = null;
@@ -552,7 +553,9 @@ export async function executePiece(
     });
     out.info(`[${iteration}/${pieceConfig.maxMovements}] ${step.name} (${step.personaDisplayName})`);
     const movementProvider = providerInfo.provider ?? currentProvider;
-    const movementModel = providerInfo.model ?? '(default)';
+    const movementModel = providerInfo.model
+      ?? (movementProvider === currentProvider ? configuredModel : undefined)
+      ?? '(default)';
     currentMovementProvider = movementProvider;
     currentMovementModel = movementModel;
     providerEventLogger.setMovement(step.name);
