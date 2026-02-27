@@ -155,7 +155,19 @@ vi.mock('../shared/exitCodes.js', () => ({
 }));
 
 import { executePiece } from '../features/tasks/execute/pieceExecution.js';
+import { resolvePieceConfigValues } from '../infra/config/index.js';
 import { info } from '../shared/ui/index.js';
+
+const defaultResolvedConfigValues = {
+  notificationSound: true,
+  notificationSoundEvents: {},
+  provider: 'claude',
+  runtime: undefined,
+  preventSleep: false,
+  model: undefined,
+  observability: undefined,
+  analytics: undefined,
+};
 
 function makeConfig(): PieceConfig {
   return {
@@ -178,6 +190,7 @@ function makeConfig(): PieceConfig {
 describe('executePiece session loading', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(resolvePieceConfigValues).mockReturnValue({ ...defaultResolvedConfigValues });
     mockLoadPersonaSessions.mockReturnValue({ coder: 'saved-session-id' });
     mockLoadWorktreeSessions.mockReturnValue({ coder: 'worktree-session-id' });
   });
@@ -259,6 +272,20 @@ describe('executePiece session loading', () => {
     const mockInfo = vi.mocked(info);
     expect(mockInfo).toHaveBeenCalledWith('Provider: claude');
     expect(mockInfo).toHaveBeenCalledWith('Model: (default)');
+  });
+
+  it('should log configured model from global/project settings when movement model is unresolved', async () => {
+    vi.mocked(resolvePieceConfigValues).mockReturnValue({
+      ...defaultResolvedConfigValues,
+      model: 'gpt-4.1',
+    });
+
+    await executePiece(makeConfig(), 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+    });
+
+    const mockInfo = vi.mocked(info);
+    expect(mockInfo).toHaveBeenCalledWith('Model: gpt-4.1');
   });
 
   it('should log provider and model per movement with overrides', async () => {
