@@ -7,7 +7,6 @@
 import type { Command } from 'commander';
 import type { TaskExecutionOptions } from '../../features/tasks/index.js';
 import type { ProviderType } from '../../infra/providers/index.js';
-import { error } from '../../shared/ui/index.js';
 import { isIssueReference } from '../../infra/github/index.js';
 
 /**
@@ -24,28 +23,6 @@ export function resolveAgentOverrides(program: Command): TaskExecutionOptions | 
   }
 
   return { provider, model };
-}
-
-/**
- * Parse --create-worktree option value (yes/no/true/false).
- * Returns undefined if not specified, boolean otherwise.
- * Exits with error on invalid value.
- */
-export function parseCreateWorktreeOption(value?: string): boolean | undefined {
-  if (!value) {
-    return undefined;
-  }
-
-  const normalized = value.toLowerCase();
-  if (normalized === 'yes' || normalized === 'true') {
-    return true;
-  }
-  if (normalized === 'no' || normalized === 'false') {
-    return false;
-  }
-
-  error('Invalid value for --create-worktree. Use yes or no.');
-  process.exit(1);
 }
 
 /**

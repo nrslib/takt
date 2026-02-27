@@ -373,7 +373,7 @@ TAKTのデータフローは以下の7つの主要なレイヤーで構成され
    - オーバーライドなし → インタラクティブ選択 (`selectPiece()`)
 
 2. **Worktree作成** (`confirmAndCreateWorktree()`):
-   - ユーザー確認 (または `--create-worktree` フラグ)
+   - ユーザー確認
    - ブランチ名生成 (`summarizeTaskName()` - AIでタスクから英語スラグ生成)
    - `createSharedClone()`: git clone --shared で軽量クローン作成
 
@@ -386,7 +386,6 @@ TAKTのデータフローは以下の7つの主要なレイヤーで構成され
 - `task: string`
 - `options?: SelectAndExecuteOptions`:
   - `piece?: string`
-  - `createWorktree?: boolean`
   - `autoPr?: boolean`
 - `agentOverrides?: TaskExecutionOptions`
 
@@ -762,7 +761,7 @@ async call(
 
 **Worktree作成** (オプション):
 - `confirmAndCreateWorktree()`:
-  - ユーザー確認または `--create-worktree` フラグ
+  - ユーザー確認
   - `summarizeTaskName()`: タスク → 英語スラグ (AI呼び出し)
   - `createSharedClone()`: git clone --shared
 

@@ -120,7 +120,7 @@ import { interactiveMode } from '../features/interactive/index.js';
 import { resolveConfigValues, loadPersonaSessions } from '../infra/config/index.js';
 import { isDirectTask } from '../app/cli/helpers.js';
 import { executeDefaultAction } from '../app/cli/routing.js';
-import { info } from '../shared/ui/index.js';
+import { info, error } from '../shared/ui/index.js';
 import type { Issue } from '../infra/git/index.js';
 
 const mockFormatIssueAsTask = vi.mocked(formatIssueAsTask);
@@ -133,6 +133,7 @@ const mockLoadPersonaSessions = vi.mocked(loadPersonaSessions);
 const mockResolveConfigValues = vi.mocked(resolveConfigValues);
 const mockIsDirectTask = vi.mocked(isDirectTask);
 const mockInfo = vi.mocked(info);
+const mockError = vi.mocked(error);
 const mockTaskRunnerListAllTaskItems = vi.mocked(mockListAllTaskItems);
 
 function createMockIssue(number: number): Issue {
@@ -161,6 +162,25 @@ beforeEach(() => {
 });
 
 describe('Issue resolution in routing', () => {
+  it('should show migration error and exit when deprecated --create-worktree is used', async () => {
+    mockOpts.createWorktree = 'yes';
+
+    const mockExit = vi.spyOn(process, 'exit').mockImplementation(() => {
+      throw new Error('process.exit called');
+    });
+
+    await expect(executeDefaultAction()).rejects.toThrow('process.exit called');
+
+    expect(mockError).toHaveBeenCalledWith(
+      '--create-worktree has been removed. execute now always runs in-place. Use "takt add" (save_task) + "takt run" for worktree-based execution.'
+    );
+    expect(mockExit).toHaveBeenCalledWith(1);
+    expect(mockInteractiveMode).not.toHaveBeenCalled();
+    expect(mockSelectAndExecuteTask).not.toHaveBeenCalled();
+
+    mockExit.mockRestore();
+  });
+
   describe('--issue option', () => {
     it('should resolve issue and pass to interactive mode when --issue is specified', async () => {
       // Given

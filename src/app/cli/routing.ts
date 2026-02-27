@@ -25,7 +25,7 @@ import {
 } from '../../features/interactive/index.js';
 import { getPieceDescription, resolveConfigValue, resolveConfigValues, loadPersonaSessions } from '../../infra/config/index.js';
 import { program, resolvedCwd, pipelineMode } from './program.js';
-import { resolveAgentOverrides, parseCreateWorktreeOption, isDirectTask } from './helpers.js';
+import { resolveAgentOverrides, isDirectTask } from './helpers.js';
 import { loadTaskHistory } from './taskHistory.js';
 
 /**
@@ -82,8 +82,15 @@ async function resolveIssueInput(
  */
 export async function executeDefaultAction(task?: string): Promise<void> {
   const opts = program.opts();
+  if (opts.createWorktree !== undefined) {
+    logError(
+      '--create-worktree has been removed. ' +
+      'execute now always runs in-place. ' +
+      'Use "takt add" (save_task) + "takt run" for worktree-based execution.'
+    );
+    process.exit(1);
+  }
   const agentOverrides = resolveAgentOverrides(program);
-  const createWorktreeOverride = parseCreateWorktreeOption(opts.createWorktree as string | undefined);
   const resolvedPipelinePiece = (opts.piece as string | undefined) ?? resolveConfigValue(resolvedCwd, 'piece');
   const resolvedPipelineAutoPr = opts.autoPr === true
     ? true
@@ -96,7 +103,6 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     draftPr: opts.draft === true ? true : undefined,
     repo: opts.repo as string | undefined,
     piece: opts.piece as string | undefined,
-    createWorktree: createWorktreeOverride,
   };
 
   // --- Pipeline mode (non-interactive): triggered by --pipeline ---
@@ -113,7 +119,6 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       cwd: resolvedCwd,
       provider: agentOverrides?.provider,
       model: agentOverrides?.model,
-      createWorktree: createWorktreeOverride,
     });
 
     if (exitCode !== 0) {

@@ -1,7 +1,7 @@
 /**
  * Task execution orchestration.
  *
- * Coordinates piece selection, worktree creation, task execution,
+ * Coordinates piece selection and task execution,
  * auto-commit, and PR creation. Extracted from cli.ts to avoid
  * mixing CLI parsing with business logic.
  */
@@ -74,7 +74,7 @@ export async function confirmAndCreateWorktree(
 }
 
 /**
- * Execute a task with piece selection, optional worktree, and auto-commit.
+ * Execute a task with piece selection.
  * Shared by direct task execution and interactive mode.
  */
 export async function selectAndExecuteTask(
@@ -90,11 +90,12 @@ export async function selectAndExecuteTask(
     return;
   }
 
-  const { execCwd, isWorktree, branch, baseBranch, taskSlug } = await confirmAndCreateWorktree(
-    cwd,
-    task,
-    options?.createWorktree,
-  );
+  // execute action always runs in-place (no worktree prompt/creation).
+  const execCwd = cwd;
+  const isWorktree = false;
+  const branch = undefined;
+  const baseBranch = undefined;
+  const taskSlug = undefined;
 
   // Ask for PR creation BEFORE execution (only if worktree is enabled)
   let shouldCreatePr = false;

@@ -138,7 +138,6 @@ export interface SelectAndExecuteOptions {
   draftPr?: boolean;
   repo?: string;
   piece?: string;
-  createWorktree?: boolean | undefined;
   /** Enable interactive user input during step transitions */
   interactiveUserInput?: boolean;
   /** Interactive mode result metadata for NDJSON logging */
