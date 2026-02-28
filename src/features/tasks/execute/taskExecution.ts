@@ -19,7 +19,7 @@ import type { TaskExecutionOptions, ExecuteTaskOptions, PieceExecutionResult } f
 import { runWithWorkerPool } from './parallelExecution.js';
 import { resolveTaskExecution, resolveTaskIssue } from './resolveTask.js';
 import { postExecutionFlow } from './postExecution.js';
-import { buildTaskResult, persistTaskError, persistTaskResult } from './taskResultHandler.js';
+import { buildTaskResult, persistExceededTaskResult, persistTaskError, persistTaskResult } from './taskResultHandler.js';
 import { generateRunId, toSlackTaskDetail } from './slackSummaryAdapter.js';
 
 export type { TaskExecutionOptions, ExecuteTaskOptions };
@@ -42,6 +42,8 @@ async function executeTaskWithResult(options: ExecuteTaskOptions): Promise<Piece
     taskPrefix,
     taskColorIndex,
     taskDisplayLabel,
+    maxMovementsOverride,
+    initialIterationOverride,
   } = options;
   const pieceConfig = loadPieceByIdentifier(pieceIdentifier, projectCwd);
 
@@ -82,8 +84,10 @@ async function executeTaskWithResult(options: ExecuteTaskOptions): Promise<Piece
     taskPrefix,
     taskColorIndex,
     taskDisplayLabel,
+    maxMovementsOverride,
+    initialIterationOverride,
   });
-  }
+}
 
 /**
  * Execute a single task with piece.
@@ -141,6 +145,8 @@ export async function executeAndCompleteTask(
       autoPr,
       draftPr,
       issueNumber,
+      maxMovementsOverride,
+      initialIterationOverride,
     } = await resolveTaskExecution(task, cwd, pieceName, taskAbortSignal);
 
     // cwd is always the project root; pass it as projectCwd so reports/sessions go there
@@ -157,7 +163,14 @@ export async function executeAndCompleteTask(
       taskPrefix: parallelOptions?.taskPrefix,
       taskColorIndex: parallelOptions?.taskColorIndex,
       taskDisplayLabel: parallelOptions?.taskDisplayLabel,
+      maxMovementsOverride,
+      initialIterationOverride,
     });
+
+    if (taskRunResult.exceeded && taskRunResult.exceededInfo) {
+      persistExceededTaskResult(taskRunner, task, taskRunResult.exceededInfo);
+      return false;
+    }
 
     const taskSuccess = taskRunResult.success;
     const completedAt = new Date().toISOString();

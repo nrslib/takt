@@ -45,9 +45,9 @@ export function resolveTaskContent(projectDir: string, task: TaskRecord): string
   return fs.readFileSync(contentPath, 'utf-8');
 }
 
-export function toTaskData(projectDir: string, task: TaskRecord): TaskFileData {
+function buildTaskFileData(task: TaskRecord, content: string): TaskFileData {
   return TaskFileSchema.parse({
-    task: resolveTaskContent(projectDir, task),
+    task: content,
     worktree: task.worktree,
     branch: task.branch,
     piece: task.piece,
@@ -56,7 +56,13 @@ export function toTaskData(projectDir: string, task: TaskRecord): TaskFileData {
     retry_note: task.retry_note,
     auto_pr: task.auto_pr,
     draft_pr: task.draft_pr,
+    exceeded_max_movements: task.exceeded_max_movements,
+    exceeded_current_iteration: task.exceeded_current_iteration,
   });
+}
+
+export function toTaskData(projectDir: string, task: TaskRecord): TaskFileData {
+  return buildTaskFileData(task, resolveTaskContent(projectDir, task));
 }
 
 export function toTaskInfo(projectDir: string, tasksFile: string, task: TaskRecord): TaskInfo {
@@ -70,17 +76,7 @@ export function toTaskInfo(projectDir: string, tasksFile: string, task: TaskReco
     createdAt: task.created_at,
     status: task.status,
     worktreePath: task.worktree_path,
-    data: TaskFileSchema.parse({
-      task: content,
-      worktree: task.worktree,
-      branch: task.branch,
-      piece: task.piece,
-      issue: task.issue,
-      start_movement: task.start_movement,
-      retry_note: task.retry_note,
-      auto_pr: task.auto_pr,
-      draft_pr: task.draft_pr,
-    }),
+    data: buildTaskFileData(task, content),
   };
 }
 
@@ -99,6 +95,15 @@ export function toFailedTaskItem(projectDir: string, tasksFile: string, task: Ta
   };
 }
 
+export function toExceededTaskItem(projectDir: string, tasksFile: string, task: TaskRecord): TaskListItem {
+  return {
+    kind: 'exceeded',
+    ...toBaseTaskListItem(projectDir, tasksFile, task),
+    exceededMaxMovements: task.exceeded_max_movements,
+    exceededCurrentIteration: task.exceeded_current_iteration,
+  };
+}
+
 function toRunningTaskItem(projectDir: string, tasksFile: string, task: TaskRecord): TaskListItem {
   return {
     kind: 'running',
@@ -113,7 +118,7 @@ function toCompletedTaskItem(projectDir: string, tasksFile: string, task: TaskRe
   };
 }
 
-function toBaseTaskListItem(projectDir: string, tasksFile: string, task: TaskRecord): Omit<TaskListItem, 'kind' | 'failure'> {
+function toBaseTaskListItem(projectDir: string, tasksFile: string, task: TaskRecord): Omit<TaskListItem, 'kind' | 'failure' | 'exceededMaxMovements' | 'exceededCurrentIteration'> {
   return {
     name: task.name,
     createdAt: task.created_at,
@@ -141,5 +146,7 @@ export function toTaskListItem(projectDir: string, tasksFile: string, task: Task
       return toCompletedTaskItem(projectDir, tasksFile, task);
     case 'failed':
       return toFailedTaskItem(projectDir, tasksFile, task);
+    case 'exceeded':
+      return toExceededTaskItem(projectDir, tasksFile, task);
   }
 }

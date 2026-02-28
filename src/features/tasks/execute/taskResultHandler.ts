@@ -1,7 +1,7 @@
 import { type TaskInfo, type TaskResult, TaskRunner } from '../../../infra/task/index.js';
-import { error, success } from '../../../shared/ui/index.js';
+import { error, info, success } from '../../../shared/ui/index.js';
 import { getErrorMessage } from '../../../shared/utils/index.js';
-import type { PieceExecutionResult } from './types.js';
+import type { ExceededInfo, PieceExecutionResult } from './types.js';
 
 interface BuildTaskResultParams {
   task: TaskInfo;
@@ -98,6 +98,19 @@ export function persistTaskResult(
   if (emitStatusLog) {
     error(`Task "${taskResult.task.name}" failed`);
   }
+}
+
+export function persistExceededTaskResult(
+  taskRunner: TaskRunner,
+  task: TaskInfo,
+  exceeded: ExceededInfo,
+): void {
+  taskRunner.exceedTask(task.name, {
+    currentMovement: exceeded.currentMovement,
+    newMaxMovements: exceeded.newMaxMovements,
+    currentIteration: exceeded.currentIteration,
+  });
+  info(`Task "${task.name}" exceeded iteration limit at movement "${exceeded.currentMovement}"`);
 }
 
 export function persistTaskError(

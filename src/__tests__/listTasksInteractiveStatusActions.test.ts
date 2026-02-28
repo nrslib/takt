@@ -7,20 +7,22 @@ const {
   mockInfo,
   mockBlankLine,
   mockListAllTaskItems,
-  mockDeleteCompletedRecord,
+  mockDeleteTask,
   mockShowDiffAndPromptActionForTask,
   mockMergeBranch,
   mockDeleteCompletedTask,
+  mockRequeueExceededTask,
 } = vi.hoisted(() => ({
   mockSelectOption: vi.fn(),
   mockHeader: vi.fn(),
   mockInfo: vi.fn(),
   mockBlankLine: vi.fn(),
   mockListAllTaskItems: vi.fn(),
-  mockDeleteCompletedRecord: vi.fn(),
+  mockDeleteTask: vi.fn(),
   mockShowDiffAndPromptActionForTask: vi.fn(),
   mockMergeBranch: vi.fn(),
   mockDeleteCompletedTask: vi.fn(),
+  mockRequeueExceededTask: vi.fn(),
 }));
 
 vi.mock('../infra/task/index.js', () => ({
@@ -28,8 +30,11 @@ vi.mock('../infra/task/index.js', () => ({
     listAllTaskItems() {
       return mockListAllTaskItems();
     }
-    deleteCompletedTask(name: string) {
-      mockDeleteCompletedRecord(name);
+    deleteTask(name: string, kind: string) {
+      mockDeleteTask(name, kind);
+    }
+    requeueExceededTask(name: string) {
+      mockRequeueExceededTask(name);
     }
   },
 }));
@@ -54,9 +59,8 @@ vi.mock('../features/tasks/list/taskActions.js', () => ({
 }));
 
 vi.mock('../features/tasks/list/taskDeleteActions.js', () => ({
-  deletePendingTask: vi.fn(),
-  deleteFailedTask: vi.fn(),
-  deleteCompletedTask: mockDeleteCompletedTask,
+  deleteTaskByKind: mockDeleteCompletedTask,
+  deleteAllTasks: vi.fn(),
 }));
 
 vi.mock('../features/tasks/list/taskRetryActions.js', () => ({
@@ -86,6 +90,16 @@ const completedTaskWithoutBranch: TaskListItem = {
   ...completedTaskWithBranch,
   branch: undefined,
   name: 'completed-without-branch',
+};
+
+const exceededTask: TaskListItem = {
+  kind: 'exceeded',
+  name: 'exceeded-task',
+  createdAt: '2026-02-14T00:00:00.000Z',
+  filePath: '/project/.takt/tasks.yaml',
+  content: 'iteration limit reached',
+  exceededMaxMovements: 60,
+  exceededCurrentIteration: 30,
 };
 
 describe('listTasks interactive status actions', () => {
@@ -129,7 +143,7 @@ describe('listTasks interactive status actions', () => {
     await listTasks('/project');
 
     expect(mockMergeBranch).toHaveBeenCalledWith('/project', completedTaskWithBranch);
-    expect(mockDeleteCompletedRecord).toHaveBeenCalledWith('completed-task');
+    expect(mockDeleteTask).toHaveBeenCalledWith('completed-task', 'completed');
   });
 
   it('completed delete 選択時は deleteCompletedTask を呼ぶ', async () => {
@@ -142,6 +156,47 @@ describe('listTasks interactive status actions', () => {
     await listTasks('/project');
 
     expect(mockDeleteCompletedTask).toHaveBeenCalledWith(completedTaskWithBranch);
-    expect(mockDeleteCompletedRecord).not.toHaveBeenCalled();
+    expect(mockDeleteTask).not.toHaveBeenCalled();
+  });
+
+  describe('exceeded status action handling', () => {
+    it('exceeded requeue 選択時は requeueExceededTask を呼ぶ', async () => {
+      mockListAllTaskItems.mockReturnValue([exceededTask]);
+      mockSelectOption
+        .mockResolvedValueOnce('exceeded:0')
+        .mockResolvedValueOnce('requeue')
+        .mockResolvedValueOnce(null);
+
+      await listTasks('/project');
+
+      expect(mockRequeueExceededTask).toHaveBeenCalledWith('exceeded-task');
+      expect(mockDeleteCompletedTask).not.toHaveBeenCalled();
+    });
+
+    it('exceeded delete 選択時は deleteTaskByKind を呼ぶ', async () => {
+      mockListAllTaskItems.mockReturnValue([exceededTask]);
+      mockSelectOption
+        .mockResolvedValueOnce('exceeded:0')
+        .mockResolvedValueOnce('delete')
+        .mockResolvedValueOnce(null);
+
+      await listTasks('/project');
+
+      expect(mockDeleteCompletedTask).toHaveBeenCalledWith(exceededTask);
+      expect(mockRequeueExceededTask).not.toHaveBeenCalled();
+    });
+
+    it('exceeded でキャンセル選択時は何も呼ばれない', async () => {
+      mockListAllTaskItems.mockReturnValue([exceededTask]);
+      mockSelectOption
+        .mockResolvedValueOnce('exceeded:0')
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null);
+
+      await listTasks('/project');
+
+      expect(mockRequeueExceededTask).not.toHaveBeenCalled();
+      expect(mockDeleteCompletedTask).not.toHaveBeenCalled();
+    });
   });
 });

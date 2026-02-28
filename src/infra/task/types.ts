@@ -78,7 +78,7 @@ export interface SummarizeOptions {
 
 /** pending/failedタスクのリストアイテム */
 export interface TaskListItem {
-  kind: 'pending' | 'running' | 'completed' | 'failed';
+  kind: 'pending' | 'running' | 'completed' | 'failed' | 'exceeded';
   name: string;
   createdAt: string;
   filePath: string;
@@ -93,4 +93,6 @@ export interface TaskListItem {
   completedAt?: string;
   ownerPid?: number;
   issueNumber?: number;
+  exceededMaxMovements?: number;
+  exceededCurrentIteration?: number;
 }

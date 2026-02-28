@@ -5,6 +5,7 @@ const TASK_STATUS_BY_KIND: Record<TaskListItem['kind'], string> = {
   running: 'running',
   completed: 'completed',
   failed: 'failed',
+  exceeded: 'exceeded',
 };
 
 export function formatTaskStatusLabel(task: TaskListItem): string {

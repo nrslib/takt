@@ -10,12 +10,22 @@ import type { ProviderType } from '../../../infra/providers/index.js';
 import type { Issue } from '../../../infra/git/index.js';
 import type { ProviderOptionsSource } from '../../../core/piece/types.js';
 
+/** Info captured when iteration limit is hit in non-interactive mode */
+export interface ExceededInfo {
+  currentMovement: string;
+  newMaxMovements: number;
+  currentIteration: number;
+}
+
 /** Result of piece execution */
 export interface PieceExecutionResult {
   success: boolean;
   reason?: string;
   lastMovement?: string;
   lastMessage?: string;
+  /** True when iteration limit was hit in non-interactive mode */
+  exceeded?: boolean;
+  exceededInfo?: ExceededInfo;
 }
 
 /** Metadata from interactive mode, passed through to NDJSON logging */
@@ -32,6 +42,10 @@ export interface PieceExecutionOptions {
   headerPrefix?: string;
   /** Project root directory (where .takt/ lives). */
   projectCwd: string;
+  /** Override maxMovements from piece config (used when resuming exceeded tasks) */
+  maxMovementsOverride?: number;
+  /** Override initial iteration count (used when resuming exceeded tasks) */
+  initialIterationOverride?: number;
   /** Language for instruction metadata */
   language?: Language;
   provider?: ProviderType;
@@ -80,6 +94,10 @@ export interface ExecuteTaskOptions {
   projectCwd: string;
   /** Agent provider/model overrides */
   agentOverrides?: TaskExecutionOptions;
+  /** Override maxMovements from piece config (used when resuming exceeded tasks) */
+  maxMovementsOverride?: number;
+  /** Override initial iteration count (used when resuming exceeded tasks) */
+  initialIterationOverride?: number;
   /** Enable interactive user input during step transitions */
   interactiveUserInput?: boolean;
   /** Interactive mode result metadata for NDJSON logging */

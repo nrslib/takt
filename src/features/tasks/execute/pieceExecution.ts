@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PieceEngine, createDenyAskUserQuestionHandler, type IterationLimitRequest, type UserInputRequest } from '../../../core/piece/index.js';
 import type { PieceConfig } from '../../../core/models/index.js';
-import type { PieceExecutionResult, PieceExecutionOptions } from './types.js';
+import type { PieceExecutionResult, PieceExecutionOptions, ExceededInfo } from './types.js';
 import { detectRuleIndex } from '../../../shared/utils/ruleIndex.js';
 import { interruptAllQueries } from '../../../infra/claude/query-manager.js';
 import { callAiJudge } from '../../../agents/ai-judge.js';
@@ -346,6 +346,7 @@ export async function executePiece(
   const effectivePieceConfig: PieceConfig = {
     ...pieceConfig,
     runtime: resolveRuntimeConfig(globalConfig.runtime, pieceConfig.runtime),
+    ...(options.maxMovementsOverride !== undefined ? { maxMovements: options.maxMovementsOverride } : {}),
   };
   const providerEventLogger = createProviderEventLogger({
     logsDir: runPaths.logsAbs,
@@ -402,6 +403,15 @@ export async function executePiece(
       playWarningSound();
     }
 
+    if (!interactiveUserInput) {
+      exceededInfo = {
+        currentMovement: request.currentMovement,
+        newMaxMovements: request.maxMovements + pieceConfig.maxMovements,
+        currentIteration: request.currentIteration,
+      };
+      return null;
+    }
+
     enterInputWait();
     try {
       const action = await selectOption(getLabel('piece.iterationLimit.continueQuestion'), [
@@ -450,6 +460,7 @@ export async function executePiece(
     : undefined;
 
   let abortReason: string | undefined;
+  let exceededInfo: ExceededInfo | undefined;
   let lastMovementContent: string | undefined;
   let lastMovementName: string | undefined;
   let currentIteration = 0;
@@ -488,6 +499,7 @@ export async function executePiece(
       reportDirName: runSlug,
       taskPrefix: options.taskPrefix,
       taskColorIndex: options.taskColorIndex,
+      initialIteration: options.initialIterationOverride,
     });
 
     engine.on('phase:start', (step, phase, phaseName, instruction) => {
@@ -548,10 +560,10 @@ export async function executePiece(
     prefixWriter?.setMovementContext({
       movementName: step.name,
       iteration,
-      maxMovements: pieceConfig.maxMovements,
+      maxMovements: effectivePieceConfig.maxMovements,
       movementIteration,
     });
-    out.info(`[${iteration}/${pieceConfig.maxMovements}] ${step.name} (${step.personaDisplayName})`);
+    out.info(`[${iteration}/${effectivePieceConfig.maxMovements}] ${step.name} (${step.personaDisplayName})`);
     const movementProvider = providerInfo.provider ?? currentProvider;
     const movementModel = providerInfo.model
       ?? (movementProvider === currentProvider ? configuredModel : undefined)
@@ -579,7 +591,7 @@ export async function executePiece(
       const agentLabel = step.personaDisplayName;
       displayRef.current = new StreamDisplay(agentLabel, quiet, {
         iteration,
-        maxMovements: pieceConfig.maxMovements,
+        maxMovements: effectivePieceConfig.maxMovements,
         movementIndex: movementIndex >= 0 ? movementIndex : 0,
         totalMovements,
       });
@@ -847,6 +859,8 @@ export async function executePiece(
       reason: abortReason,
       lastMovement: lastMovementName,
       lastMessage: lastMovementContent,
+      exceeded: exceededInfo != null,
+      ...(exceededInfo ? { exceededInfo } : {}),
     };
   } catch (error) {
     if (!isMetaFinalized) {
