@@ -99,7 +99,7 @@ jobs:
 
       - name: Resolve
         run: |
-          claude -p "$(cat <<'PROMPT'
+          claude -p --dangerously-skip-permissions "$(cat <<'PROMPT'
           このPRのコンフリクトおよびレビュー指摘を解決してください。
 
           ## 状況判定
