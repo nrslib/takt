@@ -4,7 +4,7 @@
 
 **T**AKT **A**gent **K**oordination **T**opology — Give your AI coding agents structured review loops, managed prompts, and guardrails — so they deliver quality code, not just code.
 
-TAKT runs AI agents (Claude Code, Codex, OpenCode, Cursor) through YAML-defined workflows with built-in review cycles. You talk to AI to define what you want, queue tasks, and let TAKT handle the execution — planning, implementation, multi-stage review, and fix loops — all governed by declarative piece files.
+TAKT runs AI agents (Claude Code, Codex, OpenCode, Cursor, Copilot) through YAML-defined workflows with built-in review cycles. You talk to AI to define what you want, queue tasks, and let TAKT handle the execution — planning, implementation, multi-stage review, and fix loops — all governed by declarative piece files.
 
 TAKT is built with TAKT itself (dogfooding).
 
@@ -22,7 +22,7 @@ TAKT is built with TAKT itself (dogfooding).
 
 Choose one:
 
-- **Provider CLIs**: [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), [OpenCode](https://opencode.ai), or [Cursor Agent](https://docs.cursor.com/) installed
+- **Provider CLIs**: [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), [OpenCode](https://opencode.ai), [Cursor Agent](https://docs.cursor.com/), or [GitHub Copilot](https://github.com/features/copilot) installed
 - **Direct API**: Anthropic / OpenAI / OpenCode / Cursor API Key (no CLI required)
 
 Optional:
@@ -152,7 +152,7 @@ See the [CLI Reference](./docs/cli-reference.md) for all commands and options.
 Minimal `~/.takt/config.yaml`:
 
 ```yaml
-provider: claude    # claude, codex, opencode, or cursor
+provider: claude    # claude, codex, opencode, cursor, or copilot
 model: sonnet       # passed directly to provider
 language: en        # en or ja
 ```
