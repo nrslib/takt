@@ -20,7 +20,6 @@ const COPILOT_ABORTED_MESSAGE = 'Copilot execution aborted';
 const COPILOT_MAX_BUFFER_BYTES = 10 * 1024 * 1024;
 const COPILOT_FORCE_KILL_DELAY_MS_DEFAULT = 1_000;
 const COPILOT_ERROR_DETAIL_MAX_LENGTH = 400;
-const COPILOT_DEFAULT_MAX_AUTOPILOT_CONTINUES = 50;
 
 function resolveForceKillDelayMs(): number {
   const raw = process.env.TAKT_COPILOT_FORCE_KILL_DELAY_MS;
