@@ -31,7 +31,6 @@ describe('E2E: Error handling edge cases (mock)', () => {
       args: [
         '--task', 'test',
         '--piece', '/nonexistent/path/to/piece.yaml',
-        '--create-worktree', 'no',
         '--provider', 'mock',
       ],
       cwd: repo.path,
@@ -53,7 +52,6 @@ describe('E2E: Error handling edge cases (mock)', () => {
       args: [
         '--task', 'test',
         '--piece', 'nonexistent-piece-name-xyz',
-        '--create-worktree', 'no',
         '--provider', 'mock',
       ],
       cwd: repo.path,
@@ -122,7 +120,6 @@ describe('E2E: Error handling edge cases (mock)', () => {
       args: [
         '--task', 'test',
         '--piece', brokenPiecePath,
-        '--create-worktree', 'no',
         '--provider', 'mock',
       ],
       cwd: repo.path,

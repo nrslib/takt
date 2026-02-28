@@ -9,7 +9,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // E2E更新時は docs/testing/e2e.md も更新すること
-describe('E2E: Direct task execution (--task --create-worktree no)', () => {
+describe('E2E: Direct task execution (--task)', () => {
   let isolatedEnv: IsolatedEnv;
   let testRepo: TestRepo;
 
@@ -39,7 +39,6 @@ describe('E2E: Direct task execution (--task --create-worktree no)', () => {
       args: [
         '--task', 'Create a file called noop.txt',
         '--piece', piecePath,
-        '--create-worktree', 'no',
         '--provider', 'mock',
       ],
       cwd: testRepo.path,
