@@ -7,8 +7,8 @@
  */
 
 import { checkGhCli, fetchIssue, createIssue } from './issue.js';
-import { findExistingPr, commentOnPr, createPullRequest } from './pr.js';
-import type { GitProvider, CliStatus, Issue, ExistingPr, CreateIssueOptions, CreateIssueResult, CreatePrOptions, CreatePrResult, CommentResult } from '../git/types.js';
+import { findExistingPr, commentOnPr, createPullRequest, fetchPrReviewComments } from './pr.js';
+import type { GitProvider, CliStatus, Issue, ExistingPr, CreateIssueOptions, CreateIssueResult, CreatePrOptions, CreatePrResult, CommentResult, PrReviewData } from '../git/types.js';
 
 export class GitHubProvider implements GitProvider {
   checkCliStatus(): CliStatus {
@@ -21,6 +21,10 @@ export class GitHubProvider implements GitProvider {
 
   createIssue(options: CreateIssueOptions): CreateIssueResult {
     return createIssue(options);
+  }
+
+  fetchPrReviewComments(prNumber: number): PrReviewData {
+    return fetchPrReviewComments(prNumber);
   }
 
   findExistingPr(cwd: string, branch: string): ExistingPr | undefined {

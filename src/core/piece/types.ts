@@ -11,7 +11,7 @@ import type { PersonaProviderEntry } from '../models/persisted-global-config.js'
 import type { ProviderPermissionProfiles } from '../models/provider-profiles.js';
 import type { MovementProviderOptions } from '../models/piece-types.js';
 
-export type ProviderType = 'claude' | 'codex' | 'opencode' | 'mock';
+export type ProviderType = 'claude' | 'codex' | 'opencode' | 'cursor' | 'mock';
 export type ProviderOptionsSource = 'env' | 'project' | 'global' | 'default';
 
 export interface StreamInitEventData {
@@ -110,9 +110,15 @@ export type AiJudgeCaller = (
 
 export type PhaseName = 'execute' | 'report' | 'judge';
 
+/** Provider and model info resolved for a movement */
+export interface MovementProviderInfo {
+  provider: ProviderType | undefined;
+  model: string | undefined;
+}
+
 /** Events emitted by piece engine */
 export interface PieceEvents {
-  'movement:start': (step: PieceMovement, iteration: number, instruction: string) => void;
+  'movement:start': (step: PieceMovement, iteration: number, instruction: string, providerInfo: MovementProviderInfo) => void;
   'movement:complete': (step: PieceMovement, response: AgentResponse, instruction: string) => void;
   'movement:report': (step: PieceMovement, filePath: string, fileName: string) => void;
   'movement:blocked': (step: PieceMovement, response: AgentResponse) => void;

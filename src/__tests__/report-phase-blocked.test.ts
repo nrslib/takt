@@ -8,7 +8,8 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 
 // --- Mock setup (must be before imports that use these modules) ---
 
@@ -220,5 +221,67 @@ describe('PieceEngine Integration: Report Phase Blocked Handling', () => {
       expect.objectContaining({ name: 'implement' }),
       expect.objectContaining({ status: 'blocked', content: blockedContent }),
     );
+  });
+
+  it('should skip report phase when phase 1 returns error', async () => {
+    const config = buildConfigWithReport();
+    const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+
+    mockRunAgentSequence([
+      makeResponse({ persona: 'plan', content: 'Plan done' }),
+      makeResponse({
+        persona: 'implement',
+        status: 'error',
+        content: 'Cursor Agent CLI exited with code 1: Workspace Trust Required',
+        error: 'Cursor Agent CLI exited with code 1: Workspace Trust Required',
+      }),
+    ]);
+
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' },
+    ]);
+
+    const abortFn = vi.fn();
+    engine.on('piece:abort', abortFn);
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(runReportPhase).not.toHaveBeenCalled();
+    expect(abortFn).toHaveBeenCalledOnce();
+    const reason = abortFn.mock.calls[0]?.[1] as string;
+    expect(reason).toContain('Movement "implement" failed');
+    expect(reason).toContain('Workspace Trust Required');
+  });
+
+  it('should skip report phase when phase 1 returns blocked and persist blocked snapshot', async () => {
+    const config = buildConfigWithReport();
+    const onUserInput = vi.fn().mockResolvedValueOnce(null);
+    const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, onUserInput });
+
+    mockRunAgentSequence([
+      makeResponse({ persona: 'plan', content: 'Plan done' }),
+      makeResponse({
+        persona: 'implement',
+        status: 'blocked',
+        content: 'Need clarification before report',
+      }),
+    ]);
+
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' }, // plan -> implement
+    ]);
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(onUserInput).toHaveBeenCalledOnce();
+    expect(runReportPhase).not.toHaveBeenCalled();
+    expect(state.previousResponseSourcePath).toMatch(
+      /^\.takt\/runs\/test-report-dir\/context\/previous_responses\/implement\.1\.\d{8}T\d{6}Z\.md$/,
+    );
+
+    const snapshotPath = join(tmpDir, state.previousResponseSourcePath!);
+    expect(readFileSync(snapshotPath, 'utf-8')).toBe('Need clarification before report');
   });
 });

@@ -37,6 +37,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 import { PieceEngine } from '../core/piece/index.js';
 import { runAgent } from '../agents/runner.js';
 import { detectMatchedRule } from '../core/piece/evaluation/index.js';
+import { runReportPhase } from '../core/piece/phase-runner.js';
 import {
   makeResponse,
   makeMovement,
@@ -113,7 +114,42 @@ describe('PieceEngine Integration: Error Handling', () => {
   });
 
   // =====================================================
-  // 3. Loop detection
+  // 3. Interrupted status routing
+  // =====================================================
+  describe('Interrupted status', () => {
+    it('should continue with normal rule routing and skip report phase when movement returns interrupted', async () => {
+      const config = buildDefaultPieceConfig({
+        initialMovement: 'plan',
+        movements: [
+          makeMovement('plan', {
+            outputContracts: [{ name: '01-plan.md', format: '# Plan' }],
+            rules: [makeRule('continue', 'COMPLETE')],
+          }),
+        ],
+      });
+      const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+
+      mockRunAgentSequence([
+        makeResponse({ persona: 'plan', status: 'interrupted', content: 'Partial response' }),
+      ]);
+
+      mockDetectMatchedRuleSequence([
+        { index: 0, method: 'phase1_tag' },
+      ]);
+
+      const abortFn = vi.fn();
+      engine.on('piece:abort', abortFn);
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('completed');
+      expect(abortFn).not.toHaveBeenCalled();
+      expect(runReportPhase).not.toHaveBeenCalled();
+    });
+  });
+
+  // =====================================================
+  // 4. Loop detection
   // =====================================================
   describe('Loop detection', () => {
     it('should abort when loop detected with action: abort', async () => {
@@ -153,7 +189,7 @@ describe('PieceEngine Integration: Error Handling', () => {
   });
 
   // =====================================================
-  // 4. Iteration limit
+  // 5. Iteration limit
   // =====================================================
   describe('Iteration limit', () => {
     it('should abort when max iterations reached without onIterationLimit callback', async () => {

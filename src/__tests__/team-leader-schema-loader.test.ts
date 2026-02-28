@@ -32,6 +32,20 @@ describe('team_leader schema', () => {
     expect(result.success).toBe(false);
   });
 
+  it('refill_threshold > max_parts は拒否する', () => {
+    const raw = {
+      name: 'implement',
+      team_leader: {
+        max_parts: 2,
+        refill_threshold: 3,
+      },
+      instruction_template: 'decompose',
+    };
+
+    const result = PieceMovementRawSchema.safeParse(raw);
+    expect(result.success).toBe(false);
+  });
+
   it('parallel と team_leader の同時指定は拒否する', () => {
     const raw = {
       name: 'implement',
@@ -94,6 +108,7 @@ describe('normalizePieceConfig team_leader', () => {
       persona: 'team-leader',
       personaPath: undefined,
       maxParts: 2,
+      refillThreshold: 0,
       timeoutMs: 90000,
       partPersona: 'coder',
       partPersonaPath: undefined,

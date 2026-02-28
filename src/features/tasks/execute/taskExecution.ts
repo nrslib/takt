@@ -64,19 +64,13 @@ async function executeTaskWithResult(options: ExecuteTaskOptions): Promise<Piece
     movements: pieceConfig.movements.map((s: { name: string }) => s.name),
   });
 
-  const config = resolvePieceConfigValues(projectCwd, [
-    'language',
-    'provider',
-    'model',
-    'personaProviders',
-    'providerProfiles',
-  ]);
+  const config = resolvePieceConfigValues(projectCwd, ['language', 'personaProviders', 'providerProfiles']);
   const providerOptions = resolveConfigValueWithSource(projectCwd, 'providerOptions');
   return await executePiece(pieceConfig, task, cwd, {
     projectCwd,
     language: config.language,
-    provider: agentOverrides?.provider ?? config.provider,
-    model: agentOverrides?.model ?? config.model,
+    provider: agentOverrides?.provider,
+    model: agentOverrides?.model,
     providerOptions: providerOptions.value,
     providerOptionsSource: providerOptions.source === 'piece' ? 'global' : providerOptions.source,
     personaProviders: config.personaProviders,

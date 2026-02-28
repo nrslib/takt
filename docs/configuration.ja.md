@@ -13,7 +13,7 @@
 language: en                  # UI 言語: 'en' または 'ja'
 default_piece: default        # 新規プロジェクトのデフォルト piece
 log_level: info               # ログレベル: debug, info, warn, error
-provider: claude              # デフォルト provider: claude, codex, または opencode
+provider: claude              # デフォルト provider: claude, codex, opencode, または cursor
 model: sonnet                 # デフォルトモデル（省略可、provider にそのまま渡される）
 branch_name_strategy: romaji  # ブランチ名生成方式: 'romaji'（高速）または 'ai'（低速）
 prevent_sleep: false          # 実行中に macOS のアイドルスリープを防止（caffeinate）
@@ -56,10 +56,11 @@ interactive_preview_movements: 3  # インタラクティブモードでの move
 #     default_permission_mode: edit
 
 # API キー設定（省略可）
-# 環境変数 TAKT_ANTHROPIC_API_KEY / TAKT_OPENAI_API_KEY / TAKT_OPENCODE_API_KEY で上書き可能
+# 環境変数 TAKT_ANTHROPIC_API_KEY / TAKT_OPENAI_API_KEY / TAKT_OPENCODE_API_KEY / TAKT_CURSOR_API_KEY で上書き可能
 # anthropic_api_key: sk-ant-...  # Claude（Anthropic）用
 # openai_api_key: sk-...         # Codex（OpenAI）用
 # opencode_api_key: ...          # OpenCode 用
+# cursor_api_key: ...            # Cursor Agent 用（省略時は login セッションにフォールバック）
 
 # Codex CLI パス上書き（省略可）
 # Codex SDK が使用する Codex CLI バイナリを上書き（実行可能ファイルの絶対パスが必要）
@@ -88,7 +89,7 @@ interactive_preview_movements: 3  # インタラクティブモードでの move
 | `language` | `"en"` \| `"ja"` | `"en"` | UI 言語 |
 | `default_piece` | string | `"default"` | 新規プロジェクトのデフォルト piece |
 | `log_level` | `"debug"` \| `"info"` \| `"warn"` \| `"error"` | `"info"` | ログレベル |
-| `provider` | `"claude"` \| `"codex"` \| `"opencode"` | `"claude"` | デフォルト AI provider |
+| `provider` | `"claude"` \| `"codex"` \| `"opencode"` \| `"cursor"` | `"claude"` | デフォルト AI provider |
 | `model` | string | - | デフォルトモデル名（provider にそのまま渡される） |
 | `branch_name_strategy` | `"romaji"` \| `"ai"` | `"romaji"` | ブランチ名生成方式 |
 | `prevent_sleep` | boolean | `false` | macOS アイドルスリープ防止（caffeinate） |
@@ -108,6 +109,7 @@ interactive_preview_movements: 3  # インタラクティブモードでの move
 | `anthropic_api_key` | string | - | Claude 用 Anthropic API キー |
 | `openai_api_key` | string | - | Codex 用 OpenAI API キー |
 | `opencode_api_key` | string | - | OpenCode API キー |
+| `cursor_api_key` | string | - | Cursor API キー（省略時は login セッションへフォールバック） |
 | `codex_cli_path` | string | - | Codex CLI バイナリパス上書き（絶対パス） |
 | `enable_builtin_pieces` | boolean | `true` | ビルトイン piece の有効化 |
 | `disabled_builtins` | string[] | `[]` | 無効化する特定のビルトイン piece |
@@ -149,7 +151,7 @@ concurrency: 2                # このプロジェクトでの takt run 並列�
 | フィールド | 型 | デフォルト | 説明 |
 |-----------|------|---------|------|
 | `piece` | string | `"default"` | このプロジェクトの現在の piece 名 |
-| `provider` | `"claude"` \| `"codex"` \| `"opencode"` \| `"mock"` | - | provider 上書き |
+| `provider` | `"claude"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"mock"` | - | provider 上書き |
 | `model` | string | - | モデル名の上書き（provider にそのまま渡される） |
 | `auto_pr` | boolean | - | worktree 実行後に PR を自動作成 |
 | `verbose` | boolean | - | 詳細出力モード |
@@ -162,7 +164,7 @@ concurrency: 2                # このプロジェクトでの takt run 並列�
 
 ## API キー設定
 
-TAKT は3つの provider をサポートしており、それぞれに API キーが必要です。API キーは環境変数または `~/.takt/config.yaml` で設定できます。
+TAKT は4つの provider をサポートしています。Claude/Codex/OpenCode は API キーを使い、Cursor は API キーまたは `cursor-agent login` セッションで認証できます。
 
 ### 環境変数（推奨）
 
@@ -175,6 +177,9 @@ export TAKT_OPENAI_API_KEY=sk-...
 
 # OpenCode 用
 export TAKT_OPENCODE_API_KEY=...
+
+# Cursor Agent 用（cursor-agent login 済みなら省略可）
+export TAKT_CURSOR_API_KEY=...
 ```
 
 ### 設定ファイル
@@ -184,6 +189,7 @@ export TAKT_OPENCODE_API_KEY=...
 anthropic_api_key: sk-ant-...  # Claude 用
 openai_api_key: sk-...         # Codex 用
 opencode_api_key: ...          # OpenCode 用
+cursor_api_key: ...            # Cursor Agent 用（省略可）
 ```
 
 ### 優先順位
@@ -195,12 +201,14 @@ opencode_api_key: ...          # OpenCode 用
 | Claude (Anthropic) | `TAKT_ANTHROPIC_API_KEY` | `anthropic_api_key` |
 | Codex (OpenAI) | `TAKT_OPENAI_API_KEY` | `openai_api_key` |
 | OpenCode | `TAKT_OPENCODE_API_KEY` | `opencode_api_key` |
+| Cursor Agent | `TAKT_CURSOR_API_KEY` | `cursor_api_key` |
 
 ### セキュリティ
 
 - `config.yaml` に API キーを記載する場合、このファイルを Git にコミットしないよう注意してください。
 - 環境変数の使用を検討してください。
 - 必要に応じて `~/.takt/config.yaml` をグローバル `.gitignore` に追加してください。
+- Cursor provider は `cursor-agent login` が済んでいれば API キーなしでも動作できます。
 - API キーを設定すれば、対応する CLI ツール（Claude Code、Codex、OpenCode）のインストールは不要です。TAKT が対応する API を直接呼び出します。
 
 ### Codex CLI パス上書き
@@ -223,9 +231,8 @@ codex_cli_path: /usr/local/bin/codex
 各 movement で使用されるモデルは、次の優先順位（高い順）で解決されます。
 
 1. **Piece movement の `model`** - piece YAML の movement 定義で指定
-2. **カスタムエージェントの `model`** - `.takt/agents.yaml` のエージェントレベルのモデル
-3. **グローバル設定の `model`** - `~/.takt/config.yaml` のデフォルトモデル
-4. **Provider デフォルト** - provider のビルトインデフォルトにフォールバック（Claude: `sonnet`、Codex: `codex`、OpenCode: provider デフォルト）
+2. **グローバル設定の `model`** - `~/.takt/config.yaml` のデフォルトモデル
+3. **Provider デフォルト** - provider のビルトインデフォルトにフォールバック（Claude: `sonnet`、Codex: `codex`、OpenCode: provider デフォルト、Cursor: CLI デフォルト）
 
 ### Provider 固有のモデルに関する注意
 
@@ -234,6 +241,8 @@ codex_cli_path: /usr/local/bin/codex
 **Codex** は Codex SDK を通じてモデル文字列をそのまま使用します。未指定の場合、デフォルトは `codex` です。利用可能なモデルについては Codex のドキュメントを参照してください。
 
 **OpenCode** は `provider/model` 形式のモデル（例: `opencode/big-pickle`）が必要です。OpenCode provider でモデルを省略すると設定エラーになります。
+
+**Cursor Agent** は `model` を `cursor-agent --model <model>` にそのまま渡します。省略時は Cursor CLI のデフォルトが使用されます。
 
 ### 設定例
 
@@ -262,11 +271,11 @@ Provider プロファイルを使用すると、各 provider にデフォルト�
 
 TAKT は provider 非依存の3つのパーミッションモードを使用します。
 
-| モード | 説明 | Claude | Codex | OpenCode |
-|--------|------|--------|-------|----------|
-| `readonly` | 読み取り専用、ファイル変更不可 | `default` | `read-only` | `read-only` |
-| `edit` | 確認付きでファイル編集を許可 | `acceptEdits` | `workspace-write` | `workspace-write` |
-| `full` | すべてのパーミッションチェックをバイパス | `bypassPermissions` | `danger-full-access` | `danger-full-access` |
+| モード | 説明 | Claude | Codex | OpenCode | Cursor Agent |
+|--------|------|--------|-------|----------|--------------|
+| `readonly` | 読み取り専用、ファイル変更不可 | `default` | `read-only` | `read-only` | デフォルトフラグ（`--force` なし） |
+| `edit` | 確認付きでファイル編集を許可 | `acceptEdits` | `workspace-write` | `workspace-write` | デフォルトフラグ（`--force` なし） |
+| `full` | すべてのパーミッションチェックをバイパス | `bypassPermissions` | `danger-full-access` | `danger-full-access` | `--force` |
 
 ### 設定方法
 

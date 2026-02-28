@@ -4,10 +4,10 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
-import { loadCustomAgents, loadAgentPrompt, resolveConfigValues } from '../infra/config/index.js';
+import { loadCustomAgents, loadAgentPrompt, loadGlobalConfig, loadProjectConfig } from '../infra/config/index.js';
 import { getProvider, type ProviderType, type ProviderCallOptions } from '../infra/providers/index.js';
 import type { AgentResponse, CustomAgentConfig } from '../core/models/index.js';
-import { resolveProviderModelCandidates } from '../core/piece/provider-resolution.js';
+import { resolveAgentProviderModel } from '../core/piece/provider-resolution.js';
 import { createLogger } from '../shared/utils/index.js';
 import { loadTemplate } from '../shared/prompts/index.js';
 import type { RunAgentOptions } from './types.js';
@@ -25,30 +25,31 @@ const log = createLogger('runner');
 export class AgentRunner {
   private static resolveProviderAndModel(
     cwd: string,
+    personaDisplayName: string | undefined,
     options?: RunAgentOptions,
-    agentConfig?: CustomAgentConfig,
   ): { provider: ProviderType; model: string | undefined } {
-    const config = resolveConfigValues(cwd, ['provider', 'model']);
-    const resolvedProvider = resolveProviderModelCandidates([
-      { provider: options?.provider },
-      { provider: options?.stepProvider },
-      { provider: config.provider },
-      { provider: agentConfig?.provider },
-    ]).provider ?? 'claude';
+    const localConfig = loadProjectConfig(cwd);
+    const globalConfig = loadGlobalConfig();
 
-    const configModel = (config.provider ?? 'claude') === resolvedProvider
-      ? config.model
-      : undefined;
-    const resolvedModel = resolveProviderModelCandidates([
-      { model: options?.model },
-      { model: options?.stepModel },
-      { model: agentConfig?.model },
-      { model: configModel },
-    ]).model;
-
+    const resolvedProviderModel = resolveAgentProviderModel({
+      personaDisplayName,
+      cliProvider: options?.provider,
+      cliModel: options?.model,
+      stepProvider: options?.stepProvider,
+      stepModel: options?.stepModel,
+      personaProviders: globalConfig.personaProviders,
+      localProvider: localConfig.provider,
+      localModel: localConfig.model,
+      globalProvider: globalConfig.provider,
+      globalModel: globalConfig.model,
+    });
+    const resolvedProvider = resolvedProviderModel.provider;
+    if (!resolvedProvider) {
+      throw new Error('No provider configured. Set "provider" in ~/.takt/config.yaml');
+    }
     return {
       provider: resolvedProvider,
-      model: resolvedModel,
+      model: resolvedProviderModel.model,
     };
   }
 
@@ -109,7 +110,7 @@ export class AgentRunner {
     task: string,
     options: RunAgentOptions,
   ): Promise<AgentResponse> {
-    const resolved = AgentRunner.resolveProviderAndModel(options.cwd, options, agentConfig);
+    const resolved = AgentRunner.resolveProviderAndModel(options.cwd, agentConfig.name, options);
     const providerType = resolved.provider;
     const provider = getProvider(providerType);
 
@@ -142,7 +143,7 @@ export class AgentRunner {
       permissionMode: options.permissionMode,
     });
 
-    const resolved = AgentRunner.resolveProviderAndModel(options.cwd, options);
+    const resolved = AgentRunner.resolveProviderAndModel(options.cwd, personaName, options);
     const providerType = resolved.provider;
     const provider = getProvider(providerType);
     const callOptions = AgentRunner.buildCallOptions(resolved.model, options);

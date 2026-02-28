@@ -37,21 +37,34 @@ import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 const require = createRequire(import.meta.url);
 const { version: TAKT_VERSION } = require('../../../package.json') as { version: string };
 
+const GH_API_MAX_BUFFER_BYTES = 100 * 1024 * 1024;
+
 const log = createLogger('repertoire-add');
 
 export async function repertoireAddCommand(spec: string): Promise<void> {
   const { owner, repo, ref: specRef } = parseGithubSpec(spec);
 
   try {
-    execFileSync('gh', ['--version'], { stdio: 'pipe' });
+    execFileSync('gh', ['--version'], {
+      stdio: 'pipe',
+      maxBuffer: GH_API_MAX_BUFFER_BYTES,
+    });
   } catch {
     throw new Error(
       '`gh` CLI がインストールされていません。https://cli.github.com からインストールしてください',
     );
   }
 
-  const execGh = (args: string[]) =>
-    execFileSync('gh', args, { encoding: 'utf-8', stdio: 'pipe' });
+  const execGh = (args: string[]) => execFileSync('gh', args, {
+    encoding: 'utf-8',
+    stdio: 'pipe',
+    maxBuffer: GH_API_MAX_BUFFER_BYTES,
+  });
+
+  const execGhBinary = (args: string[]) => execFileSync('gh', args, {
+    stdio: ['pipe', 'pipe', 'pipe'],
+    maxBuffer: GH_API_MAX_BUFFER_BYTES,
+  });
 
   const ref = resolveRef(specRef, owner, repo, execGh);
 
@@ -64,14 +77,10 @@ export async function repertoireAddCommand(spec: string): Promise<void> {
     mkdirSync(tmpExtractDir, { recursive: true });
 
     info(`📦 ${owner}/${repo} @${ref} をダウンロード中...`);
-    const tarballBuffer = execFileSync(
-      'gh',
-      [
-        'api',
-        `/repos/${owner}/${repo}/tarball/${ref}`,
-      ],
-      { stdio: ['pipe', 'pipe', 'pipe'] },
-    );
+    const tarballBuffer = execGhBinary([
+      'api',
+      `/repos/${owner}/${repo}/tarball/${ref}`,
+    ]);
     writeFileSync(tmpTarPath, tarballBuffer);
 
     const tarVerboseList = execFileSync('tar', ['tvzf', tmpTarPath], {

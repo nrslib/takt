@@ -1,13 +1,17 @@
-import * as fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { success, error as logError, StreamDisplay } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { getProvider, type ProviderType } from '../../../infra/providers/index.js';
 import { resolveConfigValues } from '../../../infra/config/index.js';
-import { pushBranch } from '../../../infra/task/index.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import { getLanguage } from '../../../infra/config/index.js';
-import { type BranchActionTarget, resolveTargetBranch, resolveTargetInstruction } from './taskActionTarget.js';
+import {
+  type BranchActionTarget,
+  resolveTargetBranch,
+  resolveTargetInstruction,
+  validateWorktreeTarget,
+  pushWorktreeToOrigin,
+} from './taskActionTarget.js';
 
 const log = createLogger('list-tasks');
 
@@ -17,12 +21,7 @@ export async function syncBranchWithRoot(
   projectDir: string,
   target: BranchActionTarget,
 ): Promise<boolean> {
-  if (!('kind' in target)) {
-    throw new Error('Sync requires a task target.');
-  }
-
-  if (!target.worktreePath || !fs.existsSync(target.worktreePath)) {
-    logError(`Worktree directory does not exist for task: ${target.name}`);
+  if (!validateWorktreeTarget(target, 'Sync')) {
     return false;
   }
   const worktreePath = target.worktreePath;
@@ -58,7 +57,9 @@ export async function syncBranchWithRoot(
   }
 
   if (!mergeConflict) {
-    pushSynced(worktreePath, projectDir, target);
+    if (!pushSynced(worktreePath, projectDir, target)) {
+      return false;
+    }
     success('Synced & pushed.');
     log.info('Merge succeeded without conflicts', { worktreePath });
     return true;
@@ -70,7 +71,10 @@ export async function syncBranchWithRoot(
   const prompt = loadTemplate('sync_conflict_resolver_message', lang, { originalInstruction });
 
   const config = resolveConfigValues(projectDir, ['provider', 'model']);
-  const providerType = (config.provider ?? 'claude') as ProviderType;
+  if (!config.provider) {
+    throw new Error('No provider configured. Set "provider" in ~/.takt/config.yaml');
+  }
+  const providerType = config.provider as ProviderType;
   const provider = getProvider(providerType);
   const agent = provider.setup({ name: 'conflict-resolver', systemPrompt });
 
@@ -83,7 +87,9 @@ export async function syncBranchWithRoot(
   });
 
   if (response.status === 'done') {
-    pushSynced(worktreePath, projectDir, target);
+    if (!pushSynced(worktreePath, projectDir, target)) {
+      return false;
+    }
     success('Conflicts resolved & pushed.');
     log.info('AI conflict resolution succeeded', { worktreePath });
     return true;
@@ -99,18 +105,16 @@ async function autoApproveBash(request: { toolName: string; input: Record<string
   return { behavior: 'allow' as const, updatedInput: request.input };
 }
 
-/** Push worktree → project dir, then project dir → origin */
-function pushSynced(worktreePath: string, projectDir: string, target: BranchActionTarget): void {
-  execFileSync('git', ['push', projectDir, 'HEAD'], {
-    cwd: worktreePath,
-    encoding: 'utf-8',
-    stdio: 'pipe',
-  });
-  log.info('Pushed to main repo', { worktreePath, projectDir });
-
+function pushSynced(worktreePath: string, projectDir: string, target: BranchActionTarget): boolean {
   const branch = resolveTargetBranch(target);
-  pushBranch(projectDir, branch);
-  log.info('Pushed to origin', { projectDir, branch });
+  try {
+    pushWorktreeToOrigin(worktreePath, projectDir, branch);
+  } catch (err) {
+    logError(`Push failed after sync: ${getErrorMessage(err)}`);
+    log.error('pushWorktreeToOrigin failed', { worktreePath, projectDir, branch, error: getErrorMessage(err) });
+    return false;
+  }
+  return true;
 }
 
 function abortMerge(worktreePath: string): void {

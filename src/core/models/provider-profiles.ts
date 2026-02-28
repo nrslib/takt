@@ -5,7 +5,7 @@
 import type { PermissionMode } from './status.js';
 
 /** Supported providers for profile-based permission resolution. */
-export type ProviderProfileName = 'claude' | 'codex' | 'opencode' | 'mock';
+export type ProviderProfileName = 'claude' | 'codex' | 'opencode' | 'cursor' | 'mock';
 
 /** Permission profile for a single provider. */
 export interface ProviderPermissionProfile {

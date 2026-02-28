@@ -8,7 +8,8 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 
 // --- Mock setup (must be before imports that use these modules) ---
 
@@ -140,6 +141,44 @@ describe('PieceEngine Integration: Blocked Handling', () => {
     expect(onUserInput).toHaveBeenCalledOnce();
     expect(userInputFn).toHaveBeenCalledOnce();
     expect(state.userInputs).toContain('User provided clarification');
+  });
+
+  it('should refresh previous response snapshot when Phase 1 returns blocked', async () => {
+    const config = buildDefaultPieceConfig();
+    const onUserInput = vi.fn().mockResolvedValueOnce(null);
+    const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, onUserInput });
+
+    mockRunAgentSequence([
+      makeResponse({ persona: 'plan', status: 'done', content: 'Plan done' }),
+      makeResponse({ persona: 'implement', status: 'blocked', content: 'Need clarification' }),
+    ]);
+
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' }, // plan -> implement
+    ]);
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(state.lastOutput?.status).toBe('blocked');
+    expect(state.previousResponseSourcePath).toMatch(
+      /^\.takt\/runs\/test-report-dir\/context\/previous_responses\/implement\.1\.\d{8}T\d{6}Z\.md$/,
+    );
+
+    const snapshotPath = join(tmpDir, state.previousResponseSourcePath!);
+    const latestPath = join(
+      tmpDir,
+      '.takt',
+      'runs',
+      'test-report-dir',
+      'context',
+      'previous_responses',
+      'latest.md',
+    );
+
+    expect(readFileSync(snapshotPath, 'utf-8')).toBe('Need clarification');
+    expect(readFileSync(latestPath, 'utf-8')).toBe('Need clarification');
+    expect(onUserInput).toHaveBeenCalledOnce();
   });
 
   it('should abort immediately when movement returns error status', async () => {

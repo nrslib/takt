@@ -71,7 +71,6 @@ import { getLabel } from '../../../shared/i18n/index.js';
 import { EXIT_SIGINT } from '../../../shared/exitCodes.js';
 import { ShutdownManager } from './shutdownManager.js';
 import { buildRunPaths } from '../../../core/piece/run/run-paths.js';
-import { resolveMovementProviderModel } from '../../../core/piece/provider-resolution.js';
 import { resolveRuntimeConfig } from '../../../core/runtime/runtime-environment.js';
 import { writeFileAtomic, ensureDir } from '../../../infra/config/index.js';
 import { getGlobalConfigDir } from '../../../infra/config/paths.js';
@@ -340,6 +339,10 @@ export async function executePiece(
   const shouldNotifyPieceComplete = shouldNotify && notificationSoundEvents?.pieceComplete !== false;
   const shouldNotifyPieceAbort = shouldNotify && notificationSoundEvents?.pieceAbort !== false;
   const currentProvider = globalConfig.provider;
+  const configuredModel = options.model ?? globalConfig.model;
+  if (!currentProvider) {
+    throw new Error('No provider configured. Set "provider" in ~/.takt/config.yaml');
+  }
   const effectivePieceConfig: PieceConfig = {
     ...pieceConfig,
     runtime: resolveRuntimeConfig(globalConfig.runtime, pieceConfig.runtime),
@@ -462,7 +465,7 @@ export async function executePiece(
   let lastMovementName: string | undefined;
   let currentIteration = 0;
   let currentMovementProvider = currentProvider;
-  let currentMovementModel = globalConfig.model ?? '(default)';
+  let currentMovementModel = configuredModel ?? '(default)';
   const phasePrompts = new Map<string, string>();
   const movementIterations = new Map<string, number>();
   let engine: PieceEngine | null = null;
@@ -549,7 +552,7 @@ export async function executePiece(
     }
   });
 
-    engine.on('movement:start', (step, iteration, instruction) => {
+    engine.on('movement:start', (step, iteration, instruction, providerInfo) => {
     log.debug('Movement starting', { step: step.name, persona: step.personaDisplayName, iteration });
     currentIteration = iteration;
     const movementIteration = (movementIterations.get(step.name) ?? 0) + 1;
@@ -561,15 +564,10 @@ export async function executePiece(
       movementIteration,
     });
     out.info(`[${iteration}/${effectivePieceConfig.maxMovements}] ${step.name} (${step.personaDisplayName})`);
-    const resolved = resolveMovementProviderModel({
-      step,
-      provider: options.provider,
-      model: options.model,
-      personaProviders: options.personaProviders,
-    });
-    const movementProvider = resolved.provider ?? 'claude';
-    const resolvedModel = resolved.model;
-    const movementModel = resolvedModel ?? '(default)';
+    const movementProvider = providerInfo.provider ?? currentProvider;
+    const movementModel = providerInfo.model
+      ?? (movementProvider === currentProvider ? configuredModel : undefined)
+      ?? '(default)';
     currentMovementProvider = movementProvider;
     currentMovementModel = movementModel;
     providerEventLogger.setMovement(step.name);

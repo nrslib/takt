@@ -35,6 +35,7 @@ export interface ProviderCallOptions {
   anthropicApiKey?: string;
   openaiApiKey?: string;
   opencodeApiKey?: string;
+  cursorApiKey?: string;
   outputSchema?: Record<string, unknown>;
 }
 
@@ -49,4 +50,4 @@ export interface Provider {
 }
 
 /** Provider type */
-export type ProviderType = 'claude' | 'codex' | 'opencode' | 'mock';
+export type ProviderType = 'claude' | 'codex' | 'opencode' | 'cursor' | 'mock';

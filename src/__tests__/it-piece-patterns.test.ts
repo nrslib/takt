@@ -182,6 +182,26 @@ describe('Piece Patterns IT: default piece (parallel reviewers)', () => {
     expect(state.status).toBe('completed');
   });
 
+  it('should continue to implement when tests cannot be written because target is not implemented', async () => {
+    const config = loadPiece('default', testDir);
+
+    setMockScenario([
+      { persona: 'planner', status: 'done', content: 'Requirements are clear and implementable' },
+      { persona: 'coder', status: 'done', content: 'Cannot proceed because the test target is not implemented yet, so skip test writing' },
+      { persona: 'coder', status: 'done', content: 'Implementation complete' },
+      { persona: 'ai-antipattern-reviewer', status: 'done', content: 'No AI-specific issues' },
+      { persona: 'architecture-reviewer', status: 'done', content: 'approved' },
+      { persona: 'qa-reviewer', status: 'done', content: 'approved' },
+      { persona: 'testing-reviewer', status: 'done', content: 'approved' },
+      { persona: 'supervisor', status: 'done', content: 'All checks passed' },
+    ]);
+
+    const engine = createEngine(config!, testDir, 'Test task');
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+  });
+
   it('should route to fix when any("needs_fix") in parallel review step', async () => {
     const config = loadPiece('default', testDir);
 
@@ -205,6 +225,38 @@ describe('Piece Patterns IT: default piece (parallel reviewers)', () => {
     ]);
 
     const engine = createEngine(config!, testDir, 'Task needing QA fix');
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+  });
+});
+
+describe('Piece Patterns IT: default-test-first-mini piece', () => {
+  let testDir: string;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    testDir = createTestDir();
+  });
+
+  afterEach(() => {
+    resetScenario();
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('should continue to implement when tests cannot be written because target is not implemented', async () => {
+    const config = loadPiece('default-test-first-mini', testDir);
+    expect(config).not.toBeNull();
+
+    setMockScenario([
+      { persona: 'planner', status: 'done', content: 'Requirements are clear and implementation is possible' },
+      { persona: 'coder', status: 'done', content: 'Cannot proceed because the test target is not implemented yet, so skip test writing' },
+      { persona: 'coder', status: 'done', content: 'Implementation complete' },
+      { persona: 'ai-antipattern-reviewer', status: 'done', content: 'No AI-specific issues' },
+      { persona: 'supervisor', status: 'done', content: 'All checks passed' },
+    ]);
+
+    const engine = createEngine(config!, testDir, 'Test task');
     const state = await engine.run();
 
     expect(state.status).toBe('completed');

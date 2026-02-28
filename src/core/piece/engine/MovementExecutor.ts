@@ -173,6 +173,82 @@ export class MovementExecutor {
   }
 
   /**
+   * Apply shared post-execution phases (Phase 2/3 + fallback rule evaluation).
+   *
+   * This method is intentionally reusable by non-normal movement runners
+   * (e.g., team_leader) so rule/report behavior stays consistent.
+   */
+  async applyPostExecutionPhases(
+    step: PieceMovement,
+    state: PieceState,
+    movementIteration: number,
+    response: AgentResponse,
+    updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
+  ): Promise<AgentResponse> {
+    let nextResponse = response;
+
+    if (nextResponse.status === 'error' || nextResponse.status === 'blocked') {
+      return nextResponse;
+    }
+
+    const phaseCtx = this.deps.optionsBuilder.buildPhaseRunnerContext(
+      state,
+      nextResponse.content,
+      updatePersonaSession,
+      this.deps.onPhaseStart,
+      this.deps.onPhaseComplete,
+    );
+
+    // Phase 2: report output (resume same session, Write only)
+    // Report generation is only valid after a completed Phase 1 response.
+    if (nextResponse.status === 'done' && step.outputContracts && step.outputContracts.length > 0) {
+      const reportResult = await runReportPhase(step, movementIteration, phaseCtx);
+      if (reportResult?.blocked) {
+        nextResponse = { ...nextResponse, status: 'blocked', content: reportResult.response.content };
+        return nextResponse;
+      }
+    }
+
+    // Phase 3: status judgment (new session, no tools, determines matched rule)
+    const phase3Result = needsStatusJudgmentPhase(step)
+      ? await runStatusJudgmentPhase(step, phaseCtx)
+      : undefined;
+
+    if (phase3Result) {
+      log.debug('Rule matched (Phase 3)', {
+        movement: step.name,
+        ruleIndex: phase3Result.ruleIndex,
+        method: phase3Result.method,
+      });
+      nextResponse = {
+        ...nextResponse,
+        matchedRuleIndex: phase3Result.ruleIndex,
+        matchedRuleMethod: phase3Result.method,
+      };
+      return nextResponse;
+    }
+
+    // No Phase 3 — use rule evaluator with Phase 1 content
+    const match = await detectMatchedRule(step, nextResponse.content, '', {
+      state,
+      cwd: this.deps.getCwd(),
+      interactive: this.deps.getInteractive(),
+      detectRuleIndex: this.deps.detectRuleIndex,
+      callAiJudge: this.deps.callAiJudge,
+    });
+    if (match) {
+      log.debug('Rule matched', { movement: step.name, ruleIndex: match.index, method: match.method });
+      nextResponse = {
+        ...nextResponse,
+        matchedRuleIndex: match.index,
+        matchedRuleMethod: match.method,
+      };
+    }
+
+    return nextResponse;
+  }
+
+  /**
    * Execute a normal (non-parallel) movement through all 3 phases.
    *
    * Returns the final response (with matchedRuleIndex if a rule matched)
@@ -206,43 +282,29 @@ export class MovementExecutor {
     updatePersonaSession(sessionKey, response.sessionId);
     this.deps.onPhaseComplete?.(step, 1, 'execute', response.content, response.status, response.error);
 
-    const phaseCtx = this.deps.optionsBuilder.buildPhaseRunnerContext(state, response.content, updatePersonaSession, this.deps.onPhaseStart, this.deps.onPhaseComplete);
-
-    // Phase 2: report output (resume same session, Write only)
-    // When report phase returns blocked, propagate to PieceEngine's handleBlocked flow
-    if (step.outputContracts && step.outputContracts.length > 0) {
-      const reportResult = await runReportPhase(step, movementIteration, phaseCtx);
-      if (reportResult?.blocked) {
-        response = { ...response, status: 'blocked', content: reportResult.response.content };
-        state.movementOutputs.set(step.name, response);
-        state.lastOutput = response;
-        return { response, instruction };
-      }
+    // Provider failures should abort immediately.
+    if (response.status === 'error') {
+      state.movementOutputs.set(step.name, response);
+      state.lastOutput = response;
+      return { response, instruction };
     }
 
-    // Phase 3: status judgment (new session, no tools, determines matched rule)
-    const phase3Result = needsStatusJudgmentPhase(step)
-      ? await runStatusJudgmentPhase(step, phaseCtx)
-      : undefined;
-
-    if (phase3Result) {
-      // Phase 3 already determined the matched rule — use its result directly
-      log.debug('Rule matched (Phase 3)', { movement: step.name, ruleIndex: phase3Result.ruleIndex, method: phase3Result.method });
-      response = { ...response, matchedRuleIndex: phase3Result.ruleIndex, matchedRuleMethod: phase3Result.method };
-    } else {
-      // No Phase 3 — use rule evaluator with Phase 1 content
-      const match = await detectMatchedRule(step, response.content, '', {
-        state,
-        cwd: this.deps.getCwd(),
-        interactive: this.deps.getInteractive(),
-        detectRuleIndex: this.deps.detectRuleIndex,
-        callAiJudge: this.deps.callAiJudge,
-      });
-      if (match) {
-        log.debug('Rule matched', { movement: step.name, ruleIndex: match.index, method: match.method });
-        response = { ...response, matchedRuleIndex: match.index, matchedRuleMethod: match.method };
-      }
+    // Blocked responses should be handled by PieceEngine's blocked flow.
+    // Persist snapshot so re-execution receives the latest blocked context.
+    if (response.status === 'blocked') {
+      state.movementOutputs.set(step.name, response);
+      state.lastOutput = response;
+      this.persistPreviousResponseSnapshot(state, step.name, movementIteration, response.content);
+      return { response, instruction };
     }
+
+    response = await this.applyPostExecutionPhases(
+      step,
+      state,
+      movementIteration,
+      response,
+      updatePersonaSession,
+    );
 
     state.movementOutputs.set(step.name, response);
     state.lastOutput = response;

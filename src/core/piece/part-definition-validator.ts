@@ -17,16 +17,17 @@ export function parsePartDefinitionEntry(entry: unknown, index: number): PartDef
   const title = assertNonEmptyString(raw.title, 'title', index);
   const instruction = assertNonEmptyString(raw.instruction, 'instruction', index);
 
-  const timeoutMs = raw.timeout_ms;
-  if (timeoutMs != null && (typeof timeoutMs !== 'number' || !Number.isInteger(timeoutMs) || timeoutMs <= 0)) {
+  const timeoutMsValue = raw.timeout_ms;
+  if (timeoutMsValue != null && (typeof timeoutMsValue !== 'number' || !Number.isInteger(timeoutMsValue) || timeoutMsValue <= 0)) {
     throw new Error(`Part[${index}] "timeout_ms" must be a positive integer`);
   }
+  const timeoutMs = timeoutMsValue == null ? undefined : timeoutMsValue;
 
   return {
     id,
     title,
     instruction,
-    timeoutMs: timeoutMs as number | undefined,
+    timeoutMs,
   };
 }
 

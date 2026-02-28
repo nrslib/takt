@@ -56,11 +56,12 @@ export async function promptLanguageSelection(): Promise<Language> {
  * Prompt user to select provider for resources.
  * Exits process if cancelled (initial setup is required).
  */
-export async function promptProviderSelection(): Promise<'claude' | 'codex' | 'opencode'> {
-  const options: { label: string; value: 'claude' | 'codex' | 'opencode' }[] = [
+export async function promptProviderSelection(): Promise<'claude' | 'codex' | 'opencode' | 'cursor'> {
+  const options: { label: string; value: 'claude' | 'codex' | 'opencode' | 'cursor' }[] = [
     { label: 'Claude Code', value: 'claude' },
     { label: 'Codex', value: 'codex' },
     { label: 'OpenCode', value: 'opencode' },
+    { label: 'Cursor Agent', value: 'cursor' },
   ];
 
   const result = await selectOptionWithDefault(

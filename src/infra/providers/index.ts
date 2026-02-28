@@ -1,13 +1,14 @@
 /**
  * Provider abstraction layer
  *
- * Provides a unified interface for different agent providers (Claude, Codex, OpenCode, Mock).
+ * Provides a unified interface for different agent providers (Claude, Codex, OpenCode, Cursor, Mock).
  * This enables adding new providers without modifying the runner logic.
  */
 
 import { ClaudeProvider } from './claude.js';
 import { CodexProvider } from './codex.js';
 import { OpenCodeProvider } from './opencode.js';
+import { CursorProvider } from './cursor.js';
 import { MockProvider } from './mock.js';
 import type { Provider, ProviderType } from './types.js';
 
@@ -26,6 +27,7 @@ export class ProviderRegistry {
       claude: new ClaudeProvider(),
       codex: new CodexProvider(),
       opencode: new OpenCodeProvider(),
+      cursor: new CursorProvider(),
       mock: new MockProvider(),
     };
   }
@@ -56,4 +58,3 @@ export class ProviderRegistry {
 export function getProvider(type: ProviderType): Provider {
   return ProviderRegistry.getInstance().get(type);
 }
-

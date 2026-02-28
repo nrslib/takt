@@ -1,0 +1,258 @@
+name: CC Resolve
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  resolve:
+    # Uncomment to allow organization members or collaborators:
+    # || github.event.comment.author_association == 'MEMBER'
+    # || github.event.comment.author_association == 'COLLABORATOR'
+    if: |
+      github.event.issue.pull_request &&
+      contains(github.event.comment.body, '/resolve') &&
+      github.event.comment.author_association == 'OWNER'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Acknowledge
+        run: |
+          gh api repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
+            -f content=rocket
+          gh pr comment ${{ github.event.issue.number }} --repo ${{ github.repository }} \
+            --body "🚀 cc-resolve started: [View logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check if fork PR
+        id: pr
+        run: |
+          PR_REPO=$(gh pr view ${{ github.event.issue.number }} --repo ${{ github.repository }} \
+            --json headRepositoryOwner,headRepository \
+            --jq '"\(.headRepositoryOwner.login)/\(.headRepository.name)"')
+          BRANCH=$(gh pr view ${{ github.event.issue.number }} --repo ${{ github.repository }} \
+            --json headRefName -q .headRefName)
+          echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
+          if [ "$PR_REPO" != "${{ github.repository }}" ]; then
+            echo "::error::Fork PR はサポートしていません。contributor 側で解決してください。"
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.branch }}
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Merge main (detect conflicts)
+        id: merge
+        run: |
+          git fetch origin main
+          if git merge origin/main --no-edit 2>/dev/null; then
+            echo "conflicts=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "conflicts=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          # コミット済みのコンフリクトマーカーを検出
+          STALE_MARKERS=$(grep -rl '<<<<<<<' --include='*.ts' --include='*.js' --include='*.json' --include='*.yaml' --include='*.yml' --include='*.md' . 2>/dev/null | grep -v node_modules | grep -v .git || echo "")
+          if [ -n "$STALE_MARKERS" ]; then
+            echo "stale_markers=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "stale_marker_files<<MARKER_EOF"
+              echo "$STALE_MARKERS"
+              echo "MARKER_EOF"
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "stale_markers=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Resolve
+        run: |
+          claude -p --dangerously-skip-permissions "$(cat <<'PROMPT'
+          このPRのコンフリクトを解決してください。
+
+          ## 状況判定
+
+          まず現在の状態を確認してください。以下の2つをすべてチェックする。
+
+          1. `git status` でマージコンフリクト（Unmerged paths）の有無を確認
+          2. ファイル中にコミット済みのコンフリクトマーカー（`<<<<<<<`）が残っていないか `grep -r '<<<<<<<' --include='*.ts' --include='*.js' --include='*.json' .` で確認
+
+          **重要**: git status がクリーンでも、ファイル内にコンフリクトマーカーがテキストとしてコミットされている場合がある。必ず grep で確認すること。
+
+          どちらも該当しなければ「コンフリクトなし」と報告して終了。
+
+          ---
+
+          ## コンフリクト解決
+
+          Git merge/rebase/cherry-pick のコンフリクト、およびファイル内に残存するコンフリクトマーカーを、差分分析に基づいて解決する。
+
+          **原則: 差分を読み、疑い、判断根拠を書いてから解決する。妄信的に片方を採用しない。**
+
+          ### 1. コンフリクト状態を確認する
+
+          ```bash
+          git status
+          ```
+
+          - merge / rebase / cherry-pick のどれが進行中か特定する
+            - `.git/MERGE_HEAD` があれば merge
+            - `.git/rebase-merge/` があれば rebase
+            - `.git/CHERRY_PICK_HEAD` があれば cherry-pick
+
+          ### 2. コンテキストを把握する
+
+          以下を**並列で**実行:
+
+          - `git log --oneline HEAD -5` で HEAD 側（現在のブランチ）の最近の変更を確認
+          - `git log --oneline MERGE_HEAD -5` で取り込み側の最近の変更を確認（merge の場合）
+          - 両ブランチの関係性（どちらがベースでどちらが新しいか）を理解する
+
+          ### 3. コンフリクトファイルを列挙する
+
+          ```bash
+          git diff --name-only --diff-filter=U
+          ```
+
+          加えて、コミット済みマーカーがあるファイルも対象に含める:
+          ```bash
+          grep -rl '<<<<<<<' --include='*.ts' --include='*.js' --include='*.json' . | grep -v node_modules
+          ```
+
+          ファイル数と種類（ソースコード / 設定ファイル / ロックファイル等）を報告する。
+
+          ### 4. 各ファイルを分析する
+
+          **ここが核心。ファイルごとに以下を必ず実行する。省略しない。**
+
+          1. ファイル全体を読む（コンフリクトマーカー付きの状態）
+          2. 各コンフリクトブロック（`<<<<<<<` 〜 `>>>>>>>`）について:
+             - HEAD 側の内容を具体的に読む
+             - theirs 側の内容を具体的に読む
+             - 差分が何を意味するか分析する（バージョン番号？リファクタ？機能追加？型変更？）
+             - 判断に迷う場合は `git log --oneline -- {file}` で変更履歴を確認する
+          3. **判断を書く**（以下の形式で必ず出力すること）:
+
+          ```markdown
+          ### ファイル: path/to/file.ts
+
+          #### コンフリクト 1 (L30-45)
+          - HEAD 側: {具体的な内容を書く}
+          - theirs 側: {具体的な内容を書く}
+          - 分析: {差分が何を意味するか}
+          - 判断: {HEAD / theirs / 両方統合} を採用（{理由}）
+          ```
+
+          **疑うべきポイント:**
+          - 「〇〇側が新しいから」だけで判断していないか？ HEAD 側に独自の意図ある変更はないか？
+          - theirs を採用すると、HEAD 側でしか行っていない作業が消えないか？
+          - 両方の変更を統合すべきケースではないか？
+          - package-lock.json のような機械生成ファイルでも、バージョンの意味を確認したか？
+
+          ### 5. 解決を実施する
+
+          ステップ4の分析結果に基づいて解決する:
+
+          - 片方採用が明確な場合: `git checkout --ours {file}` / `git checkout --theirs {file}` を使ってよい（**分析済みファイルのみ**）
+          - 両方の変更を統合する場合: コンフリクトマーカーを除去し、両方の内容を適切に結合する
+          - 解決したファイルを `git add {file}` でマークする
+
+          解決後、`<<<<<<<` を検索し、マーカーの取り残しがないか確認する。
+
+          ---
+
+          ## 波及影響確認
+
+          **コンフリクトを解決しただけでは終わらない。** 対象外ファイルにも影響が出ていないか検証する。
+
+          - ビルド確認（`npm run build`、`./gradlew build` 等、プロジェクトに応じて）
+          - テスト確認（`npm test`、`./gradlew test` 等）
+          - 対象外ファイルが、変更と矛盾していないか確認する
+            - 例: 関数シグネチャを変更したのに、テストが旧シグネチャを期待している
+            - 例: import パスを変更したのに、別ファイルが旧パスを参照している
+
+          問題が見つかった場合はここで修正する。
+
+          ---
+
+          ## 結果を報告する
+
+          全ファイルの解決結果をサマリーテーブルで報告する:
+
+          ```markdown
+          ## コンフリクト解決サマリー
+
+          | ファイル | コンフリクト数 | 採用 | 理由 |
+          |---------|-------------|------|------|
+          | path/to/file.ts | 2 | theirs | リファクタリング済み |
+
+          波及修正: {対象外ファイルの修正内容。なければ「なし」}
+          ビルド: OK / NG
+          テスト: OK / NG ({passed}/{total})
+          ```
+
+          ---
+
+          ## 絶対原則
+
+          - **差分を読まずに解決しない。** ファイルの中身を確認せずに `--ours` / `--theirs` を適用しない
+          - **盲従しない。** HEAD 側に独自の意図がないか必ず疑う
+          - **判断根拠を省略しない。** 各コンフリクトに「何が・なぜ・どちらを」の3点を書く
+          - **波及を確認する。** 対象外ファイルもビルド・テストで検証する
+
+          ## 禁止事項
+
+          - 分析なしで `git checkout --ours .` / `git checkout --theirs .` を実行しない
+          - 「とりあえず片方」で全ファイルを一括解決しない
+          - コンフリクトマーカー (`<<<<<<<`) が残ったままにしない
+          - `git merge --abort` を実行しない
+          PROMPT
+          )" --verbose
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Commit and push
+        run: |
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m "fix: resolve merge conflicts"
+          fi
+          AHEAD=$(git rev-list --count origin/${{ steps.pr.outputs.branch }}..HEAD 2>/dev/null || echo "0")
+          if [ "$AHEAD" -gt 0 ]; then
+            echo "Pushing $AHEAD commit(s)"
+            git push
+          else
+            echo "Nothing to push"
+          fi
+
+      - name: Report result
+        if: always()
+        run: |
+          PR_NUMBER=${{ github.event.issue.number }}
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          if [ "${{ job.status }}" = "success" ]; then
+            gh pr comment "$PR_NUMBER" --repo ${{ github.repository }} --body "✅ cc-resolve completed. [View logs](${RUN_URL})"
+          else
+            gh pr comment "$PR_NUMBER" --repo ${{ github.repository }} --body "❌ cc-resolve failed. [View logs](${RUN_URL})"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

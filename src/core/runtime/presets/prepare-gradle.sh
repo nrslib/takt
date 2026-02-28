@@ -9,3 +9,5 @@ mkdir -p "$runtime_tmp" "$gradle_home"
 
 echo "GRADLE_USER_HOME=$gradle_home"
 echo "TMPDIR=$runtime_tmp"
+# Codex コンテナは UDP ソケット（Gradle デーモン通信）をブロックするためデーモンを無効化
+echo "GRADLE_OPTS=-Dorg.gradle.daemon=false"

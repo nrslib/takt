@@ -19,7 +19,7 @@
 | `--repo <owner/repo>` | リポジトリを指定（PR 作成用） |
 | `--create-worktree <yes\|no>` | worktree 確認プロンプトをスキップ |
 | `-q, --quiet` | 最小出力モード: AI 出力を抑制（CI 向け） |
-| `--provider <name>` | エージェント provider を上書き（claude\|codex\|opencode\|mock） |
+| `--provider <name>` | エージェント provider を上書き（claude\|codex\|opencode\|cursor\|mock） |
 | `--model <name>` | エージェントモデルを上書き |
 | `--config <path>` | グローバル設定ファイルのパス（デフォルト: `~/.takt/config.yaml`） |
 
@@ -177,7 +177,7 @@ takt list --non-interactive --action delete --branch takt/my-branch --yes
 takt list --non-interactive --format json
 ```
 
-インタラクティブモードでは **Sync with root** を選択でき、ルートリポジトリの HEAD をワークツリーブランチにマージします。コンフリクト発生時は AI が自動解決を試みます。
+インタラクティブモードでは **Merge from root** を選択でき、ルートリポジトリの HEAD をワークツリーブランチにマージします。コンフリクト発生時は AI が自動解決を試みます。
 
 ### タスクディレクトリワークフロー（作成 / 実行 / 確認）
 

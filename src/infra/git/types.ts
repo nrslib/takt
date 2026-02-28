@@ -69,6 +69,32 @@ export interface CreateIssueResult {
   error?: string;
 }
 
+/** PR review comment (conversation or inline) */
+export interface PrReviewComment {
+  author: string;
+  body: string;
+  /** File path for inline comments (undefined for conversation comments) */
+  path?: string;
+  /** Line number for inline comments */
+  line?: number;
+}
+
+/** PR review data including metadata and review comments */
+export interface PrReviewData {
+  number: number;
+  title: string;
+  body: string;
+  url: string;
+  /** Branch name of the PR head */
+  headRefName: string;
+  /** Conversation comments (non-review) */
+  comments: PrReviewComment[];
+  /** Review comments (from reviews) */
+  reviews: PrReviewComment[];
+  /** Changed file paths */
+  files: string[];
+}
+
 export interface GitProvider {
   /** Check CLI tool availability and authentication status */
   checkCliStatus(): CliStatus;
@@ -76,6 +102,9 @@ export interface GitProvider {
   fetchIssue(issueNumber: number): Issue;
 
   createIssue(options: CreateIssueOptions): CreateIssueResult;
+
+  /** Fetch PR review comments and metadata */
+  fetchPrReviewComments(prNumber: number): PrReviewData;
 
   /** Find an open PR for the given branch. Returns undefined if no PR exists. */
   findExistingPr(cwd: string, branch: string): ExistingPr | undefined;

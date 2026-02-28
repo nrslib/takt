@@ -84,6 +84,8 @@ movements:
     rules:
       - condition: Tests written successfully
         next: implement
+      - condition: Cannot proceed because the test target is not implemented yet, so skip test writing
+        next: implement
       - condition: Cannot proceed with test writing
         next: ABORT
       - condition: User input needed for clarification

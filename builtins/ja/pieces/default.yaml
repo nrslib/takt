@@ -84,6 +84,8 @@ movements:
     rules:
       - condition: テスト作成が完了した
         next: implement
+      - condition: テスト対象が未実装のためテスト作成をスキップする
+        next: implement
       - condition: テスト作成を進行できない
         next: ABORT
       - condition: ユーザーへの確認事項があるためユーザー入力が必要

@@ -15,6 +15,7 @@ const {
   mockFindExistingPr,
   mockCommentOnPr,
   mockCreatePullRequest,
+  mockFetchPrReviewComments,
 } = vi.hoisted(() => ({
   mockCheckGhCli: vi.fn(),
   mockFetchIssue: vi.fn(),
@@ -22,6 +23,7 @@ const {
   mockFindExistingPr: vi.fn(),
   mockCommentOnPr: vi.fn(),
   mockCreatePullRequest: vi.fn(),
+  mockFetchPrReviewComments: vi.fn(),
 }));
 
 vi.mock('../infra/github/issue.js', () => ({
@@ -34,11 +36,12 @@ vi.mock('../infra/github/pr.js', () => ({
   findExistingPr: (...args: unknown[]) => mockFindExistingPr(...args),
   commentOnPr: (...args: unknown[]) => mockCommentOnPr(...args),
   createPullRequest: (...args: unknown[]) => mockCreatePullRequest(...args),
+  fetchPrReviewComments: (...args: unknown[]) => mockFetchPrReviewComments(...args),
 }));
 
 import { GitHubProvider } from '../infra/github/GitHubProvider.js';
 import { getGitProvider } from '../infra/git/index.js';
-import type { CommentResult } from '../infra/git/index.js';
+import type { CommentResult, PrReviewData } from '../infra/git/index.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -206,6 +209,31 @@ describe('GitHubProvider', () => {
       expect(result.error).toBe('Permission denied');
     });
   });
+
+  describe('fetchPrReviewComments', () => {
+    it('fetchPrReviewComments(n) に委譲し結果を返す', () => {
+      // Given
+      const prReview: PrReviewData = {
+        number: 456,
+        title: 'Fix bug',
+        body: 'Description',
+        url: 'https://github.com/org/repo/pull/456',
+        headRefName: 'fix/bug',
+        comments: [],
+        reviews: [{ author: 'reviewer', body: 'Fix this' }],
+        files: ['src/index.ts'],
+      };
+      mockFetchPrReviewComments.mockReturnValue(prReview);
+      const provider = new GitHubProvider();
+
+      // When
+      const result = provider.fetchPrReviewComments(456);
+
+      // Then
+      expect(mockFetchPrReviewComments).toHaveBeenCalledWith(456);
+      expect(result).toBe(prReview);
+    });
+  });
 });
 
 describe('getGitProvider', () => {
@@ -217,6 +245,7 @@ describe('getGitProvider', () => {
     expect(typeof provider.checkCliStatus).toBe('function');
     expect(typeof provider.fetchIssue).toBe('function');
     expect(typeof provider.createIssue).toBe('function');
+    expect(typeof provider.fetchPrReviewComments).toBe('function');
     expect(typeof provider.findExistingPr).toBe('function');
     expect(typeof provider.createPullRequest).toBe('function');
     expect(typeof provider.commentOnPr).toBe('function');

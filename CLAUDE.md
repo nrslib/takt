@@ -64,6 +64,7 @@ TAKT (TAKT Agent Koordination Topology) is a multi-agent orchestration system fo
 | `--pipeline` | Enable pipeline (non-interactive) mode — required for CI/automation |
 | `-t, --task <text>` | Task content (as alternative to GitHub issue) |
 | `-i, --issue <N>` | GitHub issue number (equivalent to `#N` in interactive mode) |
+| `--pr <number>` | PR number to fetch review comments and fix |
 | `-w, --piece <name or path>` | Piece name or path to piece YAML file |
 | `-b, --branch <name>` | Branch name (auto-generated if omitted) |
 | `--auto-pr` | Create PR after execution (interactive: skip confirmation, pipeline: enable PR) |
@@ -171,8 +172,8 @@ Implemented in `src/core/piece/evaluation/RuleEvaluator.ts`. The matched method 
 **Agent Runner** (`src/agents/runner.ts`)
 - Resolves agent specs (name or path) to agent configurations
 - Agent is optional — movements can execute with `instruction_template` only (no system prompt)
-- 4-layer resolution for provider/model: options.provider → options.stepProvider → config.provider → agentConfig.provider
-- Custom agents via `.takt/agents.yaml` or prompt files (.md)
+- 5-layer resolution for provider/model: CLI `--provider` / `--model` → persona_providers → movement override → project `.takt/config.yaml` → global `~/.takt/config.yaml`
+- Custom personas via `~/.takt/personas/<name>.md` or prompt files (.md)
 - Inline system prompts: If agent file doesn't exist, the agent string is used as inline system prompt
 
 **Provider Integration** (`src/infra/providers/`)
@@ -258,7 +259,6 @@ Implemented in `src/core/piece/evaluation/RuleEvaluator.ts`. The matched method 
 
 .takt/                    # Project-level config
   config.yaml             # Project configuration
-  agents.yaml             # Custom agent definitions
   facets/                 # Project-level facets
   tasks/                  # Task files for takt run
   runs/                   # Execution reports (runs/{slug}/reports/)
@@ -479,10 +479,11 @@ others_category_name: "Other Pieces"
 
 Model is resolved in the following priority order:
 
-1. **Piece movement `model`** - Highest priority (specified in movement YAML)
-2. **Custom agent `model`** - Agent-level model in `.takt/agents.yaml`
-3. **Global config `model`** - Default model in `~/.takt/config.yaml`
-4. **Provider default** - Falls back to provider's default (Claude: sonnet, Codex: gpt-5.2-codex)
+1. **Persona-level `model`** - `persona_providers.<persona>.model`
+2. **Movement `model`** - `step.model` / `stepModel` (`piece movement` field)
+3. **CLI/task override `model`** - `--model` or task options
+4. **Local/Global config `model`** - `.takt/config.yaml` and `~/.takt/config.yaml` when the resolved provider matches
+5. **Provider default** - Falls back to provider's default (for example, Claude: sonnet, Codex: gpt-5.2-codex)
 
 ### Loop Detection
 
