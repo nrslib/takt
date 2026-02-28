@@ -6,7 +6,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { formatIssueAsTask, buildPrBody } from '../../infra/github/index.js';
+import { formatIssueAsTask, buildPrBody, formatPrReviewAsTask } from '../../infra/github/index.js';
 import { getGitProvider, type Issue } from '../../infra/git/index.js';
 import { stageAndCommit, resolveBaseBranch, pushBranch } from '../../infra/task/index.js';
 import { executeTask, confirmAndCreateWorktree, type TaskExecutionOptions, type PipelineExecutionOptions } from '../tasks/index.js';
@@ -19,6 +19,8 @@ import type { PipelineConfig } from '../../core/models/index.js';
 export interface TaskContent {
   task: string;
   issue?: Issue;
+  /** PR head branch name (set when using --pr) */
+  prBranch?: string;
 }
 
 export interface ExecutionContext {
@@ -78,29 +80,56 @@ function buildPipelinePrBody(
 
 // ---- Step 1: Resolve task content ----
 
+/** Fetch a GitHub resource with CLI availability check and error handling. */
+function fetchGitHubResource<T>(
+  label: string,
+  fetch: (provider: ReturnType<typeof getGitProvider>) => T,
+): T | undefined {
+  const gitProvider = getGitProvider();
+  const cliStatus = gitProvider.checkCliStatus();
+  if (!cliStatus.available) {
+    error(cliStatus.error ?? 'gh CLI is not available');
+    return undefined;
+  }
+  try {
+    return fetch(gitProvider);
+  } catch (err) {
+    error(`Failed to fetch ${label}: ${getErrorMessage(err)}`);
+    return undefined;
+  }
+}
+
 export function resolveTaskContent(options: PipelineExecutionOptions): TaskContent | undefined {
+  if (options.prNumber) {
+    info(`Fetching PR #${options.prNumber} review comments...`);
+    const prReview = fetchGitHubResource(
+      `PR #${options.prNumber}`,
+      (provider) => provider.fetchPrReviewComments(options.prNumber!),
+    );
+    if (!prReview) return undefined;
+    if (prReview.reviews.length === 0 && prReview.comments.length === 0) {
+      error(`PR #${options.prNumber} has no review comments`);
+      return undefined;
+    }
+    const task = formatPrReviewAsTask(prReview);
+    success(`PR #${options.prNumber} fetched: "${prReview.title}"`);
+    return { task, prBranch: prReview.headRefName };
+  }
   if (options.issueNumber) {
     info(`Fetching issue #${options.issueNumber}...`);
-    const gitProvider = getGitProvider();
-    const cliStatus = gitProvider.checkCliStatus();
-    if (!cliStatus.available) {
-      error(cliStatus.error ?? 'gh CLI is not available');
-      return undefined;
-    }
-    try {
-      const issue = gitProvider.fetchIssue(options.issueNumber);
-      const task = formatIssueAsTask(issue);
-      success(`Issue #${options.issueNumber} fetched: "${issue.title}"`);
-      return { task, issue };
-    } catch (err) {
-      error(`Failed to fetch issue #${options.issueNumber}: ${getErrorMessage(err)}`);
-      return undefined;
-    }
+    const issue = fetchGitHubResource(
+      `issue #${options.issueNumber}`,
+      (provider) => provider.fetchIssue(options.issueNumber!),
+    );
+    if (!issue) return undefined;
+    const task = formatIssueAsTask(issue);
+    success(`Issue #${options.issueNumber} fetched: "${issue.title}"`);
+    return { task, issue };
   }
   if (options.task) {
     return { task: options.task };
   }
-  error('Either --issue or --task must be specified');
+  error('Either --issue, --pr, or --task must be specified');
   return undefined;
 }
 
@@ -111,9 +140,10 @@ export async function resolveExecutionContext(
   task: string,
   options: Pick<PipelineExecutionOptions, 'createWorktree' | 'skipGit' | 'branch' | 'issueNumber'>,
   pipelineConfig: PipelineConfig | undefined,
+  prBranch?: string,
 ): Promise<ExecutionContext> {
   if (options.createWorktree) {
-    const result = await confirmAndCreateWorktree(cwd, task, options.createWorktree);
+    const result = await confirmAndCreateWorktree(cwd, task, options.createWorktree, prBranch);
     if (result.isWorktree) {
       success(`Worktree created: ${result.execCwd}`);
     }
@@ -121,6 +151,13 @@ export async function resolveExecutionContext(
   }
   if (options.skipGit) {
     return { execCwd: cwd, isWorktree: false };
+  }
+  if (prBranch) {
+    info(`Fetching and checking out PR branch: ${prBranch}`);
+    execFileSync('git', ['fetch', 'origin', prBranch], { cwd, stdio: 'pipe' });
+    execFileSync('git', ['checkout', prBranch], { cwd, stdio: 'pipe' });
+    success(`Checked out PR branch: ${prBranch}`);
+    return { execCwd: cwd, branch: prBranch, baseBranch: resolveBaseBranch(cwd).branch, isWorktree: false };
   }
   const resolved = resolveBaseBranch(cwd);
   const branch = options.branch ?? generatePipelineBranchName(pipelineConfig, options.issueNumber);

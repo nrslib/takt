@@ -20,9 +20,15 @@ vi.mock('../infra/github/issue.js', () => ({
 const mockCreatePullRequest = vi.fn();
 const mockPushBranch = vi.fn();
 const mockBuildPrBody = vi.fn(() => 'Default PR body');
+const mockFetchPrReviewComments = vi.fn();
+const mockFormatPrReviewAsTask = vi.fn((pr: { number: number; title: string }) =>
+  `## PR #${pr.number} Review Comments: ${pr.title}`
+);
 vi.mock('../infra/github/pr.js', () => ({
   createPullRequest: mockCreatePullRequest,
   buildPrBody: mockBuildPrBody,
+  fetchPrReviewComments: (...args: unknown[]) => mockFetchPrReviewComments(...args),
+  formatPrReviewAsTask: (...args: unknown[]) => mockFormatPrReviewAsTask(...args),
 }));
 
 vi.mock('../infra/task/git.js', async (importOriginal) => ({
@@ -528,7 +534,7 @@ describe('executePipeline', () => {
       });
 
       expect(exitCode).toBe(0);
-      expect(mockConfirmAndCreateWorktree).toHaveBeenCalledWith('/tmp/test', 'Fix the bug', true);
+      expect(mockConfirmAndCreateWorktree).toHaveBeenCalledWith('/tmp/test', 'Fix the bug', true, undefined);
       expect(mockExecuteTask).toHaveBeenCalledWith({
         task: 'Fix the bug',
         cwd: '/tmp/test-worktree',
@@ -810,6 +816,121 @@ describe('executePipeline', () => {
           })],
         }),
       );
+    });
+  });
+
+  describe('--pr pipeline', () => {
+    it('should resolve PR review comments and execute pipeline with PR branch checkout', async () => {
+      mockFetchPrReviewComments.mockReturnValueOnce({
+        number: 456,
+        title: 'Fix auth bug',
+        body: 'PR description',
+        url: 'https://github.com/org/repo/pull/456',
+        headRefName: 'fix/auth-bug',
+        comments: [{ author: 'commenter1', body: 'Update tests' }],
+        reviews: [{ author: 'reviewer1', body: 'Fix null check' }],
+        files: ['src/auth.ts'],
+      });
+      mockExecuteTask.mockResolvedValueOnce(true);
+
+      const exitCode = await executePipeline({
+        prNumber: 456,
+        piece: 'default',
+        autoPr: false,
+        cwd: '/tmp/test',
+      });
+
+      expect(exitCode).toBe(0);
+      expect(mockFetchPrReviewComments).toHaveBeenCalledWith(456);
+      expect(mockFormatPrReviewAsTask).toHaveBeenCalled();
+      // PR branch checkout
+      const checkoutCall = mockExecFileSync.mock.calls.find(
+        (call: unknown[]) => call[0] === 'git' && (call[1] as string[])[0] === 'checkout' && (call[1] as string[])[1] === 'fix/auth-bug',
+      );
+      expect(checkoutCall).toBeDefined();
+    });
+
+    it('should return exit code 2 when gh CLI is unavailable for --pr', async () => {
+      mockCheckGhCli.mockReturnValueOnce({ available: false, error: 'gh not found' });
+
+      const exitCode = await executePipeline({
+        prNumber: 456,
+        piece: 'default',
+        autoPr: false,
+        cwd: '/tmp/test',
+      });
+
+      expect(exitCode).toBe(2);
+    });
+
+    it('should return exit code 2 when PR has no review comments', async () => {
+      mockFetchPrReviewComments.mockReturnValueOnce({
+        number: 456,
+        title: 'Fix auth bug',
+        body: 'PR description',
+        url: 'https://github.com/org/repo/pull/456',
+        headRefName: 'fix/auth-bug',
+        comments: [],
+        reviews: [],
+        files: ['src/auth.ts'],
+      });
+
+      const exitCode = await executePipeline({
+        prNumber: 456,
+        piece: 'default',
+        autoPr: false,
+        cwd: '/tmp/test',
+      });
+
+      expect(exitCode).toBe(2);
+    });
+
+    it('should return exit code 2 when PR fetch fails', async () => {
+      mockFetchPrReviewComments.mockImplementationOnce(() => {
+        throw new Error('PR not found');
+      });
+
+      const exitCode = await executePipeline({
+        prNumber: 999,
+        piece: 'default',
+        autoPr: false,
+        cwd: '/tmp/test',
+      });
+
+      expect(exitCode).toBe(2);
+    });
+
+    it('should checkout PR branch instead of creating new branch', async () => {
+      mockFetchPrReviewComments.mockReturnValueOnce({
+        number: 456,
+        title: 'Fix auth bug',
+        body: 'PR description',
+        url: 'https://github.com/org/repo/pull/456',
+        headRefName: 'fix/auth-bug',
+        comments: [{ author: 'reviewer1', body: 'Fix this' }],
+        reviews: [],
+        files: ['src/auth.ts'],
+      });
+      mockExecuteTask.mockResolvedValueOnce(true);
+
+      const exitCode = await executePipeline({
+        prNumber: 456,
+        piece: 'default',
+        autoPr: false,
+        cwd: '/tmp/test',
+      });
+
+      expect(exitCode).toBe(0);
+      // Should checkout existing branch, not create new
+      const checkoutNewBranch = mockExecFileSync.mock.calls.find(
+        (call: unknown[]) => call[0] === 'git' && (call[1] as string[])[0] === 'checkout' && (call[1] as string[])[1] === '-b',
+      );
+      expect(checkoutNewBranch).toBeUndefined();
+      // Should checkout existing PR branch
+      const checkoutPrBranch = mockExecFileSync.mock.calls.find(
+        (call: unknown[]) => call[0] === 'git' && (call[1] as string[])[0] === 'checkout' && (call[1] as string[])[1] === 'fix/auth-bug',
+      );
+      expect(checkoutPrBranch).toBeDefined();
     });
   });
 });

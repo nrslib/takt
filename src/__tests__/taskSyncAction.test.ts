@@ -219,6 +219,42 @@ describe('syncBranchWithRoot', () => {
     expect(result).toBe(false);
   });
 
+  it('returns false when push fails after successful merge', async () => {
+    const task = makeTask();
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'push') throw new Error('push failed');
+      return '' as never;
+    });
+
+    const result = await syncBranchWithRoot(PROJECT_DIR, task);
+
+    expect(result).toBe(false);
+    expect(mockLogError).toHaveBeenCalledWith(
+      expect.stringContaining('Push failed after sync'),
+    );
+    expect(mockSuccess).not.toHaveBeenCalledWith('Synced & pushed.');
+  });
+
+  it('returns false when push fails after AI conflict resolution', async () => {
+    const task = makeTask();
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'merge' && !argsArr.includes('--abort')) throw new Error('CONFLICT');
+      if (argsArr[0] === 'push') throw new Error('push failed');
+      return '' as never;
+    });
+    mockAgentCall.mockResolvedValue(makeAgentResponse({ status: 'done' }));
+
+    const result = await syncBranchWithRoot(PROJECT_DIR, task);
+
+    expect(result).toBe(false);
+    expect(mockLogError).toHaveBeenCalledWith(
+      expect.stringContaining('Push failed after sync'),
+    );
+    expect(mockSuccess).not.toHaveBeenCalledWith('Conflicts resolved & pushed.');
+  });
+
   it('fetches from projectDir using local path ref', async () => {
     const task = makeTask();
     mockExecFileSync.mockReturnValue('' as never);

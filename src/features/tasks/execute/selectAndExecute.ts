@@ -43,6 +43,7 @@ export async function confirmAndCreateWorktree(
   cwd: string,
   task: string,
   createWorktreeOverride?: boolean | undefined,
+  branchOverride?: string,
 ): Promise<WorktreeConfirmationResult> {
   const useWorktree =
     typeof createWorktreeOverride === 'boolean'
@@ -67,6 +68,7 @@ export async function confirmAndCreateWorktree(
     async () => createSharedClone(cwd, {
       worktree: true,
       taskSlug,
+      ...(branchOverride ? { branch: branchOverride } : {}),
     }),
   );
 

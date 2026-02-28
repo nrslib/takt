@@ -47,6 +47,10 @@ piece_categories:
   ✅ テストファースト:
     pieces:
       - default-test-first-mini
+  🎵 TAKT開発:
+    pieces:
+      - takt-default
+      - takt-default-team-leader
   その他:
     pieces:
       - research

@@ -90,6 +90,10 @@ export interface PersistedGlobalConfig {
   openaiApiKey?: string;
   /** External Codex CLI path for Codex SDK override (overridden by TAKT_CODEX_CLI_PATH env var) */
   codexCliPath?: string;
+  /** External Claude Code CLI path (overridden by TAKT_CLAUDE_CLI_PATH env var) */
+  claudeCliPath?: string;
+  /** External cursor-agent CLI path (overridden by TAKT_CURSOR_CLI_PATH env var) */
+  cursorCliPath?: string;
   /** OpenCode API key for OpenCode SDK (overridden by TAKT_OPENCODE_API_KEY env var) */
   opencodeApiKey?: string;
   /** Cursor API key for Cursor Agent CLI/API (overridden by TAKT_CURSOR_API_KEY env var) */
@@ -121,13 +125,13 @@ export interface PersistedGlobalConfig {
   /** Number of movement previews to inject into interactive mode (0 to disable, max 10) */
   interactivePreviewMovements?: number;
   /** Verbose output mode */
-  verbose?: boolean;
+  verbose: boolean;
   /** Number of tasks to run concurrently in takt run (default: 1 = sequential) */
   concurrency: number;
   /** Polling interval in ms for picking up new tasks during takt run (default: 500, range: 100-5000) */
   taskPollIntervalMs: number;
   /** Opt-in: fetch remote before cloning to keep clones up-to-date (default: false) */
-  autoFetch?: boolean;
+  autoFetch: boolean;
   /** Base branch to clone from (default: current branch) */
   baseBranch?: string;
 }

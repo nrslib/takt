@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.27.0-alpha.1] - 2026-02-27
+## [0.27.0] - 2026-02-28
 
 ### Added
 
@@ -16,6 +16,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - Phase 1 が error または blocked を返した場合に Phase 2（レポート出力）をスキップするよう修正。Phase 1 失敗時に不要なレポート生成が実行される問題を解消
+- Codex 互換性のため、runtime prepare で Gradle デーモンを無効化するよう修正
+
+### Internal
+
+- エージェント/カスタムペルソナのドキュメントを整合
 
 ## [0.26.0] - 2026-02-27
 

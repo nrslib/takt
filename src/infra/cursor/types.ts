@@ -15,4 +15,6 @@ export interface CursorCallOptions {
   permissionMode?: PermissionMode;
   onStream?: StreamCallback;
   cursorApiKey?: string;
+  /** Custom path to cursor-agent executable */
+  cursorCliPath?: string;
 }

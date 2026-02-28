@@ -47,6 +47,34 @@ AI often repeats the same patterns, including mistakes.
 | Inconsistent implementation | Same logic implemented differently across files |
 | Boilerplate explosion | Unnecessary repetition that could be abstracted |
 
+## Redundant Conditional Branch Detection
+
+AI tends to generate if/else blocks that call the same function with only argument differences.
+
+| Pattern | Example | Verdict |
+|---------|---------|---------|
+| Branch differs only in argument presence | `if (x) f(a, b, c) else f(a, b)` | REJECT |
+| Branch differs only in options | `if (x) f(a, {opt: x}) else f(a)` | REJECT |
+| Redundant else without using return value | `if (x) { f(a, x); return; } f(a);` | REJECT |
+
+```typescript
+// REJECT - both branches call the same function, differing only in the 3rd argument
+if (options.format !== undefined) {
+  await processFile(input, output, { format: options.format });
+} else {
+  await processFile(input, output);
+}
+
+// OK - extract the conditional into a variable, then make a single call
+const formatOpt = options.format !== undefined ? { format: options.format } : undefined;
+await processFile(input, output, formatOpt);
+```
+
+Verification approach:
+1. Find if/else blocks calling the same function
+2. If the only difference is optional argument presence, unify with ternary or spread syntax
+3. If branches have different preprocessing, store results in a variable and make a single call
+
 ## Context Fitness Assessment
 
 Does the code fit this specific project?
@@ -102,18 +130,18 @@ Logical dead code detection:
 AI tends to add "just in case" defensive code, but when considering caller constraints, it may be unreachable. Code that is syntactically reachable but logically unreachable due to call chain preconditions should be removed.
 
 ```typescript
-// REJECT - callers are only from interactive menus that require TTY
-// This function is never called from non-TTY environments
-function showFullDiff(cwd: string, branch: string): void {
-  const usePager = process.stdin.isTTY === true;
-  // usePager is always true (callers assume TTY)
-  const pager = usePager ? 'less -R' : 'cat';  // else branch is unreachable
+// REJECT - callers always require interactive input
+// This function is never called from non-interactive environments
+function displayResult(data: ResultData): void {
+  const isInteractive = process.stdin.isTTY === true;
+  // isInteractive is always true (callers assume TTY)
+  const output = isInteractive ? formatRich(data) : formatPlain(data);  // else branch is unreachable
 }
 
 // OK - understands caller constraints and removes unnecessary branching
-function showFullDiff(cwd: string, branch: string): void {
+function displayResult(data: ResultData): void {
   // Only called from interactive menus, so TTY is always present
-  spawnSync('git', ['diff', ...], { env: { GIT_PAGER: 'less -R' } });
+  console.log(formatRich(data));
 }
 ```
 

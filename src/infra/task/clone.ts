@@ -122,8 +122,19 @@ export class CloneManager {
   }
 
   private static branchExists(projectDir: string, branch: string): boolean {
+    // Local branch
     try {
       execFileSync('git', ['rev-parse', '--verify', branch], {
+        cwd: projectDir,
+        stdio: 'pipe',
+      });
+      return true;
+    } catch {
+      // not found locally — fall through to remote check
+    }
+    // Remote tracking branch
+    try {
+      execFileSync('git', ['rev-parse', '--verify', `origin/${branch}`], {
         cwd: projectDir,
         stdio: 'pipe',
       });
@@ -219,17 +230,33 @@ export class CloneManager {
 
     fs.mkdirSync(path.dirname(clonePath), { recursive: true });
 
-    const cloneArgs = ['clone', '--reference', referenceRepo, '--dissociate'];
-    cloneArgs.push(...cloneSubmoduleOptions.args);
+    const commonArgs: string[] = [...cloneSubmoduleOptions.args];
     if (branch) {
-      cloneArgs.push('--branch', branch);
+      commonArgs.push('--branch', branch);
     }
-    cloneArgs.push(projectDir, clonePath);
+    commonArgs.push(projectDir, clonePath);
 
-    execFileSync('git', cloneArgs, {
-      cwd: projectDir,
-      stdio: 'pipe',
-    });
+    const referenceCloneArgs = ['clone', '--reference', referenceRepo, '--dissociate', ...commonArgs];
+    const fallbackCloneArgs = ['clone', ...commonArgs];
+
+    try {
+      execFileSync('git', referenceCloneArgs, {
+        cwd: projectDir,
+        stdio: 'pipe',
+      });
+    } catch (err) {
+      const stderr = ((err as { stderr?: Buffer }).stderr ?? Buffer.alloc(0)).toString();
+      if (stderr.includes('reference repository is shallow')) {
+        log.info('Reference repository is shallow, retrying clone without --reference', { referenceRepo });
+        try { fs.rmSync(clonePath, { recursive: true, force: true }); } catch (e) { log.debug('Failed to cleanup partial clone before retry', { clonePath, error: String(e) }); }
+        execFileSync('git', fallbackCloneArgs, {
+          cwd: projectDir,
+          stdio: 'pipe',
+        });
+      } else {
+        throw err;
+      }
+    }
 
     execFileSync('git', ['remote', 'remove', 'origin'], {
       cwd: clonePath,

@@ -157,6 +157,9 @@ export function loadProjectConfig(projectDir: string): ProjectLocalConfig {
     provider_options,
     provider_profiles,
     analytics,
+    claude_cli_path,
+    codex_cli_path,
+    cursor_cli_path,
     ...rest
   } = parsedConfig;
 
@@ -184,6 +187,9 @@ export function loadProjectConfig(projectDir: string): ProjectLocalConfig {
       };
     } | undefined),
     providerProfiles: normalizeProviderProfiles(provider_profiles as Record<string, { default_permission_mode: unknown; movement_permission_overrides?: Record<string, unknown> }> | undefined),
+    claudeCliPath: claude_cli_path as string | undefined,
+    codexCliPath: codex_cli_path as string | undefined,
+    cursorCliPath: cursor_cli_path as string | undefined,
   };
 }
 

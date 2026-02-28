@@ -101,7 +101,7 @@ function createExecError(
 
 function execCursor(args: string[], options: CursorCallOptions): Promise<CursorExecResult> {
   return new Promise<CursorExecResult>((resolve, reject) => {
-    const child = spawn(CURSOR_COMMAND, args, {
+    const child = spawn(options.cursorCliPath ?? CURSOR_COMMAND, args, {
       cwd: options.cwd,
       env: buildEnv(options.cursorApiKey),
       stdio: ['ignore', 'pipe', 'pipe'],

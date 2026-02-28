@@ -445,6 +445,10 @@ export const GlobalConfigSchema = z.object({
   openai_api_key: z.string().optional(),
   /** External Codex CLI path for Codex SDK override (overridden by TAKT_CODEX_CLI_PATH env var) */
   codex_cli_path: z.string().optional(),
+  /** External Claude Code CLI path (overridden by TAKT_CLAUDE_CLI_PATH env var) */
+  claude_cli_path: z.string().optional(),
+  /** External cursor-agent CLI path (overridden by TAKT_CURSOR_CLI_PATH env var) */
+  cursor_cli_path: z.string().optional(),
   /** OpenCode API key for OpenCode SDK (overridden by TAKT_OPENCODE_API_KEY env var) */
   opencode_api_key: z.string().optional(),
   /** Cursor API key for Cursor Agent CLI/API (overridden by TAKT_CURSOR_API_KEY env var) */
@@ -485,7 +489,7 @@ export const GlobalConfigSchema = z.object({
   /** Number of movement previews to inject into interactive mode (0 to disable, max 10) */
   interactive_preview_movements: z.number().int().min(0).max(10).optional().default(3),
   /** Verbose output mode */
-  verbose: z.boolean().optional(),
+  verbose: z.boolean().optional().default(false),
   /** Number of tasks to run concurrently in takt run (default: 1 = sequential, max: 10) */
   concurrency: z.number().int().min(1).max(10).optional().default(1),
   /** Polling interval in ms for picking up new tasks during takt run (default: 500, range: 100-5000) */
@@ -518,4 +522,10 @@ export const ProjectConfigSchema = z.object({
   ]).optional(),
   /** Compatibility flag for full submodule acquisition when submodules is unset */
   with_submodules: z.boolean().optional(),
+  /** Claude Code CLI path override (project-level) */
+  claude_cli_path: z.string().optional(),
+  /** Codex CLI path override (project-level) */
+  codex_cli_path: z.string().optional(),
+  /** cursor-agent CLI path override (project-level) */
+  cursor_cli_path: z.string().optional(),
 });

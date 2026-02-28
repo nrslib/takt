@@ -52,8 +52,11 @@ const {
   resolveAnthropicApiKey,
   resolveOpenaiApiKey,
   resolveCodexCliPath,
+  resolveClaudeCliPath,
+  resolveCursorCliPath,
   resolveOpencodeApiKey,
   resolveCursorApiKey,
+  validateCliPath,
   invalidateGlobalConfigCache,
 } = await import('../infra/config/global/globalConfig.js');
 
@@ -529,5 +532,313 @@ describe('resolveCursorApiKey', () => {
 
     const key = resolveCursorApiKey();
     expect(key).toBeUndefined();
+  });
+});
+
+// ============================================================
+// Task 6.1 — validateCliPath unit tests
+// ============================================================
+
+describe('validateCliPath', () => {
+  beforeEach(() => {
+    mkdirSync(testDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('should return trimmed path for a valid executable', () => {
+    const exePath = createExecutableFile('valid-cli');
+    const result = validateCliPath(exePath, 'test_cli_path');
+    expect(result).toBe(exePath);
+  });
+
+  it('should trim whitespace from the path', () => {
+    const exePath = createExecutableFile('valid-cli');
+    const result = validateCliPath(`  ${exePath}  `, 'test_cli_path');
+    expect(result).toBe(exePath);
+  });
+
+  it('should throw when path is empty', () => {
+    expect(() => validateCliPath('', 'test_cli_path')).toThrow(/must not be empty/i);
+  });
+
+  it('should throw when path is only whitespace', () => {
+    expect(() => validateCliPath('   ', 'test_cli_path')).toThrow(/must not be empty/i);
+  });
+
+  it('should throw when path contains control characters', () => {
+    expect(() => validateCliPath('/tmp/cli\nbad', 'test_cli_path')).toThrow(/control characters/i);
+  });
+
+  it('should throw when path is relative', () => {
+    expect(() => validateCliPath('bin/cli', 'test_cli_path')).toThrow(/absolute path/i);
+  });
+
+  it('should throw when path does not exist', () => {
+    expect(() => validateCliPath(join(testDir, 'missing'), 'test_cli_path')).toThrow(/does not exist/i);
+  });
+
+  it('should throw when path points to a directory', () => {
+    const dirPath = join(testDir, 'a-dir');
+    mkdirSync(dirPath, { recursive: true });
+    expect(() => validateCliPath(dirPath, 'test_cli_path')).toThrow(/executable file/i);
+  });
+
+  it('should throw when path points to a non-executable file', () => {
+    const filePath = createNonExecutableFile('non-exec');
+    expect(() => validateCliPath(filePath, 'test_cli_path')).toThrow(/not executable/i);
+  });
+
+  it('should include source name in error messages', () => {
+    expect(() => validateCliPath('', 'MY_CUSTOM_SOURCE')).toThrow(/MY_CUSTOM_SOURCE/);
+  });
+});
+
+// ============================================================
+// Task 6.2 — resolveClaudeCliPath / resolveCursorCliPath tests
+// ============================================================
+
+describe('resolveClaudeCliPath', () => {
+  const originalEnv = process.env['TAKT_CLAUDE_CLI_PATH'];
+
+  beforeEach(() => {
+    invalidateGlobalConfigCache();
+    mkdirSync(taktDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    if (originalEnv !== undefined) {
+      process.env['TAKT_CLAUDE_CLI_PATH'] = originalEnv;
+    } else {
+      delete process.env['TAKT_CLAUDE_CLI_PATH'];
+    }
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('should return env var path when set (highest priority)', () => {
+    const envPath = createExecutableFile('env-claude');
+    const configPath2 = createExecutableFile('config-claude');
+    process.env['TAKT_CLAUDE_CLI_PATH'] = envPath;
+    const yaml = [
+      'language: en',
+      'log_level: info',
+      'provider: claude',
+      `claude_cli_path: ${configPath2}`,
+    ].join('\n');
+    writeFileSync(configPath, yaml, 'utf-8');
+
+    const path = resolveClaudeCliPath();
+    expect(path).toBe(envPath);
+  });
+
+  it('should use project config when env var is not set', () => {
+    delete process.env['TAKT_CLAUDE_CLI_PATH'];
+    const projPath = createExecutableFile('project-claude');
+
+    const path = resolveClaudeCliPath({ claudeCliPath: projPath });
+    expect(path).toBe(projPath);
+  });
+
+  it('should prefer project config over global config', () => {
+    delete process.env['TAKT_CLAUDE_CLI_PATH'];
+    const projPath = createExecutableFile('project-claude');
+    const globalPath = createExecutableFile('global-claude');
+    const yaml = [
+      'language: en',
+      'log_level: info',
+      'provider: claude',
+      `claude_cli_path: ${globalPath}`,
+    ].join('\n');
+    writeFileSync(configPath, yaml, 'utf-8');
+
+    const path = resolveClaudeCliPath({ claudeCliPath: projPath });
+    expect(path).toBe(projPath);
+  });
+
+  it('should fall back to global config when neither env nor project is set', () => {
+    delete process.env['TAKT_CLAUDE_CLI_PATH'];
+    const globalPath = createExecutableFile('global-claude');
+    const yaml = [
+      'language: en',
+      'log_level: info',
+      'provider: claude',
+      `claude_cli_path: ${globalPath}`,
+    ].join('\n');
+    writeFileSync(configPath, yaml, 'utf-8');
+
+    const path = resolveClaudeCliPath();
+    expect(path).toBe(globalPath);
+  });
+
+  it('should return undefined when nothing is set', () => {
+    delete process.env['TAKT_CLAUDE_CLI_PATH'];
+    const yaml = [
+      'language: en',
+      'log_level: info',
+      'provider: claude',
+    ].join('\n');
+    writeFileSync(configPath, yaml, 'utf-8');
+
+    const path = resolveClaudeCliPath();
+    expect(path).toBeUndefined();
+  });
+
+  it('should throw when env path is invalid', () => {
+    process.env['TAKT_CLAUDE_CLI_PATH'] = join(testDir, 'missing-claude');
+    expect(() => resolveClaudeCliPath()).toThrow(/does not exist/i);
+  });
+});
+
+describe('resolveCursorCliPath', () => {
+  const originalEnv = process.env['TAKT_CURSOR_CLI_PATH'];
+
+  beforeEach(() => {
+    invalidateGlobalConfigCache();
+    mkdirSync(taktDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    if (originalEnv !== undefined) {
+      process.env['TAKT_CURSOR_CLI_PATH'] = originalEnv;
+    } else {
+      delete process.env['TAKT_CURSOR_CLI_PATH'];
+    }
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('should return env var path when set (highest priority)', () => {
+    const envPath = createExecutableFile('env-cursor');
+    const configPath2 = createExecutableFile('config-cursor');
+    process.env['TAKT_CURSOR_CLI_PATH'] = envPath;
+    const yaml = [
+      'language: en',
+      'log_level: info',
+      'provider: cursor',
+      `cursor_cli_path: ${configPath2}`,
+    ].join('\n');
+    writeFileSync(configPath, yaml, 'utf-8');
+
+    const path = resolveCursorCliPath();
+    expect(path).toBe(envPath);
+  });
+
+  it('should use project config when env var is not set', () => {
+    delete process.env['TAKT_CURSOR_CLI_PATH'];
+    const projPath = createExecutableFile('project-cursor');
+
+    const path = resolveCursorCliPath({ cursorCliPath: projPath });
+    expect(path).toBe(projPath);
+  });
+
+  it('should prefer project config over global config', () => {
+    delete process.env['TAKT_CURSOR_CLI_PATH'];
+    const projPath = createExecutableFile('project-cursor');
+    const globalPath = createExecutableFile('global-cursor');
+    const yaml = [
+      'language: en',
+      'log_level: info',
+      'provider: cursor',
+      `cursor_cli_path: ${globalPath}`,
+    ].join('\n');
+    writeFileSync(configPath, yaml, 'utf-8');
+
+    const path = resolveCursorCliPath({ cursorCliPath: projPath });
+    expect(path).toBe(projPath);
+  });
+
+  it('should fall back to global config when neither env nor project is set', () => {
+    delete process.env['TAKT_CURSOR_CLI_PATH'];
+    const globalPath = createExecutableFile('global-cursor');
+    const yaml = [
+      'language: en',
+      'log_level: info',
+      'provider: cursor',
+      `cursor_cli_path: ${globalPath}`,
+    ].join('\n');
+    writeFileSync(configPath, yaml, 'utf-8');
+
+    const path = resolveCursorCliPath();
+    expect(path).toBe(globalPath);
+  });
+
+  it('should return undefined when nothing is set', () => {
+    delete process.env['TAKT_CURSOR_CLI_PATH'];
+    const yaml = [
+      'language: en',
+      'log_level: info',
+      'provider: cursor',
+    ].join('\n');
+    writeFileSync(configPath, yaml, 'utf-8');
+
+    const path = resolveCursorCliPath();
+    expect(path).toBeUndefined();
+  });
+
+  it('should throw when env path is invalid', () => {
+    process.env['TAKT_CURSOR_CLI_PATH'] = join(testDir, 'missing-cursor');
+    expect(() => resolveCursorCliPath()).toThrow(/does not exist/i);
+  });
+});
+
+// ============================================================
+// Task 6.3 — resolveCodexCliPath project config layer tests
+// ============================================================
+
+describe('resolveCodexCliPath — project config layer', () => {
+  const originalEnv = process.env['TAKT_CODEX_CLI_PATH'];
+
+  beforeEach(() => {
+    invalidateGlobalConfigCache();
+    mkdirSync(taktDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    if (originalEnv !== undefined) {
+      process.env['TAKT_CODEX_CLI_PATH'] = originalEnv;
+    } else {
+      delete process.env['TAKT_CODEX_CLI_PATH'];
+    }
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('should use project config when env var is not set', () => {
+    delete process.env['TAKT_CODEX_CLI_PATH'];
+    const projPath = createExecutableFile('project-codex');
+
+    const path = resolveCodexCliPath({ codexCliPath: projPath });
+    expect(path).toBe(projPath);
+  });
+
+  it('should prefer env var over project config', () => {
+    const envPath = createExecutableFile('env-codex');
+    const projPath = createExecutableFile('project-codex');
+    process.env['TAKT_CODEX_CLI_PATH'] = envPath;
+
+    const path = resolveCodexCliPath({ codexCliPath: projPath });
+    expect(path).toBe(envPath);
+  });
+
+  it('should prefer project config over global config', () => {
+    delete process.env['TAKT_CODEX_CLI_PATH'];
+    const projPath = createExecutableFile('project-codex');
+    const globalPath = createExecutableFile('global-codex');
+    const yaml = [
+      'language: en',
+      'log_level: info',
+      'provider: codex',
+      `codex_cli_path: ${globalPath}`,
+    ].join('\n');
+    writeFileSync(configPath, yaml, 'utf-8');
+
+    const path = resolveCodexCliPath({ codexCliPath: projPath });
+    expect(path).toBe(projPath);
+  });
+
+  it('should throw when project config path is invalid', () => {
+    delete process.env['TAKT_CODEX_CLI_PATH'];
+    expect(() => resolveCodexCliPath({ codexCliPath: join(testDir, 'missing-codex') }))
+      .toThrow(/does not exist/i);
   });
 });

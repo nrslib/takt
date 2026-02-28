@@ -1,61 +1,65 @@
 # Contributing to TAKT
 
-Thank you for your interest in contributing to TAKT!
+🇯🇵 [日本語版](./docs/CONTRIBUTING.ja.md)
 
-## About This Project
-
-This project is developed using [TAKT](https://github.com/nrslib/takt). Please understand the following before contributing:
-
-- **Small, focused changes are preferred** - Bug fixes, typo corrections, documentation improvements
-- **Large PRs are difficult to review** - Especially AI-generated bulk changes without explanation
-
-## How to Contribute
-
-### Reporting Issues
-
-1. Search existing issues first
-2. Include reproduction steps
-3. Include your environment (OS, Node version, etc.)
-
-### Pull Requests
-
-**Preferred:**
-- Bug fixes with tests
-- Documentation improvements
-- Small, focused changes
-- Typo corrections
-
-**Difficult to review:**
-- Large refactoring
-- AI-generated bulk changes
-- Feature additions without prior discussion
-
-### Before Submitting a PR
-
-1. Open an issue first to discuss the change
-2. Keep changes small and focused
-3. Include tests if applicable
-4. Update documentation if needed
+Thank you for your interest in contributing to TAKT! This project uses TAKT's review piece to verify PR quality before merging.
 
 ## Development Setup
 
 ```bash
-# Clone the repository
 git clone https://github.com/your-username/takt.git
 cd takt
-
-# Install dependencies
 npm install
-
-# Build
 npm run build
-
-# Run tests
 npm test
-
-# Lint
 npm run lint
 ```
+
+## How to Contribute
+
+1. **Open an issue** to discuss the change before starting work
+2. **Keep changes small and focused** — bug fixes, documentation improvements, typo corrections are welcome
+3. **Include tests** for new behavior
+4. **Run the review** before submitting (see below)
+
+Large refactoring or feature additions without prior discussion are difficult to review and may be declined.
+
+## Before Submitting a PR
+
+All PRs must pass the TAKT review process. PRs without a review summary or with unresolved REJECT findings will not be merged.
+
+### 1. Pass CI checks
+
+```bash
+npm run build
+npm run lint
+npm test
+```
+
+### 2. Run TAKT review
+
+The review piece auto-detects the review mode based on the input:
+
+```bash
+# PR mode — review a pull request by number
+takt -t "#<PR-number>" -w review
+
+# Branch mode — review a branch diff against main
+takt -t "<branch-name>" -w review
+
+# Current diff mode — review uncommitted or recent changes
+takt -t "review current changes" -w review
+```
+
+### 3. Confirm APPROVE
+
+Check the review summary in `.takt/runs/*/reports/review-summary.md`. If the result is **REJECT**, fix the reported issues and re-run the review until you get **APPROVE**.
+
+If a REJECT finding cannot be resolved (e.g., false positive, intentional design decision), leave a comment on the PR explaining why it remains unresolved.
+
+### 4. Include the review summary in your PR
+
+Post the contents of `review-summary.md` as a comment on your PR. This is **required** — it lets maintainers verify that the review was run and passed.
 
 ## Code Style
 

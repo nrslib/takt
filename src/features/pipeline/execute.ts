@@ -59,7 +59,7 @@ async function runPipeline(options: PipelineExecutionOptions): Promise<PipelineO
   // Step 2: Prepare execution environment
   let context: ExecutionContext;
   try {
-    context = await resolveExecutionContext(cwd, taskContent.task, options, pipelineConfig);
+    context = await resolveExecutionContext(cwd, taskContent.task, options, pipelineConfig, taskContent.prBranch);
   } catch (err) {
     error(`Failed to prepare execution environment: ${getErrorMessage(err)}`);
     return { exitCode: EXIT_GIT_OPERATION_FAILED, result: buildResult() };
