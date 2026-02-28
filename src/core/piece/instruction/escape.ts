@@ -63,6 +63,16 @@ export function replaceTemplatePlaceholders(
     result = result.replace(/\{report_dir\}/g, context.reportDir);
   }
 
+  // Replace {key} from vars (movement-specific variable substitution)
+  if (step.vars) {
+    for (const [key, value] of Object.entries(step.vars)) {
+      // Escape regex special characters in the key to prevent regex injection
+      const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const placeholder = new RegExp(`\\{${escapedKey}\\}`, 'g');
+      result = result.replace(placeholder, escapeTemplateChars(value));
+    }
+  }
+
   // Replace {report:filename} with reportDir/filename
   if (context.reportDir) {
     result = result.replace(/\{report:([^}]+)\}/g, (_match, filename: string) => {

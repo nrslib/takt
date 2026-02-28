@@ -234,6 +234,9 @@ export const TeamLeaderConfigRawSchema = z.object({
   },
 );
 
+/** Variable substitution map schema (for instruction template placeholders) */
+export const MovementVarsSchema = z.record(z.string(), z.string()).optional();
+
 /** Sub-movement schema for parallel execution */
 export const ParallelSubMovementRawSchema = z.object({
   name: z.string().min(1),
@@ -262,6 +265,8 @@ export const ParallelSubMovementRawSchema = z.object({
   /** Quality gates for this movement (AI directives) */
   quality_gates: QualityGatesSchema,
   pass_previous_response: z.boolean().optional().default(true),
+  /** Variable substitution map for instruction template placeholders */
+  vars: MovementVarsSchema,
 });
 
 /** Piece movement schema - raw YAML format */
@@ -299,6 +304,8 @@ export const PieceMovementRawSchema = z.object({
   /** Quality gates for this movement (AI directives) */
   quality_gates: QualityGatesSchema,
   pass_previous_response: z.boolean().optional().default(true),
+  /** Variable substitution map for instruction template placeholders */
+  vars: MovementVarsSchema,
   /** Sub-movements to execute in parallel */
   parallel: z.array(ParallelSubMovementRawSchema).optional(),
   /** Arpeggio configuration for data-driven batch processing */
