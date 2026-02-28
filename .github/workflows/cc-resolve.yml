@@ -290,9 +290,13 @@ jobs:
           git add -A
           if ! git diff --cached --quiet; then
             git commit -m "fix: resolve conflicts and review comments"
+          fi
+          AHEAD=$(git rev-list --count origin/${{ steps.pr.outputs.branch }}..HEAD 2>/dev/null || echo "0")
+          if [ "$AHEAD" -gt 0 ]; then
+            echo "Pushing $AHEAD commit(s)"
             git push
           else
-            echo "No changes to commit"
+            echo "Nothing to push"
           fi
 
       - name: Report result
