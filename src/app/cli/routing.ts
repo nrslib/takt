@@ -8,9 +8,9 @@
 import { info, error as logError, withProgress } from '../../shared/ui/index.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
 import { getLabel } from '../../shared/i18n/index.js';
-import { formatIssueAsTask, parseIssueNumbers } from '../../infra/github/index.js';
+import { formatIssueAsTask, parseIssueNumbers, formatPrReviewAsTask } from '../../infra/github/index.js';
 import { getGitProvider } from '../../infra/git/index.js';
-import type { Issue } from '../../infra/git/index.js';
+import type { Issue, PrReviewData } from '../../infra/git/index.js';
 import { selectAndExecuteTask, determinePiece, saveTaskFromInteractive, createIssueAndSaveTask, promptLabelSelection, type SelectAndExecuteOptions } from '../../features/tasks/index.js';
 import { executePipeline } from '../../features/pipeline/index.js';
 import {
@@ -77,11 +77,55 @@ async function resolveIssueInput(
 }
 
 /**
+ * Resolve PR review comments from `--pr` option.
+ *
+ * Fetches review comments and metadata, formats as task text.
+ * Returns the PR branch name for checkout and the formatted task.
+ * Throws on gh CLI unavailability or fetch failure.
+ */
+async function resolvePrInput(
+  prNumber: number,
+): Promise<{ initialInput: string; prBranch: string }> {
+  const ghStatus = getGitProvider().checkCliStatus();
+  if (!ghStatus.available) {
+    throw new Error(ghStatus.error);
+  }
+
+  const prReview = await withProgress(
+    'Fetching PR review comments...',
+    (pr: PrReviewData) => `PR fetched: #${pr.number} ${pr.title}`,
+    async () => getGitProvider().fetchPrReviewComments(prNumber),
+  );
+
+  if (prReview.reviews.length === 0 && prReview.comments.length === 0) {
+    throw new Error(`PR #${prNumber} has no review comments`);
+  }
+
+  return {
+    initialInput: formatPrReviewAsTask(prReview),
+    prBranch: prReview.headRefName,
+  };
+}
+
+/**
  * Execute default action: handle task execution, pipeline mode, or interactive mode.
  * Exported for use in slash-command fallback logic.
  */
 export async function executeDefaultAction(task?: string): Promise<void> {
   const opts = program.opts();
+  const prNumber = opts.pr as number | undefined;
+  const issueNumber = opts.issue as number | undefined;
+
+  if (prNumber && issueNumber) {
+    logError('--pr and --issue cannot be used together');
+    process.exit(1);
+  }
+
+  if (prNumber && (opts.task as string | undefined)) {
+    logError('--pr and --task cannot be used together');
+    process.exit(1);
+  }
+
   const agentOverrides = resolveAgentOverrides(program);
   const createWorktreeOverride = parseCreateWorktreeOption(opts.createWorktree as string | undefined);
   const resolvedPipelinePiece = (opts.piece as string | undefined) ?? resolveConfigValue(resolvedCwd, 'piece');
@@ -102,7 +146,8 @@ export async function executeDefaultAction(task?: string): Promise<void> {
   // --- Pipeline mode (non-interactive): triggered by --pipeline ---
   if (pipelineMode) {
     const exitCode = await executePipeline({
-      issueNumber: opts.issue as number | undefined,
+      issueNumber,
+      prNumber,
       task: opts.task as string | undefined,
       piece: resolvedPipelinePiece,
       branch: opts.branch as string | undefined,
@@ -132,18 +177,32 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     return;
   }
 
-  // Resolve issue references (--issue N or #N positional arg) before interactive mode
+  // Resolve PR review comments (--pr N) before interactive mode
   let initialInput: string | undefined = task;
 
-  try {
-    const issueResult = await resolveIssueInput(opts.issue as number | undefined, task);
-    if (issueResult) {
-      selectOptions.issues = issueResult.issues;
-      initialInput = issueResult.initialInput;
+  if (prNumber) {
+    try {
+      const prResult = await resolvePrInput(prNumber);
+      initialInput = prResult.initialInput;
+      selectOptions.branch = prResult.prBranch;
+    } catch (e) {
+      logError(getErrorMessage(e));
+      process.exit(1);
     }
-  } catch (e) {
-    logError(getErrorMessage(e));
-    process.exit(1);
+  }
+
+  // Resolve issue references (--issue N or #N positional arg) before interactive mode
+  if (!prNumber) {
+    try {
+      const issueResult = await resolveIssueInput(issueNumber, task);
+      if (issueResult) {
+        selectOptions.issues = issueResult.issues;
+        initialInput = issueResult.initialInput;
+      }
+    } catch (e) {
+      logError(getErrorMessage(e));
+      process.exit(1);
+    }
   }
 
   // All paths below go through interactive mode

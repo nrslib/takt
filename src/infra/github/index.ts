@@ -9,4 +9,4 @@ export {
   resolveIssueTask,
 } from './issue.js';
 
-export { buildPrBody } from './pr.js';
+export { buildPrBody, formatPrReviewAsTask } from './pr.js';

@@ -64,6 +64,7 @@ TAKT (TAKT Agent Koordination Topology) is a multi-agent orchestration system fo
 | `--pipeline` | Enable pipeline (non-interactive) mode — required for CI/automation |
 | `-t, --task <text>` | Task content (as alternative to GitHub issue) |
 | `-i, --issue <N>` | GitHub issue number (equivalent to `#N` in interactive mode) |
+| `--pr <number>` | PR number to fetch review comments and fix |
 | `-w, --piece <name or path>` | Piece name or path to piece YAML file |
 | `-b, --branch <name>` | Branch name (auto-generated if omitted) |
 | `--auto-pr` | Create PR after execution (interactive: skip confirmation, pipeline: enable PR) |
