@@ -153,10 +153,11 @@ export async function resolveExecutionContext(
     return { execCwd: cwd, isWorktree: false };
   }
   if (prBranch) {
-    info(`Checking out PR branch: ${prBranch}`);
+    info(`Fetching and checking out PR branch: ${prBranch}`);
+    execFileSync('git', ['fetch', 'origin', prBranch], { cwd, stdio: 'pipe' });
     execFileSync('git', ['checkout', prBranch], { cwd, stdio: 'pipe' });
     success(`Checked out PR branch: ${prBranch}`);
-    return { execCwd: cwd, branch: prBranch, isWorktree: false };
+    return { execCwd: cwd, branch: prBranch, baseBranch: resolveBaseBranch(cwd).branch, isWorktree: false };
   }
   const resolved = resolveBaseBranch(cwd);
   const branch = options.branch ?? generatePipelineBranchName(pipelineConfig, options.issueNumber);
