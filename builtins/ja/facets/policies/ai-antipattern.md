@@ -47,6 +47,34 @@ AIは同じパターンを、間違いも含めて繰り返すことが多い。
 | 一貫性のない実装 | ファイル間で異なる方法で実装された同じロジック |
 | ボイラープレートの爆発 | 抽象化できる不要な繰り返し |
 
+## 冗長な条件分岐パターン検出
+
+AIは条件分岐で同一関数を引数の差異のみで呼び分けるコードを生成しがちである。
+
+| パターン | 例 | 判定 |
+|---------|-----|------|
+| 引数の有無のみの分岐 | `if (x) f(a, b, c) else f(a, b)` | REJECT |
+| オプション有無の分岐 | `if (x) f(a, {opt: x}) else f(a)` | REJECT |
+| 戻り値を使わない冗長な else | `if (x) { f(a, x); return; } f(a);` | REJECT |
+
+```typescript
+// REJECT - 両ブランチが同一関数を呼び出し、第3引数の有無のみが異なる
+if (options.format !== undefined) {
+  await processFile(input, output, { format: options.format });
+} else {
+  await processFile(input, output);
+}
+
+// OK - 三項演算子で統一
+const formatOpt = options.format !== undefined ? { format: options.format } : undefined;
+await processFile(input, output, formatOpt);
+```
+
+検証アプローチ:
+1. if/else ブロックで同一関数を呼び出している箇所を探す
+2. 差異がオプション引数の有無のみなら、三項演算子やスプレッド構文で統一
+3. 分岐ごとに異なる前処理がある場合は、変数に結果を格納してから単一呼び出しに統一
+
 ## コンテキスト適合性評価
 
 コードはこの特定のプロジェクトに合っているか?
@@ -118,18 +146,18 @@ AIは新しいコードを追加するが、不要になったコードの削除
 AIは「念のため」の防御コードを追加しがちだが、呼び出し元の制約を考慮すると到達不能な場合がある。構文的には到達可能でも、呼び出しチェーンの前提条件により論理的に到達しないコードは削除する。
 
 ```typescript
-// REJECT - 呼び出し元がTTY必須のインタラクティブメニュー経由のみ
-// TTYがない環境からこの関数が呼ばれることはない
-function showFullDiff(cwd: string, branch: string): void {
-  const usePager = process.stdin.isTTY === true;
-  // usePager は常に true（呼び出し元がTTYを前提としている）
-  const pager = usePager ? 'less -R' : 'cat';  // else節は到達不能
+// REJECT - 呼び出し元がインタラクティブ入力を前提としている
+// 非インタラクティブ環境からこの関数が呼ばれることはない
+function displayResult(data: ResultData): void {
+  const isInteractive = process.stdin.isTTY === true;
+  // isInteractive は常に true（呼び出し元がTTYを前提としている）
+  const output = isInteractive ? formatRich(data) : formatPlain(data);  // else節は到達不能
 }
 
 // OK - 呼び出し元の制約を理解し、不要な分岐を排除
-function showFullDiff(cwd: string, branch: string): void {
+function displayResult(data: ResultData): void {
   // インタラクティブメニューからのみ呼ばれるためTTYは常に存在する
-  spawnSync('git', ['diff', ...], { env: { GIT_PAGER: 'less -R' } });
+  console.log(formatRich(data));
 }
 ```
 
