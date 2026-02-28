@@ -63,32 +63,18 @@ jobs:
             echo "conflicts=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Collect PR review comments
-        id: reviews
-        run: |
-          PR_NUMBER=${{ github.event.issue.number }}
-          COMMENTS=$(gh pr view "$PR_NUMBER" --json comments -q '.comments[].body' 2>/dev/null || echo "")
-          REVIEWS=$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}/reviews" --jq '.[].body' 2>/dev/null || echo "")
-          REVIEW_COMMENTS=$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}/comments" --jq '.[] | "**\(.path):\(.line // .original_line)** \(.body)"' 2>/dev/null || echo "")
-
-          {
-            echo "review_context<<REVIEW_EOF"
-            if [ -n "$REVIEWS" ]; then
-              echo "## PR Reviews"
-              echo "$REVIEWS"
-            fi
-            if [ -n "$REVIEW_COMMENTS" ]; then
-              echo "## PR Review Comments (inline)"
-              echo "$REVIEW_COMMENTS"
-            fi
-            if [ -n "$COMMENTS" ]; then
-              echo "## PR Comments"
-              echo "$COMMENTS"
-            fi
-            echo "REVIEW_EOF"
-          } >> "$GITHUB_OUTPUT"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # コミット済みのコンフリクトマーカーを検出
+          STALE_MARKERS=$(grep -rl '<<<<<<<' --include='*.ts' --include='*.js' --include='*.json' --include='*.yaml' --include='*.yml' --include='*.md' . 2>/dev/null | grep -v node_modules | grep -v .git || echo "")
+          if [ -n "$STALE_MARKERS" ]; then
+            echo "stale_markers=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "stale_marker_files<<MARKER_EOF"
+              echo "$STALE_MARKERS"
+              echo "MARKER_EOF"
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "stale_markers=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - uses: actions/setup-node@v4
         with:
@@ -100,22 +86,24 @@ jobs:
       - name: Resolve
         run: |
           claude -p --dangerously-skip-permissions "$(cat <<'PROMPT'
-          このPRのコンフリクトおよびレビュー指摘を解決してください。
+          このPRのコンフリクトを解決してください。
 
           ## 状況判定
 
-          まず現在の状態を確認してください。
+          まず現在の状態を確認してください。以下の2つをすべてチェックする。
 
-          1. `git status` でコンフリクトの有無を確認
-          2. コンフリクトがあれば「コンフリクト解決」を実行
-          3. PRのレビューコメントがあれば「レビュー指摘対応」を実行
-          4. 両方あれば、コンフリクト解決を先に行い、その後レビュー指摘に対応
+          1. `git status` でマージコンフリクト（Unmerged paths）の有無を確認
+          2. ファイル中にコミット済みのコンフリクトマーカー（`<<<<<<<`）が残っていないか `grep -r '<<<<<<<' --include='*.ts' --include='*.js' --include='*.json' .` で確認
+
+          **重要**: git status がクリーンでも、ファイル内にコンフリクトマーカーがテキストとしてコミットされている場合がある。必ず grep で確認すること。
+
+          どちらも該当しなければ「コンフリクトなし」と報告して終了。
 
           ---
 
           ## コンフリクト解決
 
-          Git merge/rebase/cherry-pick のコンフリクトを、差分分析に基づいて解決する。
+          Git merge/rebase/cherry-pick のコンフリクト、およびファイル内に残存するコンフリクトマーカーを、差分分析に基づいて解決する。
 
           **原則: 差分を読み、疑い、判断根拠を書いてから解決する。妄信的に片方を採用しない。**
 
@@ -125,7 +113,6 @@ jobs:
           git status
           ```
 
-          - `Unmerged paths` がなければ「コンフリクトなし」と報告してスキップ
           - merge / rebase / cherry-pick のどれが進行中か特定する
             - `.git/MERGE_HEAD` があれば merge
             - `.git/rebase-merge/` があれば rebase
@@ -143,6 +130,11 @@ jobs:
 
           ```bash
           git diff --name-only --diff-filter=U
+          ```
+
+          加えて、コミット済みマーカーがあるファイルも対象に含める:
+          ```bash
+          grep -rl '<<<<<<<' --include='*.ts' --include='*.js' --include='*.json' . | grep -v node_modules
           ```
 
           ファイル数と種類（ソースコード / 設定ファイル / ロックファイル等）を報告する。
@@ -187,50 +179,9 @@ jobs:
 
           ---
 
-          ## レビュー指摘対応
+          ## 波及影響確認
 
-          PRのレビューコメントを分析し、コンフリクト解決と同じ原則で対応する。
-
-          **原則: 指摘を読み、コードを確認し、判断根拠を書いてから修正する。盲従しない。**
-
-          ### 1. レビューコメントを収集する
-
-          `gh pr view` や `gh api` でPRのレビューコメントを取得し、全指摘を列挙する。
-
-          ### 2. 各指摘を分析する
-
-          **指摘ごとに以下を必ず実行する。省略しない。**
-
-          1. 指摘箇所のコードを実際に読む
-          2. 指摘の意図を理解する
-          3. 現状コードが指摘通りに問題があるか分析する
-          4. **判断を書く**（以下の形式で必ず出力すること）:
-
-          ```markdown
-          ### 指摘: {レビューコメントの要約}
-          - 指摘箇所: {ファイル:行}
-          - 現状コード: {具体的な内容}
-          - 指摘の意図: {何を改善すべきか}
-          - 判断: {修正 / 部分修正 / 反論}（{理由}）
-          ```
-
-          **疑うべきポイント:**
-          - 指摘が的外れではないか？ コンテキストを見落としていないか？
-          - 修正すると他の箇所に影響しないか？
-          - 指摘の通りに修正するのがベストか、別のアプローチの方が良くないか？
-
-          ### 3. 修正を実施する
-
-          判断に基づいて修正する:
-          - 修正: 指摘が妥当 → コードを修正
-          - 部分修正: 一部妥当 → 妥当な部分のみ修正
-          - 反論: 指摘が不適切 → 理由を明記してスキップ
-
-          ---
-
-          ## 波及影響確認（共通）
-
-          **コンフリクト解決・指摘修正だけでは終わらない。** 対象外ファイルにも影響が出ていないか検証する。
+          **コンフリクトを解決しただけでは終わらない。** 対象外ファイルにも影響が出ていないか検証する。
 
           - ビルド確認（`npm run build`、`./gradlew build` 等、プロジェクトに応じて）
           - テスト確認（`npm test`、`./gradlew test` 等）
@@ -247,17 +198,11 @@ jobs:
           全ファイルの解決結果をサマリーテーブルで報告する:
 
           ```markdown
-          ## 解決サマリー
+          ## コンフリクト解決サマリー
 
-          ### コンフリクト解決
           | ファイル | コンフリクト数 | 採用 | 理由 |
           |---------|-------------|------|------|
           | path/to/file.ts | 2 | theirs | リファクタリング済み |
-
-          ### レビュー指摘対応
-          | 指摘 | 判断 | 理由 |
-          |------|------|------|
-          | {指摘要約} | 修正/反論 | {理由} |
 
           波及修正: {対象外ファイルの修正内容。なければ「なし」}
           ビルド: OK / NG
@@ -269,8 +214,8 @@ jobs:
           ## 絶対原則
 
           - **差分を読まずに解決しない。** ファイルの中身を確認せずに `--ours` / `--theirs` を適用しない
-          - **盲従しない。** HEAD 側に独自の意図がないか必ず疑う。レビュー指摘も鵜呑みにしない
-          - **判断根拠を省略しない。** 各コンフリクト・各指摘に「何が・なぜ・どちらを」の3点を書く
+          - **盲従しない。** HEAD 側に独自の意図がないか必ず疑う
+          - **判断根拠を省略しない。** 各コンフリクトに「何が・なぜ・どちらを」の3点を書く
           - **波及を確認する。** 対象外ファイルもビルド・テストで検証する
 
           ## 禁止事項
@@ -289,7 +234,7 @@ jobs:
         run: |
           git add -A
           if ! git diff --cached --quiet; then
-            git commit -m "fix: resolve conflicts and review comments"
+            git commit -m "fix: resolve merge conflicts"
           fi
           AHEAD=$(git rev-list --count origin/${{ steps.pr.outputs.branch }}..HEAD 2>/dev/null || echo "0")
           if [ "$AHEAD" -gt 0 ]; then
