@@ -6,7 +6,6 @@ import { describe, it, expect } from 'vitest';
 import {
   GlobalConfigSchema,
   ProjectConfigSchema,
-  CustomAgentConfigSchema,
   PieceMovementRawSchema,
   ParallelSubMovementRawSchema,
 } from '../core/models/index.js';
@@ -31,9 +30,21 @@ describe('Schemas accept opencode provider', () => {
     expect(result.opencode_api_key).toBe('test-key-123');
   });
 
+  it('should accept cursor_api_key in GlobalConfigSchema', () => {
+    const result = GlobalConfigSchema.parse({
+      cursor_api_key: 'cursor-key-123',
+    });
+    expect(result.cursor_api_key).toBe('cursor-key-123');
+  });
+
   it('should accept opencode in ProjectConfigSchema', () => {
     const result = ProjectConfigSchema.parse({ provider: 'opencode' });
     expect(result.provider).toBe('opencode');
+  });
+
+  it('should accept cursor in ProjectConfigSchema', () => {
+    const result = ProjectConfigSchema.parse({ provider: 'cursor' });
+    expect(result.provider).toBe('cursor');
   });
 
   it('should accept concurrency in ProjectConfigSchema', () => {
@@ -64,21 +75,20 @@ describe('Schemas accept opencode provider', () => {
     expect(() => ProjectConfigSchema.parse({ submodules: 'libs' })).toThrow();
   });
 
-  it('should accept opencode in CustomAgentConfigSchema', () => {
-    const result = CustomAgentConfigSchema.parse({
-      name: 'test',
-      prompt: 'You are a test agent',
-      provider: 'opencode',
-    });
-    expect(result.provider).toBe('opencode');
-  });
-
   it('should accept opencode in PieceMovementRawSchema', () => {
     const result = PieceMovementRawSchema.parse({
       name: 'test-movement',
       provider: 'opencode',
     });
     expect(result.provider).toBe('opencode');
+  });
+
+  it('should accept cursor in PieceMovementRawSchema', () => {
+    const result = PieceMovementRawSchema.parse({
+      name: 'test-movement',
+      provider: 'cursor',
+    });
+    expect(result.provider).toBe('cursor');
   });
 
   it('should accept opencode in ParallelSubMovementRawSchema', () => {
@@ -89,8 +99,16 @@ describe('Schemas accept opencode provider', () => {
     expect(result.provider).toBe('opencode');
   });
 
-  it('should still accept existing providers (claude, codex, mock)', () => {
-    for (const provider of ['claude', 'codex', 'mock']) {
+  it('should accept cursor in ParallelSubMovementRawSchema', () => {
+    const result = ParallelSubMovementRawSchema.parse({
+      name: 'sub-1',
+      provider: 'cursor',
+    });
+    expect(result.provider).toBe('cursor');
+  });
+
+  it('should still accept existing providers (claude, codex, opencode, cursor, mock)', () => {
+    for (const provider of ['claude', 'codex', 'opencode', 'cursor', 'mock']) {
       const result = GlobalConfigSchema.parse({ provider });
       expect(result.provider).toBe(provider);
     }

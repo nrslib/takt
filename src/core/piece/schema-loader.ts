@@ -48,3 +48,22 @@ export function loadDecompositionSchema(maxParts: number): JsonSchema {
   (rawParts as Record<string, unknown>).maxItems = maxParts;
   return schema;
 }
+
+export function loadMorePartsSchema(maxAdditionalParts: number): JsonSchema {
+  if (!Number.isInteger(maxAdditionalParts) || maxAdditionalParts <= 0) {
+    throw new Error(`maxAdditionalParts must be a positive integer: ${maxAdditionalParts}`);
+  }
+
+  const schema = cloneSchema(loadSchema('more-parts.json'));
+  const properties = schema.properties;
+  if (!properties || typeof properties !== 'object' || Array.isArray(properties)) {
+    throw new Error('more-parts schema is invalid: properties is missing');
+  }
+  const rawParts = (properties as Record<string, unknown>).parts;
+  if (!rawParts || typeof rawParts !== 'object' || Array.isArray(rawParts)) {
+    throw new Error('more-parts schema is invalid: parts is missing');
+  }
+
+  (rawParts as Record<string, unknown>).maxItems = maxAdditionalParts;
+  return schema;
+}

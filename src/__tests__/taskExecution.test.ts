@@ -67,7 +67,7 @@ vi.mock('../shared/i18n/index.js', () => ({
   getLabel: vi.fn((key: string) => key),
 }));
 
-import { executeAndCompleteTask } from '../features/tasks/execute/taskExecution.js';
+import { executeAndCompleteTask, executeTask } from '../features/tasks/execute/taskExecution.js';
 
 const createTask = (name: string): TaskInfo => ({
   name,
@@ -149,6 +149,54 @@ describe('executeAndCompleteTask', () => {
       claude: { sandbox: { allowUnsandboxedCommands: true } },
     });
     expect(pieceExecutionOptions?.providerOptionsSource).toBe('project');
+  });
+
+  it('should not pass config provider/model to executePiece when agent overrides are absent', async () => {
+    // Given: project config contains provider/model, but overrides are omitted.
+    const task = createTask('task-with-defaults');
+
+    // When
+    await executeTask({
+      task: task.content,
+      cwd: '/project',
+      projectCwd: '/project',
+      pieceIdentifier: 'default',
+    });
+
+    // Then: piece options should not force provider/model from taskExecution layer
+    expect(mockExecutePiece).toHaveBeenCalledTimes(1);
+    const pieceExecutionOptions = mockExecutePiece.mock.calls[0]?.[3] as {
+      provider?: string;
+      model?: string;
+    };
+    expect(pieceExecutionOptions?.provider).toBeUndefined();
+    expect(pieceExecutionOptions?.model).toBeUndefined();
+  });
+
+  it('should pass agent overrides to executePiece when provided', async () => {
+    // Given: overrides explicitly specified by caller.
+    const task = createTask('task-with-overrides');
+
+    // When
+    await executeTask({
+      task: task.content,
+      cwd: '/project',
+      projectCwd: '/project',
+      pieceIdentifier: 'default',
+      agentOverrides: {
+        provider: 'codex',
+        model: 'gpt-5.3-codex',
+      },
+    });
+
+    // Then
+    expect(mockExecutePiece).toHaveBeenCalledTimes(1);
+    const pieceExecutionOptions = mockExecutePiece.mock.calls[0]?.[3] as {
+      provider?: string;
+      model?: string;
+    };
+    expect(pieceExecutionOptions?.provider).toBe('codex');
+    expect(pieceExecutionOptions?.model).toBe('gpt-5.3-codex');
   });
 
   it('should mark task as failed when PR creation fails', async () => {

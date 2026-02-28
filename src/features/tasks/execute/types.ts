@@ -103,6 +103,8 @@ export interface ExecuteTaskOptions {
 export interface PipelineExecutionOptions {
   /** GitHub issue number */
   issueNumber?: number;
+  /** PR number to fetch review comments */
+  prNumber?: number;
   /** Task content (alternative to issue) */
   task?: string;
   /** Piece name or path to piece file */
@@ -139,6 +141,8 @@ export interface SelectAndExecuteOptions {
   repo?: string;
   piece?: string;
   createWorktree?: boolean | undefined;
+  /** Override branch name (e.g., PR head branch for --pr) */
+  branch?: string;
   /** Enable interactive user input during step transitions */
   interactiveUserInput?: boolean;
   /** Interactive mode result metadata for NDJSON logging */

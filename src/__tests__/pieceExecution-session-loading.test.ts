@@ -15,6 +15,19 @@ const { MockPieceEngine, mockLoadPersonaSessions, mockLoadWorktreeSessions } = v
   const mockLoadPersonaSessions = vi.fn().mockReturnValue({ coder: 'saved-session-id' });
   const mockLoadWorktreeSessions = vi.fn().mockReturnValue({ coder: 'worktree-session-id' });
 
+  type PersonaProviderMap = Record<string, { provider?: string; model?: string }>;
+
+  function resolveProviderInfo(
+    step: { personaDisplayName?: string; provider?: string; model?: string },
+    opts: Record<string, unknown>,
+  ): { provider: string | undefined; model: string | undefined } {
+    const personaProviders = opts.personaProviders as PersonaProviderMap | undefined;
+    const personaEntry = personaProviders?.[step.personaDisplayName ?? ''];
+    const provider = personaEntry?.provider ?? step.provider ?? opts.provider as string | undefined;
+    const model = personaEntry?.model ?? step.model ?? opts.model as string | undefined;
+    return { provider, model };
+  }
+
   class MockPieceEngine extends EE {
     static lastInstance: MockPieceEngine;
     readonly receivedOptions: Record<string, unknown>;
@@ -32,7 +45,8 @@ const { MockPieceEngine, mockLoadPersonaSessions, mockLoadWorktreeSessions } = v
     async run(): Promise<{ status: string; iteration: number }> {
       const firstStep = this.config.movements[0];
       if (firstStep) {
-        this.emit('movement:start', firstStep, 1, firstStep.instructionTemplate);
+        const providerInfo = resolveProviderInfo(firstStep, this.receivedOptions);
+        this.emit('movement:start', firstStep, 1, firstStep.instructionTemplate, providerInfo);
       }
       this.emit('piece:complete', { status: 'completed', iteration: 1 });
       return { status: 'completed', iteration: 1 };
@@ -141,7 +155,19 @@ vi.mock('../shared/exitCodes.js', () => ({
 }));
 
 import { executePiece } from '../features/tasks/execute/pieceExecution.js';
+import { resolvePieceConfigValues } from '../infra/config/index.js';
 import { info } from '../shared/ui/index.js';
+
+const defaultResolvedConfigValues = {
+  notificationSound: true,
+  notificationSoundEvents: {},
+  provider: 'claude',
+  runtime: undefined,
+  preventSleep: false,
+  model: undefined,
+  observability: undefined,
+  analytics: undefined,
+};
 
 function makeConfig(): PieceConfig {
   return {
@@ -164,6 +190,7 @@ function makeConfig(): PieceConfig {
 describe('executePiece session loading', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(resolvePieceConfigValues).mockReturnValue({ ...defaultResolvedConfigValues });
     mockLoadPersonaSessions.mockReturnValue({ coder: 'saved-session-id' });
     mockLoadWorktreeSessions.mockReturnValue({ coder: 'worktree-session-id' });
   });
@@ -245,6 +272,20 @@ describe('executePiece session loading', () => {
     const mockInfo = vi.mocked(info);
     expect(mockInfo).toHaveBeenCalledWith('Provider: claude');
     expect(mockInfo).toHaveBeenCalledWith('Model: (default)');
+  });
+
+  it('should log configured model from global/project settings when movement model is unresolved', async () => {
+    vi.mocked(resolvePieceConfigValues).mockReturnValue({
+      ...defaultResolvedConfigValues,
+      model: 'gpt-4.1',
+    });
+
+    await executePiece(makeConfig(), 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+    });
+
+    const mockInfo = vi.mocked(info);
+    expect(mockInfo).toHaveBeenCalledWith('Model: gpt-4.1');
   });
 
   it('should log provider and model per movement with overrides', async () => {

@@ -42,7 +42,7 @@ describe('loadGlobalConfig', () => {
     expect(config.logLevel).toBe('info');
     expect(config.provider).toBe('claude');
     expect(config.model).toBeUndefined();
-    expect(config.verbose).toBeUndefined();
+    expect(config.verbose).toBe(false);
     expect(config.pipeline).toBeUndefined();
   });
 

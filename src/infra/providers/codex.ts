@@ -4,7 +4,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { callCodex, callCodexCustom, type CodexCallOptions } from '../codex/index.js';
-import { resolveOpenaiApiKey, resolveCodexCliPath } from '../config/index.js';
+import { resolveOpenaiApiKey, resolveCodexCliPath, loadProjectConfig } from '../config/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
 import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from './types.js';
 
@@ -25,6 +25,7 @@ function isInsideGitRepo(cwd: string): boolean {
 }
 
 function toCodexOptions(options: ProviderCallOptions): CodexCallOptions {
+  const projectConfig = loadProjectConfig(options.cwd);
   return {
     cwd: options.cwd,
     abortSignal: options.abortSignal,
@@ -34,7 +35,7 @@ function toCodexOptions(options: ProviderCallOptions): CodexCallOptions {
     networkAccess: options.providerOptions?.codex?.networkAccess,
     onStream: options.onStream,
     openaiApiKey: options.openaiApiKey ?? resolveOpenaiApiKey(),
-    codexPathOverride: resolveCodexCliPath(),
+    codexPathOverride: resolveCodexCliPath(projectConfig),
     outputSchema: options.outputSchema,
   };
 }

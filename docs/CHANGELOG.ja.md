@@ -6,6 +6,57 @@
 
 フォーマットは [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) に基づいています。
 
+## [0.27.0] - 2026-02-28
+
+### Added
+
+- Cursor Agent CLI プロバイダーを追加: `cursor-agent` CLI を介して Cursor を AI プロバイダーとして利用可能に。API キー（`TAKT_CURSOR_API_KEY` / `cursor_api_key`）または `cursor-agent login` セッションで認証、JSON 出力解析、セッション継続（`--resume`）、モデル指定（`--model`）、パーミッション制御（`full` → `--force`）に対応 (#403)
+- Cursor プロバイダーの E2E テスト設定を追加（`vitest.config.e2e.cursor.ts`、`npm run test:e2e:cursor`）
+
+### Fixed
+
+- Phase 1 が error または blocked を返した場合に Phase 2（レポート出力）をスキップするよう修正。Phase 1 失敗時に不要なレポート生成が実行される問題を解消
+- Codex 互換性のため、runtime prepare で Gradle デーモンを無効化するよう修正
+
+### Internal
+
+- エージェント/カスタムペルソナのドキュメントを整合
+
+## [0.26.0] - 2026-02-27
+
+### Added
+
+- TeamLeader に refill threshold と動的パート追加を導入: 実行中のパートが `refill_threshold` 以下になると、リーダーが完了済みパートの結果を評価して追加パートを動的に生成。`max_parts` は同時並行数、`refill_threshold` で追加計画のタイミングを制御（最大合計 20 パートまで）
+- deep-research ピースの dig ムーブメントに `team_leader` 設定を追加し、リサーチの並列実行が可能に
+- TeamLeader が Phase 2（レポート出力）/ Phase 3（ステータス判定）を通常ムーブメントと同様にサポート（`applyPostExecutionPhases` の共通化）
+- ParallelLogger が動的なサブムーブメント追加に対応（`addSubMovement`）し、TeamLeader の動的パート追加時にもストリーミング出力を表示
+- `LineTimeSliceBuffer` を導入し、並列ストリーミング出力のバッファリングを時間スライスベースで最適化
+- プロジェクト設定（`.takt/config.yaml`）で `model` 指定をサポート
+
+### Changed
+
+- BREAKING: カスタムエージェント定義（`~/.takt/personas/*.md`）の `provider` / `model` を解釈しない方針とし、エージェントのプロバイダー・モデルはピース側の解決ロジック（CLI → persona_providers → ステップ → ローカル → グローバル）に統一 (#390)
+- エージェントの provider/model 解決ロジックを `resolveAgentProviderModel` に一元化し、ムーブメント解決と同じ優先順位チェーンを使用するよう変更 (#386)
+- `movement:start` イベントが `providerInfo` を含むよう変更し、表示側でのプロバイダー再解決を不要に (#390)
+- `takt list` の「Sync with root」を「Merge from root」にリネーム (#394)
+- インタラクティブモードの要約 AI がセッション非継承で実行されるよう修正し、会話コンテキストの汚染を防止 (#368)
+- interactive policy のガイドラインを改善: ユーザーが「自分で調べて」と指示した場合と、ピースへの指示作成を区別するルールを明確化
+
+### Fixed
+
+- default / default-test-first-mini ピースの `write_tests` ムーブメントで、テスト対象が未実装の場合にスキップして implement へ進むルールを追加（従来は ABORT になっていた）(#396)
+- `takt add` の GitHub Issue タイトル抽出を改善: Markdown 見出し（h1-h3）を優先的にタイトルとして使用するよう変更（従来は先頭行がそのまま使われていた）(#368)
+- quiet モードの要約 AI がセッションを引き継がない問題を修正 (#368)
+- `repertoire add` の `gh api` 呼び出しにバッファサイズ上限（100MB）を設定し、大きなリポジトリでのバッファオーバーフローを防止
+- E2E テストで `gh` ユーザー検索が無効な場合にローカルリポジトリへフォールバックするよう修正
+
+### Internal
+
+- TeamLeaderRunner をリファクタリング: 実行ロジック（`team-leader-execution.ts`）、集約（`team-leader-aggregation.ts`）、共通ユーティリティ（`team-leader-common.ts`）、ストリーミング（`team-leader-streaming.ts`）に分離
+- `more-parts.json` スキーマと `loadMorePartsSchema` ローダーを追加
+- AGENTS.md を更新（プロジェクト構成とガイドラインの改訂）
+- テスト拡充: provider/model 解決マトリクス、TeamLeader refill threshold / worker pool / aggregation / execution、OptionsBuilder、stream-buffer、conversationLoop resume、quietMode session、createIssueFromTask、schema-loader
+
 ## [0.25.0] - 2026-02-26
 
 ### Added
@@ -28,6 +79,7 @@
 - `--task` オプションでの直接実行時に tasks.yaml へ不要な記録がされる問題を修正
 - `--task` でワークツリー作成時は tasks.yaml に記録するよう修正（`takt list` でのブランチ管理に必要）
 - プロバイダー解決: 暗黙の `claude` フォールバックを廃止し、プロバイダーを解決できない場合は Fail Fast で終了するよう修正 (#386)
+- プロバイダー解決: 表示用と実行用の provider/model 解決を `movement:start` イベントの providerInfo に一元化し、表示されるプロバイダーと実行プロバイダーの一致を構造的に保証 (#390)
 - E2E テスト config-priority の不安定性を修正 (#388)
 
 ### Internal

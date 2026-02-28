@@ -11,7 +11,9 @@ export interface ProjectLocalConfig {
   /** Current piece name */
   piece?: string;
   /** Provider selection for agent runtime */
-  provider?: 'claude' | 'codex' | 'opencode' | 'mock';
+  provider?: 'claude' | 'codex' | 'opencode' | 'cursor' | 'mock';
+  /** Model selection for agent runtime */
+  model?: string;
   /** Auto-create PR after worktree execution */
   autoPr?: boolean;
   /** Create PR as draft */
@@ -32,6 +34,12 @@ export interface ProjectLocalConfig {
   providerOptions?: MovementProviderOptions;
   /** Provider-specific permission profiles (project-level override) */
   providerProfiles?: ProviderPermissionProfiles;
+  /** Claude Code CLI path override (project-level) */
+  claudeCliPath?: string;
+  /** Codex CLI path override (project-level) */
+  codexCliPath?: string;
+  /** cursor-agent CLI path override (project-level) */
+  cursorCliPath?: string;
 }
 
 /** Persona session data for persistence */

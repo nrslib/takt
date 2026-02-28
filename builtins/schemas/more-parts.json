@@ -1,0 +1,41 @@
+{
+  "type": "object",
+  "properties": {
+    "done": {
+      "type": "boolean",
+      "description": "True when no additional part is needed"
+    },
+    "reasoning": {
+      "type": "string",
+      "description": "Brief reason for the decision"
+    },
+    "parts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Unique part identifier"
+          },
+          "title": {
+            "type": "string",
+            "description": "Human-readable part title"
+          },
+          "instruction": {
+            "type": "string",
+            "description": "Instruction for the part agent"
+          },
+          "timeout_ms": {
+            "type": ["integer", "null"],
+            "description": "Optional timeout in ms"
+          }
+        },
+        "required": ["id", "title", "instruction", "timeout_ms"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["done", "reasoning", "parts"],
+  "additionalProperties": false
+}

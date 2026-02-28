@@ -306,4 +306,71 @@ describe('PieceEngine persona_providers override', () => {
     expect(options.stepProvider).toBe('codex');
     expect(options.stepModel).toBe('persona-model');
   });
+
+  it('should emit providerInfo in movement:start matching stepProvider/stepModel', async () => {
+    const movement = makeMovement('implement', {
+      personaDisplayName: 'coder',
+      rules: [makeRule('done', 'COMPLETE')],
+    });
+    const config: PieceConfig = {
+      name: 'provider-info-event-test',
+      movements: [movement],
+      initialMovement: 'implement',
+      maxMovements: 1,
+    };
+
+    mockRunAgentSequence([
+      makeResponse({ persona: movement.persona, content: 'done' }),
+    ]);
+    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+
+    const engine = new PieceEngine(config, '/tmp/project', 'test task', {
+      projectCwd: '/tmp/project',
+      provider: 'claude',
+      model: 'global-model',
+      personaProviders: { coder: { provider: 'codex', model: 'o3-mini' } },
+    });
+
+    const startFn = vi.fn();
+    engine.on('movement:start', startFn);
+
+    await engine.run();
+
+    expect(startFn).toHaveBeenCalledTimes(1);
+    const [, , , providerInfo] = startFn.mock.calls[0];
+    expect(providerInfo).toEqual({ provider: 'codex', model: 'o3-mini' });
+  });
+
+  it('should emit engine-level provider in providerInfo when persona has no override', async () => {
+    const movement = makeMovement('plan', {
+      personaDisplayName: 'planner',
+      rules: [makeRule('done', 'COMPLETE')],
+    });
+    const config: PieceConfig = {
+      name: 'provider-info-no-override',
+      movements: [movement],
+      initialMovement: 'plan',
+      maxMovements: 1,
+    };
+
+    mockRunAgentSequence([
+      makeResponse({ persona: movement.persona, content: 'done' }),
+    ]);
+    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+
+    const engine = new PieceEngine(config, '/tmp/project', 'test task', {
+      projectCwd: '/tmp/project',
+      provider: 'claude',
+      model: 'sonnet',
+    });
+
+    const startFn = vi.fn();
+    engine.on('movement:start', startFn);
+
+    await engine.run();
+
+    expect(startFn).toHaveBeenCalledTimes(1);
+    const [, , , providerInfo] = startFn.mock.calls[0];
+    expect(providerInfo).toEqual({ provider: 'claude', model: 'sonnet' });
+  });
 });

@@ -665,7 +665,7 @@ const match = await detectMatchedRule(step, response.content, tagContent, {...})
 **主要な処理**:
 1. **エージェント仕様解決**:
    - ビルトインエージェント (`coder`, `architect`, など)
-   - カスタムエージェント (`.takt/agents.yaml`)
+   - カスタムエージェント（`~/.takt/personas/<name>.md`）
    - プロンプトファイル (`.md`)
 
 2. **プロバイダー取得**:

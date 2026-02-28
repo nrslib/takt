@@ -33,7 +33,6 @@ export interface ResolvedConfigValue<K extends ConfigParameterKey> {
 type ResolutionLayer = 'local' | 'piece' | 'global';
 interface ResolutionRule<K extends ConfigParameterKey> {
   layers: readonly ResolutionLayer[];
-  defaultValue?: LoadedConfig[K];
   mergeMode?: 'analytics';
   pieceValue?: (pieceContext: PieceContext | undefined) => LoadedConfig[K] | undefined;
 }
@@ -61,7 +60,7 @@ const PROVIDER_OPTIONS_ENV_PATHS = [
 ] as const;
 
 const RESOLUTION_REGISTRY: Partial<{ [K in ConfigParameterKey]: ResolutionRule<K> }> = {
-  piece: { layers: ['local', 'global'], defaultValue: 'default' },
+  piece: { layers: ['local', 'global'] },
   provider: {
     layers: ['local', 'piece', 'global'],
     pieceValue: (pieceContext) => pieceContext?.provider,
@@ -77,8 +76,8 @@ const RESOLUTION_REGISTRY: Partial<{ [K in ConfigParameterKey]: ResolutionRule<K
   autoPr: { layers: ['local', 'global'] },
   draftPr: { layers: ['local', 'global'] },
   analytics: { layers: ['local', 'global'], mergeMode: 'analytics' },
-  verbose: { layers: ['local', 'global'], defaultValue: false },
-  autoFetch: { layers: ['global'], defaultValue: false },
+  verbose: { layers: ['local', 'global'] },
+  autoFetch: { layers: ['global'] },
   baseBranch: { layers: ['local', 'global'] },
 };
 
@@ -159,7 +158,7 @@ function resolveByRegistry<K extends ConfigParameterKey>(
     }
   }
 
-  return { value: rule.defaultValue as LoadedConfig[K], source: 'default' };
+  return { value: undefined as LoadedConfig[K], source: 'default' };
 }
 
 function hasProviderOptionsEnvOverride(): boolean {

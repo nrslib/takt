@@ -46,6 +46,10 @@ function getGitHubUser(): string {
     stdio: 'pipe',
   }).trim();
 
+  if (user.startsWith('<')) {
+    throw new Error('Unexpected HTML response from gh api user');
+  }
+
   if (!user) {
     throw new Error(
       'Failed to get GitHub user. Make sure `gh` CLI is authenticated.',
@@ -128,7 +132,12 @@ export function createTestRepo(options?: CreateTestRepoOptions): TestRepo {
     return createOfflineTestRepo(options);
   }
 
-  const user = getGitHubUser();
+  let user: string;
+  try {
+    user = getGitHubUser();
+  } catch {
+    return createOfflineTestRepo(options);
+  }
   const repoName = `${user}/takt-testing`;
 
   // Verify repository exists

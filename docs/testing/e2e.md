@@ -5,7 +5,8 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
 ## 前提条件
 - `gh` CLI が利用可能で、対象GitHubアカウントでログイン済みであること。
 - `takt-testing` リポジトリが対象アカウントに存在すること（E2Eがクローンして使用）。
-- 必要に応じて `TAKT_E2E_PROVIDER` を設定すること（例: `claude` / `codex` / `opencode`）。
+- 必要に応じて `TAKT_E2E_PROVIDER` を設定すること（例: `claude` / `codex` / `cursor` / `opencode`）。
+- `TAKT_E2E_PROVIDER=cursor` の場合は `cursor-agent` CLI が利用可能で、認証済みであること。
 - `TAKT_E2E_PROVIDER=opencode` の場合は `TAKT_E2E_MODEL` が必須（例: `opencode/big-pickle`）。
 - 実行時間が長いテストがあるため、タイムアウトに注意すること。
 - E2Eは `e2e/helpers/test-repo.ts` が `gh` でリポジトリをクローンし、テンポラリディレクトリで実行する。
@@ -28,10 +29,12 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
 - `npm run test:e2e:provider`: `claude` と `codex` の両方で実行。
 - `npm run test:e2e:provider:claude`: `TAKT_E2E_PROVIDER=claude` で実行。
 - `npm run test:e2e:provider:codex`: `TAKT_E2E_PROVIDER=codex` で実行。
+- `npm run test:e2e:provider:cursor`: `TAKT_AUTO_PR=false TAKT_E2E_PROVIDER=cursor` で実行（Cursor専用スイート: `add-and-run` / `worktree`）。
 - `npm run test:e2e:provider:opencode`: `TAKT_E2E_PROVIDER=opencode` で実行（`TAKT_E2E_MODEL` 必須）。
 - `npm run test:e2e:all`: `mock` + `provider` を通しで実行。
 - `npm run test:e2e:claude`: `test:e2e:provider:claude` の別名。
 - `npm run test:e2e:codex`: `test:e2e:provider:codex` の別名。
+- `npm run test:e2e:cursor`: `test:e2e:provider:cursor` の別名。
 - `npm run test:e2e:opencode`: `test:e2e:provider:opencode` の別名。
 - `npx vitest run e2e/specs/add-and-run.e2e.ts`: 単体実行の例。
 

@@ -20,11 +20,13 @@ vi.mock('node:fs', () => ({
     mkdtempSync: vi.fn(),
     writeFileSync: vi.fn(),
     existsSync: vi.fn(),
+    rmSync: vi.fn(),
   },
   mkdirSync: vi.fn(),
   mkdtempSync: vi.fn(),
   writeFileSync: vi.fn(),
   existsSync: vi.fn(),
+  rmSync: vi.fn(),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -570,6 +572,173 @@ describe('clone submodule arguments', () => {
   });
 });
 
+describe('branchExists remote tracking branch fallback', () => {
+  it('should clone with existing branch when only remote tracking branch exists', () => {
+    // Given: local branch does not exist, but origin/<branch> does
+    const cloneCalls: string[][] = [];
+    const checkoutCalls: string[][] = [];
+
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+
+      // resolveBaseBranch: detectDefaultBranch
+      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--abbrev-ref' && argsArr[2] === 'HEAD') {
+        return 'main\n';
+      }
+
+      // branchExists: git rev-parse --verify <branch>
+      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--verify') {
+        const ref = argsArr[2];
+        if (typeof ref === 'string' && ref.startsWith('origin/')) {
+          // Remote tracking branch exists
+          return Buffer.from('abc123');
+        }
+        // Local branch does not exist
+        throw new Error('branch not found');
+      }
+
+      if (argsArr[0] === 'clone') {
+        cloneCalls.push(argsArr);
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'remote') return Buffer.from('');
+      if (argsArr[0] === 'config') {
+        if (argsArr[1] === '--local') throw new Error('not set');
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'checkout') {
+        checkoutCalls.push(argsArr);
+        return Buffer.from('');
+      }
+
+      return Buffer.from('');
+    });
+
+    // When
+    const result = createSharedClone('/project', {
+      worktree: '/tmp/clone-remote-branch',
+      taskSlug: 'remote-branch-task',
+      branch: 'feature/remote-only',
+    });
+
+    // Then: branch is the requested branch name
+    expect(result.branch).toBe('feature/remote-only');
+
+    // Then: cloneAndIsolate was called with --branch feature/remote-only (not base branch)
+    expect(cloneCalls).toHaveLength(1);
+    expect(cloneCalls[0]).toContain('--branch');
+    expect(cloneCalls[0]).toContain('feature/remote-only');
+
+    // Then: no checkout -b was called (branch already exists on remote)
+    expect(checkoutCalls).toHaveLength(0);
+  });
+
+  it('should create new branch when neither local nor remote tracking branch exists', () => {
+    // Given: neither local nor remote tracking branch exists
+    const cloneCalls: string[][] = [];
+    const checkoutCalls: string[][] = [];
+
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+
+      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--abbrev-ref' && argsArr[2] === 'HEAD') {
+        return 'main\n';
+      }
+
+      // Both local and remote tracking branch not found
+      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--verify') {
+        throw new Error('branch not found');
+      }
+
+      if (argsArr[0] === 'clone') {
+        cloneCalls.push(argsArr);
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'remote') return Buffer.from('');
+      if (argsArr[0] === 'config') {
+        if (argsArr[1] === '--local') throw new Error('not set');
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'checkout') {
+        checkoutCalls.push(argsArr);
+        return Buffer.from('');
+      }
+
+      return Buffer.from('');
+    });
+
+    // When
+    const result = createSharedClone('/project', {
+      worktree: '/tmp/clone-no-branch',
+      taskSlug: 'no-branch-task',
+      branch: 'feature/brand-new',
+    });
+
+    // Then: branch is the requested branch name
+    expect(result.branch).toBe('feature/brand-new');
+
+    // Then: cloneAndIsolate was called with --branch main (base branch)
+    expect(cloneCalls).toHaveLength(1);
+    expect(cloneCalls[0]).toContain('--branch');
+    expect(cloneCalls[0]).toContain('main');
+
+    // Then: checkout -b was called to create the new branch
+    expect(checkoutCalls).toHaveLength(1);
+    expect(checkoutCalls[0]).toEqual(['checkout', '-b', 'feature/brand-new']);
+  });
+
+  it('should prefer local branch over remote tracking branch', () => {
+    // Given: local branch exists
+    const cloneCalls: string[][] = [];
+    const checkoutCalls: string[][] = [];
+
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+
+      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--abbrev-ref' && argsArr[2] === 'HEAD') {
+        return 'main\n';
+      }
+
+      // Local branch exists (first rev-parse --verify call succeeds)
+      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--verify') {
+        return Buffer.from('def456');
+      }
+
+      if (argsArr[0] === 'clone') {
+        cloneCalls.push(argsArr);
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'remote') return Buffer.from('');
+      if (argsArr[0] === 'config') {
+        if (argsArr[1] === '--local') throw new Error('not set');
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'checkout') {
+        checkoutCalls.push(argsArr);
+        return Buffer.from('');
+      }
+
+      return Buffer.from('');
+    });
+
+    // When
+    const result = createSharedClone('/project', {
+      worktree: '/tmp/clone-local-branch',
+      taskSlug: 'local-branch-task',
+      branch: 'feature/local-exists',
+    });
+
+    // Then: cloneAndIsolate was called with --branch feature/local-exists
+    expect(result.branch).toBe('feature/local-exists');
+    expect(cloneCalls).toHaveLength(1);
+    expect(cloneCalls[0]).toContain('--branch');
+    expect(cloneCalls[0]).toContain('feature/local-exists');
+
+    // Then: no checkout -b was called (branch already exists locally)
+    expect(checkoutCalls).toHaveLength(0);
+  });
+});
+
 describe('autoFetch: true — fetch, rev-parse origin/<branch>, reset --hard', () => {
   it('should run git fetch, resolve origin/<branch> commit hash, and reset --hard in the clone', () => {
     // Given: autoFetch is enabled in global config.
@@ -648,5 +817,132 @@ describe('autoFetch: true — fetch, rev-parse origin/<branch>, reset --hard', (
     // Then: clone was reset to the fetched commit
     expect(resetCalls).toHaveLength(1);
     expect(resetCalls[0]).toEqual(['reset', '--hard', 'abc123def456']);
+  });
+});
+
+describe('shallow clone fallback', () => {
+  function setupShallowCloneMock(options: {
+    shallowError: boolean;
+    otherError?: string;
+  }): { cloneCalls: string[][] } {
+    const cloneCalls: string[][] = [];
+
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+
+      // git rev-parse --abbrev-ref HEAD
+      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--abbrev-ref' && argsArr[2] === 'HEAD') {
+        return 'main\n';
+      }
+
+      // git clone
+      if (argsArr[0] === 'clone') {
+        cloneCalls.push([...argsArr]);
+        const hasReference = argsArr.includes('--reference');
+
+        if (hasReference && options.shallowError) {
+          const err = new Error('clone failed');
+          (err as unknown as { stderr: Buffer }).stderr = Buffer.from('fatal: reference repository is shallow');
+          throw err;
+        }
+
+        if (hasReference && options.otherError) {
+          const err = new Error('clone failed');
+          (err as unknown as { stderr: Buffer }).stderr = Buffer.from(options.otherError);
+          throw err;
+        }
+
+        return Buffer.from('');
+      }
+
+      // git remote remove origin
+      if (argsArr[0] === 'remote' && argsArr[1] === 'remove') {
+        return Buffer.from('');
+      }
+
+      // git config --local (reading from source repo)
+      if (argsArr[0] === 'config' && argsArr[1] === '--local') {
+        throw new Error('not set');
+      }
+
+      // git config <key> <value> (writing to clone)
+      if (argsArr[0] === 'config') {
+        return Buffer.from('');
+      }
+
+      // git rev-parse --verify (branchExists)
+      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--verify') {
+        throw new Error('branch not found');
+      }
+
+      // git checkout -b
+      if (argsArr[0] === 'checkout') {
+        return Buffer.from('');
+      }
+
+      return Buffer.from('');
+    });
+
+    return { cloneCalls };
+  }
+
+  it('should fall back to clone without --reference when reference repository is shallow', () => {
+    const { cloneCalls } = setupShallowCloneMock({ shallowError: true });
+
+    createSharedClone('/project', {
+      worktree: '/tmp/shallow-test',
+      taskSlug: 'shallow-fallback',
+    });
+
+    // Two clone attempts: first with --reference, then without
+    expect(cloneCalls).toHaveLength(2);
+
+    // First attempt includes --reference and --dissociate
+    expect(cloneCalls[0]).toContain('--reference');
+    expect(cloneCalls[0]).toContain('--dissociate');
+
+    // Second attempt (fallback) does not include --reference or --dissociate
+    expect(cloneCalls[1]).not.toContain('--reference');
+    expect(cloneCalls[1]).not.toContain('--dissociate');
+
+    // Both attempts target the same clone path
+    expect(cloneCalls[0][cloneCalls[0].length - 1]).toBe('/tmp/shallow-test');
+    expect(cloneCalls[1][cloneCalls[1].length - 1]).toBe('/tmp/shallow-test');
+
+    // Fallback was logged
+    expect(mockLogInfo).toHaveBeenCalledWith(
+      'Reference repository is shallow, retrying clone without --reference',
+      expect.objectContaining({ referenceRepo: expect.any(String) }),
+    );
+  });
+
+  it('should not fall back on non-shallow clone errors', () => {
+    setupShallowCloneMock({
+      shallowError: false,
+      otherError: 'fatal: repository does not exist',
+    });
+
+    expect(() => {
+      createSharedClone('/project', {
+        worktree: '/tmp/other-error-test',
+        taskSlug: 'other-error',
+      });
+    }).toThrow('clone failed');
+  });
+
+  it('should attempt --reference --dissociate clone first', () => {
+    const { cloneCalls } = setupShallowCloneMock({ shallowError: false });
+
+    createSharedClone('/project', {
+      worktree: '/tmp/reference-first-test',
+      taskSlug: 'reference-first',
+    });
+
+    // Only one clone call (successful on first attempt)
+    expect(cloneCalls).toHaveLength(1);
+
+    // First (and only) attempt includes --reference and --dissociate
+    expect(cloneCalls[0]).toContain('--reference');
+    expect(cloneCalls[0]).toContain('--dissociate');
   });
 });

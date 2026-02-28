@@ -41,12 +41,13 @@ program
 // --- Global options ---
 program
   .option('-i, --issue <number>', 'GitHub issue number (equivalent to #N)', (val: string) => parseInt(val, 10))
+  .option('--pr <number>', 'PR number to fetch review comments and fix', (val: string) => parseInt(val, 10))
   .option('-w, --piece <name>', 'Piece name or path to piece file')
   .option('-b, --branch <name>', 'Branch name (auto-generated if omitted)')
   .option('--auto-pr', 'Create PR after successful execution')
   .option('--draft', 'Create PR as draft (requires --auto-pr or auto_pr config)')
   .option('--repo <owner/repo>', 'Repository (defaults to current)')
-  .option('--provider <name>', 'Override agent provider (claude|codex|opencode|mock)')
+  .option('--provider <name>', 'Override agent provider (claude|codex|opencode|cursor|mock)')
   .option('--model <name>', 'Override agent model')
   .option('-t, --task <string>', 'Task content (as alternative to GitHub issue)')
   .option('--pipeline', 'Pipeline mode: non-interactive, no worktree, direct branch creation')
