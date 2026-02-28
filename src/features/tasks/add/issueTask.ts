@@ -5,6 +5,13 @@ const TITLE_MAX_LENGTH = 100;
 const TITLE_TRUNCATE_LENGTH = 97;
 const MARKDOWN_HEADING_PATTERN = /^#{1,3}\s+\S/;
 
+/**
+ * Extract a clean title from a task description.
+ *
+ * Prefers the first Markdown heading (h1-h3) if present.
+ * Falls back to the first non-empty line otherwise.
+ * Truncates to 100 characters (97 + "...") when exceeded.
+ */
 export function extractTitle(task: string): string {
   const lines = task.split('\n');
   const headingLine = lines.find((l) => MARKDOWN_HEADING_PATTERN.test(l));
@@ -16,6 +23,13 @@ export function extractTitle(task: string): string {
     : titleLine;
 }
 
+/**
+ * Create a GitHub Issue from a task description.
+ *
+ * Extracts the first Markdown heading (h1-h3) as the issue title,
+ * falling back to the first non-empty line. Truncates to 100 chars.
+ * Uses the full task as the body, and displays success/error messages.
+ */
 export function createIssueFromTask(task: string, options?: { labels?: string[] }): number | undefined {
   info('Creating GitHub Issue...');
   const title = extractTitle(task);

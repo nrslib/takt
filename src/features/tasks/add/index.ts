@@ -178,6 +178,12 @@ export async function createIssueAndSaveTask(
 
 /**
  * add command handler
+ *
+ * Flow:
+ *   A) --pr オプション: PRレビュー取得 → ピース選択 → YAML作成
+ *   B) 引数なし: Usage表示して終了
+ *   C) Issue参照の場合: issue取得 → ピース選択 → ワークツリー設定 → YAML作成
+ *   D) 通常入力: ピース選択 → ワークツリー設定 → YAML作成
  */
 export async function addTask(
   cwd: string,

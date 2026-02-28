@@ -84,12 +84,6 @@ const mockConfirm = vi.mocked(confirm);
 const mockInfo = vi.mocked(info);
 const mockError = vi.mocked(error);
 const mockDeterminePiece = vi.mocked(determinePiece);
-const mockCheckCliStatusRef = vi.mocked(mockCheckCliStatus);
-const mockFetchPrReviewCommentsRef = vi.mocked(mockFetchPrReviewComments);
-const mockResolveIssueTaskRef = vi.mocked(mockResolveIssueTask);
-const mockParseIssueNumbersRef = vi.mocked(mockParseIssueNumbers);
-const mockIsIssueReferenceRef = vi.mocked(mockIsIssueReference);
-const mockFormatPrReviewAsTaskRef = vi.mocked(mockFormatPrReviewAsTask);
 
 let testDir: string;
 
@@ -176,15 +170,15 @@ describe('addTask', () => {
   });
 
   it('should create task from issue reference without interactive mode', async () => {
-    mockResolveIssueTaskRef.mockReturnValue('Issue #99: Fix login timeout');
+    mockResolveIssueTask.mockReturnValue('Issue #99: Fix login timeout');
 
     await addTask(testDir, '#99');
 
     expect(mockInteractiveMode).not.toHaveBeenCalled();
-    expect(mockIsIssueReferenceRef).toHaveBeenCalledWith('#99');
-    expect(mockParseIssueNumbersRef).toHaveBeenCalledWith(['#99']);
-    expect(mockResolveIssueTaskRef).toHaveBeenCalledWith('#99');
-    expect(mockCheckCliStatusRef).not.toHaveBeenCalled();
+    expect(mockIsIssueReference).toHaveBeenCalledWith('#99');
+    expect(mockParseIssueNumbers).toHaveBeenCalledWith(['#99']);
+    expect(mockResolveIssueTask).toHaveBeenCalledWith('#99');
+    expect(mockCheckCliStatus).not.toHaveBeenCalled();
     const task = loadTasks(testDir).tasks[0]!;
     expect(task.content).toBeUndefined();
     expect(readOrderContent(testDir, task.task_dir)).toContain('Fix login timeout');
@@ -194,20 +188,20 @@ describe('addTask', () => {
   it('should create task from PR review comments with PR-specific task settings', async () => {
     const prReview = createMockPrReview();
     const formattedTask = '## PR #456 Review Comments: Fix auth bug';
-    mockFetchPrReviewCommentsRef.mockReturnValue(prReview);
-    mockFormatPrReviewAsTaskRef.mockReturnValue(formattedTask);
+    mockFetchPrReviewComments.mockReturnValue(prReview);
+    mockFormatPrReviewAsTask.mockReturnValue(formattedTask);
 
     await addTaskWithPrOption(testDir, 'placeholder', 456);
 
-    expect(mockCheckCliStatusRef).toHaveBeenCalled();
-    expect(mockCheckCliStatusRef.mock.invocationCallOrder[0]).toBeLessThan(
-      mockFetchPrReviewCommentsRef.mock.invocationCallOrder[0],
+    expect(mockCheckCliStatus).toHaveBeenCalled();
+    expect(mockCheckCliStatus.mock.invocationCallOrder[0]).toBeLessThan(
+      mockFetchPrReviewComments.mock.invocationCallOrder[0],
     );
-    expect(mockFetchPrReviewCommentsRef).toHaveBeenCalledWith(456);
-    expect(mockFormatPrReviewAsTaskRef).toHaveBeenCalledWith(prReview);
-    expect(mockIsIssueReferenceRef).not.toHaveBeenCalled();
-    expect(mockParseIssueNumbersRef).not.toHaveBeenCalled();
-    expect(mockResolveIssueTaskRef).not.toHaveBeenCalled();
+    expect(mockFetchPrReviewComments).toHaveBeenCalledWith(456);
+    expect(mockFormatPrReviewAsTask).toHaveBeenCalledWith(prReview);
+    expect(mockIsIssueReference).not.toHaveBeenCalled();
+    expect(mockParseIssueNumbers).not.toHaveBeenCalled();
+    expect(mockResolveIssueTask).not.toHaveBeenCalled();
     expect(mockPromptInput).not.toHaveBeenCalled();
     expect(mockConfirm).not.toHaveBeenCalled();
     expect(mockDeterminePiece).toHaveBeenCalledTimes(1);
@@ -222,26 +216,26 @@ describe('addTask', () => {
 
   it('should not create a PR task when PR has no review comments', async () => {
     const prReview = createMockPrReview({ comments: [], reviews: [] });
-    mockFetchPrReviewCommentsRef.mockReturnValue(prReview);
+    mockFetchPrReviewComments.mockReturnValue(prReview);
 
     await addTaskWithPrOption(testDir, 'placeholder', 456);
 
-    expect(mockCheckCliStatusRef).toHaveBeenCalled();
-    expect(mockFetchPrReviewCommentsRef).toHaveBeenCalledWith(456);
-    expect(mockFormatPrReviewAsTaskRef).not.toHaveBeenCalled();
+    expect(mockCheckCliStatus).toHaveBeenCalled();
+    expect(mockFetchPrReviewComments).toHaveBeenCalledWith(456);
+    expect(mockFormatPrReviewAsTask).not.toHaveBeenCalled();
     expect(mockDeterminePiece).not.toHaveBeenCalled();
     expect(mockError).toHaveBeenCalled();
     expect(fs.existsSync(path.join(testDir, '.takt', 'tasks.yaml'))).toBe(false);
   });
 
   it('should show error and not create task when fetchPrReviewComments throws', async () => {
-    mockFetchPrReviewCommentsRef.mockRejectedValue(new Error('network timeout'));
+    mockFetchPrReviewComments.mockImplementation(() => { throw new Error('network timeout'); });
 
     await addTaskWithPrOption(testDir, 'placeholder', 456);
 
-    expect(mockCheckCliStatusRef).toHaveBeenCalled();
-    expect(mockFetchPrReviewCommentsRef).toHaveBeenCalledWith(456);
-    expect(mockFormatPrReviewAsTaskRef).not.toHaveBeenCalled();
+    expect(mockCheckCliStatus).toHaveBeenCalled();
+    expect(mockFetchPrReviewComments).toHaveBeenCalledWith(456);
+    expect(mockFormatPrReviewAsTask).not.toHaveBeenCalled();
     expect(mockDeterminePiece).not.toHaveBeenCalled();
     expect(mockError).toHaveBeenCalledWith(expect.stringContaining('network timeout'));
     expect(fs.existsSync(path.join(testDir, '.takt', 'tasks.yaml'))).toBe(false);
@@ -252,8 +246,8 @@ describe('addTask', () => {
 
     await addTaskWithPrOption(testDir, 'placeholder', 456);
 
-    expect(mockFetchPrReviewCommentsRef).not.toHaveBeenCalled();
-    expect(mockFormatPrReviewAsTaskRef).not.toHaveBeenCalled();
+    expect(mockFetchPrReviewComments).not.toHaveBeenCalled();
+    expect(mockFormatPrReviewAsTask).not.toHaveBeenCalled();
     expect(mockDeterminePiece).not.toHaveBeenCalled();
     expect(mockError).toHaveBeenCalled();
     expect(fs.existsSync(path.join(testDir, '.takt', 'tasks.yaml'))).toBe(false);
@@ -262,18 +256,18 @@ describe('addTask', () => {
   it('should not perform issue parsing when PR task text looks like issue reference', async () => {
     const prReview = createMockPrReview();
     const formattedTask = '## PR #456 Review Comments: Fix auth bug';
-    mockFetchPrReviewCommentsRef.mockReturnValue(prReview);
-    mockFormatPrReviewAsTaskRef.mockReturnValue(formattedTask);
+    mockFetchPrReviewComments.mockReturnValue(prReview);
+    mockFormatPrReviewAsTask.mockReturnValue(formattedTask);
 
     await addTaskWithPrOption(testDir, '#99', 456);
 
-    expect(mockIsIssueReferenceRef).not.toHaveBeenCalled();
+    expect(mockIsIssueReference).not.toHaveBeenCalled();
 
-    expect(mockParseIssueNumbersRef).not.toHaveBeenCalled();
-    expect(mockResolveIssueTaskRef).not.toHaveBeenCalled();
-    expect(mockCheckCliStatusRef).toHaveBeenCalled();
-    expect(mockFetchPrReviewCommentsRef).toHaveBeenCalledWith(456);
-    expect(mockFormatPrReviewAsTaskRef).toHaveBeenCalledWith(prReview);
+    expect(mockParseIssueNumbers).not.toHaveBeenCalled();
+    expect(mockResolveIssueTask).not.toHaveBeenCalled();
+    expect(mockCheckCliStatus).toHaveBeenCalled();
+    expect(mockFetchPrReviewComments).toHaveBeenCalledWith(456);
+    expect(mockFormatPrReviewAsTask).toHaveBeenCalledWith(prReview);
     const task = loadTasks(testDir).tasks[0]!;
     expect(task.content).toBeUndefined();
     expect(task.branch).toBe('feature/fix-auth-bug');
@@ -292,14 +286,14 @@ describe('addTask', () => {
     const prReview = createMockPrReview();
     const formattedTask = '## PR #456 Review Comments: Fix auth bug';
     mockDeterminePiece.mockResolvedValue(null);
-    mockFetchPrReviewCommentsRef.mockReturnValue(prReview);
-    mockFormatPrReviewAsTaskRef.mockReturnValue(formattedTask);
+    mockFetchPrReviewComments.mockReturnValue(prReview);
+    mockFormatPrReviewAsTask.mockReturnValue(formattedTask);
 
     await addTaskWithPrOption(testDir, 'placeholder', 456);
 
-    expect(mockCheckCliStatusRef).toHaveBeenCalled();
-    expect(mockFetchPrReviewCommentsRef).toHaveBeenCalledWith(456);
-    expect(mockFormatPrReviewAsTaskRef).toHaveBeenCalledWith(prReview);
+    expect(mockCheckCliStatus).toHaveBeenCalled();
+    expect(mockFetchPrReviewComments).toHaveBeenCalledWith(456);
+    expect(mockFormatPrReviewAsTask).toHaveBeenCalledWith(prReview);
     expect(mockDeterminePiece).toHaveBeenCalledTimes(1);
     expect(fs.existsSync(path.join(testDir, '.takt', 'tasks.yaml'))).toBe(false);
   });
