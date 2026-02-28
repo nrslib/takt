@@ -13,9 +13,11 @@ import type { Language } from '../../../core/models/types.js';
 import { TaskRunner, type TaskFileData, summarizeTaskName } from '../../../infra/task/index.js';
 import { determinePiece } from '../execute/selectAndExecute.js';
 import { createLogger, getErrorMessage, generateReportDir } from '../../../shared/utils/index.js';
-import { isIssueReference, resolveIssueTask, parseIssueNumbers } from '../../../infra/github/index.js';
-import { getGitProvider } from '../../../infra/git/index.js';
+import { isIssueReference, resolveIssueTask, parseIssueNumbers, formatPrReviewAsTask } from '../../../infra/github/index.js';
+import { getGitProvider, type PrReviewData } from '../../../infra/git/index.js';
 import { firstLine } from '../../../infra/task/naming.js';
+import { extractTitle, createIssueFromTask } from './issueTask.js';
+export { extractTitle, createIssueFromTask };
 
 const log = createLogger('add-task');
 
@@ -70,60 +72,6 @@ export async function saveTaskFile(
   return { taskName: created.name, tasksFile };
 }
 
-const TITLE_MAX_LENGTH = 100;
-const TITLE_TRUNCATE_LENGTH = 97;
-const MARKDOWN_HEADING_PATTERN = /^#{1,3}\s+\S/;
-
-/**
- * Extract a clean title from a task description.
- *
- * Prefers the first Markdown heading (h1-h3) if present.
- * Falls back to the first non-empty line otherwise.
- * Truncates to 100 characters (97 + "...") when exceeded.
- */
-export function extractTitle(task: string): string {
-  const lines = task.split('\n');
-  const headingLine = lines.find((l) => MARKDOWN_HEADING_PATTERN.test(l));
-  const titleLine = headingLine
-    ? headingLine.replace(/^#{1,3}\s+/, '')
-    : (lines.find((l) => l.trim().length > 0) ?? task);
-  return titleLine.length > TITLE_MAX_LENGTH
-    ? `${titleLine.slice(0, TITLE_TRUNCATE_LENGTH)}...`
-    : titleLine;
-}
-
-/**
- * Create a GitHub Issue from a task description.
- *
- * Extracts the first Markdown heading (h1-h3) as the issue title,
- * falling back to the first non-empty line. Truncates to 100 chars.
- * Uses the full task as the body, and displays success/error messages.
- */
-export function createIssueFromTask(task: string, options?: { labels?: string[] }): number | undefined {
-  info('Creating GitHub Issue...');
-  const title = extractTitle(task);
-  const effectiveLabels = options?.labels?.filter((l) => l.length > 0) ?? [];
-  const labels = effectiveLabels.length > 0 ? effectiveLabels : undefined;
-
-  const issueResult = getGitProvider().createIssue({ title, body: task, labels });
-  if (issueResult.success) {
-    if (!issueResult.url) {
-      error('Failed to extract issue number from URL');
-      return undefined;
-    }
-    success(`Issue created: ${issueResult.url}`);
-    const num = Number(issueResult.url.split('/').pop());
-    if (Number.isNaN(num)) {
-      error('Failed to extract issue number from URL');
-      return undefined;
-    }
-    return num;
-  } else {
-    error(`Failed to create issue: ${issueResult.error}`);
-    return undefined;
-  }
-}
-
 interface WorktreeSettings {
   worktree?: boolean | string;
   branch?: string;
@@ -151,27 +99,6 @@ function displayTaskCreationResult(
     info(`  Draft PR: yes`);
   }
   if (piece) info(`  Piece: ${piece}`);
-}
-
-/**
- * Create a GitHub Issue and save the task to .takt/tasks.yaml.
- *
- * Combines issue creation and task saving into a single workflow.
- * If issue creation fails, no task is saved.
- */
-export async function createIssueAndSaveTask(
-  cwd: string,
-  task: string,
-  piece?: string,
-  options?: { confirmAtEndMessage?: string; labels?: string[] },
-): Promise<void> {
-  const issueNumber = createIssueFromTask(task, { labels: options?.labels });
-  if (issueNumber !== undefined) {
-    await saveTaskFromInteractive(cwd, task, piece, {
-      issue: issueNumber,
-      confirmAtEndMessage: options?.confirmAtEndMessage,
-    });
-  }
 }
 
 /**
@@ -233,17 +160,77 @@ export async function saveTaskFromInteractive(
   displayTaskCreationResult(created, settings, piece);
 }
 
+export async function createIssueAndSaveTask(
+  cwd: string,
+  task: string,
+  piece?: string,
+  options?: { confirmAtEndMessage?: string; labels?: string[] },
+): Promise<void> {
+  const issueNumber = createIssueFromTask(task, { labels: options?.labels });
+  if (issueNumber === undefined) {
+    return;
+  }
+  await saveTaskFromInteractive(cwd, task, piece, {
+    issue: issueNumber,
+    confirmAtEndMessage: options?.confirmAtEndMessage,
+  });
+}
+
 /**
  * add command handler
- *
- * Flow:
- *   A) 引数なし: Usage表示して終了
- *   B) Issue参照の場合: issue取得 → ピース選択 → ワークツリー設定 → YAML作成
- *   C) 通常入力: 引数をそのまま保存
  */
-export async function addTask(cwd: string, task?: string): Promise<void> {
+export async function addTask(
+  cwd: string,
+  task?: string,
+  opts?: { prNumber?: number },
+): Promise<void> {
   const rawTask = task ?? '';
   const trimmedTask = rawTask.trim();
+  const prNumber = opts?.prNumber;
+
+  if (prNumber !== undefined) {
+    const provider = getGitProvider();
+    const ghStatus = provider.checkCliStatus();
+    if (!ghStatus.available) {
+      error(ghStatus.error ?? 'GitHub CLI is unavailable');
+      return;
+    }
+
+    let prReview: PrReviewData;
+    try {
+      prReview = await withProgress(
+        'Fetching PR review comments...',
+        (fetchedPrReview: PrReviewData) => `PR fetched: #${fetchedPrReview.number} ${fetchedPrReview.title}`,
+        async () => provider.fetchPrReviewComments(prNumber),
+      );
+    } catch (e) {
+      const msg = getErrorMessage(e);
+      error(`Failed to fetch PR review comments #${prNumber}: ${msg}`);
+      return;
+    }
+
+    if (prReview.reviews.length === 0 && prReview.comments.length === 0) {
+      error(`PR #${prNumber} has no review comments`);
+      return;
+    }
+
+    const taskContent = formatPrReviewAsTask(prReview);
+    const piece = await determinePiece(cwd);
+    if (piece === null) {
+      info('Cancelled.');
+      return;
+    }
+
+    const settings = {
+      worktree: true,
+      branch: prReview.headRefName,
+      autoPr: false,
+    };
+    const created = await saveTaskFile(cwd, taskContent, { piece, ...settings });
+    displayTaskCreationResult(created, settings, piece);
+    return;
+  }
+
   if (!trimmedTask) {
     info('Usage: takt add <task>');
     return;
@@ -253,7 +240,6 @@ export async function addTask(cwd: string, task?: string): Promise<void> {
   let issueNumber: number | undefined;
 
   if (isIssueReference(trimmedTask)) {
-    // Issue reference: fetch issue and use directly as task content
     try {
       const numbers = parseIssueNumbers([trimmedTask]);
       const primaryIssueNumber = numbers[0];
@@ -283,7 +269,6 @@ export async function addTask(cwd: string, task?: string): Promise<void> {
 
   const settings = await promptWorktreeSettings();
 
-  // YAMLファイル作成
   const created = await saveTaskFile(cwd, taskContent, {
     piece,
     issue: issueNumber,

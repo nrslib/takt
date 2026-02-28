@@ -39,7 +39,12 @@ program
   .description('Add a new task')
   .argument('[task]', 'Task description or GitHub issue reference (e.g. "#28")')
   .action(async (task?: string) => {
-    await addTask(resolvedCwd, task);
+    const opts = program.opts();
+    if (opts.pr !== undefined) {
+      await addTask(resolvedCwd, task, { prNumber: opts.pr });
+    } else {
+      await addTask(resolvedCwd, task);
+    }
   });
 
 program
