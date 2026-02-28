@@ -4,7 +4,7 @@
 
 **T**AKT **A**gent **K**oordination **T**opology — AI コーディングエージェントにレビューループ・プロンプト管理・ガードレールを与え、「とりあえず動くコード」ではなく「品質の高いコード」を出させるツールです。
 
-AI と会話してやりたいことを決め、タスクとして積み、`takt run` で実行します。計画・実装・レビュー・修正のループは YAML の piece ファイルで定義されており、エージェント任せにはしません。Claude Code、Codex、OpenCode、Cursor に対応しています。
+AI と会話してやりたいことを決め、タスクとして積み、`takt run` で実行します。計画・実装・レビュー・修正のループは YAML の piece ファイルで定義されており、エージェント任せにはしません。Claude Code、Codex、OpenCode、Cursor、Copilot に対応しています。
 
 TAKT は TAKT 自身で開発しています（ドッグフーディング）。
 
@@ -22,7 +22,7 @@ TAKT は TAKT 自身で開発しています（ドッグフーディング）。
 
 次のいずれかが必要です。
 
-- **プロバイダー CLI**: [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Codex](https://github.com/openai/codex)、[OpenCode](https://opencode.ai)、[Cursor Agent](https://docs.cursor.com/) のいずれか
+- **プロバイダー CLI**: [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Codex](https://github.com/openai/codex)、[OpenCode](https://opencode.ai)、[Cursor Agent](https://docs.cursor.com/)、[GitHub Copilot](https://github.com/features/copilot) のいずれか
 - **API Key 直接利用**: Anthropic / OpenAI / OpenCode / Cursor の API Key があれば CLI は不要です
 
 任意:
@@ -164,7 +164,7 @@ movements:
 最小限の `~/.takt/config.yaml` は次の通りです。
 
 ```yaml
-provider: claude    # claude, codex, opencode, or cursor
+provider: claude    # claude, codex, opencode, cursor, or copilot
 model: sonnet       # プロバイダーにそのまま渡されます
 language: ja        # en or ja
 ```
