@@ -14,6 +14,7 @@ export const DEFAULT_PROVIDER_PERMISSION_PROFILES: ProviderPermissionProfiles = 
   codex: { defaultPermissionMode: 'edit' },
   opencode: { defaultPermissionMode: 'edit' },
   cursor: { defaultPermissionMode: 'edit' },
+  copilot: { defaultPermissionMode: 'edit' },
   mock: { defaultPermissionMode: 'edit' },
 };
 

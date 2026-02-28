@@ -11,7 +11,7 @@ export interface ProjectLocalConfig {
   /** Current piece name */
   piece?: string;
   /** Provider selection for agent runtime */
-  provider?: 'claude' | 'codex' | 'opencode' | 'cursor' | 'mock';
+  provider?: 'claude' | 'codex' | 'opencode' | 'cursor' | 'copilot' | 'mock';
   /** Model selection for agent runtime */
   model?: string;
   /** Auto-create PR after worktree execution */
@@ -40,6 +40,8 @@ export interface ProjectLocalConfig {
   codexCliPath?: string;
   /** cursor-agent CLI path override (project-level) */
   cursorCliPath?: string;
+  /** Copilot CLI path override (project-level) */
+  copilotCliPath?: string;
 }
 
 /** Persona session data for persistence */

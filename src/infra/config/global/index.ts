@@ -17,6 +17,8 @@ export {
   resolveCodexCliPath,
   resolveClaudeCliPath,
   resolveCursorCliPath,
+  resolveCopilotCliPath,
+  resolveCopilotGithubToken,
   resolveOpencodeApiKey,
   resolveCursorApiKey,
   validateCliPath,
