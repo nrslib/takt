@@ -38,9 +38,17 @@ npm test
 
 ### 2. TAKT レビューを実行する
 
+レビューピースは入力内容からレビューモードを自動判定します:
+
 ```bash
-# PR を作成してからレビューを実行
+# PR モード — PR番号を指定してレビュー
 takt -t "#<PR番号>" -w review
+
+# ブランチモード — ブランチのmainとの差分をレビュー
+takt -t "<ブランチ名>" -w review
+
+# 現在の差分モード — 未コミットや直近の変更をレビュー
+takt -t "review current changes" -w review
 ```
 
 ### 3. APPROVE を確認する

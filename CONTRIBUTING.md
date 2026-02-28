@@ -38,9 +38,17 @@ npm test
 
 ### 2. Run TAKT review
 
+The review piece auto-detects the review mode based on the input:
+
 ```bash
-# Create your PR first, then run review against it
+# PR mode — review a pull request by number
 takt -t "#<PR-number>" -w review
+
+# Branch mode — review a branch diff against main
+takt -t "<branch-name>" -w review
+
+# Current diff mode — review uncommitted or recent changes
+takt -t "review current changes" -w review
 ```
 
 ### 3. Confirm APPROVE
