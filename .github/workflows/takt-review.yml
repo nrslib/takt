@@ -1,4 +1,4 @@
-name: TAKT PR Review
+name: TAKT Review
 
 on:
   pull_request:
