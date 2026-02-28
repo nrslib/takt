@@ -4,12 +4,13 @@
 
 import { callClaude, callClaudeCustom, callClaudeAgent, callClaudeSkill } from '../claude/client.js';
 import type { ClaudeCallOptions } from '../claude/types.js';
-import { resolveAnthropicApiKey } from '../config/index.js';
+import { resolveAnthropicApiKey, resolveClaudeCliPath, loadProjectConfig } from '../config/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
 import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from './types.js';
 
 function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
   const claudeSandbox = options.providerOptions?.claude?.sandbox;
+  const projectConfig = loadProjectConfig(options.cwd);
   return {
     cwd: options.cwd,
     abortSignal: options.abortSignal,
@@ -29,6 +30,7 @@ function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
       allowUnsandboxedCommands: claudeSandbox.allowUnsandboxedCommands,
       excludedCommands: claudeSandbox.excludedCommands,
     } : undefined,
+    pathToClaudeCodeExecutable: resolveClaudeCliPath(projectConfig),
   };
 }
 

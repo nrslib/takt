@@ -34,6 +34,12 @@ export interface ProjectLocalConfig {
   providerOptions?: MovementProviderOptions;
   /** Provider-specific permission profiles (project-level override) */
   providerProfiles?: ProviderPermissionProfiles;
+  /** Claude Code CLI path override (project-level) */
+  claudeCliPath?: string;
+  /** Codex CLI path override (project-level) */
+  codexCliPath?: string;
+  /** cursor-agent CLI path override (project-level) */
+  cursorCliPath?: string;
 }
 
 /** Persona session data for persistence */

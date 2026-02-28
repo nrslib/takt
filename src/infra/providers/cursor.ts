@@ -3,7 +3,7 @@
  */
 
 import { callCursor, callCursorCustom, type CursorCallOptions } from '../cursor/index.js';
-import { resolveCursorApiKey } from '../config/index.js';
+import { resolveCursorApiKey, resolveCursorCliPath, loadProjectConfig } from '../config/index.js';
 import { createLogger } from '../../shared/utils/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
 import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from './types.js';
@@ -21,6 +21,7 @@ function toCursorOptions(options: ProviderCallOptions): CursorCallOptions {
     log.info('Cursor provider does not support outputSchema; ignoring');
   }
 
+  const projectConfig = loadProjectConfig(options.cwd);
   return {
     cwd: options.cwd,
     abortSignal: options.abortSignal,
@@ -29,6 +30,7 @@ function toCursorOptions(options: ProviderCallOptions): CursorCallOptions {
     permissionMode: options.permissionMode,
     onStream: options.onStream,
     cursorApiKey: options.cursorApiKey ?? resolveCursorApiKey(),
+    cursorCliPath: resolveCursorCliPath(projectConfig),
   };
 }
 

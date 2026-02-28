@@ -94,6 +94,8 @@ const GLOBAL_ENV_SPECS: readonly EnvSpec[] = [
   { path: 'anthropic_api_key', type: 'string' },
   { path: 'openai_api_key', type: 'string' },
   { path: 'codex_cli_path', type: 'string' },
+  { path: 'claude_cli_path', type: 'string' },
+  { path: 'cursor_cli_path', type: 'string' },
   { path: 'opencode_api_key', type: 'string' },
   { path: 'cursor_api_key', type: 'string' },
   { path: 'pipeline', type: 'json' },
@@ -145,6 +147,9 @@ const PROJECT_ENV_SPECS: readonly EnvSpec[] = [
   { path: 'provider_options.claude.sandbox.excluded_commands', type: 'json' },
   { path: 'provider_profiles', type: 'json' },
   { path: 'base_branch', type: 'string' },
+  { path: 'claude_cli_path', type: 'string' },
+  { path: 'codex_cli_path', type: 'string' },
+  { path: 'cursor_cli_path', type: 'string' },
 ];
 
 export function applyGlobalConfigEnvOverrides(target: Record<string, unknown>): void {

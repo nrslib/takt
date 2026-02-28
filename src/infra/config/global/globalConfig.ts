@@ -32,7 +32,8 @@ function hasControlCharacters(value: string): boolean {
   return false;
 }
 
-function validateCodexCliPath(pathValue: string, sourceName: 'TAKT_CODEX_CLI_PATH' | 'codex_cli_path'): string {
+/** Validate a CLI path value: must be non-empty, absolute, existing, executable file without control characters. */
+export function validateCliPath(pathValue: string, sourceName: string): string {
   const trimmed = pathValue.trim();
   if (trimmed.length === 0) {
     throw new Error(`Configuration error: ${sourceName} must not be empty.`);
@@ -191,6 +192,8 @@ export class GlobalConfigManager {
       anthropicApiKey: parsed.anthropic_api_key,
       openaiApiKey: parsed.openai_api_key,
       codexCliPath: parsed.codex_cli_path,
+      claudeCliPath: parsed.claude_cli_path,
+      cursorCliPath: parsed.cursor_cli_path,
       opencodeApiKey: parsed.opencode_api_key,
       cursorApiKey: parsed.cursor_api_key,
       pipeline: parsed.pipeline ? {
@@ -277,6 +280,12 @@ export class GlobalConfigManager {
     }
     if (config.codexCliPath) {
       raw.codex_cli_path = config.codexCliPath;
+    }
+    if (config.claudeCliPath) {
+      raw.claude_cli_path = config.claudeCliPath;
+    }
+    if (config.cursorCliPath) {
+      raw.cursor_cli_path = config.cursorCliPath;
     }
     if (config.opencodeApiKey) {
       raw.opencode_api_key = config.opencodeApiKey;
@@ -456,10 +465,14 @@ export function resolveOpenaiApiKey(): string | undefined {
  * Resolve the Codex CLI path override.
  * Priority: TAKT_CODEX_CLI_PATH env var > config.yaml > undefined (SDK vendored binary fallback)
  */
-export function resolveCodexCliPath(): string | undefined {
+export function resolveCodexCliPath(projectConfig?: { codexCliPath?: string }): string | undefined {
   const envPath = process.env[envVarNameFromPath('codex_cli_path')];
   if (envPath !== undefined) {
-    return validateCodexCliPath(envPath, 'TAKT_CODEX_CLI_PATH');
+    return validateCliPath(envPath, 'TAKT_CODEX_CLI_PATH');
+  }
+
+  if (projectConfig?.codexCliPath !== undefined) {
+    return validateCliPath(projectConfig.codexCliPath, 'codex_cli_path (project)');
   }
 
   let config: PersistedGlobalConfig;
@@ -471,7 +484,59 @@ export function resolveCodexCliPath(): string | undefined {
   if (config.codexCliPath === undefined) {
     return undefined;
   }
-  return validateCodexCliPath(config.codexCliPath, 'codex_cli_path');
+  return validateCliPath(config.codexCliPath, 'codex_cli_path');
+}
+
+/**
+ * Resolve the Claude Code CLI path override.
+ * Priority: TAKT_CLAUDE_CLI_PATH env var > project config > global config > undefined (SDK default)
+ */
+export function resolveClaudeCliPath(projectConfig?: { claudeCliPath?: string }): string | undefined {
+  const envPath = process.env[envVarNameFromPath('claude_cli_path')];
+  if (envPath !== undefined) {
+    return validateCliPath(envPath, 'TAKT_CLAUDE_CLI_PATH');
+  }
+
+  if (projectConfig?.claudeCliPath !== undefined) {
+    return validateCliPath(projectConfig.claudeCliPath, 'claude_cli_path (project)');
+  }
+
+  let config: PersistedGlobalConfig;
+  try {
+    config = loadGlobalConfig();
+  } catch {
+    return undefined;
+  }
+  if (config.claudeCliPath === undefined) {
+    return undefined;
+  }
+  return validateCliPath(config.claudeCliPath, 'claude_cli_path');
+}
+
+/**
+ * Resolve the cursor-agent CLI path override.
+ * Priority: TAKT_CURSOR_CLI_PATH env var > project config > global config > undefined (default 'cursor-agent')
+ */
+export function resolveCursorCliPath(projectConfig?: { cursorCliPath?: string }): string | undefined {
+  const envPath = process.env[envVarNameFromPath('cursor_cli_path')];
+  if (envPath !== undefined) {
+    return validateCliPath(envPath, 'TAKT_CURSOR_CLI_PATH');
+  }
+
+  if (projectConfig?.cursorCliPath !== undefined) {
+    return validateCliPath(projectConfig.cursorCliPath, 'cursor_cli_path (project)');
+  }
+
+  let config: PersistedGlobalConfig;
+  try {
+    config = loadGlobalConfig();
+  } catch {
+    return undefined;
+  }
+  if (config.cursorCliPath === undefined) {
+    return undefined;
+  }
+  return validateCliPath(config.cursorCliPath, 'cursor_cli_path');
 }
 
 /**
