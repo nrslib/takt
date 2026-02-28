@@ -22,7 +22,7 @@ jobs:
         run: |
           gh api repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
             -f content=rocket
-          gh pr comment ${{ github.event.issue.number }} \
+          gh pr comment ${{ github.event.issue.number }} --repo ${{ github.repository }} \
             --body "🚀 cc-resolve started: [View logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -30,7 +30,7 @@ jobs:
       - name: Get PR branch
         id: pr
         run: |
-          echo "branch=$(gh pr view ${{ github.event.issue.number }} --json headRefName -q .headRefName)" >> "$GITHUB_OUTPUT"
+          echo "branch=$(gh pr view ${{ github.event.issue.number }} --repo ${{ github.repository }} --json headRefName -q .headRefName)" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -220,9 +220,9 @@ jobs:
           PR_NUMBER=${{ github.event.issue.number }}
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           if [ "${{ job.status }}" = "success" ]; then
-            gh pr comment "$PR_NUMBER" --body "✅ cc-resolve completed. [View logs](${RUN_URL})"
+            gh pr comment "$PR_NUMBER" --repo ${{ github.repository }} --body "✅ cc-resolve completed. [View logs](${RUN_URL})"
           else
-            gh pr comment "$PR_NUMBER" --body "❌ cc-resolve failed. [View logs](${RUN_URL})"
+            gh pr comment "$PR_NUMBER" --repo ${{ github.repository }} --body "❌ cc-resolve failed. [View logs](${RUN_URL})"
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
