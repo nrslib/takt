@@ -28,7 +28,7 @@ export interface DecomposeTaskOptions {
   personaPath?: string;
   language?: Language;
   model?: string;
-  provider?: 'claude' | 'codex' | 'opencode' | 'cursor' | 'mock';
+  provider?: 'claude' | 'codex' | 'opencode' | 'cursor' | 'copilot' | 'mock';
 }
 
 export interface MorePartsResponse {

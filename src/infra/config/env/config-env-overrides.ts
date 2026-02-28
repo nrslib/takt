@@ -96,6 +96,8 @@ const GLOBAL_ENV_SPECS: readonly EnvSpec[] = [
   { path: 'codex_cli_path', type: 'string' },
   { path: 'claude_cli_path', type: 'string' },
   { path: 'cursor_cli_path', type: 'string' },
+  { path: 'copilot_cli_path', type: 'string' },
+  { path: 'copilot_github_token', type: 'string' },
   { path: 'opencode_api_key', type: 'string' },
   { path: 'cursor_api_key', type: 'string' },
   { path: 'pipeline', type: 'json' },
@@ -150,6 +152,7 @@ const PROJECT_ENV_SPECS: readonly EnvSpec[] = [
   { path: 'claude_cli_path', type: 'string' },
   { path: 'codex_cli_path', type: 'string' },
   { path: 'cursor_cli_path', type: 'string' },
+  { path: 'copilot_cli_path', type: 'string' },
 ];
 
 export function applyGlobalConfigEnvOverrides(target: Record<string, unknown>): void {
