@@ -356,7 +356,7 @@ export class GlobalConfigManager {
     if (config.interactivePreviewMovements !== undefined) {
       raw.interactive_preview_movements = config.interactivePreviewMovements;
     }
-    if (config.verbose !== undefined) {
+    if (config.verbose) {
       raw.verbose = config.verbose;
     }
     if (config.concurrency !== undefined && config.concurrency > 1) {
@@ -365,7 +365,7 @@ export class GlobalConfigManager {
     if (config.taskPollIntervalMs !== undefined && config.taskPollIntervalMs !== 500) {
       raw.task_poll_interval_ms = config.taskPollIntervalMs;
     }
-    if (config.autoFetch !== undefined) {
+    if (config.autoFetch) {
       raw.auto_fetch = config.autoFetch;
     }
     if (config.baseBranch) {
