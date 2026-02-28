@@ -27,10 +27,19 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Get PR branch
+      - name: Check if fork PR
         id: pr
         run: |
-          echo "branch=$(gh pr view ${{ github.event.issue.number }} --repo ${{ github.repository }} --json headRefName -q .headRefName)" >> "$GITHUB_OUTPUT"
+          PR_REPO=$(gh pr view ${{ github.event.issue.number }} --repo ${{ github.repository }} \
+            --json headRepositoryOwner,headRepository \
+            --jq '"\(.headRepositoryOwner.login)/\(.headRepository.name)"')
+          BRANCH=$(gh pr view ${{ github.event.issue.number }} --repo ${{ github.repository }} \
+            --json headRefName -q .headRefName)
+          echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
+          if [ "$PR_REPO" != "${{ github.repository }}" ]; then
+            echo "::error::Fork PR はサポートしていません。contributor 側で解決してください。"
+            exit 1
+          fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
