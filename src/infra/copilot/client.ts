@@ -10,8 +10,10 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentResponse } from '../../core/models/index.js';
-import { getErrorMessage } from '../../shared/utils/index.js';
+import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import type { CopilotCallOptions } from './types.js';
+
+const log = createLogger('copilot-client');
 
 export type { CopilotCallOptions } from './types.js';
 
@@ -207,11 +209,12 @@ function execCopilot(args: string[], options: CopilotCallOptions): Promise<Copil
     };
 
     child.stdout?.on('data', (chunk: Buffer | string) => {
-      const text = typeof chunk === 'string' ? chunk : chunk.toString('utf-8');
       appendChunk('stdout', chunk);
-      // Stream stdout chunks in real-time via onStream callback
-      if (options.onStream && text) {
-        options.onStream({ type: 'text', data: { text } });
+      if (options.onStream) {
+        const text = typeof chunk === 'string' ? chunk : chunk.toString('utf-8');
+        if (text) {
+          options.onStream({ type: 'text', data: { text } });
+        }
       }
     });
     child.stderr?.on('data', (chunk: Buffer | string) => appendChunk('stderr', chunk));
@@ -265,14 +268,30 @@ function execCopilot(args: string[], options: CopilotCallOptions): Promise<Copil
   });
 }
 
+const CREDENTIAL_PATTERNS = [
+  /ghp_[A-Za-z0-9_]{36,}/g,
+  /ghs_[A-Za-z0-9_]{36,}/g,
+  /gho_[A-Za-z0-9_]{36,}/g,
+  /github_pat_[A-Za-z0-9_]{82,}/g,
+];
+
+function redactCredentials(text: string): string {
+  let result = text;
+  for (const pattern of CREDENTIAL_PATTERNS) {
+    result = result.replace(pattern, '[REDACTED]');
+  }
+  return result;
+}
+
 function trimDetail(value: string | undefined, fallback = ''): string {
   const normalized = (value ?? '').trim();
   if (!normalized) {
     return fallback;
   }
-  return normalized.length > COPILOT_ERROR_DETAIL_MAX_LENGTH
-    ? `${normalized.slice(0, COPILOT_ERROR_DETAIL_MAX_LENGTH)}...`
-    : normalized;
+  const redacted = redactCredentials(normalized);
+  return redacted.length > COPILOT_ERROR_DETAIL_MAX_LENGTH
+    ? `${redacted.slice(0, COPILOT_ERROR_DETAIL_MAX_LENGTH)}...`
+    : redacted;
 }
 
 function isAuthenticationError(error: CopilotExecError): boolean {
@@ -337,15 +356,23 @@ export function extractSessionIdFromShareFile(content: string): string | undefin
 /**
  * Read and extract session ID from a --share transcript file, then clean up.
  */
+function cleanupTmpDir(dir?: string): void {
+  if (dir) {
+    rm(dir, { recursive: true, force: true }).catch((err) => {
+      log.debug('Failed to clean up tmp dir', { dir, err });
+    });
+  }
+}
+
 async function extractAndCleanupSessionId(shareFilePath: string, shareTmpDir: string): Promise<string | undefined> {
   try {
     const content = await readFile(shareFilePath, 'utf-8');
     return extractSessionIdFromShareFile(content);
-  } catch {
+  } catch (err) {
+    log.debug('readFile share transcript failed', { shareFilePath, err });
     return undefined;
   } finally {
-    // Clean up the temporary directory
-    rm(shareTmpDir, { recursive: true, force: true }).catch(() => {});
+    cleanupTmpDir(shareTmpDir);
   }
 }
 
@@ -375,8 +402,8 @@ export class CopilotClient {
     try {
       shareTmpDir = await mkdtemp(join(tmpdir(), 'takt-copilot-'));
       shareFilePath = join(shareTmpDir, 'session.md');
-    } catch {
-      // If we can't create temp dir, proceed without session extraction
+    } catch (err) {
+      log.debug('mkdtemp failed, skipping session extraction', { err });
     }
 
     const args = buildArgs(prompt, { ...options, shareFilePath });
@@ -385,10 +412,7 @@ export class CopilotClient {
       const { stdout } = await execCopilot(args, options);
       const parsed = parseCopilotOutput(stdout);
       if ('error' in parsed) {
-        // Clean up temp dir on error
-        if (shareTmpDir) {
-          rm(shareTmpDir, { recursive: true, force: true }).catch(() => {});
-        }
+        cleanupTmpDir(shareTmpDir);
         return {
           persona: agentType,
           status: 'error',
@@ -398,15 +422,12 @@ export class CopilotClient {
         };
       }
 
-      // Extract session ID from --share transcript file
       const extractedSessionId = (shareFilePath && shareTmpDir)
         ? await extractAndCleanupSessionId(shareFilePath, shareTmpDir)
         : undefined;
       const sessionId = extractedSessionId ?? options.sessionId;
 
       if (options.onStream) {
-        // Text chunks are already streamed in real-time via execCopilot data events.
-        // Only emit the final result event here.
         options.onStream({
           type: 'result',
           data: {
@@ -425,10 +446,7 @@ export class CopilotClient {
         sessionId,
       };
     } catch (rawError) {
-      // Clean up temp dir on error
-      if (shareTmpDir) {
-        rm(shareTmpDir, { recursive: true, force: true }).catch(() => {});
-      }
+      cleanupTmpDir(shareTmpDir);
       const error = rawError as CopilotExecError;
       const message = classifyExecutionError(error, options);
       if (options.onStream) {

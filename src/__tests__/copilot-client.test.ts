@@ -186,7 +186,7 @@ describe('callCopilot', () => {
     expect(command).toBe('/custom/bin/copilot');
   });
 
-  it('should ignore maxAutopilotContinues (not supported in -p mode)', async () => {
+  it('should not include --autopilot or --max-autopilot-continues flags', async () => {
     mockSpawnWithScenario({
       stdout: 'done',
       code: 0,
@@ -194,7 +194,6 @@ describe('callCopilot', () => {
 
     await callCopilot('coder', 'implement', {
       cwd: '/repo',
-      maxAutopilotContinues: 30,
       permissionMode: 'readonly',
     });
 
@@ -366,6 +365,7 @@ describe('callCopilot', () => {
 
     expect(result.status).toBe('done');
     expect(result.sessionId).toBe('fallback-session-id');
+    expect(mockRm).toHaveBeenCalledWith('/tmp/takt-copilot-XXXXXX', { recursive: true, force: true });
   });
 
   it('should extract session ID from --share file on success', async () => {
@@ -383,6 +383,86 @@ describe('callCopilot', () => {
 
     expect(result.status).toBe('done');
     expect(result.sessionId).toBe('12345678-abcd-1234-ef01-123456789012');
+  });
+
+  it('should return error when stdout buffer overflows', async () => {
+    mockSpawn.mockImplementation(() => {
+      const child = createMockChildProcess();
+      queueMicrotask(() => {
+        child.stdout.emit('data', Buffer.alloc(10 * 1024 * 1024 + 1));
+      });
+      return child;
+    });
+
+    const result = await callCopilot('coder', 'implement', { cwd: '/repo' });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('Copilot CLI output exceeded buffer limit');
+  });
+
+  it('should return error when stderr buffer overflows', async () => {
+    mockSpawn.mockImplementation(() => {
+      const child = createMockChildProcess();
+      queueMicrotask(() => {
+        child.stderr.emit('data', Buffer.alloc(10 * 1024 * 1024 + 1));
+      });
+      return child;
+    });
+
+    const result = await callCopilot('coder', 'implement', { cwd: '/repo' });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('Copilot CLI output exceeded buffer limit');
+  });
+
+  it('should return error when abort signal is already aborted before call', async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    mockSpawn.mockImplementation(() => {
+      const child = createMockChildProcess();
+      queueMicrotask(() => {
+        child.emit('close', null, 'SIGTERM');
+      });
+      return child;
+    });
+
+    const result = await callCopilot('coder', 'implement', {
+      cwd: '/repo',
+      abortSignal: controller.signal,
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('Copilot execution aborted');
+  });
+
+  it('should proceed without session extraction when mkdtemp fails', async () => {
+    mockMkdtemp.mockRejectedValue(new Error('ENOSPC'));
+    mockSpawnWithScenario({
+      stdout: 'done',
+      code: 0,
+    });
+
+    const result = await callCopilot('coder', 'implement', {
+      cwd: '/repo',
+      sessionId: 'existing-session-id',
+    });
+
+    expect(result.status).toBe('done');
+    expect(result.sessionId).toBe('existing-session-id');
+  });
+
+  it('should redact credentials from error stderr', async () => {
+    mockSpawnWithScenario({
+      code: 2,
+      stderr: 'config error: secret ghp_abcdefghijklmnopqrstuvwxyz1234567890 is wrong',
+    });
+
+    const result = await callCopilot('coder', 'implement', { cwd: '/repo' });
+
+    expect(result.status).toBe('error');
+    expect(result.content).not.toContain('ghp_abcdefghijklmnopqrstuvwxyz1234567890');
+    expect(result.content).toContain('[REDACTED]');
   });
 });
 
