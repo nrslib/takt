@@ -40,11 +40,7 @@ program
   .argument('[task]', 'Task description or GitHub issue reference (e.g. "#28")')
   .action(async (task?: string) => {
     const opts = program.opts();
-    if (opts.pr !== undefined) {
-      await addTask(resolvedCwd, task, { prNumber: opts.pr });
-    } else {
-      await addTask(resolvedCwd, task);
-    }
+    await addTask(resolvedCwd, task, opts.pr !== undefined ? { prNumber: opts.pr as number } : undefined);
   });
 
 program

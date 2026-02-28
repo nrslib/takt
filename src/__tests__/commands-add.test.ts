@@ -138,8 +138,7 @@ describe('CLI add command', () => {
 
       await addAction?.('Regular task');
 
-      expect(mockAddTask).toHaveBeenCalledWith('/test/cwd', 'Regular task');
-      expect(mockAddTask).not.toHaveBeenCalledWith('/test/cwd', expect.anything(), expect.any(Object));
+      expect(mockAddTask).toHaveBeenCalledWith('/test/cwd', 'Regular task', undefined);
     });
   });
 });
