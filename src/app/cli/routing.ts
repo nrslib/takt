@@ -189,10 +189,8 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       logError(getErrorMessage(e));
       process.exit(1);
     }
-  }
-
-  // Resolve issue references (--issue N or #N positional arg) before interactive mode
-  if (!prNumber) {
+  } else {
+    // Resolve issue references (--issue N or #N positional arg) before interactive mode
     try {
       const issueResult = await resolveIssueInput(issueNumber, task);
       if (issueResult) {

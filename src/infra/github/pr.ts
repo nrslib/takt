@@ -109,7 +109,7 @@ export function fetchPrReviewComments(prNumber: number): PrReviewData {
   return {
     number: data.number,
     title: data.title,
-    body: data.body ?? '',
+    body: data.body,
     url: data.url,
     headRefName: data.headRefName,
     comments,
