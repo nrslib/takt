@@ -114,10 +114,10 @@ describe('PieceEngine Integration: Error Handling', () => {
   });
 
   // =====================================================
-  // 3. Interrupted status routing
+  // 3. Error status routing
   // =====================================================
-  describe('Interrupted status', () => {
-    it('should continue with normal rule routing and skip report phase when movement returns interrupted', async () => {
+  describe('Error status', () => {
+    it('should abort and skip report phase when movement returns error', async () => {
       const config = buildDefaultPieceConfig({
         initialMovement: 'plan',
         movements: [
@@ -130,11 +130,12 @@ describe('PieceEngine Integration: Error Handling', () => {
       const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
-        makeResponse({ persona: 'plan', status: 'interrupted', content: 'Partial response' }),
-      ]);
-
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },
+        makeResponse({
+          persona: 'plan',
+          status: 'error',
+          content: 'Partial response',
+          error: 'Execution failed',
+        }),
       ]);
 
       const abortFn = vi.fn();
@@ -142,8 +143,10 @@ describe('PieceEngine Integration: Error Handling', () => {
 
       const state = await engine.run();
 
-      expect(state.status).toBe('completed');
-      expect(abortFn).not.toHaveBeenCalled();
+      expect(state.status).toBe('aborted');
+      expect(abortFn).toHaveBeenCalledTimes(1);
+      const runErrorReason = abortFn.mock.calls[0]![1] as string;
+      expect(runErrorReason).toContain('Execution failed');
       expect(runReportPhase).not.toHaveBeenCalled();
     });
   });

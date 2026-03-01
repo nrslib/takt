@@ -3,7 +3,6 @@
  */
 
 import type { AgentResponse } from './response.js';
-import type { Status } from './status.js';
 
 /**
  * Session state for piece execution
@@ -13,9 +12,6 @@ export interface SessionState {
   projectDir: string;
   iteration: number;
   maxMovements: number;
-  coderStatus: Status;
-  architectStatus: Status;
-  supervisorStatus: Status;
   history: AgentResponse[];
   context: string;
 }
@@ -33,9 +29,6 @@ export function createSessionState(
     projectDir,
     iteration: 0,
     maxMovements: 10,
-    coderStatus: 'pending',
-    architectStatus: 'pending',
-    supervisorStatus: 'pending',
     history: [],
     context: '',
     ...options,

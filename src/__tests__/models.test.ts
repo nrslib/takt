@@ -27,19 +27,27 @@ describe('AgentTypeSchema', () => {
 });
 
 describe('StatusSchema', () => {
-  it('should accept valid statuses', () => {
-    expect(StatusSchema.parse('pending')).toBe('pending');
+  it('有効なステータス値（6種類）をすべて受容する', () => {
     expect(StatusSchema.parse('done')).toBe('done');
     expect(StatusSchema.parse('approved')).toBe('approved');
     expect(StatusSchema.parse('rejected')).toBe('rejected');
+    expect(StatusSchema.parse('improve')).toBe('improve');
     expect(StatusSchema.parse('blocked')).toBe('blocked');
     expect(StatusSchema.parse('error')).toBe('error');
-    expect(StatusSchema.parse('answer')).toBe('answer');
   });
 
-  it('should reject invalid statuses', () => {
-    expect(() => StatusSchema.parse('unknown')).toThrow();
-    expect(() => StatusSchema.parse('conditional')).toThrow();
+  it('廃止済みステータスは受理しない', () => {
+    for (const status of [
+      'pending',
+      'answer',
+      'cancelled',
+      'interrupted',
+      'unknown',
+      'conditional',
+    ]) {
+      const result = StatusSchema.safeParse(status);
+      expect(result.success).toBe(false);
+    }
   });
 });
 

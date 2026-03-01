@@ -45,16 +45,12 @@ export const AgentTypeSchema = z.enum(['coder', 'architect', 'supervisor', 'cust
 
 /** Status schema */
 export const StatusSchema = z.enum([
-  'pending',
   'done',
   'blocked',
   'error',
   'approved',
   'rejected',
   'improve',
-  'cancelled',
-  'interrupted',
-  'answer',
 ]);
 
 /** Permission mode schema for tool execution */
