@@ -67,10 +67,9 @@ TAKT (TAKT Agent Koordination Topology) is a multi-agent orchestration system fo
 | `--pr <number>` | PR number to fetch review comments and fix |
 | `-w, --piece <name or path>` | Piece name or path to piece YAML file |
 | `-b, --branch <name>` | Branch name (auto-generated if omitted) |
-| `--auto-pr` | Create PR after execution (interactive: skip confirmation, pipeline: enable PR) |
+| `--auto-pr` | Create PR after execution (pipeline mode only) |
 | `--skip-git` | Skip branch creation, commit, and push (pipeline mode, piece-only) |
 | `--repo <owner/repo>` | Repository for PR creation |
-| `--create-worktree <yes\|no>` | Skip worktree confirmation prompt |
 | `-q, --quiet` | Minimal output mode: suppress AI output (for CI) |
 | `--provider <name>` | Override agent provider (claude\|codex\|opencode\|mock) |
 | `--model <name>` | Override agent model |

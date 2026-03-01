@@ -32,7 +32,6 @@ describe('E2E: Sequential multi-step session log transitions (mock)', () => {
       args: [
         '--task', 'Test sequential transitions',
         '--piece', piecePath,
-        '--create-worktree', 'no',
         '--provider', 'mock',
       ],
       cwd: repo.path,

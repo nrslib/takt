@@ -54,7 +54,7 @@ function runTaskWithPiece(args: {
   env: NodeJS.ProcessEnv;
 }): ReturnType<typeof runTakt> {
   const scenarioPath = resolve(__dirname, '../fixtures/scenarios/execute-done.json');
-  const baseArgs = ['--task', 'Create a file called noop.txt', '--create-worktree', 'no', '--provider', 'mock'];
+  const baseArgs = ['--task', 'Create a file called noop.txt', '--provider', 'mock'];
   const fullArgs = args.piece ? [...baseArgs, '--piece', args.piece] : baseArgs;
   return runTakt({
     args: fullArgs,

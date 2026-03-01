@@ -17,7 +17,6 @@
 | `--draft-pr` | PR をドラフトとして作成 |
 | `--skip-git` | ブランチ作成、コミット、プッシュをスキップ（pipeline モード、piece のみ実行） |
 | `--repo <owner/repo>` | リポジトリを指定（PR 作成用） |
-| `--create-worktree <yes\|no>` | worktree 確認プロンプトをスキップ |
 | `-q, --quiet` | 最小出力モード: AI 出力を抑制（CI 向け） |
 | `--provider <name>` | エージェント provider を上書き（claude\|codex\|opencode\|cursor\|mock） |
 | `--model <name>` | エージェントモデルを上書き |
@@ -43,7 +42,7 @@ takt hello
 2. インタラクティブモードを選択（assistant / persona / quiet / passthrough）
 3. AI との会話でタスク内容を精緻化
 4. `/go` でタスク指示を確定（`/go 追加の指示` のように追記も可能）、または `/play <task>` でタスクを即座に実行
-5. 実行（worktree 作成、piece 実行、PR 作成）
+5. 実行（piece 実行、PR 作成）
 
 ### インタラクティブモードの種類
 
@@ -87,8 +86,6 @@ Requirements:
 ---
 
 Proceed with these task instructions? (Y/n) y
-
-? Create worktree? (Y/n) y
 
 [Piece の実行を開始...]
 ```

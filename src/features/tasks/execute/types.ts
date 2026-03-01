@@ -136,11 +136,8 @@ export interface WorktreeConfirmationResult {
 }
 
 export interface SelectAndExecuteOptions {
-  autoPr?: boolean;
-  draftPr?: boolean;
   repo?: string;
   piece?: string;
-  createWorktree?: boolean | undefined;
   /** Override branch name (e.g., PR head branch for --pr) */
   branch?: string;
   /** Enable interactive user input during step transitions */

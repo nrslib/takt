@@ -33,7 +33,6 @@ describe('E2E: Piece error handling (mock)', () => {
       args: [
         '--task', 'Test error status abort',
         '--piece', piecePath,
-        '--create-worktree', 'no',
         '--provider', 'mock',
       ],
       cwd: repo.path,
@@ -60,7 +59,6 @@ describe('E2E: Piece error handling (mock)', () => {
       args: [
         '--task', 'Test max movements',
         '--piece', piecePath,
-        '--create-worktree', 'no',
         '--provider', 'mock',
       ],
       cwd: repo.path,
@@ -87,7 +85,6 @@ describe('E2E: Piece error handling (mock)', () => {
       args: [
         '--task', 'Test previous response passing',
         '--piece', piecePath,
-        '--create-worktree', 'no',
         '--provider', 'mock',
       ],
       cwd: repo.path,

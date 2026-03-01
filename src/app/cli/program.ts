@@ -6,7 +6,7 @@
  */
 
 import { createRequire } from 'node:module';
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import { resolve } from 'node:path';
 import {
   initGlobalDirs,
@@ -52,7 +52,8 @@ program
   .option('-t, --task <string>', 'Task content (as alternative to GitHub issue)')
   .option('--pipeline', 'Pipeline mode: non-interactive, no worktree, direct branch creation')
   .option('--skip-git', 'Skip branch creation, commit, and push (pipeline mode)')
-  .option('--create-worktree <yes|no>', 'Skip the worktree prompt by explicitly specifying yes or no')
+  // Deprecated compatibility option: keep parsing to show migration guidance.
+  .addOption(new Option('--create-worktree <yes|no>').hideHelp())
   .option('-q, --quiet', 'Minimal output mode: suppress AI output (for CI)')
   .option('-c, --continue', 'Continue from the last assistant session');
 

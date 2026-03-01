@@ -40,7 +40,6 @@ describe('E2E: Multi-step with parallel movements (mock)', () => {
       args: [
         '--task', 'Implement a feature',
         '--piece', piecePath,
-        '--create-worktree', 'no',
         '--provider', 'mock',
       ],
       cwd: testRepo.path,
@@ -62,7 +61,6 @@ describe('E2E: Multi-step with parallel movements (mock)', () => {
       args: [
         '--task', 'Implement a feature with issues',
         '--piece', piecePath,
-        '--create-worktree', 'no',
         '--provider', 'mock',
       ],
       cwd: testRepo.path,

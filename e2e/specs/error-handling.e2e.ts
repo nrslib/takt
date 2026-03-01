@@ -31,7 +31,6 @@ describe('E2E: Error handling edge cases (mock)', () => {
       args: [
         '--task', 'test',
         '--piece', '/nonexistent/path/to/piece.yaml',
-        '--create-worktree', 'no',
         '--provider', 'mock',
       ],
       cwd: repo.path,
@@ -53,7 +52,6 @@ describe('E2E: Error handling edge cases (mock)', () => {
       args: [
         '--task', 'test',
         '--piece', 'nonexistent-piece-name-xyz',
-        '--create-worktree', 'no',
         '--provider', 'mock',
       ],
       cwd: repo.path,
@@ -90,8 +88,8 @@ describe('E2E: Error handling edge cases (mock)', () => {
     expect(combined).toMatch(/task|issue|required/i);
   }, 240_000);
 
-  it('should error when --create-worktree receives an invalid value', () => {
-    // Given: invalid worktree value
+  it('should error when deprecated --create-worktree option is used', () => {
+    // Given: deprecated option value
     const piecePath = resolve(__dirname, '../fixtures/pieces/mock-single-step.yaml');
 
     // When: running with invalid worktree option
@@ -107,10 +105,10 @@ describe('E2E: Error handling edge cases (mock)', () => {
       timeout: 240_000,
     });
 
-    // Then: exits with error or warning about invalid value
+    // Then: exits with migration error
     const combined = result.stdout + result.stderr;
-    const hasError = result.exitCode !== 0 || combined.match(/invalid|error|must be/i);
-    expect(hasError).toBeTruthy();
+    expect(result.exitCode).not.toBe(0);
+    expect(combined).toContain('--create-worktree has been removed');
   }, 240_000);
 
   it('should error when piece file contains invalid YAML', () => {
@@ -122,7 +120,6 @@ describe('E2E: Error handling edge cases (mock)', () => {
       args: [
         '--task', 'test',
         '--piece', brokenPiecePath,
-        '--create-worktree', 'no',
         '--provider', 'mock',
       ],
       cwd: repo.path,

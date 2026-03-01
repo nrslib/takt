@@ -38,8 +38,6 @@ describe('E2E: Team leader worker-pool dynamic scheduling', () => {
         'Create exactly five files: wp-1.txt, wp-2.txt, wp-3.txt, wp-4.txt, wp-5.txt. Each file must contain its own filename as content. Each part must create exactly one file, and you must complete all five files.',
         '--piece',
         piecePath,
-        '--create-worktree',
-        'no',
       ],
       cwd: repo.path,
       env: isolatedEnv.env,

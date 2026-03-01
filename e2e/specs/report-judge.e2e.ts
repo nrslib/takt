@@ -39,7 +39,6 @@ describe('E2E: Report + Judge phases (mock)', () => {
       args: [
         '--task', 'Create a short report and finish',
         '--piece', piecePath,
-        '--create-worktree', 'no',
         '--provider', 'mock',
       ],
       cwd: testRepo.path,
