@@ -112,7 +112,6 @@ vi.mock('../app/cli/program.js', () => {
 
 vi.mock('../app/cli/helpers.js', () => ({
   resolveAgentOverrides: vi.fn(),
-  parseCreateWorktreeOption: vi.fn(),
   isDirectTask: vi.fn(() => false),
 }));
 

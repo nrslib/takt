@@ -121,6 +121,10 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     );
     process.exit(1);
   }
+  if (!pipelineMode && (opts.autoPr === true || opts.draft === true)) {
+    logError('--auto-pr/--draft are supported only in --pipeline mode');
+    process.exit(1);
+  }
   const prNumber = opts.pr as number | undefined;
   const issueNumber = opts.issue as number | undefined;
 
@@ -142,8 +146,6 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     ? true
     : (resolveConfigValue(resolvedCwd, 'draftPr') ?? false);
   const selectOptions: SelectAndExecuteOptions = {
-    autoPr: opts.autoPr === true ? true : undefined,
-    draftPr: opts.draft === true ? true : undefined,
     repo: opts.repo as string | undefined,
     piece: opts.piece as string | undefined,
   };

@@ -18,7 +18,7 @@ TAKTのデータフローは以下の7つの主要なレイヤーで構成され
 
 1. **CLI Layer** - ユーザー入力の受付
 2. **Interactive Layer** - タスクの対話的な明確化
-3. **Execution Orchestration Layer** - ピース選択とworktree管理
+3. **Execution Orchestration Layer** - ピース選択と実行開始
 4. **Piece Execution Layer** - セッション管理とイベント処理
 5. **Engine Layer** - ステートマシンによるステップ実行
 6. **Instruction Building Layer** - プロンプト生成
@@ -70,13 +70,6 @@ TAKTのデータフローは以下の7つの主要なレイヤーで構成され
 │  │ determinePiece()  │ ← piece選択 (interactive/override) │
 │  └─────────┬────────────┘                                      │
 │            │ pieceIdentifier: string                        │
-│            ▼                                                    │
-│  ┌──────────────────────────────────┐                         │
-│  │ confirmAndCreateWorktree()       │                         │
-│  │  - AI branchname generation      │                         │
-│  │  - createSharedClone()           │                         │
-│  └─────────┬────────────────────────┘                         │
-│            │ { execCwd, isWorktree, branch }                  │
 │            ▼                                                    │
 │  ┌──────────────────────────────────┐                         │
 │  │ executeTask()                    │                         │
@@ -362,7 +355,7 @@ TAKTのデータフローは以下の7つの主要なレイヤーで構成され
 
 ### 3. Execution Orchestration Layer (`src/features/tasks/execute/selectAndExecute.ts`)
 
-**役割**: ピース選択とworktree管理
+**役割**: ピース選択と実行オーケストレーション
 
 **主要な処理**:
 
@@ -372,25 +365,18 @@ TAKTのデータフローは以下の7つの主要なレイヤーで構成され
      - 名前形式 → バリデーション
    - オーバーライドなし → インタラクティブ選択 (`selectPiece()`)
 
-2. **Worktree作成** (`confirmAndCreateWorktree()`):
-   - ユーザー確認
-   - ブランチ名生成 (`summarizeTaskName()` - AIでタスクから英語スラグ生成)
-   - `createSharedClone()`: git clone --shared で軽量クローン作成
-
-3. **タスク実行開始** (`selectAndExecuteTask()`):
+2. **タスク実行開始** (`selectAndExecuteTask()`):
    - `executeTask()` を呼び出し
-   - 成功時: Auto-commit & Push
-   - PR作成 (オプション)
+   - 成功/失敗を `tasks.yaml` に記録（`skipTaskList` 設定時を除く）
 
 **データ入力**:
 - `task: string`
 - `options?: SelectAndExecuteOptions`:
   - `piece?: string`
-  - `autoPr?: boolean`
+  - `skipTaskList?: boolean`
 - `agentOverrides?: TaskExecutionOptions`
 
 **データ出力**:
-- `{ execCwd, isWorktree, branch }`
 - タスク実行成功/失敗
 
 ---
@@ -759,15 +745,9 @@ async call(
 - `--piece` フラグ → 検証
 - なし → インタラクティブ選択 (`selectPiece()`)
 
-**Worktree作成** (オプション):
-- `confirmAndCreateWorktree()`:
-  - ユーザー確認
-  - `summarizeTaskName()`: タスク → 英語スラグ (AI呼び出し)
-  - `createSharedClone()`: git clone --shared
-
 **データ**:
 - `pieceIdentifier: string`
-- `{ execCwd, isWorktree, branch }`
+- `execCwd: string` (実行ディレクトリ)
 
 ---
 

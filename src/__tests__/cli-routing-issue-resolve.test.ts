@@ -110,7 +110,6 @@ vi.mock('../app/cli/program.js', () => {
 
 vi.mock('../app/cli/helpers.js', () => ({
   resolveAgentOverrides: vi.fn(),
-  parseCreateWorktreeOption: vi.fn(),
   isDirectTask: vi.fn(() => false),
 }));
 
@@ -162,6 +161,24 @@ beforeEach(() => {
 });
 
 describe('Issue resolution in routing', () => {
+  it('should show error and exit when --auto-pr/--draft are used outside pipeline mode', async () => {
+    mockOpts.autoPr = true;
+    mockOpts.draft = true;
+
+    const mockExit = vi.spyOn(process, 'exit').mockImplementation(() => {
+      throw new Error('process.exit called');
+    });
+
+    await expect(executeDefaultAction()).rejects.toThrow('process.exit called');
+
+    expect(mockError).toHaveBeenCalledWith('--auto-pr/--draft are supported only in --pipeline mode');
+    expect(mockExit).toHaveBeenCalledWith(1);
+    expect(mockInteractiveMode).not.toHaveBeenCalled();
+    expect(mockSelectAndExecuteTask).not.toHaveBeenCalled();
+
+    mockExit.mockRestore();
+  });
+
   it('should show migration error and exit when deprecated --create-worktree is used', async () => {
     mockOpts.createWorktree = 'yes';
 

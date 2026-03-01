@@ -103,11 +103,7 @@ describe('selectAndExecuteTask (execute path)', () => {
     });
 
     expect(mockAutoCommitAndPush).not.toHaveBeenCalled();
-    expect(mockAddTask).toHaveBeenCalledWith('test task', expect.objectContaining({
-      piece: 'default',
-      auto_pr: false,
-      draft_pr: false,
-    }));
+    expect(mockAddTask).toHaveBeenCalledWith('test task', { piece: 'default' });
   });
 
   it('should call selectPiece when no override is provided', async () => {
@@ -146,11 +142,7 @@ describe('selectAndExecuteTask (execute path)', () => {
       piece: 'default',
     });
 
-    expect(mockAddTask).toHaveBeenCalledWith('test task', expect.objectContaining({
-      piece: 'default',
-      auto_pr: false,
-      draft_pr: false,
-    }));
+    expect(mockAddTask).toHaveBeenCalledWith('test task', { piece: 'default' });
     expect(mockCompleteTask).toHaveBeenCalledTimes(1);
     expect(mockFailTask).not.toHaveBeenCalled();
   });
@@ -166,11 +158,7 @@ describe('selectAndExecuteTask (execute path)', () => {
       piece: 'default',
     })).rejects.toThrow('process exit');
 
-    expect(mockAddTask).toHaveBeenCalledWith('test task', expect.objectContaining({
-      piece: 'default',
-      auto_pr: false,
-      draft_pr: false,
-    }));
+    expect(mockAddTask).toHaveBeenCalledWith('test task', { piece: 'default' });
     expect(mockFailTask).toHaveBeenCalledTimes(1);
     expect(mockCompleteTask).not.toHaveBeenCalled();
     processExitSpy.mockRestore();
