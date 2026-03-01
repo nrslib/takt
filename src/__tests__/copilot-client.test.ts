@@ -75,7 +75,6 @@ describe('callCopilot', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     delete process.env.COPILOT_GITHUB_TOKEN;
-    // Default: mkdtemp creates a temp dir, readFile returns a session transcript, rm succeeds
     mockMkdtemp.mockResolvedValue('/tmp/takt-copilot-XXXXXX');
     mockReadFile.mockResolvedValue(
       '# 🤖 Copilot CLI Session\n\n> **Session ID:** `aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`\n',
@@ -99,14 +98,12 @@ describe('callCopilot', () => {
 
     expect(result.status).toBe('done');
     expect(result.content).toBe('Implementation complete. All tests pass.');
-    // Session ID extracted from --share file
     expect(result.sessionId).toBe('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee');
 
     expect(mockSpawn).toHaveBeenCalledTimes(1);
     const [command, args, options] = mockSpawn.mock.calls[0] as [string, string[], { env?: NodeJS.ProcessEnv; stdio?: unknown }];
 
     expect(command).toBe('copilot');
-    // --yolo is used for full permission; --share is included for session extraction
     expect(args).toContain('-p');
     expect(args).toContain('--silent');
     expect(args).toContain('--no-color');
@@ -214,8 +211,9 @@ describe('callCopilot', () => {
     });
 
     const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
-    // -p is at index 0, prompt is at index 1
-    expect(args[1]).toBe('You are a strict reviewer.\n\nreview this code');
+    const promptIndex = args.indexOf('-p');
+    expect(promptIndex).toBeGreaterThan(-1);
+    expect(args[promptIndex + 1]).toBe('You are a strict reviewer.\n\nreview this code');
   });
 
   it('should return structured error when copilot binary is not found', async () => {
@@ -266,6 +264,31 @@ describe('callCopilot', () => {
 
     expect(result.status).toBe('error');
     expect(result.content).toContain('copilot returned empty output');
+  });
+
+  it('should emit a failed result onStream event when stdout is empty', async () => {
+    mockSpawnWithScenario({
+      stdout: '',
+      code: 0,
+    });
+
+    const onStream = vi.fn();
+    const result = await callCopilot('coder', 'implement feature', {
+      cwd: '/repo',
+      onStream,
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('copilot returned empty output');
+    expect(onStream).toHaveBeenCalledTimes(1);
+    expect(onStream).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'result',
+        data: expect.objectContaining({
+          success: false,
+        }),
+      }),
+    );
   });
 
   it('should return plain text content (no JSON parsing needed)', async () => {
@@ -334,7 +357,6 @@ describe('callCopilot', () => {
       const child = createMockChildProcess();
 
       queueMicrotask(() => {
-        // Simulate abort
         controller.abort();
         child.emit('close', null, 'SIGTERM');
       });
