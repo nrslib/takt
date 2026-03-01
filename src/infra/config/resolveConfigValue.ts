@@ -60,7 +60,6 @@ const PROVIDER_OPTIONS_ENV_PATHS = [
 ] as const;
 
 const RESOLUTION_REGISTRY: Partial<{ [K in ConfigParameterKey]: ResolutionRule<K> }> = {
-  piece: { layers: ['local', 'global'] },
   provider: {
     layers: ['local', 'piece', 'global'],
     pieceValue: (pieceContext) => pieceContext?.provider,

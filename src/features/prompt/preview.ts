@@ -20,8 +20,8 @@ import { header, info, error, blankLine } from '../../shared/ui/index.js';
  * Loads the piece definition, then for each movement builds and displays
  * the Phase 1, Phase 2, and Phase 3 prompts with sample variable values.
  */
-export async function previewPrompts(cwd: string, pieceIdentifier?: string): Promise<void> {
-  const identifier = pieceIdentifier ?? resolvePieceConfigValue(cwd, 'piece');
+export async function previewPrompts(cwd: string, pieceIdentifier: string): Promise<void> {
+  const identifier = pieceIdentifier;
   const config = loadPieceByIdentifier(identifier, cwd);
 
   if (!config) {

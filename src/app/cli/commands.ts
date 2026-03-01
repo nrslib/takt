@@ -1,15 +1,15 @@
 /**
  * CLI subcommand definitions
  *
- * Registers all named subcommands (run, watch, add, list, switch, clear, eject, prompt, catalog).
+ * Registers all named subcommands (run, watch, add, list, clear, eject, prompt, catalog).
  */
 
 import { join } from 'node:path';
 import { clearPersonaSessions, resolveConfigValue } from '../../infra/config/index.js';
 import { getGlobalConfigDir } from '../../infra/config/paths.js';
-import { success, info } from '../../shared/ui/index.js';
+import { success, info, error } from '../../shared/ui/index.js';
 import { runAllTasks, addTask, watchTasks, listTasks } from '../../features/tasks/index.js';
-import { switchPiece, ejectBuiltin, ejectFacet, parseFacetType, VALID_FACET_TYPES, resetCategoriesToDefault, resetConfigToDefault, deploySkill } from '../../features/config/index.js';
+import { ejectBuiltin, ejectFacet, parseFacetType, VALID_FACET_TYPES, resetCategoriesToDefault, resetConfigToDefault, deploySkill } from '../../features/config/index.js';
 import { previewPrompts } from '../../features/prompt/index.js';
 import { showCatalog } from '../../features/catalog/index.js';
 import { computeReviewMetrics, formatReviewMetrics, parseSinceDuration, purgeOldEvents } from '../../features/analytics/index.js';
@@ -23,8 +23,7 @@ program
   .command('run')
   .description('Run all pending tasks from .takt/tasks.yaml')
   .action(async () => {
-    const piece = resolveConfigValue(resolvedCwd, 'piece');
-    await runAllTasks(resolvedCwd, piece, resolveAgentOverrides(program));
+    await runAllTasks(resolvedCwd, resolveAgentOverrides(program));
   });
 
 program
@@ -63,14 +62,6 @@ program
         yes: opts.yes === true,
       },
     );
-  });
-
-program
-  .command('switch')
-  .description('Switch piece interactively')
-  .argument('[piece]', 'Piece name')
-  .action(async (piece?: string) => {
-    await switchPiece(resolvedCwd, piece);
   });
 
 program
@@ -124,8 +115,12 @@ reset
 program
   .command('prompt')
   .description('Preview assembled prompts for each movement and phase')
-  .argument('[piece]', 'Piece name or path (defaults to current)')
+  .argument('[piece]', 'Piece name or path')
   .action(async (piece?: string) => {
+    if (!piece) {
+      error('Piece is required. Usage: takt prompt <piece>');
+      return;
+    }
     await previewPrompts(resolvedCwd, piece);
   });
 

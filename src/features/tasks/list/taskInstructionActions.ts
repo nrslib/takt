@@ -128,7 +128,7 @@ export async function instructBranch(
       piece: selectedPiece,
     });
 
-    return executeAndCompleteTask(taskInfo, runner, projectDir, selectedPiece);
+    return executeAndCompleteTask(taskInfo, runner, projectDir);
   };
 
   return dispatchConversationAction(result, {

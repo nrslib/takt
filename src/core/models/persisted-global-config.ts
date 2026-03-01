@@ -142,7 +142,6 @@ export interface PersistedGlobalConfig {
 
 /** Project-level configuration */
 export interface ProjectConfig {
-  piece?: string;
   provider?: 'claude' | 'codex' | 'opencode' | 'cursor' | 'copilot' | 'mock';
   model?: string;
   providerOptions?: MovementProviderOptions;

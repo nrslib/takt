@@ -33,7 +33,6 @@ export const ClaudeConfigSchema = z.object({
 /** TAKT global tool configuration schema */
 export const TaktConfigSchema = z.object({
   defaultModel: AgentModelSchema,
-  defaultPiece: z.string().default('default'),
   agentDirs: z.array(z.string()).default([]),
   pieceDirs: z.array(z.string()).default([]),
   sessionDir: z.string().optional(),
@@ -506,7 +505,6 @@ export const GlobalConfigSchema = z.object({
 
 /** Project config schema */
 export const ProjectConfigSchema = z.object({
-  piece: z.string().optional(),
   provider: z.enum(['claude', 'codex', 'opencode', 'cursor', 'copilot', 'mock']).optional(),
   model: z.string().optional(),
   provider_options: MovementProviderOptionsSchema,

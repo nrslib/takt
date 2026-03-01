@@ -16,13 +16,11 @@ import {
   loadAllPiecesWithSources,
   getPieceCategories,
   buildCategorizedPieces,
-  resolveConfigValue,
   type PieceDirEntry,
   type PieceCategoryNode,
   type CategorizedPieces,
   type MissingPiece,
 } from '../../infra/config/index.js';
-import { DEFAULT_PIECE_NAME } from '../../shared/constants.js';
 
 /** Top-level selection item: either a piece or a category containing pieces */
 export type PieceSelectionItem =
@@ -71,16 +69,13 @@ const CATEGORY_VALUE_PREFIX = '__category__:';
  */
 export function buildTopLevelSelectOptions(
   items: PieceSelectionItem[],
-  currentPiece: string,
 ): SelectionOption[] {
   return items.map((item) => {
     if (item.type === 'piece') {
-      const isCurrent = item.name === currentPiece;
-      const label = isCurrent ? `${item.name} (current)` : item.name;
+      const label = item.name;
       return { label, value: item.name };
     }
-    const containsCurrent = item.pieces.some((w) => w === currentPiece);
-    const label = containsCurrent ? `📁 ${item.name}/ (current)` : `📁 ${item.name}/`;
+    const label = `📁 ${item.name}/`;
     return { label, value: `${CATEGORY_VALUE_PREFIX}${item.name}` };
   });
 }
@@ -102,7 +97,6 @@ export function parseCategorySelection(selected: string): string | null {
 export function buildCategoryPieceOptions(
   items: PieceSelectionItem[],
   categoryName: string,
-  currentPiece: string,
 ): SelectionOption[] | null {
   const categoryItem = items.find(
     (item) => item.type === 'category' && item.name === categoryName,
@@ -111,8 +105,7 @@ export function buildCategoryPieceOptions(
 
   return categoryItem.pieces.map((qualifiedName) => {
     const displayName = qualifiedName.split('/').pop() ?? qualifiedName;
-    const isCurrent = qualifiedName === currentPiece;
-    const label = isCurrent ? `${displayName} (current)` : displayName;
+    const label = displayName;
     return { label, value: qualifiedName };
   });
 }
@@ -147,18 +140,9 @@ export function warnMissingPieces(missing: MissingPiece[]): void {
   }
 }
 
-function categoryContainsPiece(node: PieceCategoryNode, piece: string): boolean {
-  if (node.pieces.includes(piece)) return true;
-  for (const child of node.children) {
-    if (categoryContainsPiece(child, piece)) return true;
-  }
-  return false;
-}
-
 function buildCategoryLevelOptions(
   categories: PieceCategoryNode[],
   pieces: string[],
-  currentPiece: string,
 ): {
   options: SelectionOption[];
   categoryMap: Map<string, PieceCategoryNode>;
@@ -167,18 +151,14 @@ function buildCategoryLevelOptions(
   const categoryMap = new Map<string, PieceCategoryNode>();
 
   for (const category of categories) {
-    const containsCurrent = currentPiece.length > 0 && categoryContainsPiece(category, currentPiece);
-    const label = containsCurrent
-      ? `📁 ${category.name}/ (current)`
-      : `📁 ${category.name}/`;
+    const label = `📁 ${category.name}/`;
     const value = `${CATEGORY_VALUE_PREFIX}${category.name}`;
     options.push({ label, value });
     categoryMap.set(category.name, category);
   }
 
   for (const pieceName of pieces) {
-    const isCurrent = pieceName === currentPiece;
-    const label = isCurrent ? `🎼 ${pieceName} (current)` : `🎼 ${pieceName}`;
+    const label = `🎼 ${pieceName}`;
     options.push({ label, value: pieceName });
   }
 
@@ -187,7 +167,6 @@ function buildCategoryLevelOptions(
 
 async function selectPieceFromCategoryTree(
   categories: PieceCategoryNode[],
-  currentPiece: string,
   hasSourceSelection: boolean,
   rootPieces: string[] = [],
 ): Promise<string | null> {
@@ -207,7 +186,6 @@ async function selectPieceFromCategoryTree(
     const { options, categoryMap } = buildCategoryLevelOptions(
       currentCategories,
       currentPieces,
-      currentPiece,
     );
 
     if (options.length === 0) {
@@ -268,40 +246,28 @@ async function selectPieceFromCategoryTree(
   }
 }
 
-const CURRENT_PIECE_VALUE = '__current__';
 const CUSTOM_CATEGORY_PREFIX = '__custom_category__:';
 
 type TopLevelSelection =
-  | { type: 'current' }
   | { type: 'piece'; name: string }
   | { type: 'category'; node: PieceCategoryNode };
 
 async function selectTopLevelPieceOption(
   categorized: CategorizedPieces,
-  currentPiece: string,
 ): Promise<TopLevelSelection | null> {
   const buildOptions = (): SelectOptionItem<string>[] => {
     const options: SelectOptionItem<string>[] = [];
     const bookmarkedPieces = getBookmarkedPieces();
 
-    // 1. Current piece
-    if (currentPiece) {
-      options.push({
-        label: `🎼 ${currentPiece} (current)`,
-        value: CURRENT_PIECE_VALUE,
-      });
-    }
-
-    // 2. Bookmarked pieces (individual items)
+    // 1. Bookmarked pieces (individual items)
     for (const pieceName of bookmarkedPieces) {
-      if (pieceName === currentPiece) continue;
       options.push({
         label: `🎼 ${pieceName} [*]`,
         value: pieceName,
       });
     }
 
-    // 3. Categories
+    // 2. Categories
     for (const category of categorized.categories) {
       options.push({
         label: `📁 ${category.name}/`,
@@ -316,7 +282,7 @@ async function selectTopLevelPieceOption(
 
   const result = await selectOption<string>('Select piece:', buildOptions(), {
     onKeyPress: (key: string, value: string): SelectOptionItem<string>[] | null => {
-      if (value === CURRENT_PIECE_VALUE || value.startsWith(CUSTOM_CATEGORY_PREFIX)) {
+      if (value.startsWith(CUSTOM_CATEGORY_PREFIX)) {
         return null;
       }
 
@@ -336,10 +302,6 @@ async function selectTopLevelPieceOption(
 
   if (!result) return null;
 
-  if (result === CURRENT_PIECE_VALUE) {
-    return { type: 'current' };
-  }
-
   if (result.startsWith(CUSTOM_CATEGORY_PREFIX)) {
     const categoryName = result.slice(CUSTOM_CATEGORY_PREFIX.length);
     const node = categorized.categories.find(c => c.name === categoryName);
@@ -355,20 +317,16 @@ async function selectTopLevelPieceOption(
  */
 export async function selectPieceFromCategorizedPieces(
   categorized: CategorizedPieces,
-  currentPiece: string,
 ): Promise<string | null> {
   while (true) {
-    const selection = await selectTopLevelPieceOption(categorized, currentPiece);
+    const selection = await selectTopLevelPieceOption(categorized);
     if (!selection) return null;
-
-    if (selection.type === 'current') return currentPiece;
 
     if (selection.type === 'piece') return selection.name;
 
     if (selection.type === 'category') {
       const piece = await selectPieceFromCategoryTree(
         selection.node.children,
-        currentPiece,
         true,
         selection.node.pieces,
       );
@@ -380,7 +338,6 @@ export async function selectPieceFromCategorizedPieces(
 
 async function selectPieceFromEntriesWithCategories(
   entries: PieceDirEntry[],
-  currentPiece: string,
 ): Promise<string | null> {
   if (entries.length === 0) return null;
 
@@ -390,7 +347,7 @@ async function selectPieceFromEntriesWithCategories(
 
   if (!hasCategories) {
     const baseOptions: SelectionOption[] = availablePieces.map((name) => ({
-      label: name === currentPiece ? `🎼 ${name} (current)` : `🎼 ${name}`,
+      label: `🎼 ${name}`,
       value: name,
     }));
 
@@ -415,7 +372,7 @@ async function selectPieceFromEntriesWithCategories(
   // Loop until user selects a piece or cancels at top level
   while (true) {
     const buildTopLevelOptions = (): SelectionOption[] =>
-      applyBookmarks(buildTopLevelSelectOptions(items, currentPiece), getBookmarkedPieces());
+      applyBookmarks(buildTopLevelSelectOptions(items), getBookmarkedPieces());
 
     const selected = await selectOption<string>('Select piece:', buildTopLevelOptions(), {
       onKeyPress: (key: string, value: string): SelectOptionItem<string>[] | null => {
@@ -441,7 +398,7 @@ async function selectPieceFromEntriesWithCategories(
 
     const categoryName = parseCategorySelection(selected);
     if (categoryName) {
-      const categoryOptions = buildCategoryPieceOptions(items, categoryName, currentPiece);
+      const categoryOptions = buildCategoryPieceOptions(items, categoryName);
       if (!categoryOptions) continue;
 
       const buildCategoryOptions = (): SelectionOption[] =>
@@ -476,7 +433,6 @@ async function selectPieceFromEntriesWithCategories(
  */
 export async function selectPieceFromEntries(
   entries: PieceDirEntry[],
-  currentPiece: string,
 ): Promise<string | null> {
   const builtinEntries = entries.filter((entry) => entry.source === 'builtin');
   const customEntries = entries.filter((entry) => entry.source !== 'builtin');
@@ -488,50 +444,35 @@ export async function selectPieceFromEntries(
     ]);
     if (!selectedSource) return null;
     const sourceEntries = selectedSource === 'custom' ? customEntries : builtinEntries;
-    return selectPieceFromEntriesWithCategories(sourceEntries, currentPiece);
+    return selectPieceFromEntriesWithCategories(sourceEntries);
   }
 
   const entriesToUse = customEntries.length > 0 ? customEntries : builtinEntries;
-  return selectPieceFromEntriesWithCategories(entriesToUse, currentPiece);
-}
-
-export interface SelectPieceOptions {
-  fallbackToDefault?: boolean;
+  return selectPieceFromEntriesWithCategories(entriesToUse);
 }
 
 export async function selectPiece(
   cwd: string,
-  options?: SelectPieceOptions,
 ): Promise<string | null> {
-  const fallbackToDefault = options?.fallbackToDefault !== false;
   const categoryConfig = getPieceCategories(cwd);
-  const currentPiece = resolveConfigValue(cwd, 'piece');
 
   if (categoryConfig) {
     const allPieces = loadAllPiecesWithSources(cwd);
     if (allPieces.size === 0) {
-      if (fallbackToDefault) {
-        info(`No pieces found. Using default: ${DEFAULT_PIECE_NAME}`);
-        return DEFAULT_PIECE_NAME;
-      }
       info('No pieces found.');
       return null;
     }
     const categorized = buildCategorizedPieces(allPieces, categoryConfig, cwd);
     warnMissingPieces(categorized.missingPieces.filter((missing) => missing.source === 'user'));
-    return selectPieceFromCategorizedPieces(categorized, currentPiece);
+    return selectPieceFromCategorizedPieces(categorized);
   }
 
   const availablePieces = listPieces(cwd);
   if (availablePieces.length === 0) {
-    if (fallbackToDefault) {
-      info(`No pieces found. Using default: ${DEFAULT_PIECE_NAME}`);
-      return DEFAULT_PIECE_NAME;
-    }
     info('No pieces found.');
     return null;
   }
 
   const entries = listPieceEntries(cwd);
-  return selectPieceFromEntries(entries, currentPiece);
+  return selectPieceFromEntries(entries);
 }

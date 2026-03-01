@@ -93,7 +93,6 @@ export async function runWithWorkerPool(
   initialTasks: TaskInfo[],
   concurrency: number,
   cwd: string,
-  pieceName: string,
   options: TaskExecutionOptions | undefined,
   pollIntervalMs: number,
 ): Promise<WorkerPoolResult> {
@@ -119,7 +118,7 @@ export async function runWithWorkerPool(
   try {
     while (queue.length > 0 || active.size > 0) {
       if (!abortController.signal.aborted) {
-        fillSlots(queue, active, concurrency, taskRunner, cwd, pieceName, options, abortController, colorCounter);
+        fillSlots(queue, active, concurrency, taskRunner, cwd, options, abortController, colorCounter);
         if ((selfSigintOnce || selfSigintTwice) && !selfSigintInjected && active.size > 0) {
           selfSigintInjected = true;
           process.emit('SIGINT');
@@ -197,7 +196,6 @@ function fillSlots(
   concurrency: number,
   taskRunner: TaskRunner,
   cwd: string,
-  pieceName: string,
   options: TaskExecutionOptions | undefined,
   abortController: AbortController,
   colorCounter: { value: number },
@@ -223,7 +221,7 @@ function fillSlots(
       info(`=== Task: ${task.name} ===`);
     }
 
-    const promise = executeAndCompleteTask(task, taskRunner, cwd, pieceName, options, {
+    const promise = executeAndCompleteTask(task, taskRunner, cwd, options, {
       abortSignal: abortController.signal,
       taskPrefix: isParallel ? taskPrefix : undefined,
       taskColorIndex: isParallel ? colorIndex : undefined,

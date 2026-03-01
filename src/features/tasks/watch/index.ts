@@ -6,7 +6,6 @@
  */
 
 import { TaskRunner, type TaskInfo, TaskWatcher } from '../../../infra/task/index.js';
-import { resolveConfigValue } from '../../../infra/config/index.js';
 import {
   header,
   info,
@@ -24,7 +23,6 @@ import type { TaskExecutionOptions } from '../execute/types.js';
  * Runs until Ctrl+C.
  */
 export async function watchTasks(cwd: string, options?: TaskExecutionOptions): Promise<void> {
-  const pieceName = resolveConfigValue(cwd, 'piece');
   const taskRunner = new TaskRunner(cwd);
   const watcher = new TaskWatcher(cwd);
   const recovered = taskRunner.recoverInterruptedRunningTasks();
@@ -34,7 +32,6 @@ export async function watchTasks(cwd: string, options?: TaskExecutionOptions): P
   let failCount = 0;
 
   header('TAKT Watch Mode');
-  info(`Piece: ${pieceName}`);
   info(`Watching: ${taskRunner.getTasksDir()}`);
   if (recovered > 0) {
     info(`Recovered ${recovered} interrupted running task(s) to pending.`);
@@ -64,7 +61,7 @@ export async function watchTasks(cwd: string, options?: TaskExecutionOptions): P
       info(`=== Task ${taskCount}: ${task.name} ===`);
       blankLine();
 
-      const taskSuccess = await executeAndCompleteTask(task, taskRunner, cwd, pieceName, options);
+      const taskSuccess = await executeAndCompleteTask(task, taskRunner, cwd, options);
 
       if (taskSuccess) {
         successCount++;

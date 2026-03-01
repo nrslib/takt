@@ -13,7 +13,6 @@ import {
   loadPiece,
   listPieces,
   loadPersonaPromptFromPath,
-  setCurrentPiece,
   getProjectConfigDir,
   getBuiltinPersonasDir,
   loadInputHistory,
@@ -299,47 +298,6 @@ describe('loadPersonaPromptFromPath (builtin paths)', () => {
   });
 });
 
-describe('setCurrentPiece', () => {
-  let testDir: string;
-
-  beforeEach(() => {
-    testDir = join(tmpdir(), `takt-test-${randomUUID()}`);
-    mkdirSync(testDir, { recursive: true });
-  });
-
-  afterEach(() => {
-    if (existsSync(testDir)) {
-      rmSync(testDir, { recursive: true, force: true });
-    }
-  });
-
-  it('should save piece name to config.yaml', () => {
-    setCurrentPiece(testDir, 'my-piece');
-
-    const config = loadProjectConfig(testDir);
-
-    expect(config.piece).toBe('my-piece');
-  });
-
-  it('should create config directory if not exists', () => {
-    const configDir = getProjectConfigDir(testDir);
-    expect(existsSync(configDir)).toBe(false);
-
-    setCurrentPiece(testDir, 'test');
-
-    expect(existsSync(configDir)).toBe(true);
-  });
-
-  it('should overwrite existing piece name', () => {
-    setCurrentPiece(testDir, 'first');
-    setCurrentPiece(testDir, 'second');
-
-    const piece = loadProjectConfig(testDir).piece;
-
-    expect(piece).toBe('second');
-  });
-});
-
 describe('loadProjectConfig provider_options', () => {
   let testDir: string;
 
@@ -358,7 +316,6 @@ describe('loadProjectConfig provider_options', () => {
     const projectConfigDir = getProjectConfigDir(testDir);
     mkdirSync(projectConfigDir, { recursive: true });
     writeFileSync(join(projectConfigDir, 'config.yaml'), [
-      'piece: default',
       'provider_options:',
       '  codex:',
       '    network_access: true',
@@ -445,7 +402,6 @@ describe('analytics config resolution', () => {
     const projectConfigDir = getProjectConfigDir(testDir);
     mkdirSync(projectConfigDir, { recursive: true });
     writeFileSync(join(projectConfigDir, 'config.yaml'), [
-      'piece: default',
       'analytics:',
       '  enabled: false',
       '  events_path: .takt/project-analytics/events',
@@ -488,7 +444,6 @@ describe('analytics config resolution', () => {
     const projectConfigDir = getProjectConfigDir(testDir);
     mkdirSync(projectConfigDir, { recursive: true });
     writeFileSync(join(projectConfigDir, 'config.yaml'), [
-      'piece: default',
       'analytics:',
       '  events_path: /tmp/project-analytics',
       '  retention_days: 14',
@@ -538,7 +493,7 @@ describe('isVerboseMode', () => {
   it('should return project verbose when project config has verbose: true', () => {
     const projectConfigDir = getProjectConfigDir(testDir);
     mkdirSync(projectConfigDir, { recursive: true });
-    writeFileSync(join(projectConfigDir, 'config.yaml'), 'piece: default\nverbose: true\n');
+    writeFileSync(join(projectConfigDir, 'config.yaml'), 'verbose: true\n');
 
     const globalConfigDir = process.env.TAKT_CONFIG_DIR!;
     mkdirSync(globalConfigDir, { recursive: true });
@@ -550,7 +505,7 @@ describe('isVerboseMode', () => {
   it('should return project verbose when project config has verbose: false', () => {
     const projectConfigDir = getProjectConfigDir(testDir);
     mkdirSync(projectConfigDir, { recursive: true });
-    writeFileSync(join(projectConfigDir, 'config.yaml'), 'piece: default\nverbose: false\n');
+    writeFileSync(join(projectConfigDir, 'config.yaml'), 'verbose: false\n');
 
     const globalConfigDir = process.env.TAKT_CONFIG_DIR!;
     mkdirSync(globalConfigDir, { recursive: true });
@@ -562,7 +517,7 @@ describe('isVerboseMode', () => {
   it('should fallback to global verbose when project verbose is not set', () => {
     const projectConfigDir = getProjectConfigDir(testDir);
     mkdirSync(projectConfigDir, { recursive: true });
-    writeFileSync(join(projectConfigDir, 'config.yaml'), 'piece: default\n');
+    writeFileSync(join(projectConfigDir, 'config.yaml'), '');
 
     const globalConfigDir = process.env.TAKT_CONFIG_DIR!;
     mkdirSync(globalConfigDir, { recursive: true });
@@ -578,7 +533,7 @@ describe('isVerboseMode', () => {
   it('should prioritize TAKT_VERBOSE over project and global config', () => {
     const projectConfigDir = getProjectConfigDir(testDir);
     mkdirSync(projectConfigDir, { recursive: true });
-    writeFileSync(join(projectConfigDir, 'config.yaml'), 'piece: default\nverbose: false\n');
+    writeFileSync(join(projectConfigDir, 'config.yaml'), 'verbose: false\n');
 
     const globalConfigDir = process.env.TAKT_CONFIG_DIR!;
     mkdirSync(globalConfigDir, { recursive: true });
@@ -810,56 +765,6 @@ describe('loadInputHistory - edge cases', () => {
     const history = loadInputHistory(testDir);
 
     expect(history).toEqual([]);
-  });
-});
-
-describe('saveProjectConfig - gitignore copy', () => {
-  let testDir: string;
-
-  beforeEach(() => {
-    testDir = join(tmpdir(), `takt-test-${randomUUID()}`);
-    mkdirSync(testDir, { recursive: true });
-  });
-
-  afterEach(() => {
-    if (existsSync(testDir)) {
-      rmSync(testDir, { recursive: true, force: true });
-    }
-  });
-
-  it('should copy .gitignore when creating new config', () => {
-    setCurrentPiece(testDir, 'test');
-
-    const configDir = getProjectConfigDir(testDir);
-    const gitignorePath = join(configDir, '.gitignore');
-
-    expect(existsSync(gitignorePath)).toBe(true);
-  });
-
-  it('should copy .gitignore to existing config directory without one', () => {
-    // Create config directory without .gitignore
-    const configDir = getProjectConfigDir(testDir);
-    mkdirSync(configDir, { recursive: true });
-    writeFileSync(join(configDir, 'config.yaml'), 'piece: existing\n');
-
-    // Save config should still copy .gitignore
-    setCurrentPiece(testDir, 'updated');
-
-    const gitignorePath = join(configDir, '.gitignore');
-    expect(existsSync(gitignorePath)).toBe(true);
-  });
-
-  it('should not overwrite existing .gitignore', () => {
-    const configDir = getProjectConfigDir(testDir);
-    mkdirSync(configDir, { recursive: true });
-    const customContent = '# Custom gitignore\nmy-custom-file';
-    writeFileSync(join(configDir, '.gitignore'), customContent);
-
-    setCurrentPiece(testDir, 'test');
-
-    const gitignorePath = join(configDir, '.gitignore');
-    const content = readFileSync(gitignorePath, 'utf-8');
-    expect(content).toBe(customContent);
   });
 });
 
@@ -1310,7 +1215,7 @@ describe('saveProjectConfig snake_case denormalization', () => {
   });
 
   it('should persist autoPr as auto_pr and reload correctly', () => {
-    saveProjectConfig(testDir, { piece: 'default', autoPr: true });
+    saveProjectConfig(testDir, { autoPr: true });
 
     const saved = loadProjectConfig(testDir);
 
@@ -1319,7 +1224,7 @@ describe('saveProjectConfig snake_case denormalization', () => {
   });
 
   it('should persist draftPr as draft_pr and reload correctly', () => {
-    saveProjectConfig(testDir, { piece: 'default', draftPr: true });
+    saveProjectConfig(testDir, { draftPr: true });
 
     const saved = loadProjectConfig(testDir);
 
@@ -1328,7 +1233,7 @@ describe('saveProjectConfig snake_case denormalization', () => {
   });
 
   it('should persist baseBranch as base_branch and reload correctly', () => {
-    saveProjectConfig(testDir, { piece: 'default', baseBranch: 'main' });
+    saveProjectConfig(testDir, { baseBranch: 'main' });
 
     const saved = loadProjectConfig(testDir);
 
@@ -1337,7 +1242,7 @@ describe('saveProjectConfig snake_case denormalization', () => {
   });
 
   it('should persist withSubmodules as with_submodules and reload correctly', () => {
-    saveProjectConfig(testDir, { piece: 'default', withSubmodules: true });
+    saveProjectConfig(testDir, { withSubmodules: true });
 
     const saved = loadProjectConfig(testDir);
 
@@ -1346,7 +1251,7 @@ describe('saveProjectConfig snake_case denormalization', () => {
   });
 
   it('should persist submodules and ignore with_submodules when both are provided', () => {
-    saveProjectConfig(testDir, { piece: 'default', submodules: ['path/a'], withSubmodules: true });
+    saveProjectConfig(testDir, { submodules: ['path/a'], withSubmodules: true });
 
     const projectConfigDir = getProjectConfigDir(testDir);
     const content = readFileSync(join(projectConfigDir, 'config.yaml'), 'utf-8');
@@ -1359,7 +1264,7 @@ describe('saveProjectConfig snake_case denormalization', () => {
   });
 
   it('should persist concurrency and reload correctly', () => {
-    saveProjectConfig(testDir, { piece: 'default', concurrency: 3 });
+    saveProjectConfig(testDir, { concurrency: 3 });
 
     const saved = loadProjectConfig(testDir);
 
@@ -1367,7 +1272,7 @@ describe('saveProjectConfig snake_case denormalization', () => {
   });
 
   it('should not write camelCase keys to YAML file', () => {
-    saveProjectConfig(testDir, { piece: 'default', autoPr: true, draftPr: false, baseBranch: 'develop' });
+    saveProjectConfig(testDir, { autoPr: true, draftPr: false, baseBranch: 'develop' });
 
     const projectConfigDir = getProjectConfigDir(testDir);
     const content = readFileSync(join(projectConfigDir, 'config.yaml'), 'utf-8');

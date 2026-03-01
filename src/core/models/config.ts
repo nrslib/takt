@@ -7,7 +7,6 @@ export type TaktConfig = z.infer<typeof TaktConfigSchema>;
 
 export const DEFAULT_CONFIG: TaktConfig = {
   defaultModel: 'sonnet',
-  defaultPiece: 'default',
   agentDirs: [],
   pieceDirs: [],
   claude: {
