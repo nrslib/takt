@@ -121,8 +121,8 @@ Detect comments that simply restate code behavior in natural language.
 
 ```typescript
 // REJECT - Restates code (What)
-// If interrupted, abort immediately
-if (status === 'interrupted') {
+// If error, abort immediately
+if (status === 'error') {
   return ABORT_STEP;
 }
 
@@ -135,8 +135,8 @@ for (const transition of step.transitions) {
 export function matchesCondition(status: Status, condition: TransitionCondition): boolean {
 
 // OK - Design decision (Why)
-// User interruption takes priority over piece-defined transitions
-if (status === 'interrupted') {
+// Errors take priority over piece-defined transitions
+if (status === 'error') {
   return ABORT_STEP;
 }
 

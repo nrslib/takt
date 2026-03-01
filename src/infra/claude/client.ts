@@ -22,15 +22,9 @@ const log = createLogger('client');
 export class ClaudeClient {
   /** Determine status from execution result */
   private static determineStatus(
-    result: { success: boolean; interrupted?: boolean; content: string; fullContent?: string },
+    result: { success: boolean; content: string; fullContent?: string },
   ): Status {
-    if (!result.success) {
-      if (result.interrupted) {
-        return 'interrupted';
-      }
-      return 'error';
-    }
-    return 'done';
+    return result.success ? 'done' : 'error';
   }
 
   /** Convert ClaudeCallOptions to ClaudeSpawnOptions */
@@ -152,7 +146,7 @@ export class ClaudeClient {
 
     return {
       persona: `skill:${skillName}`,
-      status: result.success ? 'done' : 'error',
+      status: ClaudeClient.determineStatus(result),
       content: result.content,
       timestamp: new Date(),
       sessionId: result.sessionId,

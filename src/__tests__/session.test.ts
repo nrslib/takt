@@ -6,6 +6,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { existsSync, readFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { createSessionState } from '../core/models/session.js';
 import {
   initNdjsonLog,
   appendNdjsonLine,
@@ -659,5 +660,26 @@ describe('NDJSON log', () => {
       const result = extractFailureInfo(filepath);
       expect(result).toBeNull();
     });
+  });
+});
+
+describe('createSessionState', () => {
+  it('デフォルト値で SessionState を生成する', () => {
+    const state = createSessionState('タスク', '/project');
+
+    expect(state.task).toBe('タスク');
+    expect(state.projectDir).toBe('/project');
+    expect(state.iteration).toBe(0);
+    expect(state.maxMovements).toBe(10);
+    expect(state.history).toEqual([]);
+    expect(state.context).toBe('');
+  });
+
+  it('options で値を上書きできる', () => {
+    const state = createSessionState('task', '/dir', { iteration: 3, maxMovements: 20, context: 'ctx' });
+
+    expect(state.iteration).toBe(3);
+    expect(state.maxMovements).toBe(20);
+    expect(state.context).toBe('ctx');
   });
 });

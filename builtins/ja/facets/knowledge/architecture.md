@@ -121,8 +121,8 @@ Vertical Slice の判定基準:
 
 ```typescript
 // REJECT - コードの言い換え（What）
-// If interrupted, abort immediately
-if (status === 'interrupted') {
+// If error, abort immediately
+if (status === 'error') {
   return ABORT_STEP;
 }
 
@@ -135,8 +135,8 @@ for (const transition of step.transitions) {
 export function matchesCondition(status: Status, condition: TransitionCondition): boolean {
 
 // OK - 設計判断の理由（Why）
-// ユーザー中断はピース定義のトランジションより優先する
-if (status === 'interrupted') {
+// エラーはピース定義のトランジションより優先する
+if (status === 'error') {
   return ABORT_STEP;
 }
 
