@@ -50,3 +50,35 @@ export function pushBranch(cwd: string, branch: string): void {
     stdio: 'pipe',
   });
 }
+
+// ---- Git clone readiness check ----
+
+export type GitCloneReadiness =
+  | { ready: true }
+  | { ready: false; reason: 'not_git_repo' | 'no_commits' };
+
+/**
+ * Check if the directory is a git repository with at least one commit,
+ * which is required before creating a shared clone.
+ */
+export function checkGitCloneReadiness(cwd: string): GitCloneReadiness {
+  try {
+    execFileSync('git', ['rev-parse', '--is-inside-work-tree'], {
+      cwd,
+      stdio: 'pipe',
+    });
+  } catch {
+    return { ready: false, reason: 'not_git_repo' };
+  }
+
+  try {
+    execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd,
+      stdio: 'pipe',
+    });
+  } catch {
+    return { ready: false, reason: 'no_commits' };
+  }
+
+  return { ready: true };
+}

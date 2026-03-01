@@ -144,6 +144,9 @@ export async function resolveExecutionContext(
 ): Promise<ExecutionContext> {
   if (options.createWorktree) {
     const result = await confirmAndCreateWorktree(cwd, task, options.createWorktree, prBranch);
+    if (!result) {
+      return { execCwd: cwd, isWorktree: false };
+    }
     if (result.isWorktree) {
       success(`Worktree created: ${result.execCwd}`);
     }
