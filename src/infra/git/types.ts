@@ -87,6 +87,8 @@ export interface PrReviewData {
   url: string;
   /** Branch name of the PR head */
   headRefName: string;
+  /** Base branch the PR targets */
+  baseRefName: string;
   /** Conversation comments (non-review) */
   comments: PrReviewComment[];
   /** Review comments (from reviews) */

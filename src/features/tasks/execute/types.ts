@@ -143,6 +143,8 @@ export interface SelectAndExecuteOptions {
   createWorktree?: boolean | undefined;
   /** Override branch name (e.g., PR head branch for --pr) */
   branch?: string;
+  /** Override base branch (e.g., PR base branch for --pr, or current branch for interactive mode) */
+  baseBranch?: string;
   /** Enable interactive user input during step transitions */
   interactiveUserInput?: boolean;
   /** Interactive mode result metadata for NDJSON logging */

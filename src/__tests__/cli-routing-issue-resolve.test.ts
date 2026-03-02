@@ -14,9 +14,6 @@ vi.mock('../shared/ui/index.js', () => ({
   withProgress: vi.fn(async (_start, _done, operation) => operation()),
 }));
 
-vi.mock('../shared/prompt/index.js', () => ({
-}));
-
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   createLogger: () => ({
@@ -51,6 +48,7 @@ vi.mock('../features/tasks/index.js', () => ({
   saveTaskFromInteractive: vi.fn(),
   createIssueAndSaveTask: vi.fn(),
   promptLabelSelection: vi.fn().mockResolvedValue([]),
+  promptBaseBranchIfNeeded: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../features/pipeline/index.js', () => ({
@@ -115,7 +113,7 @@ vi.mock('../app/cli/helpers.js', () => ({
 }));
 
 import { formatIssueAsTask, parseIssueNumbers } from '../infra/github/issue.js';
-import { selectAndExecuteTask, determinePiece, createIssueAndSaveTask } from '../features/tasks/index.js';
+import { selectAndExecuteTask, determinePiece, createIssueAndSaveTask, promptBaseBranchIfNeeded } from '../features/tasks/index.js';
 import { interactiveMode } from '../features/interactive/index.js';
 import { resolveConfigValues, loadPersonaSessions } from '../infra/config/index.js';
 import { isDirectTask } from '../app/cli/helpers.js';
@@ -134,6 +132,7 @@ const mockResolveConfigValues = vi.mocked(resolveConfigValues);
 const mockIsDirectTask = vi.mocked(isDirectTask);
 const mockInfo = vi.mocked(info);
 const mockTaskRunnerListAllTaskItems = vi.mocked(mockListAllTaskItems);
+const mockPromptBaseBranchIfNeeded = vi.mocked(promptBaseBranchIfNeeded);
 
 function createMockIssue(number: number): Issue {
   return {
@@ -158,6 +157,7 @@ beforeEach(() => {
   mockParseIssueNumbers.mockReturnValue([]);
   mockTaskRunnerListAllTaskItems.mockReturnValue([]);
   mockIsStaleRunningTask.mockReturnValue(false);
+  mockPromptBaseBranchIfNeeded.mockResolvedValue(undefined);
 });
 
 describe('Issue resolution in routing', () => {
@@ -543,6 +543,43 @@ describe('Issue resolution in routing', () => {
         expect.anything(),
         undefined,
       );
+    });
+  });
+
+  describe('base branch prompt on execute action', () => {
+    it('should set baseBranch when promptBaseBranchIfNeeded returns a branch name', async () => {
+      // Given: feature branch confirmed by user
+      mockPromptBaseBranchIfNeeded.mockResolvedValue('feat/xxx');
+
+      // When
+      await executeDefaultAction();
+
+      // Then: baseBranch is passed to selectAndExecuteTask
+      expect(mockSelectAndExecuteTask).toHaveBeenCalledWith(
+        '/test/cwd',
+        'summarized task',
+        expect.objectContaining({ baseBranch: 'feat/xxx' }),
+        undefined,
+      );
+    });
+
+    it('should not set baseBranch when promptBaseBranchIfNeeded returns undefined', async () => {
+      // Given: user declined or on main/master (default mock returns undefined)
+
+      // When
+      await executeDefaultAction();
+
+      // Then: baseBranch is not set
+      const callArgs = mockSelectAndExecuteTask.mock.calls[0];
+      expect(callArgs?.[2]?.baseBranch).toBeUndefined();
+    });
+
+    it('should call promptBaseBranchIfNeeded with cwd', async () => {
+      // When
+      await executeDefaultAction();
+
+      // Then: promptBaseBranchIfNeeded receives the cwd
+      expect(mockPromptBaseBranchIfNeeded).toHaveBeenCalledWith('/test/cwd');
     });
   });
 });

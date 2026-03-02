@@ -85,6 +85,28 @@ describe('TaskExecutionConfigSchema', () => {
   it('should reject non-integer issue number', () => {
     expect(() => TaskExecutionConfigSchema.parse({ issue: 1.5 })).toThrow();
   });
+
+  it('should accept base_branch as optional string', () => {
+    // Given: base_branch is a valid branch name
+    expect(() => TaskExecutionConfigSchema.parse({ base_branch: 'feat/xxx' })).not.toThrow();
+  });
+
+  it('should accept base_branch with slash in name', () => {
+    // Given: branch names commonly include slashes
+    expect(() => TaskExecutionConfigSchema.parse({ base_branch: 'feature/some-feature' })).not.toThrow();
+  });
+
+  it('should accept config without base_branch (optional field)', () => {
+    // Given: base_branch is not provided
+    const config = { worktree: true, branch: 'feat/x' };
+    const parsed = TaskExecutionConfigSchema.parse(config);
+    expect(parsed.base_branch).toBeUndefined();
+  });
+
+  it('should reject non-string base_branch', () => {
+    // Given: base_branch is a number instead of string
+    expect(() => TaskExecutionConfigSchema.parse({ base_branch: 123 })).toThrow();
+  });
 });
 
 describe('TaskFileSchema', () => {

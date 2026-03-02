@@ -14,9 +14,6 @@ vi.mock('../shared/ui/index.js', () => ({
   withProgress: vi.fn(async (_start, _done, operation) => operation()),
 }));
 
-vi.mock('../shared/prompt/index.js', () => ({
-}));
-
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   createLogger: () => ({
@@ -53,6 +50,7 @@ vi.mock('../features/tasks/index.js', () => ({
   saveTaskFromInteractive: vi.fn(),
   createIssueAndSaveTask: vi.fn(),
   promptLabelSelection: vi.fn().mockResolvedValue([]),
+  promptBaseBranchIfNeeded: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../features/pipeline/index.js', () => ({
@@ -116,7 +114,7 @@ vi.mock('../app/cli/helpers.js', () => ({
   isDirectTask: vi.fn(() => false),
 }));
 
-import { selectAndExecuteTask, determinePiece } from '../features/tasks/index.js';
+import { selectAndExecuteTask, determinePiece, promptBaseBranchIfNeeded } from '../features/tasks/index.js';
 import { interactiveMode } from '../features/interactive/index.js';
 import { executePipeline } from '../features/pipeline/index.js';
 import { executeDefaultAction } from '../app/cli/routing.js';
@@ -128,6 +126,7 @@ const mockDeterminePiece = vi.mocked(determinePiece);
 const mockInteractiveMode = vi.mocked(interactiveMode);
 const mockExecutePipeline = vi.mocked(executePipeline);
 const mockLogError = vi.mocked(logError);
+const mockPromptBaseBranchIfNeeded = vi.mocked(promptBaseBranchIfNeeded);
 
 function createMockPrReview(overrides: Partial<PrReviewData> = {}): PrReviewData {
   return {
@@ -136,6 +135,7 @@ function createMockPrReview(overrides: Partial<PrReviewData> = {}): PrReviewData
     body: 'PR description',
     url: 'https://github.com/org/repo/pull/456',
     headRefName: 'fix/auth-bug',
+    baseRefName: 'main',
     comments: [{ author: 'commenter1', body: 'Update tests' }],
     reviews: [{ author: 'reviewer1', body: 'Fix null check' }],
     files: ['src/auth.ts'],
@@ -176,10 +176,10 @@ describe('PR resolution in routing', () => {
       );
     });
 
-    it('should set branch in selectOptions from PR headRefName', async () => {
+    it('should set branch and baseBranch in selectOptions from PR headRefName and baseRefName', async () => {
       // Given
       mockOpts.pr = 456;
-      const prReview = createMockPrReview({ headRefName: 'feat/my-pr-branch' });
+      const prReview = createMockPrReview({ headRefName: 'feat/my-pr-branch', baseRefName: 'main' });
       mockCheckCliStatus.mockReturnValue({ available: true });
       mockFetchPrReviewComments.mockReturnValue(prReview);
 
@@ -192,7 +192,28 @@ describe('PR resolution in routing', () => {
         'summarized task',
         expect.objectContaining({
           branch: 'feat/my-pr-branch',
+          baseBranch: 'main',
         }),
+        undefined,
+      );
+    });
+
+    it('should not call promptBaseBranchIfNeeded when baseBranch is already set from PR', async () => {
+      // Given: --pr sets baseBranch automatically from prBaseRefName
+      mockOpts.pr = 456;
+      const prReview = createMockPrReview({ baseRefName: 'develop' });
+      mockCheckCliStatus.mockReturnValue({ available: true });
+      mockFetchPrReviewComments.mockReturnValue(prReview);
+
+      // When
+      await executeDefaultAction();
+
+      // Then: promptBaseBranchIfNeeded should NOT be called since baseBranch is already set
+      expect(mockPromptBaseBranchIfNeeded).not.toHaveBeenCalled();
+      expect(mockSelectAndExecuteTask).toHaveBeenCalledWith(
+        '/test/cwd',
+        'summarized task',
+        expect.objectContaining({ baseBranch: 'develop' }),
         undefined,
       );
     });

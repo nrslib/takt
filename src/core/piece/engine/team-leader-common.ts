@@ -9,7 +9,7 @@ export function summarizeParts(parts: PartDefinition[]): Array<{ id: string; tit
 }
 
 export function resolvePartErrorDetail(partResult: PartResult): string {
-  const detail = partResult.response.error ?? partResult.response.content;
+  const detail = partResult.response.error || partResult.response.content;
   if (!detail) {
     throw new Error(`Part "${partResult.part.id}" failed without error detail`);
   }

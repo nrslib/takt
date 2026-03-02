@@ -51,7 +51,7 @@ vi.mock('../infra/config/project/projectConfig.js', async (importOriginal) => ({
 import { execFileSync } from 'node:child_process';
 import { loadGlobalConfig } from '../infra/config/global/globalConfig.js';
 import { loadProjectConfig } from '../infra/config/project/projectConfig.js';
-import { createSharedClone, createTempCloneForBranch } from '../infra/task/clone.js';
+import { createSharedClone, createTempCloneForBranch, resolveBaseBranch } from '../infra/task/clone.js';
 
 const mockExecFileSync = vi.mocked(execFileSync);
 const mockLoadProjectConfig = vi.mocked(loadProjectConfig);
@@ -736,6 +736,176 @@ describe('branchExists remote tracking branch fallback', () => {
 
     // Then: no checkout -b was called (branch already exists locally)
     expect(checkoutCalls).toHaveLength(0);
+  });
+});
+
+describe('resolveBaseBranch with taskBaseBranch override', () => {
+  it('should return taskBaseBranch when local branch exists', () => {
+    // Given: taskBaseBranch is provided and the local branch exists
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--verify') {
+        // Local branch exists
+        return Buffer.from('abc123');
+      }
+      return Buffer.from('');
+    });
+
+    // When
+    const result = resolveBaseBranch('/project', 'feat/xxx');
+
+    // Then: returns taskBaseBranch without looking up config or detectDefaultBranch
+    expect(result.branch).toBe('feat/xxx');
+  });
+
+  it('should return taskBaseBranch when only remote tracking branch exists', () => {
+    // Given: taskBaseBranch is provided; local branch missing, remote tracking branch exists
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--verify') {
+        const ref = argsArr[2] as string;
+        if (ref.startsWith('origin/')) {
+          return Buffer.from('abc123');  // remote tracking branch exists
+        }
+        throw new Error('branch not found');  // local branch missing
+      }
+      return Buffer.from('');
+    });
+
+    // When
+    const result = resolveBaseBranch('/project', 'feat/remote-only');
+
+    // Then: returns the branch using remote tracking ref as fallback
+    expect(result.branch).toBe('feat/remote-only');
+  });
+
+  it('should throw when taskBaseBranch does not exist locally or remotely', () => {
+    // Given: neither local nor remote tracking branch exists
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--verify') {
+        throw new Error('branch not found');
+      }
+      return Buffer.from('');
+    });
+
+    // When / Then: error message contains the branch name for diagnostics
+    expect(() => resolveBaseBranch('/project', 'feat/nonexistent')).toThrow('feat/nonexistent');
+  });
+
+  it('should not fetch from remote when taskBaseBranch is specified', () => {
+    // Given: autoFetch is enabled but taskBaseBranch is provided
+    vi.mocked(loadGlobalConfig).mockReturnValue({ autoFetch: true } as ReturnType<typeof loadGlobalConfig>);
+
+    const fetchCalls: string[][] = [];
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'fetch') {
+        fetchCalls.push(argsArr);
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--verify') {
+        return Buffer.from('abc123');
+      }
+      return Buffer.from('');
+    });
+
+    // When: taskBaseBranch is explicitly given
+    resolveBaseBranch('/project', 'feat/explicit');
+
+    // Then: git fetch is NOT called (taskBaseBranch bypasses autoFetch)
+    expect(fetchCalls).toHaveLength(0);
+  });
+});
+
+describe('createSharedClone with baseBranch option', () => {
+  it('should use baseBranch option as the base when creating a new branch', () => {
+    // Given: baseBranch option provided; new task branch does not exist yet; feat/xxx exists locally
+    const cloneCalls: string[][] = [];
+    const checkoutCalls: string[][] = [];
+
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+
+      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--verify') {
+        const ref = argsArr[2] as string;
+        // base branch exists locally
+        if (ref === 'feat/xxx' || ref === 'origin/feat/xxx') {
+          return Buffer.from('abc123');
+        }
+        // new task branch doesn't exist yet
+        throw new Error('branch not found');
+      }
+      if (argsArr[0] === 'clone') {
+        cloneCalls.push(argsArr);
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'remote') return Buffer.from('');
+      if (argsArr[0] === 'config') {
+        if (argsArr[1] === '--local') throw new Error('not set');
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'checkout') {
+        checkoutCalls.push(argsArr);
+        return Buffer.from('');
+      }
+      return Buffer.from('');
+    });
+
+    // When: createSharedClone with baseBranch set to feat/xxx
+    createSharedClone('/project', {
+      worktree: '/tmp/clone-base-branch-test',
+      taskSlug: 'new-feature-task',
+      baseBranch: 'feat/xxx',
+    });
+
+    // Then: git clone was called with --branch feat/xxx (the task-level base)
+    expect(cloneCalls).toHaveLength(1);
+    expect(cloneCalls[0]).toContain('--branch');
+    expect(cloneCalls[0]).toContain('feat/xxx');
+
+    // Then: checkout -b was called to create the task branch from feat/xxx
+    expect(checkoutCalls).toHaveLength(1);
+    expect(checkoutCalls[0][0]).toBe('checkout');
+    expect(checkoutCalls[0][1]).toBe('-b');
+  });
+
+  it('should not use baseBranch when the task branch already exists', () => {
+    // Given: task branch already exists (no new checkout needed)
+    const cloneCalls: string[][] = [];
+
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+
+      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--verify') {
+        // Task branch exists; both local and baseBranch verify succeed
+        return Buffer.from('abc123');
+      }
+      if (argsArr[0] === 'clone') {
+        cloneCalls.push(argsArr);
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'remote') return Buffer.from('');
+      if (argsArr[0] === 'config') {
+        if (argsArr[1] === '--local') throw new Error('not set');
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'checkout') return Buffer.from('');
+      return Buffer.from('');
+    });
+
+    // When: createSharedClone with explicit branch that already exists
+    createSharedClone('/project', {
+      worktree: '/tmp/clone-existing-branch',
+      taskSlug: 'existing-task',
+      branch: 'existing-task-branch',
+      baseBranch: 'feat/xxx',
+    });
+
+    // Then: clone was called with --branch existing-task-branch (not baseBranch)
+    expect(cloneCalls).toHaveLength(1);
+    expect(cloneCalls[0]).toContain('--branch');
+    expect(cloneCalls[0]).toContain('existing-task-branch');
   });
 });
 

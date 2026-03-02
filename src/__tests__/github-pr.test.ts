@@ -191,6 +191,7 @@ describe('fetchPrReviewComments', () => {
       body: 'PR description',
       url: 'https://github.com/org/repo/pull/456',
       headRefName: 'fix/auth-bug',
+      baseRefName: 'main',
       comments: [
         { author: { login: 'commenter1' }, body: 'Please update tests' },
       ],
@@ -221,12 +222,13 @@ describe('fetchPrReviewComments', () => {
     // Then
     expect(mockExecFileSync).toHaveBeenCalledWith(
       'gh',
-      ['pr', 'view', '456', '--json', 'number,title,body,url,headRefName,comments,reviews,files'],
+      ['pr', 'view', '456', '--json', 'number,title,body,url,headRefName,baseRefName,comments,reviews,files'],
       expect.objectContaining({ encoding: 'utf-8' }),
     );
     expect(result.number).toBe(456);
     expect(result.title).toBe('Fix auth bug');
     expect(result.headRefName).toBe('fix/auth-bug');
+    expect(result.baseRefName).toBe('main');
     expect(result.comments).toEqual([{ author: 'commenter1', body: 'Please update tests' }]);
     expect(result.reviews).toEqual([
       { author: 'reviewer1', body: 'Looks mostly good' },
@@ -276,6 +278,7 @@ describe('formatPrReviewAsTask', () => {
       body: 'PR description text',
       url: 'https://github.com/org/repo/pull/456',
       headRefName: 'fix/auth-bug',
+      baseRefName: 'main',
       comments: [
         { author: 'commenter1', body: 'Can you also update the tests?' },
       ],
@@ -312,6 +315,7 @@ describe('formatPrReviewAsTask', () => {
       body: '',
       url: 'https://github.com/org/repo/pull/10',
       headRefName: 'fix/quick',
+      baseRefName: 'main',
       comments: [],
       reviews: [{ author: 'reviewer', body: 'Fix this' }],
       files: [],
@@ -333,6 +337,7 @@ describe('formatPrReviewAsTask', () => {
       body: '',
       url: 'https://github.com/org/repo/pull/20',
       headRefName: 'feat/empty',
+      baseRefName: 'main',
       comments: [],
       reviews: [{ author: 'reviewer', body: 'Add tests' }],
       files: [],
@@ -355,6 +360,7 @@ describe('formatPrReviewAsTask', () => {
       body: '',
       url: 'https://github.com/org/repo/pull/30',
       headRefName: 'feat/path-only',
+      baseRefName: 'main',
       comments: [],
       reviews: [{ author: 'reviewer', body: 'Fix this', path: 'src/index.ts' }],
       files: [],

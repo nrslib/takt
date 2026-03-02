@@ -12,6 +12,27 @@ function makePart(id: string, title: string): PartDefinition {
 }
 
 describe('buildTeamLeaderAggregatedContent', () => {
+  it('errorが空文字でもcontentをエラー詳細として使う', () => {
+    // error: '' は ?? では採用されてしまうが、|| ではコンテンツにフォールバックする
+    const part = makePart('p1', 'API');
+    const partResults: PartResult[] = [
+      {
+        part,
+        response: {
+          persona: 'execute.p1',
+          status: 'error',
+          content: 'fallback error detail',
+          error: '',
+          timestamp: new Date(),
+        },
+      },
+    ];
+
+    const content = buildTeamLeaderAggregatedContent([part], partResults);
+
+    expect(content).toContain('[ERROR] fallback error detail');
+  });
+
   it('decomposition とパート結果を規定フォーマットで連結する', () => {
     const part1 = makePart('p1', 'API');
     const part2 = makePart('p2', 'Test');

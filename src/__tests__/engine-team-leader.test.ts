@@ -157,6 +157,37 @@ describe('PieceEngine Integration: TeamLeaderRunner', () => {
     expect(output!.content).toContain('[ERROR] test failed');
   });
 
+  it('パート失敗時にerrorが空文字でもcontentの詳細をエラー表示に使う', async () => {
+    // error: '' は ?? では空文字を採用してしまうが、|| では content にフォールバックする
+    const config = buildTeamLeaderConfig();
+    const engine = new PieceEngine(config, tmpDir, 'implement feature', { projectCwd: tmpDir });
+
+    vi.mocked(runAgent)
+      .mockResolvedValueOnce(makeResponse({
+        persona: 'team-leader',
+        content: [
+          '```json',
+          '[{"id":"part-1","title":"API","instruction":"Implement API"},{"id":"part-2","title":"Test","instruction":"Add tests"}]',
+          '```',
+        ].join('\n'),
+      }))
+      .mockResolvedValueOnce(makeResponse({ persona: 'coder', status: 'error', error: '', content: 'api failed from content' }))
+      .mockResolvedValueOnce(makeResponse({ persona: 'coder', content: 'Tests done' }))
+      .mockResolvedValueOnce(makeResponse({
+        persona: 'team-leader',
+        structuredOutput: { done: true, reasoning: 'stop', parts: [] },
+      }));
+
+    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    const output = state.movementOutputs.get('implement');
+    expect(output).toBeDefined();
+    expect(output!.content).toContain('[ERROR] api failed from content');
+  });
+
   it('パート失敗時にerrorがなくてもcontentの詳細をエラー表示に使う', async () => {
     const config = buildTeamLeaderConfig();
     const engine = new PieceEngine(config, tmpDir, 'implement feature', { projectCwd: tmpDir });

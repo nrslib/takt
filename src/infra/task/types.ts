@@ -42,6 +42,8 @@ export interface WorktreeOptions {
   taskSlug: string;
   /** GitHub Issue number (optional, for formatting branch/path) */
   issueNumber?: number;
+  /** Override base branch for clone (task-level base_branch takes precedence over config/default) */
+  baseBranch?: string;
 }
 
 export interface WorktreeResult {

@@ -44,6 +44,7 @@ export async function confirmAndCreateWorktree(
   task: string,
   createWorktreeOverride?: boolean | undefined,
   branchOverride?: string,
+  baseBranchOverride?: string,
 ): Promise<WorktreeConfirmationResult> {
   const useWorktree =
     typeof createWorktreeOverride === 'boolean'
@@ -54,7 +55,7 @@ export async function confirmAndCreateWorktree(
     return { execCwd: cwd, isWorktree: false };
   }
 
-  const baseBranch = resolveBaseBranch(cwd).branch;
+  const baseBranch = baseBranchOverride ?? resolveBaseBranch(cwd).branch;
 
   const taskSlug = await withProgress(
     'Generating branch name...',
@@ -69,6 +70,7 @@ export async function confirmAndCreateWorktree(
       worktree: true,
       taskSlug,
       ...(branchOverride ? { branch: branchOverride } : {}),
+      ...(baseBranchOverride ? { baseBranch: baseBranchOverride } : {}),
     }),
   );
 
@@ -97,6 +99,7 @@ export async function selectAndExecuteTask(
     task,
     options?.createWorktree,
     options?.branch,
+    options?.baseBranch,
   );
 
   // Ask for PR creation BEFORE execution (only if worktree is enabled)

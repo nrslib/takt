@@ -534,7 +534,7 @@ describe('executePipeline', () => {
       });
 
       expect(exitCode).toBe(0);
-      expect(mockConfirmAndCreateWorktree).toHaveBeenCalledWith('/tmp/test', 'Fix the bug', true, undefined);
+      expect(mockConfirmAndCreateWorktree).toHaveBeenCalledWith('/tmp/test', 'Fix the bug', true, undefined, undefined);
       expect(mockExecuteTask).toHaveBeenCalledWith({
         task: 'Fix the bug',
         cwd: '/tmp/test-worktree',

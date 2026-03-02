@@ -175,7 +175,12 @@ export class CloneManager {
   /**
    * Resolve the base branch for cloning and optionally fetch from remote.
    *
-   * When `auto_fetch` config is true:
+   * When `taskBaseBranch` is provided:
+   *   - Checks local then remote tracking branch existence
+   *   - Returns it immediately (bypasses config and autoFetch)
+   *   - Throws if neither local nor remote tracking branch exists
+   *
+   * When `auto_fetch` config is true (and no taskBaseBranch):
    *   1. Runs `git fetch origin` (without modifying local branches)
    *   2. Resolves base branch from config `base_branch` → remote default branch fallback
    *   3. Returns the branch name and the fetched commit hash of `origin/<baseBranch>`
@@ -185,7 +190,33 @@ export class CloneManager {
    *
    * Any failure (network, no remote, etc.) is non-fatal.
    */
-  static resolveBaseBranch(projectDir: string): { branch: string; fetchedCommit?: string } {
+  static resolveBaseBranch(projectDir: string, taskBaseBranch?: string): { branch: string; fetchedCommit?: string } {
+    if (taskBaseBranch !== undefined) {
+      // Check local branch
+      try {
+        execFileSync('git', ['rev-parse', '--verify', taskBaseBranch], {
+          cwd: projectDir,
+          stdio: 'pipe',
+        });
+        log.info('Task base branch found locally', { branch: taskBaseBranch });
+        return { branch: taskBaseBranch };
+      } catch {
+        // not found locally — fall through to remote check
+      }
+      // Check remote tracking branch
+      try {
+        execFileSync('git', ['rev-parse', '--verify', `origin/${taskBaseBranch}`], {
+          cwd: projectDir,
+          stdio: 'pipe',
+        });
+        log.info('Task base branch found as remote tracking ref', { branch: taskBaseBranch });
+        return { branch: taskBaseBranch };
+      } catch {
+        // not found remotely either
+      }
+      throw new Error(`Base branch not found locally or remotely: ${taskBaseBranch}`);
+    }
+
     const configBaseBranch = resolveConfigValue(projectDir, 'baseBranch');
     const autoFetch = resolveConfigValue(projectDir, 'autoFetch');
 
@@ -292,7 +323,7 @@ export class CloneManager {
 
   /** Create a git clone for a task */
   createSharedClone(projectDir: string, options: WorktreeOptions): WorktreeResult {
-    const { branch: baseBranch, fetchedCommit } = CloneManager.resolveBaseBranch(projectDir);
+    const { branch: baseBranch, fetchedCommit } = CloneManager.resolveBaseBranch(projectDir, options.baseBranch);
 
     const clonePath = CloneManager.resolveClonePath(projectDir, options);
     const branch = CloneManager.resolveBranchName(options);
@@ -412,6 +443,6 @@ export function cleanupOrphanedClone(projectDir: string, branch: string): void {
   defaultManager.cleanupOrphanedClone(projectDir, branch);
 }
 
-export function resolveBaseBranch(projectDir: string): { branch: string; fetchedCommit?: string } {
-  return CloneManager.resolveBaseBranch(projectDir);
+export function resolveBaseBranch(projectDir: string, taskBaseBranch?: string): { branch: string; fetchedCommit?: string } {
+  return CloneManager.resolveBaseBranch(projectDir, taskBaseBranch);
 }

@@ -21,6 +21,8 @@ export interface TaskContent {
   issue?: Issue;
   /** PR head branch name (set when using --pr) */
   prBranch?: string;
+  /** PR base branch name (set when using --pr) */
+  prBaseRefName?: string;
 }
 
 export interface ExecutionContext {
@@ -113,7 +115,7 @@ export function resolveTaskContent(options: PipelineExecutionOptions): TaskConte
     }
     const task = formatPrReviewAsTask(prReview);
     success(`PR #${options.prNumber} fetched: "${prReview.title}"`);
-    return { task, prBranch: prReview.headRefName };
+    return { task, prBranch: prReview.headRefName, prBaseRefName: prReview.baseRefName };
   }
   if (options.issueNumber) {
     info(`Fetching issue #${options.issueNumber}...`);
@@ -141,9 +143,10 @@ export async function resolveExecutionContext(
   options: Pick<PipelineExecutionOptions, 'createWorktree' | 'skipGit' | 'branch' | 'issueNumber'>,
   pipelineConfig: PipelineConfig | undefined,
   prBranch?: string,
+  prBaseRefName?: string,
 ): Promise<ExecutionContext> {
   if (options.createWorktree) {
-    const result = await confirmAndCreateWorktree(cwd, task, options.createWorktree, prBranch);
+    const result = await confirmAndCreateWorktree(cwd, task, options.createWorktree, prBranch, prBaseRefName);
     if (result.isWorktree) {
       success(`Worktree created: ${result.execCwd}`);
     }
@@ -157,7 +160,8 @@ export async function resolveExecutionContext(
     execFileSync('git', ['fetch', 'origin', prBranch], { cwd, stdio: 'pipe' });
     execFileSync('git', ['checkout', prBranch], { cwd, stdio: 'pipe' });
     success(`Checked out PR branch: ${prBranch}`);
-    return { execCwd: cwd, branch: prBranch, baseBranch: resolveBaseBranch(cwd).branch, isWorktree: false };
+    const baseBranch = prBaseRefName ?? resolveBaseBranch(cwd).branch;
+    return { execCwd: cwd, branch: prBranch, baseBranch, isWorktree: false };
   }
   const resolved = resolveBaseBranch(cwd);
   const branch = options.branch ?? generatePipelineBranchName(pipelineConfig, options.issueNumber);

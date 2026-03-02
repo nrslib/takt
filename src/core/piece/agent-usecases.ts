@@ -296,7 +296,7 @@ export async function decomposeTask(
   });
 
   if (response.status !== 'done') {
-    const detail = response.error ?? response.content;
+    const detail = response.error || response.content || `status: ${response.status}`;
     throw new Error(`Team leader failed: ${detail}`);
   }
 
@@ -336,7 +336,7 @@ export async function requestMoreParts(
   });
 
   if (response.status !== 'done') {
-    const detail = response.error ?? response.content;
+    const detail = response.error || response.content || `status: ${response.status}`;
     throw new Error(`Team leader feedback failed: ${detail}`);
   }
 

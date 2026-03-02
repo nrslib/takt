@@ -5,7 +5,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { resolvePieceConfigValue } from '../../../infra/config/index.js';
-import { type TaskInfo, createSharedClone, summarizeTaskName, detectDefaultBranch } from '../../../infra/task/index.js';
+import { type TaskInfo, createSharedClone, summarizeTaskName, resolveBaseBranch } from '../../../infra/task/index.js';
 import { getGitProvider, type Issue } from '../../../infra/git/index.js';
 import { withProgress } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
@@ -125,7 +125,7 @@ export async function resolveTaskExecution(
 
   if (data.worktree) {
     throwIfAborted(abortSignal);
-    baseBranch = detectDefaultBranch(defaultCwd);
+    baseBranch = resolveBaseBranch(defaultCwd, data.base_branch).branch;
 
     if (task.worktreePath && fs.existsSync(task.worktreePath)) {
       // Reuse existing worktree (clone still on disk from previous execution)
@@ -149,6 +149,7 @@ export async function resolveTaskExecution(
           branch: data.branch,
           taskSlug,
           issueNumber: data.issue,
+          ...(data.base_branch ? { baseBranch: data.base_branch } : {}),
         }),
       );
       throwIfAborted(abortSignal);

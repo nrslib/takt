@@ -11,7 +11,7 @@ import { getLabel } from '../../shared/i18n/index.js';
 import { formatIssueAsTask, parseIssueNumbers, formatPrReviewAsTask } from '../../infra/github/index.js';
 import { getGitProvider } from '../../infra/git/index.js';
 import type { Issue, PrReviewData } from '../../infra/git/index.js';
-import { selectAndExecuteTask, determinePiece, saveTaskFromInteractive, createIssueAndSaveTask, promptLabelSelection, type SelectAndExecuteOptions } from '../../features/tasks/index.js';
+import { selectAndExecuteTask, determinePiece, saveTaskFromInteractive, createIssueAndSaveTask, promptLabelSelection, promptBaseBranchIfNeeded, type SelectAndExecuteOptions } from '../../features/tasks/index.js';
 import { executePipeline } from '../../features/pipeline/index.js';
 import {
   interactiveMode,
@@ -85,7 +85,7 @@ async function resolveIssueInput(
  */
 async function resolvePrInput(
   prNumber: number,
-): Promise<{ initialInput: string; prBranch: string }> {
+): Promise<{ initialInput: string; prBranch: string; prBaseRefName: string }> {
   const ghStatus = getGitProvider().checkCliStatus();
   if (!ghStatus.available) {
     throw new Error(ghStatus.error);
@@ -104,6 +104,7 @@ async function resolvePrInput(
   return {
     initialInput: formatPrReviewAsTask(prReview),
     prBranch: prReview.headRefName,
+    prBaseRefName: prReview.baseRefName,
   };
 }
 
@@ -185,6 +186,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       const prResult = await resolvePrInput(prNumber);
       initialInput = prResult.initialInput;
       selectOptions.branch = prResult.prBranch;
+      selectOptions.baseBranch = prResult.prBaseRefName;
     } catch (e) {
       logError(getErrorMessage(e));
       process.exit(1);
@@ -275,6 +277,12 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       selectOptions.piece = pieceId;
       selectOptions.interactiveMetadata = { confirmed: true, task: confirmedTask };
       selectOptions.skipTaskList = true;
+      if (!selectOptions.baseBranch) {
+        const baseBranch = await promptBaseBranchIfNeeded(resolvedCwd);
+        if (baseBranch) {
+          selectOptions.baseBranch = baseBranch;
+        }
+      }
       await selectAndExecuteTask(resolvedCwd, confirmedTask, selectOptions, agentOverrides);
     },
     create_issue: async ({ task: confirmedTask }) => {

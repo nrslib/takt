@@ -232,6 +232,48 @@ describe('agent-usecases', () => {
       .rejects.toThrow('Team leader failed: bad output');
   });
 
+  it('decomposeTask は error と content が共に空の場合に status をフォールバックに使う', async () => {
+    // error が undefined、content が空文字 → ?? では '' が残る → 修正後は status フォールバック
+    vi.mocked(runAgent).mockResolvedValue({
+      persona: 'team-leader',
+      status: 'error',
+      content: '',
+      error: undefined,
+      timestamp: new Date('2026-02-12T00:00:00Z'),
+    });
+
+    await expect(decomposeTask('instruction', 2, { cwd: '/repo' }))
+      .rejects.toThrow('Team leader failed: status: error');
+  });
+
+  it('decomposeTask は error が空文字でも status フォールバックを使う', async () => {
+    // error が '' → ?? は空文字をフォールバックしない → 修正後は || で status にフォールバック
+    vi.mocked(runAgent).mockResolvedValue({
+      persona: 'team-leader',
+      status: 'error',
+      content: '',
+      error: '',
+      timestamp: new Date('2026-02-12T00:00:00Z'),
+    });
+
+    await expect(decomposeTask('instruction', 2, { cwd: '/repo' }))
+      .rejects.toThrow('Team leader failed: status: error');
+  });
+
+  it('decomposeTask は error が空文字で content がある場合 content を使う', async () => {
+    // error が '' → ?? は '' を採用するが、修正後の || は content にフォールバック
+    vi.mocked(runAgent).mockResolvedValue({
+      persona: 'team-leader',
+      status: 'error',
+      content: 'partial output',
+      error: '',
+      timestamp: new Date('2026-02-12T00:00:00Z'),
+    });
+
+    await expect(decomposeTask('instruction', 2, { cwd: '/repo' }))
+      .rejects.toThrow('Team leader failed: partial output');
+  });
+
   it('requestMoreParts は構造化出力をパースして返す', async () => {
     vi.mocked(runAgent).mockResolvedValue(doneResponse('x', {
       done: false,
@@ -276,5 +318,24 @@ describe('agent-usecases', () => {
       1,
       { cwd: '/repo', persona: 'team-leader' },
     )).rejects.toThrow('Team leader feedback failed: timeout');
+  });
+
+  it('requestMoreParts は error と content が共に空の場合に status をフォールバックに使う', async () => {
+    // error が undefined、content が空文字 → 修正後は status フォールバック
+    vi.mocked(runAgent).mockResolvedValue({
+      persona: 'team-leader',
+      status: 'error',
+      content: '',
+      error: undefined,
+      timestamp: new Date('2026-02-12T00:00:00Z'),
+    });
+
+    await expect(requestMoreParts(
+      'instruction',
+      [{ id: 'p1', title: 'Part 1', status: 'done', content: 'ok' }],
+      ['p1'],
+      1,
+      { cwd: '/repo', persona: 'team-leader' },
+    )).rejects.toThrow('Team leader feedback failed: status: error');
   });
 });
