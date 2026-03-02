@@ -22,8 +22,9 @@ export async function detectMatchedRule(
   agentContent: string,
   tagContent: string,
   ctx: RuleEvaluatorContext,
+  agentError?: string,
 ): Promise<RuleMatch | undefined> {
-  return new RuleEvaluator(step, ctx).evaluate(agentContent, tagContent);
+  return new RuleEvaluator(step, ctx).evaluate(agentContent, tagContent, agentError);
 }
 
 /**

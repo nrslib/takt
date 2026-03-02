@@ -11,6 +11,7 @@ import { detectRuleIndex } from '../../../shared/utils/ruleIndex.js';
 import { interruptAllQueries } from '../../../infra/claude/query-manager.js';
 import { callAiJudge } from '../../../agents/ai-judge.js';
 import { enterInputWait, leaveInputWait } from './inputWait.js';
+import type { ProviderType } from '../../../infra/providers/index.js';
 
 export type { PieceExecutionResult, PieceExecutionOptions };
 
@@ -224,6 +225,31 @@ function formatElapsedTime(startTime: string, endTime: string): string {
   return `${minutes}m ${seconds}s`;
 }
 
+function resolveRuntimeProviderConfig(
+  projectCwd: string,
+  pieceConfig: PieceConfig,
+  options: Pick<PieceExecutionOptions, 'providerResolution' | 'provider' | 'model'>,
+): { provider?: ProviderType; model?: string } {
+  const config = resolvePieceConfigValues(projectCwd, ['provider', 'model'], {
+    pieceContext: {
+      provider: pieceConfig.provider,
+      model: pieceConfig.model,
+    },
+  });
+
+  const configuredProvider = options.providerResolution?.provider
+    ?? options.provider
+    ?? config.provider;
+  const configuredModel = options.providerResolution?.model
+    ?? options.model
+    ?? config.model;
+
+  return {
+    provider: configuredProvider,
+    model: configuredModel,
+  };
+}
+
 /**
  * Execute a piece and handle all events
  */
@@ -331,16 +357,17 @@ export async function executePiece(
   const isWorktree = cwd !== projectCwd;
   const globalConfig = resolvePieceConfigValues(
     projectCwd,
-    ['notificationSound', 'notificationSoundEvents', 'provider', 'runtime', 'preventSleep', 'model', 'observability', 'analytics'],
+    ['notificationSound', 'notificationSoundEvents', 'runtime', 'preventSleep', 'observability', 'analytics'],
   );
+  const runtimeProvider = resolveRuntimeProviderConfig(projectCwd, pieceConfig, options);
+  const configuredProvider = runtimeProvider.provider;
+  const configuredModel = runtimeProvider.model;
   const shouldNotify = globalConfig.notificationSound !== false;
   const notificationSoundEvents = globalConfig.notificationSoundEvents;
   const shouldNotifyIterationLimit = shouldNotify && notificationSoundEvents?.iterationLimit !== false;
   const shouldNotifyPieceComplete = shouldNotify && notificationSoundEvents?.pieceComplete !== false;
   const shouldNotifyPieceAbort = shouldNotify && notificationSoundEvents?.pieceAbort !== false;
-  const currentProvider = globalConfig.provider;
-  const configuredModel = options.model ?? globalConfig.model;
-  if (!currentProvider) {
+  if (!configuredProvider) {
     throw new Error('No provider configured. Set "provider" in ~/.takt/config.yaml');
   }
   const effectivePieceConfig: PieceConfig = {
@@ -351,7 +378,7 @@ export async function executePiece(
     logsDir: runPaths.logsAbs,
     sessionId: pieceSessionId,
     runId: runSlug,
-    provider: currentProvider,
+    provider: configuredProvider,
     movement: options.startMovement ?? pieceConfig.initialMovement,
     enabled: isProviderEventsEnabled(globalConfig),
   });
@@ -367,18 +394,18 @@ export async function executePiece(
   }
   const savedSessions = isRetry
     ? (isWorktree
-        ? loadWorktreeSessions(projectCwd, cwd, currentProvider)
-        : loadPersonaSessions(projectCwd, currentProvider))
+        ? loadWorktreeSessions(projectCwd, cwd, configuredProvider)
+        : loadPersonaSessions(projectCwd, configuredProvider))
     : {};
 
   // Session update handler - persist session IDs when they change
   // Clone sessions are stored separately per clone path
   const sessionUpdateHandler = isWorktree
     ? (personaName: string, personaSessionId: string): void => {
-        updateWorktreeSession(projectCwd, cwd, personaName, personaSessionId, currentProvider);
+        updateWorktreeSession(projectCwd, cwd, personaName, personaSessionId, configuredProvider);
       }
     : (persona: string, personaSessionId: string): void => {
-        updatePersonaSession(projectCwd, persona, personaSessionId, currentProvider);
+        updatePersonaSession(projectCwd, persona, personaSessionId, configuredProvider);
       };
 
   const iterationLimitHandler = async (
@@ -453,7 +480,7 @@ export async function executePiece(
   let lastMovementContent: string | undefined;
   let lastMovementName: string | undefined;
   let currentIteration = 0;
-  let currentMovementProvider = currentProvider;
+  let currentMovementProvider = configuredProvider;
   let currentMovementModel = configuredModel ?? '(default)';
   const phasePrompts = new Map<string, string>();
   const movementIterations = new Map<string, number>();
@@ -474,8 +501,8 @@ export async function executePiece(
       onAskUserQuestion: createDenyAskUserQuestionHandler(),
       projectCwd,
       language: options.language,
-      provider: options.provider,
-      model: options.model,
+      provider: configuredProvider,
+      model: configuredModel,
       providerOptions: options.providerOptions,
       providerOptionsSource: options.providerOptionsSource,
       personaProviders: options.personaProviders,
@@ -552,9 +579,9 @@ export async function executePiece(
       movementIteration,
     });
     out.info(`[${iteration}/${pieceConfig.maxMovements}] ${step.name} (${step.personaDisplayName})`);
-    const movementProvider = providerInfo.provider ?? currentProvider;
+    const movementProvider = providerInfo.provider ?? configuredProvider;
     const movementModel = providerInfo.model
-      ?? (movementProvider === currentProvider ? configuredModel : undefined)
+      ?? (movementProvider === configuredProvider ? configuredModel : undefined)
       ?? '(default)';
     currentMovementProvider = movementProvider;
     currentMovementModel = movementModel;

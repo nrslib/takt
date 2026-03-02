@@ -34,6 +34,11 @@ export interface PieceExecutionOptions {
   projectCwd: string;
   /** Language for instruction metadata */
   language?: Language;
+  /** Unified runtime provider/model resolution result (CLI overrides + config inheritance) */
+  providerResolution?: {
+    provider?: ProviderType;
+    model?: string;
+  };
   provider?: ProviderType;
   model?: string;
   /** Resolved provider options */

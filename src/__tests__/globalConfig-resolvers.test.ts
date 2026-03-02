@@ -56,6 +56,8 @@ const {
   resolveCursorCliPath,
   resolveOpencodeApiKey,
   resolveCursorApiKey,
+  resolveCopilotCliPath,
+  resolveCopilotGithubToken,
   validateCliPath,
   invalidateGlobalConfigCache,
 } = await import('../infra/config/global/globalConfig.js');
@@ -840,5 +842,102 @@ describe('resolveCodexCliPath — project config layer', () => {
     delete process.env['TAKT_CODEX_CLI_PATH'];
     expect(() => resolveCodexCliPath({ codexCliPath: join(testDir, 'missing-codex') }))
       .toThrow(/does not exist/i);
+  });
+});
+
+// ============================================================
+// Regression tests for ARCH-NEW-copilot-config-no-regression-test
+// Verify that loadGlobalConfig() correctly maps copilot_cli_path / copilot_github_token
+// and that resolveCopilotCliPath() / resolveCopilotGithubToken() read from config file.
+// ============================================================
+
+describe('resolveCopilotCliPath — config file regression', () => {
+  const originalEnv = process.env['TAKT_COPILOT_CLI_PATH'];
+
+  beforeEach(() => {
+    invalidateGlobalConfigCache();
+    mkdirSync(taktDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    if (originalEnv !== undefined) {
+      process.env['TAKT_COPILOT_CLI_PATH'] = originalEnv;
+    } else {
+      delete process.env['TAKT_COPILOT_CLI_PATH'];
+    }
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('should fall back to global config copilot_cli_path when env var is not set', () => {
+    delete process.env['TAKT_COPILOT_CLI_PATH'];
+    const copilotPath = createExecutableFile('config-copilot');
+    const yaml = [
+      'language: en',
+      'log_level: info',
+      'provider: copilot',
+      `copilot_cli_path: ${copilotPath}`,
+    ].join('\n');
+    writeFileSync(configPath, yaml, 'utf-8');
+
+    const path = resolveCopilotCliPath();
+    expect(path).toBe(copilotPath);
+  });
+
+  it('should return undefined when copilot_cli_path is not in config and env var is not set', () => {
+    delete process.env['TAKT_COPILOT_CLI_PATH'];
+    const yaml = [
+      'language: en',
+      'log_level: info',
+      'provider: copilot',
+    ].join('\n');
+    writeFileSync(configPath, yaml, 'utf-8');
+
+    const path = resolveCopilotCliPath();
+    expect(path).toBeUndefined();
+  });
+});
+
+describe('resolveCopilotGithubToken — config file regression', () => {
+  const originalEnv = process.env['TAKT_COPILOT_GITHUB_TOKEN'];
+
+  beforeEach(() => {
+    invalidateGlobalConfigCache();
+    mkdirSync(taktDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    if (originalEnv !== undefined) {
+      process.env['TAKT_COPILOT_GITHUB_TOKEN'] = originalEnv;
+    } else {
+      delete process.env['TAKT_COPILOT_GITHUB_TOKEN'];
+    }
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('should fall back to global config copilot_github_token when env var is not set', () => {
+    delete process.env['TAKT_COPILOT_GITHUB_TOKEN'];
+    const yaml = [
+      'language: en',
+      'log_level: info',
+      'provider: copilot',
+      'copilot_github_token: ghp_test_token_from_yaml',
+    ].join('\n');
+    writeFileSync(configPath, yaml, 'utf-8');
+
+    const token = resolveCopilotGithubToken();
+    expect(token).toBe('ghp_test_token_from_yaml');
+  });
+
+  it('should return undefined when copilot_github_token is not in config and env var is not set', () => {
+    delete process.env['TAKT_COPILOT_GITHUB_TOKEN'];
+    const yaml = [
+      'language: en',
+      'log_level: info',
+      'provider: copilot',
+    ].join('\n');
+    writeFileSync(configPath, yaml, 'utf-8');
+
+    const token = resolveCopilotGithubToken();
+    expect(token).toBeUndefined();
   });
 });

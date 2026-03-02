@@ -6,28 +6,9 @@ import type { PhaseRunnerContext } from '../phase-runner.js';
 import type { PieceEngineOptions, PhaseName, MovementProviderInfo } from '../types.js';
 import { buildSessionKey } from '../session-key.js';
 import { resolveMovementProviderModel } from '../provider-resolution.js';
+import type { MovementProviderModelInput } from '../provider-resolution.js';
 import { DEFAULT_PROVIDER_PERMISSION_PROFILES, resolveMovementPermissionMode } from '../permission-profile-resolution.js';
-
-function mergeProviderOptions(
-  ...layers: (MovementProviderOptions | undefined)[]
-): MovementProviderOptions | undefined {
-  const result: MovementProviderOptions = {};
-  for (const layer of layers) {
-    if (!layer) continue;
-    if (layer.codex) {
-      result.codex = { ...result.codex, ...layer.codex };
-    }
-    if (layer.opencode) {
-      result.opencode = { ...result.opencode, ...layer.opencode };
-    }
-    if (layer.claude?.sandbox) {
-      result.claude = {
-        sandbox: { ...result.claude?.sandbox, ...layer.claude.sandbox },
-      };
-    }
-  }
-  return Object.keys(result).length > 0 ? result : undefined;
-}
+import { mergeProviderOptions } from '../../../infra/config/loaders/pieceParser.js';
 
 function resolveMovementProviderOptions(
   source: 'env' | 'project' | 'global' | 'default' | undefined,
@@ -51,19 +32,27 @@ export class OptionsBuilder {
     private readonly getPieceMovements: () => ReadonlyArray<{ name: string; description?: string }>,
     private readonly getPieceName: () => string,
     private readonly getPieceDescription: () => string | undefined,
+    private readonly getPieceProvider?: () => unknown,
+    private readonly getPieceModel?: () => string | undefined,
   ) {}
 
   /** Resolve effective provider and model for a movement (same logic as buildBaseOptions) */
   resolveStepProviderModel(step: PieceMovement): MovementProviderInfo {
+    const engineProvider = this.engineOptions.provider;
+    const engineModel = this.engineOptions.model;
+    const pieceProvider = this.getPieceProvider?.() as MovementProviderModelInput['pieceProvider'];
+    const pieceModel = this.getPieceModel?.();
     const resolved = resolveMovementProviderModel({
       step,
-      provider: this.engineOptions.provider,
-      model: this.engineOptions.model,
+      provider: engineProvider, // movement fallback: CLI/piece/global/project default provider
+      model: engineModel, // movement fallback: CLI/piece/global/project default model
+      pieceProvider,
+      pieceModel,
       personaProviders: this.engineOptions.personaProviders,
     });
     return {
-      provider: resolved.provider ?? this.engineOptions.provider,
-      model: resolved.model ?? this.engineOptions.model,
+      provider: resolved.provider ?? engineProvider,
+      model: resolved.model ?? engineModel,
     };
   }
 

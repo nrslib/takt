@@ -21,7 +21,6 @@ import { resolveTaskExecution, resolveTaskIssue } from './resolveTask.js';
 import { postExecutionFlow } from './postExecution.js';
 import { buildTaskResult, persistTaskError, persistTaskResult } from './taskResultHandler.js';
 import { generateRunId, toSlackTaskDetail } from './slackSummaryAdapter.js';
-
 export type { TaskExecutionOptions, ExecuteTaskOptions };
 
 const log = createLogger('task');

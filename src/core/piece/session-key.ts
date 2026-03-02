@@ -10,6 +10,7 @@
  */
 
 import type { PieceMovement } from '../models/types.js';
+import { resolveProviderType } from './provider-resolution.js';
 
 /**
  * Build a unique session key for a movement.
@@ -25,5 +26,6 @@ import type { PieceMovement } from '../models/types.js';
  */
 export function buildSessionKey(step: PieceMovement): string {
   const base = step.persona ?? step.name;
-  return step.provider ? `${base}:${step.provider}` : base;
+  const provider = resolveProviderType(step.provider);
+  return provider ? `${base}:${provider}` : base;
 }

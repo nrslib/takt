@@ -105,6 +105,14 @@ export class ParallelRunner {
         updatePersonaSession(subSessionKey, subResponse.sessionId);
         this.deps.onPhaseComplete?.(subMovement, 1, 'execute', subResponse.content, subResponse.status, subResponse.error);
 
+        // Provider failures and blocked responses must abort immediately — same as MovementExecutor.
+        // Running Phase 2 (report) after error/blocked would attempt session resume and throw
+        // unrelated errors, hiding the original Phase 1 failure cause.
+        if (subResponse.status === 'error' || subResponse.status === 'blocked') {
+          state.movementOutputs.set(subMovement.name, subResponse);
+          return { subMovement, response: subResponse, instruction: subInstruction };
+        }
+
         // Phase 2/3 context — no overrides needed, phase-runner uses buildSessionKey internally
         const phaseCtx = this.deps.optionsBuilder.buildPhaseRunnerContext(state, subResponse.content, updatePersonaSession, this.deps.onPhaseStart, this.deps.onPhaseComplete);
 
@@ -122,7 +130,7 @@ export class ParallelRunner {
         if (subPhase3) {
           finalResponse = { ...subResponse, matchedRuleIndex: subPhase3.ruleIndex, matchedRuleMethod: subPhase3.method };
         } else {
-          const match = await detectMatchedRule(subMovement, subResponse.content, '', ruleCtx);
+          const match = await detectMatchedRule(subMovement, subResponse.content, '', ruleCtx, subResponse.error);
           finalResponse = match
             ? { ...subResponse, matchedRuleIndex: match.index, matchedRuleMethod: match.method }
             : subResponse;

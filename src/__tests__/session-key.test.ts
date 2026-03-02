@@ -33,6 +33,14 @@ describe('buildSessionKey', () => {
     expect(buildSessionKey(step)).toBe('coder:claude');
   });
 
+  it('should append provider type when provider object is specified', () => {
+    const step = createMovement({
+      persona: 'coder',
+      provider: { type: 'codex', model: 'gpt-5.3' } as unknown as PieceMovement['provider'],
+    });
+    expect(buildSessionKey(step)).toBe('coder:codex');
+  });
+
   it('should use name with provider when persona is not set', () => {
     const step = createMovement({ persona: undefined, name: 'review', provider: 'codex' });
     expect(buildSessionKey(step)).toBe('review:codex');

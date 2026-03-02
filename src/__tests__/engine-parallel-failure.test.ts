@@ -199,4 +199,49 @@ describe('PieceEngine Integration: Parallel Movement Partial Failure', () => {
     expect(archReviewOutput!.error).toBe('Session resume failed');
     expect(archReviewOutput!.content).toBe('');
   });
+
+  it('should skip phase 2/3 and preserve original status when sub-movement response is blocked', async () => {
+    const config = buildParallelOnlyConfig();
+    const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+
+    const mock = vi.mocked(runAgent);
+    // arch-review returns blocked with error (e.g. rate limit during generation)
+    mock.mockResolvedValueOnce(
+      makeResponse({ persona: 'arch-review', content: '', status: 'blocked', error: 'Rate limit exceeded' }),
+    );
+    // security-review succeeds
+    mock.mockResolvedValueOnce(
+      makeResponse({ persona: 'security-review', content: 'Security review passed' }),
+    );
+    mock.mockResolvedValueOnce(
+      makeResponse({ persona: 'done', content: 'Completed' }),
+    );
+
+    const detectMatchedRuleMock = vi.mocked(detectMatchedRule);
+    // arch-review: error guard causes early return — detectMatchedRule is NOT called for arch-review.
+    // Only security-review, parent aggregate, and done movement call detectMatchedRule.
+    detectMatchedRuleMock.mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });  // security-review
+    detectMatchedRuleMock.mockResolvedValueOnce({ index: 0, method: 'aggregate' });   // parent aggregate
+    detectMatchedRuleMock.mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });  // done
+
+    const state = await engine.run();
+
+    // arch-review should be recorded with its original blocked status (not converted to error)
+    const archReviewOutput = state.movementOutputs.get('arch-review');
+    expect(archReviewOutput).toBeDefined();
+    expect(archReviewOutput!.status).toBe('blocked');
+    expect(archReviewOutput!.error).toBe('Rate limit exceeded');
+
+    // detectMatchedRule must NOT have been called for arch-review (early exit from error guard)
+    expect(detectMatchedRuleMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'arch-review' }),
+      expect.any(String),
+      expect.any(String),
+      expect.any(Object),
+      'Rate limit exceeded',
+    );
+
+    // security-review should succeed, piece should complete
+    expect(state.status).toBe('completed');
+  });
 });

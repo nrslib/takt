@@ -35,6 +35,8 @@ function createBuilder(step: PieceMovement, engineOverrides: Partial<PieceEngine
     () => [{ name: step.name }],
     () => 'default',
     () => 'test piece',
+    undefined,
+    undefined,
   );
 }
 
@@ -176,6 +178,37 @@ describe('OptionsBuilder.resolveStepProviderModel', () => {
     const result = builder.resolveStepProviderModel(step);
 
     expect(result.provider).toBeUndefined();
+  });
+
+  it('uses piece-level provider/model when movement has no provider/model', () => {
+    const step = createMovement();
+    const builder = new OptionsBuilder(
+      {
+        projectCwd: '/project',
+        provider: 'claude',
+        providerProfiles: {
+          codex: {
+            defaultPermissionMode: 'full',
+          },
+        },
+        model: 'cli-model',
+      },
+      () => '/project',
+      () => '/project',
+      () => undefined,
+      () => '.takt/runs/sample/reports',
+      () => 'ja',
+      () => [{ name: step.name }],
+      () => 'default',
+      () => 'test piece',
+      () => 'codex',
+      () => 'piece-model',
+    );
+
+    const result = builder.resolveStepProviderModel(step);
+
+    expect(result.provider).toBe('codex');
+    expect(result.model).toBe('piece-model');
   });
 
   it('should match buildBaseOptions stepProvider and stepModel', () => {

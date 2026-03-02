@@ -9,10 +9,16 @@ import { join, resolve } from 'node:path';
 import { parse, stringify } from 'yaml';
 import { copyProjectResourcesToDir } from '../../resources/index.js';
 import type { ProjectLocalConfig } from '../types.js';
-import type { ProviderPermissionProfiles } from '../../../core/models/provider-profiles.js';
 import type { AnalyticsConfig, SubmoduleSelection } from '../../../core/models/persisted-global-config.js';
 import { applyProjectConfigEnvOverrides } from '../env/config-env-overrides.js';
-import { normalizeProviderOptions } from '../loaders/pieceParser.js';
+import {
+  normalizeProviderOptions,
+  normalizeConfigProviderBlock,
+  toProviderOptionsPayload,
+  normalizeProviderProfiles,
+  denormalizeProviderProfiles,
+  type RawProviderConfig,
+} from '../loaders/pieceParser.js';
 import { invalidateResolvedConfigCache } from '../resolutionCache.js';
 
 export type { ProjectLocalConfig } from '../types.js';
@@ -82,28 +88,6 @@ function getConfigPath(projectDir: string): string {
   return join(getConfigDir(projectDir), 'config.yaml');
 }
 
-function normalizeProviderProfiles(raw: Record<string, { default_permission_mode: unknown; movement_permission_overrides?: Record<string, unknown> }> | undefined): ProviderPermissionProfiles | undefined {
-  if (!raw) return undefined;
-  return Object.fromEntries(
-    Object.entries(raw).map(([provider, profile]) => [provider, {
-      defaultPermissionMode: profile.default_permission_mode,
-      movementPermissionOverrides: profile.movement_permission_overrides,
-    }]),
-  ) as ProviderPermissionProfiles;
-}
-
-function denormalizeProviderProfiles(profiles: ProviderPermissionProfiles | undefined): Record<string, { default_permission_mode: string; movement_permission_overrides?: Record<string, string> }> | undefined {
-  if (!profiles) return undefined;
-  const entries = Object.entries(profiles);
-  if (entries.length === 0) return undefined;
-  return Object.fromEntries(entries.map(([provider, profile]) => [provider, {
-    default_permission_mode: profile.defaultPermissionMode,
-    ...(profile.movementPermissionOverrides
-      ? { movement_permission_overrides: profile.movementPermissionOverrides }
-      : {}),
-  }])) as Record<string, { default_permission_mode: string; movement_permission_overrides?: Record<string, string> }>;
-}
-
 function normalizeAnalytics(raw: Record<string, unknown> | undefined): AnalyticsConfig | undefined {
   if (!raw) return undefined;
   const enabled = typeof raw.enabled === 'boolean' ? raw.enabled : undefined;
@@ -144,6 +128,36 @@ export function loadProjectConfig(projectDir: string): ProjectLocalConfig {
     } catch {
       return { ...DEFAULT_PROJECT_CONFIG };
     }
+  }
+
+  const seenWarnings = new Set<string>();
+  const warn = (message: string): void => {
+    if (seenWarnings.has(message)) return;
+    seenWarnings.add(message);
+    console.warn(message);
+  };
+
+  const normalizedProviderConfig = normalizeConfigProviderBlock(
+    parsedConfig.provider as RawProviderConfig,
+    parsedConfig.model,
+    parsedConfig.provider_options,
+    warn,
+    'projectConfig',
+  );
+  if (normalizedProviderConfig.provider !== undefined) {
+    parsedConfig.provider = normalizedProviderConfig.provider;
+  } else {
+    delete parsedConfig.provider;
+  }
+  if (normalizedProviderConfig.model !== undefined) {
+    parsedConfig.model = normalizedProviderConfig.model;
+  } else {
+    delete parsedConfig.model;
+  }
+  if (normalizedProviderConfig.providerOptions !== undefined) {
+    parsedConfig.provider_options = toProviderOptionsPayload(normalizedProviderConfig.providerOptions);
+  } else {
+    delete parsedConfig.provider_options;
   }
 
   applyProjectConfigEnvOverrides(parsedConfig);

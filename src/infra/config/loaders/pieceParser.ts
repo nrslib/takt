@@ -9,7 +9,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import type { z } from 'zod';
-import { PieceConfigRawSchema, PieceMovementRawSchema } from '../../../core/models/index.js';
+import { PieceConfigRawSchema, PieceMovementRawSchema, ProviderBlockRawSchema } from '../../../core/models/index.js';
 import type { PieceConfig, PieceMovement, PieceRule, OutputContractEntry, OutputContractItem, LoopMonitorConfig, LoopMonitorJudge, ArpeggioMovementConfig, ArpeggioMergeMovementConfig, TeamLeaderConfig } from '../../../core/models/index.js';
 import { resolvePieceConfigValue } from '../resolvePieceConfigValue.js';
 import { getRepertoireDir } from '../paths.js';
@@ -25,9 +25,19 @@ import {
 
 type RawStep = z.output<typeof PieceMovementRawSchema>;
 type RawPiece = z.output<typeof PieceConfigRawSchema>;
+type OnWarning = (message: string) => void;
+type ProviderBlock = z.output<typeof ProviderBlockRawSchema> | undefined;
 
 import type { MovementProviderOptions } from '../../../core/models/piece-types.js';
 import type { PieceRuntimeConfig } from '../../../core/models/piece-types.js';
+import type { ProviderPermissionProfiles } from '../../../core/models/provider-profiles.js';
+
+export type RawProviderConfig = string | Record<string, unknown> | undefined;
+export type NormalizedProviderConfig = {
+  provider?: string;
+  model?: string;
+  providerOptions?: MovementProviderOptions;
+};
 
 /** Convert raw YAML provider_options (snake_case) to internal format (camelCase). */
 export function normalizeProviderOptions(
@@ -57,6 +67,159 @@ export function normalizeProviderOptions(
   return Object.keys(result).length > 0 ? result : undefined;
 }
 
+function toRecord(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  return value as Record<string, unknown>;
+}
+
+export function toProviderOptionsPayload(
+  providerOptions: MovementProviderOptions | undefined,
+): Record<string, unknown> | undefined {
+  if (!providerOptions) return undefined;
+
+  const codex: Record<string, unknown> = {};
+  if (providerOptions.codex?.networkAccess !== undefined) {
+    codex.network_access = providerOptions.codex.networkAccess;
+  }
+
+  const opencode: Record<string, unknown> = {};
+  if (providerOptions.opencode?.networkAccess !== undefined) {
+    opencode.network_access = providerOptions.opencode.networkAccess;
+  }
+
+  const claudeSandbox: Record<string, unknown> = {};
+  if (providerOptions.claude?.sandbox?.allowUnsandboxedCommands !== undefined) {
+    claudeSandbox.allow_unsandboxed_commands = providerOptions.claude.sandbox.allowUnsandboxedCommands;
+  }
+  if (providerOptions.claude?.sandbox?.excludedCommands !== undefined) {
+    claudeSandbox.excluded_commands = providerOptions.claude.sandbox.excludedCommands;
+  }
+
+  const claude: Record<string, unknown> = {};
+  if (Object.keys(claudeSandbox).length > 0) {
+    claude.sandbox = claudeSandbox;
+  }
+
+  const result: Record<string, unknown> = {};
+  if (Object.keys(codex).length > 0) result.codex = codex;
+  if (Object.keys(opencode).length > 0) result.opencode = opencode;
+  if (Object.keys(claude).length > 0) result.claude = claude;
+
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+export function normalizeConfigProviderBlock(
+  rawProvider: RawProviderConfig,
+  rawModel: unknown,
+  rawProviderOptions: unknown,
+  warn: (message: string) => void,
+  source: string,
+): NormalizedProviderConfig {
+  const legacyModel = typeof rawModel === 'string' ? rawModel : undefined;
+  const legacyProviderOptions = normalizeProviderOptions(rawProviderOptions as Parameters<typeof normalizeProviderOptions>[0]);
+
+  if (rawProvider === undefined) {
+    return {
+      model: legacyModel,
+      providerOptions: legacyProviderOptions,
+    };
+  }
+
+  if (typeof rawProvider === 'string') {
+    if (legacyModel !== undefined) {
+      warn(`${source}: model is deprecated; use provider.model instead.`);
+    }
+    if (rawProviderOptions !== undefined) {
+      warn(`${source}: provider_options is deprecated; move fields into provider block.`);
+    }
+    return {
+      provider: rawProvider,
+      model: legacyModel,
+      providerOptions: legacyProviderOptions,
+    };
+  }
+
+  const providerRecord = toRecord(rawProvider);
+  if (!providerRecord) {
+    return {
+      model: legacyModel,
+      providerOptions: legacyProviderOptions,
+    };
+  }
+
+  const providerFromType = typeof providerRecord.type === 'string' ? providerRecord.type : undefined;
+  const providerFromProvider = typeof providerRecord.provider === 'string' ? providerRecord.provider : undefined;
+
+  if (providerFromProvider !== undefined && providerFromType === undefined) {
+    warn(`${source}: provider block uses deprecated "provider" key; use "type" instead.`);
+  }
+
+  const providerBlockInput = {
+    type: providerFromType ?? providerFromProvider,
+    model: typeof providerRecord.model === 'string' ? providerRecord.model : undefined,
+    network_access: typeof providerRecord.network_access === 'boolean' ? providerRecord.network_access : undefined,
+    sandbox: toRecord(providerRecord.sandbox),
+  };
+  const normalizedProviderBlock = normalizeProviderBlock(providerBlockInput as unknown as ProviderBlock);
+
+  if (legacyModel !== undefined) {
+    warn(`${source}: model is deprecated; use provider.model instead.`);
+  }
+  if (rawProviderOptions !== undefined) {
+    warn(`${source}: provider_options is deprecated; move fields into provider block.`);
+  }
+
+  return {
+    provider: normalizedProviderBlock.provider,
+    model: normalizedProviderBlock.model ?? legacyModel,
+    providerOptions: mergeProviderOptions(legacyProviderOptions, normalizedProviderBlock.providerOptions),
+  };
+}
+
+type NormalizedProviderBlock = {
+  provider?: PieceMovement['provider'];
+  model?: string;
+  providerOptions?: MovementProviderOptions;
+};
+
+/** Convert raw provider block to unified movement provider representation. */
+function normalizeProviderBlock(raw: ProviderBlock | undefined): NormalizedProviderBlock {
+  if (raw === undefined) return {};
+  if (typeof raw === 'string') {
+    return { provider: raw };
+  }
+
+  const normalizedOptions: MovementProviderOptions = {};
+  if (raw.network_access !== undefined) {
+    if (raw.type === 'codex') {
+      normalizedOptions.codex = { networkAccess: raw.network_access };
+    } else if (raw.type === 'opencode') {
+      normalizedOptions.opencode = { networkAccess: raw.network_access };
+    }
+  }
+
+  if (raw.sandbox) {
+    normalizedOptions.claude = {
+      sandbox: {
+        ...(raw.sandbox.allow_unsandboxed_commands !== undefined
+          ? { allowUnsandboxedCommands: raw.sandbox.allow_unsandboxed_commands }
+          : {}),
+        ...(raw.sandbox.excluded_commands !== undefined
+          ? { excludedCommands: raw.sandbox.excluded_commands }
+          : {}),
+      },
+    };
+  }
+
+  return {
+    provider: raw.type,
+    model: raw.model,
+    providerOptions: Object.keys(normalizedOptions).length > 0 ? normalizedOptions : undefined,
+  };
+}
+
 /**
  * Deep merge provider options. Later sources override earlier ones.
  * Exported for reuse in runner.ts (4-layer resolution).
@@ -82,6 +245,39 @@ export function mergeProviderOptions(
   }
 
   return Object.keys(result).length > 0 ? result : undefined;
+}
+
+type RawProviderProfile = {
+  default_permission_mode: unknown;
+  movement_permission_overrides?: Record<string, unknown>;
+};
+
+/** Convert raw YAML provider_profiles (snake_case) to internal format (camelCase). */
+export function normalizeProviderProfiles(
+  raw: Record<string, RawProviderProfile> | undefined,
+): ProviderPermissionProfiles | undefined {
+  if (!raw) return undefined;
+  return Object.fromEntries(
+    Object.entries(raw).map(([provider, profile]) => [provider, {
+      defaultPermissionMode: profile.default_permission_mode,
+      movementPermissionOverrides: profile.movement_permission_overrides,
+    }]),
+  ) as ProviderPermissionProfiles;
+}
+
+/** Convert internal provider_profiles to raw YAML format (snake_case). */
+export function denormalizeProviderProfiles(
+  profiles: ProviderPermissionProfiles | undefined,
+): Record<string, { default_permission_mode: string; movement_permission_overrides?: Record<string, string> }> | undefined {
+  if (!profiles) return undefined;
+  const entries = Object.entries(profiles);
+  if (entries.length === 0) return undefined;
+  return Object.fromEntries(entries.map(([provider, profile]) => [provider, {
+    default_permission_mode: profile.defaultPermissionMode,
+    ...(profile.movementPermissionOverrides
+      ? { movement_permission_overrides: profile.movementPermissionOverrides }
+      : {}),
+  }])) as Record<string, { default_permission_mode: string; movement_permission_overrides?: Record<string, string> }>;
 }
 
 function normalizeRuntimeConfig(raw: RawPiece['piece_config']): PieceRuntimeConfig | undefined {
@@ -278,6 +474,7 @@ function normalizeStepFromRaw(
   sections: PieceSections,
   inheritedProviderOptions?: PieceMovement['providerOptions'],
   context?: FacetResolutionContext,
+  onWarning?: OnWarning,
 ): PieceMovement {
   const rules: PieceRule[] | undefined = step.rules?.map(normalizeRule);
 
@@ -296,6 +493,13 @@ function normalizeStepFromRaw(
   const expandedInstruction = step.instruction
     ? resolveRefToContent(step.instruction, sections.resolvedInstructions, pieceDir, 'instructions', context)
     : undefined;
+  const normalizedProvider = normalizeProviderBlock(step.provider);
+  if (step.model !== undefined) {
+    onWarning?.(`movement "${step.name}": model is deprecated; use provider.model instead.`);
+  }
+  if (step.provider_options !== undefined) {
+    onWarning?.(`movement "${step.name}": provider_options is deprecated; move fields into provider block.`);
+  }
 
   const result: PieceMovement = {
     name: step.name,
@@ -306,10 +510,14 @@ function normalizeStepFromRaw(
     personaPath,
     allowedTools: step.allowed_tools,
     mcpServers: step.mcp_servers,
-    provider: step.provider,
-    model: step.model,
+    provider: normalizedProvider.provider,
+    model: normalizedProvider.model ?? step.model,
     requiredPermissionMode: step.required_permission_mode,
-    providerOptions: mergeProviderOptions(inheritedProviderOptions, normalizeProviderOptions(step.provider_options)),
+    providerOptions: mergeProviderOptions(
+      inheritedProviderOptions,
+      normalizeProviderOptions(step.provider_options),
+      normalizedProvider.providerOptions,
+    ),
     edit: step.edit,
     instructionTemplate: (step.instruction_template
       ? resolveRefToContent(step.instruction_template, sections.resolvedInstructions, pieceDir, 'instructions', context)
@@ -324,7 +532,7 @@ function normalizeStepFromRaw(
 
   if (step.parallel && step.parallel.length > 0) {
     result.parallel = step.parallel.map((sub: RawStep) =>
-      normalizeStepFromRaw(sub, pieceDir, sections, inheritedProviderOptions, context),
+      normalizeStepFromRaw(sub, pieceDir, sections, inheritedProviderOptions, context, onWarning),
     );
   }
 
@@ -382,6 +590,7 @@ export function normalizePieceConfig(
   raw: unknown,
   pieceDir: string,
   context?: FacetResolutionContext,
+  onWarning?: OnWarning,
 ): PieceConfig {
   const parsed = PieceConfigRawSchema.parse(raw);
 
@@ -398,11 +607,18 @@ export function normalizePieceConfig(
     resolvedReportFormats,
   };
 
-  const pieceProviderOptions = normalizeProviderOptions(parsed.piece_config?.provider_options as RawStep['provider_options']);
+  if (parsed.piece_config?.provider_options !== undefined) {
+    onWarning?.('piece_config.provider_options is deprecated; use piece_config.provider block instead.');
+  }
+  const pieceProviderBlock = normalizeProviderBlock(parsed.piece_config?.provider);
+  const pieceProviderOptions = mergeProviderOptions(
+    normalizeProviderOptions(parsed.piece_config?.provider_options as RawStep['provider_options']),
+    pieceProviderBlock.providerOptions,
+  );
   const pieceRuntime = normalizeRuntimeConfig(parsed.piece_config);
 
   const movements: PieceMovement[] = parsed.movements.map((step) =>
-    normalizeStepFromRaw(step, pieceDir, sections, pieceProviderOptions, context),
+    normalizeStepFromRaw(step, pieceDir, sections, pieceProviderOptions, context, onWarning),
   );
 
   // Schema guarantees movements.min(1)
@@ -411,6 +627,8 @@ export function normalizePieceConfig(
   return {
     name: parsed.name,
     description: parsed.description,
+    provider: pieceProviderBlock.provider,
+    model: pieceProviderBlock.model,
     providerOptions: pieceProviderOptions,
     runtime: pieceRuntime,
     personas: parsed.personas,
@@ -446,6 +664,12 @@ export function loadPieceFromFile(filePath: string, projectDir: string): PieceCo
     pieceDir,
     repertoireDir: getRepertoireDir(),
   };
-
-  return normalizePieceConfig(raw, pieceDir, context);
+  const warnings: string[] = [];
+  const config = normalizePieceConfig(raw, pieceDir, context, (message) => {
+    warnings.push(message);
+  });
+  for (const message of warnings) {
+    console.warn(message);
+  }
+  return config;
 }

@@ -1,11 +1,19 @@
 import type { PieceMovement } from '../models/types.js';
 import type { PersonaProviderEntry } from '../models/persisted-global-config.js';
 import type { ProviderType } from './types.js';
+import { ProviderTypeSchema } from '../models/schemas.js';
+
+const KNOWN_PROVIDER_TYPES_SET = new Set<ProviderType>(ProviderTypeSchema.options);
+type UnknownProviderInput = ProviderType | { type?: unknown; provider?: unknown } | Record<string, unknown> | undefined;
 
 export interface MovementProviderModelInput {
-  step: Pick<PieceMovement, 'provider' | 'model' | 'personaDisplayName'>;
-  provider?: ProviderType;
+  step: Pick<PieceMovement, 'provider' | 'model' | 'personaDisplayName'> & {
+    provider?: UnknownProviderInput;
+  };
+  provider?: UnknownProviderInput;
   model?: string;
+  pieceProvider?: UnknownProviderInput;
+  pieceModel?: string;
   personaProviders?: Record<string, PersonaProviderEntry>;
 }
 
@@ -15,34 +23,13 @@ export interface MovementProviderModelOutput {
 }
 
 export interface ProviderModelCandidate {
-  provider?: ProviderType;
+  provider?: UnknownProviderInput;
   model?: string;
 }
 
 interface ModelProviderCandidate {
   model?: string;
-  provider?: ProviderType;
-}
-
-export function resolveProviderModelCandidates(
-  candidates: readonly ProviderModelCandidate[],
-): MovementProviderModelOutput {
-  let provider: ProviderType | undefined;
-  let model: string | undefined;
-
-  for (const candidate of candidates) {
-    if (provider === undefined && candidate.provider !== undefined) {
-      provider = candidate.provider;
-    }
-    if (model === undefined && candidate.model !== undefined) {
-      model = candidate.model;
-    }
-    if (provider !== undefined && model !== undefined) {
-      break;
-    }
-  }
-
-  return { provider, model };
+  provider?: UnknownProviderInput;
 }
 
 export interface AgentProviderModelInput {
@@ -63,6 +50,44 @@ export interface AgentProviderModelOutput {
   model?: string;
 }
 
+export function resolveProviderType(provider: unknown): ProviderType | undefined {
+  if (typeof provider === 'string') {
+    return KNOWN_PROVIDER_TYPES_SET.has(provider as ProviderType) ? provider as ProviderType : undefined;
+  }
+
+  if (
+    provider === null
+    || typeof provider !== 'object'
+    || Array.isArray(provider)
+  ) {
+    return undefined;
+  }
+
+  const providerRecord = provider as Record<string, unknown>;
+  return resolveProviderType(providerRecord.type) ?? resolveProviderType(providerRecord.provider);
+}
+
+export function resolveProviderModelCandidates(
+  candidates: readonly ProviderModelCandidate[],
+): MovementProviderModelOutput {
+  let provider: ProviderType | undefined;
+  let model: string | undefined;
+
+  for (const candidate of candidates) {
+    if (provider === undefined) {
+      provider = resolveProviderType(candidate.provider);
+    }
+    if (model === undefined && candidate.model !== undefined) {
+      model = candidate.model;
+    }
+    if (provider !== undefined && model !== undefined) {
+      break;
+    }
+  }
+
+  return { provider, model };
+}
+
 function resolveModelFromCandidates(
   candidates: readonly ModelProviderCandidate[],
   resolvedProvider: ProviderType | undefined,
@@ -72,7 +97,8 @@ function resolveModelFromCandidates(
     if (model === undefined) {
       continue;
     }
-    if (provider !== undefined && provider !== resolvedProvider) {
+    const normalizedProvider = resolveProviderType(provider);
+    if (normalizedProvider !== undefined && normalizedProvider !== resolvedProvider) {
       continue;
     }
     return model;
@@ -102,15 +128,24 @@ export function resolveAgentProviderModel(input: AgentProviderModelInput): Agent
 
 export function resolveMovementProviderModel(input: MovementProviderModelInput): MovementProviderModelOutput {
   const personaEntry = input.personaProviders?.[input.step.personaDisplayName];
-  const provider = resolveProviderModelCandidates([
+  const stepProvider = resolveProviderType(input.step.provider);
+  const pieceProvider = resolveProviderType(input.pieceProvider);
+  const resolvedProvider = resolveProviderModelCandidates([
     { provider: personaEntry?.provider },
-    { provider: input.step.provider },
+    { provider: stepProvider },
+    { provider: pieceProvider },
     { provider: input.provider },
   ]).provider;
-  const model = resolveProviderModelCandidates([
+  const stepModel = typeof input.step.model === 'string' ? input.step.model : undefined;
+  const resolvedModel = resolveProviderModelCandidates([
     { model: personaEntry?.model },
-    { model: input.step.model },
+    { model: stepModel },
+    { model: input.pieceModel },
     { model: input.model },
   ]).model;
-  return { provider, model };
+
+  return {
+    provider: resolvedProvider,
+    model: resolvedModel,
+  };
 }

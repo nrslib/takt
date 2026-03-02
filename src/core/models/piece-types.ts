@@ -7,6 +7,9 @@ import type { AgentResponse } from './response.js';
 import type { InteractiveMode } from './interactive-mode.js';
 import type { TeamLeaderConfig } from './part.js';
 
+/** Provider type literal union shared across PieceMovement and PieceConfig */
+type ProviderKind = 'claude' | 'codex' | 'opencode' | 'cursor' | 'copilot' | 'mock';
+
 /** Rule-based transition configuration (unified format) */
 export interface PieceRule {
   /** Human-readable condition text */
@@ -135,7 +138,7 @@ export interface PieceMovement {
   /** Resolved absolute path to persona prompt file (set by loader) */
   personaPath?: string;
   /** Provider override for this movement */
-  provider?: 'claude' | 'codex' | 'opencode' | 'cursor' | 'copilot' | 'mock';
+  provider?: ProviderKind;
   /** Model override for this movement */
   model?: string;
   /** Required minimum permission mode for tool execution in this movement */
@@ -240,6 +243,10 @@ export interface LoopMonitorConfig {
 export interface PieceConfig {
   name: string;
   description?: string;
+  /** Piece-level provider type (from piece_config.provider.type). */
+  provider?: ProviderKind;
+  /** Piece-level default model (from piece_config.provider.model). */
+  model?: string;
   /** Piece-level default provider options (used as movement defaults) */
   providerOptions?: MovementProviderOptions;
   /** Piece-level runtime preparation and env injection settings */

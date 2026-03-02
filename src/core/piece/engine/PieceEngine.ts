@@ -112,6 +112,8 @@ export class PieceEngine extends EventEmitter {
       () => this.config.movements.map(s => ({ name: s.name, description: s.description })),
       () => this.getPieceName(),
       () => this.getPieceDescription(),
+      () => this.config.provider,
+      () => this.config.model,
     );
 
     this.movementExecutor = new MovementExecutor({

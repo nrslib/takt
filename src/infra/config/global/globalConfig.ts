@@ -8,11 +8,18 @@
 import { readFileSync, existsSync, writeFileSync, statSync, accessSync, constants } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
-import { GlobalConfigSchema } from '../../../core/models/index.js';
+import type { z } from 'zod';
+import { GlobalConfigSchema, PersonaProviderEntrySchema, ProviderTypeSchema } from '../../../core/models/index.js';
 import type { Language } from '../../../core/models/index.js';
 import type { PersistedGlobalConfig, PersonaProviderEntry } from '../../../core/models/persisted-global-config.js';
-import type { ProviderPermissionProfiles } from '../../../core/models/provider-profiles.js';
-import { normalizeProviderOptions } from '../loaders/pieceParser.js';
+import {
+  normalizeProviderOptions,
+  normalizeConfigProviderBlock,
+  toProviderOptionsPayload,
+  normalizeProviderProfiles,
+  denormalizeProviderProfiles,
+  type RawProviderConfig,
+} from '../loaders/pieceParser.js';
 import { getGlobalConfigPath } from '../paths.js';
 import { DEFAULT_LANGUAGE } from '../../../shared/constants.js';
 import { parseProviderModel } from '../../../shared/utils/providerModel.js';
@@ -83,44 +90,26 @@ function validateProviderModelCompatibility(provider: string | undefined, model:
 }
 
 function normalizePersonaProviders(
-  raw: Record<string, NonNullable<PersonaProviderEntry['provider']> | PersonaProviderEntry> | undefined,
+  raw: Record<string, z.infer<typeof ProviderTypeSchema> | z.infer<typeof PersonaProviderEntrySchema>> | undefined,
+  warn: (message: string) => void,
 ): Record<string, PersonaProviderEntry> | undefined {
   if (!raw) return undefined;
   return Object.fromEntries(
     Object.entries(raw).map(([persona, entry]) => {
-      const normalized: PersonaProviderEntry = typeof entry === 'string' ? { provider: entry } : entry;
+      if (typeof entry === 'string') {
+        return [persona, { provider: entry }];
+      }
+      const normalized: PersonaProviderEntry = {
+        provider: entry.type ?? entry.provider,
+        model: entry.model,
+      };
+      if (entry.provider !== undefined && entry.type === undefined) {
+        warn(`globalConfig: persona_providers.${persona}: provider key is deprecated; use type instead.`);
+      }
       validateProviderModelCompatibility(normalized.provider, normalized.model);
       return [persona, normalized];
     }),
   );
-}
-
-function normalizeProviderProfiles(
-  raw: Record<string, { default_permission_mode: unknown; movement_permission_overrides?: Record<string, unknown> }> | undefined,
-): ProviderPermissionProfiles | undefined {
-  if (!raw) return undefined;
-
-  const entries = Object.entries(raw).map(([provider, profile]) => [provider, {
-    defaultPermissionMode: profile.default_permission_mode,
-    movementPermissionOverrides: profile.movement_permission_overrides,
-  }]);
-
-  return Object.fromEntries(entries) as ProviderPermissionProfiles;
-}
-
-function denormalizeProviderProfiles(
-  profiles: ProviderPermissionProfiles | undefined,
-): Record<string, { default_permission_mode: string; movement_permission_overrides?: Record<string, string> }> | undefined {
-  if (!profiles) return undefined;
-  const entries = Object.entries(profiles);
-  if (entries.length === 0) return undefined;
-
-  return Object.fromEntries(entries.map(([provider, profile]) => [provider, {
-    default_permission_mode: profile.defaultPermissionMode,
-    ...(profile.movementPermissionOverrides
-      ? { movement_permission_overrides: profile.movementPermissionOverrides }
-      : {}),
-  }])) as Record<string, { default_permission_mode: string; movement_permission_overrides?: Record<string, string> }>;
 }
 
 /**
@@ -168,6 +157,36 @@ export class GlobalConfigManager {
       }
     }
 
+    const seenWarnings = new Set<string>();
+    const warn = (message: string): void => {
+      if (seenWarnings.has(message)) return;
+      seenWarnings.add(message);
+      console.warn(message);
+    };
+
+    const normalizedProviderConfig = normalizeConfigProviderBlock(
+      rawConfig.provider as RawProviderConfig,
+      rawConfig.model,
+      rawConfig.provider_options,
+      warn,
+      'globalConfig',
+    );
+    if (normalizedProviderConfig.provider !== undefined) {
+      rawConfig.provider = normalizedProviderConfig.provider;
+    } else {
+      delete rawConfig.provider;
+    }
+    if (normalizedProviderConfig.model !== undefined) {
+      rawConfig.model = normalizedProviderConfig.model;
+    } else {
+      delete rawConfig.model;
+    }
+    if (normalizedProviderConfig.providerOptions !== undefined) {
+      rawConfig.provider_options = toProviderOptionsPayload(normalizedProviderConfig.providerOptions);
+    } else {
+      delete rawConfig.provider_options;
+    }
+
     applyGlobalConfigEnvOverrides(rawConfig);
 
     const parsed = GlobalConfigSchema.parse(rawConfig);
@@ -194,6 +213,8 @@ export class GlobalConfigManager {
       codexCliPath: parsed.codex_cli_path,
       claudeCliPath: parsed.claude_cli_path,
       cursorCliPath: parsed.cursor_cli_path,
+      copilotCliPath: parsed.copilot_cli_path,
+      copilotGithubToken: parsed.copilot_github_token,
       opencodeApiKey: parsed.opencode_api_key,
       cursorApiKey: parsed.cursor_api_key,
       pipeline: parsed.pipeline ? {
@@ -204,7 +225,7 @@ export class GlobalConfigManager {
       minimalOutput: parsed.minimal_output,
       bookmarksFile: parsed.bookmarks_file,
       pieceCategoriesFile: parsed.piece_categories_file,
-      personaProviders: normalizePersonaProviders(parsed.persona_providers as Record<string, NonNullable<PersonaProviderEntry['provider']> | PersonaProviderEntry> | undefined),
+      personaProviders: normalizePersonaProviders(parsed.persona_providers, warn),
       providerOptions: normalizeProviderOptions(parsed.provider_options),
       providerProfiles: normalizeProviderProfiles(parsed.provider_profiles as Record<string, { default_permission_mode: unknown; movement_permission_overrides?: Record<string, unknown> }> | undefined),
       runtime: parsed.runtime?.prepare && parsed.runtime.prepare.length > 0
@@ -286,6 +307,12 @@ export class GlobalConfigManager {
     }
     if (config.cursorCliPath) {
       raw.cursor_cli_path = config.cursorCliPath;
+    }
+    if (config.copilotCliPath) {
+      raw.copilot_cli_path = config.copilotCliPath;
+    }
+    if (config.copilotGithubToken) {
+      raw.copilot_github_token = config.copilotGithubToken;
     }
     if (config.opencodeApiKey) {
       raw.opencode_api_key = config.opencodeApiKey;

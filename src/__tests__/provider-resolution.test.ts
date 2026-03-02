@@ -129,6 +129,22 @@ describe('resolveMovementProviderModel', () => {
 
     expect(result.provider).toBe('cursor');
   });
+
+  it('should resolve movement provider and model from normalized step fields', () => {
+    const result = resolveMovementProviderModel({
+      step: {
+        provider: 'codex',
+        model: 'codex-step-model',
+        personaDisplayName: 'coder',
+      },
+      provider: 'mock',
+      model: 'fallback-model',
+    });
+
+    expect(result.provider).toBe('codex');
+    expect(result.model).toBe('codex-step-model');
+  });
+
 });
 
 describe('resolveAgentProviderModel', () => {

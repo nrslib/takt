@@ -175,6 +175,21 @@ describe('RuleEvaluator', () => {
       );
     });
 
+    it('should include agentError in throw message when provided', async () => {
+      const step = makeMovement({
+        rules: [
+          { condition: 'approved', next: 'implement' },
+          { condition: 'rejected', next: 'review' },
+        ],
+      });
+      const ctx = makeContext();
+      const evaluator = new RuleEvaluator(step, ctx);
+
+      await expect(evaluator.evaluate('', '', 'Rate limit exceeded')).rejects.toThrow(
+        'Status not found for movement "test-movement": Rate limit exceeded',
+      );
+    });
+
     it('should reject out-of-bounds tag detection index', async () => {
       const step = makeMovement({
         rules: [
@@ -213,8 +228,8 @@ describe('RuleEvaluator', () => {
       const evaluator = new RuleEvaluator(step, ctx);
 
       const result = await evaluator.evaluate('output', '');
-      // Returns the judge result index (0) directly — it's the index into the filtered conditions array
-      expect(result).toEqual({ index: 0, method: 'ai_judge_fallback' });
+      // Judge returns 0 (position in filtered array), which maps to conditions[0].index = 1 (original rule index)
+      expect(result).toEqual({ index: 1, method: 'ai_judge_fallback' });
     });
   });
 });

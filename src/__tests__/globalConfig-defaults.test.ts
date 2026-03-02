@@ -573,6 +573,56 @@ describe('loadGlobalConfig', () => {
 
       expect(() => loadGlobalConfig()).not.toThrow();
     });
+
+    it('persona_providers の type キーが採用される', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(
+        getGlobalConfigPath(),
+        [
+          'language: en',
+          'persona_providers:',
+          '  coder:',
+          '    type: codex',
+          '    model: gpt-4o',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      const config = loadGlobalConfig();
+
+      expect(config.personaProviders).toEqual({
+        coder: { provider: 'codex', model: 'gpt-4o' },
+      });
+    });
+
+    it('provider キー deprecated 警告', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(
+        getGlobalConfigPath(),
+        [
+          'language: en',
+          'persona_providers:',
+          '  coder:',
+          '    provider: codex',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const config = loadGlobalConfig();
+        expect(config.personaProviders).toEqual({
+          coder: { provider: 'codex' },
+        });
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('deprecated'),
+        );
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
   });
 
   describe('runtime', () => {

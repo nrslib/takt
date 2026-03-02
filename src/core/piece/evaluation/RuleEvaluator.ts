@@ -54,7 +54,7 @@ export class RuleEvaluator {
     private readonly ctx: RuleEvaluatorContext,
   ) {}
 
-  async evaluate(agentContent: string, tagContent: string): Promise<RuleMatch | undefined> {
+  async evaluate(agentContent: string, tagContent: string, agentError?: string): Promise<RuleMatch | undefined> {
     if (!this.step.rules || this.step.rules.length === 0) return undefined;
     const interactiveEnabled = this.ctx.interactive === true;
 
@@ -103,7 +103,7 @@ export class RuleEvaluator {
       return { index: fallbackIndex, method: 'ai_judge_fallback' };
     }
 
-    throw new Error(`Status not found for movement "${this.step.name}": no rule matched after all detection phases`);
+    throw new Error(`Status not found for movement "${this.step.name}": ${agentError || 'no rule matched after all detection phases'}`);
   }
 
   /**
@@ -171,12 +171,13 @@ export class RuleEvaluator {
     const judgeResult = await this.ctx.callAiJudge(agentOutput, conditions, { cwd: this.ctx.cwd });
 
     if (judgeResult >= 0 && judgeResult < conditions.length) {
+      const originalIndex = conditions[judgeResult]?.index ?? judgeResult;
       log.debug('AI judge (fallback) matched condition', {
         movement: this.step.name,
-        ruleIndex: judgeResult,
+        ruleIndex: originalIndex,
         condition: conditions[judgeResult]?.text,
       });
-      return judgeResult;
+      return originalIndex;
     }
 
     log.debug('AI judge (fallback) did not match any condition', { movement: this.step.name });
