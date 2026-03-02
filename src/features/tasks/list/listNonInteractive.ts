@@ -106,7 +106,7 @@ export async function listTasksNonInteractive(
       return;
     case 'merge':
       if (mergeBranch(cwd, task)) {
-        runner.deleteCompletedTask(task.name);
+        runner.deleteTask(task.name, 'completed');
       }
       return;
     case 'delete':
@@ -115,7 +115,7 @@ export async function listTasksNonInteractive(
         process.exit(1);
       }
       if (deleteBranch(cwd, task)) {
-        runner.deleteCompletedTask(task.name);
+        runner.deleteTask(task.name, 'completed');
       }
       return;
   }

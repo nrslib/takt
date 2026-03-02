@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PieceEngine, createDenyAskUserQuestionHandler } from '../../../core/piece/index.js';
 import type { PieceConfig } from '../../../core/models/index.js';
-import type { PieceExecutionResult, PieceExecutionOptions } from './types.js';
+import type { PieceExecutionResult, PieceExecutionOptions, ExceededInfo } from './types.js';
 import { detectRuleIndex } from '../../../shared/utils/ruleIndex.js';
 import { interruptAllQueries } from '../../../infra/claude/query-manager.js';
 import { callAiJudge } from '../../../agents/ai-judge.js';
@@ -110,8 +110,11 @@ export async function executePiece(
   const currentProvider = globalConfig.provider;
   if (!currentProvider) throw new Error('No provider configured. Set "provider" in ~/.takt/config.yaml');
   const configuredModel = options.model ?? globalConfig.model;
-
-  const effectivePieceConfig: PieceConfig = { ...pieceConfig, runtime: resolveRuntimeConfig(globalConfig.runtime, pieceConfig.runtime) };
+  const effectivePieceConfig: PieceConfig = {
+    ...pieceConfig,
+    runtime: resolveRuntimeConfig(globalConfig.runtime, pieceConfig.runtime),
+    ...(options.maxMovementsOverride !== undefined ? { maxMovements: options.maxMovementsOverride } : {}),
+  };
   const providerEventLogger = createProviderEventLogger({
     logsDir: runPaths.logsAbs,
     sessionId: pieceSessionId,
@@ -132,10 +135,24 @@ export async function executePiece(
     ? (personaName: string, personaSessionId: string) => updateWorktreeSession(projectCwd, cwd, personaName, personaSessionId, currentProvider)
     : (persona: string, personaSessionId: string) => updatePersonaSession(projectCwd, persona, personaSessionId, currentProvider);
 
-  const iterationLimitHandler = createIterationLimitHandler(out, displayRef, shouldNotifyIterationLimit);
+  const iterationLimitHandler = createIterationLimitHandler(
+    out,
+    displayRef,
+    shouldNotifyIterationLimit,
+    !interactiveUserInput
+      ? (request) => {
+          exceededInfo = {
+            currentMovement: request.currentMovement,
+            newMaxMovements: request.maxMovements + pieceConfig.maxMovements,
+            currentIteration: request.currentIteration,
+          };
+        }
+      : undefined,
+  );
   const onUserInput = interactiveUserInput ? createUserInputHandler(out, displayRef) : undefined;
 
   let abortReason: string | undefined;
+  let exceededInfo: ExceededInfo | undefined;
   let lastMovementContent: string | undefined;
   let lastMovementName: string | undefined;
   let currentIteration = 0;
@@ -169,6 +186,7 @@ export async function executePiece(
       reportDirName: runSlug,
       taskPrefix: options.taskPrefix,
       taskColorIndex: options.taskColorIndex,
+      initialIteration: options.initialIterationOverride,
     });
 
     abortHandler.install();
@@ -189,8 +207,8 @@ export async function executePiece(
       currentIteration = iteration;
       const movementIteration = (movementIterations.get(step.name) ?? 0) + 1;
       movementIterations.set(step.name, movementIteration);
-      prefixWriter?.setMovementContext({ movementName: step.name, iteration, maxMovements: pieceConfig.maxMovements, movementIteration });
-      out.info(`[${iteration}/${pieceConfig.maxMovements}] ${step.name} (${step.personaDisplayName})`);
+      prefixWriter?.setMovementContext({ movementName: step.name, iteration, maxMovements: effectivePieceConfig.maxMovements, movementIteration });
+      out.info(`[${iteration}/${effectivePieceConfig.maxMovements}] ${step.name} (${step.personaDisplayName})`);
       const movementProvider = providerInfo.provider ?? currentProvider;
       const movementModel = providerInfo.model ?? (movementProvider === currentProvider ? configuredModel : undefined) ?? '(default)';
       providerEventLogger.setMovement(step.name);
@@ -203,7 +221,7 @@ export async function executePiece(
         const movementIndex = pieceConfig.movements.findIndex((m) => m.name === step.name);
         displayRef.current = new StreamDisplay(step.personaDisplayName, isQuietMode(), {
           iteration,
-          maxMovements: pieceConfig.maxMovements,
+          maxMovements: effectivePieceConfig.maxMovements,
           movementIndex: movementIndex >= 0 ? movementIndex : 0,
           totalMovements: pieceConfig.movements.length,
         });
@@ -271,7 +289,14 @@ export async function executePiece(
     });
 
     const finalState = await engine.run();
-    return { success: finalState.status === 'completed', reason: abortReason, lastMovement: lastMovementName, lastMessage: lastMovementContent };
+    return {
+      success: finalState.status === 'completed',
+      reason: abortReason,
+      lastMovement: lastMovementName,
+      lastMessage: lastMovementContent,
+      exceeded: exceededInfo != null,
+      ...(exceededInfo ? { exceededInfo } : {}),
+    };
   } catch (error) {
     if (!runMetaManager.isFinalized) runMetaManager.finalize('aborted');
     throw error;

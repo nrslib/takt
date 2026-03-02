@@ -308,7 +308,7 @@ describe('TaskRunner (tasks.yaml)', () => {
 
   it('should delete pending and failed tasks', () => {
     const pending = runner.addTask('Task A');
-    runner.deletePendingTask(pending.name);
+    runner.deleteTask(pending.name, 'pending');
     expect(runner.listTasks()).toHaveLength(0);
 
     const failed = runner.addTask('Task B');
@@ -321,7 +321,7 @@ describe('TaskRunner (tasks.yaml)', () => {
       startedAt: new Date().toISOString(),
       completedAt: new Date().toISOString(),
     });
-    runner.deleteFailedTask(failed.name);
+    runner.deleteTask(failed.name, 'failed');
     expect(runner.listFailedTasks()).toHaveLength(0);
   });
 });

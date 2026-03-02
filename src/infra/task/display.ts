@@ -18,13 +18,13 @@ export function showTaskList(runner: TaskRunner): void {
   divider('=', 60);
   header('TAKT タスク一覧');
   divider('=', 60);
-  console.log(chalk.gray(`タスクディレクトリ: ${runner.getTasksDir()}`));
+  console.log(chalk.gray(`タスクファイル: ${runner.getTasksFilePath()}`));
   divider('-', 60);
 
   if (tasks.length === 0) {
     console.log();
     info('実行待ちのタスクはありません。');
-    console.log(chalk.gray(`\n${runner.getTasksDir()} を確認してください。`));
+    console.log(chalk.gray(`\nタスクファイル: ${runner.getTasksFilePath()} を確認してください。`));
     console.log(chalk.gray('takt add でタスクを追加できます。'));
     return;
   }
@@ -34,7 +34,6 @@ export function showTaskList(runner: TaskRunner): void {
   for (let i = 0; i < tasks.length; i++) {
     const task = tasks[i];
     if (task) {
-      // タスク内容の最初の行を取得
       const firstLine = task.content.trim().split('\n')[0]?.slice(0, 60) ?? '';
       console.log(chalk.cyan.bold(`  [${i + 1}] ${task.name}`));
       console.log(chalk.gray(`      ${firstLine}...`));

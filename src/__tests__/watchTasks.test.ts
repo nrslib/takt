@@ -3,7 +3,7 @@ import type { TaskInfo } from '../infra/task/index.js';
 
 const {
   mockRecoverInterruptedRunningTasks,
-  mockGetTasksDir,
+  mockGetTasksFilePath,
   mockWatch,
   mockStop,
   mockExecuteAndCompleteTask,
@@ -17,7 +17,7 @@ const {
   mockResolveConfigValue,
 } = vi.hoisted(() => ({
   mockRecoverInterruptedRunningTasks: vi.fn(),
-  mockGetTasksDir: vi.fn(),
+  mockGetTasksFilePath: vi.fn(),
   mockWatch: vi.fn(),
   mockStop: vi.fn(),
   mockExecuteAndCompleteTask: vi.fn(),
@@ -34,7 +34,7 @@ const {
 vi.mock('../infra/task/index.js', () => ({
   TaskRunner: vi.fn().mockImplementation(() => ({
     recoverInterruptedRunningTasks: mockRecoverInterruptedRunningTasks,
-    getTasksDir: mockGetTasksDir,
+    getTasksFilePath: mockGetTasksFilePath,
   })),
   TaskWatcher: vi.fn().mockImplementation(() => ({
     watch: mockWatch,
@@ -71,7 +71,7 @@ describe('watchTasks', () => {
     vi.clearAllMocks();
     mockResolveConfigValue.mockReturnValue('default');
     mockRecoverInterruptedRunningTasks.mockReturnValue(0);
-    mockGetTasksDir.mockReturnValue('/project/.takt/tasks.yaml');
+    mockGetTasksFilePath.mockReturnValue('/project/.takt/tasks.yaml');
     mockExecuteAndCompleteTask.mockResolvedValue(true);
 
     mockWatch.mockImplementation(async (onTask: (task: TaskInfo) => Promise<void>) => {
