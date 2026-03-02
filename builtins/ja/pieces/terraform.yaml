@@ -1,0 +1,296 @@
+name: terraform
+description: Terraform IaC 開発ピース（plan → implement → 並列レビュー → 監督検証 → 修正 → 完了）
+piece_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+max_movements: 15
+initial_movement: plan
+movements:
+  - name: plan
+    edit: false
+    persona: planner
+    knowledge: terraform-aws
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Bash
+      - WebSearch
+      - WebFetch
+    rules:
+      - condition: 要件が明確で実装可能
+        next: implement
+      - condition: ユーザーが質問をしている（実装タスクではない）
+        next: COMPLETE
+      - condition: 要件が不明確、情報不足
+        next: ABORT
+    instruction: plan
+    output_contracts:
+      report:
+        - name: plan.md
+          format: plan
+  - name: implement
+    edit: true
+    persona: terraform-coder
+    policy:
+      - terraform
+    knowledge: terraform-aws
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    required_permission_mode: full
+    quality_gates:
+      - terraform fmt -check がエラーなし
+      - terraform validate が成功
+      - terraform plan が実行可能（エラーなし）
+    instruction: implement-terraform
+    rules:
+      - condition: 実装が完了した
+        next: reviewers
+      - condition: 実装を進行できない
+        next: ABORT
+      - condition: ユーザーへの確認事項があるためユーザー入力が必要
+        next: implement
+        requires_user_input: true
+        interactive_only: true
+    output_contracts:
+      report:
+        - name: coder-scope.md
+          format: coder-scope
+        - name: coder-decisions.md
+          format: coder-decisions
+  - name: reviewers
+    parallel:
+      - name: tf_review
+        edit: false
+        persona: terraform-reviewer
+        policy:
+          - review
+          - terraform
+        knowledge: terraform-aws
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Bash
+          - WebSearch
+          - WebFetch
+        instruction: review-terraform
+        rules:
+          - condition: Terraform規約に準拠
+          - condition: 規約違反あり
+        output_contracts:
+          report:
+            - name: terraform-review.md
+              format: terraform-review
+      - name: ai_review
+        edit: false
+        persona: ai-antipattern-reviewer
+        policy:
+          - review
+          - ai-antipattern
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - WebSearch
+          - WebFetch
+        instruction: review-ai
+        rules:
+          - condition: AI特有の問題なし
+          - condition: AI特有の問題あり
+        output_contracts:
+          report:
+            - name: ai-review.md
+              format: ai-review
+    rules:
+      - condition: all("Terraform規約に準拠", "AI特有の問題なし")
+        next: supervise
+      - condition: any("規約違反あり", "AI特有の問題あり")
+        next: supervise
+  - name: supervise
+    edit: false
+    persona: supervisor
+    policy: review
+    knowledge: terraform-aws
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Bash
+      - WebSearch
+      - WebFetch
+    instruction: supervise
+    rules:
+      - condition: レビュアー全員承認かつタスク要件充足
+        next: COMPLETE
+      - condition: AI特有の問題のみ要修正
+        next: ai_fix
+      - condition: 規約違反または要件未達のみ要修正
+        next: supervise_fix
+      - condition: 複数種別の問題あり
+        next: fix_both
+      - condition: 要件矛盾で収束不能、ユーザー判断が必要
+        next: ABORT
+    output_contracts:
+      report:
+        - name: supervisor-validation.md
+          format: supervisor-validation
+        - name: summary.md
+          format: summary
+          use_judge: false
+  - name: fix_both
+    parallel:
+      - name: ai_fix_parallel
+        edit: true
+        persona: terraform-coder
+        policy:
+          - terraform
+        knowledge: terraform-aws
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Edit
+          - Bash
+          - WebSearch
+          - WebFetch
+        required_permission_mode: full
+        rules:
+          - condition: AI問題の修正完了
+          - condition: 修正不要（指摘対象ファイル/仕様の確認済み）
+          - condition: 判断できない、情報不足
+        instruction: ai-fix
+      - name: supervise_fix_parallel
+        edit: true
+        persona: terraform-coder
+        policy:
+          - terraform
+        knowledge: terraform-aws
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Edit
+          - Bash
+          - WebSearch
+          - WebFetch
+        required_permission_mode: full
+        rules:
+          - condition: 監督者の指摘に対する修正が完了した
+          - condition: 修正を進行できない
+        instruction: fix-supervisor
+    rules:
+      - condition: all("AI問題の修正完了", "監督者の指摘に対する修正が完了した")
+        next: reviewers
+      - condition: any("修正不要（指摘対象ファイル/仕様の確認済み）", "判断できない、情報不足", "修正を進行できない")
+        next: implement
+  - name: ai_fix
+    edit: true
+    persona: terraform-coder
+    policy:
+      - terraform
+    knowledge: terraform-aws
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    required_permission_mode: full
+    pass_previous_response: false
+    rules:
+      - condition: AI問題の修正完了
+        next: reviewers
+      - condition: 修正不要（指摘対象ファイル/仕様の確認済み）
+        next: implement
+      - condition: 判断できない、情報不足
+        next: implement
+    instruction: ai-fix
+  - name: supervise_fix
+    edit: true
+    persona: terraform-coder
+    policy:
+      - terraform
+    knowledge: terraform-aws
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    required_permission_mode: full
+    pass_previous_response: false
+    rules:
+      - condition: 監督者の指摘に対する修正が完了した
+        next: reviewers
+      - condition: 修正を進行できない
+        next: implement
+    instruction: fix-supervisor
+loop_monitors:
+  - cycle: [fix_both, reviewers]
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction_template: |
+        レビュー → 修正のサイクルが {cycle_count} 回繰り返されました。
+        Report Directory 内のレビューレポート履歴を確認し、収束状況を判断してください。
+
+        **非生産的の兆候:**
+        - 同じ finding_id が resolved → new を繰り返している
+        - 前の修正の副作用で新しい issue が生まれ続けている
+        - レビュアーの指摘とタスク要件が矛盾しており解消不能
+      rules:
+        - condition: 健全（新しい問題が減少傾向）
+          next: fix_both
+        - condition: 非生産的（振動または要件矛盾）
+          next: ABORT
+  - cycle: [ai_fix, reviewers]
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction_template: |
+        AI修正 → レビューのサイクルが {cycle_count} 回繰り返されました。
+        Report Directory 内のレビューレポート履歴を確認し、収束状況を判断してください。
+
+        **非生産的の兆候:**
+        - 同じ finding_id が resolved → new を繰り返している
+        - 前の修正の副作用で新しい issue が生まれ続けている
+        - レビュアーの指摘とタスク要件が矛盾しており解消不能
+      rules:
+        - condition: 健全（新しい問題が減少傾向）
+          next: ai_fix
+        - condition: 非生産的（振動または要件矛盾）
+          next: ABORT
+  - cycle: [supervise_fix, reviewers]
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction_template: |
+        監督修正 → レビューのサイクルが {cycle_count} 回繰り返されました。
+        Report Directory 内のレビューレポート履歴を確認し、収束状況を判断してください。
+
+        **非生産的の兆候:**
+        - 同じ finding_id が resolved → new を繰り返している
+        - 前の修正の副作用で新しい issue が生まれ続けている
+        - レビュアーの指摘とタスク要件が矛盾しており解消不能
+      rules:
+        - condition: 健全（新しい問題が減少傾向）
+          next: supervise_fix
+        - condition: 非生産的（振動または要件矛盾）
+          next: ABORT

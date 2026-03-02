@@ -39,6 +39,7 @@ const log = createLogger('engine');
 
 export type {
   PieceEvents,
+  MovementProviderInfo,
   UserInputRequest,
   IterationLimitRequest,
   SessionUpdateCallback,
@@ -492,7 +493,7 @@ export class PieceEngine extends EventEmitter {
       judgeMovement, movementIteration, this.state, this.task, this.config.maxMovements,
     );
 
-    this.emit('movement:start', judgeMovement, this.state.iteration, prebuiltInstruction);
+    this.emit('movement:start', judgeMovement, this.state.iteration, prebuiltInstruction, this.optionsBuilder.resolveStepProviderModel(judgeMovement));
 
     const { response, instruction } = await this.movementExecutor.runNormalMovement(
       judgeMovement,
@@ -579,7 +580,7 @@ export class PieceEngine extends EventEmitter {
           movement, movementIteration, this.state, this.task, this.config.maxMovements,
         );
       }
-      this.emit('movement:start', movement, this.state.iteration, prebuiltInstruction ?? '');
+      this.emit('movement:start', movement, this.state.iteration, prebuiltInstruction ?? '', this.optionsBuilder.resolveStepProviderModel(movement));
 
       try {
         const { response, instruction } = await this.runMovement(movement, prebuiltInstruction);

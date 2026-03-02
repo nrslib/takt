@@ -32,7 +32,6 @@ describe('E2E: Session NDJSON log output (mock)', () => {
       args: [
         '--task', 'Test session log success',
         '--piece', piecePath,
-        '--create-worktree', 'no',
         '--provider', 'mock',
       ],
       cwd: repo.path,
@@ -59,7 +58,6 @@ describe('E2E: Session NDJSON log output (mock)', () => {
       args: [
         '--task', 'Test session log abort',
         '--piece', piecePath,
-        '--create-worktree', 'no',
         '--provider', 'mock',
       ],
       cwd: repo.path,

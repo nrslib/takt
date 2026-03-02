@@ -1,0 +1,245 @@
+name: takt-default-review-fix
+description: TAKT開発コードレビュー＋修正ループ（アーキテクチャ・セキュリティ・QA・テスト・要件の5観点から並列レビューし、指摘を修正する）
+piece_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+max_movements: 30
+initial_movement: gather
+loop_monitors:
+  - cycle:
+      - reviewers
+      - fix
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction_template: loop-monitor-ai-fix
+      rules:
+        - condition: 健全（進捗あり）
+          next: reviewers
+        - condition: 非生産的（同じ指摘の反復・修正未反映）
+          next: supervise
+
+movements:
+  - name: gather
+    edit: false
+    persona: planner
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Bash
+      - WebSearch
+      - WebFetch
+    instruction: gather-review
+    output_contracts:
+      report:
+        - name: review-target.md
+          format: review-gather
+    rules:
+      - condition: レビュー対象の情報収集完了
+        next: reviewers
+      - condition: レビュー対象を特定できない、情報不足
+        next: ABORT
+        appendix: |
+          確認事項:
+          - {質問1}
+          - {質問2}
+
+  - name: reviewers
+    parallel:
+      - name: arch-review
+        edit: false
+        persona: architecture-reviewer
+        policy: review
+        knowledge:
+          - architecture
+          - takt
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Bash
+          - WebSearch
+          - WebFetch
+        instruction: review-arch
+        output_contracts:
+          report:
+            - name: architecture-review.md
+              format: architecture-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+
+      - name: security-review
+        edit: false
+        persona: security-reviewer
+        policy: review
+        knowledge: security
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Bash
+          - WebSearch
+          - WebFetch
+        instruction: review-security
+        output_contracts:
+          report:
+            - name: security-review.md
+              format: security-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+
+      - name: qa-review
+        edit: false
+        persona: qa-reviewer
+        policy:
+          - review
+          - qa
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Bash
+          - WebSearch
+          - WebFetch
+        instruction: review-qa
+        output_contracts:
+          report:
+            - name: qa-review.md
+              format: qa-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+
+      - name: testing-review
+        edit: false
+        persona: testing-reviewer
+        policy:
+          - review
+          - testing
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Bash
+          - WebSearch
+          - WebFetch
+        instruction: review-test
+        output_contracts:
+          report:
+            - name: testing-review.md
+              format: testing-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+
+      - name: requirements-review
+        edit: false
+        persona: requirements-reviewer
+        policy: review
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Bash
+          - WebSearch
+          - WebFetch
+        instruction: review-requirements
+        output_contracts:
+          report:
+            - name: requirements-review.md
+              format: requirements-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+
+    rules:
+      - condition: all("approved")
+        next: supervise
+      - condition: any("needs_fix")
+        next: fix
+
+  - name: fix
+    edit: true
+    persona: coder
+    policy:
+      - coding
+      - testing
+    knowledge:
+      - takt
+      - architecture
+      - security
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    required_permission_mode: edit
+    pass_previous_response: false
+    instruction: fix
+    rules:
+      - condition: 修正が完了した
+        next: reviewers
+      - condition: 修正を進行できない
+        next: supervise
+
+  - name: supervise
+    edit: false
+    persona: supervisor
+    policy: review
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
+    instruction: supervise
+    pass_previous_response: false
+    rules:
+      - condition: すべての検証が完了し、マージ可能な状態である
+        next: COMPLETE
+      - condition: 問題が検出された
+        next: fix_supervisor
+    output_contracts:
+      report:
+        - name: supervisor-validation.md
+          format: supervisor-validation
+        - name: summary.md
+          format: summary
+          use_judge: false
+
+  - name: fix_supervisor
+    edit: true
+    persona: coder
+    policy:
+      - coding
+      - testing
+    knowledge:
+      - takt
+      - architecture
+      - security
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    instruction: fix-supervisor
+    pass_previous_response: false
+    rules:
+      - condition: 監督者の指摘に対する修正が完了した
+        next: supervise
+      - condition: 修正を進行できない
+        next: supervise

@@ -26,7 +26,6 @@ const {
 }));
 
 vi.mock('../shared/prompt/index.js', () => ({
-  confirm: vi.fn(),
 }));
 
 vi.mock('../infra/config/index.js', () => ({
@@ -68,11 +67,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 }));
 
 vi.mock('../infra/github/index.js', () => ({
-  createPullRequest: vi.fn(),
   buildPrBody: vi.fn(),
-  pushBranch: vi.fn(),
-  findExistingPr: vi.fn(),
-  commentOnPr: vi.fn(),
 }));
 
 vi.mock('../features/tasks/execute/taskExecution.js', () => ({
@@ -89,16 +84,11 @@ vi.mock('../features/pieceSelection/index.js', () => ({
   selectPiece: vi.fn(),
 }));
 
-import { confirm } from '../shared/prompt/index.js';
 import { selectAndExecuteTask } from '../features/tasks/execute/selectAndExecute.js';
-
-const mockConfirm = vi.mocked(confirm);
 
 beforeEach(() => {
   vi.clearAllMocks();
   mockExecuteTask.mockResolvedValue(true);
-  // worktree を使わない（confirm で false）
-  mockConfirm.mockResolvedValue(false);
 });
 
 describe('skipTaskList option in selectAndExecuteTask', () => {

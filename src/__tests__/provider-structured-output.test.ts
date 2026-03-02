@@ -52,12 +52,14 @@ vi.mock('../infra/opencode/index.js', () => ({
   callOpenCodeCustom: mockCallOpenCodeCustom,
 }));
 
-// ===== Config (API key resolvers) =====
+// ===== Config (API key resolvers + CLI path resolvers) =====
 vi.mock('../infra/config/index.js', () => ({
   resolveAnthropicApiKey: vi.fn(() => undefined),
   resolveOpenaiApiKey: vi.fn(() => undefined),
   resolveCodexCliPath: vi.fn(() => '/opt/codex/bin/codex'),
+  resolveClaudeCliPath: vi.fn(() => undefined),
   resolveOpencodeApiKey: vi.fn(() => undefined),
+  loadProjectConfig: vi.fn(() => ({})),
 }));
 
 // Codex の isInsideGitRepo をバイパス

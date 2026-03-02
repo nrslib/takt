@@ -149,6 +149,8 @@ export interface ClaudeCallOptions {
   outputSchema?: Record<string, unknown>;
   /** Sandbox settings for Claude SDK */
   sandbox?: SandboxSettings;
+  /** Custom path to Claude Code executable */
+  pathToClaudeCodeExecutable?: string;
 }
 
 /** Options for spawning a Claude SDK query (low-level, used by executor/process) */
@@ -182,4 +184,6 @@ export interface ClaudeSpawnOptions {
   onStderr?: (data: string) => void;
   /** Sandbox settings for Claude SDK */
   sandbox?: SandboxSettings;
+  /** Custom path to Claude Code executable */
+  pathToClaudeCodeExecutable?: string;
 }

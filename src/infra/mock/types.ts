@@ -25,4 +25,6 @@ export interface ScenarioEntry {
   status: 'done' | 'blocked' | 'error' | 'approved' | 'rejected' | 'improve';
   /** Response content body */
   content: string;
+  /** Optional structured output payload (for outputSchema-driven flows) */
+  structuredOutput?: Record<string, unknown>;
 }

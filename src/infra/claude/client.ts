@@ -53,6 +53,7 @@ export class ClaudeClient {
       anthropicApiKey: options.anthropicApiKey,
       outputSchema: options.outputSchema,
       sandbox: options.sandbox,
+      pathToClaudeCodeExecutable: options.pathToClaudeCodeExecutable,
     };
   }
 

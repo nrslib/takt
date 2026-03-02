@@ -209,22 +209,6 @@ describe('PieceConfigRawSchema', () => {
     expect(() => PieceConfigRawSchema.parse(config)).toThrow();
   });
 
-  it('should reject legacy permission_mode', () => {
-    const config = {
-      name: 'test-piece',
-      movements: [
-        {
-          name: 'step1',
-          persona: 'coder',
-          permission_mode: 'edit',
-          instruction: '{task}',
-        },
-      ],
-    };
-
-    expect(() => PieceConfigRawSchema.parse(config)).toThrow();
-  });
-
   it('should require at least one movement', () => {
     const config = {
       name: 'empty-piece',
@@ -468,17 +452,6 @@ describe('CustomAgentConfigSchema', () => {
 
     const result = CustomAgentConfigSchema.parse(config);
     expect(result.claude_agent).toBe('architect');
-  });
-
-  it('should accept agent with provider override', () => {
-    const config = {
-      name: 'my-agent',
-      prompt: 'You are a helpful assistant.',
-      provider: 'codex',
-    };
-
-    const result = CustomAgentConfigSchema.parse(config);
-    expect(result.provider).toBe('codex');
   });
 
   it('should reject agent without any prompt source', () => {

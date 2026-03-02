@@ -1,53 +1,19 @@
 /**
  * Shared post-execution logic: auto-commit, push, and PR creation.
  *
- * Used by both selectAndExecuteTask (interactive mode) and
- * instructBranch (instruct mode from takt list).
+ * Used by taskExecution (takt run / watch path) and
+ * instructBranch (takt list).
  */
 
-import { resolvePieceConfigValue } from '../../../infra/config/index.js';
-import { confirm } from '../../../shared/prompt/index.js';
-import { autoCommitAndPush } from '../../../infra/task/index.js';
+import { autoCommitAndPush, pushBranch } from '../../../infra/task/index.js';
 import { info, error, success } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
-import { createPullRequest, buildPrBody, pushBranch, findExistingPr, commentOnPr } from '../../../infra/github/index.js';
-import type { GitHubIssue } from '../../../infra/github/index.js';
+import { buildPrBody } from '../../../infra/github/index.js';
+import { getGitProvider } from '../../../infra/git/index.js';
+import type { Issue } from '../../../infra/git/index.js';
 
 const log = createLogger('postExecution');
 
-/**
- * Resolve a boolean PR option with priority: CLI option > config > prompt.
- */
-async function resolvePrBooleanOption(
-  option: boolean | undefined,
-  cwd: string,
-  configKey: 'autoPr' | 'draftPr',
-  promptMessage: string,
-): Promise<boolean> {
-  if (typeof option === 'boolean') {
-    return option;
-  }
-  const configValue = resolvePieceConfigValue(cwd, configKey);
-  if (typeof configValue === 'boolean') {
-    return configValue;
-  }
-  return confirm(promptMessage, true);
-}
-
-/**
- * Resolve auto-PR setting with priority: CLI option > config > prompt.
- */
-export async function resolveAutoPr(optionAutoPr: boolean | undefined, cwd: string): Promise<boolean> {
-  return resolvePrBooleanOption(optionAutoPr, cwd, 'autoPr', 'Create pull request?');
-}
-
-/**
- * Resolve draft-PR setting with priority: CLI option > config > prompt.
- * Only called when shouldCreatePr is true.
- */
-export async function resolveDraftPr(optionDraftPr: boolean | undefined, cwd: string): Promise<boolean> {
-  return resolvePrBooleanOption(optionDraftPr, cwd, 'draftPr', 'Create as draft?');
-}
 
 export interface PostExecutionOptions {
   execCwd: string;
@@ -58,7 +24,7 @@ export interface PostExecutionOptions {
   shouldCreatePr: boolean;
   draftPr: boolean;
   pieceIdentifier?: string;
-  issues?: GitHubIssue[];
+  issues?: Issue[];
   repo?: string;
 }
 
@@ -87,12 +53,13 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
     } catch (pushError) {
       log.info('Branch push from project cwd failed (may already exist)', { error: pushError });
     }
+    const gitProvider = getGitProvider();
     const report = pieceIdentifier ? `Piece \`${pieceIdentifier}\` completed successfully.` : 'Task completed successfully.';
-    const existingPr = findExistingPr(projectCwd, branch);
+    const existingPr = gitProvider.findExistingPr(projectCwd, branch);
     if (existingPr) {
-      // PRが既に存在する場合はコメントを追加（push済みなので新コミットはPRに自動反映）
+      // push済みなので、新コミットはPRに自動反映される
       const commentBody = buildPrBody(issues, report);
-      const commentResult = commentOnPr(projectCwd, existingPr.number, commentBody);
+      const commentResult = gitProvider.commentOnPr(projectCwd, existingPr.number, commentBody);
       if (commentResult.success) {
         success(`PR updated with comment: ${existingPr.url}`);
         return { prUrl: existingPr.url };
@@ -107,7 +74,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
       const issuePrefix = firstIssue ? `[#${firstIssue.number}] ` : '';
       const truncatedTask = task.length > 100 - issuePrefix.length ? `${task.slice(0, 100 - issuePrefix.length - 3)}...` : task;
       const prTitle = issuePrefix + truncatedTask;
-      const prResult = createPullRequest(projectCwd, {
+      const prResult = gitProvider.createPullRequest(projectCwd, {
         branch,
         title: prTitle,
         body: prBody,

@@ -80,4 +80,13 @@ describe('config env overrides', () => {
       retention_days: 14,
     });
   });
+
+  it('should apply cursor API key override for global config', () => {
+    process.env.TAKT_CURSOR_API_KEY = 'cursor-key-from-env';
+
+    const raw: Record<string, unknown> = {};
+    applyGlobalConfigEnvOverrides(raw);
+
+    expect(raw.cursor_api_key).toBe('cursor-key-from-env');
+  });
 });

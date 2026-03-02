@@ -11,7 +11,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createLogger } from '../../shared/utils/index.js';
-import { resolveConfigValue } from '../config/index.js';
+import { loadProjectConfig, resolveConfigValue } from '../config/index.js';
 import { detectDefaultBranch } from './branchList.js';
 import type { WorktreeOptions, WorktreeResult } from './types.js';
 
@@ -20,6 +20,33 @@ export type { WorktreeOptions, WorktreeResult };
 const log = createLogger('clone');
 
 const CLONE_META_DIR = 'clone-meta';
+
+function resolveCloneSubmoduleOptions(projectDir: string): { args: string[]; label: string; targets: string } {
+  const config = loadProjectConfig(projectDir);
+  const resolvedSubmodules = config.submodules ?? (config.withSubmodules === true ? 'all' : undefined);
+
+  if (resolvedSubmodules === 'all') {
+    return {
+      args: ['--recurse-submodules'],
+      label: 'with submodule',
+      targets: 'all',
+    };
+  }
+
+  if (Array.isArray(resolvedSubmodules) && resolvedSubmodules.length > 0) {
+    return {
+      args: resolvedSubmodules.map((submodulePath) => `--recurse-submodules=${submodulePath}`),
+      label: 'with submodule',
+      targets: resolvedSubmodules.join(', '),
+    };
+  }
+
+  return {
+    args: [],
+    label: 'without submodule',
+    targets: 'none',
+  };
+}
 
 /**
  * Manages git clone lifecycle for task isolation.
@@ -35,9 +62,7 @@ export class CloneManager {
   /**
    * Resolve the base directory for clones from global config.
    * Returns the configured worktree_dir (resolved to absolute), or
-   * the default 'takt-worktrees' (plural). Automatically migrates
-   * legacy 'takt-worktree' (singular) to 'takt-worktrees' if only
-   * the legacy directory exists.
+   * the default 'takt-worktrees' (plural).
    */
   private static resolveCloneBaseDir(projectDir: string): string {
     const worktreeDir = resolveConfigValue(projectDir, 'worktreeDir');
@@ -46,13 +71,7 @@ export class CloneManager {
         ? worktreeDir
         : path.resolve(projectDir, worktreeDir);
     }
-    const newDir = path.join(projectDir, '..', 'takt-worktrees');
-    const legacyDir = path.join(projectDir, '..', 'takt-worktree');
-    // Auto-migrate: rename legacy singular to plural
-    if (fs.existsSync(legacyDir) && !fs.existsSync(newDir)) {
-      fs.renameSync(legacyDir, newDir);
-    }
-    return newDir;
+    return path.join(projectDir, '..', 'takt-worktrees');
   }
 
   /** Resolve the clone path based on options and global config */
@@ -95,8 +114,19 @@ export class CloneManager {
   }
 
   private static branchExists(projectDir: string, branch: string): boolean {
+    // Local branch
     try {
       execFileSync('git', ['rev-parse', '--verify', branch], {
+        cwd: projectDir,
+        stdio: 'pipe',
+      });
+      return true;
+    } catch {
+      // not found locally — fall through to remote check
+    }
+    // Remote tracking branch
+    try {
+      execFileSync('git', ['rev-parse', '--verify', `origin/${branch}`], {
         cwd: projectDir,
         stdio: 'pipe',
       });
@@ -188,19 +218,37 @@ export class CloneManager {
    */
   private static cloneAndIsolate(projectDir: string, clonePath: string, branch?: string): void {
     const referenceRepo = CloneManager.resolveMainRepo(projectDir);
+    const cloneSubmoduleOptions = resolveCloneSubmoduleOptions(projectDir);
 
     fs.mkdirSync(path.dirname(clonePath), { recursive: true });
 
-    const cloneArgs = ['clone', '--reference', referenceRepo, '--dissociate'];
+    const commonArgs: string[] = [...cloneSubmoduleOptions.args];
     if (branch) {
-      cloneArgs.push('--branch', branch);
+      commonArgs.push('--branch', branch);
     }
-    cloneArgs.push(projectDir, clonePath);
+    commonArgs.push(projectDir, clonePath);
 
-    execFileSync('git', cloneArgs, {
-      cwd: projectDir,
-      stdio: 'pipe',
-    });
+    const referenceCloneArgs = ['clone', '--reference', referenceRepo, '--dissociate', ...commonArgs];
+    const fallbackCloneArgs = ['clone', ...commonArgs];
+
+    try {
+      execFileSync('git', referenceCloneArgs, {
+        cwd: projectDir,
+        stdio: 'pipe',
+      });
+    } catch (err) {
+      const stderr = ((err as { stderr?: Buffer }).stderr ?? Buffer.alloc(0)).toString();
+      if (stderr.includes('reference repository is shallow')) {
+        log.info('Reference repository is shallow, retrying clone without --reference', { referenceRepo });
+        try { fs.rmSync(clonePath, { recursive: true, force: true }); } catch (e) { log.debug('Failed to cleanup partial clone before retry', { clonePath, error: String(e) }); }
+        execFileSync('git', fallbackCloneArgs, {
+          cwd: projectDir,
+          stdio: 'pipe',
+        });
+      } else {
+        throw err;
+      }
+    }
 
     execFileSync('git', ['remote', 'remove', 'origin'], {
       cwd: clonePath,
@@ -240,8 +288,12 @@ export class CloneManager {
 
     const clonePath = CloneManager.resolveClonePath(projectDir, options);
     const branch = CloneManager.resolveBranchName(options);
+    const cloneSubmoduleOptions = resolveCloneSubmoduleOptions(projectDir);
 
-    log.info('Creating shared clone', { path: clonePath, branch });
+    log.info(
+      `Creating shared clone (${cloneSubmoduleOptions.label}, targets: ${cloneSubmoduleOptions.targets})`,
+      { path: clonePath, branch }
+    );
 
     if (CloneManager.branchExists(projectDir, branch)) {
       CloneManager.cloneAndIsolate(projectDir, clonePath, branch);
@@ -313,9 +365,20 @@ export class CloneManager {
     try {
       const raw = fs.readFileSync(CloneManager.getCloneMetaPath(projectDir, branch), 'utf-8');
       const meta = JSON.parse(raw) as { clonePath: string };
-      if (fs.existsSync(meta.clonePath)) {
-        this.removeClone(meta.clonePath);
-        log.info('Orphaned clone cleaned up', { branch, clonePath: meta.clonePath });
+      // Validate clonePath is within the expected clone base directory to prevent path traversal.
+      const cloneBaseDir = path.resolve(CloneManager.resolveCloneBaseDir(projectDir));
+      const resolvedClonePath = path.resolve(meta.clonePath);
+      if (!resolvedClonePath.startsWith(cloneBaseDir + path.sep)) {
+        log.error('Refusing to remove clone outside of clone base directory', {
+          branch,
+          clonePath: meta.clonePath,
+          cloneBaseDir,
+        });
+        return;
+      }
+      if (fs.existsSync(resolvedClonePath)) {
+        this.removeClone(resolvedClonePath);
+        log.info('Orphaned clone cleaned up', { branch, clonePath: resolvedClonePath });
       }
     } catch {
       // No metadata or parse error — nothing to clean up

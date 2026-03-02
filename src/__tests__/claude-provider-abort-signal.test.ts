@@ -18,6 +18,8 @@ vi.mock('../infra/claude/client.js', () => ({
 
 vi.mock('../infra/config/index.js', () => ({
   resolveAnthropicApiKey: mockResolveAnthropicApiKey,
+  resolveClaudeCliPath: vi.fn(() => undefined),
+  loadProjectConfig: vi.fn(() => ({})),
 }));
 
 import { ClaudeProvider } from '../infra/providers/claude.js';

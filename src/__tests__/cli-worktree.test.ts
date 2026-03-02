@@ -235,4 +235,39 @@ describe('confirmAndCreateWorktree', () => {
     expect(mockConfirm).not.toHaveBeenCalled();
     expect(result.isWorktree).toBe(true);
   });
+
+  it('should pass branchOverride to createSharedClone', async () => {
+    // Given: branchOverride provided (e.g., PR head branch)
+    mockSummarizeTaskName.mockResolvedValue('fix-auth');
+    mockCreateSharedClone.mockReturnValue({
+      path: '/project/../20260128T0504-fix-auth',
+      branch: 'fix/pr-branch',
+    });
+
+    // When
+    await confirmAndCreateWorktree('/project', 'fix auth', true, 'fix/pr-branch');
+
+    // Then
+    expect(mockCreateSharedClone).toHaveBeenCalledWith('/project', expect.objectContaining({
+      branch: 'fix/pr-branch',
+    }));
+  });
+
+  it('should not pass branch to createSharedClone when branchOverride is omitted', async () => {
+    // Given: no branchOverride
+    mockSummarizeTaskName.mockResolvedValue('fix-auth');
+    mockCreateSharedClone.mockReturnValue({
+      path: '/project/../20260128T0504-fix-auth',
+      branch: 'takt/20260128T0504-fix-auth',
+    });
+
+    // When
+    await confirmAndCreateWorktree('/project', 'fix auth', true);
+
+    // Then
+    expect(mockCreateSharedClone).toHaveBeenCalledWith('/project', {
+      worktree: true,
+      taskSlug: 'fix-auth',
+    });
+  });
 });

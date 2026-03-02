@@ -1,0 +1,25 @@
+**Terraform 規約準拠**のレビューに集中してください。
+AI特有の問題はレビューしないでください（ai_reviewムーブメントで実施済み）。
+
+**レビュー観点:**
+- 変数宣言の規約準拠（type, description, sensitive）
+- リソース命名の一貫性（name_prefix パターン）
+- ファイル構成の規約準拠（1ファイル1関心事）
+- セキュリティ設定（IMDSv2, 暗号化, アクセス制御, IAM最小権限）
+- タグ管理（default_tags, 重複なし）
+- lifecycle ルールの妥当性
+- コストトレードオフの文書化
+- 未使用の variable / output / data source
+
+**前回指摘の追跡（必須）:**
+- まず「Previous Response」から前回の open findings を抽出する
+- 各 finding に `finding_id` を付け、今回の状態を `new / persists / resolved` で判定する
+- `persists` と判定する場合は、未解決である根拠（ファイル/行）を必ず示す
+
+## 判定手順
+
+1. まず前回open findingsを抽出し、`new / persists / resolved` を仮判定する
+2. 変更差分を確認し、Terraform規約の観点に基づいて問題を検出する
+   - ナレッジの判定基準テーブル（REJECT条件）と変更内容を照合する
+3. 検出した問題ごとに、Policyのスコープ判定表と判定ルールに基づいてブロッキング/非ブロッキングを分類する
+4. ブロッキング問題（`new` または `persists`）が1件でもあればREJECTと判定する

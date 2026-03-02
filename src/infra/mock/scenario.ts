@@ -143,9 +143,15 @@ function validateEntry(entry: unknown, index: number): ScenarioEntry {
     throw new Error(`Scenario entry [${index}] "persona" must be a string if provided`);
   }
 
+  // structured_output is optional
+  if (obj.structured_output !== undefined && (typeof obj.structured_output !== 'object' || obj.structured_output === null || Array.isArray(obj.structured_output))) {
+    throw new Error(`Scenario entry [${index}] "structured_output" must be an object if provided`);
+  }
+
   return {
     persona: obj.persona as string | undefined,
     status: status as ScenarioEntry['status'],
     content: obj.content as string,
+    structuredOutput: obj.structured_output as Record<string, unknown> | undefined,
   };
 }

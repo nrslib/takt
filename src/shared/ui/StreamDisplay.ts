@@ -6,11 +6,7 @@
  */
 
 import chalk from 'chalk';
-// NOTE: type-only import from core — acceptable because StreamDisplay is
-// a UI renderer tightly coupled to the piece event protocol.
-// Moving StreamEvent/StreamCallback to shared would require relocating all
-// dependent event-data types, which is out of scope for this refactoring.
-import type { StreamEvent, StreamCallback } from '../../core/piece/index.js';
+import type { StreamEvent, StreamCallback } from '../types/provider.js';
 import { truncate } from './LogManager.js';
 import { stripAnsi } from '../utils/text.js';
 

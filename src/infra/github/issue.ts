@@ -174,7 +174,28 @@ export function resolveIssueTask(task: string): string {
 }
 
 /**
- * Create a GitHub Issue via `gh issue create`.
+ * Filter labels to only those that exist on the repository.
+ */
+function filterExistingLabels(labels: string[]): string[] {
+  try {
+    const existing = new Set(
+      execFileSync('gh', ['label', 'list', '--json', 'name', '-q', '.[].name'], {
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+      })
+        .trim()
+        .split('\n')
+        .filter((l) => l.length > 0),
+    );
+    return labels.filter((l) => existing.has(l));
+  } catch (err) {
+    log.error('Failed to fetch labels', { error: getErrorMessage(err) });
+    return [];
+  }
+}
+
+/**
+ * Create a GitHub Issue via `gh issue create`. 
  */
 export function createIssue(options: CreateIssueOptions): CreateIssueResult {
   const ghStatus = checkGhCli();
@@ -184,7 +205,10 @@ export function createIssue(options: CreateIssueOptions): CreateIssueResult {
 
   const args = ['issue', 'create', '--title', options.title, '--body', options.body];
   if (options.labels && options.labels.length > 0) {
-    args.push('--label', options.labels.join(','));
+    const validLabels = filterExistingLabels(options.labels);
+    if (validLabels.length > 0) {
+      args.push('--label', validLabels.join(','));
+    }
   }
 
   log.info('Creating issue', { title: options.title });

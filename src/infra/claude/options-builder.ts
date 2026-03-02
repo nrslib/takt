@@ -100,6 +100,10 @@ export class SdkOptionsBuilder {
       sdkOptions.sandbox = this.options.sandbox;
     }
 
+    if (this.options.pathToClaudeCodeExecutable) {
+      sdkOptions.pathToClaudeCodeExecutable = this.options.pathToClaudeCodeExecutable;
+    }
+
     return sdkOptions;
   }
 

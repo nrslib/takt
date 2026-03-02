@@ -8,3 +8,6 @@ notification_sound_events:
   piece_abort: false
   run_complete: true
   run_abort: false
+provider_profiles:
+  cursor:
+    default_permission_mode: full

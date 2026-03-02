@@ -36,6 +36,7 @@ function buildTeamLeaderConfig(): PieceConfig {
         teamLeader: {
           persona: '../personas/team-leader.md',
           maxParts: 3,
+          refillThreshold: 0,
           timeoutMs: 10000,
           partPersona: '../personas/coder.md',
           partAllowedTools: ['Read', 'Edit', 'Write'],
@@ -77,14 +78,18 @@ describe('PieceEngine Integration: TeamLeaderRunner', () => {
         ].join('\n'),
       }))
       .mockResolvedValueOnce(makeResponse({ persona: 'coder', content: 'API done' }))
-      .mockResolvedValueOnce(makeResponse({ persona: 'coder', content: 'Tests done' }));
+      .mockResolvedValueOnce(makeResponse({ persona: 'coder', content: 'Tests done' }))
+      .mockResolvedValueOnce(makeResponse({
+        persona: 'team-leader',
+        structuredOutput: { done: true, reasoning: 'enough', parts: [] },
+      }));
 
     vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
 
     const state = await engine.run();
 
     expect(state.status).toBe('completed');
-    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(4);
     const output = state.movementOutputs.get('implement');
     expect(output).toBeDefined();
     expect(output!.content).toContain('## decomposition');
@@ -108,7 +113,11 @@ describe('PieceEngine Integration: TeamLeaderRunner', () => {
         ].join('\n'),
       }))
       .mockResolvedValueOnce(makeResponse({ persona: 'coder', status: 'error', error: 'api failed' }))
-      .mockResolvedValueOnce(makeResponse({ persona: 'coder', status: 'error', error: 'test failed' }));
+      .mockResolvedValueOnce(makeResponse({ persona: 'coder', status: 'error', error: 'test failed' }))
+      .mockResolvedValueOnce(makeResponse({
+        persona: 'team-leader',
+        structuredOutput: { done: true, reasoning: 'stop', parts: [] },
+      }));
 
     const state = await engine.run();
 
@@ -129,7 +138,11 @@ describe('PieceEngine Integration: TeamLeaderRunner', () => {
         ].join('\n'),
       }))
       .mockResolvedValueOnce(makeResponse({ persona: 'coder', content: 'API done' }))
-      .mockResolvedValueOnce(makeResponse({ persona: 'coder', status: 'error', error: 'test failed' }));
+      .mockResolvedValueOnce(makeResponse({ persona: 'coder', status: 'error', error: 'test failed' }))
+      .mockResolvedValueOnce(makeResponse({
+        persona: 'team-leader',
+        structuredOutput: { done: true, reasoning: 'stop', parts: [] },
+      }));
 
     vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
 
@@ -158,7 +171,11 @@ describe('PieceEngine Integration: TeamLeaderRunner', () => {
         ].join('\n'),
       }))
       .mockResolvedValueOnce(makeResponse({ persona: 'coder', status: 'error', content: 'api failed from content' }))
-      .mockResolvedValueOnce(makeResponse({ persona: 'coder', content: 'Tests done' }));
+      .mockResolvedValueOnce(makeResponse({ persona: 'coder', content: 'Tests done' }))
+      .mockResolvedValueOnce(makeResponse({
+        persona: 'team-leader',
+        structuredOutput: { done: true, reasoning: 'stop', parts: [] },
+      }));
 
     vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
 
@@ -169,4 +186,53 @@ describe('PieceEngine Integration: TeamLeaderRunner', () => {
     expect(output).toBeDefined();
     expect(output!.content).toContain('[ERROR] api failed from content');
   });
+
+  it('結果に応じて追加パートを生成して実行する', async () => {
+    const config = buildTeamLeaderConfig();
+    const engine = new PieceEngine(config, tmpDir, 'implement feature', { projectCwd: tmpDir });
+
+    vi.mocked(runAgent)
+      .mockResolvedValueOnce(makeResponse({
+        persona: 'team-leader',
+        structuredOutput: {
+          parts: [
+            { id: 'part-1', title: 'API', instruction: 'Implement API', timeout_ms: null },
+            { id: 'part-2', title: 'Test', instruction: 'Add tests', timeout_ms: null },
+          ],
+        },
+      }))
+      .mockResolvedValueOnce(makeResponse({ persona: 'coder', content: 'API done' }))
+      .mockResolvedValueOnce(makeResponse({ persona: 'coder', content: 'Tests done' }))
+      .mockResolvedValueOnce(makeResponse({
+        persona: 'team-leader',
+        structuredOutput: {
+          done: false,
+          reasoning: 'Need docs',
+          parts: [
+            { id: 'part-3', title: 'Docs', instruction: 'Write docs', timeout_ms: null },
+          ],
+        },
+      }))
+      .mockResolvedValueOnce(makeResponse({ persona: 'coder', content: 'Docs done' }))
+      .mockResolvedValueOnce(makeResponse({
+        persona: 'team-leader',
+        structuredOutput: {
+          done: true,
+          reasoning: 'Enough',
+          parts: [],
+        },
+      }));
+
+    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(6);
+    const output = state.movementOutputs.get('implement');
+    expect(output).toBeDefined();
+    expect(output!.content).toContain('## part-3: Docs');
+    expect(output!.content).toContain('Docs done');
+  });
+
 });

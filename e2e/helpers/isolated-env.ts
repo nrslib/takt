@@ -104,7 +104,7 @@ export function createIsolatedEnv(): IsolatedEnv {
     ? {
       ...baseConfig,
       provider,
-      ...(provider === 'opencode' && model ? { model } : {}),
+      ...(model ? { model } : {}),
     }
     : baseConfig;
   writeConfigFile(taktDir, config);

@@ -5,11 +5,14 @@
  * pipeline mode, or interactive mode.
  */
 
-import { info, error as logError, withProgress } from '../../shared/ui/index.js';
+import { info, success, error as logError, withProgress } from '../../shared/ui/index.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
 import { getLabel } from '../../shared/i18n/index.js';
-import { fetchIssue, formatIssueAsTask, checkGhCli, parseIssueNumbers, type GitHubIssue } from '../../infra/github/index.js';
-import { selectAndExecuteTask, determinePiece, saveTaskFromInteractive, createIssueFromTask, type SelectAndExecuteOptions } from '../../features/tasks/index.js';
+import { formatIssueAsTask, parseIssueNumbers, formatPrReviewAsTask } from '../../infra/github/index.js';
+import { getGitProvider } from '../../infra/git/index.js';
+import type { PrReviewData } from '../../infra/git/index.js';
+import { checkoutBranch } from '../../infra/task/index.js';
+import { selectAndExecuteTask, determinePiece, saveTaskFromInteractive, createIssueAndSaveTask, promptLabelSelection, type SelectAndExecuteOptions } from '../../features/tasks/index.js';
 import { executePipeline } from '../../features/pipeline/index.js';
 import {
   interactiveMode,
@@ -23,7 +26,7 @@ import {
 } from '../../features/interactive/index.js';
 import { getPieceDescription, resolveConfigValue, resolveConfigValues, loadPersonaSessions } from '../../infra/config/index.js';
 import { program, resolvedCwd, pipelineMode } from './program.js';
-import { resolveAgentOverrides, parseCreateWorktreeOption, isDirectTask } from './helpers.js';
+import { resolveAgentOverrides, isDirectTask } from './helpers.js';
 import { loadTaskHistory } from './taskHistory.js';
 
 /**
@@ -33,28 +36,28 @@ import { loadTaskHistory } from './taskHistory.js';
  * - --issue N option (numeric issue number)
  * - Positional argument containing issue references (#N or "#1 #2")
  *
- * Returns resolved issues and the formatted task text for interactive mode.
+ * Returns the formatted task text for interactive mode.
  * Throws on gh CLI unavailability or fetch failure.
  */
 async function resolveIssueInput(
   issueOption: number | undefined,
   task: string | undefined,
-): Promise<{ issues: GitHubIssue[]; initialInput: string } | null> {
+): Promise<{ initialInput: string } | null> {
   if (issueOption) {
-    const ghStatus = checkGhCli();
+    const ghStatus = getGitProvider().checkCliStatus();
     if (!ghStatus.available) {
       throw new Error(ghStatus.error);
     }
     const issue = await withProgress(
       'Fetching GitHub Issue...',
       (fetchedIssue) => `GitHub Issue fetched: #${fetchedIssue.number} ${fetchedIssue.title}`,
-      async () => fetchIssue(issueOption),
+      async () => getGitProvider().fetchIssue(issueOption),
     );
-    return { issues: [issue], initialInput: formatIssueAsTask(issue) };
+    return { initialInput: formatIssueAsTask(issue) };
   }
 
   if (task && isDirectTask(task)) {
-    const ghStatus = checkGhCli();
+    const ghStatus = getGitProvider().checkCliStatus();
     if (!ghStatus.available) {
       throw new Error(ghStatus.error);
     }
@@ -66,12 +69,36 @@ async function resolveIssueInput(
     const issues = await withProgress(
       'Fetching GitHub Issue...',
       (fetchedIssues) => `GitHub Issues fetched: ${fetchedIssues.map((issue) => `#${issue.number}`).join(', ')}`,
-      async () => issueNumbers.map((n) => fetchIssue(n)),
+      async () => issueNumbers.map((n) => getGitProvider().fetchIssue(n)),
     );
-    return { issues, initialInput: issues.map(formatIssueAsTask).join('\n\n---\n\n') };
+    return { initialInput: issues.map(formatIssueAsTask).join('\n\n---\n\n') };
   }
 
   return null;
+}
+
+/**
+ * Resolve PR review comments from `--pr` option.
+ *
+ * Fetches review comments and metadata, formats as task text.
+ * Returns the formatted task text for interactive mode.
+ * Throws on gh CLI unavailability or fetch failure.
+ */
+async function resolvePrInput(
+  prNumber: number,
+): Promise<{ initialInput: string; prBranch: string }> {
+  const ghStatus = getGitProvider().checkCliStatus();
+  if (!ghStatus.available) {
+    throw new Error(ghStatus.error);
+  }
+
+  const prReview = await withProgress(
+    'Fetching PR review comments...',
+    (pr: PrReviewData) => `PR fetched: #${pr.number} ${pr.title}`,
+    async () => getGitProvider().fetchPrReviewComments(prNumber),
+  );
+
+  return { initialInput: formatPrReviewAsTask(prReview), prBranch: prReview.headRefName };
 }
 
 /**
@@ -80,8 +107,23 @@ async function resolveIssueInput(
  */
 export async function executeDefaultAction(task?: string): Promise<void> {
   const opts = program.opts();
+  if (!pipelineMode && (opts.autoPr === true || opts.draft === true)) {
+    logError('--auto-pr/--draft are supported only in --pipeline mode');
+    process.exit(1);
+  }
+  const prNumber = opts.pr as number | undefined;
+  const issueNumber = opts.issue as number | undefined;
+
+  if (prNumber && issueNumber) {
+    logError('--pr and --issue cannot be used together');
+    process.exit(1);
+  }
+
+  if (prNumber && (opts.task as string | undefined)) {
+    logError('--pr and --task cannot be used together');
+    process.exit(1);
+  }
   const agentOverrides = resolveAgentOverrides(program);
-  const createWorktreeOverride = parseCreateWorktreeOption(opts.createWorktree as string | undefined);
   const resolvedPipelinePiece = (opts.piece as string | undefined) ?? resolveConfigValue(resolvedCwd, 'piece');
   const resolvedPipelineAutoPr = opts.autoPr === true
     ? true
@@ -90,17 +132,14 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     ? true
     : (resolveConfigValue(resolvedCwd, 'draftPr') ?? false);
   const selectOptions: SelectAndExecuteOptions = {
-    autoPr: opts.autoPr === true ? true : undefined,
-    draftPr: opts.draft === true ? true : undefined,
-    repo: opts.repo as string | undefined,
     piece: opts.piece as string | undefined,
-    createWorktree: createWorktreeOverride,
   };
 
   // --- Pipeline mode (non-interactive): triggered by --pipeline ---
   if (pipelineMode) {
     const exitCode = await executePipeline({
-      issueNumber: opts.issue as number | undefined,
+      issueNumber,
+      prNumber,
       task: opts.task as string | undefined,
       piece: resolvedPipelinePiece,
       branch: opts.branch as string | undefined,
@@ -111,7 +150,6 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       cwd: resolvedCwd,
       provider: agentOverrides?.provider,
       model: agentOverrides?.model,
-      createWorktree: createWorktreeOverride,
     });
 
     if (exitCode !== 0) {
@@ -130,18 +168,30 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     return;
   }
 
-  // Resolve issue references (--issue N or #N positional arg) before interactive mode
+  // Resolve PR review comments (--pr N) before interactive mode
   let initialInput: string | undefined = task;
+  let prBranch: string | undefined;
 
-  try {
-    const issueResult = await resolveIssueInput(opts.issue as number | undefined, task);
-    if (issueResult) {
-      selectOptions.issues = issueResult.issues;
-      initialInput = issueResult.initialInput;
+  if (prNumber) {
+    try {
+      const prResult = await resolvePrInput(prNumber);
+      initialInput = prResult.initialInput;
+      prBranch = prResult.prBranch;
+    } catch (e) {
+      logError(getErrorMessage(e));
+      process.exit(1);
     }
-  } catch (e) {
-    logError(getErrorMessage(e));
-    process.exit(1);
+  } else {
+    // Resolve issue references (--issue N or #N positional arg) before interactive mode
+    try {
+      const issueResult = await resolveIssueInput(issueNumber, task);
+      if (issueResult) {
+        initialInput = issueResult.initialInput;
+      }
+    } catch (e) {
+      logError(getErrorMessage(e));
+      process.exit(1);
+    }
   }
 
   // All paths below go through interactive mode
@@ -187,7 +237,8 @@ export async function executeDefaultAction(task?: string): Promise<void> {
           info(getLabel('interactive.continueNoSession', lang));
         }
       }
-      result = await interactiveMode(resolvedCwd, initialInput, pieceContext, selectedSessionId);
+      const interactiveOpts = prBranch ? { excludeActions: ['create_issue'] as const } : undefined;
+      result = await interactiveMode(resolvedCwd, initialInput, pieceContext, selectedSessionId, undefined, interactiveOpts);
       break;
     }
 
@@ -212,6 +263,11 @@ export async function executeDefaultAction(task?: string): Promise<void> {
 
   await dispatchConversationAction(result, {
     execute: async ({ task: confirmedTask }) => {
+      if (prBranch) {
+        info(`Fetching and checking out PR branch: ${prBranch}`);
+        checkoutBranch(resolvedCwd, prBranch);
+        success(`Checked out PR branch: ${prBranch}`);
+      }
       selectOptions.interactiveUserInput = true;
       selectOptions.piece = pieceId;
       selectOptions.interactiveMetadata = { confirmed: true, task: confirmedTask };
@@ -219,16 +275,17 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       await selectAndExecuteTask(resolvedCwd, confirmedTask, selectOptions, agentOverrides);
     },
     create_issue: async ({ task: confirmedTask }) => {
-      const issueNumber = createIssueFromTask(confirmedTask);
-      if (issueNumber !== undefined) {
-        await saveTaskFromInteractive(resolvedCwd, confirmedTask, pieceId, {
-          issue: issueNumber,
-          confirmAtEndMessage: 'Add this issue to tasks?',
-        });
-      }
+      const labels = await promptLabelSelection(lang);
+      await createIssueAndSaveTask(resolvedCwd, confirmedTask, pieceId, {
+        confirmAtEndMessage: 'Add this issue to tasks?',
+        labels,
+      });
     },
     save_task: async ({ task: confirmedTask }) => {
-      await saveTaskFromInteractive(resolvedCwd, confirmedTask, pieceId);
+      const presetSettings = prBranch
+        ? { worktree: true as const, branch: prBranch, autoPr: false }
+        : undefined;
+      await saveTaskFromInteractive(resolvedCwd, confirmedTask, pieceId, { presetSettings });
     },
     cancel: () => undefined,
   });

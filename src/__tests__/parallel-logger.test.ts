@@ -2,7 +2,7 @@
  * Tests for parallel-logger module
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ParallelLogger } from '../core/piece/index.js';
 import type { StreamEvent } from '../core/piece/index.js';
 
@@ -11,6 +11,7 @@ describe('ParallelLogger', () => {
   let writeFn: (text: string) => void;
 
   beforeEach(() => {
+    vi.useRealTimers();
     output = [];
     writeFn = (text: string) => output.push(text);
   });
@@ -333,6 +334,45 @@ describe('ParallelLogger', () => {
 
       logger.flush();
       expect(output).toHaveLength(0); // Nothing to flush
+    });
+
+    it('should flush partial lines by time-slice', async () => {
+      vi.useFakeTimers();
+      const logger = new ParallelLogger({
+        subMovementNames: ['step-a'],
+        writeFn,
+        flushIntervalMs: 50,
+        minTimedFlushChars: 1,
+      });
+      const handler = logger.createStreamHandler('step-a', 0);
+
+      handler({ type: 'text', data: { text: 'partial' } } as StreamEvent);
+      expect(output).toHaveLength(0);
+
+      await vi.advanceTimersByTimeAsync(60);
+      expect(output).toHaveLength(1);
+      expect(output[0]).toContain('[step-a]');
+      expect(output[0]).toContain('partial');
+    });
+
+    it('should prefer boundary-aware timed flush to reduce mid-word splits', async () => {
+      vi.useFakeTimers();
+      const logger = new ParallelLogger({
+        subMovementNames: ['step-a'],
+        writeFn,
+        flushIntervalMs: 50,
+        minTimedFlushChars: 10,
+      });
+      const handler = logger.createStreamHandler('step-a', 0);
+
+      handler({ type: 'text', data: { text: 'alpha beta gamma delta' } } as StreamEvent);
+      await vi.advanceTimersByTimeAsync(60);
+
+      expect(output).toHaveLength(1);
+      expect(output[0]).toContain('alpha beta gamma ');
+
+      logger.flush();
+      expect(output[1]).toContain('delta');
     });
   });
 

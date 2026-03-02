@@ -1,9 +1,8 @@
 /**
  * Task execution orchestration.
  *
- * Coordinates piece selection, worktree creation, task execution,
- * auto-commit, and PR creation. Extracted from cli.ts to avoid
- * mixing CLI parsing with business logic.
+ * Coordinates piece selection and in-place task execution.
+ * Extracted from cli.ts to avoid mixing CLI parsing with business logic.
  */
 
 import {
@@ -15,7 +14,6 @@ import { createSharedClone, summarizeTaskName, resolveBaseBranch, TaskRunner } f
 import { info, error, withProgress } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import { executeTask } from './taskExecution.js';
-import { resolveAutoPr, resolveDraftPr, postExecutionFlow } from './postExecution.js';
 import type { TaskExecutionOptions, WorktreeConfirmationResult, SelectAndExecuteOptions } from './types.js';
 import { selectPiece } from '../../pieceSelection/index.js';
 import { buildBooleanTaskResult, persistTaskError, persistTaskResult } from './taskResultHandler.js';
@@ -43,6 +41,7 @@ export async function confirmAndCreateWorktree(
   cwd: string,
   task: string,
   createWorktreeOverride?: boolean | undefined,
+  branchOverride?: string,
 ): Promise<WorktreeConfirmationResult> {
   const useWorktree =
     typeof createWorktreeOverride === 'boolean'
@@ -67,6 +66,7 @@ export async function confirmAndCreateWorktree(
     async () => createSharedClone(cwd, {
       worktree: true,
       taskSlug,
+      ...(branchOverride ? { branch: branchOverride } : {}),
     }),
   );
 
@@ -74,7 +74,7 @@ export async function confirmAndCreateWorktree(
 }
 
 /**
- * Execute a task with piece selection, optional worktree, and auto-commit.
+ * Execute a task with piece selection.
  * Shared by direct task execution and interactive mode.
  */
 export async function selectAndExecuteTask(
@@ -90,34 +90,14 @@ export async function selectAndExecuteTask(
     return;
   }
 
-  const { execCwd, isWorktree, branch, baseBranch, taskSlug } = await confirmAndCreateWorktree(
-    cwd,
-    task,
-    options?.createWorktree,
-  );
-
-  // Ask for PR creation BEFORE execution (only if worktree is enabled)
-  let shouldCreatePr = false;
-  let shouldDraftPr = false;
-  if (isWorktree) {
-    shouldCreatePr = await resolveAutoPr(options?.autoPr, cwd);
-    if (shouldCreatePr) {
-      shouldDraftPr = await resolveDraftPr(options?.draftPr, cwd);
-    }
-  }
-
-  log.info('Starting task execution', { piece: pieceIdentifier, worktree: isWorktree, autoPr: shouldCreatePr, draftPr: shouldDraftPr });
+  // execute action always runs in-place (no worktree prompt/creation).
+  const execCwd = cwd;
+  log.info('Starting task execution', { piece: pieceIdentifier, worktree: false });
   const taskRunner = new TaskRunner(cwd);
   let taskRecord: Awaited<ReturnType<TaskRunner['addTask']>> | null = null;
   if (options?.skipTaskList !== true) {
     taskRecord = taskRunner.addTask(task, {
       piece: pieceIdentifier,
-      ...(isWorktree ? { worktree: true } : {}),
-      ...(branch ? { branch } : {}),
-      ...(isWorktree ? { worktree_path: execCwd } : {}),
-      auto_pr: shouldCreatePr,
-      draft_pr: shouldDraftPr,
-      ...(taskSlug ? { slug: taskSlug } : {}),
     });
   }
   const startedAt = new Date().toISOString();
@@ -145,41 +125,19 @@ export async function selectAndExecuteTask(
 
   const completedAt = new Date().toISOString();
 
-  let prFailed = false;
-  let prError: string | undefined;
-  if (taskSuccess && isWorktree) {
-    const postResult = await postExecutionFlow({
-      execCwd,
-      projectCwd: cwd,
-      task,
-      branch,
-      baseBranch,
-      shouldCreatePr,
-      draftPr: shouldDraftPr,
-      pieceIdentifier,
-      issues: options?.issues,
-      repo: options?.repo,
-    });
-    prFailed = postResult.prFailed ?? false;
-    prError = postResult.prError;
-  }
-
-  const effectiveSuccess = taskSuccess && !prFailed;
   if (taskRecord) {
     const taskResult = buildBooleanTaskResult({
       task: taskRecord,
-      taskSuccess: effectiveSuccess,
+      taskSuccess,
       successResponse: 'Task completed successfully',
-      failureResponse: prFailed ? `PR creation failed: ${prError}` : 'Task failed',
+      failureResponse: 'Task failed',
       startedAt,
       completedAt,
-      branch,
-      ...(isWorktree ? { worktreePath: execCwd } : {}),
     });
     persistTaskResult(taskRunner, taskResult);
   }
 
-  if (!effectiveSuccess) {
+  if (!taskSuccess) {
     process.exit(1);
   }
 }

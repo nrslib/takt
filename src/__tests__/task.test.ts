@@ -94,18 +94,29 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(recovered).toBe(0);
   });
 
-  it('should recover from corrupted tasks.yaml and allow adding tasks again', () => {
+  it('should preserve corrupted tasks.yaml and throw', () => {
     mkdirSync(join(testDir, '.takt'), { recursive: true });
     writeFileSync(join(testDir, '.takt', 'tasks.yaml'), 'tasks:\n  - name: [broken', 'utf-8');
 
-    expect(() => runner.listTasks()).not.toThrow();
-    expect(runner.listTasks()).toEqual([]);
-    expect(existsSync(join(testDir, '.takt', 'tasks.yaml'))).toBe(false);
+    const tasksFilePath = join(testDir, '.takt', 'tasks.yaml');
+    expect(() => runner.listTasks()).toThrow(/Invalid tasks\.yaml/);
+    expect(existsSync(tasksFilePath)).toBe(true);
+  });
 
-    const task = runner.addTask('Task after recovery');
-    expect(task.name).toContain('task-after-recovery');
-    expect(existsSync(join(testDir, '.takt', 'tasks.yaml'))).toBe(true);
-    expect(runner.listTasks()).toHaveLength(1);
+  it('should preserve tasks.yaml and throw when pending record has started_at', () => {
+    writeTasksFile(testDir, [{
+      name: 'broken-pending-task',
+      status: 'pending',
+      content: 'Broken pending',
+      created_at: '2026-02-09T00:00:00.000Z',
+      started_at: '2026-02-09T00:01:00.000Z',
+      completed_at: null,
+      owner_pid: null,
+    }]);
+
+    const tasksFilePath = join(testDir, '.takt', 'tasks.yaml');
+    expect(() => runner.claimNextTasks(1)).toThrow();
+    expect(existsSync(tasksFilePath)).toBe(true);
   });
 
   it('should load pending content from relative content_file', () => {
@@ -164,7 +175,7 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(() => runner.listTasks()).toThrow(/Task spec file is missing/i);
   });
 
-  it('should reset tasks file when both content and content_file are set', () => {
+  it('should preserve tasks file and throw when both content and content_file are set', () => {
     writeTasksFile(testDir, [{
       name: 'task-a',
       status: 'pending',
@@ -176,8 +187,9 @@ describe('TaskRunner (tasks.yaml)', () => {
       owner_pid: null,
     }]);
 
-    expect(runner.listTasks()).toEqual([]);
-    expect(existsSync(join(testDir, '.takt', 'tasks.yaml'))).toBe(false);
+    const tasksFilePath = join(testDir, '.takt', 'tasks.yaml');
+    expect(() => runner.listTasks()).toThrow(/Invalid tasks\.yaml/);
+    expect(existsSync(tasksFilePath)).toBe(true);
   });
 
   it('should throw when content_file target is missing', () => {

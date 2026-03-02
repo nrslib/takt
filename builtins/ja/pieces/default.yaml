@@ -1,5 +1,5 @@
 name: default
-description: テスト先行開発ピース（計画 → テスト作成 → 実装 → AIレビュー → 3並列レビュー → 修正 → 監督 → 完了）
+description: テスト先行開発ピース（計画 → テスト作成 → 実装 → AIアンチパターンレビュー → 並列レビュー → 完了）
 piece_config:
   provider_options:
     codex:
@@ -68,7 +68,6 @@ movements:
       - coding
       - testing
     knowledge:
-      - backend
       - architecture
     allowed_tools:
       - Read
@@ -83,6 +82,8 @@ movements:
     instruction: write-tests-first
     rules:
       - condition: テスト作成が完了した
+        next: implement
+      - condition: テスト対象が未実装のためテスト作成をスキップする
         next: implement
       - condition: テスト作成を進行できない
         next: ABORT
@@ -104,7 +105,6 @@ movements:
       - testing
     session: refresh
     knowledge:
-      - backend
       - architecture
     allowed_tools:
       - Read
@@ -116,6 +116,7 @@ movements:
       - WebSearch
       - WebFetch
     required_permission_mode: edit
+    instruction: implement-after-tests
     rules:
       - condition: 実装完了
         next: ai_review
@@ -127,7 +128,6 @@ movements:
         next: implement
         requires_user_input: true
         interactive_only: true
-    instruction: implement-after-tests
     output_contracts:
       report:
         - name: coder-scope.md
@@ -146,12 +146,12 @@ movements:
       - Grep
       - WebSearch
       - WebFetch
+    instruction: ai-review
     rules:
       - condition: AI特有の問題なし
         next: reviewers
       - condition: AI特有の問題あり
         next: ai_fix
-    instruction: ai-review
     output_contracts:
       report:
         - name: ai-review.md
@@ -164,7 +164,6 @@ movements:
       - testing
     session: refresh
     knowledge:
-      - backend
       - architecture
     allowed_tools:
       - Read
@@ -176,38 +175,22 @@ movements:
       - WebSearch
       - WebFetch
     required_permission_mode: edit
+    instruction: ai-fix
     pass_previous_response: false
     rules:
-      - condition: AI問題の修正完了
+      - condition: AI Reviewerの指摘に対する修正が完了した
         next: ai_review
       - condition: 修正不要（指摘対象ファイル/仕様の確認済み）
-        next: ai_no_fix
-      - condition: 判断できない、情報不足
-        next: ai_no_fix
-    instruction: ai-fix
-  - name: ai_no_fix
-    edit: false
-    persona: architecture-reviewer
-    policy: review
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-    rules:
-      - condition: ai_reviewの指摘が妥当（修正すべき）
-        next: ai_fix
-      - condition: ai_fixの判断が妥当（修正不要）
         next: reviewers
-    instruction: arbitrate
+      - condition: 修正を進行できない
+        next: reviewers
   - name: reviewers
     parallel:
       - name: arch-review
         edit: false
         persona: architecture-reviewer
         policy: review
-        knowledge:
-          - architecture
-          - backend
+        knowledge: architecture
         allowed_tools:
           - Read
           - Glob
@@ -222,50 +205,32 @@ movements:
           report:
             - name: architect-review.md
               format: architecture-review
-      - name: qa-review
+      - name: supervise
         edit: false
-        persona: qa-reviewer
-        policy:
-          - review
-          - qa
+        persona: supervisor
+        policy: review
         allowed_tools:
           - Read
           - Glob
           - Grep
+          - Bash
           - WebSearch
           - WebFetch
+        instruction: supervise
         rules:
-          - condition: approved
-          - condition: needs_fix
-        instruction: review-qa
+          - condition: すべて問題なし
+          - condition: 要求未達成、テスト失敗、ビルドエラー
         output_contracts:
           report:
-            - name: qa-review.md
-              format: qa-review
-      - name: testing-review
-        edit: false
-        persona: testing-reviewer
-        policy:
-          - review
-          - testing
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - WebSearch
-          - WebFetch
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        instruction: review-test
-        output_contracts:
-          report:
-            - name: testing-review.md
-              format: testing-review
+            - name: supervisor-validation.md
+              format: supervisor-validation
+            - name: summary.md
+              format: summary
+              use_judge: false
     rules:
-      - condition: all("approved")
-        next: supervise
-      - condition: any("needs_fix")
+      - condition: all("approved", "すべて問題なし")
+        next: COMPLETE
+      - condition: any("needs_fix", "要求未達成、テスト失敗、ビルドエラー")
         next: fix
   - name: fix
     edit: true
@@ -274,7 +239,6 @@ movements:
       - coding
       - testing
     knowledge:
-      - backend
       - architecture
     allowed_tools:
       - Read
@@ -286,35 +250,10 @@ movements:
       - WebSearch
       - WebFetch
     required_permission_mode: edit
+    instruction: fix
     pass_previous_response: false
     rules:
       - condition: 修正完了
         next: reviewers
       - condition: 判断できない、情報不足
         next: plan
-    instruction: fix
-  - name: supervise
-    edit: false
-    persona: supervisor
-    policy: review
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - Bash
-      - WebSearch
-      - WebFetch
-    pass_previous_response: false
-    rules:
-      - condition: すべて問題なし
-        next: COMPLETE
-      - condition: 要求未達成、テスト失敗、ビルドエラー
-        next: plan
-    instruction: supervise
-    output_contracts:
-      report:
-        - name: supervisor-validation.md
-          format: supervisor-validation
-        - name: summary.md
-          format: summary
-          use_judge: false

@@ -1,0 +1,296 @@
+name: terraform
+description: Terraform IaC development piece (plan → implement → parallel review → supervisor validation → fix → complete)
+piece_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+max_movements: 15
+initial_movement: plan
+movements:
+  - name: plan
+    edit: false
+    persona: planner
+    knowledge: terraform-aws
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Bash
+      - WebSearch
+      - WebFetch
+    rules:
+      - condition: Requirements are clear and implementable
+        next: implement
+      - condition: User is asking a question (not an implementation task)
+        next: COMPLETE
+      - condition: Requirements are unclear or insufficient
+        next: ABORT
+    instruction: plan
+    output_contracts:
+      report:
+        - name: plan.md
+          format: plan
+  - name: implement
+    edit: true
+    persona: terraform-coder
+    policy:
+      - terraform
+    knowledge: terraform-aws
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    required_permission_mode: full
+    quality_gates:
+      - terraform fmt -check passes without errors
+      - terraform validate succeeds
+      - terraform plan is executable (no errors)
+    instruction: implement-terraform
+    rules:
+      - condition: Implementation is complete
+        next: reviewers
+      - condition: Cannot proceed with implementation
+        next: ABORT
+      - condition: User input needed for confirmation
+        next: implement
+        requires_user_input: true
+        interactive_only: true
+    output_contracts:
+      report:
+        - name: coder-scope.md
+          format: coder-scope
+        - name: coder-decisions.md
+          format: coder-decisions
+  - name: reviewers
+    parallel:
+      - name: tf_review
+        edit: false
+        persona: terraform-reviewer
+        policy:
+          - review
+          - terraform
+        knowledge: terraform-aws
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Bash
+          - WebSearch
+          - WebFetch
+        instruction: review-terraform
+        rules:
+          - condition: Complies with Terraform conventions
+          - condition: Convention violations found
+        output_contracts:
+          report:
+            - name: terraform-review.md
+              format: terraform-review
+      - name: ai_review
+        edit: false
+        persona: ai-antipattern-reviewer
+        policy:
+          - review
+          - ai-antipattern
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - WebSearch
+          - WebFetch
+        instruction: review-ai
+        rules:
+          - condition: No AI-specific issues
+          - condition: AI-specific issues found
+        output_contracts:
+          report:
+            - name: ai-review.md
+              format: ai-review
+    rules:
+      - condition: all("Complies with Terraform conventions", "No AI-specific issues")
+        next: supervise
+      - condition: any("Convention violations found", "AI-specific issues found")
+        next: supervise
+  - name: supervise
+    edit: false
+    persona: supervisor
+    policy: review
+    knowledge: terraform-aws
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Bash
+      - WebSearch
+      - WebFetch
+    instruction: supervise
+    rules:
+      - condition: All reviewers approved and task requirements met
+        next: COMPLETE
+      - condition: Only AI-specific issues need fixing
+        next: ai_fix
+      - condition: Only convention violations or requirements unmet
+        next: supervise_fix
+      - condition: Multiple types of issues found
+        next: fix_both
+      - condition: Irreconcilable requirement conflict, user decision needed
+        next: ABORT
+    output_contracts:
+      report:
+        - name: supervisor-validation.md
+          format: supervisor-validation
+        - name: summary.md
+          format: summary
+          use_judge: false
+  - name: fix_both
+    parallel:
+      - name: ai_fix_parallel
+        edit: true
+        persona: terraform-coder
+        policy:
+          - terraform
+        knowledge: terraform-aws
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Edit
+          - Bash
+          - WebSearch
+          - WebFetch
+        required_permission_mode: full
+        rules:
+          - condition: AI issue fix complete
+          - condition: No fix needed (target file/spec verified)
+          - condition: Cannot determine, insufficient info
+        instruction: ai-fix
+      - name: supervise_fix_parallel
+        edit: true
+        persona: terraform-coder
+        policy:
+          - terraform
+        knowledge: terraform-aws
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Edit
+          - Bash
+          - WebSearch
+          - WebFetch
+        required_permission_mode: full
+        rules:
+          - condition: Supervisor's findings have been fixed
+          - condition: Cannot proceed with fix
+        instruction: fix-supervisor
+    rules:
+      - condition: all("AI issue fix complete", "Supervisor's findings have been fixed")
+        next: reviewers
+      - condition: any("No fix needed (target file/spec verified)", "Cannot determine, insufficient info", "Cannot proceed with fix")
+        next: implement
+  - name: ai_fix
+    edit: true
+    persona: terraform-coder
+    policy:
+      - terraform
+    knowledge: terraform-aws
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    required_permission_mode: full
+    pass_previous_response: false
+    rules:
+      - condition: AI issue fix complete
+        next: reviewers
+      - condition: No fix needed (target file/spec verified)
+        next: implement
+      - condition: Cannot determine, insufficient info
+        next: implement
+    instruction: ai-fix
+  - name: supervise_fix
+    edit: true
+    persona: terraform-coder
+    policy:
+      - terraform
+    knowledge: terraform-aws
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    required_permission_mode: full
+    pass_previous_response: false
+    rules:
+      - condition: Supervisor's findings have been fixed
+        next: reviewers
+      - condition: Cannot proceed with fix
+        next: implement
+    instruction: fix-supervisor
+loop_monitors:
+  - cycle: [fix_both, reviewers]
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction_template: |
+        The review → fix cycle has repeated {cycle_count} times.
+        Check the review report history in the Report Directory and assess convergence.
+
+        **Signs of unproductive cycling:**
+        - Same finding_id oscillating between resolved → new
+        - New issues keep arising as side effects of previous fixes
+        - Reviewer findings conflict with task requirements and cannot be reconciled
+      rules:
+        - condition: Healthy (new issues trending down)
+          next: fix_both
+        - condition: Unproductive (oscillation or requirement conflict)
+          next: ABORT
+  - cycle: [ai_fix, reviewers]
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction_template: |
+        The AI fix → review cycle has repeated {cycle_count} times.
+        Check the review report history in the Report Directory and assess convergence.
+
+        **Signs of unproductive cycling:**
+        - Same finding_id oscillating between resolved → new
+        - New issues keep arising as side effects of previous fixes
+        - Reviewer findings conflict with task requirements and cannot be reconciled
+      rules:
+        - condition: Healthy (new issues trending down)
+          next: ai_fix
+        - condition: Unproductive (oscillation or requirement conflict)
+          next: ABORT
+  - cycle: [supervise_fix, reviewers]
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction_template: |
+        The supervisor fix → review cycle has repeated {cycle_count} times.
+        Check the review report history in the Report Directory and assess convergence.
+
+        **Signs of unproductive cycling:**
+        - Same finding_id oscillating between resolved → new
+        - New issues keep arising as side effects of previous fixes
+        - Reviewer findings conflict with task requirements and cannot be reconciled
+      rules:
+        - condition: Healthy (new issues trending down)
+          next: supervise_fix
+        - condition: Unproductive (oscillation or requirement conflict)
+          next: ABORT

@@ -226,3 +226,38 @@ describe('/resume command', () => {
     expect(result.action).toBe('cancel');
   });
 });
+
+// =================================================================
+// /go command: summary AI session isolation
+// =================================================================
+describe('/go command', () => {
+  it('should pass sessionId as undefined to summary AI even when conversation has an active session', async () => {
+    // Given: send message (AI responds with sessionId) → /go triggers summary
+    setupRawStdin(toRawInputs(['hello', '/go']));
+
+    const { provider, capture } = createScenarioProvider([
+      // Call 0: user message → AI responds and sets sessionId
+      { content: 'AI response', sessionId: 'session-abc' },
+      // Call 1: /go summary → should NOT inherit sessionId
+      { content: '## Fix broken title\nDetails here' },
+    ]);
+
+    const ctx: SessionContext = {
+      provider: provider as SessionContext['provider'],
+      providerType: 'mock' as SessionContext['providerType'],
+      model: undefined,
+      lang: 'en',
+      personaName: 'interactive',
+      sessionId: undefined,
+    };
+
+    // When
+    const result = await runConversationLoop('/test', ctx, defaultStrategy, undefined, undefined);
+
+    // Then: first AI call had no session (initial state)
+    expect(capture.sessionIds[0]).toBeUndefined();
+    // Then: summary call must NOT inherit the conversation session
+    expect(capture.sessionIds[1]).toBeUndefined();
+    expect(result.action).toBe('execute');
+  });
+});

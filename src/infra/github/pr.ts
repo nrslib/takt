@@ -7,16 +7,9 @@
 import { execFileSync } from 'node:child_process';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { checkGhCli } from './issue.js';
-import type { GitHubIssue, CreatePrOptions, CreatePrResult } from './types.js';
-
-export type { CreatePrOptions, CreatePrResult };
+import type { Issue, CreatePrOptions, CreatePrResult, ExistingPr, CommentResult, PrReviewData, PrReviewComment } from '../git/types.js';
 
 const log = createLogger('github-pr');
-
-export interface ExistingPr {
-  number: number;
-  url: string;
-}
 
 /**
  * Find an open PR for the given branch.
@@ -33,15 +26,13 @@ export function findExistingPr(cwd: string, branch: string): ExistingPr | undefi
     );
     const prs = JSON.parse(output) as ExistingPr[];
     return prs[0];
-  } catch {
+  } catch (e) {
+    log.debug('gh pr list failed, treating as no PR', { error: getErrorMessage(e) });
     return undefined;
   }
 }
 
-/**
- * Add a comment to an existing PR.
- */
-export function commentOnPr(cwd: string, prNumber: number, body: string): CreatePrResult {
+export function commentOnPr(cwd: string, prNumber: number, body: string): CommentResult {
   const ghStatus = checkGhCli();
   if (!ghStatus.available) {
     return { success: false, error: ghStatus.error ?? 'gh CLI is not available' };
@@ -61,21 +52,116 @@ export function commentOnPr(cwd: string, prNumber: number, body: string): Create
   }
 }
 
-/**
- * Push a branch to origin.
- * Throws on failure.
- */
-export function pushBranch(cwd: string, branch: string): void {
-  log.info('Pushing branch to origin', { branch });
-  execFileSync('git', ['push', 'origin', branch], {
-    cwd,
-    stdio: 'pipe',
-  });
+/** JSON fields requested from `gh pr view` for review data */
+const PR_REVIEW_JSON_FIELDS = 'number,title,body,url,headRefName,comments,reviews,files';
+
+/** Raw shape returned by `gh pr view --json` for review data */
+interface GhPrViewReviewResponse {
+  number: number;
+  title: string;
+  body: string;
+  url: string;
+  headRefName: string;
+  comments: Array<{ author: { login: string }; body: string }>;
+  reviews: Array<{
+    author: { login: string };
+    body: string;
+    comments: Array<{ body: string; path: string; line: number; author: { login: string } }>;
+  }>;
+  files: Array<{ path: string }>;
 }
 
 /**
- * Create a Pull Request via `gh pr create`.
+ * Fetch PR review comments and metadata via `gh pr view`.
+ * Throws on failure (PR not found, network error, etc.).
  */
+export function fetchPrReviewComments(prNumber: number): PrReviewData {
+  log.debug('Fetching PR review comments', { prNumber });
+
+  const raw = execFileSync(
+    'gh',
+    ['pr', 'view', String(prNumber), '--json', PR_REVIEW_JSON_FIELDS],
+    { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
+  );
+
+  const data = JSON.parse(raw) as GhPrViewReviewResponse;
+
+  const comments: PrReviewComment[] = data.comments.map((c) => ({
+    author: c.author.login,
+    body: c.body,
+  }));
+
+  const reviews: PrReviewComment[] = [];
+  for (const review of data.reviews) {
+    if (review.body) {
+      reviews.push({ author: review.author.login, body: review.body });
+    }
+    for (const comment of review.comments) {
+      reviews.push({
+        author: comment.author.login,
+        body: comment.body,
+        path: comment.path,
+        line: comment.line,
+      });
+    }
+  }
+
+  return {
+    number: data.number,
+    title: data.title,
+    body: data.body,
+    url: data.url,
+    headRefName: data.headRefName,
+    comments,
+    reviews,
+    files: data.files.map((f) => f.path),
+  };
+}
+
+/**
+ * Format PR review data into task text for piece execution.
+ */
+export function formatPrReviewAsTask(prReview: PrReviewData): string {
+  const parts: string[] = [];
+
+  parts.push(`## PR #${prReview.number} Review Comments: ${prReview.title}`);
+
+  if (prReview.body) {
+    parts.push('');
+    parts.push('### PR Description');
+    parts.push(prReview.body);
+  }
+
+  if (prReview.reviews.length > 0) {
+    parts.push('');
+    parts.push('### Review Comments');
+    for (const review of prReview.reviews) {
+      const location = review.path
+        ? `\n  File: ${review.path}${review.line ? `, Line: ${review.line}` : ''}`
+        : '';
+      parts.push(`**${review.author}**: ${review.body}${location}`);
+    }
+  }
+
+  if (prReview.comments.length > 0) {
+    parts.push('');
+    parts.push('### Conversation Comments');
+    for (const comment of prReview.comments) {
+      parts.push(`**${comment.author}**: ${comment.body}`);
+    }
+  }
+
+  if (prReview.files.length > 0) {
+    parts.push('');
+    parts.push('### Changed Files');
+    for (const file of prReview.files) {
+      parts.push(`- ${file}`);
+    }
+  }
+
+  return parts.join('\n');
+}
+
 export function createPullRequest(cwd: string, options: CreatePrOptions): CreatePrResult {
   const ghStatus = checkGhCli();
   if (!ghStatus.available) {
@@ -125,13 +211,12 @@ export function createPullRequest(cwd: string, options: CreatePrOptions): Create
  * Build PR body from issues and execution report.
  * Supports multiple issues (adds "Closes #N" for each).
  */
-export function buildPrBody(issues: GitHubIssue[] | undefined, report: string): string {
+export function buildPrBody(issues: Issue[] | undefined, report: string): string {
   const parts: string[] = [];
 
   parts.push('## Summary');
   if (issues && issues.length > 0) {
     parts.push('');
-    // Use the first issue's body/title for summary
     parts.push(issues[0]!.body || issues[0]!.title);
   }
 

@@ -8,6 +8,7 @@
 
 import type { StreamCallback, StreamEvent } from '../types.js';
 import { stripAnsi } from '../../../shared/utils/text.js';
+import { LineTimeSliceBuffer } from './stream-buffer.js';
 
 /** ANSI color codes for sub-movement prefixes (cycled in order) */
 const COLORS = ['\x1b[36m', '\x1b[33m', '\x1b[35m', '\x1b[32m'] as const; // cyan, yellow, magenta, green
@@ -38,6 +39,12 @@ export interface ParallelLoggerOptions {
   parentMovementName?: string;
   /** Parent movement iteration count for rich parallel prefix display */
   movementIteration?: number;
+  /** Flush interval for partial text buffers in milliseconds */
+  flushIntervalMs?: number;
+  /** Minimum buffered chars before timed flush is allowed */
+  minTimedFlushChars?: number;
+  /** Maximum wait time for timed flush even without boundary */
+  maxTimedBufferMs?: number;
 }
 
 /**
@@ -49,31 +56,55 @@ export interface ParallelLoggerOptions {
  * - Delegate init/result/error events to the parent callback
  */
 export class ParallelLogger {
-  private readonly maxNameLength: number;
-  private readonly lineBuffers: Map<string, string> = new Map();
+  private static readonly DEFAULT_FLUSH_INTERVAL_MS = 300;
+  private maxNameLength: number;
+  private readonly subMovementNames: string[];
+  private readonly lineBuffer: LineTimeSliceBuffer;
   private readonly parentOnStream?: StreamCallback;
   private readonly writeFn: (text: string) => void;
   private readonly progressInfo?: ParallelProgressInfo;
-  private readonly totalSubMovements: number;
+  private totalSubMovements: number;
   private readonly taskLabel?: string;
   private readonly taskColorIndex?: number;
   private readonly parentMovementName?: string;
   private readonly movementIteration?: number;
+  private readonly flushIntervalMs: number;
 
   constructor(options: ParallelLoggerOptions) {
-    this.maxNameLength = Math.max(...options.subMovementNames.map((n) => n.length));
+    this.subMovementNames = [...options.subMovementNames];
+    this.maxNameLength = Math.max(...this.subMovementNames.map((n) => n.length));
     this.parentOnStream = options.parentOnStream;
     this.writeFn = options.writeFn ?? ((text: string) => process.stdout.write(text));
     this.progressInfo = options.progressInfo;
-    this.totalSubMovements = options.subMovementNames.length;
+    this.totalSubMovements = this.subMovementNames.length;
     this.taskLabel = options.taskLabel ? options.taskLabel.slice(0, 4) : undefined;
     this.taskColorIndex = options.taskColorIndex;
     this.parentMovementName = options.parentMovementName;
     this.movementIteration = options.movementIteration;
+    this.flushIntervalMs = options.flushIntervalMs ?? ParallelLogger.DEFAULT_FLUSH_INTERVAL_MS;
+    this.lineBuffer = new LineTimeSliceBuffer({
+      flushIntervalMs: this.flushIntervalMs,
+      onTimedFlush: (name, text) => this.flushPartialLine(name, text),
+      minTimedFlushChars: options.minTimedFlushChars,
+      maxTimedBufferMs: options.maxTimedBufferMs,
+    });
 
-    for (const name of options.subMovementNames) {
-      this.lineBuffers.set(name, '');
+    for (const name of this.subMovementNames) {
+      this.lineBuffer.addKey(name);
     }
+  }
+
+  addSubMovement(name: string): number {
+    const existingIndex = this.subMovementNames.indexOf(name);
+    if (existingIndex >= 0) {
+      return existingIndex;
+    }
+
+    this.subMovementNames.push(name);
+    this.totalSubMovements = this.subMovementNames.length;
+    this.maxNameLength = Math.max(this.maxNameLength, name.length);
+    this.lineBuffer.addKey(name);
+    return this.subMovementNames.length - 1;
   }
 
   /**
@@ -139,13 +170,7 @@ export class ParallelLogger {
    * Empty lines get no prefix per spec.
    */
   private handleTextEvent(name: string, prefix: string, text: string): void {
-    const buffer = this.lineBuffers.get(name) ?? '';
-    const combined = buffer + stripAnsi(text);
-    const parts = combined.split('\n');
-
-    // Last part is incomplete (no trailing newline) — keep in buffer
-    const remainder = parts.pop() ?? '';
-    this.lineBuffers.set(name, remainder);
+    const parts = this.lineBuffer.push(name, stripAnsi(text));
 
     // Output all complete lines
     for (const line of parts) {
@@ -155,6 +180,12 @@ export class ParallelLogger {
         this.writeFn(`${prefix}${line}\n`);
       }
     }
+  }
+
+  private flushPartialLine(name: string, text: string): void {
+    const index = this.subMovementNames.indexOf(name);
+    const prefix = this.buildPrefix(name, index < 0 ? 0 : index);
+    this.writeFn(`${prefix}${text}\n`);
   }
 
   /**
@@ -207,17 +238,9 @@ export class ParallelLogger {
    * Call after all sub-movements complete to output any trailing partial lines.
    */
   flush(): void {
-    // Build prefixes for flush — need index mapping
-    // Since we don't store index, iterate lineBuffers in insertion order
-    // (Map preserves insertion order, matching subMovementNames order)
-    let index = 0;
-    for (const [name, buffer] of this.lineBuffers) {
-      if (buffer !== '') {
-        const prefix = this.buildPrefix(name, index);
-        this.writeFn(`${prefix}${buffer}\n`);
-        this.lineBuffers.set(name, '');
-      }
-      index++;
+    const pending = this.lineBuffer.flushAll();
+    for (const { key, text } of pending) {
+      this.flushPartialLine(key, text);
     }
   }
 

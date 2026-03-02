@@ -7,7 +7,6 @@ import type { PersonaProviderEntry } from '../../../core/models/persisted-global
 import type { ProviderPermissionProfiles } from '../../../core/models/provider-profiles.js';
 import type { MovementProviderOptions } from '../../../core/models/piece-types.js';
 import type { ProviderType } from '../../../infra/providers/index.js';
-import type { GitHubIssue } from '../../../infra/github/index.js';
 import type { ProviderOptionsSource } from '../../../core/piece/types.js';
 
 /** Result of piece execution */
@@ -103,6 +102,8 @@ export interface ExecuteTaskOptions {
 export interface PipelineExecutionOptions {
   /** GitHub issue number */
   issueNumber?: number;
+  /** PR number to fetch review comments */
+  prNumber?: number;
   /** Task content (alternative to issue) */
   task?: string;
   /** Piece name or path to piece file */
@@ -134,17 +135,11 @@ export interface WorktreeConfirmationResult {
 }
 
 export interface SelectAndExecuteOptions {
-  autoPr?: boolean;
-  draftPr?: boolean;
-  repo?: string;
   piece?: string;
-  createWorktree?: boolean | undefined;
   /** Enable interactive user input during step transitions */
   interactiveUserInput?: boolean;
   /** Interactive mode result metadata for NDJSON logging */
   interactiveMetadata?: InteractiveMetadata;
-  /** GitHub Issues to associate with the PR (adds "Closes #N" for each issue) */
-  issues?: GitHubIssue[];
   /** Skip adding task to tasks.yaml */
   skipTaskList?: boolean;
 }

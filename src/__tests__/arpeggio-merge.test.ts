@@ -17,9 +17,9 @@ function makeFailedResult(batchIndex: number, error: string): BatchResult {
 
 describe('buildMergeFn', () => {
   describe('concat strategy', () => {
-    it('should concatenate results with default separator (newline)', async () => {
+    it('should concatenate results with default separator (newline)', () => {
       const config: ArpeggioMergeMovementConfig = { strategy: 'concat' };
-      const mergeFn = await buildMergeFn(config);
+      const mergeFn = buildMergeFn(config);
       const results = [
         makeResult(0, 'Result A'),
         makeResult(1, 'Result B'),
@@ -28,9 +28,9 @@ describe('buildMergeFn', () => {
       expect(mergeFn(results)).toBe('Result A\nResult B\nResult C');
     });
 
-    it('should concatenate results with custom separator', async () => {
+    it('should concatenate results with custom separator', () => {
       const config: ArpeggioMergeMovementConfig = { strategy: 'concat', separator: '\n---\n' };
-      const mergeFn = await buildMergeFn(config);
+      const mergeFn = buildMergeFn(config);
       const results = [
         makeResult(0, 'A'),
         makeResult(1, 'B'),
@@ -38,9 +38,9 @@ describe('buildMergeFn', () => {
       expect(mergeFn(results)).toBe('A\n---\nB');
     });
 
-    it('should sort results by batch index', async () => {
+    it('should sort results by batch index', () => {
       const config: ArpeggioMergeMovementConfig = { strategy: 'concat' };
-      const mergeFn = await buildMergeFn(config);
+      const mergeFn = buildMergeFn(config);
       const results = [
         makeResult(2, 'C'),
         makeResult(0, 'A'),
@@ -49,9 +49,9 @@ describe('buildMergeFn', () => {
       expect(mergeFn(results)).toBe('A\nB\nC');
     });
 
-    it('should filter out failed results', async () => {
+    it('should filter out failed results', () => {
       const config: ArpeggioMergeMovementConfig = { strategy: 'concat' };
-      const mergeFn = await buildMergeFn(config);
+      const mergeFn = buildMergeFn(config);
       const results = [
         makeResult(0, 'A'),
         makeFailedResult(1, 'oops'),
@@ -60,9 +60,9 @@ describe('buildMergeFn', () => {
       expect(mergeFn(results)).toBe('A\nC');
     });
 
-    it('should return empty string when all results failed', async () => {
+    it('should return empty string when all results failed', () => {
       const config: ArpeggioMergeMovementConfig = { strategy: 'concat' };
-      const mergeFn = await buildMergeFn(config);
+      const mergeFn = buildMergeFn(config);
       const results = [
         makeFailedResult(0, 'error1'),
         makeFailedResult(1, 'error2'),
@@ -71,38 +71,18 @@ describe('buildMergeFn', () => {
     });
   });
 
-  describe('custom strategy with inline_js', () => {
-    it('should execute inline JS merge function', async () => {
+  describe('custom strategy', () => {
+    it('should execute inline_js merge function', () => {
       const config: ArpeggioMergeMovementConfig = {
         strategy: 'custom',
-        inlineJs: 'return results.filter(r => r.success).map(r => r.content.toUpperCase()).join(", ");',
+        inlineJs: 'return results.filter((r) => r.success).map((r) => r.content).reverse().join("|");',
       };
-      const mergeFn = await buildMergeFn(config);
+      const mergeFn = buildMergeFn(config);
       const results = [
-        makeResult(0, 'hello'),
-        makeResult(1, 'world'),
+        makeResult(1, 'B'),
+        makeResult(0, 'A'),
       ];
-      expect(mergeFn(results)).toBe('HELLO, WORLD');
-    });
-
-    it('should throw when inline JS returns non-string', async () => {
-      const config: ArpeggioMergeMovementConfig = {
-        strategy: 'custom',
-        inlineJs: 'return 42;',
-      };
-      const mergeFn = await buildMergeFn(config);
-      expect(() => mergeFn([makeResult(0, 'test')])).toThrow(
-        'Inline JS merge function must return a string, got number'
-      );
-    });
-  });
-
-  describe('custom strategy validation', () => {
-    it('should throw when custom strategy has neither inline_js nor file', async () => {
-      const config: ArpeggioMergeMovementConfig = { strategy: 'custom' };
-      await expect(buildMergeFn(config)).rejects.toThrow(
-        'Custom merge strategy requires either inline_js or file path'
-      );
+      expect(mergeFn(results)).toBe('B|A');
     });
   });
 });

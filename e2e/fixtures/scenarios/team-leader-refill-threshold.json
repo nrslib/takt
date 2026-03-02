@@ -1,0 +1,57 @@
+[
+  {
+    "persona": "agents/test-team-leader-refill-threshold",
+    "status": "done",
+    "content": "decompose",
+    "structured_output": {
+      "parts": [
+        { "id": "rt-1", "title": "Create rt-1.txt", "instruction": "Create rt-1.txt with content rt-1.txt", "timeout_ms": null },
+        { "id": "rt-2", "title": "Create rt-2.txt", "instruction": "Create rt-2.txt with content rt-2.txt", "timeout_ms": null },
+        { "id": "rt-3", "title": "Create rt-3.txt", "instruction": "Create rt-3.txt with content rt-3.txt", "timeout_ms": null }
+      ]
+    }
+  },
+  {
+    "persona": "agents/test-team-leader-refill-threshold",
+    "status": "done",
+    "content": "add-4-5",
+    "structured_output": {
+      "done": false,
+      "reasoning": "Need two more tasks now",
+      "parts": [
+        { "id": "rt-4", "title": "Create rt-4.txt", "instruction": "Create rt-4.txt with content rt-4.txt", "timeout_ms": null },
+        { "id": "rt-5", "title": "Create rt-5.txt", "instruction": "Create rt-5.txt with content rt-5.txt", "timeout_ms": null }
+      ]
+    }
+  },
+  {
+    "persona": "agents/test-team-leader-refill-threshold",
+    "status": "done",
+    "content": "add-6-7",
+    "structured_output": {
+      "done": false,
+      "reasoning": "Need final two tasks",
+      "parts": [
+        { "id": "rt-6", "title": "Create rt-6.txt", "instruction": "Create rt-6.txt with content rt-6.txt", "timeout_ms": null },
+        { "id": "rt-7", "title": "Create rt-7.txt", "instruction": "Create rt-7.txt with content rt-7.txt", "timeout_ms": null }
+      ]
+    }
+  },
+  {
+    "persona": "agents/test-team-leader-refill-threshold",
+    "status": "done",
+    "content": "done",
+    "structured_output": {
+      "done": true,
+      "reasoning": "All tasks planned",
+      "parts": []
+    }
+  },
+  { "persona": "agents/test-coder", "status": "done", "content": "completed rt-1" },
+  { "persona": "agents/test-coder", "status": "done", "content": "completed rt-2" },
+  { "persona": "agents/test-coder", "status": "done", "content": "completed rt-3" },
+  { "persona": "agents/test-coder", "status": "done", "content": "completed rt-4" },
+  { "persona": "agents/test-coder", "status": "done", "content": "completed rt-5" },
+  { "persona": "agents/test-coder", "status": "done", "content": "completed rt-6" },
+  { "persona": "agents/test-coder", "status": "done", "content": "completed rt-7" }
+]

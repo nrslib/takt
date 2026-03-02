@@ -71,20 +71,19 @@ describe('default piece parallel reviewers movement', () => {
     const reviewersMovement = piece!.movements.find((s) => s.name === 'reviewers');
     expect(reviewersMovement).toBeDefined();
     expect(reviewersMovement!.parallel).toBeDefined();
-    expect(reviewersMovement!.parallel).toHaveLength(3);
+    expect(reviewersMovement!.parallel).toHaveLength(2);
   });
 
-  it('should have arch-review, qa-review, and testing-review as parallel sub-movements', () => {
+  it('should have arch-review and supervise as parallel sub-movements', () => {
     const piece = getBuiltinPiece('default', process.cwd());
     const reviewersMovement = piece!.movements.find((s) => s.name === 'reviewers')!;
     const subMovementNames = reviewersMovement.parallel!.map((s) => s.name);
 
     expect(subMovementNames).toContain('arch-review');
-    expect(subMovementNames).toContain('qa-review');
-    expect(subMovementNames).toContain('testing-review');
+    expect(subMovementNames).toContain('supervise');
   });
 
-  it('should have aggregate conditions on the reviewers parent movement', () => {
+  it('should have multi-condition aggregate rules on the reviewers parent movement', () => {
     const piece = getBuiltinPiece('default', process.cwd());
     const reviewersMovement = piece!.movements.find((s) => s.name === 'reviewers')!;
 
@@ -93,25 +92,37 @@ describe('default piece parallel reviewers movement', () => {
 
     const allRule = reviewersMovement.rules!.find((r) => r.isAggregateCondition && r.aggregateType === 'all');
     expect(allRule).toBeDefined();
-    expect(allRule!.aggregateConditionText).toBe('approved');
-    expect(allRule!.next).toBe('supervise');
+    // Multi-condition aggregate: first condition is always 'approved' (both en/ja)
+    expect(Array.isArray(allRule!.aggregateConditionText)).toBe(true);
+    expect((allRule!.aggregateConditionText as string[])[0]).toBe('approved');
+    expect(allRule!.next).toBe('COMPLETE');
 
     const anyRule = reviewersMovement.rules!.find((r) => r.isAggregateCondition && r.aggregateType === 'any');
     expect(anyRule).toBeDefined();
-    expect(anyRule!.aggregateConditionText).toBe('needs_fix');
+    // Multi-condition aggregate: first condition is always 'needs_fix' (both en/ja)
+    expect(Array.isArray(anyRule!.aggregateConditionText)).toBe(true);
+    expect((anyRule!.aggregateConditionText as string[])[0]).toBe('needs_fix');
     expect(anyRule!.next).toBe('fix');
   });
 
-  it('should have matching conditions on sub-movements for aggregation', () => {
+  it('should have arch-review sub-movement with approved/needs_fix conditions', () => {
     const piece = getBuiltinPiece('default', process.cwd());
     const reviewersMovement = piece!.movements.find((s) => s.name === 'reviewers')!;
 
-    for (const subMovement of reviewersMovement.parallel!) {
-      expect(subMovement.rules).toBeDefined();
-      const conditions = subMovement.rules!.map((r) => r.condition);
-      expect(conditions).toContain('approved');
-      expect(conditions).toContain('needs_fix');
-    }
+    const archReview = reviewersMovement.parallel!.find((s) => s.name === 'arch-review')!;
+    expect(archReview.rules).toBeDefined();
+    const conditions = archReview.rules!.map((r) => r.condition);
+    expect(conditions).toContain('approved');
+    expect(conditions).toContain('needs_fix');
+  });
+
+  it('should have supervise sub-movement with 2 conditions', () => {
+    const piece = getBuiltinPiece('default', process.cwd());
+    const reviewersMovement = piece!.movements.find((s) => s.name === 'reviewers')!;
+
+    const supervise = reviewersMovement.parallel!.find((s) => s.name === 'supervise')!;
+    expect(supervise.rules).toBeDefined();
+    expect(supervise.rules).toHaveLength(2);
   });
 
   it('should have ai_review transitioning to reviewers movement', () => {
@@ -155,8 +166,8 @@ describe('default piece parallel reviewers movement', () => {
     const archReview = reviewersMovement.parallel!.find((s) => s.name === 'arch-review')!;
     expect(archReview.persona).toContain('architecture-reviewer');
 
-    const qaReview = reviewersMovement.parallel!.find((s) => s.name === 'qa-review')!;
-    expect(qaReview.persona).toContain('qa-reviewer');
+    const supervise = reviewersMovement.parallel!.find((s) => s.name === 'supervise')!;
+    expect(supervise.persona).toContain('supervisor');
   });
 
   it('should have output contracts configured on sub-movements', () => {
@@ -166,8 +177,8 @@ describe('default piece parallel reviewers movement', () => {
     const archReview = reviewersMovement.parallel!.find((s) => s.name === 'arch-review')!;
     expect(archReview.outputContracts).toBeDefined();
 
-    const qaReview = reviewersMovement.parallel!.find((s) => s.name === 'qa-review')!;
-    expect(qaReview.outputContracts).toBeDefined();
+    const supervise = reviewersMovement.parallel!.find((s) => s.name === 'supervise')!;
+    expect(supervise.outputContracts).toBeDefined();
   });
 });
 
@@ -221,10 +232,10 @@ describe('loadPiece (builtin fallback)', () => {
     expect(piece).toBeNull();
   });
 
-  it('should load builtin pieces like default-mini, research, e2e-test', () => {
-    const mini = loadPiece('default-mini', process.cwd());
-    expect(mini).not.toBeNull();
-    expect(mini!.name).toBe('default-mini');
+  it('should load builtin pieces like default, research, e2e-test', () => {
+    const defaultPiece = loadPiece('default', process.cwd());
+    expect(defaultPiece).not.toBeNull();
+    expect(defaultPiece!.name).toBe('default');
 
     const research = loadPiece('research', process.cwd());
     expect(research).not.toBeNull();
@@ -253,7 +264,6 @@ describe('listPieces (builtin fallback)', () => {
   it('should include builtin pieces', () => {
     const pieces = listPieces(testDir);
     expect(pieces).toContain('default');
-    expect(pieces).toContain('default-mini');
     expect(pieces).toContain('e2e-test');
   });
 
@@ -281,7 +291,6 @@ describe('loadAllPieces (builtin fallback)', () => {
   it('should include builtin pieces in the map', () => {
     const pieces = loadAllPieces(testDir);
     expect(pieces.has('default')).toBe(true);
-    expect(pieces.has('default-mini')).toBe(true);
   });
 });
 
@@ -1206,6 +1215,95 @@ describe('loadProjectConfig snake_case normalization', () => {
   });
 });
 
+describe('loadProjectConfig submodules', () => {
+  let testDir: string;
+
+  beforeEach(() => {
+    testDir = join(tmpdir(), `takt-test-${randomUUID()}`);
+    mkdirSync(testDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    if (existsSync(testDir)) {
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should normalize case-insensitive submodules all to canonical all', () => {
+    const projectConfigDir = getProjectConfigDir(testDir);
+    mkdirSync(projectConfigDir, { recursive: true });
+    writeFileSync(join(projectConfigDir, 'config.yaml'), 'submodules: ALL\n');
+
+    const config = loadProjectConfig(testDir);
+
+    expect(config.submodules).toBe('all');
+    expect(config.withSubmodules).toBeUndefined();
+  });
+
+  it('should keep explicit submodule path list as target set', () => {
+    const projectConfigDir = getProjectConfigDir(testDir);
+    mkdirSync(projectConfigDir, { recursive: true });
+    writeFileSync(join(projectConfigDir, 'config.yaml'), [
+      'submodules:',
+      '  - path/a',
+      '  - path/b',
+    ].join('\n'));
+
+    const config = loadProjectConfig(testDir);
+
+    expect(config.submodules).toEqual(['path/a', 'path/b']);
+    expect(config.withSubmodules).toBeUndefined();
+  });
+
+  it('should reject wildcard-only path in submodules', () => {
+    const projectConfigDir = getProjectConfigDir(testDir);
+    mkdirSync(projectConfigDir, { recursive: true });
+    writeFileSync(join(projectConfigDir, 'config.yaml'), [
+      'submodules:',
+      '  - "*"',
+    ].join('\n'));
+
+    expect(() => loadProjectConfig(testDir)).toThrow('Invalid submodules');
+  });
+
+  it('should reject wildcard-like path in submodules', () => {
+    const projectConfigDir = getProjectConfigDir(testDir);
+    mkdirSync(projectConfigDir, { recursive: true });
+    writeFileSync(join(projectConfigDir, 'config.yaml'), [
+      'submodules:',
+      '  - libs/*',
+    ].join('\n'));
+
+    expect(() => loadProjectConfig(testDir)).toThrow('Invalid submodules');
+  });
+
+  it('should prefer submodules over with_submodules', () => {
+    const projectConfigDir = getProjectConfigDir(testDir);
+    mkdirSync(projectConfigDir, { recursive: true });
+    writeFileSync(join(projectConfigDir, 'config.yaml'), [
+      'submodules:',
+      '  - path/a',
+      'with_submodules: true',
+    ].join('\n'));
+
+    const config = loadProjectConfig(testDir);
+
+    expect(config.submodules).toEqual(['path/a']);
+    expect(config.withSubmodules).toBeUndefined();
+  });
+
+  it('should treat with_submodules true as fallback full acquisition when submodules is unset', () => {
+    const projectConfigDir = getProjectConfigDir(testDir);
+    mkdirSync(projectConfigDir, { recursive: true });
+    writeFileSync(join(projectConfigDir, 'config.yaml'), 'with_submodules: true\n');
+
+    const config = loadProjectConfig(testDir);
+
+    expect(config.submodules).toBeUndefined();
+    expect(config.withSubmodules).toBe(true);
+  });
+});
+
 describe('saveProjectConfig snake_case denormalization', () => {
   let testDir: string;
 
@@ -1247,6 +1345,28 @@ describe('saveProjectConfig snake_case denormalization', () => {
     expect((saved as Record<string, unknown>).base_branch).toBeUndefined();
   });
 
+  it('should persist withSubmodules as with_submodules and reload correctly', () => {
+    saveProjectConfig(testDir, { piece: 'default', withSubmodules: true });
+
+    const saved = loadProjectConfig(testDir);
+
+    expect(saved.withSubmodules).toBe(true);
+    expect((saved as Record<string, unknown>).with_submodules).toBeUndefined();
+  });
+
+  it('should persist submodules and ignore with_submodules when both are provided', () => {
+    saveProjectConfig(testDir, { piece: 'default', submodules: ['path/a'], withSubmodules: true });
+
+    const projectConfigDir = getProjectConfigDir(testDir);
+    const content = readFileSync(join(projectConfigDir, 'config.yaml'), 'utf-8');
+    const saved = loadProjectConfig(testDir);
+
+    expect(content).toContain('submodules:');
+    expect(content).not.toContain('with_submodules:');
+    expect(saved.submodules).toEqual(['path/a']);
+    expect(saved.withSubmodules).toBeUndefined();
+  });
+
   it('should persist concurrency and reload correctly', () => {
     saveProjectConfig(testDir, { piece: 'default', concurrency: 3 });
 
@@ -1264,6 +1384,7 @@ describe('saveProjectConfig snake_case denormalization', () => {
     expect(content).toContain('auto_pr:');
     expect(content).toContain('draft_pr:');
     expect(content).toContain('base_branch:');
+    expect(content).not.toContain('withSubmodules:');
     expect(content).not.toContain('autoPr:');
     expect(content).not.toContain('draftPr:');
     expect(content).not.toContain('baseBranch:');

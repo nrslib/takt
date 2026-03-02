@@ -13,7 +13,7 @@ Configure TAKT defaults in `~/.takt/config.yaml`. This file is created automatic
 language: en                  # UI language: 'en' or 'ja'
 default_piece: default        # Default piece for new projects
 log_level: info               # Log level: debug, info, warn, error
-provider: claude              # Default provider: claude, codex, or opencode
+provider: claude              # Default provider: claude, codex, opencode, cursor, or copilot
 model: sonnet                 # Default model (optional, passed to provider as-is)
 branch_name_strategy: romaji  # Branch name generation: 'romaji' (fast) or 'ai' (slow)
 prevent_sleep: false          # Prevent macOS idle sleep during execution (caffeinate)
@@ -56,19 +56,24 @@ interactive_preview_movements: 3  # Movement previews in interactive mode (0-10,
 #     default_permission_mode: edit
 
 # API Key configuration (optional)
-# Can be overridden by environment variables TAKT_ANTHROPIC_API_KEY / TAKT_OPENAI_API_KEY / TAKT_OPENCODE_API_KEY
+# Can be overridden by environment variables TAKT_ANTHROPIC_API_KEY / TAKT_OPENAI_API_KEY / TAKT_OPENCODE_API_KEY / TAKT_CURSOR_API_KEY / TAKT_COPILOT_GITHUB_TOKEN
 # anthropic_api_key: sk-ant-...  # For Claude (Anthropic)
 # openai_api_key: sk-...         # For Codex (OpenAI)
 # opencode_api_key: ...          # For OpenCode
+# cursor_api_key: ...            # For Cursor Agent (optional; login session fallback is also supported)
+# copilot_github_token: ...      # For Copilot (GitHub token)
 
-# Codex CLI path override (optional)
-# Override the Codex CLI binary used by the Codex SDK (must be an absolute path to an executable file)
-# Can be overridden by TAKT_CODEX_CLI_PATH environment variable
+# CLI path overrides (optional)
+# Override provider CLI binaries (must be absolute paths to executable files)
+# Can be overridden by environment variables TAKT_CLAUDE_CLI_PATH / TAKT_CODEX_CLI_PATH / TAKT_CURSOR_CLI_PATH / TAKT_COPILOT_CLI_PATH
+# claude_cli_path: /usr/local/bin/claude
 # codex_cli_path: /usr/local/bin/codex
+# cursor_cli_path: /usr/local/bin/cursor-agent
+# copilot_cli_path: /usr/local/bin/github-copilot-cli
 
 # Builtin piece filtering (optional)
 # builtin_pieces_enabled: true           # Set false to disable all builtins
-# disabled_builtins: [magi, passthrough] # Disable specific builtin pieces
+# disabled_builtins: [magi]              # Disable specific builtin pieces
 
 # Pipeline execution configuration (optional)
 # Customize branch names, commit messages, and PR body.
@@ -88,7 +93,7 @@ interactive_preview_movements: 3  # Movement previews in interactive mode (0-10,
 | `language` | `"en"` \| `"ja"` | `"en"` | UI language |
 | `default_piece` | string | `"default"` | Default piece for new projects |
 | `log_level` | `"debug"` \| `"info"` \| `"warn"` \| `"error"` | `"info"` | Log level |
-| `provider` | `"claude"` \| `"codex"` \| `"opencode"` | `"claude"` | Default AI provider |
+| `provider` | `"claude"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` | `"claude"` | Default AI provider |
 | `model` | string | - | Default model name (passed to provider as-is) |
 | `branch_name_strategy` | `"romaji"` \| `"ai"` | `"romaji"` | Branch name generation strategy |
 | `prevent_sleep` | boolean | `false` | Prevent macOS idle sleep (caffeinate) |
@@ -108,7 +113,11 @@ interactive_preview_movements: 3  # Movement previews in interactive mode (0-10,
 | `anthropic_api_key` | string | - | Anthropic API key for Claude |
 | `openai_api_key` | string | - | OpenAI API key for Codex |
 | `opencode_api_key` | string | - | OpenCode API key |
+| `cursor_api_key` | string | - | Cursor API key (optional; login session fallback supported) |
+| `copilot_github_token` | string | - | GitHub token for Copilot CLI authentication |
 | `codex_cli_path` | string | - | Codex CLI binary path override (absolute) |
+| `cursor_cli_path` | string | - | Cursor Agent CLI binary path override (absolute) |
+| `copilot_cli_path` | string | - | Copilot CLI binary path override (absolute) |
 | `enable_builtin_pieces` | boolean | `true` | Enable builtin pieces |
 | `disabled_builtins` | string[] | `[]` | Specific builtin pieces to disable |
 | `pipeline` | object | - | Pipeline template settings |
@@ -149,7 +158,7 @@ concurrency: 2                # Parallel task count for takt run in this project
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `piece` | string | `"default"` | Current piece name for this project |
-| `provider` | `"claude"` \| `"codex"` \| `"opencode"` \| `"mock"` | - | Override provider |
+| `provider` | `"claude"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` \| `"mock"` | - | Override provider |
 | `model` | string | - | Override model name (passed to provider as-is) |
 | `auto_pr` | boolean | - | Auto-create PR after worktree execution |
 | `verbose` | boolean | - | Verbose output mode |
@@ -162,7 +171,7 @@ Project config values override global config when both are set.
 
 ## API Key Configuration
 
-TAKT supports three providers, each with its own API key. API keys can be configured via environment variables or `~/.takt/config.yaml`.
+TAKT supports five providers. Claude/Codex/OpenCode use API keys, Cursor can use either API key or existing `cursor-agent login` session, and Copilot uses a GitHub token.
 
 ### Environment Variables (Recommended)
 
@@ -175,6 +184,12 @@ export TAKT_OPENAI_API_KEY=sk-...
 
 # For OpenCode
 export TAKT_OPENCODE_API_KEY=...
+
+# For Cursor Agent (optional if cursor-agent login session exists)
+export TAKT_CURSOR_API_KEY=...
+
+# For GitHub Copilot CLI
+export TAKT_COPILOT_GITHUB_TOKEN=ghp_...
 ```
 
 ### Config File
@@ -184,6 +199,8 @@ export TAKT_OPENCODE_API_KEY=...
 anthropic_api_key: sk-ant-...  # For Claude
 openai_api_key: sk-...         # For Codex
 opencode_api_key: ...          # For OpenCode
+cursor_api_key: ...            # For Cursor Agent (optional)
+copilot_github_token: ghp_...  # For GitHub Copilot CLI
 ```
 
 ### Priority
@@ -195,37 +212,53 @@ Environment variables take precedence over `config.yaml` settings.
 | Claude (Anthropic) | `TAKT_ANTHROPIC_API_KEY` | `anthropic_api_key` |
 | Codex (OpenAI) | `TAKT_OPENAI_API_KEY` | `openai_api_key` |
 | OpenCode | `TAKT_OPENCODE_API_KEY` | `opencode_api_key` |
+| Cursor Agent | `TAKT_CURSOR_API_KEY` | `cursor_api_key` |
+| GitHub Copilot CLI | `TAKT_COPILOT_GITHUB_TOKEN` | `copilot_github_token` |
 
 ### Security
 
 - If you write API keys in `config.yaml`, be careful not to commit this file to Git.
 - Consider using environment variables instead.
 - Add `~/.takt/config.yaml` to your global `.gitignore` if needed.
+- Cursor provider can run without API key when `cursor-agent login` is already configured.
 - If you set an API key, installing the corresponding CLI tool (Claude Code, Codex, OpenCode) is not necessary. TAKT directly calls the respective API.
+- Copilot provider requires the `copilot` CLI to be installed. The GitHub token is used for authentication.
 
-### Codex CLI Path Override
+### CLI Path Overrides
 
-You can override the Codex CLI binary path using either an environment variable or config:
+You can override provider CLI binary paths using environment variables or config:
 
 ```bash
+export TAKT_CLAUDE_CLI_PATH=/usr/local/bin/claude
 export TAKT_CODEX_CLI_PATH=/usr/local/bin/codex
+export TAKT_CURSOR_CLI_PATH=/usr/local/bin/cursor-agent
+export TAKT_COPILOT_CLI_PATH=/usr/local/bin/github-copilot-cli
 ```
 
 ```yaml
 # ~/.takt/config.yaml
+claude_cli_path: /usr/local/bin/claude
 codex_cli_path: /usr/local/bin/codex
+cursor_cli_path: /usr/local/bin/cursor-agent
+copilot_cli_path: /usr/local/bin/github-copilot-cli
 ```
 
-The path must be an absolute path to an executable file. `TAKT_CODEX_CLI_PATH` takes precedence over the config file value.
+| Provider | Environment Variable | Config Key |
+|----------|---------------------|------------|
+| Claude | `TAKT_CLAUDE_CLI_PATH` | `claude_cli_path` |
+| Codex | `TAKT_CODEX_CLI_PATH` | `codex_cli_path` |
+| Cursor Agent | `TAKT_CURSOR_CLI_PATH` | `cursor_cli_path` |
+| Copilot | `TAKT_COPILOT_CLI_PATH` | `copilot_cli_path` |
+
+Paths must be absolute paths to executable files. Environment variables take precedence over config file values. These can also be set at the project level in `.takt/config.yaml`.
 
 ## Model Resolution
 
 The model used for each movement is resolved with the following priority order (highest first):
 
 1. **Piece movement `model`** - Specified in the movement definition in piece YAML
-2. **Custom agent `model`** - Agent-level model in `.takt/agents.yaml`
-3. **Global config `model`** - Default model in `~/.takt/config.yaml`
-4. **Provider default** - Falls back to the provider's built-in default (Claude: `sonnet`, Codex: `codex`, OpenCode: provider default)
+2. **Global config `model`** - Default model in `~/.takt/config.yaml`
+3. **Provider default** - Falls back to the provider's built-in default (Claude: `sonnet`, Codex: `codex`, OpenCode: provider default, Cursor: CLI default, Copilot: CLI default)
 
 ### Provider-specific Model Notes
 
@@ -234,6 +267,10 @@ The model used for each movement is resolved with the following priority order (
 **Codex** uses the model string as-is via the Codex SDK. If unspecified, defaults to `codex`. Refer to Codex documentation for available models.
 
 **OpenCode** requires a model in `provider/model` format (e.g., `opencode/big-pickle`). Omitting the model for the OpenCode provider will result in a configuration error.
+
+**Cursor Agent** forwards `model` directly to `cursor-agent --model <model>`. If omitted, Cursor CLI default is used.
+
+**GitHub Copilot CLI** forwards `model` directly to `copilot --model <model>`. If omitted, Copilot CLI default is used.
 
 ### Example
 
@@ -262,11 +299,11 @@ Provider profiles allow you to set default permission modes and per-movement per
 
 TAKT uses three provider-independent permission modes:
 
-| Mode | Description | Claude | Codex | OpenCode |
-|------|-------------|--------|-------|----------|
-| `readonly` | Read-only access, no file modifications | `default` | `read-only` | `read-only` |
-| `edit` | Allow file edits with confirmation | `acceptEdits` | `workspace-write` | `workspace-write` |
-| `full` | Bypass all permission checks | `bypassPermissions` | `danger-full-access` | `danger-full-access` |
+| Mode | Description | Claude | Codex | OpenCode | Cursor Agent | Copilot |
+|------|-------------|--------|-------|----------|--------------|---------|
+| `readonly` | Read-only access, no file modifications | `default` | `read-only` | `read-only` | default flags (no `--force`) | no permission flags |
+| `edit` | Allow file edits with confirmation | `acceptEdits` | `workspace-write` | `workspace-write` | default flags (no `--force`) | `--allow-all-tools --no-ask-user` |
+| `full` | Bypass all permission checks | `bypassPermissions` | `danger-full-access` | `danger-full-access` | `--force` | `--yolo` |
 
 ### Configuration
 
@@ -332,9 +369,9 @@ piece_categories:
     pieces: [default, simple]
     children:
       Backend:
-        pieces: [expert-cqrs]
+        pieces: [dual-cqrs]
       Frontend:
-        pieces: [expert]
+        pieces: [dual]
   Research:
     pieces: [research, magi]
 

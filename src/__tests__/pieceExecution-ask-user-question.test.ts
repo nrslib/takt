@@ -31,7 +31,7 @@ const { MockPieceEngine } = vi.hoisted(() => {
     async run(): Promise<{ status: string; iteration: number }> {
       const firstStep = this.config.movements[0];
       if (firstStep) {
-        this.emit('movement:start', firstStep, 1, firstStep.instructionTemplate);
+        this.emit('movement:start', firstStep, 1, firstStep.instructionTemplate, { provider: undefined, model: undefined });
       }
       this.emit('piece:complete', { status: 'completed', iteration: 1 });
       return { status: 'completed', iteration: 1 };

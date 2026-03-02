@@ -67,7 +67,10 @@ export class TaskSummarizer {
       log.info('Task name romanized', { original: taskName, slug });
       return slug || 'task';
     }
-    const providerType = (globalConfig.provider as ProviderType) ?? 'claude';
+    if (!globalConfig.provider) {
+      throw new Error('No provider configured. Set "provider" in ~/.takt/config.yaml');
+    }
+    const providerType = globalConfig.provider as ProviderType;
     const model = options.model ?? globalConfig.model;
 
     const provider = getProvider(providerType);

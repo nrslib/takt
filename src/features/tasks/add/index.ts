@@ -6,13 +6,18 @@
 
 import * as path from 'node:path';
 import * as fs from 'node:fs';
-import { promptInput, confirm } from '../../../shared/prompt/index.js';
+import { promptInput, confirm, selectOption } from '../../../shared/prompt/index.js';
 import { success, info, error, withProgress } from '../../../shared/ui/index.js';
+import { getLabel } from '../../../shared/i18n/index.js';
+import type { Language } from '../../../core/models/types.js';
 import { TaskRunner, type TaskFileData, summarizeTaskName } from '../../../infra/task/index.js';
 import { determinePiece } from '../execute/selectAndExecute.js';
 import { createLogger, getErrorMessage, generateReportDir } from '../../../shared/utils/index.js';
-import { isIssueReference, resolveIssueTask, parseIssueNumbers, createIssue } from '../../../infra/github/index.js';
+import { isIssueReference, resolveIssueTask, parseIssueNumbers, formatPrReviewAsTask } from '../../../infra/github/index.js';
+import { getGitProvider, type PrReviewData } from '../../../infra/git/index.js';
 import { firstLine } from '../../../infra/task/naming.js';
+import { extractTitle, createIssueFromTask } from './issueTask.js';
+export { extractTitle, createIssueFromTask };
 
 const log = createLogger('add-task');
 
@@ -67,31 +72,6 @@ export async function saveTaskFile(
   return { taskName: created.name, tasksFile };
 }
 
-/**
- * Create a GitHub Issue from a task description.
- *
- * Extracts the first line as the issue title (truncated to 100 chars),
- * uses the full task as the body, and displays success/error messages.
- */
-export function createIssueFromTask(task: string): number | undefined {
-  info('Creating GitHub Issue...');
-  const titleLine = task.split('\n')[0] || task;
-  const title = titleLine.length > 100 ? `${titleLine.slice(0, 97)}...` : titleLine;
-  const issueResult = createIssue({ title, body: task });
-  if (issueResult.success) {
-    success(`Issue created: ${issueResult.url}`);
-    const num = Number(issueResult.url!.split('/').pop());
-    if (Number.isNaN(num)) {
-      error('Failed to extract issue number from URL');
-      return undefined;
-    }
-    return num;
-  } else {
-    error(`Failed to create issue: ${issueResult.error}`);
-    return undefined;
-  }
-}
-
 interface WorktreeSettings {
   worktree?: boolean | string;
   branch?: string;
@@ -122,16 +102,28 @@ function displayTaskCreationResult(
 }
 
 /**
- * Create a GitHub Issue and save the task to .takt/tasks.yaml.
+ * Prompt user to select a label for the GitHub Issue.
  *
- * Combines issue creation and task saving into a single workflow.
- * If issue creation fails, no task is saved.
+ * Presents 4 fixed options: None, bug, enhancement, custom input.
+ * Returns an array of selected labels (empty if none selected).
  */
-export async function createIssueAndSaveTask(cwd: string, task: string, piece?: string): Promise<void> {
-  const issueNumber = createIssueFromTask(task);
-  if (issueNumber !== undefined) {
-    await saveTaskFromInteractive(cwd, task, piece, { issue: issueNumber });
+export async function promptLabelSelection(lang: Language): Promise<string[]> {
+  const selected = await selectOption<string>(
+    getLabel('issue.labelSelection.prompt', lang),
+    [
+      { label: getLabel('issue.labelSelection.none', lang), value: 'none' },
+      { label: 'bug', value: 'bug' },
+      { label: 'enhancement', value: 'enhancement' },
+      { label: getLabel('issue.labelSelection.custom', lang), value: 'custom' },
+    ],
+  );
+
+  if (selected === null || selected === 'none') return [];
+  if (selected === 'custom') {
+    const customLabel = await promptInput(getLabel('issue.labelSelection.customPrompt', lang));
+    return customLabel?.split(',').map((l) => l.trim()).filter((l) => l.length > 0) ?? [];
   }
+  return [selected];
 }
 
 async function promptWorktreeSettings(): Promise<WorktreeSettings> {
@@ -150,12 +142,13 @@ async function promptWorktreeSettings(): Promise<WorktreeSettings> {
 /**
  * Save a task from interactive mode result.
  * Prompts for worktree/branch/auto_pr settings before saving.
+ * If presetSettings is provided, skips the prompt and uses those settings directly.
  */
 export async function saveTaskFromInteractive(
   cwd: string,
   task: string,
   piece?: string,
-  options?: { issue?: number; confirmAtEndMessage?: string },
+  options?: { issue?: number; confirmAtEndMessage?: string; presetSettings?: WorktreeSettings },
 ): Promise<void> {
   if (options?.confirmAtEndMessage) {
     const approved = await confirm(options.confirmAtEndMessage, true);
@@ -163,22 +156,88 @@ export async function saveTaskFromInteractive(
       return;
     }
   }
-  const settings = await promptWorktreeSettings();
+  const settings = options?.presetSettings ?? await promptWorktreeSettings();
   const created = await saveTaskFile(cwd, task, { piece, issue: options?.issue, ...settings });
   displayTaskCreationResult(created, settings, piece);
+}
+
+export async function createIssueAndSaveTask(
+  cwd: string,
+  task: string,
+  piece?: string,
+  options?: { confirmAtEndMessage?: string; labels?: string[] },
+): Promise<void> {
+  const issueNumber = createIssueFromTask(task, { labels: options?.labels });
+  if (issueNumber === undefined) {
+    return;
+  }
+  await saveTaskFromInteractive(cwd, task, piece, {
+    issue: issueNumber,
+    confirmAtEndMessage: options?.confirmAtEndMessage,
+  });
 }
 
 /**
  * add command handler
  *
  * Flow:
- *   A) 引数なし: Usage表示して終了
- *   B) Issue参照の場合: issue取得 → ピース選択 → ワークツリー設定 → YAML作成
- *   C) 通常入力: 引数をそのまま保存
+ *   A) --pr オプション: PRレビュー取得 → ピース選択 → YAML作成
+ *   B) 引数なし: Usage表示して終了
+ *   C) Issue参照の場合: issue取得 → ピース選択 → ワークツリー設定 → YAML作成
+ *   D) 通常入力: ピース選択 → ワークツリー設定 → YAML作成
  */
-export async function addTask(cwd: string, task?: string): Promise<void> {
+export async function addTask(
+  cwd: string,
+  task?: string,
+  opts?: { prNumber?: number },
+): Promise<void> {
   const rawTask = task ?? '';
   const trimmedTask = rawTask.trim();
+  const prNumber = opts?.prNumber;
+
+  if (prNumber !== undefined) {
+    const provider = getGitProvider();
+    const ghStatus = provider.checkCliStatus();
+    if (!ghStatus.available) {
+      error(ghStatus.error ?? 'GitHub CLI is unavailable');
+      return;
+    }
+
+    let prReview: PrReviewData;
+    try {
+      prReview = await withProgress(
+        'Fetching PR review comments...',
+        (fetchedPrReview: PrReviewData) => `PR fetched: #${fetchedPrReview.number} ${fetchedPrReview.title}`,
+        async () => provider.fetchPrReviewComments(prNumber),
+      );
+    } catch (e) {
+      const msg = getErrorMessage(e);
+      error(`Failed to fetch PR review comments #${prNumber}: ${msg}`);
+      return;
+    }
+
+    if (prReview.reviews.length === 0 && prReview.comments.length === 0) {
+      error(`PR #${prNumber} has no review comments`);
+      return;
+    }
+
+    const taskContent = formatPrReviewAsTask(prReview);
+    const piece = await determinePiece(cwd);
+    if (piece === null) {
+      info('Cancelled.');
+      return;
+    }
+
+    const settings = {
+      worktree: true,
+      branch: prReview.headRefName,
+      autoPr: false,
+    };
+    const created = await saveTaskFile(cwd, taskContent, { piece, ...settings });
+    displayTaskCreationResult(created, settings, piece);
+    return;
+  }
+
   if (!trimmedTask) {
     info('Usage: takt add <task>');
     return;
@@ -188,7 +247,6 @@ export async function addTask(cwd: string, task?: string): Promise<void> {
   let issueNumber: number | undefined;
 
   if (isIssueReference(trimmedTask)) {
-    // Issue reference: fetch issue and use directly as task content
     try {
       const numbers = parseIssueNumbers([trimmedTask]);
       const primaryIssueNumber = numbers[0];
@@ -216,10 +274,8 @@ export async function addTask(cwd: string, task?: string): Promise<void> {
     return;
   }
 
-  // 3. ワークツリー/ブランチ/PR設定
   const settings = await promptWorktreeSettings();
 
-  // YAMLファイル作成
   const created = await saveTaskFile(cwd, taskContent, {
     piece,
     issue: issueNumber,

@@ -12,7 +12,7 @@ import type { PhaseName } from './types.js';
 import type { RunAgentOptions } from '../../agents/runner.js';
 import { ReportInstructionBuilder } from './instruction/ReportInstructionBuilder.js';
 import { hasTagBasedRules, getReportFiles } from './evaluation/rule-utils.js';
-import { executeAgent } from './agent-usecases.js';
+import { executeAgent } from '../../agents/agent-usecases.js';
 import { createLogger } from '../../shared/utils/index.js';
 import { buildSessionKey } from './session-key.js';
 export { runStatusJudgmentPhase, type StatusJudgmentPhaseResult } from './status-judgment-phase.js';
@@ -41,6 +41,8 @@ export interface PhaseRunnerContext {
   buildNewSessionReportOptions: (step: PieceMovement, overrides: Pick<RunAgentOptions, 'allowedTools' | 'maxTurns'>) => RunAgentOptions;
   /** Update persona session after a phase run */
   updatePersonaSession: (persona: string, sessionId: string | undefined) => void;
+  /** Stream callback for provider event logging (passed to judgeStatus) */
+  onStream?: import('../../agents/types.js').StreamCallback;
   /** Callback for phase lifecycle logging */
   onPhaseStart?: (step: PieceMovement, phase: 1 | 2 | 3, phaseName: PhaseName, instruction: string) => void;
   /** Callback for phase completion logging */

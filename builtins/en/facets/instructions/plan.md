@@ -19,3 +19,7 @@ For small tasks, skip the design sections in the report.
 4. Determine file structure and design patterns (if needed)
 5. Decide on the implementation approach
    - Verify the implementation approach does not violate knowledge/policy constraints
+6. Include the following in coder implementation guidelines:
+   - Existing implementation patterns to reference (file:line). Always cite when similar processing already exists
+   - Impact area of changes. Especially when adding new parameters, enumerate all call sites that need wiring
+   - Anti-patterns to watch for in this specific task (if applicable)

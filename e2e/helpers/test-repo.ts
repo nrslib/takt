@@ -43,7 +43,12 @@ export interface CreateTestRepoOptions {
 function getGitHubUser(): string {
   const user = execFileSync('gh', ['api', 'user', '--jq', '.login'], {
     encoding: 'utf-8',
+    stdio: 'pipe',
   }).trim();
+
+  if (user.startsWith('<')) {
+    throw new Error('Unexpected HTML response from gh api user');
+  }
 
   if (!user) {
     throw new Error(
@@ -127,7 +132,12 @@ export function createTestRepo(options?: CreateTestRepoOptions): TestRepo {
     return createOfflineTestRepo(options);
   }
 
-  const user = getGitHubUser();
+  let user: string;
+  try {
+    user = getGitHubUser();
+  } catch {
+    return createOfflineTestRepo(options);
+  }
   const repoName = `${user}/takt-testing`;
 
   // Verify repository exists

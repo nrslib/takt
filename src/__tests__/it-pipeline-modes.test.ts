@@ -59,13 +59,13 @@ vi.mock('../infra/github/issue.js', () => ({
 
 vi.mock('../infra/github/pr.js', () => ({
   createPullRequest: mockCreatePullRequest,
-  pushBranch: mockPushBranch,
   buildPrBody: vi.fn().mockReturnValue('PR body'),
 }));
 
 vi.mock('../infra/task/git.js', () => ({
   stageAndCommit: vi.fn().mockReturnValue('abc1234'),
   getCurrentBranch: vi.fn().mockReturnValue('main'),
+  pushBranch: (...args: unknown[]) => mockPushBranch(...args),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -115,6 +115,7 @@ vi.mock('../infra/config/global/globalConfig.js', async (importOriginal) => {
     ...original,
     loadGlobalConfig: vi.fn().mockReturnValue({
       language: 'en',
+      provider: 'mock',
       enableBuiltinPieces: true,
       disabledBuiltins: [],
     }),
@@ -279,17 +280,20 @@ describe('Pipeline Modes IT: --task + --piece name (builtin)', () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  it('should load and execute builtin minimal piece by name', async () => {
+  it('should load and execute builtin default piece by name', async () => {
+    // Flow: plan → write_tests → implement → ai_review → reviewers(arch-review + supervise) → COMPLETE
     setMockScenario([
-      { persona: 'planner', status: 'done', content: 'Requirements are clear and implementation is possible.' },
+      { persona: 'planner', status: 'done', content: 'Requirements are clear and implementable' },
+      { persona: 'coder', status: 'done', content: 'Tests written successfully' },
       { persona: 'coder', status: 'done', content: 'Implementation complete' },
       { persona: 'ai-antipattern-reviewer', status: 'done', content: 'No AI-specific issues' },
+      { persona: 'architecture-reviewer', status: 'done', content: 'approved' },
       { persona: 'supervisor', status: 'done', content: 'All checks passed' },
     ]);
 
     const exitCode = await executePipeline({
       task: 'Add a feature',
-      piece: 'default-mini',
+      piece: 'default',
       autoPr: false,
       skipGit: true,
       cwd: testDir,

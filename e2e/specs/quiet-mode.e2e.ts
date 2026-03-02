@@ -33,7 +33,6 @@ describe('E2E: Quiet mode (--quiet)', () => {
       args: [
         '--task', 'Test quiet mode',
         '--piece', piecePath,
-        '--create-worktree', 'no',
         '--provider', 'mock',
         '--quiet',
       ],

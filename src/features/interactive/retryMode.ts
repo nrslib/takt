@@ -61,11 +61,13 @@ const RETRY_TOOLS = ['Read', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch'];
  */
 export function buildRetryTemplateVars(ctx: RetryContext, lang: 'en' | 'ja', previousOrderContent: string | null = null): Record<string, string | boolean> {
   const hasPiecePreview = !!ctx.pieceContext.movementPreviews?.length;
-  const movementDetails = hasPiecePreview
-    ? formatMovementPreviews(ctx.pieceContext.movementPreviews!, lang)
-    : '';
+  const movementDetails =
+    hasPiecePreview && ctx.pieceContext.movementPreviews
+      ? formatMovementPreviews(ctx.pieceContext.movementPreviews, lang)
+      : '';
 
-  const hasRun = ctx.run !== null;
+  const run = ctx.run;
+  const hasRun = run !== null;
   return {
     taskName: ctx.failure.taskName,
     taskContent: ctx.failure.taskContent,
@@ -79,13 +81,13 @@ export function buildRetryTemplateVars(ctx: RetryContext, lang: 'en' | 'ja', pre
     pieceStructure: ctx.pieceContext.pieceStructure,
     movementDetails,
     hasRun,
-    runLogsDir: hasRun ? ctx.run!.logsDir : '',
-    runReportsDir: hasRun ? ctx.run!.reportsDir : '',
-    runTask: hasRun ? ctx.run!.task : '',
-    runPiece: hasRun ? ctx.run!.piece : '',
-    runStatus: hasRun ? ctx.run!.status : '',
-    runMovementLogs: hasRun ? ctx.run!.movementLogs : '',
-    runReports: hasRun ? ctx.run!.reports : '',
+    runLogsDir: run !== null ? run.logsDir : '',
+    runReportsDir: run !== null ? run.reportsDir : '',
+    runTask: run !== null ? run.task : '',
+    runPiece: run !== null ? run.piece : '',
+    runStatus: run !== null ? run.status : '',
+    runMovementLogs: run !== null ? run.movementLogs : '',
+    runReports: run !== null ? run.reports : '',
     hasOrderContent: previousOrderContent !== null,
     orderContent: previousOrderContent ?? '',
   };

@@ -321,3 +321,6 @@ function formatPercentage(value: number): string { ... }
 - **Replaced code surviving after refactoring** - Remove replaced code and exports. Do not keep unless explicitly told to
 - **Workarounds that bypass safety mechanisms** - If the root fix is correct, no additional bypass is needed
 - **Direct tool execution bypassing project scripts** - `npx tool` and similar bypass the lockfile, causing version mismatches. Look for project-defined scripts (npm scripts, Makefile, etc.) first. Only consider direct execution when no script exists
+- **Missing wiring** - When adding new parameters or fields, grep the entire call chain to verify. If callers do not pass the value, `options.xxx ?? fallback` always uses the fallback
+- **Redundant conditionals** - When if/else calls the same function with only argument differences, unify using ternary operators or spread syntax
+- **Copy-paste patterns** - Before writing new code, grep for existing implementations of the same kind and follow the existing pattern. Do not introduce your own style

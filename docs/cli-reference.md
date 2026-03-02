@@ -13,13 +13,13 @@ This document provides a complete reference for all TAKT CLI commands and option
 | `-i, --issue <N>` | GitHub issue number (same as `#N` in interactive mode) |
 | `-w, --piece <name or path>` | Piece name or path to piece YAML file |
 | `-b, --branch <name>` | Specify branch name (auto-generated if omitted) |
-| `--auto-pr` | Create PR (interactive: skip confirmation, pipeline: enable PR) |
-| `--draft-pr` | Create PR as draft |
+| `--pr <number>` | PR number to fetch review comments and fix |
+| `--auto-pr` | Create PR after execution (pipeline mode only) |
+| `--draft` | Create PR as draft (requires `--auto-pr` or `auto_pr` config) |
 | `--skip-git` | Skip branch creation, commit, and push (pipeline mode, piece-only) |
 | `--repo <owner/repo>` | Specify repository (for PR creation) |
-| `--create-worktree <yes\|no>` | Skip worktree confirmation prompt |
 | `-q, --quiet` | Minimal output mode: suppress AI output (for CI) |
-| `--provider <name>` | Override agent provider (claude\|codex\|opencode\|mock) |
+| `--provider <name>` | Override agent provider (claude\|codex\|opencode\|cursor\|copilot\|mock) |
 | `--model <name>` | Override agent model |
 | `--config <path>` | Path to global config file (default: `~/.takt/config.yaml`) |
 
@@ -43,7 +43,7 @@ takt hello
 2. Select interactive mode (assistant / persona / quiet / passthrough)
 3. Refine task content through conversation with AI
 4. Finalize task instructions with `/go` (you can also add additional instructions like `/go additional instructions`), or use `/play <task>` to execute a task immediately
-5. Execute (create worktree, run piece, create PR)
+5. Execute (run piece, create PR)
 
 ### Interactive Mode Variants
 
@@ -88,8 +88,6 @@ Requirements:
 
 Proceed with these task instructions? (Y/n) y
 
-? Create worktree? (Y/n) y
-
 [Piece execution starts...]
 ```
 
@@ -102,10 +100,7 @@ Use the `--task` option to skip interactive mode and execute directly.
 takt --task "Fix bug"
 
 # Specify piece
-takt --task "Add authentication" --piece expert
-
-# Auto-create PR
-takt --task "Fix bug" --auto-pr
+takt --task "Add authentication" --piece dual
 ```
 
 **Note:** Passing a string as an argument (e.g., `takt "Add login feature"`) enters interactive mode with it as the initial message.
@@ -120,10 +115,7 @@ takt #6
 takt --issue 6
 
 # Issue + piece specification
-takt #6 --piece expert
-
-# Issue + auto-create PR
-takt #6 --auto-pr
+takt #6 --piece dual
 ```
 
 **Requirements:** [GitHub CLI](https://cli.github.com/) (`gh`) must be installed and authenticated.
@@ -164,7 +156,7 @@ takt watch
 
 ### takt list
 
-List task branches and perform actions (merge, delete, sync with root, etc.).
+List task branches and perform actions (merge, delete, merge from root, etc.).
 
 ```bash
 # List task branches (merge/delete)
@@ -177,7 +169,7 @@ takt list --non-interactive --action delete --branch takt/my-branch --yes
 takt list --non-interactive --format json
 ```
 
-In interactive mode, **Sync with root** merges the root repository HEAD into the worktree branch with AI-assisted conflict resolution.
+In interactive mode, **Merge from root** merges the root repository HEAD into the worktree branch with AI-assisted conflict resolution.
 
 ### Task Directory Workflow (Create / Run / Verify)
 

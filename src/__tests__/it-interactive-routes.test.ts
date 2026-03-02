@@ -366,6 +366,67 @@ describe('/play empty task error', () => {
 });
 
 // =================================================================
+// Route H: End-of-line slash commands
+// =================================================================
+describe('end-of-line /play command', () => {
+  it('should return execute with preceding text as task', async () => {
+    setupRawStdin(toRawInputs(['fix the login bug /play']));
+    setupProvider([]);
+
+    const result = await runInstruct();
+
+    expect(result.action).toBe('execute');
+    expect(result.task).toBe('fix the login bug');
+  });
+});
+
+describe('end-of-line /go command', () => {
+  it('should use preceding text as user note in summary', async () => {
+    setupRawStdin(toRawInputs(['refactor auth', 'also check security /go']));
+    const capture = setupProvider(['Will do.', 'Refactor auth and check security.']);
+
+    const result = await runInstruct();
+
+    expect(result.action).toBe('execute');
+    expect(result.task).toBe('Refactor auth and check security.');
+    expect(capture.prompts[1]).toContain('also check security');
+  });
+
+  it('should reject end-of-line /go without prior conversation', async () => {
+    setupRawStdin(toRawInputs(['実行して /go', '/cancel']));
+    setupProvider([]);
+
+    const result = await runInstruct();
+
+    expect(result.action).toBe('cancel');
+  });
+});
+
+describe('end-of-line /cancel command', () => {
+  it('should cancel when /cancel is at the end of input', async () => {
+    setupRawStdin(toRawInputs(['やっぱりやめる /cancel']));
+    setupProvider([]);
+
+    const result = await runInstruct();
+
+    expect(result.action).toBe('cancel');
+    expect(result.task).toBe('');
+  });
+});
+
+describe('middle-of-text command is not recognized', () => {
+  it('should treat text with /go in the middle as a regular message', async () => {
+    setupRawStdin(toRawInputs(['テキスト中に /go を含むがコマンドではない文', '/cancel']));
+    const capture = setupProvider(['OK.']);
+
+    const result = await runInstruct();
+
+    expect(result.action).toBe('cancel');
+    expect(capture.callCount).toBe(1);
+  });
+});
+
+// =================================================================
 // Session management: new sessionId propagates across calls
 // =================================================================
 describe('session propagation', () => {

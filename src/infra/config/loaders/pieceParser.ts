@@ -230,9 +230,9 @@ function normalizeArpeggio(
   const merge: ArpeggioMergeMovementConfig = raw.merge
     ? {
         strategy: raw.merge.strategy,
-        inlineJs: raw.merge.inline_js,
-        filePath: raw.merge.file ? resolve(pieceDir, raw.merge.file) : undefined,
         separator: raw.merge.separator,
+        inlineJs: raw.merge.inline_js,
+        file: raw.merge.file ? resolve(pieceDir, raw.merge.file) : undefined,
       }
     : { strategy: 'concat' };
 
@@ -265,6 +265,7 @@ function normalizeTeamLeader(
     persona: personaSpec,
     personaPath,
     maxParts: raw.max_parts,
+    refillThreshold: raw.refill_threshold,
     timeoutMs: raw.timeout_ms,
     partPersona,
     partPersonaPath,

@@ -18,6 +18,7 @@ export { AskUserQuestionDeniedError, createDenyAskUserQuestionHandler } from './
 export type {
   PieceEvents,
   PhaseName,
+  MovementProviderInfo,
   UserInputRequest,
   IterationLimitRequest,
   SessionUpdateCallback,
@@ -69,13 +70,3 @@ export { AggregateEvaluator } from './evaluation/AggregateEvaluator.js';
 // Phase runner
 export { needsStatusJudgmentPhase, type ReportPhaseBlockedResult } from './phase-runner.js';
 
-// Agent usecases
-export {
-  executeAgent,
-  generateReport,
-  executePart,
-  judgeStatus,
-  evaluateCondition,
-  decomposeTask,
-  type JudgeStatusResult,
-} from './agent-usecases.js';

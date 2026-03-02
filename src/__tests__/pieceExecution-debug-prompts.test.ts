@@ -33,7 +33,8 @@ const { mockIsDebugEnabled, mockWritePromptLog, MockPieceEngine } = vi.hoisted((
       const shouldAbort = this.task === 'abort-task';
 
       const shouldRepeatMovement = this.task === 'repeat-movement-task';
-      this.emit('movement:start', step, 1, 'movement instruction');
+      const providerInfo = { provider: undefined, model: undefined };
+      this.emit('movement:start', step, 1, 'movement instruction', providerInfo);
       this.emit('phase:start', step, 1, 'execute', 'phase prompt');
       this.emit('phase:complete', step, 1, 'execute', 'phase response', 'done');
       this.emit(
@@ -48,7 +49,7 @@ const { mockIsDebugEnabled, mockWritePromptLog, MockPieceEngine } = vi.hoisted((
         'movement instruction'
       );
       if (shouldRepeatMovement) {
-        this.emit('movement:start', step, 2, 'movement instruction repeat');
+        this.emit('movement:start', step, 2, 'movement instruction repeat', providerInfo);
         this.emit(
           'movement:complete',
           step,

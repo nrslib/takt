@@ -7,7 +7,7 @@
 
 import type { AiJudgeCaller, AiJudgeCondition } from '../core/piece/types.js';
 import { createLogger } from '../shared/utils/index.js';
-import { evaluateCondition } from '../core/piece/agent-usecases.js';
+import { evaluateCondition } from './agent-usecases.js';
 
 const log = createLogger('ai-judge');
 
