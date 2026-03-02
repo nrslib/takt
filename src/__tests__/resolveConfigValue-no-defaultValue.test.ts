@@ -50,37 +50,6 @@ describe('RESOLUTION_REGISTRY defaultValue removal', () => {
     }
   });
 
-  describe('piece', () => {
-    it('should resolve piece from project config DEFAULT_PROJECT_CONFIG when not explicitly set', () => {
-      const value = resolveConfigValue(projectDir, 'piece');
-      expect(value).toBe('default');
-    });
-
-    it('should report source as project when piece comes from DEFAULT_PROJECT_CONFIG', () => {
-      const result = resolveConfigValueWithSource(projectDir, 'piece');
-      expect(result.value).toBe('default');
-      expect(result.source).toBe('project');
-    });
-
-    it('should resolve explicit project piece over default', () => {
-      const configDir = getProjectConfigDir(projectDir);
-      mkdirSync(configDir, { recursive: true });
-      writeFileSync(join(configDir, 'config.yaml'), 'piece: custom-piece\n');
-
-      const value = resolveConfigValue(projectDir, 'piece');
-      expect(value).toBe('custom-piece');
-    });
-
-    it('should resolve piece from global config when global has it', () => {
-      writeFileSync(globalConfigPath, 'language: en\npiece: global-piece\n', 'utf-8');
-      invalidateGlobalConfigCache();
-
-      const result = resolveConfigValueWithSource(projectDir, 'piece');
-      expect(result.value).toBe('default');
-      expect(result.source).toBe('project');
-    });
-  });
-
   describe('verbose', () => {
     it('should resolve verbose to false via schema default when not set anywhere', () => {
       const value = resolveConfigValue(projectDir, 'verbose');

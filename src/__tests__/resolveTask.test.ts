@@ -31,25 +31,24 @@ function createTask(overrides: Partial<TaskInfo>): TaskInfo {
     content: 'Run task',
     createdAt: '2026-01-01T00:00:00.000Z',
     status: 'pending',
-    data: { task: 'Run task' },
+    data: { task: 'Run task', piece: 'default' },
     ...overrides,
   };
 }
 
 describe('resolveTaskExecution', () => {
-  it('should return defaults when task data is null', async () => {
+  it('should throw when task data is null', async () => {
     const root = createTempProjectDir();
     const task = createTask({ data: null });
 
-    const result = await resolveTaskExecution(task, root, 'default');
+    await expect(resolveTaskExecution(task, root)).rejects.toThrow('Task has no piece specified.');
+  });
 
-    expect(result).toEqual({
-      execCwd: root,
-      execPiece: 'default',
-      isWorktree: false,
-      autoPr: false,
-      draftPr: false,
-    });
+  it('should throw when task data does not include piece', async () => {
+    const root = createTempProjectDir();
+    const task = createTask({ data: { task: 'Run task' } });
+
+    await expect(resolveTaskExecution(task, root)).rejects.toThrow('Task has no piece specified.');
   });
 
   it('should generate report context and copy issue-bearing task spec', async () => {
@@ -64,12 +63,13 @@ describe('resolveTaskExecution', () => {
       taskDir,
       data: {
         task: 'Run issue task',
+        piece: 'default',
         issue: 12345,
         auto_pr: true,
       },
     });
 
-    const result = await resolveTaskExecution(task, root, 'default');
+    const result = await resolveTaskExecution(task, root);
     const expectedReportOrderPath = path.join(root, '.takt', 'runs', 'issue-task-123', 'context', 'task', 'order.md');
 
     expect(result).toMatchObject({
@@ -91,12 +91,13 @@ describe('resolveTaskExecution', () => {
     const task = createTask({
       data: {
         task: 'Run draft task',
+        piece: 'default',
         auto_pr: true,
         draft_pr: true,
       },
     });
 
-    const result = await resolveTaskExecution(task, root, 'default');
+    const result = await resolveTaskExecution(task, root);
 
     expect(result.draftPr).toBe(true);
     expect(result.autoPr).toBe(true);

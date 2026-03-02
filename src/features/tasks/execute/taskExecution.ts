@@ -14,7 +14,6 @@ import {
 import { createLogger, getErrorMessage, getSlackWebhookUrl, notifyError, notifySuccess, sendSlackNotification, buildSlackRunSummary } from '../../../shared/utils/index.js';
 import { getLabel } from '../../../shared/i18n/index.js';
 import { executePiece } from './pieceExecution.js';
-import { DEFAULT_PIECE_NAME } from '../../../shared/constants.js';
 import type { TaskExecutionOptions, ExecuteTaskOptions, PieceExecutionResult } from './types.js';
 import { runWithWorkerPool } from './parallelExecution.js';
 import { resolveTaskExecution, resolveTaskIssue } from './resolveTask.js';
@@ -52,7 +51,7 @@ async function executeTaskWithResult(options: ExecuteTaskOptions): Promise<Piece
     } else {
       error(`Piece "${pieceIdentifier}" not found.`);
       info('Available pieces are in ~/.takt/pieces/ or .takt/pieces/');
-      info('Use "takt switch" to select a piece.');
+      info('Use "takt -w <piece>" to specify a piece.');
       return { success: false, reason: `Piece "${pieceIdentifier}" not found.` };
     }
   }
@@ -105,7 +104,6 @@ export async function executeAndCompleteTask(
   task: TaskInfo,
   taskRunner: TaskRunner,
   cwd: string,
-  pieceName: string,
   options?: TaskExecutionOptions,
   parallelOptions?: { abortSignal?: AbortSignal; taskPrefix?: string; taskColorIndex?: number; taskDisplayLabel?: string },
 ): Promise<boolean> {
@@ -141,7 +139,7 @@ export async function executeAndCompleteTask(
       autoPr,
       draftPr,
       issueNumber,
-    } = await resolveTaskExecution(task, cwd, pieceName, taskAbortSignal);
+    } = await resolveTaskExecution(task, cwd, taskAbortSignal);
 
     // cwd is always the project root; pass it as projectCwd so reports/sessions go there
     const taskRunResult = await executeTaskWithResult({
@@ -214,7 +212,6 @@ export async function executeAndCompleteTask(
  */
 export async function runAllTasks(
   cwd: string,
-  pieceName: string = DEFAULT_PIECE_NAME,
   options?: TaskExecutionOptions,
 ): Promise<void> {
   const taskRunner = new TaskRunner(cwd);
@@ -267,7 +264,7 @@ export async function runAllTasks(
   };
 
   try {
-    const result = await runWithWorkerPool(taskRunner, initialTasks, concurrency, cwd, pieceName, options, globalConfig.taskPollIntervalMs);
+    const result = await runWithWorkerPool(taskRunner, initialTasks, concurrency, cwd, options, globalConfig.taskPollIntervalMs);
 
     const totalCount = result.success + result.fail;
     blankLine();

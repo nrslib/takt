@@ -18,10 +18,6 @@ import { invalidateResolvedConfigCache } from '../resolutionCache.js';
 export type { ProjectLocalConfig } from '../types.js';
 
 /** Default project configuration */
-const DEFAULT_PROJECT_CONFIG: ProjectLocalConfig = {
-  piece: 'default',
-};
-
 const SUBMODULES_ALL = 'all';
 
 function normalizeSubmodules(raw: unknown): SubmoduleSelection | undefined {
@@ -142,7 +138,7 @@ export function loadProjectConfig(projectDir: string): ProjectLocalConfig {
       const parsed = (parse(content) as Record<string, unknown> | null) ?? {};
       Object.assign(parsedConfig, parsed);
     } catch {
-      return { ...DEFAULT_PROJECT_CONFIG };
+      return {};
     }
   }
 
@@ -169,7 +165,6 @@ export function loadProjectConfig(projectDir: string): ProjectLocalConfig {
   const effectiveWithSubmodules = normalizedSubmodules === undefined ? normalizedWithSubmodules : undefined;
 
   return {
-    ...DEFAULT_PROJECT_CONFIG,
     ...(rest as ProjectLocalConfig),
     autoPr: auto_pr as boolean | undefined,
     draftPr: draft_pr as boolean | undefined,
@@ -262,11 +257,4 @@ export function updateProjectConfig<K extends keyof ProjectLocalConfig>(
   const config = loadProjectConfig(projectDir);
   config[key] = value;
   saveProjectConfig(projectDir, config);
-}
-
-/**
- * Set current piece in project config
- */
-export function setCurrentPiece(projectDir: string, piece: string): void {
-  updateProjectConfig(projectDir, 'piece', piece);
 }

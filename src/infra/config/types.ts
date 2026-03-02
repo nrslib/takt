@@ -8,8 +8,6 @@ import type { AnalyticsConfig, SubmoduleSelection } from '../../core/models/pers
 
 /** Project configuration stored in .takt/config.yaml */
 export interface ProjectLocalConfig {
-  /** Current piece name */
-  piece?: string;
   /** Provider selection for agent runtime */
   provider?: 'claude' | 'codex' | 'opencode' | 'cursor' | 'copilot' | 'mock';
   /** Model selection for agent runtime */

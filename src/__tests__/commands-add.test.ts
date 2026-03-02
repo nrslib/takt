@@ -71,7 +71,6 @@ vi.mock('../features/tasks/index.js', () => ({
 
 vi.mock('../features/config/index.js', () => ({
   clearPersonaSessions: vi.fn(),
-  switchPiece: vi.fn(),
   ejectBuiltin: vi.fn(),
   ejectFacet: vi.fn(),
   parseFacetType: vi.fn(),

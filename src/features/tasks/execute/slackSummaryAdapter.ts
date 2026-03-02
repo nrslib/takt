@@ -4,7 +4,6 @@
 
 import type { TaskListItem } from '../../../infra/task/index.js';
 import type { SlackTaskDetail } from '../../../shared/utils/index.js';
-import { DEFAULT_PIECE_NAME } from '../../../shared/constants.js';
 
 export function generateRunId(): string {
   const now = new Date();
@@ -20,10 +19,15 @@ function computeTaskDurationSec(item: TaskListItem): number {
 }
 
 export function toSlackTaskDetail(item: TaskListItem): SlackTaskDetail {
+  const piece = item.data?.piece;
+  if (!piece) {
+    throw new Error('Task data must include piece for Slack summary');
+  }
+
   return {
     name: item.name,
     success: item.kind === 'completed',
-    piece: item.data?.piece ?? DEFAULT_PIECE_NAME,
+    piece,
     issueNumber: item.data?.issue,
     durationSec: computeTaskDurationSec(item),
     branch: item.branch,

@@ -98,14 +98,13 @@ export function resolveTaskIssue(issueNumber: number | undefined): Issue[] | und
 export async function resolveTaskExecution(
   task: TaskInfo,
   defaultCwd: string,
-  defaultPiece: string,
   abortSignal?: AbortSignal,
 ): Promise<ResolvedTaskExecution> {
   throwIfAborted(abortSignal);
 
   const data = task.data;
-  if (!data) {
-    return { execCwd: defaultCwd, execPiece: defaultPiece, isWorktree: false, autoPr: false, draftPr: false };
+  if (!data || data.piece === undefined) {
+    throw new Error('Task has no piece specified.');
   }
 
   let execCwd = defaultCwd;
@@ -163,7 +162,7 @@ export async function resolveTaskExecution(
     taskPrompt = stageTaskSpecForExecution(defaultCwd, execCwd, task.taskDir, reportDirName);
   }
 
-  const execPiece = data.piece || defaultPiece;
+  const execPiece = data.piece;
   const startMovement = data.start_movement;
   const retryNote = data.retry_note;
 

@@ -134,7 +134,6 @@ const GLOBAL_ENV_SPECS: readonly EnvSpec[] = [
 ];
 
 const PROJECT_ENV_SPECS: readonly EnvSpec[] = [
-  { path: 'piece', type: 'string' },
   { path: 'provider', type: 'string' },
   { path: 'verbose', type: 'boolean' },
   { path: 'concurrency', type: 'number' },

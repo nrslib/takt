@@ -128,7 +128,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
 
   const agentOverrides = resolveAgentOverrides(program);
   const createWorktreeOverride = parseCreateWorktreeOption(opts.createWorktree as string | undefined);
-  const resolvedPipelinePiece = (opts.piece as string | undefined) ?? resolveConfigValue(resolvedCwd, 'piece');
+  const resolvedPipelinePiece = opts.piece as string | undefined;
   const resolvedPipelineAutoPr = opts.autoPr === true
     ? true
     : (resolveConfigValue(resolvedCwd, 'autoPr') ?? false);
@@ -145,6 +145,11 @@ export async function executeDefaultAction(task?: string): Promise<void> {
 
   // --- Pipeline mode (non-interactive): triggered by --pipeline ---
   if (pipelineMode) {
+    if (!resolvedPipelinePiece) {
+      logError('--pipeline requires a piece to be specified with -w <piece>');
+      process.exit(1);
+    }
+
     const exitCode = await executePipeline({
       issueNumber,
       prNumber,

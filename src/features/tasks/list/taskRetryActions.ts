@@ -227,5 +227,5 @@ export async function retryFailedTask(
     startMovement,
   });
 
-  return executeAndCompleteTask(taskInfo, runner, projectDir, selectedPiece);
+  return executeAndCompleteTask(taskInfo, runner, projectDir);
 }

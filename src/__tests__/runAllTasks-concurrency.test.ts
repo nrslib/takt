@@ -8,7 +8,6 @@ import type { TaskInfo } from '../infra/task/index.js';
 const { mockLoadConfigRaw } = vi.hoisted(() => ({
   mockLoadConfigRaw: vi.fn(() => ({
     language: 'en',
-    defaultPiece: 'default',
     logLevel: 'info',
     concurrency: 1,
     taskPollIntervalMs: 500,
@@ -26,14 +25,14 @@ vi.mock('../infra/config/index.js', () => ({
     }
     return {
       global: raw,
-      project: { piece: 'default' },
+      project: {},
     };
   },
   resolvePieceConfigValues: (_projectDir: string, keys: readonly string[]) => {
     const raw = mockLoadConfigRaw() as Record<string, unknown>;
     const config = ('global' in raw && 'project' in raw)
       ? { ...raw.global as Record<string, unknown>, ...raw.project as Record<string, unknown> }
-      : { ...raw, piece: 'default', provider: 'claude', verbose: false };
+      : { ...raw, provider: 'claude', verbose: false };
     const result: Record<string, unknown> = {};
     for (const key of keys) {
       result[key] = config[key];
@@ -44,9 +43,10 @@ vi.mock('../infra/config/index.js', () => ({
     const raw = mockLoadConfigRaw() as Record<string, unknown>;
     const config = ('global' in raw && 'project' in raw)
       ? { ...raw.global as Record<string, unknown>, ...raw.project as Record<string, unknown> }
-      : { ...raw, piece: 'default', provider: 'claude', verbose: false };
+      : { ...raw, provider: 'claude', verbose: false };
     return { value: config[key], source: 'project' };
   },
+  resolvePieceConfigValue: vi.fn().mockReturnValue(undefined),
 }));
 
 const mockLoadConfig = mockLoadConfigRaw;
@@ -144,7 +144,6 @@ vi.mock('../shared/context.js', () => ({
 
 vi.mock('../shared/constants.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  DEFAULT_PIECE_NAME: 'default',
   DEFAULT_LANGUAGE: 'en',
 }));
 
@@ -188,7 +187,7 @@ function createTask(name: string): TaskInfo {
     filePath: `/tasks/${name}.yaml`,
     createdAt: '2026-02-09T00:00:00.000Z',
     status: 'pending',
-    data: null,
+    data: { task: `Task: ${name}`, piece: 'default' },
   };
 }
 
@@ -202,7 +201,6 @@ describe('runAllTasks concurrency', () => {
     beforeEach(() => {
       mockLoadConfig.mockReturnValue({
         language: 'en',
-        defaultPiece: 'default',
         logLevel: 'info',
         notificationSound: true,
         notificationSoundEvents: { runComplete: true, runAbort: true },
@@ -245,7 +243,6 @@ describe('runAllTasks concurrency', () => {
     beforeEach(() => {
       mockLoadConfig.mockReturnValue({
         language: 'en',
-        defaultPiece: 'default',
         logLevel: 'info',
         notificationSound: true,
         notificationSoundEvents: { runComplete: true, runAbort: true },
@@ -323,7 +320,6 @@ describe('runAllTasks concurrency', () => {
       // Given: Config without explicit concurrency (defaults to 1)
       mockLoadConfig.mockReturnValue({
         language: 'en',
-        defaultPiece: 'default',
         logLevel: 'info',
         notificationSound: false,
         concurrency: 1,
@@ -359,7 +355,6 @@ describe('runAllTasks concurrency', () => {
     beforeEach(() => {
       mockLoadConfig.mockReturnValue({
         language: 'en',
-        defaultPiece: 'default',
         logLevel: 'info',
         concurrency: 3,
         taskPollIntervalMs: 500,
@@ -406,7 +401,6 @@ describe('runAllTasks concurrency', () => {
       // Given: 3 tasks, concurrency=2, task1 finishes quickly, task2 takes longer
       mockLoadConfig.mockReturnValue({
         language: 'en',
-        defaultPiece: 'default',
         logLevel: 'info',
         concurrency: 2,
         taskPollIntervalMs: 500,
@@ -448,7 +442,6 @@ describe('runAllTasks concurrency', () => {
       // Given: 3 tasks, 1 fails, 2 succeed
       mockLoadConfig.mockReturnValue({
         language: 'en',
-        defaultPiece: 'default',
         logLevel: 'info',
         notificationSound: true,
         notificationSoundEvents: { runAbort: true },
@@ -530,7 +523,6 @@ describe('runAllTasks concurrency', () => {
       // Given: Sequential mode
       mockLoadConfig.mockReturnValue({
         language: 'en',
-        defaultPiece: 'default',
         logLevel: 'info',
         notificationSound: true,
         notificationSoundEvents: { runComplete: true, runAbort: true },
@@ -560,7 +552,6 @@ describe('runAllTasks concurrency', () => {
     it('should only notify once at run completion when multiple tasks succeed', async () => {
       mockLoadConfig.mockReturnValue({
         language: 'en',
-        defaultPiece: 'default',
         logLevel: 'info',
         notificationSound: true,
         notificationSoundEvents: { runComplete: true },
@@ -585,7 +576,6 @@ describe('runAllTasks concurrency', () => {
     it('should not notify run completion when runComplete is explicitly false', async () => {
       mockLoadConfig.mockReturnValue({
         language: 'en',
-        defaultPiece: 'default',
         logLevel: 'info',
         notificationSound: true,
         notificationSoundEvents: { runComplete: false },
@@ -607,7 +597,6 @@ describe('runAllTasks concurrency', () => {
     it('should notify run completion by default when notification_sound_events is not set', async () => {
       mockLoadConfig.mockReturnValue({
         language: 'en',
-        defaultPiece: 'default',
         logLevel: 'info',
         notificationSound: true,
         concurrency: 1,
@@ -629,7 +618,6 @@ describe('runAllTasks concurrency', () => {
     it('should notify run abort by default when notification_sound_events is not set', async () => {
       mockLoadConfig.mockReturnValue({
         language: 'en',
-        defaultPiece: 'default',
         logLevel: 'info',
         notificationSound: true,
         concurrency: 1,
@@ -652,7 +640,6 @@ describe('runAllTasks concurrency', () => {
     it('should not notify run abort when runAbort is explicitly false', async () => {
       mockLoadConfig.mockReturnValue({
         language: 'en',
-        defaultPiece: 'default',
         logLevel: 'info',
         notificationSound: true,
         notificationSoundEvents: { runAbort: false },
@@ -675,7 +662,6 @@ describe('runAllTasks concurrency', () => {
     it('should notify run abort and rethrow when worker pool throws', async () => {
       mockLoadConfig.mockReturnValue({
         language: 'en',
-        defaultPiece: 'default',
         logLevel: 'info',
         notificationSound: true,
         notificationSoundEvents: { runAbort: true },
@@ -710,7 +696,6 @@ describe('runAllTasks concurrency', () => {
     beforeEach(() => {
       mockLoadConfig.mockReturnValue({
         language: 'en',
-        defaultPiece: 'default',
         logLevel: 'info',
         concurrency: 1,
         taskPollIntervalMs: 500,

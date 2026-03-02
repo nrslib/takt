@@ -35,7 +35,6 @@ TAKT (TAKT Agent Koordination Topology) is a multi-agent orchestration system fo
 | `takt watch` | Watch `.takt/tasks/` and auto-execute tasks (resident process) |
 | `takt add [task]` | Add a new task via AI conversation |
 | `takt list` | List task branches (merge, delete, retry) |
-| `takt switch [piece]` | Switch piece interactively |
 | `takt clear` | Clear agent conversation sessions (reset state) |
 | `takt eject [type] [name]` | Copy builtin piece or facet for customization (`--global` for ~/.takt/) |
 | `takt prompt [piece]` | Preview assembled prompts for each movement and phase |

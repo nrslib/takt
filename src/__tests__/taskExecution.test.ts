@@ -75,7 +75,7 @@ const createTask = (name: string): TaskInfo => ({
   filePath: `/tasks/${name}.yaml`,
   createdAt: '2026-02-16T00:00:00.000Z',
   status: 'pending',
-  data: { task: `Task: ${name}` },
+  data: { task: `Task: ${name}`, piece: 'default' },
 });
 
 describe('executeAndCompleteTask', () => {
@@ -128,7 +128,7 @@ describe('executeAndCompleteTask', () => {
     const abortController = new AbortController();
 
     // When
-    await executeAndCompleteTask(task, {} as never, '/project', 'default', undefined, {
+    await executeAndCompleteTask(task, {} as never, '/project', undefined, {
       abortSignal: abortController.signal,
       taskPrefix: taskDisplayLabel,
       taskColorIndex: 0,
@@ -221,7 +221,7 @@ describe('executeAndCompleteTask', () => {
     mockPostExecutionFlow.mockResolvedValue({ prFailed: true, prError: 'Base ref must be a branch' });
 
     // When
-    const result = await executeAndCompleteTask(task, {} as never, '/project', 'default');
+    const result = await executeAndCompleteTask(task, {} as never, '/project');
 
     // Then: task should be marked as failed
     expect(result).toBe(false);
@@ -257,7 +257,7 @@ describe('executeAndCompleteTask', () => {
     mockPostExecutionFlow.mockResolvedValue({ prUrl: 'https://github.com/org/repo/pull/1' });
 
     // When
-    const result = await executeAndCompleteTask(task, {} as never, '/project', 'default');
+    const result = await executeAndCompleteTask(task, {} as never, '/project');
 
     // Then: task should be marked as completed
     expect(result).toBe(true);

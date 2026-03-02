@@ -45,7 +45,7 @@ vi.mock('../infra/config/global/globalConfig.js', () => ({
 
 vi.mock('../infra/config/project/projectConfig.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  loadProjectConfig: vi.fn(() => ({ piece: 'default' })),
+  loadProjectConfig: vi.fn(() => ({})),
 }));
 
 import { execFileSync } from 'node:child_process';
@@ -58,7 +58,7 @@ const mockLoadProjectConfig = vi.mocked(loadProjectConfig);
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockLoadProjectConfig.mockReturnValue({ piece: 'default' });
+  mockLoadProjectConfig.mockReturnValue({});
 });
 
 describe('cloneAndIsolate git config propagation', () => {
@@ -505,7 +505,7 @@ describe('clone submodule arguments', () => {
   }
 
   it('should append recurse flag when submodules is all', () => {
-    mockLoadProjectConfig.mockReturnValue({ piece: 'default', submodules: 'all' });
+    mockLoadProjectConfig.mockReturnValue({ submodules: 'all' });
     const cloneCalls = setupCloneArgsCapture();
 
     createSharedClone('/project', {
@@ -518,7 +518,7 @@ describe('clone submodule arguments', () => {
   });
 
   it('should append path-scoped recurse flags when submodules is explicit list', () => {
-    mockLoadProjectConfig.mockReturnValue({ piece: 'default', submodules: ['path/a', 'path/b'] });
+    mockLoadProjectConfig.mockReturnValue({ submodules: ['path/a', 'path/b'] });
     const cloneCalls = setupCloneArgsCapture();
 
     createSharedClone('/project', {
@@ -536,7 +536,7 @@ describe('clone submodule arguments', () => {
   });
 
   it('should append recurse flag when withSubmodules is true and submodules is unset', () => {
-    mockLoadProjectConfig.mockReturnValue({ piece: 'default', withSubmodules: true });
+    mockLoadProjectConfig.mockReturnValue({ withSubmodules: true });
     const cloneCalls = setupCloneArgsCapture();
 
     createSharedClone('/project', {
@@ -554,7 +554,7 @@ describe('clone submodule arguments', () => {
   });
 
   it('should keep existing clone args when submodule acquisition is disabled', () => {
-    mockLoadProjectConfig.mockReturnValue({ piece: 'default', withSubmodules: false });
+    mockLoadProjectConfig.mockReturnValue({ withSubmodules: false });
     const cloneCalls = setupCloneArgsCapture();
 
     createSharedClone('/project', {

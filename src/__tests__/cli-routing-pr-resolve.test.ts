@@ -86,13 +86,9 @@ vi.mock('../infra/task/index.js', () => ({
 
 vi.mock('../infra/config/index.js', () => ({
   getPieceDescription: vi.fn(() => ({ name: 'default', description: 'test piece', pieceStructure: '', movementPreviews: [] })),
-  resolveConfigValue: vi.fn((_: string, key: string) => (key === 'piece' ? 'default' : false)),
+  resolveConfigValue: vi.fn(() => false),
   resolveConfigValues: vi.fn(() => ({ language: 'en', interactivePreviewMovements: 3, provider: 'claude' })),
   loadPersonaSessions: vi.fn(() => ({})),
-}));
-
-vi.mock('../shared/constants.js', () => ({
-  DEFAULT_PIECE_NAME: 'default',
 }));
 
 const mockOpts: Record<string, unknown> = {};
@@ -119,6 +115,7 @@ vi.mock('../app/cli/helpers.js', () => ({
 import { selectAndExecuteTask, determinePiece } from '../features/tasks/index.js';
 import { interactiveMode } from '../features/interactive/index.js';
 import { executePipeline } from '../features/pipeline/index.js';
+import { resolveConfigValue } from '../infra/config/index.js';
 import { executeDefaultAction } from '../app/cli/routing.js';
 import { error as logError } from '../shared/ui/index.js';
 import type { PrReviewData } from '../infra/git/index.js';
@@ -128,6 +125,7 @@ const mockDeterminePiece = vi.mocked(determinePiece);
 const mockInteractiveMode = vi.mocked(interactiveMode);
 const mockExecutePipeline = vi.mocked(executePipeline);
 const mockLogError = vi.mocked(logError);
+const mockResolveConfigValue = vi.mocked(resolveConfigValue);
 
 function createMockPrReview(overrides: Partial<PrReviewData> = {}): PrReviewData {
   return {
@@ -152,6 +150,7 @@ beforeEach(() => {
   mockInteractiveMode.mockResolvedValue({ action: 'execute', task: 'summarized task' });
   mockListAllTaskItems.mockReturnValue([]);
   mockIsStaleRunningTask.mockReturnValue(false);
+  mockResolveConfigValue.mockReturnValue(false);
 });
 
 describe('PR resolution in routing', () => {
@@ -290,6 +289,32 @@ describe('PR resolution in routing', () => {
   });
 
   describe('--pr in pipeline mode', () => {
+    it('should exit with error when piece is not specified in pipeline mode', async () => {
+      // Given: --piece is not set in pipeline mode
+      const programModule = await import('../app/cli/program.js');
+      const originalPipelineMode = programModule.pipelineMode;
+      Object.defineProperty(programModule, 'pipelineMode', { value: true, writable: true });
+
+      mockOpts.pr = 456;
+      mockResolveConfigValue.mockReturnValue(false);
+      mockCheckCliStatus.mockReturnValue({ available: true });
+      mockFetchPrReviewComments.mockReturnValue(createMockPrReview());
+      mockExecutePipeline.mockResolvedValue(0);
+
+      const mockExit = vi.spyOn(process, 'exit').mockImplementation(() => {
+        throw new Error('process.exit called');
+      });
+
+      // When/Then
+      await expect(executeDefaultAction()).rejects.toThrow('process.exit called');
+      expect(mockLogError).toHaveBeenCalled();
+      expect(mockExit).toHaveBeenCalledWith(1);
+      expect(mockExecutePipeline).not.toHaveBeenCalled();
+
+      mockExit.mockRestore();
+      Object.defineProperty(programModule, 'pipelineMode', { value: originalPipelineMode, writable: true });
+    });
+
     it('should pass prNumber to executePipeline', async () => {
       // Given: override pipelineMode
       const programModule = await import('../app/cli/program.js');
@@ -297,6 +322,7 @@ describe('PR resolution in routing', () => {
       Object.defineProperty(programModule, 'pipelineMode', { value: true, writable: true });
 
       mockOpts.pr = 456;
+      mockOpts.piece = 'default';
       mockExecutePipeline.mockResolvedValue(0);
 
       // When

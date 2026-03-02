@@ -74,7 +74,6 @@ export interface InteractiveSession {
   sessionId: string | null;
   messages: ConversationMessage[];
   userApprovedTools: string[];
-  currentPiece: string;
 }
 
 /**
@@ -90,7 +89,6 @@ export function createInteractiveSession(
     sessionId: null,
     messages: [],
     userApprovedTools: [],
-    currentPiece: 'default',
     ...options,
   };
 }

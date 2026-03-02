@@ -26,7 +26,6 @@ export default defineConfig({
       'e2e/specs/error-handling.e2e.ts',
       'e2e/specs/cli-catalog.e2e.ts',
       'e2e/specs/cli-prompt.e2e.ts',
-      'e2e/specs/cli-switch.e2e.ts',
       'e2e/specs/cli-help.e2e.ts',
       'e2e/specs/cli-clear.e2e.ts',
       'e2e/specs/cli-config.e2e.ts',

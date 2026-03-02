@@ -26,7 +26,6 @@ describe('project provider_profiles', () => {
     writeFileSync(
       join(taktDir, 'config.yaml'),
       [
-        'piece: default',
         'provider_profiles:',
         '  codex:',
         '    default_permission_mode: full',
@@ -44,7 +43,6 @@ describe('project provider_profiles', () => {
 
   it('saves providerProfiles as provider_profiles', () => {
     saveProjectConfig(testDir, {
-      piece: 'default',
       providerProfiles: {
         codex: {
           defaultPermissionMode: 'full',

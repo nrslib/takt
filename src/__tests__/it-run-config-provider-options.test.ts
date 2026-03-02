@@ -107,7 +107,7 @@ describe('IT: runAllTasks provider_options reflection', () => {
     vi.mocked(runAgent).mockResolvedValue(mockDoneResponse());
 
     const runner = new TaskRunner(env.projectDir);
-    runner.addTask('test task');
+    runner.addTask('test task', { piece: 'run-config-it' });
   });
 
   afterEach(() => {
@@ -137,7 +137,7 @@ describe('IT: runAllTasks provider_options reflection', () => {
       '    network_access: false',
     ].join('\n'));
 
-    await runAllTasks(env.projectDir, 'run-config-it');
+    await runAllTasks(env.projectDir);
 
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
     expect(options?.providerOptions).toEqual({
@@ -159,7 +159,7 @@ describe('IT: runAllTasks provider_options reflection', () => {
     process.env.TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS = 'true';
     invalidateGlobalConfigCache();
 
-    await runAllTasks(env.projectDir, 'run-config-it');
+    await runAllTasks(env.projectDir);
 
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
     expect(options?.providerOptions).toEqual({
@@ -167,4 +167,3 @@ describe('IT: runAllTasks provider_options reflection', () => {
     });
   });
 });
-
