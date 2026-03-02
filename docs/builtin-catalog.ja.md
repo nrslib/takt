@@ -35,10 +35,13 @@ TAKT に同梱されているすべてのビルトイン piece と persona の�
 | | `backend-cqrs` | CQRS+ES 特化バックエンド開発 piece。CQRS+ES、セキュリティ、QA エキスパートレビュー付き。 |
 | 🔧 エキスパート | `expert` | フルスタック開発 piece: architecture、frontend、security、QA レビューと修正ループ付き。 |
 | | `expert-cqrs` | フルスタック開発 piece (CQRS+ES 特化): CQRS+ES、frontend、security、QA レビューと修正ループ付き。 |
+| 🏗️ インフラストラクチャ | `terraform` | Terraform IaC 開発 piece: plan → implement → 並列レビュー → supervisor 検証 → 修正 → 完了。 |
 | 🛠️ リファクタリング | `structural-reform` | プロジェクト全体のレビューと構造改革: 段階的なファイル分割による反復的なコードベース再構築。 |
 | 🔍 レビュー | `review` | 多角コードレビュー: PR/ブランチ/作業中の差分を自動判定し、5つの並列観点（arch/security/QA/testing/requirements）からレビューして統合結果を出力。 |
 | 🧪 テスト | `unit-test` | ユニットテスト特化 piece: テスト分析 -> テスト実装 -> レビュー -> 修正。 |
 | | `e2e-test` | E2E テスト特化 piece: E2E 分析 -> E2E 実装 -> レビュー -> 修正 (Vitest ベースの E2E フロー)。 |
+| 🎵 TAKT 開発 | `takt-default` | TAKT 開発 piece: plan → テスト作成 → implement → AI レビュー → 5並列レビュー → 修正 → supervise → 完了。 |
+| | `takt-default-team-leader` | TAKT 開発 piece (team leader 版): plan → テスト作成 → team-leader implement → AI レビュー → 5並列レビュー → 修正 → supervise → 完了。 |
 | その他 | `research` | リサーチ piece: planner -> digger -> supervisor。質問せずに自律的にリサーチを実行。 |
 | | `deep-research` | ディープリサーチ piece: plan -> dig -> analyze -> supervise。発見駆動型の調査で、浮上した疑問を多角的に分析。 |
 | | `magi` | エヴァンゲリオンにインスパイアされた合議システム。3つの AI persona (MELCHIOR, BALTHASAR, CASPER) が分析・投票。 |

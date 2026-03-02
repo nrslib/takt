@@ -13,7 +13,7 @@
 language: en                  # UI 言語: 'en' または 'ja'
 default_piece: default        # 新規プロジェクトのデフォルト piece
 log_level: info               # ログレベル: debug, info, warn, error
-provider: claude              # デフォルト provider: claude, codex, opencode, または cursor
+provider: claude              # デフォルト provider: claude, codex, opencode, cursor, または copilot
 model: sonnet                 # デフォルトモデル（省略可、provider にそのまま渡される）
 branch_name_strategy: romaji  # ブランチ名生成方式: 'romaji'（高速）または 'ai'（低速）
 prevent_sleep: false          # 実行中に macOS のアイドルスリープを防止（caffeinate）
@@ -56,16 +56,20 @@ interactive_preview_movements: 3  # インタラクティブモードでの move
 #     default_permission_mode: edit
 
 # API キー設定（省略可）
-# 環境変数 TAKT_ANTHROPIC_API_KEY / TAKT_OPENAI_API_KEY / TAKT_OPENCODE_API_KEY / TAKT_CURSOR_API_KEY で上書き可能
+# 環境変数 TAKT_ANTHROPIC_API_KEY / TAKT_OPENAI_API_KEY / TAKT_OPENCODE_API_KEY / TAKT_CURSOR_API_KEY / TAKT_COPILOT_GITHUB_TOKEN で上書き可能
 # anthropic_api_key: sk-ant-...  # Claude（Anthropic）用
 # openai_api_key: sk-...         # Codex（OpenAI）用
 # opencode_api_key: ...          # OpenCode 用
 # cursor_api_key: ...            # Cursor Agent 用（省略時は login セッションにフォールバック）
+# copilot_github_token: ...      # Copilot 用（GitHub トークン）
 
-# Codex CLI パス上書き（省略可）
-# Codex SDK が使用する Codex CLI バイナリを上書き（実行可能ファイルの絶対パスが必要）
-# 環境変数 TAKT_CODEX_CLI_PATH で上書き可能
+# CLI パス上書き（省略可）
+# provider の CLI バイナリを上書き（実行可能ファイルの絶対パスが必要）
+# 環境変数 TAKT_CLAUDE_CLI_PATH / TAKT_CODEX_CLI_PATH / TAKT_CURSOR_CLI_PATH / TAKT_COPILOT_CLI_PATH で上書き可能
+# claude_cli_path: /usr/local/bin/claude
 # codex_cli_path: /usr/local/bin/codex
+# cursor_cli_path: /usr/local/bin/cursor-agent
+# copilot_cli_path: /usr/local/bin/github-copilot-cli
 
 # ビルトイン piece フィルタリング（省略可）
 # builtin_pieces_enabled: true           # false ですべてのビルトインを無効化
@@ -89,7 +93,7 @@ interactive_preview_movements: 3  # インタラクティブモードでの move
 | `language` | `"en"` \| `"ja"` | `"en"` | UI 言語 |
 | `default_piece` | string | `"default"` | 新規プロジェクトのデフォルト piece |
 | `log_level` | `"debug"` \| `"info"` \| `"warn"` \| `"error"` | `"info"` | ログレベル |
-| `provider` | `"claude"` \| `"codex"` \| `"opencode"` \| `"cursor"` | `"claude"` | デフォルト AI provider |
+| `provider` | `"claude"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` | `"claude"` | デフォルト AI provider |
 | `model` | string | - | デフォルトモデル名（provider にそのまま渡される） |
 | `branch_name_strategy` | `"romaji"` \| `"ai"` | `"romaji"` | ブランチ名生成方式 |
 | `prevent_sleep` | boolean | `false` | macOS アイドルスリープ防止（caffeinate） |
@@ -110,7 +114,11 @@ interactive_preview_movements: 3  # インタラクティブモードでの move
 | `openai_api_key` | string | - | Codex 用 OpenAI API キー |
 | `opencode_api_key` | string | - | OpenCode API キー |
 | `cursor_api_key` | string | - | Cursor API キー（省略時は login セッションへフォールバック） |
+| `copilot_github_token` | string | - | Copilot 認証用 GitHub トークン |
+| `claude_cli_path` | string | - | Claude Code CLI バイナリパス上書き（絶対パス） |
 | `codex_cli_path` | string | - | Codex CLI バイナリパス上書き（絶対パス） |
+| `cursor_cli_path` | string | - | Cursor Agent CLI バイナリパス上書き（絶対パス） |
+| `copilot_cli_path` | string | - | Copilot CLI バイナリパス上書き（絶対パス） |
 | `enable_builtin_pieces` | boolean | `true` | ビルトイン piece の有効化 |
 | `disabled_builtins` | string[] | `[]` | 無効化する特定のビルトイン piece |
 | `pipeline` | object | - | pipeline テンプレート設定 |
@@ -151,7 +159,7 @@ concurrency: 2                # このプロジェクトでの takt run 並列�
 | フィールド | 型 | デフォルト | 説明 |
 |-----------|------|---------|------|
 | `piece` | string | `"default"` | このプロジェクトの現在の piece 名 |
-| `provider` | `"claude"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"mock"` | - | provider 上書き |
+| `provider` | `"claude"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` \| `"mock"` | - | provider 上書き |
 | `model` | string | - | モデル名の上書き（provider にそのまま渡される） |
 | `auto_pr` | boolean | - | worktree 実行後に PR を自動作成 |
 | `verbose` | boolean | - | 詳細出力モード |
@@ -164,7 +172,7 @@ concurrency: 2                # このプロジェクトでの takt run 並列�
 
 ## API キー設定
 
-TAKT は4つの provider をサポートしています。Claude/Codex/OpenCode は API キーを使い、Cursor は API キーまたは `cursor-agent login` セッションで認証できます。
+TAKT は5つの provider をサポートしています。Claude/Codex/OpenCode は API キーを使い、Cursor は API キーまたは `cursor-agent login` セッションで認証でき、Copilot は GitHub トークンで認証します。
 
 ### 環境変数（推奨）
 
@@ -180,6 +188,9 @@ export TAKT_OPENCODE_API_KEY=...
 
 # Cursor Agent 用（cursor-agent login 済みなら省略可）
 export TAKT_CURSOR_API_KEY=...
+
+# Copilot 用（GitHub トークン）
+export TAKT_COPILOT_GITHUB_TOKEN=...
 ```
 
 ### 設定ファイル
@@ -190,6 +201,7 @@ anthropic_api_key: sk-ant-...  # Claude 用
 openai_api_key: sk-...         # Codex 用
 opencode_api_key: ...          # OpenCode 用
 cursor_api_key: ...            # Cursor Agent 用（省略可）
+copilot_github_token: ...      # Copilot 用（GitHub トークン）
 ```
 
 ### 優先順位
@@ -202,6 +214,7 @@ cursor_api_key: ...            # Cursor Agent 用（省略可）
 | Codex (OpenAI) | `TAKT_OPENAI_API_KEY` | `openai_api_key` |
 | OpenCode | `TAKT_OPENCODE_API_KEY` | `opencode_api_key` |
 | Cursor Agent | `TAKT_CURSOR_API_KEY` | `cursor_api_key` |
+| Copilot | `TAKT_COPILOT_GITHUB_TOKEN` | `copilot_github_token` |
 
 ### セキュリティ
 
@@ -211,20 +224,33 @@ cursor_api_key: ...            # Cursor Agent 用（省略可）
 - Cursor provider は `cursor-agent login` が済んでいれば API キーなしでも動作できます。
 - API キーを設定すれば、対応する CLI ツール（Claude Code、Codex、OpenCode）のインストールは不要です。TAKT が対応する API を直接呼び出します。
 
-### Codex CLI パス上書き
+### CLI パス上書き
 
-Codex CLI バイナリパスは環境変数または設定ファイルで上書きできます。
+provider の CLI バイナリパスは環境変数または設定ファイルで上書きできます。
 
 ```bash
+export TAKT_CLAUDE_CLI_PATH=/usr/local/bin/claude
 export TAKT_CODEX_CLI_PATH=/usr/local/bin/codex
+export TAKT_CURSOR_CLI_PATH=/usr/local/bin/cursor-agent
+export TAKT_COPILOT_CLI_PATH=/usr/local/bin/github-copilot-cli
 ```
 
 ```yaml
 # ~/.takt/config.yaml
+claude_cli_path: /usr/local/bin/claude
 codex_cli_path: /usr/local/bin/codex
+cursor_cli_path: /usr/local/bin/cursor-agent
+copilot_cli_path: /usr/local/bin/github-copilot-cli
 ```
 
-パスは実行可能ファイルの絶対パスである必要があります。`TAKT_CODEX_CLI_PATH` は設定ファイルの値よりも優先されます。
+| Provider | 環境変数 | 設定キー |
+|----------|---------|---------|
+| Claude | `TAKT_CLAUDE_CLI_PATH` | `claude_cli_path` |
+| Codex | `TAKT_CODEX_CLI_PATH` | `codex_cli_path` |
+| Cursor Agent | `TAKT_CURSOR_CLI_PATH` | `cursor_cli_path` |
+| Copilot | `TAKT_COPILOT_CLI_PATH` | `copilot_cli_path` |
+
+パスは実行可能ファイルの絶対パスである必要があります。環境変数は設定ファイルの値よりも優先されます。プロジェクトレベルの `.takt/config.yaml` でも設定可能です。
 
 ## モデル解決
 
@@ -243,6 +269,8 @@ codex_cli_path: /usr/local/bin/codex
 **OpenCode** は `provider/model` 形式のモデル（例: `opencode/big-pickle`）が必要です。OpenCode provider でモデルを省略すると設定エラーになります。
 
 **Cursor Agent** は `model` を `cursor-agent --model <model>` にそのまま渡します。省略時は Cursor CLI のデフォルトが使用されます。
+
+**Copilot** は `model` を Copilot CLI の `--model <model>` フラグにそのまま渡します。省略時は Copilot CLI のデフォルトが使用されます。
 
 ### 設定例
 
@@ -271,11 +299,11 @@ Provider プロファイルを使用すると、各 provider にデフォルト�
 
 TAKT は provider 非依存の3つのパーミッションモードを使用します。
 
-| モード | 説明 | Claude | Codex | OpenCode | Cursor Agent |
-|--------|------|--------|-------|----------|--------------|
-| `readonly` | 読み取り専用、ファイル変更不可 | `default` | `read-only` | `read-only` | デフォルトフラグ（`--force` なし） |
-| `edit` | 確認付きでファイル編集を許可 | `acceptEdits` | `workspace-write` | `workspace-write` | デフォルトフラグ（`--force` なし） |
-| `full` | すべてのパーミッションチェックをバイパス | `bypassPermissions` | `danger-full-access` | `danger-full-access` | `--force` |
+| モード | 説明 | Claude | Codex | OpenCode | Cursor Agent | Copilot |
+|--------|------|--------|-------|----------|--------------|---------|
+| `readonly` | 読み取り専用、ファイル変更不可 | `default` | `read-only` | `read-only` | デフォルトフラグ（`--force` なし） | フラグなし |
+| `edit` | 確認付きでファイル編集を許可 | `acceptEdits` | `workspace-write` | `workspace-write` | デフォルトフラグ（`--force` なし） | `--allow-all-tools --no-ask-user` |
+| `full` | すべてのパーミッションチェックをバイパス | `bypassPermissions` | `danger-full-access` | `danger-full-access` | `--force` | `--yolo` |
 
 ### 設定方法
 
