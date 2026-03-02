@@ -1,18 +1,22 @@
-name: default-test-first-mini
-description: Test-First開発ピース（plan → テスト作成 → implement → 並列レビュー → 修正 → 完了）
+name: dual-mini
+description: フロントエンド＋バックエンド向けMini開発ピース（plan → implement → 並列レビュー → 修正 → 完了）。フロントエンド＋バックエンドのナレッジ注入付き。
 piece_config:
   provider_options:
     codex:
       network_access: true
     opencode:
       network_access: true
-max_movements: 25
+max_movements: 20
 initial_movement: plan
 movements:
   - name: plan
     edit: false
     persona: planner
-    knowledge: architecture
+    knowledge:
+      - frontend
+      - backend
+      - security
+      - architecture
     allowed_tools:
       - Read
       - Glob
@@ -22,7 +26,7 @@ movements:
       - WebFetch
     rules:
       - condition: 要件が明確で実装可能
-        next: write_tests
+        next: implement
       - condition: ユーザーが質問をしている（実装タスクではない）
         next: COMPLETE
       - condition: 要件が不明確、情報不足
@@ -32,48 +36,17 @@ movements:
       report:
         - name: plan.md
           format: plan
-  - name: write_tests
-    edit: true
-    persona: coder
-    policy:
-      - coding
-      - testing
-    knowledge: architecture
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - Edit
-      - Write
-      - Bash
-      - WebSearch
-      - WebFetch
-    required_permission_mode: edit
-    instruction: write-tests-first
-    rules:
-      - condition: テスト作成が完了した
-        next: implement
-      - condition: テスト対象が未実装のためテスト作成をスキップする
-        next: implement
-      - condition: テスト作成を進行できない
-        next: ABORT
-      - condition: ユーザーへの確認事項があるためユーザー入力が必要
-        next: write_tests
-        requires_user_input: true
-        interactive_only: true
-    output_contracts:
-      report:
-        - name: test-scope.md
-          format: coder-scope
-        - name: test-decisions.md
-          format: coder-decisions
   - name: implement
     edit: true
     persona: coder
     policy:
       - coding
       - testing
-    knowledge: architecture
+    knowledge:
+      - frontend
+      - backend
+      - security
+      - architecture
     allowed_tools:
       - Read
       - Glob
@@ -84,7 +57,7 @@ movements:
       - WebSearch
       - WebFetch
     required_permission_mode: edit
-    instruction: implement-after-tests
+    instruction: implement
     rules:
       - condition: 実装が完了した
         next: reviewers
@@ -124,9 +97,13 @@ movements:
               format: ai-review
       - name: supervise
         edit: false
-        persona: supervisor
+        persona: dual-supervisor
         policy: review
-        knowledge: architecture
+        knowledge:
+          - frontend
+          - backend
+          - security
+          - architecture
         allowed_tools:
           - Read
           - Glob
@@ -162,7 +139,11 @@ movements:
         policy:
           - coding
           - testing
-        knowledge: architecture
+        knowledge:
+          - frontend
+          - backend
+          - security
+          - architecture
         allowed_tools:
           - Read
           - Glob
@@ -183,7 +164,11 @@ movements:
         policy:
           - coding
           - testing
-        knowledge: architecture
+        knowledge:
+          - frontend
+          - backend
+          - security
+          - architecture
         allowed_tools:
           - Read
           - Glob
@@ -208,7 +193,11 @@ movements:
     policy:
       - coding
       - testing
-    knowledge: architecture
+    knowledge:
+      - frontend
+      - backend
+      - security
+      - architecture
     allowed_tools:
       - Read
       - Glob
@@ -234,7 +223,11 @@ movements:
     policy:
       - coding
       - testing
-    knowledge: architecture
+    knowledge:
+      - frontend
+      - backend
+      - security
+      - architecture
     allowed_tools:
       - Read
       - Glob

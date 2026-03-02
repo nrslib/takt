@@ -863,7 +863,7 @@ describe('executePipeline', () => {
       expect(exitCode).toBe(2);
     });
 
-    it('should return exit code 2 when PR has no review comments', async () => {
+    it('should succeed even when PR has no review comments', async () => {
       mockFetchPrReviewComments.mockReturnValueOnce({
         number: 456,
         title: 'Fix auth bug',
@@ -874,6 +874,7 @@ describe('executePipeline', () => {
         reviews: [],
         files: ['src/auth.ts'],
       });
+      mockExecuteTask.mockResolvedValueOnce(true);
 
       const exitCode = await executePipeline({
         prNumber: 456,
@@ -882,7 +883,8 @@ describe('executePipeline', () => {
         cwd: '/tmp/test',
       });
 
-      expect(exitCode).toBe(2);
+      expect(exitCode).toBe(0);
+      expect(mockFormatPrReviewAsTask).toHaveBeenCalled();
     });
 
     it('should return exit code 2 when PR fetch fails', async () => {

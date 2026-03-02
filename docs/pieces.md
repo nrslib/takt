@@ -193,7 +193,7 @@ output_contracts:
 | `edit` | - | Whether the movement can edit project files (`true`/`false`) |
 | `pass_previous_response` | `true` | Pass previous movement's output to `{previous_response}` |
 | `allowed_tools` | - | List of tools the agent can use (Read, Glob, Grep, Edit, Write, Bash, etc.) |
-| `provider` | - | Override provider for this movement (`claude`, `codex`, or `opencode`) |
+| `provider` | - | Override provider for this movement (`claude`, `codex`, `opencode`, `cursor`, or `copilot`) |
 | `model` | - | Override model for this movement |
 | `required_permission_mode` | - | Required minimum permission mode: `readonly`, `edit`, or `full` |
 | `output_contracts` | - | Report file configuration (name, format) |

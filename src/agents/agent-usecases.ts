@@ -1,16 +1,17 @@
-import type { AgentResponse, PartDefinition, PieceRule, RuleMatchMethod, Language } from '../models/types.js';
-import { runAgent, type RunAgentOptions } from '../../agents/runner.js';
-import { detectJudgeIndex, buildJudgePrompt } from '../../agents/judge-utils.js';
-import { parseParts } from './engine/task-decomposer.js';
-import { loadJudgmentSchema, loadEvaluationSchema, loadDecompositionSchema, loadMorePartsSchema } from './schema-loader.js';
-import { detectRuleIndex } from '../../shared/utils/ruleIndex.js';
-import { ensureUniquePartIds, parsePartDefinitionEntry } from './part-definition-validator.js';
+import type { AgentResponse, PartDefinition, PieceRule, RuleMatchMethod, Language } from '../core/models/types.js';
+import { runAgent, type RunAgentOptions, type StreamCallback } from './runner.js';
+import { detectJudgeIndex, buildJudgePrompt } from './judge-utils.js';
+import { parseParts } from '../core/piece/engine/task-decomposer.js';
+import { loadJudgmentSchema, loadEvaluationSchema, loadDecompositionSchema, loadMorePartsSchema } from '../infra/resources/schema-loader.js';
+import { detectRuleIndex } from '../shared/utils/ruleIndex.js';
+import { ensureUniquePartIds, parsePartDefinitionEntry } from '../core/piece/part-definition-validator.js';
 
 export interface JudgeStatusOptions {
   cwd: string;
   movementName: string;
   language?: Language;
   interactive?: boolean;
+  onStream?: StreamCallback;
 }
 
 export interface JudgeStatusResult {
@@ -29,6 +30,7 @@ export interface DecomposeTaskOptions {
   language?: Language;
   model?: string;
   provider?: 'claude' | 'codex' | 'opencode' | 'cursor' | 'copilot' | 'mock';
+  onStream?: StreamCallback;
 }
 
 export interface MorePartsResponse {
@@ -231,6 +233,7 @@ export async function judgeStatus(
     maxTurns: 3,
     permissionMode: 'readonly' as const,
     language: options.language,
+    onStream: options.onStream,
   };
 
   // Stage 1: Structured output
@@ -291,12 +294,13 @@ export async function decomposeTask(
     provider: options.provider,
     allowedTools: [],
     permissionMode: 'readonly',
-    maxTurns: 2,
+    maxTurns: 4,
     outputSchema: loadDecompositionSchema(maxParts),
+    onStream: options.onStream,
   });
 
   if (response.status !== 'done') {
-    const detail = response.error ?? response.content;
+    const detail = response.error || response.content || response.status;
     throw new Error(`Team leader failed: ${detail}`);
   }
 
@@ -331,12 +335,13 @@ export async function requestMoreParts(
     provider: options.provider,
     allowedTools: [],
     permissionMode: 'readonly',
-    maxTurns: 2,
+    maxTurns: 4,
     outputSchema: loadMorePartsSchema(maxAdditionalParts),
+    onStream: options.onStream,
   });
 
   if (response.status !== 'done') {
-    const detail = response.error ?? response.content;
+    const detail = response.error || response.content || response.status;
     throw new Error(`Team leader feedback failed: ${detail}`);
   }
 

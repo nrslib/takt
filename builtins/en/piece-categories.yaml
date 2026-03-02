@@ -1,20 +1,17 @@
 piece_categories:
   🚀 Quick Start:
     pieces:
-      - default-mini
+      - default
       - frontend-mini
       - backend-mini
-      - default
       - compound-eye
   ⚡ Mini:
     pieces:
-      - default-mini
-      - default-test-first-mini
       - frontend-mini
       - backend-mini
       - backend-cqrs-mini
-      - expert-mini
-      - expert-cqrs-mini
+      - dual-mini
+      - dual-cqrs-mini
   🎨 Frontend:
     pieces:
       - frontend
@@ -25,35 +22,42 @@ piece_categories:
       - backend-mini
       - backend-cqrs
       - backend-cqrs-mini
-  🔧 Expert:
+  🔧 Dual:
     pieces:
-      - expert
-      - expert-mini
-      - expert-cqrs
-      - expert-cqrs-mini
+      - dual
+      - dual-mini
+      - dual-cqrs
+      - dual-cqrs-mini
   🏗️ Infrastructure:
     pieces:
       - terraform
-  🛠️ Refactoring:
-    pieces:
-      - structural-reform
   🔍 Review:
     pieces:
       - review
+      - review-fix
+      - frontend-review
+      - frontend-review-fix
+      - backend-review
+      - backend-review-fix
+      - dual-review
+      - dual-review-fix
+      - dual-cqrs-review
+      - dual-cqrs-review-fix
+      - backend-cqrs-review
+      - backend-cqrs-review-fix
   🧪 Testing:
     pieces:
       - unit-test
       - e2e-test
-  ✅ Test First:
-    pieces:
-      - default-test-first-mini
   🎵 TAKT Development:
     pieces:
       - takt-default
       - takt-default-team-leader
+      - takt-default-review-fix
   Others:
     pieces:
       - research
+      - deep-research
       - magi
 show_others_category: true
 others_category_name: Others

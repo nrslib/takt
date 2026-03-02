@@ -277,25 +277,6 @@ describe('NDJSON log', () => {
       expect(log!.status).toBe('completed');
     });
 
-    it('should still load legacy .json files', () => {
-      const logsDir = join(projectDir, '.takt', 'logs');
-      mkdirSync(logsDir, { recursive: true });
-      const legacyPath = join(logsDir, 'legacy-001.json');
-      const legacyLog: SessionLog = {
-        task: 'legacy task',
-        projectDir,
-        pieceName: 'wf',
-        iterations: 0,
-        startTime: new Date().toISOString(),
-        status: 'running',
-        history: [],
-      };
-      writeFileSync(legacyPath, JSON.stringify(legacyLog, null, 2), 'utf-8');
-
-      const log = loadSessionLog(legacyPath);
-      expect(log).not.toBeNull();
-      expect(log!.task).toBe('legacy task');
-    });
   });
 
   describe('appendNdjsonLine real-time characteristics', () => {

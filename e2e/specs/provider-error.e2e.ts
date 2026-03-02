@@ -41,7 +41,6 @@ describe('E2E: Provider error handling (mock)', () => {
       args: [
         '--task', 'Test provider override',
         '--piece', piecePath,
-        '--create-worktree', 'no',
         '--provider', 'mock',
       ],
       cwd: repo.path,
@@ -67,7 +66,6 @@ describe('E2E: Provider error handling (mock)', () => {
       args: [
         '--task', 'Test scenario exhaustion',
         '--piece', piecePath,
-        '--create-worktree', 'no',
         '--provider', 'mock',
       ],
       cwd: repo.path,
@@ -93,7 +91,6 @@ describe('E2E: Provider error handling (mock)', () => {
       args: [
         '--task', 'Test bad scenario',
         '--piece', piecePath,
-        '--create-worktree', 'no',
         '--provider', 'mock',
       ],
       cwd: repo.path,

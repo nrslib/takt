@@ -100,10 +100,16 @@ export class LineTimeSliceBuffer {
       return undefined;
     }
 
-    const boundaryIndex = this.findBoundaryIndex(buffer);
-    const flushIndex = boundaryIndex > 0
-      ? boundaryIndex
+    const minBoundaryIndex = Math.max(this.minTimedFlushChars - 1, 1);
+    const boundaryIndex = this.findBoundaryIndex(buffer, minBoundaryIndex);
+    const flushIndex = boundaryIndex >= 0
+      ? boundaryIndex + 1
       : buffer.length;
+
+    if (!canForceFlush && buffer.length > 0 && this.isBoundary(buffer.charAt(0)) && boundaryIndex < 0) {
+      this.scheduleTimer(key);
+      return undefined;
+    }
 
     const flushText = buffer.slice(0, flushIndex);
     const remainder = buffer.slice(flushIndex);
@@ -118,15 +124,16 @@ export class LineTimeSliceBuffer {
     return flushText;
   }
 
-  private findBoundaryIndex(text: string): number {
+  private findBoundaryIndex(text: string, minIndex: number): number {
     let lastIndex = -1;
-    for (let i = 0; i < text.length; i += 1) {
+    const start = Math.min(Math.max(minIndex, 0), text.length - 1);
+    for (let i = start; i < text.length; i += 1) {
       const ch = text.charAt(i);
       if (this.isBoundary(ch)) {
         lastIndex = i;
       }
     }
-    return lastIndex + 1;
+    return lastIndex;
   }
 
   private isBoundary(ch: string): boolean {

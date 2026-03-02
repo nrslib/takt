@@ -48,10 +48,10 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
     - `README.md` に行が追加されることを確認する。
     - 実行後にタスクが `tasks.yaml` で `completed` ステータスになることを確認する。
 - Worktree/Clone isolation（`e2e/specs/worktree.e2e.ts`）
-  - 目的: `--create-worktree yes` 指定で隔離環境に実行されることを確認。
+  - 目的: `worktree: true` タスクが隔離環境に実行されることを確認。
   - LLM: 条件付き（`TAKT_E2E_PROVIDER` が `claude` / `codex` の場合に呼び出す）
   - 手順（ユーザー行動/コマンド）:
-    - `takt --task 'Add a line "worktree test" to README.md' --piece e2e/fixtures/pieces/simple.yaml --create-worktree yes` を実行する。
+    - `.takt/tasks.yaml` に `worktree: true` のタスクを追加して `takt run` を実行する。
     - コマンドが成功終了することを確認する。
 - Pipeline mode（`e2e/specs/pipeline.e2e.ts`）
   - 目的: ブランチ作成→タスク実行→コミット→push→PR作成の一連フローを確認。
@@ -73,7 +73,7 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
   - 目的: `--task` の直接実行が、プロンプトなしで完了することを確認。
   - LLM: 呼び出さない（`--provider mock` 固定）
   - 手順（ユーザー行動/コマンド）:
-    - `takt --task 'Create a file called noop.txt' --piece e2e/fixtures/pieces/mock-single-step.yaml --create-worktree no --provider mock` を実行する。
+    - `takt --task 'Create a file called noop.txt' --piece e2e/fixtures/pieces/mock-single-step.yaml --provider mock` を実行する。
     - `TAKT_MOCK_SCENARIO=e2e/fixtures/scenarios/execute-done.json` を設定する。
     - 出力に `Piece completed` が含まれることを確認する。
 - Pipeline mode with --skip-git（`e2e/specs/pipeline-skip-git.e2e.ts`）
@@ -87,7 +87,7 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
   - 目的: reportフェーズとjudgeフェーズを通ることを確認（mockシナリオ）。
   - LLM: 呼び出さない（`--provider mock` 固定）
   - 手順（ユーザー行動/コマンド）:
-    - `takt --task 'Create a short report and finish' --piece e2e/fixtures/pieces/report-judge.yaml --create-worktree no --provider mock` を実行する。
+    - `takt --task 'Create a short report and finish' --piece e2e/fixtures/pieces/report-judge.yaml --provider mock` を実行する。
     - `TAKT_MOCK_SCENARIO=e2e/fixtures/scenarios/report-judge.json` を設定する。
     - 出力に `Piece completed` が含まれることを確認する。
 - Add task（`e2e/specs/add.e2e.ts`）
@@ -135,7 +135,7 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
   - LLM: 条件付き（`TAKT_E2E_PROVIDER` が `claude` / `codex` / `opencode` の場合に実行、未指定時は skip）
   - 手順（ユーザー行動/コマンド）:
     - E2E用 `config.yaml` に `runtime.prepare: [gradle, node]` を設定する。
-    - `takt --task '<gradle/npm を実行する指示>' --piece e2e/fixtures/pieces/simple.yaml --create-worktree no` を実行する。
+    - `takt --task '<gradle/npm を実行する指示>' --piece e2e/fixtures/pieces/simple.yaml` を実行する。
     - 正例では、作業リポジトリに `.runtime/env.sh` と `.runtime/{tmp,cache,config,state,gradle,npm}` が作成されていることを確認する。
     - 負例（`runtime.prepare` 未設定）では、`GRADLE_USER_HOME is required` と npm キャッシュ書き込み失敗が出力され、`.runtime/env.sh` が生成されないことを確認する。
 - List tasks non-interactive（`e2e/specs/list-non-interactive.e2e.ts`）

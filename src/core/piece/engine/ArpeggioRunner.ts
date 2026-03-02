@@ -16,7 +16,7 @@ import { createDataSource } from '../arpeggio/data-source-factory.js';
 import { loadTemplate, expandTemplate } from '../arpeggio/template.js';
 import { buildMergeFn, writeMergedOutput } from '../arpeggio/merge.js';
 import type { RunAgentOptions } from '../../../agents/runner.js';
-import { executeAgent } from '../agent-usecases.js';
+import { executeAgent } from '../../../agents/agent-usecases.js';
 import { detectMatchedRule } from '../evaluation/index.js';
 import { incrementMovementIteration } from './state-manager.js';
 import { createLogger } from '../../../shared/utils/index.js';
@@ -200,7 +200,7 @@ export class ArpeggioRunner {
       );
     }
 
-    const mergeFn = await buildMergeFn(arpeggioConfig.merge);
+    const mergeFn = buildMergeFn(arpeggioConfig.merge);
     const mergedContent = mergeFn(results);
 
     if (arpeggioConfig.outputPath) {

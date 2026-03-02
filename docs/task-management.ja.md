@@ -263,7 +263,7 @@ takt list --non-interactive --action try --branch takt/my-branch
 
 TAKT は `git worktree` の代わりに `git clone --shared` を使用して、独立した `.git` ディレクトリを持つ軽量クローンを作成します。これが重要な理由は次の通りです。
 
-- **独立した `.git`**: 共有クローンは独自の `.git` ディレクトリを持ち、エージェントツール（Claude Code など）が `gitdir:` 参照をたどってメインリポジトリに戻ることを防ぎます。
+- **独立した `.git`**: 共有クローンは独自の `.git` ディレクトリを持ち、エージェントツールが `gitdir:` 参照をたどってメインリポジトリに戻ることを防ぎます。
 - **完全な隔離**: エージェントはクローンディレクトリ内でのみ作業し、メインリポジトリを認識しません。
 
 > **注意**: YAML フィールド名は後方互換性のため `worktree` のままです。内部的には `git worktree` ではなく `git clone --shared` を使用しています。

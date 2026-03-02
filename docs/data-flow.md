@@ -18,7 +18,7 @@ TAKTのデータフローは以下の7つの主要なレイヤーで構成され
 
 1. **CLI Layer** - ユーザー入力の受付
 2. **Interactive Layer** - タスクの対話的な明確化
-3. **Execution Orchestration Layer** - ピース選択とworktree管理
+3. **Execution Orchestration Layer** - ピース選択と実行開始
 4. **Piece Execution Layer** - セッション管理とイベント処理
 5. **Engine Layer** - ステートマシンによるステップ実行
 6. **Instruction Building Layer** - プロンプト生成
@@ -70,13 +70,6 @@ TAKTのデータフローは以下の7つの主要なレイヤーで構成され
 │  │ determinePiece()  │ ← piece選択 (interactive/override) │
 │  └─────────┬────────────┘                                      │
 │            │ pieceIdentifier: string                        │
-│            ▼                                                    │
-│  ┌──────────────────────────────────┐                         │
-│  │ confirmAndCreateWorktree()       │                         │
-│  │  - AI branchname generation      │                         │
-│  │  - createSharedClone()           │                         │
-│  └─────────┬────────────────────────┘                         │
-│            │ { execCwd, isWorktree, branch }                  │
 │            ▼                                                    │
 │  ┌──────────────────────────────────┐                         │
 │  │ executeTask()                    │                         │
@@ -288,10 +281,10 @@ TAKTのデータフローは以下の7つの主要なレイヤーで構成され
 │               ▼                                                 │
 │  ┌────────────────────────────────────────┐                    │
 │  │ Provider.call()                        │                    │
-│  │  (ClaudeProvider / CodexProvider)      │                    │
+│  │  (Claude / Codex / OpenCode / etc.)    │                    │
 │  │                                        │                    │
 │  │  - Build system prompt                 │                    │
-│  │  - Call SDK (callClaude / callCodex)   │                    │
+│  │  - Call SDK (provider-specific)        │                    │
 │  │  - Stream handling (onStream callback) │                    │
 │  │  - Error propagation                   │                    │
 │  │                                        │                    │
@@ -362,7 +355,7 @@ TAKTのデータフローは以下の7つの主要なレイヤーで構成され
 
 ### 3. Execution Orchestration Layer (`src/features/tasks/execute/selectAndExecute.ts`)
 
-**役割**: ピース選択とworktree管理
+**役割**: ピース選択と実行オーケストレーション
 
 **主要な処理**:
 
@@ -372,26 +365,18 @@ TAKTのデータフローは以下の7つの主要なレイヤーで構成され
      - 名前形式 → バリデーション
    - オーバーライドなし → インタラクティブ選択 (`selectPiece()`)
 
-2. **Worktree作成** (`confirmAndCreateWorktree()`):
-   - ユーザー確認 (または `--create-worktree` フラグ)
-   - ブランチ名生成 (`summarizeTaskName()` - AIでタスクから英語スラグ生成)
-   - `createSharedClone()`: git clone --shared で軽量クローン作成
-
-3. **タスク実行開始** (`selectAndExecuteTask()`):
+2. **タスク実行開始** (`selectAndExecuteTask()`):
    - `executeTask()` を呼び出し
-   - 成功時: Auto-commit & Push
-   - PR作成 (オプション)
+   - 成功/失敗を `tasks.yaml` に記録（`skipTaskList` 設定時を除く）
 
 **データ入力**:
 - `task: string`
 - `options?: SelectAndExecuteOptions`:
   - `piece?: string`
-  - `createWorktree?: boolean`
-  - `autoPr?: boolean`
+  - `skipTaskList?: boolean`
 - `agentOverrides?: TaskExecutionOptions`
 
 **データ出力**:
-- `{ execCwd, isWorktree, branch }`
 - タスク実行成功/失敗
 
 ---
@@ -669,7 +654,7 @@ const match = await detectMatchedRule(step, response.content, tagContent, {...})
    - プロンプトファイル (`.md`)
 
 2. **プロバイダー取得**:
-   - `getProvider(providerType)`: ClaudeProvider / CodexProvider / MockProvider
+   - `getProvider(providerType)`: Claude / Codex / OpenCode / Cursor / Copilot / Mock
 
 3. **エージェント呼び出し**:
    - `provider.call(agentName, instruction, options)`
@@ -696,11 +681,14 @@ const match = await detectMatchedRule(step, response.content, tagContent, {...})
 
 #### 7.2 Provider (`src/infra/providers/`)
 
-**役割**: AIプロバイダー(Claude, Codex)とのSDK通信
+**役割**: AIプロバイダー(Claude, Codex, OpenCode, Cursor, Copilot)とのSDK通信
 
 **主要なプロバイダー**:
 - `ClaudeProvider`: Claude Code SDK (`@anthropic-ai/claude-agent-sdk`)
-- `CodexProvider`: Codex API
+- `CodexProvider`: Codex SDK (`@openai/codex-sdk`)
+- `OpenCodeProvider`: OpenCode SDK (`@opencode-ai/sdk`)
+- `CursorProvider`: Cursor Agent CLI
+- `CopilotProvider`: GitHub Copilot CLI
 - `MockProvider`: テスト用
 
 **主要メソッド**:
@@ -716,7 +704,7 @@ async call(
 
 **処理内容**:
 1. システムプロンプト構築
-2. SDK呼び出し (`callClaude()` / `callCodex()`)
+2. SDK呼び出し（プロバイダー固有）
 3. ストリーミング処理 (`onStream` callback)
 4. エラーハンドリング
 5. レスポンス変換
@@ -760,15 +748,9 @@ async call(
 - `--piece` フラグ → 検証
 - なし → インタラクティブ選択 (`selectPiece()`)
 
-**Worktree作成** (オプション):
-- `confirmAndCreateWorktree()`:
-  - ユーザー確認または `--create-worktree` フラグ
-  - `summarizeTaskName()`: タスク → 英語スラグ (AI呼び出し)
-  - `createSharedClone()`: git clone --shared
-
 **データ**:
 - `pieceIdentifier: string`
-- `{ execCwd, isWorktree, branch }`
+- `execCwd: string` (実行ディレクトリ)
 
 ---
 
@@ -1000,9 +982,9 @@ function determineNextStepByRules(
 
 ### 7. Provider Response → AgentResponse
 
-**場所**: `src/infra/providers/claude.ts`, `src/infra/providers/codex.ts`
+**場所**: `src/infra/providers/` (各プロバイダー実装)
 
-**入力**: SDKレスポンス (`ClaudeResult`)
+**入力**: SDKレスポンス（プロバイダー固有）
 
 **処理**:
 - `status` 変換

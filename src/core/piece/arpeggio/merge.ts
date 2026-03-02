@@ -3,73 +3,71 @@
  *
  * Supports two merge strategies:
  * - 'concat': Simple concatenation with configurable separator
- * - 'custom': User-provided merge function (inline JS or external file)
+ * - 'custom': User-provided merge function (inline_js or file)
  */
 
 import { writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import type { ArpeggioMergeMovementConfig, MergeFn } from './types.js';
+import type { BatchResult } from './types.js';
+
+const require = createRequire(import.meta.url);
+
+function sortByBatchIndex(results: readonly BatchResult[]): readonly BatchResult[] {
+  return results.slice().sort((a, b) => a.batchIndex - b.batchIndex);
+}
+
+/** Create a merge function from inline JS source */
+function createCustomMergeFromInlineJs(inlineJs: string): MergeFn {
+  const mergeImpl = new Function('results', inlineJs) as (results: readonly BatchResult[]) => unknown;
+
+  return (results) => {
+    const orderedResults = sortByBatchIndex(results);
+    const value = mergeImpl(orderedResults);
+    return typeof value === 'string' ? value : JSON.stringify(value);
+  };
+}
+
+/** Create a merge function from external JS module */
+function createCustomMergeFromFile(path: string): MergeFn {
+  const moduleExports = require(path);
+  const mergeImpl = moduleExports?.default ?? moduleExports;
+
+  if (typeof mergeImpl !== 'function') {
+    throw new Error(`Custom merge module must export a function: ${path}`);
+  }
+
+  return (results) => {
+    const orderedResults = sortByBatchIndex(results);
+    const value = mergeImpl(orderedResults);
+    return typeof value === 'string' ? value : JSON.stringify(value);
+  };
+}
 
 /** Create a concat merge function with the given separator */
 function createConcatMerge(separator: string): MergeFn {
   return (results) =>
-    results
+    sortByBatchIndex(results)
       .filter((r) => r.success)
-      .sort((a, b) => a.batchIndex - b.batchIndex)
       .map((r) => r.content)
       .join(separator);
 }
 
 /**
- * Create a merge function from inline JavaScript.
- *
- * The inline JS receives `results` as the function parameter (readonly BatchResult[]).
- * It must return a string.
- */
-function createInlineJsMerge(jsBody: string): MergeFn {
-  const fn = new Function('results', jsBody) as MergeFn;
-  return (results) => {
-    const output = fn(results);
-    if (typeof output !== 'string') {
-      throw new Error(`Inline JS merge function must return a string, got ${typeof output}`);
-    }
-    return output;
-  };
-}
-
-/**
- * Create a merge function from an external JS file.
- *
- * The file must export a default function: (results: BatchResult[]) => string
- */
-async function createFileMerge(filePath: string): Promise<MergeFn> {
-  const module = await import(filePath) as { default?: MergeFn };
-  if (typeof module.default !== 'function') {
-    throw new Error(`Merge file "${filePath}" must export a default function`);
-  }
-  return module.default;
-}
-
-/**
  * Build a merge function from the arpeggio merge configuration.
- *
- * For 'concat' strategy: returns a simple join function.
- * For 'custom' strategy: loads from inline JS or external file.
  */
-export async function buildMergeFn(config: ArpeggioMergeMovementConfig): Promise<MergeFn> {
-  if (config.strategy === 'concat') {
-    return createConcatMerge(config.separator ?? '\n');
+export function buildMergeFn(config: ArpeggioMergeMovementConfig): MergeFn {
+  if (config.strategy === 'custom') {
+    if (config.inlineJs) {
+      return createCustomMergeFromInlineJs(config.inlineJs);
+    }
+    if (config.file) {
+      return createCustomMergeFromFile(config.file);
+    }
+    throw new Error('Custom merge strategy requires inline_js or file');
   }
 
-  // Custom strategy
-  if (config.inlineJs) {
-    return createInlineJsMerge(config.inlineJs);
-  }
-
-  if (config.filePath) {
-    return createFileMerge(config.filePath);
-  }
-
-  throw new Error('Custom merge strategy requires either inline_js or file path');
+  return createConcatMerge(config.separator ?? '\n');
 }
 
 /** Write merged output to a file if output_path is configured */

@@ -1,5 +1,5 @@
-name: default-mini
-description: Mini development piece (plan -> implement -> parallel review -> fix if needed -> complete)
+name: dual-cqrs-mini
+description: CQRS+ES frontend + backend mini development piece (plan -> implement -> parallel review -> fix if needed -> complete) with CQRS+ES knowledge injection
 piece_config:
   provider_options:
     codex:
@@ -12,7 +12,12 @@ movements:
   - name: plan
     edit: false
     persona: planner
-    knowledge: architecture
+    knowledge:
+      - frontend
+      - backend
+      - cqrs-es
+      - security
+      - architecture
     allowed_tools:
       - Read
       - Glob
@@ -38,7 +43,12 @@ movements:
     policy:
       - coding
       - testing
-    knowledge: architecture
+    knowledge:
+      - frontend
+      - backend
+      - cqrs-es
+      - security
+      - architecture
     allowed_tools:
       - Read
       - Glob
@@ -89,9 +99,14 @@ movements:
               format: ai-review
       - name: supervise
         edit: false
-        persona: supervisor
+        persona: dual-supervisor
         policy: review
-        knowledge: architecture
+        knowledge:
+          - frontend
+          - backend
+          - cqrs-es
+          - security
+          - architecture
         allowed_tools:
           - Read
           - Glob
@@ -127,7 +142,12 @@ movements:
         policy:
           - coding
           - testing
-        knowledge: architecture
+        knowledge:
+          - frontend
+          - backend
+          - cqrs-es
+          - security
+          - architecture
         allowed_tools:
           - Read
           - Glob
@@ -148,7 +168,12 @@ movements:
         policy:
           - coding
           - testing
-        knowledge: architecture
+        knowledge:
+          - frontend
+          - backend
+          - cqrs-es
+          - security
+          - architecture
         allowed_tools:
           - Read
           - Glob
@@ -173,7 +198,12 @@ movements:
     policy:
       - coding
       - testing
-    knowledge: architecture
+    knowledge:
+      - frontend
+      - backend
+      - cqrs-es
+      - security
+      - architecture
     allowed_tools:
       - Read
       - Glob
@@ -199,7 +229,12 @@ movements:
     policy:
       - coding
       - testing
-    knowledge: architecture
+    knowledge:
+      - frontend
+      - backend
+      - cqrs-es
+      - security
+      - architecture
     allowed_tools:
       - Read
       - Glob

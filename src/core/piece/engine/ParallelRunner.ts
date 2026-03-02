@@ -10,7 +10,7 @@ import type {
   PieceState,
   AgentResponse,
 } from '../../models/types.js';
-import { executeAgent } from '../agent-usecases.js';
+import { executeAgent } from '../../../agents/agent-usecases.js';
 import { ParallelLogger } from './parallel-logger.js';
 import { needsStatusJudgmentPhase, runReportPhase, runStatusJudgmentPhase } from '../phase-runner.js';
 import { detectMatchedRule } from '../evaluation/index.js';

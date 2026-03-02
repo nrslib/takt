@@ -73,7 +73,6 @@ function buildArgs(prompt: string, options: CopilotCallOptions & { shareFilePath
     args.push('--resume', options.sessionId);
   }
 
-  // Permission mode mapping
   // Note: -p mode is already non-interactive. --autopilot and
   // --max-autopilot-continues are not used because they conflict with
   // permission flags in Copilot CLI v0.0.418+ and -p already implies
@@ -83,7 +82,6 @@ function buildArgs(prompt: string, options: CopilotCallOptions & { shareFilePath
   } else if (options.permissionMode === 'edit') {
     args.push('--allow-all-tools', '--no-ask-user');
   }
-  // 'readonly' / undefined: no permission flags (copilot runs without tool access)
 
   // --share exports session transcript to a markdown file, which we parse
   // to extract the session ID for later resumption.
@@ -176,8 +174,10 @@ function execCopilot(args: string[], options: CopilotCallOptions): Promise<Copil
       reject(error);
     };
 
-    const appendChunk = (target: 'stdout' | 'stderr', chunk: Buffer | string): void => {
-      const text = typeof chunk === 'string' ? chunk : chunk.toString('utf-8');
+    const toText = (chunk: Buffer | string): string =>
+      typeof chunk === 'string' ? chunk : chunk.toString('utf-8');
+
+    const appendChunk = (target: 'stdout' | 'stderr', text: string): void => {
       const byteLength = Buffer.byteLength(text);
 
       if (target === 'stdout') {
@@ -209,15 +209,15 @@ function execCopilot(args: string[], options: CopilotCallOptions): Promise<Copil
     };
 
     child.stdout?.on('data', (chunk: Buffer | string) => {
-      appendChunk('stdout', chunk);
+      const text = toText(chunk);
+      appendChunk('stdout', text);
       if (options.onStream) {
-        const text = typeof chunk === 'string' ? chunk : chunk.toString('utf-8');
         if (text) {
           options.onStream({ type: 'text', data: { text } });
         }
       }
     });
-    child.stderr?.on('data', (chunk: Buffer | string) => appendChunk('stderr', chunk));
+    child.stderr?.on('data', (chunk: Buffer | string) => appendChunk('stderr', toText(chunk)));
 
     child.on('error', (error: NodeJS.ErrnoException) => {
       rejectOnce(createExecError(error.message, {
@@ -353,9 +353,6 @@ export function extractSessionIdFromShareFile(content: string): string | undefin
   return match?.[1];
 }
 
-/**
- * Read and extract session ID from a --share transcript file, then clean up.
- */
 function cleanupTmpDir(dir?: string): void {
   if (dir) {
     rm(dir, { recursive: true, force: true }).catch((err) => {
@@ -396,7 +393,6 @@ function parseCopilotOutput(stdout: string): { content: string } | { error: stri
  */
 export class CopilotClient {
   async call(agentType: string, prompt: string, options: CopilotCallOptions): Promise<AgentResponse> {
-    // Create a temp directory for --share session transcript
     let shareTmpDir: string | undefined;
     let shareFilePath: string | undefined;
     try {
@@ -412,6 +408,17 @@ export class CopilotClient {
       const { stdout } = await execCopilot(args, options);
       const parsed = parseCopilotOutput(stdout);
       if ('error' in parsed) {
+        if (options.onStream) {
+          options.onStream({
+            type: 'result',
+            data: {
+              result: '',
+              success: false,
+              error: parsed.error,
+              sessionId: options.sessionId ?? '',
+            },
+          });
+        }
         cleanupTmpDir(shareTmpDir);
         return {
           persona: agentType,

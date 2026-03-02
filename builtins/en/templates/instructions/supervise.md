@@ -1,7 +1,7 @@
 # supervise -- Final Verification Instruction Template
 
 > **Purpose**: Run tests/builds, verify all review results, give final approval
-> **Agent**: supervisor, expert-supervisor
+> **Agent**: supervisor, dual-supervisor
 > **Reports**: Validation + Summary (format embedded in template)
 
 ---
@@ -11,7 +11,7 @@
 ```
 Run tests, verify builds, and perform final approval.
 
-{Customize: Review pass status -- for expert pieces where all reviews have passed}
+{Customize: Review pass status -- for dual pieces where all reviews have passed}
 ## Previous Reviews Summary
 Reaching this movement means all of the following reviews have been APPROVED:
 {Customize: Actual review list}

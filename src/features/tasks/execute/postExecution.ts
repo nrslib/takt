@@ -1,12 +1,10 @@
 /**
  * Shared post-execution logic: auto-commit, push, and PR creation.
  *
- * Used by both selectAndExecuteTask (interactive mode) and
- * instructBranch (instruct mode from takt list).
+ * Used by taskExecution (takt run / watch path) and
+ * instructBranch (takt list).
  */
 
-import { resolvePieceConfigValue } from '../../../infra/config/index.js';
-import { confirm } from '../../../shared/prompt/index.js';
 import { autoCommitAndPush, pushBranch } from '../../../infra/task/index.js';
 import { info, error, success } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
@@ -16,39 +14,6 @@ import type { Issue } from '../../../infra/git/index.js';
 
 const log = createLogger('postExecution');
 
-/**
- * Resolve a boolean PR option with priority: CLI option > config > prompt.
- */
-async function resolvePrBooleanOption(
-  option: boolean | undefined,
-  cwd: string,
-  configKey: 'autoPr' | 'draftPr',
-  promptMessage: string,
-): Promise<boolean> {
-  if (typeof option === 'boolean') {
-    return option;
-  }
-  const configValue = resolvePieceConfigValue(cwd, configKey);
-  if (typeof configValue === 'boolean') {
-    return configValue;
-  }
-  return confirm(promptMessage, true);
-}
-
-/**
- * Resolve auto-PR setting with priority: CLI option > config > prompt.
- */
-export async function resolveAutoPr(optionAutoPr: boolean | undefined, cwd: string): Promise<boolean> {
-  return resolvePrBooleanOption(optionAutoPr, cwd, 'autoPr', 'Create pull request?');
-}
-
-/**
- * Resolve draft-PR setting with priority: CLI option > config > prompt.
- * Only called when shouldCreatePr is true.
- */
-export async function resolveDraftPr(optionDraftPr: boolean | undefined, cwd: string): Promise<boolean> {
-  return resolvePrBooleanOption(optionDraftPr, cwd, 'draftPr', 'Create as draft?');
-}
 
 export interface PostExecutionOptions {
   execCwd: string;

@@ -39,7 +39,6 @@ describe('E2E: Report file output (mock)', () => {
       args: [
         '--task', 'Test report output',
         '--piece', piecePath,
-        '--create-worktree', 'no',
         '--provider', 'mock',
       ],
       cwd: repo.path,

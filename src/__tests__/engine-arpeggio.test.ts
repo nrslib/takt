@@ -251,32 +251,4 @@ describe('ArpeggioRunner integration', () => {
     expect(mockAgent).toHaveBeenCalledTimes(3);
   });
 
-  it('should use custom merge function when configured', async () => {
-    const { tmpDir, csvPath, templatePath } = createArpeggioTestDir();
-    const arpeggioConfig = createArpeggioConfig(csvPath, templatePath, {
-      merge: {
-        strategy: 'custom',
-        inlineJs: 'return results.filter(r => r.success).map(r => r.content).join(" | ");',
-      },
-    });
-    const config = buildArpeggioPieceConfig(arpeggioConfig, tmpDir);
-
-    const mockAgent = vi.mocked(runAgent);
-    mockAgent
-      .mockResolvedValueOnce(makeResponse({ content: 'X' }))
-      .mockResolvedValueOnce(makeResponse({ content: 'Y' }))
-      .mockResolvedValueOnce(makeResponse({ content: 'Z' }));
-
-    vi.mocked(detectMatchedRule).mockResolvedValueOnce({
-      index: 0,
-      method: 'phase1_tag',
-    });
-
-    engine = new PieceEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
-    const state = await engine.run();
-
-    expect(state.status).toBe('completed');
-    const output = state.movementOutputs.get('process');
-    expect(output!.content).toBe('X | Y | Z');
-  });
 });

@@ -1,5 +1,5 @@
-name: expert-cqrs
-description: CQRS+ES・フロントエンド・セキュリティ・QA専門家レビュー
+name: dual-cqrs
+description: フロントエンド＋バックエンド開発ピース（CQRS+ES特化）（CQRS+ES・フロントエンド・セキュリティ・QAレビューと修正ループ付き）
 piece_config:
   provider_options:
     codex:
@@ -271,7 +271,7 @@ movements:
     instruction: fix
   - name: supervise
     edit: false
-    persona: expert-supervisor
+    persona: dual-supervisor
     policy: review
     allowed_tools:
       - Read

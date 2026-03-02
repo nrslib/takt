@@ -25,6 +25,10 @@ import {
   type PieceContext,
   formatMovementPreviews,
   type InteractiveModeAction,
+  type SummaryActionValue,
+  type PostSummaryAction,
+  buildSummaryActionOptions,
+  selectSummaryAction,
 } from './interactive-summary.js';
 import { type RunSessionContext, formatRunSessionForPrompt } from './runSessionReader.js';
 
@@ -113,12 +117,18 @@ export {
  *   /cancel → exits without executing
  *   Ctrl+D  → exits without executing
  */
+export interface InteractiveModeOptions {
+  /** Actions to exclude from the post-summary action selector. */
+  excludeActions?: readonly SummaryActionValue[];
+}
+
 export async function interactiveMode(
   cwd: string,
   initialInput?: string,
   pieceContext?: PieceContext,
   sessionId?: string,
   runSessionContext?: RunSessionContext,
+  options?: InteractiveModeOptions,
 ): Promise<InteractiveModeResult> {
   const baseCtx = initializeSession(cwd, 'interactive');
   const ctx = sessionId ? { ...baseCtx, sessionId } : baseCtx;
@@ -155,11 +165,32 @@ export async function interactiveMode(
     return `## Policy\n${policyIntro}\n\n${policyContent}\n\n---\n\n${userMessage}\n\n---\n**Policy Reminder:** ${reminderLabel}`;
   }
 
+  const excludeActions = options?.excludeActions;
+  const selectAction = excludeActions?.length
+    ? (task: string): Promise<PostSummaryAction | null> =>
+        selectSummaryAction(
+          task,
+          ui.proposed,
+          ui.actionPrompt,
+          buildSummaryActionOptions(
+            {
+              execute: ui.actions.execute,
+              createIssue: ui.actions.createIssue,
+              saveTask: ui.actions.saveTask,
+              continue: ui.actions.continue,
+            },
+            ['create_issue'],
+            excludeActions,
+          ),
+        )
+    : undefined;
+
   return runConversationLoop(cwd, ctx, {
     systemPrompt,
     allowedTools: DEFAULT_INTERACTIVE_TOOLS,
     transformPrompt: injectPolicy,
     introMessage: ui.intro,
+    selectAction,
   }, pieceContext, initialInput);
 }
 

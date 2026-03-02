@@ -49,4 +49,4 @@ All other sections are the same across pieces.
 | minimal | AI Review, Supervisor |
 | coding | AI Review, Architecture |
 | default | Architecture Design, AI Review, Architect Review, QA, Supervisor |
-| expert | AI Review, Architecture, Frontend, Security, QA, Supervisor |
+| dual | AI Review, Architecture, Frontend, Security, QA, Supervisor |

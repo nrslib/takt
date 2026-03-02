@@ -52,7 +52,6 @@ program
   .option('-t, --task <string>', 'Task content (as alternative to GitHub issue)')
   .option('--pipeline', 'Pipeline mode: non-interactive, no worktree, direct branch creation')
   .option('--skip-git', 'Skip branch creation, commit, and push (pipeline mode)')
-  .option('--create-worktree <yes|no>', 'Skip the worktree prompt by explicitly specifying yes or no')
   .option('-q, --quiet', 'Minimal output mode: suppress AI output (for CI)')
   .option('-c, --continue', 'Continue from the last assistant session');
 

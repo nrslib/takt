@@ -1,5 +1,5 @@
-name: expert
-description: アーキテクチャ・フロントエンド・セキュリティ・QA専門家レビュー
+name: dual-cqrs-review-fix
+description: フロントエンド＋CQRS+ES特化レビュー＋修正ループ（構造・モジュール化・ドメインモデル・コンポーネント設計・セキュリティ・QA）
 piece_config:
   provider_options:
     codex:
@@ -7,28 +7,25 @@ piece_config:
     opencode:
       network_access: true
 max_movements: 30
-initial_movement: plan
+initial_movement: gather
 loop_monitors:
   - cycle:
-      - ai_review
-      - ai_fix
+      - reviewers
+      - fix
     threshold: 3
     judge:
       persona: supervisor
       instruction_template: loop-monitor-ai-fix
       rules:
         - condition: 健全（進捗あり）
-          next: ai_review
+          next: reviewers
         - condition: 非生産的（同じ指摘の反復・修正未反映）
-          next: ai_no_fix
+          next: supervise
+
 movements:
-  - name: plan
+  - name: gather
     edit: false
     persona: planner
-    knowledge:
-      - frontend
-      - backend
-      - architecture
     allowed_tools:
       - Read
       - Glob
@@ -36,121 +33,17 @@ movements:
       - Bash
       - WebSearch
       - WebFetch
-    instruction: plan
+    instruction: gather-review
+    output_contracts:
+      report:
+        - name: review-target.md
+          format: review-gather
     rules:
-      - condition: タスク分析と計画が完了した
-        next: implement
-      - condition: 要件が不明確で計画を立てられない
+      - condition: レビュー対象の情報収集完了
+        next: reviewers
+      - condition: レビュー対象を特定できない、情報不足
         next: ABORT
-    output_contracts:
-      report:
-        - name: plan.md
-          format: plan
-  - name: implement
-    edit: true
-    persona: coder
-    policy:
-      - coding
-      - testing
-    session: refresh
-    knowledge:
-      - frontend
-      - backend
-      - security
-      - architecture
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - Edit
-      - Write
-      - Bash
-      - WebSearch
-      - WebFetch
-    instruction: implement
-    rules:
-      - condition: 実装が完了した
-        next: ai_review
-      - condition: 実装未着手（レポートのみ）
-        next: ai_review
-      - condition: 実装を進行できない
-        next: ai_review
-      - condition: ユーザー入力が必要
-        next: implement
-        requires_user_input: true
-        interactive_only: true
-    output_contracts:
-      report:
-        - name: coder-scope.md
-          format: coder-scope
-        - name: coder-decisions.md
-          format: coder-decisions
-  - name: ai_review
-    edit: false
-    persona: ai-antipattern-reviewer
-    policy:
-      - review
-      - ai-antipattern
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - WebSearch
-      - WebFetch
-    instruction: ai-review
-    rules:
-      - condition: AI特有の問題が見つからない
-        next: reviewers
-      - condition: AI特有の問題が検出された
-        next: ai_fix
-    output_contracts:
-      report:
-        - name: ai-review.md
-          format: ai-review
-  - name: ai_fix
-    edit: true
-    persona: coder
-    policy:
-      - coding
-      - testing
-    session: refresh
-    knowledge:
-      - frontend
-      - backend
-      - security
-      - architecture
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - Edit
-      - Write
-      - Bash
-      - WebSearch
-      - WebFetch
-    instruction: ai-fix
-    pass_previous_response: false
-    rules:
-      - condition: AI Reviewerの指摘に対する修正が完了した
-        next: ai_review
-      - condition: 修正不要（指摘対象ファイル/仕様の確認済み）
-        next: ai_no_fix
-      - condition: 修正を進行できない
-        next: ai_no_fix
-  - name: ai_no_fix
-    edit: false
-    persona: architecture-reviewer
-    policy: review
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-    rules:
-      - condition: ai_reviewの指摘が妥当（修正すべき）
-        next: ai_fix
-      - condition: ai_fixの判断が妥当（修正不要）
-        next: reviewers
-    instruction: arbitrate
+
   - name: reviewers
     parallel:
       - name: arch-review
@@ -159,6 +52,7 @@ movements:
         policy: review
         knowledge:
           - architecture
+          - frontend
           - backend
         allowed_tools:
           - Read
@@ -166,14 +60,37 @@ movements:
           - Grep
           - WebSearch
           - WebFetch
-        rules:
-          - condition: approved
-          - condition: needs_fix
         instruction: review-arch
         output_contracts:
           report:
             - name: architect-review.md
               format: architecture-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+
+      - name: cqrs-es-review
+        edit: false
+        persona: cqrs-es-reviewer
+        policy: review
+        knowledge:
+          - cqrs-es
+          - backend
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - WebSearch
+          - WebFetch
+        instruction: review-cqrs-es
+        output_contracts:
+          report:
+            - name: cqrs-es-review.md
+              format: cqrs-es-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+
       - name: frontend-review
         edit: false
         persona: frontend-reviewer
@@ -185,14 +102,15 @@ movements:
           - Grep
           - WebSearch
           - WebFetch
-        rules:
-          - condition: approved
-          - condition: needs_fix
         instruction: review-frontend
         output_contracts:
           report:
             - name: frontend-review.md
               format: frontend-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+
       - name: security-review
         edit: false
         persona: security-reviewer
@@ -204,14 +122,15 @@ movements:
           - Grep
           - WebSearch
           - WebFetch
-        rules:
-          - condition: approved
-          - condition: needs_fix
         instruction: review-security
         output_contracts:
           report:
             - name: security-review.md
               format: security-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+
       - name: qa-review
         edit: false
         persona: qa-reviewer
@@ -224,19 +143,21 @@ movements:
           - Grep
           - WebSearch
           - WebFetch
-        rules:
-          - condition: approved
-          - condition: needs_fix
         instruction: review-qa
         output_contracts:
           report:
             - name: qa-review.md
               format: qa-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+
     rules:
       - condition: all("approved")
         next: supervise
       - condition: any("needs_fix")
         next: fix
+
   - name: fix
     edit: true
     persona: coder
@@ -246,6 +167,7 @@ movements:
     knowledge:
       - frontend
       - backend
+      - cqrs-es
       - security
       - architecture
     allowed_tools:
@@ -259,15 +181,16 @@ movements:
       - WebFetch
     required_permission_mode: edit
     pass_previous_response: false
+    instruction: fix
     rules:
       - condition: 修正が完了した
         next: reviewers
       - condition: 修正を進行できない
-        next: plan
-    instruction: fix
+        next: supervise
+
   - name: supervise
     edit: false
-    persona: expert-supervisor
+    persona: dual-supervisor
     policy: review
     allowed_tools:
       - Read
@@ -289,6 +212,7 @@ movements:
         - name: summary.md
           format: summary
           use_judge: false
+
   - name: fix_supervisor
     edit: true
     persona: coder
@@ -298,6 +222,7 @@ movements:
     knowledge:
       - frontend
       - backend
+      - cqrs-es
       - security
       - architecture
     allowed_tools:
@@ -315,4 +240,4 @@ movements:
       - condition: 監督者の指摘に対する修正が完了した
         next: supervise
       - condition: 修正を進行できない
-        next: plan
+        next: supervise

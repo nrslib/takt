@@ -39,7 +39,6 @@ describe('E2E: Cycle detection via loop_monitors (mock)', () => {
       args: [
         '--task', 'Test cycle detection abort',
         '--piece', piecePath,
-        '--create-worktree', 'no',
         '--provider', 'mock',
       ],
       cwd: repo.path,
@@ -68,7 +67,6 @@ describe('E2E: Cycle detection via loop_monitors (mock)', () => {
       args: [
         '--task', 'Test cycle detection pass',
         '--piece', piecePath,
-        '--create-worktree', 'no',
         '--provider', 'mock',
       ],
       cwd: repo.path,

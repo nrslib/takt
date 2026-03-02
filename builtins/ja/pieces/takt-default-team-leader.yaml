@@ -1,5 +1,5 @@
 name: takt-default-team-leader
-description: TAKT開発ピース（チームリーダー版）（計画 → テスト作成 → チームリーダー実装 → AIレビュー → 5並列レビュー → 修正 → 監督 → 完了）
+description: TAKT開発ピース（チームリーダー版）（計画 → テスト作成 → チームリーダー実装 → AIアンチパターンレビュー → 5並列レビュー → 修正 → 監督 → 完了）
 piece_config:
   provider_options:
     codex:

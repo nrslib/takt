@@ -1,8 +1,8 @@
 /**
- * Tests for expert/expert-cqrs piece parallel review structure.
+ * Tests for dual/dual-cqrs piece parallel review structure.
  *
  * Validates that:
- * - expert and expert-cqrs pieces load successfully via loadPiece
+ * - dual and dual-cqrs pieces load successfully via loadPiece
  * - The reviewers movement is a parallel movement with expected sub-movements
  * - ai_review routes to reviewers (not individual review movements)
  * - fix movement routes back to reviewers
@@ -13,12 +13,12 @@
 import { describe, it, expect } from 'vitest';
 import { loadPiece } from '../infra/config/index.js';
 
-describe('expert piece parallel structure', () => {
-  const piece = loadPiece('expert', process.cwd());
+describe('dual piece parallel structure', () => {
+  const piece = loadPiece('dual', process.cwd());
 
   it('should load successfully', () => {
     expect(piece).not.toBeNull();
-    expect(piece!.name).toBe('expert');
+    expect(piece!.name).toBe('dual');
   });
 
   it('should have a reviewers parallel movement', () => {
@@ -94,12 +94,12 @@ describe('expert piece parallel structure', () => {
   });
 });
 
-describe('expert-cqrs piece parallel structure', () => {
-  const piece = loadPiece('expert-cqrs', process.cwd());
+describe('dual-cqrs piece parallel structure', () => {
+  const piece = loadPiece('dual-cqrs', process.cwd());
 
   it('should load successfully', () => {
     expect(piece).not.toBeNull();
-    expect(piece!.name).toBe('expert-cqrs');
+    expect(piece!.name).toBe('dual-cqrs');
   });
 
   it('should have a reviewers parallel movement', () => {

@@ -1,4 +1,4 @@
-import type { MorePartsResponse } from '../agent-usecases.js';
+import type { MorePartsResponse } from '../../../agents/agent-usecases.js';
 import type { PartDefinition, PartResult } from '../../models/types.js';
 
 const DEFAULT_MAX_TOTAL_PARTS = 20;

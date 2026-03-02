@@ -185,17 +185,9 @@ export class SessionManager {
     };
   }
 
-  /** Load session log from file (supports both .json and .jsonl formats) */
+  /** Load session log from a .jsonl file */
   loadSessionLog(filepath: string): SessionLog | null {
-    if (filepath.endsWith('.jsonl')) {
-      return this.loadNdjsonLog(filepath);
-    }
-
-    if (!existsSync(filepath)) {
-      return null;
-    }
-    const content = readFileSync(filepath, 'utf-8');
-    return JSON.parse(content) as SessionLog;
+    return this.loadNdjsonLog(filepath);
   }
 
 }

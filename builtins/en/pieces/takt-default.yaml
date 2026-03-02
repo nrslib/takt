@@ -1,5 +1,5 @@
 name: takt-default
-description: TAKT development piece (plan → write tests → implement → AI review → 5-parallel review → fix → supervise → complete)
+description: TAKT development piece (plan → write tests → implement → AI antipattern review → 5-parallel review → fix → supervise → complete)
 piece_config:
   provider_options:
     codex:

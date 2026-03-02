@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { getResourcesDir } from '../../infra/resources/index.js';
+import { getResourcesDir } from './index.js';
 
 type JsonSchema = Record<string, unknown>;
 
