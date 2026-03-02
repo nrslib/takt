@@ -13,13 +13,14 @@ This document provides a complete reference for all TAKT CLI commands and option
 | `-i, --issue <N>` | GitHub issue number (same as `#N` in interactive mode) |
 | `-w, --piece <name or path>` | Piece name or path to piece YAML file |
 | `-b, --branch <name>` | Specify branch name (auto-generated if omitted) |
+| `--pr <number>` | PR number to fetch review comments and fix |
 | `--auto-pr` | Create PR (interactive: skip confirmation, pipeline: enable PR) |
-| `--draft-pr` | Create PR as draft |
+| `--draft` | Create PR as draft (requires `--auto-pr` or `auto_pr` config) |
 | `--skip-git` | Skip branch creation, commit, and push (pipeline mode, piece-only) |
 | `--repo <owner/repo>` | Specify repository (for PR creation) |
 | `--create-worktree <yes\|no>` | Skip worktree confirmation prompt |
 | `-q, --quiet` | Minimal output mode: suppress AI output (for CI) |
-| `--provider <name>` | Override agent provider (claude\|codex\|opencode\|cursor\|mock) |
+| `--provider <name>` | Override agent provider (claude\|codex\|opencode\|cursor\|copilot\|mock) |
 | `--model <name>` | Override agent model |
 | `--config <path>` | Path to global config file (default: `~/.takt/config.yaml`) |
 

@@ -13,13 +13,14 @@
 | `-i, --issue <N>` | GitHub Issue 番号（インタラクティブモードでの `#N` と同等） |
 | `-w, --piece <name or path>` | Piece 名または piece YAML ファイルのパス |
 | `-b, --branch <name>` | ブランチ名を指定（省略時は自動生成） |
+| `--pr <number>` | PR 番号を指定してレビューコメントを取得し修正を実行 |
 | `--auto-pr` | PR を作成（インタラクティブ: 確認スキップ、pipeline: PR 有効化） |
-| `--draft-pr` | PR をドラフトとして作成 |
+| `--draft` | PR をドラフトとして作成（`--auto-pr` または `auto_pr` 設定が必要） |
 | `--skip-git` | ブランチ作成、コミット、プッシュをスキップ（pipeline モード、piece のみ実行） |
 | `--repo <owner/repo>` | リポジトリを指定（PR 作成用） |
 | `--create-worktree <yes\|no>` | worktree 確認プロンプトをスキップ |
 | `-q, --quiet` | 最小出力モード: AI 出力を抑制（CI 向け） |
-| `--provider <name>` | エージェント provider を上書き（claude\|codex\|opencode\|cursor\|mock） |
+| `--provider <name>` | エージェント provider を上書き（claude\|codex\|opencode\|cursor\|copilot\|mock） |
 | `--model <name>` | エージェントモデルを上書き |
 | `--config <path>` | グローバル設定ファイルのパス（デフォルト: `~/.takt/config.yaml`） |
 

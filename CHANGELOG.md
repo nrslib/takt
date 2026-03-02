@@ -6,6 +6,36 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.28.0] - 2026-03-02
+
+### Added
+
+- GitHub Copilot CLI プロバイダーを追加: `copilot` プロバイダーとして GitHub Copilot CLI を利用可能に。セッション継続、パーミッション制御（readonly/edit/full）に対応。`copilotCliPath` / `TAKT_COPILOT_CLI_PATH` で CLI パスを指定、`copilotGithubToken` / `TAKT_COPILOT_GITHUB_TOKEN` で認証トークンを設定 (#425)
+- `--pr` オプションを追加: PR のレビューコメントを取得してタスクとして実行。パイプラインモードとインタラクティブモードの両方で利用可能 (#421)
+- `takt add --pr N` で PR のレビューコメントをタスクとして追加可能に。PR のブランチ名で worktree を自動作成し、レビュー指摘の修正タスクとしてキューイング (#426)
+- `takt list` に「Pull from remote」アクションを追加: リモートの変更を worktree に取り込み、再プッシュ可能に (#395)
+- プロジェクト単位の CLI パス設定: `.takt/config.yaml` で `claudeCliPath` / `cursorCliPath` / `codexCliPath` / `copilotCliPath` をプロジェクトごとに設定可能に (#413)
+- インタラクティブモードのスラッシュコマンドを行末でも認識可能に（例: `タスクの内容 /go`）(#406)
+- takt-default / takt-default-team-leader ビルトインピースを追加（TAKT 自己開発用のワークフロー定義）
+- TAKT ナレッジファセット（`takt.md`）を追加: TAKT のアーキテクチャとコード規約を体系化
+- ai-antipattern ポリシーに冗長な条件分岐パターン検出を追加: 同一関数を if/else で呼び分けるコードを検出し、三項演算子やスプレッド構文での統一を促す
+
+### Fixed
+
+- 不正な `tasks.yaml` を検出した場合、ファイルを削除せず保持してエラーメッセージで停止するよう修正 (#418)
+- shallow clone リポジトリで worktree 作成が失敗する問題を修正: `--reference` 付きクローンが失敗した場合に通常クローンへフォールバック (#376, #409)
+- グローバル/プロジェクト設定の `model` がモデルログに反映されない不具合を修正 (#417)
+- fork PR レビュー時に `GH_REPO` を設定して正しいリポジトリの issue を参照するよう修正
+- takt-review ワークフローの PR コメント投稿ステップにも `GH_REPO` を設定
+
+### Internal
+
+- `resolveConfigValue` の不要な `defaultValue` 引数を削除し、設定解決ロジックを簡素化 (#391)
+- PRコメント `/resolve` でコンフリクト解決・レビュー指摘修正を行う GitHub Actions ワークフロー（cc-resolve）を追加
+- takt-review ワークフローを `pull_request_target` に変更し、fork PR でもシークレットを利用可能に
+- CI に `ready_for_review` / `reopened` トリガーを追加
+- CONTRIBUTING にレビューモードの例を追加、日本語版（`CONTRIBUTING.ja.md`）を追加
+
 ## [0.28.0-alpha.1] - 2026-02-28
 
 ### Added

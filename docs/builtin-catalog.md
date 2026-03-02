@@ -35,10 +35,13 @@ Organized by category.
 | | `backend-cqrs` | CQRS+ES-specialized backend development piece with CQRS+ES, security, and QA expert reviews. |
 | 🔧 Expert | `expert` | Full-stack development piece: architecture, frontend, security, QA reviews with fix loops. |
 | | `expert-cqrs` | Full-stack development piece (CQRS+ES specialized): CQRS+ES, frontend, security, QA reviews with fix loops. |
+| 🏗️ Infrastructure | `terraform` | Terraform IaC development piece: plan → implement → parallel review → supervisor validation → fix → complete. |
 | 🛠️ Refactoring | `structural-reform` | Full project review and structural reform: iterative codebase restructuring with staged file splits. |
 | 🔍 Review | `review` | Multi-perspective code review: auto-detects PR/branch/working diff, reviews from 5 parallel perspectives (arch/security/QA/testing/requirements), outputs consolidated results. |
 | 🧪 Testing | `unit-test` | Unit test focused piece: test analysis -> test implementation -> review -> fix. |
 | | `e2e-test` | E2E test focused piece: E2E analysis -> E2E implementation -> review -> fix (Vitest-based E2E flow). |
+| 🎵 TAKT Development | `takt-default` | TAKT development piece: plan → write tests → implement → AI review → 5-parallel review → fix → supervise → complete. |
+| | `takt-default-team-leader` | TAKT development piece with team leader: plan → write tests → team-leader implement → AI review → 5-parallel review → fix → supervise → complete. |
 | Others | `research` | Research piece: planner -> digger -> supervisor. Autonomously executes research without asking questions. |
 | | `deep-research` | Deep research piece: plan -> dig -> analyze -> supervise. Discovery-driven investigation that follows emerging questions with multi-perspective analysis. |
 | | `magi` | Deliberation system inspired by Evangelion. Three AI personas (MELCHIOR, BALTHASAR, CASPER) analyze and vote. |
