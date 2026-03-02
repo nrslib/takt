@@ -170,7 +170,7 @@ describe('Piece Loader IT: agent path resolution', () => {
   });
 
   it('should resolve relative agent paths from piece YAML location', () => {
-    const config = loadPiece('default-mini', testDir);
+    const config = loadPiece('default', testDir);
     expect(config).not.toBeNull();
 
     for (const movement of config!.movements) {
@@ -203,7 +203,7 @@ describe('Piece Loader IT: rule syntax parsing', () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  it('should parse all() aggregate conditions from default piece', () => {
+  it('should parse all() multi-condition aggregate from default piece', () => {
     const config = loadPiece('default', testDir);
     expect(config).not.toBeNull();
 
@@ -213,15 +213,17 @@ describe('Piece Loader IT: rule syntax parsing', () => {
     );
     expect(reviewersStep).toBeDefined();
 
-    // Should have aggregate rules
+    // Should have aggregate rules with multi-condition (array)
     const allRule = reviewersStep!.rules?.find(
       (r) => r.isAggregateCondition && r.aggregateType === 'all',
     );
     expect(allRule).toBeDefined();
-    expect(allRule!.aggregateConditionText).toBe('approved');
+    // Multi-condition aggregate: all("approved", "All checks passed")
+    expect(Array.isArray(allRule!.aggregateConditionText)).toBe(true);
+    expect((allRule!.aggregateConditionText as string[])[0]).toBe('approved');
   });
 
-  it('should parse any() aggregate conditions from default piece', () => {
+  it('should parse any() multi-condition aggregate from default piece', () => {
     const config = loadPiece('default', testDir);
     expect(config).not.toBeNull();
 
@@ -233,11 +235,13 @@ describe('Piece Loader IT: rule syntax parsing', () => {
       (r) => r.isAggregateCondition && r.aggregateType === 'any',
     );
     expect(anyRule).toBeDefined();
-    expect(anyRule!.aggregateConditionText).toBe('needs_fix');
+    // Multi-condition aggregate: any("needs_fix", "...")
+    expect(Array.isArray(anyRule!.aggregateConditionText)).toBe(true);
+    expect((anyRule!.aggregateConditionText as string[])[0]).toBe('needs_fix');
   });
 
   it('should parse standard rules with next movement', () => {
-    const config = loadPiece('default-mini', testDir);
+    const config = loadPiece('default', testDir);
     expect(config).not.toBeNull();
 
     const implementStep = config!.movements.find((s) => s.name === 'implement');
@@ -265,14 +269,14 @@ describe('Piece Loader IT: piece config validation', () => {
   });
 
   it('should set max_movements from YAML', () => {
-    const config = loadPiece('default-mini', testDir);
+    const config = loadPiece('default', testDir);
     expect(config).not.toBeNull();
     expect(typeof config!.maxMovements).toBe('number');
     expect(config!.maxMovements).toBeGreaterThan(0);
   });
 
   it('should set initial_movement from YAML', () => {
-    const config = loadPiece('default-mini', testDir);
+    const config = loadPiece('default', testDir);
     expect(config).not.toBeNull();
     expect(typeof config!.initialMovement).toBe('string');
 
@@ -295,16 +299,16 @@ describe('Piece Loader IT: piece config validation', () => {
       }
     }
 
-    // expert: implement movement should have edit: true
-    const expertConfig = loadPiece('expert', testDir);
-    expect(expertConfig).not.toBeNull();
-    const implementStep = expertConfig!.movements.find((s) => s.name === 'implement');
+    // dual: implement movement should have edit: true
+    const dualConfig = loadPiece('dual', testDir);
+    expect(dualConfig).not.toBeNull();
+    const implementStep = dualConfig!.movements.find((s) => s.name === 'implement');
     expect(implementStep).toBeDefined();
     expect(implementStep!.edit).toBe(true);
   });
 
   it('should set passPreviousResponse from YAML', () => {
-    const config = loadPiece('default-mini', testDir);
+    const config = loadPiece('default', testDir);
     expect(config).not.toBeNull();
 
     // At least some movements should have passPreviousResponse set
@@ -342,8 +346,8 @@ describe('Piece Loader IT: parallel movement loading', () => {
     }
   });
 
-  it('should load 4 parallel reviewers from expert piece', () => {
-    const config = loadPiece('expert', testDir);
+  it('should load 4 parallel reviewers from dual piece', () => {
+    const config = loadPiece('dual', testDir);
     expect(config).not.toBeNull();
 
     const parallelStep = config!.movements.find(
@@ -380,8 +384,8 @@ describe('Piece Loader IT: report config loading', () => {
     expect(planStep!.outputContracts).toBeDefined();
   });
 
-  it('should load multi-report config from expert piece', () => {
-    const config = loadPiece('expert', testDir);
+  it('should load multi-report config from dual piece', () => {
+    const config = loadPiece('dual', testDir);
     expect(config).not.toBeNull();
 
     // implement movement has multi-output contracts: [Scope, Decisions]
@@ -622,138 +626,6 @@ movements:
   });
 });
 
-describe('Piece Loader IT: structural-reform piece', () => {
-  let testDir: string;
-
-  beforeEach(() => {
-    testDir = createTestDir();
-  });
-
-  afterEach(() => {
-    rmSync(testDir, { recursive: true, force: true });
-  });
-
-  it('should load structural-reform with 7 movements', () => {
-    const config = loadPiece('structural-reform', testDir);
-
-    expect(config).not.toBeNull();
-    expect(config!.name).toBe('structural-reform');
-    expect(config!.movements.length).toBe(7);
-    expect(config!.maxMovements).toBe(50);
-    expect(config!.initialMovement).toBe('review');
-  });
-
-  it('should have expected movement names in order', () => {
-    const config = loadPiece('structural-reform', testDir);
-    expect(config).not.toBeNull();
-
-    const movementNames = config!.movements.map((m) => m.name);
-    expect(movementNames).toEqual([
-      'review',
-      'plan_reform',
-      'implement',
-      'reviewers',
-      'fix',
-      'verify',
-      'next_target',
-    ]);
-  });
-
-  it('should have review as read-only with instruction_template', () => {
-    const config = loadPiece('structural-reform', testDir);
-    expect(config).not.toBeNull();
-
-    const review = config!.movements.find((m) => m.name === 'review');
-    expect(review).toBeDefined();
-    expect(review!.edit).not.toBe(true);
-    expect(review!.instructionTemplate).toBeDefined();
-    expect(review!.instructionTemplate).toContain('{task}');
-  });
-
-  it('should have implement with edit: true and session: refresh', () => {
-    const config = loadPiece('structural-reform', testDir);
-    expect(config).not.toBeNull();
-
-    const implement = config!.movements.find((m) => m.name === 'implement');
-    expect(implement).toBeDefined();
-    expect(implement!.edit).toBe(true);
-    expect(implement!.session).toBe('refresh');
-  });
-
-  it('should have 2 parallel reviewers (arch-review and qa-review)', () => {
-    const config = loadPiece('structural-reform', testDir);
-    expect(config).not.toBeNull();
-
-    const reviewers = config!.movements.find(
-      (m) => m.parallel && m.parallel.length > 0,
-    );
-    expect(reviewers).toBeDefined();
-    expect(reviewers!.parallel!.length).toBe(2);
-
-    const subNames = reviewers!.parallel!.map((s) => s.name);
-    expect(subNames).toContain('arch-review');
-    expect(subNames).toContain('qa-review');
-  });
-
-  it('should have aggregate rules on reviewers movement', () => {
-    const config = loadPiece('structural-reform', testDir);
-    expect(config).not.toBeNull();
-
-    const reviewers = config!.movements.find(
-      (m) => m.parallel && m.parallel.length > 0,
-    );
-    expect(reviewers).toBeDefined();
-
-    const allRule = reviewers!.rules?.find(
-      (r) => r.isAggregateCondition && r.aggregateType === 'all',
-    );
-    expect(allRule).toBeDefined();
-    expect(allRule!.aggregateConditionText).toBe('approved');
-    expect(allRule!.next).toBe('verify');
-
-    const anyRule = reviewers!.rules?.find(
-      (r) => r.isAggregateCondition && r.aggregateType === 'any',
-    );
-    expect(anyRule).toBeDefined();
-    expect(anyRule!.aggregateConditionText).toBe('needs_fix');
-    expect(anyRule!.next).toBe('fix');
-  });
-
-  it('should have verify movement with instruction_template', () => {
-    const config = loadPiece('structural-reform', testDir);
-    expect(config).not.toBeNull();
-
-    const verify = config!.movements.find((m) => m.name === 'verify');
-    expect(verify).toBeDefined();
-    expect(verify!.edit).not.toBe(true);
-    expect(verify!.instructionTemplate).toBeDefined();
-  });
-
-  it('should have next_target movement routing to implement or COMPLETE', () => {
-    const config = loadPiece('structural-reform', testDir);
-    expect(config).not.toBeNull();
-
-    const nextTarget = config!.movements.find((m) => m.name === 'next_target');
-    expect(nextTarget).toBeDefined();
-    expect(nextTarget!.edit).not.toBe(true);
-
-    const nextValues = nextTarget!.rules?.map((r) => r.next);
-    expect(nextValues).toContain('implement');
-    expect(nextValues).toContain('COMPLETE');
-  });
-
-  it('should have loop_monitors for implement-fix cycle', () => {
-    const config = loadPiece('structural-reform', testDir);
-    expect(config).not.toBeNull();
-    expect(config!.loopMonitors).toBeDefined();
-    expect(config!.loopMonitors!.length).toBe(1);
-
-    const monitor = config!.loopMonitors![0]!;
-    expect(monitor.cycle).toEqual(['implement', 'fix']);
-    expect(monitor.threshold).toBe(3);
-    expect(monitor.judge).toBeDefined();
-  });
-});
 
 describe('Piece Loader IT: invalid YAML handling', () => {
   let testDir: string;

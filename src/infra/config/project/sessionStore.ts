@@ -88,6 +88,70 @@ import type { PersonaSessionData } from '../types.js';
 
 export type { PersonaSessionData };
 
+/**
+ * Read session data from a file path.
+ * Returns empty record if file doesn't exist, is malformed, or provider has changed.
+ */
+function readSessionData(sessionPath: string, currentProvider?: string): Record<string, string> {
+  if (!existsSync(sessionPath)) return {};
+  try {
+    const content = readFileSync(sessionPath, 'utf-8');
+    const data = JSON.parse(content) as PersonaSessionData;
+    // If provider has changed or is unknown (legacy data), sessions are incompatible — discard them
+    if (currentProvider && data.provider !== currentProvider) {
+      return {};
+    }
+    return data.personaSessions || {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Update a single persona session atomically (read-modify-write).
+ * @param sessionPath - Path to the session JSON file
+ * @param ensureSessionDir - Function that ensures the session directory exists
+ * @param persona - Persona (key) to update
+ * @param sessionId - New session ID
+ * @param provider - Current provider (used to detect provider change)
+ */
+function updateSessionData(
+  sessionPath: string,
+  ensureSessionDir: () => void,
+  persona: string,
+  sessionId: string,
+  provider?: string,
+): void {
+  ensureSessionDir();
+
+  let sessions: Record<string, string> = {};
+  let existingProvider: string | undefined;
+  if (existsSync(sessionPath)) {
+    try {
+      const content = readFileSync(sessionPath, 'utf-8');
+      const data = JSON.parse(content) as PersonaSessionData;
+      existingProvider = data.provider;
+      // If provider changed, discard old sessions
+      if (provider && existingProvider && existingProvider !== provider) {
+        sessions = {};
+      } else {
+        sessions = data.personaSessions || {};
+      }
+    } catch {
+      sessions = {};
+    }
+  }
+
+  sessions[persona] = sessionId;
+
+  const data: PersonaSessionData = {
+    personaSessions: sessions,
+    updatedAt: new Date().toISOString(),
+    provider: provider ?? existingProvider,
+  };
+  writeFileAtomic(sessionPath, JSON.stringify(data, null, 2));
+}
+
 /** Get path for storing persona sessions */
 export function getPersonaSessionsPath(projectDir: string): string {
   return join(getProjectConfigDir(projectDir), 'persona_sessions.json');
@@ -95,21 +159,7 @@ export function getPersonaSessionsPath(projectDir: string): string {
 
 /** Load saved persona sessions. Returns empty if provider has changed. */
 export function loadPersonaSessions(projectDir: string, currentProvider?: string): Record<string, string> {
-  const path = getPersonaSessionsPath(projectDir);
-  if (existsSync(path)) {
-    try {
-      const content = readFileSync(path, 'utf-8');
-      const data = JSON.parse(content) as PersonaSessionData;
-      // If provider has changed or is unknown (legacy data), sessions are incompatible — discard them
-      if (currentProvider && data.provider !== currentProvider) {
-        return {};
-      }
-      return data.personaSessions || {};
-    } catch {
-      return {};
-    }
-  }
-  return {};
+  return readSessionData(getPersonaSessionsPath(projectDir), currentProvider);
 }
 
 /** Save persona sessions (atomic write) */
@@ -138,35 +188,13 @@ export function updatePersonaSession(
   sessionId: string,
   provider?: string
 ): void {
-  const path = getPersonaSessionsPath(projectDir);
-  ensureDir(getProjectConfigDir(projectDir));
-
-  let sessions: Record<string, string> = {};
-  let existingProvider: string | undefined;
-  if (existsSync(path)) {
-    try {
-      const content = readFileSync(path, 'utf-8');
-      const data = JSON.parse(content) as PersonaSessionData;
-      existingProvider = data.provider;
-      // If provider changed, discard old sessions
-      if (provider && existingProvider && existingProvider !== provider) {
-        sessions = {};
-      } else {
-        sessions = data.personaSessions || {};
-      }
-    } catch {
-      sessions = {};
-    }
-  }
-
-  sessions[persona] = sessionId;
-
-  const data: PersonaSessionData = {
-    personaSessions: sessions,
-    updatedAt: new Date().toISOString(),
-    provider: provider ?? existingProvider,
-  };
-  writeFileAtomic(path, JSON.stringify(data, null, 2));
+  updateSessionData(
+    getPersonaSessionsPath(projectDir),
+    () => ensureDir(getProjectConfigDir(projectDir)),
+    persona,
+    sessionId,
+    provider,
+  );
 }
 
 /** Clear all saved persona sessions */
@@ -209,20 +237,7 @@ export function loadWorktreeSessions(
   worktreePath: string,
   currentProvider?: string
 ): Record<string, string> {
-  const sessionPath = getWorktreeSessionPath(projectDir, worktreePath);
-  if (existsSync(sessionPath)) {
-    try {
-      const content = readFileSync(sessionPath, 'utf-8');
-      const data = JSON.parse(content) as PersonaSessionData;
-      if (currentProvider && data.provider !== currentProvider) {
-        return {};
-      }
-      return data.personaSessions || {};
-    } catch {
-      return {};
-    }
-  }
-  return {};
+  return readSessionData(getWorktreeSessionPath(projectDir, worktreePath), currentProvider);
 }
 
 /** Update a single persona session for a worktree (atomic) */
@@ -233,36 +248,13 @@ export function updateWorktreeSession(
   sessionId: string,
   provider?: string
 ): void {
-  const dir = getWorktreeSessionsDir(projectDir);
-  ensureDir(dir);
-
-  const sessionPath = getWorktreeSessionPath(projectDir, worktreePath);
-  let sessions: Record<string, string> = {};
-  let existingProvider: string | undefined;
-
-  if (existsSync(sessionPath)) {
-    try {
-      const content = readFileSync(sessionPath, 'utf-8');
-      const data = JSON.parse(content) as PersonaSessionData;
-      existingProvider = data.provider;
-      if (provider && existingProvider && existingProvider !== provider) {
-        sessions = {};
-      } else {
-        sessions = data.personaSessions || {};
-      }
-    } catch {
-      sessions = {};
-    }
-  }
-
-  sessions[personaName] = sessionId;
-
-  const data: PersonaSessionData = {
-    personaSessions: sessions,
-    updatedAt: new Date().toISOString(),
-    provider: provider ?? existingProvider,
-  };
-  writeFileAtomic(sessionPath, JSON.stringify(data, null, 2));
+  updateSessionData(
+    getWorktreeSessionPath(projectDir, worktreePath),
+    () => ensureDir(getWorktreeSessionsDir(projectDir)),
+    personaName,
+    sessionId,
+    provider,
+  );
 }
 
 /**

@@ -14,6 +14,7 @@ export {
   type TaskHistorySummaryItem,
   type InteractiveModeResult,
   type InteractiveModeAction,
+  type InteractiveModeOptions,
 } from './interactive.js';
 
 export { selectInteractiveMode } from './modeSelection.js';

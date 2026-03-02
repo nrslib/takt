@@ -1,6 +1,6 @@
 import { appendFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { ProviderType, StreamCallback, StreamEvent } from '../../core/piece/index.js';
+import type { ProviderType, StreamCallback, StreamEvent } from '../types/provider.js';
 
 export interface ProviderEventLoggerConfig {
   logsDir: string;

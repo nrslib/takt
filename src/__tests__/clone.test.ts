@@ -19,14 +19,18 @@ vi.mock('node:fs', () => ({
     mkdirSync: vi.fn(),
     mkdtempSync: vi.fn(),
     writeFileSync: vi.fn(),
+    readFileSync: vi.fn(),
     existsSync: vi.fn(),
     rmSync: vi.fn(),
+    unlinkSync: vi.fn(),
   },
   mkdirSync: vi.fn(),
   mkdtempSync: vi.fn(),
   writeFileSync: vi.fn(),
+  readFileSync: vi.fn(),
   existsSync: vi.fn(),
   rmSync: vi.fn(),
+  unlinkSync: vi.fn(),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -49,9 +53,10 @@ vi.mock('../infra/config/project/projectConfig.js', async (importOriginal) => ({
 }));
 
 import { execFileSync } from 'node:child_process';
+import * as fs from 'node:fs';
 import { loadGlobalConfig } from '../infra/config/global/globalConfig.js';
 import { loadProjectConfig } from '../infra/config/project/projectConfig.js';
-import { createSharedClone, createTempCloneForBranch } from '../infra/task/clone.js';
+import { createSharedClone, createTempCloneForBranch, cleanupOrphanedClone } from '../infra/task/clone.js';
 
 const mockExecFileSync = vi.mocked(execFileSync);
 const mockLoadProjectConfig = vi.mocked(loadProjectConfig);
@@ -944,5 +949,47 @@ describe('shallow clone fallback', () => {
     // First (and only) attempt includes --reference and --dissociate
     expect(cloneCalls[0]).toContain('--reference');
     expect(cloneCalls[0]).toContain('--dissociate');
+  });
+});
+
+describe('cleanupOrphanedClone path traversal protection', () => {
+  // projectDir = '/project' → resolveCloneBaseDir → path.join('/project', '..', 'takt-worktrees') = '/takt-worktrees'
+  const PROJECT_DIR = '/project';
+  const BRANCH = 'my-branch';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('should refuse to remove clone path outside clone base directory', () => {
+    // clonePath points above the clone base directory (path traversal attempt)
+    vi.mocked(fs.readFileSync).mockReturnValueOnce(
+      JSON.stringify({ clonePath: '/etc/malicious' })
+    );
+
+    cleanupOrphanedClone(PROJECT_DIR, BRANCH);
+
+    expect(mockLogError).toHaveBeenCalledWith(
+      'Refusing to remove clone outside of clone base directory',
+      expect.objectContaining({ branch: BRANCH })
+    );
+    expect(vi.mocked(fs.rmSync)).not.toHaveBeenCalled();
+  });
+
+  it('should remove clone when path is within clone base directory', () => {
+    // resolveCloneBaseDir('/project') = path.resolve('/project/../takt-worktrees') = '/takt-worktrees'
+    const validClonePath = '/takt-worktrees/20260101T0000-my-task';
+    vi.mocked(fs.readFileSync).mockReturnValueOnce(
+      JSON.stringify({ clonePath: validClonePath })
+    );
+    vi.mocked(fs.existsSync).mockReturnValueOnce(true);
+
+    cleanupOrphanedClone(PROJECT_DIR, BRANCH);
+
+    expect(mockLogError).not.toHaveBeenCalled();
+    expect(vi.mocked(fs.rmSync)).toHaveBeenCalledWith(
+      validClonePath,
+      expect.objectContaining({ recursive: true })
+    );
   });
 });

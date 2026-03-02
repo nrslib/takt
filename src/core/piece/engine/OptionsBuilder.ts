@@ -173,6 +173,7 @@ export class OptionsBuilder {
       language: this.getLanguage(),
       interactive: this.engineOptions.interactive,
       lastResponse,
+      onStream: this.engineOptions.onStream,
       getSessionId: (persona: string) => state.personaSessions.get(persona),
       buildResumeOptions: this.buildResumeOptions.bind(this),
       buildNewSessionReportOptions: this.buildNewSessionReportOptions.bind(this),

@@ -62,9 +62,7 @@ export class CloneManager {
   /**
    * Resolve the base directory for clones from global config.
    * Returns the configured worktree_dir (resolved to absolute), or
-   * the default 'takt-worktrees' (plural). Automatically migrates
-   * legacy 'takt-worktree' (singular) to 'takt-worktrees' if only
-   * the legacy directory exists.
+   * the default 'takt-worktrees' (plural).
    */
   private static resolveCloneBaseDir(projectDir: string): string {
     const worktreeDir = resolveConfigValue(projectDir, 'worktreeDir');
@@ -73,13 +71,7 @@ export class CloneManager {
         ? worktreeDir
         : path.resolve(projectDir, worktreeDir);
     }
-    const newDir = path.join(projectDir, '..', 'takt-worktrees');
-    const legacyDir = path.join(projectDir, '..', 'takt-worktree');
-    // Auto-migrate: rename legacy singular to plural
-    if (fs.existsSync(legacyDir) && !fs.existsSync(newDir)) {
-      fs.renameSync(legacyDir, newDir);
-    }
-    return newDir;
+    return path.join(projectDir, '..', 'takt-worktrees');
   }
 
   /** Resolve the clone path based on options and global config */
@@ -373,9 +365,20 @@ export class CloneManager {
     try {
       const raw = fs.readFileSync(CloneManager.getCloneMetaPath(projectDir, branch), 'utf-8');
       const meta = JSON.parse(raw) as { clonePath: string };
-      if (fs.existsSync(meta.clonePath)) {
-        this.removeClone(meta.clonePath);
-        log.info('Orphaned clone cleaned up', { branch, clonePath: meta.clonePath });
+      // Validate clonePath is within the expected clone base directory to prevent path traversal.
+      const cloneBaseDir = path.resolve(CloneManager.resolveCloneBaseDir(projectDir));
+      const resolvedClonePath = path.resolve(meta.clonePath);
+      if (!resolvedClonePath.startsWith(cloneBaseDir + path.sep)) {
+        log.error('Refusing to remove clone outside of clone base directory', {
+          branch,
+          clonePath: meta.clonePath,
+          cloneBaseDir,
+        });
+        return;
+      }
+      if (fs.existsSync(resolvedClonePath)) {
+        this.removeClone(resolvedClonePath);
+        log.info('Orphaned clone cleaned up', { branch, clonePath: resolvedClonePath });
       }
     } catch {
       // No metadata or parse error — nothing to clean up

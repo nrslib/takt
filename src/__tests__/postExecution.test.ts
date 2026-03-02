@@ -33,14 +33,6 @@ vi.mock('../infra/github/index.js', () => ({
   buildPrBody: (...args: unknown[]) => mockBuildPrBody(...args),
 }));
 
-vi.mock('../infra/config/index.js', () => ({
-  resolvePieceConfigValue: vi.fn(),
-}));
-
-vi.mock('../shared/prompt/index.js', () => ({
-  confirm: vi.fn(),
-}));
-
 vi.mock('../shared/ui/index.js', () => ({
   info: vi.fn(),
   error: vi.fn(),
@@ -56,12 +48,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   }),
 }));
 
-import { postExecutionFlow, resolveDraftPr } from '../features/tasks/execute/postExecution.js';
-import { resolvePieceConfigValue } from '../infra/config/index.js';
-import { confirm } from '../shared/prompt/index.js';
-
-const mockResolvePieceConfigValue = vi.mocked(resolvePieceConfigValue);
-const mockConfirm = vi.mocked(confirm);
+import { postExecutionFlow } from '../features/tasks/execute/postExecution.js';
 
 const baseOptions = {
   execCwd: '/clone',
@@ -237,36 +224,3 @@ describe('postExecutionFlow', () => {
   });
 });
 
-describe('resolveDraftPr', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it('CLI オプション true が渡された場合は true を返す', async () => {
-    const result = await resolveDraftPr(true, '/project');
-    expect(result).toBe(true);
-  });
-
-  it('CLI オプション false が渡された場合は false を返す', async () => {
-    const result = await resolveDraftPr(false, '/project');
-    expect(result).toBe(false);
-  });
-
-  it('CLI オプションが未指定で config が true の場合は true を返す', async () => {
-    mockResolvePieceConfigValue.mockReturnValue(true);
-
-    const result = await resolveDraftPr(undefined, '/project');
-
-    expect(result).toBe(true);
-  });
-
-  it('CLI オプション・config ともに未指定の場合はプロンプトを表示する', async () => {
-    mockResolvePieceConfigValue.mockReturnValue(undefined);
-    mockConfirm.mockResolvedValue(false);
-
-    const result = await resolveDraftPr(undefined, '/project');
-
-    expect(mockConfirm).toHaveBeenCalledWith('Create as draft?', true);
-    expect(result).toBe(false);
-  });
-});

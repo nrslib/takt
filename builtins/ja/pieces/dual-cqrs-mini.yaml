@@ -1,5 +1,5 @@
-name: expert-mini
-description: Expert向けMini開発ピース（plan → implement → 並列レビュー → 修正 → 完了）
+name: dual-cqrs-mini
+description: CQRS+ES フロントエンド＋バックエンド向けMini開発ピース（plan → implement → 並列レビュー → 修正 → 完了）。CQRS+ESナレッジ注入付き。
 piece_config:
   provider_options:
     codex:
@@ -15,6 +15,7 @@ movements:
     knowledge:
       - frontend
       - backend
+      - cqrs-es
       - security
       - architecture
     allowed_tools:
@@ -45,6 +46,7 @@ movements:
     knowledge:
       - frontend
       - backend
+      - cqrs-es
       - security
       - architecture
     allowed_tools:
@@ -97,11 +99,12 @@ movements:
               format: ai-review
       - name: supervise
         edit: false
-        persona: expert-supervisor
+        persona: dual-supervisor
         policy: review
         knowledge:
           - frontend
           - backend
+          - cqrs-es
           - security
           - architecture
         allowed_tools:
@@ -142,6 +145,7 @@ movements:
         knowledge:
           - frontend
           - backend
+          - cqrs-es
           - security
           - architecture
         allowed_tools:
@@ -167,6 +171,7 @@ movements:
         knowledge:
           - frontend
           - backend
+          - cqrs-es
           - security
           - architecture
         allowed_tools:
@@ -196,6 +201,7 @@ movements:
     knowledge:
       - frontend
       - backend
+      - cqrs-es
       - security
       - architecture
     allowed_tools:
@@ -226,6 +232,7 @@ movements:
     knowledge:
       - frontend
       - backend
+      - cqrs-es
       - security
       - architecture
     allowed_tools:

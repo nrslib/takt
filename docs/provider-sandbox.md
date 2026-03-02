@@ -9,6 +9,8 @@ TAKT supports configuring sandbox settings for AI agent providers. This document
 | **Claude Code** | macOS Seatbelt / Linux bubblewrap | Gradle/JVM blocked in `edit` mode | `provider_options.claude.sandbox` |
 | **Codex CLI** | macOS Seatbelt / Linux Landlock+seccomp | npm/maven/pytest failures (widespread) | `provider_options.codex.network_access` |
 | **OpenCode CLI** | None (no native sandbox) | No constraints (no security either) | N/A |
+| **Cursor Agent** | None (relies on Cursor IDE sandbox) | No known issues | N/A |
+| **GitHub Copilot CLI** | None (no native sandbox) | No constraints | N/A |
 
 ## Claude Code Sandbox
 

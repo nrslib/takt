@@ -227,19 +227,21 @@ describe('Pipeline Integration Tests', () => {
   });
 
   it('should complete pipeline with piece name + skip-git + mock scenario', async () => {
-    // Use builtin 'default-mini' piece
+    // Use builtin 'default' piece
     // persona field: extractPersonaName result (from .md filename)
-    // tag in content: [MOVEMENT_NAME:N] where MOVEMENT_NAME is the movement name uppercased
+    // Flow: plan → write_tests → implement → ai_review → reviewers(arch-review + supervise) → COMPLETE
     setMockScenario([
-      { persona: 'planner', status: 'done', content: 'Requirements are clear and implementation is possible.' },
+      { persona: 'planner', status: 'done', content: 'Requirements are clear and implementable' },
+      { persona: 'coder', status: 'done', content: 'Tests written successfully' },
       { persona: 'coder', status: 'done', content: 'Implementation complete' },
       { persona: 'ai-antipattern-reviewer', status: 'done', content: 'No AI-specific issues' },
+      { persona: 'architecture-reviewer', status: 'done', content: 'approved' },
       { persona: 'supervisor', status: 'done', content: 'All checks passed' },
     ]);
 
     const exitCode = await executePipeline({
       task: 'Add a hello world function',
-      piece: 'default-mini',
+      piece: 'default',
       autoPr: false,
       skipGit: true,
       cwd: testDir,

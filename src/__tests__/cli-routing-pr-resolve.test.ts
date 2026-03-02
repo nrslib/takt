@@ -1,15 +1,15 @@
 /**
  * Tests for PR resolution in routing module.
  *
- * Verifies that --pr option fetches review comments,
- * passes formatted task to interactive mode, and sets
- * the branch for worktree checkout.
+ * Verifies that --pr option fetches review comments
+ * and passes formatted task to interactive mode.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../shared/ui/index.js', () => ({
   info: vi.fn(),
+  success: vi.fn(),
   error: vi.fn(),
   withProgress: vi.fn(async (_start, _done, operation) => operation()),
 }));
@@ -77,11 +77,13 @@ vi.mock('../features/interactive/index.js', () => ({
 
 const mockListAllTaskItems = vi.fn();
 const mockIsStaleRunningTask = vi.fn();
+const mockCheckoutBranch = vi.fn();
 vi.mock('../infra/task/index.js', () => ({
   TaskRunner: vi.fn(() => ({
     listAllTaskItems: mockListAllTaskItems,
   })),
   isStaleRunningTask: (...args: unknown[]) => mockIsStaleRunningTask(...args),
+  checkoutBranch: (...args: unknown[]) => mockCheckoutBranch(...args),
 }));
 
 vi.mock('../infra/config/index.js', () => ({
@@ -108,7 +110,6 @@ vi.mock('../app/cli/program.js', () => {
 
 vi.mock('../app/cli/helpers.js', () => ({
   resolveAgentOverrides: vi.fn(),
-  parseCreateWorktreeOption: vi.fn(),
   isDirectTask: vi.fn(() => false),
 }));
 
@@ -172,10 +173,12 @@ describe('PR resolution in routing', () => {
         expect.stringContaining('## PR #456 Review Comments:'),
         expect.anything(),
         undefined,
+        undefined,
+        { excludeActions: ['create_issue'] },
       );
     });
 
-    it('should set branch in selectOptions from PR headRefName', async () => {
+    it('should execute task after resolving PR review comments', async () => {
       // Given
       mockOpts.pr = 456;
       const prReview = createMockPrReview({ headRefName: 'feat/my-pr-branch' });
@@ -185,15 +188,27 @@ describe('PR resolution in routing', () => {
       // When
       await executeDefaultAction();
 
-      // Then
+      // Then: selectAndExecuteTask is called
       expect(mockSelectAndExecuteTask).toHaveBeenCalledWith(
         '/test/cwd',
         'summarized task',
-        expect.objectContaining({
-          branch: 'feat/my-pr-branch',
-        }),
+        expect.any(Object),
         undefined,
       );
+    });
+
+    it('should checkout PR branch before executing task', async () => {
+      // Given
+      mockOpts.pr = 456;
+      const prReview = createMockPrReview({ headRefName: 'feat/my-pr-branch' });
+      mockCheckCliStatus.mockReturnValue({ available: true });
+      mockFetchPrReviewComments.mockReturnValue(prReview);
+
+      // When
+      await executeDefaultAction();
+
+      // Then: checkoutBranch is called with the PR's head branch
+      expect(mockCheckoutBranch).toHaveBeenCalledWith('/test/cwd', 'feat/my-pr-branch');
     });
 
     it('should exit with error when gh CLI is unavailable', async () => {
@@ -216,23 +231,25 @@ describe('PR resolution in routing', () => {
       mockExit.mockRestore();
     });
 
-    it('should exit with error when PR has no review comments', async () => {
+    it('should pass to interactive mode even when PR has no review comments', async () => {
       // Given
       mockOpts.pr = 456;
       const emptyPrReview = createMockPrReview({ reviews: [], comments: [] });
       mockCheckCliStatus.mockReturnValue({ available: true });
       mockFetchPrReviewComments.mockReturnValue(emptyPrReview);
 
-      const mockExit = vi.spyOn(process, 'exit').mockImplementation(() => {
-        throw new Error('process.exit called');
-      });
+      // When
+      await executeDefaultAction();
 
-      // When/Then
-      await expect(executeDefaultAction()).rejects.toThrow('process.exit called');
-      expect(mockExit).toHaveBeenCalledWith(1);
-      expect(mockInteractiveMode).not.toHaveBeenCalled();
-
-      mockExit.mockRestore();
+      // Then: PR title/description/files are still passed to interactive mode
+      expect(mockInteractiveMode).toHaveBeenCalledWith(
+        '/test/cwd',
+        expect.stringContaining('## PR #456 Review Comments:'),
+        expect.anything(),
+        undefined,
+        undefined,
+        { excludeActions: ['create_issue'] },
+      );
     });
 
     it('should not resolve issues when --pr is specified', async () => {

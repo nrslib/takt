@@ -166,14 +166,14 @@ export interface PieceMovement {
 
 /** Merge configuration for arpeggio results */
 export interface ArpeggioMergeMovementConfig {
-  /** Merge strategy: 'concat' (default), 'custom' */
+  /** Merge strategy */
   readonly strategy: 'concat' | 'custom';
-  /** Inline JS merge function body (for custom strategy) */
-  readonly inlineJs?: string;
-  /** Path to external JS merge file (for custom strategy, resolved to absolute) */
-  readonly filePath?: string;
   /** Separator for concat strategy (default: '\n') */
   readonly separator?: string;
+  /** Inline JS function body for custom merge strategy */
+  readonly inlineJs?: string;
+  /** External JS module path for custom merge strategy */
+  readonly file?: string;
 }
 
 /** Arpeggio configuration for data-driven batch processing movements */

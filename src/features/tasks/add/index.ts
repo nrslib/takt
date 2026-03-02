@@ -142,12 +142,13 @@ async function promptWorktreeSettings(): Promise<WorktreeSettings> {
 /**
  * Save a task from interactive mode result.
  * Prompts for worktree/branch/auto_pr settings before saving.
+ * If presetSettings is provided, skips the prompt and uses those settings directly.
  */
 export async function saveTaskFromInteractive(
   cwd: string,
   task: string,
   piece?: string,
-  options?: { issue?: number; confirmAtEndMessage?: string },
+  options?: { issue?: number; confirmAtEndMessage?: string; presetSettings?: WorktreeSettings },
 ): Promise<void> {
   if (options?.confirmAtEndMessage) {
     const approved = await confirm(options.confirmAtEndMessage, true);
@@ -155,7 +156,7 @@ export async function saveTaskFromInteractive(
       return;
     }
   }
-  const settings = await promptWorktreeSettings();
+  const settings = options?.presetSettings ?? await promptWorktreeSettings();
   const created = await saveTaskFile(cwd, task, { piece, issue: options?.issue, ...settings });
   displayTaskCreationResult(created, settings, piece);
 }

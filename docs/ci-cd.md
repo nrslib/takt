@@ -66,7 +66,7 @@ In pipeline mode, PRs are **not** created unless `--auto-pr` is explicitly speci
 | `--skip-git` | Skip branch creation, commit, and push (pipeline mode, piece-only) |
 | `--repo <owner/repo>` | Specify repository (for PR creation) |
 | `-q, --quiet` | Minimal output mode: suppress AI output (for CI) |
-| `--provider <name>` | Override agent provider (claude\|codex\|opencode\|mock) |
+| `--provider <name>` | Override agent provider (claude\|codex\|opencode\|cursor\|copilot\|mock) |
 | `--model <name>` | Override agent model |
 
 ### Command Examples
@@ -161,18 +161,24 @@ export TAKT_OPENAI_API_KEY=sk-...
 
 # For OpenCode
 export TAKT_OPENCODE_API_KEY=...
+
+# For Cursor Agent (optional if cursor-agent login session exists)
+export TAKT_CURSOR_API_KEY=...
+
+# For GitHub Copilot CLI
+export TAKT_COPILOT_GITHUB_TOKEN=ghp_...
 ```
 
 Priority: Environment variables take precedence over `config.yaml` settings.
 
-> **Note**: If you set an API key via environment variable, installing Claude Code, Codex, or OpenCode CLI is not necessary. TAKT directly calls the respective API.
+> **Note**: If you set an API key via environment variable, installing the corresponding CLI (Claude Code, Codex, OpenCode) is not necessary. TAKT directly calls the respective API. Cursor and Copilot require their CLIs to be installed.
 
 ## Cost Considerations
 
-TAKT uses AI APIs (Claude or OpenAI), which can incur significant costs, especially when tasks are auto-executed in CI/CD environments. Take the following precautions:
+TAKT uses AI APIs (Anthropic, OpenAI, etc.), which can incur significant costs, especially when tasks are auto-executed in CI/CD environments. Take the following precautions:
 
 - **Monitor API usage**: Set up billing alerts with your AI provider to avoid unexpected charges.
 - **Use `--quiet` mode**: Reduces output volume but does not reduce API calls.
-- **Choose appropriate pieces**: Simpler pieces (e.g., `default-mini`) use fewer API calls than multi-stage pieces (e.g., `default` with parallel reviews).
+- **Choose appropriate pieces**: Simpler pieces use fewer API calls than multi-stage pieces (e.g., `default` with parallel reviews).
 - **Limit CI triggers**: Use conditional triggers (e.g., `if: contains(github.event.comment.body, '@takt')`) to prevent unintended executions.
 - **Test with `--provider mock`**: Use mock provider during CI pipeline development to avoid real API costs.

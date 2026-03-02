@@ -40,12 +40,6 @@ export {
 export {
   PieceEngine,
   isOutputContractItem,
-  executeAgent,
-  generateReport,
-  executePart,
-  judgeStatus,
-  evaluateCondition,
-  decomposeTask,
 } from './core/piece/index.js';
 export type {
   PieceEvents,
@@ -55,5 +49,15 @@ export type {
   IterationLimitCallback,
   PieceEngineOptions,
   ProviderType,
-  JudgeStatusResult,
 } from './core/piece/index.js';
+
+// Agent usecases
+export {
+  executeAgent,
+  generateReport,
+  executePart,
+  judgeStatus,
+  evaluateCondition,
+  decomposeTask,
+} from './agents/agent-usecases.js';
+export type { JudgeStatusResult } from './agents/agent-usecases.js';

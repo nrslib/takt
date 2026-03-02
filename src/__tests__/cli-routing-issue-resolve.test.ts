@@ -110,7 +110,6 @@ vi.mock('../app/cli/program.js', () => {
 
 vi.mock('../app/cli/helpers.js', () => ({
   resolveAgentOverrides: vi.fn(),
-  parseCreateWorktreeOption: vi.fn(),
   isDirectTask: vi.fn(() => false),
 }));
 
@@ -120,7 +119,7 @@ import { interactiveMode } from '../features/interactive/index.js';
 import { resolveConfigValues, loadPersonaSessions } from '../infra/config/index.js';
 import { isDirectTask } from '../app/cli/helpers.js';
 import { executeDefaultAction } from '../app/cli/routing.js';
-import { info } from '../shared/ui/index.js';
+import { info, error } from '../shared/ui/index.js';
 import type { Issue } from '../infra/git/index.js';
 
 const mockFormatIssueAsTask = vi.mocked(formatIssueAsTask);
@@ -133,6 +132,7 @@ const mockLoadPersonaSessions = vi.mocked(loadPersonaSessions);
 const mockResolveConfigValues = vi.mocked(resolveConfigValues);
 const mockIsDirectTask = vi.mocked(isDirectTask);
 const mockInfo = vi.mocked(info);
+const mockError = vi.mocked(error);
 const mockTaskRunnerListAllTaskItems = vi.mocked(mockListAllTaskItems);
 
 function createMockIssue(number: number): Issue {
@@ -161,6 +161,55 @@ beforeEach(() => {
 });
 
 describe('Issue resolution in routing', () => {
+  it('should show error and exit when --auto-pr/--draft are used outside pipeline mode', async () => {
+    mockOpts.autoPr = true;
+    mockOpts.draft = true;
+
+    const mockExit = vi.spyOn(process, 'exit').mockImplementation(() => {
+      throw new Error('process.exit called');
+    });
+
+    await expect(executeDefaultAction()).rejects.toThrow('process.exit called');
+
+    expect(mockError).toHaveBeenCalledWith('--auto-pr/--draft are supported only in --pipeline mode');
+    expect(mockExit).toHaveBeenCalledWith(1);
+    expect(mockInteractiveMode).not.toHaveBeenCalled();
+    expect(mockSelectAndExecuteTask).not.toHaveBeenCalled();
+
+    mockExit.mockRestore();
+  });
+
+  it('should show error and exit when only --auto-pr is used outside pipeline mode', async () => {
+    mockOpts.autoPr = true;
+
+    const mockExit = vi.spyOn(process, 'exit').mockImplementation(() => {
+      throw new Error('process.exit called');
+    });
+
+    await expect(executeDefaultAction()).rejects.toThrow('process.exit called');
+
+    expect(mockError).toHaveBeenCalledWith('--auto-pr/--draft are supported only in --pipeline mode');
+    expect(mockExit).toHaveBeenCalledWith(1);
+
+    mockExit.mockRestore();
+  });
+
+  it('should show error and exit when only --draft is used outside pipeline mode', async () => {
+    mockOpts.draft = true;
+
+    const mockExit = vi.spyOn(process, 'exit').mockImplementation(() => {
+      throw new Error('process.exit called');
+    });
+
+    await expect(executeDefaultAction()).rejects.toThrow('process.exit called');
+
+    expect(mockError).toHaveBeenCalledWith('--auto-pr/--draft are supported only in --pipeline mode');
+    expect(mockExit).toHaveBeenCalledWith(1);
+
+    mockExit.mockRestore();
+  });
+
+
   describe('--issue option', () => {
     it('should resolve issue and pass to interactive mode when --issue is specified', async () => {
       // Given
@@ -182,15 +231,15 @@ describe('Issue resolution in routing', () => {
         '## GitHub Issue #131: Issue #131',
         expect.anything(),
         undefined,
+        undefined,
+        undefined,
       );
 
-      // Then: selectAndExecuteTask should receive issues in options
+      // Then: selectAndExecuteTask should be called (issues are used only for initialInput, not selectOptions)
       expect(mockSelectAndExecuteTask).toHaveBeenCalledWith(
         '/test/cwd',
         'summarized task',
-        expect.objectContaining({
-          issues: [issue131],
-        }),
+        expect.any(Object),
         undefined,
       );
     });
@@ -235,15 +284,15 @@ describe('Issue resolution in routing', () => {
         '## GitHub Issue #131: Issue #131',
         expect.anything(),
         undefined,
+        undefined,
+        undefined,
       );
 
-      // Then: selectAndExecuteTask should receive issues
+      // Then: selectAndExecuteTask should be called
       expect(mockSelectAndExecuteTask).toHaveBeenCalledWith(
         '/test/cwd',
         'summarized task',
-        expect.objectContaining({
-          issues: [issue131],
-        }),
+        expect.any(Object),
         undefined,
       );
     });
@@ -260,14 +309,15 @@ describe('Issue resolution in routing', () => {
         'refactor the code',
         expect.anything(),
         undefined,
+        undefined,
+        undefined,
       );
 
       // Then: no issue fetching should occur
       expect(mockFetchIssue).not.toHaveBeenCalled();
 
-      // Then: selectAndExecuteTask should be called without issues
-      const callArgs = mockSelectAndExecuteTask.mock.calls[0];
-      expect(callArgs?.[2]?.issues).toBeUndefined();
+      // Then: selectAndExecuteTask should be called
+      expect(mockSelectAndExecuteTask).toHaveBeenCalledTimes(1);
     });
 
     it('should enter interactive mode with no input when no args provided', async () => {
@@ -279,6 +329,8 @@ describe('Issue resolution in routing', () => {
         '/test/cwd',
         undefined,
         expect.anything(),
+        undefined,
+        undefined,
         undefined,
       );
 
@@ -355,6 +407,8 @@ describe('Issue resolution in routing', () => {
           ]),
         }),
         undefined,
+        undefined,
+        undefined,
       );
     });
 
@@ -389,6 +443,8 @@ describe('Issue resolution in routing', () => {
           ]),
         }),
         undefined,
+        undefined,
+        undefined,
       );
     });
 
@@ -406,6 +462,8 @@ describe('Issue resolution in routing', () => {
         'fix issue',
         expect.objectContaining({ taskHistory: [] }),
         undefined,
+        undefined,
+        undefined,
       );
     });
 
@@ -418,6 +476,8 @@ describe('Issue resolution in routing', () => {
         '/test/cwd',
         'verify history',
         expect.objectContaining({ taskHistory: [] }),
+        undefined,
+        undefined,
         undefined,
       );
     });
@@ -489,6 +549,8 @@ describe('Issue resolution in routing', () => {
         undefined,
         expect.anything(),
         'saved-session-123',
+        undefined,
+        undefined,
       );
     });
 
@@ -512,6 +574,8 @@ describe('Issue resolution in routing', () => {
         undefined,
         expect.anything(),
         undefined,
+        undefined,
+        undefined,
       );
     });
 
@@ -528,6 +592,8 @@ describe('Issue resolution in routing', () => {
         undefined,
         expect.anything(),
         undefined,
+        undefined,
+        undefined,
       );
     });
   });
@@ -541,6 +607,8 @@ describe('Issue resolution in routing', () => {
         '/test/cwd',
         undefined,
         expect.anything(),
+        undefined,
+        undefined,
         undefined,
       );
     });

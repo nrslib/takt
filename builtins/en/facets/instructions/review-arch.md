@@ -3,6 +3,8 @@ Do not review AI-specific issues (already covered by the ai_review movement).
 
 **Review criteria:**
 - Structural and design validity
+- Modularization (high cohesion, low coupling, no circular dependencies)
+- Functionalization (single responsibility per function, operation discoverability, consistent abstraction level)
 - Code quality
 - Appropriateness of change scope
 - Test coverage

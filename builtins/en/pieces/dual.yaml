@@ -1,5 +1,5 @@
-name: expert-cqrs
-description: CQRS+ES, Frontend, Security, QA Expert Review
+name: dual
+description: Frontend + backend development piece with architecture, frontend, security, and QA reviews with fix loops
 piece_config:
   provider_options:
     codex:
@@ -28,7 +28,6 @@ movements:
     knowledge:
       - frontend
       - backend
-      - cqrs-es
       - architecture
     allowed_tools:
       - Read
@@ -57,7 +56,6 @@ movements:
     knowledge:
       - frontend
       - backend
-      - cqrs-es
       - security
       - architecture
     allowed_tools:
@@ -119,7 +117,6 @@ movements:
     knowledge:
       - frontend
       - backend
-      - cqrs-es
       - security
       - architecture
     allowed_tools:
@@ -156,12 +153,12 @@ movements:
     instruction: arbitrate
   - name: reviewers
     parallel:
-      - name: cqrs-es-review
+      - name: arch-review
         edit: false
-        persona: cqrs-es-reviewer
+        persona: architecture-reviewer
         policy: review
         knowledge:
-          - cqrs-es
+          - architecture
           - backend
         allowed_tools:
           - Read
@@ -172,11 +169,11 @@ movements:
         rules:
           - condition: approved
           - condition: needs_fix
-        instruction: review-cqrs-es
+        instruction: review-arch
         output_contracts:
           report:
-            - name: cqrs-es-review.md
-              format: cqrs-es-review
+            - name: architect-review.md
+              format: architecture-review
       - name: frontend-review
         edit: false
         persona: frontend-reviewer
@@ -249,7 +246,6 @@ movements:
     knowledge:
       - frontend
       - backend
-      - cqrs-es
       - security
       - architecture
     allowed_tools:
@@ -271,7 +267,7 @@ movements:
     instruction: fix
   - name: supervise
     edit: false
-    persona: expert-supervisor
+    persona: dual-supervisor
     policy: review
     allowed_tools:
       - Read
@@ -302,7 +298,6 @@ movements:
     knowledge:
       - frontend
       - backend
-      - cqrs-es
       - security
       - architecture
     allowed_tools:

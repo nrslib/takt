@@ -5,12 +5,13 @@
  * pipeline mode, or interactive mode.
  */
 
-import { info, error as logError, withProgress } from '../../shared/ui/index.js';
+import { info, success, error as logError, withProgress } from '../../shared/ui/index.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { formatIssueAsTask, parseIssueNumbers, formatPrReviewAsTask } from '../../infra/github/index.js';
 import { getGitProvider } from '../../infra/git/index.js';
-import type { Issue, PrReviewData } from '../../infra/git/index.js';
+import type { PrReviewData } from '../../infra/git/index.js';
+import { checkoutBranch } from '../../infra/task/index.js';
 import { selectAndExecuteTask, determinePiece, saveTaskFromInteractive, createIssueAndSaveTask, promptLabelSelection, type SelectAndExecuteOptions } from '../../features/tasks/index.js';
 import { executePipeline } from '../../features/pipeline/index.js';
 import {
@@ -25,7 +26,7 @@ import {
 } from '../../features/interactive/index.js';
 import { getPieceDescription, resolveConfigValue, resolveConfigValues, loadPersonaSessions } from '../../infra/config/index.js';
 import { program, resolvedCwd, pipelineMode } from './program.js';
-import { resolveAgentOverrides, parseCreateWorktreeOption, isDirectTask } from './helpers.js';
+import { resolveAgentOverrides, isDirectTask } from './helpers.js';
 import { loadTaskHistory } from './taskHistory.js';
 
 /**
@@ -35,13 +36,13 @@ import { loadTaskHistory } from './taskHistory.js';
  * - --issue N option (numeric issue number)
  * - Positional argument containing issue references (#N or "#1 #2")
  *
- * Returns resolved issues and the formatted task text for interactive mode.
+ * Returns the formatted task text for interactive mode.
  * Throws on gh CLI unavailability or fetch failure.
  */
 async function resolveIssueInput(
   issueOption: number | undefined,
   task: string | undefined,
-): Promise<{ issues: Issue[]; initialInput: string } | null> {
+): Promise<{ initialInput: string } | null> {
   if (issueOption) {
     const ghStatus = getGitProvider().checkCliStatus();
     if (!ghStatus.available) {
@@ -52,7 +53,7 @@ async function resolveIssueInput(
       (fetchedIssue) => `GitHub Issue fetched: #${fetchedIssue.number} ${fetchedIssue.title}`,
       async () => getGitProvider().fetchIssue(issueOption),
     );
-    return { issues: [issue], initialInput: formatIssueAsTask(issue) };
+    return { initialInput: formatIssueAsTask(issue) };
   }
 
   if (task && isDirectTask(task)) {
@@ -70,7 +71,7 @@ async function resolveIssueInput(
       (fetchedIssues) => `GitHub Issues fetched: ${fetchedIssues.map((issue) => `#${issue.number}`).join(', ')}`,
       async () => issueNumbers.map((n) => getGitProvider().fetchIssue(n)),
     );
-    return { issues, initialInput: issues.map(formatIssueAsTask).join('\n\n---\n\n') };
+    return { initialInput: issues.map(formatIssueAsTask).join('\n\n---\n\n') };
   }
 
   return null;
@@ -80,7 +81,7 @@ async function resolveIssueInput(
  * Resolve PR review comments from `--pr` option.
  *
  * Fetches review comments and metadata, formats as task text.
- * Returns the PR branch name for checkout and the formatted task.
+ * Returns the formatted task text for interactive mode.
  * Throws on gh CLI unavailability or fetch failure.
  */
 async function resolvePrInput(
@@ -97,14 +98,7 @@ async function resolvePrInput(
     async () => getGitProvider().fetchPrReviewComments(prNumber),
   );
 
-  if (prReview.reviews.length === 0 && prReview.comments.length === 0) {
-    throw new Error(`PR #${prNumber} has no review comments`);
-  }
-
-  return {
-    initialInput: formatPrReviewAsTask(prReview),
-    prBranch: prReview.headRefName,
-  };
+  return { initialInput: formatPrReviewAsTask(prReview), prBranch: prReview.headRefName };
 }
 
 /**
@@ -113,6 +107,10 @@ async function resolvePrInput(
  */
 export async function executeDefaultAction(task?: string): Promise<void> {
   const opts = program.opts();
+  if (!pipelineMode && (opts.autoPr === true || opts.draft === true)) {
+    logError('--auto-pr/--draft are supported only in --pipeline mode');
+    process.exit(1);
+  }
   const prNumber = opts.pr as number | undefined;
   const issueNumber = opts.issue as number | undefined;
 
@@ -125,9 +123,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     logError('--pr and --task cannot be used together');
     process.exit(1);
   }
-
   const agentOverrides = resolveAgentOverrides(program);
-  const createWorktreeOverride = parseCreateWorktreeOption(opts.createWorktree as string | undefined);
   const resolvedPipelinePiece = opts.piece as string | undefined;
   const resolvedPipelineAutoPr = opts.autoPr === true
     ? true
@@ -136,11 +132,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     ? true
     : (resolveConfigValue(resolvedCwd, 'draftPr') ?? false);
   const selectOptions: SelectAndExecuteOptions = {
-    autoPr: opts.autoPr === true ? true : undefined,
-    draftPr: opts.draft === true ? true : undefined,
-    repo: opts.repo as string | undefined,
     piece: opts.piece as string | undefined,
-    createWorktree: createWorktreeOverride,
   };
 
   // --- Pipeline mode (non-interactive): triggered by --pipeline ---
@@ -163,7 +155,6 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       cwd: resolvedCwd,
       provider: agentOverrides?.provider,
       model: agentOverrides?.model,
-      createWorktree: createWorktreeOverride,
     });
 
     if (exitCode !== 0) {
@@ -184,12 +175,13 @@ export async function executeDefaultAction(task?: string): Promise<void> {
 
   // Resolve PR review comments (--pr N) before interactive mode
   let initialInput: string | undefined = task;
+  let prBranch: string | undefined;
 
   if (prNumber) {
     try {
       const prResult = await resolvePrInput(prNumber);
       initialInput = prResult.initialInput;
-      selectOptions.branch = prResult.prBranch;
+      prBranch = prResult.prBranch;
     } catch (e) {
       logError(getErrorMessage(e));
       process.exit(1);
@@ -199,7 +191,6 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     try {
       const issueResult = await resolveIssueInput(issueNumber, task);
       if (issueResult) {
-        selectOptions.issues = issueResult.issues;
         initialInput = issueResult.initialInput;
       }
     } catch (e) {
@@ -251,7 +242,8 @@ export async function executeDefaultAction(task?: string): Promise<void> {
           info(getLabel('interactive.continueNoSession', lang));
         }
       }
-      result = await interactiveMode(resolvedCwd, initialInput, pieceContext, selectedSessionId);
+      const interactiveOpts = prBranch ? { excludeActions: ['create_issue'] as const } : undefined;
+      result = await interactiveMode(resolvedCwd, initialInput, pieceContext, selectedSessionId, undefined, interactiveOpts);
       break;
     }
 
@@ -276,6 +268,11 @@ export async function executeDefaultAction(task?: string): Promise<void> {
 
   await dispatchConversationAction(result, {
     execute: async ({ task: confirmedTask }) => {
+      if (prBranch) {
+        info(`Fetching and checking out PR branch: ${prBranch}`);
+        checkoutBranch(resolvedCwd, prBranch);
+        success(`Checked out PR branch: ${prBranch}`);
+      }
       selectOptions.interactiveUserInput = true;
       selectOptions.piece = pieceId;
       selectOptions.interactiveMetadata = { confirmed: true, task: confirmedTask };
@@ -290,7 +287,10 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       });
     },
     save_task: async ({ task: confirmedTask }) => {
-      await saveTaskFromInteractive(resolvedCwd, confirmedTask, pieceId);
+      const presetSettings = prBranch
+        ? { worktree: true as const, branch: prBranch, autoPr: false }
+        : undefined;
+      await saveTaskFromInteractive(resolvedCwd, confirmedTask, pieceId, { presetSettings });
     },
     cancel: () => undefined,
   });

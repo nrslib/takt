@@ -6,23 +6,34 @@ import { loadTemplate } from '../../shared/prompts/index.js';
 import { type MovementPreview } from '../../infra/config/index.js';
 import { selectOption } from '../../shared/prompt/index.js';
 import { blankLine, info } from '../../shared/ui/index.js';
+import {
+  type TaskHistoryLocale,
+  type ConversationMessage,
+  type TaskHistorySummaryItem,
+  type PieceContext,
+  type InteractiveModeAction,
+  type PostSummaryAction,
+  type SummaryActionValue,
+  type SummaryActionOption,
+  type SummaryActionLabels,
+  BASE_SUMMARY_ACTIONS,
+  type InteractiveSummaryUIText,
+  type ActionWithoutExecuteUIText,
+} from './interactive-summary-types.js';
 
-type TaskHistoryLocale = 'en' | 'ja';
-
-export interface ConversationMessage {
-  role: 'user' | 'assistant';
-  content: string;
-}
-
-export interface TaskHistorySummaryItem {
-  worktreeId: string;
-  status: 'completed' | 'failed' | 'interrupted';
-  startedAt: string;
-  completedAt: string;
-  finalResult: string;
-  failureSummary: string | undefined;
-  logKey: string;
-}
+export type {
+  ConversationMessage,
+  TaskHistorySummaryItem,
+  PieceContext,
+  PostSummaryAction,
+  SummaryActionValue,
+  SummaryActionOption,
+  SummaryActionLabels,
+  InteractiveModeAction,
+  InteractiveSummaryUIText,
+  ActionWithoutExecuteUIText,
+} from './interactive-summary-types.js';
+export { BASE_SUMMARY_ACTIONS } from './interactive-summary-types.js';
 
 export function formatMovementPreviews(previews: MovementPreview[], lang: TaskHistoryLocale): string {
   return previews.map((p, i) => {
@@ -110,19 +121,6 @@ function buildTaskFromHistory(history: ConversationMessage[]): string {
     .join('\n\n');
 }
 
-export interface PieceContext {
-  /** Piece name (e.g. "minimal") */
-  name: string;
-  /** Piece description */
-  description: string;
-  /** Piece structure (numbered list of movements) */
-  pieceStructure: string;
-  /** Movement previews (persona + instruction content for first N movements) */
-  movementPreviews?: MovementPreview[];
-  /** Recent task history for conversation context */
-  taskHistory?: TaskHistorySummaryItem[];
-}
-
 export function buildSummaryPrompt(
   history: ConversationMessage[],
   hasSession: boolean,
@@ -143,9 +141,10 @@ export function buildSummaryPrompt(
 
   const hasPiece = !!pieceContext;
   const hasPreview = !!pieceContext?.movementPreviews?.length;
-  const summaryMovementDetails = hasPreview
-    ? `\n### ${lang === 'ja' ? '処理するエージェント' : 'Processing Agents'}\n${formatMovementPreviews(pieceContext!.movementPreviews!, lang)}`
-    : '';
+  const summaryMovementDetails =
+    hasPreview && pieceContext?.movementPreviews
+      ? `\n### ${lang === 'ja' ? '処理するエージェント' : 'Processing Agents'}\n${formatMovementPreviews(pieceContext.movementPreviews, lang)}`
+      : '';
   const summaryTaskHistory = pieceContext?.taskHistory?.length
     ? formatTaskHistorySummary(pieceContext.taskHistory, lang)
     : '';
@@ -158,40 +157,6 @@ export function buildSummaryPrompt(
     taskHistory: summaryTaskHistory,
     conversation,
   });
-}
-
-export type PostSummaryAction = InteractiveModeAction | 'continue';
-
-export type SummaryActionValue = 'execute' | 'create_issue' | 'save_task' | 'continue';
-
-export interface SummaryActionOption {
-  label: string;
-  value: SummaryActionValue;
-}
-
-export type SummaryActionLabels = {
-  execute: string;
-  createIssue?: string;
-  saveTask: string;
-  continue: string;
-};
-
-export const BASE_SUMMARY_ACTIONS: readonly SummaryActionValue[] = [
-  'execute',
-  'save_task',
-  'continue',
-];
-
-export type InteractiveModeAction = 'execute' | 'save_task' | 'create_issue' | 'cancel';
-
-export interface InteractiveSummaryUIText {
-  actionPrompt: string;
-  actions: {
-    execute: string;
-    createIssue: string;
-    saveTask: string;
-    continue: string;
-  };
 }
 
 export function buildSummaryActionOptions(
@@ -238,7 +203,7 @@ export function selectSummaryAction(
 ): Promise<PostSummaryAction | null> {
   blankLine();
   info(proposedLabel);
-  console.log(task);
+  info(task);
 
   return selectOption<PostSummaryAction>(actionPrompt, options);
 }
@@ -274,17 +239,6 @@ export function buildReplayHint(lang: 'en' | 'ja', hasPreviousOrder: boolean): s
   return lang === 'ja'
     ? ', /replay（前回の指示書を再投入）'
     : ', /replay (resubmit previous order)';
-}
-
-/** UI labels required by createSelectActionWithoutExecute */
-export interface ActionWithoutExecuteUIText {
-  proposed: string;
-  actionPrompt: string;
-  actions: {
-    execute: string;
-    saveTask: string;
-    continue: string;
-  };
 }
 
 /**

@@ -263,7 +263,7 @@ Specifying `worktree` in task configuration executes each task in an isolated cl
 
 TAKT uses `git clone --shared` instead of `git worktree` to create lightweight clones with an independent `.git` directory. This is important because:
 
-- **Independent `.git`**: Shared clones have their own `.git` directory, preventing agent tools (like Claude Code) from traversing `gitdir:` references back to the main repository.
+- **Independent `.git`**: Shared clones have their own `.git` directory, preventing agent tools from traversing `gitdir:` references back to the main repository.
 - **Full isolation**: Agents work entirely within the clone directory, unaware of the main repository.
 
 > **Note**: The YAML field name remains `worktree` for backward compatibility. Internally, it uses `git clone --shared` instead of `git worktree`.

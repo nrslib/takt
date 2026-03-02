@@ -39,8 +39,6 @@ describe('E2E: Team leader refill threshold', () => {
         'Create exactly seven files: rt-1.txt, rt-2.txt, rt-3.txt, rt-4.txt, rt-5.txt, rt-6.txt, rt-7.txt. Each file must contain its own filename as content. Each part must create exactly one file.',
         '--piece',
         piecePath,
-        '--create-worktree',
-        'no',
       ],
       cwd: repo.path,
       env: {

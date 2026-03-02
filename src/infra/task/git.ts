@@ -41,6 +41,15 @@ export function stageAndCommit(cwd: string, message: string): string | undefined
 }
 
 /**
+ * Fetches and checks out a branch from origin. Throws on failure.
+ */
+export function checkoutBranch(cwd: string, branch: string): void {
+  log.info('Checking out branch from origin', { branch });
+  execFileSync('git', ['fetch', 'origin', branch], { cwd, stdio: 'pipe' });
+  execFileSync('git', ['checkout', branch], { cwd, stdio: 'pipe' });
+}
+
+/**
  * Throws on failure.
  */
 export function pushBranch(cwd: string, branch: string): void {

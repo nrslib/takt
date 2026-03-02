@@ -45,7 +45,6 @@ describe('E2E: Team leader movement', () => {
       args: [
         '--task', 'Create two files: hello-en.txt containing "Hello World" and hello-ja.txt containing "こんにちは世界"',
         '--piece', piecePath,
-        '--create-worktree', 'no',
       ],
       cwd: repo.path,
       env: isolatedEnv.env,

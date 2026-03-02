@@ -15,7 +15,7 @@ import type {
   Language,
 } from '../../models/types.js';
 import type { PhaseName } from '../types.js';
-import { executeAgent } from '../agent-usecases.js';
+import { executeAgent } from '../../../agents/agent-usecases.js';
 import { InstructionBuilder } from '../instruction/InstructionBuilder.js';
 import { needsStatusJudgmentPhase, runReportPhase, runStatusJudgmentPhase } from '../phase-runner.js';
 import { detectMatchedRule } from '../evaluation/index.js';
