@@ -142,7 +142,7 @@ export class InstructionBuilder {
     // Policy injection (top + bottom reminder per "Lost in the Middle" research)
     const policyContents = this.context.policyContents ?? this.step.policyContents;
     const hasPolicy = !!(policyContents && policyContents.length > 0);
-    const policyJoined = hasPolicy ? policyContents!.join('\n\n---\n\n') : '';
+    const policyJoined = hasPolicy && policyContents ? policyContents.join('\n\n---\n\n') : '';
     const policyContent = hasPolicy
       ? preparePolicyContent(policyJoined, this.context.policySourcePath)
       : '';
@@ -150,15 +150,15 @@ export class InstructionBuilder {
     // Knowledge injection (domain-specific knowledge, no reminder needed)
     const knowledgeContents = this.context.knowledgeContents ?? this.step.knowledgeContents;
     const hasKnowledge = !!(knowledgeContents && knowledgeContents.length > 0);
-    const knowledgeJoined = hasKnowledge ? knowledgeContents!.join('\n\n---\n\n') : '';
+    const knowledgeJoined = hasKnowledge && knowledgeContents ? knowledgeContents.join('\n\n---\n\n') : '';
     const knowledgeContent = hasKnowledge
       ? prepareKnowledgeContent(knowledgeJoined, this.context.knowledgeSourcePath)
       : '';
 
     // Quality gates injection (AI directives for movement completion)
     const hasQualityGates = !!(this.step.qualityGates && this.step.qualityGates.length > 0);
-    const qualityGatesContent = hasQualityGates
-      ? this.step.qualityGates!.map(gate => `- ${gate}`).join('\n')
+    const qualityGatesContent = hasQualityGates && this.step.qualityGates
+      ? this.step.qualityGates.map(gate => `- ${gate}`).join('\n')
       : '';
 
     return loadTemplate('perform_phase1_message', language, {

@@ -283,3 +283,77 @@ describe('loadAllPiecesWithSources with repertoire pieces', () => {
     expect(repertoirePieces).toHaveLength(0);
   });
 });
+
+describe('normalizeArpeggio: strategy coercion via loadPieceByIdentifier', () => {
+  let tempDir: string;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'takt-arpeggio-coerce-'));
+    // Dummy files required by normalizeArpeggio (resolved relative to piece dir)
+    writeFileSync(join(tempDir, 'template.md'), '{line:1}');
+    writeFileSync(join(tempDir, 'data.csv'), 'col\nval');
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('should preserve strategy:"custom" when loading arpeggio piece YAML', () => {
+    const pieceYaml = `name: arpeggio-coerce-test
+initial_movement: process
+max_movements: 5
+movements:
+  - name: process
+    persona: coder
+    arpeggio:
+      source: csv
+      source_path: ./data.csv
+      template: ./template.md
+      merge:
+        strategy: custom
+        inline_js: 'return results.map(r => r.content).join(", ");'
+    rules:
+      - condition: All processed
+        next: COMPLETE
+`;
+    const piecePath = join(tempDir, 'piece.yaml');
+    writeFileSync(piecePath, pieceYaml);
+
+    const config = loadPieceByIdentifier(piecePath, tempDir);
+
+    expect(config).not.toBeNull();
+    const movement = config!.movements[0]!;
+    expect(movement.arpeggio).toBeDefined();
+    expect(movement.arpeggio!.merge.strategy).toBe('custom');
+    expect(movement.arpeggio!.merge.inlineJs).toContain('map');
+  });
+
+  it('should preserve concat strategy and separator when loading arpeggio piece YAML', () => {
+    const pieceYaml = `name: arpeggio-concat-test
+initial_movement: process
+max_movements: 5
+movements:
+  - name: process
+    persona: coder
+    arpeggio:
+      source: csv
+      source_path: ./data.csv
+      template: ./template.md
+      merge:
+        strategy: concat
+        separator: "\\n---\\n"
+    rules:
+      - condition: All processed
+        next: COMPLETE
+`;
+    const piecePath = join(tempDir, 'piece.yaml');
+    writeFileSync(piecePath, pieceYaml);
+
+    const config = loadPieceByIdentifier(piecePath, tempDir);
+
+    expect(config).not.toBeNull();
+    const movement = config!.movements[0]!;
+    expect(movement.arpeggio!.merge.strategy).toBe('concat');
+    expect(movement.arpeggio!.merge.separator).toBe('\n---\n');
+  });
+});

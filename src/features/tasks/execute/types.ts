@@ -7,7 +7,6 @@ import type { PersonaProviderEntry } from '../../../core/models/persisted-global
 import type { ProviderPermissionProfiles } from '../../../core/models/provider-profiles.js';
 import type { MovementProviderOptions } from '../../../core/models/piece-types.js';
 import type { ProviderType } from '../../../infra/providers/index.js';
-import type { Issue } from '../../../infra/git/index.js';
 import type { ProviderOptionsSource } from '../../../core/piece/types.js';
 
 /** Info captured when iteration limit is hit in non-interactive mode */
@@ -154,19 +153,11 @@ export interface WorktreeConfirmationResult {
 }
 
 export interface SelectAndExecuteOptions {
-  autoPr?: boolean;
-  draftPr?: boolean;
-  repo?: string;
   piece?: string;
-  createWorktree?: boolean | undefined;
-  /** Override branch name (e.g., PR head branch for --pr) */
-  branch?: string;
   /** Enable interactive user input during step transitions */
   interactiveUserInput?: boolean;
   /** Interactive mode result metadata for NDJSON logging */
   interactiveMetadata?: InteractiveMetadata;
-  /** GitHub Issues to associate with the PR (adds "Closes #N" for each issue) */
-  issues?: Issue[];
   /** Skip adding task to tasks.yaml */
   skipTaskList?: boolean;
 }

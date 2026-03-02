@@ -63,7 +63,7 @@ describe('schema-loader', () => {
   });
 
   it('同じスキーマを複数回ロードしても readFileSync は1回だけ', async () => {
-    const { loadJudgmentSchema } = await import('../core/piece/schema-loader.js');
+    const { loadJudgmentSchema } = await import('../infra/resources/schema-loader.js');
 
     const first = loadJudgmentSchema();
     const second = loadJudgmentSchema();
@@ -74,7 +74,7 @@ describe('schema-loader', () => {
   });
 
   it('loadDecompositionSchema は maxItems を注入し、呼び出しごとに独立したオブジェクトを返す', async () => {
-    const { loadDecompositionSchema } = await import('../core/piece/schema-loader.js');
+    const { loadDecompositionSchema } = await import('../infra/resources/schema-loader.js');
 
     const first = loadDecompositionSchema(2);
     const second = loadDecompositionSchema(5);
@@ -88,14 +88,14 @@ describe('schema-loader', () => {
   });
 
   it('loadDecompositionSchema は不正な maxParts を拒否する', async () => {
-    const { loadDecompositionSchema } = await import('../core/piece/schema-loader.js');
+    const { loadDecompositionSchema } = await import('../infra/resources/schema-loader.js');
 
     expect(() => loadDecompositionSchema(0)).toThrow('maxParts must be a positive integer: 0');
     expect(() => loadDecompositionSchema(-1)).toThrow('maxParts must be a positive integer: -1');
   });
 
   it('loadMorePartsSchema は maxItems を注入し、呼び出しごとに独立したオブジェクトを返す', async () => {
-    const { loadMorePartsSchema } = await import('../core/piece/schema-loader.js');
+    const { loadMorePartsSchema } = await import('../infra/resources/schema-loader.js');
 
     const first = loadMorePartsSchema(1);
     const second = loadMorePartsSchema(4);
@@ -109,7 +109,7 @@ describe('schema-loader', () => {
   });
 
   it('loadMorePartsSchema は不正な maxAdditionalParts を拒否する', async () => {
-    const { loadMorePartsSchema } = await import('../core/piece/schema-loader.js');
+    const { loadMorePartsSchema } = await import('../infra/resources/schema-loader.js');
 
     expect(() => loadMorePartsSchema(0)).toThrow('maxAdditionalParts must be a positive integer: 0');
     expect(() => loadMorePartsSchema(-1)).toThrow('maxAdditionalParts must be a positive integer: -1');

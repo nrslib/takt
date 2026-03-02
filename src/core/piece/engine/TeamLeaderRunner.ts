@@ -5,7 +5,7 @@ import type {
   PartDefinition,
   PartResult,
 } from '../../models/types.js';
-import { decomposeTask, executeAgent, requestMoreParts } from '../agent-usecases.js';
+import { decomposeTask, executeAgent, requestMoreParts } from '../../../agents/agent-usecases.js';
 import { buildSessionKey } from '../session-key.js';
 import { ParallelLogger } from './parallel-logger.js';
 import { incrementMovementIteration } from './state-manager.js';
@@ -79,6 +79,7 @@ export class TeamLeaderRunner {
       personaPath: leaderStep.personaPath,
       model: leaderModel,
       provider: leaderProvider,
+      onStream: this.deps.engineOptions.onStream,
     });
     const leaderResponse: AgentResponse = {
       persona: leaderStep.persona ?? leaderStep.name,
@@ -172,6 +173,7 @@ export class TeamLeaderRunner {
             language: this.deps.engineOptions.language,
             model: leaderModel,
             provider: leaderProvider,
+            onStream: this.deps.engineOptions.onStream,
           },
         );
       },

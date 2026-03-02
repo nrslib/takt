@@ -52,7 +52,6 @@ describe('E2E: Structured output rule matching', () => {
       args: [
         '--task', 'Say hello',
         '--piece', piecePath,
-        '--create-worktree', 'no',
       ],
       cwd: repo.path,
       env: isolatedEnv.env,

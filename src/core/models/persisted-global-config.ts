@@ -6,7 +6,7 @@ import type { MovementProviderOptions, PieceRuntimeConfig } from './piece-types.
 import type { ProviderPermissionProfiles } from './provider-profiles.js';
 
 export interface PersonaProviderEntry {
-  provider?: 'claude' | 'codex' | 'opencode' | 'cursor' | 'mock';
+  provider?: 'claude' | 'codex' | 'opencode' | 'cursor' | 'copilot' | 'mock';
   model?: string;
 }
 
@@ -70,7 +70,7 @@ export interface NotificationSoundEventsConfig {
 export interface PersistedGlobalConfig {
   language: Language;
   logLevel: 'debug' | 'info' | 'warn' | 'error';
-  provider?: 'claude' | 'codex' | 'opencode' | 'cursor' | 'mock';
+  provider?: 'claude' | 'codex' | 'opencode' | 'cursor' | 'copilot' | 'mock';
   model?: string;
   observability?: ObservabilityConfig;
   analytics?: AnalyticsConfig;
@@ -94,6 +94,10 @@ export interface PersistedGlobalConfig {
   claudeCliPath?: string;
   /** External cursor-agent CLI path (overridden by TAKT_CURSOR_CLI_PATH env var) */
   cursorCliPath?: string;
+  /** External Copilot CLI path (overridden by TAKT_COPILOT_CLI_PATH env var) */
+  copilotCliPath?: string;
+  /** Copilot GitHub token (overridden by TAKT_COPILOT_GITHUB_TOKEN env var) */
+  copilotGithubToken?: string;
   /** OpenCode API key for OpenCode SDK (overridden by TAKT_OPENCODE_API_KEY env var) */
   opencodeApiKey?: string;
   /** Cursor API key for Cursor Agent CLI/API (overridden by TAKT_CURSOR_API_KEY env var) */
@@ -139,7 +143,7 @@ export interface PersistedGlobalConfig {
 /** Project-level configuration */
 export interface ProjectConfig {
   piece?: string;
-  provider?: 'claude' | 'codex' | 'opencode' | 'cursor' | 'mock';
+  provider?: 'claude' | 'codex' | 'opencode' | 'cursor' | 'copilot' | 'mock';
   model?: string;
   providerOptions?: MovementProviderOptions;
   /** Provider-specific permission profiles */

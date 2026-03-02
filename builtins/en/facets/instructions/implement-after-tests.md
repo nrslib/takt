@@ -41,6 +41,15 @@ Small / Medium / Large
 - **Rationale**: {Reason for the choice}
 ```
 
+**Pre-completion self-check (required):**
+Before running build and tests, verify the following:
+- If new parameters/fields were added, grep to confirm they are actually passed from call sites
+- For any `??`, `||`, `= defaultValue` usage, confirm fallback is truly necessary
+- Verify no replaced code/exports remain after refactoring
+- Verify no features outside the task specification were added
+- Verify no if/else blocks call the same function with only argument differences
+- Verify new code matches existing implementation patterns (API call style, type definition style, etc.)
+
 **Required output (include headings)**
 ## Work results
 - {Summary of actions taken}

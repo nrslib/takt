@@ -10,13 +10,13 @@ import {
   judgeStatus,
   decomposeTask,
   requestMoreParts,
-} from '../core/piece/agent-usecases.js';
+} from '../agents/agent-usecases.js';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/piece/schema-loader.js', () => ({
+vi.mock('../infra/resources/schema-loader.js', () => ({
   loadJudgmentSchema: vi.fn(() => ({ type: 'judgment' })),
   loadEvaluationSchema: vi.fn(() => ({ type: 'evaluation' })),
   loadDecompositionSchema: vi.fn((maxParts: number) => ({ type: 'decomposition', maxParts })),

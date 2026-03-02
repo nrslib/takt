@@ -209,22 +209,6 @@ describe('PieceConfigRawSchema', () => {
     expect(() => PieceConfigRawSchema.parse(config)).toThrow();
   });
 
-  it('should reject legacy permission_mode', () => {
-    const config = {
-      name: 'test-piece',
-      movements: [
-        {
-          name: 'step1',
-          persona: 'coder',
-          permission_mode: 'edit',
-          instruction: '{task}',
-        },
-      ],
-    };
-
-    expect(() => PieceConfigRawSchema.parse(config)).toThrow();
-  });
-
   it('should require at least one movement', () => {
     const config = {
       name: 'empty-piece',

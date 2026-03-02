@@ -47,12 +47,11 @@ program
   .option('--auto-pr', 'Create PR after successful execution')
   .option('--draft', 'Create PR as draft (requires --auto-pr or auto_pr config)')
   .option('--repo <owner/repo>', 'Repository (defaults to current)')
-  .option('--provider <name>', 'Override agent provider (claude|codex|opencode|cursor|mock)')
+  .option('--provider <name>', 'Override agent provider (claude|codex|opencode|cursor|copilot|mock)')
   .option('--model <name>', 'Override agent model')
   .option('-t, --task <string>', 'Task content (as alternative to GitHub issue)')
   .option('--pipeline', 'Pipeline mode: non-interactive, no worktree, direct branch creation')
   .option('--skip-git', 'Skip branch creation, commit, and push (pipeline mode)')
-  .option('--create-worktree <yes|no>', 'Skip the worktree prompt by explicitly specifying yes or no')
   .option('-q, --quiet', 'Minimal output mode: suppress AI output (for CI)')
   .option('-c, --continue', 'Continue from the last assistant session');
 

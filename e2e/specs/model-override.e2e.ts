@@ -31,7 +31,6 @@ describe('E2E: --model option override (mock)', () => {
       args: [
         '--task', 'Test model override direct',
         '--piece', piecePath,
-        '--create-worktree', 'no',
         '--provider', 'mock',
         '--model', 'mock-model-override',
       ],

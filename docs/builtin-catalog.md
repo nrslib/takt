@@ -8,12 +8,10 @@ A comprehensive catalog of all builtin pieces and personas included with TAKT.
 
 | Piece | Recommended Use |
 |----------|-----------------|
-| `default-mini` | Quick fixes. Lightweight plan → implement → parallel review → fix loop. |
+| `default` | Standard development. Test-first with AI antipattern review and parallel review (architecture + supervisor). plan → write_tests → implement → AI antipattern review → parallel review → complete. |
 | `frontend-mini` | Frontend-focused mini configuration. |
 | `backend-mini` | Backend-focused mini configuration. |
-| `expert-mini` | Expert-level mini configuration. |
-| `default-test-first-mini` | Test-first development. Write tests first, then implement to pass them. |
-| `default` | Serious development. Multi-stage review with parallel reviewers. Used for TAKT's own development. |
+| `dual-mini` | Frontend + backend mini configuration. |
 
 ## All Builtin Pieces
 
@@ -21,28 +19,27 @@ Organized by category.
 
 | Category | Piece | Description |
 |----------|----------|-------------|
-| 🚀 Quick Start | `default-mini` | Mini development piece: plan -> implement -> parallel review (AI antipattern + supervisor) -> fix if needed. Lightweight with review. |
+| 🚀 Quick Start | `default` | Standard development. Test-first with AI antipattern review and parallel review (architecture + supervisor). plan → write_tests → implement → AI antipattern review → parallel review → complete. |
 | | `frontend-mini` | Mini frontend piece: plan -> implement -> parallel review (AI antipattern + supervisor) with frontend knowledge injection. |
 | | `backend-mini` | Mini backend piece: plan -> implement -> parallel review (AI antipattern + supervisor) with backend knowledge injection. |
-| | `default-test-first-mini` | Test-first development piece: plan -> write tests -> implement -> parallel review -> fix if needed -> complete. |
-| | `default` | Full development piece: plan -> implement -> AI review -> parallel review (architect + QA) -> supervisor approval. Includes fix loops at each review stage. |
 | | `compound-eye` | Multi-model review: sends the same instruction to Claude and Codex simultaneously, then synthesizes both responses. |
 | ⚡ Mini | `backend-cqrs-mini` | Mini CQRS+ES piece: plan -> implement -> parallel review (AI antipattern + supervisor) with CQRS+ES knowledge injection. |
-| | `expert-mini` | Mini expert piece: plan -> implement -> parallel review (AI antipattern + expert supervisor) with full-stack knowledge injection. |
-| | `expert-cqrs-mini` | Mini CQRS+ES expert piece: plan -> implement -> parallel review (AI antipattern + expert supervisor) with CQRS+ES knowledge injection. |
+| | `dual-mini` | Mini dual piece: plan -> implement -> parallel review (AI antipattern + expert supervisor) with frontend + backend knowledge injection. |
+| | `dual-cqrs-mini` | Mini CQRS+ES dual piece: plan -> implement -> parallel review (AI antipattern + expert supervisor) with CQRS+ES knowledge injection. |
 | 🎨 Frontend | `frontend` | Frontend-specialized development piece with React/Next.js focused reviews and knowledge injection. |
 | ⚙️ Backend | `backend` | Backend-specialized development piece with backend, security, and QA expert reviews. |
 | | `backend-cqrs` | CQRS+ES-specialized backend development piece with CQRS+ES, security, and QA expert reviews. |
-| 🔧 Expert | `expert` | Full-stack development piece: architecture, frontend, security, QA reviews with fix loops. |
-| | `expert-cqrs` | Full-stack development piece (CQRS+ES specialized): CQRS+ES, frontend, security, QA reviews with fix loops. |
-| 🛠️ Refactoring | `structural-reform` | Full project review and structural reform: iterative codebase restructuring with staged file splits. |
+| 🔧 Dual | `dual` | Frontend + backend development piece: architecture, frontend, security, QA reviews with fix loops. |
+| | `dual-cqrs` | Frontend + backend development piece (CQRS+ES specialized): CQRS+ES, frontend, security, QA reviews with fix loops. |
+| 🏗️ Infrastructure | `terraform` | Terraform IaC development piece: plan → implement → parallel review → supervisor validation → fix → complete. |
 | 🔍 Review | `review` | Multi-perspective code review: auto-detects PR/branch/working diff, reviews from 5 parallel perspectives (arch/security/QA/testing/requirements), outputs consolidated results. |
 | 🧪 Testing | `unit-test` | Unit test focused piece: test analysis -> test implementation -> review -> fix. |
 | | `e2e-test` | E2E test focused piece: E2E analysis -> E2E implementation -> review -> fix (Vitest-based E2E flow). |
+| 🎵 TAKT Development | `takt-default` | TAKT development piece: plan → write tests → implement → AI antipattern review → 5-parallel review → fix → supervise → complete. |
+| | `takt-default-team-leader` | TAKT development piece with team leader: plan → write tests → team-leader implement → AI antipattern review → 5-parallel review → fix → supervise → complete. |
 | Others | `research` | Research piece: planner -> digger -> supervisor. Autonomously executes research without asking questions. |
 | | `deep-research` | Deep research piece: plan -> dig -> analyze -> supervise. Discovery-driven investigation that follows emerging questions with multi-perspective analysis. |
 | | `magi` | Deliberation system inspired by Evangelion. Three AI personas (MELCHIOR, BALTHASAR, CASPER) analyze and vote. |
-| | `passthrough` | Thinnest wrapper. Pass task directly to coder as-is. No review. |
 
 Use `takt switch` to switch pieces interactively.
 
@@ -61,7 +58,7 @@ Use `takt switch` to switch pieces interactively.
 | **security-reviewer** | Security vulnerability assessment |
 | **conductor** | Phase 3 judgment specialist: reads reports/responses and outputs status tags |
 | **supervisor** | Final validation, approval |
-| **expert-supervisor** | Expert-level final validation with comprehensive review integration |
+| **dual-supervisor** | Multi-review integration validation and release readiness judgment |
 | **research-planner** | Research task planning and scope definition |
 | **research-analyzer** | Research result interpretation and additional investigation planning |
 | **research-digger** | Deep investigation and information gathering |
@@ -69,6 +66,11 @@ Use `takt switch` to switch pieces interactively.
 | **test-planner** | Test strategy analysis and comprehensive test planning |
 | **testing-reviewer** | Testing-focused code review with integration test requirements analysis |
 | **requirements-reviewer** | Requirements specification and compliance review |
+| **terraform-coder** | Terraform IaC implementation |
+| **terraform-reviewer** | Terraform IaC review |
+| **melchior** | MAGI deliberation system: MELCHIOR-1 (scientist perspective) |
+| **balthasar** | MAGI deliberation system: BALTHASAR-2 (mother perspective) |
+| **casper** | MAGI deliberation system: CASPER-3 (woman perspective) |
 | **pr-commenter** | Posts review findings as GitHub PR comments |
 
 ## Custom Personas

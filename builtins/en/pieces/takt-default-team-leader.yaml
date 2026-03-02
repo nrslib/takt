@@ -1,5 +1,5 @@
 name: takt-default-team-leader
-description: TAKT development piece with team leader (plan → write tests → team-leader implement → AI review → 5-parallel review → fix → supervise → complete)
+description: TAKT development piece with team leader (plan → write tests → team-leader implement → AI antipattern review → 5-parallel review → fix → supervise → complete)
 piece_config:
   provider_options:
     codex:

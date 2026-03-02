@@ -160,6 +160,7 @@ export function loadProjectConfig(projectDir: string): ProjectLocalConfig {
     claude_cli_path,
     codex_cli_path,
     cursor_cli_path,
+    copilot_cli_path,
     ...rest
   } = parsedConfig;
 
@@ -190,6 +191,7 @@ export function loadProjectConfig(projectDir: string): ProjectLocalConfig {
     claudeCliPath: claude_cli_path as string | undefined,
     codexCliPath: codex_cli_path as string | undefined,
     cursorCliPath: cursor_cli_path as string | undefined,
+    copilotCliPath: copilot_cli_path as string | undefined,
   };
 }
 

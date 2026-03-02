@@ -8,7 +8,7 @@
 import { execFileSync } from 'node:child_process';
 import { formatIssueAsTask, buildPrBody, formatPrReviewAsTask } from '../../infra/github/index.js';
 import { getGitProvider, type Issue } from '../../infra/git/index.js';
-import { stageAndCommit, resolveBaseBranch, pushBranch } from '../../infra/task/index.js';
+import { stageAndCommit, resolveBaseBranch, pushBranch, checkoutBranch } from '../../infra/task/index.js';
 import { executeTask, confirmAndCreateWorktree, type TaskExecutionOptions, type PipelineExecutionOptions } from '../tasks/index.js';
 import { info, error, success } from '../../shared/ui/index.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
@@ -107,10 +107,6 @@ export function resolveTaskContent(options: PipelineExecutionOptions): TaskConte
       (provider) => provider.fetchPrReviewComments(options.prNumber!),
     );
     if (!prReview) return undefined;
-    if (prReview.reviews.length === 0 && prReview.comments.length === 0) {
-      error(`PR #${options.prNumber} has no review comments`);
-      return undefined;
-    }
     const task = formatPrReviewAsTask(prReview);
     success(`PR #${options.prNumber} fetched: "${prReview.title}"`);
     return { task, prBranch: prReview.headRefName };
@@ -154,8 +150,7 @@ export async function resolveExecutionContext(
   }
   if (prBranch) {
     info(`Fetching and checking out PR branch: ${prBranch}`);
-    execFileSync('git', ['fetch', 'origin', prBranch], { cwd, stdio: 'pipe' });
-    execFileSync('git', ['checkout', prBranch], { cwd, stdio: 'pipe' });
+    checkoutBranch(cwd, prBranch);
     success(`Checked out PR branch: ${prBranch}`);
     return { execCwd: cwd, branch: prBranch, baseBranch: resolveBaseBranch(cwd).branch, isWorktree: false };
   }

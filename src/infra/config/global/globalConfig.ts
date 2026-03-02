@@ -423,7 +423,7 @@ export function setLanguage(language: Language): void {
   saveGlobalConfig(config);
 }
 
-export function setProvider(provider: 'claude' | 'codex' | 'opencode' | 'cursor'): void {
+export function setProvider(provider: 'claude' | 'codex' | 'opencode' | 'cursor' | 'copilot'): void {
   const config = loadGlobalConfig();
   config.provider = provider;
   saveGlobalConfig(config);
@@ -566,6 +566,48 @@ export function resolveCursorApiKey(): string | undefined {
   try {
     const config = loadGlobalConfig();
     return config.cursorApiKey;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Resolve the Copilot CLI path override.
+ * Priority: TAKT_COPILOT_CLI_PATH env var > project config > global config > undefined (default 'copilot')
+ */
+export function resolveCopilotCliPath(projectConfig?: { copilotCliPath?: string }): string | undefined {
+  const envPath = process.env[envVarNameFromPath('copilot_cli_path')];
+  if (envPath !== undefined) {
+    return validateCliPath(envPath, 'TAKT_COPILOT_CLI_PATH');
+  }
+
+  if (projectConfig?.copilotCliPath !== undefined) {
+    return validateCliPath(projectConfig.copilotCliPath, 'copilot_cli_path (project)');
+  }
+
+  let config: PersistedGlobalConfig;
+  try {
+    config = loadGlobalConfig();
+  } catch {
+    return undefined;
+  }
+  if (config.copilotCliPath === undefined) {
+    return undefined;
+  }
+  return validateCliPath(config.copilotCliPath, 'copilot_cli_path');
+}
+
+/**
+ * Resolve the Copilot GitHub token.
+ * Priority: TAKT_COPILOT_GITHUB_TOKEN env var > config.yaml > undefined
+ */
+export function resolveCopilotGithubToken(): string | undefined {
+  const envKey = process.env[envVarNameFromPath('copilot_github_token')];
+  if (envKey) return envKey;
+
+  try {
+    const config = loadGlobalConfig();
+    return config.copilotGithubToken;
   } catch {
     return undefined;
   }

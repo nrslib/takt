@@ -9,7 +9,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // E2E更新時は docs/testing/e2e.md も更新すること
-describe('E2E: Worktree/Clone isolation (--create-worktree yes)', () => {
+describe('E2E: Removed --create-worktree option', () => {
   let isolatedEnv: IsolatedEnv;
   let testRepo: TestRepo;
 
@@ -31,7 +31,7 @@ describe('E2E: Worktree/Clone isolation (--create-worktree yes)', () => {
     }
   });
 
-  it('should execute task in an isolated worktree/clone', () => {
+  it('should fail fast with migration guidance', () => {
     const piecePath = resolve(__dirname, '../fixtures/pieces/simple.yaml');
 
     const result = runTakt({
@@ -45,7 +45,8 @@ describe('E2E: Worktree/Clone isolation (--create-worktree yes)', () => {
       timeout: 240_000,
     });
 
-    // Task should succeed
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode).not.toBe(0);
+    const combined = result.stdout + result.stderr;
+    expect(combined).toContain('--create-worktree has been removed');
   }, 240_000);
 });
