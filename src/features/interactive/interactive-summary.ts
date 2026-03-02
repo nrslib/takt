@@ -11,7 +11,6 @@ import {
   type ConversationMessage,
   type TaskHistorySummaryItem,
   type PieceContext,
-  type InteractiveModeAction,
   type PostSummaryAction,
   type SummaryActionValue,
   type SummaryActionOption,

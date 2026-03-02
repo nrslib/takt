@@ -108,7 +108,7 @@ describe('E2E: Error handling edge cases (mock)', () => {
     // Then: exits with migration error
     const combined = result.stdout + result.stderr;
     expect(result.exitCode).not.toBe(0);
-    expect(combined).toContain('--create-worktree has been removed');
+    expect(combined).toContain("unknown option '--create-worktree'");
   }, 240_000);
 
   it('should error when piece file contains invalid YAML', () => {

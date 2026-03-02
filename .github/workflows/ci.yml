@@ -5,7 +5,8 @@ on:
     branches: [main]
     types: [opened, synchronize, ready_for_review]
   push:
-    branches: [main]
+    branches: [main, "takt/**"]
+  workflow_dispatch:
 
 jobs:
   lint:

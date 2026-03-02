@@ -17,6 +17,7 @@ export function createIterationLimitHandler(
   out: OutputFns,
   displayRef: { current: StreamDisplay | null },
   shouldNotify: boolean,
+  onExceeded?: (request: IterationLimitRequest) => void,
 ): (request: IterationLimitRequest) => Promise<number | null> {
   return async (request: IterationLimitRequest): Promise<number | null> => {
     if (displayRef.current) { displayRef.current.flush(); displayRef.current = null; }
@@ -27,6 +28,10 @@ export function createIterationLimitHandler(
     }));
     out.info(getLabel('piece.iterationLimit.currentMovement', undefined, { currentMovement: request.currentMovement }));
     if (shouldNotify) playWarningSound();
+    if (onExceeded) {
+      onExceeded(request);
+      return null;
+    }
     enterInputWait();
     try {
       const action = await selectOption(getLabel('piece.iterationLimit.continueQuestion'), [

@@ -45,9 +45,8 @@ vi.mock('../features/tasks/list/taskActions.js', () => ({
 }));
 
 vi.mock('../features/tasks/list/taskDeleteActions.js', () => ({
-  deletePendingTask: mockDeletePendingTask,
-  deleteFailedTask: vi.fn(),
-  deleteCompletedTask: vi.fn(),
+  deleteTaskByKind: mockDeletePendingTask,
+  deleteAllTasks: vi.fn(),
 }));
 
 vi.mock('../features/tasks/list/taskRetryActions.js', () => ({
