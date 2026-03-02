@@ -11,8 +11,8 @@ import {
   isPiecePath,
 } from '../../../infra/config/index.js';
 import { confirm } from '../../../shared/prompt/index.js';
-import { createSharedClone, summarizeTaskName, resolveBaseBranch, TaskRunner } from '../../../infra/task/index.js';
-import { info, error, withProgress } from '../../../shared/ui/index.js';
+import { createSharedClone, summarizeTaskName, resolveBaseBranch, TaskRunner, checkGitCloneReadiness } from '../../../infra/task/index.js';
+import { info, warn, error, withProgress } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import { executeTask } from './taskExecution.js';
 import { resolveAutoPr, resolveDraftPr, postExecutionFlow } from './postExecution.js';
@@ -39,12 +39,17 @@ export async function determinePiece(cwd: string, override?: string): Promise<st
   return selectPiece(cwd);
 }
 
+const GIT_READINESS_MESSAGES: Record<'not_git_repo' | 'no_commits', string> = {
+  not_git_repo: 'Cannot create worktree: not a git repository.',
+  no_commits: 'Cannot create worktree: no commits found (branch does not exist).',
+};
+
 export async function confirmAndCreateWorktree(
   cwd: string,
   task: string,
   createWorktreeOverride?: boolean | undefined,
   branchOverride?: string,
-): Promise<WorktreeConfirmationResult> {
+): Promise<WorktreeConfirmationResult | null> {
   const useWorktree =
     typeof createWorktreeOverride === 'boolean'
       ? createWorktreeOverride
@@ -52,6 +57,24 @@ export async function confirmAndCreateWorktree(
 
   if (!useWorktree) {
     return { execCwd: cwd, isWorktree: false };
+  }
+
+  // Validate git state before attempting clone creation
+  const readiness = checkGitCloneReadiness(cwd);
+  if (!readiness.ready) {
+    warn(GIT_READINESS_MESSAGES[readiness.reason]);
+
+    if (typeof createWorktreeOverride === 'boolean') {
+      // Pipeline/explicit mode: auto-fallback to in-place execution
+      return { execCwd: cwd, isWorktree: false };
+    }
+
+    // Interactive mode: ask user
+    const runInPlace = await confirm('Run in current directory instead?', true);
+    if (runInPlace) {
+      return { execCwd: cwd, isWorktree: false };
+    }
+    return null;
   }
 
   const baseBranch = resolveBaseBranch(cwd).branch;
@@ -92,12 +115,22 @@ export async function selectAndExecuteTask(
     return;
   }
 
-  const { execCwd, isWorktree, branch, baseBranch, taskSlug } = await confirmAndCreateWorktree(
+  const worktreeResult = await confirmAndCreateWorktree(
     cwd,
     task,
     options?.createWorktree,
     options?.branch,
   );
+
+  if (!worktreeResult) {
+    // User declined fallback — save task to queue and exit
+    const taskRunner = new TaskRunner(cwd);
+    taskRunner.addTask(task, { piece: pieceIdentifier });
+    info('Task saved to queue.');
+    return;
+  }
+
+  const { execCwd, isWorktree, branch, baseBranch, taskSlug } = worktreeResult;
 
   // Ask for PR creation BEFORE execution (only if worktree is enabled)
   let shouldCreatePr = false;

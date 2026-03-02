@@ -44,6 +44,7 @@ vi.mock('../infra/task/index.js', () => ({
   getCurrentBranch: vi.fn(() => 'main'),
   detectDefaultBranch: vi.fn(() => 'main'),
   resolveBaseBranch: vi.fn(() => ({ branch: 'main' })),
+  checkGitCloneReadiness: vi.fn(() => ({ ready: true })),
   TaskRunner: vi.fn(() => ({
     addTask: (...args: unknown[]) => mockAddTask(...args),
     completeTask: (...args: unknown[]) => mockCompleteTask(...args),
@@ -53,6 +54,7 @@ vi.mock('../infra/task/index.js', () => ({
 
 vi.mock('../shared/ui/index.js', () => ({
   info: vi.fn(),
+  warn: vi.fn(),
   error: vi.fn(),
   success: vi.fn(),
   withProgress: async <T>(

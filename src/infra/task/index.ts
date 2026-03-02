@@ -55,7 +55,7 @@ export {
   getOriginalInstruction,
   buildListItems,
 } from './branchList.js';
-export { stageAndCommit, getCurrentBranch, pushBranch } from './git.js';
+export { stageAndCommit, getCurrentBranch, pushBranch, checkGitCloneReadiness, type GitCloneReadiness } from './git.js';
 export { autoCommitAndPush, type AutoCommitResult } from './autoCommit.js';
 export { summarizeTaskName } from './summarize.js';
 export { TaskWatcher, type TaskWatcherOptions } from './watcher.js';

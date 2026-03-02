@@ -13,6 +13,7 @@ vi.mock('../shared/prompt/index.js', () => ({
 vi.mock('../infra/task/git.js', () => ({
   stageAndCommit: vi.fn(),
   getCurrentBranch: vi.fn(() => 'main'),
+  checkGitCloneReadiness: vi.fn(() => ({ ready: true })),
 }));
 
 vi.mock('../infra/task/clone.js', () => ({
@@ -38,6 +39,7 @@ vi.mock('../shared/ui/index.js', () => {
   const info = vi.fn();
   return {
     info,
+    warn: vi.fn(),
     error: vi.fn(),
     success: vi.fn(),
     header: vi.fn(),
