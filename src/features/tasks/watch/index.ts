@@ -35,7 +35,7 @@ export async function watchTasks(cwd: string, options?: TaskExecutionOptions): P
 
   header('TAKT Watch Mode');
   info(`Piece: ${pieceName}`);
-  info(`Watching: ${taskRunner.getTasksDir()}`);
+  info(`Watching: ${taskRunner.getTasksFilePath()}`);
   if (recovered > 0) {
     info(`Recovered ${recovered} interrupted running task(s) to pending.`);
   }
