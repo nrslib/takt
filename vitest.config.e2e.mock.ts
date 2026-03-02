@@ -39,6 +39,7 @@ export default defineConfig({
       'e2e/specs/repertoire.e2e.ts',
       'e2e/specs/repertoire-real.e2e.ts',
       'e2e/specs/piece-selection-branches.e2e.ts',
+      'e2e/specs/movement-vars.e2e.ts',
     ],
   },
 });
