@@ -1,12 +1,5 @@
-/**
- * Tests for pipeline execution
- *
- * Tests the orchestration logic with mocked dependencies.
- */
-
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// Mock all external dependencies
 const mockFetchIssue = vi.fn();
 const mockCheckGhCli = vi.fn().mockReturnValue({ available: true });
 vi.mock('../infra/github/issue.js', () => ({
@@ -49,13 +42,11 @@ vi.mock('../infra/config/index.js', () => ({
   resolveConfigValue: vi.fn(() => undefined),
 }));
 
-// Mock execFileSync for git operations
 const mockExecFileSync = vi.fn();
 vi.mock('node:child_process', () => ({
   execFileSync: mockExecFileSync,
 }));
 
-// Mock UI
 vi.mock('../shared/ui/index.js', () => ({
   info: vi.fn(),
   error: vi.fn(),
@@ -67,7 +58,6 @@ vi.mock('../shared/ui/index.js', () => ({
   warn: vi.fn(),
   debug: vi.fn(),
 }));
-// Mock Slack + utils
 const mockGetSlackWebhookUrl = vi.fn<() => string | undefined>(() => undefined);
 const mockSendSlackNotification = vi.fn<(url: string, message: string) => Promise<void>>();
 const mockBuildSlackRunSummary = vi.fn<(params: unknown) => string>(() => 'TAKT Run Summary');
@@ -241,7 +231,7 @@ describe('executePipeline', () => {
     );
   });
 
-  it('draftPr: true の場合、createPullRequest に draft: true が渡される', async () => {
+  it('should pass draft: true to createPullRequest when draftPr is true', async () => {
     mockExecuteTask.mockResolvedValueOnce(true);
     mockCreatePullRequest.mockReturnValueOnce({ success: true, url: 'https://github.com/test/pr/1' });
 
@@ -261,7 +251,7 @@ describe('executePipeline', () => {
     );
   });
 
-  it('draftPr: false の場合、createPullRequest に draft: false が渡される', async () => {
+  it('should pass draft: false to createPullRequest when draftPr is false', async () => {
     mockExecuteTask.mockResolvedValueOnce(true);
     mockCreatePullRequest.mockReturnValueOnce({ success: true, url: 'https://github.com/test/pr/1' });
 
@@ -281,7 +271,7 @@ describe('executePipeline', () => {
     );
   });
 
-  it('should pass baseBranch as base to createPullRequest', async () => {
+  it('should pass baseBranch as base to createPullRequest when autoPr is true', async () => {
     // Given: detectDefaultBranch returns 'develop' (via symbolic-ref)
     mockExecFileSync.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === 'symbolic-ref' && args[1] === 'refs/remotes/origin/HEAD') {
@@ -303,13 +293,11 @@ describe('executePipeline', () => {
 
     // Then
     expect(exitCode).toBe(0);
-    expect(mockCreatePullRequest).toHaveBeenCalledWith(
-      '/tmp/test',
-      expect.objectContaining({
-        branch: 'fix/my-branch',
-        base: 'develop',
-      }),
-    );
+    expect(mockCreatePullRequest).toHaveBeenCalledTimes(1);
+    const prOptions = mockCreatePullRequest.mock.calls[0]?.[1] as { branch?: string; base?: string };
+    expect(prOptions.branch).toBe('fix/my-branch');
+    expect(prOptions.base).toBe('develop');
+    expect(prOptions.base).not.toBeUndefined();
   });
 
   it('should use --task when both --task and positional task are provided', async () => {
@@ -534,7 +522,13 @@ describe('executePipeline', () => {
       });
 
       expect(exitCode).toBe(0);
-      expect(mockConfirmAndCreateWorktree).toHaveBeenCalledWith('/tmp/test', 'Fix the bug', true, undefined);
+      expect(mockConfirmAndCreateWorktree).toHaveBeenCalledWith(
+        '/tmp/test',
+        'Fix the bug',
+        true,
+        undefined,
+        undefined,
+      );
       expect(mockExecuteTask).toHaveBeenCalledWith({
         task: 'Fix the bug',
         cwd: '/tmp/test-worktree',
@@ -631,6 +625,28 @@ describe('executePipeline', () => {
       expect(exitCode).toBe(4);
     });
 
+    it('should return exit code 4 when worktree baseBranch is unresolved', async () => {
+      mockConfirmAndCreateWorktree.mockResolvedValueOnce({
+        execCwd: '/tmp/test-worktree',
+        isWorktree: true,
+        branch: 'fix/the-bug',
+        baseBranch: undefined,
+        taskSlug: 'fix-the-bug',
+      });
+
+      const exitCode = await executePipeline({
+        task: 'Fix the bug',
+        piece: 'default',
+        autoPr: false,
+        cwd: '/tmp/test',
+        createWorktree: true,
+      });
+
+      expect(exitCode).toBe(4);
+      expect(mockExecuteTask).not.toHaveBeenCalled();
+      expect(mockCreatePullRequest).not.toHaveBeenCalled();
+    });
+
     it('should commit in worktree and push via clone→project→origin', async () => {
       mockConfirmAndCreateWorktree.mockResolvedValueOnce({
         execCwd: '/tmp/test-worktree',
@@ -698,6 +714,74 @@ describe('executePipeline', () => {
           branch: 'fix/the-bug',
           base: 'main',
         }),
+      );
+    });
+
+    it('should use worktree base branch for PR creation', async () => {
+      mockConfirmAndCreateWorktree.mockResolvedValueOnce({
+        execCwd: '/tmp/test-worktree',
+        isWorktree: true,
+        branch: 'fix/the-bug',
+        baseBranch: 'release/main',
+        taskSlug: 'fix-the-bug',
+      });
+      mockExecuteTask.mockResolvedValueOnce(true);
+      mockCreatePullRequest.mockReturnValueOnce({ success: true, url: 'https://github.com/test/pr/1' });
+
+      const exitCode = await executePipeline({
+        task: 'Fix the bug',
+        piece: 'default',
+        autoPr: true,
+        cwd: '/tmp/test',
+        createWorktree: true,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(mockCreatePullRequest).toHaveBeenCalledWith(
+        '/tmp/test',
+        expect.objectContaining({
+          branch: 'fix/the-bug',
+          base: 'release/main',
+        }),
+      );
+    });
+
+    it('should pass PR base branch to worktree creation when createWorktree is true', async () => {
+      mockFetchPrReviewComments.mockReturnValueOnce({
+        number: 456,
+        title: 'Fix auth bug',
+        body: 'PR description',
+        url: 'https://github.com/org/repo/pull/456',
+        baseRefName: 'release/main',
+        headRefName: 'fix/auth-bug',
+        comments: [{ author: 'reviewer1', body: 'Fix null check' }],
+        reviews: [],
+        files: ['src/auth.ts'],
+      });
+      mockConfirmAndCreateWorktree.mockResolvedValueOnce({
+        execCwd: '/tmp/test-worktree',
+        isWorktree: true,
+        branch: 'fix/auth-bug',
+        baseBranch: 'release/main',
+        taskSlug: 'fix-auth-bug',
+      });
+      mockExecuteTask.mockResolvedValueOnce(true);
+
+      const exitCode = await executePipeline({
+        prNumber: 456,
+        piece: 'default',
+        autoPr: false,
+        cwd: '/tmp/test',
+        createWorktree: true,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(mockConfirmAndCreateWorktree).toHaveBeenCalledWith(
+        '/tmp/test',
+        expect.any(String),
+        true,
+        'fix/auth-bug',
+        'release/main',
       );
     });
   });
@@ -933,6 +1017,80 @@ describe('executePipeline', () => {
         (call: unknown[]) => call[0] === 'git' && (call[1] as string[])[0] === 'checkout' && (call[1] as string[])[1] === 'fix/auth-bug',
       );
       expect(checkoutPrBranch).toBeDefined();
+    });
+
+    it('should pass PR base branch to PR creation when baseRefName is provided', async () => {
+      // Given: remote default branch is develop, PR base is release/main
+      mockExecFileSync.mockImplementation((_cmd: string, args: string[]) => {
+        if (args[0] === 'symbolic-ref' && args[1] === 'refs/remotes/origin/HEAD') {
+          return 'refs/remotes/origin/develop\n';
+        }
+        return 'abc1234\n';
+      });
+      mockFetchPrReviewComments.mockReturnValueOnce({
+        number: 456,
+        title: 'Fix auth bug',
+        body: 'PR description',
+        url: 'https://github.com/org/repo/pull/456',
+        baseRefName: 'release/main',
+        headRefName: 'fix/auth-bug',
+        comments: [{ author: 'commenter1', body: 'Update tests' }],
+        reviews: [{ author: 'reviewer1', body: 'Fix null check' }],
+        files: ['src/auth.ts'],
+      });
+      mockExecuteTask.mockResolvedValueOnce(true);
+      mockCreatePullRequest.mockReturnValueOnce({ success: true, url: 'https://github.com/org/repo/pull/1' });
+
+      // When
+      const exitCode = await executePipeline({
+        prNumber: 456,
+        piece: 'default',
+        autoPr: true,
+        cwd: '/tmp/test',
+      });
+
+      // Then
+      expect(exitCode).toBe(0);
+      expect(mockCreatePullRequest).toHaveBeenCalledTimes(1);
+      const prOptions = mockCreatePullRequest.mock.calls[0]?.[1] as { base?: string };
+      expect(prOptions.base).toBe('release/main');
+      expect(prOptions.base).not.toBeUndefined();
+      expect(prOptions.base).not.toBe('develop');
+    });
+
+    it('should resolve default base branch for PR creation when baseRefName is undefined', async () => {
+      mockExecFileSync.mockImplementation((_cmd: string, args: string[]) => {
+        if (args[0] === 'symbolic-ref' && args[1] === 'refs/remotes/origin/HEAD') {
+          return 'refs/remotes/origin/develop\n';
+        }
+        return 'abc1234\n';
+      });
+      mockFetchPrReviewComments.mockReturnValueOnce({
+        number: 456,
+        title: 'Fix auth bug',
+        body: 'PR description',
+        url: 'https://github.com/org/repo/pull/456',
+        baseRefName: undefined,
+        headRefName: 'fix/auth-bug',
+        comments: [{ author: 'commenter1', body: 'Update tests' }],
+        reviews: [{ author: 'reviewer1', body: 'Fix null check' }],
+        files: ['src/auth.ts'],
+      });
+      mockExecuteTask.mockResolvedValueOnce(true);
+      mockCreatePullRequest.mockReturnValueOnce({ success: true, url: 'https://github.com/org/repo/pull/1' });
+
+      const exitCode = await executePipeline({
+        prNumber: 456,
+        piece: 'default',
+        autoPr: true,
+        cwd: '/tmp/test',
+      });
+
+      expect(exitCode).toBe(0);
+      expect(mockCreatePullRequest).toHaveBeenCalledTimes(1);
+      const prOptions = mockCreatePullRequest.mock.calls[0]?.[1] as { base?: string };
+      expect(prOptions.base).toBe('develop');
+      expect(prOptions.base).not.toBeUndefined();
     });
   });
 });

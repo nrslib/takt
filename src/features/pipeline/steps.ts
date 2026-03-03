@@ -1,10 +1,3 @@
-/**
- * Pipeline step implementations
- *
- * Each function encapsulates one step of the pipeline,
- * keeping the orchestrator at a consistent abstraction level.
- */
-
 import { execFileSync } from 'node:child_process';
 import { formatIssueAsTask, buildPrBody, formatPrReviewAsTask } from '../../infra/github/index.js';
 import { getGitProvider, type Issue } from '../../infra/git/index.js';
@@ -14,23 +7,42 @@ import { info, error, success } from '../../shared/ui/index.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
 import type { PipelineConfig } from '../../core/models/index.js';
 
-// ---- Types ----
-
 export interface TaskContent {
   task: string;
   issue?: Issue;
-  /** PR head branch name (set when using --pr) */
   prBranch?: string;
+  prBaseBranch?: string;
 }
 
-export interface ExecutionContext {
+export interface GitExecutionContext {
   execCwd: string;
-  branch?: string;
-  baseBranch?: string;
   isWorktree: boolean;
+  branch: string;
+  baseBranch: string;
 }
 
-// ---- Template helpers ----
+export interface SkipGitExecutionContext {
+  execCwd: string;
+  isWorktree: false;
+  branch: undefined;
+  baseBranch: undefined;
+}
+
+export type ExecutionContext = GitExecutionContext | SkipGitExecutionContext;
+
+function requireBaseBranch(baseBranch: string | undefined, context: string): string {
+  if (!baseBranch) {
+    throw new Error(`Base branch is required (${context})`);
+  }
+  return baseBranch;
+}
+
+function requireBranch(branch: string | undefined, context: string): string {
+  if (!branch) {
+    throw new Error(`Branch is required (${context})`);
+  }
+  return branch;
+}
 
 function expandTemplate(template: string, vars: Record<string, string>): string {
   return template.replace(/\{(\w+)\}/g, (match, key: string) => vars[key] ?? match);
@@ -61,6 +73,11 @@ export function buildCommitMessage(
     : `takt: ${taskText ?? 'pipeline task'}`;
 }
 
+function resolveExecutionBaseBranch(cwd: string, preferredBaseBranch?: string): string {
+  const { branch } = resolveBaseBranch(cwd, preferredBaseBranch);
+  return requireBaseBranch(branch, 'execution context');
+}
+
 function buildPipelinePrBody(
   pipelineConfig: PipelineConfig | undefined,
   issue: Issue | undefined,
@@ -78,9 +95,6 @@ function buildPipelinePrBody(
   return buildPrBody(issue ? [issue] : undefined, report);
 }
 
-// ---- Step 1: Resolve task content ----
-
-/** Fetch a GitHub resource with CLI availability check and error handling. */
 function fetchGitHubResource<T>(
   label: string,
   fetch: (provider: ReturnType<typeof getGitProvider>) => T,
@@ -109,7 +123,11 @@ export function resolveTaskContent(options: PipelineExecutionOptions): TaskConte
     if (!prReview) return undefined;
     const task = formatPrReviewAsTask(prReview);
     success(`PR #${options.prNumber} fetched: "${prReview.title}"`);
-    return { task, prBranch: prReview.headRefName };
+    return {
+      task,
+      prBranch: prReview.headRefName,
+      prBaseBranch: prReview.baseRefName,
+    };
   }
   if (options.issueNumber) {
     info(`Fetching issue #${options.issueNumber}...`);
@@ -129,40 +147,55 @@ export function resolveTaskContent(options: PipelineExecutionOptions): TaskConte
   return undefined;
 }
 
-// ---- Step 2: Resolve execution context ----
-
 export async function resolveExecutionContext(
   cwd: string,
   task: string,
   options: Pick<PipelineExecutionOptions, 'createWorktree' | 'skipGit' | 'branch' | 'issueNumber'>,
   pipelineConfig: PipelineConfig | undefined,
   prBranch?: string,
+  prBaseBranch?: string,
 ): Promise<ExecutionContext> {
   if (options.createWorktree) {
-    const result = await confirmAndCreateWorktree(cwd, task, options.createWorktree, prBranch);
+    const result = await confirmAndCreateWorktree(cwd, task, options.createWorktree, prBranch, prBaseBranch);
+    const branch = requireBranch(result.branch, 'worktree execution');
+    const baseBranch = requireBaseBranch(result.baseBranch, 'worktree execution');
     if (result.isWorktree) {
       success(`Worktree created: ${result.execCwd}`);
     }
-    return { execCwd: result.execCwd, branch: result.branch, baseBranch: result.baseBranch, isWorktree: result.isWorktree };
+    return {
+      execCwd: result.execCwd,
+      branch,
+      baseBranch,
+      isWorktree: result.isWorktree,
+    };
   }
   if (options.skipGit) {
-    return { execCwd: cwd, isWorktree: false };
+    return {
+      execCwd: cwd,
+      isWorktree: false,
+      branch: undefined,
+      baseBranch: undefined,
+    };
   }
   if (prBranch) {
     info(`Fetching and checking out PR branch: ${prBranch}`);
     checkoutBranch(cwd, prBranch);
     success(`Checked out PR branch: ${prBranch}`);
-    return { execCwd: cwd, branch: prBranch, baseBranch: resolveBaseBranch(cwd).branch, isWorktree: false };
+    const baseBranch = resolveExecutionBaseBranch(cwd, prBaseBranch);
+    return {
+      execCwd: cwd,
+      branch: prBranch,
+      baseBranch,
+      isWorktree: false,
+    };
   }
-  const resolved = resolveBaseBranch(cwd);
+  const baseBranch = resolveExecutionBaseBranch(cwd);
   const branch = options.branch ?? generatePipelineBranchName(pipelineConfig, options.issueNumber);
   info(`Creating branch: ${branch}`);
   execFileSync('git', ['checkout', '-b', branch], { cwd, stdio: 'pipe' });
   success(`Branch created: ${branch}`);
-  return { execCwd: cwd, branch, baseBranch: resolved.branch, isWorktree: false };
+  return { execCwd: cwd, branch, baseBranch, isWorktree: false };
 }
-
-// ---- Step 3: Run piece ----
 
 export async function runPiece(
   projectCwd: string,
@@ -192,8 +225,6 @@ export async function runPiece(
   return true;
 }
 
-// ---- Step 4: Commit & push ----
-
 export function commitAndPush(
   execCwd: string,
   projectCwd: string,
@@ -211,7 +242,6 @@ export function commitAndPush(
     }
 
     if (isWorktree) {
-      // Clone has no origin — push to main project via path, then project pushes to origin
       execFileSync('git', ['push', projectCwd, 'HEAD'], { cwd: execCwd, stdio: 'pipe' });
     }
 
@@ -225,18 +255,17 @@ export function commitAndPush(
   }
 }
 
-// ---- Step 5: Submit pull request ----
-
 export function submitPullRequest(
   projectCwd: string,
   branch: string,
-  baseBranch: string | undefined,
+  baseBranch: string,
   taskContent: TaskContent,
   piece: string,
   pipelineConfig: PipelineConfig | undefined,
   options: Pick<PipelineExecutionOptions, 'task' | 'repo' | 'draftPr'>,
 ): string | undefined {
   info('Creating pull request...');
+  const resolvedBaseBranch = requireBaseBranch(baseBranch, 'pull request creation');
   const prTitle = taskContent.issue ? `[#${taskContent.issue.number}] ${taskContent.issue.title}` : (options.task ?? 'Pipeline task');
   const report = `Piece \`${piece}\` completed successfully.`;
   const prBody = buildPipelinePrBody(pipelineConfig, taskContent.issue, report);
@@ -245,7 +274,7 @@ export function submitPullRequest(
     branch,
     title: prTitle,
     body: prBody,
-    base: baseBranch,
+    base: resolvedBaseBranch,
     repo: options.repo,
     draft: options.draftPr,
   });

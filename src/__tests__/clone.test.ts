@@ -1,7 +1,3 @@
-/**
- * Tests for clone module (cloneAndIsolate git config propagation)
- */
-
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const { mockLogInfo, mockLogDebug, mockLogError } = vi.hoisted(() => ({
@@ -425,6 +421,98 @@ describe('resolveBaseBranch', () => {
     expect(cloneCalls[0]).toContain('develop');
   });
 
+  it('should use explicit baseBranch from options when provided', () => {
+    const cloneCalls: string[][] = [];
+
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+
+      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--abbrev-ref') {
+        return 'main\n';
+      }
+      if (argsArr[0] === 'symbolic-ref' && argsArr[1] === 'refs/remotes/origin/HEAD') {
+        return 'refs/remotes/origin/develop\n';
+      }
+      if (argsArr[0] === 'clone') {
+        cloneCalls.push(argsArr);
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'remote') {
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'config') {
+        if (argsArr[1] === '--local') {
+          throw new Error('not set');
+        }
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--verify') {
+        const ref = argsArr[2] === '--' ? argsArr[3] : argsArr[2];
+        if (ref === 'release/main' || ref === 'origin/release/main') {
+          return Buffer.from('');
+        }
+        throw new Error('branch not found');
+      }
+      if (argsArr[0] === 'checkout') {
+        return Buffer.from('');
+      }
+
+      return Buffer.from('');
+    });
+
+    createSharedClone('/project', ({
+      worktree: true,
+      taskSlug: 'explicit-base-branch',
+      baseBranch: 'release/main',
+    } as unknown) as { worktree: true; taskSlug: string; baseBranch: string });
+
+    expect(cloneCalls).toHaveLength(1);
+    expect(cloneCalls[0]).toContain('--branch');
+    expect(cloneCalls[0]).toContain('release/main');
+  });
+
+  it('should throw when explicit baseBranch is whitespace', () => {
+    expect(() => createSharedClone('/project', {
+      worktree: true,
+      taskSlug: 'whitespace-base-branch',
+      baseBranch: '   ',
+    })).toThrow('Base branch override must not be empty.');
+  });
+
+  it('should throw when explicit baseBranch is invalid ref', () => {
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'check-ref-format') {
+        throw new Error('invalid ref');
+      }
+      return Buffer.from('');
+    });
+
+    expect(() => createSharedClone('/project', {
+      worktree: true,
+      taskSlug: 'invalid-base-branch',
+      baseBranch: 'invalid..name',
+    })).toThrow('Invalid base branch: invalid..name');
+  });
+
+  it('should throw when explicit baseBranch does not exist locally or on origin', () => {
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+
+      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--verify') {
+        throw new Error('branch not found');
+      }
+
+      return Buffer.from('');
+    });
+
+    expect(() => createSharedClone('/project', {
+      worktree: true,
+      taskSlug: 'missing-base-branch',
+      baseBranch: 'missing/branch',
+    })).toThrow('Base branch does not exist: missing/branch');
+  });
+
   it('should continue clone creation when fetch fails (network error)', () => {
     // Given: fetch throws (no network)
     mockExecFileSync.mockImplementation((_cmd, args) => {
@@ -593,7 +681,7 @@ describe('branchExists remote tracking branch fallback', () => {
 
       // branchExists: git rev-parse --verify <branch>
       if (argsArr[0] === 'rev-parse' && argsArr[1] === '--verify') {
-        const ref = argsArr[2];
+        const ref = argsArr[2] === '--' ? argsArr[3] : argsArr[2];
         if (typeof ref === 'string' && ref.startsWith('origin/')) {
           // Remote tracking branch exists
           return Buffer.from('abc123');
@@ -966,6 +1054,7 @@ describe('cleanupOrphanedClone path traversal protection', () => {
     vi.mocked(fs.readFileSync).mockReturnValueOnce(
       JSON.stringify({ clonePath: '/etc/malicious' })
     );
+    vi.mocked(fs.existsSync).mockReturnValueOnce(true);
 
     cleanupOrphanedClone(PROJECT_DIR, BRANCH);
 
@@ -982,7 +1071,7 @@ describe('cleanupOrphanedClone path traversal protection', () => {
     vi.mocked(fs.readFileSync).mockReturnValueOnce(
       JSON.stringify({ clonePath: validClonePath })
     );
-    vi.mocked(fs.existsSync).mockReturnValueOnce(true);
+    vi.mocked(fs.existsSync).mockReturnValueOnce(true).mockReturnValueOnce(true);
 
     cleanupOrphanedClone(PROJECT_DIR, BRANCH);
 

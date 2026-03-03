@@ -1,16 +1,3 @@
-/**
- * Pipeline orchestration
- *
- * Thin orchestrator that coordinates pipeline steps:
- *   1. Resolve task content
- *   2. Prepare execution environment
- *   3. Run piece
- *   4. Commit & push
- *   5. Create PR
- *
- * Each step is implemented in steps.ts.
- */
-
 import { resolveConfigValues } from '../../infra/config/index.js';
 import { info, error, status, blankLine } from '../../shared/ui/index.js';
 import { createLogger, getErrorMessage, getSlackWebhookUrl, sendSlackNotification, buildSlackRunSummary } from '../../shared/utils/index.js';
@@ -37,8 +24,6 @@ export type { PipelineExecutionOptions };
 
 const log = createLogger('pipeline');
 
-// ---- Pipeline orchestration ----
-
 interface PipelineOutcome {
   exitCode: number;
   result: PipelineResult;
@@ -52,25 +37,28 @@ async function runPipeline(options: PipelineExecutionOptions): Promise<PipelineO
     success: false, piece, issueNumber: options.issueNumber, ...overrides,
   });
 
-  // Step 1: Resolve task content
   const taskContent = resolveTaskContent(options);
   if (!taskContent) return { exitCode: EXIT_ISSUE_FETCH_FAILED, result: buildResult() };
 
-  // Step 2: Prepare execution environment
   let context: ExecutionContext;
   try {
-    context = await resolveExecutionContext(cwd, taskContent.task, options, pipelineConfig, taskContent.prBranch);
+    context = await resolveExecutionContext(
+      cwd,
+      taskContent.task,
+      options,
+      pipelineConfig,
+      taskContent.prBranch,
+      taskContent.prBaseBranch,
+    );
   } catch (err) {
     error(`Failed to prepare execution environment: ${getErrorMessage(err)}`);
     return { exitCode: EXIT_GIT_OPERATION_FAILED, result: buildResult() };
   }
 
-  // Step 3: Run piece
   log.info('Pipeline piece execution starting', { piece, branch: context.branch, skipGit, issueNumber: options.issueNumber });
   const pieceOk = await runPiece(cwd, piece, taskContent.task, context.execCwd, options);
   if (!pieceOk) return { exitCode: EXIT_PIECE_FAILED, result: buildResult({ branch: context.branch }) };
 
-  // Step 4: Commit & push
   if (!skipGit && context.branch) {
     const commitMessage = buildCommitMessage(pipelineConfig, taskContent.issue, options.task);
     if (!commitAndPush(context.execCwd, cwd, context.branch, commitMessage, context.isWorktree)) {
@@ -78,7 +66,6 @@ async function runPipeline(options: PipelineExecutionOptions): Promise<PipelineO
     }
   }
 
-  // Step 5: Create PR
   let prUrl: string | undefined;
   if (autoPr && !skipGit && context.branch) {
     prUrl = submitPullRequest(cwd, context.branch, context.baseBranch, taskContent, piece, pipelineConfig, options);
@@ -87,7 +74,6 @@ async function runPipeline(options: PipelineExecutionOptions): Promise<PipelineO
     info('--auto-pr is ignored when --skip-git is specified (no push was performed)');
   }
 
-  // Summary
   blankLine();
   status('Issue', taskContent.issue ? `#${taskContent.issue.number} "${taskContent.issue.title}"` : 'N/A');
   status('Branch', context.branch ?? '(current)');
@@ -96,14 +82,6 @@ async function runPipeline(options: PipelineExecutionOptions): Promise<PipelineO
 
   return { exitCode: 0, result: buildResult({ success: true, branch: context.branch, prUrl }) };
 }
-
-// ---- Public API ----
-
-/**
- * Execute the full pipeline.
- *
- * Returns a process exit code (0 on success, 2-5 on specific failures).
- */
 export async function executePipeline(options: PipelineExecutionOptions): Promise<number> {
   const startTime = Date.now();
   const runId = generateRunId();
@@ -118,8 +96,6 @@ export async function executePipeline(options: PipelineExecutionOptions): Promis
   }
 }
 
-// ---- Slack notification ----
-
 interface PipelineResult {
   success: boolean;
   piece: string;
@@ -128,7 +104,6 @@ interface PipelineResult {
   prUrl?: string;
 }
 
-/** Send Slack notification if webhook is configured. Never throws. */
 async function notifySlack(runId: string, startTime: number, result: PipelineResult): Promise<void> {
   const webhookUrl = getSlackWebhookUrl();
   if (!webhookUrl) return;

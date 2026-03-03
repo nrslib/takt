@@ -40,6 +40,11 @@ vi.mock('../features/tasks/execute/selectAndExecute.js', () => ({
 vi.mock('../infra/task/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   summarizeTaskName: vi.fn().mockResolvedValue('test-task'),
+  getCurrentBranch: vi.fn().mockReturnValue('main'),
+}));
+
+vi.mock('../infra/task/clone-base-branch.js', () => ({
+  branchExists: vi.fn(),
 }));
 
 vi.mock('../infra/git/index.js', () => ({
@@ -76,6 +81,8 @@ import { promptInput, confirm } from '../shared/prompt/index.js';
 import { error, info } from '../shared/ui/index.js';
 import { determinePiece } from '../features/tasks/execute/selectAndExecute.js';
 import { addTask } from '../features/tasks/index.js';
+import { getCurrentBranch } from '../infra/task/index.js';
+import { branchExists } from '../infra/task/clone-base-branch.js';
 import type { PrReviewData } from '../infra/git/index.js';
 
 const mockInteractiveMode = vi.mocked(interactiveMode);
@@ -84,6 +91,8 @@ const mockConfirm = vi.mocked(confirm);
 const mockInfo = vi.mocked(info);
 const mockError = vi.mocked(error);
 const mockDeterminePiece = vi.mocked(determinePiece);
+const mockGetCurrentBranch = vi.mocked(getCurrentBranch);
+const mockBranchExists = vi.mocked(branchExists);
 
 let testDir: string;
 
@@ -96,7 +105,7 @@ function addTaskWithPrOption(cwd: string, task: string, prNumber: number): Promi
   return addTask(cwd, task, { prNumber });
 }
 
-function createMockPrReview(overrides: Partial<PrReviewData> = {}): PrReviewData {
+function createMockPrReview(overrides: Partial<PrReviewData & { baseRefName?: string }> = {}): PrReviewData {
   return {
     number: 456,
     title: 'Fix auth bug',
@@ -107,7 +116,7 @@ function createMockPrReview(overrides: Partial<PrReviewData> = {}): PrReviewData
     reviews: [{ author: 'reviewer', body: 'Fix null check' }],
     files: ['src/auth.ts'],
     ...overrides,
-  };
+  } as PrReviewData;
 }
 
 beforeEach(() => {
@@ -115,6 +124,8 @@ beforeEach(() => {
   testDir = fs.mkdtempSync(path.join(tmpdir(), 'takt-test-'));
   mockDeterminePiece.mockResolvedValue('default');
   mockConfirm.mockResolvedValue(false);
+  mockGetCurrentBranch.mockReturnValue('main');
+  mockBranchExists.mockReturnValue(true);
   mockCheckCliStatus.mockReturnValue({ available: true });
 });
 
@@ -169,6 +180,61 @@ describe('addTask', () => {
     expect(task.auto_pr).toBe(true);
   });
 
+  it('should set base_branch when current branch is not main/master and user confirms', async () => {
+    mockGetCurrentBranch.mockReturnValue('feat/awesome');
+    mockConfirm.mockResolvedValueOnce(true);
+    mockPromptInput.mockResolvedValueOnce('').mockResolvedValueOnce('');
+    mockConfirm.mockResolvedValueOnce(false);
+
+    await addTask(testDir, 'Task content');
+
+    const task = loadTasks(testDir).tasks[0]!;
+    expect(task.base_branch).toBe('feat/awesome');
+  });
+
+  it('should not set base_branch when current branch prompt is declined', async () => {
+    mockGetCurrentBranch.mockReturnValue('feat/awesome');
+    mockConfirm.mockResolvedValueOnce(false);
+    mockPromptInput.mockResolvedValueOnce('').mockResolvedValueOnce('');
+
+    await addTask(testDir, 'Task content');
+
+    const task = loadTasks(testDir).tasks[0]!;
+    expect(task.base_branch).toBeUndefined();
+    expect(mockBranchExists).not.toHaveBeenCalled();
+  });
+
+  it('should skip base branch prompt when current branch detection fails', async () => {
+    mockGetCurrentBranch.mockImplementationOnce(() => {
+      throw new Error('not a git repository');
+    });
+
+    await addTask(testDir, 'Task content');
+
+    expect(mockConfirm).toHaveBeenCalledTimes(1);
+    expect(mockConfirm).toHaveBeenCalledWith('Auto-create PR?', true);
+    expect(mockConfirm).not.toHaveBeenCalledWith(expect.stringContaining('現在のブランチ'));
+    const task = loadTasks(testDir).tasks[0]!;
+    expect(task.base_branch).toBeUndefined();
+  });
+
+  it('should reprompt when base branch does not exist', async () => {
+    mockGetCurrentBranch.mockReturnValue('feat/missing');
+    mockConfirm.mockResolvedValueOnce(true);
+    mockBranchExists.mockReturnValueOnce(false).mockReturnValueOnce(true);
+    mockPromptInput
+      .mockResolvedValueOnce('develop')
+      .mockResolvedValueOnce('')
+      .mockResolvedValueOnce('');
+    mockConfirm.mockResolvedValueOnce(false);
+
+    await addTask(testDir, 'Task content');
+
+    const task = loadTasks(testDir).tasks[0]!;
+    expect(task.base_branch).toBe('develop');
+    expect(mockError).toHaveBeenCalledWith('Base branch does not exist: feat/missing');
+  });
+
   it('should create task from issue reference without interactive mode', async () => {
     mockResolveIssueTask.mockReturnValue('Issue #99: Fix login timeout');
 
@@ -212,6 +278,18 @@ describe('addTask', () => {
     expect(task.worktree).toBe(true);
     expect(task.draft_pr).toBeUndefined();
     expect(readOrderContent(testDir, task.task_dir)).toContain(formattedTask);
+  });
+
+  it('should store PR base_ref as base_branch when adding with --pr', async () => {
+    const prReview = createMockPrReview({ baseRefName: 'release/main' });
+    const formattedTask = '## PR #456 Review Comments: Fix auth bug';
+    mockFetchPrReviewComments.mockReturnValue(prReview);
+    mockFormatPrReviewAsTask.mockReturnValue(formattedTask);
+
+    await addTaskWithPrOption(testDir, 'placeholder', 456);
+
+    const task = loadTasks(testDir).tasks[0]!;
+    expect(task.base_branch).toBe('release/main');
   });
 
   it('should not create a PR task when PR has no review comments', async () => {

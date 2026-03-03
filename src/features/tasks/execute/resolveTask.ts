@@ -1,17 +1,22 @@
-/**
- * Resolve execution directory and piece from task data.
- */
-
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { resolvePieceConfigValue } from '../../../infra/config/index.js';
-import { type TaskInfo, createSharedClone, summarizeTaskName, detectDefaultBranch } from '../../../infra/task/index.js';
+import { type TaskInfo, buildTaskInstruction, createSharedClone, resolveBaseBranch, summarizeTaskName } from '../../../infra/task/index.js';
 import { getGitProvider, type Issue } from '../../../infra/git/index.js';
 import { withProgress } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { getTaskSlugFromTaskDir } from '../../../shared/utils/taskPaths.js';
 
 const log = createLogger('task');
+
+function resolveTaskDataBaseBranch(taskData: TaskInfo['data']): string | undefined {
+  return taskData?.base_branch;
+}
+
+function resolveTaskBaseBranch(projectDir: string, taskData: TaskInfo['data']): string {
+  const preferredBaseBranch = resolveTaskDataBaseBranch(taskData);
+  return resolveBaseBranch(projectDir, preferredBaseBranch).branch;
+}
 
 export interface ResolvedTaskExecution {
   execCwd: string;
@@ -31,17 +36,6 @@ export interface ResolvedTaskExecution {
   initialIterationOverride?: number;
 }
 
-function buildRunTaskDirInstruction(reportDirName: string): string {
-  const runTaskDir = `.takt/runs/${reportDirName}/context/task`;
-  const orderFile = `${runTaskDir}/order.md`;
-  return [
-    `Implement using only the files in \`${runTaskDir}\`.`,
-    `Primary spec: \`${orderFile}\`.`,
-    'Use report files in Report Directory as primary execution history.',
-    'Do not rely on previous response or conversation summary.',
-  ].join('\n');
-}
-
 function stageTaskSpecForExecution(
   projectCwd: string,
   execCwd: string,
@@ -58,7 +52,9 @@ function stageTaskSpecForExecution(
   fs.mkdirSync(targetTaskDir, { recursive: true });
   fs.copyFileSync(sourceOrderPath, targetOrderPath);
 
-  return buildRunTaskDirInstruction(reportDirName);
+  const runTaskDir = `.takt/runs/${reportDirName}/context/task`;
+  const orderFile = `${runTaskDir}/order.md`;
+  return buildTaskInstruction(runTaskDir, orderFile);
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
@@ -67,10 +63,6 @@ function throwIfAborted(signal?: AbortSignal): void {
   }
 }
 
-/**
- * Resolve a GitHub issue from task data's issue number.
- * Returns issue array for buildPrBody, or undefined if no issue or gh CLI unavailable.
- */
 export function resolveTaskIssue(issueNumber: number | undefined): Issue[] | undefined {
   if (issueNumber === undefined) {
     return undefined;
@@ -92,11 +84,6 @@ export function resolveTaskIssue(issueNumber: number | undefined): Issue[] | und
   }
 }
 
-/**
- * Resolve execution directory and piece from task data.
- * If the task has worktree settings, create a shared clone and use it as cwd.
- * Task name is summarized to English by AI for use in branch/clone names.
- */
 export async function resolveTaskExecution(
   task: TaskInfo,
   defaultCwd: string,
@@ -117,6 +104,7 @@ export async function resolveTaskExecution(
   let branch: string | undefined;
   let worktreePath: string | undefined;
   let baseBranch: string | undefined;
+  const preferredBaseBranch = resolveTaskDataBaseBranch(data);
   if (task.taskDir) {
     const taskSlug = getTaskSlugFromTaskDir(task.taskDir);
     if (!taskSlug) {
@@ -127,10 +115,9 @@ export async function resolveTaskExecution(
 
   if (data.worktree) {
     throwIfAborted(abortSignal);
-    baseBranch = detectDefaultBranch(defaultCwd);
+    baseBranch = resolveTaskBaseBranch(defaultCwd, data);
 
     if (task.worktreePath && fs.existsSync(task.worktreePath)) {
-      // Reuse existing worktree (clone still on disk from previous execution)
       execCwd = task.worktreePath;
       branch = data.branch;
       worktreePath = task.worktreePath;
@@ -149,6 +136,7 @@ export async function resolveTaskExecution(
         async () => createSharedClone(defaultCwd, {
           worktree: data.worktree!,
           branch: data.branch,
+          ...(preferredBaseBranch ? { baseBranch: preferredBaseBranch } : {}),
           taskSlug,
           issueNumber: data.issue,
         }),

@@ -1,10 +1,3 @@
-/**
- * Tests for PR resolution in routing module.
- *
- * Verifies that --pr option fetches review comments
- * and passes formatted task to interactive mode.
- */
-
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -117,11 +110,12 @@ vi.mock('../app/cli/helpers.js', () => ({
   isDirectTask: vi.fn(() => false),
 }));
 
-import { selectAndExecuteTask, determinePiece } from '../features/tasks/index.js';
+import { selectAndExecuteTask, determinePiece, saveTaskFromInteractive } from '../features/tasks/index.js';
 import { interactiveMode } from '../features/interactive/index.js';
 import { executePipeline } from '../features/pipeline/index.js';
 import { executeDefaultAction } from '../app/cli/routing.js';
 import { error as logError } from '../shared/ui/index.js';
+import type { InteractiveModeResult } from '../features/interactive/index.js';
 import type { PrReviewData } from '../infra/git/index.js';
 
 const mockSelectAndExecuteTask = vi.mocked(selectAndExecuteTask);
@@ -129,8 +123,9 @@ const mockDeterminePiece = vi.mocked(determinePiece);
 const mockInteractiveMode = vi.mocked(interactiveMode);
 const mockExecutePipeline = vi.mocked(executePipeline);
 const mockLogError = vi.mocked(logError);
+const mockSaveTaskFromInteractive = vi.mocked(saveTaskFromInteractive);
 
-function createMockPrReview(overrides: Partial<PrReviewData> = {}): PrReviewData {
+function createMockPrReview(overrides: Partial<PrReviewData & { baseRefName?: string }> = {}): PrReviewData {
   return {
     number: 456,
     title: 'Fix auth bug',
@@ -176,6 +171,37 @@ describe('PR resolution in routing', () => {
         undefined,
         undefined,
         { excludeActions: ['create_issue'] },
+      );
+    });
+
+    it('should pass PR base branch as baseBranch when interactive save_task is selected', async () => {
+      // Given
+      mockOpts.pr = 456;
+      const actionResult: InteractiveModeResult = {
+        action: 'save_task',
+        task: 'Saved PR task',
+      };
+      mockInteractiveMode.mockResolvedValue(actionResult);
+      const prReview = createMockPrReview({ baseRefName: 'release/main', headRefName: 'feat/my-pr-branch' });
+      mockCheckCliStatus.mockReturnValue({ available: true });
+      mockFetchPrReviewComments.mockReturnValue(prReview);
+
+      // When
+      await executeDefaultAction();
+
+      // Then
+      expect(mockSaveTaskFromInteractive).toHaveBeenCalledWith(
+        '/test/cwd',
+        'Saved PR task',
+        'default',
+        expect.objectContaining({
+          presetSettings: expect.objectContaining({
+            worktree: true,
+            branch: 'feat/my-pr-branch',
+            autoPr: false,
+            baseBranch: 'release/main',
+          }),
+        }),
       );
     });
 

@@ -1,10 +1,3 @@
-/**
- * Task execution orchestration.
- *
- * Coordinates piece selection and in-place task execution.
- * Extracted from cli.ts to avoid mixing CLI parsing with business logic.
- */
-
 import {
   loadPieceByIdentifier,
   isPiecePath,
@@ -42,6 +35,7 @@ export async function confirmAndCreateWorktree(
   task: string,
   createWorktreeOverride?: boolean | undefined,
   branchOverride?: string,
+  baseBranchOverride?: string,
 ): Promise<WorktreeConfirmationResult> {
   const useWorktree =
     typeof createWorktreeOverride === 'boolean'
@@ -52,7 +46,7 @@ export async function confirmAndCreateWorktree(
     return { execCwd: cwd, isWorktree: false };
   }
 
-  const baseBranch = resolveBaseBranch(cwd).branch;
+  const baseBranch = resolveBaseBranch(cwd, baseBranchOverride).branch;
 
   const taskSlug = await withProgress(
     'Generating branch name...',
@@ -63,20 +57,17 @@ export async function confirmAndCreateWorktree(
   const result = await withProgress(
     'Creating clone...',
     (cloneResult) => `Clone created: ${cloneResult.path} (branch: ${cloneResult.branch})`,
-    async () => createSharedClone(cwd, {
-      worktree: true,
-      taskSlug,
-      ...(branchOverride ? { branch: branchOverride } : {}),
-    }),
-  );
+        async () => createSharedClone(cwd, {
+          worktree: true,
+          taskSlug,
+          ...(baseBranchOverride ? { baseBranch: baseBranchOverride } : {}),
+          ...(branchOverride ? { branch: branchOverride } : {}),
+        }),
+      );
 
   return { execCwd: result.path, isWorktree: true, branch: result.branch, baseBranch, taskSlug };
 }
 
-/**
- * Execute a task with piece selection.
- * Shared by direct task execution and interactive mode.
- */
 export async function selectAndExecuteTask(
   cwd: string,
   task: string,
@@ -90,7 +81,6 @@ export async function selectAndExecuteTask(
     return;
   }
 
-  // execute action always runs in-place (no worktree prompt/creation).
   const execCwd = cwd;
   log.info('Starting task execution', { piece: pieceIdentifier, worktree: false });
   const taskRunner = new TaskRunner(cwd);
