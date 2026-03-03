@@ -91,8 +91,8 @@ YAMLから以下を抽出する（→ references/yaml-schema.md 参照）:
 ピースYAMLのセクションマップ（`personas:`, `policies:`, `instructions:`, `output_contracts:`, `knowledge:`）から全ファイルパスを収集する。
 パスは **ピースYAMLファイルのディレクトリからの相対パス** で解決する。
 
-例: ピースが `~/.claude/skills/takt/pieces/default.yaml` にあり、`personas:` に `coder: ../personas/coder.md` がある場合
-→ 絶対パスは `~/.claude/skills/takt/personas/coder.md`
+例: ピースが `~/.claude/skills/takt/pieces/default.yaml` にあり、`personas:` に `coder: ../facets/personas/coder.md` がある場合
+→ 絶対パスは `~/.claude/skills/takt/facets/personas/coder.md`
 
 重複を除いて Read で全て読み込む。読み込んだ内容はチームメイトへのプロンプト構築に使う。
 

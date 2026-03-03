@@ -39,8 +39,6 @@ const DIRECT_DIRS = ['pieces', 'templates'] as const;
 /** Facet directories under builtins/{lang}/facets/ */
 const FACET_DIRS = ['personas', 'policies', 'instructions', 'knowledge', 'output-contracts'] as const;
 
-/** All resource directory names (used for summary filtering) */
-const RESOURCE_DIRS = [...DIRECT_DIRS, ...FACET_DIRS] as const;
 
 /**
  * Deploy takt skill to Claude Code (~/.claude/).
@@ -95,11 +93,12 @@ export async function deploySkill(): Promise<void> {
     copyDirRecursive(srcDir, destDir, copiedFiles);
   }
 
-  // 4. Deploy facet directories from builtins/{lang}/facets/
+  // 4. Deploy facet directories from builtins/{lang}/facets/ (preserving facets/ structure)
+  const facetsDestDir = join(skillDir, 'facets');
+  cleanDir(facetsDestDir);
   for (const dir of FACET_DIRS) {
     const srcDir = join(langResourcesDir, 'facets', dir);
-    const destDir = join(skillDir, dir);
-    cleanDir(destDir);
+    const destDir = join(facetsDestDir, dir);
     copyDirRecursive(srcDir, destDir, copiedFiles);
   }
 
@@ -114,14 +113,17 @@ export async function deploySkill(): Promise<void> {
     const skillFiles = copiedFiles.filter(
       (f) =>
         f.startsWith(skillDir) &&
-        !RESOURCE_DIRS.some((dir) => f.includes(`/${dir}/`)),
+        !f.includes('/pieces/') &&
+        !f.includes('/facets/') &&
+        !f.includes('/templates/') &&
+        !f.includes('/references/'),
     );
     const pieceFiles = copiedFiles.filter((f) => f.includes('/pieces/'));
-    const personaFiles = copiedFiles.filter((f) => f.includes('/personas/'));
-    const policyFiles = copiedFiles.filter((f) => f.includes('/policies/'));
-    const instructionFiles = copiedFiles.filter((f) => f.includes('/instructions/'));
-    const knowledgeFiles = copiedFiles.filter((f) => f.includes('/knowledge/'));
-    const outputContractFiles = copiedFiles.filter((f) => f.includes('/output-contracts/'));
+    const personaFiles = copiedFiles.filter((f) => f.includes('/facets/personas/'));
+    const policyFiles = copiedFiles.filter((f) => f.includes('/facets/policies/'));
+    const instructionFiles = copiedFiles.filter((f) => f.includes('/facets/instructions/'));
+    const knowledgeFiles = copiedFiles.filter((f) => f.includes('/facets/knowledge/'));
+    const outputContractFiles = copiedFiles.filter((f) => f.includes('/facets/output-contracts/'));
     const templateFiles = copiedFiles.filter((f) => f.includes('/templates/'));
 
     if (skillFiles.length > 0) {

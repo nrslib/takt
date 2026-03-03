@@ -67,9 +67,9 @@ Task tool:
 3. movement の `persona: coder` → `personas:` セクションの `coder` キー → ファイルパス → Read で内容を取得
 
 例: ピースが `~/.claude/skills/takt/pieces/default.yaml` の場合
-- `personas.coder: ../personas/coder.md` → `~/.claude/skills/takt/personas/coder.md`
-- `policies.coding: ../policies/coding.md` → `~/.claude/skills/takt/policies/coding.md`
-- `instructions.plan: ../instructions/plan.md` → `~/.claude/skills/takt/instructions/plan.md`
+- `personas.coder: ../facets/personas/coder.md` → `~/.claude/skills/takt/facets/personas/coder.md`
+- `policies.coding: ../facets/policies/coding.md` → `~/.claude/skills/takt/facets/policies/coding.md`
+- `instructions.plan: ../facets/instructions/plan.md` → `~/.claude/skills/takt/facets/instructions/plan.md`
 
 ## プロンプト構築
 

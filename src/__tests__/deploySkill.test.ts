@@ -132,11 +132,11 @@ describe('deploySkill', () => {
 
       // Verify each resource directory is copied
       expect(existsSync(join(skillDir, 'pieces', 'default.yaml'))).toBe(true);
-      expect(existsSync(join(skillDir, 'personas', 'coder.md'))).toBe(true);
-      expect(existsSync(join(skillDir, 'policies', 'coding.md'))).toBe(true);
-      expect(existsSync(join(skillDir, 'instructions', 'init.md'))).toBe(true);
-      expect(existsSync(join(skillDir, 'knowledge', 'patterns.md'))).toBe(true);
-      expect(existsSync(join(skillDir, 'output-contracts', 'summary.md'))).toBe(true);
+      expect(existsSync(join(skillDir, 'facets', 'personas', 'coder.md'))).toBe(true);
+      expect(existsSync(join(skillDir, 'facets', 'policies', 'coding.md'))).toBe(true);
+      expect(existsSync(join(skillDir, 'facets', 'instructions', 'init.md'))).toBe(true);
+      expect(existsSync(join(skillDir, 'facets', 'knowledge', 'patterns.md'))).toBe(true);
+      expect(existsSync(join(skillDir, 'facets', 'output-contracts', 'summary.md'))).toBe(true);
       expect(existsSync(join(skillDir, 'templates', 'task.md'))).toBe(true);
     });
   });
