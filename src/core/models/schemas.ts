@@ -444,6 +444,8 @@ export const GlobalConfigSchema = z.object({
   log_level: z.enum(['debug', 'info', 'warn', 'error']).optional().default('info'),
   provider: z.enum(['claude', 'codex', 'opencode', 'cursor', 'copilot', 'mock']).optional().default('claude'),
   model: z.string().optional(),
+  /** Default piece name for new tasks */
+  piece: z.string().optional(),
   observability: ObservabilityConfigSchema.optional(),
   analytics: AnalyticsConfigSchema.optional(),
   /** Directory for shared clones (worktree_dir in config). If empty, uses ../{clone-name} relative to project */

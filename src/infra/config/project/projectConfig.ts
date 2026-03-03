@@ -18,9 +18,7 @@ import { invalidateResolvedConfigCache } from '../resolutionCache.js';
 export type { ProjectLocalConfig } from '../types.js';
 
 /** Default project configuration */
-const DEFAULT_PROJECT_CONFIG: ProjectLocalConfig = {
-  piece: 'default',
-};
+const DEFAULT_PROJECT_CONFIG: ProjectLocalConfig = {};
 
 const SUBMODULES_ALL = 'all';
 

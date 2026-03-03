@@ -87,6 +87,8 @@ export interface PersistedGlobalConfig {
   logLevel: 'debug' | 'info' | 'warn' | 'error';
   provider?: 'claude' | 'codex' | 'opencode' | 'cursor' | 'copilot' | 'mock';
   model?: string;
+  /** Default piece name for new tasks (resolved via config layers: project > global > 'default') */
+  piece?: string;
   observability?: ObservabilityConfig;
   analytics?: AnalyticsConfig;
   /** Directory for shared clones (worktree_dir in config). If empty, uses ../{clone-name} relative to project */
