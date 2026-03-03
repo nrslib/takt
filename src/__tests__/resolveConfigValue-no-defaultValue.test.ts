@@ -51,15 +51,15 @@ describe('RESOLUTION_REGISTRY defaultValue removal', () => {
   });
 
   describe('piece', () => {
-    it('should resolve piece from project config DEFAULT_PROJECT_CONFIG when not explicitly set', () => {
+    it('should resolve piece as undefined when not set in project or global config', () => {
       const value = resolveConfigValue(projectDir, 'piece');
-      expect(value).toBe('default');
+      expect(value).toBeUndefined();
     });
 
-    it('should report source as project when piece comes from DEFAULT_PROJECT_CONFIG', () => {
+    it('should report source as default when piece is not set anywhere', () => {
       const result = resolveConfigValueWithSource(projectDir, 'piece');
-      expect(result.value).toBe('default');
-      expect(result.source).toBe('project');
+      expect(result.value).toBeUndefined();
+      expect(result.source).toBe('default');
     });
 
     it('should resolve explicit project piece over default', () => {
@@ -76,8 +76,8 @@ describe('RESOLUTION_REGISTRY defaultValue removal', () => {
       invalidateGlobalConfigCache();
 
       const result = resolveConfigValueWithSource(projectDir, 'piece');
-      expect(result.value).toBe('default');
-      expect(result.source).toBe('project');
+      expect(result.value).toBe('global-piece');
+      expect(result.source).toBe('global');
     });
   });
 
