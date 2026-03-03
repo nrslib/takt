@@ -399,6 +399,77 @@ describe('loadProjectConfig provider_options', () => {
       process.env.TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS = original;
     }
   });
+
+  it('should throw when provider block uses claude with network_access', () => {
+    const projectConfigDir = getProjectConfigDir(testDir);
+    mkdirSync(projectConfigDir, { recursive: true });
+    writeFileSync(join(projectConfigDir, 'config.yaml'), [
+      'piece: default',
+      'provider:',
+      '  type: claude',
+      '  network_access: true',
+    ].join('\n'));
+
+    expect(() => loadProjectConfig(testDir)).toThrow(/network_access/);
+  });
+
+  it('should normalize project provider block into provider/model/providerOptions', () => {
+    const projectConfigDir = getProjectConfigDir(testDir);
+    mkdirSync(projectConfigDir, { recursive: true });
+    writeFileSync(join(projectConfigDir, 'config.yaml'), [
+      'piece: default',
+      'provider:',
+      '  type: codex',
+      '  model: gpt-5.3',
+      '  network_access: false',
+    ].join('\n'));
+
+    const config = loadProjectConfig(testDir);
+
+    expect(config.provider).toBe('codex');
+    expect(config.model).toBe('gpt-5.3');
+    expect(config.providerOptions).toEqual({
+      codex: { networkAccess: false },
+    });
+  });
+
+  it('should throw when provider block uses codex with sandbox', () => {
+    const projectConfigDir = getProjectConfigDir(testDir);
+    mkdirSync(projectConfigDir, { recursive: true });
+    writeFileSync(join(projectConfigDir, 'config.yaml'), [
+      'piece: default',
+      'provider:',
+      '  type: codex',
+      '  sandbox:',
+      '    allow_unsandboxed_commands: true',
+    ].join('\n'));
+
+    expect(() => loadProjectConfig(testDir)).toThrow(/sandbox/);
+  });
+
+  it('should throw when provider block contains unknown fields', () => {
+    const projectConfigDir = getProjectConfigDir(testDir);
+    mkdirSync(projectConfigDir, { recursive: true });
+    writeFileSync(join(projectConfigDir, 'config.yaml'), [
+      'piece: default',
+      'provider:',
+      '  type: codex',
+      '  unknown_option: true',
+    ].join('\n'));
+
+    expect(() => loadProjectConfig(testDir)).toThrow(/unknown fields|unrecognized key/i);
+  });
+
+  it('should throw when project provider has unsupported type', () => {
+    const projectConfigDir = getProjectConfigDir(testDir);
+    mkdirSync(projectConfigDir, { recursive: true });
+    writeFileSync(join(projectConfigDir, 'config.yaml'), [
+      'piece: default',
+      'provider: invalid-provider',
+    ].join('\n'));
+
+    expect(() => loadProjectConfig(testDir)).toThrow(/provider/);
+  });
 });
 
 describe('analytics config resolution', () => {

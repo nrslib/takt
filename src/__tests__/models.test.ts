@@ -11,6 +11,7 @@ import {
   McpServerConfigSchema,
   CustomAgentConfigSchema,
   GlobalConfigSchema,
+  ProjectConfigSchema,
 } from '../core/models/index.js';
 
 describe('AgentTypeSchema', () => {
@@ -126,6 +127,114 @@ describe('PieceConfigRawSchema', () => {
       codex: { network_access: true },
       opencode: { network_access: false },
     });
+  });
+
+  it('should parse movement with provider object block', () => {
+    const config = {
+      name: 'test-piece',
+      movements: [
+        {
+          name: 'implement',
+          provider: {
+            type: 'codex',
+            model: 'gpt-5.3',
+            network_access: true,
+          },
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    const result = PieceConfigRawSchema.parse(config as unknown);
+    const movement = result.movements?.[0] as Record<string, unknown> | undefined;
+    const provider = movement?.provider as Record<string, unknown> | undefined;
+    expect(provider?.type).toBe('codex');
+    expect(provider?.model).toBe('gpt-5.3');
+    expect(provider?.network_access).toBe(true);
+  });
+
+  it('should reject provider block when claude sets network_access', () => {
+    const config = {
+      name: 'test-piece',
+      movements: [
+        {
+          name: 'implement',
+          provider: {
+            type: 'claude',
+            network_access: true,
+          },
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    expect(() => PieceConfigRawSchema.parse(config as unknown)).toThrow(/network_access/);
+  });
+
+  it('should reject provider block when codex sets sandbox', () => {
+    const config = {
+      name: 'test-piece',
+      movements: [
+        {
+          name: 'implement',
+          provider: {
+            type: 'codex',
+            sandbox: {
+              allow_unsandboxed_commands: true,
+            },
+          },
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    expect(() => PieceConfigRawSchema.parse(config as unknown)).toThrow(/sandbox/);
+  });
+
+  it('should reject provider block with unknown fields', () => {
+    const config = {
+      name: 'test-piece',
+      movements: [
+        {
+          name: 'implement',
+          provider: {
+            type: 'codex',
+            model: 'gpt-5.3',
+            network_access: true,
+            unknown_option: true,
+          },
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    expect(() => PieceConfigRawSchema.parse(config as unknown)).toThrow();
+  });
+
+  it('should parse piece-level piece_config.provider block', () => {
+    const config = {
+      name: 'test-piece',
+      piece_config: {
+        provider: {
+          type: 'codex',
+          model: 'gpt-5.3',
+          network_access: true,
+        },
+      },
+      movements: [
+        {
+          name: 'implement',
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    const result = PieceConfigRawSchema.parse(config as unknown);
+    const pieceConfig = result.piece_config as Record<string, unknown> | undefined;
+    const provider = pieceConfig?.provider as Record<string, unknown> | undefined;
+    expect(provider?.type).toBe('codex');
+    expect(provider?.model).toBe('gpt-5.3');
+    expect(provider?.network_access).toBe(true);
   });
 
   it('should parse piece-level piece_config.provider_options', () => {
@@ -484,5 +593,61 @@ describe('GlobalConfigSchema', () => {
     const result = GlobalConfigSchema.parse(config);
     expect(result.log_level).toBe('debug');
     expect(result.observability?.provider_events).toBe(false);
+  });
+
+  it('should parse global provider object block', () => {
+    const result = GlobalConfigSchema.parse({
+      provider: {
+        type: 'codex',
+        model: 'gpt-5.3',
+        network_access: true,
+      },
+    } as unknown);
+    const provider = (result as Record<string, unknown>).provider as Record<string, unknown> | undefined;
+    expect(provider?.type).toBe('codex');
+    expect(provider?.model).toBe('gpt-5.3');
+    expect(provider?.network_access).toBe(true);
+  });
+
+  it('should parse persona_providers entry with provider object block', () => {
+    const result = GlobalConfigSchema.parse({
+      persona_providers: {
+        coder: {
+          type: 'opencode',
+          model: 'openai/gpt-5',
+        },
+      },
+    } as unknown);
+    const personaProviders = (result as Record<string, unknown>).persona_providers as Record<string, unknown> | undefined;
+    const coder = personaProviders?.coder as Record<string, unknown> | undefined;
+    expect(coder?.type).toBe('opencode');
+    expect(coder?.model).toBe('openai/gpt-5');
+  });
+
+  it('should reject persona_providers provider object block with provider options', () => {
+    expect(() => GlobalConfigSchema.parse({
+      persona_providers: {
+        coder: {
+          type: 'codex',
+          network_access: true,
+        },
+      },
+    } as unknown)).toThrow();
+  });
+});
+
+describe('ProjectConfigSchema', () => {
+  it('should parse project provider object block', () => {
+    const result = ProjectConfigSchema.parse({
+      provider: {
+        type: 'codex',
+        model: 'gpt-5.3',
+        network_access: false,
+      },
+    } as unknown);
+    const provider = (result as Record<string, unknown>).provider as Record<string, unknown> | undefined;
+    expect(provider?.type).toBe('codex');
+    expect(provider?.model).toBe('gpt-5.3');
+    expect(provider?.network_access).toBe(false);
   });
 });

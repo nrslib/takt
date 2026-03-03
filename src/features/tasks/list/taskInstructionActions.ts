@@ -12,7 +12,7 @@ import {
   detectDefaultBranch,
 } from '../../../infra/task/index.js';
 import { resolvePieceConfigValues, getPieceDescription } from '../../../infra/config/index.js';
-import { info, error as logError } from '../../../shared/ui/index.js';
+import { info, warn, error as logError } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { runInstructMode } from './instructMode.js';
 import { selectPiece } from '../../pieceSelection/index.js';
@@ -20,7 +20,12 @@ import { dispatchConversationAction } from '../../interactive/actionDispatcher.j
 import type { PieceContext } from '../../interactive/interactive.js';
 import { resolveLanguage, findRunForTask, findPreviousOrderContent } from '../../interactive/index.js';
 import { type BranchActionTarget, resolveTargetBranch } from './taskActionTarget.js';
-import { appendRetryNote, selectRunSessionContext } from './requeueHelpers.js';
+import {
+  appendRetryNote,
+  DEPRECATED_PROVIDER_CONFIG_WARNING,
+  hasDeprecatedProviderConfig,
+  selectRunSessionContext,
+} from './requeueHelpers.js';
 import { executeAndCompleteTask } from '../execute/taskExecution.js';
 
 const log = createLogger('list-tasks');
@@ -107,6 +112,9 @@ export async function instructBranch(
   const runSessionContext = await selectRunSessionContext(worktreePath, lang);
   const matchedSlug = findRunForTask(worktreePath, target.content);
   const previousOrderContent = findPreviousOrderContent(worktreePath, matchedSlug);
+  if (hasDeprecatedProviderConfig(previousOrderContent)) {
+    warn(DEPRECATED_PROVIDER_CONFIG_WARNING);
+  }
 
   const branchContext = getBranchContext(projectDir, branch);
 

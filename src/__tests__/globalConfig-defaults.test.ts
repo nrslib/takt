@@ -78,6 +78,53 @@ describe('loadGlobalConfig', () => {
     expect(config.logLevel).toBe('debug');
   });
 
+  it('should load provider block from config.yaml and normalize model/providerOptions', () => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(
+      getGlobalConfigPath(),
+      [
+        'provider:',
+        '  type: codex',
+        '  model: gpt-5.3',
+        '  network_access: true',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const config = loadGlobalConfig();
+
+    expect(config.provider).toBe('codex');
+    expect(config.model).toBe('gpt-5.3');
+    expect(config.providerOptions).toEqual({
+      codex: { networkAccess: true },
+    });
+  });
+
+  it('should load persona_providers provider block and normalize to provider/model', () => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(
+      getGlobalConfigPath(),
+      [
+        'persona_providers:',
+        '  coder:',
+        '    type: opencode',
+        '    model: openai/gpt-5',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const config = loadGlobalConfig();
+
+    expect(config.personaProviders).toEqual({
+      coder: {
+        provider: 'opencode',
+        model: 'openai/gpt-5',
+      },
+    });
+  });
+
   it('should apply env override for nested provider_options key', () => {
     const original = process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_SANDBOX_ALLOW_UNSANDBOXED_COMMANDS;
     try {
@@ -573,6 +620,24 @@ describe('loadGlobalConfig', () => {
 
       expect(() => loadGlobalConfig()).not.toThrow();
     });
+
+    it('should throw when persona provider block includes provider options', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(
+        getGlobalConfigPath(),
+        [
+          'language: en',
+          'persona_providers:',
+          '  coder:',
+          '    type: codex',
+          '    network_access: true',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      expect(() => loadGlobalConfig()).toThrow();
+    });
   });
 
   describe('runtime', () => {
@@ -611,6 +676,39 @@ describe('loadGlobalConfig', () => {
   });
 
   describe('provider/model compatibility validation', () => {
+    it('should throw when provider block uses claude with network_access', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(
+        getGlobalConfigPath(),
+        [
+          'provider:',
+          '  type: claude',
+          '  network_access: true',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      expect(() => loadGlobalConfig()).toThrow(/network_access/);
+    });
+
+    it('should throw when provider block uses codex with sandbox', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(
+        getGlobalConfigPath(),
+        [
+          'provider:',
+          '  type: codex',
+          '  sandbox:',
+          '    allow_unsandboxed_commands: true',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      expect(() => loadGlobalConfig()).toThrow(/sandbox/);
+    });
+
     it('should throw when provider is codex but model is a Claude alias (opus)', () => {
       const taktDir = join(testHomeDir, '.takt');
       mkdirSync(taktDir, { recursive: true });

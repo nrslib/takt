@@ -32,60 +32,26 @@ import type { PieceOverrides } from '../../../core/models/persisted-global-confi
 import { applyQualityGateOverrides } from './qualityGateOverrides.js';
 import { loadProjectConfig } from '../project/projectConfig.js';
 import { loadGlobalConfig } from '../global/globalConfig.js';
+import { normalizeConfigProviderReferenceDetailed, type ConfigProviderReference } from '../providerReference.js';
+import { mergeProviderOptions } from '../providerOptions.js';
 
-/** Convert raw YAML provider_options (snake_case) to internal format (camelCase). */
-export function normalizeProviderOptions(
-  raw: RawStep['provider_options'],
-): MovementProviderOptions | undefined {
-  if (!raw) return undefined;
+type RawProviderReference = RawStep['provider'];
 
-  const result: MovementProviderOptions = {};
-  if (raw.codex?.network_access !== undefined) {
-    result.codex = { networkAccess: raw.codex.network_access };
-  }
-  if (raw.opencode?.network_access !== undefined) {
-    result.opencode = { networkAccess: raw.opencode.network_access };
-  }
-  if (raw.claude?.sandbox) {
-    result.claude = {
-      sandbox: {
-        ...(raw.claude.sandbox.allow_unsandboxed_commands !== undefined
-          ? { allowUnsandboxedCommands: raw.claude.sandbox.allow_unsandboxed_commands }
-          : {}),
-        ...(raw.claude.sandbox.excluded_commands !== undefined
-          ? { excludedCommands: raw.claude.sandbox.excluded_commands }
-          : {}),
-      },
-    };
-  }
-  return Object.keys(result).length > 0 ? result : undefined;
-}
-
-/**
- * Deep merge provider options. Later sources override earlier ones.
- * Exported for reuse in runner.ts (4-layer resolution).
- */
-export function mergeProviderOptions(
-  ...layers: (MovementProviderOptions | undefined)[]
-): MovementProviderOptions | undefined {
-  const result: MovementProviderOptions = {};
-
-  for (const layer of layers) {
-    if (!layer) continue;
-    if (layer.codex) {
-      result.codex = { ...result.codex, ...layer.codex };
-    }
-    if (layer.opencode) {
-      result.opencode = { ...result.opencode, ...layer.opencode };
-    }
-    if (layer.claude?.sandbox) {
-      result.claude = {
-        sandbox: { ...result.claude?.sandbox, ...layer.claude.sandbox },
-      };
-    }
-  }
-
-  return Object.keys(result).length > 0 ? result : undefined;
+function normalizeProviderReference(
+  provider: RawProviderReference,
+  model: RawStep['model'],
+  providerOptions: RawStep['provider_options'],
+): {
+  provider: PieceMovement['provider'];
+  model: PieceMovement['model'];
+  providerOptions: MovementProviderOptions | undefined;
+  providerSpecified: boolean;
+} {
+  return normalizeConfigProviderReferenceDetailed(
+    provider as ConfigProviderReference<NonNullable<PieceMovement['provider']>>,
+    model,
+    providerOptions as Record<string, unknown> | undefined,
+  );
 }
 
 function normalizeRuntimeConfig(raw: RawPiece['piece_config']): PieceRuntimeConfig | undefined {
@@ -280,6 +246,8 @@ function normalizeStepFromRaw(
   step: RawStep,
   pieceDir: string,
   sections: PieceSections,
+  inheritedProvider?: PieceMovement['provider'],
+  inheritedModel?: PieceMovement['model'],
   inheritedProviderOptions?: PieceMovement['providerOptions'],
   context?: FacetResolutionContext,
   projectOverrides?: PieceOverrides,
@@ -298,6 +266,7 @@ function normalizeStepFromRaw(
 
   const knowledgeRef = (step as Record<string, unknown>).knowledge as string | string[] | undefined;
   const knowledgeContents = resolveRefList(knowledgeRef, sections.resolvedKnowledge, pieceDir, 'knowledge', context);
+  const normalizedProvider = normalizeProviderReference(step.provider, step.model, step.provider_options);
 
   const expandedInstruction = step.instruction
     ? resolveRefToContent(step.instruction, sections.resolvedInstructions, pieceDir, 'instructions', context)
@@ -312,10 +281,10 @@ function normalizeStepFromRaw(
     personaPath,
     allowedTools: step.allowed_tools,
     mcpServers: step.mcp_servers,
-    provider: step.provider,
-    model: step.model,
+    provider: normalizedProvider.provider ?? inheritedProvider,
+    model: normalizedProvider.model ?? (normalizedProvider.providerSpecified ? undefined : inheritedModel),
     requiredPermissionMode: step.required_permission_mode,
-    providerOptions: mergeProviderOptions(inheritedProviderOptions, normalizeProviderOptions(step.provider_options)),
+    providerOptions: mergeProviderOptions(inheritedProviderOptions, normalizedProvider.providerOptions),
     edit: step.edit,
     instructionTemplate: (step.instruction_template
       ? resolveRefToContent(step.instruction_template, sections.resolvedInstructions, pieceDir, 'instructions', context)
@@ -336,7 +305,17 @@ function normalizeStepFromRaw(
 
   if (step.parallel && step.parallel.length > 0) {
     result.parallel = step.parallel.map((sub: RawStep) =>
-      normalizeStepFromRaw(sub, pieceDir, sections, inheritedProviderOptions, context, projectOverrides, globalOverrides),
+      normalizeStepFromRaw(
+        sub,
+        pieceDir,
+        sections,
+        result.provider,
+        result.model,
+        result.providerOptions,
+        context,
+        projectOverrides,
+        globalOverrides,
+      ),
     );
   }
 
@@ -412,11 +391,18 @@ export function normalizePieceConfig(
     resolvedReportFormats,
   };
 
-  const pieceProviderOptions = normalizeProviderOptions(parsed.piece_config?.provider_options as RawStep['provider_options']);
+  const normalizedPieceProvider = normalizeProviderReference(
+    parsed.piece_config?.provider as RawProviderReference,
+    undefined,
+    parsed.piece_config?.provider_options as RawStep['provider_options'],
+  );
+  const pieceProvider = normalizedPieceProvider.provider;
+  const pieceModel = normalizedPieceProvider.model;
+  const pieceProviderOptions = normalizedPieceProvider.providerOptions;
   const pieceRuntime = normalizeRuntimeConfig(parsed.piece_config);
 
   const movements: PieceMovement[] = parsed.movements.map((step) =>
-    normalizeStepFromRaw(step, pieceDir, sections, pieceProviderOptions, context, projectOverrides, globalOverrides),
+    normalizeStepFromRaw(step, pieceDir, sections, pieceProvider, pieceModel, pieceProviderOptions, context, projectOverrides, globalOverrides),
   );
 
   // Schema guarantees movements.min(1)

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { normalizePieceConfig, mergeProviderOptions } from '../infra/config/loaders/pieceParser.js';
+import { normalizePieceConfig } from '../infra/config/loaders/pieceParser.js';
+import { mergeProviderOptions } from '../infra/config/providerOptions.js';
 
 describe('normalizePieceConfig provider_options', () => {
   it('piece-level global を movement に継承し、movement 側で上書きできる', () => {
@@ -113,6 +114,192 @@ describe('normalizePieceConfig provider_options', () => {
     expect(config.runtime).toEqual({
       prepare: ['gradle', 'node'],
     });
+  });
+
+  it('movement の provider block を provider/model/providerOptions に正規化する', () => {
+    const raw = {
+      name: 'provider-block-movement',
+      movements: [
+        {
+          name: 'implement',
+          provider: {
+            type: 'codex',
+            model: 'gpt-5.3',
+            network_access: false,
+          },
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    const config = normalizePieceConfig(raw, process.cwd());
+
+    expect(config.movements[0]?.provider).toBe('codex');
+    expect(config.movements[0]?.model).toBe('gpt-5.3');
+    expect(config.movements[0]?.providerOptions).toEqual({
+      codex: { networkAccess: false },
+    });
+  });
+
+  it('piece_config の provider block を movement 既定値として継承する', () => {
+    const raw = {
+      name: 'provider-block-piece-config',
+      piece_config: {
+        provider: {
+          type: 'codex',
+          model: 'gpt-5.3',
+          network_access: true,
+        },
+      },
+      movements: [
+        {
+          name: 'plan',
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    const config = normalizePieceConfig(raw, process.cwd());
+
+    expect(config.providerOptions).toEqual({
+      codex: { networkAccess: true },
+    });
+    expect(config.movements[0]?.provider).toBe('codex');
+    expect(config.movements[0]?.model).toBe('gpt-5.3');
+    expect(config.movements[0]?.providerOptions).toEqual({
+      codex: { networkAccess: true },
+    });
+  });
+
+  it('provider block で claude に network_access を指定した場合はエラーにする', () => {
+    const raw = {
+      name: 'invalid-provider-block',
+      movements: [
+        {
+          name: 'review',
+          provider: {
+            type: 'claude',
+            network_access: true,
+          },
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    expect(() => normalizePieceConfig(raw, process.cwd())).toThrow(/network_access/);
+  });
+
+  it('provider block で codex に sandbox を指定した場合はエラーにする', () => {
+    const raw = {
+      name: 'invalid-provider-block',
+      piece_config: {
+        provider: {
+          type: 'codex',
+          sandbox: {
+            allow_unsandboxed_commands: true,
+          },
+        },
+      },
+      movements: [
+        {
+          name: 'review',
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    expect(() => normalizePieceConfig(raw, process.cwd())).toThrow(/sandbox/);
+  });
+
+  it('parallel サブムーブメントは親ムーブメントの provider block を継承する', () => {
+    const raw = {
+      name: 'provider-block-parallel-inherit',
+      piece_config: {
+        provider: {
+          type: 'claude',
+          model: 'sonnet',
+        },
+      },
+      movements: [
+        {
+          name: 'reviewers',
+          provider: {
+            type: 'codex',
+            model: 'gpt-5.3',
+            network_access: true,
+          },
+          parallel: [
+            {
+              name: 'arch-review',
+              instruction: '{task}',
+            },
+          ],
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    const config = normalizePieceConfig(raw, process.cwd());
+    const parent = config.movements[0];
+    const child = parent?.parallel?.[0];
+
+    expect(parent?.provider).toBe('codex');
+    expect(parent?.model).toBe('gpt-5.3');
+    expect(child?.provider).toBe('codex');
+    expect(child?.model).toBe('gpt-5.3');
+    expect(child?.providerOptions).toEqual({
+      codex: { networkAccess: true },
+    });
+  });
+
+  it('parallel の provider block で claude に network_access 指定時はエラーにする', () => {
+    const raw = {
+      name: 'invalid-provider-block-parallel',
+      movements: [
+        {
+          name: 'review',
+          parallel: [
+            {
+              name: 'arch-review',
+              provider: {
+                type: 'claude',
+                network_access: true,
+              },
+              instruction: '{task}',
+            },
+          ],
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    expect(() => normalizePieceConfig(raw, process.cwd())).toThrow(/network_access/);
+  });
+
+  it('parallel の provider block で codex に sandbox 指定時はエラーにする', () => {
+    const raw = {
+      name: 'invalid-provider-block-parallel',
+      movements: [
+        {
+          name: 'review',
+          parallel: [
+            {
+              name: 'arch-review',
+              provider: {
+                type: 'codex',
+                sandbox: {
+                  allow_unsandboxed_commands: true,
+                },
+              },
+              instruction: '{task}',
+            },
+          ],
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    expect(() => normalizePieceConfig(raw, process.cwd())).toThrow(/sandbox/);
   });
 });
 

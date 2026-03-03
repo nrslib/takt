@@ -54,6 +54,35 @@ describe('ParallelSubMovementRawSchema', () => {
     }
   });
 
+  it('should accept provider block in parallel sub-movement', () => {
+    const raw = {
+      name: 'provider-block-sub-step',
+      provider: {
+        type: 'codex',
+        model: 'gpt-5.3',
+        network_access: true,
+      },
+      instruction_template: 'Review',
+    };
+
+    const result = ParallelSubMovementRawSchema.safeParse(raw);
+    expect(result.success).toBe(true);
+  });
+
+  it('should reject invalid provider block options in parallel sub-movement', () => {
+    const raw = {
+      name: 'invalid-provider-block-sub-step',
+      provider: {
+        type: 'claude',
+        network_access: true,
+      },
+      instruction_template: 'Review',
+    };
+
+    const result = ParallelSubMovementRawSchema.safeParse(raw);
+    expect(result.success).toBe(false);
+  });
+
   it('should accept rules on sub-movements', () => {
     const raw = {
       name: 'reviewed',
@@ -115,6 +144,22 @@ describe('PieceMovementRawSchema with parallel', () => {
     const raw = {
       name: 'empty-parallel',
       parallel: [],
+    };
+
+    const result = PieceMovementRawSchema.safeParse(raw);
+    expect(result.success).toBe(true);
+  });
+
+  it('should accept provider string in parallel sub-movement', () => {
+    const raw = {
+      name: 'parallel-provider-string',
+      parallel: [
+        {
+          name: 'arch-review',
+          provider: 'codex',
+          instruction_template: 'Review architecture',
+        },
+      ],
     };
 
     const result = PieceMovementRawSchema.safeParse(raw);

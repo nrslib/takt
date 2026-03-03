@@ -9,9 +9,11 @@ const {
   mockGetPieceDescription,
   mockRunRetryMode,
   mockFindRunForTask,
+  mockFindPreviousOrderContent,
   mockStartReExecution,
   mockRequeueTask,
   mockExecuteAndCompleteTask,
+  mockWarn,
 } = vi.hoisted(() => ({
   mockExistsSync: vi.fn(() => true),
   mockSelectPiece: vi.fn(),
@@ -26,9 +28,11 @@ const {
   })),
   mockRunRetryMode: vi.fn(),
   mockFindRunForTask: vi.fn(() => null),
+  mockFindPreviousOrderContent: vi.fn(() => null),
   mockStartReExecution: vi.fn(),
   mockRequeueTask: vi.fn(),
   mockExecuteAndCompleteTask: vi.fn(),
+  mockWarn: vi.fn(),
 }));
 
 vi.mock('node:fs', async (importOriginal) => ({
@@ -49,6 +53,7 @@ vi.mock('../shared/ui/index.js', () => ({
   header: vi.fn(),
   blankLine: vi.fn(),
   status: vi.fn(),
+  warn: (...args: unknown[]) => mockWarn(...args),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -77,7 +82,7 @@ vi.mock('../features/interactive/index.js', () => ({
     runReports: '',
   })),
   runRetryMode: (...args: unknown[]) => mockRunRetryMode(...args),
-  findPreviousOrderContent: vi.fn(() => null),
+  findPreviousOrderContent: (...args: unknown[]) => mockFindPreviousOrderContent(...args),
 }));
 
 vi.mock('../infra/task/index.js', () => ({
@@ -146,6 +151,7 @@ beforeEach(() => {
   mockLoadPieceByIdentifier.mockReturnValue(defaultPieceConfig);
   mockSelectOptionWithDefault.mockResolvedValue('plan');
   mockRunRetryMode.mockResolvedValue({ action: 'execute', task: '追加指示A' });
+  mockFindPreviousOrderContent.mockReturnValue(null);
   mockStartReExecution.mockReturnValue({
     name: 'my-task',
     content: 'Do something',
@@ -222,6 +228,40 @@ describe('retryFailedTask', () => {
     await retryFailedTask(task, '/project');
 
     expect(mockFindRunForTask).toHaveBeenCalledWith('/project/.takt/worktrees/my-task', 'Do something');
+  });
+
+  it('should show deprecated config warning when selected run order uses legacy provider fields', async () => {
+    const task = makeFailedTask();
+    mockFindPreviousOrderContent.mockReturnValue([
+      'movements:',
+      '  - name: review',
+      '    provider: codex',
+      '    model: gpt-5.3',
+      '    provider_options:',
+      '      codex:',
+      '        network_access: true',
+    ].join('\n'));
+
+    await retryFailedTask(task, '/project');
+
+    expect(mockWarn).toHaveBeenCalledTimes(1);
+    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('deprecated'));
+  });
+
+  it('should not warn when selected run order uses provider block format', async () => {
+    const task = makeFailedTask();
+    mockFindPreviousOrderContent.mockReturnValue([
+      'movements:',
+      '  - name: review',
+      '    provider:',
+      '      type: codex',
+      '      model: gpt-5.3',
+      '      network_access: true',
+    ].join('\n'));
+
+    await retryFailedTask(task, '/project');
+
+    expect(mockWarn).not.toHaveBeenCalled();
   });
 
   it('should throw when worktree path is not set', async () => {

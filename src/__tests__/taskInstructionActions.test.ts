@@ -14,6 +14,8 @@ const {
   mockListRecentRuns,
   mockSelectRun,
   mockLoadRunSessionContext,
+  mockFindPreviousOrderContent,
+  mockWarn,
 } = vi.hoisted(() => ({
   mockExistsSync: vi.fn(() => true),
   mockStartReExecution: vi.fn(),
@@ -28,6 +30,8 @@ const {
   mockListRecentRuns: vi.fn(() => []),
   mockSelectRun: vi.fn(() => null),
   mockLoadRunSessionContext: vi.fn(),
+  mockFindPreviousOrderContent: vi.fn(() => null),
+  mockWarn: vi.fn(),
 }));
 
 vi.mock('node:fs', async (importOriginal) => ({
@@ -83,7 +87,7 @@ vi.mock('../features/interactive/index.js', () => ({
   selectRun: (...args: unknown[]) => mockSelectRun(...args),
   loadRunSessionContext: (...args: unknown[]) => mockLoadRunSessionContext(...args),
   findRunForTask: vi.fn(() => null),
-  findPreviousOrderContent: vi.fn(() => null),
+  findPreviousOrderContent: (...args: unknown[]) => mockFindPreviousOrderContent(...args),
 }));
 
 vi.mock('../features/tasks/execute/taskExecution.js', () => ({
@@ -93,6 +97,7 @@ vi.mock('../features/tasks/execute/taskExecution.js', () => ({
 vi.mock('../shared/ui/index.js', () => ({
   info: vi.fn(),
   error: vi.fn(),
+  warn: mockWarn,
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -122,6 +127,7 @@ describe('instructBranch direct execution flow', () => {
     mockResolveLanguage.mockReturnValue('en');
     mockListRecentRuns.mockReturnValue([]);
     mockSelectRun.mockResolvedValue(null);
+    mockFindPreviousOrderContent.mockReturnValue(null);
     mockStartReExecution.mockReturnValue({
       name: 'done-task',
       content: 'done',
@@ -232,6 +238,94 @@ describe('instructBranch direct execution flow', () => {
       runContext,
       null,
     );
+  });
+
+  it('should show deprecated config warning when selected run order uses legacy provider fields', async () => {
+    mockListRecentRuns.mockReturnValue([
+      { slug: 'run-1', task: 'fix', piece: 'default', status: 'completed', startTime: '2026-02-18T00:00:00Z' },
+    ]);
+    mockSelectRun.mockResolvedValue('run-1');
+    mockLoadRunSessionContext.mockReturnValue({
+      task: 'fix',
+      piece: 'default',
+      status: 'completed',
+      movementLogs: [],
+      reports: [],
+    });
+    mockFindPreviousOrderContent.mockReturnValue([
+      'movements:',
+      '  - name: review',
+      '    provider: codex',
+      '    model: gpt-5.3',
+      '    provider_options:',
+      '      codex:',
+      '        network_access: true',
+    ].join('\n'));
+
+    await instructBranch('/project', {
+      kind: 'completed',
+      name: 'done-task',
+      createdAt: '2026-02-14T00:00:00.000Z',
+      filePath: '/project/.takt/tasks.yaml',
+      content: 'done',
+      branch: 'takt/done-task',
+      worktreePath: '/project/.takt/worktrees/done-task',
+      data: { task: 'done' },
+    });
+
+    expect(mockWarn).toHaveBeenCalledTimes(1);
+    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('deprecated'));
+  });
+
+  it('should not warn for markdown explanatory snippets without piece config body', async () => {
+    mockFindPreviousOrderContent.mockReturnValue([
+      '# Deprecated examples',
+      '',
+      '```yaml',
+      'provider: codex',
+      'model: gpt-5.3',
+      'provider_options:',
+      '  codex:',
+      '    network_access: true',
+      '```',
+    ].join('\n'));
+
+    await instructBranch('/project', {
+      kind: 'completed',
+      name: 'done-task',
+      createdAt: '2026-02-14T00:00:00.000Z',
+      filePath: '/project/.takt/tasks.yaml',
+      content: 'done',
+      branch: 'takt/done-task',
+      worktreePath: '/project/.takt/worktrees/done-task',
+      data: { task: 'done' },
+    });
+
+    expect(mockWarn).not.toHaveBeenCalled();
+  });
+
+  it('should not warn when selected run order uses provider block format', async () => {
+    mockFindPreviousOrderContent.mockReturnValue([
+      'movements:',
+      '  - name: review',
+      '    provider:',
+      '      type: codex',
+      '      model: gpt-5.3',
+      '      network_access: true',
+    ].join('\n'));
+
+    await instructBranch('/project', {
+      kind: 'completed',
+      name: 'done-task',
+      createdAt: '2026-02-14T00:00:00.000Z',
+      filePath: '/project/.takt/tasks.yaml',
+      content: 'done',
+      branch: 'takt/done-task',
+      worktreePath: '/project/.takt/worktrees/done-task',
+      data: { task: 'done' },
+    });
+
+    expect(mockWarn).not.toHaveBeenCalled();
   });
 
   it('should return false when worktree does not exist', async () => {

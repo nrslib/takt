@@ -7,12 +7,16 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parse, stringify } from 'yaml';
+import { ProjectConfigSchema } from '../../../core/models/index.js';
 import { copyProjectResourcesToDir } from '../../resources/index.js';
 import type { ProjectLocalConfig } from '../types.js';
 import type { ProviderPermissionProfiles } from '../../../core/models/provider-profiles.js';
 import type { AnalyticsConfig, PieceOverrides, SubmoduleSelection } from '../../../core/models/persisted-global-config.js';
 import { applyProjectConfigEnvOverrides } from '../env/config-env-overrides.js';
-import { normalizeProviderOptions } from '../loaders/pieceParser.js';
+import {
+  normalizeConfigProviderReference,
+  type ConfigProviderReference,
+} from '../providerReference.js';
 import { invalidateResolvedConfigCache } from '../resolutionCache.js';
 
 export type { ProjectLocalConfig } from '../types.js';
@@ -23,6 +27,8 @@ const DEFAULT_PROJECT_CONFIG: ProjectLocalConfig = {
 };
 
 const SUBMODULES_ALL = 'all';
+type ProviderType = NonNullable<ProjectLocalConfig['provider']>;
+type RawProviderReference = ConfigProviderReference<ProviderType>;
 
 function normalizeSubmodules(raw: unknown): SubmoduleSelection | undefined {
   if (raw === undefined) return undefined;
@@ -180,20 +186,23 @@ function denormalizePieceOverrides(
 export function loadProjectConfig(projectDir: string): ProjectLocalConfig {
   const configPath = getConfigPath(projectDir);
 
-  const parsedConfig: Record<string, unknown> = {};
+  const rawConfig: Record<string, unknown> = {};
   if (existsSync(configPath)) {
     try {
       const content = readFileSync(configPath, 'utf-8');
       const parsed = (parse(content) as Record<string, unknown> | null) ?? {};
-      Object.assign(parsedConfig, parsed);
+      Object.assign(rawConfig, parsed);
     } catch {
       return { ...DEFAULT_PROJECT_CONFIG };
     }
   }
 
-  applyProjectConfigEnvOverrides(parsedConfig);
+  applyProjectConfigEnvOverrides(rawConfig);
+  const parsedConfig = ProjectConfigSchema.parse(rawConfig);
 
   const {
+    provider,
+    model,
     auto_pr,
     draft_pr,
     base_branch,
@@ -209,6 +218,11 @@ export function loadProjectConfig(projectDir: string): ProjectLocalConfig {
     copilot_cli_path,
     ...rest
   } = parsedConfig;
+  const normalizedProvider = normalizeConfigProviderReference(
+    provider as RawProviderReference,
+    model as string | undefined,
+    provider_options as Record<string, unknown> | undefined,
+  );
 
   const normalizedSubmodules = normalizeSubmodules(submodules);
   const normalizedWithSubmodules = normalizeWithSubmodules(with_submodules);
@@ -223,16 +237,9 @@ export function loadProjectConfig(projectDir: string): ProjectLocalConfig {
     submodules: normalizedSubmodules,
     withSubmodules: effectiveWithSubmodules,
     analytics: normalizeAnalytics(analytics as Record<string, unknown> | undefined),
-    providerOptions: normalizeProviderOptions(provider_options as {
-      codex?: { network_access?: boolean };
-      opencode?: { network_access?: boolean };
-      claude?: {
-        sandbox?: {
-          allow_unsandboxed_commands?: boolean;
-          excluded_commands?: string[];
-        };
-      };
-    } | undefined),
+    provider: normalizedProvider.provider,
+    model: normalizedProvider.model,
+    providerOptions: normalizedProvider.providerOptions,
     providerProfiles: normalizeProviderProfiles(provider_profiles as Record<string, { default_permission_mode: unknown; movement_permission_overrides?: Record<string, unknown> }> | undefined),
     pieceOverrides: normalizePieceOverrides(piece_overrides as { quality_gates?: string[]; quality_gates_edit_only?: boolean; movements?: Record<string, { quality_gates?: string[] }> } | undefined),
     claudeCliPath: claude_cli_path as string | undefined,

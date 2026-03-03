@@ -12,7 +12,7 @@ import { loadPieceByIdentifier, resolvePieceConfigValue, getPieceDescription } f
 import { selectPiece } from '../../pieceSelection/index.js';
 import { selectOptionWithDefault } from '../../../shared/prompt/index.js';
 import { getLabel } from '../../../shared/i18n/index.js';
-import { info, header, blankLine, status } from '../../../shared/ui/index.js';
+import { info, header, blankLine, status, warn } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import type { PieceConfig } from '../../../core/models/index.js';
 import {
@@ -27,7 +27,11 @@ import {
   type RetryRunInfo,
 } from '../../interactive/index.js';
 import { executeAndCompleteTask } from '../execute/taskExecution.js';
-import { appendRetryNote } from './requeueHelpers.js';
+import {
+  appendRetryNote,
+  DEPRECATED_PROVIDER_CONFIG_WARNING,
+  hasDeprecatedProviderConfig,
+} from './requeueHelpers.js';
 
 const log = createLogger('list-tasks');
 
@@ -191,6 +195,9 @@ export async function retryFailedTask(
 
   // Runs data lives in the worktree (written during previous execution)
   const previousOrderContent = findPreviousOrderContent(worktreePath, matchedSlug);
+  if (hasDeprecatedProviderConfig(previousOrderContent)) {
+    warn(DEPRECATED_PROVIDER_CONFIG_WARNING);
+  }
 
   blankLine();
   const branchName = task.branch ?? task.name;

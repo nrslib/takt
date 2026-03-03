@@ -12,12 +12,22 @@ import { GlobalConfigSchema } from '../../../core/models/index.js';
 import type { Language } from '../../../core/models/index.js';
 import type { PersistedGlobalConfig, PersonaProviderEntry, PieceOverrides } from '../../../core/models/persisted-global-config.js';
 import type { ProviderPermissionProfiles } from '../../../core/models/provider-profiles.js';
-import { normalizeProviderOptions } from '../loaders/pieceParser.js';
+import {
+  normalizeConfigProviderReference,
+  type ConfigProviderReference,
+} from '../providerReference.js';
 import { getGlobalConfigPath } from '../paths.js';
 import { DEFAULT_LANGUAGE } from '../../../shared/constants.js';
 import { parseProviderModel } from '../../../shared/utils/providerModel.js';
 import { applyGlobalConfigEnvOverrides, envVarNameFromPath } from '../env/config-env-overrides.js';
 import { invalidateAllResolvedConfigCache } from '../resolutionCache.js';
+
+type ProviderType = NonNullable<PersistedGlobalConfig['provider']>;
+type RawPersonaProviderBlock = {
+  type: ProviderType;
+  model?: string;
+};
+type RawProviderReference = ConfigProviderReference<ProviderType>;
 
 /** Claude-specific model aliases that are not valid for other providers */
 const CLAUDE_MODEL_ALIASES = new Set(['opus', 'sonnet', 'haiku']);
@@ -83,12 +93,19 @@ function validateProviderModelCompatibility(provider: string | undefined, model:
 }
 
 function normalizePersonaProviders(
-  raw: Record<string, NonNullable<PersonaProviderEntry['provider']> | PersonaProviderEntry> | undefined,
+  raw: Record<string, ProviderType | PersonaProviderEntry | RawPersonaProviderBlock> | undefined,
 ): Record<string, PersonaProviderEntry> | undefined {
   if (!raw) return undefined;
   return Object.fromEntries(
     Object.entries(raw).map(([persona, entry]) => {
-      const normalized: PersonaProviderEntry = typeof entry === 'string' ? { provider: entry } : entry;
+      let normalized: PersonaProviderEntry;
+      if (typeof entry === 'string') {
+        normalized = { provider: entry };
+      } else if ('type' in entry) {
+        normalized = { provider: entry.type, model: entry.model };
+      } else {
+        normalized = entry;
+      }
       validateProviderModelCompatibility(normalized.provider, normalized.model);
       return [persona, normalized];
     }),
@@ -216,11 +233,16 @@ export class GlobalConfigManager {
     applyGlobalConfigEnvOverrides(rawConfig);
 
     const parsed = GlobalConfigSchema.parse(rawConfig);
+    const normalizedProvider = normalizeConfigProviderReference(
+      parsed.provider as RawProviderReference,
+      parsed.model,
+      parsed.provider_options as Record<string, unknown> | undefined,
+    );
     const config: PersistedGlobalConfig = {
       language: parsed.language,
       logLevel: parsed.log_level,
-      provider: parsed.provider,
-      model: parsed.model,
+      provider: normalizedProvider.provider,
+      model: normalizedProvider.model,
       observability: parsed.observability ? {
         providerEvents: parsed.observability.provider_events,
       } : undefined,
@@ -249,8 +271,10 @@ export class GlobalConfigManager {
       minimalOutput: parsed.minimal_output,
       bookmarksFile: parsed.bookmarks_file,
       pieceCategoriesFile: parsed.piece_categories_file,
-      personaProviders: normalizePersonaProviders(parsed.persona_providers as Record<string, NonNullable<PersonaProviderEntry['provider']> | PersonaProviderEntry> | undefined),
-      providerOptions: normalizeProviderOptions(parsed.provider_options),
+      personaProviders: normalizePersonaProviders(
+        parsed.persona_providers as Record<string, ProviderType | PersonaProviderEntry | RawPersonaProviderBlock> | undefined,
+      ),
+      providerOptions: normalizedProvider.providerOptions,
       providerProfiles: normalizeProviderProfiles(parsed.provider_profiles as Record<string, { default_permission_mode: unknown; movement_permission_overrides?: Record<string, unknown> }> | undefined),
       runtime: parsed.runtime?.prepare && parsed.runtime.prepare.length > 0
         ? { prepare: [...new Set(parsed.runtime.prepare)] }

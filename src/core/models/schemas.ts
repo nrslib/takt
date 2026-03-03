@@ -80,6 +80,48 @@ export const MovementProviderOptionsSchema = z.object({
 
 /** Provider key schema for profile maps */
 export const ProviderProfileNameSchema = z.enum(['claude', 'codex', 'opencode', 'cursor', 'copilot', 'mock']);
+export const ProviderTypeSchema = ProviderProfileNameSchema;
+
+export const ProviderBlockSchema = z.object({
+  type: ProviderTypeSchema,
+  model: z.string().optional(),
+  network_access: z.boolean().optional(),
+  sandbox: ClaudeSandboxSchema,
+}).strict().superRefine((provider, ctx) => {
+  const hasNetworkAccess = provider.network_access !== undefined;
+  const hasSandbox = provider.sandbox !== undefined;
+
+  if (provider.type === 'claude') {
+    if (hasNetworkAccess) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['network_access'],
+        message: "provider.type 'claude' does not support 'network_access'.",
+      });
+    }
+    return;
+  }
+
+  if (provider.type === 'codex' || provider.type === 'opencode') {
+    if (hasSandbox) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['sandbox'],
+        message: `provider.type '${provider.type}' does not support 'sandbox'.`,
+      });
+    }
+    return;
+  }
+
+  if (hasNetworkAccess || hasSandbox) {
+    ctx.addIssue({
+      code: 'custom',
+      message: `provider.type '${provider.type}' does not support provider-specific options in provider block.`,
+    });
+  }
+});
+
+export const ProviderReferenceSchema = z.union([ProviderTypeSchema, ProviderBlockSchema]);
 
 /** Provider permission profile schema */
 export const ProviderPermissionProfileSchema = z.object({
@@ -111,6 +153,7 @@ export const RuntimeConfigSchema = z.object({
 
 /** Piece-level provider options schema */
 export const PieceProviderOptionsSchema = z.object({
+  provider: ProviderReferenceSchema.optional(),
   provider_options: MovementProviderOptionsSchema,
   runtime: RuntimeConfigSchema,
 }).optional();
@@ -262,7 +305,7 @@ export const ParallelSubMovementRawSchema = z.object({
   knowledge: z.union([z.string(), z.array(z.string())]).optional(),
   allowed_tools: z.array(z.string()).optional(),
   mcp_servers: McpServersSchema,
-  provider: z.enum(['claude', 'codex', 'opencode', 'cursor', 'copilot', 'mock']).optional(),
+  provider: ProviderReferenceSchema.optional(),
   model: z.string().optional(),
   /** Deprecated alias */
   permission_mode: z.never().optional(),
@@ -295,7 +338,7 @@ export const PieceMovementRawSchema = z.object({
   knowledge: z.union([z.string(), z.array(z.string())]).optional(),
   allowed_tools: z.array(z.string()).optional(),
   mcp_servers: McpServersSchema,
-  provider: z.enum(['claude', 'codex', 'opencode', 'cursor', 'copilot', 'mock']).optional(),
+  provider: ProviderReferenceSchema.optional(),
   model: z.string().optional(),
   /** Deprecated alias */
   permission_mode: z.never().optional(),
@@ -386,9 +429,23 @@ export const PieceConfigRawSchema = z.object({
 });
 
 export const PersonaProviderEntrySchema = z.object({
-  provider: z.enum(['claude', 'codex', 'opencode', 'cursor', 'copilot', 'mock']).optional(),
+  provider: ProviderTypeSchema.optional(),
   model: z.string().optional(),
-});
+}).strict().refine(
+  (entry) => entry.provider !== undefined || entry.model !== undefined,
+  { message: "persona_providers entry must include either 'provider' or 'model'" }
+);
+
+export const PersonaProviderBlockSchema = z.object({
+  type: ProviderTypeSchema,
+  model: z.string().optional(),
+}).strict();
+
+export const PersonaProviderReferenceSchema = z.union([
+  ProviderTypeSchema,
+  PersonaProviderBlockSchema,
+  PersonaProviderEntrySchema,
+]);
 
 /** Custom agent configuration schema */
 export const CustomAgentConfigSchema = z.object({
@@ -442,7 +499,7 @@ export const PieceCategoryConfigSchema = z.record(z.string(), PieceCategoryConfi
 export const GlobalConfigSchema = z.object({
   language: LanguageSchema.optional().default(DEFAULT_LANGUAGE),
   log_level: z.enum(['debug', 'info', 'warn', 'error']).optional().default('info'),
-  provider: z.enum(['claude', 'codex', 'opencode', 'cursor', 'copilot', 'mock']).optional().default('claude'),
+  provider: ProviderReferenceSchema.optional().default('claude'),
   model: z.string().optional(),
   observability: ObservabilityConfigSchema.optional(),
   analytics: AnalyticsConfigSchema.optional(),
@@ -483,10 +540,7 @@ export const GlobalConfigSchema = z.object({
   /** Path to piece categories file (default: ~/.takt/preferences/piece-categories.yaml) */
   piece_categories_file: z.string().optional(),
   /** Per-persona provider and model overrides. */
-  persona_providers: z.record(z.string(), z.union([
-    z.enum(['claude', 'codex', 'opencode', 'cursor', 'copilot', 'mock']),
-    PersonaProviderEntrySchema,
-  ])).optional(),
+  persona_providers: z.record(z.string(), PersonaProviderReferenceSchema).optional(),
   /** Global provider-specific options (lowest priority) */
   provider_options: MovementProviderOptionsSchema,
   /** Provider-specific permission profiles */
@@ -526,8 +580,14 @@ export const GlobalConfigSchema = z.object({
 /** Project config schema */
 export const ProjectConfigSchema = z.object({
   piece: z.string().optional(),
-  provider: z.enum(['claude', 'codex', 'opencode', 'cursor', 'copilot', 'mock']).optional(),
+  verbose: z.boolean().optional(),
+  provider: ProviderReferenceSchema.optional(),
   model: z.string().optional(),
+  analytics: AnalyticsConfigSchema.optional(),
+  /** Auto-create PR after worktree execution (project override) */
+  auto_pr: z.boolean().optional(),
+  /** Create PR as draft (project override) */
+  draft_pr: z.boolean().optional(),
   provider_options: MovementProviderOptionsSchema,
   provider_profiles: ProviderPermissionProfilesSchema,
   /** Number of tasks to run concurrently in takt run (default from global: 1, max: 10) */
@@ -539,10 +599,10 @@ export const ProjectConfigSchema = z.object({
   /** Submodule acquisition mode (all or explicit path list) */
   submodules: z.union([
     z.string().refine((value) => value.trim().toLowerCase() === 'all', {
-      message: 'submodules string value must be "all"',
+      message: 'Invalid submodules: string value must be "all"',
     }),
     z.array(z.string().min(1)).refine((paths) => paths.every((path) => !path.includes('*')), {
-      message: 'submodules path entries must not include wildcard "*"',
+      message: 'Invalid submodules: path entries must not include wildcard "*"',
     }),
   ]).optional(),
   /** Compatibility flag for full submodule acquisition when submodules is unset */
