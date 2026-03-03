@@ -187,10 +187,10 @@ movements:
     pass_previous_response: false
     instruction: fix
     rules:
-      - condition: 修正が完了した
+      - condition: 修正完了
         next: reviewers
-      - condition: 修正を進行できない
-        next: supervise
+      - condition: 判断できない、情報不足
+        next: ABORT
 
   - name: supervise
     edit: false
@@ -200,15 +200,16 @@ movements:
       - Read
       - Glob
       - Grep
+      - Bash
       - WebSearch
       - WebFetch
     instruction: supervise
     pass_previous_response: false
     rules:
-      - condition: すべての検証が完了し、マージ可能な状態である
+      - condition: すべて問題なし
         next: COMPLETE
-      - condition: 問題が検出された
-        next: fix_supervisor
+      - condition: 要求未達成、テスト失敗、ビルドエラー
+        next: ABORT
     output_contracts:
       report:
         - name: supervisor-validation.md
@@ -216,30 +217,3 @@ movements:
         - name: summary.md
           format: summary
           use_judge: false
-
-  - name: fix_supervisor
-    edit: true
-    persona: coder
-    policy:
-      - coding
-      - testing
-    knowledge:
-      - takt
-      - architecture
-      - security
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - Edit
-      - Write
-      - Bash
-      - WebSearch
-      - WebFetch
-    instruction: fix-supervisor
-    pass_previous_response: false
-    rules:
-      - condition: 監督者の指摘に対する修正が完了した
-        next: supervise
-      - condition: 修正を進行できない
-        next: supervise

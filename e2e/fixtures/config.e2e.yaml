@@ -1,6 +1,11 @@
 provider: claude
 language: en
 log_level: info
+provider_options:
+  codex:
+    network_access: true
+  opencode:
+    network_access: true
 notification_sound: false
 notification_sound_events:
   iteration_limit: false

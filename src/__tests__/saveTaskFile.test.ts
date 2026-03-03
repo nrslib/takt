@@ -4,7 +4,8 @@ import * as path from 'node:path';
 import { tmpdir } from 'node:os';
 import { parse as parseYaml } from 'yaml';
 
-vi.mock('../infra/task/summarize.js', () => ({
+vi.mock('../infra/task/summarize.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   summarizeTaskName: vi.fn().mockImplementation((content: string) => {
     const slug = content.split('\n')[0]!
       .toLowerCase()
@@ -36,14 +37,23 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   }),
 }));
 
+vi.mock('../infra/task/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  getCurrentBranch: vi.fn().mockReturnValue('main'),
+  branchExists: vi.fn().mockReturnValue(true),
+}));
+
 import { success, info } from '../shared/ui/index.js';
 import { confirm, promptInput } from '../shared/prompt/index.js';
 import { saveTaskFile, saveTaskFromInteractive } from '../features/tasks/add/index.js';
+import { getCurrentBranch, branchExists } from '../infra/task/index.js';
 
 const mockSuccess = vi.mocked(success);
 const mockInfo = vi.mocked(info);
 const mockConfirm = vi.mocked(confirm);
 const mockPromptInput = vi.mocked(promptInput);
+const mockGetCurrentBranch = vi.mocked(getCurrentBranch);
+const mockBranchExists = vi.mocked(branchExists);
 
 let testDir: string;
 
@@ -57,6 +67,8 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date('2026-02-10T04:40:00.000Z'));
   testDir = fs.mkdtempSync(path.join(tmpdir(), 'takt-test-save-'));
+  mockGetCurrentBranch.mockReturnValue('main');
+  mockBranchExists.mockReturnValue(true);
 });
 
 afterEach(() => {
@@ -103,7 +115,20 @@ describe('saveTaskFile', () => {
     expect(task.task_dir).toBeTypeOf('string');
   });
 
-  it('draftPr: true が draft_pr: true として保存される', async () => {
+  it('should persist base_branch when it is provided', async () => {
+    await saveTaskFile(testDir, 'Task', {
+      piece: 'review',
+      issue: 42,
+      worktree: true,
+      branch: 'feature/bugfix',
+      baseBranch: 'release/main',
+    });
+
+    const task = loadTasks(testDir).tasks[0]!;
+    expect(task.base_branch).toBe('release/main');
+  });
+
+  it('should persist draft_pr when draftPr is true', async () => {
     await saveTaskFile(testDir, 'Draft task', {
       autoPr: true,
       draftPr: true,
@@ -208,5 +233,18 @@ describe('saveTaskFromInteractive', () => {
       expect(task.issue).toBe(42);
       expect(task.worktree).toBe(true);
     });
+  });
+
+  it('should save base_branch when current branch is not main/master and user confirms', async () => {
+    mockGetCurrentBranch.mockReturnValue('feature/custom-base');
+    mockConfirm.mockResolvedValueOnce(true);
+    mockPromptInput.mockResolvedValueOnce('');
+    mockPromptInput.mockResolvedValueOnce('');
+    mockConfirm.mockResolvedValueOnce(false);
+
+    await saveTaskFromInteractive(testDir, 'Task content');
+
+    const task = loadTasks(testDir).tasks[0]!;
+    expect(task.base_branch).toBe('feature/custom-base');
   });
 });

@@ -1,16 +1,6 @@
-/**
- * Default action routing
- *
- * Handles the default (no subcommand) action: task execution,
- * pipeline mode, or interactive mode.
- */
-
-import { info, success, error as logError, withProgress } from '../../shared/ui/index.js';
+import { info, success, error as logError } from '../../shared/ui/index.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
 import { getLabel } from '../../shared/i18n/index.js';
-import { formatIssueAsTask, parseIssueNumbers, formatPrReviewAsTask } from '../../infra/github/index.js';
-import { getGitProvider } from '../../infra/git/index.js';
-import type { PrReviewData } from '../../infra/git/index.js';
 import { checkoutBranch } from '../../infra/task/index.js';
 import { selectAndExecuteTask, determinePiece, saveTaskFromInteractive, createIssueAndSaveTask, promptLabelSelection, type SelectAndExecuteOptions } from '../../features/tasks/index.js';
 import { executePipeline } from '../../features/pipeline/index.js';
@@ -26,85 +16,9 @@ import {
 } from '../../features/interactive/index.js';
 import { getPieceDescription, resolveConfigValue, resolveConfigValues, loadPersonaSessions } from '../../infra/config/index.js';
 import { program, resolvedCwd, pipelineMode } from './program.js';
-import { resolveAgentOverrides, isDirectTask } from './helpers.js';
+import { resolveAgentOverrides } from './helpers.js';
 import { loadTaskHistory } from './taskHistory.js';
-
-/**
- * Resolve issue references from CLI input.
- *
- * Handles two sources:
- * - --issue N option (numeric issue number)
- * - Positional argument containing issue references (#N or "#1 #2")
- *
- * Returns the formatted task text for interactive mode.
- * Throws on gh CLI unavailability or fetch failure.
- */
-async function resolveIssueInput(
-  issueOption: number | undefined,
-  task: string | undefined,
-): Promise<{ initialInput: string } | null> {
-  if (issueOption) {
-    const ghStatus = getGitProvider().checkCliStatus();
-    if (!ghStatus.available) {
-      throw new Error(ghStatus.error);
-    }
-    const issue = await withProgress(
-      'Fetching GitHub Issue...',
-      (fetchedIssue) => `GitHub Issue fetched: #${fetchedIssue.number} ${fetchedIssue.title}`,
-      async () => getGitProvider().fetchIssue(issueOption),
-    );
-    return { initialInput: formatIssueAsTask(issue) };
-  }
-
-  if (task && isDirectTask(task)) {
-    const ghStatus = getGitProvider().checkCliStatus();
-    if (!ghStatus.available) {
-      throw new Error(ghStatus.error);
-    }
-    const tokens = task.trim().split(/\s+/);
-    const issueNumbers = parseIssueNumbers(tokens);
-    if (issueNumbers.length === 0) {
-      throw new Error(`Invalid issue reference: ${task}`);
-    }
-    const issues = await withProgress(
-      'Fetching GitHub Issue...',
-      (fetchedIssues) => `GitHub Issues fetched: ${fetchedIssues.map((issue) => `#${issue.number}`).join(', ')}`,
-      async () => issueNumbers.map((n) => getGitProvider().fetchIssue(n)),
-    );
-    return { initialInput: issues.map(formatIssueAsTask).join('\n\n---\n\n') };
-  }
-
-  return null;
-}
-
-/**
- * Resolve PR review comments from `--pr` option.
- *
- * Fetches review comments and metadata, formats as task text.
- * Returns the formatted task text for interactive mode.
- * Throws on gh CLI unavailability or fetch failure.
- */
-async function resolvePrInput(
-  prNumber: number,
-): Promise<{ initialInput: string; prBranch: string }> {
-  const ghStatus = getGitProvider().checkCliStatus();
-  if (!ghStatus.available) {
-    throw new Error(ghStatus.error);
-  }
-
-  const prReview = await withProgress(
-    'Fetching PR review comments...',
-    (pr: PrReviewData) => `PR fetched: #${pr.number} ${pr.title}`,
-    async () => getGitProvider().fetchPrReviewComments(prNumber),
-  );
-
-  return { initialInput: formatPrReviewAsTask(prReview), prBranch: prReview.headRefName };
-}
-
-/**
- * Execute default action: handle task execution, pipeline mode, or interactive mode.
- * Exported for use in slash-command fallback logic.
- */
+import { resolveIssueInput, resolvePrInput } from './routing-inputs.js';
 export async function executeDefaultAction(task?: string): Promise<void> {
   const opts = program.opts();
   if (!pipelineMode && (opts.autoPr === true || opts.draft === true)) {
@@ -135,7 +49,6 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     piece: opts.piece as string | undefined,
   };
 
-  // --- Pipeline mode (non-interactive): triggered by --pipeline ---
   if (pipelineMode) {
     const exitCode = await executePipeline({
       issueNumber,
@@ -158,9 +71,6 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     return;
   }
 
-  // --- Normal (interactive) mode ---
-
-  // Resolve --task option to task text (direct execution, no interactive mode)
   const taskFromOption = opts.task as string | undefined;
   if (taskFromOption) {
     selectOptions.skipTaskList = true;
@@ -168,21 +78,21 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     return;
   }
 
-  // Resolve PR review comments (--pr N) before interactive mode
   let initialInput: string | undefined = task;
   let prBranch: string | undefined;
+  let prBaseBranch: string | undefined;
 
   if (prNumber) {
     try {
       const prResult = await resolvePrInput(prNumber);
       initialInput = prResult.initialInput;
       prBranch = prResult.prBranch;
+      prBaseBranch = prResult.baseBranch;
     } catch (e) {
       logError(getErrorMessage(e));
       process.exit(1);
     }
   } else {
-    // Resolve issue references (--issue N or #N positional arg) before interactive mode
     try {
       const issueResult = await resolveIssueInput(issueNumber, task);
       if (issueResult) {
@@ -194,7 +104,6 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     }
   }
 
-  // All paths below go through interactive mode
   const globalConfig = resolveConfigValues(resolvedCwd, ['language', 'interactivePreviewMovements', 'provider']);
   const lang = resolveLanguage(globalConfig.language);
 
@@ -207,7 +116,6 @@ export async function executeDefaultAction(task?: string): Promise<void> {
   const previewCount = globalConfig.interactivePreviewMovements;
   const pieceDesc = getPieceDescription(pieceId, resolvedCwd, previewCount);
 
-  // Mode selection after piece selection
   const selectedMode = await selectInteractiveMode(lang, pieceDesc.interactiveMode);
   if (selectedMode === null) {
     info(getLabel('interactive.ui.cancelled', lang));
@@ -283,7 +191,12 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     },
     save_task: async ({ task: confirmedTask }) => {
       const presetSettings = prBranch
-        ? { worktree: true as const, branch: prBranch, autoPr: false }
+        ? {
+          worktree: true as const,
+          branch: prBranch,
+          autoPr: false,
+          ...(prBaseBranch ? { baseBranch: prBaseBranch } : {}),
+        }
         : undefined;
       await saveTaskFromInteractive(resolvedCwd, confirmedTask, pieceId, { presetSettings });
     },

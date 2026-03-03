@@ -10,6 +10,7 @@ export default defineConfig({
       'e2e/specs/pipeline.e2e.ts',
       'e2e/specs/github-issue.e2e.ts',
       'e2e/specs/structured-output.e2e.ts',
+      'e2e/specs/codex-permission-mode.e2e.ts',
       'e2e/specs/opencode-conversation.e2e.ts',
       'e2e/specs/team-leader.e2e.ts',
       'e2e/specs/team-leader-worker-pool.e2e.ts',

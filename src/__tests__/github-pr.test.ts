@@ -1,10 +1,3 @@
-/**
- * Tests for github/pr module
- *
- * Tests buildPrBody formatting and findExistingPr logic.
- * createPullRequest/commentOnPr call `gh` CLI, not unit-tested here.
- */
-
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockExecFileSync = vi.fn();
@@ -183,13 +176,14 @@ describe('fetchPrReviewComments', () => {
     vi.clearAllMocks();
   });
 
-  it('should parse gh pr view JSON and return PrReviewData', () => {
+  it('should return PrReviewData when gh pr view JSON is valid', () => {
     // Given
     const ghResponse = {
       number: 456,
       title: 'Fix auth bug',
       body: 'PR description',
       url: 'https://github.com/org/repo/pull/456',
+      baseRefName: 'release/main',
       headRefName: 'fix/auth-bug',
       comments: [
         { author: { login: 'commenter1' }, body: 'Please update tests' },
@@ -221,11 +215,12 @@ describe('fetchPrReviewComments', () => {
     // Then
     expect(mockExecFileSync).toHaveBeenCalledWith(
       'gh',
-      ['pr', 'view', '456', '--json', 'number,title,body,url,headRefName,comments,reviews,files'],
+      ['pr', 'view', '456', '--json', 'number,title,body,url,headRefName,baseRefName,comments,reviews,files'],
       expect.objectContaining({ encoding: 'utf-8' }),
     );
     expect(result.number).toBe(456);
     expect(result.title).toBe('Fix auth bug');
+    expect((result as { baseRefName?: string }).baseRefName).toBe('release/main');
     expect(result.headRefName).toBe('fix/auth-bug');
     expect(result.comments).toEqual([{ author: 'commenter1', body: 'Please update tests' }]);
     expect(result.reviews).toEqual([

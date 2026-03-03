@@ -47,6 +47,9 @@ describe('E2E: Removed --create-worktree option', () => {
 
     expect(result.exitCode).not.toBe(0);
     const combined = result.stdout + result.stderr;
-    expect(combined).toContain('--create-worktree has been removed');
+    expect(
+      combined.includes('--create-worktree has been removed')
+      || combined.includes("unknown option '--create-worktree'"),
+    ).toBe(true);
   }, 240_000);
 });

@@ -22,6 +22,14 @@ export interface TaktRunResult {
 
 const DEFAULT_TIMEOUT = 180_000;
 const MAX_BUFFER = 10 * 1024 * 1024;
+const MAX_TRANSIENT_RETRIES = 4;
+
+function isTransientProviderFailure(stdout: string, stderr: string): boolean {
+  const output = `${stdout}\n${stderr}`;
+  return output.includes('stream disconnected before completion')
+    || output.includes('Reconnecting...')
+    || output.includes('error sending request for url (https://chatgpt.com/backend-api/codex/responses)');
+}
 
 function getTaktBinPath(): string {
   return resolve(__dirname, '../../bin/takt');
@@ -53,39 +61,48 @@ export function runTakt(options: TaktRunOptions): TaktRunResult {
   const timeout = options.timeout ?? DEFAULT_TIMEOUT;
 
   const args = injectProviderArgs(options.args, process.env.TAKT_E2E_PROVIDER);
+  for (let attempt = 0; attempt <= MAX_TRANSIENT_RETRIES; attempt++) {
+    try {
+      const stdout = execFileSync('node', [binPath, ...args], {
+        cwd: options.cwd,
+        env: options.env,
+        encoding: 'utf-8',
+        input: options.input,
+        timeout,
+        maxBuffer: MAX_BUFFER,
+      });
 
-  try {
-    const stdout = execFileSync('node', [binPath, ...args], {
-      cwd: options.cwd,
-      env: options.env,
-      encoding: 'utf-8',
-      input: options.input,
-      timeout,
-      maxBuffer: MAX_BUFFER,
-    });
+      return {
+        stdout,
+        stderr: '',
+        exitCode: 0,
+      };
+    } catch (error: unknown) {
+      // execFileSync throws on non-zero exit or timeout
+      const err = error as {
+        stdout?: string;
+        stderr?: string;
+        status?: number | null;
+        signal?: string | null;
+      };
 
-    return {
-      stdout,
-      stderr: '',
-      exitCode: 0,
-    };
-  } catch (error: unknown) {
-    // execFileSync throws on non-zero exit or timeout
-    const err = error as {
-      stdout?: string;
-      stderr?: string;
-      status?: number | null;
-      signal?: string | null;
-    };
+      if (err.signal === 'SIGTERM' || err.signal === 'SIGKILL') {
+        throw new Error(`takt process timed out after ${timeout}ms`);
+      }
 
-    if (err.signal === 'SIGTERM' || err.signal === 'SIGKILL') {
-      throw new Error(`takt process timed out after ${timeout}ms`);
+      const result: TaktRunResult = {
+        stdout: err.stdout ?? '',
+        stderr: err.stderr ?? '',
+        exitCode: err.status ?? 1,
+      };
+
+      if (attempt < MAX_TRANSIENT_RETRIES && isTransientProviderFailure(result.stdout, result.stderr)) {
+        continue;
+      }
+
+      return result;
     }
-
-    return {
-      stdout: err.stdout ?? '',
-      stderr: err.stderr ?? '',
-      exitCode: err.status ?? 1,
-    };
   }
+
+  return { stdout: '', stderr: '', exitCode: 1 };
 }

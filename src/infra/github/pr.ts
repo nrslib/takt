@@ -53,7 +53,7 @@ export function commentOnPr(cwd: string, prNumber: number, body: string): Commen
 }
 
 /** JSON fields requested from `gh pr view` for review data */
-const PR_REVIEW_JSON_FIELDS = 'number,title,body,url,headRefName,comments,reviews,files';
+const PR_REVIEW_JSON_FIELDS = 'number,title,body,url,headRefName,baseRefName,comments,reviews,files';
 
 /** Raw shape returned by `gh pr view --json` for review data */
 interface GhPrViewReviewResponse {
@@ -62,6 +62,7 @@ interface GhPrViewReviewResponse {
   body: string;
   url: string;
   headRefName: string;
+  baseRefName?: string;
   comments: Array<{ author: { login: string }; body: string }>;
   reviews: Array<{
     author: { login: string };
@@ -112,6 +113,7 @@ export function fetchPrReviewComments(prNumber: number): PrReviewData {
     body: data.body,
     url: data.url,
     headRefName: data.headRefName,
+    baseRefName: data.baseRefName,
     comments,
     reviews,
     files: data.files.map((f) => f.path),

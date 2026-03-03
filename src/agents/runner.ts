@@ -8,6 +8,7 @@ import { loadCustomAgents, loadAgentPrompt, loadGlobalConfig, loadProjectConfig 
 import { getProvider, type ProviderType, type ProviderCallOptions } from '../infra/providers/index.js';
 import type { AgentResponse, CustomAgentConfig } from '../core/models/index.js';
 import { resolveAgentProviderModel } from '../core/piece/provider-resolution.js';
+import { DEFAULT_PROVIDER_PERMISSION_PROFILES, resolveMovementPermissionMode } from '../core/piece/permission-profile-resolution.js';
 import { createLogger } from '../shared/utils/index.js';
 import { loadTemplate } from '../shared/prompts/index.js';
 import type { RunAgentOptions } from './types.js';
@@ -27,7 +28,12 @@ export class AgentRunner {
     cwd: string,
     personaDisplayName: string | undefined,
     options?: RunAgentOptions,
-  ): { provider: ProviderType; model: string | undefined } {
+  ): {
+    provider: ProviderType;
+    model: string | undefined;
+    localConfig: ReturnType<typeof loadProjectConfig>;
+    globalConfig: ReturnType<typeof loadGlobalConfig>;
+  } {
     const localConfig = loadProjectConfig(cwd);
     const globalConfig = loadGlobalConfig();
     const resolved = resolveAgentProviderModel({
@@ -49,6 +55,8 @@ export class AgentRunner {
     return {
       provider: resolvedProvider,
       model: resolved.model,
+      localConfig,
+      globalConfig,
     };
   }
 
@@ -82,9 +90,19 @@ export class AgentRunner {
   /** Build ProviderCallOptions from RunAgentOptions */
   private static buildCallOptions(
     resolvedModel: string | undefined,
+    resolvedProvider: ProviderType,
     options: RunAgentOptions,
+    localConfig: ReturnType<typeof loadProjectConfig>,
+    globalConfig: ReturnType<typeof loadGlobalConfig>,
     agentConfig?: CustomAgentConfig,
   ): ProviderCallOptions {
+    const permissionMode = AgentRunner.resolvePermissionMode(
+      resolvedProvider,
+      options,
+      localConfig,
+      globalConfig,
+    );
+
     return {
       cwd: options.cwd,
       abortSignal: options.abortSignal,
@@ -93,7 +111,7 @@ export class AgentRunner {
       mcpServers: options.mcpServers,
       maxTurns: options.maxTurns,
       model: resolvedModel,
-      permissionMode: options.permissionMode,
+      permissionMode,
       providerOptions: options.providerOptions,
       onStream: options.onStream,
       onPermissionRequest: options.onPermissionRequest,
@@ -101,6 +119,26 @@ export class AgentRunner {
       bypassPermissions: options.bypassPermissions,
       outputSchema: options.outputSchema,
     };
+  }
+
+  private static resolvePermissionMode(
+    resolvedProvider: ProviderType,
+    options: RunAgentOptions,
+    localConfig: ReturnType<typeof loadProjectConfig>,
+    globalConfig: ReturnType<typeof loadGlobalConfig>,
+  ): RunAgentOptions['permissionMode'] {
+    if (options.permissionResolution) {
+      return resolveMovementPermissionMode({
+        movementName: options.permissionResolution.movementName,
+        requiredPermissionMode: options.permissionResolution.requiredPermissionMode,
+        provider: resolvedProvider,
+        projectProviderProfiles: options.permissionResolution.providerProfiles
+          ?? localConfig.providerProfiles,
+        globalProviderProfiles: globalConfig.providerProfiles
+          ?? DEFAULT_PROVIDER_PERMISSION_PROFILES,
+      });
+    }
+    return options.permissionMode;
   }
 
   /** Run a custom agent */
@@ -122,7 +160,14 @@ export class AgentRunner {
       claudeSkill: agentConfig.claudeSkill,
     });
 
-    return agent.call(task, AgentRunner.buildCallOptions(resolved.model, options, agentConfig));
+    return agent.call(task, AgentRunner.buildCallOptions(
+      resolved.model,
+      providerType,
+      options,
+      resolved.localConfig,
+      resolved.globalConfig,
+      agentConfig,
+    ));
   }
 
   /** Run an agent by name, path, inline prompt string, or no agent at all */
@@ -145,7 +190,13 @@ export class AgentRunner {
     const resolved = AgentRunner.resolveProviderAndModel(options.cwd, personaName, options);
     const providerType = resolved.provider;
     const provider = getProvider(providerType);
-    const callOptions = AgentRunner.buildCallOptions(resolved.model, options);
+    const callOptions = AgentRunner.buildCallOptions(
+      resolved.model,
+      providerType,
+      options,
+      resolved.localConfig,
+      resolved.globalConfig,
+    );
 
     // 1. If personaPath is provided (resolved file exists), load prompt from file
     //    and wrap it through the perform_agent_system_prompt template

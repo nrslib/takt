@@ -9,8 +9,17 @@ import { runTakt } from '../helpers/takt-runner';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+function isGitHubAvailable(): boolean {
+  try {
+    execFileSync('gh', ['api', 'rate_limit'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // E2E更新時は docs/testing/e2e.md も更新すること
-describe('E2E: GitHub Issue processing', () => {
+describe.skipIf(!isGitHubAvailable())('E2E: GitHub Issue processing', () => {
   let isolatedEnv: IsolatedEnv;
   let testRepo: TestRepo;
   let issueNumber: string;

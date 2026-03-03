@@ -39,25 +39,38 @@ function createBuilder(step: PieceMovement, engineOverrides: Partial<PieceEngine
 }
 
 describe('OptionsBuilder.buildBaseOptions', () => {
-  it('resolves permission mode using provider profiles', () => {
+  it('passes permission resolution context for provider profile resolution', () => {
     const step = createMovement();
     const builder = createBuilder(step);
 
     const options = builder.buildBaseOptions(step);
 
-    expect(options.permissionMode).toBe('full');
+    expect(options.permissionMode).toBeUndefined();
+    expect(options.permissionResolution).toEqual({
+      movementName: 'reviewers',
+      requiredPermissionMode: undefined,
+      providerProfiles: {
+        codex: { defaultPermissionMode: 'full' },
+      },
+    });
   });
 
-  it('applies movement requiredPermissionMode as minimum floor', () => {
+  it('includes requiredPermissionMode in permission resolution context', () => {
     const step = createMovement({ requiredPermissionMode: 'full' });
     const builder = createBuilder(step);
 
     const options = builder.buildBaseOptions(step);
 
-    expect(options.permissionMode).toBe('full');
+    expect(options.permissionResolution).toEqual({
+      movementName: 'reviewers',
+      requiredPermissionMode: 'full',
+      providerProfiles: {
+        codex: { defaultPermissionMode: 'full' },
+      },
+    });
   });
 
-  it('uses readonly when provider is not configured', () => {
+  it('still passes permission resolution context when provider is not configured', () => {
     const step = createMovement();
     const builder = createBuilder(step, {
       provider: undefined,
@@ -65,7 +78,11 @@ describe('OptionsBuilder.buildBaseOptions', () => {
     });
 
     const options = builder.buildBaseOptions(step);
-    expect(options.permissionMode).toBe('readonly');
+    expect(options.permissionResolution).toEqual({
+      movementName: 'reviewers',
+      requiredPermissionMode: undefined,
+      providerProfiles: undefined,
+    });
   });
 
   it('merges provider options with precedence: global/project < movement', () => {

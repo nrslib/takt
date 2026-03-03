@@ -3,7 +3,13 @@
  */
 
 import type { StreamCallback, PermissionHandler, AskUserQuestionHandler } from '../infra/claude/types.js';
-import type { PermissionMode, Language, McpServerConfig, MovementProviderOptions } from '../core/models/index.js';
+import type {
+  PermissionMode,
+  Language,
+  McpServerConfig,
+  MovementProviderOptions,
+  ProviderPermissionProfiles,
+} from '../core/models/index.js';
 
 export type { StreamCallback };
 
@@ -21,6 +27,11 @@ export interface RunAgentOptions {
   mcpServers?: Record<string, McpServerConfig>;
   maxTurns?: number;
   permissionMode?: PermissionMode;
+  permissionResolution?: {
+    movementName: string;
+    requiredPermissionMode?: PermissionMode;
+    providerProfiles?: ProviderPermissionProfiles;
+  };
   providerOptions?: MovementProviderOptions;
   onStream?: StreamCallback;
   onPermissionRequest?: PermissionHandler;

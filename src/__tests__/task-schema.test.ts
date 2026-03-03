@@ -1,9 +1,3 @@
-/**
- * Unit tests for task schema validation
- *
- * Tests TaskRecordSchema cross-field validation rules (status-dependent constraints).
- */
-
 import { describe, it, expect } from 'vitest';
 import {
   TaskRecordSchema,
@@ -84,6 +78,10 @@ describe('TaskExecutionConfigSchema', () => {
 
   it('should reject non-integer issue number', () => {
     expect(() => TaskExecutionConfigSchema.parse({ issue: 1.5 })).toThrow();
+  });
+
+  it('should accept base_branch when provided in config', () => {
+    expect(() => TaskExecutionConfigSchema.parse({ base_branch: 'feature/base' })).not.toThrow();
   });
 });
 
@@ -250,5 +248,14 @@ describe('TaskRecordSchema', () => {
       const record = { ...makePendingRecord(), content: undefined, content_file: '' };
       expect(() => TaskRecordSchema.parse(record)).toThrow();
     });
+  });
+
+  it('should accept base_branch when task record uses config-only fields', () => {
+    expect(() => TaskRecordSchema.parse({
+      ...makePendingRecord(),
+      content: undefined,
+      task_dir: '.takt/tasks/feat-bugfix',
+      base_branch: 'release/main',
+    })).not.toThrow();
   });
 });

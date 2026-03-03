@@ -6,7 +6,6 @@ import type { PhaseRunnerContext } from '../phase-runner.js';
 import type { PieceEngineOptions, PhaseName, MovementProviderInfo } from '../types.js';
 import { buildSessionKey } from '../session-key.js';
 import { resolveMovementProviderModel } from '../provider-resolution.js';
-import { DEFAULT_PROVIDER_PERMISSION_PROFILES, resolveMovementPermissionMode } from '../permission-profile-resolution.js';
 
 function mergeProviderOptions(
   ...layers: (MovementProviderOptions | undefined)[]
@@ -79,13 +78,11 @@ export class OptionsBuilder {
       model: this.engineOptions.model,
       stepProvider: resolvedProvider,
       stepModel: resolvedModel,
-      permissionMode: resolveMovementPermissionMode({
+      permissionResolution: {
         movementName: step.name,
         requiredPermissionMode: step.requiredPermissionMode,
-        provider: resolvedProvider,
-        projectProviderProfiles: this.engineOptions.providerProfiles,
-        globalProviderProfiles: DEFAULT_PROVIDER_PERMISSION_PROFILES,
-      }),
+        providerProfiles: this.engineOptions.providerProfiles,
+      },
       providerOptions: resolveMovementProviderOptions(
         this.engineOptions.providerOptionsSource,
         this.engineOptions.providerOptions,

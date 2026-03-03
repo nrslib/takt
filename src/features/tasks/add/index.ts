@@ -7,7 +7,7 @@
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { promptInput, confirm, selectOption } from '../../../shared/prompt/index.js';
-import { success, info, error, withProgress } from '../../../shared/ui/index.js';
+import { info, error, withProgress } from '../../../shared/ui/index.js';
 import { getLabel } from '../../../shared/i18n/index.js';
 import type { Language } from '../../../core/models/types.js';
 import { TaskRunner, type TaskFileData, summarizeTaskName } from '../../../infra/task/index.js';
@@ -17,6 +17,7 @@ import { isIssueReference, resolveIssueTask, parseIssueNumbers, formatPrReviewAs
 import { getGitProvider, type PrReviewData } from '../../../infra/git/index.js';
 import { firstLine } from '../../../infra/task/naming.js';
 import { extractTitle, createIssueFromTask } from './issueTask.js';
+import { displayTaskCreationResult, promptWorktreeSettings, type WorktreeSettings } from './worktree-settings.js';
 export { extractTitle, createIssueFromTask };
 
 const log = createLogger('add-task');
@@ -42,7 +43,15 @@ function resolveUniqueTaskSlug(cwd: string, baseSlug: string): string {
 export async function saveTaskFile(
   cwd: string,
   taskContent: string,
-  options?: { piece?: string; issue?: number; worktree?: boolean | string; branch?: string; autoPr?: boolean; draftPr?: boolean },
+  options?: {
+    piece?: string;
+    issue?: number;
+    worktree?: boolean | string;
+    branch?: string;
+    baseBranch?: string;
+    autoPr?: boolean;
+    draftPr?: boolean;
+  },
 ): Promise<{ taskName: string; tasksFile: string }> {
   const runner = new TaskRunner(cwd);
   const slug = await summarizeTaskName(taskContent, { cwd });
@@ -56,6 +65,7 @@ export async function saveTaskFile(
   const config: Omit<TaskFileData, 'task'> = {
     ...(options?.worktree !== undefined && { worktree: options.worktree }),
     ...(options?.branch && { branch: options.branch }),
+    ...(options?.baseBranch && { base_branch: options.baseBranch }),
     ...(options?.piece && { piece: options.piece }),
     ...(options?.issue !== undefined && { issue: options.issue }),
     ...(options?.autoPr !== undefined && { auto_pr: options.autoPr }),
@@ -72,34 +82,6 @@ export async function saveTaskFile(
   return { taskName: created.name, tasksFile };
 }
 
-interface WorktreeSettings {
-  worktree?: boolean | string;
-  branch?: string;
-  autoPr?: boolean;
-  draftPr?: boolean;
-}
-
-function displayTaskCreationResult(
-  created: { taskName: string; tasksFile: string },
-  settings: WorktreeSettings,
-  piece?: string,
-): void {
-  success(`Task created: ${created.taskName}`);
-  info(`  File: ${created.tasksFile}`);
-  if (settings.worktree) {
-    info(`  Worktree: ${typeof settings.worktree === 'string' ? settings.worktree : 'auto'}`);
-  }
-  if (settings.branch) {
-    info(`  Branch: ${settings.branch}`);
-  }
-  if (settings.autoPr) {
-    info(`  Auto-PR: yes`);
-  }
-  if (settings.draftPr) {
-    info(`  Draft PR: yes`);
-  }
-  if (piece) info(`  Piece: ${piece}`);
-}
 
 /**
  * Prompt user to select a label for the GitHub Issue.
@@ -126,18 +108,6 @@ export async function promptLabelSelection(lang: Language): Promise<string[]> {
   return [selected];
 }
 
-async function promptWorktreeSettings(): Promise<WorktreeSettings> {
-  const customPath = await promptInput('Worktree path (Enter for auto)');
-  const worktree: boolean | string = customPath || true;
-
-  const customBranch = await promptInput('Branch name (Enter for auto)');
-  const branch = customBranch || undefined;
-
-  const autoPr = await confirm('Auto-create PR?', true);
-  const draftPr = autoPr ? await confirm('Create as draft?', true) : false;
-
-  return { worktree, branch, autoPr, draftPr };
-}
 
 /**
  * Save a task from interactive mode result.
@@ -156,7 +126,7 @@ export async function saveTaskFromInteractive(
       return;
     }
   }
-  const settings = options?.presetSettings ?? await promptWorktreeSettings();
+  const settings = options?.presetSettings ?? await promptWorktreeSettings(cwd);
   const created = await saveTaskFile(cwd, task, { piece, issue: options?.issue, ...settings });
   displayTaskCreationResult(created, settings, piece);
 }
@@ -231,6 +201,7 @@ export async function addTask(
     const settings = {
       worktree: true,
       branch: prReview.headRefName,
+      baseBranch: prReview.baseRefName,
       autoPr: false,
     };
     const created = await saveTaskFile(cwd, taskContent, { piece, ...settings });
@@ -274,7 +245,7 @@ export async function addTask(
     return;
   }
 
-  const settings = await promptWorktreeSettings();
+  const settings = await promptWorktreeSettings(cwd);
 
   const created = await saveTaskFile(cwd, taskContent, {
     piece,

@@ -251,4 +251,53 @@ describe('option resolution order', () => {
       expect.objectContaining({ model: 'project-model' }),
     );
   });
+
+  it('should resolve permission mode after provider resolution using provider profiles', async () => {
+    loadProjectConfigMock.mockReturnValue({});
+    loadGlobalConfigMock.mockReturnValue({
+      provider: 'codex',
+      providerProfiles: {
+        codex: { defaultPermissionMode: 'full' },
+      },
+      language: 'en',
+      concurrency: 1,
+      taskPollIntervalMs: 500,
+    });
+
+    await runAgent(undefined, 'task', {
+      cwd: '/repo',
+      permissionResolution: {
+        movementName: 'supervise',
+      },
+    });
+
+    expect(getProviderMock).toHaveBeenLastCalledWith('codex');
+    expect(providerCallMock).toHaveBeenLastCalledWith(
+      'task',
+      expect.objectContaining({ permissionMode: 'full' }),
+    );
+  });
+
+  it('should preserve explicit permission mode when permissionResolution is not set', async () => {
+    loadProjectConfigMock.mockReturnValue({});
+    loadGlobalConfigMock.mockReturnValue({
+      provider: 'codex',
+      providerProfiles: {
+        codex: { defaultPermissionMode: 'full' },
+      },
+      language: 'en',
+      concurrency: 1,
+      taskPollIntervalMs: 500,
+    });
+
+    await runAgent(undefined, 'task', {
+      cwd: '/repo',
+      permissionMode: 'readonly',
+    });
+
+    expect(providerCallMock).toHaveBeenLastCalledWith(
+      'task',
+      expect.objectContaining({ permissionMode: 'readonly' }),
+    );
+  });
 });

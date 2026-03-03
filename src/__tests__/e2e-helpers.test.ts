@@ -93,6 +93,10 @@ describe('createIsolatedEnv', () => {
       run_complete: true,
       run_abort: false,
     });
+    expect(config.provider_options).toEqual({
+      codex: { network_access: true },
+      opencode: { network_access: true },
+    });
   });
 
   it('should override provider in config.yaml when TAKT_E2E_PROVIDER is set', () => {

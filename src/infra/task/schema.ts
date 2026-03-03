@@ -12,6 +12,7 @@ import { isValidTaskDir } from '../../shared/utils/taskPaths.js';
 export const TaskExecutionConfigSchema = z.object({
   worktree: z.union([z.boolean(), z.string()]).optional(),
   branch: z.string().optional(),
+  base_branch: z.string().optional(),
   piece: z.string().optional(),
   issue: z.number().int().positive().optional(),
   start_movement: z.string().optional(),

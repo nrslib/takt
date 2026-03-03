@@ -243,6 +243,7 @@ export class GlobalConfigManager {
       logLevel: parsed.log_level,
       provider: normalizedProvider.provider,
       model: normalizedProvider.model,
+      piece: parsed.piece,
       observability: parsed.observability ? {
         providerEvents: parsed.observability.provider_events,
       } : undefined,
@@ -312,6 +313,9 @@ export class GlobalConfigManager {
     };
     if (config.model) {
       raw.model = config.model;
+    }
+    if (config.piece) {
+      raw.piece = config.piece;
     }
     if (config.observability && config.observability.providerEvents !== undefined) {
       raw.observability = {

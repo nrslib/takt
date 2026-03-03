@@ -23,7 +23,7 @@ function isOpencodeAvailable(): boolean {
 }
 
 const MODEL = process.env.OPENCODE_E2E_MODEL ?? 'minimax/MiniMax-M2.5-highspeed';
-const enabled = isOpencodeAvailable();
+const enabled = isOpencodeAvailable() && process.env.TAKT_E2E_PROVIDER === 'opencode';
 
 describe.skipIf(!enabled)('OpenCode real E2E conversation', () => {
   afterAll(() => {

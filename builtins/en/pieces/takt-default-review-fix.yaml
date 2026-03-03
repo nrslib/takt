@@ -187,10 +187,10 @@ movements:
     pass_previous_response: false
     instruction: fix
     rules:
-      - condition: Fixes complete
+      - condition: Fix complete
         next: reviewers
-      - condition: Unable to proceed with fixes
-        next: supervise
+      - condition: Cannot proceed, insufficient info
+        next: ABORT
 
   - name: supervise
     edit: false
@@ -200,15 +200,16 @@ movements:
       - Read
       - Glob
       - Grep
+      - Bash
       - WebSearch
       - WebFetch
     instruction: supervise
     pass_previous_response: false
     rules:
-      - condition: All validations complete, ready to merge
+      - condition: All checks passed
         next: COMPLETE
-      - condition: Issues detected
-        next: fix_supervisor
+      - condition: Requirements unmet, tests failing, build errors
+        next: ABORT
     output_contracts:
       report:
         - name: supervisor-validation.md
@@ -216,30 +217,3 @@ movements:
         - name: summary.md
           format: summary
           use_judge: false
-
-  - name: fix_supervisor
-    edit: true
-    persona: coder
-    policy:
-      - coding
-      - testing
-    knowledge:
-      - takt
-      - architecture
-      - security
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - Edit
-      - Write
-      - Bash
-      - WebSearch
-      - WebFetch
-    instruction: fix-supervisor
-    pass_previous_response: false
-    rules:
-      - condition: Fixes for supervisor findings complete
-        next: supervise
-      - condition: Unable to proceed with fixes
-        next: supervise
