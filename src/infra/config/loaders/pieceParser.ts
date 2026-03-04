@@ -24,11 +24,10 @@ import {
 } from './resource-resolver.js';
 
 type RawStep = z.output<typeof PieceMovementRawSchema>;
-type RawPiece = z.output<typeof PieceConfigRawSchema>;
 
 import type { MovementProviderOptions } from '../../../core/models/piece-types.js';
-import type { PieceRuntimeConfig } from '../../../core/models/piece-types.js';
 import type { PieceOverrides } from '../../../core/models/persisted-global-config.js';
+import { normalizeRuntime } from '../configNormalizers.js';
 import { applyQualityGateOverrides } from './qualityGateOverrides.js';
 import { loadProjectConfig } from '../project/projectConfig.js';
 import { loadGlobalConfig } from '../global/globalConfig.js';
@@ -52,16 +51,6 @@ function normalizeProviderReference(
     model,
     providerOptions as Record<string, unknown> | undefined,
   );
-}
-
-function normalizeRuntimeConfig(raw: RawPiece['piece_config']): PieceRuntimeConfig | undefined {
-  const prepare = raw?.runtime?.prepare;
-  if (!prepare || prepare.length === 0) {
-    return undefined;
-  }
-  return {
-    prepare: [...new Set(prepare)],
-  };
 }
 
 /**
@@ -399,7 +388,7 @@ export function normalizePieceConfig(
   const pieceProvider = normalizedPieceProvider.provider;
   const pieceModel = normalizedPieceProvider.model;
   const pieceProviderOptions = normalizedPieceProvider.providerOptions;
-  const pieceRuntime = normalizeRuntimeConfig(parsed.piece_config);
+  const pieceRuntime = normalizeRuntime(parsed.piece_config?.runtime);
 
   const movements: PieceMovement[] = parsed.movements.map((step) =>
     normalizeStepFromRaw(step, pieceDir, sections, pieceProvider, pieceModel, pieceProviderOptions, context, projectOverrides, globalOverrides),

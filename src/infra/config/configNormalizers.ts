@@ -4,8 +4,22 @@
  * Used by both globalConfig.ts and projectConfig.ts.
  */
 
+import type { PieceRuntimeConfig } from '../../core/models/piece-types.js';
 import type { ProviderPermissionProfiles } from '../../core/models/provider-profiles.js';
 import type { PieceOverrides } from '../../core/models/persisted-global-config.js';
+
+/**
+ * Normalize runtime config: deduplicate prepare entries, return undefined if empty.
+ * Used by both load (raw → domain) and save (domain → raw) since the field name is identical.
+ */
+export function normalizeRuntime(
+  runtime: { prepare?: string[] } | undefined,
+): PieceRuntimeConfig | undefined {
+  if (!runtime?.prepare || runtime.prepare.length === 0) {
+    return undefined;
+  }
+  return { prepare: [...new Set(runtime.prepare)] };
+}
 
 export function normalizeProviderProfiles(
   raw: Record<string, { default_permission_mode: unknown; movement_permission_overrides?: Record<string, unknown> }> | undefined,

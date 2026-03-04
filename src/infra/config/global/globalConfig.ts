@@ -16,6 +16,7 @@ import {
   type ConfigProviderReference,
 } from '../providerReference.js';
 import {
+  normalizeRuntime,
   normalizeProviderProfiles,
   denormalizeProviderProfiles,
   normalizePieceOverrides,
@@ -209,9 +210,7 @@ export class GlobalConfigManager {
       ),
       providerOptions: normalizedProvider.providerOptions,
       providerProfiles: normalizeProviderProfiles(parsed.provider_profiles as Record<string, { default_permission_mode: unknown; movement_permission_overrides?: Record<string, unknown> }> | undefined),
-      runtime: parsed.runtime?.prepare && parsed.runtime.prepare.length > 0
-        ? { prepare: [...new Set(parsed.runtime.prepare)] }
-        : undefined,
+      runtime: normalizeRuntime(parsed.runtime),
       branchNameStrategy: parsed.branch_name_strategy,
       preventSleep: parsed.prevent_sleep,
       notificationSound: parsed.notification_sound,
@@ -324,10 +323,9 @@ export class GlobalConfigManager {
     if (rawProviderProfiles && Object.keys(rawProviderProfiles).length > 0) {
       raw.provider_profiles = rawProviderProfiles;
     }
-    if (config.runtime?.prepare && config.runtime.prepare.length > 0) {
-      raw.runtime = {
-        prepare: [...new Set(config.runtime.prepare)],
-      };
+    const normalizedRuntime = normalizeRuntime(config.runtime);
+    if (normalizedRuntime) {
+      raw.runtime = normalizedRuntime;
     }
     if (config.branchNameStrategy) {
       raw.branch_name_strategy = config.branchNameStrategy;
