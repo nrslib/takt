@@ -1,9 +1,3 @@
-/**
- * Shared normalizer/denormalizer functions for config snake_case <-> camelCase conversion.
- *
- * Used by both globalConfig.ts and projectConfig.ts.
- */
-
 import type { MovementProviderOptions, PieceRuntimeConfig } from '../../core/models/piece-types.js';
 import type { ProviderPermissionProfiles } from '../../core/models/provider-profiles.js';
 import type { PieceOverrides, PersonaProviderEntry, PipelineConfig } from '../../core/models/persisted-global-config.js';
