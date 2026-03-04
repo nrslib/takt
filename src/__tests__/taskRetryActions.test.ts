@@ -179,6 +179,25 @@ describe('retryFailedTask', () => {
     expect(mockExecuteAndCompleteTask).toHaveBeenCalled();
   });
 
+  it('should execute with selected piece without mutating taskInfo', async () => {
+    mockSelectPiece.mockResolvedValue('selected-piece');
+    const originalTaskInfo = {
+      name: 'my-task',
+      content: 'Do something',
+      data: { task: 'Do something', piece: 'original-piece' },
+    };
+    mockStartReExecution.mockReturnValue(originalTaskInfo);
+    const task = makeFailedTask();
+
+    await retryFailedTask(task, '/project');
+
+    const executeArg = mockExecuteAndCompleteTask.mock.calls[0]?.[0];
+    expect(executeArg).not.toBe(originalTaskInfo);
+    expect(executeArg.data).not.toBe(originalTaskInfo.data);
+    expect(executeArg.data.piece).toBe('selected-piece');
+    expect(originalTaskInfo.data.piece).toBe('original-piece');
+  });
+
   it('should pass failed movement as default to selectOptionWithDefault', async () => {
     const task = makeFailedTask(); // failure.movement = 'review'
 

@@ -99,6 +99,7 @@ function writeExceededRecord(testDir: string, overrides: Record<string, unknown>
     name: 'task-a',
     status: 'exceeded',
     content: 'Do work',
+    piece: 'test-piece',
     created_at: '2026-02-09T00:00:00.000Z',
     started_at: '2026-02-09T00:01:00.000Z',
     completed_at: '2026-02-09T00:05:00.000Z',
@@ -166,7 +167,7 @@ describe('シナリオ1・2: exceeded status transition via executeAndCompleteTa
 
   it('scenario 1: task transitions to exceeded status when executePiece returns exceeded result', async () => {
     // Given: a pending task
-    runner.addTask('Do work');
+    runner.addTask('Do work', { piece: 'test-piece' });
     const [task] = runner.claimNextTasks(1);
     if (!task) throw new Error('No task claimed');
 
@@ -182,7 +183,7 @@ describe('シナリオ1・2: exceeded status transition via executeAndCompleteTa
     });
 
     // When: executeAndCompleteTask processes the exceeded result
-    const result = await executeAndCompleteTask(task, runner, testDir, 'test-piece');
+    const result = await executeAndCompleteTask(task, runner, testDir);
 
     // Then: returns false (task did not succeed)
     expect(result).toBe(false);
@@ -196,7 +197,7 @@ describe('シナリオ1・2: exceeded status transition via executeAndCompleteTa
 
   it('scenario 2: exceeded metadata is recorded in tasks.yaml for resumption', async () => {
     // Given: a pending task
-    runner.addTask('Do work');
+    runner.addTask('Do work', { piece: 'test-piece' });
     const [task] = runner.claimNextTasks(1);
     if (!task) throw new Error('No task claimed');
 
@@ -212,7 +213,7 @@ describe('シナリオ1・2: exceeded status transition via executeAndCompleteTa
     });
 
     // When: executeAndCompleteTask records the exceeded result
-    await executeAndCompleteTask(task, runner, testDir, 'test-piece');
+    await executeAndCompleteTask(task, runner, testDir);
 
     // Then: YAML contains the three resumption fields
     const file = loadTasksFile(testDir);
@@ -267,7 +268,7 @@ describe('シナリオ3・4: requeue → re-execution passes exceeded metadata t
     vi.mocked(executePiece).mockResolvedValueOnce({ success: true });
 
     // When: executeAndCompleteTask runs the requeued task
-    await executeAndCompleteTask(task, runner, testDir, 'test-piece');
+    await executeAndCompleteTask(task, runner, testDir);
 
     // Then: executePiece received the correct exceeded override options
     expect(vi.mocked(executePiece)).toHaveBeenCalledOnce();
@@ -297,7 +298,7 @@ describe('シナリオ3・4: requeue → re-execution passes exceeded metadata t
     vi.mocked(executePiece).mockResolvedValueOnce({ success: true });
 
     // When: executeAndCompleteTask runs the requeued task
-    await executeAndCompleteTask(task, runner, testDir, 'test-piece');
+    await executeAndCompleteTask(task, runner, testDir);
 
     // Then: executePiece received startMovement='implement' to resume from where it stopped
     expect(vi.mocked(executePiece)).toHaveBeenCalledOnce();

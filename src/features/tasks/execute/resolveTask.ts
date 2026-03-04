@@ -87,14 +87,17 @@ export function resolveTaskIssue(issueNumber: number | undefined): Issue[] | und
 export async function resolveTaskExecution(
   task: TaskInfo,
   defaultCwd: string,
-  defaultPiece: string,
   abortSignal?: AbortSignal,
 ): Promise<ResolvedTaskExecution> {
   throwIfAborted(abortSignal);
 
   const data = task.data;
   if (!data) {
-    return { execCwd: defaultCwd, execPiece: defaultPiece, isWorktree: false, autoPr: false, draftPr: false };
+    throw new Error(`Task "${task.name}" is missing required data, including piece.`);
+  }
+
+  if (!data.piece || typeof data.piece !== 'string' || data.piece.trim() === '') {
+    throw new Error(`Task "${task.name}" is missing required piece.`);
   }
 
   let execCwd = defaultCwd;
@@ -153,7 +156,7 @@ export async function resolveTaskExecution(
     taskPrompt = stageTaskSpecForExecution(defaultCwd, execCwd, task.taskDir, reportDirName);
   }
 
-  const execPiece = data.piece || defaultPiece;
+  const execPiece = data.piece;
   const startMovement = data.start_movement;
   const retryNote = data.retry_note;
   const maxMovementsOverride = data.exceeded_max_movements;

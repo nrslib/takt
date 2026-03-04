@@ -158,6 +158,33 @@ describe('instructBranch direct execution flow', () => {
     expect(mockExecuteAndCompleteTask).toHaveBeenCalled();
   });
 
+  it('should execute with selected piece without mutating taskInfo', async () => {
+    mockSelectPiece.mockResolvedValue('selected-piece');
+    const originalTaskInfo = {
+      name: 'done-task',
+      content: 'done',
+      data: { task: 'done', piece: 'original-piece' },
+    };
+    mockStartReExecution.mockReturnValue(originalTaskInfo);
+
+    await instructBranch('/project', {
+      kind: 'completed',
+      name: 'done-task',
+      createdAt: '2026-02-14T00:00:00.000Z',
+      filePath: '/project/.takt/tasks.yaml',
+      content: 'done',
+      branch: 'takt/done-task',
+      worktreePath: '/project/.takt/worktrees/done-task',
+      data: { task: 'done' },
+    });
+
+    const executeArg = mockExecuteAndCompleteTask.mock.calls[0]?.[0];
+    expect(executeArg).not.toBe(originalTaskInfo);
+    expect(executeArg.data).not.toBe(originalTaskInfo.data);
+    expect(executeArg.data.piece).toBe('selected-piece');
+    expect(originalTaskInfo.data.piece).toBe('original-piece');
+  });
+
   it('should set generated instruction as retry note when no existing note', async () => {
     await instructBranch('/project', {
       kind: 'completed',

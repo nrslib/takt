@@ -77,8 +77,16 @@ const createTask = (name: string): TaskInfo => ({
   filePath: `/tasks/${name}.yaml`,
   createdAt: '2026-02-16T00:00:00.000Z',
   status: 'pending',
-  data: { task: `Task: ${name}` },
+  data: { task: `Task: ${name}`, piece: 'default' },
 });
+
+const executeAndCompleteTaskWithoutPiece = executeAndCompleteTask as (
+  task: TaskInfo,
+  taskRunner: unknown,
+  projectCwd: string,
+  executeOptions?: unknown,
+  parallelOptions?: unknown,
+) => Promise<boolean>;
 
 describe('executeAndCompleteTask', () => {
   beforeEach(() => {
@@ -130,12 +138,18 @@ describe('executeAndCompleteTask', () => {
     const abortController = new AbortController();
 
     // When
-    await executeAndCompleteTask(task, {} as never, '/project', 'default', undefined, {
-      abortSignal: abortController.signal,
-      taskPrefix: taskDisplayLabel,
-      taskColorIndex: 0,
-      taskDisplayLabel,
-    });
+    await executeAndCompleteTaskWithoutPiece(
+      task,
+      {} as never,
+      '/project',
+      undefined,
+      {
+        abortSignal: abortController.signal,
+        taskPrefix: taskDisplayLabel,
+        taskColorIndex: 0,
+        taskDisplayLabel,
+      },
+    );
 
     // Then: executePiece receives the propagated display label.
     expect(mockExecutePiece).toHaveBeenCalledTimes(1);
@@ -223,7 +237,7 @@ describe('executeAndCompleteTask', () => {
     mockPostExecutionFlow.mockResolvedValue({ prFailed: true, prError: 'Base ref must be a branch' });
 
     // When
-    const result = await executeAndCompleteTask(task, {} as never, '/project', 'default');
+    const result = await executeAndCompleteTaskWithoutPiece(task, {} as never, '/project');
 
     // Then: code succeeded, task is marked as pr_failed (not failed)
     expect(result).toBe(true);
@@ -262,7 +276,7 @@ describe('executeAndCompleteTask', () => {
     mockPostExecutionFlow.mockResolvedValue({ prUrl: 'https://github.com/org/repo/pull/1' });
 
     // When
-    const result = await executeAndCompleteTask(task, {} as never, '/project', 'default');
+    const result = await executeAndCompleteTaskWithoutPiece(task, {} as never, '/project');
 
     // Then: task should be marked as completed
     expect(result).toBe(true);

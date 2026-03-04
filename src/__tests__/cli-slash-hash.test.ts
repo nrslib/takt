@@ -8,7 +8,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { isDirectTask } from '../app/cli/helpers.js';
+import type { Command } from 'commander';
+import { isDirectTask, resolveAgentOverrides, resolveRemovedRootCommand, resolveSlashFallbackTask } from '../app/cli/helpers.js';
 
 describe('isDirectTask', () => {
   describe('slash prefixed inputs', () => {
@@ -100,6 +101,58 @@ describe('isDirectTask', () => {
       expect(isDirectTask('  /task  ')).toBe(false);
       // '  #task  ' → not issue ref → interactive mode
       expect(isDirectTask('  #task  ')).toBe(false);
+    });
+  });
+});
+
+describe('resolveSlashFallbackTask', () => {
+  it('returns raw argv as task for unknown slash command', () => {
+    const task = resolveSlashFallbackTask(['/foo', '--bar'], ['run', 'add', 'watch']);
+    expect(task).toBe('/foo --bar');
+  });
+
+  it('returns null for known slash command', () => {
+    const task = resolveSlashFallbackTask(['/run', '--help'], ['run', 'add', 'watch']);
+    expect(task).toBeNull();
+  });
+
+  it('returns null when first argument is not slash-prefixed', () => {
+    const task = resolveSlashFallbackTask(['run', '/foo'], ['run', 'add', 'watch']);
+    expect(task).toBeNull();
+  });
+});
+
+describe('resolveRemovedRootCommand', () => {
+  it('returns removed command when first argument is switch', () => {
+    expect(resolveRemovedRootCommand(['switch'])).toBe('switch');
+  });
+
+  it('returns null when first argument is a valid command', () => {
+    expect(resolveRemovedRootCommand(['run'])).toBeNull();
+  });
+
+  it('returns null when argument only contains removed command in later position', () => {
+    expect(resolveRemovedRootCommand(['--help', 'switch'])).toBeNull();
+  });
+});
+
+describe('resolveAgentOverrides', () => {
+  it('returns undefined when provider and model are both missing', () => {
+    const program = {
+      opts: () => ({}),
+    } as unknown as Command;
+
+    expect(resolveAgentOverrides(program)).toBeUndefined();
+  });
+
+  it('returns provider/model pair when one or both are provided', () => {
+    const program = {
+      opts: () => ({ provider: 'codex', model: 'gpt-5' }),
+    } as unknown as Command;
+
+    expect(resolveAgentOverrides(program)).toEqual({
+      provider: 'codex',
+      model: 'gpt-5',
     });
   });
 });

@@ -126,7 +126,6 @@ const GLOBAL_ENV_SPECS: readonly EnvSpec[] = [
 ];
 
 const PROJECT_ENV_SPECS: readonly EnvSpec[] = [
-  { path: 'piece', type: 'string' },
   { path: 'log_level', type: 'string' },
   { path: 'provider', type: 'string' },
   { path: 'model', type: 'string' },

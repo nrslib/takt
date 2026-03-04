@@ -9,7 +9,7 @@ describe('resolveConfigValue call-chain contract', () => {
 
   it('should fail fast when migrated fallback loader is missing and migrated key is resolved', async () => {
     vi.doMock('../infra/config/project/projectConfig.js', () => ({
-      loadProjectConfig: () => ({ piece: 'default' }),
+      loadProjectConfig: () => ({}),
     }));
     vi.doMock('../infra/config/global/globalConfig.js', () => ({
       loadGlobalConfig: () => ({ language: 'en' }),

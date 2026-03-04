@@ -32,7 +32,6 @@ export type { PieceSource, PieceWithSource, PieceDirEntry } from './infra/config
 export {
   saveProjectConfig,
   updateProjectConfig,
-  setCurrentPiece,
   isVerboseMode,
   type ProjectLocalConfig,
 } from './infra/config/project/index.js';

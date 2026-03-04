@@ -9,6 +9,7 @@
 import { checkForUpdates } from '../../shared/utils/index.js';
 import { getErrorMessage } from '../../shared/utils/error.js';
 import { error as errorLog } from '../../shared/ui/index.js';
+import { resolveRemovedRootCommand, resolveSlashFallbackTask } from './helpers.js';
 
 checkForUpdates();
 
@@ -19,20 +20,20 @@ import { executeDefaultAction } from './routing.js';
 
 (async () => {
   const args = process.argv.slice(2);
-  const firstArg = args[0];
+  const { operands } = program.parseOptions(args);
+  const removedRootCommand = resolveRemovedRootCommand(operands);
+  if (removedRootCommand !== null) {
+    errorLog(`error: unknown command '${removedRootCommand}'`);
+    process.exit(1);
+  }
 
-  // Handle '/' prefixed inputs that are not known commands
-  if (firstArg?.startsWith('/')) {
-    const commandName = firstArg.slice(1);
-    const knownCommands = program.commands.map((cmd) => cmd.name());
+  const knownCommands = program.commands.map((cmd) => cmd.name());
+  const slashFallbackTask = resolveSlashFallbackTask(args, knownCommands);
 
-    if (!knownCommands.includes(commandName)) {
-      // Treat as task instruction
-      const task = args.join(' ');
-      await runPreActionHook();
-      await executeDefaultAction(task);
-      process.exit(0);
-    }
+  if (slashFallbackTask !== null) {
+    await runPreActionHook();
+    await executeDefaultAction(slashFallbackTask);
+    process.exit(0);
   }
 
   // Normal parsing for all other cases (including '#' prefixed inputs)

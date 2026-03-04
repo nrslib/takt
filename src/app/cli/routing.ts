@@ -19,7 +19,6 @@ import { program, resolvedCwd, pipelineMode } from './program.js';
 import { resolveAgentOverrides } from './helpers.js';
 import { loadTaskHistory } from './taskHistory.js';
 import { resolveIssueInput, resolvePrInput } from './routing-inputs.js';
-import { DEFAULT_PIECE_NAME } from '../../shared/constants.js';
 export async function executeDefaultAction(task?: string): Promise<void> {
   const opts = program.opts();
   if (!pipelineMode && (opts.autoPr === true || opts.draft === true)) {
@@ -39,9 +38,11 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     process.exit(1);
   }
   const agentOverrides = resolveAgentOverrides(program);
-  const resolvedPipelinePiece = (opts.piece as string | undefined)
-    ?? resolveConfigValue(resolvedCwd, 'piece')
-    ?? DEFAULT_PIECE_NAME;
+  const resolvedPipelinePiece = opts.piece as string | undefined;
+  if (pipelineMode && resolvedPipelinePiece === undefined) {
+    logError('--piece (-w) is required in pipeline mode');
+    process.exit(1);
+  }
   const resolvedPipelineAutoPr = opts.autoPr === true
     ? true
     : (resolveConfigValue(resolvedCwd, 'autoPr') ?? false);
@@ -57,7 +58,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       issueNumber,
       prNumber,
       task: opts.task as string | undefined,
-      piece: resolvedPipelinePiece,
+      piece: resolvedPipelinePiece!,
       branch: opts.branch as string | undefined,
       autoPr: resolvedPipelineAutoPr,
       draftPr: resolvedPipelineDraftPr,

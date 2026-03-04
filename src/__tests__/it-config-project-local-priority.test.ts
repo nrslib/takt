@@ -108,7 +108,7 @@ describe('IT: migrated config keys should prefer project over global', () => {
   it('should resolve migrated keys from global when project config does not set them', () => {
     writeFileSync(
       join(projectDir, '.takt', 'config.yaml'),
-      'piece: default\n',
+      '',
       'utf-8',
     );
     invalidateGlobalConfigCache();
@@ -142,7 +142,7 @@ describe('IT: migrated config keys should prefer project over global', () => {
   it('should mark migrated key source as global when only global defines the key', () => {
     writeFileSync(
       join(projectDir, '.takt', 'config.yaml'),
-      'piece: default\n',
+      '',
       'utf-8',
     );
     invalidateGlobalConfigCache();

@@ -500,8 +500,6 @@ export const GlobalConfigSchema = z.object({
   language: LanguageSchema.optional().default(DEFAULT_LANGUAGE),
   provider: ProviderReferenceSchema.optional().default('claude'),
   model: z.string().optional(),
-  /** Default piece name for new tasks */
-  piece: z.string().optional(),
   observability: ObservabilityConfigSchema.optional(),
   analytics: AnalyticsConfigSchema.optional(),
   /** Directory for shared clones (worktree_dir in config). If empty, uses ../{clone-name} relative to project */
@@ -572,7 +570,6 @@ export const GlobalConfigSchema = z.object({
 
 /** Project config schema */
 export const ProjectConfigSchema = z.object({
-  piece: z.string().optional(),
   log_level: z.enum(['debug', 'info', 'warn', 'error']).optional(),
   verbose: z.boolean().optional(),
   provider: ProviderReferenceSchema.optional(),
