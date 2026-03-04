@@ -592,6 +592,8 @@ export const ProjectConfigSchema = z.object({
   draft_pr: z.boolean().optional(),
   provider_options: MovementProviderOptionsSchema,
   provider_profiles: ProviderPermissionProfilesSchema,
+  /** Project-level runtime environment configuration */
+  runtime: RuntimeConfigSchema,
   /** Number of tasks to run concurrently in takt run (default from global: 1, max: 10) */
   concurrency: z.number().int().min(1).max(10).optional(),
   /** Base branch to clone from (overrides global base_branch) */

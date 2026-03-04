@@ -2,7 +2,7 @@
  * Config module type definitions
  */
 
-import type { MovementProviderOptions } from '../../core/models/piece-types.js';
+import type { MovementProviderOptions, PieceRuntimeConfig } from '../../core/models/piece-types.js';
 import type { ProviderPermissionProfiles } from '../../core/models/provider-profiles.js';
 import type { AnalyticsConfig, PieceOverrides, SubmoduleSelection } from '../../core/models/persisted-global-config.js';
 
@@ -36,6 +36,8 @@ export interface ProjectLocalConfig {
   providerProfiles?: ProviderPermissionProfiles;
   /** Piece-level overrides (quality_gates, etc.) */
   pieceOverrides?: PieceOverrides;
+  /** Runtime environment configuration (project-level override) */
+  runtime?: PieceRuntimeConfig;
   /** Claude Code CLI path override (project-level) */
   claudeCliPath?: string;
   /** Codex CLI path override (project-level) */

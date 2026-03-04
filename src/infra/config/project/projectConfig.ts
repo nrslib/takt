@@ -148,6 +148,7 @@ export function loadProjectConfig(projectDir: string): ProjectLocalConfig {
     provider_profiles,
     analytics,
     piece_overrides,
+    runtime,
     claude_cli_path,
     codex_cli_path,
     cursor_cli_path,
@@ -178,6 +179,9 @@ export function loadProjectConfig(projectDir: string): ProjectLocalConfig {
     providerOptions: normalizedProvider.providerOptions,
     providerProfiles: normalizeProviderProfiles(provider_profiles as Record<string, { default_permission_mode: unknown; movement_permission_overrides?: Record<string, unknown> }> | undefined),
     pieceOverrides: normalizePieceOverrides(piece_overrides as { quality_gates?: string[]; quality_gates_edit_only?: boolean; movements?: Record<string, { quality_gates?: string[] }> } | undefined),
+    runtime: runtime?.prepare && runtime.prepare.length > 0
+      ? { prepare: [...new Set(runtime.prepare)] }
+      : undefined,
     claudeCliPath: claude_cli_path as string | undefined,
     codexCliPath: codex_cli_path as string | undefined,
     cursorCliPath: cursor_cli_path as string | undefined,
@@ -241,6 +245,14 @@ export function saveProjectConfig(projectDir: string, config: ProjectLocalConfig
     savePayload.piece_overrides = rawPieceOverrides;
   }
   delete savePayload.pieceOverrides;
+
+  if (config.runtime?.prepare && config.runtime.prepare.length > 0) {
+    savePayload.runtime = {
+      prepare: [...new Set(config.runtime.prepare)],
+    };
+  } else {
+    delete savePayload.runtime;
+  }
 
   const content = stringify(savePayload, { indent: 2 });
   writeFileSync(configPath, content, 'utf-8');
