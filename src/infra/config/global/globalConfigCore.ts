@@ -97,6 +97,7 @@ export class GlobalConfigManager {
         trace: parsed.logging.trace,
         debug: parsed.logging.debug,
         providerEvents: parsed.logging.provider_events,
+        usageEvents: parsed.logging.usage_events,
       } : undefined,
       analytics: parsed.analytics ? {
         enabled: parsed.analytics.enabled,

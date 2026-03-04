@@ -11,6 +11,7 @@ export type {
   RuntimePrepareEntry,
   PieceRuntimeConfig,
   AgentResponse,
+  ProviderUsageSnapshot,
   SessionState,
   PartDefinition,
   PartResult,

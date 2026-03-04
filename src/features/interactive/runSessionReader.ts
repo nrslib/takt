@@ -7,6 +7,10 @@
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import {
+  PROVIDER_EVENTS_LOG_FILE_SUFFIX,
+  USAGE_EVENTS_LOG_FILE_SUFFIX,
+} from '../../core/logging/contracts.js';
 import { loadNdjsonLog } from '../../infra/fs/index.js';
 import type { SessionLog } from '../../shared/utils/index.js';
 
@@ -113,7 +117,11 @@ function findSessionLogFile(logsDir: string): string | null {
   }
 
   const files = readdirSync(logsDir).filter(
-    (f) => f.endsWith('.jsonl') && !f.includes('-provider-events'),
+    (f) => (
+      f.endsWith('.jsonl')
+      && !f.endsWith(PROVIDER_EVENTS_LOG_FILE_SUFFIX)
+      && !f.endsWith(USAGE_EVENTS_LOG_FILE_SUFFIX)
+    ),
   );
 
   const first = files[0];

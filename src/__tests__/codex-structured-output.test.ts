@@ -191,4 +191,42 @@ describe('CodexClient — structuredOutput 抽出', () => {
       codexPathOverride: '/opt/codex/bin/codex',
     });
   });
+
+  it('turn.completed の usage を providerUsage として返す', async () => {
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      {
+        type: 'turn.completed',
+        usage: { input_tokens: 11, output_tokens: 22, cached_input_tokens: 3 },
+      },
+    ];
+
+    const client = new CodexClient();
+    const result = await client.call('coder', 'prompt', { cwd: '/tmp' });
+    const providerUsage = result.providerUsage;
+
+    expect(providerUsage).toEqual({
+      inputTokens: 11,
+      outputTokens: 22,
+      totalTokens: 33,
+      cachedInputTokens: 3,
+      usageMissing: false,
+    });
+  });
+
+  it('turn.completed に usage がない場合は usageMissing=true と reason を返す', async () => {
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.completed' },
+    ];
+
+    const client = new CodexClient();
+    const result = await client.call('coder', 'prompt', { cwd: '/tmp' });
+    const providerUsage = result.providerUsage;
+
+    expect(providerUsage).toMatchObject({
+      usageMissing: true,
+      reason: 'usage_not_available',
+    });
+  });
 });

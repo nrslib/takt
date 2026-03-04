@@ -5,7 +5,8 @@
  */
 
 import { Codex, type TurnOptions } from '@openai/codex-sdk';
-import type { AgentResponse } from '../../core/models/index.js';
+import { USAGE_MISSING_REASONS } from '../../core/logging/contracts.js';
+import type { AgentResponse, ProviderUsageSnapshot } from '../../core/models/index.js';
 import { createLogger, getErrorMessage, createStreamDiagnostics, parseStructuredOutput, type StreamDiagnostics } from '../../shared/utils/index.js';
 import { mapToCodexSandboxMode, type CodexCallOptions } from './types.js';
 import {
@@ -37,6 +38,49 @@ const CODEX_RETRYABLE_ERROR_PATTERNS = [
   'eai_again',
   'fetch failed',
 ];
+
+function toNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function extractProviderUsageFromTurnCompleted(event: CodexEvent): ProviderUsageSnapshot {
+  const usageRaw = event.usage;
+  if (!usageRaw || typeof usageRaw !== 'object') {
+    return {
+      usageMissing: true,
+      reason: USAGE_MISSING_REASONS.NOT_AVAILABLE,
+    };
+  }
+
+  const usage = usageRaw as Record<string, unknown>;
+  const inputTokens = toNumber(usage.input_tokens);
+  const outputTokens = toNumber(usage.output_tokens);
+  const explicitTotal = toNumber(usage.total_tokens);
+  const totalTokens = explicitTotal ?? (
+    inputTokens !== undefined && outputTokens !== undefined
+      ? inputTokens + outputTokens
+      : undefined
+  );
+  const cachedInputTokens = toNumber(usage.cached_input_tokens);
+  if (inputTokens === undefined || outputTokens === undefined || totalTokens === undefined) {
+    return {
+      usageMissing: true,
+      reason: USAGE_MISSING_REASONS.TOKENS_MISSING,
+    };
+  }
+
+  const providerUsage: ProviderUsageSnapshot = {
+    inputTokens,
+    outputTokens,
+    totalTokens,
+    usageMissing: false,
+  };
+  if (cachedInputTokens !== undefined) {
+    providerUsage.cachedInputTokens = cachedInputTokens;
+  }
+
+  return providerUsage;
+}
 
 /**
  * Client for Codex SDK agent interactions.
@@ -167,6 +211,7 @@ export class CodexClient {
         const contentOffsets = new Map<string, number>();
         let success = true;
         let failureMessage = '';
+        let providerUsage: ProviderUsageSnapshot | undefined;
         const state = createStreamTrackingState();
 
         for await (const event of events as AsyncGenerator<CodexEvent>) {
@@ -177,6 +222,11 @@ export class CodexClient {
           if (event.type === 'thread.started') {
             currentThreadId = typeof event.thread_id === 'string' ? event.thread_id : currentThreadId;
             emitInit(options.onStream, options.model, currentThreadId);
+            continue;
+          }
+
+          if (event.type === 'turn.completed') {
+            providerUsage = extractProviderUsageFromTurnCompleted(event);
             continue;
           }
 
@@ -280,14 +330,19 @@ export class CodexClient {
         const structuredOutput = parseStructuredOutput(trimmed, !!options.outputSchema);
         emitResult(options.onStream, true, trimmed, currentThreadId);
 
-        return {
+        const response: AgentResponse = {
           persona: agentType,
           status: 'done',
           content: trimmed,
           timestamp: new Date(),
           sessionId: currentThreadId,
           structuredOutput,
+          providerUsage: providerUsage ?? {
+            usageMissing: true,
+            reason: USAGE_MISSING_REASONS.NOT_AVAILABLE,
+          },
         };
+        return response;
       } catch (error) {
         const message = getErrorMessage(error);
         const errorMessage = streamAbortController.signal.aborted

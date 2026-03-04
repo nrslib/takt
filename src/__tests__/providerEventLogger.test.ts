@@ -94,6 +94,20 @@ describe('providerEventLogger', () => {
     expect(parsed.data['tool']).toBe('Read');
   });
 
+  it('should keep provider-events filename suffix for backward compatibility', () => {
+    const logger = createProviderEventLogger({
+      logsDir: tempDir,
+      sessionId: 'session-compat',
+      runId: 'run-compat',
+      provider: 'claude',
+      movement: 'plan',
+      enabled: true,
+    });
+
+    expect(logger.filepath.endsWith('-provider-events.jsonl')).toBe(true);
+    expect(logger.filepath.endsWith('-usage-events.jsonl')).toBe(false);
+  });
+
   it('should update movement and provider for subsequent events', () => {
     const logger = createProviderEventLogger({
       logsDir: tempDir,

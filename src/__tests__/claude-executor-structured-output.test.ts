@@ -161,4 +161,49 @@ describe('QueryExecutor — structuredOutput 抽出', () => {
     expect(result.content).toBe('final text');
     expect(result.structuredOutput).toEqual({ step: 1, reason: 'approved' });
   });
+
+  it('result メッセージの usage を providerUsage として抽出する', async () => {
+    mockQuery.mockReturnValue(createMockQuery([
+      {
+        type: 'result',
+        subtype: 'success',
+        result: 'done',
+        usage: {
+          input_tokens: 12,
+          output_tokens: 34,
+          cache_creation_input_tokens: 5,
+          cache_read_input_tokens: 7,
+        },
+      },
+    ]));
+
+    const executor = new QueryExecutor();
+    const result = await executor.execute('test', { cwd: '/tmp' });
+    const providerUsage = result.providerUsage;
+
+    expect(providerUsage).toEqual({
+      inputTokens: 12,
+      outputTokens: 34,
+      totalTokens: 46,
+      cachedInputTokens: 12,
+      cacheCreationInputTokens: 5,
+      cacheReadInputTokens: 7,
+      usageMissing: false,
+    });
+  });
+
+  it('usage が存在しない場合は usageMissing=true と reason を返す', async () => {
+    mockQuery.mockReturnValue(createMockQuery([
+      { type: 'result', subtype: 'success', result: 'done' },
+    ]));
+
+    const executor = new QueryExecutor();
+    const result = await executor.execute('test', { cwd: '/tmp' });
+    const providerUsage = result.providerUsage;
+
+    expect(providerUsage).toMatchObject({
+      usageMissing: true,
+      reason: 'usage_not_available',
+    });
+  });
 });

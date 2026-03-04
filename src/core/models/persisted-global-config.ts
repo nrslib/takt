@@ -45,6 +45,8 @@ export interface LoggingConfig {
   debug?: boolean;
   /** Enable provider stream event logging (default: false when undefined) */
   providerEvents?: boolean;
+  /** Enable usage event logging (default: false when undefined) */
+  usageEvents?: boolean;
 }
 
 /** Analytics configuration for local metrics collection */

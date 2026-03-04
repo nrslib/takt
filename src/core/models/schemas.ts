@@ -465,6 +465,7 @@ export const LoggingConfigSchema = z.object({
   trace: z.boolean().optional(),
   debug: z.boolean().optional(),
   provider_events: z.boolean().optional(),
+  usage_events: z.boolean().optional(),
 });
 
 /** Analytics config schema */

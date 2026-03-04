@@ -318,6 +318,26 @@ describe('loadRunSessionContext', () => {
     expect(context.movementLogs).toEqual([]);
   });
 
+  it('should exclude usage-events log files', () => {
+    const slug = 'usage-events-run';
+    const runDir = createRunDir(tmpDir, slug, {
+      task: 'Usage events test',
+      piece: 'default',
+      status: 'completed',
+      startTime: '2026-02-01T00:00:00.000Z',
+      logsDirectory: `.takt/runs/${slug}/logs`,
+      reportDirectory: `.takt/runs/${slug}/reports`,
+      runSlug: slug,
+    });
+
+    // Only usage-events log file
+    writeFileSync(join(runDir, 'logs', 'session-001-usage-events.jsonl'), '{}', 'utf-8');
+
+    const context = loadRunSessionContext(tmpDir, slug);
+    expect(mockLoadNdjsonLog).not.toHaveBeenCalled();
+    expect(context.movementLogs).toEqual([]);
+  });
+
   afterEach(() => {
     rmSync(tmpDir, { recursive: true, force: true });
   });

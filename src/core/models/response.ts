@@ -4,6 +4,17 @@
 
 import type { Status, RuleMatchMethod } from './status.js';
 
+export interface ProviderUsageSnapshot {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  cachedInputTokens?: number;
+  cacheCreationInputTokens?: number;
+  cacheReadInputTokens?: number;
+  usageMissing: boolean;
+  reason?: string;
+}
+
 /** Response from an agent execution */
 export interface AgentResponse {
   persona: string;
@@ -19,4 +30,6 @@ export interface AgentResponse {
   matchedRuleMethod?: RuleMatchMethod;
   /** Structured output returned by provider SDK (JSON Schema mode) */
   structuredOutput?: Record<string, unknown>;
+  /** Provider-native usage payload normalized for TAKT observability */
+  providerUsage?: ProviderUsageSnapshot;
 }

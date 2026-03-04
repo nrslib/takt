@@ -16,6 +16,7 @@ export type {
 // Agent response
 export type {
   AgentResponse,
+  ProviderUsageSnapshot,
 } from './response.js';
 
 // Session state (authoritative definition with createSessionState)

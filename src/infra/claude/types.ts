@@ -7,6 +7,7 @@
 
 import type { PermissionUpdate, AgentDefinition, SandboxSettings } from '@anthropic-ai/claude-agent-sdk';
 import type { PermissionMode, McpServerConfig } from '../../core/models/index.js';
+import type { ProviderUsageSnapshot } from '../../core/models/response.js';
 
 export type { SandboxSettings };
 import type { PermissionResult } from '../../core/piece/index.js';
@@ -113,6 +114,8 @@ export interface ClaudeResult {
   fullContent?: string;
   /** Structured output returned by Claude SDK */
   structuredOutput?: Record<string, unknown>;
+  /** Provider-native usage payload normalized for TAKT observability */
+  providerUsage?: ProviderUsageSnapshot;
 }
 
 /** Extended result with query ID for concurrent execution */

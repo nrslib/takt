@@ -503,6 +503,7 @@ describe('loadGlobalConfig', () => {
         'language: en',
         'logging:',
         '  provider_events: false',
+        '  usage_events: true',
       ].join('\n'),
       'utf-8',
     );
@@ -510,6 +511,7 @@ describe('loadGlobalConfig', () => {
     const config = loadGlobalConfig();
     expect(config.logging).toEqual({
       providerEvents: false,
+      usageEvents: true,
     });
   });
 
@@ -525,6 +527,7 @@ describe('loadGlobalConfig', () => {
         '  trace: true',
         '  debug: true',
         '  provider_events: true',
+        '  usage_events: false',
       ].join('\n'),
       'utf-8',
     );
@@ -535,6 +538,7 @@ describe('loadGlobalConfig', () => {
       trace: true,
       debug: true,
       providerEvents: true,
+      usageEvents: false,
     });
   });
 
@@ -549,6 +553,7 @@ describe('loadGlobalConfig', () => {
       trace: false,
       debug: true,
       providerEvents: false,
+      usageEvents: true,
     };
     saveGlobalConfig(config);
     invalidateGlobalConfigCache();
@@ -559,6 +564,7 @@ describe('loadGlobalConfig', () => {
       trace: false,
       debug: true,
       providerEvents: false,
+      usageEvents: true,
     });
   });
 
@@ -577,6 +583,24 @@ describe('loadGlobalConfig', () => {
     const reloaded = loadGlobalConfig();
     expect(reloaded.logging).toEqual({
       providerEvents: true,
+    });
+  });
+
+  it('should save partial logging config (only usage_events)', () => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
+
+    const config = loadGlobalConfig();
+    config.logging = {
+      usageEvents: true,
+    };
+    saveGlobalConfig(config);
+    invalidateGlobalConfigCache();
+
+    const reloaded = loadGlobalConfig();
+    expect(reloaded.logging).toEqual({
+      usageEvents: true,
     });
   });
 

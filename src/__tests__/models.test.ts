@@ -585,11 +585,13 @@ describe('GlobalConfigSchema', () => {
     const config = {
       logging: {
         provider_events: false,
+        usage_events: true,
       },
     };
 
     const result = GlobalConfigSchema.parse(config);
     expect(result.logging?.provider_events).toBe(false);
+    expect(result.logging?.usage_events).toBe(true);
   });
 
   it('should accept full logging config with all fields', () => {
@@ -599,6 +601,7 @@ describe('GlobalConfigSchema', () => {
         trace: true,
         debug: true,
         provider_events: true,
+        usage_events: false,
       },
     };
 
@@ -607,6 +610,7 @@ describe('GlobalConfigSchema', () => {
     expect(result.logging?.trace).toBe(true);
     expect(result.logging?.debug).toBe(true);
     expect(result.logging?.provider_events).toBe(true);
+    expect(result.logging?.usage_events).toBe(false);
   });
 
   it('should accept partial logging config', () => {
@@ -621,6 +625,7 @@ describe('GlobalConfigSchema', () => {
     expect(result.logging?.trace).toBeUndefined();
     expect(result.logging?.debug).toBeUndefined();
     expect(result.logging?.provider_events).toBeUndefined();
+    expect(result.logging?.usage_events).toBeUndefined();
   });
 
   it('should reject invalid logging level', () => {

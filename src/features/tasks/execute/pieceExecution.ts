@@ -13,6 +13,8 @@ import { TaskPrefixWriter } from '../../../shared/ui/TaskPrefixWriter.js';
 import { generateSessionId, createSessionLog, finalizeSessionLog, initNdjsonLog } from '../../../infra/fs/index.js';
 import { createLogger, notifySuccess, notifyError, preventSleep, generateReportDir, isValidReportDirName, getDebugPromptsLogFile } from '../../../shared/utils/index.js';
 import { createProviderEventLogger, isProviderEventsEnabled } from '../../../shared/utils/providerEventLogger.js';
+import { createUsageEventLogger, isUsageEventsEnabled } from '../../../shared/utils/usageEventLogger.js';
+import { USAGE_MISSING_REASONS } from '../../../core/logging/contracts.js';
 import { getLabel } from '../../../shared/i18n/index.js';
 import { buildRunPaths } from '../../../core/piece/run/run-paths.js';
 import { resolveRuntimeConfig } from '../../../core/runtime/runtime-environment.js';
@@ -24,7 +26,7 @@ import { AnalyticsEmitter } from './analyticsEmitter.js';
 import { createOutputFns, createPrefixedStreamHandler } from './outputFns.js';
 import { RunMetaManager } from './runMeta.js';
 import { createIterationLimitHandler, createUserInputHandler } from './iterationLimitHandler.js';
-import { assertTaskPrefixPair, truncate, formatElapsedTime } from './pieceExecutionUtils.js';
+import { assertTaskPrefixPair, truncate, formatElapsedTime, detectMovementType } from './pieceExecutionUtils.js';
 import { createTraceReportWriter } from './traceReportWriter.js';
 import { sanitizeTextForStorage } from './traceReportRedaction.js';
 export type { PieceExecutionResult, PieceExecutionOptions };
@@ -46,7 +48,6 @@ export async function executePiece(
   const isRetry = Boolean(options.startMovement || options.retryNote);
   log.debug('Session mode', { isRetry, isWorktree: cwd !== projectCwd });
   out.header(`${headerPrefix} ${pieceConfig.name}`);
-
   const pieceSessionId = generateSessionId();
   const runSlug = options.reportDirName ?? generateReportDir(task);
   if (!isValidReportDirName(runSlug)) throw new Error(`Invalid reportDirName: ${runSlug}`);
@@ -61,10 +62,7 @@ export async function executePiece(
         displayRef.current.createHandler()(event);
       };
   const isWorktree = cwd !== projectCwd;
-  const globalConfig = resolvePieceConfigValues(
-    projectCwd,
-    ['notificationSound', 'notificationSoundEvents', 'provider', 'runtime', 'preventSleep', 'model', 'logging', 'analytics'],
-  );
+  const globalConfig = resolvePieceConfigValues(projectCwd, ['notificationSound', 'notificationSoundEvents', 'provider', 'runtime', 'preventSleep', 'model', 'logging', 'analytics']);
   const traceReportMode = globalConfig.logging?.trace === true ? 'full' : 'redacted';
   const allowSensitiveData = traceReportMode === 'full';
   const ndjsonLogPath = initNdjsonLog(
@@ -74,9 +72,7 @@ export async function executePiece(
     { logsDir: runPaths.logsAbs },
   );
   const sessionLogger = new SessionLogger(ndjsonLogPath, allowSensitiveData);
-  if (options.interactiveMetadata) {
-    sessionLogger.writeInteractiveMetadata(options.interactiveMetadata);
-  }
+  if (options.interactiveMetadata) sessionLogger.writeInteractiveMetadata(options.interactiveMetadata);
   const shouldNotify = globalConfig.notificationSound !== false;
   const nse = globalConfig.notificationSoundEvents;
   const shouldNotifyIterationLimit = shouldNotify && nse?.iterationLimit !== false;
@@ -98,6 +94,16 @@ export async function executePiece(
     movement: options.startMovement ?? pieceConfig.initialMovement,
     enabled: isProviderEventsEnabled(globalConfig),
   });
+  const usageEventLogger = createUsageEventLogger({
+    logsDir: runPaths.logsAbs,
+    sessionId: pieceSessionId,
+    runId: runSlug,
+    provider: currentProvider,
+    providerModel: configuredModel ?? '(default)',
+    movement: options.startMovement ?? pieceConfig.initialMovement,
+    movementType: 'normal',
+    enabled: isUsageEventsEnabled(globalConfig),
+  });
   initAnalyticsWriter(globalConfig.analytics?.enabled === true, globalConfig.analytics?.eventsPath ?? join(getGlobalConfigDir(), 'analytics', 'events'));
   if (globalConfig.preventSleep) preventSleep();
   const analyticsEmitter = new AnalyticsEmitter(runSlug, currentProvider, configuredModel ?? '(default)');
@@ -107,7 +113,6 @@ export async function executePiece(
   const sessionUpdateHandler = isWorktree
     ? (personaName: string, personaSessionId: string) => updateWorktreeSession(projectCwd, cwd, personaName, personaSessionId, currentProvider)
     : (persona: string, personaSessionId: string) => updatePersonaSession(projectCwd, persona, personaSessionId, currentProvider);
-
   const iterationLimitHandler = createIterationLimitHandler(
     out,
     displayRef,
@@ -121,7 +126,6 @@ export async function executePiece(
     },
   );
   const onUserInput = interactiveUserInput ? createUserInputHandler(out, displayRef) : undefined;
-
   let abortReason: string | undefined;
   let exceededInfo: ExceededInfo | undefined;
   let lastMovementContent: string | undefined;
@@ -174,13 +178,11 @@ export async function executePiece(
       log.debug('Phase starting', { step: step.name, phase, phaseName });
       sessionLogger.onPhaseStart(step, phase, phaseName, instruction, promptParts, phaseExecutionId, iteration);
     });
-
     engine.on('phase:complete', (step, phase, phaseName, content, phaseStatus, phaseError, phaseExecutionId, iteration) => {
       log.debug('Phase completed', { step: step.name, phase, phaseName, status: phaseStatus });
       sessionLogger.setIteration(currentIteration);
       sessionLogger.onPhaseComplete(step, phase, phaseName, content, phaseStatus, phaseError, phaseExecutionId, iteration);
     });
-
     engine.on('phase:judge_stage', (step, phase, phaseName, entry, phaseExecutionId, iteration) => {
       sessionLogger.onJudgeStage(step, phase, phaseName, entry, phaseExecutionId, iteration);
     });
@@ -195,6 +197,8 @@ export async function executePiece(
       const movementModel = providerInfo.model ?? (movementProvider === currentProvider ? configuredModel : undefined) ?? '(default)';
       providerEventLogger.setMovement(step.name);
       providerEventLogger.setProvider(movementProvider);
+      usageEventLogger.setMovement(step.name, detectMovementType(step));
+      usageEventLogger.setProvider(movementProvider, movementModel);
       out.info(`Provider: ${movementProvider}`);
       out.info(`Model: ${movementModel}`);
       if (instruction) log.debug('Step instruction', instruction);
@@ -210,7 +214,6 @@ export async function executePiece(
       }
       sessionLogger.onMovementStart(step, iteration, instruction);
     });
-
     engine.on('movement:complete', (step, response, instruction) => {
       log.debug('Movement completed', { step: step.name, status: response.status, matchedRuleIndex: response.matchedRuleIndex, matchedRuleMethod: response.matchedRuleMethod, contentLength: response.content.length, sessionId: response.sessionId, error: response.error });
       lastMovementContent = response.content;
@@ -227,17 +230,16 @@ export async function executePiece(
       }
       if (response.error) out.error(`Error: ${response.error}`);
       if (response.sessionId) out.status('Session', response.sessionId);
+      usageEventLogger.logUsage({ success: response.status === 'done', usage: response.providerUsage ?? { usageMissing: true, reason: USAGE_MISSING_REASONS.NOT_AVAILABLE } });
       sessionLogger.onMovementComplete(step, response, instruction);
       analyticsEmitter.onMovementComplete(step, response);
       sessionLog = { ...sessionLog, iterations: sessionLog.iterations + 1 };
     });
-
     engine.on('movement:report', (step, filePath, fileName) => {
       out.logLine(`\n📄 Report: ${fileName}\n`);
       out.logLine(readFileSync(filePath, 'utf-8'));
       analyticsEmitter.onMovementReport(step, filePath);
     });
-
     engine.on('piece:complete', (state) => {
       log.info('Piece completed successfully', { iterations: state.iteration });
       sessionLog = finalizeSessionLog(sessionLog, 'completed');
@@ -256,7 +258,6 @@ export async function executePiece(
       out.info(`Session log: ${ndjsonLogPath}`);
       if (shouldNotifyPieceComplete) notifySuccess('TAKT', getLabel('piece.notifyComplete', undefined, { iteration: String(state.iteration) }));
     });
-
     engine.on('piece:abort', (state, reason) => {
       interruptAllQueries();
       log.error('Piece aborted', { reason, iterations: state.iteration });
@@ -280,7 +281,6 @@ export async function executePiece(
       out.info(`Session log: ${ndjsonLogPath}`);
       if (shouldNotifyPieceAbort) notifyError('TAKT', getLabel('piece.notifyAbort', undefined, { reason }));
     });
-
     const finalState = await engine.run();
     return {
       success: finalState.status === 'completed',

@@ -79,6 +79,7 @@ export class ClaudeClient {
       sessionId: result.sessionId,
       error: result.error,
       structuredOutput: result.structuredOutput,
+      providerUsage: result.providerUsage,
     };
   }
 
@@ -108,6 +109,7 @@ export class ClaudeClient {
       sessionId: result.sessionId,
       error: result.error,
       structuredOutput: result.structuredOutput,
+      providerUsage: result.providerUsage,
     };
   }
 
@@ -158,6 +160,7 @@ export class ClaudeClient {
       sessionId: result.sessionId,
       error: result.error,
       structuredOutput: result.structuredOutput,
+      providerUsage: result.providerUsage,
     };
   }
 

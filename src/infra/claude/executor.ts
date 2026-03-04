@@ -11,6 +11,8 @@ import {
   type SDKResultMessage,
   type SDKAssistantMessage,
 } from '@anthropic-ai/claude-agent-sdk';
+import { USAGE_MISSING_REASONS } from '../../core/logging/contracts.js';
+import type { ProviderUsageSnapshot } from '../../core/models/response.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import {
   generateQueryId,
@@ -25,6 +27,55 @@ import type {
 } from './types.js';
 
 const log = createLogger('claude-sdk');
+
+function toNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function extractProviderUsage(resultMsg: SDKResultMessage): ProviderUsageSnapshot {
+  const rawUsage = (resultMsg as unknown as { usage?: unknown }).usage;
+  if (!rawUsage || typeof rawUsage !== 'object') {
+    return {
+      usageMissing: true,
+      reason: USAGE_MISSING_REASONS.NOT_AVAILABLE,
+    };
+  }
+
+  const usage = rawUsage as Record<string, unknown>;
+  const inputTokens = toNumber(usage.input_tokens);
+  const outputTokens = toNumber(usage.output_tokens);
+  const cacheCreationInputTokens = toNumber(usage.cache_creation_input_tokens);
+  const cacheReadInputTokens = toNumber(usage.cache_read_input_tokens);
+  if (inputTokens === undefined || outputTokens === undefined) {
+    return {
+      usageMissing: true,
+      reason: USAGE_MISSING_REASONS.TOKENS_MISSING,
+    };
+  }
+  const totalTokens = inputTokens + outputTokens;
+  const cachedInputTokens = (
+    cacheCreationInputTokens !== undefined && cacheReadInputTokens !== undefined
+      ? cacheCreationInputTokens + cacheReadInputTokens
+      : cacheReadInputTokens ?? cacheCreationInputTokens
+  );
+
+  const providerUsage: ProviderUsageSnapshot = {
+    inputTokens,
+    outputTokens,
+    totalTokens,
+    usageMissing: false,
+  };
+  if (cachedInputTokens !== undefined) {
+    providerUsage.cachedInputTokens = cachedInputTokens;
+  }
+  if (cacheCreationInputTokens !== undefined) {
+    providerUsage.cacheCreationInputTokens = cacheCreationInputTokens;
+  }
+  if (cacheReadInputTokens !== undefined) {
+    providerUsage.cacheReadInputTokens = cacheReadInputTokens;
+  }
+  return providerUsage;
+}
 
 /**
  * Executes Claude queries using the Agent SDK.
@@ -95,6 +146,7 @@ export class QueryExecutor {
     let hasResultMessage = false;
     let accumulatedAssistantText = '';
     let structuredOutput: Record<string, unknown> | undefined;
+    let providerUsage: ProviderUsageSnapshot | undefined;
     let onExternalAbort: (() => void) | undefined;
 
     try {
@@ -138,6 +190,7 @@ export class QueryExecutor {
         if (message.type === 'result') {
           hasResultMessage = true;
           const resultMsg = message as SDKResultMessage;
+          providerUsage = extractProviderUsage(resultMsg);
           if (resultMsg.subtype === 'success') {
             resultContent = resultMsg.result;
             const rawStructuredOutput = (resultMsg as unknown as {
@@ -176,13 +229,18 @@ export class QueryExecutor {
         hasResultMessage,
       });
 
-      return {
+      const response: ClaudeResult = {
         success,
         content: finalContent.trim(),
         sessionId,
         fullContent: accumulatedAssistantText.trim(),
         structuredOutput,
+        providerUsage: providerUsage ?? {
+          usageMissing: true,
+          reason: USAGE_MISSING_REASONS.NOT_AVAILABLE,
+        },
       };
+      return response;
     } catch (error) {
       if (onExternalAbort && options.abortSignal) {
         options.abortSignal.removeEventListener('abort', onExternalAbort);

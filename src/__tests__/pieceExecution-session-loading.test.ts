@@ -6,14 +6,45 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { USAGE_MISSING_REASONS } from '../core/logging/contracts.js';
 import type { PieceConfig } from '../core/models/index.js';
 
-const { MockPieceEngine, mockLoadPersonaSessions, mockLoadWorktreeSessions } = vi.hoisted(() => {
+const {
+  MockPieceEngine,
+  mockLoadPersonaSessions,
+  mockLoadWorktreeSessions,
+  mockCreateUsageEventLogger,
+  mockUsageLogger,
+  mockMovementResponse,
+} = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { EventEmitter: EE } = require('node:events') as typeof import('node:events');
 
   const mockLoadPersonaSessions = vi.fn().mockReturnValue({ coder: 'saved-session-id' });
   const mockLoadWorktreeSessions = vi.fn().mockReturnValue({ coder: 'worktree-session-id' });
+  const mockUsageLogger = {
+    filepath: '/tmp/test-usage-events.jsonl',
+    setMovement: vi.fn(),
+    setProvider: vi.fn(),
+    logUsage: vi.fn(),
+  };
+  const mockCreateUsageEventLogger = vi.fn().mockReturnValue(mockUsageLogger);
+  const mockMovementResponse: {
+    providerUsage: {
+      inputTokens?: number;
+      outputTokens?: number;
+      totalTokens?: number;
+      usageMissing: boolean;
+      reason?: string;
+    } | undefined;
+  } = {
+    providerUsage: {
+      inputTokens: 3,
+      outputTokens: 2,
+      totalTokens: 5,
+      usageMissing: false,
+    },
+  };
 
   type PersonaProviderMap = Record<string, { provider?: string; model?: string }>;
 
@@ -47,13 +78,28 @@ const { MockPieceEngine, mockLoadPersonaSessions, mockLoadWorktreeSessions } = v
       if (firstStep) {
         const providerInfo = resolveProviderInfo(firstStep, this.receivedOptions);
         this.emit('movement:start', firstStep, 1, firstStep.instructionTemplate, providerInfo);
+        this.emit('movement:complete', firstStep, {
+          persona: firstStep.personaDisplayName,
+          status: 'done',
+          content: 'ok',
+          timestamp: new Date('2026-03-04T00:00:00.000Z'),
+          sessionId: 'movement-session',
+          providerUsage: mockMovementResponse.providerUsage,
+        }, firstStep.instructionTemplate);
       }
       this.emit('piece:complete', { status: 'completed', iteration: 1 });
       return { status: 'completed', iteration: 1 };
     }
   }
 
-  return { MockPieceEngine, mockLoadPersonaSessions, mockLoadWorktreeSessions };
+  return {
+    MockPieceEngine,
+    mockLoadPersonaSessions,
+    mockLoadWorktreeSessions,
+    mockCreateUsageEventLogger,
+    mockUsageLogger,
+    mockMovementResponse,
+  };
 });
 
 vi.mock('../core/piece/index.js', async () => {
@@ -146,6 +192,10 @@ vi.mock('../shared/prompt/index.js', () => ({
   selectOption: vi.fn(),
   promptInput: vi.fn(),
 }));
+vi.mock('../shared/utils/usageEventLogger.js', () => ({
+  createUsageEventLogger: mockCreateUsageEventLogger,
+  isUsageEventsEnabled: vi.fn().mockReturnValue(true),
+}));
 
 vi.mock('../shared/i18n/index.js', () => ({
   getLabel: vi.fn().mockImplementation((key: string) => key),
@@ -188,12 +238,30 @@ function makeConfig(): PieceConfig {
   };
 }
 
+function makeConfigWithMovement(overrides: Record<string, unknown>): PieceConfig {
+  const baseMovement = makeConfig().movements[0];
+  if (!baseMovement) {
+    throw new Error('Base movement is required');
+  }
+  return {
+    ...makeConfig(),
+    movements: [{ ...baseMovement, ...overrides }],
+  };
+}
+
 describe('executePiece session loading', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockCreateUsageEventLogger.mockReturnValue(mockUsageLogger);
     vi.mocked(resolvePieceConfigValues).mockReturnValue({ ...defaultResolvedConfigValues });
     mockLoadPersonaSessions.mockReturnValue({ coder: 'saved-session-id' });
     mockLoadWorktreeSessions.mockReturnValue({ coder: 'worktree-session-id' });
+    mockMovementResponse.providerUsage = {
+      inputTokens: 3,
+      outputTokens: 2,
+      totalTokens: 5,
+      usageMissing: false,
+    };
   });
 
   it('should pass empty initialSessions on normal run', async () => {
@@ -206,6 +274,41 @@ describe('executePiece session loading', () => {
     expect(mockLoadPersonaSessions).not.toHaveBeenCalled();
     expect(mockLoadWorktreeSessions).not.toHaveBeenCalled();
     expect(MockPieceEngine.lastInstance.receivedOptions.initialSessions).toEqual({});
+  });
+
+  it('should log usage events on movement completion when usage logging is enabled', async () => {
+    await executePiece(makeConfig(), 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+    });
+
+    expect(mockCreateUsageEventLogger).toHaveBeenCalledOnce();
+    expect(mockUsageLogger.setMovement).toHaveBeenCalledWith('implement', 'normal');
+    expect(mockUsageLogger.setProvider).toHaveBeenCalledWith('claude', '(default)');
+    expect(mockUsageLogger.logUsage).toHaveBeenCalledWith({
+      success: true,
+      usage: {
+        inputTokens: 3,
+        outputTokens: 2,
+        totalTokens: 5,
+        usageMissing: false,
+      },
+    });
+  });
+
+  it('should log usage_missing reason when provider usage is unavailable', async () => {
+    mockMovementResponse.providerUsage = undefined;
+
+    await executePiece(makeConfig(), 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+    });
+
+    expect(mockUsageLogger.logUsage).toHaveBeenCalledWith({
+      success: true,
+      usage: {
+        usageMissing: true,
+        reason: USAGE_MISSING_REASONS.NOT_AVAILABLE,
+      },
+    });
   });
 
   it('should load persisted sessions when startMovement is set (retry)', async () => {
@@ -313,5 +416,34 @@ describe('executePiece session loading', () => {
     const mockInfo = vi.mocked(info);
     expect(mockInfo).toHaveBeenCalledWith('Provider: opencode');
     expect(mockInfo).toHaveBeenCalledWith('Model: gpt-5');
+  });
+
+  it('should pass movement type to usage logger for parallel movement', async () => {
+    await executePiece(makeConfigWithMovement({ parallel: { branches: [] } }), 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+    });
+
+    expect(mockUsageLogger.setMovement).toHaveBeenCalledWith('implement', 'parallel');
+  });
+
+  it('should pass movement type to usage logger for arpeggio movement', async () => {
+    await executePiece(makeConfigWithMovement({ arpeggio: { source: './items.csv' } }), 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+    });
+
+    expect(mockUsageLogger.setMovement).toHaveBeenCalledWith('implement', 'arpeggio');
+  });
+
+  it('should pass movement type to usage logger for team leader movement', async () => {
+    await executePiece(
+      makeConfigWithMovement({ teamLeader: { output: { mode: 'summary' } } }),
+      'task',
+      '/tmp/project',
+      {
+        projectCwd: '/tmp/project',
+      },
+    );
+
+    expect(mockUsageLogger.setMovement).toHaveBeenCalledWith('implement', 'team_leader');
   });
 });

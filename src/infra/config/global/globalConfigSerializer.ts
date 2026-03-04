@@ -18,12 +18,14 @@ export function serializeGlobalConfig(config: PersistedGlobalConfig): Record<str
     || config.logging.trace !== undefined
     || config.logging.debug !== undefined
     || config.logging.providerEvents !== undefined
+    || config.logging.usageEvents !== undefined
   )) {
     raw.logging = {
       ...(config.logging.level !== undefined ? { level: config.logging.level } : {}),
       ...(config.logging.trace !== undefined ? { trace: config.logging.trace } : {}),
       ...(config.logging.debug !== undefined ? { debug: config.logging.debug } : {}),
       ...(config.logging.providerEvents !== undefined ? { provider_events: config.logging.providerEvents } : {}),
+      ...(config.logging.usageEvents !== undefined ? { usage_events: config.logging.usageEvents } : {}),
     };
   }
   if (config.analytics) {

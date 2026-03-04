@@ -18,3 +18,10 @@ export function formatElapsedTime(startTime: string, endTime: string): string {
   }
   return `${Math.floor(elapsedSec / 60)}m ${Math.floor(elapsedSec % 60)}s`;
 }
+
+export function detectMovementType(step: { parallel?: unknown; arpeggio?: unknown; teamLeader?: unknown }): 'normal' | 'parallel' | 'arpeggio' | 'team_leader' {
+  if (step.parallel) return 'parallel';
+  if (step.arpeggio) return 'arpeggio';
+  if (step.teamLeader) return 'team_leader';
+  return 'normal';
+}
