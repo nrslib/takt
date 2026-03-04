@@ -75,7 +75,6 @@ const MIGRATED_PROJECT_LOCAL_CONFIG_KEY_SET = new Set(
 );
 
 const RESOLUTION_REGISTRY: Partial<{ [K in ConfigParameterKey]: ResolutionRule<K> }> = {
-  piece: { layers: ['local', 'global'] },
   logLevel: { layers: ['local', 'global'] },
   provider: {
     layers: ['local', 'piece', 'global'],

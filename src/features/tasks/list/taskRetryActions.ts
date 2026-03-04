@@ -32,6 +32,7 @@ import {
   DEPRECATED_PROVIDER_CONFIG_WARNING,
   hasDeprecatedProviderConfig,
 } from './requeueHelpers.js';
+import { prepareTaskForExecution } from './prepareTaskForExecution.js';
 
 const log = createLogger('list-tasks');
 
@@ -227,6 +228,7 @@ export async function retryFailedTask(
   }
 
   const taskInfo = runner.startReExecution(task.name, ['failed'], startMovement, retryNote);
+  const taskForExecution = prepareTaskForExecution(taskInfo, selectedPiece);
 
   log.info('Starting re-execution of failed task', {
     name: task.name,
@@ -234,5 +236,5 @@ export async function retryFailedTask(
     startMovement,
   });
 
-  return executeAndCompleteTask(taskInfo, runner, projectDir, selectedPiece);
+  return executeAndCompleteTask(taskForExecution, runner, projectDir);
 }

@@ -5,7 +5,6 @@ import type { MigratedProjectLocalConfigKey } from './migratedProjectLocalKeys.j
 export interface LoadedConfig
   extends PersistedGlobalConfig,
     Pick<ProjectLocalConfig, MigratedProjectLocalConfigKey> {
-  piece?: string;
   logLevel: NonNullable<ProjectLocalConfig['logLevel']>;
   minimalOutput: NonNullable<ProjectLocalConfig['minimalOutput']>;
   verbose: NonNullable<ProjectLocalConfig['verbose']>;

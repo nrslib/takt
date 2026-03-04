@@ -145,7 +145,6 @@ export {
   loadProjectConfig,
   saveProjectConfig,
   updateProjectConfig,
-  setCurrentPiece,
   type ProjectLocalConfig,
 } from './project/projectConfig.js';
 export {

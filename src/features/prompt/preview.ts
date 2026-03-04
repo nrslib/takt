@@ -22,7 +22,7 @@ import { DEFAULT_PIECE_NAME } from '../../shared/constants.js';
  * the Phase 1, Phase 2, and Phase 3 prompts with sample variable values.
  */
 export async function previewPrompts(cwd: string, pieceIdentifier?: string): Promise<void> {
-  const identifier = pieceIdentifier ?? resolvePieceConfigValue(cwd, 'piece') ?? DEFAULT_PIECE_NAME;
+  const identifier = pieceIdentifier ?? DEFAULT_PIECE_NAME;
   const config = loadPieceByIdentifier(identifier, cwd);
 
   if (!config) {

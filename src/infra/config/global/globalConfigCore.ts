@@ -99,7 +99,6 @@ export class GlobalConfigManager {
       language: parsed.language,
       provider: normalizedProvider.provider,
       model: normalizedProvider.model,
-      piece: parsed.piece,
       logging: parsed.logging ? {
         level: parsed.logging.level,
         trace: parsed.logging.trace,

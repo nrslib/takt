@@ -2,7 +2,7 @@
  * Tests for /retry slash command in the conversation loop.
  *
  * Verifies:
- * - /retry with previousOrderContent returns execute action with order content
+ * - /retry with previousOrderContent uses post-summary action selection
  * - /retry without previousOrderContent shows error and continues loop
  * - /retry in retry mode with order.md context in system prompt
  */
@@ -18,6 +18,7 @@ import {
   createMockProvider,
   type MockProviderCapture,
 } from './helpers/stdinSimulator.js';
+import { selectOption } from '../shared/prompt/index.js';
 
 // --- Mocks (infrastructure only) ---
 
@@ -147,7 +148,8 @@ describe('/retry slash command', () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('should execute with previous order content when /retry is used', async () => {
+  it('should route previous order content through action selection when /retry is used', async () => {
+    vi.mocked(selectOption).mockResolvedValueOnce('save_task');
     const orderContent = '# Task Order\n\nImplement feature X with tests.';
     setupRawStdin(toRawInputs(['/retry']));
     setupProvider([]);
@@ -155,7 +157,7 @@ describe('/retry slash command', () => {
     const retryContext = buildRetryContext({ previousOrderContent: orderContent });
     const result = await runRetryMode(tmpDir, retryContext, orderContent);
 
-    expect(result.action).toBe('execute');
+    expect(result.action).toBe('save_task');
     expect(result.task).toBe(orderContent);
   });
 
@@ -167,6 +169,18 @@ describe('/retry slash command', () => {
     const result = await runRetryMode(tmpDir, retryContext, null);
 
     expect(mockInfo).toHaveBeenCalledWith('No previous order found.');
+    expect(result.action).toBe('cancel');
+  });
+
+  it('should continue when /retry is selected with continue action', async () => {
+    vi.mocked(selectOption).mockResolvedValueOnce('continue');
+    setupRawStdin(toRawInputs(['/retry', '/cancel']));
+    setupProvider([]);
+
+    const orderContent = '# Task Order\n\nImplement feature X with tests.';
+    const retryContext = buildRetryContext({ previousOrderContent: orderContent });
+    const result = await runRetryMode(tmpDir, retryContext, orderContent);
+
     expect(result.action).toBe('cancel');
   });
 

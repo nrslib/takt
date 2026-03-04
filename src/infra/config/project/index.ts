@@ -6,7 +6,6 @@ export {
   loadProjectConfig,
   saveProjectConfig,
   updateProjectConfig,
-  setCurrentPiece,
   type ProjectLocalConfig,
 } from './projectConfig.js';
 export {

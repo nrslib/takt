@@ -40,6 +40,13 @@ vi.mock('../infra/config/index.js', () => ({
     }
     return result;
   },
+  resolvePieceConfigValue: (_projectDir: string, key: string) => {
+    const raw = mockLoadConfigRaw() as Record<string, unknown>;
+    const config = ('global' in raw && 'project' in raw)
+      ? { ...raw.global as Record<string, unknown>, ...raw.project as Record<string, unknown> }
+      : { ...raw, provider: 'claude', verbose: false };
+    return config[key];
+  },
   resolveConfigValueWithSource: (_projectDir: string, key: string) => {
     const raw = mockLoadConfigRaw() as Record<string, unknown>;
     const config = ('global' in raw && 'project' in raw)
@@ -188,7 +195,10 @@ function createTask(name: string): TaskInfo {
     filePath: `/tasks/${name}.yaml`,
     createdAt: '2026-02-09T00:00:00.000Z',
     status: 'pending',
-    data: null,
+    data: {
+      task: `Task: ${name}`,
+      piece: 'default',
+    },
   };
 }
 

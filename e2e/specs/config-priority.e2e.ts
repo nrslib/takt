@@ -44,7 +44,7 @@ describe('E2E: Config priority (piece / autoPr)', () => {
     }
   });
 
-  it('should use configured piece in pipeline when --piece is omitted', () => {
+  it('should require --piece in pipeline even when config has piece', () => {
     const configuredPiecePath = resolve(__dirname, '../fixtures/pieces/mock-single-step.yaml');
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/execute-done.json');
     const projectConfigDir = join(testRepo.path, '.takt');
@@ -70,9 +70,8 @@ describe('E2E: Config priority (piece / autoPr)', () => {
       timeout: 240_000,
     });
 
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain(`Running piece: ${configuredPiecePath}`);
-    expect(result.stdout).toContain(`Piece '${configuredPiecePath}' completed`);
+    expect(result.exitCode).toBe(1);
+    expect(`${result.stdout}${result.stderr}`).toContain('piece');
   }, 240_000);
 
   it('should default auto_pr to true when unset in config/env', () => {

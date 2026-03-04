@@ -13,9 +13,6 @@ export function serializeGlobalConfig(config: PersistedGlobalConfig): Record<str
   if (config.model) {
     raw.model = config.model;
   }
-  if (config.piece) {
-    raw.piece = config.piece;
-  }
   if (config.logging && (
     config.logging.level !== undefined
     || config.logging.trace !== undefined

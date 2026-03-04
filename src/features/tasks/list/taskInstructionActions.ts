@@ -27,6 +27,7 @@ import {
   selectRunSessionContext,
 } from './requeueHelpers.js';
 import { executeAndCompleteTask } from '../execute/taskExecution.js';
+import { prepareTaskForExecution } from './prepareTaskForExecution.js';
 
 const log = createLogger('list-tasks');
 
@@ -128,6 +129,7 @@ export async function instructBranch(
     const retryNote = appendRetryNote(target.data?.retry_note, instruction);
     const runner = new TaskRunner(projectDir);
     const taskInfo = runner.startReExecution(target.name, ['completed', 'failed'], undefined, retryNote);
+    const taskForExecution = prepareTaskForExecution(taskInfo, selectedPiece);
 
     log.info('Starting re-execution of instructed task', {
       name: target.name,
@@ -136,7 +138,7 @@ export async function instructBranch(
       piece: selectedPiece,
     });
 
-    return executeAndCompleteTask(taskInfo, runner, projectDir, selectedPiece);
+    return executeAndCompleteTask(taskForExecution, runner, projectDir);
   };
 
   return dispatchConversationAction(result, {

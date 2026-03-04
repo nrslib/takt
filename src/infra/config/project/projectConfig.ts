@@ -283,7 +283,3 @@ export function updateProjectConfig<K extends keyof ProjectLocalConfig>(
   config[key] = value;
   saveProjectConfig(projectDir, config);
 }
-
-export function setCurrentPiece(projectDir: string, piece: string): void {
-  updateProjectConfig(projectDir, 'piece', piece);
-}

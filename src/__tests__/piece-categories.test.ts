@@ -252,22 +252,19 @@ describe('2-stage category selection helpers', () => {
 
   describe('buildTopLevelSelectOptions', () => {
     it('should encode categories with prefix in value', () => {
-      const options = buildTopLevelSelectOptions(items, '');
+      const options = buildTopLevelSelectOptions(items);
       const categoryOption = options.find((o) => o.label.includes('frontend'));
       expect(categoryOption).toBeDefined();
       expect(categoryOption!.value).toBe('__category__:frontend');
     });
 
-    it('should mark current piece', () => {
-      const options = buildTopLevelSelectOptions(items, 'simple');
-      const simpleOption = options.find((o) => o.value === 'simple');
-      expect(simpleOption!.label).toContain('(current)');
-    });
+    it('should not include legacy current markers in labels or values', () => {
+      const options = buildTopLevelSelectOptions(items);
+      const labels = options.map((o) => o.label);
+      const values = options.map((o) => o.value);
 
-    it('should mark category containing current piece', () => {
-      const options = buildTopLevelSelectOptions(items, 'frontend/react');
-      const frontendOption = options.find((o) => o.value === '__category__:frontend');
-      expect(frontendOption!.label).toContain('(current)');
+      expect(labels.some((label) => label.includes('(current)'))).toBe(false);
+      expect(values).not.toContain('__current__');
     });
   });
 
@@ -283,21 +280,15 @@ describe('2-stage category selection helpers', () => {
 
   describe('buildCategoryPieceOptions', () => {
     it('should return options for pieces in a category', () => {
-      const options = buildCategoryPieceOptions(items, 'frontend', '');
+      const options = buildCategoryPieceOptions(items, 'frontend');
       expect(options).not.toBeNull();
       expect(options).toHaveLength(2);
       expect(options![0]!.value).toBe('frontend/react');
       expect(options![0]!.label).toBe('react');
     });
 
-    it('should mark current piece in category', () => {
-      const options = buildCategoryPieceOptions(items, 'frontend', 'frontend/vue');
-      const vueOption = options!.find((o) => o.value === 'frontend/vue');
-      expect(vueOption!.label).toContain('(current)');
-    });
-
     it('should return null for non-existent category', () => {
-      expect(buildCategoryPieceOptions(items, 'nonexistent', '')).toBeNull();
+      expect(buildCategoryPieceOptions(items, 'nonexistent')).toBeNull();
     });
   });
 });

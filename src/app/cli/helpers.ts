@@ -9,6 +9,8 @@ import type { TaskExecutionOptions } from '../../features/tasks/index.js';
 import type { ProviderType } from '../../infra/providers/index.js';
 import { isIssueReference } from '../../infra/github/index.js';
 
+const REMOVED_ROOT_COMMANDS = new Set(['switch']);
+
 /**
  * Resolve --provider and --model options into TaskExecutionOptions.
  * Returns undefined if neither is specified.
@@ -41,4 +43,26 @@ export function resolveAgentOverrides(program: Command): TaskExecutionOptions | 
  */
 export function isDirectTask(input: string): boolean {
   return isIssueReference(input) || input.trim().split(/\s+/).every((t: string) => isIssueReference(t));
+}
+
+export function resolveSlashFallbackTask(args: string[], knownCommands: string[]): string | null {
+  const firstArg = args[0];
+  if (!firstArg?.startsWith('/')) {
+    return null;
+  }
+
+  const commandName = firstArg.slice(1);
+  if (knownCommands.includes(commandName)) {
+    return null;
+  }
+
+  return args.join(' ');
+}
+
+export function resolveRemovedRootCommand(args: string[]): string | null {
+  const firstArg = args[0];
+  if (!firstArg) {
+    return null;
+  }
+  return REMOVED_ROOT_COMMANDS.has(firstArg) ? firstArg : null;
 }

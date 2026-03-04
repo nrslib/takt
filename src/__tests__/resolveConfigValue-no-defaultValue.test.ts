@@ -57,37 +57,6 @@ describe('RESOLUTION_REGISTRY defaultValue removal', () => {
     }
   });
 
-  describe('piece', () => {
-    it('should resolve piece as undefined when not set in project or global config', () => {
-      const value = resolveConfigValue(projectDir, 'piece');
-      expect(value).toBeUndefined();
-    });
-
-    it('should report source as default when piece is not set anywhere', () => {
-      const result = resolveConfigValueWithSource(projectDir, 'piece');
-      expect(result.value).toBeUndefined();
-      expect(result.source).toBe('default');
-    });
-
-    it('should resolve explicit project piece over default', () => {
-      const configDir = getProjectConfigDir(projectDir);
-      mkdirSync(configDir, { recursive: true });
-      writeFileSync(join(configDir, 'config.yaml'), 'piece: custom-piece\n');
-
-      const value = resolveConfigValue(projectDir, 'piece');
-      expect(value).toBe('custom-piece');
-    });
-
-    it('should resolve piece from global config when global has it', () => {
-      writeFileSync(globalConfigPath, 'language: en\npiece: global-piece\n', 'utf-8');
-      invalidateGlobalConfigCache();
-
-      const result = resolveConfigValueWithSource(projectDir, 'piece');
-      expect(result.value).toBe('global-piece');
-      expect(result.source).toBe('global');
-    });
-  });
-
   describe('verbose', () => {
     it('should resolve verbose to false via resolver default when not set anywhere', () => {
       const value = resolveConfigValue(projectDir, 'verbose');
@@ -116,7 +85,7 @@ describe('RESOLUTION_REGISTRY defaultValue removal', () => {
 
       const configDir = getProjectConfigDir(projectDir);
       mkdirSync(configDir, { recursive: true });
-      writeFileSync(join(configDir, 'config.yaml'), 'piece: default\nverbose: true\n');
+    writeFileSync(join(configDir, 'config.yaml'), 'verbose: true\n');
 
       const value = resolveConfigValue(projectDir, 'verbose');
       expect(value).toBe(true);
@@ -247,7 +216,7 @@ describe('RESOLUTION_REGISTRY defaultValue removal', () => {
     it('should resolve migrated non-default keys as undefined when project keys are unset', () => {
       const configDir = getProjectConfigDir(projectDir);
       mkdirSync(configDir, { recursive: true });
-      writeFileSync(join(configDir, 'config.yaml'), 'piece: default\n', 'utf-8');
+      writeFileSync(join(configDir, 'config.yaml'), 'provider: claude\n', 'utf-8');
       writeFileSync(
         globalConfigPath,
         ['language: en'].join('\n'),
@@ -276,7 +245,7 @@ describe('RESOLUTION_REGISTRY defaultValue removal', () => {
     it('should resolve default-backed migrated keys from defaults when project keys are unset', () => {
       const configDir = getProjectConfigDir(projectDir);
       mkdirSync(configDir, { recursive: true });
-      writeFileSync(join(configDir, 'config.yaml'), 'piece: default\n', 'utf-8');
+      writeFileSync(join(configDir, 'config.yaml'), 'provider: claude\n', 'utf-8');
       writeFileSync(
         globalConfigPath,
         ['language: en'].join('\n'),
@@ -364,7 +333,7 @@ describe('RESOLUTION_REGISTRY defaultValue removal', () => {
     it('should resolve all migrated keys from project or defaults when project config has no migrated keys', () => {
       const configDir = getProjectConfigDir(projectDir);
       mkdirSync(configDir, { recursive: true });
-      writeFileSync(join(configDir, 'config.yaml'), 'piece: default\n', 'utf-8');
+      writeFileSync(join(configDir, 'config.yaml'), 'provider: claude\n', 'utf-8');
       writeFileSync(
         globalConfigPath,
         ['language: en'].join('\n'),

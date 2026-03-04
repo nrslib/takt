@@ -98,8 +98,6 @@ export interface PersistedGlobalConfig {
   language: Language;
   provider?: 'claude' | 'codex' | 'opencode' | 'cursor' | 'copilot' | 'mock';
   model?: string;
-  /** Default piece name for new tasks (resolved via config layers: project > global > 'default') */
-  piece?: string;
   /** @globalOnly */
   logging?: LoggingConfig;
   analytics?: AnalyticsConfig;
@@ -187,7 +185,6 @@ export interface PersistedGlobalConfig {
 
 /** Project-level configuration */
 export interface ProjectConfig {
-  piece?: string;
   verbose?: boolean;
   provider?: 'claude' | 'codex' | 'opencode' | 'cursor' | 'copilot' | 'mock';
   model?: string;

@@ -14,7 +14,6 @@ const {
   mockSuccess,
   mockWarn,
   mockError,
-  mockResolveConfigValue,
 } = vi.hoisted(() => ({
   mockRecoverInterruptedRunningTasks: vi.fn(),
   mockGetTasksFilePath: vi.fn(),
@@ -28,7 +27,6 @@ const {
   mockSuccess: vi.fn(),
   mockWarn: vi.fn(),
   mockError: vi.fn(),
-  mockResolveConfigValue: vi.fn(),
 }));
 
 vi.mock('../infra/task/index.js', () => ({
@@ -60,16 +58,11 @@ vi.mock('../shared/i18n/index.js', () => ({
   getLabel: vi.fn((key: string) => key),
 }));
 
-vi.mock('../infra/config/index.js', () => ({
-  resolveConfigValue: mockResolveConfigValue,
-}));
-
 import { watchTasks } from '../features/tasks/watch/index.js';
 
 describe('watchTasks', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockResolveConfigValue.mockReturnValue('default');
     mockRecoverInterruptedRunningTasks.mockReturnValue(0);
     mockGetTasksFilePath.mockReturnValue('/project/.takt/tasks.yaml');
     mockExecuteAndCompleteTask.mockResolvedValue(true);
@@ -97,17 +90,13 @@ describe('watchTasks', () => {
     expect(mockExecuteAndCompleteTask).toHaveBeenCalledTimes(1);
   });
 
-  it('piece設定が未定義の場合はデフォルトpiece名を使う', async () => {
-    mockResolveConfigValue.mockReturnValue(undefined);
-
+  it('executeAndCompleteTask を watch ループで呼び出す', async () => {
     await watchTasks('/project');
 
-    expect(mockInfo).toHaveBeenCalledWith('Piece: default');
     expect(mockExecuteAndCompleteTask).toHaveBeenCalledWith(
       expect.any(Object),
       expect.any(Object),
       '/project',
-      'default',
       undefined,
     );
   });
