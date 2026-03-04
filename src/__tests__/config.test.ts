@@ -633,14 +633,20 @@ describe('isVerboseMode', () => {
   let testDir: string;
   let originalTaktConfigDir: string | undefined;
   let originalTaktVerbose: string | undefined;
+  let originalTaktLoggingDebug: string | undefined;
+  let originalTaktLoggingTrace: string | undefined;
 
   beforeEach(() => {
     testDir = join(tmpdir(), `takt-test-${randomUUID()}`);
     mkdirSync(testDir, { recursive: true });
     originalTaktConfigDir = process.env.TAKT_CONFIG_DIR;
     originalTaktVerbose = process.env.TAKT_VERBOSE;
+    originalTaktLoggingDebug = process.env.TAKT_LOGGING_DEBUG;
+    originalTaktLoggingTrace = process.env.TAKT_LOGGING_TRACE;
     process.env.TAKT_CONFIG_DIR = join(testDir, 'global-takt');
     delete process.env.TAKT_VERBOSE;
+    delete process.env.TAKT_LOGGING_DEBUG;
+    delete process.env.TAKT_LOGGING_TRACE;
     invalidateGlobalConfigCache();
   });
 
@@ -654,6 +660,16 @@ describe('isVerboseMode', () => {
       delete process.env.TAKT_VERBOSE;
     } else {
       process.env.TAKT_VERBOSE = originalTaktVerbose;
+    }
+    if (originalTaktLoggingDebug === undefined) {
+      delete process.env.TAKT_LOGGING_DEBUG;
+    } else {
+      process.env.TAKT_LOGGING_DEBUG = originalTaktLoggingDebug;
+    }
+    if (originalTaktLoggingTrace === undefined) {
+      delete process.env.TAKT_LOGGING_TRACE;
+    } else {
+      process.env.TAKT_LOGGING_TRACE = originalTaktLoggingTrace;
     }
 
     if (existsSync(testDir)) {
@@ -699,6 +715,66 @@ describe('isVerboseMode', () => {
 
   it('should return false when neither project nor global verbose is set', () => {
     expect(isVerboseMode(testDir)).toBe(false);
+  });
+
+  it('should return true when global logging.debug is enabled', () => {
+    const globalConfigDir = process.env.TAKT_CONFIG_DIR!;
+    mkdirSync(globalConfigDir, { recursive: true });
+    writeFileSync(
+      join(globalConfigDir, 'config.yaml'),
+      [
+        'language: en',
+        'logging:',
+        '  debug: true',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    expect(isVerboseMode(testDir)).toBe(true);
+  });
+
+  it('should return true when global logging.trace is enabled', () => {
+    const globalConfigDir = process.env.TAKT_CONFIG_DIR!;
+    mkdirSync(globalConfigDir, { recursive: true });
+    writeFileSync(
+      join(globalConfigDir, 'config.yaml'),
+      [
+        'language: en',
+        'logging:',
+        '  trace: true',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    expect(isVerboseMode(testDir)).toBe(true);
+  });
+
+  it('should return true when TAKT_LOGGING_DEBUG=true is set', () => {
+    process.env.TAKT_LOGGING_DEBUG = 'true';
+
+    expect(isVerboseMode(testDir)).toBe(true);
+  });
+
+  it('should return true when TAKT_LOGGING_TRACE=true is set', () => {
+    process.env.TAKT_LOGGING_TRACE = 'true';
+
+    expect(isVerboseMode(testDir)).toBe(true);
+  });
+
+  it('should return true when global logging.level is debug', () => {
+    const globalConfigDir = process.env.TAKT_CONFIG_DIR!;
+    mkdirSync(globalConfigDir, { recursive: true });
+    writeFileSync(
+      join(globalConfigDir, 'config.yaml'),
+      [
+        'language: en',
+        'logging:',
+        '  level: debug',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    expect(isVerboseMode(testDir)).toBe(true);
   });
 
   it('should prioritize TAKT_VERBOSE over project and global config', () => {

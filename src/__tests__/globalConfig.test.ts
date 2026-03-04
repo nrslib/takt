@@ -118,4 +118,20 @@ piece_overrides:
       expect(reloaded.pieceOverrides?.qualityGates).toEqual(['Test 1', 'Test 2']);
     });
   });
+
+  describe('security hardening', () => {
+    it('should reject forbidden keys that can cause prototype pollution', () => {
+      const configContent = `
+logging:
+  level: info
+  __proto__:
+    polluted: true
+`;
+      writeFileSync(testConfigPath, configContent, 'utf-8');
+
+      const manager = GlobalConfigManager.getInstance();
+      expect(() => manager.load()).toThrow(/forbidden key "__proto__"/i);
+      expect(({} as Record<string, unknown>)['polluted']).toBeUndefined();
+    });
+  });
 });

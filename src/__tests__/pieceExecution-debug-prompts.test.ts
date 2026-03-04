@@ -102,7 +102,7 @@ vi.mock('../infra/config/index.js', () => ({
     runtime: undefined,
     preventSleep: false,
     model: undefined,
-    observability: undefined,
+    logging: undefined,
   }),
   saveSessionState: vi.fn(),
   ensureDir: vi.fn(),

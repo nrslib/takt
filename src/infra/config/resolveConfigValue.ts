@@ -76,6 +76,7 @@ const MIGRATED_PROJECT_LOCAL_CONFIG_KEY_SET = new Set(
 
 const RESOLUTION_REGISTRY: Partial<{ [K in ConfigParameterKey]: ResolutionRule<K> }> = {
   piece: { layers: ['local', 'global'] },
+  logLevel: { layers: ['local', 'global'] },
   provider: {
     layers: ['local', 'piece', 'global'],
     pieceValue: (pieceContext) => pieceContext?.provider,
@@ -135,6 +136,10 @@ function getGlobalLayerValue<K extends ConfigParameterKey>(
   globalMigratedProjectLocalFallback: GlobalMigratedProjectLocalFallback,
   key: K,
 ): LoadedConfig[K] | undefined {
+  if (key === 'logLevel' && global.logging?.level !== undefined) {
+    return global.logging.level as LoadedConfig[K];
+  }
+
   if (isMigratedProjectLocalConfigKey(key)) {
     return globalMigratedProjectLocalFallback[key] as LoadedConfig[K] | undefined;
   }
@@ -243,4 +248,21 @@ export function resolveConfigValues<K extends ConfigParameterKey>(
     result[key] = resolveConfigValue(projectDir, key, options);
   }
   return result;
+}
+
+export function isVerboseShortcutEnabled(
+  projectDir: string,
+  options?: ResolveConfigOptions,
+): boolean {
+  const verbose = resolveConfigValue(projectDir, 'verbose', options);
+  if (verbose === true) {
+    return true;
+  }
+
+  const logging = resolveConfigValue(projectDir, 'logging', options);
+  if (logging?.debug === true || logging?.trace === true) {
+    return true;
+  }
+
+  return resolveConfigValue(projectDir, 'logLevel', options) === 'debug';
 }

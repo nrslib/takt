@@ -20,8 +20,12 @@ language: en        # UI language: en | ja
 #   piece_abort: true
 #   run_complete: true
 #   run_abort: true
-# observability:
-#   provider_events: false         # Persist provider stream events
+# verbose: false                   # Shortcut: enable trace/debug and set logging.level=debug
+# logging:
+#   level: info                    # Log level for console and file output
+#   trace: true                    # Generate human-readable execution trace report (trace.md)
+#   debug: false                   # Enable debug.log + prompts.jsonl
+#   provider_events: false          # Persist provider stream events
 
 # Credentials (environment variables take priority)
 # anthropic_api_key: "sk-ant-..." # Claude API key

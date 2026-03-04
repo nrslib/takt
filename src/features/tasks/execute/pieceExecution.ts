@@ -1,7 +1,3 @@
-/**
- * Piece execution logic
- */
-
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PieceEngine, createDenyAskUserQuestionHandler } from '../../../core/piece/index.js';
@@ -28,33 +24,12 @@ import { AnalyticsEmitter } from './analyticsEmitter.js';
 import { createOutputFns, createPrefixedStreamHandler } from './outputFns.js';
 import { RunMetaManager } from './runMeta.js';
 import { createIterationLimitHandler, createUserInputHandler } from './iterationLimitHandler.js';
+import { assertTaskPrefixPair, truncate, formatElapsedTime } from './pieceExecutionUtils.js';
 
 export type { PieceExecutionResult, PieceExecutionOptions };
 
 const log = createLogger('piece');
 
-function assertTaskPrefixPair(
-  taskPrefix: string | undefined,
-  taskColorIndex: number | undefined,
-): void {
-  if ((taskPrefix != null) !== (taskColorIndex != null)) {
-    throw new Error('taskPrefix and taskColorIndex must be provided together');
-  }
-}
-
-function truncate(str: string, maxLength: number): string {
-  return str.length <= maxLength ? str : str.slice(0, maxLength) + '...';
-}
-
-function formatElapsedTime(startTime: string, endTime: string): string {
-  const elapsedSec = (new Date(endTime).getTime() - new Date(startTime).getTime()) / 1000;
-  if (elapsedSec < 60) return `${elapsedSec.toFixed(1)}s`;
-  return `${Math.floor(elapsedSec / 60)}m ${Math.floor(elapsedSec % 60)}s`;
-}
-
-/**
- * Execute a piece and handle all events
- */
 export async function executePiece(
   pieceConfig: PieceConfig,
   task: string,
@@ -100,7 +75,7 @@ export async function executePiece(
   const isWorktree = cwd !== projectCwd;
   const globalConfig = resolvePieceConfigValues(
     projectCwd,
-    ['notificationSound', 'notificationSoundEvents', 'provider', 'runtime', 'preventSleep', 'model', 'observability', 'analytics'],
+    ['notificationSound', 'notificationSoundEvents', 'provider', 'runtime', 'preventSleep', 'model', 'logging', 'analytics'],
   );
   const shouldNotify = globalConfig.notificationSound !== false;
   const nse = globalConfig.notificationSoundEvents;

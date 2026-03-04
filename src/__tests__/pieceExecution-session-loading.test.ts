@@ -84,7 +84,7 @@ vi.mock('../infra/config/index.js', () => ({
     runtime: undefined,
     preventSleep: false,
     model: undefined,
-    observability: undefined,
+    logging: undefined,
   }),
   saveSessionState: vi.fn(),
   ensureDir: vi.fn(),
@@ -165,7 +165,7 @@ const defaultResolvedConfigValues = {
   runtime: undefined,
   preventSleep: false,
   model: undefined,
-  observability: undefined,
+  logging: undefined,
   analytics: undefined,
 };
 
@@ -272,6 +272,19 @@ describe('executePiece session loading', () => {
     const mockInfo = vi.mocked(info);
     expect(mockInfo).toHaveBeenCalledWith('Provider: claude');
     expect(mockInfo).toHaveBeenCalledWith('Model: (default)');
+  });
+
+  it('should resolve logging config from piece config values', async () => {
+    await executePiece(makeConfig(), 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+    });
+
+    const calls = vi.mocked(resolvePieceConfigValues).mock.calls;
+    expect(calls).toHaveLength(1);
+    const keys = calls[0]?.[1];
+    expect(Array.isArray(keys)).toBe(true);
+    expect(keys).toContain('logging');
+    expect(keys).not.toContain('observability');
   });
 
   it('should log configured model from global/project settings when movement model is unresolved', async () => {

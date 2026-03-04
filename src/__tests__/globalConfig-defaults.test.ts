@@ -24,6 +24,7 @@ const {
   loadGlobalConfig,
   saveGlobalConfig,
   invalidateGlobalConfigCache,
+  loadGlobalMigratedProjectLocalFallback,
 } = await import('../infra/config/global/globalConfig.js');
 const { getGlobalConfigPath } = await import('../infra/config/paths.js');
 
@@ -493,40 +494,268 @@ describe('loadGlobalConfig', () => {
     });
   });
 
-  it('should load observability.provider_events config from config.yaml', () => {
+  it('should load logging config from config.yaml', () => {
     const taktDir = join(testHomeDir, '.takt');
     mkdirSync(taktDir, { recursive: true });
     writeFileSync(
       getGlobalConfigPath(),
       [
         'language: en',
-        'observability:',
+        'logging:',
         '  provider_events: false',
       ].join('\n'),
       'utf-8',
     );
 
     const config = loadGlobalConfig();
-    expect(config.observability).toEqual({
+    expect(config.logging).toEqual({
       providerEvents: false,
     });
   });
 
-  it('should save and reload observability.provider_events config', () => {
+  it('should load full logging config with all fields', () => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(
+      getGlobalConfigPath(),
+      [
+        'language: en',
+        'logging:',
+        '  level: debug',
+        '  trace: true',
+        '  debug: true',
+        '  provider_events: true',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const config = loadGlobalConfig();
+    expect(config.logging).toEqual({
+      level: 'debug',
+      trace: true,
+      debug: true,
+      providerEvents: true,
+    });
+  });
+
+  it('should save and reload logging config', () => {
     const taktDir = join(testHomeDir, '.takt');
     mkdirSync(taktDir, { recursive: true });
     writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
 
     const config = loadGlobalConfig();
-    config.observability = {
+    config.logging = {
+      level: 'warn',
+      trace: false,
+      debug: true,
       providerEvents: false,
     };
     saveGlobalConfig(config);
     invalidateGlobalConfigCache();
 
     const reloaded = loadGlobalConfig();
-    expect(reloaded.observability).toEqual({
+    expect(reloaded.logging).toEqual({
+      level: 'warn',
+      trace: false,
+      debug: true,
       providerEvents: false,
+    });
+  });
+
+  it('should save partial logging config (only provider_events)', () => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
+
+    const config = loadGlobalConfig();
+    config.logging = {
+      providerEvents: true,
+    };
+    saveGlobalConfig(config);
+    invalidateGlobalConfigCache();
+
+    const reloaded = loadGlobalConfig();
+    expect(reloaded.logging).toEqual({
+      providerEvents: true,
+    });
+  });
+
+  describe('deprecated migration: observability → logging', () => {
+    it('should migrate observability.provider_events to logging.providerEvents', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(
+        getGlobalConfigPath(),
+        [
+          'language: en',
+          'observability:',
+          '  provider_events: true',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const config = loadGlobalConfig();
+        expect(config.logging?.providerEvents).toBe(true);
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('observability'),
+        );
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it('should not overwrite explicit logging.provider_events with observability value', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(
+        getGlobalConfigPath(),
+        [
+          'language: en',
+          'logging:',
+          '  provider_events: false',
+          'observability:',
+          '  provider_events: true',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const config = loadGlobalConfig();
+        expect(config.logging?.providerEvents).toBe(false);
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it('should emit deprecation warning when observability is present', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(
+        getGlobalConfigPath(),
+        [
+          'language: en',
+          'observability:',
+          '  provider_events: false',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        loadGlobalConfig();
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('Deprecated'),
+        );
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+  });
+
+  describe('deprecated migration: log_level → logging.level', () => {
+    it('should migrate log_level to logging.level', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(
+        getGlobalConfigPath(),
+        [
+          'language: en',
+          'log_level: warn',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const config = loadGlobalConfig();
+        expect(config.logging?.level).toBe('warn');
+        expect(warnSpy).toHaveBeenCalled();
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it('should prefer logging.level over legacy log_level', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(
+        getGlobalConfigPath(),
+        [
+          'language: en',
+          'logging:',
+          '  level: info',
+          'log_level: warn',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const config = loadGlobalConfig();
+        expect(config.logging?.level).toBe('info');
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+  });
+
+  describe('logging.level → logLevel fallback', () => {
+    it('should use logging.level as logLevel fallback when legacy log_level is absent', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(
+        getGlobalConfigPath(),
+        [
+          'language: en',
+          'logging:',
+          '  level: warn',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      invalidateGlobalConfigCache();
+      const fallback = loadGlobalMigratedProjectLocalFallback();
+      expect(fallback.logLevel).toBe('warn');
+    });
+
+    it('should prefer logging.level over legacy log_level', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(
+        getGlobalConfigPath(),
+        [
+          'language: en',
+          'log_level: debug',
+          'logging:',
+          '  level: warn',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      invalidateGlobalConfigCache();
+      const fallback = loadGlobalMigratedProjectLocalFallback();
+      expect(fallback.logLevel).toBe('warn');
+    });
+
+    it('should fall back to legacy log_level when logging.level is absent', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(
+        getGlobalConfigPath(),
+        [
+          'language: en',
+          'log_level: debug',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      invalidateGlobalConfigCache();
+      const fallback = loadGlobalMigratedProjectLocalFallback();
+      expect(fallback.logLevel).toBe('debug');
     });
   });
 

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   applyGlobalConfigEnvOverrides,
   applyProjectConfigEnvOverrides,
@@ -52,7 +52,6 @@ describe('config env overrides', () => {
   });
 
   it('should apply project env overrides from generated env names', () => {
-    process.env.TAKT_LOG_LEVEL = 'debug';
     process.env.TAKT_MODEL = 'gpt-5';
     process.env.TAKT_VERBOSE = 'true';
     process.env.TAKT_CONCURRENCY = '3';
@@ -61,7 +60,6 @@ describe('config env overrides', () => {
     const raw: Record<string, unknown> = {};
     applyProjectConfigEnvOverrides(raw);
 
-    expect(raw.log_level).toBe('debug');
     expect(raw.model).toBe('gpt-5');
     expect(raw.verbose).toBe(true);
     expect(raw.concurrency).toBe(3);
@@ -83,6 +81,140 @@ describe('config env overrides', () => {
       events_path: '/tmp/global-analytics',
       retention_days: 14,
     });
+  });
+
+  it('should apply logging env overrides for global config', () => {
+    process.env.TAKT_LOGGING_LEVEL = 'debug';
+    process.env.TAKT_LOGGING_TRACE = 'true';
+    process.env.TAKT_LOGGING_DEBUG = 'true';
+    process.env.TAKT_LOGGING_PROVIDER_EVENTS = 'true';
+
+    const raw: Record<string, unknown> = {};
+    applyGlobalConfigEnvOverrides(raw);
+
+    expect(raw.logging).toEqual({
+      level: 'debug',
+      trace: true,
+      debug: true,
+      provider_events: true,
+    });
+  });
+
+  it('should let logging leaf env vars override TAKT_LOGGING JSON', () => {
+    process.env.TAKT_LOGGING = '{"level":"info","trace":true,"debug":false}';
+    process.env.TAKT_LOGGING_LEVEL = 'warn';
+    process.env.TAKT_LOGGING_DEBUG = 'true';
+
+    const raw: Record<string, unknown> = {};
+    applyGlobalConfigEnvOverrides(raw);
+
+    expect(raw.logging).toEqual({
+      level: 'warn',
+      trace: true,
+      debug: true,
+    });
+  });
+
+  it('should map TAKT_LOGGING_LEVEL as global logging.level override', () => {
+    process.env.TAKT_LOGGING_LEVEL = 'warn';
+
+    const raw: Record<string, unknown> = {};
+    applyGlobalConfigEnvOverrides(raw);
+
+    expect(raw.logging).toEqual({
+      level: 'warn',
+    });
+  });
+
+  it('should apply logging JSON override for global config', () => {
+    process.env.TAKT_LOGGING = '{"level":"warn","debug":true}';
+
+    const raw: Record<string, unknown> = {};
+    applyGlobalConfigEnvOverrides(raw);
+
+    expect(raw.logging).toEqual({
+      level: 'warn',
+      debug: true,
+    });
+  });
+
+  it('should map TAKT_LOG_LEVEL to logging.level with deprecation warning', () => {
+    process.env.TAKT_LOG_LEVEL = 'warn';
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const raw: Record<string, unknown> = {};
+      applyGlobalConfigEnvOverrides(raw);
+
+      expect(raw.logging).toEqual({
+        level: 'warn',
+      });
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('TAKT_LOG_LEVEL'),
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('should map TAKT_OBSERVABILITY_PROVIDER_EVENTS to logging.provider_events with deprecation warning', () => {
+    process.env.TAKT_OBSERVABILITY_PROVIDER_EVENTS = 'true';
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const raw: Record<string, unknown> = {};
+      applyGlobalConfigEnvOverrides(raw);
+
+      expect(raw.logging).toEqual({
+        provider_events: true,
+      });
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('TAKT_OBSERVABILITY_PROVIDER_EVENTS'),
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('should prefer TAKT_LOGGING_* over legacy logging env vars', () => {
+    process.env.TAKT_LOGGING_LEVEL = 'info';
+    process.env.TAKT_LOG_LEVEL = 'debug';
+    process.env.TAKT_LOGGING_PROVIDER_EVENTS = 'false';
+    process.env.TAKT_OBSERVABILITY_PROVIDER_EVENTS = 'true';
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const raw: Record<string, unknown> = {};
+      applyGlobalConfigEnvOverrides(raw);
+
+      expect(raw.logging).toEqual({
+        level: 'info',
+        provider_events: false,
+      });
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('should prefer TAKT_LOGGING JSON over legacy logging env vars', () => {
+    process.env.TAKT_LOGGING = '{"level":"error","provider_events":false}';
+    process.env.TAKT_LOG_LEVEL = 'debug';
+    process.env.TAKT_OBSERVABILITY_PROVIDER_EVENTS = 'true';
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const raw: Record<string, unknown> = {};
+      applyGlobalConfigEnvOverrides(raw);
+
+      expect(raw.logging).toEqual({
+        level: 'error',
+        provider_events: false,
+      });
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it('should apply cursor API key override for global config', () => {

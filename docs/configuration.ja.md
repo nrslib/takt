@@ -12,7 +12,8 @@
 # ~/.takt/config.yaml
 language: en                  # UI 言語: 'en' または 'ja'
 default_piece: default        # 新規プロジェクトのデフォルト piece
-log_level: info               # ログレベル: debug, info, warn, error
+logging:
+  level: info                 # ログレベル: debug, info, warn, error
 provider: claude              # デフォルト provider: claude, codex, opencode, cursor, または copilot
 model: sonnet                 # デフォルトモデル（省略可、provider にそのまま渡される）
 branch_name_strategy: romaji  # ブランチ名生成方式: 'romaji'（高速）または 'ai'（低速）
@@ -92,7 +93,7 @@ interactive_preview_movements: 3  # インタラクティブモードでの move
 |-----------|------|---------|------|
 | `language` | `"en"` \| `"ja"` | `"en"` | UI 言語 |
 | `default_piece` | string | `"default"` | 新規プロジェクトのデフォルト piece |
-| `log_level` | `"debug"` \| `"info"` \| `"warn"` \| `"error"` | `"info"` | ログレベル |
+| `logging.level` | `"debug"` \| `"info"` \| `"warn"` \| `"error"` | `"info"` | ログレベル |
 | `provider` | `"claude"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` | `"claude"` | デフォルト AI provider |
 | `model` | string | - | デフォルトモデル名（provider にそのまま渡される） |
 | `branch_name_strategy` | `"romaji"` \| `"ai"` | `"romaji"` | ブランチ名生成方式 |
@@ -434,22 +435,27 @@ pipeline:
 
 ### デバッグログ
 
-`~/.takt/config.yaml` で `debug_enabled: true` を設定するか、`.takt/debug.yaml` ファイルを作成してデバッグログを有効化できます。
+`~/.takt/config.yaml` で `logging.debug: true` を設定してデバッグログを有効化できます。
 
 ```yaml
-# .takt/debug.yaml
-enabled: true
+logging:
+  debug: true
 ```
 
-デバッグログは `.takt/logs/debug.log` に NDJSON 形式で出力されます。
+デバッグログは `.takt/runs/debug-{timestamp}/logs/debug.log` に NDJSON 形式で出力されます。
 
 ### 詳細モード
 
-空の `.takt/verbose` ファイルを作成すると、詳細なコンソール出力が有効になります。これにより、デバッグログも自動的に有効化されます。
+`verbose: true` を設定すると、詳細なコンソール出力が有効になります。これにより、デバッグログ・トレースも有効化され、ログレベルが `debug` になります。
 
-または、設定ファイルで `verbose: true` を設定することもできます。
+または、環境変数で `TAKT_VERBOSE=true` を指定して有効化できます。
 
 ```yaml
 # ~/.takt/config.yaml または .takt/config.yaml
 verbose: true
+```
+
+```bash
+# env
+TAKT_VERBOSE=true
 ```

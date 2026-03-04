@@ -602,16 +602,23 @@ Implemented in `src/core/runtime/runtime-environment.ts`.
 
 ## Debugging
 
-**Debug logging:** Set `debug_enabled: true` in `~/.takt/config.yaml` or create a `.takt/debug.yaml` file:
+**Debug logging:** Set `logging.debug: true` in `~/.takt/config.yaml`:
 ```yaml
-enabled: true
+logging:
+  debug: true
 ```
 
-Debug logs are written to `.takt/logs/debug.log` (ndjson format). Log levels: `debug`, `info`, `warn`, `error`.
+Debug logs are written to `.takt/runs/debug-{timestamp}/logs/` in NDJSON format. Log levels: `debug`, `info`, `warn`, `error`.
 
-**Verbose mode:** Create `.takt/verbose` file (empty file) to enable verbose console output. This automatically enables debug logging and sets log level to `debug`.
+**Verbose mode:** Set `verbose: true` in `~/.takt/config.yaml` or `TAKT_VERBOSE=true` to enable verbose console output. This enables `logging.debug`, `logging.trace`, and sets `logging.level` to `debug`.
 
 **Session logs:** All piece executions are logged to `.takt/logs/{sessionId}.jsonl`. Use `tail -f .takt/logs/{sessionId}.jsonl` to monitor in real-time.
+
+**Environment variables:**
+
+- `TAKT_LOGGING_LEVEL=info`
+- `TAKT_LOGGING_PROVIDER_EVENTS=true`
+- `TAKT_VERBOSE=true`
 
 **Testing with mocks:** Use `--provider mock` to test pieces without calling real AI APIs. Mock responses are deterministic and configurable via test fixtures.
 

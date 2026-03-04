@@ -8,10 +8,7 @@ import {
 } from '../providerReference.js';
 import {
   normalizeProviderProfiles,
-  denormalizeProviderProfiles,
   normalizePieceOverrides,
-  denormalizePieceOverrides,
-  denormalizeProviderOptions,
 } from '../configNormalizers.js';
 import { getGlobalConfigPath } from '../paths.js';
 import { applyGlobalConfigEnvOverrides } from '../env/config-env-overrides.js';
@@ -22,7 +19,20 @@ import {
   removeMigratedProjectLocalKeys,
   type GlobalMigratedProjectLocalFallback,
 } from './globalMigratedProjectLocalFallback.js';
+import {
+  sanitizeConfigValue,
+  migrateDeprecatedGlobalConfigKeys,
+} from './globalConfigLegacyMigration.js';
+import { serializeGlobalConfig } from './globalConfigSerializer.js';
 export { validateCliPath } from './cliPathValidator.js';
+
+function getRecord(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  return value as Record<string, unknown>;
+}
+
 type ProviderType = NonNullable<PersistedGlobalConfig['provider']>;
 type RawProviderReference = ConfigProviderReference<ProviderType>;
 export class GlobalConfigManager {
@@ -58,15 +68,25 @@ export class GlobalConfigManager {
       const content = readFileSync(configPath, 'utf-8');
       const parsedRaw = parseYaml(content);
       if (parsedRaw && typeof parsedRaw === 'object' && !Array.isArray(parsedRaw)) {
-        Object.assign(rawConfig, parsedRaw as Record<string, unknown>);
+        const sanitizedParsedRaw = getRecord(sanitizeConfigValue(parsedRaw, 'config'));
+        if (!sanitizedParsedRaw) {
+          throw new Error('Configuration error: ~/.takt/config.yaml must be a YAML object.');
+        }
+        for (const [key, value] of Object.entries(sanitizedParsedRaw)) {
+          rawConfig[key] = value;
+        }
       } else if (parsedRaw != null) {
         throw new Error('Configuration error: ~/.takt/config.yaml must be a YAML object.');
       }
     }
 
     applyGlobalConfigEnvOverrides(rawConfig);
-    const migratedProjectLocalFallback = extractMigratedProjectLocalFallback(rawConfig);
-    const schemaInput = { ...rawConfig };
+    const { migratedConfig, migratedLogLevel } = migrateDeprecatedGlobalConfigKeys(rawConfig);
+    const migratedProjectLocalFallback = extractMigratedProjectLocalFallback({
+      ...migratedConfig,
+      ...(migratedLogLevel !== undefined ? { log_level: migratedLogLevel } : {}),
+    });
+    const schemaInput = { ...migratedConfig };
     removeMigratedProjectLocalKeys(schemaInput);
 
     const parsed = GlobalConfigSchema.parse(schemaInput);
@@ -80,8 +100,11 @@ export class GlobalConfigManager {
       provider: normalizedProvider.provider,
       model: normalizedProvider.model,
       piece: parsed.piece,
-      observability: parsed.observability ? {
-        providerEvents: parsed.observability.provider_events,
+      logging: parsed.logging ? {
+        level: parsed.logging.level,
+        trace: parsed.logging.trace,
+        debug: parsed.logging.debug,
+        providerEvents: parsed.logging.provider_events,
       } : undefined,
       analytics: parsed.analytics ? {
         enabled: parsed.analytics.enabled,
@@ -142,140 +165,7 @@ export class GlobalConfigManager {
 
   save(config: PersistedGlobalConfig): void {
     const configPath = getGlobalConfigPath();
-    const raw: Record<string, unknown> = {
-      language: config.language,
-      provider: config.provider,
-    };
-    if (config.model) {
-      raw.model = config.model;
-    }
-    if (config.piece) {
-      raw.piece = config.piece;
-    }
-    if (config.observability && config.observability.providerEvents !== undefined) {
-      raw.observability = {
-        provider_events: config.observability.providerEvents,
-      };
-    }
-    if (config.analytics) {
-      const analyticsRaw: Record<string, unknown> = {};
-      if (config.analytics.enabled !== undefined) analyticsRaw.enabled = config.analytics.enabled;
-      if (config.analytics.eventsPath) analyticsRaw.events_path = config.analytics.eventsPath;
-      if (config.analytics.retentionDays !== undefined) analyticsRaw.retention_days = config.analytics.retentionDays;
-      if (Object.keys(analyticsRaw).length > 0) {
-        raw.analytics = analyticsRaw;
-      }
-    }
-    if (config.worktreeDir) {
-      raw.worktree_dir = config.worktreeDir;
-    }
-    if (config.autoPr !== undefined) {
-      raw.auto_pr = config.autoPr;
-    }
-    if (config.draftPr !== undefined) {
-      raw.draft_pr = config.draftPr;
-    }
-    if (config.disabledBuiltins && config.disabledBuiltins.length > 0) {
-      raw.disabled_builtins = config.disabledBuiltins;
-    }
-    if (config.enableBuiltinPieces !== undefined) {
-      raw.enable_builtin_pieces = config.enableBuiltinPieces;
-    }
-    if (config.anthropicApiKey) {
-      raw.anthropic_api_key = config.anthropicApiKey;
-    }
-    if (config.openaiApiKey) {
-      raw.openai_api_key = config.openaiApiKey;
-    }
-    if (config.geminiApiKey) {
-      raw.gemini_api_key = config.geminiApiKey;
-    }
-    if (config.googleApiKey) {
-      raw.google_api_key = config.googleApiKey;
-    }
-    if (config.groqApiKey) {
-      raw.groq_api_key = config.groqApiKey;
-    }
-    if (config.openrouterApiKey) {
-      raw.openrouter_api_key = config.openrouterApiKey;
-    }
-    if (config.codexCliPath) {
-      raw.codex_cli_path = config.codexCliPath;
-    }
-    if (config.claudeCliPath) {
-      raw.claude_cli_path = config.claudeCliPath;
-    }
-    if (config.cursorCliPath) {
-      raw.cursor_cli_path = config.cursorCliPath;
-    }
-    if (config.copilotCliPath) {
-      raw.copilot_cli_path = config.copilotCliPath;
-    }
-    if (config.copilotGithubToken) {
-      raw.copilot_github_token = config.copilotGithubToken;
-    }
-    if (config.opencodeApiKey) {
-      raw.opencode_api_key = config.opencodeApiKey;
-    }
-    if (config.cursorApiKey) {
-      raw.cursor_api_key = config.cursorApiKey;
-    }
-    if (config.bookmarksFile) {
-      raw.bookmarks_file = config.bookmarksFile;
-    }
-    if (config.pieceCategoriesFile) {
-      raw.piece_categories_file = config.pieceCategoriesFile;
-    }
-    const rawProviderOptions = denormalizeProviderOptions(config.providerOptions);
-    if (rawProviderOptions) {
-      raw.provider_options = rawProviderOptions;
-    }
-    const rawProviderProfiles = denormalizeProviderProfiles(config.providerProfiles);
-    if (rawProviderProfiles && Object.keys(rawProviderProfiles).length > 0) {
-      raw.provider_profiles = rawProviderProfiles;
-    }
-    if (config.runtime?.prepare && config.runtime.prepare.length > 0) {
-      raw.runtime = {
-        prepare: [...new Set(config.runtime.prepare)],
-      };
-    }
-    if (config.preventSleep !== undefined) {
-      raw.prevent_sleep = config.preventSleep;
-    }
-    if (config.notificationSound !== undefined) {
-      raw.notification_sound = config.notificationSound;
-    }
-    if (config.notificationSoundEvents) {
-      const eventRaw: Record<string, unknown> = {};
-      if (config.notificationSoundEvents.iterationLimit !== undefined) {
-        eventRaw.iteration_limit = config.notificationSoundEvents.iterationLimit;
-      }
-      if (config.notificationSoundEvents.pieceComplete !== undefined) {
-        eventRaw.piece_complete = config.notificationSoundEvents.pieceComplete;
-      }
-      if (config.notificationSoundEvents.pieceAbort !== undefined) {
-        eventRaw.piece_abort = config.notificationSoundEvents.pieceAbort;
-      }
-      if (config.notificationSoundEvents.runComplete !== undefined) {
-        eventRaw.run_complete = config.notificationSoundEvents.runComplete;
-      }
-      if (config.notificationSoundEvents.runAbort !== undefined) {
-        eventRaw.run_abort = config.notificationSoundEvents.runAbort;
-      }
-      if (Object.keys(eventRaw).length > 0) {
-        raw.notification_sound_events = eventRaw;
-      }
-    }
-    if (config.autoFetch) {
-      raw.auto_fetch = config.autoFetch;
-    }
-    if (config.baseBranch) {
-      raw.base_branch = config.baseBranch;
-    }
-    const denormalizedPieceOverrides = denormalizePieceOverrides(config.pieceOverrides);
-    if (denormalizedPieceOverrides) {
-      raw.piece_overrides = denormalizedPieceOverrides;
-    }
+    const raw = serializeGlobalConfig(config);
     writeFileSync(configPath, stringifyYaml(raw), 'utf-8');
     this.invalidateCache();
     invalidateAllResolvedConfigCache();

@@ -578,18 +578,69 @@ describe('GlobalConfigSchema', () => {
     const result = GlobalConfigSchema.parse(config);
 
     expect(result.provider).toBe('claude');
-    expect(result.observability).toBeUndefined();
+    expect(result.logging).toBeUndefined();
   });
 
-  it('should accept valid config', () => {
+  it('should accept valid logging config', () => {
+    const config = {
+      logging: {
+        provider_events: false,
+      },
+    };
+
+    const result = GlobalConfigSchema.parse(config);
+    expect(result.logging?.provider_events).toBe(false);
+  });
+
+  it('should accept full logging config with all fields', () => {
+    const config = {
+      logging: {
+        level: 'debug',
+        trace: true,
+        debug: true,
+        provider_events: true,
+      },
+    };
+
+    const result = GlobalConfigSchema.parse(config);
+    expect(result.logging?.level).toBe('debug');
+    expect(result.logging?.trace).toBe(true);
+    expect(result.logging?.debug).toBe(true);
+    expect(result.logging?.provider_events).toBe(true);
+  });
+
+  it('should accept partial logging config', () => {
+    const config = {
+      logging: {
+        level: 'warn',
+      },
+    };
+
+    const result = GlobalConfigSchema.parse(config);
+    expect(result.logging?.level).toBe('warn');
+    expect(result.logging?.trace).toBeUndefined();
+    expect(result.logging?.debug).toBeUndefined();
+    expect(result.logging?.provider_events).toBeUndefined();
+  });
+
+  it('should reject invalid logging level', () => {
+    const config = {
+      logging: {
+        level: 'verbose',
+      },
+    };
+
+    expect(() => GlobalConfigSchema.parse(config)).toThrow();
+  });
+
+  it('should reject observability key (strict schema rejects unknown keys)', () => {
     const config = {
       observability: {
         provider_events: false,
       },
     };
 
-    const result = GlobalConfigSchema.parse(config);
-    expect(result.observability?.provider_events).toBe(false);
+    expect(() => GlobalConfigSchema.parse(config)).toThrow();
   });
 
   it('should parse global provider object block', () => {

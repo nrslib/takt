@@ -1,5 +1,5 @@
-import { resolveConfigValue } from '../resolveConfigValue.js';
+import { isVerboseShortcutEnabled } from '../resolveConfigValue.js';
 
 export function isVerboseMode(projectDir: string): boolean {
-  return resolveConfigValue(projectDir, 'verbose');
+  return isVerboseShortcutEnabled(projectDir);
 }

@@ -20,7 +20,11 @@ language: ja         # 表示言語: ja | en
 #   piece_abort: true
 #   run_complete: true
 #   run_abort: true
-# observability:
+# verbose: false                   # ショートカット: trace/debug有効化 + logging.level=debug
+# logging:
+#   level: info                    # ログレベル: debug | info | warn | error
+#   trace: true                    # trace.md 実行レポート生成
+#   debug: false                   # debug.log + prompts.jsonl を有効化
 #   provider_events: false         # providerイベントログを記録
 
 # 認証情報（環境変数優先）

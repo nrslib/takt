@@ -75,12 +75,38 @@ function applyEnvOverrides(target: Record<string, unknown>, specs: readonly EnvS
   }
 }
 
+function applyLegacyGlobalLoggingEnvOverrides(target: Record<string, unknown>): void {
+  const nextLogging = process.env.TAKT_LOGGING;
+  const nextLoggingLevel = process.env.TAKT_LOGGING_LEVEL;
+  const legacyLogLevel = process.env.TAKT_LOG_LEVEL;
+  if (legacyLogLevel !== undefined && nextLoggingLevel === undefined && nextLogging === undefined) {
+    console.warn('Deprecated: "TAKT_LOG_LEVEL" is deprecated. Use "TAKT_LOGGING_LEVEL" instead.');
+    setNested(target, 'logging.level', parseEnvValue('TAKT_LOG_LEVEL', legacyLogLevel, 'string'));
+  }
+
+  const nextLoggingProviderEvents = process.env.TAKT_LOGGING_PROVIDER_EVENTS;
+  const legacyProviderEvents = process.env.TAKT_OBSERVABILITY_PROVIDER_EVENTS;
+  if (legacyProviderEvents !== undefined && nextLoggingProviderEvents === undefined && nextLogging === undefined) {
+    console.warn(
+      'Deprecated: "TAKT_OBSERVABILITY_PROVIDER_EVENTS" is deprecated. Use "TAKT_LOGGING_PROVIDER_EVENTS" instead.',
+    );
+    setNested(
+      target,
+      'logging.provider_events',
+      parseEnvValue('TAKT_OBSERVABILITY_PROVIDER_EVENTS', legacyProviderEvents, 'boolean'),
+    );
+  }
+}
+
 const GLOBAL_ENV_SPECS: readonly EnvSpec[] = [
   { path: 'language', type: 'string' },
   { path: 'provider', type: 'string' },
   { path: 'model', type: 'string' },
-  { path: 'observability', type: 'json' },
-  { path: 'observability.provider_events', type: 'boolean' },
+  { path: 'logging', type: 'json' },
+  { path: 'logging.level', type: 'string' },
+  { path: 'logging.trace', type: 'boolean' },
+  { path: 'logging.debug', type: 'boolean' },
+  { path: 'logging.provider_events', type: 'boolean' },
   { path: 'analytics', type: 'json' },
   { path: 'analytics.enabled', type: 'boolean' },
   { path: 'analytics.events_path', type: 'string' },
@@ -156,6 +182,7 @@ const PROJECT_ENV_SPECS: readonly EnvSpec[] = [
 
 export function applyGlobalConfigEnvOverrides(target: Record<string, unknown>): void {
   applyEnvOverrides(target, GLOBAL_ENV_SPECS);
+  applyLegacyGlobalLoggingEnvOverrides(target);
 }
 
 export function applyProjectConfigEnvOverrides(target: Record<string, unknown>): void {

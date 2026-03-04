@@ -27,7 +27,7 @@ export type {
   PieceConfig,
   PieceState,
   CustomAgentConfig,
-  ObservabilityConfig,
+  LoggingConfig,
   Language,
   PipelineConfig,
   ProjectConfig,

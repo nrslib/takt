@@ -123,6 +123,26 @@ describe('RESOLUTION_REGISTRY defaultValue removal', () => {
     });
   });
 
+  describe('logLevel migration', () => {
+    it('should resolve logLevel from global logging.level after migration', () => {
+      writeFileSync(
+        globalConfigPath,
+        [
+          'language: en',
+          'logging:',
+          '  level: warn',
+        ].join('\n'),
+        'utf-8',
+      );
+      invalidateGlobalConfigCache();
+
+      expect(resolveConfigValueWithSource(projectDir, 'logLevel')).toEqual({
+        value: 'warn',
+        source: 'global',
+      });
+    });
+  });
+
   describe('project-local priority for migrated keys', () => {
     it.each([
       {

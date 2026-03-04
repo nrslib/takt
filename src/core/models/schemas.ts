@@ -460,7 +460,10 @@ export const CustomAgentConfigSchema = z.object({
   { message: 'Agent must have prompt_file, prompt, claude_agent, or claude_skill' }
 );
 
-export const ObservabilityConfigSchema = z.object({
+export const LoggingConfigSchema = z.object({
+  level: z.enum(['debug', 'info', 'warn', 'error']).optional(),
+  trace: z.boolean().optional(),
+  debug: z.boolean().optional(),
   provider_events: z.boolean().optional(),
 });
 
@@ -502,7 +505,7 @@ export const GlobalConfigSchema = z.object({
   model: z.string().optional(),
   /** Default piece name for new tasks */
   piece: z.string().optional(),
-  observability: ObservabilityConfigSchema.optional(),
+  logging: LoggingConfigSchema.optional(),
   analytics: AnalyticsConfigSchema.optional(),
   /** Directory for shared clones (worktree_dir in config). If empty, uses ../{clone-name} relative to project */
   worktree_dir: z.string().optional(),

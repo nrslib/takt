@@ -94,13 +94,19 @@ export function createProviderEventLogger(config: ProviderEventLoggerConfig): Pr
   const filepath = join(config.logsDir, `${config.sessionId}-provider-events.jsonl`);
   let movement = config.movement;
   let provider = config.provider;
+  let hasReportedWriteFailure = false;
 
   const write = (event: StreamEvent): void => {
     try {
       const record = buildLogRecord(event, provider, movement, config.runId);
       appendFileSync(filepath, JSON.stringify(record) + '\n', 'utf-8');
-    } catch {
-      // Silently fail - observability logging should not interrupt main flow.
+    } catch (error) {
+      if (hasReportedWriteFailure) {
+        return;
+      }
+      hasReportedWriteFailure = true;
+      const message = error instanceof Error ? error.message : String(error);
+      process.stderr.write(`[takt] Failed to write provider event log: ${message}\n`);
     }
   };
 
@@ -129,9 +135,9 @@ export function createProviderEventLogger(config: ProviderEventLoggerConfig): Pr
 }
 
 export function isProviderEventsEnabled(config?: {
-  observability?: {
+  logging?: {
     providerEvents?: boolean;
   };
 }): boolean {
-  return config?.observability?.providerEvents === true;
+  return config?.logging?.providerEvents === true;
 }
