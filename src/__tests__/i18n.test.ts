@@ -139,4 +139,15 @@ describe('label integrity', () => {
       expect(() => getLabelObject(key, 'ja')).not.toThrow();
     }
   });
+
+  it('keeps only confirm-based retry piece reuse labels', () => {
+    expect(() => getLabel('retry.usePreviousPieceConfirm', 'en', { piece: 'default' })).not.toThrow();
+    expect(() => getLabel('retry.usePreviousPieceConfirm', 'ja', { piece: 'default' })).not.toThrow();
+    expect(() => getLabel('retry.workflowPrompt', 'en')).toThrow('Label key not found');
+    expect(() => getLabel('retry.usePreviousWorkflow', 'en')).toThrow('Label key not found');
+    expect(() => getLabel('retry.changeWorkflow', 'en')).toThrow('Label key not found');
+    expect(() => getLabel('retry.workflowPrompt', 'ja')).toThrow('Label key not found');
+    expect(() => getLabel('retry.usePreviousWorkflow', 'ja')).toThrow('Label key not found');
+    expect(() => getLabel('retry.changeWorkflow', 'ja')).toThrow('Label key not found');
+  });
 });
