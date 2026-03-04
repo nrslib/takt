@@ -26,13 +26,15 @@ movements:
   - name: gather
     edit: false
     persona: planner
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - Bash
-      - WebSearch
-      - WebFetch
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Bash
+          - WebSearch
+          - WebFetch
     instruction: gather-review
     output_contracts:
       report:
@@ -53,12 +55,14 @@ movements:
         knowledge:
           - architecture
           - backend
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - WebSearch
-          - WebFetch
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - WebSearch
+              - WebFetch
         instruction: review-arch
         output_contracts:
           report:
@@ -75,12 +79,14 @@ movements:
         knowledge:
           - cqrs-es
           - backend
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - WebSearch
-          - WebFetch
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - WebSearch
+              - WebFetch
         instruction: review-cqrs-es
         output_contracts:
           report:
@@ -95,12 +101,14 @@ movements:
         persona: security-reviewer
         policy: review
         knowledge: security
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - WebSearch
-          - WebFetch
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - WebSearch
+              - WebFetch
         instruction: review-security
         output_contracts:
           report:
@@ -116,12 +124,14 @@ movements:
         policy:
           - review
           - qa
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - WebSearch
-          - WebFetch
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - WebSearch
+              - WebFetch
         instruction: review-qa
         output_contracts:
           report:
@@ -148,15 +158,17 @@ movements:
       - cqrs-es
       - security
       - architecture
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - Edit
-      - Write
-      - Bash
-      - WebSearch
-      - WebFetch
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Edit
+          - Write
+          - Bash
+          - WebSearch
+          - WebFetch
     required_permission_mode: edit
     pass_previous_response: false
     instruction: fix
@@ -170,12 +182,14 @@ movements:
     edit: false
     persona: dual-supervisor
     policy: review
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - WebSearch
-      - WebFetch
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - WebSearch
+          - WebFetch
     instruction: supervise
     pass_previous_response: false
     rules:
@@ -202,15 +216,17 @@ movements:
       - cqrs-es
       - security
       - architecture
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - Edit
-      - Write
-      - Bash
-      - WebSearch
-      - WebFetch
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Edit
+          - Write
+          - Bash
+          - WebSearch
+          - WebFetch
     instruction: fix-supervisor
     pass_previous_response: false
     rules:

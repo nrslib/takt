@@ -19,9 +19,12 @@ function mergeProviderOptions(
     if (layer.opencode) {
       result.opencode = { ...result.opencode, ...layer.opencode };
     }
-    if (layer.claude?.sandbox) {
+    if (layer.claude?.sandbox || layer.claude?.allowedTools) {
       result.claude = {
-        sandbox: { ...result.claude?.sandbox, ...layer.claude.sandbox },
+        sandbox: layer.claude.sandbox
+          ? { ...result.claude?.sandbox, ...layer.claude.sandbox }
+          : result.claude?.sandbox,
+        allowedTools: layer.claude.allowedTools ?? result.claude?.allowedTools,
       };
     }
   }
@@ -64,7 +67,7 @@ export class OptionsBuilder {
   }
 
   /** Build common RunAgentOptions shared by all phases */
-  buildBaseOptions(step: PieceMovement): RunAgentOptions {
+  buildBaseOptions(step: PieceMovement, mergedProviderOptions?: MovementProviderOptions): RunAgentOptions {
     const movements = this.getPieceMovements();
     const currentIndex = movements.findIndex((m) => m.name === step.name);
     const currentPosition = currentIndex >= 0 ? `${currentIndex + 1}/${movements.length}` : '?/?';
@@ -83,7 +86,7 @@ export class OptionsBuilder {
         requiredPermissionMode: step.requiredPermissionMode,
         providerProfiles: this.engineOptions.providerProfiles,
       },
-      providerOptions: resolveMovementProviderOptions(
+      providerOptions: mergedProviderOptions ?? resolveMovementProviderOptions(
         this.engineOptions.providerOptionsSource,
         this.engineOptions.providerOptions,
         step.providerOptions,
@@ -105,19 +108,26 @@ export class OptionsBuilder {
 
   /** Build RunAgentOptions for Phase 1 (main execution) */
   buildAgentOptions(step: PieceMovement): RunAgentOptions {
+    const mergedProviderOptions = resolveMovementProviderOptions(
+      this.engineOptions.providerOptionsSource,
+      this.engineOptions.providerOptions,
+      step.providerOptions,
+    );
+
     // Phase 1: exclude Write from allowedTools when movement has output contracts AND edit is NOT enabled
     // (If edit is enabled, Write is needed for code implementation even if output contracts exist)
     // Note: edit defaults to undefined, so check !== true to catch both false and undefined
     const hasOutputContracts = step.outputContracts && step.outputContracts.length > 0;
+    const resolvedAllowedTools = mergedProviderOptions?.claude?.allowedTools;
     const allowedTools = hasOutputContracts && step.edit !== true
-      ? step.allowedTools?.filter((t) => t !== 'Write')
-      : step.allowedTools;
+      ? resolvedAllowedTools?.filter((t) => t !== 'Write')
+      : resolvedAllowedTools;
 
     // Skip session resume when cwd !== projectCwd (worktree execution) to avoid cross-directory contamination
     const shouldResumeSession = step.session !== 'refresh' && this.getCwd() === this.getProjectCwd();
 
     return {
-      ...this.buildBaseOptions(step),
+      ...this.buildBaseOptions(step, mergedProviderOptions),
       sessionId: shouldResumeSession ? this.getSessionId(buildSessionKey(step)) : undefined,
       allowedTools,
       mcpServers: step.mcpServers,

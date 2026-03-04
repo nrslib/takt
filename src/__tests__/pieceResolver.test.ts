@@ -181,9 +181,11 @@ movements:
     description: Planning
     persona: Plan the task
     instruction: "Create a plan for {task}"
-    allowed_tools:
-      - Read
-      - Glob
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
     rules:
       - condition: plan complete
         next: implement
@@ -192,10 +194,12 @@ movements:
     persona: Implement the code
     instruction: "Implement according to plan"
     edit: true
-    allowed_tools:
-      - Read
-      - Edit
-      - Bash
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Edit
+          - Bash
     rules:
       - condition: done
         next: review
@@ -658,9 +662,11 @@ movements:
     persona: You are a planner.
     persona_name: Planner
     instruction: "Plan the task"
-    allowed_tools:
-      - Read
-      - Glob
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
 `;
 
     const piecePath = join(tempDir, 'test-first.yaml');

@@ -2,6 +2,13 @@ name: research
 description: Research piece - autonomously executes research without asking questions
 piece_config:
   provider_options:
+    claude:
+      allowed_tools:
+        - Read
+        - Glob
+        - Grep
+        - WebSearch
+        - WebFetch
     codex:
       network_access: true
     opencode:
@@ -14,12 +21,6 @@ movements:
     policy: research
     knowledge: research
     instruction: research-plan
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - WebSearch
-      - WebFetch
     rules:
       - condition: Planning is complete
         next: dig
@@ -30,12 +31,6 @@ movements:
     policy: research
     knowledge: research
     instruction: research-dig
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - WebSearch
-      - WebFetch
     rules:
       - condition: Research is complete
         next: supervise
@@ -46,12 +41,6 @@ movements:
     policy: research
     knowledge: research
     instruction: research-supervise
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - WebSearch
-      - WebFetch
     rules:
       - condition: Research results adequately answer the original request
         next: COMPLETE

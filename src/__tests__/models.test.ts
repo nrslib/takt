@@ -8,6 +8,7 @@ import {
   StatusSchema,
   PermissionModeSchema,
   PieceConfigRawSchema,
+  PieceMovementRawSchema,
   McpServerConfigSchema,
   CustomAgentConfigSchema,
   GlobalConfigSchema,
@@ -69,7 +70,11 @@ describe('PieceConfigRawSchema', () => {
         {
           name: 'step1',
           persona: 'coder',
-          allowed_tools: ['Read', 'Grep'],
+          provider_options: {
+            claude: {
+              allowed_tools: ['Read', 'Grep'],
+            },
+          },
           instruction: '{task}',
           rules: [
             { condition: 'Task completed', next: 'COMPLETE' },
@@ -81,7 +86,11 @@ describe('PieceConfigRawSchema', () => {
     const result = PieceConfigRawSchema.parse(config);
     expect(result.name).toBe('test-piece');
     expect(result.movements).toHaveLength(1);
-    expect(result.movements![0]?.allowed_tools).toEqual(['Read', 'Grep']);
+    expect(result.movements![0]?.provider_options).toEqual({
+      claude: {
+        allowed_tools: ['Read', 'Grep'],
+      },
+    });
     expect(result.max_movements).toBe(10);
   });
 
@@ -92,7 +101,11 @@ describe('PieceConfigRawSchema', () => {
         {
           name: 'implement',
           persona: 'coder',
-          allowed_tools: ['Read', 'Edit', 'Write', 'Bash'],
+          provider_options: {
+            claude: {
+              allowed_tools: ['Read', 'Edit', 'Write', 'Bash'],
+            },
+          },
           required_permission_mode: 'edit',
           instruction: '{task}',
           rules: [
@@ -340,7 +353,11 @@ describe('PieceConfigRawSchema', () => {
               args: ['-y', '@anthropic-ai/mcp-server-playwright'],
             },
           },
-          allowed_tools: ['mcp__playwright__*'],
+          provider_options: {
+            claude: {
+              allowed_tools: ['mcp__playwright__*'],
+            },
+          },
           instruction: '{task}',
         },
       ],
@@ -461,6 +478,18 @@ describe('PieceConfigRawSchema', () => {
     };
 
     expect(() => PieceConfigRawSchema.parse(config)).toThrow();
+  });
+
+  it('should reject movement-level allowed_tools', () => {
+    const movement = {
+      name: 'step1',
+      persona: 'coder',
+      allowed_tools: ['Read'],
+      instruction: '{task}',
+    };
+
+    const result = PieceMovementRawSchema.safeParse(movement);
+    expect(result.success).toBe(false);
   });
 });
 

@@ -2,6 +2,13 @@ name: research
 description: 調査ピース - 質問せずに自律的に調査を実行
 piece_config:
   provider_options:
+    claude:
+      allowed_tools:
+        - Read
+        - Glob
+        - Grep
+        - WebSearch
+        - WebFetch
     codex:
       network_access: true
     opencode:
@@ -14,12 +21,6 @@ movements:
     policy: research
     knowledge: research
     instruction: research-plan
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - WebSearch
-      - WebFetch
     rules:
       - condition: 計画が完了した
         next: dig
@@ -30,12 +31,6 @@ movements:
     policy: research
     knowledge: research
     instruction: research-dig
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - WebSearch
-      - WebFetch
     rules:
       - condition: 調査が完了した
         next: supervise
@@ -46,12 +41,6 @@ movements:
     policy: research
     knowledge: research
     instruction: research-supervise
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - WebSearch
-      - WebFetch
     rules:
       - condition: 調査結果が元の依頼に対して十分である
         next: COMPLETE

@@ -101,7 +101,6 @@ export class AgentRunner {
     options: RunAgentOptions,
     localConfig: ReturnType<typeof loadProjectConfig>,
     globalConfig: ReturnType<typeof loadGlobalConfig>,
-    agentConfig?: CustomAgentConfig,
   ): ProviderCallOptions {
     const permissionMode = AgentRunner.resolvePermissionMode(
       resolvedProvider,
@@ -114,7 +113,7 @@ export class AgentRunner {
       cwd: options.cwd,
       abortSignal: options.abortSignal,
       sessionId: options.sessionId,
-      allowedTools: options.allowedTools ?? agentConfig?.allowedTools,
+      allowedTools: options.allowedTools,
       mcpServers: options.mcpServers,
       maxTurns: options.maxTurns,
       model: resolvedModel,
@@ -174,13 +173,17 @@ export class AgentRunner {
       claudeSkill: agentConfig.claudeSkill,
     });
 
+    const customOptions: RunAgentOptions = {
+      ...options,
+      allowedTools: options.allowedTools ?? agentConfig.allowedTools,
+    };
+
     return agent.call(task, AgentRunner.buildCallOptions(
       resolved.model,
       providerType,
-      options,
+      customOptions,
       resolved.localConfig,
       resolved.globalConfig,
-      agentConfig,
     ));
   }
 

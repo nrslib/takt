@@ -263,6 +263,34 @@ describe('option resolution order', () => {
     );
   });
 
+  it('should use custom agent allowedTools when run options do not provide allowedTools', async () => {
+    loadProjectConfigMock.mockReturnValue({ provider: 'claude' });
+    loadCustomAgentsMock.mockReturnValue(new Map([
+      ['custom', { name: 'custom', prompt: 'agent prompt', allowedTools: ['Read', 'Grep'] }],
+    ]));
+
+    await runAgent('custom', 'task', { cwd: '/repo' });
+
+    expect(providerCallMock).toHaveBeenLastCalledWith(
+      'task',
+      expect.objectContaining({ allowedTools: ['Read', 'Grep'] }),
+    );
+  });
+
+  it('should prioritize run options allowedTools over custom agent allowedTools', async () => {
+    loadProjectConfigMock.mockReturnValue({ provider: 'claude' });
+    loadCustomAgentsMock.mockReturnValue(new Map([
+      ['custom', { name: 'custom', prompt: 'agent prompt', allowedTools: ['Read', 'Grep'] }],
+    ]));
+
+    await runAgent('custom', 'task', { cwd: '/repo', allowedTools: ['Write'] });
+
+    expect(providerCallMock).toHaveBeenLastCalledWith(
+      'task',
+      expect.objectContaining({ allowedTools: ['Write'] }),
+    );
+  });
+
   it('should resolve permission mode after provider resolution using provider profiles', async () => {
     loadProjectConfigMock.mockReturnValue({});
     loadGlobalConfigMock.mockReturnValue({

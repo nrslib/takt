@@ -17,13 +17,15 @@ movements:
         provider: claude
         session: refresh
         knowledge: architecture
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Bash
-          - WebSearch
-          - WebFetch
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - Bash
+              - WebSearch
+              - WebFetch
         rules:
           - condition: done
           - condition: failed
@@ -56,13 +58,15 @@ movements:
         provider: codex
         session: refresh
         knowledge: architecture
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Bash
-          - WebSearch
-          - WebFetch
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - Bash
+              - WebSearch
+              - WebFetch
         rules:
           - condition: done
           - condition: failed
@@ -95,10 +99,12 @@ movements:
   - name: synthesize
     edit: false
     persona: supervisor
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
     rules:
       - condition: synthesis complete
         next: COMPLETE

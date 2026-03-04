@@ -529,10 +529,12 @@ movements:
       playwright:
         command: npx
         args: ["-y", "@anthropic-ai/mcp-server-playwright"]
-    allowed_tools:
-      - Read
-      - Bash
-      - mcp__playwright__*
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Bash
+          - mcp__playwright__*
     rules:
       - condition: Done
         next: COMPLETE

@@ -29,13 +29,15 @@ movements:
       - frontend
       - security
       - architecture
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - Bash
-      - WebSearch
-      - WebFetch
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Bash
+          - WebSearch
+          - WebFetch
     rules:
       - condition: 要件が明確で実装可能
         next: implement
@@ -58,15 +60,17 @@ movements:
       - frontend
       - security
       - architecture
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - Edit
-      - Write
-      - Bash
-      - WebSearch
-      - WebFetch
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Edit
+          - Write
+          - Bash
+          - WebSearch
+          - WebFetch
     required_permission_mode: edit
     instruction: implement
     rules:
@@ -92,12 +96,14 @@ movements:
         policy:
           - review
           - ai-antipattern
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - WebSearch
-          - WebFetch
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - WebSearch
+              - WebFetch
         instruction: review-ai
         rules:
           - condition: AI特有の問題なし
@@ -114,13 +120,15 @@ movements:
           - frontend
           - security
           - architecture
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Bash
-          - WebSearch
-          - WebFetch
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - Bash
+              - WebSearch
+              - WebFetch
         instruction: supervise
         rules:
           - condition: すべて問題なし
@@ -153,14 +161,16 @@ movements:
           - frontend
           - security
           - architecture
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Bash
-          - WebSearch
-          - WebFetch
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - Edit
+              - Bash
+              - WebSearch
+              - WebFetch
         required_permission_mode: edit
         rules:
           - condition: AI問題の修正完了
@@ -177,14 +187,16 @@ movements:
           - frontend
           - security
           - architecture
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Bash
-          - WebSearch
-          - WebFetch
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - Edit
+              - Bash
+              - WebSearch
+              - WebFetch
         required_permission_mode: edit
         rules:
           - condition: 監督者の指摘に対する修正が完了した
@@ -205,15 +217,17 @@ movements:
       - frontend
       - security
       - architecture
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - Edit
-      - Write
-      - Bash
-      - WebSearch
-      - WebFetch
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Edit
+          - Write
+          - Bash
+          - WebSearch
+          - WebFetch
     required_permission_mode: edit
     pass_previous_response: false
     rules:
@@ -234,15 +248,17 @@ movements:
       - frontend
       - security
       - architecture
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - Edit
-      - Write
-      - Bash
-      - WebSearch
-      - WebFetch
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Edit
+          - Write
+          - Bash
+          - WebSearch
+          - WebFetch
     required_permission_mode: edit
     pass_previous_response: false
     rules:

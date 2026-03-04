@@ -93,6 +93,46 @@ describe('normalizePieceConfig provider_options', () => {
     });
   });
 
+  it('claude allowed_tools を piece-level で設定し movement で上書きできる', () => {
+    const raw = {
+      name: 'claude-allowed-tools',
+      piece_config: {
+        provider_options: {
+          claude: {
+            allowed_tools: ['Read', 'Glob'],
+          },
+        },
+      },
+      movements: [
+        {
+          name: 'inherit',
+          instruction: '{task}',
+        },
+        {
+          name: 'override',
+          provider_options: {
+            claude: {
+              allowed_tools: ['Read', 'Edit', 'Bash'],
+            },
+          },
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    const config = normalizePieceConfig(raw, process.cwd());
+
+    expect(config.providerOptions).toEqual({
+      claude: { allowedTools: ['Read', 'Glob'] },
+    });
+    expect(config.movements[0]?.providerOptions).toEqual({
+      claude: { allowedTools: ['Read', 'Glob'] },
+    });
+    expect(config.movements[1]?.providerOptions).toEqual({
+      claude: { allowedTools: ['Read', 'Edit', 'Bash'] },
+    });
+  });
+
   it('piece-level runtime.prepare を正規化し重複を除去する', () => {
     const raw = {
       name: 'runtime-prepare',
@@ -306,20 +346,27 @@ describe('normalizePieceConfig provider_options', () => {
 describe('mergeProviderOptions', () => {
   it('複数層を正しくマージする（後の層が優先）', () => {
     const global = {
-      claude: { sandbox: { allowUnsandboxedCommands: false, excludedCommands: ['./gradlew'] } },
+      claude: {
+        sandbox: { allowUnsandboxedCommands: false, excludedCommands: ['./gradlew'] },
+        allowedTools: ['Read'],
+      },
       codex: { networkAccess: true },
     };
     const local = {
       claude: { sandbox: { allowUnsandboxedCommands: true } },
     };
     const step = {
+      claude: { allowedTools: ['Read', 'Edit'] },
       codex: { networkAccess: false },
     };
 
     const result = mergeProviderOptions(global, local, step);
 
     expect(result).toEqual({
-      claude: { sandbox: { allowUnsandboxedCommands: true, excludedCommands: ['./gradlew'] } },
+      claude: {
+        sandbox: { allowUnsandboxedCommands: true, excludedCommands: ['./gradlew'] },
+        allowedTools: ['Read', 'Edit'],
+      },
       codex: { networkAccess: false },
     });
   });

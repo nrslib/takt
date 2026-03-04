@@ -107,6 +107,7 @@ export interface ClaudeSandboxSettings {
 
 /** Claude provider-specific options */
 export interface ClaudeProviderOptions {
+  allowedTools?: string[];
   sandbox?: ClaudeSandboxSettings;
 }
 
@@ -128,8 +129,6 @@ export interface PieceMovement {
   session?: 'continue' | 'refresh';
   /** Display name for the persona (shown in output). Falls back to persona basename if not specified */
   personaDisplayName: string;
-  /** Allowed tools for this movement (optional, passed to agent execution) */
-  allowedTools?: string[];
   /** MCP servers configuration for this movement */
   mcpServers?: Record<string, McpServerConfig>;
   /** Resolved absolute path to persona prompt file (set by loader) */

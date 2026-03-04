@@ -5,7 +5,7 @@
  * - Piece YAML files (EN/JA) load and pass schema validation
  * - Piece structure: gather -> reviewers (parallel 5) -> supervise -> COMPLETE
  * - All movements have edit: false
- * - All 5 reviewers have Bash in allowed_tools
+ * - All 5 reviewers have Bash in provider_options.claude.allowed_tools
  * - Routing rules for gather and reviewers
  */
 
@@ -112,10 +112,10 @@ describe('review piece (EN)', () => {
     }
   });
 
-  it('should have Bash in allowed_tools for all 5 reviewers', () => {
+  it('should have Bash in provider_options.claude.allowed_tools for all 5 reviewers', () => {
     const reviewers = raw.movements.find((s: { name: string }) => s.name === 'reviewers');
     for (const sub of reviewers.parallel) {
-      expect(sub.allowed_tools).toContain('Bash');
+      expect(sub.provider_options?.claude?.allowed_tools).toContain('Bash');
     }
   });
 
@@ -169,10 +169,10 @@ describe('review piece (JA)', () => {
     }
   });
 
-  it('should have Bash in allowed_tools for all 5 reviewers', () => {
+  it('should have Bash in provider_options.claude.allowed_tools for all 5 reviewers', () => {
     const reviewers = raw.movements.find((s: { name: string }) => s.name === 'reviewers');
     for (const sub of reviewers.parallel) {
-      expect(sub.allowed_tools).toContain('Bash');
+      expect(sub.provider_options?.claude?.allowed_tools).toContain('Bash');
     }
   });
 

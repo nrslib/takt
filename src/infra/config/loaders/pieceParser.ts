@@ -267,7 +267,6 @@ function normalizeStepFromRaw(
     session: step.session,
     personaDisplayName: displayName || (personaSpec ? extractPersonaDisplayName(personaSpec) : step.name),
     personaPath,
-    allowedTools: step.allowed_tools,
     mcpServers: step.mcp_servers,
     provider: normalizedProvider.provider ?? inheritedProvider,
     model: normalizedProvider.model ?? (normalizedProvider.providerSpecified ? undefined : inheritedModel),

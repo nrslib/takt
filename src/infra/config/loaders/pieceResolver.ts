@@ -230,7 +230,7 @@ function buildMovementPreviews(piece: PieceConfig, maxCount: number): MovementPr
       personaDisplayName: movement.personaDisplayName,
       personaContent: readMovementPersona(movement),
       instructionContent: movement.instructionTemplate,
-      allowedTools: movement.allowedTools ?? [],
+      allowedTools: movement.providerOptions?.claude?.allowedTools ?? [],
       canEdit: movement.edit === true,
     });
 
@@ -321,7 +321,7 @@ function buildFirstMovementInfo(piece: PieceConfig): FirstMovementInfo | undefin
   return {
     personaContent: readMovementPersona(movement),
     personaDisplayName: movement.personaDisplayName,
-    allowedTools: movement.allowedTools ?? [],
+    allowedTools: movement.providerOptions?.claude?.allowedTools ?? [],
   };
 }
 

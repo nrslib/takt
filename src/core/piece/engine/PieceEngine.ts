@@ -518,13 +518,17 @@ export class PieceEngine extends EventEmitter {
       personaPath: monitor.judge.personaPath,
       personaDisplayName: 'loop-judge',
       edit: false,
+      providerOptions: {
+        claude: {
+          allowedTools: ['Read', 'Glob', 'Grep'],
+        },
+      },
       instructionTemplate: processedTemplate,
       rules: monitor.judge.rules.map((r) => ({
         condition: r.condition,
         next: r.next,
       })),
       passPreviousResponse: true,
-      allowedTools: ['Read', 'Glob', 'Grep'],
     };
 
     log.info('Running loop monitor judge', {

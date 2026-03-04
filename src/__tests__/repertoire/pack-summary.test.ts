@@ -63,19 +63,21 @@ describe('detectEditPieces', () => {
     expect(detectEditPieces([])).toEqual([]);
   });
 
-  it('should return empty array when piece has edit: false, no allowed_tools, and no required_permission_mode', () => {
+  it('should return empty array when piece has edit: false, no provider_options.claude.allowed_tools, and no required_permission_mode', () => {
     const pieces = [
       { name: 'simple.yaml', content: 'movements:\n  - name: run\n    edit: false\n' },
     ];
     expect(detectEditPieces(pieces)).toEqual([]);
   });
 
-  it('should detect piece with edit: true and collect allowed_tools', () => {
+  it('should detect piece with edit: true and collect provider_options.claude.allowed_tools', () => {
     const content = `
 movements:
   - name: implement
     edit: true
-    allowed_tools: [Bash, Write, Edit]
+    provider_options:
+      claude:
+        allowed_tools: [Bash, Write, Edit]
 `.trim();
     const result = detectEditPieces([{ name: 'coder.yaml', content }]);
     expect(result).toHaveLength(1);
@@ -84,15 +86,19 @@ movements:
     expect(result[0]!.allowedTools).toHaveLength(3);
   });
 
-  it('should merge allowed_tools from multiple edit movements', () => {
+  it('should merge provider_options.claude.allowed_tools from multiple edit movements', () => {
     const content = `
 movements:
   - name: implement
     edit: true
-    allowed_tools: [Bash, Write]
+    provider_options:
+      claude:
+        allowed_tools: [Bash, Write]
   - name: fix
     edit: true
-    allowed_tools: [Edit, Bash]
+    provider_options:
+      claude:
+        allowed_tools: [Edit, Bash]
 `.trim();
     const result = detectEditPieces([{ name: 'coder.yaml', content }]);
     expect(result).toHaveLength(1);
@@ -100,7 +106,7 @@ movements:
     expect(result[0]!.allowedTools).toHaveLength(3);
   });
 
-  it('should detect piece with edit: true and no allowed_tools', () => {
+  it('should detect piece with edit: true and no provider_options.claude.allowed_tools', () => {
     const content = `
 movements:
   - name: implement
@@ -133,7 +139,7 @@ movements:
     const pieces = [
       {
         name: 'coder.yaml',
-        content: 'movements:\n  - name: impl\n    edit: true\n    allowed_tools: [Write]\n',
+        content: 'movements:\n  - name: impl\n    edit: true\n    provider_options:\n      claude:\n        allowed_tools: [Write]\n',
       },
       {
         name: 'reviewer.yaml',
@@ -141,7 +147,7 @@ movements:
       },
       {
         name: 'fixer.yaml',
-        content: 'movements:\n  - name: fix\n    edit: true\n    allowed_tools: [Edit]\n',
+        content: 'movements:\n  - name: fix\n    edit: true\n    provider_options:\n      claude:\n        allowed_tools: [Edit]\n',
       },
     ];
     const result = detectEditPieces(pieces);
@@ -150,7 +156,7 @@ movements:
   });
 
   it('should set hasEdit: true for pieces with edit: true', () => {
-    const content = 'movements:\n  - name: impl\n    edit: true\n    allowed_tools: [Write]\n';
+    const content = 'movements:\n  - name: impl\n    edit: true\n    provider_options:\n      claude:\n        allowed_tools: [Write]\n';
     const result = detectEditPieces([{ name: 'coder.yaml', content }]);
     expect(result).toHaveLength(1);
     expect(result[0]!.hasEdit).toBe(true);
@@ -176,7 +182,9 @@ movements:
 movements:
   - name: implement
     edit: true
-    allowed_tools: [Write, Edit]
+    provider_options:
+      claude:
+        allowed_tools: [Write, Edit]
   - name: plan
     required_permission_mode: bypassPermissions
 `.trim();
@@ -200,17 +208,19 @@ movements:
     expect(result[0]!.requiredPermissionModes).toEqual(['bypassPermissions']);
   });
 
-  it('should return empty array when piece has edit: false, empty allowed_tools, and no required_permission_mode', () => {
+  it('should return empty array when piece has edit: false, empty provider_options.claude.allowed_tools, and no required_permission_mode', () => {
     const content = 'movements:\n  - name: review\n    edit: false\n';
     expect(detectEditPieces([{ name: 'reviewer.yaml', content }])).toEqual([]);
   });
 
-  it('should detect piece with edit: false and non-empty allowed_tools', () => {
+  it('should detect piece with edit: false and non-empty provider_options.claude.allowed_tools', () => {
     const content = `
 movements:
   - name: run
     edit: false
-    allowed_tools: [Bash]
+    provider_options:
+      claude:
+        allowed_tools: [Bash]
 `.trim();
     const result = detectEditPieces([{ name: 'runner.yaml', content }]);
     expect(result).toHaveLength(1);
@@ -220,12 +230,34 @@ movements:
     expect(result[0]!.requiredPermissionModes).toEqual([]);
   });
 
-  it('should exclude piece with edit: false and empty allowed_tools', () => {
+  it('should detect piece using piece_config provider_options.claude.allowed_tools when movement does not define tools', () => {
+    const content = `
+piece_config:
+  provider_options:
+    claude:
+      allowed_tools: [Read, Grep]
+movements:
+  - name: plan
+    edit: false
+  - name: supervise
+    edit: true
+`.trim();
+    const result = detectEditPieces([{ name: 'piece-level.yaml', content }]);
+    expect(result).toHaveLength(1);
+    expect(result[0]!.name).toBe('piece-level.yaml');
+    expect(result[0]!.hasEdit).toBe(true);
+    expect(result[0]!.allowedTools).toEqual(expect.arrayContaining(['Read', 'Grep']));
+    expect(result[0]!.allowedTools).toHaveLength(2);
+  });
+
+  it('should exclude piece with edit: false and empty provider_options.claude.allowed_tools', () => {
     const content = `
 movements:
   - name: run
     edit: false
-    allowed_tools: []
+    provider_options:
+      claude:
+        allowed_tools: []
 `.trim();
     expect(detectEditPieces([{ name: 'runner.yaml', content }])).toEqual([]);
   });
@@ -250,7 +282,7 @@ movements:
 // ---------------------------------------------------------------------------
 
 describe('formatEditPieceWarnings', () => {
-  it('should format edit:true warning without allowed_tools', () => {
+  it('should format edit:true warning without provider_options.claude.allowed_tools', () => {
     const warnings = formatEditPieceWarnings({
       name: 'piece.yaml',
       hasEdit: true,
@@ -260,27 +292,27 @@ describe('formatEditPieceWarnings', () => {
     expect(warnings).toEqual(['\n   ⚠ piece.yaml: edit: true']);
   });
 
-  it('should format edit:true warning with allowed_tools appended inline', () => {
+  it('should format edit:true warning with provider_options.claude.allowed_tools appended inline', () => {
     const warnings = formatEditPieceWarnings({
       name: 'piece.yaml',
       hasEdit: true,
       allowedTools: ['Bash', 'Edit'],
       requiredPermissionModes: [],
     });
-    expect(warnings).toEqual(['\n   ⚠ piece.yaml: edit: true, allowed_tools: [Bash, Edit]']);
+    expect(warnings).toEqual(['\n   ⚠ piece.yaml: edit: true, provider_options.claude.allowed_tools: [Bash, Edit]']);
   });
 
-  it('should format allowed_tools-only warning when edit:false', () => {
+  it('should format provider_options.claude.allowed_tools-only warning when edit:false', () => {
     const warnings = formatEditPieceWarnings({
       name: 'runner.yaml',
       hasEdit: false,
       allowedTools: ['Bash'],
       requiredPermissionModes: [],
     });
-    expect(warnings).toEqual(['\n   ⚠ runner.yaml: allowed_tools: [Bash]']);
+    expect(warnings).toEqual(['\n   ⚠ runner.yaml: provider_options.claude.allowed_tools: [Bash]']);
   });
 
-  it('should return empty array when edit:false and no allowed_tools and no required_permission_mode', () => {
+  it('should return empty array when edit:false and no provider_options.claude.allowed_tools and no required_permission_mode', () => {
     const warnings = formatEditPieceWarnings({
       name: 'review.yaml',
       hasEdit: false,
@@ -300,7 +332,7 @@ describe('formatEditPieceWarnings', () => {
     expect(warnings).toEqual(['\n   ⚠ planner.yaml: required_permission_mode: bypassPermissions']);
   });
 
-  it('should combine allowed_tools and required_permission_mode warnings when edit:false', () => {
+  it('should combine provider_options.claude.allowed_tools and required_permission_mode warnings when edit:false', () => {
     const warnings = formatEditPieceWarnings({
       name: 'combo.yaml',
       hasEdit: false,
@@ -308,7 +340,7 @@ describe('formatEditPieceWarnings', () => {
       requiredPermissionModes: ['bypassPermissions'],
     });
     expect(warnings).toEqual([
-      '\n   ⚠ combo.yaml: allowed_tools: [Bash]',
+      '\n   ⚠ combo.yaml: provider_options.claude.allowed_tools: [Bash]',
       '\n   ⚠ combo.yaml: required_permission_mode: bypassPermissions',
     ]);
   });

@@ -14,12 +14,14 @@ movements:
     policy: research
     knowledge: research
     instruction: research-plan
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - WebSearch
-      - WebFetch
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - WebSearch
+          - WebFetch
     rules:
       - condition: Planning is complete
         next: dig
@@ -43,14 +45,16 @@ movements:
         - Grep
         - WebSearch
         - WebFetch
-    allowed_tools:
-      - Read
-      - Write
-      - Bash
-      - Glob
-      - Grep
-      - WebSearch
-      - WebFetch
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Write
+          - Bash
+          - Glob
+          - Grep
+          - WebSearch
+          - WebFetch
     rules:
       - condition: Research is complete
         next: analyze
@@ -62,13 +66,15 @@ movements:
     knowledge: research
     instruction: research-analyze
     edit: true
-    allowed_tools:
-      - Read
-      - Write
-      - Glob
-      - Grep
-      - WebSearch
-      - WebFetch
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Write
+          - Glob
+          - Grep
+          - WebSearch
+          - WebFetch
     rules:
       - condition: New questions exist and additional research is needed
         next: dig
@@ -79,12 +85,14 @@ movements:
     policy: research
     knowledge: research
     instruction: research-supervise
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - WebSearch
-      - WebFetch
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - WebSearch
+          - WebFetch
     output_contracts:
       report:
         - name: research-report.md

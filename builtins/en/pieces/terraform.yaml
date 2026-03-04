@@ -13,13 +13,15 @@ movements:
     edit: false
     persona: planner
     knowledge: terraform-aws
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - Bash
-      - WebSearch
-      - WebFetch
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Bash
+          - WebSearch
+          - WebFetch
     rules:
       - condition: Requirements are clear and implementable
         next: implement
@@ -38,15 +40,17 @@ movements:
     policy:
       - terraform
     knowledge: terraform-aws
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - Edit
-      - Write
-      - Bash
-      - WebSearch
-      - WebFetch
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Edit
+          - Write
+          - Bash
+          - WebSearch
+          - WebFetch
     required_permission_mode: full
     quality_gates:
       - terraform fmt -check passes without errors
@@ -77,13 +81,15 @@ movements:
           - review
           - terraform
         knowledge: terraform-aws
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Bash
-          - WebSearch
-          - WebFetch
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - Bash
+              - WebSearch
+              - WebFetch
         instruction: review-terraform
         rules:
           - condition: Complies with Terraform conventions
@@ -98,12 +104,14 @@ movements:
         policy:
           - review
           - ai-antipattern
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - WebSearch
-          - WebFetch
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - WebSearch
+              - WebFetch
         instruction: review-ai
         rules:
           - condition: No AI-specific issues
@@ -122,13 +130,15 @@ movements:
     persona: supervisor
     policy: review
     knowledge: terraform-aws
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - Bash
-      - WebSearch
-      - WebFetch
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Bash
+          - WebSearch
+          - WebFetch
     instruction: supervise
     rules:
       - condition: All reviewers approved and task requirements met
@@ -156,14 +166,16 @@ movements:
         policy:
           - terraform
         knowledge: terraform-aws
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Bash
-          - WebSearch
-          - WebFetch
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - Edit
+              - Bash
+              - WebSearch
+              - WebFetch
         required_permission_mode: full
         rules:
           - condition: AI issue fix complete
@@ -176,14 +188,16 @@ movements:
         policy:
           - terraform
         knowledge: terraform-aws
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Bash
-          - WebSearch
-          - WebFetch
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - Edit
+              - Bash
+              - WebSearch
+              - WebFetch
         required_permission_mode: full
         rules:
           - condition: Supervisor's findings have been fixed
@@ -200,15 +214,17 @@ movements:
     policy:
       - terraform
     knowledge: terraform-aws
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - Edit
-      - Write
-      - Bash
-      - WebSearch
-      - WebFetch
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Edit
+          - Write
+          - Bash
+          - WebSearch
+          - WebFetch
     required_permission_mode: full
     pass_previous_response: false
     rules:
@@ -225,15 +241,17 @@ movements:
     policy:
       - terraform
     knowledge: terraform-aws
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - Edit
-      - Write
-      - Bash
-      - WebSearch
-      - WebFetch
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Edit
+          - Write
+          - Bash
+          - WebSearch
+          - WebFetch
     required_permission_mode: full
     pass_previous_response: false
     rules:

@@ -7,6 +7,7 @@ describe('denormalizeProviderOptions', () => {
       codex: { networkAccess: true },
       opencode: { networkAccess: false },
       claude: {
+        allowedTools: ['Read', 'Edit'],
         sandbox: {
           allowUnsandboxedCommands: true,
           excludedCommands: ['npm test'],
@@ -18,6 +19,7 @@ describe('denormalizeProviderOptions', () => {
       codex: { network_access: true },
       opencode: { network_access: false },
       claude: {
+        allowed_tools: ['Read', 'Edit'],
         sandbox: {
           allow_unsandboxed_commands: true,
           excluded_commands: ['npm test'],
@@ -32,5 +34,15 @@ describe('denormalizeProviderOptions', () => {
     });
 
     expect(result).toBeUndefined();
+  });
+
+  it('should persist claude allowedTools even when sandbox is omitted', () => {
+    const result = denormalizeProviderOptions({
+      claude: { allowedTools: ['Read', 'Bash'] },
+    });
+
+    expect(result).toEqual({
+      claude: { allowed_tools: ['Read', 'Bash'] },
+    });
   });
 });

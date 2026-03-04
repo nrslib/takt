@@ -89,14 +89,17 @@ describe('OptionsBuilder.buildBaseOptions', () => {
     const step = createMovement({
       providerOptions: {
         codex: { networkAccess: false },
-        claude: { sandbox: { excludedCommands: ['./gradlew'] } },
+        claude: {
+          sandbox: { excludedCommands: ['./gradlew'] },
+          allowedTools: ['Read', 'Edit', 'Bash'],
+        },
       },
     });
     const builder = createBuilder(step, {
       providerOptionsSource: 'project',
       providerOptions: {
         codex: { networkAccess: true },
-        claude: { sandbox: { allowUnsandboxedCommands: true } },
+        claude: { sandbox: { allowUnsandboxedCommands: true }, allowedTools: ['Read', 'Glob'] },
         opencode: { networkAccess: true },
       },
     });
@@ -111,6 +114,7 @@ describe('OptionsBuilder.buildBaseOptions', () => {
           excludedCommands: ['./gradlew'],
           allowUnsandboxedCommands: true,
         },
+        allowedTools: ['Read', 'Edit', 'Bash'],
       },
     });
   });
@@ -225,5 +229,45 @@ describe('OptionsBuilder.buildResumeOptions', () => {
     expect(options.allowedTools).toEqual([]);
     expect(options.maxTurns).toBe(3);
     expect(options.sessionId).toBe('session-123');
+  });
+});
+
+describe('OptionsBuilder.buildAgentOptions', () => {
+  it('uses merged providerOptions.claude.allowedTools when movement.allowedTools is absent', () => {
+    // Given
+    const step = createMovement({
+      providerOptions: {
+        claude: { allowedTools: ['Read', 'Edit', 'Bash'] },
+      },
+    });
+    const builder = createBuilder(step, {
+      providerOptions: {
+        claude: { allowedTools: ['Read', 'Glob'] },
+      },
+    });
+
+    // When
+    const options = builder.buildAgentOptions(step);
+
+    // Then
+    expect(options.allowedTools).toEqual(['Read', 'Edit', 'Bash']);
+  });
+
+  it('removes Write when output contracts exist and edit is not enabled', () => {
+    // Given
+    const step = createMovement({
+      outputContracts: [{ name: 'report.md', format: 'markdown', useJudge: true }],
+      providerOptions: {
+        claude: { allowedTools: ['Read', 'Write', 'Bash'] },
+      },
+      edit: false,
+    });
+    const builder = createBuilder(step);
+
+    // When
+    const options = builder.buildAgentOptions(step);
+
+    // Then
+    expect(options.allowedTools).toEqual(['Read', 'Bash']);
   });
 });

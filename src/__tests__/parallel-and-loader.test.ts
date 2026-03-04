@@ -37,7 +37,11 @@ describe('ParallelSubMovementRawSchema', () => {
       name: 'full-sub-step',
       persona: '~/.takt/agents/default/coder.md',
       persona_name: 'Coder',
-      allowed_tools: ['Read', 'Grep'],
+      provider_options: {
+        claude: {
+          allowed_tools: ['Read', 'Grep'],
+        },
+      },
       model: 'haiku',
       edit: false,
       instruction_template: 'Do work',
@@ -49,7 +53,7 @@ describe('ParallelSubMovementRawSchema', () => {
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.persona_name).toBe('Coder');
-      expect(result.data.allowed_tools).toEqual(['Read', 'Grep']);
+      expect(result.data.provider_options?.claude?.allowed_tools).toEqual(['Read', 'Grep']);
       expect(result.data.edit).toBe(false);
     }
   });
@@ -99,6 +103,17 @@ describe('ParallelSubMovementRawSchema', () => {
     if (result.success) {
       expect(result.data.rules).toHaveLength(2);
     }
+  });
+
+  it('should reject movement-level allowed_tools on sub-movement', () => {
+    const raw = {
+      name: 'invalid-sub-step',
+      allowed_tools: ['Read'],
+      instruction_template: 'Review',
+    };
+
+    const result = ParallelSubMovementRawSchema.safeParse(raw);
+    expect(result.success).toBe(false);
   });
 });
 

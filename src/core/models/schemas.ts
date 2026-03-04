@@ -74,6 +74,7 @@ export const MovementProviderOptionsSchema = z.object({
     network_access: z.boolean().optional(),
   }).optional(),
   claude: z.object({
+    allowed_tools: z.array(z.string()).optional(),
     sandbox: ClaudeSandboxSchema,
   }).optional(),
 }).optional();
@@ -303,7 +304,7 @@ export const ParallelSubMovementRawSchema = z.object({
   policy: z.union([z.string(), z.array(z.string())]).optional(),
   /** Knowledge reference(s) — key name(s) from piece-level knowledge map */
   knowledge: z.union([z.string(), z.array(z.string())]).optional(),
-  allowed_tools: z.array(z.string()).optional(),
+  allowed_tools: z.never().optional(),
   mcp_servers: McpServersSchema,
   provider: ProviderReferenceSchema.optional(),
   model: z.string().optional(),
@@ -336,7 +337,7 @@ export const PieceMovementRawSchema = z.object({
   policy: z.union([z.string(), z.array(z.string())]).optional(),
   /** Knowledge reference(s) — key name(s) from piece-level knowledge map */
   knowledge: z.union([z.string(), z.array(z.string())]).optional(),
-  allowed_tools: z.array(z.string()).optional(),
+  allowed_tools: z.never().optional(),
   mcp_servers: McpServersSchema,
   provider: ProviderReferenceSchema.optional(),
   model: z.string().optional(),

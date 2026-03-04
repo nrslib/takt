@@ -133,4 +133,38 @@ describe('PieceEngine provider_options resolution', () => {
       codex: { networkAccess: true },
     });
   });
+
+  it('should propagate merged claude allowedTools to runAgent options.allowedTools', async () => {
+    const movement = makeMovement('implement', {
+      providerOptions: {
+        claude: { allowedTools: ['Read', 'Edit', 'Bash'] },
+      },
+      rules: [makeRule('done', 'COMPLETE')],
+    });
+
+    const config: PieceConfig = {
+      name: 'provider-options-allowed-tools',
+      movements: [movement],
+      initialMovement: 'implement',
+      maxMovements: 1,
+    };
+
+    mockRunAgentSequence([
+      makeResponse({ persona: movement.persona, content: 'done' }),
+    ]);
+    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+
+    engine = new PieceEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      provider: 'claude',
+      providerOptions: {
+        claude: { allowedTools: ['Read', 'Glob'] },
+      },
+    });
+
+    await engine.run();
+
+    const options = vi.mocked(runAgent).mock.calls[0]?.[2];
+    expect(options?.allowedTools).toEqual(['Read', 'Edit', 'Bash']);
+  });
 });

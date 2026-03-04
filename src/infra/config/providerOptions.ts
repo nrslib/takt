@@ -8,6 +8,7 @@ type RawProviderOptions = {
     network_access?: boolean;
   };
   claude?: {
+    allowed_tools?: string[];
     sandbox?: {
       allow_unsandboxed_commands?: boolean;
       excluded_commands?: string[];
@@ -31,17 +32,22 @@ export function normalizeProviderOptions(
   if (options.opencode?.network_access !== undefined) {
     result.opencode = { networkAccess: options.opencode.network_access };
   }
-  if (options.claude?.sandbox) {
-    result.claude = {
-      sandbox: {
+  if (options.claude?.allowed_tools !== undefined || options.claude?.sandbox) {
+    const claude: NonNullable<MovementProviderOptions['claude']> = {};
+    if (options.claude.allowed_tools !== undefined) {
+      claude.allowedTools = options.claude.allowed_tools;
+    }
+    if (options.claude.sandbox) {
+      claude.sandbox = {
         ...(options.claude.sandbox.allow_unsandboxed_commands !== undefined
           ? { allowUnsandboxedCommands: options.claude.sandbox.allow_unsandboxed_commands }
           : {}),
         ...(options.claude.sandbox.excluded_commands !== undefined
           ? { excludedCommands: options.claude.sandbox.excluded_commands }
           : {}),
-      },
-    };
+      };
+    }
+    result.claude = claude;
   }
   return Object.keys(result).length > 0 ? result : undefined;
 }
@@ -60,9 +66,15 @@ export function mergeProviderOptions(
     if (layer.opencode) {
       result.opencode = { ...result.opencode, ...layer.opencode };
     }
-    if (layer.claude?.sandbox) {
+    if (layer.claude) {
       result.claude = {
-        sandbox: { ...result.claude?.sandbox, ...layer.claude.sandbox },
+        ...result.claude,
+        ...(layer.claude.allowedTools !== undefined
+          ? { allowedTools: layer.claude.allowedTools }
+          : {}),
+        ...(layer.claude.sandbox
+          ? { sandbox: { ...result.claude?.sandbox, ...layer.claude.sandbox } }
+          : {}),
       };
     }
   }

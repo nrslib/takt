@@ -142,16 +142,23 @@ export function denormalizeProviderOptions(
   if (providerOptions.opencode?.networkAccess !== undefined) {
     raw.opencode = { network_access: providerOptions.opencode.networkAccess };
   }
-  if (providerOptions.claude?.sandbox) {
+  if (providerOptions.claude) {
+    const claude: Record<string, unknown> = {};
+    if (providerOptions.claude.allowedTools !== undefined) {
+      claude.allowed_tools = providerOptions.claude.allowedTools;
+    }
     const sandbox: Record<string, unknown> = {};
-    if (providerOptions.claude.sandbox.allowUnsandboxedCommands !== undefined) {
+    if (providerOptions.claude.sandbox?.allowUnsandboxedCommands !== undefined) {
       sandbox.allow_unsandboxed_commands = providerOptions.claude.sandbox.allowUnsandboxedCommands;
     }
-    if (providerOptions.claude.sandbox.excludedCommands !== undefined) {
+    if (providerOptions.claude.sandbox?.excludedCommands !== undefined) {
       sandbox.excluded_commands = providerOptions.claude.sandbox.excludedCommands;
     }
     if (Object.keys(sandbox).length > 0) {
-      raw.claude = { sandbox };
+      claude.sandbox = sandbox;
+    }
+    if (Object.keys(claude).length > 0) {
+      raw.claude = claude;
     }
   }
 
