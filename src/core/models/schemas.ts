@@ -588,6 +588,8 @@ export const ProjectConfigSchema = z.object({
   minimal_output: z.boolean().optional(),
   provider_options: MovementProviderOptionsSchema,
   provider_profiles: ProviderPermissionProfilesSchema,
+  /** Project-level runtime environment configuration */
+  runtime: RuntimeConfigSchema,
   /** Number of tasks to run concurrently in takt run (default from global: 1, max: 10) */
   concurrency: z.number().int().min(1).max(10).optional(),
   /** Polling interval in ms for picking up new tasks during takt run (default: 500, range: 100-5000) */

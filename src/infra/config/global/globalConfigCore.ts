@@ -132,9 +132,7 @@ export class GlobalConfigManager {
       pieceCategoriesFile: parsed.piece_categories_file,
       providerOptions: normalizedProvider.providerOptions,
       providerProfiles: normalizeProviderProfiles(parsed.provider_profiles as Record<string, { default_permission_mode: unknown; movement_permission_overrides?: Record<string, unknown> }> | undefined),
-      runtime: parsed.runtime?.prepare && parsed.runtime.prepare.length > 0
-        ? { prepare: [...new Set(parsed.runtime.prepare)] }
-        : undefined,
+      runtime: normalizeRuntime(parsed.runtime),
       preventSleep: parsed.prevent_sleep,
       notificationSound: parsed.notification_sound,
       notificationSoundEvents: parsed.notification_sound_events ? {

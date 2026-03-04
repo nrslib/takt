@@ -16,6 +16,7 @@ import {
   normalizePersonaProviders,
   normalizePieceOverrides,
   denormalizePieceOverrides,
+  normalizeRuntime,
 } from '../configNormalizers.js';
 import { invalidateResolvedConfigCache } from '../resolutionCache.js';
 import { MIGRATED_PROJECT_LOCAL_DEFAULTS } from '../migratedProjectLocalDefaults.js';
@@ -101,6 +102,7 @@ export function loadProjectConfig(projectDir: string): ProjectLocalConfig {
     task_poll_interval_ms,
     interactive_preview_movements,
     piece_overrides,
+    runtime,
     ...rest
   } = parsedConfig;
   const normalizedProvider = normalizeConfigProviderReference(
@@ -141,6 +143,7 @@ export function loadProjectConfig(projectDir: string): ProjectLocalConfig {
     providerOptions: normalizedProvider.providerOptions,
     providerProfiles: normalizeProviderProfiles(provider_profiles as Record<string, { default_permission_mode: unknown; movement_permission_overrides?: Record<string, unknown> }> | undefined),
     pieceOverrides: normalizePieceOverrides(piece_overrides as { quality_gates?: string[]; quality_gates_edit_only?: boolean; movements?: Record<string, { quality_gates?: string[] }> } | undefined),
+    runtime: normalizeRuntime(runtime),
   };
 }
 
@@ -268,6 +271,13 @@ export function saveProjectConfig(projectDir: string, config: ProjectLocalConfig
     savePayload.piece_overrides = rawPieceOverrides;
   }
   delete savePayload.pieceOverrides;
+
+  const normalizedRuntime = normalizeRuntime(config.runtime);
+  if (normalizedRuntime) {
+    savePayload.runtime = normalizedRuntime;
+  } else {
+    delete savePayload.runtime;
+  }
 
   const content = stringify(savePayload, { indent: 2 });
   writeFileSync(configPath, content, 'utf-8');

@@ -247,9 +247,19 @@ jobs:
           if [ "$AHEAD" -gt 0 ]; then
             echo "Pushing $AHEAD commit(s)"
             git push
+            echo "pushed=true" >> "$GITHUB_OUTPUT"
           else
             echo "Nothing to push"
+            echo "pushed=false" >> "$GITHUB_OUTPUT"
           fi
+        id: push
+
+      - name: Trigger CI
+        if: steps.push.outputs.pushed == 'true'
+        run: |
+          gh workflow run ci.yml --ref "${{ steps.pr.outputs.branch }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Report result
         if: always()

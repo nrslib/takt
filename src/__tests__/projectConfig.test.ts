@@ -352,4 +352,85 @@ piece_overrides:
       expect(() => loadProjectConfig(testDir)).not.toThrow();
     });
   });
+
+  describe('runtime.prepare round-trip', () => {
+    it('should load single preset entry', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(configPath, 'runtime:\n  prepare:\n    - node\n', 'utf-8');
+
+      const loaded = loadProjectConfig(testDir);
+      expect(loaded.runtime).toEqual({ prepare: ['node'] });
+    });
+
+    it('should load multiple preset entries', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(configPath, 'runtime:\n  prepare:\n    - node\n    - gradle\n', 'utf-8');
+
+      const loaded = loadProjectConfig(testDir);
+      expect(loaded.runtime).toEqual({ prepare: ['node', 'gradle'] });
+    });
+
+    it('should load custom script paths', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(configPath, 'runtime:\n  prepare:\n    - ./setup.sh\n', 'utf-8');
+
+      const loaded = loadProjectConfig(testDir);
+      expect(loaded.runtime).toEqual({ prepare: ['./setup.sh'] });
+    });
+
+    it('should round-trip save and load', () => {
+      const config: ProjectLocalConfig = {
+        runtime: { prepare: ['node'] },
+      };
+
+      saveProjectConfig(testDir, config);
+      const reloaded = loadProjectConfig(testDir);
+
+      expect(reloaded.runtime).toEqual({ prepare: ['node'] });
+    });
+
+    it('should deduplicate entries on load', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(configPath, 'runtime:\n  prepare:\n    - node\n    - node\n', 'utf-8');
+
+      const loaded = loadProjectConfig(testDir);
+      expect(loaded.runtime).toEqual({ prepare: ['node'] });
+    });
+
+    it('should return undefined when runtime is not specified', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(configPath, '{}\n', 'utf-8');
+
+      const loaded = loadProjectConfig(testDir);
+      expect(loaded.runtime).toBeUndefined();
+    });
+
+    it('should return undefined when prepare is empty array', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(configPath, 'runtime:\n  prepare: []\n', 'utf-8');
+
+      const loaded = loadProjectConfig(testDir);
+      expect(loaded.runtime).toBeUndefined();
+    });
+
+    it('should not serialize runtime when config has no runtime', () => {
+      const config: ProjectLocalConfig = {};
+
+      saveProjectConfig(testDir, config);
+
+      const raw = readFileSync(join(testDir, '.takt', 'config.yaml'), 'utf-8');
+      expect(raw).not.toContain('runtime');
+    });
+
+    it('should round-trip mixed presets and custom scripts', () => {
+      const config: ProjectLocalConfig = {
+        runtime: { prepare: ['node', 'gradle', './custom-setup.sh'] },
+      };
+
+      saveProjectConfig(testDir, config);
+      const reloaded = loadProjectConfig(testDir);
+
+      expect(reloaded.runtime).toEqual({ prepare: ['node', 'gradle', './custom-setup.sh'] });
+    });
+  });
 });
