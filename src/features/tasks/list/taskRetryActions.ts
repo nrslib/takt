@@ -9,9 +9,7 @@ import * as fs from 'node:fs';
 import type { TaskListItem } from '../../../infra/task/index.js';
 import { TaskRunner } from '../../../infra/task/index.js';
 import { loadPieceByIdentifier, resolvePieceConfigValue, getPieceDescription } from '../../../infra/config/index.js';
-import { selectPiece } from '../../pieceSelection/index.js';
 import { selectOptionWithDefault } from '../../../shared/prompt/index.js';
-import { getLabel } from '../../../shared/i18n/index.js';
 import { info, header, blankLine, status, warn } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import type { PieceConfig } from '../../../core/models/index.js';
@@ -31,6 +29,7 @@ import {
   appendRetryNote,
   DEPRECATED_PROVIDER_CONFIG_WARNING,
   hasDeprecatedProviderConfig,
+  selectPieceWithOptionalReuse,
 } from './requeueHelpers.js';
 import { prepareTaskForExecution } from './prepareTaskForExecution.js';
 
@@ -137,41 +136,10 @@ export async function retryFailedTask(
   const matchedSlug = findRunForTask(worktreePath, task.content);
   const runInfo = matchedSlug ? buildRetryRunInfo(worktreePath, matchedSlug) : null;
 
-  let selectedPiece: string;
-  if (runInfo?.piece) {
-    const usePreviousLabel = getLabel('retry.usePreviousWorkflow');
-    const changeWorkflowLabel = getLabel('retry.changeWorkflow');
-    const choice = await selectOptionWithDefault(
-      getLabel('retry.workflowPrompt'),
-      [
-        { label: `${runInfo.piece} - ${usePreviousLabel}`, value: 'use_previous' },
-        { label: changeWorkflowLabel, value: 'change' },
-      ],
-      'use_previous',
-    );
-
-    if (choice === null) {
-      info('Cancelled');
-      return false;
-    }
-
-    if (choice === 'use_previous') {
-      selectedPiece = runInfo.piece;
-    } else {
-      const selected = await selectPiece(projectDir);
-      if (!selected) {
-        info('Cancelled');
-        return false;
-      }
-      selectedPiece = selected;
-    }
-  } else {
-    const selected = await selectPiece(projectDir);
-    if (!selected) {
-      info('Cancelled');
-      return false;
-    }
-    selectedPiece = selected;
+  const selectedPiece = await selectPieceWithOptionalReuse(projectDir, runInfo?.piece);
+  if (!selectedPiece) {
+    info('Cancelled');
+    return false;
   }
 
   const previewCount = resolvePieceConfigValue(projectDir, 'interactivePreviewMovements');

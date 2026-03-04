@@ -4,20 +4,26 @@ const {
   mockExistsSync,
   mockSelectPiece,
   mockSelectOptionWithDefault,
+  mockConfirm,
   mockResolvePieceConfigValue,
   mockLoadPieceByIdentifier,
   mockGetPieceDescription,
   mockRunRetryMode,
   mockFindRunForTask,
   mockFindPreviousOrderContent,
+  mockLoadRunSessionContext,
+  mockFormatRunSessionForPrompt,
   mockStartReExecution,
   mockRequeueTask,
   mockExecuteAndCompleteTask,
   mockWarn,
+  mockIsPiecePath,
+  mockLoadAllPiecesWithSources,
 } = vi.hoisted(() => ({
   mockExistsSync: vi.fn(() => true),
   mockSelectPiece: vi.fn(),
   mockSelectOptionWithDefault: vi.fn(),
+  mockConfirm: vi.fn(),
   mockResolvePieceConfigValue: vi.fn(),
   mockLoadPieceByIdentifier: vi.fn(),
   mockGetPieceDescription: vi.fn(() => ({
@@ -29,10 +35,20 @@ const {
   mockRunRetryMode: vi.fn(),
   mockFindRunForTask: vi.fn(() => null),
   mockFindPreviousOrderContent: vi.fn(() => null),
+  mockLoadRunSessionContext: vi.fn(),
+  mockFormatRunSessionForPrompt: vi.fn((sessionContext?: { piece?: string }) => ({
+    runTask: '',
+    runPiece: sessionContext?.piece ?? '',
+    runStatus: '',
+    runMovementLogs: '',
+    runReports: '',
+  })),
   mockStartReExecution: vi.fn(),
   mockRequeueTask: vi.fn(),
   mockExecuteAndCompleteTask: vi.fn(),
   mockWarn: vi.fn(),
+  mockIsPiecePath: vi.fn(() => false),
+  mockLoadAllPiecesWithSources: vi.fn(() => new Map<string, unknown>([['default', {}]])),
 }));
 
 vi.mock('node:fs', async (importOriginal) => ({
@@ -46,6 +62,7 @@ vi.mock('../features/pieceSelection/index.js', () => ({
 
 vi.mock('../shared/prompt/index.js', () => ({
   selectOptionWithDefault: (...args: unknown[]) => mockSelectOptionWithDefault(...args),
+  confirm: (...args: unknown[]) => mockConfirm(...args),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -68,19 +85,15 @@ vi.mock('../infra/config/index.js', () => ({
   resolvePieceConfigValue: (...args: unknown[]) => mockResolvePieceConfigValue(...args),
   loadPieceByIdentifier: (...args: unknown[]) => mockLoadPieceByIdentifier(...args),
   getPieceDescription: (...args: unknown[]) => mockGetPieceDescription(...args),
+  isPiecePath: (...args: unknown[]) => mockIsPiecePath(...args),
+  loadAllPiecesWithSources: (...args: unknown[]) => mockLoadAllPiecesWithSources(...args),
 }));
 
 vi.mock('../features/interactive/index.js', () => ({
   findRunForTask: (...args: unknown[]) => mockFindRunForTask(...args),
-  loadRunSessionContext: vi.fn(),
+  loadRunSessionContext: (...args: unknown[]) => mockLoadRunSessionContext(...args),
   getRunPaths: vi.fn(() => ({ logsDir: '/tmp/logs', reportsDir: '/tmp/reports' })),
-  formatRunSessionForPrompt: vi.fn(() => ({
-    runTask: '',
-    runPiece: 'default',
-    runStatus: '',
-    runMovementLogs: '',
-    runReports: '',
-  })),
+  formatRunSessionForPrompt: (...args: unknown[]) => mockFormatRunSessionForPrompt(...args),
   runRetryMode: (...args: unknown[]) => mockRunRetryMode(...args),
   findPreviousOrderContent: (...args: unknown[]) => mockFindPreviousOrderContent(...args),
 }));
@@ -101,13 +114,11 @@ vi.mock('../features/tasks/execute/taskExecution.js', () => ({
 }));
 
 vi.mock('../shared/i18n/index.js', () => ({
-  getLabel: vi.fn((key: string) => {
-    const labels: Record<string, string> = {
-      'retry.workflowPrompt': 'Select workflow:',
-      'retry.usePreviousWorkflow': 'Use previous',
-      'retry.changeWorkflow': 'Change workflow',
-    };
-    return labels[key] ?? key;
+  getLabel: vi.fn((key: string, _lang?: string, vars?: Record<string, string>) => {
+    if (vars?.piece) {
+      return `Use previous piece "${vars.piece}"?`;
+    }
+    return key;
   }),
 }));
 
@@ -146,12 +157,22 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockExistsSync.mockReturnValue(true);
 
+  mockConfirm.mockResolvedValue(true);
   mockSelectPiece.mockResolvedValue('default');
   mockResolvePieceConfigValue.mockReturnValue(3);
   mockLoadPieceByIdentifier.mockReturnValue(defaultPieceConfig);
+  mockIsPiecePath.mockImplementation((piece: string) => piece.startsWith('/') || piece.startsWith('~') || piece.startsWith('./') || piece.startsWith('../') || piece.endsWith('.yaml') || piece.endsWith('.yml'));
+  mockLoadAllPiecesWithSources.mockReturnValue(new Map<string, unknown>([['default', {}], ['selected-piece', {}]]));
   mockSelectOptionWithDefault.mockResolvedValue('plan');
   mockRunRetryMode.mockResolvedValue({ action: 'execute', task: '追加指示A' });
   mockFindPreviousOrderContent.mockReturnValue(null);
+  mockLoadRunSessionContext.mockReturnValue({
+    task: 'Do something',
+    piece: 'default',
+    status: 'failed',
+    movementLogs: [],
+    reports: [],
+  });
   mockStartReExecution.mockReturnValue({
     name: 'my-task',
     content: 'Do something',
@@ -337,29 +358,24 @@ describe('retryFailedTask', () => {
     expect(mockRequeueTask).toHaveBeenCalledWith('my-task', ['failed'], undefined, '既存ノート\n\n追加指示A');
   });
 
-  describe('when previous workflow exists', () => {
+  describe('when previous piece exists', () => {
     beforeEach(() => {
       mockFindRunForTask.mockReturnValue('run-123');
     });
 
-    it('should show workflow selection prompt when runInfo.piece exists', async () => {
+    it('should ask whether to reuse previous piece with default yes', async () => {
       const task = makeFailedTask();
 
       await retryFailedTask(task, '/project');
 
-      expect(mockSelectOptionWithDefault).toHaveBeenCalledWith(
-        'Select workflow:',
-        expect.arrayContaining([
-          expect.objectContaining({ value: 'use_previous' }),
-          expect.objectContaining({ value: 'change' }),
-        ]),
-        'use_previous',
-      );
+      const [message, defaultYes] = mockConfirm.mock.calls[0] ?? [];
+      expect(message).toEqual(expect.stringContaining('"default"'));
+      expect(defaultYes ?? true).toBe(true);
     });
 
-    it('should use previous workflow when use_previous is selected', async () => {
+    it('should use previous piece when reuse is confirmed', async () => {
       const task = makeFailedTask();
-      mockSelectOptionWithDefault.mockResolvedValue('use_previous');
+      mockConfirm.mockResolvedValue(true);
 
       await retryFailedTask(task, '/project');
 
@@ -367,23 +383,41 @@ describe('retryFailedTask', () => {
       expect(mockLoadPieceByIdentifier).toHaveBeenCalledWith('default', '/project');
     });
 
-    it('should call selectPiece when change is selected', async () => {
+    it('should call selectPiece when reuse is declined', async () => {
       const task = makeFailedTask();
-      mockSelectOptionWithDefault.mockResolvedValue('change');
+      mockConfirm.mockResolvedValue(false);
 
       await retryFailedTask(task, '/project');
 
       expect(mockSelectPiece).toHaveBeenCalledWith('/project');
     });
 
-    it('should return false when workflow selection is cancelled', async () => {
+    it('should return false when selecting replacement piece is cancelled after declining reuse', async () => {
       const task = makeFailedTask();
-      mockSelectOptionWithDefault.mockResolvedValue(null);
+      mockConfirm.mockResolvedValue(false);
+      mockSelectPiece.mockResolvedValue(null);
 
       const result = await retryFailedTask(task, '/project');
 
       expect(result).toBe(false);
       expect(mockLoadPieceByIdentifier).not.toHaveBeenCalled();
+    });
+
+    it('should ignore previous piece when run metadata contains piece path', async () => {
+      const task = makeFailedTask();
+      mockLoadRunSessionContext.mockReturnValue({
+        task: 'Do something',
+        piece: '../secrets.yaml',
+        status: 'failed',
+        movementLogs: [],
+        reports: [],
+      });
+
+      await retryFailedTask(task, '/project');
+
+      expect(mockConfirm).not.toHaveBeenCalled();
+      expect(mockSelectPiece).toHaveBeenCalledWith('/project');
+      expect(mockLoadPieceByIdentifier).toHaveBeenCalledWith('default', '/project');
     });
   });
 });

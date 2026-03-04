@@ -1,7 +1,19 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
-const { mockDebug } = vi.hoisted(() => ({
+const {
+  mockDebug,
+  mockConfirm,
+  mockGetLabel,
+  mockSelectPiece,
+  mockIsPiecePath,
+  mockLoadAllPiecesWithSources,
+} = vi.hoisted(() => ({
   mockDebug: vi.fn(),
+  mockConfirm: vi.fn(),
+  mockGetLabel: vi.fn((_key: string, _lang?: string, vars?: Record<string, string>) => `Use previous piece "${vars?.piece ?? ''}"?`),
+  mockSelectPiece: vi.fn(),
+  mockIsPiecePath: vi.fn(() => false),
+  mockLoadAllPiecesWithSources: vi.fn(() => new Map<string, unknown>([['default', {}], ['selected-piece', {}]])),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -15,7 +27,25 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   }),
 }));
 
-import { hasDeprecatedProviderConfig } from '../features/tasks/list/requeueHelpers.js';
+vi.mock('../shared/prompt/index.js', () => ({
+  confirm: (...args: unknown[]) => mockConfirm(...args),
+}));
+
+vi.mock('../shared/i18n/index.js', () => ({
+  getLabel: (...args: unknown[]) => mockGetLabel(...args),
+}));
+
+vi.mock('../features/pieceSelection/index.js', () => ({
+  selectPiece: (...args: unknown[]) => mockSelectPiece(...args),
+}));
+
+vi.mock('../infra/config/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  isPiecePath: (...args: unknown[]) => mockIsPiecePath(...args),
+  loadAllPiecesWithSources: (...args: unknown[]) => mockLoadAllPiecesWithSources(...args),
+}));
+
+import { hasDeprecatedProviderConfig, selectPieceWithOptionalReuse } from '../features/tasks/list/requeueHelpers.js';
 
 describe('hasDeprecatedProviderConfig', () => {
   beforeEach(() => {
@@ -84,5 +114,50 @@ describe('hasDeprecatedProviderConfig', () => {
     ].join('\n');
 
     expect(hasDeprecatedProviderConfig(orderContent)).toBe(false);
+  });
+});
+
+describe('selectPieceWithOptionalReuse', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsPiecePath.mockReturnValue(false);
+    mockLoadAllPiecesWithSources.mockReturnValue(new Map<string, unknown>([['default', {}], ['selected-piece', {}]]));
+    mockSelectPiece.mockResolvedValue('selected-piece');
+  });
+
+  it('内部ヘルパーを公開 API に露出しない', async () => {
+    const requeueHelpersModule = await import('../features/tasks/list/requeueHelpers.js');
+
+    expect(Object.prototype.hasOwnProperty.call(requeueHelpersModule, 'resolveReusablePieceName')).toBe(false);
+  });
+
+  it('前回 piece 再利用を確認して Yes ならそのまま返す', async () => {
+    mockConfirm.mockResolvedValue(true);
+
+    const selected = await selectPieceWithOptionalReuse('/project', 'default', 'en');
+
+    expect(selected).toBe('default');
+    expect(mockConfirm).toHaveBeenCalledTimes(1);
+    expect(mockSelectPiece).not.toHaveBeenCalled();
+  });
+
+  it('前回 piece 再利用を拒否した場合は piece 選択にフォールバックする', async () => {
+    mockConfirm.mockResolvedValue(false);
+
+    const selected = await selectPieceWithOptionalReuse('/project', 'default', 'en');
+
+    expect(selected).toBe('selected-piece');
+    expect(mockConfirm).toHaveBeenCalledTimes(1);
+    expect(mockSelectPiece).toHaveBeenCalledWith('/project');
+  });
+
+  it('未登録の前回 piece 名は確認せず拒否して piece 選択にフォールバックする', async () => {
+    mockLoadAllPiecesWithSources.mockReturnValue(new Map<string, unknown>([['default', {}]]));
+
+    const selected = await selectPieceWithOptionalReuse('/project', 'tampered-piece', 'en');
+
+    expect(selected).toBe('selected-piece');
+    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(mockSelectPiece).toHaveBeenCalledWith('/project');
   });
 });

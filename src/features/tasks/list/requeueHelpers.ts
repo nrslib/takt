@@ -1,6 +1,8 @@
 import { confirm } from '../../../shared/prompt/index.js';
 import { getLabel } from '../../../shared/i18n/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
+import { isPiecePath, loadAllPiecesWithSources } from '../../../infra/config/index.js';
+import { selectPiece } from '../../pieceSelection/index.js';
 import { parse as parseYaml } from 'yaml';
 import {
   selectRun,
@@ -22,6 +24,42 @@ export function appendRetryNote(existing: string | undefined, additional: string
     return trimmedAdditional;
   }
   return `${existing}\n\n${trimmedAdditional}`;
+}
+
+function resolveReusablePieceName(
+  previousPiece: string | undefined,
+  projectDir: string,
+): string | null {
+  if (!previousPiece || previousPiece.trim() === '') {
+    return null;
+  }
+  if (isPiecePath(previousPiece)) {
+    return null;
+  }
+  const availablePieces = loadAllPiecesWithSources(projectDir);
+  if (!availablePieces.has(previousPiece)) {
+    return null;
+  }
+  return previousPiece;
+}
+
+export async function selectPieceWithOptionalReuse(
+  projectDir: string,
+  previousPiece: string | undefined,
+  lang?: 'en' | 'ja',
+): Promise<string | null> {
+  const reusablePiece = resolveReusablePieceName(previousPiece, projectDir);
+  if (reusablePiece) {
+    const shouldReusePreviousPiece = await confirm(
+      getLabel('retry.usePreviousPieceConfirm', lang, { piece: reusablePiece }),
+      true,
+    );
+    if (shouldReusePreviousPiece) {
+      return reusablePiece;
+    }
+  }
+
+  return selectPiece(projectDir);
 }
 
 function extractYamlCandidates(content: string): string[] {

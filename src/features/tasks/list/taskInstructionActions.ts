@@ -15,15 +15,15 @@ import { resolvePieceConfigValues, getPieceDescription } from '../../../infra/co
 import { info, warn, error as logError } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { runInstructMode } from './instructMode.js';
-import { selectPiece } from '../../pieceSelection/index.js';
 import { dispatchConversationAction } from '../../interactive/actionDispatcher.js';
 import type { PieceContext } from '../../interactive/interactive.js';
-import { resolveLanguage, findRunForTask, findPreviousOrderContent } from '../../interactive/index.js';
+import { resolveLanguage, findRunForTask, findPreviousOrderContent, loadRunSessionContext } from '../../interactive/index.js';
 import { type BranchActionTarget, resolveTargetBranch } from './taskActionTarget.js';
 import {
   appendRetryNote,
   DEPRECATED_PROVIDER_CONFIG_WARNING,
   hasDeprecatedProviderConfig,
+  selectPieceWithOptionalReuse,
   selectRunSessionContext,
 } from './requeueHelpers.js';
 import { executeAndCompleteTask } from '../execute/taskExecution.js';
@@ -93,13 +93,18 @@ export async function instructBranch(
 
   const branch = resolveTargetBranch(target);
 
-  const selectedPiece = await selectPiece(projectDir);
+  const globalConfig = resolvePieceConfigValues(projectDir, ['interactivePreviewMovements', 'language']);
+  const lang = resolveLanguage(globalConfig.language);
+  const matchedSlug = findRunForTask(worktreePath, target.content);
+  const previousRunContext = matchedSlug
+    ? loadRunSessionContext(worktreePath, matchedSlug)
+    : undefined;
+  const selectedPiece = await selectPieceWithOptionalReuse(projectDir, previousRunContext?.piece, lang);
   if (!selectedPiece) {
     info('Cancelled');
     return false;
   }
 
-  const globalConfig = resolvePieceConfigValues(projectDir, ['interactivePreviewMovements', 'language']);
   const pieceDesc = getPieceDescription(selectedPiece, projectDir, globalConfig.interactivePreviewMovements);
   const pieceContext: PieceContext = {
     name: pieceDesc.name,
@@ -108,10 +113,8 @@ export async function instructBranch(
     movementPreviews: pieceDesc.movementPreviews,
   };
 
-  const lang = resolveLanguage(globalConfig.language);
   // Runs data lives in the worktree (written during previous execution)
   const runSessionContext = await selectRunSessionContext(worktreePath, lang);
-  const matchedSlug = findRunForTask(worktreePath, target.content);
   const previousOrderContent = findPreviousOrderContent(worktreePath, matchedSlug);
   if (hasDeprecatedProviderConfig(previousOrderContent)) {
     warn(DEPRECATED_PROVIDER_CONFIG_WARNING);
