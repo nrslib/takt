@@ -78,6 +78,19 @@ export type AiJudgeCaller = (
 
 export type PhaseName = 'execute' | 'report' | 'judge';
 
+export interface PhasePromptParts {
+  systemPrompt: string;
+  userInstruction: string;
+}
+
+export interface JudgeStageEntry {
+  stage: 1 | 2 | 3;
+  method: 'structured_output' | 'phase3_tag' | 'ai_judge';
+  status: 'done' | 'error' | 'skipped';
+  instruction: string;
+  response: string;
+}
+
 /** Provider and model info resolved for a movement */
 export interface MovementProviderInfo {
   provider: ProviderType | undefined;
@@ -91,8 +104,33 @@ export interface PieceEvents {
   'movement:report': (step: PieceMovement, filePath: string, fileName: string) => void;
   'movement:blocked': (step: PieceMovement, response: AgentResponse) => void;
   'movement:user_input': (step: PieceMovement, userInput: string) => void;
-  'phase:start': (step: PieceMovement, phase: 1 | 2 | 3, phaseName: PhaseName, instruction: string) => void;
-  'phase:complete': (step: PieceMovement, phase: 1 | 2 | 3, phaseName: PhaseName, content: string, status: string, error?: string) => void;
+  'phase:start': (
+    step: PieceMovement,
+    phase: 1 | 2 | 3,
+    phaseName: PhaseName,
+    instruction: string,
+    promptParts: PhasePromptParts,
+    phaseExecutionId?: string,
+    iteration?: number,
+  ) => void;
+  'phase:complete': (
+    step: PieceMovement,
+    phase: 1 | 2 | 3,
+    phaseName: PhaseName,
+    content: string,
+    status: string,
+    error?: string,
+    phaseExecutionId?: string,
+    iteration?: number,
+  ) => void;
+  'phase:judge_stage': (
+    step: PieceMovement,
+    phase: 3,
+    phaseName: 'judge',
+    entry: JudgeStageEntry,
+    phaseExecutionId?: string,
+    iteration?: number,
+  ) => void;
   'piece:complete': (state: PieceState) => void;
   'piece:abort': (state: PieceState, reason: string) => void;
   'iteration:limit': (iteration: number, maxMovements: number) => void;

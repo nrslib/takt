@@ -3,7 +3,7 @@ import type { PieceMovement, PieceState, Language } from '../../models/types.js'
 import type { MovementProviderOptions } from '../../models/piece-types.js';
 import type { RunAgentOptions } from '../../../agents/runner.js';
 import type { PhaseRunnerContext } from '../phase-runner.js';
-import type { PieceEngineOptions, PhaseName, MovementProviderInfo } from '../types.js';
+import type { PieceEngineOptions, PhaseName, MovementProviderInfo, PhasePromptParts, JudgeStageEntry } from '../types.js';
 import { buildSessionKey } from '../session-key.js';
 import { resolveMovementProviderModel } from '../provider-resolution.js';
 
@@ -158,8 +158,34 @@ export class OptionsBuilder {
     state: PieceState,
     lastResponse: string | undefined,
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
-    onPhaseStart?: (step: PieceMovement, phase: 1 | 2 | 3, phaseName: PhaseName, instruction: string) => void,
-    onPhaseComplete?: (step: PieceMovement, phase: 1 | 2 | 3, phaseName: PhaseName, content: string, status: string, error?: string) => void,
+    onPhaseStart?: (
+      step: PieceMovement,
+      phase: 1 | 2 | 3,
+      phaseName: PhaseName,
+      instruction: string,
+      promptParts: PhasePromptParts,
+      phaseExecutionId?: string,
+      iteration?: number,
+    ) => void,
+    onPhaseComplete?: (
+      step: PieceMovement,
+      phase: 1 | 2 | 3,
+      phaseName: PhaseName,
+      content: string,
+      status: string,
+      error?: string,
+      phaseExecutionId?: string,
+      iteration?: number,
+    ) => void,
+    onJudgeStage?: (
+      step: PieceMovement,
+      phase: 3,
+      phaseName: 'judge',
+      entry: JudgeStageEntry,
+      phaseExecutionId?: string,
+      iteration?: number,
+    ) => void,
+    iteration?: number,
   ): PhaseRunnerContext {
     return {
       cwd: this.getCwd(),
@@ -174,6 +200,8 @@ export class OptionsBuilder {
       updatePersonaSession,
       onPhaseStart,
       onPhaseComplete,
+      onJudgeStage,
+      iteration,
     };
   }
 }

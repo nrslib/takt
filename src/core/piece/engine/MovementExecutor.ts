@@ -14,7 +14,7 @@ import type {
   AgentResponse,
   Language,
 } from '../../models/types.js';
-import type { PhaseName } from '../types.js';
+import type { PhaseName, PhasePromptParts, JudgeStageEntry } from '../types.js';
 import { executeAgent } from '../../../agents/agent-usecases.js';
 import { InstructionBuilder } from '../instruction/InstructionBuilder.js';
 import { needsStatusJudgmentPhase, runReportPhase, runStatusJudgmentPhase } from '../phase-runner.js';
@@ -45,8 +45,33 @@ export interface MovementExecutorDeps {
     conditions: Array<{ index: number; text: string }>,
     options: { cwd: string }
   ) => Promise<number>;
-  readonly onPhaseStart?: (step: PieceMovement, phase: 1 | 2 | 3, phaseName: PhaseName, instruction: string) => void;
-  readonly onPhaseComplete?: (step: PieceMovement, phase: 1 | 2 | 3, phaseName: PhaseName, content: string, status: string, error?: string) => void;
+  readonly onPhaseStart?: (
+    step: PieceMovement,
+    phase: 1 | 2 | 3,
+    phaseName: PhaseName,
+    instruction: string,
+    promptParts: PhasePromptParts,
+    phaseExecutionId?: string,
+    iteration?: number,
+  ) => void;
+  readonly onPhaseComplete?: (
+    step: PieceMovement,
+    phase: 1 | 2 | 3,
+    phaseName: PhaseName,
+    content: string,
+    status: string,
+    error?: string,
+    phaseExecutionId?: string,
+    iteration?: number,
+  ) => void;
+  readonly onJudgeStage?: (
+    step: PieceMovement,
+    phase: 3,
+    phaseName: 'judge',
+    entry: JudgeStageEntry,
+    phaseExecutionId?: string,
+    iteration?: number,
+  ) => void;
 }
 
 export class MovementExecutor {
@@ -197,6 +222,8 @@ export class MovementExecutor {
       updatePersonaSession,
       this.deps.onPhaseStart,
       this.deps.onPhaseComplete,
+      this.deps.onJudgeStage,
+      state.iteration,
     );
 
     // Phase 2: report output (resume same session, Write only)
@@ -276,11 +303,21 @@ export class MovementExecutor {
     });
 
     // Phase 1: main execution (Write excluded if movement has report)
-    this.deps.onPhaseStart?.(step, 1, 'execute', instruction);
-    const agentOptions = this.deps.optionsBuilder.buildAgentOptions(step);
+    let didEmitPhaseStart = false;
+    const baseAgentOptions = this.deps.optionsBuilder.buildAgentOptions(step);
+    const agentOptions = {
+      ...baseAgentOptions,
+      onPromptResolved: (promptParts: PhasePromptParts) => {
+        this.deps.onPhaseStart?.(step, 1, 'execute', instruction, promptParts, undefined, state.iteration);
+        didEmitPhaseStart = true;
+      },
+    };
     let response = await executeAgent(step.persona, instruction, agentOptions);
+    if (!didEmitPhaseStart) {
+      throw new Error(`Missing prompt parts for phase start: ${step.name}:1`);
+    }
     updatePersonaSession(sessionKey, response.sessionId);
-    this.deps.onPhaseComplete?.(step, 1, 'execute', response.content, response.status, response.error);
+    this.deps.onPhaseComplete?.(step, 1, 'execute', response.content, response.status, response.error, undefined, state.iteration);
 
     // Provider failures should abort immediately.
     if (response.status === 'error') {

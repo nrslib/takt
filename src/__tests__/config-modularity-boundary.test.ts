@@ -26,4 +26,33 @@ describe('config module file-size boundary', () => {
     const lineCount = getLineCount('../features/tasks/execute/pieceExecution.ts');
     expect(lineCount).toBeLessThanOrEqual(300);
   });
+
+  it('keeps sessionLogger.ts under 300 lines', () => {
+    const lineCount = getLineCount('../features/tasks/execute/sessionLogger.ts');
+    expect(lineCount).toBeLessThanOrEqual(300);
+  });
+
+  it('keeps traceReport renderer/parser split modules under 300 lines', () => {
+    const rendererLineCount = getLineCount('../features/tasks/execute/traceReportRenderer.ts');
+    const parserLineCount = getLineCount('../features/tasks/execute/traceReportParser.ts');
+    expect(rendererLineCount).toBeLessThanOrEqual(300);
+    expect(parserLineCount).toBeLessThanOrEqual(300);
+  });
+
+  it('keeps traceReport.ts as thin facade under 120 lines', () => {
+    const lineCount = getLineCount('../features/tasks/execute/traceReport.ts');
+    expect(lineCount).toBeLessThanOrEqual(120);
+  });
+
+  it('keeps agent-usecases.ts as thin facade under 120 lines', () => {
+    const lineCount = getLineCount('../agents/agent-usecases.ts');
+    expect(lineCount).toBeLessThanOrEqual(120);
+  });
+
+  it('keeps split agent usecases under 300 lines each', () => {
+    const judgeLineCount = getLineCount('../agents/judge-status-usecase.ts');
+    const decomposeLineCount = getLineCount('../agents/decompose-task-usecase.ts');
+    expect(judgeLineCount).toBeLessThanOrEqual(300);
+    expect(decomposeLineCount).toBeLessThanOrEqual(300);
+  });
 });

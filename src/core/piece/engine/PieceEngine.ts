@@ -128,11 +128,26 @@ export class PieceEngine extends EventEmitter {
       getRetryNote: () => this.options.retryNote,
       detectRuleIndex: this.detectRuleIndex,
       callAiJudge: this.callAiJudge,
-      onPhaseStart: (step, phase, phaseName, instruction) => {
-        this.emit('phase:start', step, phase, phaseName, instruction);
+      onPhaseStart: (step, phase, phaseName, instruction, promptParts, phaseExecutionId, iteration) => {
+        if (phaseExecutionId == null && iteration == null) {
+          this.emit('phase:start', step, phase, phaseName, instruction, promptParts);
+          return;
+        }
+        this.emit('phase:start', step, phase, phaseName, instruction, promptParts, phaseExecutionId, iteration);
       },
-      onPhaseComplete: (step, phase, phaseName, content, phaseStatus, error) => {
-        this.emit('phase:complete', step, phase, phaseName, content, phaseStatus, error);
+      onPhaseComplete: (step, phase, phaseName, content, phaseStatus, error, phaseExecutionId, iteration) => {
+        if (phaseExecutionId == null && iteration == null) {
+          this.emit('phase:complete', step, phase, phaseName, content, phaseStatus, error);
+          return;
+        }
+        this.emit('phase:complete', step, phase, phaseName, content, phaseStatus, error, phaseExecutionId, iteration);
+      },
+      onJudgeStage: (step, phase, phaseName, entry, phaseExecutionId, iteration) => {
+        if (phaseExecutionId == null && iteration == null) {
+          this.emit('phase:judge_stage', step, phase, phaseName, entry);
+          return;
+        }
+        this.emit('phase:judge_stage', step, phase, phaseName, entry, phaseExecutionId, iteration);
       },
     });
 
@@ -145,11 +160,26 @@ export class PieceEngine extends EventEmitter {
       getInteractive: () => this.options.interactive === true,
       detectRuleIndex: this.detectRuleIndex,
       callAiJudge: this.callAiJudge,
-      onPhaseStart: (step, phase, phaseName, instruction) => {
-        this.emit('phase:start', step, phase, phaseName, instruction);
+      onPhaseStart: (step, phase, phaseName, instruction, promptParts, phaseExecutionId, iteration) => {
+        if (phaseExecutionId == null && iteration == null) {
+          this.emit('phase:start', step, phase, phaseName, instruction, promptParts);
+          return;
+        }
+        this.emit('phase:start', step, phase, phaseName, instruction, promptParts, phaseExecutionId, iteration);
       },
-      onPhaseComplete: (step, phase, phaseName, content, phaseStatus, error) => {
-        this.emit('phase:complete', step, phase, phaseName, content, phaseStatus, error);
+      onPhaseComplete: (step, phase, phaseName, content, phaseStatus, error, phaseExecutionId, iteration) => {
+        if (phaseExecutionId == null && iteration == null) {
+          this.emit('phase:complete', step, phase, phaseName, content, phaseStatus, error);
+          return;
+        }
+        this.emit('phase:complete', step, phase, phaseName, content, phaseStatus, error, phaseExecutionId, iteration);
+      },
+      onJudgeStage: (step, phase, phaseName, entry, phaseExecutionId, iteration) => {
+        if (phaseExecutionId == null && iteration == null) {
+          this.emit('phase:judge_stage', step, phase, phaseName, entry);
+          return;
+        }
+        this.emit('phase:judge_stage', step, phase, phaseName, entry, phaseExecutionId, iteration);
       },
     });
 
@@ -160,11 +190,19 @@ export class PieceEngine extends EventEmitter {
       getInteractive: () => this.options.interactive === true,
       detectRuleIndex: this.detectRuleIndex,
       callAiJudge: this.callAiJudge,
-      onPhaseStart: (step, phase, phaseName, instruction) => {
-        this.emit('phase:start', step, phase, phaseName, instruction);
+      onPhaseStart: (step, phase, phaseName, instruction, promptParts, phaseExecutionId, iteration) => {
+        if (phaseExecutionId == null && iteration == null) {
+          this.emit('phase:start', step, phase, phaseName, instruction, promptParts);
+          return;
+        }
+        this.emit('phase:start', step, phase, phaseName, instruction, promptParts, phaseExecutionId, iteration);
       },
-      onPhaseComplete: (step, phase, phaseName, content, phaseStatus, error) => {
-        this.emit('phase:complete', step, phase, phaseName, content, phaseStatus, error);
+      onPhaseComplete: (step, phase, phaseName, content, phaseStatus, error, phaseExecutionId, iteration) => {
+        if (phaseExecutionId == null && iteration == null) {
+          this.emit('phase:complete', step, phase, phaseName, content, phaseStatus, error);
+          return;
+        }
+        this.emit('phase:complete', step, phase, phaseName, content, phaseStatus, error, phaseExecutionId, iteration);
       },
     });
 
@@ -176,11 +214,19 @@ export class PieceEngine extends EventEmitter {
       getInteractive: () => this.options.interactive === true,
       detectRuleIndex: this.detectRuleIndex,
       callAiJudge: this.callAiJudge,
-      onPhaseStart: (step, phase, phaseName, instruction) => {
-        this.emit('phase:start', step, phase, phaseName, instruction);
+      onPhaseStart: (step, phase, phaseName, instruction, promptParts, phaseExecutionId, iteration) => {
+        if (phaseExecutionId == null && iteration == null) {
+          this.emit('phase:start', step, phase, phaseName, instruction, promptParts);
+          return;
+        }
+        this.emit('phase:start', step, phase, phaseName, instruction, promptParts, phaseExecutionId, iteration);
       },
-      onPhaseComplete: (step, phase, phaseName, content, phaseStatus, error) => {
-        this.emit('phase:complete', step, phase, phaseName, content, phaseStatus, error);
+      onPhaseComplete: (step, phase, phaseName, content, phaseStatus, error, phaseExecutionId, iteration) => {
+        if (phaseExecutionId == null && iteration == null) {
+          this.emit('phase:complete', step, phase, phaseName, content, phaseStatus, error);
+          return;
+        }
+        this.emit('phase:complete', step, phase, phaseName, content, phaseStatus, error, phaseExecutionId, iteration);
       },
     });
 

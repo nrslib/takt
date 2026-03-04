@@ -11,6 +11,7 @@ vi.mock('../agents/runner.js', () => ({
 }));
 
 import { runAgent } from '../agents/runner.js';
+import type { AgentResponse } from '../core/models/types.js';
 
 function createStep(fileName: string): PieceMovement {
   return {
@@ -51,6 +52,19 @@ function createContext(
   };
 }
 
+function queueRunAgentResponses(responses: AgentResponse[]): void {
+  const runAgentMock = vi.mocked(runAgent);
+  for (const response of responses) {
+    runAgentMock.mockImplementationOnce(async (persona, task, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: task,
+      });
+      return response;
+    });
+  }
+}
+
 describe('runReportPhase report history behavior', () => {
   let tmpRoot: string;
 
@@ -71,22 +85,22 @@ describe('runReportPhase report history behavior', () => {
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
     const step = createStep('05-architect-review.md');
     const ctx = createContext(reportDir);
-    const runAgentMock = vi.mocked(runAgent);
-    runAgentMock
-      .mockResolvedValueOnce({
+    queueRunAgentResponses([
+      {
         persona: 'reviewers',
         status: 'done',
         content: 'First review result',
         timestamp: new Date('2026-02-10T06:11:43Z'),
         sessionId: 'session-2',
-      })
-      .mockResolvedValueOnce({
+      },
+      {
         persona: 'reviewers',
         status: 'done',
         content: 'Second review result',
         timestamp: new Date('2026-02-10T06:14:37Z'),
         sessionId: 'session-3',
-      });
+      },
+    ]);
 
     // When
     await runReportPhase(step, 1, ctx);
@@ -113,29 +127,29 @@ describe('runReportPhase report history behavior', () => {
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
     const step = createStep('06-qa-review.md');
     const ctx = createContext(reportDir);
-    const runAgentMock = vi.mocked(runAgent);
-    runAgentMock
-      .mockResolvedValueOnce({
+    queueRunAgentResponses([
+      {
         persona: 'reviewers',
         status: 'done',
         content: 'v1',
         timestamp: new Date('2026-02-10T06:11:43Z'),
         sessionId: 'session-2',
-      })
-      .mockResolvedValueOnce({
+      },
+      {
         persona: 'reviewers',
         status: 'done',
         content: 'v2',
         timestamp: new Date('2026-02-10T06:11:43Z'),
         sessionId: 'session-3',
-      })
-      .mockResolvedValueOnce({
+      },
+      {
         persona: 'reviewers',
         status: 'done',
         content: 'v3',
         timestamp: new Date('2026-02-10T06:11:43Z'),
         sessionId: 'session-4',
-      });
+      },
+    ]);
 
     // When
     await runReportPhase(step, 1, ctx);
@@ -158,14 +172,13 @@ describe('runReportPhase report history behavior', () => {
     const ctx = createContext(reportDir, (overrides) => {
       capturedOverrides.push(overrides);
     });
-    const runAgentMock = vi.mocked(runAgent);
-    runAgentMock.mockResolvedValueOnce({
+    queueRunAgentResponses([{
       persona: 'reviewers',
       status: 'done',
       content: 'Permission-based report execution',
       timestamp: new Date('2026-02-10T06:21:17Z'),
       sessionId: 'session-2',
-    });
+    }]);
 
     // When
     await runReportPhase(step, 1, ctx);

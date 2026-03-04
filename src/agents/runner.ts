@@ -158,11 +158,18 @@ export class AgentRunner {
     const providerType = resolved.provider;
     const provider = getProvider(providerType);
 
+    const resolvedSystemPrompt = agentConfig.claudeAgent || agentConfig.claudeSkill
+      ? undefined
+      : loadAgentPrompt(agentConfig, options.cwd);
+
+    options.onPromptResolved?.({
+      systemPrompt: resolvedSystemPrompt ?? '',
+      userInstruction: task,
+    });
+
     const agent = provider.setup({
       name: agentConfig.name,
-      systemPrompt: agentConfig.claudeAgent || agentConfig.claudeSkill
-        ? undefined
-        : loadAgentPrompt(agentConfig, options.cwd),
+      systemPrompt: resolvedSystemPrompt,
       claudeAgent: agentConfig.claudeAgent,
       claudeSkill: agentConfig.claudeSkill,
     });
@@ -223,6 +230,10 @@ export class AgentRunner {
       }
 
       const systemPrompt = loadTemplate('perform_agent_system_prompt', language, templateVars);
+      options.onPromptResolved?.({
+        systemPrompt,
+        userInstruction: task,
+      });
       const agent = provider.setup({ name: personaName, systemPrompt });
       return agent.call(task, callOptions);
     }
@@ -236,11 +247,19 @@ export class AgentRunner {
         return this.runCustom(agentConfig, task, options);
       }
 
+      options.onPromptResolved?.({
+        systemPrompt: personaSpec,
+        userInstruction: task,
+      });
       const agent = provider.setup({ name: personaName, systemPrompt: personaSpec });
       return agent.call(task, callOptions);
     }
 
     // 3. No persona specified — run with instruction_template only (no system prompt)
+    options.onPromptResolved?.({
+      systemPrompt: '',
+      userInstruction: task,
+    });
     const agent = provider.setup({ name: personaName });
     return agent.call(task, callOptions);
   }

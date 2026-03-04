@@ -83,7 +83,13 @@ describe('IT: provider block reflection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     originalConfigDir = process.env.TAKT_CONFIG_DIR;
-    vi.mocked(runAgent).mockResolvedValue(makeDoneResponse());
+    vi.mocked(runAgent).mockImplementation(async (persona, task, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: task,
+      });
+      return makeDoneResponse();
+    });
   });
 
   afterEach(() => {

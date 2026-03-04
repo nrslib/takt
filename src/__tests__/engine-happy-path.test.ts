@@ -544,11 +544,16 @@ describe('PieceEngine Integration: Happy Path', () => {
 
       expect(phaseStartFn).toHaveBeenCalledWith(
         expect.objectContaining({ name: 'plan' }),
-        1, 'execute', expect.any(String)
+        1, 'execute', expect.any(String), expect.objectContaining({
+          systemPrompt: expect.any(String),
+          userInstruction: expect.any(String),
+        }),
+        undefined,
+        1,
       );
       expect(phaseCompleteFn).toHaveBeenCalledWith(
         expect.objectContaining({ name: 'plan' }),
-        1, 'execute', expect.any(String), 'done', undefined
+        1, 'execute', expect.any(String), 'done', undefined, undefined, 1,
       );
     });
 

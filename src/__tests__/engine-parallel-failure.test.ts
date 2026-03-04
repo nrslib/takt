@@ -122,13 +122,21 @@ describe('PieceEngine Integration: Parallel Movement Partial Failure', () => {
     // arch-review fails (exit code 1)
     mock.mockRejectedValueOnce(new Error('Claude Code process exited with code 1'));
     // security-review succeeds
-    mock.mockResolvedValueOnce(
-      makeResponse({ persona: 'security-review', content: 'Security review passed' }),
-    );
+    mock.mockImplementationOnce(async (persona, task, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: task,
+      });
+      return makeResponse({ persona: 'security-review', content: 'Security review passed' });
+    });
     // done step
-    mock.mockResolvedValueOnce(
-      makeResponse({ persona: 'done', content: 'Completed' }),
-    );
+    mock.mockImplementationOnce(async (persona, task, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: task,
+      });
+      return makeResponse({ persona: 'done', content: 'Completed' });
+    });
 
     mockDetectMatchedRuleSequence([
       // security-review sub-movement rule match (arch-review has no match — it failed)
@@ -179,12 +187,20 @@ describe('PieceEngine Integration: Parallel Movement Partial Failure', () => {
 
     const mock = vi.mocked(runAgent);
     mock.mockRejectedValueOnce(new Error('Session resume failed'));
-    mock.mockResolvedValueOnce(
-      makeResponse({ persona: 'security-review', content: 'OK' }),
-    );
-    mock.mockResolvedValueOnce(
-      makeResponse({ persona: 'done', content: 'Done' }),
-    );
+    mock.mockImplementationOnce(async (persona, task, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: task,
+      });
+      return makeResponse({ persona: 'security-review', content: 'OK' });
+    });
+    mock.mockImplementationOnce(async (persona, task, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: task,
+      });
+      return makeResponse({ persona: 'done', content: 'Done' });
+    });
 
     mockDetectMatchedRuleSequence([
       { index: 0, method: 'phase1_tag' },

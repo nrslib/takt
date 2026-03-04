@@ -21,6 +21,7 @@ export type {
   NdjsonPieceAbort,
   NdjsonPhaseStart,
   NdjsonPhaseComplete,
+  NdjsonPhaseJudgeStage,
   NdjsonInteractiveStart,
   NdjsonInteractiveEnd,
   NdjsonRecord,

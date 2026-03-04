@@ -6,6 +6,7 @@ import { StatusJudgmentBuilder, type StatusJudgmentContext } from './instruction
 import { getJudgmentReportFiles } from './evaluation/rule-utils.js';
 import { createLogger } from '../../shared/utils/index.js';
 import type { PhaseRunnerContext } from './phase-runner.js';
+import { buildPhaseExecutionId } from '../../shared/utils/phaseExecutionId.js';
 
 const log = createLogger('phase-runner');
 
@@ -85,8 +86,29 @@ export async function runStatusJudgmentPhase(
   const tagInstruction = new StatusJudgmentBuilder(step, {
     ...baseContext,
   }).build();
+  if (!ctx.iteration || !Number.isInteger(ctx.iteration) || ctx.iteration <= 0) {
+    throw new Error(`Status judgment requires iteration for movement "${step.name}"`);
+  }
+  const phaseExecutionId = buildPhaseExecutionId({
+    step: step.name,
+    iteration: ctx.iteration,
+    phase: 3,
+    sequence: 1,
+  });
 
-  ctx.onPhaseStart?.(step, 3, 'judge', structuredInstruction);
+  let didEmitPhaseStart = false;
+  const emitPhaseStart = (promptParts: { systemPrompt: string; userInstruction: string }): void => {
+    ctx.onPhaseStart?.(step, 3, 'judge', structuredInstruction, promptParts, phaseExecutionId, ctx.iteration);
+    didEmitPhaseStart = true;
+  };
+
+  if (step.rules.length === 1) {
+    emitPhaseStart({
+      systemPrompt: '',
+      userInstruction: structuredInstruction,
+    });
+  }
+
   try {
     const result = await judgeStatus(structuredInstruction, tagInstruction, step.rules, {
       cwd: ctx.cwd,
@@ -94,13 +116,24 @@ export async function runStatusJudgmentPhase(
       language: ctx.language,
       interactive: ctx.interactive,
       onStream: ctx.onStream,
+      onStructuredPromptResolved: (promptParts) => {
+        if (!didEmitPhaseStart) {
+          emitPhaseStart(promptParts);
+        }
+      },
+      onJudgeStage: (entry) => {
+        ctx.onJudgeStage?.(step, 3, 'judge', entry, phaseExecutionId, ctx.iteration);
+      },
     });
+    if (!didEmitPhaseStart) {
+      throw new Error(`Missing prompt parts for phase start: ${step.name}:3`);
+    }
     const tag = `[${step.name.toUpperCase()}:${result.ruleIndex + 1}]`;
-    ctx.onPhaseComplete?.(step, 3, 'judge', tag, 'done');
+    ctx.onPhaseComplete?.(step, 3, 'judge', tag, 'done', undefined, phaseExecutionId, ctx.iteration);
     return { tag, ruleIndex: result.ruleIndex, method: result.method };
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
-    ctx.onPhaseComplete?.(step, 3, 'judge', '', 'error', errorMsg);
+    ctx.onPhaseComplete?.(step, 3, 'judge', '', 'error', errorMsg, phaseExecutionId, ctx.iteration);
     throw error;
   }
 }

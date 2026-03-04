@@ -46,4 +46,8 @@ export interface RunAgentOptions {
     currentPosition: string;
   };
   outputSchema?: Record<string, unknown>;
+  onPromptResolved?: (promptParts: {
+    systemPrompt: string;
+    userInstruction: string;
+  }) => void;
 }

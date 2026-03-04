@@ -22,7 +22,7 @@ import { incrementMovementIteration } from './state-manager.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { MovementExecutor } from './MovementExecutor.js';
-import type { PhaseName } from '../types.js';
+import type { PhaseName, PhasePromptParts } from '../types.js';
 
 const log = createLogger('arpeggio-runner');
 
@@ -37,8 +37,25 @@ export interface ArpeggioRunnerDeps {
     conditions: Array<{ index: number; text: string }>,
     options: { cwd: string }
   ) => Promise<number>;
-  readonly onPhaseStart?: (step: PieceMovement, phase: 1 | 2 | 3, phaseName: PhaseName, instruction: string) => void;
-  readonly onPhaseComplete?: (step: PieceMovement, phase: 1 | 2 | 3, phaseName: PhaseName, content: string, status: string, error?: string) => void;
+  readonly onPhaseStart?: (
+    step: PieceMovement,
+    phase: 1 | 2 | 3,
+    phaseName: PhaseName,
+    instruction: string,
+    promptParts: PhasePromptParts,
+    phaseExecutionId?: string,
+    iteration?: number,
+  ) => void;
+  readonly onPhaseComplete?: (
+    step: PieceMovement,
+    phase: 1 | 2 | 3,
+    phaseName: PhaseName,
+    content: string,
+    status: string,
+    error?: string,
+    phaseExecutionId?: string,
+    iteration?: number,
+  ) => void;
 }
 
 /**
@@ -185,6 +202,8 @@ export class ArpeggioRunner {
       batches,
       template,
       step,
+      movementIteration,
+      state.iteration,
       agentOptions,
       arpeggioConfig,
       semaphore,
@@ -244,6 +263,8 @@ export class ArpeggioRunner {
     batches: readonly DataBatch[],
     template: string,
     step: PieceMovement,
+    movementIteration: number,
+    iteration: number,
     agentOptions: RunAgentOptions,
     config: ArpeggioMovementConfig,
     semaphore: Semaphore,
@@ -251,20 +272,34 @@ export class ArpeggioRunner {
     const promises = batches.map(async (batch) => {
       await semaphore.acquire();
       try {
-        this.deps.onPhaseStart?.(step, 1, 'execute', `[Arpeggio batch ${batch.batchIndex + 1}/${batch.totalBatches}]`);
+        let didEmitPhaseStart = false;
+        const phaseExecutionId = `${step.name}:1:${movementIteration}:${batch.batchIndex}`;
+        const batchAgentOptions: RunAgentOptions = {
+          ...agentOptions,
+          onPromptResolved: (promptParts) => {
+            if (didEmitPhaseStart) return;
+              this.deps.onPhaseStart?.(step, 1, 'execute', promptParts.userInstruction, promptParts, phaseExecutionId, iteration);
+            didEmitPhaseStart = true;
+          },
+        };
         const result = await executeBatchWithRetry(
           batch,
           template,
           step.persona,
-          agentOptions,
+          batchAgentOptions,
           config.maxRetries,
           config.retryDelayMs,
         );
+        if (!didEmitPhaseStart) {
+          throw new Error(`Missing prompt parts for phase start: ${step.name}:1`);
+        }
         this.deps.onPhaseComplete?.(
           step, 1, 'execute',
           result.content,
           result.success ? 'done' : 'error',
           result.error,
+          phaseExecutionId,
+          iteration,
         );
         return result;
       } finally {

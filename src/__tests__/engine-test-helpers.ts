@@ -136,7 +136,13 @@ export function buildDefaultPieceConfig(overrides: Partial<PieceConfig> = {}): P
 export function mockRunAgentSequence(responses: AgentResponse[]): void {
   const mock = vi.mocked(runAgent);
   for (const response of responses) {
-    mock.mockResolvedValueOnce(response);
+    mock.mockImplementationOnce(async (persona, task, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: task,
+      });
+      return response;
+    });
   }
 }
 

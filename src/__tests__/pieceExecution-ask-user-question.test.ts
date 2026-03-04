@@ -139,6 +139,7 @@ vi.mock('../shared/utils/index.js', () => ({
   preventSleep: vi.fn(),
   isDebugEnabled: vi.fn().mockReturnValue(false),
   writePromptLog: vi.fn(),
+  getDebugPromptsLogFile: vi.fn().mockReturnValue(null),
   generateReportDir: vi.fn().mockReturnValue('test-report-dir'),
   isValidReportDirName: vi.fn().mockReturnValue(true),
   playWarningSound: vi.fn(),

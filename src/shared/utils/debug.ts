@@ -128,6 +128,11 @@ export class DebugLogger {
     return this.debugLogFile;
   }
 
+  /** Get current debug prompts log file path */
+  getPromptsLogFile(): string | null {
+    return this.debugPromptsLogFile;
+  }
+
   /** Format log message with timestamp and level */
   private static formatLogMessage(level: string, component: string, message: string, data?: unknown): string {
     const timestamp = new Date().toISOString();
@@ -221,6 +226,10 @@ export function isDebugEnabled(): boolean {
 
 export function getDebugLogFile(): string | null {
   return DebugLogger.getInstance().getLogFile();
+}
+
+export function getDebugPromptsLogFile(): string | null {
+  return DebugLogger.getInstance().getPromptsLogFile();
 }
 
 export function debugLog(component: string, message: string, data?: unknown): void {

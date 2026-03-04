@@ -79,21 +79,42 @@ export interface NdjsonPieceAbort {
 export interface NdjsonPhaseStart {
   type: 'phase_start';
   step: string;
+  iteration?: number;
   phase: 1 | 2 | 3;
   phaseName: 'execute' | 'report' | 'judge';
+  phaseExecutionId?: string;
   timestamp: string;
   instruction?: string;
+  systemPrompt?: string;
+  userInstruction?: string;
 }
 
 export interface NdjsonPhaseComplete {
   type: 'phase_complete';
   step: string;
+  iteration?: number;
   phase: 1 | 2 | 3;
   phaseName: 'execute' | 'report' | 'judge';
+  phaseExecutionId?: string;
   status: string;
   content?: string;
   timestamp: string;
   error?: string;
+}
+
+export interface NdjsonPhaseJudgeStage {
+  type: 'phase_judge_stage';
+  step: string;
+  iteration?: number;
+  phase: 3;
+  phaseName: 'judge';
+  phaseExecutionId?: string;
+  stage: 1 | 2 | 3;
+  method: 'structured_output' | 'phase3_tag' | 'ai_judge';
+  status: 'done' | 'error' | 'skipped';
+  instruction: string;
+  response: string;
+  timestamp: string;
 }
 
 export interface NdjsonInteractiveStart {
@@ -116,6 +137,7 @@ export type NdjsonRecord =
   | NdjsonPieceAbort
   | NdjsonPhaseStart
   | NdjsonPhaseComplete
+  | NdjsonPhaseJudgeStage
   | NdjsonInteractiveStart
   | NdjsonInteractiveEnd;
 
@@ -124,7 +146,10 @@ export interface PromptLogRecord {
   movement: string;
   phase: 1 | 2 | 3;
   iteration: number;
+  phaseExecutionId?: string;
   prompt: string;
+  systemPrompt: string;
+  userInstruction: string;
   response: string;
   timestamp: string;
 }

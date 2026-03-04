@@ -10,6 +10,7 @@ vi.mock('../agents/runner.js', () => ({
 }));
 
 import { runAgent } from '../agents/runner.js';
+import type { AgentResponse } from '../core/models/types.js';
 
 function createStep(fileName: string): PieceMovement {
   return {
@@ -50,6 +51,19 @@ function createContext(reportDir: string, lastResponse = 'Phase 1 result'): Phas
   };
 }
 
+function queueRunAgentResponses(responses: AgentResponse[]): void {
+  const runAgentMock = vi.mocked(runAgent);
+  for (const response of responses) {
+    runAgentMock.mockImplementationOnce(async (persona, task, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: task,
+      });
+      return response;
+    });
+  }
+}
+
 describe('runReportPhase retry with new session', () => {
   let tmpRoot: string;
 
@@ -69,22 +83,23 @@ describe('runReportPhase retry with new session', () => {
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
     const step = createStep('02-coder.md');
     const ctx = createContext(reportDir, 'Implemented feature X');
-    const runAgentMock = vi.mocked(runAgent);
-    runAgentMock
-      .mockResolvedValueOnce({
+    queueRunAgentResponses([
+      {
         persona: 'coder',
         status: 'done',
         content: '   ',
         timestamp: new Date('2026-02-11T00:00:00Z'),
         sessionId: 'session-resume-2',
-      })
-      .mockResolvedValueOnce({
+      },
+      {
         persona: 'coder',
         status: 'done',
         content: '# Report\nRecovered output',
         timestamp: new Date('2026-02-11T00:00:01Z'),
         sessionId: 'session-fresh-1',
-      });
+      },
+    ]);
+    const runAgentMock = vi.mocked(runAgent);
 
     // When
     await runReportPhase(step, 1, ctx);
@@ -107,21 +122,22 @@ describe('runReportPhase retry with new session', () => {
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
     const step = createStep('03-review.md');
     const ctx = createContext(reportDir);
-    const runAgentMock = vi.mocked(runAgent);
-    runAgentMock
-      .mockResolvedValueOnce({
+    queueRunAgentResponses([
+      {
         persona: 'coder',
         status: 'error',
         content: 'Tool use is not allowed in this phase',
         timestamp: new Date('2026-02-11T00:01:00Z'),
         error: 'Tool use is not allowed in this phase',
-      })
-      .mockResolvedValueOnce({
+      },
+      {
         persona: 'coder',
         status: 'done',
         content: 'Recovered report',
         timestamp: new Date('2026-02-11T00:01:01Z'),
-      });
+      },
+    ]);
+    const runAgentMock = vi.mocked(runAgent);
 
     // When
     await runReportPhase(step, 1, ctx);
@@ -137,20 +153,21 @@ describe('runReportPhase retry with new session', () => {
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
     const step = createStep('04-qa.md');
     const ctx = createContext(reportDir);
-    const runAgentMock = vi.mocked(runAgent);
-    runAgentMock
-      .mockResolvedValueOnce({
+    queueRunAgentResponses([
+      {
         persona: 'coder',
         status: 'done',
         content: ' ',
         timestamp: new Date('2026-02-11T00:02:00Z'),
-      })
-      .mockResolvedValueOnce({
+      },
+      {
         persona: 'coder',
         status: 'done',
         content: '\n\n',
         timestamp: new Date('2026-02-11T00:02:01Z'),
-      });
+      },
+    ]);
+    const runAgentMock = vi.mocked(runAgent);
 
     // When / Then
     await expect(runReportPhase(step, 1, ctx)).rejects.toThrow('Report phase failed for 04-qa.md: Report output is empty');
@@ -162,14 +179,14 @@ describe('runReportPhase retry with new session', () => {
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
     const step = createStep('05-ok.md');
     const ctx = createContext(reportDir);
-    const runAgentMock = vi.mocked(runAgent);
-    runAgentMock.mockResolvedValueOnce({
+    queueRunAgentResponses([{
       persona: 'coder',
       status: 'done',
       content: 'Single-pass success',
       timestamp: new Date('2026-02-11T00:03:00Z'),
       sessionId: 'session-resume-2',
-    });
+    }]);
+    const runAgentMock = vi.mocked(runAgent);
 
     // When
     await runReportPhase(step, 1, ctx);
@@ -185,13 +202,13 @@ describe('runReportPhase retry with new session', () => {
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
     const step = createStep('06-blocked.md');
     const ctx = createContext(reportDir);
-    const runAgentMock = vi.mocked(runAgent);
-    runAgentMock.mockResolvedValueOnce({
+    queueRunAgentResponses([{
       persona: 'coder',
       status: 'blocked',
       content: 'Need permission',
       timestamp: new Date('2026-02-11T00:04:00Z'),
-    });
+    }]);
+    const runAgentMock = vi.mocked(runAgent);
 
     // When
     const result = await runReportPhase(step, 1, ctx);

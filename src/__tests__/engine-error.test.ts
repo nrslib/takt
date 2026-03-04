@@ -167,9 +167,13 @@ describe('PieceEngine Integration: Error Handling', () => {
       const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       for (let i = 0; i < 5; i++) {
-        vi.mocked(runAgent).mockResolvedValueOnce(
-          makeResponse({ content: `iteration ${i}` })
-        );
+        vi.mocked(runAgent).mockImplementationOnce(async (persona, task, options) => {
+          options?.onPromptResolved?.({
+            systemPrompt: typeof persona === 'string' ? persona : '',
+            userInstruction: task,
+          });
+          return makeResponse({ content: `iteration ${i}` });
+        });
         vi.mocked(detectMatchedRule).mockResolvedValueOnce(
           { index: 0, method: 'phase1_tag' }
         );

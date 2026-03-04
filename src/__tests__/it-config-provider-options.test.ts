@@ -103,7 +103,13 @@ describe('IT: config provider_options reflection', () => {
     delete process.env.TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS;
     invalidateGlobalConfigCache();
 
-    vi.mocked(runAgent).mockResolvedValue(makeDoneResponse());
+    vi.mocked(runAgent).mockImplementation(async (persona, task, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: task,
+      });
+      return makeDoneResponse();
+    });
   });
 
   afterEach(() => {
@@ -203,4 +209,3 @@ describe('IT: config provider_options reflection', () => {
     });
   });
 });
-

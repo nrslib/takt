@@ -216,11 +216,15 @@ describe('PieceEngine Integration: Parallel Movement Aggregation', () => {
       ['../personas/supervise.md', makeResponse({ persona: 'supervise', content: 'All passed' })],
     ]);
 
-    vi.mocked(runAgent).mockImplementation(async (persona, _task, options) => {
+    vi.mocked(runAgent).mockImplementation(async (persona, task, options) => {
       const response = responsesByPersona.get(persona ?? '');
       if (!response) {
         throw new Error(`Unexpected persona: ${persona}`);
       }
+      options.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: task,
+      });
 
       if (persona === '../personas/arch-review.md') {
         options.onStream?.({ type: 'text', data: { text: 'arch stream line\n' } });

@@ -100,6 +100,19 @@ function createEngineOptions(tmpDir: string): PieceEngineOptions {
   };
 }
 
+function mockRunAgentWithPrompt(...responses: ReturnType<typeof makeResponse>[]): void {
+  const mock = vi.mocked(runAgent);
+  for (const response of responses) {
+    mock.mockImplementationOnce(async (persona, instruction, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: instruction,
+      });
+      return response;
+    });
+  }
+}
+
 describe('ArpeggioRunner integration', () => {
   let engine: PieceEngine | undefined;
 
@@ -122,10 +135,11 @@ describe('ArpeggioRunner integration', () => {
 
     // Mock agent to return batch-specific responses
     const mockAgent = vi.mocked(runAgent);
-    mockAgent
-      .mockResolvedValueOnce(makeResponse({ content: 'Processed Alice' }))
-      .mockResolvedValueOnce(makeResponse({ content: 'Processed Bob' }))
-      .mockResolvedValueOnce(makeResponse({ content: 'Processed Charlie' }));
+    mockRunAgentWithPrompt(
+      makeResponse({ content: 'Processed Alice' }),
+      makeResponse({ content: 'Processed Bob' }),
+      makeResponse({ content: 'Processed Charlie' }),
+    );
 
     // Mock rule detection for the merged result
     vi.mocked(detectMatchedRule).mockResolvedValueOnce({
@@ -163,9 +177,10 @@ describe('ArpeggioRunner integration', () => {
     const config = buildArpeggioPieceConfig(arpeggioConfig, tmpDir);
 
     const mockAgent = vi.mocked(runAgent);
-    mockAgent
-      .mockResolvedValueOnce(makeResponse({ content: 'Batch 0 result' }))
-      .mockResolvedValueOnce(makeResponse({ content: 'Batch 1 result' }));
+    mockRunAgentWithPrompt(
+      makeResponse({ content: 'Batch 0 result' }),
+      makeResponse({ content: 'Batch 1 result' }),
+    );
 
     vi.mocked(detectMatchedRule).mockResolvedValueOnce({
       index: 0,
@@ -189,13 +204,12 @@ describe('ArpeggioRunner integration', () => {
     const config = buildArpeggioPieceConfig(arpeggioConfig, tmpDir);
 
     const mockAgent = vi.mocked(runAgent);
-    // First batch succeeds
-    mockAgent.mockResolvedValueOnce(makeResponse({ content: 'OK' }));
-    // Second batch fails twice (initial + 1 retry)
-    mockAgent.mockResolvedValueOnce(makeResponse({ status: 'error', error: 'fail1' }));
-    mockAgent.mockResolvedValueOnce(makeResponse({ status: 'error', error: 'fail2' }));
-    // Third batch succeeds
-    mockAgent.mockResolvedValueOnce(makeResponse({ content: 'OK' }));
+    mockRunAgentWithPrompt(
+      makeResponse({ content: 'OK' }),
+      makeResponse({ status: 'error', error: 'fail1' }),
+      makeResponse({ status: 'error', error: 'fail2' }),
+      makeResponse({ content: 'OK' }),
+    );
 
     engine = new PieceEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
     const state = await engine.run();
@@ -210,10 +224,11 @@ describe('ArpeggioRunner integration', () => {
     const config = buildArpeggioPieceConfig(arpeggioConfig, tmpDir);
 
     const mockAgent = vi.mocked(runAgent);
-    mockAgent
-      .mockResolvedValueOnce(makeResponse({ content: 'Result A' }))
-      .mockResolvedValueOnce(makeResponse({ content: 'Result B' }))
-      .mockResolvedValueOnce(makeResponse({ content: 'Result C' }));
+    mockRunAgentWithPrompt(
+      makeResponse({ content: 'Result A' }),
+      makeResponse({ content: 'Result B' }),
+      makeResponse({ content: 'Result C' }),
+    );
 
     vi.mocked(detectMatchedRule).mockResolvedValueOnce({
       index: 0,
@@ -234,10 +249,11 @@ describe('ArpeggioRunner integration', () => {
     const config = buildArpeggioPieceConfig(arpeggioConfig, tmpDir);
 
     const mockAgent = vi.mocked(runAgent);
-    mockAgent
-      .mockResolvedValueOnce(makeResponse({ content: 'A' }))
-      .mockResolvedValueOnce(makeResponse({ content: 'B' }))
-      .mockResolvedValueOnce(makeResponse({ content: 'C' }));
+    mockRunAgentWithPrompt(
+      makeResponse({ content: 'A' }),
+      makeResponse({ content: 'B' }),
+      makeResponse({ content: 'C' }),
+    );
 
     vi.mocked(detectMatchedRule).mockResolvedValueOnce({
       index: 0,
@@ -249,6 +265,92 @@ describe('ArpeggioRunner integration', () => {
 
     expect(state.status).toBe('completed');
     expect(mockAgent).toHaveBeenCalledTimes(3);
+  });
+
+  it('should record resolved prompt in phase:start for arpeggio batches', async () => {
+    const { tmpDir, csvPath, templatePath } = createArpeggioTestDir();
+    const arpeggioConfig = createArpeggioConfig(csvPath, templatePath, { concurrency: 2 });
+    const config = buildArpeggioPieceConfig(arpeggioConfig, tmpDir);
+    const phaseStarts: string[] = [];
+
+    mockRunAgentWithPrompt(
+      makeResponse({ content: 'A' }),
+      makeResponse({ content: 'B' }),
+      makeResponse({ content: 'C' }),
+    );
+    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+
+    engine = new PieceEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
+    engine.on('phase:start', (step, phase, phaseName, instruction) => {
+      if (step.name !== 'process' || phase !== 1 || phaseName !== 'execute') return;
+      phaseStarts.push(instruction);
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(phaseStarts.length).toBe(3);
+    expect(phaseStarts.every((instruction) => !instruction.startsWith('[Arpeggio batch'))).toBe(true);
+    expect(phaseStarts.some((instruction) => instruction.includes('Process '))).toBe(true);
+  });
+
+  it('should keep phaseExecutionId bindings correct when completion order is reversed', async () => {
+    const { tmpDir, csvPath, templatePath } = createArpeggioTestDir();
+    const arpeggioConfig = createArpeggioConfig(csvPath, templatePath, { concurrency: 2 });
+    const config = buildArpeggioPieceConfig(arpeggioConfig, tmpDir);
+    const phaseStartsByExecutionId = new Map<string, string>();
+    const phaseCompletions: Array<{ phaseExecutionId?: string; content: string }> = [];
+
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: instruction,
+      });
+      if (instruction.includes('Alice')) {
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        return makeResponse({ content: 'Result Alice' });
+      }
+      if (instruction.includes('Bob')) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return makeResponse({ content: 'Result Bob' });
+      }
+      return makeResponse({ content: 'Result Charlie' });
+    });
+    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+
+    engine = new PieceEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
+    engine.on('phase:start', (step, phase, phaseName, instruction, _promptParts, phaseExecutionId) => {
+      if (step.name !== 'process' || phase !== 1 || phaseName !== 'execute' || !phaseExecutionId) return;
+      phaseStartsByExecutionId.set(phaseExecutionId, instruction);
+    });
+    engine.on('phase:complete', (step, phase, phaseName, content, _status, _error, phaseExecutionId) => {
+      if (step.name !== 'process' || phase !== 1 || phaseName !== 'execute') return;
+      phaseCompletions.push({ phaseExecutionId, content });
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(phaseCompletions).toHaveLength(3);
+    expect(new Set(phaseCompletions.map((entry) => entry.phaseExecutionId)).size).toBe(3);
+    expect(phaseCompletions.map((entry) => entry.content).sort()).toEqual([
+      'Result Alice',
+      'Result Bob',
+      'Result Charlie',
+    ]);
+    for (const completion of phaseCompletions) {
+      const instruction = completion.phaseExecutionId
+        ? phaseStartsByExecutionId.get(completion.phaseExecutionId)
+        : undefined;
+      expect(instruction).toBeDefined();
+      if (completion.content === 'Result Alice') {
+        expect(instruction).toContain('Alice');
+      } else if (completion.content === 'Result Bob') {
+        expect(instruction).toContain('Bob');
+      } else {
+        expect(instruction).toContain('Charlie');
+      }
+    }
   });
 
 });

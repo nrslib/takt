@@ -17,7 +17,7 @@ import { createPartMovement, resolvePartErrorDetail, summarizeParts } from './te
 import { buildTeamLeaderParallelLoggerOptions, emitTeamLeaderProgressHint } from './team-leader-streaming.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { MovementExecutor } from './MovementExecutor.js';
-import type { PieceEngineOptions, PhaseName } from '../types.js';
+import type { PieceEngineOptions, PhaseName, PhasePromptParts } from '../types.js';
 
 const log = createLogger('team-leader-runner');
 const MAX_TOTAL_PARTS = 20;
@@ -34,8 +34,25 @@ export interface TeamLeaderRunnerDeps {
     conditions: Array<{ index: number; text: string }>,
     options: { cwd: string }
   ) => Promise<number>;
-  readonly onPhaseStart?: (step: PieceMovement, phase: 1 | 2 | 3, phaseName: PhaseName, instruction: string) => void;
-  readonly onPhaseComplete?: (step: PieceMovement, phase: 1 | 2 | 3, phaseName: PhaseName, content: string, status: string, error?: string) => void;
+  readonly onPhaseStart?: (
+    step: PieceMovement,
+    phase: 1 | 2 | 3,
+    phaseName: PhaseName,
+    instruction: string,
+    promptParts: PhasePromptParts,
+    phaseExecutionId?: string,
+    iteration?: number,
+  ) => void;
+  readonly onPhaseComplete?: (
+    step: PieceMovement,
+    phase: 1 | 2 | 3,
+    phaseName: PhaseName,
+    content: string,
+    status: string,
+    error?: string,
+    phaseExecutionId?: string,
+    iteration?: number,
+  ) => void;
 }
 
 export class TeamLeaderRunner {
@@ -54,6 +71,7 @@ export class TeamLeaderRunner {
       throw new Error(`Movement "${step.name}" has no teamLeader configuration`);
     }
     const teamLeaderConfig = step.teamLeader;
+    const parentIteration = state.iteration;
 
     const movementIteration = incrementMovementIteration(state, step.name);
     const leaderStep: PieceMovement = {
@@ -72,7 +90,7 @@ export class TeamLeaderRunner {
     );
 
     emitTeamLeaderProgressHint(this.deps.engineOptions, 'decompose');
-    this.deps.onPhaseStart?.(leaderStep, 1, 'execute', instruction);
+    let didEmitPhaseStart = false;
     const parts = await decomposeTask(instruction, teamLeaderConfig.maxParts, {
       cwd: this.deps.getCwd(),
       persona: leaderStep.persona,
@@ -80,14 +98,21 @@ export class TeamLeaderRunner {
       model: leaderModel,
       provider: leaderProvider,
       onStream: this.deps.engineOptions.onStream,
+      onPromptResolved: (promptParts) => {
+        this.deps.onPhaseStart?.(leaderStep, 1, 'execute', promptParts.userInstruction, promptParts, undefined, parentIteration);
+        didEmitPhaseStart = true;
+      },
     });
+    if (!didEmitPhaseStart) {
+      throw new Error(`Missing prompt parts for phase start: ${leaderStep.name}:1`);
+    }
     const leaderResponse: AgentResponse = {
       persona: leaderStep.persona ?? leaderStep.name,
       status: 'done',
       content: JSON.stringify({ parts }, null, 2),
       timestamp: new Date(),
     };
-    this.deps.onPhaseComplete?.(leaderStep, 1, 'execute', leaderResponse.content, leaderResponse.status, leaderResponse.error);
+    this.deps.onPhaseComplete?.(leaderStep, 1, 'execute', leaderResponse.content, leaderResponse.status, leaderResponse.error, undefined, parentIteration);
     log.debug('Team leader decomposed parts', {
       movement: step.name,
       partCount: parts.length,

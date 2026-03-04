@@ -8,7 +8,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve, sep } from 'node:path';
 import type { PieceMovement, Language, AgentResponse } from '../models/types.js';
-import type { PhaseName } from './types.js';
+import type { PhaseName, PhasePromptParts, JudgeStageEntry } from './types.js';
 import type { RunAgentOptions } from '../../agents/runner.js';
 import { ReportInstructionBuilder } from './instruction/ReportInstructionBuilder.js';
 import { hasTagBasedRules, getReportFiles } from './evaluation/rule-utils.js';
@@ -33,6 +33,8 @@ export interface PhaseRunnerContext {
   interactive?: boolean;
   /** Last response from Phase 1 */
   lastResponse?: string;
+  /** Parent piece iteration for sub-movement phase events */
+  iteration?: number;
   /** Get persona session ID */
   getSessionId: (persona: string) => string | undefined;
   /** Build resume options for a movement */
@@ -44,9 +46,35 @@ export interface PhaseRunnerContext {
   /** Stream callback for provider event logging (passed to judgeStatus) */
   onStream?: import('../../agents/types.js').StreamCallback;
   /** Callback for phase lifecycle logging */
-  onPhaseStart?: (step: PieceMovement, phase: 1 | 2 | 3, phaseName: PhaseName, instruction: string) => void;
+  onPhaseStart?: (
+    step: PieceMovement,
+    phase: 1 | 2 | 3,
+    phaseName: PhaseName,
+    instruction: string,
+    promptParts: PhasePromptParts,
+    phaseExecutionId?: string,
+    iteration?: number,
+  ) => void;
   /** Callback for phase completion logging */
-  onPhaseComplete?: (step: PieceMovement, phase: 1 | 2 | 3, phaseName: PhaseName, content: string, status: string, error?: string) => void;
+  onPhaseComplete?: (
+    step: PieceMovement,
+    phase: 1 | 2 | 3,
+    phaseName: PhaseName,
+    content: string,
+    status: string,
+    error?: string,
+    phaseExecutionId?: string,
+    iteration?: number,
+  ) => void;
+  /** Callback for Phase 3 internal stage logging */
+  onJudgeStage?: (
+    step: PieceMovement,
+    phase: 3,
+    phaseName: 'judge',
+    entry: JudgeStageEntry,
+    phaseExecutionId?: string,
+    iteration?: number,
+  ) => void;
 }
 
 /**
@@ -207,35 +235,45 @@ async function runSingleReportAttempt(
   options: RunAgentOptions,
   ctx: PhaseRunnerContext,
 ): Promise<ReportAttemptResult> {
-  ctx.onPhaseStart?.(step, 2, 'report', instruction);
+  let didEmitPhaseStart = false;
+  const callOptions: RunAgentOptions = {
+    ...options,
+    onPromptResolved: (promptParts) => {
+      ctx.onPhaseStart?.(step, 2, 'report', instruction, promptParts, undefined, ctx.iteration);
+      didEmitPhaseStart = true;
+    },
+  };
 
   let response: AgentResponse;
   try {
-    response = await executeAgent(step.persona, instruction, options);
+    response = await executeAgent(step.persona, instruction, callOptions);
+    if (!didEmitPhaseStart) {
+      throw new Error(`Missing prompt parts for phase start: ${step.name}:2`);
+    }
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
-    ctx.onPhaseComplete?.(step, 2, 'report', '', 'error', errorMsg);
+    ctx.onPhaseComplete?.(step, 2, 'report', '', 'error', errorMsg, undefined, ctx.iteration);
     throw error;
   }
 
   if (response.status === 'blocked') {
-    ctx.onPhaseComplete?.(step, 2, 'report', response.content, response.status);
+    ctx.onPhaseComplete?.(step, 2, 'report', response.content, response.status, undefined, undefined, ctx.iteration);
     return { kind: 'blocked', response };
   }
 
   if (response.status !== 'done') {
     const errorMessage = response.error || response.content || 'Unknown error';
-    ctx.onPhaseComplete?.(step, 2, 'report', response.content, response.status, errorMessage);
+    ctx.onPhaseComplete?.(step, 2, 'report', response.content, response.status, errorMessage, undefined, ctx.iteration);
     return { kind: 'retryable_failure', errorMessage };
   }
 
   const trimmedContent = response.content.trim();
   if (trimmedContent.length === 0) {
     const errorMessage = 'Report output is empty';
-    ctx.onPhaseComplete?.(step, 2, 'report', response.content, 'error', errorMessage);
+    ctx.onPhaseComplete?.(step, 2, 'report', response.content, 'error', errorMessage, undefined, ctx.iteration);
     return { kind: 'retryable_failure', errorMessage };
   }
 
-  ctx.onPhaseComplete?.(step, 2, 'report', response.content, response.status);
+  ctx.onPhaseComplete?.(step, 2, 'report', response.content, response.status, undefined, undefined, ctx.iteration);
   return { kind: 'success', content: trimmedContent, response };
 }

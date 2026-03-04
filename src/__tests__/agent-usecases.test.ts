@@ -43,6 +43,13 @@ function doneResponse(content: string, structuredOutput?: Record<string, unknown
 }
 
 const judgeOptions = { cwd: '/repo', movementName: 'review' };
+type JudgeStageLog = {
+  stage: 1 | 2 | 3;
+  method: 'structured_output' | 'phase3_tag' | 'ai_judge';
+  status: 'done' | 'error' | 'skipped';
+  instruction: string;
+  response: string;
+};
 
 describe('agent-usecases', () => {
   beforeEach(() => {
@@ -173,6 +180,75 @@ describe('agent-usecases', () => {
     expect(runAgent).toHaveBeenCalledTimes(3);
   });
 
+  it('judgeStatus は Phase 3 の内部ステージログを順序どおりに通知する', async () => {
+    const onJudgeStage = vi.fn();
+    // Stage 1: structured output fails
+    vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('no match'));
+    // Stage 2: tag detection succeeds
+    vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('[REVIEW:2]'));
+
+    await judgeStatus(
+      'structured',
+      'tag',
+      [
+        { condition: 'a', next: 'one' },
+        { condition: 'b', next: 'two' },
+      ],
+      {
+        ...judgeOptions,
+        onJudgeStage,
+      } as typeof judgeOptions & { onJudgeStage: (entry: JudgeStageLog) => void },
+    );
+
+    expect(onJudgeStage).toHaveBeenCalledTimes(2);
+    expect(onJudgeStage).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      stage: 1,
+      method: 'structured_output',
+      status: 'done',
+      instruction: 'structured',
+      response: 'no match',
+    }));
+    expect(onJudgeStage).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      stage: 2,
+      method: 'phase3_tag',
+      status: 'done',
+      instruction: 'tag',
+      response: '[REVIEW:2]',
+    }));
+  });
+
+  it('judgeStatus は全ステージ失敗時にも Stage 3 までログ通知する', async () => {
+    const onJudgeStage = vi.fn();
+    // Stage 1: structured output fails
+    vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('no match'));
+    // Stage 2: tag detection fails
+    vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('no tag'));
+    // Stage 3: evaluateCondition fails
+    vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('still no match'));
+    vi.mocked(detectJudgeIndex).mockReturnValue(-1);
+
+    await expect(
+      judgeStatus(
+        'structured',
+        'tag',
+        [
+          { condition: 'a', next: 'one' },
+          { condition: 'b', next: 'two' },
+        ],
+        {
+          ...judgeOptions,
+          onJudgeStage,
+        } as typeof judgeOptions & { onJudgeStage: (entry: JudgeStageLog) => void },
+      ),
+    ).rejects.toThrow('Status not found for movement "review"');
+
+    expect(onJudgeStage).toHaveBeenCalledTimes(3);
+    expect(onJudgeStage).toHaveBeenLastCalledWith(expect.objectContaining({
+      stage: 3,
+      method: 'ai_judge',
+    }));
+  });
+
   it('judgeStatus は全ての判定に失敗したらエラー', async () => {
     // Stage 1: structured output fails
     vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('no match'));
@@ -230,6 +306,27 @@ describe('agent-usecases', () => {
 
     await expect(decomposeTask('instruction', 2, { cwd: '/repo' }))
       .rejects.toThrow('Team leader failed: bad output');
+  });
+
+  it('decomposeTask は onPromptResolved を runAgent に伝搬する', async () => {
+    vi.mocked(runAgent).mockResolvedValue(doneResponse('x', {
+      parts: [
+        { id: 'p1', title: 'Part 1', instruction: 'Do 1', timeout_ms: null },
+      ],
+    }));
+    const onPromptResolved = vi.fn();
+
+    await decomposeTask('instruction', 2, {
+      cwd: '/repo',
+      persona: 'team-leader',
+      onPromptResolved,
+    });
+
+    expect(runAgent).toHaveBeenCalledWith(
+      'team-leader',
+      expect.any(String),
+      expect.objectContaining({ onPromptResolved }),
+    );
   });
 
   it('requestMoreParts は構造化出力をパースして返す', async () => {
