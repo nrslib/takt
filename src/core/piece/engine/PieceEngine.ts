@@ -446,6 +446,14 @@ export class PieceEngine extends EventEmitter {
     throw new Error(`No matching rule found for movement "${step.name}" (status: ${response.status})`);
   }
 
+  private resolveNextMovementFromDone(step: PieceMovement, response: AgentResponse): string {
+    if (response.status !== 'done') {
+      throw new Error(`Unhandled response status: ${response.status}`);
+    }
+
+    return this.resolveNextMovement(step, response);
+  }
+
   /** Build instruction (public, used by pieceExecution.ts for logging) */
   buildInstruction(step: PieceMovement, movementIteration: number): string {
     return this.movementExecutor.buildInstruction(
@@ -557,7 +565,7 @@ export class PieceEngine extends EventEmitter {
     this.emit('movement:complete', judgeMovement, response, instruction);
 
     // Resolve next movement from the judge's rules
-    const nextMovement = this.resolveNextMovement(judgeMovement, response);
+    const nextMovement = this.resolveNextMovementFromDone(judgeMovement, response);
 
     log.info('Loop monitor judge decision', {
       cycle: monitor.cycle,
@@ -658,7 +666,7 @@ export class PieceEngine extends EventEmitter {
           break;
         }
 
-        let nextMovement = this.resolveNextMovement(movement, response);
+        let nextMovement = this.resolveNextMovementFromDone(movement, response);
         log.debug('Movement transition', {
           from: movement.name,
           status: response.status,
@@ -764,7 +772,21 @@ export class PieceEngine extends EventEmitter {
 
     this.state.iteration++;
     const { response } = await this.runMovement(movement);
-    const nextMovement = this.resolveNextMovement(movement, response);
+
+    if (response.status === 'blocked') {
+      this.state.status = 'aborted';
+      this.emit('piece:abort', this.state, 'Piece blocked and no user input provided');
+      return { response, nextMovement: ABORT_MOVEMENT, isComplete: true, loopDetected: loopCheck.isLoop };
+    }
+
+    if (response.status === 'error') {
+      const detail = response.error ?? response.content;
+      this.state.status = 'aborted';
+      this.emit('piece:abort', this.state, `Movement "${movement.name}" failed: ${detail}`);
+      return { response, nextMovement: ABORT_MOVEMENT, isComplete: true, loopDetected: loopCheck.isLoop };
+    }
+
+    const nextMovement = this.resolveNextMovementFromDone(movement, response);
     const isComplete = nextMovement === COMPLETE_MOVEMENT || nextMovement === ABORT_MOVEMENT;
 
     if (response.matchedRuleIndex != null && movement.rules) {

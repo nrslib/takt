@@ -3,6 +3,7 @@
  */
 
 import type { StreamCallback } from '../claude/index.js';
+import type { Status } from '../../core/models/status.js';
 
 /** Options for mock calls */
 export interface MockCallOptions {
@@ -12,7 +13,7 @@ export interface MockCallOptions {
   /** Fixed response content (optional, defaults to generic mock response) */
   mockResponse?: string;
   /** Fixed status to return (optional, defaults to 'done') */
-  mockStatus?: 'done' | 'blocked' | 'error' | 'approved' | 'rejected' | 'improve';
+  mockStatus?: Status;
   /** Structured output payload returned as-is */
   structuredOutput?: Record<string, unknown>;
 }
@@ -22,7 +23,7 @@ export interface ScenarioEntry {
   /** Persona name to match (optional — if omitted, consumed by call order) */
   persona?: string;
   /** Response status */
-  status: 'done' | 'blocked' | 'error' | 'approved' | 'rejected' | 'improve';
+  status: Status;
   /** Response content body */
   content: string;
   /** Optional structured output payload (for outputSchema-driven flows) */

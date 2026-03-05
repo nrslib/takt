@@ -14,6 +14,7 @@ import {
   GlobalConfigSchema,
   ProjectConfigSchema,
 } from '../core/models/index.js';
+import { STATUS_VALUES } from '../core/models/status.js';
 
 describe('AgentTypeSchema', () => {
   it('should accept valid agent types', () => {
@@ -30,18 +31,25 @@ describe('AgentTypeSchema', () => {
 
 describe('StatusSchema', () => {
   it('should accept valid statuses', () => {
-    expect(StatusSchema.parse('pending')).toBe('pending');
     expect(StatusSchema.parse('done')).toBe('done');
-    expect(StatusSchema.parse('approved')).toBe('approved');
-    expect(StatusSchema.parse('rejected')).toBe('rejected');
     expect(StatusSchema.parse('blocked')).toBe('blocked');
     expect(StatusSchema.parse('error')).toBe('error');
-    expect(StatusSchema.parse('answer')).toBe('answer');
+  });
+
+  it('should align with the shared status contract values', () => {
+    expect(StatusSchema.options).toEqual([...STATUS_VALUES]);
   });
 
   it('should reject invalid statuses', () => {
     expect(() => StatusSchema.parse('unknown')).toThrow();
     expect(() => StatusSchema.parse('conditional')).toThrow();
+    expect(() => StatusSchema.parse('pending')).toThrow();
+    expect(() => StatusSchema.parse('approved')).toThrow();
+    expect(() => StatusSchema.parse('rejected')).toThrow();
+    expect(() => StatusSchema.parse('improve')).toThrow();
+    expect(() => StatusSchema.parse('cancelled')).toThrow();
+    expect(() => StatusSchema.parse('interrupted')).toThrow();
+    expect(() => StatusSchema.parse('answer')).toThrow();
   });
 });
 

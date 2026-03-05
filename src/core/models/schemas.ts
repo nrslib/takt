@@ -8,6 +8,7 @@ import { z } from 'zod/v4';
 import { DEFAULT_LANGUAGE } from '../../shared/constants.js';
 import { McpServersSchema } from './mcp-schemas.js';
 import { INTERACTIVE_MODES } from './interactive-mode.js';
+import { STATUS_VALUES } from './status.js';
 
 export { McpServerConfigSchema, McpServersSchema } from './mcp-schemas.js';
 
@@ -44,18 +45,7 @@ export const TaktConfigSchema = z.object({
 export const AgentTypeSchema = z.enum(['coder', 'architect', 'supervisor', 'custom']);
 
 /** Status schema */
-export const StatusSchema = z.enum([
-  'pending',
-  'done',
-  'blocked',
-  'error',
-  'approved',
-  'rejected',
-  'improve',
-  'cancelled',
-  'interrupted',
-  'answer',
-]);
+export const StatusSchema = z.enum(STATUS_VALUES);
 
 /** Permission mode schema for tool execution */
 export const PermissionModeSchema = z.enum(['readonly', 'edit', 'full']);

@@ -8,6 +8,7 @@
 
 import { readFileSync, existsSync } from 'node:fs';
 import type { ScenarioEntry } from './types.js';
+import { STATUS_VALUES } from '../../core/models/status.js';
 
 export type { ScenarioEntry };
 
@@ -130,11 +131,10 @@ function validateEntry(entry: unknown, index: number): ScenarioEntry {
   }
 
   // status defaults to 'done'
-  const validStatuses = ['done', 'blocked', 'error', 'approved', 'rejected', 'improve'] as const;
   const status = obj.status ?? 'done';
-  if (typeof status !== 'string' || !validStatuses.includes(status as typeof validStatuses[number])) {
+  if (typeof status !== 'string' || !STATUS_VALUES.includes(status as typeof STATUS_VALUES[number])) {
     throw new Error(
-      `Scenario entry [${index}] has invalid status "${String(status)}". Valid: ${validStatuses.join(', ')}`,
+      `Scenario entry [${index}] has invalid status "${String(status)}". Valid: ${STATUS_VALUES.join(', ')}`,
     );
   }
 

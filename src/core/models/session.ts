@@ -5,6 +5,8 @@
 import type { AgentResponse } from './response.js';
 import type { Status } from './status.js';
 
+type SessionAgentStatus = 'pending' | Status;
+
 /**
  * Session state for piece execution
  */
@@ -13,9 +15,9 @@ export interface SessionState {
   projectDir: string;
   iteration: number;
   maxMovements: number;
-  coderStatus: Status;
-  architectStatus: Status;
-  supervisorStatus: Status;
+  coderStatus: SessionAgentStatus;
+  architectStatus: SessionAgentStatus;
+  supervisorStatus: SessionAgentStatus;
   history: AgentResponse[];
   context: string;
 }

@@ -39,6 +39,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 import { PieceEngine } from '../core/piece/index.js';
 import { runAgent } from '../agents/runner.js';
+import { runReportPhase } from '../core/piece/phase-runner.js';
 import {
   makeResponse,
   makeMovement,
@@ -207,6 +208,40 @@ describe('PieceEngine Integration: Loop Monitors', () => {
       expect(state.status).toBe('completed');
       // 8 iterations: impl + ai_review*3 + ai_fix*2 + judge + reviewers
       expect(state.iteration).toBe(8);
+    });
+
+    it('should abort when judge returns non-done status', async () => {
+      const config = buildConfigWithLoopMonitor(1);
+      engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+
+      mockRunAgentSequence([
+        makeResponse({ persona: 'implement', content: 'Implementation done' }),
+        makeResponse({ persona: 'ai_review', content: 'Issues found: X' }),
+        makeResponse({ persona: 'ai_fix', content: 'Fixed X' }),
+        makeResponse({
+          persona: 'supervisor',
+          status: 'error',
+          content: 'judge failed',
+          error: 'judge interrupted',
+        }),
+      ]);
+
+      mockDetectMatchedRuleSequence([
+        { index: 0, method: 'phase1_tag' },
+        { index: 1, method: 'phase1_tag' },
+        { index: 0, method: 'phase1_tag' },
+      ]);
+
+      const abortFn = vi.fn();
+      engine.on('piece:abort', abortFn);
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('aborted');
+      expect(abortFn).toHaveBeenCalledOnce();
+      const reason = abortFn.mock.calls[0]![1] as string;
+      expect(reason).toContain('Unhandled response status: error');
+      expect(runReportPhase).not.toHaveBeenCalled();
     });
   });
 

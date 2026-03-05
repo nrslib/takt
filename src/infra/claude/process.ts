@@ -64,7 +64,6 @@ export async function executeClaudeCli(
 export class ClaudeProcess {
   private options: ClaudeSpawnOptions;
   private currentSessionId?: string;
-  private interrupted = false;
 
   constructor(options: ClaudeSpawnOptions) {
     this.options = options;
@@ -72,18 +71,13 @@ export class ClaudeProcess {
 
   /** Execute a prompt */
   async execute(prompt: string): Promise<ClaudeResult> {
-    this.interrupted = false;
     const result = await executeClaudeCli(prompt, this.options);
     this.currentSessionId = result.sessionId;
-    if (result.interrupted) {
-      this.interrupted = true;
-    }
     return result;
   }
 
   /** Interrupt the running query */
   kill(): void {
-    this.interrupted = true;
     interruptCurrentProcess();
   }
 
@@ -95,10 +89,5 @@ export class ClaudeProcess {
   /** Get session ID */
   getSessionId(): string | undefined {
     return this.currentSessionId;
-  }
-
-  /** Check if query was interrupted */
-  wasInterrupted(): boolean {
-    return this.interrupted;
   }
 }

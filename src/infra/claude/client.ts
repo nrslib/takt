@@ -25,9 +25,6 @@ export class ClaudeClient {
     result: { success: boolean; interrupted?: boolean; content: string; fullContent?: string },
   ): Status {
     if (!result.success) {
-      if (result.interrupted) {
-        return 'interrupted';
-      }
       return 'error';
     }
     return 'done';

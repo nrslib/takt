@@ -6,17 +6,10 @@
 export type AgentType = 'coder' | 'architect' | 'supervisor' | 'custom';
 
 /** Execution status for agents and pieces */
-export type Status =
-  | 'pending'
-  | 'done'
-  | 'blocked'
-  | 'error'
-  | 'approved'
-  | 'rejected'
-  | 'improve'
-  | 'cancelled'
-  | 'interrupted'
-  | 'answer';
+export const STATUS_VALUES = ['done', 'blocked', 'error'] as const;
+
+/** Execution status for agents and pieces */
+export type Status = typeof STATUS_VALUES[number];
 
 /** How a rule match was detected */
 export type RuleMatchMethod =

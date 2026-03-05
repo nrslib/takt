@@ -14,6 +14,7 @@ import {
   resetScenario,
   type ScenarioEntry,
 } from '../infra/mock/index.js';
+import { STATUS_VALUES } from '../core/models/status.js';
 
 describe('ScenarioQueue', () => {
   it('should consume entries in order when no agent specified', () => {
@@ -130,6 +131,16 @@ describe('loadScenarioFile', () => {
     expect(entries[1]).toEqual({ persona: undefined, status: 'blocked', content: 'Blocked' });
   });
 
+  it('should accept all statuses from shared status contract', () => {
+    const scenario = STATUS_VALUES.map((status, i) => ({ status, content: `entry-${i}` }));
+    const filePath = join(tempDir, 'all-statuses.json');
+    writeFileSync(filePath, JSON.stringify(scenario));
+
+    const entries = loadScenarioFile(filePath);
+
+    expect(entries.map((entry) => entry.status)).toEqual([...STATUS_VALUES]);
+  });
+
   it('should default status to "done" if omitted', () => {
     const scenario = [{ content: 'Simple response' }];
     const filePath = join(tempDir, 'scenario.json');
@@ -167,7 +178,21 @@ describe('loadScenarioFile', () => {
 
   it('should throw for invalid status', () => {
     const filePath = join(tempDir, 'bad-status.json');
-    writeFileSync(filePath, '[{"content": "test", "status": "invalid"}]');
+    writeFileSync(filePath, '[{"content": "test", "status": "approved"}]');
+
+    expect(() => loadScenarioFile(filePath)).toThrow('invalid status');
+  });
+
+  it('should throw for rejected status', () => {
+    const filePath = join(tempDir, 'rejected-status.json');
+    writeFileSync(filePath, '[{"content": "test", "status": "rejected"}]');
+
+    expect(() => loadScenarioFile(filePath)).toThrow('invalid status');
+  });
+
+  it('should throw for improve status', () => {
+    const filePath = join(tempDir, 'improve-status.json');
+    writeFileSync(filePath, '[{"content": "test", "status": "improve"}]');
 
     expect(() => loadScenarioFile(filePath)).toThrow('invalid status');
   });
