@@ -142,7 +142,6 @@ See the [Builtin Catalog](./docs/builtin-catalog.md) for all pieces and personas
 | `takt run` | Execute all pending tasks |
 | `takt list` | Manage task branches (merge, retry, instruct, delete) |
 | `takt #N` | Execute GitHub Issue as task |
-| `takt switch` | Switch active piece |
 | `takt eject` | Copy builtin pieces/facets for customization |
 | `takt repertoire add` | Install a repertoire package from GitHub |
 

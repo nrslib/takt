@@ -153,7 +153,6 @@ movements:
 | `takt run` | 積まれたタスクをまとめて実行します |
 | `takt list` | タスクブランチを管理します（マージ、リトライ、追加指示、削除） |
 | `takt #N` | GitHub Issue をタスクとして実行します |
-| `takt switch` | 使う piece を切り替えます |
 | `takt eject` | ビルトインの piece/facet をコピーしてカスタマイズできます |
 | `takt repertoire add` | GitHub から repertoire パッケージをインストールします |
 

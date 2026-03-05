@@ -1,6 +1,6 @@
 {
   "name": "takt",
-  "version": "0.29.0",
+  "version": "0.30.0",
   "description": "TAKT: TAKT Agent Koordination Topology - AI Agent Piece Orchestration",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

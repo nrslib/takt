@@ -6,6 +6,40 @@
 
 フォーマットは [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) に基づいています。
 
+## [0.30.0] - 2026-03-05
+
+### Added
+
+- トレースレポートの自動生成: piece 実行完了時に movement の遷移・フェーズ・ルール評価結果を Markdown レポートとして `.takt/runs/` に自動出力。`logging.trace: true` で全文モード、デフォルトは redacted モード (#467)
+- 使用量イベントログ: プロバイダー呼び出しごとのトークン使用量を NDJSON 形式で記録。`logging.usage_events: true` で有効化 (#470)
+- タスクリトライ時のピース再利用確認: `takt list` からリトライ・追加指示する際に、前回と同じピースを使うか選び直すかを選択可能に (#468)
+
+### Changed
+
+- BREAKING: `takt switch` コマンドを削除。ピース選択はインタラクティブモード起動時（`takt`）に毎回行う方式に変更 (#465)
+- Claude プロバイダーの `allowed_tools` をビルトインピースの YAML 定義からエグゼキューター側に移動し、ピース YAML の簡素化と保守性を向上 (#469)
+- 設定構造をリファクタリング: `globalConfig.ts` を `globalConfigCore.ts`・`globalConfigAccessors.ts`・`globalConfigResolvers.ts`・`globalConfigSerializer.ts` に分割。プロジェクトローカル設定（`.takt/config.yaml`）のフォールバック優先度を明確化 (#460)
+- observability モジュールを `core/logging/` に再編成: `providerEventLogger` と `usageEventLogger` を統一的なログ基盤として整理 (#466)
+- レビュアー全体に `coder-decisions.md` の参照を追加し、コーダーの設計判断を考慮したレビューで誤検知を抑制
+- レビュー↔修正ループの収束を支援: レポート履歴の参照、ループモニター、修正方針のガイドラインを整備
+
+### Fixed
+
+- runtime 環境の `XDG_CONFIG_HOME` 上書きで `gh` CLI の認証が失敗する問題を修正。`GH_CONFIG_DIR` を元の設定から保持するよう変更
+- `.takt/config.yaml` に `runtime.prepare` を記述するとエラーになる問題を修正（プロジェクトレベルでの runtime 設定を許可） (#464)
+- インタラクティブモードで iteration limit 到達時にプロンプトが表示されず、exceeded 状態が保持されない問題を修正
+- PR 作成失敗時のタスクステータスを `failed` から `pr_failed` に分離し、実行成功だが PR 作成のみ失敗したケースを区別可能に
+- リトライ時にタスクにピース情報が引き継がれるよう修正
+- `.gitignore` の `.takt/` ディレクトリ ignore を削除し `.takt/.gitignore` に委譲（プロジェクト設定ファイルの追跡を可能に）
+- CI: push トリガーから `takt/**` を削除し二重実行を防止
+- `cc-resolve` ワークフローで push 後に CI を自動トリガーするよう修正
+
+### Internal
+
+- deprecated config マイグレーション処理を削除
+- プロジェクトローカル設定の優先度に関する統合テストを追加
+- テストヘルパーとテストセットアップの改善
+
 ## [0.29.0] - 2026-03-04
 
 ### Added
