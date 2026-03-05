@@ -11,10 +11,12 @@ movements:
   - name: execute
     edit: true
     persona: ../agents/test-reporter.md
-    allowed_tools:
-      - Read
-      - Write
-      - Edit
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Write
+          - Edit
     required_permission_mode: edit
     output_contracts:
       report:
