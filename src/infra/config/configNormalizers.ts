@@ -41,7 +41,12 @@ export function denormalizeProviderProfiles(
 }
 
 export function normalizePieceOverrides(
-  raw: { quality_gates?: string[]; quality_gates_edit_only?: boolean; movements?: Record<string, { quality_gates?: string[] }> } | undefined,
+  raw: {
+    quality_gates?: string[];
+    quality_gates_edit_only?: boolean;
+    movements?: Record<string, { quality_gates?: string[] }>;
+    personas?: Record<string, { quality_gates?: string[] }>;
+  } | undefined,
 ): PieceOverrides | undefined {
   if (!raw) return undefined;
   return {
@@ -55,14 +60,32 @@ export function normalizePieceOverrides(
           ])
         )
       : undefined,
+    personas: raw.personas
+      ? Object.fromEntries(
+          Object.entries(raw.personas).map(([name, override]) => [
+            name,
+            { qualityGates: override.quality_gates },
+          ])
+        )
+      : undefined,
   };
 }
 
 export function denormalizePieceOverrides(
   overrides: PieceOverrides | undefined,
-): { quality_gates?: string[]; quality_gates_edit_only?: boolean; movements?: Record<string, { quality_gates?: string[] }> } | undefined {
+): {
+  quality_gates?: string[];
+  quality_gates_edit_only?: boolean;
+  movements?: Record<string, { quality_gates?: string[] }>;
+  personas?: Record<string, { quality_gates?: string[] }>;
+} | undefined {
   if (!overrides) return undefined;
-  const result: { quality_gates?: string[]; quality_gates_edit_only?: boolean; movements?: Record<string, { quality_gates?: string[] }> } = {};
+  const result: {
+    quality_gates?: string[];
+    quality_gates_edit_only?: boolean;
+    movements?: Record<string, { quality_gates?: string[] }>;
+    personas?: Record<string, { quality_gates?: string[] }>;
+  } = {};
   if (overrides.qualityGates !== undefined) {
     result.quality_gates = overrides.qualityGates;
   }
@@ -77,6 +100,17 @@ export function denormalizePieceOverrides(
           movementOverride.quality_gates = override.qualityGates;
         }
         return [name, movementOverride];
+      })
+    );
+  }
+  if (overrides.personas) {
+    result.personas = Object.fromEntries(
+      Object.entries(overrides.personas).map(([name, override]) => {
+        const personaOverride: { quality_gates?: string[] } = {};
+        if (override.qualityGates !== undefined) {
+          personaOverride.quality_gates = override.qualityGates;
+        }
+        return [name, personaOverride];
       })
     );
   }

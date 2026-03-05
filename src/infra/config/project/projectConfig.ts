@@ -51,7 +51,6 @@ type RawProviderReference = ConfigProviderReference<ProviderType>;
  */
 export function loadProjectConfig(projectDir: string): ProjectLocalConfig {
   const configPath = getProjectConfigPath(projectDir);
-
   const rawConfig: Record<string, unknown> = {};
   if (existsSync(configPath)) {
     const content = readFileSync(configPath, 'utf-8');
@@ -110,7 +109,6 @@ export function loadProjectConfig(projectDir: string): ProjectLocalConfig {
     model as string | undefined,
     provider_options as Record<string, unknown> | undefined,
   );
-
   const normalizedSubmodules = normalizeSubmodules(submodules);
   const normalizedWithSubmodules = normalizeWithSubmodules(with_submodules);
   const effectiveWithSubmodules = normalizedSubmodules === undefined ? normalizedWithSubmodules : undefined;
@@ -142,7 +140,14 @@ export function loadProjectConfig(projectDir: string): ProjectLocalConfig {
     model: normalizedProvider.model,
     providerOptions: normalizedProvider.providerOptions,
     providerProfiles: normalizeProviderProfiles(provider_profiles as Record<string, { default_permission_mode: unknown; movement_permission_overrides?: Record<string, unknown> }> | undefined),
-    pieceOverrides: normalizePieceOverrides(piece_overrides as { quality_gates?: string[]; quality_gates_edit_only?: boolean; movements?: Record<string, { quality_gates?: string[] }> } | undefined),
+    pieceOverrides: normalizePieceOverrides(
+      piece_overrides as {
+        quality_gates?: string[];
+        quality_gates_edit_only?: boolean;
+        movements?: Record<string, { quality_gates?: string[] }>;
+        personas?: Record<string, { quality_gates?: string[] }>;
+      } | undefined
+    ),
     runtime: normalizeRuntime(runtime),
   };
 }
@@ -153,11 +158,9 @@ export function loadProjectConfig(projectDir: string): ProjectLocalConfig {
 export function saveProjectConfig(projectDir: string, config: ProjectLocalConfig): void {
   const configDir = getProjectConfigDir(projectDir);
   const configPath = getProjectConfigPath(projectDir);
-
   if (!existsSync(configDir)) {
     mkdirSync(configDir, { recursive: true });
   }
-
   copyProjectResourcesToDir(configDir);
 
   const savePayload: Record<string, unknown> = { ...config };
@@ -243,6 +246,8 @@ export function saveProjectConfig(projectDir: string, config: ProjectLocalConfig
   }
   if (config.personaProviders && Object.keys(config.personaProviders).length > 0) {
     savePayload.persona_providers = config.personaProviders;
+  } else {
+    delete savePayload.persona_providers;
   }
   if (normalizedSubmodules !== undefined) {
     savePayload.submodules = normalizedSubmodules;

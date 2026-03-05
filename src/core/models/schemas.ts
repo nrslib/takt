@@ -211,6 +211,8 @@ export const PieceOverridesSchema = z.object({
   quality_gates_edit_only: z.boolean().optional(),
   /** Movement-specific quality gates overrides */
   movements: z.record(z.string(), MovementQualityGatesOverrideSchema).optional(),
+  /** Persona-specific quality gates overrides */
+  personas: z.record(z.string(), MovementQualityGatesOverrideSchema).optional(),
 }).optional();
 
 /** Rule-based transition schema (new unified format) */

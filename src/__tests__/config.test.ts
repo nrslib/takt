@@ -37,6 +37,7 @@ import {
   isVerboseMode,
   resolveConfigValue,
   invalidateGlobalConfigCache,
+  invalidateAllResolvedConfigCache,
 } from '../infra/config/index.js';
 
 let isolatedGlobalConfigDir: string;
@@ -267,6 +268,351 @@ describe('loadPiece (builtin fallback)', () => {
     const e2eTest = loadPiece('e2e-test', process.cwd());
     expect(e2eTest).not.toBeNull();
     expect(e2eTest!.name).toBe('e2e-test');
+  });
+});
+
+describe('loadPiece piece_overrides.personas integration', () => {
+  let testDir: string;
+
+  beforeEach(() => {
+    testDir = join(tmpdir(), `takt-test-${randomUUID()}`);
+    mkdirSync(join(testDir, '.takt', 'pieces'), { recursive: true });
+  });
+
+  afterEach(() => {
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+    if (existsSync(testDir)) {
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should apply persona quality gates from global then project configs', () => {
+    // Given: global/project persona overrides and piece yaml quality gates
+    writeFileSync(
+      join(isolatedGlobalConfigDir, 'config.yaml'),
+      [
+        'language: en',
+        'piece_overrides:',
+        '  personas:',
+        '    coder:',
+        '      quality_gates:',
+        '        - "Global persona gate"',
+      ].join('\n'),
+      'utf-8',
+    );
+    writeFileSync(
+      join(testDir, '.takt', 'config.yaml'),
+      [
+        'piece_overrides:',
+        '  personas:',
+        '    coder:',
+        '      quality_gates:',
+        '        - "Project persona gate"',
+      ].join('\n'),
+      'utf-8',
+    );
+    writeFileSync(
+      join(testDir, '.takt', 'pieces', 'persona-gates.yaml'),
+      [
+        'name: persona-gates',
+        'description: Persona quality gates integration test',
+        'max_movements: 3',
+        'initial_movement: implement',
+        'movements:',
+        '  - name: implement',
+        '    persona: coder',
+        '    edit: true',
+        '    quality_gates:',
+        '      - "YAML gate"',
+        '    rules:',
+        '      - condition: Done',
+        '        next: COMPLETE',
+        '    instruction: "{task}"',
+      ].join('\n'),
+      'utf-8',
+    );
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+
+    // When: loading the piece through normal config pipeline
+    const piece = loadPiece('persona-gates', testDir);
+
+    // Then: persona gates are merged in global -> project -> yaml order
+    const movement = piece?.movements.find((step) => step.name === 'implement');
+    expect(movement?.qualityGates).toEqual([
+      'Global persona gate',
+      'Project persona gate',
+      'YAML gate',
+    ]);
+  });
+
+  it('should apply persona quality gates when movement persona uses personas section alias key', () => {
+    // Given: piece persona alias key differs from mapped persona filename
+    writeFileSync(
+      join(isolatedGlobalConfigDir, 'config.yaml'),
+      [
+        'language: en',
+        'piece_overrides:',
+        '  personas:',
+        '    coder:',
+        '      quality_gates:',
+        '        - "Alias key gate"',
+      ].join('\n'),
+      'utf-8',
+    );
+    mkdirSync(join(testDir, '.takt', 'pieces', 'personas'), { recursive: true });
+    writeFileSync(join(testDir, '.takt', 'pieces', 'personas', 'implementer.md'), 'Implementer persona', 'utf-8');
+    writeFileSync(
+      join(testDir, '.takt', 'pieces', 'persona-alias-key.yaml'),
+      [
+        'name: persona-alias-key',
+        'description: personas alias key should drive override matching',
+        'max_movements: 3',
+        'initial_movement: implement',
+        'personas:',
+        '  coder: ./personas/implementer.md',
+        'movements:',
+        '  - name: implement',
+        '    persona: coder',
+        '    quality_gates:',
+        '      - "YAML gate"',
+        '    rules:',
+        '      - condition: Done',
+        '        next: COMPLETE',
+        '    instruction: "{task}"',
+      ].join('\n'),
+      'utf-8',
+    );
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+
+    // When: loading piece with section alias persona reference
+    const piece = loadPiece('persona-alias-key', testDir);
+
+    // Then: override key is alias key ("coder"), not mapped filename ("implementer")
+    const movement = piece?.movements.find((step) => step.name === 'implement');
+    expect(movement?.qualityGates).toEqual(['Alias key gate', 'YAML gate']);
+  });
+
+  it('should apply persona quality gates for path personas using basename key', () => {
+    // Given: movement persona is a path and override key uses its basename
+    writeFileSync(
+      join(isolatedGlobalConfigDir, 'config.yaml'),
+      [
+        'language: en',
+        'piece_overrides:',
+        '  personas:',
+        '    implementer:',
+        '      quality_gates:',
+        '        - "Path basename gate"',
+      ].join('\n'),
+      'utf-8',
+    );
+    mkdirSync(join(testDir, '.takt', 'pieces', 'personas'), { recursive: true });
+    writeFileSync(join(testDir, '.takt', 'pieces', 'personas', 'implementer.md'), 'Implementer persona', 'utf-8');
+    writeFileSync(
+      join(testDir, '.takt', 'pieces', 'persona-path-key.yaml'),
+      [
+        'name: persona-path-key',
+        'description: path personas should match overrides by basename',
+        'max_movements: 3',
+        'initial_movement: implement',
+        'movements:',
+        '  - name: implement',
+        '    persona: ./personas/implementer.md',
+        '    quality_gates:',
+        '      - "YAML gate"',
+        '    rules:',
+        '      - condition: Done',
+        '        next: COMPLETE',
+        '    instruction: "{task}"',
+      ].join('\n'),
+      'utf-8',
+    );
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+
+    // When: loading piece with path-like persona reference
+    const piece = loadPiece('persona-path-key', testDir);
+
+    // Then: override key resolves from path basename ("implementer")
+    const movement = piece?.movements.find((step) => step.name === 'implement');
+    expect(movement?.qualityGates).toEqual(['Path basename gate', 'YAML gate']);
+  });
+
+  it('should not apply persona quality gates when persona does not match', () => {
+    // Given: persona overrides exist only for reviewer
+    writeFileSync(
+      join(isolatedGlobalConfigDir, 'config.yaml'),
+      [
+        'language: en',
+        'piece_overrides:',
+        '  personas:',
+        '    reviewer:',
+        '      quality_gates:',
+        '        - "Reviewer gate"',
+      ].join('\n'),
+      'utf-8',
+    );
+    writeFileSync(
+      join(testDir, '.takt', 'pieces', 'persona-mismatch.yaml'),
+      [
+        'name: persona-mismatch',
+        'description: Persona mismatch integration test',
+        'max_movements: 3',
+        'initial_movement: implement',
+        'movements:',
+        '  - name: implement',
+        '    persona: coder',
+        '    quality_gates:',
+        '      - "YAML gate"',
+        '    rules:',
+        '      - condition: Done',
+        '        next: COMPLETE',
+        '    instruction: "{task}"',
+      ].join('\n'),
+      'utf-8',
+    );
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+
+    // When: loading piece with different persona
+    const piece = loadPiece('persona-mismatch', testDir);
+
+    // Then: only YAML gates are applied
+    const movement = piece?.movements.find((step) => step.name === 'implement');
+    expect(movement?.qualityGates).toEqual(['YAML gate']);
+  });
+
+  it('should not apply persona quality gates when movement has no persona', () => {
+    writeFileSync(
+      join(isolatedGlobalConfigDir, 'config.yaml'),
+      [
+        'language: en',
+        'piece_overrides:',
+        '  personas:',
+        '    reviewer:',
+        '      quality_gates:',
+        '        - "Reviewer gate"',
+      ].join('\n'),
+      'utf-8',
+    );
+    writeFileSync(
+      join(testDir, '.takt', 'pieces', 'no-persona-reviewer.yaml'),
+      [
+        'name: no-persona-reviewer',
+        'description: No persona movement should not match persona overrides',
+        'max_movements: 3',
+        'initial_movement: reviewer',
+        'movements:',
+        '  - name: reviewer',
+        '    quality_gates:',
+        '      - "YAML gate"',
+        '    rules:',
+        '      - condition: Done',
+        '        next: COMPLETE',
+        '    instruction: "{task}"',
+      ].join('\n'),
+      'utf-8',
+    );
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+
+    const piece = loadPiece('no-persona-reviewer', testDir);
+
+    const movement = piece?.movements.find((step) => step.name === 'reviewer');
+    expect(movement?.qualityGates).toEqual(['YAML gate']);
+  });
+
+  it('should not apply persona quality gates from persona_name without persona', () => {
+    writeFileSync(
+      join(isolatedGlobalConfigDir, 'config.yaml'),
+      [
+        'language: en',
+        'piece_overrides:',
+        '  personas:',
+        '    reviewer:',
+        '      quality_gates:',
+        '        - "Reviewer gate"',
+      ].join('\n'),
+      'utf-8',
+    );
+    writeFileSync(
+      join(testDir, '.takt', 'pieces', 'persona-name-only.yaml'),
+      [
+        'name: persona-name-only',
+        'description: persona_name should be display-only for persona overrides',
+        'max_movements: 3',
+        'initial_movement: review',
+        'movements:',
+        '  - name: review',
+        '    persona_name: reviewer',
+        '    quality_gates:',
+        '      - "YAML gate"',
+        '    rules:',
+        '      - condition: Done',
+        '        next: COMPLETE',
+        '    instruction: "{task}"',
+      ].join('\n'),
+      'utf-8',
+    );
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+
+    const piece = loadPiece('persona-name-only', testDir);
+
+    const movement = piece?.movements.find((step) => step.name === 'review');
+    expect(movement?.qualityGates).toEqual(['YAML gate']);
+  });
+
+  it('should throw when movement persona is an empty string', () => {
+    writeFileSync(
+      join(testDir, '.takt', 'pieces', 'empty-persona.yaml'),
+      [
+        'name: empty-persona',
+        'description: Empty persona should fail fast',
+        'max_movements: 3',
+        'initial_movement: implement',
+        'movements:',
+        '  - name: implement',
+        '    persona: "   "',
+        '    rules:',
+        '      - condition: Done',
+        '        next: COMPLETE',
+        '    instruction: "{task}"',
+      ].join('\n'),
+      'utf-8',
+    );
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+
+    expect(() => loadPiece('empty-persona', testDir)).toThrow('Movement "implement" has an empty persona value');
+  });
+
+  it('should throw when movement persona_name is an empty string', () => {
+    writeFileSync(
+      join(testDir, '.takt', 'pieces', 'empty-persona-name.yaml'),
+      [
+        'name: empty-persona-name',
+        'description: Empty persona_name should fail fast',
+        'max_movements: 3',
+        'initial_movement: implement',
+        'movements:',
+        '  - name: implement',
+        '    persona: coder',
+        '    persona_name: "   "',
+        '    rules:',
+        '      - condition: Done',
+        '        next: COMPLETE',
+        '    instruction: "{task}"',
+      ].join('\n'),
+      'utf-8',
+    );
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+
+    expect(() => loadPiece('empty-persona-name', testDir)).toThrow('Movement "implement" has an empty persona_name value');
   });
 });
 

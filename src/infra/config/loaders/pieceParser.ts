@@ -20,6 +20,7 @@ import {
   resolveRefList,
   resolveSectionMap,
   extractPersonaDisplayName,
+  isResourcePath,
   resolvePersona,
 } from './resource-resolver.js';
 
@@ -244,10 +245,22 @@ function normalizeStepFromRaw(
   const rules: PieceRule[] | undefined = step.rules?.map(normalizeRule);
 
   const rawPersona = (step as Record<string, unknown>).persona as string | undefined;
+  if (rawPersona !== undefined && rawPersona.trim().length === 0) {
+    throw new Error(`Movement "${step.name}" has an empty persona value`);
+  }
   const { personaSpec, personaPath } = resolvePersona(rawPersona, sections, pieceDir, context);
 
-  const displayName: string | undefined = (step as Record<string, unknown>).persona_name as string
-    || undefined;
+  const displayNameRaw = (step as Record<string, unknown>).persona_name as string | undefined;
+  if (displayNameRaw !== undefined && displayNameRaw.trim().length === 0) {
+    throw new Error(`Movement "${step.name}" has an empty persona_name value`);
+  }
+  const displayName = displayNameRaw || undefined;
+  const derivedPersonaName = personaSpec ? extractPersonaDisplayName(personaSpec) : undefined;
+  const resolvedPersonaDisplayName = displayName || derivedPersonaName || step.name;
+  const normalizedRawPersona = rawPersona?.trim();
+  const personaOverrideKey = normalizedRawPersona
+    ? (isResourcePath(normalizedRawPersona) ? extractPersonaDisplayName(normalizedRawPersona) : normalizedRawPersona)
+    : undefined;
 
   const policyRef = (step as Record<string, unknown>).policy as string | string[] | undefined;
   const policyContents = resolveRefList(policyRef, sections.resolvedPolicies, pieceDir, 'policies', context);
@@ -265,7 +278,7 @@ function normalizeStepFromRaw(
     description: step.description,
     persona: personaSpec,
     session: step.session,
-    personaDisplayName: displayName || (personaSpec ? extractPersonaDisplayName(personaSpec) : step.name),
+    personaDisplayName: resolvedPersonaDisplayName,
     personaPath,
     mcpServers: step.mcp_servers,
     provider: normalizedProvider.provider ?? inheritedProvider,
@@ -282,6 +295,7 @@ function normalizeStepFromRaw(
       step.name,
       step.quality_gates,
       step.edit,
+      personaOverrideKey,
       projectOverrides,
       globalOverrides,
     ),

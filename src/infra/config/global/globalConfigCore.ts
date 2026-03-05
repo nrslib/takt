@@ -140,7 +140,14 @@ export class GlobalConfigManager {
       } : undefined,
       autoFetch: parsed.auto_fetch,
       baseBranch: parsed.base_branch,
-      pieceOverrides: normalizePieceOverrides(parsed.piece_overrides as { quality_gates?: string[]; quality_gates_edit_only?: boolean; movements?: Record<string, { quality_gates?: string[] }> } | undefined),
+      pieceOverrides: normalizePieceOverrides(
+        parsed.piece_overrides as {
+          quality_gates?: string[];
+          quality_gates_edit_only?: boolean;
+          movements?: Record<string, { quality_gates?: string[] }>;
+          personas?: Record<string, { quality_gates?: string[] }>;
+        } | undefined
+      ),
     };
     validateProviderModelCompatibility(config.provider, config.model);
     this.cachedConfig = config;

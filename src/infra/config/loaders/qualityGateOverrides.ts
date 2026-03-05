@@ -17,15 +17,18 @@ import type { PieceOverrides } from '../../../core/models/persisted-global-confi
  * Merge order (gates are added in this sequence):
  * 1. Global override in global config (filtered by edit flag if qualityGatesEditOnly=true)
  * 2. Movement-specific override in global config
- * 3. Global override in project config (filtered by edit flag if qualityGatesEditOnly=true)
- * 4. Movement-specific override in project config
- * 5. Piece YAML quality_gates
+ * 3. Persona-specific override in global config
+ * 4. Global override in project config (filtered by edit flag if qualityGatesEditOnly=true)
+ * 5. Movement-specific override in project config
+ * 6. Persona-specific override in project config
+ * 7. Piece YAML quality_gates
  *
  * Merge strategy: Additive merge (all gates are combined, no overriding)
  *
  * @param movementName - Name of the movement
  * @param yamlGates - Quality gates from piece YAML
  * @param editFlag - Whether the movement has edit: true
+ * @param personaName - Persona name used by the movement
  * @param projectOverrides - Project-level piece_overrides (from .takt/config.yaml)
  * @param globalOverrides - Global-level piece_overrides (from ~/.takt/config.yaml)
  * @returns Merged quality gates array
@@ -34,9 +37,15 @@ export function applyQualityGateOverrides(
   movementName: string,
   yamlGates: string[] | undefined,
   editFlag: boolean | undefined,
+  personaName: string | undefined,
   projectOverrides: PieceOverrides | undefined,
   globalOverrides: PieceOverrides | undefined,
 ): string[] | undefined {
+  if (personaName !== undefined && personaName.trim().length === 0) {
+    throw new Error(`Invalid persona name for movement "${movementName}": empty value`);
+  }
+  const normalizedPersonaName = personaName?.trim();
+
   // Track whether yamlGates was explicitly defined (even if empty)
   const hasYamlGates = yamlGates !== undefined;
   const gates: string[] = [];
@@ -54,6 +63,14 @@ export function applyQualityGateOverrides(
     gates.push(...globalMovementGates);
   }
 
+  // Collect persona-specific gates from global config
+  const globalPersonaGates = normalizedPersonaName
+    ? globalOverrides?.personas?.[normalizedPersonaName]?.qualityGates
+    : undefined;
+  if (globalPersonaGates) {
+    gates.push(...globalPersonaGates);
+  }
+
   // Collect global gates from project config
   const projectGlobalGates = projectOverrides?.qualityGates;
   const projectEditOnly = projectOverrides?.qualityGatesEditOnly ?? false;
@@ -65,6 +82,14 @@ export function applyQualityGateOverrides(
   const projectMovementGates = projectOverrides?.movements?.[movementName]?.qualityGates;
   if (projectMovementGates) {
     gates.push(...projectMovementGates);
+  }
+
+  // Collect persona-specific gates from project config
+  const projectPersonaGates = normalizedPersonaName
+    ? projectOverrides?.personas?.[normalizedPersonaName]?.qualityGates
+    : undefined;
+  if (projectPersonaGates) {
+    gates.push(...projectPersonaGates);
   }
 
   // Add YAML gates (lowest priority)

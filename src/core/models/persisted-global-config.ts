@@ -23,6 +23,8 @@ export interface PieceOverrides {
   qualityGatesEditOnly?: boolean;
   /** Movement-specific quality gates overrides */
   movements?: Record<string, MovementQualityGatesOverride>;
+  /** Persona-specific quality gates overrides */
+  personas?: Record<string, MovementQualityGatesOverride>;
 }
 
 /** Custom agent configuration */

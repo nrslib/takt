@@ -95,6 +95,57 @@ piece_overrides:
 
       expect(reloaded.pieceOverrides?.qualityGates).toEqual(['Test 1', 'Test 2']);
     });
+
+    it('should preserve personas quality_gates in save/load cycle', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      const configContent = `
+piece_overrides:
+  personas:
+    coder:
+      quality_gates:
+        - "Project persona gate"
+`;
+      writeFileSync(configPath, configContent, 'utf-8');
+
+      const loaded = loadProjectConfig(testDir);
+      const loadedPieceOverrides = loaded.pieceOverrides as unknown as {
+        personas?: Record<string, { qualityGates?: string[] }>;
+      };
+      expect(loadedPieceOverrides.personas?.coder?.qualityGates).toEqual(['Project persona gate']);
+
+      saveProjectConfig(testDir, loaded);
+
+      const reloaded = loadProjectConfig(testDir);
+      const reloadedPieceOverrides = reloaded.pieceOverrides as unknown as {
+        personas?: Record<string, { qualityGates?: string[] }>;
+      };
+      expect(reloadedPieceOverrides.personas?.coder?.qualityGates).toEqual(['Project persona gate']);
+    });
+
+    it('should preserve empty quality_gates array in personas', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      const configContent = `
+piece_overrides:
+  personas:
+    coder:
+      quality_gates: []
+`;
+      writeFileSync(configPath, configContent, 'utf-8');
+
+      const loaded = loadProjectConfig(testDir);
+      const loadedPieceOverrides = loaded.pieceOverrides as unknown as {
+        personas?: Record<string, { qualityGates?: string[] }>;
+      };
+      expect(loadedPieceOverrides.personas?.coder?.qualityGates).toEqual([]);
+
+      saveProjectConfig(testDir, loaded);
+
+      const reloaded = loadProjectConfig(testDir);
+      const reloadedPieceOverrides = reloaded.pieceOverrides as unknown as {
+        personas?: Record<string, { qualityGates?: string[] }>;
+      };
+      expect(reloadedPieceOverrides.personas?.coder?.qualityGates).toEqual([]);
+    });
   });
 
   describe('migrated project-local fields', () => {
@@ -168,6 +219,35 @@ piece_overrides:
       expect(raw).toContain('task_poll_interval_ms: 1500');
       expect(raw).toContain('interactive_preview_movements: 1');
       expect(raw).not.toContain('verbose: false');
+    });
+
+    it('should not persist empty pipeline object on save', () => {
+      // Given: empty pipeline object
+      const config = {
+        pipeline: {},
+      } as ProjectLocalConfig;
+
+      // When: project config is saved
+      saveProjectConfig(testDir, config);
+
+      // Then: pipeline key is not serialized
+      const raw = readFileSync(join(testDir, '.takt', 'config.yaml'), 'utf-8');
+      expect(raw).not.toContain('pipeline:');
+    });
+
+    it('should not persist empty personaProviders object on save', () => {
+      // Given: empty personaProviders object
+      const config = {
+        personaProviders: {},
+      } as ProjectLocalConfig;
+
+      // When: project config is saved
+      saveProjectConfig(testDir, config);
+
+      // Then: persona_providers key is not serialized
+      const raw = readFileSync(join(testDir, '.takt', 'config.yaml'), 'utf-8');
+      expect(raw).not.toContain('persona_providers:');
+      expect(raw).not.toContain('personaProviders:');
     });
 
     it('should not persist schema-injected default values on save', () => {
