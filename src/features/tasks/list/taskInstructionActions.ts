@@ -99,7 +99,7 @@ export async function instructBranch(
   const previousRunContext = matchedSlug
     ? loadRunSessionContext(worktreePath, matchedSlug)
     : undefined;
-  const selectedPiece = await selectPieceWithOptionalReuse(projectDir, previousRunContext?.piece, lang);
+  const selectedPiece = await selectPieceWithOptionalReuse(projectDir, target.data?.piece, lang);
   if (!selectedPiece) {
     info('Cancelled');
     return false;

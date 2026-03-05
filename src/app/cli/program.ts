@@ -71,13 +71,13 @@ export async function runPreActionHook(): Promise<void> {
   const verbose = isVerboseMode(resolvedCwd);
   initDebugLogger(verbose ? { enabled: true } : undefined, resolvedCwd);
 
-  const config = resolveConfigValues(resolvedCwd, ['logLevel', 'minimalOutput']);
+  const config = resolveConfigValues(resolvedCwd, ['logging', 'minimalOutput']);
 
   if (verbose) {
     setVerboseConsole(true);
     setLogLevel('debug');
   } else {
-    setLogLevel(config.logLevel);
+    setLogLevel(config.logging?.level ?? 'info');
   }
 
   const quietMode = rootOpts.quiet === true || config.minimalOutput === true;

@@ -7,7 +7,7 @@
 
 import type { PermissionResult, PermissionUpdate } from '@anthropic-ai/claude-agent-sdk';
 import type { PieceMovement, AgentResponse, PieceState, Language, LoopMonitorConfig } from '../models/types.js';
-import type { PersonaProviderEntry } from '../models/persisted-global-config.js';
+import type { PersonaProviderEntry } from '../models/config-types.js';
 import type { ProviderPermissionProfiles } from '../models/provider-profiles.js';
 import type { MovementProviderOptions } from '../models/piece-types.js';
 

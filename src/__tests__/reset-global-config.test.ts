@@ -36,14 +36,10 @@ describe('resetGlobalConfigToTemplate', () => {
     const newConfig = readFileSync(configPath, 'utf-8');
     expect(newConfig).toContain('# TAKT グローバル設定サンプル');
     expect(newConfig).toContain('language: ja');
-    expect(newConfig).not.toContain('provider:');
-    expect(newConfig).not.toContain('runtime:');
-    expect(newConfig).not.toContain('branch_name_strategy:');
-    expect(newConfig).not.toContain('concurrency:');
-    expect(newConfig).not.toContain('minimal_output:');
-    expect(newConfig).not.toContain('task_poll_interval_ms:');
-    expect(newConfig).not.toContain('persona_providers:');
-    expect(newConfig).not.toContain('pipeline:');
+    // Template should only have 'language' as an active (non-commented) setting
+    const activeLines = newConfig.split('\n').filter(line => !line.startsWith('#') && line.trim() !== '');
+    expect(activeLines.length).toBe(1);
+    expect(activeLines[0]).toMatch(/^language: ja/);
   });
 
   it('should create config from default language template when config does not exist', () => {
@@ -57,9 +53,8 @@ describe('resetGlobalConfigToTemplate', () => {
     const newConfig = readFileSync(configPath, 'utf-8');
     expect(newConfig).toContain('# TAKT global configuration sample');
     expect(newConfig).toContain('language: en');
-    expect(newConfig).not.toContain('provider:');
-    expect(newConfig).not.toContain('runtime:');
-    expect(newConfig).not.toContain('branch_name_strategy:');
-    expect(newConfig).not.toContain('concurrency:');
+    const activeLines = newConfig.split('\n').filter(line => !line.startsWith('#') && line.trim() !== '');
+    expect(activeLines.length).toBe(1);
+    expect(activeLines[0]).toMatch(/^language: en/);
   });
 });

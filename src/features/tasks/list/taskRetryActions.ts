@@ -136,7 +136,7 @@ export async function retryFailedTask(
   const matchedSlug = findRunForTask(worktreePath, task.content);
   const runInfo = matchedSlug ? buildRetryRunInfo(worktreePath, matchedSlug) : null;
 
-  const selectedPiece = await selectPieceWithOptionalReuse(projectDir, runInfo?.piece);
+  const selectedPiece = await selectPieceWithOptionalReuse(projectDir, task.data?.piece);
   if (!selectedPiece) {
     info('Cancelled');
     return false;

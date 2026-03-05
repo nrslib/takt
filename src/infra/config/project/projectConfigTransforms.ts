@@ -1,4 +1,4 @@
-import type { AnalyticsConfig, SubmoduleSelection } from '../../../core/models/persisted-global-config.js';
+import type { AnalyticsConfig, SubmoduleSelection } from '../../../core/models/config-types.js';
 
 const SUBMODULES_ALL = 'all';
 

@@ -1,7 +1,7 @@
 import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { GlobalConfigSchema } from '../../../core/models/index.js';
-import type { PersistedGlobalConfig } from '../../../core/models/persisted-global-config.js';
+import type { GlobalConfig } from '../../../core/models/config-types.js';
 import {
   normalizeConfigProviderReference,
   type ConfigProviderReference,
@@ -9,16 +9,14 @@ import {
 import {
   normalizeProviderProfiles,
   normalizePieceOverrides,
+  normalizePipelineConfig,
+  normalizePersonaProviders,
+  normalizeRuntime,
 } from '../configNormalizers.js';
 import { getGlobalConfigPath } from '../paths.js';
 import { applyGlobalConfigEnvOverrides } from '../env/config-env-overrides.js';
 import { invalidateAllResolvedConfigCache } from '../resolutionCache.js';
 import { validateProviderModelCompatibility } from '../providerModelCompatibility.js';
-import {
-  extractMigratedProjectLocalFallback,
-  removeMigratedProjectLocalKeys,
-  type GlobalMigratedProjectLocalFallback,
-} from './globalMigratedProjectLocalFallback.js';
 import { sanitizeConfigValue } from './globalConfigLegacyMigration.js';
 import { serializeGlobalConfig } from './globalConfigSerializer.js';
 export { validateCliPath } from './cliPathValidator.js';
@@ -30,12 +28,11 @@ function getRecord(value: unknown): Record<string, unknown> | undefined {
   return value as Record<string, unknown>;
 }
 
-type ProviderType = NonNullable<PersistedGlobalConfig['provider']>;
+type ProviderType = NonNullable<GlobalConfig['provider']>;
 type RawProviderReference = ConfigProviderReference<ProviderType>;
 export class GlobalConfigManager {
   private static instance: GlobalConfigManager | null = null;
-  private cachedConfig: PersistedGlobalConfig | null = null;
-  private cachedMigratedProjectLocalFallback: GlobalMigratedProjectLocalFallback | null = null;
+  private cachedConfig: GlobalConfig | null = null;
   private constructor() {}
 
   static getInstance(): GlobalConfigManager {
@@ -51,10 +48,9 @@ export class GlobalConfigManager {
 
   invalidateCache(): void {
     this.cachedConfig = null;
-    this.cachedMigratedProjectLocalFallback = null;
   }
 
-  load(): PersistedGlobalConfig {
+  load(): GlobalConfig {
     if (this.cachedConfig !== null) {
       return this.cachedConfig;
     }
@@ -78,17 +74,14 @@ export class GlobalConfigManager {
     }
 
     applyGlobalConfigEnvOverrides(rawConfig);
-    const migratedProjectLocalFallback = extractMigratedProjectLocalFallback(rawConfig);
-    const schemaInput = { ...rawConfig };
-    removeMigratedProjectLocalKeys(schemaInput);
 
-    const parsed = GlobalConfigSchema.parse(schemaInput);
+    const parsed = GlobalConfigSchema.parse(rawConfig);
     const normalizedProvider = normalizeConfigProviderReference(
       parsed.provider as RawProviderReference,
       parsed.model,
       parsed.provider_options as Record<string, unknown> | undefined,
     );
-    const config: PersistedGlobalConfig = {
+    const config: GlobalConfig = {
       language: parsed.language,
       provider: normalizedProvider.provider,
       model: normalizedProvider.model,
@@ -126,9 +119,7 @@ export class GlobalConfigManager {
       pieceCategoriesFile: parsed.piece_categories_file,
       providerOptions: normalizedProvider.providerOptions,
       providerProfiles: normalizeProviderProfiles(parsed.provider_profiles as Record<string, { default_permission_mode: unknown; movement_permission_overrides?: Record<string, unknown> }> | undefined),
-      runtime: parsed.runtime?.prepare && parsed.runtime.prepare.length > 0
-        ? { prepare: [...new Set(parsed.runtime.prepare)] }
-        : undefined,
+      runtime: normalizeRuntime(parsed.runtime),
       preventSleep: parsed.prevent_sleep,
       notificationSound: parsed.notification_sound,
       notificationSoundEvents: parsed.notification_sound_events ? {
@@ -148,22 +139,25 @@ export class GlobalConfigManager {
           personas?: Record<string, { quality_gates?: string[] }>;
         } | undefined
       ),
+      // Project-local keys (also accepted in global config)
+      pipeline: normalizePipelineConfig(
+        parsed.pipeline as { default_branch_prefix?: string; commit_message_template?: string; pr_body_template?: string } | undefined,
+      ),
+      personaProviders: normalizePersonaProviders(
+        parsed.persona_providers as Record<string, string | { type?: string; provider?: string; model?: string }> | undefined,
+      ),
+      branchNameStrategy: parsed.branch_name_strategy as GlobalConfig['branchNameStrategy'],
+      minimalOutput: parsed.minimal_output as boolean | undefined,
+      concurrency: parsed.concurrency as number | undefined,
+      taskPollIntervalMs: parsed.task_poll_interval_ms as number | undefined,
+      interactivePreviewMovements: parsed.interactive_preview_movements as number | undefined,
     };
     validateProviderModelCompatibility(config.provider, config.model);
     this.cachedConfig = config;
-    this.cachedMigratedProjectLocalFallback = migratedProjectLocalFallback;
     return config;
   }
 
-  loadMigratedProjectLocalFallback(): GlobalMigratedProjectLocalFallback {
-    if (this.cachedMigratedProjectLocalFallback !== null) {
-      return this.cachedMigratedProjectLocalFallback;
-    }
-    this.load();
-    return this.cachedMigratedProjectLocalFallback ?? {};
-  }
-
-  save(config: PersistedGlobalConfig): void {
+  save(config: GlobalConfig): void {
     const configPath = getGlobalConfigPath();
     const raw = serializeGlobalConfig(config);
     writeFileSync(configPath, stringifyYaml(raw), 'utf-8');
@@ -177,14 +171,10 @@ export function invalidateGlobalConfigCache(): void {
   invalidateAllResolvedConfigCache();
 }
 
-export function loadGlobalConfig(): PersistedGlobalConfig {
+export function loadGlobalConfig(): GlobalConfig {
   return GlobalConfigManager.getInstance().load();
 }
 
-export function loadGlobalMigratedProjectLocalFallback(): GlobalMigratedProjectLocalFallback {
-  return GlobalConfigManager.getInstance().loadMigratedProjectLocalFallback();
-}
-
-export function saveGlobalConfig(config: PersistedGlobalConfig): void {
+export function saveGlobalConfig(config: GlobalConfig): void {
   GlobalConfigManager.getInstance().save(config);
 }

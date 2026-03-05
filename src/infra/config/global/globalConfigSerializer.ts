@@ -1,11 +1,11 @@
-import type { PersistedGlobalConfig } from '../../../core/models/persisted-global-config.js';
+import type { GlobalConfig } from '../../../core/models/config-types.js';
 import {
   denormalizeProviderProfiles,
   denormalizePieceOverrides,
   denormalizeProviderOptions,
 } from '../configNormalizers.js';
 
-export function serializeGlobalConfig(config: PersistedGlobalConfig): Record<string, unknown> {
+export function serializeGlobalConfig(config: GlobalConfig): Record<string, unknown> {
   const raw: Record<string, unknown> = {
     language: config.language,
     provider: config.provider,
@@ -146,6 +146,38 @@ export function serializeGlobalConfig(config: PersistedGlobalConfig): Record<str
   const denormalizedPieceOverrides = denormalizePieceOverrides(config.pieceOverrides);
   if (denormalizedPieceOverrides) {
     raw.piece_overrides = denormalizedPieceOverrides;
+  }
+  // Project-local keys (also accepted in global config)
+  if (config.pipeline) {
+    const pipelineRaw: Record<string, unknown> = {};
+    if (config.pipeline.defaultBranchPrefix !== undefined) {
+      pipelineRaw.default_branch_prefix = config.pipeline.defaultBranchPrefix;
+    }
+    if (config.pipeline.commitMessageTemplate !== undefined) {
+      pipelineRaw.commit_message_template = config.pipeline.commitMessageTemplate;
+    }
+    if (config.pipeline.prBodyTemplate !== undefined) {
+      pipelineRaw.pr_body_template = config.pipeline.prBodyTemplate;
+    }
+    if (Object.keys(pipelineRaw).length > 0) raw.pipeline = pipelineRaw;
+  }
+  if (config.personaProviders && Object.keys(config.personaProviders).length > 0) {
+    raw.persona_providers = config.personaProviders;
+  }
+  if (config.branchNameStrategy !== undefined) {
+    raw.branch_name_strategy = config.branchNameStrategy;
+  }
+  if (config.minimalOutput !== undefined) {
+    raw.minimal_output = config.minimalOutput;
+  }
+  if (config.concurrency !== undefined) {
+    raw.concurrency = config.concurrency;
+  }
+  if (config.taskPollIntervalMs !== undefined) {
+    raw.task_poll_interval_ms = config.taskPollIntervalMs;
+  }
+  if (config.interactivePreviewMovements !== undefined) {
+    raw.interactive_preview_movements = config.interactivePreviewMovements;
   }
   return raw;
 }

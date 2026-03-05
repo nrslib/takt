@@ -9,11 +9,6 @@ import {
   setCachedResolvedValue,
 } from './resolutionCache.js';
 import type { ConfigParameterKey, LoadedConfig } from './resolvedConfig.js';
-import { MIGRATED_PROJECT_LOCAL_DEFAULTS } from './migratedProjectLocalDefaults.js';
-import {
-  MIGRATED_PROJECT_LOCAL_CONFIG_KEYS,
-  type MigratedProjectLocalConfigKey,
-} from './migratedProjectLocalKeys.js';
 
 export type { ConfigParameterKey } from './resolvedConfig.js';
 export { invalidateResolvedConfigCache, invalidateAllResolvedConfigCache } from './resolutionCache.js';
@@ -41,9 +36,14 @@ interface ResolutionRule<K extends ConfigParameterKey> {
   mergeMode?: 'analytics';
   pieceValue?: (pieceContext: PieceContext | undefined) => LoadedConfig[K] | undefined;
 }
-type GlobalMigratedProjectLocalFallback = Partial<
-  Pick<LoadedConfig, MigratedProjectLocalConfigKey>
->;
+
+/** Default values for project-local keys that need NonNullable guarantees */
+const PROJECT_LOCAL_DEFAULTS: Partial<Record<ConfigParameterKey, unknown>> = {
+  minimalOutput: false,
+  concurrency: 1,
+  taskPollIntervalMs: 500,
+  interactivePreviewMovements: 3,
+};
 
 function loadProjectConfigCached(projectDir: string) {
   const cached = getCachedProjectConfig(projectDir);
@@ -67,15 +67,7 @@ const PROVIDER_OPTIONS_ENV_PATHS = [
   'provider_options.claude.sandbox.excluded_commands',
 ] as const;
 
-const MIGRATED_PROJECT_LOCAL_RESOLUTION_REGISTRY = Object.fromEntries(
-  MIGRATED_PROJECT_LOCAL_CONFIG_KEYS.map((key) => [key, { layers: ['local', 'global'] as const }]),
-) as Partial<{ [K in ConfigParameterKey]: ResolutionRule<K> }>;
-const MIGRATED_PROJECT_LOCAL_CONFIG_KEY_SET = new Set(
-  MIGRATED_PROJECT_LOCAL_CONFIG_KEYS as ConfigParameterKey[],
-);
-
 const RESOLUTION_REGISTRY: Partial<{ [K in ConfigParameterKey]: ResolutionRule<K> }> = {
-  logLevel: { layers: ['local', 'global'] },
   provider: {
     layers: ['local', 'piece', 'global'],
     pieceValue: (pieceContext) => pieceContext?.provider,
@@ -91,7 +83,6 @@ const RESOLUTION_REGISTRY: Partial<{ [K in ConfigParameterKey]: ResolutionRule<K
   autoPr: { layers: ['local', 'global'] },
   draftPr: { layers: ['local', 'global'] },
   analytics: { layers: ['local', 'global'], mergeMode: 'analytics' },
-  ...MIGRATED_PROJECT_LOCAL_RESOLUTION_REGISTRY,
   autoFetch: { layers: ['global'] },
   baseBranch: { layers: ['local', 'global'] },
   pieceOverrides: { layers: ['local', 'global'] },
@@ -132,16 +123,8 @@ function getLocalLayerValue<K extends ConfigParameterKey>(
 
 function getGlobalLayerValue<K extends ConfigParameterKey>(
   global: ReturnType<typeof globalConfigModule.loadGlobalConfig>,
-  globalMigratedProjectLocalFallback: GlobalMigratedProjectLocalFallback,
   key: K,
 ): LoadedConfig[K] | undefined {
-  if (key === 'logLevel' && global.logging?.level !== undefined) {
-    return global.logging.level as LoadedConfig[K];
-  }
-
-  if (isMigratedProjectLocalConfigKey(key)) {
-    return globalMigratedProjectLocalFallback[key] as LoadedConfig[K] | undefined;
-  }
   return global[key as keyof typeof global] as LoadedConfig[K] | undefined;
 }
 
@@ -149,7 +132,6 @@ function resolveByRegistry<K extends ConfigParameterKey>(
   key: K,
   project: ReturnType<typeof loadProjectConfigCached>,
   global: ReturnType<typeof globalConfigModule.loadGlobalConfig>,
-  globalMigratedProjectLocalFallback: GlobalMigratedProjectLocalFallback,
   options: ResolveConfigOptions | undefined,
 ): ResolvedConfigValue<K> {
   const rule = (RESOLUTION_REGISTRY[key] ?? DEFAULT_RULE) as ResolutionRule<K>;
@@ -167,7 +149,7 @@ function resolveByRegistry<K extends ConfigParameterKey>(
     } else if (layer === 'piece') {
       value = rule.pieceValue?.(options?.pieceContext);
     } else {
-      value = getGlobalLayerValue(global, globalMigratedProjectLocalFallback, key);
+      value = getGlobalLayerValue(global, key);
     }
     if (value !== undefined) {
       if (layer === 'local') {
@@ -183,7 +165,7 @@ function resolveByRegistry<K extends ConfigParameterKey>(
     }
   }
 
-  const fallbackDefaultValue = MIGRATED_PROJECT_LOCAL_DEFAULTS[key as keyof typeof MIGRATED_PROJECT_LOCAL_DEFAULTS];
+  const fallbackDefaultValue = PROJECT_LOCAL_DEFAULTS[key];
   if (fallbackDefaultValue !== undefined) {
     return { value: fallbackDefaultValue as LoadedConfig[K], source: 'default' };
   }
@@ -202,16 +184,7 @@ function resolveUncachedConfigValue<K extends ConfigParameterKey>(
 ): ResolvedConfigValue<K> {
   const project = loadProjectConfigCached(projectDir);
   const global = globalConfigModule.loadGlobalConfig();
-  const globalMigratedProjectLocalFallback = isMigratedProjectLocalConfigKey(key)
-    ? globalConfigModule.loadGlobalMigratedProjectLocalFallback()
-    : {};
-  return resolveByRegistry(key, project, global, globalMigratedProjectLocalFallback, options);
-}
-
-function isMigratedProjectLocalConfigKey(
-  key: ConfigParameterKey,
-): key is MigratedProjectLocalConfigKey {
-  return MIGRATED_PROJECT_LOCAL_CONFIG_KEY_SET.has(key);
+  return resolveByRegistry(key, project, global, options);
 }
 
 export function resolveConfigValueWithSource<K extends ConfigParameterKey>(
@@ -249,19 +222,10 @@ export function resolveConfigValues<K extends ConfigParameterKey>(
   return result;
 }
 
-export function isVerboseShortcutEnabled(
+export function isDebugLoggingEnabled(
   projectDir: string,
   options?: ResolveConfigOptions,
 ): boolean {
-  const verbose = resolveConfigValue(projectDir, 'verbose', options);
-  if (verbose === true) {
-    return true;
-  }
-
   const logging = resolveConfigValue(projectDir, 'logging', options);
-  if (logging?.debug === true || logging?.trace === true) {
-    return true;
-  }
-
-  return resolveConfigValue(projectDir, 'logLevel', options) === 'debug';
+  return logging?.debug === true || logging?.trace === true || logging?.level === 'debug';
 }

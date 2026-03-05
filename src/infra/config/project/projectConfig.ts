@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { parse, stringify } from 'yaml';
 import { ProjectConfigSchema } from '../../../core/models/index.js';
 import { copyProjectResourcesToDir } from '../../resources/index.js';
-import type { ProjectLocalConfig } from '../types.js';
+import type { ProjectConfig } from '../types.js';
 import { applyProjectConfigEnvOverrides } from '../env/config-env-overrides.js';
 import {
   normalizeConfigProviderReference,
@@ -19,8 +19,6 @@ import {
   normalizeRuntime,
 } from '../configNormalizers.js';
 import { invalidateResolvedConfigCache } from '../resolutionCache.js';
-import { MIGRATED_PROJECT_LOCAL_DEFAULTS } from '../migratedProjectLocalDefaults.js';
-import type { MigratedProjectLocalConfigKey } from '../migratedProjectLocalKeys.js';
 import { getProjectConfigDir, getProjectConfigPath } from './projectConfigPaths.js';
 import {
   normalizeSubmodules,
@@ -30,26 +28,15 @@ import {
   formatIssuePath,
 } from './projectConfigTransforms.js';
 
-export type { ProjectLocalConfig } from '../types.js';
+export type { ProjectConfig as ProjectLocalConfig } from '../types.js';
 
-type Assert<T extends true> = T;
-type IsNever<T> = [T] extends [never] ? true : false;
-
-/**
- * Compile-time guard:
- * migrated fields must be owned by ProjectLocalConfig.
- */
-const projectLocalConfigMigratedFieldGuard:
-  Assert<IsNever<Exclude<MigratedProjectLocalConfigKey, keyof ProjectLocalConfig>>> = true;
-void projectLocalConfigMigratedFieldGuard;
-
-type ProviderType = NonNullable<ProjectLocalConfig['provider']>;
+type ProviderType = NonNullable<ProjectConfig['provider']>;
 type RawProviderReference = ConfigProviderReference<ProviderType>;
 
 /**
  * Load project configuration from .takt/config.yaml
  */
-export function loadProjectConfig(projectDir: string): ProjectLocalConfig {
+export function loadProjectConfig(projectDir: string): ProjectConfig {
   const configPath = getProjectConfigPath(projectDir);
   const rawConfig: Record<string, unknown> = {};
   if (existsSync(configPath)) {
@@ -91,10 +78,8 @@ export function loadProjectConfig(projectDir: string): ProjectLocalConfig {
     provider_options,
     provider_profiles,
     analytics,
-    log_level,
     pipeline,
     persona_providers,
-    verbose,
     branch_name_strategy,
     minimal_output,
     concurrency,
@@ -102,7 +87,6 @@ export function loadProjectConfig(projectDir: string): ProjectLocalConfig {
     interactive_preview_movements,
     piece_overrides,
     runtime,
-    ...rest
   } = parsedConfig;
   const normalizedProvider = normalizeConfigProviderReference(
     provider as RawProviderReference,
@@ -115,21 +99,18 @@ export function loadProjectConfig(projectDir: string): ProjectLocalConfig {
   const normalizedPipeline = normalizePipelineConfig(
     pipeline as { default_branch_prefix?: string; commit_message_template?: string; pr_body_template?: string } | undefined,
   );
-  const personaProviders = normalizePersonaProviders(
+  const normalizedPersonaProviders = normalizePersonaProviders(
     persona_providers as Record<string, string | { type?: string; provider?: string; model?: string }> | undefined,
   );
 
   return {
-    ...(rest as ProjectLocalConfig),
-    logLevel: log_level as ProjectLocalConfig['logLevel'],
     pipeline: normalizedPipeline,
-    personaProviders,
-    branchNameStrategy: branch_name_strategy as ProjectLocalConfig['branchNameStrategy'],
+    personaProviders: normalizedPersonaProviders,
+    branchNameStrategy: branch_name_strategy as ProjectConfig['branchNameStrategy'],
     minimalOutput: minimal_output as boolean | undefined,
     concurrency: concurrency as number | undefined,
     taskPollIntervalMs: task_poll_interval_ms as number | undefined,
     interactivePreviewMovements: interactive_preview_movements as number | undefined,
-    verbose: verbose as boolean | undefined,
     autoPr: auto_pr as boolean | undefined,
     draftPr: draft_pr as boolean | undefined,
     baseBranch: base_branch as string | undefined,
@@ -155,7 +136,7 @@ export function loadProjectConfig(projectDir: string): ProjectLocalConfig {
 /**
  * Save project configuration to .takt/config.yaml
  */
-export function saveProjectConfig(projectDir: string, config: ProjectLocalConfig): void {
+export function saveProjectConfig(projectDir: string, config: ProjectConfig): void {
   const configDir = getProjectConfigDir(projectDir);
   const configPath = getProjectConfigPath(projectDir);
   if (!existsSync(configDir)) {
@@ -187,49 +168,15 @@ export function saveProjectConfig(projectDir: string, config: ProjectLocalConfig
   }
   delete savePayload.providerProfiles;
   delete savePayload.providerOptions;
-  delete savePayload.concurrency;
-  delete savePayload.verbose;
 
   if (config.autoPr !== undefined) savePayload.auto_pr = config.autoPr;
   if (config.draftPr !== undefined) savePayload.draft_pr = config.draftPr;
   if (config.baseBranch !== undefined) savePayload.base_branch = config.baseBranch;
-  if (
-    config.logLevel !== undefined
-    && config.logLevel !== MIGRATED_PROJECT_LOCAL_DEFAULTS.logLevel
-  ) {
-    savePayload.log_level = config.logLevel;
-  }
   if (config.branchNameStrategy !== undefined) savePayload.branch_name_strategy = config.branchNameStrategy;
-  if (
-    config.minimalOutput !== undefined
-    && config.minimalOutput !== MIGRATED_PROJECT_LOCAL_DEFAULTS.minimalOutput
-  ) {
-    savePayload.minimal_output = config.minimalOutput;
-  }
-  if (
-    config.taskPollIntervalMs !== undefined
-    && config.taskPollIntervalMs !== MIGRATED_PROJECT_LOCAL_DEFAULTS.taskPollIntervalMs
-  ) {
-    savePayload.task_poll_interval_ms = config.taskPollIntervalMs;
-  }
-  if (
-    config.interactivePreviewMovements !== undefined
-    && config.interactivePreviewMovements !== MIGRATED_PROJECT_LOCAL_DEFAULTS.interactivePreviewMovements
-  ) {
-    savePayload.interactive_preview_movements = config.interactivePreviewMovements;
-  }
-  if (
-    config.concurrency !== undefined
-    && config.concurrency !== MIGRATED_PROJECT_LOCAL_DEFAULTS.concurrency
-  ) {
-    savePayload.concurrency = config.concurrency;
-  }
-  if (
-    config.verbose !== undefined
-    && config.verbose !== MIGRATED_PROJECT_LOCAL_DEFAULTS.verbose
-  ) {
-    savePayload.verbose = config.verbose;
-  }
+  if (config.minimalOutput !== undefined) savePayload.minimal_output = config.minimalOutput;
+  if (config.taskPollIntervalMs !== undefined) savePayload.task_poll_interval_ms = config.taskPollIntervalMs;
+  if (config.interactivePreviewMovements !== undefined) savePayload.interactive_preview_movements = config.interactivePreviewMovements;
+  if (config.concurrency !== undefined) savePayload.concurrency = config.concurrency;
   delete savePayload.pipeline;
   if (config.pipeline) {
     const pipelineRaw: Record<string, unknown> = {};
@@ -264,7 +211,6 @@ export function saveProjectConfig(projectDir: string, config: ProjectLocalConfig
   delete savePayload.draftPr;
   delete savePayload.baseBranch;
   delete savePayload.withSubmodules;
-  delete savePayload.logLevel;
   delete savePayload.branchNameStrategy;
   delete savePayload.minimalOutput;
   delete savePayload.taskPollIntervalMs;
@@ -289,10 +235,10 @@ export function saveProjectConfig(projectDir: string, config: ProjectLocalConfig
   invalidateResolvedConfigCache(projectDir);
 }
 
-export function updateProjectConfig<K extends keyof ProjectLocalConfig>(
+export function updateProjectConfig<K extends keyof ProjectConfig>(
   projectDir: string,
   key: K,
-  value: ProjectLocalConfig[K]
+  value: ProjectConfig[K]
 ): void {
   const config = loadProjectConfig(projectDir);
   config[key] = value;

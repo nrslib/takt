@@ -3,7 +3,7 @@
  */
 
 import type { Language } from '../../../core/models/index.js';
-import type { PersonaProviderEntry } from '../../../core/models/persisted-global-config.js';
+import type { PersonaProviderEntry } from '../../../core/models/config-types.js';
 import type { ProviderPermissionProfiles } from '../../../core/models/provider-profiles.js';
 import type { MovementProviderOptions } from '../../../core/models/piece-types.js';
 import type { ProviderType } from '../../../infra/providers/index.js';

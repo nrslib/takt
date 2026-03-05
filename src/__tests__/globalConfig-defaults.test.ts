@@ -24,7 +24,6 @@ const {
   loadGlobalConfig,
   saveGlobalConfig,
   invalidateGlobalConfigCache,
-  loadGlobalMigratedProjectLocalFallback,
 } = await import('../infra/config/global/globalConfig.js');
 const { getGlobalConfigPath } = await import('../infra/config/paths.js');
 
@@ -48,28 +47,25 @@ describe('loadGlobalConfig', () => {
     expect(config.model).toBeUndefined();
   });
 
-  it('should not expose migrated project-local fields from global config', () => {
-    const config = loadGlobalConfig() as Record<string, unknown>;
+  it('should not have project-local fields set by default', () => {
+    const config = loadGlobalConfig();
 
-    expect(config).not.toHaveProperty('logLevel');
-    expect(config).not.toHaveProperty('pipeline');
-    expect(config).not.toHaveProperty('personaProviders');
-    expect(config).not.toHaveProperty('branchNameStrategy');
-    expect(config).not.toHaveProperty('minimalOutput');
-    expect(config).not.toHaveProperty('concurrency');
-    expect(config).not.toHaveProperty('taskPollIntervalMs');
-    expect(config).not.toHaveProperty('interactivePreviewMovements');
-    expect(config).not.toHaveProperty('verbose');
+    expect(config.pipeline).toBeUndefined();
+    expect(config.personaProviders).toBeUndefined();
+    expect(config.branchNameStrategy).toBeUndefined();
+    expect(config.minimalOutput).toBeUndefined();
+    expect(config.concurrency).toBeUndefined();
+    expect(config.taskPollIntervalMs).toBeUndefined();
+    expect(config.interactivePreviewMovements).toBeUndefined();
   });
 
-  it('should accept migrated project-local keys in global config.yaml for resolver fallback', () => {
+  it('should accept project-local keys in global config.yaml', () => {
     const taktDir = join(testHomeDir, '.takt');
     mkdirSync(taktDir, { recursive: true });
     writeFileSync(
       getGlobalConfigPath(),
       [
         'language: en',
-        'log_level: debug',
         'pipeline:',
         '  default_branch_prefix: "global/"',
         'persona_providers:',
@@ -80,31 +76,27 @@ describe('loadGlobalConfig', () => {
         'concurrency: 3',
         'task_poll_interval_ms: 1000',
         'interactive_preview_movements: 2',
-        'verbose: true',
       ].join('\n'),
       'utf-8',
     );
 
     expect(() => loadGlobalConfig()).not.toThrow();
-    const config = loadGlobalConfig() as Record<string, unknown>;
-    expect(config).not.toHaveProperty('logLevel');
-    expect(config).not.toHaveProperty('pipeline');
-    expect(config).not.toHaveProperty('personaProviders');
-    expect(config).not.toHaveProperty('branchNameStrategy');
-    expect(config).not.toHaveProperty('minimalOutput');
-    expect(config).not.toHaveProperty('concurrency');
-    expect(config).not.toHaveProperty('taskPollIntervalMs');
-    expect(config).not.toHaveProperty('interactivePreviewMovements');
-    expect(config).not.toHaveProperty('verbose');
+    const config = loadGlobalConfig();
+    expect(config.pipeline).toEqual({ defaultBranchPrefix: 'global/' });
+    expect(config.personaProviders).toEqual({ coder: { provider: 'codex' } });
+    expect(config.branchNameStrategy).toBe('ai');
+    expect(config.minimalOutput).toBe(true);
+    expect(config.concurrency).toBe(3);
+    expect(config.taskPollIntervalMs).toBe(1000);
+    expect(config.interactivePreviewMovements).toBe(2);
   });
 
-  it('should not persist migrated project-local keys when saving global config', () => {
+  it('should persist project-local keys when saving global config', () => {
     const taktDir = join(testHomeDir, '.takt');
     mkdirSync(taktDir, { recursive: true });
     writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
 
-    const config = loadGlobalConfig() as Record<string, unknown>;
-    config.logLevel = 'debug';
+    const config = loadGlobalConfig();
     config.pipeline = { defaultBranchPrefix: 'global/' };
     config.personaProviders = { coder: { provider: 'codex' } };
     config.branchNameStrategy = 'ai';
@@ -112,19 +104,16 @@ describe('loadGlobalConfig', () => {
     config.concurrency = 4;
     config.taskPollIntervalMs = 1200;
     config.interactivePreviewMovements = 1;
-    config.verbose = true;
-    saveGlobalConfig(config as Parameters<typeof saveGlobalConfig>[0]);
+    saveGlobalConfig(config);
 
     const raw = readFileSync(getGlobalConfigPath(), 'utf-8');
-    expect(raw).not.toContain('log_level:');
-    expect(raw).not.toContain('pipeline:');
-    expect(raw).not.toContain('persona_providers:');
-    expect(raw).not.toContain('branch_name_strategy:');
-    expect(raw).not.toContain('minimal_output:');
-    expect(raw).not.toContain('concurrency:');
-    expect(raw).not.toContain('task_poll_interval_ms:');
-    expect(raw).not.toContain('interactive_preview_movements:');
-    expect(raw).not.toContain('verbose:');
+    expect(raw).toContain('pipeline:');
+    expect(raw).toContain('persona_providers:');
+    expect(raw).toContain('branch_name_strategy:');
+    expect(raw).toContain('minimal_output:');
+    expect(raw).toContain('concurrency:');
+    expect(raw).toContain('task_poll_interval_ms:');
+    expect(raw).toContain('interactive_preview_movements:');
   });
 
   it('should return the same cached object on subsequent calls', () => {
@@ -264,7 +253,7 @@ describe('loadGlobalConfig', () => {
     }
   });
 
-  it('should accept pipeline in global config for migrated fallback', () => {
+  it('should accept pipeline in global config', () => {
     const taktDir = join(testHomeDir, '.takt');
     mkdirSync(taktDir, { recursive: true });
     writeFileSync(
@@ -279,18 +268,20 @@ describe('loadGlobalConfig', () => {
     );
 
     expect(() => loadGlobalConfig()).not.toThrow();
-    const config = loadGlobalConfig() as Record<string, unknown>;
-    expect(config).not.toHaveProperty('pipeline');
+    const config = loadGlobalConfig();
+    expect(config.pipeline).toEqual({
+      defaultBranchPrefix: 'feat/',
+      commitMessageTemplate: 'fix: {title} (#{issue})',
+    });
   });
 
   it('should save and reload pipeline config', () => {
     const taktDir = join(testHomeDir, '.takt');
     mkdirSync(taktDir, { recursive: true });
-    // Create minimal config first
     writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
 
     const config = loadGlobalConfig();
-    (config as Record<string, unknown>).pipeline = {
+    config.pipeline = {
       defaultBranchPrefix: 'takt/',
       commitMessageTemplate: 'feat: {title} (#{issue})',
     };
@@ -298,7 +289,10 @@ describe('loadGlobalConfig', () => {
     invalidateGlobalConfigCache();
 
     const reloaded = loadGlobalConfig();
-    expect((reloaded as Record<string, unknown>).pipeline).toBeUndefined();
+    expect(reloaded.pipeline).toEqual({
+      defaultBranchPrefix: 'takt/',
+      commitMessageTemplate: 'feat: {title} (#{issue})',
+    });
   });
 
   it('should load auto_pr config from config.yaml', () => {
@@ -631,7 +625,7 @@ describe('loadGlobalConfig', () => {
     });
   });
 
-  it('should accept interactive_preview_movements in global config for migrated fallback', () => {
+  it('should accept interactive_preview_movements in global config', () => {
     const taktDir = join(testHomeDir, '.takt');
     mkdirSync(taktDir, { recursive: true });
     writeFileSync(
@@ -641,8 +635,8 @@ describe('loadGlobalConfig', () => {
     );
 
     expect(() => loadGlobalConfig()).not.toThrow();
-    const config = loadGlobalConfig() as Record<string, unknown>;
-    expect(config).not.toHaveProperty('interactivePreviewMovements');
+    const config = loadGlobalConfig();
+    expect(config.interactivePreviewMovements).toBe(5);
   });
 
   it('should save and reload interactive_preview_movements config', () => {
@@ -651,24 +645,24 @@ describe('loadGlobalConfig', () => {
     writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
 
     const config = loadGlobalConfig();
-    (config as Record<string, unknown>).interactivePreviewMovements = 7;
+    config.interactivePreviewMovements = 7;
     saveGlobalConfig(config);
     invalidateGlobalConfigCache();
 
     const reloaded = loadGlobalConfig();
-    expect((reloaded as Record<string, unknown>).interactivePreviewMovements).toBeUndefined();
+    expect(reloaded.interactivePreviewMovements).toBe(7);
   });
 
-  it('should default interactive_preview_movements to 3', () => {
+  it('should default interactive_preview_movements to undefined', () => {
     const taktDir = join(testHomeDir, '.takt');
     mkdirSync(taktDir, { recursive: true });
     writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
 
     const config = loadGlobalConfig();
-    expect((config as Record<string, unknown>).interactivePreviewMovements).toBeUndefined();
+    expect(config.interactivePreviewMovements).toBeUndefined();
   });
 
-  it('should accept interactive_preview_movements=0 in global config for migrated fallback', () => {
+  it('should accept interactive_preview_movements=0 in global config', () => {
     const taktDir = join(testHomeDir, '.takt');
     mkdirSync(taktDir, { recursive: true });
     writeFileSync(
@@ -678,8 +672,8 @@ describe('loadGlobalConfig', () => {
     );
 
     expect(() => loadGlobalConfig()).not.toThrow();
-    const config = loadGlobalConfig() as Record<string, unknown>;
-    expect(config).not.toHaveProperty('interactivePreviewMovements');
+    const config = loadGlobalConfig();
+    expect(config.interactivePreviewMovements).toBe(0);
   });
 
   describe('persona_providers', () => {

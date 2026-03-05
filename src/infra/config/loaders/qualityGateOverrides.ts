@@ -9,7 +9,7 @@
  * Merge strategy: Additive (config gates + YAML gates)
  */
 
-import type { PieceOverrides } from '../../../core/models/persisted-global-config.js';
+import type { PieceOverrides } from '../../../core/models/config-types.js';
 
 /**
  * Apply quality gate overrides to a movement.

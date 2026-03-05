@@ -149,10 +149,9 @@ piece_overrides:
   });
 
   describe('migrated project-local fields', () => {
-    it('should load migrated fields from project config yaml', () => {
+    it('should load project-local fields from project config yaml', () => {
       const configPath = join(testDir, '.takt', 'config.yaml');
       const configContent = [
-        'log_level: debug',
         'pipeline:',
         '  default_branch_prefix: "proj/"',
         '  commit_message_template: "feat: {title} (#{issue})"',
@@ -165,12 +164,10 @@ piece_overrides:
         'concurrency: 3',
         'task_poll_interval_ms: 1200',
         'interactive_preview_movements: 2',
-        'verbose: true',
       ].join('\n');
       writeFileSync(configPath, configContent, 'utf-8');
 
-      const loaded = loadProjectConfig(testDir) as Record<string, unknown>;
-      expect(loaded.logLevel).toBe('debug');
+      const loaded = loadProjectConfig(testDir);
       expect(loaded.pipeline).toEqual({
         defaultBranchPrefix: 'proj/',
         commitMessageTemplate: 'feat: {title} (#{issue})',
@@ -183,12 +180,10 @@ piece_overrides:
       expect(loaded.concurrency).toBe(3);
       expect(loaded.taskPollIntervalMs).toBe(1200);
       expect(loaded.interactivePreviewMovements).toBe(2);
-      expect(loaded.verbose).toBe(true);
     });
 
-    it('should save migrated fields as snake_case keys', () => {
+    it('should save project-local fields as snake_case keys', () => {
       const config = {
-        logLevel: 'warn',
         pipeline: {
           defaultBranchPrefix: 'task/',
           prBodyTemplate: 'Body {report}',
@@ -201,13 +196,11 @@ piece_overrides:
         concurrency: 4,
         taskPollIntervalMs: 1500,
         interactivePreviewMovements: 1,
-        verbose: false,
       } as ProjectLocalConfig;
 
       saveProjectConfig(testDir, config);
 
       const raw = readFileSync(join(testDir, '.takt', 'config.yaml'), 'utf-8');
-      expect(raw).toContain('log_level: warn');
       expect(raw).toContain('pipeline:');
       expect(raw).toContain('default_branch_prefix: task/');
       expect(raw).toContain('pr_body_template: Body {report}');
@@ -218,7 +211,6 @@ piece_overrides:
       expect(raw).toContain('concurrency: 4');
       expect(raw).toContain('task_poll_interval_ms: 1500');
       expect(raw).toContain('interactive_preview_movements: 1');
-      expect(raw).not.toContain('verbose: false');
     });
 
     it('should not persist empty pipeline object on save', () => {
@@ -250,17 +242,15 @@ piece_overrides:
       expect(raw).not.toContain('personaProviders:');
     });
 
-    it('should not persist schema-injected default values on save', () => {
+    it('should not persist unset values on save', () => {
       const loaded = loadProjectConfig(testDir);
       saveProjectConfig(testDir, loaded);
 
       const raw = readFileSync(join(testDir, '.takt', 'config.yaml'), 'utf-8');
-      expect(raw).not.toContain('log_level: info');
-      expect(raw).not.toContain('minimal_output: false');
-      expect(raw).not.toContain('concurrency: 1');
-      expect(raw).not.toContain('task_poll_interval_ms: 500');
-      expect(raw).not.toContain('interactive_preview_movements: 3');
-      expect(raw).not.toContain('verbose: false');
+      expect(raw).not.toContain('minimal_output:');
+      expect(raw).not.toContain('concurrency:');
+      expect(raw).not.toContain('task_poll_interval_ms:');
+      expect(raw).not.toContain('interactive_preview_movements:');
     });
 
     it('should fail fast when project config contains global-only cli path keys', () => {

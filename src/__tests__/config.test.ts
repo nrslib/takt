@@ -906,7 +906,6 @@ describe('analytics config resolution', () => {
 describe('isVerboseMode', () => {
   let testDir: string;
   let originalTaktConfigDir: string | undefined;
-  let originalTaktVerbose: string | undefined;
   let originalTaktLoggingDebug: string | undefined;
   let originalTaktLoggingTrace: string | undefined;
 
@@ -914,11 +913,9 @@ describe('isVerboseMode', () => {
     testDir = join(tmpdir(), `takt-test-${randomUUID()}`);
     mkdirSync(testDir, { recursive: true });
     originalTaktConfigDir = process.env.TAKT_CONFIG_DIR;
-    originalTaktVerbose = process.env.TAKT_VERBOSE;
     originalTaktLoggingDebug = process.env.TAKT_LOGGING_DEBUG;
     originalTaktLoggingTrace = process.env.TAKT_LOGGING_TRACE;
     process.env.TAKT_CONFIG_DIR = join(testDir, 'global-takt');
-    delete process.env.TAKT_VERBOSE;
     delete process.env.TAKT_LOGGING_DEBUG;
     delete process.env.TAKT_LOGGING_TRACE;
     invalidateGlobalConfigCache();
@@ -929,11 +926,6 @@ describe('isVerboseMode', () => {
       delete process.env.TAKT_CONFIG_DIR;
     } else {
       process.env.TAKT_CONFIG_DIR = originalTaktConfigDir;
-    }
-    if (originalTaktVerbose === undefined) {
-      delete process.env.TAKT_VERBOSE;
-    } else {
-      process.env.TAKT_VERBOSE = originalTaktVerbose;
     }
     if (originalTaktLoggingDebug === undefined) {
       delete process.env.TAKT_LOGGING_DEBUG;
@@ -951,43 +943,7 @@ describe('isVerboseMode', () => {
     }
   });
 
-  it('should return project verbose when project config has verbose: true', () => {
-    const projectConfigDir = getProjectConfigDir(testDir);
-    mkdirSync(projectConfigDir, { recursive: true });
-    writeFileSync(join(projectConfigDir, 'config.yaml'), 'verbose: true\n');
-
-    const globalConfigDir = process.env.TAKT_CONFIG_DIR!;
-    mkdirSync(globalConfigDir, { recursive: true });
-    writeFileSync(join(globalConfigDir, 'config.yaml'), 'language: en\n');
-
-    expect(isVerboseMode(testDir)).toBe(true);
-  });
-
-  it('should return project verbose when project config has verbose: false', () => {
-    const projectConfigDir = getProjectConfigDir(testDir);
-    mkdirSync(projectConfigDir, { recursive: true });
-    writeFileSync(join(projectConfigDir, 'config.yaml'), 'verbose: false\n');
-
-    const globalConfigDir = process.env.TAKT_CONFIG_DIR!;
-    mkdirSync(globalConfigDir, { recursive: true });
-    writeFileSync(join(globalConfigDir, 'config.yaml'), 'language: en\n');
-
-    expect(isVerboseMode(testDir)).toBe(false);
-  });
-
-  it('should use default verbose=false when project verbose is not set', () => {
-    const projectConfigDir = getProjectConfigDir(testDir);
-    mkdirSync(projectConfigDir, { recursive: true });
-    writeFileSync(join(projectConfigDir, 'config.yaml'), '');
-
-    const globalConfigDir = process.env.TAKT_CONFIG_DIR!;
-    mkdirSync(globalConfigDir, { recursive: true });
-    writeFileSync(join(globalConfigDir, 'config.yaml'), 'language: en\n');
-
-    expect(isVerboseMode(testDir)).toBe(false);
-  });
-
-  it('should return false when neither project nor global verbose is set', () => {
+  it('should return false when neither project nor global logging.debug is set', () => {
     expect(isVerboseMode(testDir)).toBe(false);
   });
 
@@ -1051,27 +1007,9 @@ describe('isVerboseMode', () => {
     expect(isVerboseMode(testDir)).toBe(true);
   });
 
-  it('should prioritize TAKT_VERBOSE over project and global config', () => {
-    const projectConfigDir = getProjectConfigDir(testDir);
-    mkdirSync(projectConfigDir, { recursive: true });
-    writeFileSync(join(projectConfigDir, 'config.yaml'), 'verbose: false\n');
-
-    const globalConfigDir = process.env.TAKT_CONFIG_DIR!;
-    mkdirSync(globalConfigDir, { recursive: true });
-    writeFileSync(join(globalConfigDir, 'config.yaml'), 'language: en\n');
-
-    process.env.TAKT_VERBOSE = 'true';
+  it('should return true when TAKT_LOGGING_DEBUG=true overrides config', () => {
+    process.env.TAKT_LOGGING_DEBUG = 'true';
     expect(isVerboseMode(testDir)).toBe(true);
-  });
-
-  it('should throw on TAKT_VERBOSE=0', () => {
-    process.env.TAKT_VERBOSE = '0';
-    expect(() => isVerboseMode(testDir)).toThrow('TAKT_VERBOSE must be one of: true, false');
-  });
-
-  it('should throw on invalid TAKT_VERBOSE value', () => {
-    process.env.TAKT_VERBOSE = 'yes';
-    expect(() => isVerboseMode(testDir)).toThrow('TAKT_VERBOSE must be one of: true, false');
   });
 });
 

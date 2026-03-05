@@ -9,7 +9,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import type { PersistedGlobalConfig } from '../core/models/persisted-global-config.js';
+import type { GlobalConfig } from '../core/models/config-types.js';
 
 // Mock the getGlobalConfigPath to use a test directory
 let testConfigPath: string;
@@ -102,7 +102,7 @@ piece_overrides:
     });
 
     it('should preserve non-empty quality_gates array', () => {
-      const config: PersistedGlobalConfig = {
+      const config: GlobalConfig = {
         pieceOverrides: {
           qualityGates: ['Test 1', 'Test 2'],
         },

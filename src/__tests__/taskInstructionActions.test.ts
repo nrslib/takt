@@ -210,15 +210,7 @@ describe('instructBranch direct execution flow', () => {
     expect(originalTaskInfo.data.piece).toBe('original-piece');
   });
 
-  it('should reuse previous piece when confirmed', async () => {
-    mockFindRunForTask.mockReturnValue('run-previous');
-    mockLoadRunSessionContext.mockReturnValue({
-      task: 'done',
-      piece: 'default',
-      status: 'completed',
-      movementLogs: [],
-      reports: [],
-    });
+  it('should reuse previous piece from task data when confirmed', async () => {
     mockConfirm
       .mockResolvedValueOnce(true);
 
@@ -230,7 +222,7 @@ describe('instructBranch direct execution flow', () => {
       content: 'done',
       branch: 'takt/done-task',
       worktreePath: '/project/.takt/worktrees/done-task',
-      data: { task: 'done' },
+      data: { task: 'done', piece: 'default' },
     });
 
     expect(mockSelectPiece).not.toHaveBeenCalled();
@@ -240,14 +232,6 @@ describe('instructBranch direct execution flow', () => {
   });
 
   it('should call selectPiece when previous piece reuse is declined', async () => {
-    mockFindRunForTask.mockReturnValue('run-previous');
-    mockLoadRunSessionContext.mockReturnValue({
-      task: 'done',
-      piece: 'default',
-      status: 'completed',
-      movementLogs: [],
-      reports: [],
-    });
     mockConfirm
       .mockResolvedValueOnce(false);
     mockSelectPiece.mockResolvedValue('selected-piece');
@@ -260,22 +244,14 @@ describe('instructBranch direct execution flow', () => {
       content: 'done',
       branch: 'takt/done-task',
       worktreePath: '/project/.takt/worktrees/done-task',
-      data: { task: 'done' },
+      data: { task: 'done', piece: 'default' },
     });
 
     expect(mockSelectPiece).toHaveBeenCalledWith('/project');
     expect(mockStartReExecution).toHaveBeenCalled();
   });
 
-  it('should ignore previous piece when run metadata contains piece path', async () => {
-    mockFindRunForTask.mockReturnValue('run-previous');
-    mockLoadRunSessionContext.mockReturnValue({
-      task: 'done',
-      piece: '../secrets.yaml',
-      status: 'completed',
-      movementLogs: [],
-      reports: [],
-    });
+  it('should skip reuse prompt when task data has no piece', async () => {
     mockSelectPiece.mockResolvedValue('selected-piece');
 
     await instructBranch('/project', {
@@ -291,18 +267,9 @@ describe('instructBranch direct execution flow', () => {
 
     expect(mockConfirm).not.toHaveBeenCalled();
     expect(mockSelectPiece).toHaveBeenCalledWith('/project');
-    expect(mockStartReExecution).toHaveBeenCalled();
   });
 
   it('should return false when replacement piece selection is cancelled after declining reuse', async () => {
-    mockFindRunForTask.mockReturnValue('run-previous');
-    mockLoadRunSessionContext.mockReturnValue({
-      task: 'done',
-      piece: 'default',
-      status: 'completed',
-      movementLogs: [],
-      reports: [],
-    });
     mockConfirm.mockResolvedValueOnce(false);
     mockSelectPiece.mockResolvedValue(null);
 
@@ -314,7 +281,7 @@ describe('instructBranch direct execution flow', () => {
       content: 'done',
       branch: 'takt/done-task',
       worktreePath: '/project/.takt/worktrees/done-task',
-      data: { task: 'done' },
+      data: { task: 'done', piece: 'default' },
     });
 
     expect(result).toBe(false);

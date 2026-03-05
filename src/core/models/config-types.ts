@@ -1,5 +1,10 @@
 /**
  * Configuration types (global and project)
+ *
+ * 3-layer model:
+ *   ProjectConfig  — .takt/config.yaml (project-level)
+ *   GlobalConfig   — ~/.takt/config.yaml (user-level, superset of ProjectConfig)
+ *   LoadedConfig   — resolved values with NonNullable defaults (defined in resolvedConfig.ts)
  */
 
 import type { MovementProviderOptions, PieceRuntimeConfig } from './piece-types.js';
@@ -91,27 +96,65 @@ export interface NotificationSoundEventsConfig {
   runAbort?: boolean;
 }
 
-/** Persisted global configuration for ~/.takt/config.yaml */
-export interface PersistedGlobalConfig {
-  /**
-   * このインターフェースにはマシン/ユーザー固有の設定のみを定義する。
-   * プロジェクト単位で変えたい設定は ProjectConfig に追加すること。
-   * グローバル専用フィールドを追加する場合は @globalOnly を付ける。
-   */
+/**
+ * Project-level configuration stored in .takt/config.yaml.
+ */
+export interface ProjectConfig {
+  /** Provider selection for agent runtime */
+  provider?: 'claude' | 'codex' | 'opencode' | 'cursor' | 'copilot' | 'mock';
+  /** Model selection for agent runtime */
+  model?: string;
+  /** Auto-create PR after worktree execution */
+  autoPr?: boolean;
+  /** Create PR as draft */
+  draftPr?: boolean;
+  /** Base branch to clone from (overrides global baseBranch) */
+  baseBranch?: string;
+  /** Submodule acquisition mode (all or explicit path list) */
+  submodules?: SubmoduleSelection;
+  /** Compatibility flag for full submodule acquisition when submodules is unset */
+  withSubmodules?: boolean;
+  /** Pipeline execution settings */
+  pipeline?: PipelineConfig;
+  /** Per-persona provider/model overrides */
+  personaProviders?: Record<string, PersonaProviderEntry>;
+  /** Branch name generation strategy */
+  branchNameStrategy?: 'romaji' | 'ai';
+  /** Minimal output mode */
+  minimalOutput?: boolean;
+  /** Number of tasks to run concurrently in takt run (1-10) */
+  concurrency?: number;
+  /** Polling interval in ms for task pickup */
+  taskPollIntervalMs?: number;
+  /** Number of movement previews in interactive mode */
+  interactivePreviewMovements?: number;
+  /** Project-level analytics overrides */
+  analytics?: AnalyticsConfig;
+  /** Provider-specific options (overrides global, overridden by piece/movement) */
+  providerOptions?: MovementProviderOptions;
+  /** Provider-specific permission profiles (project-level override) */
+  providerProfiles?: ProviderPermissionProfiles;
+  /** Piece-level overrides (quality_gates, etc.) */
+  pieceOverrides?: PieceOverrides;
+  /** Runtime environment configuration (project-level override) */
+  runtime?: PieceRuntimeConfig;
+}
+
+/**
+ * Global configuration persisted in ~/.takt/config.yaml.
+ *
+ * Extends ProjectConfig with global-only fields (API keys, CLI paths, etc.).
+ * For overlapping keys, ProjectConfig values take priority at runtime
+ * — handled by the resolution layer.
+ */
+export interface GlobalConfig extends Omit<ProjectConfig, 'submodules' | 'withSubmodules'> {
   /** @globalOnly */
   language: Language;
-  provider?: 'claude' | 'codex' | 'opencode' | 'cursor' | 'copilot' | 'mock';
-  model?: string;
   /** @globalOnly */
   logging?: LoggingConfig;
-  analytics?: AnalyticsConfig;
   /** @globalOnly */
   /** Directory for shared clones (worktree_dir in config). If empty, uses ../{clone-name} relative to project */
   worktreeDir?: string;
-  /** Auto-create PR after worktree execution (default: prompt in interactive mode) */
-  autoPr?: boolean;
-  /** Create PR as draft (default: prompt in interactive mode when autoPr is true) */
-  draftPr?: boolean;
   /** @globalOnly */
   /** List of builtin piece/agent names to exclude from fallback loading */
   disabledBuiltins?: string[];
@@ -163,12 +206,6 @@ export interface PersistedGlobalConfig {
   /** @globalOnly */
   /** Path to piece categories file (default: ~/.takt/preferences/piece-categories.yaml) */
   pieceCategoriesFile?: string;
-  /** Global provider-specific options (lowest priority) */
-  providerOptions?: MovementProviderOptions;
-  /** Provider-specific permission profiles */
-  providerProfiles?: ProviderPermissionProfiles;
-  /** Global runtime environment defaults (can be overridden by piece runtime) */
-  runtime?: PieceRuntimeConfig;
   /** @globalOnly */
   /** Prevent macOS idle sleep during takt execution using caffeinate (default: false) */
   preventSleep?: boolean;
@@ -181,45 +218,4 @@ export interface PersistedGlobalConfig {
   /** @globalOnly */
   /** Opt-in: fetch remote before cloning to keep clones up-to-date (default: false) */
   autoFetch: boolean;
-  /** Base branch to clone from (default: current branch) */
-  baseBranch?: string;
-  /** Piece-level overrides (quality_gates, etc.) */
-  pieceOverrides?: PieceOverrides;
-}
-
-/** Project-level configuration */
-export interface ProjectConfig {
-  verbose?: boolean;
-  provider?: 'claude' | 'codex' | 'opencode' | 'cursor' | 'copilot' | 'mock';
-  model?: string;
-  analytics?: AnalyticsConfig;
-  autoPr?: boolean;
-  draftPr?: boolean;
-  providerOptions?: MovementProviderOptions;
-  /** Provider-specific permission profiles */
-  providerProfiles?: ProviderPermissionProfiles;
-  /** Project log level */
-  logLevel?: 'debug' | 'info' | 'warn' | 'error';
-  /** Pipeline execution settings */
-  pipeline?: PipelineConfig;
-  /** Per-persona provider/model overrides */
-  personaProviders?: Record<string, PersonaProviderEntry>;
-  /** Branch name generation strategy */
-  branchNameStrategy?: 'romaji' | 'ai';
-  /** Minimal output mode */
-  minimalOutput?: boolean;
-  /** Number of tasks to run concurrently in takt run (1-10) */
-  concurrency?: number;
-  /** Polling interval in ms for task pickup */
-  taskPollIntervalMs?: number;
-  /** Number of movement previews in interactive mode */
-  interactivePreviewMovements?: number;
-  /** Base branch to clone from (overrides global baseBranch) */
-  baseBranch?: string;
-  /** Piece-level overrides (quality_gates, etc.) */
-  pieceOverrides?: PieceOverrides;
-  /** Compatibility flag for full submodule acquisition when submodules is unset */
-  withSubmodules?: boolean;
-  /** Submodule acquisition mode (all or explicit path list) */
-  submodules?: SubmoduleSelection;
 }

@@ -47,7 +47,6 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 vi.mock('../infra/config/global/globalConfig.js', () => ({
   loadGlobalConfig: vi.fn().mockReturnValue({}),
-  loadGlobalMigratedProjectLocalFallback: vi.fn().mockReturnValue({}),
   getLanguage: vi.fn().mockReturnValue('en'),
   getDisabledBuiltins: vi.fn().mockReturnValue([]),
   getBuiltinPiecesEnabled: vi.fn().mockReturnValue(true),

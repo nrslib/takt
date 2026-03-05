@@ -81,15 +81,7 @@ You are the **human proxy** in the automated piece. Before approval, verify the 
 | Production ready | No mock/stub/TODO remaining? |
 | Operation | Actually works as expected? |
 
-### 6. Backward Compatibility Code Detection
-
-**Backward compatibility code is unnecessary unless explicitly instructed.** REJECT if found:
-
-- Unused re-exports, `_var` renames, `// removed` comments
-- Fallbacks, old API maintenance, migration code
-- Legacy support kept "just in case"
-
-### 7. Spec Compliance Final Check
+### 6. Spec Compliance Final Check
 
 **Final verification that changes comply with the project's documented specifications.**
 
@@ -114,66 +106,6 @@ Additions can be reverted, but restoring deleted flows is difficult.
 - A "change statuses" task includes wholesale deletion of Sagas or endpoints
 - A "UI fix" task includes structural changes to backend domain models
 - A "display change" task rewrites business logic flows
-
-### 8. Piece Overall Review
-
-**Check all reports in the report directory and verify overall piece consistency.**
-
-Check:
-- Does implementation match the plan (00-plan.md)?
-- Were all review step issues properly addressed?
-- Was the original task objective achieved?
-
-**Piece-wide issues:**
-| Issue | Action |
-|-------|--------|
-| Plan-implementation gap | REJECT - Request plan revision or implementation fix |
-| Unaddressed review feedback | REJECT - Point out specific unaddressed items |
-| Deviation from original purpose | REJECT - Request return to objective |
-| Scope creep | REJECT - Deletions outside task order must be reverted |
-
-### 9. Improvement Suggestion Check
-
-**Check review reports for unaddressed improvement suggestions.**
-
-Check:
-- "Improvement Suggestions" section in Architect report
-- Warnings and suggestions in AI Reviewer report
-- Recommendations in Security report
-
-**If there are unaddressed improvement suggestions:**
-- Judge if the improvement should be addressed in this task
-- If it should be addressed, **REJECT** and request fix
-- If it should be addressed in next task, record as "technical debt" in report
-
-**Judgment criteria:**
-| Type of suggestion | Decision |
-|--------------------|----------|
-| Minor fix in same file | Address now (REJECT) |
-| Fixable in seconds to minutes | Address now (REJECT) |
-| Redundant code / unnecessary expression removal | Address now (REJECT) |
-| Affects other features | Address in next task (record only) |
-| External impact (API changes, etc.) | Address in next task (record only) |
-| Requires significant refactoring (large scope) | Address in next task (record only) |
-
-### Boy Scout Rule
-
-**"Functionally harmless" is not a free pass.** Classifying a near-zero-cost fix as "non-blocking" or "next task" is a compromise. There is no guarantee it will be addressed in a future task, and it accumulates as technical debt.
-
-**Principle:** If a reviewer found it and it can be fixed in minutes, make the coder fix it now. Do not settle for recording it as a "non-blocking improvement suggestion."
-
-## Workaround Detection
-
-**REJECT** if any of the following remain:
-
-| Pattern | Example |
-|---------|---------|
-| TODO/FIXME | `// TODO: implement later` |
-| Commented out | Code that should be deleted remains |
-| Hardcoded | Values that should be config are hardcoded |
-| Mock data | Dummy data unusable in production |
-| console.log | Forgotten debug output |
-| Skipped tests | `@Disabled`, `.skip()` |
 
 ## Important
 

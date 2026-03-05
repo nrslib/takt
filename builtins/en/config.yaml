@@ -2,17 +2,35 @@
 # Location: ~/.takt/config.yaml
 
 # =====================================
-# General settings (piece-independent)
+# General settings
 # =====================================
-# Note: this template contains global-only settings for ~/.takt/config.yaml.
 language: en        # UI language: en | ja
+
+# Default provider and model
+# provider: claude                    # Default provider: claude | codex | opencode | cursor | copilot | mock
+# model: sonnet                       # Default model (passed directly to provider)
 
 # Execution control
 # worktree_dir: ~/takt-worktrees   # Base directory for shared clone execution
 # prevent_sleep: false             # Prevent macOS idle sleep while running
 # auto_fetch: false                # Fetch before clone to keep shared clones up-to-date
+# base_branch: main                # Base branch to clone from (default: current branch)
+# concurrency: 1                   # Number of tasks to run concurrently in takt run (1-10)
+# task_poll_interval_ms: 500       # Polling interval in ms for picking up new tasks (100-5000)
+
+# PR / branch
+# auto_pr: false                   # Auto-create PR after worktree execution
+# draft_pr: false                  # Create PR as draft
+# branch_name_strategy: romaji     # Branch name generation: romaji | ai
+
+# Pipeline execution
+# pipeline:
+#   default_branch_prefix: "takt/"         # Branch prefix for pipeline-created branches
+#   commit_message_template: "{title}"     # Commit message template. Variables: {title}, {issue}
+#   pr_body_template: "{report}"           # PR body template. Variables: {issue_body}, {report}, {issue}
 
 # Output / notifications
+# minimal_output: false            # Suppress detailed agent output
 # notification_sound: true         # Master switch for sounds
 # notification_sound_events:       # Per-event sound toggle (unset means true)
 #   iteration_limit: true
@@ -20,12 +38,63 @@ language: en        # UI language: en | ja
 #   piece_abort: true
 #   run_complete: true
 #   run_abort: true
-# verbose: false                   # Shortcut: enable trace/debug and set logging.level=debug
 # logging:
 #   level: info                    # Log level for console and file output
 #   trace: true                    # Generate human-readable execution trace report (trace.md)
 #   debug: false                   # Enable debug.log + prompts.jsonl
-#   provider_events: false          # Persist provider stream events
+#   provider_events: false         # Persist provider stream events
+#   usage_events: false            # Persist usage event logs
+
+# Analytics
+# analytics:
+#   enabled: true                  # Enable local analytics collection
+#   events_path: ~/.takt/analytics/events  # Custom events directory
+#   retention_days: 30             # Retention period for event files
+
+# Interactive mode
+# interactive_preview_movements: 3 # Number of movement previews in interactive mode (0-10)
+
+# Per-persona provider/model overrides
+# persona_providers:
+#   coder:
+#     provider: claude
+#     model: opus
+#   reviewer:
+#     provider: codex
+#     model: gpt-5.2-codex
+
+# Provider-specific options (lowest priority, overridden by piece/movement)
+# provider_options:
+#   codex:
+#     network_access: true
+#   claude:
+#     sandbox:
+#       allow_unsandboxed_commands: true
+
+# Provider permission profiles
+# provider_profiles:
+#   claude:
+#     default_permission_mode: edit
+#   codex:
+#     default_permission_mode: edit
+
+# Runtime environment preparation
+# runtime:
+#   prepare: [node, gradle, ./custom-script.sh]
+
+# Piece-level overrides
+# piece_overrides:
+#   quality_gates:
+#     - "All tests pass"
+#   quality_gates_edit_only: true
+#   movements:
+#     review:
+#       quality_gates:
+#         - "No security vulnerabilities"
+#   personas:
+#     coder:
+#       quality_gates:
+#         - "Code follows conventions"
 
 # Credentials (environment variables take priority)
 # anthropic_api_key: "sk-ant-..." # Claude API key
@@ -35,7 +104,14 @@ language: en        # UI language: en | ja
 # groq_api_key: "..."              # Groq API key
 # openrouter_api_key: "..."        # OpenRouter API key
 # opencode_api_key: "..."          # OpenCode API key
-# codex_cli_path: "/absolute/path/to/codex"  # Absolute path to Codex CLI
+# cursor_api_key: "..."            # Cursor API key
+
+# CLI paths
+# codex_cli_path: "/absolute/path/to/codex"    # Absolute path to Codex CLI
+# claude_cli_path: "/absolute/path/to/claude"  # Absolute path to Claude Code CLI
+# cursor_cli_path: "/absolute/path/to/cursor"  # Absolute path to cursor-agent CLI
+# copilot_cli_path: "/absolute/path/to/copilot" # Absolute path to Copilot CLI
+# copilot_github_token: "ghp_..."              # Copilot GitHub token
 
 # Misc
 # bookmarks_file: ~/.takt/preferences/bookmarks.yaml  # Bookmark file location

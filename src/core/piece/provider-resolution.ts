@@ -1,5 +1,5 @@
 import type { PieceMovement } from '../models/types.js';
-import type { PersonaProviderEntry } from '../models/persisted-global-config.js';
+import type { PersonaProviderEntry } from '../models/config-types.js';
 import type { ProviderType } from './types.js';
 
 export interface MovementProviderModelInput {

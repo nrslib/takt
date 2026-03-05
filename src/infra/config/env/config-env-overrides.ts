@@ -152,10 +152,8 @@ const GLOBAL_ENV_SPECS: readonly EnvSpec[] = [
 ];
 
 const PROJECT_ENV_SPECS: readonly EnvSpec[] = [
-  { path: 'log_level', type: 'string' },
   { path: 'provider', type: 'string' },
   { path: 'model', type: 'string' },
-  { path: 'verbose', type: 'boolean' },
   { path: 'concurrency', type: 'number' },
   { path: 'pipeline', type: 'json' },
   { path: 'pipeline.default_branch_prefix', type: 'string' },

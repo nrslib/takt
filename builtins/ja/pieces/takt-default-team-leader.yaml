@@ -15,19 +15,7 @@ loop_monitors:
     threshold: 3
     judge:
       persona: supervisor
-      instruction_template: |
-        ai_review と ai_fix のループが {cycle_count} 回繰り返されました。
-
-        各サイクルのレポートを確認し、このループが健全（進捗がある）か、
-        非生産的（同じ問題を繰り返している）かを判断してください。
-
-        **参照するレポート:**
-        - AIレビュー結果: {report:ai-review.md}
-
-        **判断基準:**
-        - 各サイクルで新しい問題が発見・修正されているか
-        - 同じ指摘が繰り返されていないか
-        - 修正が実際に反映されているか
+      instruction_template: loop-monitor-ai-fix
       rules:
         - condition: 健全（進捗あり）
           next: ai_review
@@ -158,7 +146,7 @@ movements:
       - condition: 実装未着手（レポートのみ）
         next: ai_review
       - condition: 判断できない、情報不足
-        next: ai_review
+        next: plan
       - condition: ユーザー入力が必要
         next: implement
         requires_user_input: true
@@ -392,6 +380,7 @@ movements:
     edit: false
     persona: supervisor
     policy: review
+    knowledge: architecture
     provider_options:
       claude:
         allowed_tools:

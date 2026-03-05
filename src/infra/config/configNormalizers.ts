@@ -1,6 +1,6 @@
 import type { MovementProviderOptions, PieceRuntimeConfig } from '../../core/models/piece-types.js';
 import type { ProviderPermissionProfiles } from '../../core/models/provider-profiles.js';
-import type { PieceOverrides, PersonaProviderEntry, PipelineConfig } from '../../core/models/persisted-global-config.js';
+import type { PieceOverrides, PersonaProviderEntry, PipelineConfig } from '../../core/models/config-types.js';
 import { validateProviderModelCompatibility } from './providerModelCompatibility.js';
 
 export function normalizeRuntime(

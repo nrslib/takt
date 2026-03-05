@@ -68,4 +68,4 @@ export type {
   Language,
   PipelineConfig,
   ProjectConfig,
-} from './persisted-global-config.js';
+} from './config-types.js';

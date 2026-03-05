@@ -4,7 +4,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { applyQualityGateOverrides } from '../infra/config/loaders/qualityGateOverrides.js';
-import type { PieceOverrides } from '../core/models/persisted-global-config.js';
+import type { PieceOverrides } from '../core/models/config-types.js';
 
 type ApplyOverridesArgs = [
   string,

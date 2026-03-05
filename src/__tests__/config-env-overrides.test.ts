@@ -53,7 +53,6 @@ describe('config env overrides', () => {
 
   it('should apply project env overrides from generated env names', () => {
     process.env.TAKT_MODEL = 'gpt-5';
-    process.env.TAKT_VERBOSE = 'true';
     process.env.TAKT_CONCURRENCY = '3';
     process.env.TAKT_ANALYTICS_EVENTS_PATH = '/tmp/project-analytics';
 
@@ -61,7 +60,6 @@ describe('config env overrides', () => {
     applyProjectConfigEnvOverrides(raw);
 
     expect(raw.model).toBe('gpt-5');
-    expect(raw.verbose).toBe(true);
     expect(raw.concurrency).toBe(3);
     expect(raw.analytics).toEqual({
       events_path: '/tmp/project-analytics',

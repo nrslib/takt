@@ -2,17 +2,35 @@
 # 配置場所: ~/.takt/config.yaml
 
 # =====================================
-# 通常設定（ピース非依存）
+# 通常設定
 # =====================================
-# 注意: このテンプレートは global 専用設定（~/.takt/config.yaml）だけを扱う
 language: ja         # 表示言語: ja | en
+
+# デフォルトプロバイダー・モデル
+# provider: claude                    # デフォルトプロバイダー: claude | codex | opencode | cursor | copilot | mock
+# model: sonnet                       # デフォルトモデル（プロバイダーにそのまま渡される）
 
 # 実行制御
 # worktree_dir: ~/takt-worktrees   # 共有clone作成先ディレクトリ
 # prevent_sleep: false             # macOS実行中のスリープ防止（caffeinate）
 # auto_fetch: false                # clone前にfetchして最新化するか
+# base_branch: main                # cloneのベースブランチ（デフォルト: カレントブランチ）
+# concurrency: 1                   # takt run の同時実行タスク数 (1-10)
+# task_poll_interval_ms: 500       # 新規タスク検出のポーリング間隔（ms, 100-5000）
+
+# PR / ブランチ
+# auto_pr: false                   # worktree実行後にPR自動作成
+# draft_pr: false                  # ドラフトPRとして作成
+# branch_name_strategy: romaji     # ブランチ名生成: romaji | ai
+
+# パイプライン実行
+# pipeline:
+#   default_branch_prefix: "takt/"         # パイプラインで作成するブランチのプレフィックス
+#   commit_message_template: "{title}"     # コミットメッセージテンプレート。変数: {title}, {issue}
+#   pr_body_template: "{report}"           # PR本文テンプレート。変数: {issue_body}, {report}, {issue}
 
 # 出力・通知
+# minimal_output: false            # エージェント詳細出力を抑制
 # notification_sound: true         # 通知音全体のON/OFF
 # notification_sound_events:       # イベント別通知音（未指定はtrue扱い）
 #   iteration_limit: true
@@ -20,12 +38,63 @@ language: ja         # 表示言語: ja | en
 #   piece_abort: true
 #   run_complete: true
 #   run_abort: true
-# verbose: false                   # ショートカット: trace/debug有効化 + logging.level=debug
 # logging:
 #   level: info                    # ログレベル: debug | info | warn | error
 #   trace: true                    # trace.md 実行レポート生成
 #   debug: false                   # debug.log + prompts.jsonl を有効化
 #   provider_events: false         # providerイベントログを記録
+#   usage_events: false            # 使用量イベントログを記録
+
+# アナリティクス
+# analytics:
+#   enabled: true                  # ローカルアナリティクス収集を有効化
+#   events_path: ~/.takt/analytics/events  # イベントディレクトリのカスタムパス
+#   retention_days: 30             # イベントファイルの保持期間（日）
+
+# インタラクティブモード
+# interactive_preview_movements: 3 # インタラクティブモードでのムーブメントプレビュー数 (0-10)
+
+# ペルソナ別プロバイダー・モデル指定
+# persona_providers:
+#   coder:
+#     provider: claude
+#     model: opus
+#   reviewer:
+#     provider: codex
+#     model: gpt-5.2-codex
+
+# プロバイダー固有オプション（最低優先度、ピース/ムーブメントで上書き可能）
+# provider_options:
+#   codex:
+#     network_access: true
+#   claude:
+#     sandbox:
+#       allow_unsandboxed_commands: true
+
+# プロバイダー権限プロファイル
+# provider_profiles:
+#   claude:
+#     default_permission_mode: edit
+#   codex:
+#     default_permission_mode: edit
+
+# ランタイム環境の準備
+# runtime:
+#   prepare: [node, gradle, ./custom-script.sh]
+
+# ピースレベルのオーバーライド
+# piece_overrides:
+#   quality_gates:
+#     - "All tests pass"
+#   quality_gates_edit_only: true
+#   movements:
+#     review:
+#       quality_gates:
+#         - "No security vulnerabilities"
+#   personas:
+#     coder:
+#       quality_gates:
+#         - "Code follows conventions"
 
 # 認証情報（環境変数優先）
 # anthropic_api_key: "sk-ant-..." # Claude APIキー
@@ -35,7 +104,14 @@ language: ja         # 表示言語: ja | en
 # groq_api_key: "..."              # Groq APIキー
 # openrouter_api_key: "..."        # OpenRouter APIキー
 # opencode_api_key: "..."          # OpenCode APIキー
-# codex_cli_path: "/absolute/path/to/codex"  # Codex CLI絶対パス
+# cursor_api_key: "..."            # Cursor APIキー
+
+# CLIパス
+# codex_cli_path: "/absolute/path/to/codex"    # Codex CLI絶対パス
+# claude_cli_path: "/absolute/path/to/claude"  # Claude Code CLI絶対パス
+# cursor_cli_path: "/absolute/path/to/cursor"  # cursor-agent CLI絶対パス
+# copilot_cli_path: "/absolute/path/to/copilot" # Copilot CLI絶対パス
+# copilot_github_token: "ghp_..."              # Copilot GitHubトークン
 
 # その他
 # bookmarks_file: ~/.takt/preferences/bookmarks.yaml   # ブックマーク保存先

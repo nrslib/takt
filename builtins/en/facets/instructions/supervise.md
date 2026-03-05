@@ -1,9 +1,11 @@
 Run tests, verify the build, and perform final approval.
 
 **Overall piece verification:**
-1. Whether the plan and implementation results are consistent
-2. Whether findings from each review movement have been addressed
-3. Whether each task spec requirement has been achieved
+1. Check all reports in the report directory and verify overall piece consistency
+   - Does implementation match the plan?
+   - Were all review movement findings properly addressed?
+   - Was the original task objective achieved?
+2. Whether each task spec requirement has been achieved
    - Extract requirements one by one from the task spec
    - For each requirement, identify the implementing code (file:line)
    - Verify the code actually fulfills the requirement (read the file, run the test)

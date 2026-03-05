@@ -492,83 +492,8 @@ export const PieceCategoryConfigNodeSchema: z.ZodType<PieceCategoryConfigNode> =
 
 export const PieceCategoryConfigSchema = z.record(z.string(), PieceCategoryConfigNodeSchema);
 
-/** Global config schema */
-export const GlobalConfigSchema = z.object({
-  language: LanguageSchema.optional().default(DEFAULT_LANGUAGE),
-  provider: ProviderReferenceSchema.optional().default('claude'),
-  model: z.string().optional(),
-  logging: LoggingConfigSchema.optional(),
-  analytics: AnalyticsConfigSchema.optional(),
-  /** Directory for shared clones (worktree_dir in config). If empty, uses ../{clone-name} relative to project */
-  worktree_dir: z.string().optional(),
-  /** Auto-create PR after worktree execution (default: prompt in interactive mode) */
-  auto_pr: z.boolean().optional(),
-  /** Create PR as draft (default: prompt in interactive mode when auto_pr is true) */
-  draft_pr: z.boolean().optional(),
-  /** List of builtin piece/agent names to exclude from fallback loading */
-  disabled_builtins: z.array(z.string()).optional().default([]),
-  /** Enable builtin pieces from builtins/{lang}/pieces */
-  enable_builtin_pieces: z.boolean().optional(),
-  /** Anthropic API key for Claude Code SDK (overridden by TAKT_ANTHROPIC_API_KEY env var) */
-  anthropic_api_key: z.string().optional(),
-  /** OpenAI API key for Codex SDK (overridden by TAKT_OPENAI_API_KEY env var) */
-  openai_api_key: z.string().optional(),
-  /** Gemini API key (overridden by TAKT_GEMINI_API_KEY env var) */
-  gemini_api_key: z.string().optional(),
-  /** Google API key (overridden by TAKT_GOOGLE_API_KEY env var) */
-  google_api_key: z.string().optional(),
-  /** Groq API key (overridden by TAKT_GROQ_API_KEY env var) */
-  groq_api_key: z.string().optional(),
-  /** OpenRouter API key (overridden by TAKT_OPENROUTER_API_KEY env var) */
-  openrouter_api_key: z.string().optional(),
-  /** External Codex CLI path for Codex SDK override (overridden by TAKT_CODEX_CLI_PATH env var) */
-  codex_cli_path: z.string().optional(),
-  /** External Claude Code CLI path (overridden by TAKT_CLAUDE_CLI_PATH env var) */
-  claude_cli_path: z.string().optional(),
-  /** External cursor-agent CLI path (overridden by TAKT_CURSOR_CLI_PATH env var) */
-  cursor_cli_path: z.string().optional(),
-  /** External Copilot CLI path (overridden by TAKT_COPILOT_CLI_PATH env var) */
-  copilot_cli_path: z.string().optional(),
-  /** Copilot GitHub token (overridden by TAKT_COPILOT_GITHUB_TOKEN env var) */
-  copilot_github_token: z.string().optional(),
-  /** OpenCode API key for OpenCode SDK (overridden by TAKT_OPENCODE_API_KEY env var) */
-  opencode_api_key: z.string().optional(),
-  /** Cursor API key for Cursor Agent CLI/API (overridden by TAKT_CURSOR_API_KEY env var) */
-  cursor_api_key: z.string().optional(),
-  /** Path to bookmarks file (default: ~/.takt/preferences/bookmarks.yaml) */
-  bookmarks_file: z.string().optional(),
-  /** Path to piece categories file (default: ~/.takt/preferences/piece-categories.yaml) */
-  piece_categories_file: z.string().optional(),
-  /** Global provider-specific options (lowest priority) */
-  provider_options: MovementProviderOptionsSchema,
-  /** Provider-specific permission profiles */
-  provider_profiles: ProviderPermissionProfilesSchema,
-  /** Global runtime defaults (piece runtime overrides this) */
-  runtime: RuntimeConfigSchema,
-  /** Prevent macOS idle sleep during takt execution using caffeinate (default: false) */
-  prevent_sleep: z.boolean().optional(),
-  /** Enable notification sounds (default: true when undefined) */
-  notification_sound: z.boolean().optional(),
-  /** Notification sound toggles per event timing */
-  notification_sound_events: z.object({
-    iteration_limit: z.boolean().optional(),
-    piece_complete: z.boolean().optional(),
-    piece_abort: z.boolean().optional(),
-    run_complete: z.boolean().optional(),
-    run_abort: z.boolean().optional(),
-  }).optional(),
-  /** Opt-in: fetch remote before cloning to keep clones up-to-date (default: false) */
-  auto_fetch: z.boolean().optional().default(false),
-  /** Base branch to clone from (default: current branch) */
-  base_branch: z.string().optional(),
-  /** Piece-level overrides (quality_gates, etc.) */
-  piece_overrides: PieceOverridesSchema,
-}).strict();
-
 /** Project config schema */
 export const ProjectConfigSchema = z.object({
-  log_level: z.enum(['debug', 'info', 'warn', 'error']).optional(),
-  verbose: z.boolean().optional(),
   provider: ProviderReferenceSchema.optional(),
   model: z.string().optional(),
   analytics: AnalyticsConfigSchema.optional(),
@@ -606,3 +531,71 @@ export const ProjectConfigSchema = z.object({
   /** Compatibility flag for full submodule acquisition when submodules is unset */
   with_submodules: z.boolean().optional(),
 }).strict();
+
+/** Global-only fields (not in ProjectConfig) */
+const GlobalOnlyConfigSchema = z.object({
+  language: LanguageSchema.optional().default(DEFAULT_LANGUAGE),
+  logging: LoggingConfigSchema.optional(),
+  /** Directory for shared clones (worktree_dir in config). If empty, uses ../{clone-name} relative to project */
+  worktree_dir: z.string().optional(),
+  /** List of builtin piece/agent names to exclude from fallback loading */
+  disabled_builtins: z.array(z.string()).optional().default([]),
+  /** Enable builtin pieces from builtins/{lang}/pieces */
+  enable_builtin_pieces: z.boolean().optional(),
+  /** Anthropic API key for Claude Code SDK (overridden by TAKT_ANTHROPIC_API_KEY env var) */
+  anthropic_api_key: z.string().optional(),
+  /** OpenAI API key for Codex SDK (overridden by TAKT_OPENAI_API_KEY env var) */
+  openai_api_key: z.string().optional(),
+  /** Gemini API key (overridden by TAKT_GEMINI_API_KEY env var) */
+  gemini_api_key: z.string().optional(),
+  /** Google API key (overridden by TAKT_GOOGLE_API_KEY env var) */
+  google_api_key: z.string().optional(),
+  /** Groq API key (overridden by TAKT_GROQ_API_KEY env var) */
+  groq_api_key: z.string().optional(),
+  /** OpenRouter API key (overridden by TAKT_OPENROUTER_API_KEY env var) */
+  openrouter_api_key: z.string().optional(),
+  /** External Codex CLI path for Codex SDK override (overridden by TAKT_CODEX_CLI_PATH env var) */
+  codex_cli_path: z.string().optional(),
+  /** External Claude Code CLI path (overridden by TAKT_CLAUDE_CLI_PATH env var) */
+  claude_cli_path: z.string().optional(),
+  /** External cursor-agent CLI path (overridden by TAKT_CURSOR_CLI_PATH env var) */
+  cursor_cli_path: z.string().optional(),
+  /** External Copilot CLI path (overridden by TAKT_COPILOT_CLI_PATH env var) */
+  copilot_cli_path: z.string().optional(),
+  /** Copilot GitHub token (overridden by TAKT_COPILOT_GITHUB_TOKEN env var) */
+  copilot_github_token: z.string().optional(),
+  /** OpenCode API key for OpenCode SDK (overridden by TAKT_OPENCODE_API_KEY env var) */
+  opencode_api_key: z.string().optional(),
+  /** Cursor API key for Cursor Agent CLI/API (overridden by TAKT_CURSOR_API_KEY env var) */
+  cursor_api_key: z.string().optional(),
+  /** Path to bookmarks file (default: ~/.takt/preferences/bookmarks.yaml) */
+  bookmarks_file: z.string().optional(),
+  /** Path to piece categories file (default: ~/.takt/preferences/piece-categories.yaml) */
+  piece_categories_file: z.string().optional(),
+  /** Prevent macOS idle sleep during takt execution using caffeinate (default: false) */
+  prevent_sleep: z.boolean().optional(),
+  /** Enable notification sounds (default: true when undefined) */
+  notification_sound: z.boolean().optional(),
+  /** Notification sound toggles per event timing */
+  notification_sound_events: z.object({
+    iteration_limit: z.boolean().optional(),
+    piece_complete: z.boolean().optional(),
+    piece_abort: z.boolean().optional(),
+    run_complete: z.boolean().optional(),
+    run_abort: z.boolean().optional(),
+  }).optional(),
+  /** Opt-in: fetch remote before cloning to keep clones up-to-date (default: false) */
+  auto_fetch: z.boolean().optional().default(false),
+});
+
+/** Global config schema = ProjectConfig + global-only fields.
+ *  For overlapping keys (provider, model, etc.), GlobalOnly definitions take precedence in the schema.
+ *  Runtime value priority (project > global) is handled by the resolution layer. */
+export const GlobalConfigSchema = ProjectConfigSchema
+  .omit({ submodules: true, with_submodules: true })
+  .merge(GlobalOnlyConfigSchema)
+  .extend({
+    /** Override provider with default value for global config */
+    provider: ProviderReferenceSchema.optional().default('claude'),
+  })
+  .strict();

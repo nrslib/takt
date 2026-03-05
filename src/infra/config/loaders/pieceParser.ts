@@ -27,7 +27,7 @@ import {
 type RawStep = z.output<typeof PieceMovementRawSchema>;
 import type { MovementProviderOptions } from '../../../core/models/piece-types.js';
 import { normalizeRuntime } from '../configNormalizers.js';
-import type { PieceOverrides } from '../../../core/models/persisted-global-config.js';
+import type { PieceOverrides } from '../../../core/models/config-types.js';
 import { applyQualityGateOverrides } from './qualityGateOverrides.js';
 import { loadProjectConfig } from '../project/projectConfig.js';
 import { loadGlobalConfig } from '../global/globalConfig.js';

@@ -1,4 +1,4 @@
-import type { PersistedGlobalConfig } from '../../../core/models/persisted-global-config.js';
+import type { GlobalConfig } from '../../../core/models/config-types.js';
 import { envVarNameFromPath } from '../env/config-env-overrides.js';
 import { loadGlobalConfig, validateCliPath } from './globalConfigCore.js';
 
@@ -24,7 +24,7 @@ export function resolveCodexCliPath(): string | undefined {
     return validateCliPath(envPath, 'TAKT_CODEX_CLI_PATH');
   }
 
-  const config: PersistedGlobalConfig = loadGlobalConfig();
+  const config: GlobalConfig = loadGlobalConfig();
   if (config.codexCliPath === undefined) {
     return undefined;
   }
@@ -37,7 +37,7 @@ export function resolveClaudeCliPath(): string | undefined {
     return validateCliPath(envPath, 'TAKT_CLAUDE_CLI_PATH');
   }
 
-  const config: PersistedGlobalConfig = loadGlobalConfig();
+  const config: GlobalConfig = loadGlobalConfig();
   if (config.claudeCliPath === undefined) {
     return undefined;
   }
@@ -50,7 +50,7 @@ export function resolveCursorCliPath(): string | undefined {
     return validateCliPath(envPath, 'TAKT_CURSOR_CLI_PATH');
   }
 
-  const config: PersistedGlobalConfig = loadGlobalConfig();
+  const config: GlobalConfig = loadGlobalConfig();
   if (config.cursorCliPath === undefined) {
     return undefined;
   }
@@ -79,7 +79,7 @@ export function resolveCopilotCliPath(): string | undefined {
     return validateCliPath(envPath, 'TAKT_COPILOT_CLI_PATH');
   }
 
-  const config: PersistedGlobalConfig = loadGlobalConfig();
+  const config: GlobalConfig = loadGlobalConfig();
   if (config.copilotCliPath === undefined) {
     return undefined;
   }

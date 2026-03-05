@@ -184,11 +184,12 @@ beforeEach(() => {
 describe('retryFailedTask', () => {
   it('should run retry mode in existing worktree and execute directly', async () => {
     const task = makeFailedTask();
+    mockConfirm.mockResolvedValue(true);
 
     const result = await retryFailedTask(task, '/project');
 
     expect(result).toBe(true);
-    expect(mockSelectPiece).toHaveBeenCalledWith('/project');
+    expect(mockSelectPiece).not.toHaveBeenCalled();
     expect(mockRunRetryMode).toHaveBeenCalledWith(
       '/project/.takt/worktrees/my-task',
       expect.objectContaining({
@@ -201,6 +202,7 @@ describe('retryFailedTask', () => {
   });
 
   it('should execute with selected piece without mutating taskInfo', async () => {
+    mockConfirm.mockResolvedValue(false);
     mockSelectPiece.mockResolvedValue('selected-piece');
     const originalTaskInfo = {
       name: 'my-task',
@@ -319,6 +321,7 @@ describe('retryFailedTask', () => {
 
   it('should return false when piece selection is cancelled', async () => {
     const task = makeFailedTask();
+    mockConfirm.mockResolvedValue(false);
     mockSelectPiece.mockResolvedValue(null);
 
     const result = await retryFailedTask(task, '/project');
@@ -358,11 +361,7 @@ describe('retryFailedTask', () => {
     expect(mockRequeueTask).toHaveBeenCalledWith('my-task', ['failed'], undefined, '既存ノート\n\n追加指示A');
   });
 
-  describe('when previous piece exists', () => {
-    beforeEach(() => {
-      mockFindRunForTask.mockReturnValue('run-123');
-    });
-
+  describe('when previous piece exists in task data', () => {
     it('should ask whether to reuse previous piece with default yes', async () => {
       const task = makeFailedTask();
 
@@ -403,21 +402,13 @@ describe('retryFailedTask', () => {
       expect(mockLoadPieceByIdentifier).not.toHaveBeenCalled();
     });
 
-    it('should ignore previous piece when run metadata contains piece path', async () => {
-      const task = makeFailedTask();
-      mockLoadRunSessionContext.mockReturnValue({
-        task: 'Do something',
-        piece: '../secrets.yaml',
-        status: 'failed',
-        movementLogs: [],
-        reports: [],
-      });
+    it('should skip reuse prompt when task data has no piece', async () => {
+      const task = makeFailedTask({ data: { task: 'Do something' } });
 
       await retryFailedTask(task, '/project');
 
       expect(mockConfirm).not.toHaveBeenCalled();
       expect(mockSelectPiece).toHaveBeenCalledWith('/project');
-      expect(mockLoadPieceByIdentifier).toHaveBeenCalledWith('default', '/project');
     });
   });
 });
