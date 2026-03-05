@@ -84,7 +84,7 @@ describe('createIsolatedEnv', () => {
     const config = parseYaml(configRaw) as Record<string, unknown>;
 
     expect(config.language).toBe('en');
-    expect(config.log_level).toBe('info');
+    expect(config.logging).toEqual({ level: 'info' });
     expect(config.notification_sound).toBe(false);
     expect(config.notification_sound_events).toEqual({
       iteration_limit: false,
@@ -175,7 +175,8 @@ describe('createIsolatedEnv', () => {
       `${isolated.taktDir}/config.yaml`,
       [
         'language: en',
-        'log_level: info',
+        'logging:',
+        '  level: info',
         'notification_sound: true',
         'notification_sound_events: true',
       ].join('\n'),

@@ -1,6 +1,7 @@
 provider: claude
 language: en
-log_level: info
+logging:
+  level: info
 provider_options:
   codex:
     network_access: true

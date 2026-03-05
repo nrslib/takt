@@ -251,6 +251,15 @@ takt clear
 takt export-cc
 ```
 
+### takt export-codex
+
+TAKT のスキルファイルを Codex Skill（`~/.agents/skills/takt/`）としてデプロイします。
+このコマンドは `SKILL.md`、`references/`、`agents/`、`pieces/`、`facets/`、`templates/` をデプロイします。
+
+```bash
+takt export-codex
+```
+
 ### takt catalog
 
 レイヤー間で利用可能なファセットの一覧を表示します。

@@ -251,6 +251,15 @@ Deploy builtin pieces/personas as a Claude Code Skill.
 takt export-cc
 ```
 
+### takt export-codex
+
+Deploy TAKT skill files as a Codex Skill (`~/.agents/skills/takt/`).
+This command deploys `SKILL.md`, `references/`, `agents/`, `pieces/`, `facets/`, and `templates/`.
+
+```bash
+takt export-codex
+```
+
 ### takt catalog
 
 List available facets across layers.

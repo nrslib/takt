@@ -53,6 +53,7 @@ vi.mock('../app/cli/program.js', () => ({
 }));
 
 vi.mock('../infra/config/index.js', () => ({
+  clearPersonaSessions: vi.fn(),
   resolveConfigValue: vi.fn(),
 }));
 
@@ -73,7 +74,6 @@ vi.mock('../features/tasks/index.js', () => ({
 }));
 
 vi.mock('../features/config/index.js', () => ({
-  clearPersonaSessions: vi.fn(),
   ejectBuiltin: vi.fn(),
   ejectFacet: vi.fn(),
   parseFacetType: vi.fn(),
@@ -81,6 +81,7 @@ vi.mock('../features/config/index.js', () => ({
   resetCategoriesToDefault: vi.fn(),
   resetConfigToDefault: vi.fn(),
   deploySkill: vi.fn(),
+  deploySkillCodex: vi.fn(),
 }));
 
 vi.mock('../features/prompt/index.js', () => ({
@@ -111,6 +112,7 @@ vi.mock('../commands/repertoire/list.js', () => ({
 }));
 
 import '../app/cli/commands.js';
+const configFeatures = await import('../features/config/index.js');
 
 describe('CLI add command', () => {
   beforeEach(() => {
@@ -149,6 +151,22 @@ describe('CLI add command', () => {
       .map((call: unknown[]) => call[0] as string);
 
     expect(calledCommandNames).not.toContain('switch');
+  });
+
+  it('should register export-codex command', () => {
+    const calledCommandNames = rootCommand.command.mock.calls
+      .map((call: unknown[]) => call[0] as string);
+
+    expect(calledCommandNames).toContain('export-codex');
+  });
+
+  it('should invoke deploySkillCodex for export-codex command', async () => {
+    const exportCodexAction = commandActions.get('root.export-codex');
+    expect(exportCodexAction).toBeTypeOf('function');
+
+    await exportCodexAction?.();
+    const deploySkillCodex = (configFeatures as Record<string, unknown>).deploySkillCodex;
+    expect(deploySkillCodex).toHaveBeenCalledTimes(1);
   });
 
   it('should describe prompt piece argument as defaulting to "default"', () => {
