@@ -14,6 +14,7 @@ import { executeAgent } from '../../../agents/agent-usecases.js';
 import { ParallelLogger } from './parallel-logger.js';
 import { needsStatusJudgmentPhase, runReportPhase, runStatusJudgmentPhase } from '../phase-runner.js';
 import { detectMatchedRule } from '../evaluation/index.js';
+import type { StatusJudgmentPhaseResult } from '../phase-runner.js';
 import { incrementMovementIteration } from './state-manager.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { buildSessionKey } from '../session-key.js';
@@ -154,9 +155,17 @@ export class ParallelRunner {
         }
 
         // Phase 3: status judgment for sub-movement
-        const subPhase3 = needsStatusJudgmentPhase(subMovement)
-          ? await runStatusJudgmentPhase(subMovement, phaseCtx)
-          : undefined;
+        let subPhase3: StatusJudgmentPhaseResult | undefined;
+        try {
+          subPhase3 = needsStatusJudgmentPhase(subMovement)
+            ? await runStatusJudgmentPhase(subMovement, phaseCtx)
+            : undefined;
+        } catch (error) {
+          log.info('Phase 3 status judgment failed for sub-movement, falling back to phase1 rule evaluation', {
+            movement: subMovement.name,
+            error: getErrorMessage(error),
+          });
+        }
 
         let finalResponse: AgentResponse;
         if (subPhase3) {

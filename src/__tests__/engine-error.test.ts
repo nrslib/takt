@@ -37,7 +37,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 import { PieceEngine } from '../core/piece/index.js';
 import { runAgent } from '../agents/runner.js';
 import { detectMatchedRule } from '../core/piece/evaluation/index.js';
-import { runReportPhase } from '../core/piece/phase-runner.js';
+import { needsStatusJudgmentPhase, runReportPhase, runStatusJudgmentPhase } from '../core/piece/phase-runner.js';
 import {
   makeResponse,
   makeMovement,
@@ -111,6 +111,45 @@ describe('PieceEngine Integration: Error Handling', () => {
       expect(reason).toContain('API connection failed');
     });
 
+  });
+
+  // =====================================================
+  // 2.5 Phase 3 fallback
+  // =====================================================
+  describe('Phase 3 fallback', () => {
+    it('should continue with phase1 rule evaluation when status judgment throws', async () => {
+      const config = buildDefaultPieceConfig({
+        initialMovement: 'plan',
+        movements: [
+          makeMovement('plan', {
+            rules: [makeRule('continue', 'COMPLETE')],
+          }),
+        ],
+      });
+      const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+
+      vi.mocked(needsStatusJudgmentPhase).mockReturnValue(true);
+      vi.mocked(runStatusJudgmentPhase).mockRejectedValueOnce(new Error('Phase 3 failed'));
+
+      mockRunAgentSequence([
+        makeResponse({ persona: 'plan', content: '[STEP:1] continue' }),
+      ]);
+      mockDetectMatchedRuleSequence([
+        { index: 0, method: 'phase1_tag' },
+      ]);
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('completed');
+      expect(runStatusJudgmentPhase).toHaveBeenCalledOnce();
+      expect(detectMatchedRule).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'plan' }),
+        '[STEP:1] continue',
+        '',
+        expect.any(Object),
+      );
+      expect(state.movementOutputs.get('plan')?.matchedRuleMethod).toBe('phase1_tag');
+    });
   });
 
   // =====================================================

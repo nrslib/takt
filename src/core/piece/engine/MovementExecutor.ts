@@ -19,9 +19,10 @@ import { executeAgent } from '../../../agents/agent-usecases.js';
 import { InstructionBuilder } from '../instruction/InstructionBuilder.js';
 import { needsStatusJudgmentPhase, runReportPhase, runStatusJudgmentPhase } from '../phase-runner.js';
 import { detectMatchedRule } from '../evaluation/index.js';
+import type { StatusJudgmentPhaseResult } from '../phase-runner.js';
 import { buildSessionKey } from '../session-key.js';
 import { incrementMovementIteration, getPreviousOutput } from './state-manager.js';
-import { createLogger } from '../../../shared/utils/index.js';
+import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { RunPaths } from '../run/run-paths.js';
 
@@ -237,9 +238,17 @@ export class MovementExecutor {
     }
 
     // Phase 3: status judgment (new session, no tools, determines matched rule)
-    const phase3Result = needsStatusJudgmentPhase(step)
-      ? await runStatusJudgmentPhase(step, phaseCtx)
-      : undefined;
+    let phase3Result: StatusJudgmentPhaseResult | undefined;
+    try {
+      phase3Result = needsStatusJudgmentPhase(step)
+        ? await runStatusJudgmentPhase(step, phaseCtx)
+        : undefined;
+    } catch (error) {
+      log.info('Phase 3 status judgment failed, falling back to phase1 rule evaluation', {
+        movement: step.name,
+        error: getErrorMessage(error),
+      });
+    }
 
     if (phase3Result) {
       log.debug('Rule matched (Phase 3)', {

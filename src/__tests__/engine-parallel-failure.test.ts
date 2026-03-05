@@ -36,6 +36,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 import { PieceEngine } from '../core/piece/index.js';
 import { runAgent } from '../agents/runner.js';
 import { detectMatchedRule } from '../core/piece/evaluation/index.js';
+import { needsStatusJudgmentPhase, runStatusJudgmentPhase } from '../core/piece/phase-runner.js';
 import {
   makeResponse,
   makeMovement,
@@ -214,5 +215,60 @@ describe('PieceEngine Integration: Parallel Movement Partial Failure', () => {
     expect(archReviewOutput).toBeDefined();
     expect(archReviewOutput!.error).toBe('Session resume failed');
     expect(archReviewOutput!.content).toBe('');
+  });
+
+  it('should fallback to phase1 rule evaluation when sub-movement phase3 throws', async () => {
+    const config = buildParallelOnlyConfig();
+    const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+
+    vi.mocked(needsStatusJudgmentPhase).mockImplementation((movement) => {
+      return movement.name === 'arch-review' || movement.name === 'security-review';
+    });
+    vi.mocked(runStatusJudgmentPhase).mockImplementation(async (movement) => {
+      if (movement.name === 'arch-review') {
+        throw new Error('Phase 3 failed for arch-review');
+      }
+      return { tag: '', ruleIndex: 0, method: 'auto_select' };
+    });
+
+    const mock = vi.mocked(runAgent);
+    mock.mockImplementationOnce(async (persona, task, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: task,
+      });
+      return makeResponse({ persona: 'arch-review', content: '[STEP:1] done' });
+    });
+    mock.mockImplementationOnce(async (persona, task, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: task,
+      });
+      return makeResponse({ persona: 'security-review', content: '[STEP:1] done' });
+    });
+    mock.mockImplementationOnce(async (persona, task, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: task,
+      });
+      return makeResponse({ persona: 'done', content: 'completed' });
+    });
+
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' }, // arch-review fallback
+      { index: 0, method: 'aggregate' },  // reviewers aggregate
+      { index: 0, method: 'phase1_tag' }, // done -> COMPLETE
+    ]);
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(state.movementOutputs.get('arch-review')?.status).toBe('done');
+    expect(state.movementOutputs.get('arch-review')?.matchedRuleMethod).toBe('phase1_tag');
+    expect(
+      vi.mocked(detectMatchedRule).mock.calls.some(([movement, content, tagContent]) => {
+        return movement.name === 'arch-review' && content === '[STEP:1] done' && tagContent === '';
+      }),
+    ).toBe(true);
   });
 });
