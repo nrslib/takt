@@ -17,7 +17,7 @@ import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { runInstructMode } from './instructMode.js';
 import { dispatchConversationAction } from '../../interactive/actionDispatcher.js';
 import type { PieceContext } from '../../interactive/interactive.js';
-import { resolveLanguage, findRunForTask, findPreviousOrderContent, loadRunSessionContext } from '../../interactive/index.js';
+import { resolveLanguage, findRunForTask, findPreviousOrderContent } from '../../interactive/index.js';
 import { type BranchActionTarget, resolveTargetBranch } from './taskActionTarget.js';
 import {
   appendRetryNote,
@@ -96,9 +96,6 @@ export async function instructBranch(
   const globalConfig = resolvePieceConfigValues(projectDir, ['interactivePreviewMovements', 'language']);
   const lang = resolveLanguage(globalConfig.language);
   const matchedSlug = findRunForTask(worktreePath, target.content);
-  const previousRunContext = matchedSlug
-    ? loadRunSessionContext(worktreePath, matchedSlug)
-    : undefined;
   const selectedPiece = await selectPieceWithOptionalReuse(projectDir, target.data?.piece, lang);
   if (!selectedPiece) {
     info('Cancelled');

@@ -7,7 +7,7 @@ const log = createLogger('clone');
 
 function gitRefExists(projectDir: string, ref: string): boolean {
   try {
-    execFileSync('git', ['check-ref-format', '--branch', '--', ref], {
+    execFileSync('git', ['check-ref-format', '--branch', ref], {
       cwd: projectDir,
       stdio: 'pipe',
     });
@@ -38,7 +38,7 @@ function resolveConfiguredBaseBranch(projectDir: string, explicitBaseBranch?: st
 
 function assertValidBranchRef(projectDir: string, ref: string): void {
   try {
-    execFileSync('git', ['check-ref-format', '--branch', '--', ref], {
+    execFileSync('git', ['check-ref-format', '--branch', ref], {
       cwd: projectDir,
       stdio: 'pipe',
     });

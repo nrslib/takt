@@ -1,5 +1,5 @@
 name: takt-default
-description: TAKT開発ピース（計画 → テスト作成 → 実装 → AIアンチパターンレビュー → 5並列レビュー → 修正 → 監督 → 完了）
+description: TAKT開発ピース（計画 → テスト作成 → チームリーダー実装 → AIアンチパターンレビュー → 5並列レビュー → 修正 → 監督 → 完了）
 piece_config:
   provider_options:
     codex:
@@ -15,19 +15,7 @@ loop_monitors:
     threshold: 3
     judge:
       persona: supervisor
-      instruction: |
-        ai_review と ai_fix のループが {cycle_count} 回繰り返されました。
-
-        各サイクルのレポートを確認し、このループが健全（進捗がある）か、
-        非生産的（同じ問題を繰り返している）かを判断してください。
-
-        **参照するレポート:**
-        - AIレビュー結果: {report:ai-review.md}
-
-        **判断基準:**
-        - 各サイクルで新しい問題が発見・修正されているか
-        - 同じ指摘が繰り返されていないか
-        - 修正が実際に反映されているか
+      instruction: loop-monitor-ai-fix
       rules:
         - condition: 健全（進捗あり）
           next: ai_review
@@ -103,7 +91,7 @@ movements:
       - condition: テスト対象が未実装のためテスト作成をスキップする
         next: implement
       - condition: テスト作成を進行できない
-        next: ABORT
+        next: plan
       - condition: ユーザーへの確認事項があるためユーザー入力が必要
         next: write_tests
         requires_user_input: true
@@ -124,6 +112,7 @@ movements:
     knowledge:
       - takt
       - architecture
+      - task-decomposition
     provider_options:
       claude:
         allowed_tools:
@@ -136,18 +125,32 @@ movements:
           - WebSearch
           - WebFetch
     required_permission_mode: edit
+    team_leader:
+      max_parts: 2
+      part_persona: coder
+      part_edit: true
+      part_permission_mode: edit
+      part_allowed_tools:
+        - Read
+        - Glob
+        - Grep
+        - Edit
+        - Write
+        - Bash
+        - WebSearch
+        - WebFetch
+    instruction: team-leader-implement
     rules:
       - condition: 実装完了
         next: ai_review
       - condition: 実装未着手（レポートのみ）
         next: ai_review
       - condition: 判断できない、情報不足
-        next: ai_review
+        next: plan
       - condition: ユーザー入力が必要
         next: implement
         requires_user_input: true
         interactive_only: true
-    instruction: implement-after-tests
     output_contracts:
       report:
         - name: coder-scope.md
@@ -377,6 +380,7 @@ movements:
     edit: false
     persona: supervisor
     policy: review
+    knowledge: architecture
     provider_options:
       claude:
         allowed_tools:

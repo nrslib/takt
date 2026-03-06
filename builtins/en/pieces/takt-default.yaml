@@ -1,5 +1,5 @@
 name: takt-default
-description: TAKT development piece (plan → write tests → implement → AI antipattern review → 5-parallel review → fix → supervise → complete)
+description: TAKT development piece (plan → write tests → team-leader implement → AI antipattern review → 5-parallel review → fix → supervise → complete)
 piece_config:
   provider_options:
     codex:
@@ -15,19 +15,7 @@ loop_monitors:
     threshold: 3
     judge:
       persona: supervisor
-      instruction: |
-        The ai_review ↔ ai_fix loop has repeated {cycle_count} times.
-
-        Review the reports from each cycle and determine whether this loop
-        is healthy (making progress) or unproductive (repeating the same issues).
-
-        **Reports to reference:**
-        - AI Review results: {report:ai-review.md}
-
-        **Judgment criteria:**
-        - Are new issues being found/fixed in each cycle?
-        - Are the same findings being repeated?
-        - Are fixes actually being applied?
+      instruction: loop-monitor-ai-fix
       rules:
         - condition: Healthy (making progress)
           next: ai_review
@@ -103,7 +91,7 @@ movements:
       - condition: Cannot proceed because the test target is not implemented yet, so skip test writing
         next: implement
       - condition: Cannot proceed with test writing
-        next: ABORT
+        next: plan
       - condition: User input needed for clarification
         next: write_tests
         requires_user_input: true
@@ -124,6 +112,7 @@ movements:
     knowledge:
       - takt
       - architecture
+      - task-decomposition
     provider_options:
       claude:
         allowed_tools:
@@ -136,18 +125,32 @@ movements:
           - WebSearch
           - WebFetch
     required_permission_mode: edit
+    team_leader:
+      max_parts: 2
+      part_persona: coder
+      part_edit: true
+      part_permission_mode: edit
+      part_allowed_tools:
+        - Read
+        - Glob
+        - Grep
+        - Edit
+        - Write
+        - Bash
+        - WebSearch
+        - WebFetch
+    instruction: team-leader-implement
     rules:
       - condition: Implementation complete
         next: ai_review
       - condition: No implementation (report only)
         next: ai_review
       - condition: Cannot proceed, insufficient info
-        next: ai_review
+        next: plan
       - condition: User input required
         next: implement
         requires_user_input: true
         interactive_only: true
-    instruction: implement-after-tests
     output_contracts:
       report:
         - name: coder-scope.md
@@ -377,6 +380,7 @@ movements:
     edit: false
     persona: supervisor
     policy: review
+    knowledge: architecture
     provider_options:
       claude:
         allowed_tools:
