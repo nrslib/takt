@@ -1,5 +1,5 @@
 name: dual
-description: フロントエンド＋バックエンド開発ピース（アーキテクチャ・フロントエンド・セキュリティ・QAレビューと修正ループ付き）
+description: フロントエンド＋バックエンド開発ピース（テスト先行 → チームリーダー実装 → AIレビュー → 2段階レビュー → 修正ループ → 監督）
 piece_config:
   provider_options:
     codex:
@@ -19,10 +19,10 @@ loop_monitors:
       rules:
         - condition: 健全（進捗あり）
           next: ai_review
-        - condition: 非生産的（同じ指摘の反復・修正未反映）
-          next: ai_no_fix
+        - condition: 非生産的（改善なし）
+          next: reviewers_1
   - cycle:
-      - reviewers
+      - reviewers_1
       - fix
     threshold: 3
     judge:
@@ -30,7 +30,7 @@ loop_monitors:
       instruction_template: loop-monitor-reviewers-fix
       rules:
         - condition: 健全（指摘数が減少、修正が反映されている）
-          next: reviewers
+          next: reviewers_1
         - condition: 非生産的（同じ指摘が繰り返される）
           next: supervise
 movements:
@@ -53,24 +53,26 @@ movements:
     instruction: plan
     rules:
       - condition: タスク分析と計画が完了した
-        next: implement
+        next: write_tests
       - condition: 要件が不明確で計画を立てられない
         next: ABORT
+        appendix: |
+          確認事項:
+          - {質問1}
+          - {質問2}
     output_contracts:
       report:
         - name: plan.md
           format: plan
-  - name: implement
+  - name: write_tests
     edit: true
     persona: coder
     policy:
       - coding
       - testing
-    session: refresh
     knowledge:
       - frontend
       - backend
-      - security
       - architecture
     provider_options:
       claude:
@@ -83,7 +85,65 @@ movements:
           - Bash
           - WebSearch
           - WebFetch
-    instruction: implement
+    required_permission_mode: edit
+    instruction: write-tests-first
+    rules:
+      - condition: テスト作成が完了した
+        next: implement
+      - condition: テスト対象が未実装のためテスト作成をスキップする
+        next: implement
+      - condition: テスト作成を進行できない
+        next: plan
+      - condition: ユーザーへの確認事項があるためユーザー入力が必要
+        next: write_tests
+        requires_user_input: true
+        interactive_only: true
+    output_contracts:
+      report:
+        - name: test-scope.md
+          format: coder-scope
+        - name: test-decisions.md
+          format: coder-decisions
+  - name: implement
+    edit: true
+    persona: coder
+    policy:
+      - coding
+      - testing
+    session: refresh
+    knowledge:
+      - frontend
+      - backend
+      - security
+      - architecture
+      - task-decomposition
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Edit
+          - Write
+          - Bash
+          - WebSearch
+          - WebFetch
+    required_permission_mode: edit
+    team_leader:
+      max_parts: 2
+      part_persona: coder
+      part_edit: true
+      part_permission_mode: edit
+      part_allowed_tools:
+        - Read
+        - Glob
+        - Grep
+        - Edit
+        - Write
+        - Bash
+        - WebSearch
+        - WebFetch
+    instruction: dual-team-leader-implement
     rules:
       - condition: 実装が完了した
         next: ai_review
@@ -118,7 +178,7 @@ movements:
     instruction: ai-review
     rules:
       - condition: AI特有の問題が見つからない
-        next: reviewers
+        next: reviewers_1
       - condition: AI特有の問題が検出された
         next: ai_fix
     output_contracts:
@@ -148,6 +208,7 @@ movements:
           - Bash
           - WebSearch
           - WebFetch
+    required_permission_mode: edit
     instruction: ai-fix
     pass_previous_response: false
     rules:
@@ -171,9 +232,9 @@ movements:
       - condition: ai_reviewの指摘が妥当（修正すべき）
         next: ai_fix
       - condition: ai_fixの判断が妥当（修正不要）
-        next: reviewers
+        next: reviewers_1
     instruction: arbitrate
-  - name: reviewers
+  - name: reviewers_1
     parallel:
       - name: arch-review
         edit: false
@@ -188,6 +249,7 @@ movements:
               - Read
               - Glob
               - Grep
+              - Bash
               - WebSearch
               - WebFetch
         rules:
@@ -209,6 +271,7 @@ movements:
               - Read
               - Glob
               - Grep
+              - Bash
               - WebSearch
               - WebFetch
         rules:
@@ -219,6 +282,36 @@ movements:
           report:
             - name: frontend-review.md
               format: frontend-review
+      - name: testing-review
+        edit: false
+        persona: testing-reviewer
+        policy:
+          - review
+          - testing
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - Bash
+              - WebSearch
+              - WebFetch
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        instruction: review-test
+        output_contracts:
+          report:
+            - name: testing-review.md
+              format: testing-review
+    rules:
+      - condition: all("approved")
+        next: reviewers_2
+      - condition: any("needs_fix")
+        next: fix
+  - name: reviewers_2
+    parallel:
       - name: security-review
         edit: false
         persona: security-reviewer
@@ -230,6 +323,7 @@ movements:
               - Read
               - Glob
               - Grep
+              - Bash
               - WebSearch
               - WebFetch
         rules:
@@ -252,6 +346,7 @@ movements:
               - Read
               - Glob
               - Grep
+              - Bash
               - WebSearch
               - WebFetch
         rules:
@@ -262,6 +357,27 @@ movements:
           report:
             - name: qa-review.md
               format: qa-review
+      - name: requirements-review
+        edit: false
+        persona: requirements-reviewer
+        policy: review
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - Bash
+              - WebSearch
+              - WebFetch
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        instruction: review-requirements
+        output_contracts:
+          report:
+            - name: requirements-review.md
+              format: requirements-review
     rules:
       - condition: all("approved")
         next: supervise
@@ -293,7 +409,7 @@ movements:
     pass_previous_response: false
     rules:
       - condition: 修正が完了した
-        next: reviewers
+        next: reviewers_1
       - condition: 修正を進行できない
         next: plan
     instruction: fix
@@ -301,12 +417,14 @@ movements:
     edit: false
     persona: dual-supervisor
     policy: review
+    knowledge: architecture
     provider_options:
       claude:
         allowed_tools:
           - Read
           - Glob
           - Grep
+          - Bash
           - WebSearch
           - WebFetch
     instruction: supervise
@@ -315,7 +433,7 @@ movements:
       - condition: すべての検証が完了し、マージ可能な状態である
         next: COMPLETE
       - condition: 問題が検出された
-        next: fix_supervisor
+        next: plan
     output_contracts:
       report:
         - name: supervisor-validation.md
@@ -323,32 +441,3 @@ movements:
         - name: summary.md
           format: summary
           use_judge: false
-  - name: fix_supervisor
-    edit: true
-    persona: coder
-    policy:
-      - coding
-      - testing
-    knowledge:
-      - frontend
-      - backend
-      - security
-      - architecture
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Write
-          - Bash
-          - WebSearch
-          - WebFetch
-    instruction: fix-supervisor
-    pass_previous_response: false
-    rules:
-      - condition: 監督者の指摘に対する修正が完了した
-        next: supervise
-      - condition: 修正を進行できない
-        next: plan

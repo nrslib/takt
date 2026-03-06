@@ -346,20 +346,25 @@ describe('Piece Loader IT: parallel movement loading', () => {
     }
   });
 
-  it('should load 4 parallel reviewers from dual piece', () => {
+  it('should load 2-stage parallel reviewers from dual piece', () => {
     const config = loadPiece('dual', testDir);
     expect(config).not.toBeNull();
 
-    const parallelStep = config!.movements.find(
-      (s) => s.parallel && s.parallel.length === 4,
-    );
-    expect(parallelStep).toBeDefined();
+    const reviewers1 = config!.movements.find((s) => s.name === 'reviewers_1');
+    expect(reviewers1).toBeDefined();
+    expect(reviewers1!.parallel!.length).toBe(3);
+    const stage1Names = reviewers1!.parallel!.map((s) => s.name);
+    expect(stage1Names).toContain('arch-review');
+    expect(stage1Names).toContain('frontend-review');
+    expect(stage1Names).toContain('testing-review');
 
-    const subNames = parallelStep!.parallel!.map((s) => s.name);
-    expect(subNames).toContain('arch-review');
-    expect(subNames).toContain('frontend-review');
-    expect(subNames).toContain('security-review');
-    expect(subNames).toContain('qa-review');
+    const reviewers2 = config!.movements.find((s) => s.name === 'reviewers_2');
+    expect(reviewers2).toBeDefined();
+    expect(reviewers2!.parallel!.length).toBe(3);
+    const stage2Names = reviewers2!.parallel!.map((s) => s.name);
+    expect(stage2Names).toContain('security-review');
+    expect(stage2Names).toContain('qa-review');
+    expect(stage2Names).toContain('requirements-review');
   });
 });
 

@@ -52,7 +52,6 @@ piece_categories:
   🎵 TAKT開発:
     pieces:
       - takt-default
-      - takt-default-team-leader
       - takt-default-review-fix
   その他:
     pieces:

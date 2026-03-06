@@ -402,7 +402,7 @@ describe('Piece Patterns IT: review piece', () => {
   });
 });
 
-describe('Piece Patterns IT: dual piece (4 parallel reviewers)', () => {
+describe('Piece Patterns IT: dual piece (2-stage parallel reviewers)', () => {
   let testDir: string;
 
   beforeEach(() => {
@@ -415,19 +415,26 @@ describe('Piece Patterns IT: dual piece (4 parallel reviewers)', () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  it('should complete with all("approved") in 4-parallel review', async () => {
+  it('should complete with 2-stage review: reviewers_1 → reviewers_2 → supervise', async () => {
     const config = loadPiece('dual', testDir);
     expect(config).not.toBeNull();
 
     setMockScenario([
       { persona: 'planner', status: 'done', content: '[PLAN:1]\n\nClear.' },
+      { persona: 'coder', status: 'done', content: '[WRITE_TESTS:1]\n\nTests written.' },
+      // Team leader decompose (returns single part via structuredOutput)
+      { persona: 'coder', status: 'done', content: 'Decomposed into 1 part.', structuredOutput: { parts: [{ id: 'part-1', title: 'Implement all', instruction: 'Implement the task.' }] } },
+      // Team leader part execution
       { persona: 'coder', status: 'done', content: '[IMPLEMENT:1]\n\nDone.' },
       { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI_REVIEW:1]\n\nNo issues.' },
-      // 4 parallel reviewers
+      // Stage 1: 3 parallel reviewers (arch, frontend, testing)
       { persona: 'architecture-reviewer', status: 'done', content: '[ARCH-REVIEW:1]\n\napproved' },
       { persona: 'frontend-reviewer', status: 'done', content: '[FRONTEND-REVIEW:1]\n\napproved' },
+      { persona: 'testing-reviewer', status: 'done', content: '[TESTING-REVIEW:1]\n\napproved' },
+      // Stage 2: 3 parallel reviewers (security, qa, requirements)
       { persona: 'security-reviewer', status: 'done', content: '[SECURITY-REVIEW:1]\n\napproved' },
       { persona: 'qa-reviewer', status: 'done', content: '[QA-REVIEW:1]\n\napproved' },
+      { persona: 'requirements-reviewer', status: 'done', content: '[REQUIREMENTS-REVIEW:1]\n\napproved' },
       // Supervisor
       { persona: 'dual-supervisor', status: 'done', content: '[SUPERVISE:1]\n\nAll validations pass.' },
     ]);
