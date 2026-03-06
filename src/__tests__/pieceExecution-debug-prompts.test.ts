@@ -236,7 +236,7 @@ describe('executePiece debug prompts logging', () => {
           name: 'implement',
           persona: '../agents/coder.md',
           personaDisplayName: 'coder',
-          instructionTemplate: 'Implement task',
+          instruction: 'Implement task',
           passPreviousResponse: true,
           rules: [{ condition: 'done', next: 'COMPLETE' }],
         },

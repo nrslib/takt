@@ -317,11 +317,11 @@ describe('normalizePieceConfig knowledge resolution', () => {
 
 // --- Test helpers for InstructionBuilder ---
 
-function createMinimalStep(instructionTemplate: string): PieceMovement {
+function createMinimalStep(instruction: string): PieceMovement {
   return {
     name: 'test-step',
     personaDisplayName: 'coder',
-    instructionTemplate,
+    instruction,
     passPreviousResponse: false,
   };
 }

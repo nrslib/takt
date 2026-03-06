@@ -9,7 +9,7 @@ describe('createPartMovement', () => {
       name: 'implement',
       persona: 'coder',
       personaDisplayName: 'Coder',
-      instructionTemplate: 'do work',
+      instruction: 'do work',
       passPreviousResponse: false,
       providerOptions: {
         claude: {

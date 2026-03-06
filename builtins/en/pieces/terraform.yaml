@@ -265,7 +265,7 @@ loop_monitors:
     threshold: 3
     judge:
       persona: supervisor
-      instruction_template: |
+      instruction: |
         The review → fix cycle has repeated {cycle_count} times.
         Check the review report history in the Report Directory and assess convergence.
 
@@ -282,7 +282,7 @@ loop_monitors:
     threshold: 3
     judge:
       persona: supervisor
-      instruction_template: |
+      instruction: |
         The AI fix → review cycle has repeated {cycle_count} times.
         Check the review report history in the Report Directory and assess convergence.
 
@@ -299,7 +299,7 @@ loop_monitors:
     threshold: 3
     judge:
       persona: supervisor
-      instruction_template: |
+      instruction: |
         The supervisor fix → review cycle has repeated {cycle_count} times.
         Check the review report history in the Report Directory and assess convergence.
 

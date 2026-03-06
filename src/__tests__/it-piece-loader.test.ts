@@ -92,8 +92,8 @@ describe('Piece Loader IT: builtin piece loading', () => {
 
     expect(planMovement).toBeDefined();
     expect(implementMovement).toBeDefined();
-    expect(planMovement!.instructionTemplate).toContain('missing E2E tests');
-    expect(implementMovement!.instructionTemplate).toContain('npm run test:e2e:mock');
+    expect(planMovement!.instruction).toContain('missing E2E tests');
+    expect(implementMovement!.instruction).toContain('npm run test:e2e:mock');
   });
 
   it('should load e2e-test as a builtin piece in ja locale', () => {
@@ -110,8 +110,8 @@ describe('Piece Loader IT: builtin piece loading', () => {
 
     expect(planMovement).toBeDefined();
     expect(implementMovement).toBeDefined();
-    expect(planMovement!.instructionTemplate).toContain('E2Eテスト');
-    expect(implementMovement!.instructionTemplate).toContain('npm run test:e2e:mock');
+    expect(planMovement!.instruction).toContain('E2Eテスト');
+    expect(implementMovement!.instruction).toContain('npm run test:e2e:mock');
   });
 });
 
@@ -155,6 +155,49 @@ movements:
     expect(config!.name).toBe('custom-wf');
     expect(config!.movements.length).toBe(1);
     expect(config!.movements[0]!.name).toBe('start');
+  });
+
+  it('should propagate canonical instruction field through loader for movement and loop monitor judge', () => {
+    // Given: project-local piece that uses instruction on both movement and loop monitor judge
+    const piecesDir = join(testDir, '.takt', 'pieces');
+    mkdirSync(piecesDir, { recursive: true });
+
+    writeFileSync(join(piecesDir, 'instruction-canonical.yaml'), `
+name: instruction-canonical
+max_movements: 8
+initial_movement: step1
+
+movements:
+  - name: step1
+    instruction: "Step 1 instruction"
+    rules:
+      - condition: next
+        next: step2
+  - name: step2
+    instruction: "Step 2 instruction"
+    rules:
+      - condition: done
+        next: COMPLETE
+
+loop_monitors:
+  - cycle: [step1, step2]
+    threshold: 2
+    judge:
+      instruction: "Judge instruction"
+      rules:
+        - condition: continue
+          next: step2
+`);
+
+    // When: loading the piece through the integration entry point
+    const config = loadPiece('instruction-canonical', testDir);
+
+    // Then: canonical instruction is available on normalized movement/judge models
+    expect(config).not.toBeNull();
+    const step1 = config!.movements[0] as unknown as Record<string, unknown>;
+    const judge = config!.loopMonitors?.[0]?.judge as unknown as Record<string, unknown>;
+    expect(step1.instruction).toBe('Step 1 instruction');
+    expect(judge.instruction).toBe('Judge instruction');
   });
 });
 

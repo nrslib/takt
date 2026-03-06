@@ -265,7 +265,7 @@ loop_monitors:
     threshold: 3
     judge:
       persona: supervisor
-      instruction_template: |
+      instruction: |
         レビュー → 修正のサイクルが {cycle_count} 回繰り返されました。
         Report Directory 内のレビューレポート履歴を確認し、収束状況を判断してください。
 
@@ -282,7 +282,7 @@ loop_monitors:
     threshold: 3
     judge:
       persona: supervisor
-      instruction_template: |
+      instruction: |
         AI修正 → レビューのサイクルが {cycle_count} 回繰り返されました。
         Report Directory 内のレビューレポート履歴を確認し、収束状況を判断してください。
 
@@ -299,7 +299,7 @@ loop_monitors:
     threshold: 3
     judge:
       persona: supervisor
-      instruction_template: |
+      instruction: |
         監督修正 → レビューのサイクルが {cycle_count} 回繰り返されました。
         Report Directory 内のレビューレポート履歴を確認し、収束状況を判断してください。
 

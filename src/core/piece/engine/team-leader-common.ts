@@ -45,7 +45,7 @@ export function createPartMovement(step: PieceMovement, part: PartDefinition): P
     model: step.model,
     requiredPermissionMode: step.teamLeader.partPermissionMode ?? step.requiredPermissionMode,
     edit: step.teamLeader.partEdit ?? step.edit,
-    instructionTemplate: part.instruction,
+    instruction: part.instruction,
     passPreviousResponse: false,
   };
 }

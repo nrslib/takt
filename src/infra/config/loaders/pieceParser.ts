@@ -272,6 +272,12 @@ function normalizeStepFromRaw(
   const expandedInstruction = step.instruction
     ? resolveRefToContent(step.instruction, sections.resolvedInstructions, pieceDir, 'instructions', context)
     : undefined;
+  if (step.instruction_template !== undefined) {
+    console.warn(`Movement "${step.name}" uses deprecated field "instruction_template". Use "instruction" instead.`);
+  }
+  const expandedLegacyInstruction = step.instruction_template
+    ? resolveRefToContent(step.instruction_template, sections.resolvedInstructions, pieceDir, 'instructions', context)
+    : undefined;
 
   const result: PieceMovement = {
     name: step.name,
@@ -286,9 +292,7 @@ function normalizeStepFromRaw(
     requiredPermissionMode: step.required_permission_mode,
     providerOptions: mergeProviderOptions(inheritedProviderOptions, normalizedProvider.providerOptions),
     edit: step.edit,
-    instructionTemplate: (step.instruction_template
-      ? resolveRefToContent(step.instruction_template, sections.resolvedInstructions, pieceDir, 'instructions', context)
-      : undefined) || expandedInstruction || '{task}',
+    instruction: expandedInstruction || expandedLegacyInstruction || '{task}',
     rules,
     outputContracts: normalizeOutputContracts(step.output_contracts, pieceDir, sections.resolvedReportFormats, context),
     qualityGates: applyQualityGateOverrides(
@@ -335,19 +339,25 @@ function normalizeStepFromRaw(
 
 /** Normalize a raw loop monitor judge from YAML into internal format. */
 function normalizeLoopMonitorJudge(
-  raw: { persona?: string; instruction_template?: string; rules: Array<{ condition: string; next: string }> },
+  raw: { persona?: string; instruction?: string; instruction_template?: string; rules: Array<{ condition: string; next: string }> },
   pieceDir: string,
   sections: PieceSections,
   context?: FacetResolutionContext,
 ): LoopMonitorJudge {
   const { personaSpec, personaPath } = resolvePersona(raw.persona, sections, pieceDir, context);
+  if (raw.instruction_template !== undefined) {
+    console.warn('loop_monitors judge uses deprecated field "instruction_template". Use "instruction" instead.');
+  }
+  const resolvedInstruction = raw.instruction
+    ? resolveRefToContent(raw.instruction, sections.resolvedInstructions, pieceDir, 'instructions', context)
+    : raw.instruction_template
+      ? resolveRefToContent(raw.instruction_template, sections.resolvedInstructions, pieceDir, 'instructions', context)
+      : undefined;
 
   return {
     persona: personaSpec,
     personaPath,
-    instructionTemplate: raw.instruction_template
-      ? resolveRefToContent(raw.instruction_template, sections.resolvedInstructions, pieceDir, 'instructions', context)
-      : undefined,
+    instruction: resolvedInstruction,
     rules: raw.rules.map((r) => ({ condition: r.condition, next: r.next })),
   };
 }
@@ -356,7 +366,7 @@ function normalizeLoopMonitorJudge(
  * Normalize raw loop monitors from YAML into internal format.
  */
 function normalizeLoopMonitors(
-  raw: Array<{ cycle: string[]; threshold: number; judge: { persona?: string; instruction_template?: string; rules: Array<{ condition: string; next: string }> } }> | undefined,
+  raw: Array<{ cycle: string[]; threshold: number; judge: { persona?: string; instruction?: string; instruction_template?: string; rules: Array<{ condition: string; next: string }> } }> | undefined,
   pieceDir: string,
   sections: PieceSections,
   context?: FacetResolutionContext,

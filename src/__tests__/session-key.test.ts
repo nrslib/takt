@@ -11,7 +11,7 @@ function createMovement(overrides: Partial<PieceMovement> = {}): PieceMovement {
     name: 'test-movement',
     personaDisplayName: 'test',
     edit: false,
-    instructionTemplate: '',
+    instruction: '',
     passPreviousResponse: true,
     ...overrides,
   };

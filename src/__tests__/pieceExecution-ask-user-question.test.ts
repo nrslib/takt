@@ -49,7 +49,7 @@ const { MockPieceEngine } = vi.hoisted(() => {
         return { status: 'aborted', iteration: 1 };
       }
       if (firstStep) {
-        this.emit('movement:start', firstStep, 1, firstStep.instructionTemplate, { provider: undefined, model: undefined });
+        this.emit('movement:start', firstStep, 1, firstStep.instruction, { provider: undefined, model: undefined });
       }
       this.emit('piece:complete', { status: 'completed', iteration: 1 });
       return { status: 'completed', iteration: 1 };
@@ -171,7 +171,7 @@ function makeConfig(): PieceConfig {
         name: 'implement',
         persona: '../agents/coder.md',
         personaDisplayName: 'coder',
-        instructionTemplate: 'Implement task',
+        instruction: 'Implement task',
         passPreviousResponse: true,
         rules: [{ condition: 'done', next: 'COMPLETE' }],
       },

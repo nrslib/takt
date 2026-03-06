@@ -17,7 +17,7 @@ function createStep(fileName: string): PieceMovement {
     name: 'implement',
     persona: 'coder',
     personaDisplayName: 'Coder',
-    instructionTemplate: 'Implement task',
+    instruction: 'Implement task',
     passPreviousResponse: false,
     outputContracts: [{ name: fileName }],
   };

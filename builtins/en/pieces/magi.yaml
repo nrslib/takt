@@ -18,7 +18,7 @@ initial_movement: melchior
 movements:
   - name: melchior
     persona: melchior
-    instruction_template: |
+    instruction: |
       # MAGI System Initiated
 
       ## Matter for Deliberation
@@ -48,7 +48,7 @@ movements:
         next: balthasar
   - name: balthasar
     persona: balthasar
-    instruction_template: |
+    instruction: |
       # MAGI System Continuing
 
       ## Matter for Deliberation
@@ -82,7 +82,7 @@ movements:
         next: casper
   - name: casper
     persona: casper
-    instruction_template: |
+    instruction: |
       # MAGI System Final Deliberation
 
       ## Matter for Deliberation

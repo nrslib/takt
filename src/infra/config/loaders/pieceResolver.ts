@@ -229,7 +229,7 @@ function buildMovementPreviews(piece: PieceConfig, maxCount: number): MovementPr
       name: movement.name,
       personaDisplayName: movement.personaDisplayName,
       personaContent: readMovementPersona(movement),
-      instructionContent: movement.instructionTemplate,
+      instructionContent: movement.instruction,
       allowedTools: movement.providerOptions?.claude?.allowedTools ?? [],
       canEdit: movement.edit === true,
     });

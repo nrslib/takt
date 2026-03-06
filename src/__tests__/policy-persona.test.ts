@@ -9,7 +9,7 @@
  * - File-based policy content loading via resolveContentPath
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -371,7 +371,7 @@ describe('InstructionBuilder policy injection', () => {
     const step = {
       name: 'test-step',
       personaDisplayName: 'coder',
-      instructionTemplate: 'Do the thing.',
+      instruction: 'Do the thing.',
       passPreviousResponse: false,
       policyContents: ['# Coding Policy\n\nWrite clean code.'],
     };
@@ -390,7 +390,7 @@ describe('InstructionBuilder policy injection', () => {
     const step = {
       name: 'test-step',
       personaDisplayName: 'coder',
-      instructionTemplate: 'Do the thing.',
+      instruction: 'Do the thing.',
       passPreviousResponse: false,
       policyContents: ['# Coding Policy\n\nWrite clean code.'],
     };
@@ -408,7 +408,7 @@ describe('InstructionBuilder policy injection', () => {
     const step = {
       name: 'test-step',
       personaDisplayName: 'coder',
-      instructionTemplate: 'Do the thing.',
+      instruction: 'Do the thing.',
       passPreviousResponse: false,
     };
 
@@ -423,7 +423,7 @@ describe('InstructionBuilder policy injection', () => {
     const step = {
       name: 'test-step',
       personaDisplayName: 'coder',
-      instructionTemplate: 'Do the thing.',
+      instruction: 'Do the thing.',
       passPreviousResponse: false,
       policyContents: ['Policy A content.', 'Policy B content.'],
     };
@@ -441,7 +441,7 @@ describe('InstructionBuilder policy injection', () => {
     const step = {
       name: 'test-step',
       personaDisplayName: 'coder',
-      instructionTemplate: 'Do the thing.',
+      instruction: 'Do the thing.',
       passPreviousResponse: false,
       policyContents: ['Step policy.'],
     };
@@ -545,7 +545,22 @@ describe('section reference resolution', () => {
     };
 
     const config = normalizePieceConfig(raw, testDir);
-    expect(config.movements[0]!.instructionTemplate).toBe('Implement the feature.');
+    expect(config.movements[0]!.instruction).toBe('Implement the feature.');
+  });
+
+  it('should expose normalized movement instruction on instruction field', () => {
+    const raw = {
+      name: 'test-piece',
+      movements: [{
+        name: 'impl',
+        persona: 'coder',
+        instruction: 'Canonical movement instruction',
+      }],
+    };
+
+    const config = normalizePieceConfig(raw, testDir);
+    const movement = config.movements[0] as unknown as Record<string, unknown>;
+    expect(movement.instruction).toBe('Canonical movement instruction');
   });
 
   it('should resolve output contract from report_formats section by name', () => {
@@ -586,7 +601,7 @@ describe('section reference resolution', () => {
     expect(config.movements[0]!.persona).toBe('nonexistent');
   });
 
-  it('should prefer instruction_template over instruction section reference', () => {
+  it('should prefer instruction over instruction_template when both are provided', () => {
     const raw = {
       name: 'test-piece',
       instructions: { implement: './instructions/implement.md' },
@@ -599,7 +614,144 @@ describe('section reference resolution', () => {
     };
 
     const config = normalizePieceConfig(raw, testDir);
-    expect(config.movements[0]!.instructionTemplate).toBe('Inline template takes priority.');
+    expect(config.movements[0]!.instruction).toBe('Implement the feature.');
+  });
+
+  it('should emit deprecation warning when movement uses instruction_template', () => {
+    // Given: deprecated instruction_template is used on a movement
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const raw = {
+        name: 'test-piece',
+        movements: [{
+          name: 'impl',
+          persona: 'coder',
+          instruction_template: 'Legacy movement instruction',
+        }],
+      };
+
+      // When: normalizing piece config
+      normalizePieceConfig(raw, testDir);
+
+      // Then: deprecation warning is emitted
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('instruction_template'));
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('should emit deprecation warning when loop monitor judge uses instruction_template', () => {
+    // Given: deprecated instruction_template is used on loop monitor judge
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const raw = {
+        name: 'test-piece',
+        movements: [
+          {
+            name: 'step1',
+            persona: 'coder',
+            instruction: '{task}',
+            rules: [{ condition: 'next', next: 'step2' }],
+          },
+          {
+            name: 'step2',
+            persona: 'coder',
+            instruction: '{task}',
+            rules: [{ condition: 'done', next: 'COMPLETE' }],
+          },
+        ],
+        loop_monitors: [
+          {
+            cycle: ['step1', 'step2'],
+            threshold: 2,
+            judge: {
+              persona: 'coder',
+              instruction_template: 'Legacy judge instruction',
+              rules: [{ condition: 'continue', next: 'step2' }],
+            },
+          },
+        ],
+      };
+
+      // When: normalizing piece config
+      normalizePieceConfig(raw, testDir);
+
+      // Then: deprecation warning is emitted
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('instruction_template'));
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('should prefer loop monitor judge instruction over instruction_template when both are provided', () => {
+    const raw = {
+      name: 'test-piece',
+      instructions: { judge_template: './instructions/implement.md' },
+      movements: [
+        {
+          name: 'step1',
+          persona: 'coder',
+          instruction: '{task}',
+          rules: [{ condition: 'next', next: 'step2' }],
+        },
+        {
+          name: 'step2',
+          persona: 'coder',
+          instruction: '{task}',
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        },
+      ],
+      loop_monitors: [
+        {
+          cycle: ['step1', 'step2'],
+          threshold: 2,
+          judge: {
+            persona: 'coder',
+            instruction: 'judge_template',
+            instruction_template: 'Legacy judge template',
+            rules: [{ condition: 'continue', next: 'step2' }],
+          },
+        },
+      ],
+    };
+
+    const config = normalizePieceConfig(raw, testDir);
+    expect(config.loopMonitors?.[0]?.judge.instruction).toBe('Implement the feature.');
+  });
+
+  it('should expose normalized loop monitor judge instruction on instruction field', () => {
+    const raw = {
+      name: 'test-piece',
+      movements: [
+        {
+          name: 'step1',
+          persona: 'coder',
+          instruction: '{task}',
+          rules: [{ condition: 'next', next: 'step2' }],
+        },
+        {
+          name: 'step2',
+          persona: 'coder',
+          instruction: '{task}',
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        },
+      ],
+      loop_monitors: [
+        {
+          cycle: ['step1', 'step2'],
+          threshold: 2,
+          judge: {
+            persona: 'coder',
+            instruction: 'Canonical judge instruction',
+            rules: [{ condition: 'continue', next: 'step2' }],
+          },
+        },
+      ],
+    };
+
+    const config = normalizePieceConfig(raw, testDir);
+    const judge = config.loopMonitors?.[0]?.judge as unknown as Record<string, unknown>;
+    expect(judge.instruction).toBe('Canonical judge instruction');
   });
 
   it('should store resolved sections on PieceConfig', () => {
@@ -653,7 +805,7 @@ describe('section reference resolution', () => {
     const parallel = config.movements[0]!.parallel!;
     expect(parallel[0]!.persona).toBe('./personas/coder.md');
     expect(parallel[0]!.policyContents).toEqual(['# Coding Policy\nWrite clean code.']);
-    expect(parallel[0]!.instructionTemplate).toBe('Implement the feature.');
+    expect(parallel[0]!.instruction).toBe('Implement the feature.');
     expect(parallel[1]!.policyContents).toEqual([
       '# Coding Policy\nWrite clean code.',
       '# Testing Policy\nTest everything.',

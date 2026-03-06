@@ -162,11 +162,11 @@ export const PieceProviderOptionsSchema = z.object({
 export const OutputContractItemSchema = z.object({
   /** Report file name */
   name: z.string().min(1),
-  /** Instruction appended after instruction_template (e.g., output format) */
+  /** Instruction appended after movement instruction (e.g., output format) */
   format: z.string().min(1),
   /** Whether this report is used as input for status judgment phase */
   use_judge: z.boolean().optional().default(true),
-  /** Instruction prepended before instruction_template (e.g., output destination) */
+  /** Instruction prepended before movement instruction (e.g., output destination) */
   order: z.string().optional(),
 });
 
@@ -376,7 +376,9 @@ export const LoopMonitorRuleSchema = z.object({
 export const LoopMonitorJudgeSchema = z.object({
   /** Persona reference — key name from piece-level personas map, or file path */
   persona: z.string().optional(),
-  /** Custom instruction template for the judge */
+  /** Custom judge instruction */
+  instruction: z.string().optional(),
+  /** Deprecated alias */
   instruction_template: z.string().optional(),
   /** Rules for the judge's decision */
   rules: z.array(LoopMonitorRuleSchema).min(1),

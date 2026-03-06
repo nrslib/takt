@@ -462,10 +462,10 @@ export class PieceEngine extends EventEmitter {
   }
 
   /**
-   * Build the default instruction template for a loop monitor judge.
-   * Used when the monitor config does not specify a custom instruction_template.
+   * Build the default instruction for a loop monitor judge.
+   * Used when the monitor config does not specify a custom instruction.
    */
-  private buildDefaultJudgeInstructionTemplate(
+  private buildDefaultJudgeInstruction(
     monitor: LoopMonitorConfig,
     cycleCount: number,
     language: string,
@@ -513,11 +513,11 @@ export class PieceEngine extends EventEmitter {
     cycleCount: number,
   ): Promise<string> {
     const language = this.options.language ?? 'en';
-    const instructionTemplate = monitor.judge.instructionTemplate
-      ?? this.buildDefaultJudgeInstructionTemplate(monitor, cycleCount, language);
+    const instruction = monitor.judge.instruction
+      ?? this.buildDefaultJudgeInstruction(monitor, cycleCount, language);
 
-    // Replace {cycle_count} in custom templates
-    const processedTemplate = instructionTemplate.replace(/\{cycle_count\}/g, String(cycleCount));
+    // Replace {cycle_count} in custom instructions
+    const processedInstruction = instruction.replace(/\{cycle_count\}/g, String(cycleCount));
 
     // Build a synthetic PieceMovement for the judge
     const judgeMovement: PieceMovement = {
@@ -531,7 +531,7 @@ export class PieceEngine extends EventEmitter {
           allowedTools: ['Read', 'Glob', 'Grep'],
         },
       },
-      instructionTemplate: processedTemplate,
+      instruction: processedInstruction,
       rules: monitor.judge.rules.map((r) => ({
         condition: r.condition,
         next: r.next,
@@ -553,7 +553,7 @@ export class PieceEngine extends EventEmitter {
 
     this.emit('movement:start', judgeMovement, this.state.iteration, prebuiltInstruction, this.optionsBuilder.resolveStepProviderModel(judgeMovement));
 
-    const { response, instruction } = await this.movementExecutor.runNormalMovement(
+    const { response, instruction: executedInstruction } = await this.movementExecutor.runNormalMovement(
       judgeMovement,
       this.state,
       this.task,
@@ -562,7 +562,7 @@ export class PieceEngine extends EventEmitter {
       prebuiltInstruction,
     );
     this.emitCollectedReports();
-    this.emit('movement:complete', judgeMovement, response, instruction);
+    this.emit('movement:complete', judgeMovement, response, executedInstruction);
 
     // Resolve next movement from the judge's rules
     const nextMovement = this.resolveNextMovementFromDone(judgeMovement, response);

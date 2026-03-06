@@ -16,7 +16,7 @@ export function makeMovement(overrides: Partial<PieceMovement> = {}): PieceMovem
   return {
     name: 'test-movement',
     personaDisplayName: 'tester',
-    instructionTemplate: '',
+    instruction: '',
     passPreviousResponse: false,
     ...overrides,
   };

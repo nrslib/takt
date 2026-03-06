@@ -7,7 +7,7 @@ function createMovement(overrides: Partial<PieceMovement> = {}): PieceMovement {
   return {
     name: 'reviewers',
     personaDisplayName: 'Reviewers',
-    instructionTemplate: 'review',
+    instruction: 'review',
     passPreviousResponse: false,
     ...overrides,
   };
