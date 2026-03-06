@@ -25,7 +25,25 @@ export class CloneManager {
         ? worktreeDir
         : path.resolve(projectDir, worktreeDir);
     }
-    return path.join(projectDir, '..', 'takt-worktrees');
+    const defaultDir = path.join(projectDir, '..', 'takt-worktrees');
+    if (!CloneManager.isParentWritable(defaultDir)) {
+      log.info('Parent directory not writable, using fallback clone base dir', {
+        defaultDir,
+        fallback: path.join(projectDir, '.takt', 'worktrees'),
+      });
+      return path.join(projectDir, '.takt', 'worktrees');
+    }
+    return defaultDir;
+  }
+
+  private static isParentWritable(targetDir: string): boolean {
+    const parentDir = path.dirname(targetDir);
+    try {
+      fs.accessSync(parentDir, fs.constants.W_OK);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private static resolveClonePath(projectDir: string, options: WorktreeOptions): string {

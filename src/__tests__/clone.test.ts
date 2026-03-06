@@ -19,6 +19,8 @@ vi.mock('node:fs', () => ({
     existsSync: vi.fn(),
     rmSync: vi.fn(),
     unlinkSync: vi.fn(),
+    accessSync: vi.fn(),
+    constants: { W_OK: 2 },
   },
   mkdirSync: vi.fn(),
   mkdtempSync: vi.fn(),
@@ -27,6 +29,8 @@ vi.mock('node:fs', () => ({
   existsSync: vi.fn(),
   rmSync: vi.fn(),
   unlinkSync: vi.fn(),
+  accessSync: vi.fn(),
+  constants: { W_OK: 2 },
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -50,9 +54,10 @@ vi.mock('../infra/config/project/projectConfig.js', async (importOriginal) => ({
 
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { loadGlobalConfig } from '../infra/config/global/globalConfig.js';
 import { loadProjectConfig } from '../infra/config/project/projectConfig.js';
-import { createSharedClone, createTempCloneForBranch, cleanupOrphanedClone } from '../infra/task/clone.js';
+import { CloneManager, createSharedClone, createTempCloneForBranch, cleanupOrphanedClone } from '../infra/task/clone.js';
 
 const mockExecFileSync = vi.mocked(execFileSync);
 const mockLoadProjectConfig = vi.mocked(loadProjectConfig);
@@ -1080,5 +1085,58 @@ describe('cleanupOrphanedClone path traversal protection', () => {
       validClonePath,
       expect.objectContaining({ recursive: true })
     );
+  });
+});
+
+describe('resolveCloneBaseDir parent-not-writable fallback', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('should fall back to .takt/worktrees when parent dir is not writable', () => {
+    // Simulate /workspaces/ being read-only (devcontainer scenario)
+    vi.mocked(fs.accessSync).mockImplementation(() => {
+      throw new Error('EACCES: permission denied');
+    });
+
+    const manager = new CloneManager();
+    vi.mocked(execFileSync)
+      .mockReturnValueOnce(Buffer.from('main'))   // resolveBaseBranch: git symbolic-ref
+      .mockReturnValueOnce(Buffer.from(''))        // clone
+      .mockReturnValueOnce(Buffer.from(''))        // remote remove
+      .mockReturnValueOnce(Buffer.from(''))         // checkout -b
+    ;
+
+    const result = manager.createSharedClone('/workspaces/hello-world', {
+      worktree: true,
+      taskSlug: 'test-task',
+    });
+
+    expect(result.path).toContain(path.join('/workspaces/hello-world', '.takt', 'worktrees'));
+    expect(mockLogInfo).toHaveBeenCalledWith(
+      'Parent directory not writable, using fallback clone base dir',
+      expect.objectContaining({ fallback: expect.stringContaining('.takt/worktrees') }),
+    );
+  });
+
+  it('should use default ../takt-worktrees when parent dir is writable', () => {
+    // accessSync does not throw = writable
+    vi.mocked(fs.accessSync).mockImplementation(() => undefined);
+
+    const manager = new CloneManager();
+    vi.mocked(execFileSync)
+      .mockReturnValueOnce(Buffer.from('main'))
+      .mockReturnValueOnce(Buffer.from(''))
+      .mockReturnValueOnce(Buffer.from(''))
+      .mockReturnValueOnce(Buffer.from(''))
+    ;
+
+    const result = manager.createSharedClone('/workspaces/hello-world', {
+      worktree: true,
+      taskSlug: 'test-task',
+    });
+
+    expect(result.path).toContain('takt-worktrees');
+    expect(result.path).not.toContain('.takt/worktrees');
   });
 });
