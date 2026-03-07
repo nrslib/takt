@@ -8,7 +8,12 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { PieceConfigRawSchema, ParallelSubMovementRawSchema, PieceMovementRawSchema } from '../core/models/index.js';
+import {
+  PieceConfigRawSchema,
+  ParallelSubMovementRawSchema,
+  PieceMovementRawSchema,
+  LoopMonitorJudgeSchema,
+} from '../core/models/index.js';
 
 describe('ParallelSubMovementRawSchema', () => {
   it('should validate a valid parallel sub-movement', () => {
@@ -30,6 +35,39 @@ describe('ParallelSubMovementRawSchema', () => {
 
     const result = ParallelSubMovementRawSchema.safeParse(raw);
     expect(result.success).toBe(true);
+  });
+
+  it('should accept a sub-movement with instruction field', () => {
+    // Given: a parallel sub-movement that uses the new canonical field
+    const raw = {
+      name: 'no-agent-step',
+      instruction: 'Do something',
+    };
+
+    // When: validating the sub-movement schema
+    const result = ParallelSubMovementRawSchema.safeParse(raw);
+
+    // Then: it is accepted
+    expect(result.success).toBe(true);
+  });
+
+  it('should accept a sub-movement when instruction and instruction_template are both provided', () => {
+    // Given: both canonical and deprecated fields are present during migration
+    const raw = {
+      name: 'dual-field-sub-step',
+      instruction: 'Canonical instruction',
+      instruction_template: 'Legacy instruction',
+    };
+
+    // When: validating the sub-movement schema
+    const result = ParallelSubMovementRawSchema.safeParse(raw);
+
+    // Then: schema keeps backward compatibility and accepts both fields
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect((result.data as unknown as Record<string, unknown>).instruction).toBe('Canonical instruction');
+      expect((result.data as unknown as Record<string, unknown>).instruction_template).toBe('Legacy instruction');
+    }
   });
 
   it('should accept optional fields', () => {
@@ -144,6 +182,39 @@ describe('PieceMovementRawSchema with parallel', () => {
     expect(result.success).toBe(true);
   });
 
+  it('should accept a movement with instruction only', () => {
+    // Given: a movement that only uses instruction
+    const raw = {
+      name: 'orphan-step',
+      instruction: 'Do something',
+    };
+
+    // When: validating the movement schema
+    const result = PieceMovementRawSchema.safeParse(raw);
+
+    // Then: it is accepted
+    expect(result.success).toBe(true);
+  });
+
+  it('should accept a movement when instruction and instruction_template are both provided', () => {
+    // Given: movement includes both canonical and deprecated instruction fields
+    const raw = {
+      name: 'orphan-step',
+      instruction: 'Canonical movement instruction',
+      instruction_template: 'Legacy movement instruction',
+    };
+
+    // When: validating the movement schema
+    const result = PieceMovementRawSchema.safeParse(raw);
+
+    // Then: schema accepts both fields for deprecation window
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect((result.data as unknown as Record<string, unknown>).instruction).toBe('Canonical movement instruction');
+      expect((result.data as unknown as Record<string, unknown>).instruction_template).toBe('Legacy movement instruction');
+    }
+  });
+
   it('should accept a movement with persona (no parallel)', () => {
     const raw = {
       name: 'normal-step',
@@ -179,6 +250,46 @@ describe('PieceMovementRawSchema with parallel', () => {
 
     const result = PieceMovementRawSchema.safeParse(raw);
     expect(result.success).toBe(true);
+  });
+});
+
+describe('LoopMonitorJudgeSchema', () => {
+  it('should accept judge configuration with instruction field', () => {
+    // Given: a loop monitor judge with canonical instruction
+    const raw = {
+      persona: 'reviewer',
+      instruction: 'Judge loop health',
+      rules: [{ condition: 'continue', next: 'ai_fix' }],
+    };
+
+    // When: validating judge schema
+    const result = LoopMonitorJudgeSchema.safeParse(raw);
+
+    // Then: it is accepted
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect((result.data as unknown as Record<string, unknown>).instruction).toBe('Judge loop health');
+    }
+  });
+
+  it('should accept judge configuration during deprecation window when both fields exist', () => {
+    // Given: judge config with both new and deprecated fields
+    const raw = {
+      persona: 'reviewer',
+      instruction: 'Judge loop health',
+      instruction_template: 'legacy judge instruction',
+      rules: [{ condition: 'continue', next: 'ai_fix' }],
+    };
+
+    // When: validating judge schema
+    const result = LoopMonitorJudgeSchema.safeParse(raw);
+
+    // Then: it is accepted for backward compatibility
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect((result.data as unknown as Record<string, unknown>).instruction).toBe('Judge loop health');
+      expect((result.data as unknown as Record<string, unknown>).instruction_template).toBe('legacy judge instruction');
+    }
   });
 });
 

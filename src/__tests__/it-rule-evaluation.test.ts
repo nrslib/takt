@@ -50,7 +50,7 @@ function makeMovement(
     name,
     persona: 'test-agent',
     personaDisplayName: name,
-    instructionTemplate: '{task}',
+    instruction: '{task}',
     passPreviousResponse: true,
     rules,
     parallel,
@@ -401,7 +401,7 @@ describe('Rule Evaluation IT: movements without rules', () => {
       name: 'step',
       persona: 'agent',
       personaDisplayName: 'step',
-      instructionTemplate: '{task}',
+      instruction: '{task}',
       passPreviousResponse: true,
     };
 

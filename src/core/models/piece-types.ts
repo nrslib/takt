@@ -42,7 +42,7 @@ export interface OutputContractItem {
   format: string;
   /** Whether this report is used as input for status judgment phase (default: true) */
   useJudge?: boolean;
-  /** Instruction prepended before instruction_template (e.g., output destination) */
+  /** Instruction prepended before movement instruction (e.g., output destination) */
   order?: string;
 }
 
@@ -143,7 +143,7 @@ export interface PieceMovement {
   providerOptions?: MovementProviderOptions;
   /** Whether this movement is allowed to edit project files (true=allowed, false=prohibited, undefined=no prompt) */
   edit?: boolean;
-  instructionTemplate: string;
+  instruction: string;
   /** Rules for movement routing */
   rules?: PieceRule[];
   /** Output contracts for this movement (report definitions) */
@@ -219,8 +219,8 @@ export interface LoopMonitorJudge {
   persona?: string;
   /** Resolved absolute path to persona prompt file (set by loader) */
   personaPath?: string;
-  /** Custom instruction template for the judge (uses default if omitted) */
-  instructionTemplate?: string;
+  /** Custom instruction for the judge (uses default if omitted) */
+  instruction?: string;
   /** Rules for the judge's decision */
   rules: LoopMonitorRule[];
 }

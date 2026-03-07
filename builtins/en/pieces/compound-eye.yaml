@@ -108,7 +108,7 @@ movements:
     rules:
       - condition: synthesis complete
         next: COMPLETE
-    instruction_template: |
+    instruction: |
       Two models (Claude / Codex) independently answered the same instruction.
       Synthesize their responses.
 

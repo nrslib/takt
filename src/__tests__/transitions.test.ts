@@ -12,7 +12,7 @@ function createMovementWithRules(rules: { condition: string; next: string }[]): 
     name: 'test-step',
     persona: 'test-agent',
     personaDisplayName: 'Test Agent',
-    instructionTemplate: '{task}',
+    instruction: '{task}',
     passPreviousResponse: false,
     rules: rules.map((r) => ({
       condition: r.condition,
@@ -47,7 +47,7 @@ describe('determineNextMovementByRules', () => {
       name: 'test-step',
       persona: 'test-agent',
       personaDisplayName: 'Test Agent',
-      instructionTemplate: '{task}',
+      instruction: '{task}',
       passPreviousResponse: false,
     };
 
@@ -68,7 +68,7 @@ describe('determineNextMovementByRules', () => {
       name: 'sub-step',
       persona: 'test-agent',
       personaDisplayName: 'Test Agent',
-      instructionTemplate: '{task}',
+      instruction: '{task}',
       passPreviousResponse: false,
       rules: [
         { condition: 'approved' },

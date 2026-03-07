@@ -520,7 +520,6 @@ describe('normalizePieceConfig with layer resolution', () => {
           name: 'step1',
           persona: 'coder',
           instruction_template: 'implement',
-          instruction: '{task}',
         },
       ],
     };
@@ -528,7 +527,7 @@ describe('normalizePieceConfig with layer resolution', () => {
     const context: FacetResolutionContext = { projectDir, lang: 'ja' };
     const config = normalizePieceConfig(raw, pieceDir, context);
 
-    expect(config.movements[0]!.instructionTemplate).toBe('Mapped instruction template');
+    expect(config.movements[0]!.instruction).toBe('Mapped instruction template');
   });
 
   it('should resolve instruction_template by name via layer resolution', () => {
@@ -543,7 +542,6 @@ describe('normalizePieceConfig with layer resolution', () => {
           name: 'step1',
           persona: 'coder',
           instruction_template: 'implement',
-          instruction: '{task}',
         },
       ],
     };
@@ -551,7 +549,7 @@ describe('normalizePieceConfig with layer resolution', () => {
     const context: FacetResolutionContext = { projectDir, lang: 'ja' };
     const config = normalizePieceConfig(raw, pieceDir, context);
 
-    expect(config.movements[0]!.instructionTemplate).toBe('Project implement template');
+    expect(config.movements[0]!.instruction).toBe('Project implement template');
   });
 
   it('should keep inline instruction_template when no facet is found', () => {
@@ -564,7 +562,6 @@ Second line remains inline.`;
           name: 'step1',
           persona: 'coder',
           instruction_template: inlineTemplate,
-          instruction: '{task}',
         },
       ],
     };
@@ -572,7 +569,7 @@ Second line remains inline.`;
     const context: FacetResolutionContext = { projectDir, lang: 'ja' };
     const config = normalizePieceConfig(raw, pieceDir, context);
 
-    expect(config.movements[0]!.instructionTemplate).toBe(inlineTemplate);
+    expect(config.movements[0]!.instruction).toBe(inlineTemplate);
   });
 
   it('should resolve loop monitor judge instruction_template via layer resolution', () => {
@@ -612,6 +609,6 @@ Second line remains inline.`;
     const context: FacetResolutionContext = { projectDir, lang: 'ja' };
     const config = normalizePieceConfig(raw, pieceDir, context);
 
-    expect(config.loopMonitors?.[0]?.judge.instructionTemplate).toBe('Project judge template');
+    expect(config.loopMonitors?.[0]?.judge.instruction).toBe('Project judge template');
   });
 });

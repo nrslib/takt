@@ -32,7 +32,7 @@ function buildTeamLeaderConfig(): PieceConfig {
     maxMovements: 5,
     movements: [
       makeMovement('implement', {
-        instructionTemplate: 'Task: {task}',
+        instruction: 'Task: {task}',
         teamLeader: {
           persona: '../personas/team-leader.md',
           maxParts: 3,

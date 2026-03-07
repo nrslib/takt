@@ -32,7 +32,7 @@ function createMinimalStep(template: string): PieceMovement {
     name: 'test-step',
     persona: 'test-agent',
     personaDisplayName: 'Test Agent',
-    instructionTemplate: template,
+    instruction: template,
     passPreviousResponse: false,
   };
 }

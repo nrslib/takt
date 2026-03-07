@@ -43,7 +43,7 @@ describe('runStatusJudgmentPhase', () => {
       name: 'review',
       persona: 'reviewer',
       personaDisplayName: 'reviewer',
-      instructionTemplate: 'Review',
+      instruction: 'Review',
       passPreviousResponse: true,
       rules: [
         { condition: 'needs_fix', next: 'fix' },
@@ -103,7 +103,7 @@ describe('runStatusJudgmentPhase', () => {
       name: 'review',
       persona: 'reviewer',
       personaDisplayName: 'reviewer',
-      instructionTemplate: 'Review',
+      instruction: 'Review',
       passPreviousResponse: true,
       rules: [
         { condition: 'needs_fix', next: 'fix' },

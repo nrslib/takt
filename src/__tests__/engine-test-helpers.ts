@@ -41,7 +41,7 @@ export function makeMovement(name: string, overrides: Partial<PieceMovement> = {
     name,
     persona: `../personas/${name}.md`,
     personaDisplayName: name,
-    instructionTemplate: `Run ${name}`,
+    instruction: `Run ${name}`,
     passPreviousResponse: true,
     ...overrides,
   };

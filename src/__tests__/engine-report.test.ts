@@ -50,7 +50,7 @@ function createMovement(overrides: Partial<PieceMovement> = {}): PieceMovement {
     name: 'test-movement',
     persona: 'coder',
     personaDisplayName: 'Coder',
-    instructionTemplate: '',
+    instruction: '',
     passPreviousResponse: false,
     ...overrides,
   };

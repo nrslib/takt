@@ -177,7 +177,7 @@ movements:
     rules:
       - condition: Review synthesis complete
         next: COMPLETE
-    instruction_template: |
+    instruction: |
       ## Review Results
       {previous_response}
 

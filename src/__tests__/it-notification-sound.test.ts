@@ -224,7 +224,7 @@ function makeConfig(): PieceConfig {
         name: 'step1',
         persona: '../agents/coder.md',
         personaDisplayName: 'coder',
-        instructionTemplate: 'Do something',
+        instruction: 'Do something',
         passPreviousResponse: true,
         rules: [
           { condition: 'done', next: 'COMPLETE' },

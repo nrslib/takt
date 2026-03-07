@@ -77,7 +77,7 @@ const {
       const firstStep = this.config.movements[0];
       if (firstStep) {
         const providerInfo = resolveProviderInfo(firstStep, this.receivedOptions);
-        this.emit('movement:start', firstStep, 1, firstStep.instructionTemplate, providerInfo);
+        this.emit('movement:start', firstStep, 1, firstStep.instruction, providerInfo);
         this.emit('movement:complete', firstStep, {
           persona: firstStep.personaDisplayName,
           status: 'done',
@@ -85,7 +85,7 @@ const {
           timestamp: new Date('2026-03-04T00:00:00.000Z'),
           sessionId: 'movement-session',
           providerUsage: mockMovementResponse.providerUsage,
-        }, firstStep.instructionTemplate);
+        }, firstStep.instruction);
       }
       this.emit('piece:complete', { status: 'completed', iteration: 1 });
       return { status: 'completed', iteration: 1 };
@@ -230,7 +230,7 @@ function makeConfig(): PieceConfig {
         name: 'implement',
         persona: '../agents/coder.md',
         personaDisplayName: 'coder',
-        instructionTemplate: 'Implement task',
+        instruction: 'Implement task',
         passPreviousResponse: true,
         rules: [{ condition: 'done', next: 'COMPLETE' }],
       },

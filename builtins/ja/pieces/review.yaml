@@ -177,7 +177,7 @@ movements:
     rules:
       - condition: レビュー統合完了
         next: COMPLETE
-    instruction_template: |
+    instruction: |
       ## レビュー結果
       {previous_response}
 

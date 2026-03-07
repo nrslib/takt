@@ -15,7 +15,7 @@ loop_monitors:
     threshold: 3
     judge:
       persona: supervisor
-      instruction_template: loop-monitor-reviewers-fix
+      instruction: loop-monitor-reviewers-fix
       rules:
         - condition: 健全（進捗あり）
           next: reviewers

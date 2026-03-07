@@ -15,7 +15,7 @@ loop_monitors:
     threshold: 3
     judge:
       persona: supervisor
-      instruction_template: |
+      instruction: |
         The ai_review ↔ ai_fix loop has repeated {cycle_count} times.
 
         Review the reports from each cycle and determine whether this loop

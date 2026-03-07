@@ -35,7 +35,7 @@ function makeSubMovement(name: string, conditions: string[]): PieceMovement {
   return {
     name,
     personaDisplayName: name,
-    instructionTemplate: '',
+    instruction: '',
     passPreviousResponse: false,
     rules: conditions.map((c) => ({ condition: c })),
   };
@@ -48,7 +48,7 @@ function makeParentMovement(
   return {
     name: 'parent',
     personaDisplayName: 'parent',
-    instructionTemplate: '',
+    instruction: '',
     passPreviousResponse: false,
     parallel,
     rules,
@@ -264,7 +264,7 @@ describe('AggregateEvaluator', () => {
       const step: PieceMovement = {
         name: 'test-movement',
         personaDisplayName: 'tester',
-        instructionTemplate: '',
+        instruction: '',
         passPreviousResponse: false,
         rules: [
           {

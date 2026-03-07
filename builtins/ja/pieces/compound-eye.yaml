@@ -106,7 +106,7 @@ movements:
     rules:
       - condition: 統合完了
         next: COMPLETE
-    instruction_template: |
+    instruction: |
       2つのモデル（Claude / Codex）が同じ指示に対して独立に回答しました。
       両者の回答を統合してください。
 

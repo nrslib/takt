@@ -18,7 +18,7 @@ initial_movement: melchior
 movements:
   - name: melchior
     persona: melchior
-    instruction_template: |
+    instruction: |
       # MAGI System 起動
 
       ## 審議事項
@@ -48,7 +48,7 @@ movements:
         next: balthasar
   - name: balthasar
     persona: balthasar
-    instruction_template: |
+    instruction: |
       # MAGI System 継続
 
       ## 審議事項
@@ -82,7 +82,7 @@ movements:
         next: casper
   - name: casper
     persona: casper
-    instruction_template: |
+    instruction: |
       # MAGI System 最終審議
 
       ## 審議事項

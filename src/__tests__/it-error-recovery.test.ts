@@ -63,7 +63,7 @@ function makeMovement(name: string, agentPath: string, rules: PieceRule[]): Piec
     persona: `./personas/${name}.md`,
     personaDisplayName: name,
     personaPath: agentPath,
-    instructionTemplate: '{task}',
+    instruction: '{task}',
     passPreviousResponse: true,
     rules,
   };

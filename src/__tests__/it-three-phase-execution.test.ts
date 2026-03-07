@@ -93,7 +93,7 @@ function makeMovement(
     persona: './agents/agent.md',
     personaDisplayName: name,
     personaPath: agentPath,
-    instructionTemplate: '{task}',
+    instruction: '{task}',
     passPreviousResponse: true,
     rules,
     outputContracts: options.outputContracts,

@@ -15,7 +15,7 @@ loop_monitors:
     threshold: 3
     judge:
       persona: supervisor
-      instruction_template: |
+      instruction: |
         ai_review と ai_fix のループが {cycle_count} 回繰り返されました。
 
         各サイクルのレポートを確認し、このループが健全（進捗がある）か、

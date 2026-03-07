@@ -137,7 +137,7 @@ describe('PieceEngine: worktree reportDir resolution', () => {
       initialMovement: 'review',
       movements: [
         makeMovement('review', {
-          instructionTemplate: 'Write report to {report_dir}',
+          instruction: 'Write report to {report_dir}',
           outputContracts: [{ name: '00-review.md', format: '00-review', useJudge: true }],
           rules: [
             makeRule('approved', 'COMPLETE'),

@@ -89,7 +89,7 @@ export class InstructionBuilder {
     }
 
     // Skip auto-injection for sections whose placeholders exist in the template
-    const tmpl = this.step.instructionTemplate;
+    const tmpl = this.step.instruction;
     const hasTaskPlaceholder = tmpl.includes('{task}');
     const hasPreviousResponsePlaceholder = tmpl.includes('{previous_response}');
     const hasUserInputsPlaceholder = tmpl.includes('{user_inputs}');
@@ -120,9 +120,9 @@ export class InstructionBuilder {
       ? escapeTemplateChars(this.context.userInputs.join('\n'))
       : '';
 
-    // Instructions (instruction_template processed)
+    // Instructions (movement instruction with placeholder processing)
     const instructions = replaceTemplatePlaceholders(
-      this.step.instructionTemplate,
+      tmpl,
       this.step,
       {
         ...this.context,

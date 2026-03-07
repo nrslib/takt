@@ -126,7 +126,7 @@ function buildTestPieceConfig(): PieceConfig {
         name: 'plan',
         persona: '../personas/plan.md',
         personaDisplayName: 'plan',
-        instructionTemplate: 'Run plan',
+        instruction: 'Run plan',
         passPreviousResponse: true,
         rules: [],
       },

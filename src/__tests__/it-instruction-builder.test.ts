@@ -40,7 +40,7 @@ function makeMovement(overrides: Partial<PieceMovement> = {}): PieceMovement {
     name: 'test-step',
     persona: 'test-agent',
     personaDisplayName: 'test-step',
-    instructionTemplate: 'Do the work.',
+    instruction: 'Do the work.',
     passPreviousResponse: false,
     rules: [
       makeRule('Done', 'COMPLETE'),
@@ -66,7 +66,7 @@ function makeContext(overrides: Partial<InstructionContext> = {}): InstructionCo
 
 describe('Instruction Builder IT: task auto-injection', () => {
   it('should auto-inject task as "User Request" section when template has no {task}', () => {
-    const step = makeMovement({ instructionTemplate: 'Do the work.' });
+    const step = makeMovement({ instruction: 'Do the work.' });
     const ctx = makeContext({ task: 'Build the login page' });
 
     const result = buildInstruction(step, ctx);
@@ -76,7 +76,7 @@ describe('Instruction Builder IT: task auto-injection', () => {
   });
 
   it('should NOT auto-inject task section when template contains {task}', () => {
-    const step = makeMovement({ instructionTemplate: 'Here is the task: {task}' });
+    const step = makeMovement({ instruction: 'Here is the task: {task}' });
     const ctx = makeContext({ task: 'Build the login page' });
 
     const result = buildInstruction(step, ctx);
@@ -93,7 +93,7 @@ describe('Instruction Builder IT: previous_response auto-injection', () => {
   it('should auto-inject previous response when passPreviousResponse is true', () => {
     const step = makeMovement({
       passPreviousResponse: true,
-      instructionTemplate: 'Continue the work.',
+      instruction: 'Continue the work.',
     });
     const previousOutput: AgentResponse = {
       persona: 'previous-agent',
@@ -112,7 +112,7 @@ describe('Instruction Builder IT: previous_response auto-injection', () => {
   it('should NOT inject previous response when passPreviousResponse is false', () => {
     const step = makeMovement({
       passPreviousResponse: false,
-      instructionTemplate: 'Do fresh work.',
+      instruction: 'Do fresh work.',
     });
     const previousOutput: AgentResponse = {
       persona: 'previous-agent',
@@ -131,7 +131,7 @@ describe('Instruction Builder IT: previous_response auto-injection', () => {
   it('should NOT auto-inject when template contains {previous_response}', () => {
     const step = makeMovement({
       passPreviousResponse: true,
-      instructionTemplate: '## Context\n{previous_response}\n\nDo work.',
+      instruction: '## Context\n{previous_response}\n\nDo work.',
     });
     const previousOutput: AgentResponse = {
       persona: 'prev', status: 'done', content: 'Prior work done.', timestamp: new Date(),
@@ -161,7 +161,7 @@ describe('Instruction Builder IT: user_inputs auto-injection', () => {
   });
 
   it('should NOT auto-inject when template contains {user_inputs}', () => {
-    const step = makeMovement({ instructionTemplate: 'Inputs: {user_inputs}' });
+    const step = makeMovement({ instruction: 'Inputs: {user_inputs}' });
     const ctx = makeContext({ userInputs: ['Input A'] });
 
     const result = buildInstruction(step, ctx);
@@ -175,7 +175,7 @@ describe('Instruction Builder IT: user_inputs auto-injection', () => {
 describe('Instruction Builder IT: iteration variables', () => {
   it('should replace {iteration}, {max_movements}, {movement_iteration} in template', () => {
     const step = makeMovement({
-      instructionTemplate: 'Iter: {iteration}/{max_movements}, movement iter: {movement_iteration}',
+      instruction: 'Iter: {iteration}/{max_movements}, movement iter: {movement_iteration}',
     });
     const ctx = makeContext({ iteration: 5, maxMovements: 30, movementIteration: 2 });
 
@@ -198,7 +198,7 @@ describe('Instruction Builder IT: iteration variables', () => {
 describe('Instruction Builder IT: report_dir expansion', () => {
   it('should replace {report_dir} in template', () => {
     const step = makeMovement({
-      instructionTemplate: 'Read the plan from {report_dir}/00-plan.md',
+      instruction: 'Read the plan from {report_dir}/00-plan.md',
     });
     const ctx = makeContext({ reportDir: '/tmp/test-project/.takt/runs/20250126-task/reports' });
 
@@ -209,7 +209,7 @@ describe('Instruction Builder IT: report_dir expansion', () => {
 
   it('should replace {report:filename} with full path', () => {
     const step = makeMovement({
-      instructionTemplate: 'Read {report:00-plan.md} for the plan.',
+      instruction: 'Read {report:00-plan.md} for the plan.',
     });
     const ctx = makeContext({ reportDir: '/tmp/reports' });
 
@@ -388,7 +388,7 @@ describe('Instruction Builder IT: template injection prevention', () => {
   it('should escape curly braces in previous response content', () => {
     const step = makeMovement({
       passPreviousResponse: true,
-      instructionTemplate: 'Continue.',
+      instruction: 'Continue.',
     });
     const ctx = makeContext({
       previousOutput: {
