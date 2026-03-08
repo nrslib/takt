@@ -5,13 +5,21 @@ import { detectDefaultBranch } from './branchList.js';
 
 const log = createLogger('clone');
 
-function gitRefExists(projectDir: string, ref: string): boolean {
+export function localBranchExists(projectDir: string, branch: string): boolean {
   try {
-    execFileSync('git', ['check-ref-format', '--branch', ref], {
+    execFileSync('git', ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], {
       cwd: projectDir,
       stdio: 'pipe',
     });
-    execFileSync('git', ['rev-parse', '--verify', '--', ref], {
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function remoteBranchExists(projectDir: string, branch: string): boolean {
+  try {
+    execFileSync('git', ['show-ref', '--verify', '--quiet', `refs/remotes/origin/${branch}`], {
       cwd: projectDir,
       stdio: 'pipe',
     });
@@ -22,7 +30,7 @@ function gitRefExists(projectDir: string, ref: string): boolean {
 }
 
 export function branchExists(projectDir: string, branch: string): boolean {
-  return gitRefExists(projectDir, branch) || gitRefExists(projectDir, `origin/${branch}`);
+  return localBranchExists(projectDir, branch) || remoteBranchExists(projectDir, branch);
 }
 
 function resolveConfiguredBaseBranch(projectDir: string, explicitBaseBranch?: string): string | undefined {

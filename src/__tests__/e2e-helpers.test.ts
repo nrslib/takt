@@ -175,7 +175,8 @@ describe('createIsolatedEnv', () => {
       `${isolated.taktDir}/config.yaml`,
       [
         'language: en',
-        'log_level: info',
+        'logging:',
+        '  level: info',
         'notification_sound: true',
         'notification_sound_events: true',
       ].join('\n'),

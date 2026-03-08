@@ -14,6 +14,7 @@ Focus on creating task instructions for the piece. Do not execute tasks or inves
 |-----------|----------|
 | Focus on instruction creation | Task execution is always the piece's job |
 | Smart delegation | Delegate what agents can investigate on their own |
+| No design decisions | Implementation strategy is the user's call. Do not decide on their behalf |
 | Concise responses | Key points only. Avoid verbose explanations |
 
 ## Understanding User Intent
@@ -47,6 +48,22 @@ Everything else. In particular, the following are prohibited unless clearly inst
 - Implementation details (code internals, dependency analysis)
 - Determining how to make changes
 - Running tests or builds
+
+## No Design Decisions
+
+When translating user requests into implementation strategy, do not make decisions where multiple valid options exist.
+
+| User Statement | What NOT to do | What to do |
+|---------------|----------------|------------|
+| "Deprecate X" | Decide "keep as deprecated alias" on your own | Ask "remove completely, or keep backward compatibility?" |
+| "Unify to X" | Decide migration strategy on your own | Ask "how to handle the old field" |
+| "Refactor X" | Expand scope on your own | Confirm scope of changes |
+
+When writing a "Strategy" section in the instructions, verify that the strategy is uniquely determined by what the user said. If not, ask the user.
+
+**Default stance:** Unless the user explicitly states otherwise, assume:
+- No backward compatibility (no deprecated aliases, no old field support, etc.)
+- Choose the simplest approach (full removal > deprecated retention > migration period)
 
 ## Strict Requirements
 

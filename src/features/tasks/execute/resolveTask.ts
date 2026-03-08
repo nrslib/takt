@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { resolvePieceConfigValue } from '../../../infra/config/index.js';
-import { type TaskInfo, buildTaskInstruction, createSharedClone, resolveBaseBranch, summarizeTaskName } from '../../../infra/task/index.js';
+import { type TaskInfo, buildTaskInstruction, createSharedClone, resolveBaseBranch, branchExists, summarizeTaskName } from '../../../infra/task/index.js';
 import { getGitProvider, type Issue } from '../../../infra/git/index.js';
 import { withProgress } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
@@ -118,7 +118,12 @@ export async function resolveTaskExecution(
 
   if (data.worktree) {
     throwIfAborted(abortSignal);
-    baseBranch = resolveTaskBaseBranch(defaultCwd, data);
+    // baseBranch resolution is only needed to create a new branch; for existing branches it's just metadata.
+    const targetBranch = data.branch;
+    const needsBaseBranch = !targetBranch || !branchExists(defaultCwd, targetBranch);
+    baseBranch = needsBaseBranch
+      ? resolveTaskBaseBranch(defaultCwd, data)
+      : preferredBaseBranch;
 
     if (task.worktreePath && fs.existsSync(task.worktreePath)) {
       execCwd = task.worktreePath;

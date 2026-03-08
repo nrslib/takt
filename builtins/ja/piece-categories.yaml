@@ -33,18 +33,20 @@ piece_categories:
       - terraform
   🔍 レビュー:
     pieces:
-      - review
-      - review-fix
-      - frontend-review
-      - frontend-review-fix
-      - backend-review
-      - backend-review-fix
-      - dual-review
-      - dual-review-fix
-      - dual-cqrs-review
-      - dual-cqrs-review-fix
-      - backend-cqrs-review
-      - backend-cqrs-review-fix
+      - review-default
+      - review-fix-default
+      - review-frontend
+      - review-fix-frontend
+      - review-backend
+      - review-fix-backend
+      - review-dual
+      - review-fix-dual
+      - review-dual-cqrs
+      - review-fix-dual-cqrs
+      - review-backend-cqrs
+      - review-fix-backend-cqrs
+      - review-takt-default
+      - review-fix-takt-default
   🧪 テスト:
     pieces:
       - unit-test
@@ -52,7 +54,8 @@ piece_categories:
   🎵 TAKT開発:
     pieces:
       - takt-default
-      - takt-default-review-fix
+      - review-takt-default
+      - review-fix-takt-default
   その他:
     pieces:
       - research

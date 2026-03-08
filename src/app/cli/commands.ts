@@ -9,7 +9,16 @@ import { clearPersonaSessions, resolveConfigValue } from '../../infra/config/ind
 import { getGlobalConfigDir } from '../../infra/config/paths.js';
 import { success, info } from '../../shared/ui/index.js';
 import { runAllTasks, addTask, watchTasks, listTasks } from '../../features/tasks/index.js';
-import { ejectBuiltin, ejectFacet, parseFacetType, VALID_FACET_TYPES, resetCategoriesToDefault, resetConfigToDefault, deploySkill } from '../../features/config/index.js';
+import {
+  ejectBuiltin,
+  ejectFacet,
+  parseFacetType,
+  VALID_FACET_TYPES,
+  resetCategoriesToDefault,
+  resetConfigToDefault,
+  deploySkill,
+  deploySkillCodex,
+} from '../../features/config/index.js';
 import { previewPrompts } from '../../features/prompt/index.js';
 import { showCatalog } from '../../features/catalog/index.js';
 import { computeReviewMetrics, formatReviewMetrics, parseSinceDuration, purgeOldEvents } from '../../features/analytics/index.js';
@@ -125,6 +134,13 @@ program
   .description('Export takt pieces/agents as Claude Code Skill (~/.claude/)')
   .action(async () => {
     await deploySkill();
+  });
+
+program
+  .command('export-codex')
+  .description('Export takt pieces/agents as Codex Skill (~/.agents/)')
+  .action(async () => {
+    await deploySkillCodex();
   });
 
 program

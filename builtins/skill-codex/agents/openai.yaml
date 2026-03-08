@@ -1,0 +1,6 @@
+interface:
+  display_name: "TAKT Piece Engine"
+  short_description: "Multi-agent orchestration via piece YAML workflows"
+
+policy:
+  allow_implicit_invocation: false

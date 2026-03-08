@@ -32,60 +32,54 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe('branchExists — check-ref-format argument correctness', () => {
-  it('should call check-ref-format with --branch and ref only (no --)', () => {
-    // Given: both check-ref-format and rev-parse succeed
-    const checkRefFormatCalls: string[][] = [];
+describe('branchExists — show-ref based branch detection', () => {
+  it('should return true when local branch exists via show-ref', () => {
+    // Given: show-ref for refs/heads/ succeeds
+    const showRefCalls: string[][] = [];
 
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
-      if (argsArr[0] === 'check-ref-format') {
-        checkRefFormatCalls.push([...argsArr]);
-        return Buffer.from('feature/my-branch\n');
-      }
-      if (argsArr[0] === 'rev-parse') {
-        return Buffer.from('abc123\n');
-      }
-      return Buffer.from('');
-    });
-
-    // When
-    branchExists('/project', 'feature/my-branch');
-
-    // Then: check-ref-format was called with exactly ['check-ref-format', '--branch', 'feature/my-branch']
-    expect(checkRefFormatCalls.length).toBeGreaterThanOrEqual(1);
-    expect(checkRefFormatCalls[0]).toEqual(['check-ref-format', '--branch', 'feature/my-branch']);
-  });
-
-  it('should not include -- in check-ref-format arguments for origin/ prefixed ref', () => {
-    // Given: local branch check fails, remote check succeeds
-    const checkRefFormatCalls: string[][] = [];
-    let callCount = 0;
-
-    mockExecFileSync.mockImplementation((_cmd, args) => {
-      const argsArr = args as string[];
-      if (argsArr[0] === 'check-ref-format') {
-        checkRefFormatCalls.push([...argsArr]);
+      if (argsArr[0] === 'show-ref') {
+        showRefCalls.push([...argsArr]);
         return Buffer.from('');
       }
-      if (argsArr[0] === 'rev-parse') {
-        callCount++;
-        // First rev-parse (local) fails, second (origin/) succeeds
-        if (callCount <= 1) {
-          throw new Error('branch not found');
+      return Buffer.from('');
+    });
+
+    // When
+    const result = branchExists('/project', 'feature/my-branch');
+
+    // Then: local ref check succeeds, remote ref check is not needed
+    expect(result).toBe(true);
+    expect(showRefCalls).toHaveLength(1);
+    expect(showRefCalls[0]).toEqual(['show-ref', '--verify', '--quiet', 'refs/heads/feature/my-branch']);
+  });
+
+  it('should return true when only remote tracking branch exists', () => {
+    // Given: local branch check fails, remote check succeeds
+    const showRefCalls: string[][] = [];
+
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'show-ref') {
+        showRefCalls.push([...argsArr]);
+        const ref = argsArr[3];
+        if (typeof ref === 'string' && ref.startsWith('refs/remotes/origin/')) {
+          return Buffer.from('');
         }
-        return Buffer.from('abc123\n');
+        throw new Error('not found');
       }
       return Buffer.from('');
     });
 
     // When
-    branchExists('/project', 'feature/my-branch');
+    const result = branchExists('/project', 'feature/my-branch');
 
-    // Then: both check-ref-format calls should not contain '--'
-    expect(checkRefFormatCalls).toHaveLength(2);
-    expect(checkRefFormatCalls[0]).toEqual(['check-ref-format', '--branch', 'feature/my-branch']);
-    expect(checkRefFormatCalls[1]).toEqual(['check-ref-format', '--branch', 'origin/feature/my-branch']);
+    // Then: local ref failed, remote ref succeeded
+    expect(result).toBe(true);
+    expect(showRefCalls).toHaveLength(2);
+    expect(showRefCalls[0]).toEqual(['show-ref', '--verify', '--quiet', 'refs/heads/feature/my-branch']);
+    expect(showRefCalls[1]).toEqual(['show-ref', '--verify', '--quiet', 'refs/remotes/origin/feature/my-branch']);
   });
 });
 
@@ -101,8 +95,8 @@ describe('resolveBaseBranch — assertValidBranchRef argument correctness', () =
         checkRefFormatCalls.push([...argsArr]);
         return Buffer.from('');
       }
-      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--verify') {
-        return Buffer.from('abc123\n');
+      if (argsArr[0] === 'show-ref') {
+        return Buffer.from('');
       }
       return Buffer.from('');
     });
@@ -134,14 +128,14 @@ describe('resolveBaseBranch — assertValidBranchRef argument correctness', () =
   });
 
   it('should throw Base branch does not exist when branch does not exist', () => {
-    // Given: check-ref-format succeeds but rev-parse fails (branch not found)
+    // Given: check-ref-format succeeds but show-ref fails (branch not found)
     mockResolveConfigValue.mockReturnValue(undefined);
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
       if (argsArr[0] === 'check-ref-format') {
         return Buffer.from('');
       }
-      if (argsArr[0] === 'rev-parse') {
+      if (argsArr[0] === 'show-ref') {
         throw new Error('branch not found');
       }
       return Buffer.from('');

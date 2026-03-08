@@ -19,6 +19,8 @@ vi.mock('node:fs', () => ({
     existsSync: vi.fn(),
     rmSync: vi.fn(),
     unlinkSync: vi.fn(),
+    accessSync: vi.fn(),
+    constants: { W_OK: 2 },
   },
   mkdirSync: vi.fn(),
   mkdtempSync: vi.fn(),
@@ -27,6 +29,8 @@ vi.mock('node:fs', () => ({
   existsSync: vi.fn(),
   rmSync: vi.fn(),
   unlinkSync: vi.fn(),
+  accessSync: vi.fn(),
+  constants: { W_OK: 2 },
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -50,9 +54,10 @@ vi.mock('../infra/config/project/projectConfig.js', async (importOriginal) => ({
 
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { loadGlobalConfig } from '../infra/config/global/globalConfig.js';
 import { loadProjectConfig } from '../infra/config/project/projectConfig.js';
-import { createSharedClone, createTempCloneForBranch, cleanupOrphanedClone } from '../infra/task/clone.js';
+import { CloneManager, createSharedClone, createTempCloneForBranch, cleanupOrphanedClone } from '../infra/task/clone.js';
 
 const mockExecFileSync = vi.mocked(execFileSync);
 const mockLoadProjectConfig = vi.mocked(loadProjectConfig);
@@ -104,8 +109,8 @@ describe('cloneAndIsolate git config propagation', () => {
         return Buffer.from('');
       }
 
-      // git rev-parse --verify (branchExists check)
-      if (argsArr[0] === 'rev-parse') {
+      // git show-ref --verify --quiet (branchExists check)
+      if (argsArr[0] === 'show-ref') {
         throw new Error('branch not found');
       }
 
@@ -220,8 +225,8 @@ describe('branch and worktree path formatting with issue numbers', () => {
         return Buffer.from('');
       }
 
-      // git rev-parse --verify (branchExists check)
-      if (argsArr[0] === 'rev-parse') {
+      // git show-ref --verify --quiet (branchExists check)
+      if (argsArr[0] === 'show-ref') {
         throw new Error('branch not found');
       }
 
@@ -363,7 +368,7 @@ describe('resolveBaseBranch', () => {
         if (argsArr[1] === '--local') throw new Error('not set');
         return Buffer.from('');
       }
-      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--verify') {
+      if (argsArr[0] === 'show-ref') {
         throw new Error('branch not found');
       }
       if (argsArr[0] === 'checkout') return Buffer.from('');
@@ -402,7 +407,7 @@ describe('resolveBaseBranch', () => {
         if (argsArr[1] === '--local') throw new Error('not set');
         return Buffer.from('');
       }
-      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--verify') {
+      if (argsArr[0] === 'show-ref') {
         throw new Error('branch not found');
       }
       if (argsArr[0] === 'checkout') return Buffer.from('');
@@ -446,9 +451,9 @@ describe('resolveBaseBranch', () => {
         }
         return Buffer.from('');
       }
-      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--verify') {
-        const ref = argsArr[2] === '--' ? argsArr[3] : argsArr[2];
-        if (ref === 'release/main' || ref === 'origin/release/main') {
+      if (argsArr[0] === 'show-ref') {
+        const ref = argsArr[3]; // show-ref --verify --quiet <ref>
+        if (ref === 'refs/heads/release/main' || ref === 'refs/remotes/origin/release/main') {
           return Buffer.from('');
         }
         throw new Error('branch not found');
@@ -482,6 +487,9 @@ describe('resolveBaseBranch', () => {
   it('should throw when explicit baseBranch is invalid ref', () => {
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
+      if (argsArr[0] === 'show-ref') {
+        throw new Error('branch not found');
+      }
       if (argsArr[0] === 'check-ref-format') {
         throw new Error('invalid ref');
       }
@@ -499,7 +507,7 @@ describe('resolveBaseBranch', () => {
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
 
-      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--verify') {
+      if (argsArr[0] === 'show-ref') {
         throw new Error('branch not found');
       }
 
@@ -530,7 +538,7 @@ describe('resolveBaseBranch', () => {
         if (argsArr[1] === '--local') throw new Error('not set');
         return Buffer.from('');
       }
-      if (argsArr[0] === 'rev-parse') throw new Error('branch not found');
+      if (argsArr[0] === 'show-ref') throw new Error('branch not found');
       if (argsArr[0] === 'checkout') return Buffer.from('');
       return Buffer.from('');
     });
@@ -586,7 +594,7 @@ describe('clone submodule arguments', () => {
         if (argsArr[1] === '--local') throw new Error('not set');
         return Buffer.from('');
       }
-      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--verify') {
+      if (argsArr[0] === 'show-ref') {
         throw new Error('branch not found');
       }
       if (argsArr[0] === 'checkout') return Buffer.from('');
@@ -666,27 +674,21 @@ describe('clone submodule arguments', () => {
 });
 
 describe('branchExists remote tracking branch fallback', () => {
-  it('should clone with existing branch when only remote tracking branch exists', () => {
+  it('should clone default branch and fetch remote ref when only remote tracking branch exists', () => {
     // Given: local branch does not exist, but origin/<branch> does
     const cloneCalls: string[][] = [];
+    const fetchCalls: string[][] = [];
     const checkoutCalls: string[][] = [];
 
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
 
-      // resolveBaseBranch: detectDefaultBranch
-      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--abbrev-ref' && argsArr[2] === 'HEAD') {
-        return 'main\n';
-      }
-
-      // branchExists: git rev-parse --verify <branch>
-      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--verify') {
-        const ref = argsArr[2] === '--' ? argsArr[3] : argsArr[2];
-        if (typeof ref === 'string' && ref.startsWith('origin/')) {
-          // Remote tracking branch exists
-          return Buffer.from('abc123');
+      // show-ref: local fails, remote succeeds
+      if (argsArr[0] === 'show-ref') {
+        const ref = argsArr[3];
+        if (typeof ref === 'string' && ref.startsWith('refs/remotes/origin/')) {
+          return Buffer.from('');
         }
-        // Local branch does not exist
         throw new Error('branch not found');
       }
 
@@ -697,6 +699,10 @@ describe('branchExists remote tracking branch fallback', () => {
       if (argsArr[0] === 'remote') return Buffer.from('');
       if (argsArr[0] === 'config') {
         if (argsArr[1] === '--local') throw new Error('not set');
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'fetch') {
+        fetchCalls.push(argsArr);
         return Buffer.from('');
       }
       if (argsArr[0] === 'checkout') {
@@ -717,13 +723,17 @@ describe('branchExists remote tracking branch fallback', () => {
     // Then: branch is the requested branch name
     expect(result.branch).toBe('feature/remote-only');
 
-    // Then: cloneAndIsolate was called with --branch feature/remote-only (not base branch)
+    // Then: cloneAndIsolate was called WITHOUT --branch (default branch clone)
     expect(cloneCalls).toHaveLength(1);
-    expect(cloneCalls[0]).toContain('--branch');
-    expect(cloneCalls[0]).toContain('feature/remote-only');
+    expect(cloneCalls[0]).not.toContain('--branch');
 
-    // Then: no checkout -b was called (branch already exists on remote)
-    expect(checkoutCalls).toHaveLength(0);
+    // Then: fetch was called to bring the remote ref into the clone
+    expect(fetchCalls).toHaveLength(1);
+    expect(fetchCalls[0]).toContain('refs/remotes/origin/feature/remote-only:refs/heads/feature/remote-only');
+
+    // Then: checkout switches to the fetched branch
+    expect(checkoutCalls).toHaveLength(1);
+    expect(checkoutCalls[0]).toEqual(['checkout', 'feature/remote-only']);
   });
 
   it('should create new branch when neither local nor remote tracking branch exists', () => {
@@ -739,7 +749,7 @@ describe('branchExists remote tracking branch fallback', () => {
       }
 
       // Both local and remote tracking branch not found
-      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--verify') {
+      if (argsArr[0] === 'show-ref') {
         throw new Error('branch not found');
       }
 
@@ -792,9 +802,9 @@ describe('branchExists remote tracking branch fallback', () => {
         return 'main\n';
       }
 
-      // Local branch exists (first rev-parse --verify call succeeds)
-      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--verify') {
-        return Buffer.from('def456');
+      // Local branch exists (first show-ref call succeeds)
+      if (argsArr[0] === 'show-ref') {
+        return Buffer.from('');
       }
 
       if (argsArr[0] === 'clone') {
@@ -835,9 +845,12 @@ describe('branchExists remote tracking branch fallback', () => {
 describe('autoFetch: true — fetch, rev-parse origin/<branch>, reset --hard', () => {
   it('should run git fetch, resolve origin/<branch> commit hash, and reset --hard in the clone', () => {
     // Given: autoFetch is enabled in global config.
-    // resolveBaseBranch calls resolveConfigValue twice (baseBranch then autoFetch),
-    // each triggers one loadGlobalConfig() call — queue two return values.
+    // loadGlobalConfig() is called by resolveConfigValue for:
+    //   1. worktreeDir (resolveClonePath)
+    //   2. baseBranch (resolveBaseBranch)
+    //   3. autoFetch (resolveBaseBranch)
     vi.mocked(loadGlobalConfig)
+      .mockReturnValueOnce({ autoFetch: true } as ReturnType<typeof loadGlobalConfig>)
       .mockReturnValueOnce({ autoFetch: true } as ReturnType<typeof loadGlobalConfig>)
       .mockReturnValueOnce({ autoFetch: true } as ReturnType<typeof loadGlobalConfig>);
 
@@ -884,8 +897,8 @@ describe('autoFetch: true — fetch, rev-parse origin/<branch>, reset --hard', (
       // git config <key> <value> (writing to clone)
       if (argsArr[0] === 'config') return Buffer.from('');
 
-      // git rev-parse --verify (branchExists) — branch not found, triggers new branch creation
-      if (argsArr[0] === 'rev-parse') throw new Error('branch not found');
+      // git show-ref --verify --quiet (branchExists) — branch not found, triggers new branch creation
+      if (argsArr[0] === 'show-ref') throw new Error('branch not found');
 
       // git checkout -b
       if (argsArr[0] === 'checkout') return Buffer.from('');
@@ -963,8 +976,8 @@ describe('shallow clone fallback', () => {
         return Buffer.from('');
       }
 
-      // git rev-parse --verify (branchExists)
-      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--verify') {
+      // git show-ref --verify --quiet (branchExists)
+      if (argsArr[0] === 'show-ref') {
         throw new Error('branch not found');
       }
 
@@ -1080,5 +1093,68 @@ describe('cleanupOrphanedClone path traversal protection', () => {
       validClonePath,
       expect.objectContaining({ recursive: true })
     );
+  });
+});
+
+describe('resolveCloneBaseDir parent-not-writable fallback', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('should fall back to .takt/worktrees when parent dir is not writable', () => {
+    // Simulate /workspaces/ being read-only (devcontainer scenario)
+    vi.mocked(fs.accessSync).mockImplementation(() => {
+      throw new Error('EACCES: permission denied');
+    });
+
+    const manager = new CloneManager();
+    vi.mocked(execFileSync).mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'show-ref') throw new Error('not found');
+      if (argsArr[0] === 'symbolic-ref') return Buffer.from('refs/remotes/origin/main\n');
+      if (argsArr[0] === 'clone') return Buffer.from('');
+      if (argsArr[0] === 'remote') return Buffer.from('');
+      if (argsArr[0] === 'config' && argsArr[1] === '--local') throw new Error('not set');
+      if (argsArr[0] === 'config') return Buffer.from('');
+      if (argsArr[0] === 'checkout') return Buffer.from('');
+      return Buffer.from('');
+    });
+
+    const result = manager.createSharedClone('/workspaces/hello-world', {
+      worktree: true,
+      taskSlug: 'test-task',
+    });
+
+    expect(result.path).toContain(path.join('/workspaces/hello-world', '.takt', 'worktrees'));
+    expect(mockLogInfo).toHaveBeenCalledWith(
+      'Parent directory not writable, using fallback clone base dir',
+      expect.objectContaining({ fallback: expect.stringContaining('.takt/worktrees') }),
+    );
+  });
+
+  it('should use default ../takt-worktrees when parent dir is writable', () => {
+    // accessSync does not throw = writable
+    vi.mocked(fs.accessSync).mockImplementation(() => undefined);
+
+    const manager = new CloneManager();
+    vi.mocked(execFileSync).mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'show-ref') throw new Error('not found');
+      if (argsArr[0] === 'symbolic-ref') return Buffer.from('refs/remotes/origin/main\n');
+      if (argsArr[0] === 'clone') return Buffer.from('');
+      if (argsArr[0] === 'remote') return Buffer.from('');
+      if (argsArr[0] === 'config' && argsArr[1] === '--local') throw new Error('not set');
+      if (argsArr[0] === 'config') return Buffer.from('');
+      if (argsArr[0] === 'checkout') return Buffer.from('');
+      return Buffer.from('');
+    });
+
+    const result = manager.createSharedClone('/workspaces/hello-world', {
+      worktree: true,
+      taskSlug: 'test-task',
+    });
+
+    expect(result.path).toContain('takt-worktrees');
+    expect(result.path).not.toContain('.takt/worktrees');
   });
 });

@@ -366,7 +366,7 @@ describe('Piece Patterns IT: review piece', () => {
   });
 
   it('should complete: gather → reviewers (all approved) → supervise → COMPLETE', async () => {
-    const config = loadPiece('review', testDir);
+    const config = loadPiece('review-default', testDir);
     expect(config).not.toBeNull();
 
     setMockScenario([
@@ -388,7 +388,7 @@ describe('Piece Patterns IT: review piece', () => {
   });
 
   it('should verify no movements have edit: true', () => {
-    const config = loadPiece('review', testDir);
+    const config = loadPiece('review-default', testDir);
     expect(config).not.toBeNull();
 
     for (const movement of config!.movements) {
@@ -460,7 +460,7 @@ describe('Piece Patterns IT: review-fix piece', () => {
   });
 
   it('happy path: gather → reviewers (all approved) → supervise → COMPLETE', async () => {
-    const config = loadPiece('review-fix', testDir);
+    const config = loadPiece('review-fix-default', testDir);
     expect(config).not.toBeNull();
 
     setMockScenario([
@@ -482,7 +482,7 @@ describe('Piece Patterns IT: review-fix piece', () => {
   });
 
   it('fix loop: reviewers any("needs_fix") → fix → reviewers (all approved) → supervise → COMPLETE', async () => {
-    const config = loadPiece('review-fix', testDir);
+    const config = loadPiece('review-fix-default', testDir);
     expect(config).not.toBeNull();
 
     setMockScenario([
@@ -512,7 +512,7 @@ describe('Piece Patterns IT: review-fix piece', () => {
   });
 
   it('fix_supervisor path: supervise detects issues → fix_supervisor → supervise → COMPLETE', async () => {
-    const config = loadPiece('review-fix', testDir);
+    const config = loadPiece('review-fix-default', testDir);
     expect(config).not.toBeNull();
 
     setMockScenario([
@@ -552,7 +552,7 @@ describe('Piece Patterns IT: frontend-review-fix piece (fix loop)', () => {
   });
 
   it('fix loop: reviewers any("needs_fix") → fix → reviewers (all approved) → supervise → COMPLETE', async () => {
-    const config = loadPiece('frontend-review-fix', testDir);
+    const config = loadPiece('review-fix-frontend', testDir);
     expect(config).not.toBeNull();
 
     setMockScenario([
@@ -594,7 +594,7 @@ describe('Piece Patterns IT: backend-review-fix piece (fix loop)', () => {
   });
 
   it('fix loop: reviewers any("needs_fix") → fix → reviewers (all approved) → supervise → COMPLETE', async () => {
-    const config = loadPiece('backend-review-fix', testDir);
+    const config = loadPiece('review-fix-backend', testDir);
     expect(config).not.toBeNull();
 
     setMockScenario([
@@ -634,7 +634,7 @@ describe('Piece Patterns IT: dual-review-fix piece (fix loop)', () => {
   });
 
   it('fix loop: reviewers any("needs_fix") → fix → reviewers (all approved) → supervise → COMPLETE', async () => {
-    const config = loadPiece('dual-review-fix', testDir);
+    const config = loadPiece('review-fix-dual', testDir);
     expect(config).not.toBeNull();
 
     setMockScenario([
@@ -676,7 +676,7 @@ describe('Piece Patterns IT: dual-cqrs-review-fix piece (fix loop)', () => {
   });
 
   it('fix loop: reviewers any("needs_fix") → fix → reviewers (all approved) → supervise → COMPLETE', async () => {
-    const config = loadPiece('dual-cqrs-review-fix', testDir);
+    const config = loadPiece('review-fix-dual-cqrs', testDir);
     expect(config).not.toBeNull();
 
     setMockScenario([
@@ -720,7 +720,7 @@ describe('Piece Patterns IT: backend-cqrs-review-fix piece (fix loop)', () => {
   });
 
   it('fix loop: reviewers any("needs_fix") → fix → reviewers (all approved) → supervise → COMPLETE', async () => {
-    const config = loadPiece('backend-cqrs-review-fix', testDir);
+    const config = loadPiece('review-fix-backend-cqrs', testDir);
     expect(config).not.toBeNull();
 
     setMockScenario([

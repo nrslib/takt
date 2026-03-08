@@ -6,6 +6,31 @@
 
 フォーマットは [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) に基づいています。
 
+## [0.31.0] - 2026-03-06
+
+### Changed
+
+- `dual` ピースを大幅強化: テストファースト（`write_tests`）ムーブメント追加、`implement` を team_leader 化（FE/BE 分割）、レビューを2段階化（`reviewers_1`: arch/frontend/testing → `reviewers_2`: security/qa/requirements）
+- `takt-default-team-leader` ピースを `takt-default` に統合し削除。`takt-default` の `implement` を team_leader 化
+- `quality_gates` のペルソナ単位オーバーライドをサポート: `piece_overrides.personas.<name>.qualityGates` で特定ペルソナのムーブメントに品質ゲートを追加可能に (#472)
+- Status 型を `done` / `blocked` / `error` の3値に整理し、ステータスハンドリングを厳格化。`blocked` / `error` 時は即座に ABORT するよう変更 (#477)
+
+### Fixed
+
+- `git check-ref-format` コマンドから不要な `--` を削除し、ブランチ名の検証が正しく動作するよう修正 (#481)
+- `log_level` → `logging.level` の設定キー不整合を修正（E2E テスト全滅の原因）
+- Phase 3 ステータス判定が失敗した際に Phase 1 のルール評価にフォールバックするよう修正（従来はエラーで中断していた） (#474)
+- Parallel ムーブメントの Phase 3 判定失敗時も同様にフォールバック対応 (#474)
+- タスクリトライ・追加指示時のピース名取得元を `runInfo?.piece` から `task.data?.piece` に変更（worktree 内で `runInfo` が常に null になる問題を修正）
+
+### Internal
+
+- config 3層モデルの整理: `PersistedGlobalConfig` → `GlobalConfig` にリネーム、マイグレーション用フォールバック処理を削除、`persisted-global-config.ts` → `config-types.ts` にリネーム
+- supervisor ペルソナからインラインの知識・ポリシーをファセットファイルに分離
+- team leader の分解品質を改善するナレッジ（`task-decomposition.md`）とインストラクション（`dual-team-leader-implement.md`）を追加
+- `~/.takt/config.yaml` テンプレートに不足していた設定項目を追加
+- Provider Sandbox & Permission ガイドのドキュメントを拡充
+
 ## [0.30.0] - 2026-03-05
 
 ### Added

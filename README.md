@@ -12,7 +12,7 @@ TAKT is built with TAKT itself (dogfooding).
 
 **Batteries included** — Architecture, security, and AI antipattern review criteria are built in. Ship code that meets a quality bar from day one.
 
-**Practical** — A tool for daily development, not demos. Talk to AI to refine requirements, queue tasks, and run them. Automatic worktree isolation, PR creation, and retry on failure.
+**Practical** — A tool for daily development, not demos. Talk to AI to refine requirements, queue tasks, and run them. Worktree isolation on task execution, PR creation, and retry on failure.
 
 **Reproducible** — Execution paths are declared in YAML, keeping results consistent. Pieces are shareable — a workflow built by one team member can be used by anyone else to run the same quality process. Every step is logged in NDJSON for full traceability from task to PR.
 
@@ -39,7 +39,7 @@ Optional:
 npm install -g takt
 ```
 
-### Talk to AI, then execute
+### Talk to AI and queue tasks
 
 ```
 $ takt
@@ -55,27 +55,32 @@ Select piece:
 [AI clarifies requirements and organizes the task]
 
 > /go
+
+Proposed task:
+  ...
+
+What would you like to do?
+    Execute now
+    Create GitHub Issue
+  ❯ Queue as task          # ← normal flow
+    Continue conversation
 ```
 
-TAKT creates an isolated worktree, runs the piece (plan → implement → review → fix loop), and offers to create a PR when done.
-
-### Queue tasks, then batch execute
-
-Use `takt` to queue multiple tasks, then execute them all at once:
+Choosing "Queue as task" saves the task to `.takt/tasks/`. Run `takt run` to execute — TAKT creates an isolated worktree, runs the piece (plan → implement → review → fix loop), and offers to create a PR when done.
 
 ```bash
-# Queue tasks through conversation
-takt
-> Refactor the auth module
-> /go          # queues the task
+# Execute queued tasks
+takt run
 
-# Or queue from GitHub Issues
+# You can also queue from GitHub Issues
 takt add #6
 takt add #12
 
 # Execute all pending tasks
 takt run
 ```
+
+> **"Execute now"** runs the piece directly in your current directory without worktree isolation. Useful for quick experiments, but note that changes go straight into your working tree.
 
 ### Manage results
 
@@ -256,7 +261,7 @@ await engine.run();
 | [Task Management](./docs/task-management.md) | Task queuing, execution, isolation |
 | [Data Flow](./docs/data-flow.md) | Internal data flow and architecture diagrams |
 | [CI/CD Integration](./docs/ci-cd.md) | GitHub Actions and pipeline mode |
-| [Provider Sandbox](./docs/provider-sandbox.md) | Sandbox configuration for providers |
+| [Provider Sandbox & Permissions](./docs/provider-sandbox.md) | Sandbox, permission modes, and network access for Codex / OpenCode / Claude |
 | [Changelog](./CHANGELOG.md) ([日本語](./docs/CHANGELOG.ja.md)) | Version history |
 | [Security Policy](./SECURITY.md) | Vulnerability reporting |
 

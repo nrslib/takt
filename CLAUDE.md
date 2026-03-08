@@ -40,6 +40,7 @@ TAKT (TAKT Agent Koordination Topology) is a multi-agent orchestration system fo
 | `takt prompt [piece]` | Preview assembled prompts for each movement and phase |
 | `takt catalog [type]` | List available facets (personas, policies, knowledge, etc.) |
 | `takt export-cc` | Export takt pieces/agents as Claude Code Skill (~/.claude/) |
+| `takt export-codex` | Export takt skill files to Codex Skill (~/.agents/skills/takt/) |
 | `takt reset config` | Reset global config to builtin template |
 | `takt reset categories` | Reset piece categories to builtin defaults |
 | `takt metrics review` | Show review quality metrics |
@@ -270,6 +271,7 @@ builtins/                 # Bundled defaults (builtin, read from dist/ at runtim
   ja/                     # Japanese (same structure)
   project/                # Project-level template files
   skill/                  # Claude Code skill files
+  skill-codex/            # Codex skill files
 ```
 
 Builtin resources are embedded in the npm package (`builtins/`). Project files in `.takt/` take highest priority, then user files in `~/.takt/`, then builtins. Use `takt eject` to copy builtins for customization.

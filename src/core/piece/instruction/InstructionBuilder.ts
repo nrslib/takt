@@ -18,7 +18,7 @@ import {
   renderConflictNotice,
   prepareKnowledgeContent as prepareKnowledgeContentGeneric,
   preparePolicyContent as preparePolicyContentGeneric,
-} from '../../../faceted-prompting/index.js';
+} from 'faceted-prompting';
 
 const CONTEXT_MAX_CHARS = 2000;
 

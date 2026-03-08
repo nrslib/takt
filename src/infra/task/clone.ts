@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { createLogger } from '../../shared/utils/index.js';
 import { resolveConfigValue } from '../config/index.js';
 import type { WorktreeOptions, WorktreeResult } from './types.js';
-import { branchExists, resolveBaseBranch as resolveBaseBranchInternal } from './clone-base-branch.js';
+import { branchExists, localBranchExists, remoteBranchExists, resolveBaseBranch as resolveBaseBranchInternal } from './clone-base-branch.js';
 import { cloneAndIsolate, resolveCloneSubmoduleOptions } from './clone-exec.js';
 import { loadCloneMeta, removeCloneMeta as removeCloneMetaFile, saveCloneMeta as saveCloneMetaFile } from './clone-meta.js';
 
@@ -25,7 +25,25 @@ export class CloneManager {
         ? worktreeDir
         : path.resolve(projectDir, worktreeDir);
     }
-    return path.join(projectDir, '..', 'takt-worktrees');
+    const defaultDir = path.join(projectDir, '..', 'takt-worktrees');
+    if (!CloneManager.isParentWritable(defaultDir)) {
+      log.info('Parent directory not writable, using fallback clone base dir', {
+        defaultDir,
+        fallback: path.join(projectDir, '.takt', 'worktrees'),
+      });
+      return path.join(projectDir, '.takt', 'worktrees');
+    }
+    return defaultDir;
+  }
+
+  private static isParentWritable(targetDir: string): boolean {
+    const parentDir = path.dirname(targetDir);
+    try {
+      fs.accessSync(parentDir, fs.constants.W_OK);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private static resolveClonePath(projectDir: string, options: WorktreeOptions): string {
@@ -73,9 +91,6 @@ export class CloneManager {
   }
 
   createSharedClone(projectDir: string, options: WorktreeOptions): WorktreeResult {
-    const requestedBaseBranch = options.baseBranch;
-    const { branch: baseBranch, fetchedCommit } = CloneManager.resolveBaseBranch(projectDir, requestedBaseBranch);
-
     const clonePath = CloneManager.resolveClonePath(projectDir, options);
     const branch = CloneManager.resolveBranchName(options);
     const cloneSubmoduleOptions = resolveCloneSubmoduleOptions(projectDir);
@@ -85,9 +100,16 @@ export class CloneManager {
       { path: clonePath, branch }
     );
 
-    if (branchExists(projectDir, branch)) {
+    if (localBranchExists(projectDir, branch)) {
       cloneAndIsolate(projectDir, clonePath, branch);
+    } else if (remoteBranchExists(projectDir, branch)) {
+      cloneAndIsolate(projectDir, clonePath);
+      execFileSync('git', ['fetch', projectDir, `refs/remotes/origin/${branch}:refs/heads/${branch}`], {
+        cwd: clonePath, stdio: 'pipe',
+      });
+      execFileSync('git', ['checkout', branch], { cwd: clonePath, stdio: 'pipe' });
     } else {
+      const { branch: baseBranch, fetchedCommit } = CloneManager.resolveBaseBranch(projectDir, options.baseBranch);
       cloneAndIsolate(projectDir, clonePath, baseBranch);
       if (fetchedCommit) {
         execFileSync('git', ['reset', '--hard', fetchedCommit], { cwd: clonePath, stdio: 'pipe' });

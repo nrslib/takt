@@ -1,6 +1,6 @@
 {
   "name": "takt",
-  "version": "0.30.0",
+  "version": "0.31.0",
   "description": "TAKT: TAKT Agent Koordination Topology - AI Agent Piece Orchestration",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -67,6 +67,7 @@
     "@opencode-ai/sdk": ">=1.1.53 <1.2.7",
     "chalk": "^5.3.0",
     "commander": "^12.1.0",
+    "faceted-prompting": "^0.1.0",
     "update-notifier": "^7.3.1",
     "wanakana": "^5.3.1",
     "yaml": "^2.4.5",

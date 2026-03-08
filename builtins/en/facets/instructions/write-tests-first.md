@@ -12,14 +12,13 @@ Refer only to files within the Report Directory shown in the Piece Context. Do n
    - Does a new status/state merge into an existing workflow?
    - Does a new option propagate through a call chain to the endpoint?
    - If any apply, create integration tests
-5. Run the build (type check) to verify test code has no syntax errors
 
 **Test writing guidelines:**
 - Follow the project's existing test patterns (naming conventions, directory structure, helpers)
 - Write tests in Given-When-Then structure
 - One concept per test. Do not mix multiple concerns in a single test
 - Cover happy path, error cases, boundary values, and edge cases
-- Write tests that are expected to pass after implementation is complete
+- Write tests that are expected to pass after implementation is complete (build errors and test failures are expected at this stage)
 
 **Scope output contract (create at the start):**
 ```markdown
@@ -55,5 +54,3 @@ Small / Medium / Large
 - {Summary of actions taken}
 ## Changes made
 - {List of test files created}
-## Build results
-- {Build execution results}

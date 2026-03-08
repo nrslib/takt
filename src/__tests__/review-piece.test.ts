@@ -1,5 +1,5 @@
 /**
- * Tests for review piece
+ * Tests for review-default piece
  *
  * Covers:
  * - Piece YAML files (EN/JA) load and pass schema validation
@@ -18,12 +18,12 @@ import { PieceConfigRawSchema } from '../core/models/index.js';
 const RESOURCES_DIR = join(import.meta.dirname, '../../builtins');
 
 function loadReviewYaml(lang: 'en' | 'ja') {
-  const filePath = join(RESOURCES_DIR, lang, 'pieces', 'review.yaml');
+  const filePath = join(RESOURCES_DIR, lang, 'pieces', 'review-default.yaml');
   const content = readFileSync(filePath, 'utf-8');
   return parseYaml(content);
 }
 
-describe('review piece (EN)', () => {
+describe('review-default piece (EN)', () => {
   const raw = loadReviewYaml('en');
 
   it('should pass schema validation', () => {
@@ -32,7 +32,7 @@ describe('review piece (EN)', () => {
   });
 
   it('should have correct name and initial_movement', () => {
-    expect(raw.name).toBe('review');
+    expect(raw.name).toBe('review-default');
     expect(raw.initial_movement).toBe('gather');
   });
 
@@ -126,7 +126,7 @@ describe('review piece (EN)', () => {
   });
 });
 
-describe('review piece (JA)', () => {
+describe('review-default piece (JA)', () => {
   const raw = loadReviewYaml('ja');
 
   it('should pass schema validation', () => {
@@ -135,7 +135,7 @@ describe('review piece (JA)', () => {
   });
 
   it('should have correct name and initial_movement', () => {
-    expect(raw.name).toBe('review');
+    expect(raw.name).toBe('review-default');
     expect(raw.initial_movement).toBe('gather');
   });
 

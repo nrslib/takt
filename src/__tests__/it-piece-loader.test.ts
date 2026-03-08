@@ -329,7 +329,7 @@ describe('Piece Loader IT: piece config validation', () => {
   });
 
   it('should preserve edit property on movements (review has no edit: true)', () => {
-    const config = loadPiece('review', testDir);
+    const config = loadPiece('review-default', testDir);
     expect(config).not.toBeNull();
 
     // review: no movement should have edit: true

@@ -1,7 +1,7 @@
 /**
  * Resource resolution helpers for piece YAML parsing.
  *
- * Facade: delegates to faceted-prompting/resolve.ts and re-exports
+ * Facade: delegates to the faceted-prompting package and re-exports
  * its types/functions. resolveFacetPath and resolveFacetByName build
  * TAKT-specific candidate directories then delegate to the generic
  * implementation.
@@ -20,17 +20,17 @@ import {
   isScopeRef,
   parseScopeRef,
   resolveScopeRef,
-} from '../../../faceted-prompting/index.js';
+} from 'faceted-prompting';
 
 // Re-export types and pure functions that need no TAKT wrapping
-export type { PieceSections } from '../../../faceted-prompting/index.js';
+export type { PieceSections } from 'faceted-prompting';
 export {
   isResourcePath,
   resolveResourcePath,
   resolveResourceContent,
   resolveSectionMap,
   extractPersonaDisplayName,
-} from '../../../faceted-prompting/index.js';
+} from 'faceted-prompting';
 
 /** Context for 3-layer facet resolution (TAKT-specific). */
 export interface FacetResolutionContext {
@@ -197,7 +197,7 @@ export function resolveRefList(
 /** Resolve persona from YAML field to spec + absolute path. */
 export function resolvePersona(
   rawPersona: string | undefined,
-  sections: import('../../../faceted-prompting/index.js').PieceSections,
+  sections: import('faceted-prompting').PieceSections,
   pieceDir: string,
   context?: FacetResolutionContext,
 ): { personaSpec?: string; personaPath?: string } {

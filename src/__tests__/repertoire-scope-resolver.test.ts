@@ -2,7 +2,7 @@
  * Unit tests for repertoire @scope resolution and facet resolution chain.
  *
  * Covers:
- *   A. @scope reference resolution (src/faceted-prompting/scope.ts)
+ *   A. @scope reference resolution (faceted-prompting package)
  *   B. Facet resolution chain with package-local layer
  *      (src/infra/config/loaders/resource-resolver.ts)
  *
@@ -36,7 +36,7 @@ import {
   validateScopeOwner,
   validateScopeRepo,
   validateScopeFacetName,
-} from '../faceted-prompting/scope.js';
+} from 'faceted-prompting';
 import {
   isPackagePiece,
   buildCandidateDirsWithPackage,

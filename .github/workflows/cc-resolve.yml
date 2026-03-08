@@ -15,6 +15,7 @@ jobs:
       github.event.comment.author_association == 'OWNER'
     runs-on: ubuntu-latest
     permissions:
+      actions: write
       contents: write
       pull-requests: write
     steps:

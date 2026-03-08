@@ -1,0 +1,90 @@
+name: CI Trigger
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  ci:
+    if: |
+      github.event.issue.pull_request &&
+      contains(github.event.comment.body, '/ci') &&
+      github.event.comment.author_association == 'OWNER'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      statuses: write
+    steps:
+      - name: Get PR ref
+        id: pr
+        run: |
+          PR=$(gh api repos/${{ github.repository }}/pulls/${{ github.event.issue.number }} \
+            --jq '{head_ref: .head.ref, head_sha: .head.sha}')
+          echo "ref=$(echo "$PR" | jq -r .head_ref)" >> "$GITHUB_OUTPUT"
+          echo "sha=$(echo "$PR" | jq -r .head_sha)" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Set pending status
+        run: |
+          for context in "CI / lint" "CI / test" "CI / e2e-mock"; do
+            gh api repos/${{ github.repository }}/statuses/${{ steps.pr.outputs.sha }} \
+              -f state=pending -f context="$context" \
+              -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: Lint
+        id: lint
+        run: npm run lint
+        continue-on-error: true
+
+      - name: Test
+        id: test
+        run: npm run test
+        continue-on-error: true
+
+      - name: E2E Mock
+        id: e2e
+        run: npm run test:e2e:mock
+        continue-on-error: true
+
+      - name: Report statuses
+        if: always()
+        run: |
+          report_status() {
+            local context="$1" result="$2"
+            local state="success"
+            if [ "$result" != "success" ]; then state="failure"; fi
+            gh api repos/${{ github.repository }}/statuses/${{ steps.pr.outputs.sha }} \
+              -f state="$state" -f context="$context" \
+              -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          }
+          report_status "CI / lint" "${{ steps.lint.outcome }}"
+          report_status "CI / test" "${{ steps.test.outcome }}"
+          report_status "CI / e2e-mock" "${{ steps.e2e.outcome }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fail if any step failed
+        if: always()
+        run: |
+          if [ "${{ steps.lint.outcome }}" != "success" ] || \
+             [ "${{ steps.test.outcome }}" != "success" ] || \
+             [ "${{ steps.e2e.outcome }}" != "success" ]; then
+            exit 1
+          fi

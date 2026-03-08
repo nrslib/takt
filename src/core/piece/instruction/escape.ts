@@ -9,9 +9,9 @@
 
 import type { PieceMovement } from '../../models/types.js';
 import type { InstructionContext } from './instruction-context.js';
-import { escapeTemplateChars } from '../../../faceted-prompting/index.js';
+import { escapeTemplateChars } from 'faceted-prompting';
 
-export { escapeTemplateChars } from '../../../faceted-prompting/index.js';
+export { escapeTemplateChars } from 'faceted-prompting';
 
 /**
  * Replace template placeholders in the instruction_template body.
