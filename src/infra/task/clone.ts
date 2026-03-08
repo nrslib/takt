@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { createLogger } from '../../shared/utils/index.js';
 import { resolveConfigValue } from '../config/index.js';
 import type { WorktreeOptions, WorktreeResult } from './types.js';
-import { branchExists, localBranchExists, remoteBranchExists, resolveBaseBranch as resolveBaseBranchInternal } from './clone-base-branch.js';
+import { localBranchExists, remoteBranchExists, resolveBaseBranch as resolveBaseBranchInternal } from './clone-base-branch.js';
 import { cloneAndIsolate, resolveCloneSubmoduleOptions } from './clone-exec.js';
 import { loadCloneMeta, removeCloneMeta as removeCloneMetaFile, saveCloneMeta as saveCloneMetaFile } from './clone-meta.js';
 
