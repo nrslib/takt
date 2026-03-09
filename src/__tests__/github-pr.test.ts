@@ -192,14 +192,10 @@ describe('fetchPrReviewComments', () => {
         {
           author: { login: 'reviewer1' },
           body: 'Looks mostly good',
-          comments: [
-            { body: 'Fix null check here', path: 'src/auth.ts', line: 42, author: { login: 'reviewer1' } },
-          ],
         },
         {
           author: { login: 'reviewer2' },
           body: '',
-          comments: [],
         },
       ],
       files: [
@@ -207,7 +203,12 @@ describe('fetchPrReviewComments', () => {
         { path: 'src/auth.test.ts' },
       ],
     };
-    mockExecFileSync.mockReturnValue(JSON.stringify(ghResponse));
+    const inlineCommentsResponse = [
+      { body: 'Fix null check here', path: 'src/auth.ts', line: 42, user: { login: 'reviewer1' } },
+    ];
+    mockExecFileSync
+      .mockReturnValueOnce(JSON.stringify(ghResponse))
+      .mockReturnValueOnce(JSON.stringify(inlineCommentsResponse));
 
     // When
     const result = fetchPrReviewComments(456);
@@ -216,6 +217,11 @@ describe('fetchPrReviewComments', () => {
     expect(mockExecFileSync).toHaveBeenCalledWith(
       'gh',
       ['pr', 'view', '456', '--json', 'number,title,body,url,headRefName,baseRefName,comments,reviews,files'],
+      expect.objectContaining({ encoding: 'utf-8' }),
+    );
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      'gh',
+      ['api', '/repos/org/repo/pulls/456/comments'],
       expect.objectContaining({ encoding: 'utf-8' }),
     );
     expect(result.number).toBe(456);
@@ -240,17 +246,49 @@ describe('fetchPrReviewComments', () => {
       headRefName: 'feat/approved',
       comments: [],
       reviews: [
-        { author: { login: 'approver' }, body: '', comments: [] },
+        { author: { login: 'approver' }, body: '' },
       ],
       files: [],
     };
-    mockExecFileSync.mockReturnValue(JSON.stringify(ghResponse));
+    mockExecFileSync
+      .mockReturnValueOnce(JSON.stringify(ghResponse))
+      .mockReturnValueOnce(JSON.stringify([]));
 
     // When
     const result = fetchPrReviewComments(10);
 
     // Then
     expect(result.reviews).toEqual([]);
+  });
+
+  it('should include inline comments from pulls comments API even when review bodies are empty', () => {
+    // Given
+    const ghResponse = {
+      number: 11,
+      title: 'Inline only',
+      body: '',
+      url: 'https://github.com/org/repo/pull/11',
+      headRefName: 'fix/inline-only',
+      comments: [],
+      reviews: [
+        { author: { login: 'approver' }, body: '' },
+      ],
+      files: [],
+    };
+    const inlineCommentsResponse = [
+      { body: 'Address this edge case', path: 'src/index.ts', line: 7, user: { login: 'reviewer3' } },
+    ];
+    mockExecFileSync
+      .mockReturnValueOnce(JSON.stringify(ghResponse))
+      .mockReturnValueOnce(JSON.stringify(inlineCommentsResponse));
+
+    // When
+    const result = fetchPrReviewComments(11);
+
+    // Then
+    expect(result.reviews).toEqual([
+      { author: 'reviewer3', body: 'Address this edge case', path: 'src/index.ts', line: 7 },
+    ]);
   });
 
   it('should throw when gh CLI fails', () => {
