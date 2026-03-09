@@ -85,7 +85,7 @@ describe('OptionsBuilder.buildBaseOptions', () => {
     });
   });
 
-  it('merges provider options with precedence: global/project < movement', () => {
+  it('merges provider options with precedence: global < movement and project/env > movement', () => {
     const step = createMovement({
       providerOptions: {
         codex: { networkAccess: false },
@@ -107,15 +107,36 @@ describe('OptionsBuilder.buildBaseOptions', () => {
     const options = builder.buildBaseOptions(step);
 
     expect(options.providerOptions).toEqual({
-      codex: { networkAccess: false },
+      codex: { networkAccess: true },
       opencode: { networkAccess: true },
       claude: {
         sandbox: {
           excludedCommands: ['./gradlew'],
           allowUnsandboxedCommands: true,
         },
-        allowedTools: ['Read', 'Edit', 'Bash'],
+        allowedTools: ['Read', 'Glob'],
       },
+    });
+  });
+
+
+  it('lets movement override when provider options source is global', () => {
+    const step = createMovement({
+      providerOptions: {
+        codex: { networkAccess: false },
+      },
+    });
+    const builder = createBuilder(step, {
+      providerOptionsSource: 'global',
+      providerOptions: {
+        codex: { networkAccess: true },
+      },
+    });
+
+    const options = builder.buildBaseOptions(step);
+
+    expect(options.providerOptions).toEqual({
+      codex: { networkAccess: false },
     });
   });
 

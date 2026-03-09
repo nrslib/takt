@@ -32,10 +32,13 @@ function mergeProviderOptions(
 }
 
 function resolveMovementProviderOptions(
-  _source: 'env' | 'project' | 'global' | 'default' | undefined,
+  source: 'env' | 'project' | 'global' | 'default' | undefined,
   resolvedConfigOptions: MovementProviderOptions | undefined,
   movementOptions: MovementProviderOptions | undefined,
 ): MovementProviderOptions | undefined {
+  if (source === 'env' || source === 'project') {
+    return mergeProviderOptions(movementOptions, resolvedConfigOptions);
+  }
   return mergeProviderOptions(resolvedConfigOptions, movementOptions);
 }
 
