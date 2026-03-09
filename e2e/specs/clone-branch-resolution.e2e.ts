@@ -80,6 +80,8 @@ describe('E2E: Clone branch resolution (mock)', () => {
   });
 
   it('should clone with remote-only branch (PR scenario)', () => {
+    // Get default branch BEFORE switching away, so fallback rev-parse returns the correct branch
+    const defaultBranch = getDefaultBranch(testRepo.path);
     const remoteBranch = `takt/e2e-remote-only-${Date.now()}`;
     execFileSync('git', ['checkout', '-b', remoteBranch], { cwd: testRepo.path, stdio: 'pipe' });
     writeFileSync(join(testRepo.path, 'remote-only.txt'), 'remote content\n');
@@ -87,7 +89,6 @@ describe('E2E: Clone branch resolution (mock)', () => {
     execFileSync('git', ['commit', '-m', 'remote-only commit'], { cwd: testRepo.path, stdio: 'pipe' });
     execFileSync('git', ['push', '-u', 'origin', remoteBranch], { cwd: testRepo.path, stdio: 'pipe' });
 
-    const defaultBranch = getDefaultBranch(testRepo.path);
     execFileSync('git', ['checkout', defaultBranch], { cwd: testRepo.path, stdio: 'pipe' });
     execFileSync('git', ['branch', '-D', remoteBranch], { cwd: testRepo.path, stdio: 'pipe' });
 
