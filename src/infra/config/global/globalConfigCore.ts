@@ -17,6 +17,7 @@ import { getGlobalConfigPath } from '../paths.js';
 import { applyGlobalConfigEnvOverrides } from '../env/config-env-overrides.js';
 import { invalidateAllResolvedConfigCache } from '../resolutionCache.js';
 import { validateProviderModelCompatibility } from '../providerModelCompatibility.js';
+import { expandOptionalHomePath } from '../pathExpansion.js';
 import { sanitizeConfigValue } from './globalConfigLegacyMigration.js';
 import { serializeGlobalConfig } from './globalConfigSerializer.js';
 export { validateCliPath } from './cliPathValidator.js';
@@ -94,10 +95,10 @@ export class GlobalConfigManager {
       } : undefined,
       analytics: parsed.analytics ? {
         enabled: parsed.analytics.enabled,
-        eventsPath: parsed.analytics.events_path,
+        eventsPath: expandOptionalHomePath(parsed.analytics.events_path),
         retentionDays: parsed.analytics.retention_days,
       } : undefined,
-      worktreeDir: parsed.worktree_dir,
+      worktreeDir: expandOptionalHomePath(parsed.worktree_dir),
       autoPr: parsed.auto_pr,
       draftPr: parsed.draft_pr,
       disabledBuiltins: parsed.disabled_builtins,
@@ -108,15 +109,15 @@ export class GlobalConfigManager {
       googleApiKey: parsed.google_api_key,
       groqApiKey: parsed.groq_api_key,
       openrouterApiKey: parsed.openrouter_api_key,
-      codexCliPath: parsed.codex_cli_path,
-      claudeCliPath: parsed.claude_cli_path,
-      cursorCliPath: parsed.cursor_cli_path,
-      copilotCliPath: parsed.copilot_cli_path,
+      codexCliPath: expandOptionalHomePath(parsed.codex_cli_path),
+      claudeCliPath: expandOptionalHomePath(parsed.claude_cli_path),
+      cursorCliPath: expandOptionalHomePath(parsed.cursor_cli_path),
+      copilotCliPath: expandOptionalHomePath(parsed.copilot_cli_path),
       copilotGithubToken: parsed.copilot_github_token,
       opencodeApiKey: parsed.opencode_api_key,
       cursorApiKey: parsed.cursor_api_key,
-      bookmarksFile: parsed.bookmarks_file,
-      pieceCategoriesFile: parsed.piece_categories_file,
+      bookmarksFile: expandOptionalHomePath(parsed.bookmarks_file),
+      pieceCategoriesFile: expandOptionalHomePath(parsed.piece_categories_file),
       providerOptions: normalizedProvider.providerOptions,
       providerProfiles: normalizeProviderProfiles(parsed.provider_profiles as Record<string, { default_permission_mode: unknown; movement_permission_overrides?: Record<string, unknown> }> | undefined),
       runtime: normalizeRuntime(parsed.runtime),

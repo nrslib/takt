@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { tmpdir, homedir } from 'node:os';
 import type { GlobalConfig } from '../core/models/config-types.js';
 
 // Mock the getGlobalConfigPath to use a test directory
@@ -187,6 +187,44 @@ logging:
       const manager = GlobalConfigManager.getInstance();
       expect(() => manager.load()).toThrow(/forbidden key "__proto__"/i);
       expect(({} as Record<string, unknown>)['polluted']).toBeUndefined();
+    });
+  });
+
+  describe('tilde expansion for path fields', () => {
+    it.each([
+      ['worktree_dir', 'worktreeDir'],
+      ['bookmarks_file', 'bookmarksFile'],
+      ['piece_categories_file', 'pieceCategoriesFile'],
+      ['codex_cli_path', 'codexCliPath'],
+      ['claude_cli_path', 'claudeCliPath'],
+      ['cursor_cli_path', 'cursorCliPath'],
+      ['copilot_cli_path', 'copilotCliPath'],
+    ] as const)('should expand "~/" for %s', (yamlKey, configKey) => {
+      writeFileSync(testConfigPath, `${yamlKey}: ~/.takt/bin/value\n`, 'utf-8');
+
+      const loaded = GlobalConfigManager.getInstance().load() as Record<string, unknown>;
+
+      expect(loaded[configKey]).toBe(join(homedir(), '.takt/bin/value'));
+    });
+
+    it('should expand "~/" for analytics.events_path', () => {
+      writeFileSync(
+        testConfigPath,
+        ['analytics:', '  enabled: true', '  events_path: ~/.takt/analytics/events'].join('\n'),
+        'utf-8',
+      );
+
+      const loaded = GlobalConfigManager.getInstance().load();
+
+      expect(loaded.analytics?.eventsPath).toBe(join(homedir(), '.takt/analytics/events'));
+    });
+
+    it('should expand "~" for worktree_dir to home directory itself', () => {
+      writeFileSync(testConfigPath, 'worktree_dir: "~"\n', 'utf-8');
+
+      const loaded = GlobalConfigManager.getInstance().load();
+
+      expect(loaded.worktreeDir).toBe(homedir());
     });
   });
 });

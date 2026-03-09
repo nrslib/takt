@@ -19,6 +19,7 @@ import {
   normalizeRuntime,
 } from '../configNormalizers.js';
 import { invalidateResolvedConfigCache } from '../resolutionCache.js';
+import { expandOptionalHomePath } from '../pathExpansion.js';
 import { getProjectConfigDir, getProjectConfigPath } from './projectConfigPaths.js';
 import {
   normalizeSubmodules,
@@ -103,6 +104,8 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     persona_providers as Record<string, string | { type?: string; provider?: string; model?: string }> | undefined,
   );
 
+  const analyticsConfig = normalizeAnalytics(analytics as Record<string, unknown> | undefined);
+
   return {
     pipeline: normalizedPipeline,
     personaProviders: normalizedPersonaProviders,
@@ -116,7 +119,10 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     baseBranch: base_branch as string | undefined,
     submodules: normalizedSubmodules,
     withSubmodules: effectiveWithSubmodules,
-    analytics: normalizeAnalytics(analytics as Record<string, unknown> | undefined),
+    analytics: analyticsConfig ? {
+      ...analyticsConfig,
+      eventsPath: expandOptionalHomePath(analyticsConfig.eventsPath),
+    } : undefined,
     provider: normalizedProvider.provider,
     model: normalizedProvider.model,
     providerOptions: normalizedProvider.providerOptions,

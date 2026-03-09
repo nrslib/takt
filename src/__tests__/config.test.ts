@@ -5,7 +5,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { tmpdir, homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import {
   getBuiltinPiece,
@@ -288,7 +288,6 @@ describe('loadPiece piece_overrides.personas integration', () => {
   });
 
   it('should apply persona quality gates from global then project configs', () => {
-    // Given: global/project persona overrides and piece yaml quality gates
     writeFileSync(
       join(isolatedGlobalConfigDir, 'config.yaml'),
       [
@@ -335,10 +334,8 @@ describe('loadPiece piece_overrides.personas integration', () => {
     invalidateGlobalConfigCache();
     invalidateAllResolvedConfigCache();
 
-    // When: loading the piece through normal config pipeline
     const piece = loadPiece('persona-gates', testDir);
 
-    // Then: persona gates are merged in global -> project -> yaml order
     const movement = piece?.movements.find((step) => step.name === 'implement');
     expect(movement?.qualityGates).toEqual([
       'Global persona gate',
@@ -348,7 +345,6 @@ describe('loadPiece piece_overrides.personas integration', () => {
   });
 
   it('should apply persona quality gates when movement persona uses personas section alias key', () => {
-    // Given: piece persona alias key differs from mapped persona filename
     writeFileSync(
       join(isolatedGlobalConfigDir, 'config.yaml'),
       [
@@ -387,16 +383,13 @@ describe('loadPiece piece_overrides.personas integration', () => {
     invalidateGlobalConfigCache();
     invalidateAllResolvedConfigCache();
 
-    // When: loading piece with section alias persona reference
     const piece = loadPiece('persona-alias-key', testDir);
 
-    // Then: override key is alias key ("coder"), not mapped filename ("implementer")
     const movement = piece?.movements.find((step) => step.name === 'implement');
     expect(movement?.qualityGates).toEqual(['Alias key gate', 'YAML gate']);
   });
 
   it('should apply persona quality gates for path personas using basename key', () => {
-    // Given: movement persona is a path and override key uses its basename
     writeFileSync(
       join(isolatedGlobalConfigDir, 'config.yaml'),
       [
@@ -433,16 +426,13 @@ describe('loadPiece piece_overrides.personas integration', () => {
     invalidateGlobalConfigCache();
     invalidateAllResolvedConfigCache();
 
-    // When: loading piece with path-like persona reference
     const piece = loadPiece('persona-path-key', testDir);
 
-    // Then: override key resolves from path basename ("implementer")
     const movement = piece?.movements.find((step) => step.name === 'implement');
     expect(movement?.qualityGates).toEqual(['Path basename gate', 'YAML gate']);
   });
 
   it('should not apply persona quality gates when persona does not match', () => {
-    // Given: persona overrides exist only for reviewer
     writeFileSync(
       join(isolatedGlobalConfigDir, 'config.yaml'),
       [
@@ -477,10 +467,8 @@ describe('loadPiece piece_overrides.personas integration', () => {
     invalidateGlobalConfigCache();
     invalidateAllResolvedConfigCache();
 
-    // When: loading piece with different persona
     const piece = loadPiece('persona-mismatch', testDir);
 
-    // Then: only YAML gates are applied
     const movement = piece?.movements.find((step) => step.name === 'implement');
     expect(movement?.qualityGates).toEqual(['YAML gate']);
   });
@@ -898,6 +886,54 @@ describe('analytics config resolution', () => {
     expect(analytics).toEqual({
       enabled: true,
       eventsPath: '/tmp/project-analytics',
+      retentionDays: 14,
+    });
+  });
+
+  it('should expand "~/" in global analytics.events_path when resolved', () => {
+    const globalConfigDir = process.env.TAKT_CONFIG_DIR!;
+    mkdirSync(globalConfigDir, { recursive: true });
+    writeFileSync(join(globalConfigDir, 'config.yaml'), [
+      'language: ja',
+      'analytics:',
+      '  enabled: true',
+      '  events_path: ~/.takt/global-analytics',
+      '  retention_days: 30',
+    ].join('\n'));
+
+    const analytics = resolveConfigValue(testDir, 'analytics');
+
+    expect(analytics).toEqual({
+      enabled: true,
+      eventsPath: join(homedir(), '.takt/global-analytics'),
+      retentionDays: 30,
+    });
+  });
+
+  it('should expand "~/" in project analytics.events_path and keep project precedence', () => {
+    const globalConfigDir = process.env.TAKT_CONFIG_DIR!;
+    mkdirSync(globalConfigDir, { recursive: true });
+    writeFileSync(join(globalConfigDir, 'config.yaml'), [
+      'language: ja',
+      'analytics:',
+      '  enabled: true',
+      '  events_path: ~/.takt/global-analytics',
+      '  retention_days: 30',
+    ].join('\n'));
+
+    const projectConfigDir = getProjectConfigDir(testDir);
+    mkdirSync(projectConfigDir, { recursive: true });
+    writeFileSync(join(projectConfigDir, 'config.yaml'), [
+      'analytics:',
+      '  events_path: ~/.takt/project-analytics',
+      '  retention_days: 14',
+    ].join('\n'));
+
+    const analytics = resolveConfigValue(testDir, 'analytics');
+
+    expect(analytics).toEqual({
+      enabled: true,
+      eventsPath: join(homedir(), '.takt/project-analytics'),
       retentionDays: 14,
     });
   });

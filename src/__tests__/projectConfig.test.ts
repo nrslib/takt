@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { tmpdir, homedir } from 'node:os';
 import { loadProjectConfig, saveProjectConfig } from '../infra/config/project/projectConfig.js';
 import type { ProjectLocalConfig } from '../infra/config/types.js';
 
@@ -214,29 +214,23 @@ piece_overrides:
     });
 
     it('should not persist empty pipeline object on save', () => {
-      // Given: empty pipeline object
       const config = {
         pipeline: {},
       } as ProjectLocalConfig;
 
-      // When: project config is saved
       saveProjectConfig(testDir, config);
 
-      // Then: pipeline key is not serialized
       const raw = readFileSync(join(testDir, '.takt', 'config.yaml'), 'utf-8');
       expect(raw).not.toContain('pipeline:');
     });
 
     it('should not persist empty personaProviders object on save', () => {
-      // Given: empty personaProviders object
       const config = {
         personaProviders: {},
       } as ProjectLocalConfig;
 
-      // When: project config is saved
       saveProjectConfig(testDir, config);
 
-      // Then: persona_providers key is not serialized
       const raw = readFileSync(join(testDir, '.takt', 'config.yaml'), 'utf-8');
       expect(raw).not.toContain('persona_providers:');
       expect(raw).not.toContain('personaProviders:');
@@ -501,6 +495,34 @@ piece_overrides:
       const reloaded = loadProjectConfig(testDir);
 
       expect(reloaded.runtime).toEqual({ prepare: ['node', 'gradle', './custom-setup.sh'] });
+    });
+  });
+
+  describe('tilde expansion for analytics path', () => {
+    it('should expand "~/" in analytics.events_path on load', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(
+        configPath,
+        ['analytics:', '  events_path: ~/.takt/project-analytics/events'].join('\n'),
+        'utf-8',
+      );
+
+      const loaded = loadProjectConfig(testDir);
+
+      expect(loaded.analytics?.eventsPath).toBe(join(homedir(), '.takt/project-analytics/events'));
+    });
+
+    it('should expand "~" in analytics.events_path to home directory itself on load', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(
+        configPath,
+        ['analytics:', '  events_path: "~"'].join('\n'),
+        'utf-8',
+      );
+
+      const loaded = loadProjectConfig(testDir);
+
+      expect(loaded.analytics?.eventsPath).toBe(homedir());
     });
   });
 });
