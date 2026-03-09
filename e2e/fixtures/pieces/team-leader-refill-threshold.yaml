@@ -21,7 +21,7 @@ movements:
         - Read
         - Write
         - Edit
-    instruction_template: |
+    instruction: |
       {task}
     rules:
       - condition: Task completed

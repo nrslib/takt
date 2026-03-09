@@ -13,7 +13,7 @@ movements:
     persona: ../agents/test-coder.md
     edit: true
     required_permission_mode: edit
-    instruction_template: |
+    instruction: |
       Create a plan for the task.
     rules:
       - condition: Plan complete
@@ -22,14 +22,14 @@ movements:
     parallel:
       - name: arch-review
         persona: ../agents/test-reviewer-a.md
-        instruction_template: |
+        instruction: |
           Review the architecture.
         rules:
           - condition: approved
           - condition: needs_fix
       - name: security-review
         persona: ../agents/test-reviewer-b.md
-        instruction_template: |
+        instruction: |
           Review security.
         rules:
           - condition: approved
@@ -43,7 +43,7 @@ movements:
     persona: ../agents/test-coder.md
     edit: true
     required_permission_mode: edit
-    instruction_template: |
+    instruction: |
       Fix the issues found in review.
     rules:
       - condition: Fix applied

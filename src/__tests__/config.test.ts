@@ -71,7 +71,7 @@ describe('getBuiltinPiece', () => {
     expect(piece!.name).toBe('default');
   });
 
-  it('should resolve builtin instruction_template without projectCwd', () => {
+  it('should resolve builtin instruction without projectCwd', () => {
     const piece = getBuiltinPiece('default', process.cwd());
     expect(piece).not.toBeNull();
 

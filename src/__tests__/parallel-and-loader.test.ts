@@ -20,17 +20,17 @@ describe('ParallelSubMovementRawSchema', () => {
     const raw = {
       name: 'arch-review',
       persona: '~/.takt/agents/default/reviewer.md',
-      instruction_template: 'Review architecture',
+      instruction: 'Review architecture',
     };
 
     const result = ParallelSubMovementRawSchema.safeParse(raw);
     expect(result.success).toBe(true);
   });
 
-  it('should accept a sub-movement without persona (instruction_template only)', () => {
+  it('should accept a sub-movement without persona (instruction only)', () => {
     const raw = {
       name: 'no-agent-step',
-      instruction_template: 'Do something',
+      instruction: 'Do something',
     };
 
     const result = ParallelSubMovementRawSchema.safeParse(raw);
@@ -51,8 +51,8 @@ describe('ParallelSubMovementRawSchema', () => {
     expect(result.success).toBe(true);
   });
 
-  it('should accept a sub-movement when instruction and instruction_template are both provided', () => {
-    // Given: both canonical and deprecated fields are present during migration
+  it('should reject legacy instruction_template in sub-movement schema', () => {
+    // Given: legacy field is present in raw input
     const raw = {
       name: 'dual-field-sub-step',
       instruction: 'Canonical instruction',
@@ -62,12 +62,8 @@ describe('ParallelSubMovementRawSchema', () => {
     // When: validating the sub-movement schema
     const result = ParallelSubMovementRawSchema.safeParse(raw);
 
-    // Then: schema keeps backward compatibility and accepts both fields
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect((result.data as unknown as Record<string, unknown>).instruction).toBe('Canonical instruction');
-      expect((result.data as unknown as Record<string, unknown>).instruction_template).toBe('Legacy instruction');
-    }
+    // Then: validation fails to prevent silent legacy fallback
+    expect(result.success).toBe(false);
   });
 
   it('should accept optional fields', () => {
@@ -82,7 +78,7 @@ describe('ParallelSubMovementRawSchema', () => {
       },
       model: 'haiku',
       edit: false,
-      instruction_template: 'Do work',
+      instruction: 'Do work',
       report: '01-report.md',
       pass_previous_response: false,
     };
@@ -104,7 +100,7 @@ describe('ParallelSubMovementRawSchema', () => {
         model: 'gpt-5.3',
         network_access: true,
       },
-      instruction_template: 'Review',
+      instruction: 'Review',
     };
 
     const result = ParallelSubMovementRawSchema.safeParse(raw);
@@ -118,7 +114,7 @@ describe('ParallelSubMovementRawSchema', () => {
         type: 'claude',
         network_access: true,
       },
-      instruction_template: 'Review',
+      instruction: 'Review',
     };
 
     const result = ParallelSubMovementRawSchema.safeParse(raw);
@@ -129,7 +125,7 @@ describe('ParallelSubMovementRawSchema', () => {
     const raw = {
       name: 'reviewed',
       persona: '~/.takt/agents/default/reviewer.md',
-      instruction_template: 'Review',
+      instruction: 'Review',
       rules: [
         { condition: 'No issues', next: 'COMPLETE' },
         { condition: 'Issues found', next: 'fix' },
@@ -147,7 +143,7 @@ describe('ParallelSubMovementRawSchema', () => {
     const raw = {
       name: 'invalid-sub-step',
       allowed_tools: ['Read'],
-      instruction_template: 'Review',
+      instruction: 'Review',
     };
 
     const result = ParallelSubMovementRawSchema.safeParse(raw);
@@ -160,8 +156,8 @@ describe('PieceMovementRawSchema with parallel', () => {
     const raw = {
       name: 'parallel-review',
       parallel: [
-        { name: 'arch-review', persona: 'reviewer.md', instruction_template: 'Review arch' },
-        { name: 'sec-review', persona: 'security.md', instruction_template: 'Review security' },
+        { name: 'arch-review', persona: 'reviewer.md', instruction: 'Review arch' },
+        { name: 'sec-review', persona: 'security.md', instruction: 'Review security' },
       ],
       rules: [
         { condition: 'All pass', next: 'COMPLETE' },
@@ -172,10 +168,10 @@ describe('PieceMovementRawSchema with parallel', () => {
     expect(result.success).toBe(true);
   });
 
-  it('should accept a movement with neither agent nor parallel (instruction_template only)', () => {
+  it('should accept a movement with neither agent nor parallel (instruction only)', () => {
     const raw = {
       name: 'orphan-step',
-      instruction_template: 'Do something',
+      instruction: 'Do something',
     };
 
     const result = PieceMovementRawSchema.safeParse(raw);
@@ -196,8 +192,8 @@ describe('PieceMovementRawSchema with parallel', () => {
     expect(result.success).toBe(true);
   });
 
-  it('should accept a movement when instruction and instruction_template are both provided', () => {
-    // Given: movement includes both canonical and deprecated instruction fields
+  it('should reject legacy instruction_template in movement schema', () => {
+    // Given: movement includes both canonical and legacy instruction fields
     const raw = {
       name: 'orphan-step',
       instruction: 'Canonical movement instruction',
@@ -207,19 +203,15 @@ describe('PieceMovementRawSchema with parallel', () => {
     // When: validating the movement schema
     const result = PieceMovementRawSchema.safeParse(raw);
 
-    // Then: schema accepts both fields for deprecation window
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect((result.data as unknown as Record<string, unknown>).instruction).toBe('Canonical movement instruction');
-      expect((result.data as unknown as Record<string, unknown>).instruction_template).toBe('Legacy movement instruction');
-    }
+    // Then: validation fails to prevent silent legacy fallback
+    expect(result.success).toBe(false);
   });
 
   it('should accept a movement with persona (no parallel)', () => {
     const raw = {
       name: 'normal-step',
       persona: 'coder.md',
-      instruction_template: 'Code something',
+      instruction: 'Code something',
     };
 
     const result = PieceMovementRawSchema.safeParse(raw);
@@ -243,7 +235,7 @@ describe('PieceMovementRawSchema with parallel', () => {
         {
           name: 'arch-review',
           provider: 'codex',
-          instruction_template: 'Review architecture',
+          instruction: 'Review architecture',
         },
       ],
     };
@@ -272,8 +264,8 @@ describe('LoopMonitorJudgeSchema', () => {
     }
   });
 
-  it('should accept judge configuration during deprecation window when both fields exist', () => {
-    // Given: judge config with both new and deprecated fields
+  it('should reject legacy instruction_template in judge schema', () => {
+    // Given: judge config with both canonical and legacy fields
     const raw = {
       persona: 'reviewer',
       instruction: 'Judge loop health',
@@ -284,12 +276,8 @@ describe('LoopMonitorJudgeSchema', () => {
     // When: validating judge schema
     const result = LoopMonitorJudgeSchema.safeParse(raw);
 
-    // Then: it is accepted for backward compatibility
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect((result.data as unknown as Record<string, unknown>).instruction).toBe('Judge loop health');
-      expect((result.data as unknown as Record<string, unknown>).instruction_template).toBe('legacy judge instruction');
-    }
+    // Then: validation fails to prevent silent legacy fallback
+    expect(result.success).toBe(false);
   });
 });
 
@@ -306,8 +294,8 @@ describe('PieceConfigRawSchema with parallel movements', () => {
         {
           name: 'review',
           parallel: [
-            { name: 'arch-review', persona: 'arch-reviewer.md', instruction_template: 'Review architecture' },
-            { name: 'sec-review', persona: 'sec-reviewer.md', instruction_template: 'Review security' },
+            { name: 'arch-review', persona: 'arch-reviewer.md', instruction: 'Review architecture' },
+            { name: 'sec-review', persona: 'sec-reviewer.md', instruction: 'Review security' },
           ],
           rules: [
             { condition: 'All approved', next: 'COMPLETE' },
@@ -475,7 +463,7 @@ describe('all()/any() condition in PieceMovementRawSchema', () => {
     const raw = {
       name: 'parallel-review',
       parallel: [
-        { name: 'arch-review', persona: 'reviewer.md', instruction_template: 'Review' },
+        { name: 'arch-review', persona: 'reviewer.md', instruction: 'Review' },
       ],
       rules: [
         { condition: 'all("approved")', next: 'COMPLETE' },

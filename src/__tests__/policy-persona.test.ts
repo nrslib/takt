@@ -9,7 +9,7 @@
  * - File-based policy content loading via resolveContentPath
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -601,7 +601,7 @@ describe('section reference resolution', () => {
     expect(config.movements[0]!.persona).toBe('nonexistent');
   });
 
-  it('should prefer instruction over instruction_template when both are provided', () => {
+  it('should resolve movement instruction from instructions section', () => {
     const raw = {
       name: 'test-piece',
       instructions: { implement: './instructions/implement.md' },
@@ -609,7 +609,6 @@ describe('section reference resolution', () => {
         name: 'impl',
         persona: 'coder',
         instruction: 'implement',
-        instruction_template: 'Inline template takes priority.',
       }],
     };
 
@@ -617,76 +616,22 @@ describe('section reference resolution', () => {
     expect(config.movements[0]!.instruction).toBe('Implement the feature.');
   });
 
-  it('should emit deprecation warning when movement uses instruction_template', () => {
-    // Given: deprecated instruction_template is used on a movement
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    try {
-      const raw = {
-        name: 'test-piece',
-        movements: [{
-          name: 'impl',
-          persona: 'coder',
-          instruction_template: 'Legacy movement instruction',
-        }],
-      };
-
-      // When: normalizing piece config
-      normalizePieceConfig(raw, testDir);
-
-      // Then: deprecation warning is emitted
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('instruction_template'));
-    } finally {
-      warnSpy.mockRestore();
-    }
-  });
-
-  it('should emit deprecation warning when loop monitor judge uses instruction_template', () => {
-    // Given: deprecated instruction_template is used on loop monitor judge
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    try {
-      const raw = {
-        name: 'test-piece',
-        movements: [
-          {
-            name: 'step1',
-            persona: 'coder',
-            instruction: '{task}',
-            rules: [{ condition: 'next', next: 'step2' }],
-          },
-          {
-            name: 'step2',
-            persona: 'coder',
-            instruction: '{task}',
-            rules: [{ condition: 'done', next: 'COMPLETE' }],
-          },
-        ],
-        loop_monitors: [
-          {
-            cycle: ['step1', 'step2'],
-            threshold: 2,
-            judge: {
-              persona: 'coder',
-              instruction_template: 'Legacy judge instruction',
-              rules: [{ condition: 'continue', next: 'step2' }],
-            },
-          },
-        ],
-      };
-
-      // When: normalizing piece config
-      normalizePieceConfig(raw, testDir);
-
-      // Then: deprecation warning is emitted
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('instruction_template'));
-    } finally {
-      warnSpy.mockRestore();
-    }
-  });
-
-  it('should prefer loop monitor judge instruction over instruction_template when both are provided', () => {
+  it('should reject legacy instruction_template on movement', () => {
     const raw = {
       name: 'test-piece',
-      instructions: { judge_template: './instructions/implement.md' },
+      movements: [{
+        name: 'impl',
+        persona: 'coder',
+        instruction_template: 'Legacy movement instruction',
+      }],
+    };
+
+    expect(() => normalizePieceConfig(raw, testDir)).toThrowError();
+  });
+
+  it('should reject legacy instruction_template on loop monitor judge', () => {
+    const raw = {
+      name: 'test-piece',
       movements: [
         {
           name: 'step1',
@@ -707,16 +652,14 @@ describe('section reference resolution', () => {
           threshold: 2,
           judge: {
             persona: 'coder',
-            instruction: 'judge_template',
-            instruction_template: 'Legacy judge template',
+            instruction_template: 'Legacy judge instruction',
             rules: [{ condition: 'continue', next: 'step2' }],
           },
         },
       ],
     };
 
-    const config = normalizePieceConfig(raw, testDir);
-    expect(config.loopMonitors?.[0]?.judge.instruction).toBe('Implement the feature.');
+    expect(() => normalizePieceConfig(raw, testDir)).toThrowError();
   });
 
   it('should expose normalized loop monitor judge instruction on instruction field', () => {

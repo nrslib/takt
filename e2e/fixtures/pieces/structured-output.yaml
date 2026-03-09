@@ -12,7 +12,7 @@ movements:
     edit: false
     persona: ../agents/test-coder.md
     required_permission_mode: readonly
-    instruction_template: |
+    instruction: |
       Reply with exactly: "Task completed successfully."
       Do not do anything else.
     rules:

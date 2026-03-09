@@ -509,7 +509,7 @@ describe('normalizePieceConfig with layer resolution', () => {
     expect(config.movements[0]!.knowledgeContents![0]).toBe('# Domain Knowledge');
   });
 
-  it('should resolve instruction_template from section map before layer resolution', () => {
+  it('should resolve instruction from section map before layer resolution', () => {
     const raw = {
       name: 'test-piece',
       instructions: {
@@ -519,7 +519,7 @@ describe('normalizePieceConfig with layer resolution', () => {
         {
           name: 'step1',
           persona: 'coder',
-          instruction_template: 'implement',
+          instruction: 'implement',
         },
       ],
     };
@@ -530,7 +530,7 @@ describe('normalizePieceConfig with layer resolution', () => {
     expect(config.movements[0]!.instruction).toBe('Mapped instruction template');
   });
 
-  it('should resolve instruction_template by name via layer resolution', () => {
+  it('should resolve instruction by name via layer resolution', () => {
     const instructionsDir = join(projectDir, '.takt', 'facets', 'instructions');
     mkdirSync(instructionsDir, { recursive: true });
     writeFileSync(join(instructionsDir, 'implement.md'), 'Project implement template');
@@ -541,7 +541,7 @@ describe('normalizePieceConfig with layer resolution', () => {
         {
           name: 'step1',
           persona: 'coder',
-          instruction_template: 'implement',
+          instruction: 'implement',
         },
       ],
     };
@@ -552,7 +552,7 @@ describe('normalizePieceConfig with layer resolution', () => {
     expect(config.movements[0]!.instruction).toBe('Project implement template');
   });
 
-  it('should keep inline instruction_template when no facet is found', () => {
+  it('should keep inline instruction when no facet is found', () => {
     const inlineTemplate = `Use this inline template.
 Second line remains inline.`;
     const raw = {
@@ -561,7 +561,7 @@ Second line remains inline.`;
         {
           name: 'step1',
           persona: 'coder',
-          instruction_template: inlineTemplate,
+          instruction: inlineTemplate,
         },
       ],
     };
@@ -572,7 +572,7 @@ Second line remains inline.`;
     expect(config.movements[0]!.instruction).toBe(inlineTemplate);
   });
 
-  it('should resolve loop monitor judge instruction_template via layer resolution', () => {
+  it('should resolve loop monitor judge instruction via layer resolution', () => {
     const instructionsDir = join(projectDir, '.takt', 'facets', 'instructions');
     mkdirSync(instructionsDir, { recursive: true });
     writeFileSync(join(instructionsDir, 'judge-template.md'), 'Project judge template');
@@ -599,7 +599,7 @@ Second line remains inline.`;
           threshold: 2,
           judge: {
             persona: 'coder',
-            instruction_template: 'judge-template',
+            instruction: 'judge-template',
             rules: [{ condition: 'continue', next: 'step2' }],
           },
         },
