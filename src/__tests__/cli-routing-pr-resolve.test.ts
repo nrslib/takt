@@ -194,7 +194,7 @@ describe('PR resolution in routing', () => {
           presetSettings: expect.objectContaining({
             worktree: true,
             branch: 'feat/my-pr-branch',
-            autoPr: false,
+            autoPr: true,
             baseBranch: 'release/main',
           }),
         }),
