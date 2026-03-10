@@ -221,7 +221,7 @@ describe('fetchPrReviewComments', () => {
     );
     expect(mockExecFileSync).toHaveBeenCalledWith(
       'gh',
-      ['api', '/repos/org/repo/pulls/456/comments'],
+      ['api', '/repos/org/repo/pulls/456/comments?per_page=100&page=1'],
       expect.objectContaining({ encoding: 'utf-8' }),
     );
     expect(result.number).toBe(456);
@@ -288,6 +288,140 @@ describe('fetchPrReviewComments', () => {
     // Then
     expect(result.reviews).toEqual([
       { author: 'reviewer3', body: 'Address this edge case', path: 'src/index.ts', line: 7 },
+    ]);
+  });
+
+  it('should fetch all inline review comments when total comments exceed one default page', () => {
+    // Given
+    const ghResponse = {
+      number: 12,
+      title: 'Many inline comments',
+      body: '',
+      url: 'https://github.com/org/repo/pull/12',
+      headRefName: 'fix/many-inline-comments',
+      comments: [],
+      reviews: [],
+      files: [],
+    };
+    const inlineCommentsResponse = Array.from({ length: 31 }, (_, i) => ({
+      body: `Inline comment ${i + 1}`,
+      path: 'src/index.ts',
+      line: i + 1,
+      user: { login: 'reviewer-pagination' },
+    }));
+    mockExecFileSync
+      .mockReturnValueOnce(JSON.stringify(ghResponse))
+      .mockReturnValueOnce(JSON.stringify(inlineCommentsResponse));
+
+    // When
+    const result = fetchPrReviewComments(12);
+
+    // Then
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      'gh',
+      ['api', '/repos/org/repo/pulls/12/comments?per_page=100&page=1'],
+      expect.objectContaining({ encoding: 'utf-8' }),
+    );
+    expect(result.reviews).toHaveLength(31);
+    expect(result.reviews[0]).toEqual({
+      author: 'reviewer-pagination',
+      body: 'Inline comment 1',
+      path: 'src/index.ts',
+      line: 1,
+    });
+    expect(result.reviews[30]).toEqual({
+      author: 'reviewer-pagination',
+      body: 'Inline comment 31',
+      path: 'src/index.ts',
+      line: 31,
+    });
+  });
+
+  it('should request additional pages when inline review comments exceed per_page', () => {
+    // Given
+    const ghResponse = {
+      number: 13,
+      title: 'Paginated inline comments',
+      body: '',
+      url: 'https://github.com/org/repo/pull/13',
+      headRefName: 'fix/paginated-inline-comments',
+      comments: [],
+      reviews: [],
+      files: [],
+    };
+    const firstPageInlineComments = Array.from({ length: 100 }, (_, i) => ({
+      body: `Inline comment ${i + 1}`,
+      path: 'src/index.ts',
+      line: i + 1,
+      user: { login: 'reviewer-pagination' },
+    }));
+    const secondPageInlineComments = [
+      { body: 'Inline comment 101', path: 'src/index.ts', line: 101, user: { login: 'reviewer-pagination' } },
+    ];
+    mockExecFileSync
+      .mockReturnValueOnce(JSON.stringify(ghResponse))
+      .mockReturnValueOnce(JSON.stringify(firstPageInlineComments))
+      .mockReturnValueOnce(JSON.stringify(secondPageInlineComments));
+
+    // When
+    const result = fetchPrReviewComments(13);
+
+    // Then
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      'gh',
+      ['api', '/repos/org/repo/pulls/13/comments?per_page=100&page=1'],
+      expect.objectContaining({ encoding: 'utf-8' }),
+    );
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      'gh',
+      ['api', '/repos/org/repo/pulls/13/comments?per_page=100&page=2'],
+      expect.objectContaining({ encoding: 'utf-8' }),
+    );
+    expect(result.reviews).toHaveLength(101);
+    expect(result.reviews[100]).toEqual({
+      author: 'reviewer-pagination',
+      body: 'Inline comment 101',
+      path: 'src/index.ts',
+      line: 101,
+    });
+  });
+
+  it('should fallback to original_line when line is null', () => {
+    // Given
+    const ghResponse = {
+      number: 14,
+      title: 'Keep original line',
+      body: '',
+      url: 'https://github.com/org/repo/pull/14',
+      headRefName: 'fix/original-line',
+      comments: [],
+      reviews: [],
+      files: [],
+    };
+    const inlineCommentsResponse = [
+      {
+        body: 'Line moved after suggestion',
+        path: 'src/index.ts',
+        line: null,
+        original_line: 27,
+        user: { login: 'reviewer-original-line' },
+      },
+    ];
+    mockExecFileSync
+      .mockReturnValueOnce(JSON.stringify(ghResponse))
+      .mockReturnValueOnce(JSON.stringify(inlineCommentsResponse));
+
+    // When
+    const result = fetchPrReviewComments(14);
+
+    // Then
+    expect(result.reviews).toEqual([
+      {
+        author: 'reviewer-original-line',
+        body: 'Line moved after suggestion',
+        path: 'src/index.ts',
+        line: 27,
+      },
     ]);
   });
 

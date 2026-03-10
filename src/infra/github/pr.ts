@@ -75,7 +75,32 @@ interface GhPrApiReviewCommentResponse {
   body: string;
   path: string;
   line: number | null;
+  original_line?: number | null;
   user: { login: string };
+}
+
+const INLINE_REVIEW_COMMENTS_PER_PAGE = 100;
+
+function fetchInlineReviewComments(owner: string, repo: string, prNumber: number): GhPrApiReviewCommentResponse[] {
+  const comments: GhPrApiReviewCommentResponse[] = [];
+  let page = 1;
+
+  while (true) {
+    const rawInlineReviewComments = execFileSync(
+      'gh',
+      ['api', `/repos/${owner}/${repo}/pulls/${prNumber}/comments?per_page=${INLINE_REVIEW_COMMENTS_PER_PAGE}&page=${page}`],
+      { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
+    );
+    const inlineReviewComments = JSON.parse(rawInlineReviewComments) as GhPrApiReviewCommentResponse[];
+
+    comments.push(...inlineReviewComments);
+
+    if (inlineReviewComments.length < INLINE_REVIEW_COMMENTS_PER_PAGE) {
+      return comments;
+    }
+
+    page += 1;
+  }
 }
 
 function parseRepositoryFromPrUrl(prUrl: string): { owner: string; repo: string } {
@@ -110,12 +135,7 @@ export function fetchPrReviewComments(prNumber: number): PrReviewData {
   const data = JSON.parse(raw) as GhPrViewReviewResponse;
   const { owner, repo } = parseRepositoryFromPrUrl(data.url);
 
-  const rawInlineReviewComments = execFileSync(
-    'gh',
-    ['api', `/repos/${owner}/${repo}/pulls/${prNumber}/comments`],
-    { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
-  );
-  const inlineReviewComments = JSON.parse(rawInlineReviewComments) as GhPrApiReviewCommentResponse[];
+  const inlineReviewComments = fetchInlineReviewComments(owner, repo, prNumber);
 
   const comments: PrReviewComment[] = data.comments.map((c) => ({
     author: c.author.login,
@@ -133,7 +153,7 @@ export function fetchPrReviewComments(prNumber: number): PrReviewData {
       author: comment.user.login,
       body: comment.body,
       path: comment.path,
-      line: comment.line ?? undefined,
+      line: comment.line ?? comment.original_line ?? undefined,
     });
   }
 
