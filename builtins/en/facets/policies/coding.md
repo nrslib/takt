@@ -305,6 +305,73 @@ function formatDate(date: Date): string { ... }
 function formatPercentage(value: number): string { ... }
 ```
 
+## Same Implementation with Different Names (DRY Violation)
+
+AI tends to define the same logic under multiple function names.
+
+| Pattern | Example | Verdict |
+|---------|---------|---------|
+| Same implementation with different names | `copyFacets()` and `placeFacetFiles()` doing the same thing | REJECT |
+| Same parameter signature and body | Two functions taking the same params and doing the same work | REJECT |
+
+```typescript
+// REJECT - Same implementation exists under different names
+function copyFiles(src: string, dest: string): void {
+  for (const f of readdirSync(src)) {
+    copyFileSync(join(src, f), join(dest, f));
+  }
+}
+function placeFiles(src: string, dest: string): void {
+  for (const f of readdirSync(src)) {
+    copyFileSync(join(src, f), join(dest, f));
+  }
+}
+
+// OK - Consolidate into a single function
+function copyFiles(src: string, dest: string): void {
+  for (const f of readdirSync(src)) {
+    copyFileSync(join(src, f), join(dest, f));
+  }
+}
+```
+
+Verification approach:
+1. Check if newly added functions have bodies identical or nearly identical to existing functions
+2. Compare functions within the same file and within the same module
+3. If duplication is found, consolidate into one and unify call sites
+
+## Dangerous Stateful Regex Patterns
+
+Regular expressions with the `/g` flag are stateful (they retain `lastIndex`). Defining them at module scope and mixing `test()` and `replace()` causes unexpected results.
+
+| Pattern | Example | Verdict |
+|---------|---------|---------|
+| Module-scope `/g` regex used with `test()` | `const RE = /x/g; if (RE.test(s)) ...` | REJECT |
+| `/g` regex shared between `test()` and `replace()` | `RE.test(s)` followed by `s.replace(RE, ...)` | REJECT |
+
+```typescript
+// REJECT - Module-scope /g regex used with test()
+const PATTERN = /\{\{facet:(\w+)\}\}/g;
+function hasFacetRef(text: string): boolean {
+  return PATTERN.test(text);  // lastIndex advances, next call returns different result
+}
+
+// OK - Don't use /g for test(), or create new RegExp inside function
+const PATTERN_CHECK = /\{\{facet:(\w+)\}\}/;  // no /g
+const PATTERN_REPLACE = /\{\{facet:(\w+)\}\}/g;  // /g for replace
+function hasFacetRef(text: string): boolean {
+  return PATTERN_CHECK.test(text);
+}
+function replaceFacetRefs(text: string): string {
+  return text.replace(PATTERN_REPLACE, ...);
+}
+```
+
+Verification approach:
+1. Check if module-scope regexes have the `/g` flag
+2. Check if `/g` regexes are used with `test()`
+3. Check if the same regex is used with both `test()` and `replace()`
+
 ## Prohibited
 
 - **Fallbacks are prohibited by default** - Do not write fallbacks using `?? 'unknown'`, `|| 'default'`, or swallowing via `try-catch`. Propagate errors upward. If absolutely necessary, add a comment explaining why

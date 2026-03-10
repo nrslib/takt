@@ -305,6 +305,73 @@ function formatDate(date: Date): string { ... }
 function formatPercentage(value: number): string { ... }
 ```
 
+## 同一実装の別名関数（DRY 違反）
+
+AIは同じ処理を異なる関数名で複数定義しがちである。
+
+| パターン | 例 | 判定 |
+|---------|-----|------|
+| 同一実装の別名関数 | `copyFacets()` と `placeFacetFiles()` が同じ処理 | REJECT |
+| 引数シグネチャが同一で本体も同一 | 2つの関数が同じパラメータを受け取り同じ処理を行う | REJECT |
+
+```typescript
+// REJECT - 同じ実装が別名で存在
+function copyFiles(src: string, dest: string): void {
+  for (const f of readdirSync(src)) {
+    copyFileSync(join(src, f), join(dest, f));
+  }
+}
+function placeFiles(src: string, dest: string): void {
+  for (const f of readdirSync(src)) {
+    copyFileSync(join(src, f), join(dest, f));
+  }
+}
+
+// OK - 1つの関数にまとめる
+function copyFiles(src: string, dest: string): void {
+  for (const f of readdirSync(src)) {
+    copyFileSync(join(src, f), join(dest, f));
+  }
+}
+```
+
+検証アプローチ:
+1. 新規追加された関数の本体が、既存関数と同一または酷似していないか確認
+2. 同じファイル内の関数同士、および同じモジュール内の関数同士を比較
+3. 重複があれば1つにまとめ、呼び出し元を統一
+
+## Stateful Regex の危険なパターン
+
+`/g` フラグ付き正規表現はステートフル（`lastIndex` を保持する）。モジュールスコープに定義して `test()` と `replace()` を混用すると予期しない結果になる。
+
+| パターン | 例 | 判定 |
+|---------|-----|------|
+| モジュールスコープの `/g` 正規表現を `test()` で使用 | `const RE = /x/g; if (RE.test(s)) ...` | REJECT |
+| `/g` 正規表現を `test()` と `replace()` で使い回し | `RE.test(s)` の後に `s.replace(RE, ...)` | REJECT |
+
+```typescript
+// REJECT - モジュールスコープの /g 正規表現を test() で使用
+const PATTERN = /\{\{facet:(\w+)\}\}/g;
+function hasFacetRef(text: string): boolean {
+  return PATTERN.test(text);  // lastIndex が進み、次回の呼び出しで結果が変わる
+}
+
+// OK - test() には /g を付けない、または関数内で new RegExp
+const PATTERN_CHECK = /\{\{facet:(\w+)\}\}/;  // /g なし
+const PATTERN_REPLACE = /\{\{facet:(\w+)\}\}/g;  // replace 用は /g
+function hasFacetRef(text: string): boolean {
+  return PATTERN_CHECK.test(text);
+}
+function replaceFacetRefs(text: string): string {
+  return text.replace(PATTERN_REPLACE, ...);
+}
+```
+
+検証アプローチ:
+1. モジュールスコープの正規表現に `/g` フラグがあるか確認
+2. `/g` 付き正規表現が `test()` で使われていないか確認
+3. 同一の正規表現が `test()` と `replace()` の両方で使われていないか確認
+
 ## 禁止事項
 
 - **フォールバックは原則禁止** - `?? 'unknown'`、`|| 'default'`、`try-catch` で握りつぶすフォールバックを書かない。エラーは上位に伝播させる。どうしても必要な場合はコメントで理由を明記する

@@ -12,7 +12,7 @@ loop_monitors:
   - cycle:
       - ai_review
       - ai_fix
-    threshold: 3
+    threshold: 5
     judge:
       persona: supervisor
       instruction: loop-monitor-ai-fix
@@ -24,7 +24,7 @@ loop_monitors:
   - cycle:
       - reviewers
       - fix
-    threshold: 3
+    threshold: 5
     judge:
       persona: supervisor
       instruction: loop-monitor-reviewers-fix

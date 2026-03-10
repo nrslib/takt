@@ -152,7 +152,7 @@ describe('IT: provider block reflection', () => {
     expect(options?.stepProvider).toBe('codex');
     expect(options?.stepModel).toBe('gpt-5.3');
     expect(options?.providerOptions).toEqual({
-      codex: { networkAccess: false },
+      codex: { networkAccess: true },
     });
   });
 

@@ -22,7 +22,7 @@ import { detectMatchedRule } from '../evaluation/index.js';
 import type { StatusJudgmentPhaseResult } from '../phase-runner.js';
 import { buildSessionKey } from '../session-key.js';
 import { incrementMovementIteration, getPreviousOutput } from './state-manager.js';
-import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
+import { createLogger, getErrorMessage, slugify } from '../../../shared/utils/index.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { RunPaths } from '../run/run-paths.js';
 
@@ -84,6 +84,15 @@ export class MovementExecutor {
     return new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
   }
 
+  private static buildSnapshotFileName(
+    movementName: string,
+    movementIteration: number,
+    timestamp: string,
+  ): string {
+    const safeMovementName = slugify(movementName) || 'movement';
+    return `${safeMovementName}.${movementIteration}.${timestamp}.md`;
+  }
+
   private writeSnapshot(
     content: string,
     directoryRel: string,
@@ -110,7 +119,7 @@ export class MovementExecutor {
     const sourcePath = this.writeSnapshot(
       merged,
       directoryRel,
-      `${movementName}.${movementIteration}.${timestamp}.md`,
+      MovementExecutor.buildSnapshotFileName(movementName, movementIteration, timestamp),
     );
     return { content: [merged], sourcePath };
   }
@@ -123,7 +132,7 @@ export class MovementExecutor {
     if (!state.lastOutput || state.previousResponseSourcePath) return;
     const timestamp = MovementExecutor.buildTimestamp();
     const runPaths = this.deps.getRunPaths();
-    const fileName = `${movementName}.${movementIteration}.${timestamp}.md`;
+    const fileName = MovementExecutor.buildSnapshotFileName(movementName, movementIteration, timestamp);
     const sourcePath = this.writeSnapshot(
       state.lastOutput.content,
       runPaths.contextPreviousResponsesRel,
@@ -145,7 +154,7 @@ export class MovementExecutor {
   ): void {
     const timestamp = MovementExecutor.buildTimestamp();
     const runPaths = this.deps.getRunPaths();
-    const fileName = `${movementName}.${movementIteration}.${timestamp}.md`;
+    const fileName = MovementExecutor.buildSnapshotFileName(movementName, movementIteration, timestamp);
     const sourcePath = this.writeSnapshot(content, runPaths.contextPreviousResponsesRel, fileName);
     this.writeSnapshot(content, runPaths.contextPreviousResponsesRel, 'latest.md');
     state.previousResponseSourcePath = sourcePath;

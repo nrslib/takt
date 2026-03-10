@@ -4,6 +4,8 @@ Review the latest review reports in the Report Directory and determine
 whether this loop is healthy (converging) or unproductive (diverging or oscillating).
 
 **Judgment criteria:**
-- Is the number of new / reopened findings decreasing each cycle?
-- Are the same family_tag findings not repeating (is persists not growing)?
+- Are the same finding_ids persisting across multiple cycles?
+  - Same finding_id repeatedly persists → unproductive (stuck)
+  - Previous findings resolved and new findings appear as new → healthy (converging)
 - Are fixes actually being applied to the code?
+- Is the number of new / reopened findings decreasing overall?

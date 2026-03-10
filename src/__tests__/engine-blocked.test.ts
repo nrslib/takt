@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 // --- Mock setup (must be before imports that use these modules) ---
@@ -42,6 +42,8 @@ import {
   mockDetectMatchedRuleSequence,
   createTestTmpDir,
   applyDefaultMocks,
+  makeMovement,
+  makeRule,
 } from './engine-test-helpers.js';
 
 describe('PieceEngine Integration: Blocked Handling', () => {
@@ -178,6 +180,50 @@ describe('PieceEngine Integration: Blocked Handling', () => {
 
     expect(readFileSync(snapshotPath, 'utf-8')).toBe('Need clarification');
     expect(readFileSync(latestPath, 'utf-8')).toBe('Need clarification');
+    expect(onUserInput).toHaveBeenCalledOnce();
+  });
+
+  it('should sanitize movement name containing path separators when writing snapshot', async () => {
+    const config = buildDefaultPieceConfig({
+      initialMovement: '../../escape',
+      movements: [
+        makeMovement('../../escape', {
+          rules: [makeRule('done', 'ABORT')],
+        }),
+      ],
+    });
+
+    const onUserInput = vi.fn().mockResolvedValueOnce(null);
+    const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, onUserInput });
+
+    mockRunAgentSequence([
+      makeResponse({ persona: 'escape', status: 'blocked', content: 'Need clarification' }),
+    ]);
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(state.lastOutput?.status).toBe('blocked');
+    // slugify('../../escape') === 'escape'
+    expect(state.previousResponseSourcePath).toMatch(
+      /^\.takt\/runs\/test-report-dir\/context\/previous_responses\/escape\.1\.\d{8}T\d{6}Z\.md$/,
+    );
+
+    const snapshotPath = join(tmpDir, state.previousResponseSourcePath!);
+    const latestPath = join(
+      tmpDir,
+      '.takt',
+      'runs',
+      'test-report-dir',
+      'context',
+      'previous_responses',
+      'latest.md',
+    );
+
+    expect(readFileSync(snapshotPath, 'utf-8')).toBe('Need clarification');
+    expect(readFileSync(latestPath, 'utf-8')).toBe('Need clarification');
+    // 上位ディレクトリにパストラバーサルでファイルが書き込まれていないことを確認
+    expect(readdirSync(tmpDir).some(name => /^escape\.1\.\d{8}T\d{6}Z\.md$/.test(name))).toBe(false);
     expect(onUserInput).toHaveBeenCalledOnce();
   });
 

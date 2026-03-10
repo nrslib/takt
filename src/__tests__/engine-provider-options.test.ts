@@ -54,7 +54,7 @@ describe('PieceEngine provider_options resolution', () => {
     }
   });
 
-  it('should merge provider_options in order: global/project < piece/movement', async () => {
+  it('should merge provider_options with project source winning over movement', async () => {
     const movement = makeMovement('implement', {
       providerOptions: {
         codex: { networkAccess: false },
@@ -90,7 +90,7 @@ describe('PieceEngine provider_options resolution', () => {
 
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
     expect(options?.providerOptions).toEqual({
-      codex: { networkAccess: false },
+      codex: { networkAccess: true },
       opencode: { networkAccess: true },
       claude: {
         sandbox: {

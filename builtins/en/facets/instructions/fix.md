@@ -1,5 +1,9 @@
 Use reports in the Report Directory and fix the issues raised by the reviewer.
 
+**Fix principles:**
+- When a finding includes a "suggested fix", follow it rather than inventing your own workaround
+- Fix the target code directly. Do not deflect findings by adding tests or documentation instead
+
 **Report reference policy:**
 - Use the latest review reports in the Report Directory as primary evidence.
 - Past iteration reports are saved as `{filename}.{timestamp}` in the same directory (e.g., `architect-review.md.20260304T123456Z`). For each report, run Glob with a `{report-name}.*` pattern, read up to 2 files in descending timestamp order, and understand persists / reopened trends before starting fixes.

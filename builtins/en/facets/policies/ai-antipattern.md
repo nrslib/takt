@@ -75,6 +75,49 @@ Verification approach:
 2. If the only difference is optional argument presence, unify with ternary or spread syntax
 3. If branches have different preprocessing, store results in a variable and make a single call
 
+## Callback + External Variable Capture Abuse
+
+AI tends to implement data retrieval via callbacks and external variable capture when return values would suffice.
+
+| Pattern | Example | Verdict |
+|---------|---------|---------|
+| Assign to external variable in callback | `let result; await f(x => { result = x })` | REJECT |
+| Get value via event handler | `emitter.on('data', d => { captured = d })` to synchronously get value | REJECT |
+| Build state across multiple callbacks | `forEach(item => { externalMap.set(...) })` to construct result | REJECT |
+
+```typescript
+// REJECT - Capturing external variable via callback
+let selectedMode: string | undefined;
+await promptUser(choices, (choice) => {
+  selectedMode = choice;
+});
+return selectedMode;
+
+// OK - Receive via return value
+const selectedMode = await promptUser(choices);
+return selectedMode;
+```
+
+Verification approach:
+1. Find places where callback functions assign to variables in the outer scope
+2. Check if the value can be returned as a function return value
+3. If possible, flag for rewriting to the return-value pattern
+
+## Inappropriate Response to Review Findings
+
+AI sometimes "addresses" review findings by adding tests or documentation that "verify the finding" instead of actually fixing the code.
+
+| Pattern | Example | Verdict |
+|---------|---------|---------|
+| Adding tests instead of fixing | "Remove unnecessary comments" → adds tests verifying comment presence | REJECT |
+| Adding docs instead of fixing | "DRY violation" → adds documentation explaining duplication is intentional | REJECT |
+| Changing unrelated files | Security finding → performs unrelated refactoring | REJECT |
+
+Verification approach:
+1. Check if the fix diff includes changes to the finding's target file and target lines
+2. If the fix consists only of new file additions, check whether those files "fix" the issue or merely "verify" it
+3. If tests are added as part of the fix, verify they test "correct behavior after the fix" (not "the finding itself")
+
 ## Context Fitness Assessment
 
 Does the code fit this specific project?
