@@ -1,6 +1,7 @@
 import * as globalConfigModule from './global/globalConfig.js';
 import { loadProjectConfig } from './project/projectConfig.js';
 import { envVarNameFromPath } from './env/config-env-overrides.js';
+import { expandOptionalHomePath } from './pathExpansion.js';
 import {
   getCachedProjectConfig,
   getCachedResolvedValue,
@@ -96,7 +97,7 @@ function resolveAnalyticsMerged(
   const globalAnalytics = global.analytics;
 
   const enabled = localAnalytics?.enabled ?? globalAnalytics?.enabled;
-  const eventsPath = localAnalytics?.eventsPath ?? globalAnalytics?.eventsPath;
+  const eventsPath = expandOptionalHomePath(localAnalytics?.eventsPath ?? globalAnalytics?.eventsPath);
   const retentionDays = localAnalytics?.retentionDays ?? globalAnalytics?.retentionDays;
 
   if (enabled === undefined && eventsPath === undefined && retentionDays === undefined) {
