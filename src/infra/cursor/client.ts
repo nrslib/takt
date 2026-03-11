@@ -63,7 +63,7 @@ function buildArgs(prompt: string, options: CursorCallOptions): string[] {
     args.push('--force');
   }
 
-  args.push(buildPrompt(prompt, options.systemPrompt));
+  args.push('--', buildPrompt(prompt, options.systemPrompt));
   return args;
 }
 

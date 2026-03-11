@@ -101,10 +101,29 @@ describe('callCursor', () => {
       '--resume',
       'sess-prev',
       '--force',
+      '--',
       'implement feature',
     ]);
     expect(options.env?.CURSOR_API_KEY).toBe('cursor-key');
     expect(options.stdio).toEqual(['ignore', 'pipe', 'pipe']);
+  });
+
+  it('should pass prompt after end-of-options marker', async () => {
+    mockSpawnWithScenario({
+      stdout: JSON.stringify({ content: 'done' }),
+      code: 0,
+    });
+
+    const result = await callCursor('coder', '--workspace=/', {
+      cwd: '/repo',
+    });
+
+    expect(result.status).toBe('done');
+
+    const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+    expect(args).toContain('--');
+    expect(args.at(-2)).toBe('--');
+    expect(args.at(-1)).toBe('--workspace=/');
   });
 
   it('should not inject CURSOR_API_KEY when cursorApiKey is undefined', async () => {
