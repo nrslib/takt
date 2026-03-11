@@ -1,13 +1,31 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { resolvePieceConfigValue } from '../../../infra/config/index.js';
-import { type TaskInfo, buildTaskInstruction, createSharedClone, resolveBaseBranch, branchExists, summarizeTaskName } from '../../../infra/task/index.js';
+import {
+  type TaskInfo,
+  buildTaskInstruction,
+  createSharedClone,
+  resolveBaseBranch,
+  resolveCloneBaseDir,
+  branchExists,
+  summarizeTaskName,
+} from '../../../infra/task/index.js';
 import { getGitProvider, type Issue } from '../../../infra/git/index.js';
 import { withProgress } from '../../../shared/ui/index.js';
-import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
+import { createLogger, getErrorMessage, isPathInside } from '../../../shared/utils/index.js';
 import { getTaskSlugFromTaskDir } from '../../../shared/utils/taskPaths.js';
 
 const log = createLogger('task');
+
+function canReuseWorktreePath(projectDir: string, candidatePath: string): boolean {
+  if (!fs.existsSync(candidatePath)) {
+    return false;
+  }
+
+  const cloneBaseDir = resolveCloneBaseDir(projectDir);
+  const fallbackCloneBaseDir = path.join(projectDir, '.takt', 'worktrees');
+  return isPathInside(cloneBaseDir, candidatePath) || isPathInside(fallbackCloneBaseDir, candidatePath);
+}
 
 function resolveTaskDataBaseBranch(taskData: TaskInfo['data']): string | undefined {
   return taskData?.base_branch;
@@ -125,7 +143,7 @@ export async function resolveTaskExecution(
       ? resolveTaskBaseBranch(defaultCwd, data)
       : preferredBaseBranch;
 
-    if (task.worktreePath && fs.existsSync(task.worktreePath)) {
+    if (task.worktreePath && canReuseWorktreePath(defaultCwd, task.worktreePath)) {
       execCwd = task.worktreePath;
       branch = data.branch;
       worktreePath = task.worktreePath;

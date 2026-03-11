@@ -45,6 +45,7 @@ export {
   removeCloneMeta,
   cleanupOrphanedClone,
   resolveBaseBranch,
+  resolveCloneBaseDir,
   branchExists,
 } from './clone.js';
 export {
