@@ -40,6 +40,12 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
   if (config.worktreeDir) {
     raw.worktree_dir = config.worktreeDir;
   }
+  if (config.allowGitHooks !== undefined) {
+    raw.allow_git_hooks = config.allowGitHooks;
+  }
+  if (config.allowGitFilters !== undefined) {
+    raw.allow_git_filters = config.allowGitFilters;
+  }
   if (config.autoPr !== undefined) {
     raw.auto_pr = config.autoPr;
   }

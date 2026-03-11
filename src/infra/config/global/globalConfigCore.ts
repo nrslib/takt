@@ -99,6 +99,8 @@ export class GlobalConfigManager {
         retentionDays: parsed.analytics.retention_days,
       } : undefined,
       worktreeDir: expandOptionalHomePath(parsed.worktree_dir),
+      allowGitHooks: parsed.allow_git_hooks,
+      allowGitFilters: parsed.allow_git_filters,
       autoPr: parsed.auto_pr,
       draftPr: parsed.draft_pr,
       disabledBuiltins: parsed.disabled_builtins,

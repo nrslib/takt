@@ -104,6 +104,8 @@ describe('loadGlobalConfig', () => {
     config.concurrency = 4;
     config.taskPollIntervalMs = 1200;
     config.interactivePreviewMovements = 1;
+    config.allowGitHooks = true;
+    config.allowGitFilters = true;
     saveGlobalConfig(config);
 
     const raw = readFileSync(getGlobalConfigPath(), 'utf-8');
@@ -114,6 +116,8 @@ describe('loadGlobalConfig', () => {
     expect(raw).toContain('concurrency:');
     expect(raw).toContain('task_poll_interval_ms:');
     expect(raw).toContain('interactive_preview_movements:');
+    expect(raw).toContain('allow_git_hooks: true');
+    expect(raw).toContain('allow_git_filters: true');
   });
 
   it('should return the same cached object on subsequent calls', () => {

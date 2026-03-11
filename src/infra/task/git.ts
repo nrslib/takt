@@ -8,6 +8,11 @@ import { createLogger } from '../../shared/utils/index.js';
 
 const log = createLogger('git');
 
+export interface StageAndCommitOptions {
+  allowGitHooks?: boolean;
+  allowGitFilters?: boolean;
+}
+
 export function getCurrentBranch(cwd: string): string {
   return execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
     cwd,
@@ -33,14 +38,24 @@ function getFilterConfigNames(cwd: string): string[] {
   }
 }
 
-function getSafeGitEnv(cwd: string): NodeJS.ProcessEnv {
-  const configNames = getFilterConfigNames(cwd);
-  const configEntries = [['core.hooksPath', devNull] as const].concat(
-    configNames.map(configName => [
+function getSafeGitEnv(cwd: string, options: StageAndCommitOptions): NodeJS.ProcessEnv | undefined {
+  const configEntries: Array<readonly [string, string]> = [];
+
+  if (!options.allowGitHooks) {
+    configEntries.push(['core.hooksPath', devNull] as const);
+  }
+
+  if (!options.allowGitFilters) {
+    const configNames = getFilterConfigNames(cwd);
+    configEntries.push(...configNames.map(configName => [
       configName,
       configName.endsWith('.required') ? 'false' : '',
-    ] as const)
-  );
+    ] as const));
+  }
+
+  if (configEntries.length === 0) {
+    return undefined;
+  }
 
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -58,8 +73,8 @@ function getSafeGitEnv(cwd: string): NodeJS.ProcessEnv {
 /**
  * Returns the short commit hash if changes were committed, undefined if no changes.
  */
-export function stageAndCommit(cwd: string, message: string): string | undefined {
-  const env = getSafeGitEnv(cwd);
+export function stageAndCommit(cwd: string, message: string, options: StageAndCommitOptions = {}): string | undefined {
+  const env = getSafeGitEnv(cwd, options);
 
   execFileSync('git', ['add', '-A'], { cwd, stdio: 'pipe', env });
 
@@ -74,7 +89,11 @@ export function stageAndCommit(cwd: string, message: string): string | undefined
     return undefined;
   }
 
-  execFileSync('git', ['commit', '--no-verify', '-m', message], { cwd, stdio: 'pipe', env });
+  const commitArgs = options.allowGitHooks
+    ? ['commit', '-m', message]
+    : ['commit', '--no-verify', '-m', message];
+
+  execFileSync('git', commitArgs, { cwd, stdio: 'pipe', env });
 
   return execFileSync('git', ['rev-parse', '--short', 'HEAD'], {
     cwd,

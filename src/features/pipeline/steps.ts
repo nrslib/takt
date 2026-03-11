@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { formatIssueAsTask, buildPrBody, formatPrReviewAsTask } from '../../infra/github/index.js';
 import { getGitProvider, type Issue } from '../../infra/git/index.js';
+import { resolveConfigValue } from '../../infra/config/index.js';
 import { stageAndCommit, resolveBaseBranch, pushBranch, checkoutBranch } from '../../infra/task/index.js';
 import { executeTask, confirmAndCreateWorktree, type TaskExecutionOptions, type PipelineExecutionOptions } from '../tasks/index.js';
 import { info, error, success } from '../../shared/ui/index.js';
@@ -234,7 +235,10 @@ export function commitAndPush(
 ): boolean {
   info('Committing changes...');
   try {
-    const commitHash = stageAndCommit(execCwd, commitMessage);
+    const commitHash = stageAndCommit(execCwd, commitMessage, {
+      allowGitHooks: resolveConfigValue(projectCwd, 'allowGitHooks') ?? false,
+      allowGitFilters: resolveConfigValue(projectCwd, 'allowGitFilters') ?? false,
+    });
     if (commitHash) {
       success(`Changes committed: ${commitHash}`);
     } else {

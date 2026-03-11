@@ -500,6 +500,10 @@ export const ProjectConfigSchema = z.object({
   provider: ProviderReferenceSchema.optional(),
   model: z.string().optional(),
   analytics: AnalyticsConfigSchema.optional(),
+  /** Allow git hooks during TAKT-managed auto-commit */
+  allow_git_hooks: z.boolean().optional(),
+  /** Allow git filters during TAKT-managed auto-commit */
+  allow_git_filters: z.boolean().optional(),
   /** Auto-create PR after worktree execution (project override) */
   auto_pr: z.boolean().optional(),
   /** Create PR as draft (project override) */

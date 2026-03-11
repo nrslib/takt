@@ -8,6 +8,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
+import { resolveConfigValue } from '../config/index.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { stageAndCommit } from './git.js';
 
@@ -40,7 +41,10 @@ export class AutoCommitter {
 
     try {
       const commitMessage = `takt: ${taskName}`;
-      const commitHash = stageAndCommit(cloneCwd, commitMessage);
+      const commitHash = stageAndCommit(cloneCwd, commitMessage, {
+        allowGitHooks: resolveConfigValue(projectDir, 'allowGitHooks') ?? false,
+        allowGitFilters: resolveConfigValue(projectDir, 'allowGitFilters') ?? false,
+      });
 
       if (!commitHash) {
         log.info('No changes to commit');

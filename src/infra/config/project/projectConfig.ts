@@ -71,6 +71,8 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
   const {
     provider,
     model,
+    allow_git_hooks,
+    allow_git_filters,
     auto_pr,
     draft_pr,
     base_branch,
@@ -114,6 +116,8 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     concurrency: concurrency as number | undefined,
     taskPollIntervalMs: task_poll_interval_ms as number | undefined,
     interactivePreviewMovements: interactive_preview_movements as number | undefined,
+    allowGitHooks: allow_git_hooks as boolean | undefined,
+    allowGitFilters: allow_git_filters as boolean | undefined,
     autoPr: auto_pr as boolean | undefined,
     draftPr: draft_pr as boolean | undefined,
     baseBranch: base_branch as string | undefined,
@@ -177,6 +181,8 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
 
   if (config.autoPr !== undefined) savePayload.auto_pr = config.autoPr;
   if (config.draftPr !== undefined) savePayload.draft_pr = config.draftPr;
+  if (config.allowGitHooks !== undefined) savePayload.allow_git_hooks = config.allowGitHooks;
+  if (config.allowGitFilters !== undefined) savePayload.allow_git_filters = config.allowGitFilters;
   if (config.baseBranch !== undefined) savePayload.base_branch = config.baseBranch;
   if (config.branchNameStrategy !== undefined) savePayload.branch_name_strategy = config.branchNameStrategy;
   if (config.minimalOutput !== undefined) savePayload.minimal_output = config.minimalOutput;
@@ -215,6 +221,8 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
   }
   delete savePayload.autoPr;
   delete savePayload.draftPr;
+  delete savePayload.allowGitHooks;
+  delete savePayload.allowGitFilters;
   delete savePayload.baseBranch;
   delete savePayload.withSubmodules;
   delete savePayload.branchNameStrategy;

@@ -104,6 +104,10 @@ export interface ProjectConfig {
   provider?: 'claude' | 'codex' | 'opencode' | 'cursor' | 'copilot' | 'mock';
   /** Model selection for agent runtime */
   model?: string;
+  /** Allow git hooks during TAKT-managed auto-commit */
+  allowGitHooks?: boolean;
+  /** Allow git filters during TAKT-managed auto-commit */
+  allowGitFilters?: boolean;
   /** Auto-create PR after worktree execution */
   autoPr?: boolean;
   /** Create PR as draft */

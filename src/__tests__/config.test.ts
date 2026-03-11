@@ -1873,6 +1873,15 @@ describe('resolveConfigValue autoPr/draftPr/baseBranch/concurrency from project 
     expect(resolveConfigValue(testDir, 'draftPr')).toBe(true);
   });
 
+  it('should resolve allowGitHooks and allowGitFilters from project config written in snake_case YAML', () => {
+    const projectConfigDir = getProjectConfigDir(testDir);
+    mkdirSync(projectConfigDir, { recursive: true });
+    writeFileSync(join(projectConfigDir, 'config.yaml'), 'allow_git_hooks: true\nallow_git_filters: true\n');
+
+    expect(resolveConfigValue(testDir, 'allowGitHooks')).toBe(true);
+    expect(resolveConfigValue(testDir, 'allowGitFilters')).toBe(true);
+  });
+
   it('should resolve baseBranch from project config written in snake_case YAML', () => {
     const projectConfigDir = getProjectConfigDir(testDir);
     mkdirSync(projectConfigDir, { recursive: true });

@@ -81,6 +81,8 @@ const RESOLUTION_REGISTRY: Partial<{ [K in ConfigParameterKey]: ResolutionRule<K
     layers: ['local', 'piece', 'global'],
     pieceValue: (pieceContext) => pieceContext?.providerOptions,
   },
+  allowGitHooks: { layers: ['local', 'global'] },
+  allowGitFilters: { layers: ['local', 'global'] },
   autoPr: { layers: ['local', 'global'] },
   draftPr: { layers: ['local', 'global'] },
   analytics: { layers: ['local', 'global'], mergeMode: 'analytics' },

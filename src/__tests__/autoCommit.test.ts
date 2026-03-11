@@ -10,6 +10,11 @@ vi.mock('node:child_process', () => ({
   execFileSync: vi.fn(),
 }));
 
+const mockResolveConfigValue = vi.fn(() => undefined);
+vi.mock('../infra/config/index.js', () => ({
+  resolveConfigValue: (...args: unknown[]) => mockResolveConfigValue(...args),
+}));
+
 import { execFileSync } from 'node:child_process';
 const mockExecFileSync = vi.mocked(execFileSync);
 
@@ -19,6 +24,7 @@ function includesCommand(args: readonly string[], command: string): boolean {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockResolveConfigValue.mockReturnValue(undefined);
 });
 
 describe('autoCommitAndPush', () => {
@@ -188,5 +194,40 @@ describe('autoCommitAndPush', () => {
     );
     const args = commitCall![1] as string[];
     expect(args[args.indexOf('-m') + 1]).toBe('takt: 認証機能を追加する');
+  });
+
+  it('should allow hooks and filters only when explicitly configured', () => {
+    mockResolveConfigValue.mockImplementation((_projectDir: string, key: string) => {
+      if (key === 'allowGitHooks' || key === 'allowGitFilters') {
+        return true;
+      }
+      return undefined;
+    });
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (includesCommand(argsArr, 'status')) {
+        return 'M src/index.ts\n';
+      }
+      if (includesCommand(argsArr, 'rev-parse')) {
+        return 'abc1234\n';
+      }
+      return Buffer.from('');
+    });
+
+    autoCommitAndPush('/tmp/clone', 'my-task', '/project');
+
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      'git',
+      ['add', '-A'],
+      expect.objectContaining({ cwd: '/tmp/clone', env: undefined })
+    );
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      'git',
+      ['commit', '-m', 'takt: my-task'],
+      expect.objectContaining({ cwd: '/tmp/clone', env: undefined })
+    );
+    expect(
+      mockExecFileSync.mock.calls.some(call => includesCommand(call[1] as string[], 'config'))
+    ).toBe(false);
   });
 });
