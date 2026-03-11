@@ -12,12 +12,6 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
-          fetch-depth: 0
-
       - name: API キー確認
         run: |
           if [ -z "$ANTHROPIC_API_KEY" ]; then
@@ -37,7 +31,7 @@ jobs:
           npm install -g takt
 
       - name: TAKT Review 実行
-        run: takt --pipeline --skip-git -i ${{ github.event.pull_request.number }} -w review
+        run: takt --pipeline --skip-git --pr ${{ github.event.pull_request.number }} -w review-takt-default
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
