@@ -46,7 +46,7 @@ vi.mock('../infra/resources/index.js', async () => {
 
 const configFeatures = await import('../features/config/index.js');
 const deploySkillCodex = (configFeatures as Record<string, unknown>).deploySkillCodex as () => Promise<void>;
-const { warn } = await import('../shared/ui/index.js');
+const { warn, info } = await import('../shared/ui/index.js');
 const { confirm } = await import('../shared/prompt/index.js');
 
 describe('deploySkillCodex', () => {
@@ -83,7 +83,7 @@ describe('deploySkillCodex', () => {
     writeFileSync(join(langDir, 'facets', 'instructions', 'init.md'), '# Init');
     writeFileSync(join(langDir, 'facets', 'knowledge', 'patterns.md'), '# Patterns');
     writeFileSync(join(langDir, 'facets', 'output-contracts', 'summary.md'), '# Summary');
-    writeFileSync(join(langDir, 'templates', 'task.md'), '# Task');
+    writeFileSync(join(langDir, 'templates', 'task.md'), '# legacy template');
 
     skillDir = join(testHomeDir, '.agents', 'skills', 'takt');
     mkdirSync(skillDir, { recursive: true });
@@ -124,7 +124,7 @@ describe('deploySkillCodex', () => {
       expect(existsSync(join(skillDir, 'agents', 'openai.yaml'))).toBe(true);
     });
 
-    it('should copy all language resource directories', async () => {
+    it('should copy facets and pieces from language resources', async () => {
       await deploySkillCodex();
 
       expect(existsSync(join(skillDir, 'pieces', 'default.yaml'))).toBe(true);
@@ -133,7 +133,8 @@ describe('deploySkillCodex', () => {
       expect(existsSync(join(skillDir, 'facets', 'instructions', 'init.md'))).toBe(true);
       expect(existsSync(join(skillDir, 'facets', 'knowledge', 'patterns.md'))).toBe(true);
       expect(existsSync(join(skillDir, 'facets', 'output-contracts', 'summary.md'))).toBe(true);
-      expect(existsSync(join(skillDir, 'templates', 'task.md'))).toBe(true);
+      expect(existsSync(join(skillDir, 'templates'))).toBe(false);
+      expect(info).not.toHaveBeenCalledWith(expect.stringContaining('テンプレート'));
     });
   });
 
@@ -158,6 +159,28 @@ describe('deploySkillCodex', () => {
 
       expect(existsSync(join(agentsDir, 'legacy.yaml'))).toBe(false);
       expect(existsSync(join(agentsDir, 'openai.yaml'))).toBe(true);
+    });
+
+    it('should remove stale templates directory from previous deployments', async () => {
+      writeFileSync(join(skillDir, 'SKILL.md'), '# Old Skill');
+      const templatesDir = join(skillDir, 'templates');
+      mkdirSync(templatesDir, { recursive: true });
+      writeFileSync(join(templatesDir, 'task.md'), '# stale template');
+
+      await deploySkillCodex();
+
+      expect(existsSync(templatesDir)).toBe(false);
+    });
+
+    it('should remove stale templates directory even without existing SKILL.md', async () => {
+      const templatesDir = join(skillDir, 'templates');
+      mkdirSync(templatesDir, { recursive: true });
+      writeFileSync(join(templatesDir, 'task.md'), '# stale template');
+
+      await deploySkillCodex();
+
+      expect(existsSync(join(skillDir, 'SKILL.md'))).toBe(true);
+      expect(existsSync(templatesDir)).toBe(false);
     });
   });
 

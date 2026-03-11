@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -51,7 +51,7 @@ vi.mock('../infra/resources/index.js', async () => {
 
 // Import after mocks are set up
 const { deploySkill } = await import('../features/config/deploySkill.js');
-const { warn } = await import('../shared/ui/index.js');
+const { warn, info } = await import('../shared/ui/index.js');
 const { confirm } = await import('../shared/prompt/index.js');
 
 describe('deploySkill', () => {
@@ -88,7 +88,7 @@ describe('deploySkill', () => {
     writeFileSync(join(langDir, 'facets', 'instructions', 'init.md'), '# Init');
     writeFileSync(join(langDir, 'facets', 'knowledge', 'patterns.md'), '# Patterns');
     writeFileSync(join(langDir, 'facets', 'output-contracts', 'summary.md'), '# Summary');
-    writeFileSync(join(langDir, 'templates', 'task.md'), '# Task');
+    writeFileSync(join(langDir, 'templates', 'task.md'), '# legacy template');
 
     // Create target directories
     skillDir = join(testHomeDir, '.claude', 'skills', 'takt');
@@ -127,7 +127,7 @@ describe('deploySkill', () => {
       expect(existsSync(join(refsDir, 'yaml-schema.md'))).toBe(true);
     });
 
-    it('should copy all resource directories from language resources', async () => {
+    it('should copy facets and pieces from language resources', async () => {
       await deploySkill();
 
       // Verify each resource directory is copied
@@ -137,7 +137,8 @@ describe('deploySkill', () => {
       expect(existsSync(join(skillDir, 'facets', 'instructions', 'init.md'))).toBe(true);
       expect(existsSync(join(skillDir, 'facets', 'knowledge', 'patterns.md'))).toBe(true);
       expect(existsSync(join(skillDir, 'facets', 'output-contracts', 'summary.md'))).toBe(true);
-      expect(existsSync(join(skillDir, 'templates', 'task.md'))).toBe(true);
+      expect(existsSync(join(skillDir, 'templates'))).toBe(false);
+      expect(info).not.toHaveBeenCalledWith(expect.stringContaining('テンプレート'));
     });
   });
 
@@ -165,6 +166,28 @@ describe('deploySkill', () => {
 
       expect(existsSync(join(refsDir, 'old-reference.md'))).toBe(false);
       expect(existsSync(join(refsDir, 'engine.md'))).toBe(true);
+    });
+
+    it('should remove stale templates directory from previous deployments', async () => {
+      writeFileSync(join(skillDir, 'SKILL.md'), '# Old Skill');
+      const templatesDir = join(skillDir, 'templates');
+      mkdirSync(templatesDir, { recursive: true });
+      writeFileSync(join(templatesDir, 'task.md'), '# stale template');
+
+      await deploySkill();
+
+      expect(existsSync(templatesDir)).toBe(false);
+    });
+
+    it('should remove stale templates directory even without existing SKILL.md', async () => {
+      const templatesDir = join(skillDir, 'templates');
+      mkdirSync(templatesDir, { recursive: true });
+      writeFileSync(join(templatesDir, 'task.md'), '# stale template');
+
+      await deploySkill();
+
+      expect(existsSync(join(skillDir, 'SKILL.md'))).toBe(true);
+      expect(existsSync(templatesDir)).toBe(false);
     });
   });
 

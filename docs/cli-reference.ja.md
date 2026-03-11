@@ -254,7 +254,7 @@ takt export-cc
 ### takt export-codex
 
 TAKT のスキルファイルを Codex Skill（`~/.agents/skills/takt/`）としてデプロイします。
-このコマンドは `SKILL.md`、`references/`、`agents/`、`pieces/`、`facets/`、`templates/` をデプロイします。
+このコマンドは `SKILL.md`、`references/`、`agents/`、`pieces/`、`facets/` をデプロイします。
 
 ```bash
 takt export-codex

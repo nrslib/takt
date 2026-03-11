@@ -2,13 +2,13 @@
 
 このガイドは `knowledge/` のファイルを作成・編集する際のルールを定義する。
 
-## テンプレート
+## 参照元
 
-`templates/knowledge/` にテンプレートファイルを用意している。新規作成時はコピーして使う。
+`facets/knowledge/` を参照元として使う。新規作成時は既存ファイルをコピーして使う。
 
-| テンプレート | 用途 | 使用例 |
+| 参照ファイル | 用途 | 使用例 |
 |------------|------|--------|
-| `knowledge.md` | ドメイン知識 | frontend, backend, security |
+| `takt.md` | ドメイン知識 | frontend, backend, security |
 
 ---
 

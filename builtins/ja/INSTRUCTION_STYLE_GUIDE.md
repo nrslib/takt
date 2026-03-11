@@ -2,17 +2,16 @@
 
 このガイドは `instructions/` のファイルを作成・編集する際のルールを定義する。
 
-## テンプレート
+## 参照元
 
-`templates/instructions/` にテンプレートファイルを用意している。新規作成時は参照して使う。
+`facets/instructions/` を参照元として使う。新規作成時は既存ファイルを参照して使う。
 
-| テンプレート | 用途 |
+| 参照ファイル | 用途 |
 |------------|------|
 | `plan.md` | 計画（タスク分析・要件整理） |
 | `architect.md` | 設計（アーキテクチャ設計） |
 | `implement.md` | 実装（コーディング + レポート埋め込み） |
-| `review.md` | レビュー（parallel sub-step 汎用） |
-| `ai-review-standalone.md` | AIレビュー（standalone、iteration tracking） |
+| `review-ai.md` | AIレビュー（parallel sub-step 汎用） |
 | `ai-fix.md` | AI指摘修正（全ピース共通） |
 | `fix.md` | レビュー指摘修正（汎用 fix / supervise fix） |
 | `arbitrate.md` | 裁定（レビュアー vs コーダー） |
@@ -22,7 +21,7 @@
 
 ## インストラクションとは
 
-ピースのムーブメントで実行する具体的な手順。`instruction_template` フィールドに直接記述するか、ファイル参照で使用する。
+ピースのムーブメントで実行する具体的な手順。`instruction` フィールドでファイル参照するか、インラインで直接記述する。
 
 | 項目 | 内容 |
 |------|------|
@@ -65,7 +64,7 @@
 
 ### セクション注入（`## Instructions` の前に別セクションとして挿入）
 
-`perform_phase1_message.md` のテンプレート側で処理される。instruction_template の外に配置される。
+`perform_phase1_message.md` 側で処理される。`instruction` の外に配置される。
 
 | セクション | 内容 | デフォルト |
 |-----------|------|-----------|
@@ -73,11 +72,11 @@
 | `## Previous Response` | 前ムーブメントの出力 | **初回以外は常に表示**（`pass_previous_response` デフォルト: `true`） |
 | `## Additional User Inputs` | 蓄積されたユーザー入力 | **常に表示** |
 
-抑制したい場合は instruction_template 内にプレースホルダー（`{task}`, `{previous_response}`, `{user_inputs}`）を含めるか、`pass_previous_response: false` を設定する。通常は不要。
+抑制したい場合は `instruction` 内にプレースホルダー（`{task}`, `{previous_response}`, `{user_inputs}`）を含めるか、`pass_previous_response: false` を設定する。通常は不要。
 
-### テンプレート変数展開（instruction_template 内のプレースホルダーを置換）
+### テンプレート変数展開（`instruction` 内のプレースホルダーを置換）
 
-InstructionBuilder が instruction_template 内の `{変数名}` を展開する。インストラクション内で使用可能。
+InstructionBuilder が `instruction` 内の `{変数名}` を展開する。インストラクション内で使用可能。
 
 | 変数 | 内容 |
 |------|------|

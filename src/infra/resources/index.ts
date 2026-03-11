@@ -4,12 +4,11 @@
  * Contains default piece definitions and resource paths.
  * Resources are organized into:
  * - builtins/{lang}/pieces/    - Builtin pieces (loaded via fallback)
- * - builtins/{lang}/personas/  - Builtin personas (loaded via fallback)
- * - builtins/{lang}/policies/  - Builtin policies
- * - builtins/{lang}/instructions/ - Builtin instructions
- * - builtins/{lang}/knowledge/ - Builtin knowledge files
- * - builtins/{lang}/output-contracts/ - Builtin output contracts
- * - builtins/{lang}/templates/ - Builtin templates
+ * - builtins/{lang}/facets/personas/ - Builtin personas (loaded via fallback)
+ * - builtins/{lang}/facets/policies/ - Builtin policies
+ * - builtins/{lang}/facets/instructions/ - Builtin instructions
+ * - builtins/{lang}/facets/knowledge/ - Builtin knowledge files
+ * - builtins/{lang}/facets/output-contracts/ - Builtin output contracts
  * - builtins/project/          - Project-level template files (.gitignore)
  * - builtins/skill/            - Claude Code skill files
  */

@@ -2,15 +2,15 @@
 
 このガイドは `output-contracts/` のファイルを作成・編集する際のルールを定義する。
 
-## テンプレート
+## 参照元
 
-`templates/reports/` にテンプレートファイルを用意している。新規作成時は参照して使う。
+`facets/output-contracts/` を参照元として使う。新規作成時は既存ファイルを参照して使う。
 
-| テンプレート | 用途 |
+| 参照ファイル | 用途 |
 |------------|------|
 | `plan.md` | タスク計画（標準 / 拡張） |
 | `architecture-design.md` | アーキテクチャ設計 |
-| `review.md` | 汎用レビュー結果 |
+| `review-gather.md` | 汎用レビュー結果 |
 | `security-review.md` | セキュリティレビュー（重大度付き） |
 | `validation.md` | 最終検証結果 |
 | `summary.md` | タスク完了サマリー |

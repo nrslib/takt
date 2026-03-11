@@ -8,7 +8,7 @@ import { confirm } from '../../shared/prompt/index.js';
 import { header, success, info, warn, blankLine } from '../../shared/ui/index.js';
 
 const SKIP_FILES = new Set(['.DS_Store', 'Thumbs.db']);
-const DIRECT_DIRS = ['pieces', 'templates'] as const;
+const DIRECT_DIRS = ['pieces'] as const;
 const FACET_DIRS = ['personas', 'policies', 'instructions', 'knowledge', 'output-contracts'] as const;
 
 export type DeploySkillOptions = {
@@ -51,6 +51,7 @@ export async function deploySkillInternal(options: DeploySkillOptions): Promise<
   }
 
   const copiedFiles: string[] = [];
+  cleanDir(join(skillDir, 'templates'));
 
   copyFile(join(skillResourcesDir, 'SKILL.md'), join(skillDir, 'SKILL.md'), copiedFiles);
 
@@ -91,7 +92,6 @@ export async function deploySkillInternal(options: DeploySkillOptions): Promise<
       filePath.startsWith(skillDir)
       && !filePath.includes('/pieces/')
       && !filePath.includes('/facets/')
-      && !filePath.includes('/templates/')
       && !filePath.includes('/references/')
       && !filePath.includes('/agents/'),
   );
@@ -103,7 +103,6 @@ export async function deploySkillInternal(options: DeploySkillOptions): Promise<
   const instructionFiles = copiedFiles.filter((filePath) => filePath.includes('/facets/instructions/'));
   const knowledgeFiles = copiedFiles.filter((filePath) => filePath.includes('/facets/knowledge/'));
   const outputContractFiles = copiedFiles.filter((filePath) => filePath.includes('/facets/output-contracts/'));
-  const templateFiles = copiedFiles.filter((filePath) => filePath.includes('/templates/'));
 
   if (skillFiles.length > 0) {
     info(`  スキル:        ${skillFiles.length} ファイル`);
@@ -134,9 +133,6 @@ export async function deploySkillInternal(options: DeploySkillOptions): Promise<
   }
   if (outputContractFiles.length > 0) {
     info(`  出力契約:      ${outputContractFiles.length} ファイル`);
-  }
-  if (templateFiles.length > 0) {
-    info(`  テンプレート:  ${templateFiles.length} ファイル`);
   }
 
   blankLine();

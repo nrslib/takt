@@ -254,7 +254,7 @@ takt export-cc
 ### takt export-codex
 
 Deploy TAKT skill files as a Codex Skill (`~/.agents/skills/takt/`).
-This command deploys `SKILL.md`, `references/`, `agents/`, `pieces/`, `facets/`, and `templates/`.
+This command deploys `SKILL.md`, `references/`, `agents/`, `pieces/`, and `facets/`.
 
 ```bash
 takt export-codex

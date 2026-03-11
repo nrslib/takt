@@ -2,15 +2,15 @@
 
 このガイドは `personas/` のファイルを作成・編集する際のルールを定義する。
 
-## テンプレート
+## 参照元
 
-`templates/personas/` にテンプレートファイルを用意している。新規作成時はコピーして使う。
+`facets/personas/` を参照元として使う。新規作成時は既存ファイルをコピーして使う。
 
-| テンプレート | 用途 | 使用例 |
+| 参照ファイル | 用途 | 使用例 |
 |------------|------|--------|
-| `simple.md` | ドメイン知識を持たない実行系エージェント | coder, planner, conductor, research-digger |
-| `expert.md` | ドメイン知識を持つ専門エージェント | architecture-reviewer, security-reviewer, cqrs-es-reviewer |
-| `character.md` | 固有の人格・口調を持つキャラクター型 | melchior, balthasar, casper |
+| `coder.md` | ドメイン知識を持たない実行系エージェント | coder, planner, conductor, research-digger |
+| `architecture-reviewer.md` | ドメイン知識を持つ専門エージェント | architecture-reviewer, security-reviewer, cqrs-es-reviewer |
+| `melchior.md` | 固有の人格・口調を持つキャラクター型 | melchior, balthasar, casper |
 
 ---
 
@@ -48,7 +48,7 @@
 このルール/知識は…
 ├── 特定のエージェントだけが必要 → ペルソナ（ドメイン知識）
 ├── 複数のエージェントが共有 → ポリシー
-└── 特定のピースの実行手順 → instruction_template（ペルソナに書かない）
+└── 特定のピースの実行手順 → instruction（ペルソナに書かない）
 ```
 
 ---
@@ -158,7 +158,7 @@
 1. **ポリシーの詳細ルール**: コード例・判定基準・例外リスト等の詳細はポリシーの責務（1行の行動指針は行動姿勢に記載してよい）
 2. **ピース固有の概念**: ムーブメント名、レポートファイル名、ステップ間ルーティング
 3. **ツール固有の環境情報**: `.takt/runs/` 等のディレクトリパス、テンプレート変数（`{report_dir}` 等）
-4. **実行手順**: 「まず〜を読み、次に〜を実行」のような手順はinstruction_templateの責務
+4. **実行手順**: 「まず〜を読み、次に〜を実行」のような手順は instruction の責務
 
 ### 例外: ドメイン知識としての重複
 
