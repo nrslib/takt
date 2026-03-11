@@ -4,11 +4,11 @@
 
 ## テンプレート
 
-`templates/policies/` にテンプレートファイルを用意している。新規作成時はコピーして使う。
+`facets/policies/` を参照元として使う。新規作成時は既存ファイルをコピーして使う。
 
-| テンプレート | 用途 | 使用例 |
+| 参照ファイル | 用途 | 使用例 |
 |------------|------|--------|
-| `policy.md` | 共有行動規範 | coding, review, testing |
+| `coding.md` | 共有行動規範 | coding, review, testing |
 
 ---
 

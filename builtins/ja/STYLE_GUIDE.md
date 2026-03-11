@@ -10,35 +10,17 @@
 | インストラクション | [INSTRUCTION_STYLE_GUIDE.md](INSTRUCTION_STYLE_GUIDE.md) | Phase 1 メッセージ（`{{instructions}}`） |
 | 出力契約 | [OUTPUT_CONTRACT_STYLE_GUIDE.md](OUTPUT_CONTRACT_STYLE_GUIDE.md) | `report.format` |
 
-## テンプレート
+## 参照元
 
-`templates/` にテンプレートファイルを用意している。新規作成時はコピーまたは参照して使う。
+`facets/` のファイルを参照元として使う。新規作成時はコピーまたは参照して使う。
 
 ```
-templates/
-├── personas/          # ペルソナテンプレート
-│   ├── simple.md      # ドメイン知識なし
-│   ├── expert.md      # ドメイン知識あり
-│   └── character.md   # キャラクター型
-├── policies/          # ポリシーテンプレート
-│   └── policy.md
-├── instructions/      # インストラクションテンプレート
-│   ├── plan.md
-│   ├── architect.md
-│   ├── implement.md
-│   ├── review.md
-│   ├── ai-review-standalone.md
-│   ├── ai-fix.md
-│   ├── fix.md
-│   ├── arbitrate.md
-│   └── supervise.md
-└── reports/           # 出力契約テンプレート
-    ├── plan.md
-    ├── architecture-design.md
-    ├── review.md
-    ├── security-review.md
-    ├── validation.md
-    └── summary.md
+facets/
+├── personas/          # ペルソナ
+├── policies/          # ポリシー
+├── instructions/      # インストラクション
+├── knowledge/         # ナレッジ
+└── output-contracts/  # 出力契約
 ```
 
 ## 3層プロンプトアーキテクチャ

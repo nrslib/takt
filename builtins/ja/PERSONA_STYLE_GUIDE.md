@@ -4,13 +4,13 @@
 
 ## テンプレート
 
-`templates/personas/` にテンプレートファイルを用意している。新規作成時はコピーして使う。
+`facets/personas/` を参照元として使う。新規作成時は既存ファイルをコピーして使う。
 
-| テンプレート | 用途 | 使用例 |
+| 参照ファイル | 用途 | 使用例 |
 |------------|------|--------|
-| `simple.md` | ドメイン知識を持たない実行系エージェント | coder, planner, conductor, research-digger |
-| `expert.md` | ドメイン知識を持つ専門エージェント | architecture-reviewer, security-reviewer, cqrs-es-reviewer |
-| `character.md` | 固有の人格・口調を持つキャラクター型 | melchior, balthasar, casper |
+| `coder.md` | ドメイン知識を持たない実行系エージェント | coder, planner, conductor, research-digger |
+| `architecture-reviewer.md` | ドメイン知識を持つ専門エージェント | architecture-reviewer, security-reviewer, cqrs-es-reviewer |
+| `melchior.md` | 固有の人格・口調を持つキャラクター型 | melchior, balthasar, casper |
 
 ---
 

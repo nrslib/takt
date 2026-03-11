@@ -4,15 +4,14 @@
 
 ## テンプレート
 
-`templates/instructions/` にテンプレートファイルを用意している。新規作成時は参照して使う。
+`facets/instructions/` を参照元として使う。新規作成時は既存ファイルを参照して使う。
 
-| テンプレート | 用途 |
+| 参照ファイル | 用途 |
 |------------|------|
 | `plan.md` | 計画（タスク分析・要件整理） |
 | `architect.md` | 設計（アーキテクチャ設計） |
 | `implement.md` | 実装（コーディング + レポート埋め込み） |
-| `review.md` | レビュー（parallel sub-step 汎用） |
-| `ai-review-standalone.md` | AIレビュー（standalone、iteration tracking） |
+| `review-ai.md` | AIレビュー（parallel sub-step 汎用） |
 | `ai-fix.md` | AI指摘修正（全ピース共通） |
 | `fix.md` | レビュー指摘修正（汎用 fix / supervise fix） |
 | `arbitrate.md` | 裁定（レビュアー vs コーダー） |
