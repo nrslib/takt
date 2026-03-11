@@ -237,7 +237,7 @@ describe('resolveTaskExecution', () => {
 
   it('should preserve base_branch when reusing an existing worktree path', async () => {
     const root = createTempProjectDir();
-    const worktreePath = path.join(root, 'existing-worktree');
+    const worktreePath = path.join(root, '.takt', 'worktrees', 'existing-worktree');
     fs.mkdirSync(worktreePath, { recursive: true });
 
     const task = createTask({
@@ -272,7 +272,7 @@ describe('resolveTaskExecution', () => {
 
   it('should prefer base_branch over legacy baseBranch when reusing an existing worktree path', async () => {
     const root = createTempProjectDir();
-    const worktreePath = path.join(root, 'existing-worktree');
+    const worktreePath = path.join(root, '.takt', 'worktrees', 'existing-worktree');
     fs.mkdirSync(worktreePath, { recursive: true });
 
     const task = createTask({
@@ -309,7 +309,7 @@ describe('resolveTaskExecution', () => {
 
   it('should ignore legacy baseBranch when reusing an existing worktree path', async () => {
     const root = createTempProjectDir();
-    const worktreePath = path.join(root, 'existing-worktree');
+    const worktreePath = path.join(root, '.takt', 'worktrees', 'existing-worktree');
     fs.mkdirSync(worktreePath, { recursive: true });
 
     const task = createTask({
@@ -338,6 +338,76 @@ describe('resolveTaskExecution', () => {
     expect(result.execCwd).toBe(worktreePath);
     expect(result.isWorktree).toBe(true);
     expect(result.baseBranch).toBe('develop');
+
+    mockCreateSharedClone.mockRestore();
+    mockResolveBaseBranch.mockRestore();
+  });
+
+  it('should not reuse existing worktree path outside clone base directory', async () => {
+    const root = createTempProjectDir();
+    const outsidePath = path.join(os.tmpdir(), `takt-outside-${Date.now()}`);
+    fs.mkdirSync(outsidePath, { recursive: true });
+
+    const task = createTask({
+      data: ({
+        task: 'Run task with untrusted worktree path',
+        worktree: true,
+        branch: 'feature/outside-worktree',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      worktreePath: outsidePath,
+      status: 'pending',
+    });
+
+    const safeClonePath = path.join(root, '.takt', 'worktrees', 'safe-clone');
+    const mockResolveBaseBranch = vi.spyOn(infraTask, 'resolveBaseBranch').mockReturnValue({
+      branch: 'main',
+    });
+    const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedClone').mockReturnValue({
+      path: safeClonePath,
+      branch: 'feature/outside-worktree',
+    });
+
+    const result = await resolveTaskExecutionWithPiece(task, root);
+
+    expect(mockCreateSharedClone).toHaveBeenCalled();
+    expect(result.execCwd).toBe(safeClonePath);
+    expect(result.worktreePath).toBe(safeClonePath);
+    expect(result.isWorktree).toBe(true);
+
+    mockCreateSharedClone.mockRestore();
+    mockResolveBaseBranch.mockRestore();
+    fs.rmSync(outsidePath, { recursive: true, force: true });
+  });
+
+  it('should reuse existing worktree path within clone base directory', async () => {
+    const root = createTempProjectDir();
+    const worktreePath = path.join(root, '.takt', 'worktrees', 'existing-safe-worktree');
+    fs.mkdirSync(worktreePath, { recursive: true });
+
+    const task = createTask({
+      data: ({
+        task: 'Run task with safe worktree path',
+        worktree: true,
+        branch: 'feature/safe-worktree',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      worktreePath,
+      status: 'pending',
+    });
+
+    const mockResolveBaseBranch = vi.spyOn(infraTask, 'resolveBaseBranch').mockReturnValue({
+      branch: 'main',
+    });
+    const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedClone').mockReturnValue({
+      path: worktreePath,
+      branch: 'feature/safe-worktree',
+    });
+
+    const result = await resolveTaskExecutionWithPiece(task, root);
+
+    expect(mockCreateSharedClone).not.toHaveBeenCalled();
+    expect(result.execCwd).toBe(worktreePath);
+    expect(result.worktreePath).toBe(worktreePath);
+    expect(result.isWorktree).toBe(true);
 
     mockCreateSharedClone.mockRestore();
     mockResolveBaseBranch.mockRestore();

@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { createLogger } from '../../shared/utils/index.js';
+import { createLogger, isPathInside } from '../../shared/utils/index.js';
 import { resolveConfigValue } from '../config/index.js';
 import type { WorktreeOptions, WorktreeResult } from './types.js';
 import { localBranchExists, remoteBranchExists, resolveBaseBranch as resolveBaseBranchInternal } from './clone-base-branch.js';
@@ -18,7 +18,7 @@ export class CloneManager {
     return new Date().toISOString().replace(/[-:.]/g, '').slice(0, 13);
   }
 
-  private static resolveCloneBaseDir(projectDir: string): string {
+  static resolveCloneBaseDir(projectDir: string): string {
     const worktreeDir = resolveConfigValue(projectDir, 'worktreeDir');
     if (worktreeDir) {
       return path.isAbsolute(worktreeDir)
@@ -165,7 +165,7 @@ export class CloneManager {
     }
     const cloneBaseDir = path.resolve(CloneManager.resolveCloneBaseDir(projectDir));
     const resolvedClonePath = path.resolve(meta.clonePath);
-    if (!resolvedClonePath.startsWith(cloneBaseDir + path.sep)) {
+    if (!isPathInside(cloneBaseDir, resolvedClonePath)) {
       log.error('Refusing to remove clone outside of clone base directory', {
         branch,
         clonePath: meta.clonePath,
@@ -212,4 +212,8 @@ export function resolveBaseBranch(
   explicitBaseBranch?: string,
 ): { branch: string; fetchedCommit?: string } {
   return CloneManager.resolveBaseBranch(projectDir, explicitBaseBranch);
+}
+
+export function resolveCloneBaseDir(projectDir: string): string {
+  return CloneManager.resolveCloneBaseDir(projectDir);
 }

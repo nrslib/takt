@@ -235,8 +235,9 @@ describe('シナリオ3・4: requeue → re-execution passes exceeded metadata t
     vi.clearAllMocks();
     applyDefaultMocks();
     testDir = createTestDir();
-    // cloneDir simulates a pre-existing worktree clone (fs.existsSync check will pass)
-    cloneDir = createTestDir();
+    // cloneDir simulates a pre-existing worktree clone inside the managed worktree directory
+    cloneDir = join(testDir, '.takt', 'worktrees', `existing-${randomUUID()}`);
+    mkdirSync(cloneDir, { recursive: true });
     runner = new TaskRunner(testDir);
   });
 
