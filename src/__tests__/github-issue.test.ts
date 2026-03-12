@@ -1,8 +1,8 @@
 /**
- * Tests for github/issue module
+ * Tests for issue parsing and formatting functions.
  *
- * Tests parsing and formatting functions.
- * checkGhCli/fetchIssue/resolveIssueTask are integration functions
+ * These functions live in git/format.ts (provider-neutral).
+ * checkGhCli/fetchIssue are integration functions
  * that call `gh` CLI, so they are not unit-tested here.
  */
 
@@ -11,8 +11,8 @@ import {
   parseIssueNumbers,
   isIssueReference,
   formatIssueAsTask,
-  type GitHubIssue,
-} from '../infra/github/issue.js';
+} from '../infra/git/format.js';
+import type { Issue } from '../infra/git/types.js';
 
 describe('parseIssueNumbers', () => {
   it('should parse single issue reference', () => {
@@ -83,7 +83,7 @@ describe('isIssueReference', () => {
 
 describe('formatIssueAsTask', () => {
   it('should format issue with all fields', () => {
-    const issue: GitHubIssue = {
+    const issue: Issue = {
       number: 6,
       title: 'Fix authentication bug',
       body: 'The login flow is broken.',
@@ -96,7 +96,7 @@ describe('formatIssueAsTask', () => {
 
     const result = formatIssueAsTask(issue);
 
-    expect(result).toContain('## GitHub Issue #6: Fix authentication bug');
+    expect(result).toContain('## Issue #6: Fix authentication bug');
     expect(result).toContain('The login flow is broken.');
     expect(result).toContain('### Labels');
     expect(result).toContain('bug, priority:high');
@@ -106,7 +106,7 @@ describe('formatIssueAsTask', () => {
   });
 
   it('should format issue with no body', () => {
-    const issue: GitHubIssue = {
+    const issue: Issue = {
       number: 10,
       title: 'Empty issue',
       body: '',
@@ -116,13 +116,13 @@ describe('formatIssueAsTask', () => {
 
     const result = formatIssueAsTask(issue);
 
-    expect(result).toBe('## GitHub Issue #10: Empty issue');
+    expect(result).toBe('## Issue #10: Empty issue');
     expect(result).not.toContain('### Labels');
     expect(result).not.toContain('### Comments');
   });
 
   it('should format issue with labels but no comments', () => {
-    const issue: GitHubIssue = {
+    const issue: Issue = {
       number: 5,
       title: 'Feature request',
       body: 'Add dark mode.',
@@ -138,7 +138,7 @@ describe('formatIssueAsTask', () => {
   });
 
   it('should format issue with comments but no labels', () => {
-    const issue: GitHubIssue = {
+    const issue: Issue = {
       number: 3,
       title: 'Discussion',
       body: 'Thoughts?',
@@ -156,7 +156,7 @@ describe('formatIssueAsTask', () => {
   });
 
   it('should handle multiline body', () => {
-    const issue: GitHubIssue = {
+    const issue: Issue = {
       number: 1,
       title: 'Multi-line',
       body: 'Line 1\nLine 2\n\nLine 4',

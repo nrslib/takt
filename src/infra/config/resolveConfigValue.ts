@@ -83,6 +83,7 @@ const RESOLUTION_REGISTRY: Partial<{ [K in ConfigParameterKey]: ResolutionRule<K
   },
   allowGitHooks: { layers: ['local', 'global'] },
   allowGitFilters: { layers: ['local', 'global'] },
+  vcsProvider: { layers: ['local', 'global'] },
   autoPr: { layers: ['local', 'global'] },
   draftPr: { layers: ['local', 'global'] },
   analytics: { layers: ['local', 'global'], mergeMode: 'analytics' },

@@ -101,6 +101,7 @@ export class GlobalConfigManager {
       worktreeDir: expandOptionalHomePath(parsed.worktree_dir),
       allowGitHooks: parsed.allow_git_hooks,
       allowGitFilters: parsed.allow_git_filters,
+      vcsProvider: parsed.vcs_provider as GlobalConfig['vcsProvider'],
       autoPr: parsed.auto_pr,
       draftPr: parsed.draft_pr,
       disabledBuiltins: parsed.disabled_builtins,

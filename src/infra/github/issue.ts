@@ -13,9 +13,6 @@ export type { GitHubIssue, GhCliStatus, CreateIssueOptions, CreateIssueResult };
 
 const log = createLogger('github');
 
-/** Regex to match `#N` patterns (issue numbers) */
-const ISSUE_NUMBER_REGEX = /^#(\d+)$/;
-
 /**
  * Check if `gh` CLI is available and authenticated.
  */
@@ -73,107 +70,6 @@ export function fetchIssue(issueNumber: number): GitHubIssue {
 }
 
 /**
- * Format a GitHub issue into task text for piece execution.
- *
- * Output format:
- * ```
- * ## GitHub Issue #6: Fix authentication bug
- *
- * {body}
- *
- * ### Labels
- * bug, priority:high
- *
- * ### Comments
- * **user1**: Comment body...
- * ```
- */
-export function formatIssueAsTask(issue: GitHubIssue): string {
-  const parts: string[] = [];
-
-  parts.push(`## GitHub Issue #${issue.number}: ${issue.title}`);
-
-  if (issue.body) {
-    parts.push('');
-    parts.push(issue.body);
-  }
-
-  if (issue.labels.length > 0) {
-    parts.push('');
-    parts.push('### Labels');
-    parts.push(issue.labels.join(', '));
-  }
-
-  if (issue.comments.length > 0) {
-    parts.push('');
-    parts.push('### Comments');
-    for (const comment of issue.comments) {
-      parts.push(`**${comment.author}**: ${comment.body}`);
-    }
-  }
-
-  return parts.join('\n');
-}
-
-/**
- * Parse `#N` patterns from argument strings.
- * Returns issue numbers found, or empty array if none.
- *
- * Each argument must be exactly `#N` (no mixed text).
- * Examples:
- *   ['#6'] → [6]
- *   ['#6', '#7'] → [6, 7]
- *   ['Fix bug'] → []
- *   ['#6', 'and', '#7'] → [] (mixed, not all are issue refs)
- */
-export function parseIssueNumbers(args: string[]): number[] {
-  if (args.length === 0) return [];
-
-  const numbers: number[] = [];
-  for (const arg of args) {
-    const match = arg.match(ISSUE_NUMBER_REGEX);
-    if (!match?.[1]) return []; // Not all args are issue refs
-    numbers.push(Number.parseInt(match[1], 10));
-  }
-
-  return numbers;
-}
-
-/**
- * Check if a single task string is an issue reference (`#N`).
- */
-export function isIssueReference(task: string): boolean {
-  return ISSUE_NUMBER_REGEX.test(task.trim());
-}
-
-/**
- * Resolve issue references in a task string.
- * If task contains `#N` patterns (space-separated), fetches issues and returns formatted text.
- * Otherwise returns the task string as-is.
- *
- * Checks gh CLI availability before fetching.
- * Throws if gh CLI is not available or issue fetch fails.
- */
-export function resolveIssueTask(task: string): string {
-  const tokens = task.trim().split(/\s+/);
-  const issueNumbers = parseIssueNumbers(tokens);
-
-  if (issueNumbers.length === 0) {
-    return task;
-  }
-
-  const ghStatus = checkGhCli();
-  if (!ghStatus.available) {
-    throw new Error(ghStatus.error ?? 'gh CLI is not available');
-  }
-
-  log.info('Resolving issue references', { issueNumbers });
-
-  const issues = issueNumbers.map((n) => fetchIssue(n));
-  return issues.map(formatIssueAsTask).join('\n\n---\n\n');
-}
-
-/**
  * Filter labels to only those that exist on the repository.
  */
 function filterExistingLabels(labels: string[]): string[] {
@@ -195,7 +91,7 @@ function filterExistingLabels(labels: string[]): string[] {
 }
 
 /**
- * Create a GitHub Issue via `gh issue create`. 
+ * Create a GitHub Issue via `gh issue create`.
  */
 export function createIssue(options: CreateIssueOptions): CreateIssueResult {
   const ghStatus = checkGhCli();

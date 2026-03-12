@@ -14,6 +14,7 @@ import {
   resolveConfigValues,
   isVerboseMode,
 } from '../../infra/config/index.js';
+import { initGitProvider } from '../../infra/git/index.js';
 import { setQuietMode } from '../../shared/context.js';
 import { setLogLevel } from '../../shared/ui/index.js';
 import { initDebugLogger, createLogger, setVerboseConsole } from '../../shared/utils/index.js';
@@ -67,6 +68,7 @@ export async function runPreActionHook(): Promise<void> {
 
   await initGlobalDirs({ nonInteractive: pipelineMode });
   initProjectDirs(resolvedCwd);
+  initGitProvider(resolvedCwd);
 
   const verbose = isVerboseMode(resolvedCwd);
   initDebugLogger(verbose ? { enabled: true } : undefined, resolvedCwd);

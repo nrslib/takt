@@ -46,6 +46,9 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
   if (config.allowGitFilters !== undefined) {
     raw.allow_git_filters = config.allowGitFilters;
   }
+  if (config.vcsProvider !== undefined) {
+    raw.vcs_provider = config.vcsProvider;
+  }
   if (config.autoPr !== undefined) {
     raw.auto_pr = config.autoPr;
   }

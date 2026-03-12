@@ -112,6 +112,8 @@ export interface ProjectConfig {
   autoPr?: boolean;
   /** Create PR as draft */
   draftPr?: boolean;
+  /** VCS provider selection (github or gitlab) */
+  vcsProvider?: 'github' | 'gitlab';
   /** Base branch to clone from (overrides global baseBranch) */
   baseBranch?: string;
   /** Submodule acquisition mode (all or explicit path list) */

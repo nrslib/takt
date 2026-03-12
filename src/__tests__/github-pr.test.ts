@@ -19,9 +19,9 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   getErrorMessage: (e: unknown) => String(e),
 }));
 
-import { buildPrBody, findExistingPr, createPullRequest, fetchPrReviewComments, formatPrReviewAsTask } from '../infra/github/pr.js';
-import type { GitHubIssue } from '../infra/github/types.js';
-import type { PrReviewData } from '../infra/git/types.js';
+import { findExistingPr, createPullRequest, fetchPrReviewComments } from '../infra/github/pr.js';
+import { buildPrBody, formatPrReviewAsTask } from '../infra/git/format.js';
+import type { Issue, PrReviewData } from '../infra/git/types.js';
 
 describe('findExistingPr', () => {
   beforeEach(() => {
@@ -102,7 +102,7 @@ describe('createPullRequest', () => {
 
 describe('buildPrBody', () => {
   it('should build body with single issue and report', () => {
-    const issue: GitHubIssue = {
+    const issue: Issue = {
       number: 99,
       title: 'Add login feature',
       body: 'Implement username/password authentication.',
@@ -120,7 +120,7 @@ describe('buildPrBody', () => {
   });
 
   it('should use title when body is empty', () => {
-    const issue: GitHubIssue = {
+    const issue: Issue = {
       number: 10,
       title: 'Fix bug',
       body: '',
@@ -144,7 +144,7 @@ describe('buildPrBody', () => {
   });
 
   it('should support multiple issues', () => {
-    const issues: GitHubIssue[] = [
+    const issues: Issue[] = [
       {
         number: 1,
         title: 'First issue',

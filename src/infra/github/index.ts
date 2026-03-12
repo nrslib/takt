@@ -2,11 +2,7 @@
  * GitHub integration - barrel exports
  */
 
-export {
-  formatIssueAsTask,
-  parseIssueNumbers,
-  isIssueReference,
-  resolveIssueTask,
-} from './issue.js';
+export { checkGhCli, fetchIssue, createIssue } from './issue.js';
+export type { GitHubIssue, GhCliStatus, CreateIssueOptions, CreateIssueResult } from './types.js';
 
-export { buildPrBody, formatPrReviewAsTask } from './pr.js';
+export { findExistingPr, commentOnPr, fetchPrReviewComments, createPullRequest } from './pr.js';

@@ -75,6 +75,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     allow_git_filters,
     auto_pr,
     draft_pr,
+    vcs_provider,
     base_branch,
     submodules,
     with_submodules,
@@ -120,6 +121,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     allowGitFilters: allow_git_filters as boolean | undefined,
     autoPr: auto_pr as boolean | undefined,
     draftPr: draft_pr as boolean | undefined,
+    vcsProvider: vcs_provider as ProjectConfig['vcsProvider'],
     baseBranch: base_branch as string | undefined,
     submodules: normalizedSubmodules,
     withSubmodules: effectiveWithSubmodules,
@@ -183,6 +185,7 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
   if (config.draftPr !== undefined) savePayload.draft_pr = config.draftPr;
   if (config.allowGitHooks !== undefined) savePayload.allow_git_hooks = config.allowGitHooks;
   if (config.allowGitFilters !== undefined) savePayload.allow_git_filters = config.allowGitFilters;
+  if (config.vcsProvider !== undefined) savePayload.vcs_provider = config.vcsProvider;
   if (config.baseBranch !== undefined) savePayload.base_branch = config.baseBranch;
   if (config.branchNameStrategy !== undefined) savePayload.branch_name_strategy = config.branchNameStrategy;
   if (config.minimalOutput !== undefined) savePayload.minimal_output = config.minimalOutput;
@@ -223,6 +226,7 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
   delete savePayload.draftPr;
   delete savePayload.allowGitHooks;
   delete savePayload.allowGitFilters;
+  delete savePayload.vcsProvider;
   delete savePayload.baseBranch;
   delete savePayload.withSubmodules;
   delete savePayload.branchNameStrategy;

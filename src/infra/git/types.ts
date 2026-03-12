@@ -1,7 +1,6 @@
-export interface CliStatus {
-  available: boolean;
-  error?: string;
-}
+export type CliStatus =
+  | { available: true }
+  | { available: false; error: string };
 
 export interface Issue {
   number: number;

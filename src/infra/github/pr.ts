@@ -7,7 +7,7 @@
 import { execFileSync } from 'node:child_process';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { checkGhCli } from './issue.js';
-import type { Issue, CreatePrOptions, CreatePrResult, ExistingPr, CommentResult, PrReviewData, PrReviewComment } from '../git/types.js';
+import type { CreatePrOptions, CreatePrResult, ExistingPr, CommentResult, PrReviewData, PrReviewComment } from '../git/types.js';
 
 const log = createLogger('github-pr');
 
@@ -35,7 +35,7 @@ export function findExistingPr(cwd: string, branch: string): ExistingPr | undefi
 export function commentOnPr(cwd: string, prNumber: number, body: string): CommentResult {
   const ghStatus = checkGhCli();
   if (!ghStatus.available) {
-    return { success: false, error: ghStatus.error ?? 'gh CLI is not available' };
+    return { success: false, error: ghStatus.error };
   }
 
   try {
@@ -170,54 +170,10 @@ export function fetchPrReviewComments(prNumber: number): PrReviewData {
   };
 }
 
-/**
- * Format PR review data into task text for piece execution.
- */
-export function formatPrReviewAsTask(prReview: PrReviewData): string {
-  const parts: string[] = [];
-
-  parts.push(`## PR #${prReview.number} Review Comments: ${prReview.title}`);
-
-  if (prReview.body) {
-    parts.push('');
-    parts.push('### PR Description');
-    parts.push(prReview.body);
-  }
-
-  if (prReview.reviews.length > 0) {
-    parts.push('');
-    parts.push('### Review Comments');
-    for (const review of prReview.reviews) {
-      const location = review.path
-        ? `\n  File: ${review.path}${review.line ? `, Line: ${review.line}` : ''}`
-        : '';
-      parts.push(`**${review.author}**: ${review.body}${location}`);
-    }
-  }
-
-  if (prReview.comments.length > 0) {
-    parts.push('');
-    parts.push('### Conversation Comments');
-    for (const comment of prReview.comments) {
-      parts.push(`**${comment.author}**: ${comment.body}`);
-    }
-  }
-
-  if (prReview.files.length > 0) {
-    parts.push('');
-    parts.push('### Changed Files');
-    for (const file of prReview.files) {
-      parts.push(`- ${file}`);
-    }
-  }
-
-  return parts.join('\n');
-}
-
 export function createPullRequest(cwd: string, options: CreatePrOptions): CreatePrResult {
   const ghStatus = checkGhCli();
   if (!ghStatus.available) {
-    return { success: false, error: ghStatus.error ?? 'gh CLI is not available' };
+    return { success: false, error: ghStatus.error };
   }
 
   const args = [
@@ -257,30 +213,4 @@ export function createPullRequest(cwd: string, options: CreatePrOptions): Create
     log.error('PR creation failed', { error: errorMessage });
     return { success: false, error: errorMessage };
   }
-}
-
-/**
- * Build PR body from issues and execution report.
- * Supports multiple issues (adds "Closes #N" for each).
- */
-export function buildPrBody(issues: Issue[] | undefined, report: string): string {
-  const parts: string[] = [];
-
-  parts.push('## Summary');
-  if (issues && issues.length > 0) {
-    parts.push('');
-    parts.push(issues[0]!.body || issues[0]!.title);
-  }
-
-  parts.push('');
-  parts.push('## Execution Report');
-  parts.push('');
-  parts.push(report);
-
-  if (issues && issues.length > 0) {
-    parts.push('');
-    parts.push(issues.map((issue) => `Closes #${issue.number}`).join('\n'));
-  }
-
-  return parts.join('\n');
 }

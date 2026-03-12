@@ -526,6 +526,8 @@ export const ProjectConfigSchema = z.object({
   base_branch: z.string().optional(),
   /** Piece-level overrides (quality_gates, etc.) */
   piece_overrides: PieceOverridesSchema,
+  /** VCS provider selection (github or gitlab) */
+  vcs_provider: z.enum(['github', 'gitlab']).optional(),
   /** Submodule acquisition mode (all or explicit path list) */
   submodules: z.union([
     z.string().refine((value) => value.trim().toLowerCase() === 'all', {
