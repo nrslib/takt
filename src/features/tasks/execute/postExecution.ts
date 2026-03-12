@@ -8,8 +8,7 @@
 import { autoCommitAndPush, pushBranch } from '../../../infra/task/index.js';
 import { info, error, success } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
-import { buildPrBody } from '../../../infra/github/index.js';
-import { getGitProvider } from '../../../infra/git/index.js';
+import { buildPrBody, getGitProvider } from '../../../infra/git/index.js';
 import type { Issue } from '../../../infra/git/index.js';
 
 const log = createLogger('postExecution');

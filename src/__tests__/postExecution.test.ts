@@ -27,9 +27,6 @@ vi.mock('../infra/git/index.js', () => ({
     commentOnPr: (...args: unknown[]) => mockCommentOnPr(...args),
     createPullRequest: (...args: unknown[]) => mockCreatePullRequest(...args),
   }),
-}));
-
-vi.mock('../infra/github/index.js', () => ({
   buildPrBody: (...args: unknown[]) => mockBuildPrBody(...args),
 }));
 

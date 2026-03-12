@@ -7,7 +7,7 @@
 import type { Command } from 'commander';
 import type { TaskExecutionOptions } from '../../features/tasks/index.js';
 import type { ProviderType } from '../../infra/providers/index.js';
-import { isIssueReference } from '../../infra/github/index.js';
+import { isIssueReference } from '../../infra/git/index.js';
 
 const REMOVED_ROOT_COMMANDS = new Set(['switch']);
 

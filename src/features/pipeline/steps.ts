@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { formatIssueAsTask, buildPrBody, formatPrReviewAsTask } from '../../infra/github/index.js';
-import { getGitProvider, type Issue } from '../../infra/git/index.js';
+import { formatIssueAsTask, buildPrBody, formatPrReviewAsTask, getGitProvider } from '../../infra/git/index.js';
+import type { Issue } from '../../infra/git/index.js';
 import { resolveConfigValue } from '../../infra/config/index.js';
 import { stageAndCommit, resolveBaseBranch, pushBranch, checkoutBranch } from '../../infra/task/index.js';
 import { executeTask, confirmAndCreateWorktree, type TaskExecutionOptions, type PipelineExecutionOptions } from '../tasks/index.js';
@@ -96,14 +96,14 @@ function buildPipelinePrBody(
   return buildPrBody(issue ? [issue] : undefined, report);
 }
 
-function fetchGitHubResource<T>(
+function fetchVcsResource<T>(
   label: string,
   fetch: (provider: ReturnType<typeof getGitProvider>) => T,
 ): T | undefined {
   const gitProvider = getGitProvider();
   const cliStatus = gitProvider.checkCliStatus();
   if (!cliStatus.available) {
-    error(cliStatus.error ?? 'gh CLI is not available');
+    error(cliStatus.error);
     return undefined;
   }
   try {
@@ -117,7 +117,7 @@ function fetchGitHubResource<T>(
 export function resolveTaskContent(options: PipelineExecutionOptions): TaskContent | undefined {
   if (options.prNumber) {
     info(`Fetching PR #${options.prNumber} review comments...`);
-    const prReview = fetchGitHubResource(
+    const prReview = fetchVcsResource(
       `PR #${options.prNumber}`,
       (provider) => provider.fetchPrReviewComments(options.prNumber!),
     );
@@ -132,7 +132,7 @@ export function resolveTaskContent(options: PipelineExecutionOptions): TaskConte
   }
   if (options.issueNumber) {
     info(`Fetching issue #${options.issueNumber}...`);
-    const issue = fetchGitHubResource(
+    const issue = fetchVcsResource(
       `issue #${options.issueNumber}`,
       (provider) => provider.fetchIssue(options.issueNumber!),
     );

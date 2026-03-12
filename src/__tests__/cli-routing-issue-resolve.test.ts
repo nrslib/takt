@@ -36,13 +36,11 @@ vi.mock('../infra/git/index.js', () => ({
     checkCliStatus: (...args: unknown[]) => mockCheckCliStatus(...args),
     fetchIssue: (...args: unknown[]) => mockFetchIssue(...args),
   }),
-}));
-
-vi.mock('../infra/github/issue.js', () => ({
   parseIssueNumbers: vi.fn(() => []),
   formatIssueAsTask: vi.fn(),
   isIssueReference: vi.fn(),
   resolveIssueTask: vi.fn(),
+  formatPrReviewAsTask: vi.fn(),
 }));
 
 vi.mock('../features/tasks/index.js', () => ({
@@ -113,7 +111,7 @@ vi.mock('../app/cli/helpers.js', () => ({
   isDirectTask: vi.fn(() => false),
 }));
 
-import { formatIssueAsTask, parseIssueNumbers } from '../infra/github/issue.js';
+import { formatIssueAsTask, parseIssueNumbers } from '../infra/git/index.js';
 import { selectAndExecuteTask, determinePiece, createIssueAndSaveTask } from '../features/tasks/index.js';
 import { interactiveMode } from '../features/interactive/index.js';
 import { resolveConfigValues, loadPersonaSessions } from '../infra/config/index.js';
@@ -217,7 +215,7 @@ describe('Issue resolution in routing', () => {
       const issue131 = createMockIssue(131);
       mockCheckCliStatus.mockReturnValue({ available: true });
       mockFetchIssue.mockReturnValue(issue131);
-      mockFormatIssueAsTask.mockReturnValue('## GitHub Issue #131: Issue #131');
+      mockFormatIssueAsTask.mockReturnValue('## Issue #131: Issue #131');
 
       // When
       await executeDefaultAction();
@@ -228,7 +226,7 @@ describe('Issue resolution in routing', () => {
       // Then: interactive mode should receive the formatted issue as initial input
       expect(mockInteractiveMode).toHaveBeenCalledWith(
         '/test/cwd',
-        '## GitHub Issue #131: Issue #131',
+        '## Issue #131: Issue #131',
         expect.anything(),
         undefined,
         undefined,
@@ -272,7 +270,7 @@ describe('Issue resolution in routing', () => {
       mockIsDirectTask.mockReturnValue(true);
       mockCheckCliStatus.mockReturnValue({ available: true });
       mockFetchIssue.mockReturnValue(issue131);
-      mockFormatIssueAsTask.mockReturnValue('## GitHub Issue #131: Issue #131');
+      mockFormatIssueAsTask.mockReturnValue('## Issue #131: Issue #131');
       mockParseIssueNumbers.mockReturnValue([131]);
 
       // When
@@ -281,7 +279,7 @@ describe('Issue resolution in routing', () => {
       // Then: interactive mode should be entered with formatted issue
       expect(mockInteractiveMode).toHaveBeenCalledWith(
         '/test/cwd',
-        '## GitHub Issue #131: Issue #131',
+        '## Issue #131: Issue #131',
         expect.anything(),
         undefined,
         undefined,
@@ -490,7 +488,7 @@ describe('Issue resolution in routing', () => {
       const issue131 = createMockIssue(131);
       mockCheckCliStatus.mockReturnValue({ available: true });
       mockFetchIssue.mockReturnValue(issue131);
-      mockFormatIssueAsTask.mockReturnValue('## GitHub Issue #131');
+      mockFormatIssueAsTask.mockReturnValue('## Issue #131');
       mockInteractiveMode.mockResolvedValue({ action: 'cancel', task: '' });
 
       // When

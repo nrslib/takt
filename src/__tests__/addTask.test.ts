@@ -47,14 +47,6 @@ vi.mock('../infra/task/clone-base-branch.js', () => ({
   branchExists: vi.fn(),
 }));
 
-vi.mock('../infra/git/index.js', () => ({
-  getGitProvider: () => ({
-    createIssue: vi.fn(),
-    checkCliStatus: (...args: unknown[]) => mockCheckCliStatus(...args),
-    fetchPrReviewComments: (...args: unknown[]) => mockFetchPrReviewComments(...args),
-  }),
-}));
-
 const mockIsIssueReference = vi.fn((s: string) => /^#\d+$/.test(s));
 const mockResolveIssueTask = vi.fn();
 const mockParseIssueNumbers = vi.fn((args: string[]) => {
@@ -69,7 +61,12 @@ const mockParseIssueNumbers = vi.fn((args: string[]) => {
 });
 const mockFormatPrReviewAsTask = vi.fn();
 
-vi.mock('../infra/github/index.js', () => ({
+vi.mock('../infra/git/index.js', () => ({
+  getGitProvider: () => ({
+    createIssue: vi.fn(),
+    checkCliStatus: (...args: unknown[]) => mockCheckCliStatus(...args),
+    fetchPrReviewComments: (...args: unknown[]) => mockFetchPrReviewComments(...args),
+  }),
   isIssueReference: (...args: unknown[]) => mockIsIssueReference(...args),
   resolveIssueTask: (...args: unknown[]) => mockResolveIssueTask(...args),
   parseIssueNumbers: (...args: unknown[]) => mockParseIssueNumbers(...args),

@@ -1,6 +1,5 @@
 import { withProgress } from '../../shared/ui/index.js';
-import { formatIssueAsTask, parseIssueNumbers, formatPrReviewAsTask } from '../../infra/github/index.js';
-import { getGitProvider } from '../../infra/git/index.js';
+import { formatIssueAsTask, parseIssueNumbers, formatPrReviewAsTask, getGitProvider } from '../../infra/git/index.js';
 import type { PrReviewData } from '../../infra/git/index.js';
 import { isDirectTask } from './helpers.js';
 export async function resolveIssueInput(
@@ -13,8 +12,8 @@ export async function resolveIssueInput(
       throw new Error(ghStatus.error);
     }
     const issue = await withProgress(
-      'Fetching GitHub Issue...',
-      (fetchedIssue) => `GitHub Issue fetched: #${fetchedIssue.number} ${fetchedIssue.title}`,
+      'Fetching issue...',
+      (fetchedIssue) => `Issue fetched: #${fetchedIssue.number} ${fetchedIssue.title}`,
       async () => getGitProvider().fetchIssue(issueOption),
     );
     return { initialInput: formatIssueAsTask(issue) };
@@ -31,8 +30,8 @@ export async function resolveIssueInput(
       throw new Error(`Invalid issue reference: ${task}`);
     }
     const issues = await withProgress(
-      'Fetching GitHub Issue...',
-      (fetchedIssues) => `GitHub Issues fetched: ${fetchedIssues.map((issue) => `#${issue.number}`).join(', ')}`,
+      'Fetching issues...',
+      (fetchedIssues) => `Issues fetched: ${fetchedIssues.map((issue) => `#${issue.number}`).join(', ')}`,
       async () => issueNumbers.map((n) => getGitProvider().fetchIssue(n)),
     );
     return { initialInput: issues.map(formatIssueAsTask).join('\n\n---\n\n') };

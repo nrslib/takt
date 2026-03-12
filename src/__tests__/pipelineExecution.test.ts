@@ -2,14 +2,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockFetchIssue = vi.fn();
 const mockCheckGhCli = vi.fn().mockReturnValue({ available: true });
-vi.mock('../infra/github/issue.js', () => ({
-  fetchIssue: mockFetchIssue,
-  formatIssueAsTask: vi.fn((issue: { title: string; body: string; number: number }) =>
-    `## GitHub Issue #${issue.number}: ${issue.title}\n\n${issue.body}`
-  ),
-  checkGhCli: mockCheckGhCli,
-}));
-
 const mockCreatePullRequest = vi.fn();
 const mockPushBranch = vi.fn();
 const mockBuildPrBody = vi.fn(() => 'Default PR body');
@@ -17,10 +9,18 @@ const mockFetchPrReviewComments = vi.fn();
 const mockFormatPrReviewAsTask = vi.fn((pr: { number: number; title: string }) =>
   `## PR #${pr.number} Review Comments: ${pr.title}`
 );
-vi.mock('../infra/github/pr.js', () => ({
-  createPullRequest: mockCreatePullRequest,
-  buildPrBody: mockBuildPrBody,
-  fetchPrReviewComments: (...args: unknown[]) => mockFetchPrReviewComments(...args),
+
+vi.mock('../infra/git/index.js', () => ({
+  getGitProvider: () => ({
+    checkCliStatus: (...args: unknown[]) => mockCheckGhCli(...args),
+    fetchIssue: (...args: unknown[]) => mockFetchIssue(...args),
+    createPullRequest: (...args: unknown[]) => mockCreatePullRequest(...args),
+    fetchPrReviewComments: (...args: unknown[]) => mockFetchPrReviewComments(...args),
+  }),
+  formatIssueAsTask: vi.fn((issue: { title: string; body: string; number: number }) =>
+    `## Issue #${issue.number}: ${issue.title}\n\n${issue.body}`
+  ),
+  buildPrBody: (...args: unknown[]) => mockBuildPrBody(...args),
   formatPrReviewAsTask: (...args: unknown[]) => mockFormatPrReviewAsTask(...args),
 }));
 

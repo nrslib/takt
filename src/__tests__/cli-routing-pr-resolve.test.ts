@@ -31,13 +31,12 @@ vi.mock('../infra/git/index.js', () => ({
     fetchIssue: (...args: unknown[]) => mockFetchIssue(...args),
     fetchPrReviewComments: (...args: unknown[]) => mockFetchPrReviewComments(...args),
   }),
-}));
-
-vi.mock('../infra/github/issue.js', () => ({
   parseIssueNumbers: vi.fn(() => []),
   formatIssueAsTask: vi.fn(),
   isIssueReference: vi.fn(),
   resolveIssueTask: vi.fn(),
+  formatPrReviewAsTask: vi.fn((pr: { number: number; title: string }) =>
+    `## PR #${pr.number} Review Comments: ${pr.title}`),
 }));
 
 vi.mock('../features/tasks/index.js', () => ({

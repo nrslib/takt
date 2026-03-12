@@ -24,14 +24,14 @@ export function extractTitle(task: string): string {
 }
 
 /**
- * Create a GitHub Issue from a task description.
+ * Create an issue from a task description.
  *
  * Extracts the first Markdown heading (h1-h3) as the issue title,
  * falling back to the first non-empty line. Truncates to 100 chars.
  * Uses the full task as the body, and displays success/error messages.
  */
 export function createIssueFromTask(task: string, options?: { labels?: string[] }): number | undefined {
-  info('Creating GitHub Issue...');
+  info('Creating issue...');
   const title = extractTitle(task);
   const effectiveLabels = options?.labels?.filter((l) => l.length > 0) ?? [];
   const labels = effectiveLabels.length > 0 ? effectiveLabels : undefined;

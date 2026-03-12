@@ -51,15 +51,15 @@ vi.mock('node:child_process', () => ({
   execFileSync: vi.fn(),
 }));
 
-vi.mock('../infra/github/issue.js', () => ({
-  fetchIssue: mockFetchIssue,
-  formatIssueAsTask: mockFormatIssueAsTask,
-  checkGhCli: mockCheckGhCli,
-}));
-
-vi.mock('../infra/github/pr.js', () => ({
-  createPullRequest: mockCreatePullRequest,
+vi.mock('../infra/git/index.js', () => ({
+  getGitProvider: () => ({
+    checkCliStatus: (...args: unknown[]) => mockCheckGhCli(...args),
+    fetchIssue: (...args: unknown[]) => mockFetchIssue(...args),
+    createPullRequest: (...args: unknown[]) => mockCreatePullRequest(...args),
+  }),
+  formatIssueAsTask: (...args: unknown[]) => mockFormatIssueAsTask(...args),
   buildPrBody: vi.fn().mockReturnValue('PR body'),
+  formatPrReviewAsTask: vi.fn(),
 }));
 
 vi.mock('../infra/task/git.js', () => ({

@@ -13,8 +13,8 @@ import type { Language } from '../../../core/models/types.js';
 import { TaskRunner, type TaskFileData, summarizeTaskName } from '../../../infra/task/index.js';
 import { determinePiece } from '../execute/selectAndExecute.js';
 import { createLogger, getErrorMessage, generateReportDir } from '../../../shared/utils/index.js';
-import { isIssueReference, resolveIssueTask, parseIssueNumbers, formatPrReviewAsTask } from '../../../infra/github/index.js';
-import { getGitProvider, type PrReviewData } from '../../../infra/git/index.js';
+import { isIssueReference, resolveIssueTask, parseIssueNumbers, formatPrReviewAsTask, getGitProvider } from '../../../infra/git/index.js';
+import type { PrReviewData } from '../../../infra/git/index.js';
 import { firstLine } from '../../../infra/task/naming.js';
 import { extractTitle, createIssueFromTask } from './issueTask.js';
 import { displayTaskCreationResult, promptWorktreeSettings, type WorktreeSettings } from './worktree-settings.js';
@@ -84,7 +84,7 @@ export async function saveTaskFile(
 
 
 /**
- * Prompt user to select a label for the GitHub Issue.
+ * Prompt user to select a label for the issue.
  *
  * Presents 4 fixed options: None, bug, enhancement, custom input.
  * Returns an array of selected labels (empty if none selected).
@@ -169,7 +169,7 @@ export async function addTask(
     const provider = getGitProvider();
     const ghStatus = provider.checkCliStatus();
     if (!ghStatus.available) {
-      error(ghStatus.error ?? 'GitHub CLI is unavailable');
+      error(ghStatus.error);
       return;
     }
 
@@ -222,8 +222,8 @@ export async function addTask(
       const numbers = parseIssueNumbers([trimmedTask]);
       const primaryIssueNumber = numbers[0];
       taskContent = await withProgress(
-        'Fetching GitHub Issue...',
-        primaryIssueNumber ? `GitHub Issue fetched: #${primaryIssueNumber}` : 'GitHub Issue fetched',
+        'Fetching issue...',
+        primaryIssueNumber ? `Issue fetched: #${primaryIssueNumber}` : 'Issue fetched',
         async () => resolveIssueTask(trimmedTask),
       );
       if (numbers.length > 0) {
@@ -231,7 +231,7 @@ export async function addTask(
       }
     } catch (e) {
       const msg = getErrorMessage(e);
-      log.error('Failed to fetch GitHub Issue', { task: trimmedTask, error: msg });
+      log.error('Failed to fetch issue', { task: trimmedTask, error: msg });
       info(`Failed to fetch issue ${trimmedTask}: ${msg}`);
       return;
     }
