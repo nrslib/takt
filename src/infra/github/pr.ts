@@ -80,12 +80,13 @@ interface GhPrApiReviewCommentResponse {
 }
 
 const INLINE_REVIEW_COMMENTS_PER_PAGE = 100;
+const MAX_PAGES = 100;
 
 function fetchInlineReviewComments(owner: string, repo: string, prNumber: number): GhPrApiReviewCommentResponse[] {
   const comments: GhPrApiReviewCommentResponse[] = [];
   let page = 1;
 
-  while (true) {
+  while (page <= MAX_PAGES) {
     const rawInlineReviewComments = execFileSync(
       'gh',
       ['api', `/repos/${owner}/${repo}/pulls/${prNumber}/comments?per_page=${INLINE_REVIEW_COMMENTS_PER_PAGE}&page=${page}`],
@@ -96,11 +97,13 @@ function fetchInlineReviewComments(owner: string, repo: string, prNumber: number
     comments.push(...inlineReviewComments);
 
     if (inlineReviewComments.length < INLINE_REVIEW_COMMENTS_PER_PAGE) {
-      return comments;
+      break;
     }
 
     page += 1;
   }
+
+  return comments;
 }
 
 function parseRepositoryFromPrUrl(prUrl: string): { owner: string; repo: string } {

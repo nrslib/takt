@@ -425,6 +425,41 @@ describe('fetchPrReviewComments', () => {
     ]);
   });
 
+  it('should return collected comments when MAX_PAGES limit is reached', () => {
+    // Given
+    const ghResponse = {
+      number: 15,
+      title: 'Max pages hit',
+      body: '',
+      url: 'https://github.com/org/repo/pull/15',
+      headRefName: 'fix/max-pages',
+      comments: [],
+      reviews: [],
+      files: [],
+    };
+    // Every page returns exactly per_page (100) items, simulating a never-ending API
+    const fullPage = Array.from({ length: 100 }, (_, i) => ({
+      body: `Comment ${i + 1}`,
+      path: 'src/index.ts',
+      line: i + 1,
+      user: { login: 'reviewer-max-pages' },
+    }));
+
+    mockExecFileSync.mockReturnValueOnce(JSON.stringify(ghResponse));
+    // Return full pages for all 100 pages
+    for (let i = 0; i < 100; i++) {
+      mockExecFileSync.mockReturnValueOnce(JSON.stringify(fullPage));
+    }
+
+    // When
+    const result = fetchPrReviewComments(15);
+
+    // Then — should have called gh api exactly 101 times (1 for pr view + 100 pages)
+    expect(mockExecFileSync).toHaveBeenCalledTimes(101);
+    // Should have collected 100 pages × 100 comments = 10000 comments
+    expect(result.reviews).toHaveLength(10000);
+  });
+
   it('should throw when gh CLI fails', () => {
     // Given
     mockExecFileSync.mockImplementation(() => { throw new Error('gh: PR not found'); });
