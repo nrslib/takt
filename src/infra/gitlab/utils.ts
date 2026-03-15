@@ -5,9 +5,10 @@
  */
 
 import { execFileSync } from 'node:child_process';
+import { MAX_PAGES } from '../git/constants.js';
 import type { CliStatus } from '../git/types.js';
 
-const MAX_PAGES = 100;
+export const ITEMS_PER_PAGE = 100;
 
 export function parseJson<T>(raw: string, context: string): T {
   try {

@@ -7,6 +7,7 @@
 import { execFileSync } from 'node:child_process';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { checkGhCli } from './issue.js';
+import { MAX_PAGES } from '../git/constants.js';
 import type { CreatePrOptions, CreatePrResult, ExistingPr, CommentResult, PrReviewData, PrReviewComment } from '../git/types.js';
 
 const log = createLogger('github-pr');
@@ -71,7 +72,19 @@ interface GhPrViewReviewResponse {
   files: Array<{ path: string }>;
 }
 
-interface GhPrApiReviewCommentResponse {
+/** Raw shape from GitHub Pull Request Review Comments API (null fields normalized on parse) */
+interface GhPrApiReviewComment {
+  body: string;
+  path: string;
+  line?: number;
+  original_line?: number;
+  user: { login: string };
+}
+
+const INLINE_REVIEW_COMMENTS_PER_PAGE = 100;
+
+/** Raw JSON shape from GitHub API (line/original_line are nullable) */
+interface GhPrApiRawReviewComment {
   body: string;
   path: string;
   line: number | null;
@@ -79,11 +92,18 @@ interface GhPrApiReviewCommentResponse {
   user: { login: string };
 }
 
-const INLINE_REVIEW_COMMENTS_PER_PAGE = 100;
-const MAX_PAGES = 100;
+function normalizeReviewComment(raw: GhPrApiRawReviewComment): GhPrApiReviewComment {
+  return {
+    body: raw.body,
+    path: raw.path,
+    line: raw.line ?? undefined,
+    original_line: raw.original_line ?? undefined,
+    user: raw.user,
+  };
+}
 
-function fetchInlineReviewComments(owner: string, repo: string, prNumber: number): GhPrApiReviewCommentResponse[] {
-  const comments: GhPrApiReviewCommentResponse[] = [];
+function fetchInlineReviewComments(owner: string, repo: string, prNumber: number): GhPrApiReviewComment[] {
+  const comments: GhPrApiReviewComment[] = [];
   let page = 1;
 
   while (page <= MAX_PAGES) {
@@ -92,11 +112,12 @@ function fetchInlineReviewComments(owner: string, repo: string, prNumber: number
       ['api', `/repos/${owner}/${repo}/pulls/${prNumber}/comments?per_page=${INLINE_REVIEW_COMMENTS_PER_PAGE}&page=${page}`],
       { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
     );
-    const inlineReviewComments = JSON.parse(rawInlineReviewComments) as GhPrApiReviewCommentResponse[];
+    const parsed = JSON.parse(rawInlineReviewComments) as GhPrApiRawReviewComment[];
+    const normalized = parsed.map(normalizeReviewComment);
 
-    comments.push(...inlineReviewComments);
+    comments.push(...normalized);
 
-    if (inlineReviewComments.length < INLINE_REVIEW_COMMENTS_PER_PAGE) {
+    if (parsed.length < INLINE_REVIEW_COMMENTS_PER_PAGE) {
       break;
     }
 
