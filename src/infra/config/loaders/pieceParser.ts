@@ -27,7 +27,7 @@ import {
 type RawStep = z.output<typeof PieceMovementRawSchema>;
 import type { MovementProviderOptions } from '../../../core/models/piece-types.js';
 import { normalizeRuntime } from '../configNormalizers.js';
-import type { PieceOverrides } from '../../../core/models/config-types.js';
+import type { PieceOverrides, PieceRuntimePrepareConfig } from '../../../core/models/config-types.js';
 import { applyQualityGateOverrides } from './qualityGateOverrides.js';
 import { loadProjectConfig } from '../project/projectConfig.js';
 import { loadGlobalConfig } from '../global/globalConfig.js';
@@ -35,6 +35,7 @@ import { normalizeConfigProviderReferenceDetailed, type ConfigProviderReference 
 import { mergeProviderOptions } from '../providerOptions.js';
 
 type RawProviderReference = RawStep['provider'];
+const RUNTIME_PREPARE_PRESETS = new Set(['gradle', 'node']);
 
 function normalizeProviderReference(
   provider: RawProviderReference,
@@ -386,6 +387,7 @@ export function normalizePieceConfig(
   context?: FacetResolutionContext,
   projectOverrides?: PieceOverrides,
   globalOverrides?: PieceOverrides,
+  pieceRuntimePreparePolicy?: PieceRuntimePrepareConfig,
 ): PieceConfig {
   const parsed = PieceConfigRawSchema.parse(raw);
 
@@ -411,6 +413,7 @@ export function normalizePieceConfig(
   const pieceModel = normalizedPieceProvider.model;
   const pieceProviderOptions = normalizedPieceProvider.providerOptions;
   const pieceRuntime = normalizeRuntime(parsed.piece_config?.runtime);
+  validatePieceRuntimePrepare(pieceRuntime, pieceRuntimePreparePolicy);
 
   const movements: PieceMovement[] = parsed.movements.map((step) =>
     normalizeStepFromRaw(step, pieceDir, sections, pieceProvider, pieceModel, pieceProviderOptions, context, projectOverrides, globalOverrides),
@@ -463,6 +466,34 @@ export function loadPieceFromFile(filePath: string, projectDir: string): PieceCo
   const globalConfig = loadGlobalConfig();
   const projectOverrides = projectConfig.pieceOverrides;
   const globalOverrides = globalConfig.pieceOverrides;
+  const pieceRuntimePreparePolicy = {
+    ...globalConfig.pieceRuntimePrepare,
+    ...projectConfig.pieceRuntimePrepare,
+  };
 
-  return normalizePieceConfig(raw, pieceDir, context, projectOverrides, globalOverrides);
+  return normalizePieceConfig(
+    raw,
+    pieceDir,
+    context,
+    projectOverrides,
+    globalOverrides,
+    pieceRuntimePreparePolicy,
+  );
+}
+
+function validatePieceRuntimePrepare(
+  runtime: PieceConfig['runtime'],
+  policy?: PieceRuntimePrepareConfig,
+): void {
+  const prepareEntries = runtime?.prepare ?? [];
+  if (prepareEntries.length === 0) return;
+
+  for (const entry of prepareEntries) {
+    if (RUNTIME_PREPARE_PRESETS.has(entry)) continue;
+    if (policy?.customScripts === true) continue;
+    throw new Error(
+      `Piece runtime.prepare custom script "${entry}" is disabled by default. `
+      + 'Configure piece_runtime_prepare.custom_scripts in project/global config to allow it.'
+    );
+  }
 }

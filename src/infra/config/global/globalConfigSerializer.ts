@@ -116,6 +116,11 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
       prepare: [...new Set(config.runtime.prepare)],
     };
   }
+  if (config.pieceRuntimePrepare) {
+    raw.piece_runtime_prepare = {
+      custom_scripts: config.pieceRuntimePrepare.customScripts,
+    };
+  }
   if (config.preventSleep !== undefined) {
     raw.prevent_sleep = config.preventSleep;
   }

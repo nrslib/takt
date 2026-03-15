@@ -498,6 +498,32 @@ piece_overrides:
     });
   });
 
+  describe('piece_runtime_prepare policy round-trip', () => {
+    it('should load piece_runtime_prepare policy block', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(
+        configPath,
+        ['piece_runtime_prepare:', '  custom_scripts: true'].join('\n'),
+        'utf-8',
+      );
+
+      const loaded = loadProjectConfig(testDir);
+
+      expect(loaded.pieceRuntimePrepare).toEqual({ customScripts: true });
+    });
+
+    it('should round-trip piece_runtime_prepare policy block', () => {
+      const config: ProjectLocalConfig = {
+        pieceRuntimePrepare: { customScripts: true },
+      };
+
+      saveProjectConfig(testDir, config);
+      const reloaded = loadProjectConfig(testDir);
+
+      expect(reloaded.pieceRuntimePrepare).toEqual({ customScripts: true });
+    });
+  });
+
   describe('tilde expansion for analytics path', () => {
     it('should expand "~/" in analytics.events_path on load', () => {
       const configPath = join(testDir, '.takt', 'config.yaml');

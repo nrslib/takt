@@ -481,6 +481,10 @@ export const PipelineConfigSchema = z.object({
   pr_body_template: z.string().optional(),
 }).strict();
 
+export const PieceRuntimePrepareConfigSchema = z.object({
+  custom_scripts: z.boolean().optional(),
+}).strict();
+
 /** Piece category config schema (recursive) */
 export type PieceCategoryConfigNode = {
   pieces?: string[];
@@ -516,6 +520,8 @@ export const ProjectConfigSchema = z.object({
   provider_profiles: ProviderPermissionProfilesSchema,
   /** Project-level runtime environment configuration */
   runtime: RuntimeConfigSchema,
+  /** Piece-level runtime.prepare policy */
+  piece_runtime_prepare: PieceRuntimePrepareConfigSchema.optional(),
   /** Number of tasks to run concurrently in takt run (default from global: 1, max: 10) */
   concurrency: z.number().int().min(1).max(10).optional(),
   /** Polling interval in ms for picking up new tasks during takt run (default: 500, range: 100-5000) */

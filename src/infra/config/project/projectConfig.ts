@@ -90,6 +90,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     interactive_preview_movements,
     piece_overrides,
     runtime,
+    piece_runtime_prepare,
   } = parsedConfig;
   const normalizedProvider = normalizeConfigProviderReference(
     provider as RawProviderReference,
@@ -140,6 +141,9 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
       } | undefined
     ),
     runtime: normalizeRuntime(runtime),
+    pieceRuntimePrepare: piece_runtime_prepare ? {
+      customScripts: piece_runtime_prepare.custom_scripts,
+    } : undefined,
   };
 }
 
@@ -230,6 +234,7 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
   delete savePayload.taskPollIntervalMs;
   delete savePayload.interactivePreviewMovements;
   delete savePayload.personaProviders;
+  delete savePayload.pieceRuntimePrepare;
 
   const rawPieceOverrides = denormalizePieceOverrides(config.pieceOverrides);
   if (rawPieceOverrides) {
@@ -242,6 +247,13 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
     savePayload.runtime = normalizedRuntime;
   } else {
     delete savePayload.runtime;
+  }
+  if (config.pieceRuntimePrepare) {
+    savePayload.piece_runtime_prepare = {
+      custom_scripts: config.pieceRuntimePrepare.customScripts,
+    };
+  } else {
+    delete savePayload.piece_runtime_prepare;
   }
 
   const content = stringify(savePayload, { indent: 2 });

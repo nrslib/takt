@@ -82,6 +82,12 @@ export interface PipelineConfig {
   prBodyTemplate?: string;
 }
 
+/** Piece-level runtime.prepare policy */
+export interface PieceRuntimePrepareConfig {
+  /** Allow custom script paths from piece YAML (default: false) */
+  customScripts?: boolean;
+}
+
 /** Notification sound toggles per event timing */
 export interface NotificationSoundEventsConfig {
   /** Warning when iteration limit is reached */
@@ -142,6 +148,8 @@ export interface ProjectConfig {
   pieceOverrides?: PieceOverrides;
   /** Runtime environment configuration (project-level override) */
   runtime?: PieceRuntimeConfig;
+  /** Piece-level runtime.prepare policy */
+  pieceRuntimePrepare?: PieceRuntimePrepareConfig;
 }
 
 /**

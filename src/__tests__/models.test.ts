@@ -725,4 +725,16 @@ describe('ProjectConfigSchema', () => {
     expect(provider?.model).toBe('gpt-5.3');
     expect(provider?.network_access).toBe(false);
   });
+
+  it('should parse piece_runtime_prepare policy block', () => {
+    const result = ProjectConfigSchema.parse({
+      piece_runtime_prepare: {
+        custom_scripts: true,
+      },
+    } as unknown) as Record<string, unknown>;
+
+    expect(result.piece_runtime_prepare).toEqual({
+      custom_scripts: true,
+    });
+  });
 });
