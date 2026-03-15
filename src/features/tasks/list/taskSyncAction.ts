@@ -82,7 +82,6 @@ export async function syncBranchWithRoot(
     cwd: worktreePath,
     model: config.model,
     permissionMode: 'edit',
-    onPermissionRequest: autoApproveBash,
     onStream: new StreamDisplay('conflict-resolver', false).createHandler(),
   });
 
@@ -98,11 +97,6 @@ export async function syncBranchWithRoot(
   abortMerge(worktreePath);
   logError('Failed to resolve conflicts. Merge aborted.');
   return false;
-}
-
-/** Auto-approve all tool invocations (agent runs in isolated worktree) */
-async function autoApproveBash(request: { toolName: string; input: Record<string, unknown> }) {
-  return { behavior: 'allow' as const, updatedInput: request.input };
 }
 
 function pushSynced(worktreePath: string, projectDir: string, target: BranchActionTarget): boolean {

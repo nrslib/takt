@@ -180,7 +180,6 @@ describe('syncBranchWithRoot', () => {
         cwd: task.worktreePath,
         model: 'sonnet',
         permissionMode: 'edit',
-        onPermissionRequest: expect.any(Function),
         onStream: expect.any(Function),
       }),
     );
