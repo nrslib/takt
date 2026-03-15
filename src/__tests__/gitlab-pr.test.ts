@@ -296,8 +296,11 @@ describe('fetchMrReviewComments', () => {
       source_branch: 'fix/auth-bug',
       target_branch: 'main',
     });
-    // glab mr diff --name-only returns changed file list
-    const diffNameOnly = 'src/auth.ts\nsrc/auth.test.ts\n';
+    // glab api returns diffs
+    const diffsResponse = [
+      { new_path: 'src/auth.ts' },
+      { new_path: 'src/auth.test.ts' },
+    ];
     // glab api returns notes (discussions)
     const notesResponse = [
       {
@@ -325,7 +328,7 @@ describe('fetchMrReviewComments', () => {
     ];
     mockExecFileSync
       .mockReturnValueOnce(JSON.stringify(mrViewResponse))
-      .mockReturnValueOnce(diffNameOnly)
+      .mockReturnValueOnce(JSON.stringify(diffsResponse))
       .mockReturnValueOnce(JSON.stringify(notesResponse))
       .mockReturnValueOnce(JSON.stringify(discussionsResponse));
 
@@ -357,7 +360,7 @@ describe('fetchMrReviewComments', () => {
     ];
     mockExecFileSync
       .mockReturnValueOnce(JSON.stringify(mrViewResponse))
-      .mockReturnValueOnce('\n') // glab mr diff --name-only
+      .mockReturnValueOnce(JSON.stringify([])) // diffs API
       .mockReturnValueOnce(JSON.stringify(notesResponse))
       .mockReturnValueOnce(JSON.stringify([])); // no discussions
 
@@ -375,7 +378,7 @@ describe('fetchMrReviewComments', () => {
     const mrViewResponse = makeMrViewResponse({ iid: 11, description: null });
     mockExecFileSync
       .mockReturnValueOnce(JSON.stringify(mrViewResponse))
-      .mockReturnValueOnce('\n') // glab mr diff --name-only
+      .mockReturnValueOnce(JSON.stringify([])) // diffs API
       .mockReturnValueOnce(JSON.stringify([]))
       .mockReturnValueOnce(JSON.stringify([]));
 
@@ -413,7 +416,7 @@ describe('fetchMrReviewComments', () => {
     ];
     mockExecFileSync
       .mockReturnValueOnce(JSON.stringify(mrViewResponse))
-      .mockReturnValueOnce('\n') // glab mr diff --name-only
+      .mockReturnValueOnce(JSON.stringify([])) // diffs API
       .mockReturnValueOnce(JSON.stringify([]))
       .mockReturnValueOnce(JSON.stringify(discussionsResponse));
 
@@ -447,7 +450,7 @@ describe('fetchMrReviewComments', () => {
     const mrViewResponse = makeMrViewResponse({ iid: 101 });
     mockExecFileSync
       .mockReturnValueOnce(JSON.stringify(mrViewResponse))
-      .mockReturnValueOnce('\n') // glab mr diff --name-only
+      .mockReturnValueOnce(JSON.stringify([])) // diffs API
       .mockReturnValueOnce('invalid json');
 
     // When / Then
@@ -459,7 +462,7 @@ describe('fetchMrReviewComments', () => {
     const mrViewResponse = makeMrViewResponse({ iid: 102 });
     mockExecFileSync
       .mockReturnValueOnce(JSON.stringify(mrViewResponse))
-      .mockReturnValueOnce('\n') // glab mr diff --name-only
+      .mockReturnValueOnce(JSON.stringify([])) // diffs API
       .mockReturnValueOnce(JSON.stringify([]))
       .mockReturnValueOnce('not json');
 
@@ -467,24 +470,30 @@ describe('fetchMrReviewComments', () => {
     expect(() => fetchMrReviewComments(102)).toThrow('glab returned invalid JSON');
   });
 
-  it('notes API と discussions API に per_page パラメータが含まれる', () => {
+  it('diffs, notes, discussions API に per_page パラメータが含まれる', () => {
     // Given
     const mrViewResponse = makeMrViewResponse({ iid: 200 });
     mockExecFileSync
       .mockReturnValueOnce(JSON.stringify(mrViewResponse))
-      .mockReturnValueOnce('\n') // glab mr diff --name-only
+      .mockReturnValueOnce(JSON.stringify([])) // diffs API
       .mockReturnValueOnce(JSON.stringify([]))
       .mockReturnValueOnce(JSON.stringify([]));
 
     // When
     fetchMrReviewComments(200);
 
-    // Then: verify notes API call has per_page (call index 2, after mr view + diff)
+    // Then: verify diffs API call has per_page (call index 1, after mr view)
+    const diffsCall = mockExecFileSync.mock.calls[1];
+    const diffsApiPath = diffsCall[1][1] as string;
+    expect(diffsApiPath).toContain('per_page=100');
+    expect(diffsApiPath).toContain('diffs');
+
+    // Then: verify notes API call has per_page (call index 2)
     const notesCall = mockExecFileSync.mock.calls[2];
     const notesApiPath = notesCall[1][1] as string;
     expect(notesApiPath).toContain('per_page=100');
 
-    // Then: verify discussions API call has per_page
+    // Then: verify discussions API call has per_page (call index 3)
     const discussionsCall = mockExecFileSync.mock.calls[3];
     const discussionsApiPath = discussionsCall[1][1] as string;
     expect(discussionsApiPath).toContain('per_page=100');
@@ -503,7 +512,7 @@ describe('fetchMrReviewComments', () => {
     ];
     mockExecFileSync
       .mockReturnValueOnce(JSON.stringify(mrViewResponse))
-      .mockReturnValueOnce('\n') // glab mr diff --name-only
+      .mockReturnValueOnce(JSON.stringify([])) // diffs API
       .mockReturnValueOnce(JSON.stringify(firstPageNotes))
       .mockReturnValueOnce(JSON.stringify(secondPageNotes))
       .mockReturnValueOnce(JSON.stringify([])); // discussions (single page)
@@ -529,7 +538,7 @@ describe('fetchMrReviewComments', () => {
     ];
     mockExecFileSync
       .mockReturnValueOnce(JSON.stringify(mrViewResponse))
-      .mockReturnValueOnce('\n') // glab mr diff --name-only
+      .mockReturnValueOnce(JSON.stringify([])) // diffs API
       .mockReturnValueOnce(JSON.stringify(firstPage))
       .mockReturnValueOnce(JSON.stringify(secondPage))
       .mockReturnValueOnce(JSON.stringify([])); // discussions
@@ -537,7 +546,7 @@ describe('fetchMrReviewComments', () => {
     // When
     fetchMrReviewComments(301);
 
-    // Then: verify page=1 for notes (call index 2, after mr view + diff)
+    // Then: verify page=1 for notes (call index 2, after mr view + diffs API)
     const notesCall1 = mockExecFileSync.mock.calls[2];
     const apiPath1 = notesCall1[1][1] as string;
     expect(apiPath1).toContain('page=1');
@@ -571,7 +580,7 @@ describe('fetchMrReviewComments', () => {
     }];
     mockExecFileSync
       .mockReturnValueOnce(JSON.stringify(mrViewResponse))
-      .mockReturnValueOnce('\n') // glab mr diff --name-only
+      .mockReturnValueOnce(JSON.stringify([])) // diffs API
       .mockReturnValueOnce(JSON.stringify([])) // notes (empty, single page)
       .mockReturnValueOnce(JSON.stringify(firstPageDiscussions))
       .mockReturnValueOnce(JSON.stringify(secondPageDiscussions));
@@ -610,7 +619,7 @@ describe('fetchMrReviewComments', () => {
     }];
     mockExecFileSync
       .mockReturnValueOnce(JSON.stringify(mrViewResponse))
-      .mockReturnValueOnce('\n') // glab mr diff --name-only
+      .mockReturnValueOnce(JSON.stringify([])) // diffs API
       .mockReturnValueOnce(JSON.stringify([])) // notes
       .mockReturnValueOnce(JSON.stringify(firstPage))
       .mockReturnValueOnce(JSON.stringify(secondPage));
@@ -618,7 +627,7 @@ describe('fetchMrReviewComments', () => {
     // When
     fetchMrReviewComments(303);
 
-    // Then: discussions page=1 (call index 3, after mr view + diff + notes)
+    // Then: discussions page=1 (call index 3, after mr view + diffs API + notes)
     const discCall1 = mockExecFileSync.mock.calls[3];
     const discPath1 = discCall1[1][1] as string;
     expect(discPath1).toContain('page=1');
@@ -664,7 +673,7 @@ describe('fetchMrReviewComments', () => {
     ];
     mockExecFileSync
       .mockReturnValueOnce(JSON.stringify(mrViewResponse))
-      .mockReturnValueOnce('\n') // glab mr diff --name-only
+      .mockReturnValueOnce(JSON.stringify([])) // diffs API
       .mockReturnValueOnce(JSON.stringify(notesResponse))
       .mockReturnValueOnce(JSON.stringify(discussionsResponse));
 
@@ -682,12 +691,16 @@ describe('fetchMrReviewComments', () => {
     ]);
   });
 
-  it('glab mr diff --name-only で変更ファイル一覧を取得する', () => {
+  it('GitLab API 経由で変更ファイル一覧を取得する', () => {
     // Given
     const mrViewResponse = makeMrViewResponse({ iid: 500 });
+    const diffsResponse = [
+      { new_path: 'src/a.ts' },
+      { new_path: 'src/b.ts' },
+    ];
     mockExecFileSync
       .mockReturnValueOnce(JSON.stringify(mrViewResponse))
-      .mockReturnValueOnce('src/a.ts\nsrc/b.ts\n') // glab mr diff --name-only
+      .mockReturnValueOnce(JSON.stringify(diffsResponse))
       .mockReturnValueOnce(JSON.stringify([]))
       .mockReturnValueOnce(JSON.stringify([]));
 
@@ -696,20 +709,19 @@ describe('fetchMrReviewComments', () => {
 
     // Then
     expect(result.files).toEqual(['src/a.ts', 'src/b.ts']);
-    const diffCall = mockExecFileSync.mock.calls[1];
-    expect(diffCall[0]).toBe('glab');
-    expect(diffCall[1]).toContain('mr');
-    expect(diffCall[1]).toContain('diff');
-    expect(diffCall[1]).toContain('--name-only');
-    expect(diffCall[1]).toContain('500');
+    const diffsCall = mockExecFileSync.mock.calls[1];
+    expect(diffsCall[0]).toBe('glab');
+    expect(diffsCall[1][0]).toBe('api');
+    const diffsApiPath = diffsCall[1][1] as string;
+    expect(diffsApiPath).toContain('merge_requests/500/diffs');
   });
 
-  it('glab mr diff --name-only が空の場合は空配列を返す', () => {
+  it('diffs API が空配列を返す場合は空配列を返す', () => {
     // Given
     const mrViewResponse = makeMrViewResponse({ iid: 501 });
     mockExecFileSync
       .mockReturnValueOnce(JSON.stringify(mrViewResponse))
-      .mockReturnValueOnce('\n') // empty diff
+      .mockReturnValueOnce(JSON.stringify([])) // empty diffs
       .mockReturnValueOnce(JSON.stringify([]))
       .mockReturnValueOnce(JSON.stringify([]));
 
@@ -730,14 +742,14 @@ describe('fetchMrReviewComments', () => {
     }));
     mockExecFileSync
       .mockReturnValueOnce(JSON.stringify(mrViewResponse))
-      .mockReturnValueOnce('\n') // glab mr diff --name-only
+      .mockReturnValueOnce(JSON.stringify([])) // diffs API
       .mockReturnValueOnce(JSON.stringify(fewNotes))
       .mockReturnValueOnce(JSON.stringify([])); // discussions
 
     // When
     fetchMrReviewComments(304);
 
-    // Then: 4 calls total (mr view + diff --name-only + 1 page notes + 1 page discussions)
+    // Then: 4 calls total (mr view + diffs API + 1 page notes + 1 page discussions)
     expect(mockExecFileSync).toHaveBeenCalledTimes(4);
   });
 

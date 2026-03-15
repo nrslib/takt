@@ -137,11 +137,7 @@ interface GlabDiscussion {
 
 /**
  * Fetch MR review comments and metadata.
- * Uses 4 CLI calls (with pagination):
- *   1. `glab mr view` — MR metadata
- *   2. `glab mr diff` — changed file list
- *   3. `glab api` — notes (general comments, paginated)
- *   4. `glab api` — discussions (inline review comments, paginated)
+ * Uses `glab mr view` for metadata and `glab api` (paginated) for diffs, notes, and discussions.
  *
  * Throws on failure (MR not found, network error, etc.).
  */
@@ -155,13 +151,12 @@ export function fetchMrReviewComments(mrNumber: number): PrReviewData {
   );
   const mrData = parseJson<GlabMrViewResponse>(rawMr, `mr view #${mrNumber}`);
 
-  // Fetch changed file list via `glab mr diff --name-only`
-  const rawDiff = execFileSync(
-    'glab',
-    ['mr', 'diff', String(mrNumber), '--name-only'],
-    { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
+  const diffs = fetchAllPages<{ new_path: string }>(
+    `projects/:id/merge_requests/${mrNumber}/diffs`,
+    ITEMS_PER_PAGE,
+    `mr #${mrNumber} diffs`,
   );
-  const files = rawDiff.trim().split('\n').filter((f) => f.length > 0);
+  const files = diffs.map(d => d.new_path);
 
   const allNotes = fetchAllPages<GlabNote>(
     `projects/:id/merge_requests/${mrNumber}/notes`,
