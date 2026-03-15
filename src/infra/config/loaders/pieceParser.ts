@@ -466,10 +466,10 @@ export function loadPieceFromFile(filePath: string, projectDir: string): PieceCo
   const globalConfig = loadGlobalConfig();
   const projectOverrides = projectConfig.pieceOverrides;
   const globalOverrides = globalConfig.pieceOverrides;
-  const pieceRuntimePreparePolicy = {
-    ...globalConfig.pieceRuntimePrepare,
-    ...projectConfig.pieceRuntimePrepare,
-  };
+  const pieceRuntimePreparePolicy = resolvePieceRuntimePreparePolicy(
+    globalConfig.pieceRuntimePrepare,
+    projectConfig.pieceRuntimePrepare,
+  );
 
   return normalizePieceConfig(
     raw,
@@ -479,6 +479,22 @@ export function loadPieceFromFile(filePath: string, projectDir: string): PieceCo
     globalOverrides,
     pieceRuntimePreparePolicy,
   );
+}
+
+function resolvePieceRuntimePreparePolicy(
+  globalPolicy: PieceRuntimePrepareConfig | undefined,
+  projectPolicy: PieceRuntimePrepareConfig | undefined,
+): PieceRuntimePrepareConfig | undefined {
+  const policy: PieceRuntimePrepareConfig = {};
+
+  if (globalPolicy?.customScripts !== undefined) {
+    policy.customScripts = globalPolicy.customScripts;
+  }
+  if (projectPolicy?.customScripts !== undefined) {
+    policy.customScripts = projectPolicy.customScripts;
+  }
+
+  return Object.keys(policy).length > 0 ? policy : undefined;
 }
 
 function validatePieceRuntimePrepare(
