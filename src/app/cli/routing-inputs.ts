@@ -7,9 +7,9 @@ export async function resolveIssueInput(
   task: string | undefined,
 ): Promise<{ initialInput: string } | null> {
   if (issueOption) {
-    const ghStatus = getGitProvider().checkCliStatus();
-    if (!ghStatus.available) {
-      throw new Error(ghStatus.error);
+    const cliStatus = getGitProvider().checkCliStatus();
+    if (!cliStatus.available) {
+      throw new Error(cliStatus.error);
     }
     const issue = await withProgress(
       'Fetching issue...',
@@ -20,9 +20,9 @@ export async function resolveIssueInput(
   }
 
   if (task && isDirectTask(task)) {
-    const ghStatus = getGitProvider().checkCliStatus();
-    if (!ghStatus.available) {
-      throw new Error(ghStatus.error);
+    const cliStatus = getGitProvider().checkCliStatus();
+    if (!cliStatus.available) {
+      throw new Error(cliStatus.error);
     }
     const tokens = task.trim().split(/\s+/);
     const issueNumbers = parseIssueNumbers(tokens);
@@ -43,9 +43,9 @@ export async function resolveIssueInput(
 export async function resolvePrInput(
   prNumber: number,
 ): Promise<{ initialInput: string; prBranch: string; baseBranch?: string }> {
-  const ghStatus = getGitProvider().checkCliStatus();
-  if (!ghStatus.available) {
-    throw new Error(ghStatus.error);
+  const cliStatus = getGitProvider().checkCliStatus();
+  if (!cliStatus.available) {
+    throw new Error(cliStatus.error);
   }
 
   const prReview = await withProgress(

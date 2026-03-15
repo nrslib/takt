@@ -167,9 +167,9 @@ export async function addTask(
 
   if (prNumber !== undefined) {
     const provider = getGitProvider();
-    const ghStatus = provider.checkCliStatus();
-    if (!ghStatus.available) {
-      error(ghStatus.error);
+    const cliStatus = provider.checkCliStatus();
+    if (!cliStatus.available) {
+      error(cliStatus.error);
       return;
     }
 

@@ -45,7 +45,7 @@ program
 program
   .command('add')
   .description('Add a new task')
-  .argument('[task]', 'Task description or GitHub issue reference (e.g. "#28")')
+  .argument('[task]', 'Task description or issue reference (e.g. "#28")')
   .action(async (task?: string) => {
     const opts = program.opts();
     await addTask(resolvedCwd, task, opts.pr !== undefined ? { prNumber: opts.pr as number } : undefined);

@@ -209,5 +209,5 @@ export async function executeDefaultAction(task?: string): Promise<void> {
 }
 
 program
-  .argument('[task]', 'Task to execute (or GitHub issue reference like "#6")')
+  .argument('[task]', 'Task to execute (or issue reference like "#6")')
   .action(executeDefaultAction);
