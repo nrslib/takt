@@ -6,7 +6,6 @@
 
 import { z } from 'zod/v4';
 import { DEFAULT_LANGUAGE } from '../../shared/constants.js';
-import { McpServersSchema } from './mcp-schemas.js';
 import { INTERACTIVE_MODES } from './interactive-mode.js';
 import { STATUS_VALUES } from './status.js';
 
@@ -298,7 +297,7 @@ export const ParallelSubMovementRawSchema = z.object({
   /** Knowledge reference(s) — key name(s) from piece-level knowledge map */
   knowledge: z.union([z.string(), z.array(z.string())]).optional(),
   allowed_tools: z.never().optional(),
-  mcp_servers: McpServersSchema,
+  mcp_servers: z.never().optional(),
   provider: ProviderReferenceSchema.optional(),
   model: z.string().optional(),
   /** Deprecated alias */
@@ -331,7 +330,7 @@ export const PieceMovementRawSchema = z.object({
   /** Knowledge reference(s) — key name(s) from piece-level knowledge map */
   knowledge: z.union([z.string(), z.array(z.string())]).optional(),
   allowed_tools: z.never().optional(),
-  mcp_servers: McpServersSchema,
+  mcp_servers: z.never().optional(),
   provider: ProviderReferenceSchema.optional(),
   model: z.string().optional(),
   /** Deprecated alias */

@@ -348,7 +348,7 @@ describe('PieceConfigRawSchema', () => {
     expect(() => PieceConfigRawSchema.parse(config)).toThrow();
   });
 
-  it('should parse movement with stdio mcp_servers', () => {
+  it('should reject movement with stdio mcp_servers', () => {
     const config = {
       name: 'test-piece',
       movements: [
@@ -371,16 +371,10 @@ describe('PieceConfigRawSchema', () => {
       ],
     };
 
-    const result = PieceConfigRawSchema.parse(config);
-    expect(result.movements![0]?.mcp_servers).toEqual({
-      playwright: {
-        command: 'npx',
-        args: ['-y', '@anthropic-ai/mcp-server-playwright'],
-      },
-    });
+    expect(() => PieceConfigRawSchema.parse(config)).toThrow();
   });
 
-  it('should parse movement with sse mcp_servers', () => {
+  it('should reject movement with sse mcp_servers', () => {
     const config = {
       name: 'test-piece',
       movements: [
@@ -399,17 +393,10 @@ describe('PieceConfigRawSchema', () => {
       ],
     };
 
-    const result = PieceConfigRawSchema.parse(config);
-    expect(result.movements![0]?.mcp_servers).toEqual({
-      remote: {
-        type: 'sse',
-        url: 'http://localhost:8080/sse',
-        headers: { Authorization: 'Bearer token' },
-      },
-    });
+    expect(() => PieceConfigRawSchema.parse(config)).toThrow();
   });
 
-  it('should parse movement with http mcp_servers', () => {
+  it('should reject movement with http mcp_servers', () => {
     const config = {
       name: 'test-piece',
       movements: [
@@ -427,13 +414,7 @@ describe('PieceConfigRawSchema', () => {
       ],
     };
 
-    const result = PieceConfigRawSchema.parse(config);
-    expect(result.movements![0]?.mcp_servers).toEqual({
-      api: {
-        type: 'http',
-        url: 'http://localhost:3000/mcp',
-      },
-    });
+    expect(() => PieceConfigRawSchema.parse(config)).toThrow();
   });
 
   it('should allow omitting mcp_servers', () => {

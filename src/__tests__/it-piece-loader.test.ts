@@ -556,7 +556,7 @@ describe('Piece Loader IT: mcp_servers parsing', () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  it('should parse mcp_servers from YAML to PieceMovement.mcpServers', () => {
+  it('should reject piece that defines mcp_servers in movement', () => {
     const piecesDir = join(testDir, '.takt', 'pieces');
     mkdirSync(piecesDir, { recursive: true });
 
@@ -585,17 +585,7 @@ movements:
     instruction: "Run E2E tests"
 `);
 
-    const config = loadPiece('with-mcp', testDir);
-
-    expect(config).not.toBeNull();
-    const e2eStep = config!.movements.find((s) => s.name === 'e2e-test');
-    expect(e2eStep).toBeDefined();
-    expect(e2eStep!.mcpServers).toEqual({
-      playwright: {
-        command: 'npx',
-        args: ['-y', '@anthropic-ai/mcp-server-playwright'],
-      },
-    });
+    expect(() => loadPiece('with-mcp', testDir)).toThrow();
   });
 
   it('should allow movement without mcp_servers', () => {
@@ -625,7 +615,7 @@ movements:
     expect(implementStep!.mcpServers).toBeUndefined();
   });
 
-  it('should parse mcp_servers with multiple servers and transports', () => {
+  it('should reject piece that defines multiple mcp_servers', () => {
     const piecesDir = join(testDir, '.takt', 'pieces');
     mkdirSync(piecesDir, { recursive: true });
 
@@ -653,22 +643,7 @@ movements:
     instruction: "Run tests"
 `);
 
-    const config = loadPiece('multi-mcp', testDir);
-
-    expect(config).not.toBeNull();
-    const testStep = config!.movements.find((s) => s.name === 'test');
-    expect(testStep).toBeDefined();
-    expect(testStep!.mcpServers).toEqual({
-      playwright: {
-        command: 'npx',
-        args: ['-y', '@anthropic-ai/mcp-server-playwright'],
-      },
-      'remote-api': {
-        type: 'http',
-        url: 'http://localhost:3000/mcp',
-        headers: { Authorization: 'Bearer token123' },
-      },
-    });
+    expect(() => loadPiece('multi-mcp', testDir)).toThrow();
   });
 });
 
