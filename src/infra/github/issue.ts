@@ -1,8 +1,5 @@
 /**
  * GitHub Issue utilities
- *
- * Fetches issue content via `gh` CLI and formats it as task text
- * for piece execution or task creation.
  */
 
 import { execFileSync } from 'node:child_process';
