@@ -307,7 +307,7 @@ describe('PieceMovementRawSchema with arpeggio', () => {
     }
   });
 
-  it('should accept a movement with arpeggio including custom merge', () => {
+  it('should reject a movement with arpeggio including custom merge', () => {
     const raw = {
       name: 'custom-merge-step',
       arpeggio: {
@@ -323,10 +323,20 @@ describe('PieceMovementRawSchema with arpeggio', () => {
     };
 
     const result = PieceMovementRawSchema.safeParse(raw);
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.arpeggio!.merge).toBeDefined();
-      expect(result.data.arpeggio!.output_path).toBe('./output.txt');
-    }
+    expect(result.success).toBe(false);
+  });
+
+  it('should reject a movement with arpeggio using a custom source type', () => {
+    const raw = {
+      name: 'custom-source-step',
+      arpeggio: {
+        source: './custom-source.mjs',
+        source_path: './data.csv',
+        template: './prompt.md',
+      },
+    };
+
+    const result = PieceMovementRawSchema.safeParse(raw);
+    expect(result.success).toBe(false);
   });
 });

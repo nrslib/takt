@@ -298,7 +298,7 @@ describe('normalizeArpeggio: strategy coercion via loadPieceByIdentifier', () =>
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('should preserve strategy:"custom" when loading arpeggio piece YAML', () => {
+  it('should reject strategy:"custom" when loading arpeggio piece YAML', () => {
     const pieceYaml = `name: arpeggio-coerce-test
 initial_movement: process
 max_movements: 5
@@ -319,13 +319,7 @@ movements:
     const piecePath = join(tempDir, 'piece.yaml');
     writeFileSync(piecePath, pieceYaml);
 
-    const config = loadPieceByIdentifier(piecePath, tempDir);
-
-    expect(config).not.toBeNull();
-    const movement = config!.movements[0]!;
-    expect(movement.arpeggio).toBeDefined();
-    expect(movement.arpeggio!.merge.strategy).toBe('custom');
-    expect(movement.arpeggio!.merge.inlineJs).toContain('map');
+    expect(() => loadPieceByIdentifier(piecePath, tempDir)).toThrow();
   });
 
   it('should preserve concat strategy and separator when loading arpeggio piece YAML', () => {

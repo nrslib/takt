@@ -238,6 +238,15 @@ export const ArpeggioMergeRawSchema = z.object({
   { message: "Concat merge strategy does not accept 'inline_js' or 'file'" }
 );
 
+/** Piece-level arpeggio merge schema (built-in-safe subset only) */
+export const PieceArpeggioMergeRawSchema = z.object({
+  strategy: z.literal('concat').optional().default('concat'),
+  separator: z.string().optional(),
+}).refine(
+  (data) => data.strategy === 'concat',
+  { message: "Piece arpeggio merge only supports 'concat' strategy" }
+);
+
 /** Arpeggio configuration schema for data-driven batch processing */
 export const ArpeggioConfigRawSchema = z.object({
   /** Data source type (e.g., 'csv') */
@@ -257,6 +266,19 @@ export const ArpeggioConfigRawSchema = z.object({
   /** Delay between retries in ms (default: 1000) */
   retry_delay_ms: z.number().int().min(0).optional().default(1000),
   /** Optional output file path */
+  output_path: z.string().optional(),
+});
+
+/** Piece-level arpeggio schema (built-in-safe subset only) */
+export const PieceArpeggioConfigRawSchema = z.object({
+  source: z.literal('csv'),
+  source_path: z.string().min(1),
+  batch_size: z.number().int().positive().optional().default(1),
+  concurrency: z.number().int().positive().optional().default(1),
+  template: z.string().min(1),
+  merge: PieceArpeggioMergeRawSchema.optional(),
+  max_retries: z.number().int().min(0).optional().default(2),
+  retry_delay_ms: z.number().int().min(0).optional().default(1000),
   output_path: z.string().optional(),
 });
 
@@ -354,7 +376,7 @@ export const PieceMovementRawSchema = z.object({
   /** Sub-movements to execute in parallel */
   parallel: z.array(ParallelSubMovementRawSchema).optional(),
   /** Arpeggio configuration for data-driven batch processing */
-  arpeggio: ArpeggioConfigRawSchema.optional(),
+  arpeggio: PieceArpeggioConfigRawSchema.optional(),
   /** Team leader configuration for dynamic part decomposition */
   team_leader: TeamLeaderConfigRawSchema.optional(),
 }).refine(
