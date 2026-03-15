@@ -177,7 +177,7 @@ export function fetchPrReviewComments(prNumber: number): PrReviewData {
       author: comment.user.login,
       body: comment.body,
       path: comment.path,
-      line: comment.line ?? comment.original_line ?? undefined,
+      line: comment.line ?? comment.original_line,
     });
   }
 
