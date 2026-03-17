@@ -9,11 +9,12 @@
  */
 
 import { GitHubProvider } from '../github/GitHubProvider.js';
-import { GitLabProvider } from '../gitlab/GitLabProvider.js';
+import { GitLabProvider } from '../gitlab/index.js';
 import { detectVcsProvider } from './detect.js';
 import { resolveConfigValue } from '../config/resolveConfigValue.js';
 import { formatIssueAsTask, parseIssueNumbers } from './format.js';
-import type { GitProvider } from './types.js';
+import { getErrorMessage } from '../../shared/utils/index.js';
+import type { GitProvider, CreatePrOptions, CreatePrResult } from './types.js';
 import type { VcsProviderType } from './detect.js';
 
 export type { GitProvider, Issue, CliStatus, ExistingPr, CreatePrOptions, CreatePrResult, CommentResult, CreateIssueOptions, CreateIssueResult, PrReviewComment, PrReviewData } from './types.js';
@@ -68,11 +69,26 @@ export function initGitProvider(projectDir: string): void {
  */
 export function getGitProvider(): GitProvider {
   if (!provider) {
-    const detected = detectVcsProvider() ?? 'github';
-    provider = createProvider(detected);
-    currentProviderType = detected;
+    const resolved = resolveProviderType(undefined);
+    provider = createProvider(resolved);
+    currentProviderType = resolved;
   }
   return provider;
+}
+
+export function createPullRequestSafely(
+  gitProvider: GitProvider,
+  cwd: string,
+  options: CreatePrOptions,
+): CreatePrResult {
+  try {
+    return gitProvider.createPullRequest(cwd, options);
+  } catch (createPrError) {
+    return {
+      success: false,
+      error: getErrorMessage(createPrError),
+    };
+  }
 }
 
 /**

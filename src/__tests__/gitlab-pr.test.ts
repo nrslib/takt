@@ -8,6 +8,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockExecFileSync = vi.fn();
+const { mockCheckGlabCli } = vi.hoisted(() => ({
+  mockCheckGlabCli: vi.fn().mockReturnValue({ available: true }),
+}));
+
 vi.mock('node:child_process', () => ({
   execFileSync: (...args: unknown[]) => mockExecFileSync(...args),
 }));
@@ -16,7 +20,7 @@ vi.mock('../infra/gitlab/utils.js', async (importOriginal) => {
   const original = await importOriginal<Record<string, unknown>>();
   return {
     ...original,
-    checkGlabCli: vi.fn().mockReturnValue({ available: true }),
+    checkGlabCli: (...args: unknown[]) => mockCheckGlabCli(...args),
   };
 });
 
@@ -208,21 +212,22 @@ describe('createMergeRequest', () => {
     expect(result.error).toBeDefined();
   });
 
-  it('glab mr create は --repo オプションを含まない', () => {
+  it('repo が指定された場合、明示エラーを throw する', () => {
     // Given
-    mockExecFileSync.mockReturnValue('https://gitlab.com/org/repo/-/merge_requests/7\n');
-
-    // When
-    createMergeRequest('/project', {
+    const options = {
       branch: 'feat/my-branch',
       title: 'MR with repo',
       body: 'body',
       repo: 'org/repo',
-    });
+    };
 
-    // Then: --repo should NOT be passed to glab
-    const call = mockExecFileSync.mock.calls[0];
-    expect(call[1]).not.toContain('--repo');
+    // When
+    const execute = () => createMergeRequest('/project', options);
+
+    // Then
+    expect(execute).toThrow('--repo is not supported with GitLab provider. Use cwd context instead.');
+    expect(mockExecFileSync).not.toHaveBeenCalled();
+    expect(mockCheckGlabCli).not.toHaveBeenCalled();
   });
 });
 

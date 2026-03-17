@@ -46,12 +46,13 @@ vi.mock('../infra/github/GitHubProvider.js', () => ({
   GitHubProvider: MockGitHubProvider,
 }));
 
-vi.mock('../infra/gitlab/GitLabProvider.js', () => ({
+vi.mock('../infra/gitlab/index.js', () => ({
   GitLabProvider: MockGitLabProvider,
 }));
 
 let getGitProvider: typeof import('../infra/git/index.js').getGitProvider;
 let initGitProvider: typeof import('../infra/git/index.js').initGitProvider;
+let createPullRequestSafely: typeof import('../infra/git/index.js').createPullRequestSafely;
 
 beforeEach(async () => {
   vi.clearAllMocks();
@@ -59,6 +60,7 @@ beforeEach(async () => {
   const mod = await import('../infra/git/index.js');
   getGitProvider = mod.getGitProvider;
   initGitProvider = mod.initGitProvider;
+  createPullRequestSafely = mod.createPullRequestSafely;
 });
 
 describe('getGitProvider', () => {
@@ -224,5 +226,27 @@ describe('initGitProvider', () => {
     expect(provider1).not.toBe(provider2);
     expect((provider1 as unknown as { _type: string })._type).toBe('github');
     expect((provider2 as unknown as { _type: string })._type).toBe('gitlab');
+  });
+});
+
+describe('createPullRequestSafely', () => {
+  it('createPullRequest が例外を投げても失敗結果に正規化する', () => {
+    mockDetectVcsProvider.mockReturnValue('github');
+    const gitProvider = getGitProvider();
+    const createPullRequestMock = vi.mocked(gitProvider.createPullRequest);
+    createPullRequestMock.mockImplementation(() => {
+      throw new Error('boom');
+    });
+
+    const result = createPullRequestSafely(gitProvider, '/project', {
+      branch: 'feature/test',
+      title: 'Test',
+      body: 'Body',
+    });
+
+    expect(result).toEqual({
+      success: false,
+      error: 'boom',
+    });
   });
 });

@@ -22,12 +22,14 @@ const {
   mockFormatIssueAsTask,
   mockCheckGhCli,
   mockCreatePullRequest,
+  mockCreatePullRequestSafely,
   mockPushBranch,
 } = vi.hoisted(() => ({
   mockFetchIssue: vi.fn(),
   mockFormatIssueAsTask: vi.fn(),
   mockCheckGhCli: vi.fn(),
   mockCreatePullRequest: vi.fn(),
+  mockCreatePullRequestSafely: vi.fn(),
   mockPushBranch: vi.fn(),
 }));
 
@@ -60,6 +62,7 @@ vi.mock('../infra/git/index.js', () => ({
   formatIssueAsTask: (...args: unknown[]) => mockFormatIssueAsTask(...args),
   buildPrBody: vi.fn().mockReturnValue('PR body'),
   formatPrReviewAsTask: vi.fn(),
+  createPullRequestSafely: (...args: unknown[]) => mockCreatePullRequestSafely(...args),
 }));
 
 vi.mock('../infra/task/git.js', () => ({
@@ -223,6 +226,16 @@ describe('Pipeline Modes IT: --task + --piece path', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockCreatePullRequestSafely.mockImplementation((provider, cwd, options) => {
+      try {
+        return provider.createPullRequest(cwd, options);
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    });
     const setup = createTestPieceDir();
     testDir = setup.dir;
     piecePath = setup.piecePath;

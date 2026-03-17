@@ -39,6 +39,10 @@ export function findExistingMr(cwd: string, branch: string): ExistingPr | undefi
  * Create a GitLab Merge Request via `glab mr create`.
  */
 export function createMergeRequest(cwd: string, options: CreatePrOptions): CreatePrResult {
+  if (options.repo) {
+    throw new Error('--repo is not supported with GitLab provider. Use cwd context instead.');
+  }
+
   const glabStatus = checkGlabCli();
   if (!glabStatus.available) {
     return { success: false, error: glabStatus.error };
@@ -58,8 +62,6 @@ export function createMergeRequest(cwd: string, options: CreatePrOptions): Creat
   if (options.draft) {
     args.push('--draft');
   }
-
-  // glab mr create does not support --repo; repo context comes from the cwd
 
   log.info('Creating MR', { branch: options.branch, title: options.title, draft: options.draft });
 
