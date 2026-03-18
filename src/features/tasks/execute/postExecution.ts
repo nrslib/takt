@@ -8,8 +8,8 @@
 import { autoCommitAndPush, pushBranch } from '../../../infra/task/index.js';
 import { info, error, success } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
-import { buildPrBody, getGitProvider } from '../../../infra/git/index.js';
-import type { Issue } from '../../../infra/git/index.js';
+import { buildPrBody, createPullRequestSafely, getGitProvider } from '../../../infra/git/index.js';
+import type { Issue, CreatePrResult } from '../../../infra/git/index.js';
 
 const log = createLogger('postExecution');
 
@@ -73,7 +73,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
       const issuePrefix = firstIssue ? `[#${firstIssue.number}] ` : '';
       const truncatedTask = task.length > 100 - issuePrefix.length ? `${task.slice(0, 100 - issuePrefix.length - 3)}...` : task;
       const prTitle = issuePrefix + truncatedTask;
-      const prResult = gitProvider.createPullRequest(projectCwd, {
+      const prResult: CreatePrResult = createPullRequestSafely(gitProvider, projectCwd, {
         branch,
         title: prTitle,
         body: prBody,

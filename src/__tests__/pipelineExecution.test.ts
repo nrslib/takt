@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mockFetchIssue = vi.fn();
 const mockCheckGhCli = vi.fn().mockReturnValue({ available: true });
 const mockCreatePullRequest = vi.fn();
+const mockCreatePullRequestSafely = vi.fn();
 const mockPushBranch = vi.fn();
 const mockBuildPrBody = vi.fn(() => 'Default PR body');
 const mockFetchPrReviewComments = vi.fn();
@@ -22,6 +23,7 @@ vi.mock('../infra/git/index.js', () => ({
   ),
   buildPrBody: (...args: unknown[]) => mockBuildPrBody(...args),
   formatPrReviewAsTask: (...args: unknown[]) => mockFormatPrReviewAsTask(...args),
+  createPullRequestSafely: (...args: unknown[]) => mockCreatePullRequestSafely(...args),
 }));
 
 vi.mock('../infra/task/git.js', async (importOriginal) => ({
@@ -86,6 +88,16 @@ const { executePipeline } = await import('../features/pipeline/index.js');
 describe('executePipeline', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockCreatePullRequestSafely.mockImplementation((provider, cwd, options) => {
+      try {
+        return provider.createPullRequest(cwd, options);
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    });
     // Default: no Slack webhook
     mockGetSlackWebhookUrl.mockReturnValue(undefined);
     // Default: git operations succeed
@@ -197,6 +209,22 @@ describe('executePipeline', () => {
   it('should return exit code 5 when PR creation fails', async () => {
     mockExecuteTask.mockResolvedValueOnce(true);
     mockCreatePullRequest.mockReturnValueOnce({ success: false, error: 'PR failed' });
+
+    const exitCode = await executePipeline({
+      task: 'Fix the bug',
+      piece: 'default',
+      autoPr: true,
+      cwd: '/tmp/test',
+    });
+
+    expect(exitCode).toBe(5);
+  });
+
+  it('should return exit code 5 when createPullRequest throws', async () => {
+    mockExecuteTask.mockResolvedValueOnce(true);
+    mockCreatePullRequest.mockImplementationOnce(() => {
+      throw new Error('--repo is not supported with GitLab provider. Use cwd context instead.');
+    });
 
     const exitCode = await executePipeline({
       task: 'Fix the bug',

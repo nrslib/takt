@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockAutoCommitAndPush, mockPushBranch, mockFindExistingPr, mockCommentOnPr, mockCreatePullRequest, mockBuildPrBody } =
+const { mockAutoCommitAndPush, mockPushBranch, mockFindExistingPr, mockCommentOnPr, mockCreatePullRequest, mockBuildPrBody, mockCreatePullRequestSafely } =
   vi.hoisted(() => ({
     mockAutoCommitAndPush: vi.fn(),
     mockPushBranch: vi.fn(),
@@ -14,6 +14,7 @@ const { mockAutoCommitAndPush, mockPushBranch, mockFindExistingPr, mockCommentOn
     mockCommentOnPr: vi.fn(),
     mockCreatePullRequest: vi.fn(),
     mockBuildPrBody: vi.fn(() => 'pr-body'),
+    mockCreatePullRequestSafely: vi.fn(),
   }));
 
 vi.mock('../infra/task/index.js', () => ({
@@ -28,6 +29,7 @@ vi.mock('../infra/git/index.js', () => ({
     createPullRequest: (...args: unknown[]) => mockCreatePullRequest(...args),
   }),
   buildPrBody: (...args: unknown[]) => mockBuildPrBody(...args),
+  createPullRequestSafely: (...args: unknown[]) => mockCreatePullRequestSafely(...args),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -65,6 +67,16 @@ describe('postExecutionFlow', () => {
     mockPushBranch.mockReturnValue(undefined);
     mockCommentOnPr.mockReturnValue({ success: true });
     mockCreatePullRequest.mockReturnValue({ success: true, url: 'https://github.com/org/repo/pull/1' });
+    mockCreatePullRequestSafely.mockImplementation((provider, cwd, options) => {
+      try {
+        return provider.createPullRequest(cwd, options);
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    });
   });
 
   it('既存PRがない場合は createPullRequest を呼ぶ', async () => {
@@ -139,6 +151,19 @@ describe('postExecutionFlow', () => {
 
     expect(result.prFailed).toBe(true);
     expect(result.prError).toBe('Base ref must be a branch');
+    expect(result.prUrl).toBeUndefined();
+  });
+
+  it('createPullRequest が例外を投げた場合も prFailed: true を返す', async () => {
+    mockFindExistingPr.mockReturnValue(undefined);
+    mockCreatePullRequest.mockImplementation(() => {
+      throw new Error('--repo is not supported with GitLab provider. Use cwd context instead.');
+    });
+
+    const result = await postExecutionFlow(baseOptions);
+
+    expect(result.prFailed).toBe(true);
+    expect(result.prError).toBe('--repo is not supported with GitLab provider. Use cwd context instead.');
     expect(result.prUrl).toBeUndefined();
   });
 
@@ -220,4 +245,3 @@ describe('postExecutionFlow', () => {
     );
   });
 });
-

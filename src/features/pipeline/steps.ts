@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { formatIssueAsTask, buildPrBody, formatPrReviewAsTask, getGitProvider } from '../../infra/git/index.js';
-import type { Issue } from '../../infra/git/index.js';
+import { formatIssueAsTask, buildPrBody, createPullRequestSafely, formatPrReviewAsTask, getGitProvider } from '../../infra/git/index.js';
+import type { Issue, CreatePrResult } from '../../infra/git/index.js';
 import { resolveConfigValue } from '../../infra/config/index.js';
 import { stageAndCommit, resolveBaseBranch, pushBranch, checkoutBranch } from '../../infra/task/index.js';
 import { executeTask, confirmAndCreateWorktree, type TaskExecutionOptions, type PipelineExecutionOptions } from '../tasks/index.js';
@@ -274,7 +274,7 @@ export function submitPullRequest(
   const report = `Piece \`${piece}\` completed successfully.`;
   const prBody = buildPipelinePrBody(pipelineConfig, taskContent.issue, report);
 
-  const prResult = getGitProvider().createPullRequest(projectCwd, {
+  const prResult: CreatePrResult = createPullRequestSafely(getGitProvider(), projectCwd, {
     branch,
     title: prTitle,
     body: prBody,
