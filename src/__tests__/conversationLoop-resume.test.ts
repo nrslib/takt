@@ -17,6 +17,13 @@ import {
   type MockProviderCapture,
 } from './helpers/stdinSimulator.js';
 
+const { mockResolveAssistantConfigLayers } = vi.hoisted(() => ({
+  mockResolveAssistantConfigLayers: vi.fn(() => ({
+    local: { provider: 'mock' },
+    global: {},
+  })),
+}));
+
 // --- Infrastructure mocks ---
 
 vi.mock('../infra/config/global/globalConfig.js', () => ({
@@ -24,13 +31,31 @@ vi.mock('../infra/config/global/globalConfig.js', () => ({
   getBuiltinPiecesEnabled: vi.fn().mockReturnValue(true),
 }));
 
+vi.mock('../infra/config/index.js', () => ({
+  resolveConfigValues: vi.fn(() => ({ language: 'en', provider: 'mock', model: undefined })),
+  loadSessionState: vi.fn(() => null),
+  clearSessionState: vi.fn(),
+}));
+
+vi.mock('../features/interactive/assistantConfig.js', () => ({
+  resolveAssistantConfigLayers: (...args: unknown[]) => mockResolveAssistantConfigLayers(...args),
+}));
+
 vi.mock('../infra/providers/index.js', () => ({
   getProvider: vi.fn(),
 }));
 
+const { mockLogger } = vi.hoisted(() => ({
+  mockLogger: {
+    info: vi.fn(),
+    debug: vi.fn(),
+    error: vi.fn(),
+  },
+}));
+
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  createLogger: () => ({ info: vi.fn(), debug: vi.fn(), error: vi.fn() }),
+  createLogger: () => mockLogger,
 }));
 
 vi.mock('../shared/context.js', () => ({
@@ -89,7 +114,8 @@ vi.mock('../shared/i18n/index.js', () => ({
 import { getProvider } from '../infra/providers/index.js';
 import { selectOption } from '../shared/prompt/index.js';
 import { info as logInfo } from '../shared/ui/index.js';
-import { initializeSession, runConversationLoop, type SessionContext } from '../features/interactive/conversationLoop.js';
+import { runConversationLoop, type SessionContext } from '../features/interactive/conversationLoop.js';
+import { initializeSession } from '../features/interactive/sessionInitialization.js';
 
 const mockGetProvider = vi.mocked(getProvider);
 const mockSelectOption = vi.mocked(selectOption);
@@ -128,6 +154,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockSelectOption.mockResolvedValue('execute');
   mockSelectRecentSession.mockResolvedValue(null);
+  mockResolveAssistantConfigLayers.mockReturnValue({
+    local: { provider: 'mock' },
+    global: {},
+  });
 });
 
 afterEach(() => {
@@ -259,5 +289,57 @@ describe('/go command', () => {
     // Then: summary call must NOT inherit the conversation session
     expect(capture.sessionIds[1]).toBeUndefined();
     expect(result.action).toBe('execute');
+  });
+});
+
+describe('conversation logging', () => {
+  it('should log only non-sensitive metadata for initial input, session state, and play task', async () => {
+    setupRawStdin(toRawInputs(['/play secret implementation details']));
+    setupProvider([]);
+
+    const ctx = createSessionContext({ sessionId: 'sensitive-session-id' });
+
+    const result = await runConversationLoop(
+      '/test',
+      ctx,
+      defaultStrategy,
+      undefined,
+      'secret prefilled input',
+    );
+
+    expect(result).toEqual({
+      action: 'execute',
+      task: 'secret implementation details',
+    });
+    expect(mockLogger.debug).toHaveBeenCalledWith(
+      'Loaded initial input into local history without auto-submitting to AI',
+      {
+        hasInitialInput: true,
+        initialInputLength: 'secret prefilled input'.length,
+        hasSession: true,
+      },
+    );
+    expect(mockLogger.info).toHaveBeenCalledWith('Play command', {
+      hasTaskText: true,
+      taskLength: 'secret implementation details'.length,
+    });
+    expect(mockLogger.debug).not.toHaveBeenCalledWith(
+      'Loaded initial input into local history without auto-submitting to AI',
+      expect.objectContaining({
+        initialInput: 'secret prefilled input',
+      }),
+    );
+    expect(mockLogger.debug).not.toHaveBeenCalledWith(
+      'Sending to AI',
+      expect.objectContaining({
+        sessionId: 'sensitive-session-id',
+      }),
+    );
+    expect(mockLogger.info).not.toHaveBeenCalledWith(
+      'Play command',
+      expect.objectContaining({
+        task: 'secret implementation details',
+      }),
+    );
   });
 });

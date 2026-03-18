@@ -12,8 +12,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // ── Mocks ─────────────────────────────────────────────────────────────
 
 vi.mock('../features/interactive/conversationLoop.js', () => ({
-  initializeSession: vi.fn(),
   callAIWithRetry: vi.fn(),
+}));
+
+vi.mock('../features/interactive/sessionInitialization.js', () => ({
+  initializeSession: vi.fn(),
 }));
 
 vi.mock('../features/interactive/interactive.js', () => ({
@@ -45,9 +48,10 @@ vi.mock('../shared/i18n/index.js', () => ({
 // ── Imports (after mocks) ──────────────────────────────────────────────
 
 import { quietMode } from '../features/interactive/quietMode.js';
-import { initializeSession, callAIWithRetry } from '../features/interactive/conversationLoop.js';
+import { callAIWithRetry } from '../features/interactive/conversationLoop.js';
+import { initializeSession } from '../features/interactive/sessionInitialization.js';
 import { buildSummaryPrompt, selectPostSummaryAction } from '../features/interactive/interactive.js';
-import type { SessionContext } from '../features/interactive/conversationLoop.js';
+import type { SessionContext } from '../features/interactive/aiCaller.js';
 
 const mockInitializeSession = vi.mocked(initializeSession);
 const mockCallAIWithRetry = vi.mocked(callAIWithRetry);

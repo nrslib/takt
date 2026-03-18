@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   resolveAgentProviderModel,
-  resolveAssistantProviderModel,
   resolveMovementProviderModel,
-  resolveProviderModelCandidates,
 } from '../core/piece/provider-resolution.js';
+import {
+  resolveModelFromCandidates,
+  resolveProviderModelCandidates,
+} from '../core/provider-resolution.js';
+import { resolveAssistantProviderModelFromConfig } from '../core/config/provider-resolution.js';
 
 describe('resolveProviderModelCandidates', () => {
   it('should resolve first defined provider and model independently', () => {
@@ -581,45 +584,216 @@ describe('resolveAgentProviderModel', () => {
   });
 });
 
-describe('resolveAssistantProviderModel', () => {
-  it('should prioritize takt_providers.assistant over CLI and global', () => {
-    const result = resolveAssistantProviderModel({
-      assistantProvider: 'opencode',
-      assistantModel: 'assistant-model',
-      cliProvider: 'codex',
-      cliModel: 'cli-model',
-      globalProvider: 'claude',
-      globalModel: 'global-model',
-    });
+describe('resolveModelFromCandidates', () => {
+  it('should ignore model candidates whose provider does not match the resolved provider', () => {
+    const result = resolveModelFromCandidates([
+      { model: 'cli-model' },
+      { model: 'local-model', provider: 'codex' },
+      { model: 'global-model', provider: 'claude' },
+    ], 'claude');
 
-    expect(result).toEqual({
-      provider: 'opencode',
-      model: 'assistant-model',
-    });
+    expect(result).toBe('cli-model');
   });
 
-  it('should fallback to CLI when assistant override is not configured', () => {
-    const result = resolveAssistantProviderModel({
-      cliProvider: 'codex',
-      cliModel: 'cli-model',
-      globalProvider: 'claude',
-      globalModel: 'global-model',
-    });
+  it('should pick the first provider-matching config model when unscoped candidates are absent', () => {
+    const result = resolveModelFromCandidates([
+      { model: 'local-model', provider: 'codex' },
+      { model: 'global-model', provider: 'claude' },
+    ], 'claude');
+
+    expect(result).toBe('global-model');
+  });
+});
+
+describe('resolveAssistantProviderModelFromConfig', () => {
+  it('should prioritize CLI over local/global assistant and top-level provider/model', () => {
+    const result = resolveAssistantProviderModelFromConfig(
+      {
+        local: {
+          provider: 'opencode',
+          model: 'local-model',
+          taktProviders: {
+            assistant: {
+              provider: 'claude',
+              model: 'local-assistant-model',
+            },
+          },
+        },
+        global: {
+          provider: 'mock',
+          model: 'global-model',
+          taktProviders: {
+            assistant: {
+              provider: 'codex',
+              model: 'global-assistant-model',
+            },
+          },
+        },
+      },
+      {
+        provider: 'cursor',
+        model: 'cli-model',
+      },
+    );
 
     expect(result).toEqual({
-      provider: 'codex',
+      provider: 'cursor',
       model: 'cli-model',
     });
   });
 
-  it('should fallback to global when assistant and CLI are not configured', () => {
-    const result = resolveAssistantProviderModel({
-      globalProvider: 'claude',
-      globalModel: 'global-model',
+  it('should prefer local assistant over global assistant when CLI is missing', () => {
+    const result = resolveAssistantProviderModelFromConfig({
+      local: {
+        provider: 'opencode',
+        model: 'local-model',
+        taktProviders: {
+          assistant: {
+            provider: 'claude',
+            model: 'local-assistant-model',
+          },
+        },
+      },
+      global: {
+        provider: 'mock',
+        model: 'global-model',
+        taktProviders: {
+          assistant: {
+            provider: 'codex',
+            model: 'global-assistant-model',
+          },
+        },
+      },
     });
 
     expect(result).toEqual({
       provider: 'claude',
+      model: 'local-assistant-model',
+    });
+  });
+
+  it('should prioritize CLI model even when provider is resolved from assistant config', () => {
+    const result = resolveAssistantProviderModelFromConfig(
+      {
+        local: {
+          provider: 'opencode',
+          model: 'local-top-level-model',
+          taktProviders: {
+            assistant: {
+              provider: 'claude',
+              model: 'local-assistant-model',
+            },
+          },
+        },
+        global: {
+          provider: 'mock',
+          model: 'global-top-level-model',
+        },
+      },
+      {
+        model: 'cli-model',
+      },
+    );
+
+    expect(result).toEqual({
+      provider: 'claude',
+      model: 'cli-model',
+    });
+  });
+
+  it('should prefer global assistant over top-level config when local assistant is missing', () => {
+    const result = resolveAssistantProviderModelFromConfig({
+      local: {
+        provider: 'opencode',
+        model: 'local-model',
+      },
+      global: {
+        provider: 'mock',
+        model: 'global-model',
+        taktProviders: {
+          assistant: {
+            provider: 'codex',
+            model: 'global-assistant-model',
+          },
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      provider: 'codex',
+      model: 'global-assistant-model',
+    });
+  });
+
+  it('should ignore assistant and top-level models that do not match CLI provider when only CLI provider is set', () => {
+    const result = resolveAssistantProviderModelFromConfig(
+      {
+        local: {
+          provider: 'claude',
+          model: 'local-top-level-model',
+          taktProviders: {
+            assistant: {
+              provider: 'claude',
+              model: 'local-assistant-model',
+            },
+          },
+        },
+        global: {
+          provider: 'opencode',
+          model: 'global-top-level-model',
+          taktProviders: {
+            assistant: {
+              provider: 'codex',
+              model: 'global-assistant-model',
+            },
+          },
+        },
+      },
+      {
+        provider: 'cursor',
+      },
+    );
+
+    expect(result).toEqual({
+      provider: 'cursor',
+      model: undefined,
+    });
+  });
+
+  it('should ignore top-level models when their provider does not match the resolved provider', () => {
+    const result = resolveAssistantProviderModelFromConfig({
+      local: {
+        provider: 'opencode',
+        model: 'local-top-level-model',
+      },
+      global: {
+        provider: 'mock',
+        model: 'global-top-level-model',
+        taktProviders: {
+          assistant: {
+            provider: 'claude',
+          },
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      provider: 'claude',
+      model: undefined,
+    });
+  });
+
+  it('should fallback from local top-level to global top-level when assistant entries are absent', () => {
+    const result = resolveAssistantProviderModelFromConfig({
+      local: {},
+      global: {
+        provider: 'mock',
+        model: 'global-model',
+      },
+    });
+
+    expect(result).toEqual({
+      provider: 'mock',
       model: 'global-model',
     });
   });

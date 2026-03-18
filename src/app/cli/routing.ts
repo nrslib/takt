@@ -14,9 +14,15 @@ import {
   dispatchConversationAction,
   type InteractiveModeResult,
 } from '../../features/interactive/index.js';
-import { getPieceDescription, resolveConfigValue, resolveConfigValues, loadPersonaSessions, type ConfigParameterKey } from '../../infra/config/index.js';
+import {
+  getPieceDescription,
+  resolveConfigValue,
+  resolveConfigValues,
+  loadPersonaSessions,
+} from '../../infra/config/index.js';
 import { resolvePersonaSessionId } from '../../infra/config/project/sessionStore.js';
 import { resolveAssistantProviderModelFromConfig } from '../../core/config/provider-resolution.js';
+import { resolveAssistantConfigLayers } from '../../features/interactive/assistantConfig.js';
 import { program, resolvedCwd, pipelineMode } from './program.js';
 import { resolveAgentOverrides } from './helpers.js';
 import { loadTaskHistory } from './taskHistory.js';
@@ -112,7 +118,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
 
   const globalConfig = resolveConfigValues(
     resolvedCwd,
-    ['language', 'interactivePreviewMovements', 'provider', 'model', 'taktProviders' as ConfigParameterKey],
+    ['language', 'interactivePreviewMovements'],
   );
   const lang = resolveLanguage(globalConfig.language);
 
@@ -146,7 +152,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       let selectedSessionId: string | undefined;
       if (opts.continue === true) {
         const { provider: providerType } = resolveAssistantProviderModelFromConfig(
-          globalConfig,
+          resolveAssistantConfigLayers(resolvedCwd),
           {
             provider: agentOverrides?.provider,
             model: agentOverrides?.model,

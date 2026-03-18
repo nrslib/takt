@@ -215,6 +215,7 @@ describe('config resolution defaults and project-local priority', () => {
         source: 'global',
       });
     });
+
   });
 
   describe('autoFetch', () => {

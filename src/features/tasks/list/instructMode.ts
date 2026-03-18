@@ -6,17 +6,18 @@
  */
 
 import {
-  initializeSession,
   displayAndClearSessionState,
   runConversationLoop,
   type SessionContext,
   type ConversationStrategy,
 } from '../../interactive/conversationLoop.js';
+import { initializeSession } from '../../interactive/sessionInitialization.js';
 import {
   resolveLanguage,
   formatMovementPreviews,
   type PieceContext,
 } from '../../interactive/interactive.js';
+import { buildInteractivePolicyPrompt } from '../../interactive/policyPrompt.js';
 import { createSelectActionWithoutExecute, buildReplayHint } from '../../interactive/interactive-summary.js';
 import { type RunSessionContext, formatRunSessionForPrompt } from '../../interactive/runSessionReader.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
@@ -118,22 +119,10 @@ export async function runInstructMode(
 
   const replayHint = buildReplayHint(ctx.lang, !!previousOrderContent);
 
-  const policyContent = loadTemplate('score_interactive_policy', ctx.lang, {});
-
-  function injectPolicy(userMessage: string): string {
-    const policyIntro = ctx.lang === 'ja'
-      ? '以下のポリシーは行動規範です。必ず遵守してください。'
-      : 'The following policy defines behavioral guidelines. Please follow them.';
-    const reminderLabel = ctx.lang === 'ja'
-      ? '上記の Policy セクションで定義されたポリシー規範を遵守してください。'
-      : 'Please follow the policy guidelines defined in the Policy section above.';
-    return `## Policy\n${policyIntro}\n\n${policyContent}\n\n---\n\n${userMessage}\n\n---\n**Policy Reminder:** ${reminderLabel}`;
-  }
-
   const strategy: ConversationStrategy = {
     systemPrompt,
     allowedTools: INSTRUCT_TOOLS,
-    transformPrompt: injectPolicy,
+    transformPrompt: (userMessage: string) => buildInteractivePolicyPrompt(ctx.lang, userMessage),
     introMessage: `${ui.intro}${replayHint}`,
     selectAction: createSelectActionWithoutExecute(ui),
     previousOrderContent: previousOrderContent ?? undefined,

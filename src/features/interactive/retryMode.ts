@@ -6,18 +6,19 @@
  */
 
 import {
-  initializeSession,
   displayAndClearSessionState,
   runConversationLoop,
   type SessionContext,
   type ConversationStrategy,
 } from './conversationLoop.js';
+import { initializeSession } from './sessionInitialization.js';
 import {
   createSelectActionWithoutExecute,
   formatMovementPreviews,
   type PieceContext,
 } from './interactive-summary.js';
 import { resolveLanguage } from './interactive.js';
+import { buildInteractivePolicyPrompt } from './policyPrompt.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
 import { resolveConfigValues } from '../../infra/config/index.js';
@@ -126,22 +127,10 @@ export async function runRetryMode(
     ? `## リトライ: ${retryContext.failure.taskName}\n\nブランチ: ${retryContext.branchName}\n\n${retryIntro}`
     : `## Retry: ${retryContext.failure.taskName}\n\nBranch: ${retryContext.branchName}\n\n${retryIntro}`;
 
-  const policyContent = loadTemplate('score_interactive_policy', ctx.lang, {});
-
-  function injectPolicy(userMessage: string): string {
-    const policyIntro = ctx.lang === 'ja'
-      ? '以下のポリシーは行動規範です。必ず遵守してください。'
-      : 'The following policy defines behavioral guidelines. Please follow them.';
-    const reminderLabel = ctx.lang === 'ja'
-      ? '上記の Policy セクションで定義されたポリシー規範を遵守してください。'
-      : 'Please follow the policy guidelines defined in the Policy section above.';
-    return `## Policy\n${policyIntro}\n\n${policyContent}\n\n---\n\n${userMessage}\n\n---\n**Policy Reminder:** ${reminderLabel}`;
-  }
-
   const strategy: ConversationStrategy = {
     systemPrompt,
     allowedTools: RETRY_TOOLS,
-    transformPrompt: injectPolicy,
+    transformPrompt: (userMessage: string) => buildInteractivePolicyPrompt(ctx.lang, userMessage),
     introMessage: introLabel,
     selectAction: createSelectActionWithoutExecute(ui),
     previousOrderContent: previousOrderContent ?? undefined,

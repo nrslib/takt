@@ -1,5 +1,9 @@
 import type { PieceMovement } from '../models/types.js';
 import type { PersonaProviderEntry } from '../models/config-types.js';
+import {
+  resolveProviderModelCandidates,
+  resolveModelFromCandidates,
+} from '../provider-resolution.js';
 import type { ProviderType } from './types.js';
 
 export interface MovementProviderModelInput {
@@ -12,37 +16,6 @@ export interface MovementProviderModelInput {
 export interface MovementProviderModelOutput {
   provider?: ProviderType;
   model?: string;
-}
-
-export interface ProviderModelCandidate {
-  provider?: ProviderType;
-  model?: string;
-}
-
-interface ModelProviderCandidate {
-  model?: string;
-  provider?: ProviderType;
-}
-
-export function resolveProviderModelCandidates(
-  candidates: readonly ProviderModelCandidate[],
-): MovementProviderModelOutput {
-  let provider: ProviderType | undefined;
-  let model: string | undefined;
-
-  for (const candidate of candidates) {
-    if (provider === undefined && candidate.provider !== undefined) {
-      provider = candidate.provider;
-    }
-    if (model === undefined && candidate.model !== undefined) {
-      model = candidate.model;
-    }
-    if (provider !== undefined && model !== undefined) {
-      break;
-    }
-  }
-
-  return { provider, model };
 }
 
 export interface AgentProviderModelInput {
@@ -61,39 +34,6 @@ export interface AgentProviderModelInput {
 export interface AgentProviderModelOutput {
   provider?: ProviderType;
   model?: string;
-}
-
-export interface AssistantProviderModelInput {
-  assistantProvider?: ProviderType;
-  assistantModel?: string;
-  cliProvider?: ProviderType;
-  cliModel?: string;
-  localProvider?: ProviderType;
-  localModel?: string;
-  globalProvider?: ProviderType;
-  globalModel?: string;
-}
-
-export interface AssistantProviderModelOutput {
-  provider?: ProviderType;
-  model?: string;
-}
-
-function resolveModelFromCandidates(
-  candidates: readonly ModelProviderCandidate[],
-  resolvedProvider: ProviderType | undefined,
-): string | undefined {
-  for (const candidate of candidates) {
-    const { model, provider } = candidate;
-    if (model === undefined) {
-      continue;
-    }
-    if (provider !== undefined && provider !== resolvedProvider) {
-      continue;
-    }
-    return model;
-  }
-  return undefined;
 }
 
 export function resolveAgentProviderModel(input: AgentProviderModelInput): AgentProviderModelOutput {
@@ -115,27 +55,6 @@ export function resolveAgentProviderModel(input: AgentProviderModelInput): Agent
 
   return { provider, model };
 }
-
-export function resolveAssistantProviderModel(
-  input: AssistantProviderModelInput,
-): AssistantProviderModelOutput {
-  const provider = resolveProviderModelCandidates([
-    { provider: input.assistantProvider },
-    { provider: input.cliProvider },
-    { provider: input.localProvider },
-    { provider: input.globalProvider },
-  ]).provider;
-
-  const model = resolveModelFromCandidates([
-    { model: input.assistantModel },
-    { model: input.cliModel },
-    { model: input.localModel, provider: input.localProvider },
-    { model: input.globalModel, provider: input.globalProvider },
-  ], provider);
-
-  return { provider, model };
-}
-
 export function resolveMovementProviderModel(input: MovementProviderModelInput): MovementProviderModelOutput {
   const personaEntry = input.personaProviders?.[input.step.personaDisplayName];
   const provider = resolveProviderModelCandidates([

@@ -9,17 +9,9 @@
 
 import chalk from 'chalk';
 import {
-  resolveConfigValues,
-  type ConfigParameterKey,
   loadSessionState,
   clearSessionState,
 } from '../../infra/config/index.js';
-import { getProvider, type ProviderType } from '../../infra/providers/index.js';
-import {
-  resolveAssistantProviderModelFromConfig,
-  type AssistantProviderConfig,
-  type AssistantCliOverrides,
-} from '../../core/config/provider-resolution.js';
 import { createLogger } from '../../shared/utils/index.js';
 import { info, error, blankLine } from '../../shared/ui/index.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
@@ -33,49 +25,20 @@ import {
   type InteractiveUIText,
   type ConversationMessage,
   type PostSummaryAction,
-  resolveLanguage,
   buildSummaryPrompt,
   selectPostSummaryAction,
   formatSessionStatus,
 } from './interactive.js';
 import { callAIWithRetry, type CallAIResult, type SessionContext } from './aiCaller.js';
+import {
+  createInputLogMeta,
+  createPlayCommandLogMeta,
+  createSessionLogMeta,
+} from './conversationLogMeta.js';
 
 export { type CallAIResult, type SessionContext, callAIWithRetry } from './aiCaller.js';
 
 const log = createLogger('conversation-loop');
-
-/**
- * Initialize provider and language for interactive conversation.
- *
- * Session ID is always undefined (new session).
- * Callers that need session continuity pass sessionId explicitly
- * (e.g., --continue flag or /resume command).
- */
-export function initializeSession(
-  cwd: string,
-  personaName: string,
-  assistantCliOverrides?: AssistantCliOverrides,
-): SessionContext {
-  const globalConfig = resolveConfigValues(
-    cwd,
-    ['language', 'provider', 'model', 'taktProviders' as ConfigParameterKey],
-  );
-  const lang = resolveLanguage(globalConfig.language);
-  const resolvedProviderModel = personaName === 'interactive'
-    ? resolveAssistantProviderModelFromConfig(globalConfig as AssistantProviderConfig, assistantCliOverrides)
-    : {
-      provider: globalConfig.provider as ProviderType | undefined,
-      model: globalConfig.model as string | undefined,
-    };
-  const { provider: resolvedProvider, model } = resolvedProviderModel;
-  if (!resolvedProvider) {
-    throw new Error('Provider is not configured.');
-  }
-  const providerType = resolvedProvider;
-  const provider = getProvider(providerType);
-
-  return { provider, providerType, model, lang, personaName, sessionId: undefined };
-}
 
 /**
  * Display and clear previous session state if present.
@@ -147,8 +110,7 @@ export async function runConversationLoop(
   if (initialInput) {
     history.push({ role: 'user', content: initialInput });
     log.debug('Loaded initial input into local history without auto-submitting to AI', {
-      initialInput,
-      sessionId,
+      ...createInputLogMeta(initialInput, sessionId),
     });
   }
 
@@ -184,7 +146,10 @@ export async function runConversationLoop(
     // No slash command detected, treat as regular message
     if (!match) {
       history.push({ role: 'user', content: trimmed });
-      log.debug('Sending to AI', { messageCount: history.length, sessionId });
+      log.debug('Sending to AI', {
+        messageCount: history.length,
+        ...createSessionLogMeta(sessionId),
+      });
       process.stdin.pause();
 
       const promptWithTransform = strategy.transformPrompt(trimmed);
@@ -210,7 +175,7 @@ export async function runConversationLoop(
           info(ui.playNoTask);
           continue;
         }
-        log.info('Play command', { task: match.text });
+        log.info('Play command', createPlayCommandLogMeta(match.text));
         return { action: 'execute', task: match.text };
       }
 

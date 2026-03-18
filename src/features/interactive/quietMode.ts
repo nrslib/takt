@@ -21,9 +21,9 @@ import {
   selectPostSummaryAction,
 } from './interactive.js';
 import {
-  initializeSession,
   callAIWithRetry,
 } from './conversationLoop.js';
+import { initializeSession } from './sessionInitialization.js';
 
 const log = createLogger('quiet-mode');
 

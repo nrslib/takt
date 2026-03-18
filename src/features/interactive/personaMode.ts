@@ -15,10 +15,10 @@ import {
   DEFAULT_INTERACTIVE_TOOLS,
 } from './interactive.js';
 import {
-  initializeSession,
   displayAndClearSessionState,
   runConversationLoop,
 } from './conversationLoop.js';
+import { initializeSession } from './sessionInitialization.js';
 
 /**
  * Run persona mode: converse as the first movement's persona.

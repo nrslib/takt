@@ -26,10 +26,16 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   }),
 }));
 
-const { mockCheckCliStatus, mockFetchIssue, mockResolveAgentOverrides } = vi.hoisted(() => ({
+const {
+  mockCheckCliStatus,
+  mockFetchIssue,
+  mockResolveAgentOverrides,
+  mockResolveAssistantConfigLayers,
+} = vi.hoisted(() => ({
   mockCheckCliStatus: vi.fn(),
   mockFetchIssue: vi.fn(),
   mockResolveAgentOverrides: vi.fn(),
+  mockResolveAssistantConfigLayers: vi.fn(() => ({ local: {}, global: {} })),
 }));
 
 vi.mock('../infra/git/index.js', () => ({
@@ -86,6 +92,10 @@ vi.mock('../infra/config/index.js', () => ({
   resolveConfigValue: vi.fn((_: string, key: string) => (key === 'piece' ? 'default' : false)),
   resolveConfigValues: vi.fn(() => ({ language: 'en', interactivePreviewMovements: 3, provider: 'claude' })),
   loadPersonaSessions: vi.fn(() => ({})),
+}));
+
+vi.mock('../features/interactive/assistantConfig.js', () => ({
+  resolveAssistantConfigLayers: (...args: unknown[]) => mockResolveAssistantConfigLayers(...args),
 }));
 
 vi.mock('../shared/constants.js', async (importOriginal) => ({
@@ -159,6 +169,7 @@ beforeEach(() => {
   mockParseIssueNumbers.mockReturnValue([]);
   mockTaskRunnerListAllTaskItems.mockReturnValue([]);
   mockIsStaleRunningTask.mockReturnValue(false);
+  mockResolveAssistantConfigLayers.mockReturnValue({ local: {}, global: {} });
 });
 
 describe('Issue resolution in routing', () => {
@@ -536,6 +547,7 @@ describe('Issue resolution in routing', () => {
       // Given
       mockOpts.continue = true;
       mockResolveConfigValues.mockReturnValue({ language: 'en', interactivePreviewMovements: 3, provider: 'claude' });
+      mockResolveAssistantConfigLayers.mockReturnValue({ local: { provider: 'claude' }, global: {} });
       mockLoadPersonaSessions.mockReturnValue({ interactive: 'saved-session-123' });
 
       // When
@@ -555,13 +567,66 @@ describe('Issue resolution in routing', () => {
       );
     });
 
-    it('should prioritize CLI provider/model over top-level in --continue and interactiveMode', async () => {
+    it('should load assistant-scoped session when takt_providers.assistant is configured', async () => {
+      mockOpts.continue = true;
+      mockResolveConfigValues.mockReturnValue({
+        language: 'en',
+        interactivePreviewMovements: 3,
+        provider: 'claude',
+      });
+      mockResolveAssistantConfigLayers.mockReturnValue({
+        local: {
+          provider: 'claude',
+          taktProviders: {
+            assistant: {
+              provider: 'codex',
+              model: 'assistant-model',
+            },
+          },
+        },
+        global: {},
+      });
+      mockLoadPersonaSessions.mockReturnValue({
+        'interactive:codex': 'saved-session-codex',
+        interactive: 'saved-session-legacy',
+      });
+
+      await executeDefaultAction();
+
+      expect(mockLoadPersonaSessions).toHaveBeenCalledWith('/test/cwd', 'codex');
+      expect(mockInteractiveMode).toHaveBeenCalledWith(
+        '/test/cwd',
+        undefined,
+        expect.anything(),
+        'saved-session-codex',
+        undefined,
+        undefined,
+      );
+    });
+
+    it('should prioritize CLI provider/model over takt_providers.assistant in --continue and interactiveMode', async () => {
       mockOpts.continue = true;
       mockResolveAgentOverrides.mockReturnValue({ provider: 'opencode', model: 'cli-model' });
-      mockResolveConfigValues.mockReturnValue({ language: 'en', interactivePreviewMovements: 3, provider: 'claude' });
+      mockResolveConfigValues.mockReturnValue({
+        language: 'en',
+        interactivePreviewMovements: 3,
+        provider: 'claude',
+      });
+      mockResolveAssistantConfigLayers.mockReturnValue({
+        local: {
+          provider: 'claude',
+          taktProviders: {
+            assistant: {
+              provider: 'codex',
+              model: 'assistant-model',
+            },
+          },
+        },
+        global: {},
+      });
       mockLoadPersonaSessions.mockReturnValue({
         'interactive:opencode': 'saved-session-opencode',
-        interactive: 'saved-session-legacy',
+        'interactive:codex': 'saved-session-codex',
       });
 
       await executeDefaultAction();
@@ -577,10 +642,59 @@ describe('Issue resolution in routing', () => {
       );
     });
 
+    it('should use local assistant config for --continue when local config exists', async () => {
+      mockOpts.continue = true;
+      mockResolveConfigValues.mockReturnValue({
+        language: 'en',
+        interactivePreviewMovements: 3,
+        provider: 'mock',
+        model: 'global-top-level-model',
+      });
+      mockResolveAssistantConfigLayers.mockReturnValue({
+        local: {
+          provider: 'opencode',
+          model: 'local-top-level-model',
+          taktProviders: {
+            assistant: {
+              provider: 'codex',
+              model: 'local-assistant-model',
+            },
+          },
+        },
+        global: {
+          provider: 'claude',
+          model: 'global-top-level-model',
+          taktProviders: {
+            assistant: {
+              provider: 'cursor',
+              model: 'global-assistant-model',
+            },
+          },
+        },
+      });
+      mockLoadPersonaSessions.mockReturnValue({
+        'interactive:codex': 'saved-session-codex',
+      });
+
+      await executeDefaultAction();
+
+      expect(mockResolveAssistantConfigLayers).toHaveBeenCalledWith('/test/cwd');
+      expect(mockLoadPersonaSessions).toHaveBeenCalledWith('/test/cwd', 'codex');
+      expect(mockInteractiveMode).toHaveBeenCalledWith(
+        '/test/cwd',
+        undefined,
+        expect.anything(),
+        'saved-session-codex',
+        undefined,
+        undefined,
+      );
+    });
+
     it('should show message and start new session when --continue has no saved session', async () => {
       // Given
       mockOpts.continue = true;
       mockResolveConfigValues.mockReturnValue({ language: 'en', interactivePreviewMovements: 3, provider: 'claude' });
+      mockResolveAssistantConfigLayers.mockReturnValue({ local: { provider: 'claude' }, global: {} });
       mockLoadPersonaSessions.mockReturnValue({});
 
       // When

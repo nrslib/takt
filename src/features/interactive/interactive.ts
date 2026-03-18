@@ -18,10 +18,11 @@ import {
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
 import {
-  initializeSession,
   displayAndClearSessionState,
   runConversationLoop,
 } from './conversationLoop.js';
+import { buildInteractivePolicyPrompt } from './policyPrompt.js';
+import { initializeSession } from './sessionInitialization.js';
 import {
   type PieceContext,
   formatMovementPreviews,
@@ -156,22 +157,7 @@ export async function interactiveMode(
     hasRunSession,
     ...runPromptVars,
   });
-  const policyContent = loadTemplate('score_interactive_policy', ctx.lang, {});
   const ui = getLabelObject<InteractiveUIText>('interactive.ui', ctx.lang);
-
-  /**
-   * Inject policy into user message for AI call.
-   * Follows the same pattern as piece execution (perform_phase1_message.md).
-   */
-  function injectPolicy(userMessage: string): string {
-    const policyIntro = ctx.lang === 'ja'
-      ? '以下のポリシーは行動規範です。必ず遵守してください。'
-      : 'The following policy defines behavioral guidelines. Please follow them.';
-    const reminderLabel = ctx.lang === 'ja'
-      ? '上記の Policy セクションで定義されたポリシー規範を遵守してください。'
-      : 'Please follow the policy guidelines defined in the Policy section above.';
-    return `## Policy\n${policyIntro}\n\n${policyContent}\n\n---\n\n${userMessage}\n\n---\n**Policy Reminder:** ${reminderLabel}`;
-  }
 
   const excludeActions = options?.excludeActions;
   const selectAction = excludeActions?.length
@@ -196,7 +182,7 @@ export async function interactiveMode(
   return runConversationLoop(cwd, ctx, {
     systemPrompt,
     allowedTools: DEFAULT_INTERACTIVE_TOOLS,
-    transformPrompt: injectPolicy,
+    transformPrompt: (userMessage: string) => buildInteractivePolicyPrompt(ctx.lang, userMessage),
     introMessage: ui.intro,
     selectAction,
   }, pieceContext, initialInput);

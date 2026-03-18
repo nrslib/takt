@@ -24,6 +24,7 @@ const {
   mockFetchIssue,
   mockFetchPrReviewComments,
   mockResolveConfigValues,
+  mockResolveAssistantConfigLayers,
   mockLoadPersonaSessions,
   mockResolveAgentOverrides,
 } = vi.hoisted(() => ({
@@ -31,6 +32,7 @@ const {
   mockFetchIssue: vi.fn(),
   mockFetchPrReviewComments: vi.fn(),
   mockResolveConfigValues: vi.fn(() => ({ language: 'en', interactivePreviewMovements: 3, provider: 'claude' })),
+  mockResolveAssistantConfigLayers: vi.fn(() => ({ local: {}, global: {} })),
   mockLoadPersonaSessions: vi.fn(() => ({})),
   mockResolveAgentOverrides: vi.fn(),
 }));
@@ -95,6 +97,10 @@ vi.mock('../infra/config/index.js', () => ({
   loadPersonaSessions: (...args: unknown[]) => mockLoadPersonaSessions(...args),
 }));
 
+vi.mock('../features/interactive/assistantConfig.js', () => ({
+  resolveAssistantConfigLayers: (...args: unknown[]) => mockResolveAssistantConfigLayers(...args),
+}));
+
 const mockOpts: Record<string, unknown> = {};
 
 vi.mock('../app/cli/program.js', () => {
@@ -156,6 +162,7 @@ beforeEach(() => {
   mockListAllTaskItems.mockReturnValue([]);
   mockIsStaleRunningTask.mockReturnValue(false);
   mockResolveConfigValuesFn.mockReturnValue({ language: 'en', interactivePreviewMovements: 3, provider: 'claude' });
+  mockResolveAssistantConfigLayers.mockReturnValue({ local: {}, global: {} });
   mockLoadPersonaSessionsFn.mockReturnValue({});
   mockResolveAgentOverrides.mockReturnValue(undefined);
 });
@@ -397,12 +404,18 @@ describe('PR resolution in routing', () => {
         language: 'en',
         interactivePreviewMovements: 3,
         provider: 'codex',
-        taktProviders: {
-          assistant: {
-            provider: 'claude',
-            model: 'haiku',
+      });
+      mockResolveAssistantConfigLayers.mockReturnValue({
+        local: {
+          provider: 'codex',
+          taktProviders: {
+            assistant: {
+              provider: 'claude',
+              model: 'haiku',
+            },
           },
         },
+        global: {},
       });
       mockLoadPersonaSessionsFn.mockReturnValue({
         'interactive:claude': 'scoped-session-from-claude',
@@ -422,35 +435,90 @@ describe('PR resolution in routing', () => {
       );
     });
 
-    it('should keep takt_providers.assistant priority even when CLI override exists', async () => {
+    it('should prioritize CLI override over takt_providers.assistant when both are configured', async () => {
       mockOpts.continue = true;
       mockResolveAgentOverrides.mockReturnValue({ provider: 'opencode', model: 'cli-model' });
       mockResolveConfigValuesFn.mockReturnValue({
         language: 'en',
         interactivePreviewMovements: 3,
         provider: 'codex',
-        taktProviders: {
-          assistant: {
-            provider: 'claude',
-            model: 'haiku',
+      });
+      mockResolveAssistantConfigLayers.mockReturnValue({
+        local: {
+          provider: 'codex',
+          taktProviders: {
+            assistant: {
+              provider: 'claude',
+              model: 'haiku',
+            },
           },
         },
+        global: {},
       });
       mockLoadPersonaSessionsFn.mockReturnValue({
+        'interactive:opencode': 'scoped-session-from-opencode',
         'interactive:claude': 'scoped-session-from-claude',
         interactive: 'legacy-session-from-claude',
       });
 
       await executeDefaultAction();
 
-      expect(mockLoadPersonaSessionsFn).toHaveBeenCalledWith('/test/cwd', 'claude');
+      expect(mockLoadPersonaSessionsFn).toHaveBeenCalledWith('/test/cwd', 'opencode');
       expect(mockInteractiveMode).toHaveBeenCalledWith(
         '/test/cwd',
         undefined,
         expect.anything(),
-        'scoped-session-from-claude',
+        'scoped-session-from-opencode',
         undefined,
         { provider: 'opencode', model: 'cli-model' },
+      );
+    });
+
+    it('should use local config assistant provider when local config exists', async () => {
+      mockOpts.continue = true;
+      mockResolveConfigValuesFn.mockReturnValue({
+        language: 'en',
+        interactivePreviewMovements: 3,
+        provider: 'mock',
+        model: 'global-top-level-model',
+      });
+      mockResolveAssistantConfigLayers.mockReturnValue({
+        local: {
+          provider: 'opencode',
+          model: 'local-top-level-model',
+          taktProviders: {
+            assistant: {
+              provider: 'codex',
+              model: 'local-assistant-model',
+            },
+          },
+        },
+        global: {
+          provider: 'claude',
+          model: 'global-top-level-model',
+          taktProviders: {
+            assistant: {
+              provider: 'cursor',
+              model: 'global-assistant-model',
+            },
+          },
+        },
+      });
+      mockLoadPersonaSessionsFn.mockReturnValue({
+        'interactive:codex': 'scoped-session-from-codex',
+      });
+
+      await executeDefaultAction();
+
+      expect(mockResolveAssistantConfigLayers).toHaveBeenCalledWith('/test/cwd');
+      expect(mockLoadPersonaSessionsFn).toHaveBeenCalledWith('/test/cwd', 'codex');
+      expect(mockInteractiveMode).toHaveBeenCalledWith(
+        '/test/cwd',
+        undefined,
+        expect.anything(),
+        'scoped-session-from-codex',
+        undefined,
+        undefined,
       );
     });
   });
