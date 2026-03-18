@@ -1555,8 +1555,9 @@ describe('provider-based session management', () => {
 
       const sessions = loadPersonaSessions(testDir, 'codex');
       expect(sessions.coder).toBe('codex-session');
+      expect(sessions['coder:codex']).toBe('codex-session');
       // Old claude sessions should not remain
-      expect(Object.keys(sessions)).toHaveLength(1);
+      expect(sessions['coder:claude']).toBeUndefined();
     });
 
     it('should store provider in session data', () => {
@@ -1594,7 +1595,8 @@ describe('provider-based session management', () => {
 
       const sessions = loadWorktreeSessions(testDir, worktreePath, 'codex');
       expect(sessions.coder).toBe('codex-session');
-      expect(Object.keys(sessions)).toHaveLength(1);
+      expect(sessions['coder:codex']).toBe('codex-session');
+      expect(sessions['coder:claude']).toBeUndefined();
     });
 
     it('should store provider in session data', () => {

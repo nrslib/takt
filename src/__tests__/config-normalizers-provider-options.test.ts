@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { denormalizeProviderOptions } from '../infra/config/configNormalizers.js';
+import {
+  buildRawTaktProvidersOrThrow,
+  denormalizeProviderOptions,
+} from '../infra/config/configNormalizers.js';
 
 describe('denormalizeProviderOptions', () => {
   it('should convert camelCase provider options into persisted snake_case format', () => {
@@ -44,5 +47,31 @@ describe('denormalizeProviderOptions', () => {
     expect(result).toEqual({
       claude: { allowed_tools: ['Read', 'Bash'] },
     });
+  });
+});
+
+describe('buildRawTaktProvidersOrThrow', () => {
+  it('should build raw takt_providers when assistant is set', () => {
+    const result = buildRawTaktProvidersOrThrow({
+      assistant: {
+        provider: 'claude',
+        model: 'haiku',
+      },
+    });
+
+    expect(result).toEqual({
+      assistant: {
+        provider: 'claude',
+        model: 'haiku',
+      },
+    });
+  });
+
+  it('should throw when assistant is empty object', () => {
+    expect(() =>
+      buildRawTaktProvidersOrThrow({
+        assistant: {},
+      }),
+    ).toThrow(/takt_providers\.assistant/);
   });
 });

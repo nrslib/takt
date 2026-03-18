@@ -182,6 +182,24 @@ piece_overrides:
       expect(loaded.interactivePreviewMovements).toBe(2);
     });
 
+    it('should load takt_providers.assistant from project config yaml', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      const configContent = [
+        'provider: codex',
+        'model: gpt-5.4',
+        'takt_providers:',
+        '  assistant:',
+        '    provider: claude',
+        '    model: haiku',
+      ].join('\n');
+      writeFileSync(configPath, configContent, 'utf-8');
+
+      const loaded = loadProjectConfig(testDir);
+      expect(loaded.taktProviders).toEqual({
+        assistant: { provider: 'claude', model: 'haiku' },
+      });
+    });
+
     it('should save project-local fields as snake_case keys', () => {
       const config = {
         pipeline: {
@@ -211,6 +229,24 @@ piece_overrides:
       expect(raw).toContain('concurrency: 4');
       expect(raw).toContain('task_poll_interval_ms: 1500');
       expect(raw).toContain('interactive_preview_movements: 1');
+    });
+
+    it('should save takt_providers.assistant as snake_case keys', () => {
+      const config = {
+        provider: 'codex',
+        model: 'gpt-5.4',
+        taktProviders: {
+          assistant: { provider: 'claude', model: 'haiku' },
+        },
+      } as ProjectLocalConfig;
+
+      saveProjectConfig(testDir, config);
+
+      const raw = readFileSync(join(testDir, '.takt', 'config.yaml'), 'utf-8');
+      expect(raw).toContain('takt_providers:');
+      expect(raw).toContain('assistant:');
+      expect(raw).toContain('provider: claude');
+      expect(raw).toContain('model: haiku');
     });
 
     it('should not persist empty pipeline object on save', () => {
@@ -338,6 +374,38 @@ piece_overrides:
       expect(() => loadProjectConfig(testDir)).toThrow(/Configuration error: invalid persona_providers\.coder/);
     });
 
+    it('should throw when takt_providers.assistant has unknown field', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(
+        configPath,
+        [
+          'takt_providers:',
+          '  assistant:',
+          '    provider: codex',
+          '    unknown_field: true',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      expect(() => loadProjectConfig(testDir)).toThrow(/Configuration error: invalid takt_providers\.assistant/);
+    });
+
+    it('should throw when takt_providers.assistant uses incompatible provider/model', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(
+        configPath,
+        [
+          'takt_providers:',
+          '  assistant:',
+          '    provider: codex',
+          '    model: opus',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      expect(() => loadProjectConfig(testDir)).toThrow(/Claude model alias/);
+    });
+
     it('should throw when persona_providers entry has invalid provider', () => {
       const configPath = join(testDir, '.takt', 'config.yaml');
       writeFileSync(
@@ -414,6 +482,40 @@ piece_overrides:
       );
 
       expect(() => loadProjectConfig(testDir)).not.toThrow();
+    });
+
+    it('should throw on save when taktProviders is set without assistant', () => {
+      const invalidConfig = {
+        provider: 'codex',
+        taktProviders: {},
+      } as unknown as ProjectLocalConfig;
+
+      expect(() => saveProjectConfig(testDir, invalidConfig)).toThrow(/taktProviders\.assistant/);
+    });
+
+    it('should throw on save when taktProviders.assistant has incompatible provider/model', () => {
+      const invalidConfig = {
+        provider: 'codex',
+        taktProviders: {
+          assistant: {
+            provider: 'codex',
+            model: 'opus',
+          },
+        },
+      } as unknown as ProjectLocalConfig;
+
+      expect(() => saveProjectConfig(testDir, invalidConfig)).toThrow(/Claude model alias/);
+    });
+
+    it('should throw on save when taktProviders.assistant is empty object', () => {
+      const invalidConfig = {
+        provider: 'codex',
+        taktProviders: {
+          assistant: {},
+        },
+      } as unknown as ProjectLocalConfig;
+
+      expect(() => saveProjectConfig(testDir, invalidConfig)).toThrow(/takt_providers\.assistant/);
     });
   });
 

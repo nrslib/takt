@@ -91,6 +91,29 @@ describe('loadGlobalConfig', () => {
     expect(config.interactivePreviewMovements).toBe(2);
   });
 
+  it('should load takt_providers.assistant from global config.yaml', () => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(
+      getGlobalConfigPath(),
+      [
+        'language: en',
+        'provider: codex',
+        'model: gpt-5.4',
+        'takt_providers:',
+        '  assistant:',
+        '    provider: claude',
+        '    model: haiku',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const config = loadGlobalConfig();
+    expect(config.taktProviders).toEqual({
+      assistant: { provider: 'claude', model: 'haiku' },
+    });
+  });
+
   it('should persist project-local keys when saving global config', () => {
     const taktDir = join(testHomeDir, '.takt');
     mkdirSync(taktDir, { recursive: true });
@@ -118,6 +141,90 @@ describe('loadGlobalConfig', () => {
     expect(raw).toContain('interactive_preview_movements:');
     expect(raw).toContain('allow_git_hooks: true');
     expect(raw).toContain('allow_git_filters: true');
+  });
+
+  it('should persist takt_providers.assistant when saving global config', () => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
+
+    const config = loadGlobalConfig();
+    config.provider = 'codex';
+    config.model = 'gpt-5.4';
+    config.taktProviders = {
+      assistant: { provider: 'claude', model: 'haiku' },
+    };
+    saveGlobalConfig(config);
+    invalidateGlobalConfigCache();
+
+    const reloaded = loadGlobalConfig();
+    expect(reloaded.taktProviders).toEqual({
+      assistant: { provider: 'claude', model: 'haiku' },
+    });
+
+    const raw = readFileSync(getGlobalConfigPath(), 'utf-8');
+    expect(raw).toContain('takt_providers:');
+    expect(raw).toContain('assistant:');
+    expect(raw).toContain('provider: claude');
+    expect(raw).toContain('model: haiku');
+  });
+
+  it('should fail fast on load when takt_providers.assistant has incompatible provider/model', () => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(
+      getGlobalConfigPath(),
+      [
+        'language: en',
+        'takt_providers:',
+        '  assistant:',
+        '    provider: codex',
+        '    model: opus',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    expect(() => loadGlobalConfig()).toThrow(/Claude model alias/);
+  });
+
+  it('should fail fast on save when taktProviders is set without assistant', () => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
+
+    const config = loadGlobalConfig();
+    config.taktProviders = {} as unknown as NonNullable<typeof config.taktProviders>;
+
+    expect(() => saveGlobalConfig(config)).toThrow(/taktProviders\.assistant/);
+  });
+
+  it('should fail fast on save when taktProviders.assistant has incompatible provider/model', () => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
+
+    const config = loadGlobalConfig();
+    config.taktProviders = {
+      assistant: {
+        provider: 'codex',
+        model: 'opus',
+      },
+    };
+
+    expect(() => saveGlobalConfig(config)).toThrow(/Claude model alias/);
+  });
+
+  it('should fail fast on save when taktProviders.assistant is empty object', () => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
+
+    const config = loadGlobalConfig();
+    config.taktProviders = {
+      assistant: {} as NonNullable<typeof config.taktProviders>['assistant'],
+    };
+
+    expect(() => saveGlobalConfig(config)).toThrow(/takt_providers\.assistant/);
   });
 
   it('should return the same cached object on subsequent calls', () => {

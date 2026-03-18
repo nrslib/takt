@@ -11,6 +11,8 @@ import {
   normalizePieceOverrides,
   normalizePipelineConfig,
   normalizePersonaProviders,
+  normalizeTaktProviders,
+  buildRawTaktProvidersOrThrow,
   normalizeRuntime,
 } from '../configNormalizers.js';
 import { getGlobalConfigPath } from '../paths.js';
@@ -150,6 +152,14 @@ export class GlobalConfigManager {
       pipeline: normalizePipelineConfig(
         parsed.pipeline as { default_branch_prefix?: string; commit_message_template?: string; pr_body_template?: string } | undefined,
       ),
+      taktProviders: normalizeTaktProviders(
+        parsed.takt_providers as {
+          assistant?: {
+            provider?: GlobalConfig['provider'];
+            model?: string;
+          };
+        } | undefined,
+      ),
       personaProviders: normalizePersonaProviders(
         parsed.persona_providers as Record<string, string | { type?: string; provider?: string; model?: string }> | undefined,
       ),
@@ -167,6 +177,11 @@ export class GlobalConfigManager {
   save(config: GlobalConfig): void {
     const configPath = getGlobalConfigPath();
     const raw = serializeGlobalConfig(config);
+
+    const rawTaktProviders = buildRawTaktProvidersOrThrow(config.taktProviders);
+    if (rawTaktProviders) {
+      raw.takt_providers = rawTaktProviders;
+    }
     writeFileSync(configPath, stringifyYaml(raw), 'utf-8');
     this.invalidateCache();
     invalidateAllResolvedConfigCache();

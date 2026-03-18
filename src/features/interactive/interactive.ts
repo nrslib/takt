@@ -11,6 +11,7 @@
  */
 
 import type { Language } from '../../core/models/index.js';
+import type { ProviderType } from '../../infra/providers/index.js';
 import {
   type SessionState,
 } from '../../infra/config/index.js';
@@ -120,6 +121,10 @@ export {
 export interface InteractiveModeOptions {
   /** Actions to exclude from the post-summary action selector. */
   excludeActions?: readonly SummaryActionValue[];
+  /** CLI provider override for assistant mode */
+  provider?: ProviderType;
+  /** CLI model override for assistant mode */
+  model?: string;
 }
 
 export async function interactiveMode(
@@ -130,7 +135,10 @@ export async function interactiveMode(
   runSessionContext?: RunSessionContext,
   options?: InteractiveModeOptions,
 ): Promise<InteractiveModeResult> {
-  const baseCtx = initializeSession(cwd, 'interactive');
+  const baseCtx = initializeSession(cwd, 'interactive', {
+    provider: options?.provider,
+    model: options?.model,
+  });
   const ctx = sessionId ? { ...baseCtx, sessionId } : baseCtx;
 
   displayAndClearSessionState(cwd, ctx.lang);

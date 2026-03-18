@@ -420,7 +420,6 @@ export const PieceConfigRawSchema = z.object({
   initial_movement: z.string().optional(),
   max_movements: z.number().int().positive().optional().default(10),
   loop_monitors: z.array(LoopMonitorSchema).optional(),
-  answer_agent: z.string().optional(),
   /** Default interactive mode for this piece (overrides user default) */
   interactive_mode: InteractiveModeSchema.optional(),
 });
@@ -443,6 +442,21 @@ export const PersonaProviderReferenceSchema = z.union([
   PersonaProviderBlockSchema,
   PersonaProviderEntrySchema,
 ]);
+
+export const TaktProviderEntrySchema = z.object({
+  provider: ProviderTypeSchema.optional(),
+  model: z.string().optional(),
+}).strict().refine(
+  (entry) => entry.provider !== undefined || entry.model !== undefined,
+  { message: "takt_providers.assistant must include either 'provider' or 'model'" }
+);
+
+export const TaktProvidersSchema = z.object({
+  assistant: TaktProviderEntrySchema.optional(),
+}).strict().refine(
+  (entry) => entry.assistant !== undefined,
+  { message: "takt_providers must include 'assistant'" }
+);
 
 /** Custom agent configuration schema */
 export const CustomAgentConfigSchema = z.object({
@@ -514,6 +528,7 @@ export const ProjectConfigSchema = z.object({
   /** Create PR as draft (project override) */
   draft_pr: z.boolean().optional(),
   pipeline: PipelineConfigSchema.optional(),
+  takt_providers: TaktProvidersSchema.optional(),
   persona_providers: z.record(z.string(), PersonaProviderReferenceSchema).optional(),
   branch_name_strategy: z.enum(['romaji', 'ai']).optional(),
   minimal_output: z.boolean().optional(),

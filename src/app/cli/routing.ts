@@ -14,7 +14,9 @@ import {
   dispatchConversationAction,
   type InteractiveModeResult,
 } from '../../features/interactive/index.js';
-import { getPieceDescription, resolveConfigValue, resolveConfigValues, loadPersonaSessions } from '../../infra/config/index.js';
+import { getPieceDescription, resolveConfigValue, resolveConfigValues, loadPersonaSessions, type ConfigParameterKey } from '../../infra/config/index.js';
+import { resolvePersonaSessionId } from '../../infra/config/project/sessionStore.js';
+import { resolveAssistantProviderModelFromConfig } from '../../core/config/provider-resolution.js';
 import { program, resolvedCwd, pipelineMode } from './program.js';
 import { resolveAgentOverrides } from './helpers.js';
 import { loadTaskHistory } from './taskHistory.js';
@@ -108,7 +110,10 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     }
   }
 
-  const globalConfig = resolveConfigValues(resolvedCwd, ['language', 'interactivePreviewMovements', 'provider']);
+  const globalConfig = resolveConfigValues(
+    resolvedCwd,
+    ['language', 'interactivePreviewMovements', 'provider', 'model', 'taktProviders' as ConfigParameterKey],
+  );
   const lang = resolveLanguage(globalConfig.language);
 
   const pieceId = await determinePiece(resolvedCwd, selectOptions.piece);
@@ -140,9 +145,18 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     case 'assistant': {
       let selectedSessionId: string | undefined;
       if (opts.continue === true) {
-        const providerType = globalConfig.provider;
+        const { provider: providerType } = resolveAssistantProviderModelFromConfig(
+          globalConfig,
+          {
+            provider: agentOverrides?.provider,
+            model: agentOverrides?.model,
+          },
+        );
+        if (!providerType) {
+          throw new Error('Provider is not configured.');
+        }
         const savedSessions = loadPersonaSessions(resolvedCwd, providerType);
-        const savedSessionId = savedSessions['interactive'];
+        const savedSessionId = resolvePersonaSessionId(savedSessions, 'interactive', providerType);
         if (savedSessionId) {
           selectedSessionId = savedSessionId;
         } else {
@@ -150,7 +164,19 @@ export async function executeDefaultAction(task?: string): Promise<void> {
         }
       }
       const interactiveOpts = prBranch ? { excludeActions: ['create_issue'] as const } : undefined;
-      result = await interactiveMode(resolvedCwd, initialInput, pieceContext, selectedSessionId, undefined, interactiveOpts);
+      const assistantModeOptions = {
+        ...interactiveOpts,
+        ...(agentOverrides?.provider ? { provider: agentOverrides.provider } : {}),
+        ...(agentOverrides?.model ? { model: agentOverrides.model } : {}),
+      };
+      result = await interactiveMode(
+        resolvedCwd,
+        initialInput,
+        pieceContext,
+        selectedSessionId,
+        undefined,
+        Object.keys(assistantModeOptions).length > 0 ? assistantModeOptions : undefined,
+      );
       break;
     }
 

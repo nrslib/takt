@@ -297,7 +297,6 @@ description: Optional description
 max_movements: 10
 initial_movement: plan    # First movement to execute
 interactive_mode: assistant  # Default interactive mode (assistant|passthrough|quiet|persona)
-answer_agent: agent-name  # Route AskUserQuestion to this agent (optional)
 
 # Piece-level provider options (inherited by all movements unless overridden)
 piece_config:

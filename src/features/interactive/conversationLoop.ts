@@ -10,10 +10,16 @@
 import chalk from 'chalk';
 import {
   resolveConfigValues,
+  type ConfigParameterKey,
   loadSessionState,
   clearSessionState,
 } from '../../infra/config/index.js';
 import { getProvider, type ProviderType } from '../../infra/providers/index.js';
+import {
+  resolveAssistantProviderModelFromConfig,
+  type AssistantProviderConfig,
+  type AssistantCliOverrides,
+} from '../../core/config/provider-resolution.js';
 import { createLogger } from '../../shared/utils/index.js';
 import { info, error, blankLine } from '../../shared/ui/index.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
@@ -45,15 +51,28 @@ const log = createLogger('conversation-loop');
  * Callers that need session continuity pass sessionId explicitly
  * (e.g., --continue flag or /resume command).
  */
-export function initializeSession(cwd: string, personaName: string): SessionContext {
-  const globalConfig = resolveConfigValues(cwd, ['language', 'provider', 'model']);
+export function initializeSession(
+  cwd: string,
+  personaName: string,
+  assistantCliOverrides?: AssistantCliOverrides,
+): SessionContext {
+  const globalConfig = resolveConfigValues(
+    cwd,
+    ['language', 'provider', 'model', 'taktProviders' as ConfigParameterKey],
+  );
   const lang = resolveLanguage(globalConfig.language);
-  if (!globalConfig.provider) {
+  const resolvedProviderModel = personaName === 'interactive'
+    ? resolveAssistantProviderModelFromConfig(globalConfig as AssistantProviderConfig, assistantCliOverrides)
+    : {
+      provider: globalConfig.provider as ProviderType | undefined,
+      model: globalConfig.model as string | undefined,
+    };
+  const { provider: resolvedProvider, model } = resolvedProviderModel;
+  if (!resolvedProvider) {
     throw new Error('Provider is not configured.');
   }
-  const providerType = globalConfig.provider as ProviderType;
+  const providerType = resolvedProvider;
   const provider = getProvider(providerType);
-  const model = globalConfig.model as string | undefined;
 
   return { provider, providerType, model, lang, personaName, sessionId: undefined };
 }

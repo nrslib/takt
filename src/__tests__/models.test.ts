@@ -699,6 +699,26 @@ describe('GlobalConfigSchema', () => {
     expect(provider?.network_access).toBe(true);
   });
 
+  it('should parse takt_providers.assistant in global config schema', () => {
+    const result = GlobalConfigSchema.parse({
+      provider: 'codex',
+      model: 'gpt-5.4',
+      takt_providers: {
+        assistant: {
+          provider: 'claude',
+          model: 'haiku',
+        },
+      },
+    } as unknown) as Record<string, unknown>;
+
+    expect(result.takt_providers).toEqual({
+      assistant: {
+        provider: 'claude',
+        model: 'haiku',
+      },
+    });
+  });
+
   it('should reject persona_providers because it is project-local only', () => {
     expect(() => GlobalConfigSchema.parse({
       persona_providers: {
@@ -735,6 +755,26 @@ describe('ProjectConfigSchema', () => {
 
     expect(result.piece_runtime_prepare).toEqual({
       custom_scripts: true,
+    });
+  });
+
+  it('should parse takt_providers.assistant in project config schema', () => {
+    const result = ProjectConfigSchema.parse({
+      provider: 'codex',
+      model: 'gpt-5.4',
+      takt_providers: {
+        assistant: {
+          provider: 'claude',
+          model: 'haiku',
+        },
+      },
+    } as unknown) as Record<string, unknown>;
+
+    expect(result.takt_providers).toEqual({
+      assistant: {
+        provider: 'claude',
+        model: 'haiku',
+      },
     });
   });
 });

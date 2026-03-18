@@ -26,9 +26,10 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   }),
 }));
 
-const { mockCheckCliStatus, mockFetchIssue } = vi.hoisted(() => ({
+const { mockCheckCliStatus, mockFetchIssue, mockResolveAgentOverrides } = vi.hoisted(() => ({
   mockCheckCliStatus: vi.fn(),
   mockFetchIssue: vi.fn(),
+  mockResolveAgentOverrides: vi.fn(),
 }));
 
 vi.mock('../infra/git/index.js', () => ({
@@ -87,7 +88,8 @@ vi.mock('../infra/config/index.js', () => ({
   loadPersonaSessions: vi.fn(() => ({})),
 }));
 
-vi.mock('../shared/constants.js', () => ({
+vi.mock('../shared/constants.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   DEFAULT_PIECE_NAME: 'default',
 }));
 
@@ -107,7 +109,7 @@ vi.mock('../app/cli/program.js', () => {
 });
 
 vi.mock('../app/cli/helpers.js', () => ({
-  resolveAgentOverrides: vi.fn(),
+  resolveAgentOverrides: (...args: unknown[]) => mockResolveAgentOverrides(...args),
   isDirectTask: vi.fn(() => false),
 }));
 
@@ -153,6 +155,7 @@ beforeEach(() => {
   mockDeterminePiece.mockResolvedValue('default');
   mockInteractiveMode.mockResolvedValue({ action: 'execute', task: 'summarized task' });
   mockIsDirectTask.mockReturnValue(false);
+  mockResolveAgentOverrides.mockReturnValue(undefined);
   mockParseIssueNumbers.mockReturnValue([]);
   mockTaskRunnerListAllTaskItems.mockReturnValue([]);
   mockIsStaleRunningTask.mockReturnValue(false);
@@ -549,6 +552,28 @@ describe('Issue resolution in routing', () => {
         'saved-session-123',
         undefined,
         undefined,
+      );
+    });
+
+    it('should prioritize CLI provider/model over top-level in --continue and interactiveMode', async () => {
+      mockOpts.continue = true;
+      mockResolveAgentOverrides.mockReturnValue({ provider: 'opencode', model: 'cli-model' });
+      mockResolveConfigValues.mockReturnValue({ language: 'en', interactivePreviewMovements: 3, provider: 'claude' });
+      mockLoadPersonaSessions.mockReturnValue({
+        'interactive:opencode': 'saved-session-opencode',
+        interactive: 'saved-session-legacy',
+      });
+
+      await executeDefaultAction();
+
+      expect(mockLoadPersonaSessions).toHaveBeenCalledWith('/test/cwd', 'opencode');
+      expect(mockInteractiveMode).toHaveBeenCalledWith(
+        '/test/cwd',
+        undefined,
+        expect.anything(),
+        'saved-session-opencode',
+        undefined,
+        { provider: 'opencode', model: 'cli-model' },
       );
     });
 

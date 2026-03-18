@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   resolveAgentProviderModel,
+  resolveAssistantProviderModel,
   resolveMovementProviderModel,
   resolveProviderModelCandidates,
 } from '../core/piece/provider-resolution.js';
@@ -577,5 +578,49 @@ describe('resolveAgentProviderModel', () => {
 
     expect(result.provider).toBe('claude');
     expect(result.model).toBe('persona-model');
+  });
+});
+
+describe('resolveAssistantProviderModel', () => {
+  it('should prioritize takt_providers.assistant over CLI and global', () => {
+    const result = resolveAssistantProviderModel({
+      assistantProvider: 'opencode',
+      assistantModel: 'assistant-model',
+      cliProvider: 'codex',
+      cliModel: 'cli-model',
+      globalProvider: 'claude',
+      globalModel: 'global-model',
+    });
+
+    expect(result).toEqual({
+      provider: 'opencode',
+      model: 'assistant-model',
+    });
+  });
+
+  it('should fallback to CLI when assistant override is not configured', () => {
+    const result = resolveAssistantProviderModel({
+      cliProvider: 'codex',
+      cliModel: 'cli-model',
+      globalProvider: 'claude',
+      globalModel: 'global-model',
+    });
+
+    expect(result).toEqual({
+      provider: 'codex',
+      model: 'cli-model',
+    });
+  });
+
+  it('should fallback to global when assistant and CLI are not configured', () => {
+    const result = resolveAssistantProviderModel({
+      globalProvider: 'claude',
+      globalModel: 'global-model',
+    });
+
+    expect(result).toEqual({
+      provider: 'claude',
+      model: 'global-model',
+    });
   });
 });

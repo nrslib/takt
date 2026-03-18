@@ -3,6 +3,23 @@ import { normalizePieceConfig } from '../infra/config/loaders/pieceParser.js';
 import { mergeProviderOptions } from '../infra/config/providerOptions.js';
 
 describe('normalizePieceConfig provider_options', () => {
+  it('answer_agent を指定しても PieceConfig に answerAgent を残さない', () => {
+    const raw = {
+      name: 'answer-agent-removed',
+      answer_agent: 'reviewer',
+      movements: [
+        {
+          name: 'implement',
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    const config = normalizePieceConfig(raw, process.cwd()) as Record<string, unknown>;
+
+    expect(config.answerAgent).toBeUndefined();
+  });
+
   it('piece-level global を movement に継承し、movement 側で上書きできる', () => {
     const raw = {
       name: 'provider-options',

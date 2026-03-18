@@ -143,6 +143,9 @@ function updateSessionData(
   }
 
   sessions[persona] = sessionId;
+  if (provider) {
+    sessions[`${persona}:${provider}`] = sessionId;
+  }
 
   const data: PersonaSessionData = {
     personaSessions: sessions,
@@ -160,6 +163,28 @@ export function getPersonaSessionsPath(projectDir: string): string {
 /** Load saved persona sessions. Returns empty if provider has changed. */
 export function loadPersonaSessions(projectDir: string, currentProvider?: string): Record<string, string> {
   return readSessionData(getPersonaSessionsPath(projectDir), currentProvider);
+}
+
+/**
+ * Resolve persona session ID with provider-aware key fallback.
+ *
+ * Priority:
+ * 1) "{persona}:{provider}" (collision-safe key)
+ * 2) "{persona}" (legacy/simple key)
+ */
+export function resolvePersonaSessionId(
+  sessions: Record<string, string>,
+  persona: string,
+  provider?: string,
+): string | undefined {
+  if (provider) {
+    const scopedKey = `${persona}:${provider}`;
+    const scoped = sessions[scopedKey];
+    if (scoped) {
+      return scoped;
+    }
+  }
+  return sessions[persona];
 }
 
 /** Save persona sessions (atomic write) */

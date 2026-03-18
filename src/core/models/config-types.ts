@@ -16,6 +16,22 @@ export interface PersonaProviderEntry {
   model?: string;
 }
 
+export interface TaktProviderEntry {
+  provider: 'claude' | 'codex' | 'opencode' | 'cursor' | 'copilot' | 'mock';
+  model?: string;
+}
+
+export type TaktProviderModelOnlyEntry = {
+  provider?: 'claude' | 'codex' | 'opencode' | 'cursor' | 'copilot' | 'mock';
+  model: string;
+};
+
+export type TaktProviderConfigEntry = TaktProviderEntry | TaktProviderModelOnlyEntry;
+
+export interface TaktProvidersConfig {
+  assistant: TaktProviderConfigEntry;
+}
+
 /** Movement-specific quality gates override */
 export interface MovementQualityGatesOverride {
   qualityGates?: string[];
@@ -129,6 +145,8 @@ export interface ProjectConfig {
   withSubmodules?: boolean;
   /** Pipeline execution settings */
   pipeline?: PipelineConfig;
+  /** TAKT internal target provider/model overrides */
+  taktProviders?: TaktProvidersConfig;
   /** Per-persona provider/model overrides */
   personaProviders?: Record<string, PersonaProviderEntry>;
   /** Branch name generation strategy */

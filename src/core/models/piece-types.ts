@@ -260,12 +260,6 @@ export interface PieceConfig {
   loopDetection?: LoopDetectionConfig;
   /** Loop monitors for detecting cyclic patterns between movements */
   loopMonitors?: LoopMonitorConfig[];
-  /**
-   * Agent to use for answering AskUserQuestion prompts automatically.
-   * When specified, questions from Claude Code are routed to this agent
-   * instead of prompting the user interactively.
-   */
-  answerAgent?: string;
   /** Default interactive mode for this piece (overrides user default) */
   interactiveMode?: InteractiveMode;
 }

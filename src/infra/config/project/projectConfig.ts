@@ -14,6 +14,8 @@ import {
   denormalizeProviderProfiles,
   denormalizeProviderOptions,
   normalizePersonaProviders,
+  normalizeTaktProviders,
+  buildRawTaktProvidersOrThrow,
   normalizePieceOverrides,
   denormalizePieceOverrides,
   normalizeRuntime,
@@ -83,6 +85,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     provider_profiles,
     analytics,
     pipeline,
+    takt_providers,
     persona_providers,
     branch_name_strategy,
     minimal_output,
@@ -110,8 +113,18 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
 
   const analyticsConfig = normalizeAnalytics(analytics as Record<string, unknown> | undefined);
 
+  const normalizedTaktProviders = normalizeTaktProviders(
+    takt_providers as {
+      assistant?: {
+        provider?: ProjectConfig['provider'];
+        model?: string;
+      };
+    } | undefined,
+  );
+
   return {
     pipeline: normalizedPipeline,
+    taktProviders: normalizedTaktProviders,
     personaProviders: normalizedPersonaProviders,
     branchNameStrategy: branch_name_strategy as ProjectConfig['branchNameStrategy'],
     minimalOutput: minimal_output as boolean | undefined,
@@ -215,6 +228,12 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
   } else {
     delete savePayload.persona_providers;
   }
+  const rawTaktProviders = buildRawTaktProvidersOrThrow(config.taktProviders);
+  if (rawTaktProviders) {
+    savePayload.takt_providers = rawTaktProviders;
+  } else {
+    delete savePayload.takt_providers;
+  }
   if (normalizedSubmodules !== undefined) {
     savePayload.submodules = normalizedSubmodules;
     delete savePayload.with_submodules;
@@ -238,6 +257,7 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
   delete savePayload.taskPollIntervalMs;
   delete savePayload.interactivePreviewMovements;
   delete savePayload.personaProviders;
+  delete savePayload.taktProviders;
   delete savePayload.pieceRuntimePrepare;
 
   const rawPieceOverrides = denormalizePieceOverrides(config.pieceOverrides);

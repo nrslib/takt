@@ -63,6 +63,22 @@ export interface AgentProviderModelOutput {
   model?: string;
 }
 
+export interface AssistantProviderModelInput {
+  assistantProvider?: ProviderType;
+  assistantModel?: string;
+  cliProvider?: ProviderType;
+  cliModel?: string;
+  localProvider?: ProviderType;
+  localModel?: string;
+  globalProvider?: ProviderType;
+  globalModel?: string;
+}
+
+export interface AssistantProviderModelOutput {
+  provider?: ProviderType;
+  model?: string;
+}
+
 function resolveModelFromCandidates(
   candidates: readonly ModelProviderCandidate[],
   resolvedProvider: ProviderType | undefined,
@@ -93,6 +109,26 @@ export function resolveAgentProviderModel(input: AgentProviderModelInput): Agent
     { model: input.cliModel },
     { model: personaEntry?.model },
     { model: input.stepModel },
+    { model: input.localModel, provider: input.localProvider },
+    { model: input.globalModel, provider: input.globalProvider },
+  ], provider);
+
+  return { provider, model };
+}
+
+export function resolveAssistantProviderModel(
+  input: AssistantProviderModelInput,
+): AssistantProviderModelOutput {
+  const provider = resolveProviderModelCandidates([
+    { provider: input.assistantProvider },
+    { provider: input.cliProvider },
+    { provider: input.localProvider },
+    { provider: input.globalProvider },
+  ]).provider;
+
+  const model = resolveModelFromCandidates([
+    { model: input.assistantModel },
+    { model: input.cliModel },
     { model: input.localModel, provider: input.localProvider },
     { model: input.globalModel, provider: input.globalProvider },
   ], provider);
