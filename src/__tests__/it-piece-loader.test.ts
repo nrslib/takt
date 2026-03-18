@@ -742,11 +742,104 @@ movements:
     expect(() => loadPiece('runtime-custom', testDir)).toThrow(/piece_runtime_prepare\.custom_scripts/);
   });
 
+  it('allows piece runtime.prepare gradle preset by default', () => {
+    const piecesDir = join(testDir, '.takt', 'pieces');
+    mkdirSync(piecesDir, { recursive: true });
+
+    writeFileSync(join(piecesDir, 'runtime-gradle.yaml'), `
+name: runtime-gradle
+piece_config:
+  runtime:
+    prepare:
+      - gradle
+movements:
+  - name: implement
+    instruction: "Do the work"
+`);
+
+    const config = loadPiece('runtime-gradle', testDir);
+
+    expect(config).not.toBeNull();
+    expect(config!.runtime).toEqual({ prepare: ['gradle'] });
+  });
+
+  it('allows piece runtime.prepare node preset by default', () => {
+    const piecesDir = join(testDir, '.takt', 'pieces');
+    mkdirSync(piecesDir, { recursive: true });
+
+    writeFileSync(join(piecesDir, 'runtime-node.yaml'), `
+name: runtime-node
+piece_config:
+  runtime:
+    prepare:
+      - node
+movements:
+  - name: implement
+    instruction: "Do the work"
+`);
+
+    const config = loadPiece('runtime-node', testDir);
+
+    expect(config).not.toBeNull();
+    expect(config!.runtime).toEqual({ prepare: ['node'] });
+  });
+
   it('allows piece runtime.prepare custom scripts when project config enables them', () => {
     const piecesDir = join(testDir, '.takt', 'pieces');
     mkdirSync(piecesDir, { recursive: true });
 
     writeFileSync(join(testDir, '.takt', 'config.yaml'), 'piece_runtime_prepare:\n  custom_scripts: true\n');
+    writeFileSync(join(piecesDir, 'runtime-custom.yaml'), `
+name: runtime-custom
+piece_config:
+  runtime:
+    prepare:
+      - ./setup.sh
+movements:
+  - name: implement
+    instruction: "Do the work"
+`);
+
+    const config = loadPiece('runtime-custom', testDir);
+
+    expect(config).not.toBeNull();
+    expect(config!.runtime).toEqual({ prepare: ['./setup.sh'] });
+  });
+
+  it('rejects piece runtime.prepare custom scripts when global allows and project explicitly denies', () => {
+    const piecesDir = join(testDir, '.takt', 'pieces');
+    mkdirSync(piecesDir, { recursive: true });
+    loadGlobalConfigMock.mockReturnValue({
+      pieceRuntimePrepare: { customScripts: true },
+    });
+    writeFileSync(
+      join(testDir, '.takt', 'config.yaml'),
+      'piece_runtime_prepare:\n  custom_scripts: false\n',
+    );
+    writeFileSync(join(piecesDir, 'runtime-custom.yaml'), `
+name: runtime-custom
+piece_config:
+  runtime:
+    prepare:
+      - ./setup.sh
+movements:
+  - name: implement
+    instruction: "Do the work"
+`);
+
+    expect(() => loadPiece('runtime-custom', testDir)).toThrow(/piece_runtime_prepare\.custom_scripts/);
+  });
+
+  it('allows piece runtime.prepare custom scripts when global denies and project explicitly allows', () => {
+    const piecesDir = join(testDir, '.takt', 'pieces');
+    mkdirSync(piecesDir, { recursive: true });
+    loadGlobalConfigMock.mockReturnValue({
+      pieceRuntimePrepare: { customScripts: false },
+    });
+    writeFileSync(
+      join(testDir, '.takt', 'config.yaml'),
+      'piece_runtime_prepare:\n  custom_scripts: true\n',
+    );
     writeFileSync(join(piecesDir, 'runtime-custom.yaml'), `
 name: runtime-custom
 piece_config:

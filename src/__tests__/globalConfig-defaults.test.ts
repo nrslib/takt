@@ -745,6 +745,37 @@ describe('loadGlobalConfig', () => {
       const reloaded = loadGlobalConfig();
       expect(reloaded.runtime).toEqual({ prepare: ['gradle', 'node'] });
     });
+
+    it('should load piece_runtime_prepare from config.yaml', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(
+        getGlobalConfigPath(),
+        [
+          'language: en',
+          'piece_runtime_prepare:',
+          '  custom_scripts: true',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      const config = loadGlobalConfig();
+      expect(config.pieceRuntimePrepare).toEqual({ customScripts: true });
+    });
+
+    it('should save and reload piece_runtime_prepare', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
+
+      const config = loadGlobalConfig();
+      config.pieceRuntimePrepare = { customScripts: true };
+      saveGlobalConfig(config);
+      invalidateGlobalConfigCache();
+
+      const reloaded = loadGlobalConfig();
+      expect(reloaded.pieceRuntimePrepare).toEqual({ customScripts: true });
+    });
   });
 
   describe('provider/model compatibility validation', () => {

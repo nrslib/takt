@@ -10,6 +10,7 @@ import { McpServersSchema } from './mcp-schemas.js';
 import { INTERACTIVE_MODES } from './interactive-mode.js';
 import { STATUS_VALUES } from './status.js';
 import { VCS_PROVIDER_TYPES } from './vcs-types.js';
+import { RUNTIME_PREPARE_PRESETS } from './piece-types.js';
 
 export { McpServerConfigSchema, McpServersSchema } from './mcp-schemas.js';
 
@@ -132,7 +133,7 @@ export const ProviderPermissionProfilesSchema = z.object({
 }).optional();
 
 /** Runtime prepare preset identifiers */
-export const RuntimePreparePresetSchema = z.enum(['gradle', 'node']);
+export const RuntimePreparePresetSchema = z.enum(RUNTIME_PREPARE_PRESETS);
 /** Runtime prepare entry: preset name or script path */
 export const RuntimePrepareEntrySchema = z.union([
   RuntimePreparePresetSchema,

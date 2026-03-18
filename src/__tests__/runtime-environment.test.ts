@@ -92,6 +92,7 @@ describe('prepareRuntimeEnvironment', () => {
     expect(result?.injectedEnv.CUSTOM_CACHE_DIR).toBe(join(cwd, '.takt', '.runtime', 'custom-cache'));
     expect(existsSync(join(cwd, '.takt', '.runtime', 'custom-cache'))).toBe(true);
   });
+
 });
 
 describe('resolveRuntimeConfig', () => {

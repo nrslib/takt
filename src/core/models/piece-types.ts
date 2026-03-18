@@ -87,7 +87,12 @@ export interface OpenCodeProviderOptions {
 }
 
 /** Runtime prepare preset identifiers */
-export type RuntimePreparePreset = 'gradle' | 'node';
+export const RUNTIME_PREPARE_PRESETS = ['gradle', 'node'] as const;
+export type RuntimePreparePreset = (typeof RUNTIME_PREPARE_PRESETS)[number];
+const RUNTIME_PREPARE_PRESET_SET: ReadonlySet<string> = new Set(RUNTIME_PREPARE_PRESETS);
+export function isRuntimePreparePreset(entry: string): entry is RuntimePreparePreset {
+  return RUNTIME_PREPARE_PRESET_SET.has(entry);
+}
 /** Runtime prepare entry: preset name or executable script path */
 export type RuntimePrepareEntry = RuntimePreparePreset | string;
 

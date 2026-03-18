@@ -26,6 +26,7 @@ import {
 
 type RawStep = z.output<typeof PieceMovementRawSchema>;
 import type { MovementProviderOptions } from '../../../core/models/piece-types.js';
+import { isRuntimePreparePreset } from '../../../core/models/piece-types.js';
 import { normalizeRuntime } from '../configNormalizers.js';
 import type { PieceOverrides, PieceRuntimePrepareConfig } from '../../../core/models/config-types.js';
 import { applyQualityGateOverrides } from './qualityGateOverrides.js';
@@ -35,7 +36,6 @@ import { normalizeConfigProviderReferenceDetailed, type ConfigProviderReference 
 import { mergeProviderOptions } from '../providerOptions.js';
 
 type RawProviderReference = RawStep['provider'];
-const RUNTIME_PREPARE_PRESETS = new Set(['gradle', 'node']);
 
 function normalizeProviderReference(
   provider: RawProviderReference,
@@ -505,7 +505,7 @@ function validatePieceRuntimePrepare(
   if (prepareEntries.length === 0) return;
 
   for (const entry of prepareEntries) {
-    if (RUNTIME_PREPARE_PRESETS.has(entry)) continue;
+    if (isRuntimePreparePreset(entry)) continue;
     if (policy?.customScripts === true) continue;
     throw new Error(
       `Piece runtime.prepare custom script "${entry}" is disabled by default. `

@@ -66,6 +66,39 @@ describe('config env overrides', () => {
     });
   });
 
+  it('should apply TAKT_PIECE_RUNTIME_PREPARE JSON override for global config', () => {
+    process.env.TAKT_PIECE_RUNTIME_PREPARE = '{"custom_scripts":true}';
+
+    const raw: Record<string, unknown> = {};
+    applyGlobalConfigEnvOverrides(raw);
+
+    expect(raw.piece_runtime_prepare).toEqual({
+      custom_scripts: true,
+    });
+  });
+
+  it('should apply TAKT_PIECE_RUNTIME_PREPARE_CUSTOM_SCRIPTS override for global config', () => {
+    process.env.TAKT_PIECE_RUNTIME_PREPARE_CUSTOM_SCRIPTS = 'false';
+
+    const raw: Record<string, unknown> = {};
+    applyGlobalConfigEnvOverrides(raw);
+
+    expect(raw.piece_runtime_prepare).toEqual({
+      custom_scripts: false,
+    });
+  });
+
+  it('should apply TAKT_PIECE_RUNTIME_PREPARE_CUSTOM_SCRIPTS override for project config', () => {
+    process.env.TAKT_PIECE_RUNTIME_PREPARE_CUSTOM_SCRIPTS = 'true';
+
+    const raw: Record<string, unknown> = {};
+    applyProjectConfigEnvOverrides(raw);
+
+    expect(raw.piece_runtime_prepare).toEqual({
+      custom_scripts: true,
+    });
+  });
+
   it('should apply analytics env overrides for global config', () => {
     process.env.TAKT_ANALYTICS_ENABLED = 'true';
     process.env.TAKT_ANALYTICS_EVENTS_PATH = '/tmp/global-analytics';

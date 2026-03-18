@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { join, resolve, isAbsolute, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import type { PieceRuntimeConfig, RuntimePrepareEntry, RuntimePreparePreset } from '../models/piece-types.js';
+import { isRuntimePreparePreset, type PieceRuntimeConfig, type RuntimePrepareEntry, type RuntimePreparePreset } from '../models/piece-types.js';
 
 export interface RuntimeEnvironmentResult {
   runtimeRoot: string;
@@ -67,10 +67,14 @@ function parseScriptOutput(stdout: string): Record<string, string> {
 }
 
 function resolvePrepareScript(cwd: string, entry: RuntimePrepareEntry): string {
-  if (entry === 'gradle' || entry === 'node') {
+  if (isRuntimePreparePreset(entry)) {
     return PRESET_SCRIPT_MAP[entry];
   }
   return isAbsolute(entry) ? entry : resolve(cwd, entry);
+}
+
+function hasPreparePreset(entries: RuntimePrepareEntry[], preset: RuntimePreparePreset): boolean {
+  return entries.includes(preset);
 }
 
 function runPrepareScript(
@@ -120,14 +124,14 @@ function buildInjectedEnvironment(
     Object.assign(env, scriptEnv);
   }
 
-  if (prepareEntries.includes('gradle')) {
+  if (hasPreparePreset(prepareEntries, 'gradle')) {
     const tmpDir = env.TMPDIR ?? join(runtimeRoot, 'tmp');
     env.JAVA_TOOL_OPTIONS = appendJavaTmpdirOption(process.env['JAVA_TOOL_OPTIONS'], tmpDir);
   }
-  if (prepareEntries.includes('gradle') && !env.GRADLE_USER_HOME) {
+  if (hasPreparePreset(prepareEntries, 'gradle') && !env.GRADLE_USER_HOME) {
     env.GRADLE_USER_HOME = join(runtimeRoot, 'gradle');
   }
-  if (prepareEntries.includes('node') && !env.npm_config_cache) {
+  if (hasPreparePreset(prepareEntries, 'node') && !env.npm_config_cache) {
     env.npm_config_cache = join(runtimeRoot, 'npm');
   }
 
