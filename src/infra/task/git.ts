@@ -122,3 +122,14 @@ export function pushBranch(cwd: string, branch: string): void {
     stdio: 'pipe',
   });
 }
+
+/**
+ * Pushes the current HEAD to the target origin branch. Throws on failure.
+ */
+export function pushHeadToOriginBranch(cwd: string, branch: string): void {
+  log.info('Pushing HEAD to origin branch', { branch });
+  execFileSync('git', ['push', 'origin', `HEAD:refs/heads/${branch}`], {
+    cwd,
+    stdio: 'pipe',
+  });
+}

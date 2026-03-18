@@ -20,7 +20,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 import { execFileSync } from 'node:child_process';
 const mockExecFileSync = vi.mocked(execFileSync);
 
-import { pushBranch } from '../infra/task/git.js';
+import { pushBranch, pushHeadToOriginBranch } from '../infra/task/git.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -51,6 +51,20 @@ describe('pushBranch', () => {
     // When / Then
     expect(() => pushBranch('/project', 'feature/my-branch')).toThrow(
       'error: failed to push some refs',
+    );
+  });
+});
+
+describe('pushHeadToOriginBranch', () => {
+  it('should call git push origin HEAD:refs/heads/<branch>', () => {
+    mockExecFileSync.mockReturnValue(Buffer.from(''));
+
+    pushHeadToOriginBranch('/clone', 'feature/my-branch');
+
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      'git',
+      ['push', 'origin', 'HEAD:refs/heads/feature/my-branch'],
+      { cwd: '/clone', stdio: 'pipe' },
     );
   });
 });

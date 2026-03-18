@@ -5,13 +5,20 @@
  * instructBranch (takt list).
  */
 
-import { autoCommitAndPush, pushBranch } from '../../../infra/task/index.js';
+import { autoCommitAndPush } from '../../../infra/task/index.js';
+import { pushHeadToOriginBranch } from '../../../infra/task/git.js';
 import { info, error, success } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import { buildPrBody, createPullRequestSafely, getGitProvider } from '../../../infra/git/index.js';
 import type { Issue, CreatePrResult } from '../../../infra/git/index.js';
 
 const log = createLogger('postExecution');
+
+const AUTO_COMMIT_FAILURE_MESSAGE = 'Auto-commit failed before PR creation.';
+const LOCAL_PUSH_FAILURE_MESSAGE = 'Push to main repo failed after commit creation.';
+const BRANCH_PUSH_FAILURE_MESSAGE = 'Failed to push branch to origin.';
+const PR_COMMENT_FAILURE_MESSAGE = 'Failed to update pull request comment.';
+const PR_CREATION_FAILURE_MESSAGE = 'Failed to create pull request.';
 
 
 export interface PostExecutionOptions {
@@ -31,6 +38,8 @@ export interface PostExecutionResult {
   prUrl?: string;
   prFailed?: boolean;
   prError?: string;
+  taskFailed?: boolean;
+  taskError?: string;
 }
 
 /**
@@ -40,17 +49,35 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
   const { execCwd, projectCwd, task, branch, baseBranch, shouldCreatePr, draftPr, pieceIdentifier, issues, repo } = options;
 
   const commitResult = autoCommitAndPush(execCwd, task, projectCwd);
-  if (commitResult.success && commitResult.commitHash) {
-    success(`Auto-committed & pushed: ${commitResult.commitHash}`);
+  if (commitResult.commitHash) {
+    success(`Auto-committed: ${commitResult.commitHash}`);
   } else if (!commitResult.success) {
-    error(`Auto-commit failed: ${commitResult.message}`);
+    log.error('Auto-commit failed before PR handling', {
+      outcome: AUTO_COMMIT_FAILURE_MESSAGE,
+    });
+    error(AUTO_COMMIT_FAILURE_MESSAGE);
+    return { taskFailed: true, taskError: AUTO_COMMIT_FAILURE_MESSAGE };
   }
 
-  if (commitResult.success && commitResult.commitHash && branch && shouldCreatePr) {
+  if (commitResult.localPushFailed && !shouldCreatePr) {
+    log.error('Local push failed for task without PR creation', {
+      outcome: LOCAL_PUSH_FAILURE_MESSAGE,
+    });
+    error(LOCAL_PUSH_FAILURE_MESSAGE);
+    return { taskFailed: true, taskError: LOCAL_PUSH_FAILURE_MESSAGE };
+  }
+
+  if (commitResult.commitHash && branch && shouldCreatePr) {
     try {
-      pushBranch(projectCwd, branch);
+      pushHeadToOriginBranch(execCwd, branch);
     } catch (pushError) {
-      log.info('Branch push from project cwd failed (may already exist)', { error: pushError });
+      void pushError;
+      log.error('Branch push from execution cwd failed', {
+        branch,
+        outcome: BRANCH_PUSH_FAILURE_MESSAGE,
+      });
+      error(BRANCH_PUSH_FAILURE_MESSAGE);
+      return { prFailed: true, prError: BRANCH_PUSH_FAILURE_MESSAGE };
     }
     const gitProvider = getGitProvider();
     const report = pieceIdentifier ? `Piece \`${pieceIdentifier}\` completed successfully.` : 'Task completed successfully.';
@@ -63,8 +90,12 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
         success(`PR updated with comment: ${existingPr.url}`);
         return { prUrl: existingPr.url };
       } else {
-        error(`PR comment failed: ${commentResult.error}`);
-        return { prFailed: true, prError: commentResult.error };
+        log.error('PR comment failed', {
+          prNumber: existingPr.number,
+          outcome: PR_COMMENT_FAILURE_MESSAGE,
+        });
+        error(PR_COMMENT_FAILURE_MESSAGE);
+        return { prFailed: true, prError: PR_COMMENT_FAILURE_MESSAGE };
       }
     } else {
       info('Creating pull request...');
@@ -85,8 +116,13 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
         success(`PR created: ${prResult.url}`);
         return { prUrl: prResult.url };
       } else {
-        error(`PR creation failed: ${prResult.error}`);
-        return { prFailed: true, prError: prResult.error };
+        log.error('PR creation failed', {
+          branch,
+          baseBranch,
+          outcome: PR_CREATION_FAILURE_MESSAGE,
+        });
+        error(PR_CREATION_FAILURE_MESSAGE);
+        return { prFailed: true, prError: PR_CREATION_FAILURE_MESSAGE };
       }
     }
   }

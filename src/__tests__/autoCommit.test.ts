@@ -15,6 +15,20 @@ vi.mock('../infra/config/index.js', () => ({
   resolveConfigValue: (...args: unknown[]) => mockResolveConfigValue(...args),
 }));
 
+const { mockLogInfo, mockLogError } = vi.hoisted(() => ({
+  mockLogInfo: vi.fn(),
+  mockLogError: vi.fn(),
+}));
+
+vi.mock('../shared/utils/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  createLogger: () => ({
+    info: (...args: unknown[]) => mockLogInfo(...args),
+    error: (...args: unknown[]) => mockLogError(...args),
+    debug: vi.fn(),
+  }),
+}));
+
 import { execFileSync } from 'node:child_process';
 const mockExecFileSync = vi.mocked(execFileSync);
 
@@ -143,6 +157,54 @@ describe('autoCommitAndPush', () => {
     expect(result.message).toContain('not a git repository');
   });
 
+  it('should keep commitHash when push to projectDir fails after commit creation', () => {
+    // Given: commit creation succeeds, but the local push back to projectDir fails.
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (includesCommand(argsArr, 'status')) {
+        return 'M src/index.ts\n';
+      }
+      if (includesCommand(argsArr, 'rev-parse')) {
+        return 'abc1234\n';
+      }
+      if (includesCommand(argsArr, 'config')) {
+        return '';
+      }
+      if (includesCommand(argsArr, 'push')) {
+        throw new Error('refusing to update checked out branch');
+      }
+      return Buffer.from('');
+    });
+
+    // When: auto-commit runs in clone mode.
+    const result = autoCommitAndPush('/tmp/clone', 'my-task', '/project');
+
+    // Then: the created commit should still be reported so postExecution can continue.
+    expect(result.success).toBe(true);
+    expect(result.commitHash).toBe('abc1234');
+    expect(result.localPushFailed).toBe(true);
+    expect(result.message).toContain('abc1234');
+    expect(result.message).not.toContain('Auto-commit failed');
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      'git',
+      ['push', '/project', 'HEAD'],
+      expect.objectContaining({ cwd: '/tmp/clone' })
+    );
+    expect(mockLogInfo).toHaveBeenCalledWith(
+      'Push to main repo failed after commit creation',
+      {
+        projectDir: '/project',
+        outcome: 'Push to main repo failed after commit creation.',
+      }
+    );
+    expect(mockLogInfo).not.toHaveBeenCalledWith(
+      'Push to main repo failed after commit creation',
+      expect.objectContaining({
+        error: expect.anything(),
+      })
+    );
+  });
+
   it('should not include co-author in commit message', () => {
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
@@ -229,5 +291,24 @@ describe('autoCommitAndPush', () => {
     expect(
       mockExecFileSync.mock.calls.some(call => includesCommand(call[1] as string[], 'config'))
     ).toBe(false);
+  });
+
+  it('should not pass raw git errors to logger data when auto-commit fails', () => {
+    mockExecFileSync.mockImplementation(() => {
+      throw new Error('fatal: could not read Password for https://token@example.com/org/repo from /tmp/project');
+    });
+
+    const result = autoCommitAndPush('/tmp/clone', 'my-task', '/project');
+
+    expect(result.success).toBe(false);
+    expect(mockLogError).toHaveBeenCalledWith('Auto-commit failed', {
+      outcome: 'Auto-commit failed.',
+    });
+    expect(mockLogError).not.toHaveBeenCalledWith(
+      'Auto-commit failed',
+      expect.objectContaining({
+        error: expect.anything(),
+      })
+    );
   });
 });

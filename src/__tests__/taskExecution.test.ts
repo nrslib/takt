@@ -5,13 +5,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { TaskInfo } from '../infra/task/index.js';
 
-const { mockResolveTaskExecution, mockExecutePiece, mockLoadPieceByIdentifier, mockResolvePieceConfigValues, mockResolveConfigValueWithSource, mockBuildTaskResult, mockPersistTaskResult, mockPersistPrFailedTaskResult, mockPersistTaskError, mockPostExecutionFlow } =
+const { mockResolveTaskExecution, mockExecutePiece, mockLoadPieceByIdentifier, mockResolvePieceConfigValues, mockResolveConfigValueWithSource, mockBuildBooleanTaskResult, mockBuildTaskResult, mockPersistTaskResult, mockPersistPrFailedTaskResult, mockPersistTaskError, mockPostExecutionFlow } =
   vi.hoisted(() => ({
     mockResolveTaskExecution: vi.fn(),
     mockExecutePiece: vi.fn(),
     mockLoadPieceByIdentifier: vi.fn(),
     mockResolvePieceConfigValues: vi.fn(),
     mockResolveConfigValueWithSource: vi.fn(),
+    mockBuildBooleanTaskResult: vi.fn(),
     mockBuildTaskResult: vi.fn(),
     mockPersistTaskResult: vi.fn(),
     mockPersistPrFailedTaskResult: vi.fn(),
@@ -29,6 +30,7 @@ vi.mock('../features/tasks/execute/pieceExecution.js', () => ({
 }));
 
 vi.mock('../features/tasks/execute/taskResultHandler.js', () => ({
+  buildBooleanTaskResult: (...args: unknown[]) => mockBuildBooleanTaskResult(...args),
   buildTaskResult: (...args: unknown[]) => mockBuildTaskResult(...args),
   persistTaskResult: (...args: unknown[]) => mockPersistTaskResult(...args),
   persistPrFailedTaskResult: (...args: unknown[]) => mockPersistPrFailedTaskResult(...args),
@@ -113,6 +115,7 @@ describe('executeAndCompleteTask', () => {
       },
       source: 'project',
     });
+    mockBuildBooleanTaskResult.mockReturnValue({ success: false });
     mockBuildTaskResult.mockReturnValue({ success: true });
     mockResolveTaskExecution.mockResolvedValue({
       execCwd: '/project',
@@ -286,5 +289,85 @@ describe('executeAndCompleteTask', () => {
         prUrl: 'https://github.com/org/repo/pull/1',
       }),
     );
+  });
+
+  it('should mark task as failed when postExecution returns a non-PR failure', async () => {
+    const task = createTask('task-with-autocommit-failure');
+    mockResolveTaskExecution.mockResolvedValue({
+      execCwd: '/worktree/clone',
+      execPiece: 'default',
+      isWorktree: true,
+      autoPr: false,
+      draftPr: false,
+      taskPrompt: undefined,
+      reportDirName: undefined,
+      branch: 'takt/task-with-autocommit-failure',
+      worktreePath: '/worktree/clone',
+      baseBranch: 'main',
+      startMovement: undefined,
+      retryNote: undefined,
+      issueNumber: undefined,
+    });
+    mockExecutePiece.mockResolvedValue({ success: true });
+    mockPostExecutionFlow.mockResolvedValue({
+      taskFailed: true,
+      taskError: 'Auto-commit failed before PR creation.',
+    });
+
+    const result = await executeAndCompleteTaskWithoutPiece(task, {} as never, '/project');
+
+    expect(result).toBe(false);
+    expect(mockBuildBooleanTaskResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task,
+        taskSuccess: false,
+        failureResponse: 'Auto-commit failed before PR creation.',
+        branch: 'takt/task-with-autocommit-failure',
+        worktreePath: '/worktree/clone',
+      }),
+    );
+    expect(mockPersistTaskResult).toHaveBeenCalledTimes(1);
+    expect(mockPersistPrFailedTaskResult).not.toHaveBeenCalled();
+    expect(mockBuildTaskResult).not.toHaveBeenCalled();
+  });
+
+  it('should mark task as failed when local push fails for a worktree task without PR creation', async () => {
+    const task = createTask('task-with-local-push-failure');
+    mockResolveTaskExecution.mockResolvedValue({
+      execCwd: '/worktree/clone',
+      execPiece: 'default',
+      isWorktree: true,
+      autoPr: false,
+      draftPr: false,
+      taskPrompt: undefined,
+      reportDirName: undefined,
+      branch: 'takt/task-with-local-push-failure',
+      worktreePath: '/worktree/clone',
+      baseBranch: 'main',
+      startMovement: undefined,
+      retryNote: undefined,
+      issueNumber: undefined,
+    });
+    mockExecutePiece.mockResolvedValue({ success: true });
+    mockPostExecutionFlow.mockResolvedValue({
+      taskFailed: true,
+      taskError: 'Push to main repo failed after commit creation.',
+    });
+
+    const result = await executeAndCompleteTaskWithoutPiece(task, {} as never, '/project');
+
+    expect(result).toBe(false);
+    expect(mockBuildBooleanTaskResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task,
+        taskSuccess: false,
+        failureResponse: 'Push to main repo failed after commit creation.',
+        branch: 'takt/task-with-local-push-failure',
+        worktreePath: '/worktree/clone',
+      }),
+    );
+    expect(mockPersistTaskResult).toHaveBeenCalledTimes(1);
+    expect(mockPersistPrFailedTaskResult).not.toHaveBeenCalled();
+    expect(mockBuildTaskResult).not.toHaveBeenCalled();
   });
 });
