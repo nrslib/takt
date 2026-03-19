@@ -23,7 +23,7 @@ loop_monitors:
 movements:
   - name: review
     persona: ../agents/test-reviewer-a.md
-    instruction_template: |
+    instruction: |
       Review the code.
     rules:
       - condition: approved
@@ -34,7 +34,7 @@ movements:
     persona: ../agents/test-coder.md
     edit: true
     required_permission_mode: edit
-    instruction_template: |
+    instruction: |
       Fix the issues found in review.
     rules:
       - condition: fixed

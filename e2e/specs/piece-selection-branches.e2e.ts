@@ -39,7 +39,7 @@ function writeMinimalPiece(piecePath: string): void {
       '          - Write',
       '          - Edit',
       '    required_permission_mode: edit',
-      '    instruction_template: |',
+      '    instruction: |',
       '      {task}',
       '    rules:',
       '      - condition: Done',

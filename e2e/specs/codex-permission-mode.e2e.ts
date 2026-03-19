@@ -30,7 +30,7 @@ describe('E2E: Codex permission mode readonly/full', () => {
         '        allowed_tools:',
         '          - Bash',
         '    required_permission_mode: readonly',
-        '    instruction_template: |',
+        '    instruction: |',
         '      Run this exact command in repository root:',
         '      /bin/sh -lc \'printf "ok\\n" > epperm-check.txt\'',
         '      If file creation succeeds, reply exactly: COMPLETE',

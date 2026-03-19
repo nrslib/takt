@@ -700,7 +700,7 @@ describe('instruction-builder', () => {
       expect(result).not.toContain('Custom order instruction');
     });
 
-    it('should still replace {report:filename} in instruction_template', () => {
+    it('should still replace {report:filename} in instruction', () => {
       const step = createMinimalStep('Write to {report:00-plan.md}');
       const context = createMinimalContext({
         reportDir: '/project/.takt/runs/20260129-test/reports',

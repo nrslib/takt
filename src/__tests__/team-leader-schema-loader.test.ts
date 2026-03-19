@@ -12,7 +12,7 @@ describe('team_leader schema', () => {
         max_parts: 3,
         timeout_ms: 120000,
       },
-      instruction_template: 'decompose',
+      instruction: 'decompose',
     };
 
     const result = PieceMovementRawSchema.safeParse(raw);
@@ -25,7 +25,7 @@ describe('team_leader schema', () => {
       team_leader: {
         max_parts: 4,
       },
-      instruction_template: 'decompose',
+      instruction: 'decompose',
     };
 
     const result = PieceMovementRawSchema.safeParse(raw);
@@ -39,7 +39,7 @@ describe('team_leader schema', () => {
         max_parts: 2,
         refill_threshold: 3,
       },
-      instruction_template: 'decompose',
+      instruction: 'decompose',
     };
 
     const result = PieceMovementRawSchema.safeParse(raw);
@@ -49,11 +49,11 @@ describe('team_leader schema', () => {
   it('parallel と team_leader の同時指定は拒否する', () => {
     const raw = {
       name: 'implement',
-      parallel: [{ name: 'sub', instruction_template: 'x' }],
+      parallel: [{ name: 'sub', instruction: 'x' }],
       team_leader: {
         max_parts: 2,
       },
-      instruction_template: 'decompose',
+      instruction: 'decompose',
     };
 
     const result = PieceMovementRawSchema.safeParse(raw);
@@ -71,7 +71,7 @@ describe('team_leader schema', () => {
       team_leader: {
         max_parts: 2,
       },
-      instruction_template: 'decompose',
+      instruction: 'decompose',
     };
 
     const result = PieceMovementRawSchema.safeParse(raw);
@@ -96,7 +96,7 @@ describe('normalizePieceConfig team_leader', () => {
             part_edit: true,
             part_permission_mode: 'edit',
           },
-          instruction_template: 'decompose',
+          instruction: 'decompose',
         },
       ],
     };

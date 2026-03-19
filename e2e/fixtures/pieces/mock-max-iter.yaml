@@ -13,7 +13,7 @@ movements:
     edit: true
     persona: ../agents/test-coder.md
     required_permission_mode: edit
-    instruction_template: |
+    instruction: |
       {task}
     rules:
       - condition: Done
@@ -22,7 +22,7 @@ movements:
     edit: true
     persona: ../agents/test-coder.md
     required_permission_mode: edit
-    instruction_template: |
+    instruction: |
       Continue the task.
     rules:
       - condition: Done

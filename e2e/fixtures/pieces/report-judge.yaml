@@ -22,7 +22,7 @@ movements:
       report:
         - name: report.md
           format: report
-    instruction_template: |
+    instruction: |
       {task}
     rules:
       - condition: Done

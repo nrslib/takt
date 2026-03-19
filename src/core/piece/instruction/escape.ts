@@ -1,7 +1,7 @@
 /**
  * Template escaping and placeholder replacement utilities
  *
- * Used by instruction builders to process instruction_template content.
+ * Used by instruction builders to process instruction content.
  *
  * escapeTemplateChars is re-exported from faceted-prompting.
  * replaceTemplatePlaceholders is TAKT-specific and stays here.
@@ -14,9 +14,9 @@ import { escapeTemplateChars } from 'faceted-prompting';
 export { escapeTemplateChars } from 'faceted-prompting';
 
 /**
- * Replace template placeholders in the instruction_template body.
+ * Replace template placeholders in the instruction body.
  *
- * These placeholders may still be used in instruction_template for
+ * These placeholders may still be used in instruction for
  * special cases or legacy templates.
  */
 export function replaceTemplatePlaceholders(
