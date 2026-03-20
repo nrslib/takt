@@ -11,6 +11,8 @@ import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
+import { getProjectPiecesDir, getProjectFacetDir } from '../infra/config/paths.js';
+import { VALID_FACET_TYPES, parseFacetType } from '../features/config/ejectBuiltin.js';
 
 function gitTrackedFiles(cwd: string): string[] {
   const output = execFileSync('git', ['ls-files', '.takt/'], { cwd, encoding: 'utf-8' });
@@ -56,23 +58,36 @@ describe('dotgitignore patterns', () => {
   });
 
   it('should track facet directories', () => {
-    const facets = ['pieces', 'personas', 'policies', 'knowledge', 'instructions', 'output-contracts'];
-    for (const facet of facets) {
-      mkdirSync(join(testDir, '.takt', facet), { recursive: true });
-      writeFileSync(join(testDir, '.takt', facet, 'test.md'), `# ${facet}`);
+    // pieces directory
+    const piecesDir = getProjectPiecesDir(testDir);
+    mkdirSync(piecesDir, { recursive: true });
+    writeFileSync(join(piecesDir, 'test.md'), '# pieces');
+
+    // facet type directories — derived from VALID_FACET_TYPES
+    for (const singular of VALID_FACET_TYPES) {
+      const facetType = parseFacetType(singular)!;
+      const facetDir = getProjectFacetDir(testDir, facetType);
+      mkdirSync(facetDir, { recursive: true });
+      writeFileSync(join(facetDir, 'test.md'), `# ${facetType}`);
     }
 
     execFileSync('git', ['add', '.takt/'], { cwd: testDir });
     const tracked = gitTrackedFiles(testDir);
 
-    for (const facet of facets) {
-      expect(tracked).toContain(`.takt/${facet}/test.md`);
+    // Assert pieces tracked
+    expect(tracked).toContain('.takt/pieces/test.md');
+
+    // Assert all facet types tracked
+    for (const singular of VALID_FACET_TYPES) {
+      const facetType = parseFacetType(singular)!;
+      expect(tracked).toContain(`.takt/facets/${facetType}/test.md`);
     }
   });
 
   it('should track nested files in facet directories', () => {
-    mkdirSync(join(testDir, '.takt', 'pieces', 'sub'), { recursive: true });
-    writeFileSync(join(testDir, '.takt', 'pieces', 'sub', 'nested.yaml'), 'name: test');
+    const subDir = join(getProjectPiecesDir(testDir), 'sub');
+    mkdirSync(subDir, { recursive: true });
+    writeFileSync(join(subDir, 'nested.yaml'), 'name: test');
 
     execFileSync('git', ['add', '.takt/'], { cwd: testDir });
     const tracked = gitTrackedFiles(testDir);
