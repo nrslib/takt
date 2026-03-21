@@ -1,6 +1,7 @@
 import { confirm } from '../../../shared/prompt/index.js';
 import { getLabel } from '../../../shared/i18n/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
+import { warn } from '../../../shared/ui/index.js';
 import { isPiecePath, loadAllPiecesWithSources } from '../../../infra/config/index.js';
 import { selectPiece } from '../../pieceSelection/index.js';
 import { parse as parseYaml } from 'yaml';
@@ -36,7 +37,7 @@ function resolveReusablePieceName(
   if (isPiecePath(previousPiece)) {
     return null;
   }
-  const availablePieces = loadAllPiecesWithSources(projectDir);
+  const availablePieces = loadAllPiecesWithSources(projectDir, { onWarning: warn });
   if (!availablePieces.has(previousPiece)) {
     return null;
   }

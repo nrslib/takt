@@ -7,6 +7,7 @@ const {
   mockSelectPiece,
   mockIsPiecePath,
   mockLoadAllPiecesWithSources,
+  mockWarn,
 } = vi.hoisted(() => ({
   mockDebug: vi.fn(),
   mockConfirm: vi.fn(),
@@ -14,6 +15,7 @@ const {
   mockSelectPiece: vi.fn(),
   mockIsPiecePath: vi.fn(() => false),
   mockLoadAllPiecesWithSources: vi.fn(() => new Map<string, unknown>([['default', {}], ['selected-piece', {}]])),
+  mockWarn: vi.fn(),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -33,6 +35,10 @@ vi.mock('../shared/prompt/index.js', () => ({
 
 vi.mock('../shared/i18n/index.js', () => ({
   getLabel: (...args: unknown[]) => mockGetLabel(...args),
+}));
+
+vi.mock('../shared/ui/index.js', () => ({
+  warn: (...args: unknown[]) => mockWarn(...args),
 }));
 
 vi.mock('../features/pieceSelection/index.js', () => ({
@@ -159,5 +165,23 @@ describe('selectPieceWithOptionalReuse', () => {
     expect(selected).toBe('selected-piece');
     expect(mockConfirm).not.toHaveBeenCalled();
     expect(mockSelectPiece).toHaveBeenCalledWith('/project');
+  });
+
+  it('再利用候補の解決で warning callback を UI warn に配線する', async () => {
+    mockLoadAllPiecesWithSources.mockImplementation(
+      (_projectDir: string, options?: { onWarning?: (message: string) => void }) => {
+        options?.onWarning?.('Piece "broken" failed to load');
+        return new Map<string, unknown>([['selected-piece', {}]]);
+      },
+    );
+    mockConfirm.mockResolvedValue(false);
+
+    await selectPieceWithOptionalReuse('/project', 'selected-piece', 'en');
+
+    expect(mockLoadAllPiecesWithSources).toHaveBeenCalledWith(
+      '/project',
+      expect.objectContaining({ onWarning: expect.any(Function) }),
+    );
+    expect(mockWarn).toHaveBeenCalledWith('Piece "broken" failed to load');
   });
 });

@@ -22,13 +22,13 @@ import {
 } from '../configNormalizers.js';
 import { invalidateResolvedConfigCache } from '../resolutionCache.js';
 import { expandOptionalHomePath } from '../pathExpansion.js';
+import { formatIssuePath } from '../issuePath.js';
 import { getProjectConfigDir, getProjectConfigPath } from './projectConfigPaths.js';
 import {
   normalizeSubmodules,
   normalizeWithSubmodules,
   normalizeAnalytics,
   denormalizeAnalytics,
-  formatIssuePath,
   normalizePieceRuntimePreparePolicy,
   denormalizePieceRuntimePreparePolicy,
   normalizePieceArpeggioPolicy,

@@ -21,14 +21,13 @@ export {
   loadPiece,
   loadPieceByIdentifier,
   listPieces,
-  listPieceEntries,
   loadAllPieces,
   loadAllPiecesWithSources,
   getPieceDescription,
   getBuiltinPiece,
   isPiecePath,
 } from './infra/config/loaders/index.js';
-export type { PieceSource, PieceWithSource, PieceDirEntry } from './infra/config/loaders/index.js';
+export type { PieceSource, PieceWithSource } from './infra/config/loaders/index.js';
 export {
   saveProjectConfig,
   updateProjectConfig,

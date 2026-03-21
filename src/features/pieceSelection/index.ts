@@ -11,9 +11,8 @@ import {
   removeBookmark,
 } from '../../infra/config/global/index.js';
 import {
-  listPieces,
-  listPieceEntries,
   loadAllPiecesWithSources,
+  listPieceEntries,
   getPieceCategories,
   buildCategorizedPieces,
   type PieceDirEntry,
@@ -22,6 +21,7 @@ import {
   type MissingPiece,
 } from '../../infra/config/index.js';
 import { DEFAULT_PIECE_NAME } from '../../shared/constants.js';
+import { sanitizeTerminalText } from '../../shared/utils/index.js';
 
 /** Top-level selection item: either a piece or a category containing pieces */
 export type PieceSelectionItem =
@@ -73,9 +73,9 @@ export function buildTopLevelSelectOptions(
 ): SelectionOption[] {
   return items.map((item) => {
     if (item.type === 'piece') {
-      return { label: item.name, value: item.name };
+      return { label: sanitizeTerminalText(item.name), value: item.name };
     }
-    const label = `📁 ${item.name}/`;
+    const label = `📁 ${sanitizeTerminalText(item.name)}/`;
     return { label, value: `${CATEGORY_VALUE_PREFIX}${item.name}` };
   });
 }
@@ -105,7 +105,7 @@ export function buildCategoryPieceOptions(
 
   return categoryItem.pieces.map((qualifiedName) => {
     const displayName = qualifiedName.split('/').pop() ?? qualifiedName;
-    return { label: displayName, value: qualifiedName };
+    return { label: sanitizeTerminalText(displayName), value: qualifiedName };
   });
 }
 
@@ -134,8 +134,9 @@ export function applyBookmarks(
  */
 export function warnMissingPieces(missing: MissingPiece[]): void {
   for (const { categoryPath, pieceName } of missing) {
-    const pathLabel = categoryPath.join(' / ');
-    warn(`Piece "${pieceName}" in category "${pathLabel}" not found`);
+    const pathLabel = sanitizeTerminalText(categoryPath.join(' / '));
+    const safePieceName = sanitizeTerminalText(pieceName);
+    warn(`Piece "${safePieceName}" in category "${pathLabel}" not found`);
   }
 }
 
@@ -150,14 +151,14 @@ function buildCategoryLevelOptions(
   const categoryMap = new Map<string, PieceCategoryNode>();
 
   for (const category of categories) {
-    const label = `📁 ${category.name}/`;
+    const label = `📁 ${sanitizeTerminalText(category.name)}/`;
     const value = `${CATEGORY_VALUE_PREFIX}${category.name}`;
     options.push({ label, value });
     categoryMap.set(category.name, category);
   }
 
   for (const pieceName of pieces) {
-    const label = `🎼 ${pieceName}`;
+    const label = `🎼 ${sanitizeTerminalText(pieceName)}`;
     options.push({ label, value: pieceName });
   }
 
@@ -180,7 +181,7 @@ async function selectPieceFromCategoryTree(
     const currentNode = stack.length > 0 ? stack[stack.length - 1] : undefined;
     const currentCategories = currentNode ? currentNode.children : categories;
     const currentPieces = currentNode ? currentNode.pieces : rootPieces;
-    const currentPathLabel = stack.map((node) => node.name).join(' / ');
+    const currentPathLabel = sanitizeTerminalText(stack.map((node) => node.name).join(' / '));
 
     const { options, categoryMap } = buildCategoryLevelOptions(
       currentCategories,
@@ -261,7 +262,7 @@ async function selectTopLevelPieceOption(
     // 2. Bookmarked pieces (individual items)
     for (const pieceName of bookmarkedPieces) {
       options.push({
-        label: `🎼 ${pieceName} [*]`,
+        label: `🎼 ${sanitizeTerminalText(pieceName)} [*]`,
         value: pieceName,
       });
     }
@@ -269,7 +270,7 @@ async function selectTopLevelPieceOption(
     // 3. Categories
     for (const category of categorized.categories) {
       options.push({
-        label: `📁 ${category.name}/`,
+        label: `📁 ${sanitizeTerminalText(category.name)}/`,
         value: `${CUSTOM_CATEGORY_PREFIX}${category.name}`,
       });
     }
@@ -346,7 +347,7 @@ async function selectPieceFromEntriesWithCategories(
 
   if (!hasCategories) {
     const baseOptions: SelectionOption[] = availablePieces.map((name) => ({
-      label: `🎼 ${name}`,
+      label: `🎼 ${sanitizeTerminalText(name)}`,
       value: name,
     }));
 
@@ -403,7 +404,7 @@ async function selectPieceFromEntriesWithCategories(
       const buildCategoryOptions = (): SelectionOption[] =>
         applyBookmarks(categoryOptions, getBookmarkedPieces());
 
-      const pieceSelection = await selectOption<string>(`Select piece in ${categoryName}:`, buildCategoryOptions(), {
+      const pieceSelection = await selectOption<string>(`Select piece in ${sanitizeTerminalText(categoryName)}:`, buildCategoryOptions(), {
         cancelLabel: '← Go back',
         onKeyPress: (key: string, value: string): SelectOptionItem<string>[] | null => {
           if (key === 'b') {
@@ -462,7 +463,7 @@ export async function selectPiece(
   const categoryConfig = getPieceCategories(cwd);
 
   if (categoryConfig) {
-    const allPieces = loadAllPiecesWithSources(cwd);
+    const allPieces = loadAllPiecesWithSources(cwd, { onWarning: warn });
     if (allPieces.size === 0) {
       if (fallbackToDefault) {
         info(`No pieces found. Using default: ${DEFAULT_PIECE_NAME}`);
@@ -476,8 +477,8 @@ export async function selectPiece(
     return selectPieceFromCategorizedPieces(categorized);
   }
 
-  const availablePieces = listPieces(cwd);
-  if (availablePieces.length === 0) {
+  const entries = listPieceEntries(cwd, { onWarning: warn });
+  if (entries.length === 0) {
     if (fallbackToDefault) {
       info(`No pieces found. Using default: ${DEFAULT_PIECE_NAME}`);
       return DEFAULT_PIECE_NAME;
@@ -486,6 +487,5 @@ export async function selectPiece(
     return null;
   }
 
-  const entries = listPieceEntries(cwd);
   return selectPieceFromEntries(entries);
 }
