@@ -12,7 +12,7 @@ movements:
   - name: step-1
     edit: true
     persona: ../agents/test-coder.md
-    instruction_template: |
+    instruction: |
       {task}
     rules:
       - condition: Done
@@ -20,7 +20,7 @@ movements:
   - name: step-2
     edit: true
     persona: ../agents/test-coder.md
-    instruction_template: |
+    instruction: |
       Continue task execution.
     rules:
       - condition: Done
@@ -28,7 +28,7 @@ movements:
   - name: step-3
     edit: true
     persona: ../agents/test-coder.md
-    instruction_template: |
+    instruction: |
       Continue task execution.
     rules:
       - condition: Done
@@ -36,7 +36,7 @@ movements:
   - name: step-4
     edit: true
     persona: ../agents/test-coder.md
-    instruction_template: |
+    instruction: |
       Continue task execution.
     rules:
       - condition: Done
@@ -44,7 +44,7 @@ movements:
   - name: step-5
     edit: true
     persona: ../agents/test-coder.md
-    instruction_template: |
+    instruction: |
       Continue task execution.
     rules:
       - condition: Done
@@ -52,7 +52,7 @@ movements:
   - name: step-6
     edit: true
     persona: ../agents/test-coder.md
-    instruction_template: |
+    instruction: |
       Continue task execution.
     rules:
       - condition: Done
@@ -60,7 +60,7 @@ movements:
   - name: step-7
     edit: true
     persona: ../agents/test-coder.md
-    instruction_template: |
+    instruction: |
       Continue task execution.
     rules:
       - condition: Done
@@ -68,7 +68,7 @@ movements:
   - name: step-8
     edit: true
     persona: ../agents/test-coder.md
-    instruction_template: |
+    instruction: |
       Finalize task execution.
     rules:
       - condition: Done

@@ -129,7 +129,7 @@ describe('ParallelSubMovementRawSchema knowledge field', () => {
       name: 'sub-step',
       persona: 'reviewer.md',
       knowledge: 'security',
-      instruction_template: 'Review security',
+      instruction: 'Review security',
     };
 
     const result = ParallelSubMovementRawSchema.safeParse(raw);
@@ -144,7 +144,7 @@ describe('ParallelSubMovementRawSchema knowledge field', () => {
       name: 'sub-step',
       persona: 'reviewer.md',
       knowledge: ['security', 'performance'],
-      instruction_template: 'Review',
+      instruction: 'Review',
     };
 
     const result = ParallelSubMovementRawSchema.safeParse(raw);
@@ -238,7 +238,7 @@ describe('normalizePieceConfig knowledge resolution', () => {
               name: 'sec-review',
               persona: 'reviewer.md',
               knowledge: 'security',
-              instruction_template: 'Review security',
+              instruction: 'Review security',
             },
           ],
           rules: [{ condition: 'approved', next: 'COMPLETE' }],

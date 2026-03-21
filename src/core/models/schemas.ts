@@ -309,7 +309,7 @@ export const ParallelSubMovementRawSchema = z.object({
   provider_options: MovementProviderOptionsSchema,
   edit: z.boolean().optional(),
   instruction: z.string().optional(),
-  instruction_template: z.string().optional(),
+  instruction_template: z.never().optional(),
   rules: z.array(PieceRuleSchema).optional(),
   /** Output contracts for this movement (report definitions) */
   output_contracts: OutputContractsFieldSchema,
@@ -345,7 +345,7 @@ export const PieceMovementRawSchema = z.object({
   /** Whether this movement is allowed to edit project files */
   edit: z.boolean().optional(),
   instruction: z.string().optional(),
-  instruction_template: z.string().optional(),
+  instruction_template: z.never().optional(),
   /** Rules for movement routing */
   rules: z.array(PieceRuleSchema).optional(),
   /** Output contracts for this movement (report definitions) */
@@ -381,8 +381,7 @@ export const LoopMonitorJudgeSchema = z.object({
   persona: z.string().optional(),
   /** Custom judge instruction */
   instruction: z.string().optional(),
-  /** Deprecated alias */
-  instruction_template: z.string().optional(),
+  instruction_template: z.never().optional(),
   /** Rules for the judge's decision */
   rules: z.array(LoopMonitorRuleSchema).min(1),
 });
