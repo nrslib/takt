@@ -17,6 +17,7 @@ import {
   getProjectConfigDir,
   ensureDir,
 } from '../paths.js';
+import { isProjectConfigEnabled } from '../project/projectConfigGuards.js';
 import { copyProjectResourcesToDir, getLanguageResourcesDir } from '../../resources/index.js';
 import { setLanguage, setProvider } from './globalConfig.js';
 
@@ -130,6 +131,10 @@ function copyLanguageConfigYaml(lang: Language): void {
  * Only copies files that don't exist.
  */
 export function initProjectDirs(projectDir: string): void {
+  if (!isProjectConfigEnabled(projectDir)) {
+    return;
+  }
+
   const configDir = getProjectConfigDir(projectDir);
   ensureDir(configDir);
   copyProjectResourcesToDir(configDir);
