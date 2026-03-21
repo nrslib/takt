@@ -268,6 +268,11 @@ export interface PieceConfig {
   answerAgent?: string;
   /** Default interactive mode for this piece (overrides user default) */
   interactiveMode?: InteractiveMode;
+  /**
+   * When true, a 1-line safety constraint is prepended before the persona definition
+   * in every movement system prompt. Defaults to false so existing pieces are unaffected.
+   */
+  safetyBaseline?: boolean;
 }
 
 /** Runtime state of a piece execution */

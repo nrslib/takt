@@ -435,6 +435,7 @@ export function normalizePieceConfig(
     loopMonitors: normalizeLoopMonitors(parsed.loop_monitors, pieceDir, sections, context),
     answerAgent: parsed.answer_agent,
     interactiveMode: parsed.interactive_mode,
+    safetyBaseline: parsed.safety_baseline ?? false,
   };
 }
 

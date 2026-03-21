@@ -106,6 +106,7 @@ export class OptionsBuilder {
         movementsList: movements,
         currentPosition,
       },
+      safetyBaseline: this.engineOptions.safetyBaseline,
     };
   }
 

@@ -81,7 +81,8 @@ export class PieceEngine extends EventEmitter {
     this.projectCwd = options.projectCwd;
     this.cwd = cwd;
     this.task = task;
-    this.options = options;
+    // Merge piece-level safetyBaseline into options so OptionsBuilder can propagate it
+    this.options = config.safetyBaseline ? { ...options, safetyBaseline: true } : options;
     this.loopDetector = new LoopDetector(config.loopDetection);
     this.cycleDetector = new CycleDetector(config.loopMonitors ?? []);
     if (options.reportDirName !== undefined && !isValidReportDirName(options.reportDirName)) {
