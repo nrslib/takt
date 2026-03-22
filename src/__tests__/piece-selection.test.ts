@@ -11,15 +11,16 @@ const selectOptionMock = vi.fn();
 const bookmarkState = vi.hoisted(() => ({
   bookmarks: [] as string[],
 }));
+const uiMock = vi.hoisted(() => ({
+  info: vi.fn(),
+  warn: vi.fn(),
+}));
 
 vi.mock('../shared/prompt/index.js', () => ({
   selectOption: selectOptionMock,
 }));
 
-vi.mock('../shared/ui/index.js', () => ({
-  info: vi.fn(),
-  warn: vi.fn(),
-}));
+vi.mock('../shared/ui/index.js', () => uiMock);
 
 vi.mock('../infra/config/global/index.js', () => ({
   getBookmarkedPieces: () => bookmarkState.bookmarks,
@@ -34,9 +35,8 @@ vi.mock('../infra/config/index.js', async (importOriginal) => {
 });
 
 const configMock = vi.hoisted(() => ({
-  listPieces: vi.fn(),
-  listPieceEntries: vi.fn(),
   loadAllPiecesWithSources: vi.fn(),
+  listPieceEntries: vi.fn(),
   getPieceCategories: vi.fn(),
   buildCategorizedPieces: vi.fn(),
 }));
@@ -302,27 +302,95 @@ describe('selectPieceFromCategorizedPieces', () => {
     expect(labels.some((l) => l.includes('My Team'))).toBe(true);
     expect(labels.some((l) => l.includes('builtin'))).toBe(true);
   });
+
+  it('should sanitize category labels and bookmarked piece labels in categorized selection', async () => {
+    bookmarkState.bookmarks = ['bookmarked\npiece'];
+
+    const categorized: CategorizedPieces = {
+      categories: [
+        { name: 'Unsafe\nCategory', pieces: [], children: [] },
+      ],
+      allPieces: createPieceMap([
+        { name: 'bookmarked\npiece', source: 'builtin' },
+      ]),
+      missingPieces: [],
+    };
+
+    selectOptionMock.mockResolvedValueOnce(null);
+
+    await selectPieceFromCategorizedPieces(categorized);
+
+    const firstCallOptions = selectOptionMock.mock.calls[0]![1] as { label: string; value: string }[];
+    expect(firstCallOptions).toEqual(
+      expect.arrayContaining([
+        { label: '🎼 bookmarked\\npiece [*]', value: 'bookmarked\npiece' },
+        { label: '📁 Unsafe\\nCategory/', value: '__custom_category__:Unsafe\nCategory' },
+      ]),
+    );
+  });
+
+  it('should sanitize category prompt labels when navigating nested categories', async () => {
+    const categorized: CategorizedPieces = {
+      categories: [
+        {
+          name: 'Root',
+          pieces: [],
+          children: [
+            {
+              name: 'Unsafe\nInner',
+              pieces: [],
+              children: [
+                { name: 'Final\tCategory', pieces: ['safe-piece'], children: [] },
+              ],
+            },
+          ],
+        },
+      ],
+      allPieces: createPieceMap([
+        { name: 'safe-piece', source: 'builtin' },
+      ]),
+      missingPieces: [],
+    };
+
+    selectOptionMock
+      .mockResolvedValueOnce('__custom_category__:Root')
+      .mockResolvedValueOnce('__category__:Unsafe\nInner')
+      .mockResolvedValueOnce('__category__:Final\tCategory')
+      .mockResolvedValueOnce('safe-piece');
+
+    const selected = await selectPieceFromCategorizedPieces(categorized);
+
+    expect(selected).toBe('safe-piece');
+    expect(selectOptionMock).toHaveBeenNthCalledWith(
+      3,
+      'Select piece in Unsafe\\nInner:',
+      expect.any(Array),
+      expect.any(Object),
+    );
+    expect(selectOptionMock).toHaveBeenNthCalledWith(
+      4,
+      'Select piece in Unsafe\\nInner / Final\\tCategory:',
+      expect.any(Array),
+      expect.any(Object),
+    );
+  });
 });
 
 describe('selectPiece', () => {
-  const entries: PieceDirEntry[] = [
-    { name: 'custom-flow', path: '/tmp/custom.yaml', source: 'user' },
-    { name: 'builtin-flow', path: '/tmp/builtin.yaml', source: 'builtin' },
-  ];
-
   beforeEach(() => {
     selectOptionMock.mockReset();
     bookmarkState.bookmarks = [];
-    configMock.listPieces.mockReset();
-    configMock.listPieceEntries.mockReset();
     configMock.loadAllPiecesWithSources.mockReset();
+    configMock.listPieceEntries.mockReset();
     configMock.getPieceCategories.mockReset();
     configMock.buildCategorizedPieces.mockReset();
+    uiMock.info.mockReset();
+    uiMock.warn.mockReset();
   });
 
   it('should return default piece when no pieces found and fallbackToDefault is true', async () => {
     configMock.getPieceCategories.mockReturnValue(null);
-    configMock.listPieces.mockReturnValue([]);
+    configMock.listPieceEntries.mockReturnValue([]);
 
     const result = await selectPiece('/cwd');
 
@@ -331,7 +399,7 @@ describe('selectPiece', () => {
 
   it('should return null when no pieces found and fallbackToDefault is false', async () => {
     configMock.getPieceCategories.mockReturnValue(null);
-    configMock.listPieces.mockReturnValue([]);
+    configMock.listPieceEntries.mockReturnValue([]);
 
     const result = await selectPiece('/cwd', { fallbackToDefault: false });
 
@@ -340,7 +408,6 @@ describe('selectPiece', () => {
 
   it('should prompt selection even when only one piece exists', async () => {
     configMock.getPieceCategories.mockReturnValue(null);
-    configMock.listPieces.mockReturnValue(['only-piece']);
     configMock.listPieceEntries.mockReturnValue([
       { name: 'only-piece', path: '/tmp/only-piece.yaml', source: 'user' },
     ]);
@@ -372,12 +439,46 @@ describe('selectPiece', () => {
 
     expect(result).toBe('my-piece');
     expect(configMock.buildCategorizedPieces).toHaveBeenCalled();
+    expect(configMock.loadAllPiecesWithSources).toHaveBeenCalledWith('/cwd', {
+      onWarning: uiMock.warn,
+    });
+  });
+
+  it('should forward invalid piece warnings to UI in category-based selection path', async () => {
+    const pieceMap = createPieceMap([{ name: 'my-piece', source: 'user' }]);
+    const categorized: CategorizedPieces = {
+      categories: [{ name: 'Dev', pieces: ['my-piece'], children: [] }],
+      allPieces: pieceMap,
+      missingPieces: [],
+    };
+
+    configMock.getPieceCategories.mockReturnValue({ categories: ['Dev'] });
+    configMock.loadAllPiecesWithSources.mockImplementation(
+      (_cwd: string, options?: { onWarning?: (message: string) => void }) => {
+        options?.onWarning?.('Piece "broken" failed to load: movements.0.allowed_tools: Invalid input');
+        return pieceMap;
+      },
+    );
+    configMock.buildCategorizedPieces.mockReturnValue(categorized);
+
+    selectOptionMock
+      .mockResolvedValueOnce('__custom_category__:Dev')
+      .mockResolvedValueOnce('my-piece');
+
+    const result = await selectPiece('/cwd');
+
+    expect(result).toBe('my-piece');
+    expect(uiMock.warn).toHaveBeenCalledWith(
+      'Piece "broken" failed to load: movements.0.allowed_tools: Invalid input',
+    );
   });
 
   it('should use directory-based selection when no category config', async () => {
     configMock.getPieceCategories.mockReturnValue(null);
-    configMock.listPieces.mockReturnValue(['piece-a', 'piece-b']);
-    configMock.listPieceEntries.mockReturnValue(entries);
+    configMock.listPieceEntries.mockReturnValue([
+      { name: 'custom-flow', path: '/tmp/custom-flow.yaml', source: 'user' },
+      { name: 'builtin-flow', path: '/tmp/builtin-flow.yaml', source: 'builtin' },
+    ]);
 
     selectOptionMock
       .mockResolvedValueOnce('custom')
@@ -386,6 +487,109 @@ describe('selectPiece', () => {
     const result = await selectPiece('/cwd');
 
     expect(result).toBe('custom-flow');
-    expect(configMock.listPieceEntries).toHaveBeenCalled();
+    expect(configMock.listPieceEntries).toHaveBeenCalledWith('/cwd', {
+      onWarning: uiMock.warn,
+    });
+  });
+
+  it('should exclude invalid pieces from normal selection path and forward warnings to UI', async () => {
+    configMock.getPieceCategories.mockReturnValue(null);
+    configMock.listPieceEntries.mockImplementation(
+      (_cwd: string, options?: { onWarning?: (message: string) => void }) => {
+        options?.onWarning?.('Piece "broken" failed to load: movements.0: Invalid input');
+        return [
+          { name: 'builtin-flow', path: '/tmp/builtin-flow.yaml', source: 'builtin' },
+          { name: 'valid-flow', path: '/tmp/valid-flow.yaml', source: 'user' },
+        ];
+      },
+    );
+
+    selectOptionMock
+      .mockResolvedValueOnce('custom')
+      .mockResolvedValueOnce('valid-flow');
+
+    const result = await selectPiece('/cwd');
+
+    expect(result).toBe('valid-flow');
+    expect(uiMock.warn).toHaveBeenCalledWith('Piece "broken" failed to load: movements.0: Invalid input');
+    expect(selectOptionMock).toHaveBeenNthCalledWith(
+      2,
+      'Select piece:',
+      [{ label: '🎼 valid-flow', value: 'valid-flow' }],
+      expect.any(Object),
+    );
+  });
+
+  it('should preserve repertoire package-qualified names in normal selection path', async () => {
+    configMock.getPieceCategories.mockReturnValue(null);
+    configMock.listPieceEntries.mockReturnValue([
+      { name: '@owner/repo-a/build', path: '/tmp/repo-a.yaml', source: 'repertoire' },
+      { name: '@owner/repo-b/build', path: '/tmp/repo-b.yaml', source: 'repertoire' },
+    ]);
+    selectOptionMock.mockResolvedValueOnce('@owner/repo-a/build');
+
+    const result = await selectPiece('/cwd');
+
+    expect(result).toBe('@owner/repo-a/build');
+    expect(selectOptionMock).toHaveBeenCalledWith(
+      'Select piece:',
+      [
+        { label: '🎼 @owner/repo-a/build', value: '@owner/repo-a/build' },
+        { label: '🎼 @owner/repo-b/build', value: '@owner/repo-b/build' },
+      ],
+      expect.any(Object),
+    );
+  });
+
+  it('should sanitize terminal control characters in normal selection labels and warnings', async () => {
+    configMock.getPieceCategories.mockReturnValue(null);
+    configMock.listPieceEntries.mockImplementation(
+      (_cwd: string, options?: { onWarning?: (message: string) => void }) => {
+        options?.onWarning?.('Piece "bad\\nname" failed to load: invalid\\tfield');
+        return [
+          { name: 'safe\npiece', path: '/tmp/safe-piece.yaml', source: 'user' },
+        ];
+      },
+    );
+    selectOptionMock.mockResolvedValueOnce('safe\npiece');
+
+    const result = await selectPiece('/cwd');
+
+    expect(result).toBe('safe\npiece');
+    expect(uiMock.warn).toHaveBeenCalledWith('Piece "bad\\nname" failed to load: invalid\\tfield');
+    expect(selectOptionMock).toHaveBeenCalledWith(
+      'Select piece:',
+      [{ label: '🎼 safe\\npiece', value: 'safe\npiece' }],
+      expect.any(Object),
+    );
+  });
+
+  it('should sanitize missing piece warnings in category-based selection path', async () => {
+    const pieceMap = createPieceMap([{ name: 'safe-piece', source: 'user' }]);
+    const categorized: CategorizedPieces = {
+      categories: [{ name: 'Dev', pieces: ['safe-piece'], children: [] }],
+      allPieces: pieceMap,
+      missingPieces: [
+        {
+          categoryPath: ['Unsafe\nCategory', 'Inner\tLevel'],
+          pieceName: 'missing\rpiece',
+          source: 'user',
+        },
+      ],
+    };
+
+    configMock.getPieceCategories.mockReturnValue({ categories: ['Dev'] });
+    configMock.loadAllPiecesWithSources.mockReturnValue(pieceMap);
+    configMock.buildCategorizedPieces.mockReturnValue(categorized);
+    selectOptionMock
+      .mockResolvedValueOnce('__custom_category__:Dev')
+      .mockResolvedValueOnce('safe-piece');
+
+    const result = await selectPiece('/cwd');
+
+    expect(result).toBe('safe-piece');
+    expect(uiMock.warn).toHaveBeenCalledWith(
+      'Piece "missing\\rpiece" in category "Unsafe\\nCategory / Inner\\tLevel" not found',
+    );
   });
 });

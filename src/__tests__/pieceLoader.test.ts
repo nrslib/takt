@@ -2,14 +2,16 @@
  * Tests for isPiecePath and loadPieceByIdentifier
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+
 import {
   isPiecePath,
   loadPieceByIdentifier,
   listPieces,
+  listPieceEntries,
   loadAllPieces,
   loadAllPiecesWithSources,
 } from '../infra/config/loaders/pieceLoader.js';
@@ -22,6 +24,18 @@ max_movements: 1
 movements:
   - name: step1
     persona: coder
+    instruction: "{task}"
+`;
+
+const INVALID_ALLOWED_TOOLS_PIECE = `name: broken-piece
+description: Broken piece
+initial_movement: step1
+max_movements: 1
+
+movements:
+  - name: step1
+    persona: coder
+    allowed_tools: [Read]
     instruction: "{task}"
 `;
 
@@ -144,6 +158,19 @@ describe('listPieces with project-local', () => {
     expect(pieces).toContain('default');
   });
 
+  it('should warn and skip invalid project-local pieces', () => {
+    const projectPiecesDir = join(tempDir, '.takt', 'pieces');
+    mkdirSync(projectPiecesDir, { recursive: true });
+    writeFileSync(join(projectPiecesDir, 'broken.yaml'), INVALID_ALLOWED_TOOLS_PIECE);
+    const onWarning = vi.fn();
+
+    const pieces = listPieces(tempDir, { onWarning });
+
+    expect(pieces).not.toContain('broken');
+    expect(onWarning).toHaveBeenCalledTimes(1);
+    expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('Piece "broken" failed to load'));
+  });
+
 });
 
 describe('loadAllPieces with project-local', () => {
@@ -211,28 +238,22 @@ describe('loadPieceByIdentifier with @scope ref (repertoire)', () => {
   });
 
   it('should load piece by @scope ref (repertoire)', () => {
-    // Given: repertoire package with a piece file
     const piecesDir = join(configDir, 'repertoire', '@nrslib', 'takt-ensemble', 'pieces');
     mkdirSync(piecesDir, { recursive: true });
     writeFileSync(join(piecesDir, 'expert.yaml'), SAMPLE_PIECE);
 
-    // When: piece is loaded via @scope ref
     const piece = loadPieceByIdentifier('@nrslib/takt-ensemble/expert', tempDir);
 
-    // Then: the piece is resolved correctly
     expect(piece).not.toBeNull();
     expect(piece!.name).toBe('test-piece');
   });
 
   it('should return null for non-existent @scope piece', () => {
-    // Given: repertoire dir exists but the requested piece does not
     const piecesDir = join(configDir, 'repertoire', '@nrslib', 'takt-ensemble', 'pieces');
     mkdirSync(piecesDir, { recursive: true });
 
-    // When: a non-existent piece is requested
     const piece = loadPieceByIdentifier('@nrslib/takt-ensemble/no-such-piece', tempDir);
 
-    // Then: null is returned
     expect(piece).toBeNull();
   });
 });
@@ -259,28 +280,105 @@ describe('loadAllPiecesWithSources with repertoire pieces', () => {
   });
 
   it('should include repertoire pieces with @scope qualified names', () => {
-    // Given: repertoire package with a piece file
     const piecesDir = join(configDir, 'repertoire', '@nrslib', 'takt-ensemble', 'pieces');
     mkdirSync(piecesDir, { recursive: true });
     writeFileSync(join(piecesDir, 'expert.yaml'), SAMPLE_PIECE);
 
-    // When: all pieces are loaded
     const pieces = loadAllPiecesWithSources(tempDir);
 
-    // Then: the repertoire piece is included with 'repertoire' source
     expect(pieces.has('@nrslib/takt-ensemble/expert')).toBe(true);
     expect(pieces.get('@nrslib/takt-ensemble/expert')!.source).toBe('repertoire');
   });
 
   it('should not throw when repertoire dir does not exist', () => {
-    // Given: no repertoire dir created (configDir/repertoire does not exist)
-
-    // When: all pieces are loaded
     const pieces = loadAllPiecesWithSources(tempDir);
 
-    // Then: no @scope pieces are present and no error thrown
     const repertoirePieces = Array.from(pieces.keys()).filter((k) => k.startsWith('@'));
     expect(repertoirePieces).toHaveLength(0);
+  });
+
+  it('should warn and skip invalid project-local pieces', () => {
+    const projectPiecesDir = join(tempDir, '.takt', 'pieces');
+    mkdirSync(projectPiecesDir, { recursive: true });
+    writeFileSync(join(projectPiecesDir, 'broken.yaml'), INVALID_ALLOWED_TOOLS_PIECE);
+    const onWarning = vi.fn();
+
+    const pieces = loadAllPiecesWithSources(tempDir, { onWarning });
+
+    expect(pieces.has('broken')).toBe(false);
+    expect(onWarning).toHaveBeenCalledTimes(1);
+    expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('Piece "broken" failed to load'));
+    expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('allowed_tools'));
+  });
+
+  it('should warn and skip invalid repertoire pieces', () => {
+    const piecesDir = join(configDir, 'repertoire', '@nrslib', 'takt-ensemble', 'pieces');
+    mkdirSync(piecesDir, { recursive: true });
+    writeFileSync(join(piecesDir, 'broken.yaml'), INVALID_ALLOWED_TOOLS_PIECE);
+    const onWarning = vi.fn();
+
+    const pieces = loadAllPiecesWithSources(tempDir, { onWarning });
+
+    expect(pieces.has('@nrslib/takt-ensemble/broken')).toBe(false);
+    expect(onWarning).toHaveBeenCalledTimes(1);
+    expect(onWarning).toHaveBeenCalledWith(
+      expect.stringContaining('Piece "@nrslib/takt-ensemble/broken" failed to load'),
+    );
+    expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('allowed_tools'));
+  });
+
+  it('should forward warnings through loadAllPieces callback', () => {
+    const projectPiecesDir = join(tempDir, '.takt', 'pieces');
+    mkdirSync(projectPiecesDir, { recursive: true });
+    writeFileSync(join(projectPiecesDir, 'broken.yaml'), INVALID_ALLOWED_TOOLS_PIECE);
+    const onWarning = vi.fn();
+
+    const pieces = loadAllPieces(tempDir, { onWarning });
+
+    expect(pieces.has('broken')).toBe(false);
+    expect(onWarning).toHaveBeenCalledTimes(1);
+    expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('allowed_tools'));
+  });
+
+  it('should return validated selection entries for repertoire pieces without collapsing repo names', () => {
+    const piecesDirA = join(configDir, 'repertoire', '@nrslib', 'repo-a', 'pieces');
+    const piecesDirB = join(configDir, 'repertoire', '@nrslib', 'repo-b', 'pieces');
+    mkdirSync(piecesDirA, { recursive: true });
+    mkdirSync(piecesDirB, { recursive: true });
+    writeFileSync(join(piecesDirA, 'expert.yaml'), SAMPLE_PIECE);
+    writeFileSync(join(piecesDirB, 'expert.yaml'), SAMPLE_PIECE);
+
+    const entries = listPieceEntries(tempDir);
+
+    expect(entries).toEqual(
+      expect.arrayContaining([
+        {
+          name: '@nrslib/repo-a/expert',
+          path: join(piecesDirA, 'expert.yaml'),
+          source: 'repertoire',
+        },
+        {
+          name: '@nrslib/repo-b/expert',
+          path: join(piecesDirB, 'expert.yaml'),
+          source: 'repertoire',
+        },
+      ]),
+    );
+  });
+
+  it('should warn and skip invalid entries from listPieceEntries', () => {
+    const piecesDir = join(configDir, 'repertoire', '@nrslib', 'takt-ensemble', 'pieces');
+    mkdirSync(piecesDir, { recursive: true });
+    writeFileSync(join(piecesDir, 'broken.yaml'), INVALID_ALLOWED_TOOLS_PIECE);
+    const onWarning = vi.fn();
+
+    const entries = listPieceEntries(tempDir, { onWarning });
+
+    expect(entries.find((entry) => entry.name === '@nrslib/takt-ensemble/broken')).toBeUndefined();
+    expect(onWarning).toHaveBeenCalledTimes(1);
+    expect(onWarning).toHaveBeenCalledWith(
+      expect.stringContaining('Piece "@nrslib/takt-ensemble/broken" failed to load'),
+    );
   });
 });
 
