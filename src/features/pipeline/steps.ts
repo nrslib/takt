@@ -85,11 +85,11 @@ function buildPipelinePrBody(
   report: string,
 ): string {
   const template = pipelineConfig?.prBodyTemplate;
-  if (template && issue) {
+  if (template) {
     return expandTemplate(template, {
-      title: issue.title,
-      issue: String(issue.number),
-      issue_body: issue.body || issue.title,
+      title: issue?.title ?? '',
+      issue: issue ? String(issue.number) : '',
+      issue_body: issue?.body || issue?.title || '',
       report,
     });
   }

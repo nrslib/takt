@@ -439,12 +439,36 @@ describe('executePipeline', () => {
         cwd: '/tmp/test',
       });
 
-      // When prBodyTemplate is set, buildPrBody (mock) should NOT be called
-      // Instead, the template is expanded directly
       expect(mockCreatePullRequest).toHaveBeenCalledWith(
         '/tmp/test',
         expect.objectContaining({
           body: '## Summary\nAuth is broken.\n\nCloses #50',
+        }),
+      );
+    });
+
+    it('should use pr_body_template for task-based PR creation when issue is unavailable', async () => {
+      mockResolveConfigValues.mockReturnValue({
+        pipeline: {
+          prBodyTemplate: '## Summary\n{report}\n\nIssue:{issue}\nDetails:{issue_body}',
+        },
+      });
+      mockExecuteTask.mockResolvedValueOnce(true);
+      mockCreatePullRequest.mockReturnValueOnce({ success: true, url: 'https://github.com/pr/2' });
+
+      await executePipeline({
+        task: 'Fix task-only PR body',
+        piece: 'default',
+        branch: 'fix-task-pr-body',
+        autoPr: true,
+        cwd: '/tmp/test',
+      });
+
+      expect(mockBuildPrBody).not.toHaveBeenCalled();
+      expect(mockCreatePullRequest).toHaveBeenCalledWith(
+        '/tmp/test',
+        expect.objectContaining({
+          body: '## Summary\nPiece `default` completed successfully.\n\nIssue:\nDetails:',
         }),
       );
     });
@@ -461,7 +485,6 @@ describe('executePipeline', () => {
         cwd: '/tmp/test',
       });
 
-      // Should use buildPrBody (the mock)
       expect(mockBuildPrBody).toHaveBeenCalled();
       expect(mockCreatePullRequest).toHaveBeenCalledWith(
         '/tmp/test',
