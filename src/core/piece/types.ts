@@ -220,6 +220,11 @@ export interface PieceEngineOptions {
   taskColorIndex?: number;
   /** Initial iteration count (for resuming exceeded tasks) */
   initialIteration?: number;
+  /**
+   * When true, a 1-line safety constraint is prepended before the persona definition
+   * in every movement system prompt. Propagated from PieceConfig.safetyBaseline.
+   */
+  safetyBaseline?: boolean;
 }
 
 /** Loop detection result */

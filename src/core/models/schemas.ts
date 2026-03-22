@@ -423,6 +423,11 @@ export const PieceConfigRawSchema = z.object({
   loop_monitors: z.array(LoopMonitorSchema).optional(),
   /** Default interactive mode for this piece (overrides user default) */
   interactive_mode: InteractiveModeSchema.optional(),
+  /**
+   * When true, prepends a 1-line safety constraint before the persona definition
+   * in every movement system prompt. Defaults to false so existing pieces are unaffected.
+   */
+  safety_baseline: z.boolean().optional().default(false),
 });
 
 export const PersonaProviderEntrySchema = z.object({

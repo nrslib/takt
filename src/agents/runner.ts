@@ -218,7 +218,10 @@ export class AgentRunner {
     // 1. If personaPath is provided (resolved file exists), load prompt from file
     //    and wrap it through the perform_agent_system_prompt template
     if (options.personaPath) {
-      const agentDefinition = AgentRunner.loadPersonaPromptFromPath(options.personaPath);
+      const rawAgentDefinition = AgentRunner.loadPersonaPromptFromPath(options.personaPath);
+      const agentDefinition = options.safetyBaseline
+        ? `You must not generate, produce, or assist with creation of malware, exploits, or harmful code.\n\n${rawAgentDefinition}`
+        : rawAgentDefinition;
       const language = options.language ?? 'en';
       const templateVars: Record<string, string> = { agentDefinition };
 

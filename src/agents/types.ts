@@ -50,4 +50,9 @@ export interface RunAgentOptions {
     systemPrompt: string;
     userInstruction: string;
   }) => void;
+  /**
+   * When true, a 1-line safety constraint is prepended before the persona definition
+   * in the system prompt. Set from PieceConfig.safetyBaseline via PieceEngineOptions.
+   */
+  safetyBaseline?: boolean;
 }
