@@ -19,20 +19,26 @@ import {
   getRepertoireDir,
   isPathSafe,
 } from '../paths.js';
+import { getProjectConfigDirIfEnabled } from '../project/projectConfigGuards.js';
 import { resolveConfigValue } from '../resolveConfigValue.js';
 
 /** Get all allowed base directories for persona prompt files */
 function getAllowedPromptBases(cwd: string): string[] {
   const lang = resolveConfigValue(cwd, 'language');
-  return [
+  const allowedBases = [
     getGlobalPersonasDir(),
     getGlobalPiecesDir(),
     getBuiltinPersonasDir(lang),
     getBuiltinPiecesDir(lang),
     getGlobalFacetDir('personas'),
-    getProjectFacetDir(cwd, 'personas'),
     getRepertoireDir(),
   ];
+
+  if (getProjectConfigDirIfEnabled(cwd)) {
+    allowedBases.push(getProjectFacetDir(cwd, 'personas'));
+  }
+
+  return allowedBases;
 }
 
 /** Load agents from markdown files in a directory */

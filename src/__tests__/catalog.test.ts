@@ -117,18 +117,25 @@ describe('scanFacets', () => {
   let builtinDir: string;
   let globalDir: string;
   let projectDir: string;
+  let originalTaktConfigDir: string | undefined;
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'takt-catalog-test-'));
     builtinDir = join(tempDir, 'builtin-lang');
     globalDir = join(tempDir, 'global');
     projectDir = join(tempDir, 'project');
+    originalTaktConfigDir = process.env.TAKT_CONFIG_DIR;
 
     mockBuiltinDir = builtinDir;
     mockGlobalDir = globalDir;
   });
 
   afterEach(() => {
+    if (originalTaktConfigDir === undefined) {
+      delete process.env.TAKT_CONFIG_DIR;
+    } else {
+      process.env.TAKT_CONFIG_DIR = originalTaktConfigDir;
+    }
     rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -214,6 +221,24 @@ describe('scanFacets', () => {
 
     // Then: returns empty array
     expect(entries).toEqual([]);
+  });
+
+  it('should skip project facets when project config dir collides with global config dir', () => {
+    process.env.TAKT_CONFIG_DIR = join(projectDir, '.takt');
+    const globalPersonas = join(globalDir, 'facets', 'personas');
+    const projectPersonas = join(projectDir, '.takt', 'facets', 'personas');
+    mkdirSync(globalPersonas, { recursive: true });
+    mkdirSync(projectPersonas, { recursive: true });
+    writeFileSync(join(globalPersonas, 'global-coder.md'), '# Global Coder');
+    writeFileSync(join(projectPersonas, 'project-coder.md'), '# Project Coder');
+
+    const entries = scanFacets('personas', projectDir);
+
+    const globalEntry = entries.find((entry) => entry.name === 'global-coder');
+
+    expect(entries.find((entry) => entry.name === 'project-coder')).toBeUndefined();
+    expect(globalEntry).toBeDefined();
+    expect(globalEntry?.source).toBe('user');
   });
 
   it('should only include .md files', () => {

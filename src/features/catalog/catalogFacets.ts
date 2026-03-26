@@ -10,6 +10,7 @@ import { join, basename } from 'node:path';
 import chalk from 'chalk';
 import type { PieceSource } from '../../infra/config/loaders/pieceResolver.js';
 import { getBuiltinFacetDir, getGlobalFacetDir, getProjectFacetDir } from '../../infra/config/paths.js';
+import { getProjectConfigDirIfEnabled } from '../../infra/config/project/projectConfigGuards.js';
 import { resolvePieceConfigValues } from '../../infra/config/index.js';
 import { section, error as logError, info } from '../../shared/ui/index.js';
 
@@ -70,7 +71,9 @@ function getFacetDirs(
   }
 
   dirs.push({ dir: getGlobalFacetDir(facetType), source: 'user' });
-  dirs.push({ dir: getProjectFacetDir(cwd, facetType), source: 'project' });
+  if (getProjectConfigDirIfEnabled(cwd)) {
+    dirs.push({ dir: getProjectFacetDir(cwd, facetType), source: 'project' });
+  }
 
   return dirs;
 }

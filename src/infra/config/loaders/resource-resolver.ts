@@ -12,6 +12,7 @@ import { resolve } from 'node:path';
 import type { Language } from '../../../core/models/index.js';
 import type { FacetType } from '../paths.js';
 import { getProjectFacetDir, getGlobalFacetDir, getBuiltinFacetDir, getRepertoireFacetDir } from '../paths.js';
+import { getProjectConfigDirIfEnabled } from '../project/projectConfigGuards.js';
 
 import {
   resolveFacetPath as resolveFacetPathGeneric,
@@ -104,7 +105,7 @@ export function buildCandidateDirsWithPackage(
     }
   }
 
-  if (context.projectDir) {
+  if (context.projectDir && getProjectConfigDirIfEnabled(context.projectDir)) {
     dirs.push(getProjectFacetDir(context.projectDir, facetType));
   }
   dirs.push(getGlobalFacetDir(facetType));
