@@ -18,6 +18,10 @@ Refer only to files within the Report Directory shown in the Piece Context. Do n
 - Write tests in Given-When-Then structure
 - One concept per test. Do not mix multiple concerns in a single test
 - Cover happy path, error cases, boundary values, and edge cases
+- When an external contract exists, include tests that use the contract-defined input location
+  - Example: pass request bodies using the defined root shape as-is
+  - Example: keep query / path parameters in their defined location instead of moving them into the body
+- Include tests that would catch implementations that incorrectly reuse a response envelope when reading requests
 - Write tests that are expected to pass after implementation is complete (build errors and test failures are expected at this stage)
 
 **Scope output contract (create at the start):**

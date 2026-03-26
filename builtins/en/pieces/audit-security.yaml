@@ -1,4 +1,4 @@
-name: security-audit
+name: audit-security
 description: Full security audit. Reads every project file one by one for security review
 max_movements: 15
 initial_movement: plan
@@ -20,7 +20,7 @@ loop_monitors:
 movements:
   - name: plan
     persona: planner
-    instruction: security-audit-plan
+    instruction: audit-security-plan
     edit: false
     output_contracts:
       report:
@@ -33,7 +33,7 @@ movements:
   - name: audit
     persona: security-reviewer
     knowledge: security
-    instruction: security-audit-team-leader
+    instruction: audit-security-team-leader
     edit: false
     team_leader:
       max_parts: 3
@@ -41,8 +41,8 @@ movements:
       part_edit: false
     output_contracts:
       report:
-        - name: 02-security-audit.md
-          format: security-audit
+        - name: 02-audit-security.md
+          format: audit-security
     rules:
       - condition: Audit complete
         next: supervise
@@ -50,7 +50,7 @@ movements:
   - name: supervise
     persona: supervisor
     knowledge: security
-    instruction: security-audit-supervise
+    instruction: audit-security-supervise
     edit: false
     rules:
       - condition: All files audited with sufficient quality
@@ -61,7 +61,7 @@ movements:
   - name: review
     persona: security-reviewer
     knowledge: security
-    instruction: security-audit-review
+    instruction: audit-security-review
     edit: false
     rules:
       - condition: Re-audit complete

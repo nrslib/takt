@@ -54,10 +54,10 @@ describe('createIssueFromTask', () => {
       createIssueFromTask(title99);
 
       // Then: title passed without truncation
-      expect(mockCreateIssue).toHaveBeenCalledWith({
-        title: title99,
-        body: title99,
-      });
+      expect(mockCreateIssue).toHaveBeenCalledWith(
+        { title: title99, body: title99 },
+        undefined,
+      );
     });
 
     it('should use title as-is when exactly 100 characters', () => {
@@ -69,10 +69,10 @@ describe('createIssueFromTask', () => {
       createIssueFromTask(title100);
 
       // Then: title passed without truncation
-      expect(mockCreateIssue).toHaveBeenCalledWith({
-        title: title100,
-        body: title100,
-      });
+      expect(mockCreateIssue).toHaveBeenCalledWith(
+        { title: title100, body: title100 },
+        undefined,
+      );
     });
 
     it('should truncate title to 97 chars + ellipsis when 101 characters', () => {
@@ -86,10 +86,10 @@ describe('createIssueFromTask', () => {
       // Then: title truncated to 97 chars + "..."
       const expectedTitle = `${'a'.repeat(97)}...`;
       expect(expectedTitle).toHaveLength(100);
-      expect(mockCreateIssue).toHaveBeenCalledWith({
-        title: expectedTitle,
-        body: title101,
-      });
+      expect(mockCreateIssue).toHaveBeenCalledWith(
+        { title: expectedTitle, body: title101 },
+        undefined,
+      );
     });
   });
 
@@ -164,9 +164,39 @@ describe('createIssueFromTask', () => {
     createIssueFromTask(task);
 
     // Then: first line → title, full text → body
-    expect(mockCreateIssue).toHaveBeenCalledWith({
-      title: 'First line title',
-      body: task,
+    expect(mockCreateIssue).toHaveBeenCalledWith(
+      { title: 'First line title', body: task },
+      undefined,
+    );
+  });
+
+  describe('cwd propagation', () => {
+    it('cwd を指定した場合は createIssue に cwd を渡す', () => {
+      // Given
+      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/1' });
+
+      // When
+      createIssueFromTask('Test task', { cwd: '/worktree/clone' });
+
+      // Then
+      expect(mockCreateIssue).toHaveBeenCalledWith(
+        { title: 'Test task', body: 'Test task' },
+        '/worktree/clone',
+      );
+    });
+
+    it('cwd 省略時は createIssue に undefined を渡す', () => {
+      // Given
+      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/1' });
+
+      // When
+      createIssueFromTask('Test task');
+
+      // Then
+      expect(mockCreateIssue).toHaveBeenCalledWith(
+        { title: 'Test task', body: 'Test task' },
+        undefined,
+      );
     });
   });
 
@@ -179,11 +209,10 @@ describe('createIssueFromTask', () => {
       createIssueFromTask('Test task', { labels: ['bug'] });
 
       // Then
-      expect(mockCreateIssue).toHaveBeenCalledWith({
-        title: 'Test task',
-        body: 'Test task',
-        labels: ['bug'],
-      });
+      expect(mockCreateIssue).toHaveBeenCalledWith(
+        { title: 'Test task', body: 'Test task', labels: ['bug'] },
+        undefined,
+      );
     });
 
     it('should not include labels key when options is undefined', () => {
@@ -194,10 +223,10 @@ describe('createIssueFromTask', () => {
       createIssueFromTask('Test task');
 
       // Then
-      expect(mockCreateIssue).toHaveBeenCalledWith({
-        title: 'Test task',
-        body: 'Test task',
-      });
+      expect(mockCreateIssue).toHaveBeenCalledWith(
+        { title: 'Test task', body: 'Test task' },
+        undefined,
+      );
     });
 
     it('should not include labels key when labels is empty array', () => {
@@ -208,10 +237,10 @@ describe('createIssueFromTask', () => {
       createIssueFromTask('Test task', { labels: [] });
 
       // Then
-      expect(mockCreateIssue).toHaveBeenCalledWith({
-        title: 'Test task',
-        body: 'Test task',
-      });
+      expect(mockCreateIssue).toHaveBeenCalledWith(
+        { title: 'Test task', body: 'Test task' },
+        undefined,
+      );
     });
 
     it('should filter out empty string labels', () => {
@@ -222,11 +251,10 @@ describe('createIssueFromTask', () => {
       createIssueFromTask('Test task', { labels: ['bug', '', 'enhancement'] });
 
       // Then
-      expect(mockCreateIssue).toHaveBeenCalledWith({
-        title: 'Test task',
-        body: 'Test task',
-        labels: ['bug', 'enhancement'],
-      });
+      expect(mockCreateIssue).toHaveBeenCalledWith(
+        { title: 'Test task', body: 'Test task', labels: ['bug', 'enhancement'] },
+        undefined,
+      );
     });
   });
 });

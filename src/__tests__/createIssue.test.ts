@@ -22,7 +22,7 @@ vi.mock('../../shared/utils/index.js', async (importOriginal) => ({
   }),
 }));
 
-import { createIssue, checkGhCli } from '../infra/github/issue.js';
+import { createIssue } from '../infra/github/issue.js';
 
 const mockExecFileSync = vi.mocked(execFileSync);
 
@@ -38,7 +38,7 @@ describe('createIssue', () => {
       .mockReturnValueOnce('https://github.com/owner/repo/issues/42\n' as unknown as Buffer);
 
     // When
-    const result = createIssue({ title: 'Test issue', body: 'Test body' });
+    const result = createIssue({ title: 'Test issue', body: 'Test body' }, '/project');
 
     // Then
     expect(result.success).toBe(true);
@@ -52,7 +52,7 @@ describe('createIssue', () => {
       .mockReturnValueOnce('https://github.com/owner/repo/issues/1\n' as unknown as Buffer);
 
     // When
-    createIssue({ title: 'My Title', body: 'My Body' });
+    createIssue({ title: 'My Title', body: 'My Body' }, '/project');
 
     // Then: verify the second call (issue create) has correct args
     const issueCreateCall = mockExecFileSync.mock.calls[1];
@@ -70,7 +70,7 @@ describe('createIssue', () => {
       .mockReturnValueOnce('https://github.com/owner/repo/issues/1\n' as unknown as Buffer);
 
     // When
-    createIssue({ title: 'Bug', body: 'Fix it', labels: ['bug', 'priority:high'] });
+    createIssue({ title: 'Bug', body: 'Fix it', labels: ['bug', 'priority:high'] }, '/project');
 
     // Then
     const issueCreateCall = mockExecFileSync.mock.calls[2];
@@ -88,7 +88,7 @@ describe('createIssue', () => {
       .mockReturnValueOnce('https://github.com/owner/repo/issues/1\n' as unknown as Buffer);
 
     // When
-    createIssue({ title: 'Bug', body: 'Fix it', labels: ['bug', 'Docs'] });
+    createIssue({ title: 'Bug', body: 'Fix it', labels: ['bug', 'Docs'] }, '/project');
 
     // Then
     const issueCreateCall = mockExecFileSync.mock.calls[2];
@@ -105,7 +105,7 @@ describe('createIssue', () => {
       .mockReturnValueOnce('https://github.com/owner/repo/issues/1\n' as unknown as Buffer);
 
     // When
-    createIssue({ title: 'Title', body: 'Body', labels: [] });
+    createIssue({ title: 'Title', body: 'Body', labels: [] }, '/project');
 
     // Then
     const issueCreateCall = mockExecFileSync.mock.calls[1];
@@ -120,7 +120,7 @@ describe('createIssue', () => {
       .mockReturnValueOnce('https://github.com/owner/repo/issues/1\n' as unknown as Buffer);
 
     // When
-    createIssue({ title: 'Title', body: 'Body', labels: ['Docs', 'Chore'] });
+    createIssue({ title: 'Title', body: 'Body', labels: ['Docs', 'Chore'] }, '/project');
 
     // Then
     const issueCreateCall = mockExecFileSync.mock.calls[2];
@@ -134,7 +134,7 @@ describe('createIssue', () => {
       .mockReturnValueOnce(Buffer.from('gh version 2.0.0'));
 
     // When
-    const result = createIssue({ title: 'Test', body: 'Body' });
+    const result = createIssue({ title: 'Test', body: 'Body' }, '/project');
 
     // Then
     expect(result.success).toBe(false);
@@ -148,11 +148,27 @@ describe('createIssue', () => {
       .mockImplementationOnce(() => { throw new Error('command not found'); });
 
     // When
-    const result = createIssue({ title: 'Test', body: 'Body' });
+    const result = createIssue({ title: 'Test', body: 'Body' }, '/project');
 
     // Then
     expect(result.success).toBe(false);
     expect(result.error).toContain('not installed');
+  });
+
+  it('should pass cwd to execFileSync for all gh commands', () => {
+    // Given
+    mockExecFileSync
+      .mockReturnValueOnce(Buffer.from('')) // gh auth status
+      .mockReturnValueOnce('bug\n' as unknown as Buffer) // gh label list
+      .mockReturnValueOnce('https://github.com/owner/repo/issues/1\n' as unknown as Buffer);
+
+    // When
+    createIssue({ title: 'Title', body: 'Body', labels: ['bug'] }, '/worktree/clone');
+
+    // Then: all execFileSync calls should include cwd
+    for (const call of mockExecFileSync.mock.calls) {
+      expect(call[2]).toEqual(expect.objectContaining({ cwd: '/worktree/clone' }));
+    }
   });
 
   it('should return error when gh issue create fails', () => {
@@ -162,7 +178,7 @@ describe('createIssue', () => {
       .mockImplementationOnce(() => { throw new Error('repo not found'); });
 
     // When
-    const result = createIssue({ title: 'Test', body: 'Body' });
+    const result = createIssue({ title: 'Test', body: 'Body' }, '/project');
 
     // Then
     expect(result.success).toBe(false);

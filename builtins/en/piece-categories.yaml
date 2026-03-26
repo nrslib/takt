@@ -47,11 +47,13 @@ piece_categories:
       - review-fix-backend-cqrs
       - review-takt-default
       - review-fix-takt-default
-      - security-audit
-  🧪 Testing:
-    pieces:
-      - fill-unit
-      - fill-e2e
+      - audit-unit
+      - audit-e2e
+      - audit-security
+      - audit-architecture
+      - audit-architecture-frontend
+      - audit-architecture-backend
+      - audit-architecture-dual
   🎵 TAKT Development:
     pieces:
       - takt-default

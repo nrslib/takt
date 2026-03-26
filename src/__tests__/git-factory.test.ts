@@ -53,6 +53,7 @@ vi.mock('../infra/gitlab/index.js', () => ({
 let getGitProvider: typeof import('../infra/git/index.js').getGitProvider;
 let initGitProvider: typeof import('../infra/git/index.js').initGitProvider;
 let createPullRequestSafely: typeof import('../infra/git/index.js').createPullRequestSafely;
+let resolveIssueTask: typeof import('../infra/git/index.js').resolveIssueTask;
 
 beforeEach(async () => {
   vi.clearAllMocks();
@@ -61,6 +62,7 @@ beforeEach(async () => {
   getGitProvider = mod.getGitProvider;
   initGitProvider = mod.initGitProvider;
   createPullRequestSafely = mod.createPullRequestSafely;
+  resolveIssueTask = mod.resolveIssueTask;
 });
 
 describe('getGitProvider', () => {
@@ -167,7 +169,7 @@ describe('initGitProvider', () => {
 
     // Then
     expect((provider as unknown as { _type: string })._type).toBe('gitlab');
-    expect(mockDetectVcsProvider).toHaveBeenCalled();
+    expect(mockDetectVcsProvider).toHaveBeenCalledWith('/project');
   });
 
   it('設定が自動検出より優先される', () => {
@@ -238,15 +240,67 @@ describe('createPullRequestSafely', () => {
       throw new Error('boom');
     });
 
-    const result = createPullRequestSafely(gitProvider, '/project', {
+    const result = createPullRequestSafely(gitProvider, {
       branch: 'feature/test',
       title: 'Test',
       body: 'Body',
-    });
+    }, '/project');
 
     expect(result).toEqual({
       success: false,
       error: 'boom',
     });
+  });
+
+  it('cwd を指定した場合は createPullRequest にそのまま転送する', () => {
+    mockDetectVcsProvider.mockReturnValue('github');
+    const gitProvider = getGitProvider();
+    const createPullRequestMock = vi.mocked(gitProvider.createPullRequest);
+    createPullRequestMock.mockReturnValue({ success: true, url: 'https://github.com/org/repo/pull/1' });
+
+    const opts = { branch: 'feat/test', title: 'Test', body: 'Body' };
+    createPullRequestSafely(gitProvider, opts, '/worktree/clone');
+
+    expect(createPullRequestMock).toHaveBeenCalledWith(opts, '/worktree/clone');
+  });
+
+  it('cwd 省略時も createPullRequest を正しく呼び出す', () => {
+    mockDetectVcsProvider.mockReturnValue('github');
+    const gitProvider = getGitProvider();
+    const createPullRequestMock = vi.mocked(gitProvider.createPullRequest);
+    createPullRequestMock.mockReturnValue({ success: true, url: 'https://github.com/org/repo/pull/2' });
+
+    const opts = { branch: 'feat/test', title: 'Test', body: 'Body' };
+    const result = createPullRequestSafely(gitProvider, opts);
+
+    expect(result.success).toBe(true);
+    expect(createPullRequestMock).toHaveBeenCalledWith(opts, undefined);
+  });
+});
+
+describe('resolveIssueTask with cwd', () => {
+  it('cwd を指定した場合は checkCliStatus と fetchIssue に cwd を渡す', () => {
+    mockDetectVcsProvider.mockReturnValue('github');
+    const gitProvider = getGitProvider();
+    const checkCliStatusMock = vi.mocked(gitProvider.checkCliStatus);
+    const fetchIssueMock = vi.mocked(gitProvider.fetchIssue);
+
+    checkCliStatusMock.mockReturnValue({ available: true });
+    fetchIssueMock.mockReturnValue({
+      number: 42,
+      title: 'Test Issue',
+      body: 'Body',
+      labels: [],
+      comments: [],
+    });
+
+    // resolveIssueTask is a module-level function using getGitProvider()
+    // After implementation, it should accept cwd? and pass to provider methods
+    const mod = { resolveIssueTask } as { resolveIssueTask: (task: string, cwd?: string) => string };
+    const result = mod.resolveIssueTask('#42', '/worktree/clone');
+
+    expect(checkCliStatusMock).toHaveBeenCalledWith('/worktree/clone');
+    expect(fetchIssueMock).toHaveBeenCalledWith(42, '/worktree/clone');
+    expect(result).toContain('Test Issue');
   });
 });

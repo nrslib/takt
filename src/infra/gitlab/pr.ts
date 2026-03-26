@@ -15,8 +15,8 @@ const log = createLogger('gitlab-mr');
  * Find an open MR for the given branch.
  * Returns undefined if no MR exists.
  */
-export function findExistingMr(cwd: string, branch: string): ExistingPr | undefined {
-  const glabStatus = checkGlabCli();
+export function findExistingMr(branch: string, cwd: string): ExistingPr | undefined {
+  const glabStatus = checkGlabCli(cwd);
   if (!glabStatus.available) return undefined;
 
   try {
@@ -38,12 +38,12 @@ export function findExistingMr(cwd: string, branch: string): ExistingPr | undefi
 /**
  * Create a GitLab Merge Request via `glab mr create`.
  */
-export function createMergeRequest(cwd: string, options: CreatePrOptions): CreatePrResult {
+export function createMergeRequest(options: CreatePrOptions, cwd: string): CreatePrResult {
   if (options.repo) {
     throw new Error('--repo is not supported with GitLab provider. Use cwd context instead.');
   }
 
-  const glabStatus = checkGlabCli();
+  const glabStatus = checkGlabCli(cwd);
   if (!glabStatus.available) {
     return { success: false, error: glabStatus.error };
   }
@@ -86,8 +86,8 @@ export function createMergeRequest(cwd: string, options: CreatePrOptions): Creat
 /**
  * Add a comment (note) to a GitLab Merge Request.
  */
-export function commentOnMr(cwd: string, mrNumber: number, body: string): CommentResult {
-  const glabStatus = checkGlabCli();
+export function commentOnMr(mrNumber: number, body: string, cwd: string): CommentResult {
+  const glabStatus = checkGlabCli(cwd);
   if (!glabStatus.available) {
     return { success: false, error: glabStatus.error };
   }
@@ -143,13 +143,13 @@ interface GlabDiscussion {
  *
  * Throws on failure (MR not found, network error, etc.).
  */
-export function fetchMrReviewComments(mrNumber: number): PrReviewData {
+export function fetchMrReviewComments(mrNumber: number, cwd: string): PrReviewData {
   log.debug('Fetching MR review comments', { mrNumber });
 
   const rawMr = execFileSync(
     'glab',
     ['mr', 'view', String(mrNumber), '--output', 'json'],
-    { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
+    { cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
   );
   const mrData = parseJson<GlabMrViewResponse>(rawMr, `mr view #${mrNumber}`);
 
@@ -157,6 +157,7 @@ export function fetchMrReviewComments(mrNumber: number): PrReviewData {
     `projects/:id/merge_requests/${mrNumber}/diffs`,
     ITEMS_PER_PAGE,
     `mr #${mrNumber} diffs`,
+    cwd,
   );
   const files = diffs.map(d => d.new_path);
 
@@ -164,6 +165,7 @@ export function fetchMrReviewComments(mrNumber: number): PrReviewData {
     `projects/:id/merge_requests/${mrNumber}/notes`,
     ITEMS_PER_PAGE,
     `mr #${mrNumber} notes`,
+    cwd,
   );
 
   const comments: PrReviewComment[] = [];
@@ -177,6 +179,7 @@ export function fetchMrReviewComments(mrNumber: number): PrReviewData {
     `projects/:id/merge_requests/${mrNumber}/discussions`,
     ITEMS_PER_PAGE,
     `mr #${mrNumber} discussions`,
+    cwd,
   );
 
   const reviews: PrReviewComment[] = [];

@@ -5,6 +5,13 @@
 
 ## 重大度: None / Low / Medium / High / Critical
 
+## Enumeration Evidence
+- Commands used:
+  - `rg ...`
+  - `rg --files ...`
+- Coverage notes:
+  - {完全なファイル集合を監査したとどう確認したか}
+
 ## 監査対象
 | # | ファイル | 監査済み | リスク分類 |
 |---|---------|---------|-----------|
@@ -18,8 +25,16 @@
 ## 問題なしのファイル
 - {問題が検出されなかったファイルの一覧}
 
+## Suggested Issue Titles
+1. {Issue タイトル}
+2. {Issue タイトル}
+
 ## 推奨事項（非ブロッキング）
 - {セキュリティ改善の提案}
+
+## Notes
+- {制約、前提、監査限界}
+- {意図的に未監査とした項目があれば、その明示的な理由}
 
 ## REJECT判定条件
 - High または Critical の問題が1件以上ある場合は REJECT

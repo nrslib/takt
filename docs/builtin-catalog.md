@@ -44,6 +44,13 @@ Organized by category.
 | | `review-fix-dual-cqrs` | Frontend + CQRS+ES focused review + fix loop (structure, modularization, domain model, component design, security, QA). |
 | | `review-backend-cqrs` | CQRS+ES focused review (structure, modularization, domain model, security, QA). |
 | | `review-fix-backend-cqrs` | CQRS+ES focused review + fix loop (structure, modularization, domain model, security, QA). |
+| | `audit-unit` | Unit test audit. Enumerates behaviors and coverage gaps, produces an issue-ready report without modifying code. |
+| | `audit-e2e` | E2E audit. Enumerates user flows and coverage gaps, produces an issue-ready report without modifying code. |
+| | `audit-security` | Full security audit. Reads every project file for security review. |
+| | `audit-architecture` | Architecture audit. Enumerates modules and boundaries, produces an issue-ready report without modifying code. |
+| | `audit-architecture-frontend` | Frontend-focused architecture audit. Enumerates UI modules and boundaries. |
+| | `audit-architecture-backend` | Backend-focused architecture audit. Enumerates service modules and boundaries. |
+| | `audit-architecture-dual` | Full-stack architecture audit. Enumerates frontend/backend boundaries and cross-layer wiring. |
 | 🧪 Testing | `unit-test` | Unit test focused piece: test analysis -> test implementation -> review -> fix. |
 | | `e2e-test` | E2E test focused piece: E2E analysis -> E2E implementation -> review -> fix (Vitest-based E2E flow). |
 | 🎵 TAKT Development | `takt-default` | TAKT development piece: plan → write tests → implement → AI antipattern review → 5-parallel review → fix → supervise → complete. |

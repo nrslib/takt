@@ -45,6 +45,12 @@ REJECT without exception if any of the following apply.
 - Replaced code/exports surviving after refactoring
 - Missing cross-validation of related fields (invariants of semantically coupled config values left unverified)
 
+A DRY finding is not complete unless the proposed consolidation target is also sound. A consolidation proposal is invalid unless all of the following hold.
+
+- The consolidation target matches existing responsibility boundaries and dependency direction
+- Any new public API, wrapper, or helper does not expand the existing contract unnaturally
+- If the proposal introduces abstraction not required by the task or plan, its necessity is explained with evidence
+
 ### Warning
 
 Not blocking, but improvement is recommended.
@@ -78,6 +84,7 @@ Every issue raised must include the following.
 - **Which file and line number**
 - **What the problem is**
 - **How to fix it**
+- **If requesting abstraction or consolidation, why that placement is the natural one**
 
 ```
 ❌ "Review the structure"
@@ -99,6 +106,7 @@ To prevent circular rejections, track findings by ID.
 - Resolved issues must be listed with status `resolved`
 - Issues without `finding_id` are invalid (cannot be used as rejection grounds)
 - REJECT is allowed only when there is at least one `new` or `persists` issue
+- Before treating a prior finding as resolved, verify that the fix did not introduce a different structural or contract problem
 
 ## Reopen Conditions (`resolved` -> open)
 

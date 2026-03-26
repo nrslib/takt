@@ -31,7 +31,7 @@ describe('findExistingPr', () => {
   it('オープンな PR がある場合はその PR を返す', () => {
     mockExecFileSync.mockReturnValue(JSON.stringify([{ number: 42, url: 'https://github.com/org/repo/pull/42' }]));
 
-    const result = findExistingPr('/project', 'task/fix-bug');
+    const result = findExistingPr('task/fix-bug', '/project');
 
     expect(result).toEqual({ number: 42, url: 'https://github.com/org/repo/pull/42' });
   });
@@ -39,7 +39,7 @@ describe('findExistingPr', () => {
   it('PR がない場合は undefined を返す', () => {
     mockExecFileSync.mockReturnValue(JSON.stringify([]));
 
-    const result = findExistingPr('/project', 'task/fix-bug');
+    const result = findExistingPr('task/fix-bug', '/project');
 
     expect(result).toBeUndefined();
   });
@@ -47,7 +47,7 @@ describe('findExistingPr', () => {
   it('gh CLI が失敗した場合は undefined を返す', () => {
     mockExecFileSync.mockImplementation(() => { throw new Error('gh: command not found'); });
 
-    const result = findExistingPr('/project', 'task/fix-bug');
+    const result = findExistingPr('task/fix-bug', '/project');
 
     expect(result).toBeUndefined();
   });
@@ -61,12 +61,12 @@ describe('createPullRequest', () => {
   it('draft: true の場合、args に --draft が含まれる', () => {
     mockExecFileSync.mockReturnValue('https://github.com/org/repo/pull/1\n');
 
-    createPullRequest('/project', {
+    createPullRequest({
       branch: 'feat/my-branch',
       title: 'My PR',
       body: 'PR body',
       draft: true,
-    });
+    }, '/project');
 
     const call = mockExecFileSync.mock.calls[0];
     expect(call[1]).toContain('--draft');
@@ -75,12 +75,12 @@ describe('createPullRequest', () => {
   it('draft: false の場合、args に --draft が含まれない', () => {
     mockExecFileSync.mockReturnValue('https://github.com/org/repo/pull/2\n');
 
-    createPullRequest('/project', {
+    createPullRequest({
       branch: 'feat/my-branch',
       title: 'My PR',
       body: 'PR body',
       draft: false,
-    });
+    }, '/project');
 
     const call = mockExecFileSync.mock.calls[0];
     expect(call[1]).not.toContain('--draft');
@@ -89,11 +89,11 @@ describe('createPullRequest', () => {
   it('draft が未指定の場合、args に --draft が含まれない', () => {
     mockExecFileSync.mockReturnValue('https://github.com/org/repo/pull/3\n');
 
-    createPullRequest('/project', {
+    createPullRequest({
       branch: 'feat/my-branch',
       title: 'My PR',
       body: 'PR body',
-    });
+    }, '/project');
 
     const call = mockExecFileSync.mock.calls[0];
     expect(call[1]).not.toContain('--draft');
@@ -211,7 +211,7 @@ describe('fetchPrReviewComments', () => {
       .mockReturnValueOnce(JSON.stringify(inlineCommentsResponse));
 
     // When
-    const result = fetchPrReviewComments(456);
+    const result = fetchPrReviewComments(456, '/project');
 
     // Then
     expect(mockExecFileSync).toHaveBeenCalledWith(
@@ -255,7 +255,7 @@ describe('fetchPrReviewComments', () => {
       .mockReturnValueOnce(JSON.stringify([]));
 
     // When
-    const result = fetchPrReviewComments(10);
+    const result = fetchPrReviewComments(10, '/project');
 
     // Then
     expect(result.reviews).toEqual([]);
@@ -283,7 +283,7 @@ describe('fetchPrReviewComments', () => {
       .mockReturnValueOnce(JSON.stringify(inlineCommentsResponse));
 
     // When
-    const result = fetchPrReviewComments(11);
+    const result = fetchPrReviewComments(11, '/project');
 
     // Then
     expect(result.reviews).toEqual([
@@ -314,7 +314,7 @@ describe('fetchPrReviewComments', () => {
       .mockReturnValueOnce(JSON.stringify(inlineCommentsResponse));
 
     // When
-    const result = fetchPrReviewComments(12);
+    const result = fetchPrReviewComments(12, '/project');
 
     // Then
     expect(mockExecFileSync).toHaveBeenCalledWith(
@@ -364,7 +364,7 @@ describe('fetchPrReviewComments', () => {
       .mockReturnValueOnce(JSON.stringify(secondPageInlineComments));
 
     // When
-    const result = fetchPrReviewComments(13);
+    const result = fetchPrReviewComments(13, '/project');
 
     // Then
     expect(mockExecFileSync).toHaveBeenCalledWith(
@@ -412,7 +412,7 @@ describe('fetchPrReviewComments', () => {
       .mockReturnValueOnce(JSON.stringify(inlineCommentsResponse));
 
     // When
-    const result = fetchPrReviewComments(14);
+    const result = fetchPrReviewComments(14, '/project');
 
     // Then
     expect(result.reviews).toEqual([
@@ -452,7 +452,7 @@ describe('fetchPrReviewComments', () => {
     }
 
     // When
-    const result = fetchPrReviewComments(15);
+    const result = fetchPrReviewComments(15, '/project');
 
     // Then — should have called gh api exactly 101 times (1 for pr view + 100 pages)
     expect(mockExecFileSync).toHaveBeenCalledTimes(101);
@@ -460,12 +460,37 @@ describe('fetchPrReviewComments', () => {
     expect(result.reviews).toHaveLength(10000);
   });
 
+  it('should pass cwd to all execFileSync calls', () => {
+    // Given
+    const ghResponse = {
+      number: 50,
+      title: 'cwd test',
+      body: '',
+      url: 'https://github.com/org/repo/pull/50',
+      headRefName: 'fix/cwd',
+      comments: [],
+      reviews: [],
+      files: [],
+    };
+    mockExecFileSync
+      .mockReturnValueOnce(JSON.stringify(ghResponse))
+      .mockReturnValueOnce(JSON.stringify([]));
+
+    // When
+    fetchPrReviewComments(50, '/worktree/clone');
+
+    // Then: all execFileSync calls should include cwd
+    for (const call of mockExecFileSync.mock.calls) {
+      expect(call[2]).toEqual(expect.objectContaining({ cwd: '/worktree/clone' }));
+    }
+  });
+
   it('should throw when gh CLI fails', () => {
     // Given
     mockExecFileSync.mockImplementation(() => { throw new Error('gh: PR not found'); });
 
     // When/Then
-    expect(() => fetchPrReviewComments(999)).toThrow('gh: PR not found');
+    expect(() => fetchPrReviewComments(999, '/project')).toThrow('gh: PR not found');
   });
 });
 

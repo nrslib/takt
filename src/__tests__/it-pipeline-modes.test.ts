@@ -226,9 +226,9 @@ describe('Pipeline Modes IT: --task + --piece path', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockCreatePullRequestSafely.mockImplementation((provider, cwd, options) => {
+    mockCreatePullRequestSafely.mockImplementation((provider, options, cwd) => {
       try {
-        return provider.createPullRequest(cwd, options);
+        return provider.createPullRequest(options, cwd);
       } catch (error) {
         return {
           success: false,
@@ -366,7 +366,7 @@ describe('Pipeline Modes IT: --issue', () => {
     });
 
     expect(exitCode).toBe(0);
-    expect(mockFetchIssue).toHaveBeenCalledWith(42);
+    expect(mockFetchIssue).toHaveBeenCalledWith(42, testDir);
   });
 
   it('should return EXIT_ISSUE_FETCH_FAILED when gh CLI unavailable', async () => {

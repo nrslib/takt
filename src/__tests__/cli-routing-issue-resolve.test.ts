@@ -235,7 +235,7 @@ describe('Issue resolution in routing', () => {
       await executeDefaultAction();
 
       // Then: issue should be fetched
-      expect(mockFetchIssue).toHaveBeenCalledWith(131);
+      expect(mockFetchIssue).toHaveBeenCalledWith(131, undefined);
 
       // Then: interactive mode should receive the formatted issue as initial input
       expect(mockInteractiveMode).toHaveBeenCalledWith(

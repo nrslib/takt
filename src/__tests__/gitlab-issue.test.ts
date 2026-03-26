@@ -50,7 +50,7 @@ describe('fetchIssue', () => {
       .mockReturnValueOnce(JSON.stringify(notesResponse)); // glab api notes
 
     // When
-    const result = fetchIssue(42);
+    const result = fetchIssue(42, '/project');
 
     // Then
     expect(result).toEqual({
@@ -78,7 +78,7 @@ describe('fetchIssue', () => {
       .mockReturnValueOnce(JSON.stringify([])); // empty notes
 
     // When
-    fetchIssue(10);
+    fetchIssue(10, '/project');
 
     // Then
     const call = mockExecFileSync.mock.calls[0];
@@ -101,7 +101,7 @@ describe('fetchIssue', () => {
       .mockReturnValueOnce(JSON.stringify([]));
 
     // When
-    fetchIssue(10);
+    fetchIssue(10, '/project');
 
     // Then: second call should be glab api for notes
     const notesCall = mockExecFileSync.mock.calls[1];
@@ -125,7 +125,7 @@ describe('fetchIssue', () => {
       .mockReturnValueOnce(JSON.stringify([]));
 
     // When
-    const result = fetchIssue(5);
+    const result = fetchIssue(5, '/project');
 
     // Then
     expect(result.body).toBe('');
@@ -149,7 +149,7 @@ describe('fetchIssue', () => {
       .mockReturnValueOnce(JSON.stringify(notesResponse));
 
     // When
-    const result = fetchIssue(7);
+    const result = fetchIssue(7, '/project');
 
     // Then
     expect(result.comments).toEqual([
@@ -162,7 +162,7 @@ describe('fetchIssue', () => {
     mockExecFileSync.mockImplementation(() => { throw new Error('glab: issue not found'); });
 
     // When / Then
-    expect(() => fetchIssue(999)).toThrow();
+    expect(() => fetchIssue(999, '/project')).toThrow();
   });
 
   it('glab issue view が不正な JSON を返した場合は明確なエラーメッセージをスローする', () => {
@@ -170,7 +170,7 @@ describe('fetchIssue', () => {
     mockExecFileSync.mockReturnValue('<html>500 Internal Server Error</html>');
 
     // When / Then
-    expect(() => fetchIssue(42)).toThrow('glab returned invalid JSON');
+    expect(() => fetchIssue(42, '/project')).toThrow('glab returned invalid JSON');
   });
 
   it('notes API が不正な JSON を返した場合は明確なエラーメッセージをスローする', () => {
@@ -186,7 +186,7 @@ describe('fetchIssue', () => {
       .mockReturnValueOnce('invalid json');
 
     // When / Then
-    expect(() => fetchIssue(42)).toThrow('glab returned invalid JSON');
+    expect(() => fetchIssue(42, '/project')).toThrow('glab returned invalid JSON');
   });
 
   it('notes が空の場合は空配列を返す', () => {
@@ -202,7 +202,7 @@ describe('fetchIssue', () => {
       .mockReturnValueOnce(JSON.stringify([]));
 
     // When
-    const result = fetchIssue(3);
+    const result = fetchIssue(3, '/project');
 
     // Then
     expect(result.comments).toEqual([]);
@@ -230,7 +230,7 @@ describe('fetchIssue', () => {
       .mockReturnValueOnce(JSON.stringify(secondPageNotes));
 
     // When
-    const result = fetchIssue(50);
+    const result = fetchIssue(50, '/project');
 
     // Then
     expect(result.comments).toHaveLength(101);
@@ -260,7 +260,7 @@ describe('fetchIssue', () => {
       .mockReturnValueOnce(JSON.stringify(secondPage));
 
     // When
-    fetchIssue(50);
+    fetchIssue(50, '/project');
 
     // Then: verify page=1 and page=2
     const notesCall1 = mockExecFileSync.mock.calls[1];
@@ -290,22 +290,63 @@ describe('fetchIssue', () => {
       .mockReturnValueOnce(JSON.stringify(notes));
 
     // When
-    fetchIssue(51);
+    fetchIssue(51, '/project');
 
     // Then: only 2 calls (issue view + 1 page of notes)
     expect(mockExecFileSync).toHaveBeenCalledTimes(2);
+  });
+
+  it('cwd を glab issue view の execFileSync に渡す', () => {
+    // Given
+    const glabIssueResponse = {
+      iid: 10,
+      title: 'Title',
+      description: '',
+      labels: [],
+    };
+    mockExecFileSync
+      .mockReturnValueOnce(JSON.stringify(glabIssueResponse))
+      .mockReturnValueOnce(JSON.stringify([]));
+
+    // When
+    fetchIssue(10, '/worktree/clone');
+
+    // Then: glab issue view に cwd が渡される
+    const issueViewCall = mockExecFileSync.mock.calls[0];
+    expect(issueViewCall[2]).toHaveProperty('cwd', '/worktree/clone');
+  });
+
+  it('cwd を fetchAllPages（notes 取得）にも伝搬する', () => {
+    // Given
+    const glabIssueResponse = {
+      iid: 10,
+      title: 'Title',
+      description: '',
+      labels: [],
+    };
+    mockExecFileSync
+      .mockReturnValueOnce(JSON.stringify(glabIssueResponse))
+      .mockReturnValueOnce(JSON.stringify([]));
+
+    // When
+    fetchIssue(10, '/worktree/clone');
+
+    // Then: glab api（notes）にも cwd が渡される
+    const notesCall = mockExecFileSync.mock.calls[1];
+    expect(notesCall[2]).toHaveProperty('cwd', '/worktree/clone');
   });
 });
 
 describe('createIssue', () => {
   it('成功時は success: true と URL を返す', () => {
-    // Given: checkGlabCli succeeds (first call), then createIssue succeeds
+    // Given: getRemoteHostname (git remote), checkGlabCli (glab auth), then createIssue
     mockExecFileSync
+      .mockReturnValueOnce('https://gitlab.com/org/repo.git\n') // git remote get-url origin
       .mockReturnValueOnce('') // glab auth status
       .mockReturnValueOnce('https://gitlab.com/org/repo/-/issues/1\n');
 
     // When
-    const result = createIssue({ title: 'New issue', body: 'Description' });
+    const result = createIssue({ title: 'New issue', body: 'Description' }, '/my/project');
 
     // Then
     expect(result.success).toBe(true);
@@ -315,14 +356,15 @@ describe('createIssue', () => {
   it('--description オプションで body を渡す（--body ではない）', () => {
     // Given
     mockExecFileSync
+      .mockReturnValueOnce('https://gitlab.com/org/repo.git\n') // git remote get-url origin
       .mockReturnValueOnce('') // glab auth status
       .mockReturnValueOnce('https://gitlab.com/org/repo/-/issues/2\n');
 
     // When
-    createIssue({ title: 'Title', body: 'Body text' });
+    createIssue({ title: 'Title', body: 'Body text' }, '/my/project');
 
     // Then
-    const createCall = mockExecFileSync.mock.calls[1];
+    const createCall = mockExecFileSync.mock.calls[2];
     expect(createCall[1]).toContain('--description');
     expect(createCall[1]).not.toContain('--body');
   });
@@ -330,25 +372,27 @@ describe('createIssue', () => {
   it('ラベル付きの場合 --label オプションを使う', () => {
     // Given
     mockExecFileSync
+      .mockReturnValueOnce('https://gitlab.com/org/repo.git\n') // git remote get-url origin
       .mockReturnValueOnce('') // glab auth status
       .mockReturnValueOnce('https://gitlab.com/org/repo/-/issues/3\n');
 
     // When
-    createIssue({ title: 'Bug', body: 'Details', labels: ['bug', 'urgent'] });
+    createIssue({ title: 'Bug', body: 'Details', labels: ['bug', 'urgent'] }, '/my/project');
 
     // Then
-    const createCall = mockExecFileSync.mock.calls[1];
+    const createCall = mockExecFileSync.mock.calls[2];
     expect(createCall[1]).toContain('--label');
   });
 
   it('glab CLI が利用不可の場合は success: false を返す', () => {
     // Given
     mockExecFileSync
+      .mockReturnValueOnce('https://gitlab.com/org/repo.git\n') // git remote get-url origin
       .mockImplementationOnce(() => { throw new Error('not logged in'); })
       .mockImplementationOnce(() => { throw new Error('command not found'); });
 
     // When
-    const result = createIssue({ title: 'Title', body: 'Body' });
+    const result = createIssue({ title: 'Title', body: 'Body' }, '/my/project');
 
     // Then
     expect(result.success).toBe(false);
@@ -358,14 +402,34 @@ describe('createIssue', () => {
   it('glab issue create が失敗した場合は success: false を返す', () => {
     // Given
     mockExecFileSync
+      .mockReturnValueOnce('https://gitlab.com/org/repo.git\n') // git remote get-url origin
       .mockReturnValueOnce('') // glab auth status
       .mockImplementationOnce(() => { throw new Error('API error'); });
 
     // When
-    const result = createIssue({ title: 'Title', body: 'Body' });
+    const result = createIssue({ title: 'Title', body: 'Body' }, '/my/project');
 
     // Then
     expect(result.success).toBe(false);
     expect(result.error).toBeDefined();
+  });
+
+  it('cwd を checkGlabCli に転送する', () => {
+    // Given
+    mockExecFileSync
+      .mockReturnValueOnce('https://gitlab.com/org/repo.git\n') // git remote get-url origin
+      .mockReturnValueOnce('') // glab auth status
+      .mockReturnValueOnce('https://gitlab.com/org/repo/-/issues/5\n');
+
+    // When
+    createIssue({ title: 'Test', body: 'Body' }, '/specific/dir');
+
+    // Then: first call is getRemoteHostname which receives cwd via execFileSync options
+    const remoteCall = mockExecFileSync.mock.calls[0];
+    expect(remoteCall[2]).toHaveProperty('cwd', '/specific/dir');
+
+    // Then: third call is glab issue create which also receives cwd
+    const createCall = mockExecFileSync.mock.calls[2];
+    expect(createCall[2]).toHaveProperty('cwd', '/specific/dir');
   });
 });

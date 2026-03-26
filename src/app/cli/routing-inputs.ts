@@ -2,25 +2,29 @@ import { withProgress } from '../../shared/ui/index.js';
 import { formatIssueAsTask, parseIssueNumbers, formatPrReviewAsTask, getGitProvider } from '../../infra/git/index.js';
 import type { PrReviewData } from '../../infra/git/index.js';
 import { isDirectTask } from './helpers.js';
+
 export async function resolveIssueInput(
   issueOption: number | undefined,
   task: string | undefined,
+  cwd?: string,
 ): Promise<{ initialInput: string } | null> {
   if (issueOption) {
-    const cliStatus = getGitProvider().checkCliStatus();
+    const provider = getGitProvider();
+    const cliStatus = provider.checkCliStatus(cwd);
     if (!cliStatus.available) {
       throw new Error(cliStatus.error);
     }
     const issue = await withProgress(
       'Fetching issue...',
       (fetchedIssue) => `Issue fetched: #${fetchedIssue.number} ${fetchedIssue.title}`,
-      async () => getGitProvider().fetchIssue(issueOption),
+      async () => provider.fetchIssue(issueOption, cwd),
     );
     return { initialInput: formatIssueAsTask(issue) };
   }
 
   if (task && isDirectTask(task)) {
-    const cliStatus = getGitProvider().checkCliStatus();
+    const provider = getGitProvider();
+    const cliStatus = provider.checkCliStatus(cwd);
     if (!cliStatus.available) {
       throw new Error(cliStatus.error);
     }
@@ -32,7 +36,7 @@ export async function resolveIssueInput(
     const issues = await withProgress(
       'Fetching issues...',
       (fetchedIssues) => `Issues fetched: ${fetchedIssues.map((issue) => `#${issue.number}`).join(', ')}`,
-      async () => issueNumbers.map((n) => getGitProvider().fetchIssue(n)),
+      async () => issueNumbers.map((n) => provider.fetchIssue(n, cwd)),
     );
     return { initialInput: issues.map(formatIssueAsTask).join('\n\n---\n\n') };
   }
@@ -42,8 +46,10 @@ export async function resolveIssueInput(
 
 export async function resolvePrInput(
   prNumber: number,
+  cwd?: string,
 ): Promise<{ initialInput: string; prBranch: string; baseBranch?: string }> {
-  const cliStatus = getGitProvider().checkCliStatus();
+  const provider = getGitProvider();
+  const cliStatus = provider.checkCliStatus(cwd);
   if (!cliStatus.available) {
     throw new Error(cliStatus.error);
   }
@@ -51,7 +57,7 @@ export async function resolvePrInput(
   const prReview = await withProgress(
     'Fetching PR review comments...',
     (pr: PrReviewData) => `PR fetched: #${pr.number} ${pr.title}`,
-    async () => getGitProvider().fetchPrReviewComments(prNumber),
+    async () => provider.fetchPrReviewComments(prNumber, cwd),
   );
 
   return {

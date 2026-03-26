@@ -137,7 +137,7 @@ export async function createIssueAndSaveTask(
   piece?: string,
   options?: { confirmAtEndMessage?: string; labels?: string[] },
 ): Promise<void> {
-  const issueNumber = createIssueFromTask(task, { labels: options?.labels });
+  const issueNumber = createIssueFromTask(task, { labels: options?.labels, cwd });
   if (issueNumber === undefined) {
     return;
   }
@@ -167,7 +167,7 @@ export async function addTask(
 
   if (prNumber !== undefined) {
     const provider = getGitProvider();
-    const cliStatus = provider.checkCliStatus();
+    const cliStatus = provider.checkCliStatus(cwd);
     if (!cliStatus.available) {
       error(cliStatus.error);
       return;
@@ -178,7 +178,7 @@ export async function addTask(
       prReview = await withProgress(
         'Fetching PR review comments...',
         (fetchedPrReview: PrReviewData) => `PR fetched: #${fetchedPrReview.number} ${fetchedPrReview.title}`,
-        async () => provider.fetchPrReviewComments(prNumber),
+        async () => provider.fetchPrReviewComments(prNumber, cwd),
       );
     } catch (e) {
       const msg = getErrorMessage(e);
@@ -224,7 +224,7 @@ export async function addTask(
       taskContent = await withProgress(
         'Fetching issue...',
         primaryIssueNumber ? `Issue fetched: #${primaryIssueNumber}` : 'Issue fetched',
-        async () => resolveIssueTask(trimmedTask),
+        async () => resolveIssueTask(trimmedTask, cwd),
       );
       if (numbers.length > 0) {
         issueNumber = numbers[0];

@@ -28,5 +28,9 @@ Review {report:coder-decisions.md} to understand the recorded design decisions.
 1. First, extract previous open findings and preliminarily classify as `new / persists / resolved`
 2. Review the change diff and detect issues based on the architecture and design criteria above
    - Cross-check changes against REJECT criteria tables defined in knowledge
+   - If you find a DRY violation, require it to be fixed
+   - Before proposing a fix, verify that the consolidation target fits existing responsibility boundaries, contracts, and public API shape
+   - If you require a new wrapper, helper, or public API, explain why that abstraction target is the natural one
+   - If the proposed abstraction goes beyond the task spec or plan, state why the additional scope is necessary and justified
 3. For each detected issue, classify as blocking/non-blocking based on Policy's scope determination table and judgment rules
 4. If there is even one blocking issue (`new` or `persists`), judge as REJECT

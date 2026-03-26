@@ -124,6 +124,7 @@ export function createIsolatedEnv(): IsolatedEnv {
     GIT_CONFIG_GLOBAL: gitConfigPath,
     TAKT_NO_TTY: '1',
     TAKT_NOTIFY_WEBHOOK: undefined,
+    CLAUDECODE: undefined,
   };
 
   return {

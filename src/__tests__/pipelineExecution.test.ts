@@ -88,9 +88,9 @@ const { executePipeline } = await import('../features/pipeline/index.js');
 describe('executePipeline', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockCreatePullRequestSafely.mockImplementation((provider, cwd, options) => {
+    mockCreatePullRequestSafely.mockImplementation((provider, options, cwd) => {
       try {
-        return provider.createPullRequest(cwd, options);
+        return provider.createPullRequest(options, cwd);
       } catch (error) {
         return {
           success: false,
@@ -251,11 +251,11 @@ describe('executePipeline', () => {
 
     expect(exitCode).toBe(0);
     expect(mockCreatePullRequest).toHaveBeenCalledWith(
-      '/tmp/test',
       expect.objectContaining({
         branch: 'fix/my-branch',
         repo: 'owner/repo',
       }),
+      '/tmp/test',
     );
   });
 
@@ -274,8 +274,8 @@ describe('executePipeline', () => {
 
     expect(exitCode).toBe(0);
     expect(mockCreatePullRequest).toHaveBeenCalledWith(
-      '/tmp/test',
       expect.objectContaining({ draft: true }),
+      '/tmp/test',
     );
   });
 
@@ -294,8 +294,8 @@ describe('executePipeline', () => {
 
     expect(exitCode).toBe(0);
     expect(mockCreatePullRequest).toHaveBeenCalledWith(
-      '/tmp/test',
       expect.objectContaining({ draft: false }),
+      '/tmp/test',
     );
   });
 
@@ -322,7 +322,7 @@ describe('executePipeline', () => {
     // Then
     expect(exitCode).toBe(0);
     expect(mockCreatePullRequest).toHaveBeenCalledTimes(1);
-    const prOptions = mockCreatePullRequest.mock.calls[0]?.[1] as { branch?: string; base?: string };
+    const prOptions = mockCreatePullRequest.mock.calls[0]?.[0] as { branch?: string; base?: string };
     expect(prOptions.branch).toBe('fix/my-branch');
     expect(prOptions.base).toBe('develop');
     expect(prOptions.base).not.toBeUndefined();
@@ -439,11 +439,13 @@ describe('executePipeline', () => {
         cwd: '/tmp/test',
       });
 
+      // When prBodyTemplate is set, buildPrBody (mock) should NOT be called
+      // Instead, the template is expanded directly
       expect(mockCreatePullRequest).toHaveBeenCalledWith(
-        '/tmp/test',
         expect.objectContaining({
           body: '## Summary\nAuth is broken.\n\nCloses #50',
         }),
+        '/tmp/test',
       );
     });
 
@@ -466,10 +468,10 @@ describe('executePipeline', () => {
 
       expect(mockBuildPrBody).not.toHaveBeenCalled();
       expect(mockCreatePullRequest).toHaveBeenCalledWith(
-        '/tmp/test',
         expect.objectContaining({
           body: '## Summary\nPiece `default` completed successfully.\n\nIssue:\nDetails:',
         }),
+        '/tmp/test',
       );
     });
 
@@ -485,12 +487,13 @@ describe('executePipeline', () => {
         cwd: '/tmp/test',
       });
 
+      // Should use buildPrBody (the mock)
       expect(mockBuildPrBody).toHaveBeenCalled();
       expect(mockCreatePullRequest).toHaveBeenCalledWith(
-        '/tmp/test',
         expect.objectContaining({
           body: 'Default PR body',
         }),
+        '/tmp/test',
       );
     });
   });
@@ -761,11 +764,11 @@ describe('executePipeline', () => {
 
       expect(exitCode).toBe(0);
       expect(mockCreatePullRequest).toHaveBeenCalledWith(
-        '/tmp/test',
         expect.objectContaining({
           branch: 'fix/the-bug',
           base: 'main',
         }),
+        '/tmp/test',
       );
     });
 
@@ -790,11 +793,11 @@ describe('executePipeline', () => {
 
       expect(exitCode).toBe(0);
       expect(mockCreatePullRequest).toHaveBeenCalledWith(
-        '/tmp/test',
         expect.objectContaining({
           branch: 'fix/the-bug',
           base: 'release/main',
         }),
+        '/tmp/test',
       );
     });
 
@@ -977,7 +980,7 @@ describe('executePipeline', () => {
       });
 
       expect(exitCode).toBe(0);
-      expect(mockFetchPrReviewComments).toHaveBeenCalledWith(456);
+      expect(mockFetchPrReviewComments).toHaveBeenCalledWith(456, '/tmp/test');
       expect(mockFormatPrReviewAsTask).toHaveBeenCalled();
       // PR branch checkout
       const checkoutCall = mockExecFileSync.mock.calls.find(
@@ -1104,7 +1107,7 @@ describe('executePipeline', () => {
       // Then
       expect(exitCode).toBe(0);
       expect(mockCreatePullRequest).toHaveBeenCalledTimes(1);
-      const prOptions = mockCreatePullRequest.mock.calls[0]?.[1] as { base?: string };
+      const prOptions = mockCreatePullRequest.mock.calls[0]?.[0] as { base?: string };
       expect(prOptions.base).toBe('release/main');
       expect(prOptions.base).not.toBeUndefined();
       expect(prOptions.base).not.toBe('develop');
@@ -1140,7 +1143,7 @@ describe('executePipeline', () => {
 
       expect(exitCode).toBe(0);
       expect(mockCreatePullRequest).toHaveBeenCalledTimes(1);
-      const prOptions = mockCreatePullRequest.mock.calls[0]?.[1] as { base?: string };
+      const prOptions = mockCreatePullRequest.mock.calls[0]?.[0] as { base?: string };
       expect(prOptions.base).toBe('develop');
       expect(prOptions.base).not.toBeUndefined();
     });

@@ -1,0 +1,87 @@
+name: audit-architecture-frontend
+description: Frontend-focused architecture audit. Enumerate UI modules and boundaries, then produce an issue-ready report without modifying code
+max_movements: 12
+initial_movement: plan
+
+loop_monitors:
+  - cycle: [supervise, review]
+    threshold: 4
+    judge:
+      persona: supervisor
+      instruction: |
+        The supervise → review cycle for the frontend architecture audit has repeated {cycle_count} times.
+        Judge the overall completeness and quality of the audit, and decide whether the current results are acceptable.
+      rules:
+        - condition: Quality is sufficient
+          next: COMPLETE
+        - condition: Quality is insufficient with no prospect of improvement
+          next: ABORT
+
+movements:
+  - name: plan
+    persona: planner
+    knowledge:
+      - frontend
+      - react
+      - architecture
+    instruction: architecture-audit-plan
+    edit: false
+    output_contracts:
+      report:
+        - name: 01-architecture-audit-plan.md
+          format: architecture-audit-plan
+    rules:
+      - condition: Module inventory and audit scope complete
+        next: audit
+      - condition: Requirements unclear, insufficient info
+        next: ABORT
+
+  - name: audit
+    persona: frontend-reviewer
+    policy: review
+    knowledge:
+      - frontend
+      - react
+      - architecture
+    instruction: architecture-audit-team-leader
+    edit: false
+    team_leader:
+      max_parts: 3
+      part_persona: frontend-reviewer
+      part_edit: false
+    output_contracts:
+      report:
+        - name: 02-architecture-audit.md
+          format: architecture-audit
+    rules:
+      - condition: Audit complete
+        next: supervise
+
+  - name: supervise
+    persona: supervisor
+    policy: review
+    knowledge:
+      - frontend
+      - react
+      - architecture
+    instruction: architecture-audit-supervise
+    edit: false
+    pass_previous_response: false
+    rules:
+      - condition: Audit is complete and issue-ready
+        next: COMPLETE
+      - condition: Architecture audit is incomplete or evidence is insufficient
+        next: review
+
+  - name: review
+    persona: frontend-reviewer
+    policy: review
+    knowledge:
+      - frontend
+      - react
+      - architecture
+    instruction: architecture-audit-review
+    edit: false
+    rules:
+      - condition: Re-audit complete
+        next: supervise

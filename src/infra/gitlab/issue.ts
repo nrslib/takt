@@ -26,13 +26,13 @@ interface GlabIssueNote {
  *
  * Throws on failure (issue not found, network error, etc.).
  */
-export function fetchIssue(issueNumber: number): Issue {
+export function fetchIssue(issueNumber: number, cwd: string): Issue {
   log.debug('Fetching issue', { issueNumber });
 
   const raw = execFileSync(
     'glab',
     ['issue', 'view', String(issueNumber), '--output', 'json'],
-    { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
+    { cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
   );
 
   const data = parseJson<{
@@ -46,6 +46,7 @@ export function fetchIssue(issueNumber: number): Issue {
     `projects/:id/issues/${issueNumber}/notes`,
     ITEMS_PER_PAGE,
     `issue #${issueNumber} notes`,
+    cwd,
   );
 
   return {
@@ -65,8 +66,8 @@ export function fetchIssue(issueNumber: number): Issue {
 /**
  * Create a GitLab Issue via `glab issue create`.
  */
-export function createIssue(options: CreateIssueOptions): CreateIssueResult {
-  const glabStatus = checkGlabCli();
+export function createIssue(options: CreateIssueOptions, cwd: string): CreateIssueResult {
+  const glabStatus = checkGlabCli(cwd);
   if (!glabStatus.available) {
     return { success: false, error: glabStatus.error };
   }
@@ -80,6 +81,7 @@ export function createIssue(options: CreateIssueOptions): CreateIssueResult {
 
   try {
     const output = execFileSync('glab', args, {
+      cwd,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
     });

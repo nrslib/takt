@@ -30,13 +30,13 @@ export function extractTitle(task: string): string {
  * falling back to the first non-empty line. Truncates to 100 chars.
  * Uses the full task as the body, and displays success/error messages.
  */
-export function createIssueFromTask(task: string, options?: { labels?: string[] }): number | undefined {
+export function createIssueFromTask(task: string, options?: { labels?: string[]; cwd?: string }): number | undefined {
   info('Creating issue...');
   const title = extractTitle(task);
   const effectiveLabels = options?.labels?.filter((l) => l.length > 0) ?? [];
   const labels = effectiveLabels.length > 0 ? effectiveLabels : undefined;
 
-  const issueResult = getGitProvider().createIssue({ title, body: task, labels });
+  const issueResult = getGitProvider().createIssue({ title, body: task, labels }, options?.cwd);
   if (issueResult.success) {
     if (!issueResult.url) {
       error('Failed to extract issue number from URL');

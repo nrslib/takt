@@ -167,7 +167,7 @@ piece_categories:
   Review:
     pieces:
       - review
-      - fill-e2e
+      - audit-e2e
 show_others_category: true
 others_category_name: Others
 `);
@@ -200,7 +200,7 @@ others_category_name: Unclassified
               { name: 'Child', pieces: ['nested'], children: [] },
             ],
           },
-          { name: 'Review', pieces: ['review', 'fill-e2e'], children: [] },
+          { name: 'Review', pieces: ['review', 'audit-e2e'], children: [] },
         ],
       },
     ]);
@@ -212,7 +212,7 @@ others_category_name: Unclassified
           { name: 'Child', pieces: ['nested'], children: [] },
         ],
       },
-      { name: 'Review', pieces: ['review', 'fill-e2e'], children: [] },
+      { name: 'Review', pieces: ['review', 'audit-e2e'], children: [] },
     ]);
     expect(config!.userPieceCategories).toEqual([
       { name: 'Main', pieces: ['custom'], children: [] },
@@ -223,7 +223,7 @@ others_category_name: Unclassified
     expect(config!.othersCategoryName).toBe('Unclassified');
   });
 
-  it('should load ja builtin categories and include fill-e2e under レビュー', () => {
+  it('should load ja builtin categories and include audit-e2e under レビュー', () => {
     languageState.value = 'ja';
 
     writeYaml(join(testDir, 'resources', 'ja', 'piece-categories.yaml'), `
@@ -231,13 +231,13 @@ piece_categories:
   レビュー:
     pieces:
       - review
-      - fill-e2e
+      - audit-e2e
 `);
 
     const config = getPieceCategories(testDir);
     expect(config).not.toBeNull();
     expect(config!.pieceCategories).toEqual([
-      { name: 'レビュー', pieces: ['review', 'fill-e2e'], children: [] },
+      { name: 'レビュー', pieces: ['review', 'audit-e2e'], children: [] },
     ]);
   });
 

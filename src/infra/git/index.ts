@@ -32,11 +32,11 @@ function createProvider(type: VcsProviderType): GitProvider {
   }
 }
 
-function resolveProviderType(configValue: VcsProviderType | undefined): VcsProviderType {
+function resolveProviderType(configValue: VcsProviderType | undefined, cwd?: string): VcsProviderType {
   if (configValue) {
     return configValue;
   }
-  return detectVcsProvider() ?? 'github';
+  return detectVcsProvider(cwd) ?? 'github';
 }
 
 /**
@@ -51,7 +51,7 @@ function resolveProviderType(configValue: VcsProviderType | undefined): VcsProvi
  */
 export function initGitProvider(projectDir: string): void {
   const configValue = resolveConfigValue(projectDir, 'vcsProvider') as VcsProviderType | undefined;
-  const resolved = resolveProviderType(configValue);
+  const resolved = resolveProviderType(configValue, projectDir);
 
   if (provider && currentProviderType === resolved) {
     return;
@@ -78,11 +78,11 @@ export function getGitProvider(): GitProvider {
 
 export function createPullRequestSafely(
   gitProvider: GitProvider,
-  cwd: string,
   options: CreatePrOptions,
+  cwd?: string,
 ): CreatePrResult {
   try {
-    return gitProvider.createPullRequest(cwd, options);
+    return gitProvider.createPullRequest(options, cwd);
   } catch (createPrError) {
     return {
       success: false,
@@ -98,7 +98,7 @@ export function createPullRequestSafely(
  * Otherwise returns the task string as-is.
  * Throws if VCS CLI is not available or issue fetch fails.
  */
-export function resolveIssueTask(task: string): string {
+export function resolveIssueTask(task: string, cwd?: string): string {
   const tokens = task.trim().split(/\s+/);
   const issueNumbers = parseIssueNumbers(tokens);
 
@@ -107,11 +107,11 @@ export function resolveIssueTask(task: string): string {
   }
 
   const gitProvider = getGitProvider();
-  const cliStatus = gitProvider.checkCliStatus();
+  const cliStatus = gitProvider.checkCliStatus(cwd);
   if (!cliStatus.available) {
     throw new Error(cliStatus.error);
   }
 
-  const issues = issueNumbers.map((n) => gitProvider.fetchIssue(n));
+  const issues = issueNumbers.map((n) => gitProvider.fetchIssue(n, cwd));
   return issues.map(formatIssueAsTask).join('\n\n---\n\n');
 }

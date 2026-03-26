@@ -11,13 +11,13 @@ const log = createLogger('github');
 /**
  * Check if `gh` CLI is available and authenticated.
  */
-export function checkGhCli(): CliStatus {
+export function checkGhCli(cwd: string): CliStatus {
   try {
-    execFileSync('gh', ['auth', 'status'], { stdio: 'pipe' });
+    execFileSync('gh', ['auth', 'status'], { cwd, stdio: 'pipe' });
     return { available: true };
   } catch {
     try {
-      execFileSync('gh', ['--version'], { stdio: 'pipe' });
+      execFileSync('gh', ['--version'], { cwd, stdio: 'pipe' });
       return {
         available: false,
         error: 'gh CLI is installed but not authenticated. Run `gh auth login` first.',
@@ -35,13 +35,13 @@ export function checkGhCli(): CliStatus {
  * Fetch issue content via `gh issue view`.
  * Throws on failure (issue not found, network error, etc.).
  */
-export function fetchIssue(issueNumber: number): Issue {
+export function fetchIssue(issueNumber: number, cwd: string): Issue {
   log.debug('Fetching issue', { issueNumber });
 
   const raw = execFileSync(
     'gh',
     ['issue', 'view', String(issueNumber), '--json', 'number,title,body,labels,comments'],
-    { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
+    { cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
   );
 
   const data = JSON.parse(raw) as {
@@ -67,10 +67,11 @@ export function fetchIssue(issueNumber: number): Issue {
 /**
  * Filter labels to only those that exist on the repository.
  */
-function filterExistingLabels(labels: string[]): string[] {
+function filterExistingLabels(labels: string[], cwd: string): string[] {
   try {
     const existing = new Set(
       execFileSync('gh', ['label', 'list', '--json', 'name', '-q', '.[].name'], {
+        cwd,
         encoding: 'utf-8',
         stdio: ['pipe', 'pipe', 'pipe'],
       })
@@ -88,15 +89,15 @@ function filterExistingLabels(labels: string[]): string[] {
 /**
  * Create a GitHub Issue via `gh issue create`.
  */
-export function createIssue(options: CreateIssueOptions): CreateIssueResult {
-  const ghStatus = checkGhCli();
+export function createIssue(options: CreateIssueOptions, cwd: string): CreateIssueResult {
+  const ghStatus = checkGhCli(cwd);
   if (!ghStatus.available) {
     return { success: false, error: ghStatus.error };
   }
 
   const args = ['issue', 'create', '--title', options.title, '--body', options.body];
   if (options.labels && options.labels.length > 0) {
-    const validLabels = filterExistingLabels(options.labels);
+    const validLabels = filterExistingLabels(options.labels, cwd);
     if (validLabels.length > 0) {
       args.push('--label', validLabels.join(','));
     }
@@ -106,6 +107,7 @@ export function createIssue(options: CreateIssueOptions): CreateIssueResult {
 
   try {
     const output = execFileSync('gh', args, {
+      cwd,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
     });

@@ -82,33 +82,33 @@ describe('Piece Loader IT: builtin piece loading', () => {
     expect(config).toBeNull();
   });
 
-  it('should include and load fill-e2e as a builtin piece', () => {
-    expect(builtinNames).toContain('fill-e2e');
+  it('should include and load audit-e2e as a builtin piece', () => {
+    expect(builtinNames).toContain('audit-e2e');
 
-    const config = loadPiece('fill-e2e', testDir);
+    const config = loadPiece('audit-e2e', testDir);
     expect(config).not.toBeNull();
 
-    const planMovement = config!.movements.find((movement) => movement.name === 'plan_test');
-    const implementMovement = config!.movements.find((movement) => movement.name === 'implement_test');
+    const planMovement = config!.movements.find((movement) => movement.name === 'plan');
+    const auditMovement = config!.movements.find((movement) => movement.name === 'audit');
 
     expect(planMovement).toBeDefined();
-    expect(implementMovement).toBeDefined();
+    expect(auditMovement).toBeDefined();
   });
 
-  it('should load fill-e2e as a builtin piece in ja locale', () => {
+  it('should load audit-e2e as a builtin piece in ja locale', () => {
     languageState.value = 'ja';
 
     const jaBuiltinNames = listBuiltinPieceNames(testDir, { includeDisabled: true });
-    expect(jaBuiltinNames).toContain('fill-e2e');
+    expect(jaBuiltinNames).toContain('audit-e2e');
 
-    const config = loadPiece('fill-e2e', testDir);
+    const config = loadPiece('audit-e2e', testDir);
     expect(config).not.toBeNull();
 
-    const planMovement = config!.movements.find((movement) => movement.name === 'plan_test');
-    const implementMovement = config!.movements.find((movement) => movement.name === 'implement_test');
+    const planMovement = config!.movements.find((movement) => movement.name === 'plan');
+    const auditMovement = config!.movements.find((movement) => movement.name === 'audit');
 
     expect(planMovement).toBeDefined();
-    expect(implementMovement).toBeDefined();
+    expect(auditMovement).toBeDefined();
   });
 });
 

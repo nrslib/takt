@@ -2,10 +2,19 @@ piece_overrides:
   movements:
     implement:
       quality_gates:
+        - "Run `npm run build` and verify the build succeeds"
+        - "Run `npm run lint` and verify lint passes"
+        - "Run `npm test` and verify all tests pass"
         - "Run `npm run test:e2e:mock` and verify all E2E tests pass"
     fix:
       quality_gates:
+        - "Run `npm run build` and verify the build succeeds"
+        - "Run `npm run lint` and verify lint passes"
+        - "Run `npm test` and verify all tests pass"
         - "Run `npm run test:e2e:mock` and verify all E2E tests pass"
     ai_fix:
       quality_gates:
+        - "Run `npm run build` and verify the build succeeds"
+        - "Run `npm run lint` and verify lint passes"
+        - "Run `npm test` and verify all tests pass"
         - "Run `npm run test:e2e:mock` and verify all E2E tests pass"

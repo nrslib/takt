@@ -1,10 +1,18 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, vi, beforeEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { TaskInfo } from '../infra/task/index.js';
 import * as infraTask from '../infra/task/index.js';
-import { resolveTaskExecution } from '../features/tasks/execute/resolveTask.js';
+
+const mockGetGitProvider = vi.hoisted(() => vi.fn());
+
+vi.mock('../infra/git/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  getGitProvider: mockGetGitProvider,
+}));
+
+import { resolveTaskExecution, resolveTaskIssue } from '../features/tasks/execute/resolveTask.js';
 
 const tempRoots = new Set<string>();
 
@@ -427,5 +435,71 @@ describe('resolveTaskExecution', () => {
 
     expect(result.draftPr).toBe(true);
     expect(result.autoPr).toBe(true);
+  });
+});
+
+describe('resolveTaskIssue', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('issueNumber が undefined の場合は undefined を返す', () => {
+    // When
+    const result = resolveTaskIssue(undefined, '/tmp/test');
+
+    // Then
+    expect(result).toBeUndefined();
+  });
+
+  it('CLI が利用不可の場合は undefined を返し、cwd を checkCliStatus に渡す', () => {
+    // Given
+    const mockProvider = {
+      checkCliStatus: vi.fn().mockReturnValue({ available: false, error: 'not installed' }),
+      fetchIssue: vi.fn(),
+    };
+    mockGetGitProvider.mockReturnValue(mockProvider);
+
+    // When
+    const result = resolveTaskIssue(42, '/my/project');
+
+    // Then
+    expect(result).toBeUndefined();
+    expect(mockProvider.checkCliStatus).toHaveBeenCalledWith('/my/project');
+    expect(mockProvider.fetchIssue).not.toHaveBeenCalled();
+  });
+
+  it('fetchIssue が成功した場合は issue 配列を返す', () => {
+    // Given
+    const issue = { number: 42, title: 'Test', body: 'Body', labels: [], comments: [] };
+    const mockProvider = {
+      checkCliStatus: vi.fn().mockReturnValue({ available: true }),
+      fetchIssue: vi.fn().mockReturnValue(issue),
+    };
+    mockGetGitProvider.mockReturnValue(mockProvider);
+
+    // When
+    const result = resolveTaskIssue(42, '/my/project');
+
+    // Then
+    expect(result).toEqual([issue]);
+    expect(mockProvider.checkCliStatus).toHaveBeenCalledWith('/my/project');
+    expect(mockProvider.fetchIssue).toHaveBeenCalledWith(42, '/my/project');
+  });
+
+  it('fetchIssue が例外を投げた場合は undefined を返す', () => {
+    // Given
+    const mockProvider = {
+      checkCliStatus: vi.fn().mockReturnValue({ available: true }),
+      fetchIssue: vi.fn().mockImplementation(() => { throw new Error('API error'); }),
+    };
+    mockGetGitProvider.mockReturnValue(mockProvider);
+
+    // When
+    const result = resolveTaskIssue(42, '/my/project');
+
+    // Then
+    expect(result).toBeUndefined();
+    expect(mockProvider.checkCliStatus).toHaveBeenCalledWith('/my/project');
+    expect(mockProvider.fetchIssue).toHaveBeenCalledWith(42, '/my/project');
   });
 });

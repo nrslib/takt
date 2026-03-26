@@ -184,7 +184,7 @@ export async function executeAndCompleteTask(
     let prFailedError: string | undefined;
     let postExecutionTaskError: string | undefined;
     if (taskSuccess && isWorktree) {
-      const issues = resolveTaskIssue(issueNumber);
+      const issues = resolveTaskIssue(issueNumber, execCwd);
       const postResult = await postExecutionFlow({
         execCwd,
         projectCwd: cwd,

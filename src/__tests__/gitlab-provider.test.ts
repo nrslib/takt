@@ -64,7 +64,7 @@ describe('GitLabProvider', () => {
       const result = provider.checkCliStatus();
 
       // Then
-      expect(mockCheckGlabCli).toHaveBeenCalledTimes(1);
+      expect(mockCheckGlabCli).toHaveBeenCalledWith(process.cwd());
       expect(result).toBe(status);
     });
 
@@ -77,6 +77,7 @@ describe('GitLabProvider', () => {
       const result = provider.checkCliStatus();
 
       // Then
+      expect(mockCheckGlabCli).toHaveBeenCalledWith(process.cwd());
       expect(result.available).toBe(false);
       expect(result.error).toBe('glab is not installed');
     });
@@ -93,13 +94,40 @@ describe('GitLabProvider', () => {
       const result = provider.checkCliStatus();
 
       // Then
+      expect(mockCheckGlabCli).toHaveBeenCalledWith(process.cwd());
       expect(result.available).toBe(false);
       expect(result.error).toContain('not authenticated');
+    });
+
+    it('cwd を指定した場合は checkGlabCli にそのまま転送する', () => {
+      // Given
+      const status = { available: true };
+      mockCheckGlabCli.mockReturnValue(status);
+      const provider = new GitLabProvider();
+
+      // When
+      const result = provider.checkCliStatus('/my/project');
+
+      // Then
+      expect(mockCheckGlabCli).toHaveBeenCalledWith('/my/project');
+      expect(result).toBe(status);
+    });
+
+    it('cwd 省略時は process.cwd() をフォールバックとして渡す', () => {
+      // Given
+      mockCheckGlabCli.mockReturnValue({ available: true });
+      const provider = new GitLabProvider();
+
+      // When
+      provider.checkCliStatus();
+
+      // Then
+      expect(mockCheckGlabCli).toHaveBeenCalledWith(process.cwd());
     });
   });
 
   describe('fetchIssue', () => {
-    it('fetchIssue(n) に委譲し結果を返す', () => {
+    it('fetchIssue(n, cwd) に委譲し結果を返す', () => {
       // Given
       const issue = { number: 42, title: 'Test issue', body: 'Body', labels: [], comments: [] };
       mockFetchIssue.mockReturnValue(issue);
@@ -109,8 +137,35 @@ describe('GitLabProvider', () => {
       const result = provider.fetchIssue(42);
 
       // Then
-      expect(mockFetchIssue).toHaveBeenCalledWith(42);
+      expect(mockFetchIssue).toHaveBeenCalledWith(42, process.cwd());
       expect(result).toBe(issue);
+    });
+
+    it('cwd を指定した場合は fetchIssue にそのまま転送する', () => {
+      // Given
+      const issue = { number: 10, title: 'Issue', body: '', labels: [], comments: [] };
+      mockFetchIssue.mockReturnValue(issue);
+      const provider = new GitLabProvider();
+
+      // When
+      const result = provider.fetchIssue(10, '/worktree/clone');
+
+      // Then
+      expect(mockFetchIssue).toHaveBeenCalledWith(10, '/worktree/clone');
+      expect(result).toBe(issue);
+    });
+
+    it('cwd 省略時は process.cwd() をフォールバックとして渡す', () => {
+      // Given
+      const issue = { number: 20, title: 'Issue', body: '', labels: [], comments: [] };
+      mockFetchIssue.mockReturnValue(issue);
+      const provider = new GitLabProvider();
+
+      // When
+      provider.fetchIssue(20);
+
+      // Then
+      expect(mockFetchIssue).toHaveBeenCalledWith(20, process.cwd());
     });
   });
 
@@ -126,7 +181,7 @@ describe('GitLabProvider', () => {
       const result = provider.createIssue(opts);
 
       // Then
-      expect(mockCreateIssue).toHaveBeenCalledWith(opts);
+      expect(mockCreateIssue).toHaveBeenCalledWith(opts, process.cwd());
       expect(result).toBe(issueResult);
     });
 
@@ -140,12 +195,38 @@ describe('GitLabProvider', () => {
       provider.createIssue(opts);
 
       // Then
-      expect(mockCreateIssue).toHaveBeenCalledWith(opts);
+      expect(mockCreateIssue).toHaveBeenCalledWith(opts, process.cwd());
+    });
+
+    it('cwd を指定した場合は createIssue にそのまま転送する', () => {
+      // Given
+      const opts = { title: 'Issue', body: 'Body' };
+      mockCreateIssue.mockReturnValue({ success: true, url: 'https://gitlab.com/org/repo/-/issues/3' });
+      const provider = new GitLabProvider();
+
+      // When
+      provider.createIssue(opts, '/my/project');
+
+      // Then
+      expect(mockCreateIssue).toHaveBeenCalledWith(opts, '/my/project');
+    });
+
+    it('cwd 省略時は process.cwd() をフォールバックとして渡す', () => {
+      // Given
+      const opts = { title: 'Issue', body: 'Body' };
+      mockCreateIssue.mockReturnValue({ success: true, url: 'https://gitlab.com/org/repo/-/issues/4' });
+      const provider = new GitLabProvider();
+
+      // When
+      provider.createIssue(opts);
+
+      // Then
+      expect(mockCreateIssue).toHaveBeenCalledWith(opts, process.cwd());
     });
   });
 
   describe('fetchPrReviewComments', () => {
-    it('fetchMrReviewComments(n) に委譲し結果を返す', () => {
+    it('fetchMrReviewComments(n, cwd) に委譲し結果を返す', () => {
       // Given
       const prReview: PrReviewData = {
         number: 456,
@@ -164,23 +245,68 @@ describe('GitLabProvider', () => {
       const result = provider.fetchPrReviewComments(456);
 
       // Then
-      expect(mockFetchMrReviewComments).toHaveBeenCalledWith(456);
+      expect(mockFetchMrReviewComments).toHaveBeenCalledWith(456, process.cwd());
       expect(result).toBe(prReview);
+    });
+
+    it('cwd を指定した場合は fetchMrReviewComments にそのまま転送する', () => {
+      // Given
+      const prReview: PrReviewData = {
+        number: 100,
+        title: 'MR',
+        body: '',
+        url: 'https://gitlab.com/org/repo/-/merge_requests/100',
+        headRefName: 'feat/x',
+        comments: [],
+        reviews: [],
+        files: [],
+      };
+      mockFetchMrReviewComments.mockReturnValue(prReview);
+      const provider = new GitLabProvider();
+
+      // When
+      const result = provider.fetchPrReviewComments(100, '/worktree/clone');
+
+      // Then
+      expect(mockFetchMrReviewComments).toHaveBeenCalledWith(100, '/worktree/clone');
+      expect(result).toBe(prReview);
+    });
+
+    it('cwd 省略時は process.cwd() をフォールバックとして渡す', () => {
+      // Given
+      const prReview: PrReviewData = {
+        number: 200,
+        title: 'MR',
+        body: '',
+        url: 'https://gitlab.com/org/repo/-/merge_requests/200',
+        headRefName: 'feat/y',
+        comments: [],
+        reviews: [],
+        files: [],
+      };
+      mockFetchMrReviewComments.mockReturnValue(prReview);
+      const provider = new GitLabProvider();
+
+      // When
+      provider.fetchPrReviewComments(200);
+
+      // Then
+      expect(mockFetchMrReviewComments).toHaveBeenCalledWith(200, process.cwd());
     });
   });
 
   describe('findExistingPr', () => {
-    it('findExistingMr(cwd, branch) に委譲し MR を返す', () => {
+    it('findExistingMr(branch, cwd) に委譲し MR を返す', () => {
       // Given
       const mr = { number: 10, url: 'https://gitlab.com/org/repo/-/merge_requests/10' };
       mockFindExistingMr.mockReturnValue(mr);
       const provider = new GitLabProvider();
 
       // When
-      const result = provider.findExistingPr('/project', 'feat/my-feature');
+      const result = provider.findExistingPr('feat/my-feature', '/project');
 
       // Then
-      expect(mockFindExistingMr).toHaveBeenCalledWith('/project', 'feat/my-feature');
+      expect(mockFindExistingMr).toHaveBeenCalledWith('feat/my-feature', '/project');
       expect(result).toBe(mr);
     });
 
@@ -190,15 +316,41 @@ describe('GitLabProvider', () => {
       const provider = new GitLabProvider();
 
       // When
-      const result = provider.findExistingPr('/project', 'feat/no-mr');
+      const result = provider.findExistingPr('feat/no-mr', '/project');
 
       // Then
       expect(result).toBeUndefined();
     });
+
+    it('cwd を指定した場合は findExistingMr にそのまま転送する', () => {
+      // Given
+      const mr = { number: 20, url: 'https://gitlab.com/org/repo/-/merge_requests/20' };
+      mockFindExistingMr.mockReturnValue(mr);
+      const provider = new GitLabProvider();
+
+      // When
+      const result = provider.findExistingPr('feat/branch', '/worktree/clone');
+
+      // Then
+      expect(mockFindExistingMr).toHaveBeenCalledWith('feat/branch', '/worktree/clone');
+      expect(result).toBe(mr);
+    });
+
+    it('cwd 省略時は process.cwd() をフォールバックとして渡す', () => {
+      // Given
+      mockFindExistingMr.mockReturnValue(undefined);
+      const provider = new GitLabProvider();
+
+      // When
+      provider.findExistingPr('feat/branch');
+
+      // Then
+      expect(mockFindExistingMr).toHaveBeenCalledWith('feat/branch', process.cwd());
+    });
   });
 
   describe('createPullRequest', () => {
-    it('createMergeRequest(cwd, opts) に委譲し結果を返す', () => {
+    it('createMergeRequest(opts, cwd) に委譲し結果を返す', () => {
       // Given
       const opts = { branch: 'feat/new', title: 'My MR', body: 'MR body', draft: false };
       const mrResult = { success: true, url: 'https://gitlab.com/org/repo/-/merge_requests/5' };
@@ -206,10 +358,10 @@ describe('GitLabProvider', () => {
       const provider = new GitLabProvider();
 
       // When
-      const result = provider.createPullRequest('/project', opts);
+      const result = provider.createPullRequest(opts, '/project');
 
       // Then
-      expect(mockCreateMergeRequest).toHaveBeenCalledWith('/project', opts);
+      expect(mockCreateMergeRequest).toHaveBeenCalledWith(opts, '/project');
       expect(result).toBe(mrResult);
     });
 
@@ -220,25 +372,51 @@ describe('GitLabProvider', () => {
       const provider = new GitLabProvider();
 
       // When
-      provider.createPullRequest('/project', opts);
+      provider.createPullRequest(opts, '/project');
 
       // Then
-      expect(mockCreateMergeRequest).toHaveBeenCalledWith('/project', expect.objectContaining({ draft: true }));
+      expect(mockCreateMergeRequest).toHaveBeenCalledWith(expect.objectContaining({ draft: true }), '/project');
+    });
+
+    it('cwd を指定した場合は createMergeRequest にそのまま転送する', () => {
+      // Given
+      const opts = { branch: 'feat/x', title: 'MR', body: 'body', draft: false };
+      mockCreateMergeRequest.mockReturnValue({ success: true, url: 'https://gitlab.com/org/repo/-/merge_requests/7' });
+      const provider = new GitLabProvider();
+
+      // When
+      provider.createPullRequest(opts, '/worktree/clone');
+
+      // Then
+      expect(mockCreateMergeRequest).toHaveBeenCalledWith(opts, '/worktree/clone');
+    });
+
+    it('cwd 省略時は process.cwd() をフォールバックとして渡す', () => {
+      // Given
+      const opts = { branch: 'feat/y', title: 'MR', body: 'body', draft: false };
+      mockCreateMergeRequest.mockReturnValue({ success: true, url: 'https://gitlab.com/org/repo/-/merge_requests/8' });
+      const provider = new GitLabProvider();
+
+      // When
+      provider.createPullRequest(opts);
+
+      // Then
+      expect(mockCreateMergeRequest).toHaveBeenCalledWith(opts, process.cwd());
     });
   });
 
   describe('commentOnPr', () => {
-    it('commentOnMr(cwd, mrNumber, body) に委譲し CommentResult を返す', () => {
+    it('commentOnMr(mrNumber, body, cwd) に委譲し CommentResult を返す', () => {
       // Given
       const commentResult: CommentResult = { success: true };
       mockCommentOnMr.mockReturnValue(commentResult);
       const provider = new GitLabProvider();
 
       // When
-      const result = provider.commentOnPr('/project', 42, 'Updated!');
+      const result = provider.commentOnPr(42, 'Updated!', '/project');
 
       // Then
-      expect(mockCommentOnMr).toHaveBeenCalledWith('/project', 42, 'Updated!');
+      expect(mockCommentOnMr).toHaveBeenCalledWith(42, 'Updated!', '/project');
       expect(result).toBe(commentResult);
     });
 
@@ -249,11 +427,37 @@ describe('GitLabProvider', () => {
       const provider = new GitLabProvider();
 
       // When
-      const result = provider.commentOnPr('/project', 42, 'comment');
+      const result = provider.commentOnPr(42, 'comment', '/project');
 
       // Then
       expect(result.success).toBe(false);
       expect(result.error).toBe('Permission denied');
+    });
+
+    it('cwd を指定した場合は commentOnMr にそのまま転送する', () => {
+      // Given
+      const commentResult: CommentResult = { success: true };
+      mockCommentOnMr.mockReturnValue(commentResult);
+      const provider = new GitLabProvider();
+
+      // When
+      provider.commentOnPr(10, 'body', '/worktree/clone');
+
+      // Then
+      expect(mockCommentOnMr).toHaveBeenCalledWith(10, 'body', '/worktree/clone');
+    });
+
+    it('cwd 省略時は process.cwd() をフォールバックとして渡す', () => {
+      // Given
+      const commentResult: CommentResult = { success: true };
+      mockCommentOnMr.mockReturnValue(commentResult);
+      const provider = new GitLabProvider();
+
+      // When
+      provider.commentOnPr(10, 'body');
+
+      // Then
+      expect(mockCommentOnMr).toHaveBeenCalledWith(10, 'body', process.cwd());
     });
   });
 });

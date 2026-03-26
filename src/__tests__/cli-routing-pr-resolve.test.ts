@@ -180,7 +180,7 @@ describe('PR resolution in routing', () => {
       await executeDefaultAction();
 
       // Then
-      expect(mockFetchPrReviewComments).toHaveBeenCalledWith(456);
+      expect(mockFetchPrReviewComments).toHaveBeenCalledWith(456, undefined);
       expect(mockInteractiveMode).toHaveBeenCalledWith(
         '/test/cwd',
         expect.stringContaining('## PR #456 Review Comments:'),

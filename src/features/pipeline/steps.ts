@@ -98,10 +98,11 @@ function buildPipelinePrBody(
 
 function fetchVcsResource<T>(
   label: string,
+  cwd: string,
   fetch: (provider: ReturnType<typeof getGitProvider>) => T,
 ): T | undefined {
   const gitProvider = getGitProvider();
-  const cliStatus = gitProvider.checkCliStatus();
+  const cliStatus = gitProvider.checkCliStatus(cwd);
   if (!cliStatus.available) {
     error(cliStatus.error);
     return undefined;
@@ -115,11 +116,13 @@ function fetchVcsResource<T>(
 }
 
 export function resolveTaskContent(options: PipelineExecutionOptions): TaskContent | undefined {
+  const { cwd } = options;
   if (options.prNumber) {
     info(`Fetching PR #${options.prNumber} review comments...`);
     const prReview = fetchVcsResource(
       `PR #${options.prNumber}`,
-      (provider) => provider.fetchPrReviewComments(options.prNumber!),
+      cwd,
+      (provider) => provider.fetchPrReviewComments(options.prNumber!, cwd),
     );
     if (!prReview) return undefined;
     const task = formatPrReviewAsTask(prReview);
@@ -134,7 +137,8 @@ export function resolveTaskContent(options: PipelineExecutionOptions): TaskConte
     info(`Fetching issue #${options.issueNumber}...`);
     const issue = fetchVcsResource(
       `issue #${options.issueNumber}`,
-      (provider) => provider.fetchIssue(options.issueNumber!),
+      cwd,
+      (provider) => provider.fetchIssue(options.issueNumber!, cwd),
     );
     if (!issue) return undefined;
     const task = formatIssueAsTask(issue);
@@ -274,14 +278,14 @@ export function submitPullRequest(
   const report = `Piece \`${piece}\` completed successfully.`;
   const prBody = buildPipelinePrBody(pipelineConfig, taskContent.issue, report);
 
-  const prResult: CreatePrResult = createPullRequestSafely(getGitProvider(), projectCwd, {
+  const prResult: CreatePrResult = createPullRequestSafely(getGitProvider(), {
     branch,
     title: prTitle,
     body: prBody,
     base: resolvedBaseBranch,
     repo: options.repo,
     draft: options.draftPr,
-  });
+  }, projectCwd);
 
   if (prResult.success) {
     success(`PR created: ${prResult.url}`);

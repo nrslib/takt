@@ -42,15 +42,17 @@ function extractHostname(url: string): string | undefined {
 }
 
 /**
- * Detect VCS provider from the `origin` remote URL.
+ * Get the hostname of the `origin` remote URL.
  *
- * @returns `'github'` | `'gitlab'` | `undefined`
+ * @param cwd - Working directory for the git command
+ * @returns hostname string or `undefined` if unavailable
  */
-export function detectVcsProvider(): VcsProviderType | undefined {
+export function getRemoteHostname(cwd: string): string | undefined {
   let output: string;
   try {
     output = String(
       execFileSync('git', ['remote', 'get-url', 'origin'], {
+        cwd,
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'ignore'],
       }),
@@ -64,7 +66,16 @@ export function detectVcsProvider(): VcsProviderType | undefined {
     return undefined;
   }
 
-  const hostname = extractHostname(url);
+  return extractHostname(url);
+}
+
+/**
+ * Detect VCS provider from the `origin` remote URL.
+ *
+ * @returns `'github'` | `'gitlab'` | `undefined`
+ */
+export function detectVcsProvider(cwd?: string): VcsProviderType | undefined {
+  const hostname = getRemoteHostname(cwd ?? process.cwd());
   if (!hostname) {
     return undefined;
   }

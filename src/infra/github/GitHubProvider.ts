@@ -11,31 +11,31 @@ import { findExistingPr, commentOnPr, createPullRequest, fetchPrReviewComments }
 import type { GitProvider, CliStatus, Issue, ExistingPr, CreateIssueOptions, CreateIssueResult, CreatePrOptions, CreatePrResult, CommentResult, PrReviewData } from '../git/types.js';
 
 export class GitHubProvider implements GitProvider {
-  checkCliStatus(): CliStatus {
-    return checkGhCli();
+  checkCliStatus(cwd?: string): CliStatus {
+    return checkGhCli(cwd ?? process.cwd());
   }
 
-  fetchIssue(issueNumber: number): Issue {
-    return fetchIssue(issueNumber);
+  fetchIssue(issueNumber: number, cwd?: string): Issue {
+    return fetchIssue(issueNumber, cwd ?? process.cwd());
   }
 
-  createIssue(options: CreateIssueOptions): CreateIssueResult {
-    return createIssue(options);
+  createIssue(options: CreateIssueOptions, cwd?: string): CreateIssueResult {
+    return createIssue(options, cwd ?? process.cwd());
   }
 
-  fetchPrReviewComments(prNumber: number): PrReviewData {
-    return fetchPrReviewComments(prNumber);
+  fetchPrReviewComments(prNumber: number, cwd?: string): PrReviewData {
+    return fetchPrReviewComments(prNumber, cwd ?? process.cwd());
   }
 
-  findExistingPr(cwd: string, branch: string): ExistingPr | undefined {
-    return findExistingPr(cwd, branch);
+  findExistingPr(branch: string, cwd?: string): ExistingPr | undefined {
+    return findExistingPr(branch, cwd ?? process.cwd());
   }
 
-  createPullRequest(cwd: string, options: CreatePrOptions): CreatePrResult {
-    return createPullRequest(cwd, options);
+  createPullRequest(options: CreatePrOptions, cwd?: string): CreatePrResult {
+    return createPullRequest(options, cwd ?? process.cwd());
   }
 
-  commentOnPr(cwd: string, prNumber: number, body: string): CommentResult {
-    return commentOnPr(cwd, prNumber, body);
+  commentOnPr(prNumber: number, body: string, cwd?: string): CommentResult {
+    return commentOnPr(prNumber, body, cwd ?? process.cwd());
   }
 }

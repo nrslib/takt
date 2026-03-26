@@ -15,6 +15,7 @@
 | Test independence & reproducibility | ✅ | - |
 | Mocks & fixtures | ✅ | - |
 | Test strategy (unit/integration/E2E) | ✅ | - |
+| Contract input location (body/query/path) | ✅ | - |
 
 ## Current Iteration Findings (new)
 | # | finding_id | family_tag | Category | Location | Issue | Fix Suggestion |
