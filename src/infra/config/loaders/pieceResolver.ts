@@ -9,7 +9,8 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import type { PieceConfig, PieceMovement, InteractiveMode } from '../../../core/models/index.js';
-import { getGlobalPiecesDir, getBuiltinPiecesDir, getProjectConfigDir, getRepertoireDir } from '../paths.js';
+import { getGlobalPiecesDir, getBuiltinPiecesDir, getRepertoireDir } from '../paths.js';
+import { getProjectConfigDirIfEnabled } from '../project/projectConfigGuards.js';
 import { isScopeRef, parseScopeRef } from 'faceted-prompting';
 import { resolvePieceConfigValues } from '../resolvePieceConfigValue.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
@@ -107,10 +108,13 @@ export function loadPiece(
   name: string,
   projectCwd: string,
 ): PieceConfig | null {
-  const projectPiecesDir = join(getProjectConfigDir(projectCwd), 'pieces');
-  const projectMatch = resolvePieceFile(projectPiecesDir, name);
-  if (projectMatch) {
-    return loadPieceFromFile(projectMatch, projectCwd);
+  const projectConfigDir = getProjectConfigDirIfEnabled(projectCwd);
+  if (projectConfigDir) {
+    const projectPiecesDir = join(projectConfigDir, 'pieces');
+    const projectMatch = resolvePieceFile(projectPiecesDir, name);
+    if (projectMatch) {
+      return loadPieceFromFile(projectMatch, projectCwd);
+    }
   }
 
   const globalPiecesDir = getGlobalPiecesDir();
@@ -425,7 +429,10 @@ function getPieceDirs(cwd: string): { dir: string; source: PieceSource; disabled
     dirs.push({ dir: getBuiltinPiecesDir(lang), disabled, source: 'builtin' });
   }
   dirs.push({ dir: getGlobalPiecesDir(), source: 'user' });
-  dirs.push({ dir: join(getProjectConfigDir(cwd), 'pieces'), source: 'project' });
+  const projectConfigDir = getProjectConfigDirIfEnabled(cwd);
+  if (projectConfigDir) {
+    dirs.push({ dir: join(projectConfigDir, 'pieces'), source: 'project' });
+  }
   return dirs;
 }
 

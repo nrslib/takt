@@ -189,6 +189,38 @@ movements:
 
 });
 
+describe('project/global config dir collision in piece loading', () => {
+  let projectDir: string;
+  let originalTaktConfigDir: string | undefined;
+
+  beforeEach(() => {
+    projectDir = mkdtempSync(join(tmpdir(), 'takt-piece-collision-'));
+    originalTaktConfigDir = process.env.TAKT_CONFIG_DIR;
+    process.env.TAKT_CONFIG_DIR = join(projectDir, '.takt');
+  });
+
+  afterEach(() => {
+    if (originalTaktConfigDir === undefined) {
+      delete process.env.TAKT_CONFIG_DIR;
+    } else {
+      process.env.TAKT_CONFIG_DIR = originalTaktConfigDir;
+    }
+    rmSync(projectDir, { recursive: true, force: true });
+  });
+
+  it('should not treat colliding global pieces as project-local pieces', () => {
+    const globalPiecesDir = join(projectDir, '.takt', 'pieces');
+    mkdirSync(globalPiecesDir, { recursive: true });
+    writeFileSync(join(globalPiecesDir, 'project-custom.yaml'), SAMPLE_PIECE);
+
+    expect(listPieces(projectDir)).toContain('project-custom');
+    expect(loadPieceByIdentifier('project-custom', projectDir)?.name).toBe('test-piece');
+
+    const pieces = loadAllPiecesWithSources(projectDir);
+    expect(pieces.get('project-custom')?.source).toBe('user');
+  });
+});
+
 describe('loadPieceByIdentifier with @scope ref (repertoire)', () => {
   let tempDir: string;
   let configDir: string;

@@ -33,3 +33,11 @@ export function isProjectConfigEnabled(projectDir: string): boolean {
   return normalizeConfigDirPath(getProjectConfigDir(projectDir))
     !== normalizeConfigDirPath(getGlobalConfigDir());
 }
+
+export function getProjectConfigDirIfEnabled(projectDir: string): string | undefined {
+  if (!isProjectConfigEnabled(projectDir)) {
+    return undefined;
+  }
+
+  return getProjectConfigDir(projectDir);
+}
