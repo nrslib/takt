@@ -534,6 +534,7 @@ export const PieceCategoryConfigSchema = z.record(z.string(), PieceCategoryConfi
 
 /** Project config schema */
 export const ProjectConfigSchema = z.object({
+  language: LanguageSchema.optional(),
   provider: ProviderReferenceSchema.optional(),
   model: z.string().optional(),
   analytics: AnalyticsConfigSchema.optional(),

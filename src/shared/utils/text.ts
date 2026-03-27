@@ -55,18 +55,32 @@ export function stripAnsi(text: string): string {
  */
 export function sanitizeTerminalText(text: string): string {
   const stripped = stripAnsi(text);
-  return stripped.replace(/[\x00-\x1F\x7F]/g, (char) => {
-    switch (char) {
-      case '\n':
-        return '\\n';
-      case '\r':
-        return '\\r';
-      case '\t':
-        return '\\t';
-      default:
-        return `\\x${char.charCodeAt(0).toString(16).padStart(2, '0')}`;
+  let sanitized = '';
+
+  for (const char of stripped) {
+    const code = char.codePointAt(0) ?? 0;
+    if ((code >= 0x00 && code <= 0x1f) || code === 0x7f) {
+      switch (char) {
+        case '\n':
+          sanitized += '\\n';
+          break;
+        case '\r':
+          sanitized += '\\r';
+          break;
+        case '\t':
+          sanitized += '\\t';
+          break;
+        default:
+          sanitized += `\\x${code.toString(16).padStart(2, '0')}`;
+          break;
+      }
+      continue;
     }
-  });
+
+    sanitized += char;
+  }
+
+  return sanitized;
 }
 
 /**

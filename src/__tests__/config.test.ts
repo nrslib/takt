@@ -890,6 +890,18 @@ describe('analytics config resolution', () => {
     });
   });
 
+  it('should resolve language as project > global in resolveConfigValue', () => {
+    const globalConfigDir = process.env.TAKT_CONFIG_DIR!;
+    mkdirSync(globalConfigDir, { recursive: true });
+    writeFileSync(join(globalConfigDir, 'config.yaml'), 'language: en\n');
+
+    const projectConfigDir = getProjectConfigDir(testDir);
+    mkdirSync(projectConfigDir, { recursive: true });
+    writeFileSync(join(projectConfigDir, 'config.yaml'), 'language: ja\n');
+
+    expect(resolveConfigValue(testDir, 'language')).toBe('ja');
+  });
+
   it('should expand "~/" in global analytics.events_path when resolved', () => {
     const globalConfigDir = process.env.TAKT_CONFIG_DIR!;
     mkdirSync(globalConfigDir, { recursive: true });

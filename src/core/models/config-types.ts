@@ -150,6 +150,8 @@ export interface NotificationSoundEventsConfig {
  * Project-level configuration stored in .takt/config.yaml.
  */
 export interface ProjectConfig {
+  /** UI / builtin resource language override for this project */
+  language?: Language;
   /** Provider selection for agent runtime */
   provider?: 'claude' | 'codex' | 'opencode' | 'cursor' | 'copilot' | 'mock';
   /** Model selection for agent runtime */

@@ -235,6 +235,7 @@ piece_overrides:
       const config = {
         provider: 'codex',
         model: 'gpt-5.4',
+        language: 'ja',
         taktProviders: {
           assistant: { provider: 'claude', model: 'haiku' },
         },
@@ -243,6 +244,7 @@ piece_overrides:
       saveProjectConfig(testDir, config);
 
       const raw = readFileSync(join(testDir, '.takt', 'config.yaml'), 'utf-8');
+      expect(raw).toContain('language: ja');
       expect(raw).toContain('takt_providers:');
       expect(raw).toContain('assistant:');
       expect(raw).toContain('provider: claude');
@@ -304,13 +306,29 @@ piece_overrides:
       writeFileSync(
         configPath,
         [
-          'language: ja',
           'anthropic_api_key: sk-test',
         ].join('\n'),
         'utf-8',
       );
 
       expect(() => loadProjectConfig(testDir)).toThrow(/unrecognized/i);
+    });
+
+    it('should accept project-local language override', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(
+        configPath,
+        [
+          'language: ja',
+          'provider: codex',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      const loaded = loadProjectConfig(testDir);
+
+      expect(loaded.language).toBe('ja');
+      expect(loaded.provider).toBe('codex');
     });
   });
 

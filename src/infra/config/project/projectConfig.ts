@@ -79,6 +79,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
   const parsedConfig = parsedResult.data;
 
   const {
+    language,
     provider,
     model,
     allow_git_hooks,
@@ -134,6 +135,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
   );
 
   return {
+    language: language as ProjectConfig['language'],
     pipeline: normalizedPipeline,
     taktProviders: normalizedTaktProviders,
     personaProviders: normalizedPersonaProviders,
@@ -208,6 +210,7 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
     delete savePayload.provider_options;
   }
   for (const [camel, snake] of [
+    ['language', 'language'],
     ['autoPr', 'auto_pr'], ['draftPr', 'draft_pr'], ['allowGitHooks', 'allow_git_hooks'],
     ['allowGitFilters', 'allow_git_filters'], ['vcsProvider', 'vcs_provider'],
     ['baseBranch', 'base_branch'], ['branchNameStrategy', 'branch_name_strategy'],
