@@ -1,4 +1,9 @@
 import type { MovementProviderOptions } from '../../core/models/piece-types.js';
+import type {
+  ProviderOptionsOriginResolver,
+  ProviderOptionsSource,
+  ProviderOptionsTraceOrigin,
+} from '../../core/piece/types.js';
 
 type RawProviderOptions = {
   codex?: {
@@ -80,4 +85,110 @@ export function mergeProviderOptions(
   }
 
   return Object.keys(result).length > 0 ? result : undefined;
+}
+
+function resolveFallbackOrigin(
+  source: ProviderOptionsSource | undefined,
+): ProviderOptionsTraceOrigin {
+  if (source === 'project') return 'local';
+  if (source === 'global') return 'global';
+  if (source === 'env') return 'env';
+  return 'default';
+}
+
+export function resolveProviderOptionOrigin(
+  resolver: ProviderOptionsOriginResolver | undefined,
+  path: string,
+  fallbackSource: ProviderOptionsSource | undefined,
+): ProviderOptionsTraceOrigin {
+  if (!resolver) {
+    return resolveFallbackOrigin(fallbackSource);
+  }
+
+  let current = path;
+  while (current.length > 0) {
+    const origin = resolver(current);
+    if (origin !== 'default') {
+      return origin;
+    }
+    const lastDot = current.lastIndexOf('.');
+    if (lastDot < 0) {
+      break;
+    }
+    current = current.slice(0, lastDot);
+  }
+
+  return resolver('');
+}
+
+function selectProviderValue<T>(
+  configValue: T | undefined,
+  movementValue: T | undefined,
+  origin: ProviderOptionsTraceOrigin,
+): T | undefined {
+  if (origin === 'env' || origin === 'cli') {
+    return configValue ?? movementValue;
+  }
+  return movementValue ?? configValue;
+}
+
+export function resolveEffectiveProviderOptions(
+  source: ProviderOptionsSource | undefined,
+  originResolver: ProviderOptionsOriginResolver | undefined,
+  resolvedConfigOptions: MovementProviderOptions | undefined,
+  movementOptions: MovementProviderOptions | undefined,
+): MovementProviderOptions | undefined {
+  if (!resolvedConfigOptions) {
+    return movementOptions;
+  }
+  if (!movementOptions) {
+    return resolvedConfigOptions;
+  }
+
+  const claudeSandbox = {
+    allowUnsandboxedCommands: selectProviderValue(
+      resolvedConfigOptions.claude?.sandbox?.allowUnsandboxedCommands,
+      movementOptions.claude?.sandbox?.allowUnsandboxedCommands,
+      resolveProviderOptionOrigin(originResolver, 'claude.sandbox.allowUnsandboxedCommands', source),
+    ),
+    excludedCommands: selectProviderValue(
+      resolvedConfigOptions.claude?.sandbox?.excludedCommands,
+      movementOptions.claude?.sandbox?.excludedCommands,
+      resolveProviderOptionOrigin(originResolver, 'claude.sandbox.excludedCommands', source),
+    ),
+  };
+
+  const claude = {
+    sandbox: claudeSandbox.allowUnsandboxedCommands !== undefined || claudeSandbox.excludedCommands !== undefined
+      ? claudeSandbox
+      : selectProviderValue(
+        resolvedConfigOptions.claude?.sandbox,
+        movementOptions.claude?.sandbox,
+        resolveProviderOptionOrigin(originResolver, 'claude.sandbox', source),
+      ),
+    allowedTools: selectProviderValue(
+      resolvedConfigOptions.claude?.allowedTools,
+      movementOptions.claude?.allowedTools,
+      resolveProviderOptionOrigin(originResolver, 'claude.allowedTools', source),
+    ),
+  };
+
+  const codexNetworkAccess = selectProviderValue(
+    resolvedConfigOptions.codex?.networkAccess,
+    movementOptions.codex?.networkAccess,
+    resolveProviderOptionOrigin(originResolver, 'codex.networkAccess', source),
+  );
+  const opencodeNetworkAccess = selectProviderValue(
+    resolvedConfigOptions.opencode?.networkAccess,
+    movementOptions.opencode?.networkAccess,
+    resolveProviderOptionOrigin(originResolver, 'opencode.networkAccess', source),
+  );
+
+  const result: MovementProviderOptions = {
+    codex: codexNetworkAccess !== undefined ? { networkAccess: codexNetworkAccess } : undefined,
+    opencode: opencodeNetworkAccess !== undefined ? { networkAccess: opencodeNetworkAccess } : undefined,
+    claude: claude.sandbox !== undefined || claude.allowedTools !== undefined ? claude : undefined,
+  };
+
+  return result.codex || result.opencode || result.claude ? result : undefined;
 }

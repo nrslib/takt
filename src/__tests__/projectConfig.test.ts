@@ -362,6 +362,20 @@ piece_overrides:
       expect(() => loadProjectConfig(testDir)).toThrow(/Configuration error: invalid pipeline/);
     });
 
+    it('should throw when config contains unknown top-level field that is not tracked', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(
+        configPath,
+        [
+          'provider: codex',
+          'unknown_top_level: true',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      expect(() => loadProjectConfig(testDir)).toThrow(/unrecognized/i);
+    });
+
     it('should throw when pipeline value has invalid type', () => {
       const configPath = join(testDir, '.takt', 'config.yaml');
       writeFileSync(

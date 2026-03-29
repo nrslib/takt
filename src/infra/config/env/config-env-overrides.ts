@@ -1,8 +1,18 @@
-type EnvValueType = 'string' | 'boolean' | 'number' | 'json';
+import { PROVIDER_OPTIONS_ENV_SPECS } from '../providerOptionsContract.js';
 
-interface EnvSpec {
+export type EnvValueType = 'string' | 'boolean' | 'number' | 'json';
+
+export interface EnvSpec {
   path: string;
   type: EnvValueType;
+}
+
+export interface LegacyEnvSpec {
+  env: string;
+  path: string;
+  type: EnvValueType;
+  blockedBy: readonly string[];
+  warning: string;
 }
 
 function normalizeEnvSegment(segment: string): string {
@@ -23,7 +33,7 @@ export function envVarNameFromPath(path: string): string {
   return `TAKT_${key}`;
 }
 
-function parseEnvValue(envKey: string, raw: string, type: EnvValueType): unknown {
+export function parseEnvValue(envKey: string, raw: string, type: EnvValueType): unknown {
   if (type === 'string') {
     return raw;
   }
@@ -48,7 +58,7 @@ function parseEnvValue(envKey: string, raw: string, type: EnvValueType): unknown
   }
 }
 
-function setNested(target: Record<string, unknown>, path: string, value: unknown): void {
+export function setNestedConfigValue(target: Record<string, unknown>, path: string, value: unknown): void {
   const parts = path.split('.');
   let current: Record<string, unknown> = target;
   for (let i = 0; i < parts.length - 1; i++) {
@@ -65,40 +75,7 @@ function setNested(target: Record<string, unknown>, path: string, value: unknown
   current[leaf] = value;
 }
 
-function applyEnvOverrides(target: Record<string, unknown>, specs: readonly EnvSpec[]): void {
-  for (const spec of specs) {
-    const envKey = envVarNameFromPath(spec.path);
-    const raw = process.env[envKey];
-    if (raw === undefined) continue;
-    const parsedValue = parseEnvValue(envKey, raw, spec.type);
-    setNested(target, spec.path, parsedValue);
-  }
-}
-
-function applyLegacyGlobalLoggingEnvOverrides(target: Record<string, unknown>): void {
-  const nextLogging = process.env.TAKT_LOGGING;
-  const nextLoggingLevel = process.env.TAKT_LOGGING_LEVEL;
-  const legacyLogLevel = process.env.TAKT_LOG_LEVEL;
-  if (legacyLogLevel !== undefined && nextLoggingLevel === undefined && nextLogging === undefined) {
-    console.warn('Deprecated: "TAKT_LOG_LEVEL" is deprecated. Use "TAKT_LOGGING_LEVEL" instead.');
-    setNested(target, 'logging.level', parseEnvValue('TAKT_LOG_LEVEL', legacyLogLevel, 'string'));
-  }
-
-  const nextLoggingProviderEvents = process.env.TAKT_LOGGING_PROVIDER_EVENTS;
-  const legacyProviderEvents = process.env.TAKT_OBSERVABILITY_PROVIDER_EVENTS;
-  if (legacyProviderEvents !== undefined && nextLoggingProviderEvents === undefined && nextLogging === undefined) {
-    console.warn(
-      'Deprecated: "TAKT_OBSERVABILITY_PROVIDER_EVENTS" is deprecated. Use "TAKT_LOGGING_PROVIDER_EVENTS" instead.',
-    );
-    setNested(
-      target,
-      'logging.provider_events',
-      parseEnvValue('TAKT_OBSERVABILITY_PROVIDER_EVENTS', legacyProviderEvents, 'boolean'),
-    );
-  }
-}
-
-const GLOBAL_ENV_SPECS: readonly EnvSpec[] = [
+export const GLOBAL_ENV_SPECS: readonly EnvSpec[] = [
   { path: 'language', type: 'string' },
   { path: 'provider', type: 'string' },
   { path: 'model', type: 'string' },
@@ -131,11 +108,7 @@ const GLOBAL_ENV_SPECS: readonly EnvSpec[] = [
   { path: 'cursor_api_key', type: 'string' },
   { path: 'bookmarks_file', type: 'string' },
   { path: 'piece_categories_file', type: 'string' },
-  { path: 'provider_options', type: 'json' },
-  { path: 'provider_options.codex.network_access', type: 'boolean' },
-  { path: 'provider_options.opencode.network_access', type: 'boolean' },
-  { path: 'provider_options.claude.sandbox.allow_unsandboxed_commands', type: 'boolean' },
-  { path: 'provider_options.claude.sandbox.excluded_commands', type: 'json' },
+  ...PROVIDER_OPTIONS_ENV_SPECS,
   { path: 'provider_profiles', type: 'json' },
   { path: 'runtime', type: 'json' },
   { path: 'runtime.prepare', type: 'json' },
@@ -163,7 +136,7 @@ const GLOBAL_ENV_SPECS: readonly EnvSpec[] = [
   { path: 'base_branch', type: 'string' },
 ];
 
-const PROJECT_ENV_SPECS: readonly EnvSpec[] = [
+export const PROJECT_ENV_SPECS: readonly EnvSpec[] = [
   { path: 'provider', type: 'string' },
   { path: 'model', type: 'string' },
   { path: 'concurrency', type: 'number' },
@@ -180,11 +153,7 @@ const PROJECT_ENV_SPECS: readonly EnvSpec[] = [
   { path: 'analytics.enabled', type: 'boolean' },
   { path: 'analytics.events_path', type: 'string' },
   { path: 'analytics.retention_days', type: 'number' },
-  { path: 'provider_options', type: 'json' },
-  { path: 'provider_options.codex.network_access', type: 'boolean' },
-  { path: 'provider_options.opencode.network_access', type: 'boolean' },
-  { path: 'provider_options.claude.sandbox.allow_unsandboxed_commands', type: 'boolean' },
-  { path: 'provider_options.claude.sandbox.excluded_commands', type: 'json' },
+  ...PROVIDER_OPTIONS_ENV_SPECS,
   { path: 'provider_profiles', type: 'json' },
   { path: 'base_branch', type: 'string' },
   { path: 'piece_runtime_prepare', type: 'json' },
@@ -201,11 +170,19 @@ const PROJECT_ENV_SPECS: readonly EnvSpec[] = [
   { path: 'piece_mcp_servers.http', type: 'boolean' },
 ];
 
-export function applyGlobalConfigEnvOverrides(target: Record<string, unknown>): void {
-  applyEnvOverrides(target, GLOBAL_ENV_SPECS);
-  applyLegacyGlobalLoggingEnvOverrides(target);
-}
-
-export function applyProjectConfigEnvOverrides(target: Record<string, unknown>): void {
-  applyEnvOverrides(target, PROJECT_ENV_SPECS);
-}
+export const GLOBAL_LEGACY_ENV_SPECS: readonly LegacyEnvSpec[] = [
+  {
+    env: 'TAKT_LOG_LEVEL',
+    path: 'logging.level',
+    type: 'string',
+    blockedBy: ['TAKT_LOGGING', 'TAKT_LOGGING_LEVEL'],
+    warning: 'Deprecated: "TAKT_LOG_LEVEL" is deprecated. Use "TAKT_LOGGING_LEVEL" instead.',
+  },
+  {
+    env: 'TAKT_OBSERVABILITY_PROVIDER_EVENTS',
+    path: 'logging.provider_events',
+    type: 'boolean',
+    blockedBy: ['TAKT_LOGGING', 'TAKT_LOGGING_PROVIDER_EVENTS'],
+    warning: 'Deprecated: "TAKT_OBSERVABILITY_PROVIDER_EVENTS" is deprecated. Use "TAKT_LOGGING_PROVIDER_EVENTS" instead.',
+  },
+];

@@ -34,6 +34,8 @@ export type {
 } from '../../shared/types/provider.js';
 
 export type ProviderOptionsSource = 'env' | 'project' | 'global' | 'default';
+export type ProviderOptionsTraceOrigin = 'env' | 'cli' | 'local' | 'global' | 'default';
+export type ProviderOptionsOriginResolver = (path: string) => ProviderOptionsTraceOrigin;
 
 export interface PermissionRequest {
   toolName: string;
@@ -198,6 +200,8 @@ export interface PieceEngineOptions {
   providerOptions?: MovementProviderOptions;
   /** Source layer for resolved provider options */
   providerOptionsSource?: ProviderOptionsSource;
+  /** Nested origin resolver for provider options traced-config values */
+  providerOptionsOriginResolver?: ProviderOptionsOriginResolver;
   /** Per-persona provider and model overrides (e.g., { coder: { provider: 'codex', model: 'o3-mini' } }) */
   personaProviders?: Record<string, PersonaProviderEntry>;
   /** Resolved provider permission profiles */

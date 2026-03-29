@@ -3,44 +3,16 @@ import type { PieceMovement, PieceState, Language } from '../../models/types.js'
 import type { MovementProviderOptions } from '../../models/piece-types.js';
 import type { RunAgentOptions } from '../../../agents/runner.js';
 import type { PhaseRunnerContext } from '../phase-runner.js';
-import type { PieceEngineOptions, PhaseName, MovementProviderInfo, PhasePromptParts, JudgeStageEntry } from '../types.js';
+import { resolveEffectiveProviderOptions } from '../../../infra/config/providerOptions.js';
+import type {
+  PieceEngineOptions,
+  PhaseName,
+  MovementProviderInfo,
+  PhasePromptParts,
+  JudgeStageEntry,
+} from '../types.js';
 import { buildSessionKey } from '../session-key.js';
 import { resolveMovementProviderModel } from '../provider-resolution.js';
-
-function mergeProviderOptions(
-  ...layers: (MovementProviderOptions | undefined)[]
-): MovementProviderOptions | undefined {
-  const result: MovementProviderOptions = {};
-  for (const layer of layers) {
-    if (!layer) continue;
-    if (layer.codex) {
-      result.codex = { ...result.codex, ...layer.codex };
-    }
-    if (layer.opencode) {
-      result.opencode = { ...result.opencode, ...layer.opencode };
-    }
-    if (layer.claude?.sandbox || layer.claude?.allowedTools) {
-      result.claude = {
-        sandbox: layer.claude.sandbox
-          ? { ...result.claude?.sandbox, ...layer.claude.sandbox }
-          : result.claude?.sandbox,
-        allowedTools: layer.claude.allowedTools ?? result.claude?.allowedTools,
-      };
-    }
-  }
-  return Object.keys(result).length > 0 ? result : undefined;
-}
-
-function resolveMovementProviderOptions(
-  source: 'env' | 'project' | 'global' | 'default' | undefined,
-  resolvedConfigOptions: MovementProviderOptions | undefined,
-  movementOptions: MovementProviderOptions | undefined,
-): MovementProviderOptions | undefined {
-  if (source === 'env' || source === 'project') {
-    return mergeProviderOptions(movementOptions, resolvedConfigOptions);
-  }
-  return mergeProviderOptions(resolvedConfigOptions, movementOptions);
-}
 
 export class OptionsBuilder {
   constructor(
@@ -89,8 +61,9 @@ export class OptionsBuilder {
         requiredPermissionMode: step.requiredPermissionMode,
         providerProfiles: this.engineOptions.providerProfiles,
       },
-      providerOptions: mergedProviderOptions ?? resolveMovementProviderOptions(
+      providerOptions: mergedProviderOptions ?? resolveEffectiveProviderOptions(
         this.engineOptions.providerOptionsSource,
+        this.engineOptions.providerOptionsOriginResolver,
         this.engineOptions.providerOptions,
         step.providerOptions,
       ),
@@ -111,8 +84,9 @@ export class OptionsBuilder {
 
   /** Build RunAgentOptions for Phase 1 (main execution) */
   buildAgentOptions(step: PieceMovement): RunAgentOptions {
-    const mergedProviderOptions = resolveMovementProviderOptions(
+    const mergedProviderOptions = resolveEffectiveProviderOptions(
       this.engineOptions.providerOptionsSource,
+      this.engineOptions.providerOptionsOriginResolver,
       this.engineOptions.providerOptions,
       step.providerOptions,
     );
