@@ -76,15 +76,37 @@ function getNearestTraceEntry(
   return undefined;
 }
 
-function getOpaqueAncestorTraceEntry(
+function getOriginPrecedence(origin: TracedOrigin): number {
+  if (origin === 'cli') return 4;
+  if (origin === 'env') return 3;
+  if (origin === 'local') return 2;
+  if (origin === 'global') return 1;
+  return 0;
+}
+
+function shouldBlockDescendantTraceEntry(
+  ancestor: TracedValue<unknown>,
+  descendant: TracedValue<unknown> | undefined,
+): boolean {
+  if (ancestor.origin !== 'env' && ancestor.origin !== 'cli') {
+    return false;
+  }
+  if (!descendant || descendant.origin === 'default') {
+    return true;
+  }
+  return getOriginPrecedence(ancestor.origin) > getOriginPrecedence(descendant.origin);
+}
+
+function getBlockingAncestorTraceEntry(
   traceEntries: ReadonlyMap<string, TracedValue<unknown>>,
   path: string,
 ): TraceEntry | undefined {
+  const descendant = traceEntries.get(path);
   const segments = path.split('.');
   for (let index = 1; index < segments.length; index += 1) {
     const ancestorKey = segments.slice(0, index).join('.');
     const traced = traceEntries.get(ancestorKey);
-    if (traced?.origin === 'env' || traced?.origin === 'cli') {
+    if (traced && shouldBlockDescendantTraceEntry(traced, descendant)) {
       return { traced };
     }
   }
@@ -105,7 +127,7 @@ function buildRawConfig(
     if (!traced || traced.origin === 'default') {
       continue;
     }
-    if (getOpaqueAncestorTraceEntry(traceEntries, key)) {
+    if (getBlockingAncestorTraceEntry(traceEntries, key)) {
       continue;
     }
     setNestedConfigValue(rawConfig, key, traced.value);
@@ -156,9 +178,9 @@ export function loadConfigTrace(options: LoadConfigTraceOptions): {
       if (legacy) {
         return legacy.traced.origin;
       }
-      const opaqueAncestor = getOpaqueAncestorTraceEntry(traceEntries, path);
-      if (opaqueAncestor) {
-        return opaqueAncestor.traced.origin;
+      const blockingAncestor = getBlockingAncestorTraceEntry(traceEntries, path);
+      if (blockingAncestor) {
+        return blockingAncestor.traced.origin;
       }
       return getNearestTraceEntry(traceEntries, path)?.traced.origin ?? 'default';
     },

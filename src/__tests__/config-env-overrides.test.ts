@@ -151,6 +151,76 @@ describe('config traced env overrides', () => {
     });
   });
 
+  it('global config は root JSON env と leaf env を併用したとき logging.level で leaf を優先する', () => {
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(globalConfigPath, 'language: ja\n', 'utf-8');
+    process.env.TAKT_LOGGING = JSON.stringify({
+      level: 'info',
+    });
+    process.env.TAKT_LOGGING_LEVEL = 'warn';
+
+    const config = loadGlobalConfig();
+
+    expect(config.logging).toEqual({
+      level: 'warn',
+    });
+  });
+
+  it('global config は root JSON env と leaf env を併用したとき logging.debug で leaf を優先する', () => {
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(globalConfigPath, 'language: ja\n', 'utf-8');
+    process.env.TAKT_LOGGING = JSON.stringify({
+      debug: false,
+    });
+    process.env.TAKT_LOGGING_DEBUG = 'true';
+
+    const config = loadGlobalConfig();
+
+    expect(config.logging).toEqual({
+      debug: true,
+    });
+  });
+
+  it('project config は root JSON env と leaf env を併用したとき provider_options で leaf を優先する', () => {
+    const projectDir = join(testRoot, 'project-provider-options-root-and-leaf');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), 'provider: codex\n', 'utf-8');
+    process.env.TAKT_PROVIDER_OPTIONS = JSON.stringify({
+      codex: {
+        network_access: false,
+        reasoning_effort: 'low',
+      },
+    });
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS = 'true';
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.providerOptions).toEqual({
+      codex: {
+        networkAccess: true,
+        reasoningEffort: 'low',
+      },
+    });
+  });
+
+  it('project config は root JSON env と leaf env を併用したとき piece_runtime_prepare で leaf を優先する', () => {
+    const projectDir = join(testRoot, 'project-piece-runtime-prepare-root-and-leaf');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), 'provider: codex\n', 'utf-8');
+    process.env.TAKT_PIECE_RUNTIME_PREPARE = JSON.stringify({
+      custom_scripts: false,
+    });
+    process.env.TAKT_PIECE_RUNTIME_PREPARE_CUSTOM_SCRIPTS = 'true';
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.pieceRuntimePrepare).toEqual({
+      customScripts: true,
+    });
+  });
+
   it('project config は非許可の provider_options env を無視する', () => {
     const projectDir = join(testRoot, 'project-non-whitelist');
     const configDir = getProjectConfigDir(projectDir);
