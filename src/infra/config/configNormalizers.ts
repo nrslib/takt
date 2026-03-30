@@ -242,8 +242,18 @@ export function denormalizeProviderOptions(
   }
 
   const raw: Record<string, unknown> = {};
-  if (providerOptions.codex?.networkAccess !== undefined) {
-    raw.codex = { network_access: providerOptions.codex.networkAccess };
+  if (
+    providerOptions.codex?.networkAccess !== undefined
+    || providerOptions.codex?.reasoningEffort !== undefined
+  ) {
+    raw.codex = {
+      ...(providerOptions.codex.networkAccess !== undefined
+        ? { network_access: providerOptions.codex.networkAccess }
+        : {}),
+      ...(providerOptions.codex.reasoningEffort !== undefined
+        ? { reasoning_effort: providerOptions.codex.reasoningEffort }
+        : {}),
+    };
   }
   if (providerOptions.opencode?.networkAccess !== undefined) {
     raw.opencode = { network_access: providerOptions.opencode.networkAccess };
@@ -252,6 +262,9 @@ export function denormalizeProviderOptions(
     const claude: Record<string, unknown> = {};
     if (providerOptions.claude.allowedTools !== undefined) {
       claude.allowed_tools = providerOptions.claude.allowedTools;
+    }
+    if (providerOptions.claude.effort !== undefined) {
+      claude.effort = providerOptions.claude.effort;
     }
     const sandbox: Record<string, unknown> = {};
     if (providerOptions.claude.sandbox?.allowUnsandboxedCommands !== undefined) {

@@ -39,4 +39,50 @@ describe('resolveEffectiveProviderOptions', () => {
       },
     });
   });
+
+  it('env origin は codex.reasoningEffort と claude.effort にも適用される', () => {
+    const result = resolveEffectiveProviderOptions(
+      'project',
+      (path: string) => {
+        if (path === 'codex.reasoningEffort' || path === 'claude.effort') {
+          return 'env';
+        }
+        return 'local';
+      },
+      {
+        codex: { reasoningEffort: 'high' },
+        claude: { effort: 'medium' },
+      },
+      {
+        codex: { reasoningEffort: 'low' },
+        claude: { effort: 'low' },
+      },
+    );
+
+    expect(result).toEqual({
+      codex: { reasoningEffort: 'high' },
+      claude: { effort: 'medium' },
+    });
+  });
+
+  it('空 sandbox object は movement の leaf を潰さない', () => {
+    const result = resolveEffectiveProviderOptions(
+      'project',
+      (path: string) => (path === 'claude.sandbox' ? 'env' : 'local'),
+      {
+        claude: { sandbox: {} },
+      },
+      {
+        claude: { sandbox: { excludedCommands: ['./gradlew'] } },
+      },
+    );
+
+    expect(result).toEqual({
+      claude: {
+        sandbox: {
+          excludedCommands: ['./gradlew'],
+        },
+      },
+    });
+  });
 });

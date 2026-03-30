@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { stringify as stringifyYaml } from 'yaml';
 import type { SchemaShape, TracedValue } from 'traced-config';
@@ -51,6 +52,25 @@ function serializeSchema(schema: SchemaShape): Record<string, SerializedSchemaEn
   return serialized;
 }
 
+function coerceJsonEnvValue(
+  key: string,
+  format: SerializedSchemaFormat,
+  traced: TracedValue<unknown>,
+): TracedValue<unknown> {
+  if (format !== 'json' || (traced.origin !== 'env' && traced.origin !== 'cli') || typeof traced.value !== 'string') {
+    return traced;
+  }
+
+  try {
+    return {
+      ...traced,
+      value: JSON.parse(traced.value),
+    };
+  } catch {
+    throw new Error(`Invalid JSON override for ${key}`);
+  }
+}
+
 function hasSchemaCollision(schemaKeys: readonly string[], key: string): boolean {
   return schemaKeys.some((candidate) =>
     candidate === key || candidate.startsWith(`${key}.`) || key.startsWith(`${candidate}.`),
@@ -72,9 +92,10 @@ function partitionSchema(schema: SchemaShape): SchemaShape[] {
 
 const TRACED_CONFIG_RUNTIME_SCRIPT = `
 import { readFileSync } from 'node:fs';
-import { tracedConfig } from 'traced-config';
 
 const input = JSON.parse(readFileSync(0, 'utf8'));
+const tracedConfigModuleUrl = import.meta.resolve('traced-config');
+const { tracedConfig } = await import(tracedConfigModuleUrl);
 const traceEntries = [];
 for (const schemaGroup of input.schemaGroups) {
   const schema = {};
@@ -109,6 +130,8 @@ for (const schemaGroup of input.schemaGroups) {
 process.stdout.write(JSON.stringify({ traceEntries }));
 `;
 
+const TAKT_PACKAGE_ROOT = dirname(fileURLToPath(new URL('../../../../package.json', import.meta.url)));
+
 export function loadTraceEntriesViaRuntime(
   schema: SchemaShape,
   fileOrigin: 'global' | 'local',
@@ -133,7 +156,7 @@ export function loadTraceEntriesViaRuntime(
       process.execPath,
       ['--input-type=module', '-e', TRACED_CONFIG_RUNTIME_SCRIPT],
       {
-        cwd: process.cwd(),
+        cwd: TAKT_PACKAGE_ROOT,
         env: process.env,
         input: JSON.stringify(input),
         encoding: 'utf-8',
@@ -142,7 +165,11 @@ export function loadTraceEntriesViaRuntime(
     const result = JSON.parse(stdout) as RuntimeLoadOutput;
     const traceEntries = new Map<string, TracedValue<unknown>>();
     for (const [key, traced] of result.traceEntries) {
-      traceEntries.set(key, traced);
+      const entry = input.schemaGroups.find((group) => key in group)?.[key];
+      if (!entry) {
+        throw new Error(`Missing traced-config schema entry for ${key}`);
+      }
+      traceEntries.set(key, coerceJsonEnvValue(key, entry.format, traced));
     }
     return traceEntries;
   } finally {

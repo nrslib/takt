@@ -1,4 +1,8 @@
-import type { MovementProviderOptions } from '../../core/models/piece-types.js';
+import type {
+  ClaudeEffort,
+  CodexReasoningEffort,
+  MovementProviderOptions,
+} from '../../core/models/piece-types.js';
 import type {
   ProviderOptionsOriginResolver,
   ProviderOptionsSource,
@@ -8,12 +12,14 @@ import type {
 type RawProviderOptions = {
   codex?: {
     network_access?: boolean;
+    reasoning_effort?: CodexReasoningEffort;
   };
   opencode?: {
     network_access?: boolean;
   };
   claude?: {
     allowed_tools?: string[];
+    effort?: ClaudeEffort;
     sandbox?: {
       allow_unsandboxed_commands?: boolean;
       excluded_commands?: string[];
@@ -31,19 +37,33 @@ export function normalizeProviderOptions(
 
   const options = raw as RawProviderOptions;
   const result: MovementProviderOptions = {};
-  if (options.codex?.network_access !== undefined) {
-    result.codex = { networkAccess: options.codex.network_access };
+  if (options.codex?.network_access !== undefined || options.codex?.reasoning_effort !== undefined) {
+    result.codex = {
+      ...(options.codex.network_access !== undefined
+        ? { networkAccess: options.codex.network_access }
+        : {}),
+      ...(options.codex.reasoning_effort !== undefined
+        ? { reasoningEffort: options.codex.reasoning_effort }
+        : {}),
+    };
   }
   if (options.opencode?.network_access !== undefined) {
     result.opencode = { networkAccess: options.opencode.network_access };
   }
-  if (options.claude?.allowed_tools !== undefined || options.claude?.sandbox) {
+  if (
+    options.claude?.allowed_tools !== undefined
+    || options.claude?.effort !== undefined
+    || options.claude?.sandbox
+  ) {
     const claude: NonNullable<MovementProviderOptions['claude']> = {};
     if (options.claude.allowed_tools !== undefined) {
       claude.allowedTools = options.claude.allowed_tools;
     }
+    if (options.claude.effort !== undefined) {
+      claude.effort = options.claude.effort;
+    }
     if (options.claude.sandbox) {
-      claude.sandbox = {
+      const sandbox = {
         ...(options.claude.sandbox.allow_unsandboxed_commands !== undefined
           ? { allowUnsandboxedCommands: options.claude.sandbox.allow_unsandboxed_commands }
           : {}),
@@ -51,8 +71,13 @@ export function normalizeProviderOptions(
           ? { excludedCommands: options.claude.sandbox.excluded_commands }
           : {}),
       };
+      if (Object.keys(sandbox).length > 0) {
+        claude.sandbox = sandbox;
+      }
     }
-    result.claude = claude;
+    if (Object.keys(claude).length > 0) {
+      result.claude = claude;
+    }
   }
   return Object.keys(result).length > 0 ? result : undefined;
 }
@@ -76,6 +101,9 @@ export function mergeProviderOptions(
         ...result.claude,
         ...(layer.claude.allowedTools !== undefined
           ? { allowedTools: layer.claude.allowedTools }
+          : {}),
+        ...(layer.claude.effort !== undefined
+          ? { effort: layer.claude.effort }
           : {}),
         ...(layer.claude.sandbox
           ? { sandbox: { ...result.claude?.sandbox, ...layer.claude.sandbox } }
@@ -161,15 +189,16 @@ export function resolveEffectiveProviderOptions(
   const claude = {
     sandbox: claudeSandbox.allowUnsandboxedCommands !== undefined || claudeSandbox.excludedCommands !== undefined
       ? claudeSandbox
-      : selectProviderValue(
-        resolvedConfigOptions.claude?.sandbox,
-        movementOptions.claude?.sandbox,
-        resolveProviderOptionOrigin(originResolver, 'claude.sandbox', source),
-      ),
+      : undefined,
     allowedTools: selectProviderValue(
       resolvedConfigOptions.claude?.allowedTools,
       movementOptions.claude?.allowedTools,
       resolveProviderOptionOrigin(originResolver, 'claude.allowedTools', source),
+    ),
+    effort: selectProviderValue(
+      resolvedConfigOptions.claude?.effort,
+      movementOptions.claude?.effort,
+      resolveProviderOptionOrigin(originResolver, 'claude.effort', source),
     ),
   };
 
@@ -178,6 +207,11 @@ export function resolveEffectiveProviderOptions(
     movementOptions.codex?.networkAccess,
     resolveProviderOptionOrigin(originResolver, 'codex.networkAccess', source),
   );
+  const codexReasoningEffort = selectProviderValue(
+    resolvedConfigOptions.codex?.reasoningEffort,
+    movementOptions.codex?.reasoningEffort,
+    resolveProviderOptionOrigin(originResolver, 'codex.reasoningEffort', source),
+  );
   const opencodeNetworkAccess = selectProviderValue(
     resolvedConfigOptions.opencode?.networkAccess,
     movementOptions.opencode?.networkAccess,
@@ -185,9 +219,18 @@ export function resolveEffectiveProviderOptions(
   );
 
   const result: MovementProviderOptions = {
-    codex: codexNetworkAccess !== undefined ? { networkAccess: codexNetworkAccess } : undefined,
+    codex:
+      codexNetworkAccess !== undefined || codexReasoningEffort !== undefined
+        ? {
+            ...(codexNetworkAccess !== undefined ? { networkAccess: codexNetworkAccess } : {}),
+            ...(codexReasoningEffort !== undefined ? { reasoningEffort: codexReasoningEffort } : {}),
+          }
+        : undefined,
     opencode: opencodeNetworkAccess !== undefined ? { networkAccess: opencodeNetworkAccess } : undefined,
-    claude: claude.sandbox !== undefined || claude.allowedTools !== undefined ? claude : undefined,
+    claude:
+      claude.sandbox !== undefined || claude.allowedTools !== undefined || claude.effort !== undefined
+        ? claude
+        : undefined,
   };
 
   return result.codex || result.opencode || result.claude ? result : undefined;

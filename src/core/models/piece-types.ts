@@ -78,6 +78,7 @@ export type McpServerConfig = McpStdioServerConfig | McpSseServerConfig | McpHtt
 export interface CodexProviderOptions {
   /** Enable network access for Codex workspace-write sandbox */
   networkAccess?: boolean;
+  reasoningEffort?: CodexReasoningEffort;
 }
 
 /** OpenCode provider-specific options */
@@ -89,6 +90,10 @@ export interface OpenCodeProviderOptions {
 /** Runtime prepare preset identifiers */
 export const RUNTIME_PREPARE_PRESETS = ['gradle', 'node'] as const;
 export type RuntimePreparePreset = (typeof RUNTIME_PREPARE_PRESETS)[number];
+export const CODEX_REASONING_EFFORT_VALUES = ['minimal', 'low', 'medium', 'high', 'xhigh'] as const;
+export type CodexReasoningEffort = (typeof CODEX_REASONING_EFFORT_VALUES)[number];
+export const CLAUDE_EFFORT_VALUES = ['low', 'medium', 'high', 'max'] as const;
+export type ClaudeEffort = (typeof CLAUDE_EFFORT_VALUES)[number];
 const RUNTIME_PREPARE_PRESET_SET: ReadonlySet<string> = new Set(RUNTIME_PREPARE_PRESETS);
 export function isRuntimePreparePreset(entry: string): entry is RuntimePreparePreset {
   return RUNTIME_PREPARE_PRESET_SET.has(entry);
@@ -113,6 +118,7 @@ export interface ClaudeSandboxSettings {
 /** Claude provider-specific options */
 export interface ClaudeProviderOptions {
   allowedTools?: string[];
+  effort?: ClaudeEffort;
   sandbox?: ClaudeSandboxSettings;
 }
 

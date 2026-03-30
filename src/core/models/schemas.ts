@@ -10,7 +10,11 @@ import { McpServersSchema } from './mcp-schemas.js';
 import { INTERACTIVE_MODES } from './interactive-mode.js';
 import { STATUS_VALUES } from './status.js';
 import { VCS_PROVIDER_TYPES } from './vcs-types.js';
-import { RUNTIME_PREPARE_PRESETS } from './piece-types.js';
+import {
+  CLAUDE_EFFORT_VALUES,
+  CODEX_REASONING_EFFORT_VALUES,
+  RUNTIME_PREPARE_PRESETS,
+} from './piece-types.js';
 
 export { McpServerConfigSchema, McpServersSchema } from './mcp-schemas.js';
 
@@ -61,12 +65,14 @@ export const ClaudeSandboxSchema = z.object({
 export const MovementProviderOptionsSchema = z.object({
   codex: z.object({
     network_access: z.boolean().optional(),
+    reasoning_effort: z.enum(CODEX_REASONING_EFFORT_VALUES).optional(),
   }).optional(),
   opencode: z.object({
     network_access: z.boolean().optional(),
   }).optional(),
   claude: z.object({
     allowed_tools: z.array(z.string()).optional(),
+    effort: z.enum(CLAUDE_EFFORT_VALUES).optional(),
     sandbox: ClaudeSandboxSchema,
   }).optional(),
 }).optional();

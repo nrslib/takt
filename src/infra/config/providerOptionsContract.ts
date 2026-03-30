@@ -4,7 +4,9 @@ import type { EnvSpec } from './env/config-env-overrides.js';
 const PROVIDER_OPTIONS_ENV_SPEC_ENTRIES = [
   { path: 'provider_options', type: 'json' },
   { path: 'provider_options.codex.network_access', type: 'boolean' },
+  { path: 'provider_options.codex.reasoning_effort', type: 'string' },
   { path: 'provider_options.opencode.network_access', type: 'boolean' },
+  { path: 'provider_options.claude.effort', type: 'string' },
   { path: 'provider_options.claude.sandbox.allow_unsandboxed_commands', type: 'boolean' },
   { path: 'provider_options.claude.sandbox.excluded_commands', type: 'json' },
 ] as const satisfies readonly EnvSpec[];
@@ -13,10 +15,12 @@ const PROVIDER_OPTIONS_TRACE_PATH_ENTRIES = [
   'provider_options',
   'provider_options.codex',
   'provider_options.codex.network_access',
+  'provider_options.codex.reasoning_effort',
   'provider_options.opencode',
   'provider_options.opencode.network_access',
   'provider_options.claude',
   'provider_options.claude.allowed_tools',
+  'provider_options.claude.effort',
   'provider_options.claude.sandbox',
   'provider_options.claude.sandbox.allow_unsandboxed_commands',
   'provider_options.claude.sandbox.excluded_commands',
@@ -24,8 +28,10 @@ const PROVIDER_OPTIONS_TRACE_PATH_ENTRIES = [
 
 const PROVIDER_OPTIONS_INTERNAL_PATH_ENTRIES = [
   'codex.networkAccess',
+  'codex.reasoningEffort',
   'opencode.networkAccess',
   'claude.allowedTools',
+  'claude.effort',
   'claude.sandbox.allowUnsandboxedCommands',
   'claude.sandbox.excludedCommands',
 ] as const;

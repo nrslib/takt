@@ -39,6 +39,7 @@ export class ClaudeClient {
       allowedTools: options.allowedTools,
       mcpServers: options.mcpServers,
       model: options.model,
+      effort: options.effort,
       maxTurns: options.maxTurns,
       systemPrompt: options.systemPrompt,
       agents: options.agents,
@@ -128,19 +129,7 @@ export class ClaudeClient {
   ): Promise<AgentResponse> {
     const fullPrompt = `/${skillName}\n\n${prompt}`;
     const spawnOptions: ClaudeSpawnOptions = {
-      cwd: options.cwd,
-      abortSignal: options.abortSignal,
-      sessionId: options.sessionId,
-      allowedTools: options.allowedTools,
-      mcpServers: options.mcpServers,
-      model: options.model,
-      maxTurns: options.maxTurns,
-      permissionMode: options.permissionMode,
-      onStream: options.onStream,
-      onPermissionRequest: options.onPermissionRequest,
-      onAskUserQuestion: options.onAskUserQuestion,
-      bypassPermissions: options.bypassPermissions,
-      anthropicApiKey: options.anthropicApiKey,
+      ...ClaudeClient.toSpawnOptions(options),
     };
 
     const result = await executeClaudeCli(fullPrompt, spawnOptions);

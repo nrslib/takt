@@ -61,13 +61,14 @@ export class SdkOptionsBuilder {
     };
 
     if (this.options.model) sdkOptions.model = this.options.model;
+    if (this.options.effort) sdkOptions.effort = this.options.effort;
     if (this.options.maxTurns != null) sdkOptions.maxTurns = this.options.maxTurns;
     if (this.options.allowedTools) sdkOptions.allowedTools = this.options.allowedTools;
     if (this.options.agents) sdkOptions.agents = this.options.agents;
     if (this.options.mcpServers) sdkOptions.mcpServers = this.options.mcpServers;
     if (this.options.systemPrompt) sdkOptions.systemPrompt = this.options.systemPrompt;
     if (this.options.outputSchema) {
-      (sdkOptions as Record<string, unknown>).outputFormat = {
+      sdkOptions.outputFormat = {
         type: 'json_schema',
         schema: this.options.outputSchema,
       };

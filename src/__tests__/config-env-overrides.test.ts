@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -22,16 +22,40 @@ const { loadGlobalConfig, invalidateGlobalConfigCache } = await import('../infra
 const { loadProjectConfig } = await import('../infra/config/project/projectConfig.js');
 const { getProjectConfigDir } = await import('../infra/config/paths.js');
 
-function resetEnv(): void {
-  for (const key of Object.keys(process.env)) {
+let taktEnvSnapshot: Record<string, string | undefined>;
+
+function snapshotTaktEnv(): Record<string, string | undefined> {
+  const snapshot: Record<string, string | undefined> = {};
+  for (const [key, value] of Object.entries(process.env)) {
     if (key.startsWith('TAKT_')) {
+      snapshot[key] = value;
+    }
+  }
+  return snapshot;
+}
+
+function restoreTaktEnv(snapshot: Record<string, string | undefined>): void {
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith('TAKT_') && !(key in snapshot)) {
       delete process.env[key];
     }
   }
+
+  for (const [key, value] of Object.entries(snapshot)) {
+    if (value === undefined) {
+      delete process.env[key];
+      continue;
+    }
+    process.env[key] = value;
+  }
 }
 
+beforeEach(() => {
+  taktEnvSnapshot = snapshotTaktEnv();
+});
+
 afterEach(() => {
-  resetEnv();
+  restoreTaktEnv(taktEnvSnapshot);
   invalidateGlobalConfigCache();
   rmSync(testRoot, { recursive: true, force: true });
 });
@@ -70,6 +94,99 @@ describe('config traced env overrides', () => {
     expect(config.providerOptions).toEqual({
       codex: { networkAccess: true },
     });
+  });
+
+  it('project config は effort 系の env override を traced-config 経由で反映する', () => {
+    const projectDir = join(testRoot, 'project-effort-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      [
+        'provider_options:',
+        '  codex:',
+        '    reasoning_effort: low',
+        '  claude:',
+        '    effort: low',
+      ].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_REASONING_EFFORT = 'xhigh';
+    process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_EFFORT = 'max';
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.providerOptions).toEqual({
+      codex: { reasoningEffort: 'xhigh' },
+      claude: { effort: 'max' },
+    });
+  });
+
+  it('project config は root JSON env で subtree 全体を置き換える', () => {
+    const projectDir = join(testRoot, 'project-root-json');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      [
+        'provider_options:',
+        '  codex:',
+        '    network_access: false',
+        '  claude:',
+        '    allowed_tools:',
+        '      - Read',
+      ].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS = JSON.stringify({
+      claude: {
+        allowed_tools: ['Bash'],
+      },
+    });
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.providerOptions).toEqual({
+      claude: { allowedTools: ['Bash'] },
+    });
+  });
+
+  it('project config は非許可の provider_options env を無視する', () => {
+    const projectDir = join(testRoot, 'project-non-whitelist');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      ['provider_options:', '  claude:', '    allowed_tools:', '      - Read'].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_ALLOWED_TOOLS = '["Bash"]';
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.providerOptions).toEqual({
+      claude: { allowedTools: ['Read'] },
+    });
+  });
+
+  it('project config は不正な codex reasoning_effort env override を拒否する', () => {
+    const projectDir = join(testRoot, 'project-invalid-codex-effort-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), 'provider: claude\n', 'utf-8');
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_REASONING_EFFORT = 'extreme';
+
+    expect(() => loadProjectConfig(projectDir)).toThrow(/reasoning_effort/);
+  });
+
+  it('project config は不正な claude effort env override を拒否する', () => {
+    const projectDir = join(testRoot, 'project-invalid-claude-effort-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), 'provider: claude\n', 'utf-8');
+    process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_EFFORT = 'impossible';
+
+    expect(() => loadProjectConfig(projectDir)).toThrow(/effort/);
   });
 
   it('legacy env は警告付きで global logging に反映する', () => {

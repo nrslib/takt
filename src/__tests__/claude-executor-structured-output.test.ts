@@ -13,11 +13,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildSdkOptions } from '../infra/claude/options-builder.js';
 
 describe('SdkOptionsBuilder — outputFormat 変換', () => {
+  it('effort が SDK options に直接反映される', () => {
+    const sdkOptions = buildSdkOptions({ cwd: '/tmp', effort: 'medium' });
+
+    expect(sdkOptions.effort).toBe('medium');
+  });
+
   it('outputSchema が outputFormat に変換される', () => {
     const schema = { type: 'object', properties: { step: { type: 'integer' } } };
     const sdkOptions = buildSdkOptions({ cwd: '/tmp', outputSchema: schema });
 
-    expect((sdkOptions as Record<string, unknown>).outputFormat).toEqual({
+    expect(sdkOptions.outputFormat).toEqual({
       type: 'json_schema',
       schema,
     });

@@ -17,6 +17,7 @@ function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
     allowedTools: options.allowedTools,
     mcpServers: options.mcpServers,
     model: options.model,
+    effort: options.providerOptions?.claude?.effort,
     maxTurns: options.maxTurns,
     permissionMode: options.permissionMode,
     onStream: options.onStream,

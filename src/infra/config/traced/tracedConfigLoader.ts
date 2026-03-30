@@ -76,6 +76,21 @@ function getNearestTraceEntry(
   return undefined;
 }
 
+function getOpaqueAncestorTraceEntry(
+  traceEntries: ReadonlyMap<string, TracedValue<unknown>>,
+  path: string,
+): TraceEntry | undefined {
+  const segments = path.split('.');
+  for (let index = 1; index < segments.length; index += 1) {
+    const ancestorKey = segments.slice(0, index).join('.');
+    const traced = traceEntries.get(ancestorKey);
+    if (traced?.origin === 'env' || traced?.origin === 'cli') {
+      return { traced };
+    }
+  }
+  return undefined;
+}
+
 function buildRawConfig(
   schemaKeys: readonly string[],
   traceEntries: ReadonlyMap<string, TracedValue<unknown>>,
@@ -88,6 +103,9 @@ function buildRawConfig(
   for (const key of keys) {
     const traced = traceEntries.get(key);
     if (!traced || traced.origin === 'default') {
+      continue;
+    }
+    if (getOpaqueAncestorTraceEntry(traceEntries, key)) {
       continue;
     }
     setNestedConfigValue(rawConfig, key, traced.value);
@@ -137,6 +155,10 @@ export function loadConfigTrace(options: LoadConfigTraceOptions): {
       const legacy = getLegacyNearestTraceEntry(legacyTraceEntries, path);
       if (legacy) {
         return legacy.traced.origin;
+      }
+      const opaqueAncestor = getOpaqueAncestorTraceEntry(traceEntries, path);
+      if (opaqueAncestor) {
+        return opaqueAncestor.traced.origin;
       }
       return getNearestTraceEntry(traceEntries, path)?.traced.origin ?? 'default';
     },

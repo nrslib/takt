@@ -48,6 +48,30 @@ describe('denormalizeProviderOptions', () => {
       claude: { allowed_tools: ['Read', 'Bash'] },
     });
   });
+
+  it('should persist effort keys in snake_case alongside existing provider options', () => {
+    const result = denormalizeProviderOptions({
+      codex: {
+        networkAccess: true,
+        reasoningEffort: 'high',
+      },
+      claude: {
+        allowedTools: ['Read'],
+        effort: 'medium',
+      },
+    });
+
+    expect(result).toEqual({
+      codex: {
+        network_access: true,
+        reasoning_effort: 'high',
+      },
+      claude: {
+        allowed_tools: ['Read'],
+        effort: 'medium',
+      },
+    });
+  });
 });
 
 describe('buildRawTaktProvidersOrThrow', () => {

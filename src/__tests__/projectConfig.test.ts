@@ -149,6 +149,30 @@ piece_overrides:
   });
 
   describe('migrated project-local fields', () => {
+    it('should fail fast when codex reasoning_effort is outside SDK enum', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      const configContent = [
+        'provider_options:',
+        '  codex:',
+        '    reasoning_effort: extreme',
+      ].join('\n');
+      writeFileSync(configPath, configContent, 'utf-8');
+
+      expect(() => loadProjectConfig(testDir)).toThrow(/reasoning_effort/);
+    });
+
+    it('should fail fast when claude effort is outside SDK enum', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      const configContent = [
+        'provider_options:',
+        '  claude:',
+        '    effort: impossible',
+      ].join('\n');
+      writeFileSync(configPath, configContent, 'utf-8');
+
+      expect(() => loadProjectConfig(testDir)).toThrow(/effort/);
+    });
+
     it('should load project-local fields from project config yaml', () => {
       const configPath = join(testDir, '.takt', 'config.yaml');
       const configContent = [

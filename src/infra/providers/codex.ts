@@ -30,6 +30,7 @@ function toCodexOptions(options: ProviderCallOptions): CodexCallOptions {
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
     model: options.model,
+    reasoningEffort: options.providerOptions?.codex?.reasoningEffort,
     permissionMode: options.permissionMode,
     networkAccess: options.providerOptions?.codex?.networkAccess,
     onStream: options.onStream,
