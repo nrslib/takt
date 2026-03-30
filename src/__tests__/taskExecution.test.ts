@@ -5,11 +5,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { TaskInfo } from '../infra/task/index.js';
 
-const { mockResolveTaskExecution, mockExecutePiece, mockLoadPieceByIdentifier, mockResolvePieceConfigValues, mockResolveProviderOptionsWithTrace, mockBuildBooleanTaskResult, mockBuildTaskResult, mockPersistTaskResult, mockPersistPrFailedTaskResult, mockPersistTaskError, mockPostExecutionFlow } =
+const { mockResolveTaskExecution, mockExecutePiece, mockLoadPieceByIdentifier, mockIsPiecePath, mockResolvePieceConfigValues, mockResolveProviderOptionsWithTrace, mockBuildBooleanTaskResult, mockBuildTaskResult, mockPersistTaskResult, mockPersistPrFailedTaskResult, mockPersistTaskError, mockPostExecutionFlow } =
   vi.hoisted(() => ({
     mockResolveTaskExecution: vi.fn(),
     mockExecutePiece: vi.fn(),
     mockLoadPieceByIdentifier: vi.fn(),
+    mockIsPiecePath: vi.fn(() => false),
     mockResolvePieceConfigValues: vi.fn(),
     mockResolveProviderOptionsWithTrace: vi.fn(),
     mockBuildBooleanTaskResult: vi.fn(),
@@ -43,7 +44,7 @@ vi.mock('../features/tasks/execute/postExecution.js', () => ({
 
 vi.mock('../infra/config/index.js', () => ({
   loadPieceByIdentifier: (...args: unknown[]) => mockLoadPieceByIdentifier(...args),
-  isPiecePath: () => false,
+  isPiecePath: (...args: unknown[]) => mockIsPiecePath(...args),
   resolvePieceConfigValues: (...args: unknown[]) => mockResolvePieceConfigValues(...args),
 }));
 
@@ -76,6 +77,7 @@ vi.mock('../shared/i18n/index.js', () => ({
 }));
 
 import { executeAndCompleteTask, executeTask } from '../features/tasks/execute/taskExecution.js';
+import { error, info } from '../shared/ui/index.js';
 
 const createTask = (name: string): TaskInfo => ({
   name,
@@ -93,6 +95,8 @@ const executeAndCompleteTaskWithoutPiece = executeAndCompleteTask as (
   executeOptions?: unknown,
   parallelOptions?: unknown,
 ) => Promise<boolean>;
+const mockError = vi.mocked(error);
+const mockInfo = vi.mocked(info);
 
 describe('executeAndCompleteTask', () => {
   beforeEach(() => {
@@ -102,6 +106,7 @@ describe('executeAndCompleteTask', () => {
       name: 'default',
       movements: [],
     });
+    mockIsPiecePath.mockReturnValue(false);
     mockResolvePieceConfigValues.mockReturnValue({
       language: 'en',
       provider: 'claude',
@@ -224,6 +229,52 @@ describe('executeAndCompleteTask', () => {
     };
     expect(pieceExecutionOptions?.provider).toBe('codex');
     expect(pieceExecutionOptions?.model).toBe('gpt-5.3-codex');
+  });
+
+  it('should use workflow terminology when named workflow is missing', async () => {
+    mockLoadPieceByIdentifier.mockReturnValueOnce(undefined);
+
+    const result = await executeTask({
+      task: 'Task: missing workflow',
+      cwd: '/project',
+      projectCwd: '/project',
+      pieceIdentifier: 'missing-workflow',
+    });
+
+    expect(result).toBe(false);
+    expect(mockError).toHaveBeenCalledWith('Workflow "missing-workflow" not found.');
+    expect(mockInfo).toHaveBeenCalledWith('Available workflows are in ~/.takt/pieces/ or .takt/pieces/');
+    expect(mockInfo).toHaveBeenCalledWith('Specify a valid workflow when creating tasks (e.g., via "takt add").');
+  });
+
+  it('should use workflow file terminology when workflow path is missing', async () => {
+    mockLoadPieceByIdentifier.mockReturnValueOnce(undefined);
+    mockIsPiecePath.mockReturnValueOnce(true);
+
+    const result = await executeTask({
+      task: 'Task: missing workflow file',
+      cwd: '/project',
+      projectCwd: '/project',
+      pieceIdentifier: './custom-workflow.yaml',
+    });
+
+    expect(result).toBe(false);
+    expect(mockError).toHaveBeenCalledWith('Workflow file not found: ./custom-workflow.yaml');
+    expect(mockInfo).not.toHaveBeenCalledWith('Available workflows are in ~/.takt/pieces/ or .takt/pieces/');
+  });
+
+  it('should sanitize workflow identifiers in terminal errors', async () => {
+    mockLoadPieceByIdentifier.mockReturnValueOnce(undefined);
+
+    const result = await executeTask({
+      task: 'Task: missing workflow',
+      cwd: '/project',
+      projectCwd: '/project',
+      pieceIdentifier: 'bad\x1b[31m-name\n',
+    });
+
+    expect(result).toBe(false);
+    expect(mockError).toHaveBeenCalledWith('Workflow "bad-name\\n" not found.');
   });
 
   it('should mark task as pr_failed when PR creation fails', async () => {

@@ -170,7 +170,7 @@ describe('selectPieceWithOptionalReuse', () => {
   it('再利用候補の解決で warning callback を UI warn に配線する', async () => {
     mockLoadAllPiecesWithSources.mockImplementation(
       (_projectDir: string, options?: { onWarning?: (message: string) => void }) => {
-        options?.onWarning?.('Piece "broken" failed to load');
+        options?.onWarning?.('Workflow "broken" failed to load');
         return new Map<string, unknown>([['selected-piece', {}]]);
       },
     );
@@ -182,6 +182,6 @@ describe('selectPieceWithOptionalReuse', () => {
       '/project',
       expect.objectContaining({ onWarning: expect.any(Function) }),
     );
-    expect(mockWarn).toHaveBeenCalledWith('Piece "broken" failed to load');
+    expect(mockWarn).toHaveBeenCalledWith('Workflow "broken" failed to load');
   });
 });

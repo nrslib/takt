@@ -80,7 +80,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
       return { prFailed: true, prError: BRANCH_PUSH_FAILURE_MESSAGE };
     }
     const gitProvider = getGitProvider();
-    const report = pieceIdentifier ? `Piece \`${pieceIdentifier}\` completed successfully.` : 'Task completed successfully.';
+    const report = pieceIdentifier ? `Workflow \`${pieceIdentifier}\` completed successfully.` : 'Task completed successfully.';
     const existingPr = gitProvider.findExistingPr(branch, projectCwd);
     if (existingPr) {
       // push済みなので、新コミットはPRに自動反映される

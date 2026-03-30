@@ -9,29 +9,31 @@ import { buildEditRule } from '../core/piece/instruction/instruction-context.js'
 
 describe('buildEditRule', () => {
   describe('edit = true', () => {
-    it('should return English editing-enabled message', () => {
+    it('should return English editing-enabled message for the current step', () => {
       const result = buildEditRule(true, 'en');
       expect(result).toContain('Editing is ENABLED');
+      expect(result).toContain('for this step');
       expect(result).toContain('create, modify, and delete files');
     });
 
-    it('should return Japanese editing-enabled message', () => {
+    it('should return Japanese editing-enabled message for the current step', () => {
       const result = buildEditRule(true, 'ja');
-      expect(result).toContain('編集が許可されています');
+      expect(result).toContain('このステップでは編集が許可されています');
       expect(result).toContain('ファイルの作成・変更・削除');
     });
   });
 
   describe('edit = false', () => {
-    it('should return English editing-disabled message', () => {
+    it('should return English editing-disabled message for the current step', () => {
       const result = buildEditRule(false, 'en');
       expect(result).toContain('Editing is DISABLED');
+      expect(result).toContain('for this step');
       expect(result).toContain('Do NOT create, modify, or delete');
     });
 
-    it('should return Japanese editing-disabled message', () => {
+    it('should return Japanese editing-disabled message for the current step', () => {
       const result = buildEditRule(false, 'ja');
-      expect(result).toContain('編集が禁止されています');
+      expect(result).toContain('このステップでは編集が禁止されています');
       expect(result).toContain('作成・変更・削除しないで');
     });
   });

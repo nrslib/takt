@@ -54,7 +54,7 @@ describe('E2E: Team leader refill threshold', () => {
     }
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Piece completed');
+    expect(result.stdout).toContain('Workflow completed');
 
     const records = readSessionRecords(repo.path);
     const stepComplete = records.find((r) => r.type === 'step_complete' && r.step === 'execute');

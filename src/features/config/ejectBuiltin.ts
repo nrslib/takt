@@ -1,7 +1,7 @@
 /**
  * /eject command implementation
  *
- * Copies a builtin piece YAML for user customization.
+ * Copies a builtin workflow YAML for user customization.
  * Also supports ejecting individual facets (persona, policy, etc.)
  * to override builtins via layer resolution.
  *
@@ -22,6 +22,7 @@ import {
   getLanguage,
 } from '../../infra/config/index.js';
 import { header, success, info, warn, error, blankLine } from '../../shared/ui/index.js';
+import { sanitizeTerminalText } from '../../shared/utils/text.js';
 
 export interface EjectOptions {
   global?: boolean;
@@ -49,8 +50,8 @@ export function parseFacetType(singular: string): FacetType | undefined {
 }
 
 /**
- * Eject a builtin piece YAML to project or global space for customization.
- * Only copies the piece YAML — facets are resolved via layer system.
+ * Eject a builtin workflow YAML to project or global space for customization.
+ * Only copies the workflow YAML — facets are resolved via layer system.
  */
 export async function ejectBuiltin(name: string | undefined, options: EjectOptions): Promise<void> {
   header('Eject Builtin');
@@ -64,8 +65,9 @@ export async function ejectBuiltin(name: string | undefined, options: EjectOptio
   }
 
   const builtinPath = join(builtinPiecesDir, `${name}.yaml`);
+  const safeName = sanitizeTerminalText(name);
   if (!existsSync(builtinPath)) {
-    error(`Builtin piece not found: ${name}`);
+    error(`Builtin workflow not found: ${safeName}`);
     info('Run "takt eject" to see available builtins.');
     return;
   }
@@ -73,18 +75,19 @@ export async function ejectBuiltin(name: string | undefined, options: EjectOptio
   const targetPiecesDir = options.global ? getGlobalPiecesDir() : getProjectPiecesDir(options.projectDir);
   const targetLabel = options.global ? 'global (~/.takt/)' : 'project (.takt/)';
 
-  info(`Ejecting piece YAML to ${targetLabel}`);
+  info(`Ejecting workflow YAML to ${targetLabel}`);
   blankLine();
 
   const pieceDest = join(targetPiecesDir, `${name}.yaml`);
+  const safePieceDest = sanitizeTerminalText(pieceDest);
   if (existsSync(pieceDest)) {
-    warn(`User piece already exists: ${pieceDest}`);
-    warn('Skipping piece copy (user version takes priority).');
+    warn(`User workflow already exists: ${safePieceDest}`);
+    warn('Skipping workflow copy (user version takes priority).');
   } else {
     mkdirSync(dirname(pieceDest), { recursive: true });
     const content = readFileSync(builtinPath, 'utf-8');
     writeFileSync(pieceDest, content, 'utf-8');
-    success(`Ejected piece: ${pieceDest}`);
+    success(`Ejected workflow: ${safePieceDest}`);
   }
 }
 
@@ -131,14 +134,14 @@ export async function ejectFacet(
   success(`Ejected: ${destPath}`);
 }
 
-/** List available builtin pieces for ejection */
+/** List available builtin workflows for ejection */
 function listAvailableBuiltins(builtinPiecesDir: string, isGlobal?: boolean): void {
   if (!existsSync(builtinPiecesDir)) {
-    warn('No builtin pieces found.');
+    warn('No builtin workflows found.');
     return;
   }
 
-  info('Available builtin pieces:');
+  info('Available builtin workflows:');
   blankLine();
 
   for (const entry of readdirSync(builtinPiecesDir).sort()) {
@@ -146,7 +149,7 @@ function listAvailableBuiltins(builtinPiecesDir: string, isGlobal?: boolean): vo
     if (!statSync(join(builtinPiecesDir, entry)).isFile()) continue;
 
     const name = entry.replace(/\.ya?ml$/, '');
-    info(`  ${name}`);
+    info(`  ${sanitizeTerminalText(name)}`);
   }
 
   blankLine();
@@ -169,6 +172,6 @@ function listAvailableFacets(builtinDir: string): void {
   for (const entry of readdirSync(builtinDir).sort()) {
     if (!entry.endsWith('.md')) continue;
     if (!statSync(join(builtinDir, entry)).isFile()) continue;
-    info(`  ${entry.replace(/\.md$/, '')}`);
+    info(`  ${sanitizeTerminalText(entry.replace(/\.md$/, ''))}`);
   }
 }

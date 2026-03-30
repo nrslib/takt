@@ -18,6 +18,8 @@ const mocks = vi.hoisted(() => {
   let builtinDir = '';
   let projectFacetDir = '';
   let globalFacetDir = '';
+  let projectPiecesDir = '';
+  let globalPiecesDir = '';
 
   return {
     get builtinDir() { return builtinDir; },
@@ -26,6 +28,10 @@ const mocks = vi.hoisted(() => {
     set projectFacetDir(v: string) { projectFacetDir = v; },
     get globalFacetDir() { return globalFacetDir; },
     set globalFacetDir(v: string) { globalFacetDir = v; },
+    get projectPiecesDir() { return projectPiecesDir; },
+    set projectPiecesDir(v: string) { projectPiecesDir = v; },
+    get globalPiecesDir() { return globalPiecesDir; },
+    set globalPiecesDir(v: string) { globalPiecesDir = v; },
     ui: {
       header: vi.fn(),
       success: vi.fn(),
@@ -42,14 +48,14 @@ vi.mock('../infra/config/index.js', () => ({
   getBuiltinFacetDir: () => mocks.builtinDir,
   getProjectFacetDir: () => mocks.projectFacetDir,
   getGlobalFacetDir: () => mocks.globalFacetDir,
-  getGlobalPiecesDir: vi.fn(),
-  getProjectPiecesDir: vi.fn(),
-  getBuiltinPiecesDir: vi.fn(),
+  getGlobalPiecesDir: () => mocks.globalPiecesDir,
+  getProjectPiecesDir: () => mocks.projectPiecesDir,
+  getBuiltinPiecesDir: () => mocks.builtinDir,
 }));
 
 vi.mock('../shared/ui/index.js', () => mocks.ui);
 
-import { ejectFacet } from '../features/config/ejectBuiltin.js';
+import { ejectBuiltin, ejectFacet } from '../features/config/ejectBuiltin.js';
 
 function createTestDirs() {
   const baseDir = mkdtempSync(join(tmpdir(), 'takt-eject-facet-test-'));
@@ -81,6 +87,8 @@ describe('ejectFacet', () => {
     mocks.builtinDir = dirs.builtinDir;
     mocks.projectFacetDir = join(dirs.projectDir, '.takt', 'personas');
     mocks.globalFacetDir = join(dirs.globalDir, 'personas');
+    mocks.projectPiecesDir = join(dirs.projectDir, '.takt', 'pieces');
+    mocks.globalPiecesDir = join(dirs.globalDir, 'pieces');
 
     Object.values(mocks.ui).forEach((fn) => fn.mockClear());
   });
@@ -124,5 +132,39 @@ describe('ejectFacet', () => {
 
     expect(mocks.ui.error).toHaveBeenCalledWith(expect.stringContaining('not found'));
     expect(mocks.ui.info).toHaveBeenCalledWith(expect.stringContaining('Available'));
+  });
+});
+
+describe('ejectBuiltin', () => {
+  let dirs: ReturnType<typeof createTestDirs>;
+
+  beforeEach(() => {
+    dirs = createTestDirs();
+    mocks.builtinDir = join(dirs.baseDir, 'builtins', 'pieces');
+    mocks.projectFacetDir = join(dirs.projectDir, '.takt', 'personas');
+    mocks.globalFacetDir = join(dirs.globalDir, 'personas');
+    mocks.projectPiecesDir = join(dirs.projectDir, '.takt', 'pieces');
+    mocks.globalPiecesDir = join(dirs.globalDir, 'pieces');
+    mkdirSync(mocks.builtinDir, { recursive: true });
+    writeFileSync(join(mocks.builtinDir, 'default.yaml'), 'name: default\n');
+    Object.values(mocks.ui).forEach((fn) => fn.mockClear());
+  });
+
+  afterEach(() => {
+    dirs.cleanup();
+  });
+
+  it('should sanitize workflow names in builtin-not-found errors', async () => {
+    await ejectBuiltin('bad\x1b[31m-workflow\n', { projectDir: dirs.projectDir });
+
+    expect(mocks.ui.error).toHaveBeenCalledWith('Builtin workflow not found: bad-workflow\\n');
+  });
+
+  it('should sanitize destination paths in success output', async () => {
+    mocks.projectPiecesDir = join(dirs.baseDir, 'project-with-control\nchars', '.takt', 'pieces');
+
+    await ejectBuiltin('default', { projectDir: dirs.projectDir });
+
+    expect(mocks.ui.success).toHaveBeenCalledWith(expect.stringContaining('project-with-control\\nchars'));
   });
 });

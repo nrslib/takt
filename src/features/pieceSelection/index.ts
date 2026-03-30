@@ -136,7 +136,7 @@ export function warnMissingPieces(missing: MissingPiece[]): void {
   for (const { categoryPath, pieceName } of missing) {
     const pathLabel = sanitizeTerminalText(categoryPath.join(' / '));
     const safePieceName = sanitizeTerminalText(pieceName);
-    warn(`Piece "${safePieceName}" in category "${pathLabel}" not found`);
+    warn(`Workflow "${safePieceName}" in category "${pathLabel}" not found`);
   }
 }
 
@@ -171,7 +171,7 @@ async function selectPieceFromCategoryTree(
   rootPieces: string[] = [],
 ): Promise<string | null> {
   if (categories.length === 0 && rootPieces.length === 0) {
-    info('No pieces available for configured categories.');
+    info('No workflows available for configured categories.');
     return null;
   }
 
@@ -190,7 +190,7 @@ async function selectPieceFromCategoryTree(
 
     if (options.length === 0) {
       if (stack.length === 0) {
-        info('No pieces available for configured categories.');
+        info('No workflows available for configured categories.');
         return null;
       }
       stack.pop();
@@ -201,8 +201,8 @@ async function selectPieceFromCategoryTree(
       applyBookmarks(options, getBookmarkedPieces());
 
     const message = currentPathLabel.length > 0
-      ? `Select piece in ${currentPathLabel}:`
-      : 'Select piece category:';
+      ? `Select workflow in ${currentPathLabel}:`
+      : 'Select workflow category:';
 
     const selected = await selectOption<string>(message, buildOptionsWithBookmarks(), {
       cancelLabel: (stack.length > 0 || hasSourceSelection) ? '← Go back' : 'Cancel',
@@ -280,7 +280,7 @@ async function selectTopLevelPieceOption(
 
   if (buildOptions().length === 0) return null;
 
-  const result = await selectOption<string>('Select piece:', buildOptions(), {
+  const result = await selectOption<string>('Select workflow:', buildOptions(), {
     onKeyPress: (key: string, value: string): SelectOptionItem<string>[] | null => {
       if (value.startsWith(CUSTOM_CATEGORY_PREFIX)) {
         return null;
@@ -354,7 +354,7 @@ async function selectPieceFromEntriesWithCategories(
     const buildFlatOptions = (): SelectionOption[] =>
       applyBookmarks(baseOptions, getBookmarkedPieces());
 
-    return selectOption<string>('Select piece:', buildFlatOptions(), {
+    return selectOption<string>('Select workflow:', buildFlatOptions(), {
       onKeyPress: (key: string, value: string): SelectOptionItem<string>[] | null => {
         if (key === 'b') {
           addBookmark(value);
@@ -374,7 +374,7 @@ async function selectPieceFromEntriesWithCategories(
     const buildTopLevelOptions = (): SelectionOption[] =>
       applyBookmarks(buildTopLevelSelectOptions(items), getBookmarkedPieces());
 
-    const selected = await selectOption<string>('Select piece:', buildTopLevelOptions(), {
+    const selected = await selectOption<string>('Select workflow:', buildTopLevelOptions(), {
       onKeyPress: (key: string, value: string): SelectOptionItem<string>[] | null => {
         // Don't handle bookmark keys for categories
         if (parseCategorySelection(value)) {
@@ -404,7 +404,7 @@ async function selectPieceFromEntriesWithCategories(
       const buildCategoryOptions = (): SelectionOption[] =>
         applyBookmarks(categoryOptions, getBookmarkedPieces());
 
-      const pieceSelection = await selectOption<string>(`Select piece in ${sanitizeTerminalText(categoryName)}:`, buildCategoryOptions(), {
+      const pieceSelection = await selectOption<string>(`Select workflow in ${sanitizeTerminalText(categoryName)}:`, buildCategoryOptions(), {
         cancelLabel: '← Go back',
         onKeyPress: (key: string, value: string): SelectOptionItem<string>[] | null => {
           if (key === 'b') {
@@ -438,9 +438,9 @@ export async function selectPieceFromEntries(
   const customEntries = entries.filter((entry) => entry.source !== 'builtin');
 
   if (builtinEntries.length > 0 && customEntries.length > 0) {
-    const selectedSource = await selectOption<'custom' | 'builtin'>('Select piece source:', [
-      { label: `Custom pieces (${customEntries.length})`, value: 'custom' },
-      { label: `Builtin pieces (${builtinEntries.length})`, value: 'builtin' },
+    const selectedSource = await selectOption<'custom' | 'builtin'>('Select workflow source:', [
+      { label: `Custom workflows (${customEntries.length})`, value: 'custom' },
+      { label: `Builtin workflows (${builtinEntries.length})`, value: 'builtin' },
     ]);
     if (!selectedSource) return null;
     const sourceEntries = selectedSource === 'custom' ? customEntries : builtinEntries;
@@ -466,10 +466,10 @@ export async function selectPiece(
     const allPieces = loadAllPiecesWithSources(cwd, { onWarning: warn });
     if (allPieces.size === 0) {
       if (fallbackToDefault) {
-        info(`No pieces found. Using default: ${DEFAULT_PIECE_NAME}`);
+        info(`No workflows found. Using default workflow: ${DEFAULT_PIECE_NAME}`);
         return DEFAULT_PIECE_NAME;
       }
-      info('No pieces found.');
+      info('No workflows found.');
       return null;
     }
     const categorized = buildCategorizedPieces(allPieces, categoryConfig, cwd);
@@ -480,10 +480,10 @@ export async function selectPiece(
   const entries = listPieceEntries(cwd, { onWarning: warn });
   if (entries.length === 0) {
     if (fallbackToDefault) {
-      info(`No pieces found. Using default: ${DEFAULT_PIECE_NAME}`);
+      info(`No workflows found. Using default workflow: ${DEFAULT_PIECE_NAME}`);
       return DEFAULT_PIECE_NAME;
     }
-    info('No pieces found.');
+    info('No workflows found.');
     return null;
   }
 

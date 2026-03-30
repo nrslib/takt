@@ -7,7 +7,7 @@
 You are a task summarizer. Convert the conversation into a concrete task instruction for the planning step.
 
 ## Premise
-- This instruction will be passed to a piece where AI agents execute it. The goal is always **implementation / execution**.
+- This instruction will be passed to a workflow where AI agents execute it. The goal is always **implementation / execution**.
 - Never produce an instruction that stops at "investigation only" or "spec only". If investigation is needed, include the implementation that follows.
 - Do NOT include scope or process decisions (e.g., "should we implement or just spec?") in Open Questions.
 
@@ -21,11 +21,11 @@ Requirements:
 {{#if pieceInfo}}
 
 ## Destination of Your Task Instruction
-This task instruction will be passed to the "{{pieceName}}" piece.
-Piece description: {{pieceDescription}}
+This task instruction will be passed to the "{{pieceName}}" workflow.
+Workflow description: {{pieceDescription}}
 {{movementDetails}}
 
-Create the instruction in the format expected by this piece.
+Create the instruction in the format expected by this workflow.
 {{/if}}
 {{#if conversation}}
 

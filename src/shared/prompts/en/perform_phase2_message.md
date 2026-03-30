@@ -9,13 +9,13 @@
 - Working Directory: {{workingDirectory}}
 
 ## Execution Rules
-- **Do NOT run git commit.** Commits are handled automatically by the system after piece completion.
+- **Do NOT run git commit.** Commits are handled automatically by the system after workflow completion.
 - **Do NOT use `cd` in Bash commands.** Your working directory is already set correctly. Run commands directly without changing directories.
 - **Do NOT modify project source files.** Only respond with the report content.
 - **Use only the Report Directory files listed below.** Do not search or open reports outside that directory.
 Note: This section is metadata. Follow the language used in the rest of the prompt.
 
-## Piece Context
+## Workflow Context
 {{reportContext}}
 {{#if hasLastResponse}}
 

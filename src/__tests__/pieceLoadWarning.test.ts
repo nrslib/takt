@@ -8,7 +8,7 @@ describe('formatPieceLoadWarning', () => {
 
     const warning = formatPieceLoadWarning('bad\n\x1b[31mname', error);
 
-    expect(warning).toContain('Piece "bad\\nname" failed to load');
+    expect(warning).toContain('Workflow "bad\\nname" failed to load');
     expect(warning).toContain('badvalue\\nnext');
     expect(warning).not.toContain('\x1b');
   });
@@ -24,6 +24,7 @@ describe('formatPieceLoadWarning', () => {
 
     const warning = formatPieceLoadWarning('piece', error);
 
+    expect(warning).toContain('Workflow "piece" failed to load');
     expect(warning).toContain('movements.0.name\\nbad');
     expect(warning).toContain('invalid\\tvalue');
   });

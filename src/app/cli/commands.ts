@@ -83,8 +83,8 @@ program
 
 program
   .command('eject')
-  .description('Copy builtin piece or facet for customization (default: project .takt/)')
-  .argument('[typeOrName]', `Piece name, or facet type (${VALID_FACET_TYPES.join(', ')})`)
+  .description('Copy builtin workflow or facet for customization (default: project .takt/)')
+  .argument('[typeOrName]', `Workflow name, or facet type (${VALID_FACET_TYPES.join(', ')})`)
   .argument('[facetName]', 'Facet name (when first arg is a facet type)')
   .option('--global', 'Eject to ~/.takt/ instead of project .takt/')
   .action(async (typeOrName: string | undefined, facetName: string | undefined, opts: { global?: boolean }) => {
@@ -116,29 +116,29 @@ reset
 
 reset
   .command('categories')
-  .description('Reset piece categories to builtin defaults')
+  .description('Reset workflow categories to builtin defaults')
   .action(async () => {
     await resetCategoriesToDefault(resolvedCwd);
   });
 
 program
   .command('prompt')
-  .description('Preview assembled prompts for each movement and phase')
-  .argument('[piece]', 'Piece name or path (defaults to "default")')
+  .description('Preview assembled prompts for each step and phase')
+  .argument('[workflow]', 'Workflow name or path (defaults to "default")')
   .action(async (piece?: string) => {
     await previewPrompts(resolvedCwd, piece);
   });
 
 program
   .command('export-cc')
-  .description('Export takt pieces/agents as Claude Code Skill (~/.claude/)')
+  .description('Export takt workflows/agents as Claude Code Skill (~/.claude/)')
   .action(async () => {
     await deploySkill();
   });
 
 program
   .command('export-codex')
-  .description('Export takt pieces/agents as Codex Skill (~/.agents/)')
+  .description('Export takt workflows/agents as Codex Skill (~/.agents/)')
   .action(async () => {
     await deploySkillCodex();
   });

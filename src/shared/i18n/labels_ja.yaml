@@ -26,7 +26,7 @@ interactive:
     playNoTask: "タスク内容を指定してください: /play <タスク内容>"
     retryNoOrder: "前回の指示書（order.md）が見つかりません。/retry はリトライ時のみ使用できます。"
     retryUnavailable: "/retry は `takt list` の Retry モードでのみ使用できます。"
-    personaFallback: "先頭ムーブメントにペルソナがありません。アシスタントモードにフォールバックします。"
+    personaFallback: "先頭ステップにペルソナがありません。アシスタントモードにフォールバックします。"
   modeSelection:
     prompt: "対話モードを選択してください:"
     assistant: "アシスタント"
@@ -54,7 +54,7 @@ interactive:
     success: "✅ 前回のタスクは正常に完了しました"
     error: "❌ 前回のタスクはエラーで終了しました: {error}"
     userStopped: "⚠️ 前回のタスクはユーザーによって中断されました"
-    piece: "使用ピース: {pieceName}"
+    piece: "使用ワークフロー: {pieceName}"
     timestamp: "実行時刻: {timestamp}"
 
 # ===== Piece Execution UI =====
@@ -64,7 +64,7 @@ piece:
     feedbackWait: "チームリーダーが結果を評価して次のタスクを計画中です..."
   iterationLimit:
     maxReached: "最大イテレーションに到達しました ({currentIteration}/{maxMovements})"
-    currentMovement: "現在のムーブメント: {currentMovement}"
+    currentMovement: "現在のステップ: {currentMovement}"
     continueQuestion: "続行しますか？"
     continueLabel: "続行する（追加イテレーション数を入力）"
     continueDescription: "入力した回数だけ上限を増やします"
@@ -72,9 +72,9 @@ piece:
     inputPrompt: "追加するイテレーション数を入力してください（1以上）"
     invalidInput: "1以上の整数を入力してください。"
     userInputPrompt: "追加の指示を入力してください（空で中止）"
-  notifyComplete: "ピース完了 ({iteration} iterations)"
+  notifyComplete: "ワークフロー完了 ({iteration} iterations)"
   notifyAbort: "中断: {reason}"
-  sigintGraceful: "Ctrl+C: ピースを中断しています..."
+  sigintGraceful: "Ctrl+C: ワークフローを中断しています..."
   sigintTimeout: "graceful停止がタイムアウトしました ({timeoutMs}ms)"
   sigintForce: "Ctrl+C: 強制終了します"
 
@@ -99,7 +99,7 @@ instruct:
 retry:
   ui:
     intro: "リトライモード - 追加指示を入力してください。コマンド: /go（指示書作成・実行）, /retry（前回の指示書で再実行）, /cancel（終了）"
-  usePreviousPieceConfirm: "前回のピース \"{piece}\" を使用しますか？"
+  usePreviousPieceConfirm: "前回のワークフロー \"{piece}\" を使用しますか？"
 
 run:
   notifyComplete: "run完了 ({total} tasks)"

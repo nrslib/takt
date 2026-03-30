@@ -98,7 +98,8 @@ describe('instruction-builder', () => {
 
       const result = buildInstruction(step, context);
 
-      expect(result).toContain('Editing is ENABLED');
+      expect(result).toContain('Editing is ENABLED for this step.');
+      expect(result).not.toContain('Editing is ENABLED for this movement.');
     });
 
     it('should include edit disabled prompt when step.edit is false', () => {
@@ -107,7 +108,8 @@ describe('instruction-builder', () => {
 
       const result = buildInstruction(step, context);
 
-      expect(result).toContain('Editing is DISABLED');
+      expect(result).toContain('Editing is DISABLED for this step.');
+      expect(result).not.toContain('Editing is DISABLED for this movement.');
     });
 
     it('should not include edit prompt when step.edit is undefined', () => {
@@ -396,8 +398,8 @@ describe('instruction-builder', () => {
     });
   });
 
-  describe('auto-injected Piece Context section', () => {
-    it('should include piece name when provided', () => {
+  describe('auto-injected Workflow Context section', () => {
+    it('should include workflow name when provided', () => {
       const step = createMinimalStep('Do work');
       const context = createMinimalContext({
         pieceName: 'my-piece',
@@ -406,11 +408,11 @@ describe('instruction-builder', () => {
 
       const result = buildInstruction(step, context);
 
-      expect(result).toContain('## Piece Context');
-      expect(result).toContain('- Piece: my-piece');
+      expect(result).toContain('## Workflow Context');
+      expect(result).toContain('- Workflow: my-piece');
     });
 
-    it('should include piece description when provided', () => {
+    it('should include workflow description when provided', () => {
       const step = createMinimalStep('Do work');
       const context = createMinimalContext({
         pieceName: 'my-piece',
@@ -420,8 +422,8 @@ describe('instruction-builder', () => {
 
       const result = buildInstruction(step, context);
 
-      expect(result).toContain('## Piece Context');
-      expect(result).toContain('- Piece: my-piece');
+      expect(result).toContain('## Workflow Context');
+      expect(result).toContain('- Workflow: my-piece');
       expect(result).toContain('- Description: A test piece for validation');
     });
 
@@ -435,11 +437,11 @@ describe('instruction-builder', () => {
 
       const result = buildInstruction(step, context);
 
-      expect(result).toContain('- Piece: my-piece');
+      expect(result).toContain('- Workflow: my-piece');
       expect(result).not.toContain('- Description:');
     });
 
-    it('should render piece context in Japanese', () => {
+    it('should render workflow context in Japanese', () => {
       const step = createMinimalStep('Do work');
       const context = createMinimalContext({
         pieceName: 'coding',
@@ -449,7 +451,8 @@ describe('instruction-builder', () => {
 
       const result = buildInstruction(step, context);
 
-      expect(result).toContain('- ピース: coding');
+      expect(result).toContain('## Workflow Context');
+      expect(result).toContain('- ワークフロー: coding');
       expect(result).toContain('- 説明: コーディングピース');
     });
 
@@ -465,10 +468,13 @@ describe('instruction-builder', () => {
 
       const result = buildInstruction(step, context);
 
-      expect(result).toContain('## Piece Context');
+      expect(result).toContain('## Workflow Context');
       expect(result).toContain('- Iteration: 3/20');
-      expect(result).toContain('- Movement Iteration: 2');
-      expect(result).toContain('- Movement: implement');
+      expect(result).toContain('- Step Iteration: 2');
+      expect(result).toContain('- Step: implement');
+      expect(result).not.toContain('- Piece:');
+      expect(result).not.toContain('- Movement Iteration:');
+      expect(result).not.toContain('- Movement: implement');
     });
 
     it('should include report info in Phase 1 when step has report', () => {
@@ -482,7 +488,7 @@ describe('instruction-builder', () => {
 
       const result = buildInstruction(step, context);
 
-      expect(result).toContain('## Piece Context');
+      expect(result).toContain('## Workflow Context');
       expect(result).toContain('Report Directory');
       expect(result).toContain('Report File');
       expect(result).toContain('Phase 1');
@@ -531,10 +537,10 @@ describe('instruction-builder', () => {
 
       const result = buildInstruction(step, context);
 
-      expect(result).toContain('- Movement Iteration: 3（このムーブメントの実行回数）');
+      expect(result).toContain('- Step Iteration: 3（このステップの実行回数）');
     });
 
-    it('should include piece structure when pieceSteps is provided', () => {
+    it('should include workflow structure when pieceSteps is provided', () => {
       const step = createMinimalStep('Do work');
       step.name = 'implement';
       const context = createMinimalContext({
@@ -549,11 +555,14 @@ describe('instruction-builder', () => {
 
       const result = buildInstruction(step, context);
 
-      expect(result).toContain('This piece consists of 3 movements:');
-      expect(result).toContain('- Movement 1: plan');
-      expect(result).toContain('- Movement 2: implement');
+      expect(result).toContain('This workflow consists of 3 steps:');
+      expect(result).toContain('- Step 1: plan');
+      expect(result).toContain('- Step 2: implement');
       expect(result).toContain('← current');
-      expect(result).toContain('- Movement 3: review');
+      expect(result).toContain('- Step 3: review');
+      expect(result).not.toContain('This piece consists of 3 movements:');
+      expect(result).not.toContain('- Movement 1: plan');
+      expect(result).not.toContain('- Movement 2: implement');
     });
 
     it('should mark current step with marker', () => {
@@ -570,8 +579,8 @@ describe('instruction-builder', () => {
 
       const result = buildInstruction(step, context);
 
-      expect(result).toContain('- Movement 1: plan ← current');
-      expect(result).not.toContain('- Movement 2: implement ← current');
+      expect(result).toContain('- Step 1: plan ← current');
+      expect(result).not.toContain('- Step 2: implement ← current');
     });
 
     it('should include description in parentheses when provided', () => {
@@ -588,7 +597,7 @@ describe('instruction-builder', () => {
 
       const result = buildInstruction(step, context);
 
-      expect(result).toContain('- Movement 1: plan（タスクを分析し実装計画を作成する） ← 現在');
+      expect(result).toContain('- Step 1: plan（タスクを分析し実装計画を作成する） ← 現在');
     });
 
     it('should skip piece structure when pieceSteps is not provided', () => {
@@ -597,7 +606,7 @@ describe('instruction-builder', () => {
 
       const result = buildInstruction(step, context);
 
-      expect(result).not.toContain('This piece consists of');
+      expect(result).not.toContain('This workflow consists of');
     });
 
     it('should skip piece structure when pieceSteps is empty', () => {
@@ -610,10 +619,10 @@ describe('instruction-builder', () => {
 
       const result = buildInstruction(step, context);
 
-      expect(result).not.toContain('This piece consists of');
+      expect(result).not.toContain('This workflow consists of');
     });
 
-    it('should render piece structure in Japanese', () => {
+    it('should render workflow structure in Japanese', () => {
       const step = createMinimalStep('Do work');
       step.name = 'plan';
       const context = createMinimalContext({
@@ -627,7 +636,8 @@ describe('instruction-builder', () => {
 
       const result = buildInstruction(step, context);
 
-      expect(result).toContain('このピースは2ムーブメントで構成されています:');
+      expect(result).toContain('このワークフローは2ステップで構成されています:');
+      expect(result).toContain('- Step 1: plan ← 現在');
       expect(result).toContain('← 現在');
     });
 
@@ -645,7 +655,7 @@ describe('instruction-builder', () => {
 
       const result = buildInstruction(step, context);
 
-      expect(result).toContain('This piece consists of 2 movements:');
+      expect(result).toContain('This workflow consists of 2 steps:');
       expect(result).not.toContain('← current');
     });
   });
@@ -857,6 +867,17 @@ describe('instruction-builder', () => {
       expect(result).toContain('Respond with the results of the work you just completed as a report');
     });
 
+    it('should use workflow terminology in report context heading', () => {
+      const step = createMinimalStep('Do work');
+      step.outputContracts = [{ name: '00-plan.md', format: '00-plan', useJudge: true }];
+      const ctx = createReportContext();
+
+      const result = buildReportInstruction(step, ctx);
+
+      expect(result).toContain('## Workflow Context');
+      expect(result).not.toContain('## Piece Context');
+    });
+
     it('should NOT include user request, previous response, or status rules', () => {
       const step = createMinimalStep('Do work');
       step.outputContracts = [{ name: '00-plan.md', format: '00-plan', useJudge: true }];
@@ -882,6 +903,8 @@ describe('instruction-builder', () => {
 
       expect(result).toContain('あなたが今行った作業の結果をレポートとして回答してください');
       expect(result).toContain('プロジェクトのソースファイルを変更しないでください');
+      expect(result).toContain('## Workflow Context');
+      expect(result).not.toContain('## Piece Context');
       expect(result).toContain('**レポート出力:** `Report File` に出力してください。');
     });
 

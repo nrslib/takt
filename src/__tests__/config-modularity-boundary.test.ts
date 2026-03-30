@@ -27,6 +27,11 @@ describe('config module file-size boundary', () => {
     expect(lineCount).toBeLessThanOrEqual(300);
   });
 
+  it('keeps taskExecution.ts under 300 lines', () => {
+    const lineCount = getLineCount('../features/tasks/execute/taskExecution.ts');
+    expect(lineCount).toBeLessThanOrEqual(300);
+  });
+
   it('keeps sessionLogger.ts under 300 lines', () => {
     const lineCount = getLineCount('../features/tasks/execute/sessionLogger.ts');
     expect(lineCount).toBeLessThanOrEqual(300);

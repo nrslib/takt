@@ -29,6 +29,7 @@ import { createIterationLimitHandler, createUserInputHandler } from './iteration
 import { assertTaskPrefixPair, truncate, formatElapsedTime, detectMovementType } from './pieceExecutionUtils.js';
 import { createTraceReportWriter } from './traceReportWriter.js';
 import { sanitizeTextForStorage } from './traceReportRedaction.js';
+import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 export type { PieceExecutionResult, PieceExecutionOptions };
 const log = createLogger('piece');
 export async function executePiece(
@@ -37,8 +38,9 @@ export async function executePiece(
   cwd: string,
   options: PieceExecutionOptions,
 ): Promise<PieceExecutionResult> {
-  const { headerPrefix = 'Running Piece:', interactiveUserInput = false } = options;
+  const { headerPrefix = 'Running Workflow:', interactiveUserInput = false } = options;
   const projectCwd = options.projectCwd;
+  const safeWorkflowName = sanitizeTerminalText(pieceConfig.name);
   assertTaskPrefixPair(options.taskPrefix, options.taskColorIndex);
   const prefixWriter = options.taskPrefix != null
     ? new TaskPrefixWriter({ taskName: options.taskPrefix, colorIndex: options.taskColorIndex!, displayLabel: options.taskDisplayLabel })
@@ -46,7 +48,7 @@ export async function executePiece(
   const out = createOutputFns(prefixWriter);
   const isRetry = Boolean(options.startMovement || options.retryNote);
   log.debug('Session mode', { isRetry, isWorktree: cwd !== projectCwd });
-  out.header(`${headerPrefix} ${pieceConfig.name}`);
+  out.header(`${headerPrefix} ${safeWorkflowName}`);
   const pieceSessionId = generateSessionId();
   const runSlug = options.reportDirName ?? generateReportDir(task);
   if (!isValidReportDirName(runSlug)) throw new Error(`Invalid reportDirName: ${runSlug}`);
@@ -73,10 +75,9 @@ export async function executePiece(
   const sessionLogger = new SessionLogger(ndjsonLogPath, allowSensitiveData);
   if (options.interactiveMetadata) sessionLogger.writeInteractiveMetadata(options.interactiveMetadata);
   const shouldNotify = globalConfig.notificationSound !== false;
-  const nse = globalConfig.notificationSoundEvents;
-  const shouldNotifyIterationLimit = shouldNotify && nse?.iterationLimit !== false;
-  const shouldNotifyPieceComplete = shouldNotify && nse?.pieceComplete !== false;
-  const shouldNotifyPieceAbort = shouldNotify && nse?.pieceAbort !== false;
+  const shouldNotifyIterationLimit = shouldNotify && globalConfig.notificationSoundEvents?.iterationLimit !== false;
+  const shouldNotifyPieceComplete = shouldNotify && globalConfig.notificationSoundEvents?.pieceComplete !== false;
+  const shouldNotifyPieceAbort = shouldNotify && globalConfig.notificationSoundEvents?.pieceAbort !== false;
   const currentProvider = globalConfig.provider;
   if (!currentProvider) throw new Error('No provider configured. Set "provider" in ~/.takt/config.yaml');
   const configuredModel = options.model ?? globalConfig.model;
@@ -106,12 +107,12 @@ export async function executePiece(
   initAnalyticsWriter(globalConfig.analytics?.enabled === true, globalConfig.analytics?.eventsPath ?? join(getGlobalConfigDir(), 'analytics', 'events'));
   if (globalConfig.preventSleep) preventSleep();
   const analyticsEmitter = new AnalyticsEmitter(runSlug, currentProvider, configuredModel ?? '(default)');
-  const savedSessions = isRetry
-    ? (isWorktree ? loadWorktreeSessions(projectCwd, cwd, currentProvider) : loadPersonaSessions(projectCwd, currentProvider))
-    : {};
-  const sessionUpdateHandler = isWorktree
-    ? (personaName: string, personaSessionId: string) => updateWorktreeSession(projectCwd, cwd, personaName, personaSessionId, currentProvider)
-    : (persona: string, personaSessionId: string) => updatePersonaSession(projectCwd, persona, personaSessionId, currentProvider);
+  const savedSessions = isRetry ? (isWorktree
+    ? loadWorktreeSessions(projectCwd, cwd, currentProvider)
+    : loadPersonaSessions(projectCwd, currentProvider)) : {};
+  const sessionUpdateHandler = isWorktree ? (personaName: string, personaSessionId: string) =>
+    updateWorktreeSession(projectCwd, cwd, personaName, personaSessionId, currentProvider) : (persona: string, personaSessionId: string) =>
+    updatePersonaSession(projectCwd, persona, personaSessionId, currentProvider);
   const iterationLimitHandler = createIterationLimitHandler(
     out,
     displayRef,
@@ -191,8 +192,10 @@ export async function executePiece(
       currentIteration = iteration;
       const movementIteration = (movementIterations.get(step.name) ?? 0) + 1;
       movementIterations.set(step.name, movementIteration);
-      prefixWriter?.setMovementContext({ movementName: step.name, iteration, maxMovements: effectivePieceConfig.maxMovements, movementIteration });
-      out.info(`[${iteration}/${effectivePieceConfig.maxMovements}] ${step.name} (${step.personaDisplayName})`);
+      const safeMovementName = sanitizeTerminalText(step.name);
+      const safePersonaDisplayName = sanitizeTerminalText(step.personaDisplayName);
+      prefixWriter?.setMovementContext({ movementName: safeMovementName, iteration, maxMovements: effectivePieceConfig.maxMovements, movementIteration });
+      out.info(`[${iteration}/${effectivePieceConfig.maxMovements}] ${safeMovementName} (${safePersonaDisplayName})`);
       const movementProvider = providerInfo.provider ?? currentProvider;
       const movementModel = providerInfo.model ?? (movementProvider === currentProvider ? configuredModel : undefined) ?? '(default)';
       providerEventLogger.setMovement(step.name);
@@ -205,12 +208,7 @@ export async function executePiece(
       analyticsEmitter.updateProviderInfo(iteration, movementProvider, movementModel);
       if (!prefixWriter) {
         const movementIndex = pieceConfig.movements.findIndex((m) => m.name === step.name);
-        displayRef.current = new StreamDisplay(step.personaDisplayName, isQuietMode(), {
-          iteration,
-          maxMovements: effectivePieceConfig.maxMovements,
-          movementIndex: movementIndex >= 0 ? movementIndex : 0,
-          totalMovements: pieceConfig.movements.length,
-        });
+        displayRef.current = new StreamDisplay(safePersonaDisplayName, isQuietMode(), { iteration, maxMovements: effectivePieceConfig.maxMovements, movementIndex: movementIndex >= 0 ? movementIndex : 0, totalMovements: pieceConfig.movements.length });
       }
       sessionLogger.onMovementStart(step, iteration, instruction);
     });
@@ -254,7 +252,7 @@ export async function executePiece(
         saveSessionState(projectCwd, { status: 'success', taskResult: truncate(lastMovementContent ?? '', 1000), timestamp: new Date().toISOString(), pieceName: pieceConfig.name, taskContent: truncate(task, 200), lastMovement: lastMovementName } satisfies SessionState);
       } catch (error) { log.error('Failed to save session state', { error }); }
       const elapsed = sessionLog.endTime ? formatElapsedTime(sessionLog.startTime, sessionLog.endTime) : '';
-      out.success(`Piece completed (${state.iteration} iterations${elapsed ? `, ${elapsed}` : ''})`);
+      out.success(`Workflow completed (${state.iteration} iterations${elapsed ? `, ${elapsed}` : ''})`);
       out.info(`Session log: ${ndjsonLogPath}`);
       if (shouldNotifyPieceComplete) notifySuccess('TAKT', getLabel('piece.notifyComplete', undefined, { iteration: String(state.iteration) }));
     });
@@ -277,7 +275,7 @@ export async function executePiece(
         saveSessionState(projectCwd, { status: reason === 'user_interrupted' ? 'user_stopped' : 'error', errorMessage: reason, timestamp: new Date().toISOString(), pieceName: pieceConfig.name, taskContent: truncate(task, 200), lastMovement: lastMovementName } satisfies SessionState);
       } catch (error) { log.error('Failed to save session state', { error }); }
       const elapsed = sessionLog.endTime ? formatElapsedTime(sessionLog.startTime, sessionLog.endTime) : '';
-      out.error(`Piece aborted after ${state.iteration} iterations${elapsed ? ` (${elapsed})` : ''}: ${reason}`);
+      out.error(`Workflow aborted after ${state.iteration} iterations${elapsed ? ` (${elapsed})` : ''}: ${reason}`);
       out.info(`Session log: ${ndjsonLogPath}`);
       if (shouldNotifyPieceAbort) notifyError('TAKT', getLabel('piece.notifyAbort', undefined, { reason }));
     });

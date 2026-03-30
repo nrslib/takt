@@ -57,7 +57,7 @@ describe('E2E: Team leader movement', () => {
     }
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Piece completed');
+    expect(result.stdout).toContain('Workflow completed');
 
     // Verify session log has proper records
     const records = readSessionRecords(repo.path);

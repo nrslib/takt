@@ -190,7 +190,7 @@ describe('saveTaskFromInteractive', () => {
 
     await saveTaskFromInteractive(testDir, 'Task content', 'review');
 
-    expect(mockInfo).toHaveBeenCalledWith('  Piece: review');
+    expect(mockInfo).toHaveBeenCalledWith('  Workflow: review');
   });
 
   it('should record issue number in tasks.yaml when issue option is provided', async () => {

@@ -19,6 +19,7 @@ import {
   buildCommitMessage,
   type ExecutionContext,
 } from './steps.js';
+import { sanitizeTerminalText } from '../../shared/utils/text.js';
 
 export type { PipelineExecutionOptions };
 
@@ -75,9 +76,14 @@ async function runPipeline(options: PipelineExecutionOptions): Promise<PipelineO
   }
 
   blankLine();
-  status('Issue', taskContent.issue ? `#${taskContent.issue.number} "${taskContent.issue.title}"` : 'N/A');
-  status('Branch', context.branch ?? '(current)');
-  status('Piece', piece);
+  const safePiece = sanitizeTerminalText(piece);
+  const issueStatus = taskContent.issue
+    ? `#${taskContent.issue.number} "${sanitizeTerminalText(taskContent.issue.title)}"`
+    : 'N/A';
+  const branchStatus = context.branch ? sanitizeTerminalText(context.branch) : '(current)';
+  status('Issue', issueStatus);
+  status('Branch', branchStatus);
+  status('Workflow', safePiece);
   status('Result', 'Success', 'green');
 
   return { exitCode: 0, result: buildResult({ success: true, branch: context.branch, prUrl }) };

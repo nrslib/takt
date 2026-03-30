@@ -89,6 +89,7 @@ describe('postExecutionFlow', () => {
 
     expect(mockCreatePullRequest).toHaveBeenCalledTimes(1);
     expect(mockCommentOnPr).not.toHaveBeenCalled();
+    expect(mockBuildPrBody).toHaveBeenCalledWith(undefined, 'Workflow `default` completed successfully.');
   });
 
   it('既存PRがある場合は commentOnPr を呼び createPullRequest は呼ばない', async () => {

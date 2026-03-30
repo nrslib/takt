@@ -6,7 +6,7 @@ import { runTakt } from '../helpers/takt-runner';
 import { createLocalRepo, type LocalRepo } from '../helpers/test-repo';
 
 // E2E更新時は docs/testing/e2e.md も更新すること
-describe('E2E: Eject builtin pieces (takt eject)', () => {
+describe('E2E: Eject builtin workflows (takt eject)', () => {
   let isolatedEnv: IsolatedEnv;
   let repo: LocalRepo;
 
@@ -28,7 +28,7 @@ describe('E2E: Eject builtin pieces (takt eject)', () => {
     }
   });
 
-  it('should list available builtin pieces when no name given', () => {
+  it('should list available builtin workflows when no name given', () => {
     const result = runTakt({
       args: ['eject'],
       cwd: repo.path,
@@ -37,7 +37,8 @@ describe('E2E: Eject builtin pieces (takt eject)', () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('default');
-    expect(result.stdout).toContain('Available builtin pieces');
+    expect(result.stdout).toContain('Available builtin workflows');
+    expect(result.stdout).not.toContain('Available builtin pieces');
   });
 
   it('should eject piece YAML only to project .takt/ by default', () => {

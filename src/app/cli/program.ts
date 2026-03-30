@@ -43,7 +43,7 @@ program
 program
   .option('-i, --issue <number>', 'Issue number (equivalent to #N)', (val: string) => parseInt(val, 10))
   .option('--pr <number>', 'PR number to fetch review comments and fix', (val: string) => parseInt(val, 10))
-  .option('-w, --piece <name>', 'Piece name or path to piece file')
+  .option('-w, --piece <name>', 'Workflow name or path to workflow file')
   .option('-b, --branch <name>', 'Branch name (auto-generated if omitted)')
   .option('--auto-pr', 'Create PR after successful execution')
   .option('--draft', 'Create PR as draft (requires --auto-pr or auto_pr config)')

@@ -23,21 +23,23 @@ describe('E2E: Prompt preview command (takt prompt)', () => {
     try { isolatedEnv.cleanup(); } catch { /* best-effort */ }
   });
 
-  it('should output prompt preview header and movement info for a piece', () => {
-    // Given: a piece file path
+  it('should output workflow prompt preview header and step info for a workflow', () => {
+    // Given: a workflow file path
     const piecePath = resolve(__dirname, '../fixtures/pieces/mock-single-step.yaml');
 
-    // When: running takt prompt with piece path
+    // When: running takt prompt with workflow path
     const result = runTakt({
       args: ['prompt', piecePath],
       cwd: repo.path,
       env: isolatedEnv.env,
     });
 
-    // Then: output contains "Prompt Preview" header and movement info
-    // (may fail on Phase 3 for pieces with tag-based rules, but header is still output)
+    // Then: output contains workflow/step terminology
+    // (may fail on Phase 3 for workflows with tag-based rules, but header is still output)
     const combined = result.stdout + result.stderr;
-    expect(combined).toMatch(/Prompt Preview|Movement 1/i);
+    expect(combined).toContain('Workflow Prompt Preview:');
+    expect(combined).toContain('Step 1:');
+    expect(combined).not.toContain('Movement 1');
   });
 
   it('should report not found for a nonexistent piece name', () => {
@@ -52,6 +54,6 @@ describe('E2E: Prompt preview command (takt prompt)', () => {
 
     // Then: reports piece not found
     const combined = result.stdout + result.stderr;
-    expect(combined).toMatch(/not found/i);
+    expect(combined).toContain('Workflow "nonexistent-piece-xyz" not found.');
   });
 });

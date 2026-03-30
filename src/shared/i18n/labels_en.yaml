@@ -26,7 +26,7 @@ interactive:
     playNoTask: "Please specify task content: /play <task>"
     retryNoOrder: "No previous order (order.md) found. /retry is only available during retry."
     retryUnavailable: "/retry is only available in Retry mode from `takt list`."
-    personaFallback: "No persona available for the first movement. Falling back to assistant mode."
+    personaFallback: "No persona available for the first step. Falling back to assistant mode."
   modeSelection:
     prompt: "Select interactive mode:"
     assistant: "Assistant"
@@ -54,7 +54,7 @@ interactive:
     success: "✅ Previous task completed successfully"
     error: "❌ Previous task failed: {error}"
     userStopped: "⚠️ Previous task was interrupted by user"
-    piece: "Piece: {pieceName}"
+    piece: "Workflow: {pieceName}"
     timestamp: "Executed: {timestamp}"
 
 # ===== Piece Execution UI =====
@@ -64,7 +64,7 @@ piece:
     feedbackWait: "Team leader is reviewing results and planning next tasks..."
   iterationLimit:
     maxReached: "Reached max iterations ({currentIteration}/{maxMovements})"
-    currentMovement: "Current movement: {currentMovement}"
+    currentMovement: "Current step: {currentMovement}"
     continueQuestion: "Continue?"
     continueLabel: "Continue (enter additional iterations)"
     continueDescription: "Increase the limit by the entered count"
@@ -72,9 +72,9 @@ piece:
     inputPrompt: "Enter additional iterations (>= 1)"
     invalidInput: "Please enter an integer of 1 or greater."
     userInputPrompt: "Enter additional instructions (empty to cancel)"
-  notifyComplete: "Piece complete ({iteration} iterations)"
+  notifyComplete: "Workflow complete ({iteration} iterations)"
   notifyAbort: "Aborted: {reason}"
-  sigintGraceful: "Ctrl+C: Aborting piece..."
+  sigintGraceful: "Ctrl+C: Aborting workflow..."
   sigintTimeout: "Graceful shutdown timed out after {timeoutMs}ms"
   sigintForce: "Ctrl+C: Force exit"
 
@@ -99,7 +99,7 @@ instruct:
 retry:
   ui:
     intro: "Retry mode - describe additional instructions. Commands: /go (create instruction & run), /retry (rerun previous order), /cancel (exit)"
-  usePreviousPieceConfirm: "Use previous piece \"{piece}\"?"
+  usePreviousPieceConfirm: "Use previous workflow \"{piece}\"?"
 
 run:
   notifyComplete: "Run complete ({total} tasks)"

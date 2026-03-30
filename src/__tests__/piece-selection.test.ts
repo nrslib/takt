@@ -363,16 +363,33 @@ describe('selectPieceFromCategorizedPieces', () => {
     expect(selected).toBe('safe-piece');
     expect(selectOptionMock).toHaveBeenNthCalledWith(
       3,
-      'Select piece in Unsafe\\nInner:',
+      'Select workflow in Unsafe\\nInner:',
       expect.any(Array),
       expect.any(Object),
     );
     expect(selectOptionMock).toHaveBeenNthCalledWith(
       4,
-      'Select piece in Unsafe\\nInner / Final\\tCategory:',
+      'Select workflow in Unsafe\\nInner / Final\\tCategory:',
       expect.any(Array),
       expect.any(Object),
     );
+  });
+
+  it('should show workflow category empty-state message when selected category has no workflows', async () => {
+    const categorized: CategorizedPieces = {
+      categories: [
+        { name: 'Empty', pieces: [], children: [] },
+      ],
+      allPieces: createPieceMap([]),
+      missingPieces: [],
+    };
+
+    selectOptionMock.mockResolvedValueOnce('__custom_category__:Empty');
+
+    const result = await selectPieceFromCategorizedPieces(categorized);
+
+    expect(result).toBeNull();
+    expect(uiMock.info).toHaveBeenCalledWith('No workflows available for configured categories.');
   });
 });
 
@@ -455,7 +472,7 @@ describe('selectPiece', () => {
     configMock.getPieceCategories.mockReturnValue({ categories: ['Dev'] });
     configMock.loadAllPiecesWithSources.mockImplementation(
       (_cwd: string, options?: { onWarning?: (message: string) => void }) => {
-        options?.onWarning?.('Piece "broken" failed to load: movements.0.allowed_tools: Invalid input');
+        options?.onWarning?.('Workflow "broken" failed to load: movements.0.allowed_tools: Invalid input');
         return pieceMap;
       },
     );
@@ -469,7 +486,7 @@ describe('selectPiece', () => {
 
     expect(result).toBe('my-piece');
     expect(uiMock.warn).toHaveBeenCalledWith(
-      'Piece "broken" failed to load: movements.0.allowed_tools: Invalid input',
+      'Workflow "broken" failed to load: movements.0.allowed_tools: Invalid input',
     );
   });
 
@@ -496,7 +513,7 @@ describe('selectPiece', () => {
     configMock.getPieceCategories.mockReturnValue(null);
     configMock.listPieceEntries.mockImplementation(
       (_cwd: string, options?: { onWarning?: (message: string) => void }) => {
-        options?.onWarning?.('Piece "broken" failed to load: movements.0: Invalid input');
+        options?.onWarning?.('Workflow "broken" failed to load: movements.0: Invalid input');
         return [
           { name: 'builtin-flow', path: '/tmp/builtin-flow.yaml', source: 'builtin' },
           { name: 'valid-flow', path: '/tmp/valid-flow.yaml', source: 'user' },
@@ -511,12 +528,61 @@ describe('selectPiece', () => {
     const result = await selectPiece('/cwd');
 
     expect(result).toBe('valid-flow');
-    expect(uiMock.warn).toHaveBeenCalledWith('Piece "broken" failed to load: movements.0: Invalid input');
+    expect(uiMock.warn).toHaveBeenCalledWith('Workflow "broken" failed to load: movements.0: Invalid input');
     expect(selectOptionMock).toHaveBeenNthCalledWith(
       2,
-      'Select piece:',
+      'Select workflow:',
       [{ label: '🎼 valid-flow', value: 'valid-flow' }],
       expect.any(Object),
+    );
+  });
+
+  it('should use workflow terminology in directory-based selection prompts', async () => {
+    configMock.getPieceCategories.mockReturnValue(null);
+    configMock.listPieceEntries.mockReturnValue([
+      { name: 'custom-flow', path: '/tmp/custom-flow.yaml', source: 'user' },
+      { name: 'builtin-flow', path: '/tmp/builtin-flow.yaml', source: 'builtin' },
+    ]);
+
+    selectOptionMock
+      .mockResolvedValueOnce('custom')
+      .mockResolvedValueOnce('custom-flow');
+
+    await selectPiece('/cwd');
+
+    expect(selectOptionMock).toHaveBeenNthCalledWith(
+      1,
+      'Select workflow source:',
+      expect.any(Array),
+    );
+    expect(selectOptionMock).toHaveBeenNthCalledWith(
+      2,
+      'Select workflow:',
+      expect.any(Array),
+      expect.any(Object),
+    );
+  });
+
+  it('should label workflow sources and categories with workflow terminology', async () => {
+    configMock.getPieceCategories.mockReturnValue(null);
+    configMock.listPieceEntries.mockReturnValue([
+      { name: 'custom-flow', path: '/tmp/custom-flow.yaml', source: 'user' },
+      { name: 'builtin-flow', path: '/tmp/builtin-flow.yaml', source: 'builtin' },
+    ]);
+
+    selectOptionMock
+      .mockResolvedValueOnce('custom')
+      .mockResolvedValueOnce('custom-flow');
+
+    await selectPiece('/cwd');
+
+    expect(selectOptionMock).toHaveBeenNthCalledWith(
+      1,
+      'Select workflow source:',
+      [
+        { label: 'Custom workflows (1)', value: 'custom' },
+        { label: 'Builtin workflows (1)', value: 'builtin' },
+      ],
     );
   });
 
@@ -532,7 +598,7 @@ describe('selectPiece', () => {
 
     expect(result).toBe('@owner/repo-a/build');
     expect(selectOptionMock).toHaveBeenCalledWith(
-      'Select piece:',
+      'Select workflow:',
       [
         { label: '🎼 @owner/repo-a/build', value: '@owner/repo-a/build' },
         { label: '🎼 @owner/repo-b/build', value: '@owner/repo-b/build' },
@@ -545,7 +611,7 @@ describe('selectPiece', () => {
     configMock.getPieceCategories.mockReturnValue(null);
     configMock.listPieceEntries.mockImplementation(
       (_cwd: string, options?: { onWarning?: (message: string) => void }) => {
-        options?.onWarning?.('Piece "bad\\nname" failed to load: invalid\\tfield');
+        options?.onWarning?.('Workflow "bad\\nname" failed to load: invalid\\tfield');
         return [
           { name: 'safe\npiece', path: '/tmp/safe-piece.yaml', source: 'user' },
         ];
@@ -556,12 +622,22 @@ describe('selectPiece', () => {
     const result = await selectPiece('/cwd');
 
     expect(result).toBe('safe\npiece');
-    expect(uiMock.warn).toHaveBeenCalledWith('Piece "bad\\nname" failed to load: invalid\\tfield');
+    expect(uiMock.warn).toHaveBeenCalledWith('Workflow "bad\\nname" failed to load: invalid\\tfield');
     expect(selectOptionMock).toHaveBeenCalledWith(
-      'Select piece:',
+      'Select workflow:',
       [{ label: '🎼 safe\\npiece', value: 'safe\npiece' }],
       expect.any(Object),
     );
+  });
+
+  it('should show workflow empty-state messages when no workflows are available', async () => {
+    configMock.getPieceCategories.mockReturnValue(null);
+    configMock.listPieceEntries.mockReturnValue([]);
+
+    const result = await selectPiece('/cwd', { fallbackToDefault: false });
+
+    expect(result).toBeNull();
+    expect(uiMock.info).toHaveBeenCalledWith('No workflows found.');
   });
 
   it('should sanitize missing piece warnings in category-based selection path', async () => {
@@ -589,7 +665,7 @@ describe('selectPiece', () => {
 
     expect(result).toBe('safe-piece');
     expect(uiMock.warn).toHaveBeenCalledWith(
-      'Piece "missing\\rpiece" in category "Unsafe\\nCategory / Inner\\tLevel" not found',
+      'Workflow "missing\\rpiece" in category "Unsafe\\nCategory / Inner\\tLevel" not found',
     );
   });
 });

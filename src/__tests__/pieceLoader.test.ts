@@ -168,7 +168,7 @@ describe('listPieces with project-local', () => {
 
     expect(pieces).not.toContain('broken');
     expect(onWarning).toHaveBeenCalledTimes(1);
-    expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('Piece "broken" failed to load'));
+    expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('Workflow "broken" failed to load'));
   });
 
 });
@@ -307,7 +307,7 @@ describe('loadAllPiecesWithSources with repertoire pieces', () => {
 
     expect(pieces.has('broken')).toBe(false);
     expect(onWarning).toHaveBeenCalledTimes(1);
-    expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('Piece "broken" failed to load'));
+    expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('Workflow "broken" failed to load'));
     expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('allowed_tools'));
   });
 
@@ -322,7 +322,7 @@ describe('loadAllPiecesWithSources with repertoire pieces', () => {
     expect(pieces.has('@nrslib/takt-ensemble/broken')).toBe(false);
     expect(onWarning).toHaveBeenCalledTimes(1);
     expect(onWarning).toHaveBeenCalledWith(
-      expect.stringContaining('Piece "@nrslib/takt-ensemble/broken" failed to load'),
+      expect.stringContaining('Workflow "@nrslib/takt-ensemble/broken" failed to load'),
     );
     expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('allowed_tools'));
   });
@@ -377,7 +377,7 @@ describe('loadAllPiecesWithSources with repertoire pieces', () => {
     expect(entries.find((entry) => entry.name === '@nrslib/takt-ensemble/broken')).toBeUndefined();
     expect(onWarning).toHaveBeenCalledTimes(1);
     expect(onWarning).toHaveBeenCalledWith(
-      expect.stringContaining('Piece "@nrslib/takt-ensemble/broken" failed to load'),
+      expect.stringContaining('Workflow "@nrslib/takt-ensemble/broken" failed to load'),
     );
   });
 });

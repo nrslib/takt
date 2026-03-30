@@ -5,22 +5,14 @@
 import { loadPieceByIdentifier, isPiecePath, resolvePieceConfigValues } from '../../../infra/config/index.js';
 import { resolveProviderOptionsWithTrace } from '../../../infra/config/resolveConfigValue.js';
 import { TaskRunner, type TaskInfo } from '../../../infra/task/index.js';
-import {
-  header,
-  info,
-  error,
-  status,
-  blankLine,
-} from '../../../shared/ui/index.js';
-import { createLogger, getErrorMessage, getSlackWebhookUrl, notifyError, notifySuccess, sendSlackNotification, buildSlackRunSummary } from '../../../shared/utils/index.js';
-import { getLabel } from '../../../shared/i18n/index.js';
+import { info, error } from '../../../shared/ui/index.js';
+import { createLogger } from '../../../shared/utils/index.js';
 import { executePiece } from './pieceExecution.js';
 import type { TaskExecutionOptions, ExecuteTaskOptions, PieceExecutionResult } from './types.js';
-import { runWithWorkerPool } from './parallelExecution.js';
 import { resolveTaskExecution, resolveTaskIssue } from './resolveTask.js';
 import { postExecutionFlow } from './postExecution.js';
 import { buildBooleanTaskResult, buildTaskResult, persistExceededTaskResult, persistTaskError, persistPrFailedTaskResult, persistTaskResult } from './taskResultHandler.js';
-import { generateRunId, toSlackTaskDetail } from './slackSummaryAdapter.js';
+import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 
 export type { TaskExecutionOptions, ExecuteTaskOptions };
 
@@ -53,16 +45,17 @@ async function executeTaskWithResult(options: ExecuteTaskOptions): Promise<Piece
     initialIterationOverride,
   } = options;
   const pieceConfig = loadPieceByIdentifier(pieceIdentifier, projectCwd);
+  const safePieceIdentifier = sanitizeTerminalText(pieceIdentifier);
 
   if (!pieceConfig) {
     if (isPiecePath(pieceIdentifier)) {
-      error(`Piece file not found: ${pieceIdentifier}`);
-      return { success: false, reason: `Piece file not found: ${pieceIdentifier}` };
+      error(`Workflow file not found: ${safePieceIdentifier}`);
+      return { success: false, reason: `Workflow file not found: ${safePieceIdentifier}` };
     } else {
-      error(`Piece "${pieceIdentifier}" not found.`);
-      info('Available pieces are in ~/.takt/pieces/ or .takt/pieces/');
-      info('Specify a valid piece when creating tasks (e.g., via "takt add").');
-      return { success: false, reason: `Piece "${pieceIdentifier}" not found.` };
+      error(`Workflow "${safePieceIdentifier}" not found.`);
+      info('Available workflows are in ~/.takt/pieces/ or .takt/pieces/');
+      info('Specify a valid workflow when creating tasks (e.g., via "takt add").');
+      return { success: false, reason: `Workflow "${safePieceIdentifier}" not found.` };
     }
   }
 
@@ -248,104 +241,5 @@ export async function executeAndCompleteTask(
     if (externalAbortSignal) {
       externalAbortSignal.removeEventListener('abort', onExternalAbort);
     }
-  }
-}
-
-/**
- * Run all pending tasks from .takt/tasks.yaml
- *
- * Uses a worker pool for both sequential (concurrency=1) and parallel
- * (concurrency>1) execution through the same code path.
- */
-export async function runAllTasks(
-  cwd: string,
-  options?: TaskExecutionOptions,
-): Promise<void> {
-  const taskRunner = new TaskRunner(cwd);
-  const globalConfig = resolvePieceConfigValues(
-    cwd,
-    ['notificationSound', 'notificationSoundEvents', 'concurrency', 'taskPollIntervalMs'],
-  );
-  const shouldNotifyRunComplete = globalConfig.notificationSound !== false
-    && globalConfig.notificationSoundEvents?.runComplete !== false;
-  const shouldNotifyRunAbort = globalConfig.notificationSound !== false
-    && globalConfig.notificationSoundEvents?.runAbort !== false;
-  const concurrency = globalConfig.concurrency;
-  const slackWebhookUrl = getSlackWebhookUrl();
-  const recovered = taskRunner.recoverInterruptedRunningTasks();
-  if (recovered > 0) {
-    info(`Recovered ${recovered} interrupted running task(s) to pending.`);
-  }
-
-  const initialTasks = taskRunner.claimNextTasks(concurrency);
-
-  if (initialTasks.length === 0) {
-    info('No pending tasks in .takt/tasks.yaml');
-    info('Use takt add to append tasks.');
-    return;
-  }
-
-  const runId = generateRunId();
-  const startTime = Date.now();
-
-  header('Running tasks');
-  if (concurrency > 1) {
-    info(`Concurrency: ${concurrency}`);
-  }
-
-  const sendSlackSummary = async (executedTaskNames: string[]): Promise<void> => {
-    if (!slackWebhookUrl) return;
-    const durationSec = Math.round((Date.now() - startTime) / 1000);
-    const executedSet = new Set(executedTaskNames);
-    const tasks = taskRunner.listAllTaskItems()
-      .filter((item) => executedSet.has(item.name))
-      .map(toSlackTaskDetail);
-    const successCount = tasks.filter((t) => t.success).length;
-    const message = buildSlackRunSummary({
-      runId,
-      total: tasks.length,
-      success: successCount,
-      failed: tasks.length - successCount,
-      durationSec,
-      concurrency,
-      tasks,
-    });
-    await sendSlackNotification(slackWebhookUrl, message);
-  };
-
-  try {
-    const result = await runWithWorkerPool(
-      taskRunner,
-      initialTasks,
-      concurrency,
-      cwd,
-      options,
-      globalConfig.taskPollIntervalMs,
-    );
-
-    const totalCount = result.success + result.fail;
-    blankLine();
-    header('Tasks Summary');
-    status('Total', String(totalCount));
-    status('Success', String(result.success), result.success === totalCount ? 'green' : undefined);
-    if (result.fail > 0) {
-      status('Failed', String(result.fail), 'red');
-      if (shouldNotifyRunAbort) {
-        notifyError('TAKT', getLabel('run.notifyAbort', undefined, { failed: String(result.fail) }));
-      }
-      await sendSlackSummary(result.executedTaskNames);
-      return;
-    }
-
-    if (shouldNotifyRunComplete) {
-      notifySuccess('TAKT', getLabel('run.notifyComplete', undefined, { total: String(totalCount) }));
-    }
-    await sendSlackSummary(result.executedTaskNames);
-  } catch (e) {
-    if (shouldNotifyRunAbort) {
-      notifyError('TAKT', getLabel('run.notifyAbort', undefined, { failed: getErrorMessage(e) }));
-    }
-    await sendSlackSummary([]);
-    throw e;
   }
 }

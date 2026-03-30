@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { info, error, success, status } from '../shared/ui/index.js';
 
 const mockFetchIssue = vi.fn();
 const mockCheckGhCli = vi.fn().mockReturnValue({ available: true });
@@ -84,6 +85,10 @@ vi.mock('../features/tasks/execute/slackSummaryAdapter.js', () => ({
 }));
 
 const { executePipeline } = await import('../features/pipeline/index.js');
+const mockInfo = vi.mocked(info);
+const mockError = vi.mocked(error);
+const mockSuccess = vi.mocked(success);
+const mockStatus = vi.mocked(status);
 
 describe('executePipeline', () => {
   beforeEach(() => {
@@ -162,6 +167,8 @@ describe('executePipeline', () => {
     });
 
     expect(exitCode).toBe(3);
+    expect(mockInfo).toHaveBeenCalledWith('Running workflow: default');
+    expect(mockError).toHaveBeenCalledWith("Workflow 'default' failed");
   });
 
   it('should return exit code 0 on successful task-only execution', async () => {
@@ -182,6 +189,105 @@ describe('executePipeline', () => {
       projectCwd: '/tmp/test',
       agentOverrides: undefined,
     });
+    expect(mockInfo).toHaveBeenCalledWith('Running workflow: default');
+    expect(mockSuccess).toHaveBeenCalledWith("Workflow 'default' completed");
+    expect(mockStatus).toHaveBeenCalledWith('Workflow', 'default');
+    expect(mockStatus).toHaveBeenCalledWith('Result', 'Success', 'green');
+  });
+
+  it('should report workflow status for issue execution success', async () => {
+    mockFetchIssue.mockReturnValueOnce({
+      number: 99,
+      title: 'Test issue',
+      body: 'Test body',
+      labels: [],
+      comments: [],
+    });
+    mockExecuteTask.mockResolvedValueOnce(true);
+
+    const exitCode = await executePipeline({
+      issueNumber: 99,
+      piece: 'default',
+      autoPr: false,
+      cwd: '/tmp/test',
+    });
+
+    expect(exitCode).toBe(0);
+    expect(mockInfo).toHaveBeenCalledWith('Running workflow: default');
+    expect(mockSuccess).toHaveBeenCalledWith("Workflow 'default' completed");
+    expect(mockStatus).toHaveBeenCalledWith('Workflow', 'default');
+    expect(mockStatus).toHaveBeenCalledWith('Result', 'Success', 'green');
+  });
+
+  it('should sanitize workflow names before terminal output', async () => {
+    mockExecuteTask.mockResolvedValueOnce(true);
+
+    const exitCode = await executePipeline({
+      task: 'Fix the bug',
+      piece: 'bad\x1b[31m-workflow\n',
+      autoPr: false,
+      cwd: '/tmp/test',
+    });
+
+    expect(exitCode).toBe(0);
+    expect(mockInfo).toHaveBeenCalledWith('Running workflow: bad-workflow\\n');
+    expect(mockSuccess).toHaveBeenCalledWith("Workflow 'bad-workflow\\n' completed");
+    expect(mockStatus).toHaveBeenCalledWith('Workflow', 'bad-workflow\\n');
+  });
+
+  it('should sanitize issue title and branch in terminal output', async () => {
+    mockFetchIssue.mockReturnValueOnce({
+      number: 99,
+      title: 'Issue\x1b[31m\n',
+      body: 'Test body',
+      labels: [],
+      comments: [],
+    });
+    mockExecuteTask.mockResolvedValueOnce(true);
+
+    const exitCode = await executePipeline({
+      issueNumber: 99,
+      piece: 'default',
+      branch: 'feature\x1b[2J\t',
+      autoPr: false,
+      cwd: '/tmp/test',
+    });
+
+    expect(exitCode).toBe(0);
+    expect(mockSuccess).toHaveBeenCalledWith('Issue #99 fetched: "Issue\\n"');
+    expect(mockInfo).toHaveBeenCalledWith('Creating branch: feature\\t');
+    expect(mockSuccess).toHaveBeenCalledWith('Branch created: feature\\t');
+    expect(mockStatus).toHaveBeenCalledWith('Issue', '#99 "Issue\\n"');
+    expect(mockStatus).toHaveBeenCalledWith('Branch', 'feature\\t');
+  });
+
+  it('should sanitize PR titles, branch names, and worktree paths in terminal output', async () => {
+    mockFetchPrReviewComments.mockReturnValueOnce({
+      number: 12,
+      title: 'PR\x1b[31m\n',
+      headRefName: 'feature\x1b[2J',
+      baseRefName: 'main',
+      comments: [],
+    });
+    mockConfirmAndCreateWorktree.mockResolvedValueOnce({
+      execCwd: '/tmp/worktree\tpath',
+      isWorktree: true,
+      branch: 'feature\x1b[2J',
+      baseBranch: 'main',
+    });
+    mockExecuteTask.mockResolvedValueOnce(true);
+
+    const exitCode = await executePipeline({
+      prNumber: 12,
+      piece: 'default',
+      autoPr: false,
+      createWorktree: true,
+      cwd: '/tmp/test',
+    });
+
+    expect(exitCode).toBe(0);
+    expect(mockSuccess).toHaveBeenCalledWith('PR #12 fetched: "PR\\n"');
+    expect(mockSuccess).toHaveBeenCalledWith('Worktree created: /tmp/worktree\\tpath');
   });
 
   it('passes provider/model overrides to task execution', async () => {
@@ -463,6 +569,7 @@ describe('executePipeline', () => {
 
       // Should use buildPrBody (the mock)
       expect(mockBuildPrBody).toHaveBeenCalled();
+      expect(mockBuildPrBody).toHaveBeenCalledWith(undefined, 'Workflow `default` completed successfully.');
       expect(mockCreatePullRequest).toHaveBeenCalledWith(
         expect.objectContaining({
           body: 'Default PR body',

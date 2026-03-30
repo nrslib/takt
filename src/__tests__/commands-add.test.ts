@@ -169,12 +169,35 @@ describe('CLI add command', () => {
     expect(deploySkillCodex).toHaveBeenCalledTimes(1);
   });
 
-  it('should describe prompt piece argument as defaulting to "default"', () => {
+  it('should describe prompt workflow argument as defaulting to "default"', () => {
     const promptCommand = commandMocks.get('root.prompt');
     expect(promptCommand).toBeTruthy();
+    expect(promptCommand?.description).toHaveBeenCalledWith('Preview assembled prompts for each step and phase');
     expect(promptCommand?.argument).toHaveBeenCalledWith(
-      '[piece]',
-      'Piece name or path (defaults to "default")',
+      '[workflow]',
+      'Workflow name or path (defaults to "default")',
     );
+  });
+
+  it('should describe eject with workflow terminology', () => {
+    const ejectCommand = commandMocks.get('root.eject');
+    expect(ejectCommand).toBeTruthy();
+    expect(ejectCommand?.description).toHaveBeenCalledWith(
+      'Copy builtin workflow or facet for customization (default: project .takt/)',
+    );
+    expect(ejectCommand?.argument).toHaveBeenNthCalledWith(
+      1,
+      '[typeOrName]',
+      'Workflow name, or facet type (personas, policies, knowledge, instructions, output-contracts)',
+    );
+  });
+
+  it('should use workflow terminology for relevant command descriptions', () => {
+    expect(commandMocks.get('root.reset.categories')?.description)
+      .toHaveBeenCalledWith('Reset workflow categories to builtin defaults');
+    expect(commandMocks.get('root.export-cc')?.description)
+      .toHaveBeenCalledWith('Export takt workflows/agents as Claude Code Skill (~/.claude/)');
+    expect(commandMocks.get('root.export-codex')?.description)
+      .toHaveBeenCalledWith('Export takt workflows/agents as Codex Skill (~/.agents/)');
   });
 });

@@ -160,6 +160,7 @@ vi.mock('../shared/exitCodes.js', () => ({
 
 import { executePiece } from '../features/tasks/execute/pieceExecution.js';
 import { selectOption } from '../shared/prompt/index.js';
+import { error, info } from '../shared/ui/index.js';
 
 function makeConfig(): PieceConfig {
   return {
@@ -238,5 +239,21 @@ describe('executePiece AskUserQuestion deny handler wiring', () => {
       newMaxMovements: 10,
       currentIteration: 1,
     });
+  });
+
+  it('should report workflow abort message and session log path when aborted', async () => {
+    MockPieceEngine.triggerIterationLimit = true;
+
+    await executePiece(makeConfig(), 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+    });
+
+    expect(vi.mocked(error)).toHaveBeenCalledWith(
+      expect.stringContaining('Workflow aborted after 1 iterations'),
+    );
+    expect(vi.mocked(error)).not.toHaveBeenCalledWith(
+      expect.stringContaining('Piece aborted after'),
+    );
+    expect(vi.mocked(info)).toHaveBeenCalledWith('Session log: /tmp/test-log.jsonl');
   });
 });
