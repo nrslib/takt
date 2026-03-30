@@ -31,7 +31,6 @@ import { createTraceReportWriter } from './traceReportWriter.js';
 import { sanitizeTextForStorage } from './traceReportRedaction.js';
 export type { PieceExecutionResult, PieceExecutionOptions };
 const log = createLogger('piece');
-
 export async function executePiece(
   pieceConfig: PieceConfig,
   task: string,
@@ -161,6 +160,7 @@ export async function executePiece(
       model: options.model,
       providerOptions: options.providerOptions,
       providerOptionsSource: options.providerOptionsSource,
+      providerOptionsOriginResolver: options.providerOptionsOriginResolver,
       personaProviders: options.personaProviders,
       providerProfiles: options.providerProfiles,
       interactive: interactiveUserInput,

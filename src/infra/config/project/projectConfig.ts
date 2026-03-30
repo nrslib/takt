@@ -1,9 +1,8 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { parse, stringify } from 'yaml';
+import { existsSync, writeFileSync, mkdirSync } from 'node:fs';
+import { stringify } from 'yaml';
 import { ProjectConfigSchema } from '../../../core/models/index.js';
 import { copyProjectResourcesToDir } from '../../resources/index.js';
 import type { ProjectConfig } from '../types.js';
-import { applyProjectConfigEnvOverrides } from '../env/config-env-overrides.js';
 import {
   normalizeConfigProviderReference,
   type ConfigProviderReference,
@@ -22,7 +21,6 @@ import {
 } from '../configNormalizers.js';
 import { invalidateResolvedConfigCache } from '../resolutionCache.js';
 import { expandOptionalHomePath } from '../pathExpansion.js';
-import { formatIssuePath } from '../issuePath.js';
 import { getProjectConfigDir, getProjectConfigPath } from './projectConfigPaths.js';
 import {
   normalizeSubmodules,
@@ -38,6 +36,9 @@ import {
   normalizePieceMcpServers,
   denormalizePieceMcpServers,
 } from './projectConfigTransforms.js';
+import { loadProjectConfigTrace, type ConfigTrace } from '../traced/tracedConfigLoader.js';
+import { getCachedProjectConfigTrace, setCachedProjectConfigTrace } from '../resolutionCache.js';
+import { assertValidProjectConfig } from './projectConfigValidation.js';
 
 export type { ProjectConfig as ProjectLocalConfig } from '../types.js';
 
@@ -49,34 +50,11 @@ type RawProviderReference = ConfigProviderReference<ProviderType>;
  */
 export function loadProjectConfig(projectDir: string): ProjectConfig {
   const configPath = getProjectConfigPath(projectDir);
-  const rawConfig: Record<string, unknown> = {};
-  if (existsSync(configPath)) {
-    const content = readFileSync(configPath, 'utf-8');
-    let parsed: unknown;
-    try {
-      parsed = parse(content);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`Configuration error: failed to parse ${configPath}: ${message}`);
-    }
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      Object.assign(rawConfig, parsed as Record<string, unknown>);
-    } else if (parsed != null) {
-      throw new Error(`Configuration error: ${configPath} must be a YAML object.`);
-    }
-  }
-
-  applyProjectConfigEnvOverrides(rawConfig);
-  const parsedResult = ProjectConfigSchema.safeParse(rawConfig);
-  if (!parsedResult.success) {
-    const firstIssue = parsedResult.error.issues[0];
-    const issuePath = firstIssue ? formatIssuePath(firstIssue.path) : '(root)';
-    const issueMessage = firstIssue?.message ?? 'Invalid configuration value';
-    throw new Error(
-      `Configuration error: invalid ${issuePath} in ${configPath}: ${issueMessage}`,
-    );
-  }
-  const parsedConfig = parsedResult.data;
+  const { parsedConfig, rawConfig, trace } = loadProjectConfigTrace(configPath);
+  setCachedProjectConfigTrace(projectDir, trace);
+  assertValidProjectConfig(parsedConfig, configPath, true);
+  assertValidProjectConfig(rawConfig, configPath);
+  const parsedConfigResult = ProjectConfigSchema.parse(rawConfig);
 
   const {
     language,
@@ -107,7 +85,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     piece_arpeggio,
     sync_conflict_resolver,
     piece_mcp_servers,
-  } = parsedConfig;
+  } = parsedConfigResult;
   const normalizedProvider = normalizeConfigProviderReference(
     provider as RawProviderReference,
     model as string | undefined,
@@ -174,6 +152,19 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     syncConflictResolver: normalizeSyncConflictResolver(sync_conflict_resolver),
     pieceMcpServers: normalizePieceMcpServers(piece_mcp_servers),
   };
+}
+
+export function loadProjectConfigTraceState(projectDir: string): ConfigTrace {
+  const cached = getCachedProjectConfigTrace(projectDir);
+  if (cached) {
+    return cached;
+  }
+  loadProjectConfig(projectDir);
+  const trace = getCachedProjectConfigTrace(projectDir);
+  if (!trace) {
+    throw new Error(`Project config trace is not available for ${projectDir}`);
+  }
+  return trace;
 }
 
 /**

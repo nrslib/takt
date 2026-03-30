@@ -5,13 +5,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { TaskInfo } from '../infra/task/index.js';
 
-const { mockResolveTaskExecution, mockExecutePiece, mockLoadPieceByIdentifier, mockResolvePieceConfigValues, mockResolveConfigValueWithSource, mockBuildBooleanTaskResult, mockBuildTaskResult, mockPersistTaskResult, mockPersistPrFailedTaskResult, mockPersistTaskError, mockPostExecutionFlow } =
+const { mockResolveTaskExecution, mockExecutePiece, mockLoadPieceByIdentifier, mockResolvePieceConfigValues, mockResolveProviderOptionsWithTrace, mockBuildBooleanTaskResult, mockBuildTaskResult, mockPersistTaskResult, mockPersistPrFailedTaskResult, mockPersistTaskError, mockPostExecutionFlow } =
   vi.hoisted(() => ({
     mockResolveTaskExecution: vi.fn(),
     mockExecutePiece: vi.fn(),
     mockLoadPieceByIdentifier: vi.fn(),
     mockResolvePieceConfigValues: vi.fn(),
-    mockResolveConfigValueWithSource: vi.fn(),
+    mockResolveProviderOptionsWithTrace: vi.fn(),
     mockBuildBooleanTaskResult: vi.fn(),
     mockBuildTaskResult: vi.fn(),
     mockPersistTaskResult: vi.fn(),
@@ -45,7 +45,11 @@ vi.mock('../infra/config/index.js', () => ({
   loadPieceByIdentifier: (...args: unknown[]) => mockLoadPieceByIdentifier(...args),
   isPiecePath: () => false,
   resolvePieceConfigValues: (...args: unknown[]) => mockResolvePieceConfigValues(...args),
-  resolveConfigValueWithSource: (...args: unknown[]) => mockResolveConfigValueWithSource(...args),
+}));
+
+vi.mock('../infra/config/resolveConfigValue.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  resolveProviderOptionsWithTrace: (...args: unknown[]) => mockResolveProviderOptionsWithTrace(...args),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -109,11 +113,12 @@ describe('executeAndCompleteTask', () => {
       concurrency: 1,
       taskPollIntervalMs: 500,
     });
-    mockResolveConfigValueWithSource.mockReturnValue({
+    mockResolveProviderOptionsWithTrace.mockReturnValue({
       value: {
         claude: { sandbox: { allowUnsandboxedCommands: true } },
       },
       source: 'project',
+      originResolver: () => 'local',
     });
     mockBuildBooleanTaskResult.mockReturnValue({ success: false });
     mockBuildTaskResult.mockReturnValue({ success: true });
@@ -161,6 +166,7 @@ describe('executeAndCompleteTask', () => {
       taskPrefix?: string;
       providerOptions?: unknown;
       providerOptionsSource?: string;
+      providerOptionsOriginResolver?: (path: string) => string;
     };
     expect(pieceExecutionOptions?.taskDisplayLabel).toBe(taskDisplayLabel);
     expect(pieceExecutionOptions?.taskPrefix).toBe(taskDisplayLabel);
@@ -168,6 +174,8 @@ describe('executeAndCompleteTask', () => {
       claude: { sandbox: { allowUnsandboxedCommands: true } },
     });
     expect(pieceExecutionOptions?.providerOptionsSource).toBe('project');
+    expect(pieceExecutionOptions?.providerOptionsOriginResolver?.('claude.sandbox.allowUnsandboxedCommands'))
+      .toBe('local');
   });
 
   it('should not pass config provider/model to executePiece when agent overrides are absent', async () => {

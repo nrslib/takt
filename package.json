@@ -68,9 +68,10 @@
     "chalk": "^5.3.0",
     "commander": "^12.1.0",
     "faceted-prompting": "^0.1.0",
+    "traced-config": "^0.3.0",
     "update-notifier": "^7.3.1",
     "wanakana": "^5.3.1",
-    "yaml": "^2.4.5",
+    "yaml": "^2.8.3",
     "zod": "^4.3.6"
   },
   "devDependencies": {

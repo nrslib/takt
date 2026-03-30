@@ -85,7 +85,7 @@ describe('OptionsBuilder.buildBaseOptions', () => {
     });
   });
 
-  it('merges provider options with precedence: global < movement and project/env > movement', () => {
+  it('lets movement override project provider options when origin resolver is absent', () => {
     const step = createMovement({
       providerOptions: {
         codex: { networkAccess: false },
@@ -107,14 +107,14 @@ describe('OptionsBuilder.buildBaseOptions', () => {
     const options = builder.buildBaseOptions(step);
 
     expect(options.providerOptions).toEqual({
-      codex: { networkAccess: true },
+      codex: { networkAccess: false },
       opencode: { networkAccess: true },
       claude: {
         sandbox: {
           excludedCommands: ['./gradlew'],
           allowUnsandboxedCommands: true,
         },
-        allowedTools: ['Read', 'Glob'],
+        allowedTools: ['Read', 'Edit', 'Bash'],
       },
     });
   });
@@ -152,6 +152,34 @@ describe('OptionsBuilder.buildBaseOptions', () => {
 
     expect(options.providerOptions).toEqual({
       codex: { networkAccess: false },
+    });
+  });
+
+  it('uses nested env origin to keep config value only for the overridden leaf', () => {
+    const step = createMovement({
+      providerOptions: {
+        codex: { networkAccess: false },
+        claude: { allowedTools: ['Read', 'Edit'] },
+      },
+    });
+    const builder = createBuilder(step, {
+      providerOptionsSource: 'project',
+      providerOptionsOriginResolver: (path: string) => {
+        if (path === 'codex.networkAccess') return 'env';
+        if (path === 'providerOptions') return 'local';
+        return 'default';
+      },
+      providerOptions: {
+        codex: { networkAccess: true },
+        claude: { allowedTools: ['Read', 'Glob'] },
+      },
+    });
+
+    const options = builder.buildBaseOptions(step);
+
+    expect(options.providerOptions).toEqual({
+      codex: { networkAccess: true },
+      claude: { allowedTools: ['Read', 'Edit'] },
     });
   });
 });

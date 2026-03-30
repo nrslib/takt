@@ -7,6 +7,7 @@
 
 import type { PermissionUpdate, AgentDefinition, SandboxSettings } from '@anthropic-ai/claude-agent-sdk';
 import type { PermissionMode, McpServerConfig } from '../../core/models/index.js';
+import type { ClaudeEffort } from '../../core/models/piece-types.js';
 import type { ProviderUsageSnapshot } from '../../core/models/response.js';
 
 export type { SandboxSettings };
@@ -132,6 +133,7 @@ export interface ClaudeCallOptions {
   /** MCP servers configuration */
   mcpServers?: Record<string, McpServerConfig>;
   model?: string;
+  effort?: ClaudeEffort;
   maxTurns?: number;
   systemPrompt?: string;
   /** SDK agents to register for sub-agent execution */
@@ -165,6 +167,7 @@ export interface ClaudeSpawnOptions {
   /** MCP servers configuration */
   mcpServers?: Record<string, McpServerConfig>;
   model?: string;
+  effort?: ClaudeEffort;
   maxTurns?: number;
   systemPrompt?: string;
   /** Enable streaming mode with callback */

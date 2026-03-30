@@ -819,6 +819,21 @@ describe('loadGlobalConfig', () => {
     });
   });
 
+  it('should throw when global config contains unknown top-level field that is not tracked', () => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(
+      getGlobalConfigPath(),
+      [
+        'language: en',
+        'unknown_top_level: true',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    expect(() => loadGlobalConfig()).toThrow(/unrecognized/i);
+  });
+
   describe('runtime', () => {
     it('should load runtime.prepare from config.yaml', () => {
       const taktDir = join(testHomeDir, '.takt');

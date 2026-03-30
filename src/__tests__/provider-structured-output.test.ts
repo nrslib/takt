@@ -105,6 +105,19 @@ describe('ClaudeProvider — structured output', () => {
     expect(result.structuredOutput).toEqual({ step: 2 });
   });
 
+  it('provider_options.claude.effort を callClaude に渡す', async () => {
+    mockCallClaude.mockResolvedValue(doneResponse('coder'));
+
+    const agent = new ClaudeProvider().setup({ name: 'coder' });
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      providerOptions: { claude: { effort: 'medium' } },
+    });
+
+    const opts = mockCallClaude.mock.calls[0]?.[2];
+    expect(opts).toHaveProperty('effort', 'medium');
+  });
+
   it('systemPrompt 指定時も outputSchema が callClaudeCustom に渡される', async () => {
     mockCallClaudeCustom.mockResolvedValue(doneResponse('judge', { step: 1 }));
 
@@ -153,6 +166,19 @@ describe('CodexProvider — structured output', () => {
     expect(opts).toHaveProperty('outputSchema', SCHEMA);
     expect(opts).toHaveProperty('codexPathOverride', '/opt/codex/bin/codex');
     expect(result.structuredOutput).toEqual({ step: 2 });
+  });
+
+  it('provider_options.codex.reasoningEffort を callCodex に渡す', async () => {
+    mockCallCodex.mockResolvedValue(doneResponse('coder'));
+
+    const agent = new CodexProvider().setup({ name: 'coder' });
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      providerOptions: { codex: { reasoningEffort: 'high' } },
+    });
+
+    const opts = mockCallCodex.mock.calls[0]?.[2];
+    expect(opts).toHaveProperty('reasoningEffort', 'high');
   });
 
   it('systemPrompt 指定時も outputSchema が callCodexCustom に渡される', async () => {

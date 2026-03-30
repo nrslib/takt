@@ -149,6 +149,30 @@ piece_overrides:
   });
 
   describe('migrated project-local fields', () => {
+    it('should fail fast when codex reasoning_effort is outside SDK enum', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      const configContent = [
+        'provider_options:',
+        '  codex:',
+        '    reasoning_effort: extreme',
+      ].join('\n');
+      writeFileSync(configPath, configContent, 'utf-8');
+
+      expect(() => loadProjectConfig(testDir)).toThrow(/reasoning_effort/);
+    });
+
+    it('should fail fast when claude effort is outside SDK enum', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      const configContent = [
+        'provider_options:',
+        '  claude:',
+        '    effort: impossible',
+      ].join('\n');
+      writeFileSync(configPath, configContent, 'utf-8');
+
+      expect(() => loadProjectConfig(testDir)).toThrow(/effort/);
+    });
+
     it('should load project-local fields from project config yaml', () => {
       const configPath = join(testDir, '.takt', 'config.yaml');
       const configContent = [
@@ -360,6 +384,20 @@ piece_overrides:
       );
 
       expect(() => loadProjectConfig(testDir)).toThrow(/Configuration error: invalid pipeline/);
+    });
+
+    it('should throw when config contains unknown top-level field that is not tracked', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(
+        configPath,
+        [
+          'provider: codex',
+          'unknown_top_level: true',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      expect(() => loadProjectConfig(testDir)).toThrow(/unrecognized/i);
     });
 
     it('should throw when pipeline value has invalid type', () => {

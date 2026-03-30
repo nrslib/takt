@@ -1,7 +1,14 @@
 import * as globalConfigModule from './global/globalConfig.js';
-import { loadProjectConfig } from './project/projectConfig.js';
-import { envVarNameFromPath } from './env/config-env-overrides.js';
+import { loadGlobalConfigTraceState } from './global/globalConfigCore.js';
+import { mergeProviderOptions } from './providerOptions.js';
+import { loadProjectConfig, loadProjectConfigTraceState } from './project/projectConfig.js';
 import { expandOptionalHomePath } from './pathExpansion.js';
+import {
+  PROVIDER_OPTIONS_TRACE_PATHS,
+  getPresentProviderOptionPaths,
+  hasProviderOptionsPath,
+  toProviderOptionsTracePath,
+} from './providerOptionsContract.js';
 import {
   getCachedProjectConfig,
   getCachedResolvedValue,
@@ -10,6 +17,12 @@ import {
   setCachedResolvedValue,
 } from './resolutionCache.js';
 import type { ConfigParameterKey, LoadedConfig } from './resolvedConfig.js';
+import type {
+  ProviderOptionsOriginResolver,
+  ProviderOptionsSource,
+  ProviderOptionsTraceOrigin,
+} from '../../core/piece/types.js';
+import type { MovementProviderOptions } from '../../core/models/piece-types.js';
 
 export type { ConfigParameterKey } from './resolvedConfig.js';
 export { invalidateResolvedConfigCache, invalidateAllResolvedConfigCache } from './resolutionCache.js';
@@ -59,14 +72,6 @@ function loadProjectConfigCached(projectDir: string) {
 const DEFAULT_RULE: ResolutionRule<ConfigParameterKey> = {
   layers: ['local', 'global'],
 };
-
-const PROVIDER_OPTIONS_ENV_PATHS = [
-  'provider_options',
-  'provider_options.codex.network_access',
-  'provider_options.opencode.network_access',
-  'provider_options.claude.sandbox.allow_unsandboxed_commands',
-  'provider_options.claude.sandbox.excluded_commands',
-] as const;
 
 const RESOLUTION_REGISTRY: Partial<{ [K in ConfigParameterKey]: ResolutionRule<K> }> = {
   provider: {
@@ -133,6 +138,7 @@ function getGlobalLayerValue<K extends ConfigParameterKey>(
 }
 
 function resolveByRegistry<K extends ConfigParameterKey>(
+  projectDir: string,
   key: K,
   project: ReturnType<typeof loadProjectConfigCached>,
   global: ReturnType<typeof globalConfigModule.loadGlobalConfig>,
@@ -157,13 +163,16 @@ function resolveByRegistry<K extends ConfigParameterKey>(
     }
     if (value !== undefined) {
       if (layer === 'local') {
-        if (key === 'providerOptions' && hasProviderOptionsEnvOverride()) {
-          return { value, source: 'env' };
+        if (key === 'providerOptions') {
+          return { value, source: getProviderOptionsSource(loadProjectConfigTraceState(projectDir)) };
         }
         return { value, source: 'project' };
       }
       if (layer === 'piece') {
         return { value, source: 'piece' };
+      }
+      if (key === 'providerOptions') {
+        return { value, source: getProviderOptionsSource(loadGlobalConfigTraceState()) };
       }
       return { value, source: 'global' };
     }
@@ -177,10 +186,6 @@ function resolveByRegistry<K extends ConfigParameterKey>(
   return { value: undefined as LoadedConfig[K], source: 'default' };
 }
 
-function hasProviderOptionsEnvOverride(): boolean {
-  return PROVIDER_OPTIONS_ENV_PATHS.some((path) => process.env[envVarNameFromPath(path)] !== undefined);
-}
-
 function resolveUncachedConfigValue<K extends ConfigParameterKey>(
   projectDir: string,
   key: K,
@@ -188,7 +193,7 @@ function resolveUncachedConfigValue<K extends ConfigParameterKey>(
 ): ResolvedConfigValue<K> {
   const project = loadProjectConfigCached(projectDir);
   const global = globalConfigModule.loadGlobalConfig();
-  return resolveByRegistry(key, project, global, options);
+  return resolveByRegistry(projectDir, key, project, global, options);
 }
 
 export function resolveConfigValueWithSource<K extends ConfigParameterKey>(
@@ -232,4 +237,108 @@ export function isDebugLoggingEnabled(
 ): boolean {
   const logging = resolveConfigValue(projectDir, 'logging', options);
   return logging?.debug === true || logging?.trace === true || logging?.level === 'debug';
+}
+
+type TracedConfigState = {
+  getOrigin(path: string): ProviderOptionsTraceOrigin;
+};
+
+function resolveProviderOptionsSourceFromValues(
+  providerOptions: MovementProviderOptions | undefined,
+  originResolver: ProviderOptionsOriginResolver,
+): ProviderOptionsSource {
+  const paths = getPresentProviderOptionPaths(providerOptions);
+  let sawLocal = false;
+  let sawGlobal = false;
+  for (const path of paths) {
+    const origin = originResolver(path);
+    if (origin === 'env' || origin === 'cli') {
+      return 'env';
+    }
+    if (origin === 'local') {
+      sawLocal = true;
+      continue;
+    }
+    if (origin === 'global') {
+      sawGlobal = true;
+    }
+  }
+  if (sawLocal) {
+    return 'project';
+  }
+  if (sawGlobal) {
+    return 'global';
+  }
+  return 'default';
+}
+
+function getProviderOptionsSource(trace: TracedConfigState): ConfigValueSource {
+  let sawLocal = false;
+  let sawGlobal = false;
+  for (const path of PROVIDER_OPTIONS_TRACE_PATHS) {
+    const origin = trace.getOrigin(path);
+    if (origin === 'env') {
+      return 'env';
+    }
+    if (origin === 'cli') {
+      return 'env';
+    }
+    if (origin === 'local') {
+      sawLocal = true;
+      continue;
+    }
+    if (origin === 'global') {
+      sawGlobal = true;
+    }
+  }
+  if (sawLocal) {
+    return 'project';
+  }
+  if (sawGlobal) {
+    return 'global';
+  }
+  return 'default';
+}
+
+export function resolveProviderOptionsWithTrace(
+  projectDir: string,
+): {
+  value: LoadedConfig['providerOptions'];
+  source: ProviderOptionsSource;
+  originResolver: ProviderOptionsOriginResolver;
+} {
+  const project = loadProjectConfigCached(projectDir);
+  const global = globalConfigModule.loadGlobalConfig();
+  const mergedProviderOptions = mergeProviderOptions(global.providerOptions, project.providerOptions);
+
+  if (mergedProviderOptions !== undefined) {
+    const projectTrace = loadProjectConfigTraceState(projectDir);
+    const globalTrace = loadGlobalConfigTraceState();
+    const originResolver: ProviderOptionsOriginResolver = (path: string) => {
+      if (hasProviderOptionsPath(project.providerOptions, path)) {
+        return projectTrace.getOrigin(toProviderOptionsTracePath(path));
+      }
+      if (hasProviderOptionsPath(global.providerOptions, path)) {
+        return globalTrace.getOrigin(toProviderOptionsTracePath(path));
+      }
+      if (project.providerOptions !== undefined) {
+        return projectTrace.getOrigin(toProviderOptionsTracePath(path));
+      }
+      if (global.providerOptions !== undefined) {
+        return globalTrace.getOrigin(toProviderOptionsTracePath(path));
+      }
+      return 'default';
+    };
+    return {
+      value: mergedProviderOptions,
+      source: resolveProviderOptionsSourceFromValues(mergedProviderOptions, originResolver),
+      originResolver,
+    };
+  }
+
+  return {
+    value: undefined,
+    source: 'default',
+    originResolver: () => 'default',
+  };
 }

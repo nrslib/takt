@@ -31,10 +31,18 @@ vi.mock('../infra/config/index.js', async (importOriginal) => {
     loadPieceByIdentifier: vi.fn(),
     isPiecePath: vi.fn().mockReturnValue(false),
     resolvePieceConfigValues: vi.fn().mockReturnValue({}),
-    resolveConfigValueWithSource: vi.fn().mockReturnValue({ value: undefined, source: 'global' }),
     resolvePieceConfigValue: vi.fn().mockReturnValue(undefined),
   };
 });
+
+vi.mock('../infra/config/resolveConfigValue.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  resolveProviderOptionsWithTrace: vi.fn().mockReturnValue({
+    value: undefined,
+    source: 'global',
+    originResolver: () => 'default',
+  }),
+}));
 
 vi.mock('../features/tasks/execute/pieceExecution.js', () => ({
   executePiece: vi.fn(),

@@ -2,7 +2,8 @@
  * Task execution logic
  */
 
-import { loadPieceByIdentifier, isPiecePath, resolveConfigValueWithSource, resolvePieceConfigValues } from '../../../infra/config/index.js';
+import { loadPieceByIdentifier, isPiecePath, resolvePieceConfigValues } from '../../../infra/config/index.js';
+import { resolveProviderOptionsWithTrace } from '../../../infra/config/resolveConfigValue.js';
 import { TaskRunner, type TaskInfo } from '../../../infra/task/index.js';
 import {
   header,
@@ -71,14 +72,15 @@ async function executeTaskWithResult(options: ExecuteTaskOptions): Promise<Piece
   });
 
   const config = resolvePieceConfigValues(projectCwd, ['language', 'personaProviders', 'providerProfiles']);
-  const providerOptions = resolveConfigValueWithSource(projectCwd, 'providerOptions');
+  const providerOptions = resolveProviderOptionsWithTrace(projectCwd);
   return await executePiece(pieceConfig, task, cwd, {
     projectCwd,
     language: config.language,
     provider: agentOverrides?.provider,
     model: agentOverrides?.model,
     providerOptions: providerOptions.value,
-    providerOptionsSource: providerOptions.source === 'piece' ? 'global' : providerOptions.source,
+    providerOptionsSource: providerOptions.source,
+    providerOptionsOriginResolver: providerOptions.originResolver,
     personaProviders: config.personaProviders,
     providerProfiles: config.providerProfiles,
     interactiveUserInput,

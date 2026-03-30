@@ -1,5 +1,5 @@
-import { readFileSync, existsSync, writeFileSync } from 'node:fs';
-import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import { writeFileSync } from 'node:fs';
+import { stringify as stringifyYaml } from 'yaml';
 import { GlobalConfigSchema } from '../../../core/models/index.js';
 import type { GlobalConfig } from '../../../core/models/config-types.js';
 import {
@@ -16,12 +16,12 @@ import {
   normalizeRuntime,
 } from '../configNormalizers.js';
 import { getGlobalConfigPath } from '../paths.js';
-import { applyGlobalConfigEnvOverrides } from '../env/config-env-overrides.js';
 import { invalidateAllResolvedConfigCache } from '../resolutionCache.js';
 import { validateProviderModelCompatibility } from '../providerModelCompatibility.js';
 import { expandOptionalHomePath } from '../pathExpansion.js';
 import { sanitizeConfigValue } from './globalConfigLegacyMigration.js';
 import { serializeGlobalConfig } from './globalConfigSerializer.js';
+import { loadGlobalConfigTrace, type ConfigTrace } from '../traced/tracedConfigLoader.js';
 export { validateCliPath } from './cliPathValidator.js';
 
 function getRecord(value: unknown): Record<string, unknown> | undefined {
@@ -31,11 +31,24 @@ function getRecord(value: unknown): Record<string, unknown> | undefined {
   return value as Record<string, unknown>;
 }
 
+function assertNoUnknownGlobalConfigKeys(rawConfig: Record<string, unknown>): void {
+  const parsedResult = GlobalConfigSchema.safeParse(rawConfig);
+  if (parsedResult.success) {
+    return;
+  }
+  const issue = parsedResult.error.issues.find((candidate) => candidate.code === 'unrecognized_keys');
+  if (!issue) {
+    return;
+  }
+  throw new Error(issue.message);
+}
+
 type ProviderType = NonNullable<GlobalConfig['provider']>;
 type RawProviderReference = ConfigProviderReference<ProviderType>;
 export class GlobalConfigManager {
   private static instance: GlobalConfigManager | null = null;
   private cachedConfig: GlobalConfig | null = null;
+  private cachedTrace: ConfigTrace | null = null;
   private constructor() {}
 
   static getInstance(): GlobalConfigManager {
@@ -51,6 +64,7 @@ export class GlobalConfigManager {
 
   invalidateCache(): void {
     this.cachedConfig = null;
+    this.cachedTrace = null;
   }
 
   load(): GlobalConfig {
@@ -59,25 +73,20 @@ export class GlobalConfigManager {
     }
     const configPath = getGlobalConfigPath();
 
-    const rawConfig: Record<string, unknown> = {};
-    if (existsSync(configPath)) {
-      const content = readFileSync(configPath, 'utf-8');
-      const parsedRaw = parseYaml(content);
-      if (parsedRaw && typeof parsedRaw === 'object' && !Array.isArray(parsedRaw)) {
-        const sanitizedParsedRaw = getRecord(sanitizeConfigValue(parsedRaw, 'config'));
-        if (!sanitizedParsedRaw) {
+    const { parsedConfig, rawConfig, trace } = loadGlobalConfigTrace(
+      configPath,
+      (value: unknown) => {
+        if (value == null) {
+          return value;
+        }
+        const sanitized = getRecord(sanitizeConfigValue(value, 'config'));
+        if (!sanitized) {
           throw new Error('Configuration error: ~/.takt/config.yaml must be a YAML object.');
         }
-        for (const [key, value] of Object.entries(sanitizedParsedRaw)) {
-          rawConfig[key] = value;
-        }
-      } else if (parsedRaw != null) {
-        throw new Error('Configuration error: ~/.takt/config.yaml must be a YAML object.');
-      }
-    }
-
-    applyGlobalConfigEnvOverrides(rawConfig);
-
+        return sanitized;
+      },
+    );
+    assertNoUnknownGlobalConfigKeys(parsedConfig);
     const parsed = GlobalConfigSchema.parse(rawConfig);
     const normalizedProvider = normalizeConfigProviderReference(
       parsed.provider as RawProviderReference,
@@ -184,7 +193,19 @@ export class GlobalConfigManager {
     };
     validateProviderModelCompatibility(config.provider, config.model);
     this.cachedConfig = config;
+    this.cachedTrace = trace;
     return config;
+  }
+
+  getTrace(): ConfigTrace {
+    if (this.cachedTrace !== null) {
+      return this.cachedTrace;
+    }
+    this.load();
+    if (this.cachedTrace === null) {
+      throw new Error('Global config trace is not available');
+    }
+    return this.cachedTrace;
   }
 
   save(config: GlobalConfig): void {
@@ -212,4 +233,8 @@ export function loadGlobalConfig(): GlobalConfig {
 
 export function saveGlobalConfig(config: GlobalConfig): void {
   GlobalConfigManager.getInstance().save(config);
+}
+
+export function loadGlobalConfigTraceState(): ConfigTrace {
+  return GlobalConfigManager.getInstance().getTrace();
 }

@@ -1,392 +1,300 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import {
-  applyGlobalConfigEnvOverrides,
-  applyProjectConfigEnvOverrides,
-  envVarNameFromPath,
-} from '../infra/config/env/config-env-overrides.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { randomUUID } from 'node:crypto';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { envVarNameFromPath } from '../infra/config/env/config-env-overrides.js';
 
-describe('config env overrides', () => {
-  const envBackup = { ...process.env };
+const testRoot = join(tmpdir(), `takt-config-env-${randomUUID()}`);
+const globalTaktDir = join(testRoot, 'global');
+const globalConfigPath = join(globalTaktDir, 'config.yaml');
 
-  afterEach(() => {
-    for (const key of Object.keys(process.env)) {
-      if (!(key in envBackup)) {
-        delete process.env[key];
-      }
+vi.mock('../infra/config/paths.js', async (importOriginal) => {
+  const original = await importOriginal<Record<string, unknown>>();
+  return {
+    ...original,
+    getGlobalConfigPath: () => globalConfigPath,
+    getTaktDir: () => globalTaktDir,
+  };
+});
+
+const { loadGlobalConfig, invalidateGlobalConfigCache } = await import('../infra/config/global/globalConfig.js');
+const { loadProjectConfig } = await import('../infra/config/project/projectConfig.js');
+const { getProjectConfigDir } = await import('../infra/config/paths.js');
+
+let taktEnvSnapshot: Record<string, string | undefined>;
+
+function snapshotTaktEnv(): Record<string, string | undefined> {
+  const snapshot: Record<string, string | undefined> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (key.startsWith('TAKT_')) {
+      snapshot[key] = value;
     }
-    for (const [key, value] of Object.entries(envBackup)) {
-      process.env[key] = value;
-    }
-  });
+  }
+  return snapshot;
+}
 
-  it('should convert dotted and camelCase paths to TAKT env variable names', () => {
-    expect(envVarNameFromPath('verbose')).toBe('TAKT_VERBOSE');
+function restoreTaktEnv(snapshot: Record<string, string | undefined>): void {
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith('TAKT_') && !(key in snapshot)) {
+      delete process.env[key];
+    }
+  }
+
+  for (const [key, value] of Object.entries(snapshot)) {
+    if (value === undefined) {
+      delete process.env[key];
+      continue;
+    }
+    process.env[key] = value;
+  }
+}
+
+beforeEach(() => {
+  taktEnvSnapshot = snapshotTaktEnv();
+});
+
+afterEach(() => {
+  restoreTaktEnv(taktEnvSnapshot);
+  invalidateGlobalConfigCache();
+  rmSync(testRoot, { recursive: true, force: true });
+});
+
+describe('config traced env overrides', () => {
+  it('dotted path から traced-config 用の env 名を生成する', () => {
     expect(envVarNameFromPath('provider_options.claude.sandbox.allow_unsandboxed_commands'))
       .toBe('TAKT_PROVIDER_OPTIONS_CLAUDE_SANDBOX_ALLOW_UNSANDBOXED_COMMANDS');
   });
 
-  it('should apply global env overrides from generated env names', () => {
+  it('global config はホワイトリストされた env のみを反映する', () => {
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(globalConfigPath, 'language: ja\nprovider: claude\n', 'utf-8');
     process.env.TAKT_PROVIDER = 'codex';
-    process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_SANDBOX_ALLOW_UNSANDBOXED_COMMANDS = 'true';
+    process.env.TAKT_VCS_PROVIDER = 'gitlab';
 
-    const raw: Record<string, unknown> = {};
-    applyGlobalConfigEnvOverrides(raw);
+    const config = loadGlobalConfig();
 
-    expect(raw.provider).toBe('codex');
-    expect(raw.provider_options).toEqual({
+    expect(config.provider).toBe('codex');
+    expect(config.vcsProvider).toBeUndefined();
+  });
+
+  it('project config は provider_options の leaf env override を反映する', () => {
+    const projectDir = join(testRoot, 'project');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      ['provider_options:', '  codex:', '    network_access: false'].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS = 'true';
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.providerOptions).toEqual({
+      codex: { networkAccess: true },
+    });
+  });
+
+  it('project config は effort 系の env override を traced-config 経由で反映する', () => {
+    const projectDir = join(testRoot, 'project-effort-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      [
+        'provider_options:',
+        '  codex:',
+        '    reasoning_effort: low',
+        '  claude:',
+        '    effort: low',
+      ].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_REASONING_EFFORT = 'xhigh';
+    process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_EFFORT = 'max';
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.providerOptions).toEqual({
+      codex: { reasoningEffort: 'xhigh' },
+      claude: { effort: 'max' },
+    });
+  });
+
+  it('project config は root JSON env で subtree 全体を置き換える', () => {
+    const projectDir = join(testRoot, 'project-root-json');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      [
+        'provider_options:',
+        '  codex:',
+        '    network_access: false',
+        '  claude:',
+        '    allowed_tools:',
+        '      - Read',
+      ].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS = JSON.stringify({
       claude: {
-        sandbox: {
-          allow_unsandboxed_commands: true,
-        },
+        allowed_tools: ['Bash'],
+      },
+    });
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.providerOptions).toEqual({
+      claude: { allowedTools: ['Bash'] },
+    });
+  });
+
+  it('global config は root JSON env と leaf env を併用したとき logging.level で leaf を優先する', () => {
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(globalConfigPath, 'language: ja\n', 'utf-8');
+    process.env.TAKT_LOGGING = JSON.stringify({
+      level: 'info',
+    });
+    process.env.TAKT_LOGGING_LEVEL = 'warn';
+
+    const config = loadGlobalConfig();
+
+    expect(config.logging).toEqual({
+      level: 'warn',
+    });
+  });
+
+  it('global config は root JSON env と leaf env を併用したとき logging.debug で leaf を優先する', () => {
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(globalConfigPath, 'language: ja\n', 'utf-8');
+    process.env.TAKT_LOGGING = JSON.stringify({
+      debug: false,
+    });
+    process.env.TAKT_LOGGING_DEBUG = 'true';
+
+    const config = loadGlobalConfig();
+
+    expect(config.logging).toEqual({
+      debug: true,
+    });
+  });
+
+  it('project config は root JSON env と leaf env を併用したとき provider_options で leaf を優先する', () => {
+    const projectDir = join(testRoot, 'project-provider-options-root-and-leaf');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), 'provider: codex\n', 'utf-8');
+    process.env.TAKT_PROVIDER_OPTIONS = JSON.stringify({
+      codex: {
+        network_access: false,
+        reasoning_effort: 'low',
+      },
+    });
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS = 'true';
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.providerOptions).toEqual({
+      codex: {
+        networkAccess: true,
+        reasoningEffort: 'low',
       },
     });
   });
 
-  it('TAKT_DRAFT_PR が draft_pr に反映される', () => {
-    process.env.TAKT_DRAFT_PR = 'true';
-
-    const raw: Record<string, unknown> = {};
-    applyGlobalConfigEnvOverrides(raw);
-
-    expect(raw.draft_pr).toBe(true);
-  });
-
-  it('should apply project env overrides from generated env names', () => {
-    process.env.TAKT_MODEL = 'gpt-5';
-    process.env.TAKT_CONCURRENCY = '3';
-    process.env.TAKT_ANALYTICS_EVENTS_PATH = '/tmp/project-analytics';
-
-    const raw: Record<string, unknown> = {};
-    applyProjectConfigEnvOverrides(raw);
-
-    expect(raw.model).toBe('gpt-5');
-    expect(raw.concurrency).toBe(3);
-    expect(raw.analytics).toEqual({
-      events_path: '/tmp/project-analytics',
-    });
-  });
-
-  it('should apply TAKT_PIECE_RUNTIME_PREPARE JSON override for global config', () => {
-    process.env.TAKT_PIECE_RUNTIME_PREPARE = '{"custom_scripts":true}';
-
-    const raw: Record<string, unknown> = {};
-    applyGlobalConfigEnvOverrides(raw);
-
-    expect(raw.piece_runtime_prepare).toEqual({
-      custom_scripts: true,
-    });
-  });
-
-  it('should apply TAKT_PIECE_RUNTIME_PREPARE_CUSTOM_SCRIPTS override for global config', () => {
-    process.env.TAKT_PIECE_RUNTIME_PREPARE_CUSTOM_SCRIPTS = 'false';
-
-    const raw: Record<string, unknown> = {};
-    applyGlobalConfigEnvOverrides(raw);
-
-    expect(raw.piece_runtime_prepare).toEqual({
+  it('project config は root JSON env と leaf env を併用したとき piece_runtime_prepare で leaf を優先する', () => {
+    const projectDir = join(testRoot, 'project-piece-runtime-prepare-root-and-leaf');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), 'provider: codex\n', 'utf-8');
+    process.env.TAKT_PIECE_RUNTIME_PREPARE = JSON.stringify({
       custom_scripts: false,
     });
-  });
-
-  it('should apply TAKT_PIECE_RUNTIME_PREPARE_CUSTOM_SCRIPTS override for project config', () => {
     process.env.TAKT_PIECE_RUNTIME_PREPARE_CUSTOM_SCRIPTS = 'true';
 
-    const raw: Record<string, unknown> = {};
-    applyProjectConfigEnvOverrides(raw);
+    const config = loadProjectConfig(projectDir);
 
-    expect(raw.piece_runtime_prepare).toEqual({
-      custom_scripts: true,
+    expect(config.pieceRuntimePrepare).toEqual({
+      customScripts: true,
     });
   });
 
-  it('should apply TAKT_PIECE_ARPEGGIO JSON override for global config', () => {
-    process.env.TAKT_PIECE_ARPEGGIO = '{"custom_data_source_modules":true,"custom_merge_inline_js":false}';
+  it('project config は非許可の provider_options env を無視する', () => {
+    const projectDir = join(testRoot, 'project-non-whitelist');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      ['provider_options:', '  claude:', '    allowed_tools:', '      - Read'].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_ALLOWED_TOOLS = '["Bash"]';
 
-    const raw: Record<string, unknown> = {};
-    applyGlobalConfigEnvOverrides(raw);
+    const config = loadProjectConfig(projectDir);
 
-    expect(raw.piece_arpeggio).toEqual({
-      custom_data_source_modules: true,
-      custom_merge_inline_js: false,
+    expect(config.providerOptions).toEqual({
+      claude: { allowedTools: ['Read'] },
     });
   });
 
-  it('should apply TAKT_PIECE_ARPEGGIO_CUSTOM_MERGE_INLINE_JS override for global config', () => {
-    process.env.TAKT_PIECE_ARPEGGIO_CUSTOM_MERGE_INLINE_JS = 'true';
+  it('project config は不正な codex reasoning_effort env override を拒否する', () => {
+    const projectDir = join(testRoot, 'project-invalid-codex-effort-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), 'provider: claude\n', 'utf-8');
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_REASONING_EFFORT = 'extreme';
 
-    const raw: Record<string, unknown> = {};
-    applyGlobalConfigEnvOverrides(raw);
-
-    expect(raw.piece_arpeggio).toEqual({
-      custom_merge_inline_js: true,
-    });
+    expect(() => loadProjectConfig(projectDir)).toThrow(/reasoning_effort/);
   });
 
-  it('should apply TAKT_PIECE_ARPEGGIO JSON override for project config', () => {
-    process.env.TAKT_PIECE_ARPEGGIO = '{"custom_merge_files":true}';
+  it('project config は不正な claude effort env override を拒否する', () => {
+    const projectDir = join(testRoot, 'project-invalid-claude-effort-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), 'provider: claude\n', 'utf-8');
+    process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_EFFORT = 'impossible';
 
-    const raw: Record<string, unknown> = {};
-    applyProjectConfigEnvOverrides(raw);
-
-    expect(raw.piece_arpeggio).toEqual({
-      custom_merge_files: true,
-    });
+    expect(() => loadProjectConfig(projectDir)).toThrow(/effort/);
   });
 
-  it('should apply TAKT_PIECE_ARPEGGIO_CUSTOM_MERGE_FILES override for global config', () => {
-    process.env.TAKT_PIECE_ARPEGGIO_CUSTOM_MERGE_FILES = 'true';
-
-    const raw: Record<string, unknown> = {};
-    applyGlobalConfigEnvOverrides(raw);
-
-    expect(raw.piece_arpeggio).toEqual({
-      custom_merge_files: true,
-    });
-  });
-
-  it('should apply TAKT_PIECE_ARPEGGIO_CUSTOM_DATA_SOURCE_MODULES override for project config', () => {
-    process.env.TAKT_PIECE_ARPEGGIO_CUSTOM_DATA_SOURCE_MODULES = 'false';
-
-    const raw: Record<string, unknown> = {};
-    applyProjectConfigEnvOverrides(raw);
-
-    expect(raw.piece_arpeggio).toEqual({
-      custom_data_source_modules: false,
-    });
-  });
-
-  it('should apply analytics env overrides for global config', () => {
-    process.env.TAKT_ANALYTICS_ENABLED = 'true';
-    process.env.TAKT_ANALYTICS_EVENTS_PATH = '/tmp/global-analytics';
-    process.env.TAKT_ANALYTICS_RETENTION_DAYS = '14';
-
-    const raw: Record<string, unknown> = {};
-    applyGlobalConfigEnvOverrides(raw);
-
-    expect(raw.analytics).toEqual({
-      enabled: true,
-      events_path: '/tmp/global-analytics',
-      retention_days: 14,
-    });
-  });
-
-  it('should apply logging env overrides for global config', () => {
-    process.env.TAKT_LOGGING_LEVEL = 'debug';
-    process.env.TAKT_LOGGING_TRACE = 'true';
-    process.env.TAKT_LOGGING_DEBUG = 'true';
-    process.env.TAKT_LOGGING_PROVIDER_EVENTS = 'true';
-
-    const raw: Record<string, unknown> = {};
-    applyGlobalConfigEnvOverrides(raw);
-
-    expect(raw.logging).toEqual({
-      level: 'debug',
-      trace: true,
-      debug: true,
-      provider_events: true,
-    });
-  });
-
-  it('should let logging leaf env vars override TAKT_LOGGING JSON', () => {
-    process.env.TAKT_LOGGING = '{"level":"info","trace":true,"debug":false}';
-    process.env.TAKT_LOGGING_LEVEL = 'warn';
-    process.env.TAKT_LOGGING_DEBUG = 'true';
-
-    const raw: Record<string, unknown> = {};
-    applyGlobalConfigEnvOverrides(raw);
-
-    expect(raw.logging).toEqual({
-      level: 'warn',
-      trace: true,
-      debug: true,
-    });
-  });
-
-  it('should map TAKT_LOGGING_LEVEL as global logging.level override', () => {
-    process.env.TAKT_LOGGING_LEVEL = 'warn';
-
-    const raw: Record<string, unknown> = {};
-    applyGlobalConfigEnvOverrides(raw);
-
-    expect(raw.logging).toEqual({
-      level: 'warn',
-    });
-  });
-
-  it('should apply logging JSON override for global config', () => {
-    process.env.TAKT_LOGGING = '{"level":"warn","debug":true}';
-
-    const raw: Record<string, unknown> = {};
-    applyGlobalConfigEnvOverrides(raw);
-
-    expect(raw.logging).toEqual({
-      level: 'warn',
-      debug: true,
-    });
-  });
-
-  it('should map TAKT_LOG_LEVEL to logging.level with deprecation warning', () => {
+  it('legacy env は警告付きで global logging に反映する', () => {
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(globalConfigPath, 'language: en\n', 'utf-8');
     process.env.TAKT_LOG_LEVEL = 'warn';
+    process.env.TAKT_OBSERVABILITY_PROVIDER_EVENTS = 'true';
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     try {
-      const raw: Record<string, unknown> = {};
-      applyGlobalConfigEnvOverrides(raw);
+      const config = loadGlobalConfig();
 
-      expect(raw.logging).toEqual({
+      expect(config.logging).toEqual({
         level: 'warn',
+        providerEvents: true,
       });
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('TAKT_LOG_LEVEL'),
-      );
+      expect(warnSpy).toHaveBeenCalledTimes(2);
     } finally {
       warnSpy.mockRestore();
     }
   });
 
-  it('should map TAKT_OBSERVABILITY_PROVIDER_EVENTS to logging.provider_events with deprecation warning', () => {
-    process.env.TAKT_OBSERVABILITY_PROVIDER_EVENTS = 'true';
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
-    try {
-      const raw: Record<string, unknown> = {};
-      applyGlobalConfigEnvOverrides(raw);
-
-      expect(raw.logging).toEqual({
-        provider_events: true,
-      });
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('TAKT_OBSERVABILITY_PROVIDER_EVENTS'),
-      );
-    } finally {
-      warnSpy.mockRestore();
-    }
-  });
-
-  it('should prefer TAKT_LOGGING_* over legacy logging env vars', () => {
-    process.env.TAKT_LOGGING_LEVEL = 'info';
+  it('新しい logging env があると legacy env は無視する', () => {
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(globalConfigPath, 'language: en\n', 'utf-8');
     process.env.TAKT_LOG_LEVEL = 'debug';
-    process.env.TAKT_LOGGING_PROVIDER_EVENTS = 'false';
-    process.env.TAKT_OBSERVABILITY_PROVIDER_EVENTS = 'true';
+    process.env.TAKT_LOGGING_LEVEL = 'error';
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     try {
-      const raw: Record<string, unknown> = {};
-      applyGlobalConfigEnvOverrides(raw);
+      const config = loadGlobalConfig();
 
-      expect(raw.logging).toEqual({
-        level: 'info',
-        provider_events: false,
-      });
-      expect(warnSpy).not.toHaveBeenCalled();
-    } finally {
-      warnSpy.mockRestore();
-    }
-  });
-
-  it('should prefer TAKT_LOGGING JSON over legacy logging env vars', () => {
-    process.env.TAKT_LOGGING = '{"level":"error","provider_events":false}';
-    process.env.TAKT_LOG_LEVEL = 'debug';
-    process.env.TAKT_OBSERVABILITY_PROVIDER_EVENTS = 'true';
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
-    try {
-      const raw: Record<string, unknown> = {};
-      applyGlobalConfigEnvOverrides(raw);
-
-      expect(raw.logging).toEqual({
+      expect(config.logging).toEqual({
         level: 'error',
-        provider_events: false,
       });
       expect(warnSpy).not.toHaveBeenCalled();
     } finally {
       warnSpy.mockRestore();
     }
-  });
-
-  it('should apply TAKT_SYNC_CONFLICT_RESOLVER JSON override for global config', () => {
-    process.env.TAKT_SYNC_CONFLICT_RESOLVER = '{"auto_approve_tools":true}';
-
-    const raw: Record<string, unknown> = {};
-    applyGlobalConfigEnvOverrides(raw);
-
-    expect(raw.sync_conflict_resolver).toEqual({
-      auto_approve_tools: true,
-    });
-  });
-
-  it('should apply TAKT_SYNC_CONFLICT_RESOLVER_AUTO_APPROVE_TOOLS override for global config', () => {
-    process.env.TAKT_SYNC_CONFLICT_RESOLVER_AUTO_APPROVE_TOOLS = 'true';
-
-    const raw: Record<string, unknown> = {};
-    applyGlobalConfigEnvOverrides(raw);
-
-    expect(raw.sync_conflict_resolver).toEqual({
-      auto_approve_tools: true,
-    });
-  });
-
-  it('should apply TAKT_SYNC_CONFLICT_RESOLVER_AUTO_APPROVE_TOOLS override for project config', () => {
-    process.env.TAKT_SYNC_CONFLICT_RESOLVER_AUTO_APPROVE_TOOLS = 'false';
-
-    const raw: Record<string, unknown> = {};
-    applyProjectConfigEnvOverrides(raw);
-
-    expect(raw.sync_conflict_resolver).toEqual({
-      auto_approve_tools: false,
-    });
-  });
-
-  it('should apply TAKT_PIECE_MCP_SERVERS JSON override for global config', () => {
-    process.env.TAKT_PIECE_MCP_SERVERS = '{"stdio":true,"sse":false}';
-
-    const raw: Record<string, unknown> = {};
-    applyGlobalConfigEnvOverrides(raw);
-
-    expect(raw.piece_mcp_servers).toEqual({ stdio: true, sse: false });
-  });
-
-  it('should apply TAKT_PIECE_MCP_SERVERS_STDIO override for global config', () => {
-    process.env.TAKT_PIECE_MCP_SERVERS_STDIO = 'true';
-
-    const raw: Record<string, unknown> = {};
-    applyGlobalConfigEnvOverrides(raw);
-
-    expect(raw.piece_mcp_servers).toEqual({ stdio: true });
-  });
-
-  it('should apply TAKT_PIECE_MCP_SERVERS JSON override for project config', () => {
-    process.env.TAKT_PIECE_MCP_SERVERS = '{"stdio":true,"http":true}';
-
-    const raw: Record<string, unknown> = {};
-    applyProjectConfigEnvOverrides(raw);
-
-    expect(raw.piece_mcp_servers).toEqual({ stdio: true, http: true });
-  });
-
-  it('should apply TAKT_PIECE_MCP_SERVERS_HTTP override for project config', () => {
-    process.env.TAKT_PIECE_MCP_SERVERS_HTTP = 'true';
-
-    const raw: Record<string, unknown> = {};
-    applyProjectConfigEnvOverrides(raw);
-
-    expect(raw.piece_mcp_servers).toEqual({ http: true });
-  });
-
-  it('should apply cursor API key override for global config', () => {
-    process.env.TAKT_CURSOR_API_KEY = 'cursor-key-from-env';
-    process.env.TAKT_GEMINI_API_KEY = 'gemini-key-from-env';
-    process.env.TAKT_GOOGLE_API_KEY = 'google-key-from-env';
-    process.env.TAKT_GROQ_API_KEY = 'groq-key-from-env';
-    process.env.TAKT_OPENROUTER_API_KEY = 'openrouter-key-from-env';
-
-    const raw: Record<string, unknown> = {};
-    applyGlobalConfigEnvOverrides(raw);
-
-    expect(raw.cursor_api_key).toBe('cursor-key-from-env');
-    expect(raw.gemini_api_key).toBe('gemini-key-from-env');
-    expect(raw.google_api_key).toBe('google-key-from-env');
-    expect(raw.groq_api_key).toBe('groq-key-from-env');
-    expect(raw.openrouter_api_key).toBe('openrouter-key-from-env');
   });
 });

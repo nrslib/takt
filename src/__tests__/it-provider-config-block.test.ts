@@ -104,7 +104,7 @@ describe('IT: provider block reflection', () => {
     }
   });
 
-  it('movement provider block should be normalized and passed to runAgent options', async () => {
+  it('movement provider block should override global/project provider options when origin is local', async () => {
     // Given
     env = createEnv([
       'name: provider-block-it',
@@ -152,7 +152,7 @@ describe('IT: provider block reflection', () => {
     expect(options?.stepProvider).toBe('codex');
     expect(options?.stepModel).toBe('gpt-5.3');
     expect(options?.providerOptions).toEqual({
-      codex: { networkAccess: true },
+      codex: { networkAccess: false },
     });
   });
 

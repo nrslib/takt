@@ -150,6 +150,47 @@ describe('normalizePieceConfig provider_options', () => {
     });
   });
 
+  it('effort 系 provider_options を piece-level で設定し movement で上書きできる', () => {
+    const raw = {
+      name: 'provider-option-effort',
+      piece_config: {
+        provider_options: {
+          codex: { reasoning_effort: 'medium' },
+          claude: { effort: 'low' },
+        },
+      },
+      movements: [
+        {
+          name: 'inherit',
+          instruction: '{task}',
+        },
+        {
+          name: 'override',
+          provider_options: {
+            codex: { reasoning_effort: 'high' },
+            claude: { effort: 'medium' },
+          },
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    const config = normalizePieceConfig(raw, process.cwd());
+
+    expect(config.providerOptions).toEqual({
+      codex: { reasoningEffort: 'medium' },
+      claude: { effort: 'low' },
+    });
+    expect(config.movements[0]?.providerOptions).toEqual({
+      codex: { reasoningEffort: 'medium' },
+      claude: { effort: 'low' },
+    });
+    expect(config.movements[1]?.providerOptions).toEqual({
+      codex: { reasoningEffort: 'high' },
+      claude: { effort: 'medium' },
+    });
+  });
+
   it('piece-level runtime.prepare を正規化し重複を除去する', () => {
     const raw = {
       name: 'runtime-prepare',
