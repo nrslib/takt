@@ -28,8 +28,25 @@ function preserveToolConfigDir(envKey: string, xdgSubdir: string): string {
     ?? join(process.env['XDG_CONFIG_HOME'] ?? join(process.env['HOME']!, '.config'), xdgSubdir);
 }
 
+function resolveGlabConfigDir(): string {
+  if (process.env['GLAB_CONFIG_DIR']) {
+    return process.env['GLAB_CONFIG_DIR'];
+  }
+
+  if (process.platform === 'darwin') {
+    const macOsPath = join(process.env['HOME']!, 'Library', 'Application Support', 'glab-cli');
+    if (existsSync(macOsPath)) {
+      return macOsPath;
+    }
+  }
+
+  const xdgBase = process.env['XDG_CONFIG_HOME'] ?? join(process.env['HOME']!, '.config');
+  return join(xdgBase, 'glab-cli');
+}
+
 function createBaseEnvironment(runtimeRoot: string): Record<string, string> {
   const ghConfigDir = preserveToolConfigDir('GH_CONFIG_DIR', 'gh');
+  const glabConfigDir = resolveGlabConfigDir();
   return {
     TMPDIR: join(runtimeRoot, 'tmp'),
     XDG_CACHE_HOME: join(runtimeRoot, 'cache'),
@@ -37,6 +54,7 @@ function createBaseEnvironment(runtimeRoot: string): Record<string, string> {
     XDG_STATE_HOME: join(runtimeRoot, 'state'),
     CI: 'true',
     GH_CONFIG_DIR: ghConfigDir,
+    GLAB_CONFIG_DIR: glabConfigDir,
   };
 }
 
