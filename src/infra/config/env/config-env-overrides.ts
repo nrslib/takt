@@ -110,6 +110,7 @@ export const GLOBAL_ENV_SPECS: readonly EnvSpec[] = [
   { path: 'piece_categories_file', type: 'string' },
   ...PROVIDER_OPTIONS_ENV_SPECS,
   { path: 'provider_profiles', type: 'json' },
+  { path: 'interactive_preview_steps', type: 'number' },
   { path: 'runtime', type: 'json' },
   { path: 'runtime.prepare', type: 'json' },
   { path: 'piece_runtime_prepare', type: 'json' },
@@ -148,7 +149,7 @@ export const PROJECT_ENV_SPECS: readonly EnvSpec[] = [
   { path: 'branch_name_strategy', type: 'string' },
   { path: 'minimal_output', type: 'boolean' },
   { path: 'task_poll_interval_ms', type: 'number' },
-  { path: 'interactive_preview_movements', type: 'number' },
+  { path: 'interactive_preview_steps', type: 'number' },
   { path: 'analytics', type: 'json' },
   { path: 'analytics.enabled', type: 'boolean' },
   { path: 'analytics.events_path', type: 'string' },
@@ -170,7 +171,24 @@ export const PROJECT_ENV_SPECS: readonly EnvSpec[] = [
   { path: 'piece_mcp_servers.http', type: 'boolean' },
 ];
 
+export const PROJECT_LEGACY_ENV_SPECS: readonly LegacyEnvSpec[] = [
+  {
+    env: 'TAKT_INTERACTIVE_PREVIEW_MOVEMENTS',
+    path: 'interactive_preview_movements',
+    type: 'number',
+    blockedBy: [],
+    warning: 'Deprecated: "TAKT_INTERACTIVE_PREVIEW_MOVEMENTS" is deprecated. Use "TAKT_INTERACTIVE_PREVIEW_STEPS" instead.',
+  },
+];
+
 export const GLOBAL_LEGACY_ENV_SPECS: readonly LegacyEnvSpec[] = [
+  {
+    env: 'TAKT_INTERACTIVE_PREVIEW_MOVEMENTS',
+    path: 'interactive_preview_movements',
+    type: 'number',
+    blockedBy: [],
+    warning: 'Deprecated: "TAKT_INTERACTIVE_PREVIEW_MOVEMENTS" is deprecated. Use "TAKT_INTERACTIVE_PREVIEW_STEPS" instead.',
+  },
   {
     env: 'TAKT_LOG_LEVEL',
     path: 'logging.level',

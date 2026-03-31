@@ -10,16 +10,17 @@
  */
 
 import { existsSync, readdirSync, statSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
 import type { FacetType } from '../../infra/config/paths.js';
 import {
-  getGlobalPiecesDir,
-  getProjectPiecesDir,
+  getGlobalWorkflowsDir,
+  getProjectWorkflowsDir,
   getBuiltinPiecesDir,
   getProjectFacetDir,
   getGlobalFacetDir,
   getBuiltinFacetDir,
   getLanguage,
+  isPathSafe,
 } from '../../infra/config/index.js';
 import { header, success, info, warn, error, blankLine } from '../../shared/ui/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';
@@ -40,6 +41,11 @@ const FACET_TYPE_MAP: Record<string, FacetType> = {
 
 /** Valid singular facet type names for CLI */
 export const VALID_FACET_TYPES = Object.keys(FACET_TYPE_MAP);
+
+function resolveEjectPath(baseDir: string, name: string, extension: '.yaml' | '.md'): string | undefined {
+  const candidatePath = resolve(baseDir, `${name}${extension}`);
+  return isPathSafe(baseDir, candidatePath) ? candidatePath : undefined;
+}
 
 /**
  * Parse singular CLI facet type to plural directory FacetType.
@@ -64,21 +70,29 @@ export async function ejectBuiltin(name: string | undefined, options: EjectOptio
     return;
   }
 
-  const builtinPath = join(builtinPiecesDir, `${name}.yaml`);
   const safeName = sanitizeTerminalText(name);
+  const builtinPath = resolveEjectPath(builtinPiecesDir, name, '.yaml');
+  if (!builtinPath) {
+    error(`Invalid workflow name: ${safeName}`);
+    return;
+  }
   if (!existsSync(builtinPath)) {
     error(`Builtin workflow not found: ${safeName}`);
     info('Run "takt eject" to see available builtins.');
     return;
   }
 
-  const targetPiecesDir = options.global ? getGlobalPiecesDir() : getProjectPiecesDir(options.projectDir);
+  const targetPiecesDir = options.global ? getGlobalWorkflowsDir() : getProjectWorkflowsDir(options.projectDir);
   const targetLabel = options.global ? 'global (~/.takt/)' : 'project (.takt/)';
 
   info(`Ejecting workflow YAML to ${targetLabel}`);
   blankLine();
 
-  const pieceDest = join(targetPiecesDir, `${name}.yaml`);
+  const pieceDest = resolveEjectPath(targetPiecesDir, name, '.yaml');
+  if (!pieceDest) {
+    error(`Invalid workflow name: ${safeName}`);
+    return;
+  }
   const safePieceDest = sanitizeTerminalText(pieceDest);
   if (existsSync(pieceDest)) {
     warn(`User workflow already exists: ${safePieceDest}`);
@@ -104,7 +118,12 @@ export async function ejectFacet(
 
   const lang = getLanguage();
   const builtinDir = getBuiltinFacetDir(lang, facetType);
-  const srcPath = join(builtinDir, `${name}.md`);
+  const safeName = sanitizeTerminalText(name);
+  const srcPath = resolveEjectPath(builtinDir, name, '.md');
+  if (!srcPath) {
+    error(`Invalid ${facetType} name: ${safeName}`);
+    return;
+  }
 
   if (!existsSync(srcPath)) {
     error(`Builtin ${facetType}/${name}.md not found`);
@@ -117,13 +136,18 @@ export async function ejectFacet(
     ? getGlobalFacetDir(facetType)
     : getProjectFacetDir(options.projectDir, facetType);
   const targetLabel = options.global ? 'global (~/.takt/)' : 'project (.takt/)';
-  const destPath = join(targetDir, `${name}.md`);
+  const destPath = resolveEjectPath(targetDir, name, '.md');
+  if (!destPath) {
+    error(`Invalid ${facetType} name: ${safeName}`);
+    return;
+  }
+  const safeDestPath = sanitizeTerminalText(destPath);
 
   info(`Ejecting ${facetType}/${name} to ${targetLabel}`);
   blankLine();
 
   if (existsSync(destPath)) {
-    warn(`Already exists: ${destPath}`);
+    warn(`Already exists: ${safeDestPath}`);
     warn('Skipping copy (existing file takes priority).');
     return;
   }
@@ -131,7 +155,7 @@ export async function ejectFacet(
   mkdirSync(dirname(destPath), { recursive: true });
   const content = readFileSync(srcPath, 'utf-8');
   writeFileSync(destPath, content, 'utf-8');
-  success(`Ejected: ${destPath}`);
+  success(`Ejected: ${safeDestPath}`);
 }
 
 /** List available builtin workflows for ejection */

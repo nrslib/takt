@@ -2,7 +2,7 @@
 
 [English](./repertoire.md)
 
-Repertoire パッケージを使うと、GitHub リポジトリから TAKT のピースやファセットをインストール・共有できます。
+Repertoire パッケージを使うと、GitHub リポジトリから TAKT の workflow やファセットをインストール・共有できます。
 
 ## クイックスタート
 
@@ -42,7 +42,7 @@ my-takt-repertoire/
     expert.yaml
 ```
 
-`facets/` と `pieces/` ディレクトリのみがインポートされます。その他のファイルは無視されます。
+`facets/` と `pieces/` ディレクトリだけがインポートされます。repertoire パッケージでは workflow 定義を現在 `pieces/` に配置します。その他のファイルは無視されます。
 
 ### takt-repertoire.yaml
 
@@ -50,7 +50,7 @@ my-takt-repertoire/
 
 ```yaml
 # 説明（任意）
-description: フルスタック開発用ピースとエキスパートレビュアー
+description: フルスタック開発用 workflow とエキスパートレビュアー
 
 # パッケージルートへのパス（リポジトリルートからの相対パス、デフォルト: "."）
 path: .
@@ -65,7 +65,7 @@ takt:
 | フィールド | 必須 | デフォルト | 説明 |
 |-----------|------|-----------|------|
 | `description` | いいえ | - | パッケージの説明 |
-| `path` | いいえ | `.` | `facets/` と `pieces/` を含むディレクトリへのパス |
+| `path` | いいえ | `.` | `facets/` と `pieces/` 内の workflow 定義を含むディレクトリへのパス |
 | `takt.min_version` | いいえ | - | 必要な TAKT の最低バージョン（X.Y.Z 形式） |
 
 ## インストール
@@ -76,12 +76,12 @@ takt repertoire add github:{owner}/{repo}@{ref}
 
 `@{ref}` は省略可能です。省略した場合、リポジトリのデフォルトブランチが使用されます。
 
-インストール前に、パッケージの内容サマリ（ファセット種別ごとの数、ピース名、edit 権限の警告）が表示され、確認を求められます。
+インストール前に、パッケージの内容サマリ（ファセット種別ごとの数、workflow 名、edit 権限の警告）が表示され、確認を求められます。
 
 ### インストール時の処理
 
 1. `gh api` 経由で GitHub から tarball をダウンロード
-2. `facets/` と `pieces/` のファイルのみを展開（`.md`、`.yaml`、`.yml`）
+2. `facets/` と `pieces/` の workflow ファイルのみを展開（`.md`、`.yaml`、`.yml`）
 3. `takt-repertoire.yaml` マニフェストをバリデーション
 4. TAKT バージョン互換性チェック
 5. `~/.takt/repertoire/@{owner}/{repo}/` にファイルをコピー
@@ -100,20 +100,20 @@ takt repertoire add github:{owner}/{repo}@{ref}
 
 ## パッケージの使い方
 
-### ピース
+### ワークフロー
 
-インストールされたピースはピース選択 UI の「repertoire」カテゴリにパッケージごとのサブカテゴリとして表示されます。直接指定も可能です。
+インストールされた workflow は workflow 選択 UI の「repertoire」カテゴリにパッケージごとのサブカテゴリとして表示されます。直接指定も可能です。
 
 ```bash
-takt --piece @nrslib/takt-fullstack/expert
+takt --workflow @nrslib/takt-fullstack/expert
 ```
 
 ### @scope 参照
 
-インストール済みパッケージのファセットは、piece YAML で `@{owner}/{repo}/{facet-name}` 構文を使って参照できます。
+インストール済みパッケージのファセットは、workflow YAML で `@{owner}/{repo}/{facet-name}` 構文を使って参照できます。
 
 ```yaml
-movements:
+steps:
   - name: implement
     persona: @nrslib/takt-fullstack/expert-coder
     policy: @nrslib/takt-fullstack/strict-review
@@ -122,14 +122,14 @@ movements:
 
 ### 4層ファセット解決
 
-repertoire パッケージのピースが名前（@scope なし）でファセットを解決する場合、次の順序で検索されます。
+repertoire パッケージの workflow が名前（@scope なし）でファセットを解決する場合、次の順序で検索されます。
 
 1. **パッケージローカル**: `~/.takt/repertoire/@{owner}/{repo}/facets/{type}/`
 2. **プロジェクト**: `.takt/facets/{type}/`
 3. **ユーザー**: `~/.takt/facets/{type}/`
 4. **ビルトイン**: `builtins/{lang}/facets/{type}/`
 
-パッケージのピースは自身のファセットを最優先で見つけつつ、ユーザーやプロジェクトによるオーバーライドも可能です。
+パッケージの workflow は自身のファセットを最優先で見つけつつ、ユーザーやプロジェクトによるオーバーライドも可能です。
 
 ## パッケージ管理
 
@@ -147,7 +147,7 @@ takt repertoire list
 takt repertoire remove @{owner}/{repo}
 ```
 
-削除前に、ユーザーやプロジェクトのピースがパッケージのファセットを参照していないかチェックし、影響がある場合は警告します。
+削除前に、ユーザーやプロジェクトの workflow がパッケージのファセットを参照していないかチェックし、影響がある場合は警告します。
 
 ## ディレクトリ構造
 
@@ -163,6 +163,6 @@ takt repertoire remove @{owner}/{repo}
         personas/
         policies/
         ...
-      pieces/
+      pieces/                 # repertoire パッケージ内の workflow 定義
         expert.yaml
 ```

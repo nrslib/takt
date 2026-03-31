@@ -59,7 +59,7 @@ describe('variable substitution', () => {
   it('replaces {{variableName}} placeholders with provided values', () => {
     const result = loadTemplate('perform_builtin_agent_system_prompt', 'en', { agentName: 'test-agent' });
     expect(result).toContain('You are the test-agent agent');
-    expect(result).toContain('Follow the standard test-agent piece');
+    expect(result).toContain('Follow the standard test-agent workflow');
   });
 
   it('replaces undefined variables with empty string', () => {
@@ -287,6 +287,16 @@ describe('template content integrity', () => {
   it('perform_builtin_agent_system_prompt contains {{agentName}} placeholder', () => {
     const result = loadTemplate('perform_builtin_agent_system_prompt', 'en');
     expect(result).toContain('{{agentName}}');
+  });
+
+  it('perform_builtin_agent_system_prompt uses workflow terminology in both languages', () => {
+    const en = loadTemplate('perform_builtin_agent_system_prompt', 'en');
+    expect(en).toContain('Follow the standard {{agentName}} workflow.');
+    expect(en).not.toContain('Follow the standard {{agentName}} piece.');
+
+    const ja = loadTemplate('perform_builtin_agent_system_prompt', 'ja');
+    expect(ja).toContain('標準の {{agentName}} ワークフローに従ってください。');
+    expect(ja).not.toContain('piece');
   });
 
   it('perform_agent_system_prompt contains {{agentDefinition}} placeholder', () => {

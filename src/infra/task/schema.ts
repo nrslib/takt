@@ -5,17 +5,91 @@
 import { z } from 'zod/v4';
 import { isValidTaskDir } from '../../shared/utils/taskPaths.js';
 
+function getStringField(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === 'string' ? value : undefined;
+}
+
+function assertMatchingAliasValues(
+  canonicalValue: string | undefined,
+  aliasValue: string | undefined,
+  message: string,
+): void {
+  if (canonicalValue !== undefined && aliasValue !== undefined && canonicalValue !== aliasValue) {
+    throw new Error(message);
+  }
+}
+
+function toTaskConfigRecord(input: unknown): Record<string, unknown> | null {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+    return null;
+  }
+  return input as Record<string, unknown>;
+}
+
+export function resolveTaskWorkflowValue(record: Record<string, unknown>): string | undefined {
+  const piece = getStringField(record, 'piece');
+  const workflow = getStringField(record, 'workflow');
+  assertMatchingAliasValues(piece, workflow, "Task configuration conflict: 'workflow' and 'piece' must match when both are set.");
+  return workflow ?? piece;
+}
+
+export function resolveTaskStartMovementValue(record: Record<string, unknown>): string | undefined {
+  const startMovement = getStringField(record, 'start_movement');
+  const startStep = getStringField(record, 'start_step');
+  assertMatchingAliasValues(startMovement, startStep, "Task configuration conflict: 'start_step' and 'start_movement' must match when both are set.");
+  return startStep ?? startMovement;
+}
+
+function normalizeAliasedTaskConfig(input: unknown): unknown {
+  const record = toTaskConfigRecord(input);
+  if (!record) {
+    return input;
+  }
+
+  const workflow = resolveTaskWorkflowValue(record);
+  const startMovement = resolveTaskStartMovementValue(record);
+
+  return {
+    ...record,
+    ...(workflow !== undefined ? { piece: workflow } : {}),
+    ...(startMovement !== undefined ? { start_movement: startMovement } : {}),
+  };
+}
+
+function serializeTaskConfig(record: Record<string, unknown>): Record<string, unknown> {
+  const serialized = { ...record };
+  const piece = getStringField(serialized, 'piece') ?? getStringField(serialized, 'workflow');
+  const startMovement = getStringField(serialized, 'start_movement') ?? getStringField(serialized, 'start_step');
+
+  delete serialized.piece;
+  delete serialized.workflow;
+  delete serialized.start_movement;
+  delete serialized.start_step;
+
+  if (piece !== undefined) {
+    serialized.workflow = piece;
+  }
+  if (startMovement !== undefined) {
+    serialized.start_step = startMovement;
+  }
+
+  return serialized;
+}
+
 /**
  * Per-task execution config schema.
  * Used by `takt add` input and in-memory TaskInfo.data.
  */
-export const TaskExecutionConfigSchema = z.object({
+const TaskExecutionConfigObjectSchema = z.object({
   worktree: z.union([z.boolean(), z.string()]).optional(),
   branch: z.string().optional(),
   base_branch: z.string().optional(),
   piece: z.string().optional(),
+  workflow: z.string().optional(),
   issue: z.number().int().positive().optional(),
   start_movement: z.string().optional(),
+  start_step: z.string().optional(),
   retry_note: z.string().optional(),
   auto_pr: z.boolean().optional(),
   draft_pr: z.boolean().optional(),
@@ -23,12 +97,29 @@ export const TaskExecutionConfigSchema = z.object({
   exceeded_current_iteration: z.number().int().min(0).optional(),
 });
 
+function stripTaskAliases<T extends Record<string, unknown>>(
+  config: T,
+): Omit<T, 'workflow' | 'start_step'> {
+  const canonical = { ...config };
+  delete canonical.workflow;
+  delete canonical.start_step;
+  return canonical;
+}
+
+export const TaskExecutionConfigSchema = z.preprocess(
+  normalizeAliasedTaskConfig,
+  TaskExecutionConfigObjectSchema,
+).transform(stripTaskAliases);
+
 /**
  * Single task payload schema used by in-memory TaskInfo.data.
  */
-export const TaskFileSchema = TaskExecutionConfigSchema.extend({
-  task: z.string().min(1),
-});
+export const TaskFileSchema = z.preprocess(
+  normalizeAliasedTaskConfig,
+  TaskExecutionConfigObjectSchema.extend({
+    task: z.string().min(1),
+  }),
+).transform(stripTaskAliases);
 
 export type TaskFileData = z.infer<typeof TaskFileSchema>;
 
@@ -42,22 +133,25 @@ export const TaskFailureSchema = z.object({
 });
 export type TaskFailure = z.infer<typeof TaskFailureSchema>;
 
-export const TaskRecordSchema = TaskExecutionConfigSchema.extend({
-  name: z.string().min(1),
-  status: TaskStatusSchema,
-  slug: z.string().optional(),
-  summary: z.string().optional(),
-  worktree_path: z.string().optional(),
-  pr_url: z.string().optional(),
-  content: z.string().min(1).optional(),
-  content_file: z.string().min(1).optional(),
-  task_dir: z.string().optional(),
-  created_at: z.string().min(1),
-  started_at: z.string().nullable(),
-  completed_at: z.string().nullable(),
-  owner_pid: z.number().int().positive().nullable().optional(),
-  failure: TaskFailureSchema.optional(),
-}).superRefine((value, ctx) => {
+export const TaskRecordSchema = z.preprocess(
+  normalizeAliasedTaskConfig,
+  TaskExecutionConfigObjectSchema.extend({
+    name: z.string().min(1),
+    status: TaskStatusSchema,
+    slug: z.string().optional(),
+    summary: z.string().optional(),
+    worktree_path: z.string().optional(),
+    pr_url: z.string().optional(),
+    content: z.string().min(1).optional(),
+    content_file: z.string().min(1).optional(),
+    task_dir: z.string().optional(),
+    created_at: z.string().min(1),
+    started_at: z.string().nullable(),
+    completed_at: z.string().nullable(),
+    owner_pid: z.number().int().positive().nullable().optional(),
+    failure: TaskFailureSchema.optional(),
+  }),
+).transform(stripTaskAliases).superRefine((value, ctx) => {
   const sourceFields = [value.content, value.content_file, value.task_dir].filter((field) => field !== undefined);
   if (sourceFields.length === 0) {
     ctx.addIssue({
@@ -271,3 +365,13 @@ export const TasksFileSchema = z.object({
   tasks: z.array(TaskRecordSchema),
 });
 export type TasksFileData = z.infer<typeof TasksFileSchema>;
+
+export function serializeTaskRecord(record: TaskRecord): Record<string, unknown> {
+  return serializeTaskConfig(record as Record<string, unknown>);
+}
+
+export function serializeTasksFileData(state: TasksFileData): { tasks: Record<string, unknown>[] } {
+  return {
+    tasks: state.tasks.map(serializeTaskRecord),
+  };
+}

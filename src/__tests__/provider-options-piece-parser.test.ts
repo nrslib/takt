@@ -3,6 +3,26 @@ import { normalizePieceConfig } from '../infra/config/loaders/pieceParser.js';
 import { mergeProviderOptions } from '../infra/config/providerOptions.js';
 
 describe('normalizePieceConfig provider_options', () => {
+  it('steps と initial_step を movements / initialMovement に正規化する', () => {
+    const raw = {
+      name: 'workflow-aliases',
+      initial_step: 'plan',
+      steps: [
+        {
+          name: 'plan',
+          instruction: '{task}',
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        },
+      ],
+    };
+
+    const config = normalizePieceConfig(raw, process.cwd());
+
+    expect(config.initialMovement).toBe('plan');
+    expect(config.movements).toHaveLength(1);
+    expect(config.movements[0]?.name).toBe('plan');
+  });
+
   it('answer_agent を指定しても PieceConfig に answerAgent を残さない', () => {
     const raw = {
       name: 'answer-agent-removed',

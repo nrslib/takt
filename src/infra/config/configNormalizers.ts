@@ -7,6 +7,10 @@ import type {
   TaktProviderConfigEntry,
   TaktProvidersConfig,
 } from '../../core/models/config-types.js';
+import {
+  resolvePermissionOverrideAliases,
+  type RawProviderPermissionProfile,
+} from './configKeyAliases.js';
 import { validateProviderModelCompatibility } from './providerModelCompatibility.js';
 
 export function normalizeRuntime(
@@ -19,21 +23,26 @@ export function normalizeRuntime(
 }
 
 export function normalizeProviderProfiles(
-  raw: Record<string, { default_permission_mode: unknown; movement_permission_overrides?: Record<string, unknown> }> | undefined,
+  raw: Record<string, RawProviderPermissionProfile> | undefined,
 ): ProviderPermissionProfiles | undefined {
   if (!raw) return undefined;
 
-  const entries = Object.entries(raw).map(([provider, profile]) => [provider, {
-    defaultPermissionMode: profile.default_permission_mode,
-    movementPermissionOverrides: profile.movement_permission_overrides,
-  }]);
+  const entries = Object.entries(raw).map(([provider, profile]) => {
+    return [provider, {
+      defaultPermissionMode: profile.default_permission_mode,
+      movementPermissionOverrides: resolvePermissionOverrideAliases(
+        `provider_profiles.${provider}`,
+        profile,
+      ),
+    }];
+  });
 
   return Object.fromEntries(entries) as ProviderPermissionProfiles;
 }
 
 export function denormalizeProviderProfiles(
   profiles: ProviderPermissionProfiles | undefined,
-): Record<string, { default_permission_mode: string; movement_permission_overrides?: Record<string, string> }> | undefined {
+): Record<string, { default_permission_mode: string; step_permission_overrides?: Record<string, string> }> | undefined {
   if (!profiles) return undefined;
   const entries = Object.entries(profiles);
   if (entries.length === 0) return undefined;
@@ -41,9 +50,9 @@ export function denormalizeProviderProfiles(
   return Object.fromEntries(entries.map(([provider, profile]) => [provider, {
     default_permission_mode: profile.defaultPermissionMode,
     ...(profile.movementPermissionOverrides
-      ? { movement_permission_overrides: profile.movementPermissionOverrides }
+      ? { step_permission_overrides: profile.movementPermissionOverrides }
       : {}),
-  }])) as Record<string, { default_permission_mode: string; movement_permission_overrides?: Record<string, string> }>;
+  }])) as Record<string, { default_permission_mode: string; step_permission_overrides?: Record<string, string> }>;
 }
 
 export function normalizePieceOverrides(

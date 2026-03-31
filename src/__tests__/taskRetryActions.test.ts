@@ -113,6 +113,17 @@ vi.mock('../infra/task/index.js', () => ({
       return mockRequeueTask(...args);
     }
   },
+  resolveTaskWorkflowValue: vi.fn((data?: Record<string, unknown>) => {
+    if (!data) {
+      return undefined;
+    }
+    const workflow = typeof data.workflow === 'string' ? data.workflow : undefined;
+    const piece = typeof data.piece === 'string' ? data.piece : undefined;
+    if (workflow !== undefined && piece !== undefined && workflow !== piece) {
+      throw new Error("Task configuration conflict: 'workflow' and 'piece' must match when both are set.");
+    }
+    return workflow ?? piece;
+  }),
 }));
 
 vi.mock('../features/tasks/execute/taskExecution.js', () => ({
@@ -413,6 +424,25 @@ describe('retryFailedTask', () => {
 
       expect(mockSelectPiece).not.toHaveBeenCalled();
       expect(mockLoadPieceByIdentifier).toHaveBeenCalledWith('default', '/project');
+    });
+
+    it('should reuse previous workflow when only workflow alias is stored', async () => {
+      const task = makeFailedTask({ data: { task: 'Do something', workflow: 'default' } });
+      mockConfirm.mockResolvedValue(true);
+
+      await retryFailedTask(task, '/project');
+
+      const [message] = mockConfirm.mock.calls[0] ?? [];
+      expect(message).toEqual(expect.stringContaining('"default"'));
+      expect(mockLoadPieceByIdentifier).toHaveBeenCalledWith('default', '/project');
+    });
+
+    it('should fail fast when workflow and piece conflict in retry data', async () => {
+      const task = makeFailedTask({ data: { task: 'Do something', workflow: 'a', piece: 'b' } });
+
+      await expect(retryFailedTask(task, '/project')).rejects.toThrow(
+        "Task configuration conflict: 'workflow' and 'piece' must match when both are set.",
+      );
     });
 
     it('should call selectPiece when reuse is declined', async () => {

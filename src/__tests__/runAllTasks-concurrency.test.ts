@@ -766,7 +766,7 @@ describe('runAllTasks concurrency', () => {
       expect(message).toContain('success=1');
       expect(message).toContain('failed=0');
       expect(message).toContain('task-1');
-      expect(message).toContain('piece=default');
+      expect(message).toContain('workflow=default');
       expect(message).toContain('issue=#42');
       expect(message).toContain('duration=30s');
       expect(message).toContain('pr=https://github.com/org/repo/pull/10');
@@ -806,9 +806,9 @@ describe('runAllTasks concurrency', () => {
       expect(message).toContain('total=1');
       expect(message).toContain('failed=1');
       expect(message).toContain('task-1');
-      expect(message).toContain('piece=review');
+      expect(message).toContain('workflow=review');
       expect(message).toContain('duration=45s');
-      expect(message).toContain('movement=ai_review');
+      expect(message).toContain('step=ai_review');
       expect(message).toContain('error=Lint failed');
     });
 

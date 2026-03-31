@@ -243,7 +243,8 @@ describe('executeAndCompleteTask', () => {
 
     expect(result).toBe(false);
     expect(mockError).toHaveBeenCalledWith('Workflow "missing-workflow" not found.');
-    expect(mockInfo).toHaveBeenCalledWith('Available workflows are in ~/.takt/pieces/ or .takt/pieces/');
+    expect(mockInfo).toHaveBeenCalledWith('Available workflows are searched in .takt/workflows/, .takt/pieces/, ~/.takt/workflows/, then ~/.takt/pieces/.');
+    expect(mockInfo).toHaveBeenCalledWith('If the same workflow name exists in multiple locations, project workflows/ take priority over project pieces/, then user workflows/, then user pieces/.');
     expect(mockInfo).toHaveBeenCalledWith('Specify a valid workflow when creating tasks (e.g., via "takt add").');
   });
 
@@ -260,7 +261,7 @@ describe('executeAndCompleteTask', () => {
 
     expect(result).toBe(false);
     expect(mockError).toHaveBeenCalledWith('Workflow file not found: ./custom-workflow.yaml');
-    expect(mockInfo).not.toHaveBeenCalledWith('Available workflows are in ~/.takt/pieces/ or .takt/pieces/');
+    expect(mockInfo).not.toHaveBeenCalledWith('Available workflows are searched in .takt/workflows/, .takt/pieces/, ~/.takt/workflows/, then ~/.takt/pieces/.');
   });
 
   it('should sanitize workflow identifiers in terminal errors', async () => {

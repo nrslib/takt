@@ -119,7 +119,7 @@ export function persistExceededTaskResult(
     newMaxMovements: exceeded.newMaxMovements,
     currentIteration: exceeded.currentIteration,
   });
-  info(`Task "${task.name}" exceeded iteration limit at movement "${exceeded.currentMovement}"`);
+  info(`Task "${task.name}" exceeded iteration limit at step "${exceeded.currentMovement}"`);
 }
 
 export function persistTaskError(

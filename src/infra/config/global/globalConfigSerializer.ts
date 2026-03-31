@@ -206,7 +206,7 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
     raw.task_poll_interval_ms = config.taskPollIntervalMs;
   }
   if (config.interactivePreviewMovements !== undefined) {
-    raw.interactive_preview_movements = config.interactivePreviewMovements;
+    raw.interactive_preview_steps = config.interactivePreviewMovements;
   }
   return raw;
 }

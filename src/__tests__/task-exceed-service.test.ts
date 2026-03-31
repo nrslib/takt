@@ -140,7 +140,7 @@ describe('TaskRunner - exceedTask', () => {
     expect(exceededTask.owner_pid).toBeNull();
   });
 
-  it('should record the current movement as start_movement', () => {
+  it('should record the current movement as start_step', () => {
     // Given: a running task
     runner.addTask('Task A');
     runner.claimNextTasks(1);
@@ -153,10 +153,10 @@ describe('TaskRunner - exceedTask', () => {
       currentIteration: 30,
     });
 
-    // Then: start_movement is set to 'reviewers'
+    // Then: start_step is set to 'reviewers'
     const afterFile = loadTasksFile(testDir);
     const exceededTask = afterFile.tasks[0]!;
-    expect(exceededTask.start_movement).toBe('reviewers');
+    expect(exceededTask.start_step).toBe('reviewers');
   });
 
   it('should record exceeded_max_movements', () => {
@@ -315,8 +315,8 @@ describe('TaskRunner - requeueExceededTask', () => {
     expect(file.tasks[0]?.exceeded_current_iteration).toBe(30);
   });
 
-  it('should preserve start_movement for re-entry point', () => {
-    // Given: an exceeded task with start_movement = 'reviewers'
+  it('should preserve start_step for re-entry point', () => {
+    // Given: an exceeded task with start_step = 'reviewers'
     writeExceededRecord(testDir, {
       name: 'task-a',
       start_movement: 'reviewers',
@@ -325,9 +325,9 @@ describe('TaskRunner - requeueExceededTask', () => {
     // When: requeueExceededTask is called
     runner.requeueExceededTask('task-a');
 
-    // Then: start_movement is preserved
+    // Then: start_step is preserved
     const file = loadTasksFile(testDir);
-    expect(file.tasks[0]?.start_movement).toBe('reviewers');
+    expect(file.tasks[0]?.start_step).toBe('reviewers');
   });
 
   it('should throw when task is not in exceeded status', () => {

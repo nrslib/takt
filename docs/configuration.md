@@ -26,7 +26,7 @@ notification_sound_events:    # Optional per-event toggles
   run_abort: true             # Enabled by default; set false to disable
 concurrency: 1                # Parallel task count for takt run (1-10, default: 1 = sequential)
 task_poll_interval_ms: 500    # Polling interval for new tasks during takt run (100-5000, default: 500)
-interactive_preview_movements: 3  # Movement previews in interactive mode (0-10, default: 3)
+interactive_preview_steps: 3      # Step previews in interactive mode (0-10, default: 3)
 # auto_fetch: false            # Fetch remote before cloning (default: false)
 # base_branch: main            # Base branch for clone creation (default: remote default branch)
 
@@ -50,7 +50,7 @@ interactive_preview_movements: 3  # Movement previews in interactive mode (0-10,
 # provider_profiles:
 #   codex:
 #     default_permission_mode: full
-#     movement_permission_overrides:
+#     step_permission_overrides:
 #       ai_review: readonly
 #   claude:
 #     default_permission_mode: edit
@@ -127,7 +127,7 @@ interactive_preview_movements: 3  # Movement previews in interactive mode (0-10,
 | `notification_sound_events` | object | - | Per-event notification sound toggles |
 | `concurrency` | number (1-10) | `1` | Parallel task count for `takt run` |
 | `task_poll_interval_ms` | number (100-5000) | `500` | Polling interval for new tasks |
-| `interactive_preview_movements` | number (0-10) | `3` | Movement previews in interactive mode |
+| `interactive_preview_steps` | number (0-10) | `3` | Step previews in interactive mode |
 | `worktree_dir` | string | - | Directory for shared clones (defaults to `../{clone-name}`) |
 | `allow_git_hooks` | boolean | `false` | Allow git hooks during TAKT-managed auto-commit |
 | `allow_git_filters` | boolean | `false` | Allow git filters during TAKT-managed auto-commit |
@@ -165,7 +165,6 @@ Configure project-specific settings in `.takt/config.yaml`. This file is created
 
 ```yaml
 # .takt/config.yaml
-piece: default                # Current piece for this project
 provider: claude              # Override provider for this project
 model: sonnet                 # Override model for this project
 auto_pr: true                 # Auto-create PR after worktree execution
@@ -174,7 +173,7 @@ logging:
 concurrency: 2                # Parallel task count for takt run in this project (1-10)
 # base_branch: main           # Base branch for clone creation (overrides global, default: remote default branch)
 
-# Provider-specific options (overrides global, overridden by piece/movement)
+# Provider-specific options (overrides global, overridden by workflow/step)
 # provider_options:
 #   codex:
 #     network_access: true
@@ -183,7 +182,7 @@ concurrency: 2                # Parallel task count for takt run in this project
 # provider_profiles:
 #   codex:
 #     default_permission_mode: full
-#     movement_permission_overrides:
+#     step_permission_overrides:
 #       ai_review: readonly
 ```
 
@@ -191,7 +190,6 @@ concurrency: 2                # Parallel task count for takt run in this project
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `piece` | string | `"default"` | Current piece name for this project |
 | `provider` | `"claude"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` \| `"mock"` | - | Override provider |
 | `model` | string | - | Override model name (passed to provider as-is) |
 | `allow_git_hooks` | boolean | `false` | Allow git hooks during TAKT-managed auto-commit |
@@ -295,9 +293,9 @@ Paths must be absolute paths to executable files. Environment variables take pre
 
 ## Model Resolution
 
-The model used for each movement is resolved with the following priority order (highest first):
+The model used for each step is resolved with the following priority order (highest first):
 
-1. **Piece movement `model`** - Specified in the movement definition in piece YAML
+1. **Workflow step `model`** - Specified in the step definition in workflow YAML
 2. **Global config `model`** - Default model in `~/.takt/config.yaml`
 3. **Provider default** - Falls back to the provider's built-in default (Claude: `sonnet`, Codex: `codex`, OpenCode: provider default, Cursor: CLI default, Copilot: CLI default)
 
@@ -318,14 +316,14 @@ The model used for each movement is resolved with the following priority order (
 ```yaml
 # ~/.takt/config.yaml
 provider: claude
-model: opus     # Default model for all movements (unless overridden)
+model: opus     # Default model for all steps (unless overridden)
 ```
 
 ```yaml
-# piece.yaml - movement-level override takes highest priority
-movements:
+# workflow.yaml - step-level override takes highest priority
+steps:
   - name: plan
-    model: opus       # This movement uses opus regardless of global config
+    model: opus       # This step uses opus regardless of global config
     ...
   - name: implement
     # No model specified - falls back to global config (opus)
@@ -334,7 +332,7 @@ movements:
 
 ## Provider Profiles
 
-Provider profiles allow you to set default permission modes and per-movement permission overrides for each provider. This is useful when running different providers with different security postures.
+Provider profiles allow you to set default permission modes and per-step permission overrides for each provider. This is useful when running different providers with different security postures.
 
 ### Permission Modes
 
@@ -355,11 +353,11 @@ Provider profiles can be set at both global and project levels:
 provider_profiles:
   codex:
     default_permission_mode: full
-    movement_permission_overrides:
+    step_permission_overrides:
       ai_review: readonly
   claude:
     default_permission_mode: edit
-    movement_permission_overrides:
+    step_permission_overrides:
       implement: full
 ```
 
@@ -367,17 +365,17 @@ provider_profiles:
 
 Permission mode is resolved in the following order (first match wins):
 
-1. **Project** `provider_profiles.<provider>.movement_permission_overrides.<movement>`
-2. **Global** `provider_profiles.<provider>.movement_permission_overrides.<movement>`
+1. **Project** `provider_profiles.<provider>.step_permission_overrides.<step>`
+2. **Global** `provider_profiles.<provider>.step_permission_overrides.<step>`
 3. **Project** `provider_profiles.<provider>.default_permission_mode`
 4. **Global** `provider_profiles.<provider>.default_permission_mode`
-5. **Movement** `required_permission_mode` (acts as a minimum floor)
+5. **Step** `required_permission_mode` (acts as a minimum floor)
 
-The `required_permission_mode` on a movement sets the minimum floor. If the resolved mode from provider profiles is lower than the required mode, the required mode is used instead. For example, if a movement requires `edit` but the profile resolves to `readonly`, the effective mode will be `edit`.
+The `required_permission_mode` on a step sets the minimum floor. If the resolved mode from provider profiles is lower than the required mode, the required mode is used instead. For example, if a step requires `edit` but the profile resolves to `readonly`, the effective mode will be `edit`.
 
 ### Persona Providers
 
-Route specific personas to different providers and models without duplicating pieces:
+Route specific personas to different providers and models without duplicating workflows:
 
 ```yaml
 # ~/.takt/config.yaml
@@ -389,13 +387,13 @@ persona_providers:
     provider: claude       # Keep reviewers on Claude
 ```
 
-Both `provider` and `model` are optional. `model` resolution priority: movement YAML `model` > `persona_providers[persona].model` > global `model`.
+Both `provider` and `model` are optional. `model` resolution priority: step YAML `model` > `persona_providers[persona].model` > global `model`.
 
-This allows mixing providers and models within a single piece. The persona name is matched against the `persona` key in the movement definition.
+This allows mixing providers and models within a single workflow. The persona name is matched against the `persona` key in the step definition.
 
 ## Piece Categories
 
-Organize pieces into categories for better UI presentation in `takt switch` and piece selection prompts.
+Organize workflows into categories for better UI presentation in the `takt` workflow selection prompt.
 
 ### Configuration
 
@@ -416,20 +414,20 @@ piece_categories:
   Research:
     pieces: [research, magi]
 
-show_others_category: true         # Show uncategorized pieces (default: true)
-others_category_name: "Other Pieces"  # Name for uncategorized category
+show_others_category: true         # Show uncategorized workflows (default: true)
+others_category_name: "Other Workflows"  # Name for uncategorized category
 ```
 
 ### Category Features
 
 - **Nested categories** - Unlimited depth for hierarchical organization
-- **Per-category piece lists** - Assign pieces to specific categories
-- **Others category** - Automatically collects uncategorized pieces (can be disabled via `show_others_category: false`)
-- **Builtin piece filtering** - Disable all builtins via `enable_builtin_pieces: false`, or selectively via `disabled_builtins: [name1, name2]`
+- **Per-category workflow lists** - Assign workflows to specific categories
+- **Others category** - Automatically collects uncategorized workflows (can be disabled via `show_others_category: false`)
+- **Builtin workflow filtering** - Disable all builtins via `enable_builtin_pieces: false`, or selectively via `disabled_builtins: [name1, name2]`
 
 ### Resetting Categories
 
-Reset piece categories to builtin defaults:
+Reset workflow categories to builtin defaults:
 
 ```bash
 takt reset categories
@@ -467,7 +465,7 @@ pipeline:
 |--------|-------------|
 | `--pipeline` | Enable pipeline (non-interactive) mode |
 | `--auto-pr` | Create PR after execution |
-| `--skip-git` | Skip branch creation, commit, and push (piece-only) |
+| `--skip-git` | Skip branch creation, commit, and push (workflow-only) |
 | `--repo <owner/repo>` | Repository for PR creation |
 | `-q, --quiet` | Minimal output mode (suppress AI output) |
 

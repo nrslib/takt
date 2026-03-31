@@ -9,6 +9,8 @@ import {
   resolveCloneBaseDir,
   branchExists,
   summarizeTaskName,
+  resolveTaskWorkflowValue,
+  resolveTaskStartMovementValue,
 } from '../../../infra/task/index.js';
 import { getGitProvider, type Issue } from '../../../infra/git/index.js';
 import { withProgress } from '../../../shared/ui/index.js';
@@ -111,11 +113,13 @@ export async function resolveTaskExecution(
 
   const data = task.data;
   if (!data) {
-    throw new Error(`Task "${task.name}" is missing required data, including piece.`);
+    throw new Error(`Task "${task.name}" is missing required data, including workflow.`);
   }
 
-  if (!data.piece || typeof data.piece !== 'string' || data.piece.trim() === '') {
-    throw new Error(`Task "${task.name}" is missing required piece.`);
+  const normalizedData = data as Record<string, unknown>;
+  const execPiece = resolveTaskWorkflowValue(normalizedData);
+  if (!execPiece || execPiece.trim() === '') {
+    throw new Error(`Task "${task.name}" is missing required workflow.`);
   }
 
   let execCwd = defaultCwd;
@@ -179,8 +183,7 @@ export async function resolveTaskExecution(
     taskPrompt = stageTaskSpecForExecution(defaultCwd, execCwd, task.taskDir, reportDirName);
   }
 
-  const execPiece = data.piece;
-  const startMovement = data.start_movement;
+  const startMovement = resolveTaskStartMovementValue(normalizedData);
   const retryNote = data.retry_note;
   const maxMovementsOverride = data.exceeded_max_movements;
   const initialIterationOverride = data.exceeded_current_iteration;

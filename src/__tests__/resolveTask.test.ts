@@ -88,6 +88,50 @@ describe('resolveTaskExecution', () => {
     });
   });
 
+  it('should resolve execPiece from workflow alias', async () => {
+    const root = createTempProjectDir();
+    const task = createTask({
+      data: ({
+        task: 'Run task',
+        piece: undefined,
+        workflow: 'workflow-only',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+    });
+
+    const result = await resolveTaskExecutionWithPiece(task, root);
+
+    expect(result.execPiece).toBe('workflow-only');
+  });
+
+  it('should resolve startMovement from start_step alias', async () => {
+    const root = createTempProjectDir();
+    const task = createTask({
+      data: ({
+        task: 'Run task',
+        start_step: 'implement',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+    });
+
+    const result = await resolveTaskExecutionWithPiece(task, root);
+
+    expect(result.startMovement).toBe('implement');
+  });
+
+  it('should fail fast when workflow and piece conflict', async () => {
+    const root = createTempProjectDir();
+    const task = createTask({
+      data: ({
+        task: 'Run task',
+        workflow: 'workflow-a',
+        piece: 'workflow-b',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+    });
+
+    await expect(resolveTaskExecutionWithPiece(task, root)).rejects.toThrow(
+      "Task configuration conflict: 'workflow' and 'piece' must match when both are set.",
+    );
+  });
+
   it('should generate report context and copy issue-bearing task spec', async () => {
     const root = createTempProjectDir();
     const taskDir = '.takt/tasks/issue-task-123';

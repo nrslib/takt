@@ -49,7 +49,7 @@ The following permissions are required for `takt-action` to function correctly:
 
 ## Pipeline Mode
 
-Specifying `--pipeline` enables non-interactive pipeline mode. It automatically creates a branch, runs the piece, commits, and pushes. This mode is designed for CI/CD automation where no human interaction is available.
+Specifying `--pipeline` enables non-interactive pipeline mode. It automatically creates a branch, runs the workflow, commits, and pushes. This mode is designed for CI/CD automation where no human interaction is available.
 
 In pipeline mode, PRs are **not** created unless `--auto-pr` is explicitly specified.
 
@@ -60,10 +60,10 @@ In pipeline mode, PRs are **not** created unless `--auto-pr` is explicitly speci
 | `--pipeline` | **Enable pipeline (non-interactive) mode** -- Required for CI/automation |
 | `-t, --task <text>` | Task content (alternative to GitHub Issue) |
 | `-i, --issue <N>` | GitHub issue number (same as `#N` in interactive mode) |
-| `-w, --piece <name or path>` | Piece name or path to piece YAML file |
+| `-w, --workflow <name or path>` | Workflow name or path to workflow YAML file (`--piece` remains available as a compatibility alias) |
 | `-b, --branch <name>` | Specify branch name (auto-generated if omitted) |
 | `--auto-pr` | Create PR (interactive: skip confirmation, pipeline: enable PR) |
-| `--skip-git` | Skip branch creation, commit, and push (pipeline mode, piece-only) |
+| `--skip-git` | Skip branch creation, commit, and push (pipeline mode, workflow-only) |
 | `--repo <owner/repo>` | Specify repository (for PR creation) |
 | `-q, --quiet` | Minimal output mode: suppress AI output (for CI) |
 | `--provider <name>` | Override agent provider (claude\|codex\|opencode\|cursor\|copilot\|mock) |
@@ -89,7 +89,7 @@ takt --pipeline --task "Fix bug" --auto-pr
 takt --pipeline --issue 99 --auto-pr
 ```
 
-**Specify piece and branch name:**
+**Specify workflow and branch name:**
 
 ```bash
 takt --pipeline --task "Fix bug" -w magi -b feat/fix-bug
@@ -101,7 +101,7 @@ takt --pipeline --task "Fix bug" -w magi -b feat/fix-bug
 takt --pipeline --task "Fix bug" --auto-pr --repo owner/repo
 ```
 
-**Piece execution only (skip branch creation, commit, push):**
+**Workflow execution only (skip branch creation, commit, push):**
 
 ```bash
 takt --pipeline --task "Fix bug" --skip-git
@@ -132,7 +132,7 @@ pipeline:
 | `{title}` | Commit message | Issue title |
 | `{issue}` | Commit message, PR body | Issue number |
 | `{issue_body}` | PR body | Issue body |
-| `{report}` | PR body | Piece execution report |
+| `{report}` | PR body | Workflow execution report |
 
 ## Other CI Systems
 
@@ -179,6 +179,6 @@ TAKT uses AI APIs (Anthropic, OpenAI, etc.), which can incur significant costs, 
 
 - **Monitor API usage**: Set up billing alerts with your AI provider to avoid unexpected charges.
 - **Use `--quiet` mode**: Reduces output volume but does not reduce API calls.
-- **Choose appropriate pieces**: Simpler pieces use fewer API calls than multi-stage pieces (e.g., `default` with parallel reviews).
+- **Choose an appropriate workflow**: Simpler workflows use fewer API calls than multi-stage workflows (e.g., `default` with parallel reviews).
 - **Limit CI triggers**: Use conditional triggers (e.g., `if: contains(github.event.comment.body, '@takt')`) to prevent unintended executions.
 - **Test with `--provider mock`**: Use mock provider during CI pipeline development to avoid real API costs.

@@ -271,6 +271,17 @@ describe('cwd propagation: addTask wiring', () => {
     vi.mock('../infra/task/index.js', () => ({
       TaskRunner: vi.fn().mockImplementation(() => ({ addTask: vi.fn(() => ({ name: 'task-1' })) })),
       summarizeTaskName: vi.fn(async () => 'slug'),
+      resolveTaskWorkflowValue: vi.fn((data?: Record<string, unknown>) => {
+        if (!data) {
+          return undefined;
+        }
+        const workflow = typeof data.workflow === 'string' ? data.workflow : undefined;
+        const piece = typeof data.piece === 'string' ? data.piece : undefined;
+        if (workflow !== undefined && piece !== undefined && workflow !== piece) {
+          throw new Error("Task configuration conflict: 'workflow' and 'piece' must match when both are set.");
+        }
+        return workflow ?? piece;
+      }),
     }));
     vi.mock('../features/tasks/execute/selectAndExecute.js', () => ({
       determinePiece: vi.fn(async () => 'default'),

@@ -19,6 +19,10 @@ import {
   denormalizePieceOverrides,
   normalizeRuntime,
 } from '../configNormalizers.js';
+import {
+  resolveAliasedPreviewCount,
+  type RawProviderPermissionProfile,
+} from '../configKeyAliases.js';
 import { invalidateResolvedConfigCache } from '../resolutionCache.js';
 import { expandOptionalHomePath } from '../pathExpansion.js';
 import { getProjectConfigDir, getProjectConfigPath } from './projectConfigPaths.js';
@@ -78,7 +82,6 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     minimal_output,
     concurrency,
     task_poll_interval_ms,
-    interactive_preview_movements,
     piece_overrides,
     runtime,
     piece_runtime_prepare,
@@ -121,7 +124,10 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     minimalOutput: minimal_output as boolean | undefined,
     concurrency: concurrency as number | undefined,
     taskPollIntervalMs: task_poll_interval_ms as number | undefined,
-    interactivePreviewMovements: interactive_preview_movements as number | undefined,
+    interactivePreviewMovements: resolveAliasedPreviewCount(
+      parsedConfigResult as Record<string, unknown>,
+      configPath,
+    ),
     allowGitHooks: allow_git_hooks as boolean | undefined,
     allowGitFilters: allow_git_filters as boolean | undefined,
     autoPr: auto_pr as boolean | undefined,
@@ -137,7 +143,9 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     provider: normalizedProvider.provider,
     model: normalizedProvider.model,
     providerOptions: normalizedProvider.providerOptions,
-    providerProfiles: normalizeProviderProfiles(provider_profiles as Record<string, { default_permission_mode: unknown; movement_permission_overrides?: Record<string, unknown> }> | undefined),
+    providerProfiles: normalizeProviderProfiles(
+      provider_profiles as Record<string, RawProviderPermissionProfile> | undefined,
+    ),
     pieceOverrides: normalizePieceOverrides(
       piece_overrides as {
         quality_gates?: string[];
@@ -206,7 +214,7 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
     ['allowGitFilters', 'allow_git_filters'], ['vcsProvider', 'vcs_provider'],
     ['baseBranch', 'base_branch'], ['branchNameStrategy', 'branch_name_strategy'],
     ['minimalOutput', 'minimal_output'], ['taskPollIntervalMs', 'task_poll_interval_ms'],
-    ['interactivePreviewMovements', 'interactive_preview_movements'], ['concurrency', 'concurrency'],
+    ['interactivePreviewMovements', 'interactive_preview_steps'], ['concurrency', 'concurrency'],
   ] as const) {
     if (config[camel] !== undefined) savePayload[snake] = config[camel];
   }

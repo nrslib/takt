@@ -24,19 +24,19 @@ Create a Markdown file with your persona instructions.
 Custom personas are loaded from:
 
 - `~/.takt/personas/<name>.md` (name-based persona)
-- explicit path (for example `~/.takt/facets/personas/<name>.md`, or a repertoire facet path) in piece YAML
+- explicit path (for example `~/.takt/facets/personas/<name>.md`, or a repertoire facet path) in workflow YAML
 
-### Specifying Personas in Pieces
+### Specifying Personas in Workflows
 
-In piece YAML, personas are usually configured via `personas` section map:
+In workflow YAML, personas are usually configured via the `personas` section map:
 
 ```yaml
-# Section map at top level (key -> file path relative to piece YAML)
+# Section map at top level (key -> file path relative to workflow YAML)
 personas:
   coder: ../facets/personas/coder.md
   reviewer: ../facets/personas/architecture-reviewer.md
 
-movements:
+steps:
   - name: implement
     persona: coder       # References the key in the section map
   - name: review
@@ -46,7 +46,7 @@ movements:
 You can also specify a persona file path directly:
 
 ```yaml
-movements:
+steps:
   - name: review
     persona: ~/.takt/personas/my-reviewer.md
 ```
@@ -58,7 +58,7 @@ If `persona` is a bare name and no section-map entry exists, TAKT checks `~/.tak
 ## Behavior Notes
 
 `agents.yaml` is not used in the current TAKT implementation.
-Use `~/.takt/personas/<name>.md` or direct file references in piece YAML instead.
+Use `~/.takt/personas/<name>.md` or direct file references in workflow YAML instead.
 
 ## Best Practices
 

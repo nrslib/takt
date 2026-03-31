@@ -456,7 +456,7 @@ export function normalizePieceConfig(
  */
 export function loadPieceFromFile(filePath: string, projectDir: string): PieceConfig {
   if (!existsSync(filePath)) {
-    throw new Error(`Piece file not found: ${filePath}`);
+    throw new Error(`Workflow file not found: ${filePath}`);
   }
   const content = readFileSync(filePath, 'utf-8');
   const raw = parseYaml(content);

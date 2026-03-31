@@ -37,6 +37,8 @@ describe('loadGlobalConfig', () => {
     if (existsSync(testHomeDir)) {
       rmSync(testHomeDir, { recursive: true });
     }
+    delete process.env.TAKT_INTERACTIVE_PREVIEW_STEPS;
+    delete process.env.TAKT_INTERACTIVE_PREVIEW_MOVEMENTS;
   });
 
   it('should return default values when config.yaml does not exist', () => {
@@ -138,7 +140,7 @@ describe('loadGlobalConfig', () => {
     expect(raw).toContain('minimal_output:');
     expect(raw).toContain('concurrency:');
     expect(raw).toContain('task_poll_interval_ms:');
-    expect(raw).toContain('interactive_preview_movements:');
+    expect(raw).toContain('interactive_preview_steps:');
     expect(raw).toContain('allow_git_hooks: true');
     expect(raw).toContain('allow_git_filters: true');
   });
@@ -750,6 +752,47 @@ describe('loadGlobalConfig', () => {
     expect(config.interactivePreviewMovements).toBe(5);
   });
 
+  it('should accept interactive_preview_steps in global config', () => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(
+      getGlobalConfigPath(),
+      'language: en\ninteractive_preview_steps: 6\n',
+      'utf-8',
+    );
+
+    const config = loadGlobalConfig();
+    expect(config.interactivePreviewMovements).toBe(6);
+  });
+
+  it('should prefer interactive_preview_steps when both preview keys match', () => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(
+      getGlobalConfigPath(),
+      'language: en\ninteractive_preview_movements: 4\ninteractive_preview_steps: 4\n',
+      'utf-8',
+    );
+
+    const config = loadGlobalConfig();
+
+    expect(config.interactivePreviewMovements).toBe(4);
+  });
+
+  it('should fail fast when interactive preview aliases differ in global config', () => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(
+      getGlobalConfigPath(),
+      'language: en\ninteractive_preview_movements: 4\ninteractive_preview_steps: 2\n',
+      'utf-8',
+    );
+
+    expect(() => loadGlobalConfig()).toThrow(
+      'Configuration error: ~/.takt/config.yaml interactive_preview_steps must match interactive_preview_movements when both are set.',
+    );
+  });
+
   it('should save and reload interactive_preview_movements config', () => {
     const taktDir = join(testHomeDir, '.takt');
     mkdirSync(taktDir, { recursive: true });
@@ -762,6 +805,20 @@ describe('loadGlobalConfig', () => {
 
     const reloaded = loadGlobalConfig();
     expect(reloaded.interactivePreviewMovements).toBe(7);
+  });
+
+  it('should save interactive preview count with canonical step key', () => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
+
+    const config = loadGlobalConfig();
+    config.interactivePreviewMovements = 8;
+    saveGlobalConfig(config);
+
+    const raw = readFileSync(getGlobalConfigPath(), 'utf-8');
+    expect(raw).toContain('interactive_preview_steps: 8');
+    expect(raw).not.toContain('interactive_preview_movements:');
   });
 
   it('should default interactive_preview_movements to undefined', () => {
@@ -785,6 +842,31 @@ describe('loadGlobalConfig', () => {
     expect(() => loadGlobalConfig()).not.toThrow();
     const config = loadGlobalConfig();
     expect(config.interactivePreviewMovements).toBe(0);
+  });
+
+  it('should accept TAKT_INTERACTIVE_PREVIEW_STEPS for global config env override', () => {
+    process.env.TAKT_INTERACTIVE_PREVIEW_STEPS = '9';
+
+    const config = loadGlobalConfig();
+
+    expect(config.interactivePreviewMovements).toBe(9);
+  });
+
+  it('should accept legacy TAKT_INTERACTIVE_PREVIEW_MOVEMENTS for global config env override', () => {
+    process.env.TAKT_INTERACTIVE_PREVIEW_MOVEMENTS = '10';
+
+    const config = loadGlobalConfig();
+
+    expect(config.interactivePreviewMovements).toBe(10);
+  });
+
+  it('should fail fast when global preview env aliases differ', () => {
+    process.env.TAKT_INTERACTIVE_PREVIEW_MOVEMENTS = '3';
+    process.env.TAKT_INTERACTIVE_PREVIEW_STEPS = '2';
+
+    expect(() => loadGlobalConfig()).toThrow(
+      'Configuration error: ~/.takt/config.yaml interactive_preview_steps must match interactive_preview_movements when both are set.',
+    );
   });
 
   describe('persona_providers', () => {

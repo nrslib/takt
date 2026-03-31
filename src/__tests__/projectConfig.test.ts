@@ -24,6 +24,8 @@ describe('projectConfig', () => {
     if (testDir) {
       rmSync(testDir, { recursive: true, force: true });
     }
+    delete process.env.TAKT_INTERACTIVE_PREVIEW_STEPS;
+    delete process.env.TAKT_INTERACTIVE_PREVIEW_MOVEMENTS;
   });
 
   describe('piece_overrides empty array round-trip', () => {
@@ -206,6 +208,92 @@ piece_overrides:
       expect(loaded.interactivePreviewMovements).toBe(2);
     });
 
+    it('should accept interactive_preview_steps in project config yaml', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(
+        configPath,
+        [
+          'interactive_preview_steps: 4',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      const loaded = loadProjectConfig(testDir);
+
+      expect(loaded.interactivePreviewMovements).toBe(4);
+    });
+
+    it('should accept TAKT_INTERACTIVE_PREVIEW_STEPS for project config env override', () => {
+      process.env.TAKT_INTERACTIVE_PREVIEW_STEPS = '5';
+
+      const loaded = loadProjectConfig(testDir);
+
+      expect(loaded.interactivePreviewMovements).toBe(5);
+    });
+
+    it('should accept legacy TAKT_INTERACTIVE_PREVIEW_MOVEMENTS for project config env override', () => {
+      process.env.TAKT_INTERACTIVE_PREVIEW_MOVEMENTS = '6';
+
+      const loaded = loadProjectConfig(testDir);
+
+      expect(loaded.interactivePreviewMovements).toBe(6);
+    });
+
+    it('should fail fast when project preview env aliases differ', () => {
+      process.env.TAKT_INTERACTIVE_PREVIEW_MOVEMENTS = '3';
+      process.env.TAKT_INTERACTIVE_PREVIEW_STEPS = '2';
+
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      expect(() => loadProjectConfig(testDir)).toThrow(
+        `Configuration error: ${configPath} interactive_preview_steps must match interactive_preview_movements when both are set.`,
+      );
+    });
+
+    it('should reject unsupported workflow key in project config yaml', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(
+        configPath,
+        [
+          'workflow: default',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      expect(() => loadProjectConfig(testDir)).toThrow(/workflow/);
+    });
+
+    it('should prefer interactive_preview_steps when both project preview keys match', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(
+        configPath,
+        [
+          'interactive_preview_movements: 3',
+          'interactive_preview_steps: 3',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      const loaded = loadProjectConfig(testDir);
+
+      expect(loaded.interactivePreviewMovements).toBe(3);
+    });
+
+    it('should fail fast when project preview aliases differ', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(
+        configPath,
+        [
+          'interactive_preview_movements: 3',
+          'interactive_preview_steps: 2',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      expect(() => loadProjectConfig(testDir)).toThrow(
+        `Configuration error: ${configPath} interactive_preview_steps must match interactive_preview_movements when both are set.`,
+      );
+    });
+
     it('should load takt_providers.assistant from project config yaml', () => {
       const configPath = join(testDir, '.takt', 'config.yaml');
       const configContent = [
@@ -252,7 +340,18 @@ piece_overrides:
       expect(raw).toContain('minimal_output: true');
       expect(raw).toContain('concurrency: 4');
       expect(raw).toContain('task_poll_interval_ms: 1500');
-      expect(raw).toContain('interactive_preview_movements: 1');
+      expect(raw).toContain('interactive_preview_steps: 1');
+    });
+
+    it('should save interactive preview count with canonical step key', () => {
+      saveProjectConfig(testDir, {
+        interactivePreviewMovements: 2,
+      } as ProjectLocalConfig);
+
+      const raw = readFileSync(join(testDir, '.takt', 'config.yaml'), 'utf-8');
+
+      expect(raw).toContain('interactive_preview_steps: 2');
+      expect(raw).not.toContain('interactive_preview_movements:');
     });
 
     it('should save takt_providers.assistant as snake_case keys', () => {

@@ -94,14 +94,14 @@ takt list
 
 TAKT uses a music metaphor — the name itself comes from the German word for "beat" or "baton stroke," used in conducting to keep an orchestra in time. User-facing terminology uses **workflow** and **step**, while the internal canonical names remain **piece** and **movement** for backward compatibility.
 
-A workflow is defined by a sequence of steps. Internally, the YAML schema still uses `piece` and `movement` fields. Each step specifies a persona (who), permissions (what's allowed), and rules (what happens next). Here's a minimal example:
+A workflow is defined by a sequence of steps. Public YAML examples use `steps` and `initial_step`, while legacy `movements` and `initial_movement` are still accepted as compatibility aliases. Each step specifies a persona (who), permissions (what's allowed), and rules (what happens next). Here's a minimal example:
 
 ```yaml
 name: plan-implement-review
-initial_movement: plan
+initial_step: plan
 max_movements: 10
 
-movements:
+steps:
   - name: plan
     persona: planner
     edit: false
@@ -128,6 +128,10 @@ movements:
 ```
 
 Rules determine the next step. `COMPLETE` ends the workflow successfully, `ABORT` ends with failure. See the [Workflow Guide](./docs/pieces.md) for the full schema, parallel steps, and rule condition types.
+
+Workflow files live in `workflows/` as the official directory name. TAKT still accepts legacy `pieces/` directories and `--piece` / legacy YAML keys as compatibility input, but normal docs and UI use `workflow` / `step`.
+
+When the same workflow name exists in multiple locations, TAKT resolves in this order: `.takt/workflows/` → `.takt/pieces/` → `~/.takt/workflows/` → `~/.takt/pieces/` → builtins.
 
 ## Recommended Workflows
 
@@ -180,7 +184,7 @@ See the [Configuration Guide](./docs/configuration.md) for all options, provider
 ### Custom workflows
 
 ```bash
-takt eject default    # Copy builtin workflow to ~/.takt/pieces/ and edit
+takt eject default    # Copy builtin workflow to ~/.takt/workflows/ and edit
 ```
 
 ### Custom personas
@@ -220,17 +224,20 @@ See the [CI/CD Guide](./docs/ci-cd.md) for full setup instructions.
 ```
 ~/.takt/                    # Global config
 ├── config.yaml             # Provider, model, language, etc.
-├── pieces/                 # User workflow definitions
+├── workflows/              # User workflow definitions
 ├── facets/                 # User facets (personas, policies, knowledge, etc.)
 └── repertoire/             # Installed repertoire packages
 
 .takt/                      # Project-level
 ├── config.yaml             # Project config
+├── workflows/              # Project workflow overrides
 ├── facets/                 # Project facets
 ├── tasks.yaml              # Pending tasks
 ├── tasks/                  # Task specifications
 └── runs/                   # Execution reports, logs, context
 ```
+
+Legacy `pieces/` directories are still read for compatibility, but `workflows/` is the canonical name in current docs and CLI output.
 
 ## API Usage
 

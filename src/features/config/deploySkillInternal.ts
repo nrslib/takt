@@ -117,7 +117,7 @@ export async function deploySkillInternal(options: DeploySkillOptions): Promise<
     info(`  エージェント設定: ${agentFiles.length} ファイル`);
   }
   if (pieceFiles.length > 0) {
-    info(`  ピース:        ${pieceFiles.length} ファイル`);
+    info(`  ワークフロー:  ${pieceFiles.length} ファイル`);
   }
   if (personaFiles.length > 0) {
     info(`  ペルソナ:      ${personaFiles.length} ファイル`);

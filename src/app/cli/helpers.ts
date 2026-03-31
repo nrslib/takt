@@ -66,3 +66,14 @@ export function resolveRemovedRootCommand(args: string[]): string | null {
   }
   return REMOVED_ROOT_COMMANDS.has(firstArg) ? firstArg : null;
 }
+
+export function resolveWorkflowCliOption(opts: Record<string, unknown>): string | undefined {
+  const workflow = typeof opts.workflow === 'string' ? opts.workflow : undefined;
+  const piece = typeof opts.piece === 'string' ? opts.piece : undefined;
+
+  if (workflow !== undefined && piece !== undefined && workflow !== piece) {
+    throw new Error('--workflow and --piece cannot be used together with different values');
+  }
+
+  return workflow ?? piece;
+}

@@ -7,7 +7,7 @@
 
 import * as fs from 'node:fs';
 import type { TaskListItem } from '../../../infra/task/index.js';
-import { TaskRunner } from '../../../infra/task/index.js';
+import { TaskRunner, resolveTaskWorkflowValue } from '../../../infra/task/index.js';
 import { loadPieceByIdentifier, resolvePieceConfigValue, getPieceDescription } from '../../../infra/config/index.js';
 import { selectOptionWithDefault } from '../../../shared/prompt/index.js';
 import { info, header, blankLine, status, warn } from '../../../shared/ui/index.js';
@@ -137,7 +137,10 @@ export async function retryFailedTask(
   const matchedSlug = findRunForTask(worktreePath, task.content);
   const runInfo = matchedSlug ? buildRetryRunInfo(worktreePath, matchedSlug) : null;
 
-  const selectedPiece = await selectPieceWithOptionalReuse(projectDir, task.data?.piece);
+  const selectedPiece = await selectPieceWithOptionalReuse(
+    projectDir,
+    task.data ? resolveTaskWorkflowValue(task.data as Record<string, unknown>) : undefined,
+  );
   if (!selectedPiece) {
     info('Cancelled');
     return false;

@@ -6,10 +6,11 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import type { TaskListItem } from '../../../infra/task/index.js';
 import {
   detectDefaultBranch,
   TaskRunner,
+  serializeTaskListItemForJson,
+  type TaskListItem,
 } from '../../../infra/task/index.js';
 import { info } from '../../../shared/ui/index.js';
 import {
@@ -37,7 +38,7 @@ function printNonInteractiveList(tasks: TaskListItem[], format?: string): void {
   if (outputFormat === 'json') {
     // stdout に直接出力（JSON パース用途のため UI ヘルパーを経由しない）
     console.log(JSON.stringify({
-      tasks,
+      tasks: tasks.map(serializeTaskListItemForJson),
     }, null, 2));
     return;
   }
@@ -71,6 +72,10 @@ export async function listTasksNonInteractive(
   const tasks = runner.listAllTaskItems();
 
   if (tasks.length === 0) {
+    if (nonInteractive.format === 'json') {
+      console.log(JSON.stringify({ tasks: [] }, null, 2));
+      return;
+    }
     info('No tasks to list.');
     return;
   }

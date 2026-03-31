@@ -161,7 +161,8 @@ describe('addTask', () => {
     expect(task.content).toBeUndefined();
     expect(task.task_dir).toBeTypeOf('string');
     expect(readOrderContent(testDir, task.task_dir)).toContain('JWT認証を実装する');
-    expect(task.piece).toBe('default');
+    expect(task.workflow).toBe('default');
+    expect(task.piece).toBeUndefined();
     expect(task.worktree).toBe(true);
   });
 

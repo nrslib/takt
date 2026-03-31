@@ -38,6 +38,11 @@ export function getGlobalPiecesDir(): string {
   return join(getGlobalConfigDir(), 'pieces');
 }
 
+/** Get takt global workflows directory (~/.takt/workflows) */
+export function getGlobalWorkflowsDir(): string {
+  return join(getGlobalConfigDir(), 'workflows');
+}
+
 /** Get takt global logs directory */
 export function getGlobalLogsDir(): string {
   return join(getGlobalConfigDir(), 'logs');
@@ -66,6 +71,11 @@ export function getProjectConfigDir(projectDir: string): string {
 /** Get project pieces directory (.takt/pieces in project) */
 export function getProjectPiecesDir(projectDir: string): string {
   return join(getProjectConfigDir(projectDir), 'pieces');
+}
+
+/** Get project workflows directory (.takt/workflows in project) */
+export function getProjectWorkflowsDir(projectDir: string): string {
+  return join(getProjectConfigDir(projectDir), 'workflows');
 }
 
 /** Get project config file path */

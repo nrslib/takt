@@ -5,6 +5,7 @@
  */
 
 import { z } from 'zod/v4';
+import { isDeepStrictEqual } from 'node:util';
 import { DEFAULT_LANGUAGE } from '../../shared/constants.js';
 import { McpServersSchema } from './mcp-schemas.js';
 import { INTERACTIVE_MODES } from './interactive-mode.js';
@@ -126,6 +127,7 @@ export const ProviderReferenceSchema = z.union([ProviderTypeSchema, ProviderBloc
 export const ProviderPermissionProfileSchema = z.object({
   default_permission_mode: PermissionModeSchema,
   movement_permission_overrides: z.record(z.string(), PermissionModeSchema).optional(),
+  step_permission_overrides: z.record(z.string(), PermissionModeSchema).optional(),
 });
 
 /** Provider permission profiles schema */
@@ -405,30 +407,60 @@ export const LoopMonitorSchema = z.object({
 /** Interactive mode schema for piece-level default */
 export const InteractiveModeSchema = z.enum(INTERACTIVE_MODES);
 
+function normalizePieceConfigAliases(input: unknown): unknown {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+    return input;
+  }
+
+  const record = input as Record<string, unknown>;
+  const movements = record.movements;
+  const steps = record.steps;
+  if (movements !== undefined && steps !== undefined && !isDeepStrictEqual(movements, steps)) {
+    throw new Error("Workflow definition conflict: 'steps' and 'movements' must match when both are set.");
+  }
+
+  const initialMovement = typeof record.initial_movement === 'string' ? record.initial_movement : undefined;
+  const initialStep = typeof record.initial_step === 'string' ? record.initial_step : undefined;
+  if (initialMovement !== undefined && initialStep !== undefined && initialMovement !== initialStep) {
+    throw new Error("Workflow definition conflict: 'initial_step' and 'initial_movement' must match when both are set.");
+  }
+
+  return {
+    ...record,
+    ...(steps !== undefined ? { movements: steps } : {}),
+    ...(initialStep !== undefined ? { initial_movement: initialStep } : {}),
+  };
+}
+
 /** Piece configuration schema - raw YAML format */
-export const PieceConfigRawSchema = z.object({
-  name: z.string().min(1),
-  description: z.string().optional(),
-  piece_config: PieceProviderOptionsSchema,
-  /** Deprecated alias */
-  permission_mode: z.never().optional(),
-  /** Piece-level persona definitions — map of name to .md file path or inline content */
-  personas: z.record(z.string(), z.string()).optional(),
-  /** Piece-level policy definitions — map of name to .md file path or inline content */
-  policies: z.record(z.string(), z.string()).optional(),
-  /** Piece-level knowledge definitions — map of name to .md file path or inline content */
-  knowledge: z.record(z.string(), z.string()).optional(),
-  /** Piece-level instruction definitions — map of name to .md file path or inline content */
-  instructions: z.record(z.string(), z.string()).optional(),
-  /** Piece-level report format definitions — map of name to .md file path or inline content */
-  report_formats: z.record(z.string(), z.string()).optional(),
-  movements: z.array(PieceMovementRawSchema).min(1),
-  initial_movement: z.string().optional(),
-  max_movements: z.number().int().positive().optional().default(10),
-  loop_monitors: z.array(LoopMonitorSchema).optional(),
-  /** Default interactive mode for this piece (overrides user default) */
-  interactive_mode: InteractiveModeSchema.optional(),
-});
+export const PieceConfigRawSchema = z.preprocess(
+  normalizePieceConfigAliases,
+  z.object({
+    name: z.string().min(1),
+    description: z.string().optional(),
+    piece_config: PieceProviderOptionsSchema,
+    /** Deprecated alias */
+    permission_mode: z.never().optional(),
+    /** Piece-level persona definitions — map of name to .md file path or inline content */
+    personas: z.record(z.string(), z.string()).optional(),
+    /** Piece-level policy definitions — map of name to .md file path or inline content */
+    policies: z.record(z.string(), z.string()).optional(),
+    /** Piece-level knowledge definitions — map of name to .md file path or inline content */
+    knowledge: z.record(z.string(), z.string()).optional(),
+    /** Piece-level instruction definitions — map of name to .md file path or inline content */
+    instructions: z.record(z.string(), z.string()).optional(),
+    /** Piece-level report format definitions — map of name to .md file path or inline content */
+    report_formats: z.record(z.string(), z.string()).optional(),
+    movements: z.array(PieceMovementRawSchema).min(1),
+    steps: z.array(PieceMovementRawSchema).min(1).optional(),
+    initial_movement: z.string().optional(),
+    initial_step: z.string().optional(),
+    max_movements: z.number().int().positive().optional().default(10),
+    loop_monitors: z.array(LoopMonitorSchema).optional(),
+    /** Default interactive mode for this piece (overrides user default) */
+    interactive_mode: InteractiveModeSchema.optional(),
+  }).transform(({ steps: _steps, initial_step: _initialStep, ...config }) => config)
+);
 
 export const PersonaProviderEntrySchema = z.object({
   provider: ProviderTypeSchema.optional(),
@@ -572,8 +604,9 @@ export const ProjectConfigSchema = z.object({
   concurrency: z.number().int().min(1).max(10).optional(),
   /** Polling interval in ms for picking up new tasks during takt run (default: 500, range: 100-5000) */
   task_poll_interval_ms: z.number().int().min(100).max(5000).optional(),
-  /** Number of movement previews to inject into interactive mode (0 to disable, max 10) */
+  /** Number of step previews to inject into interactive mode (0 to disable, max 10) */
   interactive_preview_movements: z.number().int().min(0).max(10).optional(),
+  interactive_preview_steps: z.number().int().min(0).max(10).optional(),
   /** Base branch to clone from (overrides global base_branch) */
   base_branch: z.string().optional(),
   /** Piece-level overrides (quality_gates, etc.) */

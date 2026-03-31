@@ -10,7 +10,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 
 // vi.hoisted runs before vi.mock hoisting — safe for shared state
@@ -48,9 +48,13 @@ vi.mock('../infra/config/index.js', () => ({
   getBuiltinFacetDir: () => mocks.builtinDir,
   getProjectFacetDir: () => mocks.projectFacetDir,
   getGlobalFacetDir: () => mocks.globalFacetDir,
-  getGlobalPiecesDir: () => mocks.globalPiecesDir,
-  getProjectPiecesDir: () => mocks.projectPiecesDir,
+  getGlobalWorkflowsDir: () => mocks.globalPiecesDir,
+  getProjectWorkflowsDir: () => mocks.projectPiecesDir,
   getBuiltinPiecesDir: () => mocks.builtinDir,
+  isPathSafe: (basePath: string, targetPath: string) => {
+    const rel = relative(resolve(basePath), resolve(targetPath));
+    return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+  },
 }));
 
 vi.mock('../shared/ui/index.js', () => mocks.ui);
@@ -87,8 +91,8 @@ describe('ejectFacet', () => {
     mocks.builtinDir = dirs.builtinDir;
     mocks.projectFacetDir = join(dirs.projectDir, '.takt', 'personas');
     mocks.globalFacetDir = join(dirs.globalDir, 'personas');
-    mocks.projectPiecesDir = join(dirs.projectDir, '.takt', 'pieces');
-    mocks.globalPiecesDir = join(dirs.globalDir, 'pieces');
+    mocks.projectPiecesDir = join(dirs.projectDir, '.takt', 'workflows');
+    mocks.globalPiecesDir = join(dirs.globalDir, 'workflows');
 
     Object.values(mocks.ui).forEach((fn) => fn.mockClear());
   });
@@ -133,6 +137,13 @@ describe('ejectFacet', () => {
     expect(mocks.ui.error).toHaveBeenCalledWith(expect.stringContaining('not found'));
     expect(mocks.ui.info).toHaveBeenCalledWith(expect.stringContaining('Available'));
   });
+
+  it('should reject facet names that escape the builtin or target directory', async () => {
+    await ejectFacet('personas', '../secrets', { projectDir: dirs.projectDir });
+
+    expect(existsSync(join(dirs.projectDir, '.takt', 'secrets.md'))).toBe(false);
+    expect(mocks.ui.error).toHaveBeenCalledWith('Invalid personas name: ../secrets');
+  });
 });
 
 describe('ejectBuiltin', () => {
@@ -143,8 +154,8 @@ describe('ejectBuiltin', () => {
     mocks.builtinDir = join(dirs.baseDir, 'builtins', 'pieces');
     mocks.projectFacetDir = join(dirs.projectDir, '.takt', 'personas');
     mocks.globalFacetDir = join(dirs.globalDir, 'personas');
-    mocks.projectPiecesDir = join(dirs.projectDir, '.takt', 'pieces');
-    mocks.globalPiecesDir = join(dirs.globalDir, 'pieces');
+    mocks.projectPiecesDir = join(dirs.projectDir, '.takt', 'workflows');
+    mocks.globalPiecesDir = join(dirs.globalDir, 'workflows');
     mkdirSync(mocks.builtinDir, { recursive: true });
     writeFileSync(join(mocks.builtinDir, 'default.yaml'), 'name: default\n');
     Object.values(mocks.ui).forEach((fn) => fn.mockClear());
@@ -161,10 +172,17 @@ describe('ejectBuiltin', () => {
   });
 
   it('should sanitize destination paths in success output', async () => {
-    mocks.projectPiecesDir = join(dirs.baseDir, 'project-with-control\nchars', '.takt', 'pieces');
+    mocks.projectPiecesDir = join(dirs.baseDir, 'project-with-control\nchars', '.takt', 'workflows');
 
     await ejectBuiltin('default', { projectDir: dirs.projectDir });
 
     expect(mocks.ui.success).toHaveBeenCalledWith(expect.stringContaining('project-with-control\\nchars'));
+  });
+
+  it('should reject workflow names that escape the builtin or target directory', async () => {
+    await ejectBuiltin('../outside', { projectDir: dirs.projectDir });
+
+    expect(existsSync(join(dirs.projectDir, '.takt', 'outside.yaml'))).toBe(false);
+    expect(mocks.ui.error).toHaveBeenCalledWith('Invalid workflow name: ../outside');
   });
 });

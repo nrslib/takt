@@ -24,9 +24,9 @@ TAKT uses three provider-independent permission modes. Each mode maps to provide
 
 ### What each mode means
 
-**`readonly`** — The agent can read files and search code, but cannot modify anything. Use for review movements where the agent only needs to analyze code.
+**`readonly`** — The agent can read files and search code, but cannot modify anything. Use for review steps where the agent only needs to analyze code.
 
-**`edit`** — The agent can read and edit files within the working directory. Bash commands run inside the provider's sandbox (if available). This is the recommended default for implementation movements.
+**`edit`** — The agent can read and edit files within the working directory. Bash commands run inside the provider's sandbox (if available). This is the recommended default for implementation steps.
 
 **`full`** — All restrictions are removed. The agent has unrestricted access to the filesystem, network, and system commands. See [Security considerations for `full` mode](#security-considerations-for-full-mode).
 
@@ -42,14 +42,14 @@ provider_profiles:
     default_permission_mode: edit
 ```
 
-You can also override permissions for specific movements:
+You can also override permissions for specific steps:
 
 ```yaml
 provider_profiles:
   codex:
     default_permission_mode: edit
-    movement_permission_overrides:
-      implement: full      # Only the implement movement gets full access
+    step_permission_overrides:
+      implement: full      # Only the implement step gets full access
       ai_review: readonly  # Review stays read-only
 ```
 
@@ -79,7 +79,7 @@ With network access blocked by default, the following operations fail inside the
 - `curl`, `wget`, `gh api` — Cannot reach external APIs
 - Any command that requires DNS resolution or HTTP requests
 
-If your piece involves implementation (not just code editing), you almost certainly need to enable network access.
+If your workflow involves implementation (not just code editing), you almost certainly need to enable network access.
 
 ### Configuration
 
@@ -100,7 +100,7 @@ provider_options:
 ```
 
 ```yaml
-# In a piece YAML (applies to all movements in this piece)
+# In a workflow YAML (applies to all steps in this workflow)
 piece_config:
   provider_options:
     codex:
@@ -108,8 +108,8 @@ piece_config:
 ```
 
 ```yaml
-# Per movement (applies to this movement only)
-movements:
+# Per step (applies to this step only)
+steps:
   - name: implement
     provider_options:
       codex:
@@ -119,7 +119,7 @@ movements:
 Settings are merged with the following priority (highest wins):
 
 ```
-Movement > Piece > Project (.takt/config.yaml) > Global (~/.takt/config.yaml)
+Step > Workflow > Project (.takt/config.yaml) > Global (~/.takt/config.yaml)
 ```
 
 ### Codex sandbox mode reference
@@ -172,7 +172,7 @@ Note that this only controls TAKT-managed tools. Bash commands can still make ne
 
 ### The problem
 
-When a movement uses `permission_mode: edit` (mapped to Claude SDK's `acceptEdits`), Bash commands run inside a macOS Seatbelt sandbox. This sandbox blocks:
+When a step uses `permission_mode: edit` (mapped to Claude SDK's `acceptEdits`), Bash commands run inside a macOS Seatbelt sandbox. This sandbox blocks:
 
 - Writes outside the working directory (e.g., `~/.gradle`)
 - Certain system calls required by JVM initialization
@@ -209,7 +209,7 @@ provider_options:
 
 ### Configuration levels
 
-Same 4-level merge as Codex (Movement > Piece > Project > Global). See the Codex section above for examples at each level.
+Same 4-level merge as Codex (Step > Workflow > Project > Global). See the Codex section above for examples at each level.
 
 ### Security comparison
 
@@ -233,7 +233,7 @@ Setting `permission_mode: full` (or `default_permission_mode: full` in provider 
 
 ### When `full` mode is acceptable
 
-- **Code-only implementation tasks** — If the piece only writes source code within the project directory, the practical risk is low. The agent's actions are constrained by the task instructions and reviewed by subsequent movements.
+- **Code-only implementation tasks** — If the workflow only writes source code within the project directory, the practical risk is low. The agent's actions are constrained by the task instructions and reviewed by subsequent steps.
 - **Build tasks that need system access** — Gradle, Maven, npm tasks that write to global caches (`~/.gradle`, `~/.m2`, `~/.npm`).
 - **CI/CD pipelines** — Running in an isolated container where the blast radius is already limited.
 
@@ -245,13 +245,13 @@ Setting `permission_mode: full` (or `default_permission_mode: full` in provider 
 
 ### Recommended approach
 
-Use `edit` mode as the default and only escalate specific movements that need it:
+Use `edit` mode as the default and only escalate specific steps that need it:
 
 ```yaml
 provider_profiles:
   codex:
     default_permission_mode: edit
-    movement_permission_overrides:
+    step_permission_overrides:
       implement: full    # Needs build tools and network
       review: readonly   # Only reads code
 ```
@@ -264,7 +264,7 @@ provider_options:
     network_access: true
 ```
 
-This gives `implement` full access for builds while keeping review movements locked down.
+This gives `implement` full access for builds while keeping review steps locked down.
 
 ## Recommended Configuration
 
@@ -337,8 +337,8 @@ Provider options (`provider_options`) and permission profiles (`provider_profile
 
 | Priority | Source | Example |
 |----------|--------|---------|
-| 1 (highest) | Movement `provider_options` | `movements[].provider_options.codex.network_access` |
-| 2 | Piece `piece_config.provider_options` | `piece_config.provider_options.codex.network_access` |
+| 1 (highest) | Step `provider_options` | `steps[].provider_options.codex.network_access` |
+| 2 | Workflow `piece_config.provider_options` | `piece_config.provider_options.codex.network_access` |
 | 3 | Project `.takt/config.yaml` | `provider_options.codex.network_access` |
 | 4 (lowest) | Global `~/.takt/config.yaml` | `provider_options.codex.network_access` |
 
@@ -346,10 +346,10 @@ Provider options (`provider_options`) and permission profiles (`provider_profile
 
 | Priority | Source |
 |----------|--------|
-| 1 (highest) | Project `provider_profiles.<provider>.movement_permission_overrides.<movement>` |
-| 2 | Global `provider_profiles.<provider>.movement_permission_overrides.<movement>` |
+| 1 (highest) | Project `provider_profiles.<provider>.step_permission_overrides.<step>` |
+| 2 | Global `provider_profiles.<provider>.step_permission_overrides.<step>` |
 | 3 | Project `provider_profiles.<provider>.default_permission_mode` |
 | 4 | Global `provider_profiles.<provider>.default_permission_mode` |
-| 5 (floor) | Movement `required_permission_mode` (minimum; raises resolved mode if lower) |
+| 5 (floor) | Step `required_permission_mode` (minimum; raises resolved mode if lower) |
 
 Default permission mode when nothing is configured: `readonly`.

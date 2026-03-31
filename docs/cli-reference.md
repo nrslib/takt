@@ -11,7 +11,8 @@ This document provides a complete reference for all TAKT CLI commands and option
 | `--pipeline` | Enable pipeline (non-interactive) mode -- required for CI/automation |
 | `-t, --task <text>` | Task content (alternative to GitHub Issue) |
 | `-i, --issue <N>` | GitHub issue number (same as `#N` in interactive mode) |
-| `-w, --piece <name or path>` | Workflow name or path to workflow YAML file |
+| `-w, --workflow <name or path>` | Workflow name or path to workflow YAML file |
+| `--piece <name or path>` | Deprecated alias for `--workflow` |
 | `-b, --branch <name>` | Specify branch name (auto-generated if omitted) |
 | `--pr <number>` | PR number to fetch review comments and fix |
 | `--auto-pr` | Create PR after execution (pipeline mode only) |
@@ -22,6 +23,8 @@ This document provides a complete reference for all TAKT CLI commands and option
 | `--provider <name>` | Override agent provider (claude\|codex\|opencode\|cursor\|copilot\|mock) |
 | `--model <name>` | Override agent model |
 | `--config <path>` | Path to global config file (default: `~/.takt/config.yaml`) |
+
+`--workflow` is the canonical option. `--piece` remains available only as a compatibility alias, and internal implementation names still use `piece` / `movement`.
 
 ## Interactive Mode
 
@@ -100,7 +103,7 @@ Use the `--task` option to skip interactive mode and execute directly.
 takt --task "Fix bug"
 
 # Specify workflow
-takt --task "Add authentication" --piece dual
+takt --task "Add authentication" --workflow dual
 ```
 
 **Note:** Passing a string as an argument (e.g., `takt "Add login feature"`) enters interactive mode with it as the initial message.
@@ -115,7 +118,7 @@ takt #6
 takt --issue 6
 
 # Issue + workflow specification
-takt #6 --piece dual
+takt #6 --workflow dual
 ```
 
 **Requirements:** [GitHub CLI](https://cli.github.com/) (`gh`) must be installed and authenticated.
@@ -211,12 +214,12 @@ In pipeline mode, PRs are not created unless `--auto-pr` is specified.
 
 ## Utility Commands
 
-### takt switch
+### Interactive workflow selection
 
-Interactively switch the active workflow.
+Run `takt` without a task argument to choose a workflow interactively.
 
 ```bash
-takt switch
+takt
 ```
 
 ### takt eject
@@ -234,6 +237,8 @@ takt eject --global
 takt eject persona coder
 takt eject instruction plan --global
 ```
+
+Builtin and custom workflow lookup uses `workflows/` as the canonical directory name. Legacy `pieces/` directories are still supported for compatibility.
 
 ### takt clear
 
@@ -254,7 +259,7 @@ takt export-cc
 ### takt export-codex
 
 Deploy TAKT skill files as a Codex Skill (`~/.agents/skills/takt/`).
-This command deploys `SKILL.md`, `references/`, `agents/`, `pieces/`, and `facets/`.
+This command deploys `SKILL.md`, `references/`, `agents/`, `pieces/`, and `facets/`. The deployed `pieces/` directory is a legacy/internal compatibility path.
 
 ```bash
 takt export-codex
@@ -320,6 +325,8 @@ takt repertoire remove @{owner}/{repo}
 ```
 
 Installed packages are stored in `~/.takt/repertoire/` and their workflows/facets become available in workflow selection and facet resolution.
+
+When the same workflow name exists in multiple locations, TAKT resolves in this order: `.takt/workflows/` → `.takt/pieces/` → `~/.takt/workflows/` → `~/.takt/pieces/` → builtins.
 
 ### takt purge
 

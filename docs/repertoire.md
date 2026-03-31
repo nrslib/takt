@@ -2,7 +2,7 @@
 
 [Japanese](./repertoire.ja.md)
 
-Repertoire packages let you install and share TAKT pieces and facets from GitHub repositories.
+Repertoire packages let you install and share TAKT workflows and facets from GitHub repositories.
 
 ## Quick Start
 
@@ -42,7 +42,7 @@ my-takt-repertoire/
     expert.yaml
 ```
 
-Only `facets/` and `pieces/` directories are imported. Other files are ignored.
+Only `facets/` and `pieces/` directories are imported. In repertoire packages, workflow definitions are currently stored under `pieces/`. Other files are ignored.
 
 ### takt-repertoire.yaml
 
@@ -50,7 +50,7 @@ The manifest tells TAKT where to find the package content within the repository.
 
 ```yaml
 # Optional description
-description: Full-stack development pieces with expert reviewers
+description: Full-stack development workflows with expert reviewers
 
 # Path to the package root (relative to repo root, default: ".")
 path: .
@@ -65,7 +65,7 @@ The manifest can be placed at the repository root (`takt-repertoire.yaml`) or in
 | Field | Required | Default | Description |
 |-------|----------|---------|-------------|
 | `description` | No | - | Package description |
-| `path` | No | `.` | Path to the directory containing `facets/` and `pieces/` |
+| `path` | No | `.` | Path to the directory containing `facets/` and workflow definitions in `pieces/` |
 | `takt.min_version` | No | - | Minimum TAKT version required (X.Y.Z format) |
 
 ## Installation
@@ -76,12 +76,12 @@ takt repertoire add github:{owner}/{repo}@{ref}
 
 The `@{ref}` is optional. Without it, the repository's default branch is used.
 
-Before installing, TAKT displays a summary of the package contents (facet counts by type, piece names, and edit permission warnings) and asks for confirmation.
+Before installing, TAKT displays a summary of the package contents (facet counts by type, workflow names, and edit permission warnings) and asks for confirmation.
 
 ### What happens during install
 
 1. Downloads the tarball from GitHub via `gh api`
-2. Extracts only `facets/` and `pieces/` files (`.md`, `.yaml`, `.yml`)
+2. Extracts only `facets/` and workflow files from `pieces/` (`.md`, `.yaml`, `.yml`)
 3. Validates the `takt-repertoire.yaml` manifest
 4. Checks TAKT version compatibility
 5. Copies files to `~/.takt/repertoire/@{owner}/{repo}/`
@@ -100,20 +100,20 @@ Installation is atomic — if it fails partway, no partial state is left behind.
 
 ## Using Package Content
 
-### Pieces
+### Workflows
 
-Installed pieces appear in the piece selection UI under the "repertoire" category, organized by package. You can also specify them directly:
+Installed workflows appear in the workflow selection UI under the "repertoire" category, organized by package. You can also specify them directly:
 
 ```bash
-takt --piece @nrslib/takt-fullstack/expert
+takt --workflow @nrslib/takt-fullstack/expert
 ```
 
 ### @scope references
 
-Facets from installed packages can be referenced in piece YAML using `@{owner}/{repo}/{facet-name}` syntax:
+Facets from installed packages can be referenced in workflow YAML using `@{owner}/{repo}/{facet-name}` syntax:
 
 ```yaml
-movements:
+steps:
   - name: implement
     persona: @nrslib/takt-fullstack/expert-coder
     policy: @nrslib/takt-fullstack/strict-review
@@ -122,14 +122,14 @@ movements:
 
 ### 4-layer facet resolution
 
-When a piece from a repertoire package resolves facets by name (without @scope), the resolution order is:
+When a workflow from a repertoire package resolves facets by name (without @scope), the resolution order is:
 
 1. **Package-local**: `~/.takt/repertoire/@{owner}/{repo}/facets/{type}/`
 2. **Project**: `.takt/facets/{type}/`
 3. **User**: `~/.takt/facets/{type}/`
 4. **Builtin**: `builtins/{lang}/facets/{type}/`
 
-This means package pieces automatically find their own facets first, while still allowing user/project overrides.
+This means package workflows automatically find their own facets first, while still allowing user/project overrides.
 
 ## Managing Packages
 
@@ -147,7 +147,7 @@ Shows installed packages with their scope, description, ref, and commit SHA.
 takt repertoire remove @{owner}/{repo}
 ```
 
-Before removing, TAKT checks if any user/project pieces reference the package's facets and warns about potential breakage.
+Before removing, TAKT checks if any user/project workflows reference the package's facets and warns about potential breakage.
 
 ## Directory Structure
 
@@ -163,6 +163,6 @@ Installed packages are stored under `~/.takt/repertoire/`:
         personas/
         policies/
         ...
-      pieces/
+      pieces/                 # Workflow definitions in repertoire packages
         expert.yaml
 ```

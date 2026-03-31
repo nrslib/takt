@@ -97,14 +97,14 @@ takt list
 
 TAKT は音楽のメタファーを使っています。TAKT という名前自体が、オーケストラの指揮で拍を刻む「タクト（Takt）」に由来しています。ユーザー向けには **workflow** と **step** を使い、後方互換のため内部 canonical 名は **piece** と **movement** のまま維持しています。
 
-ワークフローは step の並びで構成されます。YAML スキーマ上は引き続き `piece` / `movement` フィールドを使います。各 step では persona（誰が実行するか）、権限（何を許可するか）、ルール（次にどこへ進むか）を指定します。
+workflow は step の並びで構成されます。公開 YAML では `steps` と `initial_step` を使い、互換 alias として `movements` と `initial_movement` も受理します。各 step では persona（誰が実行するか）、権限（何を許可するか）、ルール（次にどこへ進むか）を指定します。
 
 ```yaml
 name: plan-implement-review
-initial_movement: plan
+initial_step: plan
 max_movements: 10
 
-movements:
+steps:
   - name: plan
     persona: planner
     edit: false
@@ -131,6 +131,10 @@ movements:
 ```
 
 ルールが次の step を決めます。`COMPLETE` でワークフロー成功終了、`ABORT` で失敗終了です。並列 step やルール条件の詳細は [Workflow Guide](./pieces.md) を参照してください。
+
+workflow ファイルの正式ディレクトリ名は `workflows/` です。旧来の `pieces/` ディレクトリ、`--piece`、旧 YAML キーは互換入力として引き続き受理しますが、通常の UI・ドキュメントでは `workflow` / `step` を使用します。
+
+同名 workflow が複数箇所にある場合の探索順は `.takt/workflows/` → `.takt/pieces/` → `~/.takt/workflows/` → `~/.takt/pieces/` → builtin です。
 
 ## おすすめワークフロー
 
@@ -183,7 +187,7 @@ export TAKT_COPILOT_GITHUB_TOKEN=ghp_...   # GitHub Copilot CLI
 ### カスタム workflow
 
 ```bash
-takt eject default    # ビルトイン workflow を ~/.takt/pieces/ にコピーして編集できます
+takt eject default    # ビルトイン workflow を ~/.takt/workflows/ にコピーして編集できます
 ```
 
 ### カスタム persona
@@ -223,17 +227,20 @@ takt --pipeline --task "バグを修正して" --auto-pr
 ```
 ~/.takt/                    # グローバル設定
 ├── config.yaml             # プロバイダー、モデル、言語など
-├── pieces/                 # ユーザー定義の workflow
+├── workflows/              # ユーザー定義の workflow
 ├── facets/                 # ユーザー定義のファセット（personas, policies, knowledge など）
 └── repertoire/               # インストール済み repertoire パッケージ
 
 .takt/                      # プロジェクトレベル
 ├── config.yaml             # プロジェクト設定
+├── workflows/              # プロジェクト定義の workflow
 ├── facets/                 # プロジェクトのファセット
 ├── tasks.yaml              # 積まれたタスク
 ├── tasks/                  # タスクの仕様書
 └── runs/                   # 実行レポート、ログ、コンテキスト
 ```
+
+互換性のため `pieces/` ディレクトリも引き続き読まれますが、現在の正式名称は `workflows/` です。
 
 ## API
 

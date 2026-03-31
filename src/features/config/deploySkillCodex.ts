@@ -10,7 +10,7 @@ export async function deploySkillCodex(): Promise<void> {
     skillRootDir: '.agents',
     skillResourceDirName: 'skill-codex',
     existingInstallMessage: 'Codex Skill が既にインストールされています。',
-    usageCommand: '使い方: $takt <piece-name> <task>',
+    usageCommand: '使い方: $takt <workflow-name> <task>',
     usageExample: '例:     $takt passthrough "Hello World テスト"',
     showReferencesSummary: true,
     includeAgentsDirectory: true,

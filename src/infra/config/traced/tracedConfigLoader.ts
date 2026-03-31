@@ -3,6 +3,7 @@ import { parse as parseYaml } from 'yaml';
 import type { SchemaShape, TracedValue } from 'traced-config';
 import {
   GLOBAL_LEGACY_ENV_SPECS,
+  PROJECT_LEGACY_ENV_SPECS,
   setNestedConfigValue,
   type LegacyEnvSpec,
 } from '../env/config-env-overrides.js';
@@ -210,6 +211,7 @@ export function loadProjectConfigTrace(
     configPath,
     fileOrigin: 'local',
     schema: getProjectTracedSchema(),
+    legacyEnvSpecs: PROJECT_LEGACY_ENV_SPECS,
     parseErrorPrefix: `Configuration error: failed to parse ${configPath}`,
     rootObjectError: `Configuration error: ${configPath} must be a YAML object.`,
   });

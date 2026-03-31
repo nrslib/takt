@@ -327,14 +327,14 @@ Key properties:
 
 ### Implementation Example: TAKT
 
-[TAKT](https://github.com/nrslib/takt) implements Faceted Prompting using YAML-based workflow definitions called "pieces." Builtin facets can be referenced directly by bare name in each step (called "movement" in TAKT). Section maps are optional and only needed for custom aliases (name differs from file name):
+[TAKT](https://github.com/nrslib/takt) implements Faceted Prompting using YAML-based workflow definitions. Builtin facets can be referenced directly by bare name in each step. Section maps are optional and only needed for custom aliases (name differs from file name):
 
 ```yaml
 name: my-workflow
 max_movements: 10
-initial_movement: plan
+initial_step: plan
 
-movements:
+steps:
   - name: implement
     persona: coder            # WHO — builtins/{lang}/personas/coder.md
     policy: coding            # RULES — builtins/{lang}/policies/coding.md
@@ -362,7 +362,7 @@ movements:
         next: implement
 ```
 
-The engine resolves each key to its file, reads the content, and assembles the final prompt at runtime. The workflow author never writes a monolithic prompt — only selects which facets to combine.
+Legacy `movements` / `initial_movement` keys remain accepted as compatibility aliases, but public examples use `steps` / `initial_step`. The engine resolves each key to its file, reads the content, and assembles the final prompt at runtime. The workflow author never writes a monolithic prompt — only selects which facets to combine.
 
 ## How It Differs from Existing Approaches
 

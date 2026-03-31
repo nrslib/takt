@@ -53,7 +53,8 @@ async function executeTaskWithResult(options: ExecuteTaskOptions): Promise<Piece
       return { success: false, reason: `Workflow file not found: ${safePieceIdentifier}` };
     } else {
       error(`Workflow "${safePieceIdentifier}" not found.`);
-      info('Available workflows are in ~/.takt/pieces/ or .takt/pieces/');
+      info('Available workflows are searched in .takt/workflows/, .takt/pieces/, ~/.takt/workflows/, then ~/.takt/pieces/.');
+      info('If the same workflow name exists in multiple locations, project workflows/ take priority over project pieces/, then user workflows/, then user pieces/.');
       info('Specify a valid workflow when creating tasks (e.g., via "takt add").');
       return { success: false, reason: `Workflow "${safePieceIdentifier}" not found.` };
     }

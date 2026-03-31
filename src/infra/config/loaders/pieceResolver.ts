@@ -1,15 +1,22 @@
 /**
- * Piece resolution — 3-layer lookup logic.
+ * Piece resolution.
  *
- * Resolves piece names and paths to concrete PieceConfig objects,
- * using the priority chain: project-local → user → builtin.
+ * Resolves workflow names and paths to concrete PieceConfig objects,
+ * keeping legacy pieces/ directories as compatibility inputs.
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import type { PieceConfig, PieceMovement, InteractiveMode } from '../../../core/models/index.js';
-import { getGlobalPiecesDir, getBuiltinPiecesDir, getProjectConfigDir, getRepertoireDir } from '../paths.js';
+import {
+  getGlobalPiecesDir,
+  getGlobalWorkflowsDir,
+  getBuiltinPiecesDir,
+  getProjectPiecesDir,
+  getProjectWorkflowsDir,
+  getRepertoireDir,
+} from '../paths.js';
 import { isScopeRef, parseScopeRef } from 'faceted-prompting';
 import { resolvePieceConfigValues } from '../resolvePieceConfigValue.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
@@ -23,6 +30,12 @@ export type PieceSource = 'builtin' | 'user' | 'project' | 'repertoire';
 export interface PieceWithSource {
   config: PieceConfig;
   source: PieceSource;
+}
+
+interface PieceLookupDir {
+  dir: string;
+  source: PieceSource;
+  disabled?: string[];
 }
 
 interface LoadPiecesOptions {
@@ -120,24 +133,28 @@ function resolvePieceFile(piecesDir: string, name: string): string | null {
  * Supports category/name identifiers (e.g. "frontend/react").
  *
  * Priority:
- * 1. Project-local pieces → .takt/pieces/{name}.yaml
- * 2. User pieces → ~/.takt/pieces/{name}.yaml
- * 3. Builtin pieces → builtins/{lang}/pieces/{name}.yaml
+ * 1. Project-local workflows → .takt/workflows/{name}.yaml
+ * 2. Project-local pieces → .takt/pieces/{name}.yaml
+ * 3. User workflows → ~/.takt/workflows/{name}.yaml
+ * 4. User pieces → ~/.takt/pieces/{name}.yaml
+ * 5. Builtin pieces → builtins/{lang}/pieces/{name}.yaml
  */
 export function loadPiece(
   name: string,
   projectCwd: string,
 ): PieceConfig | null {
-  const projectPiecesDir = join(getProjectConfigDir(projectCwd), 'pieces');
-  const projectMatch = resolvePieceFile(projectPiecesDir, name);
-  if (projectMatch) {
-    return loadPieceFromFile(projectMatch, projectCwd);
-  }
+  const candidateDirs = [
+    getProjectWorkflowsDir(projectCwd),
+    getProjectPiecesDir(projectCwd),
+    getGlobalWorkflowsDir(),
+    getGlobalPiecesDir(),
+  ];
 
-  const globalPiecesDir = getGlobalPiecesDir();
-  const globalMatch = resolvePieceFile(globalPiecesDir, name);
-  if (globalMatch) {
-    return loadPieceFromFile(globalMatch, projectCwd);
+  for (const dir of candidateDirs) {
+    const match = resolvePieceFile(dir, name);
+    if (match) {
+      return loadPieceFromFile(match, projectCwd);
+    }
   }
 
   return getBuiltinPiece(name, projectCwd);
@@ -472,17 +489,19 @@ function loadRepertoirePieceByRef(identifier: string, projectCwd: string): Piece
   return loadPieceFromFile(filePath, projectCwd);
 }
 
-/** Get the 3-layer directory list (builtin → user → project-local) */
-function getPieceDirs(cwd: string): { dir: string; source: PieceSource; disabled?: string[] }[] {
+/** Get the workflow lookup directories in override order (lowest → highest). */
+function getPieceDirs(cwd: string): PieceLookupDir[] {
   const config = resolvePieceConfigValues(cwd, ['enableBuiltinPieces', 'language', 'disabledBuiltins']);
   const disabled = config.disabledBuiltins ?? [];
   const lang = config.language;
-  const dirs: { dir: string; source: PieceSource; disabled?: string[] }[] = [];
+  const dirs: PieceLookupDir[] = [];
   if (config.enableBuiltinPieces !== false) {
     dirs.push({ dir: getBuiltinPiecesDir(lang), disabled, source: 'builtin' });
   }
   dirs.push({ dir: getGlobalPiecesDir(), source: 'user' });
-  dirs.push({ dir: join(getProjectConfigDir(cwd), 'pieces'), source: 'project' });
+  dirs.push({ dir: getGlobalWorkflowsDir(), source: 'user' });
+  dirs.push({ dir: getProjectPiecesDir(cwd), source: 'project' });
+  dirs.push({ dir: getProjectWorkflowsDir(cwd), source: 'project' });
   return dirs;
 }
 
@@ -492,7 +511,9 @@ function getPieceDirs(cwd: string): { dir: string; source: PieceSource; disabled
  * Priority (later entries override earlier):
  *   1. Builtin pieces
  *   2. User pieces (~/.takt/pieces/)
- *   3. Project-local pieces (.takt/pieces/)
+ *   3. User workflows (~/.takt/workflows/)
+ *   4. Project-local pieces (.takt/pieces/)
+ *   5. Project-local workflows (.takt/workflows/)
  */
 export function loadAllPiecesWithSources(
   cwd: string,
@@ -517,7 +538,9 @@ export function listPieceEntries(cwd: string, options?: LoadPiecesOptions): Piec
  * Priority (later entries override earlier):
  *   1. Builtin pieces
  *   2. User pieces (~/.takt/pieces/)
- *   3. Project-local pieces (.takt/pieces/)
+ *   3. User workflows (~/.takt/workflows/)
+ *   4. Project-local pieces (.takt/pieces/)
+ *   5. Project-local workflows (.takt/workflows/)
  */
 export function loadAllPieces(cwd: string, options?: LoadPiecesOptions): Map<string, PieceConfig> {
   const pieces = new Map<string, PieceConfig>();
@@ -529,13 +552,12 @@ export function loadAllPieces(cwd: string, options?: LoadPiecesOptions): Map<str
 }
 
 /**
- * List available piece names (builtin + user + project-local, excluding disabled).
+ * List available workflow names (builtin + user + project-local, excluding disabled).
  * Category pieces use qualified names like "frontend/react".
  */
 export function listPieces(cwd: string, options?: LoadPiecesOptions): string[] {
   const entries = getPieceDirs(cwd).flatMap(({ dir, source, disabled }) =>
-    Array.from(iteratePieceDir(dir, source, disabled)),
-  );
+    Array.from(iteratePieceDir(dir, source, disabled)));
   return collectValidatedPieceEntries(entries, cwd, options)
     .map(({ entry }) => entry.name)
     .sort();

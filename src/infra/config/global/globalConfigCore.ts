@@ -15,6 +15,10 @@ import {
   buildRawTaktProvidersOrThrow,
   normalizeRuntime,
 } from '../configNormalizers.js';
+import {
+  resolveAliasedPreviewCount,
+  type RawProviderPermissionProfile,
+} from '../configKeyAliases.js';
 import { getGlobalConfigPath } from '../paths.js';
 import { invalidateAllResolvedConfigCache } from '../resolutionCache.js';
 import { validateProviderModelCompatibility } from '../providerModelCompatibility.js';
@@ -133,7 +137,9 @@ export class GlobalConfigManager {
       bookmarksFile: expandOptionalHomePath(parsed.bookmarks_file),
       pieceCategoriesFile: expandOptionalHomePath(parsed.piece_categories_file),
       providerOptions: normalizedProvider.providerOptions,
-      providerProfiles: normalizeProviderProfiles(parsed.provider_profiles as Record<string, { default_permission_mode: unknown; movement_permission_overrides?: Record<string, unknown> }> | undefined),
+      providerProfiles: normalizeProviderProfiles(
+        parsed.provider_profiles as Record<string, RawProviderPermissionProfile> | undefined,
+      ),
       runtime: normalizeRuntime(parsed.runtime),
       pieceRuntimePrepare: parsed.piece_runtime_prepare ? {
         customScripts: parsed.piece_runtime_prepare.custom_scripts,
@@ -189,7 +195,7 @@ export class GlobalConfigManager {
       minimalOutput: parsed.minimal_output as boolean | undefined,
       concurrency: parsed.concurrency as number | undefined,
       taskPollIntervalMs: parsed.task_poll_interval_ms as number | undefined,
-      interactivePreviewMovements: parsed.interactive_preview_movements as number | undefined,
+      interactivePreviewMovements: resolveAliasedPreviewCount(parsed as Record<string, unknown>, '~/.takt/config.yaml'),
     };
     validateProviderModelCompatibility(config.provider, config.model);
     this.cachedConfig = config;
