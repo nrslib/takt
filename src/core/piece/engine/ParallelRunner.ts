@@ -25,6 +25,37 @@ import type { ParallelLoggerOptions } from './parallel-logger.js';
 
 const log = createLogger('parallel-runner');
 
+/**
+ * Simple semaphore for controlling concurrency.
+ * Limits the number of concurrent async operations.
+ * Same implementation as ArpeggioRunner's Semaphore.
+ */
+class Semaphore {
+  private running = 0;
+  private readonly waiting: Array<() => void> = [];
+
+  constructor(private readonly maxConcurrency: number) {}
+
+  async acquire(): Promise<void> {
+    if (this.running < this.maxConcurrency) {
+      this.running++;
+      return;
+    }
+    return new Promise<void>((resolve) => {
+      this.waiting.push(resolve);
+    });
+  }
+
+  release(): void {
+    if (this.waiting.length > 0) {
+      const next = this.waiting.shift()!;
+      next();
+    } else {
+      this.running--;
+    }
+  }
+}
+
 export interface ParallelRunnerDeps {
   readonly optionsBuilder: OptionsBuilder;
   readonly movementExecutor: MovementExecutor;
@@ -107,9 +138,22 @@ export class ParallelRunner {
       callAiJudge: this.deps.callAiJudge,
     };
 
+    // Create semaphore for concurrency control (if configured)
+    const semaphore = step.concurrency != null
+      ? new Semaphore(step.concurrency)
+      : undefined;
+    if (semaphore) {
+      log.debug('Concurrency limit enabled', { movement: step.name, concurrency: step.concurrency });
+    }
+
     // Run all sub-movements concurrently (failures are captured, not thrown)
+    // When semaphore is set, at most `concurrency` sub-movements execute simultaneously.
     const settled = await Promise.allSettled(
       subMovements.map(async (subMovement, index) => {
+        if (semaphore) {
+          await semaphore.acquire();
+        }
+        try {
         const subIteration = incrementMovementIteration(state, subMovement.name);
         const subInstruction = this.deps.movementExecutor.buildInstruction(subMovement, subIteration, state, task, maxMovements);
         const parentIteration = state.iteration;
@@ -181,6 +225,11 @@ export class ParallelRunner {
         this.deps.movementExecutor.emitMovementReports(subMovement);
 
         return { subMovement, response: finalResponse, instruction: subInstruction };
+        } finally {
+          if (semaphore) {
+            semaphore.release();
+          }
+        }
       }),
     );
 

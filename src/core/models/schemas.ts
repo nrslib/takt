@@ -363,6 +363,8 @@ export const PieceMovementRawSchema = z.object({
   pass_previous_response: z.boolean().optional().default(true),
   /** Sub-movements to execute in parallel */
   parallel: z.array(ParallelSubMovementRawSchema).optional(),
+  /** Maximum number of parallel sub-movements to execute concurrently (default: unlimited) */
+  concurrency: z.number().int().min(1).optional(),
   /** Arpeggio configuration for data-driven batch processing */
   arpeggio: ArpeggioConfigRawSchema.optional(),
   /** Team leader configuration for dynamic part decomposition */

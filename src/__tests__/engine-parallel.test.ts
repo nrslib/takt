@@ -272,4 +272,93 @@ describe('PieceEngine Integration: Parallel Movement Aggregation', () => {
       () => new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, taskPrefix: 'override-persona-provider' })
     ).toThrow('taskPrefix and taskColorIndex must be provided together');
   });
+
+  it('should respect concurrency limit on parallel sub-movements', async () => {
+    // Track concurrent execution count
+    let currentConcurrency = 0;
+    let maxObservedConcurrency = 0;
+
+    const config = buildDefaultPieceConfig();
+    // Set concurrency to 1 on the reviewers movement
+    const reviewersMovement = config.movements.find(m => m.name === 'reviewers')!;
+    reviewersMovement.concurrency = 1;
+
+    const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+
+    vi.mocked(runAgent).mockImplementation(async (persona, task, options) => {
+      // Track concurrency for parallel sub-movements only
+      const isSubMovement = persona === '../personas/arch-review.md' || persona === '../personas/security-review.md';
+      if (isSubMovement) {
+        currentConcurrency++;
+        maxObservedConcurrency = Math.max(maxObservedConcurrency, currentConcurrency);
+        // Small delay to make concurrency observable
+        await new Promise(resolve => setTimeout(resolve, 10));
+        currentConcurrency--;
+      }
+
+      options.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: task,
+      });
+      return makeResponse({ persona: persona ?? 'unknown', content: `${persona} done` });
+    });
+
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' },  // plan
+      { index: 0, method: 'phase1_tag' },  // implement
+      { index: 0, method: 'phase1_tag' },  // ai_review
+      { index: 0, method: 'phase1_tag' },  // arch-review
+      { index: 0, method: 'phase1_tag' },  // security-review
+      { index: 0, method: 'aggregate' },   // reviewers
+      { index: 0, method: 'phase1_tag' },  // supervise
+    ]);
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    // With concurrency=1, max observed should be 1
+    expect(maxObservedConcurrency).toBe(1);
+  });
+
+  it('should run all sub-movements simultaneously when concurrency is not set', async () => {
+    let currentConcurrency = 0;
+    let maxObservedConcurrency = 0;
+
+    const config = buildDefaultPieceConfig();
+    // No concurrency set — default behavior (all simultaneous)
+
+    const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+
+    vi.mocked(runAgent).mockImplementation(async (persona, task, options) => {
+      const isSubMovement = persona === '../personas/arch-review.md' || persona === '../personas/security-review.md';
+      if (isSubMovement) {
+        currentConcurrency++;
+        maxObservedConcurrency = Math.max(maxObservedConcurrency, currentConcurrency);
+        await new Promise(resolve => setTimeout(resolve, 10));
+        currentConcurrency--;
+      }
+
+      options.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: task,
+      });
+      return makeResponse({ persona: persona ?? 'unknown', content: `${persona} done` });
+    });
+
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'aggregate' },
+      { index: 0, method: 'phase1_tag' },
+    ]);
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    // Without concurrency limit, both should run simultaneously
+    expect(maxObservedConcurrency).toBe(2);
+  });
 });

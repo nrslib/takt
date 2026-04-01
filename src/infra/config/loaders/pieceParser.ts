@@ -323,6 +323,9 @@ function normalizeStepFromRaw(
         pieceMcpServersPolicy,
       ),
     );
+    if (step.concurrency != null) {
+      result.concurrency = step.concurrency;
+    }
   }
 
   const arpeggioConfig = normalizeArpeggio(step.arpeggio, pieceDir);
