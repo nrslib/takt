@@ -76,7 +76,7 @@ $takt {piece} [permission] {task...}
 1. `.yaml` / `.yml` で終わる、または `/` を含む → ファイルパスとして直接 Read
 2. ピース名として検索:
    - `~/.takt/pieces/{name}.yaml` （ユーザーカスタム、優先）
-   - `~/.agents/skills/takt/pieces/{name}.yaml` （Skill同梱ビルトイン）
+   - `~/.agents/skills/takt/workflows/{name}.yaml` （Skill同梱ビルトイン）
 3. 見つからない場合: 上記2ディレクトリを Glob で列挙し、AskUserQuestion で選択させる
 
 YAMLから以下を抽出する（→ references/yaml-schema.md 参照）:
@@ -88,7 +88,7 @@ YAMLから以下を抽出する（→ references/yaml-schema.md 参照）:
 ピースYAMLのセクションマップ（`personas:`, `policies:`, `instructions:`, `output_contracts:`, `knowledge:`）から全ファイルパスを収集する。
 パスは **ピースYAMLファイルのディレクトリからの相対パス** で解決する。
 
-例: ピースが `~/.agents/skills/takt/pieces/default.yaml` にあり、`personas:` に `coder: ../facets/personas/coder.md` がある場合
+例: ピースが `~/.agents/skills/takt/workflows/default.yaml` にあり、`personas:` に `coder: ../facets/personas/coder.md` がある場合
 → 絶対パスは `~/.agents/skills/takt/facets/personas/coder.md`
 
 重複を除いて Read で全て読み込む。読み込んだ内容はサブエージェントへのプロンプト構築に使う。

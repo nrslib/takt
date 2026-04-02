@@ -50,7 +50,7 @@ vi.mock('../infra/config/index.js', () => ({
   getGlobalFacetDir: () => mocks.globalFacetDir,
   getGlobalWorkflowsDir: () => mocks.globalPiecesDir,
   getProjectWorkflowsDir: () => mocks.projectPiecesDir,
-  getBuiltinPiecesDir: () => mocks.builtinDir,
+  getBuiltinWorkflowsDir: () => mocks.builtinDir,
   isPathSafe: (basePath: string, targetPath: string) => {
     const rel = relative(resolve(basePath), resolve(targetPath));
     return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
@@ -151,7 +151,7 @@ describe('ejectBuiltin', () => {
 
   beforeEach(() => {
     dirs = createTestDirs();
-    mocks.builtinDir = join(dirs.baseDir, 'builtins', 'pieces');
+    mocks.builtinDir = join(dirs.baseDir, 'builtins', 'workflows');
     mocks.projectFacetDir = join(dirs.projectDir, '.takt', 'personas');
     mocks.globalFacetDir = join(dirs.globalDir, 'personas');
     mocks.projectPiecesDir = join(dirs.projectDir, '.takt', 'workflows');

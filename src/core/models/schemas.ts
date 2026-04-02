@@ -634,7 +634,7 @@ const GlobalOnlyConfigSchema = z.object({
   worktree_dir: z.string().optional(),
   /** List of builtin piece/agent names to exclude from fallback loading */
   disabled_builtins: z.array(z.string()).optional().default([]),
-  /** Enable builtin pieces from builtins/{lang}/pieces */
+  /** Enable builtin workflows from builtins/{lang}/workflows */
   enable_builtin_pieces: z.boolean().optional(),
   /** Anthropic API key for Claude Code SDK (overridden by TAKT_ANTHROPIC_API_KEY env var) */
   anthropic_api_key: z.string().optional(),
@@ -664,7 +664,7 @@ const GlobalOnlyConfigSchema = z.object({
   cursor_api_key: z.string().optional(),
   /** Path to bookmarks file (default: ~/.takt/preferences/bookmarks.yaml) */
   bookmarks_file: z.string().optional(),
-  /** Path to piece categories file (default: ~/.takt/preferences/piece-categories.yaml) */
+  /** Path to user categories overlay (default: ~/.takt/preferences/piece-categories.yaml). Builtin defaults: builtins/{lang}/workflow-categories.yaml */
   piece_categories_file: z.string().optional(),
   /** Prevent macOS idle sleep during takt execution using caffeinate (default: false) */
   prevent_sleep: z.boolean().optional(),

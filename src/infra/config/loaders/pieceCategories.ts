@@ -198,12 +198,12 @@ function resolveOthersCategoryName(defaultConfig: ParsedCategoryConfig, userConf
 }
 
 /**
- * Load default categories from builtin resource file.
+ * Load default categories from builtin `workflow-categories.yaml` only.
  * Returns null if file doesn't exist or has no piece_categories.
  */
 export function loadDefaultCategories(cwd: string): CategoryConfig | null {
   const { language: lang } = resolvePieceConfigValues(cwd, ['language']);
-  const filePath = join(getLanguageResourcesDir(lang), 'piece-categories.yaml');
+  const filePath = join(getLanguageResourcesDir(lang), 'workflow-categories.yaml');
   const parsed = loadCategoryConfigFromPath(filePath, filePath);
 
   if (!parsed?.pieceCategories) {
@@ -224,10 +224,10 @@ export function loadDefaultCategories(cwd: string): CategoryConfig | null {
   };
 }
 
-/** Get the path to the builtin default categories file. */
+/** Get the path to the builtin default categories file (`workflow-categories.yaml`). */
 export function getDefaultCategoriesPath(cwd: string): string {
   const { language: lang } = resolvePieceConfigValues(cwd, ['language']);
-  return join(getLanguageResourcesDir(lang), 'piece-categories.yaml');
+  return join(getLanguageResourcesDir(lang), 'workflow-categories.yaml');
 }
 
 function buildSeparatedCategories(

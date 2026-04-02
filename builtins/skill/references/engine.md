@@ -66,7 +66,7 @@ Task tool:
 2. 各セクションマップのパスを、**ピースYAMLファイルのディレクトリ**を基準に絶対パスに変換する
 3. movement の `persona: coder` → `personas:` セクションの `coder` キー → ファイルパス → Read で内容を取得
 
-例: ピースが `~/.claude/skills/takt/pieces/default.yaml` の場合
+例: ピースが `~/.claude/skills/takt/workflows/default.yaml` の場合
 - `personas.coder: ../facets/personas/coder.md` → `~/.claude/skills/takt/facets/personas/coder.md`
 - `policies.coding: ../facets/policies/coding.md` → `~/.claude/skills/takt/facets/policies/coding.md`
 - `instructions.plan: ../facets/instructions/plan.md` → `~/.claude/skills/takt/facets/instructions/plan.md`

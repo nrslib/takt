@@ -398,7 +398,7 @@ persona_providers:
 ### 設定方法
 
 カテゴリは次の場所で設定できます。
-- `builtins/{lang}/piece-categories.yaml` - デフォルトのビルトインカテゴリ
+- `builtins/{lang}/workflow-categories.yaml` - デフォルトのビルトインカテゴリ
 - `~/.takt/config.yaml` または `piece_categories_file` で指定した別のカテゴリファイル
 
 ```yaml

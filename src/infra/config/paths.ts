@@ -53,9 +53,9 @@ export function getGlobalConfigPath(): string {
   return join(getGlobalConfigDir(), 'config.yaml');
 }
 
-/** Get builtin pieces directory (builtins/{lang}/pieces) */
-export function getBuiltinPiecesDir(lang: Language): string {
-  return join(getLanguageResourcesDir(lang), 'pieces');
+/** Get builtin workflows directory (builtins/{lang}/workflows) */
+export function getBuiltinWorkflowsDir(lang: Language): string {
+  return join(getLanguageResourcesDir(lang), 'workflows');
 }
 
 /** Get builtin personas directory (builtins/{lang}/facets/personas) */

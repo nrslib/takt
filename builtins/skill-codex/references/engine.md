@@ -71,7 +71,7 @@ codex exec --full-auto - < "$tmp_prompt_file"
 2. 各セクションマップのパスを、**ピースYAMLファイルのディレクトリ基準**で絶対パスへ変換する
 3. movement のキー参照（例: `persona: coder`）から実ファイルを Read で取得する
 
-例: ピースが `~/.agents/skills/takt/pieces/default.yaml` の場合
+例: ピースが `~/.agents/skills/takt/workflows/default.yaml` の場合
 - `personas.coder: ../facets/personas/coder.md` → `~/.agents/skills/takt/facets/personas/coder.md`
 - `policies.coding: ../facets/policies/coding.md` → `~/.agents/skills/takt/facets/policies/coding.md`
 - `instructions.plan: ../facets/instructions/plan.md` → `~/.agents/skills/takt/facets/instructions/plan.md`

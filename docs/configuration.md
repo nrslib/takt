@@ -398,7 +398,7 @@ Organize workflows into categories for better UI presentation in the `takt` work
 ### Configuration
 
 Categories can be configured in:
-- `builtins/{lang}/piece-categories.yaml` - Default builtin categories
+- `builtins/{lang}/workflow-categories.yaml` - Default builtin categories
 - `~/.takt/config.yaml` or a separate categories file specified by `piece_categories_file`
 
 ```yaml

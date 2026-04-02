@@ -227,7 +227,7 @@ export interface GlobalConfig extends Omit<ProjectConfig, 'submodules' | 'withSu
   /** List of builtin piece/agent names to exclude from fallback loading */
   disabledBuiltins?: string[];
   /** @globalOnly */
-  /** Enable builtin pieces from builtins/{lang}/pieces */
+  /** Enable builtin workflows from builtins/{lang}/workflows */
   enableBuiltinPieces?: boolean;
   /** @globalOnly */
   /** Anthropic API key for Claude Code SDK (overridden by TAKT_ANTHROPIC_API_KEY env var) */
@@ -272,7 +272,7 @@ export interface GlobalConfig extends Omit<ProjectConfig, 'submodules' | 'withSu
   /** Path to bookmarks file (default: ~/.takt/preferences/bookmarks.yaml) */
   bookmarksFile?: string;
   /** @globalOnly */
-  /** Path to piece categories file (default: ~/.takt/preferences/piece-categories.yaml) */
+  /** User categories overlay path (default: ~/.takt/preferences/piece-categories.yaml). Builtin defaults: builtins/{lang}/workflow-categories.yaml */
   pieceCategoriesFile?: string;
   /** @globalOnly */
   /** Prevent macOS idle sleep during takt execution using caffeinate (default: false) */

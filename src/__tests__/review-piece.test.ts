@@ -18,7 +18,7 @@ import { PieceConfigRawSchema } from '../core/models/index.js';
 const RESOURCES_DIR = join(import.meta.dirname, '../../builtins');
 
 function loadReviewYaml(lang: 'en' | 'ja') {
-  const filePath = join(RESOURCES_DIR, lang, 'pieces', 'review-default.yaml');
+  const filePath = join(RESOURCES_DIR, lang, 'workflows', 'review-default.yaml');
   const content = readFileSync(filePath, 'utf-8');
   return parseYaml(content);
 }

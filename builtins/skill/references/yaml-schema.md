@@ -35,8 +35,8 @@ loop_monitors: [...]          # ループ監視設定（任意）
 各セクションマップのパスは **ピースYAMLファイルのディレクトリからの相対パス** で解決する。
 movement 内では**キー名**で参照する（パスを直接書かない）。
 
-例: ピースが `~/.claude/skills/takt/pieces/coding.yaml` にあり、`personas:` セクションに `coder: ../personas/coder.md` がある場合
-→ 絶対パスは `~/.claude/skills/takt/personas/coder.md`
+例: ピースが `{スキルルート}/workflows/coding.yaml` にあり、`personas:` セクションに `coder: ../personas/coder.md` がある場合
+→ 絶対パスは `{スキルルート}/personas/coder.md`（`スキルルート` は Claude Code では `~/.claude/skills/takt`、Codex では `~/.agents/skills/takt` など、インストール先に応じて置き換える）
 → movement では `persona: coder` で参照
 
 ## Movement 定義
