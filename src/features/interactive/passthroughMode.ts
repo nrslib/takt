@@ -32,7 +32,7 @@ export async function passthroughMode(
   info(getLabel('interactive.ui.intro', lang));
   blankLine();
 
-  const input = await readMultilineInput(chalk.green('> '));
+  const input = await readMultilineInput(chalk.green('> '), { lang });
 
   if (input === null) {
     blankLine();

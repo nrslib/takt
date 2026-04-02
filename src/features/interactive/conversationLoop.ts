@@ -127,7 +127,7 @@ export async function runConversationLoop(
   }
 
   while (true) {
-    const input = await readMultilineInput(chalk.green('> '));
+    const input = await readMultilineInput(chalk.green('> '), { lang: ctx.lang });
 
     if (input === null) {
       blankLine();
