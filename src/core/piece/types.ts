@@ -10,6 +10,7 @@ import type { PieceMovement, AgentResponse, PieceState, Language, LoopMonitorCon
 import type { PersonaProviderEntry } from '../models/config-types.js';
 import type { ProviderPermissionProfiles } from '../models/provider-profiles.js';
 import type { MovementProviderOptions } from '../models/piece-types.js';
+import type { StructuredCaller } from '../../agents/structured-caller.js';
 
 // Re-export shared provider protocol types to maintain backward compatibility.
 // The canonical definitions live in shared/types/provider.ts so that shared-layer
@@ -66,17 +67,6 @@ export type AskUserQuestionHandler = (
 ) => Promise<Record<string, string>>;
 
 export type RuleIndexDetector = (content: string, movementName: string) => number;
-
-export interface AiJudgeCondition {
-  index: number;
-  text: string;
-}
-
-export type AiJudgeCaller = (
-  agentOutput: string,
-  conditions: AiJudgeCondition[],
-  options: { cwd: string }
-) => Promise<number>;
 
 export type PhaseName = 'execute' | 'report' | 'judge';
 
@@ -210,8 +200,8 @@ export interface PieceEngineOptions {
   interactive?: boolean;
   /** Rule tag index detector (required for rules evaluation) */
   detectRuleIndex?: RuleIndexDetector;
-  /** AI judge caller (required for rules evaluation) */
-  callAiJudge?: AiJudgeCaller;
+  /** Structured caller (required for rule evaluation and status/decomposition flows) */
+  structuredCaller?: StructuredCaller;
   /** Override initial movement (default: piece config's initialMovement) */
   startMovement?: string;
   /** Retry note explaining why task is being retried */

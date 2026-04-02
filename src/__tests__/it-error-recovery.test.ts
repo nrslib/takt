@@ -4,7 +4,7 @@
  * Tests agent error, blocked responses, max iteration limits,
  * loop detection, scenario queue exhaustion, and movement execution exceptions.
  *
- * Mocked: UI, session, phase-runner, notifications, config, callAiJudge
+ * Mocked: UI, session, phase-runner, notifications, config
  * Not mocked: PieceEngine, runAgent, detectMatchedRule, rule-evaluator
  */
 
@@ -13,20 +13,12 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setMockScenario, resetScenario } from '../infra/mock/index.js';
+import { DefaultStructuredCaller } from '../agents/structured-caller.js';
 import type { PieceConfig, PieceMovement, PieceRule } from '../core/models/index.js';
 import { detectRuleIndex } from '../shared/utils/ruleIndex.js';
 import { makeRule } from './test-helpers.js';
-import { callAiJudge } from '../agents/ai-judge.js';
 
 // --- Mocks ---
-
-vi.mock('../agents/ai-judge.js', async (importOriginal) => {
-  const original = await importOriginal<typeof import('../agents/ai-judge.js')>();
-  return {
-    ...original,
-    callAiJudge: vi.fn().mockResolvedValue(-1),
-  };
-});
 
 vi.mock('../core/piece/phase-runner.js', () => ({
   needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
@@ -92,7 +84,7 @@ function buildEngineOptions(projectCwd: string) {
   return {
     projectCwd,
     detectRuleIndex,
-    callAiJudge,
+    structuredCaller: new DefaultStructuredCaller(),
   };
 }
 

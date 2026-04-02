@@ -36,6 +36,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 import { PieceEngine } from '../core/piece/index.js';
 import { runAgent } from '../agents/runner.js';
+import { detectMatchedRule } from '../core/piece/evaluation/index.js';
 import {
   makeResponse,
   buildDefaultPieceConfig,
@@ -200,6 +201,46 @@ describe('PieceEngine Integration: Parallel Movement Aggregation', () => {
     const calledAgents = vi.mocked(runAgent).mock.calls.map(call => call[0]);
     expect(calledAgents).toContain('../personas/arch-review.md');
     expect(calledAgents).toContain('../personas/security-review.md');
+  });
+
+  it('should pass resolved providers to rule evaluation for sub-movements and parent movement', async () => {
+    const config = buildDefaultPieceConfig();
+    const engine = new PieceEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      provider: 'claude',
+      personaProviders: {
+        'arch-review': { provider: 'cursor' },
+        'security-review': { provider: 'copilot' },
+      },
+    });
+
+    mockRunAgentSequence([
+      makeResponse({ persona: 'plan', content: 'Plan done' }),
+      makeResponse({ persona: 'implement', content: 'Impl done' }),
+      makeResponse({ persona: 'ai_review', content: 'OK' }),
+      makeResponse({ persona: 'arch-review', content: 'Architecture review content' }),
+      makeResponse({ persona: 'security-review', content: 'Security review content' }),
+      makeResponse({ persona: 'supervise', content: 'All passed' }),
+    ]);
+
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'aggregate' },
+      { index: 0, method: 'phase1_tag' },
+    ]);
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+
+    const detectCalls = vi.mocked(detectMatchedRule).mock.calls;
+    expect(detectCalls[3]?.[3].provider).toBe('cursor');
+    expect(detectCalls[4]?.[3].provider).toBe('copilot');
+    expect(detectCalls[5]?.[3].provider).toBe('claude');
   });
 
   it('should output rich parallel prefix when taskPrefix/taskColorIndex are provided', async () => {

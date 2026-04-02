@@ -8,14 +8,6 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../agents/ai-judge.js', async (importOriginal) => {
-  const original = await importOriginal<typeof import('../agents/ai-judge.js')>();
-  return {
-    ...original,
-    callAiJudge: vi.fn().mockResolvedValue(-1),
-  };
-});
-
 vi.mock('../core/piece/phase-runner.js', () => ({
   needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),

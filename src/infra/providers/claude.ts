@@ -36,6 +36,8 @@ function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
 
 /** Claude provider — delegates to Claude Code SDK */
 export class ClaudeProvider implements Provider {
+  readonly supportsStructuredOutput = true;
+
   setup(config: AgentSetup): ProviderAgent {
     if (config.claudeAgent) {
       const agentName = config.claudeAgent;

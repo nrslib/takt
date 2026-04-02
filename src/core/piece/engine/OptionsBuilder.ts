@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import type { PieceMovement, PieceState, Language } from '../../models/types.js';
 import type { MovementProviderOptions } from '../../models/piece-types.js';
 import type { RunAgentOptions } from '../../../agents/runner.js';
+import type { StructuredCaller } from '../../../agents/structured-caller.js';
 import type { PhaseRunnerContext } from '../phase-runner.js';
 import { resolveEffectiveProviderOptions } from '../../../infra/config/providerOptions.js';
 import type {
@@ -181,6 +182,8 @@ export class OptionsBuilder {
       interactive: this.engineOptions.interactive,
       lastResponse,
       onStream: this.engineOptions.onStream,
+      structuredCaller: this.requireStructuredCaller(),
+      resolveProvider: (step) => this.resolveStepProviderModel(step).provider,
       getSessionId: (persona: string) => state.personaSessions.get(persona),
       buildResumeOptions: this.buildResumeOptions.bind(this),
       buildNewSessionReportOptions: this.buildNewSessionReportOptions.bind(this),
@@ -190,5 +193,13 @@ export class OptionsBuilder {
       onJudgeStage,
       iteration,
     };
+  }
+
+  private requireStructuredCaller(): StructuredCaller {
+    if (!this.engineOptions.structuredCaller) {
+      throw new Error('structuredCaller is required for phase runner context');
+    }
+
+    return this.engineOptions.structuredCaller;
   }
 }

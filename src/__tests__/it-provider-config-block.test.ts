@@ -8,14 +8,6 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../agents/ai-judge.js', async (importOriginal) => {
-  const original = await importOriginal<typeof import('../agents/ai-judge.js')>();
-  return {
-    ...original,
-    callAiJudge: vi.fn().mockResolvedValue(-1),
-  };
-});
-
 vi.mock('../core/piece/phase-runner.js', () => ({
   needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
@@ -234,8 +226,8 @@ describe('IT: provider block reflection', () => {
     // Then
     expect(ok).toBe(true);
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
-    expect(options?.stepProvider).toBeUndefined();
-    expect(options?.stepModel).toBeUndefined();
+    expect(options?.stepProvider).toBe('codex');
+    expect(options?.stepModel).toBe('project-model');
     expect(options?.providerOptions).toEqual({
       codex: { networkAccess: false },
     });

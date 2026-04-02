@@ -112,10 +112,6 @@ vi.mock('../infra/claude/query-manager.js', () => ({
   interruptAllQueries: mockInterruptAllQueries,
 }));
 
-vi.mock('../agents/ai-judge.js', () => ({
-  callAiJudge: vi.fn(),
-}));
-
 vi.mock('../infra/config/index.js', () => ({
   loadPersonaSessions: vi.fn().mockReturnValue({}),
   updatePersonaSession: vi.fn(),

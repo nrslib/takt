@@ -35,6 +35,8 @@ function toCopilotOptions(options: ProviderCallOptions): CopilotCallOptions {
 
 /** Copilot provider — delegates to GitHub Copilot CLI */
 export class CopilotProvider implements Provider {
+  readonly supportsStructuredOutput = false;
+
   setup(config: AgentSetup): ProviderAgent {
     if (config.claudeAgent) {
       throw new Error('Claude Code agent calls are not supported by the Copilot provider');

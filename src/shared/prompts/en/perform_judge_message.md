@@ -2,7 +2,7 @@
   template: perform_judge_message
   phase: judge (AI-based rule evaluation)
   vars: agentOutput, conditionList
-  caller: callAiJudge
+  caller: structuredCaller.evaluateCondition
 -->
 # Judge Task
 

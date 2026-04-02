@@ -70,6 +70,7 @@ vi.mock('node:child_process', () => ({
 import { ClaudeProvider } from '../infra/providers/claude.js';
 import { CodexProvider } from '../infra/providers/codex.js';
 import { OpenCodeProvider } from '../infra/providers/opencode.js';
+import { MockProvider } from '../infra/providers/mock.js';
 
 const SCHEMA = {
   type: 'object',
@@ -92,6 +93,11 @@ function doneResponse(persona: string, structuredOutput?: Record<string, unknown
 describe('ClaudeProvider — structured output', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('supportsStructuredOutput is true', () => {
+    const provider = new ClaudeProvider() as { supportsStructuredOutput?: boolean };
+    expect(provider.supportsStructuredOutput).toBe(true);
   });
 
   it('outputSchema を callClaude に渡し structuredOutput を返す', async () => {
@@ -154,6 +160,11 @@ describe('ClaudeProvider — structured output', () => {
 describe('CodexProvider — structured output', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('supportsStructuredOutput is true', () => {
+    const provider = new CodexProvider() as { supportsStructuredOutput?: boolean };
+    expect(provider.supportsStructuredOutput).toBe(true);
   });
 
   it('outputSchema を callCodex に渡し structuredOutput を返す', async () => {
@@ -219,6 +230,11 @@ describe('OpenCodeProvider — structured output', () => {
     vi.clearAllMocks();
   });
 
+  it('supportsStructuredOutput is true', () => {
+    const provider = new OpenCodeProvider() as { supportsStructuredOutput?: boolean };
+    expect(provider.supportsStructuredOutput).toBe(true);
+  });
+
   it('outputSchema を callOpenCode に渡し structuredOutput を返す', async () => {
     mockCallOpenCode.mockResolvedValue(doneResponse('coder', { step: 2 }));
 
@@ -270,5 +286,14 @@ describe('OpenCodeProvider — structured output', () => {
 
     const opts = mockCallOpenCode.mock.calls[0]?.[2];
     expect(opts.outputSchema).toBeUndefined();
+  });
+});
+
+// ---------- Mock ----------
+
+describe('MockProvider — structured output', () => {
+  it('supportsStructuredOutput is true', () => {
+    const provider = new MockProvider() as { supportsStructuredOutput?: boolean };
+    expect(provider.supportsStructuredOutput).toBe(true);
   });
 });

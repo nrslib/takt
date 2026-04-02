@@ -33,22 +33,6 @@ const {
   mockPushBranch: vi.fn(),
 }));
 
-vi.mock('../agents/ai-judge.js', async (importOriginal) => {
-  const original = await importOriginal<typeof import('../agents/ai-judge.js')>();
-  return {
-    ...original,
-    callAiJudge: vi.fn().mockImplementation(async (content: string, conditions: { index: number; text: string }[]) => {
-      // Simple text matching: return index of first condition whose text appears in content
-      for (let i = 0; i < conditions.length; i++) {
-        if (content.includes(conditions[i]!.text)) {
-          return i;
-        }
-      }
-      return -1;
-    }),
-  };
-});
-
 vi.mock('node:child_process', () => ({
   execFileSync: vi.fn(),
 }));
@@ -296,12 +280,12 @@ describe('Pipeline Modes IT: --task + --piece name (builtin)', () => {
   it('should load and execute builtin default piece by name', async () => {
     // Flow: plan → write_tests → implement → ai_review → reviewers(arch-review + supervise) → COMPLETE
     setMockScenario([
-      { persona: 'planner', status: 'done', content: 'Requirements are clear and implementable' },
-      { persona: 'coder', status: 'done', content: 'Tests written successfully' },
-      { persona: 'coder', status: 'done', content: 'Implementation complete' },
-      { persona: 'ai-antipattern-reviewer', status: 'done', content: 'No AI-specific issues' },
-      { persona: 'architecture-reviewer', status: 'done', content: 'approved' },
-      { persona: 'supervisor', status: 'done', content: 'All checks passed' },
+      { persona: 'planner', status: 'done', content: '[PLAN:1]\n\nRequirements are clear and implementable' },
+      { persona: 'coder', status: 'done', content: '[WRITE_TESTS:1]\n\nTests written successfully' },
+      { persona: 'coder', status: 'done', content: '[IMPLEMENT:1]\n\nImplementation complete' },
+      { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI_REVIEW:1]\n\nNo AI-specific issues' },
+      { persona: 'architecture-reviewer', status: 'done', content: '[ARCH-REVIEW:1]\n\napproved' },
+      { persona: 'supervisor', status: 'done', content: '[SUPERVISE:1]\n\nAll checks passed' },
     ]);
 
     const exitCode = await executePipeline({

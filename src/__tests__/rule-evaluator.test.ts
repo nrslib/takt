@@ -27,7 +27,9 @@ function makeContext(overrides: Partial<RuleEvaluatorContext> = {}): RuleEvaluat
     state: makeState(),
     cwd: '/tmp/test',
     detectRuleIndex: vi.fn().mockReturnValue(-1),
-    callAiJudge: vi.fn().mockResolvedValue(-1),
+    structuredCaller: {
+      evaluateCondition: vi.fn().mockResolvedValue(-1),
+    } as RuleEvaluatorContext['structuredCaller'],
     ...overrides,
   };
 }
@@ -96,8 +98,8 @@ describe('RuleEvaluator', () => {
       });
       // Tag detection returns index 0 (interactiveOnly rule)
       const detectRuleIndex = vi.fn().mockReturnValue(0);
-      const callAiJudge = vi.fn().mockResolvedValue(-1);
-      const ctx = makeContext({ detectRuleIndex, callAiJudge, interactive: false });
+      const structuredCaller = { evaluateCondition: vi.fn().mockResolvedValue(-1) };
+      const ctx = makeContext({ detectRuleIndex, structuredCaller, interactive: false });
       const evaluator = new RuleEvaluator(step, ctx);
 
       // Should skip interactive-only rule and eventually throw
@@ -126,20 +128,19 @@ describe('RuleEvaluator', () => {
           { condition: 'rejected', next: 'review', isAiCondition: true, aiConditionText: 'is it rejected?' },
         ],
       });
-      // callAiJudge returns 0 (first ai condition matched)
-      const callAiJudge = vi.fn().mockResolvedValue(0);
-      const ctx = makeContext({ callAiJudge });
+      const structuredCaller = { evaluateCondition: vi.fn().mockResolvedValue(0) };
+      const ctx = makeContext({ structuredCaller });
       const evaluator = new RuleEvaluator(step, ctx);
 
       const result = await evaluator.evaluate('agent output', '');
       expect(result).toEqual({ index: 0, method: 'ai_judge' });
-      expect(callAiJudge).toHaveBeenCalledWith(
+      expect(structuredCaller.evaluateCondition).toHaveBeenCalledWith(
         'agent output',
         [
           { index: 0, text: 'is it approved?' },
           { index: 1, text: 'is it rejected?' },
         ],
-        { cwd: '/tmp/test' },
+        { cwd: '/tmp/test', provider: undefined },
       );
     });
 
@@ -150,10 +151,8 @@ describe('RuleEvaluator', () => {
           { condition: 'rejected', next: 'review' },
         ],
       });
-      // No rules have isAiCondition, so evaluateAiConditions returns -1 without calling callAiJudge.
-      // evaluateAllConditionsViaAiJudge is the only caller of callAiJudge.
-      const callAiJudge = vi.fn().mockResolvedValue(1);
-      const ctx = makeContext({ callAiJudge });
+      const structuredCaller = { evaluateCondition: vi.fn().mockResolvedValue(1) };
+      const ctx = makeContext({ structuredCaller });
       const evaluator = new RuleEvaluator(step, ctx);
 
       const result = await evaluator.evaluate('agent output', '');
@@ -183,8 +182,8 @@ describe('RuleEvaluator', () => {
       });
       // Tag detection returns index 5 (out of bounds)
       const detectRuleIndex = vi.fn().mockReturnValue(5);
-      const callAiJudge = vi.fn().mockResolvedValue(-1);
-      const ctx = makeContext({ detectRuleIndex, callAiJudge });
+      const structuredCaller = { evaluateCondition: vi.fn().mockResolvedValue(-1) };
+      const ctx = makeContext({ detectRuleIndex, structuredCaller });
       const evaluator = new RuleEvaluator(step, ctx);
 
       await expect(evaluator.evaluate('content', 'tag')).rejects.toThrow('no rule matched');
@@ -203,18 +202,12 @@ describe('RuleEvaluator', () => {
           { condition: 'auto proceed', next: 'COMPLETE' },
         ],
       });
-      // In non-interactive mode, interactiveOnly rules are filtered out from ai judge.
-      // evaluateAiConditions skips the interactiveOnly ai() rule, returning -1.
-      // evaluateAllConditionsViaAiJudge filters to only non-interactive rules,
-      // passing conditions=[{index: 1, text: 'auto proceed'}] to judge.
-      // The judge returns 0 (first condition in filtered array).
-      const callAiJudge = vi.fn().mockResolvedValue(0);
-      const ctx = makeContext({ callAiJudge, interactive: false });
+      const structuredCaller = { evaluateCondition: vi.fn().mockResolvedValue(1) };
+      const ctx = makeContext({ structuredCaller, interactive: false });
       const evaluator = new RuleEvaluator(step, ctx);
 
       const result = await evaluator.evaluate('output', '');
-      // Returns the judge result index (0) directly — it's the index into the filtered conditions array
-      expect(result).toEqual({ index: 0, method: 'ai_judge_fallback' });
+      expect(result).toEqual({ index: 1, method: 'ai_judge_fallback' });
     });
   });
 });

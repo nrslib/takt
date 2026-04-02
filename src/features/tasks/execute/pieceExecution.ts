@@ -3,10 +3,11 @@ import { join } from 'node:path';
 import { PieceEngine, createDenyAskUserQuestionHandler } from '../../../core/piece/index.js';
 import type { PieceConfig } from '../../../core/models/index.js';
 import type { PieceExecutionResult, PieceExecutionOptions, ExceededInfo } from './types.js';
+import { DefaultStructuredCaller, PromptBasedStructuredCaller } from '../../../agents/structured-caller.js';
 import { detectRuleIndex } from '../../../shared/utils/ruleIndex.js';
 import { interruptAllQueries } from '../../../infra/claude/query-manager.js';
-import { callAiJudge } from '../../../agents/ai-judge.js';
 import { loadPersonaSessions, updatePersonaSession, loadWorktreeSessions, updateWorktreeSession, resolvePieceConfigValues, saveSessionState, type SessionState } from '../../../infra/config/index.js';
+import { getProvider } from '../../../infra/providers/index.js';
 import { isQuietMode } from '../../../shared/context.js';
 import { StreamDisplay } from '../../../shared/ui/index.js';
 import { TaskPrefixWriter } from '../../../shared/ui/TaskPrefixWriter.js';
@@ -30,8 +31,7 @@ import { assertTaskPrefixPair, truncate, formatElapsedTime, detectMovementType }
 import { createTraceReportWriter } from './traceReportWriter.js';
 import { sanitizeTextForStorage } from './traceReportRedaction.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
-export type { PieceExecutionResult, PieceExecutionOptions };
-const log = createLogger('piece');
+export type { PieceExecutionResult, PieceExecutionOptions }; const log = createLogger('piece');
 export async function executePiece(
   pieceConfig: PieceConfig,
   task: string,
@@ -78,7 +78,7 @@ export async function executePiece(
   const shouldNotifyIterationLimit = shouldNotify && globalConfig.notificationSoundEvents?.iterationLimit !== false;
   const shouldNotifyPieceComplete = shouldNotify && globalConfig.notificationSoundEvents?.pieceComplete !== false;
   const shouldNotifyPieceAbort = shouldNotify && globalConfig.notificationSoundEvents?.pieceAbort !== false;
-  const currentProvider = globalConfig.provider;
+  const currentProvider = options.provider ?? globalConfig.provider;
   if (!currentProvider) throw new Error('No provider configured. Set "provider" in ~/.takt/config.yaml');
   const configuredModel = options.model ?? globalConfig.model;
   const effectivePieceConfig: PieceConfig = {
@@ -107,6 +107,9 @@ export async function executePiece(
   initAnalyticsWriter(globalConfig.analytics?.enabled === true, globalConfig.analytics?.eventsPath ?? join(getGlobalConfigDir(), 'analytics', 'events'));
   if (globalConfig.preventSleep) preventSleep();
   const analyticsEmitter = new AnalyticsEmitter(runSlug, currentProvider, configuredModel ?? '(default)');
+  const structuredCaller = getProvider(currentProvider).supportsStructuredOutput
+    ? new DefaultStructuredCaller()
+    : new PromptBasedStructuredCaller();
   const savedSessions = isRetry ? (isWorktree
     ? loadWorktreeSessions(projectCwd, cwd, currentProvider)
     : loadPersonaSessions(projectCwd, currentProvider)) : {};
@@ -157,8 +160,8 @@ export async function executePiece(
       onAskUserQuestion: createDenyAskUserQuestionHandler(),
       projectCwd,
       language: options.language,
-      provider: options.provider,
-      model: options.model,
+      provider: currentProvider,
+      model: configuredModel,
       providerOptions: options.providerOptions,
       providerOptionsSource: options.providerOptionsSource,
       providerOptionsOriginResolver: options.providerOptionsOriginResolver,
@@ -166,7 +169,7 @@ export async function executePiece(
       providerProfiles: options.providerProfiles,
       interactive: interactiveUserInput,
       detectRuleIndex,
-      callAiJudge,
+      structuredCaller,
       startMovement: options.startMovement,
       retryNote: options.retryNote,
       reportDirName: runSlug,
@@ -291,8 +294,5 @@ export async function executePiece(
   } catch (error) {
     if (!runMetaManager.isFinalized) runMetaManager.finalize('aborted');
     throw error;
-  } finally {
-    prefixWriter?.flush();
-    abortHandler.cleanup();
-  }
+  } finally { prefixWriter?.flush(); abortHandler.cleanup(); }
 }

@@ -23,6 +23,7 @@ export default defineConfig({
       'e2e/specs/task-status-persistence.e2e.ts',
       'e2e/specs/session-log.e2e.ts',
       'e2e/specs/model-override.e2e.ts',
+      'e2e/specs/provider-override.e2e.ts',
       'e2e/specs/provider-error.e2e.ts',
       'e2e/specs/error-handling.e2e.ts',
       'e2e/specs/cli-catalog.e2e.ts',

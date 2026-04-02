@@ -1,7 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { PieceMovement, RuleMatchMethod } from '../models/types.js';
-import { judgeStatus } from '../../agents/agent-usecases.js';
 import { StatusJudgmentBuilder, type StatusJudgmentContext } from './instruction/StatusJudgmentBuilder.js';
 import { getJudgmentReportFiles } from './evaluation/rule-utils.js';
 import { createLogger } from '../../shared/utils/index.js';
@@ -110,9 +109,10 @@ export async function runStatusJudgmentPhase(
   }
 
   try {
-    const result = await judgeStatus(structuredInstruction, tagInstruction, step.rules, {
+    const result = await ctx.structuredCaller.judgeStatus(structuredInstruction, tagInstruction, step.rules, {
       cwd: ctx.cwd,
       movementName: step.name,
+      provider: ctx.resolveProvider(step),
       language: ctx.language,
       interactive: ctx.interactive,
       onStream: ctx.onStream,

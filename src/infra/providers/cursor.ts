@@ -35,6 +35,8 @@ function toCursorOptions(options: ProviderCallOptions): CursorCallOptions {
 
 /** Cursor provider — delegates to Cursor Agent CLI */
 export class CursorProvider implements Provider {
+  readonly supportsStructuredOutput = false;
+
   setup(config: AgentSetup): ProviderAgent {
     if (config.claudeAgent) {
       throw new Error('Claude Code agent calls are not supported by the Cursor provider');

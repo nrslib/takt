@@ -163,10 +163,6 @@ vi.mock('../infra/claude/query-manager.js', () => ({
   interruptAllQueries: vi.fn(),
 }));
 
-vi.mock('../agents/ai-judge.js', () => ({
-  callAiJudge: vi.fn(),
-}));
-
 vi.mock('../shared/exitCodes.js', () => ({
   EXIT_SIGINT: 130,
 }));

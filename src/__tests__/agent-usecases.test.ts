@@ -10,7 +10,9 @@ import {
   judgeStatus,
   decomposeTask,
   requestMoreParts,
+  type DecomposeTaskOptions,
 } from '../agents/agent-usecases.js';
+import { runTagJudgeStage } from '../agents/judge-status-usecase.js';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -27,10 +29,14 @@ vi.mock('../core/piece/engine/task-decomposer.js', () => ({
   parseParts: vi.fn(),
 }));
 
-vi.mock('../agents/judge-utils.js', () => ({
-  buildJudgePrompt: vi.fn(() => 'judge prompt'),
-  detectJudgeIndex: vi.fn(() => -1),
-}));
+vi.mock('../agents/judge-utils.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../agents/judge-utils.js')>();
+  return {
+    ...actual,
+    buildJudgePrompt: vi.fn(() => 'judge prompt'),
+    detectJudgeIndex: vi.fn(() => -1),
+  };
+});
 
 function doneResponse(content: string, structuredOutput?: Record<string, unknown>) {
   return {
@@ -249,6 +255,31 @@ describe('agent-usecases', () => {
     }));
   });
 
+  it('judgeStatus Stage 3 で interactiveOnly フィルタリング後の非連続インデックスが正しく返る', async () => {
+    // rules = [done(0), blocked(1, interactiveOnly), fix(2)]
+    // interactive=false → conditions = [{index:0}, {index:2}]
+    // AI が fix (matched_index=2) を選択 → position 1 → originalIndex = 2
+    // Stage 1: structured output fails
+    vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('no match'));
+    // Stage 2: tag detection fails
+    vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('no tag'));
+    // Stage 3: evaluateCondition - matched_index:2 means position 1 in normalized conditions
+    vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('ignored', { matched_index: 2 }));
+
+    const result = await judgeStatus(
+      'structured',
+      'tag',
+      [
+        { condition: 'done', next: 'COMPLETE' },
+        { condition: 'blocked', next: 'ABORT', interactiveOnly: true },
+        { condition: 'fix', next: 'fix' },
+      ],
+      { ...judgeOptions, interactive: false },
+    );
+
+    expect(result).toEqual({ ruleIndex: 2, method: 'ai_judge' });
+  });
+
   it('judgeStatus は全ての判定に失敗したらエラー', async () => {
     // Stage 1: structured output fails
     vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('no match'));
@@ -262,6 +293,42 @@ describe('agent-usecases', () => {
       { condition: 'a', next: 'one' },
       { condition: 'b', next: 'two' },
     ], judgeOptions)).rejects.toThrow('Status not found for movement "review"');
+  });
+
+  it('judgeStatus Stage 3 では onJudgeStage は evaluateCondition の応答状態が error でも必ず呼ばれる（dead code なし）', async () => {
+    // dead code 再発防止: stage3Status === 'skipped' チェックは不要で、
+    // onJudgeResponse が呼ばれれば stage3Status は 'done' か 'error' になる。
+    const onJudgeStage = vi.fn();
+    // Stage 1: fails
+    vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('no match'));
+    // Stage 2: fails
+    vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('no tag'));
+    // Stage 3: evaluateCondition returns error response
+    vi.mocked(runAgent).mockResolvedValueOnce({
+      persona: 'tester',
+      status: 'error' as const,
+      content: 'agent error',
+      timestamp: new Date('2026-02-12T00:00:00Z'),
+    });
+    vi.mocked(detectJudgeIndex).mockReturnValue(-1);
+
+    await expect(
+      judgeStatus('structured', 'tag', [
+        { condition: 'a', next: 'one' },
+        { condition: 'b', next: 'two' },
+      ], {
+        ...judgeOptions,
+        onJudgeStage,
+      } as typeof judgeOptions & { onJudgeStage: (entry: JudgeStageLog) => void }),
+    ).rejects.toThrow('Status not found for movement "review"');
+
+    // Stage 3 の onJudgeStage は必ず呼ばれる（'skipped' での早期 throw はない）
+    expect(onJudgeStage).toHaveBeenCalledTimes(3);
+    expect(onJudgeStage).toHaveBeenLastCalledWith(expect.objectContaining({
+      stage: 3,
+      method: 'ai_judge',
+      status: 'error',
+    }));
   });
 
   // --- decomposeTask ---
@@ -381,5 +448,69 @@ describe('agent-usecases', () => {
       1,
       { cwd: '/repo', persona: 'team-leader' },
     )).rejects.toThrow('Team leader feedback failed: timeout');
+  });
+
+  // --- runTagJudgeStage (ARCH-NEW-DRY-Stage2-judgeStatus 再発防止) ---
+
+  it('runTagJudgeStage はタグ検出成功時に JudgeStatusResult を返す', async () => {
+    vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('[REVIEW:1]'));
+
+    const result = await runTagJudgeStage(
+      'tag instruction',
+      [{ condition: 'done', next: 'COMPLETE' }, { condition: 'fix', next: 'fix' }],
+      false,
+      { cwd: '/repo', movementName: 'review', provider: 'cursor' },
+    );
+
+    expect(result).toEqual({ ruleIndex: 0, method: 'phase3_tag' });
+    expect(runAgent).toHaveBeenCalledWith('conductor', 'tag instruction', expect.objectContaining({
+      cwd: '/repo',
+      provider: 'cursor',
+      maxTurns: 3,
+      permissionMode: 'readonly',
+    }));
+  });
+
+  it('runTagJudgeStage はタグ不一致時に undefined を返す', async () => {
+    vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('no matching tag'));
+
+    const result = await runTagJudgeStage(
+      'tag instruction',
+      [{ condition: 'done', next: 'COMPLETE' }],
+      false,
+      { cwd: '/repo', movementName: 'review' },
+    );
+
+    expect(result).toBeUndefined();
+  });
+
+  it('runTagJudgeStage は interactiveOnly ルールを interactive=false 時にスキップする', async () => {
+    // [REVIEW:2] → index 1 → interactiveOnly ルール → isValidRuleIndex が false → undefined
+    vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('[REVIEW:2]'));
+
+    const result = await runTagJudgeStage(
+      'tag instruction',
+      [
+        { condition: 'done', next: 'COMPLETE' },
+        { condition: 'blocked', next: 'ABORT', interactiveOnly: true },
+      ],
+      false,
+      { cwd: '/repo', movementName: 'review' },
+    );
+
+    expect(result).toBeUndefined();
+  });
+
+  // --- DecomposeTaskOptions.provider 型契約（ARCH-NEW-BoySCout-ProviderType-DecomposeTask 再発防止） ---
+
+  it('DecomposeTaskOptions.provider は cursor/copilot を受け入れる（ProviderType 型契約）', () => {
+    // ProviderType の全値が DecomposeTaskOptions.provider に代入できることを確認。
+    // TypeScript コンパイルが通ることで型の一致を保証。
+    const optionsCursor: DecomposeTaskOptions = { cwd: '/repo', provider: 'cursor' };
+    const optionsCopilot: DecomposeTaskOptions = { cwd: '/repo', provider: 'copilot' };
+    const optionsClaude: DecomposeTaskOptions = { cwd: '/repo', provider: 'claude' };
+    expect(optionsCursor.provider).toBe('cursor');
+    expect(optionsCopilot.provider).toBe('copilot');
+    expect(optionsClaude.provider).toBe('claude');
   });
 });

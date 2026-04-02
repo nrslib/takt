@@ -4,7 +4,7 @@
  * Tests that all builtin piece definitions can be loaded and execute
  * the expected step transitions using PieceEngine + MockProvider + ScenarioQueue.
  *
- * Mocked: UI, session, phase-runner, notifications, config, callAiJudge
+ * Mocked: UI, session, phase-runner, notifications, config
  * Not mocked: PieceEngine, runAgent, detectMatchedRule, rule-evaluator
  */
 
@@ -13,26 +13,10 @@ import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setMockScenario, resetScenario } from '../infra/mock/index.js';
+import { DefaultStructuredCaller, type StructuredCaller } from '../agents/structured-caller.js';
 import { detectRuleIndex } from '../shared/utils/ruleIndex.js';
-import { callAiJudge } from '../agents/ai-judge.js';
 
 // --- Mocks ---
-
-vi.mock('../agents/ai-judge.js', async (importOriginal) => {
-  const original = await importOriginal<typeof import('../agents/ai-judge.js')>();
-  return {
-    ...original,
-    callAiJudge: vi.fn().mockImplementation(async (content: string, conditions: { index: number; text: string }[]) => {
-      // Simple text matching: return index of first condition whose text appears in content
-      for (let i = 0; i < conditions.length; i++) {
-        if (content.includes(conditions[i]!.text)) {
-          return i;
-        }
-      }
-      return -1;
-    }),
-  };
-});
 
 vi.mock('../core/piece/phase-runner.js', () => ({
   needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
@@ -90,11 +74,25 @@ function createTestDir(): string {
 }
 
 function createEngine(config: PieceConfig, dir: string, task: string): PieceEngine {
+  const defaultStructuredCaller = new DefaultStructuredCaller();
+  const structuredCaller: StructuredCaller = {
+    judgeStatus: defaultStructuredCaller.judgeStatus.bind(defaultStructuredCaller),
+    evaluateCondition: vi.fn().mockImplementation(async (content: string, conditions: { index: number; text: string }[]) => {
+      for (const condition of conditions) {
+        if (content.includes(condition.text)) {
+          return condition.index;
+        }
+      }
+      return -1;
+    }),
+    decomposeTask: defaultStructuredCaller.decomposeTask.bind(defaultStructuredCaller),
+    requestMoreParts: defaultStructuredCaller.requestMoreParts.bind(defaultStructuredCaller),
+  };
   return new PieceEngine(config, dir, task, {
     projectCwd: dir,
     provider: 'mock',
     detectRuleIndex,
-    callAiJudge,
+    structuredCaller,
   });
 }
 

@@ -22,6 +22,7 @@ import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { MovementExecutor } from './MovementExecutor.js';
 import type { PieceEngineOptions, PhaseName, PhasePromptParts, JudgeStageEntry } from '../types.js';
 import type { ParallelLoggerOptions } from './parallel-logger.js';
+import type { StructuredCaller } from '../../../agents/structured-caller.js';
 
 const log = createLogger('parallel-runner');
 
@@ -33,11 +34,7 @@ export interface ParallelRunnerDeps {
   readonly getReportDir: () => string;
   readonly getInteractive: () => boolean;
   readonly detectRuleIndex: (content: string, movementName: string) => number;
-  readonly callAiJudge: (
-    agentOutput: string,
-    conditions: Array<{ index: number; text: string }>,
-    options: { cwd: string }
-  ) => Promise<number>;
+  readonly structuredCaller: StructuredCaller;
   readonly onPhaseStart?: (
     step: PieceMovement,
     phase: 1 | 2 | 3,
@@ -99,12 +96,13 @@ export class ParallelRunner {
       ? new ParallelLogger(this.buildParallelLoggerOptions(step.name, movementIteration, subMovements.map((s) => s.name), state.iteration, maxMovements))
       : undefined;
 
-    const ruleCtx = {
+    const parentRuleCtx = {
       state,
       cwd: this.deps.getCwd(),
+      provider: this.deps.optionsBuilder.resolveStepProviderModel(step).provider,
       interactive: this.deps.getInteractive(),
       detectRuleIndex: this.deps.detectRuleIndex,
-      callAiJudge: this.deps.callAiJudge,
+      structuredCaller: this.deps.structuredCaller,
     };
 
     // Run all sub-movements concurrently (failures are captured, not thrown)
@@ -113,6 +111,10 @@ export class ParallelRunner {
         const subIteration = incrementMovementIteration(state, subMovement.name);
         const subInstruction = this.deps.movementExecutor.buildInstruction(subMovement, subIteration, state, task, maxMovements);
         const parentIteration = state.iteration;
+        const subRuleCtx = {
+          ...parentRuleCtx,
+          provider: this.deps.optionsBuilder.resolveStepProviderModel(subMovement).provider,
+        };
 
         // Session key uses buildSessionKey (persona:provider) — same as normal movements.
         // This ensures sessions are shared across movements with the same persona+provider,
@@ -171,7 +173,7 @@ export class ParallelRunner {
         if (subPhase3) {
           finalResponse = { ...subResponse, matchedRuleIndex: subPhase3.ruleIndex, matchedRuleMethod: subPhase3.method };
         } else {
-          const match = await detectMatchedRule(subMovement, subResponse.content, '', ruleCtx);
+          const match = await detectMatchedRule(subMovement, subResponse.content, '', subRuleCtx);
           finalResponse = match
             ? { ...subResponse, matchedRuleIndex: match.index, matchedRuleMethod: match.method }
             : subResponse;
@@ -233,7 +235,7 @@ export class ParallelRunner {
       .join('\n\n');
 
     // Parent movement uses aggregate conditions, so tagContent is empty
-    const match = await detectMatchedRule(step, aggregatedContent, '', ruleCtx);
+    const match = await detectMatchedRule(step, aggregatedContent, '', parentRuleCtx);
 
     const aggregatedResponse: AgentResponse = {
       persona: step.name,
