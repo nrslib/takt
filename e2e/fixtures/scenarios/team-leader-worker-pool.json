@@ -5,8 +5,8 @@
     "content": "decompose",
     "structured_output": {
       "parts": [
-        { "id": "wp-1", "title": "Create wp-1.txt", "instruction": "Create wp-1.txt with content wp-1.txt", "timeout_ms": null },
-        { "id": "wp-2", "title": "Create wp-2.txt", "instruction": "Create wp-2.txt with content wp-2.txt", "timeout_ms": null }
+        { "id": "wp-1", "title": "Create wp-1.txt", "instruction": "Create wp-1.txt with content wp-1.txt" },
+        { "id": "wp-2", "title": "Create wp-2.txt", "instruction": "Create wp-2.txt with content wp-2.txt" }
       ]
     }
   },
@@ -18,8 +18,8 @@
       "done": false,
       "reasoning": "Two more files remain after the first batch begins finishing",
       "parts": [
-        { "id": "wp-3", "title": "Create wp-3.txt", "instruction": "Create wp-3.txt with content wp-3.txt", "timeout_ms": null },
-        { "id": "wp-4", "title": "Create wp-4.txt", "instruction": "Create wp-4.txt with content wp-4.txt", "timeout_ms": null }
+        { "id": "wp-3", "title": "Create wp-3.txt", "instruction": "Create wp-3.txt with content wp-3.txt" },
+        { "id": "wp-4", "title": "Create wp-4.txt", "instruction": "Create wp-4.txt with content wp-4.txt" }
       ]
     }
   },
@@ -31,7 +31,7 @@
       "done": false,
       "reasoning": "One final file remains",
       "parts": [
-        { "id": "wp-5", "title": "Create wp-5.txt", "instruction": "Create wp-5.txt with content wp-5.txt", "timeout_ms": null }
+        { "id": "wp-5", "title": "Create wp-5.txt", "instruction": "Create wp-5.txt with content wp-5.txt" }
       ]
     }
   },
