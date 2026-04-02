@@ -9,6 +9,8 @@ export interface JudgeStatusOptions {
   cwd: string;
   movementName: string;
   provider?: ProviderType;
+  resolvedProvider?: ProviderType;
+  resolvedModel?: string;
   language?: Language;
   interactive?: boolean;
   onStream?: StreamCallback;
@@ -28,6 +30,8 @@ export interface JudgeStatusOptions {
 export interface TagJudgeRunOptions {
   cwd: string;
   provider?: ProviderType;
+  resolvedProvider?: ProviderType;
+  resolvedModel?: string;
   language?: Language;
   onStream?: StreamCallback;
   movementName: string;
@@ -43,6 +47,8 @@ export async function runTagJudgeStage(
   const tagResponse = await runAgent('conductor', tagInstruction, {
     cwd: runOptions.cwd,
     provider: runOptions.provider,
+    resolvedProvider: runOptions.resolvedProvider,
+    resolvedModel: runOptions.resolvedModel,
     maxTurns: 3,
     permissionMode: 'readonly',
     language: runOptions.language,
@@ -75,6 +81,8 @@ export interface JudgeStatusResult {
 export interface EvaluateConditionOptions {
   cwd: string;
   provider?: ProviderType;
+  resolvedProvider?: ProviderType;
+  resolvedModel?: string;
   onJudgeResponse?: (entry: {
     instruction: string;
     status: 'done' | 'error';
@@ -91,6 +99,8 @@ export async function evaluateCondition(
   const response = await runAgent(undefined, prompt, {
     cwd: options.cwd,
     provider: options.provider,
+    resolvedProvider: options.resolvedProvider,
+    resolvedModel: options.resolvedModel,
     maxTurns: 1,
     permissionMode: 'readonly',
     outputSchema: loadEvaluationSchema(),
@@ -144,6 +154,8 @@ export async function judgeStatus(
   const structuredResponse = await runAgent('conductor', structuredInstruction, {
     ...agentOptions,
     provider: options.provider,
+    resolvedProvider: options.resolvedProvider,
+    resolvedModel: options.resolvedModel,
     outputSchema: loadJudgmentSchema(),
     onPromptResolved: options.onStructuredPromptResolved,
   });
@@ -170,7 +182,15 @@ export async function judgeStatus(
     tagInstruction,
     rules,
     interactiveEnabled,
-    { cwd: options.cwd, provider: options.provider, language: options.language, onStream: options.onStream, movementName: options.movementName },
+    {
+      cwd: options.cwd,
+      provider: options.provider,
+      resolvedProvider: options.resolvedProvider,
+      resolvedModel: options.resolvedModel,
+      language: options.language,
+      onStream: options.onStream,
+      movementName: options.movementName,
+    },
     options.onJudgeStage,
   );
   if (tagResult !== undefined) {
@@ -187,6 +207,8 @@ export async function judgeStatus(
     const fallbackPosition = await evaluateCondition(structuredInstruction, normalizedConditions, {
       cwd: options.cwd,
       provider: options.provider,
+      resolvedProvider: options.resolvedProvider,
+      resolvedModel: options.resolvedModel,
       onJudgeResponse: (entry) => {
         stage3Status = entry.status;
         stage3Instruction = entry.instruction;

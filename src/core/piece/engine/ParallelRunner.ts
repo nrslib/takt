@@ -127,10 +127,13 @@ export class ParallelRunner {
       ? new ParallelLogger(this.buildParallelLoggerOptions(step.name, movementIteration, subMovements.map((s) => s.name), state.iteration, maxMovements))
       : undefined;
 
+    const parentPm = this.deps.optionsBuilder.resolveStepProviderModel(step);
     const parentRuleCtx = {
       state,
       cwd: this.deps.getCwd(),
-      provider: this.deps.optionsBuilder.resolveStepProviderModel(step).provider,
+      provider: parentPm.provider,
+      resolvedProvider: parentPm.provider,
+      resolvedModel: parentPm.model,
       interactive: this.deps.getInteractive(),
       detectRuleIndex: this.deps.detectRuleIndex,
       structuredCaller: this.deps.structuredCaller,
@@ -155,9 +158,12 @@ export class ParallelRunner {
         const subIteration = incrementMovementIteration(state, subMovement.name);
         const subInstruction = this.deps.movementExecutor.buildInstruction(subMovement, subIteration, state, task, maxMovements);
         const parentIteration = state.iteration;
+        const subPm = this.deps.optionsBuilder.resolveStepProviderModel(subMovement);
         const subRuleCtx = {
           ...parentRuleCtx,
-          provider: this.deps.optionsBuilder.resolveStepProviderModel(subMovement).provider,
+          provider: subPm.provider,
+          resolvedProvider: subPm.provider,
+          resolvedModel: subPm.model,
         };
 
         // Session key uses buildSessionKey (persona:provider) — same as normal movements.

@@ -42,6 +42,8 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
     const structuredResponse = await runAgent('conductor', buildPromptBasedStructuredInstruction(structuredInstruction), {
       cwd: options.cwd,
       provider: options.provider,
+      resolvedProvider: options.resolvedProvider,
+      resolvedModel: options.resolvedModel,
       maxTurns: 3,
       permissionMode: 'readonly',
       language: options.language,
@@ -73,7 +75,15 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
       tagInstruction,
       rules,
       interactiveEnabled,
-      { cwd: options.cwd, provider: options.provider, language: options.language, onStream: options.onStream, movementName: options.movementName },
+      {
+        cwd: options.cwd,
+        provider: options.provider,
+        resolvedProvider: options.resolvedProvider,
+        resolvedModel: options.resolvedModel,
+        language: options.language,
+        onStream: options.onStream,
+        movementName: options.movementName,
+      },
       options.onJudgeStage,
     );
     if (tagResult !== undefined) {
@@ -89,6 +99,8 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
       const fallbackIndex = await this.evaluateCondition(structuredInstruction, conditions, {
         cwd: options.cwd,
         provider: options.provider,
+        resolvedProvider: options.resolvedProvider,
+        resolvedModel: options.resolvedModel,
         onJudgeResponse: (entry) => {
           stage3Status = entry.status;
           stage3Instruction = entry.instruction;
@@ -124,6 +136,8 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
     const response = await runAgent(undefined, prompt, {
       cwd: options.cwd,
       provider: options.provider,
+      resolvedProvider: options.resolvedProvider,
+      resolvedModel: options.resolvedModel,
       maxTurns: 1,
       permissionMode: 'readonly',
     });

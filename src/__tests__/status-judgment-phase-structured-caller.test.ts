@@ -61,4 +61,58 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
       }),
     );
   });
+
+  it('should pass resolvedProvider and resolvedModel to judgeStatus aligned with movement resolution (#556)', async () => {
+    const structuredCaller = {
+      judgeStatus: vi.fn().mockImplementation(async (_structured, _tag, _rules, options) => {
+        options.onStructuredPromptResolved?.({
+          systemPrompt: 'judge-system',
+          userInstruction: 'judge-instruction',
+        });
+        return { ruleIndex: 0, method: 'structured_output' as const };
+      }),
+    };
+
+    const step: PieceMovement = {
+      name: 'review',
+      persona: 'reviewer',
+      personaDisplayName: 'reviewer',
+      instruction: 'Review',
+      passPreviousResponse: true,
+      rules: [
+        { condition: 'needs_fix', next: 'fix' },
+        { condition: 'approved', next: 'COMPLETE' },
+      ],
+    };
+
+    type PhaseCtx = Parameters<typeof runStatusJudgmentPhase>[1] & {
+      resolveStepProviderModel: (s: PieceMovement) => { provider: 'codex'; model: string };
+    };
+
+    await runStatusJudgmentPhase(step, {
+      cwd: '/tmp/project',
+      reportDir: '/tmp/project/.takt/reports',
+      lastResponse: 'response body',
+      iteration: 2,
+      getSessionId: vi.fn(),
+      buildResumeOptions: vi.fn(),
+      buildNewSessionReportOptions: vi.fn(),
+      updatePersonaSession: vi.fn(),
+      resolveProvider: vi.fn().mockReturnValue('codex'),
+      resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'codex', model: 'gpt-5.2-codex' }),
+      structuredCaller,
+    } as PhaseCtx);
+
+    expect(structuredCaller.judgeStatus).toHaveBeenCalledTimes(1);
+    const judgeOptions = structuredCaller.judgeStatus.mock.calls[0]?.[3];
+    expect(judgeOptions).toEqual(
+      expect.objectContaining({
+        cwd: '/tmp/project',
+        movementName: 'review',
+        provider: 'codex',
+        resolvedProvider: 'codex',
+        resolvedModel: 'gpt-5.2-codex',
+      }),
+    );
+  });
 });

@@ -31,6 +31,8 @@ export interface RuleEvaluatorContext {
   cwd: string;
   /** Effective provider for the movement */
   provider?: ProviderType;
+  resolvedProvider?: ProviderType;
+  resolvedModel?: string;
   /** Whether interactive-only rules are enabled */
   interactive?: boolean;
   /** Rule tag index detector */
@@ -57,6 +59,18 @@ export class RuleEvaluator {
     private readonly step: PieceMovement,
     private readonly ctx: RuleEvaluatorContext,
   ) {}
+
+  private structuredCallerJudgeOptions(): Pick<
+    RuleEvaluatorContext,
+    'cwd' | 'provider' | 'resolvedProvider' | 'resolvedModel'
+  > {
+    return {
+      cwd: this.ctx.cwd,
+      provider: this.ctx.provider,
+      resolvedProvider: this.ctx.resolvedProvider,
+      resolvedModel: this.ctx.resolvedModel,
+    };
+  }
 
   async evaluate(agentContent: string, tagContent: string): Promise<RuleMatch | undefined> {
     if (!this.step.rules || this.step.rules.length === 0) return undefined;
@@ -136,10 +150,11 @@ export class RuleEvaluator {
       conditionCount: aiConditions.length,
     });
 
-    const judgeResult = await this.ctx.structuredCaller.evaluateCondition(agentOutput, aiConditions, {
-      cwd: this.ctx.cwd,
-      provider: this.ctx.provider,
-    });
+    const judgeResult = await this.ctx.structuredCaller.evaluateCondition(
+      agentOutput,
+      aiConditions,
+      this.structuredCallerJudgeOptions(),
+    );
     const matched = aiConditions.find((condition) => condition.index === judgeResult);
     if (matched) {
       log.debug('AI judge matched condition', {
@@ -169,10 +184,11 @@ export class RuleEvaluator {
       conditionCount: conditions.length,
     });
 
-    const judgeResult = await this.ctx.structuredCaller.evaluateCondition(agentOutput, conditions, {
-      cwd: this.ctx.cwd,
-      provider: this.ctx.provider,
-    });
+    const judgeResult = await this.ctx.structuredCaller.evaluateCondition(
+      agentOutput,
+      conditions,
+      this.structuredCallerJudgeOptions(),
+    );
     const matched = conditions.find((condition) => condition.index === judgeResult);
     if (matched) {
       log.debug('AI judge (fallback) matched condition', {

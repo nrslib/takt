@@ -271,10 +271,13 @@ export class MovementExecutor {
     }
 
     // No Phase 3 — use rule evaluator with Phase 1 content
+    const movementPm = this.deps.optionsBuilder.resolveStepProviderModel(step);
     const match = await detectMatchedRule(step, nextResponse.content, '', {
       state,
       cwd: this.deps.getCwd(),
-      provider: this.deps.optionsBuilder.resolveStepProviderModel(step).provider,
+      provider: movementPm.provider,
+      resolvedProvider: movementPm.provider,
+      resolvedModel: movementPm.model,
       interactive: this.deps.getInteractive(),
       detectRuleIndex: this.deps.detectRuleIndex,
       structuredCaller: this.deps.structuredCaller,

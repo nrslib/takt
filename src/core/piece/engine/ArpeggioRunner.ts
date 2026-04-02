@@ -224,10 +224,13 @@ export class ArpeggioRunner {
       log.info('Arpeggio output written', { outputPath: arpeggioConfig.outputPath });
     }
 
+    const movementPm = this.deps.optionsBuilder.resolveStepProviderModel(step);
     const ruleCtx = {
       state,
       cwd: this.deps.getCwd(),
-      provider: this.deps.optionsBuilder.resolveStepProviderModel(step).provider,
+      provider: movementPm.provider,
+      resolvedProvider: movementPm.provider,
+      resolvedModel: movementPm.model,
       interactive: this.deps.getInteractive(),
       detectRuleIndex: this.deps.detectRuleIndex,
       structuredCaller: this.deps.structuredCaller,

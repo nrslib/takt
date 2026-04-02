@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve, sep } from 'node:path';
 import type { PieceMovement, Language, AgentResponse } from '../models/types.js';
 import type { StructuredCaller } from '../../agents/structured-caller.js';
-import type { PhaseName, PhasePromptParts, JudgeStageEntry, ProviderType } from './types.js';
+import type { PhaseName, PhasePromptParts, JudgeStageEntry, ProviderType, MovementProviderInfo } from './types.js';
 import type { RunAgentOptions } from '../../agents/runner.js';
 import { ReportInstructionBuilder } from './instruction/ReportInstructionBuilder.js';
 import { hasTagBasedRules, getReportFiles } from './evaluation/rule-utils.js';
@@ -50,6 +50,7 @@ export interface PhaseRunnerContext {
   structuredCaller: StructuredCaller;
   /** Resolve effective provider for the current movement */
   resolveProvider: (step: PieceMovement) => ProviderType | undefined;
+  resolveStepProviderModel?: (step: PieceMovement) => MovementProviderInfo;
   /** Callback for phase lifecycle logging */
   onPhaseStart?: (
     step: PieceMovement,

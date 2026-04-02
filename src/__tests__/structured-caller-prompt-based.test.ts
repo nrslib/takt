@@ -45,6 +45,38 @@ describe('PromptBasedStructuredCaller', () => {
     );
   });
 
+  it('should pass resolvedProvider and resolvedModel through evaluateCondition to runAgent (#556)', async () => {
+    mockRunAgent.mockResolvedValue({
+      persona: 'default',
+      status: 'done',
+      content: '[JUDGE:1]',
+      timestamp: new Date(),
+    });
+
+    const caller = new PromptBasedStructuredCaller();
+    await caller.evaluateCondition(
+      'agent output',
+      [{ index: 0, text: 'approved' }],
+      {
+        cwd: '/tmp/project',
+        provider: 'claude',
+        resolvedProvider: 'codex',
+        resolvedModel: 'gpt-5.2-codex',
+      },
+    );
+
+    expect(mockRunAgent).toHaveBeenCalledWith(
+      undefined,
+      expect.stringContaining('[JUDGE:N]'),
+      expect.objectContaining({
+        cwd: '/tmp/project',
+        provider: 'claude',
+        resolvedProvider: 'codex',
+        resolvedModel: 'gpt-5.2-codex',
+      }),
+    );
+  });
+
   it('should parse decomposed parts from fenced JSON without outputSchema', async () => {
     mockRunAgent.mockResolvedValue({
       persona: 'leader',
@@ -161,11 +193,28 @@ describe('PromptBasedStructuredCaller', () => {
         { condition: 'approved', next: 'done' },
         { condition: 'rejected', next: 'failed' },
       ],
-      { cwd: '/tmp/project', movementName: 'review', provider: 'cursor' },
+      {
+        cwd: '/tmp/project',
+        movementName: 'review',
+        provider: 'claude',
+        resolvedProvider: 'codex',
+        resolvedModel: 'gpt-5.2-codex',
+      },
     );
 
     expect(result).toEqual({ ruleIndex: 1, method: 'structured_output' });
     expect(mockRunAgent).toHaveBeenCalledTimes(1);
+    expect(mockRunAgent).toHaveBeenNthCalledWith(
+      1,
+      'conductor',
+      expect.stringContaining('structured instruction'),
+      expect.objectContaining({
+        cwd: '/tmp/project',
+        provider: 'claude',
+        resolvedProvider: 'codex',
+        resolvedModel: 'gpt-5.2-codex',
+      }),
+    );
   });
 
   it('should return phase3_tag when Stage 1 fails and Stage 2 tag matches', async () => {

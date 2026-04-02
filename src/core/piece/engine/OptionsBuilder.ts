@@ -28,7 +28,6 @@ export class OptionsBuilder {
     private readonly getPieceDescription: () => string | undefined,
   ) {}
 
-  /** Resolve effective provider and model for a movement (same logic as buildBaseOptions) */
   resolveStepProviderModel(step: PieceMovement): MovementProviderInfo {
     const resolved = resolveMovementProviderModel({
       step,
@@ -182,6 +181,7 @@ export class OptionsBuilder {
       onStream: this.engineOptions.onStream,
       structuredCaller: this.requireStructuredCaller(),
       resolveProvider: (step) => this.resolveStepProviderModel(step).provider,
+      resolveStepProviderModel: this.resolveStepProviderModel.bind(this),
       getSessionId: (persona: string) => state.personaSessions.get(persona),
       buildResumeOptions: this.buildResumeOptions.bind(this),
       buildNewSessionReportOptions: this.buildNewSessionReportOptions.bind(this),
