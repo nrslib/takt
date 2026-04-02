@@ -1,6 +1,6 @@
 name: audit-unit
 description: ユニットテストの全件監査。振る舞いとカバレッジ不足を棚卸しし、コード修正なしで Issue 直貼り可能なレポートを作成する
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true

@@ -1,6 +1,6 @@
 name: magi
 description: MAGI Deliberation System - Analyze from 3 perspectives and decide by majority
-piece_config:
+workflow_config:
   provider_options:
     claude:
       allowed_tools:

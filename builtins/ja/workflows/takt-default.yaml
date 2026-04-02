@@ -1,6 +1,6 @@
 name: takt-default
 description: TAKT開発ワークフロー（計画 → テスト作成 → チームリーダー実装 → AIアンチパターンレビュー → 5並列レビュー → 修正 → 監督 → 完了）
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true

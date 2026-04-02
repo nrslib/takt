@@ -10,8 +10,8 @@ description: 説明テキスト      # 任意
 max_movements: 10            # 最大イテレーション数（省略時デフォルトあり）
 initial_step: plan            # 最初に実行する step 名（省略時は steps の先頭）
 
-# ワークフロー全体の provider / runtime 等（キー名は従来どおり piece_config）
-piece_config:
+# ワークフロー全体の provider / runtime 等
+workflow_config:
   provider_options:
     codex:
       network_access: true

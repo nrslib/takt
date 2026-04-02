@@ -1,6 +1,6 @@
 name: e2e-mock-single
 description: Minimal mock-only piece for CLI E2E
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true

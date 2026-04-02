@@ -148,6 +148,79 @@ piece_overrides:
       };
       expect(reloadedPieceOverrides.personas?.coder?.qualityGates).toEqual([]);
     });
+
+    it('should load workflow_overrides.steps as alias of piece_overrides.movements', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      const configContent = `
+workflow_overrides:
+  steps:
+    implement:
+      quality_gates: []
+`;
+      writeFileSync(configPath, configContent, 'utf-8');
+
+      const loaded = loadProjectConfig(testDir);
+
+      expect(loaded.pieceOverrides?.movements?.implement?.qualityGates).toEqual([]);
+    });
+
+    it('should fail fast when workflow_overrides and piece_overrides differ', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      const configContent = `
+workflow_overrides:
+  quality_gates:
+    - "new"
+piece_overrides:
+  quality_gates:
+    - "legacy"
+`;
+      writeFileSync(configPath, configContent, 'utf-8');
+
+      expect(() => loadProjectConfig(testDir)).toThrow(
+        /workflow_overrides.*piece_overrides|piece_overrides.*workflow_overrides|conflict/i,
+      );
+    });
+
+    it('should accept semantically identical workflow_overrides and piece_overrides', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      const configContent = `
+workflow_overrides:
+  steps:
+    implement:
+      quality_gates:
+        - "shared"
+piece_overrides:
+  movements:
+    implement:
+      quality_gates:
+        - "shared"
+`;
+      writeFileSync(configPath, configContent, 'utf-8');
+
+      const loaded = loadProjectConfig(testDir);
+
+      expect(loaded.pieceOverrides?.movements?.implement?.qualityGates).toEqual(['shared']);
+    });
+
+    it('should save pieceOverrides using workflow_overrides and steps keys', () => {
+      const config: ProjectLocalConfig = {
+        pieceOverrides: {
+          movements: {
+            implement: {
+              qualityGates: ['Project gate'],
+            },
+          },
+        },
+      };
+
+      saveProjectConfig(testDir, config);
+
+      const saved = readFileSync(join(testDir, '.takt', 'config.yaml'), 'utf-8');
+      expect(saved).toContain('workflow_overrides:');
+      expect(saved).toContain('steps:');
+      expect(saved).not.toContain('piece_overrides:');
+      expect(saved).not.toContain('movements:');
+    });
   });
 
   describe('migrated project-local fields', () => {
@@ -779,6 +852,49 @@ piece_overrides:
 
       expect(reloaded.pieceRuntimePrepare).toEqual({ customScripts: true });
     });
+
+    it('should load workflow_runtime_prepare policy block', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(
+        configPath,
+        ['workflow_runtime_prepare:', '  custom_scripts: true'].join('\n'),
+        'utf-8',
+      );
+
+      const loaded = loadProjectConfig(testDir);
+
+      expect(loaded.pieceRuntimePrepare).toEqual({ customScripts: true });
+    });
+
+    it('should save pieceRuntimePrepare using workflow_runtime_prepare key', () => {
+      const config: ProjectLocalConfig = {
+        pieceRuntimePrepare: { customScripts: true },
+      };
+
+      saveProjectConfig(testDir, config);
+
+      const saved = readFileSync(join(testDir, '.takt', 'config.yaml'), 'utf-8');
+      expect(saved).toContain('workflow_runtime_prepare:');
+      expect(saved).not.toContain('piece_runtime_prepare:');
+    });
+
+    it('should fail fast when workflow_runtime_prepare and piece_runtime_prepare differ', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(
+        configPath,
+        [
+          'workflow_runtime_prepare:',
+          '  custom_scripts: true',
+          'piece_runtime_prepare:',
+          '  custom_scripts: false',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      expect(() => loadProjectConfig(testDir)).toThrow(
+        /workflow_runtime_prepare.*piece_runtime_prepare|piece_runtime_prepare.*workflow_runtime_prepare|conflict/i,
+      );
+    });
   });
 
   describe('piece_arpeggio policy round-trip', () => {
@@ -821,6 +937,62 @@ piece_overrides:
         customMergeInlineJs: true,
         customMergeFiles: false,
       });
+    });
+
+    it('should load workflow_arpeggio policy block', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(
+        configPath,
+        [
+          'workflow_arpeggio:',
+          '  custom_data_source_modules: true',
+          '  custom_merge_inline_js: false',
+          '  custom_merge_files: true',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      const loaded = loadProjectConfig(testDir);
+
+      expect(loaded.pieceArpeggio).toEqual({
+        customDataSourceModules: true,
+        customMergeInlineJs: false,
+        customMergeFiles: true,
+      });
+    });
+
+    it('should save pieceArpeggio using workflow_arpeggio key', () => {
+      const config: ProjectLocalConfig = {
+        pieceArpeggio: {
+          customDataSourceModules: true,
+          customMergeInlineJs: true,
+          customMergeFiles: false,
+        },
+      };
+
+      saveProjectConfig(testDir, config);
+
+      const saved = readFileSync(join(testDir, '.takt', 'config.yaml'), 'utf-8');
+      expect(saved).toContain('workflow_arpeggio:');
+      expect(saved).not.toContain('piece_arpeggio:');
+    });
+
+    it('should fail fast when workflow_arpeggio and piece_arpeggio differ', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(
+        configPath,
+        [
+          'workflow_arpeggio:',
+          '  custom_data_source_modules: true',
+          'piece_arpeggio:',
+          '  custom_data_source_modules: false',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      expect(() => loadProjectConfig(testDir)).toThrow(
+        /workflow_arpeggio.*piece_arpeggio|piece_arpeggio.*workflow_arpeggio|conflict/i,
+      );
     });
   });
 
@@ -873,6 +1045,49 @@ piece_overrides:
       const reloaded = loadProjectConfig(testDir);
 
       expect(reloaded.pieceMcpServers).toEqual({ stdio: true, http: true, sse: false });
+    });
+
+    it('should load workflow_mcp_servers config block', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(
+        configPath,
+        ['workflow_mcp_servers:', '  stdio: true', '  http: false', '  sse: true'].join('\n'),
+        'utf-8',
+      );
+
+      const loaded = loadProjectConfig(testDir);
+
+      expect(loaded.pieceMcpServers).toEqual({ stdio: true, http: false, sse: true });
+    });
+
+    it('should save pieceMcpServers using workflow_mcp_servers key', () => {
+      const config: ProjectLocalConfig = {
+        pieceMcpServers: { stdio: true, http: true, sse: false },
+      };
+
+      saveProjectConfig(testDir, config);
+
+      const saved = readFileSync(join(testDir, '.takt', 'config.yaml'), 'utf-8');
+      expect(saved).toContain('workflow_mcp_servers:');
+      expect(saved).not.toContain('piece_mcp_servers:');
+    });
+
+    it('should fail fast when workflow_mcp_servers and piece_mcp_servers differ', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(
+        configPath,
+        [
+          'workflow_mcp_servers:',
+          '  stdio: true',
+          'piece_mcp_servers:',
+          '  stdio: false',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      expect(() => loadProjectConfig(testDir)).toThrow(
+        /workflow_mcp_servers.*piece_mcp_servers|piece_mcp_servers.*workflow_mcp_servers|conflict/i,
+      );
     });
   });
 

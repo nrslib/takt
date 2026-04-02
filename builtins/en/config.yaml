@@ -34,8 +34,8 @@ language: en        # UI language: en | ja
 # notification_sound: true         # Master switch for sounds
 # notification_sound_events:       # Per-event sound toggle (unset means true)
 #   iteration_limit: true
-#   piece_complete: true
-#   piece_abort: true
+#   workflow_complete: true
+#   workflow_abort: true
 #   run_complete: true
 #   run_abort: true
 # logging:
@@ -82,12 +82,12 @@ language: en        # UI language: en | ja
 # runtime:
 #   prepare: [node, gradle, ./custom-script.sh]
 
-# Piece-level overrides
-# piece_overrides:
+# Workflow-level overrides
+# workflow_overrides:
 #   quality_gates:
 #     - "All tests pass"
 #   quality_gates_edit_only: true
-#   movements:
+#   steps:
 #     review:
 #       quality_gates:
 #         - "No security vulnerabilities"
@@ -116,8 +116,8 @@ language: en        # UI language: en | ja
 # Misc
 # bookmarks_file: ~/.takt/preferences/bookmarks.yaml  # Bookmark file location
 
-# Piece list / categories
-# enable_builtin_pieces: true                             # Enable built-in pieces from builtins/{lang}/pieces
+# Workflow list / categories
+# enable_builtin_workflows: true                          # Enable built-in workflows from builtins/{lang}/workflows
 # disabled_builtins:
 #   - magi                                                # Built-in piece names to disable
-# piece_categories_file: ~/.takt/preferences/piece-categories.yaml  # Category definition file
+# workflow_categories_file: ~/.takt/preferences/workflow-categories.yaml  # Category definition file

@@ -1,6 +1,6 @@
 name: dual
 description: フロントエンド＋バックエンド開発ワークフロー（テスト先行 → チームリーダー実装 → AIレビュー → 2段階レビュー → 修正ループ → 監督）
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true

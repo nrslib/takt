@@ -1,6 +1,6 @@
 name: review-fix-backend
 description: バックエンド特化レビュー＋修正ループ（構造・モジュール化・ヘキサゴナルアーキテクチャ・セキュリティ・QA）
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true

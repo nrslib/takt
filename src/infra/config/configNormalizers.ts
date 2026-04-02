@@ -60,28 +60,30 @@ export function normalizePieceOverrides(
     quality_gates?: string[];
     quality_gates_edit_only?: boolean;
     movements?: Record<string, { quality_gates?: string[] }>;
+    steps?: Record<string, { quality_gates?: string[] }>;
     personas?: Record<string, { quality_gates?: string[] }>;
   } | undefined,
 ): PieceOverrides | undefined {
   if (!raw) return undefined;
+  const movements = raw.steps ?? raw.movements;
   return {
     qualityGates: raw.quality_gates,
     qualityGatesEditOnly: raw.quality_gates_edit_only,
-    movements: raw.movements
+    movements: movements
       ? Object.fromEntries(
-          Object.entries(raw.movements).map(([name, override]) => [
-            name,
-            { qualityGates: override.quality_gates },
-          ])
-        )
+        Object.entries(movements).map(([name, override]) => [
+          name,
+          { qualityGates: override.quality_gates },
+        ])
+      )
       : undefined,
     personas: raw.personas
       ? Object.fromEntries(
-          Object.entries(raw.personas).map(([name, override]) => [
-            name,
-            { qualityGates: override.quality_gates },
-          ])
-        )
+        Object.entries(raw.personas).map(([name, override]) => [
+          name,
+          { qualityGates: override.quality_gates },
+        ])
+      )
       : undefined,
   };
 }
@@ -91,14 +93,14 @@ export function denormalizePieceOverrides(
 ): {
   quality_gates?: string[];
   quality_gates_edit_only?: boolean;
-  movements?: Record<string, { quality_gates?: string[] }>;
+  steps?: Record<string, { quality_gates?: string[] }>;
   personas?: Record<string, { quality_gates?: string[] }>;
 } | undefined {
   if (!overrides) return undefined;
   const result: {
     quality_gates?: string[];
     quality_gates_edit_only?: boolean;
-    movements?: Record<string, { quality_gates?: string[] }>;
+    steps?: Record<string, { quality_gates?: string[] }>;
     personas?: Record<string, { quality_gates?: string[] }>;
   } = {};
   if (overrides.qualityGates !== undefined) {
@@ -108,7 +110,7 @@ export function denormalizePieceOverrides(
     result.quality_gates_edit_only = overrides.qualityGatesEditOnly;
   }
   if (overrides.movements) {
-    result.movements = Object.fromEntries(
+    result.steps = Object.fromEntries(
       Object.entries(overrides.movements).map(([name, override]) => {
         const movementOverride: { quality_gates?: string[] } = {};
         if (override.qualityGates !== undefined) {

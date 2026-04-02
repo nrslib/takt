@@ -59,7 +59,7 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
     raw.disabled_builtins = config.disabledBuiltins;
   }
   if (config.enableBuiltinPieces !== undefined) {
-    raw.enable_builtin_pieces = config.enableBuiltinPieces;
+    raw.enable_builtin_workflows = config.enableBuiltinPieces;
   }
   if (config.anthropicApiKey) {
     raw.anthropic_api_key = config.anthropicApiKey;
@@ -104,7 +104,7 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
     raw.bookmarks_file = config.bookmarksFile;
   }
   if (config.pieceCategoriesFile) {
-    raw.piece_categories_file = config.pieceCategoriesFile;
+    raw.workflow_categories_file = config.pieceCategoriesFile;
   }
   const rawProviderOptions = denormalizeProviderOptions(config.providerOptions);
   if (rawProviderOptions) {
@@ -120,12 +120,12 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
     };
   }
   if (config.pieceRuntimePrepare) {
-    raw.piece_runtime_prepare = {
+    raw.workflow_runtime_prepare = {
       custom_scripts: config.pieceRuntimePrepare.customScripts,
     };
   }
   if (config.pieceArpeggio) {
-    raw.piece_arpeggio = {
+    raw.workflow_arpeggio = {
       custom_data_source_modules: config.pieceArpeggio.customDataSourceModules,
       custom_merge_inline_js: config.pieceArpeggio.customMergeInlineJs,
       custom_merge_files: config.pieceArpeggio.customMergeFiles,
@@ -137,7 +137,7 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
     };
   }
   if (config.pieceMcpServers && Object.keys(config.pieceMcpServers).length > 0) {
-    raw.piece_mcp_servers = config.pieceMcpServers;
+    raw.workflow_mcp_servers = config.pieceMcpServers;
   }
   if (config.preventSleep !== undefined) {
     raw.prevent_sleep = config.preventSleep;
@@ -151,10 +151,10 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
       eventRaw.iteration_limit = config.notificationSoundEvents.iterationLimit;
     }
     if (config.notificationSoundEvents.pieceComplete !== undefined) {
-      eventRaw.piece_complete = config.notificationSoundEvents.pieceComplete;
+      eventRaw.workflow_complete = config.notificationSoundEvents.pieceComplete;
     }
     if (config.notificationSoundEvents.pieceAbort !== undefined) {
-      eventRaw.piece_abort = config.notificationSoundEvents.pieceAbort;
+      eventRaw.workflow_abort = config.notificationSoundEvents.pieceAbort;
     }
     if (config.notificationSoundEvents.runComplete !== undefined) {
       eventRaw.run_complete = config.notificationSoundEvents.runComplete;
@@ -174,7 +174,7 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
   }
   const denormalizedPieceOverrides = denormalizePieceOverrides(config.pieceOverrides);
   if (denormalizedPieceOverrides) {
-    raw.piece_overrides = denormalizedPieceOverrides;
+    raw.workflow_overrides = denormalizedPieceOverrides;
   }
   // Project-local keys (also accepted in global config)
   if (config.pipeline) {

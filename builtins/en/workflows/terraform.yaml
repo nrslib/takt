@@ -1,6 +1,6 @@
 name: terraform
 description: Terraform IaC development workflow (plan → implement → parallel review → supervisor validation → fix → complete)
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true

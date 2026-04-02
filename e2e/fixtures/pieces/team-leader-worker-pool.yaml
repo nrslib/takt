@@ -1,6 +1,6 @@
 name: e2e-team-leader-worker-pool
 description: E2E test piece for dynamic team_leader worker-pool behavior
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true

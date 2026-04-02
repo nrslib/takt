@@ -1,6 +1,6 @@
 name: review-fix-dual
 description: フロントエンド＋バックエンド特化レビュー＋修正ループ（構造・モジュール化・コンポーネント設計・セキュリティ・QA）
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true

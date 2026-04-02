@@ -1,6 +1,6 @@
 name: review-fix-default
 description: 多角レビュー＋修正ループ（アーキテクチャ・セキュリティ・QA・テスト・要件の5観点から並列レビューし、指摘を修正する）
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true

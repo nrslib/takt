@@ -1,6 +1,6 @@
 name: deep-research
 description: Deep research workflow - discovery-driven investigation that follows emerging questions with multi-perspective analysis
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true

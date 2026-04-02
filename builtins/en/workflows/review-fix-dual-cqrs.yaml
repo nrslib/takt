@@ -1,6 +1,6 @@
 name: review-fix-dual-cqrs
 description: Frontend + CQRS+ES focused review + fix loop (structure, modularization, domain model, component design, security, QA)
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true

@@ -1,6 +1,6 @@
 name: dual-cqrs-mini
 description: CQRS+ES frontend + backend mini development workflow (plan -> implement -> parallel review -> fix if needed -> complete) with CQRS+ES knowledge injection
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true

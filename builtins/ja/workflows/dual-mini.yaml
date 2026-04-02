@@ -1,6 +1,6 @@
 name: dual-mini
 description: フロントエンド＋バックエンド向けMini開発ワークフロー（plan → implement → 並列レビュー → 修正 → 完了）。フロントエンド＋バックエンドのナレッジ注入付き。
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true

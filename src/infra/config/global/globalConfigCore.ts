@@ -17,6 +17,8 @@ import {
 } from '../configNormalizers.js';
 import {
   resolveAliasedPreviewCount,
+  resolveAliasedConfigKey,
+  resolveAliasedNotificationSoundEvents,
   type RawProviderPermissionProfile,
 } from '../configKeyAliases.js';
 import { getGlobalConfigPath } from '../paths.js';
@@ -97,6 +99,57 @@ export class GlobalConfigManager {
       parsed.model,
       parsed.provider_options as Record<string, unknown> | undefined,
     );
+    const parsedRecord = parsed as Record<string, unknown>;
+    const resolvedEnableBuiltinWorkflows = resolveAliasedConfigKey<boolean>(
+      '~/.takt/config.yaml',
+      parsedRecord,
+      'enable_builtin_workflows',
+      'enable_builtin_pieces',
+    );
+    const resolvedWorkflowCategoriesFile = resolveAliasedConfigKey<string>(
+      '~/.takt/config.yaml',
+      parsedRecord,
+      'workflow_categories_file',
+      'piece_categories_file',
+    );
+    const resolvedPieceRuntimePrepare = resolveAliasedConfigKey<{ custom_scripts?: boolean }>(
+      '~/.takt/config.yaml',
+      parsedRecord,
+      'workflow_runtime_prepare',
+      'piece_runtime_prepare',
+    );
+    const resolvedPieceArpeggio = resolveAliasedConfigKey<{
+      custom_data_source_modules?: boolean;
+      custom_merge_inline_js?: boolean;
+      custom_merge_files?: boolean;
+    }>(
+      '~/.takt/config.yaml',
+      parsedRecord,
+      'workflow_arpeggio',
+      'piece_arpeggio',
+    );
+    const resolvedPieceMcpServers = resolveAliasedConfigKey<{ stdio?: boolean; sse?: boolean; http?: boolean }>(
+      '~/.takt/config.yaml',
+      parsedRecord,
+      'workflow_mcp_servers',
+      'piece_mcp_servers',
+    );
+    const resolvedNotificationSoundEvents = resolveAliasedNotificationSoundEvents(
+      '~/.takt/config.yaml',
+      parsed.notification_sound_events as Record<string, unknown> | undefined,
+    );
+    const resolvedPieceOverrides = resolveAliasedConfigKey(
+      '~/.takt/config.yaml',
+      parsedRecord,
+      'workflow_overrides',
+      'piece_overrides',
+    ) as {
+      quality_gates?: string[];
+      quality_gates_edit_only?: boolean;
+      movements?: Record<string, { quality_gates?: string[] }>;
+      steps?: Record<string, { quality_gates?: string[] }>;
+      personas?: Record<string, { quality_gates?: string[] }>;
+    } | undefined;
     const config: GlobalConfig = {
       language: parsed.language,
       provider: normalizedProvider.provider,
@@ -120,7 +173,7 @@ export class GlobalConfigManager {
       autoPr: parsed.auto_pr,
       draftPr: parsed.draft_pr,
       disabledBuiltins: parsed.disabled_builtins,
-      enableBuiltinPieces: parsed.enable_builtin_pieces,
+      enableBuiltinPieces: resolvedEnableBuiltinWorkflows,
       anthropicApiKey: parsed.anthropic_api_key,
       openaiApiKey: parsed.openai_api_key,
       geminiApiKey: parsed.gemini_api_key,
@@ -135,47 +188,40 @@ export class GlobalConfigManager {
       opencodeApiKey: parsed.opencode_api_key,
       cursorApiKey: parsed.cursor_api_key,
       bookmarksFile: expandOptionalHomePath(parsed.bookmarks_file),
-      pieceCategoriesFile: expandOptionalHomePath(parsed.piece_categories_file),
+      pieceCategoriesFile: expandOptionalHomePath(resolvedWorkflowCategoriesFile),
       providerOptions: normalizedProvider.providerOptions,
       providerProfiles: normalizeProviderProfiles(
         parsed.provider_profiles as Record<string, RawProviderPermissionProfile> | undefined,
       ),
       runtime: normalizeRuntime(parsed.runtime),
-      pieceRuntimePrepare: parsed.piece_runtime_prepare ? {
-        customScripts: parsed.piece_runtime_prepare.custom_scripts,
+      pieceRuntimePrepare: resolvedPieceRuntimePrepare ? {
+        customScripts: resolvedPieceRuntimePrepare.custom_scripts,
       } : undefined,
-      pieceArpeggio: parsed.piece_arpeggio ? {
-        customDataSourceModules: parsed.piece_arpeggio.custom_data_source_modules,
-        customMergeInlineJs: parsed.piece_arpeggio.custom_merge_inline_js,
-        customMergeFiles: parsed.piece_arpeggio.custom_merge_files,
+      pieceArpeggio: resolvedPieceArpeggio ? {
+        customDataSourceModules: resolvedPieceArpeggio.custom_data_source_modules,
+        customMergeInlineJs: resolvedPieceArpeggio.custom_merge_inline_js,
+        customMergeFiles: resolvedPieceArpeggio.custom_merge_files,
       } : undefined,
       syncConflictResolver: parsed.sync_conflict_resolver ? {
         autoApproveTools: parsed.sync_conflict_resolver.auto_approve_tools,
       } : undefined,
-      pieceMcpServers: parsed.piece_mcp_servers ? {
-        stdio: parsed.piece_mcp_servers.stdio,
-        sse: parsed.piece_mcp_servers.sse,
-        http: parsed.piece_mcp_servers.http,
+      pieceMcpServers: resolvedPieceMcpServers ? {
+        stdio: resolvedPieceMcpServers.stdio,
+        sse: resolvedPieceMcpServers.sse,
+        http: resolvedPieceMcpServers.http,
       } : undefined,
       preventSleep: parsed.prevent_sleep,
       notificationSound: parsed.notification_sound,
-      notificationSoundEvents: parsed.notification_sound_events ? {
-        iterationLimit: parsed.notification_sound_events.iteration_limit,
-        pieceComplete: parsed.notification_sound_events.piece_complete,
-        pieceAbort: parsed.notification_sound_events.piece_abort,
-        runComplete: parsed.notification_sound_events.run_complete,
-        runAbort: parsed.notification_sound_events.run_abort,
+      notificationSoundEvents: resolvedNotificationSoundEvents ? {
+        iterationLimit: resolvedNotificationSoundEvents.iteration_limit as boolean | undefined,
+        pieceComplete: resolvedNotificationSoundEvents.piece_complete as boolean | undefined,
+        pieceAbort: resolvedNotificationSoundEvents.piece_abort as boolean | undefined,
+        runComplete: resolvedNotificationSoundEvents.run_complete as boolean | undefined,
+        runAbort: resolvedNotificationSoundEvents.run_abort as boolean | undefined,
       } : undefined,
       autoFetch: parsed.auto_fetch,
       baseBranch: parsed.base_branch,
-      pieceOverrides: normalizePieceOverrides(
-        parsed.piece_overrides as {
-          quality_gates?: string[];
-          quality_gates_edit_only?: boolean;
-          movements?: Record<string, { quality_gates?: string[] }>;
-          personas?: Record<string, { quality_gates?: string[] }>;
-        } | undefined
-      ),
+      pieceOverrides: normalizePieceOverrides(resolvedPieceOverrides),
       // Project-local keys (also accepted in global config)
       pipeline: normalizePipelineConfig(
         parsed.pipeline as { default_branch_prefix?: string; commit_message_template?: string; pr_body_template?: string } | undefined,

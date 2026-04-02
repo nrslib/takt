@@ -1,6 +1,6 @@
 name: default
 description: テスト先行開発ワークフロー（計画 → テスト作成 → 実装 → AIアンチパターンレビュー → 並列レビュー → 完了）
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true

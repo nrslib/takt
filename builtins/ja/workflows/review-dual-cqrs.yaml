@@ -1,6 +1,6 @@
 name: review-dual-cqrs
 description: フロントエンド＋CQRS+ES特化レビュー（構造・モジュール化・ドメインモデル・コンポーネント設計・セキュリティ・QA）
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true

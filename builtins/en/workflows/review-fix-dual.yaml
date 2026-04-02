@@ -1,6 +1,6 @@
 name: review-fix-dual
 description: Frontend + backend focused review + fix loop (structure, modularization, component design, security, QA)
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true

@@ -1,6 +1,6 @@
 name: review-frontend
 description: Frontend-focused review (structure, modularization, component design, security, QA)
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true

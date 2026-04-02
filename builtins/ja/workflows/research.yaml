@@ -1,6 +1,6 @@
 name: research
 description: 調査ワークフロー - 質問せずに自律的に調査を実行
-piece_config:
+workflow_config:
   provider_options:
     claude:
       allowed_tools:

@@ -1,6 +1,6 @@
 name: review-takt-default
 description: TAKT開発向け多角レビュー（AIアンチパターン含む6観点レビュー）
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true

@@ -1,6 +1,6 @@
 name: frontend
 description: Frontend development workflow with test-first, AI review, 2-stage reviews, fix loops, and supervision
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true

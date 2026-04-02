@@ -1,6 +1,6 @@
 name: dual-cqrs
 description: Frontend + backend development workflow (CQRS+ES specialized) with CQRS+ES, frontend, security, and QA reviews with fix loops
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true

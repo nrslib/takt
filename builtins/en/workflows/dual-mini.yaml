@@ -1,6 +1,6 @@
 name: dual-mini
 description: Frontend + backend mini development workflow (plan -> implement -> parallel review -> fix if needed -> complete) with frontend + backend knowledge injection
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true

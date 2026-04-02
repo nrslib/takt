@@ -1,6 +1,6 @@
 name: terraform
 description: Terraform IaC 開発ワークフロー（plan → implement → 並列レビュー → 監督検証 → 修正 → 完了）
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true

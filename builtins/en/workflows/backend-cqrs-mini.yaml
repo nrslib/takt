@@ -1,6 +1,6 @@
 name: backend-cqrs-mini
 description: CQRS+ES-focused mini development workflow (plan -> implement -> parallel review -> fix if needed -> complete)
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true

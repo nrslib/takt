@@ -1,6 +1,6 @@
 name: review-fix-default
 description: Multi-perspective review + fix loop (architecture, security, QA, testing, requirements — 5 parallel reviewers with iterative fixes)
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true

@@ -1,6 +1,6 @@
 name: e2e-team-leader-refill-threshold
 description: E2E test for team_leader refill threshold behavior
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true

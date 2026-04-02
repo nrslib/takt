@@ -1,6 +1,6 @@
 name: deep-research
 description: 深掘り調査ワークフロー - 発見駆動で新たな問いを追跡し、多角的に調査する
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true

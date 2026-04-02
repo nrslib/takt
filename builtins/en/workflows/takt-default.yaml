@@ -1,6 +1,6 @@
 name: takt-default
 description: TAKT development workflow (plan → write tests → team-leader implement → AI antipattern review → 5-parallel review → fix → supervise → complete)
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true

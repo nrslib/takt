@@ -1,6 +1,6 @@
 name: review-backend-cqrs
 description: CQRS+ES特化レビュー（構造・モジュール化・ドメインモデル・セキュリティ・QA）
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true

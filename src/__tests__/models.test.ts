@@ -307,6 +307,116 @@ describe('PieceConfigRawSchema', () => {
     });
   });
 
+  it('should parse piece-level workflow_config as alias of piece_config', () => {
+    const config = {
+      name: 'test-piece',
+      workflow_config: {
+        provider_options: {
+          codex: { network_access: true },
+        },
+      },
+      movements: [
+        {
+          name: 'implement',
+          provider: 'codex',
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    const result = PieceConfigRawSchema.parse(config);
+    expect(result.piece_config).toEqual({
+      provider_options: {
+        codex: { network_access: true },
+      },
+    });
+  });
+
+  it('should reject when workflow_config and piece_config disagree', () => {
+    const config = {
+      name: 'test-piece',
+      workflow_config: {
+        provider_options: {
+          codex: { network_access: true },
+        },
+      },
+      piece_config: {
+        provider_options: {
+          codex: { network_access: false },
+        },
+      },
+      movements: [
+        {
+          name: 'implement',
+          provider: 'codex',
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    expect(() => PieceConfigRawSchema.parse(config)).toThrow(
+      /workflow_config.*piece_config|piece_config.*workflow_config|conflict/i,
+    );
+  });
+
+  it('should parse workflow-facing project config aliases', () => {
+    const project = ProjectConfigSchema.parse({
+      workflow_overrides: {
+        steps: {
+          implement: {
+            quality_gates: ['gate'],
+          },
+        },
+      },
+      workflow_runtime_prepare: {
+        custom_scripts: true,
+      },
+      workflow_arpeggio: {
+        custom_data_source_modules: true,
+        custom_merge_inline_js: false,
+        custom_merge_files: true,
+      },
+      workflow_mcp_servers: {
+        stdio: true,
+        sse: false,
+        http: true,
+      },
+    } as unknown) as Record<string, unknown>;
+
+    expect(project.workflow_overrides).toEqual({
+      steps: {
+        implement: {
+          quality_gates: ['gate'],
+        },
+      },
+    });
+    expect(project.workflow_runtime_prepare).toEqual({ custom_scripts: true });
+    expect(project.workflow_arpeggio).toEqual({
+      custom_data_source_modules: true,
+      custom_merge_inline_js: false,
+      custom_merge_files: true,
+    });
+    expect(project.workflow_mcp_servers).toEqual({ stdio: true, sse: false, http: true });
+  });
+
+  it('should parse workflow-facing global config aliases', () => {
+    const global = GlobalConfigSchema.parse({
+      workflow_categories_file: '/tmp/workflow-categories.yaml',
+      enable_builtin_workflows: true,
+      notification_sound_events: {
+        workflow_complete: true,
+        workflow_abort: false,
+      },
+    } as unknown) as Record<string, unknown>;
+
+    expect(global.workflow_categories_file).toBe('/tmp/workflow-categories.yaml');
+    expect(global.enable_builtin_workflows).toBe(true);
+    expect(global.notification_sound_events).toEqual({
+      workflow_complete: true,
+      workflow_abort: false,
+    });
+  });
+
   it('should allow omitting required_permission_mode', () => {
     const config = {
       name: 'test-piece',

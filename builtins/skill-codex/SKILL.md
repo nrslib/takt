@@ -82,7 +82,7 @@ $takt {piece} [permission] {task...}
 
 YAML から以下を抽出する（→ references/yaml-schema.md 参照）:
 - `name`, `max_movements`, `initial_step`, `steps` 配列（互換: `initial_movement`, `movements`）
-- `piece_config`（ワークフロー全体の provider / runtime 等。キー名は従来どおり）
+- `workflow_config`（ワークフロー全体の provider / runtime 等。`piece_config` も後方互換で受理）
 - セクションマップ: `personas`, `policies`, `instructions`, `output_contracts`, `knowledge`
 
 ### 手順 2: セクションリソースの事前読み込み

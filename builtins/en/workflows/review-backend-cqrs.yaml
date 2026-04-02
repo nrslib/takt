@@ -1,6 +1,6 @@
 name: review-backend-cqrs
 description: CQRS+ES focused review (structure, modularization, domain model, security, QA)
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true

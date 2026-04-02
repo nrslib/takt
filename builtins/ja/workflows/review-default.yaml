@@ -1,6 +1,6 @@
 name: review-default
 description: 多角レビュー - 5つの観点から並列にコード変更をレビューし、統合結果を出力する
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true

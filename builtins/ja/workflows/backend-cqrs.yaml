@@ -1,6 +1,6 @@
 name: backend-cqrs
 description: テストファースト・AIレビュー・2段階レビュー・修正ループ・監督付きCQRS+ES開発
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true

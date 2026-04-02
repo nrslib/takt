@@ -221,6 +221,299 @@ describe('config traced env overrides', () => {
     });
   });
 
+  it('project config は workflow_runtime_prepare の新 env 名を反映する', () => {
+    const projectDir = join(testRoot, 'project-workflow-runtime-prepare-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), 'provider: codex\n', 'utf-8');
+    process.env.TAKT_WORKFLOW_RUNTIME_PREPARE_CUSTOM_SCRIPTS = 'true';
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.pieceRuntimePrepare).toEqual({
+      customScripts: true,
+    });
+  });
+
+  it('project config は workflow_runtime_prepare の root JSON env を反映する', () => {
+    const projectDir = join(testRoot, 'project-workflow-runtime-prepare-root-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), 'provider: codex\n', 'utf-8');
+    process.env.TAKT_WORKFLOW_RUNTIME_PREPARE = JSON.stringify({
+      custom_scripts: true,
+    });
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.pieceRuntimePrepare).toEqual({
+      customScripts: true,
+    });
+  });
+
+  it('project config は新旧 runtime_prepare env が同時指定されたとき新 env を優先する', () => {
+    const projectDir = join(testRoot, 'project-workflow-runtime-prepare-env-priority');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), 'provider: codex\n', 'utf-8');
+    process.env.TAKT_PIECE_RUNTIME_PREPARE_CUSTOM_SCRIPTS = 'false';
+    process.env.TAKT_WORKFLOW_RUNTIME_PREPARE_CUSTOM_SCRIPTS = 'true';
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const config = loadProjectConfig(projectDir);
+
+      expect(config.pieceRuntimePrepare).toEqual({
+        customScripts: true,
+      });
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('project config は workflow_arpeggio の新 env 名を反映する', () => {
+    const projectDir = join(testRoot, 'project-workflow-arpeggio-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), 'provider: codex\n', 'utf-8');
+    process.env.TAKT_WORKFLOW_ARPEGGIO_CUSTOM_DATA_SOURCE_MODULES = 'true';
+    process.env.TAKT_WORKFLOW_ARPEGGIO_CUSTOM_MERGE_INLINE_JS = 'false';
+    process.env.TAKT_WORKFLOW_ARPEGGIO_CUSTOM_MERGE_FILES = 'true';
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.pieceArpeggio).toEqual({
+      customDataSourceModules: true,
+      customMergeInlineJs: false,
+      customMergeFiles: true,
+    });
+  });
+
+  it('project config は workflow_arpeggio の root JSON env を反映する', () => {
+    const projectDir = join(testRoot, 'project-workflow-arpeggio-root-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), 'provider: codex\n', 'utf-8');
+    process.env.TAKT_WORKFLOW_ARPEGGIO = JSON.stringify({
+      custom_data_source_modules: true,
+      custom_merge_inline_js: false,
+      custom_merge_files: true,
+    });
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.pieceArpeggio).toEqual({
+      customDataSourceModules: true,
+      customMergeInlineJs: false,
+      customMergeFiles: true,
+    });
+  });
+
+  it('project config は workflow_mcp_servers の新 env 名を反映する', () => {
+    const projectDir = join(testRoot, 'project-workflow-mcp-servers-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), 'provider: codex\n', 'utf-8');
+    process.env.TAKT_WORKFLOW_MCP_SERVERS_STDIO = 'true';
+    process.env.TAKT_WORKFLOW_MCP_SERVERS_HTTP = 'false';
+    process.env.TAKT_WORKFLOW_MCP_SERVERS_SSE = 'true';
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.pieceMcpServers).toEqual({
+      stdio: true,
+      http: false,
+      sse: true,
+    });
+  });
+
+  it('project config は workflow_mcp_servers の root JSON env を反映する', () => {
+    const projectDir = join(testRoot, 'project-workflow-mcp-servers-root-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), 'provider: codex\n', 'utf-8');
+    process.env.TAKT_WORKFLOW_MCP_SERVERS = JSON.stringify({
+      stdio: true,
+      http: false,
+      sse: true,
+    });
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.pieceMcpServers).toEqual({
+      stdio: true,
+      http: false,
+      sse: true,
+    });
+  });
+
+  it('global config は enable_builtin_workflows の新 env 名を反映する', () => {
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(globalConfigPath, 'language: ja\n', 'utf-8');
+    process.env.TAKT_ENABLE_BUILTIN_WORKFLOWS = 'true';
+
+    const config = loadGlobalConfig();
+
+    expect(config.enableBuiltinPieces).toBe(true);
+  });
+
+  it('global config は新旧 enable_builtin env が同時指定されたとき新 env を優先する', () => {
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(globalConfigPath, 'language: ja\n', 'utf-8');
+    process.env.TAKT_ENABLE_BUILTIN_PIECES = 'false';
+    process.env.TAKT_ENABLE_BUILTIN_WORKFLOWS = 'true';
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const config = loadGlobalConfig();
+
+      expect(config.enableBuiltinPieces).toBe(true);
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('global config は workflow notification の新 env 名を反映する', () => {
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(globalConfigPath, 'language: ja\n', 'utf-8');
+    process.env.TAKT_NOTIFICATION_SOUND_EVENTS_WORKFLOW_COMPLETE = 'true';
+    process.env.TAKT_NOTIFICATION_SOUND_EVENTS_WORKFLOW_ABORT = 'false';
+
+    const config = loadGlobalConfig();
+
+    expect(config.notificationSoundEvents).toEqual({
+      pieceComplete: true,
+      pieceAbort: false,
+    });
+  });
+
+  it('global config は新旧 workflow notification env が同時指定されたとき新 env を優先する', () => {
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(globalConfigPath, 'language: ja\n', 'utf-8');
+    process.env.TAKT_NOTIFICATION_SOUND_EVENTS_PIECE_COMPLETE = 'false';
+    process.env.TAKT_NOTIFICATION_SOUND_EVENTS_WORKFLOW_COMPLETE = 'true';
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const config = loadGlobalConfig();
+
+      expect(config.notificationSoundEvents).toEqual({
+        pieceComplete: true,
+      });
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('global config は workflow_categories_file の新 env 名を反映する', () => {
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(globalConfigPath, 'language: ja\n', 'utf-8');
+    process.env.TAKT_WORKFLOW_CATEGORIES_FILE = '/tmp/workflow-categories.yaml';
+
+    const config = loadGlobalConfig();
+
+    expect(config.pieceCategoriesFile).toBe('/tmp/workflow-categories.yaml');
+  });
+
+  it('global config は新旧 workflow_categories_file env が同時指定されたとき新 env を優先する', () => {
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(globalConfigPath, 'language: ja\n', 'utf-8');
+    process.env.TAKT_PIECE_CATEGORIES_FILE = '/tmp/legacy-piece-categories.yaml';
+    process.env.TAKT_WORKFLOW_CATEGORIES_FILE = '/tmp/workflow-categories.yaml';
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const config = loadGlobalConfig();
+
+      expect(config.pieceCategoriesFile).toBe('/tmp/workflow-categories.yaml');
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('global config は workflow_runtime_prepare の root JSON env を反映する', () => {
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(globalConfigPath, 'language: ja\n', 'utf-8');
+    process.env.TAKT_WORKFLOW_RUNTIME_PREPARE = JSON.stringify({
+      custom_scripts: true,
+    });
+
+    const config = loadGlobalConfig();
+
+    expect(config.pieceRuntimePrepare).toEqual({
+      customScripts: true,
+    });
+  });
+
+  it('global config は workflow 系 leaf env を反映する', () => {
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(globalConfigPath, 'language: ja\n', 'utf-8');
+    process.env.TAKT_WORKFLOW_RUNTIME_PREPARE_CUSTOM_SCRIPTS = 'true';
+    process.env.TAKT_WORKFLOW_ARPEGGIO_CUSTOM_DATA_SOURCE_MODULES = 'true';
+    process.env.TAKT_WORKFLOW_ARPEGGIO_CUSTOM_MERGE_INLINE_JS = 'false';
+    process.env.TAKT_WORKFLOW_ARPEGGIO_CUSTOM_MERGE_FILES = 'true';
+    process.env.TAKT_WORKFLOW_MCP_SERVERS_STDIO = 'true';
+    process.env.TAKT_WORKFLOW_MCP_SERVERS_HTTP = 'false';
+    process.env.TAKT_WORKFLOW_MCP_SERVERS_SSE = 'true';
+
+    const config = loadGlobalConfig();
+
+    expect(config.pieceRuntimePrepare).toEqual({
+      customScripts: true,
+    });
+    expect(config.pieceArpeggio).toEqual({
+      customDataSourceModules: true,
+      customMergeInlineJs: false,
+      customMergeFiles: true,
+    });
+    expect(config.pieceMcpServers).toEqual({
+      stdio: true,
+      http: false,
+      sse: true,
+    });
+  });
+
+  it('global config は workflow_arpeggio の root JSON env を反映する', () => {
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(globalConfigPath, 'language: ja\n', 'utf-8');
+    process.env.TAKT_WORKFLOW_ARPEGGIO = JSON.stringify({
+      custom_data_source_modules: true,
+      custom_merge_inline_js: false,
+      custom_merge_files: true,
+    });
+
+    const config = loadGlobalConfig();
+
+    expect(config.pieceArpeggio).toEqual({
+      customDataSourceModules: true,
+      customMergeInlineJs: false,
+      customMergeFiles: true,
+    });
+  });
+
+  it('global config は workflow_mcp_servers の root JSON env を反映する', () => {
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(globalConfigPath, 'language: ja\n', 'utf-8');
+    process.env.TAKT_WORKFLOW_MCP_SERVERS = JSON.stringify({
+      stdio: true,
+      http: false,
+      sse: true,
+    });
+    process.env.TAKT_WORKFLOW_MCP_SERVERS_HTTP = 'true';
+
+    const config = loadGlobalConfig();
+
+    expect(config.pieceMcpServers).toEqual({
+      stdio: true,
+      http: true,
+      sse: true,
+    });
+  });
+
   it('project config は非許可の provider_options env を無視する', () => {
     const projectDir = join(testRoot, 'project-non-whitelist');
     const configDir = getProjectConfigDir(projectDir);
@@ -274,6 +567,273 @@ describe('config traced env overrides', () => {
         providerEvents: true,
       });
       expect(warnSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('legacy env は警告付きで global enable_builtin_pieces に反映する', () => {
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(globalConfigPath, 'language: en\n', 'utf-8');
+    process.env.TAKT_ENABLE_BUILTIN_PIECES = 'true';
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const config = loadGlobalConfig();
+
+      expect(config.enableBuiltinPieces).toBe(true);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('legacy env は警告付きで global piece_categories_file に反映する', () => {
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(globalConfigPath, 'language: en\n', 'utf-8');
+    process.env.TAKT_PIECE_CATEGORIES_FILE = '/tmp/legacy-piece-categories.yaml';
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const config = loadGlobalConfig();
+
+      expect(config.pieceCategoriesFile).toBe('/tmp/legacy-piece-categories.yaml');
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('legacy env は警告付きで global workflow notification に反映する', () => {
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(globalConfigPath, 'language: en\n', 'utf-8');
+    process.env.TAKT_NOTIFICATION_SOUND_EVENTS_PIECE_COMPLETE = 'true';
+    process.env.TAKT_NOTIFICATION_SOUND_EVENTS_PIECE_ABORT = 'false';
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const config = loadGlobalConfig();
+
+      expect(config.notificationSoundEvents).toEqual({
+        pieceComplete: true,
+        pieceAbort: false,
+      });
+      expect(warnSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('legacy leaf env は警告付きで global config に反映する', () => {
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(globalConfigPath, 'language: en\n', 'utf-8');
+    process.env.TAKT_PIECE_RUNTIME_PREPARE_CUSTOM_SCRIPTS = 'true';
+    process.env.TAKT_PIECE_ARPEGGIO_CUSTOM_DATA_SOURCE_MODULES = 'true';
+    process.env.TAKT_PIECE_ARPEGGIO_CUSTOM_MERGE_INLINE_JS = 'false';
+    process.env.TAKT_PIECE_ARPEGGIO_CUSTOM_MERGE_FILES = 'true';
+    process.env.TAKT_PIECE_MCP_SERVERS_STDIO = 'true';
+    process.env.TAKT_PIECE_MCP_SERVERS_HTTP = 'false';
+    process.env.TAKT_PIECE_MCP_SERVERS_SSE = 'true';
+    process.env.TAKT_NOTIFICATION_SOUND_EVENTS_PIECE_COMPLETE = 'true';
+    process.env.TAKT_NOTIFICATION_SOUND_EVENTS_PIECE_ABORT = 'false';
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const config = loadGlobalConfig();
+
+      expect(config.pieceRuntimePrepare).toEqual({
+        customScripts: true,
+      });
+      expect(config.pieceArpeggio).toEqual({
+        customDataSourceModules: true,
+        customMergeInlineJs: false,
+        customMergeFiles: true,
+      });
+      expect(config.pieceMcpServers).toEqual({
+        stdio: true,
+        http: false,
+        sse: true,
+      });
+      expect(config.notificationSoundEvents).toEqual({
+        pieceComplete: true,
+        pieceAbort: false,
+      });
+      expect(warnSpy).toHaveBeenCalledTimes(9);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('legacy env は警告付きで project piece_runtime_prepare に反映する', () => {
+    const projectDir = join(testRoot, 'project-legacy-piece-runtime-prepare-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), 'provider: codex\n', 'utf-8');
+    process.env.TAKT_PIECE_RUNTIME_PREPARE = JSON.stringify({
+      custom_scripts: true,
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const config = loadProjectConfig(projectDir);
+
+      expect(config.pieceRuntimePrepare).toEqual({
+        customScripts: true,
+      });
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('legacy env は警告付きで project piece_arpeggio に反映する', () => {
+    const projectDir = join(testRoot, 'project-legacy-piece-arpeggio-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), 'provider: codex\n', 'utf-8');
+    process.env.TAKT_PIECE_ARPEGGIO = JSON.stringify({
+      custom_data_source_modules: true,
+      custom_merge_inline_js: false,
+      custom_merge_files: true,
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const config = loadProjectConfig(projectDir);
+
+      expect(config.pieceArpeggio).toEqual({
+        customDataSourceModules: true,
+        customMergeInlineJs: false,
+        customMergeFiles: true,
+      });
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('legacy env は警告付きで project piece_mcp_servers に反映する', () => {
+    const projectDir = join(testRoot, 'project-legacy-piece-mcp-servers-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), 'provider: codex\n', 'utf-8');
+    process.env.TAKT_PIECE_MCP_SERVERS = JSON.stringify({
+      stdio: true,
+      http: false,
+      sse: true,
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const config = loadProjectConfig(projectDir);
+
+      expect(config.pieceMcpServers).toEqual({
+        stdio: true,
+        http: false,
+        sse: true,
+      });
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('legacy leaf env は警告付きで project config に反映する', () => {
+    const projectDir = join(testRoot, 'project-legacy-piece-leaf-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), 'provider: codex\n', 'utf-8');
+    process.env.TAKT_PIECE_RUNTIME_PREPARE_CUSTOM_SCRIPTS = 'true';
+    process.env.TAKT_PIECE_ARPEGGIO_CUSTOM_DATA_SOURCE_MODULES = 'true';
+    process.env.TAKT_PIECE_ARPEGGIO_CUSTOM_MERGE_INLINE_JS = 'false';
+    process.env.TAKT_PIECE_ARPEGGIO_CUSTOM_MERGE_FILES = 'true';
+    process.env.TAKT_PIECE_MCP_SERVERS_STDIO = 'true';
+    process.env.TAKT_PIECE_MCP_SERVERS_HTTP = 'false';
+    process.env.TAKT_PIECE_MCP_SERVERS_SSE = 'true';
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const config = loadProjectConfig(projectDir);
+
+      expect(config.pieceRuntimePrepare).toEqual({
+        customScripts: true,
+      });
+      expect(config.pieceArpeggio).toEqual({
+        customDataSourceModules: true,
+        customMergeInlineJs: false,
+        customMergeFiles: true,
+      });
+      expect(config.pieceMcpServers).toEqual({
+        stdio: true,
+        http: false,
+        sse: true,
+      });
+      expect(warnSpy).toHaveBeenCalledTimes(7);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('project config では新 env があると legacy leaf env は warning なしで無視する', () => {
+    const projectDir = join(testRoot, 'project-legacy-piece-leaf-env-blocked-by-workflow-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), 'provider: codex\n', 'utf-8');
+    process.env.TAKT_PIECE_RUNTIME_PREPARE_CUSTOM_SCRIPTS = 'false';
+    process.env.TAKT_WORKFLOW_RUNTIME_PREPARE_CUSTOM_SCRIPTS = 'true';
+    process.env.TAKT_PIECE_ARPEGGIO_CUSTOM_MERGE_FILES = 'false';
+    process.env.TAKT_WORKFLOW_ARPEGGIO_CUSTOM_MERGE_FILES = 'true';
+    process.env.TAKT_PIECE_MCP_SERVERS_HTTP = 'false';
+    process.env.TAKT_WORKFLOW_MCP_SERVERS_HTTP = 'true';
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const config = loadProjectConfig(projectDir);
+
+      expect(config.pieceRuntimePrepare).toEqual({
+        customScripts: true,
+      });
+      expect(config.pieceArpeggio).toEqual({
+        customMergeFiles: true,
+      });
+      expect(config.pieceMcpServers).toEqual({
+        http: true,
+      });
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('新 env があると legacy leaf env は warning なしで無視する', () => {
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(globalConfigPath, 'language: en\n', 'utf-8');
+    process.env.TAKT_PIECE_RUNTIME_PREPARE_CUSTOM_SCRIPTS = 'false';
+    process.env.TAKT_WORKFLOW_RUNTIME_PREPARE_CUSTOM_SCRIPTS = 'true';
+    process.env.TAKT_PIECE_ARPEGGIO_CUSTOM_MERGE_FILES = 'false';
+    process.env.TAKT_WORKFLOW_ARPEGGIO_CUSTOM_MERGE_FILES = 'true';
+    process.env.TAKT_PIECE_MCP_SERVERS_HTTP = 'false';
+    process.env.TAKT_WORKFLOW_MCP_SERVERS_HTTP = 'true';
+    process.env.TAKT_NOTIFICATION_SOUND_EVENTS_PIECE_ABORT = 'false';
+    process.env.TAKT_NOTIFICATION_SOUND_EVENTS_WORKFLOW_ABORT = 'true';
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const config = loadGlobalConfig();
+
+      expect(config.pieceRuntimePrepare).toEqual({
+        customScripts: true,
+      });
+      expect(config.pieceArpeggio).toEqual({
+        customMergeFiles: true,
+      });
+      expect(config.pieceMcpServers).toEqual({
+        http: true,
+      });
+      expect(config.notificationSoundEvents).toEqual({
+        pieceAbort: true,
+      });
+      expect(warnSpy).not.toHaveBeenCalled();
     } finally {
       warnSpy.mockRestore();
     }

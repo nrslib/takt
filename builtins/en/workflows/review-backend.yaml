@@ -1,6 +1,6 @@
 name: review-backend
 description: Backend-focused review (structure, modularization, hexagonal architecture, security, QA)
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true

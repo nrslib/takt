@@ -1,6 +1,6 @@
 name: review-fix-takt-default
 description: TAKT開発向け多角レビュー＋修正ループ（初回6並列レビュー、修正後はAIアンチパターン事前レビュー＋5並列レビュー）
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true

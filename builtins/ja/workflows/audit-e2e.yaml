@@ -1,6 +1,6 @@
 name: audit-e2e
 description: E2E の全件監査。ユーザーフローとカバレッジ不足を棚卸しし、コード修正なしで Issue 直貼り可能なレポートを作成する
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true

@@ -1,6 +1,6 @@
 name: default
 description: Test-first development workflow (plan → write tests → implement → AI antipattern review → parallel review → complete)
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true

@@ -1,6 +1,6 @@
 name: review-default
 description: Multi-perspective Code Review - reviews changes in parallel from 5 perspectives and outputs consolidated results
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true

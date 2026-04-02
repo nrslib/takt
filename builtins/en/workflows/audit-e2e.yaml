@@ -1,6 +1,6 @@
 name: audit-e2e
 description: Comprehensive E2E audit. Enumerate user flows and coverage gaps, then produce an issue-ready report without modifying code
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true

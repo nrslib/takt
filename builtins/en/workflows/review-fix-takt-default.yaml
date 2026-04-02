@@ -1,6 +1,6 @@
 name: review-fix-takt-default
 description: "TAKT-focused multi-perspective review + fix loop (6-parallel initial review, AI antipattern pre-review on fix iterations)"
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true

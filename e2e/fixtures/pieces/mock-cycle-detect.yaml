@@ -1,6 +1,6 @@
 name: e2e-cycle-detect
 description: Piece with loop_monitors for cycle detection E2E testing
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true
