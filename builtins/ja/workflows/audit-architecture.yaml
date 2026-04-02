@@ -1,0 +1,75 @@
+name: audit-architecture
+description: アーキテクチャの全件監査。モジュールと境界を棚卸しし、コード修正なしで Issue 直貼り可能なレポートを作成する
+max_steps: 12
+initial_step: plan
+
+loop_monitors:
+  - cycle: [supervise, review]
+    threshold: 4
+    judge:
+      persona: supervisor
+      instruction: |
+        architecture audit の supervise → review サイクルが {cycle_count} 回繰り返されました。
+        監査の完全性と品質を総合的に判断し、現状の結果で受け入れるか判断してください。
+      rules:
+        - condition: 十分な品質に達している
+          next: COMPLETE
+        - condition: 品質が不十分だが改善の見込みがない
+          next: ABORT
+
+steps:
+  - name: plan
+    persona: planner
+    knowledge: architecture
+    instruction: architecture-audit-plan
+    edit: false
+    output_contracts:
+      report:
+        - name: 01-architecture-audit-plan.md
+          format: architecture-audit-plan
+    rules:
+      - condition: モジュール棚卸しと監査スコープ整理が完了
+        next: audit
+      - condition: 要件が不明確、情報不足
+        next: ABORT
+
+  - name: audit
+    persona: architecture-reviewer
+    policy: review
+    knowledge: architecture
+    instruction: architecture-audit-team-leader
+    edit: false
+    team_leader:
+      max_parts: 3
+      part_persona: architecture-reviewer
+      part_edit: false
+    output_contracts:
+      report:
+        - name: 02-architecture-audit.md
+          format: architecture-audit
+    rules:
+      - condition: 監査完了
+        next: supervise
+
+  - name: supervise
+    persona: supervisor
+    policy: review
+    knowledge: architecture
+    instruction: architecture-audit-supervise
+    edit: false
+    pass_previous_response: false
+    rules:
+      - condition: 監査が完全で Issue 化できる品質に達している
+        next: COMPLETE
+      - condition: アーキテクチャ監査が不完全、または根拠が不足している
+        next: review
+
+  - name: review
+    persona: architecture-reviewer
+    policy: review
+    knowledge: architecture
+    instruction: architecture-audit-review
+    edit: false
+    rules:
+      - condition: 再監査完了
+        next: supervise

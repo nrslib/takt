@@ -3,7 +3,7 @@
  *
  * Loads persona prompts with user → builtin fallback:
  * 1. User personas: ~/.takt/personas/*.md
- * 2. Builtin personas: builtins/{lang}/personas/*.md
+ * 2. Builtin personas: builtins/{lang}/facets/personas/*.md
  */
 
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
@@ -13,7 +13,7 @@ import {
   getGlobalPersonasDir,
   getGlobalPiecesDir,
   getBuiltinPersonasDir,
-  getBuiltinPiecesDir,
+  getBuiltinWorkflowsDir,
   getGlobalFacetDir,
   getProjectFacetDir,
   getRepertoireDir,
@@ -28,7 +28,7 @@ function getAllowedPromptBases(cwd: string): string[] {
     getGlobalPersonasDir(),
     getGlobalPiecesDir(),
     getBuiltinPersonasDir(lang),
-    getBuiltinPiecesDir(lang),
+    getBuiltinWorkflowsDir(lang),
     getGlobalFacetDir('personas'),
     getProjectFacetDir(cwd, 'personas'),
     getRepertoireDir(),

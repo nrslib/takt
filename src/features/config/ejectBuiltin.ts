@@ -15,7 +15,7 @@ import type { FacetType } from '../../infra/config/paths.js';
 import {
   getGlobalWorkflowsDir,
   getProjectWorkflowsDir,
-  getBuiltinPiecesDir,
+  getBuiltinWorkflowsDir,
   getProjectFacetDir,
   getGlobalFacetDir,
   getBuiltinFacetDir,
@@ -63,15 +63,15 @@ export async function ejectBuiltin(name: string | undefined, options: EjectOptio
   header('Eject Builtin');
 
   const lang = getLanguage();
-  const builtinPiecesDir = getBuiltinPiecesDir(lang);
+  const builtinWorkflowsDir = getBuiltinWorkflowsDir(lang);
 
   if (!name) {
-    listAvailableBuiltins(builtinPiecesDir, options.global);
+    listAvailableBuiltins(builtinWorkflowsDir, options.global);
     return;
   }
 
   const safeName = sanitizeTerminalText(name);
-  const builtinPath = resolveEjectPath(builtinPiecesDir, name, '.yaml');
+  const builtinPath = resolveEjectPath(builtinWorkflowsDir, name, '.yaml');
   if (!builtinPath) {
     error(`Invalid workflow name: ${safeName}`);
     return;
@@ -159,8 +159,8 @@ export async function ejectFacet(
 }
 
 /** List available builtin workflows for ejection */
-function listAvailableBuiltins(builtinPiecesDir: string, isGlobal?: boolean): void {
-  if (!existsSync(builtinPiecesDir)) {
+function listAvailableBuiltins(builtinWorkflowsDir: string, isGlobal?: boolean): void {
+  if (!existsSync(builtinWorkflowsDir)) {
     warn('No builtin workflows found.');
     return;
   }
@@ -168,9 +168,9 @@ function listAvailableBuiltins(builtinPiecesDir: string, isGlobal?: boolean): vo
   info('Available builtin workflows:');
   blankLine();
 
-  for (const entry of readdirSync(builtinPiecesDir).sort()) {
+  for (const entry of readdirSync(builtinWorkflowsDir).sort()) {
     if (!entry.endsWith('.yaml') && !entry.endsWith('.yml')) continue;
-    if (!statSync(join(builtinPiecesDir, entry)).isFile()) continue;
+    if (!statSync(join(builtinWorkflowsDir, entry)).isFile()) continue;
 
     const name = entry.replace(/\.ya?ml$/, '');
     info(`  ${sanitizeTerminalText(name)}`);

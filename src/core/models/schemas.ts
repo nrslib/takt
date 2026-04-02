@@ -407,28 +407,89 @@ export const LoopMonitorSchema = z.object({
 /** Interactive mode schema for piece-level default */
 export const InteractiveModeSchema = z.enum(INTERACTIVE_MODES);
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** Normalize parallel sub-step `step` → `name` (fail if both disagree). */
+function normalizeParallelSubMovementAliases(item: unknown): unknown {
+  if (!isPlainRecord(item)) {
+    return item;
+  }
+  const name = typeof item.name === 'string' ? item.name : undefined;
+  const step = typeof item.step === 'string' ? item.step : undefined;
+  if (name !== undefined && step !== undefined && name !== step) {
+    throw new Error("Workflow definition conflict: parallel sub-step 'step' and 'name' must match when both are set.");
+  }
+  const resolvedName = name ?? step;
+  const rest = { ...item };
+  delete rest.step;
+  if (resolvedName === undefined) {
+    return rest;
+  }
+  return { ...rest, name: resolvedName };
+}
+
+function normalizeMovementsParallelAliases(movements: unknown): unknown {
+  if (!Array.isArray(movements)) {
+    return movements;
+  }
+  return movements.map((mov) => {
+    if (!isPlainRecord(mov)) {
+      return mov;
+    }
+    const parallel = mov.parallel;
+    if (!Array.isArray(parallel)) {
+      return mov;
+    }
+    const nextParallel = parallel.map((sub) => normalizeParallelSubMovementAliases(sub));
+    return { ...mov, parallel: nextParallel };
+  });
+}
+
 function normalizePieceConfigAliases(input: unknown): unknown {
-  if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+  if (!isPlainRecord(input)) {
     return input;
   }
 
-  const record = input as Record<string, unknown>;
-  const movements = record.movements;
-  const steps = record.steps;
-  if (movements !== undefined && steps !== undefined && !isDeepStrictEqual(movements, steps)) {
+  const {
+    steps: rawSteps,
+    movements: rawMovements,
+    initial_step: rawInitialStep,
+    initial_movement: rawInitialMovement,
+    max_steps: rawMaxSteps,
+    max_movements: rawMaxMovements,
+    ...rest
+  } = input;
+
+  const normSteps = rawSteps !== undefined ? normalizeMovementsParallelAliases(rawSteps) : undefined;
+  const normMovements = rawMovements !== undefined ? normalizeMovementsParallelAliases(rawMovements) : undefined;
+
+  if (normSteps !== undefined && normMovements !== undefined && !isDeepStrictEqual(normSteps, normMovements)) {
     throw new Error("Workflow definition conflict: 'steps' and 'movements' must match when both are set.");
   }
 
-  const initialMovement = typeof record.initial_movement === 'string' ? record.initial_movement : undefined;
-  const initialStep = typeof record.initial_step === 'string' ? record.initial_step : undefined;
+  const effectiveMovements = normSteps ?? normMovements;
+
+  const initialMovement = typeof rawInitialMovement === 'string' ? rawInitialMovement : undefined;
+  const initialStep = typeof rawInitialStep === 'string' ? rawInitialStep : undefined;
   if (initialMovement !== undefined && initialStep !== undefined && initialMovement !== initialStep) {
     throw new Error("Workflow definition conflict: 'initial_step' and 'initial_movement' must match when both are set.");
   }
+  const resolvedInitial = initialMovement ?? initialStep;
+
+  const maxMov = typeof rawMaxMovements === 'number' ? rawMaxMovements : undefined;
+  const maxSt = typeof rawMaxSteps === 'number' ? rawMaxSteps : undefined;
+  if (maxMov !== undefined && maxSt !== undefined && maxMov !== maxSt) {
+    throw new Error("Workflow definition conflict: 'max_steps' and 'max_movements' must match when both are set.");
+  }
+  const resolvedMax = maxMov ?? maxSt;
 
   return {
-    ...record,
-    ...(steps !== undefined ? { movements: steps } : {}),
-    ...(initialStep !== undefined ? { initial_movement: initialStep } : {}),
+    ...rest,
+    ...(effectiveMovements !== undefined ? { movements: effectiveMovements } : {}),
+    ...(resolvedInitial !== undefined ? { initial_movement: resolvedInitial } : {}),
+    ...(resolvedMax !== undefined ? { max_movements: resolvedMax } : {}),
   };
 }
 
@@ -455,11 +516,13 @@ export const PieceConfigRawSchema = z.preprocess(
     steps: z.array(PieceMovementRawSchema).min(1).optional(),
     initial_movement: z.string().optional(),
     initial_step: z.string().optional(),
+    /** User-facing alias; normalized to max_movements by preprocess */
+    max_steps: z.number().int().positive().optional(),
     max_movements: z.number().int().positive().optional().default(10),
     loop_monitors: z.array(LoopMonitorSchema).optional(),
     /** Default interactive mode for this piece (overrides user default) */
     interactive_mode: InteractiveModeSchema.optional(),
-  }).transform(({ steps: _steps, initial_step: _initialStep, ...config }) => config)
+  }).transform(({ steps: _steps, initial_step: _initialStep, max_steps: _maxSteps, ...config }) => config)
 );
 
 export const PersonaProviderEntrySchema = z.object({
@@ -634,7 +697,7 @@ const GlobalOnlyConfigSchema = z.object({
   worktree_dir: z.string().optional(),
   /** List of builtin piece/agent names to exclude from fallback loading */
   disabled_builtins: z.array(z.string()).optional().default([]),
-  /** Enable builtin pieces from builtins/{lang}/pieces */
+  /** Enable builtin workflows from builtins/{lang}/workflows */
   enable_builtin_pieces: z.boolean().optional(),
   /** Anthropic API key for Claude Code SDK (overridden by TAKT_ANTHROPIC_API_KEY env var) */
   anthropic_api_key: z.string().optional(),
@@ -664,7 +727,7 @@ const GlobalOnlyConfigSchema = z.object({
   cursor_api_key: z.string().optional(),
   /** Path to bookmarks file (default: ~/.takt/preferences/bookmarks.yaml) */
   bookmarks_file: z.string().optional(),
-  /** Path to piece categories file (default: ~/.takt/preferences/piece-categories.yaml) */
+  /** Path to user categories overlay (default: ~/.takt/preferences/piece-categories.yaml). Builtin defaults: builtins/{lang}/workflow-categories.yaml */
   piece_categories_file: z.string().optional(),
   /** Prevent macOS idle sleep during takt execution using caffeinate (default: false) */
   prevent_sleep: z.boolean().optional(),

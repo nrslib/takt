@@ -1,0 +1,68 @@
+workflow_categories:
+  🚀 クイックスタート:
+    workflows:
+      - default
+      - frontend-mini
+      - backend-mini
+      - compound-eye
+  ⚡ Mini:
+    workflows:
+      - frontend-mini
+      - backend-mini
+      - backend-cqrs-mini
+      - dual-mini
+      - dual-cqrs-mini
+  🎨 フロントエンド:
+    workflows:
+      - frontend
+      - frontend-mini
+  ⚙️ バックエンド:
+    workflows:
+      - backend
+      - backend-mini
+      - backend-cqrs
+      - backend-cqrs-mini
+  🔧 デュアル:
+    workflows:
+      - dual
+      - dual-mini
+      - dual-cqrs
+      - dual-cqrs-mini
+  🏗️ インフラストラクチャ:
+    workflows:
+      - terraform
+  🔍 レビュー:
+    workflows:
+      - review-default
+      - review-fix-default
+      - review-frontend
+      - review-fix-frontend
+      - review-backend
+      - review-fix-backend
+      - review-dual
+      - review-fix-dual
+      - review-dual-cqrs
+      - review-fix-dual-cqrs
+      - review-backend-cqrs
+      - review-fix-backend-cqrs
+      - review-takt-default
+      - review-fix-takt-default
+      - audit-unit
+      - audit-e2e
+      - audit-security
+      - audit-architecture
+      - audit-architecture-frontend
+      - audit-architecture-backend
+      - audit-architecture-dual
+  🎵 TAKT開発:
+    workflows:
+      - takt-default
+      - review-takt-default
+      - review-fix-takt-default
+  その他:
+    workflows:
+      - research
+      - deep-research
+      - magi
+show_others_category: true
+others_category_name: その他

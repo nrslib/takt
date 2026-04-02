@@ -56,13 +56,13 @@ describe('E2E: Export-cc command (takt export-cc)', () => {
       env,
     });
 
-    // Then: pieces/ and personas/ directories exist with at least one file each
+    // Then: workflows/ (builtin workflow YAMLs) and personas/ exist with at least one file each
     const skillDir = join(fakeHome, '.claude', 'skills', 'takt');
 
-    const piecesDir = join(skillDir, 'pieces');
-    expect(existsSync(piecesDir)).toBe(true);
-    const pieceFiles = readdirSync(piecesDir);
-    expect(pieceFiles.length).toBeGreaterThan(0);
+    const workflowsDir = join(skillDir, 'workflows');
+    expect(existsSync(workflowsDir)).toBe(true);
+    const workflowFiles = readdirSync(workflowsDir);
+    expect(workflowFiles.length).toBeGreaterThan(0);
 
     const personasDir = join(skillDir, 'facets', 'personas');
     expect(existsSync(personasDir)).toBe(true);

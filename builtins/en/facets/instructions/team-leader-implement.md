@@ -22,8 +22,9 @@ Analyze the implementation task and, if decomposition is appropriate, split into
      - **Implementation task** (what and how to implement)
      - **Completion criteria** (implementation of responsible files is complete)
    - If tests are already written, instruct parts to implement so existing tests pass
-   - Do not include build checks (all parts complete first, then build is verified together)
+   - Refer to Quality Gates and plan any required verification as a dedicated single verification part
+   - Do not make parallel implementation parts run duplicate full-build or full-test checks
 
 **Constraints:**
-- Parts do not run tests (handled by subsequent movements)
+- If tests or build verification are needed, run them as a dedicated single verification part after dependent implementation parts are complete
 - Do not modify files outside your responsibility (causes conflicts)

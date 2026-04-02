@@ -12,7 +12,7 @@ import type { PieceConfig, PieceMovement, InteractiveMode } from '../../../core/
 import {
   getGlobalPiecesDir,
   getGlobalWorkflowsDir,
-  getBuiltinPiecesDir,
+  getBuiltinWorkflowsDir,
   getProjectPiecesDir,
   getProjectWorkflowsDir,
   getRepertoireDir,
@@ -61,7 +61,7 @@ function emitPieceLoadWarning(
 export function listBuiltinPieceNames(cwd: string, options?: { includeDisabled?: boolean }): string[] {
   const config = resolvePieceConfigValues(cwd, ['language', 'disabledBuiltins']);
   const lang = config.language;
-  const dir = getBuiltinPiecesDir(lang);
+  const dir = getBuiltinWorkflowsDir(lang);
   const disabled = options?.includeDisabled ? undefined : (config.disabledBuiltins ?? []);
   const names = new Set<string>();
   for (const entry of iteratePieceDir(dir, 'builtin', disabled)) {
@@ -78,7 +78,7 @@ export function getBuiltinPiece(name: string, projectCwd: string): PieceConfig |
   const disabled = config.disabledBuiltins ?? [];
   if (disabled.includes(name)) return null;
 
-  const builtinDir = getBuiltinPiecesDir(lang);
+  const builtinDir = getBuiltinWorkflowsDir(lang);
   const yamlPath = join(builtinDir, `${name}.yaml`);
   if (existsSync(yamlPath)) {
     return loadPieceFromFile(yamlPath, projectCwd);
@@ -137,7 +137,7 @@ function resolvePieceFile(piecesDir: string, name: string): string | null {
  * 2. Project-local pieces → .takt/pieces/{name}.yaml
  * 3. User workflows → ~/.takt/workflows/{name}.yaml
  * 4. User pieces → ~/.takt/pieces/{name}.yaml
- * 5. Builtin pieces → builtins/{lang}/pieces/{name}.yaml
+ * 5. Builtin workflows → builtins/{lang}/workflows/{name}.yaml
  */
 export function loadPiece(
   name: string,
@@ -496,7 +496,7 @@ function getPieceDirs(cwd: string): PieceLookupDir[] {
   const lang = config.language;
   const dirs: PieceLookupDir[] = [];
   if (config.enableBuiltinPieces !== false) {
-    dirs.push({ dir: getBuiltinPiecesDir(lang), disabled, source: 'builtin' });
+    dirs.push({ dir: getBuiltinWorkflowsDir(lang), disabled, source: 'builtin' });
   }
   dirs.push({ dir: getGlobalPiecesDir(), source: 'user' });
   dirs.push({ dir: getGlobalWorkflowsDir(), source: 'user' });
@@ -509,7 +509,7 @@ function getPieceDirs(cwd: string): PieceLookupDir[] {
  * Load all pieces with source metadata.
  *
  * Priority (later entries override earlier):
- *   1. Builtin pieces
+ *   1. Builtin workflows
  *   2. User pieces (~/.takt/pieces/)
  *   3. User workflows (~/.takt/workflows/)
  *   4. Project-local pieces (.takt/pieces/)
@@ -536,7 +536,7 @@ export function listPieceEntries(cwd: string, options?: LoadPiecesOptions): Piec
  * Load all pieces with descriptions (for switch command).
  *
  * Priority (later entries override earlier):
- *   1. Builtin pieces
+ *   1. Builtin workflows
  *   2. User pieces (~/.takt/pieces/)
  *   3. User workflows (~/.takt/workflows/)
  *   4. Project-local pieces (.takt/pieces/)

@@ -161,12 +161,14 @@ describe('README public terminology', () => {
 
     expect(configDoc).not.toContain('workflow: default             # Current workflow for this project');
     expect(configDoc).not.toContain('| `workflow` | string | `"default"` | Current workflow name for this project |');
-    expect(configDoc).toContain('`builtins/{lang}/piece-categories.yaml` - Default builtin categories');
-    expect(configDoc).not.toContain('`builtins/{lang}/workflow-categories.yaml` - Default builtin categories');
+    expect(configDoc).toContain(
+      '`builtins/{lang}/workflow-categories.yaml` — default builtin categories (bundled with TAKT)',
+    );
+    expect(configDoc).not.toContain('`builtins/{lang}/piece-categories.yaml` — default builtin categories');
     expect(configDocJa).not.toContain('workflow: default             # このプロジェクトの現在の workflow');
     expect(configDocJa).not.toContain('| `workflow` | string | `"default"` | このプロジェクトの現在の workflow 名 |');
-    expect(configDocJa).toContain('`builtins/{lang}/piece-categories.yaml` - デフォルトのビルトインカテゴリ');
-    expect(configDocJa).not.toContain('`builtins/{lang}/workflow-categories.yaml` - デフォルトのビルトインカテゴリ');
+    expect(configDocJa).toContain('`builtins/{lang}/workflow-categories.yaml` — TAKT 同梱のデフォルト');
+    expect(configDocJa).not.toContain('`builtins/{lang}/piece-categories.yaml` — TAKT 同梱のデフォルト');
   });
 
   it('uses step permission terminology in provider sandbox docs', () => {
