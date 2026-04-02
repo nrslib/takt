@@ -49,7 +49,7 @@ function buildPrompt(prompt: string, systemPrompt?: string): string {
 }
 
 function buildArgs(prompt: string, options: CursorCallOptions): string[] {
-  const args = ['-p', '--output-format', 'json', '--workspace', options.cwd];
+  const args = ['-p', '--trust', '--output-format', 'json', '--workspace', options.cwd];
 
   if (options.model) {
     args.push('--model', options.model);
