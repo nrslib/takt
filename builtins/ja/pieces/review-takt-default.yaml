@@ -19,7 +19,6 @@ movements:
           - Read
           - Glob
           - Grep
-          - Bash
           - WebSearch
           - WebFetch
     instruction: gather-review
@@ -52,7 +51,6 @@ movements:
               - Read
               - Glob
               - Grep
-              - Bash
               - WebSearch
               - WebFetch
         instruction: review-arch
@@ -75,7 +73,6 @@ movements:
               - Read
               - Glob
               - Grep
-              - Bash
               - WebSearch
               - WebFetch
         instruction: review-security
@@ -99,7 +96,6 @@ movements:
               - Read
               - Glob
               - Grep
-              - Bash
               - WebSearch
               - WebFetch
         instruction: review-qa
@@ -126,7 +122,6 @@ movements:
               - Read
               - Glob
               - Grep
-              - Bash
               - WebSearch
               - WebFetch
         instruction: review-test
@@ -150,7 +145,6 @@ movements:
               - Read
               - Glob
               - Grep
-              - Bash
               - WebSearch
               - WebFetch
         instruction: ai-review
@@ -172,7 +166,6 @@ movements:
               - Read
               - Glob
               - Grep
-              - Bash
               - WebSearch
               - WebFetch
         instruction: review-requirements
