@@ -1,7 +1,7 @@
 name: audit-architecture
 description: アーキテクチャの全件監査。モジュールと境界を棚卸しし、コード修正なしで Issue 直貼り可能なレポートを作成する
-max_movements: 12
-initial_movement: plan
+max_steps: 12
+initial_step: plan
 
 loop_monitors:
   - cycle: [supervise, review]
@@ -17,7 +17,7 @@ loop_monitors:
         - condition: 品質が不十分だが改善の見込みがない
           next: ABORT
 
-movements:
+steps:
   - name: plan
     persona: planner
     knowledge: architecture

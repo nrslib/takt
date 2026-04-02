@@ -6,9 +6,9 @@ piece_config:
       network_access: true
     opencode:
       network_access: true
-max_movements: 10
-initial_movement: evaluate
-movements:
+max_steps: 10
+initial_step: evaluate
+steps:
   - name: evaluate
     parallel:
       - name: claude-eye

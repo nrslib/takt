@@ -1,14 +1,14 @@
 name: terraform
-description: Terraform IaC development piece (plan → implement → parallel review → supervisor validation → fix → complete)
+description: Terraform IaC development workflow (plan → implement → parallel review → supervisor validation → fix → complete)
 piece_config:
   provider_options:
     codex:
       network_access: true
     opencode:
       network_access: true
-max_movements: 15
-initial_movement: plan
-movements:
+max_steps: 15
+initial_step: plan
+steps:
   - name: plan
     edit: false
     persona: planner

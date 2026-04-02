@@ -1,7 +1,7 @@
 name: audit-architecture-backend
 description: バックエンド特化のアーキテクチャ監査。サービスモジュールと境界を列挙し、コードを変更せずに Issue 化しやすいレポートを作成する
-max_movements: 12
-initial_movement: plan
+max_steps: 12
+initial_step: plan
 
 loop_monitors:
   - cycle: [supervise, review]
@@ -17,7 +17,7 @@ loop_monitors:
         - condition: Quality is insufficient with no prospect of improvement
           next: ABORT
 
-movements:
+steps:
   - name: plan
     persona: planner
     knowledge:

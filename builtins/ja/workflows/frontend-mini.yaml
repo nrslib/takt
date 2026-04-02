@@ -1,13 +1,13 @@
 name: frontend-mini
-description: フロントエンド向けMini開発ピース（plan → implement → 並列レビュー → 修正 → 完了）
+description: フロントエンド向けMini開発ワークフロー（plan → implement → 並列レビュー → 修正 → 完了）
 piece_config:
   provider_options:
     codex:
       network_access: true
     opencode:
       network_access: true
-max_movements: 20
-initial_movement: plan
+max_steps: 20
+initial_step: plan
 loop_monitors:
   - cycle:
       - reviewers
@@ -21,7 +21,7 @@ loop_monitors:
           next: fix_both
         - condition: 非生産的（同じ指摘が繰り返される）
           next: supervise_fix
-movements:
+steps:
   - name: plan
     edit: false
     persona: planner

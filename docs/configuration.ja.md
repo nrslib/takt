@@ -30,14 +30,14 @@ interactive_preview_steps: 3      # インタラクティブモードでの step
 # auto_fetch: false            # クローン作成前にリモートを fetch（デフォルト: false）
 # base_branch: main            # クローン作成のベースブランチ（デフォルト: リモートのデフォルトブランチ）
 
-# ランタイム環境デフォルト（piece_config.runtime で上書きしない限りすべての piece に適用）
+# ランタイム環境デフォルト（piece_config.runtime で上書きしない限りすべての workflow に適用）
 # runtime:
 #   prepare:
 #     - gradle    # .runtime/ に Gradle キャッシュ/設定を準備
 #     - node      # .runtime/ に npm キャッシュを準備
 
 # persona ごとの provider / model 上書き（省略可）
-# piece を複製せずに特定の persona を別の provider / model にルーティング
+# workflow を複製せずに特定の persona を別の provider / model にルーティング
 # persona_providers:
 #   coder:
 #     provider: codex        # coder を Codex で実行
@@ -83,8 +83,8 @@ interactive_preview_steps: 3      # インタラクティブモードでの step
 #     provider: claude
 #     model: opus
 
-# ピースセキュリティポリシー（すべてデフォルト拒否）
-# 信頼されていないピース YAML が実行できる内容を制御
+# ワークフローセキュリティポリシー（すべてデフォルト拒否）
+# 信頼されていないワークフロー YAML が実行できる内容を制御
 # pieceMcpServers:                       # MCP サーバートランスポートポリシー
 #   stdio: true                          # stdio トランスポートを許可（デフォルト: false）
 #   sse: false                           # SSE トランスポートを許可（デフォルト: false）
@@ -98,9 +98,9 @@ interactive_preview_steps: 3      # インタラクティブモードでの step
 # syncConflictResolver:                  # sync conflict resolver ポリシー
 #   autoApproveTools: false              # ツールの自動承認を許可（デフォルト: false）
 
-# ビルトイン piece フィルタリング（省略可）
-# builtin_pieces_enabled: true           # false ですべてのビルトインを無効化
-# disabled_builtins: [magi]              # 特定のビルトイン piece を無効化
+# ビルトイン workflow フィルタリング（省略可。設定キー名は従来どおり piece_*）
+# builtin_pieces_enabled: true           # false ですべてのビルトイン workflow を無効化
+# disabled_builtins: [magi]              # 特定のビルトイン workflow（name）を無効化
 
 # pipeline 実行設定（省略可）
 # ブランチ名、コミットメッセージ、PR 本文をカスタマイズ
@@ -145,13 +145,13 @@ interactive_preview_steps: 3      # インタラクティブモードでの step
 | `codex_cli_path` | string | - | Codex CLI バイナリパス上書き（絶対パス） |
 | `cursor_cli_path` | string | - | Cursor Agent CLI バイナリパス上書き（絶対パス） |
 | `copilot_cli_path` | string | - | Copilot CLI バイナリパス上書き（絶対パス） |
-| `enable_builtin_pieces` | boolean | `true` | ビルトイン piece の有効化 |
-| `disabled_builtins` | string[] | `[]` | 無効化する特定のビルトイン piece |
+| `enable_builtin_pieces` | boolean | `true` | ビルトイン workflow の有効化（キー名は従来どおり） |
+| `disabled_builtins` | string[] | `[]` | 無効化するビルトイン workflow（YAML の `name`） |
 | `pipeline` | object | - | pipeline テンプレート設定 |
 | `bookmarks_file` | string | - | ブックマークファイルのパス |
 | `auto_fetch` | boolean | `false` | クローン作成前にリモートを fetch してクローンを最新に保つ |
 | `base_branch` | string | - | クローン作成のベースブランチ（デフォルトはリモートのデフォルトブランチ） |
-| `piece_categories_file` | string | - | piece カテゴリファイルのパス |
+| `piece_categories_file` | string | - | カテゴリファイルのパス（[Workflow カテゴリ](#piece-categories) 参照。デフォルトのユーザー上書きは `piece-categories.yaml`） |
 | `vcs_provider` | `"github"` \| `"gitlab"` | 自動検出 | VCS プロバイダー（git リモート URL から自動検出） |
 | `taktProviders` | object | - | TAKT 内部プロバイダー上書き（例: `assistant: { provider: claude, model: opus }`） |
 | `pieceMcpServers` | object | すべて `false` | MCP サーバートランスポートポリシー（`stdio`, `sse`, `http` トグル） |
@@ -391,28 +391,40 @@ persona_providers:
 
 これにより、単一の workflow 内で provider や model を混在させることができます。persona 名は step 定義の `persona` キーに対してマッチされます。
 
+<a id="piece-categories"></a>
+
 ## Workflow カテゴリ
 
 `takt` の workflow 選択プロンプトでの UI 表示を改善するために、workflow をカテゴリに整理できます。
 
+**推奨（正）の YAML キー**（同梱の `builtins/{lang}/workflow-categories.yaml` と一致）: トップレベル **`workflow_categories`**、各カテゴリオブジェクト直下の **`workflows`** 配列に **workflow 名**（各 workflow YAML の `name` フィールド。ビルトインなら `default` など）を列挙します。ファイルパスではありません。
+
+**レガシーキー**（ユーザー上書きや既存設定向けに引き続き受理）: トップレベル **`piece_categories`**、各ノードの **`pieces`**。同一ファイルに正キーとレガシーキーの両方がある場合、ツリー内容は一致している必要があり、矛盾すると読み込みに失敗します。
+
 ### 設定方法
 
 カテゴリは次の場所で設定できます。
-- `builtins/{lang}/workflow-categories.yaml` - デフォルトのビルトインカテゴリ
-- `~/.takt/config.yaml` または `piece_categories_file` で指定した別のカテゴリファイル
+- `builtins/{lang}/workflow-categories.yaml` — TAKT 同梱のデフォルト
+- `~/.takt/config.yaml` または `piece_categories_file` で指定した別ファイル（ユーザー上書きのデフォルトは `~/.takt/preferences/piece-categories.yaml`）
 
 ```yaml
-# ~/.takt/config.yaml または専用カテゴリファイル
-piece_categories:
+# ~/.takt/config.yaml または専用カテゴリファイル（推奨）
+workflow_categories:
   Development:
-    pieces: [default, simple]
+    workflows: [default, simple]
     children:
       Backend:
-        pieces: [dual-cqrs]
+        workflows: [dual-cqrs]
       Frontend:
-        pieces: [dual]
+        workflows: [dual]
   Research:
-    pieces: [research, magi]
+    workflows: [research, magi]
+
+# レガシー相当（引き続き受理）:
+# piece_categories:
+#   Development:
+#     pieces: [default, simple]
+#     ...
 
 show_others_category: true         # 未分類の workflow を表示（デフォルト: true）
 others_category_name: "Other Workflows"  # 未分類カテゴリの名前
@@ -420,10 +432,10 @@ others_category_name: "Other Workflows"  # 未分類カテゴリの名前
 
 ### カテゴリ機能
 
-- **ネストされたカテゴリ** - 階層的な整理のための無制限の深さ
-- **カテゴリごとの workflow リスト** - 特定のカテゴリに workflow を割り当て
-- **その他カテゴリ** - 未分類の workflow を自動収集（`show_others_category: false` で無効化可能）
-- **ビルトイン workflow フィルタリング** - `enable_builtin_pieces: false` ですべてのビルトイン workflow を無効化、または `disabled_builtins: [name1, name2]` で選択的に無効化
+- **ネストされたカテゴリ** — 階層的な整理のための無制限の深さ
+- **カテゴリごとの workflow リスト** — 各カテゴリの `workflows:`（またはレガシーの `pieces:`）に、そのグループに表示する workflow 名を並べる
+- **その他カテゴリ** — いずれのカテゴリにも列挙されていない workflow を自動収集（`show_others_category: false` で無効化可能）
+- **ビルトイン workflow フィルタリング** — `enable_builtin_pieces: false` ですべてのビルトインを無効化、または `disabled_builtins: [name1, name2]` で名前指定で無効化
 
 ### カテゴリのリセット
 

@@ -9,7 +9,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // E2E更新時は docs/testing/e2e.md も更新すること
-describe('E2E: Multi-step with parallel movements (mock)', () => {
+describe('E2E: Multi-step with parallel steps (mock)', () => {
   let isolatedEnv: IsolatedEnv;
   let testRepo: TestRepo;
 

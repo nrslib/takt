@@ -1,38 +1,38 @@
-piece_categories:
+workflow_categories:
   🚀 Quick Start:
-    pieces:
+    workflows:
       - default
       - frontend-mini
       - backend-mini
       - compound-eye
   ⚡ Mini:
-    pieces:
+    workflows:
       - frontend-mini
       - backend-mini
       - backend-cqrs-mini
       - dual-mini
       - dual-cqrs-mini
   🎨 Frontend:
-    pieces:
+    workflows:
       - frontend
       - frontend-mini
   ⚙️ Backend:
-    pieces:
+    workflows:
       - backend
       - backend-mini
       - backend-cqrs
       - backend-cqrs-mini
   🔧 Dual:
-    pieces:
+    workflows:
       - dual
       - dual-mini
       - dual-cqrs
       - dual-cqrs-mini
   🏗️ Infrastructure:
-    pieces:
+    workflows:
       - terraform
   🔍 Review:
-    pieces:
+    workflows:
       - review-default
       - review-fix-default
       - review-frontend
@@ -55,12 +55,12 @@ piece_categories:
       - audit-architecture-backend
       - audit-architecture-dual
   🎵 TAKT Development:
-    pieces:
+    workflows:
       - takt-default
       - review-takt-default
       - review-fix-takt-default
   Others:
-    pieces:
+    workflows:
       - research
       - deep-research
       - magi

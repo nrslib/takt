@@ -1,13 +1,13 @@
 name: takt-default
-description: TAKT開発ピース（計画 → テスト作成 → チームリーダー実装 → AIアンチパターンレビュー → 5並列レビュー → 修正 → 監督 → 完了）
+description: TAKT開発ワークフロー（計画 → テスト作成 → チームリーダー実装 → AIアンチパターンレビュー → 5並列レビュー → 修正 → 監督 → 完了）
 piece_config:
   provider_options:
     codex:
       network_access: true
     opencode:
       network_access: true
-max_movements: 30
-initial_movement: plan
+max_steps: 30
+initial_step: plan
 loop_monitors:
   - cycle:
       - ai_review
@@ -33,7 +33,7 @@ loop_monitors:
           next: reviewers
         - condition: 非生産的（同じ指摘が繰り返される）
           next: supervise
-movements:
+steps:
   - name: plan
     edit: false
     persona: planner

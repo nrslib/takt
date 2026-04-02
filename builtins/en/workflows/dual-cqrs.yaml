@@ -1,13 +1,13 @@
 name: dual-cqrs
-description: Frontend + backend development piece (CQRS+ES specialized) with CQRS+ES, frontend, security, and QA reviews with fix loops
+description: Frontend + backend development workflow (CQRS+ES specialized) with CQRS+ES, frontend, security, and QA reviews with fix loops
 piece_config:
   provider_options:
     codex:
       network_access: true
     opencode:
       network_access: true
-max_movements: 30
-initial_movement: plan
+max_steps: 30
+initial_step: plan
 loop_monitors:
   - cycle:
       - ai_review
@@ -33,7 +33,7 @@ loop_monitors:
           next: reviewers
         - condition: Unproductive (same findings repeating)
           next: supervise
-movements:
+steps:
   - name: plan
     edit: false
     persona: planner

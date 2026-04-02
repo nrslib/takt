@@ -1,13 +1,13 @@
 name: dual-mini
-description: Frontend + backend mini development piece (plan -> implement -> parallel review -> fix if needed -> complete) with frontend + backend knowledge injection
+description: Frontend + backend mini development workflow (plan -> implement -> parallel review -> fix if needed -> complete) with frontend + backend knowledge injection
 piece_config:
   provider_options:
     codex:
       network_access: true
     opencode:
       network_access: true
-max_movements: 20
-initial_movement: plan
+max_steps: 20
+initial_step: plan
 loop_monitors:
   - cycle:
       - reviewers
@@ -21,7 +21,7 @@ loop_monitors:
           next: fix_both
         - condition: unproductive (same findings repeating)
           next: supervise_fix
-movements:
+steps:
   - name: plan
     edit: false
     persona: planner

@@ -6,10 +6,10 @@ piece_config:
       network_access: true
     opencode:
       network_access: true
-max_movements: 10
-initial_movement: gather
+max_steps: 10
+initial_step: gather
 
-movements:
+steps:
   - name: gather
     edit: false
     persona: planner
@@ -184,7 +184,7 @@ movements:
       ## レビュー結果
       {previous_response}
 
-      **これはレビュー専用ピースです。** テスト実行やビルドは行わないでください。
+      **これはレビュー専用 workflow です。** テスト実行やビルドは行わないでください。
       レビュー結果を統合し、最終サマリーを作成する役割です。
 
       **やること:**

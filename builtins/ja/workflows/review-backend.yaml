@@ -6,10 +6,10 @@ piece_config:
       network_access: true
     opencode:
       network_access: true
-max_movements: 10
-initial_movement: gather
+max_steps: 10
+initial_step: gather
 
-movements:
+steps:
   - name: gather
     edit: false
     persona: planner

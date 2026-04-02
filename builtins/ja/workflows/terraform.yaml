@@ -1,14 +1,14 @@
 name: terraform
-description: Terraform IaC 開発ピース（plan → implement → 並列レビュー → 監督検証 → 修正 → 完了）
+description: Terraform IaC 開発ワークフロー（plan → implement → 並列レビュー → 監督検証 → 修正 → 完了）
 piece_config:
   provider_options:
     codex:
       network_access: true
     opencode:
       network_access: true
-max_movements: 15
-initial_movement: plan
-movements:
+max_steps: 15
+initial_step: plan
+steps:
   - name: plan
     edit: false
     persona: planner

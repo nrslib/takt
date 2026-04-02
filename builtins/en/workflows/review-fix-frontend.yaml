@@ -6,8 +6,8 @@ piece_config:
       network_access: true
     opencode:
       network_access: true
-max_movements: 30
-initial_movement: gather
+max_steps: 30
+initial_step: gather
 loop_monitors:
   - cycle:
       - reviewers
@@ -22,7 +22,7 @@ loop_monitors:
         - condition: Unproductive (repeated findings, fixes not applied)
           next: supervise
 
-movements:
+steps:
   - name: gather
     edit: false
     persona: planner

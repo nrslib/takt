@@ -13,9 +13,9 @@ piece_config:
       network_access: true
     opencode:
       network_access: true
-max_movements: 5
-initial_movement: melchior
-movements:
+max_steps: 5
+initial_step: melchior
+steps:
   - name: melchior
     persona: melchior
     instruction: |

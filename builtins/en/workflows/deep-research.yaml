@@ -1,14 +1,14 @@
 name: deep-research
-description: Deep research piece - discovery-driven investigation that follows emerging questions with multi-perspective analysis
+description: Deep research workflow - discovery-driven investigation that follows emerging questions with multi-perspective analysis
 piece_config:
   provider_options:
     codex:
       network_access: true
     opencode:
       network_access: true
-max_movements: 15
-initial_movement: plan
-movements:
+max_steps: 15
+initial_step: plan
+steps:
   - name: plan
     persona: research-planner
     policy: research

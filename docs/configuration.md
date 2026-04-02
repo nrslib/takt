@@ -30,14 +30,14 @@ interactive_preview_steps: 3      # Step previews in interactive mode (0-10, def
 # auto_fetch: false            # Fetch remote before cloning (default: false)
 # base_branch: main            # Base branch for clone creation (default: remote default branch)
 
-# Runtime environment defaults (applies to all pieces unless piece_config.runtime overrides)
+# Runtime environment defaults (applies to all workflows unless piece_config.runtime overrides)
 # runtime:
 #   prepare:
 #     - gradle    # Prepare Gradle cache/config in .runtime/
 #     - node      # Prepare npm cache in .runtime/
 
 # Per-persona provider/model overrides (optional)
-# Route specific personas to different providers and models without duplicating pieces
+# Route specific personas to different providers and models without duplicating workflows
 # persona_providers:
 #   coder:
 #     provider: codex        # Run coder on Codex
@@ -83,8 +83,8 @@ interactive_preview_steps: 3      # Step previews in interactive mode (0-10, def
 #     provider: claude
 #     model: opus
 
-# Piece security policies (all default to deny)
-# These settings control what untrusted piece YAMLs are allowed to do.
+# Workflow security policies (all default to deny)
+# These settings control what untrusted workflow YAMLs are allowed to do.
 # pieceMcpServers:                       # MCP server transport policy
 #   stdio: true                          # Allow stdio transport (default: false)
 #   sse: false                           # Allow SSE transport (default: false)
@@ -98,9 +98,9 @@ interactive_preview_steps: 3      # Step previews in interactive mode (0-10, def
 # syncConflictResolver:                  # Sync conflict resolver policy
 #   autoApproveTools: false              # Allow auto-approval of tools (default: false)
 
-# Builtin piece filtering (optional)
-# builtin_pieces_enabled: true           # Set false to disable all builtins
-# disabled_builtins: [magi]              # Disable specific builtin pieces
+# Builtin workflow filtering (optional; config keys retain piece_* names)
+# builtin_pieces_enabled: true           # Set false to disable all builtin workflows
+# disabled_builtins: [magi]              # Disable specific builtin workflows by name
 
 # Pipeline execution configuration (optional)
 # Customize branch names, commit messages, and PR body.
@@ -145,13 +145,13 @@ interactive_preview_steps: 3      # Step previews in interactive mode (0-10, def
 | `codex_cli_path` | string | - | Codex CLI binary path override (absolute) |
 | `cursor_cli_path` | string | - | Cursor Agent CLI binary path override (absolute) |
 | `copilot_cli_path` | string | - | Copilot CLI binary path override (absolute) |
-| `enable_builtin_pieces` | boolean | `true` | Enable builtin pieces |
-| `disabled_builtins` | string[] | `[]` | Specific builtin pieces to disable |
+| `enable_builtin_pieces` | boolean | `true` | Enable builtin workflows (config key name unchanged) |
+| `disabled_builtins` | string[] | `[]` | Builtin workflows to disable, by workflow `name` |
 | `pipeline` | object | - | Pipeline template settings |
 | `bookmarks_file` | string | - | Path to bookmarks file |
 | `auto_fetch` | boolean | `false` | Fetch remote before cloning to keep clones up-to-date |
 | `base_branch` | string | - | Base branch for clone creation (defaults to remote default branch) |
-| `piece_categories_file` | string | - | Path to piece categories file |
+| `piece_categories_file` | string | - | Path to categories file (see [Workflow categories](#piece-categories); default overlay path uses `piece-categories.yaml`) |
 | `vcs_provider` | `"github"` \| `"gitlab"` | auto-detect | VCS provider (auto-detected from git remote URL) |
 | `taktProviders` | object | - | TAKT internal provider overrides (e.g., `assistant: { provider: claude, model: opus }`) |
 | `pieceMcpServers` | object | all `false` | MCP server transport policy (`stdio`, `sse`, `http` toggles) |
@@ -391,39 +391,51 @@ Both `provider` and `model` are optional. `model` resolution priority: step YAML
 
 This allows mixing providers and models within a single workflow. The persona name is matched against the `persona` key in the step definition.
 
-## Piece Categories
+<a id="piece-categories"></a>
+
+## Workflow categories
 
 Organize workflows into categories for better UI presentation in the `takt` workflow selection prompt.
+
+**Canonical YAML keys** (recommended, matches bundled `builtins/{lang}/workflow-categories.yaml`): top-level **`workflow_categories`**, and under each category object the **`workflows`** array listing **workflow names** (the `name` field from each workflow YAML, e.g. builtin `default`), not file paths.
+
+**Legacy keys** (still accepted for overlays and older configs): **`piece_categories`** at the top level and **`pieces`** per category node. If both canonical and legacy keys appear in the same file, their trees must match or loading fails.
 
 ### Configuration
 
 Categories can be configured in:
-- `builtins/{lang}/workflow-categories.yaml` - Default builtin categories
-- `~/.takt/config.yaml` or a separate categories file specified by `piece_categories_file`
+- `builtins/{lang}/workflow-categories.yaml` — default builtin categories (bundled with TAKT)
+- `~/.takt/config.yaml` or a separate file via `piece_categories_file` (default user overlay: `~/.takt/preferences/piece-categories.yaml`)
 
 ```yaml
-# ~/.takt/config.yaml or dedicated categories file
-piece_categories:
+# ~/.takt/config.yaml or dedicated categories file (canonical)
+workflow_categories:
   Development:
-    pieces: [default, simple]
+    workflows: [default, simple]
     children:
       Backend:
-        pieces: [dual-cqrs]
+        workflows: [dual-cqrs]
       Frontend:
-        pieces: [dual]
+        workflows: [dual]
   Research:
-    pieces: [research, magi]
+    workflows: [research, magi]
+
+# Legacy equivalent (still accepted):
+# piece_categories:
+#   Development:
+#     pieces: [default, simple]
+#     ...
 
 show_others_category: true         # Show uncategorized workflows (default: true)
 others_category_name: "Other Workflows"  # Name for uncategorized category
 ```
 
-### Category Features
+### Category features
 
-- **Nested categories** - Unlimited depth for hierarchical organization
-- **Per-category workflow lists** - Assign workflows to specific categories
-- **Others category** - Automatically collects uncategorized workflows (can be disabled via `show_others_category: false`)
-- **Builtin workflow filtering** - Disable all builtins via `enable_builtin_pieces: false`, or selectively via `disabled_builtins: [name1, name2]`
+- **Nested categories** — unlimited depth for hierarchical organization
+- **Per-category workflow lists** — under each category, `workflows:` (or legacy `pieces:`) holds workflow names to show in that group
+- **Others category** — collects workflows not listed under any category (disable with `show_others_category: false`)
+- **Builtin workflow filtering** — turn off all builtins with `enable_builtin_pieces: false`, or specific names with `disabled_builtins: [name1, name2]`
 
 ### Resetting Categories
 
@@ -457,7 +469,7 @@ pipeline:
 | `{title}` | Commit message | Issue title |
 | `{issue}` | Commit message, PR body | Issue number |
 | `{issue_body}` | PR body | Issue body |
-| `{report}` | PR body | Piece execution report |
+| `{report}` | PR body | Workflow execution report |
 
 ### Pipeline CLI Options
 

@@ -1,5 +1,5 @@
 name: research
-description: Research piece - autonomously executes research without asking questions
+description: Research workflow - autonomously executes research without asking questions
 piece_config:
   provider_options:
     claude:
@@ -13,9 +13,9 @@ piece_config:
       network_access: true
     opencode:
       network_access: true
-max_movements: 10
-initial_movement: plan
-movements:
+max_steps: 10
+initial_step: plan
+steps:
   - name: plan
     persona: research-planner
     policy: research

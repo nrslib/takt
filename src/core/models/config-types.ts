@@ -272,7 +272,10 @@ export interface GlobalConfig extends Omit<ProjectConfig, 'submodules' | 'withSu
   /** Path to bookmarks file (default: ~/.takt/preferences/bookmarks.yaml) */
   bookmarksFile?: string;
   /** @globalOnly */
-  /** User categories overlay path (default: ~/.takt/preferences/piece-categories.yaml). Builtin defaults: builtins/{lang}/workflow-categories.yaml */
+  /**
+   * User categories overlay path (default: ~/.takt/preferences/piece-categories.yaml).
+   * Builtin defaults: builtins/{lang}/workflow-categories.yaml (canonical keys: `workflow_categories` / `workflows`; legacy `piece_categories` / `pieces` merged when identical).
+   */
   pieceCategoriesFile?: string;
   /** @globalOnly */
   /** Prevent macOS idle sleep during takt execution using caffeinate (default: false) */

@@ -1,14 +1,14 @@
 name: deep-research
-description: 深掘り調査ピース - 発見駆動で新たな問いを追跡し、多角的に調査する
+description: 深掘り調査ワークフロー - 発見駆動で新たな問いを追跡し、多角的に調査する
 piece_config:
   provider_options:
     codex:
       network_access: true
     opencode:
       network_access: true
-max_movements: 15
-initial_movement: plan
-movements:
+max_steps: 15
+initial_step: plan
+steps:
   - name: plan
     persona: research-planner
     policy: research

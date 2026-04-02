@@ -26,9 +26,9 @@ function writeMinimalPiece(piecePath: string): void {
     piecePath,
     [
       'name: e2e-branch-piece',
-      'description: Piece for branch coverage E2E',
+      'description: Workflow for branch coverage E2E',
       'max_movements: 3',
-      'movements:',
+      'steps:',
       '  - name: execute',
       '    edit: true',
       '    persona: ../agents/test-coder.md',
@@ -71,7 +71,7 @@ function runTaskWithSelection(args: {
   });
 }
 
-describe('E2E: Piece selection branch coverage', () => {
+describe('E2E: Workflow selection branch coverage', () => {
   let isolatedEnv: IsolatedEnv;
   let testRepo: TestRepo;
 
