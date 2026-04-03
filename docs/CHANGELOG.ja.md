@@ -6,6 +6,44 @@
 
 フォーマットは [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) に基づいています。
 
+## [0.34.0] - 2026-04-03
+
+### Added
+
+- StructuredCaller インターフェースを導入: プロバイダーのネイティブ構造化出力（Structured Output）をサポートし、ステータス判定・条件評価・タスク分解でテキストパースに代わる JSON ベースの応答抽出が可能に (#570)
+- Traced Config を導入: `traced-config` パッケージによる設定値の出所追跡（環境変数・設定ファイル・デフォルト値）をサポート (#558)
+- 並列ステップに `concurrency` フィールドを追加: セマフォベースの同時実行数制御が可能に
+- 無効なワークフロー YAML のロード時に警告を表示するようになった（スキーマバリデーションエラーの詳細を表示） (#540)
+- 計画・レビュー用ファセットを強化: planner・requirements-reviewer・supervisor のペルソナ、plan・requirements-review・supervisor-validation の出力契約、coding ポリシーを新規追加
+- `takt add` コマンドで `--workflow` オプションによるワークフロー指定に対応
+
+### Changed
+
+- **BREAKING:** ワークフロー YAML のキーをリネーム: `movements` → `steps`、`initial_movement` → `initial_step`、`max_movements` → `max_steps`、`piece_config` → `workflow_config`。旧キーは互換エイリアスとして引き続き使用可能 (#576)
+- **BREAKING:** ビルトインワークフローのディレクトリを `builtins/{lang}/pieces/` から `builtins/{lang}/workflows/` に移動。設定キーも `piece_categories` → `workflow_categories`、`enable_builtin_pieces` → `enable_builtin_workflows` にリネーム。旧キーは互換エイリアスとして引き続き使用可能 (#571, #561)
+- **BREAKING:** CLI オプション `-w, --piece` を `-w, --workflow` にリネーム。`--piece` はレガシーエイリアスとして使用可能 (#576)
+- **BREAKING:** ワークフロー YAML の `instruction_template` フィールドを削除。`instruction` フィールドを使用すること (#539)
+- `takt-default` ワークフローの `max_steps` を 50 に増加（`default` は 30 のまま）
+- 設定キーのエイリアス解決時に旧キーと新キーの両方が異なる値で存在する場合はエラーを発生させるよう変更
+
+### Fixed
+
+- Claude SDK のエラーペイロードが正しく処理されない問題を修正
+- ワークフロー用語の統一: CLI ヘルプ、エラーメッセージ、ドキュメントを `workflow` / `step` 用語に更新
+- ワークツリーモードで PR の Issue 解決がプロジェクト cwd から正しく行われるよう修正
+- Cursor Agent のヘッドレスワークツリー実行で `--trust` フラグが渡されるよう修正
+- ワークツリー環境下で `runtime.prepare` が設定されている場合にセルフホスト GitLab の `glab` CLI 認証が失敗する問題を修正 (#563)
+- ピースプロバイダー解決の統一化
+
+### Internal
+
+- Zod スキーマを `schemas.ts` から `schema-base.ts`・`workflow-schemas.ts`・`config-schemas.ts` に分割
+- 環境変数オーバーライドを spec ベースの宣言的定義にリファクタリング
+- レガシーの `step_provider`・`step_model` フィールドを削除
+- TeamLeader のパートタイムアウト処理を簡素化
+- `yaml` パッケージを v2.8.3 に更新
+- ドキュメント（README、CLI リファレンス、設定ガイド等）をワークフロー用語に全面更新
+
 ## [0.33.2] - 2026-03-26
 
 ### Added

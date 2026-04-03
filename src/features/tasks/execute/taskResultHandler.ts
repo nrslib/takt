@@ -113,11 +113,14 @@ export function persistExceededTaskResult(
   taskRunner: TaskRunner,
   task: TaskInfo,
   exceeded: ExceededInfo,
+  context?: { worktreePath?: string; branch?: string },
 ): void {
   taskRunner.exceedTask(task.name, {
     currentMovement: exceeded.currentMovement,
     newMaxMovements: exceeded.newMaxMovements,
     currentIteration: exceeded.currentIteration,
+    ...(context?.worktreePath ? { worktreePath: context.worktreePath } : {}),
+    ...(context?.branch ? { branch: context.branch } : {}),
   });
   info(`Task "${task.name}" exceeded iteration limit at step "${exceeded.currentMovement}"`);
 }

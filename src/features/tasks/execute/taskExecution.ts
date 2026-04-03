@@ -150,12 +150,12 @@ export async function executeAndCompleteTask(
       initialIterationOverride,
     } = await resolveTaskExecution(task, cwd, taskAbortSignal);
 
-    // cwd is always the project root; pass it as projectCwd so reports/sessions go there
+    const projectRootCwd = cwd;
     const taskRunResult = await executeTaskWithResult({
       task: taskPrompt ?? task.content,
       cwd: execCwd,
       pieceIdentifier: execPiece,
-      projectCwd: cwd,
+      projectCwd: projectRootCwd,
       agentOverrides: taskExecutionOptions,
       startMovement,
       retryNote,
@@ -169,7 +169,10 @@ export async function executeAndCompleteTask(
     });
 
     if (taskRunResult.exceeded && taskRunResult.exceededInfo) {
-      persistExceededTaskResult(taskRunner, task, taskRunResult.exceededInfo);
+      persistExceededTaskResult(taskRunner, task, taskRunResult.exceededInfo, {
+        worktreePath,
+        branch,
+      });
       return false;
     }
 
@@ -180,10 +183,10 @@ export async function executeAndCompleteTask(
     let prFailedError: string | undefined;
     let postExecutionTaskError: string | undefined;
     if (taskSuccess && isWorktree) {
-      const issues = resolveTaskIssue(issueNumber, cwd);
+      const issues = resolveTaskIssue(issueNumber, projectRootCwd);
       const postResult = await postExecutionFlow({
         execCwd,
-        projectCwd: cwd,
+        projectCwd: projectRootCwd,
         task: task.name,
         branch,
         baseBranch,
