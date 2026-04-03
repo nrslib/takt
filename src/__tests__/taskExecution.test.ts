@@ -133,6 +133,8 @@ describe('executeAndCompleteTask', () => {
       execPiece: 'default',
       isWorktree: false,
       autoPr: false,
+      draftPr: false,
+      shouldPublishBranchToOrigin: false,
       taskPrompt: undefined,
       reportDirName: undefined,
       branch: undefined,
@@ -147,12 +149,10 @@ describe('executeAndCompleteTask', () => {
   });
 
   it('should pass taskDisplayLabel from parallel options into executePiece', async () => {
-    // Given: Parallel execution passes an issue-style taskDisplayLabel.
     const task = createTask('task-with-issue');
     const taskDisplayLabel = '#12345';
     const abortController = new AbortController();
 
-    // When
     await executeAndCompleteTaskWithoutPiece(
       task,
       {} as never,
@@ -166,7 +166,6 @@ describe('executeAndCompleteTask', () => {
       },
     );
 
-    // Then: executePiece receives the propagated display label.
     expect(mockExecutePiece).toHaveBeenCalledTimes(1);
     const pieceExecutionOptions = mockExecutePiece.mock.calls[0]?.[3] as {
       taskDisplayLabel?: string;
@@ -186,10 +185,8 @@ describe('executeAndCompleteTask', () => {
   });
 
   it('should not pass config provider/model to executePiece when agent overrides are absent', async () => {
-    // Given: project config contains provider/model, but overrides are omitted.
     const task = createTask('task-with-defaults');
 
-    // When
     await executeTask({
       task: task.content,
       cwd: '/project',
@@ -197,7 +194,6 @@ describe('executeAndCompleteTask', () => {
       pieceIdentifier: 'default',
     });
 
-    // Then: piece options should not force provider/model from taskExecution layer
     expect(mockExecutePiece).toHaveBeenCalledTimes(1);
     const pieceExecutionOptions = mockExecutePiece.mock.calls[0]?.[3] as {
       provider?: string;
@@ -208,10 +204,8 @@ describe('executeAndCompleteTask', () => {
   });
 
   it('should pass agent overrides to executePiece when provided', async () => {
-    // Given: overrides explicitly specified by caller.
     const task = createTask('task-with-overrides');
 
-    // When
     await executeTask({
       task: task.content,
       cwd: '/project',
@@ -223,7 +217,6 @@ describe('executeAndCompleteTask', () => {
       },
     });
 
-    // Then
     expect(mockExecutePiece).toHaveBeenCalledTimes(1);
     const pieceExecutionOptions = mockExecutePiece.mock.calls[0]?.[3] as {
       provider?: string;
@@ -281,7 +274,6 @@ describe('executeAndCompleteTask', () => {
   });
 
   it('should mark task as pr_failed when PR creation fails', async () => {
-    // Given: worktree mode with autoPr enabled, PR creation fails
     const task = createTask('task-with-pr-failure');
     mockResolveTaskExecution.mockResolvedValue({
       execCwd: '/worktree/clone',
@@ -289,6 +281,7 @@ describe('executeAndCompleteTask', () => {
       isWorktree: true,
       autoPr: true,
       draftPr: false,
+      shouldPublishBranchToOrigin: true,
       taskPrompt: undefined,
       reportDirName: undefined,
       branch: 'takt/task-with-pr-failure',
@@ -301,10 +294,8 @@ describe('executeAndCompleteTask', () => {
     mockExecutePiece.mockResolvedValue({ success: true });
     mockPostExecutionFlow.mockResolvedValue({ prFailed: true, prError: 'Base ref must be a branch' });
 
-    // When
     const result = await executeAndCompleteTaskWithoutPiece(task, {} as never, '/project');
 
-    // Then: code succeeded, task is marked as pr_failed (not failed)
     expect(result).toBe(true);
     expect(mockBuildTaskResult).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -319,8 +310,43 @@ describe('executeAndCompleteTask', () => {
     expect(mockPersistTaskResult).not.toHaveBeenCalled();
   });
 
+  it('should persist full projectDir pushBranch non-fast-forward diagnostics in pr_failed', async () => {
+    const task = createTask('task-projectdir-nff');
+    mockResolveTaskExecution.mockResolvedValue({
+      execCwd: '/worktree/clone',
+      execPiece: 'default',
+      isWorktree: true,
+      autoPr: true,
+      draftPr: false,
+      shouldPublishBranchToOrigin: false,
+      taskPrompt: undefined,
+      reportDirName: undefined,
+      branch: 'takt/task-projectdir-nff',
+      worktreePath: '/worktree/clone',
+      baseBranch: 'main',
+      startMovement: undefined,
+      retryNote: undefined,
+      issueNumber: undefined,
+    });
+    mockExecutePiece.mockResolvedValue({ success: true });
+    const prError =
+      'Failed to push branch to origin. Command failed: git push\n' +
+      '! [rejected] (non-fast-forward)\n' +
+      'Push rejected (non-fast-forward): remote is ahead; resync or recreate worktree; stale local branch may apply.';
+    mockPostExecutionFlow.mockResolvedValue({ prFailed: true, prError });
+
+    const result = await executeAndCompleteTaskWithoutPiece(task, {} as never, '/project');
+
+    expect(result).toBe(true);
+    expect(mockPersistPrFailedTaskResult).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      prError,
+    );
+    expect(mockPersistTaskResult).not.toHaveBeenCalled();
+  });
+
   it('should mark task as completed when PR creation succeeds', async () => {
-    // Given: worktree mode with autoPr enabled, PR creation succeeds
     const task = createTask('task-with-pr-success');
     mockResolveTaskExecution.mockResolvedValue({
       execCwd: '/worktree/clone',
@@ -328,6 +354,7 @@ describe('executeAndCompleteTask', () => {
       isWorktree: true,
       autoPr: true,
       draftPr: false,
+      shouldPublishBranchToOrigin: true,
       taskPrompt: undefined,
       reportDirName: undefined,
       branch: 'takt/task-with-pr-success',
@@ -340,10 +367,8 @@ describe('executeAndCompleteTask', () => {
     mockExecutePiece.mockResolvedValue({ success: true });
     mockPostExecutionFlow.mockResolvedValue({ prUrl: 'https://github.com/org/repo/pull/1' });
 
-    // When
     const result = await executeAndCompleteTaskWithoutPiece(task, {} as never, '/project');
 
-    // Then: task should be marked as completed
     expect(result).toBe(true);
     expect(mockBuildTaskResult).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -363,6 +388,7 @@ describe('executeAndCompleteTask', () => {
       isWorktree: true,
       autoPr: true,
       draftPr: false,
+      shouldPublishBranchToOrigin: true,
       taskPrompt: undefined,
       reportDirName: undefined,
       branch: 'takt/18/task-with-issue-pr',
@@ -388,6 +414,76 @@ describe('executeAndCompleteTask', () => {
     );
   });
 
+  it('should pass shouldPublishBranchToOrigin from resolveTaskExecution into postExecutionFlow', async () => {
+    const task = createTask('task-publish-origin');
+    mockResolveTaskExecution.mockResolvedValue({
+      execCwd: '/worktree/clone',
+      execPiece: 'default',
+      isWorktree: true,
+      autoPr: false,
+      draftPr: false,
+      shouldPublishBranchToOrigin: true,
+      taskPrompt: undefined,
+      reportDirName: undefined,
+      branch: 'takt/task-publish-origin',
+      worktreePath: '/worktree/clone',
+      baseBranch: 'main',
+      startMovement: undefined,
+      retryNote: undefined,
+      issueNumber: undefined,
+    });
+    mockExecutePiece.mockResolvedValue({ success: true });
+    mockPostExecutionFlow.mockResolvedValue({});
+
+    const result = await executeAndCompleteTaskWithoutPiece(task, {} as never, '/project');
+
+    expect(result).toBe(true);
+    expect(mockPostExecutionFlow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        shouldCreatePr: false,
+        shouldPublishBranchToOrigin: true,
+        branch: 'takt/task-publish-origin',
+        execCwd: '/worktree/clone',
+      }),
+    );
+  });
+
+  it('should mark task as pr_failed when clone origin push fails for shouldPublishBranchToOrigin without auto_pr', async () => {
+    const task = createTask('task-pr-style-push-failure');
+    mockResolveTaskExecution.mockResolvedValue({
+      execCwd: '/worktree/clone',
+      execPiece: 'default',
+      isWorktree: true,
+      autoPr: false,
+      draftPr: false,
+      shouldPublishBranchToOrigin: true,
+      taskPrompt: undefined,
+      reportDirName: undefined,
+      branch: 'takt/task-pr-style-push-failure',
+      worktreePath: '/worktree/clone',
+      baseBranch: 'main',
+      startMovement: undefined,
+      retryNote: undefined,
+      issueNumber: undefined,
+    });
+    mockExecutePiece.mockResolvedValue({ success: true });
+    mockPostExecutionFlow.mockResolvedValue({
+      prFailed: true,
+      prError: 'Failed to push branch to origin from clone. non-fast-forward',
+    });
+
+    const result = await executeAndCompleteTaskWithoutPiece(task, {} as never, '/project');
+
+    expect(result).toBe(true);
+    expect(mockPersistPrFailedTaskResult).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      'Failed to push branch to origin from clone. non-fast-forward',
+    );
+    expect(mockBuildBooleanTaskResult).not.toHaveBeenCalled();
+    expect(mockPersistTaskResult).not.toHaveBeenCalled();
+  });
+
   it('should mark task as failed when postExecution returns a non-PR failure', async () => {
     const task = createTask('task-with-autocommit-failure');
     mockResolveTaskExecution.mockResolvedValue({
@@ -396,6 +492,7 @@ describe('executeAndCompleteTask', () => {
       isWorktree: true,
       autoPr: false,
       draftPr: false,
+      shouldPublishBranchToOrigin: false,
       taskPrompt: undefined,
       reportDirName: undefined,
       branch: 'takt/task-with-autocommit-failure',
@@ -436,6 +533,7 @@ describe('executeAndCompleteTask', () => {
       isWorktree: true,
       autoPr: false,
       draftPr: false,
+      shouldPublishBranchToOrigin: false,
       taskPrompt: undefined,
       reportDirName: undefined,
       branch: 'takt/task-with-local-push-failure',

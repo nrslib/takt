@@ -85,6 +85,7 @@ describe('resolveTaskExecution', () => {
       isWorktree: false,
       autoPr: false,
       draftPr: false,
+      shouldPublishBranchToOrigin: false,
     });
   });
 
@@ -158,6 +159,7 @@ describe('resolveTaskExecution', () => {
       isWorktree: false,
       autoPr: true,
       draftPr: false,
+      shouldPublishBranchToOrigin: true,
       reportDirName: 'issue-task-123',
       issueNumber: 12345,
       taskPrompt: expect.stringContaining('Primary spec: `.takt/runs/issue-task-123/context/task/order.md`'),
@@ -479,6 +481,53 @@ describe('resolveTaskExecution', () => {
 
     expect(result.draftPr).toBe(true);
     expect(result.autoPr).toBe(true);
+    expect(result.shouldPublishBranchToOrigin).toBe(true);
+  });
+
+  it('should_publish_branch_to_origin: true が shouldPublishBranchToOrigin: true として解決される', async () => {
+    const root = createTempProjectDir();
+    const task = createTask({
+      data: {
+        task: 'Run publish task',
+        should_publish_branch_to_origin: true,
+      },
+    });
+
+    const result = await resolveTaskExecutionWithPiece(task, root);
+
+    expect(result.shouldPublishBranchToOrigin).toBe(true);
+  });
+
+  it('auto_pr: true のみでも shouldPublishBranchToOrigin: true として解決される', async () => {
+    const root = createTempProjectDir();
+    const task = createTask({
+      data: {
+        task: 'Run auto PR task',
+        auto_pr: true,
+      },
+    });
+
+    const result = await resolveTaskExecutionWithPiece(task, root);
+
+    expect(result.autoPr).toBe(true);
+    expect(result.shouldPublishBranchToOrigin).toBe(true);
+  });
+
+  it('auto_pr: true のとき should_publish_branch_to_origin: false でも shouldPublishBranchToOrigin は true（OR 解決・#557）', async () => {
+    const root = createTempProjectDir();
+    const task = createTask({
+      data: ({
+        task: 'Run task',
+        piece: 'default',
+        auto_pr: true,
+        should_publish_branch_to_origin: false,
+      } as unknown) as NonNullable<TaskInfo['data']>,
+    });
+
+    const result = await resolveTaskExecutionWithPiece(task, root);
+
+    expect(result.autoPr).toBe(true);
+    expect(result.shouldPublishBranchToOrigin).toBe(true);
   });
 });
 
@@ -488,32 +537,26 @@ describe('resolveTaskIssue', () => {
   });
 
   it('issueNumber が undefined の場合は undefined を返す', () => {
-    // When
     const result = resolveTaskIssue(undefined, '/tmp/test');
 
-    // Then
     expect(result).toBeUndefined();
   });
 
   it('CLI が利用不可の場合は undefined を返し、projectCwd を checkCliStatus に渡す', () => {
-    // Given
     const mockProvider = {
       checkCliStatus: vi.fn().mockReturnValue({ available: false, error: 'not installed' }),
       fetchIssue: vi.fn(),
     };
     mockGetGitProvider.mockReturnValue(mockProvider);
 
-    // When
     const result = resolveTaskIssue(42, '/my/project');
 
-    // Then
     expect(result).toBeUndefined();
     expect(mockProvider.checkCliStatus).toHaveBeenCalledWith('/my/project');
     expect(mockProvider.fetchIssue).not.toHaveBeenCalled();
   });
 
   it('fetchIssue が成功した場合は issue 配列を返す', () => {
-    // Given
     const issue = { number: 42, title: 'Test', body: 'Body', labels: [], comments: [] };
     const mockProvider = {
       checkCliStatus: vi.fn().mockReturnValue({ available: true }),
@@ -521,27 +564,22 @@ describe('resolveTaskIssue', () => {
     };
     mockGetGitProvider.mockReturnValue(mockProvider);
 
-    // When
     const result = resolveTaskIssue(42, '/my/project');
 
-    // Then
     expect(result).toEqual([issue]);
     expect(mockProvider.checkCliStatus).toHaveBeenCalledWith('/my/project');
     expect(mockProvider.fetchIssue).toHaveBeenCalledWith(42, '/my/project');
   });
 
   it('fetchIssue が例外を投げた場合は undefined を返す', () => {
-    // Given
     const mockProvider = {
       checkCliStatus: vi.fn().mockReturnValue({ available: true }),
       fetchIssue: vi.fn().mockImplementation(() => { throw new Error('API error'); }),
     };
     mockGetGitProvider.mockReturnValue(mockProvider);
 
-    // When
     const result = resolveTaskIssue(42, '/my/project');
 
-    // Then
     expect(result).toBeUndefined();
     expect(mockProvider.checkCliStatus).toHaveBeenCalledWith('/my/project');
     expect(mockProvider.fetchIssue).toHaveBeenCalledWith(42, '/my/project');

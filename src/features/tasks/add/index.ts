@@ -57,6 +57,7 @@ export async function saveTaskFile(
     baseBranch?: string;
     autoPr?: boolean;
     draftPr?: boolean;
+    shouldPublishBranchToOrigin?: boolean;
   },
 ): Promise<{ taskName: string; tasksFile: string }> {
   const runner = new TaskRunner(cwd);
@@ -77,6 +78,9 @@ export async function saveTaskFile(
     ...(options?.issue !== undefined && { issue: options.issue }),
     ...(options?.autoPr !== undefined && { auto_pr: options.autoPr }),
     ...(options?.draftPr !== undefined && { draft_pr: options.draftPr }),
+    ...(options?.shouldPublishBranchToOrigin !== undefined && {
+      should_publish_branch_to_origin: options.shouldPublishBranchToOrigin,
+    }),
   };
   const created = runner.addTask(taskContent, {
     ...config,
@@ -210,6 +214,7 @@ export async function addTask(
       branch: prReview.headRefName,
       baseBranch: prReview.baseRefName,
       autoPr: false,
+      shouldPublishBranchToOrigin: true,
     };
     const created = await saveTaskFile(cwd, taskContent, { piece, ...settings });
     displayTaskCreationResult(created, settings, piece);

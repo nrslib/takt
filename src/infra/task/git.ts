@@ -8,6 +8,9 @@ import { createLogger } from '../../shared/utils/index.js';
 
 const log = createLogger('git');
 
+export const NON_FAST_FORWARD_PUSH_HINT =
+  'Push rejected (non-fast-forward): remote is ahead of this branch. Sync with origin (fetch/pull or reset to remote) or recreate the worktree from the remote tip; a stale local branch as the clone source often causes this.';
+
 export interface StageAndCommitOptions {
   allowGitHooks?: boolean;
   allowGitFilters?: boolean;
@@ -112,15 +115,30 @@ export function checkoutBranch(cwd: string, branch: string): void {
   execFileSync('git', ['checkout', branch], { cwd, stdio: 'pipe' });
 }
 
+function throwPushFailureWithStderr(err: unknown, extraHint: string): never {
+  const stderr = ((err as { stderr?: Buffer }).stderr ?? Buffer.alloc(0)).toString();
+  const base = err instanceof Error ? err.message : String(err);
+  if (stderr && /non-fast-forward/i.test(stderr)) {
+    throw new Error(
+      `${base}\n${stderr.trim()}\n${extraHint}`,
+    );
+  }
+  throw err;
+}
+
 /**
  * Throws on failure.
  */
 export function pushBranch(cwd: string, branch: string): void {
   log.info('Pushing branch to origin', { branch });
-  execFileSync('git', ['push', 'origin', branch], {
-    cwd,
-    stdio: 'pipe',
-  });
+  try {
+    execFileSync('git', ['push', 'origin', branch], {
+      cwd,
+      stdio: 'pipe',
+    });
+  } catch (err) {
+    throwPushFailureWithStderr(err, NON_FAST_FORWARD_PUSH_HINT);
+  }
 }
 
 /**
@@ -128,8 +146,12 @@ export function pushBranch(cwd: string, branch: string): void {
  */
 export function pushHeadToOriginBranch(cwd: string, branch: string): void {
   log.info('Pushing HEAD to origin branch', { branch });
-  execFileSync('git', ['push', 'origin', `HEAD:refs/heads/${branch}`], {
-    cwd,
-    stdio: 'pipe',
-  });
+  try {
+    execFileSync('git', ['push', 'origin', `HEAD:refs/heads/${branch}`], {
+      cwd,
+      stdio: 'pipe',
+    });
+  } catch (err) {
+    throwPushFailureWithStderr(err, NON_FAST_FORWARD_PUSH_HINT);
+  }
 }

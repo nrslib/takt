@@ -100,14 +100,26 @@ export class CloneManager {
       { path: clonePath, branch }
     );
 
-    if (localBranchExists(projectDir, branch)) {
-      cloneAndIsolate(projectDir, clonePath, branch);
-    } else if (remoteBranchExists(projectDir, branch)) {
+    try {
+      execFileSync('git', ['fetch', 'origin', branch], {
+        cwd: projectDir,
+        stdio: 'pipe',
+      });
+    } catch (err) {
+      log.info('Failed to prefetch branch from origin, continuing', {
+        branch,
+        error: String(err),
+      });
+    }
+
+    if (remoteBranchExists(projectDir, branch)) {
       cloneAndIsolate(projectDir, clonePath);
       execFileSync('git', ['fetch', projectDir, `refs/remotes/origin/${branch}:refs/heads/${branch}`], {
         cwd: clonePath, stdio: 'pipe',
       });
       execFileSync('git', ['checkout', branch], { cwd: clonePath, stdio: 'pipe' });
+    } else if (localBranchExists(projectDir, branch)) {
+      cloneAndIsolate(projectDir, clonePath, branch);
     } else {
       const { branch: baseBranch, fetchedCommit } = CloneManager.resolveBaseBranch(projectDir, options.baseBranch);
       cloneAndIsolate(projectDir, clonePath, baseBranch);
