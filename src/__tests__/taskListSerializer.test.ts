@@ -68,4 +68,63 @@ describe('serializeTaskListItemForJson', () => {
     expect(serializedData).not.toHaveProperty('start_movement');
     expect(serializedFailure).not.toHaveProperty('movement');
   });
+
+  it('maps should_publish_branch_to_origin true into json data', () => {
+    const task: TaskListItem = {
+      kind: 'pending',
+      name: 'pr-branch-task',
+      createdAt: '2026-04-03T00:00:00.000Z',
+      filePath: '/tmp/.takt/tasks/pr.yaml',
+      content: 'body',
+      data: {
+        task: 'do work',
+        should_publish_branch_to_origin: true,
+      },
+    };
+
+    const serialized = serializeTaskListItemForJson(task);
+
+    expect(serialized.data).toMatchObject({
+      task: 'do work',
+      should_publish_branch_to_origin: true,
+    });
+  });
+
+  it('maps should_publish_branch_to_origin false into json data', () => {
+    const task: TaskListItem = {
+      kind: 'pending',
+      name: 'local-only',
+      createdAt: '2026-04-03T00:00:00.000Z',
+      filePath: '/tmp/.takt/tasks/local.yaml',
+      content: 'body',
+      data: {
+        task: 'local work',
+        should_publish_branch_to_origin: false,
+      },
+    };
+
+    const serialized = serializeTaskListItemForJson(task);
+
+    expect(serialized.data).toMatchObject({
+      task: 'local work',
+      should_publish_branch_to_origin: false,
+    });
+  });
+
+  it('leaves should_publish_branch_to_origin unset in json data when omitted on task', () => {
+    const task: TaskListItem = {
+      kind: 'pending',
+      name: 'default-publish-flag',
+      createdAt: '2026-04-03T00:00:00.000Z',
+      filePath: '/tmp/.takt/tasks/default.yaml',
+      content: 'body',
+      data: {
+        task: 'unspecified flag',
+      },
+    };
+
+    const serialized = serializeTaskListItemForJson(task);
+
+    expect(serialized.data?.should_publish_branch_to_origin).toBeUndefined();
+  });
 });

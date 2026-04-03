@@ -50,6 +50,7 @@ function buildTaskFileData(task: TaskRecord, content: string): TaskFileData {
     retry_note: task.retry_note,
     auto_pr: task.auto_pr,
     draft_pr: task.draft_pr,
+    should_publish_branch_to_origin: task.should_publish_branch_to_origin,
     exceeded_max_movements: task.exceeded_max_movements,
     exceeded_current_iteration: task.exceeded_current_iteration,
   });

@@ -51,6 +51,7 @@ export interface ResolvedTaskExecution {
   retryNote?: string;
   autoPr: boolean;
   draftPr: boolean;
+  shouldPublishBranchToOrigin: boolean;
   issueNumber?: number;
   maxMovementsOverride?: number;
   initialIterationOverride?: number;
@@ -140,7 +141,6 @@ export async function resolveTaskExecution(
 
   if (data.worktree) {
     throwIfAborted(abortSignal);
-    // baseBranch resolution is only needed to create a new branch; for existing branches it's just metadata.
     const targetBranch = data.branch;
     const needsBaseBranch = !targetBranch || !branchExists(defaultCwd, targetBranch);
     baseBranch = needsBaseBranch
@@ -190,6 +190,8 @@ export async function resolveTaskExecution(
 
   const autoPr = data.auto_pr ?? resolvePieceConfigValue(defaultCwd, 'autoPr') ?? false;
   const draftPr = data.draft_pr ?? resolvePieceConfigValue(defaultCwd, 'draftPr') ?? false;
+  const shouldPublishBranchToOrigin =
+    normalizedData.should_publish_branch_to_origin === true || autoPr;
 
   return {
     execCwd,
@@ -197,6 +199,7 @@ export async function resolveTaskExecution(
     isWorktree,
     autoPr,
     draftPr,
+    shouldPublishBranchToOrigin,
     ...(taskPrompt ? { taskPrompt } : {}),
     ...(reportDirName ? { reportDirName } : {}),
     ...(branch ? { branch } : {}),

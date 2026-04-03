@@ -126,55 +126,45 @@ describe('cloneAndIsolate git config propagation', () => {
   }
 
   it('should propagate user.name and user.email from source repo to clone', () => {
-    // Given: source repo has local user.name and user.email
     const configSetCalls = setupMock({
       'user.name': 'Test User',
       'user.email': 'test@example.com',
     });
 
-    // When: creating a shared clone
     createSharedClone('/project', {
       worktree: '/tmp/clone-dest',
       taskSlug: 'test-task',
     });
 
-    // Then: both user.name and user.email are set on the clone
     expect(configSetCalls).toContainEqual({ key: 'user.name', value: 'Test User' });
     expect(configSetCalls).toContainEqual({ key: 'user.email', value: 'test@example.com' });
   });
 
   it('should skip config propagation when source repo has no local user config', () => {
-    // Given: source repo has no local user.name or user.email
     const configSetCalls = setupMock({});
 
-    // When: creating a shared clone
     createSharedClone('/project', {
       worktree: '/tmp/clone-dest',
       taskSlug: 'test-task',
     });
 
-    // Then: no git config set calls are made for user settings
     expect(configSetCalls).toHaveLength(0);
   });
 
   it('should propagate only user.name when user.email is not set', () => {
-    // Given: source repo has only user.name
     const configSetCalls = setupMock({
       'user.name': 'Test User',
     });
 
-    // When: creating a shared clone
     createSharedClone('/project', {
       worktree: '/tmp/clone-dest',
       taskSlug: 'test-task',
     });
 
-    // Then: only user.name is set on the clone
     expect(configSetCalls).toEqual([{ key: 'user.name', value: 'Test User' }]);
   });
 
   it('should propagate git config when using createTempCloneForBranch', () => {
-    // Given: source repo has local user config
     const configSetCalls = setupMock({
       'user.name': 'Temp User',
       'user.email': 'temp@example.com',
@@ -190,10 +180,8 @@ describe('cloneAndIsolate git config propagation', () => {
       return originalImpl(cmd, args, opts);
     });
 
-    // When: creating a temp clone for a branch
     createTempCloneForBranch('/project', 'existing-branch');
 
-    // Then: git config is propagated
     expect(configSetCalls).toContainEqual({ key: 'user.name', value: 'Temp User' });
     expect(configSetCalls).toContainEqual({ key: 'user.email', value: 'temp@example.com' });
   });
@@ -241,69 +229,55 @@ describe('branch and worktree path formatting with issue numbers', () => {
   }
 
   it('should format branch as takt/{issue}/{slug} when issue number is provided', () => {
-    // Given: issue number 99 with slug
     setupMockForPathTest();
 
-    // When
     const result = createSharedClone('/project', {
       worktree: true,
       taskSlug: 'fix-login-timeout',
       issueNumber: 99,
     });
 
-    // Then: branch should use issue format
     expect(result.branch).toBe('takt/99/fix-login-timeout');
   });
 
   it('should format branch as takt/{timestamp}-{slug} when no issue number', () => {
-    // Given: no issue number
     setupMockForPathTest();
 
-    // When
     const result = createSharedClone('/project', {
       worktree: true,
       taskSlug: 'regular-task',
     });
 
-    // Then: branch should use timestamp format (13 chars: 8 digits + T + 4 digits)
     expect(result.branch).toMatch(/^takt\/\d{8}T\d{4}-regular-task$/);
   });
 
   it('should format worktree path as {timestamp}-{issue}-{slug} when issue number is provided', () => {
-    // Given: issue number 99 with slug
     setupMockForPathTest();
 
-    // When
     const result = createSharedClone('/project', {
       worktree: true,
       taskSlug: 'fix-bug',
       issueNumber: 99,
     });
 
-    // Then: path should include issue number (timestamp: 8 digits + T + 4 digits)
     expect(result.path).toMatch(/\/\d{8}T\d{4}-99-fix-bug$/);
   });
 
   it('should format worktree path as {timestamp}-{slug} when no issue number', () => {
-    // Given: no issue number
     setupMockForPathTest();
 
-    // When
     const result = createSharedClone('/project', {
       worktree: true,
       taskSlug: 'regular-task',
     });
 
-    // Then: path should NOT include issue number (timestamp: 8 digits + T + 4 digits)
     expect(result.path).toMatch(/\/\d{8}T\d{4}-regular-task$/);
     expect(result.path).not.toMatch(/-\d+-/);
   });
 
   it('should use custom branch when provided, ignoring issue number', () => {
-    // Given: custom branch with issue number
     setupMockForPathTest();
 
-    // When
     const result = createSharedClone('/project', {
       worktree: true,
       taskSlug: 'task',
@@ -311,45 +285,37 @@ describe('branch and worktree path formatting with issue numbers', () => {
       branch: 'custom-branch-name',
     });
 
-    // Then: custom branch takes precedence
     expect(result.branch).toBe('custom-branch-name');
   });
 
   it('should use custom worktree path when provided, ignoring issue formatting', () => {
-    // Given: custom path with issue number
     setupMockForPathTest();
 
-    // When
     const result = createSharedClone('/project', {
       worktree: '/custom/path/to/worktree',
       taskSlug: 'task',
       issueNumber: 99,
     });
 
-    // Then: custom path takes precedence
     expect(result.path).toBe('/custom/path/to/worktree');
   });
 
   it('should fall back to timestamp-only format when issue number provided but slug is empty', () => {
-    // Given: issue number but taskSlug produces empty string after slugify
     setupMockForPathTest();
 
-    // When
     const result = createSharedClone('/project', {
       worktree: true,
       taskSlug: '', // empty slug
       issueNumber: 99,
     });
 
-    // Then: falls back to timestamp format (issue number not included due to empty slug)
     expect(result.branch).toMatch(/^takt\/\d{8}T\d{4}$/);
     expect(result.path).toMatch(/\/\d{8}T\d{4}$/);
   });
 });
 
 describe('resolveBaseBranch', () => {
-  it('should not fetch when auto_fetch is disabled (default)', () => {
-    // Given: auto_fetch is off (default), HEAD is on main
+  it('should prefetch resolved implicit branch on project before clone when auto_fetch is disabled', () => {
     const fetchCalls: string[][] = [];
 
     mockExecFileSync.mockImplementation((_cmd, args) => {
@@ -375,18 +341,18 @@ describe('resolveBaseBranch', () => {
       return Buffer.from('');
     });
 
-    // When
     createSharedClone('/project', {
       worktree: true,
       taskSlug: 'test-no-fetch',
     });
 
-    // Then: no fetch was performed
-    expect(fetchCalls).toHaveLength(0);
+    expect(fetchCalls.length).toBeGreaterThanOrEqual(1);
+    expect(fetchCalls[0]![0]).toBe('fetch');
+    expect(fetchCalls[0]![1]).toBe('origin');
+    expect(fetchCalls[0]![2]).toMatch(/^takt\/\d{8}T\d{4}-test-no-fetch$/);
   });
 
   it('should use remote default branch as base when no base_branch config', () => {
-    // Given: remote default branch is develop (via symbolic-ref)
     const cloneCalls: string[][] = [];
 
     mockExecFileSync.mockImplementation((_cmd, args) => {
@@ -414,13 +380,11 @@ describe('resolveBaseBranch', () => {
       return Buffer.from('');
     });
 
-    // When
     createSharedClone('/project', {
       worktree: true,
       taskSlug: 'use-default-branch',
     });
 
-    // Then: clone was called with --branch develop (remote default branch, not current branch)
     expect(cloneCalls).toHaveLength(1);
     expect(cloneCalls[0]).toContain('--branch');
     expect(cloneCalls[0]).toContain('develop');
@@ -522,7 +486,6 @@ describe('resolveBaseBranch', () => {
   });
 
   it('should continue clone creation when fetch fails (network error)', () => {
-    // Given: fetch throws (no network)
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
 
@@ -543,7 +506,6 @@ describe('resolveBaseBranch', () => {
       return Buffer.from('');
     });
 
-    // When/Then: should not throw, clone still created
     const result = createSharedClone('/project', {
       worktree: true,
       taskSlug: 'offline-task',
@@ -553,7 +515,6 @@ describe('resolveBaseBranch', () => {
   });
 
   it('should also resolve base branch before createTempCloneForBranch', () => {
-    // Given
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
 
@@ -569,7 +530,6 @@ describe('resolveBaseBranch', () => {
       return Buffer.from('');
     });
 
-    // When/Then: should not throw
     const result = createTempCloneForBranch('/project', 'existing-branch');
     expect(result.branch).toBe('existing-branch');
   });
@@ -675,7 +635,6 @@ describe('clone submodule arguments', () => {
 
 describe('branchExists remote tracking branch fallback', () => {
   it('should clone default branch and fetch remote ref when only remote tracking branch exists', () => {
-    // Given: local branch does not exist, but origin/<branch> does
     const cloneCalls: string[][] = [];
     const fetchCalls: string[][] = [];
     const checkoutCalls: string[][] = [];
@@ -713,31 +672,26 @@ describe('branchExists remote tracking branch fallback', () => {
       return Buffer.from('');
     });
 
-    // When
     const result = createSharedClone('/project', {
       worktree: '/tmp/clone-remote-branch',
       taskSlug: 'remote-branch-task',
       branch: 'feature/remote-only',
     });
 
-    // Then: branch is the requested branch name
     expect(result.branch).toBe('feature/remote-only');
 
-    // Then: cloneAndIsolate was called WITHOUT --branch (default branch clone)
     expect(cloneCalls).toHaveLength(1);
     expect(cloneCalls[0]).not.toContain('--branch');
 
-    // Then: fetch was called to bring the remote ref into the clone
-    expect(fetchCalls).toHaveLength(1);
-    expect(fetchCalls[0]).toContain('refs/remotes/origin/feature/remote-only:refs/heads/feature/remote-only');
+    expect(fetchCalls).toHaveLength(2);
+    expect(fetchCalls[0]).toEqual(['fetch', 'origin', 'feature/remote-only']);
+    expect(fetchCalls[1]).toContain('refs/remotes/origin/feature/remote-only:refs/heads/feature/remote-only');
 
-    // Then: checkout switches to the fetched branch
     expect(checkoutCalls).toHaveLength(1);
     expect(checkoutCalls[0]).toEqual(['checkout', 'feature/remote-only']);
   });
 
   it('should create new branch when neither local nor remote tracking branch exists', () => {
-    // Given: neither local nor remote tracking branch exists
     const cloneCalls: string[][] = [];
     const checkoutCalls: string[][] = [];
 
@@ -770,28 +724,88 @@ describe('branchExists remote tracking branch fallback', () => {
       return Buffer.from('');
     });
 
-    // When
     const result = createSharedClone('/project', {
       worktree: '/tmp/clone-no-branch',
       taskSlug: 'no-branch-task',
       branch: 'feature/brand-new',
     });
 
-    // Then: branch is the requested branch name
     expect(result.branch).toBe('feature/brand-new');
 
-    // Then: cloneAndIsolate was called with --branch main (base branch)
     expect(cloneCalls).toHaveLength(1);
     expect(cloneCalls[0]).toContain('--branch');
     expect(cloneCalls[0]).toContain('main');
 
-    // Then: checkout -b was called to create the new branch
     expect(checkoutCalls).toHaveLength(1);
     expect(checkoutCalls[0]).toEqual(['checkout', '-b', 'feature/brand-new']);
   });
 
-  it('should prefer local branch over remote tracking branch', () => {
-    // Given: local branch exists
+  it('should prefer remote tracking branch over local when both exist (remote authoritative)', () => {
+    const cloneCalls: string[][] = [];
+    const fetchCalls: Array<{ cwd: string | undefined; args: string[] }> = [];
+    const checkoutCalls: string[][] = [];
+
+    mockExecFileSync.mockImplementation((_cmd, args, opts) => {
+      const argsArr = args as string[];
+      const cwd = (opts as { cwd?: string } | undefined)?.cwd;
+
+      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--abbrev-ref' && argsArr[2] === 'HEAD') {
+        return 'main\n';
+      }
+
+      if (argsArr[0] === 'fetch') {
+        fetchCalls.push({ cwd, args: [...argsArr] });
+        return Buffer.from('');
+      }
+
+      if (argsArr[0] === 'show-ref') {
+        const ref = argsArr[3];
+        if (typeof ref === 'string' && ref.startsWith('refs/heads/')) {
+          return Buffer.from('');
+        }
+        if (typeof ref === 'string' && ref.startsWith('refs/remotes/origin/')) {
+          return Buffer.from('');
+        }
+        throw new Error('branch not found');
+      }
+
+      if (argsArr[0] === 'clone') {
+        cloneCalls.push([...argsArr]);
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'remote') return Buffer.from('');
+      if (argsArr[0] === 'config') {
+        if (argsArr[1] === '--local') throw new Error('not set');
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'checkout') {
+        checkoutCalls.push([...argsArr]);
+        return Buffer.from('');
+      }
+
+      return Buffer.from('');
+    });
+
+    const result = createSharedClone('/project', {
+      worktree: '/tmp/clone-remote-wins',
+      taskSlug: 'remote-wins-task',
+      branch: 'feature/both-local-and-remote',
+    });
+
+    expect(result.branch).toBe('feature/both-local-and-remote');
+    expect(cloneCalls).toHaveLength(1);
+    expect(cloneCalls[0]).not.toContain('feature/both-local-and-remote');
+    const fetchIntoClone = fetchCalls.filter(
+      (f) => f.cwd === '/tmp/clone-remote-wins' && f.args[0] === 'fetch',
+    );
+    expect(fetchIntoClone.length).toBeGreaterThanOrEqual(1);
+    expect(fetchIntoClone[0]!.args.join(' ')).toContain('refs/remotes/origin/feature/both-local-and-remote');
+    expect(checkoutCalls.some((c) => c[0] === 'checkout' && c[1] === 'feature/both-local-and-remote')).toBe(
+      true,
+    );
+  });
+
+  it('should use local branch only when remote tracking branch is missing', () => {
     const cloneCalls: string[][] = [];
     const checkoutCalls: string[][] = [];
 
@@ -802,13 +816,20 @@ describe('branchExists remote tracking branch fallback', () => {
         return 'main\n';
       }
 
-      // Local branch exists (first show-ref call succeeds)
-      if (argsArr[0] === 'show-ref') {
+      if (argsArr[0] === 'fetch') {
         return Buffer.from('');
       }
 
+      if (argsArr[0] === 'show-ref') {
+        const ref = argsArr[3];
+        if (typeof ref === 'string' && ref.startsWith('refs/heads/')) {
+          return Buffer.from('');
+        }
+        throw new Error('branch not found');
+      }
+
       if (argsArr[0] === 'clone') {
-        cloneCalls.push(argsArr);
+        cloneCalls.push([...argsArr]);
         return Buffer.from('');
       }
       if (argsArr[0] === 'remote') return Buffer.from('');
@@ -817,38 +838,143 @@ describe('branchExists remote tracking branch fallback', () => {
         return Buffer.from('');
       }
       if (argsArr[0] === 'checkout') {
-        checkoutCalls.push(argsArr);
+        checkoutCalls.push([...argsArr]);
         return Buffer.from('');
       }
 
       return Buffer.from('');
     });
 
-    // When
     const result = createSharedClone('/project', {
-      worktree: '/tmp/clone-local-branch',
-      taskSlug: 'local-branch-task',
-      branch: 'feature/local-exists',
+      worktree: '/tmp/clone-local-only',
+      taskSlug: 'local-only-task',
+      branch: 'feature/local-only',
     });
 
-    // Then: cloneAndIsolate was called with --branch feature/local-exists
-    expect(result.branch).toBe('feature/local-exists');
+    expect(result.branch).toBe('feature/local-only');
     expect(cloneCalls).toHaveLength(1);
     expect(cloneCalls[0]).toContain('--branch');
-    expect(cloneCalls[0]).toContain('feature/local-exists');
-
-    // Then: no checkout -b was called (branch already exists locally)
+    expect(cloneCalls[0]).toContain('feature/local-only');
     expect(checkoutCalls).toHaveLength(0);
+  });
+});
+
+describe('prefetch existing branch on origin before clone (#557)', () => {
+  it('should run fetch on project repo before clone when explicit branch is set (auto_fetch off)', () => {
+    const opSequence: string[] = [];
+
+    mockExecFileSync.mockImplementation((_cmd, args, opts) => {
+      const argsArr = args as string[];
+      const cwd = (opts as { cwd?: string } | undefined)?.cwd;
+
+      if (argsArr[0] === 'fetch' && cwd === '/project') {
+        opSequence.push('project-fetch');
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'clone') {
+        opSequence.push('clone');
+        return Buffer.from('');
+      }
+
+      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--abbrev-ref' && argsArr[2] === 'HEAD') {
+        return 'main\n';
+      }
+      if (argsArr[0] === 'remote') return Buffer.from('');
+      if (argsArr[0] === 'config') {
+        if (argsArr[1] === '--local') throw new Error('not set');
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'show-ref') {
+        const ref = argsArr[3];
+        if (typeof ref === 'string' && ref.startsWith('refs/remotes/origin/')) {
+          return Buffer.from('');
+        }
+        throw new Error('branch not found');
+      }
+      if (argsArr[0] === 'fetch') {
+        opSequence.push('other-fetch');
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'checkout') {
+        return Buffer.from('');
+      }
+
+      return Buffer.from('');
+    });
+
+    createSharedClone('/project', {
+      worktree: '/tmp/prefetch-test',
+      taskSlug: 'prefetch-slug',
+      branch: 'feature/prefetch-before-clone',
+    });
+
+    const projectFetchIdx = opSequence.indexOf('project-fetch');
+    const cloneIdx = opSequence.indexOf('clone');
+    expect(projectFetchIdx).toBeGreaterThanOrEqual(0);
+    expect(cloneIdx).toBeGreaterThanOrEqual(0);
+    expect(projectFetchIdx).toBeLessThan(cloneIdx);
+  });
+
+  it('should run fetch on project for issue/slug resolved branch before clone (auto_fetch off)', () => {
+    const opSequence: string[] = [];
+
+    mockExecFileSync.mockImplementation((_cmd, args, opts) => {
+      const argsArr = args as string[];
+      const cwd = (opts as { cwd?: string } | undefined)?.cwd;
+
+      if (argsArr[0] === 'fetch' && cwd === '/project') {
+        opSequence.push(`project-fetch:${argsArr[2]}`);
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'clone') {
+        opSequence.push('clone');
+        return Buffer.from('');
+      }
+
+      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--abbrev-ref' && argsArr[2] === 'HEAD') {
+        return 'main\n';
+      }
+      if (argsArr[0] === 'remote') return Buffer.from('');
+      if (argsArr[0] === 'config') {
+        if (argsArr[1] === '--local') throw new Error('not set');
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'show-ref') {
+        const ref = argsArr[3];
+        if (typeof ref === 'string' && ref.startsWith('refs/remotes/origin/')) {
+          return Buffer.from('');
+        }
+        throw new Error('branch not found');
+      }
+      if (argsArr[0] === 'fetch') {
+        opSequence.push('other-fetch');
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'checkout') {
+        return Buffer.from('');
+      }
+
+      return Buffer.from('');
+    });
+
+    createSharedClone('/project', {
+      worktree: '/tmp/implicit-issue-prefetch',
+      taskSlug: 'implicit-slug',
+      issueNumber: 42,
+    });
+
+    const prefetch = opSequence.find((s) => s.startsWith('project-fetch:'));
+    expect(prefetch).toBe('project-fetch:takt/42/implicit-slug');
+    const cloneIdx = opSequence.indexOf('clone');
+    const prefetchIdx = opSequence.indexOf(prefetch!);
+    expect(prefetchIdx).toBeGreaterThanOrEqual(0);
+    expect(cloneIdx).toBeGreaterThanOrEqual(0);
+    expect(prefetchIdx).toBeLessThan(cloneIdx);
   });
 });
 
 describe('autoFetch: true — fetch, rev-parse origin/<branch>, reset --hard', () => {
   it('should run git fetch, resolve origin/<branch> commit hash, and reset --hard in the clone', () => {
-    // Given: autoFetch is enabled in global config.
-    // loadGlobalConfig() is called by resolveConfigValue for:
-    //   1. worktreeDir (resolveClonePath)
-    //   2. baseBranch (resolveBaseBranch)
-    //   3. autoFetch (resolveBaseBranch)
     vi.mocked(loadGlobalConfig)
       .mockReturnValueOnce({ autoFetch: true } as ReturnType<typeof loadGlobalConfig>)
       .mockReturnValueOnce({ autoFetch: true } as ReturnType<typeof loadGlobalConfig>)
@@ -906,21 +1032,20 @@ describe('autoFetch: true — fetch, rev-parse origin/<branch>, reset --hard', (
       return Buffer.from('');
     });
 
-    // When
     createSharedClone('/project-autofetch-test', {
       worktree: true,
       taskSlug: 'autofetch-task',
     });
 
-    // Then: git fetch origin was called exactly once
-    expect(fetchCalls).toHaveLength(1);
-    expect(fetchCalls[0]).toEqual(['fetch', 'origin']);
+    expect(fetchCalls).toHaveLength(2);
+    expect(fetchCalls[0]![0]).toBe('fetch');
+    expect(fetchCalls[0]![1]).toBe('origin');
+    expect(fetchCalls[0]![2]).toMatch(/^takt\/\d{8}T\d{4}-autofetch-task$/);
+    expect(fetchCalls[1]).toEqual(['fetch', 'origin']);
 
-    // Then: remote tracking ref for the base branch was resolved
     expect(revParseOriginCalls).toHaveLength(1);
     expect(revParseOriginCalls[0]).toEqual(['rev-parse', 'origin/main']);
 
-    // Then: clone was reset to the fetched commit
     expect(resetCalls).toHaveLength(1);
     expect(resetCalls[0]).toEqual(['reset', '--hard', 'abc123def456']);
   });

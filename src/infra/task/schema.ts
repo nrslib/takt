@@ -93,6 +93,7 @@ const TaskExecutionConfigObjectSchema = z.object({
   retry_note: z.string().optional(),
   auto_pr: z.boolean().optional(),
   draft_pr: z.boolean().optional(),
+  should_publish_branch_to_origin: z.boolean().optional(),
   exceeded_max_movements: z.number().int().positive().optional(),
   exceeded_current_iteration: z.number().int().min(0).optional(),
 });

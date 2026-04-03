@@ -160,6 +160,21 @@ describe('saveTaskFile', () => {
     expect(task.draft_pr).toBe(true);
   });
 
+  it('should persist should_publish_branch_to_origin when shouldPublishBranchToOrigin is true', async () => {
+    await saveTaskFile(testDir, 'PR fix task', {
+      worktree: true,
+      branch: 'takt/1/fix',
+      autoPr: false,
+      shouldPublishBranchToOrigin: true,
+    });
+
+    const task = loadTasks(testDir).tasks[0]!;
+    expect(task.should_publish_branch_to_origin).toBe(true);
+    expect(task.worktree).toBe(true);
+    expect(task.branch).toBe('takt/1/fix');
+    expect(task.auto_pr).toBe(false);
+  });
+
   it('should generate unique names on duplicates', async () => {
     const first = await saveTaskFile(testDir, 'Same title');
     const second = await saveTaskFile(testDir, 'Same title');

@@ -274,6 +274,7 @@ describe('addTask', () => {
     expect(task.branch).toBe('feature/fix-auth-bug');
     expect(task.auto_pr).toBe(false);
     expect(task.worktree).toBe(true);
+    expect(task.should_publish_branch_to_origin).toBe(true);
     expect(task.draft_pr).toBeUndefined();
     expect(readOrderContent(testDir, task.task_dir)).toContain(formattedTask);
   });
@@ -288,6 +289,7 @@ describe('addTask', () => {
 
     const task = loadTasks(testDir).tasks[0]!;
     expect(task.base_branch).toBe('release/main');
+    expect(task.should_publish_branch_to_origin).toBe(true);
   });
 
   it('should not create a PR task when PR has no review comments', async () => {
