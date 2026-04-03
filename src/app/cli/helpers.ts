@@ -76,8 +76,8 @@ export function resolveWorkflowCliOption(opts: Record<string, unknown>): string 
     throw new Error('--workflow and --piece cannot be used together with different values');
   }
 
-  if (workflow === undefined && piece !== undefined) {
-    warnLegacyConfigKey(new Set(), 'piece', 'workflow');
+  if (typeof piece === 'string') {
+    warnLegacyConfigKey(new Set(), 'piece', 'workflow', 'CLI');
   }
 
   return workflow ?? piece;

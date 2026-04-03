@@ -72,13 +72,13 @@ function normalizeAliasedTaskConfig(input: unknown): unknown {
   }
 
   const deprecationSeen = new Set<string>();
-  if ('piece' in record && !('workflow' in record)) {
+  if ('piece' in record) {
     warnLegacyConfigKey(deprecationSeen, 'piece', 'workflow');
   }
-  if ('start_movement' in record && !('start_step' in record)) {
+  if ('start_movement' in record) {
     warnLegacyConfigKey(deprecationSeen, 'start_movement', 'start_step');
   }
-  if ('exceeded_max_movements' in record && !('exceeded_max_steps' in record)) {
+  if ('exceeded_max_movements' in record) {
     warnLegacyConfigKey(deprecationSeen, 'exceeded_max_movements', 'exceeded_max_steps');
   }
 
@@ -86,29 +86,51 @@ function normalizeAliasedTaskConfig(input: unknown): unknown {
   const startMovement = resolveTaskStartMovementValue(record);
   const exceededMax = resolveExceededMaxValue(record);
 
-  return {
-    ...record,
-    ...(workflow !== undefined ? { piece: workflow } : {}),
-    ...(startMovement !== undefined ? { start_movement: startMovement } : {}),
-    ...(exceededMax !== undefined ? { exceeded_max_movements: exceededMax } : {}),
-  };
+  const hadExceededMovementsKey = Object.prototype.hasOwnProperty.call(record, 'exceeded_max_movements');
+  const hadExceededStepsKey = Object.prototype.hasOwnProperty.call(record, 'exceeded_max_steps');
+
+  const next: Record<string, unknown> = { ...record };
+  delete next.exceeded_max_movements;
+  delete next.exceeded_max_steps;
+  if (exceededMax !== undefined) {
+    next.exceeded_max_steps = exceededMax;
+  } else if (hadExceededMovementsKey) {
+    next.exceeded_max_movements = record.exceeded_max_movements;
+  } else if (hadExceededStepsKey) {
+    next.exceeded_max_steps = record.exceeded_max_steps;
+  }
+  if (workflow !== undefined) {
+    next.piece = workflow;
+  }
+  if (startMovement !== undefined) {
+    next.start_movement = startMovement;
+  }
+
+  return next;
 }
 
 function serializeTaskConfig(record: Record<string, unknown>): Record<string, unknown> {
   const serialized = { ...record };
   const piece = getStringField(serialized, 'piece') ?? getStringField(serialized, 'workflow');
   const startMovement = getStringField(serialized, 'start_movement') ?? getStringField(serialized, 'start_step');
+  const exceededMax =
+    getPositiveIntField(serialized, 'exceeded_max_steps') ?? getPositiveIntField(serialized, 'exceeded_max_movements');
 
   delete serialized.piece;
   delete serialized.workflow;
   delete serialized.start_movement;
   delete serialized.start_step;
+  delete serialized.exceeded_max_movements;
+  delete serialized.exceeded_max_steps;
 
   if (piece !== undefined) {
     serialized.workflow = piece;
   }
   if (startMovement !== undefined) {
     serialized.start_step = startMovement;
+  }
+  if (exceededMax !== undefined) {
+    serialized.exceeded_max_steps = exceededMax;
   }
 
   return serialized;
@@ -137,11 +159,11 @@ const TaskExecutionConfigObjectSchema = z.object({
 
 function stripTaskAliases<T extends Record<string, unknown>>(
   config: T,
-): Omit<T, 'workflow' | 'start_step' | 'exceeded_max_steps'> {
+): Omit<T, 'workflow' | 'start_step' | 'exceeded_max_movements'> {
   const canonical = { ...config };
   delete canonical.workflow;
   delete canonical.start_step;
-  delete canonical.exceeded_max_steps;
+  delete canonical.exceeded_max_movements;
   return canonical;
 }
 
@@ -363,13 +385,13 @@ export const TaskRecordSchema = z.preprocess(
         message: 'Exceeded task must not have owner_pid.',
       });
     }
-    const hasExceededMax = value.exceeded_max_movements !== undefined;
+    const hasExceededMax = value.exceeded_max_steps !== undefined;
     const hasExceededIter = value.exceeded_current_iteration !== undefined;
     if (hasExceededMax !== hasExceededIter) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        path: ['exceeded_max_movements'],
-        message: 'exceeded_max_movements and exceeded_current_iteration must both be set or both be absent.',
+        path: ['exceeded_max_steps'],
+        message: 'exceeded_max_steps and exceeded_current_iteration must both be set or both be absent.',
       });
     }
   }

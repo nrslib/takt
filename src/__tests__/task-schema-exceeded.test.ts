@@ -3,7 +3,8 @@
  *
  * Covers:
  * - TaskRecordSchema cross-field validation for `exceeded` status
- * - TaskExecutionConfigSchema new fields: exceeded_max_movements, exceeded_current_iteration
+ * - TaskExecutionConfigSchema: legacy read aliases and canonical `exceeded_max_steps` on parsed output
+ * - serializeTaskRecord / serializeTasksFileData canonical write shape (PR #582)
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -11,6 +12,9 @@ import {
   TaskRecordSchema,
   TaskExecutionConfigSchema,
   TaskStatusSchema,
+  TasksFileSchema,
+  serializeTaskRecord,
+  serializeTasksFileData,
 } from '../infra/task/schema.js';
 
 function makeExceededRecord(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -89,10 +93,16 @@ describe('TaskExecutionConfigSchema - exceeded fields', () => {
     expect(() => TaskExecutionConfigSchema.parse({ exceeded_max_movements: 1.5 })).toThrow();
   });
 
-  it('should accept exceeded_max_steps as alias and strip it from output (#581)', () => {
+  it('should accept exceeded_max_steps and keep canonical exceed key on parsed output (PR #582)', () => {
     const parsed = TaskExecutionConfigSchema.parse({ exceeded_max_steps: 60 });
-    expect(parsed.exceeded_max_movements).toBe(60);
-    expect('exceeded_max_steps' in parsed).toBe(false);
+    expect(parsed.exceeded_max_steps).toBe(60);
+    expect('exceeded_max_movements' in parsed).toBe(false);
+  });
+
+  it('should accept legacy exceeded_max_movements and normalize to canonical on parsed output (PR #582)', () => {
+    const parsed = TaskExecutionConfigSchema.parse({ exceeded_max_movements: 60 });
+    expect(parsed.exceeded_max_steps).toBe(60);
+    expect('exceeded_max_movements' in parsed).toBe(false);
   });
 
   it('should reject when exceeded_max_steps and exceeded_max_movements disagree (#581)', () => {
@@ -170,6 +180,33 @@ describe('TaskRecordSchema - exceeded status', () => {
     it('should accept exceeded record with owner_pid explicitly null', () => {
       const record = makeExceededRecord({ owner_pid: null });
       expect(() => TaskRecordSchema.parse(record)).not.toThrow();
+    });
+  });
+
+  describe('serializeTaskRecord / serializeTasksFileData (canonical exceed)', () => {
+    beforeEach(() => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('Given an exceeded record parsed from disk-shaped input, When serializing for write, Then output uses exceeded_max_steps only', () => {
+      const parsed = TaskRecordSchema.parse(makeExceededRecord());
+      const out = serializeTaskRecord(parsed);
+
+      expect(out.exceeded_max_steps).toBe(60);
+      expect(out).not.toHaveProperty('exceeded_max_movements');
+    });
+
+    it('Given tasks file state, When serializing for write, Then each task omits exceeded_max_movements', () => {
+      const state = TasksFileSchema.parse({ tasks: [makeExceededRecord()] });
+      const out = serializeTasksFileData(state);
+
+      expect(out.tasks).toHaveLength(1);
+      expect(out.tasks[0]?.exceeded_max_steps).toBe(60);
+      expect(out.tasks[0]).not.toHaveProperty('exceeded_max_movements');
     });
   });
 

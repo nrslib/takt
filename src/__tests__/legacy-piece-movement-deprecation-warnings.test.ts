@@ -106,7 +106,7 @@ describe('legacy piece/movement deprecation warnings (#581)', () => {
       warnSpy.mockRestore();
     });
 
-    it('should not warn for enable_builtin_pieces when enable_builtin_workflows is also set (same input)', () => {
+    it('should warn for enable_builtin_pieces when enable_builtin_workflows is also set (PR #582: canonical does not suppress)', () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
       writeFileSync(
         testGlobalConfigPath,
@@ -116,11 +116,12 @@ describe('legacy piece/movement deprecation warnings (#581)', () => {
 
       GlobalConfigManager.getInstance().load();
 
-      expect(
-        messagesFromWarnSpy(warnSpy).some(
-          (m) => m.includes('enable_builtin_pieces') && m.startsWith('Deprecated:'),
-        ),
-      ).toBe(false);
+      expectSomeDeprecation(
+        warnSpy,
+        (m) =>
+          m.includes('enable_builtin_pieces')
+          && m.includes('enable_builtin_workflows'),
+      );
       warnSpy.mockRestore();
     });
 
@@ -143,7 +144,7 @@ describe('legacy piece/movement deprecation warnings (#581)', () => {
       warnSpy.mockRestore();
     });
 
-    it('should not warn for piece_categories_file when workflow_categories_file is also set to the same path', () => {
+    it('should warn for piece_categories_file when workflow_categories_file is also set to the same path (PR #582)', () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
       writeFileSync(
         testGlobalConfigPath,
@@ -156,11 +157,12 @@ describe('legacy piece/movement deprecation warnings (#581)', () => {
 
       GlobalConfigManager.getInstance().load();
 
-      expect(
-        messagesFromWarnSpy(warnSpy).some(
-          (m) => m.includes('piece_categories_file') && m.startsWith('Deprecated:'),
-        ),
-      ).toBe(false);
+      expectSomeDeprecation(
+        warnSpy,
+        (m) =>
+          m.includes('piece_categories_file')
+          && m.includes('workflow_categories_file'),
+      );
       warnSpy.mockRestore();
     });
 
@@ -198,7 +200,7 @@ describe('legacy piece/movement deprecation warnings (#581)', () => {
       warnSpy.mockRestore();
     });
 
-    it('should not deprecate notification_sound_events piece_complete when workflow_complete is also set', () => {
+    it('should warn for notification_sound_events piece_complete when workflow_complete is also set (PR #582)', () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
       writeFileSync(
         testGlobalConfigPath,
@@ -212,11 +214,10 @@ describe('legacy piece/movement deprecation warnings (#581)', () => {
 
       GlobalConfigManager.getInstance().load();
 
-      expect(
-        messagesFromWarnSpy(warnSpy).some(
-          (m) => m.includes('piece_complete') && m.startsWith('Deprecated:'),
-        ),
-      ).toBe(false);
+      expectSomeDeprecation(
+        warnSpy,
+        (m) => m.includes('piece_complete') && m.includes('workflow_complete'),
+      );
       warnSpy.mockRestore();
     });
 
@@ -604,7 +605,7 @@ describe('legacy piece/movement deprecation warnings (#581)', () => {
       warnSpy.mockRestore();
     });
 
-    it('should not warn for movements vs steps when both keys are present on raw input', () => {
+    it('should warn for movements vs steps when both keys are present on raw input (PR #582)', () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
       const raw = {
         name: 'wf-both-movements-steps',
@@ -615,16 +616,15 @@ describe('legacy piece/movement deprecation warnings (#581)', () => {
 
       normalizePieceConfig(raw, process.cwd());
 
-      expect(
-        messagesFromWarnSpy(warnSpy).some(
-          (m) =>
-            m.startsWith('Deprecated:')
-            && m.includes('movements')
-            && m.includes('steps')
-            && !m.includes('workflow_overrides')
-            && !m.includes('piece_overrides'),
-        ),
-      ).toBe(false);
+      expectSomeDeprecation(
+        warnSpy,
+        (m) =>
+          m.startsWith('Deprecated:')
+          && m.includes('movements')
+          && m.includes('steps')
+          && !m.includes('workflow_overrides')
+          && !m.includes('piece_overrides'),
+      );
       warnSpy.mockRestore();
     });
 
@@ -737,7 +737,7 @@ describe('legacy piece/movement deprecation warnings (#581)', () => {
       warnSpy.mockRestore();
     });
 
-    it('should not warn for root piece_categories when workflow_categories is also present', () => {
+    it('should warn for root piece_categories when workflow_categories is also present (PR #582)', () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
       warnLegacyCategoryYamlKeys(
         {
@@ -746,14 +746,12 @@ describe('legacy piece/movement deprecation warnings (#581)', () => {
         },
         new Set(),
       );
-      expect(
-        messagesFromWarnSpy(warnSpy).some(
-          (m) =>
-            m.startsWith('Deprecated:')
-            && m.includes('piece_categories')
-            && m.includes('workflow_categories'),
-        ),
-      ).toBe(false);
+      expectSomeDeprecation(
+        warnSpy,
+        (m) =>
+          m.includes('piece_categories')
+          && m.includes('workflow_categories'),
+      );
       warnSpy.mockRestore();
     });
   });
@@ -819,7 +817,7 @@ describe('legacy piece/movement deprecation warnings (#581)', () => {
       warnSpy.mockRestore();
     });
 
-    it('should not warn for piece when workflow is set to the same value', () => {
+    it('should warn for piece when workflow is set to the same value (PR #582)', () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
       TaskFileSchema.parse({
@@ -828,11 +826,10 @@ describe('legacy piece/movement deprecation warnings (#581)', () => {
         workflow: 'default',
       });
 
-      expect(
-        messagesFromWarnSpy(warnSpy).some(
-          (m) => m.includes('"piece"') && m.startsWith('Deprecated:'),
-        ),
-      ).toBe(false);
+      expectSomeDeprecation(
+        warnSpy,
+        (m) => m.includes('piece') && m.includes('workflow'),
+      );
       warnSpy.mockRestore();
     });
 
@@ -848,7 +845,7 @@ describe('legacy piece/movement deprecation warnings (#581)', () => {
       warnSpy.mockRestore();
     });
 
-    it('should not warn for start_movement when start_step is set to the same value', () => {
+    it('should warn for start_movement when start_step is set to the same value (PR #582)', () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
       TaskFileSchema.parse({
@@ -857,11 +854,10 @@ describe('legacy piece/movement deprecation warnings (#581)', () => {
         start_step: 'plan',
       });
 
-      expect(
-        messagesFromWarnSpy(warnSpy).some(
-          (m) => m.includes('start_movement') && m.startsWith('Deprecated:'),
-        ),
-      ).toBe(false);
+      expectSomeDeprecation(
+        warnSpy,
+        (m) => m.includes('start_movement') && m.includes('start_step'),
+      );
       warnSpy.mockRestore();
     });
 
@@ -871,6 +867,23 @@ describe('legacy piece/movement deprecation warnings (#581)', () => {
       TaskFileSchema.parse({
         task: 'do work',
         exceeded_max_movements: 12,
+        exceeded_current_iteration: 3,
+      });
+
+      expectSomeDeprecation(
+        warnSpy,
+        (m) => m.includes('exceeded_max_movements') && m.includes('exceeded_max_steps'),
+      );
+      warnSpy.mockRestore();
+    });
+
+    it('should warn when task data sets exceeded_max_movements even when exceeded_max_steps matches (PR #582)', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      TaskFileSchema.parse({
+        task: 'do work',
+        exceeded_max_movements: 12,
+        exceeded_max_steps: 12,
         exceeded_current_iteration: 3,
       });
 
@@ -945,6 +958,19 @@ describe('legacy piece/movement deprecation warnings (#581)', () => {
           (m) => m.includes('--piece') || (m.includes('piece') && m.startsWith('Deprecated:')),
         ),
       ).toBe(false);
+      warnSpy.mockRestore();
+    });
+
+    it('should warn when opts use piece together with workflow at the same value (PR #582)', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      const resolved = resolveWorkflowCliOption({ piece: 'default', workflow: 'default' });
+
+      expect(resolved).toBe('default');
+      expectSomeDeprecation(
+        warnSpy,
+        (m) => m.includes('piece') && m.includes('workflow'),
+      );
       warnSpy.mockRestore();
     });
   });

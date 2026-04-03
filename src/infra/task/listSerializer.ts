@@ -12,7 +12,7 @@ export interface JsonTaskData {
   retry_note?: string;
   auto_pr?: boolean;
   draft_pr?: boolean;
-  exceeded_max_movements?: number;
+  exceeded_max_steps?: number;
   exceeded_current_iteration?: number;
 }
 
@@ -38,7 +38,7 @@ export interface JsonTaskListItem {
   completedAt?: string;
   ownerPid?: number;
   issueNumber?: number;
-  exceededMaxMovements?: number;
+  exceededMaxSteps?: number;
   exceededCurrentIteration?: number;
 }
 
@@ -58,7 +58,7 @@ function serializeTaskData(data: TaskFileData | undefined): JsonTaskData | undef
     retry_note: data.retry_note,
     auto_pr: data.auto_pr,
     draft_pr: data.draft_pr,
-    exceeded_max_movements: data.exceeded_max_movements,
+    exceeded_max_steps: data.exceeded_max_steps,
     exceeded_current_iteration: data.exceeded_current_iteration,
   };
 }
@@ -92,7 +92,7 @@ export function serializeTaskListItemForJson(task: TaskListItem): JsonTaskListIt
     completedAt: task.completedAt,
     ownerPid: task.ownerPid,
     issueNumber: task.issueNumber,
-    exceededMaxMovements: task.exceededMaxMovements,
+    exceededMaxSteps: task.exceededMaxSteps,
     exceededCurrentIteration: task.exceededCurrentIteration,
   };
 }

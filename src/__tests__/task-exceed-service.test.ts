@@ -19,8 +19,8 @@ function writeExceededRecord(testDir: string, overrides: Record<string, unknown>
     started_at: '2026-02-09T00:01:00.000Z',
     completed_at: '2026-02-09T00:05:00.000Z',
     owner_pid: null,
-    start_movement: 'implement',
-    exceeded_max_movements: 60,
+    start_step: 'implement',
+    exceeded_max_steps: 60,
     exceeded_current_iteration: 30,
     ...overrides,
   };
@@ -134,7 +134,7 @@ describe('TaskRunner - exceedTask', () => {
     expect(exceededTask.start_step).toBe('reviewers');
   });
 
-  it('should record exceeded_max_movements', () => {
+  it('should record exceeded_max_steps in tasks.yaml', () => {
     runner.addTask('Task A');
     runner.claimNextTasks(1);
     const taskName = (loadTasksFile(testDir).tasks[0] as Record<string, unknown>).name as string;
@@ -147,7 +147,7 @@ describe('TaskRunner - exceedTask', () => {
 
     const afterFile = loadTasksFile(testDir);
     const exceededTask = afterFile.tasks[0]!;
-    expect(exceededTask.exceeded_max_movements).toBe(60);
+    expect(exceededTask.exceeded_max_steps).toBe(60);
   });
 
   it('should record exceeded_current_iteration', () => {
@@ -309,7 +309,7 @@ describe('TaskRunner - requeueExceededTask', () => {
     expect(file.tasks[0]?.owner_pid).toBeNull();
   });
 
-  it('should preserve exceeded_max_movements for continuation', () => {
+  it('should preserve exceeded_max_steps for continuation after requeue', () => {
     writeExceededRecord(testDir, {
       name: 'task-a',
       exceeded_max_movements: 60,
@@ -319,7 +319,7 @@ describe('TaskRunner - requeueExceededTask', () => {
     runner.requeueExceededTask('task-a');
 
     const file = loadTasksFile(testDir);
-    expect(file.tasks[0]?.exceeded_max_movements).toBe(60);
+    expect(file.tasks[0]?.exceeded_max_steps).toBe(60);
   });
 
   it('should preserve exceeded_current_iteration for continuation', () => {
@@ -337,7 +337,7 @@ describe('TaskRunner - requeueExceededTask', () => {
   it('should preserve start_step for re-entry point', () => {
     writeExceededRecord(testDir, {
       name: 'task-a',
-      start_movement: 'reviewers',
+      start_step: 'reviewers',
     });
 
     runner.requeueExceededTask('task-a');
@@ -477,7 +477,7 @@ describe('TaskRunner - listExceededTasks', () => {
     const exceeded = runner.listExceededTasks();
 
     const task = exceeded[0]!;
-    expect(task.data?.exceeded_max_movements).toBe(60);
+    expect(task.data?.exceeded_max_steps).toBe(60);
     expect(task.data?.exceeded_current_iteration).toBe(30);
   });
 });

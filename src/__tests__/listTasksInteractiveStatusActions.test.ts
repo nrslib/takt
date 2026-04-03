@@ -98,7 +98,7 @@ const exceededTask: TaskListItem = {
   createdAt: '2026-02-14T00:00:00.000Z',
   filePath: '/project/.takt/tasks.yaml',
   content: 'iteration limit reached',
-  exceededMaxMovements: 60,
+  exceededMaxSteps: 60,
   exceededCurrentIteration: 30,
 };
 

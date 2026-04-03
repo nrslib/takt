@@ -185,7 +185,7 @@ export async function resolveTaskExecution(
 
   const startMovement = resolveTaskStartMovementValue(normalizedData);
   const retryNote = data.retry_note;
-  const maxMovementsOverride = data.exceeded_max_movements;
+  const maxMovementsOverride = data.exceeded_max_steps;
   const initialIterationOverride = data.exceeded_current_iteration;
 
   const autoPr = data.auto_pr ?? resolvePieceConfigValue(defaultCwd, 'autoPr') ?? false;

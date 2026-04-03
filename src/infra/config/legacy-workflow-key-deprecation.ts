@@ -29,16 +29,16 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function warnLegacyPieceStarYamlKeys(parsed: Record<string, unknown>, seen: Set<string>): void {
-  if ('piece_overrides' in parsed && !('workflow_overrides' in parsed)) {
+  if ('piece_overrides' in parsed) {
     warnLegacyConfigKey(seen, 'piece_overrides', 'workflow_overrides');
   }
-  if ('piece_runtime_prepare' in parsed && !('workflow_runtime_prepare' in parsed)) {
+  if ('piece_runtime_prepare' in parsed) {
     warnLegacyConfigKey(seen, 'piece_runtime_prepare', 'workflow_runtime_prepare');
   }
-  if ('piece_arpeggio' in parsed && !('workflow_arpeggio' in parsed)) {
+  if ('piece_arpeggio' in parsed) {
     warnLegacyConfigKey(seen, 'piece_arpeggio', 'workflow_arpeggio');
   }
-  if ('piece_mcp_servers' in parsed && !('workflow_mcp_servers' in parsed)) {
+  if ('piece_mcp_servers' in parsed) {
     warnLegacyConfigKey(seen, 'piece_mcp_servers', 'workflow_mcp_servers');
   }
 }
@@ -47,28 +47,28 @@ function warnLegacyOverridesNestedMovements(overrides: unknown, blockLabel: stri
   if (!isPlainRecord(overrides)) {
     return;
   }
-  if ('movements' in overrides && !('steps' in overrides)) {
+  if ('movements' in overrides) {
     warnLegacyConfigKey(seen, 'movements', 'steps', blockLabel);
   }
 }
 
 export function warnLegacyGlobalConfigYamlKeys(parsed: Record<string, unknown>, seen: Set<string>): void {
-  if ('enable_builtin_pieces' in parsed && !('enable_builtin_workflows' in parsed)) {
+  if ('enable_builtin_pieces' in parsed) {
     warnLegacyConfigKey(seen, 'enable_builtin_pieces', 'enable_builtin_workflows');
   }
-  if ('piece_categories_file' in parsed && !('workflow_categories_file' in parsed)) {
+  if ('piece_categories_file' in parsed) {
     warnLegacyConfigKey(seen, 'piece_categories_file', 'workflow_categories_file');
   }
   const nse = parsed.notification_sound_events;
   if (isPlainRecord(nse)) {
-    if ('piece_complete' in nse && !('workflow_complete' in nse)) {
+    if ('piece_complete' in nse) {
       warnLegacyConfigKey(seen, 'piece_complete', 'workflow_complete', 'notification_sound_events');
     }
-    if ('piece_abort' in nse && !('workflow_abort' in nse)) {
+    if ('piece_abort' in nse) {
       warnLegacyConfigKey(seen, 'piece_abort', 'workflow_abort', 'notification_sound_events');
     }
   }
-  if ('interactive_preview_movements' in parsed && !('interactive_preview_steps' in parsed)) {
+  if ('interactive_preview_movements' in parsed) {
     warnLegacyConfigKey(seen, 'interactive_preview_movements', 'interactive_preview_steps');
   }
   warnLegacyPieceStarYamlKeys(parsed, seen);
@@ -90,7 +90,7 @@ export function warnLegacyProjectConfigYamlKeys(parsed: Record<string, unknown>,
       if (!isPlainRecord(prof)) {
         continue;
       }
-      if ('movement_permission_overrides' in prof && !('step_permission_overrides' in prof)) {
+      if ('movement_permission_overrides' in prof) {
         warnLegacyConfigKey(seen, 'movement_permission_overrides', 'step_permission_overrides');
       }
     }
@@ -116,7 +116,7 @@ function walkParallelSubStepsForStepAlias(
       if (!isPlainRecord(sub)) {
         continue;
       }
-      if ('step' in sub && !('name' in sub)) {
+      if ('step' in sub) {
         warnLegacyConfigKey(seen, 'step', 'name', 'parallel');
       }
     }
@@ -127,18 +127,18 @@ export function warnLegacyWorkflowYamlKeys(raw: unknown, seen: Set<string>): voi
   if (!isPlainRecord(raw)) {
     return;
   }
-  if ('piece_config' in raw && !('workflow_config' in raw)) {
+  if ('piece_config' in raw) {
     warnLegacyConfigKey(seen, 'piece_config', 'workflow_config');
   }
-  if ('max_movements' in raw && !('max_steps' in raw)) {
+  if ('max_movements' in raw) {
     warnLegacyConfigKey(seen, 'max_movements', 'max_steps');
   }
   const hasSteps = 'steps' in raw;
   const hasMovements = 'movements' in raw;
-  if (hasMovements && !hasSteps) {
+  if (hasMovements) {
     warnLegacyConfigKey(seen, 'movements', 'steps');
   }
-  if ('initial_movement' in raw && !('initial_step' in raw)) {
+  if ('initial_movement' in raw) {
     warnLegacyConfigKey(seen, 'initial_movement', 'initial_step');
   }
   if (hasMovements) {
@@ -153,7 +153,7 @@ function walkCategoryNodesForLegacyPiecesKey(node: unknown, seen: Set<string>, p
   if (!isPlainRecord(node)) {
     return;
   }
-  if ('pieces' in node && !('workflows' in node)) {
+  if ('pieces' in node) {
     const label = path.length > 0 ? path.join(' > ') : 'category';
     warnLegacyConfigKey(seen, 'pieces', 'workflows', label);
   }
@@ -183,7 +183,7 @@ export function warnLegacyCategoryYamlKeys(raw: unknown, seen: Set<string>): voi
   if (!isPlainRecord(raw)) {
     return;
   }
-  if ('piece_categories' in raw && !('workflow_categories' in raw)) {
+  if ('piece_categories' in raw) {
     warnLegacyConfigKey(seen, 'piece_categories', 'workflow_categories');
   }
   const pc = raw.piece_categories;
