@@ -4,10 +4,16 @@
 
 import { z } from 'zod/v4';
 import { isValidTaskDir } from '../../shared/utils/taskPaths.js';
+import { warnLegacyConfigKey } from '../config/legacy-workflow-key-deprecation.js';
 
 function getStringField(record: Record<string, unknown>, key: string): string | undefined {
   const value = record[key];
   return typeof value === 'string' ? value : undefined;
+}
+
+function getPositiveIntField(record: Record<string, unknown>, key: string): number | undefined {
+  const value = record[key];
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
 function assertMatchingAliasValues(
@@ -18,6 +24,24 @@ function assertMatchingAliasValues(
   if (canonicalValue !== undefined && aliasValue !== undefined && canonicalValue !== aliasValue) {
     throw new Error(message);
   }
+}
+
+function assertMatchingExceededMaxAlias(
+  stepsValue: number | undefined,
+  movementsValue: number | undefined,
+): void {
+  if (stepsValue !== undefined && movementsValue !== undefined && stepsValue !== movementsValue) {
+    throw new Error(
+      "Task configuration conflict: 'exceeded_max_steps' and 'exceeded_max_movements' must match when both are set.",
+    );
+  }
+}
+
+function resolveExceededMaxValue(record: Record<string, unknown>): number | undefined {
+  const steps = getPositiveIntField(record, 'exceeded_max_steps');
+  const movements = getPositiveIntField(record, 'exceeded_max_movements');
+  assertMatchingExceededMaxAlias(steps, movements);
+  return steps ?? movements;
 }
 
 function toTaskConfigRecord(input: unknown): Record<string, unknown> | null {
@@ -47,13 +71,26 @@ function normalizeAliasedTaskConfig(input: unknown): unknown {
     return input;
   }
 
+  const deprecationSeen = new Set<string>();
+  if ('piece' in record && !('workflow' in record)) {
+    warnLegacyConfigKey(deprecationSeen, 'piece', 'workflow');
+  }
+  if ('start_movement' in record && !('start_step' in record)) {
+    warnLegacyConfigKey(deprecationSeen, 'start_movement', 'start_step');
+  }
+  if ('exceeded_max_movements' in record && !('exceeded_max_steps' in record)) {
+    warnLegacyConfigKey(deprecationSeen, 'exceeded_max_movements', 'exceeded_max_steps');
+  }
+
   const workflow = resolveTaskWorkflowValue(record);
   const startMovement = resolveTaskStartMovementValue(record);
+  const exceededMax = resolveExceededMaxValue(record);
 
   return {
     ...record,
     ...(workflow !== undefined ? { piece: workflow } : {}),
     ...(startMovement !== undefined ? { start_movement: startMovement } : {}),
+    ...(exceededMax !== undefined ? { exceeded_max_movements: exceededMax } : {}),
   };
 }
 
@@ -94,15 +131,17 @@ const TaskExecutionConfigObjectSchema = z.object({
   auto_pr: z.boolean().optional(),
   draft_pr: z.boolean().optional(),
   exceeded_max_movements: z.number().int().positive().optional(),
+  exceeded_max_steps: z.number().int().positive().optional(),
   exceeded_current_iteration: z.number().int().min(0).optional(),
 });
 
 function stripTaskAliases<T extends Record<string, unknown>>(
   config: T,
-): Omit<T, 'workflow' | 'start_step'> {
+): Omit<T, 'workflow' | 'start_step' | 'exceeded_max_steps'> {
   const canonical = { ...config };
   delete canonical.workflow;
   delete canonical.start_step;
+  delete canonical.exceeded_max_steps;
   return canonical;
 }
 

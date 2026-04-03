@@ -34,6 +34,7 @@ import { loadProjectConfig } from '../project/projectConfig.js';
 import { loadGlobalConfig } from '../global/globalConfig.js';
 import { normalizeConfigProviderReferenceDetailed, type ConfigProviderReference } from '../providerReference.js';
 import { mergeProviderOptions } from '../providerOptions.js';
+import { warnLegacyWorkflowYamlKeys } from '../legacy-workflow-key-deprecation.js';
 
 type RawProviderReference = RawStep['provider'];
 
@@ -389,6 +390,8 @@ export function normalizePieceConfig(
   pieceArpeggioPolicy?: PieceArpeggioConfig,
   pieceMcpServersPolicy?: PieceMcpServersConfig,
 ): PieceConfig {
+  const deprecationSeen = new Set<string>();
+  warnLegacyWorkflowYamlKeys(raw, deprecationSeen);
   const parsed = PieceConfigRawSchema.parse(raw);
 
   const resolvedPolicies = resolveSectionMap(parsed.policies, pieceDir);

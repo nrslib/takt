@@ -135,7 +135,7 @@ describe('instruction_template removal', () => {
     try {
       const raw = {
         name: 'test-piece',
-        movements: [
+        steps: [
           {
             name: 'implement',
             persona: 'coder',
@@ -157,7 +157,7 @@ describe('instruction_template removal', () => {
     try {
       const raw = {
         name: 'test-piece',
-        movements: [
+        steps: [
           {
             name: 'step1',
             persona: 'coder',
