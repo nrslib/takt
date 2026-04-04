@@ -11,6 +11,7 @@ export interface ResolvePermissionModeInput {
 
 export const DEFAULT_PROVIDER_PERMISSION_PROFILES: ProviderPermissionProfiles = {
   claude: { defaultPermissionMode: 'edit' },
+  'claude-sdk': { defaultPermissionMode: 'edit' },
   codex: { defaultPermissionMode: 'edit' },
   opencode: { defaultPermissionMode: 'edit' },
   cursor: { defaultPermissionMode: 'edit' },
@@ -18,18 +19,6 @@ export const DEFAULT_PROVIDER_PERMISSION_PROFILES: ProviderPermissionProfiles = 
   mock: { defaultPermissionMode: 'edit' },
 };
 
-/**
- * Resolve movement permission mode using provider profiles.
- *
- * Priority:
- * 1. project provider_profiles.<provider>.movement_permission_overrides.<movement>
- * 2. global provider_profiles.<provider>.movement_permission_overrides.<movement>
- * 3. project provider_profiles.<provider>.default_permission_mode
- * 4. global provider_profiles.<provider>.default_permission_mode
- * 5. apply movement.required_permission_mode as minimum floor
- *
- * Throws when unresolved.
- */
 export function resolveMovementPermissionMode(input: ResolvePermissionModeInput): PermissionMode {
   if (!input.provider) {
     return input.requiredPermissionMode ?? 'readonly';

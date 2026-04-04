@@ -1,7 +1,3 @@
-/**
- * Claude provider implementation
- */
-
 import { callClaude, callClaudeCustom, callClaudeAgent, callClaudeSkill } from '../claude/client.js';
 import type { ClaudeCallOptions } from '../claude/types.js';
 import { resolveAnthropicApiKey, resolveClaudeCliPath } from '../config/index.js';
@@ -34,7 +30,6 @@ function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
   };
 }
 
-/** Claude provider — delegates to Claude Code SDK */
 export class ClaudeProvider implements Provider {
   readonly supportsStructuredOutput = true;
 

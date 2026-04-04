@@ -7,22 +7,23 @@
  *   LoadedConfig   — resolved values with NonNullable defaults (defined in resolvedConfig.ts)
  */
 
+import type { ProviderType } from '../../shared/types/provider.js';
 import type { MovementProviderOptions, PieceRuntimeConfig } from './piece-types.js';
 import type { ProviderPermissionProfiles } from './provider-profiles.js';
 import type { VcsProviderType } from './vcs-types.js';
 
 export interface PersonaProviderEntry {
-  provider?: 'claude' | 'codex' | 'opencode' | 'cursor' | 'copilot' | 'mock';
+  provider?: ProviderType;
   model?: string;
 }
 
 export interface TaktProviderEntry {
-  provider: 'claude' | 'codex' | 'opencode' | 'cursor' | 'copilot' | 'mock';
+  provider: ProviderType;
   model?: string;
 }
 
 export type TaktProviderModelOnlyEntry = {
-  provider?: 'claude' | 'codex' | 'opencode' | 'cursor' | 'copilot' | 'mock';
+  provider?: ProviderType;
   model: string;
 };
 
@@ -153,7 +154,7 @@ export interface ProjectConfig {
   /** UI / builtin resource language override for this project */
   language?: Language;
   /** Provider selection for agent runtime */
-  provider?: 'claude' | 'codex' | 'opencode' | 'cursor' | 'copilot' | 'mock';
+  provider?: ProviderType;
   /** Model selection for agent runtime */
   model?: string;
   /** Allow git hooks during TAKT-managed auto-commit */

@@ -71,7 +71,15 @@ export const MovementProviderOptionsSchema = z.object({
 }).optional();
 
 /** Provider key schema for profile maps */
-export const ProviderProfileNameSchema = z.enum(['claude', 'codex', 'opencode', 'cursor', 'copilot', 'mock']);
+export const ProviderProfileNameSchema = z.enum([
+  'claude',
+  'claude-sdk',
+  'codex',
+  'opencode',
+  'cursor',
+  'copilot',
+  'mock',
+]);
 export const ProviderTypeSchema = ProviderProfileNameSchema;
 
 export const ProviderBlockSchema = z.object({
@@ -83,12 +91,30 @@ export const ProviderBlockSchema = z.object({
   const hasNetworkAccess = provider.network_access !== undefined;
   const hasSandbox = provider.sandbox !== undefined;
 
+  if (provider.type === 'claude-sdk') {
+    if (hasNetworkAccess) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['network_access'],
+        message: "provider.type 'claude-sdk' does not support 'network_access'.",
+      });
+    }
+    return;
+  }
+
   if (provider.type === 'claude') {
     if (hasNetworkAccess) {
       ctx.addIssue({
         code: 'custom',
         path: ['network_access'],
         message: "provider.type 'claude' does not support 'network_access'.",
+      });
+    }
+    if (hasSandbox) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['sandbox'],
+        message: "provider.type 'claude' (headless CLI) does not support 'sandbox'; use claude-sdk.",
       });
     }
     return;
@@ -125,6 +151,7 @@ export const ProviderPermissionProfileSchema = z.object({
 /** Provider permission profiles schema */
 export const ProviderPermissionProfilesSchema = z.object({
   claude: ProviderPermissionProfileSchema.optional(),
+  'claude-sdk': ProviderPermissionProfileSchema.optional(),
   codex: ProviderPermissionProfileSchema.optional(),
   opencode: ProviderPermissionProfileSchema.optional(),
   cursor: ProviderPermissionProfileSchema.optional(),

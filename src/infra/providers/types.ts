@@ -1,23 +1,14 @@
-/**
- * Type definitions for the provider abstraction layer
- */
-
 import type { StreamCallback, PermissionHandler, AskUserQuestionHandler } from '../claude/index.js';
 import type { AgentResponse, PermissionMode, McpServerConfig, MovementProviderOptions } from '../../core/models/index.js';
+import type { ProviderType as SharedProviderType } from '../../shared/types/provider.js';
 
-/** Agent setup configuration — determines HOW the provider invokes the agent */
 export interface AgentSetup {
-  /** Display name for this agent */
   name: string;
-  /** System prompt for the agent (persona content, inline prompt, etc.) */
   systemPrompt?: string;
-  /** Delegate to a Claude Code agent by name (Claude provider only) */
   claudeAgent?: string;
-  /** Delegate to a Claude Code skill by name (Claude provider only) */
   claudeSkill?: string;
 }
 
-/** Runtime options passed at call time */
 export interface ProviderCallOptions {
   cwd: string;
   abortSignal?: AbortSignal;
@@ -40,16 +31,13 @@ export interface ProviderCallOptions {
   outputSchema?: Record<string, unknown>;
 }
 
-/** A configured agent ready to be called */
 export interface ProviderAgent {
   call(prompt: string, options: ProviderCallOptions): Promise<AgentResponse>;
 }
 
-/** Provider interface — creates configured agents from setup */
 export interface Provider {
   supportsStructuredOutput: boolean;
   setup(config: AgentSetup): ProviderAgent;
 }
 
-/** Provider type */
-export type ProviderType = 'claude' | 'codex' | 'opencode' | 'cursor' | 'copilot' | 'mock';
+export type ProviderType = SharedProviderType;

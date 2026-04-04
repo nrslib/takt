@@ -1,10 +1,3 @@
-/**
- * SDK options builder for Claude queries
- *
- * Builds the options object for Claude Agent SDK queries,
- * including permission handlers and hooks.
- */
-
 import type {
   Options,
   CanUseTool,
@@ -18,6 +11,7 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 import type { PermissionMode } from '../../core/models/index.js';
 import { createLogger } from '../../shared/utils/index.js';
+import { taktPermissionModeToClaudeExpression } from './permission-mode-expression.js';
 import type {
   PermissionHandler,
   AskUserQuestionInput,
@@ -28,12 +22,6 @@ import { AskUserQuestionDeniedError, createAskUserQuestionHandler } from './ask-
 
 const log = createLogger('claude-sdk');
 
-/**
- * Builds SDK options from ClaudeSpawnOptions.
- *
- * Handles permission mode resolution, canUseTool callback creation,
- * and AskUserQuestion hook setup.
- */
 export class SdkOptionsBuilder {
   private readonly options: ClaudeSpawnOptions;
 
@@ -41,7 +29,6 @@ export class SdkOptionsBuilder {
     this.options = options;
   }
 
-  /** Build the full SDK Options object */
   build(): Options {
     const canUseTool = this.options.onPermissionRequest
       ? SdkOptionsBuilder.createCanUseToolCallback(this.options.onPermissionRequest)
@@ -108,17 +95,10 @@ export class SdkOptionsBuilder {
     return sdkOptions;
   }
 
-  /** Map TAKT PermissionMode to Claude SDK PermissionMode */
   static mapToSdkPermissionMode(mode: PermissionMode): SdkPermissionMode {
-    const mapping: Record<PermissionMode, SdkPermissionMode> = {
-      readonly: 'default',
-      edit: 'acceptEdits',
-      full: 'bypassPermissions',
-    };
-    return mapping[mode];
+    return taktPermissionModeToClaudeExpression(mode) as SdkPermissionMode;
   }
 
-  /** Resolve permission mode with priority: bypassPermissions > explicit > callback-based > default */
   private resolvePermissionMode(): SdkPermissionMode {
     if (this.options.bypassPermissions) {
       return 'bypassPermissions';
@@ -132,9 +112,6 @@ export class SdkOptionsBuilder {
     return 'acceptEdits';
   }
 
-  /**
-   * Create canUseTool callback from permission handler.
-   */
   static createCanUseToolCallback(
     handler: PermissionHandler
   ): CanUseTool {
@@ -158,9 +135,6 @@ export class SdkOptionsBuilder {
     };
   }
 
-  /**
-   * Create hooks for AskUserQuestion handling.
-   */
   static createAskUserQuestionHooks(
     askUserHandler: AskUserQuestionHandler
   ): Partial<Record<string, HookCallbackMatcher[]>> {
@@ -200,8 +174,6 @@ export class SdkOptionsBuilder {
     };
   }
 }
-
-// ---- Module-level functions ----
 
 export function createCanUseToolCallback(
   handler: PermissionHandler

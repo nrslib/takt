@@ -1,14 +1,11 @@
-/**
- * Shared provider-protocol types used across layers.
- *
- * Defined here (shared/) rather than core/piece/ so that modules in the
- * shared/ layer (StreamDisplay, providerEventLogger, etc.) can import them
- * without creating an upward shared → core dependency.
- *
- * core/piece/types.ts re-exports these for backward compatibility.
- */
-
-export type ProviderType = 'claude' | 'codex' | 'opencode' | 'cursor' | 'copilot' | 'mock';
+export type ProviderType =
+  | 'claude'
+  | 'claude-sdk'
+  | 'codex'
+  | 'opencode'
+  | 'cursor'
+  | 'copilot'
+  | 'mock';
 
 export interface StreamInitEventData {
   model: string;

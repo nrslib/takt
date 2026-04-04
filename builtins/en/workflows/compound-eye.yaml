@@ -14,7 +14,7 @@ steps:
       - name: claude-eye
         edit: false
         persona: coder
-        provider: claude
+        provider: claude-sdk
         session: refresh
         knowledge: architecture
         provider_options:

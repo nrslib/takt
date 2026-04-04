@@ -49,7 +49,10 @@ program
   .option('--auto-pr', 'Create PR after successful execution')
   .option('--draft', 'Create PR as draft (requires --auto-pr or auto_pr config)')
   .option('--repo <owner/repo>', 'Repository (defaults to current)')
-  .option('--provider <name>', 'Override agent provider (claude|codex|opencode|cursor|copilot|mock)')
+  .option(
+    '--provider <name>',
+    'Override agent provider (claude-sdk|claude|codex|opencode|cursor|copilot|mock)',
+  )
   .option('--model <name>', 'Override agent model')
   .option('-t, --task <string>', 'Task content (as alternative to issue reference)')
   .option('--pipeline', 'Pipeline mode: non-interactive, no worktree, direct branch creation')
