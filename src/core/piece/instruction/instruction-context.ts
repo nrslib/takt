@@ -77,3 +77,33 @@ export function buildEditRule(edit: boolean | undefined, language: Language): st
   }
   return '';
 }
+
+/**
+ * Build the git commit rule string for the execution context section.
+ *
+ * Returns a localized string describing the git commit/add prohibition for this step.
+ * Returns empty string when allowGitCommit is true (prohibition suppressed).
+ *
+ * Phase 1 includes both git commit and git add prohibition.
+ * Phase 2 includes only git commit prohibition (git add is not relevant).
+ */
+export function buildGitCommitRule(
+  allowGitCommit: boolean,
+  language: Language,
+  phase: 'phase1' | 'phase2' = 'phase1',
+): string {
+  if (allowGitCommit) {
+    return '';
+  }
+  if (phase === 'phase1') {
+    if (language === 'ja') {
+      return '- **git commit を実行しないでください。** コミットはワークフロー完了後にシステムが自動で行います。\n- **git add を実行しないでください。** ステージングもシステムが自動で行います。新規ファイルが未追跡（`??`）でも正常です。';
+    }
+    return '- **Do NOT run git commit.** Commits are handled automatically by the system after workflow completion.\n- **Do NOT run git add.** Staging is also handled automatically by the system. Untracked files (`??`) are normal.';
+  }
+  // phase2: git commit only
+  if (language === 'ja') {
+    return '- **git commit を実行しないでください。** コミットはワークフロー完了後にシステムが自動で行います。';
+  }
+  return '- **Do NOT run git commit.** Commits are handled automatically by the system after workflow completion.';
+}

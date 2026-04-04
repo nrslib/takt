@@ -26,6 +26,139 @@ function expectFailurePath(
   expect(result.error.issues.some((issue) => issue.path.join('.') === expectedPath.join('.'))).toBe(true);
 }
 
+describe('allow_git_commit schema and parser', () => {
+  it('movement schema should accept allow_git_commit: true', () => {
+    const raw = {
+      name: 'implement',
+      allow_git_commit: true,
+    };
+
+    const result = PieceMovementRawSchema.safeParse(raw);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.allow_git_commit).toBe(true);
+    }
+  });
+
+  it('movement schema should accept allow_git_commit: false', () => {
+    const raw = {
+      name: 'implement',
+      allow_git_commit: false,
+    };
+
+    const result = PieceMovementRawSchema.safeParse(raw);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.allow_git_commit).toBe(false);
+    }
+  });
+
+  it('movement schema should default allow_git_commit to false when omitted', () => {
+    const raw = {
+      name: 'implement',
+    };
+
+    const result = PieceMovementRawSchema.safeParse(raw);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.allow_git_commit).toBe(false);
+    }
+  });
+
+  it('parallel sub-movement schema should accept allow_git_commit: true', () => {
+    const raw = {
+      name: 'review',
+      allow_git_commit: true,
+    };
+
+    const result = ParallelSubMovementRawSchema.safeParse(raw);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.allow_git_commit).toBe(true);
+    }
+  });
+
+  it('parallel sub-movement schema should default allow_git_commit to false when omitted', () => {
+    const raw = {
+      name: 'review',
+    };
+
+    const result = ParallelSubMovementRawSchema.safeParse(raw);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.allow_git_commit).toBe(false);
+    }
+  });
+
+  it('normalizePieceConfig should map allow_git_commit: true to allowGitCommit: true', () => {
+    const raw = {
+      name: 'test-piece',
+      movements: [
+        {
+          name: 'commit-step',
+          allow_git_commit: true,
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    const config = normalizePieceConfig(raw, pieceDir);
+
+    expect(config.movements[0]?.allowGitCommit).toBe(true);
+  });
+
+  it('normalizePieceConfig should default allowGitCommit to false when allow_git_commit is omitted', () => {
+    const raw = {
+      name: 'test-piece',
+      movements: [
+        {
+          name: 'normal-step',
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    const config = normalizePieceConfig(raw, pieceDir);
+
+    expect(config.movements[0]?.allowGitCommit).toBe(false);
+  });
+
+  it('normalizePieceConfig should map allow_git_commit on parallel sub-movements', () => {
+    const raw = {
+      name: 'test-piece',
+      movements: [
+        {
+          name: 'reviews',
+          parallel: [
+            {
+              name: 'review-a',
+              allow_git_commit: true,
+              instruction: '{task}',
+            },
+            {
+              name: 'review-b',
+              instruction: '{task}',
+            },
+          ],
+          rules: [
+            { condition: 'all("done")', next: 'COMPLETE' },
+          ],
+        },
+      ],
+    };
+
+    const config = normalizePieceConfig(raw, pieceDir);
+
+    expect(config.movements[0]?.parallel?.[0]?.allowGitCommit).toBe(true);
+    expect(config.movements[0]?.parallel?.[1]?.allowGitCommit).toBe(false);
+  });
+});
+
 describe('instruction_template removal', () => {
   it('movement schema should reject instruction_template', () => {
     const raw = {

@@ -123,6 +123,58 @@ describe('instruction-builder', () => {
     });
   });
 
+  describe('git commit rule (Phase 1)', () => {
+    it('should include git commit + git add prohibition when allowGitCommit is undefined (default)', () => {
+      const step = createMinimalStep('Do some work');
+      const context = createMinimalContext();
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('Do NOT run git commit');
+      expect(result).toContain('Do NOT run git add');
+    });
+
+    it('should include git commit + git add prohibition when allowGitCommit is false', () => {
+      const step = { ...createMinimalStep('Do some work'), allowGitCommit: false };
+      const context = createMinimalContext();
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('Do NOT run git commit');
+      expect(result).toContain('Do NOT run git add');
+    });
+
+    it('should NOT include git commit or git add prohibition when allowGitCommit is true', () => {
+      const step = { ...createMinimalStep('Do some work'), allowGitCommit: true };
+      const context = createMinimalContext();
+
+      const result = buildInstruction(step, context);
+
+      expect(result).not.toContain('Do NOT run git commit');
+      expect(result).not.toContain('Do NOT run git add');
+    });
+
+    it('should include Japanese git prohibition when language is ja and allowGitCommit is false', () => {
+      const step = { ...createMinimalStep('作業する'), allowGitCommit: false };
+      const context = createMinimalContext({ language: 'ja' });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('git commit を実行しないでください');
+      expect(result).toContain('git add を実行しないでください');
+    });
+
+    it('should NOT include Japanese git prohibition when language is ja and allowGitCommit is true', () => {
+      const step = { ...createMinimalStep('作業する'), allowGitCommit: true };
+      const context = createMinimalContext({ language: 'ja' });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).not.toContain('git commit を実行しないでください');
+      expect(result).not.toContain('git add を実行しないでください');
+    });
+  });
+
   describe('report_dir replacement', () => {
     it('should replace {report_dir} with absolute path', () => {
       const step = createMinimalStep(
@@ -755,7 +807,7 @@ describe('instruction-builder', () => {
       expect(result).toContain('Do NOT modify project source files');
     });
 
-    it('should include no-commit and no-cd rules', () => {
+    it('should include no-commit and no-cd rules when allowGitCommit is not set', () => {
       const step = createMinimalStep('Do work');
       step.outputContracts = [{ name: '00-plan.md', format: '00-plan', useJudge: true }];
       const ctx = createReportContext();
@@ -764,6 +816,48 @@ describe('instruction-builder', () => {
 
       expect(result).toContain('Do NOT run git commit');
       expect(result).toContain('Do NOT use `cd`');
+    });
+
+    it('should include no-commit rule when allowGitCommit is false', () => {
+      const step = { ...createMinimalStep('Do work'), allowGitCommit: false };
+      step.outputContracts = [{ name: '00-plan.md', format: '00-plan', useJudge: true }];
+      const ctx = createReportContext();
+
+      const result = buildReportInstruction(step, ctx);
+
+      expect(result).toContain('Do NOT run git commit');
+    });
+
+    it('should NOT include no-commit rule when allowGitCommit is true', () => {
+      const step = { ...createMinimalStep('Do work'), allowGitCommit: true };
+      step.outputContracts = [{ name: '00-plan.md', format: '00-plan', useJudge: true }];
+      const ctx = createReportContext();
+
+      const result = buildReportInstruction(step, ctx);
+
+      expect(result).not.toContain('Do NOT run git commit');
+      expect(result).not.toContain('git commit を実行しないでください');
+    });
+
+    it('should include Japanese no-commit rule when allowGitCommit is false and language is ja', () => {
+      const step = { ...createMinimalStep('Do work'), allowGitCommit: false };
+      step.outputContracts = [{ name: '00-plan.md', format: '00-plan', useJudge: true }];
+      const ctx = createReportContext({ language: 'ja' });
+
+      const result = buildReportInstruction(step, ctx);
+
+      expect(result).toContain('git commit を実行しないでください');
+    });
+
+    it('should NOT include git add prohibition in phase 2 (only git commit)', () => {
+      const step = { ...createMinimalStep('Do work'), allowGitCommit: false };
+      step.outputContracts = [{ name: '00-plan.md', format: '00-plan', useJudge: true }];
+      const ctx = createReportContext();
+
+      const result = buildReportInstruction(step, ctx);
+
+      expect(result).toContain('Do NOT run git commit');
+      expect(result).not.toContain('Do NOT run git add');
     });
 
     it('should include report directory and file for string report', () => {
