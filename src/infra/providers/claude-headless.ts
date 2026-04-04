@@ -11,6 +11,7 @@ function toHeadlessOptions(options: ProviderCallOptions): ClaudeHeadlessCallOpti
     sessionId: options.sessionId,
     model: options.model,
     allowedTools: options.allowedTools,
+    mcpServers: options.mcpServers,
     permissionMode: options.permissionMode,
     bypassPermissions: options.bypassPermissions,
     providerOptions: options.providerOptions,

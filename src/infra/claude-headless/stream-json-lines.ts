@@ -4,6 +4,21 @@ function toRecord(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+function pickString(source: Record<string, unknown> | undefined, keys: string[]): string | undefined {
+  if (!source) {
+    return undefined;
+  }
+
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+
+  return undefined;
+}
+
 function extractTextFromEvent(parsed: unknown): string | undefined {
   if (typeof parsed === 'string') {
     const t = parsed.trim();
@@ -52,6 +67,27 @@ function extractTextFromEvent(parsed: unknown): string | undefined {
   return undefined;
 }
 
+function extractSessionIdFromEvent(parsed: unknown): string | undefined {
+  const root = toRecord(parsed);
+  if (!root) {
+    return undefined;
+  }
+
+  const direct = pickString(root, ['session_id', 'sessionId', 'sessionID', 'thread_id', 'threadId']);
+  if (direct) {
+    return direct;
+  }
+
+  const message = toRecord(root.message);
+  const nested = pickString(message, ['session_id', 'sessionId', 'sessionID', 'thread_id', 'threadId']);
+  if (nested) {
+    return nested;
+  }
+
+  const result = toRecord(root.result);
+  return pickString(result, ['session_id', 'sessionId', 'sessionID', 'thread_id', 'threadId']);
+}
+
 export function tryExtractTextFromStreamJsonLine(line: string): string | undefined {
   const trimmed = line.trim();
   if (!trimmed) {
@@ -66,6 +102,22 @@ export function tryExtractTextFromStreamJsonLine(line: string): string | undefin
   return extractTextFromEvent(parsed);
 }
 
+export function tryExtractSessionIdFromStreamJsonLine(line: string): string | undefined {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed) as unknown;
+  } catch {
+    return undefined;
+  }
+
+  return extractSessionIdFromEvent(parsed);
+}
+
 export function aggregateContentFromStdout(stdout: string): string {
   let out = '';
   for (const line of stdout.split('\n')) {
@@ -75,4 +127,17 @@ export function aggregateContentFromStdout(stdout: string): string {
     }
   }
   return out.trim();
+}
+
+export function extractSessionIdFromStdout(stdout: string): string | undefined {
+  let sessionId: string | undefined;
+
+  for (const line of stdout.split('\n')) {
+    const extracted = tryExtractSessionIdFromStreamJsonLine(line);
+    if (extracted) {
+      sessionId = extracted;
+    }
+  }
+
+  return sessionId;
 }

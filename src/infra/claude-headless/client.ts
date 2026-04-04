@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { AgentResponse, PermissionMode } from '../../core/models/index.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
 import {
@@ -9,7 +10,7 @@ import {
   type ExecError,
   runHeadlessCli,
 } from './headless-spawn.js';
-import { aggregateContentFromStdout } from './stream-json-lines.js';
+import { aggregateContentFromStdout, extractSessionIdFromStdout } from './stream-json-lines.js';
 import type { ClaudeHeadlessCallOptions } from './types.js';
 
 const UUID_RE =
@@ -28,14 +29,37 @@ function resolveCliPermissionMode(
   return 'default';
 }
 
-function buildUserPrompt(prompt: string, systemPrompt?: string): string {
-  if (!systemPrompt?.trim()) {
-    return prompt;
+function resolveSessionArgs(options: ClaudeHeadlessCallOptions): { args: string[]; sessionId: string } {
+  if (options.sessionId) {
+    if (!UUID_RE.test(options.sessionId)) {
+      throw new Error(`Claude headless sessionId must be a valid UUID: ${options.sessionId}`);
+    }
+    return {
+      args: ['--resume', options.sessionId],
+      sessionId: options.sessionId,
+    };
   }
-  return `${systemPrompt.trim()}\n\n${prompt}`;
+
+  const sessionId = randomUUID();
+  return {
+    args: ['--session-id', sessionId],
+    sessionId,
+  };
 }
 
-function buildSpawnArgs(prompt: string, options: ClaudeHeadlessCallOptions): string[] {
+function buildMcpConfigArg(options: ClaudeHeadlessCallOptions): string | undefined {
+  if (!options.mcpServers || Object.keys(options.mcpServers).length === 0) {
+    return undefined;
+  }
+
+  return JSON.stringify({ mcpServers: options.mcpServers });
+}
+
+function buildSpawnArgs(
+  prompt: string,
+  options: ClaudeHeadlessCallOptions,
+): { args: string[]; expectedSessionId: string } {
+  const session = resolveSessionArgs(options);
   const args: string[] = [
     '-p',
     '--output-format',
@@ -58,12 +82,18 @@ function buildSpawnArgs(prompt: string, options: ClaudeHeadlessCallOptions): str
     args.push('--effort', effort);
   }
 
-  if (options.sessionId && UUID_RE.test(options.sessionId)) {
-    args.push('--resume', options.sessionId);
+  if (options.systemPrompt?.trim()) {
+    args.push('--system-prompt', options.systemPrompt.trim());
   }
 
-  args.push('--', buildUserPrompt(prompt, options.systemPrompt));
-  return args;
+  const mcpConfig = buildMcpConfigArg(options);
+  if (mcpConfig) {
+    args.push('--mcp-config', mcpConfig);
+  }
+
+  args.push(...session.args);
+  args.push('--', prompt);
+  return { args, expectedSessionId: session.sessionId };
 }
 
 function classifyError(error: ExecError, options: ClaudeHeadlessCallOptions): string {
@@ -88,12 +118,11 @@ export async function callClaudeHeadless(
   prompt: string,
   options: ClaudeHeadlessCallOptions,
 ): Promise<AgentResponse> {
-  const args = buildSpawnArgs(prompt, options);
-
   try {
+    const { args, expectedSessionId } = buildSpawnArgs(prompt, options);
     const { stdout, stderr } = await runHeadlessCli(args, options);
     const content = aggregateContentFromStdout(stdout);
-    const sessionId = options.sessionId;
+    const sessionId = extractSessionIdFromStdout(stdout) ?? expectedSessionId;
 
     if (!content) {
       const hint = stderr.trim() || stdout.trim().slice(0, 500) || 'no parseable stream-json output';

@@ -1,8 +1,21 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+const { callClaudeHeadlessMock } = vi.hoisted(() => ({
+  callClaudeHeadlessMock: vi.fn(),
+}));
+
+vi.mock('../infra/claude-headless/client.js', () => ({
+  callClaudeHeadless: callClaudeHeadlessMock,
+}));
+
 import { ClaudeHeadlessProvider } from '../infra/providers/claude-headless.js';
 import { ProviderRegistry } from '../infra/providers/index.js';
 
 describe('ClaudeHeadlessProvider', () => {
+  beforeEach(() => {
+    callClaudeHeadlessMock.mockReset();
+  });
+
   it('should throw when claudeAgent is specified', () => {
     const provider = new ClaudeHeadlessProvider();
 
@@ -42,6 +55,42 @@ describe('ClaudeHeadlessProvider', () => {
 
     expect(agent).toBeDefined();
     expect(typeof agent.call).toBe('function');
+  });
+
+  it('should pass mcpServers to the headless client', async () => {
+    callClaudeHeadlessMock.mockResolvedValue({
+      persona: 'test',
+      status: 'done',
+      content: 'ok',
+      timestamp: new Date(),
+      sessionId: 'session-id',
+    });
+
+    const provider = new ClaudeHeadlessProvider();
+    const agent = provider.setup({
+      name: 'test',
+      systemPrompt: 'sys',
+    });
+
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      mcpServers: {
+        sample: {
+          command: 'node',
+          args: ['server.js'],
+        },
+      },
+    });
+
+    expect(callClaudeHeadlessMock).toHaveBeenCalledWith('test', 'prompt', expect.objectContaining({
+      systemPrompt: 'sys',
+      mcpServers: {
+        sample: {
+          command: 'node',
+          args: ['server.js'],
+        },
+      },
+    }));
   });
 });
 
