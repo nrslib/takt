@@ -555,6 +555,32 @@ describe('executePipeline', () => {
       );
     });
 
+    it('should use pr_body_template for task-based PR creation when issue is unavailable', async () => {
+      mockResolveConfigValues.mockReturnValue({
+        pipeline: {
+          prBodyTemplate: '## Summary\n{report}\n\nIssue:{issue}\nDetails:{issue_body}',
+        },
+      });
+      mockExecuteTask.mockResolvedValueOnce(true);
+      mockCreatePullRequest.mockReturnValueOnce({ success: true, url: 'https://github.com/pr/2' });
+
+      await executePipeline({
+        task: 'Fix task-only PR body',
+        piece: 'default',
+        branch: 'fix-task-pr-body',
+        autoPr: true,
+        cwd: '/tmp/test',
+      });
+
+      expect(mockBuildPrBody).not.toHaveBeenCalled();
+      expect(mockCreatePullRequest).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: '## Summary\nWorkflow `default` completed successfully.\n\nIssue:\nDetails:',
+        }),
+        '/tmp/test',
+      );
+    });
+
     it('should fall back to buildPrBody when no template is configured', async () => {
       mockExecuteTask.mockResolvedValueOnce(true);
       mockCreatePullRequest.mockReturnValueOnce({ success: true, url: 'https://github.com/pr/1' });
