@@ -110,13 +110,6 @@ export const ProviderBlockSchema = z.object({
         message: "provider.type 'claude' does not support 'network_access'.",
       });
     }
-    if (hasSandbox) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['sandbox'],
-        message: "provider.type 'claude' (headless CLI) does not support 'sandbox'; use claude-sdk.",
-      });
-    }
     return;
   }
 

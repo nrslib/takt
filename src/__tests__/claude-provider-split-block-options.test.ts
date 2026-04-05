@@ -21,12 +21,18 @@ describe('normalizeProviderBlockOptions (Claude split)', () => {
     });
   });
 
-  it('Given headless claude block with sandbox, When normalize, Then returns undefined', () => {
+  it('Given headless claude block with sandbox, When normalize, Then emits claude-shaped movement options', () => {
     const result = normalizeProviderBlockOptions({
       type: 'claude',
       sandbox: { allow_unsandboxed_commands: true },
     });
 
-    expect(result).toBeUndefined();
+    expect(result).toEqual({
+      claude: {
+        sandbox: {
+          allowUnsandboxedCommands: true,
+        },
+      },
+    });
   });
 });

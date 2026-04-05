@@ -96,4 +96,19 @@ describe('resolveMovementPermissionMode', () => {
     expect(sdkMode).toBe('full');
     expect(headlessMode).toBe('readonly');
   });
+
+  it('applies required_permission_mode floor after resolving the headless claude profile', () => {
+    const mode = resolveMovementPermissionMode({
+      movementName: 'review',
+      provider: 'claude',
+      requiredPermissionMode: 'full',
+      projectProviderProfiles: {
+        claude: {
+          defaultPermissionMode: 'readonly',
+        },
+      },
+    });
+
+    expect(mode).toBe('full');
+  });
 });

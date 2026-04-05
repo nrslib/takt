@@ -186,4 +186,45 @@ describe('runReportPhase report history behavior', () => {
     // Then
     expect(capturedOverrides).toEqual([{ maxTurns: 3 }]);
   });
+
+  it('should resume the next report file with the updated sessionId returned by the previous report file', async () => {
+    // Given
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step: PieceMovement = {
+      name: 'reviewers',
+      personaDisplayName: 'Reviewers',
+      instruction: 'review',
+      passPreviousResponse: false,
+      outputContracts: [{ name: 'first.md' }, { name: 'second.md' }],
+    };
+    const resumedSessionIds: string[] = [];
+    const ctx = createContext(reportDir);
+    const originalBuildResumeOptions = ctx.buildResumeOptions;
+    ctx.buildResumeOptions = (movement, sessionId, overrides) => {
+      resumedSessionIds.push(sessionId);
+      return originalBuildResumeOptions(movement, sessionId, overrides);
+    };
+    queueRunAgentResponses([
+      {
+        persona: 'reviewers',
+        status: 'done',
+        content: 'first report',
+        timestamp: new Date('2026-02-10T06:21:17Z'),
+        sessionId: 'session-2',
+      },
+      {
+        persona: 'reviewers',
+        status: 'done',
+        content: 'second report',
+        timestamp: new Date('2026-02-10T06:22:17Z'),
+        sessionId: 'session-3',
+      },
+    ]);
+
+    // When
+    await runReportPhase(step, 1, ctx);
+
+    // Then
+    expect(resumedSessionIds).toEqual(['session-1', 'session-2']);
+  });
 });

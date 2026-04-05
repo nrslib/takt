@@ -307,6 +307,49 @@ describe('normalizePieceConfig provider_options', () => {
     expect(() => normalizePieceConfig(raw, process.cwd())).toThrow(/network_access/);
   });
 
+  it('provider block で claude に sandbox を指定した場合は providerOptions に正規化する', () => {
+    const raw = {
+      name: 'claude-sandbox-provider-block',
+      piece_config: {
+        provider: {
+          type: 'claude',
+          model: 'sonnet',
+          sandbox: {
+            allow_unsandboxed_commands: true,
+            excluded_commands: ['./gradlew'],
+          },
+        },
+      },
+      movements: [
+        {
+          name: 'review',
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    const config = normalizePieceConfig(raw, process.cwd());
+
+    expect(config.providerOptions).toEqual({
+      claude: {
+        sandbox: {
+          allowUnsandboxedCommands: true,
+          excludedCommands: ['./gradlew'],
+        },
+      },
+    });
+    expect(config.movements[0]?.provider).toBe('claude');
+    expect(config.movements[0]?.model).toBe('sonnet');
+    expect(config.movements[0]?.providerOptions).toEqual({
+      claude: {
+        sandbox: {
+          allowUnsandboxedCommands: true,
+          excludedCommands: ['./gradlew'],
+        },
+      },
+    });
+  });
+
   it('provider block で codex に sandbox を指定した場合はエラーにする', () => {
     const raw = {
       name: 'invalid-provider-block',

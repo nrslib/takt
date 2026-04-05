@@ -5,16 +5,18 @@ import type { AgentResponse } from '../../core/models/index.js';
 import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from './types.js';
 
 function toHeadlessOptions(options: ProviderCallOptions): ClaudeHeadlessCallOptions {
+  const claudeOptions = options.providerOptions?.claude;
   return {
     cwd: options.cwd,
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
     model: options.model,
+    effort: claudeOptions?.effort,
     allowedTools: options.allowedTools,
     mcpServers: options.mcpServers,
     permissionMode: options.permissionMode,
     bypassPermissions: options.bypassPermissions,
-    providerOptions: options.providerOptions,
+    sandbox: claudeOptions?.sandbox,
     onStream: options.onStream,
     claudeCliPath: resolveClaudeCliPath() ?? undefined,
   };

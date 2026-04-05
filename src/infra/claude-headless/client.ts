@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
+import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { AgentResponse, PermissionMode } from '../../core/models/index.js';
-import { getErrorMessage } from '../../shared/utils/index.js';
+import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import {
   type ClaudePermissionExpression,
   taktPermissionModeToClaudeExpression,
@@ -15,6 +18,7 @@ import type { ClaudeHeadlessCallOptions } from './types.js';
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const log = createLogger('claude-headless');
 
 function resolveCliPermissionMode(
   mode: PermissionMode | undefined,
@@ -47,21 +51,77 @@ function resolveSessionArgs(options: ClaudeHeadlessCallOptions): { args: string[
   };
 }
 
-function buildMcpConfigArg(options: ClaudeHeadlessCallOptions): string | undefined {
+type PreparedSpawnResources = {
+  mcpConfigArg?: string;
+  cleanup: () => Promise<void>;
+};
+
+async function prepareMcpConfig(options: ClaudeHeadlessCallOptions): Promise<PreparedSpawnResources> {
   if (!options.mcpServers || Object.keys(options.mcpServers).length === 0) {
+    return { cleanup: async () => {} };
+  }
+
+  const tempDir = await mkdtemp(join(tmpdir(), 'takt-claude-mcp-'));
+  const configPath = join(tempDir, 'mcp-config.json');
+
+  try {
+    await chmod(tempDir, 0o700);
+    await writeFile(configPath, JSON.stringify({ mcpServers: options.mcpServers }), {
+      encoding: 'utf-8',
+      mode: 0o600,
+    });
+    await chmod(configPath, 0o600);
+  } catch (raw) {
+    try {
+      await rm(tempDir, { recursive: true, force: true });
+    } catch (cleanupRaw) {
+      log.error('Failed to clean up Claude MCP temp directory after prepare failure', {
+        error: getErrorMessage(cleanupRaw),
+        tempDir,
+      });
+    }
+    throw raw;
+  }
+
+  return {
+    mcpConfigArg: configPath,
+    cleanup: async () => {
+      await rm(tempDir, { recursive: true, force: true });
+    },
+  };
+}
+
+function buildSettingsArg(options: ClaudeHeadlessCallOptions): string | undefined {
+  const sandbox = options.sandbox;
+  if (!sandbox) {
     return undefined;
   }
 
-  return JSON.stringify({ mcpServers: options.mcpServers });
+  const settingsSandbox = {
+    ...(sandbox.allowUnsandboxedCommands !== undefined
+      ? { allowUnsandboxedCommands: sandbox.allowUnsandboxedCommands }
+      : {}),
+    ...(sandbox.excludedCommands !== undefined
+      ? { excludedCommands: sandbox.excludedCommands }
+      : {}),
+  };
+
+  if (Object.keys(settingsSandbox).length === 0) {
+    return undefined;
+  }
+
+  return JSON.stringify({ sandbox: settingsSandbox });
 }
 
-function buildSpawnArgs(
+async function buildSpawnArgs(
   prompt: string,
   options: ClaudeHeadlessCallOptions,
-): { args: string[]; expectedSessionId: string } {
+): Promise<{ args: string[]; expectedSessionId: string; cleanup: () => Promise<void> }> {
   const session = resolveSessionArgs(options);
+  const preparedResources = await prepareMcpConfig(options);
   const args: string[] = [
     '-p',
+    '--verbose',
     '--output-format',
     'stream-json',
     '--include-partial-messages',
@@ -77,23 +137,30 @@ function buildSpawnArgs(
     args.push('--allowed-tools', options.allowedTools.join(','));
   }
 
-  const effort = options.providerOptions?.claude?.effort;
-  if (effort) {
-    args.push('--effort', effort);
+  if (options.effort) {
+    args.push('--effort', options.effort);
   }
 
   if (options.systemPrompt?.trim()) {
     args.push('--system-prompt', options.systemPrompt.trim());
   }
 
-  const mcpConfig = buildMcpConfigArg(options);
-  if (mcpConfig) {
-    args.push('--mcp-config', mcpConfig);
+  if (preparedResources.mcpConfigArg) {
+    args.push('--mcp-config', preparedResources.mcpConfigArg);
+  }
+
+  const settings = buildSettingsArg(options);
+  if (settings) {
+    args.push('--settings', settings);
   }
 
   args.push(...session.args);
   args.push('--', prompt);
-  return { args, expectedSessionId: session.sessionId };
+  return {
+    args,
+    expectedSessionId: session.sessionId,
+    cleanup: preparedResources.cleanup,
+  };
 }
 
 function classifyError(error: ExecError, options: ClaudeHeadlessCallOptions): string {
@@ -118,8 +185,13 @@ export async function callClaudeHeadless(
   prompt: string,
   options: ClaudeHeadlessCallOptions,
 ): Promise<AgentResponse> {
+  let cleanup: (() => Promise<void>) | undefined;
+  let response: AgentResponse;
+
   try {
-    const { args, expectedSessionId } = buildSpawnArgs(prompt, options);
+    const prepared = await buildSpawnArgs(prompt, options);
+    cleanup = prepared.cleanup;
+    const { args, expectedSessionId } = prepared;
     const { stdout, stderr } = await runHeadlessCli(args, options);
     const content = aggregateContentFromStdout(stdout);
     const sessionId = extractSessionIdFromStdout(stdout) ?? expectedSessionId;
@@ -138,7 +210,7 @@ export async function callClaudeHeadless(
           },
         });
       }
-      return {
+      response = {
         persona: agentName,
         status: 'error',
         content: message,
@@ -146,26 +218,26 @@ export async function callClaudeHeadless(
         sessionId,
         error: message,
       };
-    }
+    } else {
+      if (options.onStream) {
+        options.onStream({
+          type: 'result',
+          data: {
+            result: content,
+            success: true,
+            sessionId: sessionId ?? '',
+          },
+        });
+      }
 
-    if (options.onStream) {
-      options.onStream({
-        type: 'result',
-        data: {
-          result: content,
-          success: true,
-          sessionId: sessionId ?? '',
-        },
-      });
+      response = {
+        persona: agentName,
+        status: 'done',
+        content,
+        timestamp: new Date(),
+        sessionId,
+      };
     }
-
-    return {
-      persona: agentName,
-      status: 'done',
-      content,
-      timestamp: new Date(),
-      sessionId,
-    };
   } catch (raw) {
     const error = raw as ExecError;
     const message = classifyError(error, options);
@@ -180,7 +252,7 @@ export async function callClaudeHeadless(
         },
       });
     }
-    return {
+    response = {
       persona: agentName,
       status: 'error',
       content: message,
@@ -189,4 +261,16 @@ export async function callClaudeHeadless(
       error: message,
     };
   }
+
+  try {
+    await cleanup?.();
+  } catch (raw) {
+    const cleanupError = raw as Error;
+    log.error('Failed to clean up Claude MCP config', {
+      agentName,
+      error: getErrorMessage(cleanupError),
+    });
+  }
+
+  return response;
 }

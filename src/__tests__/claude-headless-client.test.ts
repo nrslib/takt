@@ -1,10 +1,29 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import type { ChildProcess } from 'node:child_process';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+
+const { mkdtempMock, chmodMock, writeFileMock, rmMock } = vi.hoisted(() => ({
+  mkdtempMock: vi.fn(),
+  chmodMock: vi.fn(),
+  writeFileMock: vi.fn(),
+  rmMock: vi.fn(),
+}));
 
 vi.mock('node:crypto', () => ({
   randomUUID: vi.fn(),
 }));
+
+vi.mock('node:fs/promises', async () => {
+  const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+  return {
+    ...actual,
+    mkdtemp: mkdtempMock,
+    chmod: chmodMock,
+    writeFile: writeFileMock,
+    rm: rmMock,
+  };
+});
 
 vi.mock('node:child_process', () => ({
   spawn: vi.fn(),
@@ -15,10 +34,39 @@ import { randomUUID } from 'node:crypto';
 import { callClaudeHeadless } from '../infra/claude-headless/client.js';
 
 describe('callClaudeHeadless', () => {
+  let lastArgv: string[] = [];
+  let capturedMcpConfigContent: string | undefined;
+  let capturedMcpConfigMode: number | undefined;
+  let capturedMcpConfigPath: string | undefined;
+
   beforeEach(() => {
     vi.mocked(spawn).mockReset();
     vi.mocked(randomUUID).mockReset();
     vi.mocked(randomUUID).mockReturnValue('11111111-1111-4111-8111-111111111111');
+    mkdtempMock.mockReset();
+    chmodMock.mockReset();
+    writeFileMock.mockReset();
+    rmMock.mockReset();
+    mkdtempMock.mockImplementation(async (...args) => {
+      const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+      return actual.mkdtemp(...args);
+    });
+    chmodMock.mockImplementation(async (...args) => {
+      const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+      return actual.chmod(...args);
+    });
+    writeFileMock.mockImplementation(async (...args) => {
+      const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+      return actual.writeFile(...args);
+    });
+    rmMock.mockImplementation(async (...args) => {
+      const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+      return actual.rm(...args);
+    });
+    lastArgv = [];
+    capturedMcpConfigContent = undefined;
+    capturedMcpConfigMode = undefined;
+    capturedMcpConfigPath = undefined;
   });
 
   function stubSpawn(opts: {
@@ -29,6 +77,13 @@ describe('callClaudeHeadless', () => {
     error?: NodeJS.ErrnoException;
   }): void {
     vi.mocked(spawn).mockImplementation((_cmd, _args, _o) => {
+      lastArgv = [...(_args as string[])];
+      const mcpIndex = lastArgv.indexOf('--mcp-config');
+      if (mcpIndex >= 0) {
+        capturedMcpConfigPath = lastArgv[mcpIndex + 1];
+        capturedMcpConfigContent = readFileSync(capturedMcpConfigPath!, 'utf-8');
+        capturedMcpConfigMode = statSync(capturedMcpConfigPath!).mode & 0o777;
+      }
       const stdout = new EventEmitter();
       const stderr = new EventEmitter();
       const proc = new EventEmitter() as EventEmitter & Partial<ChildProcess>;
@@ -95,9 +150,8 @@ describe('callClaudeHeadless', () => {
   });
 
   function lastSpawnArgv(): string[] {
-    const call = vi.mocked(spawn).mock.calls.at(-1);
-    expect(call).toBeDefined();
-    return call![1] as string[];
+    expect(lastArgv.length).toBeGreaterThan(0);
+    return lastArgv;
   }
 
   it('passes -p, stream-json, default permission-mode, and -- before prompt', async () => {
@@ -112,6 +166,7 @@ describe('callClaudeHeadless', () => {
       expect.arrayContaining([
         '--output-format',
         'stream-json',
+        '--verbose',
         '--include-partial-messages',
         '--permission-mode',
         'default',
@@ -143,6 +198,20 @@ describe('callClaudeHeadless', () => {
     expect(argv[systemPromptIndex + 1]).toBe('system prompt');
     expect(argv.at(-1)).toBe('user prompt');
     expect(argv.at(-1)).not.toContain('system prompt');
+    expect(res.sessionId).toBe('11111111-1111-4111-8111-111111111111');
+  });
+
+  it('returns the generated sessionId when the first successful response does not include session metadata', async () => {
+    stubSpawn({
+      stdoutChunks: [`${JSON.stringify({ type: 'text', text: 'ok' })}\n`],
+      closeCode: 0,
+    });
+
+    const res = await callClaudeHeadless('agent', 'user prompt', {
+      cwd: '/tmp',
+    });
+
+    expect(res.status).toBe('done');
     expect(res.sessionId).toBe('11111111-1111-4111-8111-111111111111');
   });
 
@@ -238,7 +307,7 @@ describe('callClaudeHeadless', () => {
     expect(second.content).toBe('second');
   });
 
-  it('passes mcpServers as --mcp-config JSON', async () => {
+  it('passes mcpServers as --mcp-config temp file and removes it after execution', async () => {
     stubSpawn({
       stdoutChunks: [`${JSON.stringify({ type: 'text', text: 'x' })}\n`],
       closeCode: 0,
@@ -257,12 +326,118 @@ describe('callClaudeHeadless', () => {
     const argv = lastSpawnArgv();
     const mcpIndex = argv.indexOf('--mcp-config');
     expect(mcpIndex).toBeGreaterThanOrEqual(0);
-    expect(JSON.parse(argv[mcpIndex + 1]!)).toEqual({
+    expect(capturedMcpConfigMode).toBe(0o600);
+    expect(JSON.parse(capturedMcpConfigContent!)).toEqual({
       mcpServers: {
         local: {
           command: 'node',
           args: ['server.js'],
         },
+      },
+    });
+    expect(existsSync(capturedMcpConfigPath!)).toBe(false);
+  });
+
+  it('removes the temp directory when MCP config preparation fails before cleanup is registered', async () => {
+    let createdTempDir: string | undefined;
+    mkdtempMock.mockImplementationOnce(async (...args) => {
+      const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+      createdTempDir = await actual.mkdtemp(...args);
+      return createdTempDir;
+    });
+    writeFileMock.mockRejectedValueOnce(new Error('write failed'));
+
+    const res = await callClaudeHeadless('agent', 'p', {
+      cwd: '/tmp',
+      mcpServers: {
+        local: {
+          command: 'node',
+          args: ['server.js'],
+        },
+      },
+    });
+
+    expect(res.status).toBe('error');
+    expect(res.error).toContain('write failed');
+    expect(createdTempDir).toBeDefined();
+    expect(existsSync(createdTempDir!)).toBe(false);
+    expect(vi.mocked(spawn)).not.toHaveBeenCalled();
+  });
+
+  it('keeps the successful response when MCP cleanup fails after execution', async () => {
+    rmMock.mockRejectedValueOnce(new Error('cleanup failed'));
+    stubSpawn({
+      stdoutChunks: [`${JSON.stringify({ type: 'text', text: 'x' })}\n`],
+      closeCode: 0,
+    });
+    const onStream = vi.fn();
+
+    const res = await callClaudeHeadless('agent', 'p', {
+      cwd: '/tmp',
+      mcpServers: {
+        local: {
+          command: 'node',
+          args: ['server.js'],
+        },
+      },
+      onStream,
+    });
+
+    expect(res.status).toBe('done');
+    expect(res.content).toBe('x');
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'result',
+      data: {
+        result: 'x',
+        success: true,
+        sessionId: '11111111-1111-4111-8111-111111111111',
+      },
+    });
+    expect(onStream).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'result',
+        data: expect.objectContaining({ success: false }),
+      }),
+    );
+  });
+
+  it('omits --mcp-config when mcpServers is an empty object', async () => {
+    stubSpawn({
+      stdoutChunks: [`${JSON.stringify({ type: 'text', text: 'x' })}\n`],
+      closeCode: 0,
+    });
+
+    await callClaudeHeadless('agent', 'p', {
+      cwd: '/tmp',
+      mcpServers: {},
+    });
+
+    const argv = lastSpawnArgv();
+    expect(argv).not.toContain('--mcp-config');
+    expect(capturedMcpConfigPath).toBeUndefined();
+  });
+
+  it('passes claude sandbox settings via --settings JSON', async () => {
+    stubSpawn({
+      stdoutChunks: [`${JSON.stringify({ type: 'text', text: 'x' })}\n`],
+      closeCode: 0,
+    });
+
+    await callClaudeHeadless('agent', 'p', {
+      cwd: '/tmp',
+      sandbox: {
+        allowUnsandboxedCommands: true,
+        excludedCommands: ['./gradlew', 'npm test'],
+      },
+    });
+
+    const argv = lastSpawnArgv();
+    const settingsIndex = argv.indexOf('--settings');
+    expect(settingsIndex).toBeGreaterThanOrEqual(0);
+    expect(JSON.parse(argv[settingsIndex + 1]!)).toEqual({
+      sandbox: {
+        allowUnsandboxedCommands: true,
+        excludedCommands: ['./gradlew', 'npm test'],
       },
     });
   });
@@ -286,7 +461,7 @@ describe('callClaudeHeadless', () => {
       cwd: '/tmp',
       model: 'sonnet',
       allowedTools: ['Read', 'Grep', 'Edit'],
-      providerOptions: { claude: { effort: 'high' } },
+      effort: 'high',
     });
     const argv = lastSpawnArgv();
     const modelIdx = argv.indexOf('--model');
@@ -311,7 +486,6 @@ describe('callClaudeHeadless', () => {
     await callClaudeHeadless('agent', 'p', {
       cwd: '/tmp',
       allowedTools: [],
-      providerOptions: { claude: {} },
     });
     const argv = lastSpawnArgv();
     expect(argv).not.toContain('--allowed-tools');
@@ -326,7 +500,7 @@ describe('callClaudeHeadless', () => {
     await callClaudeHeadless('agent', 'p', {
       cwd: '/tmp',
       allowedTools: [],
-      providerOptions: { claude: { effort: 'low' } },
+      effort: 'low',
     });
     const argv = lastSpawnArgv();
     expect(argv).not.toContain('--allowed-tools');

@@ -35,13 +35,14 @@ describe('Claude provider split (Zod)', () => {
       expect(parsed.sandbox).toEqual({ allow_unsandboxed_commands: true });
     });
 
-    it('Given headless claude block with sandbox, When parse, Then fails (sandbox is SDK-only)', () => {
-      expect(() =>
-        ProviderBlockSchema.parse({
-          type: 'claude',
-          sandbox: { excluded_commands: ['rm'] },
-        }),
-      ).toThrow();
+    it('Given headless claude block with sandbox, When parse, Then succeeds', () => {
+      const parsed = ProviderBlockSchema.parse({
+        type: 'claude',
+        sandbox: { excluded_commands: ['rm'] },
+      });
+
+      expect(parsed.type).toBe('claude');
+      expect(parsed.sandbox).toEqual({ excluded_commands: ['rm'] });
     });
 
     it('Given headless claude block with network_access, When parse, Then fails', () => {

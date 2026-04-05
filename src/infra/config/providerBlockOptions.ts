@@ -19,7 +19,7 @@ export function normalizeProviderBlockOptions(provider: ProviderBlockInput): Mov
     }
     return { [provider.type]: { networkAccess: provider.network_access } };
   }
-  if (provider.type === 'claude-sdk' && provider.sandbox) {
+  if ((provider.type === 'claude-sdk' || provider.type === 'claude') && provider.sandbox) {
     return {
       claude: {
         sandbox: {

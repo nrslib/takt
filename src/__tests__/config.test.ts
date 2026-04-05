@@ -746,6 +746,33 @@ describe('loadProjectConfig provider_options', () => {
     });
   });
 
+  it('should allow claude sandbox in project provider block and normalize providerOptions', () => {
+    const projectConfigDir = getProjectConfigDir(testDir);
+    mkdirSync(projectConfigDir, { recursive: true });
+    writeFileSync(join(projectConfigDir, 'config.yaml'), [
+      'provider:',
+      '  type: claude',
+      '  model: sonnet',
+      '  sandbox:',
+      '    allow_unsandboxed_commands: true',
+      '    excluded_commands:',
+      '      - ./gradlew',
+    ].join('\n'));
+
+    const config = loadProjectConfig(testDir);
+
+    expect(config.provider).toBe('claude');
+    expect(config.model).toBe('sonnet');
+    expect(config.providerOptions).toEqual({
+      claude: {
+        sandbox: {
+          allowUnsandboxedCommands: true,
+          excludedCommands: ['./gradlew'],
+        },
+      },
+    });
+  });
+
   it('should throw when provider block uses codex with sandbox', () => {
     const projectConfigDir = getProjectConfigDir(testDir);
     mkdirSync(projectConfigDir, { recursive: true });
