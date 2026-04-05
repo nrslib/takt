@@ -1,0 +1,269 @@
+name: review-default
+description: Multi-perspective Code Review - reviews changes in parallel from 5 perspectives and outputs consolidated results
+workflow_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+max_steps: 10
+initial_step: gather
+
+steps:
+  - name: gather
+    edit: false
+    persona: planner
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Bash
+          - WebSearch
+          - WebFetch
+    instruction: gather-review
+    output_contracts:
+      report:
+        - name: review-target.md
+          format: review-gather
+    rules:
+      - condition: Review target information gathered
+        next: reviewers
+      - condition: Cannot identify review target, insufficient info
+        next: ABORT
+        appendix: |
+          Clarifications needed:
+          - {Question 1}
+          - {Question 2}
+
+  - name: reviewers
+    parallel:
+      - name: arch-review
+        edit: false
+        persona: architecture-reviewer
+        policy: review
+        knowledge: architecture
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - Bash
+              - WebSearch
+              - WebFetch
+        instruction: review-arch
+        output_contracts:
+          report:
+            - name: architecture-review.md
+              format: architecture-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+
+      - name: security-review
+        edit: false
+        persona: security-reviewer
+        policy: review
+        knowledge: security
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - Bash
+              - WebSearch
+              - WebFetch
+        instruction: review-security
+        output_contracts:
+          report:
+            - name: security-review.md
+              format: security-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+
+      - name: qa-review
+        edit: false
+        persona: qa-reviewer
+        policy:
+          - review
+          - qa
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - Bash
+              - WebSearch
+              - WebFetch
+        instruction: review-qa
+        output_contracts:
+          report:
+            - name: qa-review.md
+              format: qa-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+
+      - name: testing-review
+        edit: false
+        persona: testing-reviewer
+        policy:
+          - review
+          - testing
+        knowledge:
+          - unit-testing
+          - e2e-testing
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - Bash
+              - WebSearch
+              - WebFetch
+        instruction: review-test
+        output_contracts:
+          report:
+            - name: testing-review.md
+              format: testing-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+
+      - name: requirements-review
+        edit: false
+        persona: requirements-reviewer
+        policy: review
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - Bash
+              - WebSearch
+              - WebFetch
+        instruction: review-requirements
+        output_contracts:
+          report:
+            - name: requirements-review.md
+              format: requirements-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+
+    rules:
+      - condition: all("approved")
+        next: supervise
+      - condition: any("needs_fix")
+        next: supervise
+
+  - name: supervise
+    edit: false
+    persona: supervisor
+    policy: review
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - WebSearch
+          - WebFetch
+    pass_previous_response: false
+    rules:
+      - condition: Review synthesis complete
+        next: COMPLETE
+    instruction: |
+      ## Review Results
+      {previous_response}
+
+      **This is a review-only workflow.** Do NOT run tests or builds.
+      Your role is to synthesize the review results and produce a final summary.
+
+      **Tasks:**
+      1. Read all review reports in the Report Directory
+         - `00-review-target.md` (Review target information)
+         - `01-architecture-review.md` (Architecture review)
+         - `02-security-review.md` (Security review)
+         - `03-qa-review.md` (QA review)
+         - `04-testing-review.md` (Testing review)
+         - `05-requirements-review.md` (Requirements review)
+      2. Synthesize the 5 review results
+      3. Produce a consolidated review summary with overall verdict
+
+      **Review Summary output contract:**
+      ```markdown
+      # Review Summary
+
+      ## Overall Verdict: APPROVE / REJECT
+
+      ## Summary
+      {2-3 sentences consolidating all review results}
+
+      ## Review Results
+      | Review | Result | Key Findings |
+      |--------|--------|--------------|
+      | Architecture | APPROVE/REJECT | {Brief finding} |
+      | Security | APPROVE/REJECT | {Brief finding} |
+      | QA | APPROVE/REJECT | {Brief finding} |
+      | Testing | APPROVE/REJECT | {Brief finding} |
+      | Requirements | APPROVE/REJECT | {Brief finding} |
+
+      ## Issues Requiring Attention
+      | # | Severity | Source | Location | Issue |
+      |---|----------|--------|----------|-------|
+      | 1 | High | Security | `file:line` | Description |
+
+      ## Improvement Suggestions
+      - {Consolidated suggestions from all reviews}
+      ```
+    output_contracts:
+      report:
+        - name: review-summary.md
+          format: |
+            ```markdown
+            # Review Summary
+
+            ## Overall Verdict: APPROVE / REJECT
+
+            ## Summary
+            {2-3 sentences consolidating all review results}
+
+            ## Review Results
+            | Review | Result | Key Findings |
+            |--------|--------|--------------|
+            | Architecture | APPROVE/REJECT | {Overview} |
+            | Security | APPROVE/REJECT | {Overview} |
+            | QA | APPROVE/REJECT | {Overview} |
+            | Testing | APPROVE/REJECT | {Overview} |
+            | Requirements | APPROVE/REJECT | {Overview} |
+
+            ## Current Iteration Findings (new)
+            | # | finding_id | Severity | Source | Location | Issue | Fix Suggestion |
+            |---|------------|----------|--------|----------|-------|----------------|
+            | 1 | SUM-NEW-src-file-L42 | High | Security | `file:line` | Description | Suggestion |
+
+            ## Carry-over Findings (persists)
+            | # | finding_id | Source | Previous Evidence | Current Evidence | Issue |
+            |---|------------|--------|-------------------|------------------|-------|
+            | 1 | SUM-PERSIST-src-file-L77 | Architecture | `file:line` | `file:line` | Description |
+
+            ## Resolved Findings (resolved)
+            | finding_id | Source | Resolution Evidence |
+            |------------|--------|---------------------|
+            | SUM-RESOLVED-src-file-L10 | QA | `file:line` |
+
+            ## Improvement Suggestions
+            - {Consolidated suggestions from all reviews}
+
+            ## Rejection Gate
+            - REJECT is valid only when at least one finding exists in `new` or `persists`
+            - Findings without `finding_id` are invalid
+            ```

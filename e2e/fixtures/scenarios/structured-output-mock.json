@@ -1,0 +1,16 @@
+[
+  {
+    "persona": "agents/test-coder",
+    "status": "done",
+    "content": "Task completed successfully."
+  },
+  {
+    "persona": "conductor",
+    "status": "done",
+    "content": "",
+    "structured_output": {
+      "step": 1,
+      "reason": "Task completed"
+    }
+  }
+]

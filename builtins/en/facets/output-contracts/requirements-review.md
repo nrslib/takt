@@ -7,17 +7,19 @@
 {Summarize the result in 1-2 sentences}
 
 ## Requirements Cross-Reference
-| # | Requirement (from task) | Satisfied | Evidence (file:line) |
-|---|----------------------|-----------|----------------------|
-| 1 | {requirement 1} | ✅/❌ | `src/file.ts:42` |
+| # | Requirement (from task) | Status | Evidence (file:line) | Comment |
+|---|-------------------------|--------|----------------------|---------|
+| 1 | {requirement 1} | Satisfied / Unmet / Unverified | `src/file.ts:42` | {Notes} |
 
-- If even one ❌ exists, REJECT is mandatory
-- A ✅ without evidence is invalid (must be verified in actual code)
+- If a sentence contains multiple conditions, split it into multiple independently verifiable rows
+- If even one `Unmet` row exists, REJECT is mandatory
+- `Satisfied` without evidence is invalid (must be verified in actual code)
+- Do not mark a row `Satisfied` when only part of the cases is covered
 
 ## Scope Check
-| # | Out-of-scope Change | File | Justification |
-|---|---------------------|------|---------------|
-| 1 | {change not in requirements} | `src/file.ts` | Justified/Unnecessary |
+| # | Out-of-scope Change | File | Justification | Comment |
+|---|---------------------|------|---------------|---------|
+| 1 | {change not in requirements} | `src/file.ts` | Justified / Needs review / Unnecessary | {Reason} |
 
 ## Current Iteration Findings (new)
 | # | finding_id | family_tag | Category | Location | Issue | Fix Suggestion |

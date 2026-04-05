@@ -150,6 +150,8 @@ export interface NotificationSoundEventsConfig {
  * Project-level configuration stored in .takt/config.yaml.
  */
 export interface ProjectConfig {
+  /** UI / builtin resource language override for this project */
+  language?: Language;
   /** Provider selection for agent runtime */
   provider?: 'claude' | 'codex' | 'opencode' | 'cursor' | 'copilot' | 'mock';
   /** Model selection for agent runtime */
@@ -225,7 +227,7 @@ export interface GlobalConfig extends Omit<ProjectConfig, 'submodules' | 'withSu
   /** List of builtin piece/agent names to exclude from fallback loading */
   disabledBuiltins?: string[];
   /** @globalOnly */
-  /** Enable builtin pieces from builtins/{lang}/pieces */
+  /** Enable builtin workflows from builtins/{lang}/workflows */
   enableBuiltinPieces?: boolean;
   /** @globalOnly */
   /** Anthropic API key for Claude Code SDK (overridden by TAKT_ANTHROPIC_API_KEY env var) */
@@ -270,7 +272,10 @@ export interface GlobalConfig extends Omit<ProjectConfig, 'submodules' | 'withSu
   /** Path to bookmarks file (default: ~/.takt/preferences/bookmarks.yaml) */
   bookmarksFile?: string;
   /** @globalOnly */
-  /** Path to piece categories file (default: ~/.takt/preferences/piece-categories.yaml) */
+  /**
+   * User categories overlay path (default: ~/.takt/preferences/piece-categories.yaml).
+   * Builtin defaults: builtins/{lang}/workflow-categories.yaml (canonical keys: `workflow_categories` / `workflows`; legacy `piece_categories` / `pieces` merged when identical).
+   */
   pieceCategoriesFile?: string;
   /** @globalOnly */
   /** Prevent macOS idle sleep during takt execution using caffeinate (default: false) */

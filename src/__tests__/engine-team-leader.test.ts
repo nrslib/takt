@@ -213,8 +213,8 @@ describe('PieceEngine Integration: TeamLeaderRunner', () => {
         persona: 'team-leader',
         structuredOutput: {
           parts: [
-            { id: 'part-1', title: 'API', instruction: 'Implement API', timeout_ms: null },
-            { id: 'part-2', title: 'Test', instruction: 'Add tests', timeout_ms: null },
+            { id: 'part-1', title: 'API', instruction: 'Implement API' },
+            { id: 'part-2', title: 'Test', instruction: 'Add tests' },
           ],
         },
       }),
@@ -226,7 +226,7 @@ describe('PieceEngine Integration: TeamLeaderRunner', () => {
           done: false,
           reasoning: 'Need docs',
           parts: [
-            { id: 'part-3', title: 'Docs', instruction: 'Write docs', timeout_ms: null },
+            { id: 'part-3', title: 'Docs', instruction: 'Write docs' },
           ],
         },
       }),
@@ -266,7 +266,7 @@ describe('PieceEngine Integration: TeamLeaderRunner', () => {
       makeResponse({
         persona: 'team-leader',
         structuredOutput: {
-          parts: [{ id: 'part-1', title: 'API', instruction: 'Implement API', timeout_ms: null }],
+          parts: [{ id: 'part-1', title: 'API', instruction: 'Implement API' }],
         },
       }),
       makeResponse({ persona: 'coder', content: 'API done' }),

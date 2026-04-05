@@ -4,31 +4,183 @@
 
 import { z } from 'zod/v4';
 import { isValidTaskDir } from '../../shared/utils/taskPaths.js';
+import { warnLegacyConfigKey } from '../config/legacy-workflow-key-deprecation.js';
+
+function getStringField(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === 'string' ? value : undefined;
+}
+
+function getPositiveIntField(record: Record<string, unknown>, key: string): number | undefined {
+  const value = record[key];
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
+function assertMatchingAliasValues(
+  canonicalValue: string | undefined,
+  aliasValue: string | undefined,
+  message: string,
+): void {
+  if (canonicalValue !== undefined && aliasValue !== undefined && canonicalValue !== aliasValue) {
+    throw new Error(message);
+  }
+}
+
+function assertMatchingExceededMaxAlias(
+  stepsValue: number | undefined,
+  movementsValue: number | undefined,
+): void {
+  if (stepsValue !== undefined && movementsValue !== undefined && stepsValue !== movementsValue) {
+    throw new Error(
+      "Task configuration conflict: 'exceeded_max_steps' and 'exceeded_max_movements' must match when both are set.",
+    );
+  }
+}
+
+function resolveExceededMaxValue(record: Record<string, unknown>): number | undefined {
+  const steps = getPositiveIntField(record, 'exceeded_max_steps');
+  const movements = getPositiveIntField(record, 'exceeded_max_movements');
+  assertMatchingExceededMaxAlias(steps, movements);
+  return steps ?? movements;
+}
+
+function toTaskConfigRecord(input: unknown): Record<string, unknown> | null {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+    return null;
+  }
+  return input as Record<string, unknown>;
+}
+
+export function resolveTaskWorkflowValue(record: Record<string, unknown>): string | undefined {
+  const piece = getStringField(record, 'piece');
+  const workflow = getStringField(record, 'workflow');
+  assertMatchingAliasValues(piece, workflow, "Task configuration conflict: 'workflow' and 'piece' must match when both are set.");
+  return workflow ?? piece;
+}
+
+export function resolveTaskStartMovementValue(record: Record<string, unknown>): string | undefined {
+  const startMovement = getStringField(record, 'start_movement');
+  const startStep = getStringField(record, 'start_step');
+  assertMatchingAliasValues(startMovement, startStep, "Task configuration conflict: 'start_step' and 'start_movement' must match when both are set.");
+  return startStep ?? startMovement;
+}
+
+function normalizeAliasedTaskConfig(input: unknown): unknown {
+  const record = toTaskConfigRecord(input);
+  if (!record) {
+    return input;
+  }
+
+  const deprecationSeen = new Set<string>();
+  if ('piece' in record) {
+    warnLegacyConfigKey(deprecationSeen, 'piece', 'workflow');
+  }
+  if ('start_movement' in record) {
+    warnLegacyConfigKey(deprecationSeen, 'start_movement', 'start_step');
+  }
+  if ('exceeded_max_movements' in record) {
+    warnLegacyConfigKey(deprecationSeen, 'exceeded_max_movements', 'exceeded_max_steps');
+  }
+
+  const workflow = resolveTaskWorkflowValue(record);
+  const startMovement = resolveTaskStartMovementValue(record);
+  const exceededMax = resolveExceededMaxValue(record);
+
+  const hadExceededMovementsKey = Object.prototype.hasOwnProperty.call(record, 'exceeded_max_movements');
+  const hadExceededStepsKey = Object.prototype.hasOwnProperty.call(record, 'exceeded_max_steps');
+
+  const next: Record<string, unknown> = { ...record };
+  delete next.exceeded_max_movements;
+  delete next.exceeded_max_steps;
+  if (exceededMax !== undefined) {
+    next.exceeded_max_steps = exceededMax;
+  } else if (hadExceededMovementsKey) {
+    next.exceeded_max_movements = record.exceeded_max_movements;
+  } else if (hadExceededStepsKey) {
+    next.exceeded_max_steps = record.exceeded_max_steps;
+  }
+  if (workflow !== undefined) {
+    next.piece = workflow;
+  }
+  if (startMovement !== undefined) {
+    next.start_movement = startMovement;
+  }
+
+  return next;
+}
+
+function serializeTaskConfig(record: Record<string, unknown>): Record<string, unknown> {
+  const serialized = { ...record };
+  const piece = getStringField(serialized, 'piece') ?? getStringField(serialized, 'workflow');
+  const startMovement = getStringField(serialized, 'start_movement') ?? getStringField(serialized, 'start_step');
+  const exceededMax =
+    getPositiveIntField(serialized, 'exceeded_max_steps') ?? getPositiveIntField(serialized, 'exceeded_max_movements');
+
+  delete serialized.piece;
+  delete serialized.workflow;
+  delete serialized.start_movement;
+  delete serialized.start_step;
+  delete serialized.exceeded_max_movements;
+  delete serialized.exceeded_max_steps;
+
+  if (piece !== undefined) {
+    serialized.workflow = piece;
+  }
+  if (startMovement !== undefined) {
+    serialized.start_step = startMovement;
+  }
+  if (exceededMax !== undefined) {
+    serialized.exceeded_max_steps = exceededMax;
+  }
+
+  return serialized;
+}
 
 /**
  * Per-task execution config schema.
  * Used by `takt add` input and in-memory TaskInfo.data.
  */
-export const TaskExecutionConfigSchema = z.object({
+const TaskExecutionConfigObjectSchema = z.object({
   worktree: z.union([z.boolean(), z.string()]).optional(),
   branch: z.string().optional(),
   base_branch: z.string().optional(),
   piece: z.string().optional(),
+  workflow: z.string().optional(),
   issue: z.number().int().positive().optional(),
   start_movement: z.string().optional(),
+  start_step: z.string().optional(),
   retry_note: z.string().optional(),
   auto_pr: z.boolean().optional(),
   draft_pr: z.boolean().optional(),
   exceeded_max_movements: z.number().int().positive().optional(),
+  exceeded_max_steps: z.number().int().positive().optional(),
   exceeded_current_iteration: z.number().int().min(0).optional(),
 });
+
+function stripTaskAliases<T extends Record<string, unknown>>(
+  config: T,
+): Omit<T, 'workflow' | 'start_step' | 'exceeded_max_movements'> {
+  const canonical = { ...config };
+  delete canonical.workflow;
+  delete canonical.start_step;
+  delete canonical.exceeded_max_movements;
+  return canonical;
+}
+
+export const TaskExecutionConfigSchema = z.preprocess(
+  normalizeAliasedTaskConfig,
+  TaskExecutionConfigObjectSchema,
+).transform(stripTaskAliases);
 
 /**
  * Single task payload schema used by in-memory TaskInfo.data.
  */
-export const TaskFileSchema = TaskExecutionConfigSchema.extend({
-  task: z.string().min(1),
-});
+export const TaskFileSchema = z.preprocess(
+  normalizeAliasedTaskConfig,
+  TaskExecutionConfigObjectSchema.extend({
+    task: z.string().min(1),
+  }),
+).transform(stripTaskAliases);
 
 export type TaskFileData = z.infer<typeof TaskFileSchema>;
 
@@ -42,22 +194,25 @@ export const TaskFailureSchema = z.object({
 });
 export type TaskFailure = z.infer<typeof TaskFailureSchema>;
 
-export const TaskRecordSchema = TaskExecutionConfigSchema.extend({
-  name: z.string().min(1),
-  status: TaskStatusSchema,
-  slug: z.string().optional(),
-  summary: z.string().optional(),
-  worktree_path: z.string().optional(),
-  pr_url: z.string().optional(),
-  content: z.string().min(1).optional(),
-  content_file: z.string().min(1).optional(),
-  task_dir: z.string().optional(),
-  created_at: z.string().min(1),
-  started_at: z.string().nullable(),
-  completed_at: z.string().nullable(),
-  owner_pid: z.number().int().positive().nullable().optional(),
-  failure: TaskFailureSchema.optional(),
-}).superRefine((value, ctx) => {
+export const TaskRecordSchema = z.preprocess(
+  normalizeAliasedTaskConfig,
+  TaskExecutionConfigObjectSchema.extend({
+    name: z.string().min(1),
+    status: TaskStatusSchema,
+    slug: z.string().optional(),
+    summary: z.string().optional(),
+    worktree_path: z.string().optional(),
+    pr_url: z.string().optional(),
+    content: z.string().min(1).optional(),
+    content_file: z.string().min(1).optional(),
+    task_dir: z.string().optional(),
+    created_at: z.string().min(1),
+    started_at: z.string().nullable(),
+    completed_at: z.string().nullable(),
+    owner_pid: z.number().int().positive().nullable().optional(),
+    failure: TaskFailureSchema.optional(),
+  }),
+).transform(stripTaskAliases).superRefine((value, ctx) => {
   const sourceFields = [value.content, value.content_file, value.task_dir].filter((field) => field !== undefined);
   if (sourceFields.length === 0) {
     ctx.addIssue({
@@ -230,13 +385,13 @@ export const TaskRecordSchema = TaskExecutionConfigSchema.extend({
         message: 'Exceeded task must not have owner_pid.',
       });
     }
-    const hasExceededMax = value.exceeded_max_movements !== undefined;
+    const hasExceededMax = value.exceeded_max_steps !== undefined;
     const hasExceededIter = value.exceeded_current_iteration !== undefined;
     if (hasExceededMax !== hasExceededIter) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        path: ['exceeded_max_movements'],
-        message: 'exceeded_max_movements and exceeded_current_iteration must both be set or both be absent.',
+        path: ['exceeded_max_steps'],
+        message: 'exceeded_max_steps and exceeded_current_iteration must both be set or both be absent.',
       });
     }
   }
@@ -271,3 +426,13 @@ export const TasksFileSchema = z.object({
   tasks: z.array(TaskRecordSchema),
 });
 export type TasksFileData = z.infer<typeof TasksFileSchema>;
+
+export function serializeTaskRecord(record: TaskRecord): Record<string, unknown> {
+  return serializeTaskConfig(record as Record<string, unknown>);
+}
+
+export function serializeTasksFileData(state: TasksFileData): { tasks: Record<string, unknown>[] } {
+  return {
+    tasks: state.tasks.map(serializeTaskRecord),
+  };
+}

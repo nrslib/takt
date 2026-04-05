@@ -6,6 +6,8 @@ export interface ExceedTaskOptions {
   currentMovement: string;
   newMaxMovements: number;
   currentIteration: number;
+  worktreePath?: string;
+  branch?: string;
 }
 
 export class TaskExceedService {
@@ -28,8 +30,10 @@ export class TaskExceedService {
         owner_pid: null,
         failure: undefined,
         start_movement: options.currentMovement,
-        exceeded_max_movements: options.newMaxMovements,
+        exceeded_max_steps: options.newMaxMovements,
         exceeded_current_iteration: options.currentIteration,
+        ...(options.worktreePath ? { worktree_path: options.worktreePath } : {}),
+        ...(options.branch ? { branch: options.branch } : {}),
       };
 
       const tasks = [...current.tasks];

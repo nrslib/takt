@@ -26,9 +26,9 @@ function writeMinimalPiece(piecePath: string): void {
     piecePath,
     [
       'name: e2e-branch-piece',
-      'description: Piece for branch coverage E2E',
+      'description: Workflow for branch coverage E2E',
       'max_movements: 3',
-      'movements:',
+      'steps:',
       '  - name: execute',
       '    edit: true',
       '    persona: ../agents/test-coder.md',
@@ -39,7 +39,7 @@ function writeMinimalPiece(piecePath: string): void {
       '          - Write',
       '          - Edit',
       '    required_permission_mode: edit',
-      '    instruction_template: |',
+      '    instruction: |',
       '      {task}',
       '    rules:',
       '      - condition: Done',
@@ -50,14 +50,16 @@ function writeMinimalPiece(piecePath: string): void {
   );
 }
 
-function runTaskWithPiece(args: {
+function runTaskWithSelection(args: {
+  workflow?: string;
   piece?: string;
   cwd: string;
   env: NodeJS.ProcessEnv;
 }): ReturnType<typeof runTakt> {
   const scenarioPath = resolve(__dirname, '../fixtures/scenarios/execute-done.json');
   const baseArgs = ['--task', 'Create a file called noop.txt', '--provider', 'mock'];
-  const fullArgs = args.piece ? [...baseArgs, '--piece', args.piece] : baseArgs;
+  const workflowArgs = args.workflow ? [...baseArgs, '--workflow', args.workflow] : baseArgs;
+  const fullArgs = args.piece ? [...workflowArgs, '--piece', args.piece] : workflowArgs;
   return runTakt({
     args: fullArgs,
     cwd: args.cwd,
@@ -69,7 +71,7 @@ function runTaskWithPiece(args: {
   });
 }
 
-describe('E2E: Piece selection branch coverage', () => {
+describe('E2E: Workflow selection branch coverage', () => {
   let isolatedEnv: IsolatedEnv;
   let testRepo: TestRepo;
 
@@ -102,28 +104,28 @@ describe('E2E: Piece selection branch coverage', () => {
     writeAgent(join(testRepo.path, '.takt'));
     writeMinimalPiece(customPiecePath);
 
-    const result = runTaskWithPiece({
+    const result = runTaskWithSelection({
       piece: customPiecePath,
       cwd: testRepo.path,
       env: isolatedEnv.env,
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Piece completed');
+    expect(result.stdout).toContain('Workflow completed');
   }, 240_000);
 
   it('should execute when --piece is a known local name (resolver hit branch)', () => {
     writeAgent(join(testRepo.path, '.takt'));
     writeMinimalPiece(join(testRepo.path, '.takt', 'pieces', 'local-piece.yaml'));
 
-    const result = runTaskWithPiece({
+    const result = runTaskWithSelection({
       piece: 'local-piece',
       cwd: testRepo.path,
       env: isolatedEnv.env,
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Piece completed');
+    expect(result.stdout).toContain('Workflow completed');
   }, 240_000);
 
   it('should execute when --piece is a repertoire @scope name (resolver hit branch)', () => {
@@ -131,26 +133,26 @@ describe('E2E: Piece selection branch coverage', () => {
     writeAgent(pkgRoot);
     writeMinimalPiece(join(pkgRoot, 'pieces', 'critical-thinking.yaml'));
 
-    const result = runTaskWithPiece({
+    const result = runTaskWithSelection({
       piece: '@nrslib/takt-ensembles/critical-thinking',
       cwd: testRepo.path,
       env: isolatedEnv.env,
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Piece completed');
-    expect(result.stdout).not.toContain('Piece not found');
+    expect(result.stdout).toContain('Workflow completed');
+    expect(result.stdout).not.toContain('Workflow not found');
   }, 240_000);
 
   it('should fail fast with message when --piece is unknown (resolver miss branch)', () => {
-    const result = runTaskWithPiece({
+    const result = runTaskWithSelection({
       piece: '@nrslib/takt-ensembles/not-found',
       cwd: testRepo.path,
       env: isolatedEnv.env,
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Piece not found: @nrslib/takt-ensembles/not-found');
+    expect(result.stdout).toContain('Workflow not found: @nrslib/takt-ensembles/not-found');
     expect(result.stdout).toContain('Cancelled');
   }, 240_000);
 
@@ -158,11 +160,45 @@ describe('E2E: Piece selection branch coverage', () => {
     writeAgent(join(testRepo.path, '.takt'));
     writeMinimalPiece(join(testRepo.path, '.takt', 'pieces', 'default.yaml'));
 
-    const result = runTaskWithPiece({
+    const result = runTaskWithSelection({
       cwd: testRepo.path,
       env: isolatedEnv.env,
     });
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Piece completed');
+    expect(result.stdout).toContain('Workflow completed');
+  }, 240_000);
+
+  it('should execute successfully when --workflow is a known local name', () => {
+    writeAgent(join(testRepo.path, '.takt'));
+    writeMinimalPiece(join(testRepo.path, '.takt', 'workflows', 'canonical-workflow.yaml'));
+
+    const result = runTaskWithSelection({
+      workflow: 'canonical-workflow',
+      cwd: testRepo.path,
+      env: isolatedEnv.env,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Workflow completed');
+  }, 240_000);
+
+  it('should prefer .takt/workflows over .takt/pieces when the same name exists', () => {
+    writeAgent(join(testRepo.path, '.takt'));
+    writeMinimalPiece(join(testRepo.path, '.takt', 'workflows', 'priority-check.yaml'));
+    mkdirSync(join(testRepo.path, '.takt', 'pieces'), { recursive: true });
+    writeFileSync(
+      join(testRepo.path, '.takt', 'pieces', 'priority-check.yaml'),
+      'name: broken-priority-check\nsteps: [\n',
+      'utf-8',
+    );
+
+    const result = runTaskWithSelection({
+      workflow: 'priority-check',
+      cwd: testRepo.path,
+      env: isolatedEnv.env,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Workflow completed');
   }, 240_000);
 });

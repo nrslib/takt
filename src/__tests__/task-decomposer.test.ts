@@ -10,7 +10,7 @@ describe('parseParts', () => {
       '```',
       '最終案',
       '```json',
-      '[{"id":"a","title":"A","instruction":"Do A"},{"id":"b","title":"B","instruction":"Do B","timeout_ms":1200}]',
+      '[{"id":"a","title":"A","instruction":"Do A"},{"id":"b","title":"B","instruction":"Do B"}]',
       '```',
     ].join('\n');
 
@@ -21,9 +21,12 @@ describe('parseParts', () => {
       id: 'a',
       title: 'A',
       instruction: 'Do A',
-      timeoutMs: undefined,
     });
-    expect(result[1]!.timeoutMs).toBe(1200);
+    expect(result[1]).toEqual({
+      id: 'b',
+      title: 'B',
+      instruction: 'Do B',
+    });
   });
 
   it('jsonコードブロックがない場合はエラー', () => {
@@ -72,5 +75,13 @@ describe('parseParts', () => {
     ].join('\n');
 
     expect(() => parseParts(content, 3)).toThrow('Duplicate part id: dup');
+  });
+
+  it('part に timeout_ms が含まれる場合はエラー', () => {
+    const content = '```json\n[{"id":"a","title":"A","instruction":"Do A","timeout_ms":1200}]\n```';
+
+    expect(() => parseParts(content, 3)).toThrow(
+      'Part[0] "timeout_ms" is not supported; use team_leader.timeout_ms instead',
+    );
   });
 });

@@ -10,6 +10,7 @@ import {
   isFullWidth,
   getDisplayWidth,
   stripAnsi,
+  sanitizeTerminalText,
   truncateText,
 } from '../shared/utils/text.js';
 
@@ -93,6 +94,22 @@ describe('stripAnsi', () => {
 
   it('should handle empty string', () => {
     expect(stripAnsi('')).toBe('');
+  });
+});
+
+describe('sanitizeTerminalText', () => {
+  it('should visualize newline, carriage return, and tab characters', () => {
+    expect(sanitizeTerminalText('line1\nline2\r\tend')).toBe('line1\\nline2\\r\\tend');
+  });
+
+  it('should visualize other control characters as hex escapes', () => {
+    expect(sanitizeTerminalText(`start${String.fromCharCode(0x00)}${String.fromCharCode(0x1f)}${String.fromCharCode(0x7f)}end`))
+      .toBe('start\\x00\\x1f\\x7fend');
+  });
+
+  it('should strip ANSI sequences before visualizing control characters', () => {
+    expect(sanitizeTerminalText('\x1b[31mwarn\x1b[0m\n\x1b]0;title\x07\tok'))
+      .toBe('warn\\n\\tok');
   });
 });
 

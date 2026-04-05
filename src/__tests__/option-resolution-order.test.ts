@@ -67,7 +67,7 @@ describe('option resolution order', () => {
     loadTemplateMock.mockReturnValue('template');
   });
 
-  it('should resolve provider in order: CLI > stepProvider > local config > global config', async () => {
+  it('should resolve provider in order: CLI > local config > global config', async () => {
     loadProjectConfigMock.mockReturnValue({ provider: 'opencode' });
     loadGlobalConfigMock.mockReturnValue({
       provider: 'mock',
@@ -79,15 +79,11 @@ describe('option resolution order', () => {
     await runAgent(undefined, 'task', {
       cwd: '/repo',
       provider: 'codex',
-      stepProvider: 'claude',
     });
     expect(getProviderMock).toHaveBeenLastCalledWith('codex');
 
-    await runAgent(undefined, 'task', {
-      cwd: '/repo',
-      stepProvider: 'claude',
-    });
-    expect(getProviderMock).toHaveBeenLastCalledWith('claude');
+    await runAgent(undefined, 'task', { cwd: '/repo' });
+    expect(getProviderMock).toHaveBeenLastCalledWith('opencode');
 
     loadProjectConfigMock.mockReturnValue({});
     loadGlobalConfigMock.mockReturnValue({
@@ -96,11 +92,6 @@ describe('option resolution order', () => {
       concurrency: 1,
       taskPollIntervalMs: 500,
     });
-    await runAgent(undefined, 'task', {
-      cwd: '/repo',
-      stepProvider: 'claude',
-    });
-    expect(getProviderMock).toHaveBeenLastCalledWith('claude');
 
     await runAgent(undefined, 'task', { cwd: '/repo' });
     expect(getProviderMock).toHaveBeenLastCalledWith('mock');
@@ -127,7 +118,7 @@ describe('option resolution order', () => {
     expect(getProviderMock).toHaveBeenLastCalledWith('claude');
   });
 
-  it('should resolve model in order: CLI > persona > step > local > global', async () => {
+  it('should resolve model in order: CLI > persona > local > global', async () => {
     loadGlobalConfigMock.mockReturnValue({
       provider: 'claude',
       model: 'global-model',
@@ -146,7 +137,6 @@ describe('option resolution order', () => {
     await runAgent('coder', 'task', {
       cwd: '/repo',
       model: 'cli-model',
-      stepModel: 'step-model',
     });
 
     expect(providerCallMock).toHaveBeenLastCalledWith(
@@ -154,20 +144,8 @@ describe('option resolution order', () => {
       expect.objectContaining({ model: 'cli-model' }),
     );
 
-    await runAgent(undefined, 'task', {
-      cwd: '/repo',
-      stepModel: 'step-model',
-      stepProvider: 'claude',
-    });
-
-    expect(providerCallMock).toHaveBeenLastCalledWith(
-      'task',
-      expect.objectContaining({ model: 'step-model' }),
-    );
-
     await runAgent('coder', 'task', {
       cwd: '/repo',
-      stepProvider: 'claude',
     });
     expect(providerCallMock).toHaveBeenLastCalledWith(
       'task',
@@ -187,7 +165,6 @@ describe('option resolution order', () => {
 
     await runAgent(undefined, 'task', {
       cwd: '/repo',
-      stepProvider: 'codex',
     });
 
     expect(providerCallMock).toHaveBeenLastCalledWith(
@@ -211,7 +188,7 @@ describe('option resolution order', () => {
 
     await runAgent(undefined, 'task', {
       cwd: '/repo',
-      stepProvider: 'opencode',
+      provider: 'opencode',
     });
 
     expect(providerCallMock).toHaveBeenLastCalledWith(

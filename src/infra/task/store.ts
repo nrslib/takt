@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
-import { TasksFileSchema, type TasksFileData } from './schema.js';
+import { TasksFileSchema, serializeTasksFileData, type TasksFileData } from './schema.js';
 import { createLogger } from '../../shared/utils/index.js';
 
 const log = createLogger('task-store');
@@ -67,7 +67,7 @@ export class TaskStore {
   private writeUnsafe(state: TasksFileData): void {
     this.ensureDirs();
     const tempPath = `${this.tasksFile}.tmp-${process.pid}-${Date.now()}`;
-    const yaml = stringifyYaml(state);
+    const yaml = stringifyYaml(serializeTasksFileData(state));
     fs.writeFileSync(tempPath, yaml, 'utf-8');
     fs.renameSync(tempPath, this.tasksFile);
   }

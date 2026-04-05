@@ -7,7 +7,6 @@ function makePart(id: string, title: string): PartDefinition {
     id,
     title,
     instruction: `do-${id}`,
-    timeoutMs: undefined,
   };
 }
 

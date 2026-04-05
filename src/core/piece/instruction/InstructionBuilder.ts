@@ -74,7 +74,7 @@ export class InstructionBuilder {
     // Execution context variables
     const editRule = buildEditRule(this.step.edit, language);
 
-    // Piece structure (loop expansion done in code)
+    // Workflow structure (loop expansion done in code)
     const pieceStructure = this.buildPieceStructure(language);
 
     // Report info (from output contracts)
@@ -130,7 +130,7 @@ export class InstructionBuilder {
       },
     );
 
-    // Piece name and description
+    // Workflow name and description
     const pieceName = this.context.pieceName ?? '';
     const pieceDescription = this.context.pieceDescription ?? '';
     const hasPieceDescription = !!pieceDescription;
@@ -193,7 +193,7 @@ export class InstructionBuilder {
   }
 
   /**
-   * Build the piece structure display string.
+   * Build the workflow structure display string.
    * Returns empty string if no piece movements are available.
    */
   private buildPieceStructure(language: Language): string {
@@ -203,20 +203,20 @@ export class InstructionBuilder {
 
     const currentMovementMarker = language === 'ja' ? '現在' : 'current';
     const structureHeader = language === 'ja'
-      ? `このピースは${this.context.pieceMovements.length}ムーブメントで構成されています:`
-      : `This piece consists of ${this.context.pieceMovements.length} movements:`;
+      ? `このワークフローは${this.context.pieceMovements.length}ステップで構成されています:`
+      : `This workflow consists of ${this.context.pieceMovements.length} steps:`;
     const movementLines = this.context.pieceMovements.map((ws, index) => {
       const isCurrent = index === this.context.currentMovementIndex;
       const marker = isCurrent ? ` ← ${currentMovementMarker}` : '';
       const desc = ws.description ? `（${ws.description}）` : '';
-      return `- Movement ${index + 1}: ${ws.name}${desc}${marker}`;
+      return `- Step ${index + 1}: ${ws.name}${desc}${marker}`;
     });
     return [structureHeader, ...movementLines].join('\n');
   }
 }
 
 /**
- * Render report context info for Piece Context section.
+ * Render report context info for Workflow Context section.
  * Used by InstructionBuilder and ReportInstructionBuilder.
  */
 export function renderReportContext(
@@ -246,8 +246,8 @@ export function renderReportContext(
 }
 
 /**
- * Generate report output instructions from movement's output contracts.
- * Returns empty string if movement has no output contracts or no reportDir.
+ * Generate report output instructions from step output contracts.
+ * Returns empty string if step has no output contracts or no reportDir.
  */
 export function renderReportOutputInstruction(
   step: PieceMovement,

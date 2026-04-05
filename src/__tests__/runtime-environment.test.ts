@@ -1,4 +1,4 @@
-import { mkdtempSync, existsSync, readFileSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, existsSync, readFileSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -16,6 +16,9 @@ describe('prepareRuntimeEnvironment', () => {
     'JAVA_TOOL_OPTIONS',
     'GRADLE_USER_HOME',
     'npm_config_cache',
+    'GH_CONFIG_DIR',
+    'GLAB_CONFIG_DIR',
+    'HOME',
   ] as const;
   const originalEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
 
@@ -91,6 +94,159 @@ describe('prepareRuntimeEnvironment', () => {
     expect(result).toBeDefined();
     expect(result?.injectedEnv.CUSTOM_CACHE_DIR).toBe(join(cwd, '.takt', '.runtime', 'custom-cache'));
     expect(existsSync(join(cwd, '.takt', '.runtime', 'custom-cache'))).toBe(true);
+  });
+
+  it('should preserve GLAB_CONFIG_DIR when already set in environment', () => {
+    const cwd = mkdtempSync(join(systemTmpDir, 'takt-runtime-env-'));
+    tempDirs.push(cwd);
+
+    const customGlabDir = '/custom/glab/config';
+    process.env['GLAB_CONFIG_DIR'] = customGlabDir;
+
+    const result = prepareRuntimeEnvironment(cwd, { prepare: ['node'] });
+
+    expect(result).toBeDefined();
+    expect(result?.injectedEnv.GLAB_CONFIG_DIR).toBe(customGlabDir);
+  });
+
+  it.skipIf(process.platform !== 'darwin')(
+    'should use macOS Application Support path when it exists',
+    () => {
+      const cwd = mkdtempSync(join(systemTmpDir, 'takt-runtime-env-'));
+      tempDirs.push(cwd);
+      const fakeHome = mkdtempSync(join(systemTmpDir, 'takt-fake-home-'));
+      tempDirs.push(fakeHome);
+
+      delete process.env['GLAB_CONFIG_DIR'];
+      process.env['HOME'] = fakeHome;
+      delete process.env['XDG_CONFIG_HOME'];
+
+      const macOsGlabDir = join(fakeHome, 'Library', 'Application Support', 'glab-cli');
+      mkdirSync(macOsGlabDir, { recursive: true });
+
+      const result = prepareRuntimeEnvironment(cwd, { prepare: ['node'] });
+
+      expect(result).toBeDefined();
+      expect(result?.injectedEnv.GLAB_CONFIG_DIR).toBe(macOsGlabDir);
+    },
+  );
+
+  it('should use XDG_CONFIG_HOME/glab-cli when it exists', () => {
+    const cwd = mkdtempSync(join(systemTmpDir, 'takt-runtime-env-'));
+    tempDirs.push(cwd);
+    const fakeHome = mkdtempSync(join(systemTmpDir, 'takt-fake-home-'));
+    tempDirs.push(fakeHome);
+    const fakeXdgConfig = mkdtempSync(join(systemTmpDir, 'takt-xdg-config-'));
+    tempDirs.push(fakeXdgConfig);
+
+    delete process.env['GLAB_CONFIG_DIR'];
+    process.env['HOME'] = fakeHome;
+    process.env['XDG_CONFIG_HOME'] = fakeXdgConfig;
+
+    const glabDir = join(fakeXdgConfig, 'glab-cli');
+    mkdirSync(glabDir, { recursive: true });
+
+    const result = prepareRuntimeEnvironment(cwd, { prepare: ['node'] });
+
+    expect(result).toBeDefined();
+    expect(result?.injectedEnv.GLAB_CONFIG_DIR).toBe(glabDir);
+  });
+
+  it('should fallback to ~/.config/glab-cli when no other glab config exists', () => {
+    const cwd = mkdtempSync(join(systemTmpDir, 'takt-runtime-env-'));
+    tempDirs.push(cwd);
+    const fakeHome = mkdtempSync(join(systemTmpDir, 'takt-fake-home-'));
+    tempDirs.push(fakeHome);
+
+    delete process.env['GLAB_CONFIG_DIR'];
+    delete process.env['XDG_CONFIG_HOME'];
+    process.env['HOME'] = fakeHome;
+
+    const result = prepareRuntimeEnvironment(cwd, { prepare: ['node'] });
+
+    expect(result).toBeDefined();
+    expect(result?.injectedEnv.GLAB_CONFIG_DIR).toBe(join(fakeHome, '.config', 'glab-cli'));
+  });
+
+  it('should respect XDG_CONFIG_HOME in fallback when glab-cli dir does not exist', () => {
+    const cwd = mkdtempSync(join(systemTmpDir, 'takt-runtime-env-'));
+    tempDirs.push(cwd);
+    const fakeHome = mkdtempSync(join(systemTmpDir, 'takt-fake-home-'));
+    tempDirs.push(fakeHome);
+    const fakeXdgConfig = mkdtempSync(join(systemTmpDir, 'takt-xdg-config-'));
+    tempDirs.push(fakeXdgConfig);
+
+    delete process.env['GLAB_CONFIG_DIR'];
+    process.env['HOME'] = fakeHome;
+    process.env['XDG_CONFIG_HOME'] = fakeXdgConfig;
+
+    // glab-cli dir does NOT exist under XDG_CONFIG_HOME — fallback should still use XDG_CONFIG_HOME
+    const result = prepareRuntimeEnvironment(cwd, { prepare: ['node'] });
+
+    expect(result).toBeDefined();
+    expect(result?.injectedEnv.GLAB_CONFIG_DIR).toBe(join(fakeXdgConfig, 'glab-cli'));
+  });
+
+  it('should include GLAB_CONFIG_DIR in env.sh output', () => {
+    const cwd = mkdtempSync(join(systemTmpDir, 'takt-runtime-env-'));
+    tempDirs.push(cwd);
+
+    const customGlabDir = '/custom/glab/config';
+    process.env['GLAB_CONFIG_DIR'] = customGlabDir;
+
+    const result = prepareRuntimeEnvironment(cwd, { prepare: ['node'] });
+
+    expect(result).toBeDefined();
+    const envContent = readFileSync(result!.envFile, 'utf-8');
+    expect(envContent).toContain('export GLAB_CONFIG_DIR=');
+    expect(envContent).toContain(customGlabDir);
+  });
+
+  it.skipIf(process.platform !== 'darwin')(
+    'should prefer macOS Application Support over XDG_CONFIG_HOME for glab',
+    () => {
+      const cwd = mkdtempSync(join(systemTmpDir, 'takt-runtime-env-'));
+      tempDirs.push(cwd);
+      const fakeHome = mkdtempSync(join(systemTmpDir, 'takt-fake-home-'));
+      tempDirs.push(fakeHome);
+      const fakeXdgConfig = mkdtempSync(join(systemTmpDir, 'takt-xdg-config-'));
+      tempDirs.push(fakeXdgConfig);
+
+      delete process.env['GLAB_CONFIG_DIR'];
+      process.env['HOME'] = fakeHome;
+      process.env['XDG_CONFIG_HOME'] = fakeXdgConfig;
+
+      // Both paths exist
+      const macOsGlabDir = join(fakeHome, 'Library', 'Application Support', 'glab-cli');
+      mkdirSync(macOsGlabDir, { recursive: true });
+      const xdgGlabDir = join(fakeXdgConfig, 'glab-cli');
+      mkdirSync(xdgGlabDir, { recursive: true });
+
+      const result = prepareRuntimeEnvironment(cwd, { prepare: ['node'] });
+
+      expect(result).toBeDefined();
+      expect(result?.injectedEnv.GLAB_CONFIG_DIR).toBe(macOsGlabDir);
+    },
+  );
+
+  it('should prefer GLAB_CONFIG_DIR env over all other glab config paths', () => {
+    const cwd = mkdtempSync(join(systemTmpDir, 'takt-runtime-env-'));
+    tempDirs.push(cwd);
+    const fakeXdgConfig = mkdtempSync(join(systemTmpDir, 'takt-xdg-config-'));
+    tempDirs.push(fakeXdgConfig);
+
+    const explicitDir = '/explicit/glab/config';
+    process.env['GLAB_CONFIG_DIR'] = explicitDir;
+    process.env['XDG_CONFIG_HOME'] = fakeXdgConfig;
+
+    // XDG path also exists, but env var should take precedence
+    const xdgGlabDir = join(fakeXdgConfig, 'glab-cli');
+    mkdirSync(xdgGlabDir, { recursive: true });
+
+    const result = prepareRuntimeEnvironment(cwd, { prepare: ['node'] });
+
+    expect(result).toBeDefined();
+    expect(result?.injectedEnv.GLAB_CONFIG_DIR).toBe(explicitDir);
   });
 
 });

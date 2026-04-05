@@ -1,6 +1,6 @@
 name: e2e-mock-no-match
 description: Piece with a strict rule condition that will not match mock output
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true
@@ -12,7 +12,7 @@ movements:
     edit: true
     persona: ../agents/test-coder.md
     required_permission_mode: edit
-    instruction_template: |
+    instruction: |
       {task}
     rules:
       - condition: SpecificMatchThatWillNotOccur

@@ -297,7 +297,7 @@ describe('PieceMovementRawSchema with arpeggio', () => {
     const raw = {
       name: 'normal-step',
       persona: 'coder.md',
-      instruction_template: 'Do work',
+      instruction: 'Do work',
     };
 
     const result = PieceMovementRawSchema.safeParse(raw);

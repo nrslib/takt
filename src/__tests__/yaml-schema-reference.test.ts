@@ -3,10 +3,10 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 describe('yaml-schema reference', () => {
-  it('normal movement examples should not duplicate instruction keys in one movement block', () => {
+  it('normal step examples should not duplicate instruction keys in one step block', () => {
     const schemaPath = join(process.cwd(), 'builtins', 'skill', 'references', 'yaml-schema.md');
     const schemaText = readFileSync(schemaPath, 'utf-8');
-    const normalSectionMatch = schemaText.match(/### 通常 Movement([\s\S]*?)### Parallel Movement/);
+    const normalSectionMatch = schemaText.match(/### 通常の step([\s\S]*?)### Parallel step/);
 
     expect(normalSectionMatch).not.toBeNull();
     const normalSection = normalSectionMatch![1];
@@ -24,10 +24,10 @@ describe('yaml-schema reference', () => {
     expect(hasDuplicatedInstruction).toBe(false);
   });
 
-  it('normal movement examples should not duplicate policy keys in one movement block', () => {
+  it('normal step examples should not duplicate policy keys in one step block', () => {
     const schemaPath = join(process.cwd(), 'builtins', 'skill', 'references', 'yaml-schema.md');
     const schemaText = readFileSync(schemaPath, 'utf-8');
-    const normalSectionMatch = schemaText.match(/### 通常 Movement([\s\S]*?)### Parallel Movement/);
+    const normalSectionMatch = schemaText.match(/### 通常の step([\s\S]*?)### Parallel step/);
 
     expect(normalSectionMatch).not.toBeNull();
     const normalSection = normalSectionMatch![1];

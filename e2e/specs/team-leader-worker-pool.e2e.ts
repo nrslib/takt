@@ -63,7 +63,7 @@ describe('E2E: Team leader worker-pool dynamic scheduling', () => {
     }
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Piece completed');
+    expect(result.stdout).toContain('Workflow completed');
 
     const records = readSessionRecords(repo.path);
     const initialDecomposition = records.find((r) =>

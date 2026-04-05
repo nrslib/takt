@@ -1,11 +1,11 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { PieceMovement, RuleMatchMethod } from '../models/types.js';
-import { judgeStatus } from '../../agents/agent-usecases.js';
 import { StatusJudgmentBuilder, type StatusJudgmentContext } from './instruction/StatusJudgmentBuilder.js';
 import { getJudgmentReportFiles } from './evaluation/rule-utils.js';
 import { createLogger } from '../../shared/utils/index.js';
 import type { PhaseRunnerContext } from './phase-runner.js';
+import type { MovementProviderInfo } from './types.js';
 import { buildPhaseExecutionId } from '../../shared/utils/phaseExecutionId.js';
 
 const log = createLogger('phase-runner');
@@ -109,10 +109,17 @@ export async function runStatusJudgmentPhase(
     });
   }
 
+  const movementProvider: MovementProviderInfo = ctx.resolveStepProviderModel
+    ? ctx.resolveStepProviderModel(step)
+    : { provider: ctx.resolveProvider(step), model: undefined };
+
   try {
-    const result = await judgeStatus(structuredInstruction, tagInstruction, step.rules, {
+    const result = await ctx.structuredCaller.judgeStatus(structuredInstruction, tagInstruction, step.rules, {
       cwd: ctx.cwd,
       movementName: step.name,
+      provider: movementProvider.provider,
+      resolvedProvider: movementProvider.provider,
+      resolvedModel: movementProvider.model,
       language: ctx.language,
       interactive: ctx.interactive,
       onStream: ctx.onStream,

@@ -77,6 +77,93 @@ function createEngine(config, cwd: string) {
 3. **Is there a path to pass the value from above?** → If not, add a parameter or field
 4. **Do related values have invariants?** → Cross-validate at load/setup time
 
+## Unify Resolution Responsibility
+
+Values that can be decided early — config, options, providers, paths, permissions — must be resolved once at the boundary. Do not re-resolve the same value in multiple layers.
+
+| Pattern | Judgment | Reason |
+|---------|----------|--------|
+| Resolve at the entry point and pass the value explicitly downward | OK | Source of truth stays traceable |
+| Delegate resolution to a dedicated method/object | OK | Preserves a single source of truth |
+| Resolve the same config separately in upper and lower layers | REJECT | Creates precedence drift |
+| Resolve separately for display and execution | REJECT | Logs and behavior diverge |
+| Stack `if` branches for config resolution inside main flow | REJECT | Leaks details into orchestration |
+
+```typescript
+// REJECT - Each layer resolves config independently
+function executeTask(options) {
+  const provider = options.provider ?? loadGlobalConfig().provider;
+  return runAgent({
+    provider,
+    stepProvider: resolveProviderForStep(options.step),
+  });
+}
+
+function runAgent(options) {
+  const provider = options.provider ?? resolveProviderFromConfig();
+  return getProvider(provider).call();
+}
+
+// OK - Resolve at the boundary, then use resolved values only
+function executeTask(options) {
+  const resolved = resolveExecutionContext(options);
+  return runAgent({
+    resolvedProvider: resolved.provider,
+    resolvedModel: resolved.model,
+  });
+}
+
+function runAgent(options) {
+  return getProvider(options.resolvedProvider).call();
+}
+```
+
+Decision criteria:
+1. Can this value be fixed before execution starts? → Resolve it at the boundary
+2. Does the same precedence logic exist in 2+ places? → Centralize it in a dedicated method/object
+3. Does a lower layer know config sources directly? → Pass only resolved values
+4. Are display, execution, and persistence resolving separately? → Share the same resolved result
+
+## Phase Separation
+
+Separate input collection, interpretation/normalization, execution, and output/side effects into distinct phases. Do not keep receiving unresolved input in the middle of loops or main processing and interpret it on the spot.
+
+| Pattern | Judgment | Reason |
+|---------|----------|--------|
+| Split into stages such as `RawOptions -> ResolvedOptions -> ExecutionContext` | OK | Responsibility of each phase is explicit |
+| Normalize input before entering the loop | OK | Every iteration runs on the same assumptions |
+| Resolve `options ?? config ?? env` inside every iteration | REJECT | Iteration assumptions can drift |
+| Mix input interpretation and execution logic per iteration | REJECT | Intent of the flow becomes unreadable |
+| Even when true streaming/optimization forces per-item handling, isolate interpretation in a dedicated method | OK | Keeps minimum responsibility separation |
+
+```typescript
+// REJECT - Interpret input inside the loop every time
+for (const step of steps) {
+  const provider = options.provider
+    ?? step.provider
+    ?? projectConfig.provider
+    ?? globalConfig.provider;
+  const result = await executeStep(step, { provider });
+  printResult(result);
+}
+
+// OK - Resolve first, loop only executes
+const context = resolveExecutionContext(rawOptions, steps);
+
+for (const step of context.steps) {
+  const result = await executeStep(step, {
+    resolvedProvider: step.resolvedProvider,
+  });
+  printResult(result);
+}
+```
+
+Decision criteria:
+1. Is a branch inside the loop business logic or input interpretation? → Move input interpretation outside
+2. Is the same interpretation repeated for each iteration? → Normalize once up front
+3. Does an execution function accept raw input directly? → Convert to a `Resolved*` type first
+4. Does optimization require incremental handling? → At least extract interpretation into a dedicated function
+
 ## Abstraction
 
 ### Think Before Adding Conditionals

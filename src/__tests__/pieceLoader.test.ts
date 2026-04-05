@@ -2,14 +2,16 @@
  * Tests for isPiecePath and loadPieceByIdentifier
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+
 import {
   isPiecePath,
   loadPieceByIdentifier,
   listPieces,
+  listPieceEntries,
   loadAllPieces,
   loadAllPiecesWithSources,
 } from '../infra/config/loaders/pieceLoader.js';
@@ -22,6 +24,18 @@ max_movements: 1
 movements:
   - name: step1
     persona: coder
+    instruction: "{task}"
+`;
+
+const INVALID_ALLOWED_TOOLS_PIECE = `name: broken-piece
+description: Broken piece
+initial_movement: step1
+max_movements: 1
+
+movements:
+  - name: step1
+    persona: coder
+    allowed_tools: [Read]
     instruction: "{task}"
 `;
 
@@ -117,6 +131,71 @@ describe('loadPieceByIdentifier', () => {
     const piece = loadPieceByIdentifier('./non-existent.yaml', tempDir);
     expect(piece).toBeNull();
   });
+
+  it('should load workflow definitions from project-local workflows directory', () => {
+    const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
+    mkdirSync(projectWorkflowsDir, { recursive: true });
+    writeFileSync(join(projectWorkflowsDir, 'project-custom.yaml'), SAMPLE_PIECE);
+
+    const piece = loadPieceByIdentifier('project-custom', tempDir);
+
+    expect(piece).not.toBeNull();
+    expect(piece!.name).toBe('test-piece');
+  });
+
+  it('should load workflow definitions that use steps and initial_step aliases', () => {
+    const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
+    mkdirSync(projectWorkflowsDir, { recursive: true });
+    writeFileSync(join(projectWorkflowsDir, 'aliased-workflow.yaml'), `name: aliased-workflow
+description: aliased workflow
+initial_step: plan
+max_movements: 1
+
+steps:
+  - name: plan
+    persona: coder
+    instruction: "{task}"
+`);
+
+    const piece = loadPieceByIdentifier('aliased-workflow', tempDir);
+
+    expect(piece).not.toBeNull();
+    expect(piece!.initialMovement).toBe('plan');
+    expect(piece!.movements).toHaveLength(1);
+    expect(piece!.movements[0]?.name).toBe('plan');
+  });
+
+  it('should prefer project-local workflows over legacy pieces when both exist', () => {
+    const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
+    const projectPiecesDir = join(tempDir, '.takt', 'pieces');
+    mkdirSync(projectWorkflowsDir, { recursive: true });
+    mkdirSync(projectPiecesDir, { recursive: true });
+    writeFileSync(join(projectWorkflowsDir, 'default.yaml'), `name: workflow-priority
+description: workflow wins
+initial_movement: step1
+max_movements: 1
+
+movements:
+  - name: step1
+    persona: coder
+    instruction: "{task}"
+`);
+    writeFileSync(join(projectPiecesDir, 'default.yaml'), `name: legacy-piece
+description: legacy piece
+initial_movement: step1
+max_movements: 1
+
+movements:
+  - name: step1
+    persona: coder
+    instruction: "{task}"
+`);
+
+    const piece = loadPieceByIdentifier('default', tempDir);
+
+    expect(piece).not.toBeNull();
+    expect(piece!.name).toBe('workflow-priority');
+  });
 });
 
 describe('listPieces with project-local', () => {
@@ -139,9 +218,32 @@ describe('listPieces with project-local', () => {
     expect(pieces).toContain('project-custom');
   });
 
+  it('should include project-local workflows when cwd is provided', () => {
+    const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
+    mkdirSync(projectWorkflowsDir, { recursive: true });
+    writeFileSync(join(projectWorkflowsDir, 'workflow-custom.yaml'), SAMPLE_PIECE);
+
+    const pieces = listPieces(tempDir);
+
+    expect(pieces).toContain('workflow-custom');
+  });
+
   it('should include builtin pieces regardless of cwd', () => {
     const pieces = listPieces(tempDir);
     expect(pieces).toContain('default');
+  });
+
+  it('should warn and skip invalid project-local pieces', () => {
+    const projectPiecesDir = join(tempDir, '.takt', 'pieces');
+    mkdirSync(projectPiecesDir, { recursive: true });
+    writeFileSync(join(projectPiecesDir, 'broken.yaml'), INVALID_ALLOWED_TOOLS_PIECE);
+    const onWarning = vi.fn();
+
+    const pieces = listPieces(tempDir, { onWarning });
+
+    expect(pieces).not.toContain('broken');
+    expect(onWarning).toHaveBeenCalledTimes(1);
+    expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('Workflow "broken" failed to load'));
   });
 
 });
@@ -187,6 +289,37 @@ movements:
     expect(pieces.get('default')!.name).toBe('project-override');
   });
 
+  it('should prefer project-local workflows over project-local pieces in loadAllPieces', () => {
+    const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
+    const projectPiecesDir = join(tempDir, '.takt', 'pieces');
+    mkdirSync(projectWorkflowsDir, { recursive: true });
+    mkdirSync(projectPiecesDir, { recursive: true });
+    writeFileSync(join(projectWorkflowsDir, 'shared.yaml'), `name: workflow-priority
+description: workflow priority
+initial_movement: step1
+max_movements: 1
+
+movements:
+  - name: step1
+    persona: coder
+    instruction: "{task}"
+`);
+    writeFileSync(join(projectPiecesDir, 'shared.yaml'), `name: legacy-priority
+description: legacy priority
+initial_movement: step1
+max_movements: 1
+
+movements:
+  - name: step1
+    persona: coder
+    instruction: "{task}"
+`);
+
+    const pieces = loadAllPieces(tempDir);
+
+    expect(pieces.get('shared')?.name).toBe('workflow-priority');
+  });
+
 });
 
 describe('loadPieceByIdentifier with @scope ref (repertoire)', () => {
@@ -211,28 +344,22 @@ describe('loadPieceByIdentifier with @scope ref (repertoire)', () => {
   });
 
   it('should load piece by @scope ref (repertoire)', () => {
-    // Given: repertoire package with a piece file
     const piecesDir = join(configDir, 'repertoire', '@nrslib', 'takt-ensemble', 'pieces');
     mkdirSync(piecesDir, { recursive: true });
     writeFileSync(join(piecesDir, 'expert.yaml'), SAMPLE_PIECE);
 
-    // When: piece is loaded via @scope ref
     const piece = loadPieceByIdentifier('@nrslib/takt-ensemble/expert', tempDir);
 
-    // Then: the piece is resolved correctly
     expect(piece).not.toBeNull();
     expect(piece!.name).toBe('test-piece');
   });
 
   it('should return null for non-existent @scope piece', () => {
-    // Given: repertoire dir exists but the requested piece does not
     const piecesDir = join(configDir, 'repertoire', '@nrslib', 'takt-ensemble', 'pieces');
     mkdirSync(piecesDir, { recursive: true });
 
-    // When: a non-existent piece is requested
     const piece = loadPieceByIdentifier('@nrslib/takt-ensemble/no-such-piece', tempDir);
 
-    // Then: null is returned
     expect(piece).toBeNull();
   });
 });
@@ -259,28 +386,249 @@ describe('loadAllPiecesWithSources with repertoire pieces', () => {
   });
 
   it('should include repertoire pieces with @scope qualified names', () => {
-    // Given: repertoire package with a piece file
     const piecesDir = join(configDir, 'repertoire', '@nrslib', 'takt-ensemble', 'pieces');
     mkdirSync(piecesDir, { recursive: true });
     writeFileSync(join(piecesDir, 'expert.yaml'), SAMPLE_PIECE);
 
-    // When: all pieces are loaded
     const pieces = loadAllPiecesWithSources(tempDir);
 
-    // Then: the repertoire piece is included with 'repertoire' source
     expect(pieces.has('@nrslib/takt-ensemble/expert')).toBe(true);
     expect(pieces.get('@nrslib/takt-ensemble/expert')!.source).toBe('repertoire');
   });
 
   it('should not throw when repertoire dir does not exist', () => {
-    // Given: no repertoire dir created (configDir/repertoire does not exist)
-
-    // When: all pieces are loaded
     const pieces = loadAllPiecesWithSources(tempDir);
 
-    // Then: no @scope pieces are present and no error thrown
     const repertoirePieces = Array.from(pieces.keys()).filter((k) => k.startsWith('@'));
     expect(repertoirePieces).toHaveLength(0);
+  });
+
+  it('should warn and skip invalid project-local pieces', () => {
+    const projectPiecesDir = join(tempDir, '.takt', 'pieces');
+    mkdirSync(projectPiecesDir, { recursive: true });
+    writeFileSync(join(projectPiecesDir, 'broken.yaml'), INVALID_ALLOWED_TOOLS_PIECE);
+    const onWarning = vi.fn();
+
+    const pieces = loadAllPiecesWithSources(tempDir, { onWarning });
+
+    expect(pieces.has('broken')).toBe(false);
+    expect(onWarning).toHaveBeenCalledTimes(1);
+    expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('Workflow "broken" failed to load'));
+    expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('allowed_tools'));
+  });
+
+  it('should warn and skip invalid repertoire pieces', () => {
+    const piecesDir = join(configDir, 'repertoire', '@nrslib', 'takt-ensemble', 'pieces');
+    mkdirSync(piecesDir, { recursive: true });
+    writeFileSync(join(piecesDir, 'broken.yaml'), INVALID_ALLOWED_TOOLS_PIECE);
+    const onWarning = vi.fn();
+
+    const pieces = loadAllPiecesWithSources(tempDir, { onWarning });
+
+    expect(pieces.has('@nrslib/takt-ensemble/broken')).toBe(false);
+    expect(onWarning).toHaveBeenCalledTimes(1);
+    expect(onWarning).toHaveBeenCalledWith(
+      expect.stringContaining('Workflow "@nrslib/takt-ensemble/broken" failed to load'),
+    );
+    expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('allowed_tools'));
+  });
+
+  it('should forward warnings through loadAllPieces callback', () => {
+    const projectPiecesDir = join(tempDir, '.takt', 'pieces');
+    mkdirSync(projectPiecesDir, { recursive: true });
+    writeFileSync(join(projectPiecesDir, 'broken.yaml'), INVALID_ALLOWED_TOOLS_PIECE);
+    const onWarning = vi.fn();
+
+    const pieces = loadAllPieces(tempDir, { onWarning });
+
+    expect(pieces.has('broken')).toBe(false);
+    expect(onWarning).toHaveBeenCalledTimes(1);
+    expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('allowed_tools'));
+  });
+
+  it('should prefer workflows over legacy pieces in loadAllPiecesWithSources and listPieceEntries', () => {
+    const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
+    const projectPiecesDir = join(tempDir, '.takt', 'pieces');
+    mkdirSync(projectWorkflowsDir, { recursive: true });
+    mkdirSync(projectPiecesDir, { recursive: true });
+    writeFileSync(join(projectWorkflowsDir, 'shared.yaml'), `name: workflow-priority
+description: workflow priority
+initial_movement: step1
+max_movements: 1
+
+movements:
+  - name: step1
+    persona: coder
+    instruction: "{task}"
+`);
+    writeFileSync(join(projectPiecesDir, 'shared.yaml'), `name: legacy-priority
+description: legacy priority
+initial_movement: step1
+max_movements: 1
+
+movements:
+  - name: step1
+    persona: coder
+    instruction: "{task}"
+`);
+
+    const pieces = loadAllPiecesWithSources(tempDir);
+    const entries = listPieceEntries(tempDir);
+
+    expect(pieces.get('shared')?.config.name).toBe('workflow-priority');
+    expect(entries.find((entry) => entry.name === 'shared')?.path).toBe(
+      join(projectWorkflowsDir, 'shared.yaml'),
+    );
+  });
+
+  it('should prefer user workflows over user legacy pieces for the same name', () => {
+    const userWorkflowsDir = join(configDir, 'workflows');
+    const userPiecesDir = join(configDir, 'pieces');
+    mkdirSync(userWorkflowsDir, { recursive: true });
+    mkdirSync(userPiecesDir, { recursive: true });
+    writeFileSync(join(userWorkflowsDir, 'shared.yaml'), `name: user-workflow
+description: user workflow priority
+initial_movement: step1
+max_movements: 1
+
+movements:
+  - name: step1
+    persona: coder
+    instruction: "{task}"
+`);
+    writeFileSync(join(userPiecesDir, 'shared.yaml'), `name: user-legacy-piece
+description: user legacy priority
+initial_movement: step1
+max_movements: 1
+
+movements:
+  - name: step1
+    persona: coder
+    instruction: "{task}"
+`);
+
+    const piece = loadPieceByIdentifier('shared', tempDir);
+    const pieces = loadAllPiecesWithSources(tempDir);
+    const entries = listPieceEntries(tempDir);
+
+    expect(piece?.name).toBe('user-workflow');
+    expect(pieces.get('shared')?.config.name).toBe('user-workflow');
+    expect(entries.find((entry) => entry.name === 'shared')?.path).toBe(
+      join(userWorkflowsDir, 'shared.yaml'),
+    );
+  });
+
+  it('should prefer project workflows over user workflows and user legacy pieces', () => {
+    const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
+    const userWorkflowsDir = join(configDir, 'workflows');
+    const userPiecesDir = join(configDir, 'pieces');
+    mkdirSync(projectWorkflowsDir, { recursive: true });
+    mkdirSync(userWorkflowsDir, { recursive: true });
+    mkdirSync(userPiecesDir, { recursive: true });
+    writeFileSync(join(projectWorkflowsDir, 'shared.yaml'), `name: project-workflow
+description: project workflow priority
+initial_movement: step1
+max_movements: 1
+
+movements:
+  - name: step1
+    persona: coder
+    instruction: "{task}"
+`);
+    writeFileSync(join(userWorkflowsDir, 'shared.yaml'), `name: user-workflow
+description: user workflow priority
+initial_movement: step1
+max_movements: 1
+
+movements:
+  - name: step1
+    persona: coder
+    instruction: "{task}"
+`);
+    writeFileSync(join(userPiecesDir, 'shared.yaml'), `name: user-legacy-piece
+description: user legacy priority
+initial_movement: step1
+max_movements: 1
+
+movements:
+  - name: step1
+    persona: coder
+    instruction: "{task}"
+`);
+
+    const piece = loadPieceByIdentifier('shared', tempDir);
+    const pieces = loadAllPiecesWithSources(tempDir);
+    const entries = listPieceEntries(tempDir);
+
+    expect(piece?.name).toBe('project-workflow');
+    expect(pieces.get('shared')?.config.name).toBe('project-workflow');
+    expect(entries.find((entry) => entry.name === 'shared')?.path).toBe(
+      join(projectWorkflowsDir, 'shared.yaml'),
+    );
+  });
+
+  it('should reject conflicting workflow aliases', () => {
+    const conflictPath = join(tempDir, 'conflict.yaml');
+    writeFileSync(conflictPath, `name: conflict
+description: conflicting aliases
+initial_step: plan
+initial_movement: implement
+max_movements: 1
+
+steps:
+  - name: plan
+    persona: coder
+    instruction: "{task}"
+movements:
+  - name: implement
+    persona: coder
+    instruction: "{task}"
+`);
+
+    expect(() => loadPieceByIdentifier(conflictPath, tempDir)).toThrow(
+      "Workflow definition conflict: 'steps' and 'movements' must match when both are set.",
+    );
+  });
+
+  it('should return validated selection entries for repertoire pieces without collapsing repo names', () => {
+    const piecesDirA = join(configDir, 'repertoire', '@nrslib', 'repo-a', 'pieces');
+    const piecesDirB = join(configDir, 'repertoire', '@nrslib', 'repo-b', 'pieces');
+    mkdirSync(piecesDirA, { recursive: true });
+    mkdirSync(piecesDirB, { recursive: true });
+    writeFileSync(join(piecesDirA, 'expert.yaml'), SAMPLE_PIECE);
+    writeFileSync(join(piecesDirB, 'expert.yaml'), SAMPLE_PIECE);
+
+    const entries = listPieceEntries(tempDir);
+
+    expect(entries).toEqual(
+      expect.arrayContaining([
+        {
+          name: '@nrslib/repo-a/expert',
+          path: join(piecesDirA, 'expert.yaml'),
+          source: 'repertoire',
+        },
+        {
+          name: '@nrslib/repo-b/expert',
+          path: join(piecesDirB, 'expert.yaml'),
+          source: 'repertoire',
+        },
+      ]),
+    );
+  });
+
+  it('should warn and skip invalid entries from listPieceEntries', () => {
+    const piecesDir = join(configDir, 'repertoire', '@nrslib', 'takt-ensemble', 'pieces');
+    mkdirSync(piecesDir, { recursive: true });
+    writeFileSync(join(piecesDir, 'broken.yaml'), INVALID_ALLOWED_TOOLS_PIECE);
+    const onWarning = vi.fn();
+
+    const entries = listPieceEntries(tempDir, { onWarning });
+
+    expect(entries.find((entry) => entry.name === '@nrslib/takt-ensemble/broken')).toBeUndefined();
+    expect(onWarning).toHaveBeenCalledTimes(1);
+    expect(onWarning).toHaveBeenCalledWith(
+      expect.stringContaining('Workflow "@nrslib/takt-ensemble/broken" failed to load'),
+    );
   });
 });
 

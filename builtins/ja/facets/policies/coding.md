@@ -77,6 +77,93 @@ function createEngine(config, cwd: string) {
 3. **上位から値を渡す経路があるか？** → なければ引数・フィールドを追加
 4. **関連する値に不変条件があるか？** → ロード・セットアップ時にクロスバリデーションする
 
+## 解決責務の一元化
+
+設定、Option、provider、パス、権限のような「早い段階で決められる値」は、境界で一度だけ解決する。同じ値を複数の層で再解決しない。
+
+| パターン | 判定 | 理由 |
+|---------|------|------|
+| 入口で解決した値を下位層へ明示的に渡す | OK | 値の出所が追える |
+| 解決専用のメソッド/オブジェクトに委譲する | OK | SSOTが保たれる |
+| 上位と下位で同じ設定を別々に解決する | REJECT | 優先順位のズレを生む |
+| ログ表示用と実行用で別々に解決する | REJECT | 表示と挙動が乖離する |
+| メイン処理内で `if` を重ねて設定解決する | REJECT | オーケストレーションに詳細が漏れる |
+
+```typescript
+// REJECT - 各層がそれぞれ設定を解決
+function executeTask(options) {
+  const provider = options.provider ?? loadGlobalConfig().provider;
+  return runAgent({
+    provider,
+    stepProvider: resolveProviderForStep(options.step),
+  });
+}
+
+function runAgent(options) {
+  const provider = options.provider ?? resolveProviderFromConfig();
+  return getProvider(provider).call();
+}
+
+// OK - 境界で解決し、以降は解決済みの値だけを使う
+function executeTask(options) {
+  const resolved = resolveExecutionContext(options);
+  return runAgent({
+    resolvedProvider: resolved.provider,
+    resolvedModel: resolved.model,
+  });
+}
+
+function runAgent(options) {
+  return getProvider(options.resolvedProvider).call();
+}
+```
+
+判断基準:
+1. この値は実行前に確定できるか？ → できるなら境界で解決する
+2. 同じ優先順位ロジックが2箇所以上にあるか？ → 専用メソッド/オブジェクトに集約する
+3. 下位層が設定ソースそのものを知っているか？ → 解決済みの値だけを渡す
+4. 表示・実行・保存で別々に解決しているか？ → 同じ解決結果を共有する
+
+## フェーズ分離
+
+入力の収集、解釈・正規化、実行、出力・副作用は段階で分ける。ループやメイン処理の途中で未解決の入力を受け取り直して、その場で解釈しない。
+
+| パターン | 判定 | 理由 |
+|---------|------|------|
+| `RawOptions -> ResolvedOptions -> ExecutionContext` の順で段階を分ける | OK | 各段階の責務が明確 |
+| ループ前に入力をまとめて正規化する | OK | 各反復が同じ前提で動く |
+| ループ内で毎回 `options ?? config ?? env` を解決する | REJECT | 各反復の前提が揺れる |
+| 反復ごとに入力解釈と実行ロジックが混在する | REJECT | 処理の意図が読めない |
+| 1件ずつ「入力→解釈→実行→出力」を繰り返すしかない場合でも、解釈処理を専用メソッドに隔離する | OK | 最低限の責務分離を保てる |
+
+```typescript
+// REJECT - ループ内で毎回入力を解釈
+for (const step of steps) {
+  const provider = options.provider
+    ?? step.provider
+    ?? projectConfig.provider
+    ?? globalConfig.provider;
+  const result = await executeStep(step, { provider });
+  printResult(result);
+}
+
+// OK - 先に解決し、ループ内は実行だけ
+const context = resolveExecutionContext(rawOptions, steps);
+
+for (const step of context.steps) {
+  const result = await executeStep(step, {
+    resolvedProvider: step.resolvedProvider,
+  });
+  printResult(result);
+}
+```
+
+判断基準:
+1. ループ内の分岐は「業務判断」か「入力解釈」か？ → 入力解釈ならループ外へ出す
+2. 同じ入力解釈が各反復で繰り返されているか？ → 先にまとめて正規化する
+3. 実行関数が raw input を直接受け取っているか？ → `Resolved*` 型へ変換してから渡す
+4. 最適化で逐次処理が必要か？ → 解釈だけでも先に関数へ抽出する
+
 ## 抽象化
 
 ### 条件分岐を追加する前に考える

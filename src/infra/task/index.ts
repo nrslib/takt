@@ -23,6 +23,12 @@ export { BranchManager } from './branchList.js';
 export { TaskRunner } from './runner.js';
 
 export { showTaskList } from './display.js';
+export {
+  serializeTaskListItemForJson,
+  type JsonTaskData,
+  type JsonTaskFailure,
+  type JsonTaskListItem,
+} from './listSerializer.js';
 
 export {
   TaskFileSchema,
@@ -36,6 +42,8 @@ export {
   type TaskRecord,
   TasksFileSchema,
   type TasksFileData,
+  resolveTaskWorkflowValue,
+  resolveTaskStartMovementValue,
 } from './schema.js';
 export {
   createSharedClone,

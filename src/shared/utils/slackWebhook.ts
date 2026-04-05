@@ -84,7 +84,7 @@ function formatTaskLines(task: SlackTaskDetail): string {
   const icon = task.success ? '\u2705' : '\u274C';
   const parts = [
     `${icon} ${task.name}`,
-    `piece=${task.piece}`,
+    `workflow=${task.piece}`,
   ];
   if (task.issueNumber !== undefined) {
     parts.push(`issue=#${String(task.issueNumber)}`);
@@ -98,7 +98,7 @@ function formatTaskLines(task: SlackTaskDetail): string {
     if (task.worktreePath) line2Parts.push(`worktree=${task.worktreePath}`);
     if (task.prUrl) line2Parts.push(`pr=${task.prUrl}`);
   } else {
-    if (task.failureMovement) line2Parts.push(`movement=${task.failureMovement}`);
+    if (task.failureMovement) line2Parts.push(`step=${task.failureMovement}`);
     if (task.failureError) {
       line2Parts.push(`error=${truncateText(normalizeText(task.failureError), TRUNCATE_LENGTH)}`);
     }

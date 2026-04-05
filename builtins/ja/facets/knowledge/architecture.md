@@ -104,6 +104,99 @@ Vertical Slice の判定基準:
 - エラーハンドリングが一元化されているか（各所でtry-catch禁止）
 - ビジネスロジックがController/Viewに漏れていないか
 
+## 境界での解決
+
+設定、Option、provider、権限、パスのような値は、境界で解決してから内部へ渡す。メイン処理は「何が解決済みか」を前提に組み立て、各所で設定ソースを問い合わせない。
+
+| 基準 | 判定 |
+|------|------|
+| 入口で `ExecutionContext` や `ResolvedOptions` のような解決済みオブジェクトを作る | OK |
+| オーケストレーション層が解決済みの値だけを扱う | OK |
+| 下位層が global/project/env を再読込して同じ値を再解決する | REJECT |
+| 表示用と実行用で別々の解決関数を持つ | REJECT |
+| 未解決の options を深い層まで運び、先で `??` 解決する | REJECT |
+
+```typescript
+// REJECT - 実行層が設定ソースを直接知っている
+async function executePiece(options) {
+  const engine = new PieceEngine({
+    provider: options.provider ?? globalConfig.provider,
+  });
+}
+
+class AgentRunner {
+  run(step, options) {
+    const provider = options.provider ?? resolveProviderFromConfig();
+    return getProvider(provider).call();
+  }
+}
+
+// OK - 境界で解決し、内部は解決済み値を使う
+async function executePiece(options) {
+  const context = resolveExecutionContext(options);
+  const engine = new PieceEngine(context);
+}
+
+class AgentRunner {
+  run(step, options) {
+    return getProvider(options.resolvedProvider).call();
+  }
+}
+```
+
+### Tell, Don't Ask
+
+下位層に設定ソースを問い合わせさせるのではなく、上位層が「これを使え」と解決済みの値を渡す。値の選択責務と実行責務を分離する。
+
+| パターン | 判定 |
+|---------|------|
+| 上位層が `resolvedProvider` のような値を渡す | OK |
+| 下位層が `options` を覗いて自前で解決する | REJECT |
+| 実行オブジェクトが `setup(config)` 後は `run()` だけ公開する | OK |
+| 実行中に `getGlobalConfig()` を呼んで分岐する | REJECT |
+
+### 腐敗防止層
+
+優先順位解決や外部設定形式の吸収は、境界の専用層に閉じ込める。内部モデルへは正規化済みの値だけを渡す。
+
+| パターン | 判定 |
+|---------|------|
+| YAML/env/CLI 差分を resolver/adapter に閉じ込める | OK |
+| ドメイン層が env 名や設定キー文字列を直接扱う | REJECT |
+| 外部形式から内部形式への変換が1箇所に集約されている | OK |
+| 同じ正規化ロジックが複数箇所にコピーされている | REJECT |
+
+### フェーズ分離
+
+入力、解釈、実行、出力を段階で分ける。反復処理は、できる限り「解釈済みの入力をまとめて受け取り、実行だけを繰り返す」構造にする。
+
+| 基準 | 判定 |
+|------|------|
+| 入口で raw input を `Resolved*` 型へ変換してから本処理に渡す | OK |
+| ループ本体が解決済みデータに対する実行だけを担う | OK |
+| ループ内で毎回 config/env/option を解釈する | REJECT |
+| 反復ごとに「入力取得→解釈→実行→出力」を1関数に詰め込む | REJECT |
+| 最適化で逐次処理が必要でも、解釈フェーズを専用メソッドに隔離している | OK |
+
+```typescript
+// REJECT - 各反復が入力解釈まで担う
+for (const item of items) {
+  const resolved = resolveItem(item, rawOptions, config);
+  const result = execute(resolved);
+  output(result);
+}
+
+// OK - 先に解釈し、反復は実行だけ
+const resolvedItems = items.map((item) => resolveItem(item, rawOptions, config));
+
+for (const item of resolvedItems) {
+  const result = execute(item);
+  output(result);
+}
+```
+
+逐次解釈が必要なケースでも、`nextRawInput()` と `resolveInput()` と `executeResolved()` の責務は分ける。性能要件でフェーズを近づけても、責務まで混ぜない。
+
 ## コード品質の検出手法
 
 **説明コメント（What/How）の検出基準**

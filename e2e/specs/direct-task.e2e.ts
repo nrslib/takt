@@ -50,6 +50,8 @@ describe('E2E: Direct task execution (--task)', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Piece completed');
+    expect(result.stdout).toContain('Running Workflow:');
+    expect(result.stdout).not.toContain('Running Piece:');
+    expect(result.stdout).toContain('Workflow completed');
   }, 240_000);
 });

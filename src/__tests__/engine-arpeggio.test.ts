@@ -35,6 +35,7 @@ vi.mock('../shared/utils/index.js', async () => {
 import { runAgent } from '../agents/runner.js';
 import { detectMatchedRule } from '../core/piece/evaluation/index.js';
 import { PieceEngine } from '../core/piece/engine/PieceEngine.js';
+import { DefaultStructuredCaller } from '../agents/structured-caller.js';
 import type { PieceConfig, PieceMovement, AgentResponse, ArpeggioMovementConfig } from '../core/models/index.js';
 import type { PieceEngineOptions } from '../core/piece/types.js';
 import {
@@ -96,7 +97,7 @@ function createEngineOptions(tmpDir: string): PieceEngineOptions {
     projectCwd: tmpDir,
     reportDirName: 'test-report-dir',
     detectRuleIndex: () => 0,
-    callAiJudge: async () => 0,
+    structuredCaller: new DefaultStructuredCaller(),
   };
 }
 
@@ -193,6 +194,34 @@ describe('ArpeggioRunner integration', () => {
     expect(state.status).toBe('completed');
     // 4 rows / batch_size 2 = 2 batches
     expect(mockAgent).toHaveBeenCalledTimes(2);
+  });
+
+  it('should pass resolved provider to arpeggio rule evaluation', async () => {
+    const { tmpDir, csvPath, templatePath } = createArpeggioTestDir();
+    const arpeggioConfig = createArpeggioConfig(csvPath, templatePath);
+    const config = buildArpeggioPieceConfig(arpeggioConfig, tmpDir);
+    config.movements[0]!.personaDisplayName = 'coder';
+
+    mockRunAgentWithPrompt(
+      makeResponse({ content: 'Processed Alice' }),
+      makeResponse({ content: 'Processed Bob' }),
+      makeResponse({ content: 'Processed Charlie' }),
+    );
+
+    vi.mocked(detectMatchedRule).mockResolvedValueOnce({
+      index: 0,
+      method: 'phase1_tag',
+    });
+
+    engine = new PieceEngine(config, tmpDir, 'test task', {
+      ...createEngineOptions(tmpDir),
+      provider: 'claude',
+      personaProviders: { coder: { provider: 'cursor' } },
+    });
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(vi.mocked(detectMatchedRule).mock.calls[0]?.[3].provider).toBe('cursor');
   });
 
   it('should abort when a batch fails and retries are exhausted', async () => {

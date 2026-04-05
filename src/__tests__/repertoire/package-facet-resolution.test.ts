@@ -75,14 +75,14 @@ describe('isPackagePiece', () => {
   });
 
   it('should return false when pieceDir is in builtin directory', () => {
-    // Given: builtin pieces directory
-    const builtinPiecesDir = join(tempDir, 'builtins', 'ja', 'pieces');
-    mkdirSync(builtinPiecesDir, { recursive: true });
+    // Given: builtin workflows directory
+    const builtinWorkflowsDir = join(tempDir, 'builtins', 'ja', 'workflows');
+    mkdirSync(builtinWorkflowsDir, { recursive: true });
 
     const repertoireDir = join(tempDir, 'repertoire');
 
     // When: checking
-    const result = isPackagePiece(builtinPiecesDir, repertoireDir);
+    const result = isPackagePiece(builtinWorkflowsDir, repertoireDir);
 
     // Then: not a package piece
     expect(result).toBe(false);

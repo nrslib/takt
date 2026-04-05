@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockOpts: Record<string, unknown> = {};
 const mockAddTask = vi.fn();
+const mockLogError = vi.fn();
+const mockProcessExit = vi.fn();
 
 const { rootCommand, commandActions, commandMocks } = vi.hoisted(() => {
   const commandActions = new Map<string, (...args: unknown[]) => void>();
@@ -20,6 +22,7 @@ const { rootCommand, commandActions, commandMocks } = vi.hoisted(() => {
       argument: vi.fn().mockReturnThis(),
       option: vi.fn().mockReturnThis(),
       opts: vi.fn(() => mockOpts),
+      optsWithGlobals: vi.fn(() => mockOpts),
     };
     commandMocks.set(actionKey, command);
 
@@ -64,6 +67,7 @@ vi.mock('../infra/config/paths.js', () => ({
 vi.mock('../shared/ui/index.js', () => ({
   success: vi.fn(),
   info: vi.fn(),
+  error: (...args: unknown[]) => mockLogError(...args),
 }));
 
 vi.mock('../features/tasks/index.js', () => ({
@@ -117,9 +121,12 @@ const configFeatures = await import('../features/config/index.js');
 describe('CLI add command', () => {
   beforeEach(() => {
     mockAddTask.mockClear();
+    mockLogError.mockClear();
+    mockProcessExit.mockClear();
     for (const key of Object.keys(mockOpts)) {
       delete mockOpts[key];
     }
+    vi.spyOn(process, 'exit').mockImplementation(mockProcessExit as never);
   });
 
   describe('when --pr option is provided', () => {
@@ -143,6 +150,53 @@ describe('CLI add command', () => {
       await addAction?.('Regular task');
 
       expect(mockAddTask).toHaveBeenCalledWith('/test/cwd', 'Regular task', undefined);
+    });
+
+    it('should resolve legacy --piece via command optsWithGlobals()', async () => {
+      mockOpts.piece = 'legacy-flow';
+      const addAction = commandActions.get('root.add');
+      const addCommand = commandMocks.get('root.add');
+
+      expect(addAction).toBeTypeOf('function');
+      expect(addCommand).toBeTruthy();
+
+      await addAction?.('Regular task', addCommand as never);
+
+      expect(mockAddTask).toHaveBeenCalledWith('/test/cwd', 'Regular task', { workflow: 'legacy-flow' });
+      expect(addCommand?.optsWithGlobals).toHaveBeenCalledTimes(1);
+    });
+
+    it('should resolve canonical --workflow via command optsWithGlobals()', async () => {
+      mockOpts.workflow = 'canonical-flow';
+      const addAction = commandActions.get('root.add');
+      const addCommand = commandMocks.get('root.add');
+
+      expect(addAction).toBeTypeOf('function');
+      expect(addCommand).toBeTruthy();
+
+      await addAction?.('Regular task', addCommand as never);
+
+      expect(mockAddTask).toHaveBeenCalledWith('/test/cwd', 'Regular task', { workflow: 'canonical-flow' });
+      expect(addCommand?.optsWithGlobals).toHaveBeenCalled();
+    });
+
+    it('should reject conflicting --workflow and --piece values before calling addTask', async () => {
+      mockOpts.workflow = 'canonical-flow';
+      mockOpts.piece = 'legacy-flow';
+      const addAction = commandActions.get('root.add');
+      mockProcessExit.mockImplementation(() => {
+        throw new Error('process.exit:1');
+      });
+
+      expect(addAction).toBeTypeOf('function');
+
+      await expect(addAction?.('Regular task')).rejects.toThrow('process.exit:1');
+
+      expect(mockLogError).toHaveBeenCalledWith(
+        '--workflow and --piece cannot be used together with different values',
+      );
+      expect(mockProcessExit).toHaveBeenCalledWith(1);
+      expect(mockAddTask).not.toHaveBeenCalled();
     });
   });
 
@@ -169,12 +223,35 @@ describe('CLI add command', () => {
     expect(deploySkillCodex).toHaveBeenCalledTimes(1);
   });
 
-  it('should describe prompt piece argument as defaulting to "default"', () => {
+  it('should describe prompt workflow argument as defaulting to "default"', () => {
     const promptCommand = commandMocks.get('root.prompt');
     expect(promptCommand).toBeTruthy();
+    expect(promptCommand?.description).toHaveBeenCalledWith('Preview assembled prompts for each step and phase');
     expect(promptCommand?.argument).toHaveBeenCalledWith(
-      '[piece]',
-      'Piece name or path (defaults to "default")',
+      '[workflow]',
+      'Workflow name or path (defaults to "default")',
     );
+  });
+
+  it('should describe eject with workflow terminology', () => {
+    const ejectCommand = commandMocks.get('root.eject');
+    expect(ejectCommand).toBeTruthy();
+    expect(ejectCommand?.description).toHaveBeenCalledWith(
+      'Copy builtin workflow or facet for customization (default: project .takt/)',
+    );
+    expect(ejectCommand?.argument).toHaveBeenNthCalledWith(
+      1,
+      '[typeOrName]',
+      'Workflow name, or facet type (personas, policies, knowledge, instructions, output-contracts)',
+    );
+  });
+
+  it('should use workflow terminology for relevant command descriptions', () => {
+    expect(commandMocks.get('root.reset.categories')?.description)
+      .toHaveBeenCalledWith('Reset workflow categories to builtin defaults');
+    expect(commandMocks.get('root.export-cc')?.description)
+      .toHaveBeenCalledWith('Export takt workflows/agents as Claude Code Skill (~/.claude/)');
+    expect(commandMocks.get('root.export-codex')?.description)
+      .toHaveBeenCalledWith('Export takt workflows/agents as Codex Skill (~/.agents/)');
   });
 });

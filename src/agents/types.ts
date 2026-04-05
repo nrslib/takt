@@ -20,8 +20,8 @@ export interface RunAgentOptions {
   sessionId?: string;
   model?: string;
   provider?: 'claude' | 'codex' | 'opencode' | 'cursor' | 'copilot' | 'mock';
-  stepModel?: string;
-  stepProvider?: 'claude' | 'codex' | 'opencode' | 'cursor' | 'copilot' | 'mock';
+  resolvedModel?: string;
+  resolvedProvider?: 'claude' | 'codex' | 'opencode' | 'cursor' | 'copilot' | 'mock';
   personaPath?: string;
   allowedTools?: string[];
   mcpServers?: Record<string, McpServerConfig>;

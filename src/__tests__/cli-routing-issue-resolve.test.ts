@@ -121,6 +121,14 @@ vi.mock('../app/cli/program.js', () => {
 vi.mock('../app/cli/helpers.js', () => ({
   resolveAgentOverrides: (...args: unknown[]) => mockResolveAgentOverrides(...args),
   isDirectTask: vi.fn(() => false),
+  resolveWorkflowCliOption: vi.fn((opts: Record<string, unknown>) => {
+    const workflow = typeof opts.workflow === 'string' ? opts.workflow : undefined;
+    const piece = typeof opts.piece === 'string' ? opts.piece : undefined;
+    if (workflow !== undefined && piece !== undefined && workflow !== piece) {
+      throw new Error('--workflow and --piece cannot be used together with different values');
+    }
+    return workflow ?? piece;
+  }),
 }));
 
 import { formatIssueAsTask, parseIssueNumbers } from '../infra/git/index.js';
@@ -223,6 +231,25 @@ describe('Issue resolution in routing', () => {
 
 
   describe('--issue option', () => {
+    it('should pass --workflow to determinePiece and selectAndExecuteTask', async () => {
+      mockOpts.workflow = 'migration-workflow';
+      mockDeterminePiece.mockResolvedValue('migration-workflow');
+
+      await executeDefaultAction();
+
+      expect(mockDeterminePiece).toHaveBeenCalledWith('/test/cwd', 'migration-workflow');
+      expect(mockSelectAndExecuteTask).toHaveBeenCalledWith(
+        '/test/cwd',
+        'summarized task',
+        expect.objectContaining({
+          piece: 'migration-workflow',
+          interactiveUserInput: true,
+          skipTaskList: true,
+        }),
+        undefined,
+      );
+    });
+
     it('should resolve issue and pass to interactive mode when --issue is specified', async () => {
       // Given
       mockOpts.issue = 131;

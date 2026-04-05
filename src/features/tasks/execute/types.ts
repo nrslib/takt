@@ -7,7 +7,7 @@ import type { PersonaProviderEntry } from '../../../core/models/config-types.js'
 import type { ProviderPermissionProfiles } from '../../../core/models/provider-profiles.js';
 import type { MovementProviderOptions } from '../../../core/models/piece-types.js';
 import type { ProviderType } from '../../../infra/providers/index.js';
-import type { ProviderOptionsSource } from '../../../core/piece/types.js';
+import type { ProviderOptionsOriginResolver, ProviderOptionsSource } from '../../../core/piece/types.js';
 
 /** Info captured when iteration limit is hit in non-interactive mode */
 export interface ExceededInfo {
@@ -53,6 +53,8 @@ export interface PieceExecutionOptions {
   providerOptions?: MovementProviderOptions;
   /** Source layer for resolved provider options */
   providerOptionsSource?: ProviderOptionsSource;
+  /** Nested origin resolver for resolved provider options */
+  providerOptionsOriginResolver?: ProviderOptionsOriginResolver;
   /** Per-persona provider and model overrides (e.g., { coder: { provider: 'codex', model: 'o3-mini' } }) */
   personaProviders?: Record<string, PersonaProviderEntry>;
   /** Resolved provider permission profiles */

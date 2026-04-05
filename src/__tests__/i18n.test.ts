@@ -150,4 +150,15 @@ describe('label integrity', () => {
     expect(() => getLabel('retry.usePreviousWorkflow', 'ja')).toThrow('Label key not found');
     expect(() => getLabel('retry.changeWorkflow', 'ja')).toThrow('Label key not found');
   });
+
+  it('uses workflow/step terminology in migrated labels', () => {
+    expect(getLabel('interactive.previousTask.piece', 'en', { pieceName: 'default' })).toBe('Workflow: default');
+    expect(getLabel('interactive.previousTask.piece', 'ja', { pieceName: 'default' })).toBe('使用ワークフロー: default');
+    expect(getLabel('piece.iterationLimit.currentMovement', 'en', { currentMovement: 'implement' })).toBe('Current step: implement');
+    expect(getLabel('piece.iterationLimit.currentMovement', 'ja', { currentMovement: 'implement' })).toBe('現在のステップ: implement');
+    expect(getLabel('piece.notifyComplete', 'en', { iteration: '3' })).toBe('Workflow complete (3 iterations)');
+    expect(getLabel('piece.notifyComplete', 'ja', { iteration: '3' })).toBe('ワークフロー完了 (3 iterations)');
+    expect(getLabel('retry.usePreviousPieceConfirm', 'en', { piece: 'default' })).toBe('Use previous workflow "default"?');
+    expect(getLabel('retry.usePreviousPieceConfirm', 'ja', { piece: 'default' })).toBe('前回のワークフロー "default" を使用しますか？');
+  });
 });

@@ -10,7 +10,12 @@ import { promptInput, confirm, selectOption } from '../../../shared/prompt/index
 import { info, error, withProgress } from '../../../shared/ui/index.js';
 import { getLabel } from '../../../shared/i18n/index.js';
 import type { Language } from '../../../core/models/types.js';
-import { TaskRunner, type TaskFileData, summarizeTaskName } from '../../../infra/task/index.js';
+import {
+  TaskRunner,
+  type TaskFileData,
+  summarizeTaskName,
+  resolveTaskWorkflowValue,
+} from '../../../infra/task/index.js';
 import { determinePiece } from '../execute/selectAndExecute.js';
 import { createLogger, getErrorMessage, generateReportDir } from '../../../shared/utils/index.js';
 import { isIssueReference, resolveIssueTask, parseIssueNumbers, formatPrReviewAsTask, getGitProvider } from '../../../infra/git/index.js';
@@ -45,6 +50,7 @@ export async function saveTaskFile(
   taskContent: string,
   options?: {
     piece?: string;
+    workflow?: string;
     issue?: number;
     worktree?: boolean | string;
     branch?: string;
@@ -62,11 +68,12 @@ export async function saveTaskFile(
   const orderPath = path.join(taskDir, 'order.md');
   fs.mkdirSync(taskDir, { recursive: true });
   fs.writeFileSync(orderPath, taskContent, 'utf-8');
+  const resolvedWorkflow = options ? resolveTaskWorkflowValue(options) : undefined;
   const config: Omit<TaskFileData, 'task'> = {
     ...(options?.worktree !== undefined && { worktree: options.worktree }),
     ...(options?.branch && { branch: options.branch }),
     ...(options?.baseBranch && { base_branch: options.baseBranch }),
-    ...(options?.piece && { piece: options.piece }),
+    ...(resolvedWorkflow && { piece: resolvedWorkflow }),
     ...(options?.issue !== undefined && { issue: options.issue }),
     ...(options?.autoPr !== undefined && { auto_pr: options.autoPr }),
     ...(options?.draftPr !== undefined && { draft_pr: options.draftPr }),
@@ -159,7 +166,7 @@ export async function createIssueAndSaveTask(
 export async function addTask(
   cwd: string,
   task?: string,
-  opts?: { prNumber?: number },
+  opts?: { prNumber?: number; workflow?: string },
 ): Promise<void> {
   const rawTask = task ?? '';
   const trimmedTask = rawTask.trim();
@@ -192,7 +199,7 @@ export async function addTask(
     }
 
     const taskContent = formatPrReviewAsTask(prReview);
-    const piece = await determinePiece(cwd);
+    const piece = await determinePiece(cwd, opts?.workflow);
     if (piece === null) {
       info('Cancelled.');
       return;
@@ -239,7 +246,7 @@ export async function addTask(
     taskContent = rawTask;
   }
 
-  const piece = await determinePiece(cwd);
+  const piece = await determinePiece(cwd, opts?.workflow);
   if (piece === null) {
     info('Cancelled.');
     return;

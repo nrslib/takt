@@ -51,6 +51,39 @@ export function stripAnsi(text: string): string {
 }
 
 /**
+ * Sanitize terminal-bound text by removing ANSI escapes and visualizing control characters.
+ */
+export function sanitizeTerminalText(text: string): string {
+  const stripped = stripAnsi(text);
+  let sanitized = '';
+
+  for (const char of stripped) {
+    const code = char.codePointAt(0) ?? 0;
+    if ((code >= 0x00 && code <= 0x1f) || code === 0x7f) {
+      switch (char) {
+        case '\n':
+          sanitized += '\\n';
+          break;
+        case '\r':
+          sanitized += '\\r';
+          break;
+        case '\t':
+          sanitized += '\\t';
+          break;
+        default:
+          sanitized += `\\x${code.toString(16).padStart(2, '0')}`;
+          break;
+      }
+      continue;
+    }
+
+    sanitized += char;
+  }
+
+  return sanitized;
+}
+
+/**
  * Truncate plain text to fit within maxWidth display columns.
  * Appends '…' if truncated. The ellipsis itself counts as 1 column.
  */

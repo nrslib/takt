@@ -69,11 +69,6 @@ export function denormalizeAnalytics(config: AnalyticsConfig | undefined): Recor
   return Object.keys(raw).length > 0 ? raw : undefined;
 }
 
-export function formatIssuePath(path: readonly PropertyKey[]): string {
-  if (path.length === 0) return '(root)';
-  return path.map((segment) => String(segment)).join('.');
-}
-
 export function normalizePieceRuntimePreparePolicy(
   raw: { custom_scripts?: boolean } | undefined,
 ): PieceRuntimePrepareConfig | undefined {

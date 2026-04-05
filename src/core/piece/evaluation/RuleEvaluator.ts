@@ -11,8 +11,10 @@ import type {
   PieceState,
   RuleMatchMethod,
 } from '../../models/types.js';
-import type { AiJudgeCaller, RuleIndexDetector } from '../types.js';
+import type { StructuredCaller } from '../../../agents/structured-caller.js';
+import type { ProviderType, RuleIndexDetector } from '../types.js';
 import { createLogger } from '../../../shared/utils/index.js';
+import { buildJudgeConditions } from '../../../agents/judge-utils.js';
 import { AggregateEvaluator } from './AggregateEvaluator.js';
 
 const log = createLogger('rule-evaluator');
@@ -27,12 +29,16 @@ export interface RuleEvaluatorContext {
   state: PieceState;
   /** Working directory (for AI judge calls) */
   cwd: string;
+  /** Effective provider for the movement */
+  provider?: ProviderType;
+  resolvedProvider?: ProviderType;
+  resolvedModel?: string;
   /** Whether interactive-only rules are enabled */
   interactive?: boolean;
   /** Rule tag index detector */
   detectRuleIndex: RuleIndexDetector;
-  /** AI judge caller */
-  callAiJudge: AiJudgeCaller;
+  /** Structured caller */
+  structuredCaller: StructuredCaller;
 }
 
 /**
@@ -53,6 +59,18 @@ export class RuleEvaluator {
     private readonly step: PieceMovement,
     private readonly ctx: RuleEvaluatorContext,
   ) {}
+
+  private structuredCallerJudgeOptions(): Pick<
+    RuleEvaluatorContext,
+    'cwd' | 'provider' | 'resolvedProvider' | 'resolvedModel'
+  > {
+    return {
+      cwd: this.ctx.cwd,
+      provider: this.ctx.provider,
+      resolvedProvider: this.ctx.resolvedProvider,
+      resolvedModel: this.ctx.resolvedModel,
+    };
+  }
 
   async evaluate(agentContent: string, tagContent: string): Promise<RuleMatch | undefined> {
     if (!this.step.rules || this.step.rules.length === 0) return undefined;
@@ -132,19 +150,20 @@ export class RuleEvaluator {
       conditionCount: aiConditions.length,
     });
 
-    const judgeConditions = aiConditions.map((c, i) => ({ index: i, text: c.text }));
-    const judgeResult = await this.ctx.callAiJudge(agentOutput, judgeConditions, { cwd: this.ctx.cwd });
-
-    if (judgeResult >= 0 && judgeResult < aiConditions.length) {
-      const matched = aiConditions[judgeResult];
-      if (!matched) return -1;
+    const judgeResult = await this.ctx.structuredCaller.evaluateCondition(
+      agentOutput,
+      aiConditions,
+      this.structuredCallerJudgeOptions(),
+    );
+    const matched = aiConditions.find((condition) => condition.index === judgeResult);
+    if (matched) {
       log.debug('AI judge matched condition', {
         movement: this.step.name,
         judgeResult,
         originalRuleIndex: matched.index,
         condition: matched.text,
       });
-      return matched.index;
+      return judgeResult;
     }
 
     log.debug('AI judge did not match any condition', { movement: this.step.name });
@@ -158,23 +177,24 @@ export class RuleEvaluator {
   private async evaluateAllConditionsViaAiJudge(agentOutput: string): Promise<number> {
     if (!this.step.rules || this.step.rules.length === 0) return -1;
 
-    const conditions = this.step.rules
-      .map((rule, i) => ({ index: i, text: rule.condition, interactiveOnly: rule.interactiveOnly }))
-      .filter((rule) => this.ctx.interactive === true || !rule.interactiveOnly)
-      .map((rule) => ({ index: rule.index, text: rule.text }));
+    const conditions = buildJudgeConditions(this.step.rules, this.ctx.interactive === true);
 
     log.debug('Evaluating all conditions via AI judge (final fallback)', {
       movement: this.step.name,
       conditionCount: conditions.length,
     });
 
-    const judgeResult = await this.ctx.callAiJudge(agentOutput, conditions, { cwd: this.ctx.cwd });
-
-    if (judgeResult >= 0 && judgeResult < conditions.length) {
+    const judgeResult = await this.ctx.structuredCaller.evaluateCondition(
+      agentOutput,
+      conditions,
+      this.structuredCallerJudgeOptions(),
+    );
+    const matched = conditions.find((condition) => condition.index === judgeResult);
+    if (matched) {
       log.debug('AI judge (fallback) matched condition', {
         movement: this.step.name,
         ruleIndex: judgeResult,
-        condition: conditions[judgeResult]?.text,
+        condition: matched.text,
       });
       return judgeResult;
     }

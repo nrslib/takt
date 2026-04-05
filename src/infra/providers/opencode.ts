@@ -29,6 +29,8 @@ function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
 
 /** OpenCode provider — delegates to OpenCode SDK */
 export class OpenCodeProvider implements Provider {
+  readonly supportsStructuredOutput = true;
+
   setup(config: AgentSetup): ProviderAgent {
     if (config.claudeAgent) {
       throw new Error('Claude Code agent calls are not supported by the OpenCode provider');

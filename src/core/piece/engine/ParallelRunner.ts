@@ -22,8 +22,40 @@ import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { MovementExecutor } from './MovementExecutor.js';
 import type { PieceEngineOptions, PhaseName, PhasePromptParts, JudgeStageEntry } from '../types.js';
 import type { ParallelLoggerOptions } from './parallel-logger.js';
+import type { StructuredCaller } from '../../../agents/structured-caller.js';
 
 const log = createLogger('parallel-runner');
+
+/**
+ * Simple semaphore for controlling concurrency.
+ * Limits the number of concurrent async operations.
+ * Same implementation as ArpeggioRunner's Semaphore.
+ */
+class Semaphore {
+  private running = 0;
+  private readonly waiting: Array<() => void> = [];
+
+  constructor(private readonly maxConcurrency: number) {}
+
+  async acquire(): Promise<void> {
+    if (this.running < this.maxConcurrency) {
+      this.running++;
+      return;
+    }
+    return new Promise<void>((resolve) => {
+      this.waiting.push(resolve);
+    });
+  }
+
+  release(): void {
+    if (this.waiting.length > 0) {
+      const next = this.waiting.shift()!;
+      next();
+    } else {
+      this.running--;
+    }
+  }
+}
 
 export interface ParallelRunnerDeps {
   readonly optionsBuilder: OptionsBuilder;
@@ -33,11 +65,7 @@ export interface ParallelRunnerDeps {
   readonly getReportDir: () => string;
   readonly getInteractive: () => boolean;
   readonly detectRuleIndex: (content: string, movementName: string) => number;
-  readonly callAiJudge: (
-    agentOutput: string,
-    conditions: Array<{ index: number; text: string }>,
-    options: { cwd: string }
-  ) => Promise<number>;
+  readonly structuredCaller: StructuredCaller;
   readonly onPhaseStart?: (
     step: PieceMovement,
     phase: 1 | 2 | 3,
@@ -99,20 +127,44 @@ export class ParallelRunner {
       ? new ParallelLogger(this.buildParallelLoggerOptions(step.name, movementIteration, subMovements.map((s) => s.name), state.iteration, maxMovements))
       : undefined;
 
-    const ruleCtx = {
+    const parentPm = this.deps.optionsBuilder.resolveStepProviderModel(step);
+    const parentRuleCtx = {
       state,
       cwd: this.deps.getCwd(),
+      provider: parentPm.provider,
+      resolvedProvider: parentPm.provider,
+      resolvedModel: parentPm.model,
       interactive: this.deps.getInteractive(),
       detectRuleIndex: this.deps.detectRuleIndex,
-      callAiJudge: this.deps.callAiJudge,
+      structuredCaller: this.deps.structuredCaller,
     };
 
+    // Create semaphore for concurrency control (if configured)
+    const semaphore = step.concurrency != null
+      ? new Semaphore(step.concurrency)
+      : undefined;
+    if (semaphore) {
+      log.debug('Concurrency limit enabled', { movement: step.name, concurrency: step.concurrency });
+    }
+
     // Run all sub-movements concurrently (failures are captured, not thrown)
+    // When semaphore is set, at most `concurrency` sub-movements execute simultaneously.
     const settled = await Promise.allSettled(
       subMovements.map(async (subMovement, index) => {
+        if (semaphore) {
+          await semaphore.acquire();
+        }
+        try {
         const subIteration = incrementMovementIteration(state, subMovement.name);
         const subInstruction = this.deps.movementExecutor.buildInstruction(subMovement, subIteration, state, task, maxMovements);
         const parentIteration = state.iteration;
+        const subPm = this.deps.optionsBuilder.resolveStepProviderModel(subMovement);
+        const subRuleCtx = {
+          ...parentRuleCtx,
+          provider: subPm.provider,
+          resolvedProvider: subPm.provider,
+          resolvedModel: subPm.model,
+        };
 
         // Session key uses buildSessionKey (persona:provider) — same as normal movements.
         // This ensures sessions are shared across movements with the same persona+provider,
@@ -171,7 +223,7 @@ export class ParallelRunner {
         if (subPhase3) {
           finalResponse = { ...subResponse, matchedRuleIndex: subPhase3.ruleIndex, matchedRuleMethod: subPhase3.method };
         } else {
-          const match = await detectMatchedRule(subMovement, subResponse.content, '', ruleCtx);
+          const match = await detectMatchedRule(subMovement, subResponse.content, '', subRuleCtx);
           finalResponse = match
             ? { ...subResponse, matchedRuleIndex: match.index, matchedRuleMethod: match.method }
             : subResponse;
@@ -181,6 +233,11 @@ export class ParallelRunner {
         this.deps.movementExecutor.emitMovementReports(subMovement);
 
         return { subMovement, response: finalResponse, instruction: subInstruction };
+        } finally {
+          if (semaphore) {
+            semaphore.release();
+          }
+        }
       }),
     );
 
@@ -233,7 +290,7 @@ export class ParallelRunner {
       .join('\n\n');
 
     // Parent movement uses aggregate conditions, so tagContent is empty
-    const match = await detectMatchedRule(step, aggregatedContent, '', ruleCtx);
+    const match = await detectMatchedRule(step, aggregatedContent, '', parentRuleCtx);
 
     const aggregatedResponse: AgentResponse = {
       persona: step.name,

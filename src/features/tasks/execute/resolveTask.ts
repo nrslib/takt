@@ -9,6 +9,8 @@ import {
   resolveCloneBaseDir,
   branchExists,
   summarizeTaskName,
+  resolveTaskWorkflowValue,
+  resolveTaskStartMovementValue,
 } from '../../../infra/task/index.js';
 import { getGitProvider, type Issue } from '../../../infra/git/index.js';
 import { withProgress } from '../../../shared/ui/index.js';
@@ -81,20 +83,20 @@ function throwIfAborted(signal?: AbortSignal): void {
   }
 }
 
-export function resolveTaskIssue(issueNumber: number | undefined, cwd: string): Issue[] | undefined {
+export function resolveTaskIssue(issueNumber: number | undefined, projectCwd: string): Issue[] | undefined {
   if (issueNumber === undefined) {
     return undefined;
   }
 
   const gitProvider = getGitProvider();
-  const cliStatus = gitProvider.checkCliStatus(cwd);
+  const cliStatus = gitProvider.checkCliStatus(projectCwd);
   if (!cliStatus.available) {
     log.info('VCS CLI unavailable, skipping issue resolution for PR body', { issueNumber });
     return undefined;
   }
 
   try {
-    const issue = gitProvider.fetchIssue(issueNumber, cwd);
+    const issue = gitProvider.fetchIssue(issueNumber, projectCwd);
     return [issue];
   } catch (e) {
     log.info('Failed to fetch issue for PR body, continuing without issue info', { issueNumber, error: getErrorMessage(e) });
@@ -111,11 +113,13 @@ export async function resolveTaskExecution(
 
   const data = task.data;
   if (!data) {
-    throw new Error(`Task "${task.name}" is missing required data, including piece.`);
+    throw new Error(`Task "${task.name}" is missing required data, including workflow.`);
   }
 
-  if (!data.piece || typeof data.piece !== 'string' || data.piece.trim() === '') {
-    throw new Error(`Task "${task.name}" is missing required piece.`);
+  const normalizedData = data as Record<string, unknown>;
+  const execPiece = resolveTaskWorkflowValue(normalizedData);
+  if (!execPiece || execPiece.trim() === '') {
+    throw new Error(`Task "${task.name}" is missing required workflow.`);
   }
 
   let execCwd = defaultCwd;
@@ -179,10 +183,9 @@ export async function resolveTaskExecution(
     taskPrompt = stageTaskSpecForExecution(defaultCwd, execCwd, task.taskDir, reportDirName);
   }
 
-  const execPiece = data.piece;
-  const startMovement = data.start_movement;
+  const startMovement = resolveTaskStartMovementValue(normalizedData);
   const retryNote = data.retry_note;
-  const maxMovementsOverride = data.exceeded_max_movements;
+  const maxMovementsOverride = data.exceeded_max_steps;
   const initialIterationOverride = data.exceeded_current_iteration;
 
   const autoPr = data.auto_pr ?? resolvePieceConfigValue(defaultCwd, 'autoPr') ?? false;

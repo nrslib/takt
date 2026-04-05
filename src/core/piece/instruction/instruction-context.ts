@@ -59,21 +59,21 @@ export interface InstructionContext {
 /**
  * Build the edit rule string for the execution context section.
  *
- * Returns a localized string describing the edit permission for this movement.
+ * Returns a localized string describing the edit permission for this step.
  * Returns empty string when edit is undefined (no explicit permission).
  */
 export function buildEditRule(edit: boolean | undefined, language: Language): string {
   if (edit === true) {
     if (language === 'ja') {
-      return '**このムーブメントでは編集が許可されています。** ユーザーの要求に応じて、ファイルの作成・変更・削除を行ってください。';
+      return '**このステップでは編集が許可されています。** ユーザーの要求に応じて、ファイルの作成・変更・削除を行ってください。';
     }
-    return '**Editing is ENABLED for this movement.** You may create, modify, and delete files as needed to fulfill the user\'s request.';
+    return '**Editing is ENABLED for this step.** You may create, modify, and delete files as needed to fulfill the user\'s request.';
   }
   if (edit === false) {
     if (language === 'ja') {
-      return '**このムーブメントでは編集が禁止されています。** プロジェクトのソースファイルを作成・変更・削除しないでください。コードの読み取り・検索のみ行ってください。レポート出力は後のフェーズで自動的に行われます。';
+      return '**このステップでは編集が禁止されています。** プロジェクトのソースファイルを作成・変更・削除しないでください。コードの読み取り・検索のみ行ってください。レポート出力は後のフェーズで自動的に行われます。';
     }
-    return '**Editing is DISABLED for this movement.** Do NOT create, modify, or delete any project source files. You may only read and search code. Report output will be handled automatically in a later phase.';
+    return '**Editing is DISABLED for this step.** Do NOT create, modify, or delete any project source files. You may only read and search code. Report output will be handled automatically in a later phase.';
   }
   return '';
 }

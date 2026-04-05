@@ -175,6 +175,23 @@ describe('CodexClient — structuredOutput 抽出', () => {
     });
   });
 
+  it('provider_options.codex.reasoningEffort が ThreadOptions に反映される', async () => {
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+
+    const client = new CodexClient();
+    await client.call('coder', 'prompt', {
+      cwd: '/tmp',
+      reasoningEffort: 'medium',
+    });
+
+    expect(lastThreadOptions).toMatchObject({
+      modelReasoningEffort: 'medium',
+    });
+  });
+
   it('codexPathOverride が Codex constructor options に反映される', async () => {
     mockEvents = [
       { type: 'thread.started', thread_id: 'thread-1' },

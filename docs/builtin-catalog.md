@@ -2,36 +2,36 @@
 
 [日本語](./builtin-catalog.ja.md)
 
-A comprehensive catalog of all builtin pieces and personas included with TAKT.
+A comprehensive catalog of all builtin workflows and personas included with TAKT.
 
-## Recommended Pieces
+## Recommended Workflows
 
-| Piece | Recommended Use |
+| Workflow | Recommended Use |
 |----------|-----------------|
-| `default` | Standard development. Test-first with AI antipattern review and parallel review (architecture + supervisor). plan → write_tests → implement → AI antipattern review → parallel review → complete. |
+| `default` | Standard development workflow. Test-first with AI antipattern review and parallel review (architecture + supervisor). plan → write_tests → implement → AI antipattern review → parallel review → complete. |
 | `frontend-mini` | Frontend-focused mini configuration. |
 | `backend-mini` | Backend-focused mini configuration. |
 | `dual-mini` | Frontend + backend mini configuration. |
 
-## All Builtin Pieces
+## All Builtin Workflows
 
 Organized by category.
 
-| Category | Piece | Description |
+| Category | Workflow | Description |
 |----------|----------|-------------|
-| 🚀 Quick Start | `default` | Standard development. Test-first with AI antipattern review and parallel review (architecture + supervisor). plan → write_tests → implement → AI antipattern review → parallel review → complete. |
-| | `frontend-mini` | Mini frontend piece: plan -> implement -> parallel review (AI antipattern + supervisor) with frontend knowledge injection. |
-| | `backend-mini` | Mini backend piece: plan -> implement -> parallel review (AI antipattern + supervisor) with backend knowledge injection. |
+| 🚀 Quick Start | `default` | Standard development workflow. Test-first with AI antipattern review and parallel review (architecture + supervisor). plan → write_tests → implement → AI antipattern review → parallel review → complete. |
+| | `frontend-mini` | Mini frontend workflow: plan -> implement -> parallel review (AI antipattern + supervisor) with frontend knowledge injection. |
+| | `backend-mini` | Mini backend workflow: plan -> implement -> parallel review (AI antipattern + supervisor) with backend knowledge injection. |
 | | `compound-eye` | Multi-model review: sends the same instruction to Claude and Codex simultaneously, then synthesizes both responses. |
-| ⚡ Mini | `backend-cqrs-mini` | Mini CQRS+ES piece: plan -> implement -> parallel review (AI antipattern + supervisor) with CQRS+ES knowledge injection. |
-| | `dual-mini` | Mini dual piece: plan -> implement -> parallel review (AI antipattern + expert supervisor) with frontend + backend knowledge injection. |
-| | `dual-cqrs-mini` | Mini CQRS+ES dual piece: plan -> implement -> parallel review (AI antipattern + expert supervisor) with CQRS+ES knowledge injection. |
-| 🎨 Frontend | `frontend` | Frontend-specialized development piece with React/Next.js focused reviews and knowledge injection. |
-| ⚙️ Backend | `backend` | Backend-specialized development piece with backend, security, and QA expert reviews. |
-| | `backend-cqrs` | CQRS+ES-specialized backend development piece with CQRS+ES, security, and QA expert reviews. |
-| 🔧 Dual | `dual` | Frontend + backend development piece: architecture, frontend, security, QA reviews with fix loops. |
-| | `dual-cqrs` | Frontend + backend development piece (CQRS+ES specialized): CQRS+ES, frontend, security, QA reviews with fix loops. |
-| 🏗️ Infrastructure | `terraform` | Terraform IaC development piece: plan → implement → parallel review → supervisor validation → fix → complete. |
+| ⚡ Mini | `backend-cqrs-mini` | Mini CQRS+ES workflow: plan -> implement -> parallel review (AI antipattern + supervisor) with CQRS+ES knowledge injection. |
+| | `dual-mini` | Mini dual workflow: plan -> implement -> parallel review (AI antipattern + expert supervisor) with frontend + backend knowledge injection. |
+| | `dual-cqrs-mini` | Mini CQRS+ES dual workflow: plan -> implement -> parallel review (AI antipattern + expert supervisor) with CQRS+ES knowledge injection. |
+| 🎨 Frontend | `frontend` | Frontend-specialized development workflow with React/Next.js focused reviews and knowledge injection. |
+| ⚙️ Backend | `backend` | Backend-specialized development workflow with backend, security, and QA expert reviews. |
+| | `backend-cqrs` | CQRS+ES-specialized backend development workflow with CQRS+ES, security, and QA expert reviews. |
+| 🔧 Dual | `dual` | Frontend + backend development workflow: architecture, frontend, security, QA reviews with fix loops. |
+| | `dual-cqrs` | Frontend + backend development workflow (CQRS+ES specialized): CQRS+ES, frontend, security, QA reviews with fix loops. |
+| 🏗️ Infrastructure | `terraform` | Terraform IaC development workflow: plan → implement → parallel review → supervisor validation → fix → complete. |
 | 🔍 Review | `review-default` | Multi-perspective code review: auto-detects PR/branch/working diff, reviews from 5 parallel perspectives (arch/security/QA/testing/requirements), outputs consolidated results. |
 | | `review-fix-default` | Multi-perspective review + fix loop (architecture, security, QA, testing, requirements — 5 parallel reviewers with iterative fixes). |
 | | `review-frontend` | Frontend-focused review (structure, modularization, component design, security, QA). |
@@ -51,16 +51,16 @@ Organized by category.
 | | `audit-architecture-frontend` | Frontend-focused architecture audit. Enumerates UI modules and boundaries. |
 | | `audit-architecture-backend` | Backend-focused architecture audit. Enumerates service modules and boundaries. |
 | | `audit-architecture-dual` | Full-stack architecture audit. Enumerates frontend/backend boundaries and cross-layer wiring. |
-| 🧪 Testing | `unit-test` | Unit test focused piece: test analysis -> test implementation -> review -> fix. |
-| | `e2e-test` | E2E test focused piece: E2E analysis -> E2E implementation -> review -> fix (Vitest-based E2E flow). |
-| 🎵 TAKT Development | `takt-default` | TAKT development piece: plan → write tests → implement → AI antipattern review → 5-parallel review → fix → supervise → complete. |
-| | `takt-default-team-leader` | TAKT development piece with team leader: plan → write tests → team-leader implement → AI antipattern review → 5-parallel review → fix → supervise → complete. |
+| 🧪 Testing | `unit-test` | Unit test focused workflow: test analysis -> test implementation -> review -> fix. |
+| | `e2e-test` | E2E test focused workflow: E2E analysis -> E2E implementation -> review -> fix (Vitest-based E2E flow). |
+| 🎵 TAKT Development | `takt-default` | TAKT development workflow: plan → write tests → implement → AI antipattern review → 5-parallel review → fix → supervise → complete. |
+| | `takt-default-team-leader` | TAKT development workflow with team leader: plan → write tests → team-leader implement → AI antipattern review → 5-parallel review → fix → supervise → complete. |
 | | `review-fix-takt-default` | TAKT development code review + fix loop (5 parallel reviewers: architecture, security, QA, testing, requirements — with iterative fixes). |
-| Others | `research` | Research piece: planner -> digger -> supervisor. Autonomously executes research without asking questions. |
-| | `deep-research` | Deep research piece: plan -> dig -> analyze -> supervise. Discovery-driven investigation that follows emerging questions with multi-perspective analysis. |
+| Others | `research` | Research workflow: planner -> digger -> supervisor. Autonomously executes research without asking questions. |
+| | `deep-research` | Deep research workflow: plan -> dig -> analyze -> supervise. Discovery-driven investigation that follows emerging questions with multi-perspective analysis. |
 | | `magi` | Deliberation system inspired by Evangelion. Three AI personas (MELCHIOR, BALTHASAR, CASPER) analyze and vote. |
 
-Use `takt switch` to switch pieces interactively.
+Run `takt` to choose a workflow interactively.
 
 ## Builtin Personas
 
@@ -107,13 +107,13 @@ You are a code reviewer specialized in security.
 - Review authentication logic
 ```
 
-Reference custom personas from piece YAML via the `personas` section map:
+Reference custom personas from workflow YAML via the `personas` section map:
 
 ```yaml
 personas:
   my-reviewer: ~/.takt/personas/my-reviewer.md
 
-movements:
+steps:
   - name: review
     persona: my-reviewer
     # ...
@@ -121,7 +121,7 @@ movements:
 
 ## Per-persona Provider Overrides
 
-Use `persona_providers` in `~/.takt/config.yaml` to route specific personas to different providers without duplicating pieces. This allows you to run, for example, coding on Codex while keeping reviewers on Claude.
+Use `persona_providers` in `~/.takt/config.yaml` to route specific personas to different providers without duplicating workflows. This allows you to run, for example, coding on Codex while keeping reviewers on Claude.
 
 ```yaml
 # ~/.takt/config.yaml
@@ -130,4 +130,4 @@ persona_providers:
   ai-antipattern-reviewer: claude   # Keep reviewers on Claude
 ```
 
-This configuration applies globally to all pieces. Any movement using the specified persona will be routed to the corresponding provider, regardless of which piece is being executed.
+This configuration applies globally to all workflows. Any step using the specified persona will be routed to the corresponding provider, regardless of which workflow is being executed.

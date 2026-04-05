@@ -10,7 +10,7 @@
  *
  * Also tests RuleMatchMethod tracking.
  *
- * Mocked: callAiJudge (controlled responses)
+ * Mocked: structuredCaller.evaluateCondition (controlled responses)
  * Not mocked: detectMatchedRule, evaluateAggregateConditions
  */
 
@@ -76,7 +76,9 @@ function makeCtx(movementOutputs?: Map<string, AgentResponse>): RuleEvaluatorCon
     state: makeState(movementOutputs),
     cwd: '/tmp/test',
     detectRuleIndex,
-    callAiJudge: mockCallAiJudge,
+    structuredCaller: {
+      evaluateCondition: mockCallAiJudge,
+    } as RuleEvaluatorContext['structuredCaller'],
   };
 }
 

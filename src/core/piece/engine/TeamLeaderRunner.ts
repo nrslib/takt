@@ -5,7 +5,7 @@ import type {
   PartDefinition,
   PartResult,
 } from '../../models/types.js';
-import { decomposeTask, executeAgent, requestMoreParts } from '../../../agents/agent-usecases.js';
+import { executeAgent } from '../../../agents/agent-usecases.js';
 import { buildSessionKey } from '../session-key.js';
 import { ParallelLogger } from './parallel-logger.js';
 import { incrementMovementIteration } from './state-manager.js';
@@ -28,12 +28,6 @@ export interface TeamLeaderRunnerDeps {
   readonly engineOptions: PieceEngineOptions;
   readonly getCwd: () => string;
   readonly getInteractive: () => boolean;
-  readonly detectRuleIndex: (content: string, movementName: string) => number;
-  readonly callAiJudge: (
-    agentOutput: string,
-    conditions: Array<{ index: number; text: string }>,
-    options: { cwd: string }
-  ) => Promise<number>;
   readonly onPhaseStart?: (
     step: PieceMovement,
     phase: 1 | 2 | 3,
@@ -79,8 +73,7 @@ export class TeamLeaderRunner {
       persona: teamLeaderConfig.persona ?? step.persona,
       personaPath: teamLeaderConfig.personaPath ?? step.personaPath,
     };
-    const leaderProvider = leaderStep.provider ?? this.deps.engineOptions.provider;
-    const leaderModel = leaderStep.model ?? this.deps.engineOptions.model;
+    const { provider: leaderProvider, model: leaderModel } = this.deps.optionsBuilder.resolveStepProviderModel(leaderStep);
     const instruction = this.deps.movementExecutor.buildInstruction(
       leaderStep,
       movementIteration,
@@ -91,7 +84,11 @@ export class TeamLeaderRunner {
 
     emitTeamLeaderProgressHint(this.deps.engineOptions, 'decompose');
     let didEmitPhaseStart = false;
-    const parts = await decomposeTask(instruction, teamLeaderConfig.maxParts, {
+    const structuredCaller = this.deps.engineOptions.structuredCaller;
+    if (!structuredCaller) {
+      throw new Error('structuredCaller is required for team leader execution');
+    }
+    const parts = await structuredCaller.decomposeTask(instruction, teamLeaderConfig.maxParts, {
       cwd: this.deps.getCwd(),
       persona: leaderStep.persona,
       personaPath: leaderStep.personaPath,
@@ -179,7 +176,7 @@ export class TeamLeaderRunner {
       },
       requestMoreParts: async ({ partResults: currentResults, scheduledIds, remainingPartBudget }) => {
         emitTeamLeaderProgressHint(this.deps.engineOptions, 'feedback');
-        return requestMoreParts(
+        return structuredCaller.requestMoreParts(
           instruction,
           currentResults.map((result) => ({
             id: result.part.id,
@@ -265,7 +262,7 @@ export class TeamLeaderRunner {
   ): Promise<PartResult> {
     const partMovement = createPartMovement(step, part);
     const baseOptions = this.deps.optionsBuilder.buildAgentOptions(partMovement);
-    const timeoutMs = part.timeoutMs ?? defaultTimeoutMs;
+    const timeoutMs = defaultTimeoutMs;
     const { signal, dispose } = buildAbortSignal(timeoutMs, baseOptions.abortSignal);
     const options = parallelLogger
       ? { ...baseOptions, abortSignal: signal, onStream: parallelLogger.createStreamHandler(part.id, partIndex) }

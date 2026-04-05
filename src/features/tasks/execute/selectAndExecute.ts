@@ -6,6 +6,7 @@ import { confirm } from '../../../shared/prompt/index.js';
 import { createSharedClone, summarizeTaskName, resolveBaseBranch, TaskRunner } from '../../../infra/task/index.js';
 import { info, error, withProgress } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
+import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import { executeTask } from './taskExecution.js';
 import type { TaskExecutionOptions, WorktreeConfirmationResult, SelectAndExecuteOptions } from './types.js';
 import { selectPiece } from '../../pieceSelection/index.js';
@@ -22,7 +23,7 @@ export async function determinePiece(cwd: string, override?: string): Promise<st
     }
     const resolvedPiece = loadPieceByIdentifier(override, cwd);
     if (!resolvedPiece) {
-      error(`Piece not found: ${override}`);
+      error(`Workflow not found: ${sanitizeTerminalText(override)}`);
       return null;
     }
     return override;

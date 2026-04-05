@@ -163,10 +163,6 @@ vi.mock('../infra/claude/query-manager.js', () => ({
   interruptAllQueries: vi.fn(),
 }));
 
-vi.mock('../agents/ai-judge.js', () => ({
-  callAiJudge: vi.fn(),
-}));
-
 vi.mock('../shared/exitCodes.js', () => ({
   EXIT_SIGINT: 130,
 }));
@@ -385,14 +381,14 @@ describe('runAllTasks concurrency', () => {
 
       const executionOrder: string[] = [];
 
-      // Each task takes 50ms — if sequential, total > 100ms; if parallel, total ~50ms
+      // Each task takes about 300ms. Sequential execution exceeds 600ms, while parallel execution stays around 300ms.
       mockExecutePiece.mockImplementation((_config, task) => {
         executionOrder.push(`start:${task}`);
         return new Promise((resolve) => {
           setTimeout(() => {
             executionOrder.push(`end:${task}`);
             resolve({ success: true });
-          }, 50);
+          }, 300);
         });
       });
 
@@ -406,10 +402,14 @@ describe('runAllTasks concurrency', () => {
       const elapsed = Date.now() - startTime;
 
       // Then: Both tasks started before either completed (concurrent execution)
-      expect(executionOrder[0]).toBe('start:Task: slow-1');
-      expect(executionOrder[1]).toBe('start:Task: slow-2');
-      // Elapsed time should be closer to 50ms than 100ms (allowing margin for CI)
-      expect(elapsed).toBeLessThan(150);
+      expect(executionOrder.slice(0, 2)).toEqual([
+        'start:Task: slow-1',
+        'start:Task: slow-2',
+      ]);
+      expect(executionOrder.findIndex((entry) => entry.startsWith('end:'))).toBe(2);
+      // Elapsed time remains a secondary guard: concurrent execution should stay well below
+      // the 600ms sequential baseline even on slower CI runners.
+      expect(elapsed).toBeLessThan(550);
     });
 
     it('should fill slots immediately when a task completes (no batch waiting)', async () => {
@@ -762,7 +762,7 @@ describe('runAllTasks concurrency', () => {
       expect(message).toContain('success=1');
       expect(message).toContain('failed=0');
       expect(message).toContain('task-1');
-      expect(message).toContain('piece=default');
+      expect(message).toContain('workflow=default');
       expect(message).toContain('issue=#42');
       expect(message).toContain('duration=30s');
       expect(message).toContain('pr=https://github.com/org/repo/pull/10');
@@ -802,9 +802,9 @@ describe('runAllTasks concurrency', () => {
       expect(message).toContain('total=1');
       expect(message).toContain('failed=1');
       expect(message).toContain('task-1');
-      expect(message).toContain('piece=review');
+      expect(message).toContain('workflow=review');
       expect(message).toContain('duration=45s');
-      expect(message).toContain('movement=ai_review');
+      expect(message).toContain('step=ai_review');
       expect(message).toContain('error=Lint failed');
     });
 

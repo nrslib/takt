@@ -2,45 +2,18 @@ import { join } from 'node:path';
 import type { PieceMovement, PieceState, Language } from '../../models/types.js';
 import type { MovementProviderOptions } from '../../models/piece-types.js';
 import type { RunAgentOptions } from '../../../agents/runner.js';
+import type { StructuredCaller } from '../../../agents/structured-caller.js';
 import type { PhaseRunnerContext } from '../phase-runner.js';
-import type { PieceEngineOptions, PhaseName, MovementProviderInfo, PhasePromptParts, JudgeStageEntry } from '../types.js';
+import { resolveEffectiveProviderOptions } from '../../../infra/config/providerOptions.js';
+import type {
+  PieceEngineOptions,
+  PhaseName,
+  MovementProviderInfo,
+  PhasePromptParts,
+  JudgeStageEntry,
+} from '../types.js';
 import { buildSessionKey } from '../session-key.js';
 import { resolveMovementProviderModel } from '../provider-resolution.js';
-
-function mergeProviderOptions(
-  ...layers: (MovementProviderOptions | undefined)[]
-): MovementProviderOptions | undefined {
-  const result: MovementProviderOptions = {};
-  for (const layer of layers) {
-    if (!layer) continue;
-    if (layer.codex) {
-      result.codex = { ...result.codex, ...layer.codex };
-    }
-    if (layer.opencode) {
-      result.opencode = { ...result.opencode, ...layer.opencode };
-    }
-    if (layer.claude?.sandbox || layer.claude?.allowedTools) {
-      result.claude = {
-        sandbox: layer.claude.sandbox
-          ? { ...result.claude?.sandbox, ...layer.claude.sandbox }
-          : result.claude?.sandbox,
-        allowedTools: layer.claude.allowedTools ?? result.claude?.allowedTools,
-      };
-    }
-  }
-  return Object.keys(result).length > 0 ? result : undefined;
-}
-
-function resolveMovementProviderOptions(
-  source: 'env' | 'project' | 'global' | 'default' | undefined,
-  resolvedConfigOptions: MovementProviderOptions | undefined,
-  movementOptions: MovementProviderOptions | undefined,
-): MovementProviderOptions | undefined {
-  if (source === 'env' || source === 'project') {
-    return mergeProviderOptions(movementOptions, resolvedConfigOptions);
-  }
-  return mergeProviderOptions(resolvedConfigOptions, movementOptions);
-}
 
 export class OptionsBuilder {
   constructor(
@@ -55,7 +28,6 @@ export class OptionsBuilder {
     private readonly getPieceDescription: () => string | undefined,
   ) {}
 
-  /** Resolve effective provider and model for a movement (same logic as buildBaseOptions) */
   resolveStepProviderModel(step: PieceMovement): MovementProviderInfo {
     const resolved = resolveMovementProviderModel({
       step,
@@ -80,17 +52,16 @@ export class OptionsBuilder {
       cwd: this.getCwd(),
       abortSignal: this.engineOptions.abortSignal,
       personaPath: step.personaPath,
-      provider: this.engineOptions.provider,
-      model: this.engineOptions.model,
-      stepProvider: resolvedProvider,
-      stepModel: resolvedModel,
+      resolvedProvider,
+      resolvedModel,
       permissionResolution: {
         movementName: step.name,
         requiredPermissionMode: step.requiredPermissionMode,
         providerProfiles: this.engineOptions.providerProfiles,
       },
-      providerOptions: mergedProviderOptions ?? resolveMovementProviderOptions(
+      providerOptions: mergedProviderOptions ?? resolveEffectiveProviderOptions(
         this.engineOptions.providerOptionsSource,
+        this.engineOptions.providerOptionsOriginResolver,
         this.engineOptions.providerOptions,
         step.providerOptions,
       ),
@@ -111,8 +82,9 @@ export class OptionsBuilder {
 
   /** Build RunAgentOptions for Phase 1 (main execution) */
   buildAgentOptions(step: PieceMovement): RunAgentOptions {
-    const mergedProviderOptions = resolveMovementProviderOptions(
+    const mergedProviderOptions = resolveEffectiveProviderOptions(
       this.engineOptions.providerOptionsSource,
+      this.engineOptions.providerOptionsOriginResolver,
       this.engineOptions.providerOptions,
       step.providerOptions,
     );
@@ -207,6 +179,9 @@ export class OptionsBuilder {
       interactive: this.engineOptions.interactive,
       lastResponse,
       onStream: this.engineOptions.onStream,
+      structuredCaller: this.requireStructuredCaller(),
+      resolveProvider: (step) => this.resolveStepProviderModel(step).provider,
+      resolveStepProviderModel: this.resolveStepProviderModel.bind(this),
       getSessionId: (persona: string) => state.personaSessions.get(persona),
       buildResumeOptions: this.buildResumeOptions.bind(this),
       buildNewSessionReportOptions: this.buildNewSessionReportOptions.bind(this),
@@ -216,5 +191,13 @@ export class OptionsBuilder {
       onJudgeStage,
       iteration,
     };
+  }
+
+  private requireStructuredCaller(): StructuredCaller {
+    if (!this.engineOptions.structuredCaller) {
+      throw new Error('structuredCaller is required for phase runner context');
+    }
+
+    return this.engineOptions.structuredCaller;
   }
 }

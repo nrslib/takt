@@ -1,0 +1,92 @@
+name: audit-e2e
+description: E2E の全件監査。ユーザーフローとカバレッジ不足を棚卸しし、コード修正なしで Issue 直貼り可能なレポートを作成する
+workflow_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+max_steps: 12
+initial_step: plan
+
+loop_monitors:
+  - cycle: [supervise, review]
+    threshold: 4
+    judge:
+      persona: supervisor
+      instruction: |
+        e2e audit の supervise → review サイクルが {cycle_count} 回繰り返されました。
+        監査の完全性と品質を総合的に判断し、現状の結果で受け入れるか判断してください。
+      rules:
+        - condition: 十分な品質に達している
+          next: COMPLETE
+        - condition: 品質が不十分だが改善の見込みがない
+          next: ABORT
+
+steps:
+  - name: plan
+    persona: test-planner
+    policy: testing
+    knowledge:
+      - architecture
+      - e2e-testing
+    instruction: e2e-audit-plan
+    edit: false
+    output_contracts:
+      report:
+        - name: 01-e2e-audit-plan.md
+          format: e2e-audit-plan
+    rules:
+      - condition: 監査計画が完了
+        next: audit
+      - condition: 要件が不明確、情報不足
+        next: ABORT
+
+  - name: audit
+    edit: false
+    persona: testing-reviewer
+    policy:
+      - review
+      - testing
+    knowledge:
+      - architecture
+      - e2e-testing
+    instruction: e2e-audit-team-leader
+    team_leader:
+      max_parts: 3
+      part_persona: testing-reviewer
+      part_edit: false
+    output_contracts:
+      report:
+        - name: 02-e2e-audit.md
+          format: e2e-audit
+    rules:
+      - condition: 監査完了
+        next: supervise
+
+  - name: supervise
+    edit: false
+    persona: supervisor
+    policy: review
+    knowledge:
+      - e2e-testing
+    instruction: e2e-audit-supervise
+    pass_previous_response: false
+    rules:
+      - condition: 監査が完全で Issue 化できる品質に達している
+        next: COMPLETE
+      - condition: フロー監査が不完全、または根拠が不足している
+        next: review
+
+  - name: review
+    edit: false
+    persona: testing-reviewer
+    policy:
+      - review
+      - testing
+    knowledge:
+      - e2e-testing
+    instruction: e2e-audit-review
+    rules:
+      - condition: 再監査完了
+        next: supervise

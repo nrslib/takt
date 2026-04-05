@@ -3,6 +3,26 @@ import { normalizePieceConfig } from '../infra/config/loaders/pieceParser.js';
 import { mergeProviderOptions } from '../infra/config/providerOptions.js';
 
 describe('normalizePieceConfig provider_options', () => {
+  it('steps と initial_step を movements / initialMovement に正規化する', () => {
+    const raw = {
+      name: 'workflow-aliases',
+      initial_step: 'plan',
+      steps: [
+        {
+          name: 'plan',
+          instruction: '{task}',
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        },
+      ],
+    };
+
+    const config = normalizePieceConfig(raw, process.cwd());
+
+    expect(config.initialMovement).toBe('plan');
+    expect(config.movements).toHaveLength(1);
+    expect(config.movements[0]?.name).toBe('plan');
+  });
+
   it('answer_agent を指定しても PieceConfig に answerAgent を残さない', () => {
     const raw = {
       name: 'answer-agent-removed',
@@ -147,6 +167,47 @@ describe('normalizePieceConfig provider_options', () => {
     });
     expect(config.movements[1]?.providerOptions).toEqual({
       claude: { allowedTools: ['Read', 'Edit', 'Bash'] },
+    });
+  });
+
+  it('effort 系 provider_options を piece-level で設定し movement で上書きできる', () => {
+    const raw = {
+      name: 'provider-option-effort',
+      piece_config: {
+        provider_options: {
+          codex: { reasoning_effort: 'medium' },
+          claude: { effort: 'low' },
+        },
+      },
+      movements: [
+        {
+          name: 'inherit',
+          instruction: '{task}',
+        },
+        {
+          name: 'override',
+          provider_options: {
+            codex: { reasoning_effort: 'high' },
+            claude: { effort: 'medium' },
+          },
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    const config = normalizePieceConfig(raw, process.cwd());
+
+    expect(config.providerOptions).toEqual({
+      codex: { reasoningEffort: 'medium' },
+      claude: { effort: 'low' },
+    });
+    expect(config.movements[0]?.providerOptions).toEqual({
+      codex: { reasoningEffort: 'medium' },
+      claude: { effort: 'low' },
+    });
+    expect(config.movements[1]?.providerOptions).toEqual({
+      codex: { reasoningEffort: 'high' },
+      claude: { effort: 'medium' },
     });
   });
 

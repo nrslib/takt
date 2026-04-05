@@ -17,6 +17,9 @@ const {
   mockRequeueTask,
   mockExecuteAndCompleteTask,
   mockWarn,
+  mockInfo,
+  mockHeader,
+  mockStatus,
   mockIsPiecePath,
   mockLoadAllPiecesWithSources,
 } = vi.hoisted(() => ({
@@ -47,6 +50,9 @@ const {
   mockRequeueTask: vi.fn(),
   mockExecuteAndCompleteTask: vi.fn(),
   mockWarn: vi.fn(),
+  mockInfo: vi.fn(),
+  mockHeader: vi.fn(),
+  mockStatus: vi.fn(),
   mockIsPiecePath: vi.fn(() => false),
   mockLoadAllPiecesWithSources: vi.fn(() => new Map<string, unknown>([['default', {}]])),
 }));
@@ -66,10 +72,10 @@ vi.mock('../shared/prompt/index.js', () => ({
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
-  info: vi.fn(),
-  header: vi.fn(),
+  info: (...args: unknown[]) => mockInfo(...args),
+  header: (...args: unknown[]) => mockHeader(...args),
   blankLine: vi.fn(),
-  status: vi.fn(),
+  status: (...args: unknown[]) => mockStatus(...args),
   warn: (...args: unknown[]) => mockWarn(...args),
 }));
 
@@ -107,6 +113,17 @@ vi.mock('../infra/task/index.js', () => ({
       return mockRequeueTask(...args);
     }
   },
+  resolveTaskWorkflowValue: vi.fn((data?: Record<string, unknown>) => {
+    if (!data) {
+      return undefined;
+    }
+    const workflow = typeof data.workflow === 'string' ? data.workflow : undefined;
+    const piece = typeof data.piece === 'string' ? data.piece : undefined;
+    if (workflow !== undefined && piece !== undefined && workflow !== piece) {
+      throw new Error("Task configuration conflict: 'workflow' and 'piece' must match when both are set.");
+    }
+    return workflow ?? piece;
+  }),
 }));
 
 vi.mock('../features/tasks/execute/taskExecution.js', () => ({
@@ -116,7 +133,7 @@ vi.mock('../features/tasks/execute/taskExecution.js', () => ({
 vi.mock('../shared/i18n/index.js', () => ({
   getLabel: vi.fn((key: string, _lang?: string, vars?: Record<string, string>) => {
     if (vars?.piece) {
-      return `Use previous piece "${vars.piece}"?`;
+      return `Use previous workflow "${vars.piece}"?`;
     }
     return key;
   }),
@@ -221,15 +238,15 @@ describe('retryFailedTask', () => {
     expect(originalTaskInfo.data.piece).toBe('original-piece');
   });
 
-  it('should pass failed movement as default to selectOptionWithDefault', async () => {
+  it('should pass failed step as default to selectOptionWithDefault', async () => {
     const task = makeFailedTask(); // failure.movement = 'review'
 
     await retryFailedTask(task, '/project');
 
     expect(mockSelectOptionWithDefault).toHaveBeenCalledWith(
-      'Start from movement:',
+      'Start from step:',
       expect.arrayContaining([
-        expect.objectContaining({ value: 'plan' }),
+        expect.objectContaining({ value: 'plan', description: 'Initial step' }),
         expect.objectContaining({ value: 'implement' }),
         expect.objectContaining({ value: 'review' }),
       ]),
@@ -288,6 +305,24 @@ describe('retryFailedTask', () => {
 
     expect(mockWarn).toHaveBeenCalledTimes(1);
     expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('deprecated'));
+  });
+
+  it('should sanitize failure details before printing to terminal', async () => {
+    const task = makeFailedTask({
+      name: 'bad\x1b[31m-task\n',
+      failure: {
+        movement: 'review\x1b[2J',
+        error: 'Boom\r',
+        last_message: 'last\tmessage',
+      },
+    });
+
+    await retryFailedTask(task, '/project');
+
+    expect(mockHeader).toHaveBeenCalledWith('Failed Task: bad-task\\n');
+    expect(mockStatus).toHaveBeenCalledWith('Failed at', 'review', 'red');
+    expect(mockStatus).toHaveBeenCalledWith('Error', 'Boom\\r', 'red');
+    expect(mockStatus).toHaveBeenCalledWith('Last message', 'last\\tmessage');
   });
 
   it('should not warn when selected run order uses provider block format', async () => {
@@ -352,6 +387,15 @@ describe('retryFailedTask', () => {
     expect(mockExecuteAndCompleteTask).not.toHaveBeenCalled();
   });
 
+  it('should sanitize task name in requeue confirmation', async () => {
+    const task = makeFailedTask({ name: 'bad\x1b[31m-task\n' });
+    mockRunRetryMode.mockResolvedValue({ action: 'save_task', task: '追加指示A' });
+
+    await retryFailedTask(task, '/project');
+
+    expect(mockInfo).toHaveBeenCalledWith('Task "bad-task\\n" has been requeued.');
+  });
+
   it('should requeue task with existing retry note appended when save_task', async () => {
     const task = makeFailedTask({ data: { task: 'Do something', piece: 'default', retry_note: '既存ノート' } });
     mockRunRetryMode.mockResolvedValue({ action: 'save_task', task: '追加指示A' });
@@ -380,6 +424,25 @@ describe('retryFailedTask', () => {
 
       expect(mockSelectPiece).not.toHaveBeenCalled();
       expect(mockLoadPieceByIdentifier).toHaveBeenCalledWith('default', '/project');
+    });
+
+    it('should reuse previous workflow when only workflow alias is stored', async () => {
+      const task = makeFailedTask({ data: { task: 'Do something', workflow: 'default' } });
+      mockConfirm.mockResolvedValue(true);
+
+      await retryFailedTask(task, '/project');
+
+      const [message] = mockConfirm.mock.calls[0] ?? [];
+      expect(message).toEqual(expect.stringContaining('"default"'));
+      expect(mockLoadPieceByIdentifier).toHaveBeenCalledWith('default', '/project');
+    });
+
+    it('should fail fast when workflow and piece conflict in retry data', async () => {
+      const task = makeFailedTask({ data: { task: 'Do something', workflow: 'a', piece: 'b' } });
+
+      await expect(retryFailedTask(task, '/project')).rejects.toThrow(
+        "Task configuration conflict: 'workflow' and 'piece' must match when both are set.",
+      );
     });
 
     it('should call selectPiece when reuse is declined', async () => {

@@ -9,6 +9,7 @@ import type {
   SDKMessage,
   SDKResultMessage,
   SDKAssistantMessage,
+  SDKRateLimitEvent,
   SDKSystemMessage,
   SDKUserMessage,
   SDKPartialAssistantMessage,
@@ -115,6 +116,15 @@ export function sdkMessageToStreamEvent(
 
     case 'assistant': {
       const assistantMsg = message as SDKAssistantMessage;
+      if (assistantMsg.error) {
+        callback({
+          type: 'assistant_error',
+          data: {
+            error: assistantMsg.error,
+            sessionId: assistantMsg.session_id,
+          },
+        });
+      }
       for (const block of assistantMsg.message.content) {
         if (block.type === 'text') {
           // Skip text blocks when streaming is enabled - they were already
@@ -149,6 +159,24 @@ export function sdkMessageToStreamEvent(
           data: { content, isError },
         });
       }
+      break;
+    }
+
+    case 'rate_limit_event': {
+      const rateLimitMsg = message as SDKRateLimitEvent;
+      callback({
+        type: 'rate_limit',
+        data: {
+          sessionId: rateLimitMsg.session_id,
+          status: rateLimitMsg.rate_limit_info.status,
+          rateLimitType: rateLimitMsg.rate_limit_info.rateLimitType,
+          overageStatus: rateLimitMsg.rate_limit_info.overageStatus,
+          overageDisabledReason: rateLimitMsg.rate_limit_info.overageDisabledReason,
+          resetsAt: rateLimitMsg.rate_limit_info.resetsAt,
+          overageResetsAt: rateLimitMsg.rate_limit_info.overageResetsAt,
+          isUsingOverage: rateLimitMsg.rate_limit_info.isUsingOverage,
+        },
+      });
       break;
     }
 

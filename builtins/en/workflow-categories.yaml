@@ -1,0 +1,68 @@
+workflow_categories:
+  🚀 Quick Start:
+    workflows:
+      - default
+      - frontend-mini
+      - backend-mini
+      - compound-eye
+  ⚡ Mini:
+    workflows:
+      - frontend-mini
+      - backend-mini
+      - backend-cqrs-mini
+      - dual-mini
+      - dual-cqrs-mini
+  🎨 Frontend:
+    workflows:
+      - frontend
+      - frontend-mini
+  ⚙️ Backend:
+    workflows:
+      - backend
+      - backend-mini
+      - backend-cqrs
+      - backend-cqrs-mini
+  🔧 Dual:
+    workflows:
+      - dual
+      - dual-mini
+      - dual-cqrs
+      - dual-cqrs-mini
+  🏗️ Infrastructure:
+    workflows:
+      - terraform
+  🔍 Review:
+    workflows:
+      - review-default
+      - review-fix-default
+      - review-frontend
+      - review-fix-frontend
+      - review-backend
+      - review-fix-backend
+      - review-dual
+      - review-fix-dual
+      - review-dual-cqrs
+      - review-fix-dual-cqrs
+      - review-backend-cqrs
+      - review-fix-backend-cqrs
+      - review-takt-default
+      - review-fix-takt-default
+      - audit-unit
+      - audit-e2e
+      - audit-security
+      - audit-architecture
+      - audit-architecture-frontend
+      - audit-architecture-backend
+      - audit-architecture-dual
+  🎵 TAKT Development:
+    workflows:
+      - takt-default
+      - review-takt-default
+      - review-fix-takt-default
+  Others:
+    workflows:
+      - research
+      - deep-research
+      - magi
+show_others_category: true
+others_category_name: Others

@@ -16,6 +16,8 @@ function toMockOptions(options: ProviderCallOptions): MockCallOptions {
 
 /** Mock provider — deterministic responses for testing */
 export class MockProvider implements Provider {
+  readonly supportsStructuredOutput = true;
+
   setup(config: AgentSetup): ProviderAgent {
     if (config.claudeAgent) {
       throw new Error('Claude Code agent calls are not supported by the Mock provider');

@@ -1,34 +1,35 @@
-# Piece Guide
+# Workflow Guide
 
-This guide explains how to create and customize TAKT pieces.
+This guide explains how to create and customize TAKT workflows.
 
-## Piece Basics
+## Workflow Basics
 
-A piece is a YAML file that defines a sequence of movements executed by AI agents. Each movement specifies:
+A workflow is a YAML file that defines a sequence of steps executed by AI agents. Each step specifies:
 - Which persona to use
 - What instructions to give
-- Rules for routing to the next movement
+- Rules for routing to the next step
 
 ## File Locations
 
-- Builtin pieces are embedded in the npm package (`dist/resources/`)
-- `~/.takt/pieces/` — User pieces (override builtins with the same name)
-- Use `takt eject <piece>` to copy a builtin to `~/.takt/pieces/` for customization
+- Builtin workflows are embedded in the npm package (`dist/resources/`)
+- `~/.takt/workflows/` — User workflows (override builtins with the same name)
+- Use `takt eject <workflow>` to copy a builtin to `~/.takt/workflows/` for customization
+- TAKT still reads legacy `pieces/` directories as compatibility input, but `workflows/` is the canonical directory name in current docs and CLI output.
 
-## Piece Categories
+## Workflow Categories
 
-To organize the piece selection UI into categories, configure `piece_categories`.
+To organize the workflow selection UI into categories, configure `piece_categories`.
 See the [Configuration Guide](./configuration.md#piece-categories) for details.
 
-## Piece Schema
+## Workflow Schema
 
 ```yaml
-name: my-piece
+name: my-workflow
 description: Optional description
 max_movements: 10
-initial_movement: first-movement  # Optional, defaults to first movement
+initial_step: first-step          # Optional, defaults to the first step
 
-# Section maps (key → file path relative to piece YAML directory)
+# Section maps (key → file path relative to workflow YAML directory)
 personas:
   planner: ../facets/personas/planner.md
   coder: ../facets/personas/coder.md
@@ -44,14 +45,14 @@ instructions:
 report_formats:
   plan: ../facets/output-contracts/plan.md
 
-movements:
-  - name: movement-name
+steps:
+  - name: step-name
     persona: coder                   # Persona key (references personas map)
     persona_name: coder              # Display name (optional)
     policy: coding                   # Policy key (single or array)
     knowledge: architecture          # Knowledge key (single or array)
     instruction: implement           # Instruction key (references instructions map)
-    edit: true                       # Whether the movement can edit files
+    edit: true                       # Whether the step can edit files
     required_permission_mode: edit   # Minimum permission: readonly, edit, or full
     allowed_tools:                   # Optional tool allowlist
       - Read
@@ -62,7 +63,7 @@ movements:
       - Bash
     rules:
       - condition: "Implementation complete"
-        next: next-movement
+        next: next-step
       - condition: "Cannot proceed"
         next: ABORT
     instruction_template: |          # Inline instructions (alternative to instruction key)
@@ -73,26 +74,28 @@ movements:
           format: plan               # References report_formats map
 ```
 
-Movements reference section maps by key name (e.g., `persona: coder`), not by file path. Paths in section maps are resolved relative to the piece YAML file's directory.
+Steps reference section maps by key name (e.g., `persona: coder`), not by file path. Paths in section maps are resolved relative to the workflow YAML file's directory.
+
+Legacy YAML keys remain accepted for compatibility: `movements` is an alias for `steps`, and `initial_movement` is an alias for `initial_step`.
 
 ## Available Variables
 
 | Variable | Description |
 |----------|-------------|
 | `{task}` | Original user request (auto-injected if not in template) |
-| `{iteration}` | Piece-wide turn count (total movements executed) |
-| `{max_movements}` | Maximum movements allowed |
-| `{movement_iteration}` | Per-movement iteration count (how many times THIS movement has run) |
-| `{previous_response}` | Previous movement's output (auto-injected if not in template) |
-| `{user_inputs}` | Additional user inputs during piece (auto-injected if not in template) |
+| `{iteration}` | Workflow-wide turn count (total steps executed) |
+| `{max_movements}` | Maximum steps allowed |
+| `{movement_iteration}` | Per-step iteration count (how many times THIS step has run) |
+| `{previous_response}` | Previous step's output (auto-injected if not in template) |
+| `{user_inputs}` | Additional user inputs during workflow (auto-injected if not in template) |
 | `{report_dir}` | Report directory path (e.g., `.takt/runs/20250126-143052-task-summary/reports`) |
 | `{report:filename}` | Inline the content of `{report_dir}/filename` |
 
-> **Note**: `{task}`, `{previous_response}`, and `{user_inputs}` are auto-injected into instructions. You only need explicit placeholders if you want to control their position in the template.
+> **Note**: `{task}`, `{previous_response}`, and `{user_inputs}` are auto-injected into instructions. You only need explicit placeholders if you want to control their position in the template. Internal runtime field names still use `max_movements` and `movement_iteration`.
 
 ## Rules
 
-Rules define how each movement routes to the next movement. The instruction builder auto-injects status output rules so agents know what tags to output.
+Rules define how each step routes to the next step. The instruction builder auto-injects status output rules so agents know what tags to output.
 
 ```yaml
 rules:
@@ -109,21 +112,21 @@ rules:
 | Type | Syntax | Description |
 |------|--------|-------------|
 | Tag-based | `"condition text"` | Agent outputs `[STEP:N]` tag, matched by index |
-| AI judge | `ai("condition text")` | AI evaluates the condition against agent output |
-| Aggregate | `all("X")` / `any("X")` | Aggregates parallel sub-movement results |
+| AI judge | `ai("condition text")` | AI evaluates the condition against step output |
+| Aggregate | `all("X")` / `any("X")` | Aggregates parallel sub-step results |
 
 ### Special `next` Values
 
-- `COMPLETE` — End piece successfully
-- `ABORT` — End piece with failure
+- `COMPLETE` — End workflow successfully
+- `ABORT` — End workflow with failure
 
 ### Rule Field: `appendix`
 
 The optional `appendix` field provides a template for additional AI output when that rule is matched. Useful for structured error reporting or requesting specific information.
 
-## Parallel Movements
+## Parallel Steps
 
-Movements can execute sub-movements concurrently with aggregate evaluation:
+Steps can execute sub-steps concurrently with aggregate evaluation:
 
 ```yaml
   - name: reviewers
@@ -152,13 +155,13 @@ Movements can execute sub-movements concurrently with aggregate evaluation:
         next: fix
 ```
 
-- `all("X")`: true if ALL sub-movements matched condition X
-- `any("X")`: true if ANY sub-movement matched condition X
-- Sub-movement `rules` define possible outcomes; `next` is optional (parent handles routing)
+- `all("X")`: true if ALL sub-steps matched condition X
+- `any("X")`: true if ANY sub-steps matched condition X
+- Sub-step `rules` define possible outcomes; `next` is optional (parent handles routing)
 
 ## Output Contracts (Report Files)
 
-Movements can generate report files in the report directory:
+Steps can generate report files in the report directory:
 
 ```yaml
 # Single report with format specification (references report_formats map)
@@ -182,7 +185,7 @@ output_contracts:
     - Decisions: 02-decisions.md
 ```
 
-## Movement Options
+## Step Options
 
 | Option | Default | Description |
 |--------|---------|-------------|
@@ -190,18 +193,18 @@ output_contracts:
 | `policy` | - | Policy key or array of keys |
 | `knowledge` | - | Knowledge key or array of keys |
 | `instruction` | - | Instruction key (references section map) |
-| `edit` | - | Whether the movement can edit project files (`true`/`false`) |
-| `pass_previous_response` | `true` | Pass previous movement's output to `{previous_response}` |
+| `edit` | - | Whether the step can edit project files (`true`/`false`) |
+| `pass_previous_response` | `true` | Pass previous step's output to `{previous_response}` |
 | `allowed_tools` | - | List of tools the agent can use (Read, Glob, Grep, Edit, Write, Bash, etc.) |
-| `provider` | - | Override provider for this movement (`claude`, `codex`, `opencode`, `cursor`, or `copilot`) |
-| `model` | - | Override model for this movement |
+| `provider` | - | Override provider for this step (`claude`, `codex`, `opencode`, `cursor`, or `copilot`) |
+| `model` | - | Override model for this step |
 | `required_permission_mode` | - | Required minimum permission mode: `readonly`, `edit`, or `full` |
 | `output_contracts` | - | Report file configuration (name, format) |
-| `quality_gates` | - | Quality criteria for movement completion (AI instruction) |
+| `quality_gates` | - | Quality criteria for step completion (AI instruction) |
 
 ## Examples
 
-### Simple Implementation Piece
+### Simple Implementation Workflow
 
 ```yaml
 name: simple-impl
@@ -210,7 +213,7 @@ max_movements: 5
 personas:
   coder: ../facets/personas/coder.md
 
-movements:
+steps:
   - name: implement
     persona: coder
     edit: true
@@ -225,7 +228,7 @@ movements:
       Implement the requested changes.
 ```
 
-### Implementation with Review
+### Workflow with Review
 
 ```yaml
 name: with-review
@@ -235,7 +238,7 @@ personas:
   coder: ../facets/personas/coder.md
   reviewer: ../facets/personas/architecture-reviewer.md
 
-movements:
+steps:
   - name: implement
     persona: coder
     edit: true
@@ -262,14 +265,14 @@ movements:
       Review the implementation for code quality and best practices.
 ```
 
-### Passing Data Between Movements
+### Passing Data Between Steps
 
 ```yaml
 personas:
   planner: ../facets/personas/planner.md
   coder: ../facets/personas/coder.md
 
-movements:
+steps:
   - name: analyze
     persona: planner
     edit: false
@@ -296,8 +299,8 @@ movements:
 
 ## Best Practices
 
-1. **Keep iterations reasonable** — 10-30 is typical for development pieces
-2. **Use `edit: false` for review movements** — Prevent reviewers from modifying code
-3. **Use descriptive movement names** — Makes logs easier to read
-4. **Test pieces incrementally** — Start simple, add complexity
-5. **Use `/eject` to customize** — Copy a builtin as starting point rather than writing from scratch
+1. **Keep iterations reasonable** — 10-30 is typical for development workflows
+2. **Use `edit: false` for review steps** — Prevent reviewers from modifying code
+3. **Use descriptive step names** — Makes logs easier to read
+4. **Test workflows incrementally** — Start simple, add complexity
+5. **Use `/eject` to customize** — Copy a builtin workflow as a starting point rather than writing from scratch

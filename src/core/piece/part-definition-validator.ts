@@ -13,21 +13,17 @@ export function parsePartDefinitionEntry(entry: unknown, index: number): PartDef
   }
 
   const raw = entry as Record<string, unknown>;
+  if ('timeout_ms' in raw) {
+    throw new Error(`Part[${index}] "timeout_ms" is not supported; use team_leader.timeout_ms instead`);
+  }
   const id = assertNonEmptyString(raw.id, 'id', index);
   const title = assertNonEmptyString(raw.title, 'title', index);
   const instruction = assertNonEmptyString(raw.instruction, 'instruction', index);
-
-  const timeoutMsValue = raw.timeout_ms;
-  if (timeoutMsValue != null && (typeof timeoutMsValue !== 'number' || !Number.isInteger(timeoutMsValue) || timeoutMsValue <= 0)) {
-    throw new Error(`Part[${index}] "timeout_ms" must be a positive integer`);
-  }
-  const timeoutMs = timeoutMsValue == null ? undefined : timeoutMsValue;
 
   return {
     id,
     title,
     instruction,
-    timeoutMs,
   };
 }
 

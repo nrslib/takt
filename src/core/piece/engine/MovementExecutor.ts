@@ -25,6 +25,7 @@ import { incrementMovementIteration, getPreviousOutput } from './state-manager.j
 import { createLogger, getErrorMessage, slugify } from '../../../shared/utils/index.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { RunPaths } from '../run/run-paths.js';
+import type { StructuredCaller } from '../../../agents/structured-caller.js';
 
 const log = createLogger('movement-executor');
 
@@ -41,11 +42,7 @@ export interface MovementExecutorDeps {
   readonly getPieceDescription: () => string | undefined;
   readonly getRetryNote: () => string | undefined;
   readonly detectRuleIndex: (content: string, movementName: string) => number;
-  readonly callAiJudge: (
-    agentOutput: string,
-    conditions: Array<{ index: number; text: string }>,
-    options: { cwd: string }
-  ) => Promise<number>;
+  readonly structuredCaller: StructuredCaller;
   readonly onPhaseStart?: (
     step: PieceMovement,
     phase: 1 | 2 | 3,
@@ -274,12 +271,16 @@ export class MovementExecutor {
     }
 
     // No Phase 3 — use rule evaluator with Phase 1 content
+    const movementPm = this.deps.optionsBuilder.resolveStepProviderModel(step);
     const match = await detectMatchedRule(step, nextResponse.content, '', {
       state,
       cwd: this.deps.getCwd(),
+      provider: movementPm.provider,
+      resolvedProvider: movementPm.provider,
+      resolvedModel: movementPm.model,
       interactive: this.deps.getInteractive(),
       detectRuleIndex: this.deps.detectRuleIndex,
-      callAiJudge: this.deps.callAiJudge,
+      structuredCaller: this.deps.structuredCaller,
     });
     if (match) {
       log.debug('Rule matched', { movement: step.name, ruleIndex: match.index, method: match.method });

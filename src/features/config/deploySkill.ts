@@ -10,7 +10,7 @@ export async function deploySkill(): Promise<void> {
     skillRootDir: '.claude',
     skillResourceDirName: 'skill',
     existingInstallMessage: 'Claude Code Skill が既にインストールされています。',
-    usageCommand: '使い方: /takt <piece-name> <task>',
+    usageCommand: '使い方: /takt <workflow-name> <task>',
     usageExample: '例:     /takt passthrough "Hello World テスト"',
     showReferencesSummary: false,
     includeAgentsDirectory: false,

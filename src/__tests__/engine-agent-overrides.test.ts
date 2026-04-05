@@ -1,8 +1,8 @@
 /**
  * Tests for PieceEngine provider/model overrides.
  *
- * Verifies that PieceEngine passes CLI-level and movement-level provider/model
- * as separate fields to AgentRunner.
+ * Verifies that PieceEngine passes movement-resolved provider/model
+ * to AgentRunner without reusing CLI override fields.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -44,7 +44,7 @@ describe('PieceEngine agent overrides', () => {
     applyDefaultMocks();
   });
 
-  it('passes CLI provider/model and movement provider/model separately', async () => {
+  it('passes resolved movement provider/model to AgentRunner', async () => {
     const movement = makeMovement('plan', {
       provider: 'claude',
       model: 'claude-movement',
@@ -71,13 +71,13 @@ describe('PieceEngine agent overrides', () => {
     await engine.run();
 
     const options = vi.mocked(runAgent).mock.calls[0][2];
-    expect(options.provider).toBe('codex');
-    expect(options.model).toBe('cli-model');
-    expect(options.stepProvider).toBe('claude');
-    expect(options.stepModel).toBe('claude-movement');
+    expect(options.provider).toBeUndefined();
+    expect(options.model).toBeUndefined();
+    expect(options.resolvedProvider).toBe('claude');
+    expect(options.resolvedModel).toBe('claude-movement');
   });
 
-  it('uses CLI provider/model when movement provider/model is undefined', async () => {
+  it('uses engine-level provider/model as resolved values when movement provider/model is undefined', async () => {
     const movement = makeMovement('plan', {
       rules: [makeRule('done', 'COMPLETE')],
     });
@@ -102,13 +102,13 @@ describe('PieceEngine agent overrides', () => {
     await engine.run();
 
     const options = vi.mocked(runAgent).mock.calls[0][2];
-    expect(options.provider).toBe('codex');
-    expect(options.model).toBe('cli-model');
-    expect(options.stepProvider).toBe('codex');
-    expect(options.stepModel).toBe('cli-model');
+    expect(options.provider).toBeUndefined();
+    expect(options.model).toBeUndefined();
+    expect(options.resolvedProvider).toBe('codex');
+    expect(options.resolvedModel).toBe('cli-model');
   });
 
-  it('sets movement provider/model to step fields when no CLI overrides are supplied', async () => {
+  it('sets movement provider/model to resolved fields when no engine-level overrides are supplied', async () => {
     const movement = makeMovement('plan', {
       provider: 'claude',
       model: 'movement-model',
@@ -132,7 +132,7 @@ describe('PieceEngine agent overrides', () => {
     const options = vi.mocked(runAgent).mock.calls[0][2];
     expect(options.provider).toBeUndefined();
     expect(options.model).toBeUndefined();
-    expect(options.stepProvider).toBe('claude');
-    expect(options.stepModel).toBe('movement-model');
+    expect(options.resolvedProvider).toBe('claude');
+    expect(options.resolvedModel).toBe('movement-model');
   });
 });

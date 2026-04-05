@@ -9,6 +9,14 @@
 ### Objective
 {What needs to be achieved}
 
+### Decomposed Requirements
+| # | Requirement | Type | Notes |
+|---|-------------|------|-------|
+| 1 | {requirement 1} | Explicit / Implicit | {Notes when a composite requirement was split} |
+
+- If a sentence contains multiple conditions, split it into the smallest independently verifiable rows
+- Put parallel expressions such as `A/B`, `global/project`, `JSON/leaf`, `allow/deny`, and `read/write` on separate rows
+
 ### Reference Material Findings (when reference material exists)
 {Overview of reference implementation's approach and key differences from current implementation}
 

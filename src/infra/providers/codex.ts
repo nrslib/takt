@@ -30,6 +30,7 @@ function toCodexOptions(options: ProviderCallOptions): CodexCallOptions {
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
     model: options.model,
+    reasoningEffort: options.providerOptions?.codex?.reasoningEffort,
     permissionMode: options.permissionMode,
     networkAccess: options.providerOptions?.codex?.networkAccess,
     onStream: options.onStream,
@@ -50,6 +51,8 @@ function errorResponse(agentName: string): AgentResponse {
 
 /** Codex provider — delegates to OpenAI Codex SDK */
 export class CodexProvider implements Provider {
+  readonly supportsStructuredOutput = true;
+
   setup(config: AgentSetup): ProviderAgent {
     if (config.claudeAgent) {
       throw new Error('Claude Code agent calls are not supported by the Codex provider');

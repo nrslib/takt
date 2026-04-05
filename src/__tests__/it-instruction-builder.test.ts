@@ -184,14 +184,15 @@ describe('Instruction Builder IT: iteration variables', () => {
     expect(result).toContain('Iter: 5/30, movement iter: 2');
   });
 
-  it('should include iteration in Piece Context section', () => {
+  it('should include iteration in Workflow Context section', () => {
     const step = makeMovement();
     const ctx = makeContext({ iteration: 7, maxMovements: 20, movementIteration: 3 });
 
     const result = buildInstruction(step, ctx);
 
+    expect(result).toContain('## Workflow Context');
     expect(result).toContain('Iteration: 7/20');
-    expect(result).toContain('Movement Iteration: 3');
+    expect(result).toContain('Step Iteration: 3');
   });
 });
 
@@ -273,6 +274,7 @@ describe('Instruction Builder IT: edit permission in execution context', () => {
 
     // Should contain the "Editing is DISABLED" execution rule
     expect(result).toContain('Editing is DISABLED');
+    expect(result).toContain('for this step');
     expect(result).not.toContain('Editing is ENABLED');
   });
 });
@@ -293,6 +295,8 @@ describe('Instruction Builder IT: buildReportInstruction', () => {
 
     expect(result).toContain('00-plan.md');
     expect(result).toContain('/tmp/test/.takt/runs/test-dir/reports');
+    expect(result).toContain('## Workflow Context');
+    expect(result).not.toContain('## Piece Context');
     expect(result).toContain('report');
   });
 

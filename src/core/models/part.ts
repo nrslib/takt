@@ -9,8 +9,6 @@ export interface PartDefinition {
   title: string;
   /** Instruction passed to the part agent */
   instruction: string;
-  /** Optional per-part timeout in milliseconds */
-  timeoutMs?: number;
 }
 
 /** Result of a single part execution */

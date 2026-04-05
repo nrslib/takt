@@ -8,14 +8,6 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../agents/ai-judge.js', async (importOriginal) => {
-  const original = await importOriginal<typeof import('../agents/ai-judge.js')>();
-  return {
-    ...original,
-    callAiJudge: vi.fn().mockResolvedValue(-1),
-  };
-});
-
 vi.mock('../core/piece/phase-runner.js', () => ({
   needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
@@ -104,7 +96,7 @@ describe('IT: provider block reflection', () => {
     }
   });
 
-  it('movement provider block should be normalized and passed to runAgent options', async () => {
+  it('movement provider block should override global/project provider options when origin is local', async () => {
     // Given
     env = createEnv([
       'name: provider-block-it',
@@ -149,10 +141,10 @@ describe('IT: provider block reflection', () => {
     // Then
     expect(ok).toBe(true);
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
-    expect(options?.stepProvider).toBe('codex');
-    expect(options?.stepModel).toBe('gpt-5.3');
+    expect(options?.resolvedProvider).toBe('codex');
+    expect(options?.resolvedModel).toBe('gpt-5.3');
     expect(options?.providerOptions).toEqual({
-      codex: { networkAccess: true },
+      codex: { networkAccess: false },
     });
   });
 
@@ -191,8 +183,8 @@ describe('IT: provider block reflection', () => {
     // Then
     expect(ok).toBe(true);
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
-    expect(options?.stepProvider).toBe('codex');
-    expect(options?.stepModel).toBe('piece-model');
+    expect(options?.resolvedProvider).toBe('codex');
+    expect(options?.resolvedModel).toBe('piece-model');
     expect(options?.providerOptions).toEqual({
       codex: { networkAccess: true },
     });
@@ -234,8 +226,8 @@ describe('IT: provider block reflection', () => {
     // Then
     expect(ok).toBe(true);
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
-    expect(options?.stepProvider).toBeUndefined();
-    expect(options?.stepModel).toBeUndefined();
+    expect(options?.resolvedProvider).toBe('codex');
+    expect(options?.resolvedModel).toBe('project-model');
     expect(options?.providerOptions).toEqual({
       codex: { networkAccess: false },
     });

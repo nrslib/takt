@@ -1,0 +1,94 @@
+name: audit-unit
+description: Comprehensive unit test audit. Enumerate behaviors and coverage gaps, then produce an issue-ready report without modifying code
+workflow_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+max_steps: 12
+initial_step: plan
+
+loop_monitors:
+  - cycle: [supervise, review]
+    threshold: 4
+    judge:
+      persona: supervisor
+      instruction: |
+        The supervise → review cycle for the unit audit has repeated {cycle_count} times.
+        Judge the overall completeness and quality of the audit, and decide whether the current results are acceptable.
+      rules:
+        - condition: Quality is sufficient
+          next: COMPLETE
+        - condition: Quality is insufficient with no prospect of improvement
+          next: ABORT
+
+steps:
+  - name: plan
+    edit: false
+    persona: test-planner
+    policy: testing
+    knowledge:
+      - architecture
+      - unit-testing
+    instruction: unit-audit-plan
+    output_contracts:
+      report:
+        - name: 01-unit-audit-plan.md
+          format: unit-audit-plan
+    rules:
+      - condition: Audit plan complete
+        next: audit
+      - condition: User is asking a question (not an audit task)
+        next: COMPLETE
+      - condition: Requirements unclear, insufficient info
+        next: ABORT
+
+  - name: audit
+    edit: false
+    persona: testing-reviewer
+    policy:
+      - review
+      - testing
+    knowledge:
+      - architecture
+      - unit-testing
+    instruction: unit-audit-team-leader
+    team_leader:
+      max_parts: 3
+      part_persona: testing-reviewer
+      part_edit: false
+    output_contracts:
+      report:
+        - name: 02-unit-audit.md
+          format: unit-audit
+    rules:
+      - condition: Audit complete
+        next: supervise
+
+  - name: supervise
+    edit: false
+    persona: supervisor
+    policy: review
+    knowledge:
+      - unit-testing
+    instruction: unit-audit-supervise
+    pass_previous_response: false
+    rules:
+      - condition: Audit is complete and issue-ready
+        next: COMPLETE
+      - condition: Coverage audit is incomplete or evidence is insufficient
+        next: review
+
+  - name: review
+    edit: false
+    persona: testing-reviewer
+    policy:
+      - review
+      - testing
+    knowledge:
+      - unit-testing
+    instruction: unit-audit-review
+    rules:
+      - condition: Re-audit complete
+        next: supervise

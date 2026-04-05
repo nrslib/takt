@@ -1,9 +1,8 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { parse, stringify } from 'yaml';
+import { existsSync, writeFileSync, mkdirSync } from 'node:fs';
+import { stringify } from 'yaml';
 import { ProjectConfigSchema } from '../../../core/models/index.js';
 import { copyProjectResourcesToDir } from '../../resources/index.js';
 import type { ProjectConfig } from '../types.js';
-import { applyProjectConfigEnvOverrides } from '../env/config-env-overrides.js';
 import {
   normalizeConfigProviderReference,
   type ConfigProviderReference,
@@ -20,6 +19,11 @@ import {
   denormalizePieceOverrides,
   normalizeRuntime,
 } from '../configNormalizers.js';
+import {
+  resolveAliasedPreviewCount,
+  resolveAliasedConfigKey,
+  type RawProviderPermissionProfile,
+} from '../configKeyAliases.js';
 import { invalidateResolvedConfigCache } from '../resolutionCache.js';
 import { expandOptionalHomePath } from '../pathExpansion.js';
 import { getProjectConfigDir, getProjectConfigPath } from './projectConfigPaths.js';
@@ -28,7 +32,6 @@ import {
   normalizeWithSubmodules,
   normalizeAnalytics,
   denormalizeAnalytics,
-  formatIssuePath,
   normalizePieceRuntimePreparePolicy,
   denormalizePieceRuntimePreparePolicy,
   normalizePieceArpeggioPolicy,
@@ -38,47 +41,27 @@ import {
   normalizePieceMcpServers,
   denormalizePieceMcpServers,
 } from './projectConfigTransforms.js';
+import { loadProjectConfigTrace, type ConfigTrace } from '../traced/tracedConfigLoader.js';
+import { getCachedProjectConfigTrace, setCachedProjectConfigTrace } from '../resolutionCache.js';
+import { assertValidProjectConfig } from './projectConfigValidation.js';
+import { warnLegacyProjectConfigYamlKeys } from '../legacy-workflow-key-deprecation.js';
 
 export type { ProjectConfig as ProjectLocalConfig } from '../types.js';
 
 type ProviderType = NonNullable<ProjectConfig['provider']>;
 type RawProviderReference = ConfigProviderReference<ProviderType>;
 
-/**
- * Load project configuration from .takt/config.yaml
- */
 export function loadProjectConfig(projectDir: string): ProjectConfig {
   const configPath = getProjectConfigPath(projectDir);
-  const rawConfig: Record<string, unknown> = {};
-  if (existsSync(configPath)) {
-    const content = readFileSync(configPath, 'utf-8');
-    let parsed: unknown;
-    try {
-      parsed = parse(content);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`Configuration error: failed to parse ${configPath}: ${message}`);
-    }
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      Object.assign(rawConfig, parsed as Record<string, unknown>);
-    } else if (parsed != null) {
-      throw new Error(`Configuration error: ${configPath} must be a YAML object.`);
-    }
-  }
-
-  applyProjectConfigEnvOverrides(rawConfig);
-  const parsedResult = ProjectConfigSchema.safeParse(rawConfig);
-  if (!parsedResult.success) {
-    const firstIssue = parsedResult.error.issues[0];
-    const issuePath = firstIssue ? formatIssuePath(firstIssue.path) : '(root)';
-    const issueMessage = firstIssue?.message ?? 'Invalid configuration value';
-    throw new Error(
-      `Configuration error: invalid ${issuePath} in ${configPath}: ${issueMessage}`,
-    );
-  }
-  const parsedConfig = parsedResult.data;
+  const { parsedConfig, rawConfig, trace } = loadProjectConfigTrace(configPath);
+  warnLegacyProjectConfigYamlKeys(parsedConfig, new Set());
+  setCachedProjectConfigTrace(projectDir, trace);
+  assertValidProjectConfig(parsedConfig, configPath, true);
+  assertValidProjectConfig(rawConfig, configPath);
+  const parsedConfigResult = ProjectConfigSchema.parse(rawConfig);
 
   const {
+    language,
     provider,
     model,
     allow_git_hooks,
@@ -99,14 +82,39 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     minimal_output,
     concurrency,
     task_poll_interval_ms,
-    interactive_preview_movements,
-    piece_overrides,
     runtime,
-    piece_runtime_prepare,
-    piece_arpeggio,
     sync_conflict_resolver,
-    piece_mcp_servers,
-  } = parsedConfig;
+  } = parsedConfigResult;
+  const resolvedPieceOverrides = resolveAliasedConfigKey(
+    configPath,
+    parsedConfigResult as Record<string, unknown>,
+    'workflow_overrides',
+    'piece_overrides',
+  ) as {
+    quality_gates?: string[];
+    quality_gates_edit_only?: boolean;
+    movements?: Record<string, { quality_gates?: string[] }>;
+    steps?: Record<string, { quality_gates?: string[] }>;
+    personas?: Record<string, { quality_gates?: string[] }>;
+  } | undefined;
+  const resolvedPieceRuntimePrepare = resolveAliasedConfigKey(
+    configPath,
+    parsedConfigResult as Record<string, unknown>,
+    'workflow_runtime_prepare',
+    'piece_runtime_prepare',
+  ) as typeof parsedConfigResult.piece_runtime_prepare;
+  const resolvedPieceArpeggio = resolveAliasedConfigKey(
+    configPath,
+    parsedConfigResult as Record<string, unknown>,
+    'workflow_arpeggio',
+    'piece_arpeggio',
+  ) as typeof parsedConfigResult.piece_arpeggio;
+  const resolvedPieceMcpServers = resolveAliasedConfigKey(
+    configPath,
+    parsedConfigResult as Record<string, unknown>,
+    'workflow_mcp_servers',
+    'piece_mcp_servers',
+  ) as typeof parsedConfigResult.piece_mcp_servers;
   const normalizedProvider = normalizeConfigProviderReference(
     provider as RawProviderReference,
     model as string | undefined,
@@ -121,9 +129,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
   const normalizedPersonaProviders = normalizePersonaProviders(
     persona_providers as Record<string, string | { type?: string; provider?: string; model?: string }> | undefined,
   );
-
   const analyticsConfig = normalizeAnalytics(analytics as Record<string, unknown> | undefined);
-
   const normalizedTaktProviders = normalizeTaktProviders(
     takt_providers as {
       assistant?: {
@@ -134,6 +140,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
   );
 
   return {
+    language: language as ProjectConfig['language'],
     pipeline: normalizedPipeline,
     taktProviders: normalizedTaktProviders,
     personaProviders: normalizedPersonaProviders,
@@ -141,7 +148,10 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     minimalOutput: minimal_output as boolean | undefined,
     concurrency: concurrency as number | undefined,
     taskPollIntervalMs: task_poll_interval_ms as number | undefined,
-    interactivePreviewMovements: interactive_preview_movements as number | undefined,
+    interactivePreviewMovements: resolveAliasedPreviewCount(
+      parsedConfigResult as Record<string, unknown>,
+      configPath,
+    ),
     allowGitHooks: allow_git_hooks as boolean | undefined,
     allowGitFilters: allow_git_filters as boolean | undefined,
     autoPr: auto_pr as boolean | undefined,
@@ -157,26 +167,31 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     provider: normalizedProvider.provider,
     model: normalizedProvider.model,
     providerOptions: normalizedProvider.providerOptions,
-    providerProfiles: normalizeProviderProfiles(provider_profiles as Record<string, { default_permission_mode: unknown; movement_permission_overrides?: Record<string, unknown> }> | undefined),
-    pieceOverrides: normalizePieceOverrides(
-      piece_overrides as {
-        quality_gates?: string[];
-        quality_gates_edit_only?: boolean;
-        movements?: Record<string, { quality_gates?: string[] }>;
-        personas?: Record<string, { quality_gates?: string[] }>;
-      } | undefined
+    providerProfiles: normalizeProviderProfiles(
+      provider_profiles as Record<string, RawProviderPermissionProfile> | undefined,
     ),
+    pieceOverrides: normalizePieceOverrides(resolvedPieceOverrides),
     runtime: normalizeRuntime(runtime),
-    pieceRuntimePrepare: normalizePieceRuntimePreparePolicy(piece_runtime_prepare),
-    pieceArpeggio: normalizePieceArpeggioPolicy(piece_arpeggio),
+    pieceRuntimePrepare: normalizePieceRuntimePreparePolicy(resolvedPieceRuntimePrepare),
+    pieceArpeggio: normalizePieceArpeggioPolicy(resolvedPieceArpeggio),
     syncConflictResolver: normalizeSyncConflictResolver(sync_conflict_resolver),
-    pieceMcpServers: normalizePieceMcpServers(piece_mcp_servers),
+    pieceMcpServers: normalizePieceMcpServers(resolvedPieceMcpServers),
   };
 }
 
-/**
- * Save project configuration to .takt/config.yaml
- */
+export function loadProjectConfigTraceState(projectDir: string): ConfigTrace {
+  const cached = getCachedProjectConfigTrace(projectDir);
+  if (cached) {
+    return cached;
+  }
+  loadProjectConfig(projectDir);
+  const trace = getCachedProjectConfigTrace(projectDir);
+  if (!trace) {
+    throw new Error(`Project config trace is not available for ${projectDir}`);
+  }
+  return trace;
+}
+
 export function saveProjectConfig(projectDir: string, config: ProjectConfig): void {
   const configDir = getProjectConfigDir(projectDir);
   const configPath = getProjectConfigPath(projectDir);
@@ -207,13 +222,7 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
   } else {
     delete savePayload.provider_options;
   }
-  for (const [camel, snake] of [
-    ['autoPr', 'auto_pr'], ['draftPr', 'draft_pr'], ['allowGitHooks', 'allow_git_hooks'],
-    ['allowGitFilters', 'allow_git_filters'], ['vcsProvider', 'vcs_provider'],
-    ['baseBranch', 'base_branch'], ['branchNameStrategy', 'branch_name_strategy'],
-    ['minimalOutput', 'minimal_output'], ['taskPollIntervalMs', 'task_poll_interval_ms'],
-    ['interactivePreviewMovements', 'interactive_preview_movements'], ['concurrency', 'concurrency'],
-  ] as const) {
+  for (const [camel, snake] of [['language', 'language'], ['autoPr', 'auto_pr'], ['draftPr', 'draft_pr'], ['allowGitHooks', 'allow_git_hooks'], ['allowGitFilters', 'allow_git_filters'], ['vcsProvider', 'vcs_provider'], ['baseBranch', 'base_branch'], ['branchNameStrategy', 'branch_name_strategy'], ['minimalOutput', 'minimal_output'], ['taskPollIntervalMs', 'task_poll_interval_ms'], ['interactivePreviewMovements', 'interactive_preview_steps'], ['concurrency', 'concurrency']] as const) {
     if (config[camel] !== undefined) savePayload[snake] = config[camel];
   }
   delete savePayload.pipeline;
@@ -246,20 +255,13 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
       delete savePayload.with_submodules;
     }
   }
-  for (const k of [
-    'providerProfiles', 'providerOptions', 'autoPr', 'draftPr', 'allowGitHooks',
-    'allowGitFilters', 'vcsProvider', 'baseBranch', 'withSubmodules',
-    'branchNameStrategy', 'minimalOutput', 'taskPollIntervalMs',
-    'interactivePreviewMovements', 'personaProviders', 'taktProviders',
-    'pieceRuntimePrepare', 'pieceArpeggio', 'syncConflictResolver',
-    'pieceMcpServers',
-  ] as const) {
+  for (const k of ['providerProfiles', 'providerOptions', 'autoPr', 'draftPr', 'allowGitHooks', 'allowGitFilters', 'vcsProvider', 'baseBranch', 'withSubmodules', 'branchNameStrategy', 'minimalOutput', 'taskPollIntervalMs', 'interactivePreviewMovements', 'personaProviders', 'taktProviders', 'pieceRuntimePrepare', 'pieceArpeggio', 'syncConflictResolver', 'pieceMcpServers'] as const) {
     delete savePayload[k];
   }
 
   const rawPieceOverrides = denormalizePieceOverrides(config.pieceOverrides);
   if (rawPieceOverrides) {
-    savePayload.piece_overrides = rawPieceOverrides;
+    savePayload.workflow_overrides = rawPieceOverrides;
   }
   delete savePayload.pieceOverrides;
 
@@ -269,12 +271,7 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
   } else {
     delete savePayload.runtime;
   }
-  for (const [key, raw] of [
-    ['piece_runtime_prepare', denormalizePieceRuntimePreparePolicy(config.pieceRuntimePrepare)],
-    ['piece_arpeggio', denormalizePieceArpeggioPolicy(config.pieceArpeggio)],
-    ['sync_conflict_resolver', denormalizeSyncConflictResolver(config.syncConflictResolver)],
-    ['piece_mcp_servers', denormalizePieceMcpServers(config.pieceMcpServers)],
-  ] as const) {
+  for (const [key, raw] of [['workflow_runtime_prepare', denormalizePieceRuntimePreparePolicy(config.pieceRuntimePrepare)], ['workflow_arpeggio', denormalizePieceArpeggioPolicy(config.pieceArpeggio)], ['sync_conflict_resolver', denormalizeSyncConflictResolver(config.syncConflictResolver)], ['workflow_mcp_servers', denormalizePieceMcpServers(config.pieceMcpServers)]] as const) {
     if (raw) { savePayload[key] = raw; } else { delete savePayload[key]; }
   }
 
@@ -283,11 +280,7 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
   invalidateResolvedConfigCache(projectDir);
 }
 
-export function updateProjectConfig<K extends keyof ProjectConfig>(
-  projectDir: string,
-  key: K,
-  value: ProjectConfig[K]
-): void {
+export function updateProjectConfig<K extends keyof ProjectConfig>(projectDir: string, key: K, value: ProjectConfig[K]): void {
   const config = loadProjectConfig(projectDir);
   config[key] = value;
   saveProjectConfig(projectDir, config);

@@ -8,6 +8,7 @@ import type { Command } from 'commander';
 import type { TaskExecutionOptions } from '../../features/tasks/index.js';
 import type { ProviderType } from '../../infra/providers/index.js';
 import { isIssueReference } from '../../infra/git/index.js';
+import { warnLegacyConfigKey } from '../../infra/config/legacy-workflow-key-deprecation.js';
 
 const REMOVED_ROOT_COMMANDS = new Set(['switch']);
 
@@ -65,4 +66,19 @@ export function resolveRemovedRootCommand(args: string[]): string | null {
     return null;
   }
   return REMOVED_ROOT_COMMANDS.has(firstArg) ? firstArg : null;
+}
+
+export function resolveWorkflowCliOption(opts: Record<string, unknown>): string | undefined {
+  const workflow = typeof opts.workflow === 'string' ? opts.workflow : undefined;
+  const piece = typeof opts.piece === 'string' ? opts.piece : undefined;
+
+  if (workflow !== undefined && piece !== undefined && workflow !== piece) {
+    throw new Error('--workflow and --piece cannot be used together with different values');
+  }
+
+  if (typeof piece === 'string') {
+    warnLegacyConfigKey(new Set(), 'piece', 'workflow', 'CLI');
+  }
+
+  return workflow ?? piece;
 }

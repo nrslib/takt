@@ -84,10 +84,12 @@ import { loadPieceByIdentifier } from '../infra/config/index.js';
 import { autoCommitAndPush } from '../infra/task/index.js';
 import { selectPiece } from '../features/pieceSelection/index.js';
 import { selectAndExecuteTask, determinePiece } from '../features/tasks/execute/selectAndExecute.js';
+import { error } from '../shared/ui/index.js';
 
 const mockLoadPieceByIdentifier = vi.mocked(loadPieceByIdentifier);
 const mockAutoCommitAndPush = vi.mocked(autoCommitAndPush);
 const mockSelectPiece = vi.mocked(selectPiece);
+const mockError = vi.mocked(error);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -122,6 +124,24 @@ describe('selectAndExecuteTask (execute path)', () => {
     const selected = await determinePiece('/project', '@nrslib/takt-ensembles/critical-thinking');
 
     expect(selected).toBe('@nrslib/takt-ensembles/critical-thinking');
+  });
+
+  it('should use workflow terminology when override is missing', async () => {
+    mockLoadPieceByIdentifier.mockReturnValueOnce(undefined);
+
+    const selected = await determinePiece('/project', 'missing-workflow');
+
+    expect(selected).toBeNull();
+    expect(mockError).toHaveBeenCalledWith('Workflow not found: missing-workflow');
+  });
+
+  it('should sanitize workflow override before terminal output', async () => {
+    mockLoadPieceByIdentifier.mockReturnValueOnce(undefined);
+
+    const selected = await determinePiece('/project', 'bad\x1b[31m-workflow\n');
+
+    expect(selected).toBeNull();
+    expect(mockError).toHaveBeenCalledWith('Workflow not found: bad-workflow\\n');
   });
 
   it('should fail task record when executeTask throws', async () => {

@@ -174,7 +174,7 @@ describe('buildSlackRunSummary', () => {
     expect(result).toContain('concurrency=2');
   });
 
-  it('should display successful task with piece and issue', () => {
+  it('should display successful task with workflow and issue', () => {
     // Given
     const task = makeTask({
       name: 'task-a',
@@ -191,7 +191,7 @@ describe('buildSlackRunSummary', () => {
     const result = buildSlackRunSummary(params);
 
     // Then
-    expect(result).toContain('\u2705 task-a | piece=default | issue=#42 | duration=30s');
+    expect(result).toContain('\u2705 task-a | workflow=default | issue=#42 | duration=30s');
     expect(result).toContain('branch=feat/task-a');
     expect(result).toContain('worktree=.worktrees/task-a');
     expect(result).toContain('pr=https://github.com/org/repo/pull/10');
@@ -215,8 +215,8 @@ describe('buildSlackRunSummary', () => {
     const result = buildSlackRunSummary(params);
 
     // Then
-    expect(result).toContain('\u274C task-b | piece=review | duration=45s');
-    expect(result).toContain('movement=ai_review');
+    expect(result).toContain('\u274C task-b | workflow=review | duration=45s');
+    expect(result).toContain('step=ai_review');
     expect(result).toContain('error=Lint failed');
     expect(result).toContain('last=Fix attempt timed out');
     expect(result).toContain('branch=feat/task-b');

@@ -1,0 +1,87 @@
+name: audit-architecture-dual
+description: フルスタックのアーキテクチャ監査。frontend/backend の境界と横断配線を列挙し、コードを変更せずに Issue 化しやすいレポートを作成する
+max_steps: 12
+initial_step: plan
+
+loop_monitors:
+  - cycle: [supervise, review]
+    threshold: 4
+    judge:
+      persona: supervisor
+      instruction: |
+        デュアルのアーキテクチャ監査で supervise → review が {cycle_count} 回繰り返されています。
+        監査の完全性と品質を評価し、現時点の結果を受け入れてよいか判断してください。
+      rules:
+        - condition: Quality is sufficient
+          next: COMPLETE
+        - condition: Quality is insufficient with no prospect of improvement
+          next: ABORT
+
+steps:
+  - name: plan
+    persona: planner
+    knowledge:
+      - frontend
+      - backend
+      - architecture
+    instruction: architecture-audit-plan
+    edit: false
+    output_contracts:
+      report:
+        - name: 01-architecture-audit-plan.md
+          format: architecture-audit-plan
+    rules:
+      - condition: Module inventory and audit scope complete
+        next: audit
+      - condition: Requirements unclear, insufficient info
+        next: ABORT
+
+  - name: audit
+    persona: architecture-reviewer
+    policy: review
+    knowledge:
+      - frontend
+      - backend
+      - architecture
+    instruction: architecture-audit-team-leader
+    edit: false
+    team_leader:
+      max_parts: 3
+      part_persona: architecture-reviewer
+      part_edit: false
+    output_contracts:
+      report:
+        - name: 02-architecture-audit.md
+          format: architecture-audit
+    rules:
+      - condition: Audit complete
+        next: supervise
+
+  - name: supervise
+    persona: supervisor
+    policy: review
+    knowledge:
+      - frontend
+      - backend
+      - architecture
+    instruction: architecture-audit-supervise
+    edit: false
+    pass_previous_response: false
+    rules:
+      - condition: Audit is complete and issue-ready
+        next: COMPLETE
+      - condition: Architecture audit is incomplete or evidence is insufficient
+        next: review
+
+  - name: review
+    persona: architecture-reviewer
+    policy: review
+    knowledge:
+      - frontend
+      - backend
+      - architecture
+    instruction: architecture-audit-review
+    edit: false
+    rules:
+      - condition: Re-audit complete
+        next: supervise

@@ -118,8 +118,15 @@ Do not over-interpret the task order. Plan only what is written.
 - Don't plan to leave TODO comments. Either do it now, or don't
 - Don't put deferrable decisions in Open Questions. If you can resolve it by reading code, investigate and decide. Only include items that genuinely require user input
 
+**Requirement decomposition discipline:**
+- Limit requirements to explicit requirements and implicit requirements that follow directly from them
+- When adding an implicit requirement, be able to state which explicit requirement it comes from
+- Do not turn general best practices, future possibilities, or personal preferences into requirements
+- Decompose requirements only to make them independently verifiable, not to invent new work
+
 **Important:**
 **Investigate before planning.** Don't plan without reading existing code.
 **Design simply.** No excessive abstractions or future-proofing. Provide enough direction for implementation without hesitation.
+**Do not jump when decomposing requirements.** Split only as far as needed for verification.
 **Ask all clarification questions at once.** Do not ask follow-up questions in multiple rounds.
 **Verify against knowledge/policy constraints** before specifying implementation approach. Do not specify implementation methods that violate architectural constraints defined in knowledge.

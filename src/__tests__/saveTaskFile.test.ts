@@ -107,12 +107,33 @@ describe('saveTaskFile', () => {
     });
 
     const task = loadTasks(testDir).tasks[0]!;
-    expect(task.piece).toBe('review');
+    expect(task.workflow).toBe('review');
+    expect(task.piece).toBeUndefined();
     expect(task.issue).toBe(42);
     expect(task.worktree).toBe(true);
     expect(task.branch).toBe('feat/my-branch');
     expect(task.auto_pr).toBe(false);
     expect(task.task_dir).toBeTypeOf('string');
+  });
+
+  it('should persist canonical workflow key instead of legacy piece key', async () => {
+    await saveTaskFile(testDir, 'Task', {
+      piece: 'review',
+    });
+
+    const task = loadTasks(testDir).tasks[0]!;
+    expect(task.workflow).toBe('review');
+    expect(task.piece).toBeUndefined();
+  });
+
+  it('should accept canonical workflow option and persist workflow key', async () => {
+    await saveTaskFile(testDir, 'Task', {
+      workflow: 'review',
+    });
+
+    const task = loadTasks(testDir).tasks[0]!;
+    expect(task.workflow).toBe('review');
+    expect(task.piece).toBeUndefined();
   });
 
   it('should persist base_branch when it is provided', async () => {
@@ -190,7 +211,7 @@ describe('saveTaskFromInteractive', () => {
 
     await saveTaskFromInteractive(testDir, 'Task content', 'review');
 
-    expect(mockInfo).toHaveBeenCalledWith('  Piece: review');
+    expect(mockInfo).toHaveBeenCalledWith('  Workflow: review');
   });
 
   it('should record issue number in tasks.yaml when issue option is provided', async () => {

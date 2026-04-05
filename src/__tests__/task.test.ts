@@ -306,6 +306,69 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(pending[0]?.data?.retry_note).toBe('retry note');
   });
 
+  it('should persist canonical workflow and start_step keys when requeueing failed task', () => {
+    runner.addTask('Task A', { piece: 'default' });
+    const task = runner.claimNextTasks(1)[0]!;
+    runner.failTask({
+      task,
+      success: false,
+      response: 'Boom',
+      executionLog: [],
+      startedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+    });
+
+    runner.requeueFailedTask(task.name, 'implement', 'retry note');
+
+    const file = loadTasksFile(testDir);
+    expect(file.tasks[0]?.workflow).toBe('default');
+    expect(file.tasks[0]?.piece).toBeUndefined();
+    expect(file.tasks[0]?.start_step).toBe('implement');
+    expect(file.tasks[0]?.start_movement).toBeUndefined();
+  });
+
+  it('should persist canonical workflow and start_step keys when starting re-execution', () => {
+    runner.addTask('Task A', { piece: 'default' });
+    const task = runner.claimNextTasks(1)[0]!;
+    runner.failTask({
+      task,
+      success: false,
+      response: 'Boom',
+      executionLog: [],
+      startedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+    });
+
+    const restarted = runner.startReExecution(task.name, ['failed'], 'implement', 'retry note');
+
+    expect(restarted.status).toBe('running');
+    expect(restarted.data?.piece).toBe('default');
+    expect(restarted.data?.start_movement).toBe('implement');
+    expect(restarted.data?.retry_note).toBe('retry note');
+
+    const file = loadTasksFile(testDir);
+    expect(file.tasks[0]?.status).toBe('running');
+    expect(file.tasks[0]?.workflow).toBe('default');
+    expect(file.tasks[0]?.piece).toBeUndefined();
+    expect(file.tasks[0]?.start_step).toBe('implement');
+    expect(file.tasks[0]?.start_movement).toBeUndefined();
+    expect(file.tasks[0]?.retry_note).toBe('retry note');
+  });
+
+  it('should normalize workflow and start_step from tasks.yaml into task data', () => {
+    writeTasksFile(testDir, [createPendingRecord({
+      workflow: 'default',
+      start_step: 'implement',
+      piece: undefined,
+      start_movement: undefined,
+    })]);
+
+    const tasks = runner.listTasks();
+
+    expect(tasks[0]?.data?.piece).toBe('default');
+    expect(tasks[0]?.data?.start_movement).toBe('implement');
+  });
+
   it('should delete pending and failed tasks', () => {
     const pending = runner.addTask('Task A');
     runner.deleteTask(pending.name, 'pending');

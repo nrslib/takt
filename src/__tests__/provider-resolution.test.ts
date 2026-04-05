@@ -146,8 +146,6 @@ describe('resolveAgentProviderModel', () => {
           coder: { provider: 'mock' as const, model: 'persona-model' },
         },
         personaDisplayName: 'coder',
-        stepProvider: 'claude' as const,
-        stepModel: 'step-model',
         localProvider: 'opencode' as const,
         localModel: 'local-model',
         globalProvider: 'mock' as const,
@@ -156,23 +154,10 @@ describe('resolveAgentProviderModel', () => {
       expected: { provider: 'codex' as const, model: 'cli-model' },
     },
     {
-      name: 'Step overrides local/global when persona is missing',
-      input: {
-        stepProvider: 'claude' as const,
-        stepModel: 'step-model',
-        localProvider: 'opencode' as const,
-        localModel: 'local-model',
-        globalProvider: 'mock' as const,
-        globalModel: 'global-model',
-      },
-      expected: { provider: 'claude' as const, model: 'step-model' },
-    },
-    {
       name: 'Persona provider wins when CLI is absent',
       input: {
-        stepProvider: 'claude' as const,
         personaProviders: {
-          coder: { provider: 'mock' as const },
+          coder: { provider: 'mock' as const, model: 'persona-model' },
         },
         personaDisplayName: 'coder',
         localProvider: 'opencode' as const,
@@ -180,31 +165,13 @@ describe('resolveAgentProviderModel', () => {
         globalProvider: 'mock' as const,
         globalModel: 'global-model',
       },
-      expected: { provider: 'mock' as const, model: 'global-model' },
+      expected: { provider: 'mock' as const, model: 'persona-model' },
     },
     {
-      name: 'Persona model wins when no step model and no CLI model',
+      name: 'Persona model wins while provider comes from local config',
       input: {
-        stepProvider: 'claude' as const,
-        stepModel: undefined,
         personaProviders: {
           coder: { model: 'persona-only-model' },
-        },
-        personaDisplayName: 'coder',
-        localProvider: 'opencode' as const,
-        localModel: 'local-model',
-        globalProvider: 'claude' as const,
-        globalModel: 'global-model',
-      },
-      expected: { provider: 'claude' as const, model: 'persona-only-model' },
-    },
-    {
-      name: 'Step provider wins over local/global provider and step model wins over model-only candidates',
-      input: {
-        stepProvider: 'codex' as const,
-        stepModel: 'step-model',
-        personaProviders: {
-          coder: { model: 'persona-model' },
         },
         personaDisplayName: 'coder',
         localProvider: 'claude' as const,
@@ -212,7 +179,7 @@ describe('resolveAgentProviderModel', () => {
         globalProvider: 'mock' as const,
         globalModel: 'global-model',
       },
-      expected: { provider: 'codex' as const, model: 'persona-model' },
+      expected: { provider: 'claude' as const, model: 'persona-only-model' },
     },
     {
       name: 'Local provider is used when no higher-priority provider exists',
@@ -233,11 +200,10 @@ describe('resolveAgentProviderModel', () => {
       expected: { provider: 'mock' as const, model: 'global-model' },
     },
     {
-      name: 'No CLI provider or higher layer, CLI model still has model-layer priority',
+      name: 'CLI model is used even when provider comes from local and no CLI provider',
       input: {
         cliModel: 'cli-model',
-        stepModel: 'step-model',
-        localProvider: undefined,
+        localProvider: 'mock' as const,
         localModel: 'local-model',
         globalProvider: 'mock' as const,
         globalModel: 'global-model',
@@ -245,20 +211,9 @@ describe('resolveAgentProviderModel', () => {
       expected: { provider: 'mock' as const, model: 'cli-model' },
     },
     {
-      name: 'All providers absent, earliest defined model in model order is used',
-      input: {
-        stepModel: 'step-model',
-        localProvider: undefined,
-        localModel: 'local-model',
-        globalProvider: 'mock' as const,
-        globalModel: 'global-model',
-      },
-      expected: { provider: 'mock' as const, model: 'step-model' },
-    },
-    {
       name: 'Local model is ignored when it does not match resolved provider',
       input: {
-        stepProvider: 'opencode' as const,
+        cliProvider: 'opencode' as const,
         localProvider: 'codex' as const,
         localModel: 'local-model',
         globalProvider: 'mock' as const,
@@ -269,7 +224,7 @@ describe('resolveAgentProviderModel', () => {
     {
       name: 'Global model is used when it matches resolved provider',
       input: {
-        stepProvider: 'claude' as const,
+        cliProvider: 'claude' as const,
         localProvider: 'opencode' as const,
         localModel: 'local-model',
         globalProvider: 'claude' as const,
@@ -288,51 +243,8 @@ describe('resolveAgentProviderModel', () => {
       expected: { provider: 'mock' as const, model: 'local-model' },
     },
     {
-      name: 'Global model is used when local exists but does not match resolved provider',
-      input: {
-        stepProvider: 'codex' as const,
-        localProvider: 'opencode' as const,
-        localModel: 'local-model',
-        globalProvider: 'codex' as const,
-        globalModel: 'global-model',
-      },
-      expected: { provider: 'codex' as const, model: 'global-model' },
-    },
-    {
-      name: 'CLI model is used even when provider comes from local and no CLI provider',
-      input: {
-        cliModel: 'cli-model',
-        localProvider: 'mock' as const,
-        localModel: 'local-model',
-        globalProvider: 'mock' as const,
-        globalModel: 'global-model',
-      },
-      expected: { provider: 'mock' as const, model: 'cli-model' },
-    },
-    {
-      name: 'Persona provider resolves provider, persona model still takes model priority',
-      input: {
-        stepProvider: 'codex' as const,
-        stepModel: 'step-model',
-        personaProviders: {
-          coder: {
-            provider: 'mock' as const,
-            model: 'persona-model',
-          },
-        },
-        personaDisplayName: 'coder',
-        localProvider: 'claude' as const,
-        localModel: 'local-model',
-        globalProvider: 'opencode' as const,
-        globalModel: 'global-model',
-      },
-      expected: { provider: 'mock' as const, model: 'persona-model' },
-    },
-    {
       name: 'Unknown persona name falls back to normal chain without persona model/provider',
       input: {
-        stepProvider: 'claude' as const,
-        stepModel: 'step-model',
         personaProviders: {
           reviewer: { provider: 'mock' as const, model: 'persona-model' },
         },
@@ -340,7 +252,7 @@ describe('resolveAgentProviderModel', () => {
         localProvider: 'mock' as const,
         localModel: 'local-model',
       },
-      expected: { provider: 'claude' as const, model: 'step-model' },
+      expected: { provider: 'mock' as const, model: 'local-model' },
     },
     {
       name: 'No providers defined and no models defined -> all undefined',
@@ -348,27 +260,24 @@ describe('resolveAgentProviderModel', () => {
       expected: { provider: undefined, model: undefined },
     },
     {
-      name: 'Only CLI model with persona-only model (no provider match), model remains persona-first',
+      name: 'Only CLI model with persona-only model and no provider leaves provider unresolved',
       input: {
         cliModel: 'cli-model',
         personaProviders: {
           coder: { model: 'persona-model' },
         },
         personaDisplayName: 'coder',
-        stepProvider: 'mock' as const,
-        stepModel: 'step-model',
       },
-      expected: { provider: 'mock' as const, model: 'cli-model' },
+      expected: { provider: undefined, model: 'cli-model' },
     },
   ])('should resolve %s', ({ input, expected }) => {
     const result = resolveAgentProviderModel(input);
     expect(result).toEqual(expected);
   });
 
-  it('should resolve provider in order: CLI > persona > movement > local > global', () => {
+  it('should resolve provider in order: CLI > persona > local > global', () => {
     const result = resolveAgentProviderModel({
       cliProvider: 'opencode',
-      stepProvider: 'claude',
       localProvider: 'codex',
       globalProvider: 'claude',
       personaProviders: { coder: { provider: 'mock' } },
@@ -380,7 +289,6 @@ describe('resolveAgentProviderModel', () => {
 
   it('should use persona override when no CLI provider is set', () => {
     const result = resolveAgentProviderModel({
-      stepProvider: 'claude',
       localProvider: 'codex',
       globalProvider: 'claude',
       personaProviders: { coder: { provider: 'opencode', model: 'persona-model' } },
@@ -391,16 +299,15 @@ describe('resolveAgentProviderModel', () => {
     expect(result.model).toBe('persona-model');
   });
 
-  it('should fall back to movement provider when persona override is not configured', () => {
+  it('should fall back to local provider when persona override is not configured', () => {
     const result = resolveAgentProviderModel({
-      stepProvider: 'claude',
       localProvider: 'codex',
       globalProvider: 'claude',
       personaProviders: { reviewer: { provider: 'mock', model: 'o3-mini' } },
       personaDisplayName: 'coder',
     });
 
-    expect(result.provider).toBe('claude');
+    expect(result.provider).toBe('codex');
   });
 
   it('should prefer local config provider/model over global config for same provider', () => {
@@ -426,10 +333,9 @@ describe('resolveAgentProviderModel', () => {
     expect(result.model).toBe('global-model');
   });
 
-  it('should resolve model order: CLI > persona > movement > config candidate matching provider', () => {
+  it('should resolve model order: CLI > persona > config candidate matching provider', () => {
     const result = resolveAgentProviderModel({
       cliModel: 'cli-model',
-      stepModel: 'movement-model',
       localProvider: 'claude',
       localModel: 'local-model',
       globalProvider: 'codex',
@@ -443,10 +349,9 @@ describe('resolveAgentProviderModel', () => {
     expect(result.model).toBe('cli-model');
   });
 
-  it('should use movement model when persona model is absent', () => {
+  it('should use local model when persona model is absent and provider matches local', () => {
     const result = resolveAgentProviderModel({
-      stepModel: 'movement-model',
-      localProvider: 'claude',
+      localProvider: 'opencode',
       localModel: 'local-model',
       globalProvider: 'codex',
       globalModel: 'global-model',
@@ -455,16 +360,16 @@ describe('resolveAgentProviderModel', () => {
     });
 
     expect(result.provider).toBe('opencode');
-    expect(result.model).toBe('movement-model');
+    expect(result.model).toBe('local-model');
   });
 
   it('should apply local/ global model only when provider matches resolved provider', () => {
     const result = resolveAgentProviderModel({
+      cliProvider: 'codex',
       localProvider: 'claude',
       localModel: 'local-model',
       globalProvider: 'codex',
       globalModel: 'global-model',
-      stepProvider: 'codex',
     });
 
     expect(result.provider).toBe('codex');
@@ -473,38 +378,15 @@ describe('resolveAgentProviderModel', () => {
 
   it('should ignore local and global model when provider does not match', () => {
     const result = resolveAgentProviderModel({
+      cliProvider: 'opencode',
       localProvider: 'codex',
       localModel: 'local-model',
       globalProvider: 'claude',
       globalModel: 'global-model',
-      stepProvider: 'opencode',
     });
 
     expect(result.provider).toBe('opencode');
     expect(result.model).toBeUndefined();
-  });
-
-  it('should combine persona and movement overrides in one run', () => {
-    const result = resolveAgentProviderModel({
-      cliProvider: 'codex',
-      stepProvider: 'claude',
-      stepModel: 'movement-model',
-      localProvider: 'claude',
-      localModel: 'local-model',
-      globalProvider: 'mock',
-      globalModel: 'global-model',
-      cliModel: 'cli-model',
-      personaProviders: {
-        coder: {
-          provider: 'mock',
-          model: 'persona-model',
-        },
-      },
-      personaDisplayName: 'coder',
-    });
-
-    expect(result.provider).toBe('codex');
-    expect(result.model).toBe('cli-model');
   });
 
   it('should apply full priority chain when all layers are present', () => {
@@ -518,8 +400,6 @@ describe('resolveAgentProviderModel', () => {
         },
       },
       personaDisplayName: 'reviewer',
-      stepProvider: 'claude',
-      stepModel: 'step-model',
       localProvider: 'opencode',
       localModel: 'local-model',
       globalProvider: 'claude',
@@ -539,8 +419,6 @@ describe('resolveAgentProviderModel', () => {
         },
       },
       personaDisplayName: 'reviewer',
-      stepProvider: 'claude',
-      stepModel: 'step-model',
       localProvider: 'opencode',
       localModel: 'local-model',
       globalProvider: 'claude',
@@ -553,18 +431,17 @@ describe('resolveAgentProviderModel', () => {
 
   it('should keep model and provider priorities consistent for fallback path', () => {
     const result = resolveAgentProviderModel({
-      stepProvider: 'claude',
       localProvider: 'codex',
       localModel: 'local-model',
       globalProvider: 'claude',
       globalModel: 'global-model',
     });
 
-    expect(result.provider).toBe('claude');
-    expect(result.model).toBe('global-model');
+    expect(result.provider).toBe('codex');
+    expect(result.model).toBe('local-model');
   });
 
-  it('should keep model fallback after persona-only model when step model is absent', () => {
+  it('should keep model fallback after persona-only model when provider comes from local', () => {
     const result = resolveAgentProviderModel({
       personaProviders: {
         reviewer: {
@@ -572,14 +449,13 @@ describe('resolveAgentProviderModel', () => {
         },
       },
       personaDisplayName: 'reviewer',
-      stepProvider: 'claude',
       localProvider: 'codex',
       localModel: 'local-model',
       globalProvider: 'codex',
       globalModel: 'global-model',
     });
 
-    expect(result.provider).toBe('claude');
+    expect(result.provider).toBe('codex');
     expect(result.model).toBe('persona-model');
   });
 });

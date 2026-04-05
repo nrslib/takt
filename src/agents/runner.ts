@@ -42,14 +42,20 @@ export class AgentRunner {
   } {
     const localConfig = loadProjectConfig(cwd);
     const globalConfig = loadGlobalConfig();
+    if (options?.resolvedProvider) {
+      return {
+        provider: options.resolvedProvider,
+        model: options.resolvedModel,
+        localConfig,
+        globalConfig,
+      };
+    }
     const personaProviders = resolveConfigValue(cwd, 'personaProviders');
     const resolved = resolveAgentProviderModel({
       cliProvider: options?.provider,
       cliModel: options?.model,
       personaProviders,
       personaDisplayName,
-      stepProvider: options?.stepProvider,
-      stepModel: options?.stepModel,
       localProvider: localConfig.provider,
       localModel: localConfig.model,
       globalProvider: globalConfig.provider,
@@ -199,6 +205,8 @@ export class AgentRunner {
       personaName,
       provider: options.provider,
       model: options.model,
+      resolvedProvider: options.resolvedProvider,
+      resolvedModel: options.resolvedModel,
       hasPersonaPath: !!options.personaPath,
       hasSession: !!options.sessionId,
       permissionMode: options.permissionMode,

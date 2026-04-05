@@ -8,7 +8,7 @@ import { confirm } from '../../shared/prompt/index.js';
 import { header, success, info, warn, blankLine } from '../../shared/ui/index.js';
 
 const SKIP_FILES = new Set(['.DS_Store', 'Thumbs.db']);
-const DIRECT_DIRS = ['pieces'] as const;
+const DIRECT_DIRS = ['workflows'] as const;
 const FACET_DIRS = ['personas', 'policies', 'instructions', 'knowledge', 'output-contracts'] as const;
 
 export type DeploySkillOptions = {
@@ -90,14 +90,14 @@ export async function deploySkillInternal(options: DeploySkillOptions): Promise<
   const skillFiles = copiedFiles.filter(
     (filePath) =>
       filePath.startsWith(skillDir)
-      && !filePath.includes('/pieces/')
+      && !filePath.includes('/workflows/')
       && !filePath.includes('/facets/')
       && !filePath.includes('/references/')
       && !filePath.includes('/agents/'),
   );
   const referenceFiles = copiedFiles.filter((filePath) => filePath.includes('/references/'));
   const agentFiles = copiedFiles.filter((filePath) => filePath.includes('/agents/'));
-  const pieceFiles = copiedFiles.filter((filePath) => filePath.includes('/pieces/'));
+  const workflowFiles = copiedFiles.filter((filePath) => filePath.includes('/workflows/'));
   const personaFiles = copiedFiles.filter((filePath) => filePath.includes('/facets/personas/'));
   const policyFiles = copiedFiles.filter((filePath) => filePath.includes('/facets/policies/'));
   const instructionFiles = copiedFiles.filter((filePath) => filePath.includes('/facets/instructions/'));
@@ -116,8 +116,8 @@ export async function deploySkillInternal(options: DeploySkillOptions): Promise<
   if (options.showAgentsSummary && agentFiles.length > 0) {
     info(`  エージェント設定: ${agentFiles.length} ファイル`);
   }
-  if (pieceFiles.length > 0) {
-    info(`  ピース:        ${pieceFiles.length} ファイル`);
+  if (workflowFiles.length > 0) {
+    info(`  ワークフロー:  ${workflowFiles.length} ファイル`);
   }
   if (personaFiles.length > 0) {
     info(`  ペルソナ:      ${personaFiles.length} ファイル`);

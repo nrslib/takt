@@ -1,0 +1,68 @@
+name: audit-security
+description: セキュリティ全件監査。プロジェクトの全ファイルを1つずつ読んでセキュリティレビューする
+max_steps: 15
+initial_step: plan
+
+loop_monitors:
+  - cycle: [supervise, review]
+    threshold: 5
+    judge:
+      persona: supervisor
+      instruction: |
+        セキュリティ監査の supervise → review サイクルが {cycle_count} 回繰り返されました。
+        監査の品質と網羅性を総合的に判断し、現状の結果で受け入れるか判断してください。
+      rules:
+        - condition: 十分な品質に達している
+          next: COMPLETE
+        - condition: 品質が不十分だが改善の見込みがない
+          next: ABORT
+
+steps:
+  - name: plan
+    persona: planner
+    instruction: audit-security-plan
+    edit: false
+    output_contracts:
+      report:
+        - name: 01-plan.md
+          format: plan
+    rules:
+      - condition: プロジェクト構造の把握完了
+        next: audit
+
+  - name: audit
+    persona: security-reviewer
+    knowledge: security
+    instruction: audit-security-team-leader
+    edit: false
+    team_leader:
+      max_parts: 3
+      part_persona: security-reviewer
+      part_edit: false
+    output_contracts:
+      report:
+        - name: 02-audit-security.md
+          format: audit-security
+    rules:
+      - condition: 監査完了
+        next: supervise
+
+  - name: supervise
+    persona: supervisor
+    knowledge: security
+    instruction: audit-security-supervise
+    edit: false
+    rules:
+      - condition: 全ファイルが監査済みで品質も十分
+        next: COMPLETE
+      - condition: 未監査ファイルがある、または監査が不十分
+        next: review
+
+  - name: review
+    persona: security-reviewer
+    knowledge: security
+    instruction: audit-security-review
+    edit: false
+    rules:
+      - condition: 再監査完了
+        next: supervise

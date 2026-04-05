@@ -114,7 +114,7 @@ describe('piece category config loading', () => {
   });
 
   it('should load default categories from resources', () => {
-    writeYaml(join(resourcesDir, 'piece-categories.yaml'), `
+    writeYaml(join(resourcesDir, 'workflow-categories.yaml'), `
 piece_categories:
   Quick Start:
     pieces:
@@ -134,7 +134,7 @@ piece_categories:
   });
 
   it('should use builtin categories when user overlay file is missing', () => {
-    writeYaml(join(resourcesDir, 'piece-categories.yaml'), `
+    writeYaml(join(resourcesDir, 'workflow-categories.yaml'), `
 piece_categories:
   Main:
     pieces:
@@ -155,7 +155,7 @@ others_category_name: Others
   });
 
   it('should separate user categories from builtin categories with builtin wrapper', () => {
-    writeYaml(join(resourcesDir, 'piece-categories.yaml'), `
+    writeYaml(join(resourcesDir, 'workflow-categories.yaml'), `
 piece_categories:
   Main:
     pieces:
@@ -226,7 +226,7 @@ others_category_name: Unclassified
   it('should load ja builtin categories and include audit-e2e under レビュー', () => {
     languageState.value = 'ja';
 
-    writeYaml(join(testDir, 'resources', 'ja', 'piece-categories.yaml'), `
+    writeYaml(join(testDir, 'resources', 'ja', 'workflow-categories.yaml'), `
 piece_categories:
   レビュー:
     pieces:
@@ -242,7 +242,7 @@ piece_categories:
   });
 
   it('should override others settings without replacing categories when user overlay has no piece_categories', () => {
-    writeYaml(join(resourcesDir, 'piece-categories.yaml'), `
+    writeYaml(join(resourcesDir, 'workflow-categories.yaml'), `
 piece_categories:
   Main:
     pieces:

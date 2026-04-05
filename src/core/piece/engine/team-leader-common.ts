@@ -21,6 +21,9 @@ export function createPartMovement(step: PieceMovement, part: PartDefinition): P
     throw new Error(`Movement "${step.name}" has no teamLeader configuration`);
   }
 
+  const partPersona = step.teamLeader.partPersona ?? step.persona;
+  const partPersonaPath = step.teamLeader.partPersonaPath ?? step.personaPath;
+  const partPersonaDisplayName = partPersona ?? step.personaDisplayName ?? `${step.name}:${part.id}`;
   const partAllowedTools = step.teamLeader.partAllowedTools ?? step.providerOptions?.claude?.allowedTools;
   const partProviderOptions = partAllowedTools
     ? {
@@ -35,9 +38,9 @@ export function createPartMovement(step: PieceMovement, part: PartDefinition): P
   return {
     name: `${step.name}.${part.id}`,
     description: part.title,
-    persona: step.teamLeader.partPersona ?? step.persona,
-    personaPath: step.teamLeader.partPersonaPath ?? step.personaPath,
-    personaDisplayName: `${step.name}:${part.id}`,
+    persona: partPersona,
+    personaPath: partPersonaPath,
+    personaDisplayName: partPersonaDisplayName,
     session: 'refresh',
     providerOptions: partProviderOptions,
     mcpServers: step.mcpServers,

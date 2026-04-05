@@ -148,6 +148,51 @@ export class QueryExecutor {
     let structuredOutput: Record<string, unknown> | undefined;
     let providerUsage: ProviderUsageSnapshot | undefined;
     let onExternalAbort: (() => void) | undefined;
+    const applyAssistantMessage = (assistantMsg: SDKAssistantMessage): void => {
+      for (const block of assistantMsg.message.content) {
+        if (block.type === 'text') {
+          accumulatedAssistantText += block.text;
+        }
+      }
+    };
+    const applyResultMessage = (resultMsg: SDKResultMessage): void => {
+      hasResultMessage = true;
+      providerUsage = extractProviderUsage(resultMsg);
+      const resultErrors = Array.isArray((resultMsg as { errors?: unknown }).errors)
+        ? ((resultMsg as { errors?: unknown }).errors as string[]).filter((error): error is string => typeof error === 'string')
+        : [];
+
+      if (resultMsg.subtype !== 'success') {
+        success = false;
+        if (resultErrors.length > 0) {
+          resultContent = resultErrors.join('\n');
+        }
+        return;
+      }
+
+      resultContent = resultMsg.result;
+      const rawStructuredOutput = (resultMsg as unknown as {
+        structured_output?: unknown;
+        structuredOutput?: unknown;
+      }).structured_output ?? (resultMsg as unknown as { structuredOutput?: unknown }).structuredOutput;
+      if (
+        rawStructuredOutput
+        && typeof rawStructuredOutput === 'object'
+        && !Array.isArray(rawStructuredOutput)
+      ) {
+        structuredOutput = rawStructuredOutput as Record<string, unknown>;
+      }
+
+      if (resultMsg.is_error) {
+        success = false;
+        if (resultErrors.length > 0) {
+          resultContent = resultErrors.join('\n');
+        }
+        return;
+      }
+
+      success = true;
+    };
 
     try {
       const q = query({ prompt, options: sdkOptions });
@@ -178,39 +223,17 @@ export class QueryExecutor {
           sdkMessageToStreamEvent(message, options.onStream, true);
         }
 
-        if (message.type === 'assistant') {
-          const assistantMsg = message as SDKAssistantMessage;
-          for (const block of assistantMsg.message.content) {
-            if (block.type === 'text') {
-              accumulatedAssistantText += block.text;
-            }
+        switch (message.type) {
+          case 'assistant': {
+            applyAssistantMessage(message as SDKAssistantMessage);
+            break;
           }
-        }
-
-        if (message.type === 'result') {
-          hasResultMessage = true;
-          const resultMsg = message as SDKResultMessage;
-          providerUsage = extractProviderUsage(resultMsg);
-          if (resultMsg.subtype === 'success') {
-            resultContent = resultMsg.result;
-            const rawStructuredOutput = (resultMsg as unknown as {
-              structured_output?: unknown;
-              structuredOutput?: unknown;
-            }).structured_output ?? (resultMsg as unknown as { structuredOutput?: unknown }).structuredOutput;
-            if (
-              rawStructuredOutput
-              && typeof rawStructuredOutput === 'object'
-              && !Array.isArray(rawStructuredOutput)
-            ) {
-              structuredOutput = rawStructuredOutput as Record<string, unknown>;
-            }
-            success = true;
-          } else {
-            success = false;
-            if (resultMsg.errors && resultMsg.errors.length > 0) {
-              resultContent = resultMsg.errors.join('\n');
-            }
+          case 'result': {
+            applyResultMessage(message as SDKResultMessage);
+            break;
           }
+          default:
+            break;
         }
       }
 
@@ -252,7 +275,7 @@ export class QueryExecutor {
 
   /**
    * Handle query execution errors.
-   * Classifies errors (abort, rate limit, auth, timeout) and returns appropriate ClaudeResult.
+   * Classifies errors (abort, auth, timeout) and returns appropriate ClaudeResult.
    */
   private static handleQueryError(
     error: unknown,
@@ -285,6 +308,7 @@ export class QueryExecutor {
         success: true,
         content: (resultContent ?? '').trim(),
         sessionId,
+        error: errorMessage,
       };
     }
 

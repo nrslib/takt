@@ -72,7 +72,7 @@ describe('E2E: Piece error handling (mock)', () => {
     // Then: piece aborts due to iteration limit
     expect(result.exitCode).not.toBe(0);
     const combined = result.stdout + result.stderr;
-    expect(combined).toMatch(/Max movements|iteration|aborted/i);
+    expect(combined).toContain('Workflow aborted after');
   }, 240_000);
 
   it('should pass previous response between sequential steps', () => {
@@ -97,6 +97,6 @@ describe('E2E: Piece error handling (mock)', () => {
 
     // Then: piece completes successfully (both steps execute)
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Piece completed');
+    expect(result.stdout).toContain('Workflow completed');
   }, 240_000);
 });

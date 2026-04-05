@@ -92,6 +92,7 @@ describe('callCursor', () => {
     expect(command).toBe('cursor-agent');
     expect(args).toEqual([
       '-p',
+      '--trust',
       '--output-format',
       'json',
       '--workspace',

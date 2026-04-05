@@ -69,7 +69,7 @@ describe('deploySkillCodex', () => {
     writeFileSync(join(agentsDir, 'openai.yaml'), 'interface:\n  display_name: TAKT');
 
     const langDir = join(fakeResourcesDir, 'en');
-    mkdirSync(join(langDir, 'pieces'), { recursive: true });
+    mkdirSync(join(langDir, 'workflows'), { recursive: true });
     mkdirSync(join(langDir, 'facets', 'personas'), { recursive: true });
     mkdirSync(join(langDir, 'facets', 'policies'), { recursive: true });
     mkdirSync(join(langDir, 'facets', 'instructions'), { recursive: true });
@@ -77,7 +77,7 @@ describe('deploySkillCodex', () => {
     mkdirSync(join(langDir, 'facets', 'output-contracts'), { recursive: true });
     mkdirSync(join(langDir, 'templates'), { recursive: true });
 
-    writeFileSync(join(langDir, 'pieces', 'default.yaml'), 'name: default');
+    writeFileSync(join(langDir, 'workflows', 'default.yaml'), 'name: default');
     writeFileSync(join(langDir, 'facets', 'personas', 'coder.md'), '# Coder');
     writeFileSync(join(langDir, 'facets', 'policies', 'coding.md'), '# Coding');
     writeFileSync(join(langDir, 'facets', 'instructions', 'init.md'), '# Init');
@@ -124,10 +124,10 @@ describe('deploySkillCodex', () => {
       expect(existsSync(join(skillDir, 'agents', 'openai.yaml'))).toBe(true);
     });
 
-    it('should copy facets and pieces from language resources', async () => {
+    it('should copy facets and workflows from language resources', async () => {
       await deploySkillCodex();
 
-      expect(existsSync(join(skillDir, 'pieces', 'default.yaml'))).toBe(true);
+      expect(existsSync(join(skillDir, 'workflows', 'default.yaml'))).toBe(true);
       expect(existsSync(join(skillDir, 'facets', 'personas', 'coder.md'))).toBe(true);
       expect(existsSync(join(skillDir, 'facets', 'policies', 'coding.md'))).toBe(true);
       expect(existsSync(join(skillDir, 'facets', 'instructions', 'init.md'))).toBe(true);
@@ -136,18 +136,25 @@ describe('deploySkillCodex', () => {
       expect(existsSync(join(skillDir, 'templates'))).toBe(false);
       expect(info).not.toHaveBeenCalledWith(expect.stringContaining('テンプレート'));
     });
+
+    // Regression #565 / 565-TESTS-DEPLOY-SKILL-CODEX-WORKFLOWS
+    it('should not create a pieces directory for workflow YAMLs', async () => {
+      await deploySkillCodex();
+      expect(existsSync(join(skillDir, 'workflows', 'default.yaml'))).toBe(true);
+      expect(existsSync(join(skillDir, 'pieces'))).toBe(false);
+    });
   });
 
   describe('cleanDir behavior', () => {
     it('should remove stale files from previous deployments', async () => {
-      const piecesDir = join(skillDir, 'pieces');
-      mkdirSync(piecesDir, { recursive: true });
-      writeFileSync(join(piecesDir, 'stale.yaml'), 'name: stale');
+      const workflowsDir = join(skillDir, 'workflows');
+      mkdirSync(workflowsDir, { recursive: true });
+      writeFileSync(join(workflowsDir, 'stale.yaml'), 'name: stale');
 
       await deploySkillCodex();
 
-      expect(existsSync(join(piecesDir, 'stale.yaml'))).toBe(false);
-      expect(existsSync(join(piecesDir, 'default.yaml'))).toBe(true);
+      expect(existsSync(join(workflowsDir, 'stale.yaml'))).toBe(false);
+      expect(existsSync(join(workflowsDir, 'default.yaml'))).toBe(true);
     });
 
     it('should clean agents directory before copy', async () => {

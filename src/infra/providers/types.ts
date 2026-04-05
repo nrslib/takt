@@ -47,6 +47,7 @@ export interface ProviderAgent {
 
 /** Provider interface — creates configured agents from setup */
 export interface Provider {
+  supportsStructuredOutput: boolean;
   setup(config: AgentSetup): ProviderAgent;
 }
 

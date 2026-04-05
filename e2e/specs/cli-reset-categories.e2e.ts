@@ -39,6 +39,6 @@ describe('E2E: Reset categories command (takt reset categories)', () => {
     const categoriesPath = join(isolatedEnv.taktDir, 'preferences', 'piece-categories.yaml');
     expect(existsSync(categoriesPath)).toBe(true);
     const content = readFileSync(categoriesPath, 'utf-8');
-    expect(content).toContain('piece_categories: {}');
+    expect(content).toContain('workflow_categories: {}');
   });
 });

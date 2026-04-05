@@ -71,7 +71,7 @@ describe('getBuiltinPiece', () => {
     expect(piece!.name).toBe('default');
   });
 
-  it('should resolve builtin instruction_template without projectCwd', () => {
+  it('should resolve builtin instruction without projectCwd', () => {
     const piece = getBuiltinPiece('default', process.cwd());
     expect(piece).not.toBeNull();
 
@@ -888,6 +888,18 @@ describe('analytics config resolution', () => {
       eventsPath: '/tmp/project-analytics',
       retentionDays: 14,
     });
+  });
+
+  it('should resolve language as project > global in resolveConfigValue', () => {
+    const globalConfigDir = process.env.TAKT_CONFIG_DIR!;
+    mkdirSync(globalConfigDir, { recursive: true });
+    writeFileSync(join(globalConfigDir, 'config.yaml'), 'language: en\n');
+
+    const projectConfigDir = getProjectConfigDir(testDir);
+    mkdirSync(projectConfigDir, { recursive: true });
+    writeFileSync(join(projectConfigDir, 'config.yaml'), 'language: ja\n');
+
+    expect(resolveConfigValue(testDir, 'language')).toBe('ja');
   });
 
   it('should expand "~/" in global analytics.events_path when resolved', () => {

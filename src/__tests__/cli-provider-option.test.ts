@@ -8,4 +8,18 @@ describe('CLI --provider option', () => {
     expect(providerOption).toBeDefined();
     expect(providerOption?.description).toContain('cursor');
   });
+
+  it('should describe --piece with workflow terminology', () => {
+    const pieceOption = program.options.find((option) => option.long === '--piece');
+
+    expect(pieceOption).toBeDefined();
+    expect(pieceOption?.description).toContain('--workflow');
+  });
+
+  it('should expose --workflow as the canonical workflow option', () => {
+    const workflowOption = program.options.find((option) => option.long === '--workflow');
+
+    expect(workflowOption).toBeDefined();
+    expect(workflowOption?.description).toBe('Workflow name or path to workflow file');
+  });
 });

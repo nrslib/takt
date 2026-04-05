@@ -53,6 +53,11 @@ describe('CopilotProvider', () => {
     mockLoadProjectConfig.mockReturnValue({});
   });
 
+  it('should mark supportsStructuredOutput as false', () => {
+    const provider = new CopilotProvider() as { supportsStructuredOutput?: boolean };
+    expect(provider.supportsStructuredOutput).toBe(false);
+  });
+
   it('should throw when claudeAgent is specified', () => {
     const provider = new CopilotProvider();
 

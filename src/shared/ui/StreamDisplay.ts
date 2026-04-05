@@ -277,6 +277,8 @@ export class StreamDisplay {
         case 'result':
           this.showResult(event.data.success, event.data.error);
           break;
+        case 'assistant_error':
+        case 'rate_limit':
         case 'error':
           break;
       }

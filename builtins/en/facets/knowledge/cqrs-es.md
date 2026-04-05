@@ -117,7 +117,20 @@ Good Projection:
 
 ## Query Side Design
 
-Controller uses QueryGateway. Does not use Repository directly.
+Query side operates on an event-driven PubSub model. Projections update Read Models via EventHandler, and queries read from Read Models.
+
+Event distribution uses PubSub (via message broker) to deliver events to all instances. Do not use mechanisms that assume delivery to the same instance.
+
+- **Subscription Query** (e.g., Axon's `subscriptionQuery()`): delivers change notifications back to the subscribing instance, but in distributed environments or when using third-party event store plugins, the subscribing instance and the notified instance may differ, making it impossible to return the response on the same machine. When synchronous response is needed, use reactive polling to wait for Read Model updates.
+- **Subscribing event processor** (e.g., Axon's `SubscribingEventProcessor`): relies on local event bus subscription, so only the instance that emitted the event receives it. In distributed environments, other instances' Projections are not updated. Use PubSub to distribute events to all instances.
+
+| Criteria | Judgment |
+|----------|----------|
+| Using Subscription Query (e.g., Axon's `subscriptionQuery()`) | REJECT. Does not work in distributed environments. Use reactive polling |
+| Using Subscribing event processor (e.g., Axon's `SubscribingEventProcessor`) | REJECT. Local delivery only. Other instances not updated in distributed environments |
+| Controller directly referencing Repository | REJECT. Must go through UseCase layer |
+| Query side referencing Command Model | REJECT |
+| QueryHandler issuing commands | REJECT |
 
 Types between layers:
 - `application/query/` - Query result types (e.g., `OrderDetail`)
@@ -146,7 +159,7 @@ fun handle(query: GetOrderDetailQuery): OrderDetail? {
     return OrderDetail(...)
 }
 
-// Controller - converts to adapter layer type
+// Controller - synchronous return is fine for simple reads
 @GetMapping("/{id}")
 fun getById(@PathVariable id: String): ResponseEntity<OrderDetailResponse> {
     val detail = queryGateway.query(
@@ -163,15 +176,61 @@ Structure:
 Controller (adapter) → QueryGateway → QueryHandler (application) → Repository
      ↓                                      ↓
 Response.from(detail)                  OrderDetail
+
+Event flow (PubSub):
+Aggregate → Event Bus → Projection(@EventHandler) → Repository(Read Model)
+                                                          ↑
+                                          QueryHandler reads from here
 ```
 
 ## Eventual Consistency
 
-| Situation | Response |
-|-----------|----------|
-| UI expects immediate updates | Redesign or polling/WebSocket |
+When synchronous response is needed after command dispatch, use reactive polling to wait for Projection updates.
+
+| Criteria | Judgment |
+|----------|----------|
+| Using Subscription Query to wait for Projection updates | REJECT. Does not work in distributed environments. Use reactive polling |
+| UI expects immediate updates | Polling or WebSocket |
 | Consistency delay exceeds tolerance | Reconsider architecture |
 | Compensating transactions undefined | Request failure scenario review |
+
+### Reactive Polling
+
+Pattern: dispatch command → poll for Projection update completion.
+
+```kotlin
+// UseCase: send command → poll for completion
+fun execute(input: PlaceOrderInput): Mono<PlaceOrderOutput> {
+    val orderId = UUID.randomUUID().toString()
+    return Mono.fromCallable { validatePreConditions(input) }
+        .subscribeOn(Schedulers.boundedElastic())
+        .flatMap {
+            Mono.fromFuture(commandGateway.send<Any>(
+                PlaceOrderCommand(orderId, input.customerId, input.items)
+            ))
+        }
+        .then(pollForCompletion(orderId))
+        .thenReturn(PlaceOrderOutput(orderId))
+}
+
+// Polling: wait for Projection update
+private fun pollForCompletion(orderId: String): Mono<Void> {
+    return ReactivePolling.waitFor(
+        supplier = { orderRepository.findById(orderId).orElse(null) },
+        condition = { it.sagaCompleted || it.status == OrderStatus.CONFIRMED },
+        timeout = Duration.ofSeconds(60),
+        maxAttempts = 300
+    )
+}
+```
+
+When polling is appropriate:
+- Need to wait for Saga completion before returning response
+- Need to return created resource ID after command dispatch
+
+When polling is not needed:
+- Simple operations that complete with just command dispatch (no result waiting)
+- UI does not require real-time updates
 
 ## Saga vs EventHandler
 

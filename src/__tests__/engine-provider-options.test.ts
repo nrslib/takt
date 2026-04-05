@@ -54,7 +54,7 @@ describe('PieceEngine provider_options resolution', () => {
     }
   });
 
-  it('should merge provider_options with project source winning over movement', async () => {
+  it('should let movement provider_options override project source without origin trace', async () => {
     const movement = makeMovement('implement', {
       providerOptions: {
         codex: { networkAccess: false },
@@ -90,7 +90,7 @@ describe('PieceEngine provider_options resolution', () => {
 
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
     expect(options?.providerOptions).toEqual({
-      codex: { networkAccess: true },
+      codex: { networkAccess: false },
       opencode: { networkAccess: true },
       claude: {
         sandbox: {

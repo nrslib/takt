@@ -5,9 +5,10 @@
  */
 
 import { join } from 'node:path';
+import type { Command } from 'commander';
 import { clearPersonaSessions, resolveConfigValue } from '../../infra/config/index.js';
 import { getGlobalConfigDir } from '../../infra/config/paths.js';
-import { success, info } from '../../shared/ui/index.js';
+import { success, info, error as logError } from '../../shared/ui/index.js';
 import { runAllTasks, addTask, watchTasks, listTasks } from '../../features/tasks/index.js';
 import {
   ejectBuiltin,
@@ -23,7 +24,7 @@ import { previewPrompts } from '../../features/prompt/index.js';
 import { showCatalog } from '../../features/catalog/index.js';
 import { computeReviewMetrics, formatReviewMetrics, parseSinceDuration, purgeOldEvents } from '../../features/analytics/index.js';
 import { program, resolvedCwd } from './program.js';
-import { resolveAgentOverrides } from './helpers.js';
+import { resolveAgentOverrides, resolveWorkflowCliOption } from './helpers.js';
 import { repertoireAddCommand } from '../../commands/repertoire/add.js';
 import { repertoireRemoveCommand } from '../../commands/repertoire/remove.js';
 import { repertoireListCommand } from '../../commands/repertoire/list.js';
@@ -46,9 +47,31 @@ program
   .command('add')
   .description('Add a new task')
   .argument('[task]', 'Task description or issue reference (e.g. "#28")')
-  .action(async (task?: string) => {
-    const opts = program.opts();
-    await addTask(resolvedCwd, task, opts.pr !== undefined ? { prNumber: opts.pr as number } : undefined);
+  .action(async (task: string | undefined, commandOrOpts?: Command | { opts?: () => Record<string, unknown> }) => {
+    const optsWithGlobals = (
+      commandOrOpts && 'optsWithGlobals' in commandOrOpts && typeof commandOrOpts.optsWithGlobals === 'function'
+    )
+      ? commandOrOpts.optsWithGlobals.bind(commandOrOpts)
+      : undefined;
+    const opts = optsWithGlobals
+      ? optsWithGlobals()
+      : (typeof commandOrOpts?.opts === 'function' ? commandOrOpts.opts() : program.opts());
+    let workflow: string | undefined;
+    try {
+      workflow = resolveWorkflowCliOption(opts as Record<string, unknown>);
+    } catch (error) {
+      logError(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    }
+    const addTaskOptions = {
+      ...(opts.pr !== undefined ? { prNumber: opts.pr as number } : {}),
+      ...(workflow !== undefined ? { workflow } : {}),
+    };
+    await addTask(
+      resolvedCwd,
+      task,
+      Object.keys(addTaskOptions).length > 0 ? addTaskOptions : undefined,
+    );
   });
 
 program
@@ -83,8 +106,8 @@ program
 
 program
   .command('eject')
-  .description('Copy builtin piece or facet for customization (default: project .takt/)')
-  .argument('[typeOrName]', `Piece name, or facet type (${VALID_FACET_TYPES.join(', ')})`)
+  .description('Copy builtin workflow or facet for customization (default: project .takt/)')
+  .argument('[typeOrName]', `Workflow name, or facet type (${VALID_FACET_TYPES.join(', ')})`)
   .argument('[facetName]', 'Facet name (when first arg is a facet type)')
   .option('--global', 'Eject to ~/.takt/ instead of project .takt/')
   .action(async (typeOrName: string | undefined, facetName: string | undefined, opts: { global?: boolean }) => {
@@ -116,29 +139,29 @@ reset
 
 reset
   .command('categories')
-  .description('Reset piece categories to builtin defaults')
+  .description('Reset workflow categories to builtin defaults')
   .action(async () => {
     await resetCategoriesToDefault(resolvedCwd);
   });
 
 program
   .command('prompt')
-  .description('Preview assembled prompts for each movement and phase')
-  .argument('[piece]', 'Piece name or path (defaults to "default")')
-  .action(async (piece?: string) => {
-    await previewPrompts(resolvedCwd, piece);
+  .description('Preview assembled prompts for each step and phase')
+  .argument('[workflow]', 'Workflow name or path (defaults to "default")')
+  .action(async (workflow?: string) => {
+    await previewPrompts(resolvedCwd, workflow);
   });
 
 program
   .command('export-cc')
-  .description('Export takt pieces/agents as Claude Code Skill (~/.claude/)')
+  .description('Export takt workflows/agents as Claude Code Skill (~/.claude/)')
   .action(async () => {
     await deploySkill();
   });
 
 program
   .command('export-codex')
-  .description('Export takt pieces/agents as Codex Skill (~/.agents/)')
+  .description('Export takt workflows/agents as Codex Skill (~/.agents/)')
   .action(async () => {
     await deploySkillCodex();
   });

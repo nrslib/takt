@@ -14,6 +14,7 @@ import type { InstructionContext } from '../../core/piece/instruction/instructio
 import type { Language } from '../../core/models/types.js';
 import { header, info, error, blankLine } from '../../shared/ui/index.js';
 import { DEFAULT_PIECE_NAME } from '../../shared/constants.js';
+import { sanitizeTerminalText } from '../../shared/utils/text.js';
 
 /**
  * Preview all prompts for a piece.
@@ -24,24 +25,28 @@ import { DEFAULT_PIECE_NAME } from '../../shared/constants.js';
 export async function previewPrompts(cwd: string, pieceIdentifier?: string): Promise<void> {
   const identifier = pieceIdentifier ?? DEFAULT_PIECE_NAME;
   const config = loadPieceByIdentifier(identifier, cwd);
+  const safeIdentifier = sanitizeTerminalText(identifier);
 
   if (!config) {
-    error(`Piece "${identifier}" not found.`);
+    error(`Workflow "${safeIdentifier}" not found.`);
     return;
   }
 
   const language = resolvePieceConfigValue(cwd, 'language') as Language;
+  const safeWorkflowName = sanitizeTerminalText(config.name);
 
-  header(`Prompt Preview: ${config.name}`);
-  info(`Movements: ${config.movements.length}`);
+  header(`Workflow Prompt Preview: ${safeWorkflowName}`);
+  info(`Steps: ${config.movements.length}`);
   info(`Language: ${language}`);
   blankLine();
 
   for (const [i, movement] of config.movements.entries()) {
     const separator = '='.repeat(60);
+    const safeMovementName = sanitizeTerminalText(movement.name);
+    const safePersonaDisplayName = sanitizeTerminalText(movement.personaDisplayName);
 
     console.log(separator);
-    console.log(`Movement ${i + 1}: ${movement.name} (persona: ${movement.personaDisplayName})`);
+    console.log(`Step ${i + 1}: ${safeMovementName} (persona: ${safePersonaDisplayName})`);
     console.log(separator);
 
     // Phase 1: Main execution

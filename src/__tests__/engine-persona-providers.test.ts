@@ -1,7 +1,7 @@
 /**
  * Tests for persona_providers config-level provider/model override.
  *
- * Verifies movement-level provider/model resolution for stepProvider/stepModel:
+ * Verifies movement-level provider/model resolution for resolvedProvider/resolvedModel:
  *   1. persona_providers[personaDisplayName].provider (highest)
  *   2. Movement YAML provider
  *   3. CLI/global provider (lowest in movement resolution)
@@ -77,8 +77,8 @@ describe('PieceEngine persona_providers override', () => {
     await engine.run();
 
     const options = vi.mocked(runAgent).mock.calls[0][2];
-    expect(options.provider).toBe('claude');
-    expect(options.stepProvider).toBe('codex');
+    expect(options.provider).toBeUndefined();
+    expect(options.resolvedProvider).toBe('codex');
   });
 
   it('should use global provider when persona is not in persona_providers', async () => {
@@ -107,8 +107,8 @@ describe('PieceEngine persona_providers override', () => {
     await engine.run();
 
     const options = vi.mocked(runAgent).mock.calls[0][2];
-    expect(options.provider).toBe('claude');
-    expect(options.stepProvider).toBe('claude');
+    expect(options.provider).toBeUndefined();
+    expect(options.resolvedProvider).toBe('claude');
   });
 
   it('should prioritize persona_providers provider over movement provider', async () => {
@@ -138,8 +138,8 @@ describe('PieceEngine persona_providers override', () => {
     await engine.run();
 
     const options = vi.mocked(runAgent).mock.calls[0][2];
-    expect(options.provider).toBe('mock');
-    expect(options.stepProvider).toBe('codex');
+    expect(options.provider).toBeUndefined();
+    expect(options.resolvedProvider).toBe('codex');
   });
 
   it('should work without persona_providers (undefined)', async () => {
@@ -167,8 +167,8 @@ describe('PieceEngine persona_providers override', () => {
     await engine.run();
 
     const options = vi.mocked(runAgent).mock.calls[0][2];
-    expect(options.provider).toBe('claude');
-    expect(options.stepProvider).toBe('claude');
+    expect(options.provider).toBeUndefined();
+    expect(options.resolvedProvider).toBe('claude');
   });
 
   it('should apply different providers to different personas in a multi-movement piece', async () => {
@@ -205,15 +205,15 @@ describe('PieceEngine persona_providers override', () => {
     await engine.run();
 
     const calls = vi.mocked(runAgent).mock.calls;
-    // Plan movement: planner not in persona_providers → stepProvider は claude
-    expect(calls[0][2].provider).toBe('claude');
-    expect(calls[0][2].stepProvider).toBe('claude');
-    // Implement movement: coder in persona_providers → stepProvider は codex
-    expect(calls[1][2].provider).toBe('claude');
-    expect(calls[1][2].stepProvider).toBe('codex');
+    // Plan movement: planner not in persona_providers → resolvedProvider は claude
+    expect(calls[0][2].provider).toBeUndefined();
+    expect(calls[0][2].resolvedProvider).toBe('claude');
+    // Implement movement: coder in persona_providers → resolvedProvider は codex
+    expect(calls[1][2].provider).toBeUndefined();
+    expect(calls[1][2].resolvedProvider).toBe('codex');
   });
 
-  it('should use persona_providers.model as stepModel when step.model is undefined', async () => {
+  it('should use persona_providers.model as resolvedModel when step.model is undefined', async () => {
     const movement = makeMovement('implement', {
       personaDisplayName: 'coder',
       rules: [makeRule('done', 'COMPLETE')],
@@ -240,8 +240,8 @@ describe('PieceEngine persona_providers override', () => {
     await engine.run();
 
     const options = vi.mocked(runAgent).mock.calls[0][2];
-    expect(options.stepProvider).toBe('codex');
-    expect(options.stepModel).toBe('o3-mini');
+    expect(options.resolvedProvider).toBe('codex');
+    expect(options.resolvedModel).toBe('o3-mini');
   });
 
   it('should fallback to input.model when persona_providers.model is not set', async () => {
@@ -271,8 +271,8 @@ describe('PieceEngine persona_providers override', () => {
     await engine.run();
 
     const options = vi.mocked(runAgent).mock.calls[0][2];
-    expect(options.stepProvider).toBe('codex');
-    expect(options.stepModel).toBe('global-model');
+    expect(options.resolvedProvider).toBe('codex');
+    expect(options.resolvedModel).toBe('global-model');
   });
 
   it('should prioritize persona_providers.model over movement model', async () => {
@@ -303,11 +303,11 @@ describe('PieceEngine persona_providers override', () => {
     await engine.run();
 
     const options = vi.mocked(runAgent).mock.calls[0][2];
-    expect(options.stepProvider).toBe('codex');
-    expect(options.stepModel).toBe('persona-model');
+    expect(options.resolvedProvider).toBe('codex');
+    expect(options.resolvedModel).toBe('persona-model');
   });
 
-  it('should emit providerInfo in movement:start matching stepProvider/stepModel', async () => {
+  it('should emit providerInfo in movement:start matching resolved provider/model', async () => {
     const movement = makeMovement('implement', {
       personaDisplayName: 'coder',
       rules: [makeRule('done', 'COMPLETE')],

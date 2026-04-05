@@ -1,8 +1,10 @@
 import { resolve } from 'node:path';
 import type { ProjectLocalConfig } from './types.js';
 import type { ConfigParameterKey } from './resolvedConfig.js';
+import type { ConfigTrace } from './traced/tracedConfigLoader.js';
 
 const projectConfigCache = new Map<string, ProjectLocalConfig>();
+const projectConfigTraceCache = new Map<string, ConfigTrace>();
 const resolvedValueCache = new Map<string, unknown>();
 
 function normalizeProjectDir(projectDir: string): string {
@@ -21,6 +23,14 @@ export function setCachedProjectConfig(projectDir: string, config: ProjectLocalC
   projectConfigCache.set(normalizeProjectDir(projectDir), config);
 }
 
+export function getCachedProjectConfigTrace(projectDir: string): ConfigTrace | undefined {
+  return projectConfigTraceCache.get(normalizeProjectDir(projectDir));
+}
+
+export function setCachedProjectConfigTrace(projectDir: string, trace: ConfigTrace): void {
+  projectConfigTraceCache.set(normalizeProjectDir(projectDir), trace);
+}
+
 export function hasCachedResolvedValue(projectDir: string, key: ConfigParameterKey): boolean {
   return resolvedValueCache.has(resolvedValueKey(projectDir, key));
 }
@@ -36,6 +46,7 @@ export function setCachedResolvedValue(projectDir: string, key: ConfigParameterK
 export function invalidateResolvedConfigCache(projectDir: string): void {
   const normalizedProjectDir = normalizeProjectDir(projectDir);
   projectConfigCache.delete(normalizedProjectDir);
+  projectConfigTraceCache.delete(normalizedProjectDir);
   const prefix = `${normalizedProjectDir}::`;
   for (const key of resolvedValueCache.keys()) {
     if (key.startsWith(prefix)) {
@@ -46,5 +57,6 @@ export function invalidateResolvedConfigCache(projectDir: string): void {
 
 export function invalidateAllResolvedConfigCache(): void {
   projectConfigCache.clear();
+  projectConfigTraceCache.clear();
   resolvedValueCache.clear();
 }

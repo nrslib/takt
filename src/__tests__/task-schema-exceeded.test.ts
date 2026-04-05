@@ -3,14 +3,18 @@
  *
  * Covers:
  * - TaskRecordSchema cross-field validation for `exceeded` status
- * - TaskExecutionConfigSchema new fields: exceeded_max_movements, exceeded_current_iteration
+ * - TaskExecutionConfigSchema: legacy read aliases and canonical `exceeded_max_steps` on parsed output
+ * - serializeTaskRecord / serializeTasksFileData canonical write shape (PR #582)
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   TaskRecordSchema,
   TaskExecutionConfigSchema,
   TaskStatusSchema,
+  TasksFileSchema,
+  serializeTaskRecord,
+  serializeTasksFileData,
 } from '../infra/task/schema.js';
 
 function makeExceededRecord(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -21,8 +25,8 @@ function makeExceededRecord(overrides: Record<string, unknown> = {}): Record<str
     created_at: '2025-01-01T00:00:00.000Z',
     started_at: '2025-01-01T01:00:00.000Z',
     completed_at: '2025-01-01T02:00:00.000Z',
-    start_movement: 'plan',
-    exceeded_max_movements: 60,
+    start_step: 'plan',
+    exceeded_max_steps: 60,
     exceeded_current_iteration: 30,
     ...overrides,
   };
@@ -46,6 +50,14 @@ describe('TaskStatusSchema', () => {
 });
 
 describe('TaskExecutionConfigSchema - exceeded fields', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('should accept exceeded_max_movements as a positive integer', () => {
     expect(() => TaskExecutionConfigSchema.parse({ exceeded_max_movements: 60 })).not.toThrow();
   });
@@ -81,6 +93,27 @@ describe('TaskExecutionConfigSchema - exceeded fields', () => {
     expect(() => TaskExecutionConfigSchema.parse({ exceeded_max_movements: 1.5 })).toThrow();
   });
 
+  it('should accept exceeded_max_steps and keep canonical exceed key on parsed output (PR #582)', () => {
+    const parsed = TaskExecutionConfigSchema.parse({ exceeded_max_steps: 60 });
+    expect(parsed.exceeded_max_steps).toBe(60);
+    expect('exceeded_max_movements' in parsed).toBe(false);
+  });
+
+  it('should accept legacy exceeded_max_movements and normalize to canonical on parsed output (PR #582)', () => {
+    const parsed = TaskExecutionConfigSchema.parse({ exceeded_max_movements: 60 });
+    expect(parsed.exceeded_max_steps).toBe(60);
+    expect('exceeded_max_movements' in parsed).toBe(false);
+  });
+
+  it('should reject when exceeded_max_steps and exceeded_max_movements disagree (#581)', () => {
+    expect(() =>
+      TaskExecutionConfigSchema.parse({
+        exceeded_max_steps: 10,
+        exceeded_max_movements: 20,
+      }),
+    ).toThrow(/exceeded_max_steps.*exceeded_max_movements/);
+  });
+
   it('should reject exceeded_current_iteration as negative', () => {
     expect(() => TaskExecutionConfigSchema.parse({ exceeded_current_iteration: -1 })).toThrow();
   });
@@ -96,23 +129,23 @@ describe('TaskRecordSchema - exceeded status', () => {
       expect(() => TaskRecordSchema.parse(makeExceededRecord())).not.toThrow();
     });
 
-    it('should accept exceeded record without start_movement (optional)', () => {
-      const record = makeExceededRecord({ start_movement: undefined });
+    it('should accept exceeded record without start_step (optional)', () => {
+      const record = makeExceededRecord({ start_step: undefined });
       expect(() => TaskRecordSchema.parse(record)).not.toThrow();
     });
 
-    it('should reject exceeded record with only exceeded_current_iteration set (exceeded_max_movements missing)', () => {
-      const record = makeExceededRecord({ exceeded_max_movements: undefined });
+    it('should reject exceeded record with only exceeded_current_iteration set (exceeded max missing)', () => {
+      const record = makeExceededRecord({ exceeded_max_steps: undefined });
       expect(() => TaskRecordSchema.parse(record)).toThrow();
     });
 
-    it('should reject exceeded record with only exceeded_max_movements set (exceeded_current_iteration missing)', () => {
+    it('should reject exceeded record with only exceeded max set (exceeded_current_iteration missing)', () => {
       const record = makeExceededRecord({ exceeded_current_iteration: undefined });
       expect(() => TaskRecordSchema.parse(record)).toThrow();
     });
 
     it('should accept exceeded record when both exceeded fields are absent (neither field set)', () => {
-      const record = makeExceededRecord({ exceeded_max_movements: undefined, exceeded_current_iteration: undefined });
+      const record = makeExceededRecord({ exceeded_max_steps: undefined, exceeded_current_iteration: undefined });
       expect(() => TaskRecordSchema.parse(record)).not.toThrow();
     });
   });
@@ -147,6 +180,33 @@ describe('TaskRecordSchema - exceeded status', () => {
     it('should accept exceeded record with owner_pid explicitly null', () => {
       const record = makeExceededRecord({ owner_pid: null });
       expect(() => TaskRecordSchema.parse(record)).not.toThrow();
+    });
+  });
+
+  describe('serializeTaskRecord / serializeTasksFileData (canonical exceed)', () => {
+    beforeEach(() => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('Given an exceeded record parsed from disk-shaped input, When serializing for write, Then output uses exceeded_max_steps only', () => {
+      const parsed = TaskRecordSchema.parse(makeExceededRecord());
+      const out = serializeTaskRecord(parsed);
+
+      expect(out.exceeded_max_steps).toBe(60);
+      expect(out).not.toHaveProperty('exceeded_max_movements');
+    });
+
+    it('Given tasks file state, When serializing for write, Then each task omits exceeded_max_movements', () => {
+      const state = TasksFileSchema.parse({ tasks: [makeExceededRecord()] });
+      const out = serializeTasksFileData(state);
+
+      expect(out.tasks).toHaveLength(1);
+      expect(out.tasks[0]?.exceeded_max_steps).toBe(60);
+      expect(out.tasks[0]).not.toHaveProperty('exceeded_max_movements');
     });
   });
 

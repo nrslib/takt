@@ -11,17 +11,20 @@ This document provides a complete reference for all TAKT CLI commands and option
 | `--pipeline` | Enable pipeline (non-interactive) mode -- required for CI/automation |
 | `-t, --task <text>` | Task content (alternative to GitHub Issue) |
 | `-i, --issue <N>` | GitHub issue number (same as `#N` in interactive mode) |
-| `-w, --piece <name or path>` | Piece name or path to piece YAML file |
+| `-w, --workflow <name or path>` | Workflow name or path to workflow YAML file |
+| `--piece <name or path>` | Deprecated alias for `--workflow` |
 | `-b, --branch <name>` | Specify branch name (auto-generated if omitted) |
 | `--pr <number>` | PR number to fetch review comments and fix |
 | `--auto-pr` | Create PR after execution (pipeline mode only) |
 | `--draft` | Create PR as draft (requires `--auto-pr` or `auto_pr` config) |
-| `--skip-git` | Skip branch creation, commit, and push (pipeline mode, piece-only) |
+| `--skip-git` | Skip branch creation, commit, and push (pipeline mode, workflow-only) |
 | `--repo <owner/repo>` | Specify repository (for PR creation) |
 | `-q, --quiet` | Minimal output mode: suppress AI output (for CI) |
 | `--provider <name>` | Override agent provider (claude\|codex\|opencode\|cursor\|copilot\|mock) |
 | `--model <name>` | Override agent model |
 | `--config <path>` | Path to global config file (default: `~/.takt/config.yaml`) |
+
+`--workflow` is the canonical option. `--piece` remains available only as a compatibility alias, and internal implementation names still use `piece` / `movement`.
 
 ## Interactive Mode
 
@@ -39,29 +42,29 @@ takt hello
 
 ### Flow
 
-1. Select piece
+1. Select workflow
 2. Select interactive mode (assistant / persona / quiet / passthrough)
 3. Refine task content through conversation with AI
 4. Finalize task instructions with `/go` (you can also add additional instructions like `/go additional instructions`), or use `/play <task>` to execute a task immediately
-5. Execute (run piece, create PR)
+5. Execute (run workflow, create PR)
 
 ### Interactive Mode Variants
 
 | Mode | Description |
 |------|-------------|
 | `assistant` | Default. AI asks clarifying questions before generating task instructions. |
-| `persona` | Conversation with the first movement's persona (uses its system prompt and tools). |
+| `persona` | Conversation with the first step's persona (uses its system prompt and tools). |
 | `quiet` | Generates task instructions without asking questions (best-effort). |
 | `passthrough` | Passes user input directly as task text without AI processing. |
 
-Pieces can set a default mode via the `interactive_mode` field in YAML.
+Workflows can set a default mode via the `interactive_mode` field in YAML.
 
 ### Execution Example
 
 ```
 $ takt
 
-Select piece:
+Select workflow:
   > default (current)
     Development/
     Research/
@@ -88,7 +91,7 @@ Requirements:
 
 Proceed with these task instructions? (Y/n) y
 
-[Piece execution starts...]
+[Workflow execution starts...]
 ```
 
 ## Direct Task Execution
@@ -99,8 +102,8 @@ Use the `--task` option to skip interactive mode and execute directly.
 # Specify task content with --task option
 takt --task "Fix bug"
 
-# Specify piece
-takt --task "Add authentication" --piece dual
+# Specify workflow
+takt --task "Add authentication" --workflow dual
 ```
 
 **Note:** Passing a string as an argument (e.g., `takt "Add login feature"`) enters interactive mode with it as the initial message.
@@ -114,8 +117,8 @@ You can execute GitHub Issues directly as tasks. Issue title, body, labels, and 
 takt #6
 takt --issue 6
 
-# Issue + piece specification
-takt #6 --piece dual
+# Issue + workflow specification
+takt #6 --workflow dual
 ```
 
 **Requirements:** [GitHub CLI](https://cli.github.com/) (`gh`) must be installed and authenticated.
@@ -180,7 +183,7 @@ In interactive mode, **Merge from root** merges the root repository HEAD into th
 
 ## Pipeline Mode
 
-Specifying `--pipeline` enables non-interactive pipeline mode. Automatically creates branch, runs piece, commits and pushes. Suitable for CI/CD automation.
+Specifying `--pipeline` enables non-interactive pipeline mode. Automatically creates branch, runs the workflow, commits and pushes. Suitable for CI/CD automation.
 
 ```bash
 # Execute task in pipeline mode
@@ -192,13 +195,13 @@ takt --pipeline --task "Fix bug" --auto-pr
 # Link issue information
 takt --pipeline --issue 99 --auto-pr
 
-# Specify piece and branch
+# Specify workflow and branch
 takt --pipeline --task "Fix bug" -w magi -b feat/fix-bug
 
 # Specify repository (for PR creation)
 takt --pipeline --task "Fix bug" --auto-pr --repo owner/repo
 
-# Piece execution only (skip branch creation, commit, push)
+# Workflow execution only (skip branch creation, commit, push)
 takt --pipeline --task "Fix bug" --skip-git
 
 # Minimal output mode (for CI)
@@ -211,20 +214,20 @@ In pipeline mode, PRs are not created unless `--auto-pr` is specified.
 
 ## Utility Commands
 
-### takt switch
+### Interactive workflow selection
 
-Interactively switch the active piece.
+Run `takt` without a task argument to choose a workflow interactively.
 
 ```bash
-takt switch
+takt
 ```
 
 ### takt eject
 
-Copy builtin pieces/personas to your local directory for customization.
+Copy builtin workflows/personas to your local directory for customization.
 
 ```bash
-# Copy builtin pieces/personas to project .takt/ for customization
+# Copy builtin workflows/personas to project .takt/ for customization
 takt eject
 
 # Copy to ~/.takt/ (global) instead
@@ -234,6 +237,8 @@ takt eject --global
 takt eject persona coder
 takt eject instruction plan --global
 ```
+
+Builtin and custom workflow lookup uses `workflows/` as the canonical directory name. Legacy `pieces/` directories are still supported for compatibility.
 
 ### takt clear
 
@@ -245,7 +250,7 @@ takt clear
 
 ### takt export-cc
 
-Deploy builtin pieces/personas as a Claude Code Skill.
+Deploy builtin workflows/personas as a Claude Code Skill.
 
 ```bash
 takt export-cc
@@ -254,7 +259,7 @@ takt export-cc
 ### takt export-codex
 
 Deploy TAKT skill files as a Codex Skill (`~/.agents/skills/takt/`).
-This command deploys `SKILL.md`, `references/`, `agents/`, `pieces/`, and `facets/`.
+This command deploys `SKILL.md`, `references/`, `agents/`, `pieces/`, and `facets/`. The deployed `pieces/` directory is a legacy/internal compatibility path.
 
 ```bash
 takt export-codex
@@ -271,10 +276,10 @@ takt catalog personas
 
 ### takt prompt
 
-Preview assembled prompts for each movement and phase.
+Preview assembled prompts for each step and phase.
 
 ```bash
-takt prompt [piece]
+takt prompt [workflow]
 ```
 
 ### takt reset
@@ -285,7 +290,7 @@ Reset settings to defaults.
 # Reset global config to builtin template (with backup)
 takt reset config
 
-# Reset piece categories to builtin defaults
+# Reset workflow categories to builtin defaults
 takt reset categories
 ```
 
@@ -319,7 +324,9 @@ takt repertoire list
 takt repertoire remove @{owner}/{repo}
 ```
 
-Installed packages are stored in `~/.takt/repertoire/` and their pieces/facets become available in piece selection and facet resolution.
+Installed packages are stored in `~/.takt/repertoire/` and their workflows/facets become available in workflow selection and facet resolution.
+
+When the same workflow name exists in multiple locations, TAKT resolves in this order: `.takt/workflows/` → `.takt/pieces/` → `~/.takt/workflows/` → `~/.takt/pieces/` → builtins.
 
 ### takt purge
 

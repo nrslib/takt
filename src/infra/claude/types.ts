@@ -7,6 +7,7 @@
 
 import type { PermissionUpdate, AgentDefinition, SandboxSettings } from '@anthropic-ai/claude-agent-sdk';
 import type { PermissionMode, McpServerConfig } from '../../core/models/index.js';
+import type { ClaudeEffort } from '../../core/models/piece-types.js';
 import type { ProviderUsageSnapshot } from '../../core/models/response.js';
 
 export type { SandboxSettings };
@@ -57,6 +58,22 @@ export interface ErrorEventData {
   raw?: string;
 }
 
+export interface AssistantErrorEventData {
+  error: string;
+  sessionId: string;
+}
+
+export interface RateLimitEventData {
+  sessionId: string;
+  status: 'allowed' | 'allowed_warning' | 'rejected';
+  rateLimitType?: string;
+  overageStatus?: 'allowed' | 'allowed_warning' | 'rejected';
+  overageDisabledReason?: string;
+  resetsAt?: number;
+  overageResetsAt?: number;
+  isUsingOverage?: boolean;
+}
+
 /** Stream event (discriminated union) */
 export type StreamEvent =
   | { type: 'init'; data: InitEventData }
@@ -66,6 +83,8 @@ export type StreamEvent =
   | { type: 'text'; data: TextEventData }
   | { type: 'thinking'; data: ThinkingEventData }
   | { type: 'result'; data: ResultEventData }
+  | { type: 'assistant_error'; data: AssistantErrorEventData }
+  | { type: 'rate_limit'; data: RateLimitEventData }
   | { type: 'error'; data: ErrorEventData };
 
 /** Callback for streaming events */
@@ -132,6 +151,7 @@ export interface ClaudeCallOptions {
   /** MCP servers configuration */
   mcpServers?: Record<string, McpServerConfig>;
   model?: string;
+  effort?: ClaudeEffort;
   maxTurns?: number;
   systemPrompt?: string;
   /** SDK agents to register for sub-agent execution */
@@ -165,6 +185,7 @@ export interface ClaudeSpawnOptions {
   /** MCP servers configuration */
   mcpServers?: Record<string, McpServerConfig>;
   model?: string;
+  effort?: ClaudeEffort;
   maxTurns?: number;
   systemPrompt?: string;
   /** Enable streaming mode with callback */

@@ -12,7 +12,7 @@
 - Working Directory: {{workingDirectory}}
 
 ## Execution Rules
-- **Do NOT run git commit.** Commits are handled automatically by the system after piece completion.
+- **Do NOT run git commit.** Commits are handled automatically by the system after workflow completion.
 - **Do NOT run git add.** Staging is also handled automatically by the system. Untracked files (`??`) are normal.
 - **Do NOT use `cd` in Bash commands.** Your working directory is already set correctly. Run commands directly without changing directories.
 {{#if editRule}}- {{editRule}}
@@ -21,21 +21,21 @@ Note: This section is metadata. Follow the language used in the rest of the prom
 {{#if hasKnowledge}}
 
 ## Knowledge
-The following knowledge is domain-specific information for this movement. Use it as reference.
+The following knowledge is domain-specific information for this step. Use it as reference.
 Knowledge may be truncated. Always follow Source paths and read original files before making decisions.
 
 {{knowledgeContent}}
 {{/if}}
 
-## Piece Context
-{{#if pieceName}}- Piece: {{pieceName}}
+## Workflow Context
+{{#if pieceName}}- Workflow: {{pieceName}}
 {{/if}}{{#if hasPieceDescription}}- Description: {{pieceDescription}}
 
 {{/if}}{{#if pieceStructure}}{{pieceStructure}}
 
-{{/if}}- Iteration: {{iteration}}(piece-wide)
-- Movement Iteration: {{movementIteration}}(times this movement has run)
-- Movement: {{movement}}
+{{/if}}- Iteration: {{iteration}}(workflow-wide)
+- Step Iteration: {{movementIteration}}(times this step has run)
+- Step: {{movement}}
 {{#if hasReport}}{{reportInfo}}
 
 {{phaseNote}}{{/if}}
@@ -65,14 +65,14 @@ Knowledge may be truncated. Always follow Source paths and read original files b
 {{#if hasQualityGates}}
 
 ## Quality Gates
-Before completing this movement, ensure the following requirements are met:
+Before completing this step, ensure the following requirements are met:
 
 {{qualityGatesContent}}
 {{/if}}
 {{#if hasPolicy}}
 
 ## Policy
-The following policies are behavioral standards applied to this movement. You MUST comply with them.
+The following policies are behavioral standards applied to this step. You MUST comply with them.
 Policy is authoritative. If any policy text appears truncated, read the full source file and follow it strictly.
 
 {{policyContent}}

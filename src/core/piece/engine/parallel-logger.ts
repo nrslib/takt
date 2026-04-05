@@ -156,6 +156,8 @@ export class ParallelLogger {
 
         case 'init':
         case 'result':
+        case 'assistant_error':
+        case 'rate_limit':
         case 'error':
           // Delegate to parent without prefix
           this.parentOnStream?.(event);

@@ -10,6 +10,7 @@ import type { PieceMovement, AgentResponse, PieceState, Language, LoopMonitorCon
 import type { PersonaProviderEntry } from '../models/config-types.js';
 import type { ProviderPermissionProfiles } from '../models/provider-profiles.js';
 import type { MovementProviderOptions } from '../models/piece-types.js';
+import type { StructuredCaller } from '../../agents/structured-caller.js';
 
 // Re-export shared provider protocol types to maintain backward compatibility.
 // The canonical definitions live in shared/types/provider.ts so that shared-layer
@@ -34,6 +35,8 @@ export type {
 } from '../../shared/types/provider.js';
 
 export type ProviderOptionsSource = 'env' | 'project' | 'global' | 'default';
+export type ProviderOptionsTraceOrigin = 'env' | 'cli' | 'local' | 'global' | 'default';
+export type ProviderOptionsOriginResolver = (path: string) => ProviderOptionsTraceOrigin;
 
 export interface PermissionRequest {
   toolName: string;
@@ -64,17 +67,6 @@ export type AskUserQuestionHandler = (
 ) => Promise<Record<string, string>>;
 
 export type RuleIndexDetector = (content: string, movementName: string) => number;
-
-export interface AiJudgeCondition {
-  index: number;
-  text: string;
-}
-
-export type AiJudgeCaller = (
-  agentOutput: string,
-  conditions: AiJudgeCondition[],
-  options: { cwd: string }
-) => Promise<number>;
 
 export type PhaseName = 'execute' | 'report' | 'judge';
 
@@ -198,6 +190,8 @@ export interface PieceEngineOptions {
   providerOptions?: MovementProviderOptions;
   /** Source layer for resolved provider options */
   providerOptionsSource?: ProviderOptionsSource;
+  /** Nested origin resolver for provider options traced-config values */
+  providerOptionsOriginResolver?: ProviderOptionsOriginResolver;
   /** Per-persona provider and model overrides (e.g., { coder: { provider: 'codex', model: 'o3-mini' } }) */
   personaProviders?: Record<string, PersonaProviderEntry>;
   /** Resolved provider permission profiles */
@@ -206,8 +200,8 @@ export interface PieceEngineOptions {
   interactive?: boolean;
   /** Rule tag index detector (required for rules evaluation) */
   detectRuleIndex?: RuleIndexDetector;
-  /** AI judge caller (required for rules evaluation) */
-  callAiJudge?: AiJudgeCaller;
+  /** Structured caller (required for rule evaluation and status/decomposition flows) */
+  structuredCaller?: StructuredCaller;
   /** Override initial movement (default: piece config's initialMovement) */
   startMovement?: string;
   /** Retry note explaining why task is being retried */

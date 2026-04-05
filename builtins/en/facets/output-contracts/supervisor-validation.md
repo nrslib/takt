@@ -19,6 +19,14 @@ Extract requirements from the task spec and verify each one individually against
 - Do not mark a row as ✅ when the evidence covers only part of the cases
 - Do not rely on plan report's judgment; independently verify each requirement
 
+## Re-evaluation of Prior Findings
+| finding_id | Prior Status | Re-evaluation | Evidence |
+|------------|--------------|---------------|----------|
+| {id} | new / persists / resolved | valid / false_positive / overreach | `src/file.ts:42`, `reports/plan.md` |
+
+- If final judgment differs from prior review conclusions, explain why with evidence
+- If marking `false_positive` or `overreach`, state whether it conflicts with the task objective, the plan, or both
+
 ## Validation Summary
 | Item | Status | Verification Method |
 |------|--------|-------------------|

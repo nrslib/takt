@@ -1,0 +1,92 @@
+name: audit-e2e
+description: Comprehensive E2E audit. Enumerate user flows and coverage gaps, then produce an issue-ready report without modifying code
+workflow_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+max_steps: 12
+initial_step: plan
+
+loop_monitors:
+  - cycle: [supervise, review]
+    threshold: 4
+    judge:
+      persona: supervisor
+      instruction: |
+        The supervise → review cycle for the E2E audit has repeated {cycle_count} times.
+        Judge the overall completeness and quality of the audit, and decide whether the current results are acceptable.
+      rules:
+        - condition: Quality is sufficient
+          next: COMPLETE
+        - condition: Quality is insufficient with no prospect of improvement
+          next: ABORT
+
+steps:
+  - name: plan
+    persona: test-planner
+    policy: testing
+    knowledge:
+      - architecture
+      - e2e-testing
+    instruction: e2e-audit-plan
+    edit: false
+    output_contracts:
+      report:
+        - name: 01-e2e-audit-plan.md
+          format: e2e-audit-plan
+    rules:
+      - condition: Audit plan complete
+        next: audit
+      - condition: Requirements unclear or insufficient information
+        next: ABORT
+
+  - name: audit
+    edit: false
+    persona: testing-reviewer
+    policy:
+      - review
+      - testing
+    knowledge:
+      - architecture
+      - e2e-testing
+    instruction: e2e-audit-team-leader
+    team_leader:
+      max_parts: 3
+      part_persona: testing-reviewer
+      part_edit: false
+    output_contracts:
+      report:
+        - name: 02-e2e-audit.md
+          format: e2e-audit
+    rules:
+      - condition: Audit complete
+        next: supervise
+
+  - name: supervise
+    edit: false
+    persona: supervisor
+    policy: review
+    knowledge:
+      - e2e-testing
+    instruction: e2e-audit-supervise
+    pass_previous_response: false
+    rules:
+      - condition: Audit is complete and issue-ready
+        next: COMPLETE
+      - condition: Flow audit is incomplete or evidence is insufficient
+        next: review
+
+  - name: review
+    edit: false
+    persona: testing-reviewer
+    policy:
+      - review
+      - testing
+    knowledge:
+      - e2e-testing
+    instruction: e2e-audit-review
+    rules:
+      - condition: Re-audit complete
+        next: supervise

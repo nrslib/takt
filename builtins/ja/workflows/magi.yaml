@@ -1,0 +1,127 @@
+name: magi
+description: MAGI合議システム - 3つの観点から分析し多数決で判定
+workflow_config:
+  provider_options:
+    claude:
+      allowed_tools:
+        - Read
+        - Glob
+        - Grep
+        - WebSearch
+        - WebFetch
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+max_steps: 5
+initial_step: melchior
+steps:
+  - name: melchior
+    persona: melchior
+    instruction: |
+      # MAGI System 起動
+
+      ## 審議事項
+      {task}
+
+      ## 指示
+      あなたはMAGI System の MELCHIOR-1 です。
+      科学者・技術者の観点から上記を分析し、判定を下してください。
+
+      ## 出力フォーマット
+
+      | 判定 | タグ |
+      |------|------|
+      | 賛成 | `[MELCHIOR:APPROVE]` |
+      | 反対 | `[MELCHIOR:REJECT]` |
+      | 条件付き賛成 | `[MELCHIOR:CONDITIONAL]` |
+
+      ### 出力例
+
+      ```
+      [MELCHIOR:APPROVE]
+
+      理由: {賛成の理由}
+      ```
+    rules:
+      - condition: 判定を完了した
+        next: balthasar
+  - name: balthasar
+    persona: balthasar
+    instruction: |
+      # MAGI System 継続
+
+      ## 審議事項
+      {task}
+
+      ## MELCHIOR-1 の判定
+      {previous_response}
+
+      ## 指示
+      あなたはMAGI System の BALTHASAR-2 です。
+      育成者の観点から上記を分析し、判定を下してください。
+      MELCHIORの判定は参考にしつつも、独自の観点で判断してください。
+
+      ## 出力フォーマット
+
+      | 判定 | タグ |
+      |------|------|
+      | 賛成 | `[BALTHASAR:APPROVE]` |
+      | 反対 | `[BALTHASAR:REJECT]` |
+      | 条件付き賛成 | `[BALTHASAR:CONDITIONAL]` |
+
+      ### 出力例
+
+      ```
+      [BALTHASAR:APPROVE]
+
+      理由: {賛成の理由}
+      ```
+    rules:
+      - condition: 判定を完了した
+        next: casper
+  - name: casper
+    persona: casper
+    instruction: |
+      # MAGI System 最終審議
+
+      ## 審議事項
+      {task}
+
+      ## これまでの判定
+      {previous_response}
+
+      ## 指示
+      あなたはMAGI System の CASPER-3 です。
+      実務・現実の観点から上記を分析し、判定を下してください。
+
+      **最後に、3者の判定を集計し、最終結論を出してください。**
+
+      ## 出力フォーマット
+
+      最終結論は3者の多数決で判定:
+
+      | 判定 | タグ |
+      |------|------|
+      | 承認（2票以上賛成） | `[MAGI:APPROVE]` |
+      | 却下（2票以上反対） | `[MAGI:REJECT]` |
+      | 条件付き承認 | `[MAGI:CONDITIONAL]` |
+
+      ### 出力例
+
+      ```
+      ## MAGI System 最終判定
+
+      | システム | 判定 |
+      |----------|------|
+      | MELCHIOR-1 | APPROVE |
+      | BALTHASAR-2 | CONDITIONAL |
+      | CASPER-3 | APPROVE |
+
+      **結論: [MAGI:APPROVE]**
+
+      [理由・まとめ]
+      ```
+    rules:
+      - condition: 最終判定を完了した
+        next: COMPLETE

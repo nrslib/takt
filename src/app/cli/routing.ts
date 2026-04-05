@@ -24,9 +24,10 @@ import { resolvePersonaSessionId } from '../../infra/config/project/sessionStore
 import { resolveAssistantProviderModelFromConfig } from '../../core/config/provider-resolution.js';
 import { resolveAssistantConfigLayers } from '../../features/interactive/assistantConfig.js';
 import { program, resolvedCwd, pipelineMode } from './program.js';
-import { resolveAgentOverrides } from './helpers.js';
+import { resolveAgentOverrides, resolveWorkflowCliOption } from './helpers.js';
 import { loadTaskHistory } from './taskHistory.js';
 import { resolveIssueInput, resolvePrInput } from './routing-inputs.js';
+
 export async function executeDefaultAction(task?: string): Promise<void> {
   const opts = program.opts();
   if (!pipelineMode && (opts.autoPr === true || opts.draft === true)) {
@@ -46,9 +47,16 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     process.exit(1);
   }
   const agentOverrides = resolveAgentOverrides(program);
-  const resolvedPipelinePiece = opts.piece as string | undefined;
+  let resolvedWorkflow: string | undefined;
+  try {
+    resolvedWorkflow = resolveWorkflowCliOption(opts as Record<string, unknown>);
+  } catch (error) {
+    logError(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+  const resolvedPipelinePiece = resolvedWorkflow;
   if (pipelineMode && resolvedPipelinePiece === undefined) {
-    logError('--piece (-w) is required in pipeline mode');
+    logError('--workflow (-w, alias: --piece) is required in pipeline mode');
     process.exit(1);
   }
   const resolvedPipelineAutoPr = opts.autoPr === true
@@ -58,7 +66,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     ? true
     : (resolveConfigValue(resolvedCwd, 'draftPr') ?? false);
   const selectOptions: SelectAndExecuteOptions = {
-    piece: opts.piece as string | undefined,
+    piece: resolvedWorkflow,
   };
 
   if (pipelineMode) {

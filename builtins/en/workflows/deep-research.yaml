@@ -1,0 +1,104 @@
+name: deep-research
+description: Deep research workflow - discovery-driven investigation that follows emerging questions with multi-perspective analysis
+workflow_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+max_steps: 15
+initial_step: plan
+steps:
+  - name: plan
+    persona: research-planner
+    policy: research
+    knowledge: research
+    instruction: research-plan
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - WebSearch
+          - WebFetch
+    rules:
+      - condition: Planning is complete
+        next: dig
+      - condition: Insufficient information to create a plan
+        next: ABORT
+  - name: dig
+    persona: research-digger
+    policy: research
+    knowledge: research
+    instruction: research-dig
+    edit: true
+    team_leader:
+      max_parts: 3
+      part_persona: research-digger
+      part_edit: true
+      part_allowed_tools:
+        - Read
+        - Write
+        - Bash
+        - Glob
+        - Grep
+        - WebSearch
+        - WebFetch
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Write
+          - Bash
+          - Glob
+          - Grep
+          - WebSearch
+          - WebFetch
+    rules:
+      - condition: Research is complete
+        next: analyze
+      - condition: Unable to conduct research
+        next: ABORT
+  - name: analyze
+    persona: research-analyzer
+    policy: research
+    knowledge: research
+    instruction: research-analyze
+    edit: true
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Write
+          - Glob
+          - Grep
+          - WebSearch
+          - WebFetch
+    rules:
+      - condition: New questions exist and additional research is needed
+        next: dig
+      - condition: Sufficiently investigated
+        next: supervise
+  - name: supervise
+    persona: research-supervisor
+    policy: research
+    knowledge: research
+    instruction: research-supervise
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - WebSearch
+          - WebFetch
+    output_contracts:
+      report:
+        - name: research-report.md
+          format: research-report
+    rules:
+      - condition: Research results adequately answer the original request
+        next: COMPLETE
+      - condition: Research results are insufficient and replanning is needed
+        next: plan

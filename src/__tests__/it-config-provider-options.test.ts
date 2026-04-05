@@ -8,14 +8,6 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../agents/ai-judge.js', async (importOriginal) => {
-  const original = await importOriginal<typeof import('../agents/ai-judge.js')>();
-  return {
-    ...original,
-    callAiJudge: vi.fn().mockResolvedValue(-1),
-  };
-});
-
 vi.mock('../core/piece/phase-runner.js', () => ({
   needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
@@ -59,6 +51,12 @@ function createEnv(): TestEnv {
       '  - name: plan',
       '    persona: ./personas/planner.md',
       '    instruction: "{task}"',
+      '    provider_options:',
+      '      codex:',
+      '        network_access: true',
+      '      claude:',
+      '        sandbox:',
+      '          allow_unsandboxed_commands: false',
       '    rules:',
       '      - condition: done',
       '        next: COMPLETE',
@@ -146,8 +144,11 @@ describe('IT: config provider_options reflection', () => {
 
     expect(ok).toBe(true);
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
-    expect(options?.providerOptions).toEqual({
+    expect(options?.providerOptions).toMatchObject({
       codex: { networkAccess: true },
+      claude: {
+        sandbox: { allowUnsandboxedCommands: false },
+      },
     });
   });
 
@@ -156,7 +157,7 @@ describe('IT: config provider_options reflection', () => {
       env.globalDir,
       [
         'provider_options:',
-        '  codex:',
+        '  opencode:',
         '    network_access: true',
       ].join('\n'),
     );
@@ -164,7 +165,7 @@ describe('IT: config provider_options reflection', () => {
       env.projectDir,
       [
         'provider_options:',
-        '  codex:',
+        '  opencode:',
         '    network_access: false',
       ].join('\n'),
     );
@@ -178,8 +179,11 @@ describe('IT: config provider_options reflection', () => {
 
     expect(ok).toBe(true);
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
-    expect(options?.providerOptions).toEqual({
-      codex: { networkAccess: false },
+    expect(options?.providerOptions).toMatchObject({
+      opencode: { networkAccess: false },
+      claude: {
+        sandbox: { allowUnsandboxedCommands: false },
+      },
     });
   });
 
@@ -204,8 +208,43 @@ describe('IT: config provider_options reflection', () => {
 
     expect(ok).toBe(true);
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
-    expect(options?.providerOptions).toEqual({
+    expect(options?.providerOptions).toMatchObject({
       codex: { networkAccess: false },
+      claude: {
+        sandbox: { allowUnsandboxedCommands: false },
+      },
+    });
+  });
+
+  it('should preserve provider options origin precedence through executeTask to PieceEngine', async () => {
+    setGlobalConfig(
+      env.globalDir,
+      [
+        'provider_options:',
+        '  codex:',
+        '    network_access: false',
+        '  claude:',
+        '    sandbox:',
+        '      allow_unsandboxed_commands: true',
+      ].join('\n'),
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS = 'true';
+    invalidateGlobalConfigCache();
+
+    const ok = await executeTask({
+      task: 'test task',
+      cwd: env.projectDir,
+      projectCwd: env.projectDir,
+      pieceIdentifier: 'config-it',
+    });
+
+    expect(ok).toBe(true);
+    const options = vi.mocked(runAgent).mock.calls[0]?.[2];
+    expect(options?.providerOptions).toMatchObject({
+      codex: { networkAccess: true },
+      claude: {
+        sandbox: { allowUnsandboxedCommands: false },
+      },
     });
   });
 });

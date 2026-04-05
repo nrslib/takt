@@ -7,6 +7,7 @@ import { executeTask, confirmAndCreateWorktree, type TaskExecutionOptions, type 
 import { info, error, success } from '../../shared/ui/index.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
 import type { PipelineConfig } from '../../core/models/index.js';
+import { sanitizeTerminalText } from '../../shared/utils/text.js';
 
 export interface TaskContent {
   task: string;
@@ -126,7 +127,7 @@ export function resolveTaskContent(options: PipelineExecutionOptions): TaskConte
     );
     if (!prReview) return undefined;
     const task = formatPrReviewAsTask(prReview);
-    success(`PR #${options.prNumber} fetched: "${prReview.title}"`);
+    success(`PR #${options.prNumber} fetched: "${sanitizeTerminalText(prReview.title)}"`);
     return {
       task,
       prBranch: prReview.headRefName,
@@ -142,7 +143,7 @@ export function resolveTaskContent(options: PipelineExecutionOptions): TaskConte
     );
     if (!issue) return undefined;
     const task = formatIssueAsTask(issue);
-    success(`Issue #${options.issueNumber} fetched: "${issue.title}"`);
+    success(`Issue #${options.issueNumber} fetched: "${sanitizeTerminalText(issue.title)}"`);
     return { task, issue };
   }
   if (options.task) {
@@ -165,7 +166,7 @@ export async function resolveExecutionContext(
     const branch = requireBranch(result.branch, 'worktree execution');
     const baseBranch = requireBaseBranch(result.baseBranch, 'worktree execution');
     if (result.isWorktree) {
-      success(`Worktree created: ${result.execCwd}`);
+      success(`Worktree created: ${sanitizeTerminalText(result.execCwd)}`);
     }
     return {
       execCwd: result.execCwd,
@@ -183,9 +184,10 @@ export async function resolveExecutionContext(
     };
   }
   if (prBranch) {
-    info(`Fetching and checking out PR branch: ${prBranch}`);
+    const safePrBranch = sanitizeTerminalText(prBranch);
+    info(`Fetching and checking out PR branch: ${safePrBranch}`);
     checkoutBranch(cwd, prBranch);
-    success(`Checked out PR branch: ${prBranch}`);
+    success(`Checked out PR branch: ${safePrBranch}`);
     const baseBranch = resolveExecutionBaseBranch(cwd, prBaseBranch);
     return {
       execCwd: cwd,
@@ -196,9 +198,10 @@ export async function resolveExecutionContext(
   }
   const baseBranch = resolveExecutionBaseBranch(cwd);
   const branch = options.branch ?? generatePipelineBranchName(pipelineConfig, options.issueNumber);
-  info(`Creating branch: ${branch}`);
+  const safeBranch = sanitizeTerminalText(branch);
+  info(`Creating branch: ${safeBranch}`);
   execFileSync('git', ['checkout', '-b', branch], { cwd, stdio: 'pipe' });
-  success(`Branch created: ${branch}`);
+  success(`Branch created: ${safeBranch}`);
   return { execCwd: cwd, branch, baseBranch, isWorktree: false };
 }
 
@@ -209,7 +212,8 @@ export async function runPiece(
   execCwd: string,
   options: Pick<PipelineExecutionOptions, 'provider' | 'model'>,
 ): Promise<boolean> {
-  info(`Running piece: ${piece}`);
+  const safePiece = sanitizeTerminalText(piece);
+  info(`Running workflow: ${safePiece}`);
   const agentOverrides: TaskExecutionOptions | undefined = (options.provider || options.model)
     ? { provider: options.provider, model: options.model }
     : undefined;
@@ -223,10 +227,10 @@ export async function runPiece(
   });
 
   if (!taskSuccess) {
-    error(`Piece '${piece}' failed`);
+    error(`Workflow '${safePiece}' failed`);
     return false;
   }
-  success(`Piece '${piece}' completed`);
+  success(`Workflow '${safePiece}' completed`);
   return true;
 }
 
@@ -237,6 +241,7 @@ export function commitAndPush(
   commitMessage: string,
   isWorktree: boolean,
 ): boolean {
+  const safeBranch = sanitizeTerminalText(branch);
   info('Committing changes...');
   try {
     const commitHash = stageAndCommit(execCwd, commitMessage, {
@@ -253,9 +258,9 @@ export function commitAndPush(
       execFileSync('git', ['push', projectCwd, 'HEAD'], { cwd: execCwd, stdio: 'pipe' });
     }
 
-    info(`Pushing to origin/${branch}...`);
+    info(`Pushing to origin/${safeBranch}...`);
     pushBranch(projectCwd, branch);
-    success(`Pushed to origin/${branch}`);
+    success(`Pushed to origin/${safeBranch}`);
     return true;
   } catch (err) {
     error(`Git operation failed: ${getErrorMessage(err)}`);
@@ -275,7 +280,7 @@ export function submitPullRequest(
   info('Creating pull request...');
   const resolvedBaseBranch = requireBaseBranch(baseBranch, 'pull request creation');
   const prTitle = taskContent.issue ? `[#${taskContent.issue.number}] ${taskContent.issue.title}` : (options.task ?? 'Pipeline task');
-  const report = `Piece \`${piece}\` completed successfully.`;
+  const report = `Workflow \`${piece}\` completed successfully.`;
   const prBody = buildPipelinePrBody(pipelineConfig, taskContent.issue, report);
 
   const prResult: CreatePrResult = createPullRequestSafely(getGitProvider(), {

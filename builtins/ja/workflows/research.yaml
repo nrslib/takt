@@ -1,0 +1,48 @@
+name: research
+description: 調査ワークフロー - 質問せずに自律的に調査を実行
+workflow_config:
+  provider_options:
+    claude:
+      allowed_tools:
+        - Read
+        - Glob
+        - Grep
+        - WebSearch
+        - WebFetch
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+max_steps: 10
+initial_step: plan
+steps:
+  - name: plan
+    persona: research-planner
+    policy: research
+    knowledge: research
+    instruction: research-plan
+    rules:
+      - condition: 計画が完了した
+        next: dig
+      - condition: 情報が不足しており計画を立てられない
+        next: ABORT
+  - name: dig
+    persona: research-digger
+    policy: research
+    knowledge: research
+    instruction: research-dig
+    rules:
+      - condition: 調査が完了した
+        next: supervise
+      - condition: 調査を実行できない
+        next: ABORT
+  - name: supervise
+    persona: research-supervisor
+    policy: research
+    knowledge: research
+    instruction: research-supervise
+    rules:
+      - condition: 調査結果が元の依頼に対して十分である
+        next: COMPLETE
+      - condition: 調査結果が不十分であり、計画からやり直す必要がある
+        next: plan

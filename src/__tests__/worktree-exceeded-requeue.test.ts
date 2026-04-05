@@ -1,20 +1,3 @@
-/**
- * Integration tests for worktree exceeded → requeue → re-execution flow.
- *
- * Scenarios:
- * 1. Worktree task reaches iteration limit → transitions to 'exceeded' status
- * 2. Exceeded task stores start_movement / exceeded_max_movements / exceeded_current_iteration
- * 3. After requeue, re-execution passes maxMovementsOverride and initialIterationOverride
- * 4. After requeue, re-execution starts from start_movement (re-entry point)
- *
- * Integration boundary:
- *   TaskRunner (real file I/O) →
- *   executeAndCompleteTask →
- *     resolveTaskExecution →
- *     executeTaskWithResult →
- *     executePiece (mocked, args captured)
- */
-
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, existsSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -22,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 
-// --- Mock setup (must be before imports that use these modules) ---
+// --- Mock setup ---
 
 vi.mock('../infra/config/index.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../infra/config/index.js')>();
@@ -31,10 +14,18 @@ vi.mock('../infra/config/index.js', async (importOriginal) => {
     loadPieceByIdentifier: vi.fn(),
     isPiecePath: vi.fn().mockReturnValue(false),
     resolvePieceConfigValues: vi.fn().mockReturnValue({}),
-    resolveConfigValueWithSource: vi.fn().mockReturnValue({ value: undefined, source: 'global' }),
     resolvePieceConfigValue: vi.fn().mockReturnValue(undefined),
   };
 });
+
+vi.mock('../infra/config/resolveConfigValue.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  resolveProviderOptionsWithTrace: vi.fn().mockReturnValue({
+    value: undefined,
+    source: 'global',
+    originResolver: () => 'default',
+  }),
+}));
 
 vi.mock('../features/tasks/execute/pieceExecution.js', () => ({
   executePiece: vi.fn(),
@@ -68,12 +59,12 @@ vi.mock('../shared/ui/index.js', async (importOriginal) => ({
   ),
 }));
 
-// --- Imports (after mocks) ---
+// --- Imports ---
 
 import { executePiece } from '../features/tasks/execute/pieceExecution.js';
 import { postExecutionFlow } from '../features/tasks/execute/postExecution.js';
 import { loadPieceByIdentifier } from '../infra/config/index.js';
-import { detectDefaultBranch } from '../infra/task/index.js';
+import { createSharedClone, detectDefaultBranch, summarizeTaskName } from '../infra/task/index.js';
 import { withProgress } from '../shared/ui/index.js';
 import { executeAndCompleteTask } from '../features/tasks/execute/taskExecution.js';
 import { TaskRunner } from '../infra/task/runner.js';
@@ -99,13 +90,13 @@ function writeExceededRecord(testDir: string, overrides: Record<string, unknown>
     name: 'task-a',
     status: 'exceeded',
     content: 'Do work',
-    piece: 'test-piece',
+    workflow: 'test-piece',
     created_at: '2026-02-09T00:00:00.000Z',
     started_at: '2026-02-09T00:01:00.000Z',
     completed_at: '2026-02-09T00:05:00.000Z',
     owner_pid: null,
-    start_movement: 'implement',
-    exceeded_max_movements: 60,
+    start_step: 'implement',
+    exceeded_max_steps: 60,
     exceeded_current_iteration: 30,
     ...overrides,
   };
@@ -135,8 +126,6 @@ function buildTestPieceConfig(): PieceConfig {
 }
 
 function applyDefaultMocks(): void {
-  // Re-apply mocks that are not set by the vi.mock factory
-  // (vi.clearAllMocks preserves factory implementations, but these are set per-suite)
   vi.mocked(loadPieceByIdentifier).mockReturnValue(buildTestPieceConfig());
   vi.mocked(detectDefaultBranch).mockReturnValue('main');
   vi.mocked(postExecutionFlow).mockResolvedValue({ prUrl: undefined, prFailed: false });
@@ -152,7 +141,6 @@ describe('シナリオ1・2: exceeded status transition via executeAndCompleteTa
   let runner: TaskRunner;
 
   beforeEach(() => {
-    // clearAllMocks clears call history but preserves factory implementations
     vi.clearAllMocks();
     applyDefaultMocks();
     testDir = createTestDir();
@@ -166,12 +154,10 @@ describe('シナリオ1・2: exceeded status transition via executeAndCompleteTa
   });
 
   it('scenario 1: task transitions to exceeded status when executePiece returns exceeded result', async () => {
-    // Given: a pending task
     runner.addTask('Do work', { piece: 'test-piece' });
     const [task] = runner.claimNextTasks(1);
     if (!task) throw new Error('No task claimed');
 
-    // executePiece simulates hitting iteration limit
     vi.mocked(executePiece).mockResolvedValueOnce({
       success: false,
       exceeded: true,
@@ -182,13 +168,10 @@ describe('シナリオ1・2: exceeded status transition via executeAndCompleteTa
       },
     });
 
-    // When: executeAndCompleteTask processes the exceeded result
     const result = await executeAndCompleteTask(task, runner, testDir);
 
-    // Then: returns false (task did not succeed)
     expect(result).toBe(false);
 
-    // Then: task is now in exceeded status
     const exceededTasks = runner.listExceededTasks();
     expect(exceededTasks).toHaveLength(1);
     expect(exceededTasks[0]?.kind).toBe('exceeded');
@@ -196,12 +179,10 @@ describe('シナリオ1・2: exceeded status transition via executeAndCompleteTa
   });
 
   it('scenario 2: exceeded metadata is recorded in tasks.yaml for resumption', async () => {
-    // Given: a pending task
     runner.addTask('Do work', { piece: 'test-piece' });
     const [task] = runner.claimNextTasks(1);
     if (!task) throw new Error('No task claimed');
 
-    // executePiece simulates hitting limit at 'implement' movement, producing 30/60 iterations
     vi.mocked(executePiece).mockResolvedValueOnce({
       success: false,
       exceeded: true,
@@ -212,16 +193,46 @@ describe('シナリオ1・2: exceeded status transition via executeAndCompleteTa
       },
     });
 
-    // When: executeAndCompleteTask records the exceeded result
     await executeAndCompleteTask(task, runner, testDir);
 
-    // Then: YAML contains the three resumption fields
     const file = loadTasksFile(testDir);
     const exceededRecord = file.tasks[0];
     expect(exceededRecord?.status).toBe('exceeded');
-    expect(exceededRecord?.start_movement).toBe('implement');
-    expect(exceededRecord?.exceeded_max_movements).toBe(60);
+    expect(exceededRecord?.start_step).toBe('implement');
+    expect(exceededRecord?.exceeded_max_steps).toBe(60);
     expect(exceededRecord?.exceeded_current_iteration).toBe(30);
+  });
+
+  it('scenario 5: first exceed on worktree task persists worktree_path and branch in tasks.yaml', async () => {
+    const cloneDir = join(testDir, '.takt', 'worktrees', `first-exceed-${randomUUID()}`);
+    mkdirSync(cloneDir, { recursive: true });
+    vi.mocked(summarizeTaskName).mockResolvedValueOnce('slug-562');
+    vi.mocked(createSharedClone).mockResolvedValueOnce({
+      path: cloneDir,
+      branch: 'takt/slug-562',
+    });
+
+    runner.addTask('Do work', { piece: 'test-piece', worktree: true });
+    const [task] = runner.claimNextTasks(1);
+    if (!task) throw new Error('No task claimed');
+
+    vi.mocked(executePiece).mockResolvedValueOnce({
+      success: false,
+      exceeded: true,
+      exceededInfo: {
+        currentMovement: 'implement',
+        newMaxMovements: 60,
+        currentIteration: 30,
+      },
+    });
+
+    await executeAndCompleteTask(task, runner, testDir);
+
+    const file = loadTasksFile(testDir);
+    const rec = file.tasks[0];
+    expect(rec?.status).toBe('exceeded');
+    expect(rec?.worktree_path).toBe(cloneDir);
+    expect(rec?.branch).toBe('takt/slug-562');
   });
 });
 
@@ -231,11 +242,9 @@ describe('シナリオ3・4: requeue → re-execution passes exceeded metadata t
   let runner: TaskRunner;
 
   beforeEach(() => {
-    // clearAllMocks clears call history but preserves factory implementations
     vi.clearAllMocks();
     applyDefaultMocks();
     testDir = createTestDir();
-    // cloneDir simulates a pre-existing worktree clone inside the managed worktree directory
     cloneDir = join(testDir, '.takt', 'worktrees', `existing-${randomUUID()}`);
     mkdirSync(cloneDir, { recursive: true });
     runner = new TaskRunner(testDir);
@@ -250,7 +259,6 @@ describe('シナリオ3・4: requeue → re-execution passes exceeded metadata t
   });
 
   it('scenario 3: maxMovementsOverride and initialIterationOverride are passed to executePiece after requeue', async () => {
-    // Given: an exceeded worktree task with pre-existing clone on disk
     writeExceededRecord(testDir, {
       worktree: true,
       worktree_path: cloneDir,
@@ -258,20 +266,15 @@ describe('シナリオ3・4: requeue → re-execution passes exceeded metadata t
       exceeded_current_iteration: 30,
     });
 
-    // Requeue → status back to pending, exceeded metadata and worktree_path preserved
     runner.requeueExceededTask('task-a');
 
-    // Claim the requeued task as running
     const [task] = runner.claimNextTasks(1);
     if (!task) throw new Error('No task claimed');
 
-    // executePiece returns success so we can capture args without side effects
     vi.mocked(executePiece).mockResolvedValueOnce({ success: true });
 
-    // When: executeAndCompleteTask runs the requeued task
     await executeAndCompleteTask(task, runner, testDir);
 
-    // Then: executePiece received the correct exceeded override options
     expect(vi.mocked(executePiece)).toHaveBeenCalledOnce();
     const capturedOptions = vi.mocked(executePiece).mock.calls[0]![3] as PieceExecutionOptions;
     expect(capturedOptions.maxMovementsOverride).toBe(60);
@@ -279,7 +282,6 @@ describe('シナリオ3・4: requeue → re-execution passes exceeded metadata t
   });
 
   it('scenario 4: startMovement is passed so re-execution resumes from the exceeded movement', async () => {
-    // Given: an exceeded worktree task with start_movement='implement'
     writeExceededRecord(testDir, {
       worktree: true,
       worktree_path: cloneDir,
@@ -288,20 +290,15 @@ describe('シナリオ3・4: requeue → re-execution passes exceeded metadata t
       start_movement: 'implement',
     });
 
-    // Requeue → pending, start_movement preserved
     runner.requeueExceededTask('task-a');
 
-    // Claim the requeued task as running
     const [task] = runner.claimNextTasks(1);
     if (!task) throw new Error('No task claimed');
 
-    // executePiece returns success so we can capture args without side effects
     vi.mocked(executePiece).mockResolvedValueOnce({ success: true });
 
-    // When: executeAndCompleteTask runs the requeued task
     await executeAndCompleteTask(task, runner, testDir);
 
-    // Then: executePiece received startMovement='implement' to resume from where it stopped
     expect(vi.mocked(executePiece)).toHaveBeenCalledOnce();
     const capturedOptions = vi.mocked(executePiece).mock.calls[0]![3] as PieceExecutionOptions;
     expect(capturedOptions.startMovement).toBe('implement');

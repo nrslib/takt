@@ -291,7 +291,7 @@ Controller → UseCase → CommandGateway → Aggregate
 UseCaseが必要なケース:
 - コマンド発行前にRead Modelから他集約の状態を確認する
 - 複数のバリデーションを直列に実行する
-- コマンド送信後の結果整合性を待機する（ポーリング等）
+- コマンド送信後の結果整合性を待機する（リアクティブポーリング）
 
 UseCaseが不要なケース:
 - Controllerからコマンドを1つ送るだけで完結する単純な操作
@@ -301,6 +301,7 @@ UseCaseが不要なケース:
 | ControllerがRepository直接参照してバリデーション | UseCase層に分離 |
 | UseCaseがHTTPリクエスト/レスポンスに依存 | REJECT。UseCaseはプロトコル非依存 |
 | UseCaseがAggregate内部状態を直接変更 | REJECT。CommandGateway経由 |
+| UseCaseがSubscription Queryで結果を待機 | REJECT。分散環境で動作しない。リアクティブポーリングを使う |
 
 ## プロジェクション設計
 
@@ -370,12 +371,25 @@ class InventoryReleaseHandler(private val commandGateway: CommandGateway) {
 
 ## Query側の設計
 
-ControllerはQueryGatewayを使う。Repositoryを直接使わない。
+Query側はイベント駆動のPubSubモデルで動作する。Projection が EventHandler でRead Modelを更新し、Query側はRead Modelを参照する。
+
+イベント配信はPubSub（メッセージブローカー経由）で全インスタンスに配信する。同一インスタンスへの配信を前提とする仕組みは使わない。
+
+- **Subscription Query**（たとえばAxonの `subscriptionQuery()`）: クエリ結果の変更通知を購読元インスタンスに返す仕組みだが、分散配置やサードパーティのイベントストアプラグイン使用時に、購読を発行したインスタンスと通知を受け取るインスタンスが異なり、同一筐体でレスポンスを返せない。同期的な応答が必要な場合はリアクティブポーリングで Read Model の更新を待機する。
+- **Subscribing イベントプロセッサ**（たとえばAxonの `SubscribingEventProcessor`）: ローカルのイベントバスからの直接購読に依存し、イベントを発行したインスタンスのみがイベントを受け取る。分散環境では他インスタンスの Projection が更新されない。PubSubで全インスタンスにイベントが配信される構成にする。
+
+| 基準 | 判定 |
+|------|------|
+| Subscription Query（たとえばAxonの `subscriptionQuery()`）の使用 | REJECT。分散環境で動作しない。リアクティブポーリングを使う |
+| Subscribing イベントプロセッサ（たとえばAxonの `SubscribingEventProcessor`）の使用 | REJECT。ローカル配信のみ。分散環境で他インスタンスが更新されない |
+| Controller から Repository を直接参照 | REJECT。UseCase層を経由 |
+| Query側が Command Model を参照 | REJECT |
+| QueryHandler がコマンドを発行 | REJECT |
 
 レイヤー間の型:
 - `application/query/` - Query結果の型（例: `OrderDetail`）
 - `adapter/protocol/` - RESTレスポンスの型（例: `OrderDetailResponse`）
-- QueryHandlerはapplication層の型を返し、Controllerがadapter層の型に変換
+- QueryHandler は application層の型を返し、Controller が adapter層の型に変換
 
 ```kotlin
 // application/query/OrderDetail.kt
@@ -399,7 +413,7 @@ fun handle(query: GetOrderDetailQuery): OrderDetail? {
     return OrderDetail(...)
 }
 
-// Controller - adapter層の型に変換
+// Controller - 単純な参照は同期返却で十分
 @GetMapping("/{id}")
 fun getById(@PathVariable id: String): ResponseEntity<OrderDetailResponse> {
     val detail = queryGateway.query(
@@ -416,15 +430,61 @@ fun getById(@PathVariable id: String): ResponseEntity<OrderDetailResponse> {
 Controller (adapter) → QueryGateway → QueryHandler (application) → Repository
      ↓                                      ↓
 Response.from(detail)                  OrderDetail
+
+イベント流（PubSub）:
+Aggregate → Event Bus → Projection(@EventHandler) → Repository(Read Model)
+                                                          ↑
+                                          QueryHandler がここを参照
 ```
 
 ## 結果整合性
 
-| 状況 | 対応 |
+コマンド発行後に同期的なレスポンスが必要な場合、リアクティブポーリングで Projection の更新を待機する。
+
+| 基準 | 判定 |
 |------|------|
-| UIが即座に更新を期待している | 設計見直し or ポーリング/WebSocket |
+| Subscription Query で Projection 更新を待機 | REJECT。分散環境で動作しない。リアクティブポーリングを使う |
+| UIが即座に更新を期待している | ポーリング or WebSocket |
 | 整合性遅延が許容範囲を超える | アーキテクチャ再検討 |
 | 補償トランザクションが未定義 | 障害シナリオの検討を要求 |
+
+### リアクティブポーリング
+
+コマンド発行 → Projection更新完了をポーリングで待機するパターン。
+
+```kotlin
+// UseCase: コマンド送信 → ポーリングで完了待機
+fun execute(input: PlaceOrderInput): Mono<PlaceOrderOutput> {
+    val orderId = UUID.randomUUID().toString()
+    return Mono.fromCallable { validatePreConditions(input) }
+        .subscribeOn(Schedulers.boundedElastic())
+        .flatMap {
+            Mono.fromFuture(commandGateway.send<Any>(
+                PlaceOrderCommand(orderId, input.customerId, input.items)
+            ))
+        }
+        .then(pollForCompletion(orderId))
+        .thenReturn(PlaceOrderOutput(orderId))
+}
+
+// ポーリング: Projection の更新を待機
+private fun pollForCompletion(orderId: String): Mono<Void> {
+    return ReactivePolling.waitFor(
+        supplier = { orderRepository.findById(orderId).orElse(null) },
+        condition = { it.sagaCompleted || it.status == OrderStatus.CONFIRMED },
+        timeout = Duration.ofSeconds(60),
+        maxAttempts = 300
+    )
+}
+```
+
+ポーリングが適切なケース:
+- Saga が完了するまでレスポンスを返したくない場合
+- コマンド発行後に作成されたリソースのIDを返す場合
+
+ポーリングが不要なケース:
+- コマンド発行だけで完了する単純な操作（結果を待たない）
+- UIがリアルタイム更新を必要としない場合
 
 ## Saga vs EventHandler
 

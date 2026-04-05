@@ -4,7 +4,7 @@
  * Tests Phase 1 (main) → Phase 2 (report) → Phase 3 (status judgment) lifecycle.
  * Verifies that the correct combination of phases fires based on movement config.
  *
- * Mocked: UI, session, config, callAiJudge
+ * Mocked: UI, session, config
  * Selectively mocked: phase-runner (to inspect call patterns)
  * Not mocked: PieceEngine, runAgent, detectMatchedRule, rule-evaluator
  */
@@ -14,20 +14,12 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setMockScenario, resetScenario } from '../infra/mock/index.js';
+import { DefaultStructuredCaller } from '../agents/structured-caller.js';
 import type { PieceConfig, PieceMovement, PieceRule } from '../core/models/index.js';
 import { detectRuleIndex } from '../shared/utils/ruleIndex.js';
 import { makeRule } from './test-helpers.js';
-import { callAiJudge } from '../agents/ai-judge.js';
 
 // --- Mocks ---
-
-vi.mock('../agents/ai-judge.js', async (importOriginal) => {
-  const original = await importOriginal<typeof import('../agents/ai-judge.js')>();
-  return {
-    ...original,
-    callAiJudge: vi.fn().mockResolvedValue(-1),
-  };
-});
 
 const mockNeedsStatusJudgmentPhase = vi.fn();
 const mockRunReportPhase = vi.fn();
@@ -78,7 +70,7 @@ function buildEngineOptions(projectCwd: string) {
   return {
     projectCwd,
     detectRuleIndex,
-    callAiJudge,
+    structuredCaller: new DefaultStructuredCaller(),
   };
 }
 

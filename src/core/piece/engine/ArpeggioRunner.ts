@@ -23,6 +23,7 @@ import { createLogger } from '../../../shared/utils/index.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { MovementExecutor } from './MovementExecutor.js';
 import type { PhaseName, PhasePromptParts } from '../types.js';
+import type { StructuredCaller } from '../../../agents/structured-caller.js';
 
 const log = createLogger('arpeggio-runner');
 
@@ -32,11 +33,7 @@ export interface ArpeggioRunnerDeps {
   readonly getCwd: () => string;
   readonly getInteractive: () => boolean;
   readonly detectRuleIndex: (content: string, movementName: string) => number;
-  readonly callAiJudge: (
-    agentOutput: string,
-    conditions: Array<{ index: number; text: string }>,
-    options: { cwd: string }
-  ) => Promise<number>;
+  readonly structuredCaller: StructuredCaller;
   readonly onPhaseStart?: (
     step: PieceMovement,
     phase: 1 | 2 | 3,
@@ -227,12 +224,16 @@ export class ArpeggioRunner {
       log.info('Arpeggio output written', { outputPath: arpeggioConfig.outputPath });
     }
 
+    const movementPm = this.deps.optionsBuilder.resolveStepProviderModel(step);
     const ruleCtx = {
       state,
       cwd: this.deps.getCwd(),
+      provider: movementPm.provider,
+      resolvedProvider: movementPm.provider,
+      resolvedModel: movementPm.model,
       interactive: this.deps.getInteractive(),
       detectRuleIndex: this.deps.detectRuleIndex,
-      callAiJudge: this.deps.callAiJudge,
+      structuredCaller: this.deps.structuredCaller,
     };
     const match = await detectMatchedRule(step, mergedContent, '', ruleCtx);
 

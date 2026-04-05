@@ -14,23 +14,12 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setMockScenario, resetScenario } from '../infra/mock/index.js';
+import { DefaultStructuredCaller } from '../agents/structured-caller.js';
 import type { PieceConfig, PieceMovement, PieceRule } from '../core/models/index.js';
 import { detectRuleIndex } from '../shared/utils/ruleIndex.js';
 import { makeRule } from './test-helpers.js';
-import { callAiJudge } from '../agents/ai-judge.js';
 
 // --- Mocks (minimal — only infrastructure, not core logic) ---
-
-// Safety net: prevent callAiJudge from calling real agent.
-// Tag-based detection should always match in these tests; if it doesn't,
-// this mock surfaces the failure immediately instead of timing out.
-vi.mock('../agents/ai-judge.js', async (importOriginal) => {
-  const original = await importOriginal<typeof import('../agents/ai-judge.js')>();
-  return {
-    ...original,
-    callAiJudge: vi.fn().mockResolvedValue(-1),
-  };
-});
 
 vi.mock('../core/piece/phase-runner.js', () => ({
   needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
@@ -94,7 +83,7 @@ function buildEngineOptions(projectCwd: string) {
   return {
     projectCwd,
     detectRuleIndex,
-    callAiJudge,
+    structuredCaller: new DefaultStructuredCaller(),
   };
 }
 

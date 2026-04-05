@@ -2,11 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 describe('public API exports', () => {
   it('should expose piece usecases, engine, and piece loader APIs', async () => {
-    // Given: パッケージの公開API
     const api = await import('../index.js');
-
-    // When: 主要なユースケース関数とエンジン公開API・piece読み込みAPIを参照する
-    // Then: 必要な公開シンボルが利用できる
     expect(typeof api.executeAgent).toBe('function');
     expect(typeof api.generateReport).toBe('function');
     expect(typeof api.executePart).toBe('function');
@@ -22,11 +18,7 @@ describe('public API exports', () => {
   });
 
   it('should not expose internal engine implementation details', async () => {
-    // Given: パッケージの公開API
     const api = await import('../index.js');
-
-    // When: 非公開にすべき内部シンボルの有無を確認する
-    // Then: 内部実装詳細は公開されていない
     expect('AgentRunner' in api).toBe(false);
     expect('RuleEvaluator' in api).toBe(false);
     expect('AggregateEvaluator' in api).toBe(false);
@@ -51,11 +43,7 @@ describe('public API exports', () => {
   });
 
   it('should not expose infrastructure implementations and internal shared utilities', async () => {
-    // Given: パッケージの公開API
     const api = await import('../index.js');
-
-    // When: 非公開にすべきインフラ実装と内部ユーティリティの有無を確認する
-    // Then: 直接利用させない実装詳細は公開されていない
     expect('ClaudeClient' in api).toBe(false);
     expect('executeClaudeCli' in api).toBe(false);
     expect('CodexClient' in api).toBe(false);
@@ -79,5 +67,7 @@ describe('public API exports', () => {
     expect('getWorktreeSessionPath' in api).toBe(false);
     expect('loadWorktreeSessions' in api).toBe(false);
     expect('updateWorktreeSession' in api).toBe(false);
+    expect('listPieceEntries' in api).toBe(false);
+    expect('PieceDirEntry' in api).toBe(false);
   });
 });

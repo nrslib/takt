@@ -23,8 +23,6 @@ export interface AgentProviderModelInput {
   cliModel?: string;
   personaProviders?: Record<string, PersonaProviderEntry>;
   personaDisplayName?: string;
-  stepProvider?: ProviderType;
-  stepModel?: string;
   localProvider?: ProviderType;
   localModel?: string;
   globalProvider?: ProviderType;
@@ -41,14 +39,12 @@ export function resolveAgentProviderModel(input: AgentProviderModelInput): Agent
   const provider = resolveProviderModelCandidates([
     { provider: input.cliProvider },
     { provider: personaEntry?.provider },
-    { provider: input.stepProvider },
     { provider: input.localProvider },
     { provider: input.globalProvider },
   ]).provider;
   const model = resolveModelFromCandidates([
     { model: input.cliModel },
     { model: personaEntry?.model },
-    { model: input.stepModel },
     { model: input.localModel, provider: input.localProvider },
     { model: input.globalModel, provider: input.globalProvider },
   ], provider);

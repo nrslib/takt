@@ -35,9 +35,9 @@ describe('skill-codex document safety guidance', () => {
     expect(engineDoc).toContain('codex exec');
   });
 
-  it('should require random temp file names instead of movement or substep names', () => {
-    expect(skillDoc).toContain('movement名やsubstep名をファイル名に含めず');
-    expect(engineDoc).toContain('movement名を含めない安全なランダム名');
+  it('should require random temp file names instead of step or substep names', () => {
+    expect(skillDoc).toContain('step 名や substep 名をファイル名に含めず');
+    expect(engineDoc).toContain('step 名を含めない安全なランダム名');
   });
 
   it('should avoid examples that interpolate movement or substep names into shell paths', () => {

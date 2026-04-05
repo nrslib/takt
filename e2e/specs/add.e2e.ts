@@ -72,13 +72,13 @@ describe('E2E: Add task from GitHub issue (takt add)', () => {
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/add-task.json');
 
     const result = runTakt({
-      args: ['add', `#${issueNumber}`],
+      args: ['--workflow', 'default', 'add', `#${issueNumber}`],
       cwd: testRepo.path,
       env: {
         ...isolatedEnv.env,
         TAKT_MOCK_SCENARIO: scenarioPath,
       },
-      input: 'n\n',
+      input: '\n\n\n\nn\n',
       timeout: 240_000,
     });
 

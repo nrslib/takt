@@ -119,6 +119,14 @@ vi.mock('../app/cli/program.js', () => {
 vi.mock('../app/cli/helpers.js', () => ({
   resolveAgentOverrides: (...args: unknown[]) => mockResolveAgentOverrides(...args),
   isDirectTask: vi.fn(() => false),
+  resolveWorkflowCliOption: vi.fn((opts: Record<string, unknown>) => {
+    const workflow = typeof opts.workflow === 'string' ? opts.workflow : undefined;
+    const piece = typeof opts.piece === 'string' ? opts.piece : undefined;
+    if (workflow !== undefined && piece !== undefined && workflow !== piece) {
+      throw new Error('--workflow and --piece cannot be used together with different values');
+    }
+    return workflow ?? piece;
+  }),
 }));
 
 import { selectAndExecuteTask, determinePiece, saveTaskFromInteractive } from '../features/tasks/index.js';
@@ -371,6 +379,25 @@ describe('PR resolution in routing', () => {
       );
 
       // Cleanup
+      Object.defineProperty(programModule, 'pipelineMode', { value: originalPipelineMode, writable: true });
+    });
+
+    it('should pass --workflow to executePipeline as piece', async () => {
+      const programModule = await import('../app/cli/program.js');
+      const originalPipelineMode = programModule.pipelineMode;
+      Object.defineProperty(programModule, 'pipelineMode', { value: true, writable: true });
+
+      mockOpts.workflow = 'migration-workflow';
+      mockExecutePipeline.mockResolvedValue(0);
+
+      await executeDefaultAction();
+
+      expect(mockExecutePipeline).toHaveBeenCalledWith(
+        expect.objectContaining({
+          piece: 'migration-workflow',
+        }),
+      );
+
       Object.defineProperty(programModule, 'pipelineMode', { value: originalPipelineMode, writable: true });
     });
 

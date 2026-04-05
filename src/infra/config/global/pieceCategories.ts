@@ -9,7 +9,7 @@ import { dirname, join } from 'node:path';
 import { getGlobalConfigDir } from '../paths.js';
 import { resolvePieceConfigValue } from '../resolvePieceConfigValue.js';
 
-const INITIAL_USER_CATEGORIES_CONTENT = 'piece_categories: {}\n';
+const INITIAL_USER_CATEGORIES_CONTENT = 'workflow_categories: {}\n';
 
 function getDefaultPieceCategoriesPath(): string {
   return join(getGlobalConfigDir(), 'preferences', 'piece-categories.yaml');

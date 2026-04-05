@@ -34,6 +34,7 @@ import { ArpeggioRunner } from './ArpeggioRunner.js';
 import { TeamLeaderRunner } from './TeamLeaderRunner.js';
 import { buildRunPaths, type RunPaths } from '../run/run-paths.js';
 import { prepareRuntimeEnvironment } from '../../runtime/runtime-environment.js';
+import { DefaultStructuredCaller, type StructuredCaller } from '../../../agents/structured-caller.js';
 
 const log = createLogger('engine');
 
@@ -68,11 +69,7 @@ export class PieceEngine extends EventEmitter {
   private readonly arpeggioRunner: ArpeggioRunner;
   private readonly teamLeaderRunner: TeamLeaderRunner;
   private readonly detectRuleIndex: (content: string, movementName: string) => number;
-  private readonly callAiJudge: (
-    agentOutput: string,
-    conditions: Array<{ index: number; text: string }>,
-    options: { cwd: string }
-  ) => Promise<number>;
+  private readonly structuredCaller: StructuredCaller;
 
   constructor(config: PieceConfig, cwd: string, task: string, options: PieceEngineOptions) {
     super();
@@ -97,13 +94,15 @@ export class PieceEngine extends EventEmitter {
     this.detectRuleIndex = options.detectRuleIndex ?? (() => {
       throw new Error('detectRuleIndex is required for rule evaluation');
     });
-    this.callAiJudge = options.callAiJudge ?? (async () => {
-      throw new Error('callAiJudge is required for rule evaluation');
-    });
+    this.structuredCaller = options.structuredCaller ?? new DefaultStructuredCaller();
+    this.options = {
+      ...options,
+      structuredCaller: this.structuredCaller,
+    };
 
     // Initialize composed collaborators
     this.optionsBuilder = new OptionsBuilder(
-      options,
+      this.options,
       () => this.cwd,
       () => this.projectCwd,
       (persona) => this.state.personaSessions.get(persona),
@@ -127,7 +126,7 @@ export class PieceEngine extends EventEmitter {
       getPieceDescription: () => this.getPieceDescription(),
       getRetryNote: () => this.options.retryNote,
       detectRuleIndex: this.detectRuleIndex,
-      callAiJudge: this.callAiJudge,
+      structuredCaller: this.structuredCaller,
       onPhaseStart: (step, phase, phaseName, instruction, promptParts, phaseExecutionId, iteration) => {
         if (phaseExecutionId == null && iteration == null) {
           this.emit('phase:start', step, phase, phaseName, instruction, promptParts);
@@ -159,7 +158,7 @@ export class PieceEngine extends EventEmitter {
       getReportDir: () => this.reportDir,
       getInteractive: () => this.options.interactive === true,
       detectRuleIndex: this.detectRuleIndex,
-      callAiJudge: this.callAiJudge,
+      structuredCaller: this.structuredCaller,
       onPhaseStart: (step, phase, phaseName, instruction, promptParts, phaseExecutionId, iteration) => {
         if (phaseExecutionId == null && iteration == null) {
           this.emit('phase:start', step, phase, phaseName, instruction, promptParts);
@@ -189,7 +188,7 @@ export class PieceEngine extends EventEmitter {
       getCwd: () => this.cwd,
       getInteractive: () => this.options.interactive === true,
       detectRuleIndex: this.detectRuleIndex,
-      callAiJudge: this.callAiJudge,
+      structuredCaller: this.structuredCaller,
       onPhaseStart: (step, phase, phaseName, instruction, promptParts, phaseExecutionId, iteration) => {
         if (phaseExecutionId == null && iteration == null) {
           this.emit('phase:start', step, phase, phaseName, instruction, promptParts);
@@ -212,8 +211,6 @@ export class PieceEngine extends EventEmitter {
       engineOptions: this.options,
       getCwd: () => this.cwd,
       getInteractive: () => this.options.interactive === true,
-      detectRuleIndex: this.detectRuleIndex,
-      callAiJudge: this.callAiJudge,
       onPhaseStart: (step, phase, phaseName, instruction, promptParts, phaseExecutionId, iteration) => {
         if (phaseExecutionId == null && iteration == null) {
           this.emit('phase:start', step, phase, phaseName, instruction, promptParts);

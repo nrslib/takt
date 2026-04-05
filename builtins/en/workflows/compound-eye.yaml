@@ -1,0 +1,184 @@
+name: compound-eye
+description: Multi-model review - send the same instruction to Claude and Codex simultaneously, synthesize both responses
+workflow_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+max_steps: 10
+initial_step: evaluate
+steps:
+  - name: evaluate
+    parallel:
+      - name: claude-eye
+        edit: false
+        persona: coder
+        provider: claude
+        session: refresh
+        knowledge: architecture
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - Bash
+              - WebSearch
+              - WebFetch
+        rules:
+          - condition: done
+          - condition: failed
+        output_contracts:
+          report:
+            - name: claude-review.md
+              format: |
+                ```markdown
+                # Claude Review Result
+
+                ## Conclusion
+                {One-line conclusion}
+
+                ## Key Findings
+                - {finding 1}
+                - {finding 2}
+
+                ## Evidence
+                - {file:line and rationale}
+
+                ## Risks / Caveats
+                - {risk}
+
+                ## Recommended Next Step
+                - {action}
+                ```
+      - name: codex-eye
+        edit: false
+        persona: coder
+        provider: codex
+        session: refresh
+        knowledge: architecture
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - Bash
+              - WebSearch
+              - WebFetch
+        rules:
+          - condition: done
+          - condition: failed
+        output_contracts:
+          report:
+            - name: codex-review.md
+              format: |
+                ```markdown
+                # Codex Review Result
+
+                ## Conclusion
+                {One-line conclusion}
+
+                ## Key Findings
+                - {finding 1}
+                - {finding 2}
+
+                ## Evidence
+                - {file:line and rationale}
+
+                ## Risks / Caveats
+                - {risk}
+
+                ## Recommended Next Step
+                - {action}
+                ```
+    rules:
+      - condition: any("done")
+        next: synthesize
+  - name: synthesize
+    edit: false
+    persona: supervisor
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+    rules:
+      - condition: synthesis complete
+        next: COMPLETE
+    instruction: |
+      Two models (Claude / Codex) independently answered the same instruction.
+      Synthesize their responses.
+
+      **Tasks:**
+      1. Read reports in the Report Directory
+         - `claude-review.md` (Claude's response)
+         - `codex-review.md` (Codex's response)
+         Note: If one report is missing (model failed), synthesize from the available report only
+      2. If both reports exist, compare and clarify:
+         - Points of agreement
+         - Points of disagreement
+         - Points mentioned by only one model
+      3. Produce a synthesized conclusion
+
+      **Output format:**
+      ```markdown
+      # Multi-Model Review Synthesis
+
+      ## Conclusion
+      {Synthesized conclusion}
+
+      ## Response Status
+      | Model | Status |
+      |-------|--------|
+      | Claude | ✅ / ❌ |
+      | Codex | ✅ / ❌ |
+
+      ## Agreements
+      - {Points where both models agree}
+
+      ## Disagreements
+      | Topic | Claude | Codex |
+      |-------|--------|-------|
+      | {topic} | {Claude's view} | {Codex's view} |
+
+      ## Unique Findings
+      - **Claude only:** {Points only Claude mentioned}
+      - **Codex only:** {Points only Codex mentioned}
+
+      ## Overall Assessment
+      {Overall assessment considering both responses}
+      ```
+    output_contracts:
+      report:
+        - name: synthesis.md
+          format: |
+            ```markdown
+            # Multi-Model Review Synthesis
+
+            ## Conclusion
+            {Synthesized conclusion}
+
+            ## Response Status
+            | Model | Status |
+            |-------|--------|
+            | Claude | ✅ / ❌ |
+            | Codex | ✅ / ❌ |
+
+            ## Agreements
+            - {Points where both models agree}
+
+            ## Disagreements
+            | Topic | Claude | Codex |
+            |-------|--------|-------|
+            | {topic} | {Claude's view} | {Codex's view} |
+
+            ## Unique Findings
+            - **Claude only:** {Points only Claude mentioned}
+            - **Codex only:** {Points only Codex mentioned}
+
+            ## Overall Assessment
+            {Overall assessment considering both responses}
+            ```

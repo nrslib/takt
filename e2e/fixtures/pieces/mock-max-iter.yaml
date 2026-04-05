@@ -1,6 +1,6 @@
 name: e2e-mock-max-iter
 description: Piece with max_movements=2 that loops between two steps
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true
@@ -13,7 +13,7 @@ movements:
     edit: true
     persona: ../agents/test-coder.md
     required_permission_mode: edit
-    instruction_template: |
+    instruction: |
       {task}
     rules:
       - condition: Done
@@ -22,7 +22,7 @@ movements:
     edit: true
     persona: ../agents/test-coder.md
     required_permission_mode: edit
-    instruction_template: |
+    instruction: |
       Continue the task.
     rules:
       - condition: Done

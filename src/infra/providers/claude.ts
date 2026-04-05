@@ -17,6 +17,7 @@ function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
     allowedTools: options.allowedTools,
     mcpServers: options.mcpServers,
     model: options.model,
+    effort: options.providerOptions?.claude?.effort,
     maxTurns: options.maxTurns,
     permissionMode: options.permissionMode,
     onStream: options.onStream,
@@ -35,6 +36,8 @@ function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
 
 /** Claude provider — delegates to Claude Code SDK */
 export class ClaudeProvider implements Provider {
+  readonly supportsStructuredOutput = true;
+
   setup(config: AgentSetup): ProviderAgent {
     if (config.claudeAgent) {
       const agentName = config.claudeAgent;

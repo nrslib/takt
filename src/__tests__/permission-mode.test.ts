@@ -109,4 +109,9 @@ describe('SdkOptionsBuilder.build() — settingSources', () => {
     const options = buildSdkOptions({ cwd: '/test' });
     expect(options.settingSources).toEqual(['project']);
   });
+
+  it('includes effort when provided', () => {
+    const options = buildSdkOptions({ cwd: '/test', effort: 'high' });
+    expect(options).toHaveProperty('effort', 'high');
+  });
 });

@@ -104,6 +104,99 @@ Prohibited patterns:
 - Error handling centralized (no try-catch scattered everywhere)
 - Business logic not leaking into Controller/View
 
+## Resolve at the Boundary
+
+Values such as config, options, providers, permissions, and paths should be resolved at the boundary before entering the core flow. Main processing should assume values are already resolved and should not keep asking config sources.
+
+| Criteria | Judgment |
+|----------|----------|
+| Create a resolved object such as `ExecutionContext` or `ResolvedOptions` at the entry point | OK |
+| Orchestration layers handle only resolved values | OK |
+| Lower layers reload global/project/env and resolve the same value again | REJECT |
+| Separate resolution functions exist for display and execution | REJECT |
+| Unresolved options are passed deep and later fixed with `??` | REJECT |
+
+```typescript
+// REJECT - Execution layer knows config sources directly
+async function executePiece(options) {
+  const engine = new PieceEngine({
+    provider: options.provider ?? globalConfig.provider,
+  });
+}
+
+class AgentRunner {
+  run(step, options) {
+    const provider = options.provider ?? resolveProviderFromConfig();
+    return getProvider(provider).call();
+  }
+}
+
+// OK - Resolve at the boundary, use resolved values internally
+async function executePiece(options) {
+  const context = resolveExecutionContext(options);
+  const engine = new PieceEngine(context);
+}
+
+class AgentRunner {
+  run(step, options) {
+    return getProvider(options.resolvedProvider).call();
+  }
+}
+```
+
+### Tell, Don't Ask
+
+Do not make lower layers inspect config sources and decide for themselves. Upper layers should tell them what to use by passing resolved values. Separate value selection from execution.
+
+| Pattern | Judgment |
+|---------|----------|
+| Upper layer passes a value such as `resolvedProvider` | OK |
+| Lower layer inspects `options` and resolves on its own | REJECT |
+| Execution object exposes only `run()` after `setup(config)` | OK |
+| Runtime branches call `getGlobalConfig()` during execution | REJECT |
+
+### Anti-Corruption Layer
+
+Precedence resolution and external config formats belong in a dedicated boundary layer. Pass only normalized internal values into the core model.
+
+| Pattern | Judgment |
+|---------|----------|
+| Encapsulate YAML/env/CLI differences in a resolver/adapter | OK |
+| Domain layer directly handles env var names or config key strings | REJECT |
+| Conversion from external form to internal form is centralized in one place | OK |
+| Same normalization logic is copied in multiple places | REJECT |
+
+### Phase Separation
+
+Separate input, interpretation, execution, and output into distinct stages. Iterative processing should, as much as possible, receive already interpreted input in bulk and then repeat only execution.
+
+| Criteria | Judgment |
+|----------|----------|
+| Convert raw input into a `Resolved*` type at the boundary before entering the core flow | OK |
+| Loop body handles only execution on resolved data | OK |
+| Config/env/options are interpreted inside every iteration | REJECT |
+| Each iteration packs `input -> interpret -> execute -> output` into one function | REJECT |
+| Even when optimization requires incremental handling, interpretation is isolated in a dedicated method | OK |
+
+```typescript
+// REJECT - Each iteration also interprets input
+for (const item of items) {
+  const resolved = resolveItem(item, rawOptions, config);
+  const result = execute(resolved);
+  output(result);
+}
+
+// OK - Interpret first, iterations only execute
+const resolvedItems = items.map((item) => resolveItem(item, rawOptions, config));
+
+for (const item of resolvedItems) {
+  const result = execute(item);
+  output(result);
+}
+```
+
+Even when interpretation must happen incrementally, keep `nextRawInput()`, `resolveInput()`, and `executeResolved()` as separate responsibilities. Performance constraints may compress phases, but must not mix responsibilities.
+
 ## Code Quality Detection
 
 **Explanatory Comment (What/How) Detection Criteria:**

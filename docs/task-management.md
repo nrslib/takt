@@ -27,7 +27,7 @@ takt add #28
 
 When adding a task, you are prompted for:
 
-- **Piece** -- Which piece (workflow) to use for execution
+- **Workflow** -- Which workflow to use for execution
 - **Worktree path** -- Where to create the isolated clone (Enter for auto, or specify a path)
 - **Branch name** -- Custom branch name (Enter for auto-generated `takt/{timestamp}-{slug}`)
 - **Auto-PR** -- Whether to automatically create a pull request after successful execution
@@ -53,7 +53,7 @@ tasks:
   - name: add-auth-feature
     status: pending
     task_dir: .takt/tasks/20260201-015714-foptng
-    piece: default
+    workflow: default
     created_at: "2026-02-01T01:57:14.000Z"
     started_at: null
     completed_at: null
@@ -66,7 +66,7 @@ Fields:
 | `name` | AI-generated task slug |
 | `status` | `pending`, `running`, `completed`, or `failed` |
 | `task_dir` | Path to the task directory containing `order.md` |
-| `piece` | Piece name to use for execution |
+| `workflow` | Workflow name to use for execution |
 | `worktree` | `true` (auto), a path string, or omitted (run in current directory) |
 | `branch` | Branch name (auto-generated if omitted) |
 | `auto_pr` | Whether to auto-create a PR after execution |
@@ -103,10 +103,10 @@ Execute all pending tasks from `.takt/tasks.yaml`:
 takt run
 ```
 
-The `run` command claims pending tasks and executes them through the configured piece. Each task goes through:
+The `run` command claims pending tasks and executes them through the configured workflow. Each task goes through:
 
 1. Clone creation (if `worktree` is set)
-2. Piece execution in the clone/project directory
+2. Workflow execution in the clone/project directory
 3. Auto-commit and push (if worktree execution)
 4. Post-execution flow (PR creation if `auto_pr` is set)
 5. Status update in `tasks.yaml` (`completed` or `failed`)
@@ -188,8 +188,8 @@ The list view shows all tasks organized by status (pending, running, completed, 
 When you select **Instruct** on a completed task, TAKT opens an interactive conversation loop with the AI. The conversation is pre-loaded with:
 
 - Branch context (diff stat against default branch, commit history)
-- Previous run session data (movement logs, reports)
-- Piece structure and movement previews
+- Previous run session data (step logs, reports)
+- Workflow structure and step previews
 - Previous order content
 
 You can discuss what additional changes are needed, and the AI helps refine the instructions. When ready, choose:
@@ -202,10 +202,10 @@ You can discuss what additional changes are needed, and the AI helps refine the 
 
 When you select **Retry** on a failed task, TAKT:
 
-1. Displays failure details (failed movement, error message, last agent message)
-2. Prompts you to select a piece
-3. Prompts you to select which movement to start from (defaults to the failed movement)
-4. Opens a retry conversation pre-loaded with failure context, run session data, and piece structure
+1. Displays failure details (failed step, error message, last agent message)
+2. Prompts you to select a workflow
+3. Prompts you to select which step to start from (defaults to the failed step)
+4. Opens a retry conversation pre-loaded with failure context, run session data, and workflow structure
 5. Lets you refine instructions with AI assistance
 
 The retry conversation supports the same actions as Instruct mode (execute, save task, cancel). Retry notes are appended to the task record, accumulating across multiple retry attempts.
@@ -242,7 +242,7 @@ The recommended end-to-end workflow:
 
 1. **`takt add`** -- Create a task. A pending record is added to `.takt/tasks.yaml` and `order.md` is generated in `.takt/tasks/{slug}/`.
 2. **Edit `order.md`** -- Open the generated file and add detailed specifications, reference materials, or supplementary files as needed.
-3. **`takt run`** (or `takt watch`) -- Execute pending tasks from `tasks.yaml`. Each task runs through the configured piece workflow.
+3. **`takt run`** (or `takt watch`) -- Execute pending tasks from `tasks.yaml`. Each task runs through the configured workflow.
 4. **Verify outputs** -- Check execution reports in `.takt/runs/{slug}/reports/` (the slug matches the task directory).
 5. **`takt list`** -- Review results, merge successful branches, retry failures, or add further instructions.
 
@@ -297,8 +297,8 @@ TAKT writes session logs in NDJSON (Newline-Delimited JSON, `.jsonl`) format. Ea
 
 ```text
 .takt/runs/{slug}/
-  logs/{sessionId}.jsonl   # NDJSON session log per piece execution
-  meta.json                # Run metadata (task, piece, start/end, status, etc.)
+  logs/{sessionId}.jsonl   # NDJSON session log per workflow execution
+  meta.json                # Run metadata (task, workflow, start/end, status, etc.)
   context/
     previous_responses/
       latest.md            # Latest previous response (inherited automatically)
@@ -308,10 +308,10 @@ TAKT writes session logs in NDJSON (Newline-Delimited JSON, `.jsonl`) format. Ea
 
 | Record Type | Description |
 |-------------|-------------|
-| `piece_start` | Piece initialization with task and piece name |
-| `step_start` | Movement execution start |
-| `step_complete` | Movement result with status, content, matched rule info |
-| `piece_complete` | Successful piece completion |
+| `piece_start` | Workflow initialization with task and workflow name |
+| `step_start` | Step execution start |
+| `step_complete` | Step result with status, content, matched rule info |
+| `piece_complete` | Successful workflow completion |
 | `piece_abort` | Abort with reason |
 
 ### Real-Time Monitoring

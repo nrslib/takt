@@ -8,6 +8,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod/v4';
 import { getPieceCategoriesPath } from '../global/pieceCategories.js';
@@ -15,9 +16,11 @@ import { getLanguageResourcesDir } from '../../resources/index.js';
 import { listBuiltinPieceNames } from './pieceResolver.js';
 import { resolvePieceConfigValues } from '../resolvePieceConfigValue.js';
 import type { PieceWithSource } from './pieceResolver.js';
+import { warnLegacyCategoryYamlKeys } from '../legacy-workflow-key-deprecation.js';
 
 const CategoryConfigSchema = z.object({
   piece_categories: z.record(z.string(), z.unknown()).optional(),
+  workflow_categories: z.record(z.string(), z.unknown()).optional(),
   show_others_category: z.boolean().optional(),
   others_category_name: z.string().min(1).optional(),
 }).passthrough();
@@ -53,6 +56,7 @@ export interface MissingPiece {
 
 interface RawCategoryConfig {
   piece_categories?: Record<string, unknown>;
+  workflow_categories?: Record<string, unknown>;
   show_others_category?: boolean;
   others_category_name?: string;
 }
@@ -73,20 +77,43 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
-function parsePieces(raw: unknown, sourceLabel: string, path: string[]): string[] {
+function parseStringNameList(
+  raw: unknown,
+  sourceLabel: string,
+  path: string[],
+  arrayKey: 'pieces' | 'workflows',
+): string[] {
   if (raw === undefined) return [];
   if (!Array.isArray(raw)) {
-    throw new Error(`pieces must be an array in ${sourceLabel} at ${path.join(' > ')}`);
+    throw new Error(`${arrayKey} must be an array in ${sourceLabel} at ${path.join(' > ')}`);
   }
 
-  const pieces: string[] = [];
+  const names: string[] = [];
   for (const item of raw) {
     if (typeof item !== 'string' || item.trim().length === 0) {
-      throw new Error(`piece name must be a non-empty string in ${sourceLabel} at ${path.join(' > ')}`);
+      throw new Error(`name must be a non-empty string in ${sourceLabel} at ${path.join(' > ')}`);
     }
-    pieces.push(item);
+    names.push(item);
   }
-  return pieces;
+  return names;
+}
+
+/** Resolve `pieces` vs `workflows` on a category node (canonical: workflows); fail if both disagree. */
+function parsePiecesOrWorkflows(raw: Record<string, unknown>, sourceLabel: string, path: string[]): string[] {
+  const fromPieces = Object.prototype.hasOwnProperty.call(raw, 'pieces')
+    ? parseStringNameList(raw.pieces, sourceLabel, path, 'pieces')
+    : undefined;
+  const fromWorkflows = Object.prototype.hasOwnProperty.call(raw, 'workflows')
+    ? parseStringNameList(raw.workflows, sourceLabel, path, 'workflows')
+    : undefined;
+
+  if (fromPieces !== undefined && fromWorkflows !== undefined && !isDeepStrictEqual(fromPieces, fromWorkflows)) {
+    throw new Error(
+      `Category config conflict: 'workflows' and 'pieces' must match when both are set in ${sourceLabel} at ${path.join(' > ')}`,
+    );
+  }
+
+  return fromWorkflows ?? fromPieces ?? [];
 }
 
 function parseCategoryNode(
@@ -99,11 +126,11 @@ function parseCategoryNode(
     throw new Error(`category "${name}" must be an object in ${sourceLabel} at ${path.join(' > ')}`);
   }
 
-  const pieces = parsePieces(raw.pieces, sourceLabel, path);
+  const pieces = parsePiecesOrWorkflows(raw, sourceLabel, path);
   const children: ParsedCategoryNode[] = [];
 
   for (const [key, value] of Object.entries(raw)) {
-    if (key === 'pieces') continue;
+    if (key === 'pieces' || key === 'workflows') continue;
     if (!isRecord(value)) {
       throw new Error(`category "${key}" must be an object in ${sourceLabel} at ${[...path, key].join(' > ')}`);
     }
@@ -113,9 +140,9 @@ function parseCategoryNode(
   return { name, pieces, children };
 }
 
-function parseCategoryTree(raw: unknown, sourceLabel: string): ParsedCategoryNode[] {
+function parseCategoryTree(raw: unknown, sourceLabel: string, rootKeyLabel: string): ParsedCategoryNode[] {
   if (!isRecord(raw)) {
-    throw new Error(`piece_categories must be an object in ${sourceLabel}`);
+    throw new Error(`${rootKeyLabel} must be an object in ${sourceLabel}`);
   }
 
   const categories: ParsedCategoryNode[] = [];
@@ -132,13 +159,34 @@ function parseCategoryConfig(raw: unknown, sourceLabel: string): ParsedCategoryC
 
   const parsed = CategoryConfigSchema.parse(raw) as RawCategoryConfig;
   const hasPieceCategories = Object.prototype.hasOwnProperty.call(parsed, 'piece_categories');
+  const hasWorkflowCategories = Object.prototype.hasOwnProperty.call(parsed, 'workflow_categories');
 
   const result: ParsedCategoryConfig = {};
-  if (hasPieceCategories) {
+  if (hasPieceCategories && hasWorkflowCategories) {
+    if (!parsed.piece_categories || !isRecord(parsed.piece_categories)) {
+      throw new Error(`piece_categories must be an object in ${sourceLabel}`);
+    }
+    if (!parsed.workflow_categories || !isRecord(parsed.workflow_categories)) {
+      throw new Error(`workflow_categories must be an object in ${sourceLabel}`);
+    }
+    const fromLegacy = parseCategoryTree(parsed.piece_categories, sourceLabel, 'piece_categories');
+    const fromWorkflow = parseCategoryTree(parsed.workflow_categories, sourceLabel, 'workflow_categories');
+    if (!isDeepStrictEqual(fromLegacy, fromWorkflow)) {
+      throw new Error(
+        `Category config conflict: 'workflow_categories' and 'piece_categories' must match when both are set (${sourceLabel})`,
+      );
+    }
+    result.pieceCategories = fromWorkflow;
+  } else if (hasPieceCategories) {
     if (!parsed.piece_categories) {
       throw new Error(`piece_categories must be an object in ${sourceLabel}`);
     }
-    result.pieceCategories = parseCategoryTree(parsed.piece_categories, sourceLabel);
+    result.pieceCategories = parseCategoryTree(parsed.piece_categories, sourceLabel, 'piece_categories');
+  } else if (hasWorkflowCategories) {
+    if (!parsed.workflow_categories) {
+      throw new Error(`workflow_categories must be an object in ${sourceLabel}`);
+    }
+    result.pieceCategories = parseCategoryTree(parsed.workflow_categories, sourceLabel, 'workflow_categories');
   }
 
   if (parsed.show_others_category !== undefined) {
@@ -166,6 +214,7 @@ function loadCategoryConfigFromPath(path: string, sourceLabel: string): ParsedCa
 
   const content = readFileSync(path, 'utf-8');
   const raw = parseYaml(content);
+  warnLegacyCategoryYamlKeys(raw, new Set());
   return parseCategoryConfig(raw, sourceLabel);
 }
 
@@ -198,12 +247,12 @@ function resolveOthersCategoryName(defaultConfig: ParsedCategoryConfig, userConf
 }
 
 /**
- * Load default categories from builtin resource file.
- * Returns null if file doesn't exist or has no piece_categories.
+ * Load default categories from builtin `workflow-categories.yaml` only.
+ * Returns null if file exists but defines neither `workflow_categories` nor `piece_categories`.
  */
 export function loadDefaultCategories(cwd: string): CategoryConfig | null {
   const { language: lang } = resolvePieceConfigValues(cwd, ['language']);
-  const filePath = join(getLanguageResourcesDir(lang), 'piece-categories.yaml');
+  const filePath = join(getLanguageResourcesDir(lang), 'workflow-categories.yaml');
   const parsed = loadCategoryConfigFromPath(filePath, filePath);
 
   if (!parsed?.pieceCategories) {
@@ -224,10 +273,10 @@ export function loadDefaultCategories(cwd: string): CategoryConfig | null {
   };
 }
 
-/** Get the path to the builtin default categories file. */
+/** Get the path to the builtin default categories file (`workflow-categories.yaml`). */
 export function getDefaultCategoriesPath(cwd: string): string {
   const { language: lang } = resolvePieceConfigValues(cwd, ['language']);
-  return join(getLanguageResourcesDir(lang), 'piece-categories.yaml');
+  return join(getLanguageResourcesDir(lang), 'workflow-categories.yaml');
 }
 
 function buildSeparatedCategories(

@@ -34,8 +34,8 @@ language: ja         # 表示言語: ja | en
 # notification_sound: true         # 通知音全体のON/OFF
 # notification_sound_events:       # イベント別通知音（未指定はtrue扱い）
 #   iteration_limit: true
-#   piece_complete: true
-#   piece_abort: true
+#   workflow_complete: true
+#   workflow_abort: true
 #   run_complete: true
 #   run_abort: true
 # logging:
@@ -82,12 +82,12 @@ language: ja         # 表示言語: ja | en
 # runtime:
 #   prepare: [node, gradle, ./custom-script.sh]
 
-# ピースレベルのオーバーライド
-# piece_overrides:
+# ワークフローレベルのオーバーライド
+# workflow_overrides:
 #   quality_gates:
 #     - "All tests pass"
 #   quality_gates_edit_only: true
-#   movements:
+#   steps:
 #     review:
 #       quality_gates:
 #         - "No security vulnerabilities"
@@ -116,8 +116,8 @@ language: ja         # 表示言語: ja | en
 # その他
 # bookmarks_file: ~/.takt/preferences/bookmarks.yaml   # ブックマーク保存先
 
-# ピース一覧/カテゴリ
-# enable_builtin_pieces: true                             # builtins/{lang}/pieces を有効化
+# ワークフロー一覧/カテゴリ
+# enable_builtin_workflows: true                          # builtins/{lang}/workflows を有効化
 # disabled_builtins:
 #   - magi                                                # 無効化するビルトインピース名
-# piece_categories_file: ~/.takt/preferences/piece-categories.yaml  # カテゴリ定義ファイル
+# workflow_categories_file: ~/.takt/preferences/workflow-categories.yaml  # カテゴリ定義ファイル
