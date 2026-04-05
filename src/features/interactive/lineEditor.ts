@@ -90,10 +90,10 @@ export interface InputCallbacks {
  * or -1 if the rest is a potential incomplete CSI/SS3 prefix that needs
  * more data, or 0 if the \x1B is a bare Esc.
  */
-function tryConsumeEscapeSequence(
+const tryConsumeEscapeSequence = (
   rest: string,
   callbacks: InputCallbacks,
-): number {
+): number => {
   if (rest.startsWith(ESC_PASTE_START)) {
     callbacks.onPasteStart();
     return ESC_PASTE_START.length;
@@ -155,7 +155,7 @@ function tryConsumeEscapeSequence(
 
   callbacks.onEsc();
   return 0;
-}
+};
 
 /**
  * Parse raw stdin data into semantic input events.
