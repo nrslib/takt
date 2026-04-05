@@ -35,6 +35,7 @@ import { callClaudeHeadless } from '../infra/claude-headless/client.js';
 
 describe('callClaudeHeadless', () => {
   let lastArgv: string[] = [];
+  let lastSpawnEnv: NodeJS.ProcessEnv | undefined;
   let capturedMcpConfigContent: string | undefined;
   let capturedMcpConfigMode: number | undefined;
   let capturedMcpConfigPath: string | undefined;
@@ -64,6 +65,7 @@ describe('callClaudeHeadless', () => {
       return actual.rm(...args);
     });
     lastArgv = [];
+    lastSpawnEnv = undefined;
     capturedMcpConfigContent = undefined;
     capturedMcpConfigMode = undefined;
     capturedMcpConfigPath = undefined;
@@ -76,8 +78,9 @@ describe('callClaudeHeadless', () => {
     closeSignal?: NodeJS.Signals | null;
     error?: NodeJS.ErrnoException;
   }): void {
-    vi.mocked(spawn).mockImplementation((_cmd, _args, _o) => {
+    vi.mocked(spawn).mockImplementation((_cmd, _args, spawnOptions) => {
       lastArgv = [...(_args as string[])];
+      lastSpawnEnv = spawnOptions?.env as NodeJS.ProcessEnv | undefined;
       const mcpIndex = lastArgv.indexOf('--mcp-config');
       if (mcpIndex >= 0) {
         capturedMcpConfigPath = lastArgv[mcpIndex + 1];
@@ -506,6 +509,20 @@ describe('callClaudeHeadless', () => {
     expect(modelIdx).toBeLessThan(toolsIdx);
     expect(toolsIdx).toBeLessThan(effortIdx);
     expect(effortIdx).toBeLessThan(sepIdx);
+  });
+
+  it('passes anthropicApiKey to the child process as ANTHROPIC_API_KEY', async () => {
+    stubSpawn({
+      stdoutChunks: [`${JSON.stringify({ type: 'text', text: 'x' })}\n`],
+      closeCode: 0,
+    });
+
+    await callClaudeHeadless('agent', 'p', {
+      cwd: '/tmp',
+      anthropicApiKey: 'sk-ant-from-config',
+    });
+
+    expect(lastSpawnEnv?.ANTHROPIC_API_KEY).toBe('sk-ant-from-config');
   });
 
   it('omits --allowed-tools and --effort when not configured', async () => {

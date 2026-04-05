@@ -8,6 +8,14 @@ const HEADLESS_MAX_BUFFER_BYTES = 10 * 1024 * 1024;
 export const HEADLESS_ABORTED_MESSAGE = 'Claude CLI execution aborted';
 const CLAUDE_COMMAND = 'claude';
 
+function buildHeadlessEnv(options: ClaudeHeadlessCallOptions): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  if (options.anthropicApiKey) {
+    env.ANTHROPIC_API_KEY = options.anthropicApiKey;
+  }
+  return env;
+}
+
 export type ExecError = Error & {
   code?: string | number;
   stdout?: string;
@@ -44,7 +52,7 @@ export function runHeadlessCli(
     const executable = options.claudeCliPath ?? CLAUDE_COMMAND;
     const child = spawn(executable, args, {
       cwd: options.cwd,
-      env: process.env,
+      env: buildHeadlessEnv(options),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 

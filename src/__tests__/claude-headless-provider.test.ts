@@ -8,6 +8,11 @@ vi.mock('../infra/claude-headless/client.js', () => ({
   callClaudeHeadless: callClaudeHeadlessMock,
 }));
 
+vi.mock('../infra/config/index.js', () => ({
+  resolveClaudeCliPath: vi.fn(() => undefined),
+  resolveAnthropicApiKey: vi.fn(() => 'sk-ant-from-config'),
+}));
+
 import { ClaudeHeadlessProvider } from '../infra/providers/claude-headless.js';
 import { ProviderRegistry } from '../infra/providers/index.js';
 
@@ -112,6 +117,7 @@ describe('ClaudeHeadlessProvider', () => {
       sessionId: 'opaque-session-id-from-report-phase',
       permissionMode: 'edit',
       bypassPermissions: true,
+      anthropicApiKey: 'sk-ant-from-config',
       sandbox: {
         allowUnsandboxedCommands: true,
         excludedCommands: ['./gradlew'],

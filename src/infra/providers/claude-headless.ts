@@ -1,6 +1,6 @@
 import { callClaudeHeadless } from '../claude-headless/client.js';
 import type { ClaudeHeadlessCallOptions } from '../claude-headless/types.js';
-import { resolveClaudeCliPath } from '../config/index.js';
+import { resolveAnthropicApiKey, resolveClaudeCliPath } from '../config/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
 import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from './types.js';
 
@@ -11,6 +11,7 @@ function toHeadlessOptions(options: ProviderCallOptions): ClaudeHeadlessCallOpti
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
     model: options.model,
+    anthropicApiKey: options.anthropicApiKey ?? resolveAnthropicApiKey(),
     effort: claudeOptions?.effort,
     allowedTools: options.allowedTools,
     mcpServers: options.mcpServers,

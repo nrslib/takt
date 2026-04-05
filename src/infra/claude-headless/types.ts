@@ -7,6 +7,7 @@ export interface ClaudeHeadlessCallOptions {
   abortSignal?: AbortSignal;
   sessionId?: string;
   model?: string;
+  anthropicApiKey?: string;
   effort?: ClaudeEffort;
   allowedTools?: string[];
   mcpServers?: Record<string, McpServerConfig>;
