@@ -10,6 +10,7 @@
 import * as readline from 'node:readline';
 import { StringDecoder } from 'node:string_decoder';
 import { stripAnsi, getDisplayWidth } from '../../shared/utils/text.js';
+import { createCompletionController } from './completionController.js';
 
 /** Escape sequences for terminal protocol control */
 const PASTE_BRACKET_ENABLE = '\x1B[?2004h';
@@ -78,8 +79,83 @@ export interface InputCallbacks {
   onWordRight: () => void;
   onHome: () => void;
   onEnd: () => void;
+  onEsc: () => void;
   onChar: (ch: string) => void;
 }
+
+/**
+ * Try to consume an escape sequence starting after the leading \x1B.
+ *
+ * Returns the number of characters consumed (excluding the \x1B itself),
+ * or -1 if the rest is a potential incomplete CSI/SS3 prefix that needs
+ * more data, or 0 if the \x1B is a bare Esc.
+ */
+const tryConsumeEscapeSequence = (
+  rest: string,
+  callbacks: InputCallbacks,
+): number => {
+  if (rest.startsWith(ESC_PASTE_START)) {
+    callbacks.onPasteStart();
+    return ESC_PASTE_START.length;
+  }
+  if (rest.startsWith(ESC_PASTE_END)) {
+    callbacks.onPasteEnd();
+    return ESC_PASTE_END.length;
+  }
+  if (rest.startsWith(ESC_SHIFT_ENTER)) {
+    callbacks.onShiftEnter();
+    return ESC_SHIFT_ENTER.length;
+  }
+  const ctrlKey = decodeCtrlKey(rest);
+  if (ctrlKey) {
+    callbacks.onChar(ctrlKey.ch);
+    return ctrlKey.consumed;
+  }
+
+  // Arrow keys
+  if (rest.startsWith('[D')) { callbacks.onArrowLeft(); return 2; }
+  if (rest.startsWith('[C')) { callbacks.onArrowRight(); return 2; }
+  if (rest.startsWith('[A')) { callbacks.onArrowUp(); return 2; }
+  if (rest.startsWith('[B')) { callbacks.onArrowDown(); return 2; }
+
+  // Option+Arrow (CSI modified): \x1B[1;3D (left), \x1B[1;3C (right)
+  if (rest.startsWith('[1;3D')) { callbacks.onWordLeft(); return 5; }
+  if (rest.startsWith('[1;3C')) { callbacks.onWordRight(); return 5; }
+
+  // Option+Arrow (SS3/alt): \x1Bb (left), \x1Bf (right)
+  if (rest.startsWith('b')) { callbacks.onWordLeft(); return 1; }
+  if (rest.startsWith('f')) { callbacks.onWordRight(); return 1; }
+
+  // Home: \x1B[H (CSI) or \x1BOH (SS3/application mode)
+  if (rest.startsWith('[H') || rest.startsWith('OH')) { callbacks.onHome(); return 2; }
+
+  // End: \x1B[F (CSI) or \x1BOF (SS3/application mode)
+  if (rest.startsWith('[F') || rest.startsWith('OF')) { callbacks.onEnd(); return 2; }
+
+  // Kitty keyboard protocol: ESC key → \x1B[27u or \x1B[27;1u
+  const kittyEscMatch = rest.match(/^\[27(?:;1)?u/);
+  if (kittyEscMatch) {
+    callbacks.onEsc();
+    return kittyEscMatch[0].length;
+  }
+
+  // Unknown CSI sequences: skip
+  if (rest.startsWith('[')) {
+    const csiMatch = rest.match(/^\[[0-9;]*[A-Za-z~]/);
+    if (csiMatch) return csiMatch[0].length;
+    // Incomplete CSI — need more data
+    return -1;
+  }
+
+  // SS3 prefix ('O') without a recognized follower — could be incomplete
+  if (rest.startsWith('O') && rest.length === 1) return -1;
+
+  // Bare Esc (followed by a non-sequence character or nothing)
+  if (rest.length === 0) return -1;
+
+  callbacks.onEsc();
+  return 0;
+};
 
 /**
  * Parse raw stdin data into semantic input events.
@@ -94,99 +170,16 @@ export function parseInputData(data: string, callbacks: InputCallbacks): void {
 
     if (ch === '\x1B') {
       const rest = data.slice(i + 1);
+      const consumed = tryConsumeEscapeSequence(rest, callbacks);
 
-      if (rest.startsWith(ESC_PASTE_START)) {
-        callbacks.onPasteStart();
-        i += 1 + ESC_PASTE_START.length;
-        continue;
-      }
-      if (rest.startsWith(ESC_PASTE_END)) {
-        callbacks.onPasteEnd();
-        i += 1 + ESC_PASTE_END.length;
-        continue;
-      }
-      if (rest.startsWith(ESC_SHIFT_ENTER)) {
-        callbacks.onShiftEnter();
-        i += 1 + ESC_SHIFT_ENTER.length;
-        continue;
-      }
-      const ctrlKey = decodeCtrlKey(rest);
-      if (ctrlKey) {
-        callbacks.onChar(ctrlKey.ch);
-        i += 1 + ctrlKey.consumed;
+      if (consumed === -1) {
+        // Incomplete escape sequence at end of chunk — treat as bare Esc
+        callbacks.onEsc();
+        i++;
         continue;
       }
 
-      // Arrow keys
-      if (rest.startsWith('[D')) {
-        callbacks.onArrowLeft();
-        i += 3;
-        continue;
-      }
-      if (rest.startsWith('[C')) {
-        callbacks.onArrowRight();
-        i += 3;
-        continue;
-      }
-      if (rest.startsWith('[A')) {
-        callbacks.onArrowUp();
-        i += 3;
-        continue;
-      }
-      if (rest.startsWith('[B')) {
-        callbacks.onArrowDown();
-        i += 3;
-        continue;
-      }
-
-      // Option+Arrow (CSI modified): \x1B[1;3D (left), \x1B[1;3C (right)
-      if (rest.startsWith('[1;3D')) {
-        callbacks.onWordLeft();
-        i += 6;
-        continue;
-      }
-      if (rest.startsWith('[1;3C')) {
-        callbacks.onWordRight();
-        i += 6;
-        continue;
-      }
-
-      // Option+Arrow (SS3/alt): \x1Bb (left), \x1Bf (right)
-      if (rest.startsWith('b')) {
-        callbacks.onWordLeft();
-        i += 2;
-        continue;
-      }
-      if (rest.startsWith('f')) {
-        callbacks.onWordRight();
-        i += 2;
-        continue;
-      }
-
-      // Home: \x1B[H (CSI) or \x1BOH (SS3/application mode)
-      if (rest.startsWith('[H') || rest.startsWith('OH')) {
-        callbacks.onHome();
-        i += 3;
-        continue;
-      }
-
-      // End: \x1B[F (CSI) or \x1BOF (SS3/application mode)
-      if (rest.startsWith('[F') || rest.startsWith('OF')) {
-        callbacks.onEnd();
-        i += 3;
-        continue;
-      }
-
-      // Unknown CSI sequences: skip
-      if (rest.startsWith('[')) {
-        const csiMatch = rest.match(/^\[[0-9;]*[A-Za-z~]/);
-        if (csiMatch) {
-          i += 1 + csiMatch[0].length;
-          continue;
-        }
-      }
-      // Unrecognized escape: skip the \x1B
-      i++;
+      i += 1 + consumed;
       continue;
     }
 
@@ -194,6 +187,76 @@ export function parseInputData(data: string, callbacks: InputCallbacks): void {
     i++;
   }
 }
+
+const ESC_AMBIGUITY_TIMEOUT_MS = 50 as const;
+
+/**
+ * Stateful escape sequence parser for chunked stdin input.
+ *
+ * Holds an incomplete trailing \x1B across chunks and resolves it
+ * when the next chunk arrives or after a timeout.
+ */
+export const createEscapeParser = (
+  callbacks: InputCallbacks,
+): { feed: (data: string) => void; flush: () => void } => {
+  let pendingEsc = false;
+  let escTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const clearEscTimer = (): void => {
+    if (escTimer !== null) {
+      clearTimeout(escTimer);
+      escTimer = null;
+    }
+  };
+
+  const flush = (): void => {
+    clearEscTimer();
+    if (pendingEsc) {
+      pendingEsc = false;
+      callbacks.onEsc();
+    }
+  };
+
+  const feed = (data: string): void => {
+    let input = data;
+
+    if (pendingEsc) {
+      pendingEsc = false;
+      clearEscTimer();
+      input = `\x1B${input}`;
+    }
+
+    let i = 0;
+    while (i < input.length) {
+      const ch = input[i]!;
+
+      if (ch === '\x1B') {
+        const rest = input.slice(i + 1);
+
+        if (rest.length === 0) {
+          pendingEsc = true;
+          escTimer = setTimeout(flush, ESC_AMBIGUITY_TIMEOUT_MS);
+          return;
+        }
+
+        const consumed = tryConsumeEscapeSequence(rest, callbacks);
+        if (consumed === -1) {
+          pendingEsc = true;
+          escTimer = setTimeout(flush, ESC_AMBIGUITY_TIMEOUT_MS);
+          return;
+        }
+
+        i += 1 + consumed;
+        continue;
+      }
+
+      callbacks.onChar(ch);
+      i++;
+    }
+  };
+
+  return { feed, flush };
+};
 
 /**
  * Read multiline input from the user using raw mode with cursor management.
@@ -207,7 +270,18 @@ export function parseInputData(data: string, callbacks: InputCallbacks): void {
  *
  * Falls back to readline.question() in non-TTY environments.
  */
-export function readMultilineInput(prompt: string): Promise<string | null> {
+export function readMultilineInput(
+  prompt: string,
+  options?: {
+    completionProvider?: (
+      context: { buffer: string },
+    ) => readonly {
+      readonly value: string;
+      readonly description?: string;
+      readonly applyValue?: string;
+    }[];
+  },
+): Promise<string | null> {
   if (!process.stdin.isTTY) {
     return new Promise((resolve) => {
       if (process.stdin.readable && !process.stdin.destroyed) {
@@ -297,6 +371,55 @@ export function readMultilineInput(prompt: string): Promise<string | null> {
     function getTermWidth(): number {
       return process.stdout.columns || 80;
     }
+
+    // --- Completion menu helpers ---
+
+    /**
+     * Count display rows between two arbitrary buffer positions.
+     */
+    function countDisplayRowsBetweenPositions(from: number, to: number): number {
+      if (from >= to) return 0;
+      let rows = 0;
+      let pos = from;
+      while (pos < to) {
+        const rowEnd = getDisplayRowEnd(pos);
+        if (rowEnd >= to) break;
+        const nextChar = buffer[rowEnd];
+        if (nextChar === '\n') {
+          rows++;
+          pos = rowEnd + 1;
+        } else {
+          rows++;
+          pos = rowEnd;
+        }
+      }
+      return rows;
+    }
+
+    /**
+     * Count display rows from cursor position to end of buffer.
+     */
+    function countRowsBelowCursor(): number {
+      const cursorRow = countDisplayRowsBetweenPositions(0, cursorPos);
+      const totalRows = countDisplayRowsBetweenPositions(0, buffer.length);
+      return totalRows - cursorRow;
+    }
+
+    const completion = createCompletionController(
+      {
+        getBuffer: () => buffer,
+        getCursorPos: () => cursorPos,
+        getTermWidth,
+        getTerminalColumn,
+        countRowsBelowCursor,
+      },
+      {
+        setBuffer: (v) => { buffer = v; },
+        setCursorPos: (v) => { cursorPos = v; },
+      },
+      promptWidth,
+      options?.completionProvider,
+    );
 
     /** Buffer position of the display row start that contains `pos` */
     function getDisplayRowStart(pos: number): number {
@@ -392,6 +515,8 @@ export function readMultilineInput(prompt: string): Promise<string | null> {
     }
 
     function cleanup(): void {
+      escParser.flush();
+      completion.hide();
       process.stdin.removeListener('data', onData);
       process.stdout.write(PASTE_BRACKET_DISABLE);
       process.stdout.write(KITTY_KB_DISABLE);
@@ -555,18 +680,13 @@ export function readMultilineInput(prompt: string): Promise<string | null> {
 
     const utf8Decoder = new StringDecoder('utf8');
 
-    function onData(data: Buffer): void {
-      try {
-        const str = utf8Decoder.write(data);
-        if (!str) return;
-
-        parseInputData(str, {
-          onPasteStart() { state = 'paste'; },
+    const escParser = createEscapeParser({
+          onPasteStart() { state = 'paste'; completion.hide(); },
           onPasteEnd() {
             state = 'normal';
             rerenderFromCursor();
           },
-          onShiftEnter() { insertNewline(); },
+          onShiftEnter() { completion.hide(); insertNewline(); },
           onArrowLeft() {
             if (state !== 'normal') return;
             if (cursorPos > getLineStart()) {
@@ -597,6 +717,12 @@ export function readMultilineInput(prompt: string): Promise<string | null> {
           },
           onArrowUp() {
             if (state !== 'normal') return;
+            
+            if (completion.getState()) {
+              completion.moveSelection(-1);
+              return;
+            }
+
             const logicalLineStart = getLineStart();
             const displayRowStart = getDisplayRowStart(cursorPos);
             const displayCol = getDisplayRowColumn(cursorPos);
@@ -616,6 +742,12 @@ export function readMultilineInput(prompt: string): Promise<string | null> {
           },
           onArrowDown() {
             if (state !== 'normal') return;
+
+            if (completion.getState()) {
+              completion.moveSelection(1);
+              return;
+            }
+
             const logicalLineEnd = getLineEnd();
             const displayRowEnd = getDisplayRowEnd(cursorPos);
             const displayCol = getDisplayRowColumn(cursorPos);
@@ -662,6 +794,9 @@ export function readMultilineInput(prompt: string): Promise<string | null> {
             if (state !== 'normal') return;
             moveCursorToLogicalLineEnd();
           },
+          onEsc() {
+            completion.hide();
+          },
           onChar(ch: string) {
             if (state === 'paste') {
               if (ch === '\r' || ch === '\n') {
@@ -676,8 +811,26 @@ export function readMultilineInput(prompt: string): Promise<string | null> {
               return;
             }
 
+            // Tab: apply completion
+            if (ch === '\t') {
+              if (completion.getState()) {
+                completion.apply();
+              }
+              return;
+            }
+
             // Submit
             if (ch === '\r') {
+              const compState = completion.getState();
+              if (compState && compState.candidates.length > 0) {
+                const selected = compState.candidates[compState.selectedIndex];
+                if (selected) {
+                  buffer = selected.value;
+                  cursorPos = buffer.length;
+                }
+              }
+              
+              completion.hide();
               process.stdout.write('\n');
               cleanup();
               resolve(buffer);
@@ -691,19 +844,26 @@ export function readMultilineInput(prompt: string): Promise<string | null> {
               return;
             }
             // Editing
-            if (ch === '\x7F' || ch === '\x08') { deleteCharBefore(); return; }
+            if (ch === '\x7F' || ch === '\x08') { deleteCharBefore(); completion.update(); return; }
             if (ch === '\x01') { moveCursorToDisplayRowStart(); return; }
             if (ch === '\x05') { moveCursorToDisplayRowEnd(); return; }
-            if (ch === '\x0B') { deleteToLineEnd(); return; }
-            if (ch === '\x15') { deleteToLineStart(); return; }
-            if (ch === '\x17') { deleteWord(); return; }
-            if (ch === '\x0A') { insertNewline(); return; }
+            if (ch === '\x0B') { deleteToLineEnd(); completion.update(); return; }
+            if (ch === '\x15') { deleteToLineStart(); completion.update(); return; }
+            if (ch === '\x17') { deleteWord(); completion.update(); return; }
+            if (ch === '\x0A') { completion.hide(); insertNewline(); return; }
             // Ignore unknown control characters
             if (ch.charCodeAt(0) < 0x20) return;
             // Regular character
             insertChar(ch);
+            completion.update();
           },
         });
+
+    function onData(data: Buffer): void {
+      try {
+        const str = utf8Decoder.write(data);
+        if (!str) return;
+        escParser.feed(str);
       } catch {
         cleanup();
         resolve(null);
