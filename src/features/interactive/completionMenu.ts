@@ -6,11 +6,13 @@
  */
 
 import chalk from 'chalk';
-import { truncateText } from '../../shared/utils/text.js';
+import { getDisplayWidth, truncateText } from '../../shared/utils/text.js';
 
 const SEPARATOR_CHAR = '─';
-const COMMAND_COLUMN_WIDTH = 24;
+const DEFAULT_COMMAND_COLUMN_WIDTH = 24;
 const LEFT_PADDING = 2;
+const DESC_GAP = 2;
+const MIN_COMMAND_WIDTH = 8;
 
 /**
  * Render completion menu lines (pure function).
@@ -27,11 +29,25 @@ export const renderCompletionMenu = (
   termWidth: number,
 ): readonly string[] => {
   const separator = chalk.dim(SEPARATOR_CHAR.repeat(termWidth));
-  const descMaxWidth = termWidth - LEFT_PADDING - COMMAND_COLUMN_WIDTH - 2;
+
+  const maxCommandDisplayWidth = candidates.reduce(
+    (max, entry) => Math.max(max, getDisplayWidth(entry.value)),
+    0,
+  );
+  const commandColWidth = Math.min(
+    Math.max(maxCommandDisplayWidth + 2, MIN_COMMAND_WIDTH),
+    Math.max(DEFAULT_COMMAND_COLUMN_WIDTH, maxCommandDisplayWidth + 2),
+  );
+  const availableForRow = Math.max(termWidth - LEFT_PADDING, 0);
+  const clampedCommandCol = Math.min(commandColWidth, availableForRow);
+  const descMaxWidth = availableForRow - clampedCommandCol - DESC_GAP;
 
   const lines = candidates.map((entry, i) => {
     const isSelected = i === selectedIndex;
-    const command = entry.value.padEnd(COMMAND_COLUMN_WIDTH);
+    const commandText = getDisplayWidth(entry.value) > clampedCommandCol
+      ? truncateText(entry.value, clampedCommandCol)
+      : entry.value;
+    const command = commandText.padEnd(clampedCommandCol);
     const desc = descMaxWidth > 0
       ? truncateText(entry.description ?? '', descMaxWidth)
       : '';

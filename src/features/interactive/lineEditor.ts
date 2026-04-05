@@ -84,6 +84,80 @@ export interface InputCallbacks {
 }
 
 /**
+ * Try to consume an escape sequence starting after the leading \x1B.
+ *
+ * Returns the number of characters consumed (excluding the \x1B itself),
+ * or -1 if the rest is a potential incomplete CSI/SS3 prefix that needs
+ * more data, or 0 if the \x1B is a bare Esc.
+ */
+function tryConsumeEscapeSequence(
+  rest: string,
+  callbacks: InputCallbacks,
+): number {
+  if (rest.startsWith(ESC_PASTE_START)) {
+    callbacks.onPasteStart();
+    return ESC_PASTE_START.length;
+  }
+  if (rest.startsWith(ESC_PASTE_END)) {
+    callbacks.onPasteEnd();
+    return ESC_PASTE_END.length;
+  }
+  if (rest.startsWith(ESC_SHIFT_ENTER)) {
+    callbacks.onShiftEnter();
+    return ESC_SHIFT_ENTER.length;
+  }
+  const ctrlKey = decodeCtrlKey(rest);
+  if (ctrlKey) {
+    callbacks.onChar(ctrlKey.ch);
+    return ctrlKey.consumed;
+  }
+
+  // Arrow keys
+  if (rest.startsWith('[D')) { callbacks.onArrowLeft(); return 2; }
+  if (rest.startsWith('[C')) { callbacks.onArrowRight(); return 2; }
+  if (rest.startsWith('[A')) { callbacks.onArrowUp(); return 2; }
+  if (rest.startsWith('[B')) { callbacks.onArrowDown(); return 2; }
+
+  // Option+Arrow (CSI modified): \x1B[1;3D (left), \x1B[1;3C (right)
+  if (rest.startsWith('[1;3D')) { callbacks.onWordLeft(); return 5; }
+  if (rest.startsWith('[1;3C')) { callbacks.onWordRight(); return 5; }
+
+  // Option+Arrow (SS3/alt): \x1Bb (left), \x1Bf (right)
+  if (rest.startsWith('b')) { callbacks.onWordLeft(); return 1; }
+  if (rest.startsWith('f')) { callbacks.onWordRight(); return 1; }
+
+  // Home: \x1B[H (CSI) or \x1BOH (SS3/application mode)
+  if (rest.startsWith('[H') || rest.startsWith('OH')) { callbacks.onHome(); return 2; }
+
+  // End: \x1B[F (CSI) or \x1BOF (SS3/application mode)
+  if (rest.startsWith('[F') || rest.startsWith('OF')) { callbacks.onEnd(); return 2; }
+
+  // Kitty keyboard protocol: ESC key → \x1B[27u or \x1B[27;1u
+  const kittyEscMatch = rest.match(/^\[27(?:;1)?u/);
+  if (kittyEscMatch) {
+    callbacks.onEsc();
+    return kittyEscMatch[0].length;
+  }
+
+  // Unknown CSI sequences: skip
+  if (rest.startsWith('[')) {
+    const csiMatch = rest.match(/^\[[0-9;]*[A-Za-z~]/);
+    if (csiMatch) return csiMatch[0].length;
+    // Incomplete CSI — need more data
+    return -1;
+  }
+
+  // SS3 prefix ('O') without a recognized follower — could be incomplete
+  if (rest.startsWith('O') && rest.length === 1) return -1;
+
+  // Bare Esc (followed by a non-sequence character or nothing)
+  if (rest.length === 0) return -1;
+
+  callbacks.onEsc();
+  return 0;
+}
+
+/**
  * Parse raw stdin data into semantic input events.
  *
  * Handles paste bracket mode, Kitty keyboard protocol, arrow keys,
@@ -96,108 +170,16 @@ export function parseInputData(data: string, callbacks: InputCallbacks): void {
 
     if (ch === '\x1B') {
       const rest = data.slice(i + 1);
+      const consumed = tryConsumeEscapeSequence(rest, callbacks);
 
-      if (rest.startsWith(ESC_PASTE_START)) {
-        callbacks.onPasteStart();
-        i += 1 + ESC_PASTE_START.length;
-        continue;
-      }
-      if (rest.startsWith(ESC_PASTE_END)) {
-        callbacks.onPasteEnd();
-        i += 1 + ESC_PASTE_END.length;
-        continue;
-      }
-      if (rest.startsWith(ESC_SHIFT_ENTER)) {
-        callbacks.onShiftEnter();
-        i += 1 + ESC_SHIFT_ENTER.length;
-        continue;
-      }
-      const ctrlKey = decodeCtrlKey(rest);
-      if (ctrlKey) {
-        callbacks.onChar(ctrlKey.ch);
-        i += 1 + ctrlKey.consumed;
-        continue;
-      }
-
-      // Arrow keys
-      if (rest.startsWith('[D')) {
-        callbacks.onArrowLeft();
-        i += 3;
-        continue;
-      }
-      if (rest.startsWith('[C')) {
-        callbacks.onArrowRight();
-        i += 3;
-        continue;
-      }
-      if (rest.startsWith('[A')) {
-        callbacks.onArrowUp();
-        i += 3;
-        continue;
-      }
-      if (rest.startsWith('[B')) {
-        callbacks.onArrowDown();
-        i += 3;
-        continue;
-      }
-
-      // Option+Arrow (CSI modified): \x1B[1;3D (left), \x1B[1;3C (right)
-      if (rest.startsWith('[1;3D')) {
-        callbacks.onWordLeft();
-        i += 6;
-        continue;
-      }
-      if (rest.startsWith('[1;3C')) {
-        callbacks.onWordRight();
-        i += 6;
-        continue;
-      }
-
-      // Option+Arrow (SS3/alt): \x1Bb (left), \x1Bf (right)
-      if (rest.startsWith('b')) {
-        callbacks.onWordLeft();
-        i += 2;
-        continue;
-      }
-      if (rest.startsWith('f')) {
-        callbacks.onWordRight();
-        i += 2;
-        continue;
-      }
-
-      // Home: \x1B[H (CSI) or \x1BOH (SS3/application mode)
-      if (rest.startsWith('[H') || rest.startsWith('OH')) {
-        callbacks.onHome();
-        i += 3;
-        continue;
-      }
-
-      // End: \x1B[F (CSI) or \x1BOF (SS3/application mode)
-      if (rest.startsWith('[F') || rest.startsWith('OF')) {
-        callbacks.onEnd();
-        i += 3;
-        continue;
-      }
-
-      // Kitty keyboard protocol: ESC key → \x1B[27u or \x1B[27;1u
-      const kittyEscMatch = rest.match(/^\[27(?:;1)?u/);
-      if (kittyEscMatch) {
+      if (consumed === -1) {
+        // Incomplete escape sequence at end of chunk — treat as bare Esc
         callbacks.onEsc();
-        i += 1 + kittyEscMatch[0].length;
+        i++;
         continue;
       }
 
-      // Unknown CSI sequences: skip
-      if (rest.startsWith('[')) {
-        const csiMatch = rest.match(/^\[[0-9;]*[A-Za-z~]/);
-        if (csiMatch) {
-          i += 1 + csiMatch[0].length;
-          continue;
-        }
-      }
-      // Bare Esc (not part of a recognized sequence)
-      callbacks.onEsc();
-      i++;
+      i += 1 + consumed;
       continue;
     }
 
@@ -205,6 +187,76 @@ export function parseInputData(data: string, callbacks: InputCallbacks): void {
     i++;
   }
 }
+
+const ESC_AMBIGUITY_TIMEOUT_MS = 50 as const;
+
+/**
+ * Stateful escape sequence parser for chunked stdin input.
+ *
+ * Holds an incomplete trailing \x1B across chunks and resolves it
+ * when the next chunk arrives or after a timeout.
+ */
+export const createEscapeParser = (
+  callbacks: InputCallbacks,
+): { feed: (data: string) => void; flush: () => void } => {
+  let pendingEsc = false;
+  let escTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const clearEscTimer = (): void => {
+    if (escTimer !== null) {
+      clearTimeout(escTimer);
+      escTimer = null;
+    }
+  };
+
+  const flush = (): void => {
+    clearEscTimer();
+    if (pendingEsc) {
+      pendingEsc = false;
+      callbacks.onEsc();
+    }
+  };
+
+  const feed = (data: string): void => {
+    let input = data;
+
+    if (pendingEsc) {
+      pendingEsc = false;
+      clearEscTimer();
+      input = `\x1B${input}`;
+    }
+
+    let i = 0;
+    while (i < input.length) {
+      const ch = input[i]!;
+
+      if (ch === '\x1B') {
+        const rest = input.slice(i + 1);
+
+        if (rest.length === 0) {
+          pendingEsc = true;
+          escTimer = setTimeout(flush, ESC_AMBIGUITY_TIMEOUT_MS);
+          return;
+        }
+
+        const consumed = tryConsumeEscapeSequence(rest, callbacks);
+        if (consumed === -1) {
+          pendingEsc = true;
+          escTimer = setTimeout(flush, ESC_AMBIGUITY_TIMEOUT_MS);
+          return;
+        }
+
+        i += 1 + consumed;
+        continue;
+      }
+
+      callbacks.onChar(ch);
+      i++;
+    }
+  };
+
+  return { feed, flush };
+};
 
 /**
  * Read multiline input from the user using raw mode with cursor management.
@@ -463,6 +515,7 @@ export function readMultilineInput(
     }
 
     function cleanup(): void {
+      escParser.flush();
       completion.hide();
       process.stdin.removeListener('data', onData);
       process.stdout.write(PASTE_BRACKET_DISABLE);
@@ -627,18 +680,13 @@ export function readMultilineInput(
 
     const utf8Decoder = new StringDecoder('utf8');
 
-    function onData(data: Buffer): void {
-      try {
-        const str = utf8Decoder.write(data);
-        if (!str) return;
-
-        parseInputData(str, {
-          onPasteStart() { state = 'paste'; },
+    const escParser = createEscapeParser({
+          onPasteStart() { state = 'paste'; completion.hide(); },
           onPasteEnd() {
             state = 'normal';
             rerenderFromCursor();
           },
-          onShiftEnter() { insertNewline(); },
+          onShiftEnter() { completion.hide(); insertNewline(); },
           onArrowLeft() {
             if (state !== 'normal') return;
             if (cursorPos > getLineStart()) {
@@ -810,6 +858,12 @@ export function readMultilineInput(
             completion.update();
           },
         });
+
+    function onData(data: Buffer): void {
+      try {
+        const str = utf8Decoder.write(data);
+        if (!str) return;
+        escParser.feed(str);
       } catch {
         cleanup();
         resolve(null);

@@ -8,7 +8,7 @@ import {
   writeCompletionMenu,
   clearCompletionMenu,
 } from '../features/interactive/completionMenu.js';
-import { stripAnsi } from '../shared/utils/text.js';
+import { stripAnsi, getDisplayWidth } from '../shared/utils/text.js';
 
 const ENGLISH_CANDIDATES: readonly {
   readonly value: string;
@@ -80,10 +80,26 @@ describe('renderCompletionMenu', () => {
   });
 
   it('should omit description when terminal width is very narrow', () => {
-    const lines = renderCompletionMenu([ENGLISH_CANDIDATES[0]!], 0, 26);
+    const lines = renderCompletionMenu([ENGLISH_CANDIDATES[0]!], 0, 14);
     const stripped = stripAnsi(lines[1]!);
     expect(stripped).toContain('/play');
     expect(stripped).not.toContain('Run a task');
+  });
+
+  it.each([20, 26, 30, 40])('should not exceed termWidth=%i for English candidates', (termWidth) => {
+    const lines = renderCompletionMenu(ENGLISH_CANDIDATES, 0, termWidth);
+    for (const line of lines) {
+      const width = getDisplayWidth(stripAnsi(line));
+      expect(width).toBeLessThanOrEqual(termWidth);
+    }
+  });
+
+  it.each([20, 26, 30, 40])('should not exceed termWidth=%i for Japanese candidates', (termWidth) => {
+    const lines = renderCompletionMenu(JAPANESE_CANDIDATES, 0, termWidth);
+    for (const line of lines) {
+      const width = getDisplayWidth(stripAnsi(line));
+      expect(width).toBeLessThanOrEqual(termWidth);
+    }
   });
 });
 

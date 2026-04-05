@@ -28,14 +28,29 @@ const SLASH_COMMAND_REGISTRY: readonly {
 );
 
 /**
- * Filter slash commands by prefix match.
+ * Conditions controlling which slash commands are available.
+ */
+export interface CommandAvailability {
+  readonly enableRetryCommand?: boolean;
+  readonly hasPreviousOrder?: boolean;
+}
+
+/**
+ * Filter slash commands by prefix match and availability conditions.
  */
 export const filterSlashCommands = (
   prefix: string,
+  availability?: CommandAvailability,
 ): readonly {
   readonly command: SlashCommand;
   readonly labelKey: string;
 }[] => {
   const lower = prefix.toLowerCase();
-  return SLASH_COMMAND_REGISTRY.filter((entry) => entry.command.startsWith(lower));
+  return SLASH_COMMAND_REGISTRY.filter((entry) => {
+    if (!entry.command.startsWith(lower)) return false;
+    if (!availability) return true;
+    if (entry.command === SlashCommand.Retry && !availability.enableRetryCommand) return false;
+    if (entry.command === SlashCommand.Replay && !availability.hasPreviousOrder) return false;
+    return true;
+  });
 };

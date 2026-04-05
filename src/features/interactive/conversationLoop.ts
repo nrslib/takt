@@ -16,6 +16,7 @@ import { createLogger } from '../../shared/utils/index.js';
 import { info, error, blankLine } from '../../shared/ui/index.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
 import { readInteractiveInput } from './interactiveInput.js';
+import type { CommandAvailability } from './slashCommandRegistry.js';
 import { selectRecentSession } from './sessionSelector.js';
 import { matchSlashCommand } from './commandMatcher.js';
 import { SlashCommand } from '../../shared/constants.js';
@@ -126,8 +127,13 @@ export async function runConversationLoop(
     return { action: selectedAction, task };
   }
 
+  const commandAvailability: CommandAvailability = {
+    enableRetryCommand: strategy.enableRetryCommand,
+    hasPreviousOrder: !!strategy.previousOrderContent,
+  };
+
   while (true) {
-    const input = await readInteractiveInput(chalk.green('> '), ctx.lang);
+    const input = await readInteractiveInput(chalk.green('> '), ctx.lang, commandAvailability);
 
     if (input === null) {
       blankLine();

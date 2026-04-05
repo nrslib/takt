@@ -56,6 +56,60 @@ describe('interactiveInput', () => {
 
       expect(provider({ buffer: '/go\nnote' })).toEqual([]);
     });
+
+    it('should exclude /retry when enableRetryCommand is falsy', () => {
+      const provider = createSlashCommandCompletionProvider('en', { enableRetryCommand: false, hasPreviousOrder: true });
+      const values = provider({ buffer: '/' }).map((c) => c.value);
+
+      expect(values).not.toContain('/retry');
+      expect(values).toContain('/replay');
+    });
+
+    it('should include /retry when enableRetryCommand is true', () => {
+      const provider = createSlashCommandCompletionProvider('en', { enableRetryCommand: true, hasPreviousOrder: true });
+      const values = provider({ buffer: '/' }).map((c) => c.value);
+
+      expect(values).toContain('/retry');
+    });
+
+    it('should exclude /replay when hasPreviousOrder is falsy', () => {
+      const provider = createSlashCommandCompletionProvider('en', { enableRetryCommand: true, hasPreviousOrder: false });
+      const values = provider({ buffer: '/' }).map((c) => c.value);
+
+      expect(values).not.toContain('/replay');
+      expect(values).toContain('/retry');
+    });
+
+    it('should include /replay when hasPreviousOrder is true', () => {
+      const provider = createSlashCommandCompletionProvider('en', { hasPreviousOrder: true });
+      const values = provider({ buffer: '/' }).map((c) => c.value);
+
+      expect(values).toContain('/replay');
+    });
+
+    it('should exclude /retry and /replay when availability is explicitly set without them', () => {
+      const provider = createSlashCommandCompletionProvider('en', {});
+      const values = provider({ buffer: '/' }).map((c) => c.value);
+
+      expect(values).not.toContain('/retry');
+      expect(values).not.toContain('/replay');
+    });
+
+    it('should support suffix slash command form "text /go"', () => {
+      const provider = createSlashCommandCompletionProvider('en');
+      const results = provider({ buffer: 'fix the bug /g' });
+
+      expect(results.length).toBe(1);
+      expect(results[0]!.value).toBe('fix the bug /go');
+      expect(results[0]!.applyValue).toBe('fix the bug /go ');
+    });
+
+    it('should return empty for slash in middle of text', () => {
+      const provider = createSlashCommandCompletionProvider('en');
+      const results = provider({ buffer: 'fix /go more text' });
+
+      expect(results).toEqual([]);
+    });
   });
 
   describe('readInteractiveInput', () => {

@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { parseInputData, type InputCallbacks } from '../features/interactive/lineEditor.js';
+import { parseInputData, createEscapeParser, type InputCallbacks } from '../features/interactive/lineEditor.js';
 
 function createCallbacks(): InputCallbacks & { calls: string[] } {
   const calls: string[] = [];
@@ -1272,6 +1272,70 @@ describe('readMultilineInput cursor navigation', () => {
 
       // Then
       expect(result).toBe('/resume');
+    });
+
+    it('should hide completion on Shift+Enter and return multiline buffer', async () => {
+      // Given: "/" → Shift+Enter → Enter
+      setupRawStdin(['/\x1B[13;2u\r']);
+
+      // When
+      const result = await callReadMultilineInput('> ', { completionProvider: testCompletionProvider });
+
+      // Then — buffer should contain newline, not a selected command
+      expect(result).toBe('/\n');
+    });
+
+    it('should hide completion on paste start', async () => {
+      // Given: "/" → paste bracket start → "test" → paste bracket end → Enter
+      setupRawStdin(['/\x1B[200~test\x1B[201~\r']);
+
+      // When
+      const result = await callReadMultilineInput('> ', { completionProvider: testCompletionProvider });
+
+      // Then — paste content appended, no command selection on Enter
+      expect(result).toBe('/test');
+    });
+  });
+
+  describe('createEscapeParser', () => {
+    it('should resolve split escape sequence across chunks', () => {
+      const cb = createCallbacks();
+      const parser = createEscapeParser(cb);
+
+      parser.feed('\x1B');
+      parser.feed('[A');
+
+      expect(cb.calls).toEqual(['up']);
+    });
+
+    it('should emit onEsc for bare Esc on flush', () => {
+      const cb = createCallbacks();
+      const parser = createEscapeParser(cb);
+
+      parser.feed('\x1B');
+      parser.flush();
+
+      expect(cb.calls).toEqual(['esc']);
+    });
+
+    it('should emit onEsc for bare Esc after timeout', async () => {
+      const cb = createCallbacks();
+      const parser = createEscapeParser(cb);
+
+      parser.feed('\x1B');
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      expect(cb.calls).toEqual(['esc']);
+    });
+
+    it('should handle normal characters without pending state', () => {
+      const cb = createCallbacks();
+      const parser = createEscapeParser(cb);
+
+      parser.feed('abc');
+
+      expect(cb.calls).toEqual(['char:a', 'char:b', 'char:c']);
     });
   });
 });
