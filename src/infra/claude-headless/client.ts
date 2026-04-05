@@ -3,7 +3,7 @@ import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentResponse, PermissionMode } from '../../core/models/index.js';
-import { createLogger, getErrorMessage, parseStructuredOutput } from '../../shared/utils/index.js';
+import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import {
   type ClaudePermissionExpression,
   taktPermissionModeToClaudeExpression,
@@ -13,7 +13,11 @@ import {
   type ExecError,
   runHeadlessCli,
 } from './headless-spawn.js';
-import { aggregateContentFromStdout, extractSessionIdFromStdout } from './stream-json-lines.js';
+import {
+  aggregateResultFromStdout,
+  extractSessionIdFromStdout,
+} from './stream-json-lines.js';
+import { buildClaudeHeadlessResponse } from './result-response.js';
 import type { ClaudeHeadlessCallOptions } from './types.js';
 
 const log = createLogger('claude-headless');
@@ -192,53 +196,17 @@ export async function callClaudeHeadless(
     cleanup = prepared.cleanup;
     const { args, expectedSessionId } = prepared;
     const { stdout, stderr } = await runHeadlessCli(args, options);
-    const content = aggregateContentFromStdout(stdout);
+    const parsed = aggregateResultFromStdout(stdout);
     const sessionId = extractSessionIdFromStdout(stdout) ?? expectedSessionId;
-    const structuredOutput = parseStructuredOutput(content, !!options.outputSchema);
-
-    if (!content) {
-      const hint = stderr.trim() || stdout.trim().slice(0, 500) || 'no parseable stream-json output';
-      const message = `Claude CLI returned no assistant text. ${hint}`;
-      if (options.onStream) {
-        options.onStream({
-          type: 'result',
-          data: {
-            result: '',
-            success: false,
-            error: message,
-            sessionId: sessionId ?? '',
-          },
-        });
-      }
-      response = {
-        persona: agentName,
-        status: 'error',
-        content: message,
-        timestamp: new Date(),
-        sessionId,
-        error: message,
-      };
-    } else {
-      if (options.onStream) {
-        options.onStream({
-          type: 'result',
-          data: {
-            result: content,
-            success: true,
-            sessionId: sessionId ?? '',
-          },
-        });
-      }
-
-      response = {
-        persona: agentName,
-        status: 'done',
-        content,
-        timestamp: new Date(),
-        sessionId,
-        structuredOutput,
-      };
-    }
+    response = buildClaudeHeadlessResponse({
+      agentName,
+      parsed,
+      stdout,
+      stderr,
+      sessionId,
+      outputSchema: options.outputSchema,
+      onStream: options.onStream,
+    });
   } catch (raw) {
     const error = raw as ExecError;
     const message = classifyError(error, options);

@@ -19,7 +19,20 @@ function pickString(source: Record<string, unknown> | undefined, keys: string[])
   return undefined;
 }
 
-function extractTextFromEvent(parsed: unknown): string | undefined {
+function parseStreamJsonLine(line: string): unknown | undefined {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  try {
+    return JSON.parse(trimmed) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+function extractStreamingTextFromEvent(parsed: unknown): string | undefined {
   if (typeof parsed === 'string') {
     const t = parsed.trim();
     return t.length > 0 ? t : undefined;
@@ -59,11 +72,6 @@ function extractTextFromEvent(parsed: unknown): string | undefined {
     }
   }
 
-  const result = root.result;
-  if (typeof result === 'string' && result.trim().length > 0) {
-    return result.trim();
-  }
-
   return undefined;
 }
 
@@ -89,44 +97,104 @@ function extractSessionIdFromEvent(parsed: unknown): string | undefined {
 }
 
 export function tryExtractTextFromStreamJsonLine(line: string): string | undefined {
-  const trimmed = line.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(trimmed) as unknown;
-  } catch {
-    return undefined;
-  }
-  return extractTextFromEvent(parsed);
+  const parsed = parseStreamJsonLine(line);
+  return parsed ? extractStreamingTextFromEvent(parsed) : undefined;
 }
 
 export function tryExtractSessionIdFromStreamJsonLine(line: string): string | undefined {
-  const trimmed = line.trim();
-  if (!trimmed) {
+  const parsed = parseStreamJsonLine(line);
+  if (!parsed) {
     return undefined;
   }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(trimmed) as unknown;
-  } catch {
-    return undefined;
-  }
-
   return extractSessionIdFromEvent(parsed);
 }
 
-export function aggregateContentFromStdout(stdout: string): string {
-  let out = '';
-  for (const line of stdout.split('\n')) {
-    const piece = tryExtractTextFromStreamJsonLine(line);
-    if (piece) {
-      out += piece;
+function extractResultError(event: Record<string, unknown>, resultContent: string): string | undefined {
+  const directError = pickString(event, ['error', 'message']);
+  if (directError) {
+    return directError;
+  }
+
+  const errors = event.errors;
+  if (Array.isArray(errors)) {
+    const messages = errors.filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+    if (messages.length > 0) {
+      return messages.join('\n');
     }
   }
-  return out.trim();
+
+  return resultContent.trim().length > 0 ? resultContent.trim() : undefined;
+}
+
+function extractStructuredOutput(event: Record<string, unknown>): Record<string, unknown> | undefined {
+  const structuredOutput = event.structured_output ?? event.structuredOutput;
+  return toRecord(structuredOutput);
+}
+
+function isSuccessfulResultEvent(event: Record<string, unknown>): boolean {
+  if (event.is_error === true || event.isError === true) {
+    return false;
+  }
+
+  const subtype = event.subtype;
+  return typeof subtype !== 'string' || subtype === 'success';
+}
+
+export interface StreamJsonStdoutResult {
+  content: string;
+  displayText: string;
+  hasResult: boolean;
+  success: boolean;
+  error?: string;
+  structuredOutput?: Record<string, unknown>;
+}
+
+export function aggregateResultFromStdout(stdout: string): StreamJsonStdoutResult {
+  let displayText = '';
+  let resultContent = '';
+  let hasResult = false;
+  let success = false;
+  let error: string | undefined;
+  let structuredOutput: Record<string, unknown> | undefined;
+
+  for (const line of stdout.split('\n')) {
+    const parsed = parseStreamJsonLine(line);
+    if (!parsed) {
+      continue;
+    }
+
+    const streamedText = extractStreamingTextFromEvent(parsed);
+    if (streamedText) {
+      displayText += streamedText;
+    }
+
+    const root = toRecord(parsed);
+    if (!root || root.type !== 'result') {
+      continue;
+    }
+
+    hasResult = true;
+    resultContent = typeof root.result === 'string' ? root.result : '';
+    success = isSuccessfulResultEvent(root);
+    error = success ? undefined : extractResultError(root, resultContent);
+    structuredOutput = extractStructuredOutput(root);
+  }
+
+  const normalizedDisplayText = displayText.trim();
+  const fallbackContent = hasResult ? resultContent : normalizedDisplayText;
+  const fallbackSuccess = hasResult ? success : normalizedDisplayText.length > 0;
+  return {
+    content: fallbackContent,
+    displayText: normalizedDisplayText,
+    hasResult,
+    success: fallbackSuccess,
+    error,
+    structuredOutput,
+  };
+}
+
+export function aggregateContentFromStdout(stdout: string): string {
+  return aggregateResultFromStdout(stdout).content;
 }
 
 export function extractSessionIdFromStdout(stdout: string): string | undefined {

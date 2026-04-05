@@ -115,12 +115,284 @@ describe('callClaudeHeadless', () => {
 
   it('returns done when stream-json yields text and process exits 0', async () => {
     stubSpawn({
-      stdoutChunks: [`${JSON.stringify({ type: 'text', text: 'ok' })}\n`],
+      stdoutChunks: [
+        `${JSON.stringify({ type: 'text', text: 'ok' })}\n`,
+        `${JSON.stringify({ type: 'result', subtype: 'success', result: 'ok' })}\n`,
+      ],
       closeCode: 0,
     });
     const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp' });
     expect(res.status).toBe('done');
     expect(res.content).toBe('ok');
+  });
+
+  it('uses only the final result text when assistant content and result contain the same text', async () => {
+    stubSpawn({
+      stdoutChunks: [
+        `${JSON.stringify({
+          type: 'assistant',
+          message: {
+            content: [{ type: 'text', text: 'final answer' }],
+          },
+        })}\n`,
+        `${JSON.stringify({
+          type: 'result',
+          subtype: 'success',
+          result: 'final answer',
+        })}\n`,
+      ],
+      closeCode: 0,
+    });
+
+    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp' });
+
+    expect(res.status).toBe('done');
+    expect(res.content).toBe('final answer');
+  });
+
+  it('prefers the final result text over assistant message content', async () => {
+    stubSpawn({
+      stdoutChunks: [
+        `${JSON.stringify({
+          type: 'assistant',
+          message: {
+            content: [{ type: 'text', text: 'draft answer' }],
+          },
+        })}\n`,
+        `${JSON.stringify({
+          type: 'result',
+          subtype: 'success',
+          result: 'final answer',
+        })}\n`,
+      ],
+      closeCode: 0,
+    });
+
+    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp' });
+
+    expect(res.status).toBe('done');
+    expect(res.content).toBe('final answer');
+  });
+
+  it('returns error when the final result marks the response as error even if result text exists', async () => {
+    stubSpawn({
+      stdoutChunks: [
+        `${JSON.stringify({
+          type: 'result',
+          subtype: 'success',
+          is_error: true,
+          result: 'partial answer',
+        })}\n`,
+      ],
+      closeCode: 0,
+    });
+
+    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp' });
+
+    expect(res.status).toBe('error');
+    expect(res.error).toContain('partial answer');
+    expect(res.content).toContain('partial answer');
+  });
+
+  it('returns the explicit final result message when isError is true', async () => {
+    stubSpawn({
+      stdoutChunks: [
+        `${JSON.stringify({
+          type: 'result',
+          subtype: 'success',
+          isError: true,
+          message: 'explicit failure',
+          result: 'partial answer',
+        })}\n`,
+      ],
+      closeCode: 0,
+    });
+
+    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp' });
+
+    expect(res.status).toBe('error');
+    expect(res.error).toBe('explicit failure');
+    expect(res.content).toBe('partial answer');
+  });
+
+  it('returns error when the final result subtype is error without is_error flags', async () => {
+    stubSpawn({
+      stdoutChunks: [
+        `${JSON.stringify({
+          type: 'result',
+          subtype: 'error',
+          message: 'explicit failure',
+          result: 'partial answer',
+        })}\n`,
+      ],
+      closeCode: 0,
+    });
+
+    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp' });
+
+    expect(res.status).toBe('error');
+    expect(res.error).toBe('explicit failure');
+    expect(res.content).toBe('partial answer');
+  });
+
+  it('uses the final result error when a success result is followed by an error result', async () => {
+    stubSpawn({
+      stdoutChunks: [
+        `${JSON.stringify({
+          type: 'result',
+          subtype: 'success',
+          result: 'first answer',
+        })}\n`,
+        `${JSON.stringify({
+          type: 'result',
+          subtype: 'success',
+          is_error: true,
+          result: 'final failure',
+        })}\n`,
+      ],
+      closeCode: 0,
+    });
+
+    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp' });
+
+    expect(res.status).toBe('error');
+    expect(res.error).toBe('final failure');
+    expect(res.content).toBe('final failure');
+  });
+
+  it('uses the final result success when an error result is followed by a success result', async () => {
+    stubSpawn({
+      stdoutChunks: [
+        `${JSON.stringify({
+          type: 'result',
+          subtype: 'error',
+          message: 'first failure',
+          result: 'first failure',
+        })}\n`,
+        `${JSON.stringify({
+          type: 'result',
+          subtype: 'success',
+          result: 'final answer',
+        })}\n`,
+      ],
+      closeCode: 0,
+    });
+
+    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp' });
+
+    expect(res.status).toBe('done');
+    expect(res.error).toBeUndefined();
+    expect(res.content).toBe('final answer');
+  });
+
+  it('prefers explicit result errors over stderr fallback when the final result fails', async () => {
+    stubSpawn({
+      stdoutChunks: [
+        `${JSON.stringify({
+          type: 'result',
+          subtype: 'error',
+          errors: ['explicit failure'],
+          result: 'partial answer',
+        })}\n`,
+      ],
+      stderrChunks: ['stderr fallback'],
+      closeCode: 0,
+    });
+
+    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp' });
+
+    expect(res.status).toBe('error');
+    expect(res.error).toBe('explicit failure');
+    expect(res.content).toBe('partial answer');
+  });
+
+  it('returns done when the final result succeeds with an empty result body', async () => {
+    stubSpawn({
+      stdoutChunks: [
+        `${JSON.stringify({
+          type: 'result',
+          subtype: 'success',
+          result: '',
+        })}\n`,
+      ],
+      closeCode: 0,
+    });
+
+    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp' });
+
+    expect(res.status).toBe('done');
+    expect(res.content).toBe('');
+    expect(res.error).toBeUndefined();
+  });
+
+  it('returns the empty final result body even when assistant content was streamed earlier', async () => {
+    stubSpawn({
+      stdoutChunks: [
+        `${JSON.stringify({
+          type: 'assistant',
+          message: {
+            content: [{ type: 'text', text: 'partial answer' }],
+          },
+        })}\n`,
+        `${JSON.stringify({
+          type: 'result',
+          subtype: 'success',
+          result: '',
+        })}\n`,
+      ],
+      closeCode: 0,
+    });
+
+    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp' });
+
+    expect(res.status).toBe('done');
+    expect(res.content).toBe('');
+    expect(res.error).toBeUndefined();
+  });
+
+  it('returns an empty final result when assistant content was streamed but result.result is missing', async () => {
+    stubSpawn({
+      stdoutChunks: [
+        `${JSON.stringify({
+          type: 'assistant',
+          message: {
+            content: [{ type: 'text', text: 'partial answer' }],
+          },
+        })}\n`,
+        `${JSON.stringify({
+          type: 'result',
+          subtype: 'success',
+        })}\n`,
+      ],
+      closeCode: 0,
+    });
+
+    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp' });
+
+    expect(res.status).toBe('done');
+    expect(res.content).toBe('');
+    expect(res.error).toBeUndefined();
+  });
+
+  it('returns done when assistant content is streamed but the final result event is missing', async () => {
+    stubSpawn({
+      stdoutChunks: [
+        `${JSON.stringify({
+          type: 'assistant',
+          message: {
+            content: [{ type: 'text', text: 'partial answer' }],
+          },
+        })}\n`,
+      ],
+      stderrChunks: ['missing final result'],
+      closeCode: 0,
+    });
+
+    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp' });
+
+    expect(res.status).toBe('done');
+    expect(res.content).toBe('partial answer');
+    expect(res.error).toBeUndefined();
   });
 
   it('returns error when exit code is non-zero', async () => {
@@ -185,7 +457,7 @@ describe('callClaudeHeadless', () => {
     stubSpawn({
       stdoutChunks: [
         `${JSON.stringify({ type: 'system', session_id: '11111111-1111-4111-8111-111111111111' })}\n`,
-        `${JSON.stringify({ type: 'text', text: 'ok' })}\n`,
+        `${JSON.stringify({ type: 'result', subtype: 'success', result: 'ok' })}\n`,
       ],
       closeCode: 0,
     });
@@ -206,7 +478,7 @@ describe('callClaudeHeadless', () => {
 
   it('returns the generated sessionId when the first successful response does not include session metadata', async () => {
     stubSpawn({
-      stdoutChunks: [`${JSON.stringify({ type: 'text', text: 'ok' })}\n`],
+      stdoutChunks: [`${JSON.stringify({ type: 'result', subtype: 'success', result: 'ok' })}\n`],
       closeCode: 0,
     });
 
@@ -287,7 +559,9 @@ describe('callClaudeHeadless', () => {
       required: ['decision'],
     };
     stubSpawn({
-      stdoutChunks: [`${JSON.stringify({ type: 'text', text: '{"decision":"approved"}' })}\n`],
+      stdoutChunks: [
+        `${JSON.stringify({ type: 'result', subtype: 'success', result: '{"decision":"approved"}' })}\n`,
+      ],
       closeCode: 0,
     });
 
@@ -303,11 +577,41 @@ describe('callClaudeHeadless', () => {
     expect(res.structuredOutput).toEqual({ decision: 'approved' });
   });
 
+  it('prefers structured_output from the final result event over parsing plain-text content', async () => {
+    const outputSchema = {
+      type: 'object',
+      properties: {
+        decision: { type: 'string' },
+      },
+      required: ['decision'],
+    };
+    stubSpawn({
+      stdoutChunks: [
+        `${JSON.stringify({
+          type: 'result',
+          subtype: 'success',
+          result: 'approved',
+          structured_output: { decision: 'approved' },
+        })}\n`,
+      ],
+      closeCode: 0,
+    });
+
+    const res = await callClaudeHeadless('agent', 'p', {
+      cwd: '/tmp',
+      outputSchema,
+    });
+
+    expect(res.status).toBe('done');
+    expect(res.content).toBe('approved');
+    expect(res.structuredOutput).toEqual({ decision: 'approved' });
+  });
+
   it('returns a new sessionId from stdout on the first call and resumes with it on the next call', async () => {
     stubSpawn({
       stdoutChunks: [
         `${JSON.stringify({ type: 'system', session_id: '22222222-2222-4222-8222-222222222222' })}\n`,
-        `${JSON.stringify({ type: 'text', text: 'first' })}\n`,
+        `${JSON.stringify({ type: 'result', subtype: 'success', result: 'first' })}\n`,
       ],
       closeCode: 0,
     });
@@ -395,7 +699,7 @@ describe('callClaudeHeadless', () => {
   it('keeps the successful response when MCP cleanup fails after execution', async () => {
     rmMock.mockRejectedValueOnce(new Error('cleanup failed'));
     stubSpawn({
-      stdoutChunks: [`${JSON.stringify({ type: 'text', text: 'x' })}\n`],
+      stdoutChunks: [`${JSON.stringify({ type: 'result', subtype: 'success', result: 'x' })}\n`],
       closeCode: 0,
     });
     const onStream = vi.fn();
@@ -427,6 +731,340 @@ describe('callClaudeHeadless', () => {
         data: expect.objectContaining({ success: false }),
       }),
     );
+  });
+
+  it('streams assistant message content as text without replaying the final result text', async () => {
+    stubSpawn({
+      stdoutChunks: [
+        `${JSON.stringify({
+          type: 'assistant',
+          message: {
+            content: [{ type: 'text', text: 'streamed answer' }],
+          },
+        })}\n`,
+        `${JSON.stringify({
+          type: 'result',
+          subtype: 'success',
+          result: 'streamed answer',
+        })}\n`,
+      ],
+      closeCode: 0,
+    });
+    const onStream = vi.fn();
+
+    await callClaudeHeadless('agent', 'p', {
+      cwd: '/tmp',
+      onStream,
+    });
+
+    expect(onStream).toHaveBeenCalledTimes(2);
+    expect(onStream).toHaveBeenNthCalledWith(1, {
+      type: 'text',
+      data: { text: 'streamed answer' },
+    });
+    expect(onStream).toHaveBeenNthCalledWith(2, {
+      type: 'result',
+      data: {
+        result: 'streamed answer',
+        success: true,
+        sessionId: '11111111-1111-4111-8111-111111111111',
+      },
+    });
+  });
+
+  it('emits a failed final result event when the final result is marked as error', async () => {
+    stubSpawn({
+      stdoutChunks: [
+        `${JSON.stringify({
+          type: 'assistant',
+          message: {
+            content: [{ type: 'text', text: 'partial answer' }],
+          },
+        })}\n`,
+        `${JSON.stringify({
+          type: 'result',
+          subtype: 'success',
+          is_error: true,
+          result: 'partial answer',
+        })}\n`,
+      ],
+      closeCode: 0,
+    });
+    const onStream = vi.fn();
+
+    const res = await callClaudeHeadless('agent', 'p', {
+      cwd: '/tmp',
+      onStream,
+    });
+
+    expect(res.status).toBe('error');
+    expect(onStream).toHaveBeenNthCalledWith(2, {
+      type: 'result',
+      data: {
+        result: 'partial answer',
+        success: false,
+        error: 'partial answer',
+        sessionId: '11111111-1111-4111-8111-111111111111',
+      },
+    });
+  });
+
+  it('emits the explicit final result message when isError is true', async () => {
+    stubSpawn({
+      stdoutChunks: [
+        `${JSON.stringify({
+          type: 'assistant',
+          message: {
+            content: [{ type: 'text', text: 'partial answer' }],
+          },
+        })}\n`,
+        `${JSON.stringify({
+          type: 'result',
+          subtype: 'success',
+          isError: true,
+          message: 'explicit failure',
+          result: 'partial answer',
+        })}\n`,
+      ],
+      closeCode: 0,
+    });
+    const onStream = vi.fn();
+
+    const res = await callClaudeHeadless('agent', 'p', {
+      cwd: '/tmp',
+      onStream,
+    });
+
+    expect(res.status).toBe('error');
+    expect(onStream).toHaveBeenNthCalledWith(2, {
+      type: 'result',
+      data: {
+        result: 'partial answer',
+        success: false,
+        error: 'explicit failure',
+        sessionId: '11111111-1111-4111-8111-111111111111',
+      },
+    });
+  });
+
+  it('emits an empty successful final result event even when assistant content was streamed earlier', async () => {
+    stubSpawn({
+      stdoutChunks: [
+        `${JSON.stringify({
+          type: 'assistant',
+          message: {
+            content: [{ type: 'text', text: 'partial answer' }],
+          },
+        })}\n`,
+        `${JSON.stringify({
+          type: 'result',
+          subtype: 'success',
+          result: '',
+        })}\n`,
+      ],
+      closeCode: 0,
+    });
+    const onStream = vi.fn();
+
+    const res = await callClaudeHeadless('agent', 'p', {
+      cwd: '/tmp',
+      onStream,
+    });
+
+    expect(res.status).toBe('done');
+    expect(onStream).toHaveBeenCalledTimes(2);
+    expect(onStream).toHaveBeenNthCalledWith(1, {
+      type: 'text',
+      data: { text: 'partial answer' },
+    });
+    expect(onStream).toHaveBeenNthCalledWith(2, {
+      type: 'result',
+      data: {
+        result: '',
+        success: true,
+        sessionId: '11111111-1111-4111-8111-111111111111',
+      },
+    });
+  });
+
+  it('emits an empty successful final result event when result.result is missing', async () => {
+    stubSpawn({
+      stdoutChunks: [
+        `${JSON.stringify({
+          type: 'assistant',
+          message: {
+            content: [{ type: 'text', text: 'partial answer' }],
+          },
+        })}\n`,
+        `${JSON.stringify({
+          type: 'result',
+          subtype: 'success',
+        })}\n`,
+      ],
+      closeCode: 0,
+    });
+    const onStream = vi.fn();
+
+    const res = await callClaudeHeadless('agent', 'p', {
+      cwd: '/tmp',
+      onStream,
+    });
+
+    expect(res.status).toBe('done');
+    expect(onStream).toHaveBeenCalledTimes(2);
+    expect(onStream).toHaveBeenNthCalledWith(1, {
+      type: 'text',
+      data: { text: 'partial answer' },
+    });
+    expect(onStream).toHaveBeenNthCalledWith(2, {
+      type: 'result',
+      data: {
+        result: '',
+        success: true,
+        sessionId: '11111111-1111-4111-8111-111111111111',
+      },
+    });
+  });
+
+  it('emits a successful compatibility result event when assistant content is streamed without a result event', async () => {
+    stubSpawn({
+      stdoutChunks: [
+        `${JSON.stringify({
+          type: 'assistant',
+          message: {
+            content: [{ type: 'text', text: 'partial answer' }],
+          },
+        })}\n`,
+      ],
+      stderrChunks: ['missing final result'],
+      closeCode: 0,
+    });
+    const onStream = vi.fn();
+
+    const res = await callClaudeHeadless('agent', 'p', {
+      cwd: '/tmp',
+      onStream,
+    });
+
+    expect(res.status).toBe('done');
+    expect(onStream).toHaveBeenCalledTimes(2);
+    expect(onStream).toHaveBeenNthCalledWith(1, {
+      type: 'text',
+      data: { text: 'partial answer' },
+    });
+    expect(onStream).toHaveBeenNthCalledWith(2, {
+      type: 'result',
+      data: {
+        result: 'partial answer',
+        success: true,
+        sessionId: '11111111-1111-4111-8111-111111111111',
+      },
+    });
+  });
+
+  it('emits the final error result event when a success result is followed by an error result', async () => {
+    stubSpawn({
+      stdoutChunks: [
+        `${JSON.stringify({
+          type: 'result',
+          subtype: 'success',
+          result: 'first answer',
+        })}\n`,
+        `${JSON.stringify({
+          type: 'result',
+          subtype: 'success',
+          is_error: true,
+          result: 'final failure',
+        })}\n`,
+      ],
+      closeCode: 0,
+    });
+    const onStream = vi.fn();
+
+    const res = await callClaudeHeadless('agent', 'p', {
+      cwd: '/tmp',
+      onStream,
+    });
+
+    expect(res.status).toBe('error');
+    expect(onStream).toHaveBeenCalledTimes(1);
+    expect(onStream).toHaveBeenNthCalledWith(1, {
+      type: 'result',
+      data: {
+        result: 'final failure',
+        success: false,
+        error: 'final failure',
+        sessionId: '11111111-1111-4111-8111-111111111111',
+      },
+    });
+  });
+
+  it('emits the final error result event when subtype is error without is_error flags', async () => {
+    stubSpawn({
+      stdoutChunks: [
+        `${JSON.stringify({
+          type: 'result',
+          subtype: 'error',
+          message: 'explicit failure',
+          result: 'partial answer',
+        })}\n`,
+      ],
+      closeCode: 0,
+    });
+    const onStream = vi.fn();
+
+    const res = await callClaudeHeadless('agent', 'p', {
+      cwd: '/tmp',
+      onStream,
+    });
+
+    expect(res.status).toBe('error');
+    expect(onStream).toHaveBeenCalledTimes(1);
+    expect(onStream).toHaveBeenNthCalledWith(1, {
+      type: 'result',
+      data: {
+        result: 'partial answer',
+        success: false,
+        error: 'explicit failure',
+        sessionId: '11111111-1111-4111-8111-111111111111',
+      },
+    });
+  });
+
+  it('emits the final success result event when an error result is followed by a success result', async () => {
+    stubSpawn({
+      stdoutChunks: [
+        `${JSON.stringify({
+          type: 'result',
+          subtype: 'error',
+          message: 'first failure',
+          result: 'first failure',
+        })}\n`,
+        `${JSON.stringify({
+          type: 'result',
+          subtype: 'success',
+          result: 'final answer',
+        })}\n`,
+      ],
+      closeCode: 0,
+    });
+    const onStream = vi.fn();
+
+    const res = await callClaudeHeadless('agent', 'p', {
+      cwd: '/tmp',
+      onStream,
+    });
+
+    expect(res.status).toBe('done');
+    expect(onStream).toHaveBeenCalledTimes(1);
+    expect(onStream).toHaveBeenNthCalledWith(1, {
+      type: 'result',
+      data: {
+        result: 'final answer',
+        success: true,
+        sessionId: '11111111-1111-4111-8111-111111111111',
+      },
+    });
   });
 
   it('omits --mcp-config when mcpServers is an empty object', async () => {
@@ -472,7 +1110,7 @@ describe('callClaudeHeadless', () => {
 
   it('accepts opaque sessionId when resuming', async () => {
     stubSpawn({
-      stdoutChunks: [`${JSON.stringify({ type: 'text', text: 'resumed' })}\n`],
+      stdoutChunks: [`${JSON.stringify({ type: 'result', subtype: 'success', result: 'resumed' })}\n`],
       closeCode: 0,
     });
 
