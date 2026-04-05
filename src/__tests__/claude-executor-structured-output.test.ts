@@ -35,19 +35,18 @@ describe('SdkOptionsBuilder — outputFormat 変換', () => {
     expect(sdkOptions).not.toHaveProperty('outputFormat');
   });
 
-  it('Claude CLI のディレクトリを PATH の先頭に追加する', () => {
+  it('現在の Node.js 実行ディレクトリを PATH の先頭に追加する', () => {
     const originalPath = process.env.PATH;
-    const cliPath = '/tmp/test-bin/claude';
     try {
       process.env.PATH = ['/usr/bin', '/bin'].join(delimiter);
 
       const sdkOptions = buildSdkOptions({
         cwd: '/tmp',
-        pathToClaudeCodeExecutable: cliPath,
+        pathToClaudeCodeExecutable: '/tmp/test-bin/claude',
       });
 
       const pathEntries = sdkOptions.env?.PATH?.split(delimiter) ?? [];
-      expect(pathEntries[0]).toBe(dirname(cliPath));
+      expect(pathEntries[0]).toBe(dirname(process.execPath));
       expect(pathEntries).toContain('/usr/bin');
       expect(pathEntries).toContain(dirname(process.execPath));
     } finally {

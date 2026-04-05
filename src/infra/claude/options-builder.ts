@@ -42,7 +42,6 @@ function buildSdkEnv(options: ClaudeSpawnOptions): Record<string, string> {
     .split(delimiter)
     .filter((entry): entry is string => entry.length > 0);
   const prependedEntries = [
-    options.pathToClaudeCodeExecutable ? dirname(options.pathToClaudeCodeExecutable) : undefined,
     process.execPath ? dirname(process.execPath) : undefined,
   ].filter((entry): entry is string => Boolean(entry));
 
