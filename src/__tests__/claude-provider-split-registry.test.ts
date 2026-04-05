@@ -24,10 +24,10 @@ describe('Claude provider split (registry)', () => {
     expect(sdk.supportsStructuredOutput).toBe(true);
   });
 
-  it('Given headless claude path, When supportsStructuredOutput, Then false until CLI json-schema is wired', () => {
+  it('Given headless claude path, When supportsStructuredOutput, Then true after CLI json-schema wiring', () => {
     const headless = getProvider('claude');
 
-    expect(headless.supportsStructuredOutput).toBe(false);
+    expect(headless.supportsStructuredOutput).toBe(true);
   });
 
   it('Given unknown id, When getProvider, Then throws with clear message', () => {

@@ -16,4 +16,5 @@ export interface ClaudeHeadlessCallOptions {
   onStream?: StreamCallback;
   claudeCliPath?: string;
   systemPrompt?: string;
+  outputSchema?: Record<string, unknown>;
 }

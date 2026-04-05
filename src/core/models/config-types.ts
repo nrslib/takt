@@ -56,8 +56,6 @@ export interface CustomAgentConfig {
   promptFile?: string;
   prompt?: string;
   allowedTools?: string[];
-  claudeAgent?: string;
-  claudeSkill?: string;
 }
 
 /** Logging configuration for runtime output */

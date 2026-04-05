@@ -19,19 +19,14 @@ function toHeadlessOptions(options: ProviderCallOptions): ClaudeHeadlessCallOpti
     sandbox: claudeOptions?.sandbox,
     onStream: options.onStream,
     claudeCliPath: resolveClaudeCliPath() ?? undefined,
+    outputSchema: options.outputSchema,
   };
 }
 
 export class ClaudeHeadlessProvider implements Provider {
-  readonly supportsStructuredOutput = false;
+  readonly supportsStructuredOutput = true;
 
   setup(config: AgentSetup): ProviderAgent {
-    if (config.claudeAgent || config.claudeSkill) {
-      throw new Error(
-        'claudeAgent and claudeSkill require provider claude-sdk; headless claude does not support them.',
-      );
-    }
-
     const { name, systemPrompt } = config;
 
     return {

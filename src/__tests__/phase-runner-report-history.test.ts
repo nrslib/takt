@@ -227,4 +227,40 @@ describe('runReportPhase report history behavior', () => {
     // Then
     expect(resumedSessionIds).toEqual(['session-1', 'session-2']);
   });
+
+  it('should resume report phase with an opaque claude headless sessionId', async () => {
+    // Given
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('08-headless-review.md');
+    const resumedSessionIds: string[] = [];
+    const ctx = createContext(reportDir);
+    const originalBuildResumeOptions = ctx.buildResumeOptions;
+    ctx.buildResumeOptions = (movement, sessionId, overrides) => {
+      resumedSessionIds.push(sessionId);
+      return originalBuildResumeOptions(movement, sessionId, overrides);
+    };
+    queueRunAgentResponses([
+      {
+        persona: 'reviewers',
+        status: 'done',
+        content: 'Headless first report',
+        timestamp: new Date('2026-02-10T06:25:17Z'),
+        sessionId: 'claude-headless-session-token',
+      },
+      {
+        persona: 'reviewers',
+        status: 'done',
+        content: 'Headless second report',
+        timestamp: new Date('2026-02-10T06:26:17Z'),
+        sessionId: 'claude-headless-session-token-2',
+      },
+    ]);
+
+    // When
+    await runReportPhase(step, 1, ctx);
+    await runReportPhase(step, 2, ctx);
+
+    // Then
+    expect(resumedSessionIds).toEqual(['session-1', 'claude-headless-session-token']);
+  });
 });

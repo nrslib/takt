@@ -56,18 +56,6 @@ describe('loadTemplate', () => {
 });
 
 describe('variable substitution', () => {
-  it('replaces {{variableName}} placeholders with provided values', () => {
-    const result = loadTemplate('perform_builtin_agent_system_prompt', 'en', { agentName: 'test-agent' });
-    expect(result).toContain('You are the test-agent agent');
-    expect(result).toContain('Follow the standard test-agent workflow');
-  });
-
-  it('replaces undefined variables with empty string', () => {
-    const result = loadTemplate('perform_builtin_agent_system_prompt', 'en', {});
-    expect(result).not.toContain('{{agentName}}');
-    expect(result).toContain('You are the  agent');
-  });
-
   it('replaces taskHistory variable in score_summary_system_prompt', () => {
     const result = loadTemplate('score_summary_system_prompt', 'en', {
       pieceInfo: true,
@@ -158,7 +146,6 @@ describe('template file existence', () => {
     'perform_phase2_message',
     'perform_phase3_message',
     'perform_agent_system_prompt',
-    'perform_builtin_agent_system_prompt',
     'perform_judge_message',
   ];
 
@@ -282,21 +269,6 @@ describe('template content integrity', () => {
     const result = loadTemplate('score_slug_system_prompt', 'en');
     expect(result).toContain('verb-noun');
     expect(result).toContain('max 30 chars');
-  });
-
-  it('perform_builtin_agent_system_prompt contains {{agentName}} placeholder', () => {
-    const result = loadTemplate('perform_builtin_agent_system_prompt', 'en');
-    expect(result).toContain('{{agentName}}');
-  });
-
-  it('perform_builtin_agent_system_prompt uses workflow terminology in both languages', () => {
-    const en = loadTemplate('perform_builtin_agent_system_prompt', 'en');
-    expect(en).toContain('Follow the standard {{agentName}} workflow.');
-    expect(en).not.toContain('Follow the standard {{agentName}} piece.');
-
-    const ja = loadTemplate('perform_builtin_agent_system_prompt', 'ja');
-    expect(ja).toContain('標準の {{agentName}} ワークフローに従ってください。');
-    expect(ja).not.toContain('piece');
   });
 
   it('perform_agent_system_prompt contains {{agentDefinition}} placeholder', () => {

@@ -3,7 +3,7 @@ import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentResponse, PermissionMode } from '../../core/models/index.js';
-import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
+import { createLogger, getErrorMessage, parseStructuredOutput } from '../../shared/utils/index.js';
 import {
   type ClaudePermissionExpression,
   taktPermissionModeToClaudeExpression,
@@ -16,8 +16,6 @@ import {
 import { aggregateContentFromStdout, extractSessionIdFromStdout } from './stream-json-lines.js';
 import type { ClaudeHeadlessCallOptions } from './types.js';
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const log = createLogger('claude-headless');
 
 function resolveCliPermissionMode(
@@ -35,9 +33,6 @@ function resolveCliPermissionMode(
 
 function resolveSessionArgs(options: ClaudeHeadlessCallOptions): { args: string[]; sessionId: string } {
   if (options.sessionId) {
-    if (!UUID_RE.test(options.sessionId)) {
-      throw new Error(`Claude headless sessionId must be a valid UUID: ${options.sessionId}`);
-    }
     return {
       args: ['--resume', options.sessionId],
       sessionId: options.sessionId,
@@ -145,6 +140,10 @@ async function buildSpawnArgs(
     args.push('--system-prompt', options.systemPrompt.trim());
   }
 
+  if (options.outputSchema) {
+    args.push('--json-schema', JSON.stringify(options.outputSchema));
+  }
+
   if (preparedResources.mcpConfigArg) {
     args.push('--mcp-config', preparedResources.mcpConfigArg);
   }
@@ -195,6 +194,7 @@ export async function callClaudeHeadless(
     const { stdout, stderr } = await runHeadlessCli(args, options);
     const content = aggregateContentFromStdout(stdout);
     const sessionId = extractSessionIdFromStdout(stdout) ?? expectedSessionId;
+    const structuredOutput = parseStructuredOutput(content, !!options.outputSchema);
 
     if (!content) {
       const hint = stderr.trim() || stdout.trim().slice(0, 500) || 'no parseable stream-json output';
@@ -236,6 +236,7 @@ export async function callClaudeHeadless(
         content,
         timestamp: new Date(),
         sessionId,
+        structuredOutput,
       };
     }
   } catch (raw) {

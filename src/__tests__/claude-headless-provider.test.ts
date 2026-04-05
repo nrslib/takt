@@ -16,26 +16,10 @@ describe('ClaudeHeadlessProvider', () => {
     callClaudeHeadlessMock.mockReset();
   });
 
-  it('should throw when claudeAgent is specified', () => {
-    const provider = new ClaudeHeadlessProvider();
+  it('should mark supportsStructuredOutput as true', () => {
+    const provider = new ClaudeHeadlessProvider() as { supportsStructuredOutput?: boolean };
 
-    expect(() => provider.setup({
-      name: 'test',
-      claudeAgent: 'some-agent',
-    })).toThrow(
-      'claudeAgent and claudeSkill require provider claude-sdk; headless claude does not support them.',
-    );
-  });
-
-  it('should throw when claudeSkill is specified', () => {
-    const provider = new ClaudeHeadlessProvider();
-
-    expect(() => provider.setup({
-      name: 'test',
-      claudeSkill: 'some-skill',
-    })).toThrow(
-      'claudeAgent and claudeSkill require provider claude-sdk; headless claude does not support them.',
-    );
+    expect(provider.supportsStructuredOutput).toBe(true);
   });
 
   it('should return a ProviderAgent when setup with name only', () => {
@@ -110,7 +94,7 @@ describe('ClaudeHeadlessProvider', () => {
 
     await agent.call('prompt', {
       cwd: '/tmp',
-      sessionId: '550e8400-e29b-41d4-a716-446655440000',
+      sessionId: 'opaque-session-id-from-report-phase',
       permissionMode: 'edit',
       bypassPermissions: true,
       providerOptions: {
@@ -125,7 +109,7 @@ describe('ClaudeHeadlessProvider', () => {
 
     expect(callClaudeHeadlessMock).toHaveBeenCalledWith('test', 'prompt', expect.objectContaining({
       systemPrompt: 'sys',
-      sessionId: '550e8400-e29b-41d4-a716-446655440000',
+      sessionId: 'opaque-session-id-from-report-phase',
       permissionMode: 'edit',
       bypassPermissions: true,
       sandbox: {
@@ -133,6 +117,41 @@ describe('ClaudeHeadlessProvider', () => {
         excludedCommands: ['./gradlew'],
       },
     }));
+  });
+
+  it('should pass outputSchema to the headless client', async () => {
+    callClaudeHeadlessMock.mockResolvedValue({
+      persona: 'test',
+      status: 'done',
+      content: 'ok',
+      timestamp: new Date(),
+      sessionId: 'session-id',
+      structuredOutput: { decision: 'approved' },
+    });
+
+    const provider = new ClaudeHeadlessProvider();
+    const agent = provider.setup({
+      name: 'test',
+      systemPrompt: 'sys',
+    });
+    const outputSchema = {
+      type: 'object',
+      properties: {
+        decision: { type: 'string' },
+      },
+      required: ['decision'],
+    };
+
+    const result = await agent.call('prompt', {
+      cwd: '/tmp',
+      outputSchema,
+    });
+
+    expect(callClaudeHeadlessMock).toHaveBeenCalledWith('test', 'prompt', expect.objectContaining({
+      systemPrompt: 'sys',
+      outputSchema,
+    }));
+    expect(result.structuredOutput).toEqual({ decision: 'approved' });
   });
 });
 

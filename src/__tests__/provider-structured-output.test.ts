@@ -20,8 +20,6 @@ const {
 vi.mock('../infra/claude/client.js', () => ({
   callClaude: mockCallClaude,
   callClaudeCustom: mockCallClaudeCustom,
-  callClaudeAgent: vi.fn(),
-  callClaudeSkill: vi.fn(),
 }));
 
 // ===== Codex =====

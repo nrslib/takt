@@ -8,7 +8,6 @@ import { executeClaudeCli } from './process.js';
 import type { ClaudeSpawnOptions, ClaudeCallOptions } from './types.js';
 import type { AgentResponse, Status } from '../../core/models/index.js';
 import { createLogger } from '../../shared/utils/index.js';
-import { loadTemplate } from '../../shared/prompts/index.js';
 
 export type { ClaudeCallOptions } from './types.js';
 
@@ -17,7 +16,7 @@ const log = createLogger('client');
 /**
  * High-level Claude client for calling Claude with various configurations.
  *
- * Handles agent prompts, custom agents, skills, and AI judge evaluation.
+ * Handles agent prompts, custom agents, and AI judge evaluation.
  */
 export class ClaudeClient {
   /** Determine status from execution result */
@@ -111,45 +110,6 @@ export class ClaudeClient {
     };
   }
 
-  /** Call a Claude Code built-in agent */
-  async callAgent(
-    claudeAgentName: string,
-    prompt: string,
-    options: ClaudeCallOptions,
-  ): Promise<AgentResponse> {
-    const systemPrompt = loadTemplate('perform_builtin_agent_system_prompt', 'en', { agentName: claudeAgentName });
-    return this.callCustom(claudeAgentName, prompt, systemPrompt, options);
-  }
-
-  /** Call a Claude Code skill (using /skill command) */
-  async callSkill(
-    skillName: string,
-    prompt: string,
-    options: ClaudeCallOptions,
-  ): Promise<AgentResponse> {
-    const fullPrompt = `/${skillName}\n\n${prompt}`;
-    const spawnOptions: ClaudeSpawnOptions = {
-      ...ClaudeClient.toSpawnOptions(options),
-    };
-
-    const result = await executeClaudeCli(fullPrompt, spawnOptions);
-
-    if (!result.success && result.error) {
-      log.error('Skill query failed', { skill: skillName, error: result.error });
-    }
-
-    return {
-      persona: `skill:${skillName}`,
-      status: result.success ? 'done' : 'error',
-      content: result.content,
-      timestamp: new Date(),
-      sessionId: result.sessionId,
-      error: result.error,
-      structuredOutput: result.structuredOutput,
-      providerUsage: result.providerUsage,
-    };
-  }
-
 }
 
 // ---- Module-level functions ----
@@ -171,20 +131,4 @@ export async function callClaudeCustom(
   options: ClaudeCallOptions,
 ): Promise<AgentResponse> {
   return defaultClient.callCustom(agentName, prompt, systemPrompt, options);
-}
-
-export async function callClaudeAgent(
-  claudeAgentName: string,
-  prompt: string,
-  options: ClaudeCallOptions,
-): Promise<AgentResponse> {
-  return defaultClient.callAgent(claudeAgentName, prompt, options);
-}
-
-export async function callClaudeSkill(
-  skillName: string,
-  prompt: string,
-  options: ClaudeCallOptions,
-): Promise<AgentResponse> {
-  return defaultClient.callSkill(skillName, prompt, options);
 }

@@ -7,24 +7,6 @@ import { OpenCodeProvider } from '../infra/providers/opencode.js';
 import { ProviderRegistry } from '../infra/providers/index.js';
 
 describe('OpenCodeProvider', () => {
-  it('should throw when claudeAgent is specified', () => {
-    const provider = new OpenCodeProvider();
-
-    expect(() => provider.setup({
-      name: 'test',
-      claudeAgent: 'some-agent',
-    })).toThrow('Claude Code agent calls are not supported by the OpenCode provider');
-  });
-
-  it('should throw when claudeSkill is specified', () => {
-    const provider = new OpenCodeProvider();
-
-    expect(() => provider.setup({
-      name: 'test',
-      claudeSkill: 'some-skill',
-    })).toThrow('Claude Code skill calls are not supported by the OpenCode provider');
-  });
-
   it('should return a ProviderAgent when setup with name only', () => {
     const provider = new OpenCodeProvider();
     const agent = provider.setup({ name: 'test' });

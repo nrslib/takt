@@ -719,22 +719,22 @@ describe('CustomAgentConfigSchema', () => {
     expect(result.prompt_file).toBe('/path/to/prompt.md');
   });
 
-  it('should accept agent with claude_agent', () => {
-    const config = {
-      name: 'my-agent',
-      claude_agent: 'architect',
-    };
-
-    const result = CustomAgentConfigSchema.parse(config);
-    expect(result.claude_agent).toBe('architect');
-  });
-
   it('should reject agent without any prompt source', () => {
     const config = {
       name: 'my-agent',
     };
 
     expect(() => CustomAgentConfigSchema.parse(config)).toThrow();
+  });
+
+  it('should reject legacy claude keys even when prompt is present', () => {
+    const config = {
+      name: 'my-agent',
+      prompt: 'You are a helpful assistant.',
+      claude_agent: 'legacy-agent',
+    };
+
+    expect(() => CustomAgentConfigSchema.parse(config)).toThrow(/unrecognized key/i);
   });
 });
 

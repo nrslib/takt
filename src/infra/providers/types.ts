@@ -5,8 +5,6 @@ import type { ProviderType as SharedProviderType } from '../../shared/types/prov
 export interface AgentSetup {
   name: string;
   systemPrompt?: string;
-  claudeAgent?: string;
-  claudeSkill?: string;
 }
 
 export interface ProviderCallOptions {

@@ -262,7 +262,7 @@ describe('callClaudeHeadless', () => {
   });
 
   it('passes --resume with valid session UUID', async () => {
-    const sessionId = '550e8400-e29b-41d4-a716-446655440000';
+    const sessionId = 'claude-session-opaque-token';
     stubSpawn({
       stdoutChunks: [`${JSON.stringify({ type: 'text', text: 'x' })}\n`],
       closeCode: 0,
@@ -273,6 +273,31 @@ describe('callClaudeHeadless', () => {
     expect(i).toBeGreaterThanOrEqual(0);
     expect(argv[i + 1]).toBe(sessionId);
     expect(argv).not.toContain('--session-id');
+  });
+
+  it('passes --json-schema and returns structuredOutput when outputSchema is provided', async () => {
+    const outputSchema = {
+      type: 'object',
+      properties: {
+        decision: { type: 'string' },
+      },
+      required: ['decision'],
+    };
+    stubSpawn({
+      stdoutChunks: [`${JSON.stringify({ type: 'text', text: '{"decision":"approved"}' })}\n`],
+      closeCode: 0,
+    });
+
+    const res = await callClaudeHeadless('agent', 'p', {
+      cwd: '/tmp',
+      outputSchema,
+    });
+
+    const argv = lastSpawnArgv();
+    const schemaIndex = argv.indexOf('--json-schema');
+    expect(schemaIndex).toBeGreaterThanOrEqual(0);
+    expect(JSON.parse(argv[schemaIndex + 1]!)).toEqual(outputSchema);
+    expect(res.structuredOutput).toEqual({ decision: 'approved' });
   });
 
   it('returns a new sessionId from stdout on the first call and resumes with it on the next call', async () => {
@@ -442,14 +467,19 @@ describe('callClaudeHeadless', () => {
     });
   });
 
-  it('returns an error when sessionId is not a UUID', async () => {
-    const res = await callClaudeHeadless('agent', 'p', {
-      cwd: '/tmp',
-      sessionId: 'not-a-uuid',
+  it('accepts opaque sessionId when resuming', async () => {
+    stubSpawn({
+      stdoutChunks: [`${JSON.stringify({ type: 'text', text: 'resumed' })}\n`],
+      closeCode: 0,
     });
 
-    expect(res.status).toBe('error');
-    expect(res.error).toMatch(/must be a valid UUID/);
+    const res = await callClaudeHeadless('agent', 'p', {
+      cwd: '/tmp',
+      sessionId: 'resume-session-from-report-phase',
+    });
+
+    expect(res.status).toBe('done');
+    expect(res.sessionId).toBe('resume-session-from-report-phase');
   });
 
   it('passes --allowed-tools with comma-joined values after --model and before --effort', async () => {

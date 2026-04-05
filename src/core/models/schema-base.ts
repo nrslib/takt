@@ -236,11 +236,9 @@ export const CustomAgentConfigSchema = z.object({
   prompt_file: z.string().optional(),
   prompt: z.string().optional(),
   allowed_tools: z.array(z.string()).optional(),
-  claude_agent: z.string().optional(),
-  claude_skill: z.string().optional(),
-}).refine(
-  (data) => data.prompt_file || data.prompt || data.claude_agent || data.claude_skill,
-  { message: 'Agent must have prompt_file, prompt, claude_agent, or claude_skill' }
+}).strict().refine(
+  (data) => data.prompt_file || data.prompt,
+  { message: 'Agent must have prompt_file or prompt' }
 );
 
 export const LoggingConfigSchema = z.object({

@@ -19,13 +19,6 @@ export class MockProvider implements Provider {
   readonly supportsStructuredOutput = true;
 
   setup(config: AgentSetup): ProviderAgent {
-    if (config.claudeAgent) {
-      throw new Error('Claude Code agent calls are not supported by the Mock provider');
-    }
-    if (config.claudeSkill) {
-      throw new Error('Claude Code skill calls are not supported by the Mock provider');
-    }
-
     const { name, systemPrompt } = config;
     if (systemPrompt) {
       return {
