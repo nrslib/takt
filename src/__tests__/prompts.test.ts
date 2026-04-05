@@ -334,7 +334,7 @@ describe('template content integrity', () => {
     const en = loadTemplate('perform_phase1_message', 'en');
     expect(en).toContain('## Execution Context');
     expect(en).toContain('## Execution Rules');
-    expect(en).toContain('Do NOT run git commit');
+    expect(en).toContain('{{#if gitCommitRule}}');
     expect(en).toContain('Do NOT use `cd`');
     expect(en).toContain('## Workflow Context');
     expect(en).not.toContain('## Piece Context');
@@ -343,7 +343,6 @@ describe('template content integrity', () => {
 
   it('perform_phase1_message uses workflow/step terminology in both languages', () => {
     const en = loadTemplate('perform_phase1_message', 'en');
-    expect(en).toContain('after workflow completion');
     expect(en).toContain('- Workflow: {{pieceName}}');
     expect(en).toContain('- Step Iteration: {{movementIteration}}');
     expect(en).toContain('- Step: {{movement}}');
@@ -355,7 +354,7 @@ describe('template content integrity', () => {
     expect(en).not.toContain('after piece completion');
 
     const ja = loadTemplate('perform_phase1_message', 'ja');
-    expect(ja).toContain('ワークフロー完了後');
+    expect(ja).toContain('{{#if gitCommitRule}}');
     expect(ja).toContain('- ワークフロー: {{pieceName}}');
     expect(ja).toContain('- Step Iteration: {{movementIteration}}');
     expect(ja).toContain('- Step: {{movement}}');
@@ -377,14 +376,14 @@ describe('template content integrity', () => {
 
   it('perform_phase2_message contains report-specific rules', () => {
     const en = loadTemplate('perform_phase2_message', 'en');
-    expect(en).toContain('after workflow completion');
+    expect(en).toContain('{{#if gitCommitRule}}');
     expect(en).toContain('Do NOT modify project source files');
     expect(en).toContain('## Workflow Context');
     expect(en).not.toContain('## Piece Context');
     expect(en).toContain('## Instructions');
 
     const ja = loadTemplate('perform_phase2_message', 'ja');
-    expect(ja).toContain('ワークフロー完了後');
+    expect(ja).toContain('{{#if gitCommitRule}}');
     expect(ja).toContain('プロジェクトのソースファイルを変更しないでください');
     expect(ja).toContain('## Workflow Context');
     expect(ja).not.toContain('## Piece Context');

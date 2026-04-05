@@ -523,6 +523,7 @@ export class PieceEngine extends EventEmitter {
       personaPath: monitor.judge.personaPath,
       personaDisplayName: 'loop-judge',
       edit: false,
+      allowGitCommit: false,
       providerOptions: {
         claude: {
           allowedTools: ['Read', 'Glob', 'Grep'],

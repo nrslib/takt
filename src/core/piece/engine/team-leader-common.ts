@@ -48,6 +48,7 @@ export function createPartMovement(step: PieceMovement, part: PartDefinition): P
     model: step.model,
     requiredPermissionMode: step.teamLeader.partPermissionMode ?? step.requiredPermissionMode,
     edit: step.teamLeader.partEdit ?? step.edit,
+    allowGitCommit: step.allowGitCommit,
     instruction: part.instruction,
     passPreviousResponse: false,
   };

@@ -7,6 +7,7 @@
 
 import type { PieceMovement, Language } from '../../models/types.js';
 import type { InstructionContext } from './instruction-context.js';
+import { buildGitCommitRule } from './instruction-context.js';
 import { replaceTemplatePlaceholders } from './escape.js';
 import { isOutputContractItem, renderReportContext, renderReportOutputInstruction } from './InstructionBuilder.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
@@ -90,8 +91,11 @@ export class ReportInstructionBuilder {
       hasOutputContract = true;
     }
 
+    const gitCommitRule = buildGitCommitRule(this.step.allowGitCommit, language, 'phase2');
+
     return loadTemplate('perform_phase2_message', language, {
       workingDirectory: this.context.cwd,
+      gitCommitRule,
       reportContext,
       hasLastResponse: this.context.lastResponse != null && this.context.lastResponse.trim().length > 0,
       lastResponse: this.context.lastResponse ?? '',

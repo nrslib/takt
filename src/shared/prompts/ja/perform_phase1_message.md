@@ -1,7 +1,7 @@
 <!--
   template: perform_phase1_message
   phase: 1 (main execution)
-  vars: workingDirectory, editRule, pieceName, pieceDescription, hasPieceDescription,
+  vars: workingDirectory, editRule, gitCommitRule, pieceName, pieceDescription, hasPieceDescription,
         pieceStructure, iteration, movementIteration, movement, hasReport, reportInfo,
         phaseNote, hasTaskSection, userRequest, hasPreviousResponse, previousResponse,
         hasUserInputs, userInputs, hasRetryNote, retryNote, hasPolicy, policyContent,
@@ -12,9 +12,8 @@
 - 作業ディレクトリ: {{workingDirectory}}
 
 ## 実行ルール
-- **git commit を実行しないでください。** コミットはワークフロー完了後にシステムが自動で行います。
-- **git add を実行しないでください。** ステージングもシステムが自動で行います。新規ファイルが未追跡（`??`）でも正常です。
-- **Bashコマンドで `cd` を使用しないでください。** 作業ディレクトリは既に正しく設定されています。ディレクトリを変更せずにコマンドを実行してください。
+{{#if gitCommitRule}}{{gitCommitRule}}
+{{/if}}- **Bashコマンドで `cd` を使用しないでください。** 作業ディレクトリは既に正しく設定されています。ディレクトリを変更せずにコマンドを実行してください。
 {{#if editRule}}- {{editRule}}
 {{/if}}
 {{#if hasKnowledge}}
