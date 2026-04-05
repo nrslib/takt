@@ -15,7 +15,7 @@ import {
 import { createLogger } from '../../shared/utils/index.js';
 import { info, error, blankLine } from '../../shared/ui/index.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
-import { readMultilineInput } from './lineEditor.js';
+import { readInteractiveInput } from './interactiveInput.js';
 import { selectRecentSession } from './sessionSelector.js';
 import { matchSlashCommand } from './commandMatcher.js';
 import { SlashCommand } from '../../shared/constants.js';
@@ -127,7 +127,7 @@ export async function runConversationLoop(
   }
 
   while (true) {
-    const input = await readMultilineInput(chalk.green('> '));
+    const input = await readInteractiveInput(chalk.green('> '), ctx.lang);
 
     if (input === null) {
       blankLine();

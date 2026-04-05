@@ -56,6 +56,13 @@ interactive:
     userStopped: "⚠️ Previous task was interrupted by user"
     piece: "Workflow: {pieceName}"
     timestamp: "Executed: {timestamp}"
+  commands:
+    play: "Run a task immediately"
+    go: "Create instruction & run"
+    retry: "Review & rerun with previous instructions"
+    replay: "Rerun immediately with previous instructions"
+    cancel: "Exit interactive mode"
+    resume: "Load a previous session"
 
 # ===== Piece Execution UI =====
 piece:

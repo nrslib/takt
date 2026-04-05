@@ -20,9 +20,33 @@ function createCallbacks(): InputCallbacks & { calls: string[] } {
     onWordRight() { calls.push('wordRight'); },
     onHome() { calls.push('home'); },
     onEnd() { calls.push('end'); },
+    onEsc() { calls.push('esc'); },
     onChar(ch: string) { calls.push(`char:${ch}`); },
   };
 }
+
+const TEST_COMPLETION_VALUES = ['/play', '/go', '/retry', '/replay', '/cancel', '/resume'] as const;
+
+const testCompletionProvider = (
+  { buffer }: { buffer: string },
+): readonly {
+  readonly value: string;
+  readonly description?: string;
+  readonly applyValue?: string;
+}[] => {
+  if (!buffer.startsWith('/') || buffer.includes('\n')) {
+    return [];
+  }
+
+  const lower = buffer.toLowerCase();
+  return TEST_COMPLETION_VALUES
+    .filter((value) => value.startsWith(lower))
+    .map((value) => ({
+      value,
+      applyValue: `${value} `,
+      description: `Description for ${value}`,
+    }));
+};
 
 describe('parseInputData', () => {
   describe('arrow key detection', () => {
@@ -118,6 +142,26 @@ describe('parseInputData', () => {
       expect(cb.calls).toEqual(['wordLeft', 'wordRight']);
       expect(cb.calls).not.toContain('char:b');
       expect(cb.calls).not.toContain('char:f');
+    });
+  });
+
+  describe('bare Esc key detection', () => {
+    it('should fire onEsc for bare Esc', () => {
+      // Given
+      const cb = createCallbacks();
+      // When
+      parseInputData('\x1B', cb);
+      // Then
+      expect(cb.calls).toEqual(['esc']);
+    });
+
+    it('should fire onEsc then onChar for Esc followed by non-sequence char', () => {
+      // Given
+      const cb = createCallbacks();
+      // When
+      parseInputData('\x1Bx', cb);
+      // Then
+      expect(cb.calls).toEqual(['esc', 'char:x']);
     });
   });
 
@@ -241,9 +285,20 @@ describe('readMultilineInput cursor navigation', () => {
   });
 
   // We need to dynamically import after mocking stdin
-  async function callReadMultilineInput(prompt: string): Promise<string | null> {
+  async function callReadMultilineInput(
+    prompt: string,
+    options?: {
+      completionProvider?: (
+        context: { buffer: string },
+      ) => readonly {
+        readonly value: string;
+        readonly description?: string;
+        readonly applyValue?: string;
+      }[];
+    },
+  ): Promise<string | null> {
     const { readMultilineInput } = await import('../features/interactive/lineEditor.js');
-    return readMultilineInput(prompt);
+    return readMultilineInput(prompt, options);
   }
 
   describe('left arrow line wrap', () => {
@@ -1057,6 +1112,166 @@ describe('readMultilineInput cursor navigation', () => {
 
       // Then
       expect(result).toBe('abc\ndef');
+    });
+  });
+
+  describe('onEsc callback', () => {
+    it('should emit onEsc for bare escape key', () => {
+      const cb = createCallbacks();
+      parseInputData('\x1B', cb);
+      expect(cb.calls).toEqual(['esc']);
+    });
+
+    it('should not emit onEsc for recognized escape sequences', () => {
+      const cb = createCallbacks();
+      parseInputData('\x1B[A', cb);
+      expect(cb.calls).toEqual(['up']);
+      expect(cb.calls).not.toContain('esc');
+    });
+
+    it('should emit onEsc followed by char for escape then regular character', () => {
+      const cb = createCallbacks();
+      parseInputData('\x1Ba\x1B[A', cb);
+      expect(cb.calls).toContain('esc');
+      expect(cb.calls).toContain('char:a');
+      expect(cb.calls).toContain('up');
+    });
+
+    it('should emit onEsc for Kitty keyboard protocol ESC sequence with modifier', () => {
+      const cb = createCallbacks();
+      parseInputData('\x1B[27;1u', cb);
+      expect(cb.calls).toEqual(['esc']);
+    });
+
+    it('should emit onEsc for Kitty keyboard protocol ESC sequence without modifier', () => {
+      const cb = createCallbacks();
+      parseInputData('\x1B[27u', cb);
+      expect(cb.calls).toEqual(['esc']);
+    });
+  });
+
+  describe('completion menu integration', () => {
+    it('should not enable completion by default', async () => {
+      // Given: "/" → Enter with no completion provider
+      setupRawStdin(['/\r']);
+
+      // When
+      const result = await callReadMultilineInput('> ');
+
+      // Then
+      expect(result).toBe('/');
+    });
+
+    it('should submit selected command on Enter when menu is visible', async () => {
+      // Given: type "/" then Enter → default selectedIndex=0 is /play
+      setupRawStdin(['/\r']);
+
+      // When
+      const result = await callReadMultilineInput('> ', { completionProvider: testCompletionProvider });
+
+      // Then
+      expect(result).toBe('/play');
+    });
+
+    it('should submit command selected by arrow down on Enter', async () => {
+      // Given: "/" → ArrowDown (select /go, index=1) → Enter
+      setupRawStdin(['/\x1B[B\r']);
+
+      // When
+      const result = await callReadMultilineInput('> ', { completionProvider: testCompletionProvider });
+
+      // Then
+      expect(result).toBe('/go');
+    });
+
+    it('should apply completion on Tab and allow further editing', async () => {
+      // Given: "/g" → Tab (applies "/go ") → Enter
+      setupRawStdin(['/g\t\r']);
+
+      // When
+      const result = await callReadMultilineInput('> ', { completionProvider: testCompletionProvider });
+
+      // Then
+      expect(result).toBe('/go ');
+    });
+
+    it('should dismiss completion on Esc and keep buffer unchanged', async () => {
+      // Given: "/ca" → Esc (dismiss menu) → Enter
+      setupRawStdin(['/ca\x1B\r']);
+
+      // When
+      const result = await callReadMultilineInput('> ', { completionProvider: testCompletionProvider });
+
+      // Then
+      expect(result).toBe('/ca');
+    });
+
+    it('should not trigger completion for regular text', async () => {
+      // Given: "hello" → Enter (no "/" prefix, no completion)
+      setupRawStdin(['hello\r']);
+
+      // When
+      const result = await callReadMultilineInput('> ', { completionProvider: testCompletionProvider });
+
+      // Then
+      expect(result).toBe('hello');
+    });
+
+    it('should wrap selection on ArrowUp from first item', async () => {
+      // Given: "/" → ArrowUp (wrap to last item, /resume index=5) → Enter
+      setupRawStdin(['/\x1B[A\r']);
+
+      // When
+      const result = await callReadMultilineInput('> ', { completionProvider: testCompletionProvider });
+
+      // Then
+      expect(result).toBe('/resume');
+    });
+
+    it('should not show completion menu for multiline buffer starting with /', async () => {
+      // Given: "/" → Shift+Enter (newline) → "test" → Enter
+      // shouldShowCompletion() returns false when buffer includes \n
+      setupRawStdin(['/\x1B[13;2utest\r']);
+
+      // When
+      const result = await callReadMultilineInput('> ', { completionProvider: testCompletionProvider });
+
+      // Then
+      expect(result).toBe('/\ntest');
+    });
+
+    it('should apply Tab completion then allow backspace to delete', async () => {
+      // Given: "/g" → Tab (applies "/go ") → Backspace (delete space) → Enter
+      setupRawStdin(['/g\t\x7F\r']);
+
+      // When
+      const result = await callReadMultilineInput('> ', { completionProvider: testCompletionProvider });
+
+      // Then
+      expect(result).toBe('/go');
+    });
+
+    it('should wrap selection on ArrowDown from last item', async () => {
+      // Given: "/" → ArrowDown x6 (6 commands, wraps back to /play index=0) → Enter
+      setupRawStdin(['/\x1B[B\x1B[B\x1B[B\x1B[B\x1B[B\x1B[B\r']);
+
+      // When
+      const result = await callReadMultilineInput('> ', { completionProvider: testCompletionProvider });
+
+      // Then
+      expect(result).toBe('/play');
+    });
+
+    it('should clamp selectedIndex when candidates shrink', async () => {
+      // Given: "/re" → ArrowDown x2 (select /resume, index=2) → type "s" ("/res" → 1 candidate) → Enter
+      // selectedIndex is clamped to 0
+      setupRawStdin(['/re\x1B[B\x1B[Bs\r']);
+
+      // When
+      const result = await callReadMultilineInput('> ', { completionProvider: testCompletionProvider });
+
+      // Then
+      expect(result).toBe('/resume');
     });
   });
 });

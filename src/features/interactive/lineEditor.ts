@@ -10,6 +10,7 @@
 import * as readline from 'node:readline';
 import { StringDecoder } from 'node:string_decoder';
 import { stripAnsi, getDisplayWidth } from '../../shared/utils/text.js';
+import { createCompletionController } from './completionController.js';
 
 /** Escape sequences for terminal protocol control */
 const PASTE_BRACKET_ENABLE = '\x1B[?2004h';
@@ -78,6 +79,7 @@ export interface InputCallbacks {
   onWordRight: () => void;
   onHome: () => void;
   onEnd: () => void;
+  onEsc: () => void;
   onChar: (ch: string) => void;
 }
 
@@ -177,6 +179,14 @@ export function parseInputData(data: string, callbacks: InputCallbacks): void {
         continue;
       }
 
+      // Kitty keyboard protocol: ESC key → \x1B[27u or \x1B[27;1u
+      const kittyEscMatch = rest.match(/^\[27(?:;1)?u/);
+      if (kittyEscMatch) {
+        callbacks.onEsc();
+        i += 1 + kittyEscMatch[0].length;
+        continue;
+      }
+
       // Unknown CSI sequences: skip
       if (rest.startsWith('[')) {
         const csiMatch = rest.match(/^\[[0-9;]*[A-Za-z~]/);
@@ -185,7 +195,8 @@ export function parseInputData(data: string, callbacks: InputCallbacks): void {
           continue;
         }
       }
-      // Unrecognized escape: skip the \x1B
+      // Bare Esc (not part of a recognized sequence)
+      callbacks.onEsc();
       i++;
       continue;
     }
@@ -207,7 +218,18 @@ export function parseInputData(data: string, callbacks: InputCallbacks): void {
  *
  * Falls back to readline.question() in non-TTY environments.
  */
-export function readMultilineInput(prompt: string): Promise<string | null> {
+export function readMultilineInput(
+  prompt: string,
+  options?: {
+    completionProvider?: (
+      context: { buffer: string },
+    ) => readonly {
+      readonly value: string;
+      readonly description?: string;
+      readonly applyValue?: string;
+    }[];
+  },
+): Promise<string | null> {
   if (!process.stdin.isTTY) {
     return new Promise((resolve) => {
       if (process.stdin.readable && !process.stdin.destroyed) {
@@ -297,6 +319,55 @@ export function readMultilineInput(prompt: string): Promise<string | null> {
     function getTermWidth(): number {
       return process.stdout.columns || 80;
     }
+
+    // --- Completion menu helpers ---
+
+    /**
+     * Count display rows between two arbitrary buffer positions.
+     */
+    function countDisplayRowsBetweenPositions(from: number, to: number): number {
+      if (from >= to) return 0;
+      let rows = 0;
+      let pos = from;
+      while (pos < to) {
+        const rowEnd = getDisplayRowEnd(pos);
+        if (rowEnd >= to) break;
+        const nextChar = buffer[rowEnd];
+        if (nextChar === '\n') {
+          rows++;
+          pos = rowEnd + 1;
+        } else {
+          rows++;
+          pos = rowEnd;
+        }
+      }
+      return rows;
+    }
+
+    /**
+     * Count display rows from cursor position to end of buffer.
+     */
+    function countRowsBelowCursor(): number {
+      const cursorRow = countDisplayRowsBetweenPositions(0, cursorPos);
+      const totalRows = countDisplayRowsBetweenPositions(0, buffer.length);
+      return totalRows - cursorRow;
+    }
+
+    const completion = createCompletionController(
+      {
+        getBuffer: () => buffer,
+        getCursorPos: () => cursorPos,
+        getTermWidth,
+        getTerminalColumn,
+        countRowsBelowCursor,
+      },
+      {
+        setBuffer: (v) => { buffer = v; },
+        setCursorPos: (v) => { cursorPos = v; },
+      },
+      promptWidth,
+      options?.completionProvider,
+    );
 
     /** Buffer position of the display row start that contains `pos` */
     function getDisplayRowStart(pos: number): number {
@@ -392,6 +463,7 @@ export function readMultilineInput(prompt: string): Promise<string | null> {
     }
 
     function cleanup(): void {
+      completion.hide();
       process.stdin.removeListener('data', onData);
       process.stdout.write(PASTE_BRACKET_DISABLE);
       process.stdout.write(KITTY_KB_DISABLE);
@@ -597,6 +669,12 @@ export function readMultilineInput(prompt: string): Promise<string | null> {
           },
           onArrowUp() {
             if (state !== 'normal') return;
+            
+            if (completion.getState()) {
+              completion.moveSelection(-1);
+              return;
+            }
+
             const logicalLineStart = getLineStart();
             const displayRowStart = getDisplayRowStart(cursorPos);
             const displayCol = getDisplayRowColumn(cursorPos);
@@ -616,6 +694,12 @@ export function readMultilineInput(prompt: string): Promise<string | null> {
           },
           onArrowDown() {
             if (state !== 'normal') return;
+
+            if (completion.getState()) {
+              completion.moveSelection(1);
+              return;
+            }
+
             const logicalLineEnd = getLineEnd();
             const displayRowEnd = getDisplayRowEnd(cursorPos);
             const displayCol = getDisplayRowColumn(cursorPos);
@@ -662,6 +746,9 @@ export function readMultilineInput(prompt: string): Promise<string | null> {
             if (state !== 'normal') return;
             moveCursorToLogicalLineEnd();
           },
+          onEsc() {
+            completion.hide();
+          },
           onChar(ch: string) {
             if (state === 'paste') {
               if (ch === '\r' || ch === '\n') {
@@ -676,8 +763,26 @@ export function readMultilineInput(prompt: string): Promise<string | null> {
               return;
             }
 
+            // Tab: apply completion
+            if (ch === '\t') {
+              if (completion.getState()) {
+                completion.apply();
+              }
+              return;
+            }
+
             // Submit
             if (ch === '\r') {
+              const compState = completion.getState();
+              if (compState && compState.candidates.length > 0) {
+                const selected = compState.candidates[compState.selectedIndex];
+                if (selected) {
+                  buffer = selected.value;
+                  cursorPos = buffer.length;
+                }
+              }
+              
+              completion.hide();
               process.stdout.write('\n');
               cleanup();
               resolve(buffer);
@@ -691,17 +796,18 @@ export function readMultilineInput(prompt: string): Promise<string | null> {
               return;
             }
             // Editing
-            if (ch === '\x7F' || ch === '\x08') { deleteCharBefore(); return; }
+            if (ch === '\x7F' || ch === '\x08') { deleteCharBefore(); completion.update(); return; }
             if (ch === '\x01') { moveCursorToDisplayRowStart(); return; }
             if (ch === '\x05') { moveCursorToDisplayRowEnd(); return; }
-            if (ch === '\x0B') { deleteToLineEnd(); return; }
-            if (ch === '\x15') { deleteToLineStart(); return; }
-            if (ch === '\x17') { deleteWord(); return; }
-            if (ch === '\x0A') { insertNewline(); return; }
+            if (ch === '\x0B') { deleteToLineEnd(); completion.update(); return; }
+            if (ch === '\x15') { deleteToLineStart(); completion.update(); return; }
+            if (ch === '\x17') { deleteWord(); completion.update(); return; }
+            if (ch === '\x0A') { completion.hide(); insertNewline(); return; }
             // Ignore unknown control characters
             if (ch.charCodeAt(0) < 0x20) return;
             // Regular character
             insertChar(ch);
+            completion.update();
           },
         });
       } catch {
