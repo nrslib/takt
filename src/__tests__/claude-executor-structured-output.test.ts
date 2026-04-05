@@ -7,6 +7,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { delimiter, dirname } from 'node:path';
 
 // ===== SdkOptionsBuilder tests (no mock needed) =====
 
@@ -32,6 +33,35 @@ describe('SdkOptionsBuilder — outputFormat 変換', () => {
   it('outputSchema 未設定なら outputFormat は含まれない', () => {
     const sdkOptions = buildSdkOptions({ cwd: '/tmp' });
     expect(sdkOptions).not.toHaveProperty('outputFormat');
+  });
+
+  it('Claude CLI のディレクトリを PATH の先頭に追加する', () => {
+    const originalPath = process.env.PATH;
+    const cliPath = '/tmp/test-bin/claude';
+    try {
+      process.env.PATH = ['/usr/bin', '/bin'].join(delimiter);
+
+      const sdkOptions = buildSdkOptions({
+        cwd: '/tmp',
+        pathToClaudeCodeExecutable: cliPath,
+      });
+
+      const pathEntries = sdkOptions.env?.PATH?.split(delimiter) ?? [];
+      expect(pathEntries[0]).toBe(dirname(cliPath));
+      expect(pathEntries).toContain('/usr/bin');
+      expect(pathEntries).toContain(dirname(process.execPath));
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  });
+
+  it('Anthropic API key を env に引き継ぐ', () => {
+    const sdkOptions = buildSdkOptions({
+      cwd: '/tmp',
+      anthropicApiKey: 'test-key',
+    });
+
+    expect(sdkOptions.env?.ANTHROPIC_API_KEY).toBe('test-key');
   });
 });
 

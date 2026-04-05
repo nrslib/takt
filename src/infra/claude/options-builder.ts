@@ -16,6 +16,7 @@ import type {
   PreToolUseHookInput,
   PermissionMode as SdkPermissionMode,
 } from '@anthropic-ai/claude-agent-sdk';
+import { delimiter, dirname } from 'node:path';
 import type { PermissionMode } from '../../core/models/index.js';
 import { createLogger } from '../../shared/utils/index.js';
 import type {
@@ -27,6 +28,31 @@ import type {
 import { AskUserQuestionDeniedError, createAskUserQuestionHandler } from './ask-user-question-handler.js';
 
 const log = createLogger('claude-sdk');
+
+function buildSdkEnv(options: ClaudeSpawnOptions): Record<string, string> {
+  const env: Record<string, string> = {
+    ...process.env as Record<string, string>,
+  };
+
+  if (options.anthropicApiKey) {
+    env.ANTHROPIC_API_KEY = options.anthropicApiKey;
+  }
+
+  const existingPathEntries = (env.PATH ?? '')
+    .split(delimiter)
+    .filter((entry): entry is string => entry.length > 0);
+  const prependedEntries = [
+    options.pathToClaudeCodeExecutable ? dirname(options.pathToClaudeCodeExecutable) : undefined,
+    process.execPath ? dirname(process.execPath) : undefined,
+  ].filter((entry): entry is string => Boolean(entry));
+
+  const mergedPathEntries = [...new Set([...prependedEntries, ...existingPathEntries])];
+  if (mergedPathEntries.length > 0) {
+    env.PATH = mergedPathEntries.join(delimiter);
+  }
+
+  return env;
+}
 
 /**
  * Builds SDK options from ClaudeSpawnOptions.
@@ -76,12 +102,7 @@ export class SdkOptionsBuilder {
     if (canUseTool) sdkOptions.canUseTool = canUseTool;
     sdkOptions.hooks = hooks;
 
-    if (this.options.anthropicApiKey) {
-      sdkOptions.env = {
-        ...process.env as Record<string, string>,
-        ANTHROPIC_API_KEY: this.options.anthropicApiKey,
-      };
-    }
+    sdkOptions.env = buildSdkEnv(this.options);
 
     // Always enable — QueryExecutor uses the async iterator (`for await`)
     // which only yields when this flag is true.
