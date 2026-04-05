@@ -575,7 +575,7 @@ describe('executePipeline', () => {
       expect(mockBuildPrBody).not.toHaveBeenCalled();
       expect(mockCreatePullRequest).toHaveBeenCalledWith(
         expect.objectContaining({
-          body: '## Summary\nPiece `default` completed successfully.\n\nIssue:\nDetails:',
+          body: '## Summary\nWorkflow `default` completed successfully.\n\nIssue:\nDetails:',
         }),
         '/tmp/test',
       );
