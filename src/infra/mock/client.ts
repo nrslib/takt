@@ -51,14 +51,17 @@ export async function callMock(
   if (scenarioEntry?.delayMs) {
     try {
       await delayWithAbort(scenarioEntry.delayMs, options.abortSignal);
-    } catch {
-      return {
-        persona: personaName,
-        status: 'blocked',
-        content: '[MOCK:ABORTED]\n\nMock response interrupted by abort signal.',
-        timestamp: new Date(),
-        sessionId,
-      };
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') {
+        return {
+          persona: personaName,
+          status: 'blocked',
+          content: '[MOCK:ABORTED]\n\nMock response interrupted by abort signal.',
+          timestamp: new Date(),
+          sessionId,
+        };
+      }
+      throw e;
     }
   }
 

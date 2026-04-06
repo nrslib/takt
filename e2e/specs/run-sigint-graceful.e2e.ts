@@ -9,41 +9,10 @@ import {
   type IsolatedEnv,
 } from '../helpers/isolated-env';
 import { createTestRepo, type TestRepo } from '../helpers/test-repo';
+import { waitFor, waitForClose } from '../helpers/wait.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-
-async function waitFor(
-  predicate: () => boolean,
-  timeoutMs: number,
-  intervalMs: number = 100,
-): Promise<boolean> {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    if (predicate()) {
-      return true;
-    }
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, intervalMs));
-  }
-  return false;
-}
-
-async function waitForClose(
-  child: ReturnType<typeof spawn>,
-  timeoutMs: number,
-): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
-  return await new Promise((resolvePromise, rejectPromise) => {
-    const timeout = setTimeout(() => {
-      child.kill('SIGKILL');
-      rejectPromise(new Error(`Process did not exit within ${timeoutMs}ms`));
-    }, timeoutMs);
-
-    child.on('close', (code, signal) => {
-      clearTimeout(timeout);
-      resolvePromise({ code, signal });
-    });
-  });
-}
 
 // E2E更新時は docs/testing/e2e.md も更新すること
 describe('E2E: Run tasks graceful shutdown on SIGINT (parallel)', () => {

@@ -17,39 +17,10 @@ import {
   type IsolatedEnv,
 } from '../helpers/isolated-env';
 import { createTestRepo, type TestRepo } from '../helpers/test-repo';
+import { waitFor, waitForClose } from '../helpers/wait.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-
-async function waitFor(
-  predicate: () => boolean,
-  timeoutMs: number,
-  intervalMs: number = 50,
-): Promise<boolean> {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    if (predicate()) return true;
-    await new Promise((r) => setTimeout(r, intervalMs));
-  }
-  return false;
-}
-
-async function waitForClose(
-  child: ReturnType<typeof spawn>,
-  timeoutMs: number,
-): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      child.kill('SIGKILL');
-      reject(new Error(`Process did not exit within ${timeoutMs}ms`));
-    }, timeoutMs);
-
-    child.on('close', (code, signal) => {
-      clearTimeout(timeout);
-      resolve({ code, signal });
-    });
-  });
-}
 
 describe('E2E: SIGINT while waiting for AI output (mock with delay)', () => {
   let isolatedEnv: IsolatedEnv;

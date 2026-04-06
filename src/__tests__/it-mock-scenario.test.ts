@@ -176,6 +176,22 @@ describe('loadScenarioFile', () => {
     expect(() => loadScenarioFile(filePath)).toThrow('must have a "content" string');
   });
 
+  it('should throw when delay_ms is a string instead of a number', () => {
+    const filePath = join(tempDir, 'bad-delay-ms.json');
+    writeFileSync(filePath, '[{"content": "test", "delay_ms": "30000"}]');
+
+    expect(() => loadScenarioFile(filePath)).toThrow('"delay_ms" must be a number');
+  });
+
+  it('should accept a numeric delay_ms and expose it as delayMs', () => {
+    const filePath = join(tempDir, 'valid-delay-ms.json');
+    writeFileSync(filePath, '[{"content": "test", "delay_ms": 100}]');
+
+    const entries = loadScenarioFile(filePath);
+
+    expect(entries[0].delayMs).toBe(100);
+  });
+
   it('should throw for invalid status', () => {
     const filePath = join(tempDir, 'bad-status.json');
     writeFileSync(filePath, '[{"content": "test", "status": "approved"}]');
