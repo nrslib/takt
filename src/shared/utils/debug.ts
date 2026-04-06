@@ -11,6 +11,7 @@ import type { PromptLogRecord } from './types.js';
 interface DebugConfig {
   enabled: boolean;
   logFile?: string;
+  trace?: boolean;
 }
 
 /**
@@ -21,6 +22,7 @@ export class DebugLogger {
   private static instance: DebugLogger | null = null;
 
   private debugEnabled = false;
+  private traceEnabled = false;
   private debugLogFile: string | null = null;
   private debugPromptsLogFile: string | null = null;
   private initialized = false;
@@ -54,6 +56,7 @@ export class DebugLogger {
     }
 
     this.debugEnabled = config?.enabled ?? false;
+    this.traceEnabled = config?.trace ?? false;
 
     if (this.debugEnabled) {
       if (config?.logFile) {
@@ -102,6 +105,7 @@ export class DebugLogger {
   /** Reset state (for testing) */
   reset(): void {
     this.debugEnabled = false;
+    this.traceEnabled = false;
     this.debugLogFile = null;
     this.debugPromptsLogFile = null;
     this.initialized = false;
@@ -193,6 +197,9 @@ export class DebugLogger {
   /** Create a scoped logger for a component */
   createLogger(component: string) {
     return {
+      trace: (message: string, data?: unknown) => {
+        if (this.traceEnabled) this.writeLog('TRACE', component, message, data);
+      },
       debug: (message: string, data?: unknown) => this.writeLog('DEBUG', component, message, data),
       info: (message: string, data?: unknown) => this.writeLog('INFO', component, message, data),
       error: (message: string, data?: unknown) => this.writeLog('ERROR', component, message, data),

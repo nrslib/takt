@@ -176,12 +176,12 @@ export async function runWithWorkerPool(
         const freeSlots = concurrency - active.size;
         if (freeSlots > 0) {
           const newTasks = taskRunner.claimNextTasks(freeSlots);
-          log.debug('poll_tick', { active: active.size, queued: queue.length, freeSlots });
+          log.trace('poll_tick', { active: active.size, queued: queue.length, freeSlots });
           if (newTasks.length > 0) {
             log.debug('poll_new_tasks', { count: newTasks.length });
             queue.push(...newTasks);
           } else {
-            log.debug('no_new_tasks');
+            log.trace('no_new_tasks');
           }
         }
       }

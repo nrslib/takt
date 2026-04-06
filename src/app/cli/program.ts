@@ -75,9 +75,8 @@ export async function runPreActionHook(): Promise<void> {
   initGitProvider(resolvedCwd);
 
   const verbose = isVerboseMode(resolvedCwd);
-  initDebugLogger(verbose ? { enabled: true } : undefined, resolvedCwd);
-
   const config = resolveConfigValues(resolvedCwd, ['logging', 'minimalOutput']);
+  initDebugLogger(verbose ? { enabled: true, trace: config.logging?.trace } : undefined, resolvedCwd);
 
   if (verbose) {
     setVerboseConsole(true);
