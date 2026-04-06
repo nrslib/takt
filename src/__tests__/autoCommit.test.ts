@@ -195,13 +195,8 @@ describe('autoCommitAndPush', () => {
       {
         projectDir: '/project',
         outcome: 'Push to main repo failed after commit creation.',
+        error: 'refusing to update checked out branch',
       }
-    );
-    expect(mockLogInfo).not.toHaveBeenCalledWith(
-      'Push to main repo failed after commit creation',
-      expect.objectContaining({
-        error: expect.anything(),
-      })
     );
   });
 

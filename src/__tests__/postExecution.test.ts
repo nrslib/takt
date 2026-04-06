@@ -6,10 +6,9 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockAutoCommitAndPush, mockPushBranch, mockFindExistingPr, mockCommentOnPr, mockCreatePullRequest, mockBuildPrBody, mockCreatePullRequestSafely } =
+const { mockAutoCommitAndPush, mockFindExistingPr, mockCommentOnPr, mockCreatePullRequest, mockBuildPrBody, mockCreatePullRequestSafely } =
   vi.hoisted(() => ({
     mockAutoCommitAndPush: vi.fn(),
-    mockPushBranch: vi.fn(),
     mockFindExistingPr: vi.fn(),
     mockCommentOnPr: vi.fn(),
     mockCreatePullRequest: vi.fn(),
@@ -19,10 +18,6 @@ const { mockAutoCommitAndPush, mockPushBranch, mockFindExistingPr, mockCommentOn
 
 vi.mock('../infra/task/index.js', () => ({
   autoCommitAndPush: (...args: unknown[]) => mockAutoCommitAndPush(...args),
-}));
-
-vi.mock('../infra/task/git.js', () => ({
-  pushBranch: (...args: unknown[]) => mockPushBranch(...args),
 }));
 
 vi.mock('../infra/git/index.js', () => ({
@@ -67,7 +62,6 @@ describe('postExecutionFlow', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockAutoCommitAndPush.mockReturnValue({ success: true, commitHash: 'abc123' });
-    mockPushBranch.mockReturnValue(undefined);
     mockCommentOnPr.mockReturnValue({ success: true });
     mockCreatePullRequest.mockReturnValue({ success: true, url: 'https://github.com/org/repo/pull/1' });
     mockCreatePullRequestSafely.mockImplementation((provider, options, cwd) => {
@@ -90,6 +84,22 @@ describe('postExecutionFlow', () => {
     expect(mockCreatePullRequest).toHaveBeenCalledTimes(1);
     expect(mockCommentOnPr).not.toHaveBeenCalled();
     expect(mockBuildPrBody).toHaveBeenCalledWith(undefined, 'Workflow `default` completed successfully.');
+  });
+
+  it('autoCommitAndPush に branch パラメータが渡される', async () => {
+    // Given
+    mockFindExistingPr.mockReturnValue(undefined);
+
+    // When
+    await postExecutionFlow(baseOptions);
+
+    // Then: branch is forwarded so relay push can target the correct branch
+    expect(mockAutoCommitAndPush).toHaveBeenCalledWith(
+      '/clone',
+      'Fix the bug',
+      '/project',
+      'task/fix-the-bug',
+    );
   });
 
   it('既存PRがある場合は commentOnPr を呼び createPullRequest は呼ばない', async () => {
@@ -158,21 +168,20 @@ describe('postExecutionFlow', () => {
     expect(result.prUrl).toBeUndefined();
   });
 
-  it('ローカルpush失敗後も commitHash があれば PR 作成失敗を prFailed として返す', async () => {
-    // Given: autoCommit keeps the commitHash even though its local push already failed.
+  it('ローカルpush失敗後も commitHash があれば（localPushFailed なし）PR 作成失敗を prFailed として返す', async () => {
+    // Given: autoCommit reports a commitHash but localPushFailed is not set.
+    // The relay already pushed to origin in this case; PR creation may still fail.
     mockAutoCommitAndPush.mockReturnValue({
       success: true,
       commitHash: 'abc123',
-      message: 'Committed locally; local push failed',
+      message: 'Committed locally; relay push succeeded',
     });
     mockFindExistingPr.mockReturnValue(undefined);
     mockCreatePullRequest.mockReturnValue({ success: false, error: 'Base ref must be a branch' });
 
-    // When: post-execution continues with origin push and PR creation.
+    // When: post-execution proceeds to PR creation (relay already pushed).
     const result = await postExecutionFlow(baseOptions);
 
-    // Then: the workflow should continue into the existing pr_failed path.
-    expect(mockPushBranch).toHaveBeenCalledWith('/project', 'task/fix-the-bug');
     expect(mockCreatePullRequest).toHaveBeenCalledWith(
       expect.objectContaining({
         branch: 'task/fix-the-bug',
@@ -186,18 +195,24 @@ describe('postExecutionFlow', () => {
     expect(result.prError).toBe('Failed to create pull request.');
   });
 
-  it('origin への push 失敗時は PR 処理へ進まず prFailed: true を返す', async () => {
-    mockPushBranch.mockImplementation(() => {
-      throw new Error('fatal: could not read Password for https://example.com/repo.git');
+  it('relay push 失敗時（localPushFailed: true）は shouldCreatePr に関わらず taskFailed: true を返す', async () => {
+    // Given: relay push failed, localPushFailed is set on the commit result
+    mockAutoCommitAndPush.mockReturnValue({
+      success: true,
+      commitHash: 'abc123',
+      localPushFailed: true,
+      message: 'Committed: abc123 - takt: Fix the bug',
     });
 
+    // When: called with shouldCreatePr: true
     const result = await postExecutionFlow(baseOptions);
 
-    expect(mockPushBranch).toHaveBeenCalledWith('/project', 'task/fix-the-bug');
+    // Then: we do NOT proceed to PR creation since origin was not reached
     expect(mockFindExistingPr).not.toHaveBeenCalled();
     expect(mockCreatePullRequest).not.toHaveBeenCalled();
-    expect(result.prFailed).toBe(true);
-    expect(result.prError).toBe('Failed to push branch to origin.');
+    expect(result.taskFailed).toBe(true);
+    expect(result.taskError).toBe('Push to main repo failed after commit creation.');
+    expect(result.prFailed).toBeUndefined();
   });
 
   it('auto-commit 失敗時は通常失敗を返し、PR 処理へ進まない', async () => {
@@ -208,7 +223,6 @@ describe('postExecutionFlow', () => {
 
     const result = await postExecutionFlow(baseOptions);
 
-    expect(mockPushBranch).not.toHaveBeenCalled();
     expect(mockFindExistingPr).not.toHaveBeenCalled();
     expect(mockCreatePullRequest).not.toHaveBeenCalled();
     expect(result.prFailed).toBeUndefined();
@@ -225,7 +239,6 @@ describe('postExecutionFlow', () => {
 
     const result = await postExecutionFlow({ ...baseOptions, shouldCreatePr: false });
 
-    expect(mockPushBranch).not.toHaveBeenCalled();
     expect(mockFindExistingPr).not.toHaveBeenCalled();
     expect(mockCreatePullRequest).not.toHaveBeenCalled();
     expect(result.prFailed).toBeUndefined();
@@ -244,13 +257,32 @@ describe('postExecutionFlow', () => {
 
     const result = await postExecutionFlow({ ...baseOptions, shouldCreatePr: false });
 
-    expect(mockPushBranch).not.toHaveBeenCalled();
     expect(mockFindExistingPr).not.toHaveBeenCalled();
     expect(mockCreatePullRequest).not.toHaveBeenCalled();
     expect(result.prFailed).toBeUndefined();
     expect(result.prError).toBeUndefined();
     expect(result.taskFailed).toBe(true);
     expect(result.taskError).toBe('Push to main repo failed after commit creation.');
+  });
+
+  it('shouldCreatePr が true でもローカル push 失敗時は PR 処理へ進まず taskFailed を返す', async () => {
+    // Given: relay push failed
+    mockAutoCommitAndPush.mockReturnValue({
+      success: true,
+      commitHash: 'abc123',
+      localPushFailed: true,
+      message: 'Committed: abc123 - takt: Fix the bug',
+    });
+
+    // When: shouldCreatePr is true (previously this case would skip the failure check)
+    const result = await postExecutionFlow({ ...baseOptions, shouldCreatePr: true });
+
+    // Then: localPushFailed stops the flow regardless of shouldCreatePr
+    expect(mockFindExistingPr).not.toHaveBeenCalled();
+    expect(mockCreatePullRequest).not.toHaveBeenCalled();
+    expect(result.taskFailed).toBe(true);
+    expect(result.taskError).toBe('Push to main repo failed after commit creation.');
+    expect(result.prFailed).toBeUndefined();
   });
 
   it('createPullRequest が例外を投げた場合も prFailed: true を返す', async () => {

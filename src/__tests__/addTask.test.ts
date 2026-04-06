@@ -275,6 +275,8 @@ describe('addTask', () => {
     expect(task.auto_pr).toBe(false);
     expect(task.worktree).toBe(true);
     expect(task.draft_pr).toBeUndefined();
+    expect(task.source).toBe('pr_review');
+    expect(task.pr_number).toBe(456);
     expect(readOrderContent(testDir, task.task_dir)).toContain(formattedTask);
   });
 

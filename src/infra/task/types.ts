@@ -77,4 +77,6 @@ export interface TaskListItem {
   issueNumber?: number;
   exceededMaxSteps?: number;
   exceededCurrentIteration?: number;
+  source?: 'pr_review' | 'issue' | 'manual';
+  prNumber?: number;
 }

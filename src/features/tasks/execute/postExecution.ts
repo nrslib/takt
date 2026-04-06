@@ -6,7 +6,6 @@
  */
 
 import { autoCommitAndPush } from '../../../infra/task/index.js';
-import { pushBranch } from '../../../infra/task/git.js';
 import { info, error, success } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import { buildPrBody, createPullRequestSafely, getGitProvider } from '../../../infra/git/index.js';
@@ -16,7 +15,6 @@ const log = createLogger('postExecution');
 
 const AUTO_COMMIT_FAILURE_MESSAGE = 'Auto-commit failed before PR creation.';
 const LOCAL_PUSH_FAILURE_MESSAGE = 'Push to main repo failed after commit creation.';
-const BRANCH_PUSH_FAILURE_MESSAGE = 'Failed to push branch to origin.';
 const PR_COMMENT_FAILURE_MESSAGE = 'Failed to update pull request comment.';
 const PR_CREATION_FAILURE_MESSAGE = 'Failed to create pull request.';
 
@@ -48,7 +46,7 @@ export interface PostExecutionResult {
 export async function postExecutionFlow(options: PostExecutionOptions): Promise<PostExecutionResult> {
   const { execCwd, projectCwd, task, branch, baseBranch, shouldCreatePr, draftPr, pieceIdentifier, issues, repo } = options;
 
-  const commitResult = autoCommitAndPush(execCwd, task, projectCwd);
+  const commitResult = autoCommitAndPush(execCwd, task, projectCwd, branch);
   if (commitResult.commitHash) {
     success(`Auto-committed: ${commitResult.commitHash}`);
   } else if (!commitResult.success) {
@@ -59,8 +57,8 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
     return { taskFailed: true, taskError: AUTO_COMMIT_FAILURE_MESSAGE };
   }
 
-  if (commitResult.localPushFailed && !shouldCreatePr) {
-    log.error('Local push failed for task without PR creation', {
+  if (commitResult.localPushFailed) {
+    log.error('Local push failed for task', {
       outcome: LOCAL_PUSH_FAILURE_MESSAGE,
     });
     error(LOCAL_PUSH_FAILURE_MESSAGE);
@@ -68,17 +66,6 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
   }
 
   if (commitResult.commitHash && branch && shouldCreatePr) {
-    try {
-      pushBranch(projectCwd, branch);
-    } catch (pushError) {
-      void pushError;
-      log.error('Branch push to origin failed', {
-        branch,
-        outcome: BRANCH_PUSH_FAILURE_MESSAGE,
-      });
-      error(BRANCH_PUSH_FAILURE_MESSAGE);
-      return { prFailed: true, prError: BRANCH_PUSH_FAILURE_MESSAGE };
-    }
     const gitProvider = getGitProvider();
     const report = pieceIdentifier ? `Workflow \`${pieceIdentifier}\` completed successfully.` : 'Task completed successfully.';
     const existingPr = gitProvider.findExistingPr(branch, projectCwd);

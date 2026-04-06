@@ -52,6 +52,8 @@ function buildTaskFileData(task: TaskRecord, content: string): TaskFileData {
     draft_pr: task.draft_pr,
     exceeded_max_steps: task.exceeded_max_steps,
     exceeded_current_iteration: task.exceeded_current_iteration,
+    source: task.source,
+    pr_number: task.pr_number,
   });
 }
 
@@ -135,6 +137,8 @@ function toBaseTaskListItem(projectDir: string, tasksFile: string, task: TaskRec
     ownerPid: task.owner_pid ?? undefined,
     data: toTaskData(projectDir, task),
     issueNumber: task.issue,
+    source: task.source,
+    prNumber: task.pr_number,
   };
 }
 

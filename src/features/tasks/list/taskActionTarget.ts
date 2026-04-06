@@ -1,8 +1,7 @@
 import * as fs from 'node:fs';
-import { execFileSync } from 'node:child_process';
 import { error as logError } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
-import { pushBranch } from '../../../infra/task/index.js';
+import { relayPushCloneToOrigin } from '../../../infra/task/index.js';
 import type { BranchListItem, TaskListItem } from '../../../infra/task/index.js';
 
 const log = createLogger('list-tasks');
@@ -55,15 +54,8 @@ export function validateWorktreeTarget(
   return true;
 }
 
-/** Push worktree → project dir, then project dir → origin */
+/** Relay push: clone HEAD を root repo 経由で origin へ転送する（checked-out branch を変更しない） */
 export function pushWorktreeToOrigin(worktreePath: string, projectDir: string, branch: string): void {
-  execFileSync('git', ['push', projectDir, 'HEAD'], {
-    cwd: worktreePath,
-    encoding: 'utf-8',
-    stdio: 'pipe',
-  });
-  log.info('Pushed to main repo', { worktreePath, projectDir });
-
-  pushBranch(projectDir, branch);
-  log.info('Pushed to origin', { projectDir, branch });
+  relayPushCloneToOrigin(worktreePath, projectDir, branch);
+  log.info('Relay pushed to origin', { worktreePath, projectDir, branch });
 }

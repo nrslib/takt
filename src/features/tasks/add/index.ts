@@ -57,6 +57,7 @@ export async function saveTaskFile(
     baseBranch?: string;
     autoPr?: boolean;
     draftPr?: boolean;
+    prNumber?: number;
   },
 ): Promise<{ taskName: string; tasksFile: string }> {
   const runner = new TaskRunner(cwd);
@@ -77,6 +78,10 @@ export async function saveTaskFile(
     ...(options?.issue !== undefined && { issue: options.issue }),
     ...(options?.autoPr !== undefined && { auto_pr: options.autoPr }),
     ...(options?.draftPr !== undefined && { draft_pr: options.draftPr }),
+    ...(options?.prNumber !== undefined && {
+      source: 'pr_review' as const,
+      pr_number: options.prNumber,
+    }),
   };
   const created = runner.addTask(taskContent, {
     ...config,
@@ -211,7 +216,7 @@ export async function addTask(
       baseBranch: prReview.baseRefName,
       autoPr: false,
     };
-    const created = await saveTaskFile(cwd, taskContent, { piece, ...settings });
+    const created = await saveTaskFile(cwd, taskContent, { piece, ...settings, prNumber });
     displayTaskCreationResult(created, settings, piece);
     return;
   }
