@@ -1,5 +1,5 @@
-piece_overrides:
-  movements:
+workflow_overrides:
+  steps:
     implement:
       quality_gates:
         - "Run `npm run build` and verify the build succeeds"

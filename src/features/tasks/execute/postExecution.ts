@@ -103,13 +103,16 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
         success(`PR created: ${prResult.url}`);
         return { prUrl: prResult.url };
       } else {
+        const detailedPrError = prResult.error
+          ? `${PR_CREATION_FAILURE_MESSAGE} ${prResult.error}`
+          : PR_CREATION_FAILURE_MESSAGE;
         log.error('PR creation failed', {
           branch,
           baseBranch,
-          outcome: PR_CREATION_FAILURE_MESSAGE,
+          outcome: detailedPrError,
         });
-        error(PR_CREATION_FAILURE_MESSAGE);
-        return { prFailed: true, prError: PR_CREATION_FAILURE_MESSAGE };
+        error(detailedPrError);
+        return { prFailed: true, prError: detailedPrError };
       }
     }
   }
