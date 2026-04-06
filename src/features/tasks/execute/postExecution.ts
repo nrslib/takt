@@ -6,7 +6,7 @@
  */
 
 import { autoCommitAndPush } from '../../../infra/task/index.js';
-import { pushBranch, pushHeadToOriginBranch } from '../../../infra/task/git.js';
+import { pushHeadToOriginBranch } from '../../../infra/task/git.js';
 import { info, error, success } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { buildPrBody, createPullRequestSafely, getGitProvider } from '../../../infra/git/index.js';
@@ -16,7 +16,6 @@ const log = createLogger('postExecution');
 
 const AUTO_COMMIT_FAILURE_MESSAGE = 'Auto-commit failed before PR creation.';
 const LOCAL_PUSH_FAILURE_MESSAGE = 'Push to main repo failed after commit creation.';
-const BRANCH_PUSH_FAILURE_MESSAGE = 'Failed to push branch to origin.';
 const CLONE_ORIGIN_PUSH_FAILURE_MESSAGE = 'Failed to push branch to origin from clone.';
 const PR_COMMENT_FAILURE_MESSAGE = 'Failed to update pull request comment.';
 const PR_CREATION_FAILURE_MESSAGE = 'Failed to create pull request.';
@@ -50,7 +49,7 @@ export interface PostExecutionResult {
 export async function postExecutionFlow(options: PostExecutionOptions): Promise<PostExecutionResult> {
   const { execCwd, projectCwd, task, branch, baseBranch, shouldCreatePr, shouldPublishBranchToOrigin, draftPr, pieceIdentifier, issues, repo } = options;
 
-  const commitResult = autoCommitAndPush(execCwd, task, projectCwd);
+  const commitResult = autoCommitAndPush(execCwd, task, projectCwd, branch);
   if (commitResult.commitHash) {
     success(`Auto-committed: ${commitResult.commitHash}`);
   } else if (!commitResult.success) {
@@ -61,8 +60,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
     return { taskFailed: true, taskError: AUTO_COMMIT_FAILURE_MESSAGE };
   }
 
-  let skipProjectDirOriginPush = false;
-  let pushedHeadToOriginFromClone = false;
+  let recoveredCloneOriginPush = false;
   if (
     commitResult.localPushFailed &&
     shouldPublishBranchToOrigin === true &&
@@ -71,8 +69,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
   ) {
     try {
       pushHeadToOriginBranch(execCwd, branch);
-      skipProjectDirOriginPush = true;
-      pushedHeadToOriginFromClone = true;
+      recoveredCloneOriginPush = true;
     } catch (pushError) {
       const pushDetail = getErrorMessage(pushError);
       log.error('Clone push to origin failed after local push failure', {
@@ -86,34 +83,11 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
     }
   }
 
-  if (
-    !shouldCreatePr &&
-    shouldPublishBranchToOrigin === true &&
-    commitResult.commitHash &&
-    branch &&
-    !pushedHeadToOriginFromClone
-  ) {
-    try {
-      pushHeadToOriginBranch(execCwd, branch);
-      pushedHeadToOriginFromClone = true;
-    } catch (pushError) {
-      const pushDetail = getErrorMessage(pushError);
-      log.error('Clone push to origin failed for remote-publish task', {
-        branch,
-        outcome: CLONE_ORIGIN_PUSH_FAILURE_MESSAGE,
-        error: pushDetail,
-      });
-      const pushFailureMessage = `${CLONE_ORIGIN_PUSH_FAILURE_MESSAGE} ${pushDetail}`.trim();
-      error(pushFailureMessage);
-      return { prFailed: true, prError: pushFailureMessage };
-    }
-  }
-
-  if (commitResult.localPushFailed && !shouldCreatePr) {
-    if (shouldPublishBranchToOrigin === true && commitResult.commitHash && branch) {
+  if (commitResult.localPushFailed && !recoveredCloneOriginPush) {
+    if (shouldPublishBranchToOrigin === true && !shouldCreatePr) {
       return {};
     }
-    log.error('Local push failed for task without PR creation', {
+    log.error('Local push failed for task', {
       outcome: LOCAL_PUSH_FAILURE_MESSAGE,
     });
     error(LOCAL_PUSH_FAILURE_MESSAGE);
@@ -121,21 +95,6 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
   }
 
   if (commitResult.commitHash && branch && shouldCreatePr) {
-    if (!skipProjectDirOriginPush) {
-      try {
-        pushBranch(projectCwd, branch);
-      } catch (pushError) {
-        const pushDetail = getErrorMessage(pushError);
-        log.error('Branch push to origin failed', {
-          branch,
-          outcome: BRANCH_PUSH_FAILURE_MESSAGE,
-          error: pushDetail,
-        });
-        const prError = `${BRANCH_PUSH_FAILURE_MESSAGE} ${pushDetail}`.trim();
-        error(prError);
-        return { prFailed: true, prError };
-      }
-    }
     const gitProvider = getGitProvider();
     const report = pieceIdentifier ? `Workflow \`${pieceIdentifier}\` completed successfully.` : 'Task completed successfully.';
     const existingPr = gitProvider.findExistingPr(branch, projectCwd);
@@ -172,13 +131,16 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
         success(`PR created: ${prResult.url}`);
         return { prUrl: prResult.url };
       } else {
+        const detailedPrError = prResult.error
+          ? `${PR_CREATION_FAILURE_MESSAGE} ${prResult.error}`
+          : PR_CREATION_FAILURE_MESSAGE;
         log.error('PR creation failed', {
           branch,
           baseBranch,
-          outcome: PR_CREATION_FAILURE_MESSAGE,
+          outcome: detailedPrError,
         });
-        error(PR_CREATION_FAILURE_MESSAGE);
-        return { prFailed: true, prError: PR_CREATION_FAILURE_MESSAGE };
+        error(detailedPrError);
+        return { prFailed: true, prError: detailedPrError };
       }
     }
   }

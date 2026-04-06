@@ -1,5 +1,5 @@
 /**
- * Tests for pushBranch and pushHeadToOriginBranch in infra/task/git.ts
+ * Tests for git push helpers in infra/task/git.ts
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';

@@ -38,9 +38,10 @@ vi.mock('../infra/config/index.js', () => ({
   resolveConfigValues: vi.fn(() => ({ provider: 'claude', model: 'sonnet' })),
 }));
 
+const mockRelayPushCloneToOrigin = vi.fn();
 vi.mock('../infra/task/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  pushBranch: vi.fn(),
+  relayPushCloneToOrigin: (...args: unknown[]) => mockRelayPushCloneToOrigin(...args),
 }));
 
 vi.mock('../shared/prompts/index.js', () => ({
@@ -54,7 +55,6 @@ vi.mock('../shared/prompts/index.js', () => ({
 import * as fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { error as logError, success } from '../shared/ui/index.js';
-import { pushBranch } from '../infra/task/index.js';
 import { getProvider } from '../infra/providers/index.js';
 import { resolveConfigValues } from '../infra/config/index.js';
 import { syncBranchWithRoot } from '../features/tasks/list/taskSyncAction.js';
@@ -65,7 +65,6 @@ const mockExistsSync = vi.mocked(fs.existsSync);
 const mockExecFileSync = vi.mocked(execFileSync);
 const mockLogError = vi.mocked(logError);
 const mockSuccess = vi.mocked(success);
-const mockPushBranch = vi.mocked(pushBranch);
 const mockGetProvider = vi.mocked(getProvider);
 const mockResolveConfigValues = vi.mocked(resolveConfigValues);
 
@@ -100,6 +99,7 @@ describe('syncBranchWithRoot', () => {
     mockExistsSync.mockReturnValue(true);
     mockAgentCall.mockResolvedValue(makeAgentResponse());
     mockResolveConfigValues.mockReturnValue({ provider: 'claude', model: 'sonnet' } as never);
+    mockRelayPushCloneToOrigin.mockReturnValue(undefined);
   });
 
   it('throws when called with a non-task BranchActionTarget', async () => {
@@ -157,13 +157,12 @@ describe('syncBranchWithRoot', () => {
     expect(result).toBe(true);
     expect(mockSuccess).toHaveBeenCalledWith('Synced & pushed.');
     expect(mockAgentCall).not.toHaveBeenCalled();
-    // worktree → project push
-    expect(mockExecFileSync).toHaveBeenCalledWith(
-      'git', ['push', PROJECT_DIR, 'HEAD'],
-      expect.objectContaining({ cwd: task.worktreePath }),
+    // relay push: worktree → origin via root repo
+    expect(mockRelayPushCloneToOrigin).toHaveBeenCalledWith(
+      task.worktreePath,
+      PROJECT_DIR,
+      'task/test-task',
     );
-    // project → origin push
-    expect(mockPushBranch).toHaveBeenCalledWith(PROJECT_DIR, 'task/test-task');
   });
 
   it('calls provider agent when merge has conflicts', async () => {
@@ -288,10 +287,9 @@ describe('syncBranchWithRoot', () => {
 
   it('returns false when push fails after successful merge', async () => {
     const task = makeTask();
-    mockExecFileSync.mockImplementation((_cmd, args) => {
-      const argsArr = args as string[];
-      if (argsArr[0] === 'push') throw new Error('push failed');
-      return '' as never;
+    mockExecFileSync.mockReturnValue('' as never);
+    mockRelayPushCloneToOrigin.mockImplementation(() => {
+      throw new Error('push failed');
     });
 
     const result = await syncBranchWithRoot(PROJECT_DIR, task);
@@ -308,8 +306,10 @@ describe('syncBranchWithRoot', () => {
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
       if (argsArr[0] === 'merge' && !argsArr.includes('--abort')) throw new Error('CONFLICT');
-      if (argsArr[0] === 'push') throw new Error('push failed');
       return '' as never;
+    });
+    mockRelayPushCloneToOrigin.mockImplementation(() => {
+      throw new Error('push failed');
     });
     mockAgentCall.mockResolvedValue(makeAgentResponse({ status: 'done' }));
 

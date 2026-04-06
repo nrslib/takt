@@ -142,7 +142,11 @@ export function pushBranch(cwd: string, branch: string): void {
 }
 
 /**
- * Pushes the current HEAD to the target origin branch. Throws on failure.
+ * Relay push: fetches clone HEAD into a temporary ref in the root repo,
+ * pushes that ref to origin, then cleans up the temp ref (always, even on failure).
+ *
+ * This avoids the unsafe `git push <projectDir> HEAD` pattern which can push
+ * to a checked-out branch and cause data loss.
  */
 export function pushHeadToOriginBranch(cwd: string, branch: string): void {
   log.info('Pushing HEAD to origin branch', { branch });
@@ -153,5 +157,23 @@ export function pushHeadToOriginBranch(cwd: string, branch: string): void {
     });
   } catch (err) {
     throwPushFailureWithStderr(err, NON_FAST_FORWARD_PUSH_HINT);
+  }
+}
+
+export function relayPushCloneToOrigin(cloneCwd: string, rootCwd: string, branch: string): void {
+  const tempRef = `refs/takt-relay/${branch}`;
+  log.info('Relay push: fetching clone HEAD', { cloneCwd, rootCwd, tempRef });
+  try {
+    execFileSync('git', ['fetch', cloneCwd, `HEAD:${tempRef}`], { cwd: rootCwd, stdio: 'pipe' });
+    log.info('Relay push: pushing to origin', { rootCwd, branch });
+    execFileSync('git', ['push', 'origin', `${tempRef}:refs/heads/${branch}`], { cwd: rootCwd, stdio: 'pipe' });
+    log.info('Relay push: succeeded', { rootCwd, branch });
+  } finally {
+    try {
+      execFileSync('git', ['update-ref', '-d', tempRef], { cwd: rootCwd, stdio: 'pipe' });
+      log.debug('Relay push: temp ref cleaned up', { tempRef });
+    } catch {
+      log.debug('Relay push: temp ref cleanup failed (non-fatal)', { tempRef });
+    }
   }
 }

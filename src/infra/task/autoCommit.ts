@@ -10,7 +10,7 @@
 import { execFileSync } from 'node:child_process';
 import { resolveConfigValue } from '../config/index.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
-import { stageAndCommit } from './git.js';
+import { stageAndCommit, relayPushCloneToOrigin } from './git.js';
 
 const log = createLogger('autoCommit');
 const AUTO_COMMIT_PUSH_FAILURE_MESSAGE = 'Push to main repo failed after commit creation.';
@@ -40,7 +40,7 @@ export class AutoCommitter {
    * 3. If changes exist, create a commit with "takt: {taskName}"
    * 4. Push to the main project directory
    */
-  commitAndPush(cloneCwd: string, taskName: string, projectDir: string): AutoCommitResult {
+  commitAndPush(cloneCwd: string, taskName: string, projectDir: string, branch?: string): AutoCommitResult {
     log.info('Auto-commit starting', { cwd: cloneCwd, taskName });
 
     try {
@@ -58,16 +58,21 @@ export class AutoCommitter {
       log.info('Auto-commit created', { commitHash, message: commitMessage });
 
       try {
-        execFileSync('git', ['push', projectDir, 'HEAD'], {
-          cwd: cloneCwd,
-          stdio: 'pipe',
-        });
-        log.info('Pushed to main repo', { projectDir });
+        if (branch !== undefined) {
+          relayPushCloneToOrigin(cloneCwd, projectDir, branch);
+          log.info('Relay pushed to origin', { projectDir, branch });
+        } else {
+          execFileSync('git', ['push', projectDir, 'HEAD'], {
+            cwd: cloneCwd,
+            stdio: 'pipe',
+          });
+          log.info('Pushed to main repo', { projectDir });
+        }
       } catch (pushError) {
-        void pushError;
         log.info('Push to main repo failed after commit creation', {
           projectDir,
           outcome: AUTO_COMMIT_PUSH_FAILURE_MESSAGE,
+          error: getErrorMessage(pushError),
         });
 
         return {
@@ -99,6 +104,6 @@ export class AutoCommitter {
 
 const defaultCommitter = new AutoCommitter();
 
-export function autoCommitAndPush(cloneCwd: string, taskName: string, projectDir: string): AutoCommitResult {
-  return defaultCommitter.commitAndPush(cloneCwd, taskName, projectDir);
+export function autoCommitAndPush(cloneCwd: string, taskName: string, projectDir: string, branch?: string): AutoCommitResult {
+  return defaultCommitter.commitAndPush(cloneCwd, taskName, projectDir, branch);
 }

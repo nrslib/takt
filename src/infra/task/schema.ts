@@ -155,6 +155,16 @@ const TaskExecutionConfigObjectSchema = z.object({
   exceeded_max_movements: z.number().int().positive().optional(),
   exceeded_max_steps: z.number().int().positive().optional(),
   exceeded_current_iteration: z.number().int().min(0).optional(),
+  source: z.enum(['pr_review', 'issue', 'manual']).optional(),
+  pr_number: z.number().int().positive().optional(),
+}).superRefine((data, ctx) => {
+  if (data.source === 'pr_review' && data.pr_number === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'pr_number is required when source is "pr_review"',
+      path: ['pr_number'],
+    });
+  }
 });
 
 function stripTaskAliases<T extends Record<string, unknown>>(

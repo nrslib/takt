@@ -22,15 +22,15 @@ vi.mock('../shared/utils/index.js', () => ({
   getErrorMessage: vi.fn((err) => String(err)),
 }));
 
+const mockRelayPushCloneToOrigin = vi.fn();
 vi.mock('../infra/task/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  pushBranch: vi.fn(),
+  relayPushCloneToOrigin: (...args: unknown[]) => mockRelayPushCloneToOrigin(...args),
 }));
 
 import * as fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { error as logError, success } from '../shared/ui/index.js';
-import { pushBranch } from '../infra/task/index.js';
 import { pullFromRemote } from '../features/tasks/list/taskPullAction.js';
 import type { TaskListItem } from '../infra/task/index.js';
 
@@ -38,7 +38,6 @@ const mockExistsSync = vi.mocked(fs.existsSync);
 const mockExecFileSync = vi.mocked(execFileSync);
 const mockLogError = vi.mocked(logError);
 const mockSuccess = vi.mocked(success);
-const mockPushBranch = vi.mocked(pushBranch);
 
 const PROJECT_DIR = '/project';
 const ORIGIN_URL = 'git@github.com:user/repo.git';
@@ -61,6 +60,7 @@ describe('pullFromRemote', () => {
     vi.clearAllMocks();
     mockExistsSync.mockReturnValue(true);
     mockExecFileSync.mockReturnValue('' as never);
+    mockRelayPushCloneToOrigin.mockReturnValue(undefined);
   });
 
   it('should throw when called with a non-task BranchActionTarget', () => {
@@ -148,7 +148,7 @@ describe('pullFromRemote', () => {
     );
   });
 
-  it('should push to projectDir then to origin after successful pull', () => {
+  it('should relay push to origin after successful pull', () => {
     const task = makeTask();
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
@@ -158,13 +158,12 @@ describe('pullFromRemote', () => {
 
     pullFromRemote(PROJECT_DIR, task);
 
-    // worktree → project push
-    expect(mockExecFileSync).toHaveBeenCalledWith(
-      'git', ['push', PROJECT_DIR, 'HEAD'],
-      expect.objectContaining({ cwd: task.worktreePath }),
+    // relay push: worktree → origin via root repo
+    expect(mockRelayPushCloneToOrigin).toHaveBeenCalledWith(
+      task.worktreePath,
+      PROJECT_DIR,
+      'task/test-task',
     );
-    // project → origin push
-    expect(mockPushBranch).toHaveBeenCalledWith(PROJECT_DIR, 'task/test-task');
   });
 
   it('should return false and suggest sync when pull fails (not fast-forwardable)', () => {
@@ -186,7 +185,7 @@ describe('pullFromRemote', () => {
       expect.stringContaining('Sync with root'),
     );
     // Should NOT push when pull fails
-    expect(mockPushBranch).not.toHaveBeenCalled();
+    expect(mockRelayPushCloneToOrigin).not.toHaveBeenCalled();
   });
 
   it('should remove temporary remote even when pull fails', () => {
@@ -264,35 +263,17 @@ describe('pullFromRemote', () => {
       expect.objectContaining({ cwd: task.worktreePath }),
     );
     // Should not push
-    expect(mockPushBranch).not.toHaveBeenCalled();
+    expect(mockRelayPushCloneToOrigin).not.toHaveBeenCalled();
   });
 
-  it('should return false when git push to projectDir fails after pull', () => {
-    const task = makeTask();
-    mockExecFileSync.mockImplementation((_cmd, args) => {
-      const argsArr = args as string[];
-      if (argsArr[0] === 'config') return `${ORIGIN_URL}\n` as never;
-      if (argsArr[0] === 'push') throw new Error('push failed');
-      return '' as never;
-    });
-
-    const result = pullFromRemote(PROJECT_DIR, task);
-
-    expect(result).toBe(false);
-    expect(mockLogError).toHaveBeenCalledWith(
-      expect.stringContaining('Push failed after pull'),
-    );
-    expect(mockSuccess).not.toHaveBeenCalled();
-  });
-
-  it('should return false when pushBranch fails after pull', () => {
+  it('should return false when relay push fails after pull', () => {
     const task = makeTask();
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
       if (argsArr[0] === 'config') return `${ORIGIN_URL}\n` as never;
       return '' as never;
     });
-    mockPushBranch.mockImplementation(() => {
+    mockRelayPushCloneToOrigin.mockImplementation(() => {
       throw new Error('push to origin failed');
     });
 
