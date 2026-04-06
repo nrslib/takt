@@ -16,7 +16,7 @@ import { getLanguageResourcesDir } from '../../resources/index.js';
 import { listBuiltinPieceNames } from './pieceResolver.js';
 import { resolvePieceConfigValues } from '../resolvePieceConfigValue.js';
 import type { PieceWithSource } from './pieceResolver.js';
-import { warnLegacyCategoryYamlKeys } from '../legacy-workflow-key-deprecation.js';
+import { warnLegacyCategoryYamlKeysOncePerProcess } from '../legacy-workflow-key-deprecation.js';
 
 const CategoryConfigSchema = z.object({
   piece_categories: z.record(z.string(), z.unknown()).optional(),
@@ -214,7 +214,7 @@ function loadCategoryConfigFromPath(path: string, sourceLabel: string): ParsedCa
 
   const content = readFileSync(path, 'utf-8');
   const raw = parseYaml(content);
-  warnLegacyCategoryYamlKeys(raw, new Set());
+  warnLegacyCategoryYamlKeysOncePerProcess(raw);
   return parseCategoryConfig(raw, sourceLabel);
 }
 

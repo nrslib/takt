@@ -28,7 +28,7 @@ import { expandOptionalHomePath } from '../pathExpansion.js';
 import { sanitizeConfigValue } from './globalConfigLegacyMigration.js';
 import { serializeGlobalConfig } from './globalConfigSerializer.js';
 import { loadGlobalConfigTrace, type ConfigTrace } from '../traced/tracedConfigLoader.js';
-import { warnLegacyGlobalConfigYamlKeys } from '../legacy-workflow-key-deprecation.js';
+import { warnLegacyGlobalConfigYamlKeysOncePerProcess } from '../legacy-workflow-key-deprecation.js';
 export { validateCliPath } from './cliPathValidator.js';
 
 function getRecord(value: unknown): Record<string, unknown> | undefined {
@@ -93,8 +93,7 @@ export class GlobalConfigManager {
         return sanitized;
       },
     );
-    const deprecationSeen = new Set<string>();
-    warnLegacyGlobalConfigYamlKeys(parsedConfig, deprecationSeen);
+    warnLegacyGlobalConfigYamlKeysOncePerProcess(parsedConfig);
     assertNoUnknownGlobalConfigKeys(parsedConfig);
     const parsed = GlobalConfigSchema.parse(rawConfig);
     const normalizedProvider = normalizeConfigProviderReference(

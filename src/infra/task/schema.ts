@@ -4,7 +4,7 @@
 
 import { z } from 'zod/v4';
 import { isValidTaskDir } from '../../shared/utils/taskPaths.js';
-import { warnLegacyConfigKey } from '../config/legacy-workflow-key-deprecation.js';
+import { warnLegacyConfigKeyOncePerProcess } from '../config/legacy-workflow-key-deprecation.js';
 
 function getStringField(record: Record<string, unknown>, key: string): string | undefined {
   const value = record[key];
@@ -71,15 +71,14 @@ function normalizeAliasedTaskConfig(input: unknown): unknown {
     return input;
   }
 
-  const deprecationSeen = new Set<string>();
   if ('piece' in record) {
-    warnLegacyConfigKey(deprecationSeen, 'piece', 'workflow');
+    warnLegacyConfigKeyOncePerProcess('piece', 'workflow');
   }
   if ('start_movement' in record) {
-    warnLegacyConfigKey(deprecationSeen, 'start_movement', 'start_step');
+    warnLegacyConfigKeyOncePerProcess('start_movement', 'start_step');
   }
   if ('exceeded_max_movements' in record) {
-    warnLegacyConfigKey(deprecationSeen, 'exceeded_max_movements', 'exceeded_max_steps');
+    warnLegacyConfigKeyOncePerProcess('exceeded_max_movements', 'exceeded_max_steps');
   }
 
   const workflow = resolveTaskWorkflowValue(record);

@@ -10,6 +10,8 @@ function formatLegacyConfigKeyDeprecationMessage(
   return msg;
 }
 
+const legacyConfigKeyDeprecationSeen = new Set<string>();
+
 export function warnLegacyConfigKey(
   seen: Set<string>,
   legacyKey: string,
@@ -22,6 +24,14 @@ export function warnLegacyConfigKey(
   }
   seen.add(msg);
   console.warn(msg);
+}
+
+export function warnLegacyConfigKeyOncePerProcess(
+  legacyKey: string,
+  canonicalKey: string,
+  contextLabel?: string,
+): void {
+  warnLegacyConfigKey(legacyConfigKeyDeprecationSeen, legacyKey, canonicalKey, contextLabel);
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -78,6 +88,10 @@ export function warnLegacyGlobalConfigYamlKeys(parsed: Record<string, unknown>, 
   warnLegacyOverridesNestedMovements(wo, 'workflow_overrides', seen);
 }
 
+export function warnLegacyGlobalConfigYamlKeysOncePerProcess(parsed: Record<string, unknown>): void {
+  warnLegacyGlobalConfigYamlKeys(parsed, legacyConfigKeyDeprecationSeen);
+}
+
 export function warnLegacyProjectConfigYamlKeys(parsed: Record<string, unknown>, seen: Set<string>): void {
   warnLegacyPieceStarYamlKeys(parsed, seen);
   const po = parsed.piece_overrides;
@@ -95,6 +109,10 @@ export function warnLegacyProjectConfigYamlKeys(parsed: Record<string, unknown>,
       }
     }
   }
+}
+
+export function warnLegacyProjectConfigYamlKeysOncePerProcess(parsed: Record<string, unknown>): void {
+  warnLegacyProjectConfigYamlKeys(parsed, legacyConfigKeyDeprecationSeen);
 }
 
 function walkParallelSubStepsForStepAlias(
@@ -149,6 +167,10 @@ export function warnLegacyWorkflowYamlKeys(raw: unknown, seen: Set<string>): voi
   }
 }
 
+export function warnLegacyWorkflowYamlKeysOncePerProcess(raw: unknown): void {
+  warnLegacyWorkflowYamlKeys(raw, legacyConfigKeyDeprecationSeen);
+}
+
 function walkCategoryNodesForLegacyPiecesKey(node: unknown, seen: Set<string>, path: string[]): void {
   if (!isPlainRecord(node)) {
     return;
@@ -194,4 +216,8 @@ export function warnLegacyCategoryYamlKeys(raw: unknown, seen: Set<string>): voi
   if (isPlainRecord(wc)) {
     walkCategoryRoot(wc, seen);
   }
+}
+
+export function warnLegacyCategoryYamlKeysOncePerProcess(raw: unknown): void {
+  warnLegacyCategoryYamlKeys(raw, legacyConfigKeyDeprecationSeen);
 }

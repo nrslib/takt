@@ -4,17 +4,16 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 
-import { GlobalConfigManager } from '../infra/config/global/globalConfigCore.js';
-import { loadProjectConfig } from '../infra/config/project/projectConfig.js';
-import { normalizePieceConfig } from '../infra/config/loaders/pieceParser.js';
-import { TaskFileSchema } from '../infra/task/schema.js';
-import { resolveWorkflowCliOption } from '../app/cli/helpers.js';
-import {
-  warnLegacyCategoryYamlKeys,
-  warnLegacyGlobalConfigYamlKeys,
-  warnLegacyProjectConfigYamlKeys,
-  warnLegacyWorkflowYamlKeys,
-} from '../infra/config/legacy-workflow-key-deprecation.js';
+let GlobalConfigManager: typeof import('../infra/config/global/globalConfigCore.js').GlobalConfigManager;
+let loadProjectConfig: typeof import('../infra/config/project/projectConfig.js').loadProjectConfig;
+let normalizePieceConfig: typeof import('../infra/config/loaders/pieceParser.js').normalizePieceConfig;
+let loadDefaultCategories: typeof import('../infra/config/loaders/pieceCategories.js').loadDefaultCategories;
+let TaskFileSchema: typeof import('../infra/task/schema.js').TaskFileSchema;
+let resolveWorkflowCliOption: typeof import('../app/cli/helpers.js').resolveWorkflowCliOption;
+let warnLegacyCategoryYamlKeys: typeof import('../infra/config/legacy-workflow-key-deprecation.js').warnLegacyCategoryYamlKeys;
+let warnLegacyGlobalConfigYamlKeys: typeof import('../infra/config/legacy-workflow-key-deprecation.js').warnLegacyGlobalConfigYamlKeys;
+let warnLegacyProjectConfigYamlKeys: typeof import('../infra/config/legacy-workflow-key-deprecation.js').warnLegacyProjectConfigYamlKeys;
+let warnLegacyWorkflowYamlKeys: typeof import('../infra/config/legacy-workflow-key-deprecation.js').warnLegacyWorkflowYamlKeys;
 
 function messagesFromWarnSpy(warnSpy: ReturnType<typeof vi.spyOn>): string[] {
   return warnSpy.mock.calls.map((call) => String(call[0]));
@@ -49,6 +48,30 @@ vi.mock('../infra/config/paths.js', () => ({
   getProjectTaktDir: vi.fn(),
   getProjectCwd: vi.fn(),
 }));
+
+async function loadSubjects(): Promise<void> {
+  ({ GlobalConfigManager } = await import('../infra/config/global/globalConfigCore.js'));
+  ({ loadProjectConfig } = await import('../infra/config/project/projectConfig.js'));
+  ({ normalizePieceConfig } = await import('../infra/config/loaders/pieceParser.js'));
+  ({ loadDefaultCategories } = await import('../infra/config/loaders/pieceCategories.js'));
+  ({ TaskFileSchema } = await import('../infra/task/schema.js'));
+  ({ resolveWorkflowCliOption } = await import('../app/cli/helpers.js'));
+  ({
+    warnLegacyCategoryYamlKeys,
+    warnLegacyGlobalConfigYamlKeys,
+    warnLegacyProjectConfigYamlKeys,
+    warnLegacyWorkflowYamlKeys,
+  } = await import('../infra/config/legacy-workflow-key-deprecation.js'));
+}
+
+beforeEach(async () => {
+  vi.resetModules();
+  await loadSubjects();
+});
+
+afterEach(() => {
+  GlobalConfigManager.resetInstance();
+});
 
 describe('legacy piece/movement deprecation warnings (#581)', () => {
   describe('GlobalConfigManager.load', () => {
@@ -756,6 +779,93 @@ describe('legacy piece/movement deprecation warnings (#581)', () => {
     });
   });
 
+  describe('loadDefaultCategories (#590 dedupe)', () => {
+    let testDir: string;
+    let resourcesDir: string;
+
+    beforeEach(async () => {
+      testDir = mkdtempSync(join(tmpdir(), 'takt-590-category-dedupe-'));
+      resourcesDir = join(testDir, 'resources', 'en');
+      mkdirSync(resourcesDir, { recursive: true });
+
+      vi.doMock('../infra/config/global/globalConfig.js', async (importOriginal) => {
+        const original = await importOriginal() as Record<string, unknown>;
+        return {
+          ...original,
+          loadGlobalConfig: () => ({}),
+        };
+      });
+
+      vi.doMock('../infra/config/resolveConfigValue.js', () => ({
+        resolveConfigValue: (_cwd: string, key: string) => {
+          if (key === 'language') return 'en';
+          if (key === 'enableBuiltinPieces') return true;
+          if (key === 'disabledBuiltins') return [];
+          return undefined;
+        },
+        resolveConfigValues: (_cwd: string, keys: readonly string[]) => {
+          const result: Record<string, unknown> = {};
+          for (const key of keys) {
+            if (key === 'language') result[key] = 'en';
+            if (key === 'enableBuiltinPieces') result[key] = true;
+            if (key === 'disabledBuiltins') result[key] = [];
+          }
+          return result;
+        },
+      }));
+
+      vi.doMock('../infra/resources/index.js', async (importOriginal) => {
+        const original = await importOriginal() as Record<string, unknown>;
+        return {
+          ...original,
+          getLanguageResourcesDir: (_lang: string) => resourcesDir,
+        };
+      });
+
+      vi.doMock('../infra/config/global/pieceCategories.js', async (importOriginal) => {
+        const original = await importOriginal() as Record<string, unknown>;
+        return {
+          ...original,
+          getPieceCategoriesPath: () => join(testDir, 'user-piece-categories.yaml'),
+        };
+      });
+
+      vi.resetModules();
+      await loadSubjects();
+    });
+
+    afterEach(() => {
+      vi.doUnmock('../infra/config/global/globalConfig.js');
+      vi.doUnmock('../infra/config/resolveConfigValue.js');
+      vi.doUnmock('../infra/resources/index.js');
+      vi.doUnmock('../infra/config/global/pieceCategories.js');
+      rmSync(testDir, { recursive: true, force: true });
+    });
+
+    it('should warn only once when loadDefaultCategories reads the same legacy category keys twice in one process', () => {
+      writeFileSync(
+        join(resourcesDir, 'workflow-categories.yaml'),
+        [
+          'piece_categories:',
+          '  Quick Start:',
+          '    pieces:',
+          '      - default',
+        ].join('\n'),
+        'utf-8',
+      );
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      loadDefaultCategories(testDir);
+      loadDefaultCategories(testDir);
+
+      const categoryMsgs = messagesFromWarnSpy(warnSpy).filter((m) => (
+        m.includes('piece_categories') && m.includes('workflow_categories')
+      ));
+      expect(categoryMsgs).toHaveLength(1);
+      warnSpy.mockRestore();
+    });
+  });
+
   describe('warnLegacyWorkflowYamlKeys (raw workflow object)', () => {
     it('should warn for parallel sub-object step without name', () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
@@ -972,6 +1082,153 @@ describe('legacy piece/movement deprecation warnings (#581)', () => {
         (m) => m.includes('piece') && m.includes('workflow'),
       );
       warnSpy.mockRestore();
+    });
+  });
+
+  describe('process-wide deprecation dedupe (#590)', () => {
+    it('should warn only once when TaskFileSchema parses the same legacy task key twice in one process', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      TaskFileSchema.parse({ task: 'do work', piece: 'default' });
+      TaskFileSchema.parse({ task: 'do work', piece: 'default' });
+
+      const matches = messagesFromWarnSpy(warnSpy).filter(
+        (m) => m.includes('piece') && m.includes('workflow') && !m.includes('(CLI)'),
+      );
+      expect(matches).toHaveLength(1);
+      warnSpy.mockRestore();
+    });
+
+    it('should warn only once when normalizePieceConfig parses the same legacy workflow key twice in one process', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const raw = {
+        name: 'wf-legacy-piece-config-process-shared',
+        piece_config: {},
+        movements: [minimalStep],
+        initial_movement: 'plan',
+      };
+
+      normalizePieceConfig(raw, process.cwd());
+      normalizePieceConfig(raw, process.cwd());
+
+      const matches = messagesFromWarnSpy(warnSpy).filter(
+        (m) => m.includes('piece_config') && m.includes('workflow_config'),
+      );
+      expect(matches).toHaveLength(1);
+      warnSpy.mockRestore();
+    });
+
+    it('should warn only once when loadProjectConfig loads the same legacy project key twice in one process', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const testDir = mkdtempSync(join(tmpdir(), 'takt-590-project-process-warn-'));
+      mkdirSync(join(testDir, '.takt'), { recursive: true });
+      writeFileSync(
+        join(testDir, '.takt', 'config.yaml'),
+        [
+          'piece_overrides:',
+          '  quality_gates:',
+          '    - Gate',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      try {
+        loadProjectConfig(testDir);
+        loadProjectConfig(testDir);
+
+        const matches = messagesFromWarnSpy(warnSpy).filter(
+          (m) => m.includes('piece_overrides') && m.includes('workflow_overrides'),
+        );
+        expect(matches).toHaveLength(1);
+      } finally {
+        warnSpy.mockRestore();
+        rmSync(testDir, { recursive: true, force: true });
+      }
+    });
+
+    it('should warn only once when GlobalConfigManager reloads the same legacy global key twice in one process', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const testDir = mkdtempSync(join(tmpdir(), 'takt-590-global-process-warn-'));
+      mkdirSync(testDir, { recursive: true });
+      testGlobalConfigPath = join(testDir, 'config.yaml');
+      writeFileSync(
+        testGlobalConfigPath,
+        ['enable_builtin_pieces: true'].join('\n'),
+        'utf-8',
+      );
+
+      try {
+        GlobalConfigManager.resetInstance();
+        GlobalConfigManager.getInstance().load();
+        GlobalConfigManager.resetInstance();
+        GlobalConfigManager.getInstance().load();
+
+        const matches = messagesFromWarnSpy(warnSpy).filter(
+          (m) =>
+            m.includes('enable_builtin_pieces')
+            && m.includes('enable_builtin_workflows'),
+        );
+        expect(matches).toHaveLength(1);
+      } finally {
+        warnSpy.mockRestore();
+        GlobalConfigManager.resetInstance();
+        rmSync(testDir, { recursive: true, force: true });
+      }
+    });
+
+    it('should warn only once when resolveWorkflowCliOption sees the same legacy CLI key twice in one process', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      expect(resolveWorkflowCliOption({ piece: 'default' })).toBe('default');
+      expect(resolveWorkflowCliOption({ piece: 'default' })).toBe('default');
+
+      const matches = messagesFromWarnSpy(warnSpy).filter(
+        (m) => m.includes('piece') && m.includes('workflow') && m.includes('(CLI)'),
+      );
+      expect(matches).toHaveLength(1);
+      warnSpy.mockRestore();
+    });
+
+    it('should warn only once across global and project loaders when they emit the same deprecation message in one process', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const globalDir = mkdtempSync(join(tmpdir(), 'takt-590-global-project-global-'));
+      const projectDir = mkdtempSync(join(tmpdir(), 'takt-590-global-project-project-'));
+      mkdirSync(join(projectDir, '.takt'), { recursive: true });
+      testGlobalConfigPath = join(globalDir, 'config.yaml');
+      writeFileSync(
+        testGlobalConfigPath,
+        [
+          'piece_overrides:',
+          '  quality_gates:',
+          '    - Global Gate',
+        ].join('\n'),
+        'utf-8',
+      );
+      writeFileSync(
+        join(projectDir, '.takt', 'config.yaml'),
+        [
+          'piece_overrides:',
+          '  quality_gates:',
+          '    - Project Gate',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      try {
+        GlobalConfigManager.resetInstance();
+        GlobalConfigManager.getInstance().load();
+        loadProjectConfig(projectDir);
+
+        const matches = messagesFromWarnSpy(warnSpy).filter(
+          (m) => m.includes('piece_overrides') && m.includes('workflow_overrides'),
+        );
+        expect(matches).toHaveLength(1);
+      } finally {
+        warnSpy.mockRestore();
+        GlobalConfigManager.resetInstance();
+        rmSync(globalDir, { recursive: true, force: true });
+        rmSync(projectDir, { recursive: true, force: true });
+      }
     });
   });
 });

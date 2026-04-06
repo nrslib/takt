@@ -8,7 +8,7 @@ import type { Command } from 'commander';
 import type { TaskExecutionOptions } from '../../features/tasks/index.js';
 import type { ProviderType } from '../../infra/providers/index.js';
 import { isIssueReference } from '../../infra/git/index.js';
-import { warnLegacyConfigKey } from '../../infra/config/legacy-workflow-key-deprecation.js';
+import { warnLegacyConfigKeyOncePerProcess } from '../../infra/config/legacy-workflow-key-deprecation.js';
 
 const REMOVED_ROOT_COMMANDS = new Set(['switch']);
 
@@ -77,7 +77,7 @@ export function resolveWorkflowCliOption(opts: Record<string, unknown>): string 
   }
 
   if (typeof piece === 'string') {
-    warnLegacyConfigKey(new Set(), 'piece', 'workflow', 'CLI');
+    warnLegacyConfigKeyOncePerProcess('piece', 'workflow', 'CLI');
   }
 
   return workflow ?? piece;
