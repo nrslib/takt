@@ -23,6 +23,7 @@ import {
 import { previewPrompts } from '../../features/prompt/index.js';
 import { showCatalog } from '../../features/catalog/index.js';
 import { computeReviewMetrics, formatReviewMetrics, parseSinceDuration, purgeOldEvents } from '../../features/analytics/index.js';
+import { doctorWorkflowCommand, initWorkflowCommand } from '../../features/workflowAuthoring/index.js';
 import { program, resolvedCwd } from './program.js';
 import { resolveAgentOverrides, resolveWorkflowCliOption } from './helpers.js';
 import { repertoireAddCommand } from '../../commands/repertoire/add.js';
@@ -172,6 +173,41 @@ program
   .argument('[type]', 'Facet type to list')
   .action((type?: string) => {
     showCatalog(resolvedCwd, type);
+  });
+
+const workflow = program
+  .command('workflow')
+  .description('Workflow authoring utilities');
+
+workflow
+  .command('init')
+  .description('Initialize a new workflow scaffold')
+  .argument('<name>', 'Workflow name')
+  .option('--description <text>', 'Workflow description')
+  .option('--steps <count>', 'Initial number of steps', (value: string) => parseInt(value, 10))
+  .option('--template <kind>', 'Template kind (minimal|faceted)')
+  .option('--global', 'Create in ~/.takt/workflows instead of project .takt/workflows')
+  .action(async (name: string, opts: {
+    description?: string;
+    global?: boolean;
+    steps?: number;
+    template?: 'minimal' | 'faceted';
+  }) => {
+    await initWorkflowCommand(name, {
+      description: opts.description,
+      global: opts.global,
+      steps: opts.steps,
+      template: opts.template,
+      projectDir: resolvedCwd,
+    });
+  });
+
+workflow
+  .command('doctor')
+  .description('Validate workflow definitions')
+  .argument('[targets...]', 'Workflow names or YAML paths')
+  .action(async (targets: string[] | undefined) => {
+    await doctorWorkflowCommand(targets ?? [], resolvedCwd);
   });
 
 const metrics = program

@@ -240,6 +240,22 @@ takt eject instruction plan --global
 
 workflow の正式ディレクトリ名は `workflows/` です。旧来の `pieces/` ディレクトリも互換のため引き続き探索されます。
 
+### takt workflow
+
+カスタム workflow の scaffold 作成と静的検証を行います。
+
+```bash
+# project .takt/workflows/ に minimal scaffold を作成
+takt workflow init sample-flow
+
+# ~/.takt/workflows/ に faceted scaffold を作成
+takt workflow init review-flow --template faceted --global
+
+# workflow 名または YAML パスを検証
+takt workflow doctor sample-flow
+takt workflow doctor .takt/workflows/sample-flow.yaml
+```
+
 ### takt clear
 
 エージェントの会話セッションをクリア（状態のリセット）します。

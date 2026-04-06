@@ -156,6 +156,8 @@ workflow ファイルの正式ディレクトリ名は `workflows/` です。旧
 | `takt list` | タスクブランチを管理します（マージ、リトライ、追加指示、削除） |
 | `takt #N` | GitHub Issue をタスクとして実行します |
 | `takt eject` | ビルトインの workflow/facet をコピーしてカスタマイズできます |
+| `takt workflow init` | カスタム workflow のひな形を作成します |
+| `takt workflow doctor` | カスタム workflow の定義を静的検証します |
 | `takt repertoire add` | GitHub から repertoire パッケージをインストールします |
 
 全コマンド・オプションは [CLI Reference](./cli-reference.ja.md) を参照してください。
@@ -188,6 +190,8 @@ export TAKT_COPILOT_GITHUB_TOKEN=ghp_...   # GitHub Copilot CLI
 
 ```bash
 takt eject default    # ビルトイン workflow を ~/.takt/workflows/ にコピーして編集できます
+takt workflow init my-flow
+takt workflow doctor my-flow
 ```
 
 ### カスタム persona

@@ -96,6 +96,11 @@ vi.mock('../features/catalog/index.js', () => ({
   showCatalog: vi.fn(),
 }));
 
+vi.mock('../features/workflowAuthoring/index.js', () => ({
+  initWorkflowCommand: vi.fn(),
+  doctorWorkflowCommand: vi.fn(),
+}));
+
 vi.mock('../features/analytics/index.js', () => ({
   computeReviewMetrics: vi.fn(),
   formatReviewMetrics: vi.fn(),
