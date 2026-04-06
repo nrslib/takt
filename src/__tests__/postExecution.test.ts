@@ -110,13 +110,8 @@ describe('postExecutionFlow', () => {
   });
 
   it('autoCommitAndPush に branch パラメータが渡される', async () => {
-    // Given
     mockFindExistingPr.mockReturnValue(undefined);
-
-    // When
     await postExecutionFlow(baseOptions);
-
-    // Then: branch is forwarded so relay push can target the correct branch
     expect(mockAutoCommitAndPush).toHaveBeenCalledWith(
       '/clone',
       'Fix the bug',
@@ -192,8 +187,7 @@ describe('postExecutionFlow', () => {
   });
 
   it('ローカルpush失敗後も commitHash があれば（localPushFailed なし）PR 作成失敗を prFailed として返す', async () => {
-    // Given: autoCommit reports a commitHash but localPushFailed is not set.
-    // The relay already pushed to origin in this case; PR creation may still fail.
+    // relay push 済みのケースでは、PR 作成まで継続して失敗理由を返す。
     mockAutoCommitAndPush.mockReturnValue({
       success: true,
       commitHash: 'abc123',
@@ -202,7 +196,6 @@ describe('postExecutionFlow', () => {
     mockFindExistingPr.mockReturnValue(undefined);
     mockCreatePullRequest.mockReturnValue({ success: false, error: 'Base ref must be a branch' });
 
-    // When: post-execution proceeds to PR creation (relay already pushed).
     const result = await postExecutionFlow(baseOptions);
     expect(mockCreatePullRequest).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -218,7 +211,6 @@ describe('postExecutionFlow', () => {
   });
 
   it('relay push 失敗時（localPushFailed: true）は shouldCreatePr に関わらず taskFailed: true を返す', async () => {
-    // Given: relay push failed, localPushFailed is set on the commit result
     mockAutoCommitAndPush.mockReturnValue({
       success: true,
       commitHash: 'abc123',
@@ -226,10 +218,7 @@ describe('postExecutionFlow', () => {
       message: 'Committed: abc123 - takt: Fix the bug',
     });
 
-    // When: called with shouldCreatePr: true
     const result = await postExecutionFlow(baseOptions);
-
-    // Then: we do NOT proceed to PR creation since origin was not reached
     expect(mockFindExistingPr).not.toHaveBeenCalled();
     expect(mockCreatePullRequest).not.toHaveBeenCalled();
     expect(result.taskFailed).toBe(true);
