@@ -17,6 +17,7 @@ export default defineConfig({
       'e2e/specs/multi-step-parallel.e2e.ts',
       'e2e/specs/multi-step-sequential.e2e.ts',
       'e2e/specs/run-sigint-graceful.e2e.ts',
+      'e2e/specs/run-sigint-ai-wait.e2e.ts',
       'e2e/specs/piece-error-handling.e2e.ts',
       'e2e/specs/cycle-detection.e2e.ts',
       'e2e/specs/run-multiple-tasks.e2e.ts',

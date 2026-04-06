@@ -44,6 +44,7 @@ import {
 import { loadProjectConfigTrace, type ConfigTrace } from '../traced/tracedConfigLoader.js';
 import { getCachedProjectConfigTrace, setCachedProjectConfigTrace } from '../resolutionCache.js';
 import { assertValidProjectConfig } from './projectConfigValidation.js';
+import { warnLegacyProjectConfigYamlKeysOncePerProcess } from '../legacy-workflow-key-deprecation.js';
 
 export type { ProjectConfig as ProjectLocalConfig } from '../types.js';
 
@@ -53,6 +54,7 @@ type RawProviderReference = ConfigProviderReference<ProviderType>;
 export function loadProjectConfig(projectDir: string): ProjectConfig {
   const configPath = getProjectConfigPath(projectDir);
   const { parsedConfig, rawConfig, trace } = loadProjectConfigTrace(configPath);
+  warnLegacyProjectConfigYamlKeysOncePerProcess(parsedConfig);
   setCachedProjectConfigTrace(projectDir, trace);
   assertValidProjectConfig(parsedConfig, configPath, true);
   assertValidProjectConfig(rawConfig, configPath);

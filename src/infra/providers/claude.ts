@@ -1,8 +1,4 @@
-/**
- * Claude provider implementation
- */
-
-import { callClaude, callClaudeCustom, callClaudeAgent, callClaudeSkill } from '../claude/client.js';
+import { callClaude, callClaudeCustom } from '../claude/client.js';
 import type { ClaudeCallOptions } from '../claude/types.js';
 import { resolveAnthropicApiKey, resolveClaudeCliPath } from '../config/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
@@ -34,27 +30,10 @@ function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
   };
 }
 
-/** Claude provider — delegates to Claude Code SDK */
 export class ClaudeProvider implements Provider {
   readonly supportsStructuredOutput = true;
 
   setup(config: AgentSetup): ProviderAgent {
-    if (config.claudeAgent) {
-      const agentName = config.claudeAgent;
-      return {
-        call: (prompt: string, options: ProviderCallOptions): Promise<AgentResponse> =>
-          callClaudeAgent(agentName, prompt, toClaudeOptions(options)),
-      };
-    }
-
-    if (config.claudeSkill) {
-      const skillName = config.claudeSkill;
-      return {
-        call: (prompt: string, options: ProviderCallOptions): Promise<AgentResponse> =>
-          callClaudeSkill(skillName, prompt, toClaudeOptions(options)),
-      };
-    }
-
     const { name, systemPrompt } = config;
     if (systemPrompt) {
       return {

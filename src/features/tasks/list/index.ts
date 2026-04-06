@@ -51,8 +51,8 @@ async function showExceededTaskAndPromptAction(task: TaskListItem): Promise<Exce
   if (task.content) {
     info(`  ${task.content}`);
   }
-  if (task.exceededCurrentIteration !== undefined && task.exceededMaxMovements !== undefined) {
-    info(`  Iteration: ${task.exceededCurrentIteration}/${task.exceededMaxMovements}`);
+  if (task.exceededCurrentIteration !== undefined && task.exceededMaxSteps !== undefined) {
+    info(`  Iteration: ${task.exceededCurrentIteration}/${task.exceededMaxSteps}`);
   }
   blankLine();
 

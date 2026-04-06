@@ -9,6 +9,13 @@ describe('CLI --provider option', () => {
     expect(providerOption?.description).toContain('cursor');
   });
 
+  it('should list claude-sdk and headless claude in provider help text', () => {
+    const providerOption = program.options.find((option) => option.long === '--provider');
+
+    expect(providerOption?.description).toContain('claude-sdk');
+    expect(providerOption?.description).toMatch(/claude\|/);
+  });
+
   it('should describe --piece with workflow terminology', () => {
     const pieceOption = program.options.find((option) => option.long === '--piece');
 

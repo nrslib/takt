@@ -107,8 +107,8 @@ describe('TaskRunner - deleteTask', () => {
       started_at: '2026-01-01T00:01:00.000Z',
       completed_at: '2026-01-01T00:05:00.000Z',
       owner_pid: null,
-      start_movement: 'implement',
-      exceeded_max_movements: 60,
+      start_step: 'implement',
+      exceeded_max_steps: 60,
       exceeded_current_iteration: 30,
     });
 

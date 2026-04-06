@@ -100,7 +100,7 @@ describe('resetPieceCategories', () => {
 
     // Then
     expect(existsSync(dirname(categoriesPath))).toBe(true);
-    expect(readFileSync(categoriesPath, 'utf-8')).toBe('piece_categories: {}\n');
+    expect(readFileSync(categoriesPath, 'utf-8')).toBe('workflow_categories: {}\n');
   });
 
   it('should overwrite existing file with empty user categories', () => {
@@ -117,6 +117,6 @@ describe('resetPieceCategories', () => {
     resetPieceCategories(process.cwd());
 
     // Then
-    expect(readFileSync(categoriesPath, 'utf-8')).toBe('piece_categories: {}\n');
+    expect(readFileSync(categoriesPath, 'utf-8')).toBe('workflow_categories: {}\n');
   });
 });

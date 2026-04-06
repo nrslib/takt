@@ -17,7 +17,7 @@ describe('serializeTaskListItemForJson', () => {
       completedAt: '2026-02-09T00:02:00.000Z',
       ownerPid: 1234,
       issueNumber: 42,
-      exceededMaxMovements: 8,
+      exceededMaxSteps: 8,
       exceededCurrentIteration: 3,
       data: {
         task: 'task body',
@@ -50,7 +50,7 @@ describe('serializeTaskListItemForJson', () => {
       completedAt: '2026-02-09T00:02:00.000Z',
       ownerPid: 1234,
       issueNumber: 42,
-      exceededMaxMovements: 8,
+      exceededMaxSteps: 8,
       exceededCurrentIteration: 3,
       data: {
         task: 'task body',

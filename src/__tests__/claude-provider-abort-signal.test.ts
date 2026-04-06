@@ -12,8 +12,6 @@ const {
 vi.mock('../infra/claude/client.js', () => ({
   callClaude: mockCallClaude,
   callClaudeCustom: vi.fn(),
-  callClaudeAgent: vi.fn(),
-  callClaudeSkill: vi.fn(),
 }));
 
 vi.mock('../infra/config/index.js', () => ({

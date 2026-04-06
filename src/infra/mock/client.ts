@@ -20,6 +20,20 @@ function generateMockSessionId(): string {
   return `mock-session-${randomUUID()}`;
 }
 
+async function delayWithAbort(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException('Aborted', 'AbortError'));
+      return;
+    }
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener('abort', () => {
+      clearTimeout(timer);
+      reject(new DOMException('Aborted', 'AbortError'));
+    }, { once: true });
+  });
+}
+
 /**
  * Call mock agent - returns immediate fixed response
  */
@@ -32,6 +46,24 @@ export async function callMock(
 
   // Scenario queue takes priority over explicit options
   const scenarioEntry = getScenarioQueue()?.consume(personaName);
+
+  // Apply artificial delay if specified (respects abortSignal)
+  if (scenarioEntry?.delayMs) {
+    try {
+      await delayWithAbort(scenarioEntry.delayMs, options.abortSignal);
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') {
+        return {
+          persona: personaName,
+          status: 'blocked',
+          content: '[MOCK:ABORTED]\n\nMock response interrupted by abort signal.',
+          timestamp: new Date(),
+          sessionId,
+        };
+      }
+      throw e;
+    }
+  }
 
   const status = scenarioEntry?.status ?? options.mockStatus ?? 'done';
   const statusMarker = `[MOCK:${status.toUpperCase()}]`;

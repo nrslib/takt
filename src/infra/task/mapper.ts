@@ -51,7 +51,7 @@ function buildTaskFileData(task: TaskRecord, content: string): TaskFileData {
     auto_pr: task.auto_pr,
     draft_pr: task.draft_pr,
     should_publish_branch_to_origin: task.should_publish_branch_to_origin,
-    exceeded_max_movements: task.exceeded_max_movements,
+    exceeded_max_steps: task.exceeded_max_steps,
     exceeded_current_iteration: task.exceeded_current_iteration,
   });
 }
@@ -102,7 +102,7 @@ export function toExceededTaskItem(projectDir: string, tasksFile: string, task: 
   return {
     kind: 'exceeded',
     ...toBaseTaskListItem(projectDir, tasksFile, task),
-    exceededMaxMovements: task.exceeded_max_movements,
+    exceededMaxSteps: task.exceeded_max_steps,
     exceededCurrentIteration: task.exceeded_current_iteration,
   };
 }
@@ -121,7 +121,7 @@ function toCompletedTaskItem(projectDir: string, tasksFile: string, task: TaskRe
   };
 }
 
-function toBaseTaskListItem(projectDir: string, tasksFile: string, task: TaskRecord): Omit<TaskListItem, 'kind' | 'failure' | 'exceededMaxMovements' | 'exceededCurrentIteration'> {
+function toBaseTaskListItem(projectDir: string, tasksFile: string, task: TaskRecord): Omit<TaskListItem, 'kind' | 'failure' | 'exceededMaxSteps' | 'exceededCurrentIteration'> {
   return {
     name: task.name,
     createdAt: task.created_at,

@@ -232,4 +232,52 @@ describe('IT: provider block reflection', () => {
       codex: { networkAccess: false },
     });
   });
+
+  it('project claude provider block sandbox should reach runAgent providerOptions', async () => {
+    env = createEnv([
+      'name: provider-block-it',
+      'description: project claude sandbox provider block integration test',
+      'max_movements: 3',
+      'initial_movement: plan',
+      'movements:',
+      '  - name: plan',
+      '    persona: ./personas/planner.md',
+      '    instruction: "{task}"',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
+    ].join('\n'));
+    process.env.TAKT_CONFIG_DIR = env.globalDir;
+    setGlobalConfig(env.globalDir, 'provider: codex');
+    setProjectConfig(env.projectDir, [
+      'provider:',
+      '  type: claude',
+      '  model: sonnet',
+      '  sandbox:',
+      '    allow_unsandboxed_commands: true',
+      '    excluded_commands:',
+      '      - ./gradlew',
+    ].join('\n'));
+    invalidateGlobalConfigCache();
+
+    const ok = await executeTask({
+      task: 'test task',
+      cwd: env.projectDir,
+      projectCwd: env.projectDir,
+      pieceIdentifier: 'provider-block-it',
+    });
+
+    expect(ok).toBe(true);
+    const options = vi.mocked(runAgent).mock.calls[0]?.[2];
+    expect(options?.resolvedProvider).toBe('claude');
+    expect(options?.resolvedModel).toBe('sonnet');
+    expect(options?.providerOptions).toEqual({
+      claude: {
+        sandbox: {
+          allowUnsandboxedCommands: true,
+          excludedCommands: ['./gradlew'],
+        },
+      },
+    });
+  });
 });

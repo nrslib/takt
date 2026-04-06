@@ -60,4 +60,55 @@ describe('resolveMovementPermissionMode', () => {
 
     expect(mode).toBe('edit');
   });
+
+  it('uses claude-sdk profile entry when movement runs on SDK provider', () => {
+    const mode = resolveMovementPermissionMode({
+      movementName: 'implement',
+      provider: 'claude-sdk',
+      projectProviderProfiles: {
+        'claude-sdk': {
+          defaultPermissionMode: 'full',
+        },
+      },
+    });
+
+    expect(mode).toBe('full');
+  });
+
+  it('uses headless claude profile entry separately from claude-sdk', () => {
+    const sdkMode = resolveMovementPermissionMode({
+      movementName: 'm1',
+      provider: 'claude-sdk',
+      projectProviderProfiles: {
+        'claude-sdk': { defaultPermissionMode: 'full' },
+        claude: { defaultPermissionMode: 'readonly' },
+      },
+    });
+    const headlessMode = resolveMovementPermissionMode({
+      movementName: 'm1',
+      provider: 'claude',
+      projectProviderProfiles: {
+        'claude-sdk': { defaultPermissionMode: 'full' },
+        claude: { defaultPermissionMode: 'readonly' },
+      },
+    });
+
+    expect(sdkMode).toBe('full');
+    expect(headlessMode).toBe('readonly');
+  });
+
+  it('applies required_permission_mode floor after resolving the headless claude profile', () => {
+    const mode = resolveMovementPermissionMode({
+      movementName: 'review',
+      provider: 'claude',
+      requiredPermissionMode: 'full',
+      projectProviderProfiles: {
+        claude: {
+          defaultPermissionMode: 'readonly',
+        },
+      },
+    });
+
+    expect(mode).toBe('full');
+  });
 });

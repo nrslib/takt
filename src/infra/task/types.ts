@@ -75,6 +75,6 @@ export interface TaskListItem {
   completedAt?: string;
   ownerPid?: number;
   issueNumber?: number;
-  exceededMaxMovements?: number;
+  exceededMaxSteps?: number;
   exceededCurrentIteration?: number;
 }

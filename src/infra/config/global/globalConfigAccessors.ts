@@ -1,4 +1,5 @@
 import type { Language } from '../../../core/models/index.js';
+import type { ProviderType } from '../../../shared/types/provider.js';
 import { DEFAULT_LANGUAGE } from '../../../shared/constants.js';
 import { loadGlobalConfig, saveGlobalConfig } from './globalConfigCore.js';
 
@@ -23,7 +24,7 @@ export function setLanguage(language: Language): void {
   saveGlobalConfig(config);
 }
 
-export function setProvider(provider: 'claude' | 'codex' | 'opencode' | 'cursor' | 'copilot'): void {
+export function setProvider(provider: ProviderType): void {
   const config = loadGlobalConfig();
   config.provider = provider;
   saveGlobalConfig(config);

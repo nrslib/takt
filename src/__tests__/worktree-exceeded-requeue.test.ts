@@ -90,13 +90,13 @@ function writeExceededRecord(testDir: string, overrides: Record<string, unknown>
     name: 'task-a',
     status: 'exceeded',
     content: 'Do work',
-    piece: 'test-piece',
+    workflow: 'test-piece',
     created_at: '2026-02-09T00:00:00.000Z',
     started_at: '2026-02-09T00:01:00.000Z',
     completed_at: '2026-02-09T00:05:00.000Z',
     owner_pid: null,
-    start_movement: 'implement',
-    exceeded_max_movements: 60,
+    start_step: 'implement',
+    exceeded_max_steps: 60,
     exceeded_current_iteration: 30,
     ...overrides,
   };
@@ -199,7 +199,7 @@ describe('シナリオ1・2: exceeded status transition via executeAndCompleteTa
     const exceededRecord = file.tasks[0];
     expect(exceededRecord?.status).toBe('exceeded');
     expect(exceededRecord?.start_step).toBe('implement');
-    expect(exceededRecord?.exceeded_max_movements).toBe(60);
+    expect(exceededRecord?.exceeded_max_steps).toBe(60);
     expect(exceededRecord?.exceeded_current_iteration).toBe(30);
   });
 

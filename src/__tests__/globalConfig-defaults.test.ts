@@ -1100,6 +1100,37 @@ describe('loadGlobalConfig', () => {
       expect(() => loadGlobalConfig()).toThrow(/network_access/);
     });
 
+    it('should allow claude sandbox in provider block and normalize providerOptions', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(
+        getGlobalConfigPath(),
+        [
+          'provider:',
+          '  type: claude',
+          '  model: sonnet',
+          '  sandbox:',
+          '    allow_unsandboxed_commands: true',
+          '    excluded_commands:',
+          '      - ./gradlew',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      const config = loadGlobalConfig();
+
+      expect(config.provider).toBe('claude');
+      expect(config.model).toBe('sonnet');
+      expect(config.providerOptions).toEqual({
+        claude: {
+          sandbox: {
+            allowUnsandboxedCommands: true,
+            excludedCommands: ['./gradlew'],
+          },
+        },
+      });
+    });
+
     it('should throw when provider block uses codex with sandbox', () => {
       const taktDir = join(testHomeDir, '.takt');
       mkdirSync(taktDir, { recursive: true });

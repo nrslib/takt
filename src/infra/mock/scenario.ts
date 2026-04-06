@@ -148,10 +148,16 @@ function validateEntry(entry: unknown, index: number): ScenarioEntry {
     throw new Error(`Scenario entry [${index}] "structured_output" must be an object if provided`);
   }
 
+  // delay_ms is optional
+  if (obj.delay_ms !== undefined && typeof obj.delay_ms !== 'number') {
+    throw new Error(`Scenario entry [${index}] "delay_ms" must be a number if provided`);
+  }
+
   return {
     persona: obj.persona as string | undefined,
     status: status as ScenarioEntry['status'],
     content: obj.content as string,
     structuredOutput: obj.structured_output as Record<string, unknown> | undefined,
+    delayMs: obj.delay_ms as number | undefined,
   };
 }

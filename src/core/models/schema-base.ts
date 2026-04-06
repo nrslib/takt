@@ -71,7 +71,15 @@ export const MovementProviderOptionsSchema = z.object({
 }).optional();
 
 /** Provider key schema for profile maps */
-export const ProviderProfileNameSchema = z.enum(['claude', 'codex', 'opencode', 'cursor', 'copilot', 'mock']);
+export const ProviderProfileNameSchema = z.enum([
+  'claude',
+  'claude-sdk',
+  'codex',
+  'opencode',
+  'cursor',
+  'copilot',
+  'mock',
+]);
 export const ProviderTypeSchema = ProviderProfileNameSchema;
 
 export const ProviderBlockSchema = z.object({
@@ -82,6 +90,17 @@ export const ProviderBlockSchema = z.object({
 }).strict().superRefine((provider, ctx) => {
   const hasNetworkAccess = provider.network_access !== undefined;
   const hasSandbox = provider.sandbox !== undefined;
+
+  if (provider.type === 'claude-sdk') {
+    if (hasNetworkAccess) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['network_access'],
+        message: "provider.type 'claude-sdk' does not support 'network_access'.",
+      });
+    }
+    return;
+  }
 
   if (provider.type === 'claude') {
     if (hasNetworkAccess) {
@@ -125,6 +144,7 @@ export const ProviderPermissionProfileSchema = z.object({
 /** Provider permission profiles schema */
 export const ProviderPermissionProfilesSchema = z.object({
   claude: ProviderPermissionProfileSchema.optional(),
+  'claude-sdk': ProviderPermissionProfileSchema.optional(),
   codex: ProviderPermissionProfileSchema.optional(),
   opencode: ProviderPermissionProfileSchema.optional(),
   cursor: ProviderPermissionProfileSchema.optional(),
@@ -216,11 +236,9 @@ export const CustomAgentConfigSchema = z.object({
   prompt_file: z.string().optional(),
   prompt: z.string().optional(),
   allowed_tools: z.array(z.string()).optional(),
-  claude_agent: z.string().optional(),
-  claude_skill: z.string().optional(),
-}).refine(
-  (data) => data.prompt_file || data.prompt || data.claude_agent || data.claude_skill,
-  { message: 'Agent must have prompt_file, prompt, claude_agent, or claude_skill' }
+}).strict().refine(
+  (data) => data.prompt_file || data.prompt,
+  { message: 'Agent must have prompt_file or prompt' }
 );
 
 export const LoggingConfigSchema = z.object({

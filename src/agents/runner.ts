@@ -162,21 +162,16 @@ export class AgentRunner {
     const resolved = AgentRunner.resolveProviderAndModel(options.cwd, agentConfig.name, options);
     const providerType = resolved.provider;
     const provider = getProvider(providerType);
-
-    const resolvedSystemPrompt = agentConfig.claudeAgent || agentConfig.claudeSkill
-      ? undefined
-      : loadAgentPrompt(agentConfig, options.cwd);
+    const resolvedSystemPrompt = loadAgentPrompt(agentConfig, options.cwd);
 
     options.onPromptResolved?.({
-      systemPrompt: resolvedSystemPrompt ?? '',
+      systemPrompt: resolvedSystemPrompt,
       userInstruction: task,
     });
 
     const agent = provider.setup({
       name: agentConfig.name,
       systemPrompt: resolvedSystemPrompt,
-      claudeAgent: agentConfig.claudeAgent,
-      claudeSkill: agentConfig.claudeSkill,
     });
 
     const customOptions: RunAgentOptions = {

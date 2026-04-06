@@ -31,6 +31,7 @@ vi.mock('../shared/i18n/index.js', () => ({
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   createLogger: () => ({
+    trace: vi.fn(),
     info: vi.fn(),
     debug: vi.fn(),
     error: vi.fn(),

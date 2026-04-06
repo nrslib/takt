@@ -10,6 +10,7 @@ import type {
   MovementProviderOptions,
   ProviderPermissionProfiles,
 } from '../core/models/index.js';
+import type { ProviderType } from '../shared/types/provider.js';
 
 export type { StreamCallback };
 
@@ -19,9 +20,9 @@ export interface RunAgentOptions {
   abortSignal?: AbortSignal;
   sessionId?: string;
   model?: string;
-  provider?: 'claude' | 'codex' | 'opencode' | 'cursor' | 'copilot' | 'mock';
+  provider?: ProviderType;
   resolvedModel?: string;
-  resolvedProvider?: 'claude' | 'codex' | 'opencode' | 'cursor' | 'copilot' | 'mock';
+  resolvedProvider?: ProviderType;
   personaPath?: string;
   allowedTools?: string[];
   mcpServers?: Record<string, McpServerConfig>;

@@ -1,7 +1,3 @@
-/**
- * Tests for session key generation
- */
-
 import { describe, it, expect } from 'vitest';
 import { buildSessionKey } from '../core/piece/session-key.js';
 import type { PieceMovement } from '../core/models/types.js';
@@ -44,6 +40,19 @@ describe('buildSessionKey', () => {
     expect(buildSessionKey(claudeStep)).not.toBe(buildSessionKey(codexStep));
     expect(buildSessionKey(claudeStep)).toBe('coder:claude');
     expect(buildSessionKey(codexStep)).toBe('coder:codex');
+  });
+
+  it('should separate claude-sdk from headless claude in session key', () => {
+    const sdkStep = createMovement({
+      persona: 'coder',
+      name: 'sdk-eye',
+      provider: 'claude-sdk',
+    });
+    const headlessStep = createMovement({ persona: 'coder', provider: 'claude', name: 'cli-eye' });
+
+    expect(buildSessionKey(sdkStep)).toBe('coder:claude-sdk');
+    expect(buildSessionKey(headlessStep)).toBe('coder:claude');
+    expect(buildSessionKey(sdkStep)).not.toBe(buildSessionKey(headlessStep));
   });
 
   it('should not append provider when provider is undefined', () => {
