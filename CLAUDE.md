@@ -51,7 +51,7 @@ TAKT (TAKT Agent Koordination Topology) is a multi-agent orchestration system fo
 | `takt config` | Configure settings (permission mode) |
 | `takt --help` | Show help message |
 
-**Interactive mode:** Running `takt` (without arguments) or `takt {initial message}` starts an interactive planning session. Supports 5 modes: `assistant` (default, AI asks clarifying questions), `passthrough` (passes input directly as task), `quiet` (generates instructions without questions), `persona` (uses first movement's persona for conversation), `none` (skips interactive session entirely, executes task directly). Type `/go` to execute the task with the selected piece, or `/cancel` to abort. Implemented in `src/features/interactive/`.
+**Interactive mode:** Running `takt` (without arguments) or `takt {initial message}` starts an interactive planning session. Supports 5 modes: `assistant` (default, AI asks clarifying questions), `passthrough` (passes input directly as task), `quiet` (generates instructions without questions), `persona` (uses first movement's persona for conversation), `none` (skips interactive session entirely, executes task directly). When the effective mode is not `none`, type `/go` to execute the task with the selected piece, or `/cancel` to abort (`none` has no dialogue or `/go` step). Implemented in `src/features/interactive/`.
 
 **Pipeline mode:** Specifying `--pipeline` enables non-interactive mode suitable for CI/CD. Automatically creates a branch, runs the piece, commits, and pushes. Use `--auto-pr` to also create a pull request. Use `--skip-git` to run piece only (no git operations). Implemented in `src/features/pipeline/`.
 
