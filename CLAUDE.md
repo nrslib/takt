@@ -51,7 +51,7 @@ TAKT (TAKT Agent Koordination Topology) is a multi-agent orchestration system fo
 | `takt config` | Configure settings (permission mode) |
 | `takt --help` | Show help message |
 
-**Interactive mode:** Running `takt` (without arguments) or `takt {initial message}` starts an interactive planning session. Supports 4 modes: `assistant` (default, AI asks clarifying questions), `passthrough` (passes input directly as task), `quiet` (generates instructions without questions), `persona` (uses first movement's persona for conversation). Type `/go` to execute the task with the selected piece, or `/cancel` to abort. Implemented in `src/features/interactive/`.
+**Interactive mode:** Running `takt` (without arguments) or `takt {initial message}` starts an interactive planning session. Supports 5 modes: `assistant` (default, AI asks clarifying questions), `passthrough` (passes input directly as task), `quiet` (generates instructions without questions), `persona` (uses first movement's persona for conversation), `none` (skips interactive session entirely, executes task directly). Type `/go` to execute the task with the selected piece, or `/cancel` to abort. Implemented in `src/features/interactive/`.
 
 **Pipeline mode:** Specifying `--pipeline` enables non-interactive mode suitable for CI/CD. Automatically creates a branch, runs the piece, commits, and pushes. Use `--auto-pr` to also create a pull request. Use `--skip-git` to run piece only (no git operations). Implemented in `src/features/pipeline/`.
 
@@ -296,7 +296,8 @@ name: piece-name
 description: Optional description
 max_movements: 10
 initial_movement: plan    # First movement to execute
-interactive_mode: assistant  # Default interactive mode (assistant|passthrough|quiet|persona)
+interactive_mode: assistant  # Default interactive mode (assistant|passthrough|quiet|persona|none)
+skip_interactive_mode_selection: false  # Skip mode selection UI (use interactive_mode directly)
 
 # Piece-level provider options (inherited by all movements unless overridden)
 piece_config:

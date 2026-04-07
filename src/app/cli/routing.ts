@@ -222,6 +222,11 @@ export async function executeDefaultAction(task?: string): Promise<void> {
         }
         break;
       }
+
+      default: {
+        const _exhaustive: never = selectedMode;
+        throw new Error(`Unknown interactive mode: ${_exhaustive}`);
+      }
     }
   }
 
@@ -232,9 +237,9 @@ export async function executeDefaultAction(task?: string): Promise<void> {
         checkoutBranch(resolvedCwd, prBranch);
         success(`Checked out PR branch: ${prBranch}`);
       }
-      selectOptions.interactiveUserInput = true;
+      selectOptions.interactiveUserInput = selectedMode !== 'none';
       selectOptions.piece = pieceId;
-      selectOptions.interactiveMetadata = { confirmed: true, task: confirmedTask };
+      selectOptions.interactiveMetadata = { confirmed: selectedMode !== 'none', task: confirmedTask };
       selectOptions.skipTaskList = true;
       await selectAndExecuteTask(resolvedCwd, confirmedTask, selectOptions, agentOverrides);
     },

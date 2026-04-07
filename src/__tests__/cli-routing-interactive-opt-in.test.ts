@@ -210,7 +210,7 @@ describe('executeDefaultAction interactive opt-in', () => {
       expect.objectContaining({
         piece: 'opt-in-piece',
         skipTaskList: true,
-        interactiveMetadata: expect.objectContaining({ confirmed: true, task: 'my-workflow' }),
+        interactiveMetadata: expect.objectContaining({ confirmed: false, task: 'my-workflow' }),
       }),
       undefined,
     );
