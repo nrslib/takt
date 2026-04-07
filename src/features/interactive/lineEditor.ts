@@ -199,7 +199,7 @@ const ESC_AMBIGUITY_TIMEOUT_MS = 50 as const;
 export const createEscapeParser = (
   callbacks: InputCallbacks,
 ): { feed: (data: string) => void; flush: () => void } => {
-  let pendingEsc = false;
+  let pendingFragment = '';
   let escTimer: ReturnType<typeof setTimeout> | null = null;
 
   const clearEscTimer = (): void => {
@@ -211,8 +211,8 @@ export const createEscapeParser = (
 
   const flush = (): void => {
     clearEscTimer();
-    if (pendingEsc) {
-      pendingEsc = false;
+    if (pendingFragment.length > 0) {
+      pendingFragment = '';
       callbacks.onEsc();
     }
   };
@@ -220,10 +220,10 @@ export const createEscapeParser = (
   const feed = (data: string): void => {
     let input = data;
 
-    if (pendingEsc) {
-      pendingEsc = false;
+    if (pendingFragment.length > 0) {
       clearEscTimer();
-      input = `\x1B${input}`;
+      input = `${pendingFragment}${input}`;
+      pendingFragment = '';
     }
 
     let i = 0;
@@ -234,14 +234,14 @@ export const createEscapeParser = (
         const rest = input.slice(i + 1);
 
         if (rest.length === 0) {
-          pendingEsc = true;
+          pendingFragment = '\x1B';
           escTimer = setTimeout(flush, ESC_AMBIGUITY_TIMEOUT_MS);
           return;
         }
 
         const consumed = tryConsumeEscapeSequence(rest, callbacks);
         if (consumed === -1) {
-          pendingEsc = true;
+          pendingFragment = input.slice(i);
           escTimer = setTimeout(flush, ESC_AMBIGUITY_TIMEOUT_MS);
           return;
         }

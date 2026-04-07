@@ -1337,5 +1337,46 @@ describe('readMultilineInput cursor navigation', () => {
 
       expect(cb.calls).toEqual(['char:a', 'char:b', 'char:c']);
     });
+
+    it('should resolve CSI split across chunks (ESC+[ then A)', () => {
+      const cb = createCallbacks();
+      const parser = createEscapeParser(cb);
+
+      parser.feed('\x1B[');
+      parser.feed('A');
+
+      expect(cb.calls).toEqual(['up']);
+    });
+
+    it('should resolve CSI split across three chunks (ESC then [ then B)', () => {
+      const cb = createCallbacks();
+      const parser = createEscapeParser(cb);
+
+      parser.feed('\x1B');
+      parser.feed('[');
+      parser.feed('B');
+
+      expect(cb.calls).toEqual(['down']);
+    });
+
+    it('should handle text after resolved split escape sequence', () => {
+      const cb = createCallbacks();
+      const parser = createEscapeParser(cb);
+
+      parser.feed('\x1B[');
+      parser.feed('Cabc');
+
+      expect(cb.calls).toEqual(['right', 'char:a', 'char:b', 'char:c']);
+    });
+
+    it('should flush incomplete CSI fragment as bare Esc', () => {
+      const cb = createCallbacks();
+      const parser = createEscapeParser(cb);
+
+      parser.feed('\x1B[');
+      parser.flush();
+
+      expect(cb.calls).toEqual(['esc']);
+    });
   });
 });
