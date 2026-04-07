@@ -61,6 +61,11 @@ export interface PieceExecutionOptions {
   providerProfiles?: ProviderPermissionProfiles;
   /** Enable interactive user input during step transitions */
   interactiveUserInput?: boolean;
+  /**
+   * Enable stdin prompts for movement-level user input (`requires_user_input`, blocked flows).
+   * Independent of `interactiveUserInput` (instruction `interactive` flag / interactive-only rules).
+   */
+  pieceUserInputHandler?: boolean;
   /** Interactive mode result metadata for NDJSON logging */
   interactiveMetadata?: InteractiveMetadata;
   /** Override initial movement (default: piece config's initialMovement) */
@@ -101,6 +106,11 @@ export interface ExecuteTaskOptions {
   initialIterationOverride?: number;
   /** Enable interactive user input during step transitions */
   interactiveUserInput?: boolean;
+  /**
+   * Enable stdin prompts for movement-level user input (`requires_user_input`, blocked flows).
+   * Independent of `interactiveUserInput` (instruction `interactive` flag / interactive-only rules).
+   */
+  pieceUserInputHandler?: boolean;
   /** Interactive mode result metadata for NDJSON logging */
   interactiveMetadata?: InteractiveMetadata;
   /** Override initial movement (default: piece config's initialMovement) */
@@ -158,6 +168,11 @@ export interface SelectAndExecuteOptions {
   piece?: string;
   /** Enable interactive user input during step transitions */
   interactiveUserInput?: boolean;
+  /**
+   * Enable stdin prompts for movement-level user input (`requires_user_input`, blocked flows).
+   * Independent of `interactiveUserInput` (instruction `interactive` flag / interactive-only rules).
+   */
+  pieceUserInputHandler?: boolean;
   /** Interactive mode result metadata for NDJSON logging */
   interactiveMetadata?: InteractiveMetadata;
   /** Skip adding task to tasks.yaml */

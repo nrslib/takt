@@ -238,6 +238,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
         success(`Checked out PR branch: ${prBranch}`);
       }
       selectOptions.interactiveUserInput = selectedMode !== 'none';
+      selectOptions.pieceUserInputHandler = true;
       selectOptions.piece = pieceId;
       selectOptions.interactiveMetadata = { confirmed: selectedMode !== 'none', task: confirmedTask };
       selectOptions.skipTaskList = true;

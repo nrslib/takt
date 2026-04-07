@@ -1,8 +1,3 @@
-/**
- * Piece YAML: skip_interactive_mode_selection (opt-in to skip the mode picker).
- * Legacy `run_interactive_without_task` is not part of the schema and is stripped on parse.
- */
-
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';

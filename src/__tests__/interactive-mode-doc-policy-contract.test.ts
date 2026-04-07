@@ -1,8 +1,3 @@
-/**
- * Regression: doc_drift (CLI Flow documents `none` and skip steps 3–4) and
- * policy (interactive-mode.ts must not carry per-mode What/How narrative).
- */
-
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
