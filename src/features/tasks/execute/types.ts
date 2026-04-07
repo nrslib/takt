@@ -29,9 +29,15 @@ export interface PieceExecutionResult {
 
 /** Metadata from interactive mode, passed through to NDJSON logging */
 export interface InteractiveMetadata {
-  /** Whether the user confirmed with /go */
+  /**
+   * Whether the user confirmed the plan with `/go` in interactive planning.
+   * `false` on non-interactive paths (e.g. `none` mode) where the task still runs without that step.
+   */
   confirmed: boolean;
-  /** The assembled task text (only meaningful when confirmed=true) */
+  /**
+   * Task text associated with this run for logging (mirrors the string passed into execution when present).
+   * Not tied to `confirmed`; e.g. `none` mode may set `confirmed: false` while still supplying the task.
+   */
   task?: string;
 }
 

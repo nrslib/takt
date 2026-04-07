@@ -216,6 +216,27 @@ describe('executePiece AskUserQuestion deny handler wiring', () => {
     expect(result.success).toBe(true);
   });
 
+  it('should pass onUserInput when only pieceUserInputHandler is true', async () => {
+    await executePiece(makeConfig(), 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+      interactiveUserInput: false,
+      pieceUserInputHandler: true,
+    });
+
+    const onUserInput = MockPieceEngine.lastInstance.receivedOptions.onUserInput;
+    expect(typeof onUserInput).toBe('function');
+  });
+
+  it('should omit onUserInput when both interactive flags are false', async () => {
+    await executePiece(makeConfig(), 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+      interactiveUserInput: false,
+      pieceUserInputHandler: false,
+    });
+
+    expect(MockPieceEngine.lastInstance.receivedOptions.onUserInput).toBeUndefined();
+  });
+
   it('should mark exceeded without prompting even when interactiveUserInput is true', async () => {
     // Given: mock engine reaches iteration limit immediately
     MockPieceEngine.triggerIterationLimit = true;

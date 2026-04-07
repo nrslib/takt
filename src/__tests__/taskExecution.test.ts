@@ -226,6 +226,27 @@ describe('executeAndCompleteTask', () => {
     expect(pieceExecutionOptions?.model).toBe('gpt-5.3-codex');
   });
 
+  it('should pass pieceUserInputHandler and interactiveUserInput to executeTask → executePiece', async () => {
+    const task = createTask('task-piece-user-input');
+
+    await executeTask({
+      task: task.content,
+      cwd: '/project',
+      projectCwd: '/project',
+      pieceIdentifier: 'default',
+      interactiveUserInput: false,
+      pieceUserInputHandler: true,
+    });
+
+    expect(mockExecutePiece).toHaveBeenCalledTimes(1);
+    const pieceExecutionOptions = mockExecutePiece.mock.calls[0]?.[3] as {
+      interactiveUserInput?: boolean;
+      pieceUserInputHandler?: boolean;
+    };
+    expect(pieceExecutionOptions?.interactiveUserInput).toBe(false);
+    expect(pieceExecutionOptions?.pieceUserInputHandler).toBe(true);
+  });
+
   it('should use workflow terminology when named workflow is missing', async () => {
     mockLoadPieceByIdentifier.mockReturnValueOnce(undefined);
 
