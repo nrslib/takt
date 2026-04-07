@@ -289,6 +289,7 @@ describe('executeDefaultAction — interactive_mode none (direct first movement)
       expect.objectContaining({
         piece: 'none-mode-piece',
         skipTaskList: true,
+        interactiveUserInput: false,
         interactiveMetadata: expect.objectContaining({ confirmed: false, task: 'workflow-name' }),
       }),
       undefined,
@@ -321,6 +322,7 @@ describe('executeDefaultAction — interactive_mode none (direct first movement)
       expect.objectContaining({
         piece: 'none-mode-piece',
         skipTaskList: true,
+        interactiveUserInput: false,
         interactiveMetadata: expect.objectContaining({ confirmed: false, task: 'cli task body' }),
       }),
       undefined,

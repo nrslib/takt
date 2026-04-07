@@ -210,6 +210,7 @@ describe('executeDefaultAction interactive opt-in', () => {
       expect.objectContaining({
         piece: 'opt-in-piece',
         skipTaskList: true,
+        interactiveUserInput: false,
         interactiveMetadata: expect.objectContaining({ confirmed: false, task: 'my-workflow' }),
       }),
       undefined,
@@ -237,7 +238,10 @@ describe('executeDefaultAction interactive opt-in', () => {
     expect(mockSelectAndExecuteTask).toHaveBeenCalledWith(
       '/test/cwd',
       'user supplied task',
-      expect.any(Object),
+      expect.objectContaining({
+        interactiveUserInput: false,
+        interactiveMetadata: expect.objectContaining({ confirmed: false, task: 'user supplied task' }),
+      }),
       undefined,
     );
   });
