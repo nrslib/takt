@@ -188,14 +188,14 @@ steps:
       Your role is to synthesize the review results and produce a final summary.
 
       **Tasks:**
-      1. Read all review reports in the Report Directory
-         - `00-review-target.md` (Review target information)
-         - `01-architecture-review.md` (Architecture review)
-         - `02-security-review.md` (Security review)
-         - `03-qa-review.md` (QA review)
-         - `04-testing-review.md` (Testing review)
-         - `05-requirements-review.md` (Requirements review)
-      2. Synthesize the 5 review results
+      1. Read all review reports in the Report Directory (same basenames as prior steps' output_contracts)
+         - `review-target.md` (Review target information)
+         - `architecture-review.md` (Architecture review)
+         - `security-review.md` (Security review)
+         - `qa-review.md` (QA review)
+         - `testing-review.md` (Testing review)
+         - `requirements-review.md` (Requirements review)
+      2. Synthesize the findings from all reports above
       3. Produce a consolidated review summary with overall verdict
 
       **Review Summary output contract:**

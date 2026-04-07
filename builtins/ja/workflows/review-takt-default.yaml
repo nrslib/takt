@@ -214,15 +214,15 @@ steps:
       レビュー結果を統合し、最終サマリーを作成する役割です。
 
       **やること:**
-      1. Report Directory内の全レビューレポートを読む
-         - `00-review-target.md`（レビュー対象情報）
-         - `01-architecture-review.md`（アーキテクチャレビュー）
-         - `02-security-review.md`（セキュリティレビュー）
-         - `03-qa-review.md`（QAレビュー）
-         - `04-testing-review.md`（テストレビュー）
-         - `05-ai-review.md`（AIアンチパターンレビュー）
-         - `06-requirements-review.md`（要件充足レビュー）
-      2. 5つのレビュー結果を統合
+      1. Report Directory内の全レビューレポートを読む（前段の output_contracts と同じファイル名）
+         - `review-target.md`（レビュー対象情報）
+         - `architecture-review.md`（アーキテクチャレビュー）
+         - `security-review.md`（セキュリティレビュー）
+         - `qa-review.md`（QAレビュー）
+         - `testing-review.md`（テストレビュー）
+         - `ai-review.md`（AIアンチパターンレビュー）
+         - `requirements-review.md`（要件充足レビュー）
+      2. 上記レポートの内容を統合
       3. 統合レビューサマリーと総合判定を作成
     output_contracts:
       report:
