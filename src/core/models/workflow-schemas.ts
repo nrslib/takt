@@ -277,7 +277,9 @@ export const PieceConfigRawSchema = z.preprocess(
     max_movements: z.number().int().positive().optional().default(10),
     loop_monitors: z.array(LoopMonitorSchema).optional(),
     interactive_mode: InteractiveModeSchema.optional(),
-  }).transform(({
+    skip_interactive_mode_selection: z.boolean().optional(),
+  })
+    .transform(({
     workflow_config: _workflowConfig,
     steps: _steps,
     initial_step: _initialStep,

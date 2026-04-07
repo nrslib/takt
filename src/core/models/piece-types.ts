@@ -173,6 +173,7 @@ export interface PieceConfig {
   loopDetection?: LoopDetectionConfig;
   loopMonitors?: LoopMonitorConfig[];
   interactiveMode?: InteractiveMode;
+  skipInteractiveModeSelection?: boolean;
 }
 
 export interface PieceState {

@@ -22,6 +22,7 @@ import {
 } from '../../infra/config/index.js';
 import { resolvePersonaSessionId } from '../../infra/config/project/sessionStore.js';
 import { resolveAssistantProviderModelFromConfig } from '../../core/config/provider-resolution.js';
+import { DEFAULT_INTERACTIVE_MODE, type InteractiveMode } from '../../core/models/index.js';
 import { resolveAssistantConfigLayers } from '../../features/interactive/assistantConfig.js';
 import { program, resolvedCwd, pipelineMode } from './program.js';
 import { resolveAgentOverrides, resolveWorkflowCliOption } from './helpers.js';
@@ -139,10 +140,16 @@ export async function executeDefaultAction(task?: string): Promise<void> {
   const previewCount = globalConfig.interactivePreviewMovements;
   const pieceDesc = getPieceDescription(pieceId, resolvedCwd, previewCount);
 
-  const selectedMode = await selectInteractiveMode(lang, pieceDesc.interactiveMode);
-  if (selectedMode === null) {
-    info(getLabel('interactive.ui.cancelled', lang));
-    return;
+  let selectedMode: InteractiveMode;
+  if (pieceDesc.skipInteractiveModeSelection === true) {
+    selectedMode = pieceDesc.interactiveMode ?? DEFAULT_INTERACTIVE_MODE;
+  } else {
+    const mode = await selectInteractiveMode(lang, pieceDesc.interactiveMode);
+    if (mode === null) {
+      info(getLabel('interactive.ui.cancelled', lang));
+      return;
+    }
+    selectedMode = mode;
   }
 
   const pieceContext = {
@@ -155,61 +162,66 @@ export async function executeDefaultAction(task?: string): Promise<void> {
 
   let result: InteractiveModeResult;
 
-  switch (selectedMode) {
-    case 'assistant': {
-      let selectedSessionId: string | undefined;
-      if (opts.continue === true) {
-        const { provider: providerType } = resolveAssistantProviderModelFromConfig(
-          resolveAssistantConfigLayers(resolvedCwd),
-          {
-            provider: agentOverrides?.provider,
-            model: agentOverrides?.model,
-          },
+  if (selectedMode === 'none') {
+    const trimmedInput = (initialInput?.trim() ?? '');
+    result = { action: 'execute', task: trimmedInput === '' ? pieceDesc.name : trimmedInput };
+  } else {
+    switch (selectedMode) {
+      case 'assistant': {
+        let selectedSessionId: string | undefined;
+        if (opts.continue === true) {
+          const { provider: providerType } = resolveAssistantProviderModelFromConfig(
+            resolveAssistantConfigLayers(resolvedCwd),
+            {
+              provider: agentOverrides?.provider,
+              model: agentOverrides?.model,
+            },
+          );
+          if (!providerType) {
+            throw new Error('Provider is not configured.');
+          }
+          const savedSessions = loadPersonaSessions(resolvedCwd, providerType);
+          const savedSessionId = resolvePersonaSessionId(savedSessions, 'interactive', providerType);
+          if (savedSessionId) {
+            selectedSessionId = savedSessionId;
+          } else {
+            info(getLabel('interactive.continueNoSession', lang));
+          }
+        }
+        const interactiveOpts = prBranch ? { excludeActions: ['create_issue'] as const } : undefined;
+        const assistantModeOptions = {
+          ...interactiveOpts,
+          ...(agentOverrides?.provider ? { provider: agentOverrides.provider } : {}),
+          ...(agentOverrides?.model ? { model: agentOverrides.model } : {}),
+        };
+        result = await interactiveMode(
+          resolvedCwd,
+          initialInput,
+          pieceContext,
+          selectedSessionId,
+          undefined,
+          Object.keys(assistantModeOptions).length > 0 ? assistantModeOptions : undefined,
         );
-        if (!providerType) {
-          throw new Error('Provider is not configured.');
-        }
-        const savedSessions = loadPersonaSessions(resolvedCwd, providerType);
-        const savedSessionId = resolvePersonaSessionId(savedSessions, 'interactive', providerType);
-        if (savedSessionId) {
-          selectedSessionId = savedSessionId;
+        break;
+      }
+
+      case 'passthrough':
+        result = await passthroughMode(lang, initialInput);
+        break;
+
+      case 'quiet':
+        result = await quietMode(resolvedCwd, initialInput, pieceContext);
+        break;
+
+      case 'persona': {
+        if (!pieceDesc.firstMovement) {
+          info(getLabel('interactive.ui.personaFallback', lang));
+          result = await interactiveMode(resolvedCwd, initialInput, pieceContext);
         } else {
-          info(getLabel('interactive.continueNoSession', lang));
+          result = await personaMode(resolvedCwd, pieceDesc.firstMovement, initialInput, pieceContext);
         }
+        break;
       }
-      const interactiveOpts = prBranch ? { excludeActions: ['create_issue'] as const } : undefined;
-      const assistantModeOptions = {
-        ...interactiveOpts,
-        ...(agentOverrides?.provider ? { provider: agentOverrides.provider } : {}),
-        ...(agentOverrides?.model ? { model: agentOverrides.model } : {}),
-      };
-      result = await interactiveMode(
-        resolvedCwd,
-        initialInput,
-        pieceContext,
-        selectedSessionId,
-        undefined,
-        Object.keys(assistantModeOptions).length > 0 ? assistantModeOptions : undefined,
-      );
-      break;
-    }
-
-    case 'passthrough':
-      result = await passthroughMode(lang, initialInput);
-      break;
-
-    case 'quiet':
-      result = await quietMode(resolvedCwd, initialInput, pieceContext);
-      break;
-
-    case 'persona': {
-      if (!pieceDesc.firstMovement) {
-        info(getLabel('interactive.ui.personaFallback', lang));
-        result = await interactiveMode(resolvedCwd, initialInput, pieceContext);
-      } else {
-        result = await personaMode(resolvedCwd, pieceDesc.firstMovement, initialInput, pieceContext);
-      }
-      break;
     }
   }
 

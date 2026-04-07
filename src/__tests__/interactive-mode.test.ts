@@ -1,5 +1,5 @@
 /**
- * Tests for interactive mode variants (assistant, persona, quiet, passthrough)
+ * Tests for interactive mode variants (assistant, persona, quiet, passthrough, none)
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -185,8 +185,8 @@ afterEach(() => {
 // ── InteractiveMode type & constants tests ──
 
 describe('InteractiveMode type', () => {
-  it('should define all four modes', () => {
-    expect(INTERACTIVE_MODES).toEqual(['assistant', 'persona', 'quiet', 'passthrough']);
+  it('should define the canonical mode list including none', () => {
+    expect(INTERACTIVE_MODES).toEqual(['assistant', 'persona', 'quiet', 'passthrough', 'none']);
   });
 
   it('should have assistant as default mode', () => {
@@ -197,7 +197,7 @@ describe('InteractiveMode type', () => {
 // ── Mode selection tests ──
 
 describe('selectInteractiveMode', () => {
-  it('should call selectOptionWithDefault with four mode options', async () => {
+  it('should call selectOptionWithDefault with one option per INTERACTIVE_MODES entry including none', async () => {
     // When
     await selectInteractiveMode('en');
 
@@ -209,6 +209,7 @@ describe('selectInteractiveMode', () => {
         expect.objectContaining({ value: 'persona' }),
         expect.objectContaining({ value: 'quiet' }),
         expect.objectContaining({ value: 'passthrough' }),
+        expect.objectContaining({ value: 'none' }),
       ]),
       'assistant',
     );
@@ -248,16 +249,16 @@ describe('selectInteractiveMode', () => {
     expect(result).toBe('persona');
   });
 
-  it('should present options in correct order', async () => {
+  it('should present options in INTERACTIVE_MODES order', async () => {
     // When
     await selectInteractiveMode('en');
 
     // Then
     const options = mockSelectOptionWithDefault.mock.calls[0]?.[1] as Array<{ value: string }>;
-    expect(options?.[0]?.value).toBe('assistant');
-    expect(options?.[1]?.value).toBe('persona');
-    expect(options?.[2]?.value).toBe('quiet');
-    expect(options?.[3]?.value).toBe('passthrough');
+    expect(options).toHaveLength(INTERACTIVE_MODES.length);
+    for (let i = 0; i < INTERACTIVE_MODES.length; i++) {
+      expect(options[i]?.value).toBe(INTERACTIVE_MODES[i]);
+    }
   });
 });
 

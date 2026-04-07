@@ -453,6 +453,7 @@ export function normalizePieceConfig(
     maxMovements: parsed.max_movements,
     loopMonitors: normalizeLoopMonitors(parsed.loop_monitors, pieceDir, sections, context),
     interactiveMode: parsed.interactive_mode,
+    skipInteractiveModeSelection: parsed.skip_interactive_mode_selection,
   };
 }
 

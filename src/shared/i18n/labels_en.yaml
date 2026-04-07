@@ -37,6 +37,8 @@ interactive:
     quietDescription: "Generate instructions without asking questions"
     passthrough: "Passthrough"
     passthroughDescription: "Pass your input directly as task text"
+    none: "None (direct run)"
+    noneDescription: "Skip dialogue and run the first movement (task = your input or workflow name)"
   runSelector:
     confirm: "Reference a previous run's results?"
     prompt: "Select a run to reference:"
