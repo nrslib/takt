@@ -1251,6 +1251,33 @@ describe('readMultilineInput cursor navigation', () => {
       expect(result).toBe('/go');
     });
 
+    it('should repaint wrapped suffix completion from the prompt row on Tab', async () => {
+      // Given: narrow terminal width wraps "note /g" before Tab applies "note /go "
+      const suffixCompletionProvider = ({ buffer }: { buffer: string }) =>
+        buffer === 'note /g'
+          ? [{
+              value: 'note /go',
+              applyValue: 'note /go ',
+              description: 'Description for /go',
+            }]
+          : [];
+      setupRawStdin(['note /g\t\r'], 8);
+
+      // When
+      const result = await callReadMultilineInput('> ', { completionProvider: suffixCompletionProvider });
+
+      // Then
+      expect(result).toBe('note /go ');
+      const appliedBufferIndex = stdoutCalls.lastIndexOf('note /go ');
+      expect(appliedBufferIndex).toBeGreaterThan(3);
+      expect(stdoutCalls.slice(appliedBufferIndex - 4, appliedBufferIndex)).toEqual([
+        '\r\n',
+        '\x1B[J',
+        expect.stringMatching(/^\x1B\[\d+A$/),
+        '\x1B[3G',
+      ]);
+    });
+
     it('should wrap selection on ArrowDown from last item', async () => {
       // Given: "/" → ArrowDown x6 (6 commands, wraps back to /play index=0) → Enter
       setupRawStdin(['/\x1B[B\x1B[B\x1B[B\x1B[B\x1B[B\x1B[B\r']);
