@@ -117,6 +117,23 @@ function collectStepEdges(config: PieceConfig): Map<string, Set<string>> {
     }
     edges.set(movement.name, nextSteps);
   }
+
+  for (const monitor of config.loopMonitors ?? []) {
+    const monitorTargets = monitor.judge.rules
+      .map((rule) => rule.next)
+      .filter((next): next is string => !SPECIAL_NEXT.has(next));
+
+    for (const stepName of monitor.cycle) {
+      const nextSteps = edges.get(stepName);
+      if (!nextSteps) {
+        continue;
+      }
+      for (const next of monitorTargets) {
+        nextSteps.add(next);
+      }
+    }
+  }
+
   return edges;
 }
 
@@ -153,6 +170,12 @@ function collectUsedLocalKeys(raw: RawWorkflow): Record<'personas' | 'policies' 
   const collectMovement = (movement: RawMovement): void => {
     if (movement.persona && isNamedRef(movement.persona)) {
       used.personas.add(movement.persona);
+    }
+    if (movement.team_leader?.persona && isNamedRef(movement.team_leader.persona)) {
+      used.personas.add(movement.team_leader.persona);
+    }
+    if (movement.team_leader?.part_persona && isNamedRef(movement.team_leader.part_persona)) {
+      used.personas.add(movement.team_leader.part_persona);
     }
 
     if (movement.instruction && isNamedRef(movement.instruction)) {
@@ -241,6 +264,24 @@ function validateMovementRefs(
       movement.persona,
       () => sections.personas?.[movement.persona!] !== undefined
         || resolvePersona(movement.persona, sections, pieceDir, context).personaPath !== undefined,
+    );
+  }
+  if (movement.team_leader?.persona && isNamedRef(movement.team_leader.persona)) {
+    appendMissingRef(
+      diagnostics,
+      `${label} team_leader persona`,
+      movement.team_leader.persona,
+      () => sections.personas?.[movement.team_leader!.persona!] !== undefined
+        || resolvePersona(movement.team_leader!.persona, sections, pieceDir, context).personaPath !== undefined,
+    );
+  }
+  if (movement.team_leader?.part_persona && isNamedRef(movement.team_leader.part_persona)) {
+    appendMissingRef(
+      diagnostics,
+      `${label} team_leader part_persona`,
+      movement.team_leader.part_persona,
+      () => sections.personas?.[movement.team_leader!.part_persona!] !== undefined
+        || resolvePersona(movement.team_leader!.part_persona, sections, pieceDir, context).personaPath !== undefined,
     );
   }
   validateScalarRefs(

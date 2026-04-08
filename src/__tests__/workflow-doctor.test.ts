@@ -86,6 +86,27 @@ steps:
     expect(messages).toContain('step "step1" output_contract format references missing resource "missing-format"');
   });
 
+  it('reports missing team_leader persona references', () => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/missing-team-leader-refs.yaml', `name: missing-team-leader-refs
+max_steps: 10
+initial_step: step1
+steps:
+  - name: step1
+    team_leader:
+      persona: missing-team-leader
+      part_persona: missing-worker
+    instruction: decompose
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const messages = inspectWorkflowFile(filePath, projectDir).diagnostics.map((item) => item.message);
+
+    expect(messages).toContain('step "step1" team_leader persona references missing resource "missing-team-leader"');
+    expect(messages).toContain('step "step1" team_leader part_persona references missing resource "missing-worker"');
+  });
+
   it('reports unknown next steps and unreachable steps', () => {
     const filePath = writeWorkflow(projectDir, '.takt/workflows/routing.yaml', `name: routing
 max_steps: 10
@@ -105,6 +126,37 @@ steps:
 
     expect(messages).toContain('Step "step1" routes to unknown next step "missing-step"');
     expect(messages).toContain('Unreachable steps: step2');
+  });
+
+  it('treats steps reachable from loop monitor transitions as reachable', () => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/loop-monitor-reachability.yaml', `name: loop-monitor-reachability
+max_steps: 10
+initial_step: step1
+loop_monitors:
+  - cycle: [step1, step2]
+    threshold: 2
+    judge:
+      rules:
+        - condition: escape
+          next: step3
+steps:
+  - name: step1
+    rules:
+      - condition: continue
+        next: step2
+  - name: step2
+    rules:
+      - condition: repeat
+        next: step1
+  - name: step3
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const messages = inspectWorkflowFile(filePath, projectDir).diagnostics.map((item) => item.message);
+
+    expect(messages).not.toContain('Unreachable steps: step3');
   });
 
   it('reports missing initial_step target', () => {
@@ -156,6 +208,33 @@ steps:
       level: 'warning',
       message: 'Unused instructions entry "unused-step"',
     });
+  });
+
+  it('does not warn for personas used by team_leader references', () => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/team-leader-used-personas.yaml', `name: team-leader-used-personas
+max_steps: 10
+initial_step: step1
+personas:
+  lead: ./facets/personas/lead.md
+  worker: ./facets/personas/worker.md
+steps:
+  - name: step1
+    team_leader:
+      persona: lead
+      part_persona: worker
+    instruction: decompose
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    mkdirSync(join(projectDir, '.takt/facets/personas'), { recursive: true });
+    writeFileSync(join(projectDir, '.takt/facets/personas/lead.md'), 'lead persona', 'utf-8');
+    writeFileSync(join(projectDir, '.takt/facets/personas/worker.md'), 'worker persona', 'utf-8');
+
+    const messages = inspectWorkflowFile(filePath, projectDir).diagnostics.map((item) => item.message);
+
+    expect(messages).not.toContain('Unused personas entry "lead"');
+    expect(messages).not.toContain('Unused personas entry "worker"');
   });
 
   it('validates all project workflow files when no targets are given', async () => {
