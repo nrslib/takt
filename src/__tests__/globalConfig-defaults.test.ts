@@ -39,6 +39,7 @@ describe('loadGlobalConfig', () => {
     }
     delete process.env.TAKT_INTERACTIVE_PREVIEW_STEPS;
     delete process.env.TAKT_INTERACTIVE_PREVIEW_MOVEMENTS;
+    delete process.env.TAKT_PIECE_RUNTIME_PREPARE;
   });
 
   it('should return default values when config.yaml does not exist', () => {
@@ -834,19 +835,33 @@ describe('loadGlobalConfig', () => {
     expect(config.interactivePreviewSteps).toBe(9);
   });
 
-  it('should ignore legacy TAKT_INTERACTIVE_PREVIEW_MOVEMENTS for global config env override', () => {
+  it('should reject legacy TAKT_INTERACTIVE_PREVIEW_MOVEMENTS for global config env override', () => {
     process.env.TAKT_INTERACTIVE_PREVIEW_MOVEMENTS = '10';
 
-    const config = loadGlobalConfig();
-    expect(config.interactivePreviewSteps).toBeUndefined();
+    expect(() => loadGlobalConfig()).toThrow(/interactive_preview_movements/);
   });
 
-  it('should prefer canonical global preview env when legacy key is present', () => {
+  it('should reject invalid legacy global env values as removed keys before parsing', () => {
+    process.env.TAKT_PIECE_RUNTIME_PREPARE = '{';
+
+    let thrown: unknown;
+    try {
+      loadGlobalConfig();
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toMatch(/piece_runtime_prepare/);
+    expect((thrown as Error).message).toMatch(/workflow_runtime_prepare/);
+    expect((thrown as Error).message).not.toMatch(/valid JSON/);
+  });
+
+  it('should reject global preview env when legacy key is present', () => {
     process.env.TAKT_INTERACTIVE_PREVIEW_MOVEMENTS = '3';
     process.env.TAKT_INTERACTIVE_PREVIEW_STEPS = '2';
 
-    const config = loadGlobalConfig();
-    expect(config.interactivePreviewSteps).toBe(2);
+    expect(() => loadGlobalConfig()).toThrow(/interactive_preview_movements/);
   });
 
   describe('persona_providers', () => {

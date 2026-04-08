@@ -137,7 +137,7 @@ export class GlobalConfigManager {
       workflowCategoriesFile: expandOptionalHomePath(parsed.workflow_categories_file),
       providerOptions: normalizedProvider.providerOptions,
       providerProfiles: normalizeProviderProfiles(
-        parsedConfig.provider_profiles as Record<string, {
+        rawConfig.provider_profiles as Record<string, {
           default_permission_mode: string;
           step_permission_overrides?: Record<string, string>;
         }> | undefined,

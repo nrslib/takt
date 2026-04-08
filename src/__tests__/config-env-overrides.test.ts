@@ -204,7 +204,7 @@ describe('config traced env overrides', () => {
     });
   });
 
-  it('project config は removed runtime_prepare env を無視する', () => {
+  it('project config は removed runtime_prepare env を明示エラーにする', () => {
     const projectDir = join(testRoot, 'project-removed-runtime-prepare-root-and-leaf');
     const configDir = getProjectConfigDir(projectDir);
     mkdirSync(configDir, { recursive: true });
@@ -214,8 +214,7 @@ describe('config traced env overrides', () => {
     });
     process.env.TAKT_PIECE_RUNTIME_PREPARE_CUSTOM_SCRIPTS = 'true';
 
-    const config = loadProjectConfig(projectDir);
-    expect(config.workflowRuntimePrepare).toBeUndefined();
+    expect(() => loadProjectConfig(projectDir)).toThrow(/piece_runtime_prepare/i);
   });
 
   it('project config は workflow_runtime_prepare の新 env 名を反映する', () => {
@@ -248,17 +247,15 @@ describe('config traced env overrides', () => {
     });
   });
 
-  it('project config は旧 runtime_prepare env が同時指定されても canonical env を優先する', () => {
+  it('project config は旧 runtime_prepare env が canonical env と同時指定でも明示エラーにする', () => {
     const projectDir = join(testRoot, 'project-workflow-runtime-prepare-env-priority');
     const configDir = getProjectConfigDir(projectDir);
     mkdirSync(configDir, { recursive: true });
     writeFileSync(join(configDir, 'config.yaml'), 'provider: codex\n', 'utf-8');
     process.env.TAKT_PIECE_RUNTIME_PREPARE_CUSTOM_SCRIPTS = 'false';
     process.env.TAKT_WORKFLOW_RUNTIME_PREPARE_CUSTOM_SCRIPTS = 'true';
-    const config = loadProjectConfig(projectDir);
-    expect(config.workflowRuntimePrepare).toEqual({
-      customScripts: true,
-    });
+
+    expect(() => loadProjectConfig(projectDir)).toThrow(/piece_runtime_prepare/i);
   });
 
   it('project config は workflow_arpeggio の新 env 名を反映する', () => {
@@ -347,13 +344,13 @@ describe('config traced env overrides', () => {
     expect(config.enableBuiltinWorkflows).toBe(true);
   });
 
-  it('global config は旧 enable_builtin env が同時指定されても canonical env を優先する', () => {
+  it('global config は旧 enable_builtin env が canonical env と同時指定でも明示エラーにする', () => {
     mkdirSync(globalTaktDir, { recursive: true });
     writeFileSync(globalConfigPath, 'language: ja\n', 'utf-8');
     process.env.TAKT_ENABLE_BUILTIN_PIECES = 'false';
     process.env.TAKT_ENABLE_BUILTIN_WORKFLOWS = 'true';
-    const config = loadGlobalConfig();
-    expect(config.enableBuiltinWorkflows).toBe(true);
+
+    expect(() => loadGlobalConfig()).toThrow(/enable_builtin_pieces/i);
   });
 
   it('global config は workflow notification の新 env 名を反映する', () => {
@@ -370,15 +367,13 @@ describe('config traced env overrides', () => {
     });
   });
 
-  it('global config は旧 workflow notification env が同時指定されても canonical env を優先する', () => {
+  it('global config は旧 workflow notification env が canonical env と同時指定でも明示エラーにする', () => {
     mkdirSync(globalTaktDir, { recursive: true });
     writeFileSync(globalConfigPath, 'language: ja\n', 'utf-8');
     process.env.TAKT_NOTIFICATION_SOUND_EVENTS_PIECE_COMPLETE = 'false';
     process.env.TAKT_NOTIFICATION_SOUND_EVENTS_WORKFLOW_COMPLETE = 'true';
-    const config = loadGlobalConfig();
-    expect(config.notificationSoundEvents).toEqual({
-      workflowComplete: true,
-    });
+
+    expect(() => loadGlobalConfig()).toThrow(/notification_sound_events.*piece_complete/i);
   });
 
   it('global config は workflow_categories_file の新 env 名を反映する', () => {
@@ -391,13 +386,13 @@ describe('config traced env overrides', () => {
     expect(config.workflowCategoriesFile).toBe('/tmp/workflow-categories.yaml');
   });
 
-  it('global config は旧 workflow_categories_file env が同時指定されても canonical env を優先する', () => {
+  it('global config は旧 workflow_categories_file env が canonical env と同時指定でも明示エラーにする', () => {
     mkdirSync(globalTaktDir, { recursive: true });
     writeFileSync(globalConfigPath, 'language: ja\n', 'utf-8');
     process.env.TAKT_PIECE_CATEGORIES_FILE = '/tmp/legacy-workflow-categories.yaml';
     process.env.TAKT_WORKFLOW_CATEGORIES_FILE = '/tmp/workflow-categories.yaml';
-    const config = loadGlobalConfig();
-    expect(config.workflowCategoriesFile).toBe('/tmp/workflow-categories.yaml');
+
+    expect(() => loadGlobalConfig()).toThrow(/piece_categories_file/i);
   });
 
   it('global config は workflow_runtime_prepare の root JSON env を反映する', () => {
@@ -531,35 +526,32 @@ describe('config traced env overrides', () => {
     });
   });
 
-  it('legacy env は global の削除済み builtins 設定 env を無視する', () => {
+  it('legacy env は global の削除済み builtins 設定 env を明示エラーにする', () => {
     mkdirSync(globalTaktDir, { recursive: true });
     writeFileSync(globalConfigPath, 'language: en\n', 'utf-8');
     process.env.TAKT_ENABLE_BUILTIN_PIECES = 'true';
 
-    const config = loadGlobalConfig();
-    expect(config.enableBuiltinWorkflows).toBeUndefined();
+    expect(() => loadGlobalConfig()).toThrow(/enable_builtin_pieces/i);
   });
 
-  it('legacy env は global removed categories env を無視する', () => {
+  it('legacy env は global removed categories env を明示エラーにする', () => {
     mkdirSync(globalTaktDir, { recursive: true });
     writeFileSync(globalConfigPath, 'language: en\n', 'utf-8');
     process.env.TAKT_PIECE_CATEGORIES_FILE = '/tmp/legacy-workflow-categories.yaml';
 
-    const config = loadGlobalConfig();
-    expect(config.workflowCategoriesFile).toBeUndefined();
+    expect(() => loadGlobalConfig()).toThrow(/piece_categories_file/i);
   });
 
-  it('legacy env は global workflow notification を無視する', () => {
+  it('legacy env は global workflow notification を明示エラーにする', () => {
     mkdirSync(globalTaktDir, { recursive: true });
     writeFileSync(globalConfigPath, 'language: en\n', 'utf-8');
     process.env.TAKT_NOTIFICATION_SOUND_EVENTS_PIECE_COMPLETE = 'true';
     process.env.TAKT_NOTIFICATION_SOUND_EVENTS_PIECE_ABORT = 'false';
 
-    const config = loadGlobalConfig();
-    expect(config.notificationSoundEvents).toBeUndefined();
+    expect(() => loadGlobalConfig()).toThrow(/notification_sound_events.*piece_complete/i);
   });
 
-  it('legacy leaf env は global config を無視する', () => {
+  it('legacy leaf env は global config を明示エラーにする', () => {
     mkdirSync(globalTaktDir, { recursive: true });
     writeFileSync(globalConfigPath, 'language: en\n', 'utf-8');
     process.env.TAKT_PIECE_RUNTIME_PREPARE_CUSTOM_SCRIPTS = 'true';
@@ -572,14 +564,10 @@ describe('config traced env overrides', () => {
     process.env.TAKT_NOTIFICATION_SOUND_EVENTS_PIECE_COMPLETE = 'true';
     process.env.TAKT_NOTIFICATION_SOUND_EVENTS_PIECE_ABORT = 'false';
 
-    const config = loadGlobalConfig();
-    expect(config.workflowRuntimePrepare).toBeUndefined();
-    expect(config.workflowArpeggio).toBeUndefined();
-    expect(config.workflowMcpServers).toBeUndefined();
-    expect(config.notificationSoundEvents).toBeUndefined();
+    expect(() => loadGlobalConfig()).toThrow(/piece_runtime_prepare|piece_arpeggio|piece_mcp_servers|notification_sound_events/i);
   });
 
-  it('legacy env は project removed runtime_prepare を無視する', () => {
+  it('legacy env は project removed runtime_prepare を明示エラーにする', () => {
     const projectDir = join(testRoot, 'project-legacy-workflow-runtime-prepare-env');
     const configDir = getProjectConfigDir(projectDir);
     mkdirSync(configDir, { recursive: true });
@@ -587,11 +575,13 @@ describe('config traced env overrides', () => {
     process.env.TAKT_PIECE_RUNTIME_PREPARE = JSON.stringify({
       custom_scripts: true,
     });
-    const config = loadProjectConfig(projectDir);
-    expect(config.workflowRuntimePrepare).toBeUndefined();
+
+    expect(() => loadProjectConfig(projectDir)).toThrow(
+      /piece_runtime_prepare.*workflow_runtime_prepare/i,
+    );
   });
 
-  it('legacy env は project removed arpeggio を無視する', () => {
+  it('legacy env は project removed arpeggio を明示エラーにする', () => {
     const projectDir = join(testRoot, 'project-legacy-workflow-arpeggio-env');
     const configDir = getProjectConfigDir(projectDir);
     mkdirSync(configDir, { recursive: true });
@@ -601,11 +591,11 @@ describe('config traced env overrides', () => {
       custom_merge_inline_js: false,
       custom_merge_files: true,
     });
-    const config = loadProjectConfig(projectDir);
-    expect(config.workflowArpeggio).toBeUndefined();
+
+    expect(() => loadProjectConfig(projectDir)).toThrow(/piece_arpeggio/i);
   });
 
-  it('legacy env は project removed mcp_servers を無視する', () => {
+  it('legacy env は project removed mcp_servers を明示エラーにする', () => {
     const projectDir = join(testRoot, 'project-legacy-workflow-mcp-servers-env');
     const configDir = getProjectConfigDir(projectDir);
     mkdirSync(configDir, { recursive: true });
@@ -615,11 +605,11 @@ describe('config traced env overrides', () => {
       http: false,
       sse: true,
     });
-    const config = loadProjectConfig(projectDir);
-    expect(config.workflowMcpServers).toBeUndefined();
+
+    expect(() => loadProjectConfig(projectDir)).toThrow(/piece_mcp_servers/i);
   });
 
-  it('legacy leaf env は project config を無視する', () => {
+  it('legacy leaf env は project config を明示エラーにする', () => {
     const projectDir = join(testRoot, 'project-legacy-workflow-leaf-env');
     const configDir = getProjectConfigDir(projectDir);
     mkdirSync(configDir, { recursive: true });
@@ -631,13 +621,13 @@ describe('config traced env overrides', () => {
     process.env.TAKT_PIECE_MCP_SERVERS_STDIO = 'true';
     process.env.TAKT_PIECE_MCP_SERVERS_HTTP = 'false';
     process.env.TAKT_PIECE_MCP_SERVERS_SSE = 'true';
-    const config = loadProjectConfig(projectDir);
-    expect(config.workflowRuntimePrepare).toBeUndefined();
-    expect(config.workflowArpeggio).toBeUndefined();
-    expect(config.workflowMcpServers).toBeUndefined();
+
+    expect(() => loadProjectConfig(projectDir)).toThrow(
+      /piece_runtime_prepare\.custom_scripts.*workflow_runtime_prepare\.custom_scripts|piece_arpeggio|piece_mcp_servers/i,
+    );
   });
 
-  it('project config では旧 leaf env が同時指定されても canonical env を優先する', () => {
+  it('project config では旧 leaf env が canonical env と同時指定でも明示エラーにする', () => {
     const projectDir = join(testRoot, 'project-legacy-workflow-leaf-env-blocked-by-workflow-env');
     const configDir = getProjectConfigDir(projectDir);
     mkdirSync(configDir, { recursive: true });
@@ -648,13 +638,11 @@ describe('config traced env overrides', () => {
     process.env.TAKT_WORKFLOW_ARPEGGIO_CUSTOM_MERGE_FILES = 'true';
     process.env.TAKT_PIECE_MCP_SERVERS_HTTP = 'false';
     process.env.TAKT_WORKFLOW_MCP_SERVERS_HTTP = 'true';
-    const config = loadProjectConfig(projectDir);
-    expect(config.workflowRuntimePrepare).toEqual({ customScripts: true });
-    expect(config.workflowArpeggio).toEqual({ customMergeFiles: true });
-    expect(config.workflowMcpServers).toEqual({ http: true });
+
+    expect(() => loadProjectConfig(projectDir)).toThrow(/piece_runtime_prepare|piece_arpeggio|piece_mcp_servers/i);
   });
 
-  it('global config では旧 leaf env が同時指定されても canonical env を優先する', () => {
+  it('global config では旧 leaf env が canonical env と同時指定でも明示エラーにする', () => {
     mkdirSync(globalTaktDir, { recursive: true });
     writeFileSync(globalConfigPath, 'language: en\n', 'utf-8');
     process.env.TAKT_PIECE_RUNTIME_PREPARE_CUSTOM_SCRIPTS = 'false';
@@ -665,11 +653,8 @@ describe('config traced env overrides', () => {
     process.env.TAKT_WORKFLOW_MCP_SERVERS_HTTP = 'true';
     process.env.TAKT_NOTIFICATION_SOUND_EVENTS_PIECE_ABORT = 'false';
     process.env.TAKT_NOTIFICATION_SOUND_EVENTS_WORKFLOW_ABORT = 'true';
-    const config = loadGlobalConfig();
-    expect(config.workflowRuntimePrepare).toEqual({ customScripts: true });
-    expect(config.workflowArpeggio).toEqual({ customMergeFiles: true });
-    expect(config.workflowMcpServers).toEqual({ http: true });
-    expect(config.notificationSoundEvents).toEqual({ workflowAbort: true });
+
+    expect(() => loadGlobalConfig()).toThrow(/piece_runtime_prepare|piece_arpeggio|piece_mcp_servers|notification_sound_events/i);
   });
 
   it('current logging env がある場合も legacy logging env は current を優先する', () => {

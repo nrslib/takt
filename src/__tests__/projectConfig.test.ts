@@ -26,6 +26,7 @@ describe('projectConfig', () => {
     }
     delete process.env.TAKT_INTERACTIVE_PREVIEW_STEPS;
     delete process.env.TAKT_INTERACTIVE_PREVIEW_MOVEMENTS;
+    delete process.env.TAKT_PIECE_RUNTIME_PREPARE;
   });
 
   describe('workflow_overrides empty array round-trip', () => {
@@ -300,19 +301,32 @@ piece_overrides:
       expect(loaded.interactivePreviewSteps).toBe(5);
     });
 
-    it('should ignore legacy TAKT_INTERACTIVE_PREVIEW_MOVEMENTS for project config env override', () => {
+    it('should reject legacy TAKT_INTERACTIVE_PREVIEW_MOVEMENTS for project config env override', () => {
       process.env.TAKT_INTERACTIVE_PREVIEW_MOVEMENTS = '6';
 
-      const loaded = loadProjectConfig(testDir);
-      expect(loaded.interactivePreviewSteps).toBeUndefined();
+      expect(() => loadProjectConfig(testDir)).toThrow(/interactive_preview_movements/);
     });
 
-    it('should prefer canonical project preview env when legacy key is also present', () => {
+    it('should reject invalid legacy project env values as removed keys before parsing', () => {
+      process.env.TAKT_PIECE_RUNTIME_PREPARE = '{';
+
+      let thrown: unknown;
+      try {
+        loadProjectConfig(testDir);
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message).toMatch(/piece_runtime_prepare/);
+      expect((thrown as Error).message).not.toMatch(/valid JSON/);
+    });
+
+    it('should reject project preview env when legacy key is also present', () => {
       process.env.TAKT_INTERACTIVE_PREVIEW_MOVEMENTS = '3';
       process.env.TAKT_INTERACTIVE_PREVIEW_STEPS = '2';
 
-      const loaded = loadProjectConfig(testDir);
-      expect(loaded.interactivePreviewSteps).toBe(2);
+      expect(() => loadProjectConfig(testDir)).toThrow(/interactive_preview_movements/);
     });
 
     it('should reject unsupported workflow key in project config yaml', () => {

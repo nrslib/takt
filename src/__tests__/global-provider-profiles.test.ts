@@ -27,6 +27,7 @@ describe('global provider_profiles', () => {
     if (existsSync(testHomeDir)) {
       rmSync(testHomeDir, { recursive: true });
     }
+    delete process.env.TAKT_PROVIDER_PROFILES;
   });
 
   it('loads provider_profiles from yaml', () => {
@@ -70,6 +71,84 @@ describe('global provider_profiles', () => {
     const config = loadGlobalConfig();
 
     expect(config.providerProfiles?.codex?.stepPermissionOverrides?.ai_fix).toBe('edit');
+  });
+
+  it('loads provider_profiles from TAKT_PROVIDER_PROFILES env override', () => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(
+      getGlobalConfigPath(),
+      [
+        'language: en',
+        'provider_profiles:',
+        '  cursor:',
+        '    default_permission_mode: full',
+      ].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_PROFILES = JSON.stringify({
+      codex: {
+        default_permission_mode: 'edit',
+        step_permission_overrides: {
+          ai_fix: 'full',
+        },
+      },
+    });
+
+    try {
+      const config = loadGlobalConfig();
+
+      expect(config.providerProfiles).toEqual({
+        codex: {
+          defaultPermissionMode: 'edit',
+          stepPermissionOverrides: {
+            ai_fix: 'full',
+          },
+        },
+      });
+    } finally {
+      delete process.env.TAKT_PROVIDER_PROFILES;
+    }
+  });
+
+  it('prefers TAKT_PROVIDER_PROFILES env override over yaml provider_profiles', () => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(
+      getGlobalConfigPath(),
+      [
+        'language: en',
+        'provider_profiles:',
+        '  codex:',
+        '    default_permission_mode: full',
+        '    step_permission_overrides:',
+        '      ai_fix: edit',
+      ].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_PROFILES = JSON.stringify({
+      codex: {
+        default_permission_mode: 'readonly',
+        step_permission_overrides: {
+          ai_fix: 'full',
+        },
+      },
+    });
+
+    try {
+      const config = loadGlobalConfig();
+
+      expect(config.providerProfiles).toEqual({
+        codex: {
+          defaultPermissionMode: 'readonly',
+          stepPermissionOverrides: {
+            ai_fix: 'full',
+          },
+        },
+      });
+    } finally {
+      delete process.env.TAKT_PROVIDER_PROFILES;
+    }
   });
 
   it('rejects the removed provider profile override key', () => {

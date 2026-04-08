@@ -8,9 +8,7 @@ export interface EnvSpec {
 export interface LegacyEnvSpec {
   env: string;
   path: string;
-  type: EnvValueType;
-  blockedBy: readonly string[];
-  warning: string;
+  canonicalPath?: string;
 }
 
 function normalizeEnvSegment(segment: string): string {

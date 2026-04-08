@@ -18,6 +18,7 @@ describe('project provider_profiles', () => {
     if (existsSync(testDir)) {
       rmSync(testDir, { recursive: true, force: true });
     }
+    delete process.env.TAKT_PROVIDER_PROFILES;
   });
 
   it('loads provider_profiles from project config', () => {
@@ -59,6 +60,74 @@ describe('project provider_profiles', () => {
     const config = loadProjectConfig(testDir);
 
     expect(config.providerProfiles?.codex?.stepPermissionOverrides?.implement).toBe('full');
+  });
+
+  it('loads provider_profiles from TAKT_PROVIDER_PROFILES env override', () => {
+    const taktDir = join(testDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(
+      join(taktDir, 'config.yaml'),
+      [
+        'provider_profiles:',
+        '  cursor:',
+        '    default_permission_mode: full',
+      ].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_PROFILES = JSON.stringify({
+      codex: {
+        default_permission_mode: 'edit',
+        step_permission_overrides: {
+          implement: 'full',
+        },
+      },
+    });
+
+    const config = loadProjectConfig(testDir);
+
+    expect(config.providerProfiles).toEqual({
+      codex: {
+        defaultPermissionMode: 'edit',
+        stepPermissionOverrides: {
+          implement: 'full',
+        },
+      },
+    });
+  });
+
+  it('prefers TAKT_PROVIDER_PROFILES env override over project config provider_profiles', () => {
+    const taktDir = join(testDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(
+      join(taktDir, 'config.yaml'),
+      [
+        'provider_profiles:',
+        '  codex:',
+        '    default_permission_mode: full',
+        '    step_permission_overrides:',
+        '      implement: edit',
+      ].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_PROFILES = JSON.stringify({
+      codex: {
+        default_permission_mode: 'readonly',
+        step_permission_overrides: {
+          implement: 'full',
+        },
+      },
+    });
+
+    const config = loadProjectConfig(testDir);
+
+    expect(config.providerProfiles).toEqual({
+      codex: {
+        defaultPermissionMode: 'readonly',
+        stepPermissionOverrides: {
+          implement: 'full',
+        },
+      },
+    });
   });
 
   it('rejects the removed provider profile override key in project config', () => {
