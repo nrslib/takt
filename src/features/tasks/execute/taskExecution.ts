@@ -2,13 +2,13 @@
  * Task execution logic
  */
 
-import { loadPieceByIdentifier, isPiecePath, resolvePieceConfigValues } from '../../../infra/config/index.js';
+import { loadWorkflowByIdentifier, isWorkflowPath, resolveWorkflowConfigValues } from '../../../infra/config/index.js';
 import { resolveProviderOptionsWithTrace } from '../../../infra/config/resolveConfigValue.js';
 import { TaskRunner, type TaskInfo } from '../../../infra/task/index.js';
 import { info, error } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
-import { executePiece } from './pieceExecution.js';
-import type { TaskExecutionOptions, ExecuteTaskOptions, PieceExecutionResult } from './types.js';
+import { executeWorkflow } from './workflowExecution.js';
+import type { TaskExecutionOptions, ExecuteTaskOptions, WorkflowExecutionResult } from './types.js';
 import { resolveTaskExecution, resolveTaskIssue } from './resolveTask.js';
 import { postExecutionFlow } from './postExecution.js';
 import { buildBooleanTaskResult, buildTaskResult, persistExceededTaskResult, persistTaskError, persistPrFailedTaskResult, persistTaskResult } from './taskResultHandler.js';
@@ -25,49 +25,49 @@ type TaskExecutionParallelOptions = {
   taskDisplayLabel?: string;
 };
 
-async function executeTaskWithResult(options: ExecuteTaskOptions): Promise<PieceExecutionResult> {
+async function executeTaskWithResult(options: ExecuteTaskOptions): Promise<WorkflowExecutionResult> {
   const {
     task,
     cwd,
-    pieceIdentifier,
+    workflowIdentifier,
     projectCwd,
     agentOverrides,
     interactiveUserInput,
     interactiveMetadata,
-    startMovement,
+    startStep,
     retryNote,
     reportDirName,
     abortSignal,
     taskPrefix,
     taskColorIndex,
     taskDisplayLabel,
-    maxMovementsOverride,
+    maxStepsOverride,
     initialIterationOverride,
   } = options;
-  const pieceConfig = loadPieceByIdentifier(pieceIdentifier, projectCwd);
-  const safePieceIdentifier = sanitizeTerminalText(pieceIdentifier);
+  const workflowConfig = loadWorkflowByIdentifier(workflowIdentifier, projectCwd);
+  const safeWorkflowIdentifier = sanitizeTerminalText(workflowIdentifier);
 
-  if (!pieceConfig) {
-    if (isPiecePath(pieceIdentifier)) {
-      error(`Workflow file not found: ${safePieceIdentifier}`);
-      return { success: false, reason: `Workflow file not found: ${safePieceIdentifier}` };
+  if (!workflowConfig) {
+    if (isWorkflowPath(workflowIdentifier)) {
+      error(`Workflow file not found: ${safeWorkflowIdentifier}`);
+      return { success: false, reason: `Workflow file not found: ${safeWorkflowIdentifier}` };
     } else {
-      error(`Workflow "${safePieceIdentifier}" not found.`);
-      info('Available workflows are searched in .takt/workflows/, .takt/pieces/, ~/.takt/workflows/, then ~/.takt/pieces/.');
-      info('If the same workflow name exists in multiple locations, project workflows/ take priority over project pieces/, then user workflows/, then user pieces/.');
+      error(`Workflow "${safeWorkflowIdentifier}" not found.`);
+      info('Available workflows are searched in .takt/workflows/ and ~/.takt/workflows/.');
+      info('If the same workflow name exists in multiple locations, project workflows/ take priority over user workflows/.');
       info('Specify a valid workflow when creating tasks (e.g., via "takt add").');
-      return { success: false, reason: `Workflow "${safePieceIdentifier}" not found.` };
+      return { success: false, reason: `Workflow "${safeWorkflowIdentifier}" not found.` };
     }
   }
 
-  log.debug('Running piece', {
-    name: pieceConfig.name,
-    movements: pieceConfig.movements.map((s: { name: string }) => s.name),
+  log.debug('Running workflow', {
+    name: workflowConfig.name,
+    steps: workflowConfig.steps.map((s: { name: string }) => s.name),
   });
 
-  const config = resolvePieceConfigValues(projectCwd, ['language', 'personaProviders', 'providerProfiles']);
+  const config = resolveWorkflowConfigValues(projectCwd, ['language', 'personaProviders', 'providerProfiles']);
   const providerOptions = resolveProviderOptionsWithTrace(projectCwd);
-  return await executePiece(pieceConfig, task, cwd, {
+  return await executeWorkflow(workflowConfig, task, cwd, {
     projectCwd,
     language: config.language,
     provider: agentOverrides?.provider,
@@ -79,20 +79,20 @@ async function executeTaskWithResult(options: ExecuteTaskOptions): Promise<Piece
     providerProfiles: config.providerProfiles,
     interactiveUserInput,
     interactiveMetadata,
-    startMovement,
+    startStep,
     retryNote,
     reportDirName,
     abortSignal,
     taskPrefix,
     taskColorIndex,
     taskDisplayLabel,
-    maxMovementsOverride,
+    maxStepsOverride,
     initialIterationOverride,
   });
 }
 
 /**
- * Execute a single task with piece.
+ * Execute a single task with workflow.
  */
 export async function executeTask(options: ExecuteTaskOptions): Promise<boolean> {
   const result = await executeTaskWithResult(options);
@@ -100,7 +100,7 @@ export async function executeTask(options: ExecuteTaskOptions): Promise<boolean>
 }
 
 /**
- * Execute a task: resolve clone → run piece → auto-commit+push → remove clone → record completion.
+ * Execute a task: resolve clone → run workflow → auto-commit+push → remove clone → record completion.
  *
  * Shared by runAllTasks() and watchTasks() to avoid duplicated
  * resolve → execute → autoCommit → complete logic.
@@ -134,20 +134,20 @@ export async function executeAndCompleteTask(
   try {
     const {
       execCwd,
-      execPiece,
+      workflowIdentifier,
       isWorktree,
       taskPrompt,
       reportDirName,
       branch,
       worktreePath,
       baseBranch,
-      startMovement,
+      startStep,
       retryNote,
       autoPr,
       draftPr,
       shouldPublishBranchToOrigin,
       issueNumber,
-      maxMovementsOverride,
+      maxStepsOverride,
       initialIterationOverride,
     } = await resolveTaskExecution(task, cwd, taskAbortSignal);
 
@@ -155,17 +155,17 @@ export async function executeAndCompleteTask(
     const taskRunResult = await executeTaskWithResult({
       task: taskPrompt ?? task.content,
       cwd: execCwd,
-      pieceIdentifier: execPiece,
+      workflowIdentifier,
       projectCwd: projectRootCwd,
       agentOverrides: taskExecutionOptions,
-      startMovement,
+      startStep,
       retryNote,
       reportDirName,
       abortSignal: taskAbortSignal,
       taskPrefix: parallelOptions?.taskPrefix,
       taskColorIndex: parallelOptions?.taskColorIndex,
       taskDisplayLabel: parallelOptions?.taskDisplayLabel,
-      maxMovementsOverride,
+      maxStepsOverride,
       initialIterationOverride,
     });
 
@@ -194,7 +194,7 @@ export async function executeAndCompleteTask(
         shouldCreatePr: autoPr,
         shouldPublishBranchToOrigin,
         draftPr,
-        pieceIdentifier: execPiece,
+        workflowIdentifier,
         issues,
       });
       prUrl = postResult.prUrl;

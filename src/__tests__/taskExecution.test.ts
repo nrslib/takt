@@ -5,14 +5,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { TaskInfo } from '../infra/task/index.js';
 
-const { mockResolveTaskExecution, mockResolveTaskIssue, mockExecutePiece, mockLoadPieceByIdentifier, mockIsPiecePath, mockResolvePieceConfigValues, mockResolveProviderOptionsWithTrace, mockBuildBooleanTaskResult, mockBuildTaskResult, mockPersistTaskResult, mockPersistPrFailedTaskResult, mockPersistTaskError, mockPostExecutionFlow } =
+const { mockResolveTaskExecution, mockResolveTaskIssue, mockExecuteWorkflow, mockLoadWorkflowByIdentifier, mockIsWorkflowPath, mockResolveWorkflowConfigValues, mockResolveProviderOptionsWithTrace, mockBuildBooleanTaskResult, mockBuildTaskResult, mockPersistTaskResult, mockPersistPrFailedTaskResult, mockPersistTaskError, mockPostExecutionFlow } =
   vi.hoisted(() => ({
     mockResolveTaskExecution: vi.fn(),
     mockResolveTaskIssue: vi.fn(),
-    mockExecutePiece: vi.fn(),
-    mockLoadPieceByIdentifier: vi.fn(),
-    mockIsPiecePath: vi.fn(() => false),
-    mockResolvePieceConfigValues: vi.fn(),
+    mockExecuteWorkflow: vi.fn(),
+    mockLoadWorkflowByIdentifier: vi.fn(),
+    mockIsWorkflowPath: vi.fn(() => false),
+    mockResolveWorkflowConfigValues: vi.fn(),
     mockResolveProviderOptionsWithTrace: vi.fn(),
     mockBuildBooleanTaskResult: vi.fn(),
     mockBuildTaskResult: vi.fn(),
@@ -27,8 +27,8 @@ vi.mock('../features/tasks/execute/resolveTask.js', () => ({
   resolveTaskIssue: (...args: unknown[]) => mockResolveTaskIssue(...args),
 }));
 
-vi.mock('../features/tasks/execute/pieceExecution.js', () => ({
-  executePiece: (...args: unknown[]) => mockExecutePiece(...args),
+vi.mock('../features/tasks/execute/workflowExecution.js', () => ({
+  executeWorkflow: (...args: unknown[]) => mockExecuteWorkflow(...args),
 }));
 
 vi.mock('../features/tasks/execute/taskResultHandler.js', () => ({
@@ -44,9 +44,9 @@ vi.mock('../features/tasks/execute/postExecution.js', () => ({
 }));
 
 vi.mock('../infra/config/index.js', () => ({
-  loadPieceByIdentifier: (...args: unknown[]) => mockLoadPieceByIdentifier(...args),
-  isPiecePath: (...args: unknown[]) => mockIsPiecePath(...args),
-  resolvePieceConfigValues: (...args: unknown[]) => mockResolvePieceConfigValues(...args),
+  loadWorkflowByIdentifier: (...args: unknown[]) => mockLoadWorkflowByIdentifier(...args),
+  isWorkflowPath: (...args: unknown[]) => mockIsWorkflowPath(...args),
+  resolveWorkflowConfigValues: (...args: unknown[]) => mockResolveWorkflowConfigValues(...args),
 }));
 
 vi.mock('../infra/config/resolveConfigValue.js', async (importOriginal) => ({
@@ -86,10 +86,10 @@ const createTask = (name: string): TaskInfo => ({
   filePath: `/tasks/${name}.yaml`,
   createdAt: '2026-02-16T00:00:00.000Z',
   status: 'pending',
-  data: { task: `Task: ${name}`, piece: 'default' },
+  data: { task: `Task: ${name}`, workflow: 'default' },
 });
 
-const executeAndCompleteTaskWithoutPiece = executeAndCompleteTask as (
+const executeAndCompleteTaskWithoutWorkflow = executeAndCompleteTask as (
   task: TaskInfo,
   taskRunner: unknown,
   projectCwd: string,
@@ -103,12 +103,12 @@ describe('executeAndCompleteTask', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    mockLoadPieceByIdentifier.mockReturnValue({
+    mockLoadWorkflowByIdentifier.mockReturnValue({
       name: 'default',
-      movements: [],
+      steps: [],
     });
-    mockIsPiecePath.mockReturnValue(false);
-    mockResolvePieceConfigValues.mockReturnValue({
+    mockIsWorkflowPath.mockReturnValue(false);
+    mockResolveWorkflowConfigValues.mockReturnValue({
       language: 'en',
       provider: 'claude',
       model: undefined,
@@ -130,7 +130,7 @@ describe('executeAndCompleteTask', () => {
     mockBuildTaskResult.mockReturnValue({ success: true });
     mockResolveTaskExecution.mockResolvedValue({
       execCwd: '/project',
-      execPiece: 'default',
+      workflowIdentifier: 'default',
       isWorktree: false,
       autoPr: false,
       draftPr: false,
@@ -140,20 +140,20 @@ describe('executeAndCompleteTask', () => {
       branch: undefined,
       worktreePath: undefined,
       baseBranch: undefined,
-      startMovement: undefined,
+      startStep: undefined,
       retryNote: undefined,
       issueNumber: undefined,
     });
-    mockExecutePiece.mockResolvedValue({ success: true });
+    mockExecuteWorkflow.mockResolvedValue({ success: true });
     mockResolveTaskIssue.mockReturnValue(undefined);
   });
 
-  it('should pass taskDisplayLabel from parallel options into executePiece', async () => {
+  it('should pass taskDisplayLabel from parallel options into executeWorkflow', async () => {
     const task = createTask('task-with-issue');
     const taskDisplayLabel = '#12345';
     const abortController = new AbortController();
 
-    await executeAndCompleteTaskWithoutPiece(
+    await executeAndCompleteTaskWithoutWorkflow(
       task,
       {} as never,
       '/project',
@@ -166,107 +166,107 @@ describe('executeAndCompleteTask', () => {
       },
     );
 
-    expect(mockExecutePiece).toHaveBeenCalledTimes(1);
-    const pieceExecutionOptions = mockExecutePiece.mock.calls[0]?.[3] as {
+    expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+    const workflowExecutionOptions = mockExecuteWorkflow.mock.calls[0]?.[3] as {
       taskDisplayLabel?: string;
       taskPrefix?: string;
       providerOptions?: unknown;
       providerOptionsSource?: string;
       providerOptionsOriginResolver?: (path: string) => string;
     };
-    expect(pieceExecutionOptions?.taskDisplayLabel).toBe(taskDisplayLabel);
-    expect(pieceExecutionOptions?.taskPrefix).toBe(taskDisplayLabel);
-    expect(pieceExecutionOptions?.providerOptions).toEqual({
+    expect(workflowExecutionOptions?.taskDisplayLabel).toBe(taskDisplayLabel);
+    expect(workflowExecutionOptions?.taskPrefix).toBe(taskDisplayLabel);
+    expect(workflowExecutionOptions?.providerOptions).toEqual({
       claude: { sandbox: { allowUnsandboxedCommands: true } },
     });
-    expect(pieceExecutionOptions?.providerOptionsSource).toBe('project');
-    expect(pieceExecutionOptions?.providerOptionsOriginResolver?.('claude.sandbox.allowUnsandboxedCommands'))
+    expect(workflowExecutionOptions?.providerOptionsSource).toBe('project');
+    expect(workflowExecutionOptions?.providerOptionsOriginResolver?.('claude.sandbox.allowUnsandboxedCommands'))
       .toBe('local');
   });
 
-  it('should not pass config provider/model to executePiece when agent overrides are absent', async () => {
+  it('should not pass config provider/model to executeWorkflow when agent overrides are absent', async () => {
     const task = createTask('task-with-defaults');
 
     await executeTask({
       task: task.content,
       cwd: '/project',
       projectCwd: '/project',
-      pieceIdentifier: 'default',
+      workflowIdentifier: 'default',
     });
 
-    expect(mockExecutePiece).toHaveBeenCalledTimes(1);
-    const pieceExecutionOptions = mockExecutePiece.mock.calls[0]?.[3] as {
+    expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+    const workflowExecutionOptions = mockExecuteWorkflow.mock.calls[0]?.[3] as {
       provider?: string;
       model?: string;
     };
-    expect(pieceExecutionOptions?.provider).toBeUndefined();
-    expect(pieceExecutionOptions?.model).toBeUndefined();
+    expect(workflowExecutionOptions?.provider).toBeUndefined();
+    expect(workflowExecutionOptions?.model).toBeUndefined();
   });
 
-  it('should pass agent overrides to executePiece when provided', async () => {
+  it('should pass agent overrides to executeWorkflow when provided', async () => {
     const task = createTask('task-with-overrides');
 
     await executeTask({
       task: task.content,
       cwd: '/project',
       projectCwd: '/project',
-      pieceIdentifier: 'default',
+      workflowIdentifier: 'default',
       agentOverrides: {
         provider: 'codex',
         model: 'gpt-5.3-codex',
       },
     });
 
-    expect(mockExecutePiece).toHaveBeenCalledTimes(1);
-    const pieceExecutionOptions = mockExecutePiece.mock.calls[0]?.[3] as {
+    expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+    const workflowExecutionOptions = mockExecuteWorkflow.mock.calls[0]?.[3] as {
       provider?: string;
       model?: string;
     };
-    expect(pieceExecutionOptions?.provider).toBe('codex');
-    expect(pieceExecutionOptions?.model).toBe('gpt-5.3-codex');
+    expect(workflowExecutionOptions?.provider).toBe('codex');
+    expect(workflowExecutionOptions?.model).toBe('gpt-5.3-codex');
   });
 
   it('should use workflow terminology when named workflow is missing', async () => {
-    mockLoadPieceByIdentifier.mockReturnValueOnce(undefined);
+    mockLoadWorkflowByIdentifier.mockReturnValueOnce(undefined);
 
     const result = await executeTask({
       task: 'Task: missing workflow',
       cwd: '/project',
       projectCwd: '/project',
-      pieceIdentifier: 'missing-workflow',
+      workflowIdentifier: 'missing-workflow',
     });
 
     expect(result).toBe(false);
     expect(mockError).toHaveBeenCalledWith('Workflow "missing-workflow" not found.');
-    expect(mockInfo).toHaveBeenCalledWith('Available workflows are searched in .takt/workflows/, .takt/pieces/, ~/.takt/workflows/, then ~/.takt/pieces/.');
-    expect(mockInfo).toHaveBeenCalledWith('If the same workflow name exists in multiple locations, project workflows/ take priority over project pieces/, then user workflows/, then user pieces/.');
+    expect(mockInfo).toHaveBeenCalledWith('Available workflows are searched in .takt/workflows/ and ~/.takt/workflows/.');
+    expect(mockInfo).toHaveBeenCalledWith('If the same workflow name exists in multiple locations, project workflows/ take priority over user workflows/.');
     expect(mockInfo).toHaveBeenCalledWith('Specify a valid workflow when creating tasks (e.g., via "takt add").');
   });
 
   it('should use workflow file terminology when workflow path is missing', async () => {
-    mockLoadPieceByIdentifier.mockReturnValueOnce(undefined);
-    mockIsPiecePath.mockReturnValueOnce(true);
+    mockLoadWorkflowByIdentifier.mockReturnValueOnce(undefined);
+    mockIsWorkflowPath.mockReturnValueOnce(true);
 
     const result = await executeTask({
       task: 'Task: missing workflow file',
       cwd: '/project',
       projectCwd: '/project',
-      pieceIdentifier: './custom-workflow.yaml',
+      workflowIdentifier: './custom-workflow.yaml',
     });
 
     expect(result).toBe(false);
     expect(mockError).toHaveBeenCalledWith('Workflow file not found: ./custom-workflow.yaml');
-    expect(mockInfo).not.toHaveBeenCalledWith('Available workflows are searched in .takt/workflows/, .takt/pieces/, ~/.takt/workflows/, then ~/.takt/pieces/.');
+    expect(mockInfo).not.toHaveBeenCalledWith('Available workflows are searched in .takt/workflows/ and ~/.takt/workflows/.');
   });
 
   it('should sanitize workflow identifiers in terminal errors', async () => {
-    mockLoadPieceByIdentifier.mockReturnValueOnce(undefined);
+    mockLoadWorkflowByIdentifier.mockReturnValueOnce(undefined);
 
     const result = await executeTask({
       task: 'Task: missing workflow',
       cwd: '/project',
       projectCwd: '/project',
-      pieceIdentifier: 'bad\x1b[31m-name\n',
+      workflowIdentifier: 'bad\x1b[31m-name\n',
     });
 
     expect(result).toBe(false);
@@ -277,7 +277,7 @@ describe('executeAndCompleteTask', () => {
     const task = createTask('task-with-pr-failure');
     mockResolveTaskExecution.mockResolvedValue({
       execCwd: '/worktree/clone',
-      execPiece: 'default',
+      workflowIdentifier: 'default',
       isWorktree: true,
       autoPr: true,
       draftPr: false,
@@ -287,14 +287,14 @@ describe('executeAndCompleteTask', () => {
       branch: 'takt/task-with-pr-failure',
       worktreePath: '/worktree/clone',
       baseBranch: 'main',
-      startMovement: undefined,
+      startStep: undefined,
       retryNote: undefined,
       issueNumber: undefined,
     });
-    mockExecutePiece.mockResolvedValue({ success: true });
+    mockExecuteWorkflow.mockResolvedValue({ success: true });
     mockPostExecutionFlow.mockResolvedValue({ prFailed: true, prError: 'Base ref must be a branch' });
 
-    const result = await executeAndCompleteTaskWithoutPiece(task, {} as never, '/project');
+    const result = await executeAndCompleteTaskWithoutWorkflow(task, {} as never, '/project');
 
     expect(result).toBe(true);
     expect(mockBuildTaskResult).toHaveBeenCalledWith(
@@ -314,7 +314,7 @@ describe('executeAndCompleteTask', () => {
     const task = createTask('task-projectdir-nff');
     mockResolveTaskExecution.mockResolvedValue({
       execCwd: '/worktree/clone',
-      execPiece: 'default',
+      workflowIdentifier: 'default',
       isWorktree: true,
       autoPr: true,
       draftPr: false,
@@ -324,18 +324,18 @@ describe('executeAndCompleteTask', () => {
       branch: 'takt/task-projectdir-nff',
       worktreePath: '/worktree/clone',
       baseBranch: 'main',
-      startMovement: undefined,
+      startStep: undefined,
       retryNote: undefined,
       issueNumber: undefined,
     });
-    mockExecutePiece.mockResolvedValue({ success: true });
+    mockExecuteWorkflow.mockResolvedValue({ success: true });
     const prError =
       'Failed to push branch to origin. Command failed: git push\n' +
       '! [rejected] (non-fast-forward)\n' +
       'Push rejected (non-fast-forward): remote is ahead; resync or recreate worktree; stale local branch may apply.';
     mockPostExecutionFlow.mockResolvedValue({ prFailed: true, prError });
 
-    const result = await executeAndCompleteTaskWithoutPiece(task, {} as never, '/project');
+    const result = await executeAndCompleteTaskWithoutWorkflow(task, {} as never, '/project');
 
     expect(result).toBe(true);
     expect(mockPersistPrFailedTaskResult).toHaveBeenCalledWith(
@@ -350,7 +350,7 @@ describe('executeAndCompleteTask', () => {
     const task = createTask('task-with-pr-success');
     mockResolveTaskExecution.mockResolvedValue({
       execCwd: '/worktree/clone',
-      execPiece: 'default',
+      workflowIdentifier: 'default',
       isWorktree: true,
       autoPr: true,
       draftPr: false,
@@ -360,14 +360,14 @@ describe('executeAndCompleteTask', () => {
       branch: 'takt/task-with-pr-success',
       worktreePath: '/worktree/clone',
       baseBranch: 'main',
-      startMovement: undefined,
+      startStep: undefined,
       retryNote: undefined,
       issueNumber: undefined,
     });
-    mockExecutePiece.mockResolvedValue({ success: true });
+    mockExecuteWorkflow.mockResolvedValue({ success: true });
     mockPostExecutionFlow.mockResolvedValue({ prUrl: 'https://github.com/org/repo/pull/1' });
 
-    const result = await executeAndCompleteTaskWithoutPiece(task, {} as never, '/project');
+    const result = await executeAndCompleteTaskWithoutWorkflow(task, {} as never, '/project');
 
     expect(result).toBe(true);
     expect(mockBuildTaskResult).toHaveBeenCalledWith(
@@ -384,7 +384,7 @@ describe('executeAndCompleteTask', () => {
 
     mockResolveTaskExecution.mockResolvedValue({
       execCwd: '/worktree/clone',
-      execPiece: 'default',
+      workflowIdentifier: 'default',
       isWorktree: true,
       autoPr: true,
       draftPr: false,
@@ -394,14 +394,14 @@ describe('executeAndCompleteTask', () => {
       branch: 'takt/18/task-with-issue-pr',
       worktreePath: '/worktree/clone',
       baseBranch: 'main',
-      startMovement: undefined,
+      startStep: undefined,
       retryNote: undefined,
       issueNumber: 18,
     });
     mockResolveTaskIssue.mockReturnValue([issue]);
     mockPostExecutionFlow.mockResolvedValue({ prUrl: 'https://github.com/org/repo/pull/18' });
 
-    const result = await executeAndCompleteTaskWithoutPiece(task, {} as never, '/project');
+    const result = await executeAndCompleteTaskWithoutWorkflow(task, {} as never, '/project');
 
     expect(result).toBe(true);
     expect(mockResolveTaskIssue).toHaveBeenCalledWith(18, '/project');
@@ -418,7 +418,7 @@ describe('executeAndCompleteTask', () => {
     const task = createTask('task-publish-origin');
     mockResolveTaskExecution.mockResolvedValue({
       execCwd: '/worktree/clone',
-      execPiece: 'default',
+      workflowIdentifier: 'default',
       isWorktree: true,
       autoPr: false,
       draftPr: false,
@@ -428,14 +428,14 @@ describe('executeAndCompleteTask', () => {
       branch: 'takt/task-publish-origin',
       worktreePath: '/worktree/clone',
       baseBranch: 'main',
-      startMovement: undefined,
+      startStep: undefined,
       retryNote: undefined,
       issueNumber: undefined,
     });
-    mockExecutePiece.mockResolvedValue({ success: true });
+    mockExecuteWorkflow.mockResolvedValue({ success: true });
     mockPostExecutionFlow.mockResolvedValue({});
 
-    const result = await executeAndCompleteTaskWithoutPiece(task, {} as never, '/project');
+    const result = await executeAndCompleteTaskWithoutWorkflow(task, {} as never, '/project');
 
     expect(result).toBe(true);
     expect(mockPostExecutionFlow).toHaveBeenCalledWith(
@@ -452,7 +452,7 @@ describe('executeAndCompleteTask', () => {
     const task = createTask('task-pr-style-push-failure');
     mockResolveTaskExecution.mockResolvedValue({
       execCwd: '/worktree/clone',
-      execPiece: 'default',
+      workflowIdentifier: 'default',
       isWorktree: true,
       autoPr: false,
       draftPr: false,
@@ -462,17 +462,17 @@ describe('executeAndCompleteTask', () => {
       branch: 'takt/task-pr-style-push-failure',
       worktreePath: '/worktree/clone',
       baseBranch: 'main',
-      startMovement: undefined,
+      startStep: undefined,
       retryNote: undefined,
       issueNumber: undefined,
     });
-    mockExecutePiece.mockResolvedValue({ success: true });
+    mockExecuteWorkflow.mockResolvedValue({ success: true });
     mockPostExecutionFlow.mockResolvedValue({
       prFailed: true,
       prError: 'Failed to push branch to origin from clone. non-fast-forward',
     });
 
-    const result = await executeAndCompleteTaskWithoutPiece(task, {} as never, '/project');
+    const result = await executeAndCompleteTaskWithoutWorkflow(task, {} as never, '/project');
 
     expect(result).toBe(true);
     expect(mockPersistPrFailedTaskResult).toHaveBeenCalledWith(
@@ -488,7 +488,7 @@ describe('executeAndCompleteTask', () => {
     const task = createTask('task-with-autocommit-failure');
     mockResolveTaskExecution.mockResolvedValue({
       execCwd: '/worktree/clone',
-      execPiece: 'default',
+      workflowIdentifier: 'default',
       isWorktree: true,
       autoPr: false,
       draftPr: false,
@@ -498,17 +498,17 @@ describe('executeAndCompleteTask', () => {
       branch: 'takt/task-with-autocommit-failure',
       worktreePath: '/worktree/clone',
       baseBranch: 'main',
-      startMovement: undefined,
+      startStep: undefined,
       retryNote: undefined,
       issueNumber: undefined,
     });
-    mockExecutePiece.mockResolvedValue({ success: true });
+    mockExecuteWorkflow.mockResolvedValue({ success: true });
     mockPostExecutionFlow.mockResolvedValue({
       taskFailed: true,
       taskError: 'Auto-commit failed before PR creation.',
     });
 
-    const result = await executeAndCompleteTaskWithoutPiece(task, {} as never, '/project');
+    const result = await executeAndCompleteTaskWithoutWorkflow(task, {} as never, '/project');
 
     expect(result).toBe(false);
     expect(mockBuildBooleanTaskResult).toHaveBeenCalledWith(
@@ -529,7 +529,7 @@ describe('executeAndCompleteTask', () => {
     const task = createTask('task-with-local-push-failure');
     mockResolveTaskExecution.mockResolvedValue({
       execCwd: '/worktree/clone',
-      execPiece: 'default',
+      workflowIdentifier: 'default',
       isWorktree: true,
       autoPr: false,
       draftPr: false,
@@ -539,17 +539,17 @@ describe('executeAndCompleteTask', () => {
       branch: 'takt/task-with-local-push-failure',
       worktreePath: '/worktree/clone',
       baseBranch: 'main',
-      startMovement: undefined,
+      startStep: undefined,
       retryNote: undefined,
       issueNumber: undefined,
     });
-    mockExecutePiece.mockResolvedValue({ success: true });
+    mockExecuteWorkflow.mockResolvedValue({ success: true });
     mockPostExecutionFlow.mockResolvedValue({
       taskFailed: true,
       taskError: 'Push to main repo failed after commit creation.',
     });
 
-    const result = await executeAndCompleteTaskWithoutPiece(task, {} as never, '/project');
+    const result = await executeAndCompleteTaskWithoutWorkflow(task, {} as never, '/project');
 
     expect(result).toBe(false);
     expect(mockBuildBooleanTaskResult).toHaveBeenCalledWith(

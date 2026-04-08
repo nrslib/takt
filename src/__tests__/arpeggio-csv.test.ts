@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { parseCsv, CsvDataSource } from '../core/piece/arpeggio/csv-data-source.js';
+import { parseCsv, CsvDataSource } from '../core/workflow/arpeggio/csv-data-source.js';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';

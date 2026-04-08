@@ -24,15 +24,15 @@ describe('E2E: Quiet mode (--quiet)', () => {
   });
 
   it('should suppress AI stream output in quiet mode', () => {
-    // Given: a simple piece and scenario
-    const piecePath = resolve(__dirname, '../fixtures/pieces/mock-single-step.yaml');
+    // Given: a simple workflow and scenario
+    const workflowPath = resolve(__dirname, '../fixtures/workflows/mock-single-step.yaml');
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/execute-done.json');
 
     // When: running with --quiet flag
     const result = runTakt({
       args: [
         '--task', 'Test quiet mode',
-        '--piece', piecePath,
+        '--workflow', workflowPath,
         '--provider', 'mock',
         '--quiet',
       ],

@@ -18,7 +18,7 @@
 1. `takt list` で `failed` タスクに `Retry` を選ぶ。
 2. `retryFailedTask()` が `TaskRunner.requeueFailedTask()` を呼ぶ。
 3. 失敗タスク配下の元タスクファイルを `.takt/tasks/` にコピーする。
-4. YAML タスクの場合のみ、必要に応じて `start_movement` と `retry_note` を書き換える。
+4. YAML タスクの場合のみ、必要に応じて `start_step` と `retry_note` を書き換える。
 
 参照:
 - `src/features/tasks/list/taskRetryActions.ts`
@@ -27,26 +27,26 @@
 ## 重要: Retry で復元される情報
 
 `requeueFailedTask()` はタスクファイルに `sessionId` を書き戻さない。  
-復元対象は `start_movement` と `retry_note` のみ。
+復元対象は `start_step` と `retry_note` のみ。
 
 つまり、`failed` タスクを `Retry` しても「その failed ディレクトリに紐づくセッションID」を直接復元する実装にはなっていない。
 
 ## セッション再開の実際
 
-再実行時の `pieceExecution` で、プロジェクト保存済みセッションをロードして `initialSessions` に渡す。
+再実行時の `workflowExecution` で、プロジェクト保存済みセッションをロードして `initialSessions` に渡す。
 
 - 通常実行: `loadPersonaSessions(projectCwd, provider)`
 - worktree 実行: `loadWorktreeSessions(projectCwd, cwd, provider)`
 
-その後、各 movement の Phase 1 実行で `OptionsBuilder.buildAgentOptions()` が `sessionId` を組み立てる。
+その後、各 step の Phase 1 実行で `OptionsBuilder.buildAgentOptions()` が `sessionId` を組み立てる。
 
 参照:
-- `src/features/tasks/execute/pieceExecution.ts`
-- `src/core/piece/engine/OptionsBuilder.ts`
+- `src/features/tasks/execute/workflowExecution.ts`
+- `src/core/workflow/engine/OptionsBuilder.ts`
 
 ## セッション再開しない条件
 
-- movement 側が `session: refresh` の場合。
+- step 側が `session: refresh` の場合。
 - `cwd !== projectCwd` など、セッション再開を抑止する条件に当たる場合。
 
 このため、`Retry` で常に同じ会話が厳密再開されるわけではない。

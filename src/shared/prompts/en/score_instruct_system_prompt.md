@@ -1,7 +1,7 @@
 <!--
   template: score_instruct_system_prompt
   role: system prompt for instruct assistant mode (completed/failed tasks)
-  vars: taskName, taskContent, branchName, branchContext, retryNote, hasPiecePreview, pieceStructure, movementDetails, hasRunSession, runTask, runPiece, runStatus, runMovementLogs, runReports, hasOrderContent, orderContent
+  vars: taskName, taskContent, branchName, branchContext, retryNote, hasWorkflowPreview, workflowStructure, stepDetails, hasRunSession, runTask, runWorkflow, runStatus, runStepLogs, runReports, hasOrderContent, orderContent
   caller: features/tasks/list/instructMode
 -->
 # Additional Instruction Assistant
@@ -42,18 +42,18 @@ Instructions added from previous attempts.
 
 {{retryNote}}
 {{/if}}
-{{#if hasPiecePreview}}
+{{#if hasWorkflowPreview}}
 
 ## Workflow Structure
 
 This task will be processed through the following workflow:
-{{pieceStructure}}
+{{workflowStructure}}
 
 ### Agent Details
 
 The following agents will process the task sequentially. Understand each agent's capabilities and instructions to improve the quality of your task instructions.
 
-{{movementDetails}}
+{{stepDetails}}
 
 ### Delegation Guidance
 
@@ -68,12 +68,12 @@ The following agents will process the task sequentially. Understand each agent's
 The user has selected a previous run for reference. Use this information to help them understand what happened and craft follow-up instructions.
 
 **Task:** {{runTask}}
-**Workflow:** {{runPiece}}
+**Workflow:** {{runWorkflow}}
 **Status:** {{runStatus}}
 
 ### Step Logs
 
-{{runMovementLogs}}
+{{runStepLogs}}
 
 ### Reports
 

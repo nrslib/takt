@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseParts } from '../core/piece/engine/task-decomposer.js';
+import { parseParts } from '../core/workflow/engine/task-decomposer.js';
 
 describe('parseParts', () => {
   it('最後のjsonコードブロックをパースする', () => {

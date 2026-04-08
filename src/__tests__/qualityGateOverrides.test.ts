@@ -4,15 +4,15 @@
 
 import { describe, it, expect } from 'vitest';
 import { applyQualityGateOverrides } from '../infra/config/loaders/qualityGateOverrides.js';
-import type { PieceOverrides } from '../core/models/config-types.js';
+import type { WorkflowOverrides } from '../core/models/config-types.js';
 
 type ApplyOverridesArgs = [
   string,
   string[] | undefined,
   boolean | undefined,
   string | undefined,
-  PieceOverrides | undefined,
-  PieceOverrides | undefined,
+  WorkflowOverrides | undefined,
+  WorkflowOverrides | undefined,
 ];
 
 function applyOverrides(...args: ApplyOverridesArgs): string[] | undefined {
@@ -39,55 +39,55 @@ describe('applyQualityGateOverrides', () => {
 
   it('merges global override gates with YAML gates (additive)', () => {
     const yamlGates = ['Unit tests pass'];
-    const globalOverrides: PieceOverrides = {
+    const globalOverrides: WorkflowOverrides = {
       qualityGates: ['E2E tests pass'],
     };
     const result = applyOverrides('implement', yamlGates, true, undefined, undefined, globalOverrides);
     expect(result).toEqual(['E2E tests pass', 'Unit tests pass']);
   });
 
-  it('applies movement-specific override from global config', () => {
+  it('applies step-specific override from global config', () => {
     const yamlGates = ['Unit tests pass'];
-    const globalOverrides: PieceOverrides = {
+    const globalOverrides: WorkflowOverrides = {
       qualityGates: ['Global gate'],
-      movements: {
+      steps: {
         implement: {
-          qualityGates: ['Movement-specific gate'],
+          qualityGates: ['Step-specific gate'],
         },
       },
     };
     const result = applyOverrides('implement', yamlGates, true, undefined, undefined, globalOverrides);
-    expect(result).toEqual(['Global gate', 'Movement-specific gate', 'Unit tests pass']);
+    expect(result).toEqual(['Global gate', 'Step-specific gate', 'Unit tests pass']);
   });
 
   it('applies project overrides with higher priority than global', () => {
     const yamlGates = ['YAML gate'];
-    const globalOverrides: PieceOverrides = {
+    const globalOverrides: WorkflowOverrides = {
       qualityGates: ['Global gate'],
     };
-    const projectOverrides: PieceOverrides = {
+    const projectOverrides: WorkflowOverrides = {
       qualityGates: ['Project gate'],
     };
     const result = applyOverrides('implement', yamlGates, true, undefined, projectOverrides, globalOverrides);
     expect(result).toEqual(['Global gate', 'Project gate', 'YAML gate']);
   });
 
-  it('applies movement-specific override from project config', () => {
+  it('applies step-specific override from project config', () => {
     const yamlGates = ['YAML gate'];
-    const projectOverrides: PieceOverrides = {
-      movements: {
+    const projectOverrides: WorkflowOverrides = {
+      steps: {
         implement: {
-          qualityGates: ['Project movement gate'],
+          qualityGates: ['Project step gate'],
         },
       },
     };
     const result = applyOverrides('implement', yamlGates, true, undefined, projectOverrides, undefined);
-    expect(result).toEqual(['Project movement gate', 'YAML gate']);
+    expect(result).toEqual(['Project step gate', 'YAML gate']);
   });
 
   it('filters global gates when qualityGatesEditOnly=true and edit=false', () => {
     const yamlGates = ['YAML gate'];
-    const globalOverrides: PieceOverrides = {
+    const globalOverrides: WorkflowOverrides = {
       qualityGates: ['Global gate'],
       qualityGatesEditOnly: true,
     };
@@ -97,7 +97,7 @@ describe('applyQualityGateOverrides', () => {
 
   it('includes global gates when qualityGatesEditOnly=true and edit=true', () => {
     const yamlGates = ['YAML gate'];
-    const globalOverrides: PieceOverrides = {
+    const globalOverrides: WorkflowOverrides = {
       qualityGates: ['Global gate'],
       qualityGatesEditOnly: true,
     };
@@ -107,7 +107,7 @@ describe('applyQualityGateOverrides', () => {
 
   it('filters project global gates when qualityGatesEditOnly=true and edit=false', () => {
     const yamlGates = ['YAML gate'];
-    const projectOverrides: PieceOverrides = {
+    const projectOverrides: WorkflowOverrides = {
       qualityGates: ['Project gate'],
       qualityGatesEditOnly: true,
     };
@@ -115,54 +115,54 @@ describe('applyQualityGateOverrides', () => {
     expect(result).toEqual(['YAML gate']); // Project gate excluded because edit=false
   });
 
-  it('applies movement-specific gates regardless of qualityGatesEditOnly flag', () => {
+  it('applies step-specific gates regardless of qualityGatesEditOnly flag', () => {
     const yamlGates = ['YAML gate'];
-    const projectOverrides: PieceOverrides = {
+    const projectOverrides: WorkflowOverrides = {
       qualityGates: ['Project global gate'],
       qualityGatesEditOnly: true,
-      movements: {
+      steps: {
         review: {
           qualityGates: ['Review-specific gate'],
         },
       },
     };
     const result = applyOverrides('review', yamlGates, false, undefined, projectOverrides, undefined);
-    // Project global gate excluded (edit=false), but movement-specific gate included
+    // Project global gate excluded (edit=false), but step-specific gate included
     expect(result).toEqual(['Review-specific gate', 'YAML gate']);
   });
 
   it('handles complex priority scenario with all override types', () => {
     const yamlGates = ['YAML gate'];
-    const globalOverrides: PieceOverrides = {
+    const globalOverrides: WorkflowOverrides = {
       qualityGates: ['Global gate'],
-      movements: {
+      steps: {
         implement: {
-          qualityGates: ['Global movement gate'],
+          qualityGates: ['Global step gate'],
         },
       },
     };
-    const projectOverrides: PieceOverrides = {
+    const projectOverrides: WorkflowOverrides = {
       qualityGates: ['Project gate'],
-      movements: {
+      steps: {
         implement: {
-          qualityGates: ['Project movement gate'],
+          qualityGates: ['Project step gate'],
         },
       },
     };
     const result = applyOverrides('implement', yamlGates, true, undefined, projectOverrides, globalOverrides);
     expect(result).toEqual([
       'Global gate',
-      'Global movement gate',
+      'Global step gate',
       'Project gate',
-      'Project movement gate',
+      'Project step gate',
       'YAML gate',
     ]);
   });
 
-  it('returns YAML gates only when other movements are specified in overrides', () => {
+  it('returns YAML gates only when other steps are specified in overrides', () => {
     const yamlGates = ['YAML gate'];
-    const projectOverrides: PieceOverrides = {
-      movements: {
+    const projectOverrides: WorkflowOverrides = {
+      steps: {
         review: {
           qualityGates: ['Review gate'],
         },
@@ -182,16 +182,16 @@ describe('applyQualityGateOverrides', () => {
             qualityGates: ['Global persona gate'],
           },
         },
-      } as PieceOverrides;
+      } as WorkflowOverrides;
       const projectOverrides = {
         personas: {
           coder: {
             qualityGates: ['Project persona gate'],
           },
         },
-      } as PieceOverrides;
+      } as WorkflowOverrides;
 
-      // When: the movement is executed with the matching persona
+      // When: the step is executed with the matching persona
       const result = applyOverrides('implement', yamlGates, true, 'coder', projectOverrides, globalOverrides);
 
       // Then: gates are additive with global persona gates before project persona gates
@@ -207,22 +207,22 @@ describe('applyQualityGateOverrides', () => {
             qualityGates: ['Reviewer persona gate'],
           },
         },
-      } as PieceOverrides;
+      } as WorkflowOverrides;
 
-      // When: movement persona is coder
+      // When: step persona is coder
       const result = applyOverrides('implement', yamlGates, true, 'coder', projectOverrides, undefined);
 
       // Then: only YAML gates remain
       expect(result).toEqual(['YAML gate']);
     });
 
-    it('deduplicates gates across movement, persona, and YAML sources', () => {
+    it('deduplicates gates across step, persona, and YAML sources', () => {
       // Given: same gate appears in multiple override layers
       const yamlGates = ['Shared gate', 'YAML only'];
       const globalOverrides = {
-        movements: {
+        steps: {
           implement: {
-            qualityGates: ['Shared gate', 'Global movement only'],
+            qualityGates: ['Shared gate', 'Global step only'],
           },
         },
         personas: {
@@ -230,22 +230,22 @@ describe('applyQualityGateOverrides', () => {
             qualityGates: ['Shared gate', 'Global persona only'],
           },
         },
-      } as PieceOverrides;
+      } as WorkflowOverrides;
       const projectOverrides = {
         personas: {
           coder: {
             qualityGates: ['Shared gate', 'Project persona only'],
           },
         },
-      } as PieceOverrides;
+      } as WorkflowOverrides;
 
-      // When: overrides are merged for matching movement + persona
+      // When: overrides are merged for matching step + persona
       const result = applyOverrides('implement', yamlGates, true, 'coder', projectOverrides, globalOverrides);
 
       // Then: duplicates are removed, first appearance order is preserved
       expect(result).toEqual([
         'Shared gate',
-        'Global movement only',
+        'Global step only',
         'Global persona only',
         'Project persona only',
         'YAML only',
@@ -259,20 +259,20 @@ describe('applyQualityGateOverrides', () => {
             qualityGates: ['Project persona gate'],
           },
         },
-      } as PieceOverrides;
+      } as WorkflowOverrides;
       expect(() =>
         applyOverrides('implement', ['YAML gate'], true, '   ', projectOverrides, undefined)
-      ).toThrow('Invalid persona name for movement "implement": empty value');
+      ).toThrow('Invalid persona name for step "implement": empty value');
     });
   });
 
   describe('deduplication', () => {
     it('removes duplicate gates from multiple sources', () => {
       const yamlGates = ['Test 1', 'Test 2'];
-      const globalOverrides: PieceOverrides = {
+      const globalOverrides: WorkflowOverrides = {
         qualityGates: ['Test 2', 'Test 3'],
       };
-      const projectOverrides: PieceOverrides = {
+      const projectOverrides: WorkflowOverrides = {
         qualityGates: ['Test 1', 'Test 4'],
       };
       const result = applyOverrides('implement', yamlGates, true, undefined, projectOverrides, globalOverrides);
@@ -281,7 +281,7 @@ describe('applyQualityGateOverrides', () => {
     });
 
     it('removes duplicate gates from single source', () => {
-      const projectOverrides: PieceOverrides = {
+      const projectOverrides: WorkflowOverrides = {
         qualityGates: ['Test 1', 'Test 2', 'Test 1', 'Test 3', 'Test 2'],
       };
       const result = applyOverrides('implement', undefined, true, undefined, projectOverrides, undefined);
@@ -290,7 +290,7 @@ describe('applyQualityGateOverrides', () => {
 
     it('removes duplicate gates from YAML and overrides', () => {
       const yamlGates = ['npm run test', 'npm run lint'];
-      const projectOverrides: PieceOverrides = {
+      const projectOverrides: WorkflowOverrides = {
         qualityGates: ['npm run test', 'npm run build'],
       };
       const result = applyOverrides('implement', yamlGates, true, undefined, projectOverrides, undefined);

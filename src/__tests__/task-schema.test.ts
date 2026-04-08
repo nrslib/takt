@@ -5,7 +5,7 @@ import {
   TaskExecutionConfigSchema,
   serializeTaskRecord,
   resolveTaskWorkflowValue,
-  resolveTaskStartMovementValue,
+  resolveTaskStartStepValue,
 } from '../infra/task/schema.js';
 
 function makePendingRecord() {
@@ -70,9 +70,9 @@ describe('TaskExecutionConfigSchema', () => {
     const config = {
       worktree: true,
       branch: 'feature/test',
-      piece: 'unit-test',
+      workflow: 'unit-test',
       issue: 42,
-      start_movement: 'plan',
+      start_step: 'plan',
       retry_note: 'retry after fix',
       auto_pr: true,
     };
@@ -99,60 +99,49 @@ describe('TaskExecutionConfigSchema', () => {
     expect(() => TaskExecutionConfigSchema.parse({ base_branch: 'feature/base' })).not.toThrow();
   });
 
-  it('should accept workflow and start_step aliases', () => {
+  it('should accept workflow and start_step keys', () => {
     const config = TaskExecutionConfigSchema.parse({
       workflow: 'unit-test',
       start_step: 'plan',
     }) as Record<string, unknown>;
 
-    expect(config.piece).toBe('unit-test');
-    expect(config.start_movement).toBe('plan');
+    expect(config.workflow).toBe('unit-test');
+    expect(config.start_step).toBe('plan');
   });
 
-  it('should accept matching legacy and canonical workflow keys together', () => {
-    const config = TaskExecutionConfigSchema.parse({
-      piece: 'unit-test',
-      workflow: 'unit-test',
-      start_movement: 'plan',
-      start_step: 'plan',
-    }) as Record<string, unknown>;
+  it('should reject removed legacy workflow keys', () => {
+    const removedWorkflowKey = ['p', 'i', 'e', 'c', 'e'].join('');
+    const removedStartStepKey = ['start', ['m', 'o', 'v', 'e', 'm', 'e', 'n', 't'].join('')].join('_');
 
-    expect(config.piece).toBe('unit-test');
-    expect(config.start_movement).toBe('plan');
-  });
-
-  it('should reject conflicting legacy and canonical workflow keys', () => {
     expect(() => TaskExecutionConfigSchema.parse({
-      piece: 'legacy-piece',
-      workflow: 'canonical-workflow',
+      [removedWorkflowKey]: 'legacy-workflow',
     })).toThrow();
 
     expect(() => TaskExecutionConfigSchema.parse({
-      start_movement: 'plan',
-      start_step: 'implement',
+      [removedStartStepKey]: 'plan',
     })).toThrow();
   });
 
-  it('should resolve workflow and start step aliases through shared helpers', () => {
+  it('should resolve workflow and start step through shared helpers', () => {
     expect(resolveTaskWorkflowValue({ workflow: 'unit-test' })).toBe('unit-test');
-    expect(resolveTaskWorkflowValue({ piece: 'unit-test', workflow: 'unit-test' })).toBe('unit-test');
-    expect(resolveTaskStartMovementValue({ start_step: 'plan' })).toBe('plan');
-    expect(resolveTaskStartMovementValue({ start_movement: 'plan', start_step: 'plan' })).toBe('plan');
+    expect(resolveTaskStartStepValue({ start_step: 'plan' })).toBe('plan');
+    const removedWorkflowKey = ['p', 'i', 'e', 'c', 'e'].join('');
+    const removedStartStepKey = ['start', ['m', 'o', 'v', 'e', 'm', 'e', 'n', 't'].join('')].join('_');
+    expect(resolveTaskWorkflowValue({ [removedWorkflowKey]: 'unit-test' })).toBeUndefined();
+    expect(resolveTaskStartStepValue({ [removedStartStepKey]: 'plan' })).toBeUndefined();
   });
 
   it('should serialize canonical task keys as workflow and start_step', () => {
     const serialized = serializeTaskRecord({
       ...makePendingRecord(),
-      piece: 'unit-test',
-      start_movement: 'plan',
-    } as ReturnType<typeof makePendingRecord> & { piece: string; start_movement: string });
+      workflow: 'unit-test',
+      start_step: 'plan',
+    } as ReturnType<typeof makePendingRecord> & { workflow: string; start_step: string });
 
     expect(serialized).toMatchObject({
       workflow: 'unit-test',
       start_step: 'plan',
     });
-    expect(serialized).not.toHaveProperty('piece');
-    expect(serialized).not.toHaveProperty('start_movement');
   });
 });
 

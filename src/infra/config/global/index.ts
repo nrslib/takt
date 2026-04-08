@@ -7,7 +7,7 @@ export {
   loadGlobalConfig,
   saveGlobalConfig,
   getDisabledBuiltins,
-  getBuiltinPiecesEnabled,
+  getBuiltinWorkflowsEnabled,
   getLanguage,
   setLanguage,
   setProvider,
@@ -24,16 +24,16 @@ export {
 } from './globalConfig.js';
 
 export {
-  getBookmarkedPieces,
+  getBookmarkedWorkflows,
   addBookmark,
   removeBookmark,
   isBookmarked,
 } from './bookmarks.js';
 
 export {
-  getPieceCategoriesPath,
-  resetPieceCategories,
-} from './pieceCategories.js';
+  getWorkflowCategoriesPath,
+  resetWorkflowCategories,
+} from './workflowCategories.js';
 
 export {
   resetGlobalConfigToTemplate,

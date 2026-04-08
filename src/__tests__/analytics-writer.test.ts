@@ -12,7 +12,7 @@ import {
   isAnalyticsEnabled,
   writeAnalyticsEvent,
 } from '../features/analytics/index.js';
-import type { MovementResultEvent, ReviewFindingEvent } from '../features/analytics/index.js';
+import type { StepResultEvent, ReviewFindingEvent } from '../features/analytics/index.js';
 
 describe('AnalyticsWriter', () => {
   let testDir: string;
@@ -46,9 +46,9 @@ describe('AnalyticsWriter', () => {
     it('should not write when disabled', () => {
       initAnalyticsWriter(false, testDir);
 
-      const event: MovementResultEvent = {
-        type: 'movement_result',
-        movement: 'plan',
+      const event: StepResultEvent = {
+        type: 'step_result',
+        step: 'plan',
         provider: 'claude',
         model: 'sonnet',
         decisionTag: 'done',
@@ -68,9 +68,9 @@ describe('AnalyticsWriter', () => {
     it('should append event to date-based JSONL file', () => {
       initAnalyticsWriter(true, testDir);
 
-      const event: MovementResultEvent = {
-        type: 'movement_result',
-        movement: 'implement',
+      const event: StepResultEvent = {
+        type: 'step_result',
+        step: 'implement',
         provider: 'claude',
         model: 'sonnet',
         decisionTag: 'approved',
@@ -85,9 +85,9 @@ describe('AnalyticsWriter', () => {
       expect(existsSync(filePath)).toBe(true);
 
       const content = readFileSync(filePath, 'utf-8').trim();
-      const parsed = JSON.parse(content) as MovementResultEvent;
-      expect(parsed.type).toBe('movement_result');
-      expect(parsed.movement).toBe('implement');
+      const parsed = JSON.parse(content) as StepResultEvent;
+      expect(parsed.type).toBe('step_result');
+      expect(parsed.step).toBe('implement');
       expect(parsed.provider).toBe('claude');
       expect(parsed.decisionTag).toBe('approved');
     });
@@ -95,9 +95,9 @@ describe('AnalyticsWriter', () => {
     it('should append multiple events to the same file', () => {
       initAnalyticsWriter(true, testDir);
 
-      const event1: MovementResultEvent = {
-        type: 'movement_result',
-        movement: 'plan',
+      const event1: StepResultEvent = {
+        type: 'step_result',
+        step: 'plan',
         provider: 'claude',
         model: 'sonnet',
         decisionTag: 'done',
@@ -106,9 +106,9 @@ describe('AnalyticsWriter', () => {
         timestamp: '2026-02-18T10:00:00.000Z',
       };
 
-      const event2: MovementResultEvent = {
-        type: 'movement_result',
-        movement: 'implement',
+      const event2: StepResultEvent = {
+        type: 'step_result',
+        step: 'implement',
         provider: 'codex',
         model: 'o3',
         decisionTag: 'needs_fix',
@@ -124,18 +124,18 @@ describe('AnalyticsWriter', () => {
       const lines = readFileSync(filePath, 'utf-8').trim().split('\n');
       expect(lines).toHaveLength(2);
 
-      const parsed1 = JSON.parse(lines[0]) as MovementResultEvent;
-      const parsed2 = JSON.parse(lines[1]) as MovementResultEvent;
-      expect(parsed1.movement).toBe('plan');
-      expect(parsed2.movement).toBe('implement');
+      const parsed1 = JSON.parse(lines[0]) as StepResultEvent;
+      const parsed2 = JSON.parse(lines[1]) as StepResultEvent;
+      expect(parsed1.step).toBe('plan');
+      expect(parsed2.step).toBe('implement');
     });
 
     it('should create separate files for different dates', () => {
       initAnalyticsWriter(true, testDir);
 
-      const event1: MovementResultEvent = {
-        type: 'movement_result',
-        movement: 'plan',
+      const event1: StepResultEvent = {
+        type: 'step_result',
+        step: 'plan',
         provider: 'claude',
         model: 'sonnet',
         decisionTag: 'done',
@@ -144,9 +144,9 @@ describe('AnalyticsWriter', () => {
         timestamp: '2026-02-17T23:59:00.000Z',
       };
 
-      const event2: MovementResultEvent = {
-        type: 'movement_result',
-        movement: 'implement',
+      const event2: StepResultEvent = {
+        type: 'step_result',
+        step: 'implement',
         provider: 'claude',
         model: 'sonnet',
         decisionTag: 'done',

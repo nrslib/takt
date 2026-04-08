@@ -8,7 +8,7 @@ import { describe, it, expect } from 'vitest';
 import type {
   ReviewFindingEvent,
   FixActionEvent,
-  MovementResultEvent,
+  StepResultEvent,
   AnalyticsEvent,
 } from '../features/analytics/index.js';
 
@@ -67,10 +67,10 @@ describe('analytics event types', () => {
     expect(event.findingId).toBe('f-002');
   });
 
-  it('should create a valid MovementResultEvent', () => {
-    const event: MovementResultEvent = {
-      type: 'movement_result',
-      movement: 'implement',
+  it('should create a valid StepResultEvent', () => {
+    const event: StepResultEvent = {
+      type: 'step_result',
+      step: 'implement',
       provider: 'claude',
       model: 'sonnet',
       decisionTag: 'approved',
@@ -79,8 +79,8 @@ describe('analytics event types', () => {
       timestamp: '2026-02-18T10:02:00.000Z',
     };
 
-    expect(event.type).toBe('movement_result');
-    expect(event.movement).toBe('implement');
+    expect(event.type).toBe('step_result');
+    expect(event.step).toBe('implement');
     expect(event.provider).toBe('claude');
     expect(event.decisionTag).toBe('approved');
   });
@@ -109,8 +109,8 @@ describe('analytics event types', () => {
         timestamp: '2026-01-01T00:01:00.000Z',
       },
       {
-        type: 'movement_result',
-        movement: 'plan',
+        type: 'step_result',
+        step: 'plan',
         provider: 'claude',
         model: 'opus',
         decisionTag: 'done',
@@ -126,7 +126,7 @@ describe('analytics event types', () => {
     const fixEvents = events.filter((e) => e.type === 'fix_action');
     expect(fixEvents).toHaveLength(1);
 
-    const movementEvents = events.filter((e) => e.type === 'movement_result');
-    expect(movementEvents).toHaveLength(1);
+    const stepEvents = events.filter((e) => e.type === 'step_result');
+    expect(stepEvents).toHaveLength(1);
   });
 });

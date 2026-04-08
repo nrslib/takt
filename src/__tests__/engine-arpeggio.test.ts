@@ -1,5 +1,5 @@
 /**
- * Integration tests for arpeggio movement execution via PieceEngine.
+ * Integration tests for arpeggio step execution via WorkflowEngine.
  *
  * Tests the full pipeline: CSV → template expansion → LLM → merge → rule evaluation.
  */
@@ -13,12 +13,12 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/piece/evaluation/index.js', () => ({
+vi.mock('../core/workflow/evaluation/index.js', () => ({
   detectMatchedRule: vi.fn(),
   evaluateAggregateConditions: vi.fn(),
 }));
 
-vi.mock('../core/piece/phase-runner.js', () => ({
+vi.mock('../core/workflow/phase-runner.js', () => ({
   needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
   runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
@@ -33,19 +33,19 @@ vi.mock('../shared/utils/index.js', async () => {
 });
 
 import { runAgent } from '../agents/runner.js';
-import { detectMatchedRule } from '../core/piece/evaluation/index.js';
-import { PieceEngine } from '../core/piece/engine/PieceEngine.js';
+import { detectMatchedRule } from '../core/workflow/evaluation/index.js';
+import { WorkflowEngine } from '../core/workflow/engine/WorkflowEngine.js';
 import { DefaultStructuredCaller } from '../agents/structured-caller.js';
-import type { PieceConfig, PieceMovement, AgentResponse, ArpeggioMovementConfig } from '../core/models/index.js';
-import type { PieceEngineOptions } from '../core/piece/types.js';
+import type { WorkflowConfig, WorkflowStep, AgentResponse, ArpeggioStepConfig } from '../core/models/index.js';
+import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 import {
   makeResponse,
-  makeMovement,
+  makeStep,
   makeRule,
   createTestTmpDir,
-  cleanupPieceEngine,
+  cleanupWorkflowEngine,
 } from './engine-test-helpers.js';
-import type { RuleMatch } from '../core/piece/index.js';
+import type { RuleMatch } from '../core/workflow/index.js';
 
 function createArpeggioTestDir(): { tmpDir: string; csvPath: string; templatePath: string } {
   const tmpDir = createTestTmpDir();
@@ -58,7 +58,7 @@ function createArpeggioTestDir(): { tmpDir: string; csvPath: string; templatePat
   return { tmpDir, csvPath, templatePath };
 }
 
-function createArpeggioConfig(csvPath: string, templatePath: string, overrides: Partial<ArpeggioMovementConfig> = {}): ArpeggioMovementConfig {
+function createArpeggioConfig(csvPath: string, templatePath: string, overrides: Partial<ArpeggioStepConfig> = {}): ArpeggioStepConfig {
   return {
     source: 'csv',
     sourcePath: csvPath,
@@ -72,15 +72,15 @@ function createArpeggioConfig(csvPath: string, templatePath: string, overrides: 
   };
 }
 
-function buildArpeggioPieceConfig(arpeggioConfig: ArpeggioMovementConfig, tmpDir: string): PieceConfig {
+function buildArpeggioWorkflowConfig(arpeggioConfig: ArpeggioStepConfig, tmpDir: string): WorkflowConfig {
   return {
     name: 'test-arpeggio',
-    description: 'Test arpeggio piece',
-    maxMovements: 10,
-    initialMovement: 'process',
-    movements: [
+    description: 'Test arpeggio workflow',
+    maxSteps: 10,
+    initialStep: 'process',
+    steps: [
       {
-        ...makeMovement('process', {
+        ...makeStep('process', {
           rules: [
             makeRule('Processing complete', 'COMPLETE'),
             makeRule('Processing failed', 'ABORT'),
@@ -92,7 +92,7 @@ function buildArpeggioPieceConfig(arpeggioConfig: ArpeggioMovementConfig, tmpDir
   };
 }
 
-function createEngineOptions(tmpDir: string): PieceEngineOptions {
+function createEngineOptions(tmpDir: string): WorkflowEngineOptions {
   return {
     projectCwd: tmpDir,
     reportDirName: 'test-report-dir',
@@ -115,7 +115,7 @@ function mockRunAgentWithPrompt(...responses: ReturnType<typeof makeResponse>[])
 }
 
 describe('ArpeggioRunner integration', () => {
-  let engine: PieceEngine | undefined;
+  let engine: WorkflowEngine | undefined;
 
   beforeEach(() => {
     vi.resetAllMocks();
@@ -124,7 +124,7 @@ describe('ArpeggioRunner integration', () => {
 
   afterEach(() => {
     if (engine) {
-      cleanupPieceEngine(engine);
+      cleanupWorkflowEngine(engine);
       engine = undefined;
     }
   });
@@ -132,7 +132,7 @@ describe('ArpeggioRunner integration', () => {
   it('should process CSV data and merge results', async () => {
     const { tmpDir, csvPath, templatePath } = createArpeggioTestDir();
     const arpeggioConfig = createArpeggioConfig(csvPath, templatePath);
-    const config = buildArpeggioPieceConfig(arpeggioConfig, tmpDir);
+    const config = buildArpeggioWorkflowConfig(arpeggioConfig, tmpDir);
 
     // Mock agent to return batch-specific responses
     const mockAgent = vi.mocked(runAgent);
@@ -148,14 +148,14 @@ describe('ArpeggioRunner integration', () => {
       method: 'phase1_tag',
     });
 
-    engine = new PieceEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
+    engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
     const state = await engine.run();
 
     expect(state.status).toBe('completed');
     expect(mockAgent).toHaveBeenCalledTimes(3);
 
-    // Verify merged content in movement output
-    const output = state.movementOutputs.get('process');
+    // Verify merged content in step output
+    const output = state.stepOutputs.get('process');
     expect(output).toBeDefined();
     expect(output!.content).toBe('Processed Alice\nProcessed Bob\nProcessed Charlie');
 
@@ -175,7 +175,7 @@ describe('ArpeggioRunner integration', () => {
     writeFileSync(templatePath, 'Row1: {line:1}\nRow2: {line:2}', 'utf-8');
 
     const arpeggioConfig = createArpeggioConfig(csvPath, templatePath, { batchSize: 2 });
-    const config = buildArpeggioPieceConfig(arpeggioConfig, tmpDir);
+    const config = buildArpeggioWorkflowConfig(arpeggioConfig, tmpDir);
 
     const mockAgent = vi.mocked(runAgent);
     mockRunAgentWithPrompt(
@@ -188,7 +188,7 @@ describe('ArpeggioRunner integration', () => {
       method: 'phase1_tag',
     });
 
-    engine = new PieceEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
+    engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
     const state = await engine.run();
 
     expect(state.status).toBe('completed');
@@ -199,8 +199,8 @@ describe('ArpeggioRunner integration', () => {
   it('should pass resolved provider to arpeggio rule evaluation', async () => {
     const { tmpDir, csvPath, templatePath } = createArpeggioTestDir();
     const arpeggioConfig = createArpeggioConfig(csvPath, templatePath);
-    const config = buildArpeggioPieceConfig(arpeggioConfig, tmpDir);
-    config.movements[0]!.personaDisplayName = 'coder';
+    const config = buildArpeggioWorkflowConfig(arpeggioConfig, tmpDir);
+    config.steps[0]!.personaDisplayName = 'coder';
 
     mockRunAgentWithPrompt(
       makeResponse({ content: 'Processed Alice' }),
@@ -213,7 +213,7 @@ describe('ArpeggioRunner integration', () => {
       method: 'phase1_tag',
     });
 
-    engine = new PieceEngine(config, tmpDir, 'test task', {
+    engine = new WorkflowEngine(config, tmpDir, 'test task', {
       ...createEngineOptions(tmpDir),
       provider: 'claude',
       personaProviders: { coder: { provider: 'cursor' } },
@@ -230,7 +230,7 @@ describe('ArpeggioRunner integration', () => {
       maxRetries: 1,
       retryDelayMs: 0,
     });
-    const config = buildArpeggioPieceConfig(arpeggioConfig, tmpDir);
+    const config = buildArpeggioWorkflowConfig(arpeggioConfig, tmpDir);
 
     const mockAgent = vi.mocked(runAgent);
     mockRunAgentWithPrompt(
@@ -240,7 +240,7 @@ describe('ArpeggioRunner integration', () => {
       makeResponse({ content: 'OK' }),
     );
 
-    engine = new PieceEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
+    engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
     const state = await engine.run();
 
     expect(state.status).toBe('aborted');
@@ -250,7 +250,7 @@ describe('ArpeggioRunner integration', () => {
     const { tmpDir, csvPath, templatePath } = createArpeggioTestDir();
     const outputPath = join(tmpDir, 'output.txt');
     const arpeggioConfig = createArpeggioConfig(csvPath, templatePath, { outputPath });
-    const config = buildArpeggioPieceConfig(arpeggioConfig, tmpDir);
+    const config = buildArpeggioWorkflowConfig(arpeggioConfig, tmpDir);
 
     const mockAgent = vi.mocked(runAgent);
     mockRunAgentWithPrompt(
@@ -264,7 +264,7 @@ describe('ArpeggioRunner integration', () => {
       method: 'phase1_tag',
     });
 
-    engine = new PieceEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
+    engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
     await engine.run();
 
     const { readFileSync } = await import('node:fs');
@@ -275,7 +275,7 @@ describe('ArpeggioRunner integration', () => {
   it('should handle concurrency > 1', async () => {
     const { tmpDir, csvPath, templatePath } = createArpeggioTestDir();
     const arpeggioConfig = createArpeggioConfig(csvPath, templatePath, { concurrency: 3 });
-    const config = buildArpeggioPieceConfig(arpeggioConfig, tmpDir);
+    const config = buildArpeggioWorkflowConfig(arpeggioConfig, tmpDir);
 
     const mockAgent = vi.mocked(runAgent);
     mockRunAgentWithPrompt(
@@ -289,7 +289,7 @@ describe('ArpeggioRunner integration', () => {
       method: 'phase1_tag',
     });
 
-    engine = new PieceEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
+    engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
     const state = await engine.run();
 
     expect(state.status).toBe('completed');
@@ -299,7 +299,7 @@ describe('ArpeggioRunner integration', () => {
   it('should record resolved prompt in phase:start for arpeggio batches', async () => {
     const { tmpDir, csvPath, templatePath } = createArpeggioTestDir();
     const arpeggioConfig = createArpeggioConfig(csvPath, templatePath, { concurrency: 2 });
-    const config = buildArpeggioPieceConfig(arpeggioConfig, tmpDir);
+    const config = buildArpeggioWorkflowConfig(arpeggioConfig, tmpDir);
     const phaseStarts: string[] = [];
 
     mockRunAgentWithPrompt(
@@ -309,7 +309,7 @@ describe('ArpeggioRunner integration', () => {
     );
     vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
 
-    engine = new PieceEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
+    engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
     engine.on('phase:start', (step, phase, phaseName, instruction) => {
       if (step.name !== 'process' || phase !== 1 || phaseName !== 'execute') return;
       phaseStarts.push(instruction);
@@ -326,7 +326,7 @@ describe('ArpeggioRunner integration', () => {
   it('should keep phaseExecutionId bindings correct when completion order is reversed', async () => {
     const { tmpDir, csvPath, templatePath } = createArpeggioTestDir();
     const arpeggioConfig = createArpeggioConfig(csvPath, templatePath, { concurrency: 2 });
-    const config = buildArpeggioPieceConfig(arpeggioConfig, tmpDir);
+    const config = buildArpeggioWorkflowConfig(arpeggioConfig, tmpDir);
     const phaseStartsByExecutionId = new Map<string, string>();
     const phaseCompletions: Array<{ phaseExecutionId?: string; content: string }> = [];
 
@@ -347,7 +347,7 @@ describe('ArpeggioRunner integration', () => {
     });
     vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
 
-    engine = new PieceEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
+    engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
     engine.on('phase:start', (step, phase, phaseName, instruction, _promptParts, phaseExecutionId) => {
       if (step.name !== 'process' || phase !== 1 || phaseName !== 'execute' || !phaseExecutionId) return;
       phaseStartsByExecutionId.set(phaseExecutionId, instruction);

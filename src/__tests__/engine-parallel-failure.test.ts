@@ -1,10 +1,10 @@
 /**
- * PieceEngine integration tests: parallel movement partial failure handling.
+ * WorkflowEngine integration tests: parallel step partial failure handling.
  *
  * Covers:
- * - One sub-movement fails while another succeeds → piece continues
- * - All sub-movements fail → piece aborts
- * - Failed sub-movement is recorded as error with error message
+ * - One sub-step fails while another succeeds → workflow continues
+ * - All sub-steps fail → workflow aborts
+ * - Failed sub-step is recorded as error with error message
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -16,11 +16,11 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/piece/evaluation/index.js', () => ({
+vi.mock('../core/workflow/evaluation/index.js', () => ({
   detectMatchedRule: vi.fn(),
 }));
 
-vi.mock('../core/piece/phase-runner.js', () => ({
+vi.mock('../core/workflow/phase-runner.js', () => ({
   needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
   runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
@@ -33,40 +33,40 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 // --- Imports (after mocks) ---
 
-import { PieceEngine } from '../core/piece/index.js';
+import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
-import { detectMatchedRule } from '../core/piece/evaluation/index.js';
-import { needsStatusJudgmentPhase, runStatusJudgmentPhase } from '../core/piece/phase-runner.js';
+import { detectMatchedRule } from '../core/workflow/evaluation/index.js';
+import { needsStatusJudgmentPhase, runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
 import {
   makeResponse,
-  makeMovement,
+  makeStep,
   makeRule,
   mockDetectMatchedRuleSequence,
   createTestTmpDir,
   applyDefaultMocks,
 } from './engine-test-helpers.js';
-import type { PieceConfig } from '../core/models/index.js';
+import type { WorkflowConfig } from '../core/models/index.js';
 
 /**
- * Build a piece config that goes directly to a parallel step:
+ * Build a workflow config that goes directly to a parallel step:
  * parallel-step (arch-review + security-review) → done
  */
-function buildParallelOnlyConfig(): PieceConfig {
+function buildParallelOnlyConfig(): WorkflowConfig {
   return {
     name: 'test-parallel-failure',
     description: 'Test parallel failure handling',
-    maxMovements: 10,
-    initialMovement: 'reviewers',
-    movements: [
-      makeMovement('reviewers', {
+    maxSteps: 10,
+    initialStep: 'reviewers',
+    steps: [
+      makeStep('reviewers', {
         parallel: [
-          makeMovement('arch-review', {
+          makeStep('arch-review', {
             rules: [
               makeRule('done', 'COMPLETE'),
               makeRule('needs_fix', 'fix'),
             ],
           }),
-          makeMovement('security-review', {
+          makeStep('security-review', {
             rules: [
               makeRule('done', 'COMPLETE'),
               makeRule('needs_fix', 'fix'),
@@ -86,12 +86,12 @@ function buildParallelOnlyConfig(): PieceConfig {
           }),
         ],
       }),
-      makeMovement('done', {
+      makeStep('done', {
         rules: [
           makeRule('completed', 'COMPLETE'),
         ],
       }),
-      makeMovement('fix', {
+      makeStep('fix', {
         rules: [
           makeRule('fixed', 'reviewers'),
         ],
@@ -100,7 +100,7 @@ function buildParallelOnlyConfig(): PieceConfig {
   };
 }
 
-describe('PieceEngine Integration: Parallel Movement Partial Failure', () => {
+describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
   let tmpDir: string;
 
   beforeEach(() => {
@@ -115,9 +115,9 @@ describe('PieceEngine Integration: Parallel Movement Partial Failure', () => {
     }
   });
 
-  it('should continue when one sub-movement fails but another succeeds', async () => {
+  it('should continue when one sub-step fails but another succeeds', async () => {
     const config = buildParallelOnlyConfig();
-    const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
     const mock = vi.mocked(runAgent);
     // arch-review fails (exit code 1)
@@ -140,7 +140,7 @@ describe('PieceEngine Integration: Parallel Movement Partial Failure', () => {
     });
 
     mockDetectMatchedRuleSequence([
-      // security-review sub-movement rule match (arch-review has no match — it failed)
+      // security-review sub-step rule match (arch-review has no match — it failed)
       { index: 0, method: 'phase1_tag' },  // security-review → done
       { index: 0, method: 'aggregate' },   // reviewers → any("done") matches
       { index: 0, method: 'phase1_tag' },  // done → COMPLETE
@@ -151,20 +151,20 @@ describe('PieceEngine Integration: Parallel Movement Partial Failure', () => {
     expect(state.status).toBe('completed');
 
     // arch-review should be recorded as error
-    const archReviewOutput = state.movementOutputs.get('arch-review');
+    const archReviewOutput = state.stepOutputs.get('arch-review');
     expect(archReviewOutput).toBeDefined();
     expect(archReviewOutput!.status).toBe('error');
     expect(archReviewOutput!.error).toContain('exit');
 
     // security-review should be recorded as done
-    const securityReviewOutput = state.movementOutputs.get('security-review');
+    const securityReviewOutput = state.stepOutputs.get('security-review');
     expect(securityReviewOutput).toBeDefined();
     expect(securityReviewOutput!.status).toBe('done');
   });
 
-  it('should abort when all sub-movements fail', async () => {
+  it('should abort when all sub-steps fail', async () => {
     const config = buildParallelOnlyConfig();
-    const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
     const mock = vi.mocked(runAgent);
     // Both fail
@@ -172,19 +172,19 @@ describe('PieceEngine Integration: Parallel Movement Partial Failure', () => {
     mock.mockRejectedValueOnce(new Error('Claude Code process exited with code 1'));
 
     const abortFn = vi.fn();
-    engine.on('piece:abort', abortFn);
+    engine.on('workflow:abort', abortFn);
 
     const state = await engine.run();
 
     expect(state.status).toBe('aborted');
     expect(abortFn).toHaveBeenCalledOnce();
     const reason = abortFn.mock.calls[0]![1] as string;
-    expect(reason).toContain('All parallel sub-movements failed');
+    expect(reason).toContain('All parallel sub-steps failed');
   });
 
-  it('should record failed sub-movement error message in movementOutputs', async () => {
+  it('should record failed sub-step error message in stepOutputs', async () => {
     const config = buildParallelOnlyConfig();
-    const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
     const mock = vi.mocked(runAgent);
     mock.mockRejectedValueOnce(new Error('Session resume failed'));
@@ -211,21 +211,21 @@ describe('PieceEngine Integration: Parallel Movement Partial Failure', () => {
 
     const state = await engine.run();
 
-    const archReviewOutput = state.movementOutputs.get('arch-review');
+    const archReviewOutput = state.stepOutputs.get('arch-review');
     expect(archReviewOutput).toBeDefined();
     expect(archReviewOutput!.error).toBe('Session resume failed');
     expect(archReviewOutput!.content).toBe('');
   });
 
-  it('should fallback to phase1 rule evaluation when sub-movement phase3 throws', async () => {
+  it('should fallback to phase1 rule evaluation when sub-step phase3 throws', async () => {
     const config = buildParallelOnlyConfig();
-    const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
-    vi.mocked(needsStatusJudgmentPhase).mockImplementation((movement) => {
-      return movement.name === 'arch-review' || movement.name === 'security-review';
+    vi.mocked(needsStatusJudgmentPhase).mockImplementation((step) => {
+      return step.name === 'arch-review' || step.name === 'security-review';
     });
-    vi.mocked(runStatusJudgmentPhase).mockImplementation(async (movement) => {
-      if (movement.name === 'arch-review') {
+    vi.mocked(runStatusJudgmentPhase).mockImplementation(async (step) => {
+      if (step.name === 'arch-review') {
         throw new Error('Phase 3 failed for arch-review');
       }
       return { tag: '', ruleIndex: 0, method: 'auto_select' };
@@ -263,11 +263,11 @@ describe('PieceEngine Integration: Parallel Movement Partial Failure', () => {
     const state = await engine.run();
 
     expect(state.status).toBe('completed');
-    expect(state.movementOutputs.get('arch-review')?.status).toBe('done');
-    expect(state.movementOutputs.get('arch-review')?.matchedRuleMethod).toBe('phase1_tag');
+    expect(state.stepOutputs.get('arch-review')?.status).toBe('done');
+    expect(state.stepOutputs.get('arch-review')?.matchedRuleMethod).toBe('phase1_tag');
     expect(
-      vi.mocked(detectMatchedRule).mock.calls.some(([movement, content, tagContent]) => {
-        return movement.name === 'arch-review' && content === '[STEP:1] done' && tagContent === '';
+      vi.mocked(detectMatchedRule).mock.calls.some(([step, content, tagContent]) => {
+        return step.name === 'arch-review' && content === '[STEP:1] done' && tagContent === '';
       }),
     ).toBe(true);
   });

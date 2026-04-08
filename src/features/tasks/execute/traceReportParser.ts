@@ -5,7 +5,7 @@ import {
   parsePhaseExecutionId,
 } from '../../../shared/utils/phaseExecutionId.js';
 import type {
-  TraceMovement,
+  TraceStep,
   TracePhase,
 } from './traceReportTypes.js';
 
@@ -15,7 +15,7 @@ interface PromptRecord extends PromptLogRecord {
 
 interface BuildTraceResult {
   traceStartedAt: string;
-  movements: TraceMovement[];
+  steps: TraceStep[];
 }
 
 export function parseJsonl<T>(path: string): T[] {
@@ -29,7 +29,7 @@ export function parseJsonl<T>(path: string): T[] {
   return lines.map((line) => JSON.parse(line) as T);
 }
 
-function movementKey(step: string, iteration: number): string {
+function stepKey(step: string, iteration: number): string {
   return `${step}:${iteration}`;
 }
 
@@ -61,27 +61,27 @@ function parsePhaseExecutionKey(
   return { step: parsed.step, iteration: parsed.iteration };
 }
 
-function ensureMovement(
-  movementsByKey: Map<string, TraceMovement>,
+function ensureStep(
+  stepsByKey: Map<string, TraceStep>,
   step: string,
   iteration: number,
   timestamp: string,
   fallbackPersona: string,
-): TraceMovement {
-  const key = movementKey(step, iteration);
-  const existing = movementsByKey.get(key);
+): TraceStep {
+  const key = stepKey(step, iteration);
+  const existing = stepsByKey.get(key);
   if (existing) {
     return existing;
   }
-  const movement: TraceMovement = {
+  const traceStep: TraceStep = {
     step,
     persona: fallbackPersona,
     iteration,
     startedAt: timestamp,
     phases: [],
   };
-  movementsByKey.set(key, movement);
-  return movement;
+  stepsByKey.set(key, traceStep);
+  return traceStep;
 }
 
 export function buildTraceFromRecords(
@@ -96,30 +96,30 @@ export function buildTraceFromRecords(
     }
   }
 
-  const movementsByKey = new Map<string, TraceMovement>();
-  const phasesByExecutionId = new Map<string, { movement: TraceMovement; index: number }>();
+  const stepsByKey = new Map<string, TraceStep>();
+  const phasesByExecutionId = new Map<string, { step: TraceStep; index: number }>();
   const phaseExecutionCounters = new Map<string, number>();
   const latestIterationByStep = new Map<string, number>();
 
   let traceStartedAt = '';
 
   for (const record of records) {
-    if (!traceStartedAt && record.type === 'piece_start') {
+    if (!traceStartedAt && record.type === 'workflow_start') {
       traceStartedAt = record.startTime;
       continue;
     }
 
     if (record.type === 'step_start') {
       latestIterationByStep.set(record.step, record.iteration);
-      const movement = ensureMovement(
-        movementsByKey,
+      const traceStep = ensureStep(
+        stepsByKey,
         record.step,
         record.iteration,
         record.timestamp,
         record.persona,
       );
-      movement.persona = record.persona;
-      movement.instruction = record.instruction;
+      traceStep.persona = record.persona;
+      traceStep.instruction = record.instruction;
       continue;
     }
 
@@ -128,15 +128,15 @@ export function buildTraceFromRecords(
       if (iteration == null) {
         throw new Error(`Missing iteration for step_complete: ${record.step}`);
       }
-      const movement = ensureMovement(
-        movementsByKey,
+      const traceStep = ensureStep(
+        stepsByKey,
         record.step,
         iteration,
         record.timestamp,
         record.persona,
       );
-      movement.completedAt = record.timestamp;
-      movement.result = {
+      traceStep.completedAt = record.timestamp;
+      traceStep.result = {
         status: record.status,
         content: record.content,
         error: record.error,
@@ -152,8 +152,8 @@ export function buildTraceFromRecords(
       if (iteration == null) {
         throw new Error(`Missing iteration for phase_start: ${record.step}:${record.phase}`);
       }
-      const movement = ensureMovement(
-        movementsByKey,
+      const traceStep = ensureStep(
+        stepsByKey,
         record.step,
         iteration,
         record.timestamp,
@@ -172,10 +172,10 @@ export function buildTraceFromRecords(
         userInstruction: record.userInstruction ?? prompt?.userInstruction ?? record.instruction ?? '',
         startedAt: record.timestamp,
       };
-      movement.phases.push(phase);
+      traceStep.phases.push(phase);
       phasesByExecutionId.set(resolvedExecutionId, {
-        movement,
-        index: movement.phases.length - 1,
+        step: traceStep,
+        index: traceStep.phases.length - 1,
       });
       continue;
     }
@@ -198,12 +198,12 @@ export function buildTraceFromRecords(
       if (!phaseRef) {
         throw new Error(`Missing phase_start before phase_complete: ${resolvedExecutionId}`);
       }
-      const existing = phaseRef.movement.phases[phaseRef.index];
+      const existing = phaseRef.step.phases[phaseRef.index];
       if (!existing) {
         throw new Error(`Missing phase state for completion: ${resolvedExecutionId}`);
       }
       const prompt = promptByExecutionId.get(resolvedExecutionId);
-      phaseRef.movement.phases[phaseRef.index] = {
+      phaseRef.step.phases[phaseRef.index] = {
         ...existing,
         instruction: existing.instruction || prompt?.userInstruction || '',
         systemPrompt: prompt?.systemPrompt ?? existing.systemPrompt,
@@ -223,11 +223,11 @@ export function buildTraceFromRecords(
       if (!phaseRef) {
         continue;
       }
-      const existing = phaseRef.movement.phases[phaseRef.index];
+      const existing = phaseRef.step.phases[phaseRef.index];
       if (!existing) {
         continue;
       }
-      phaseRef.movement.phases[phaseRef.index] = {
+      phaseRef.step.phases[phaseRef.index] = {
         ...existing,
         judgeStages: [
           ...(existing.judgeStages ?? []),
@@ -243,7 +243,7 @@ export function buildTraceFromRecords(
     }
   }
 
-  const movements = [...movementsByKey.values()].sort((a, b) => {
+  const steps = [...stepsByKey.values()].sort((a, b) => {
     const byStart = a.startedAt.localeCompare(b.startedAt);
     if (byStart !== 0) {
       return byStart;
@@ -253,7 +253,7 @@ export function buildTraceFromRecords(
 
   return {
     traceStartedAt: traceStartedAt || defaultEndTime,
-    movements,
+    steps,
   };
 }
 

@@ -1,7 +1,7 @@
 <!--
   template: perform_agent_system_prompt
   role: system prompt for user-defined agents
-  vars: agentDefinition, pieceName, pieceDescription, currentMovement, movementsList, currentPosition
+  vars: agentDefinition, workflowName, workflowDescription, currentStep, stepsList, currentPosition
   caller: AgentRunner
 -->
 # TAKT
@@ -14,10 +14,10 @@ You are part of TAKT (AI Agent Orchestration Tool).
 - **Your Role**: Execute the work assigned to the current step within the entire workflow
 
 ## Current Context
-- Workflow: {{pieceName}}
-- Current Step: {{currentMovement}}
+- Workflow: {{workflowName}}
+- Current Step: {{currentStep}}
 - Processing Flow:
-{{movementsList}}
+{{stepsList}}
 - Current Position: {{currentPosition}}
 
 Work with awareness of coordination with preceding and following steps.

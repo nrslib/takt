@@ -8,7 +8,7 @@ import {
 } from '../providerReference.js';
 import {
   normalizeProviderProfiles,
-  normalizePieceOverrides,
+  normalizeWorkflowOverrides,
   normalizePipelineConfig,
   normalizePersonaProviders,
   normalizeTaktProviders,
@@ -17,9 +17,6 @@ import {
 } from '../configNormalizers.js';
 import {
   resolveAliasedPreviewCount,
-  resolveAliasedConfigKey,
-  resolveAliasedNotificationSoundEvents,
-  type RawProviderPermissionProfile,
 } from '../configKeyAliases.js';
 import { getGlobalConfigPath } from '../paths.js';
 import { invalidateAllResolvedConfigCache } from '../resolutionCache.js';
@@ -28,7 +25,6 @@ import { expandOptionalHomePath } from '../pathExpansion.js';
 import { sanitizeConfigValue } from './globalConfigLegacyMigration.js';
 import { serializeGlobalConfig } from './globalConfigSerializer.js';
 import { loadGlobalConfigTrace, type ConfigTrace } from '../traced/tracedConfigLoader.js';
-import { warnLegacyGlobalConfigYamlKeysOncePerProcess } from '../legacy-workflow-key-deprecation.js';
 export { validateCliPath } from './cliPathValidator.js';
 
 function getRecord(value: unknown): Record<string, unknown> | undefined {
@@ -93,7 +89,6 @@ export class GlobalConfigManager {
         return sanitized;
       },
     );
-    warnLegacyGlobalConfigYamlKeysOncePerProcess(parsedConfig);
     assertNoUnknownGlobalConfigKeys(parsedConfig);
     const parsed = GlobalConfigSchema.parse(rawConfig);
     const normalizedProvider = normalizeConfigProviderReference(
@@ -101,57 +96,6 @@ export class GlobalConfigManager {
       parsed.model,
       parsed.provider_options as Record<string, unknown> | undefined,
     );
-    const parsedRecord = parsed as Record<string, unknown>;
-    const resolvedEnableBuiltinWorkflows = resolveAliasedConfigKey<boolean>(
-      '~/.takt/config.yaml',
-      parsedRecord,
-      'enable_builtin_workflows',
-      'enable_builtin_pieces',
-    );
-    const resolvedWorkflowCategoriesFile = resolveAliasedConfigKey<string>(
-      '~/.takt/config.yaml',
-      parsedRecord,
-      'workflow_categories_file',
-      'piece_categories_file',
-    );
-    const resolvedPieceRuntimePrepare = resolveAliasedConfigKey<{ custom_scripts?: boolean }>(
-      '~/.takt/config.yaml',
-      parsedRecord,
-      'workflow_runtime_prepare',
-      'piece_runtime_prepare',
-    );
-    const resolvedPieceArpeggio = resolveAliasedConfigKey<{
-      custom_data_source_modules?: boolean;
-      custom_merge_inline_js?: boolean;
-      custom_merge_files?: boolean;
-    }>(
-      '~/.takt/config.yaml',
-      parsedRecord,
-      'workflow_arpeggio',
-      'piece_arpeggio',
-    );
-    const resolvedPieceMcpServers = resolveAliasedConfigKey<{ stdio?: boolean; sse?: boolean; http?: boolean }>(
-      '~/.takt/config.yaml',
-      parsedRecord,
-      'workflow_mcp_servers',
-      'piece_mcp_servers',
-    );
-    const resolvedNotificationSoundEvents = resolveAliasedNotificationSoundEvents(
-      '~/.takt/config.yaml',
-      parsed.notification_sound_events as Record<string, unknown> | undefined,
-    );
-    const resolvedPieceOverrides = resolveAliasedConfigKey(
-      '~/.takt/config.yaml',
-      parsedRecord,
-      'workflow_overrides',
-      'piece_overrides',
-    ) as {
-      quality_gates?: string[];
-      quality_gates_edit_only?: boolean;
-      movements?: Record<string, { quality_gates?: string[] }>;
-      steps?: Record<string, { quality_gates?: string[] }>;
-      personas?: Record<string, { quality_gates?: string[] }>;
-    } | undefined;
     const config: GlobalConfig = {
       language: parsed.language,
       provider: normalizedProvider.provider,
@@ -175,7 +119,7 @@ export class GlobalConfigManager {
       autoPr: parsed.auto_pr,
       draftPr: parsed.draft_pr,
       disabledBuiltins: parsed.disabled_builtins,
-      enableBuiltinPieces: resolvedEnableBuiltinWorkflows,
+      enableBuiltinWorkflows: parsed.enable_builtin_workflows,
       anthropicApiKey: parsed.anthropic_api_key,
       openaiApiKey: parsed.openai_api_key,
       geminiApiKey: parsed.gemini_api_key,
@@ -190,40 +134,48 @@ export class GlobalConfigManager {
       opencodeApiKey: parsed.opencode_api_key,
       cursorApiKey: parsed.cursor_api_key,
       bookmarksFile: expandOptionalHomePath(parsed.bookmarks_file),
-      pieceCategoriesFile: expandOptionalHomePath(resolvedWorkflowCategoriesFile),
+      workflowCategoriesFile: expandOptionalHomePath(parsed.workflow_categories_file),
       providerOptions: normalizedProvider.providerOptions,
       providerProfiles: normalizeProviderProfiles(
-        parsed.provider_profiles as Record<string, RawProviderPermissionProfile> | undefined,
+        parsedConfig.provider_profiles as Record<string, {
+          default_permission_mode: string;
+          step_permission_overrides?: Record<string, string>;
+        }> | undefined,
       ),
       runtime: normalizeRuntime(parsed.runtime),
-      pieceRuntimePrepare: resolvedPieceRuntimePrepare ? {
-        customScripts: resolvedPieceRuntimePrepare.custom_scripts,
+      workflowRuntimePrepare: parsed.workflow_runtime_prepare ? {
+        customScripts: parsed.workflow_runtime_prepare.custom_scripts,
       } : undefined,
-      pieceArpeggio: resolvedPieceArpeggio ? {
-        customDataSourceModules: resolvedPieceArpeggio.custom_data_source_modules,
-        customMergeInlineJs: resolvedPieceArpeggio.custom_merge_inline_js,
-        customMergeFiles: resolvedPieceArpeggio.custom_merge_files,
+      workflowArpeggio: parsed.workflow_arpeggio ? {
+        customDataSourceModules: parsed.workflow_arpeggio.custom_data_source_modules,
+        customMergeInlineJs: parsed.workflow_arpeggio.custom_merge_inline_js,
+        customMergeFiles: parsed.workflow_arpeggio.custom_merge_files,
       } : undefined,
       syncConflictResolver: parsed.sync_conflict_resolver ? {
         autoApproveTools: parsed.sync_conflict_resolver.auto_approve_tools,
       } : undefined,
-      pieceMcpServers: resolvedPieceMcpServers ? {
-        stdio: resolvedPieceMcpServers.stdio,
-        sse: resolvedPieceMcpServers.sse,
-        http: resolvedPieceMcpServers.http,
+      workflowMcpServers: parsed.workflow_mcp_servers ? {
+        stdio: parsed.workflow_mcp_servers.stdio,
+        sse: parsed.workflow_mcp_servers.sse,
+        http: parsed.workflow_mcp_servers.http,
       } : undefined,
       preventSleep: parsed.prevent_sleep,
       notificationSound: parsed.notification_sound,
-      notificationSoundEvents: resolvedNotificationSoundEvents ? {
-        iterationLimit: resolvedNotificationSoundEvents.iteration_limit as boolean | undefined,
-        pieceComplete: resolvedNotificationSoundEvents.piece_complete as boolean | undefined,
-        pieceAbort: resolvedNotificationSoundEvents.piece_abort as boolean | undefined,
-        runComplete: resolvedNotificationSoundEvents.run_complete as boolean | undefined,
-        runAbort: resolvedNotificationSoundEvents.run_abort as boolean | undefined,
+      notificationSoundEvents: parsed.notification_sound_events ? {
+        iterationLimit: parsed.notification_sound_events.iteration_limit as boolean | undefined,
+        workflowComplete: parsed.notification_sound_events.workflow_complete as boolean | undefined,
+        workflowAbort: parsed.notification_sound_events.workflow_abort as boolean | undefined,
+        runComplete: parsed.notification_sound_events.run_complete as boolean | undefined,
+        runAbort: parsed.notification_sound_events.run_abort as boolean | undefined,
       } : undefined,
       autoFetch: parsed.auto_fetch,
       baseBranch: parsed.base_branch,
-      pieceOverrides: normalizePieceOverrides(resolvedPieceOverrides),
+      workflowOverrides: normalizeWorkflowOverrides(parsed.workflow_overrides as {
+        quality_gates?: string[];
+        quality_gates_edit_only?: boolean;
+        steps?: Record<string, { quality_gates?: string[] }>;
+        personas?: Record<string, { quality_gates?: string[] }>;
+      } | undefined),
       // Project-local keys (also accepted in global config)
       pipeline: normalizePipelineConfig(
         parsed.pipeline as { default_branch_prefix?: string; commit_message_template?: string; pr_body_template?: string } | undefined,
@@ -243,7 +195,7 @@ export class GlobalConfigManager {
       minimalOutput: parsed.minimal_output as boolean | undefined,
       concurrency: parsed.concurrency as number | undefined,
       taskPollIntervalMs: parsed.task_poll_interval_ms as number | undefined,
-      interactivePreviewMovements: resolveAliasedPreviewCount(parsed as Record<string, unknown>, '~/.takt/config.yaml'),
+      interactivePreviewSteps: resolveAliasedPreviewCount(parsed as Record<string, unknown>),
     };
     validateProviderModelCompatibility(config.provider, config.model);
     this.cachedConfig = config;

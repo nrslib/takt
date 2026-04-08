@@ -16,7 +16,7 @@ import {
   summarizeTaskName,
   resolveTaskWorkflowValue,
 } from '../../../infra/task/index.js';
-import { determinePiece } from '../execute/selectAndExecute.js';
+import { determineWorkflow } from '../execute/selectAndExecute.js';
 import { createLogger, getErrorMessage, generateReportDir } from '../../../shared/utils/index.js';
 import { isIssueReference, resolveIssueTask, parseIssueNumbers, formatPrReviewAsTask, getGitProvider } from '../../../infra/git/index.js';
 import type { PrReviewData } from '../../../infra/git/index.js';
@@ -49,7 +49,6 @@ export async function saveTaskFile(
   cwd: string,
   taskContent: string,
   options?: {
-    piece?: string;
     workflow?: string;
     issue?: number;
     worktree?: boolean | string;
@@ -75,7 +74,7 @@ export async function saveTaskFile(
     ...(options?.worktree !== undefined && { worktree: options.worktree }),
     ...(options?.branch && { branch: options.branch }),
     ...(options?.baseBranch && { base_branch: options.baseBranch }),
-    ...(resolvedWorkflow && { piece: resolvedWorkflow }),
+    ...(resolvedWorkflow && { workflow: resolvedWorkflow }),
     ...(options?.issue !== undefined && { issue: options.issue }),
     ...(options?.autoPr !== undefined && { auto_pr: options.autoPr }),
     ...(options?.draftPr !== undefined && { draft_pr: options.draftPr }),
@@ -133,7 +132,7 @@ export async function promptLabelSelection(lang: Language): Promise<string[]> {
 export async function saveTaskFromInteractive(
   cwd: string,
   task: string,
-  piece?: string,
+  workflow?: string,
   options?: { issue?: number; confirmAtEndMessage?: string; presetSettings?: WorktreeSettings },
 ): Promise<void> {
   if (options?.confirmAtEndMessage) {
@@ -143,21 +142,21 @@ export async function saveTaskFromInteractive(
     }
   }
   const settings = options?.presetSettings ?? await promptWorktreeSettings(cwd);
-  const created = await saveTaskFile(cwd, task, { piece, issue: options?.issue, ...settings });
-  displayTaskCreationResult(created, settings, piece);
+  const created = await saveTaskFile(cwd, task, { workflow, issue: options?.issue, ...settings });
+  displayTaskCreationResult(created, settings, workflow);
 }
 
 export async function createIssueAndSaveTask(
   cwd: string,
   task: string,
-  piece?: string,
+  workflow?: string,
   options?: { confirmAtEndMessage?: string; labels?: string[] },
 ): Promise<void> {
   const issueNumber = createIssueFromTask(task, { labels: options?.labels, cwd });
   if (issueNumber === undefined) {
     return;
   }
-  await saveTaskFromInteractive(cwd, task, piece, {
+  await saveTaskFromInteractive(cwd, task, workflow, {
     issue: issueNumber,
     confirmAtEndMessage: options?.confirmAtEndMessage,
   });
@@ -167,10 +166,10 @@ export async function createIssueAndSaveTask(
  * add command handler
  *
  * Flow:
- *   A) --pr オプション: PRレビュー取得 → ピース選択 → YAML作成
+ *   A) --pr オプション: PRレビュー取得 → ワークフロー選択 → YAML作成
  *   B) 引数なし: Usage表示して終了
- *   C) Issue参照の場合: issue取得 → ピース選択 → ワークツリー設定 → YAML作成
- *   D) 通常入力: ピース選択 → ワークツリー設定 → YAML作成
+ *   C) Issue参照の場合: issue取得 → ワークフロー選択 → ワークツリー設定 → YAML作成
+ *   D) 通常入力: ワークフロー選択 → ワークツリー設定 → YAML作成
  */
 export async function addTask(
   cwd: string,
@@ -208,8 +207,8 @@ export async function addTask(
     }
 
     const taskContent = formatPrReviewAsTask(prReview);
-    const piece = await determinePiece(cwd, opts?.workflow);
-    if (piece === null) {
+    const workflow = await determineWorkflow(cwd, opts?.workflow);
+    if (workflow === null) {
       info('Cancelled.');
       return;
     }
@@ -221,8 +220,8 @@ export async function addTask(
       autoPr: false,
       shouldPublishBranchToOrigin: true,
     };
-    const created = await saveTaskFile(cwd, taskContent, { piece, ...settings, prNumber });
-    displayTaskCreationResult(created, settings, piece);
+    const created = await saveTaskFile(cwd, taskContent, { workflow, ...settings, prNumber });
+    displayTaskCreationResult(created, settings, workflow);
     return;
   }
 
@@ -256,8 +255,8 @@ export async function addTask(
     taskContent = rawTask;
   }
 
-  const piece = await determinePiece(cwd, opts?.workflow);
-  if (piece === null) {
+  const workflow = await determineWorkflow(cwd, opts?.workflow);
+  if (workflow === null) {
     info('Cancelled.');
     return;
   }
@@ -265,10 +264,10 @@ export async function addTask(
   const settings = await promptWorktreeSettings(cwd);
 
   const created = await saveTaskFile(cwd, taskContent, {
-    piece,
+    workflow,
     issue: issueNumber,
     ...settings,
   });
 
-  displayTaskCreationResult(created, settings, piece);
+  displayTaskCreationResult(created, settings, workflow);
 }

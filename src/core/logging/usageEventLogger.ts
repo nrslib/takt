@@ -5,7 +5,7 @@ import type { ProviderUsageSnapshot } from '../models/response.js';
 import { USAGE_EVENTS_LOG_FILE_SUFFIX } from './contracts.js';
 import {
   buildUsageEventRecord,
-  type MovementType,
+  type StepType,
 } from './providerEvent.js';
 
 export interface UsageEventLoggerConfig {
@@ -14,14 +14,14 @@ export interface UsageEventLoggerConfig {
   readonly runId: string;
   readonly provider: ProviderType;
   readonly providerModel: string;
-  readonly movement: string;
-  readonly movementType: MovementType;
+  readonly step: string;
+  readonly stepType: StepType;
   readonly enabled: boolean;
 }
 
 export interface UsageEventLogger {
   readonly filepath: string;
-  setMovement(movement: string, movementType: MovementType): void;
+  setStep(step: string, stepType: StepType): void;
   setProvider(provider: ProviderType, providerModel: string): void;
   logUsage(params: {
     readonly success: boolean;
@@ -42,22 +42,22 @@ export function createUsageEventLogger(config: UsageEventLoggerConfig): UsageEve
     assertNonEmpty(config.sessionId, 'sessionId');
     assertNonEmpty(config.runId, 'runId');
     assertNonEmpty(config.providerModel, 'providerModel');
-    assertNonEmpty(config.movement, 'movement');
+    assertNonEmpty(config.step, 'step');
   }
 
   const filepath = join(config.logsDir, `${config.sessionId}${USAGE_EVENTS_LOG_FILE_SUFFIX}`);
-  let movement = config.movement;
-  let movementType = config.movementType;
+  let step = config.step;
+  let stepType = config.stepType;
   let provider = config.provider;
   let providerModel = config.providerModel;
   let hasReportedWriteFailure = false;
 
   return {
     filepath,
-    setMovement(nextMovement: string, nextMovementType: MovementType): void {
-      assertNonEmpty(nextMovement, 'movement');
-      movement = nextMovement;
-      movementType = nextMovementType;
+    setStep(nextStep: string, nextStepType: StepType): void {
+      assertNonEmpty(nextStep, 'step');
+      step = nextStep;
+      stepType = nextStepType;
     },
     setProvider(nextProvider: ProviderType, nextProviderModel: string): void {
       assertNonEmpty(nextProviderModel, 'providerModel');
@@ -79,8 +79,8 @@ export function createUsageEventLogger(config: UsageEventLoggerConfig): UsageEve
           sessionId: config.sessionId,
           provider,
           providerModel,
-          movement,
-          movementType,
+          step,
+          stepType,
         },
         params
       );

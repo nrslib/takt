@@ -1,5 +1,5 @@
 Review the changes from the perspective of CQRS (Command Query Responsibility Segregation) and Event Sourcing.
-AI-specific issue review is not needed (already covered by the ai_review movement).
+AI-specific issue review is not needed (already covered by the ai_review step).
 
 **Review criteria:**
 - Aggregate design validity

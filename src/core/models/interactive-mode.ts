@@ -3,7 +3,7 @@
  *
  * Defines the four modes available when using interactive mode:
  * - assistant: Asks clarifying questions before generating instructions (default)
- * - persona: Uses the first movement's persona for conversation
+ * - persona: Uses the first step's persona for conversation
  * - quiet: Generates instructions without asking questions (best-effort)
  * - passthrough: Passes user input directly as task text
  */

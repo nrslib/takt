@@ -1,4 +1,4 @@
-**これは {movement_iteration} 回目のAI Reviewです。**
+**これは {step_iteration} 回目のAI Reviewです。**
 
 初回は網羅的にレビューし、指摘すべき問題をすべて出し切ってください。
 2回目以降は、前回REJECTした項目が修正されたかの確認を優先してください。

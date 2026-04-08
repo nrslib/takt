@@ -29,7 +29,7 @@ you verify "**was the right thing built (Validation)**".
 
 ## Human-in-the-Loop Checkpoint
 
-You are the **human proxy** in the automated piece. Before approval, verify the following.
+You are the **human proxy** in the automated workflow. Before approval, verify the following.
 
 **Ask yourself what a human reviewer would check:**
 - Does this really solve the user's problem?

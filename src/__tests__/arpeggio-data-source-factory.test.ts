@@ -9,8 +9,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { createDataSource } from '../core/piece/arpeggio/data-source-factory.js';
-import { CsvDataSource } from '../core/piece/arpeggio/csv-data-source.js';
+import { createDataSource } from '../core/workflow/arpeggio/data-source-factory.js';
+import { CsvDataSource } from '../core/workflow/arpeggio/csv-data-source.js';
 
 describe('createDataSource', () => {
   it('should return a CsvDataSource for built-in "csv" type', async () => {

@@ -1,16 +1,16 @@
 /**
  * RunMeta — 実行メタデータの管理モジュール
  *
- * ランのメタデータ（task, piece, status, 開始・終了時刻など）を
+ * ランのメタデータ（task, workflow, status, 開始・終了時刻など）を
  * .takt/runs/{slug}/meta.json へ書き出す責務を担う。
  */
 
 import { writeFileAtomic, ensureDir } from '../../../infra/config/index.js';
-import type { RunPaths } from '../../../core/piece/run/run-paths.js';
+import type { RunPaths } from '../../../core/workflow/run/run-paths.js';
 
 interface RunMeta {
   task: string;
-  piece: string;
+  workflow: string;
   runSlug: string;
   runRoot: string;
   reportDirectory: string;
@@ -27,11 +27,11 @@ export class RunMetaManager {
   private readonly metaAbs: string;
   private finalized = false;
 
-  constructor(runPaths: RunPaths, task: string, pieceName: string) {
+  constructor(runPaths: RunPaths, task: string, workflowName: string) {
     this.metaAbs = runPaths.metaAbs;
     this.runMeta = {
       task,
-      piece: pieceName,
+      workflow: workflowName,
       runSlug: runPaths.slug,
       runRoot: runPaths.runRootRel,
       reportDirectory: runPaths.reportsRel,

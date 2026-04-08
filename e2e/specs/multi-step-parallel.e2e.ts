@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { createIsolatedEnv, type IsolatedEnv } from '../helpers/isolated-env';
 import { createTestRepo, type TestRepo } from '../helpers/test-repo';
 import { runTakt } from '../helpers/takt-runner';
+import { copyWorkflowFixtureToRepo } from '../helpers/local-workflow-fixture';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -12,8 +13,6 @@ const __dirname = dirname(__filename);
 describe('E2E: Multi-step with parallel steps (mock)', () => {
   let isolatedEnv: IsolatedEnv;
   let testRepo: TestRepo;
-
-  const piecePath = resolve(__dirname, '../fixtures/pieces/multi-step-parallel.yaml');
 
   beforeEach(() => {
     isolatedEnv = createIsolatedEnv();
@@ -35,11 +34,15 @@ describe('E2E: Multi-step with parallel steps (mock)', () => {
 
   it('should complete plan → review (all approved) → COMPLETE', () => {
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/multi-step-all-approved.json');
+    const workflowPath = copyWorkflowFixtureToRepo(
+      testRepo.path,
+      resolve(__dirname, '../fixtures/workflows/multi-step-parallel.yaml'),
+    );
 
     const result = runTakt({
       args: [
         '--task', 'Implement a feature',
-        '--piece', piecePath,
+        '--workflow', workflowPath,
         '--provider', 'mock',
       ],
       cwd: testRepo.path,
@@ -56,11 +59,15 @@ describe('E2E: Multi-step with parallel steps (mock)', () => {
 
   it('should complete plan → review (needs_fix) → fix → review (all approved) → COMPLETE', () => {
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/multi-step-needs-fix.json');
+    const workflowPath = copyWorkflowFixtureToRepo(
+      testRepo.path,
+      resolve(__dirname, '../fixtures/workflows/multi-step-parallel.yaml'),
+    );
 
     const result = runTakt({
       args: [
         '--task', 'Implement a feature with issues',
-        '--piece', piecePath,
+        '--workflow', workflowPath,
         '--provider', 'mock',
       ],
       cwd: testRepo.path,

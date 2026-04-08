@@ -45,13 +45,13 @@ export function getSlackWebhookUrl(): string | undefined {
 export interface SlackTaskDetail {
   name: string;
   success: boolean;
-  piece: string;
+  workflow: string;
   issueNumber?: number;
   durationSec: number;
   branch?: string;
   worktreePath?: string;
   prUrl?: string;
-  failureMovement?: string;
+  failureStep?: string;
   failureError?: string;
   failureLastMessage?: string;
 }
@@ -84,7 +84,7 @@ function formatTaskLines(task: SlackTaskDetail): string {
   const icon = task.success ? '\u2705' : '\u274C';
   const parts = [
     `${icon} ${task.name}`,
-    `workflow=${task.piece}`,
+    `workflow=${task.workflow}`,
   ];
   if (task.issueNumber !== undefined) {
     parts.push(`issue=#${String(task.issueNumber)}`);
@@ -98,7 +98,7 @@ function formatTaskLines(task: SlackTaskDetail): string {
     if (task.worktreePath) line2Parts.push(`worktree=${task.worktreePath}`);
     if (task.prUrl) line2Parts.push(`pr=${task.prUrl}`);
   } else {
-    if (task.failureMovement) line2Parts.push(`step=${task.failureMovement}`);
+    if (task.failureStep) line2Parts.push(`step=${task.failureStep}`);
     if (task.failureError) {
       line2Parts.push(`error=${truncateText(normalizeText(task.failureError), TRUNCATE_LENGTH)}`);
     }

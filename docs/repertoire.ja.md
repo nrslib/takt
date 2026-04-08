@@ -38,11 +38,11 @@ my-takt-repertoire/
       domain.md
     instructions/
       plan.md
-  pieces/
+  workflows/
     expert.yaml
 ```
 
-`facets/` と `pieces/` ディレクトリだけがインポートされます。repertoire パッケージでは workflow 定義を現在 `pieces/` に配置します。その他のファイルは無視されます。
+`facets/` と `workflows/` ディレクトリだけがインポートされます。その他のファイルは無視されます。
 
 ### takt-repertoire.yaml
 
@@ -65,7 +65,7 @@ takt:
 | フィールド | 必須 | デフォルト | 説明 |
 |-----------|------|-----------|------|
 | `description` | いいえ | - | パッケージの説明 |
-| `path` | いいえ | `.` | `facets/` と `pieces/` 内の workflow 定義を含むディレクトリへのパス |
+| `path` | いいえ | `.` | `facets/` と `workflows/` 内の workflow 定義を含むディレクトリへのパス |
 | `takt.min_version` | いいえ | - | 必要な TAKT の最低バージョン（X.Y.Z 形式） |
 
 ## インストール
@@ -81,7 +81,7 @@ takt repertoire add github:{owner}/{repo}@{ref}
 ### インストール時の処理
 
 1. `gh api` 経由で GitHub から tarball をダウンロード
-2. `facets/` と `pieces/` の workflow ファイルのみを展開（`.md`、`.yaml`、`.yml`）
+2. `facets/` と `workflows/` の workflow ファイルのみを展開（`.md`、`.yaml`、`.yml`）
 3. `takt-repertoire.yaml` マニフェストをバリデーション
 4. TAKT バージョン互換性チェック
 5. `~/.takt/repertoire/@{owner}/{repo}/` にファイルをコピー
@@ -163,6 +163,6 @@ takt repertoire remove @{owner}/{repo}
         personas/
         policies/
         ...
-      pieces/                 # repertoire パッケージ内の workflow 定義
+      workflows/              # repertoire パッケージ内の workflow 定義
         expert.yaml
 ```

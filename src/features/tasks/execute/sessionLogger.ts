@@ -1,15 +1,15 @@
 /**
  * Session logger — NDJSON ログ書き出し専用モジュール
  *
- * PieceEngine のイベントを受け取り、NDJSON セッションログへ追記する責務を担う。
+ * WorkflowEngine のイベントを受け取り、NDJSON セッションログへ追記する責務を担う。
  */
 
 import {
   appendNdjsonLine,
   type NdjsonStepStart,
   type NdjsonStepComplete,
-  type NdjsonPieceComplete,
-  type NdjsonPieceAbort,
+  type NdjsonWorkflowComplete,
+  type NdjsonWorkflowAbort,
   type NdjsonPhaseStart,
   type NdjsonPhaseComplete,
   type NdjsonPhaseJudgeStage,
@@ -19,8 +19,8 @@ import {
 import type { InteractiveMetadata } from './types.js';
 import { isDebugEnabled, writePromptLog } from '../../../shared/utils/index.js';
 import type { PromptLogRecord, NdjsonRecord } from '../../../shared/utils/index.js';
-import type { PieceMovement, AgentResponse, PieceState } from '../../../core/models/index.js';
-import type { JudgeStageEntry, PhasePromptParts } from '../../../core/piece/types.js';
+import type { WorkflowStep, AgentResponse, WorkflowState } from '../../../core/models/index.js';
+import type { JudgeStageEntry, PhasePromptParts } from '../../../core/workflow/types.js';
 import { sanitizeTextForStorage } from './traceReportRedaction.js';
 
 function toJudgmentMatchMethod(
@@ -64,7 +64,7 @@ export class SessionLogger {
   }
 
   onPhaseStart(
-    step: PieceMovement,
+    step: WorkflowStep,
     phase: 1 | 2 | 3,
     phaseName: 'execute' | 'report' | 'judge',
     instruction: string,
@@ -96,7 +96,7 @@ export class SessionLogger {
   }
 
   onPhaseComplete(
-    step: PieceMovement,
+    step: WorkflowStep,
     phase: 1 | 2 | 3,
     phaseName: 'execute' | 'report' | 'judge',
     content: string,
@@ -130,7 +130,7 @@ export class SessionLogger {
         throw new Error(`Missing debug prompt for ${step.name}:${phase}:${resolvedPhaseExecutionId}`);
       }
       const promptRecord: PromptLogRecord = {
-        movement: step.name,
+        step: step.name,
         phase,
         iteration: iteration ?? this.currentIteration,
         phaseExecutionId: resolvedPhaseExecutionId,
@@ -147,7 +147,7 @@ export class SessionLogger {
   }
 
   onJudgeStage(
-    step: PieceMovement,
+    step: WorkflowStep,
     phase: 3,
     phaseName: 'judge',
     entry: JudgeStageEntry,
@@ -172,8 +172,8 @@ export class SessionLogger {
     this.appendRecord(record);
   }
 
-  onMovementStart(
-    step: PieceMovement,
+  onStepStart(
+    step: WorkflowStep,
     iteration: number,
     instruction: string | undefined,
   ): void {
@@ -189,8 +189,8 @@ export class SessionLogger {
     this.appendRecord(record);
   }
 
-  onMovementComplete(
-    step: PieceMovement,
+  onStepComplete(
+    step: WorkflowStep,
     response: AgentResponse,
     instruction: string,
   ): void {
@@ -211,18 +211,18 @@ export class SessionLogger {
     this.appendRecord(record);
   }
 
-  onPieceComplete(state: PieceState): void {
-    const record: NdjsonPieceComplete = {
-      type: 'piece_complete',
+  onWorkflowComplete(state: WorkflowState): void {
+    const record: NdjsonWorkflowComplete = {
+      type: 'workflow_complete',
       iterations: state.iteration,
       endTime: new Date().toISOString(),
     };
     this.appendRecord(record);
   }
 
-  onPieceAbort(state: PieceState, reason: string): void {
-    const record: NdjsonPieceAbort = {
-      type: 'piece_abort',
+  onWorkflowAbort(state: WorkflowState, reason: string): void {
+    const record: NdjsonWorkflowAbort = {
+      type: 'workflow_abort',
       iterations: state.iteration,
       reason: this.sanitizeText(reason),
       endTime: new Date().toISOString(),

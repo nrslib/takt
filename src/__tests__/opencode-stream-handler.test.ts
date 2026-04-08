@@ -17,7 +17,7 @@ import {
   type OpenCodeReasoningPart,
   type OpenCodeToolPart,
 } from '../infra/opencode/OpenCodeStreamHandler.js';
-import type { StreamCallback } from '../core/piece/types.js';
+import type { StreamCallback } from '../core/workflow/types.js';
 
 describe('createStreamTrackingState', () => {
   it('should create fresh state with empty collections', () => {

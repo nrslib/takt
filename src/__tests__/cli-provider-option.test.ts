@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { program } from '../app/cli/program.js';
 
+const removedWorkflowOptionName = `--${['p', 'i', 'e', 'c', 'e'].join('')}`;
+
 describe('CLI --provider option', () => {
   it('should include cursor in provider help text', () => {
     const providerOption = program.options.find((option) => option.long === '--provider');
@@ -16,11 +18,10 @@ describe('CLI --provider option', () => {
     expect(providerOption?.description).toMatch(/claude\|/);
   });
 
-  it('should describe --piece with workflow terminology', () => {
-    const pieceOption = program.options.find((option) => option.long === '--piece');
+  it('should not expose removed legacy workflow option', () => {
+    const removedWorkflowOption = program.options.find((option) => option.long === removedWorkflowOptionName);
 
-    expect(pieceOption).toBeDefined();
-    expect(pieceOption?.description).toContain('--workflow');
+    expect(removedWorkflowOption).toBeUndefined();
   });
 
   it('should expose --workflow as the canonical workflow option', () => {

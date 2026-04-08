@@ -2,19 +2,19 @@
  * Agent execution runners
  */
 
-import { existsSync, readFileSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 import {
   loadCustomAgents,
   loadAgentPrompt,
   loadGlobalConfig,
+  loadPersonaPromptFromPath,
   loadProjectConfig,
   resolveConfigValue,
 } from '../infra/config/index.js';
 import { getProvider, type ProviderType, type ProviderCallOptions } from '../infra/providers/index.js';
 import type { AgentResponse, CustomAgentConfig } from '../core/models/index.js';
-import { resolveAgentProviderModel } from '../core/piece/provider-resolution.js';
-import { DEFAULT_PROVIDER_PERMISSION_PROFILES, resolveMovementPermissionMode } from '../core/piece/permission-profile-resolution.js';
+import { resolveAgentProviderModel } from '../core/workflow/provider-resolution.js';
+import { DEFAULT_PROVIDER_PERMISSION_PROFILES, resolveStepPermissionMode } from '../core/workflow/permission-profile-resolution.js';
 import { createLogger } from '../shared/utils/index.js';
 import { loadTemplate } from '../shared/prompts/index.js';
 import type { RunAgentOptions } from './types.js';
@@ -71,14 +71,6 @@ export class AgentRunner {
       localConfig,
       globalConfig,
     };
-  }
-
-  /** Load persona prompt from file path */
-  private static loadPersonaPromptFromPath(personaPath: string): string {
-    if (!existsSync(personaPath)) {
-      throw new Error(`Persona file not found: ${personaPath}`);
-    }
-    return readFileSync(personaPath, 'utf-8');
   }
 
   /**
@@ -140,8 +132,8 @@ export class AgentRunner {
     globalConfig: ReturnType<typeof loadGlobalConfig>,
   ): RunAgentOptions['permissionMode'] {
     if (options.permissionResolution) {
-      return resolveMovementPermissionMode({
-        movementName: options.permissionResolution.movementName,
+      return resolveStepPermissionMode({
+        stepName: options.permissionResolution.stepName,
         requiredPermissionMode: options.permissionResolution.requiredPermissionMode,
         provider: resolvedProvider,
         projectProviderProfiles: options.permissionResolution.providerProfiles
@@ -221,18 +213,21 @@ export class AgentRunner {
     // 1. If personaPath is provided (resolved file exists), load prompt from file
     //    and wrap it through the perform_agent_system_prompt template
     if (options.personaPath) {
-      const agentDefinition = AgentRunner.loadPersonaPromptFromPath(options.personaPath);
+      const agentDefinition = loadPersonaPromptFromPath(
+        options.personaPath,
+        options.projectCwd ?? options.cwd,
+      );
       const language = options.language ?? 'en';
       const templateVars: Record<string, string> = { agentDefinition };
 
-      if (options.pieceMeta) {
-        templateVars.pieceName = options.pieceMeta.pieceName;
-        templateVars.pieceDescription = options.pieceMeta.pieceDescription ?? '';
-        templateVars.currentMovement = options.pieceMeta.currentMovement;
-        templateVars.movementsList = options.pieceMeta.movementsList
+      if (options.workflowMeta) {
+        templateVars.workflowName = options.workflowMeta.workflowName;
+        templateVars.workflowDescription = options.workflowMeta.workflowDescription ?? '';
+        templateVars.currentStep = options.workflowMeta.currentStep;
+        templateVars.stepsList = options.workflowMeta.stepsList
           .map((m, i) => `${i + 1}. ${m.name}${m.description ? ` - ${m.description}` : ''}`)
           .join('\n');
-        templateVars.currentPosition = options.pieceMeta.currentPosition;
+        templateVars.currentPosition = options.workflowMeta.currentPosition;
       }
 
       const systemPrompt = loadTemplate('perform_agent_system_prompt', language, templateVars);
@@ -261,7 +256,7 @@ export class AgentRunner {
       return agent.call(task, callOptions);
     }
 
-    // 3. No persona specified — run with instruction_template only (no system prompt)
+    // 3. No persona specified — run with the resolved instruction only (no system prompt)
     options.onPromptResolved?.({
       systemPrompt: '',
       userInstruction: task,

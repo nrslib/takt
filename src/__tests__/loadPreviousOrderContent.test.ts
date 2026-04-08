@@ -23,7 +23,7 @@ function createRunWithOrder(cwd: string, slug: string, taskContent: string, orde
 
   const meta = {
     task: taskContent,
-    piece: 'default',
+    workflow: 'default',
     status: 'completed',
     startTime: '2026-02-01T00:00:00.000Z',
     logsDirectory: `.takt/runs/${slug}/logs`,
@@ -40,7 +40,7 @@ function createRunWithoutOrder(cwd: string, slug: string, taskContent: string): 
 
   const meta = {
     task: taskContent,
-    piece: 'default',
+    workflow: 'default',
     status: 'completed',
     startTime: '2026-02-01T00:00:00.000Z',
     logsDirectory: `.takt/runs/${slug}/logs`,

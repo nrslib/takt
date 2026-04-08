@@ -34,7 +34,7 @@ describe('E2E: Add task and run (takt add → takt run)', () => {
   });
 
   it('should add a task file and execute it with takt run', () => {
-    const piecePath = resolve(__dirname, '../fixtures/pieces/simple.yaml');
+    const workflowPath = resolve(__dirname, '../fixtures/workflows/simple.yaml');
 
     // Step 1: Create a pending task in .takt/tasks.yaml (simulates `takt add`)
     const taktDir = join(testRepo.path, '.takt');
@@ -46,7 +46,7 @@ describe('E2E: Add task and run (takt add → takt run)', () => {
       '  - name: e2e-test-task',
       '    status: pending',
       '    content: "Add a single line \\"E2E test passed\\" to README.md"',
-      `    piece: "${piecePath}"`,
+      `    workflow: "${workflowPath}"`,
       `    created_at: "${new Date().toISOString()}"`,
       '    started_at: null',
       '    completed_at: null',

@@ -1,5 +1,5 @@
-import type { PieceRule, RuleMatchMethod, Language } from '../core/models/types.js';
-import type { ProviderType } from '../core/piece/types.js';
+import type { WorkflowRule, RuleMatchMethod, Language } from '../core/models/types.js';
+import type { ProviderType } from '../core/workflow/types.js';
 import { runAgent, type StreamCallback } from './runner.js';
 import { detectJudgeIndex, buildJudgePrompt, isValidRuleIndex, buildJudgeConditions } from './judge-utils.js';
 import { loadJudgmentSchema, loadEvaluationSchema } from '../infra/resources/schema-loader.js';
@@ -7,7 +7,7 @@ import { detectRuleIndex } from '../shared/utils/ruleIndex.js';
 
 export interface JudgeStatusOptions {
   cwd: string;
-  movementName: string;
+  stepName: string;
   provider?: ProviderType;
   resolvedProvider?: ProviderType;
   resolvedModel?: string;
@@ -34,12 +34,12 @@ export interface TagJudgeRunOptions {
   resolvedModel?: string;
   language?: Language;
   onStream?: StreamCallback;
-  movementName: string;
+  stepName: string;
 }
 
 export async function runTagJudgeStage(
   tagInstruction: string,
-  rules: PieceRule[],
+  rules: WorkflowRule[],
   interactiveEnabled: boolean,
   runOptions: TagJudgeRunOptions,
   onJudgeStage?: JudgeStatusOptions['onJudgeStage'],
@@ -64,7 +64,7 @@ export async function runTagJudgeStage(
   });
 
   if (tagResponse.status === 'done') {
-    const tagRuleIndex = detectRuleIndex(tagResponse.content, runOptions.movementName);
+    const tagRuleIndex = detectRuleIndex(tagResponse.content, runOptions.stepName);
     if (isValidRuleIndex(tagRuleIndex, rules, interactiveEnabled)) {
       return { ruleIndex: tagRuleIndex, method: 'phase3_tag' };
     }
@@ -130,7 +130,7 @@ export async function evaluateCondition(
 export async function judgeStatus(
   structuredInstruction: string,
   tagInstruction: string,
-  rules: PieceRule[],
+  rules: WorkflowRule[],
   options: JudgeStatusOptions,
 ): Promise<JudgeStatusResult> {
   if (rules.length === 0) {
@@ -189,7 +189,7 @@ export async function judgeStatus(
       resolvedModel: options.resolvedModel,
       language: options.language,
       onStream: options.onStream,
-      movementName: options.movementName,
+      stepName: options.stepName,
     },
     options.onJudgeStage,
   );
@@ -232,5 +232,5 @@ export async function judgeStatus(
     }
   }
 
-  throw new Error(`Status not found for movement "${options.movementName}"`);
+  throw new Error(`Status not found for step "${options.stepName}"`);
 }

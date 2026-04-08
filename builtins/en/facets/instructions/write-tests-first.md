@@ -1,5 +1,5 @@
 Write tests based on the plan before implementing production code.
-Refer only to files within the Report Directory shown in the Piece Context. Do not search or reference other report directories.
+Refer only to files within the Report Directory shown in the Workflow Context. Do not search or reference other report directories.
 
 **Important: Do NOT create or modify production code. Only test files may be created.**
 

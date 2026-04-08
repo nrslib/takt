@@ -45,7 +45,7 @@ type WithResolved = {
 describe('judge runAgent provider/model resolution (#556)', () => {
   const judgeBase: JudgeStatusOptions & WithResolved = {
     cwd: '/repo',
-    movementName: 'review',
+    stepName: 'review',
     provider: 'codex',
     resolvedProvider: 'codex',
     resolvedModel: 'gpt-5.2-codex',
@@ -86,7 +86,7 @@ describe('judge runAgent provider/model resolution (#556)', () => {
 
       const runOpts: TagJudgeRunOptions & WithResolved = {
         cwd: '/repo',
-        movementName: 'review',
+        stepName: 'review',
         provider: 'codex',
         resolvedProvider: 'codex',
         resolvedModel: 'gpt-5.2-codex',

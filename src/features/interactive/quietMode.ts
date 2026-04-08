@@ -12,7 +12,7 @@ import { info, error, blankLine } from '../../shared/ui/index.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
 import { readMultilineInput } from './lineEditor.js';
 import {
-  type PieceContext,
+  type WorkflowContext,
   type InteractiveModeResult,
   type InteractiveUIText,
   type ConversationMessage,
@@ -38,13 +38,13 @@ const log = createLogger('quiet-mode');
  *
  * @param cwd - Working directory
  * @param initialInput - Pre-filled input (e.g., from issue reference)
- * @param pieceContext - Piece context for template rendering
+ * @param workflowContext - Workflow context for template rendering
  * @returns Result with generated task instructions
  */
 export async function quietMode(
   cwd: string,
   initialInput?: string,
-  pieceContext?: PieceContext,
+  workflowContext?: WorkflowContext,
 ): Promise<InteractiveModeResult> {
   const ctx = initializeSession(cwd, 'interactive');
 
@@ -76,7 +76,7 @@ export async function quietMode(
   const noTranscript = getLabel('interactive.noTranscript', ctx.lang);
 
   const summaryPrompt = buildSummaryPrompt(
-    history, !!ctx.sessionId, ctx.lang, noTranscript, conversationLabel, pieceContext,
+    history, !!ctx.sessionId, ctx.lang, noTranscript, conversationLabel, workflowContext,
   );
 
   if (!summaryPrompt) {

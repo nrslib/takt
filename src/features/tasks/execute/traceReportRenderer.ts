@@ -1,24 +1,24 @@
 import type {
-  TraceMovement,
+  TraceStep,
   TracePhase,
   TraceReportParams,
 } from './traceReportTypes.js';
 
-interface MovementBlock {
-  kind: 'movement';
-  movement: TraceMovement;
+interface StepBlock {
+  kind: 'step';
+  step: TraceStep;
 }
 
 interface LoopBlock {
   kind: 'loop';
-  movements: TraceMovement[];
+  steps: TraceStep[];
 }
 
-type RenderBlock = MovementBlock | LoopBlock;
+type RenderBlock = StepBlock | LoopBlock;
 
 export function assertTraceParams(params: TraceReportParams): void {
   if (!params.tracePath) throw new Error('tracePath is required');
-  if (!params.pieceName) throw new Error('pieceName is required');
+  if (!params.workflowName) throw new Error('workflowName is required');
   if (!params.task) throw new Error('task is required');
   if (!params.runSlug) throw new Error('runSlug is required');
   if (!params.endTime) throw new Error('endTime is required');
@@ -27,13 +27,13 @@ export function assertTraceParams(params: TraceReportParams): void {
   }
 }
 
-function assertTraceMovement(movement: TraceMovement, index: number): void {
-  if (!movement.step) throw new Error(`trace movement[${index}] missing step`);
-  if (!movement.persona) throw new Error(`trace movement[${index}] missing persona`);
-  if (!Number.isInteger(movement.iteration) || movement.iteration <= 0) {
-    throw new Error(`trace movement[${index}] has invalid iteration: ${movement.iteration}`);
+function assertTraceStep(step: TraceStep, index: number): void {
+  if (!step.step) throw new Error(`trace step[${index}] missing step`);
+  if (!step.persona) throw new Error(`trace step[${index}] missing persona`);
+  if (!Number.isInteger(step.iteration) || step.iteration <= 0) {
+    throw new Error(`trace step[${index}] has invalid iteration: ${step.iteration}`);
   }
-  if (!movement.startedAt) throw new Error(`trace movement[${index}] missing startedAt`);
+  if (!step.startedAt) throw new Error(`trace step[${index}] missing startedAt`);
 }
 
 function hasPhaseError(phase: TracePhase): boolean {
@@ -43,18 +43,18 @@ function hasPhaseError(phase: TracePhase): boolean {
   return (phase.judgeStages ?? []).some((stage) => stage.status === 'error');
 }
 
-function movementMarker(
-  movement: TraceMovement,
+function stepMarker(
+  step: TraceStep,
   runStatus: TraceReportParams['status'],
-  isLastMovement: boolean,
+  isLastStep: boolean,
 ): string {
-  if (movement.result?.status === 'error' || movement.result?.error) {
+  if (step.result?.status === 'error' || step.result?.error) {
     return '❌';
   }
-  if (runStatus === 'aborted' && !movement.result && isLastMovement) {
+  if (runStatus === 'aborted' && !step.result && isLastStep) {
     return '❌';
   }
-  if (movement.phases.some(hasPhaseError)) {
+  if (step.phases.some(hasPhaseError)) {
     return '⚠️';
   }
   return '';
@@ -127,31 +127,31 @@ function renderPhaseSection(
   return lines;
 }
 
-function renderMovementSection(
-  movement: TraceMovement,
+function renderStepSection(
+  step: TraceStep,
   params: TraceReportParams,
-  isLastMovement: boolean,
+  isLastStep: boolean,
 ): string[] {
-  const marker = movementMarker(movement, params.status, isLastMovement);
+  const marker = stepMarker(step, params.status, isLastStep);
   const markerSuffix = marker ? ` ${marker}` : '';
   const lines: string[] = [
-    `## Iteration ${movement.iteration}: ${movement.step} (persona: ${movement.persona})${markerSuffix} - ${movement.startedAt}`,
+    `## Iteration ${step.iteration}: ${step.step} (persona: ${step.persona})${markerSuffix} - ${step.startedAt}`,
     '',
   ];
 
-  if (movement.instruction) {
+  if (step.instruction) {
     lines.push(
-      `- Movement Instruction: ${movement.instruction.length} chars`,
+      `- Step Instruction: ${step.instruction.length} chars`,
       '<details><summary>Instruction</summary>',
       '',
-      movement.instruction,
+      step.instruction,
       '',
       '</details>',
       '',
     );
   }
 
-  const phases = [...movement.phases].sort((a, b) => {
+  const phases = [...step.phases].sort((a, b) => {
     const byStart = a.startedAt.localeCompare(b.startedAt);
     if (byStart !== 0) {
       return byStart;
@@ -163,30 +163,30 @@ function renderMovementSection(
     lines.push(...renderPhaseSection(phase, params.status));
   }
 
-  if (movement.result) {
+  if (step.result) {
     lines.push(
-      `- Movement Status: ${movement.result.status}`,
-      `- Movement Response: ${movement.result.content.length} chars`,
+      `- Step Status: ${step.result.status}`,
+      `- Step Response: ${step.result.content.length} chars`,
     );
-    if (movement.result.matchMethod) {
-      lines.push(`- Match Method: ${movement.result.matchMethod}`);
+    if (step.result.matchMethod) {
+      lines.push(`- Match Method: ${step.result.matchMethod}`);
     }
-    if (movement.result.matchedRuleIndex != null) {
-      lines.push(`- Matched Rule Index: ${movement.result.matchedRuleIndex}`);
+    if (step.result.matchedRuleIndex != null) {
+      lines.push(`- Matched Rule Index: ${step.result.matchedRuleIndex}`);
     }
-    if (movement.result.error) {
-      lines.push(`- Error: ${movement.result.error}`);
+    if (step.result.error) {
+      lines.push(`- Error: ${step.result.error}`);
     }
-    lines.push('<details><summary>Movement Response</summary>', '', movement.result.content, '', '</details>');
+    lines.push('<details><summary>Step Response</summary>', '', step.result.content, '', '</details>');
   } else {
-    lines.push(`- Movement Status: ${movement.completedAt ? 'aborted' : 'in_progress'}`);
+    lines.push(`- Step Status: ${step.completedAt ? 'aborted' : 'in_progress'}`);
   }
 
   lines.push('', '---', '');
   return lines;
 }
 
-function buildRenderBlocks(sorted: TraceMovement[]): RenderBlock[] {
+function buildRenderBlocks(sorted: TraceStep[]): RenderBlock[] {
   const blocks: RenderBlock[] = [];
   let index = 0;
   while (index < sorted.length) {
@@ -212,37 +212,37 @@ function buildRenderBlocks(sorted: TraceMovement[]): RenderBlock[] {
         }
         blocks.push({
           kind: 'loop',
-          movements: sorted.slice(index, end),
+          steps: sorted.slice(index, end),
         });
         index = end;
         continue;
       }
     }
-    blocks.push({ kind: 'movement', movement: sorted[index]! });
+    blocks.push({ kind: 'step', step: sorted[index]! });
     index += 1;
   }
   return blocks;
 }
 
 function renderLoopBlock(block: LoopBlock, params: TraceReportParams): string[] {
-  const first = block.movements[0]!;
-  const second = block.movements[1]!;
-  const last = block.movements[block.movements.length - 1]!;
-  const cycleCount = Math.floor(block.movements.length / 2);
+  const first = block.steps[0]!;
+  const second = block.steps[1]!;
+  const last = block.steps[block.steps.length - 1]!;
+  const cycleCount = Math.floor(block.steps.length / 2);
   const lines: string[] = [
     `## Iteration ${first.iteration}-${last.iteration}: ${first.step} ↔ ${second.step} loop (${cycleCount} cycles) ⚠️`,
     '',
-    `<details><summary>Loop details (${block.movements.length} movements)</summary>`,
+    `<details><summary>Loop details (${block.steps.length} steps)</summary>`,
     '',
   ];
 
-  block.movements.forEach((movement, movementIndex) => {
-    const movementLines = renderMovementSection(
-      movement,
+  block.steps.forEach((step, stepIndex) => {
+    const stepLines = renderStepSection(
+      step,
       params,
-      movementIndex === block.movements.length - 1,
+      stepIndex === block.steps.length - 1,
     );
-    lines.push(...movementLines.map((line) => (line ? `  ${line}` : line)));
+    lines.push(...stepLines.map((line) => (line ? `  ${line}` : line)));
   });
 
   lines.push('</details>', '', '---', '');
@@ -252,7 +252,7 @@ function renderLoopBlock(block: LoopBlock, params: TraceReportParams): string[] 
 export function renderTraceReportMarkdown(
   params: TraceReportParams,
   traceStartedAt: string,
-  movements: TraceMovement[],
+  steps: TraceStep[],
 ): string {
   assertTraceParams(params);
   if (!traceStartedAt) {
@@ -261,7 +261,7 @@ export function renderTraceReportMarkdown(
 
   const statusLabel = params.status === 'completed' ? '✅ completed' : '❌ aborted';
   const lines: string[] = [
-    `# Execution Trace: ${params.pieceName}`,
+    `# Execution Trace: ${params.workflowName}`,
     '',
     `- Task: ${params.task}`,
     `- Run: ${params.runSlug}`,
@@ -275,14 +275,14 @@ export function renderTraceReportMarkdown(
     '',
   ];
 
-  const sorted = [...movements].sort((a, b) => {
+  const sorted = [...steps].sort((a, b) => {
     const byStart = a.startedAt.localeCompare(b.startedAt);
     if (byStart !== 0) {
       return byStart;
     }
     return a.iteration - b.iteration;
   });
-  sorted.forEach((movement, index) => assertTraceMovement(movement, index));
+  sorted.forEach((step, index) => assertTraceStep(step, index));
 
   const blocks = buildRenderBlocks(sorted);
   blocks.forEach((block, blockIndex) => {
@@ -290,7 +290,7 @@ export function renderTraceReportMarkdown(
       lines.push(...renderLoopBlock(block, params));
       return;
     }
-    lines.push(...renderMovementSection(block.movement, params, blockIndex === blocks.length - 1));
+    lines.push(...renderStepSection(block.step, params, blockIndex === blocks.length - 1));
   });
 
   return lines.join('\n');

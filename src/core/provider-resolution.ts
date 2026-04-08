@@ -1,4 +1,4 @@
-import type { ProviderType } from './piece/types.js';
+import type { ProviderType } from './workflow/types.js';
 
 export interface ProviderModelCandidate {
   provider?: ProviderType;

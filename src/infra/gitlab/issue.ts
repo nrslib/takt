@@ -1,7 +1,7 @@
 /**
  * GitLab Issue utilities
  *
- * Fetches issue content via `glab` CLI and formats it for piece execution.
+ * Fetches issue content via `glab` CLI and formats it for workflow execution.
  */
 
 import { execFileSync } from 'node:child_process';

@@ -1,6 +1,6 @@
 import {
-  loadPieceByIdentifier,
-  isPiecePath,
+  loadWorkflowByIdentifier,
+  isWorkflowPath,
 } from '../../../infra/config/index.js';
 import { confirm } from '../../../shared/prompt/index.js';
 import { createSharedClone, summarizeTaskName, resolveBaseBranch, TaskRunner } from '../../../infra/task/index.js';
@@ -9,26 +9,26 @@ import { createLogger } from '../../../shared/utils/index.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import { executeTask } from './taskExecution.js';
 import type { TaskExecutionOptions, WorktreeConfirmationResult, SelectAndExecuteOptions } from './types.js';
-import { selectPiece } from '../../pieceSelection/index.js';
+import { selectWorkflow } from '../../workflowSelection/index.js';
 import { buildBooleanTaskResult, persistTaskError, persistTaskResult } from './taskResultHandler.js';
 
 export type { WorktreeConfirmationResult, SelectAndExecuteOptions };
 
 const log = createLogger('selectAndExecute');
 
-export async function determinePiece(cwd: string, override?: string): Promise<string | null> {
+export async function determineWorkflow(cwd: string, override?: string): Promise<string | null> {
   if (override) {
-    if (isPiecePath(override)) {
+    if (isWorkflowPath(override)) {
       return override;
     }
-    const resolvedPiece = loadPieceByIdentifier(override, cwd);
-    if (!resolvedPiece) {
+    const resolvedWorkflow = loadWorkflowByIdentifier(override, cwd);
+    if (!resolvedWorkflow) {
       error(`Workflow not found: ${sanitizeTerminalText(override)}`);
       return null;
     }
     return override;
   }
-  return selectPiece(cwd);
+  return selectWorkflow(cwd);
 }
 
 export async function confirmAndCreateWorktree(
@@ -75,20 +75,20 @@ export async function selectAndExecuteTask(
   options?: SelectAndExecuteOptions,
   agentOverrides?: TaskExecutionOptions,
 ): Promise<void> {
-  const pieceIdentifier = await determinePiece(cwd, options?.piece);
+  const workflowIdentifier = await determineWorkflow(cwd, options?.workflow);
 
-  if (pieceIdentifier === null) {
+  if (workflowIdentifier === null) {
     info('Cancelled');
     return;
   }
 
   const execCwd = cwd;
-  log.info('Starting task execution', { piece: pieceIdentifier, worktree: false });
+  log.info('Starting task execution', { workflow: workflowIdentifier, worktree: false });
   const taskRunner = new TaskRunner(cwd);
   let taskRecord: Awaited<ReturnType<TaskRunner['addTask']>> | null = null;
   if (options?.skipTaskList !== true) {
     taskRecord = taskRunner.addTask(task, {
-      piece: pieceIdentifier,
+      workflow: workflowIdentifier,
     });
   }
   const startedAt = new Date().toISOString();
@@ -98,7 +98,7 @@ export async function selectAndExecuteTask(
     taskSuccess = await executeTask({
       task,
       cwd: execCwd,
-      pieceIdentifier,
+      workflowIdentifier,
       projectCwd: cwd,
       agentOverrides,
       interactiveUserInput: options?.interactiveUserInput === true,

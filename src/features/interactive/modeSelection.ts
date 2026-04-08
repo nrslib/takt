@@ -1,7 +1,7 @@
 /**
  * Interactive mode selection UI.
  *
- * Presents the four interactive mode options after piece selection
+ * Presents the four interactive mode options after workflow selection
  * and returns the user's choice.
  */
 
@@ -14,14 +14,14 @@ import { getLabel } from '../../shared/i18n/index.js';
  * Prompt the user to select an interactive mode.
  *
  * @param lang - Display language
- * @param pieceDefault - Piece-level default mode (overrides user default)
+ * @param workflowDefault - Workflow-level default mode (overrides user default)
  * @returns Selected mode, or null if cancelled
  */
 export async function selectInteractiveMode(
   lang: 'en' | 'ja',
-  pieceDefault?: InteractiveMode,
+  workflowDefault?: InteractiveMode,
 ): Promise<InteractiveMode | null> {
-  const defaultMode = pieceDefault ?? DEFAULT_INTERACTIVE_MODE;
+  const defaultMode = workflowDefault ?? DEFAULT_INTERACTIVE_MODE;
 
   const options: { label: string; value: InteractiveMode; description: string }[] = INTERACTIVE_MODES.map((mode) => ({
     label: getLabel(`interactive.modeSelection.${mode}`, lang),

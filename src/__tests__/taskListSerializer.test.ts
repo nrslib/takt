@@ -21,12 +21,12 @@ describe('serializeTaskListItemForJson', () => {
       exceededCurrentIteration: 3,
       data: {
         task: 'task body',
-        piece: 'workflow-alpha',
-        start_movement: 'implement',
+        workflow: 'workflow-alpha',
+        start_step: 'implement',
         retry_note: 'retry',
       },
       failure: {
-        movement: 'review',
+        step: 'review',
         error: 'Boom',
         last_message: 'last',
       },
@@ -64,9 +64,6 @@ describe('serializeTaskListItemForJson', () => {
         last_message: 'last',
       },
     });
-    expect(serializedData).not.toHaveProperty('piece');
-    expect(serializedData).not.toHaveProperty('start_movement');
-    expect(serializedFailure).not.toHaveProperty('movement');
   });
 
   it('maps should_publish_branch_to_origin true into json data', () => {

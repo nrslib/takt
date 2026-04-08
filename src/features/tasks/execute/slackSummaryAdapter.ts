@@ -4,7 +4,6 @@
 
 import type { TaskListItem } from '../../../infra/task/index.js';
 import type { SlackTaskDetail } from '../../../shared/utils/index.js';
-import { DEFAULT_PIECE_NAME } from '../../../shared/constants.js';
 
 export function generateRunId(): string {
   const now = new Date();
@@ -23,13 +22,13 @@ export function toSlackTaskDetail(item: TaskListItem): SlackTaskDetail {
   return {
     name: item.name,
     success: item.kind === 'completed',
-    piece: item.data?.piece ?? DEFAULT_PIECE_NAME,
+    workflow: item.data?.workflow ?? 'default',
     issueNumber: item.data?.issue,
     durationSec: computeTaskDurationSec(item),
     branch: item.branch,
     worktreePath: item.worktreePath,
     prUrl: item.prUrl,
-    failureMovement: item.failure?.movement,
+    failureStep: item.failure?.step,
     failureError: item.failure?.error,
     failureLastMessage: item.failure?.last_message,
   };

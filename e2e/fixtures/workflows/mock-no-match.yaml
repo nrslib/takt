@@ -1,0 +1,22 @@
+name: e2e-mock-no-match
+description: Workflow with a strict rule condition that will not match mock output
+workflow_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+personas:
+  test-coder: |
+    You are the E2E test coder.
+max_steps: 3
+steps:
+  - name: execute
+    edit: true
+    persona: test-coder
+    required_permission_mode: edit
+    instruction: |
+      {task}
+    rules:
+      - condition: SpecificMatchThatWillNotOccur
+        next: COMPLETE

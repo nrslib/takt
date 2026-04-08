@@ -52,7 +52,7 @@ language: ja         # 表示言語: ja | en
 #   retention_days: 30             # イベントファイルの保持期間（日）
 
 # インタラクティブモード
-# interactive_preview_movements: 3 # インタラクティブモードでのムーブメントプレビュー数 (0-10)
+# interactive_preview_steps: 3 # インタラクティブモードでの step プレビュー数 (0-10)
 
 # ペルソナ別プロバイダー・モデル指定
 # persona_providers:
@@ -63,7 +63,7 @@ language: ja         # 表示言語: ja | en
 #     provider: codex
 #     model: gpt-5.2-codex
 
-# プロバイダー固有オプション（最低優先度、ピース/ムーブメントで上書き可能）
+# プロバイダー固有オプション（最低優先度、workflow/step で上書き可能）
 # provider_options:
 #   codex:
 #     network_access: true
@@ -119,5 +119,5 @@ language: ja         # 表示言語: ja | en
 # ワークフロー一覧/カテゴリ
 # enable_builtin_workflows: true                          # builtins/{lang}/workflows を有効化
 # disabled_builtins:
-#   - magi                                                # 無効化するビルトインピース名
+#   - magi                                                # 無効化するビルトイン workflow 名
 # workflow_categories_file: ~/.takt/preferences/workflow-categories.yaml  # カテゴリ定義ファイル

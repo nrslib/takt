@@ -21,34 +21,34 @@ import type {
   ProviderOptionsOriginResolver,
   ProviderOptionsSource,
   ProviderOptionsTraceOrigin,
-} from '../../core/piece/types.js';
-import type { MovementProviderOptions } from '../../core/models/piece-types.js';
+} from '../../core/workflow/types.js';
+import type { StepProviderOptions } from '../../core/models/workflow-types.js';
 
 export type { ConfigParameterKey } from './resolvedConfig.js';
 export { invalidateResolvedConfigCache, invalidateAllResolvedConfigCache } from './resolutionCache.js';
 
-export interface PieceContext {
+export interface WorkflowContext {
   provider?: LoadedConfig['provider'];
   model?: LoadedConfig['model'];
   providerOptions?: LoadedConfig['providerOptions'];
 }
 
 export interface ResolveConfigOptions {
-  pieceContext?: PieceContext;
+  workflowContext?: WorkflowContext;
 }
 
-export type ConfigValueSource = 'env' | 'project' | 'piece' | 'global' | 'default';
+export type ConfigValueSource = 'env' | 'project' | 'workflow' | 'global' | 'default';
 
 export interface ResolvedConfigValue<K extends ConfigParameterKey> {
   value: LoadedConfig[K];
   source: ConfigValueSource;
 }
 
-type ResolutionLayer = 'local' | 'piece' | 'global';
+type ResolutionLayer = 'local' | 'workflow' | 'global';
 interface ResolutionRule<K extends ConfigParameterKey> {
   layers: readonly ResolutionLayer[];
   mergeMode?: 'analytics';
-  pieceValue?: (pieceContext: PieceContext | undefined) => LoadedConfig[K] | undefined;
+  workflowValue?: (workflowContext: WorkflowContext | undefined) => LoadedConfig[K] | undefined;
 }
 
 /** Default values for project-local keys that need NonNullable guarantees */
@@ -56,7 +56,7 @@ const PROJECT_LOCAL_DEFAULTS: Partial<Record<ConfigParameterKey, unknown>> = {
   minimalOutput: false,
   concurrency: 1,
   taskPollIntervalMs: 500,
-  interactivePreviewMovements: 3,
+  interactivePreviewSteps: 3,
 };
 
 function loadProjectConfigCached(projectDir: string) {
@@ -75,16 +75,16 @@ const DEFAULT_RULE: ResolutionRule<ConfigParameterKey> = {
 
 const RESOLUTION_REGISTRY: Partial<{ [K in ConfigParameterKey]: ResolutionRule<K> }> = {
   provider: {
-    layers: ['local', 'piece', 'global'],
-    pieceValue: (pieceContext) => pieceContext?.provider,
+    layers: ['local', 'workflow', 'global'],
+    workflowValue: (workflowContext) => workflowContext?.provider,
   },
   model: {
-    layers: ['local', 'piece', 'global'],
-    pieceValue: (pieceContext) => pieceContext?.model,
+    layers: ['local', 'workflow', 'global'],
+    workflowValue: (workflowContext) => workflowContext?.model,
   },
   providerOptions: {
-    layers: ['local', 'piece', 'global'],
-    pieceValue: (pieceContext) => pieceContext?.providerOptions,
+    layers: ['local', 'workflow', 'global'],
+    workflowValue: (workflowContext) => workflowContext?.providerOptions,
   },
   allowGitHooks: { layers: ['local', 'global'] },
   allowGitFilters: { layers: ['local', 'global'] },
@@ -94,7 +94,7 @@ const RESOLUTION_REGISTRY: Partial<{ [K in ConfigParameterKey]: ResolutionRule<K
   analytics: { layers: ['local', 'global'], mergeMode: 'analytics' },
   autoFetch: { layers: ['global'] },
   baseBranch: { layers: ['local', 'global'] },
-  pieceOverrides: { layers: ['local', 'global'] },
+  workflowOverrides: { layers: ['local', 'global'] },
 };
 
 function resolveAnalyticsMerged(
@@ -156,8 +156,8 @@ function resolveByRegistry<K extends ConfigParameterKey>(
     let value: LoadedConfig[K] | undefined;
     if (layer === 'local') {
       value = getLocalLayerValue(project, key);
-    } else if (layer === 'piece') {
-      value = rule.pieceValue?.(options?.pieceContext);
+    } else if (layer === 'workflow') {
+      value = rule.workflowValue?.(options?.workflowContext);
     } else {
       value = getGlobalLayerValue(global, key);
     }
@@ -168,8 +168,8 @@ function resolveByRegistry<K extends ConfigParameterKey>(
         }
         return { value, source: 'project' };
       }
-      if (layer === 'piece') {
-        return { value, source: 'piece' };
+      if (layer === 'workflow') {
+        return { value, source: 'workflow' };
       }
       if (key === 'providerOptions') {
         return { value, source: getProviderOptionsSource(loadGlobalConfigTraceState()) };
@@ -202,7 +202,7 @@ export function resolveConfigValueWithSource<K extends ConfigParameterKey>(
   options?: ResolveConfigOptions,
 ): ResolvedConfigValue<K> {
   const resolved = resolveUncachedConfigValue(projectDir, key, options);
-  if (!options?.pieceContext) {
+  if (!options?.workflowContext) {
     setCachedResolvedValue(projectDir, key, resolved.value);
   }
   return resolved;
@@ -213,7 +213,7 @@ export function resolveConfigValue<K extends ConfigParameterKey>(
   key: K,
   options?: ResolveConfigOptions,
 ): LoadedConfig[K] {
-  if (!options?.pieceContext && hasCachedResolvedValue(projectDir, key)) {
+  if (!options?.workflowContext && hasCachedResolvedValue(projectDir, key)) {
     return getCachedResolvedValue(projectDir, key) as LoadedConfig[K];
   }
   return resolveConfigValueWithSource(projectDir, key, options).value;
@@ -244,7 +244,7 @@ type TracedConfigState = {
 };
 
 function resolveProviderOptionsSourceFromValues(
-  providerOptions: MovementProviderOptions | undefined,
+  providerOptions: StepProviderOptions | undefined,
   originResolver: ProviderOptionsOriginResolver,
 ): ProviderOptionsSource {
   const paths = getPresentProviderOptionPaths(providerOptions);

@@ -20,8 +20,8 @@ prevent_sleep: false          # Prevent macOS idle sleep during execution (caffe
 notification_sound: true      # Enable/disable notification sounds
 notification_sound_events:    # Optional per-event toggles
   iteration_limit: false
-  piece_complete: true
-  piece_abort: true
+  workflow_complete: true
+  workflow_abort: true
   run_complete: true          # Enabled by default; set false to disable
   run_abort: true             # Enabled by default; set false to disable
 concurrency: 1                # Parallel task count for takt run (1-10, default: 1 = sequential)
@@ -30,7 +30,7 @@ interactive_preview_steps: 3      # Step previews in interactive mode (0-10, def
 # auto_fetch: false            # Fetch remote before cloning (default: false)
 # base_branch: main            # Base branch for clone creation (default: remote default branch)
 
-# Runtime environment defaults (applies to all workflows unless piece_config.runtime overrides)
+# Runtime environment defaults (applies to all workflows unless workflow_config.runtime overrides)
 # runtime:
 #   prepare:
 #     - gradle    # Prepare Gradle cache/config in .runtime/
@@ -85,21 +85,21 @@ interactive_preview_steps: 3      # Step previews in interactive mode (0-10, def
 
 # Workflow security policies (all default to deny)
 # These settings control what untrusted workflow YAMLs are allowed to do.
-# pieceMcpServers:                       # MCP server transport policy
+# workflowMcpServers:                    # MCP server transport policy
 #   stdio: true                          # Allow stdio transport (default: false)
 #   sse: false                           # Allow SSE transport (default: false)
 #   http: false                          # Allow HTTP transport (default: false)
-# pieceArpeggio:                         # Arpeggio custom code policy
+# workflowArpeggio:                      # Arpeggio custom code policy
 #   customDataSourceModules: false       # Allow custom data source modules (default: false)
 #   customMergeInlineJs: false           # Allow inline JS merge functions (default: false)
 #   customMergeFiles: false              # Allow external merge files (default: false)
-# pieceRuntimePrepare:                   # Runtime prepare policy
+# workflowRuntimePrepare:                # Runtime prepare policy
 #   customScripts: false                 # Allow custom scripts (default: false; builtin presets always allowed)
 # syncConflictResolver:                  # Sync conflict resolver policy
 #   autoApproveTools: false              # Allow auto-approval of tools (default: false)
 
-# Builtin workflow filtering (optional; config keys retain piece_* names)
-# builtin_pieces_enabled: true           # Set false to disable all builtin workflows
+# Builtin workflow filtering (optional; config keys retain workflow_* names)
+# enable_builtin_workflows: true           # Set false to disable all builtin workflows
 # disabled_builtins: [magi]              # Disable specific builtin workflows by name
 
 # Pipeline execution configuration (optional)
@@ -145,18 +145,18 @@ interactive_preview_steps: 3      # Step previews in interactive mode (0-10, def
 | `codex_cli_path` | string | - | Codex CLI binary path override (absolute) |
 | `cursor_cli_path` | string | - | Cursor Agent CLI binary path override (absolute) |
 | `copilot_cli_path` | string | - | Copilot CLI binary path override (absolute) |
-| `enable_builtin_pieces` | boolean | `true` | Enable builtin workflows (config key name unchanged) |
+| `enable_builtin_workflows` | boolean | `true` | Enable builtin workflows |
 | `disabled_builtins` | string[] | `[]` | Builtin workflows to disable, by workflow `name` |
 | `pipeline` | object | - | Pipeline template settings |
 | `bookmarks_file` | string | - | Path to bookmarks file |
 | `auto_fetch` | boolean | `false` | Fetch remote before cloning to keep clones up-to-date |
 | `base_branch` | string | - | Base branch for clone creation (defaults to remote default branch) |
-| `piece_categories_file` | string | - | Path to categories file (see [Workflow categories](#piece-categories); default overlay path uses `piece-categories.yaml`) |
+| `workflow_categories_file` | string | - | Path to categories file (see [Workflow categories](#workflow-categories); default overlay path uses `workflow-categories.yaml`) |
 | `vcs_provider` | `"github"` \| `"gitlab"` | auto-detect | VCS provider (auto-detected from git remote URL) |
 | `taktProviders` | object | - | TAKT internal provider overrides (e.g., `assistant: { provider: claude, model: opus }`) |
-| `pieceMcpServers` | object | all `false` | MCP server transport policy (`stdio`, `sse`, `http` toggles) |
-| `pieceArpeggio` | object | all `false` | Arpeggio custom code policy (`customDataSourceModules`, `customMergeInlineJs`, `customMergeFiles`) |
-| `pieceRuntimePrepare` | object | `{ customScripts: false }` | Runtime prepare policy (builtin presets always allowed) |
+| `workflowMcpServers` | object | all `false` | MCP server transport policy (`stdio`, `sse`, `http` toggles) |
+| `workflowArpeggio` | object | all `false` | Arpeggio custom code policy (`customDataSourceModules`, `customMergeInlineJs`, `customMergeFiles`) |
+| `workflowRuntimePrepare` | object | `{ customScripts: false }` | Runtime prepare policy (builtin presets always allowed) |
 | `syncConflictResolver` | object | `{ autoApproveTools: false }` | Sync conflict resolver policy |
 
 ## Project Configuration
@@ -201,9 +201,9 @@ concurrency: 2                # Parallel task count for takt run in this project
 | `provider_profiles` | object | - | Provider-specific permission profiles |
 | `vcs_provider` | `"github"` \| `"gitlab"` | auto-detect | VCS provider (overrides global) |
 | `taktProviders` | object | - | TAKT internal provider overrides (e.g., `assistant: { provider: claude, model: opus }`) |
-| `pieceMcpServers` | object | - | MCP server transport policy (overrides global) |
-| `pieceArpeggio` | object | - | Arpeggio custom code policy (overrides global) |
-| `pieceRuntimePrepare` | object | - | Runtime prepare policy (overrides global) |
+| `workflowMcpServers` | object | - | MCP server transport policy (overrides global) |
+| `workflowArpeggio` | object | - | Arpeggio custom code policy (overrides global) |
+| `workflowRuntimePrepare` | object | - | Runtime prepare policy (overrides global) |
 | `syncConflictResolver` | object | - | Sync conflict resolver policy (overrides global) |
 
 Project config values override global config when both are set.
@@ -391,7 +391,7 @@ Both `provider` and `model` are optional. `model` resolution priority: step YAML
 
 This allows mixing providers and models within a single workflow. The persona name is matched against the `persona` key in the step definition.
 
-<a id="piece-categories"></a>
+<a id="workflow-categories"></a>
 
 ## Workflow categories
 
@@ -399,13 +399,13 @@ Organize workflows into categories for better UI presentation in the `takt` work
 
 **Canonical YAML keys** (recommended, matches bundled `builtins/{lang}/workflow-categories.yaml`): top-level **`workflow_categories`**, and under each category object the **`workflows`** array listing **workflow names** (the `name` field from each workflow YAML, e.g. builtin `default`), not file paths.
 
-**Legacy keys** (still accepted for overlays and older configs): **`piece_categories`** at the top level and **`pieces`** per category node. If both canonical and legacy keys appear in the same file, their trees must match or loading fails.
+Use only **`workflow_categories`** and **`workflows`** in category configuration files.
 
 ### Configuration
 
 Categories can be configured in:
 - `builtins/{lang}/workflow-categories.yaml` — default builtin categories (bundled with TAKT)
-- `~/.takt/config.yaml` or a separate file via `piece_categories_file` (default user overlay: `~/.takt/preferences/piece-categories.yaml`)
+- `~/.takt/config.yaml` or a separate file via `workflow_categories_file` (default user overlay: `~/.takt/preferences/workflow-categories.yaml`)
 
 ```yaml
 # ~/.takt/config.yaml or dedicated categories file (canonical)
@@ -420,12 +420,6 @@ workflow_categories:
   Research:
     workflows: [research, magi]
 
-# Legacy equivalent (still accepted):
-# piece_categories:
-#   Development:
-#     pieces: [default, simple]
-#     ...
-
 show_others_category: true         # Show uncategorized workflows (default: true)
 others_category_name: "Other Workflows"  # Name for uncategorized category
 ```
@@ -433,9 +427,9 @@ others_category_name: "Other Workflows"  # Name for uncategorized category
 ### Category features
 
 - **Nested categories** — unlimited depth for hierarchical organization
-- **Per-category workflow lists** — under each category, `workflows:` (or legacy `pieces:`) holds workflow names to show in that group
+- **Per-category workflow lists** — under each category, `workflows:` holds workflow names to show in that group
 - **Others category** — collects workflows not listed under any category (disable with `show_others_category: false`)
-- **Builtin workflow filtering** — turn off all builtins with `enable_builtin_pieces: false`, or specific names with `disabled_builtins: [name1, name2]`
+- **Builtin workflow filtering** — turn off all builtins with `enable_builtin_workflows: false`, or specific names with `disabled_builtins: [name1, name2]`
 
 ### Resetting Categories
 

@@ -68,11 +68,11 @@ describe('E2E: runtime.prepare with provider', () => {
     );
 
     writeFileSync(
-      join(repo.path, 'runtime-e2e-piece.yaml'),
+      join(repo.path, 'runtime-e2e-workflow.yaml'),
       [
         'name: runtime-e2e',
-        'description: Runtime env injection verification piece',
-        'max_movements: 3',
+        'description: Runtime env injection verification workflow',
+        'max_steps: 3',
         'initial_step: execute',
         'steps:',
         '  - name: execute',
@@ -106,7 +106,7 @@ describe('E2E: runtime.prepare with provider', () => {
       },
     });
 
-    const piecePath = join(repo.path, 'runtime-e2e-piece.yaml');
+    const workflowPath = join(repo.path, 'runtime-e2e-workflow.yaml');
     const result = runTakt({
       args: [
         '--task',
@@ -114,7 +114,7 @@ describe('E2E: runtime.prepare with provider', () => {
           'Run `./gradlew test` and `npm test` in the repository root.',
           'If both commands succeed, respond exactly with: Task completed',
         ].join(' '),
-        '--piece', piecePath,
+        '--workflow', workflowPath,
       ],
       cwd: repo.path,
       env: isolatedEnv.env,
@@ -143,7 +143,7 @@ describe('E2E: runtime.prepare with provider', () => {
   }, 240_000);
 
   providerIt('should reproduce missing runtime env failure when runtime.prepare is unset', () => {
-    const piecePath = join(repo.path, 'runtime-e2e-piece.yaml');
+    const workflowPath = join(repo.path, 'runtime-e2e-workflow.yaml');
     const result = runTakt({
       args: [
         '--task',
@@ -151,7 +151,7 @@ describe('E2E: runtime.prepare with provider', () => {
           'Run `./gradlew test` and `npm test` in the repository root without setting or overriding environment variables.',
           'If both commands succeed, respond exactly with: Task completed',
         ].join(' '),
-        '--piece', piecePath,
+        '--workflow', workflowPath,
       ],
       cwd: repo.path,
       env: isolatedEnv.env,

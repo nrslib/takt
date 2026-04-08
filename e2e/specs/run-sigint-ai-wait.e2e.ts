@@ -45,7 +45,7 @@ describe('E2E: SIGINT while waiting for AI output (mock with delay)', () => {
 
   it('should exit promptly when SIGINT fires during mock provider delay (30s)', async () => {
     const binPath = resolve(__dirname, '../../bin/takt');
-    const piecePath = resolve(__dirname, '../fixtures/pieces/mock-single-step.yaml');
+    const workflowPath = resolve(__dirname, '../fixtures/workflows/mock-single-step.yaml');
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/sigint-ai-wait.json');
 
     const tasksFile = join(testRepo.path, '.takt', 'tasks.yaml');
@@ -59,7 +59,7 @@ describe('E2E: SIGINT while waiting for AI output (mock with delay)', () => {
         '  - name: ai-wait-task',
         '    status: pending',
         '    content: "E2E SIGINT during AI wait"',
-        `    piece: "${piecePath}"`,
+        `    workflow: "${workflowPath}"`,
         `    created_at: "${now}"`,
         '    started_at: null',
         '    completed_at: null',

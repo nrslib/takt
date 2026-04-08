@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../infra/config/global/globalConfig.js', () => ({
   loadGlobalConfig: vi.fn(() => ({ provider: 'mock', language: 'en' })),
-  getBuiltinPiecesEnabled: vi.fn().mockReturnValue(true),
+  getBuiltinWorkflowsEnabled: vi.fn().mockReturnValue(true),
 }));
 
 vi.mock('../infra/providers/index.js', () => ({
@@ -167,8 +167,8 @@ import { selectInteractiveMode } from '../features/interactive/modeSelection.js'
 import { passthroughMode } from '../features/interactive/passthroughMode.js';
 import { quietMode } from '../features/interactive/quietMode.js';
 import { personaMode } from '../features/interactive/personaMode.js';
-import type { PieceContext } from '../features/interactive/interactive.js';
-import type { FirstMovementInfo } from '../infra/config/loaders/pieceResolver.js';
+import type { WorkflowContext } from '../features/interactive/interactive.js';
+import type { FirstStepInfo } from '../infra/config/loaders/workflowResolver.js';
 
 // ── Setup ──
 
@@ -214,7 +214,7 @@ describe('selectInteractiveMode', () => {
     );
   });
 
-  it('should use piece default when provided', async () => {
+  it('should use workflow default when provided', async () => {
     // When
     await selectInteractiveMode('en', 'quiet');
 
@@ -374,30 +374,30 @@ describe('quietMode', () => {
     expect(result.task).toBe('Fix the bug instruction.');
   });
 
-  it('should include piece context in summary generation', async () => {
+  it('should include workflow context in summary generation', async () => {
     // Given
-    const pieceContext: PieceContext = {
-      name: 'test-piece',
-      description: 'A test piece',
-      pieceStructure: '1. implement\n2. review',
-      movementPreviews: [],
+    const workflowContext: WorkflowContext = {
+      name: 'test-workflow',
+      description: 'A test workflow',
+      workflowStructure: '1. implement\n2. review',
+      stepPreviews: [],
     };
-    setupMockProvider(['Instruction with piece context.']);
+    setupMockProvider(['Instruction with workflow context.']);
     mockSelectOption.mockResolvedValue('execute');
 
     // When
-    const result = await quietMode('/project', 'some task', pieceContext);
+    const result = await quietMode('/project', 'some task', workflowContext);
 
     // Then
     expect(result.action).toBe('execute');
-    expect(result.task).toBe('Instruction with piece context.');
+    expect(result.task).toBe('Instruction with workflow context.');
   });
 });
 
 // ── Persona mode tests ──
 
 describe('personaMode', () => {
-  const mockFirstMovement: FirstMovementInfo = {
+  const mockFirstStep: FirstStepInfo = {
     personaContent: 'You are a senior coder. Write clean, maintainable code.',
     personaDisplayName: 'Coder',
     allowedTools: ['Read', 'Glob', 'Grep', 'Edit', 'Write', 'Bash'],
@@ -409,7 +409,7 @@ describe('personaMode', () => {
     setupMockProvider([]);
 
     // When
-    const result = await personaMode('/project', mockFirstMovement);
+    const result = await personaMode('/project', mockFirstStep);
 
     // Then
     expect(result.action).toBe('cancel');
@@ -422,19 +422,19 @@ describe('personaMode', () => {
     setupMockProvider([]);
 
     // When
-    const result = await personaMode('/project', mockFirstMovement);
+    const result = await personaMode('/project', mockFirstStep);
 
     // Then
     expect(result.action).toBe('cancel');
   });
 
-  it('should use first movement persona as system prompt', async () => {
+  it('should use first step persona as system prompt', async () => {
     // Given
     setupRawStdin(toRawInputs(['fix bug', '/cancel']));
     setupMockProvider(['I see the issue.']);
 
     // When
-    await personaMode('/project', mockFirstMovement);
+    await personaMode('/project', mockFirstStep);
 
     // Then: the provider should be set up with persona content as system prompt
     const mockProvider = mockGetProvider.mock.results[0]!.value as { _setup: ReturnType<typeof vi.fn> };
@@ -445,13 +445,13 @@ describe('personaMode', () => {
     );
   });
 
-  it('should use first movement allowed tools', async () => {
+  it('should use first step allowed tools', async () => {
     // Given
     setupRawStdin(toRawInputs(['check the code', '/cancel']));
     setupMockProvider(['Looking at the code.']);
 
     // When
-    await personaMode('/project', mockFirstMovement);
+    await personaMode('/project', mockFirstStep);
 
     // Then
     const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
@@ -470,7 +470,7 @@ describe('personaMode', () => {
     mockSelectOption.mockResolvedValue('execute');
 
     // When
-    const result = await personaMode('/project', mockFirstMovement, 'fix the login');
+    const result = await personaMode('/project', mockFirstStep, 'fix the login');
 
     // Then
     expect(result.action).toBe('execute');
@@ -487,16 +487,16 @@ describe('personaMode', () => {
     setupMockProvider([]);
 
     // When
-    const result = await personaMode('/project', mockFirstMovement);
+    const result = await personaMode('/project', mockFirstStep);
 
     // Then
     expect(result.action).toBe('execute');
     expect(result.task).toBe('direct task text');
   });
 
-  it('should fall back to default tools when first movement has none', async () => {
+  it('should fall back to default tools when first step has none', async () => {
     // Given
-    const noToolsMovement: FirstMovementInfo = {
+    const noToolsStep: FirstStepInfo = {
       personaContent: 'Persona prompt',
       personaDisplayName: 'Agent',
       allowedTools: [],
@@ -505,7 +505,7 @@ describe('personaMode', () => {
     setupMockProvider(['response']);
 
     // When
-    await personaMode('/project', noToolsMovement);
+    await personaMode('/project', noToolsStep);
 
     // Then
     const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
@@ -524,7 +524,7 @@ describe('personaMode', () => {
     mockSelectOption.mockResolvedValue('execute');
 
     // When
-    const result = await personaMode('/project', mockFirstMovement);
+    const result = await personaMode('/project', mockFirstStep);
 
     // Then
     expect(result.action).toBe('execute');

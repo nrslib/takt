@@ -9,7 +9,7 @@
 export interface SessionLog {
   task: string;
   projectDir: string;
-  pieceName: string;
+  workflowName: string;
   iterations: number;
   startTime: string;
   endTime?: string;
@@ -33,10 +33,10 @@ export interface SessionLog {
 
 // --- NDJSON log types ---
 
-export interface NdjsonPieceStart {
-  type: 'piece_start';
+export interface NdjsonWorkflowStart {
+  type: 'workflow_start';
   task: string;
-  pieceName: string;
+  workflowName: string;
   startTime: string;
 }
 
@@ -63,14 +63,14 @@ export interface NdjsonStepComplete {
   timestamp: string;
 }
 
-export interface NdjsonPieceComplete {
-  type: 'piece_complete';
+export interface NdjsonWorkflowComplete {
+  type: 'workflow_complete';
   iterations: number;
   endTime: string;
 }
 
-export interface NdjsonPieceAbort {
-  type: 'piece_abort';
+export interface NdjsonWorkflowAbort {
+  type: 'workflow_abort';
   iterations: number;
   reason: string;
   endTime: string;
@@ -130,11 +130,11 @@ export interface NdjsonInteractiveEnd {
 }
 
 export type NdjsonRecord =
-  | NdjsonPieceStart
+  | NdjsonWorkflowStart
   | NdjsonStepStart
   | NdjsonStepComplete
-  | NdjsonPieceComplete
-  | NdjsonPieceAbort
+  | NdjsonWorkflowComplete
+  | NdjsonWorkflowAbort
   | NdjsonPhaseStart
   | NdjsonPhaseComplete
   | NdjsonPhaseJudgeStage
@@ -143,7 +143,7 @@ export type NdjsonRecord =
 
 /** Record for debug prompt/response log (debug-*-prompts.jsonl) */
 export interface PromptLogRecord {
-  movement: string;
+  step: string;
   phase: 1 | 2 | 3;
   iteration: number;
   phaseExecutionId?: string;

@@ -101,7 +101,7 @@ provider_options:
 
 ```yaml
 # In a workflow YAML (applies to all steps in this workflow)
-piece_config:
+workflow_config:
   provider_options:
     codex:
       network_access: true
@@ -338,7 +338,7 @@ Provider options (`provider_options`) and permission profiles (`provider_profile
 | Priority | Source | Example |
 |----------|--------|---------|
 | 1 (highest) | Step `provider_options` | `steps[].provider_options.codex.network_access` |
-| 2 | Workflow `piece_config.provider_options` | `piece_config.provider_options.codex.network_access` |
+| 2 | Workflow `workflow_config.provider_options` | `workflow_config.provider_options.codex.network_access` |
 | 3 | Project `.takt/config.yaml` | `provider_options.codex.network_access` |
 | 4 (lowest) | Global `~/.takt/config.yaml` | `provider_options.codex.network_access` |
 

@@ -2,17 +2,17 @@ import type { NdjsonRecord, PromptLogRecord } from '../../../shared/utils/index.
 import type {
   TraceReportMode,
   TraceReportParams,
-  TraceMovement,
+  TraceStep,
   TracePhase,
 } from './traceReportTypes.js';
 import { parseJsonl, buildTraceFromRecords, type PromptRecord } from './traceReportParser.js';
-import { cloneMovementsForMode, sanitizeTraceParamsForMode } from './traceReportRedaction.js';
+import { cloneStepsForMode, sanitizeTraceParamsForMode } from './traceReportRedaction.js';
 import { assertTraceParams, renderTraceReportMarkdown } from './traceReportRenderer.js';
 
 export type {
   TraceReportMode,
   TraceReportParams,
-  TraceMovement,
+  TraceStep,
   TracePhase,
 };
 
@@ -50,6 +50,6 @@ export function renderTraceReportFromRecords(
 
   const trace = buildTraceFromRecords(records, promptRecords as PromptRecord[], params.endTime);
   const paramsForMode = sanitizeTraceParamsForMode(params, mode);
-  const movementsForMode = cloneMovementsForMode(trace.movements, mode);
-  return renderTraceReportMarkdown(paramsForMode, trace.traceStartedAt, movementsForMode);
+  const stepsForMode = cloneStepsForMode(trace.steps, mode);
+  return renderTraceReportMarkdown(paramsForMode, trace.traceStartedAt, stepsForMode);
 }

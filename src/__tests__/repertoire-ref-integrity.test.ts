@@ -4,9 +4,9 @@
  * Target: src/features/repertoire/remove.ts (findScopeReferences)
  *
  * Scanner searches for @scope package references in:
- *   - {root}/pieces/**\/*.yaml
- *   - {root}/preferences/piece-categories.yaml
- *   - {root}/.takt/pieces/**\/*.yaml (project-level)
+ *   - {root}/workflows/**\/*.yaml
+ *   - {root}/preferences/workflow-categories.yaml
+ *   - {root}/.takt/workflows/**\/*.yaml (project-level)
  *
  * Detection criteria:
  *   - Matches "@{owner}/{repo}" substring in file contents
@@ -32,30 +32,30 @@ describe('repertoire reference integrity: detection', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  // U29: ~/.takt/pieces/ の @scope 参照を検出
-  // Given: {root}/pieces/my-review.yaml に
+  // U29: ~/.takt/workflows/ の @scope 参照を検出
+  // Given: {root}/workflows/my-review.yaml に
   //        persona: "@nrslib/takt-ensemble-fixture/expert-coder" を含む
   // When:  findScopeReferences("@nrslib/takt-ensemble-fixture", config)
   // Then:  my-review.yaml が検出される
-  it('should detect @scope reference in global pieces YAML', () => {
-    const piecesDir = join(tempDir, 'pieces');
-    mkdirSync(piecesDir, { recursive: true });
-    const pieceFile = join(piecesDir, 'my-review.yaml');
-    writeFileSync(pieceFile, 'persona: "@nrslib/takt-ensemble-fixture/expert-coder"');
+  it('should detect @scope reference in global workflows YAML', () => {
+    const workflowsDir = join(tempDir, 'workflows');
+    mkdirSync(workflowsDir, { recursive: true });
+    const workflowFile = join(workflowsDir, 'my-review.yaml');
+    writeFileSync(workflowFile, 'persona: "@nrslib/takt-ensemble-fixture/expert-coder"');
 
     const refs = findScopeReferences('@nrslib/takt-ensemble-fixture', makeScanConfig(tempDir));
 
-    expect(refs.some((r) => r.filePath === pieceFile)).toBe(true);
+    expect(refs.some((r) => r.filePath === workflowFile)).toBe(true);
   });
 
-  // U30: {root}/preferences/piece-categories.yaml の @scope 参照を検出
-  // Given: piece-categories.yaml に @nrslib/takt-ensemble-fixture/expert を含む
+  // U30: {root}/preferences/workflow-categories.yaml の @scope 参照を検出
+  // Given: workflow-categories.yaml に @nrslib/takt-ensemble-fixture/expert を含む
   // When:  findScopeReferences("@nrslib/takt-ensemble-fixture", config)
-  // Then:  piece-categories.yaml が検出される
-  it('should detect @scope reference in global piece-categories.yaml', () => {
+  // Then:  workflow-categories.yaml が検出される
+  it('should detect @scope reference in global workflow-categories.yaml', () => {
     const prefsDir = join(tempDir, 'preferences');
     mkdirSync(prefsDir, { recursive: true });
-    const categoriesFile = join(prefsDir, 'piece-categories.yaml');
+    const categoriesFile = join(prefsDir, 'workflow-categories.yaml');
     writeFileSync(categoriesFile, 'categories:\n  - "@nrslib/takt-ensemble-fixture/expert"');
 
     const refs = findScopeReferences('@nrslib/takt-ensemble-fixture', makeScanConfig(tempDir));
@@ -63,14 +63,14 @@ describe('repertoire reference integrity: detection', () => {
     expect(refs.some((r) => r.filePath === categoriesFile)).toBe(true);
   });
 
-  // U31: {root}/.takt/pieces/ の @scope 参照を検出
-  // Given: プロジェクト {root}/.takt/pieces/proj.yaml に @scope 参照
+  // U31: {root}/.takt/workflows/ の @scope 参照を検出
+  // Given: プロジェクト {root}/.takt/workflows/proj.yaml に @scope 参照
   // When:  findScopeReferences("@nrslib/takt-ensemble-fixture", config)
   // Then:  proj.yaml が検出される
-  it('should detect @scope reference in project-level pieces YAML', () => {
-    const projectPiecesDir = join(tempDir, '.takt', 'pieces');
-    mkdirSync(projectPiecesDir, { recursive: true });
-    const projFile = join(projectPiecesDir, 'proj.yaml');
+  it('should detect @scope reference in project-level workflows YAML', () => {
+    const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
+    mkdirSync(projectWorkflowsDir, { recursive: true });
+    const projFile = join(projectWorkflowsDir, 'proj.yaml');
     writeFileSync(projFile, 'persona: "@nrslib/takt-ensemble-fixture/expert-coder"');
 
     const refs = findScopeReferences('@nrslib/takt-ensemble-fixture', makeScanConfig(tempDir));
@@ -95,9 +95,9 @@ describe('repertoire reference integrity: non-detection', () => {
   // When:  findScopeReferences("@nrslib/takt-ensemble-fixture", config)
   // Then:  結果が空配列
   it('should not detect plain name references without @scope prefix', () => {
-    const piecesDir = join(tempDir, 'pieces');
-    mkdirSync(piecesDir, { recursive: true });
-    writeFileSync(join(piecesDir, 'plain.yaml'), 'persona: "coder"');
+    const workflowsDir = join(tempDir, 'workflows');
+    mkdirSync(workflowsDir, { recursive: true });
+    writeFileSync(join(workflowsDir, 'plain.yaml'), 'persona: "coder"');
 
     const refs = findScopeReferences('@nrslib/takt-ensemble-fixture', makeScanConfig(tempDir));
 
@@ -109,9 +109,9 @@ describe('repertoire reference integrity: non-detection', () => {
   // When:  findScopeReferences("@nrslib/takt-ensemble-fixture", config)
   // Then:  結果が空配列
   it('should not detect references to a different @scope package', () => {
-    const piecesDir = join(tempDir, 'pieces');
-    mkdirSync(piecesDir, { recursive: true });
-    writeFileSync(join(piecesDir, 'other.yaml'), 'persona: "@other/package/name"');
+    const workflowsDir = join(tempDir, 'workflows');
+    mkdirSync(workflowsDir, { recursive: true });
+    writeFileSync(join(workflowsDir, 'other.yaml'), 'persona: "@other/package/name"');
 
     const refs = findScopeReferences('@nrslib/takt-ensemble-fixture', makeScanConfig(tempDir));
 

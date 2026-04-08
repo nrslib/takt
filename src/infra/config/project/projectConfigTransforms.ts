@@ -1,4 +1,4 @@
-import type { AnalyticsConfig, PieceArpeggioConfig, PieceMcpServersConfig, PieceRuntimePrepareConfig, SubmoduleSelection, SyncConflictResolverConfig } from '../../../core/models/config-types.js';
+import type { AnalyticsConfig, WorkflowArpeggioConfig, WorkflowMcpServersConfig, WorkflowRuntimePrepareConfig, SubmoduleSelection, SyncConflictResolverConfig } from '../../../core/models/config-types.js';
 
 const SUBMODULES_ALL = 'all';
 
@@ -69,22 +69,22 @@ export function denormalizeAnalytics(config: AnalyticsConfig | undefined): Recor
   return Object.keys(raw).length > 0 ? raw : undefined;
 }
 
-export function normalizePieceRuntimePreparePolicy(
+export function normalizeWorkflowRuntimePreparePolicy(
   raw: { custom_scripts?: boolean } | undefined,
-): PieceRuntimePrepareConfig | undefined {
+): WorkflowRuntimePrepareConfig | undefined {
   return raw ? { customScripts: raw.custom_scripts } : undefined;
 }
 
-export function denormalizePieceRuntimePreparePolicy(
-  config: PieceRuntimePrepareConfig | undefined,
+export function denormalizeWorkflowRuntimePreparePolicy(
+  config: WorkflowRuntimePrepareConfig | undefined,
 ): Record<string, unknown> | undefined {
   if (!config) return undefined;
   return { custom_scripts: config.customScripts };
 }
 
-export function normalizePieceArpeggioPolicy(
+export function normalizeWorkflowArpeggioPolicy(
   raw: { custom_data_source_modules?: boolean; custom_merge_inline_js?: boolean; custom_merge_files?: boolean } | undefined,
-): PieceArpeggioConfig | undefined {
+): WorkflowArpeggioConfig | undefined {
   return raw ? {
     customDataSourceModules: raw.custom_data_source_modules,
     customMergeInlineJs: raw.custom_merge_inline_js,
@@ -92,8 +92,8 @@ export function normalizePieceArpeggioPolicy(
   } : undefined;
 }
 
-export function denormalizePieceArpeggioPolicy(
-  config: PieceArpeggioConfig | undefined,
+export function denormalizeWorkflowArpeggioPolicy(
+  config: WorkflowArpeggioConfig | undefined,
 ): Record<string, unknown> | undefined {
   if (!config) return undefined;
   return {
@@ -116,14 +116,14 @@ export function denormalizeSyncConflictResolver(
   return { auto_approve_tools: config.autoApproveTools };
 }
 
-export function normalizePieceMcpServers(
+export function normalizeWorkflowMcpServers(
   raw: { stdio?: boolean; sse?: boolean; http?: boolean } | undefined,
-): PieceMcpServersConfig | undefined {
+): WorkflowMcpServersConfig | undefined {
   return raw ? { stdio: raw.stdio, sse: raw.sse, http: raw.http } : undefined;
 }
 
-export function denormalizePieceMcpServers(
-  config: PieceMcpServersConfig | undefined,
+export function denormalizeWorkflowMcpServers(
+  config: WorkflowMcpServersConfig | undefined,
 ): Record<string, unknown> | undefined {
   if (!config) return undefined;
   return { stdio: config.stdio, sse: config.sse, http: config.http };

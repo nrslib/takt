@@ -201,15 +201,15 @@ describe('TaskPrefixWriter', () => {
     });
   });
 
-  describe('setMovementContext', () => {
-    it('should include movement context in prefix after context update', () => {
+  describe('setStepContext', () => {
+    it('should include step context in prefix after context update', () => {
       const writer = new TaskPrefixWriter({ taskName: 'override-persona-provider', colorIndex: 0, writeFn });
 
-      writer.setMovementContext({
-        movementName: 'implement',
+      writer.setStepContext({
+        stepName: 'implement',
         iteration: 4,
-        maxMovements: 30,
-        movementIteration: 2,
+        maxSteps: 30,
+        stepIteration: 2,
       });
       writer.writeLine('content');
 

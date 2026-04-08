@@ -9,16 +9,16 @@ import { generateReportDir as buildReportDir } from '../../shared/utils/index.js
 import type {
   SessionLog,
   NdjsonRecord,
-  NdjsonPieceStart,
+  NdjsonWorkflowStart,
 } from '../../shared/utils/index.js';
 
 export type {
   SessionLog,
-  NdjsonPieceStart,
+  NdjsonWorkflowStart,
   NdjsonStepStart,
   NdjsonStepComplete,
-  NdjsonPieceComplete,
-  NdjsonPieceAbort,
+  NdjsonWorkflowComplete,
+  NdjsonWorkflowAbort,
   NdjsonPhaseStart,
   NdjsonPhaseComplete,
   NdjsonPhaseJudgeStage,
@@ -29,13 +29,13 @@ export type {
 
 /** Failure information extracted from session log */
 export interface FailureInfo {
-  /** Last movement that completed successfully */
-  lastCompletedMovement: string | null;
-  /** Movement that was in progress when failure occurred */
-  failedMovement: string | null;
+  /** Last step that completed successfully */
+  lastCompletedStep: string | null;
+  /** Step that was in progress when failure occurred */
+  failedStep: string | null;
   /** Total iterations consumed */
   iterations: number;
-  /** Error message from piece_abort record */
+  /** Error message from workflow_abort record */
   errorMessage: string | null;
   /** Session ID extracted from log file name */
   sessionId: string | null;
@@ -52,21 +52,21 @@ export class SessionManager {
   }
 
 
-  /** Initialize an NDJSON log file with the piece_start record */
+  /** Initialize an NDJSON log file with the workflow_start record */
   initNdjsonLog(
     sessionId: string,
     task: string,
-    pieceName: string,
+    workflowName: string,
     options: { logsDir: string },
   ): string {
     const { logsDir } = options;
     ensureDir(logsDir);
 
     const filepath = join(logsDir, `${sessionId}.jsonl`);
-    const record: NdjsonPieceStart = {
-      type: 'piece_start',
+    const record: NdjsonWorkflowStart = {
+      type: 'workflow_start',
       task,
-      pieceName,
+      workflowName,
       startTime: new Date().toISOString(),
     };
     this.appendNdjsonLine(filepath, record);
@@ -90,11 +90,11 @@ export class SessionManager {
       const record = JSON.parse(line) as NdjsonRecord;
 
       switch (record.type) {
-        case 'piece_start':
+        case 'workflow_start':
           sessionLog = {
             task: record.task,
             projectDir: '',
-            pieceName: record.pieceName,
+            workflowName: record.workflowName,
             iterations: 0,
             startTime: record.startTime,
             status: 'running',
@@ -120,14 +120,14 @@ export class SessionManager {
           }
           break;
 
-        case 'piece_complete':
+        case 'workflow_complete':
           if (sessionLog) {
             sessionLog.status = 'completed';
             sessionLog.endTime = record.endTime;
           }
           break;
 
-        case 'piece_abort':
+        case 'workflow_abort':
           if (sessionLog) {
             sessionLog.status = 'aborted';
             sessionLog.endTime = record.endTime;
@@ -161,12 +161,12 @@ export class SessionManager {
   createSessionLog(
     task: string,
     projectDir: string,
-    pieceName: string,
+    workflowName: string,
   ): SessionLog {
     return {
       task,
       projectDir,
-      pieceName,
+      workflowName,
       iterations: 0,
       startTime: new Date().toISOString(),
       status: 'running',
@@ -202,10 +202,10 @@ export function appendNdjsonLine(filepath: string, record: NdjsonRecord): void {
 export function initNdjsonLog(
   sessionId: string,
   task: string,
-  pieceName: string,
+  workflowName: string,
   options: { logsDir: string },
 ): string {
-  return defaultManager.initNdjsonLog(sessionId, task, pieceName, options);
+  return defaultManager.initNdjsonLog(sessionId, task, workflowName, options);
 }
 
 
@@ -225,9 +225,9 @@ export function generateReportDir(task: string): string {
 export function createSessionLog(
   task: string,
   projectDir: string,
-  pieceName: string,
+  workflowName: string,
 ): SessionLog {
-  return defaultManager.createSessionLog(task, projectDir, pieceName);
+  return defaultManager.createSessionLog(task, projectDir, workflowName);
 }
 
 export function finalizeSessionLog(
@@ -256,11 +256,11 @@ export function extractFailureInfo(filepath: string): FailureInfo | null {
   const lines = content.trim().split('\n').filter((line) => line.length > 0);
   if (lines.length === 0) return null;
 
-  let lastCompletedMovement: string | null = null;
-  let failedMovement: string | null = null;
+  let lastCompletedStep: string | null = null;
+  let failedStep: string | null = null;
   let iterations = 0;
   let errorMessage: string | null = null;
-  let lastStepStartMovement: string | null = null;
+  let lastStartedStep: string | null = null;
 
   // Extract sessionId from filename (e.g., "20260205-120000-abc123.jsonl" -> "20260205-120000-abc123")
   const filename = filepath.split('/').pop();
@@ -272,21 +272,21 @@ export function extractFailureInfo(filepath: string): FailureInfo | null {
 
       switch (record.type) {
         case 'step_start':
-          // Track the movement that started (may fail before completing)
-          lastStepStartMovement = record.step;
+          // Track the step that started (may fail before completing)
+          lastStartedStep = record.step;
           break;
 
         case 'step_complete':
-          // Track the last successfully completed movement
-          lastCompletedMovement = record.step;
+          // Track the last successfully completed step
+          lastCompletedStep = record.step;
           iterations++;
-          // Reset lastStepStartMovement since this movement completed
-          lastStepStartMovement = null;
+          // Reset lastStartedStep since this step completed
+          lastStartedStep = null;
           break;
 
-        case 'piece_abort':
-          // If there was a step_start without a step_complete, that's the failed movement
-          failedMovement = lastStepStartMovement;
+        case 'workflow_abort':
+          // If there was a step_start without a step_complete, that's the failed step
+          failedStep = lastStartedStep;
           errorMessage = record.reason;
           break;
       }
@@ -297,8 +297,8 @@ export function extractFailureInfo(filepath: string): FailureInfo | null {
   }
 
   return {
-    lastCompletedMovement,
-    failedMovement,
+    lastCompletedStep,
+    failedStep,
     iterations,
     errorMessage,
     sessionId,

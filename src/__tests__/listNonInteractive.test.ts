@@ -35,8 +35,8 @@ function writeTasksFile(projectDir: string): void {
         name: 'pending-task',
         status: 'pending',
         content: 'Pending content',
-        piece: 'workflow-alpha',
-        start_movement: 'implement',
+        workflow: 'workflow-alpha',
+        start_step: 'implement',
         created_at: '2026-02-09T00:00:00.000Z',
         started_at: null,
         completed_at: null,
@@ -48,7 +48,7 @@ function writeTasksFile(projectDir: string): void {
         created_at: '2026-02-09T00:00:00.000Z',
         started_at: '2026-02-09T00:01:00.000Z',
         completed_at: '2026-02-09T00:02:00.000Z',
-        failure: { movement: 'review', error: 'Boom' },
+        failure: { step: 'review', error: 'Boom' },
       },
     ],
   }), 'utf-8');
@@ -75,20 +75,17 @@ describe('listTasksNonInteractive', () => {
       tasks: Array<{
         name: string;
         kind: string;
-        data?: { workflow?: string; start_step?: string; piece?: string; start_movement?: string };
-        failure?: { step?: string; movement?: string; error: string };
+        data?: { workflow?: string; start_step?: string };
+        failure?: { step?: string; error: string };
       }>;
     };
     expect(payload.tasks[0]?.name).toBe('pending-task');
     expect(payload.tasks[0]?.kind).toBe('pending');
     expect(payload.tasks[0]?.data?.workflow).toBe('workflow-alpha');
     expect(payload.tasks[0]?.data?.start_step).toBe('implement');
-    expect(payload.tasks[0]?.data).not.toHaveProperty('piece');
-    expect(payload.tasks[0]?.data).not.toHaveProperty('start_movement');
     expect(payload.tasks[1]?.name).toBe('failed-task');
     expect(payload.tasks[1]?.kind).toBe('failed');
     expect(payload.tasks[1]?.failure?.step).toBe('review');
-    expect(payload.tasks[1]?.failure).not.toHaveProperty('movement');
 
     logSpy.mockRestore();
   });

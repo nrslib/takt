@@ -47,23 +47,18 @@ describe('traced config boundaries', () => {
     vi.restoreAllMocks();
   });
 
-  it('legacy env adapter applies only unblocked legacy overrides', () => {
+  it('legacy env adapter rejects removed legacy overrides', () => {
     process.env.TAKT_LOG_LEVEL = 'debug';
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const rawConfig: Record<string, unknown> = {};
     const traceEntries = new Map<string, TracedValue<unknown>>();
 
-    applyLegacyEnvSpecs(rawConfig, traceEntries, [{
+    expect(() => applyLegacyEnvSpecs(rawConfig, traceEntries, [{
       env: 'TAKT_LOG_LEVEL',
       path: 'logging.level',
       type: 'string',
       blockedBy: ['TAKT_LOGGING_LEVEL'],
       warning: 'deprecated',
-    }]);
-
-    expect(rawConfig).toEqual({ logging: { level: 'debug' } });
-    expect(traceEntries.get('logging.level')?.origin).toBe('env');
-    expect(warnSpy).toHaveBeenCalledWith('deprecated');
+    }])).toThrow(/logging\.level.*logging_level/);
   });
 
   it('runtime bridge keeps parent/child traced origins with actual traced-config runtime', () => {

@@ -5,11 +5,11 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/piece/evaluation/index.js', () => ({
+vi.mock('../core/workflow/evaluation/index.js', () => ({
   detectMatchedRule: vi.fn(),
 }));
 
-vi.mock('../core/piece/phase-runner.js', () => ({
+vi.mock('../core/workflow/phase-runner.js', () => ({
   needsStatusJudgmentPhase: vi.fn(),
   runReportPhase: vi.fn(),
   runStatusJudgmentPhase: vi.fn(),
@@ -20,23 +20,23 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   generateReportDir: vi.fn().mockReturnValue('test-report-dir'),
 }));
 
-import { PieceEngine } from '../core/piece/index.js';
+import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
 import {
   applyDefaultMocks,
-  cleanupPieceEngine,
+  cleanupWorkflowEngine,
   createTestTmpDir,
-  makeMovement,
+  makeStep,
   makeResponse,
   makeRule,
   mockDetectMatchedRuleSequence,
   mockRunAgentSequence,
 } from './engine-test-helpers.js';
-import type { PieceConfig } from '../core/models/index.js';
+import type { WorkflowConfig } from '../core/models/index.js';
 
-describe('PieceEngine provider_options resolution', () => {
+describe('WorkflowEngine provider_options resolution', () => {
   let tmpDir: string;
-  let engine: PieceEngine | undefined;
+  let engine: WorkflowEngine | undefined;
 
   beforeEach(() => {
     vi.resetAllMocks();
@@ -46,7 +46,7 @@ describe('PieceEngine provider_options resolution', () => {
 
   afterEach(() => {
     if (engine) {
-      cleanupPieceEngine(engine);
+      cleanupWorkflowEngine(engine);
       engine = undefined;
     }
     if (tmpDir) {
@@ -54,8 +54,8 @@ describe('PieceEngine provider_options resolution', () => {
     }
   });
 
-  it('should let movement provider_options override project source without origin trace', async () => {
-    const movement = makeMovement('implement', {
+  it('should let step provider_options override project source without origin trace', async () => {
+    const step = makeStep('implement', {
       providerOptions: {
         codex: { networkAccess: false },
         claude: { sandbox: { excludedCommands: ['./gradlew'] } },
@@ -63,19 +63,19 @@ describe('PieceEngine provider_options resolution', () => {
       rules: [makeRule('done', 'COMPLETE')],
     });
 
-    const config: PieceConfig = {
+    const config: WorkflowConfig = {
       name: 'provider-options-priority',
-      movements: [movement],
-      initialMovement: 'implement',
-      maxMovements: 1,
+      steps: [step],
+      initialStep: 'implement',
+      maxSteps: 1,
     };
 
     mockRunAgentSequence([
-      makeResponse({ persona: movement.persona, content: 'done' }),
+      makeResponse({ persona: step.persona, content: 'done' }),
     ]);
     mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
 
-    engine = new PieceEngine(config, tmpDir, 'test task', {
+    engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
       provider: 'claude',
       providerOptionsSource: 'project',
@@ -101,24 +101,24 @@ describe('PieceEngine provider_options resolution', () => {
     });
   });
 
-  it('should pass global provider_options when project and movement options are absent', async () => {
-    const movement = makeMovement('implement', {
+  it('should pass global provider_options when project and step options are absent', async () => {
+    const step = makeStep('implement', {
       rules: [makeRule('done', 'COMPLETE')],
     });
 
-    const config: PieceConfig = {
+    const config: WorkflowConfig = {
       name: 'provider-options-global-only',
-      movements: [movement],
-      initialMovement: 'implement',
-      maxMovements: 1,
+      steps: [step],
+      initialStep: 'implement',
+      maxSteps: 1,
     };
 
     mockRunAgentSequence([
-      makeResponse({ persona: movement.persona, content: 'done' }),
+      makeResponse({ persona: step.persona, content: 'done' }),
     ]);
     mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
 
-    engine = new PieceEngine(config, tmpDir, 'test task', {
+    engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
       provider: 'claude',
       providerOptions: {
@@ -135,26 +135,26 @@ describe('PieceEngine provider_options resolution', () => {
   });
 
   it('should propagate merged claude allowedTools to runAgent options.allowedTools', async () => {
-    const movement = makeMovement('implement', {
+    const step = makeStep('implement', {
       providerOptions: {
         claude: { allowedTools: ['Read', 'Edit', 'Bash'] },
       },
       rules: [makeRule('done', 'COMPLETE')],
     });
 
-    const config: PieceConfig = {
+    const config: WorkflowConfig = {
       name: 'provider-options-allowed-tools',
-      movements: [movement],
-      initialMovement: 'implement',
-      maxMovements: 1,
+      steps: [step],
+      initialStep: 'implement',
+      maxSteps: 1,
     };
 
     mockRunAgentSequence([
-      makeResponse({ persona: movement.persona, content: 'done' }),
+      makeResponse({ persona: step.persona, content: 'done' }),
     ]);
     mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
 
-    engine = new PieceEngine(config, tmpDir, 'test task', {
+    engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
       provider: 'claude',
       providerOptions: {

@@ -73,13 +73,13 @@ describe.skipIf(!isGitHubAvailable())('E2E: GitHub Issue processing', () => {
   });
 
   it('should execute pipeline from GitHub issue number', () => {
-    const piecePath = resolve(__dirname, '../fixtures/pieces/simple.yaml');
+    const workflowPath = resolve(__dirname, '../fixtures/workflows/simple.yaml');
 
     const result = runTakt({
       args: [
         '--pipeline',
         '--issue', issueNumber,
-        '--piece', piecePath,
+        '--workflow', workflowPath,
         '--auto-pr',
         '--repo', testRepo.repoName,
       ],
@@ -94,7 +94,7 @@ describe.skipIf(!isGitHubAvailable())('E2E: GitHub Issue processing', () => {
     // Verify issue was fetched
     expect(result.stdout).toContain('Issue #');
 
-    // Verify piece completion
+    // Verify workflow completion
     expect(result.stdout).toContain('completed');
 
     // Verify PR was created

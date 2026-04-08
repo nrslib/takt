@@ -42,4 +42,4 @@ When gaps are identified, evaluate on three points:
 
 - Is this gap important to the original request? (Ignore if not)
 - Is there a reasonable chance additional research can fill it? (Is public data likely available?)
-- Is the research cost (movement consumption) worthwhile?
+- Is the research cost (step consumption) worthwhile?

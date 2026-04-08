@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 type ProviderType = 'claude' | 'codex' | 'opencode';
-type MovementType = 'normal' | 'parallel' | 'arpeggio' | 'team_leader';
+type StepType = 'normal' | 'parallel' | 'arpeggio' | 'team_leader';
 
 interface ProviderUsageSnapshot {
   readonly inputTokens?: number;
@@ -21,14 +21,14 @@ interface UsageEventLoggerConfig {
   readonly runId: string;
   readonly provider: ProviderType;
   readonly providerModel: string;
-  readonly movement: string;
-  readonly movementType: MovementType;
+  readonly step: string;
+  readonly stepType: StepType;
   readonly enabled: boolean;
 }
 
 interface UsageEventLogger {
   readonly filepath: string;
-  setMovement(movement: string, movementType: MovementType): void;
+  setStep(step: string, stepType: StepType): void;
   setProvider(provider: ProviderType, providerModel: string): void;
   logUsage(params: {
     readonly success: boolean;
@@ -83,8 +83,8 @@ describe('usageEventLogger', () => {
       runId: 'run-1',
       provider: 'codex',
       providerModel: 'gpt-5-codex',
-      movement: 'implement',
-      movementType: 'normal',
+      step: 'implement',
+      stepType: 'normal',
       enabled: true,
     });
 
@@ -108,8 +108,8 @@ describe('usageEventLogger', () => {
       session_id: string;
       provider: ProviderType;
       provider_model: string;
-      movement: string;
-      movement_type: MovementType;
+      step: string;
+      step_type: StepType;
       timestamp: string;
       success: boolean;
       usage_missing: boolean;
@@ -126,8 +126,8 @@ describe('usageEventLogger', () => {
     expect(parsed.session_id).toBe('session-1');
     expect(parsed.provider).toBe('codex');
     expect(parsed.provider_model).toBe('gpt-5-codex');
-    expect(parsed.movement).toBe('implement');
-    expect(parsed.movement_type).toBe('normal');
+    expect(parsed.step).toBe('implement');
+    expect(parsed.step_type).toBe('normal');
     expect(parsed.success).toBe(true);
     expect(parsed.usage_missing).toBe(false);
     expect(parsed.timestamp).toBe('2026-03-04T12:00:00.000Z');
@@ -145,8 +145,8 @@ describe('usageEventLogger', () => {
       runId: 'run-2',
       provider: 'opencode',
       providerModel: 'openai/gpt-4.1',
-      movement: 'implement',
-      movementType: 'normal',
+      step: 'implement',
+      stepType: 'normal',
       enabled: true,
     });
 
@@ -177,7 +177,7 @@ describe('usageEventLogger', () => {
     expect(parsed.usage).toEqual({});
   });
 
-  it('should update movement and provider metadata for subsequent records', async () => {
+  it('should update step and provider metadata for subsequent records', async () => {
     const { createUsageEventLogger } = await loadUsageEventLoggerModule();
     const logger = createUsageEventLogger({
       logsDir: tempDir,
@@ -185,8 +185,8 @@ describe('usageEventLogger', () => {
       runId: 'run-3',
       provider: 'claude',
       providerModel: 'sonnet',
-      movement: 'plan',
-      movementType: 'normal',
+      step: 'plan',
+      stepType: 'normal',
       enabled: true,
     });
 
@@ -195,7 +195,7 @@ describe('usageEventLogger', () => {
       usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3, usageMissing: false },
     });
 
-    logger.setMovement('implement', 'parallel');
+    logger.setStep('implement', 'parallel');
     logger.setProvider('codex', 'gpt-5-codex');
     logger.logUsage({
       success: true,
@@ -205,18 +205,18 @@ describe('usageEventLogger', () => {
     const lines = readFileSync(logger.filepath, 'utf-8').trim().split('\n');
     expect(lines).toHaveLength(2);
 
-    const first = JSON.parse(lines[0] ?? '{}') as { provider: ProviderType; provider_model: string; movement: string; movement_type: MovementType };
-    const second = JSON.parse(lines[1] ?? '{}') as { provider: ProviderType; provider_model: string; movement: string; movement_type: MovementType };
+    const first = JSON.parse(lines[0] ?? '{}') as { provider: ProviderType; provider_model: string; step: string; step_type: StepType };
+    const second = JSON.parse(lines[1] ?? '{}') as { provider: ProviderType; provider_model: string; step: string; step_type: StepType };
 
     expect(first.provider).toBe('claude');
     expect(first.provider_model).toBe('sonnet');
-    expect(first.movement).toBe('plan');
-    expect(first.movement_type).toBe('normal');
+    expect(first.step).toBe('plan');
+    expect(first.step_type).toBe('normal');
 
     expect(second.provider).toBe('codex');
     expect(second.provider_model).toBe('gpt-5-codex');
-    expect(second.movement).toBe('implement');
-    expect(second.movement_type).toBe('parallel');
+    expect(second.step).toBe('implement');
+    expect(second.step_type).toBe('parallel');
   });
 
   it('should not write records when disabled', async () => {
@@ -227,8 +227,8 @@ describe('usageEventLogger', () => {
       runId: 'run-disabled',
       provider: 'claude',
       providerModel: 'sonnet',
-      movement: 'plan',
-      movementType: 'normal',
+      step: 'plan',
+      stepType: 'normal',
       enabled: false,
     });
 
@@ -248,8 +248,8 @@ describe('usageEventLogger', () => {
       runId: 'run-err',
       provider: 'claude',
       providerModel: 'sonnet',
-      movement: 'plan',
-      movementType: 'normal',
+      step: 'plan',
+      stepType: 'normal',
       enabled: true,
     });
 

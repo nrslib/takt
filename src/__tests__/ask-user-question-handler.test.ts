@@ -7,7 +7,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   AskUserQuestionDeniedError,
   createDenyAskUserQuestionHandler,
-} from '../core/piece/ask-user-question-error.js';
+} from '../core/workflow/ask-user-question-error.js';
 import { createAskUserQuestionHandler } from '../infra/claude/ask-user-question-handler.js';
 import { SdkOptionsBuilder, buildSdkOptions } from '../infra/claude/options-builder.js';
 import type { AskUserQuestionInput, ClaudeSpawnOptions } from '../infra/claude/types.js';

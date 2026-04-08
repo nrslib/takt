@@ -7,7 +7,7 @@
 
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import type { Language } from '../../core/models/index.js';
 import { getLanguageResourcesDir } from '../resources/index.js';
 
@@ -31,11 +31,6 @@ export function getGlobalConfigDir(): string {
 /** Get takt global personas directory (~/.takt/personas) */
 export function getGlobalPersonasDir(): string {
   return join(getGlobalConfigDir(), 'personas');
-}
-
-/** Get takt global pieces directory (~/.takt/pieces) */
-export function getGlobalPiecesDir(): string {
-  return join(getGlobalConfigDir(), 'pieces');
 }
 
 /** Get takt global workflows directory (~/.takt/workflows) */
@@ -66,11 +61,6 @@ export function getBuiltinPersonasDir(lang: Language): string {
 /** Get project takt config directory (.takt in project) */
 export function getProjectConfigDir(projectDir: string): string {
   return resolveProjectConfigDir(projectDir);
-}
-
-/** Get project pieces directory (.takt/pieces in project) */
-export function getProjectPiecesDir(projectDir: string): string {
-  return join(getProjectConfigDir(projectDir), 'pieces');
 }
 
 /** Get project workflows directory (.takt/workflows in project) */
@@ -144,8 +134,8 @@ export function getRepertoireFacetDir(owner: string, repo: string, facetType: Fa
 
 /** Validate path is safe (no directory traversal) */
 export function isPathSafe(basePath: string, targetPath: string): boolean {
-  const resolvedBase = resolve(basePath);
-  const resolvedTarget = resolve(targetPath);
+  const resolvedBase = existsSync(basePath) ? realpathSync(basePath) : resolve(basePath);
+  const resolvedTarget = existsSync(targetPath) ? realpathSync(targetPath) : resolve(targetPath);
   const rel = relative(resolvedBase, resolvedTarget);
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }

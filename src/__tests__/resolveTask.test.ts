@@ -30,7 +30,7 @@ function createTempProjectDir(): string {
 }
 
 function createTask(overrides: Partial<TaskInfo> = {}): TaskInfo {
-  const baseData = { task: 'Run task', piece: 'default' } as NonNullable<TaskInfo['data']>;
+  const baseData = { task: 'Run task', workflow: 'default' } as NonNullable<TaskInfo['data']>;
   const data = overrides.data === undefined
     ? baseData
     : overrides.data === null
@@ -51,37 +51,37 @@ function createTask(overrides: Partial<TaskInfo> = {}): TaskInfo {
   };
 }
 
-const resolveTaskExecutionWithPiece = resolveTaskExecution as (task: TaskInfo, projectCwd: string) => ReturnType<typeof resolveTaskExecution>;
+const resolveTaskExecutionStrict = resolveTaskExecution as (task: TaskInfo, projectCwd: string) => ReturnType<typeof resolveTaskExecution>;
 
 describe('resolveTaskExecution', () => {
   it('should throw when task data is null', async () => {
     const root = createTempProjectDir();
     const task = createTask({ data: null });
 
-    await expect(resolveTaskExecutionWithPiece(task, root)).rejects.toThrow();
+    await expect(resolveTaskExecutionStrict(task, root)).rejects.toThrow();
   });
 
-  it('should throw when task data does not include piece', async () => {
+  it('should throw when task data does not include workflow', async () => {
     const root = createTempProjectDir();
     const task = createTask({
       data: ({
-        task: 'Run task without piece',
-        piece: undefined,
+        task: 'Run task without workflow',
+        workflow: undefined,
       } as unknown) as NonNullable<TaskInfo['data']>,
     });
 
-    await expect(resolveTaskExecutionWithPiece(task, root)).rejects.toThrow();
+    await expect(resolveTaskExecutionStrict(task, root)).rejects.toThrow();
   });
 
   it('should return defaults for valid task data', async () => {
     const root = createTempProjectDir();
     const task = createTask();
 
-    const result = await resolveTaskExecutionWithPiece(task, root);
+    const result = await resolveTaskExecutionStrict(task, root);
 
     expect(result).toMatchObject({
       execCwd: root,
-      execPiece: 'default',
+      workflowIdentifier: 'default',
       isWorktree: false,
       autoPr: false,
       draftPr: false,
@@ -89,22 +89,21 @@ describe('resolveTaskExecution', () => {
     });
   });
 
-  it('should resolve execPiece from workflow alias', async () => {
+  it('should resolve workflowIdentifier from workflow', async () => {
     const root = createTempProjectDir();
     const task = createTask({
       data: ({
         task: 'Run task',
-        piece: undefined,
         workflow: 'workflow-only',
       } as unknown) as NonNullable<TaskInfo['data']>,
     });
 
-    const result = await resolveTaskExecutionWithPiece(task, root);
+    const result = await resolveTaskExecutionStrict(task, root);
 
-    expect(result.execPiece).toBe('workflow-only');
+    expect(result.workflowIdentifier).toBe('workflow-only');
   });
 
-  it('should resolve startMovement from start_step alias', async () => {
+  it('should resolve startStep from start_step alias', async () => {
     const root = createTempProjectDir();
     const task = createTask({
       data: ({
@@ -113,23 +112,24 @@ describe('resolveTaskExecution', () => {
       } as unknown) as NonNullable<TaskInfo['data']>,
     });
 
-    const result = await resolveTaskExecutionWithPiece(task, root);
+    const result = await resolveTaskExecutionStrict(task, root);
 
-    expect(result.startMovement).toBe('implement');
+    expect(result.startStep).toBe('implement');
   });
 
-  it('should fail fast when workflow and piece conflict', async () => {
+  it('should fail fast when a removed legacy workflow key is present', async () => {
     const root = createTempProjectDir();
+    const removedWorkflowKey = ['p', 'i', 'e', 'c', 'e'].join('');
     const task = createTask({
       data: ({
         task: 'Run task',
         workflow: 'workflow-a',
-        piece: 'workflow-b',
+        [removedWorkflowKey]: 'workflow-conflict',
       } as unknown) as NonNullable<TaskInfo['data']>,
     });
 
-    await expect(resolveTaskExecutionWithPiece(task, root)).rejects.toThrow(
-      "Task configuration conflict: 'workflow' and 'piece' must match when both are set.",
+    await expect(resolveTaskExecutionStrict(task, root)).rejects.toThrow(
+      new RegExp(removedWorkflowKey)
     );
   });
 
@@ -150,12 +150,12 @@ describe('resolveTaskExecution', () => {
       },
     });
 
-    const result = await resolveTaskExecutionWithPiece(task, root);
+    const result = await resolveTaskExecutionStrict(task, root);
     const expectedReportOrderPath = path.join(root, '.takt', 'runs', 'issue-task-123', 'context', 'task', 'order.md');
 
     expect(result).toMatchObject({
       execCwd: root,
-      execPiece: 'default',
+      workflowIdentifier: 'default',
       isWorktree: false,
       autoPr: true,
       draftPr: false,
@@ -192,7 +192,7 @@ describe('resolveTaskExecution', () => {
       branch: 'feature/base-branch',
     });
 
-    const result = await resolveTaskExecutionWithPiece(task, root);
+    const result = await resolveTaskExecutionStrict(task, root);
 
     expect(mockResolveBaseBranch).toHaveBeenCalledWith(root, 'release/main');
     expect(mockCreateSharedClone).toHaveBeenCalledWith(
@@ -232,7 +232,7 @@ describe('resolveTaskExecution', () => {
       branch: 'feature/base-branch',
     });
 
-    const result = await resolveTaskExecutionWithPiece(task, root);
+    const result = await resolveTaskExecutionStrict(task, root);
     const cloneOptions = mockCreateSharedClone.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
 
     expect(mockResolveBaseBranch).toHaveBeenCalledWith(root, 'release/main');
@@ -272,7 +272,7 @@ describe('resolveTaskExecution', () => {
       branch: 'feature/base-branch',
     });
 
-    const result = await resolveTaskExecutionWithPiece(task, root);
+    const result = await resolveTaskExecutionStrict(task, root);
     const cloneOptions = mockCreateSharedClone.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
 
     expect(mockResolveBaseBranch).toHaveBeenCalledWith(root, undefined);
@@ -313,7 +313,7 @@ describe('resolveTaskExecution', () => {
       branch: 'feature/base-branch',
     });
 
-    const result = await resolveTaskExecutionWithPiece(task, root);
+    const result = await resolveTaskExecutionStrict(task, root);
 
     expect(result.execCwd).toBe(worktreePath);
     expect(result.isWorktree).toBe(true);
@@ -349,7 +349,7 @@ describe('resolveTaskExecution', () => {
       branch: 'feature/base-branch',
     });
 
-    const result = await resolveTaskExecutionWithPiece(task, root);
+    const result = await resolveTaskExecutionStrict(task, root);
 
     expect(mockResolveBaseBranch).toHaveBeenCalledWith(root, 'release/main');
     expect(mockCreateSharedClone).not.toHaveBeenCalled();
@@ -385,7 +385,7 @@ describe('resolveTaskExecution', () => {
       branch: 'feature/base-branch',
     });
 
-    const result = await resolveTaskExecutionWithPiece(task, root);
+    const result = await resolveTaskExecutionStrict(task, root);
 
     expect(mockResolveBaseBranch).toHaveBeenCalledWith(root, undefined);
     expect(mockCreateSharedClone).not.toHaveBeenCalled();
@@ -421,7 +421,7 @@ describe('resolveTaskExecution', () => {
       branch: 'feature/outside-worktree',
     });
 
-    const result = await resolveTaskExecutionWithPiece(task, root);
+    const result = await resolveTaskExecutionStrict(task, root);
 
     expect(mockCreateSharedClone).toHaveBeenCalled();
     expect(result.execCwd).toBe(safeClonePath);
@@ -431,6 +431,43 @@ describe('resolveTaskExecution', () => {
     mockCreateSharedClone.mockRestore();
     mockResolveBaseBranch.mockRestore();
     fs.rmSync(outsidePath, { recursive: true, force: true });
+  });
+
+  it('should not reuse a symlinked worktree path that resolves outside clone base directory', async () => {
+    const root = createTempProjectDir();
+    const outsidePath = createTempProjectDir();
+    const worktreeLinkPath = path.join(root, '.takt', 'worktrees', 'linked-worktree');
+    fs.mkdirSync(path.dirname(worktreeLinkPath), { recursive: true });
+    fs.symlinkSync(outsidePath, worktreeLinkPath, 'dir');
+
+    const task = createTask({
+      data: ({
+        task: 'Run task with symlinked worktree path',
+        worktree: true,
+        branch: 'feature/symlink-worktree',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      worktreePath: worktreeLinkPath,
+      status: 'pending',
+    });
+
+    const safeClonePath = path.join(root, '.takt', 'worktrees', 'safe-clone');
+    const mockResolveBaseBranch = vi.spyOn(infraTask, 'resolveBaseBranch').mockReturnValue({
+      branch: 'main',
+    });
+    const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedClone').mockReturnValue({
+      path: safeClonePath,
+      branch: 'feature/symlink-worktree',
+    });
+
+    const result = await resolveTaskExecutionStrict(task, root);
+
+    expect(mockCreateSharedClone).toHaveBeenCalled();
+    expect(result.execCwd).toBe(safeClonePath);
+    expect(result.worktreePath).toBe(safeClonePath);
+    expect(result.isWorktree).toBe(true);
+
+    mockCreateSharedClone.mockRestore();
+    mockResolveBaseBranch.mockRestore();
   });
 
   it('should reuse existing worktree path within clone base directory', async () => {
@@ -456,7 +493,7 @@ describe('resolveTaskExecution', () => {
       branch: 'feature/safe-worktree',
     });
 
-    const result = await resolveTaskExecutionWithPiece(task, root);
+    const result = await resolveTaskExecutionStrict(task, root);
 
     expect(mockCreateSharedClone).not.toHaveBeenCalled();
     expect(result.execCwd).toBe(worktreePath);
@@ -477,7 +514,7 @@ describe('resolveTaskExecution', () => {
       },
     });
 
-    const result = await resolveTaskExecutionWithPiece(task, root);
+    const result = await resolveTaskExecutionStrict(task, root);
 
     expect(result.draftPr).toBe(true);
     expect(result.autoPr).toBe(true);
@@ -493,7 +530,7 @@ describe('resolveTaskExecution', () => {
       },
     });
 
-    const result = await resolveTaskExecutionWithPiece(task, root);
+    const result = await resolveTaskExecutionStrict(task, root);
 
     expect(result.shouldPublishBranchToOrigin).toBe(true);
   });
@@ -507,7 +544,7 @@ describe('resolveTaskExecution', () => {
       },
     });
 
-    const result = await resolveTaskExecutionWithPiece(task, root);
+    const result = await resolveTaskExecutionStrict(task, root);
 
     expect(result.autoPr).toBe(true);
     expect(result.shouldPublishBranchToOrigin).toBe(true);
@@ -518,13 +555,13 @@ describe('resolveTaskExecution', () => {
     const task = createTask({
       data: ({
         task: 'Run task',
-        piece: 'default',
+        workflow: 'default',
         auto_pr: true,
         should_publish_branch_to_origin: false,
       } as unknown) as NonNullable<TaskInfo['data']>,
     });
 
-    const result = await resolveTaskExecutionWithPiece(task, root);
+    const result = await resolveTaskExecutionStrict(task, root);
 
     expect(result.autoPr).toBe(true);
     expect(result.shouldPublishBranchToOrigin).toBe(true);

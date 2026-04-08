@@ -14,21 +14,21 @@ function createTaskInfo(data: TaskInfo['data']): TaskInfo {
 }
 
 describe('prepareTaskForExecution', () => {
-  it('returns copied task with selected piece', () => {
-    const original = createTaskInfo({ task: 'task content', piece: 'original-piece' });
+  it('returns copied task with selected workflow', () => {
+    const original = createTaskInfo({ task: 'task content', workflow: 'original-workflow' });
 
-    const prepared = prepareTaskForExecution(original, 'selected-piece');
+    const prepared = prepareTaskForExecution(original, 'selected-workflow');
 
     expect(prepared).not.toBe(original);
     expect(prepared.data).not.toBe(original.data);
-    expect(prepared.data?.piece).toBe('selected-piece');
-    expect(original.data?.piece).toBe('original-piece');
+    expect(prepared.data?.workflow).toBe('selected-workflow');
+    expect(original.data?.workflow).toBe('original-workflow');
   });
 
   it('throws when task data is missing', () => {
     const original = createTaskInfo(null);
 
-    expect(() => prepareTaskForExecution(original, 'selected-piece')).toThrow(
+    expect(() => prepareTaskForExecution(original, 'selected-workflow')).toThrow(
       'Task "task-1" is missing required data.',
     );
   });

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { resolve, dirname } from 'node:path';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   createIsolatedEnv,
@@ -12,6 +13,27 @@ import { readSessionRecords } from '../helpers/session-log';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+function createLocalWorkflowFixture(repoPath: string, fixtureName: string): string {
+  const workflowsDir = join(repoPath, '.takt', 'workflows');
+  const agentsDir = join(repoPath, '.takt', 'agents');
+  mkdirSync(workflowsDir, { recursive: true });
+  mkdirSync(agentsDir, { recursive: true });
+
+  const workflowFixturePath = resolve(__dirname, `../fixtures/workflows/${fixtureName}`);
+  const agentFixturePath = resolve(__dirname, '../fixtures/agents/test-coder.md');
+
+  const workflowContent = readFileSync(workflowFixturePath, 'utf-8');
+  const agentContent = readFileSync(agentFixturePath, 'utf-8');
+
+  const localWorkflowPath = join(workflowsDir, fixtureName);
+  const localAgentPath = join(agentsDir, 'test-coder.md');
+
+  writeFileSync(localWorkflowPath, workflowContent, 'utf-8');
+  writeFileSync(localAgentPath, agentContent, 'utf-8');
+
+  return localWorkflowPath;
+}
 
 // E2E更新時は docs/testing/e2e.md も更新すること
 describe('E2E: --provider option override (mock)', () => {
@@ -32,14 +54,14 @@ describe('E2E: --provider option override (mock)', () => {
     // Given: config.yaml has provider: claude, but CLI flag specifies mock
     updateIsolatedConfig(isolatedEnv.taktDir, { provider: 'claude' });
 
-    const piecePath = resolve(__dirname, '../fixtures/pieces/mock-single-step.yaml');
+    const workflowPath = createLocalWorkflowFixture(repo.path, 'mock-single-step.yaml');
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/execute-done.json');
 
     // When: running with --provider mock
     const result = runTakt({
       args: [
         '--task', 'Test provider override direct',
-        '--piece', piecePath,
+        '--workflow', workflowPath,
         '--provider', 'mock',
       ],
       cwd: repo.path,
@@ -59,7 +81,7 @@ describe('E2E: --provider option override (mock)', () => {
     // Given: config.yaml has provider: claude, but CLI flag specifies mock
     updateIsolatedConfig(isolatedEnv.taktDir, { provider: 'claude' });
 
-    const piecePath = resolve(__dirname, '../fixtures/pieces/mock-single-step.yaml');
+    const workflowPath = createLocalWorkflowFixture(repo.path, 'mock-single-step.yaml');
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/execute-done.json');
 
     // When: running pipeline --skip-git with --provider mock
@@ -67,7 +89,7 @@ describe('E2E: --provider option override (mock)', () => {
       args: [
         '--pipeline',
         '--task', 'Test provider override pipeline',
-        '--piece', piecePath,
+        '--workflow', workflowPath,
         '--skip-git',
         '--provider', 'mock',
       ],
@@ -85,17 +107,17 @@ describe('E2E: --provider option override (mock)', () => {
   }, 240_000);
 
   it('should use structured caller with mock provider for Phase 3 status judgment', () => {
-    // Given: a 2-rule piece requiring Phase 3 judgment
+    // Given: a 2-rule workflow requiring Phase 3 judgment
     // MockProvider.supportsStructuredOutput = true → DefaultStructuredCaller is used
     // DefaultStructuredCaller extracts step from structuredOutput.step
-    const piecePath = resolve(__dirname, '../fixtures/pieces/structured-output.yaml');
+    const workflowPath = createLocalWorkflowFixture(repo.path, 'structured-output.yaml');
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/structured-output-mock.json');
 
     // When: running with --provider mock
     const result = runTakt({
       args: [
         '--task', 'Say hello',
-        '--piece', piecePath,
+        '--workflow', workflowPath,
         '--provider', 'mock',
       ],
       cwd: repo.path,
@@ -111,14 +133,14 @@ describe('E2E: --provider option override (mock)', () => {
       console.log('=== STDERR ===\n', result.stderr);
     }
 
-    // Then: piece completes and status resolved via structured output
+    // Then: workflow completes and status is resolved via structured output
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Workflow completed');
 
     const records = readSessionRecords(repo.path);
 
-    const pieceComplete = records.find((r) => r.type === 'piece_complete');
-    expect(pieceComplete).toBeDefined();
+    const workflowComplete = records.find((r) => r.type === 'workflow_complete');
+    expect(workflowComplete).toBeDefined();
 
     const stepComplete = records.find((r) => r.type === 'step_complete');
     expect(stepComplete).toBeDefined();

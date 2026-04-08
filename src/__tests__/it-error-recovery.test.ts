@@ -2,10 +2,10 @@
  * Error recovery integration tests.
  *
  * Tests agent error, blocked responses, max iteration limits,
- * loop detection, scenario queue exhaustion, and movement execution exceptions.
+ * loop detection, scenario queue exhaustion, and step execution exceptions.
  *
  * Mocked: UI, session, phase-runner, notifications, config
- * Not mocked: PieceEngine, runAgent, detectMatchedRule, rule-evaluator
+ * Not mocked: WorkflowEngine, runAgent, detectMatchedRule, rule-evaluator
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -14,13 +14,13 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setMockScenario, resetScenario } from '../infra/mock/index.js';
 import { DefaultStructuredCaller } from '../agents/structured-caller.js';
-import type { PieceConfig, PieceMovement, PieceRule } from '../core/models/index.js';
+import type { WorkflowConfig, WorkflowStep, WorkflowRule } from '../core/models/index.js';
 import { detectRuleIndex } from '../shared/utils/ruleIndex.js';
 import { makeRule } from './test-helpers.js';
 
 // --- Mocks ---
 
-vi.mock('../core/piece/phase-runner.js', () => ({
+vi.mock('../core/workflow/phase-runner.js', () => ({
   needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
   runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
@@ -36,7 +36,7 @@ vi.mock('../infra/config/global/globalConfig.js', () => ({
   loadGlobalConfig: vi.fn().mockReturnValue({}),
   getLanguage: vi.fn().mockReturnValue('en'),
   getDisabledBuiltins: vi.fn().mockReturnValue([]),
-  getBuiltinPiecesEnabled: vi.fn().mockReturnValue(true),
+  getBuiltinWorkflowsEnabled: vi.fn().mockReturnValue(true),
 }));
 
 vi.mock('../infra/config/project/projectConfig.js', () => ({
@@ -45,14 +45,14 @@ vi.mock('../infra/config/project/projectConfig.js', () => ({
 
 // --- Imports (after mocks) ---
 
-import { PieceEngine } from '../core/piece/index.js';
+import { WorkflowEngine } from '../core/workflow/index.js';
 
 // --- Test helpers ---
 
-function makeMovement(name: string, agentPath: string, rules: PieceRule[]): PieceMovement {
+function makeStepConfig(name: string, agentPath: string, rules: WorkflowRule[]): WorkflowStep {
   return {
     name,
-    persona: `./personas/${name}.md`,
+    persona: `./.takt/personas/${name}.md`,
     personaDisplayName: name,
     personaPath: agentPath,
     instruction: '{task}',
@@ -65,10 +65,10 @@ function createTestEnv(): { dir: string; agentPaths: Record<string, string> } {
   const dir = mkdtempSync(join(tmpdir(), 'takt-it-err-'));
   mkdirSync(join(dir, '.takt', 'reports', 'test-report-dir'), { recursive: true });
 
-  const personasDir = join(dir, 'personas');
+  const personasDir = join(dir, '.takt', 'personas');
   mkdirSync(personasDir, { recursive: true });
 
-  // Persona file names match movement names used in makeMovement()
+  // Persona file names match step names used in makeStepConfig()
   const agents = ['plan', 'implement', 'review', 'supervisor'];
   const agentPaths: Record<string, string> = {};
   for (const agent of agents) {
@@ -88,22 +88,22 @@ function buildEngineOptions(projectCwd: string) {
   };
 }
 
-function buildPiece(agentPaths: Record<string, string>, maxMovements: number): PieceConfig {
+function buildWorkflow(agentPaths: Record<string, string>, maxSteps: number): WorkflowConfig {
   return {
     name: 'it-error',
-    description: 'IT error recovery piece',
-    maxMovements,
-    initialMovement: 'plan',
-    movements: [
-      makeMovement('plan', agentPaths.plan, [
+    description: 'IT error recovery workflow',
+    maxSteps,
+    initialStep: 'plan',
+    steps: [
+      makeStepConfig('plan', agentPaths.plan, [
         makeRule('Requirements are clear', 'implement'),
         makeRule('Requirements unclear', 'ABORT'),
       ]),
-      makeMovement('implement', agentPaths.implement, [
+      makeStepConfig('implement', agentPaths.implement, [
         makeRule('Implementation complete', 'review'),
         makeRule('Cannot proceed', 'plan'),
       ]),
-      makeMovement('review', agentPaths.review, [
+      makeStepConfig('review', agentPaths.review, [
         makeRule('All checks passed', 'COMPLETE'),
         makeRule('Issues found', 'implement'),
       ]),
@@ -132,15 +132,15 @@ describe('Error Recovery IT: agent blocked response', () => {
       { persona: 'plan', status: 'blocked', content: 'Error: Agent is blocked.' },
     ]);
 
-    const config = buildPiece(agentPaths, 10);
-    const engine = new PieceEngine(config, testDir, 'Test task', {
+    const config = buildWorkflow(agentPaths, 10);
+    const engine = new WorkflowEngine(config, testDir, 'Test task', {
       ...buildEngineOptions(testDir),
       provider: 'mock',
     });
 
     const state = await engine.run();
 
-    // Blocked agent should result in piece abort
+    // Blocked agent should result in workflow abort
     expect(state.status).toBe('aborted');
   });
 
@@ -149,8 +149,8 @@ describe('Error Recovery IT: agent blocked response', () => {
       { persona: 'plan', status: 'done', content: '' },
     ]);
 
-    const config = buildPiece(agentPaths, 10);
-    const engine = new PieceEngine(config, testDir, 'Test task', {
+    const config = buildWorkflow(agentPaths, 10);
+    const engine = new WorkflowEngine(config, testDir, 'Test task', {
       ...buildEngineOptions(testDir),
       provider: 'mock',
     });
@@ -179,15 +179,15 @@ describe('Error Recovery IT: max iterations reached', () => {
   });
 
   it('should abort when max iterations reached (tight limit)', async () => {
-    // Only 2 iterations allowed, but piece needs 3 movements
+    // Only 2 iterations allowed, but the workflow needs 3 steps
     setMockScenario([
       { persona: 'plan', status: 'done', content: '[PLAN:1]\n\nClear.' },
       { persona: 'implement', status: 'done', content: '[IMPLEMENT:1]\n\nDone.' },
       { persona: 'review', status: 'done', content: '[REVIEW:1]\n\nPassed.' },
     ]);
 
-    const config = buildPiece(agentPaths, 2);
-    const engine = new PieceEngine(config, testDir, 'Task', {
+    const config = buildWorkflow(agentPaths, 2);
+    const engine = new WorkflowEngine(config, testDir, 'Task', {
       ...buildEngineOptions(testDir),
       provider: 'mock',
     });
@@ -206,8 +206,8 @@ describe('Error Recovery IT: max iterations reached', () => {
     }));
     setMockScenario(loopScenario);
 
-    const config = buildPiece(agentPaths, 4);
-    const engine = new PieceEngine(config, testDir, 'Looping task', {
+    const config = buildWorkflow(agentPaths, 4);
+    const engine = new WorkflowEngine(config, testDir, 'Looping task', {
       ...buildEngineOptions(testDir),
       provider: 'mock',
     });
@@ -235,14 +235,14 @@ describe('Error Recovery IT: scenario queue exhaustion', () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  it('should handle scenario queue exhaustion mid-piece', async () => {
-    // Only 1 entry, but piece needs 3 movements
+  it('should handle scenario queue exhaustion mid-workflow', async () => {
+    // Only 1 entry, but the workflow needs 3 steps
     setMockScenario([
       { persona: 'plan', status: 'done', content: '[PLAN:1]\n\nClear.' },
     ]);
 
-    const config = buildPiece(agentPaths, 10);
-    const engine = new PieceEngine(config, testDir, 'Task', {
+    const config = buildWorkflow(agentPaths, 10);
+    const engine = new WorkflowEngine(config, testDir, 'Task', {
       ...buildEngineOptions(testDir),
       provider: 'mock',
     });
@@ -255,7 +255,7 @@ describe('Error Recovery IT: scenario queue exhaustion', () => {
   });
 });
 
-describe('Error Recovery IT: movement events on error paths', () => {
+describe('Error Recovery IT: step events on error paths', () => {
   let testDir: string;
   let agentPaths: Record<string, string>;
 
@@ -271,21 +271,21 @@ describe('Error Recovery IT: movement events on error paths', () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  it('should emit piece:abort event with reason on max iterations', async () => {
+  it('should emit workflow:abort event with reason on max iterations', async () => {
     const loopScenario = Array.from({ length: 6 }, (_, i) => ({
       status: 'done' as const,
       content: i % 2 === 0 ? '[PLAN:1]\n\nClear.' : '[IMPLEMENT:2]\n\nCannot proceed.',
     }));
     setMockScenario(loopScenario);
 
-    const config = buildPiece(agentPaths, 3);
-    const engine = new PieceEngine(config, testDir, 'Task', {
+    const config = buildWorkflow(agentPaths, 3);
+    const engine = new WorkflowEngine(config, testDir, 'Task', {
       ...buildEngineOptions(testDir),
       provider: 'mock',
     });
 
     let abortReason: string | undefined;
-    engine.on('piece:abort', (_state, reason) => {
+    engine.on('workflow:abort', (_state, reason) => {
       abortReason = reason;
     });
 
@@ -294,13 +294,13 @@ describe('Error Recovery IT: movement events on error paths', () => {
     expect(abortReason).toBeDefined();
   });
 
-  it('should emit movement:start and movement:complete for each executed movement before abort', async () => {
+  it('should emit step:start and step:complete for each executed step before abort', async () => {
     setMockScenario([
       { persona: 'plan', status: 'done', content: '[PLAN:2]\n\nRequirements unclear.' },
     ]);
 
-    const config = buildPiece(agentPaths, 10);
-    const engine = new PieceEngine(config, testDir, 'Task', {
+    const config = buildWorkflow(agentPaths, 10);
+    const engine = new WorkflowEngine(config, testDir, 'Task', {
       ...buildEngineOptions(testDir),
       provider: 'mock',
     });
@@ -308,10 +308,10 @@ describe('Error Recovery IT: movement events on error paths', () => {
     const startedSteps: string[] = [];
     const completedSteps: string[] = [];
 
-    engine.on('movement:start', (step) => {
+    engine.on('step:start', (step) => {
       startedSteps.push(step.name);
     });
-    engine.on('movement:complete', (step) => {
+    engine.on('step:complete', (step) => {
       completedSteps.push(step.name);
     });
 
@@ -338,7 +338,7 @@ describe('Error Recovery IT: programmatic abort', () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  it('should support engine.abort() to cancel running piece', async () => {
+  it('should support engine.abort() to cancel a running workflow', async () => {
     // Provide enough scenarios for 3 steps
     setMockScenario([
       { persona: 'plan', status: 'done', content: '[PLAN:1]\n\nClear.' },
@@ -346,21 +346,21 @@ describe('Error Recovery IT: programmatic abort', () => {
       { persona: 'review', status: 'done', content: '[REVIEW:1]\n\nPassed.' },
     ]);
 
-    const config = buildPiece(agentPaths, 10);
-    const engine = new PieceEngine(config, testDir, 'Task', {
+    const config = buildWorkflow(agentPaths, 10);
+    const engine = new WorkflowEngine(config, testDir, 'Task', {
       ...buildEngineOptions(testDir),
       provider: 'mock',
     });
 
-    // Abort after the first movement completes
-    engine.on('movement:complete', () => {
+    // Abort after the first step completes
+    engine.on('step:complete', () => {
       engine.abort();
     });
 
     const state = await engine.run();
 
     expect(state.status).toBe('aborted');
-    // Should have aborted after 1 movement
+    // Should have aborted after 1 step
     expect(state.iteration).toBeLessThanOrEqual(2);
   });
 });

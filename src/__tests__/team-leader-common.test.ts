@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { PartDefinition, PieceMovement } from '../core/models/types.js';
-import { createPartMovement } from '../core/piece/engine/team-leader-common.js';
+import type { PartDefinition, WorkflowStep } from '../core/models/types.js';
+import { createPartStep } from '../core/workflow/engine/team-leader-common.js';
 
-describe('createPartMovement', () => {
+describe('createPartStep', () => {
   it('uses step.providerOptions.claude.allowedTools when part_allowed_tools is omitted', () => {
     // Given
-    const step: PieceMovement = {
+    const step: WorkflowStep = {
       name: 'implement',
       persona: 'coder',
       personaDisplayName: 'Coder',
@@ -30,14 +30,14 @@ describe('createPartMovement', () => {
     };
 
     // When
-    const partMovement = createPartMovement(step, part);
+    const partStep = createPartStep(step, part);
 
     // Then
-    expect(partMovement.providerOptions?.claude?.allowedTools).toEqual(['Read', 'Edit', 'Bash']);
+    expect(partStep.providerOptions?.claude?.allowedTools).toEqual(['Read', 'Edit', 'Bash']);
   });
 
   it('keeps part personaDisplayName aligned with the part persona for personaProviders lookup', () => {
-    const step: PieceMovement = {
+    const step: WorkflowStep = {
       name: 'implement',
       persona: 'coder',
       personaDisplayName: 'coder',
@@ -57,10 +57,10 @@ describe('createPartMovement', () => {
       instruction: 'implement api',
     };
 
-    const partMovement = createPartMovement(step, part);
+    const partStep = createPartStep(step, part);
 
-    expect(partMovement.name).toBe('implement.part-1');
-    expect(partMovement.persona).toBe('coder');
-    expect(partMovement.personaDisplayName).toBe('coder');
+    expect(partStep.name).toBe('implement.part-1');
+    expect(partStep.persona).toBe('coder');
+    expect(partStep.personaDisplayName).toBe('coder');
   });
 });

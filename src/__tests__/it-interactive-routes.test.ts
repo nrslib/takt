@@ -23,7 +23,7 @@ import {
 
 vi.mock('../infra/config/global/globalConfig.js', () => ({
   loadGlobalConfig: vi.fn(() => ({ provider: 'mock', language: 'en' })),
-  getBuiltinPiecesEnabled: vi.fn().mockReturnValue(true),
+  getBuiltinWorkflowsEnabled: vi.fn().mockReturnValue(true),
 }));
 
 vi.mock('../infra/providers/index.js', () => ({

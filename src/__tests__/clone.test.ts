@@ -16,6 +16,7 @@ vi.mock('node:fs', () => ({
     mkdtempSync: vi.fn(),
     writeFileSync: vi.fn(),
     readFileSync: vi.fn(),
+    realpathSync: vi.fn((value: string) => value),
     existsSync: vi.fn(),
     rmSync: vi.fn(),
     unlinkSync: vi.fn(),
@@ -26,6 +27,7 @@ vi.mock('node:fs', () => ({
   mkdtempSync: vi.fn(),
   writeFileSync: vi.fn(),
   readFileSync: vi.fn(),
+  realpathSync: vi.fn((value: string) => value),
   existsSync: vi.fn(),
   rmSync: vi.fn(),
   unlinkSync: vi.fn(),
@@ -44,7 +46,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 vi.mock('../infra/config/global/globalConfig.js', () => ({
   loadGlobalConfig: vi.fn(() => ({})),
-  getBuiltinPiecesEnabled: vi.fn().mockReturnValue(true),
+  getBuiltinWorkflowsEnabled: vi.fn().mockReturnValue(true),
 }));
 
 vi.mock('../infra/config/project/projectConfig.js', async (importOriginal) => ({
@@ -1209,7 +1211,11 @@ describe('cleanupOrphanedClone path traversal protection', () => {
     vi.mocked(fs.readFileSync).mockReturnValueOnce(
       JSON.stringify({ clonePath: validClonePath })
     );
-    vi.mocked(fs.existsSync).mockReturnValueOnce(true).mockReturnValueOnce(true);
+    vi.mocked(fs.existsSync)
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(true);
 
     cleanupOrphanedClone(PROJECT_DIR, BRANCH);
 
@@ -1218,6 +1224,31 @@ describe('cleanupOrphanedClone path traversal protection', () => {
       validClonePath,
       expect.objectContaining({ recursive: true })
     );
+  });
+
+  it('should refuse to remove a symlinked clone whose real path escapes the clone base directory', () => {
+    const symlinkClonePath = '/takt-worktrees/linked-clone';
+    vi.mocked(fs.readFileSync).mockReturnValueOnce(
+      JSON.stringify({ clonePath: symlinkClonePath })
+    );
+    vi.mocked(fs.existsSync)
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(true);
+    vi.mocked(fs.realpathSync).mockImplementation((value: fs.PathLike) => {
+      if (value === symlinkClonePath) {
+        return '/outside/escaped-clone';
+      }
+      return String(value);
+    });
+
+    cleanupOrphanedClone(PROJECT_DIR, BRANCH);
+
+    expect(mockLogError).toHaveBeenCalledWith(
+      'Refusing to remove clone outside of clone base directory',
+      expect.objectContaining({ branch: BRANCH, clonePath: symlinkClonePath })
+    );
+    expect(vi.mocked(fs.rmSync)).not.toHaveBeenCalled();
   });
 });
 

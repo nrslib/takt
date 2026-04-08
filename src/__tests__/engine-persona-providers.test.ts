@@ -1,14 +1,14 @@
 /**
  * Tests for persona_providers config-level provider/model override.
  *
- * Verifies movement-level provider/model resolution for resolvedProvider/resolvedModel:
+ * Verifies step-level provider/model resolution for resolvedProvider/resolvedModel:
  *   1. persona_providers[personaDisplayName].provider (highest)
- *   2. Movement YAML provider
- *   3. CLI/global provider (lowest in movement resolution)
+ *   2. Step YAML provider
+ *   3. CLI/global provider (lowest in step resolution)
  *
  * Model resolution remains:
  *   1. persona_providers[personaDisplayName].model
- *   2. Movement YAML model
+ *   2. Step YAML model
  *   3. CLI/global model
  */
 
@@ -18,11 +18,11 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/piece/evaluation/index.js', () => ({
+vi.mock('../core/workflow/evaluation/index.js', () => ({
   detectMatchedRule: vi.fn(),
 }));
 
-vi.mock('../core/piece/phase-runner.js', () => ({
+vi.mock('../core/workflow/phase-runner.js', () => ({
   needsStatusJudgmentPhase: vi.fn(),
   runReportPhase: vi.fn(),
   runStatusJudgmentPhase: vi.fn(),
@@ -33,42 +33,42 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   generateReportDir: vi.fn().mockReturnValue('test-report-dir'),
 }));
 
-import { PieceEngine } from '../core/piece/index.js';
+import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
-import type { PieceConfig } from '../core/models/index.js';
+import type { WorkflowConfig } from '../core/models/index.js';
 import {
   makeResponse,
   makeRule,
-  makeMovement,
+  makeStep,
   mockRunAgentSequence,
   mockDetectMatchedRuleSequence,
   applyDefaultMocks,
 } from './engine-test-helpers.js';
 
-describe('PieceEngine persona_providers override', () => {
+describe('WorkflowEngine persona_providers override', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     applyDefaultMocks();
   });
 
-  it('should use persona_providers.provider when movement has no provider and persona matches', async () => {
-    const movement = makeMovement('implement', {
+  it('should use persona_providers.provider when step has no provider and persona matches', async () => {
+    const step = makeStep('implement', {
       personaDisplayName: 'coder',
       rules: [makeRule('done', 'COMPLETE')],
     });
-    const config: PieceConfig = {
+    const config: WorkflowConfig = {
       name: 'persona-provider-test',
-      movements: [movement],
-      initialMovement: 'implement',
-      maxMovements: 1,
+      steps: [step],
+      initialStep: 'implement',
+      maxSteps: 1,
     };
 
     mockRunAgentSequence([
-      makeResponse({ persona: movement.persona, content: 'done' }),
+      makeResponse({ persona: step.persona, content: 'done' }),
     ]);
     mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
 
-    const engine = new PieceEngine(config, '/tmp/project', 'test task', {
+    const engine = new WorkflowEngine(config, '/tmp/project', 'test task', {
       projectCwd: '/tmp/project',
       provider: 'claude',
       personaProviders: { coder: { provider: 'codex' } },
@@ -82,23 +82,23 @@ describe('PieceEngine persona_providers override', () => {
   });
 
   it('should use global provider when persona is not in persona_providers', async () => {
-    const movement = makeMovement('plan', {
+    const step = makeStep('plan', {
       personaDisplayName: 'planner',
       rules: [makeRule('done', 'COMPLETE')],
     });
-    const config: PieceConfig = {
+    const config: WorkflowConfig = {
       name: 'persona-provider-nomatch',
-      movements: [movement],
-      initialMovement: 'plan',
-      maxMovements: 1,
+      steps: [step],
+      initialStep: 'plan',
+      maxSteps: 1,
     };
 
     mockRunAgentSequence([
-      makeResponse({ persona: movement.persona, content: 'done' }),
+      makeResponse({ persona: step.persona, content: 'done' }),
     ]);
     mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
 
-    const engine = new PieceEngine(config, '/tmp/project', 'test task', {
+    const engine = new WorkflowEngine(config, '/tmp/project', 'test task', {
       projectCwd: '/tmp/project',
       provider: 'claude',
       personaProviders: { coder: { provider: 'codex' } },
@@ -111,25 +111,25 @@ describe('PieceEngine persona_providers override', () => {
     expect(options.resolvedProvider).toBe('claude');
   });
 
-  it('should prioritize persona_providers provider over movement provider', async () => {
-    const movement = makeMovement('implement', {
+  it('should prioritize persona_providers provider over step provider', async () => {
+    const step = makeStep('implement', {
       personaDisplayName: 'coder',
       provider: 'claude',
       rules: [makeRule('done', 'COMPLETE')],
     });
-    const config: PieceConfig = {
-      name: 'movement-over-persona',
-      movements: [movement],
-      initialMovement: 'implement',
-      maxMovements: 1,
+    const config: WorkflowConfig = {
+      name: 'step-over-persona',
+      steps: [step],
+      initialStep: 'implement',
+      maxSteps: 1,
     };
 
     mockRunAgentSequence([
-      makeResponse({ persona: movement.persona, content: 'done' }),
+      makeResponse({ persona: step.persona, content: 'done' }),
     ]);
     mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
 
-    const engine = new PieceEngine(config, '/tmp/project', 'test task', {
+    const engine = new WorkflowEngine(config, '/tmp/project', 'test task', {
       projectCwd: '/tmp/project',
       provider: 'mock',
       personaProviders: { coder: { provider: 'codex' } },
@@ -143,23 +143,23 @@ describe('PieceEngine persona_providers override', () => {
   });
 
   it('should work without persona_providers (undefined)', async () => {
-    const movement = makeMovement('plan', {
+    const step = makeStep('plan', {
       personaDisplayName: 'planner',
       rules: [makeRule('done', 'COMPLETE')],
     });
-    const config: PieceConfig = {
+    const config: WorkflowConfig = {
       name: 'no-persona-providers',
-      movements: [movement],
-      initialMovement: 'plan',
-      maxMovements: 1,
+      steps: [step],
+      initialStep: 'plan',
+      maxSteps: 1,
     };
 
     mockRunAgentSequence([
-      makeResponse({ persona: movement.persona, content: 'done' }),
+      makeResponse({ persona: step.persona, content: 'done' }),
     ]);
     mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
 
-    const engine = new PieceEngine(config, '/tmp/project', 'test task', {
+    const engine = new WorkflowEngine(config, '/tmp/project', 'test task', {
       projectCwd: '/tmp/project',
       provider: 'claude',
     });
@@ -171,32 +171,32 @@ describe('PieceEngine persona_providers override', () => {
     expect(options.resolvedProvider).toBe('claude');
   });
 
-  it('should apply different providers to different personas in a multi-movement piece', async () => {
-    const planMovement = makeMovement('plan', {
+  it('should apply different providers to different personas in a multi-step workflow', async () => {
+    const planStep = makeStep('plan', {
       personaDisplayName: 'planner',
       rules: [makeRule('done', 'implement')],
     });
-    const implementMovement = makeMovement('implement', {
+    const implementStep = makeStep('implement', {
       personaDisplayName: 'coder',
       rules: [makeRule('done', 'COMPLETE')],
     });
-    const config: PieceConfig = {
+    const config: WorkflowConfig = {
       name: 'multi-persona-providers',
-      movements: [planMovement, implementMovement],
-      initialMovement: 'plan',
-      maxMovements: 3,
+      steps: [planStep, implementStep],
+      initialStep: 'plan',
+      maxSteps: 3,
     };
 
     mockRunAgentSequence([
-      makeResponse({ persona: planMovement.persona, content: 'done' }),
-      makeResponse({ persona: implementMovement.persona, content: 'done' }),
+      makeResponse({ persona: planStep.persona, content: 'done' }),
+      makeResponse({ persona: implementStep.persona, content: 'done' }),
     ]);
     mockDetectMatchedRuleSequence([
       { index: 0, method: 'phase1_tag' },
       { index: 0, method: 'phase1_tag' },
     ]);
 
-    const engine = new PieceEngine(config, '/tmp/project', 'test task', {
+    const engine = new WorkflowEngine(config, '/tmp/project', 'test task', {
       projectCwd: '/tmp/project',
       provider: 'claude',
       personaProviders: { coder: { provider: 'codex' } },
@@ -205,32 +205,32 @@ describe('PieceEngine persona_providers override', () => {
     await engine.run();
 
     const calls = vi.mocked(runAgent).mock.calls;
-    // Plan movement: planner not in persona_providers → resolvedProvider は claude
+    // Plan step: planner not in persona_providers → resolvedProvider は claude
     expect(calls[0][2].provider).toBeUndefined();
     expect(calls[0][2].resolvedProvider).toBe('claude');
-    // Implement movement: coder in persona_providers → resolvedProvider は codex
+    // Implement step: coder in persona_providers → resolvedProvider は codex
     expect(calls[1][2].provider).toBeUndefined();
     expect(calls[1][2].resolvedProvider).toBe('codex');
   });
 
   it('should use persona_providers.model as resolvedModel when step.model is undefined', async () => {
-    const movement = makeMovement('implement', {
+    const step = makeStep('implement', {
       personaDisplayName: 'coder',
       rules: [makeRule('done', 'COMPLETE')],
     });
-    const config: PieceConfig = {
+    const config: WorkflowConfig = {
       name: 'persona-model-test',
-      movements: [movement],
-      initialMovement: 'implement',
-      maxMovements: 1,
+      steps: [step],
+      initialStep: 'implement',
+      maxSteps: 1,
     };
 
     mockRunAgentSequence([
-      makeResponse({ persona: movement.persona, content: 'done' }),
+      makeResponse({ persona: step.persona, content: 'done' }),
     ]);
     mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
 
-    const engine = new PieceEngine(config, '/tmp/project', 'test task', {
+    const engine = new WorkflowEngine(config, '/tmp/project', 'test task', {
       projectCwd: '/tmp/project',
       provider: 'claude',
       model: 'global-model',
@@ -245,23 +245,23 @@ describe('PieceEngine persona_providers override', () => {
   });
 
   it('should fallback to input.model when persona_providers.model is not set', async () => {
-    const movement = makeMovement('implement', {
+    const step = makeStep('implement', {
       personaDisplayName: 'coder',
       rules: [makeRule('done', 'COMPLETE')],
     });
-    const config: PieceConfig = {
+    const config: WorkflowConfig = {
       name: 'persona-model-fallback',
-      movements: [movement],
-      initialMovement: 'implement',
-      maxMovements: 1,
+      steps: [step],
+      initialStep: 'implement',
+      maxSteps: 1,
     };
 
     mockRunAgentSequence([
-      makeResponse({ persona: movement.persona, content: 'done' }),
+      makeResponse({ persona: step.persona, content: 'done' }),
     ]);
     mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
 
-    const engine = new PieceEngine(config, '/tmp/project', 'test task', {
+    const engine = new WorkflowEngine(config, '/tmp/project', 'test task', {
       projectCwd: '/tmp/project',
       provider: 'claude',
       model: 'global-model',
@@ -275,25 +275,25 @@ describe('PieceEngine persona_providers override', () => {
     expect(options.resolvedModel).toBe('global-model');
   });
 
-  it('should prioritize persona_providers.model over movement model', async () => {
-    const movement = makeMovement('implement', {
+  it('should prioritize persona_providers.model over step model', async () => {
+    const step = makeStep('implement', {
       personaDisplayName: 'coder',
-      model: 'movement-model',
+      model: 'step-model',
       rules: [makeRule('done', 'COMPLETE')],
     });
-    const config: PieceConfig = {
-      name: 'persona-model-over-movement',
-      movements: [movement],
-      initialMovement: 'implement',
-      maxMovements: 1,
+    const config: WorkflowConfig = {
+      name: 'persona-model-over-step',
+      steps: [step],
+      initialStep: 'implement',
+      maxSteps: 1,
     };
 
     mockRunAgentSequence([
-      makeResponse({ persona: movement.persona, content: 'done' }),
+      makeResponse({ persona: step.persona, content: 'done' }),
     ]);
     mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
 
-    const engine = new PieceEngine(config, '/tmp/project', 'test task', {
+    const engine = new WorkflowEngine(config, '/tmp/project', 'test task', {
       projectCwd: '/tmp/project',
       provider: 'claude',
       model: 'global-model',
@@ -307,24 +307,24 @@ describe('PieceEngine persona_providers override', () => {
     expect(options.resolvedModel).toBe('persona-model');
   });
 
-  it('should emit providerInfo in movement:start matching resolved provider/model', async () => {
-    const movement = makeMovement('implement', {
+  it('should emit providerInfo in step:start matching resolved provider/model', async () => {
+    const step = makeStep('implement', {
       personaDisplayName: 'coder',
       rules: [makeRule('done', 'COMPLETE')],
     });
-    const config: PieceConfig = {
+    const config: WorkflowConfig = {
       name: 'provider-info-event-test',
-      movements: [movement],
-      initialMovement: 'implement',
-      maxMovements: 1,
+      steps: [step],
+      initialStep: 'implement',
+      maxSteps: 1,
     };
 
     mockRunAgentSequence([
-      makeResponse({ persona: movement.persona, content: 'done' }),
+      makeResponse({ persona: step.persona, content: 'done' }),
     ]);
     mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
 
-    const engine = new PieceEngine(config, '/tmp/project', 'test task', {
+    const engine = new WorkflowEngine(config, '/tmp/project', 'test task', {
       projectCwd: '/tmp/project',
       provider: 'claude',
       model: 'global-model',
@@ -332,7 +332,7 @@ describe('PieceEngine persona_providers override', () => {
     });
 
     const startFn = vi.fn();
-    engine.on('movement:start', startFn);
+    engine.on('step:start', startFn);
 
     await engine.run();
 
@@ -342,30 +342,30 @@ describe('PieceEngine persona_providers override', () => {
   });
 
   it('should emit engine-level provider in providerInfo when persona has no override', async () => {
-    const movement = makeMovement('plan', {
+    const step = makeStep('plan', {
       personaDisplayName: 'planner',
       rules: [makeRule('done', 'COMPLETE')],
     });
-    const config: PieceConfig = {
+    const config: WorkflowConfig = {
       name: 'provider-info-no-override',
-      movements: [movement],
-      initialMovement: 'plan',
-      maxMovements: 1,
+      steps: [step],
+      initialStep: 'plan',
+      maxSteps: 1,
     };
 
     mockRunAgentSequence([
-      makeResponse({ persona: movement.persona, content: 'done' }),
+      makeResponse({ persona: step.persona, content: 'done' }),
     ]);
     mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
 
-    const engine = new PieceEngine(config, '/tmp/project', 'test task', {
+    const engine = new WorkflowEngine(config, '/tmp/project', 'test task', {
       projectCwd: '/tmp/project',
       provider: 'claude',
       model: 'sonnet',
     });
 
     const startFn = vi.fn();
-    engine.on('movement:start', startFn);
+    engine.on('step:start', startFn);
 
     await engine.run();
 

@@ -8,19 +8,19 @@ import { runTakt } from '../helpers/takt-runner';
 describe('E2E: Codex permission mode readonly/full', () => {
   let isolatedEnv: IsolatedEnv;
   let repo: LocalRepo;
-  let piecePath: string;
+  let workflowPath: string;
 
   beforeEach(() => {
     isolatedEnv = createIsolatedEnv();
     repo = createLocalRepo();
-    piecePath = join(repo.path, 'permission-mode-e2e-piece.yaml');
+    workflowPath = join(repo.path, 'permission-mode-e2e-workflow.yaml');
 
     writeFileSync(
-      piecePath,
+      workflowPath,
       [
         'name: permission-mode-e2e',
         'description: Verify readonly/full behavior in codex sandbox',
-        'max_movements: 3',
+        'max_steps: 3',
         'initial_step: write_check',
         'steps:',
         '  - name: write_check',
@@ -55,7 +55,7 @@ describe('E2E: Codex permission mode readonly/full', () => {
     });
 
     const readonlyResult = runTakt({
-      args: ['--task', 'Run write permission check', '--piece', piecePath],
+      args: ['--task', 'Run write permission check', '--workflow', workflowPath],
       cwd: repo.path,
       env: isolatedEnv.env,
       timeout: 240_000,
@@ -81,7 +81,7 @@ describe('E2E: Codex permission mode readonly/full', () => {
     });
 
     const fullResult = runTakt({
-      args: ['--task', 'Run write permission check', '--piece', piecePath],
+      args: ['--task', 'Run write permission check', '--workflow', workflowPath],
       cwd: repo.path,
       env: isolatedEnv.env,
       timeout: 240_000,

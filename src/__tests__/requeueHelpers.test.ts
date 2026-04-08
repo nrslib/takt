@@ -4,17 +4,17 @@ const {
   mockDebug,
   mockConfirm,
   mockGetLabel,
-  mockSelectPiece,
-  mockIsPiecePath,
-  mockLoadAllPiecesWithSources,
+  mockSelectWorkflow,
+  mockIsWorkflowPath,
+  mockLoadAllWorkflowsWithSources,
   mockWarn,
 } = vi.hoisted(() => ({
   mockDebug: vi.fn(),
   mockConfirm: vi.fn(),
-  mockGetLabel: vi.fn((_key: string, _lang?: string, vars?: Record<string, string>) => `Use previous piece "${vars?.piece ?? ''}"?`),
-  mockSelectPiece: vi.fn(),
-  mockIsPiecePath: vi.fn(() => false),
-  mockLoadAllPiecesWithSources: vi.fn(() => new Map<string, unknown>([['default', {}], ['selected-piece', {}]])),
+  mockGetLabel: vi.fn((_key: string, _lang?: string, vars?: Record<string, string>) => `Use previous workflow "${vars?.workflow ?? ''}"?`),
+  mockSelectWorkflow: vi.fn(),
+  mockIsWorkflowPath: vi.fn(() => false),
+  mockLoadAllWorkflowsWithSources: vi.fn(() => new Map<string, unknown>([['default', {}], ['selected-workflow', {}]])),
   mockWarn: vi.fn(),
 }));
 
@@ -41,17 +41,17 @@ vi.mock('../shared/ui/index.js', () => ({
   warn: (...args: unknown[]) => mockWarn(...args),
 }));
 
-vi.mock('../features/pieceSelection/index.js', () => ({
-  selectPiece: (...args: unknown[]) => mockSelectPiece(...args),
+vi.mock('../features/workflowSelection/index.js', () => ({
+  selectWorkflow: (...args: unknown[]) => mockSelectWorkflow(...args),
 }));
 
 vi.mock('../infra/config/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  isPiecePath: (...args: unknown[]) => mockIsPiecePath(...args),
-  loadAllPiecesWithSources: (...args: unknown[]) => mockLoadAllPiecesWithSources(...args),
+  isWorkflowPath: (...args: unknown[]) => mockIsWorkflowPath(...args),
+  loadAllWorkflowsWithSources: (...args: unknown[]) => mockLoadAllWorkflowsWithSources(...args),
 }));
 
-import { hasDeprecatedProviderConfig, selectPieceWithOptionalReuse } from '../features/tasks/list/requeueHelpers.js';
+import { hasDeprecatedProviderConfig, selectWorkflowWithOptionalReuse } from '../features/tasks/list/requeueHelpers.js';
 
 describe('hasDeprecatedProviderConfig', () => {
   beforeEach(() => {
@@ -61,11 +61,11 @@ describe('hasDeprecatedProviderConfig', () => {
   it('YAML parse エラーを debug 記録しつつ有効な候補で判定を続行する', () => {
     const orderContent = [
       '```yaml',
-      'movements: [',
+      'steps: [',
       '```',
       '',
       '```yaml',
-      'movements:',
+      'steps:',
       '  - name: review',
       '    provider_options:',
       '      codex:',
@@ -81,9 +81,9 @@ describe('hasDeprecatedProviderConfig', () => {
     );
   });
 
-  it('provider block 新記法のみの piece config は deprecated と判定しない', () => {
+  it('provider block 新記法のみの workflow config は deprecated と判定しない', () => {
     const orderContent = [
-      'movements:',
+      'steps:',
       '  - name: review',
       '    provider:',
       '      type: codex',
@@ -96,7 +96,7 @@ describe('hasDeprecatedProviderConfig', () => {
 
   it('provider object と同階層 model の旧記法を deprecated と判定する', () => {
     const orderContent = [
-      'movements:',
+      'steps:',
       '  - name: review',
       '    provider:',
       '      type: codex',
@@ -109,7 +109,7 @@ describe('hasDeprecatedProviderConfig', () => {
 
   it('循環参照を含む YAML でもスタックオーバーフローせず判定できる', () => {
     const orderContent = [
-      'movements:',
+      'steps:',
       '  - &step',
       '    name: review',
       '    provider:',
@@ -123,62 +123,62 @@ describe('hasDeprecatedProviderConfig', () => {
   });
 });
 
-describe('selectPieceWithOptionalReuse', () => {
+describe('selectWorkflowWithOptionalReuse', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockIsPiecePath.mockReturnValue(false);
-    mockLoadAllPiecesWithSources.mockReturnValue(new Map<string, unknown>([['default', {}], ['selected-piece', {}]]));
-    mockSelectPiece.mockResolvedValue('selected-piece');
+    mockIsWorkflowPath.mockReturnValue(false);
+    mockLoadAllWorkflowsWithSources.mockReturnValue(new Map<string, unknown>([['default', {}], ['selected-workflow', {}]]));
+    mockSelectWorkflow.mockResolvedValue('selected-workflow');
   });
 
   it('内部ヘルパーを公開 API に露出しない', async () => {
     const requeueHelpersModule = await import('../features/tasks/list/requeueHelpers.js');
 
-    expect(Object.prototype.hasOwnProperty.call(requeueHelpersModule, 'resolveReusablePieceName')).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(requeueHelpersModule, 'resolveReusableWorkflowName')).toBe(false);
   });
 
-  it('前回 piece 再利用を確認して Yes ならそのまま返す', async () => {
+  it('前回 workflow 再利用を確認して Yes ならそのまま返す', async () => {
     mockConfirm.mockResolvedValue(true);
 
-    const selected = await selectPieceWithOptionalReuse('/project', 'default', 'en');
+    const selected = await selectWorkflowWithOptionalReuse('/project', 'default', 'en');
 
     expect(selected).toBe('default');
     expect(mockConfirm).toHaveBeenCalledTimes(1);
-    expect(mockSelectPiece).not.toHaveBeenCalled();
+    expect(mockSelectWorkflow).not.toHaveBeenCalled();
   });
 
-  it('前回 piece 再利用を拒否した場合は piece 選択にフォールバックする', async () => {
+  it('前回 workflow 再利用を拒否した場合は workflow 選択にフォールバックする', async () => {
     mockConfirm.mockResolvedValue(false);
 
-    const selected = await selectPieceWithOptionalReuse('/project', 'default', 'en');
+    const selected = await selectWorkflowWithOptionalReuse('/project', 'default', 'en');
 
-    expect(selected).toBe('selected-piece');
+    expect(selected).toBe('selected-workflow');
     expect(mockConfirm).toHaveBeenCalledTimes(1);
-    expect(mockSelectPiece).toHaveBeenCalledWith('/project');
+    expect(mockSelectWorkflow).toHaveBeenCalledWith('/project');
   });
 
-  it('未登録の前回 piece 名は確認せず拒否して piece 選択にフォールバックする', async () => {
-    mockLoadAllPiecesWithSources.mockReturnValue(new Map<string, unknown>([['default', {}]]));
+  it('未登録の前回 workflow 名は確認せず拒否して workflow 選択にフォールバックする', async () => {
+    mockLoadAllWorkflowsWithSources.mockReturnValue(new Map<string, unknown>([['default', {}]]));
 
-    const selected = await selectPieceWithOptionalReuse('/project', 'tampered-piece', 'en');
+    const selected = await selectWorkflowWithOptionalReuse('/project', 'tampered-workflow', 'en');
 
-    expect(selected).toBe('selected-piece');
+    expect(selected).toBe('selected-workflow');
     expect(mockConfirm).not.toHaveBeenCalled();
-    expect(mockSelectPiece).toHaveBeenCalledWith('/project');
+    expect(mockSelectWorkflow).toHaveBeenCalledWith('/project');
   });
 
   it('再利用候補の解決で warning callback を UI warn に配線する', async () => {
-    mockLoadAllPiecesWithSources.mockImplementation(
+    mockLoadAllWorkflowsWithSources.mockImplementation(
       (_projectDir: string, options?: { onWarning?: (message: string) => void }) => {
         options?.onWarning?.('Workflow "broken" failed to load');
-        return new Map<string, unknown>([['selected-piece', {}]]);
+        return new Map<string, unknown>([['selected-workflow', {}]]);
       },
     );
     mockConfirm.mockResolvedValue(false);
 
-    await selectPieceWithOptionalReuse('/project', 'selected-piece', 'en');
+    await selectWorkflowWithOptionalReuse('/project', 'selected-workflow', 'en');
 
-    expect(mockLoadAllPiecesWithSources).toHaveBeenCalledWith(
+    expect(mockLoadAllWorkflowsWithSources).toHaveBeenCalledWith(
       '/project',
       expect.objectContaining({ onWarning: expect.any(Function) }),
     );

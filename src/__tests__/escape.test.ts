@@ -8,8 +8,8 @@ import { describe, it, expect } from 'vitest';
 import {
   escapeTemplateChars,
   replaceTemplatePlaceholders,
-} from '../core/piece/instruction/escape.js';
-import { makeMovement, makeInstructionContext } from './test-helpers.js';
+} from '../core/workflow/instruction/escape.js';
+import { makeStep, makeInstructionContext } from './test-helpers.js';
 
 describe('escapeTemplateChars', () => {
   it('should replace curly braces with full-width equivalents', () => {
@@ -37,7 +37,7 @@ describe('escapeTemplateChars', () => {
 
 describe('replaceTemplatePlaceholders', () => {
   it('should replace {task} placeholder', () => {
-    const step = makeMovement();
+    const step = makeStep();
     const ctx = makeInstructionContext({ task: 'implement feature X' });
     const template = 'Your task is: {task}';
 
@@ -46,7 +46,7 @@ describe('replaceTemplatePlaceholders', () => {
   });
 
   it('should escape braces in task content', () => {
-    const step = makeMovement();
+    const step = makeStep();
     const ctx = makeInstructionContext({ task: 'fix {bug} in code' });
     const template = '{task}';
 
@@ -54,26 +54,26 @@ describe('replaceTemplatePlaceholders', () => {
     expect(result).toBe('fix ｛bug｝ in code');
   });
 
-  it('should replace {iteration} and {max_movements}', () => {
-    const step = makeMovement();
-    const ctx = makeInstructionContext({ iteration: 3, maxMovements: 20 });
-    const template = 'Iteration {iteration}/{max_movements}';
+  it('should replace {iteration} and {max_steps}', () => {
+    const step = makeStep();
+    const ctx = makeInstructionContext({ iteration: 3, maxSteps: 20 });
+    const template = 'Iteration {iteration}/{max_steps}';
 
     const result = replaceTemplatePlaceholders(template, step, ctx);
     expect(result).toBe('Iteration 3/20');
   });
 
-  it('should replace {movement_iteration}', () => {
-    const step = makeMovement();
-    const ctx = makeInstructionContext({ movementIteration: 5 });
-    const template = 'Movement run #{movement_iteration}';
+  it('should replace {step_iteration}', () => {
+    const step = makeStep();
+    const ctx = makeInstructionContext({ stepIteration: 5 });
+    const template = 'Step run #{step_iteration}';
 
     const result = replaceTemplatePlaceholders(template, step, ctx);
-    expect(result).toBe('Movement run #5');
+    expect(result).toBe('Step run #5');
   });
 
   it('should replace {previous_response} when passPreviousResponse is true', () => {
-    const step = makeMovement({ passPreviousResponse: true });
+    const step = makeStep({ passPreviousResponse: true });
     const ctx = makeInstructionContext({
       previousOutput: {
         persona: 'coder',
@@ -89,7 +89,7 @@ describe('replaceTemplatePlaceholders', () => {
   });
 
   it('should prefer preprocessed previous response text when provided', () => {
-    const step = makeMovement({ passPreviousResponse: true });
+    const step = makeStep({ passPreviousResponse: true });
     const ctx = makeInstructionContext({
       previousOutput: {
         persona: 'coder',
@@ -106,7 +106,7 @@ describe('replaceTemplatePlaceholders', () => {
   });
 
   it('should replace {previous_response} with empty string when no previous output', () => {
-    const step = makeMovement({ passPreviousResponse: true });
+    const step = makeStep({ passPreviousResponse: true });
     const ctx = makeInstructionContext();
     const template = 'Previous: {previous_response}';
 
@@ -115,7 +115,7 @@ describe('replaceTemplatePlaceholders', () => {
   });
 
   it('should not replace {previous_response} when passPreviousResponse is false', () => {
-    const step = makeMovement({ passPreviousResponse: false });
+    const step = makeStep({ passPreviousResponse: false });
     const ctx = makeInstructionContext({
       previousOutput: {
         persona: 'coder',
@@ -131,7 +131,7 @@ describe('replaceTemplatePlaceholders', () => {
   });
 
   it('should replace {user_inputs} with joined inputs', () => {
-    const step = makeMovement();
+    const step = makeStep();
     const ctx = makeInstructionContext({ userInputs: ['input 1', 'input 2', 'input 3'] });
     const template = 'Inputs: {user_inputs}';
 
@@ -140,7 +140,7 @@ describe('replaceTemplatePlaceholders', () => {
   });
 
   it('should replace {report_dir} with report directory', () => {
-    const step = makeMovement();
+    const step = makeStep();
     const ctx = makeInstructionContext({ reportDir: '/tmp/reports/run-1' });
     const template = 'Reports: {report_dir}';
 
@@ -149,7 +149,7 @@ describe('replaceTemplatePlaceholders', () => {
   });
 
   it('should replace {report:filename} with full path', () => {
-    const step = makeMovement();
+    const step = makeStep();
     const ctx = makeInstructionContext({ reportDir: '/tmp/reports' });
     const template = 'Read {report:review.md} and {report:plan.md}';
 
@@ -158,22 +158,22 @@ describe('replaceTemplatePlaceholders', () => {
   });
 
   it('should handle template with multiple different placeholders', () => {
-    const step = makeMovement();
+    const step = makeStep();
     const ctx = makeInstructionContext({
       task: 'test task',
       iteration: 2,
-      maxMovements: 5,
-      movementIteration: 1,
+      maxSteps: 5,
+      stepIteration: 1,
       reportDir: '/reports',
     });
-    const template = '{task} - iter {iteration}/{max_movements} - mv {movement_iteration} - dir {report_dir}';
+    const template = '{task} - iter {iteration}/{max_steps} - step {step_iteration} - dir {report_dir}';
 
     const result = replaceTemplatePlaceholders(template, step, ctx);
-    expect(result).toBe('test task - iter 2/5 - mv 1 - dir /reports');
+    expect(result).toBe('test task - iter 2/5 - step 1 - dir /reports');
   });
 
   it('should leave unreplaced placeholders when reportDir is undefined', () => {
-    const step = makeMovement();
+    const step = makeStep();
     const ctx = makeInstructionContext({ reportDir: undefined });
     const template = 'Dir: {report_dir} File: {report:test.md}';
 

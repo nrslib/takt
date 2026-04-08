@@ -14,6 +14,7 @@ export interface ShutdownManagerOptions {
 type ShutdownState = 'idle' | 'graceful' | 'forcing';
 
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10_000;
+const NON_INTERACTIVE_SHUTDOWN_TIMEOUT_MS = 5_000;
 
 function parseTimeoutMs(raw: string | undefined): number | undefined {
   if (!raw) {
@@ -29,7 +30,14 @@ function parseTimeoutMs(raw: string | undefined): number | undefined {
 }
 
 function resolveShutdownTimeoutMs(): number {
-  return parseTimeoutMs(process.env.TAKT_SHUTDOWN_TIMEOUT_MS) ?? DEFAULT_SHUTDOWN_TIMEOUT_MS;
+  const configuredTimeout = parseTimeoutMs(process.env.TAKT_SHUTDOWN_TIMEOUT_MS);
+  if (configuredTimeout !== undefined) {
+    return configuredTimeout;
+  }
+  if (process.env.TAKT_NO_TTY === '1') {
+    return NON_INTERACTIVE_SHUTDOWN_TIMEOUT_MS;
+  }
+  return DEFAULT_SHUTDOWN_TIMEOUT_MS;
 }
 
 export class ShutdownManager {
@@ -69,7 +77,7 @@ export class ShutdownManager {
     this.state = 'graceful';
 
     blankLine();
-    warn(getLabel('piece.sigintGraceful'));
+    warn(getLabel('workflow.sigintGraceful'));
     this.callbacks.onGraceful();
 
     this.timeoutId = setTimeout(() => {
@@ -79,7 +87,7 @@ export class ShutdownManager {
       }
 
       blankLine();
-      error(getLabel('piece.sigintTimeout', undefined, {
+      error(getLabel('workflow.sigintTimeout', undefined, {
         timeoutMs: String(this.gracefulTimeoutMs),
       }));
       this.forceShutdown();
@@ -95,7 +103,7 @@ export class ShutdownManager {
     this.clearTimeout();
 
     blankLine();
-    error(getLabel('piece.sigintForce'));
+    error(getLabel('workflow.sigintForce'));
     this.callbacks.onForceKill();
   }
 

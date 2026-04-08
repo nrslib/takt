@@ -20,7 +20,7 @@ import { selectRecentSession } from './sessionSelector.js';
 import { matchSlashCommand } from './commandMatcher.js';
 import { SlashCommand } from '../../shared/constants.js';
 import {
-  type PieceContext,
+  type WorkflowContext,
   type InteractiveModeResult,
   type InteractiveUIText,
   type ConversationMessage,
@@ -83,7 +83,7 @@ export async function runConversationLoop(
   cwd: string,
   ctx: SessionContext,
   strategy: ConversationStrategy,
-  pieceContext: PieceContext | undefined,
+  workflowContext: WorkflowContext | undefined,
   initialInput: string | undefined,
 ): Promise<InteractiveModeResult> {
   const history: ConversationMessage[] = [];
@@ -199,7 +199,7 @@ export async function runConversationLoop(
       case SlashCommand.Go: {
         const userNote = match.text;
         let summaryPrompt = buildSummaryPrompt(
-          history, !!sessionId, ctx.lang, noTranscript, conversationLabel, pieceContext,
+          history, !!sessionId, ctx.lang, noTranscript, conversationLabel, workflowContext,
         );
         if (!summaryPrompt) {
           info(ui.noConversation);

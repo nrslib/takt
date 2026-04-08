@@ -8,7 +8,7 @@ import {
   buildSummaryPrompt,
   buildSummaryActionOptions,
   formatTaskHistorySummary,
-  type PieceContext,
+  type WorkflowContext,
   type SummaryActionLabels,
   type TaskHistorySummaryItem,
 } from '../features/interactive/interactive.js';
@@ -79,11 +79,11 @@ describe('buildSummaryPrompt', () => {
         logKey: 'log-1',
       },
     ];
-    const pieceContext: PieceContext = {
-      name: 'my-piece',
+    const workflowContext: WorkflowContext = {
+      name: 'my-workflow',
       description: 'desc',
-      pieceStructure: '',
-      movementPreviews: [],
+      workflowStructure: '',
+      stepPreviews: [],
       taskHistory: history,
     };
 
@@ -93,7 +93,7 @@ describe('buildSummaryPrompt', () => {
       'en',
       'No transcript',
       'Conversation:',
-      pieceContext,
+      workflowContext,
     );
 
     expect(summary).toContain('## Task execution history');

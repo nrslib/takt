@@ -49,4 +49,4 @@ Do not split out design-referenced elements as "another task" without explicit r
 
 - **Planning with only coarse screen-level summaries** - causes missing element coverage
 - **Narrowing the intent of the reference without rationale** - misaligns implementation and review
-- **Omitting the explanation for out-of-scope elements** - makes later movements ambiguous
+- **Omitting the explanation for out-of-scope elements** - makes later steps ambiguous

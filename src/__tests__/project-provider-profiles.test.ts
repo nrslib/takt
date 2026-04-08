@@ -29,7 +29,7 @@ describe('project provider_profiles', () => {
         'provider_profiles:',
         '  codex:',
         '    default_permission_mode: full',
-        '    movement_permission_overrides:',
+        '    step_permission_overrides:',
         '      implement: full',
       ].join('\n'),
       'utf-8',
@@ -38,7 +38,7 @@ describe('project provider_profiles', () => {
     const config = loadProjectConfig(testDir);
 
     expect(config.providerProfiles?.codex?.defaultPermissionMode).toBe('full');
-    expect(config.providerProfiles?.codex?.movementPermissionOverrides?.implement).toBe('full');
+    expect(config.providerProfiles?.codex?.stepPermissionOverrides?.implement).toBe('full');
   });
 
   it('loads step_permission_overrides from project config', () => {
@@ -58,10 +58,10 @@ describe('project provider_profiles', () => {
 
     const config = loadProjectConfig(testDir);
 
-    expect(config.providerProfiles?.codex?.movementPermissionOverrides?.implement).toBe('full');
+    expect(config.providerProfiles?.codex?.stepPermissionOverrides?.implement).toBe('full');
   });
 
-  it('prefers step_permission_overrides when both project config keys match', () => {
+  it('rejects the removed provider profile override key in project config', () => {
     const taktDir = join(testDir, '.takt');
     mkdirSync(taktDir, { recursive: true });
     writeFileSync(
@@ -71,21 +71,15 @@ describe('project provider_profiles', () => {
         '  codex:',
         '    default_permission_mode: full',
         '    movement_permission_overrides:',
-        '      implement: full',
-        '    step_permission_overrides:',
         '      implement: full',
       ].join('\n'),
       'utf-8',
     );
 
-    const config = loadProjectConfig(testDir);
-
-    expect(config.providerProfiles?.codex?.movementPermissionOverrides).toEqual({
-      implement: 'full',
-    });
+    expect(() => loadProjectConfig(testDir)).toThrow(/movement_permission_overrides/i);
   });
 
-  it('accepts matching project config permission override aliases regardless of key order', () => {
+  it('rejects duplicate step_permission_overrides keys in project config', () => {
     const taktDir = join(testDir, '.takt');
     mkdirSync(taktDir, { recursive: true });
     writeFileSync(
@@ -94,25 +88,18 @@ describe('project provider_profiles', () => {
         'provider_profiles:',
         '  codex:',
         '    default_permission_mode: full',
-        '    movement_permission_overrides:',
+        '    step_permission_overrides:',
         '      implement: full',
-        '      fix: edit',
         '    step_permission_overrides:',
         '      fix: edit',
-        '      implement: full',
       ].join('\n'),
       'utf-8',
     );
 
-    const config = loadProjectConfig(testDir);
-
-    expect(config.providerProfiles?.codex?.movementPermissionOverrides).toEqual({
-      implement: 'full',
-      fix: 'edit',
-    });
+    expect(() => loadProjectConfig(testDir)).toThrow(/Map keys must be unique/i);
   });
 
-  it('fails fast when project config permission override aliases differ', () => {
+  it('rejects duplicate step_permission_overrides keys before custom validation', () => {
     const taktDir = join(testDir, '.takt');
     mkdirSync(taktDir, { recursive: true });
     writeFileSync(
@@ -121,7 +108,7 @@ describe('project provider_profiles', () => {
         'provider_profiles:',
         '  codex:',
         '    default_permission_mode: full',
-        '    movement_permission_overrides:',
+        '    step_permission_overrides:',
         '      implement: full',
         '    step_permission_overrides:',
         '      implement: edit',
@@ -129,9 +116,7 @@ describe('project provider_profiles', () => {
       'utf-8',
     );
 
-    expect(() => loadProjectConfig(testDir)).toThrow(
-      'Configuration error: provider_profiles.codex step_permission_overrides must match movement_permission_overrides when both are set.',
-    );
+    expect(() => loadProjectConfig(testDir)).toThrow(/Map keys must be unique/i);
   });
 
   it('saves providerProfiles as provider_profiles', () => {
@@ -139,7 +124,7 @@ describe('project provider_profiles', () => {
       providerProfiles: {
         codex: {
           defaultPermissionMode: 'full',
-          movementPermissionOverrides: {
+          stepPermissionOverrides: {
             fix: 'full',
           },
         },
@@ -148,7 +133,7 @@ describe('project provider_profiles', () => {
 
     const config = loadProjectConfig(testDir);
     expect(config.providerProfiles?.codex?.defaultPermissionMode).toBe('full');
-    expect(config.providerProfiles?.codex?.movementPermissionOverrides?.fix).toBe('full');
+    expect(config.providerProfiles?.codex?.stepPermissionOverrides?.fix).toBe('full');
   });
 
   it('saves providerProfiles with canonical step_permission_overrides key', () => {
@@ -156,7 +141,7 @@ describe('project provider_profiles', () => {
       providerProfiles: {
         codex: {
           defaultPermissionMode: 'full',
-          movementPermissionOverrides: {
+          stepPermissionOverrides: {
             fix: 'full',
           },
         },

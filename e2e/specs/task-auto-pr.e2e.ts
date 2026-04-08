@@ -35,7 +35,7 @@ describe.skipIf(!requiresGitHub)('E2E: Task run auto PR (takt run -> postExecuti
   });
 
   it('should create a PR after running a worktree task with auto_pr', () => {
-    const piecePath = resolve(__dirname, '../fixtures/pieces/simple.yaml');
+    const workflowPath = resolve(__dirname, '../fixtures/workflows/simple.yaml');
     const branchName = `e2e-task-auto-pr-${Date.now()}`;
     const now = new Date().toISOString();
 
@@ -47,7 +47,7 @@ describe.skipIf(!requiresGitHub)('E2E: Task run auto PR (takt run -> postExecuti
         '  - name: e2e-task-auto-pr',
         '    status: pending',
         '    content: "Create a file called task-auto-pr.txt with the content \\"Task auto PR E2E\\""',
-        `    piece: "${piecePath}"`,
+        `    workflow: "${workflowPath}"`,
         '    worktree: true',
         '    auto_pr: true',
         `    branch: "${branchName}"`,

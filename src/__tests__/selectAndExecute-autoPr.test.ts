@@ -9,7 +9,7 @@ const {
   mockCompleteTask,
   mockFailTask,
   mockExecuteTask,
-  mockResolvePieceConfigValue,
+  mockResolveWorkflowConfigValue,
 } = vi.hoisted(() => ({
   mockAddTask: vi.fn(() => ({
     name: 'test-task',
@@ -22,15 +22,15 @@ const {
   mockCompleteTask: vi.fn(),
   mockFailTask: vi.fn(),
   mockExecuteTask: vi.fn(),
-  mockResolvePieceConfigValue: vi.fn((_: string, key: string) => (key === 'autoPr' ? undefined : 'default')),
+  mockResolveWorkflowConfigValue: vi.fn((_: string, key: string) => (key === 'autoPr' ? undefined : 'default')),
 }));
 
 vi.mock('../infra/config/index.js', () => ({
-  resolvePieceConfigValue: (...args: unknown[]) => mockResolvePieceConfigValue(...args),
-  listPieces: vi.fn(() => ['default']),
-  listPieceEntries: vi.fn(() => []),
-  loadPieceByIdentifier: vi.fn((identifier: string) => (identifier === 'default' ? { name: 'default' } : null)),
-  isPiecePath: vi.fn(() => false),
+  resolveWorkflowConfigValue: (...args: unknown[]) => mockResolveWorkflowConfigValue(...args),
+  listWorkflows: vi.fn(() => ['default']),
+  listWorkflowEntries: vi.fn(() => []),
+  loadWorkflowByIdentifier: vi.fn((identifier: string) => (identifier === 'default' ? { name: 'default' } : null)),
+  isWorkflowPath: vi.fn(() => false),
 }));
 
 vi.mock('../infra/task/index.js', () => ({
@@ -73,22 +73,22 @@ vi.mock('../features/tasks/execute/taskExecution.js', () => ({
   executeTask: (...args: unknown[]) => mockExecuteTask(...args),
 }));
 
-vi.mock('../features/pieceSelection/index.js', () => ({
-  warnMissingPieces: vi.fn(),
-  selectPieceFromCategorizedPieces: vi.fn(),
-  selectPieceFromEntries: vi.fn(),
-  selectPiece: vi.fn(),
+vi.mock('../features/workflowSelection/index.js', () => ({
+  warnMissingWorkflows: vi.fn(),
+  selectWorkflowFromCategorizedWorkflows: vi.fn(),
+  selectWorkflowFromEntries: vi.fn(),
+  selectWorkflow: vi.fn(),
 }));
 
-import { loadPieceByIdentifier } from '../infra/config/index.js';
+import { loadWorkflowByIdentifier } from '../infra/config/index.js';
 import { autoCommitAndPush } from '../infra/task/index.js';
-import { selectPiece } from '../features/pieceSelection/index.js';
-import { selectAndExecuteTask, determinePiece } from '../features/tasks/execute/selectAndExecute.js';
+import { selectWorkflow } from '../features/workflowSelection/index.js';
+import { selectAndExecuteTask, determineWorkflow } from '../features/tasks/execute/selectAndExecute.js';
 import { error } from '../shared/ui/index.js';
 
-const mockLoadPieceByIdentifier = vi.mocked(loadPieceByIdentifier);
+const mockLoadWorkflowByIdentifier = vi.mocked(loadWorkflowByIdentifier);
 const mockAutoCommitAndPush = vi.mocked(autoCommitAndPush);
-const mockSelectPiece = vi.mocked(selectPiece);
+const mockSelectWorkflow = vi.mocked(selectWorkflow);
 const mockError = vi.mocked(error);
 
 beforeEach(() => {
@@ -99,46 +99,46 @@ beforeEach(() => {
 describe('selectAndExecuteTask (execute path)', () => {
   it('should execute in-place without worktree setup or PR prompts', async () => {
     await selectAndExecuteTask('/project', 'test task', {
-      piece: 'default',
+      workflow: 'default',
     });
 
     expect(mockAutoCommitAndPush).not.toHaveBeenCalled();
-    expect(mockAddTask).toHaveBeenCalledWith('test task', { piece: 'default' });
+    expect(mockAddTask).toHaveBeenCalledWith('test task', { workflow: 'default' });
     expect(mockExecuteTask).toHaveBeenCalledWith(
       expect.objectContaining({ cwd: '/project', projectCwd: '/project' }),
     );
   });
 
-  it('should call selectPiece when no override is provided', async () => {
-    mockSelectPiece.mockResolvedValue('selected-piece');
+  it('should call selectWorkflow when no override is provided', async () => {
+    mockSelectWorkflow.mockResolvedValue('selected-workflow');
 
-    const selected = await determinePiece('/project');
+    const selected = await determineWorkflow('/project');
 
-    expect(selected).toBe('selected-piece');
-    expect(mockSelectPiece).toHaveBeenCalledWith('/project');
+    expect(selected).toBe('selected-workflow');
+    expect(mockSelectWorkflow).toHaveBeenCalledWith('/project');
   });
 
-  it('should accept repertoire scoped piece override when it exists', async () => {
-    mockLoadPieceByIdentifier.mockReturnValueOnce({ name: '@nrslib/takt-ensembles/critical-thinking' } as never);
+  it('should accept repertoire scoped workflow override when it exists', async () => {
+    mockLoadWorkflowByIdentifier.mockReturnValueOnce({ name: '@nrslib/takt-ensembles/critical-thinking' } as never);
 
-    const selected = await determinePiece('/project', '@nrslib/takt-ensembles/critical-thinking');
+    const selected = await determineWorkflow('/project', '@nrslib/takt-ensembles/critical-thinking');
 
     expect(selected).toBe('@nrslib/takt-ensembles/critical-thinking');
   });
 
   it('should use workflow terminology when override is missing', async () => {
-    mockLoadPieceByIdentifier.mockReturnValueOnce(undefined);
+    mockLoadWorkflowByIdentifier.mockReturnValueOnce(undefined);
 
-    const selected = await determinePiece('/project', 'missing-workflow');
+    const selected = await determineWorkflow('/project', 'missing-workflow');
 
     expect(selected).toBeNull();
     expect(mockError).toHaveBeenCalledWith('Workflow not found: missing-workflow');
   });
 
   it('should sanitize workflow override before terminal output', async () => {
-    mockLoadPieceByIdentifier.mockReturnValueOnce(undefined);
+    mockLoadWorkflowByIdentifier.mockReturnValueOnce(undefined);
 
-    const selected = await determinePiece('/project', 'bad\x1b[31m-workflow\n');
+    const selected = await determineWorkflow('/project', 'bad\x1b[31m-workflow\n');
 
     expect(selected).toBeNull();
     expect(mockError).toHaveBeenCalledWith('Workflow not found: bad-workflow\\n');
@@ -148,7 +148,7 @@ describe('selectAndExecuteTask (execute path)', () => {
     mockExecuteTask.mockRejectedValue(new Error('boom'));
 
     await expect(selectAndExecuteTask('/project', 'test task', {
-      piece: 'default',
+      workflow: 'default',
     })).rejects.toThrow('boom');
 
     expect(mockAddTask).toHaveBeenCalledTimes(1);
@@ -160,10 +160,10 @@ describe('selectAndExecuteTask (execute path)', () => {
     mockExecuteTask.mockResolvedValue(true);
 
     await selectAndExecuteTask('/project', 'test task', {
-      piece: 'default',
+      workflow: 'default',
     });
 
-    expect(mockAddTask).toHaveBeenCalledWith('test task', { piece: 'default' });
+    expect(mockAddTask).toHaveBeenCalledWith('test task', { workflow: 'default' });
     expect(mockCompleteTask).toHaveBeenCalledTimes(1);
     expect(mockFailTask).not.toHaveBeenCalled();
   });
@@ -176,10 +176,10 @@ describe('selectAndExecuteTask (execute path)', () => {
     }) as (code?: string | number | null | undefined) => never);
 
     await expect(selectAndExecuteTask('/project', 'test task', {
-      piece: 'default',
+      workflow: 'default',
     })).rejects.toThrow('process exit');
 
-    expect(mockAddTask).toHaveBeenCalledWith('test task', { piece: 'default' });
+    expect(mockAddTask).toHaveBeenCalledWith('test task', { workflow: 'default' });
     expect(mockFailTask).toHaveBeenCalledTimes(1);
     expect(mockCompleteTask).not.toHaveBeenCalled();
     processExitSpy.mockRestore();

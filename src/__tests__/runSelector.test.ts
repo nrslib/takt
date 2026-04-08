@@ -45,8 +45,8 @@ describe('selectRun', () => {
 
   it('should present run options and return selected slug', async () => {
     mockListRecentRuns.mockReturnValue([
-      { slug: 'run-1', task: 'First task', piece: 'default', status: 'completed', startTime: '2026-02-01T10:00:00Z' },
-      { slug: 'run-2', task: 'Second task', piece: 'custom', status: 'aborted', startTime: '2026-01-15T08:00:00Z' },
+      { slug: 'run-1', task: 'First task', workflow: 'default', status: 'completed', startTime: '2026-02-01T10:00:00Z' },
+      { slug: 'run-2', task: 'Second task', workflow: 'custom', status: 'aborted', startTime: '2026-01-15T08:00:00Z' },
     ]);
     mockSelectOption.mockResolvedValue('run-1');
 
@@ -67,7 +67,7 @@ describe('selectRun', () => {
 
   it('should return null when user cancels selection', async () => {
     mockListRecentRuns.mockReturnValue([
-      { slug: 'run-1', task: 'Task', piece: 'default', status: 'completed', startTime: '2026-02-01T00:00:00Z' },
+      { slug: 'run-1', task: 'Task', workflow: 'default', status: 'completed', startTime: '2026-02-01T00:00:00Z' },
     ]);
     mockSelectOption.mockResolvedValue(null);
 
@@ -79,7 +79,7 @@ describe('selectRun', () => {
   it('should truncate long task labels', async () => {
     const longTask = 'A'.repeat(100);
     mockListRecentRuns.mockReturnValue([
-      { slug: 'run-1', task: longTask, piece: 'default', status: 'completed', startTime: '2026-02-01T00:00:00Z' },
+      { slug: 'run-1', task: longTask, workflow: 'default', status: 'completed', startTime: '2026-02-01T00:00:00Z' },
     ]);
     mockSelectOption.mockResolvedValue('run-1');
 

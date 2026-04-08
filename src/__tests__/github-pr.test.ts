@@ -110,12 +110,12 @@ describe('buildPrBody', () => {
       comments: [],
     };
 
-    const result = buildPrBody([issue], 'Piece `default` completed.');
+    const result = buildPrBody([issue], 'Workflow `default` completed.');
 
     expect(result).toContain('## Summary');
     expect(result).toContain('Implement username/password authentication.');
     expect(result).toContain('## Execution Report');
-    expect(result).toContain('Piece `default` completed.');
+    expect(result).toContain('Workflow `default` completed.');
     expect(result).toContain('Closes #99');
   });
 

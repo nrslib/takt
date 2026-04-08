@@ -1,0 +1,32 @@
+name: e2e-team-leader
+description: E2E test workflow for team_leader step
+workflow_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+personas:
+  test-team-leader: |
+    You are the E2E team leader.
+  test-coder: |
+    You are the E2E test coder.
+max_steps: 5
+steps:
+  - name: execute
+    edit: true
+    persona: ./agents/test-team-leader.md
+    required_permission_mode: edit
+    team_leader:
+      max_parts: 2
+      part_persona: ./agents/test-coder.md
+      part_edit: true
+      part_allowed_tools:
+        - Read
+        - Write
+        - Edit
+    instruction: |
+      {task}
+    rules:
+      - condition: Task completed
+        next: COMPLETE

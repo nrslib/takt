@@ -14,7 +14,7 @@ import {
 import type {
   ReviewFindingEvent,
   FixActionEvent,
-  MovementResultEvent,
+  StepResultEvent,
 } from '../features/analytics/index.js';
 
 describe('analytics metrics', () => {
@@ -29,7 +29,7 @@ describe('analytics metrics', () => {
     rmSync(eventsDir, { recursive: true, force: true });
   });
 
-  function writeEvents(date: string, events: Array<ReviewFindingEvent | FixActionEvent | MovementResultEvent>): void {
+  function writeEvents(date: string, events: Array<ReviewFindingEvent | FixActionEvent | StepResultEvent>): void {
     const lines = events.map((e) => JSON.stringify(e)).join('\n') + '\n';
     writeFileSync(join(eventsDir, `${date}.jsonl`), lines, 'utf-8');
   }

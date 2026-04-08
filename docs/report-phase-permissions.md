@@ -21,7 +21,7 @@ This made phase control depend on a tool list setting that is treated as legacy 
 ## Rationale
 
 - OpenCode permission rules are the stable and explicit control mechanism for report-phase safety.
-- Centralizing compatibility behavior in `OptionsBuilder` prevents policy leakage into movement orchestration code.
+- Centralizing compatibility behavior in `OptionsBuilder` prevents policy leakage into step orchestration code.
 - Resume-session behavior remains deterministic for both report and status phases.
 
 ## Test Coverage

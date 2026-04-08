@@ -19,7 +19,7 @@ describe('E2E: Run multiple tasks (takt run)', () => {
   let isolatedEnv: IsolatedEnv;
   let repo: LocalRepo;
 
-  const piecePath = resolve(__dirname, '../fixtures/pieces/mock-single-step.yaml');
+  const workflowPath = resolve(__dirname, '../fixtures/workflows/mock-single-step.yaml');
 
   beforeEach(() => {
     isolatedEnv = createIsolatedEnv();
@@ -49,21 +49,21 @@ describe('E2E: Run multiple tasks (takt run)', () => {
         '  - name: task-1',
         '    status: pending',
         '    content: "E2E task 1"',
-        `    piece: "${piecePath}"`,
+        `    workflow: "${workflowPath}"`,
         `    created_at: "${now}"`,
         '    started_at: null',
         '    completed_at: null',
         '  - name: task-2',
         '    status: pending',
         '    content: "E2E task 2"',
-        `    piece: "${piecePath}"`,
+        `    workflow: "${workflowPath}"`,
         `    created_at: "${now}"`,
         '    started_at: null',
         '    completed_at: null',
         '  - name: task-3',
         '    status: pending',
         '    content: "E2E task 3"',
-        `    piece: "${piecePath}"`,
+        `    workflow: "${workflowPath}"`,
         `    created_at: "${now}"`,
         '    started_at: null',
         '    completed_at: null',
@@ -103,21 +103,21 @@ describe('E2E: Run multiple tasks (takt run)', () => {
         '  - name: task-ok-1',
         '    status: pending',
         '    content: "Should succeed"',
-        `    piece: "${piecePath}"`,
+        `    workflow: "${workflowPath}"`,
         `    created_at: "${now}"`,
         '    started_at: null',
         '    completed_at: null',
         '  - name: task-fail',
         '    status: pending',
         '    content: "Should fail"',
-        `    piece: "${piecePath}"`,
+        `    workflow: "${workflowPath}"`,
         `    created_at: "${now}"`,
         '    started_at: null',
         '    completed_at: null',
         '  - name: task-ok-2',
         '    status: pending',
         '    content: "Should succeed after failure"',
-        `    piece: "${piecePath}"`,
+        `    workflow: "${workflowPath}"`,
         `    created_at: "${now}"`,
         '    started_at: null',
         '    completed_at: null',

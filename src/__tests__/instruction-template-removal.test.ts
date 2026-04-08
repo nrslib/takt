@@ -1,21 +1,26 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { join } from 'node:path';
 import {
-  PieceConfigRawSchema,
+  WorkflowConfigRawSchema,
   LoopMonitorJudgeSchema,
-  ParallelSubMovementRawSchema,
-  PieceMovementRawSchema,
+  ParallelSubStepRawSchema,
+  WorkflowStepRawSchema,
 } from '../core/models/index.js';
-import { normalizePieceConfig } from '../infra/config/loaders/pieceParser.js';
+import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 
-const pieceDir = join(process.cwd(), 'src', '__tests__');
+const workflowDir = join(process.cwd(), 'src', '__tests__');
+
+function readText(relativePath: string): string {
+  return readFileSync(new URL(relativePath, import.meta.url), 'utf8');
+}
 
 function expectFailurePath(
   result:
-    | ReturnType<typeof PieceMovementRawSchema.safeParse>
-    | ReturnType<typeof ParallelSubMovementRawSchema.safeParse>
+    | ReturnType<typeof WorkflowStepRawSchema.safeParse>
+    | ReturnType<typeof ParallelSubStepRawSchema.safeParse>
     | ReturnType<typeof LoopMonitorJudgeSchema.safeParse>
-    | ReturnType<typeof PieceConfigRawSchema.safeParse>,
+    | ReturnType<typeof WorkflowConfigRawSchema.safeParse>,
   expectedPath: Array<string | number>,
 ): void {
   expect(result.success).toBe(false);
@@ -27,24 +32,24 @@ function expectFailurePath(
 }
 
 describe('instruction_template removal', () => {
-  it('movement schema should reject instruction_template', () => {
+  it('step schema should reject instruction_template', () => {
     const raw = {
       name: 'implement',
       instruction_template: 'Legacy instruction',
     };
 
-    const result = PieceMovementRawSchema.safeParse(raw);
+    const result = WorkflowStepRawSchema.safeParse(raw);
 
     expectFailurePath(result, ['instruction_template']);
   });
 
-  it('parallel sub-movement schema should reject instruction_template', () => {
+  it('parallel sub-step schema should reject instruction_template', () => {
     const raw = {
       name: 'review',
       instruction_template: 'Legacy review instruction',
     };
 
-    const result = ParallelSubMovementRawSchema.safeParse(raw);
+    const result = ParallelSubStepRawSchema.safeParse(raw);
 
     expectFailurePath(result, ['instruction_template']);
   });
@@ -61,27 +66,27 @@ describe('instruction_template removal', () => {
     expectFailurePath(result, ['instruction_template']);
   });
 
-  it('piece config schema should reject instruction_template on a movement', () => {
+  it('workflow config schema should reject instruction_template on a step', () => {
     const raw = {
-      name: 'test-piece',
-      movements: [
+      name: 'test-workflow',
+      steps: [
         {
           name: 'implement',
           persona: 'coder',
-          instruction_template: 'Legacy movement instruction',
+          instruction_template: 'Legacy step instruction',
         },
       ],
     };
 
-    const result = PieceConfigRawSchema.safeParse(raw);
+    const result = WorkflowConfigRawSchema.safeParse(raw);
 
-    expectFailurePath(result, ['movements', 0, 'instruction_template']);
+    expectFailurePath(result, ['steps', 0, 'instruction_template']);
   });
 
-  it('piece config schema should reject instruction_template on a parallel sub-movement', () => {
+  it('workflow config schema should reject instruction_template on a parallel sub-step', () => {
     const raw = {
-      name: 'test-piece',
-      movements: [
+      name: 'test-workflow',
+      steps: [
         {
           name: 'review',
           parallel: [
@@ -95,15 +100,15 @@ describe('instruction_template removal', () => {
       ],
     };
 
-    const result = PieceConfigRawSchema.safeParse(raw);
+    const result = WorkflowConfigRawSchema.safeParse(raw);
 
-    expectFailurePath(result, ['movements', 0, 'parallel', 0, 'instruction_template']);
+    expectFailurePath(result, ['steps', 0, 'parallel', 0, 'instruction_template']);
   });
 
-  it('piece config schema should reject instruction_template on a loop monitor judge', () => {
+  it('workflow config schema should reject instruction_template on a loop monitor judge', () => {
     const raw = {
-      name: 'test-piece',
-      movements: [
+      name: 'test-workflow',
+      steps: [
         {
           name: 'step1',
           persona: 'coder',
@@ -124,39 +129,39 @@ describe('instruction_template removal', () => {
       ],
     };
 
-    const result = PieceConfigRawSchema.safeParse(raw);
+    const result = WorkflowConfigRawSchema.safeParse(raw);
 
     expectFailurePath(result, ['loop_monitors', 0, 'judge', 'instruction_template']);
   });
 
-  it('normalizePieceConfig should fail fast without deprecation warning when a movement uses instruction_template', () => {
+  it('normalizeWorkflowConfig should fail fast without deprecation warning when a step uses instruction_template', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     try {
       const raw = {
-        name: 'test-piece',
+        name: 'test-workflow',
         steps: [
           {
             name: 'implement',
             persona: 'coder',
-            instruction_template: 'Legacy movement instruction',
+            instruction_template: 'Legacy step instruction',
           },
         ],
       };
 
-      expect(() => normalizePieceConfig(raw, pieceDir)).toThrow();
+      expect(() => normalizeWorkflowConfig(raw, workflowDir)).toThrow();
       expect(warnSpy).not.toHaveBeenCalled();
     } finally {
       warnSpy.mockRestore();
     }
   });
 
-  it('normalizePieceConfig should fail fast without deprecation warning when a loop monitor judge uses instruction_template', () => {
+  it('normalizeWorkflowConfig should fail fast without deprecation warning when a loop monitor judge uses instruction_template', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     try {
       const raw = {
-        name: 'test-piece',
+        name: 'test-workflow',
         steps: [
           {
             name: 'step1',
@@ -184,10 +189,25 @@ describe('instruction_template removal', () => {
         ],
       };
 
-      expect(() => normalizePieceConfig(raw, pieceDir)).toThrow();
+      expect(() => normalizeWorkflowConfig(raw, workflowDir)).toThrow();
       expect(warnSpy).not.toHaveBeenCalled();
     } finally {
       warnSpy.mockRestore();
     }
+  });
+
+  it('keeps removed instruction_template terminology out of docs and internal comments', () => {
+    const dataFlow = readText('../../docs/data-flow.md');
+    const runner = readText('../agents/runner.ts');
+    const escape = readText('../core/workflow/instruction/escape.ts');
+    const skillReference = readText('../../builtins/skill/references/engine.md');
+    const schemaReference = readText('../../builtins/skill-codex/references/yaml-schema.md');
+
+    expect(dataFlow).not.toContain('instruction_template');
+    expect(runner).not.toContain('instruction_template');
+    expect(escape).not.toContain('instruction_template');
+    expect(skillReference).not.toContain('instruction_template');
+    expect(schemaReference).toContain('`instruction`');
+    expect(schemaReference).toContain('受理されない');
   });
 });

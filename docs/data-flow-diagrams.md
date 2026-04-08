@@ -4,14 +4,14 @@
 
 ## 目次
 
-1. [シーケンス図: インタラクティブモードからピース実行まで](#シーケンス図-インタラクティブモードからピース実行まで)
+1. [シーケンス図: インタラクティブモードからワークフロー実行まで](#シーケンス図-インタラクティブモードからワークフロー実行まで)
 2. [フローチャート: 3フェーズステップ実行](#フローチャート-3フェーズステップ実行)
 3. [フローチャート: ルール評価の5段階フォールバック](#フローチャート-ルール評価の5段階フォールバック)
-4. [ステートマシン図: PieceEngineのステップ遷移](#ステートマシン図-pieceengineのステップ遷移)
+4. [ステートマシン図: WorkflowEngineのステップ遷移](#ステートマシン図-workflowengineのステップ遷移)
 
 ---
 
-## シーケンス図: インタラクティブモードからピース実行まで
+## シーケンス図: インタラクティブモードからワークフロー実行まで
 
 ```mermaid
 sequenceDiagram
@@ -20,8 +20,8 @@ sequenceDiagram
     participant Interactive as Interactive Layer
     participant Orchestration as Execution Orchestration
     participant TaskExec as Task Execution
-    participant PieceExec as Piece Execution
-    participant Engine as PieceEngine
+    participant WorkflowExec as Workflow Execution
+    participant Engine as WorkflowEngine
     participant StepExec as StepExecutor
     participant Provider as Provider Layer
 
@@ -42,8 +42,8 @@ sequenceDiagram
 
     CLI->>Orchestration: selectAndExecuteTask(cwd, task)
 
-    Orchestration->>Orchestration: determinePiece()
-    Note over Orchestration: ピース選択<br/>(interactive or override)
+    Orchestration->>Orchestration: determineWorkflow()
+    Note over Orchestration: ワークフロー選択<br/>(interactive or override)
 
     Orchestration->>Orchestration: confirmAndCreateWorktree()
     Orchestration->>Provider: summarizeTaskName(task)
@@ -51,17 +51,17 @@ sequenceDiagram
     Orchestration->>Orchestration: createSharedClone()
 
     Orchestration->>TaskExec: executeTask(options)
-    TaskExec->>TaskExec: loadPieceByIdentifier()
-    TaskExec->>PieceExec: executePiece(config, task, cwd)
+    TaskExec->>TaskExec: loadWorkflowByIdentifier()
+    TaskExec->>WorkflowExec: executeWorkflow(config, task, cwd)
 
-    PieceExec->>PieceExec: セッション管理初期化
-    Note over PieceExec: loadAgentSessions()<br/>generateSessionId()<br/>initNdjsonLog()
+    WorkflowExec->>WorkflowExec: セッション管理初期化
+    Note over WorkflowExec: loadAgentSessions()<br/>generateSessionId()<br/>initNdjsonLog()
 
-    PieceExec->>Engine: new PieceEngine(config, cwd, task, options)
-    PieceExec->>Engine: イベント購読 (step:start, step:complete, etc.)
-    PieceExec->>Engine: engine.run()
+    WorkflowExec->>Engine: new WorkflowEngine(config, cwd, task, options)
+    WorkflowExec->>Engine: イベント購読 (step:start, step:complete, etc.)
+    WorkflowExec->>Engine: engine.run()
 
-    loop ピースステップ
+    loop ワークフローステップ
         Engine->>StepExec: runStep(step)
 
         StepExec->>StepExec: InstructionBuilder.build()
@@ -89,15 +89,15 @@ sequenceDiagram
         Engine->>Engine: resolveNextStep()
 
         alt nextStep === COMPLETE
-            Engine-->>PieceExec: ピース完了
+            Engine-->>WorkflowExec: ワークフロー完了
         else nextStep === ABORT
-            Engine-->>PieceExec: ピース中断
+            Engine-->>WorkflowExec: ワークフロー中断
         else 通常ステップ
             Engine->>Engine: state.currentStep = nextStep
         end
     end
 
-    PieceExec-->>TaskExec: { success: boolean }
+    WorkflowExec-->>TaskExec: { success: boolean }
     TaskExec-->>Orchestration: taskSuccess
 
     opt taskSuccess && isWorktree
@@ -247,11 +247,11 @@ flowchart TD
 
 ---
 
-## ステートマシン図: PieceEngineのステップ遷移
+## ステートマシン図: WorkflowEngineのステップ遷移
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Initializing: new PieceEngine
+    [*] --> Initializing: new WorkflowEngine
 
     Initializing --> Running: engine.run()
     note right of Initializing
@@ -312,20 +312,20 @@ stateDiagram-v2
         Transition --> CheckAbort: state.currentStep = nextStep
     }
 
-    Running --> Completed: piece:complete
-    Running --> Aborted: piece:abort
+    Running --> Completed: workflow:complete
+    Running --> Aborted: workflow:abort
 
     Completed --> [*]: return state
     Aborted --> [*]: return state
 
     note right of Completed
         state.status = 'completed'
-        emit piece:complete
+        emit workflow:complete
     end note
 
     note right of Aborted
         state.status = 'aborted'
-        emit piece:abort
+        emit workflow:abort
         原因:
         - User abort (Ctrl+C)
         - Iteration limit
@@ -356,23 +356,23 @@ flowchart LR
     end
 
     subgraph Transform2 ["変換2: 環境準備"]
-        D1[determinePiece]
+        D1[determineWorkflow]
         D2[summarizeTaskName<br/>AI呼び出し]
         D3[createSharedClone]
     end
 
     subgraph Execution ["実行環境"]
-        E1[pieceIdentifier]
+        E1[workflowIdentifier]
         E2[execCwd, branch]
     end
 
     subgraph Transform3 ["変換3: 設定読み込み"]
-        F1[loadPieceByIdentifier]
+        F1[loadWorkflowByIdentifier]
         F2[loadAgentSessions]
     end
 
     subgraph Config ["設定"]
-        G1[PieceConfig]
+        G1[WorkflowConfig]
         G2[initialSessions]
     end
 
@@ -381,7 +381,7 @@ flowchart LR
     end
 
     subgraph State ["実行状態"]
-        I[PieceState]
+        I[WorkflowState]
     end
 
     subgraph Transform5 ["変換5: インストラクション"]
@@ -555,7 +555,7 @@ flowchart TB
 1. **シーケンス図**: 時系列での各レイヤー間のやりとり
 2. **3フェーズフローチャート**: ステップ実行の詳細な処理フロー
 3. **ルール評価フローチャート**: 5段階フォールバックの意思決定ロジック
-4. **ステートマシン**: PieceEngineの状態遷移
+4. **ステートマシン**: WorkflowEngineの状態遷移
 5. **データ変換図**: 各段階でのデータ形式変換
 6. **コンテキスト蓄積図**: 実行が進むにつれてコンテキストが蓄積される様子
 

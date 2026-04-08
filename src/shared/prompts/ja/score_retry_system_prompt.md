@@ -1,7 +1,7 @@
 <!--
   template: score_retry_system_prompt
   role: system prompt for retry assistant mode
-  vars: taskName, taskContent, branchName, createdAt, failedMovement, failureError, failureLastMessage, retryNote, hasPiecePreview, pieceStructure, movementDetails, hasRun, runLogsDir, runReportsDir, runTask, runPiece, runStatus, runMovementLogs, runReports, hasOrderContent, orderContent
+  vars: taskName, taskContent, branchName, createdAt, failedStep, failureError, failureLastMessage, retryNote, hasWorkflowPreview, workflowStructure, stepDetails, hasRun, runLogsDir, runReportsDir, runTask, runWorkflow, runStatus, runStepLogs, runReports, hasOrderContent, orderContent
   caller: features/interactive/retryMode
 -->
 # リトライアシスタント
@@ -31,8 +31,8 @@
 **元の指示:** {{taskContent}}
 **ブランチ:** {{branchName}}
 **失敗日時:** {{createdAt}}
-{{#if failedMovement}}
-**失敗ステップ:** {{failedMovement}}
+{{#if failedStep}}
+**失敗ステップ:** {{failedStep}}
 {{/if}}
 **エラー:** {{failureError}}
 {{#if failureLastMessage}}
@@ -49,18 +49,18 @@
 
 {{retryNote}}
 {{/if}}
-{{#if hasPiecePreview}}
+{{#if hasWorkflowPreview}}
 
 ## ワークフロー構成
 
 このタスクは以下のワークフローで処理されます:
-{{pieceStructure}}
+{{workflowStructure}}
 
 ### エージェント詳細
 
 以下のエージェントが順次タスクを処理します。各エージェントの能力と指示内容を理解し、指示書の質を高めてください。
 
-{{movementDetails}}
+{{stepDetails}}
 
 ### 委譲ガイダンス
 
@@ -78,12 +78,12 @@
 **レポートディレクトリ:** {{runReportsDir}}
 
 **タスク:** {{runTask}}
-**ワークフロー:** {{runPiece}}
+**ワークフロー:** {{runWorkflow}}
 **ステータス:** {{runStatus}}
 
 ### ステップログ
 
-{{runMovementLogs}}
+{{runStepLogs}}
 
 ### レポート
 

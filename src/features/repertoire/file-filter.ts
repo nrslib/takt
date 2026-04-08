@@ -3,7 +3,7 @@
  *
  * Security constraints:
  * - Only .md, .yaml, .yml files are copied
- * - Only files under facets/ or pieces/ top-level directories are copied
+ * - Only files under facets/ or workflows/ top-level directories are copied
  * - Symbolic links are skipped (lstat check)
  * - Files exceeding MAX_FILE_SIZE (1 MB) are skipped
  * - Packages with more than MAX_FILE_COUNT files throw an error
@@ -19,7 +19,7 @@ const log = createLogger('repertoire-file-filter');
 export const ALLOWED_EXTENSIONS = ['.md', '.yaml', '.yml'] as const;
 
 /** Top-level directories that are copied from a package. */
-export const ALLOWED_DIRS = ['facets', 'pieces'] as const;
+export const ALLOWED_DIRS = ['facets', 'workflows'] as const;
 
 /** Maximum single file size in bytes (1 MB). */
 export const MAX_FILE_SIZE = 1024 * 1024;
@@ -103,7 +103,7 @@ function collectFromDir(
 /**
  * Collect all files to copy from a package root directory.
  *
- * Only files under facets/ and pieces/ top-level directories are included.
+ * Only files under facets/ and workflows/ top-level directories are included.
  * Symbolic links are skipped. Files over MAX_FILE_SIZE are skipped.
  * Throws if total file count exceeds MAX_FILE_COUNT.
  *

@@ -1,10 +1,10 @@
 /**
  * Notification utilities for takt
  *
- * Provides audio and visual notifications for piece events.
+ * Provides audio and visual notifications for workflow events.
  */
 
-import { exec } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { platform } from 'node:os';
 
 /** Notification sound types */
@@ -36,32 +36,24 @@ export function playSound(type: NotificationSound = 'info'): void {
 
   try {
     if (os === 'darwin') {
-      // macOS - use afplay with system sounds
       const darwinConfig = SOUND_CONFIG.darwin;
       const sound = darwinConfig ? darwinConfig[type] : 'Pop';
-      exec(`afplay /System/Library/Sounds/${sound}.aiff 2>/dev/null`, (err) => {
-        // Silently ignore errors (sound not found, etc.)
-        if (err) {
-          // Try terminal bell as fallback
-          process.stdout.write('\x07');
-        }
+      execFile('afplay', [`/System/Library/Sounds/${sound}.aiff`], (err) => {
+        if (err) process.stdout.write('\x07');
       });
     } else if (os === 'linux') {
-      // Linux - try paplay (PulseAudio) or aplay (ALSA)
       const linuxConfig = SOUND_CONFIG.linux;
       const sound = linuxConfig ? linuxConfig[type] : '/usr/share/sounds/freedesktop/stereo/message.oga';
-      exec(`paplay ${sound} 2>/dev/null || aplay ${sound} 2>/dev/null`, (err) => {
-        // Fallback to terminal bell
-        if (err) {
-          process.stdout.write('\x07');
-        }
+      execFile('paplay', [sound], (paplayError) => {
+        if (!paplayError) return;
+        execFile('aplay', [sound], (aplayError) => {
+          if (aplayError) process.stdout.write('\x07');
+        });
       });
     } else {
-      // Windows or other - use terminal bell
       process.stdout.write('\x07');
     }
   } catch {
-    // Fallback to terminal bell
     process.stdout.write('\x07');
   }
 }
@@ -117,32 +109,21 @@ export function sendNotification(options: NotifyOptions): void {
 
   try {
     if (os === 'darwin') {
-      // macOS - use osascript for native notifications
       const subtitlePart = subtitle ? `subtitle "${escapeAppleScript(subtitle)}"` : '';
       const soundPart = sound ? `sound name "${SOUND_CONFIG.darwin?.[sound] || 'Pop'}"` : '';
       const script = `display notification "${escapeAppleScript(message)}" with title "${escapeAppleScript(title)}" ${subtitlePart} ${soundPart}`;
-      exec(`osascript -e '${script}'`, (err) => {
-        if (err) {
-          // Fallback: just play sound if notification fails
-          if (sound) playSound(sound);
-        }
+      execFile('osascript', ['-e', script], (err) => {
+        if (err && sound) playSound(sound);
       });
     } else if (os === 'linux') {
-      // Linux - use notify-send
       const urgency = sound === 'error' ? 'critical' : sound === 'warning' ? 'normal' : 'low';
-      exec(`notify-send -u ${urgency} "${escapeShell(title)}" "${escapeShell(message)}"`, (err) => {
-        // Play sound separately on Linux
+      execFile('notify-send', ['-u', urgency, title, message], () => {
         if (sound) playSound(sound);
-        if (err) {
-          // Notification daemon not available, sound already played
-        }
       });
     } else {
-      // Windows or other - just play sound
       if (sound) playSound(sound);
     }
   } catch {
-    // Fallback to just sound
     if (sound) playSound(sound);
   }
 }
@@ -152,13 +133,6 @@ export function sendNotification(options: NotifyOptions): void {
  */
 function escapeAppleScript(str: string): string {
   return str.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-}
-
-/**
- * Escape string for shell
- */
-function escapeShell(str: string): string {
-  return str.replace(/"/g, '\\"').replace(/\$/g, '\\$').replace(/`/g, '\\`');
 }
 
 /**

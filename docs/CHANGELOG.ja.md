@@ -19,9 +19,9 @@
 
 ### Changed
 
-- **BREAKING:** ワークフロー YAML のキーをリネーム: `movements` → `steps`、`initial_movement` → `initial_step`、`max_movements` → `max_steps`、`piece_config` → `workflow_config`。旧キーは互換エイリアスとして引き続き使用可能 (#576)
-- **BREAKING:** ビルトインワークフローのディレクトリを `builtins/{lang}/pieces/` から `builtins/{lang}/workflows/` に移動。設定キーも `piece_categories` → `workflow_categories`、`enable_builtin_pieces` → `enable_builtin_workflows` にリネーム。旧キーは互換エイリアスとして引き続き使用可能 (#571, #561)
-- **BREAKING:** CLI オプション `-w, --piece` を `-w, --workflow` にリネーム。`--piece` はレガシーエイリアスとして使用可能 (#576)
+- **BREAKING:** ワークフロー YAML のキーをリネーム: `steps`、`initial_step`、`max_steps`、`workflow_config` を正とし、旧キー互換は削除。`workflow` / `step` 系の名称のみを受理 (#576)
+- **BREAKING:** ビルトインワークフローのディレクトリを `builtins/{lang}/workflows/` に統一。設定キーも `workflow_categories`、`enable_builtin_workflows` を正とし、旧キー互換は削除 (#571, #561)
+- **BREAKING:** CLI オプションを `-w, --workflow` に統一。旧ワークフロー指定オプションは削除 (#576)
 - **BREAKING:** ワークフロー YAML の `instruction_template` フィールドを削除。`instruction` フィールドを使用すること (#539)
 - `takt-default` ワークフローの `max_steps` を 50 に増加（`default` は 30 のまま）
 - 設定キーのエイリアス解決時に旧キーと新キーの両方が異なる値で存在する場合はエラーを発生させるよう変更
@@ -33,7 +33,7 @@
 - ワークツリーモードで PR の Issue 解決がプロジェクト cwd から正しく行われるよう修正
 - Cursor Agent のヘッドレスワークツリー実行で `--trust` フラグが渡されるよう修正
 - ワークツリー環境下で `runtime.prepare` が設定されている場合にセルフホスト GitLab の `glab` CLI 認証が失敗する問題を修正 (#563)
-- ピースプロバイダー解決の統一化
+- ワークフロープロバイダー解決の統一化
 
 ### Internal
 
@@ -48,13 +48,13 @@
 
 ### Added
 
-- 読み取り専用の監査ピースを追加: `audit-architecture`, `audit-architecture-frontend`, `audit-architecture-backend`, `audit-architecture-dual`, `audit-e2e`, `audit-unit`。コードを変更せずにモジュール境界やカバレッジギャップを列挙し、Issue 作成可能なレポートを出力
+- 読み取り専用の監査ワークフローを追加: `audit-architecture`, `audit-architecture-frontend`, `audit-architecture-backend`, `audit-architecture-dual`, `audit-e2e`, `audit-unit`。コードを変更せずにモジュール境界やカバレッジギャップを列挙し、Issue 作成可能なレポートを出力
 
 ### Changed
 
-- `security-audit` ピースを `audit-security` にリネーム（監査ピース群の命名規則を統一）
-- ビルトインピースカテゴリを再構成: 🧪 Testing カテゴリを廃止し、監査ピースを 🔍 Review カテゴリに統合
-- `fill-unit`, `fill-e2e` ピースを削除（`audit-unit`, `audit-e2e` に置き換え）
+- `security-audit` ワークフローを `audit-security` にリネーム（監査ワークフロー群の命名規則を統一）
+- ビルトインワークフローカテゴリを再構成: 🧪 Testing カテゴリを廃止し、監査ワークフローを 🔍 Review カテゴリに統合
+- `fill-unit`, `fill-e2e` ワークフローを削除（`audit-unit`, `audit-e2e` に置き換え）
 
 ### Fixed
 
@@ -84,24 +84,24 @@
 ### Added
 
 - GitLab VCS プロバイダーを追加: `glab` CLI を使った Issue 取得・マージリクエスト作成・レビューコメント取得に対応。git リモート URL からの自動検出をサポートし、`vcs_provider: gitlab` による明示的な設定も可能 (#512)
-- インタラクティブモード用プロバイダー設定 (`taktProviders.assistant`) を追加: ピース実行とは独立したプロバイダー/モデルをインタラクティブモードに指定可能 (#483)
+- インタラクティブモード用プロバイダー設定 (`taktProviders.assistant`) を追加: workflow実行とは独立したプロバイダー/モデルをインタラクティブモードに指定可能 (#483)
 
 ### Changed
 
-- BREAKING: ピース YAML の MCP サーバー設定をデフォルト拒否に変更。使用するには `pieceMcpServers` でトランスポート別に明示的に許可が必要 (#524)
-- BREAKING: ピース YAML の Arpeggio カスタムコード（カスタムデータソース、インライン JS、外部マージファイル）をデフォルト拒否に変更。使用するには `pieceArpeggio` で明示的に許可が必要 (#521)
-- BREAKING: ピース YAML の runtime prepare カスタムスクリプトをデフォルト拒否に変更（ビルトインプリセットは常に許可）。使用するには `pieceRuntimePrepare.customScripts: true` が必要 (#520)
+- BREAKING: workflow YAML の MCP サーバー設定をデフォルト拒否に変更。使用するには `workflowMcpServers` でトランスポート別に明示的に許可が必要 (#524)
+- BREAKING: workflow YAML の Arpeggio カスタムコード（カスタムデータソース、インライン JS、外部マージファイル）をデフォルト拒否に変更。使用するには `workflowArpeggio` で明示的に許可が必要 (#521)
+- BREAKING: workflow YAML の runtime prepare カスタムスクリプトをデフォルト拒否に変更（ビルトインプリセットは常に許可）。使用するには `workflowRuntimePrepare.customScripts: true` が必要 (#520)
 - BREAKING: sync conflict resolver の自動ツール承認をデフォルト拒否に変更。使用するには `syncConflictResolver.autoApproveTools: true` が必要 (#522)
 - team leader のタスク分解における最大ターン数を 4 → 5 に引き上げ (#511)
 - supervisor ファセットを強化: 要件カバレッジのエビデンスベース検証を追加
-- ペルソナファセットからクロスエージェント参照を除去し、ピース横断での再利用性を向上
+- ペルソナファセットからクロスエージェント参照を除去し、workflow横断での再利用性を向上
 
 ### Fixed
 
 - パイプラインモードで auto-commit の push 失敗時に PR 作成が無診断で失敗する問題を修正 (#532)
 - `.takt/.gitignore` のファセットパスが実際のディレクトリ構造と不一致だった問題を修正 (#535)
-- レビューピースの gather モードでブランチ検出が不正確だった問題を修正（完全一致を要求するよう変更） (#523)
-- レビューピースで reject findings のフォーマットが正しく処理されない問題を修正 (#528)
+- レビューworkflowの gather モードでブランチ検出が不正確だった問題を修正（完全一致を要求するよう変更） (#523)
+- レビューworkflowで reject findings のフォーマットが正しく処理されない問題を修正 (#528)
 - パイプラインモードでタスクブランチが PR 作成前に push されず、PR 作成が失敗する問題を修正
 
 ### Internal
@@ -109,10 +109,10 @@
 - GitLab プロバイダーのテストカバレッジを追加（issue, pr, provider, utils）
 - VCS プロバイダーの自動検出・ファクトリ・フォーマットのテストカバレッジを追加
 - MCP サーバー・Arpeggio・runtime prepare・conflict resolver のデフォルト拒否に関するテストカバレッジを追加
-- ピースローダーのテストカバレッジを大幅に拡充
+- workflowローダーのテストカバレッジを大幅に拡充
 - プロジェクト設定・グローバル設定のテストカバレッジを追加
 - MCP サーバーヘルパー、ポリシー正規化、conflict resolver ヘルパーのリファクタリング
-- ドキュメント更新（レビューピース名の修正、ビルトインカタログ更新）
+- ドキュメント更新（レビューworkflow名の修正、ビルトインカタログ更新）
 - ビルド/lint/テスト品質ゲートの追加と E2E テスト環境の CLAUDECODE 環境変数分離
 - テスト契約チェックのビルトインファセット強化（review-test, write-tests-first, testing-review）
 - タスク auto-PR の E2E テストを追加
@@ -130,9 +130,9 @@
 
 ### Changed
 
-- フロントエンド系ピース（`frontend`, `frontend-mini`, `dual`, `dual-mini`, `dual-cqrs`, `dual-cqrs-mini`）の plan ムーブメントに `design-planning` ポリシーと `react` ナレッジを統合
-- フロントエンド系ピースのプランフォーマットを `plan` から `plan-frontend` に変更
-- `frontend` ピースの全ムーブメント（テスト、レビュー、修正等）に `react` ナレッジを追加
+- フロントエンド系workflow（`frontend`, `frontend-mini`, `dual`, `dual-mini`, `dual-cqrs`, `dual-cqrs-mini`）の plan stepに `design-planning` ポリシーと `react` ナレッジを統合
+- フロントエンド系workflowのプランフォーマットを `plan` から `plan-frontend` に変更
+- `frontend` workflowの全step（テスト、レビュー、修正等）に `react` ナレッジを追加
 
 ### Internal
 
@@ -149,16 +149,16 @@
 - auto-commit 時に git hooks/filter がそのまま実行され、TAKT 管理下のコミットが意図しない hooks の影響を受ける問題を修正。デフォルトで無効化し、`allow_git_hooks` / `allow_git_filters` で opt-in に変更 (#503)
 - インタラクティブモードで初回入力時に不要な AI 呼び出しが発生していた問題を修正 (#504)
 - Cursor provider でプロンプト文字列が CLI オプションとして解釈される可能性がある問題を修正（`--` セパレータを追加） (#500)
-- snapshot ファイル名にムーブメント名がそのまま使われ、パストラバーサルが可能だった問題を修正 (#498)
-- `provider_options` の優先順位で、環境変数・プロジェクト設定がムーブメント定義より低くなっていた問題を修正（セキュリティ設定がムーブメントで上書きされないよう変更） (#497)
+- snapshot ファイル名にstep名がそのまま使われ、パストラバーサルが可能だった問題を修正 (#498)
+- `provider_options` の優先順位で、環境変数・プロジェクト設定がstep定義より低くなっていた問題を修正（セキュリティ設定がstepで上書きされないよう変更） (#497)
 - worktree パスの再利用時に、クローンベースディレクトリ外のパスが受け入れられる問題を修正 (#502)
-- terraform ピースから不要な強制 full パーミッションを削除 (#507)
+- terraform workflowから不要な強制 full パーミッションを削除 (#507)
 
 ### Internal
 
-- テスト系ピース・ファセットの全面整備（e2e-test → audit-e2e、unit-test → audit-unit にリネーム、ナレッジ・ポリシー追加）
-- デザイン忠実度ポリシーの追加とフロントエンド系ピースへの統合
-- audit-security ピースの追加
+- テスト系workflow・ファセットの全面整備（e2e-test → audit-e2e、unit-test → audit-unit にリネーム、ナレッジ・ポリシー追加）
+- デザイン忠実度ポリシーの追加とフロントエンド系workflowへの統合
+- audit-security workflowの追加
 - ファセットデプロイメントのリファクタリング（templates ディレクトリの廃止、facets ディレクトリへの統合） (#505)
 - `isPathInside` ユーティリティを追加し、クローン削除・worktree 再利用のパス検証を強化
 - ループモニターの閾値調整とレビューポリシーの改善
@@ -167,8 +167,8 @@
 
 ### Added
 
-- `takt export-codex` コマンド: ピース/ファセットを Codex スキルとしてエクスポート (`~/.agents/skills/takt/`) (#475)
-- `frontend` / `backend` / `backend-cqrs` ピースにテストファースト（`write_tests`）ムーブメントを追加し、レビューを2段階化（Stage 1: 構造・実装品質 → Stage 2: 安全性・品質保証）
+- `takt export-codex` コマンド: workflow/ファセットを Codex スキルとしてエクスポート (`~/.agents/skills/takt/`) (#475)
+- `frontend` / `backend` / `backend-cqrs` workflowにテストファースト（`write_tests`）stepを追加し、レビューを2段階化（Stage 1: 構造・実装品質 → Stage 2: 安全性・品質保証）
 - セキュリティナレッジにログ・マスキングセクションを追加（パスワード露出、`toString()` によるフィールド漏洩の検出基準）
 - CQRS+ES ナレッジにマスタデータと CRUD の使い分けセクションを追加（6つの判断基準テーブル付き）
 - `/ci` コメントで PR の CI を手動トリガーするワークフローを追加
@@ -177,8 +177,8 @@
 
 ### Changed
 
-- BREAKING: ピース YAML の `instruction_template` フィールドを非推奨化。`instruction` に統一（後方互換あり、deprecated 警告を表示） (#476)
-- レビュー系ピースの命名規則を `review-{variant}` / `review-fix-{variant}` に統一
+- BREAKING: workflow YAML の `instruction_template` フィールドを削除し、`instruction` に統一 (#476)
+- レビュー系workflowの命名規則を `review-{variant}` / `review-fix-{variant}` に統一
 - タスク分解の REJECT 基準をナレッジからポリシーに分離
 - faceted-prompting を npm パッケージ (`@anthropic-ai/faceted-prompting`) に移行し、内蔵コードを削除
 
@@ -202,9 +202,9 @@
 
 ### Changed
 
-- `dual` ピースを大幅強化: テストファースト（`write_tests`）ムーブメント追加、`implement` を team_leader 化（FE/BE 分割）、レビューを2段階化（`reviewers_1`: arch/frontend/testing → `reviewers_2`: security/qa/requirements）
-- `takt-default-team-leader` ピースを `takt-default` に統合し削除。`takt-default` の `implement` を team_leader 化
-- `quality_gates` のペルソナ単位オーバーライドをサポート: `piece_overrides.personas.<name>.qualityGates` で特定ペルソナのムーブメントに品質ゲートを追加可能に (#472)
+- `dual` workflowを大幅強化: テストファースト（`write_tests`）step追加、`implement` を team_leader 化（FE/BE 分割）、レビューを2段階化（`reviewers_1`: arch/frontend/testing → `reviewers_2`: security/qa/requirements）
+- `takt-default-team-leader` workflowを `takt-default` に統合し削除。`takt-default` の `implement` を team_leader 化
+- `quality_gates` のペルソナ単位オーバーライドをサポート: `workflow_overrides.personas.<name>.qualityGates` で特定ペルソナのstepに品質ゲートを追加可能に (#472)
 - Status 型を `done` / `blocked` / `error` の3値に整理し、ステータスハンドリングを厳格化。`blocked` / `error` 時は即座に ABORT するよう変更 (#477)
 
 ### Fixed
@@ -212,8 +212,8 @@
 - `git check-ref-format` コマンドから不要な `--` を削除し、ブランチ名の検証が正しく動作するよう修正 (#481)
 - `log_level` → `logging.level` の設定キー不整合を修正（E2E テスト全滅の原因）
 - Phase 3 ステータス判定が失敗した際に Phase 1 のルール評価にフォールバックするよう修正（従来はエラーで中断していた） (#474)
-- Parallel ムーブメントの Phase 3 判定失敗時も同様にフォールバック対応 (#474)
-- タスクリトライ・追加指示時のピース名取得元を `runInfo?.piece` から `task.data?.piece` に変更（worktree 内で `runInfo` が常に null になる問題を修正）
+- Parallel stepの Phase 3 判定失敗時も同様にフォールバック対応 (#474)
+- タスクリトライ・追加指示時のワークフロー名取得元を `runInfo?.workflow` から `task.data?.workflow` に変更（worktree 内で `runInfo` が常に null になる問題を修正）
 
 ### Internal
 
@@ -227,14 +227,14 @@
 
 ### Added
 
-- トレースレポートの自動生成: piece 実行完了時に movement の遷移・フェーズ・ルール評価結果を Markdown レポートとして `.takt/runs/` に自動出力。`logging.trace: true` で全文モード、デフォルトは redacted モード (#467)
+- トレースレポートの自動生成: workflow 実行完了時に step の遷移・フェーズ・ルール評価結果を Markdown レポートとして `.takt/runs/` に自動出力。`logging.trace: true` で全文モード、デフォルトは redacted モード (#467)
 - 使用量イベントログ: プロバイダー呼び出しごとのトークン使用量を NDJSON 形式で記録。`logging.usage_events: true` で有効化 (#470)
-- タスクリトライ時のピース再利用確認: `takt list` からリトライ・追加指示する際に、前回と同じピースを使うか選び直すかを選択可能に (#468)
+- タスクリトライ時のworkflow再利用確認: `takt list` からリトライ・追加指示する際に、前回と同じworkflowを使うか選び直すかを選択可能に (#468)
 
 ### Changed
 
-- BREAKING: `takt switch` コマンドを削除。ピース選択はインタラクティブモード起動時（`takt`）に毎回行う方式に変更 (#465)
-- Claude プロバイダーの `allowed_tools` をビルトインピースの YAML 定義からエグゼキューター側に移動し、ピース YAML の簡素化と保守性を向上 (#469)
+- BREAKING: `takt switch` コマンドを削除。workflow選択はインタラクティブモード起動時（`takt`）に毎回行う方式に変更 (#465)
+- Claude プロバイダーの `allowed_tools` をビルトインworkflowの YAML 定義からエグゼキューター側に移動し、workflow YAML の簡素化と保守性を向上 (#469)
 - 設定構造をリファクタリング: `globalConfig.ts` を `globalConfigCore.ts`・`globalConfigAccessors.ts`・`globalConfigResolvers.ts`・`globalConfigSerializer.ts` に分割。プロジェクトローカル設定（`.takt/config.yaml`）のフォールバック優先度を明確化 (#460)
 - observability モジュールを `core/logging/` に再編成: `providerEventLogger` と `usageEventLogger` を統一的なログ基盤として整理 (#466)
 - レビュアー全体に `coder-decisions.md` の参照を追加し、コーダーの設計判断を考慮したレビューで誤検知を抑制
@@ -246,7 +246,7 @@
 - `.takt/config.yaml` に `runtime.prepare` を記述するとエラーになる問題を修正（プロジェクトレベルでの runtime 設定を許可） (#464)
 - インタラクティブモードで iteration limit 到達時にプロンプトが表示されず、exceeded 状態が保持されない問題を修正
 - PR 作成失敗時のタスクステータスを `failed` から `pr_failed` に分離し、実行成功だが PR 作成のみ失敗したケースを区別可能に
-- リトライ時にタスクにピース情報が引き継がれるよう修正
+- リトライ時にタスクにworkflow情報が引き継がれるよう修正
 - `.gitignore` の `.takt/` ディレクトリ ignore を削除し `.takt/.gitignore` に委譲（プロジェクト設定ファイルの追跡を可能に）
 - CI: push トリガーから `takt/**` を削除し二重実行を防止
 - `cc-resolve` ワークフローで push 後に CI を自動トリガーするよう修正
@@ -261,9 +261,9 @@
 
 ### Added
 
-- レビュー＋修正ループピース群を追加: `review-fix`（多角レビュー）、`frontend-review-fix`、`backend-review-fix`、`dual-review-fix`、`dual-cqrs-review-fix`、`backend-cqrs-review-fix` および対応するレビュー専用ピース群を追加。コードレビューと自動修正を反復するワークフロー
-- `takt-default-review-fix` ピースを追加: TAKT 自己開発向けのレビュー＋修正ループワークフロー
-- `quality_gates` のグローバル/プロジェクトレベルオーバーライドをサポート: `~/.takt/config.yaml` および `.takt/config.yaml` の `piece_overrides.quality_gates` でビルトインピースの品質ゲートを上書き可能に (#384)
+- レビュー＋修正ループworkflow群を追加: `review-fix`（多角レビュー）、`frontend-review-fix`、`backend-review-fix`、`dual-review-fix`、`dual-cqrs-review-fix`、`backend-cqrs-review-fix` および対応するレビュー専用workflow群を追加。コードレビューと自動修正を反復するワークフロー
+- `takt-default-review-fix` workflowを追加: TAKT 自己開発向けのレビュー＋修正ループワークフロー
+- `quality_gates` のグローバル/プロジェクトレベルオーバーライドをサポート: `~/.takt/config.yaml` および `.takt/config.yaml` の `workflow_overrides.quality_gates` でビルトインworkflowの品質ゲートを上書き可能に (#384)
 - タスクの `base_branch` 設定: `takt add` 時に現在のブランチを base_branch として記録し、タスク実行時にそのブランチから分岐するよう設定可能に (#455)
 - プロバイダー設定の統一: `.takt/config.yaml` で `provider` ブロックに `type`/`model`/プロバイダー固有オプション（`network_access` 等）をまとめて記述可能に (#457)
 - ワーカープール超過時のリキュー: タスク実行がワーカー上限を超えた場合、タスクを自動的に再キューイングするよう対応 (#366)
@@ -274,7 +274,7 @@
 
 - `export-cc` で `facets/` のサブディレクトリ構造（`personas/`、`policies/` 等）が出力先に再現されなかった問題を修正
 - `cc-resolve` コマンドがコンフリクト解決後にマージコミットを生成するよう修正
-- グローバル設定 (`~/.takt/config.yaml`) の `piece` フィールドがピース解決チェーンで無視されるバグを修正 (#458)
+- グローバル設定 (`~/.takt/config.yaml`) の `workflow` フィールドがワークフロー解決チェーンで無視されるバグを修正 (#458)
 - Codex プロバイダーでプロバイダー優先のパーミッションモード解決が機能しない問題を修正
 - レビューコメントがない PR で `--pr` を使用した際にエラーになる問題を修正
 - `--auto-pr`/`--draft` オプションをパイプラインモード専用に制限（インタラクティブモードでの誤用を防止）
@@ -287,7 +287,7 @@
 
 - E2E プロバイダー別テストをコンフィグレベル（`vitest.config.e2e.provider.ts`）で振り分けるよう変更。テストファイル内の `skip` ロジックを廃止し、JSON レポート出力を追加
 - 共有ノーマライザを `configNormalizers.ts` に抽出してプロバイダー設定解析を整理
-- `agent-usecases`/`schema-loader` を移動し `pieceExecution` の責務を分割
+- `agent-usecases`/`schema-loader` を移動し `workflowExecution` の責務を分割
 - `check:release` で全プロバイダー（claude/codex/opencode）の E2E を実行するよう変更
 - CI: PR と push の重複実行を concurrency グループで抑制
 - CI: feature ブランチへの push と手動実行に対応
@@ -296,15 +296,15 @@
 
 ### Changed
 
-- BREAKING: `expert` / `expert-mini` / `expert-cqrs` / `expert-cqrs-mini` ピースを `dual` / `dual-mini` / `dual-cqrs` / `dual-cqrs-mini` にリネーム。カスタマイズしている場合はピース名の更新が必要
-- `default-mini` / `default-test-first-mini` ピースを `default` に統合。`default` ピースが「テスト優先モード」を内包するよう拡張
+- BREAKING: `expert` / `expert-mini` / `expert-cqrs` / `expert-cqrs-mini` workflowを `dual` / `dual-mini` / `dual-cqrs` / `dual-cqrs-mini` にリネーム。カスタマイズしている場合はworkflow名の更新が必要
+- `default-mini` / `default-test-first-mini` workflowを `default` に統合。`default` workflowが「テスト優先モード」を内包するよう拡張
 - `coding-pitfalls` ナレッジの主要項目を `coding` ポリシーに移動し、ポリシーとして実際に適用されるよう強化
 - `implement` / `plan` インストラクションにセルフチェック・コーダー指針を追加
 
 ### Removed
 
-- `passthrough` ピースを削除
-- `structural-reform` ピースを削除
+- `passthrough` workflowを削除
+- `structural-reform` workflowを削除
 
 ### Internal
 
@@ -323,7 +323,7 @@
 - `takt list` に「Pull from remote」アクションを追加: リモートの変更を worktree に取り込み、再プッシュ可能に (#395)
 - プロジェクト単位の CLI パス設定: `.takt/config.yaml` で `claudeCliPath` / `cursorCliPath` / `codexCliPath` / `copilotCliPath` をプロジェクトごとに設定可能に (#413)
 - インタラクティブモードのスラッシュコマンドを行末でも認識可能に（例: `タスクの内容 /go`）(#406)
-- takt-default / takt-default-team-leader ビルトインピースを追加（TAKT 自己開発用のワークフロー定義）
+- takt-default / takt-default-team-leader ビルトインworkflowを追加（TAKT 自己開発用のワークフロー定義）
 - TAKT ナレッジファセット（`takt.md`）を追加: TAKT のアーキテクチャとコード規約を体系化
 - ai-antipattern ポリシーに冗長な条件分岐パターン検出を追加: 同一関数を if/else で呼び分けるコードを検出し、三項演算子やスプレッド構文での統一を促す
 
@@ -353,7 +353,7 @@
 - `takt list` に「Pull from remote」アクションを追加: リモートの変更を worktree に取り込み、再プッシュ可能に (#395)
 - プロジェクト単位の CLI パス設定: `.takt/config.yaml` で `claudeCliPath` / `cursorCliPath` / `codexCliPath` / `copilotCliPath` をプロジェクトごとに設定可能に (#413)
 - インタラクティブモードのスラッシュコマンドを行末でも認識可能に（例: `タスクの内容 /go`）(#406)
-- takt-default / takt-default-team-leader ビルトインピースを追加（TAKT 自己開発用のワークフロー定義）
+- takt-default / takt-default-team-leader ビルトインworkflowを追加（TAKT 自己開発用のワークフロー定義）
 - TAKT ナレッジファセット（`takt.md`）を追加: TAKT のアーキテクチャとコード規約を体系化
 - ai-antipattern ポリシーに冗長な条件分岐パターン検出を追加: 同一関数を if/else で呼び分けるコードを検出し、三項演算子やスプレッド構文での統一を促す
 
@@ -394,24 +394,24 @@
 ### Added
 
 - TeamLeader に refill threshold と動的パート追加を導入: 実行中のパートが `refill_threshold` 以下になると、リーダーが完了済みパートの結果を評価して追加パートを動的に生成。`max_parts` は同時並行数、`refill_threshold` で追加計画のタイミングを制御（最大合計 20 パートまで）
-- deep-research ピースの dig ムーブメントに `team_leader` 設定を追加し、リサーチの並列実行が可能に
-- TeamLeader が Phase 2（レポート出力）/ Phase 3（ステータス判定）を通常ムーブメントと同様にサポート（`applyPostExecutionPhases` の共通化）
-- ParallelLogger が動的なサブムーブメント追加に対応（`addSubMovement`）し、TeamLeader の動的パート追加時にもストリーミング出力を表示
+- deep-research workflowの dig stepに `team_leader` 設定を追加し、リサーチの並列実行が可能に
+- TeamLeader が Phase 2（レポート出力）/ Phase 3（ステータス判定）を通常stepと同様にサポート（`applyPostExecutionPhases` の共通化）
+- ParallelLogger が動的なサブstep追加に対応（`addSubStep`）し、TeamLeader の動的パート追加時にもストリーミング出力を表示
 - `LineTimeSliceBuffer` を導入し、並列ストリーミング出力のバッファリングを時間スライスベースで最適化
 - プロジェクト設定（`.takt/config.yaml`）で `model` 指定をサポート
 
 ### Changed
 
-- BREAKING: カスタムエージェント定義（`~/.takt/personas/*.md`）の `provider` / `model` を解釈しない方針とし、エージェントのプロバイダー・モデルはピース側の解決ロジック（CLI → persona_providers → ステップ → ローカル → グローバル）に統一 (#390)
-- エージェントの provider/model 解決ロジックを `resolveAgentProviderModel` に一元化し、ムーブメント解決と同じ優先順位チェーンを使用するよう変更 (#386)
-- `movement:start` イベントが `providerInfo` を含むよう変更し、表示側でのプロバイダー再解決を不要に (#390)
+- BREAKING: カスタムエージェント定義（`~/.takt/personas/*.md`）の `provider` / `model` を解釈しない方針とし、エージェントのプロバイダー・モデルはworkflow側の解決ロジック（CLI → persona_providers → ステップ → ローカル → グローバル）に統一 (#390)
+- エージェントの provider/model 解決ロジックを `resolveAgentProviderModel` に一元化し、ステップ解決と同じ優先順位チェーンを使用するよう変更 (#386)
+- `step:start` イベントが `providerInfo` を含むよう変更し、表示側でのプロバイダー再解決を不要に (#390)
 - `takt list` の「Sync with root」を「Merge from root」にリネーム (#394)
 - インタラクティブモードの要約 AI がセッション非継承で実行されるよう修正し、会話コンテキストの汚染を防止 (#368)
-- interactive policy のガイドラインを改善: ユーザーが「自分で調べて」と指示した場合と、ピースへの指示作成を区別するルールを明確化
+- interactive policy のガイドラインを改善: ユーザーが「自分で調べて」と指示した場合と、workflowへの指示作成を区別するルールを明確化
 
 ### Fixed
 
-- default / default-test-first-mini ピースの `write_tests` ムーブメントで、テスト対象が未実装の場合にスキップして implement へ進むルールを追加（従来は ABORT になっていた）(#396)
+- default / default-test-first-mini ワークフローの `write_tests` ステップで、テスト対象が未実装の場合にスキップして implement へ進むルールを追加（従来は ABORT になっていた）(#396)
 - `takt add` の GitHub Issue タイトル抽出を改善: Markdown 見出し（h1-h3）を優先的にタイトルとして使用するよう変更（従来は先頭行がそのまま使われていた）(#368)
 - quiet モードの要約 AI がセッションを引き継がない問題を修正 (#368)
 - `repertoire add` の `gh api` 呼び出しにバッファサイズ上限（100MB）を設定し、大きなリポジトリでのバッファオーバーフローを防止
@@ -428,17 +428,17 @@
 
 ### Added
 
-- Terraform/AWS ピース: IaC 開発用の完全なピースとファセット一式を追加。plan → implement → 並列3レビュー（architect/QA/security）→ supervise → complete の15ムーブメント構成（EN/JA）
+- Terraform/AWS workflow: IaC 開発用の完全なworkflowとファセット一式を追加。plan → implement → 並列3レビュー（architect/QA/security）→ supervise → complete の15step構成（EN/JA）
 - GitProvider 抽象化: Git/GitHub 操作を `GitProvider` インターフェースに統一し、将来の複数 Git プロバイダー対応の基盤を構築 (#375)
 - プロジェクト設定で submodule の自動取得をサポート: `submodules: all` または `submodules: [path1, path2]` で指定可能に (#387)
 - `takt add` で GitHub Issue 作成時にラベルをインタラクティブに選択可能に (#377, #111)
-- deep-research ピースにデータ保存・レポート出力機能を追加（dig/analyze ムーブメントに Write・Bash ツール許可、supervise に research-report 出力契約）
+- deep-research workflowにデータ保存・レポート出力機能を追加（dig/analyze stepに Write・Bash ツール許可、supervise に research-report 出力契約）
 - GitHub Discussions・Discord・X への一斉アナウンス GitHub Actions ワークフローを追加
 
 ### Changed
 
-- default ピースをテスト先行開発構成に変更: plan の後に `write_tests` ムーブメントを追加し、テストを先に書いてから実装する流れに。並列レビューに testing-review を追加（3→4 レビュアー）。レポートファイル名をセマンティック命名に統一（`00-plan.md` → `plan.md` 等）
-- sync with root をピースエンジン経由からプロバイダー抽象化を利用した単発エージェント呼び出しに簡素化。コンフリクト解決プロンプトをテンプレートファイル化（EN/JA 分離）
+- default workflowをテスト先行開発構成に変更: plan の後に `write_tests` stepを追加し、テストを先に書いてから実装する流れに。並列レビューに testing-review を追加（3→4 レビュアー）。レポートファイル名をセマンティック命名に統一（`00-plan.md` → `plan.md` 等）
+- sync with root をworkflowエンジン経由からプロバイダー抽象化を利用した単発エージェント呼び出しに簡素化。コンフリクト解決プロンプトをテンプレートファイル化（EN/JA 分離）
 
 ### Fixed
 
@@ -446,7 +446,7 @@
 - `--task` オプションでの直接実行時に tasks.yaml へ不要な記録がされる問題を修正
 - `--task` でワークツリー作成時は tasks.yaml に記録するよう修正（`takt list` でのブランチ管理に必要）
 - プロバイダー解決: 暗黙の `claude` フォールバックを廃止し、プロバイダーを解決できない場合は Fail Fast で終了するよう修正 (#386)
-- プロバイダー解決: 表示用と実行用の provider/model 解決を `movement:start` イベントの providerInfo に一元化し、表示されるプロバイダーと実行プロバイダーの一致を構造的に保証 (#390)
+- プロバイダー解決: 表示用と実行用の provider/model 解決を `step:start` イベントの providerInfo に一元化し、表示されるプロバイダーと実行プロバイダーの一致を構造的に保証 (#390)
 - E2E テスト config-priority の不安定性を修正 (#388)
 
 ### Internal
@@ -458,18 +458,18 @@
 
 ### Added
 
-- AskUserQuestion 対応: AI エージェントが実行中に対話的にユーザーへ質問可能に。単一選択・複数選択・自由入力の TTY UI を提供。ピース実行中は自動的に拒否しエージェントの自律性を維持 (#161, #369)
-- `review` ビルトインピースを3モード自動判定に拡張: PR 番号・ブランチ名・フリーテキストから自動でレビューモード（PR/ブランチ/作業中差分）を判定し、5並列レビュー（arch/security/qa/testing/requirements）を実行
+- AskUserQuestion 対応: AI エージェントが実行中に対話的にユーザーへ質問可能に。単一選択・複数選択・自由入力の TTY UI を提供。workflow実行中は自動的に拒否しエージェントの自律性を維持 (#161, #369)
+- `review` ビルトインworkflowを3モード自動判定に拡張: PR 番号・ブランチ名・フリーテキストから自動でレビューモード（PR/ブランチ/作業中差分）を判定し、5並列レビュー（arch/security/qa/testing/requirements）を実行
 - `testing-reviewer` と `requirements-reviewer` ビルトインペルソナを追加（専門レビュー観点）
 - `testing` ポリシー: インテグレーションテスト必要条件を追加（3+モジュールのデータフロー、ワークフローへの状態マージ、コールチェーンを通じたオプション伝搬）
-- `gather-review` インストラクションと `review-gather` 出力契約を追加（review ピースの gather ムーブメント用）
+- `gather-review` インストラクションと `review-gather` 出力契約を追加（review workflowの gather step用）
 - `requirements-review` インストラクションと出力契約を追加（要件レビュー用）
 - `testing-review` 出力契約を追加（テストレビュー用）
 - SDK オプションに `settingSources: ['project']` を追加: CLAUDE.md の読み込みを Claude SDK に委譲し、プロジェクトレベル設定を適切に解決
 
 ### Changed
 
-- **BREAKING:** `review-only` ピースを `review` にリネーム、`review-fix-minimal` ピースを削除 — これらのピース名を参照しているユーザーは `review` に更新が必要
+- **BREAKING:** `review-only` workflowを `review` にリネーム、`review-fix-minimal` workflowを削除 — これらのworkflow名を参照しているユーザーは `review` に更新が必要
 - `write-tests-first` インストラクションに具体的なインテグレーションテスト判断基準を追加（「適宜 E2E テストを作成」から置き換え）
 
 ### Fixed
@@ -479,14 +479,14 @@
 ### Internal
 
 - ドキュメント整備: 音楽メタファーの由来説明追加、カタログ漏れ・リンク切れ・孤立ドキュメント・イベント名・API Key 参照・eject 説明を修正、YAML 例から不要な personas セクションマップを削除、レガシー用語をコードベースの実態に合わせて修正
-- 新規テストスイート: `StreamDisplay`、`ask-user-question-handler`、`pieceExecution-ask-user-question`、`review-piece`、`opencode-client-cleanup`
-- レガシー `review-only-piece` テストと session モジュールの `loadProjectContext` を削除（CLAUDE.md 読み込みは SDK に委譲）
+- 新規テストスイート: `StreamDisplay`、`ask-user-question-handler`、`workflowExecution-ask-user-question`、`review-workflow`、`opencode-client-cleanup`
+- レガシー `review-only-workflow` テストと session モジュールの `loadProjectContext` を削除（CLAUDE.md 読み込みは SDK に委譲）
 
 ## [0.23.0] - 2026-02-23
 
 ### Added
 
-- `default-test-first-mini` ビルトインピースを追加（テストファースト開発ワークフロー）
+- `default-test-first-mini` ビルトインworkflowを追加（テストファースト開発ワークフロー）
 - `auto_fetch` グローバル設定: クローン作成前にリモートを fetch してクローンを最新に保つオプション（`default: false`）
 - `base_branch` 設定（グローバル/プロジェクト）: クローン作成のベースブランチを指定（デフォルトはリモートのデフォルトブランチ）
 - `model` プロジェクト設定: プロジェクトレベルでモデルを上書き（`.takt/config.yaml`）
@@ -494,17 +494,17 @@
 - パイプラインモードで `--create-worktree` をサポート（worktree ベースの実行）
 - `skipTaskList` オプション: 対話モードの「実行する」アクションで `tasks.yaml` への追加をスキップ
 - `takt list` でタスク名の横に GitHub Issue 番号を表示
-- 失敗タスクのリトライ時、ピース選択の前に前回使用したピースの再利用を提案
+- 失敗タスクのリトライ時、workflow選択の前に前回使用したworkflowの再利用を提案
 - パイプラインモードの Slack 通知: タスク詳細、実行時間、ブランチ、PR URL を含むサマリを送信
 - CI ワークフロー: PR に対して lint、test、e2e:mock チェックを自動実行 (#364)
 
 ### Changed
 
-- Provider/Model 解決を `resolveProviderModelCandidates()` に一元化 — `AgentRunner` と `resolveMovementProviderModel` で同一の解決関数を使用
+- Provider/Model 解決を `resolveProviderModelCandidates()` に一元化 — `AgentRunner` と `resolveStepProviderModel` で同一の解決関数を使用
 - パイプライン実行を薄いオーケストレーター (`execute.ts`) + ステップ実装 (`steps.ts`) にリファクタリング
 - クローンディレクトリのデフォルト名を `takt-worktree`（単数）から `takt-worktrees`（複数）に変更（レガシーディレクトリの自動マイグレーション付き）
 - PR タイトルに Issue 番号プレフィックスを追加（例: `[#6] Fix the bug`）
-- タスクステータスが PR 作成失敗を反映するよう改善 — 以前はピース実行の成功のみを追跡
+- タスクステータスが PR 作成失敗を反映するよう改善 — 以前はworkflow実行の成功のみを追跡
 - `auto-tag.yml` がマージコミットではなく PR head SHA にタグを付与（ホットフィックスの正しいコード publish のため）
 - セッションリーダーが `sessions-index.json` が欠損・不正な場合に JSONL ファイルスキャンにフォールバック
 - `ProjectLocalConfig` 型をキャメルケースに正規化（`auto_pr`→`autoPr`、`draft_pr`→`draftPr`）— YAML のスネークケースは維持
@@ -513,7 +513,7 @@
 ### Fixed
 
 - `repertoire add` のパイプ stdin: readline がバッファ済み行を破棄するため複数の `confirm()` 呼び出しが失敗する問題を修正 (#334)
-- `AgentRunner` での movement provider 上書き優先順位: step provider がグローバル設定に誤って上書きされていた問題を修正
+- `AgentRunner` での step provider 上書き優先順位: step provider がグローバル設定に誤って上書きされていた問題を修正
 - プロジェクトレベルの `model` 設定が無視されていた問題 — `getLocalLayerValue` に `model` ケースが欠落していた
 - PR 作成失敗がタスク失敗として適切に伝搬されるよう修正（エラーメッセージ付き）(#345)
 - Claude セッション resume 候補が `sessions-index.json` 利用不可時に JSONL ファイルスキャンにフォールバック
@@ -530,9 +530,9 @@
 ### Added
 
 - **Repertoire パッケージシステム** (`takt repertoire add/remove/list`): GitHub から外部 TAKT パッケージをインポート・管理 — `takt repertoire add github:{owner}/{repo}@{ref}` でパッケージを `~/.takt/repertoire/` にダウンロード。アトミックなインストール、バージョン互換チェック、ロックファイル生成、確認前のパッケージ内容サマリ表示に対応
-- **@scope 参照**: piece YAML のファセット参照で `@{owner}/{repo}/{facet-name}` 構文をサポート — インストール済み repertoire パッケージのファセットを直接参照可能（例: `persona: @nrslib/takt-fullstack/expert-coder`）
-- **4層ファセット解決**: 3層（project → user → builtin）から4層（package-local → project → user → builtin）に拡張 — repertoire パッケージのピースは自パッケージ内のファセットを最優先で解決
-- **ピース選択に repertoire カテゴリ追加**: インストール済みの repertoire パッケージがピース選択 UI の「repertoire」カテゴリにサブカテゴリとして自動表示
+- **@scope 参照**: workflow YAML のファセット参照で `@{owner}/{repo}/{facet-name}` 構文をサポート — インストール済み repertoire パッケージのファセットを直接参照可能（例: `persona: @nrslib/takt-fullstack/expert-coder`）
+- **4層ファセット解決**: 3層（project → user → builtin）から4層（package-local → project → user → builtin）に拡張 — repertoire パッケージのworkflowは自パッケージ内のファセットを最優先で解決
+- **workflow選択に repertoire カテゴリ追加**: インストール済みの repertoire パッケージがworkflow選択 UI の「repertoire」カテゴリにサブカテゴリとして自動表示
 - **implement/fix インストラクションにビルドゲート追加**: `implement` と `fix` のビルトインインストラクションでテスト実行前にビルド（型チェック）の実行を必須化
 - **Repertoire パッケージドキュメント追加**: repertoire パッケージシステムの包括的なドキュメントを追加（[en](./repertoire.md), [ja](./repertoire.ja.md)）
 
@@ -543,11 +543,11 @@
 
 ### Fixed
 
-- オーバーライドピースの検証が repertoire スコープを含むリゾルバー経由で実行されるよう修正
+- オーバーライドworkflowの検証が repertoire スコープを含むリゾルバー経由で実行されるよう修正
 - `takt export-cc` が新しい `builtins/{lang}/facets/` ディレクトリ構造からファセットを読み込むよう修正
 - `confirm()` プロンプトがパイプ経由の stdin に対応（例: `echo "y" | takt repertoire add ...`）
 - イテレーション入力待ち中の `poll_tick` デバッグログ連続出力を抑制
-- ピースリゾルバーの `stat()` 呼び出しでアクセス不能エントリ時にクラッシュせずエラーハンドリング
+- workflowリゾルバーの `stat()` 呼び出しでアクセス不能エントリ時にクラッシュせずエラーハンドリング
 
 ### Internal
 
@@ -555,7 +555,7 @@
 - `src/faceted-prompting/scope.ts` を追加（@scope 参照のパース・バリデーション・解決）
 - faceted-prompting モジュールの scope-ref テストを追加
 - `inputWait.ts` を追加（ワーカープールのログノイズ抑制のための入力待ち状態共有）
-- piece-selection-branches および repertoire の e2e テストを追加
+- workflow-selection-branches および repertoire の e2e テストを追加
 
 ## [0.21.0] - 2026-02-20
 
@@ -571,7 +571,7 @@
 
 ### Changed
 
-- **設定システムの刷新**: `loadConfig()` による一括マージを廃止し、`resolveConfigValue()` によるキー単位解決に移行 — global < piece < project < env の優先順位でソーストラッキングと `OptionsBuilder` のマージ方向を制御 (#324)
+- **設定システムの刷新**: `loadConfig()` による一括マージを廃止し、`resolveConfigValue()` によるキー単位解決に移行 — global < workflow < project < env の優先順位でソーストラッキングと `OptionsBuilder` のマージ方向を制御 (#324)
 
 ### Fixed
 
@@ -591,12 +591,12 @@
 ### Added
 
 - **Faceted Prompting モジュール** (`src/faceted-prompting/`): ファセット合成・解決・テンプレートレンダリング・トランケーションのスタンドアロンライブラリ — TAKT 内部への依存ゼロ。プラガブルなファセットストレージのための `DataEngine` インターフェースと `FileDataEngine`、`CompositeDataEngine` 実装を含む
-- **Analytics モジュール** (`src/features/analytics/`): ローカル専用のレビュー品質メトリクス収集 — イベント型（レビュー指摘、修正アクション、ムーブメント結果）、日付ローテーション付き JSONL ライター、レポートパーサー、メトリクス計算
+- **Analytics モジュール** (`src/features/analytics/`): ローカル専用のレビュー品質メトリクス収集 — イベント型（レビュー指摘、修正アクション、step結果）、日付ローテーション付き JSONL ライター、レポートパーサー、メトリクス計算
 - **`takt metrics review` コマンド**: レビュー品質メトリクスを表示（再報告カウント、ラウンドトリップ率、解決イテレーション数、ルール別 REJECT カウント、反論解決率）。`--since` で時間枠を設定可能
 - **`takt purge` コマンド**: 古いアナリティクスイベントファイルを削除。`--retention-days` で保持期間を設定可能
 - **`takt reset config` コマンド**: グローバル設定をビルトインテンプレートにリセット（既存設定の自動バックアップ付き）
 - **PR 重複防止**: 現在のブランチに既に PR が存在する場合、新規作成ではなく既存 PR へのプッシュとコメント追加で対応 (#304)
-- リトライ時のムーブメント選択で失敗箇所にカーソルを初期配置
+- リトライ時のstep選択で失敗箇所にカーソルを初期配置
 - run-recovery と config-priority シナリオの E2E テストを追加
 
 ### Changed
@@ -610,12 +610,12 @@
 
 ### Fixed
 
-- ビルトインピースのファイル参照が相対パスではなく絶対パスを使用していた問題を修正 (#304)
+- ビルトインworkflowのファイル参照が相対パスではなく絶対パスを使用していた問題を修正 (#304)
 - 複数ファイルにまたがる未使用 import・変数を削除
 
 ### Internal
 
-- `loadConfig`、`resolveConfigValue`、ピース設定解決、設定優先順位パスの統一
+- `loadConfig`、`resolveConfigValue`、workflow設定解決、設定優先順位パスの統一
 - config-priority と run-recovery シナリオの E2E テストを追加
 - PR 作成フローテスト用の `postExecution.test.ts` を追加
 - 未使用 import・変数のクリーンアップ
@@ -624,7 +624,7 @@
 
 ### Added
 
-- 失敗タスク専用のリトライモードを追加 — 失敗コンテキスト（エラー詳細、失敗ムーブメント、最終メッセージ）、実行セッションデータ、ピース構成をシステムプロンプトに注入する対話ループ
+- 失敗タスク専用のリトライモードを追加 — 失敗コンテキスト（エラー詳細、失敗step、最終メッセージ）、実行セッションデータ、workflow構成をシステムプロンプトに注入する対話ループ
 - 完了/失敗タスクの再指示用に専用 instruct システムプロンプトを追加 — タスク名・内容・ブランチ変更・リトライノートを汎用の対話プロンプトではなく直接プロンプトに注入
 - `takt list` からの直接再実行 — "execute" アクションで既存ワークツリー内で即座にタスクを実行（pending への再キューだけでなく）
 - `startReExecution` によるアトミックなタスクステータス遷移 — completed/failed から直接 running に遷移し、requeue → claim のレースコンディションを回避
@@ -667,14 +667,14 @@
 
 ### Added
 
-- `deep-research` ピースを追加 — 計画→深掘り→分析→統括の4ステップで多角的なリサーチを行うワークフロー
-- プロジェクトレベルの `.takt/` ファセット（pieces, personas, policies, knowledge, instructions, output-contracts）をバージョン管理可能に (#286)
+- `deep-research` workflowを追加 — 計画→深掘り→分析→統括の4ステップで多角的なリサーチを行うワークフロー
+- プロジェクトレベルの `.takt/` ファセット（workflows, personas, policies, knowledge, instructions, output-contracts）をバージョン管理可能に (#286)
 - リサーチ系ファセットを新規追加（research ポリシー、ナレッジ、比較分析ナレッジ、専用ペルソナ・インストラクション）
 
 ### Changed
 
-- `research` ピースをリファクタリング — ペルソナに埋め込まれていたルール・知識をポリシー・ナレッジ・インストラクションに分離し、ファセット設計に準拠
-- 既存ピース（expert, expert-cqrs, backend, backend-cqrs, frontend）に knowledge/policy 参照を追加
+- `research` workflowをリファクタリング — ペルソナに埋め込まれていたルール・知識をポリシー・ナレッジ・インストラクションに分離し、ファセット設計に準拠
+- 既存workflow（expert, expert-cqrs, backend, backend-cqrs, frontend）に knowledge/policy 参照を追加
 
 ### Fixed
 
@@ -703,8 +703,8 @@
 
 ### Added
 
-- `expert-mini`、`expert-cqrs-mini` ピースを追加 — Expert ピースの軽量版として、plan → implement → 並列レビュー（AI アンチパターン＋スーパーバイザー）→ 修正のワークフローを提供
-- ピースカテゴリの「⚡ Mini」「🔧 エキスパート」に新ピースを追加
+- `expert-mini`、`expert-cqrs-mini` workflowを追加 — Expert workflowの軽量版として、plan → implement → 並列レビュー（AI アンチパターン＋スーパーバイザー）→ 修正のワークフローを提供
+- workflowカテゴリの「⚡ Mini」「🔧 エキスパート」に新workflowを追加
 
 ### Fixed
 
@@ -720,15 +720,15 @@
 
 ### Added
 
-- **mini ピースシリーズ**: `default-mini`、`frontend-mini`、`backend-mini`、`backend-cqrs-mini` を追加 — `coding`/`minimal` の後継として、並列レビュー（AI アンチパターン＋スーパーバイザー）付きの軽量開発ピースを提供
-- ピースカテゴリに「⚡ Mini」カテゴリを追加
+- **mini workflowシリーズ**: `default-mini`、`frontend-mini`、`backend-mini`、`backend-cqrs-mini` を追加 — `coding`/`minimal` の後継として、並列レビュー（AI アンチパターン＋スーパーバイザー）付きの軽量開発workflowを提供
+- workflowカテゴリに「⚡ Mini」カテゴリを追加
 - `supervisor-validation` 出力契約を追加 — 要件充足チェックテーブル（Requirements Fulfillment Check）で要件ごとにコード根拠を提示する形式
 - `getJudgmentReportFiles()`: `use_judge` フラグにより Phase 3 ステータス判定の対象レポートをフィルタリング可能に
 - Output contract に finding_id トラッキングを追加（new/persists/resolved セクションによる指摘の追跡）
 
 ### Changed
 
-- **BREAKING: `coding` ピースと `minimal` ピースを削除** — mini ピースシリーズに置き換え。`coding` → `default-mini`、`minimal` → `default-mini` への移行を推奨
+- **BREAKING: `coding` workflowと `minimal` workflowを削除** — mini workflowシリーズに置き換え。`coding` → `default-mini`、`minimal` → `default-mini` への移行を推奨
 - **BREAKING: Output contract を item 形式に統一** — `use_judge`（boolean）と `format`（string）フィールドを必須化し、`OutputContractLabelPath`（label:path 形式）を廃止
 - ランタイム環境ディレクトリを `.runtime` から `.takt/.runtime` に移動
 - スーパーバイザーの要件充足検証を強化: 要件を個別に抽出し、コード（file:line）に対して1件ずつ検証する方式に変更 — 「おおむね完了」は APPROVE の根拠にならない
@@ -740,17 +740,17 @@
 ### Internal
 
 - `review-summary` 出力契約を削除（`supervisor-validation` に統合）
-- 全ビルトインピース、e2e フィクスチャ、テストを output contract の新形式に更新
+- 全ビルトインworkflow、e2e フィクスチャ、テストを output contract の新形式に更新
 
 ## [0.16.0] - 2026-02-15
 
 ### Added
 
-- **プロバイダー別パーミッションプロファイル（`provider_profiles`）**: グローバル設定（`~/.takt/config.yaml`）およびプロジェクト設定（`.takt/config.yaml`）でプロバイダーごとのデフォルトパーミッションモードとムーブメント単位のオーバーライドを定義可能に — 5段階の優先順位解決（project override → global override → project default → global default → `required_permission_mode` 下限補正）
+- **プロバイダー別パーミッションプロファイル（`provider_profiles`）**: グローバル設定（`~/.takt/config.yaml`）およびプロジェクト設定（`.takt/config.yaml`）でプロバイダーごとのデフォルトパーミッションモードとstep単位のオーバーライドを定義可能に — 5段階の優先順位解決（project override → global override → project default → global default → `required_permission_mode` 下限補正）
 
 ### Changed
 
-- **BREAKING: `permission_mode` → `required_permission_mode`**: ムーブメントの `permission_mode` フィールドを `required_permission_mode` にリネーム — 下限（フロア）として機能し、実際のパーミッションモードは `provider_profiles` で解決される設計に変更。旧 `permission_mode` は `z.never()` で拒否されるため後方互換性なし
+- **BREAKING: `permission_mode` → `required_permission_mode`**: stepの `permission_mode` フィールドを `required_permission_mode` にリネーム — 下限（フロア）として機能し、実際のパーミッションモードは `provider_profiles` で解決される設計に変更。旧 `permission_mode` は `z.never()` で拒否されるため後方互換性なし
 - ビルトイン `config.yaml` テンプレートを全面リライト: コメント整理、`provider_profiles` の説明と使用例を追加、OpenCode 関連設定の追加
 
 ### Internal
@@ -762,22 +762,22 @@
 
 ### Added
 
-- **ランタイム環境プリセット**: `piece_config.runtime.prepare` およびグローバル設定の `runtime.prepare` で、ピース実行前に環境準備スクリプトを自動実行可能に — ビルトインプリセット（`gradle`, `node`）で依存解決・キャッシュ設定を `.runtime/` ディレクトリに隔離
-- **ループモニターの judge インストラクション**: `loop_monitors` の judge 設定で `instruction_template` フィールドをサポート — ループ判定の指示をインストラクションファセットとして外部化し、ビルトインピース（expert, expert-cqrs）に適用
+- **ランタイム環境プリセット**: `workflow_config.runtime.prepare` およびグローバル設定の `runtime.prepare` で、workflow実行前に環境準備スクリプトを自動実行可能に — ビルトインプリセット（`gradle`, `node`）で依存解決・キャッシュ設定を `.runtime/` ディレクトリに隔離
+- **ループモニターの judge インストラクション**: `loop_monitors` の judge 設定で `instruction` フィールドをサポート — ループ判定の指示をインストラクションファセットとして外部化し、ビルトインworkflow（expert, expert-cqrs）に適用
 
 ### Internal
 
-- ランタイム環境関連のテスト追加（runtime-environment, globalConfig-defaults, models, provider-options-piece-parser）
+- ランタイム環境関連のテスト追加（runtime-environment, globalConfig-defaults, models, provider-options-workflow-parser）
 - provider e2e テスト追加（runtime-config-provider）
 
 ## [0.14.0] - 2026-02-14
 
 ### Added
 
-- **`takt list` インストラクトモード (#267)**: 既存ブランチに対して追加指示を行えるインストラクトモードを追加 — 会話ループで要件を詳細化してからピース実行が可能に
+- **`takt list` インストラクトモード (#267)**: 既存ブランチに対して追加指示を行えるインストラクトモードを追加 — 会話ループで要件を詳細化してからworkflow実行が可能に
 - **`takt list` 完了タスクアクション (#271)**: 完了タスクに対する diff 表示・ブランチ操作（マージ、削除）を追加
 - **Claude サンドボックス設定**: `provider_options.claude.sandbox` でサンドボックスの除外コマンド（`excluded_commands`）やサンドボックス無効化（`allow_unsandboxed_commands`）を設定可能に
-- **`provider_options` のグローバル/プロジェクト設定**: `provider_options` を `~/.takt/config.yaml`（グローバル）および `.takt/config.yaml`（プロジェクト）で設定可能に — ピースレベル設定の最低優先フォールバックとして機能
+- **`provider_options` のグローバル/プロジェクト設定**: `provider_options` を `~/.takt/config.yaml`（グローバル）および `.takt/config.yaml`（プロジェクト）で設定可能に — workflowレベル設定の最低優先フォールバックとして機能
 
 ### Changed
 
@@ -796,7 +796,7 @@
 - タスク管理の大規模リファクタリング: `TaskRunner` の責務を `TaskLifecycleService`、`TaskDeletionService`、`TaskQueryService` に分離
 - `taskActions.ts` を機能別に分割: `taskBranchLifecycleActions.ts`、`taskDiffActions.ts`、`taskInstructionActions.ts`、`taskDeleteActions.ts`
 - `postExecution.ts`、`taskResultHandler.ts`、`instructMode.ts`、`taskActionTarget.ts` を新規追加
-- ピース選択ロジックを `pieceSelection/index.ts` に集約（`selectAndExecute.ts` から抽出）
+- workflow選択ロジックを `workflowSelection/index.ts` に集約（`selectAndExecute.ts` から抽出）
 - テスト追加: instructMode, listNonInteractive-completedActions, listTasksInteractiveStatusActions, option-resolution-order, taskInstructionActions, selectAndExecute-autoPr 等を新規・拡充
 - E2E テストに Claude Code サンドボックス対応オプション（`dangerouslyDisableSandbox`）を追加
 - `OPENCODE_CONFIG_CONTENT` を `.gitignore` に追加
@@ -805,11 +805,11 @@
 
 ### Added
 
-- **Team Leader ムーブメント**: ムーブメント内でチームリーダーエージェントがタスクを動的にサブタスク（Part）へ分解し、複数のパートエージェントを並列実行する新しいムーブメントタイプ — `team_leader` 設定（persona, maxParts, timeoutMs, partPersona, partEdit, partPermissionMode）をサポート (#244)
+- **Team Leader step**: step内でチームリーダーエージェントがタスクを動的にサブタスク（Part）へ分解し、複数のパートエージェントを並列実行する新しいstepタイプ — `team_leader` 設定（persona, maxParts, timeoutMs, partPersona, partEdit, partPermissionMode）をサポート (#244)
 - **構造化出力（Structured Output）**: エージェント呼び出しに JSON Schema ベースの構造化出力を導入 — タスク分解（decomposition）、ルール評価（evaluation）、ステータス判定（judgment）の3つのスキーマを `builtins/schemas/` に追加。Claude / Codex 両プロバイダーで対応 (#257)
-- **`provider_options` ピースレベル設定**: ピース全体（`piece_config.provider_options`）および個別ムーブメントにプロバイダー固有オプション（`codex.network_access`、`opencode.network_access`）を設定可能に — 全ビルトインピースに Codex/OpenCode のネットワークアクセスを有効化
-- **`backend` ビルトインピース**: バックエンド開発特化のピースを新規追加 — バックエンド、セキュリティ、QA の並列専門家レビュー対応
-- **`backend-cqrs` ビルトインピース**: CQRS+ES 特化のバックエンド開発ピースを新規追加 — CQRS+ES、セキュリティ、QA の並列専門家レビュー対応
+- **`provider_options` workflowレベル設定**: workflow全体（`workflow_config.provider_options`）および個別stepにプロバイダー固有オプション（`codex.network_access`、`opencode.network_access`）を設定可能に — 全ビルトインworkflowに Codex/OpenCode のネットワークアクセスを有効化
+- **`backend` ビルトインworkflow**: バックエンド開発特化のworkflowを新規追加 — バックエンド、セキュリティ、QA の並列専門家レビュー対応
+- **`backend-cqrs` ビルトインworkflow**: CQRS+ES 特化のバックエンド開発workflowを新規追加 — CQRS+ES、セキュリティ、QA の並列専門家レビュー対応
 - **AbortSignal によるパートタイムアウト**: Team Leader のパート実行にタイムアウト制御と親シグナル連動の AbortSignal を追加
 - **エージェントユースケース層**: `agent-usecases.ts` にエージェント呼び出しのユースケース（`decomposeTask`, `executeAgent`, `evaluateRules`）を集約し、構造化出力の注入を一元管理
 
@@ -838,7 +838,7 @@
 - AbortSignal のユニットテスト追加（abort-signal, claude-executor-abort-signal, claude-provider-abort-signal）
 - Report Phase リトライのユニットテスト追加（report-phase-retry）
 - パブリック API エクスポートのユニットテスト追加（public-api-exports）
-- provider_options 関連のテスト追加（provider-options-piece-parser, models, opencode-types）
+- provider_options 関連のテスト追加（provider-options-workflow-parser, models, opencode-types）
 - E2E テストの大幅拡充: cycle-detection, model-override, multi-step-sequential, pipeline-local-repo, report-file-output, run-sigint-graceful, session-log, structured-output, task-status-persistence
 - E2E テストヘルパーのリファクタリング（共通 setup 関数の抽出）
 - `judgment/` ディレクトリ（JudgmentDetector, FallbackStrategy）を削除
@@ -861,21 +861,21 @@
 ### Added
 
 - **OpenCode プロバイダー**: 第3のプロバイダーとして OpenCode をネイティブサポート — `@opencode-ai/sdk/v2` による SDK 統合、権限マッピング（readonly/edit/full → reject/once/always）、SSE ストリーム処理、リトライ機構（最大3回）、10分タイムアウトによるハング検出 (#236, #238)
-- **Arpeggio ムーブメント**: データ駆動バッチ処理の新ムーブメントタイプ — CSV データソースからバッチ分割、テンプレート展開（`{line:N}`, `{col:N:name}`, `{batch_index}`）、並行 LLM 呼び出し（Semaphore 制御）、concat/custom マージ戦略をサポート (#200)
-- **`frontend` ビルトインピース**: フロントエンド開発特化のピースを新規追加 — React/Next.js 向けの knowledge 注入、coding/testing ポリシー適用、並列アーキテクチャレビュー対応
-- **Slack Webhook 通知**: ピース実行完了時に Slack へ自動通知 — `TAKT_NOTIFY_WEBHOOK` 環境変数で設定、10秒タイムアウト、失敗時も他処理をブロックしない (#234)
+- **Arpeggio step**: データ駆動バッチ処理の新stepタイプ — CSV データソースからバッチ分割、テンプレート展開（`{line:N}`, `{col:N:name}`, `{batch_index}`）、並行 LLM 呼び出し（Semaphore 制御）、concat/custom マージ戦略をサポート (#200)
+- **`frontend` ビルトインworkflow**: フロントエンド開発特化のworkflowを新規追加 — React/Next.js 向けの knowledge 注入、coding/testing ポリシー適用、並列アーキテクチャレビュー対応
+- **Slack Webhook 通知**: workflow実行完了時に Slack へ自動通知 — `TAKT_NOTIFY_WEBHOOK` 環境変数で設定、10秒タイムアウト、失敗時も他処理をブロックしない (#234)
 - **セッション選択 UI**: インタラクティブモード開始時に Claude Code の過去セッションから再開可能なセッションを選択可能に — 最新10セッションの一覧表示、初期入力・最終応答プレビュー付き (#180)
 - **プロバイダーイベントログ**: Claude/Codex/OpenCode の実行中イベントを NDJSON 形式でファイル出力 — `.takt/logs/{sessionId}-provider-events.jsonl` に記録、長大テキストの自動圧縮 (#236)
-- **プロバイダー・モデル名の出力表示**: 各ムーブメント実行時に使用中のプロバイダーとモデル名をコンソールに表示
+- **プロバイダー・モデル名の出力表示**: 各step実行時に使用中のプロバイダーとモデル名をコンソールに表示
 
 ### Changed
 
 - **`takt add` の刷新**: Issue 選択時にタスクへの自動追加、インタラクティブモードの廃止、Issue 作成時のタスク積み込み確認 (#193, #194)
-- **`max_iteration` → `max_movement` 統一**: イテレーション上限の用語を統一し、無限実行指定として `ostinato` を追加 (#212)
+- **`max_iteration` → `max_steps` 統一**: イテレーション上限の用語を統一し、無限実行指定として `ostinato` を追加 (#212)
 - **`previous_response` 注入仕様の改善**: 長さ制御と Source Path 常時注入を実装 (#207)
 - **タスク管理の改善**: `.takt/tasks/` を長文タスク仕様の置き場所として再定義、`completeTask()` で completed レコードを `tasks.yaml` から削除 (#201, #204)
 - **レビュー出力の改善**: レビュー出力を最新化し、過去レポートは履歴ログへ分離 (#209)
-- **ビルトインピース簡素化**: 全ビルトインピースのトップレベル宣言をさらに整理
+- **ビルトインworkflow簡素化**: 全ビルトインworkflowのトップレベル宣言をさらに整理
 
 ### Fixed
 
@@ -889,18 +889,18 @@
 
 - OpenCode プロバイダーの包括的なテスト追加（client-cleanup, config, provider, stream-handler, types）
 - Arpeggio の包括的なテスト追加（csv, data-source-factory, merge, schema, template, engine-arpeggio）
-- E2E テストの大幅な拡充: cli-catalog, cli-clear, cli-config, cli-export-cc, cli-help, cli-prompt, cli-reset-categories, cli-switch, error-handling, piece-error-handling, provider-error, quiet-mode, run-multiple-tasks, task-content-file (#192, #198)
+- E2E テストの大幅な拡充: cli-catalog, cli-clear, cli-config, cli-export-cc, cli-help, cli-prompt, cli-reset-categories, cli-switch, error-handling, workflow-error-handling, provider-error, quiet-mode, run-multiple-tasks, task-content-file (#192, #198)
 - `providerEventLogger.ts`, `providerModel.ts`, `slackWebhook.ts`, `session-reader.ts`, `sessionSelector.ts`, `provider-resolution.ts`, `run-paths.ts` の新規追加
 - `ArpeggioRunner.ts` の新規追加（データ駆動バッチ処理エンジン）
 - AI Judge をプロバイダーシステム経由に変更（Codex/OpenCode 対応）
-- テスト追加・拡充: report-phase-blocked, phase-runner-report-history, judgment-fallback, pieceExecution-session-loading, globalConfig-defaults, session-reader, sessionSelector, slackWebhook, providerEventLogger, provider-model, interactive, run-paths, engine-test-helpers
+- テスト追加・拡充: report-phase-blocked, phase-runner-report-history, judgment-fallback, workflowExecution-session-loading, globalConfig-defaults, session-reader, sessionSelector, slackWebhook, providerEventLogger, provider-model, interactive, run-paths, engine-test-helpers
 
 ## [0.11.1] - 2026-02-10
 
 ### Fixed
 
 - AI Judge がプロバイダーシステムを経由するよう修正 — `callAiJudge` を Claude 固定実装からプロバイダー経由（`runAgent`）に変更し、Codex プロバイダーでも AI 判定が正しく動作するように
-- 実行指示が長大化する問題を緩和 — implement/fix 系ムーブメントで `pass_previous_response: false` を設定し、Report Directory 内のレポートを一次情報として優先する指示に変更（en/ja 両対応）
+- 実行指示が長大化する問題を緩和 — implement/fix 系stepで `pass_previous_response: false` を設定し、Report Directory 内のレポートを一次情報として優先する指示に変更（en/ja 両対応）
 
 ### Internal
 
@@ -910,7 +910,7 @@
 
 ### Added
 
-- **`e2e-test` ビルトインピース**: E2Eテスト特化のピースを新規追加 — E2E分析 → E2E実装 → レビュー → 修正のフロー（VitestベースのE2Eテスト向け）
+- **`e2e-test` ビルトインworkflow**: E2Eテスト特化のworkflowを新規追加 — E2E分析 → E2E実装 → レビュー → 修正のフロー（VitestベースのE2Eテスト向け）
 - **`error` ステータス**: プロバイダーエラーを `blocked` から分離し、エラー状態を明確に区別可能に。Codex にリトライ機構を追加
 - **タスク YAML 一元管理**: タスクファイルの管理を `tasks.yaml` に統合。`TaskRecordSchema` による構造化されたタスクライフサイクル管理（pending/running/completed/failed）
 - **タスク指示書ドキュメント**: タスク指示書の構造と目的を明文化 (#174)
@@ -919,8 +919,8 @@
 
 ### Changed
 
-- **ビルトインピース簡素化**: 全ビルトインピースからトップレベルの `policies`/`personas`/`knowledge`/`instructions`/`report_formats` 宣言を削除し、名前ベースの暗黙的解決に移行。ピース YAML がよりシンプルに
-- **ピースカテゴリ仕様更新**: カテゴリの設定・表示ロジックを改善。グローバル設定でのカテゴリ管理を強化 (#184)
+- **ビルトインworkflow簡素化**: 全ビルトインworkflowからトップレベルの `policies`/`personas`/`knowledge`/`instructions`/`report_formats` 宣言を削除し、名前ベースの暗黙的解決に移行。workflow YAML がよりシンプルに
+- **workflowカテゴリ仕様更新**: カテゴリの設定・表示ロジックを改善。グローバル設定でのカテゴリ管理を強化 (#184)
 - **`takt list` の優先度・参照改善**: ブランチ解決のパフォーマンス最適化。ベースコミットキャッシュの導入 (#186, #195, #196)
 - **Ctrl+C シグナルハンドリング改善**: 並列実行中の SIGINT 処理を安定化
 - **ループ防止ポリシー強化**: エージェントの無限ループを防止するためのポリシーを強化
@@ -933,29 +933,29 @@
 ### Internal
 
 - タスク管理コードの大規模リファクタリング: `parser.ts` を廃止し `store.ts`/`mapper.ts`/`schema.ts`/`naming.ts` に分離。`branchGitResolver.ts`/`branchBaseCandidateResolver.ts`/`branchBaseRefCache.ts`/`branchEntryPointResolver.ts` でブランチ解決を細分化
-- テストの大幅な拡充・リファクタリング: aggregate-evaluator, blocked-handler, branchGitResolver-performance, branchList-regression, buildListItems-performance, error-utils, escape, facet-resolution, getFilesChanged, global-pieceCategories, instruction-context, instruction-helpers, judgment-strategies, listTasksInteractivePendingLabel, loop-detector, naming, reportDir, resetCategories, rule-evaluator, rule-utils, slug, state-manager, switchPiece, task-schema, text, transitions, watchTasks 等を新規追加
+- テストの大幅な拡充・リファクタリング: aggregate-evaluator, blocked-handler, branchGitResolver-performance, branchList-regression, buildListItems-performance, error-utils, escape, facet-resolution, getFilesChanged, global-categories, instruction-context, instruction-helpers, judgment-strategies, listTasksInteractivePendingLabel, loop-detector, naming, reportDir, resetCategories, rule-evaluator, rule-utils, slug, state-manager, workflow-switching, task-schema, text, transitions, watchTasks 等を新規追加
 - Codex クライアントのリファクタリング
-- ピースパーサーのファセット解決ロジック改善
+- workflowパーサーのファセット解決ロジック改善
 
 ## [0.10.0] - 2026-02-09
 
 ### Added
 
-- **`structural-reform` ビルトインピース**: プロジェクト全体のレビューと構造改革 — `loop_monitors` を活用した反復的なコードベース再構成（段階的なファイル分割）ワークフロー
-- **`unit-test` ビルトインピース**: ユニットテスト特化のピース — テスト分析 → テスト実装 → レビュー → 修正のフロー。`loop_monitors` によるサイクル制御付き
+- **`structural-reform` ビルトインworkflow**: プロジェクト全体のレビューと構造改革 — `loop_monitors` を活用した反復的なコードベース再構成（段階的なファイル分割）ワークフロー
+- **`unit-test` ビルトインworkflow**: ユニットテスト特化のworkflow — テスト分析 → テスト実装 → レビュー → 修正のフロー。`loop_monitors` によるサイクル制御付き
 - **`test-planner` ペルソナ**: コードベースを解析し、包括的なテスト戦略を立案する専用ペルソナ
-- **インタラクティブモードのバリアント**: ピース選択後に4種のモードから選択可能 — `assistant`（デフォルト: AI 支援による要件整理）、`persona`（最初のムーブメントのペルソナとの会話）、`quiet`（質問なしで指示書を生成）、`passthrough`（ユーザー入力をそのまま使用）
-- **`persona_providers` 設定**: ペルソナごとのプロバイダーオーバーライド（例: `{ coder: 'codex' }`）— ハイブリッドピースを作成せずに特定ペルソナを別プロバイダーへルーティング可能
+- **インタラクティブモードのバリアント**: workflow選択後に4種のモードから選択可能 — `assistant`（デフォルト: AI 支援による要件整理）、`persona`（最初のstepのペルソナとの会話）、`quiet`（質問なしで指示書を生成）、`passthrough`（ユーザー入力をそのまま使用）
+- **`persona_providers` 設定**: ペルソナごとのプロバイダーオーバーライド（例: `{ coder: 'codex' }`）— ハイブリッドworkflowを作成せずに特定ペルソナを別プロバイダーへルーティング可能
 - **`task_poll_interval_ms` 設定**: `takt run` が実行中に新規タスクを検出するポーリング間隔を設定可能（デフォルト: 500ms、範囲: 100〜5000ms）
-- **`interactive_mode` ピースフィールド**: ピースレベルのデフォルトインタラクティブモードを上書き可能（例: AI 計画が不要なピースに `passthrough` を設定）
+- **`interactive_mode` workflowフィールド**: workflowレベルのデフォルトインタラクティブモードを上書き可能（例: AI 計画が不要なworkflowに `passthrough` を設定）
 - **タスクレベル出力プレフィックス**: `takt run` の並列実行時、全出力行に色付きの `[taskName]` プレフィックスを付与し、並行タスク間の行途中混在を防止
-- **レビューポリシーファセット**: ピース間でレビュー基準を統一する共通レビューポリシー（`builtins/{lang}/policies/review.md`）
+- **レビューポリシーファセット**: workflow間でレビュー基準を統一する共通レビューポリシー（`builtins/{lang}/policies/review.md`）
 
 ### Changed
 
-- **BREAKING:** ハイブリッド Codex ピース（`*-hybrid-codex`）を全廃 — `persona_providers` 設定で同等の機能を実現できるため、ピースファイルの重複が不要に
+- **BREAKING:** ハイブリッド Codex workflow（`*-hybrid-codex`）を全廃 — `persona_providers` 設定で同等の機能を実現できるため、workflowファイルの重複が不要に
 - `tools/generate-hybrid-codex.mjs` を削除（`persona_providers` により不要）
-- 並列実行時の出力改善: ムーブメントレベルプレフィックスに並行実行時のタスクコンテキストとイテレーション情報を追加
+- 並列実行時の出力改善: stepレベルプレフィックスに並行実行時のタスクコンテキストとイテレーション情報を追加
 - Codex クライアントがストリームのハングを検出するように（10分間アイドルタイムアウト）。タイムアウト vs 外部中断をエラーメッセージで区別
 - 並列タスク実行（`takt run`）がタスク完了間のみではなく実行中にも新規追加タスクをポーリングするよう変更
 - 並列タスク実行でタスクごとの時間制限を廃止（従来はタイムアウトあり）
@@ -970,11 +970,11 @@
 
 ### Internal
 
-- 新規テスト追加: engine-persona-providers, interactive-mode（532行）, task-prefix-writer, workerPool 拡充, pieceResolver 拡充, lineEditor 拡充, parallel-logger 拡充, globalConfig-defaults 拡充, pieceExecution-debug-prompts 拡充, it-piece-loader 拡充, runAllTasks-concurrency 拡充, engine-parallel
+- 新規テスト追加: engine-persona-providers, interactive-mode（532行）, task-prefix-writer, workerPool 拡充, workflowResolver 拡充, lineEditor 拡充, parallel-logger 拡充, globalConfig-defaults 拡充, workflowExecution-debug-prompts 拡充, it-workflow-loader 拡充, runAllTasks-concurrency 拡充, engine-parallel
 - 並列出力管理のための `TaskPrefixWriter` を抽出
 - `modeSelection.ts`, `passthroughMode.ts`, `personaMode.ts`, `quietMode.ts` をインタラクティブモジュールから抽出
 - `InteractiveMode` 型モデルを追加（`src/core/models/interactive-mode.ts`）
-- `PieceEngine` が構築時に `taskPrefix`/`taskColorIndex` ペアの整合性を検証するよう変更
+- `WorkflowEngine` が構築時に `taskPrefix`/`taskColorIndex` ペアの整合性を検証するよう変更
 - 実装メモを追加（`docs/implements/retry-and-session.ja.md`）
 
 ## [0.9.0] - 2026-02-08
@@ -982,11 +982,11 @@
 ### Added
 
 - **`takt catalog` コマンド**: 各レイヤー（builtin/user/project）にわたって利用可能なファセット（personas, policies, knowledge, instructions, output-contracts）を一覧表示
-- **`compound-eye` ビルトインピース**: マルチモデルレビュー — 同一の指示を Claude と Codex に同時送信し、両者の回答を統合
+- **`compound-eye` ビルトインworkflow**: マルチモデルレビュー — 同一の指示を Claude と Codex に同時送信し、両者の回答を統合
 - **並列タスク実行**: `takt run` がワーカープールによる並行タスク実行をサポート（`concurrency` 設定で制御、デフォルト: 1）
 - **インタラクティブモードのリッチなラインエディタ**: Shift+Enter で複数行入力、カーソル移動（矢印キー、Home/End）、Option+Arrow で単語単位移動、Ctrl+A/E/K/U/W 編集、ブラケットペーストモード対応
-- **インタラクティブモードでのムーブメントプレビュー**: ピースのムーブメント構造（ペルソナ＋インストラクション）を AI プランナーに注入してタスク分析を改善（`interactive_preview_movements` 設定、デフォルト: 3）
-- **MCP サーバー設定**: ムーブメントごとの MCP（Model Context Protocol）サーバー設定。stdio/SSE/HTTP トランスポートをサポート
+- **インタラクティブモードでのstepプレビュー**: workflowのstep構造（ペルソナ＋インストラクション）を AI プランナーに注入してタスク分析を改善（`interactive_preview_steps` 設定、デフォルト: 3）
+- **MCP サーバー設定**: stepごとの MCP（Model Context Protocol）サーバー設定。stdio/SSE/HTTP トランスポートをサポート
 - **ファセット単位の eject**: `takt eject persona coder` — ファセットをタイプと名前で個別にエジェクトしてカスタマイズ可能に
 - **3層ファセット解決**: ペルソナ、ポリシー、その他のファセットを project → user → builtin の順で解決（名前ベースの参照をサポート）
 - **`pr-commenter` ペルソナ**: レビュー所見を GitHub PR コメントとして投稿する専用ペルソナ
@@ -996,21 +996,21 @@
 
 ### Changed
 
-- プランナーとアーキテクト・プランナーを統合: 設計知識をナレッジファセットに抽出・統合。default/coding ピースからアーキテクトムーブメントを削除（plan → implement への直接遷移に変更）
+- プランナーとアーキテクト・プランナーを統合: 設計知識をナレッジファセットに抽出・統合。default/coding workflowからアーキテクトstepを削除（plan → implement への直接遷移に変更）
 - インタラクティブモードを readline からローモードのラインエディタに置き換え（カーソル管理、行間移動、Kitty キーボードプロトコル）
 - インタラクティブモードの `save_task` を `takt add` の worktree セットアップフローに統合
 - caffeinate に `-d` フラグを追加してディスプレイスリープ中の App Nap によるプロセスフリーズを防止
 - Issue 参照がインタラクティブモードをスキップせず、最初の入力としてインタラクティブモードを経由するよう変更（従来は直接実行）
 - SDK 更新: `@anthropic-ai/claude-agent-sdk` v0.2.34 → v0.2.37
-- インタラクティブセッションのスコアリングプロンプトにピース構造情報を追加
+- インタラクティブセッションのスコアリングプロンプトにworkflow構造情報を追加
 
 ### Internal
 
-- ファセット解決ロジックのための `resource-resolver.ts` を抽出（`pieceParser.ts` から分離）
+- ファセット解決ロジックのための `resource-resolver.ts` を抽出（`workflowParser.ts` から分離）
 - `parallelExecution.ts`（ワーカープール）、`resolveTask.ts`（タスク解決）、`sigintHandler.ts`（共通 SIGINT ハンドラ）を抽出
 - `session-key.ts` によるセッションキー生成の統一
 - 新規 `lineEditor.ts`（ローモードターミナル入力、エスケープシーケンス解析、カーソル管理）
-- 大幅なテスト追加: catalog, facet-resolution, eject-facet, lineEditor, formatMovementPreviews, models, debug, strip-ansi, workerPool, runAllTasks-concurrency, session-key, interactive（大規模拡充）, cli-routing-issue-resolve, parallel-logger, engine-parallel-failure, StreamDisplay, getCurrentBranch, globalConfig-defaults, pieceExecution-debug-prompts, selectAndExecute-autoPr, it-notification-sound, it-piece-loader, permission-mode（拡充）
+- 大幅なテスト追加: catalog, facet-resolution, eject-facet, lineEditor, formatStepPreviews, models, debug, strip-ansi, workerPool, runAllTasks-concurrency, session-key, interactive（大規模拡充）, cli-routing-issue-resolve, parallel-logger, engine-parallel-failure, StreamDisplay, getCurrentBranch, globalConfig-defaults, workflowExecution-debug-prompts, selectAndExecute-autoPr, it-notification-sound, it-workflow-loader, permission-mode（拡充）
 
 ## [0.8.0] - 2026-02-08
 
@@ -1020,26 +1020,26 @@ alpha.1 の内容を正式リリース。機能変更なし。
 
 ### Added
 
-- **Faceted Prompting アーキテクチャ**: プロンプト構成要素を独立ファイルとして管理し、ピース間で自由に組み合わせ可能に
+- **Faceted Prompting アーキテクチャ**: プロンプト構成要素を独立ファイルとして管理し、workflow間で自由に組み合わせ可能に
   - `personas/` — エージェントの役割・専門性を定義するペルソナプロンプト
   - `policies/` — コーディング規約・品質基準・禁止事項を定義するポリシー
   - `knowledge/` — ドメイン知識・アーキテクチャ情報を定義するナレッジ
-  - `instructions/` — ムーブメント固有の手順を定義するインストラクション
+  - `instructions/` — step固有の手順を定義するインストラクション
   - `output-contracts/` — レポート出力フォーマットを定義するアウトプットコントラクト
-  - ピースYAMLのセクションマップ（`personas:`, `policies:`, `knowledge:`）でキーとファイルパスを対応付け、ムーブメントからキーで参照
+  - workflowYAMLのセクションマップ（`personas:`, `policies:`, `knowledge:`）でキーとファイルパスを対応付け、stepからキーで参照
 - **Output Contracts と Quality Gates**: レポート出力の構造化定義と品質基準の AI ディレクティブ
   - `output_contracts` フィールドでレポート定義（`report` フィールドを置き換え）
-  - `quality_gates` フィールドでムーブメント完了要件の AI ディレクティブを指定
-- **Knowledge システム**: ドメイン知識をペルソナから分離し、ピースレベルで管理・注入
-  - ピースYAMLの `knowledge:` セクションマップでナレッジファイルを定義
-  - ムーブメントの `knowledge:` フィールドでキー参照して注入
+  - `quality_gates` フィールドでstep完了要件の AI ディレクティブを指定
+- **Knowledge システム**: ドメイン知識をペルソナから分離し、workflowレベルで管理・注入
+  - workflowYAMLの `knowledge:` セクションマップでナレッジファイルを定義
+  - stepの `knowledge:` フィールドでキー参照して注入
 - **Faceted Prompting ドキュメント**: 設計思想と実践ガイドを `docs/faceted-prompting.md`（en/ja）に追加
-- **Hybrid Codex ピース生成ツール**: `tools/generate-hybrid-codex.mjs` で Claude ピースから Codex バリアントを自動生成
+- **Hybrid Codex workflow生成ツール**: `tools/generate-hybrid-codex.mjs` で Claude workflowから Codex バリアントを自動生成
 - 失敗タスクの再投入機能: `takt list` から失敗タスクブランチを選択して再実行可能に (#110)
 - ブランチ名生成戦略を設定可能に（`branch_name_strategy` 設定）
 - auto-PR 機能の追加と PR 作成ロジックの共通化 (#98)
-- Issue 参照時にもピース選択を実施 (#97)
-- ステップ（ムーブメント）にいてのスリープ機能
+- Issue 参照時にもworkflow選択を実施 (#97)
+- ステップ（step）にいてのスリープ機能
 
 ### Changed
 
@@ -1047,15 +1047,15 @@ alpha.1 の内容を正式リリース。機能変更なし。
   - `resources/global/{lang}/` → `builtins/{lang}/`
   - package.json の `files` フィールドを `resources/` → `builtins/` に変更
 - **BREAKING:** `agent` フィールドを `persona` にリネーム
-  - ピースYAMLの `agent:` → `persona:`、`agent_name:` → `persona_name:`
+  - workflowYAMLの `agent:` → `persona:`、`agent_name:` → `persona_name:`
   - 内部型: `agentPath` → `personaPath`、`agentDisplayName` → `personaDisplayName`、`agentSessions` → `personaSessions`
   - ディレクトリ: `agents/` → `personas/`（グローバル・プロジェクト・ビルトイン全て）
 - **BREAKING:** `report` フィールドを `output_contracts` に変更
   - 従来の `report: 00-plan.md` / `report: [{Scope: ...}]` / `report: {name, order, format}` 形式を `output_contracts: {report: [...]}` 形式に統一
 - **BREAKING:** `stances` → `policies`、`report_formats` → `output_contracts` にリネーム
-- 全ビルトインピースを Faceted Prompting アーキテクチャに移行（旧エージェントプロンプト内のドメイン知識をナレッジに分離）
+- 全ビルトインworkflowを Faceted Prompting アーキテクチャに移行（旧エージェントプロンプト内のドメイン知識をナレッジに分離）
 - SDK 更新: `@anthropic-ai/claude-agent-sdk` v0.2.19 → v0.2.34、`@openai/codex-sdk` v0.91.0 → v0.98.0
-- ムーブメントに `policy` / `knowledge` フィールドを追加（セクションマップのキーで参照）
+- stepに `policy` / `knowledge` フィールドを追加（セクションマップのキーで参照）
 - 対話モードのスコアリングにポリシーベースの評価を追加
 - README を刷新: agent → persona、セクションマップの説明追加、制御・管理の分類を明記
 - ビルトインスキル（SKILL.md）をFaceted Prompting対応に刷新
@@ -1070,7 +1070,7 @@ alpha.1 の内容を正式リリース。機能変更なし。
 
 - ビルトインリソースの大規模再構成: 旧 `agents/` ディレクトリ構造（`default/`, `expert/`, `expert-cqrs/`, `magi/`, `research/`, `templates/`）を廃止し、フラットな `personas/`, `policies/`, `knowledge/`, `instructions/`, `output-contracts/` 構造に移行
 - Faceted Prompting のスタイルガイドとテンプレートを追加（`builtins/ja/` に `PERSONA_STYLE_GUIDE.md`, `POLICY_STYLE_GUIDE.md`, `INSTRUCTION_STYLE_GUIDE.md`, `OUTPUT_CONTRACT_STYLE_GUIDE.md` 等）
-- `pieceParser.ts` にポリシー・ナレッジ・インストラクションの解決ロジックを追加
+- `workflowParser.ts` にポリシー・ナレッジ・インストラクションの解決ロジックを追加
 - テスト追加: knowledge, policy-persona, deploySkill, StreamDisplay, globalConfig-defaults, sleep, task, taskExecution, taskRetryActions, addTask, saveTaskFile, parallel-logger, summarize 拡充
 - `InstructionBuilder` にポリシー・ナレッジコンテンツの注入を追加
 - `taskRetryActions.ts` を追加（失敗タスクの再投入ロジック）
@@ -1082,7 +1082,7 @@ alpha.1 の内容を正式リリース。機能変更なし。
 
 ### Fixed
 
-- Ctrl+C がピース実行中に効かない問題を修正: SIGINT ハンドラで `interruptAllQueries()` を呼び出してアクティブな SDK クエリを停止するように修正
+- Ctrl+C がworkflow実行中に効かない問題を修正: SIGINT ハンドラで `interruptAllQueries()` を呼び出してアクティブな SDK クエリを停止するように修正
 - Ctrl+C 後に EPIPE クラッシュが発生する問題を修正: SDK が停止済みの子プロセスの stdin に書き込む際の EPIPE エラーを二重防御で抑制（`uncaughtException` ハンドラ + `Promise.resolve().catch()`）
 - セレクトメニューの `onKeypress` ハンドラで例外が発生した際にターミナルの raw mode がリークする問題を修正
 
@@ -1095,36 +1095,36 @@ alpha.1 の内容を正式リリース。機能変更なし。
 
 ### Added
 
-- Hybrid Codex ピース: 全主要ピース（default, minimal, expert, expert-cqrs, passthrough, review-fix-minimal, coding）の Codex バリアントを追加
+- Hybrid Codex workflow: 全主要workflow（default, minimal, expert, expert-cqrs, passthrough, review-fix-minimal, coding）の Codex バリアントを追加
   - coder エージェントを Codex プロバイダーで実行するハイブリッド構成
   - en/ja 両対応
-- `passthrough` ピース: タスクをそのまま coder に渡す最小構成ピース
-- `takt export-cc` コマンド: ビルトインピース・エージェントを Claude Code Skill としてデプロイ
+- `passthrough` workflow: タスクをそのまま coder に渡す最小構成workflow
+- `takt export-cc` コマンド: ビルトインworkflow・エージェントを Claude Code Skill としてデプロイ
 - `takt list` に delete アクション追加、non-interactive モード分離
 - AI 相談アクション: `takt add` / インタラクティブモードで GitHub Issue 作成・タスクファイル保存が可能に
 - サイクル検出: ai_review ↔ ai_fix 間の無限ループを検出する `CycleDetector` を追加 (#102)
-  - 修正不要時の裁定ステップ（`ai_no_fix`）を default ピースに追加
+  - 修正不要時の裁定ステップ（`ai_no_fix`）を default workflowに追加
 - CI: skipped な TAKT Action ランを週次で自動削除するワークフローを追加
-- ピースカテゴリに Hybrid Codex サブカテゴリを追加（en/ja）
+- workflowカテゴリに Hybrid Codex サブカテゴリを追加（en/ja）
 
 ### Changed
 
-- カテゴリ設定を簡素化: `default-categories.yaml` を `piece-categories.yaml` に統合し、ユーザーディレクトリへの自動コピー方式に変更
-- ピース選択UIのサブカテゴリナビゲーションを修正（再帰的な階層表示が正しく動作するように）
+- カテゴリ設定を簡素化: `default-categories.yaml` を `workflow-categories.yaml` に統合し、ユーザーディレクトリへの自動コピー方式に変更
+- workflow選択UIのサブカテゴリナビゲーションを修正（再帰的な階層表示が正しく動作するように）
 - Claude Code Skill を Agent Team ベースに刷新
 - `console.log` を `info()` に統一（list コマンド）
 
 ### Fixed
 
-- Hybrid Codex ピースの description に含まれるコロンが YAML パースエラーを起こす問題を修正
-- サブカテゴリ選択時に `selectPieceFromCategoryTree` に不正な引数が渡される問題を修正
+- Hybrid Codex workflowの description に含まれるコロンが YAML パースエラーを起こす問題を修正
+- サブカテゴリ選択時に `selectWorkflowFromCategoryTree` に不正な引数が渡される問題を修正
 
 ### Internal
 
 - `list` コマンドのリファクタリング: `listNonInteractive.ts`, `taskDeleteActions.ts` を分離
-- `cycle-detector.ts` を追加、`PieceEngine` にサイクル検出を統合
-- ピースカテゴリローダーのリファクタリング（`pieceCategories.ts`, `pieceSelection/index.ts`）
-- テスト追加: cycle-detector, engine-loop-monitors, piece-selection, listNonInteractive, taskDeleteActions, createIssue, saveTaskFile
+- `cycle-detector.ts` を追加、`WorkflowEngine` にサイクル検出を統合
+- ワークフローカテゴリローダーのリファクタリング（`workflowCategories.ts`, `workflowSelection/index.ts`）
+- テスト追加: cycle-detector, engine-loop-monitors, workflow-selection, listNonInteractive, taskDeleteActions, createIssue, saveTaskFile
 
 ## [0.6.0] - 2026-02-05
 
@@ -1137,11 +1137,11 @@ RC1/RC2 の内容を正式リリース。機能変更なし。
 - ai_review ↔ ai_fix 間の無限ループを修正: ai_fix が「修正不要」と判断した場合に plan へ戻ってフルパイプラインが再起動する問題を解消
   - `ai_no_fix` 調停ステップを追加（architecture-reviewer が ai_review vs ai_fix の対立を判定）
   - ai_fix の「修正不要」ルートを `plan` → `ai_no_fix` に変更
-  - 対象ピース: default, expert, expert-cqrs（en/ja）
+  - 対象workflow: default, expert, expert-cqrs（en/ja）
 
 ### Changed
 
-- default ピースの並列レビュアーを security-review → qa-review に変更（TAKT 開発向けに最適化）
+- default workflowの並列レビュアーを security-review → qa-review に変更（TAKT 開発向けに最適化）
 - qa-reviewer エージェントを `expert/` から `default/` に移動し、テストカバレッジ重視の内容に書き直し
 - ai_review instruction にイテレーション認識を追加（初回は網羅的レビュー、2回目以降は修正確認を優先）
 
@@ -1155,11 +1155,11 @@ RC1/RC2 の内容を正式リリース。機能変更なし。
 
 ### Added
 
-- `coding` ビルトインピース: 設計→実装→並列レビュー→修正の軽量開発ピース（plan/supervise を省略した高速フィードバックループ）
+- `coding` ビルトインworkflow: 設計→実装→並列レビュー→修正の軽量開発workflow（plan/supervise を省略した高速フィードバックループ）
 - `conductor` エージェント: Phase 3 判定専用エージェント。レポートやレスポンスを読んで判定タグを出力する
-- Phase 3 判定のフォールバック戦略: AutoSelect → ReportBased → ResponseBased → AgentConsult の4段階フォールバックで判定精度を向上 (`src/core/piece/judgment/`)
+- Phase 3 判定のフォールバック戦略: AutoSelect → ReportBased → ResponseBased → AgentConsult の4段階フォールバックで判定精度を向上 (`src/core/workflow/judgment/`)
 - セッション状態管理: タスク実行結果（成功/エラー/中断）を保存し、次回インタラクティブモード起動時に前回の結果を表示 (#89)
-- TAKT メタ情報（ピース構造、進行状況）をエージェントに引き渡す仕組み
+- TAKT メタ情報（workflow構造、進行状況）をエージェントに引き渡す仕組み
 - `/play` コマンド: インタラクティブモードでタスクを即座に実行
 - E2Eテスト基盤: mock/provider 両対応のテストインフラ、10種のE2Eテストスペック、テストヘルパー（isolated-env, takt-runner, test-repo）
 - レビューエージェントに「論理的に到達不可能な防御コード」の検出ルールを追加
@@ -1170,15 +1170,15 @@ RC1/RC2 の内容を正式リリース。機能変更なし。
 - CLI ルーティングを `executeDefaultAction()` として関数化し、スラッシュコマンドのフォールバックから再利用可能に (#32)
 - `/` や `#` で始まる入力をコマンド/Issue 未検出時にタスク指示として受け入れるよう変更 (#32)
 - `isDirectTask()` を簡素化: Issue 参照のみ直接実行、それ以外はすべてインタラクティブモードへ
-- 全ビルトインピースから `pass_previous_response: true` を削除（デフォルト動作のため不要）
+- 全ビルトインworkflowから `pass_previous_response: true` を削除（デフォルト動作のため不要）
 
 ### Internal
 
 - E2Eテスト設定ファイル追加（vitest.config.e2e.ts, vitest.config.e2e.mock.ts, vitest.config.e2e.provider.ts）
 - `rule-utils.ts` に `getReportFiles()`, `hasOnlyOneBranch()`, `getAutoSelectedTag()` を追加
 - `StatusJudgmentBuilder` にレポートコンテンツ・レスポンスベースの判定指示生成を追加
-- `InstructionBuilder` にピースメタ情報（構造、反復回数）の注入を追加
-- テスト追加: judgment-detector, judgment-fallback, sessionState, pieceResolver, cli-slash-hash, e2e-helpers
+- `InstructionBuilder` にworkflowメタ情報（構造、反復回数）の注入を追加
+- テスト追加: judgment-detector, judgment-fallback, sessionState, workflowResolver, cli-slash-hash, e2e-helpers
 
 ## [0.5.1] - 2026-02-04
 
@@ -1193,39 +1193,38 @@ RC1/RC2 の内容を正式リリース。機能変更なし。
 ### Internal
 
 - テストのメモリリークとハング問題を解消
-  - `PieceEngine` と `TaskWatcher` にクリーンアップハンドラを追加
+  - `WorkflowEngine` と `TaskWatcher` にクリーンアップハンドラを追加
   - テストの安定性向上のため vitest をシングルスレッド実行に変更
 
 ## [0.5.0] - 2026-02-04
 
 ### Changed
 
-- **BREAKING:** コードベース全体で "workflow" から "piece" への用語移行を完了
-  - 全 CLI コマンド、設定ファイル、ドキュメントで "piece" 用語を使用
-  - `WorkflowEngine` → `PieceEngine`
-  - `workflow_categories` → `piece_categories`（設定ファイル）
-  - `builtin_workflows_enabled` → `builtin_pieces_enabled`
-  - `~/.takt/workflows/` → `~/.takt/pieces/`（ユーザーピースディレクトリ）
-  - `.takt/workflows/` → `.takt/pieces/`（プロジェクトピースディレクトリ）
-  - ワークフロー関連のファイル名・型をすべてピース相当に改名
+- **BREAKING:** コードベース全体で `workflow` / `step` 用語へ統一
+  - 全 CLI コマンド、設定ファイル、ドキュメントで `workflow` 用語を使用
+  - `workflow_categories` を設定ファイルで使用
+  - `enable_builtin_workflows` を設定ファイルで使用
+  - `~/.takt/workflows/` をユーザーワークフローディレクトリとして使用
+  - `.takt/workflows/` をプロジェクトワークフローディレクトリとして使用
+  - 旧実装名ベースのファイル名・型を `workflow` / `step` 系へ統一
   - 全ドキュメントを更新（README.md, CLAUDE.md, docs/*）
 
 ### Internal
 
 - ディレクトリ構造を全面リファクタリング:
-  - `src/core/workflow/` → `src/core/piece/`
-  - `src/features/workflowSelection/` → `src/features/pieceSelection/`
+  - `src/core/workflow/` をコア実装の配置先に統一
+  - `src/features/workflowSelection/` を選択機能の配置先に統一
 - ファイル名変更:
-  - `workflow-types.ts` → `piece-types.ts`
-  - `workflowExecution.ts` → `pieceExecution.ts`
-  - `workflowLoader.ts` → `pieceLoader.ts`
-  - `workflowParser.ts` → `pieceParser.ts`
-  - `workflowResolver.ts` → `pieceResolver.ts`
-  - `workflowCategories.ts` → `pieceCategories.ts`
-  - `switchWorkflow.ts` → `switchPiece.ts`
+  - `workflow-types.ts` へ統一
+  - `workflowExecution.ts` へ統一
+  - `workflowLoader.ts` へ統一
+  - `workflowParser.ts` へ統一
+  - `workflowResolver.ts` へ統一
+  - `workflowCategories.ts` へ統一
+  - `switchWorkflow.ts` へ統一
 - 全テストファイルを新用語に対応（194ファイル変更、約3,400行の追加・削除）
 - リソースディレクトリを更新:
-  - `resources/global/*/pieces/*.yaml` を新用語で更新
+  - `resources/global/*/workflows/*.yaml` を新用語で更新
   - 全プロンプトファイル（`*.md`）を更新
   - 設定ファイル（`config.yaml`, `default-categories.yaml`）を更新
 
@@ -1234,7 +1233,7 @@ RC1/RC2 の内容を正式リリース。機能変更なし。
 ### Fixed
 
 - 前のステップのレスポンスが後続ステップに誤ってバインドされるワークフロー実行バグを修正
-  - `MovementExecutor`、`ParallelRunner`、`state-manager` を修正してステップ間のレスポンスを適切に分離
+  - ステップ実行器、`ParallelRunner`、`state-manager` を修正してステップ間のレスポンスを適切に分離
   - インタラクティブサマリープロンプトを更新してレスポンスの漏えいを防止
 
 ## [0.4.0] - 2026-02-04
@@ -1254,10 +1253,10 @@ RC1/RC2 の内容を正式リリース。機能変更なし。
 
 ### Changed
 
-- **BREAKING:** 内部用語の改名: `WorkflowStep` → `WorkflowMovement`、`StepExecutor` → `MovementExecutor`、`ParallelSubStepRawSchema` → `ParallelSubMovementRawSchema`、`WorkflowStepRawSchema` → `WorkflowMovementRawSchema`
+- **BREAKING:** 内部用語を現行の workflow / step 系名称へ統一
 - **BREAKING:** 不要な後方互換コードを削除
 - **BREAKING:** インタラクティブプロンプトオーバーライド機能を無効化
-- ワークフローリソースディレクトリを改名: `resources/global/*/workflows/` → `resources/global/*/pieces/`
+- ワークフローリソースディレクトリを現行の `resources/global/*/workflows/` に統一
 - 可読性・保守性向上のためプロンプトを再構成
 - 会話フローからタスク要件の不要なサマリー化を削除
 - ワークフロー実行中の不要なレポート出力を抑制

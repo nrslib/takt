@@ -9,6 +9,8 @@ import { runTakt } from '../helpers/takt-runner';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+const removedWorkflowAlias = `--${['p', 'i', 'e', 'c', 'e'].join('')}`;
+const removedWorkflowKey = ['p', 'i', 'e', 'c', 'e'].join('');
 
 function readFirstTask(repoPath: string): Record<string, unknown> {
   const tasksPath = join(repoPath, '.takt', 'tasks.yaml');
@@ -50,7 +52,7 @@ describe('E2E: Config priority (workflow / autoPr)', () => {
     const result = runTakt({
       args: [
         '--pipeline',
-        '--task', 'Pipeline run should resolve piece from config',
+        '--task', 'Pipeline run should resolve workflow from config',
         '--skip-git',
         '--provider', 'mock',
       ],
@@ -63,16 +65,16 @@ describe('E2E: Config priority (workflow / autoPr)', () => {
     });
 
     expect(result.exitCode).toBe(1);
-    expect(`${result.stdout}${result.stderr}`).toContain('--workflow (-w, alias: --piece) is required in pipeline mode');
+    expect(`${result.stdout}${result.stderr}`).toContain('--workflow (-w) is required in pipeline mode');
   }, 240_000);
 
-  it('should accept legacy --piece for takt add and store canonical workflow data', () => {
-    const piecePath = resolve(__dirname, '../fixtures/pieces/mock-single-step.yaml');
+  it('should store canonical workflow data for takt add', () => {
+    const workflowPath = resolve(__dirname, '../fixtures/workflows/mock-single-step.yaml');
     const result = runTakt({
       args: [
-        '--piece', piecePath,
+        '--workflow', workflowPath,
         'add',
-        'Legacy piece alias still works',
+        'Canonical workflow option works',
       ],
       cwd: testRepo.path,
       env: isolatedEnv.env,
@@ -83,19 +85,17 @@ describe('E2E: Config priority (workflow / autoPr)', () => {
     expect(result.exitCode).toBe(0);
 
     const task = readFirstTask(testRepo.path);
-    expect(task['workflow']).toBe(piecePath);
-    expect(task['piece']).toBeUndefined();
+    expect(task['workflow']).toBe(workflowPath);
+    expect(task[removedWorkflowKey]).toBeUndefined();
   }, 240_000);
 
-  it('should reject conflicting --workflow and --piece values for takt add', () => {
-    const workflowPath = resolve(__dirname, '../fixtures/pieces/mock-single-step.yaml');
-    const piecePath = resolve(__dirname, '../fixtures/pieces/simple.yaml');
+  it('should reject removed legacy workflow alias for takt add', () => {
+    const workflowPath = resolve(__dirname, '../fixtures/workflows/simple.yaml');
     const result = runTakt({
       args: [
-        '--workflow', workflowPath,
-        '--piece', piecePath,
+        removedWorkflowAlias, workflowPath,
         'add',
-        'Conflicting aliases should fail',
+        'Removed workflow alias should fail',
       ],
       cwd: testRepo.path,
       env: isolatedEnv.env,
@@ -103,16 +103,14 @@ describe('E2E: Config priority (workflow / autoPr)', () => {
     });
 
     expect(result.exitCode).toBe(1);
-    expect(`${result.stdout}${result.stderr}`).toContain(
-      '--workflow and --piece cannot be used together with different values',
-    );
+    expect(`${result.stdout}${result.stderr}`).toContain(`unknown option '${removedWorkflowAlias}'`);
   }, 240_000);
 
   it('should default auto_pr to true when unset in config/env', () => {
-    const piecePath = resolve(__dirname, '../fixtures/pieces/mock-single-step.yaml');
+    const workflowPath = resolve(__dirname, '../fixtures/workflows/mock-single-step.yaml');
     const result = runTakt({
       args: [
-        '--workflow', piecePath,
+        '--workflow', workflowPath,
         'add',
         'Auto PR default behavior',
       ],

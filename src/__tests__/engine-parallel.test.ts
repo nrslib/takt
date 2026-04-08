@@ -1,10 +1,10 @@
 /**
- * PieceEngine integration tests: parallel movement aggregation.
+ * WorkflowEngine integration tests: parallel step aggregation.
  *
  * Covers:
  * - Aggregated output format (## headers and --- separators)
- * - Individual sub-movement output storage
- * - Concurrent execution of sub-movements
+ * - Individual sub-step output storage
+ * - Concurrent execution of sub-steps
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -17,11 +17,11 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/piece/evaluation/index.js', () => ({
+vi.mock('../core/workflow/evaluation/index.js', () => ({
   detectMatchedRule: vi.fn(),
 }));
 
-vi.mock('../core/piece/phase-runner.js', () => ({
+vi.mock('../core/workflow/phase-runner.js', () => ({
   needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
   runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
@@ -34,19 +34,19 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 // --- Imports (after mocks) ---
 
-import { PieceEngine } from '../core/piece/index.js';
+import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
-import { detectMatchedRule } from '../core/piece/evaluation/index.js';
+import { detectMatchedRule } from '../core/workflow/evaluation/index.js';
 import {
   makeResponse,
-  buildDefaultPieceConfig,
+  buildDefaultWorkflowConfig,
   mockRunAgentSequence,
   mockDetectMatchedRuleSequence,
   createTestTmpDir,
   applyDefaultMocks,
 } from './engine-test-helpers.js';
 
-describe('PieceEngine Integration: Parallel Movement Aggregation', () => {
+describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
   let tmpDir: string;
 
   beforeEach(() => {
@@ -61,9 +61,9 @@ describe('PieceEngine Integration: Parallel Movement Aggregation', () => {
     }
   });
 
-  it('should aggregate sub-movement outputs with ## headers and --- separators', async () => {
-    const config = buildDefaultPieceConfig();
-    const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+  it('should aggregate sub-step outputs with ## headers and --- separators', async () => {
+    const config = buildDefaultWorkflowConfig();
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
     mockRunAgentSequence([
       makeResponse({ persona: 'plan', content: 'Plan done' }),
@@ -88,7 +88,7 @@ describe('PieceEngine Integration: Parallel Movement Aggregation', () => {
 
     expect(state.status).toBe('completed');
 
-    const reviewersOutput = state.movementOutputs.get('reviewers');
+    const reviewersOutput = state.stepOutputs.get('reviewers');
     expect(reviewersOutput).toBeDefined();
     expect(reviewersOutput!.content).toContain('## arch-review');
     expect(reviewersOutput!.content).toContain('Architecture review content');
@@ -98,9 +98,9 @@ describe('PieceEngine Integration: Parallel Movement Aggregation', () => {
     expect(reviewersOutput!.matchedRuleMethod).toBe('aggregate');
   });
 
-  it('should store individual sub-movement outputs in movementOutputs', async () => {
-    const config = buildDefaultPieceConfig();
-    const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+  it('should store individual sub-step outputs in stepOutputs', async () => {
+    const config = buildDefaultWorkflowConfig();
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
     mockRunAgentSequence([
       makeResponse({ persona: 'plan', content: 'Plan' }),
@@ -123,16 +123,16 @@ describe('PieceEngine Integration: Parallel Movement Aggregation', () => {
 
     const state = await engine.run();
 
-    expect(state.movementOutputs.has('arch-review')).toBe(true);
-    expect(state.movementOutputs.has('security-review')).toBe(true);
-    expect(state.movementOutputs.has('reviewers')).toBe(true);
-    expect(state.movementOutputs.get('arch-review')!.content).toBe('Arch content');
-    expect(state.movementOutputs.get('security-review')!.content).toBe('Sec content');
+    expect(state.stepOutputs.has('arch-review')).toBe(true);
+    expect(state.stepOutputs.has('security-review')).toBe(true);
+    expect(state.stepOutputs.has('reviewers')).toBe(true);
+    expect(state.stepOutputs.get('arch-review')!.content).toBe('Arch content');
+    expect(state.stepOutputs.get('security-review')!.content).toBe('Sec content');
   });
 
-  it('should persist aggregated previous_response snapshot for parallel parent movement', async () => {
-    const config = buildDefaultPieceConfig();
-    const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+  it('should persist aggregated previous_response snapshot for parallel parent step', async () => {
+    const config = buildDefaultWorkflowConfig();
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
     mockRunAgentSequence([
       makeResponse({ persona: 'plan', content: 'Plan' }),
@@ -154,7 +154,7 @@ describe('PieceEngine Integration: Parallel Movement Aggregation', () => {
     ]);
 
     const state = await engine.run();
-    const reviewersOutput = state.movementOutputs.get('reviewers')!.content;
+    const reviewersOutput = state.stepOutputs.get('reviewers')!.content;
     const previousDir = join(tmpDir, '.takt', 'runs', 'test-report-dir', 'context', 'previous_responses');
     const previousFiles = readdirSync(previousDir);
 
@@ -170,9 +170,9 @@ describe('PieceEngine Integration: Parallel Movement Aggregation', () => {
     ).toBe(true);
   });
 
-  it('should execute sub-movements concurrently (both runAgent calls happen)', async () => {
-    const config = buildDefaultPieceConfig();
-    const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+  it('should execute sub-steps concurrently (both runAgent calls happen)', async () => {
+    const config = buildDefaultWorkflowConfig();
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
     mockRunAgentSequence([
       makeResponse({ persona: 'plan', content: 'Plan' }),
@@ -195,7 +195,7 @@ describe('PieceEngine Integration: Parallel Movement Aggregation', () => {
 
     await engine.run();
 
-    // 6 total: 4 normal + 2 parallel sub-movements
+    // 6 total: 4 normal + 2 parallel sub-steps
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(6);
 
     const calledAgents = vi.mocked(runAgent).mock.calls.map(call => call[0]);
@@ -203,9 +203,9 @@ describe('PieceEngine Integration: Parallel Movement Aggregation', () => {
     expect(calledAgents).toContain('../personas/security-review.md');
   });
 
-  it('should pass resolved providers to rule evaluation for sub-movements and parent movement', async () => {
-    const config = buildDefaultPieceConfig();
-    const engine = new PieceEngine(config, tmpDir, 'test task', {
+  it('should pass resolved providers to rule evaluation for sub-steps and parent step', async () => {
+    const config = buildDefaultWorkflowConfig();
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
       provider: 'claude',
       personaProviders: {
@@ -244,7 +244,7 @@ describe('PieceEngine Integration: Parallel Movement Aggregation', () => {
   });
 
   it('should output rich parallel prefix when taskPrefix/taskColorIndex are provided', async () => {
-    const config = buildDefaultPieceConfig();
+    const config = buildDefaultWorkflowConfig();
     const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     const parentOnStream = vi.fn();
 
@@ -287,7 +287,7 @@ describe('PieceEngine Integration: Parallel Movement Aggregation', () => {
       { index: 0, method: 'phase1_tag' },
     ]);
 
-    const engine = new PieceEngine(config, tmpDir, 'test task', {
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
       onStream: parentOnStream,
       taskPrefix: 'override-persona-provider',
@@ -308,28 +308,28 @@ describe('PieceEngine Integration: Parallel Movement Aggregation', () => {
   });
 
   it('should fail fast when taskPrefix is provided without taskColorIndex', () => {
-    const config = buildDefaultPieceConfig();
+    const config = buildDefaultWorkflowConfig();
     expect(
-      () => new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, taskPrefix: 'override-persona-provider' })
+      () => new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, taskPrefix: 'override-persona-provider' })
     ).toThrow('taskPrefix and taskColorIndex must be provided together');
   });
 
-  it('should respect concurrency limit on parallel sub-movements', async () => {
+  it('should respect concurrency limit on parallel sub-steps', async () => {
     // Track concurrent execution count
     let currentConcurrency = 0;
     let maxObservedConcurrency = 0;
 
-    const config = buildDefaultPieceConfig();
-    // Set concurrency to 1 on the reviewers movement
-    const reviewersMovement = config.movements.find(m => m.name === 'reviewers')!;
-    reviewersMovement.concurrency = 1;
+    const config = buildDefaultWorkflowConfig();
+    // Set concurrency to 1 on the reviewers step
+    const reviewersStep = config.steps.find(m => m.name === 'reviewers')!;
+    reviewersStep.concurrency = 1;
 
-    const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
     vi.mocked(runAgent).mockImplementation(async (persona, task, options) => {
-      // Track concurrency for parallel sub-movements only
-      const isSubMovement = persona === '../personas/arch-review.md' || persona === '../personas/security-review.md';
-      if (isSubMovement) {
+      // Track concurrency for parallel sub-steps only
+      const isSubStep = persona === '../personas/arch-review.md' || persona === '../personas/security-review.md';
+      if (isSubStep) {
         currentConcurrency++;
         maxObservedConcurrency = Math.max(maxObservedConcurrency, currentConcurrency);
         // Small delay to make concurrency observable
@@ -361,18 +361,18 @@ describe('PieceEngine Integration: Parallel Movement Aggregation', () => {
     expect(maxObservedConcurrency).toBe(1);
   });
 
-  it('should run all sub-movements simultaneously when concurrency is not set', async () => {
+  it('should run all sub-steps simultaneously when concurrency is not set', async () => {
     let currentConcurrency = 0;
     let maxObservedConcurrency = 0;
 
-    const config = buildDefaultPieceConfig();
+    const config = buildDefaultWorkflowConfig();
     // No concurrency set — default behavior (all simultaneous)
 
-    const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
     vi.mocked(runAgent).mockImplementation(async (persona, task, options) => {
-      const isSubMovement = persona === '../personas/arch-review.md' || persona === '../personas/security-review.md';
-      if (isSubMovement) {
+      const isSubStep = persona === '../personas/arch-review.md' || persona === '../personas/security-review.md';
+      if (isSubStep) {
         currentConcurrency++;
         maxObservedConcurrency = Math.max(maxObservedConcurrency, currentConcurrency);
         await new Promise(resolve => setTimeout(resolve, 10));

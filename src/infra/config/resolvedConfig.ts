@@ -8,7 +8,7 @@ export interface LoadedConfig
   minimalOutput: NonNullable<ProjectConfig['minimalOutput']>;
   concurrency: NonNullable<ProjectConfig['concurrency']>;
   taskPollIntervalMs: NonNullable<ProjectConfig['taskPollIntervalMs']>;
-  interactivePreviewMovements: NonNullable<ProjectConfig['interactivePreviewMovements']>;
+  interactivePreviewSteps: NonNullable<ProjectConfig['interactivePreviewSteps']>;
 }
 
 export type ConfigParameterKey = keyof LoadedConfig;

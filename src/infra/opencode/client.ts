@@ -8,7 +8,7 @@
 import { createOpencode } from '@opencode-ai/sdk/v2';
 import { createServer } from 'node:net';
 import type { AgentResponse } from '../../core/models/index.js';
-import { AskUserQuestionDeniedError } from '../../core/piece/ask-user-question-error.js';
+import { AskUserQuestionDeniedError } from '../../core/workflow/ask-user-question-error.js';
 import { createLogger, getErrorMessage, createStreamDiagnostics, parseStructuredOutput, type StreamDiagnostics } from '../../shared/utils/index.js';
 import { parseProviderModel } from '../../shared/utils/providerModel.js';
 import {

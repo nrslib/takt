@@ -44,7 +44,7 @@ describe('TaskRunner (tasks.yaml)', () => {
   });
 
   it('should add tasks to .takt/tasks.yaml', () => {
-    const task = runner.addTask('Fix login flow', { piece: 'default' });
+    const task = runner.addTask('Fix login flow', { workflow: 'default' });
     expect(task.name).toContain('fix-login-flow');
     expect(existsSync(join(testDir, '.takt', 'tasks.yaml'))).toBe(true);
   });
@@ -250,7 +250,7 @@ describe('TaskRunner (tasks.yaml)', () => {
       success: false,
       response: 'Boom',
       executionLog: ['last message'],
-      failureMovement: 'review',
+      failureStep: 'review',
       failureLastMessage: 'last message',
       startedAt: new Date().toISOString(),
       completedAt: new Date().toISOString(),
@@ -259,7 +259,7 @@ describe('TaskRunner (tasks.yaml)', () => {
     const failed = runner.listFailedTasks();
     expect(failed).toHaveLength(1);
     expect(failed[0]?.failure?.error).toBe('Boom');
-    expect(failed[0]?.failure?.movement).toBe('review');
+    expect(failed[0]?.failure?.step).toBe('review');
     expect(failed[0]?.failure?.last_message).toBe('last message');
   });
 
@@ -302,12 +302,12 @@ describe('TaskRunner (tasks.yaml)', () => {
 
     const pending = runner.listTasks();
     expect(pending).toHaveLength(1);
-    expect(pending[0]?.data?.start_movement).toBe('implement');
+    expect(pending[0]?.data?.start_step).toBe('implement');
     expect(pending[0]?.data?.retry_note).toBe('retry note');
   });
 
   it('should persist canonical workflow and start_step keys when requeueing failed task', () => {
-    runner.addTask('Task A', { piece: 'default' });
+    runner.addTask('Task A', { workflow: 'default' });
     const task = runner.claimNextTasks(1)[0]!;
     runner.failTask({
       task,
@@ -322,13 +322,11 @@ describe('TaskRunner (tasks.yaml)', () => {
 
     const file = loadTasksFile(testDir);
     expect(file.tasks[0]?.workflow).toBe('default');
-    expect(file.tasks[0]?.piece).toBeUndefined();
     expect(file.tasks[0]?.start_step).toBe('implement');
-    expect(file.tasks[0]?.start_movement).toBeUndefined();
   });
 
   it('should persist canonical workflow and start_step keys when starting re-execution', () => {
-    runner.addTask('Task A', { piece: 'default' });
+    runner.addTask('Task A', { workflow: 'default' });
     const task = runner.claimNextTasks(1)[0]!;
     runner.failTask({
       task,
@@ -342,31 +340,27 @@ describe('TaskRunner (tasks.yaml)', () => {
     const restarted = runner.startReExecution(task.name, ['failed'], 'implement', 'retry note');
 
     expect(restarted.status).toBe('running');
-    expect(restarted.data?.piece).toBe('default');
-    expect(restarted.data?.start_movement).toBe('implement');
+    expect(restarted.data?.workflow).toBe('default');
+    expect(restarted.data?.start_step).toBe('implement');
     expect(restarted.data?.retry_note).toBe('retry note');
 
     const file = loadTasksFile(testDir);
     expect(file.tasks[0]?.status).toBe('running');
     expect(file.tasks[0]?.workflow).toBe('default');
-    expect(file.tasks[0]?.piece).toBeUndefined();
     expect(file.tasks[0]?.start_step).toBe('implement');
-    expect(file.tasks[0]?.start_movement).toBeUndefined();
     expect(file.tasks[0]?.retry_note).toBe('retry note');
   });
 
-  it('should normalize workflow and start_step from tasks.yaml into task data', () => {
+  it('should read workflow and start_step from tasks.yaml into task data', () => {
     writeTasksFile(testDir, [createPendingRecord({
       workflow: 'default',
       start_step: 'implement',
-      piece: undefined,
-      start_movement: undefined,
     })]);
 
     const tasks = runner.listTasks();
 
-    expect(tasks[0]?.data?.piece).toBe('default');
-    expect(tasks[0]?.data?.start_movement).toBe('implement');
+    expect(tasks[0]?.data?.workflow).toBe('default');
+    expect(tasks[0]?.data?.start_step).toBe('implement');
   });
 
   it('should delete pending and failed tasks', () => {

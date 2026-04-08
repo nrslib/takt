@@ -52,7 +52,7 @@ describe('E2E: Help command (takt --help)', () => {
     expect(output).toMatch(/run|task|pending/);
   });
 
-  it('should show prompt argument help without current-piece wording', () => {
+  it('should show prompt argument help without current-workflow wording', () => {
     // Given: a local repo with isolated env
 
     // When: running takt prompt --help
@@ -62,7 +62,7 @@ describe('E2E: Help command (takt --help)', () => {
       env: isolatedEnv.env,
     });
 
-    // Then: prompt help uses explicit default piece wording
+    // Then: prompt help uses explicit default workflow wording
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toMatch(/defaults to ["']default["']/i);
     expect(result.stdout).not.toMatch(/defaults to current/i);

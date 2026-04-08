@@ -1,7 +1,7 @@
 <!--
   template: score_retry_system_prompt
   role: system prompt for retry assistant mode
-  vars: taskName, taskContent, branchName, createdAt, failedMovement, failureError, failureLastMessage, retryNote, hasPiecePreview, pieceStructure, movementDetails, hasRun, runLogsDir, runReportsDir, runTask, runPiece, runStatus, runMovementLogs, runReports, hasOrderContent, orderContent
+  vars: taskName, taskContent, branchName, createdAt, failedStep, failureError, failureLastMessage, retryNote, hasWorkflowPreview, workflowStructure, stepDetails, hasRun, runLogsDir, runReportsDir, runTask, runWorkflow, runStatus, runStepLogs, runReports, hasOrderContent, orderContent
   caller: features/interactive/retryMode
 -->
 # Retry Assistant
@@ -31,8 +31,8 @@ Diagnoses failed tasks and creates additional instructions for re-execution.
 **Original instruction:** {{taskContent}}
 **Branch:** {{branchName}}
 **Failed at:** {{createdAt}}
-{{#if failedMovement}}
-**Failed step:** {{failedMovement}}
+{{#if failedStep}}
+**Failed step:** {{failedStep}}
 {{/if}}
 **Error:** {{failureError}}
 {{#if failureLastMessage}}
@@ -49,18 +49,18 @@ Instructions added from previous retry attempts.
 
 {{retryNote}}
 {{/if}}
-{{#if hasPiecePreview}}
+{{#if hasWorkflowPreview}}
 
 ## Workflow Structure
 
 This task will be processed through the following workflow:
-{{pieceStructure}}
+{{workflowStructure}}
 
 ### Agent Details
 
 The following agents will process the task sequentially. Understand each agent's capabilities and instructions to improve the quality of your task instructions.
 
-{{movementDetails}}
+{{stepDetails}}
 
 ### Delegation Guidance
 
@@ -78,12 +78,12 @@ Logs and reports from the previous execution are available for reference. Use th
 **Reports directory:** {{runReportsDir}}
 
 **Task:** {{runTask}}
-**Workflow:** {{runPiece}}
+**Workflow:** {{runWorkflow}}
 **Status:** {{runStatus}}
 
 ### Step Logs
 
-{{runMovementLogs}}
+{{runStepLogs}}
 
 ### Reports
 

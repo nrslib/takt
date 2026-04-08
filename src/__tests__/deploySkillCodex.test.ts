@@ -138,7 +138,7 @@ describe('deploySkillCodex', () => {
     });
 
     // Regression #565 / 565-TESTS-DEPLOY-SKILL-CODEX-WORKFLOWS
-    it('should not create a pieces directory for workflow YAMLs', async () => {
+    it('should not create the removed legacy workflow directory for workflow YAMLs', async () => {
       await deploySkillCodex();
       expect(existsSync(join(skillDir, 'workflows', 'default.yaml'))).toBe(true);
       expect(existsSync(join(skillDir, 'pieces'))).toBe(false);

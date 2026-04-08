@@ -113,7 +113,7 @@ describe('executePipeline', () => {
 
   it('should return exit code 2 when neither --issue nor --task is specified', async () => {
     const exitCode = await executePipeline({
-      piece: 'default',
+      workflow: 'default',
       autoPr: false,
       cwd: '/tmp/test',
     });
@@ -126,7 +126,7 @@ describe('executePipeline', () => {
 
     const exitCode = await executePipeline({
       issueNumber: 99,
-      piece: 'default',
+      workflow: 'default',
       autoPr: false,
       cwd: '/tmp/test',
     });
@@ -141,7 +141,7 @@ describe('executePipeline', () => {
 
     const exitCode = await executePipeline({
       issueNumber: 999,
-      piece: 'default',
+      workflow: 'default',
       autoPr: false,
       cwd: '/tmp/test',
     });
@@ -149,7 +149,7 @@ describe('executePipeline', () => {
     expect(exitCode).toBe(2);
   });
 
-  it('should return exit code 3 when piece fails', async () => {
+  it('should return exit code 3 when workflow fails', async () => {
     mockFetchIssue.mockReturnValueOnce({
       number: 99,
       title: 'Test issue',
@@ -161,7 +161,7 @@ describe('executePipeline', () => {
 
     const exitCode = await executePipeline({
       issueNumber: 99,
-      piece: 'default',
+      workflow: 'default',
       autoPr: false,
       cwd: '/tmp/test',
     });
@@ -176,7 +176,7 @@ describe('executePipeline', () => {
 
     const exitCode = await executePipeline({
       task: 'Fix the bug',
-      piece: 'default',
+      workflow: 'default',
       autoPr: false,
       cwd: '/tmp/test',
     });
@@ -185,7 +185,7 @@ describe('executePipeline', () => {
     expect(mockExecuteTask).toHaveBeenCalledWith({
       task: 'Fix the bug',
       cwd: '/tmp/test',
-      pieceIdentifier: 'default',
+      workflowIdentifier: 'default',
       projectCwd: '/tmp/test',
       agentOverrides: undefined,
     });
@@ -207,7 +207,7 @@ describe('executePipeline', () => {
 
     const exitCode = await executePipeline({
       issueNumber: 99,
-      piece: 'default',
+      workflow: 'default',
       autoPr: false,
       cwd: '/tmp/test',
     });
@@ -224,7 +224,7 @@ describe('executePipeline', () => {
 
     const exitCode = await executePipeline({
       task: 'Fix the bug',
-      piece: 'bad\x1b[31m-workflow\n',
+      workflow: 'bad\x1b[31m-workflow\n',
       autoPr: false,
       cwd: '/tmp/test',
     });
@@ -247,7 +247,7 @@ describe('executePipeline', () => {
 
     const exitCode = await executePipeline({
       issueNumber: 99,
-      piece: 'default',
+      workflow: 'default',
       branch: 'feature\x1b[2J\t',
       autoPr: false,
       cwd: '/tmp/test',
@@ -279,7 +279,7 @@ describe('executePipeline', () => {
 
     const exitCode = await executePipeline({
       prNumber: 12,
-      piece: 'default',
+      workflow: 'default',
       autoPr: false,
       createWorktree: true,
       cwd: '/tmp/test',
@@ -295,7 +295,7 @@ describe('executePipeline', () => {
 
     const exitCode = await executePipeline({
       task: 'Fix the bug',
-      piece: 'default',
+      workflow: 'default',
       autoPr: false,
       cwd: '/tmp/test',
       provider: 'codex',
@@ -306,7 +306,7 @@ describe('executePipeline', () => {
     expect(mockExecuteTask).toHaveBeenCalledWith({
       task: 'Fix the bug',
       cwd: '/tmp/test',
-      pieceIdentifier: 'default',
+      workflowIdentifier: 'default',
       projectCwd: '/tmp/test',
       agentOverrides: { provider: 'codex', model: 'codex-model' },
     });
@@ -318,7 +318,7 @@ describe('executePipeline', () => {
 
     const exitCode = await executePipeline({
       task: 'Fix the bug',
-      piece: 'default',
+      workflow: 'default',
       autoPr: true,
       cwd: '/tmp/test',
     });
@@ -334,7 +334,7 @@ describe('executePipeline', () => {
 
     const exitCode = await executePipeline({
       task: 'Fix the bug',
-      piece: 'default',
+      workflow: 'default',
       autoPr: true,
       cwd: '/tmp/test',
     });
@@ -348,7 +348,7 @@ describe('executePipeline', () => {
 
     const exitCode = await executePipeline({
       task: 'Fix the bug',
-      piece: 'default',
+      workflow: 'default',
       branch: 'fix/my-branch',
       autoPr: true,
       repo: 'owner/repo',
@@ -371,7 +371,7 @@ describe('executePipeline', () => {
 
     const exitCode = await executePipeline({
       task: 'Fix the bug',
-      piece: 'default',
+      workflow: 'default',
       branch: 'fix/my-branch',
       autoPr: true,
       draftPr: true,
@@ -391,7 +391,7 @@ describe('executePipeline', () => {
 
     const exitCode = await executePipeline({
       task: 'Fix the bug',
-      piece: 'default',
+      workflow: 'default',
       branch: 'fix/my-branch',
       autoPr: true,
       draftPr: false,
@@ -419,7 +419,7 @@ describe('executePipeline', () => {
     // When
     const exitCode = await executePipeline({
       task: 'Fix the bug',
-      piece: 'default',
+      workflow: 'default',
       branch: 'fix/my-branch',
       autoPr: true,
       cwd: '/tmp/test',
@@ -439,7 +439,7 @@ describe('executePipeline', () => {
 
     const exitCode = await executePipeline({
       task: 'From --task flag',
-      piece: 'magi',
+      workflow: 'magi',
       autoPr: false,
       cwd: '/tmp/test',
     });
@@ -448,7 +448,7 @@ describe('executePipeline', () => {
     expect(mockExecuteTask).toHaveBeenCalledWith({
       task: 'From --task flag',
       cwd: '/tmp/test',
-      pieceIdentifier: 'magi',
+      workflowIdentifier: 'magi',
       projectCwd: '/tmp/test',
       agentOverrides: undefined,
     });
@@ -473,7 +473,7 @@ describe('executePipeline', () => {
 
       await executePipeline({
         issueNumber: 42,
-        piece: 'default',
+        workflow: 'default',
         branch: 'test-branch',
         autoPr: false,
         cwd: '/tmp/test',
@@ -506,7 +506,7 @@ describe('executePipeline', () => {
 
       await executePipeline({
         issueNumber: 10,
-        piece: 'default',
+        workflow: 'default',
         autoPr: false,
         cwd: '/tmp/test',
       });
@@ -539,7 +539,7 @@ describe('executePipeline', () => {
 
       await executePipeline({
         issueNumber: 50,
-        piece: 'default',
+        workflow: 'default',
         branch: 'fix-auth',
         autoPr: true,
         cwd: '/tmp/test',
@@ -566,7 +566,7 @@ describe('executePipeline', () => {
 
       await executePipeline({
         task: 'Fix task-only PR body',
-        piece: 'default',
+        workflow: 'default',
         branch: 'fix-task-pr-body',
         autoPr: true,
         cwd: '/tmp/test',
@@ -587,7 +587,7 @@ describe('executePipeline', () => {
 
       await executePipeline({
         task: 'Fix bug',
-        piece: 'default',
+        workflow: 'default',
         branch: 'fix-branch',
         autoPr: true,
         cwd: '/tmp/test',
@@ -611,7 +611,7 @@ describe('executePipeline', () => {
 
       const exitCode = await executePipeline({
         task: 'Fix the bug',
-        piece: 'default',
+        workflow: 'default',
         autoPr: false,
         skipGit: true,
         cwd: '/tmp/test',
@@ -621,7 +621,7 @@ describe('executePipeline', () => {
       expect(mockExecuteTask).toHaveBeenCalledWith({
         task: 'Fix the bug',
         cwd: '/tmp/test',
-        pieceIdentifier: 'default',
+        workflowIdentifier: 'default',
         projectCwd: '/tmp/test',
         agentOverrides: undefined,
       });
@@ -639,7 +639,7 @@ describe('executePipeline', () => {
 
       const exitCode = await executePipeline({
         task: 'Fix the bug',
-        piece: 'default',
+        workflow: 'default',
         autoPr: true,
         skipGit: true,
         cwd: '/tmp/test',
@@ -649,12 +649,12 @@ describe('executePipeline', () => {
       expect(mockCreatePullRequest).not.toHaveBeenCalled();
     });
 
-    it('should still return piece failure exit code when skipGit is true', async () => {
+    it('should still return workflow failure exit code when skipGit is true', async () => {
       mockExecuteTask.mockResolvedValueOnce(false);
 
       const exitCode = await executePipeline({
         task: 'Fix the bug',
-        piece: 'default',
+        workflow: 'default',
         autoPr: false,
         skipGit: true,
         cwd: '/tmp/test',
@@ -677,7 +677,7 @@ describe('executePipeline', () => {
 
       const exitCode = await executePipeline({
         task: 'Fix the bug',
-        piece: 'default',
+        workflow: 'default',
         autoPr: false,
         cwd: '/tmp/test',
         createWorktree: true,
@@ -694,7 +694,7 @@ describe('executePipeline', () => {
       expect(mockExecuteTask).toHaveBeenCalledWith({
         task: 'Fix the bug',
         cwd: '/tmp/test-worktree',
-        pieceIdentifier: 'default',
+        workflowIdentifier: 'default',
         projectCwd: '/tmp/test',
         agentOverrides: undefined,
       });
@@ -705,7 +705,7 @@ describe('executePipeline', () => {
 
       const exitCode = await executePipeline({
         task: 'Fix the bug',
-        piece: 'default',
+        workflow: 'default',
         autoPr: false,
         cwd: '/tmp/test',
         createWorktree: false,
@@ -716,7 +716,7 @@ describe('executePipeline', () => {
       expect(mockExecuteTask).toHaveBeenCalledWith({
         task: 'Fix the bug',
         cwd: '/tmp/test',
-        pieceIdentifier: 'default',
+        workflowIdentifier: 'default',
         projectCwd: '/tmp/test',
         agentOverrides: undefined,
       });
@@ -727,7 +727,7 @@ describe('executePipeline', () => {
 
       const exitCode = await executePipeline({
         task: 'Fix the bug',
-        piece: 'default',
+        workflow: 'default',
         autoPr: false,
         cwd: '/tmp/test',
       });
@@ -737,7 +737,7 @@ describe('executePipeline', () => {
       expect(mockExecuteTask).toHaveBeenCalledWith({
         task: 'Fix the bug',
         cwd: '/tmp/test',
-        pieceIdentifier: 'default',
+        workflowIdentifier: 'default',
         projectCwd: '/tmp/test',
         agentOverrides: undefined,
       });
@@ -755,7 +755,7 @@ describe('executePipeline', () => {
 
       const exitCode = await executePipeline({
         task: 'Fix the bug',
-        piece: 'default',
+        workflow: 'default',
         autoPr: false,
         cwd: '/tmp/test',
         createWorktree: true,
@@ -767,7 +767,7 @@ describe('executePipeline', () => {
       expect(mockExecuteTask).toHaveBeenCalledWith({
         task: 'Fix the bug',
         cwd: '/tmp/test-worktree',
-        pieceIdentifier: 'default',
+        workflowIdentifier: 'default',
         projectCwd: '/tmp/test',
         agentOverrides: { provider: 'codex', model: 'codex-model' },
       });
@@ -778,7 +778,7 @@ describe('executePipeline', () => {
 
       const exitCode = await executePipeline({
         task: 'Fix the bug',
-        piece: 'default',
+        workflow: 'default',
         autoPr: false,
         cwd: '/tmp/test',
         createWorktree: true,
@@ -798,7 +798,7 @@ describe('executePipeline', () => {
 
       const exitCode = await executePipeline({
         task: 'Fix the bug',
-        piece: 'default',
+        workflow: 'default',
         autoPr: false,
         cwd: '/tmp/test',
         createWorktree: true,
@@ -821,7 +821,7 @@ describe('executePipeline', () => {
 
       const exitCode = await executePipeline({
         task: 'Fix the bug',
-        piece: 'default',
+        workflow: 'default',
         autoPr: false,
         cwd: '/tmp/test',
         createWorktree: true,
@@ -863,7 +863,7 @@ describe('executePipeline', () => {
 
       const exitCode = await executePipeline({
         task: 'Fix the bug',
-        piece: 'default',
+        workflow: 'default',
         autoPr: true,
         cwd: '/tmp/test',
         createWorktree: true,
@@ -892,7 +892,7 @@ describe('executePipeline', () => {
 
       const exitCode = await executePipeline({
         task: 'Fix the bug',
-        piece: 'default',
+        workflow: 'default',
         autoPr: true,
         cwd: '/tmp/test',
         createWorktree: true,
@@ -931,7 +931,7 @@ describe('executePipeline', () => {
 
       const exitCode = await executePipeline({
         prNumber: 456,
-        piece: 'default',
+        workflow: 'default',
         autoPr: false,
         cwd: '/tmp/test',
         createWorktree: true,
@@ -961,7 +961,7 @@ describe('executePipeline', () => {
 
     const exitCode = await executePipeline({
       task: 'Fix the bug',
-      piece: 'default',
+      workflow: 'default',
       branch: 'fix/my-branch',
       autoPr: false,
       cwd: '/tmp/test',
@@ -977,7 +977,7 @@ describe('executePipeline', () => {
 
       await executePipeline({
         task: 'Fix the bug',
-        piece: 'default',
+      workflow: 'default',
         autoPr: false,
         skipGit: true,
         cwd: '/tmp/test',
@@ -992,7 +992,7 @@ describe('executePipeline', () => {
 
       await executePipeline({
         task: 'Fix the bug',
-        piece: 'default',
+      workflow: 'default',
         autoPr: false,
         skipGit: true,
         cwd: '/tmp/test',
@@ -1008,7 +1008,7 @@ describe('executePipeline', () => {
           tasks: [expect.objectContaining({
             name: 'pipeline',
             success: true,
-            piece: 'default',
+            workflow: 'default',
           })],
         }),
       );
@@ -1018,13 +1018,13 @@ describe('executePipeline', () => {
       );
     });
 
-    it('should send failure notification when piece fails', async () => {
+    it('should send failure notification when workflow fails', async () => {
       mockGetSlackWebhookUrl.mockReturnValue('https://hooks.slack.com/test');
       mockExecuteTask.mockResolvedValueOnce(false);
 
       await executePipeline({
         task: 'Fix the bug',
-        piece: 'default',
+      workflow: 'default',
         autoPr: false,
         skipGit: true,
         cwd: '/tmp/test',
@@ -1049,7 +1049,7 @@ describe('executePipeline', () => {
 
       await executePipeline({
         task: 'Fix the bug',
-        piece: 'default',
+        workflow: 'default',
         branch: 'fix/test',
         autoPr: true,
         cwd: '/tmp/test',
@@ -1081,7 +1081,7 @@ describe('executePipeline', () => {
 
       const exitCode = await executePipeline({
         prNumber: 456,
-        piece: 'default',
+        workflow: 'default',
         autoPr: false,
         cwd: '/tmp/test',
       });
@@ -1101,7 +1101,7 @@ describe('executePipeline', () => {
 
       const exitCode = await executePipeline({
         prNumber: 456,
-        piece: 'default',
+        workflow: 'default',
         autoPr: false,
         cwd: '/tmp/test',
       });
@@ -1124,7 +1124,7 @@ describe('executePipeline', () => {
 
       const exitCode = await executePipeline({
         prNumber: 456,
-        piece: 'default',
+        workflow: 'default',
         autoPr: false,
         cwd: '/tmp/test',
       });
@@ -1140,7 +1140,7 @@ describe('executePipeline', () => {
 
       const exitCode = await executePipeline({
         prNumber: 999,
-        piece: 'default',
+        workflow: 'default',
         autoPr: false,
         cwd: '/tmp/test',
       });
@@ -1163,7 +1163,7 @@ describe('executePipeline', () => {
 
       const exitCode = await executePipeline({
         prNumber: 456,
-        piece: 'default',
+        workflow: 'default',
         autoPr: false,
         cwd: '/tmp/test',
       });
@@ -1206,7 +1206,7 @@ describe('executePipeline', () => {
       // When
       const exitCode = await executePipeline({
         prNumber: 456,
-        piece: 'default',
+        workflow: 'default',
         autoPr: true,
         cwd: '/tmp/test',
       });
@@ -1243,7 +1243,7 @@ describe('executePipeline', () => {
 
       const exitCode = await executePipeline({
         prNumber: 456,
-        piece: 'default',
+        workflow: 'default',
         autoPr: true,
         cwd: '/tmp/test',
       });

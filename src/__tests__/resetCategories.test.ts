@@ -4,9 +4,9 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('../infra/config/global/pieceCategories.js', () => ({
-  resetPieceCategories: vi.fn(),
-  getPieceCategoriesPath: vi.fn(() => '/tmp/user-piece-categories.yaml'),
+vi.mock('../infra/config/global/workflowCategories.js', () => ({
+  resetWorkflowCategories: vi.fn(),
+  getWorkflowCategoriesPath: vi.fn(() => '/tmp/user-workflow-categories.yaml'),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -15,11 +15,11 @@ vi.mock('../shared/ui/index.js', () => ({
   info: vi.fn(),
 }));
 
-import { resetPieceCategories } from '../infra/config/global/pieceCategories.js';
+import { resetWorkflowCategories } from '../infra/config/global/workflowCategories.js';
 import { header, success, info } from '../shared/ui/index.js';
 import { resetCategoriesToDefault } from '../features/config/resetCategories.js';
 
-const mockResetPieceCategories = vi.mocked(resetPieceCategories);
+const mockResetWorkflowCategories = vi.mocked(resetWorkflowCategories);
 const mockHeader = vi.mocked(header);
 const mockSuccess = vi.mocked(success);
 const mockInfo = vi.mocked(info);
@@ -38,8 +38,8 @@ describe('resetCategoriesToDefault', () => {
 
     // Then
     expect(mockHeader).toHaveBeenCalledWith('Reset Categories');
-    expect(mockResetPieceCategories).toHaveBeenCalledWith(cwd);
+    expect(mockResetWorkflowCategories).toHaveBeenCalledWith(cwd);
     expect(mockSuccess).toHaveBeenCalledWith('User category overlay reset.');
-    expect(mockInfo).toHaveBeenCalledWith('  /tmp/user-piece-categories.yaml');
+    expect(mockInfo).toHaveBeenCalledWith('  /tmp/user-workflow-categories.yaml');
   });
 });

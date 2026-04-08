@@ -53,7 +53,7 @@ function createTask(name: string): TaskInfo {
     filePath: `/tasks/${name}.yaml`,
     createdAt: '2026-01-01T00:00:00.000Z',
     status: 'pending',
-    data: { task: `Task: ${name}`, piece: 'default' },
+    data: { task: `Task: ${name}`, workflow: 'default' },
   };
 }
 

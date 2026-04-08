@@ -23,14 +23,14 @@ describe('E2E: Error handling edge cases (mock)', () => {
     try { isolatedEnv.cleanup(); } catch { /* best-effort */ }
   });
 
-  it('should error when --piece points to a nonexistent file path', () => {
-    // Given: a nonexistent piece file path
+  it('should error when --workflow points to a nonexistent file path', () => {
+    // Given: a nonexistent workflow file path
 
-    // When: running with a bad piece path
+    // When: running with a bad workflow path
     const result = runTakt({
       args: [
         '--task', 'test',
-        '--piece', '/nonexistent/path/to/piece.yaml',
+        '--workflow', '/nonexistent/path/to/workflow.yaml',
         '--provider', 'mock',
       ],
       cwd: repo.path,
@@ -44,14 +44,14 @@ describe('E2E: Error handling edge cases (mock)', () => {
     expect(combined).toMatch(/not found|does not exist|ENOENT/i);
   }, 240_000);
 
-  it('should report error when --piece specifies a nonexistent piece name', () => {
-    // Given: a nonexistent piece name
+  it('should report error when --workflow specifies a nonexistent workflow name', () => {
+    // Given: a nonexistent workflow name
 
-    // When: running with a bad piece name
+    // When: running with a bad workflow name
     const result = runTakt({
       args: [
         '--task', 'test',
-        '--piece', 'nonexistent-piece-name-xyz',
+        '--workflow', 'nonexistent-workflow-name-xyz',
         '--provider', 'mock',
       ],
       cwd: repo.path,
@@ -59,7 +59,7 @@ describe('E2E: Error handling edge cases (mock)', () => {
       timeout: 240_000,
     });
 
-    // Then: output contains error about piece not found
+    // Then: output contains error about workflow not found
     // Note: takt reports the error but currently exits with code 0
     const combined = result.stdout + result.stderr;
     expect(combined).toMatch(/not found/i);
@@ -67,13 +67,13 @@ describe('E2E: Error handling edge cases (mock)', () => {
 
   it('should error when --pipeline is used without --task or --issue', () => {
     // Given: pipeline mode with no task or issue
-    const piecePath = resolve(__dirname, '../fixtures/pieces/mock-single-step.yaml');
+    const workflowPath = resolve(__dirname, '../fixtures/workflows/mock-single-step.yaml');
 
     // When: running in pipeline mode without a task
     const result = runTakt({
       args: [
         '--pipeline',
-        '--piece', piecePath,
+        '--workflow', workflowPath,
         '--skip-git',
         '--provider', 'mock',
       ],
@@ -90,13 +90,13 @@ describe('E2E: Error handling edge cases (mock)', () => {
 
   it('should error when deprecated --create-worktree option is used', () => {
     // Given: deprecated option value
-    const piecePath = resolve(__dirname, '../fixtures/pieces/mock-single-step.yaml');
+    const workflowPath = resolve(__dirname, '../fixtures/workflows/mock-single-step.yaml');
 
     // When: running with invalid worktree option
     const result = runTakt({
       args: [
         '--task', 'test',
-        '--piece', piecePath,
+        '--workflow', workflowPath,
         '--create-worktree', 'invalid-value',
         '--provider', 'mock',
       ],
@@ -111,15 +111,15 @@ describe('E2E: Error handling edge cases (mock)', () => {
     expect(combined).toContain("unknown option '--create-worktree'");
   }, 240_000);
 
-  it('should error when piece file contains invalid YAML', () => {
-    // Given: a broken YAML piece file
-    const brokenPiecePath = resolve(__dirname, '../fixtures/pieces/broken.yaml');
+  it('should error when workflow file contains invalid YAML', () => {
+    // Given: a broken YAML workflow file
+    const brokenWorkflowPath = resolve(__dirname, '../fixtures/workflows/broken.yaml');
 
-    // When: running with the broken piece
+    // When: running with the broken workflow
     const result = runTakt({
       args: [
         '--task', 'test',
-        '--piece', brokenPiecePath,
+        '--workflow', brokenWorkflowPath,
         '--provider', 'mock',
       ],
       cwd: repo.path,

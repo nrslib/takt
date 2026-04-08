@@ -43,7 +43,7 @@ describe('detectRuleIndex', () => {
     expect(detectRuleIndex('[Plan:2]', 'plan')).toBe(1);
   });
 
-  it('should match movement name case-insensitively', () => {
+  it('should match step name case-insensitively', () => {
     expect(detectRuleIndex('[IMPLEMENT:1]', 'implement')).toBe(0);
     expect(detectRuleIndex('[REVIEW:2]', 'review')).toBe(1);
   });

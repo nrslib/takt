@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { runReportPhase, type PhaseRunnerContext } from '../core/piece/phase-runner.js';
-import type { PieceMovement } from '../core/models/types.js';
+import { runReportPhase, type PhaseRunnerContext } from '../core/workflow/phase-runner.js';
+import type { WorkflowStep } from '../core/models/types.js';
 import type { RunAgentOptions } from '../agents/runner.js';
 
 vi.mock('../agents/runner.js', () => ({
@@ -13,7 +13,7 @@ vi.mock('../agents/runner.js', () => ({
 import { runAgent } from '../agents/runner.js';
 import type { AgentResponse } from '../core/models/types.js';
 
-function createStep(fileName: string): PieceMovement {
+function createStep(fileName: string): WorkflowStep {
   return {
     name: 'reviewers',
     personaDisplayName: 'Reviewers',
@@ -190,7 +190,7 @@ describe('runReportPhase report history behavior', () => {
   it('should resume the next report file with the updated sessionId returned by the previous report file', async () => {
     // Given
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
-    const step: PieceMovement = {
+    const step: WorkflowStep = {
       name: 'reviewers',
       personaDisplayName: 'Reviewers',
       instruction: 'review',
@@ -200,9 +200,9 @@ describe('runReportPhase report history behavior', () => {
     const resumedSessionIds: string[] = [];
     const ctx = createContext(reportDir);
     const originalBuildResumeOptions = ctx.buildResumeOptions;
-    ctx.buildResumeOptions = (movement, sessionId, overrides) => {
+    ctx.buildResumeOptions = (step, sessionId, overrides) => {
       resumedSessionIds.push(sessionId);
-      return originalBuildResumeOptions(movement, sessionId, overrides);
+      return originalBuildResumeOptions(step, sessionId, overrides);
     };
     queueRunAgentResponses([
       {
@@ -235,9 +235,9 @@ describe('runReportPhase report history behavior', () => {
     const resumedSessionIds: string[] = [];
     const ctx = createContext(reportDir);
     const originalBuildResumeOptions = ctx.buildResumeOptions;
-    ctx.buildResumeOptions = (movement, sessionId, overrides) => {
+    ctx.buildResumeOptions = (step, sessionId, overrides) => {
       resumedSessionIds.push(sessionId);
-      return originalBuildResumeOptions(movement, sessionId, overrides);
+      return originalBuildResumeOptions(step, sessionId, overrides);
     };
     queueRunAgentResponses([
       {

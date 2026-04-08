@@ -133,7 +133,7 @@ export class TaskLifecycleService {
 
   failTask(result: TaskResult): string {
     const failure: TaskFailure = {
-      movement: result.failureMovement,
+      step: result.failureStep,
       error: result.response,
       last_message: result.failureLastMessage ?? result.executionLog[result.executionLog.length - 1],
     };
@@ -194,8 +194,8 @@ export class TaskLifecycleService {
     return this.tasksFile;
   }
 
-  requeueFailedTask(taskRef: string, startMovement?: string, retryNote?: string): string {
-    return this.requeueTask(taskRef, ['failed'], startMovement, retryNote);
+  requeueFailedTask(taskRef: string, startStep?: string, retryNote?: string): string {
+    return this.requeueTask(taskRef, ['failed'], startStep, retryNote);
   }
 
   /**
@@ -205,7 +205,7 @@ export class TaskLifecycleService {
   startReExecution(
     taskRef: string,
     allowedStatuses: readonly TaskStatus[],
-    startMovement?: string,
+    startStep?: string,
     retryNote?: string,
   ): TaskInfo {
     const taskName = this.normalizeTaskRef(taskRef);
@@ -229,7 +229,7 @@ export class TaskLifecycleService {
         completed_at: null,
         owner_pid: process.pid,
         failure: undefined,
-        start_movement: startMovement,
+        start_step: startStep,
         retry_note: retryNote,
       };
 
@@ -245,7 +245,7 @@ export class TaskLifecycleService {
   requeueTask(
     taskRef: string,
     allowedStatuses: readonly TaskStatus[],
-    startMovement?: string,
+    startStep?: string,
     retryNote?: string,
   ): string {
     const taskName = this.normalizeTaskRef(taskRef);
@@ -268,7 +268,7 @@ export class TaskLifecycleService {
         completed_at: null,
         owner_pid: null,
         failure: undefined,
-        start_movement: startMovement,
+        start_step: startStep,
         retry_note: retryNote,
       };
 

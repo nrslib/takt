@@ -5,22 +5,22 @@
 import type { Language } from '../../../core/models/index.js';
 import type { PersonaProviderEntry } from '../../../core/models/config-types.js';
 import type { ProviderPermissionProfiles } from '../../../core/models/provider-profiles.js';
-import type { MovementProviderOptions } from '../../../core/models/piece-types.js';
+import type { StepProviderOptions } from '../../../core/models/workflow-types.js';
 import type { ProviderType } from '../../../infra/providers/index.js';
-import type { ProviderOptionsOriginResolver, ProviderOptionsSource } from '../../../core/piece/types.js';
+import type { ProviderOptionsOriginResolver, ProviderOptionsSource } from '../../../core/workflow/types.js';
 
 /** Info captured when iteration limit is hit in non-interactive mode */
 export interface ExceededInfo {
-  currentMovement: string;
-  newMaxMovements: number;
+  currentStep: string;
+  newMaxSteps: number;
   currentIteration: number;
 }
 
-/** Result of piece execution */
-export interface PieceExecutionResult {
+/** Result of workflow execution */
+export interface WorkflowExecutionResult {
   success: boolean;
   reason?: string;
-  lastMovement?: string;
+  lastStep?: string;
   lastMessage?: string;
   /** True when iteration limit was hit in non-interactive mode */
   exceeded?: boolean;
@@ -35,14 +35,14 @@ export interface InteractiveMetadata {
   task?: string;
 }
 
-/** Options for piece execution */
-export interface PieceExecutionOptions {
+/** Options for workflow execution */
+export interface WorkflowExecutionOptions {
   /** Header prefix for display */
   headerPrefix?: string;
   /** Project root directory (where .takt/ lives). */
   projectCwd: string;
-  /** Override maxMovements from piece config (used when resuming exceeded tasks) */
-  maxMovementsOverride?: number;
+  /** Override maxSteps from workflow config (used when resuming exceeded tasks) */
+  maxStepsOverride?: number;
   /** Override initial iteration count (used when resuming exceeded tasks) */
   initialIterationOverride?: number;
   /** Language for instruction metadata */
@@ -50,7 +50,7 @@ export interface PieceExecutionOptions {
   provider?: ProviderType;
   model?: string;
   /** Resolved provider options */
-  providerOptions?: MovementProviderOptions;
+  providerOptions?: StepProviderOptions;
   /** Source layer for resolved provider options */
   providerOptionsSource?: ProviderOptionsSource;
   /** Nested origin resolver for resolved provider options */
@@ -63,8 +63,8 @@ export interface PieceExecutionOptions {
   interactiveUserInput?: boolean;
   /** Interactive mode result metadata for NDJSON logging */
   interactiveMetadata?: InteractiveMetadata;
-  /** Override initial movement (default: piece config's initialMovement) */
-  startMovement?: string;
+  /** Override initial step (default: workflow config's initialStep) */
+  startStep?: string;
   /** Retry note explaining why task is being retried */
   retryNote?: string;
   /** Override report directory name (e.g. "20260201-015714-foptng") */
@@ -89,22 +89,22 @@ export interface ExecuteTaskOptions {
   task: string;
   /** Working directory (may be a clone path) */
   cwd: string;
-  /** Piece name or path (auto-detected by isPiecePath) */
-  pieceIdentifier: string;
+  /** Workflow name or path (auto-detected by isWorkflowPath) */
+  workflowIdentifier: string;
   /** Project root (where .takt/ lives) */
   projectCwd: string;
   /** Agent provider/model overrides */
   agentOverrides?: TaskExecutionOptions;
-  /** Override maxMovements from piece config (used when resuming exceeded tasks) */
-  maxMovementsOverride?: number;
+  /** Override maxSteps from workflow config (used when resuming exceeded tasks) */
+  maxStepsOverride?: number;
   /** Override initial iteration count (used when resuming exceeded tasks) */
   initialIterationOverride?: number;
   /** Enable interactive user input during step transitions */
   interactiveUserInput?: boolean;
   /** Interactive mode result metadata for NDJSON logging */
   interactiveMetadata?: InteractiveMetadata;
-  /** Override initial movement (default: piece config's initialMovement) */
-  startMovement?: string;
+  /** Override initial step (default: workflow config's initialStep) */
+  startStep?: string;
   /** Retry note explaining why task is being retried */
   retryNote?: string;
   /** Override report directory name (e.g. "20260201-015714-foptng") */
@@ -126,8 +126,8 @@ export interface PipelineExecutionOptions {
   prNumber?: number;
   /** Task content (alternative to issue) */
   task?: string;
-  /** Piece name or path to piece file */
-  piece: string;
+  /** Workflow name or path to workflow file */
+  workflow: string;
   /** Branch name (auto-generated if omitted) */
   branch?: string;
   /** Whether to create a PR after successful execution */
@@ -136,7 +136,7 @@ export interface PipelineExecutionOptions {
   draftPr?: boolean;
   /** Repository in owner/repo format */
   repo?: string;
-  /** Skip branch creation, commit, and push (piece-only execution) */
+  /** Skip branch creation, commit, and push (workflow-only execution) */
   skipGit?: boolean;
   /** Working directory */
   cwd: string;
@@ -155,7 +155,7 @@ export interface WorktreeConfirmationResult {
 }
 
 export interface SelectAndExecuteOptions {
-  piece?: string;
+  workflow?: string;
   /** Enable interactive user input during step transitions */
   interactiveUserInput?: boolean;
   /** Interactive mode result metadata for NDJSON logging */

@@ -5,6 +5,7 @@ import { createIsolatedEnv, type IsolatedEnv } from '../helpers/isolated-env';
 import { createLocalRepo, type LocalRepo } from '../helpers/test-repo';
 import { runTakt } from '../helpers/takt-runner';
 import { readSessionRecords } from '../helpers/session-log';
+import { copyWorkflowFixtureToRepo } from '../helpers/local-workflow-fixture';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -30,15 +31,18 @@ describe('E2E: Team leader refill threshold', () => {
   });
 
   it('初回5パートから追加で7パートまで拡張して完了できる', () => {
-    const piecePath = resolve(__dirname, '../fixtures/pieces/team-leader-refill-threshold.yaml');
+    const workflowPath = copyWorkflowFixtureToRepo(
+      repo.path,
+      resolve(__dirname, '../fixtures/workflows/team-leader-refill-threshold.yaml'),
+    );
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/team-leader-refill-threshold.json');
     const result = runTakt({
       args: [
         '--provider', 'mock',
         '--task',
         'Create exactly seven files: rt-1.txt, rt-2.txt, rt-3.txt, rt-4.txt, rt-5.txt, rt-6.txt, rt-7.txt. Each file must contain its own filename as content. Each part must create exactly one file.',
-        '--piece',
-        piecePath,
+        '--workflow',
+        workflowPath,
       ],
       cwd: repo.path,
       env: {

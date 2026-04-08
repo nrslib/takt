@@ -15,14 +15,12 @@ import {
   normalizePersonaProviders,
   normalizeTaktProviders,
   buildRawTaktProvidersOrThrow,
-  normalizePieceOverrides,
-  denormalizePieceOverrides,
+  normalizeWorkflowOverrides,
+  denormalizeWorkflowOverrides,
   normalizeRuntime,
 } from '../configNormalizers.js';
 import {
   resolveAliasedPreviewCount,
-  resolveAliasedConfigKey,
-  type RawProviderPermissionProfile,
 } from '../configKeyAliases.js';
 import { invalidateResolvedConfigCache } from '../resolutionCache.js';
 import { expandOptionalHomePath } from '../pathExpansion.js';
@@ -32,19 +30,18 @@ import {
   normalizeWithSubmodules,
   normalizeAnalytics,
   denormalizeAnalytics,
-  normalizePieceRuntimePreparePolicy,
-  denormalizePieceRuntimePreparePolicy,
-  normalizePieceArpeggioPolicy,
-  denormalizePieceArpeggioPolicy,
+  normalizeWorkflowRuntimePreparePolicy,
+  denormalizeWorkflowRuntimePreparePolicy,
+  normalizeWorkflowArpeggioPolicy,
+  denormalizeWorkflowArpeggioPolicy,
   normalizeSyncConflictResolver,
   denormalizeSyncConflictResolver,
-  normalizePieceMcpServers,
-  denormalizePieceMcpServers,
+  normalizeWorkflowMcpServers,
+  denormalizeWorkflowMcpServers,
 } from './projectConfigTransforms.js';
 import { loadProjectConfigTrace, type ConfigTrace } from '../traced/tracedConfigLoader.js';
 import { getCachedProjectConfigTrace, setCachedProjectConfigTrace } from '../resolutionCache.js';
 import { assertValidProjectConfig } from './projectConfigValidation.js';
-import { warnLegacyProjectConfigYamlKeysOncePerProcess } from '../legacy-workflow-key-deprecation.js';
 
 export type { ProjectConfig as ProjectLocalConfig } from '../types.js';
 
@@ -54,7 +51,6 @@ type RawProviderReference = ConfigProviderReference<ProviderType>;
 export function loadProjectConfig(projectDir: string): ProjectConfig {
   const configPath = getProjectConfigPath(projectDir);
   const { parsedConfig, rawConfig, trace } = loadProjectConfigTrace(configPath);
-  warnLegacyProjectConfigYamlKeysOncePerProcess(parsedConfig);
   setCachedProjectConfigTrace(projectDir, trace);
   assertValidProjectConfig(parsedConfig, configPath, true);
   assertValidProjectConfig(rawConfig, configPath);
@@ -73,7 +69,6 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     submodules,
     with_submodules,
     provider_options,
-    provider_profiles,
     analytics,
     pipeline,
     takt_providers,
@@ -85,36 +80,6 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     runtime,
     sync_conflict_resolver,
   } = parsedConfigResult;
-  const resolvedPieceOverrides = resolveAliasedConfigKey(
-    configPath,
-    parsedConfigResult as Record<string, unknown>,
-    'workflow_overrides',
-    'piece_overrides',
-  ) as {
-    quality_gates?: string[];
-    quality_gates_edit_only?: boolean;
-    movements?: Record<string, { quality_gates?: string[] }>;
-    steps?: Record<string, { quality_gates?: string[] }>;
-    personas?: Record<string, { quality_gates?: string[] }>;
-  } | undefined;
-  const resolvedPieceRuntimePrepare = resolveAliasedConfigKey(
-    configPath,
-    parsedConfigResult as Record<string, unknown>,
-    'workflow_runtime_prepare',
-    'piece_runtime_prepare',
-  ) as typeof parsedConfigResult.piece_runtime_prepare;
-  const resolvedPieceArpeggio = resolveAliasedConfigKey(
-    configPath,
-    parsedConfigResult as Record<string, unknown>,
-    'workflow_arpeggio',
-    'piece_arpeggio',
-  ) as typeof parsedConfigResult.piece_arpeggio;
-  const resolvedPieceMcpServers = resolveAliasedConfigKey(
-    configPath,
-    parsedConfigResult as Record<string, unknown>,
-    'workflow_mcp_servers',
-    'piece_mcp_servers',
-  ) as typeof parsedConfigResult.piece_mcp_servers;
   const normalizedProvider = normalizeConfigProviderReference(
     provider as RawProviderReference,
     model as string | undefined,
@@ -148,10 +113,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     minimalOutput: minimal_output as boolean | undefined,
     concurrency: concurrency as number | undefined,
     taskPollIntervalMs: task_poll_interval_ms as number | undefined,
-    interactivePreviewMovements: resolveAliasedPreviewCount(
-      parsedConfigResult as Record<string, unknown>,
-      configPath,
-    ),
+    interactivePreviewSteps: resolveAliasedPreviewCount(parsedConfigResult as Record<string, unknown>),
     allowGitHooks: allow_git_hooks as boolean | undefined,
     allowGitFilters: allow_git_filters as boolean | undefined,
     autoPr: auto_pr as boolean | undefined,
@@ -168,14 +130,22 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     model: normalizedProvider.model,
     providerOptions: normalizedProvider.providerOptions,
     providerProfiles: normalizeProviderProfiles(
-      provider_profiles as Record<string, RawProviderPermissionProfile> | undefined,
+      parsedConfigResult.provider_profiles as Record<string, {
+        default_permission_mode: string;
+        step_permission_overrides?: Record<string, string>;
+      }> | undefined,
     ),
-    pieceOverrides: normalizePieceOverrides(resolvedPieceOverrides),
+    workflowOverrides: normalizeWorkflowOverrides(parsedConfigResult.workflow_overrides as {
+      quality_gates?: string[];
+      quality_gates_edit_only?: boolean;
+      steps?: Record<string, { quality_gates?: string[] }>;
+      personas?: Record<string, { quality_gates?: string[] }>;
+    } | undefined),
     runtime: normalizeRuntime(runtime),
-    pieceRuntimePrepare: normalizePieceRuntimePreparePolicy(resolvedPieceRuntimePrepare),
-    pieceArpeggio: normalizePieceArpeggioPolicy(resolvedPieceArpeggio),
+    workflowRuntimePrepare: normalizeWorkflowRuntimePreparePolicy(parsedConfigResult.workflow_runtime_prepare),
+    workflowArpeggio: normalizeWorkflowArpeggioPolicy(parsedConfigResult.workflow_arpeggio),
     syncConflictResolver: normalizeSyncConflictResolver(sync_conflict_resolver),
-    pieceMcpServers: normalizePieceMcpServers(resolvedPieceMcpServers),
+    workflowMcpServers: normalizeWorkflowMcpServers(parsedConfigResult.workflow_mcp_servers),
   };
 }
 
@@ -222,7 +192,7 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
   } else {
     delete savePayload.provider_options;
   }
-  for (const [camel, snake] of [['language', 'language'], ['autoPr', 'auto_pr'], ['draftPr', 'draft_pr'], ['allowGitHooks', 'allow_git_hooks'], ['allowGitFilters', 'allow_git_filters'], ['vcsProvider', 'vcs_provider'], ['baseBranch', 'base_branch'], ['branchNameStrategy', 'branch_name_strategy'], ['minimalOutput', 'minimal_output'], ['taskPollIntervalMs', 'task_poll_interval_ms'], ['interactivePreviewMovements', 'interactive_preview_steps'], ['concurrency', 'concurrency']] as const) {
+  for (const [camel, snake] of [['language', 'language'], ['autoPr', 'auto_pr'], ['draftPr', 'draft_pr'], ['allowGitHooks', 'allow_git_hooks'], ['allowGitFilters', 'allow_git_filters'], ['vcsProvider', 'vcs_provider'], ['baseBranch', 'base_branch'], ['branchNameStrategy', 'branch_name_strategy'], ['minimalOutput', 'minimal_output'], ['taskPollIntervalMs', 'task_poll_interval_ms'], ['interactivePreviewSteps', 'interactive_preview_steps'], ['concurrency', 'concurrency']] as const) {
     if (config[camel] !== undefined) savePayload[snake] = config[camel];
   }
   delete savePayload.pipeline;
@@ -255,15 +225,15 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
       delete savePayload.with_submodules;
     }
   }
-  for (const k of ['providerProfiles', 'providerOptions', 'autoPr', 'draftPr', 'allowGitHooks', 'allowGitFilters', 'vcsProvider', 'baseBranch', 'withSubmodules', 'branchNameStrategy', 'minimalOutput', 'taskPollIntervalMs', 'interactivePreviewMovements', 'personaProviders', 'taktProviders', 'pieceRuntimePrepare', 'pieceArpeggio', 'syncConflictResolver', 'pieceMcpServers'] as const) {
+  for (const k of ['providerProfiles', 'providerOptions', 'autoPr', 'draftPr', 'allowGitHooks', 'allowGitFilters', 'vcsProvider', 'baseBranch', 'withSubmodules', 'branchNameStrategy', 'minimalOutput', 'taskPollIntervalMs', 'interactivePreviewSteps', 'personaProviders', 'taktProviders', 'workflowRuntimePrepare', 'workflowArpeggio', 'syncConflictResolver', 'workflowMcpServers'] as const) {
     delete savePayload[k];
   }
 
-  const rawPieceOverrides = denormalizePieceOverrides(config.pieceOverrides);
-  if (rawPieceOverrides) {
-    savePayload.workflow_overrides = rawPieceOverrides;
+  const rawWorkflowOverrides = denormalizeWorkflowOverrides(config.workflowOverrides);
+  if (rawWorkflowOverrides) {
+    savePayload.workflow_overrides = rawWorkflowOverrides;
   }
-  delete savePayload.pieceOverrides;
+  delete savePayload.workflowOverrides;
 
   const normalizedRuntime = normalizeRuntime(config.runtime);
   if (normalizedRuntime) {
@@ -271,7 +241,7 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
   } else {
     delete savePayload.runtime;
   }
-  for (const [key, raw] of [['workflow_runtime_prepare', denormalizePieceRuntimePreparePolicy(config.pieceRuntimePrepare)], ['workflow_arpeggio', denormalizePieceArpeggioPolicy(config.pieceArpeggio)], ['sync_conflict_resolver', denormalizeSyncConflictResolver(config.syncConflictResolver)], ['workflow_mcp_servers', denormalizePieceMcpServers(config.pieceMcpServers)]] as const) {
+  for (const [key, raw] of [['workflow_runtime_prepare', denormalizeWorkflowRuntimePreparePolicy(config.workflowRuntimePrepare)], ['workflow_arpeggio', denormalizeWorkflowArpeggioPolicy(config.workflowArpeggio)], ['sync_conflict_resolver', denormalizeSyncConflictResolver(config.syncConflictResolver)], ['workflow_mcp_servers', denormalizeWorkflowMcpServers(config.workflowMcpServers)]] as const) {
     if (raw) { savePayload[key] = raw; } else { delete savePayload[key]; }
   }
 

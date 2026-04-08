@@ -55,12 +55,12 @@ export async function callAIWithRetry(
     sigintCount += 1;
     if (sigintCount === 1) {
       blankLine();
-      info(getLabel('piece.sigintGraceful', ctx.lang));
+      info(getLabel('workflow.sigintGraceful', ctx.lang));
       abortController.abort();
       return;
     }
     blankLine();
-    error(getLabel('piece.sigintForce', ctx.lang));
+    error(getLabel('workflow.sigintForce', ctx.lang));
     process.exit(EXIT_SIGINT);
   };
   process.on('SIGINT', onSigInt);

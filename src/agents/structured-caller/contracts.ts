@@ -1,4 +1,4 @@
-import type { PieceRule, PartDefinition } from '../../core/models/types.js';
+import type { WorkflowRule, PartDefinition } from '../../core/models/types.js';
 import type { JudgeStatusOptions, JudgeStatusResult, EvaluateConditionOptions } from '../judge-status-usecase.js';
 import type { DecomposeTaskOptions, MorePartsResponse } from '../decompose-task-usecase.js';
 
@@ -6,7 +6,7 @@ export interface StructuredCaller {
   judgeStatus(
     structuredInstruction: string,
     tagInstruction: string,
-    rules: PieceRule[],
+    rules: WorkflowRule[],
     options: JudgeStatusOptions,
   ): Promise<JudgeStatusResult>;
 

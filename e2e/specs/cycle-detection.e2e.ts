@@ -9,6 +9,7 @@ import {
 import { runTakt } from '../helpers/takt-runner';
 import { createLocalRepo, type LocalRepo } from '../helpers/test-repo';
 import { readSessionRecords } from '../helpers/session-log';
+import { copyWorkflowFixtureToRepo } from '../helpers/local-workflow-fixture';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -32,13 +33,16 @@ describe('E2E: Cycle detection via loop_monitors (mock)', () => {
   });
 
   it('should abort when cycle threshold is reached and judge selects ABORT', () => {
-    const piecePath = resolve(__dirname, '../fixtures/pieces/mock-cycle-detect.yaml');
+    const workflowPath = copyWorkflowFixtureToRepo(
+      repo.path,
+      resolve(__dirname, '../fixtures/workflows/mock-cycle-detect.yaml'),
+    );
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/cycle-detect-abort.json');
 
     const result = runTakt({
       args: [
         '--task', 'Test cycle detection abort',
-        '--piece', piecePath,
+        '--workflow', workflowPath,
         '--provider', 'mock',
       ],
       cwd: repo.path,
@@ -53,20 +57,23 @@ describe('E2E: Cycle detection via loop_monitors (mock)', () => {
 
     const records = readSessionRecords(repo.path);
     const judgeStep = records.find((r) => r.type === 'step_complete' && r.step === '_loop_judge_review_fix');
-    const abort = records.find((r) => r.type === 'piece_abort');
+    const abort = records.find((r) => r.type === 'workflow_abort');
 
     expect(judgeStep).toBeDefined();
     expect(abort).toBeDefined();
   }, 240_000);
 
   it('should complete when cycle threshold is not reached', () => {
-    const piecePath = resolve(__dirname, '../fixtures/pieces/mock-cycle-detect.yaml');
+    const workflowPath = copyWorkflowFixtureToRepo(
+      repo.path,
+      resolve(__dirname, '../fixtures/workflows/mock-cycle-detect.yaml'),
+    );
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/cycle-detect-pass.json');
 
     const result = runTakt({
       args: [
         '--task', 'Test cycle detection pass',
-        '--piece', piecePath,
+        '--workflow', workflowPath,
         '--provider', 'mock',
       ],
       cwd: repo.path,
@@ -80,7 +87,7 @@ describe('E2E: Cycle detection via loop_monitors (mock)', () => {
     expect(result.exitCode).toBe(0);
 
     const records = readSessionRecords(repo.path);
-    expect(records.some((r) => r.type === 'piece_complete')).toBe(true);
-    expect(records.some((r) => r.type === 'piece_abort')).toBe(false);
+    expect(records.some((r) => r.type === 'workflow_complete')).toBe(true);
+    expect(records.some((r) => r.type === 'workflow_abort')).toBe(false);
   }, 240_000);
 });

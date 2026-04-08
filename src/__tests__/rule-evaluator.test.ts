@@ -5,19 +5,19 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { RuleEvaluator, type RuleEvaluatorContext } from '../core/piece/evaluation/RuleEvaluator.js';
-import type { PieceState } from '../core/models/types.js';
-import { makeMovement } from './test-helpers.js';
+import { RuleEvaluator, type RuleEvaluatorContext } from '../core/workflow/evaluation/RuleEvaluator.js';
+import type { WorkflowState } from '../core/models/types.js';
+import { makeStep } from './test-helpers.js';
 
-function makeState(): PieceState {
+function makeState(): WorkflowState {
   return {
-    pieceName: 'test',
-    currentMovement: 'test-movement',
+    workflowName: 'test',
+    currentStep: 'test-step',
     iteration: 1,
-    movementOutputs: new Map(),
+    stepOutputs: new Map(),
     userInputs: [],
     personaSessions: new Map(),
-    movementIterations: new Map(),
+    stepIterations: new Map(),
     status: 'running',
   };
 }
@@ -36,8 +36,8 @@ function makeContext(overrides: Partial<RuleEvaluatorContext> = {}): RuleEvaluat
 
 describe('RuleEvaluator', () => {
   describe('evaluate', () => {
-    it('should return undefined when movement has no rules', async () => {
-      const step = makeMovement({ rules: undefined });
+    it('should return undefined when step has no rules', async () => {
+      const step = makeStep({ rules: undefined });
       const ctx = makeContext();
       const evaluator = new RuleEvaluator(step, ctx);
 
@@ -46,7 +46,7 @@ describe('RuleEvaluator', () => {
     });
 
     it('should return undefined when rules array is empty', async () => {
-      const step = makeMovement({ rules: [] });
+      const step = makeStep({ rules: [] });
       const ctx = makeContext();
       const evaluator = new RuleEvaluator(step, ctx);
 
@@ -55,7 +55,7 @@ describe('RuleEvaluator', () => {
     });
 
     it('should detect rule via Phase 3 tag output', async () => {
-      const step = makeMovement({
+      const step = makeStep({
         rules: [
           { condition: 'approved', next: 'implement' },
           { condition: 'rejected', next: 'review' },
@@ -67,11 +67,11 @@ describe('RuleEvaluator', () => {
 
       const result = await evaluator.evaluate('agent content', 'tag content with [TEST-MOVEMENT:1]');
       expect(result).toEqual({ index: 0, method: 'phase3_tag' });
-      expect(detectRuleIndex).toHaveBeenCalledWith('tag content with [TEST-MOVEMENT:1]', 'test-movement');
+      expect(detectRuleIndex).toHaveBeenCalledWith('tag content with [TEST-MOVEMENT:1]', 'test-step');
     });
 
     it('should fallback to Phase 1 tag when Phase 3 tag not found', async () => {
-      const step = makeMovement({
+      const step = makeStep({
         rules: [
           { condition: 'approved', next: 'implement' },
           { condition: 'rejected', next: 'review' },
@@ -90,7 +90,7 @@ describe('RuleEvaluator', () => {
     });
 
     it('should skip interactiveOnly rules in non-interactive mode', async () => {
-      const step = makeMovement({
+      const step = makeStep({
         rules: [
           { condition: 'user-fix', next: 'fix', interactiveOnly: true },
           { condition: 'auto-fix', next: 'autofix' },
@@ -107,7 +107,7 @@ describe('RuleEvaluator', () => {
     });
 
     it('should allow interactiveOnly rules in interactive mode', async () => {
-      const step = makeMovement({
+      const step = makeStep({
         rules: [
           { condition: 'user-fix', next: 'fix', interactiveOnly: true },
           { condition: 'auto-fix', next: 'autofix' },
@@ -122,7 +122,7 @@ describe('RuleEvaluator', () => {
     });
 
     it('should evaluate ai() conditions via AI judge', async () => {
-      const step = makeMovement({
+      const step = makeStep({
         rules: [
           { condition: 'approved', next: 'implement', isAiCondition: true, aiConditionText: 'is it approved?' },
           { condition: 'rejected', next: 'review', isAiCondition: true, aiConditionText: 'is it rejected?' },
@@ -145,7 +145,7 @@ describe('RuleEvaluator', () => {
     });
 
     it('should use ai_judge_fallback when no other method matches', async () => {
-      const step = makeMovement({
+      const step = makeStep({
         rules: [
           { condition: 'approved', next: 'implement' },
           { condition: 'rejected', next: 'review' },
@@ -160,7 +160,7 @@ describe('RuleEvaluator', () => {
     });
 
     it('should throw when no rule matches after all detection phases', async () => {
-      const step = makeMovement({
+      const step = makeStep({
         rules: [
           { condition: 'approved', next: 'implement' },
           { condition: 'rejected', next: 'review' },
@@ -170,12 +170,12 @@ describe('RuleEvaluator', () => {
       const evaluator = new RuleEvaluator(step, ctx);
 
       await expect(evaluator.evaluate('', '')).rejects.toThrow(
-        'Status not found for movement "test-movement": no rule matched after all detection phases',
+        'Status not found for step "test-step": no rule matched after all detection phases',
       );
     });
 
     it('should reject out-of-bounds tag detection index', async () => {
-      const step = makeMovement({
+      const step = makeStep({
         rules: [
           { condition: 'approved', next: 'implement' },
         ],
@@ -190,7 +190,7 @@ describe('RuleEvaluator', () => {
     });
 
     it('should skip ai() conditions for interactiveOnly rules in non-interactive mode', async () => {
-      const step = makeMovement({
+      const step = makeStep({
         rules: [
           {
             condition: 'user confirms',

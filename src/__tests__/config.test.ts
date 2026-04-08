@@ -8,10 +8,10 @@ import { join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import {
-  getBuiltinPiece,
-  loadAllPieces,
-  loadPiece,
-  listPieces,
+  getBuiltinWorkflow,
+  loadAllWorkflows,
+  loadWorkflow,
+  listWorkflows,
   loadPersonaPromptFromPath,
   getProjectConfigDir,
   getBuiltinPersonasDir,
@@ -64,64 +64,64 @@ afterEach(() => {
   }
 });
 
-describe('getBuiltinPiece', () => {
-  it('should return builtin piece when it exists in resources', () => {
-    const piece = getBuiltinPiece('default', process.cwd());
-    expect(piece).not.toBeNull();
-    expect(piece!.name).toBe('default');
+describe('getBuiltinWorkflow', () => {
+  it('should return builtin workflow when it exists in resources', () => {
+    const workflow = getBuiltinWorkflow('default', process.cwd());
+    expect(workflow).not.toBeNull();
+    expect(workflow!.name).toBe('default');
   });
 
   it('should resolve builtin instruction without projectCwd', () => {
-    const piece = getBuiltinPiece('default', process.cwd());
-    expect(piece).not.toBeNull();
+    const workflow = getBuiltinWorkflow('default', process.cwd());
+    expect(workflow).not.toBeNull();
 
-    const planMovement = piece!.movements.find((movement) => movement.name === 'plan');
-    expect(planMovement).toBeDefined();
-    expect(planMovement!.instruction).not.toBe('plan');
+    const planStep = workflow!.steps.find((step) => step.name === 'plan');
+    expect(planStep).toBeDefined();
+    expect(planStep!.instruction).not.toBe('plan');
   });
 
-  it('should return null for non-existent piece names', () => {
-    expect(getBuiltinPiece('nonexistent-piece', process.cwd())).toBeNull();
-    expect(getBuiltinPiece('unknown', process.cwd())).toBeNull();
-    expect(getBuiltinPiece('', process.cwd())).toBeNull();
+  it('should return null for non-existent workflow names', () => {
+    expect(getBuiltinWorkflow('nonexistent-workflow', process.cwd())).toBeNull();
+    expect(getBuiltinWorkflow('unknown', process.cwd())).toBeNull();
+    expect(getBuiltinWorkflow('', process.cwd())).toBeNull();
   });
 });
 
-describe('default piece parallel reviewers movement', () => {
-  it('should have a reviewers movement with parallel sub-movements', () => {
-    const piece = getBuiltinPiece('default', process.cwd());
-    expect(piece).not.toBeNull();
+describe('default workflow parallel reviewers step', () => {
+  it('should have a reviewers step with parallel sub-steps', () => {
+    const workflow = getBuiltinWorkflow('default', process.cwd());
+    expect(workflow).not.toBeNull();
 
-    const reviewersMovement = piece!.movements.find((s) => s.name === 'reviewers');
-    expect(reviewersMovement).toBeDefined();
-    expect(reviewersMovement!.parallel).toBeDefined();
-    expect(reviewersMovement!.parallel).toHaveLength(2);
+    const reviewersStep = workflow!.steps.find((s) => s.name === 'reviewers');
+    expect(reviewersStep).toBeDefined();
+    expect(reviewersStep!.parallel).toBeDefined();
+    expect(reviewersStep!.parallel).toHaveLength(2);
   });
 
-  it('should have arch-review and supervise as parallel sub-movements', () => {
-    const piece = getBuiltinPiece('default', process.cwd());
-    const reviewersMovement = piece!.movements.find((s) => s.name === 'reviewers')!;
-    const subMovementNames = reviewersMovement.parallel!.map((s) => s.name);
+  it('should have arch-review and supervise as parallel sub-steps', () => {
+    const workflow = getBuiltinWorkflow('default', process.cwd());
+    const reviewersStep = workflow!.steps.find((s) => s.name === 'reviewers')!;
+    const subStepNames = reviewersStep.parallel!.map((s) => s.name);
 
-    expect(subMovementNames).toContain('arch-review');
-    expect(subMovementNames).toContain('supervise');
+    expect(subStepNames).toContain('arch-review');
+    expect(subStepNames).toContain('supervise');
   });
 
-  it('should have multi-condition aggregate rules on the reviewers parent movement', () => {
-    const piece = getBuiltinPiece('default', process.cwd());
-    const reviewersMovement = piece!.movements.find((s) => s.name === 'reviewers')!;
+  it('should have multi-condition aggregate rules on the reviewers parent step', () => {
+    const workflow = getBuiltinWorkflow('default', process.cwd());
+    const reviewersStep = workflow!.steps.find((s) => s.name === 'reviewers')!;
 
-    expect(reviewersMovement.rules).toBeDefined();
-    expect(reviewersMovement.rules).toHaveLength(2);
+    expect(reviewersStep.rules).toBeDefined();
+    expect(reviewersStep.rules).toHaveLength(2);
 
-    const allRule = reviewersMovement.rules!.find((r) => r.isAggregateCondition && r.aggregateType === 'all');
+    const allRule = reviewersStep.rules!.find((r) => r.isAggregateCondition && r.aggregateType === 'all');
     expect(allRule).toBeDefined();
     // Multi-condition aggregate: first condition is always 'approved' (both en/ja)
     expect(Array.isArray(allRule!.aggregateConditionText)).toBe(true);
     expect((allRule!.aggregateConditionText as string[])[0]).toBe('approved');
     expect(allRule!.next).toBe('COMPLETE');
 
-    const anyRule = reviewersMovement.rules!.find((r) => r.isAggregateCondition && r.aggregateType === 'any');
+    const anyRule = reviewersStep.rules!.find((r) => r.isAggregateCondition && r.aggregateType === 'any');
     expect(anyRule).toBeDefined();
     // Multi-condition aggregate: first condition is always 'needs_fix' (both en/ja)
     expect(Array.isArray(anyRule!.aggregateConditionText)).toBe(true);
@@ -129,84 +129,84 @@ describe('default piece parallel reviewers movement', () => {
     expect(anyRule!.next).toBe('fix');
   });
 
-  it('should have arch-review sub-movement with approved/needs_fix conditions', () => {
-    const piece = getBuiltinPiece('default', process.cwd());
-    const reviewersMovement = piece!.movements.find((s) => s.name === 'reviewers')!;
+  it('should have arch-review sub-step with approved/needs_fix conditions', () => {
+    const workflow = getBuiltinWorkflow('default', process.cwd());
+    const reviewersStep = workflow!.steps.find((s) => s.name === 'reviewers')!;
 
-    const archReview = reviewersMovement.parallel!.find((s) => s.name === 'arch-review')!;
+    const archReview = reviewersStep.parallel!.find((s) => s.name === 'arch-review')!;
     expect(archReview.rules).toBeDefined();
     const conditions = archReview.rules!.map((r) => r.condition);
     expect(conditions).toContain('approved');
     expect(conditions).toContain('needs_fix');
   });
 
-  it('should have supervise sub-movement with 2 conditions', () => {
-    const piece = getBuiltinPiece('default', process.cwd());
-    const reviewersMovement = piece!.movements.find((s) => s.name === 'reviewers')!;
+  it('should have supervise sub-step with 2 conditions', () => {
+    const workflow = getBuiltinWorkflow('default', process.cwd());
+    const reviewersStep = workflow!.steps.find((s) => s.name === 'reviewers')!;
 
-    const supervise = reviewersMovement.parallel!.find((s) => s.name === 'supervise')!;
+    const supervise = reviewersStep.parallel!.find((s) => s.name === 'supervise')!;
     expect(supervise.rules).toBeDefined();
     expect(supervise.rules).toHaveLength(2);
   });
 
-  it('should have ai_review transitioning to reviewers movement', () => {
-    const piece = getBuiltinPiece('default', process.cwd());
-    const aiReviewMovement = piece!.movements.find((s) => s.name === 'ai_review')!;
+  it('should have ai_review transitioning to reviewers step', () => {
+    const workflow = getBuiltinWorkflow('default', process.cwd());
+    const aiReviewStep = workflow!.steps.find((s) => s.name === 'ai_review')!;
 
-    const approveRule = aiReviewMovement.rules!.find((r) => r.next === 'reviewers');
+    const approveRule = aiReviewStep.rules!.find((r) => r.next === 'reviewers');
     expect(approveRule).toBeDefined();
   });
 
-  it('should have ai_fix transitioning to ai_review movement', () => {
-    const piece = getBuiltinPiece('default', process.cwd());
-    const aiFixMovement = piece!.movements.find((s) => s.name === 'ai_fix')!;
+  it('should have ai_fix transitioning to ai_review step', () => {
+    const workflow = getBuiltinWorkflow('default', process.cwd());
+    const aiFixStep = workflow!.steps.find((s) => s.name === 'ai_fix')!;
 
-    const fixedRule = aiFixMovement.rules!.find((r) => r.next === 'ai_review');
+    const fixedRule = aiFixStep.rules!.find((r) => r.next === 'ai_review');
     expect(fixedRule).toBeDefined();
   });
 
-  it('should have fix movement transitioning back to reviewers', () => {
-    const piece = getBuiltinPiece('default', process.cwd());
-    const fixMovement = piece!.movements.find((s) => s.name === 'fix')!;
+  it('should have fix step transitioning back to reviewers', () => {
+    const workflow = getBuiltinWorkflow('default', process.cwd());
+    const fixStep = workflow!.steps.find((s) => s.name === 'fix')!;
 
-    const fixedRule = fixMovement.rules!.find((r) => r.next === 'reviewers');
+    const fixedRule = fixStep.rules!.find((r) => r.next === 'reviewers');
     expect(fixedRule).toBeDefined();
   });
 
-  it('should not have old separate review/security_review/improve movements', () => {
-    const piece = getBuiltinPiece('default', process.cwd());
-    const movementNames = piece!.movements.map((s) => s.name);
+  it('should not have old separate review/security_review/improve steps', () => {
+    const workflow = getBuiltinWorkflow('default', process.cwd());
+    const stepNames = workflow!.steps.map((s) => s.name);
 
-    expect(movementNames).not.toContain('review');
-    expect(movementNames).not.toContain('security_review');
-    expect(movementNames).not.toContain('improve');
-    expect(movementNames).not.toContain('security_fix');
+    expect(stepNames).not.toContain('review');
+    expect(stepNames).not.toContain('security_review');
+    expect(stepNames).not.toContain('improve');
+    expect(stepNames).not.toContain('security_fix');
   });
 
-  it('should have sub-movements with correct agents', () => {
-    const piece = getBuiltinPiece('default', process.cwd());
-    const reviewersMovement = piece!.movements.find((s) => s.name === 'reviewers')!;
+  it('should have sub-steps with correct agents', () => {
+    const workflow = getBuiltinWorkflow('default', process.cwd());
+    const reviewersStep = workflow!.steps.find((s) => s.name === 'reviewers')!;
 
-    const archReview = reviewersMovement.parallel!.find((s) => s.name === 'arch-review')!;
+    const archReview = reviewersStep.parallel!.find((s) => s.name === 'arch-review')!;
     expect(archReview.persona).toContain('architecture-reviewer');
 
-    const supervise = reviewersMovement.parallel!.find((s) => s.name === 'supervise')!;
+    const supervise = reviewersStep.parallel!.find((s) => s.name === 'supervise')!;
     expect(supervise.persona).toContain('supervisor');
   });
 
-  it('should have output contracts configured on sub-movements', () => {
-    const piece = getBuiltinPiece('default', process.cwd());
-    const reviewersMovement = piece!.movements.find((s) => s.name === 'reviewers')!;
+  it('should have output contracts configured on sub-steps', () => {
+    const workflow = getBuiltinWorkflow('default', process.cwd());
+    const reviewersStep = workflow!.steps.find((s) => s.name === 'reviewers')!;
 
-    const archReview = reviewersMovement.parallel!.find((s) => s.name === 'arch-review')!;
+    const archReview = reviewersStep.parallel!.find((s) => s.name === 'arch-review')!;
     expect(archReview.outputContracts).toBeDefined();
 
-    const supervise = reviewersMovement.parallel!.find((s) => s.name === 'supervise')!;
+    const supervise = reviewersStep.parallel!.find((s) => s.name === 'supervise')!;
     expect(supervise.outputContracts).toBeDefined();
   });
 });
 
-describe('loadAllPieces', () => {
+describe('loadAllWorkflows', () => {
   let testDir: string;
 
   beforeEach(() => {
@@ -220,15 +220,15 @@ describe('loadAllPieces', () => {
     }
   });
 
-  it('should load project-local pieces when cwd is provided', () => {
-    const piecesDir = join(testDir, '.takt', 'pieces');
-    mkdirSync(piecesDir, { recursive: true });
+  it('should load project-local workflows when cwd is provided', () => {
+    const workflowsDir = join(testDir, '.takt', 'workflows');
+    mkdirSync(workflowsDir, { recursive: true });
 
-    const samplePiece = `
-name: test-piece
-description: Test piece
-max_movements: 10
-movements:
+    const sampleWorkflow = `
+name: test-workflow
+description: Test workflow
+max_steps: 10
+steps:
   - name: step1
     persona: coder
     instruction: "{task}"
@@ -236,47 +236,47 @@ movements:
       - condition: Task completed
         next: COMPLETE
 `;
-    writeFileSync(join(piecesDir, 'test.yaml'), samplePiece);
+    writeFileSync(join(workflowsDir, 'test.yaml'), sampleWorkflow);
 
-    const pieces = loadAllPieces(testDir);
+    const workflows = loadAllWorkflows(testDir);
 
-    expect(pieces.has('test')).toBe(true);
+    expect(workflows.has('test')).toBe(true);
   });
 });
 
-describe('loadPiece (builtin fallback)', () => {
-  it('should load builtin piece when user piece does not exist', () => {
-    const piece = loadPiece('default', process.cwd());
-    expect(piece).not.toBeNull();
-    expect(piece!.name).toBe('default');
+describe('loadWorkflow (builtin fallback)', () => {
+  it('should load builtin workflow when user workflow does not exist', () => {
+    const workflow = loadWorkflow('default', process.cwd());
+    expect(workflow).not.toBeNull();
+    expect(workflow!.name).toBe('default');
   });
 
-  it('should return null for non-existent piece', () => {
-    const piece = loadPiece('does-not-exist', process.cwd());
-    expect(piece).toBeNull();
+  it('should return null for non-existent workflow', () => {
+    const workflow = loadWorkflow('does-not-exist', process.cwd());
+    expect(workflow).toBeNull();
   });
 
-  it('should load builtin pieces like default, research, audit-e2e', () => {
-    const defaultPiece = loadPiece('default', process.cwd());
-    expect(defaultPiece).not.toBeNull();
-    expect(defaultPiece!.name).toBe('default');
+  it('should load builtin workflows like default, research, audit-e2e', () => {
+    const defaultWorkflow = loadWorkflow('default', process.cwd());
+    expect(defaultWorkflow).not.toBeNull();
+    expect(defaultWorkflow!.name).toBe('default');
 
-    const research = loadPiece('research', process.cwd());
+    const research = loadWorkflow('research', process.cwd());
     expect(research).not.toBeNull();
     expect(research!.name).toBe('research');
 
-    const auditE2e = loadPiece('audit-e2e', process.cwd());
+    const auditE2e = loadWorkflow('audit-e2e', process.cwd());
     expect(auditE2e).not.toBeNull();
     expect(auditE2e!.name).toBe('audit-e2e');
   });
 });
 
-describe('loadPiece piece_overrides.personas integration', () => {
+describe('loadWorkflow workflow_overrides.personas integration', () => {
   let testDir: string;
 
   beforeEach(() => {
     testDir = join(tmpdir(), `takt-test-${randomUUID()}`);
-    mkdirSync(join(testDir, '.takt', 'pieces'), { recursive: true });
+    mkdirSync(join(testDir, '.takt', 'workflows'), { recursive: true });
   });
 
   afterEach(() => {
@@ -292,7 +292,7 @@ describe('loadPiece piece_overrides.personas integration', () => {
       join(isolatedGlobalConfigDir, 'config.yaml'),
       [
         'language: en',
-        'piece_overrides:',
+        'workflow_overrides:',
         '  personas:',
         '    coder:',
         '      quality_gates:',
@@ -303,7 +303,7 @@ describe('loadPiece piece_overrides.personas integration', () => {
     writeFileSync(
       join(testDir, '.takt', 'config.yaml'),
       [
-        'piece_overrides:',
+        'workflow_overrides:',
         '  personas:',
         '    coder:',
         '      quality_gates:',
@@ -312,13 +312,13 @@ describe('loadPiece piece_overrides.personas integration', () => {
       'utf-8',
     );
     writeFileSync(
-      join(testDir, '.takt', 'pieces', 'persona-gates.yaml'),
+      join(testDir, '.takt', 'workflows', 'persona-gates.yaml'),
       [
         'name: persona-gates',
         'description: Persona quality gates integration test',
-        'max_movements: 3',
-        'initial_movement: implement',
-        'movements:',
+        'max_steps: 3',
+        'initial_step: implement',
+        'steps:',
         '  - name: implement',
         '    persona: coder',
         '    edit: true',
@@ -334,22 +334,22 @@ describe('loadPiece piece_overrides.personas integration', () => {
     invalidateGlobalConfigCache();
     invalidateAllResolvedConfigCache();
 
-    const piece = loadPiece('persona-gates', testDir);
+    const workflow = loadWorkflow('persona-gates', testDir);
 
-    const movement = piece?.movements.find((step) => step.name === 'implement');
-    expect(movement?.qualityGates).toEqual([
+    const step = workflow?.steps.find((currentStep) => currentStep.name === 'implement');
+    expect(step?.qualityGates).toEqual([
       'Global persona gate',
       'Project persona gate',
       'YAML gate',
     ]);
   });
 
-  it('should apply persona quality gates when movement persona uses personas section alias key', () => {
+  it('should apply persona quality gates when step persona uses personas section alias key', () => {
     writeFileSync(
       join(isolatedGlobalConfigDir, 'config.yaml'),
       [
         'language: en',
-        'piece_overrides:',
+        'workflow_overrides:',
         '  personas:',
         '    coder:',
         '      quality_gates:',
@@ -357,18 +357,18 @@ describe('loadPiece piece_overrides.personas integration', () => {
       ].join('\n'),
       'utf-8',
     );
-    mkdirSync(join(testDir, '.takt', 'pieces', 'personas'), { recursive: true });
-    writeFileSync(join(testDir, '.takt', 'pieces', 'personas', 'implementer.md'), 'Implementer persona', 'utf-8');
+    mkdirSync(join(testDir, '.takt', 'workflows', 'personas'), { recursive: true });
+    writeFileSync(join(testDir, '.takt', 'workflows', 'personas', 'implementer.md'), 'Implementer persona', 'utf-8');
     writeFileSync(
-      join(testDir, '.takt', 'pieces', 'persona-alias-key.yaml'),
+      join(testDir, '.takt', 'workflows', 'persona-alias-key.yaml'),
       [
         'name: persona-alias-key',
         'description: personas alias key should drive override matching',
-        'max_movements: 3',
-        'initial_movement: implement',
+        'max_steps: 3',
+        'initial_step: implement',
         'personas:',
         '  coder: ./personas/implementer.md',
-        'movements:',
+        'steps:',
         '  - name: implement',
         '    persona: coder',
         '    quality_gates:',
@@ -383,10 +383,10 @@ describe('loadPiece piece_overrides.personas integration', () => {
     invalidateGlobalConfigCache();
     invalidateAllResolvedConfigCache();
 
-    const piece = loadPiece('persona-alias-key', testDir);
+    const workflow = loadWorkflow('persona-alias-key', testDir);
 
-    const movement = piece?.movements.find((step) => step.name === 'implement');
-    expect(movement?.qualityGates).toEqual(['Alias key gate', 'YAML gate']);
+    const step = workflow?.steps.find((currentStep) => currentStep.name === 'implement');
+    expect(step?.qualityGates).toEqual(['Alias key gate', 'YAML gate']);
   });
 
   it('should apply persona quality gates for path personas using basename key', () => {
@@ -394,7 +394,7 @@ describe('loadPiece piece_overrides.personas integration', () => {
       join(isolatedGlobalConfigDir, 'config.yaml'),
       [
         'language: en',
-        'piece_overrides:',
+        'workflow_overrides:',
         '  personas:',
         '    implementer:',
         '      quality_gates:',
@@ -402,16 +402,16 @@ describe('loadPiece piece_overrides.personas integration', () => {
       ].join('\n'),
       'utf-8',
     );
-    mkdirSync(join(testDir, '.takt', 'pieces', 'personas'), { recursive: true });
-    writeFileSync(join(testDir, '.takt', 'pieces', 'personas', 'implementer.md'), 'Implementer persona', 'utf-8');
+    mkdirSync(join(testDir, '.takt', 'workflows', 'personas'), { recursive: true });
+    writeFileSync(join(testDir, '.takt', 'workflows', 'personas', 'implementer.md'), 'Implementer persona', 'utf-8');
     writeFileSync(
-      join(testDir, '.takt', 'pieces', 'persona-path-key.yaml'),
+      join(testDir, '.takt', 'workflows', 'persona-path-key.yaml'),
       [
         'name: persona-path-key',
         'description: path personas should match overrides by basename',
-        'max_movements: 3',
-        'initial_movement: implement',
-        'movements:',
+        'max_steps: 3',
+        'initial_step: implement',
+        'steps:',
         '  - name: implement',
         '    persona: ./personas/implementer.md',
         '    quality_gates:',
@@ -426,10 +426,10 @@ describe('loadPiece piece_overrides.personas integration', () => {
     invalidateGlobalConfigCache();
     invalidateAllResolvedConfigCache();
 
-    const piece = loadPiece('persona-path-key', testDir);
+    const workflow = loadWorkflow('persona-path-key', testDir);
 
-    const movement = piece?.movements.find((step) => step.name === 'implement');
-    expect(movement?.qualityGates).toEqual(['Path basename gate', 'YAML gate']);
+    const step = workflow?.steps.find((currentStep) => currentStep.name === 'implement');
+    expect(step?.qualityGates).toEqual(['Path basename gate', 'YAML gate']);
   });
 
   it('should not apply persona quality gates when persona does not match', () => {
@@ -437,7 +437,7 @@ describe('loadPiece piece_overrides.personas integration', () => {
       join(isolatedGlobalConfigDir, 'config.yaml'),
       [
         'language: en',
-        'piece_overrides:',
+        'workflow_overrides:',
         '  personas:',
         '    reviewer:',
         '      quality_gates:',
@@ -446,13 +446,13 @@ describe('loadPiece piece_overrides.personas integration', () => {
       'utf-8',
     );
     writeFileSync(
-      join(testDir, '.takt', 'pieces', 'persona-mismatch.yaml'),
+      join(testDir, '.takt', 'workflows', 'persona-mismatch.yaml'),
       [
         'name: persona-mismatch',
         'description: Persona mismatch integration test',
-        'max_movements: 3',
-        'initial_movement: implement',
-        'movements:',
+        'max_steps: 3',
+        'initial_step: implement',
+        'steps:',
         '  - name: implement',
         '    persona: coder',
         '    quality_gates:',
@@ -467,18 +467,18 @@ describe('loadPiece piece_overrides.personas integration', () => {
     invalidateGlobalConfigCache();
     invalidateAllResolvedConfigCache();
 
-    const piece = loadPiece('persona-mismatch', testDir);
+    const workflow = loadWorkflow('persona-mismatch', testDir);
 
-    const movement = piece?.movements.find((step) => step.name === 'implement');
-    expect(movement?.qualityGates).toEqual(['YAML gate']);
+    const step = workflow?.steps.find((currentStep) => currentStep.name === 'implement');
+    expect(step?.qualityGates).toEqual(['YAML gate']);
   });
 
-  it('should not apply persona quality gates when movement has no persona', () => {
+  it('should not apply persona quality gates when step has no persona', () => {
     writeFileSync(
       join(isolatedGlobalConfigDir, 'config.yaml'),
       [
         'language: en',
-        'piece_overrides:',
+        'workflow_overrides:',
         '  personas:',
         '    reviewer:',
         '      quality_gates:',
@@ -487,13 +487,13 @@ describe('loadPiece piece_overrides.personas integration', () => {
       'utf-8',
     );
     writeFileSync(
-      join(testDir, '.takt', 'pieces', 'no-persona-reviewer.yaml'),
+      join(testDir, '.takt', 'workflows', 'no-persona-reviewer.yaml'),
       [
         'name: no-persona-reviewer',
-        'description: No persona movement should not match persona overrides',
-        'max_movements: 3',
-        'initial_movement: reviewer',
-        'movements:',
+        'description: No persona step should not match persona overrides',
+        'max_steps: 3',
+        'initial_step: reviewer',
+        'steps:',
         '  - name: reviewer',
         '    quality_gates:',
         '      - "YAML gate"',
@@ -507,10 +507,10 @@ describe('loadPiece piece_overrides.personas integration', () => {
     invalidateGlobalConfigCache();
     invalidateAllResolvedConfigCache();
 
-    const piece = loadPiece('no-persona-reviewer', testDir);
+    const workflow = loadWorkflow('no-persona-reviewer', testDir);
 
-    const movement = piece?.movements.find((step) => step.name === 'reviewer');
-    expect(movement?.qualityGates).toEqual(['YAML gate']);
+    const step = workflow?.steps.find((currentStep) => currentStep.name === 'reviewer');
+    expect(step?.qualityGates).toEqual(['YAML gate']);
   });
 
   it('should not apply persona quality gates from persona_name without persona', () => {
@@ -518,7 +518,7 @@ describe('loadPiece piece_overrides.personas integration', () => {
       join(isolatedGlobalConfigDir, 'config.yaml'),
       [
         'language: en',
-        'piece_overrides:',
+        'workflow_overrides:',
         '  personas:',
         '    reviewer:',
         '      quality_gates:',
@@ -527,13 +527,13 @@ describe('loadPiece piece_overrides.personas integration', () => {
       'utf-8',
     );
     writeFileSync(
-      join(testDir, '.takt', 'pieces', 'persona-name-only.yaml'),
+      join(testDir, '.takt', 'workflows', 'persona-name-only.yaml'),
       [
         'name: persona-name-only',
         'description: persona_name should be display-only for persona overrides',
-        'max_movements: 3',
-        'initial_movement: review',
-        'movements:',
+        'max_steps: 3',
+        'initial_step: review',
+        'steps:',
         '  - name: review',
         '    persona_name: reviewer',
         '    quality_gates:',
@@ -548,21 +548,21 @@ describe('loadPiece piece_overrides.personas integration', () => {
     invalidateGlobalConfigCache();
     invalidateAllResolvedConfigCache();
 
-    const piece = loadPiece('persona-name-only', testDir);
+    const workflow = loadWorkflow('persona-name-only', testDir);
 
-    const movement = piece?.movements.find((step) => step.name === 'review');
-    expect(movement?.qualityGates).toEqual(['YAML gate']);
+    const step = workflow?.steps.find((currentStep) => currentStep.name === 'review');
+    expect(step?.qualityGates).toEqual(['YAML gate']);
   });
 
-  it('should throw when movement persona is an empty string', () => {
+  it('should throw when step persona is an empty string', () => {
     writeFileSync(
-      join(testDir, '.takt', 'pieces', 'empty-persona.yaml'),
+      join(testDir, '.takt', 'workflows', 'empty-persona.yaml'),
       [
         'name: empty-persona',
         'description: Empty persona should fail fast',
-        'max_movements: 3',
-        'initial_movement: implement',
-        'movements:',
+        'max_steps: 3',
+        'initial_step: implement',
+        'steps:',
         '  - name: implement',
         '    persona: "   "',
         '    rules:',
@@ -575,18 +575,18 @@ describe('loadPiece piece_overrides.personas integration', () => {
     invalidateGlobalConfigCache();
     invalidateAllResolvedConfigCache();
 
-    expect(() => loadPiece('empty-persona', testDir)).toThrow('Movement "implement" has an empty persona value');
+    expect(() => loadWorkflow('empty-persona', testDir)).toThrow('Step "implement" has an empty persona value');
   });
 
-  it('should throw when movement persona_name is an empty string', () => {
+  it('should throw when step persona_name is an empty string', () => {
     writeFileSync(
-      join(testDir, '.takt', 'pieces', 'empty-persona-name.yaml'),
+      join(testDir, '.takt', 'workflows', 'empty-persona-name.yaml'),
       [
         'name: empty-persona-name',
         'description: Empty persona_name should fail fast',
-        'max_movements: 3',
-        'initial_movement: implement',
-        'movements:',
+        'max_steps: 3',
+        'initial_step: implement',
+        'steps:',
         '  - name: implement',
         '    persona: coder',
         '    persona_name: "   "',
@@ -600,11 +600,11 @@ describe('loadPiece piece_overrides.personas integration', () => {
     invalidateGlobalConfigCache();
     invalidateAllResolvedConfigCache();
 
-    expect(() => loadPiece('empty-persona-name', testDir)).toThrow('Movement "implement" has an empty persona_name value');
+    expect(() => loadWorkflow('empty-persona-name', testDir)).toThrow('Step "implement" has an empty persona_name value');
   });
 });
 
-describe('listPieces (builtin fallback)', () => {
+describe('listWorkflows (builtin fallback)', () => {
   let testDir: string;
 
   beforeEach(() => {
@@ -618,20 +618,20 @@ describe('listPieces (builtin fallback)', () => {
     }
   });
 
-  it('should include builtin pieces', () => {
-    const pieces = listPieces(testDir);
-    expect(pieces).toContain('default');
-    expect(pieces).toContain('audit-e2e');
+  it('should include builtin workflows', () => {
+    const workflows = listWorkflows(testDir);
+    expect(workflows).toContain('default');
+    expect(workflows).toContain('audit-e2e');
   });
 
   it('should return sorted list', () => {
-    const pieces = listPieces(testDir);
-    const sorted = [...pieces].sort();
-    expect(pieces).toEqual(sorted);
+    const workflows = listWorkflows(testDir);
+    const sorted = [...workflows].sort();
+    expect(workflows).toEqual(sorted);
   });
 });
 
-describe('loadAllPieces (builtin fallback)', () => {
+describe('loadAllWorkflows (builtin fallback)', () => {
   let testDir: string;
 
   beforeEach(() => {
@@ -645,9 +645,9 @@ describe('loadAllPieces (builtin fallback)', () => {
     }
   });
 
-  it('should include builtin pieces in the map', () => {
-    const pieces = loadAllPieces(testDir);
-    expect(pieces.has('default')).toBe(true);
+  it('should include builtin workflows in the map', () => {
+    const workflows = loadAllWorkflows(testDir);
+    expect(workflows.has('default')).toBe(true);
   });
 });
 
@@ -662,6 +662,10 @@ describe('loadPersonaPromptFromPath (builtin paths)', () => {
       expect(prompt).toBeTruthy();
       expect(typeof prompt).toBe('string');
     }
+  });
+
+  it('should reject persona prompt paths outside allowed roots', () => {
+    expect(() => loadPersonaPromptFromPath('/tmp/not-allowed-persona.md', process.cwd())).toThrow(/not allowed/i);
   });
 });
 

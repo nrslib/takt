@@ -90,7 +90,7 @@ describe('E2E: takt repertoire (real GitHub fixtures)', () => {
     }
   });
 
-  it.skipIf(!canUseFixtureRepo)('should install fixture package from GitHub and create lock file', () => {
+  it.skipIf(!canUseFixtureRepo)('should install fixture package from GitHub without importing legacy workflows', () => {
     const result = runTakt({
       args: ['repertoire', 'add', `github:${FIXTURE_REPO}@${FIXTURE_REF}`],
       cwd: process.cwd(),
@@ -107,7 +107,7 @@ describe('E2E: takt repertoire (real GitHub fixtures)', () => {
     expect(existsSync(join(packageDir, 'takt-repertoire.yaml'))).toBe(true);
     expect(existsSync(join(packageDir, '.takt-repertoire-lock.yaml'))).toBe(true);
     expect(existsSync(join(packageDir, 'facets'))).toBe(true);
-    expect(existsSync(join(packageDir, 'pieces'))).toBe(true);
+    expect(existsSync(join(packageDir, 'workflows'))).toBe(false);
 
     const lock = readYamlFile<LockFile>(join(packageDir, '.takt-repertoire-lock.yaml'));
     expect(lock.source).toBe('github:nrslib/takt-repertoire-fixture');
@@ -190,10 +190,10 @@ describe('E2E: takt repertoire (real GitHub fixtures)', () => {
     const packageDir = join(isolatedEnv.taktDir, 'repertoire', '@nrslib', 'takt-repertoire-fixture-subdir');
     expect(existsSync(join(packageDir, 'takt-repertoire.yaml'))).toBe(true);
     expect(existsSync(join(packageDir, '.takt-repertoire-lock.yaml'))).toBe(true);
-    expect(existsSync(join(packageDir, 'facets')) || existsSync(join(packageDir, 'pieces'))).toBe(true);
+    expect(existsSync(join(packageDir, 'facets')) || existsSync(join(packageDir, 'workflows'))).toBe(true);
   }, 240_000);
 
-  it.skipIf(!canUseFacetsOnlyRepo)('should install facets-only fixture package without requiring pieces directory', () => {
+  it.skipIf(!canUseFacetsOnlyRepo)('should install facets-only fixture package without requiring workflows directory', () => {
     const result = runTakt({
       args: ['repertoire', 'add', `github:${FIXTURE_REPO_FACETS_ONLY}@${FIXTURE_REF}`],
       cwd: process.cwd(),
@@ -205,7 +205,7 @@ describe('E2E: takt repertoire (real GitHub fixtures)', () => {
     expect(result.exitCode).toBe(0);
     const packageDir = join(isolatedEnv.taktDir, 'repertoire', '@nrslib', 'takt-repertoire-fixture-facets-only');
     expect(existsSync(join(packageDir, 'facets'))).toBe(true);
-    expect(existsSync(join(packageDir, 'pieces'))).toBe(false);
+    expect(existsSync(join(packageDir, 'workflows'))).toBe(false);
   }, 240_000);
 
   it.skipIf(!canUseMissingManifestRepo)('should fail when repository has no takt-repertoire.yaml', () => {
@@ -222,7 +222,7 @@ describe('E2E: takt repertoire (real GitHub fixtures)', () => {
   }, 240_000);
 
   it.skipIf(!canUseFixtureRepo)(
-    'should display pre-install summary with package name, faceted info, and pieces list',
+    'should display pre-install summary with package name, faceted info, and workflows list',
     () => {
       const result = runTakt({
         args: ['repertoire', 'add', `github:${FIXTURE_REPO}@${FIXTURE_REF}`],
@@ -235,7 +235,7 @@ describe('E2E: takt repertoire (real GitHub fixtures)', () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain(`nrslib/takt-repertoire-fixture @${FIXTURE_REF}`);
       expect(result.stdout).toContain('facets:');
-      expect(result.stdout).toContain('pieces:');
+      expect(result.stdout).toContain('workflows:');
       expect(result.stdout).toContain('キャンセルしました');
     },
     240_000,
@@ -411,13 +411,13 @@ describe('E2E: takt repertoire (real GitHub fixtures)', () => {
 
   it.todo('should populate lock file commit field with the specified commit SHA when installing by SHA');
 
-  it.todo('should display warning symbol when package contains piece with edit: true');
+  it.todo('should display warning symbol when package contains workflow with edit: true');
 
   it.todo('should reject takt-repertoire.yaml with absolute path in path field (/foo)');
 
   it.todo('should reject takt-repertoire.yaml with path traversal via ".." segments');
 
-  it.todo('should reject package with neither facets/ nor pieces/ directory');
+  it.todo('should reject package with neither facets/ nor workflows/ directory');
 
   it.todo('should reject takt-repertoire.yaml with min_version "1.0" (missing patch segment)');
 

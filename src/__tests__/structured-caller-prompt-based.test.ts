@@ -170,7 +170,7 @@ describe('PromptBasedStructuredCaller', () => {
       'structured instruction',
       'tag instruction',
       [{ condition: 'approved', next: 'done' }],
-      { cwd: '/tmp/project', movementName: 'review', provider: 'cursor' },
+      { cwd: '/tmp/project', stepName: 'review', provider: 'cursor' },
     );
 
     expect(result).toEqual({ ruleIndex: 0, method: 'auto_select' });
@@ -195,7 +195,7 @@ describe('PromptBasedStructuredCaller', () => {
       ],
       {
         cwd: '/tmp/project',
-        movementName: 'review',
+        stepName: 'review',
         provider: 'claude',
         resolvedProvider: 'codex',
         resolvedModel: 'gpt-5.2-codex',
@@ -240,7 +240,7 @@ describe('PromptBasedStructuredCaller', () => {
         { condition: 'approved', next: 'done' },
         { condition: 'rejected', next: 'failed' },
       ],
-      { cwd: '/tmp/project', movementName: 'review', provider: 'cursor' },
+      { cwd: '/tmp/project', stepName: 'review', provider: 'cursor' },
     );
 
     expect(result).toEqual({ ruleIndex: 0, method: 'phase3_tag' });
@@ -276,7 +276,7 @@ describe('PromptBasedStructuredCaller', () => {
         { condition: 'approved', next: 'done' },
         { condition: 'rejected', next: 'failed' },
       ],
-      { cwd: '/tmp/project', movementName: 'review', provider: 'cursor' },
+      { cwd: '/tmp/project', stepName: 'review', provider: 'cursor' },
     );
 
     expect(result).toEqual({ ruleIndex: 1, method: 'ai_judge' });
@@ -312,7 +312,7 @@ describe('PromptBasedStructuredCaller', () => {
         { condition: 'approved', next: 'done' },
         { condition: 'interactive-only-rule', next: 'blocked', interactiveOnly: true },
       ],
-      { cwd: '/tmp/project', movementName: 'review', provider: 'cursor', interactive: false },
+      { cwd: '/tmp/project', stepName: 'review', provider: 'cursor', interactive: false },
     );
 
     // interactiveOnly rule (index 1) is excluded; only index 0 is passed to evaluateCondition
@@ -351,7 +351,7 @@ describe('PromptBasedStructuredCaller', () => {
         { condition: 'approved', next: 'done' },
         { condition: 'interactive-only-rule', next: 'blocked', interactiveOnly: true },
       ],
-      { cwd: '/tmp/project', movementName: 'review', provider: 'cursor', interactive: true },
+      { cwd: '/tmp/project', stepName: 'review', provider: 'cursor', interactive: true },
     );
 
     // interactiveOnly rule (index 1) is included; [JUDGE:2] → 0-based index 1, which maps to original index 1
@@ -390,7 +390,7 @@ describe('PromptBasedStructuredCaller', () => {
         { condition: 'approved', next: 'done' },
         { condition: 'rejected', next: 'failed' },
       ],
-      { cwd: '/tmp/project', movementName: 'review', provider: 'cursor' },
+      { cwd: '/tmp/project', stepName: 'review', provider: 'cursor' },
     )).rejects.toThrow('Structured response parsing failed');
   });
 });

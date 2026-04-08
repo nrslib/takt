@@ -3,9 +3,9 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { buildMergeFn } from '../core/piece/arpeggio/merge.js';
-import type { ArpeggioMergeMovementConfig } from '../core/piece/arpeggio/types.js';
-import type { BatchResult } from '../core/piece/arpeggio/types.js';
+import { buildMergeFn } from '../core/workflow/arpeggio/merge.js';
+import type { ArpeggioMergeStepConfig } from '../core/workflow/arpeggio/types.js';
+import type { BatchResult } from '../core/workflow/arpeggio/types.js';
 
 function makeResult(batchIndex: number, content: string, success = true): BatchResult {
   return { batchIndex, content, success };
@@ -18,7 +18,7 @@ function makeFailedResult(batchIndex: number, error: string): BatchResult {
 describe('buildMergeFn', () => {
   describe('concat strategy', () => {
     it('should concatenate results with default separator (newline)', () => {
-      const config: ArpeggioMergeMovementConfig = { strategy: 'concat' };
+      const config: ArpeggioMergeStepConfig = { strategy: 'concat' };
       const mergeFn = buildMergeFn(config);
       const results = [
         makeResult(0, 'Result A'),
@@ -29,7 +29,7 @@ describe('buildMergeFn', () => {
     });
 
     it('should concatenate results with custom separator', () => {
-      const config: ArpeggioMergeMovementConfig = { strategy: 'concat', separator: '\n---\n' };
+      const config: ArpeggioMergeStepConfig = { strategy: 'concat', separator: '\n---\n' };
       const mergeFn = buildMergeFn(config);
       const results = [
         makeResult(0, 'A'),
@@ -39,7 +39,7 @@ describe('buildMergeFn', () => {
     });
 
     it('should sort results by batch index', () => {
-      const config: ArpeggioMergeMovementConfig = { strategy: 'concat' };
+      const config: ArpeggioMergeStepConfig = { strategy: 'concat' };
       const mergeFn = buildMergeFn(config);
       const results = [
         makeResult(2, 'C'),
@@ -50,7 +50,7 @@ describe('buildMergeFn', () => {
     });
 
     it('should filter out failed results', () => {
-      const config: ArpeggioMergeMovementConfig = { strategy: 'concat' };
+      const config: ArpeggioMergeStepConfig = { strategy: 'concat' };
       const mergeFn = buildMergeFn(config);
       const results = [
         makeResult(0, 'A'),
@@ -61,7 +61,7 @@ describe('buildMergeFn', () => {
     });
 
     it('should return empty string when all results failed', () => {
-      const config: ArpeggioMergeMovementConfig = { strategy: 'concat' };
+      const config: ArpeggioMergeStepConfig = { strategy: 'concat' };
       const mergeFn = buildMergeFn(config);
       const results = [
         makeFailedResult(0, 'error1'),
@@ -73,7 +73,7 @@ describe('buildMergeFn', () => {
 
   describe('custom strategy', () => {
     it('should execute inline_js merge function', () => {
-      const config: ArpeggioMergeMovementConfig = {
+      const config: ArpeggioMergeStepConfig = {
         strategy: 'custom',
         inlineJs: 'return results.filter((r) => r.success).map((r) => r.content).reverse().join("|");',
       };

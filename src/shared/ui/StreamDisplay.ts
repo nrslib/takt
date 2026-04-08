@@ -14,12 +14,12 @@ import { stripAnsi } from '../utils/text.js';
 export interface ProgressInfo {
   /** Current iteration (1-indexed) */
   iteration: number;
-  /** Maximum movements allowed */
-  maxMovements: number;
-  /** Current movement index within piece (0-indexed) */
-  movementIndex: number;
-  /** Total number of movements in piece */
-  totalMovements: number;
+  /** Maximum steps allowed */
+  maxSteps: number;
+  /** Current step index within the workflow (0-indexed) */
+  stepIndex: number;
+  /** Total number of steps in the workflow */
+  totalSteps: number;
 }
 
 /** Stream display manager for real-time Claude output */
@@ -48,16 +48,15 @@ export class StreamDisplay {
 
   /**
    * Build progress prefix string for display.
-   * Format: `(iteration/maxMovements) step movementIndex/totalMovements`
+   * Format: `(iteration/maxSteps) step stepIndex/totalSteps`
    * Example: `(3/10) step 2/4`
    */
   private buildProgressPrefix(): string {
     if (!this.progressInfo) {
       return '';
     }
-    const { iteration, maxMovements, movementIndex, totalMovements } = this.progressInfo;
-    // movementIndex is 0-indexed, display as 1-indexed
-    return `(${iteration}/${maxMovements}) step ${movementIndex + 1}/${totalMovements}`;
+    const { iteration, maxSteps, stepIndex, totalSteps } = this.progressInfo;
+    return `(${iteration}/${maxSteps}) step ${stepIndex + 1}/${totalSteps}`;
   }
 
   showInit(model: string): void {

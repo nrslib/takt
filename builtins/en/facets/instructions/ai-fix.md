@@ -1,4 +1,4 @@
-**This is AI Review iteration #{movement_iteration}.**
+**This is AI Review iteration #{step_iteration}.**
 Use reports in the Report Directory as the primary source of truth. If additional context is needed, you may consult Previous Response and conversation history as secondary sources (Previous Response may be unavailable). If information conflicts, prioritize reports in the Report Directory and actual file contents.
 
 From the 2nd iteration onward, it means the previous fixes were not actually applied.

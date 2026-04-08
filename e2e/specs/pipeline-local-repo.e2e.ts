@@ -37,14 +37,14 @@ describe('E2E: Pipeline --skip-git on local/non-git directories (mock)', () => {
   });
 
   it('should execute pipeline with --skip-git in a local git repository', () => {
-    const piecePath = resolve(__dirname, '../fixtures/pieces/mock-single-step.yaml');
+    const workflowPath = resolve(__dirname, '../fixtures/workflows/mock-single-step.yaml');
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/execute-done.json');
 
     const result = runTakt({
       args: [
         '--pipeline',
         '--task', 'Pipeline local repo test',
-        '--piece', piecePath,
+        '--workflow', workflowPath,
         '--skip-git',
         '--provider', 'mock',
       ],
@@ -61,7 +61,7 @@ describe('E2E: Pipeline --skip-git on local/non-git directories (mock)', () => {
   }, 240_000);
 
   it('should execute pipeline with --skip-git in a non-git directory', () => {
-    const piecePath = resolve(__dirname, '../fixtures/pieces/mock-single-step.yaml');
+    const workflowPath = resolve(__dirname, '../fixtures/workflows/mock-single-step.yaml');
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/execute-done.json');
     const dir = createNonGitDir();
 
@@ -70,7 +70,7 @@ describe('E2E: Pipeline --skip-git on local/non-git directories (mock)', () => {
         args: [
           '--pipeline',
           '--task', 'Pipeline non-git test',
-          '--piece', piecePath,
+          '--workflow', workflowPath,
           '--skip-git',
           '--provider', 'mock',
         ],

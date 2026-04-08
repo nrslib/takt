@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { buildEditRule } from '../core/piece/instruction/instruction-context.js';
+import { buildEditRule } from '../core/workflow/instruction/instruction-context.js';
 
 describe('buildEditRule', () => {
   describe('edit = true', () => {

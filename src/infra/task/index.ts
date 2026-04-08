@@ -43,7 +43,7 @@ export {
   TasksFileSchema,
   type TasksFileData,
   resolveTaskWorkflowValue,
-  resolveTaskStartMovementValue,
+  resolveTaskStartStepValue,
 } from './schema.js';
 export {
   createSharedClone,

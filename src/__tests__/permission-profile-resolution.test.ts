@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveMovementPermissionMode } from '../core/piece/permission-profile-resolution.js';
+import { resolveStepPermissionMode } from '../core/workflow/permission-profile-resolution.js';
 
-describe('resolveMovementPermissionMode', () => {
+describe('resolveStepPermissionMode', () => {
   it('applies required_permission_mode as minimum floor', () => {
-    const mode = resolveMovementPermissionMode({
-      movementName: 'implement',
+    const mode = resolveStepPermissionMode({
+      stepName: 'implement',
       requiredPermissionMode: 'full',
       provider: 'codex',
       projectProviderProfiles: {
@@ -19,13 +19,13 @@ describe('resolveMovementPermissionMode', () => {
   });
 
   it('resolves by priority: project override > global override > project default > global default', () => {
-    const mode = resolveMovementPermissionMode({
-      movementName: 'supervise',
+    const mode = resolveStepPermissionMode({
+      stepName: 'supervise',
       provider: 'codex',
       projectProviderProfiles: {
         codex: {
           defaultPermissionMode: 'edit',
-          movementPermissionOverrides: {
+          stepPermissionOverrides: {
             supervise: 'full',
           },
         },
@@ -33,7 +33,7 @@ describe('resolveMovementPermissionMode', () => {
       globalProviderProfiles: {
         codex: {
           defaultPermissionMode: 'readonly',
-          movementPermissionOverrides: {
+          stepPermissionOverrides: {
             supervise: 'edit',
           },
         },
@@ -44,8 +44,8 @@ describe('resolveMovementPermissionMode', () => {
   });
 
   it('falls back to readonly when unresolved', () => {
-    const mode = resolveMovementPermissionMode({
-      movementName: 'fix',
+    const mode = resolveStepPermissionMode({
+      stepName: 'fix',
       provider: 'codex',
     });
 
@@ -53,17 +53,17 @@ describe('resolveMovementPermissionMode', () => {
   });
 
   it('resolves from required_permission_mode when provider is omitted', () => {
-    const mode = resolveMovementPermissionMode({
-      movementName: 'fix',
+    const mode = resolveStepPermissionMode({
+      stepName: 'fix',
       requiredPermissionMode: 'edit',
     });
 
     expect(mode).toBe('edit');
   });
 
-  it('uses claude-sdk profile entry when movement runs on SDK provider', () => {
-    const mode = resolveMovementPermissionMode({
-      movementName: 'implement',
+  it('uses claude-sdk profile entry when step runs on SDK provider', () => {
+    const mode = resolveStepPermissionMode({
+      stepName: 'implement',
       provider: 'claude-sdk',
       projectProviderProfiles: {
         'claude-sdk': {
@@ -76,16 +76,16 @@ describe('resolveMovementPermissionMode', () => {
   });
 
   it('uses headless claude profile entry separately from claude-sdk', () => {
-    const sdkMode = resolveMovementPermissionMode({
-      movementName: 'm1',
+    const sdkMode = resolveStepPermissionMode({
+      stepName: 'm1',
       provider: 'claude-sdk',
       projectProviderProfiles: {
         'claude-sdk': { defaultPermissionMode: 'full' },
         claude: { defaultPermissionMode: 'readonly' },
       },
     });
-    const headlessMode = resolveMovementPermissionMode({
-      movementName: 'm1',
+    const headlessMode = resolveStepPermissionMode({
+      stepName: 'm1',
       provider: 'claude',
       projectProviderProfiles: {
         'claude-sdk': { defaultPermissionMode: 'full' },
@@ -98,8 +98,8 @@ describe('resolveMovementPermissionMode', () => {
   });
 
   it('applies required_permission_mode floor after resolving the headless claude profile', () => {
-    const mode = resolveMovementPermissionMode({
-      movementName: 'review',
+    const mode = resolveStepPermissionMode({
+      stepName: 'review',
       provider: 'claude',
       requiredPermissionMode: 'full',
       projectProviderProfiles: {

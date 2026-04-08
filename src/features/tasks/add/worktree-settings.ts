@@ -15,7 +15,7 @@ export interface WorktreeSettings {
 export function displayTaskCreationResult(
   created: { taskName: string; tasksFile: string },
   settings: WorktreeSettings,
-  piece?: string,
+  workflow?: string,
 ): void {
   success(`Task created: ${sanitizeTerminalText(created.taskName)}`);
   info(`  File: ${sanitizeTerminalText(created.tasksFile)}`);
@@ -34,7 +34,7 @@ export function displayTaskCreationResult(
   if (settings.draftPr) {
     info(`  Draft PR: yes`);
   }
-  if (piece) info(`  Workflow: ${sanitizeTerminalText(piece)}`);
+  if (workflow) info(`  Workflow: ${sanitizeTerminalText(workflow)}`);
 }
 
 export async function promptWorktreeSettings(cwd: string): Promise<WorktreeSettings> {

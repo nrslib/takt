@@ -2,7 +2,7 @@
  * Mock agent client for testing
  *
  * Returns immediate fixed responses without any API calls.
- * Useful for testing pieces without incurring costs or latency.
+ * Useful for testing workflows without incurring costs or latency.
  */
 
 import { randomUUID } from 'node:crypto';

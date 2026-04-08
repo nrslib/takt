@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PieceMovement } from '../core/models/types.js';
-import { runStatusJudgmentPhase } from '../core/piece/status-judgment-phase.js';
+import type { WorkflowStep } from '../core/models/types.js';
+import { runStatusJudgmentPhase } from '../core/workflow/status-judgment-phase.js';
 
 describe('runStatusJudgmentPhase with structuredCaller', () => {
   beforeEach(() => {
@@ -18,7 +18,7 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
       }),
     };
 
-    const step: PieceMovement = {
+    const step: WorkflowStep = {
       name: 'review',
       persona: 'reviewer',
       personaDisplayName: 'reviewer',
@@ -56,13 +56,13 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
       step.rules,
       expect.objectContaining({
         cwd: '/tmp/project',
-        movementName: 'review',
+        stepName: 'review',
         provider: 'cursor',
       }),
     );
   });
 
-  it('should pass resolvedProvider and resolvedModel to judgeStatus aligned with movement resolution (#556)', async () => {
+  it('should pass resolvedProvider and resolvedModel to judgeStatus aligned with step resolution (#556)', async () => {
     const structuredCaller = {
       judgeStatus: vi.fn().mockImplementation(async (_structured, _tag, _rules, options) => {
         options.onStructuredPromptResolved?.({
@@ -73,7 +73,7 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
       }),
     };
 
-    const step: PieceMovement = {
+    const step: WorkflowStep = {
       name: 'review',
       persona: 'reviewer',
       personaDisplayName: 'reviewer',
@@ -86,7 +86,7 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
     };
 
     type PhaseCtx = Parameters<typeof runStatusJudgmentPhase>[1] & {
-      resolveStepProviderModel: (s: PieceMovement) => { provider: 'codex'; model: string };
+      resolveStepProviderModel: (s: WorkflowStep) => { provider: 'codex'; model: string };
     };
 
     await runStatusJudgmentPhase(step, {
@@ -108,7 +108,7 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
     expect(judgeOptions).toEqual(
       expect.objectContaining({
         cwd: '/tmp/project',
-        movementName: 'review',
+        stepName: 'review',
         provider: 'codex',
         resolvedProvider: 'codex',
         resolvedModel: 'gpt-5.2-codex',

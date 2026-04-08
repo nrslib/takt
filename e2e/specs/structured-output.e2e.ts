@@ -12,11 +12,11 @@ const __dirname = dirname(__filename);
 /**
  * E2E: Structured output for status judgment (Phase 3).
  *
- * Verifies that real providers (Claude, Codex, OpenCode) can execute a piece
+ * Verifies that real providers (Claude, Codex, OpenCode) can execute a workflow
  * where the status judgment phase uses structured output (`outputSchema`)
  * internally via `judgeStatus()`.
  *
- * The piece has 2 rules per step, so `judgeStatus` cannot auto-select
+ * The workflow has 2 rules per step, so `judgeStatus` cannot auto-select
  * and must actually call the provider with an outputSchema to determine
  * which rule matched.
  *
@@ -45,13 +45,13 @@ describe('E2E: Structured output rule matching', () => {
     try { isolatedEnv.cleanup(); } catch { /* best-effort */ }
   });
 
-  it('should complete piece via Phase 3 status judgment with 2-rule step', () => {
-    const piecePath = resolve(__dirname, '../fixtures/pieces/structured-output.yaml');
+  it('should complete the workflow via Phase 3 status judgment with a 2-rule step', () => {
+    const workflowPath = resolve(__dirname, '../fixtures/workflows/structured-output.yaml');
 
     const result = runTakt({
       args: [
         '--task', 'Say hello',
-        '--piece', piecePath,
+        '--workflow', workflowPath,
       ],
       cwd: repo.path,
       env: isolatedEnv.env,
@@ -74,8 +74,8 @@ describe('E2E: Structured output rule matching', () => {
     // Verify session log has proper step_complete with matchMethod
     const records = readSessionRecords(repo.path);
 
-    const pieceComplete = records.find((r) => r.type === 'piece_complete');
-    expect(pieceComplete).toBeDefined();
+    const workflowComplete = records.find((r) => r.type === 'workflow_complete');
+    expect(workflowComplete).toBeDefined();
 
     const stepComplete = records.find((r) => r.type === 'step_complete');
     expect(stepComplete).toBeDefined();

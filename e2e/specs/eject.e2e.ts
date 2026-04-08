@@ -118,7 +118,7 @@ describe('E2E: Eject builtin workflows (takt eject)', () => {
 
   it('should report error for non-existent builtin', () => {
     const result = runTakt({
-      args: ['eject', 'nonexistent-piece-xyz'],
+      args: ['eject', 'nonexistent-workflow-xyz'],
       cwd: repo.path,
       env: isolatedEnv.env,
     });

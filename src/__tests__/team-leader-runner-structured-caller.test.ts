@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { TeamLeaderRunner } from '../core/piece/engine/TeamLeaderRunner.js';
-import type { PieceMovement, PieceState } from '../core/models/types.js';
+import { TeamLeaderRunner } from '../core/workflow/engine/TeamLeaderRunner.js';
+import type { WorkflowStep, WorkflowState } from '../core/models/types.js';
 
 const {
   mockExecuteAgent,
@@ -48,11 +48,11 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
         resolveStepProviderModel,
       },
-      movementExecutor: {
+      stepExecutor: {
         buildInstruction: vi.fn().mockReturnValue('leader instruction'),
         applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
         persistPreviousResponseSnapshot: vi.fn(),
-        emitMovementReports: vi.fn(),
+        emitStepReports: vi.fn(),
       },
       engineOptions: {
         projectCwd: '/tmp/project',
@@ -64,7 +64,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller };
     });
 
-    const step: PieceMovement = {
+    const step: WorkflowStep = {
       name: 'implement',
       persona: 'coder',
       personaDisplayName: 'coder',
@@ -83,20 +83,20 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       rules: [{ condition: 'done', next: 'COMPLETE' }],
     };
 
-    const state: PieceState = {
-      pieceName: 'piece',
-      currentMovement: 'implement',
+    const state: WorkflowState = {
+      workflowName: 'workflow',
+      currentStep: 'implement',
       iteration: 1,
-      movementOutputs: new Map(),
+      stepOutputs: new Map(),
       lastOutput: undefined,
       previousResponseSourcePath: undefined,
       userInputs: [],
       personaSessions: new Map(),
-      movementIterations: new Map(),
+      stepIterations: new Map(),
       status: 'running',
     };
 
-    const result = await runner.runTeamLeaderMovement(
+    const result = await runner.runTeamLeaderStep(
       step,
       state,
       'implement feature',

@@ -52,7 +52,7 @@ language: en        # UI language: en | ja
 #   retention_days: 30             # Retention period for event files
 
 # Interactive mode
-# interactive_preview_movements: 3 # Number of movement previews in interactive mode (0-10)
+# interactive_preview_steps: 3 # Number of step previews in interactive mode (0-10)
 
 # Per-persona provider/model overrides
 # persona_providers:
@@ -63,7 +63,7 @@ language: en        # UI language: en | ja
 #     provider: codex
 #     model: gpt-5.2-codex
 
-# Provider-specific options (lowest priority, overridden by piece/movement)
+# Provider-specific options (lowest priority, overridden by workflow/step)
 # provider_options:
 #   codex:
 #     network_access: true
@@ -119,5 +119,5 @@ language: en        # UI language: en | ja
 # Workflow list / categories
 # enable_builtin_workflows: true                          # Enable built-in workflows from builtins/{lang}/workflows
 # disabled_builtins:
-#   - magi                                                # Built-in piece names to disable
+#   - magi                                                # Built-in workflow names to disable
 # workflow_categories_file: ~/.takt/preferences/workflow-categories.yaml  # Category definition file

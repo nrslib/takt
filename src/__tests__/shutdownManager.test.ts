@@ -27,12 +27,15 @@ import { ShutdownManager } from '../features/tasks/execute/shutdownManager.js';
 describe('ShutdownManager', () => {
   let savedSigintListeners: ((...args: unknown[]) => void)[];
   let originalShutdownTimeoutEnv: string | undefined;
+  let originalNoTtyEnv: string | undefined;
 
   beforeEach(() => {
     vi.clearAllMocks();
     savedSigintListeners = process.rawListeners('SIGINT') as ((...args: unknown[]) => void)[];
     originalShutdownTimeoutEnv = process.env.TAKT_SHUTDOWN_TIMEOUT_MS;
+    originalNoTtyEnv = process.env.TAKT_NO_TTY;
     delete process.env.TAKT_SHUTDOWN_TIMEOUT_MS;
+    delete process.env.TAKT_NO_TTY;
   });
 
   afterEach(() => {
@@ -45,6 +48,11 @@ describe('ShutdownManager', () => {
       delete process.env.TAKT_SHUTDOWN_TIMEOUT_MS;
     } else {
       process.env.TAKT_SHUTDOWN_TIMEOUT_MS = originalShutdownTimeoutEnv;
+    }
+    if (originalNoTtyEnv === undefined) {
+      delete process.env.TAKT_NO_TTY;
+    } else {
+      process.env.TAKT_NO_TTY = originalNoTtyEnv;
     }
   });
 
@@ -63,7 +71,7 @@ describe('ShutdownManager', () => {
 
     expect(onGraceful).toHaveBeenCalledTimes(1);
     expect(onForceKill).not.toHaveBeenCalled();
-    expect(mockWarn).toHaveBeenCalledWith('piece.sigintGraceful');
+    expect(mockWarn).toHaveBeenCalledWith('workflow.sigintGraceful');
 
     manager.cleanup();
   });
@@ -85,8 +93,8 @@ describe('ShutdownManager', () => {
 
     expect(onGraceful).toHaveBeenCalledTimes(1);
     expect(onForceKill).toHaveBeenCalledTimes(1);
-    expect(mockError).toHaveBeenCalledWith('piece.sigintTimeout');
-    expect(mockError).toHaveBeenCalledWith('piece.sigintForce');
+    expect(mockError).toHaveBeenCalledWith('workflow.sigintTimeout');
+    expect(mockError).toHaveBeenCalledWith('workflow.sigintForce');
 
     manager.cleanup();
   });
@@ -110,12 +118,12 @@ describe('ShutdownManager', () => {
 
     expect(onGraceful).toHaveBeenCalledTimes(1);
     expect(onForceKill).toHaveBeenCalledTimes(1);
-    expect(mockError).toHaveBeenCalledWith('piece.sigintForce');
+    expect(mockError).toHaveBeenCalledWith('workflow.sigintForce');
 
     manager.cleanup();
   });
 
-  it('環境変数未設定時はデフォルト10_000msを使う', () => {
+  it('環境変数未設定時は通常モードでデフォルト10_000msを使う', () => {
     vi.useFakeTimers();
     const onGraceful = vi.fn();
     const onForceKill = vi.fn();
@@ -129,6 +137,29 @@ describe('ShutdownManager', () => {
     listeners[listeners.length - 1]!();
 
     vi.advanceTimersByTime(9_999);
+    expect(onForceKill).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1);
+    expect(onForceKill).toHaveBeenCalledTimes(1);
+
+    manager.cleanup();
+  });
+
+  it('TAKT_NO_TTY=1 のときはデフォルト5_000msを使う', () => {
+    vi.useFakeTimers();
+    process.env.TAKT_NO_TTY = '1';
+    const onGraceful = vi.fn();
+    const onForceKill = vi.fn();
+
+    const manager = new ShutdownManager({
+      callbacks: { onGraceful, onForceKill },
+    });
+    manager.install();
+
+    const listeners = process.rawListeners('SIGINT') as Array<() => void>;
+    listeners[listeners.length - 1]!();
+
+    vi.advanceTimersByTime(4_999);
     expect(onForceKill).not.toHaveBeenCalled();
 
     vi.advanceTimersByTime(1);

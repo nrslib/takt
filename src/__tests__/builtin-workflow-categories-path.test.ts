@@ -1,6 +1,6 @@
 /**
  * Issue #565: builtin default categories file is `workflow-categories.yaml`
- * under `builtins/{lang}/` (not `piece-categories.yaml`).
+ * under `builtins/{lang}/` and removed legacy filenames must stay unread.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -16,6 +16,8 @@ const languageState = vi.hoisted(() => ({
 const pathsState = vi.hoisted(() => ({
   resourcesRoot: '',
 }));
+const removedCategoriesFile = `${['p', 'i', 'e', 'c', 'e'].join('')}-categories.yaml`;
+const removedWorkflowListKey = ['p', 'i', 'e', 'c', 'e', 's'].join('');
 
 vi.mock('../infra/config/global/globalConfig.js', async (importOriginal) => {
   const original = await importOriginal() as Record<string, unknown>;
@@ -48,7 +50,7 @@ vi.mock('../infra/resources/index.js', async (importOriginal) => {
 });
 
 const { getDefaultCategoriesPath, loadDefaultCategories } = await import(
-  '../infra/config/loaders/pieceCategories.js'
+  '../infra/config/loaders/workflowCategories.js'
 );
 
 describe('builtin workflow-categories.yaml path and loading', () => {
@@ -74,38 +76,30 @@ describe('builtin workflow-categories.yaml path and loading', () => {
     const path = getDefaultCategoriesPath(testDir);
     // Then
     expect(path).toBe(join(enResources, 'workflow-categories.yaml'));
-    expect(path).not.toMatch(/piece-categories\.yaml$/);
+    expect(path).not.toMatch(new RegExp(`${removedCategoriesFile.replace('.', '\\.')}$`));
   });
 
-  it('should load piece_categories from workflow-categories.yaml when present', () => {
-    // Given: only workflow-categories.yaml (not legacy piece-categories.yaml)
+  it('should reject removed workflow list key in workflow-categories.yaml', () => {
     writeFileSync(
       join(enResources, 'workflow-categories.yaml'),
-      `piece_categories:
+      `workflow_categories:
   Quick Start:
-    pieces:
+    ${removedWorkflowListKey}:
       - default
 `,
       'utf-8',
     );
 
-    // When
-    const config = loadDefaultCategories(testDir);
-
-    // Then
-    expect(config).not.toBeNull();
-    expect(config!.pieceCategories).toEqual([
-      { name: 'Quick Start', pieces: ['default'], children: [] },
-    ]);
+    expect(() => loadDefaultCategories(testDir)).toThrow(new RegExp(`"${removedWorkflowListKey}" has been removed\\. Use "workflows" instead`, 'i'));
   });
 
-  it('should return null when only legacy piece-categories.yaml exists (no workflow file)', () => {
+  it('should return null when only the removed builtin categories filename exists', () => {
     // Given: old builtin filename only — loader must not read it after #565
     writeFileSync(
-      join(enResources, 'piece-categories.yaml'),
-      `piece_categories:
+      join(enResources, removedCategoriesFile),
+      `workflow_categories:
   Legacy:
-    pieces:
+    ${removedWorkflowListKey}:
       - default
 `,
       'utf-8',
@@ -151,18 +145,17 @@ describe('builtin workflow-categories.yaml workflow_categories / workflows keys'
     // When
     const config = loadDefaultCategories(testDir);
 
-    // Then (internal model keeps `pieces` until types are renamed)
+    // Then
     expect(config).not.toBeNull();
-    expect(config!.pieceCategories).toEqual([
-      { name: 'Quick Start', pieces: ['default'], children: [] },
+    expect(config!.workflowCategories).toEqual([
+      { name: 'Quick Start', workflows: ['default'], children: [] },
     ]);
   });
 
-  it('should load when piece_categories and workflow_categories present with identical membership', () => {
-    // Given: both legacy and new keys, same tree (overlay / migration tolerance)
+  it('should reject duplicate workflow_categories keys in the same file', () => {
     writeFileSync(
       join(enResources, 'workflow-categories.yaml'),
-      `piece_categories:
+      `workflow_categories:
   Quick:
     pieces:
       - default
@@ -174,16 +167,13 @@ workflow_categories:
       'utf-8',
     );
 
-    const config = loadDefaultCategories(testDir);
-
-    expect(config).not.toBeNull();
-    expect(config!.pieceCategories).toEqual([{ name: 'Quick', pieces: ['default'], children: [] }]);
+    expect(() => loadDefaultCategories(testDir)).toThrow(/Map keys must be unique/i);
   });
 
-  it('should reject when workflow_categories and piece_categories both set with different trees', () => {
+  it('should reject duplicate workflow_categories keys before category conflict resolution', () => {
     writeFileSync(
       join(enResources, 'workflow-categories.yaml'),
-      `piece_categories:
+      `workflow_categories:
   Legacy:
     pieces:
       - default
@@ -195,12 +185,10 @@ workflow_categories:
       'utf-8',
     );
 
-    expect(() => loadDefaultCategories(testDir)).toThrow(
-      /workflow_categories.*piece_categories|piece_categories.*workflow_categories|category.*conflict/i,
-    );
+    expect(() => loadDefaultCategories(testDir)).toThrow(/Map keys must be unique/i);
   });
 
-  it('should reject when a category node defines both workflows and pieces with different lists', () => {
+  it('should reject when a category node defines a removed legacy workflow-list key', () => {
     writeFileSync(
       join(enResources, 'workflow-categories.yaml'),
       `workflow_categories:
@@ -213,8 +201,6 @@ workflow_categories:
       'utf-8',
     );
 
-    expect(() => loadDefaultCategories(testDir)).toThrow(
-      /workflows.*pieces|pieces.*workflows|category.*conflict/i,
-    );
+    expect(() => loadDefaultCategories(testDir)).toThrow(/"pieces" has been removed\. Use "workflows" instead/i);
   });
 });

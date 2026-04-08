@@ -11,7 +11,7 @@ interface TraceReportWriterParams {
   sessionLogger: SessionLogger;
   ndjsonLogPath: string;
   tracePath: string;
-  pieceName: string;
+  workflowName: string;
   task: string;
   runSlug: string;
   promptLogPath?: string;
@@ -42,7 +42,7 @@ export function createTraceReportWriter(params: TraceReportWriterParams): (input
     traceReportWritten = true;
     const traceParams = {
       tracePath: params.tracePath,
-      pieceName: params.pieceName,
+      workflowName: params.workflowName,
       task: params.task,
       runSlug: params.runSlug,
       status: input.status,

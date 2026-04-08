@@ -32,10 +32,10 @@ System Prompt:
 
 User Message (Phase 1):
   [実行コンテキスト]
-  [Piece Context]
+  [Workflow Context]
   [User Request]
   [Previous Response]
-  [Instructions]          ← ムーブメント固有の手順
+  [Instructions]          ← step 固有の手順
     └── [ポリシー]        ← 共有行動規範（instruction 内に含まれる）
 ```
 
@@ -46,6 +46,6 @@ User Message (Phase 1):
 ├── 特定のエージェントだけが必要 → ペルソナ
 ├── 「〜すべき」行動規範 → ポリシー
 ├── 「〜はこう動く」「〜はこういう設計にすべき」ドメイン知識 → ナレッジ
-├── ムーブメント固有の手順 → インストラクション
+├── step 固有の手順 → インストラクション
 └── エージェント出力の構造定義 → 出力契約
 ```

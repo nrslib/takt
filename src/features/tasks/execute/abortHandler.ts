@@ -9,15 +9,15 @@
 import { interruptAllQueries } from '../../../infra/claude/query-manager.js';
 import { ShutdownManager } from './shutdownManager.js';
 import { EXIT_SIGINT } from '../../../shared/exitCodes.js';
-import type { PieceEngine } from '../../../core/piece/engine/PieceEngine.js';
+import type { WorkflowEngine } from '../../../core/workflow/engine/WorkflowEngine.js';
 
 export interface AbortHandlerOptions {
   /** 外部から渡された AbortSignal（並列実行モード） */
   externalSignal?: AbortSignal;
   /** 外部シグナルがない場合に使う内部 AbortController */
   internalController: AbortController;
-  /** 中断時に呼び出す PieceEngine インスタンス（遅延参照） */
-  getEngine: () => PieceEngine | null;
+  /** 中断時に呼び出す WorkflowEngine インスタンス（遅延参照） */
+  getEngine: () => WorkflowEngine | null;
 }
 
 export class AbortHandler {
@@ -45,7 +45,7 @@ export class AbortHandler {
     const abortEngine = () => {
       const engine = getEngine();
       if (!engine || !this.onEpipe) {
-        throw new Error('Abort handler invoked before PieceEngine initialization');
+        throw new Error('Abort handler invoked before WorkflowEngine initialization');
       }
       if (!internalController.signal.aborted) {
         internalController.abort();

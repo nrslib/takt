@@ -1,7 +1,7 @@
 /**
  * AnalyticsEmitter — analytics イベント発行専用モジュール
  *
- * PieceEngine のイベントを受け取り、analytics イベントへ変換して書き出す責務を担う。
+ * WorkflowEngine のイベントを受け取り、analytics イベントへ変換して書き出す責務を担う。
  * NDJSON ログや UI 出力は担当しない。
  */
 
@@ -14,8 +14,8 @@ import {
   emitFixActionEvents,
   emitRebuttalEvents,
 } from '../../analytics/index.js';
-import type { MovementResultEvent, ReviewFindingEvent } from '../../analytics/index.js';
-import type { PieceMovement, AgentResponse } from '../../../core/models/index.js';
+import type { StepResultEvent, ReviewFindingEvent } from '../../analytics/index.js';
+import type { WorkflowStep, AgentResponse } from '../../../core/models/index.js';
 
 export class AnalyticsEmitter {
   private readonly runSlug: string;
@@ -29,22 +29,22 @@ export class AnalyticsEmitter {
     this.currentModel = initialModel;
   }
 
-  /** movement:start 時にプロバイダ/モデル情報を更新する */
+  /** step:start 時にプロバイダ/モデル情報を更新する */
   updateProviderInfo(iteration: number, provider: string, model: string): void {
     this.currentIteration = iteration;
     this.currentProvider = provider;
     this.currentModel = model;
   }
 
-  /** movement:complete 時に MovementResultEvent と FixAction/Rebuttal を発行する */
-  onMovementComplete(step: PieceMovement, response: AgentResponse): void {
+  /** step:complete 時に StepResultEvent と FixAction/Rebuttal を発行する */
+  onStepComplete(step: WorkflowStep, response: AgentResponse): void {
     const decisionTag = (response.matchedRuleIndex != null && step.rules)
       ? (step.rules[response.matchedRuleIndex]?.condition ?? response.status)
       : response.status;
 
-    const movementResultEvent: MovementResultEvent = {
-      type: 'movement_result',
-      movement: step.name,
+    const stepResultEvent: StepResultEvent = {
+      type: 'step_result',
+      step: step.name,
       provider: this.currentProvider,
       model: this.currentModel,
       decisionTag,
@@ -52,7 +52,7 @@ export class AnalyticsEmitter {
       runId: this.runSlug,
       timestamp: response.timestamp.toISOString(),
     };
-    writeAnalyticsEvent(movementResultEvent);
+    writeAnalyticsEvent(stepResultEvent);
 
     if (step.edit === true && step.name.includes('fix')) {
       emitFixActionEvents(response.content, this.currentIteration, this.runSlug, response.timestamp);
@@ -63,8 +63,8 @@ export class AnalyticsEmitter {
     }
   }
 
-  /** movement:report 時に ReviewFindingEvent を発行する */
-  onMovementReport(step: PieceMovement, filePath: string): void {
+  /** step:report 時に ReviewFindingEvent を発行する */
+  onStepReport(step: WorkflowStep, filePath: string): void {
     if (step.edit !== false) return;
 
     const content = readFileSync(filePath, 'utf-8');

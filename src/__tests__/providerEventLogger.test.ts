@@ -6,7 +6,7 @@ import {
   createProviderEventLogger,
   isProviderEventsEnabled,
 } from '../shared/utils/providerEventLogger.js';
-import type { ProviderType } from '../core/piece/index.js';
+import type { ProviderType } from '../core/workflow/index.js';
 
 describe('providerEventLogger', () => {
   let tempDir: string;
@@ -47,7 +47,7 @@ describe('providerEventLogger', () => {
       sessionId: 'session-1',
       runId: 'run-1',
       provider: 'opencode',
-      movement: 'implement',
+      step: 'implement',
       enabled: true,
     });
 
@@ -75,7 +75,7 @@ describe('providerEventLogger', () => {
       provider: ProviderType;
       event_type: string;
       run_id: string;
-      movement: string;
+      step: string;
       session_id?: string;
       call_id?: string;
       message_id?: string;
@@ -86,7 +86,7 @@ describe('providerEventLogger', () => {
     expect(parsed.provider).toBe('opencode');
     expect(parsed.event_type).toBe('tool_use');
     expect(parsed.run_id).toBe('run-1');
-    expect(parsed.movement).toBe('implement');
+    expect(parsed.step).toBe('implement');
     expect(parsed.session_id).toBe('session-abc');
     expect(parsed.call_id).toBe('call-123');
     expect(parsed.message_id).toBe('msg-123');
@@ -100,7 +100,7 @@ describe('providerEventLogger', () => {
       sessionId: 'session-compat',
       runId: 'run-compat',
       provider: 'claude',
-      movement: 'plan',
+      step: 'plan',
       enabled: true,
     });
 
@@ -108,33 +108,33 @@ describe('providerEventLogger', () => {
     expect(logger.filepath.endsWith('-usage-events.jsonl')).toBe(false);
   });
 
-  it('should update movement and provider for subsequent events', () => {
+  it('should update step and provider for subsequent events', () => {
     const logger = createProviderEventLogger({
       logsDir: tempDir,
       sessionId: 'session-2',
       runId: 'run-2',
       provider: 'claude',
-      movement: 'plan',
+      step: 'plan',
       enabled: true,
     });
 
     const wrapped = logger.wrapCallback();
 
     wrapped({ type: 'init', data: { model: 'sonnet', sessionId: 's-1' } });
-    logger.setMovement('implement');
+    logger.setStep('implement');
     logger.setProvider('codex');
     wrapped({ type: 'result', data: { result: 'ok', sessionId: 's-1', success: true } });
 
     const lines = readFileSync(logger.filepath, 'utf-8').trim().split('\n');
     expect(lines).toHaveLength(2);
 
-    const first = JSON.parse(lines[0]!) as { provider: ProviderType; movement: string };
-    const second = JSON.parse(lines[1]!) as { provider: ProviderType; movement: string };
+    const first = JSON.parse(lines[0]!) as { provider: ProviderType; step: string };
+    const second = JSON.parse(lines[1]!) as { provider: ProviderType; step: string };
 
     expect(first.provider).toBe('claude');
-    expect(first.movement).toBe('plan');
+    expect(first.step).toBe('plan');
     expect(second.provider).toBe('codex');
-    expect(second.movement).toBe('implement');
+    expect(second.step).toBe('implement');
   });
 
   it('should not write records when disabled', () => {
@@ -143,7 +143,7 @@ describe('providerEventLogger', () => {
       sessionId: 'session-3',
       runId: 'run-3',
       provider: 'claude',
-      movement: 'plan',
+      step: 'plan',
       enabled: false,
     });
 
@@ -161,7 +161,7 @@ describe('providerEventLogger', () => {
       sessionId: 'session-4',
       runId: 'run-4',
       provider: 'claude',
-      movement: 'plan',
+      step: 'plan',
       enabled: true,
     });
 
@@ -182,7 +182,7 @@ describe('providerEventLogger', () => {
       sessionId: 'session-err',
       runId: 'run-err',
       provider: 'claude',
-      movement: 'plan',
+      step: 'plan',
       enabled: true,
     });
 
@@ -207,7 +207,7 @@ describe('providerEventLogger', () => {
       sessionId: 'session-5',
       runId: 'run-5',
       provider: 'codex',
-      movement: 'implement',
+      step: 'implement',
       enabled: true,
     });
 

@@ -4,7 +4,8 @@
 
 import { rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { getRepertoireDir, getRepertoirePackageDir, getGlobalConfigDir, getGlobalPiecesDir, getProjectPiecesDir } from '../../infra/config/paths.js';
+import { getRepertoireDir, getRepertoirePackageDir, getGlobalWorkflowsDir, getProjectWorkflowsDir } from '../../infra/config/paths.js';
+import { getWorkflowCategoriesPath } from '../../infra/config/global/index.js';
 import { findScopeReferences, shouldRemoveOwnerDir } from '../../features/repertoire/remove.js';
 import { confirm } from '../../shared/prompt/index.js';
 import { info, success } from '../../shared/ui/index.js';
@@ -29,8 +30,8 @@ export async function repertoireRemoveCommand(scope: string): Promise<void> {
   }
 
   const refs = findScopeReferences(scope, {
-    piecesDirs: [getGlobalPiecesDir(), getProjectPiecesDir(process.cwd())],
-    categoriesFiles: [join(getGlobalConfigDir(), 'preferences', 'piece-categories.yaml')],
+    workflowDirs: [getGlobalWorkflowsDir(), getProjectWorkflowsDir(process.cwd())],
+    categoriesFiles: [getWorkflowCategoriesPath(process.cwd())],
   });
   if (refs.length > 0) {
     info(`⚠ 以下のファイルが ${scope} を参照しています:`);

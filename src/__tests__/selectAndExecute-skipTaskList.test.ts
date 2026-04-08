@@ -29,11 +29,11 @@ vi.mock('../shared/prompt/index.js', () => ({
 }));
 
 vi.mock('../infra/config/index.js', () => ({
-  resolvePieceConfigValue: vi.fn(),
-  loadPieceByIdentifier: vi.fn(() => ({ name: 'default' })),
-  listPieces: vi.fn(() => ['default']),
-  listPieceEntries: vi.fn(() => []),
-  isPiecePath: vi.fn(() => false),
+  resolveWorkflowConfigValue: vi.fn(),
+  loadWorkflowByIdentifier: vi.fn(() => ({ name: 'default' })),
+  listWorkflows: vi.fn(() => ['default']),
+  listWorkflowEntries: vi.fn(() => []),
+  isWorkflowPath: vi.fn(() => false),
 }));
 
 vi.mock('../infra/task/index.js', () => ({
@@ -80,8 +80,8 @@ vi.mock('../features/tasks/execute/taskResultHandler.js', () => ({
   persistTaskError: (...args: unknown[]) => mockPersistTaskError(...args),
 }));
 
-vi.mock('../features/pieceSelection/index.js', () => ({
-  selectPiece: vi.fn(),
+vi.mock('../features/workflowSelection/index.js', () => ({
+  selectWorkflow: vi.fn(),
 }));
 
 import { selectAndExecuteTask } from '../features/tasks/execute/selectAndExecute.js';
@@ -94,7 +94,7 @@ beforeEach(() => {
 describe('skipTaskList option in selectAndExecuteTask', () => {
   it('skipTaskList: true の場合はタスクリストに追加しない', async () => {
     await selectAndExecuteTask('/project', 'test task', {
-      piece: 'default',
+      workflow: 'default',
       skipTaskList: true,
     });
 
@@ -105,7 +105,7 @@ describe('skipTaskList option in selectAndExecuteTask', () => {
 
   it('skipTaskList: false の場合はタスクリストに追加する', async () => {
     await selectAndExecuteTask('/project', 'test task', {
-      piece: 'default',
+      workflow: 'default',
       skipTaskList: false,
     });
 
@@ -117,7 +117,7 @@ describe('skipTaskList option in selectAndExecuteTask', () => {
 
   it('skipTaskList 未指定の場合はタスクリストに追加する', async () => {
     await selectAndExecuteTask('/project', 'test task', {
-      piece: 'default',
+      workflow: 'default',
     });
 
     expect(mockAddTask).toHaveBeenCalled();
@@ -130,7 +130,7 @@ describe('skipTaskList option in selectAndExecuteTask', () => {
 
     await expect(
       selectAndExecuteTask('/project', 'test task', {
-        piece: 'default',
+        workflow: 'default',
         skipTaskList: true,
       }),
     ).rejects.toThrow('Task execution failed');
@@ -144,7 +144,7 @@ describe('skipTaskList option in selectAndExecuteTask', () => {
 
     await expect(
       selectAndExecuteTask('/project', 'test task', {
-        piece: 'default',
+        workflow: 'default',
         skipTaskList: false,
       }),
     ).rejects.toThrow('Task execution failed');

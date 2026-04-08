@@ -1,4 +1,4 @@
-import type { PieceRule, PartDefinition } from '../../core/models/types.js';
+import type { WorkflowRule, PartDefinition } from '../../core/models/types.js';
 import {
   judgeStatus,
   evaluateCondition,
@@ -18,7 +18,7 @@ export class DefaultStructuredCaller implements StructuredCaller {
   async judgeStatus(
     structuredInstruction: string,
     tagInstruction: string,
-    rules: PieceRule[],
+    rules: WorkflowRule[],
     options: JudgeStatusOptions,
   ): Promise<JudgeStatusResult> {
     return judgeStatus(structuredInstruction, tagInstruction, rules, options);

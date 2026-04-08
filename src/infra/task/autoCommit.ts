@@ -1,7 +1,7 @@
 /**
  * Auto-commit and push for clone tasks
  *
- * After a successful piece completion in a shared clone,
+ * After a successful workflow completion in a shared clone,
  * automatically stages all changes, creates a commit, and
  * pushes to origin so the branch is reflected in the main repo.
  * No co-author trailer is added.

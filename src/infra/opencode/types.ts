@@ -3,7 +3,7 @@
  */
 
 import type { StreamCallback } from '../claude/index.js';
-import type { AskUserQuestionHandler } from '../../core/piece/types.js';
+import type { AskUserQuestionHandler } from '../../core/workflow/types.js';
 import type { PermissionMode } from '../../core/models/index.js';
 
 /** OpenCode permission reply values */

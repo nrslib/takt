@@ -1,0 +1,33 @@
+name: e2e-structured-output
+description: E2E workflow to verify structured output rule matching
+workflow_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+personas:
+  test-coder: |
+    # E2E Test Coder
+
+    You are a coder for E2E testing.
+
+    ## Instructions
+
+    - Make the minimal changes required by the task
+    - Do not perform any work beyond what is explicitly requested
+    - After completing the task, output your work summary
+max_steps: 5
+steps:
+  - name: execute
+    edit: false
+    persona: test-coder
+    required_permission_mode: readonly
+    instruction: |
+      Reply with exactly: "Task completed successfully."
+      Do not do anything else.
+    rules:
+      - condition: Task completed
+        next: COMPLETE
+      - condition: Task failed
+        next: ABORT

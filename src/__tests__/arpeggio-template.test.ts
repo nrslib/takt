@@ -3,8 +3,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { expandTemplate } from '../core/piece/arpeggio/template.js';
-import type { DataBatch } from '../core/piece/arpeggio/types.js';
+import { expandTemplate } from '../core/workflow/arpeggio/template.js';
+import type { DataBatch } from '../core/workflow/arpeggio/types.js';
 
 function makeBatch(rows: Record<string, string>[], batchIndex = 0, totalBatches = 1): DataBatch {
   return { rows, batchIndex, totalBatches };

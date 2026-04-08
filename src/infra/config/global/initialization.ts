@@ -2,7 +2,7 @@
  * Initialization module for first-time setup
  *
  * Handles language selection and initial config.yaml creation.
- * Builtin agents/pieces are loaded via fallback from builtins/
+ * Builtin agents/workflows are loaded via fallback from builtins/
  * and no longer copied to ~/.takt/ on setup.
  */
 
@@ -40,7 +40,7 @@ export async function promptLanguageSelection(): Promise<Language> {
   ];
 
   const result = await selectOptionWithDefault(
-    'Select language for default agents and pieces / デフォルトのエージェントとピースの言語を選択してください:',
+    'Select language for default agents and workflows / デフォルトのエージェントとワークフローの言語を選択してください:',
     options,
     DEFAULT_LANGUAGE
   );
@@ -93,7 +93,7 @@ export interface InitGlobalDirsOptions {
 /**
  * Initialize global takt directory structure with language selection.
  * On first run, creates config.yaml from language template.
- * Agents/pieces are NOT copied — they are loaded via builtin fallback.
+ * Agents/workflows are NOT copied — they are loaded via builtin fallback.
  *
  * In non-interactive mode (pipeline mode or no TTY), skips prompts
  * and uses default values so takt works in pipeline/CI environments without config.yaml.

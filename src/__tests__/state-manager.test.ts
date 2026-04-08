@@ -1,33 +1,33 @@
 /**
  * Unit tests for StateManager
  *
- * Tests piece state initialization, user input management,
- * movement iteration tracking, and output retrieval.
+ * Tests workflow state initialization, user input management,
+ * step iteration tracking, and output retrieval.
  */
 
 import { describe, it, expect } from 'vitest';
 import {
   StateManager,
   createInitialState,
-  incrementMovementIteration,
+  incrementStepIteration,
   addUserInput,
   getPreviousOutput,
-} from '../core/piece/engine/state-manager.js';
-import { MAX_USER_INPUTS, MAX_INPUT_LENGTH } from '../core/piece/constants.js';
-import type { PieceConfig, AgentResponse, PieceState } from '../core/models/types.js';
-import type { PieceEngineOptions } from '../core/piece/types.js';
+} from '../core/workflow/engine/state-manager.js';
+import { MAX_USER_INPUTS, MAX_INPUT_LENGTH } from '../core/workflow/constants.js';
+import type { WorkflowConfig, AgentResponse, WorkflowState } from '../core/models/types.js';
+import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 
-function makeConfig(overrides: Partial<PieceConfig> = {}): PieceConfig {
+function makeConfig(overrides: Partial<WorkflowConfig> = {}): WorkflowConfig {
   return {
-    name: 'test-piece',
-    movements: [],
-    initialMovement: 'start',
-    maxMovements: 10,
+    name: 'test-workflow',
+    steps: [],
+    initialStep: 'start',
+    maxSteps: 10,
     ...overrides,
   };
 }
 
-function makeOptions(overrides: Partial<PieceEngineOptions> = {}): PieceEngineOptions {
+function makeOptions(overrides: Partial<WorkflowEngineOptions> = {}): WorkflowEngineOptions {
   return {
     projectCwd: '/tmp/project',
     ...overrides,
@@ -48,23 +48,23 @@ describe('StateManager', () => {
     it('should initialize state with config defaults', () => {
       const manager = new StateManager(makeConfig(), makeOptions());
 
-      expect(manager.state.pieceName).toBe('test-piece');
-      expect(manager.state.currentMovement).toBe('start');
+      expect(manager.state.workflowName).toBe('test-workflow');
+      expect(manager.state.currentStep).toBe('start');
       expect(manager.state.iteration).toBe(0);
       expect(manager.state.status).toBe('running');
       expect(manager.state.userInputs).toEqual([]);
-      expect(manager.state.movementOutputs.size).toBe(0);
+      expect(manager.state.stepOutputs.size).toBe(0);
       expect(manager.state.personaSessions.size).toBe(0);
-      expect(manager.state.movementIterations.size).toBe(0);
+      expect(manager.state.stepIterations.size).toBe(0);
     });
 
-    it('should use startMovement option when provided', () => {
+    it('should use startStep option when provided', () => {
       const manager = new StateManager(
         makeConfig(),
-        makeOptions({ startMovement: 'custom-start' }),
+        makeOptions({ startStep: 'custom-start' }),
       );
 
-      expect(manager.state.currentMovement).toBe('custom-start');
+      expect(manager.state.currentStep).toBe('custom-start');
     });
 
     it('should restore initial sessions from options', () => {
@@ -91,28 +91,28 @@ describe('StateManager', () => {
     });
   });
 
-  describe('incrementMovementIteration', () => {
-    it('should start at 1 for new movement', () => {
+  describe('incrementStepIteration', () => {
+    it('should start at 1 for new step', () => {
       const manager = new StateManager(makeConfig(), makeOptions());
-      const count = manager.incrementMovementIteration('review');
+      const count = manager.incrementStepIteration('review');
       expect(count).toBe(1);
     });
 
-    it('should increment correctly for repeated movements', () => {
+    it('should increment correctly for repeated steps', () => {
       const manager = new StateManager(makeConfig(), makeOptions());
-      manager.incrementMovementIteration('review');
-      manager.incrementMovementIteration('review');
-      const count = manager.incrementMovementIteration('review');
+      manager.incrementStepIteration('review');
+      manager.incrementStepIteration('review');
+      const count = manager.incrementStepIteration('review');
       expect(count).toBe(3);
     });
 
-    it('should track different movements independently', () => {
+    it('should track different steps independently', () => {
       const manager = new StateManager(makeConfig(), makeOptions());
-      manager.incrementMovementIteration('review');
-      manager.incrementMovementIteration('review');
-      manager.incrementMovementIteration('implement');
-      expect(manager.state.movementIterations.get('review')).toBe(2);
-      expect(manager.state.movementIterations.get('implement')).toBe(1);
+      manager.incrementStepIteration('review');
+      manager.incrementStepIteration('review');
+      manager.incrementStepIteration('implement');
+      expect(manager.state.stepIterations.get('review')).toBe(2);
+      expect(manager.state.stepIterations.get('implement')).toBe(1);
     });
   });
 
@@ -150,27 +150,27 @@ describe('StateManager', () => {
       expect(manager.getPreviousOutput()).toBeUndefined();
     });
 
-    it('should return the last output from movementOutputs', () => {
+    it('should return the last output from stepOutputs', () => {
       const manager = new StateManager(makeConfig(), makeOptions());
       const response1 = makeResponse('first');
       const response2 = makeResponse('second');
-      manager.state.movementOutputs.set('step-1', response1);
-      manager.state.movementOutputs.set('step-2', response2);
+      manager.state.stepOutputs.set('step-1', response1);
+      manager.state.stepOutputs.set('step-2', response2);
       expect(manager.getPreviousOutput()?.content).toBe('second');
     });
   });
 });
 
 describe('standalone functions', () => {
-  function makeState(): PieceState {
+  function makeState(): WorkflowState {
     return {
-      pieceName: 'test',
-      currentMovement: 'start',
+      workflowName: 'test',
+      currentStep: 'start',
       iteration: 0,
-      movementOutputs: new Map(),
+      stepOutputs: new Map(),
       userInputs: [],
       personaSessions: new Map(),
-      movementIterations: new Map(),
+      stepIterations: new Map(),
       status: 'running',
     };
   }
@@ -178,17 +178,17 @@ describe('standalone functions', () => {
   describe('createInitialState', () => {
     it('should create state from config and options', () => {
       const state = createInitialState(makeConfig(), makeOptions());
-      expect(state.pieceName).toBe('test-piece');
-      expect(state.currentMovement).toBe('start');
+      expect(state.workflowName).toBe('test-workflow');
+      expect(state.currentStep).toBe('start');
       expect(state.status).toBe('running');
     });
   });
 
-  describe('incrementMovementIteration (standalone)', () => {
+  describe('incrementStepIteration (standalone)', () => {
     it('should increment counter on state', () => {
       const state = makeState();
-      expect(incrementMovementIteration(state, 'review')).toBe(1);
-      expect(incrementMovementIteration(state, 'review')).toBe(2);
+      expect(incrementStepIteration(state, 'review')).toBe(1);
+      expect(incrementStepIteration(state, 'review')).toBe(2);
     });
   });
 
@@ -201,20 +201,20 @@ describe('standalone functions', () => {
   });
 
   describe('getPreviousOutput (standalone)', () => {
-    it('should prefer lastOutput over movementOutputs', () => {
+    it('should prefer lastOutput over stepOutputs', () => {
       const state = makeState();
       const lastOutput = makeResponse('last');
       const mapOutput = makeResponse('from-map');
       state.lastOutput = lastOutput;
-      state.movementOutputs.set('step-1', mapOutput);
+      state.stepOutputs.set('step-1', mapOutput);
 
       expect(getPreviousOutput(state)?.content).toBe('last');
     });
 
-    it('should fall back to movementOutputs when lastOutput is undefined', () => {
+    it('should fall back to stepOutputs when lastOutput is undefined', () => {
       const state = makeState();
       const mapOutput = makeResponse('from-map');
-      state.movementOutputs.set('step-1', mapOutput);
+      state.stepOutputs.set('step-1', mapOutput);
 
       expect(getPreviousOutput(state)?.content).toBe('from-map');
     });

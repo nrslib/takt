@@ -1,7 +1,7 @@
 /**
  * Global config tests.
  *
- * Tests global config loading and saving with piece_overrides,
+ * Tests global config loading and saving with workflow_overrides,
  * including empty array round-trip behavior.
  */
 
@@ -39,11 +39,11 @@ describe('globalConfig', () => {
     }
   });
 
-  describe('piece_overrides empty array round-trip', () => {
+  describe('workflow_overrides empty array round-trip', () => {
     it('should preserve empty quality_gates array in save/load cycle', () => {
       // Write config with empty quality_gates array
       const configContent = `
-piece_overrides:
+workflow_overrides:
   quality_gates: []
 `;
       writeFileSync(testConfigPath, configContent, 'utf-8');
@@ -51,7 +51,7 @@ piece_overrides:
       // Load config
       const manager = GlobalConfigManager.getInstance();
       const loaded = manager.load();
-      expect(loaded.pieceOverrides?.qualityGates).toEqual([]);
+      expect(loaded.workflowOverrides?.qualityGates).toEqual([]);
 
       // Save config
       manager.save(loaded);
@@ -60,13 +60,13 @@ piece_overrides:
       GlobalConfigManager.resetInstance();
       const reloadedManager = GlobalConfigManager.getInstance();
       const reloaded = reloadedManager.load();
-      expect(reloaded.pieceOverrides?.qualityGates).toEqual([]);
+      expect(reloaded.workflowOverrides?.qualityGates).toEqual([]);
     });
 
-    it('should preserve empty quality_gates in movements', () => {
+    it('should preserve empty quality_gates in steps', () => {
       const configContent = `
-piece_overrides:
-  movements:
+workflow_overrides:
+  steps:
     implement:
       quality_gates: []
 `;
@@ -74,36 +74,36 @@ piece_overrides:
 
       const manager = GlobalConfigManager.getInstance();
       const loaded = manager.load();
-      expect(loaded.pieceOverrides?.movements?.implement?.qualityGates).toEqual([]);
+      expect(loaded.workflowOverrides?.steps?.implement?.qualityGates).toEqual([]);
 
       manager.save(loaded);
 
       GlobalConfigManager.resetInstance();
       const reloadedManager = GlobalConfigManager.getInstance();
       const reloaded = reloadedManager.load();
-      expect(reloaded.pieceOverrides?.movements?.implement?.qualityGates).toEqual([]);
+      expect(reloaded.workflowOverrides?.steps?.implement?.qualityGates).toEqual([]);
     });
 
     it('should distinguish undefined from empty array', () => {
       // Test with undefined (not specified)
-      writeFileSync(testConfigPath, 'piece_overrides: {}\n', 'utf-8');
+      writeFileSync(testConfigPath, 'workflow_overrides: {}\n', 'utf-8');
 
       const manager1 = GlobalConfigManager.getInstance();
       const loaded1 = manager1.load();
-      expect(loaded1.pieceOverrides?.qualityGates).toBeUndefined();
+      expect(loaded1.workflowOverrides?.qualityGates).toBeUndefined();
 
       // Test with empty array (explicitly disabled)
       GlobalConfigManager.resetInstance();
-      writeFileSync(testConfigPath, 'piece_overrides:\n  quality_gates: []\n', 'utf-8');
+      writeFileSync(testConfigPath, 'workflow_overrides:\n  quality_gates: []\n', 'utf-8');
 
       const manager2 = GlobalConfigManager.getInstance();
       const loaded2 = manager2.load();
-      expect(loaded2.pieceOverrides?.qualityGates).toEqual([]);
+      expect(loaded2.workflowOverrides?.qualityGates).toEqual([]);
     });
 
     it('should preserve non-empty quality_gates array', () => {
       const config: GlobalConfig = {
-        pieceOverrides: {
+        workflowOverrides: {
           qualityGates: ['Test 1', 'Test 2'],
         },
       };
@@ -115,12 +115,12 @@ piece_overrides:
       const reloadedManager = GlobalConfigManager.getInstance();
       const reloaded = reloadedManager.load();
 
-      expect(reloaded.pieceOverrides?.qualityGates).toEqual(['Test 1', 'Test 2']);
+      expect(reloaded.workflowOverrides?.qualityGates).toEqual(['Test 1', 'Test 2']);
     });
 
     it('should preserve personas quality_gates in save/load cycle', () => {
       const configContent = `
-piece_overrides:
+workflow_overrides:
   personas:
     coder:
       quality_gates:
@@ -130,25 +130,25 @@ piece_overrides:
 
       const manager = GlobalConfigManager.getInstance();
       const loaded = manager.load();
-      const loadedPieceOverrides = loaded.pieceOverrides as unknown as {
+      const loadedWorkflowOverrides = loaded.workflowOverrides as unknown as {
         personas?: Record<string, { qualityGates?: string[] }>;
       };
-      expect(loadedPieceOverrides.personas?.coder?.qualityGates).toEqual(['Global persona gate']);
+      expect(loadedWorkflowOverrides.personas?.coder?.qualityGates).toEqual(['Global persona gate']);
 
       manager.save(loaded);
 
       GlobalConfigManager.resetInstance();
       const reloadedManager = GlobalConfigManager.getInstance();
       const reloaded = reloadedManager.load();
-      const reloadedPieceOverrides = reloaded.pieceOverrides as unknown as {
+      const reloadedWorkflowOverrides = reloaded.workflowOverrides as unknown as {
         personas?: Record<string, { qualityGates?: string[] }>;
       };
-      expect(reloadedPieceOverrides.personas?.coder?.qualityGates).toEqual(['Global persona gate']);
+      expect(reloadedWorkflowOverrides.personas?.coder?.qualityGates).toEqual(['Global persona gate']);
     });
 
     it('should preserve empty quality_gates array in personas', () => {
       const configContent = `
-piece_overrides:
+workflow_overrides:
   personas:
     coder:
       quality_gates: []
@@ -157,23 +157,23 @@ piece_overrides:
 
       const manager = GlobalConfigManager.getInstance();
       const loaded = manager.load();
-      const loadedPieceOverrides = loaded.pieceOverrides as unknown as {
+      const loadedWorkflowOverrides = loaded.workflowOverrides as unknown as {
         personas?: Record<string, { qualityGates?: string[] }>;
       };
-      expect(loadedPieceOverrides.personas?.coder?.qualityGates).toEqual([]);
+      expect(loadedWorkflowOverrides.personas?.coder?.qualityGates).toEqual([]);
 
       manager.save(loaded);
 
       GlobalConfigManager.resetInstance();
       const reloadedManager = GlobalConfigManager.getInstance();
       const reloaded = reloadedManager.load();
-      const reloadedPieceOverrides = reloaded.pieceOverrides as unknown as {
+      const reloadedWorkflowOverrides = reloaded.workflowOverrides as unknown as {
         personas?: Record<string, { qualityGates?: string[] }>;
       };
-      expect(reloadedPieceOverrides.personas?.coder?.qualityGates).toEqual([]);
+      expect(reloadedWorkflowOverrides.personas?.coder?.qualityGates).toEqual([]);
     });
 
-    it('should load workflow_overrides.steps as alias of piece_overrides.movements', () => {
+    it('should load workflow_overrides.steps with canonical step keys', () => {
       const configContent = `
 workflow_overrides:
   steps:
@@ -185,10 +185,10 @@ workflow_overrides:
       const manager = GlobalConfigManager.getInstance();
       const loaded = manager.load();
 
-      expect(loaded.pieceOverrides?.movements?.implement?.qualityGates).toEqual([]);
+      expect(loaded.workflowOverrides?.steps?.implement?.qualityGates).toEqual([]);
     });
 
-    it('should fail fast when workflow_overrides and piece_overrides differ', () => {
+    it('should reject the removed override key when workflow_overrides is also present', () => {
       const configContent = `
 workflow_overrides:
   quality_gates:
@@ -200,12 +200,10 @@ piece_overrides:
       writeFileSync(testConfigPath, configContent, 'utf-8');
 
       const manager = GlobalConfigManager.getInstance();
-      expect(() => manager.load()).toThrow(
-        /workflow_overrides.*piece_overrides|piece_overrides.*workflow_overrides|conflict/i,
-      );
+      expect(() => manager.load()).toThrow(/piece_overrides/i);
     });
 
-    it('should accept semantically identical workflow_overrides and piece_overrides', () => {
+    it('should reject the removed override key even when semantically identical to workflow_overrides', () => {
       const configContent = `
 workflow_overrides:
   steps:
@@ -213,7 +211,7 @@ workflow_overrides:
       quality_gates:
         - "shared"
 piece_overrides:
-  movements:
+  steps:
     implement:
       quality_gates:
         - "shared"
@@ -221,15 +219,13 @@ piece_overrides:
       writeFileSync(testConfigPath, configContent, 'utf-8');
 
       const manager = GlobalConfigManager.getInstance();
-      const loaded = manager.load();
-
-      expect(loaded.pieceOverrides?.movements?.implement?.qualityGates).toEqual(['shared']);
+      expect(() => manager.load()).toThrow(/piece_overrides/i);
     });
 
-    it('should save pieceOverrides using workflow_overrides and steps keys', () => {
+    it('should save workflowOverrides using workflow_overrides and steps keys', () => {
       const config: GlobalConfig = {
-        pieceOverrides: {
-          movements: {
+        workflowOverrides: {
+          steps: {
             implement: {
               qualityGates: ['Global gate'],
             },
@@ -244,7 +240,6 @@ piece_overrides:
       expect(saved).toContain('workflow_overrides:');
       expect(saved).toContain('steps:');
       expect(saved).not.toContain('piece_overrides:');
-      expect(saved).not.toContain('movements:');
     });
   });
 
@@ -268,8 +263,7 @@ logging:
     it.each([
       ['worktree_dir', 'worktreeDir'],
       ['bookmarks_file', 'bookmarksFile'],
-      ['piece_categories_file', 'pieceCategoriesFile'],
-      ['workflow_categories_file', 'pieceCategoriesFile'],
+      ['workflow_categories_file', 'workflowCategoriesFile'],
       ['codex_cli_path', 'codexCliPath'],
       ['claude_cli_path', 'claudeCliPath'],
       ['cursor_cli_path', 'cursorCliPath'],
@@ -306,35 +300,35 @@ logging:
   describe('workflow-facing global aliases', () => {
     it.each([
       [
-        'workflow_arpeggio',
+        'workflow_arpeggio with removed-key alias',
         ['workflow_arpeggio:', '  custom_merge_files: true', 'piece_arpeggio:', '  custom_merge_files: false'],
       ],
       [
-        'workflow_mcp_servers',
+        'workflow_mcp_servers with removed-key alias',
         ['workflow_mcp_servers:', '  http: true', 'piece_mcp_servers:', '  http: false'],
       ],
       [
-        'enable_builtin_workflows',
+        'enable_builtin_workflows with removed legacy alias',
         ['enable_builtin_workflows: true', 'enable_builtin_pieces: false'],
       ],
       [
-        'workflow_categories_file',
+        'workflow_categories_file with removed legacy alias',
         ['workflow_categories_file: /tmp/workflows.yaml', 'piece_categories_file: /tmp/pieces.yaml'],
       ],
       [
-        'notification workflow keys',
+        'notification workflow keys with legacy keys',
         [
           'notification_sound_events:',
           '  workflow_complete: true',
-          '  piece_complete: false',
+          '  workflow_complete: false',
           '  workflow_abort: false',
-          '  piece_abort: true',
+          '  workflow_abort: true',
         ],
       ],
     ])('should fail fast when %s aliases differ', (_label, lines) => {
       writeFileSync(testConfigPath, `${lines.join('\n')}\n`, 'utf-8');
 
-      expect(() => GlobalConfigManager.getInstance().load()).toThrow(/conflict/i);
+      expect(() => GlobalConfigManager.getInstance().load()).toThrow(/piece_|enable_builtin_pieces|Map keys must be unique/i);
     });
 
     it('should load workflow_runtime_prepare policy block', () => {
@@ -346,12 +340,12 @@ logging:
 
       const loaded = GlobalConfigManager.getInstance().load();
 
-      expect(loaded.pieceRuntimePrepare).toEqual({ customScripts: true });
+      expect(loaded.workflowRuntimePrepare).toEqual({ customScripts: true });
     });
 
-    it('should save pieceRuntimePrepare using workflow_runtime_prepare key', () => {
+    it('should save workflowRuntimePrepare using workflow_runtime_prepare key', () => {
       const config: GlobalConfig = {
-        pieceRuntimePrepare: { customScripts: true },
+        workflowRuntimePrepare: { customScripts: true },
       };
 
       GlobalConfigManager.getInstance().save(config);
@@ -361,7 +355,7 @@ logging:
       expect(saved).not.toContain('piece_runtime_prepare:');
     });
 
-    it('should fail fast when workflow_runtime_prepare and piece_runtime_prepare differ', () => {
+    it('should reject a removed runtime.prepare alias when workflow_runtime_prepare is also present', () => {
       writeFileSync(
         testConfigPath,
         [
@@ -373,9 +367,7 @@ logging:
         'utf-8',
       );
 
-      expect(() => GlobalConfigManager.getInstance().load()).toThrow(
-        /workflow_runtime_prepare.*piece_runtime_prepare|piece_runtime_prepare.*workflow_runtime_prepare|conflict/i,
-      );
+      expect(() => GlobalConfigManager.getInstance().load()).toThrow(/piece_runtime_prepare/i);
     });
 
     it('should load workflow_arpeggio policy block', () => {
@@ -392,16 +384,16 @@ logging:
 
       const loaded = GlobalConfigManager.getInstance().load();
 
-      expect(loaded.pieceArpeggio).toEqual({
+      expect(loaded.workflowArpeggio).toEqual({
         customDataSourceModules: true,
         customMergeInlineJs: false,
         customMergeFiles: true,
       });
     });
 
-    it('should save pieceArpeggio using workflow_arpeggio key', () => {
+    it('should save workflowArpeggio using workflow_arpeggio key', () => {
       const config: GlobalConfig = {
-        pieceArpeggio: {
+        workflowArpeggio: {
           customDataSourceModules: true,
           customMergeInlineJs: true,
           customMergeFiles: false,
@@ -424,12 +416,12 @@ logging:
 
       const loaded = GlobalConfigManager.getInstance().load();
 
-      expect(loaded.pieceMcpServers).toEqual({ stdio: true, http: false, sse: true });
+      expect(loaded.workflowMcpServers).toEqual({ stdio: true, http: false, sse: true });
     });
 
-    it('should save pieceMcpServers using workflow_mcp_servers key', () => {
+    it('should save workflowMcpServers using workflow_mcp_servers key', () => {
       const config: GlobalConfig = {
-        pieceMcpServers: { stdio: true, http: true, sse: false },
+        workflowMcpServers: { stdio: true, http: true, sse: false },
       };
 
       GlobalConfigManager.getInstance().save(config);
@@ -439,17 +431,17 @@ logging:
       expect(saved).not.toContain('piece_mcp_servers:');
     });
 
-    it('should load enable_builtin_workflows as alias of enable_builtin_pieces', () => {
+    it('should load enable_builtin_workflows from the canonical key', () => {
       writeFileSync(testConfigPath, 'enable_builtin_workflows: true\n', 'utf-8');
 
       const loaded = GlobalConfigManager.getInstance().load();
 
-      expect(loaded.enableBuiltinPieces).toBe(true);
+      expect(loaded.enableBuiltinWorkflows).toBe(true);
     });
 
-    it('should save enableBuiltinPieces using enable_builtin_workflows key', () => {
+    it('should save enableBuiltinWorkflows using enable_builtin_workflows key', () => {
       const config: GlobalConfig = {
-        enableBuiltinPieces: true,
+        enableBuiltinWorkflows: true,
       };
 
       GlobalConfigManager.getInstance().save(config);
@@ -459,9 +451,9 @@ logging:
       expect(saved).not.toContain('enable_builtin_pieces:');
     });
 
-    it('should save pieceCategoriesFile using workflow_categories_file key', () => {
+    it('should save workflowCategoriesFile using workflow_categories_file key', () => {
       const config: GlobalConfig = {
-        pieceCategoriesFile: '/tmp/workflow-categories.yaml',
+        workflowCategoriesFile: '/tmp/workflow-categories.yaml',
       };
 
       GlobalConfigManager.getInstance().save(config);
@@ -471,7 +463,7 @@ logging:
       expect(saved).not.toContain('piece_categories_file:');
     });
 
-    it('should load workflow notification keys as aliases of piece notification keys', () => {
+    it('should load workflow notification keys with canonical workflow key names', () => {
       writeFileSync(
         testConfigPath,
         [
@@ -485,16 +477,16 @@ logging:
       const loaded = GlobalConfigManager.getInstance().load();
 
       expect(loaded.notificationSoundEvents).toEqual({
-        pieceComplete: true,
-        pieceAbort: false,
+        workflowComplete: true,
+        workflowAbort: false,
       });
     });
 
     it('should save notificationSoundEvents using workflow notification keys', () => {
       const config: GlobalConfig = {
         notificationSoundEvents: {
-          pieceComplete: true,
-          pieceAbort: false,
+          workflowComplete: true,
+          workflowAbort: false,
         },
       };
 

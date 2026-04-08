@@ -12,7 +12,6 @@
 | `-t, --task <text>` | タスク内容（GitHub Issue の代替） |
 | `-i, --issue <N>` | GitHub Issue 番号（インタラクティブモードでの `#N` と同等） |
 | `-w, --workflow <name or path>` | workflow 名または workflow YAML ファイルのパス |
-| `--piece <name or path>` | `--workflow` の互換 alias |
 | `-b, --branch <name>` | ブランチ名を指定（省略時は自動生成） |
 | `--pr <number>` | PR 番号を指定してレビューコメントを取得し修正を実行 |
 | `--auto-pr` | PR を作成（pipeline モードのみ） |
@@ -24,7 +23,7 @@
 | `--model <name>` | エージェントモデルを上書き |
 | `--config <path>` | グローバル設定ファイルのパス（デフォルト: `~/.takt/config.yaml`） |
 
-正式オプションは `--workflow` です。`--piece` は互換 alias としてのみ残っており、内部実装名は `piece` / `movement` のままです。
+正式オプションは `--workflow` です。
 
 ## インタラクティブモード
 
@@ -238,7 +237,7 @@ takt eject persona coder
 takt eject instruction plan --global
 ```
 
-workflow の正式ディレクトリ名は `workflows/` です。旧来の `pieces/` ディレクトリも互換のため引き続き探索されます。
+workflow の正式ディレクトリ名は `workflows/` です。
 
 ### takt clear
 
@@ -259,7 +258,7 @@ takt export-cc
 ### takt export-codex
 
 TAKT のスキルファイルを Codex Skill（`~/.agents/skills/takt/`）としてデプロイします。
-このコマンドは `SKILL.md`、`references/`、`agents/`、`pieces/`、`facets/` をデプロイします。ここでの `pieces/` は旧来の内部互換パスです。
+このコマンドは `SKILL.md`、`references/`、`agents/`、`workflows/`、`facets/` をデプロイします。
 
 ```bash
 takt export-codex
@@ -326,7 +325,7 @@ takt repertoire remove @{owner}/{repo}
 
 インストールされたパッケージは `~/.takt/repertoire/` に保存され、workflow 選択やファセット解決で利用可能になります。
 
-同名 workflow が複数箇所にある場合の探索順は `.takt/workflows/` → `.takt/pieces/` → `~/.takt/workflows/` → `~/.takt/pieces/` → builtin です。
+同名 workflow が複数箇所にある場合の探索順は `.takt/workflows/` → `~/.takt/workflows/` → builtin です。
 
 ### takt purge
 

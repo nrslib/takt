@@ -34,7 +34,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 }));
 
 vi.mock('../features/tasks/execute/selectAndExecute.js', () => ({
-  determinePiece: vi.fn(),
+  determineWorkflow: vi.fn(),
 }));
 
 vi.mock('../infra/task/index.js', async (importOriginal) => ({
@@ -76,7 +76,7 @@ vi.mock('../infra/git/index.js', () => ({
 import { interactiveMode } from '../features/interactive/index.js';
 import { promptInput, confirm } from '../shared/prompt/index.js';
 import { error, info } from '../shared/ui/index.js';
-import { determinePiece } from '../features/tasks/execute/selectAndExecute.js';
+import { determineWorkflow } from '../features/tasks/execute/selectAndExecute.js';
 import { addTask } from '../features/tasks/index.js';
 import { getCurrentBranch } from '../infra/task/index.js';
 import { branchExists } from '../infra/task/clone-base-branch.js';
@@ -87,7 +87,7 @@ const mockPromptInput = vi.mocked(promptInput);
 const mockConfirm = vi.mocked(confirm);
 const mockInfo = vi.mocked(info);
 const mockError = vi.mocked(error);
-const mockDeterminePiece = vi.mocked(determinePiece);
+const mockDetermineWorkflow = vi.mocked(determineWorkflow);
 const mockGetCurrentBranch = vi.mocked(getCurrentBranch);
 const mockBranchExists = vi.mocked(branchExists);
 
@@ -119,7 +119,7 @@ function createMockPrReview(overrides: Partial<PrReviewData & { baseRefName?: st
 beforeEach(() => {
   vi.clearAllMocks();
   testDir = fs.mkdtempSync(path.join(tmpdir(), 'takt-test-'));
-  mockDeterminePiece.mockResolvedValue('default');
+  mockDetermineWorkflow.mockResolvedValue('default');
   mockConfirm.mockResolvedValue(false);
   mockGetCurrentBranch.mockReturnValue('main');
   mockBranchExists.mockReturnValue(true);
@@ -141,7 +141,7 @@ describe('addTask', () => {
     await addTask(testDir);
 
     expect(mockInfo).toHaveBeenCalledWith('Usage: takt add <task>');
-    expect(mockDeterminePiece).not.toHaveBeenCalled();
+    expect(mockDetermineWorkflow).not.toHaveBeenCalled();
     expect(fs.existsSync(path.join(testDir, '.takt', 'tasks.yaml'))).toBe(false);
   });
 
@@ -149,7 +149,7 @@ describe('addTask', () => {
     await addTask(testDir, '   ');
 
     expect(mockInfo).toHaveBeenCalledWith('Usage: takt add <task>');
-    expect(mockDeterminePiece).not.toHaveBeenCalled();
+    expect(mockDetermineWorkflow).not.toHaveBeenCalled();
     expect(fs.existsSync(path.join(testDir, '.takt', 'tasks.yaml'))).toBe(false);
   });
 
@@ -162,7 +162,6 @@ describe('addTask', () => {
     expect(task.task_dir).toBeTypeOf('string');
     expect(readOrderContent(testDir, task.task_dir)).toContain('JWT認証を実装する');
     expect(task.workflow).toBe('default');
-    expect(task.piece).toBeUndefined();
     expect(task.worktree).toBe(true);
   });
 
@@ -268,7 +267,7 @@ describe('addTask', () => {
     expect(mockResolveIssueTask).not.toHaveBeenCalled();
     expect(mockPromptInput).not.toHaveBeenCalled();
     expect(mockConfirm).not.toHaveBeenCalled();
-    expect(mockDeterminePiece).toHaveBeenCalledTimes(1);
+    expect(mockDetermineWorkflow).toHaveBeenCalledTimes(1);
     const task = loadTasks(testDir).tasks[0]!;
     expect(task.content).toBeUndefined();
     expect(task.branch).toBe('feature/fix-auth-bug');
@@ -303,7 +302,7 @@ describe('addTask', () => {
     expect(mockCheckCliStatus).toHaveBeenCalled();
     expect(mockFetchPrReviewComments).toHaveBeenCalledWith(456, testDir);
     expect(mockFormatPrReviewAsTask).not.toHaveBeenCalled();
-    expect(mockDeterminePiece).not.toHaveBeenCalled();
+    expect(mockDetermineWorkflow).not.toHaveBeenCalled();
     expect(mockError).toHaveBeenCalled();
     expect(fs.existsSync(path.join(testDir, '.takt', 'tasks.yaml'))).toBe(false);
   });
@@ -316,7 +315,7 @@ describe('addTask', () => {
     expect(mockCheckCliStatus).toHaveBeenCalled();
     expect(mockFetchPrReviewComments).toHaveBeenCalledWith(456, testDir);
     expect(mockFormatPrReviewAsTask).not.toHaveBeenCalled();
-    expect(mockDeterminePiece).not.toHaveBeenCalled();
+    expect(mockDetermineWorkflow).not.toHaveBeenCalled();
     expect(mockError).toHaveBeenCalledWith(expect.stringContaining('network timeout'));
     expect(fs.existsSync(path.join(testDir, '.takt', 'tasks.yaml'))).toBe(false);
   });
@@ -328,7 +327,7 @@ describe('addTask', () => {
 
     expect(mockFetchPrReviewComments).not.toHaveBeenCalled();
     expect(mockFormatPrReviewAsTask).not.toHaveBeenCalled();
-    expect(mockDeterminePiece).not.toHaveBeenCalled();
+    expect(mockDetermineWorkflow).not.toHaveBeenCalled();
     expect(mockError).toHaveBeenCalled();
     expect(fs.existsSync(path.join(testDir, '.takt', 'tasks.yaml'))).toBe(false);
   });
@@ -354,18 +353,18 @@ describe('addTask', () => {
     expect(task.auto_pr).toBe(false);
   });
 
-  it('should not create task when piece selection is cancelled', async () => {
-    mockDeterminePiece.mockResolvedValue(null);
+  it('should not create task when workflow selection is cancelled', async () => {
+    mockDetermineWorkflow.mockResolvedValue(null);
 
     await addTask(testDir, 'Task content');
 
     expect(fs.existsSync(path.join(testDir, '.takt', 'tasks.yaml'))).toBe(false);
   });
 
-  it('should not save PR task when piece selection is cancelled', async () => {
+  it('should not save PR task when workflow selection is cancelled', async () => {
     const prReview = createMockPrReview();
     const formattedTask = '## PR #456 Review Comments: Fix auth bug';
-    mockDeterminePiece.mockResolvedValue(null);
+    mockDetermineWorkflow.mockResolvedValue(null);
     mockFetchPrReviewComments.mockReturnValue(prReview);
     mockFormatPrReviewAsTask.mockReturnValue(formattedTask);
 
@@ -374,7 +373,7 @@ describe('addTask', () => {
     expect(mockCheckCliStatus).toHaveBeenCalled();
     expect(mockFetchPrReviewComments).toHaveBeenCalledWith(456, testDir);
     expect(mockFormatPrReviewAsTask).toHaveBeenCalledWith(prReview);
-    expect(mockDeterminePiece).toHaveBeenCalledTimes(1);
+    expect(mockDetermineWorkflow).toHaveBeenCalledTimes(1);
     expect(fs.existsSync(path.join(testDir, '.takt', 'tasks.yaml'))).toBe(false);
   });
 });

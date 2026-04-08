@@ -252,7 +252,7 @@ describe('prepareRuntimeEnvironment', () => {
 });
 
 describe('resolveRuntimeConfig', () => {
-  it('should use piece runtime when both global and piece are defined', () => {
+  it('should use workflow runtime when both global and workflow values are defined', () => {
     const resolved = resolveRuntimeConfig(
       { prepare: ['gradle', 'node'] },
       { prepare: ['node', 'pnpm'] },
@@ -260,7 +260,7 @@ describe('resolveRuntimeConfig', () => {
     expect(resolved).toEqual({ prepare: ['node', 'pnpm'] });
   });
 
-  it('should fallback to global runtime when piece runtime is missing', () => {
+  it('should fall back to global runtime when workflow runtime is missing', () => {
     const resolved = resolveRuntimeConfig(
       { prepare: ['gradle', 'node', 'gradle'] },
       undefined,

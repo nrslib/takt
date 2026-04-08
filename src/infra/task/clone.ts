@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { createLogger, isPathInside } from '../../shared/utils/index.js';
+import { createLogger, isRealPathInside } from '../../shared/utils/index.js';
 import { resolveConfigValue } from '../config/index.js';
 import type { WorktreeOptions, WorktreeResult } from './types.js';
 import { localBranchExists, remoteBranchExists, resolveBaseBranch as resolveBaseBranchInternal } from './clone-base-branch.js';
@@ -177,7 +177,7 @@ export class CloneManager {
     }
     const cloneBaseDir = path.resolve(CloneManager.resolveCloneBaseDir(projectDir));
     const resolvedClonePath = path.resolve(meta.clonePath);
-    if (!isPathInside(cloneBaseDir, resolvedClonePath)) {
+    if (!isRealPathInside(cloneBaseDir, resolvedClonePath)) {
       log.error('Refusing to remove clone outside of clone base directory', {
         branch,
         clonePath: meta.clonePath,

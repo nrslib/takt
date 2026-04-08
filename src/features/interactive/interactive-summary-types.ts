@@ -2,7 +2,7 @@
  * Type definitions for interactive summary.
  */
 
-import type { MovementPreview } from '../../infra/config/index.js';
+import type { StepPreview } from '../../infra/config/index.js';
 
 export type TaskHistoryLocale = 'en' | 'ja';
 
@@ -21,15 +21,15 @@ export interface TaskHistorySummaryItem {
   logKey: string;
 }
 
-export interface PieceContext {
-  /** Piece name (e.g. "minimal") */
+export interface WorkflowContext {
+  /** Workflow name (e.g. "minimal") */
   name: string;
-  /** Piece description */
+  /** Workflow description */
   description: string;
-  /** Piece structure (numbered list of movements) */
-  pieceStructure: string;
-  /** Movement previews (persona + instruction content for first N movements) */
-  movementPreviews?: MovementPreview[];
+  /** Workflow structure (numbered list of steps) */
+  workflowStructure: string;
+  /** Step previews (persona + instruction content for first N steps) */
+  stepPreviews?: StepPreview[];
   /** Recent task history for conversation context */
   taskHistory?: TaskHistorySummaryItem[];
 }

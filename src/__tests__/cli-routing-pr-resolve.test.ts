@@ -31,7 +31,7 @@ const {
   mockCheckCliStatus: vi.fn(),
   mockFetchIssue: vi.fn(),
   mockFetchPrReviewComments: vi.fn(),
-  mockResolveConfigValues: vi.fn(() => ({ language: 'en', interactivePreviewMovements: 3, provider: 'claude' })),
+  mockResolveConfigValues: vi.fn(() => ({ language: 'en', interactivePreviewSteps: 3, provider: 'claude' })),
   mockResolveAssistantConfigLayers: vi.fn(() => ({ local: {}, global: {} })),
   mockLoadPersonaSessions: vi.fn(() => ({})),
   mockResolveAgentOverrides: vi.fn(),
@@ -53,7 +53,7 @@ vi.mock('../infra/git/index.js', () => ({
 
 vi.mock('../features/tasks/index.js', () => ({
   selectAndExecuteTask: vi.fn(),
-  determinePiece: vi.fn(),
+  determineWorkflow: vi.fn(),
   saveTaskFromInteractive: vi.fn(),
   createIssueAndSaveTask: vi.fn(),
   promptLabelSelection: vi.fn().mockResolvedValue([]),
@@ -91,7 +91,7 @@ vi.mock('../infra/task/index.js', () => ({
 }));
 
 vi.mock('../infra/config/index.js', () => ({
-  getPieceDescription: vi.fn(() => ({ name: 'default', description: 'test piece', pieceStructure: '', movementPreviews: [] })),
+  getWorkflowDescription: vi.fn(() => ({ name: 'default', description: 'test workflow', workflowStructure: '', stepPreviews: [] })),
   resolveConfigValues: (...args: unknown[]) => mockResolveConfigValues(...args),
   resolveConfigValue: vi.fn(() => undefined),
   loadPersonaSessions: (...args: unknown[]) => mockLoadPersonaSessions(...args),
@@ -119,17 +119,10 @@ vi.mock('../app/cli/program.js', () => {
 vi.mock('../app/cli/helpers.js', () => ({
   resolveAgentOverrides: (...args: unknown[]) => mockResolveAgentOverrides(...args),
   isDirectTask: vi.fn(() => false),
-  resolveWorkflowCliOption: vi.fn((opts: Record<string, unknown>) => {
-    const workflow = typeof opts.workflow === 'string' ? opts.workflow : undefined;
-    const piece = typeof opts.piece === 'string' ? opts.piece : undefined;
-    if (workflow !== undefined && piece !== undefined && workflow !== piece) {
-      throw new Error('--workflow and --piece cannot be used together with different values');
-    }
-    return workflow ?? piece;
-  }),
+  resolveWorkflowCliOption: vi.fn((opts: Record<string, unknown>) => typeof opts.workflow === 'string' ? opts.workflow : undefined),
 }));
 
-import { selectAndExecuteTask, determinePiece, saveTaskFromInteractive } from '../features/tasks/index.js';
+import { selectAndExecuteTask, determineWorkflow, saveTaskFromInteractive } from '../features/tasks/index.js';
 import { interactiveMode } from '../features/interactive/index.js';
 import { executePipeline } from '../features/pipeline/index.js';
 import { executeDefaultAction } from '../app/cli/routing.js';
@@ -138,7 +131,7 @@ import type { InteractiveModeResult } from '../features/interactive/index.js';
 import type { PrReviewData } from '../infra/git/index.js';
 
 const mockSelectAndExecuteTask = vi.mocked(selectAndExecuteTask);
-const mockDeterminePiece = vi.mocked(determinePiece);
+const mockDetermineWorkflow = vi.mocked(determineWorkflow);
 const mockInteractiveMode = vi.mocked(interactiveMode);
 const mockExecutePipeline = vi.mocked(executePipeline);
 const mockLogError = vi.mocked(logError);
@@ -165,11 +158,11 @@ beforeEach(() => {
   for (const key of Object.keys(mockOpts)) {
     delete mockOpts[key];
   }
-  mockDeterminePiece.mockResolvedValue('default');
+  mockDetermineWorkflow.mockResolvedValue('default');
   mockInteractiveMode.mockResolvedValue({ action: 'execute', task: 'summarized task' });
   mockListAllTaskItems.mockReturnValue([]);
   mockIsStaleRunningTask.mockReturnValue(false);
-  mockResolveConfigValuesFn.mockReturnValue({ language: 'en', interactivePreviewMovements: 3, provider: 'claude' });
+  mockResolveConfigValuesFn.mockReturnValue({ language: 'en', interactivePreviewSteps: 3, provider: 'claude' });
   mockResolveAssistantConfigLayers.mockReturnValue({ local: {}, global: {} });
   mockLoadPersonaSessionsFn.mockReturnValue({});
   mockResolveAgentOverrides.mockReturnValue(undefined);
@@ -365,7 +358,7 @@ describe('PR resolution in routing', () => {
       Object.defineProperty(programModule, 'pipelineMode', { value: true, writable: true });
 
       mockOpts.pr = 456;
-      mockOpts.piece = 'default';
+      mockOpts.workflow = 'default';
       mockExecutePipeline.mockResolvedValue(0);
 
       // When
@@ -382,7 +375,7 @@ describe('PR resolution in routing', () => {
       Object.defineProperty(programModule, 'pipelineMode', { value: originalPipelineMode, writable: true });
     });
 
-    it('should pass --workflow to executePipeline as piece', async () => {
+    it('should pass --workflow to executePipeline as workflow', async () => {
       const programModule = await import('../app/cli/program.js');
       const originalPipelineMode = programModule.pipelineMode;
       Object.defineProperty(programModule, 'pipelineMode', { value: true, writable: true });
@@ -394,14 +387,14 @@ describe('PR resolution in routing', () => {
 
       expect(mockExecutePipeline).toHaveBeenCalledWith(
         expect.objectContaining({
-          piece: 'migration-workflow',
+          workflow: 'migration-workflow',
         }),
       );
 
       Object.defineProperty(programModule, 'pipelineMode', { value: originalPipelineMode, writable: true });
     });
 
-    it('should exit with error when piece is omitted in pipeline mode', async () => {
+    it('should exit with error when workflow is omitted in pipeline mode', async () => {
       const programModule = await import('../app/cli/program.js');
       const originalPipelineMode = programModule.pipelineMode;
       Object.defineProperty(programModule, 'pipelineMode', { value: true, writable: true });
@@ -414,9 +407,7 @@ describe('PR resolution in routing', () => {
       await expect(executeDefaultAction()).rejects.toThrow('process.exit called');
 
       expect(mockExit).toHaveBeenCalledWith(1);
-      expect(mockLogError).toHaveBeenCalledWith(
-        expect.stringContaining('piece'),
-      );
+      expect(mockLogError).toHaveBeenCalledWith(expect.stringContaining('--workflow'));
       expect(mockExecutePipeline).not.toHaveBeenCalled();
       mockExit.mockRestore();
 
@@ -429,7 +420,7 @@ describe('PR resolution in routing', () => {
       mockOpts.continue = true;
       mockResolveConfigValuesFn.mockReturnValue({
         language: 'en',
-        interactivePreviewMovements: 3,
+        interactivePreviewSteps: 3,
         provider: 'codex',
       });
       mockResolveAssistantConfigLayers.mockReturnValue({
@@ -467,7 +458,7 @@ describe('PR resolution in routing', () => {
       mockResolveAgentOverrides.mockReturnValue({ provider: 'opencode', model: 'cli-model' });
       mockResolveConfigValuesFn.mockReturnValue({
         language: 'en',
-        interactivePreviewMovements: 3,
+        interactivePreviewSteps: 3,
         provider: 'codex',
       });
       mockResolveAssistantConfigLayers.mockReturnValue({
@@ -505,7 +496,7 @@ describe('PR resolution in routing', () => {
       mockOpts.continue = true;
       mockResolveConfigValuesFn.mockReturnValue({
         language: 'en',
-        interactivePreviewMovements: 3,
+        interactivePreviewSteps: 3,
         provider: 'mock',
         model: 'global-top-level-model',
       });

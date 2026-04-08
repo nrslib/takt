@@ -308,11 +308,11 @@ TAKT writes session logs in NDJSON (Newline-Delimited JSON, `.jsonl`) format. Ea
 
 | Record Type | Description |
 |-------------|-------------|
-| `piece_start` | Workflow initialization with task and workflow name |
+| `workflow_start` | Workflow initialization with task and workflow name |
 | `step_start` | Step execution start |
 | `step_complete` | Step result with status, content, matched rule info |
-| `piece_complete` | Successful workflow completion |
-| `piece_abort` | Abort with reason |
+| `workflow_complete` | Successful workflow completion |
+| `workflow_abort` | Abort with reason |
 
 ### Real-Time Monitoring
 

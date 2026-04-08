@@ -1,11 +1,11 @@
 import { type TaskInfo, type TaskResult, TaskRunner } from '../../../infra/task/index.js';
 import { error, info, success } from '../../../shared/ui/index.js';
 import { getErrorMessage } from '../../../shared/utils/index.js';
-import type { ExceededInfo, PieceExecutionResult } from './types.js';
+import type { ExceededInfo, WorkflowExecutionResult } from './types.js';
 
 interface BuildTaskResultParams {
   task: TaskInfo;
-  runResult: PieceExecutionResult;
+  runResult: WorkflowExecutionResult;
   startedAt: string;
   completedAt: string;
   branch?: string;
@@ -46,7 +46,7 @@ export function buildTaskResult(params: BuildTaskResultParams): TaskResult {
     success: taskSuccess,
     response: taskSuccess ? 'Task completed successfully' : runResult.reason!,
     executionLog: runResult.lastMessage ? [runResult.lastMessage] : [],
-    failureMovement: runResult.lastMovement,
+    failureStep: runResult.lastStep,
     failureLastMessage: runResult.lastMessage,
     startedAt,
     completedAt,
@@ -116,13 +116,13 @@ export function persistExceededTaskResult(
   context?: { worktreePath?: string; branch?: string },
 ): void {
   taskRunner.exceedTask(task.name, {
-    currentMovement: exceeded.currentMovement,
-    newMaxMovements: exceeded.newMaxMovements,
+    currentStep: exceeded.currentStep,
+    newMaxSteps: exceeded.newMaxSteps,
     currentIteration: exceeded.currentIteration,
     ...(context?.worktreePath ? { worktreePath: context.worktreePath } : {}),
     ...(context?.branch ? { branch: context.branch } : {}),
   });
-  info(`Task "${task.name}" exceeded iteration limit at step "${exceeded.currentMovement}"`);
+  info(`Task "${task.name}" exceeded iteration limit at step "${exceeded.currentStep}"`);
 }
 
 export function persistTaskError(

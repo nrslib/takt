@@ -6,7 +6,7 @@
 
 import { z } from 'zod/v4';
 import { STATUS_VALUES } from './status.js';
-import { CLAUDE_EFFORT_VALUES, CODEX_REASONING_EFFORT_VALUES, RUNTIME_PREPARE_PRESETS } from './piece-types.js';
+import { CLAUDE_EFFORT_VALUES, CODEX_REASONING_EFFORT_VALUES, RUNTIME_PREPARE_PRESETS } from './workflow-types.js';
 
 export { McpServerConfigSchema, McpServersSchema } from './mcp-schemas.js';
 
@@ -32,9 +32,9 @@ export const ClaudeConfigSchema = z.object({
 /** TAKT global tool configuration schema */
 export const TaktConfigSchema = z.object({
   defaultModel: AgentModelSchema,
-  defaultPiece: z.string().default('default'),
+  defaultWorkflow: z.string().default('default'),
   agentDirs: z.array(z.string()).default([]),
-  pieceDirs: z.array(z.string()).default([]),
+  workflowDirs: z.array(z.string()).default([]),
   sessionDir: z.string().optional(),
   claude: ClaudeConfigSchema.default({ command: 'claude', timeout: 300000 }),
 });
@@ -54,8 +54,8 @@ export const ClaudeSandboxSchema = z.object({
   excluded_commands: z.array(z.string()).optional(),
 }).optional();
 
-/** Provider-specific movement options schema */
-export const MovementProviderOptionsSchema = z.object({
+/** Provider-specific step options schema */
+export const StepProviderOptionsSchema = z.object({
   codex: z.object({
     network_access: z.boolean().optional(),
     reasoning_effort: z.enum(CODEX_REASONING_EFFORT_VALUES).optional(),
@@ -137,9 +137,8 @@ export const ProviderReferenceSchema = z.union([ProviderTypeSchema, ProviderBloc
 /** Provider permission profile schema */
 export const ProviderPermissionProfileSchema = z.object({
   default_permission_mode: PermissionModeSchema,
-  movement_permission_overrides: z.record(z.string(), PermissionModeSchema).optional(),
   step_permission_overrides: z.record(z.string(), PermissionModeSchema).optional(),
-});
+}).strict();
 
 /** Provider permission profiles schema */
 export const ProviderPermissionProfilesSchema = z.object({
@@ -150,7 +149,7 @@ export const ProviderPermissionProfilesSchema = z.object({
   cursor: ProviderPermissionProfileSchema.optional(),
   copilot: ProviderPermissionProfileSchema.optional(),
   mock: ProviderPermissionProfileSchema.optional(),
-}).optional();
+}).strict().optional();
 
 /** Runtime prepare preset identifiers */
 export const RuntimePreparePresetSchema = z.enum(RUNTIME_PREPARE_PRESETS);
@@ -161,15 +160,15 @@ export const RuntimePrepareEntrySchema = z.union([
   z.string().min(1),
 ]);
 
-/** Piece-level runtime settings */
+/** Workflow-level runtime settings */
 export const RuntimeConfigSchema = z.object({
   prepare: z.array(RuntimePrepareEntrySchema).optional(),
 }).optional();
 
-/** Piece-level provider options schema */
-export const PieceProviderOptionsSchema = z.object({
+/** Workflow-level provider options schema */
+export const WorkflowProviderOptionsSchema = z.object({
   provider: ProviderReferenceSchema.optional(),
-  provider_options: MovementProviderOptionsSchema,
+  provider_options: StepProviderOptionsSchema,
   runtime: RuntimeConfigSchema,
 }).optional();
 
@@ -183,16 +182,16 @@ export const OutputContractItemSchema = z.object({
   order: z.string().optional(),
 });
 
-/** Output contracts field schema for movement-level definition. */
+/** Output contracts field schema for step-level definition. */
 export const OutputContractsFieldSchema = z.object({
   report: z.array(OutputContractItemSchema).optional(),
 }).optional();
 
-/** Quality gates schema - AI directives for movement completion (string array) */
+/** Quality gates schema - AI directives for step completion (string array) */
 export const QualityGatesSchema = z.array(z.string()).optional();
 
-/** Movement-specific quality gates override schema */
-export const MovementQualityGatesOverrideSchema = z.object({
+/** Step-specific quality gates override schema */
+export const StepQualityGatesOverrideSchema = z.object({
   quality_gates: QualityGatesSchema,
 }).optional();
 

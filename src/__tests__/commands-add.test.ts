@@ -152,20 +152,6 @@ describe('CLI add command', () => {
       expect(mockAddTask).toHaveBeenCalledWith('/test/cwd', 'Regular task', undefined);
     });
 
-    it('should resolve legacy --piece via command optsWithGlobals()', async () => {
-      mockOpts.piece = 'legacy-flow';
-      const addAction = commandActions.get('root.add');
-      const addCommand = commandMocks.get('root.add');
-
-      expect(addAction).toBeTypeOf('function');
-      expect(addCommand).toBeTruthy();
-
-      await addAction?.('Regular task', addCommand as never);
-
-      expect(mockAddTask).toHaveBeenCalledWith('/test/cwd', 'Regular task', { workflow: 'legacy-flow' });
-      expect(addCommand?.optsWithGlobals).toHaveBeenCalledTimes(1);
-    });
-
     it('should resolve canonical --workflow via command optsWithGlobals()', async () => {
       mockOpts.workflow = 'canonical-flow';
       const addAction = commandActions.get('root.add');
@@ -178,25 +164,6 @@ describe('CLI add command', () => {
 
       expect(mockAddTask).toHaveBeenCalledWith('/test/cwd', 'Regular task', { workflow: 'canonical-flow' });
       expect(addCommand?.optsWithGlobals).toHaveBeenCalled();
-    });
-
-    it('should reject conflicting --workflow and --piece values before calling addTask', async () => {
-      mockOpts.workflow = 'canonical-flow';
-      mockOpts.piece = 'legacy-flow';
-      const addAction = commandActions.get('root.add');
-      mockProcessExit.mockImplementation(() => {
-        throw new Error('process.exit:1');
-      });
-
-      expect(addAction).toBeTypeOf('function');
-
-      await expect(addAction?.('Regular task')).rejects.toThrow('process.exit:1');
-
-      expect(mockLogError).toHaveBeenCalledWith(
-        '--workflow and --piece cannot be used together with different values',
-      );
-      expect(mockProcessExit).toHaveBeenCalledWith(1);
-      expect(mockAddTask).not.toHaveBeenCalled();
     });
   });
 

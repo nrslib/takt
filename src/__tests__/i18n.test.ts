@@ -35,22 +35,22 @@ describe('getLabel', () => {
 
   describe('template variable substitution', () => {
     it('replaces {variableName} placeholders with provided values', () => {
-      const result = getLabel('piece.iterationLimit.maxReached', undefined, {
+      const result = getLabel('workflow.iterationLimit.maxReached', undefined, {
         currentIteration: '5',
-        maxMovements: '10',
+        maxSteps: '10',
       });
       expect(result).toContain('(5/10)');
     });
 
     it('replaces single variable', () => {
-      const result = getLabel('piece.notifyComplete', undefined, {
+      const result = getLabel('workflow.notifyComplete', undefined, {
         iteration: '3',
       });
       expect(result).toContain('3 iterations');
     });
 
     it('leaves unmatched placeholders as-is', () => {
-      const result = getLabel('piece.notifyAbort', undefined, {});
+      const result = getLabel('workflow.notifyAbort', undefined, {});
       expect(result).toContain('{reason}');
     });
   });
@@ -101,30 +101,30 @@ describe('label integrity', () => {
     expect(ui).toHaveProperty('cancelled');
   });
 
-  it('contains all expected piece keys in en', () => {
-    expect(() => getLabel('piece.iterationLimit.maxReached')).not.toThrow();
-    expect(() => getLabel('piece.iterationLimit.currentMovement')).not.toThrow();
-    expect(() => getLabel('piece.iterationLimit.continueQuestion')).not.toThrow();
-    expect(() => getLabel('piece.iterationLimit.continueLabel')).not.toThrow();
-    expect(() => getLabel('piece.iterationLimit.continueDescription')).not.toThrow();
-    expect(() => getLabel('piece.iterationLimit.stopLabel')).not.toThrow();
-    expect(() => getLabel('piece.iterationLimit.inputPrompt')).not.toThrow();
-    expect(() => getLabel('piece.iterationLimit.invalidInput')).not.toThrow();
-    expect(() => getLabel('piece.iterationLimit.userInputPrompt')).not.toThrow();
-    expect(() => getLabel('piece.notifyComplete')).not.toThrow();
-    expect(() => getLabel('piece.notifyAbort')).not.toThrow();
-    expect(() => getLabel('piece.sigintGraceful')).not.toThrow();
-    expect(() => getLabel('piece.sigintTimeout')).not.toThrow();
-    expect(() => getLabel('piece.sigintForce')).not.toThrow();
+  it('contains all expected workflow keys in en', () => {
+    expect(() => getLabel('workflow.iterationLimit.maxReached')).not.toThrow();
+    expect(() => getLabel('workflow.iterationLimit.currentStep')).not.toThrow();
+    expect(() => getLabel('workflow.iterationLimit.continueQuestion')).not.toThrow();
+    expect(() => getLabel('workflow.iterationLimit.continueLabel')).not.toThrow();
+    expect(() => getLabel('workflow.iterationLimit.continueDescription')).not.toThrow();
+    expect(() => getLabel('workflow.iterationLimit.stopLabel')).not.toThrow();
+    expect(() => getLabel('workflow.iterationLimit.inputPrompt')).not.toThrow();
+    expect(() => getLabel('workflow.iterationLimit.invalidInput')).not.toThrow();
+    expect(() => getLabel('workflow.iterationLimit.userInputPrompt')).not.toThrow();
+    expect(() => getLabel('workflow.notifyComplete')).not.toThrow();
+    expect(() => getLabel('workflow.notifyAbort')).not.toThrow();
+    expect(() => getLabel('workflow.sigintGraceful')).not.toThrow();
+    expect(() => getLabel('workflow.sigintTimeout')).not.toThrow();
+    expect(() => getLabel('workflow.sigintForce')).not.toThrow();
   });
 
   it('en and ja have the same key structure', () => {
     const stringKeys = [
       'interactive.ui.intro',
       'interactive.ui.cancelled',
-      'piece.iterationLimit.maxReached',
-      'piece.notifyComplete',
-      'piece.sigintGraceful',
+      'workflow.iterationLimit.maxReached',
+      'workflow.notifyComplete',
+      'workflow.sigintGraceful',
     ];
     for (const key of stringKeys) {
       expect(() => getLabel(key, 'en')).not.toThrow();
@@ -140,25 +140,23 @@ describe('label integrity', () => {
     }
   });
 
-  it('keeps only confirm-based retry piece reuse labels', () => {
-    expect(() => getLabel('retry.usePreviousPieceConfirm', 'en', { piece: 'default' })).not.toThrow();
-    expect(() => getLabel('retry.usePreviousPieceConfirm', 'ja', { piece: 'default' })).not.toThrow();
+  it('keeps only confirm-based retry workflow reuse labels', () => {
+    expect(() => getLabel('retry.usePreviousWorkflowConfirm', 'en', { workflow: 'default' })).not.toThrow();
+    expect(() => getLabel('retry.usePreviousWorkflowConfirm', 'ja', { workflow: 'default' })).not.toThrow();
     expect(() => getLabel('retry.workflowPrompt', 'en')).toThrow('Label key not found');
-    expect(() => getLabel('retry.usePreviousWorkflow', 'en')).toThrow('Label key not found');
     expect(() => getLabel('retry.changeWorkflow', 'en')).toThrow('Label key not found');
     expect(() => getLabel('retry.workflowPrompt', 'ja')).toThrow('Label key not found');
-    expect(() => getLabel('retry.usePreviousWorkflow', 'ja')).toThrow('Label key not found');
     expect(() => getLabel('retry.changeWorkflow', 'ja')).toThrow('Label key not found');
   });
 
   it('uses workflow/step terminology in migrated labels', () => {
-    expect(getLabel('interactive.previousTask.piece', 'en', { pieceName: 'default' })).toBe('Workflow: default');
-    expect(getLabel('interactive.previousTask.piece', 'ja', { pieceName: 'default' })).toBe('使用ワークフロー: default');
-    expect(getLabel('piece.iterationLimit.currentMovement', 'en', { currentMovement: 'implement' })).toBe('Current step: implement');
-    expect(getLabel('piece.iterationLimit.currentMovement', 'ja', { currentMovement: 'implement' })).toBe('現在のステップ: implement');
-    expect(getLabel('piece.notifyComplete', 'en', { iteration: '3' })).toBe('Workflow complete (3 iterations)');
-    expect(getLabel('piece.notifyComplete', 'ja', { iteration: '3' })).toBe('ワークフロー完了 (3 iterations)');
-    expect(getLabel('retry.usePreviousPieceConfirm', 'en', { piece: 'default' })).toBe('Use previous workflow "default"?');
-    expect(getLabel('retry.usePreviousPieceConfirm', 'ja', { piece: 'default' })).toBe('前回のワークフロー "default" を使用しますか？');
+    expect(getLabel('interactive.previousTask.workflow', 'en', { workflowName: 'default' })).toBe('Workflow: default');
+    expect(getLabel('interactive.previousTask.workflow', 'ja', { workflowName: 'default' })).toBe('使用ワークフロー: default');
+    expect(getLabel('workflow.iterationLimit.currentStep', 'en', { currentStep: 'implement' })).toBe('Current step: implement');
+    expect(getLabel('workflow.iterationLimit.currentStep', 'ja', { currentStep: 'implement' })).toBe('現在のステップ: implement');
+    expect(getLabel('workflow.notifyComplete', 'en', { iteration: '3' })).toBe('Workflow complete (3 iterations)');
+    expect(getLabel('workflow.notifyComplete', 'ja', { iteration: '3' })).toBe('ワークフロー完了 (3 iterations)');
+    expect(getLabel('retry.usePreviousWorkflowConfirm', 'en', { workflow: 'default' })).toBe('Use previous workflow "default"?');
+    expect(getLabel('retry.usePreviousWorkflowConfirm', 'ja', { workflow: 'default' })).toBe('前回のワークフロー "default" を使用しますか？');
   });
 });

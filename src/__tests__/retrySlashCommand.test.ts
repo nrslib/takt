@@ -28,7 +28,7 @@ vi.mock('../infra/fs/session.js', () => ({
 
 vi.mock('../infra/config/global/globalConfig.js', () => ({
   loadGlobalConfig: vi.fn(() => ({ provider: 'mock', language: 'en' })),
-  getBuiltinPiecesEnabled: vi.fn().mockReturnValue(true),
+  getBuiltinWorkflowsEnabled: vi.fn().mockReturnValue(true),
 }));
 
 vi.mock('../infra/providers/index.js', () => ({
@@ -115,17 +115,17 @@ function buildRetryContext(overrides?: Partial<RetryContext>): RetryContext {
       taskName: 'test-task',
       taskContent: 'Test task content',
       createdAt: '2026-02-15T10:00:00Z',
-      failedMovement: 'implement',
+      failedStep: 'implement',
       error: 'Some error',
       lastMessage: '',
       retryNote: '',
     },
     branchName: 'takt/test-task',
-    pieceContext: {
+    workflowContext: {
       name: 'default',
       description: '',
-      pieceStructure: '',
-      movementPreviews: [],
+      workflowStructure: '',
+      stepPreviews: [],
     },
     run: null,
     previousOrderContent: null,

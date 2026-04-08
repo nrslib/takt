@@ -95,14 +95,14 @@ takt list
 
 ## 仕組み
 
-TAKT は音楽のメタファーを使っています。TAKT という名前自体が、オーケストラの指揮で拍を刻む「タクト（Takt）」に由来しています。ユーザー向けには **workflow** と **step** を使い、後方互換のため内部 canonical 名は **piece** と **movement** のまま維持しています。
+TAKT は音楽のメタファーを使っています。TAKT という名前自体が、オーケストラの指揮で拍を刻む「タクト（Takt）」に由来しています。TAKT はユーザー向けにも実装名にも **workflow** と **step** を使います。
 
-workflow は step の並びで構成されます。公開 YAML では `steps` と `initial_step` を使い、互換 alias として `movements` と `initial_movement` も受理します。各 step では persona（誰が実行するか）、権限（何を許可するか）、ルール（次にどこへ進むか）を指定します。
+workflow は step の並びで構成されます。YAML では `steps`、`initial_step`、`max_steps` を使います。各 step では persona（誰が実行するか）、権限（何を許可するか）、ルール（次にどこへ進むか）を指定します。
 
 ```yaml
 name: plan-implement-review
 initial_step: plan
-max_movements: 10
+max_steps: 10
 
 steps:
   - name: plan
@@ -130,11 +130,11 @@ steps:
         next: implement    # <- 修正ループ
 ```
 
-ルールが次の step を決めます。`COMPLETE` でワークフロー成功終了、`ABORT` で失敗終了です。並列 step やルール条件の詳細は [Workflow Guide](./pieces.md) を参照してください。
+ルールが次の step を決めます。`COMPLETE` でワークフロー成功終了、`ABORT` で失敗終了です。並列 step やルール条件の詳細は [Workflow Guide](./workflows.md) を参照してください。
 
-workflow ファイルの正式ディレクトリ名は `workflows/` です。旧来の `pieces/` ディレクトリ、`--piece`、旧 YAML キーは互換入力として引き続き受理しますが、通常の UI・ドキュメントでは `workflow` / `step` を使用します。
+workflow ファイルの正式ディレクトリ名は `workflows/` です。
 
-同名 workflow が複数箇所にある場合の探索順は `.takt/workflows/` → `.takt/pieces/` → `~/.takt/workflows/` → `~/.takt/pieces/` → builtin です。
+同名 workflow が複数箇所にある場合の探索順は `.takt/workflows/` → `~/.takt/workflows/` → builtin です。
 
 ## おすすめワークフロー
 
@@ -201,7 +201,7 @@ You are a code reviewer specialized in security.
 
 workflow から `persona: my-reviewer` で参照できます。
 
-詳細は [Workflow Guide](./pieces.md) と [Agent Guide](./agents.md) を参照してください。
+詳細は [Workflow Guide](./workflows.md) と [Agent Guide](./agents.md) を参照してください。
 
 ## CI/CD
 
@@ -240,21 +240,17 @@ takt --pipeline --task "バグを修正して" --auto-pr
 └── runs/                   # 実行レポート、ログ、コンテキスト
 ```
 
-互換性のため `pieces/` ディレクトリも引き続き読まれますが、現在の正式名称は `workflows/` です。
+workflow 定義は `workflows/` 配下に配置します。
 
 ## API
 
 ```typescript
-import { PieceEngine, loadPiece } from 'takt';
+import { WorkflowEngine, loadWorkflow } from 'takt';
 
-const config = loadPiece('default');
+const config = loadWorkflow('default', process.cwd());
 if (!config) throw new Error('Workflow not found');
 
-const engine = new PieceEngine(config, process.cwd(), 'My task');
-engine.on('movement:complete', (movement, response) => {
-  console.log(`${movement.name}: ${response.status}`);
-});
-
+const engine = new WorkflowEngine(config, process.cwd(), 'My task');
 await engine.run();
 ```
 
@@ -264,7 +260,7 @@ await engine.run();
 |-------------|------|
 | [CLI Reference](./cli-reference.ja.md) | 全コマンド・オプション |
 | [Configuration](./configuration.ja.md) | グローバル設定・プロジェクト設定 |
-| [Workflow Guide](./pieces.md) | workflow の作成・カスタマイズ |
+| [Workflow Guide](./workflows.md) | workflow の作成・カスタマイズ |
 | [Agent Guide](./agents.md) | カスタムエージェントの設定 |
 | [Builtin Catalog](./builtin-catalog.ja.md) | ビルトイン workflow・persona の一覧 |
 | [Faceted Prompting](./faceted-prompting.ja.md) | プロンプト設計の方法論 |

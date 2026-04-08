@@ -8,9 +8,9 @@ export function getDisabledBuiltins(): string[] {
   return config.disabledBuiltins ?? [];
 }
 
-export function getBuiltinPiecesEnabled(): boolean {
+export function getBuiltinWorkflowsEnabled(): boolean {
   const config = loadGlobalConfig();
-  return config.enableBuiltinPieces !== false;
+  return config.enableBuiltinWorkflows !== false;
 }
 
 export function getLanguage(): Language {

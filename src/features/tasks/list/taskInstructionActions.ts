@@ -11,19 +11,19 @@ import {
   TaskRunner,
   detectDefaultBranch,
 } from '../../../infra/task/index.js';
-import { resolvePieceConfigValues, getPieceDescription } from '../../../infra/config/index.js';
+import { resolveWorkflowConfigValues, getWorkflowDescription } from '../../../infra/config/index.js';
 import { info, warn, error as logError } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { runInstructMode } from './instructMode.js';
 import { dispatchConversationAction } from '../../interactive/actionDispatcher.js';
-import type { PieceContext } from '../../interactive/interactive.js';
+import type { WorkflowContext } from '../../interactive/interactive.js';
 import { resolveLanguage, findRunForTask, findPreviousOrderContent } from '../../interactive/index.js';
 import { type BranchActionTarget, resolveTargetBranch } from './taskActionTarget.js';
 import {
   appendRetryNote,
   DEPRECATED_PROVIDER_CONFIG_WARNING,
   hasDeprecatedProviderConfig,
-  selectPieceWithOptionalReuse,
+  selectWorkflowWithOptionalReuse,
   selectRunSessionContext,
 } from './requeueHelpers.js';
 import { executeAndCompleteTask } from '../execute/taskExecution.js';
@@ -93,21 +93,21 @@ export async function instructBranch(
 
   const branch = resolveTargetBranch(target);
 
-  const globalConfig = resolvePieceConfigValues(projectDir, ['interactivePreviewMovements', 'language']);
+  const globalConfig = resolveWorkflowConfigValues(projectDir, ['interactivePreviewSteps', 'language']);
   const lang = resolveLanguage(globalConfig.language);
   const matchedSlug = findRunForTask(worktreePath, target.content);
-  const selectedPiece = await selectPieceWithOptionalReuse(projectDir, target.data?.piece, lang);
-  if (!selectedPiece) {
+  const selectedWorkflow = await selectWorkflowWithOptionalReuse(projectDir, target.data?.workflow, lang);
+  if (!selectedWorkflow) {
     info('Cancelled');
     return false;
   }
 
-  const pieceDesc = getPieceDescription(selectedPiece, projectDir, globalConfig.interactivePreviewMovements);
-  const pieceContext: PieceContext = {
-    name: pieceDesc.name,
-    description: pieceDesc.description,
-    pieceStructure: pieceDesc.pieceStructure,
-    movementPreviews: pieceDesc.movementPreviews,
+  const workflowDesc = getWorkflowDescription(selectedWorkflow, projectDir, globalConfig.interactivePreviewSteps);
+  const workflowContext: WorkflowContext = {
+    name: workflowDesc.name,
+    description: workflowDesc.description,
+    workflowStructure: workflowDesc.workflowStructure,
+    stepPreviews: workflowDesc.stepPreviews,
   };
 
   // Runs data lives in the worktree (written during previous execution)
@@ -122,20 +122,20 @@ export async function instructBranch(
   const result = await runInstructMode(
     worktreePath, branchContext, branch,
     target.name, target.content, target.data?.retry_note ?? '',
-    pieceContext, runSessionContext, previousOrderContent,
+    workflowContext, runSessionContext, previousOrderContent,
   );
 
   const executeWithInstruction = async (instruction: string): Promise<boolean> => {
     const retryNote = appendRetryNote(target.data?.retry_note, instruction);
     const runner = new TaskRunner(projectDir);
     const taskInfo = runner.startReExecution(target.name, ['completed', 'failed'], undefined, retryNote);
-    const taskForExecution = prepareTaskForExecution(taskInfo, selectedPiece);
+    const taskForExecution = prepareTaskForExecution(taskInfo, selectedWorkflow);
 
     log.info('Starting re-execution of instructed task', {
       name: target.name,
       worktreePath,
       branch,
-      piece: selectedPiece,
+      workflow: selectedWorkflow,
     });
 
     return executeAndCompleteTask(taskForExecution, runner, projectDir);

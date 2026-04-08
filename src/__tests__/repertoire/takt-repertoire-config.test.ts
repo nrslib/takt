@@ -6,7 +6,7 @@
  * - path field defaults, allowed/disallowed values
  * - takt.min_version format validation
  * - Version comparison (numeric, not lexicographic)
- * - Empty package detection (facets/ and pieces/ presence)
+ * - Empty package detection (facets/ and workflows/ presence)
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -241,7 +241,7 @@ describe('checkPackageHasContent', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('should throw when neither facets/ nor pieces/ exists', () => {
+  it('should throw when neither facets/ nor workflows/ exists', () => {
     // Given: empty package root directory
     // When: content check is performed
     // Then: throws an error (empty package not allowed)
@@ -265,19 +265,19 @@ describe('checkPackageHasContent', () => {
     expect(() => checkPackageHasContent(tempDir)).not.toThrow();
   });
 
-  it('should not throw when only pieces/ exists', () => {
-    // Given: package with pieces/ only
-    mkdirSync(join(tempDir, 'pieces'), { recursive: true });
+  it('should not throw when only workflows/ exists', () => {
+    // Given: package with workflows/ only
+    mkdirSync(join(tempDir, 'workflows'), { recursive: true });
 
     // When: content check is performed
-    // Then: no error (pieces-only package is valid)
+    // Then: no error (workflows-only package is valid)
     expect(() => checkPackageHasContent(tempDir)).not.toThrow();
   });
 
-  it('should not throw when both facets/ and pieces/ exist', () => {
+  it('should not throw when both facets/ and workflows/ exist', () => {
     // Given: package with both directories
     mkdirSync(join(tempDir, 'facets'), { recursive: true });
-    mkdirSync(join(tempDir, 'pieces'), { recursive: true });
+    mkdirSync(join(tempDir, 'workflows'), { recursive: true });
 
     // When: content check is performed
     // Then: no error

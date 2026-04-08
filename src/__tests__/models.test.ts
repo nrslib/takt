@@ -7,8 +7,8 @@ import {
   AgentTypeSchema,
   StatusSchema,
   PermissionModeSchema,
-  PieceConfigRawSchema,
-  PieceMovementRawSchema,
+  WorkflowConfigRawSchema as WorkflowConfigRawSchema,
+  WorkflowStepRawSchema as WorkflowStepRawSchema,
   McpServerConfigSchema,
   CustomAgentConfigSchema,
   GlobalConfigSchema,
@@ -69,12 +69,12 @@ describe('PermissionModeSchema', () => {
   });
 });
 
-describe('PieceConfigRawSchema', () => {
-  it('should parse valid piece config', () => {
+describe('WorkflowConfigRawSchema', () => {
+  it('should parse valid workflow config', () => {
     const config = {
-      name: 'test-piece',
-      description: 'A test piece',
-      movements: [
+      name: 'test-workflow',
+      description: 'A test workflow',
+      steps: [
         {
           name: 'step1',
           persona: 'coder',
@@ -91,21 +91,21 @@ describe('PieceConfigRawSchema', () => {
       ],
     };
 
-    const result = PieceConfigRawSchema.parse(config);
-    expect(result.name).toBe('test-piece');
-    expect(result.movements).toHaveLength(1);
-    expect(result.movements![0]?.provider_options).toEqual({
+    const result = WorkflowConfigRawSchema.parse(config);
+    expect(result.name).toBe('test-workflow');
+    expect(result.steps).toHaveLength(1);
+    expect(result.steps[0]?.provider_options).toEqual({
       claude: {
         allowed_tools: ['Read', 'Grep'],
       },
     });
-    expect(result.max_movements).toBe(10);
+    expect(result.max_steps).toBe(10);
   });
 
-  it('should parse movement with required_permission_mode', () => {
+  it('should parse step with required_permission_mode', () => {
     const config = {
-      name: 'test-piece',
-      movements: [
+      name: 'test-workflow',
+      steps: [
         {
           name: 'implement',
           persona: 'coder',
@@ -123,14 +123,14 @@ describe('PieceConfigRawSchema', () => {
       ],
     };
 
-    const result = PieceConfigRawSchema.parse(config);
-    expect(result.movements![0]?.required_permission_mode).toBe('edit');
+    const result = WorkflowConfigRawSchema.parse(config);
+    expect(result.steps[0]?.required_permission_mode).toBe('edit');
   });
 
-  it('should parse movement with provider_options', () => {
+  it('should parse step with provider_options', () => {
     const config = {
-      name: 'test-piece',
-      movements: [
+      name: 'test-workflow',
+      steps: [
         {
           name: 'implement',
           provider: 'codex',
@@ -143,17 +143,17 @@ describe('PieceConfigRawSchema', () => {
       ],
     };
 
-    const result = PieceConfigRawSchema.parse(config);
-    expect(result.movements![0]?.provider_options).toEqual({
+    const result = WorkflowConfigRawSchema.parse(config);
+    expect(result.steps[0]?.provider_options).toEqual({
       codex: { network_access: true },
       opencode: { network_access: false },
     });
   });
 
-  it('should parse movement with provider object block', () => {
+  it('should parse step with provider object block', () => {
     const config = {
-      name: 'test-piece',
-      movements: [
+      name: 'test-workflow',
+      steps: [
         {
           name: 'implement',
           provider: {
@@ -166,9 +166,9 @@ describe('PieceConfigRawSchema', () => {
       ],
     };
 
-    const result = PieceConfigRawSchema.parse(config as unknown);
-    const movement = result.movements?.[0] as Record<string, unknown> | undefined;
-    const provider = movement?.provider as Record<string, unknown> | undefined;
+    const result = WorkflowConfigRawSchema.parse(config as unknown);
+    const step = result.steps?.[0] as Record<string, unknown> | undefined;
+    const provider = step?.provider as Record<string, unknown> | undefined;
     expect(provider?.type).toBe('codex');
     expect(provider?.model).toBe('gpt-5.3');
     expect(provider?.network_access).toBe(true);
@@ -176,8 +176,8 @@ describe('PieceConfigRawSchema', () => {
 
   it('should reject provider block when claude sets network_access', () => {
     const config = {
-      name: 'test-piece',
-      movements: [
+      name: 'test-workflow',
+      steps: [
         {
           name: 'implement',
           provider: {
@@ -189,13 +189,13 @@ describe('PieceConfigRawSchema', () => {
       ],
     };
 
-    expect(() => PieceConfigRawSchema.parse(config as unknown)).toThrow(/network_access/);
+    expect(() => WorkflowConfigRawSchema.parse(config as unknown)).toThrow(/network_access/);
   });
 
   it('should reject provider block when codex sets sandbox', () => {
     const config = {
-      name: 'test-piece',
-      movements: [
+      name: 'test-workflow',
+      steps: [
         {
           name: 'implement',
           provider: {
@@ -209,13 +209,13 @@ describe('PieceConfigRawSchema', () => {
       ],
     };
 
-    expect(() => PieceConfigRawSchema.parse(config as unknown)).toThrow(/sandbox/);
+    expect(() => WorkflowConfigRawSchema.parse(config as unknown)).toThrow(/sandbox/);
   });
 
   it('should reject provider block with unknown fields', () => {
     const config = {
-      name: 'test-piece',
-      movements: [
+      name: 'test-workflow',
+      steps: [
         {
           name: 'implement',
           provider: {
@@ -229,20 +229,20 @@ describe('PieceConfigRawSchema', () => {
       ],
     };
 
-    expect(() => PieceConfigRawSchema.parse(config as unknown)).toThrow();
+    expect(() => WorkflowConfigRawSchema.parse(config as unknown)).toThrow();
   });
 
-  it('should parse piece-level piece_config.provider block', () => {
+  it('should parse workflow-level workflow_config.provider block', () => {
     const config = {
-      name: 'test-piece',
-      piece_config: {
+      name: 'test-workflow',
+      workflow_config: {
         provider: {
           type: 'codex',
           model: 'gpt-5.3',
           network_access: true,
         },
       },
-      movements: [
+      steps: [
         {
           name: 'implement',
           instruction: '{task}',
@@ -250,23 +250,23 @@ describe('PieceConfigRawSchema', () => {
       ],
     };
 
-    const result = PieceConfigRawSchema.parse(config as unknown);
-    const pieceConfig = result.piece_config as Record<string, unknown> | undefined;
-    const provider = pieceConfig?.provider as Record<string, unknown> | undefined;
+    const result = WorkflowConfigRawSchema.parse(config as unknown);
+    const workflowConfig = result.workflow_config as Record<string, unknown> | undefined;
+    const provider = workflowConfig?.provider as Record<string, unknown> | undefined;
     expect(provider?.type).toBe('codex');
     expect(provider?.model).toBe('gpt-5.3');
     expect(provider?.network_access).toBe(true);
   });
 
-  it('should parse piece-level piece_config.provider_options', () => {
+  it('should parse workflow-level workflow_config.provider_options', () => {
     const config = {
-      name: 'test-piece',
-      piece_config: {
+      name: 'test-workflow',
+      workflow_config: {
         provider_options: {
           codex: { network_access: true },
         },
       },
-      movements: [
+      steps: [
         {
           name: 'implement',
           provider: 'codex',
@@ -275,23 +275,23 @@ describe('PieceConfigRawSchema', () => {
       ],
     };
 
-    const result = PieceConfigRawSchema.parse(config);
-    expect(result.piece_config).toEqual({
+    const result = WorkflowConfigRawSchema.parse(config);
+    expect(result.workflow_config).toEqual({
       provider_options: {
         codex: { network_access: true },
       },
     });
   });
 
-  it('should parse piece-level piece_config.runtime.prepare', () => {
+  it('should parse workflow-level workflow_config.runtime.prepare', () => {
     const config = {
-      name: 'test-piece',
-      piece_config: {
+      name: 'test-workflow',
+      workflow_config: {
         runtime: {
           prepare: ['gradle', 'node'],
         },
       },
-      movements: [
+      steps: [
         {
           name: 'implement',
           instruction: '{task}',
@@ -299,23 +299,23 @@ describe('PieceConfigRawSchema', () => {
       ],
     };
 
-    const result = PieceConfigRawSchema.parse(config);
-    expect(result.piece_config).toEqual({
+    const result = WorkflowConfigRawSchema.parse(config);
+    expect(result.workflow_config).toEqual({
       runtime: {
         prepare: ['gradle', 'node'],
       },
     });
   });
 
-  it('should parse piece-level workflow_config as alias of piece_config', () => {
+  it('should parse workflow-level workflow_config', () => {
     const config = {
-      name: 'test-piece',
+      name: 'test-workflow',
       workflow_config: {
         provider_options: {
           codex: { network_access: true },
         },
       },
-      movements: [
+      steps: [
         {
           name: 'implement',
           provider: 'codex',
@@ -324,17 +324,17 @@ describe('PieceConfigRawSchema', () => {
       ],
     };
 
-    const result = PieceConfigRawSchema.parse(config);
-    expect(result.piece_config).toEqual({
+    const result = WorkflowConfigRawSchema.parse(config);
+    expect(result.workflow_config).toEqual({
       provider_options: {
         codex: { network_access: true },
       },
     });
   });
 
-  it('should reject when workflow_config and piece_config disagree', () => {
+  it('should reject a removed workflow config alias when workflow_config is present', () => {
     const config = {
-      name: 'test-piece',
+      name: 'test-workflow',
       workflow_config: {
         provider_options: {
           codex: { network_access: true },
@@ -345,7 +345,7 @@ describe('PieceConfigRawSchema', () => {
           codex: { network_access: false },
         },
       },
-      movements: [
+      steps: [
         {
           name: 'implement',
           provider: 'codex',
@@ -354,8 +354,40 @@ describe('PieceConfigRawSchema', () => {
       ],
     };
 
-    expect(() => PieceConfigRawSchema.parse(config)).toThrow(
-      /workflow_config.*piece_config|piece_config.*workflow_config|conflict/i,
+    expect(() => WorkflowConfigRawSchema.parse(config)).toThrow(/piece_config|workflow_config|unrecognized/i);
+  });
+
+  it('should reject a removed step-list key', () => {
+    const config = {
+      name: 'legacy-step-list',
+      movements: [
+        {
+          name: 'plan',
+          persona: 'coder',
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    expect(() => WorkflowConfigRawSchema.parse(config as unknown)).toThrow(/movements|steps|unrecognized/i);
+  });
+
+  it('should reject removed step boundary keys', () => {
+    const config = {
+      name: 'legacy-step-keys',
+      initial_movement: 'plan',
+      max_movements: 3,
+      steps: [
+        {
+          name: 'plan',
+          persona: 'coder',
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    expect(() => WorkflowConfigRawSchema.parse(config as unknown)).toThrow(
+      /initial_movement|max_movements|initial_step|max_steps|unrecognized/i,
     );
   });
 
@@ -419,8 +451,8 @@ describe('PieceConfigRawSchema', () => {
 
   it('should allow omitting required_permission_mode', () => {
     const config = {
-      name: 'test-piece',
-      movements: [
+      name: 'test-workflow',
+      steps: [
         {
           name: 'plan',
           persona: 'planner',
@@ -429,14 +461,14 @@ describe('PieceConfigRawSchema', () => {
       ],
     };
 
-    const result = PieceConfigRawSchema.parse(config);
-    expect(result.movements![0]?.required_permission_mode).toBeUndefined();
+    const result = WorkflowConfigRawSchema.parse(config);
+    expect(result.steps[0]?.required_permission_mode).toBeUndefined();
   });
 
   it('should reject invalid required_permission_mode', () => {
     const config = {
-      name: 'test-piece',
-      movements: [
+      name: 'test-workflow',
+      steps: [
         {
           name: 'step1',
           persona: 'coder',
@@ -446,22 +478,22 @@ describe('PieceConfigRawSchema', () => {
       ],
     };
 
-    expect(() => PieceConfigRawSchema.parse(config)).toThrow();
+    expect(() => WorkflowConfigRawSchema.parse(config)).toThrow();
   });
 
-  it('should require at least one movement', () => {
+  it('should require at least one step', () => {
     const config = {
-      name: 'empty-piece',
-      movements: [],
+      name: 'empty-workflow',
+      steps: [],
     };
 
-    expect(() => PieceConfigRawSchema.parse(config)).toThrow();
+    expect(() => WorkflowConfigRawSchema.parse(config)).toThrow();
   });
 
-  it('should parse movement with stdio mcp_servers', () => {
+  it('should parse step with stdio mcp_servers', () => {
     const config = {
-      name: 'test-piece',
-      movements: [
+      name: 'test-workflow',
+      steps: [
         {
           name: 'e2e-test',
           persona: 'coder',
@@ -481,8 +513,8 @@ describe('PieceConfigRawSchema', () => {
       ],
     };
 
-    const result = PieceConfigRawSchema.parse(config);
-    expect(result.movements![0]?.mcp_servers).toEqual({
+    const result = WorkflowConfigRawSchema.parse(config);
+    expect(result.steps[0]?.mcp_servers).toEqual({
       playwright: {
         command: 'npx',
         args: ['-y', '@anthropic-ai/mcp-server-playwright'],
@@ -490,10 +522,10 @@ describe('PieceConfigRawSchema', () => {
     });
   });
 
-  it('should parse movement with sse mcp_servers', () => {
+  it('should parse step with sse mcp_servers', () => {
     const config = {
-      name: 'test-piece',
-      movements: [
+      name: 'test-workflow',
+      steps: [
         {
           name: 'step1',
           persona: 'coder',
@@ -509,8 +541,8 @@ describe('PieceConfigRawSchema', () => {
       ],
     };
 
-    const result = PieceConfigRawSchema.parse(config);
-    expect(result.movements![0]?.mcp_servers).toEqual({
+    const result = WorkflowConfigRawSchema.parse(config);
+    expect(result.steps[0]?.mcp_servers).toEqual({
       remote: {
         type: 'sse',
         url: 'http://localhost:8080/sse',
@@ -519,10 +551,10 @@ describe('PieceConfigRawSchema', () => {
     });
   });
 
-  it('should parse movement with http mcp_servers', () => {
+  it('should parse step with http mcp_servers', () => {
     const config = {
-      name: 'test-piece',
-      movements: [
+      name: 'test-workflow',
+      steps: [
         {
           name: 'step1',
           persona: 'coder',
@@ -537,8 +569,8 @@ describe('PieceConfigRawSchema', () => {
       ],
     };
 
-    const result = PieceConfigRawSchema.parse(config);
-    expect(result.movements![0]?.mcp_servers).toEqual({
+    const result = WorkflowConfigRawSchema.parse(config);
+    expect(result.steps[0]?.mcp_servers).toEqual({
       api: {
         type: 'http',
         url: 'http://localhost:3000/mcp',
@@ -546,9 +578,9 @@ describe('PieceConfigRawSchema', () => {
     });
   });
 
-  it('should parse piece_mcp_servers config blocks', () => {
+  it('should parse removed-key MCP config blocks', () => {
     const project = ProjectConfigSchema.parse({
-      piece_mcp_servers: {
+      workflow_mcp_servers: {
         stdio: true,
         sse: false,
         http: true,
@@ -556,19 +588,19 @@ describe('PieceConfigRawSchema', () => {
     } as unknown) as Record<string, unknown>;
 
     const global = GlobalConfigSchema.parse({
-      piece_mcp_servers: {
+      workflow_mcp_servers: {
         http: true,
       },
     } as unknown) as Record<string, unknown>;
 
-    expect(project.piece_mcp_servers).toEqual({ stdio: true, sse: false, http: true });
-    expect(global.piece_mcp_servers).toEqual({ http: true });
+    expect(project.workflow_mcp_servers).toEqual({ stdio: true, sse: false, http: true });
+    expect(global.workflow_mcp_servers).toEqual({ http: true });
   });
 
   it('should allow omitting mcp_servers', () => {
     const config = {
-      name: 'test-piece',
-      movements: [
+      name: 'test-workflow',
+      steps: [
         {
           name: 'step1',
           persona: 'coder',
@@ -577,14 +609,14 @@ describe('PieceConfigRawSchema', () => {
       ],
     };
 
-    const result = PieceConfigRawSchema.parse(config);
-    expect(result.movements![0]?.mcp_servers).toBeUndefined();
+    const result = WorkflowConfigRawSchema.parse(config);
+    expect(result.steps[0]?.mcp_servers).toBeUndefined();
   });
 
   it('should reject invalid mcp_servers (missing command for stdio)', () => {
     const config = {
-      name: 'test-piece',
-      movements: [
+      name: 'test-workflow',
+      steps: [
         {
           name: 'step1',
           persona: 'coder',
@@ -596,13 +628,13 @@ describe('PieceConfigRawSchema', () => {
       ],
     };
 
-    expect(() => PieceConfigRawSchema.parse(config)).toThrow();
+    expect(() => WorkflowConfigRawSchema.parse(config)).toThrow();
   });
 
   it('should reject invalid mcp_servers (missing url for sse)', () => {
     const config = {
-      name: 'test-piece',
-      movements: [
+      name: 'test-workflow',
+      steps: [
         {
           name: 'step1',
           persona: 'coder',
@@ -614,18 +646,18 @@ describe('PieceConfigRawSchema', () => {
       ],
     };
 
-    expect(() => PieceConfigRawSchema.parse(config)).toThrow();
+    expect(() => WorkflowConfigRawSchema.parse(config)).toThrow();
   });
 
-  it('should reject movement-level allowed_tools', () => {
-    const movement = {
+  it('should reject step-level allowed_tools', () => {
+    const step = {
       name: 'step1',
       persona: 'coder',
       allowed_tools: ['Read'],
       instruction: '{task}',
     };
 
-    const result = PieceMovementRawSchema.safeParse(movement);
+    const result = WorkflowStepRawSchema.safeParse(step);
     expect(result.success).toBe(false);
   });
 });
@@ -876,28 +908,28 @@ describe('ProjectConfigSchema', () => {
   });
 
 
-  it('should parse piece_runtime_prepare policy block', () => {
+  it('should parse workflow_runtime_prepare policy block', () => {
     const result = ProjectConfigSchema.parse({
-      piece_runtime_prepare: {
+      workflow_runtime_prepare: {
         custom_scripts: true,
       },
     } as unknown) as Record<string, unknown>;
 
-    expect(result.piece_runtime_prepare).toEqual({
+    expect(result.workflow_runtime_prepare).toEqual({
       custom_scripts: true,
     });
   });
 
-  it('should parse piece_arpeggio policy block', () => {
+  it('should parse workflow_arpeggio policy block', () => {
     const result = ProjectConfigSchema.parse({
-      piece_arpeggio: {
+      workflow_arpeggio: {
         custom_data_source_modules: true,
         custom_merge_inline_js: false,
         custom_merge_files: true,
       },
     } as unknown) as Record<string, unknown>;
 
-    expect(result.piece_arpeggio).toEqual({
+    expect(result.workflow_arpeggio).toEqual({
       custom_data_source_modules: true,
       custom_merge_inline_js: false,
       custom_merge_files: true,

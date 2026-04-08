@@ -1,0 +1,28 @@
+name: e2e-simple
+description: Minimal E2E test workflow
+workflow_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+personas:
+  test-coder: |
+    You are the E2E test coder.
+max_steps: 5
+steps:
+  - name: execute
+    edit: true
+    persona: test-coder
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Write
+          - Edit
+    required_permission_mode: edit
+    instruction: |
+      {task}
+    rules:
+      - condition: Task completed
+        next: COMPLETE

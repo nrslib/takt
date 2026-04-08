@@ -9,7 +9,7 @@ import chalk from 'chalk';
 import { selectOption, type SelectOptionItem } from '../../shared/prompt/select.js';
 import { promptInput } from '../../shared/prompt/confirm.js';
 import type { AskUserQuestionInput, AskUserQuestionHandler } from './types.js';
-import { AskUserQuestionDeniedError } from '../../core/piece/ask-user-question-error.js';
+import { AskUserQuestionDeniedError } from '../../core/workflow/ask-user-question-error.js';
 
 const OTHER_VALUE = '__other__';
 

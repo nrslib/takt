@@ -7,9 +7,9 @@
 # Project configuration
 !config.yaml
 
-# Facets and pieces (version-controlled)
-!pieces/
-!pieces/**
+# Facets and workflows (version-controlled)
+!workflows/
+!workflows/**
 !facets/
 !facets/personas/
 !facets/personas/**

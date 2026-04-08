@@ -10,8 +10,8 @@ provider_options:
 notification_sound: false
 notification_sound_events:
   iteration_limit: false
-  piece_complete: false
-  piece_abort: false
+  workflow_complete: false
+  workflow_abort: false
   run_complete: true
   run_abort: false
 provider_profiles:

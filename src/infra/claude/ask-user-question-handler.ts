@@ -9,9 +9,9 @@
 import { resolveTtyPolicy } from '../../shared/prompt/tty.js';
 import type { AskUserQuestionHandler } from './types.js';
 import { createTtyAskUserQuestionHandler } from './ask-user-question-tty.js';
-import { createDenyAskUserQuestionHandler } from '../../core/piece/ask-user-question-error.js';
+import { createDenyAskUserQuestionHandler } from '../../core/workflow/ask-user-question-error.js';
 
-export { AskUserQuestionDeniedError } from '../../core/piece/ask-user-question-error.js';
+export { AskUserQuestionDeniedError } from '../../core/workflow/ask-user-question-error.js';
 
 /**
  * Create an AskUserQuestion handler based on TTY availability.

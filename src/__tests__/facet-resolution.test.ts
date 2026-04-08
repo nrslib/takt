@@ -21,7 +21,7 @@ import {
   resolveRefList,
   resolvePersona,
   type FacetResolutionContext,
-  type PieceSections,
+  type WorkflowSections,
 } from '../infra/config/loaders/resource-resolver.js';
 import {
   getProjectFacetDir,
@@ -30,7 +30,7 @@ import {
   type FacetType,
 } from '../infra/config/paths.js';
 import { parseFacetType, VALID_FACET_TYPES } from '../features/config/ejectBuiltin.js';
-import { normalizePieceConfig } from '../infra/config/loaders/pieceParser.js';
+import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 
 describe('isResourcePath', () => {
   it('should return true for relative paths starting with ./', () => {
@@ -114,6 +114,16 @@ describe('resolveFacetByName', () => {
 
     const content = resolveFacetByName('coder', 'personas', context);
     expect(content).toBe('OVERRIDE');
+  });
+});
+
+describe('resource-resolver public API boundary', () => {
+  it('should not re-export workflow package scope helpers', async () => {
+    const resourceResolver = await import('../infra/config/loaders/resource-resolver.js');
+
+    expect(resourceResolver).not.toHaveProperty('buildCandidateDirsWithPackage');
+    expect(resourceResolver).not.toHaveProperty('getPackageFromWorkflowDir');
+    expect(resourceResolver).not.toHaveProperty('isPackageWorkflow');
   });
 });
 
@@ -263,13 +273,13 @@ describe('resolvePersona with layer resolution', () => {
   let tempDir: string;
   let projectDir: string;
   let context: FacetResolutionContext;
-  const emptySections: PieceSections = {};
+  const emptySections: WorkflowSections = {};
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'takt-persona-test-'));
     projectDir = join(tempDir, 'project');
-    mkdirSync(projectDir, { recursive: true });
-    context = { projectDir, lang: 'ja' };
+    mkdirSync(join(projectDir, '.takt', 'workflows'), { recursive: true });
+    context = { projectDir, lang: 'ja', workflowDir: join(projectDir, '.takt', 'workflows') };
   });
 
   afterEach(() => {
@@ -295,14 +305,15 @@ describe('resolvePersona with layer resolution', () => {
   });
 
   it('should prefer section map over layer resolution', () => {
-    const personaFile = join(tempDir, 'explicit.md');
+    const workflowDir = context.workflowDir!;
+    const personaFile = join(workflowDir, 'explicit.md');
     writeFileSync(personaFile, 'Explicit persona');
 
-    const sections: PieceSections = {
+    const sections: WorkflowSections = {
       personas: { 'my-persona': './explicit.md' },
     };
 
-    const result = resolvePersona('my-persona', sections, tempDir, context);
+    const result = resolvePersona('my-persona', sections, workflowDir, context);
     expect(result.personaSpec).toBe('./explicit.md');
     expect(result.personaPath).toBe(personaFile);
   });
@@ -376,16 +387,16 @@ describe('parseFacetType', () => {
   });
 });
 
-describe('normalizePieceConfig with layer resolution', () => {
+describe('normalizeWorkflowConfig with layer resolution', () => {
   let tempDir: string;
-  let pieceDir: string;
+  let workflowDir: string;
   let projectDir: string;
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'takt-normalize-test-'));
-    pieceDir = join(tempDir, 'pieces');
+    workflowDir = join(tempDir, 'workflows');
     projectDir = join(tempDir, 'project');
-    mkdirSync(pieceDir, { recursive: true });
+    mkdirSync(workflowDir, { recursive: true });
     mkdirSync(projectDir, { recursive: true });
   });
 
@@ -395,8 +406,8 @@ describe('normalizePieceConfig with layer resolution', () => {
 
   it('should resolve persona by name when section map is absent and context provided', () => {
     const raw = {
-      name: 'test-piece',
-      movements: [
+      name: 'test-workflow',
+      steps: [
         {
           name: 'step1',
           persona: 'coder',
@@ -405,13 +416,13 @@ describe('normalizePieceConfig with layer resolution', () => {
       ],
     };
 
-    const context: FacetResolutionContext = { projectDir, lang: 'ja' };
-    const config = normalizePieceConfig(raw, pieceDir, context);
+    const context: FacetResolutionContext = { projectDir, lang: 'ja', workflowDir };
+    const config = normalizeWorkflowConfig(raw, workflowDir, context);
 
-    expect(config.movements[0]!.persona).toBe('coder');
+    expect(config.steps[0]!.persona).toBe('coder');
     // With context, it should find the builtin coder persona
-    expect(config.movements[0]!.personaPath).toBeDefined();
-    expect(config.movements[0]!.personaPath).toContain('coder.md');
+    expect(config.steps[0]!.personaPath).toBeDefined();
+    expect(config.steps[0]!.personaPath).toContain('coder.md');
   });
 
   it('should resolve policy by name when section map is absent', () => {
@@ -421,8 +432,8 @@ describe('normalizePieceConfig with layer resolution', () => {
     writeFileSync(join(policiesDir, 'custom-policy.md'), '# Custom Policy\nBe nice.');
 
     const raw = {
-      name: 'test-piece',
-      movements: [
+      name: 'test-workflow',
+      steps: [
         {
           name: 'step1',
           persona: 'coder',
@@ -432,24 +443,24 @@ describe('normalizePieceConfig with layer resolution', () => {
       ],
     };
 
-    const context: FacetResolutionContext = { projectDir, lang: 'ja' };
-    const config = normalizePieceConfig(raw, pieceDir, context);
+    const context: FacetResolutionContext = { projectDir, lang: 'ja', workflowDir };
+    const config = normalizeWorkflowConfig(raw, workflowDir, context);
 
-    expect(config.movements[0]!.policyContents).toBeDefined();
-    expect(config.movements[0]!.policyContents![0]).toBe('# Custom Policy\nBe nice.');
+    expect(config.steps[0]!.policyContents).toBeDefined();
+    expect(config.steps[0]!.policyContents![0]).toBe('# Custom Policy\nBe nice.');
   });
 
   it('should prefer section map over layer resolution', () => {
     // Create section map entry
-    const personaFile = join(pieceDir, 'my-coder.md');
+    const personaFile = join(workflowDir, 'my-coder.md');
     writeFileSync(personaFile, 'Section map coder');
 
     const raw = {
-      name: 'test-piece',
+      name: 'test-workflow',
       personas: {
         coder: './my-coder.md',
       },
-      movements: [
+      steps: [
         {
           name: 'step1',
           persona: 'coder',
@@ -458,18 +469,18 @@ describe('normalizePieceConfig with layer resolution', () => {
       ],
     };
 
-    const context: FacetResolutionContext = { projectDir, lang: 'ja' };
-    const config = normalizePieceConfig(raw, pieceDir, context);
+    const context: FacetResolutionContext = { projectDir, lang: 'ja', workflowDir };
+    const config = normalizeWorkflowConfig(raw, workflowDir, context);
 
     // Section map should be used, not layer resolution
-    expect(config.movements[0]!.persona).toBe('./my-coder.md');
-    expect(config.movements[0]!.personaPath).toBe(personaFile);
+    expect(config.steps[0]!.persona).toBe('./my-coder.md');
+    expect(config.steps[0]!.personaPath).toBe(personaFile);
   });
 
   it('should work without context (backward compatibility)', () => {
     const raw = {
-      name: 'test-piece',
-      movements: [
+      name: 'test-workflow',
+      steps: [
         {
           name: 'step1',
           persona: 'coder',
@@ -479,10 +490,10 @@ describe('normalizePieceConfig with layer resolution', () => {
     };
 
     // No context — backward compatibility mode
-    const config = normalizePieceConfig(raw, pieceDir);
+    const config = normalizeWorkflowConfig(raw, workflowDir);
 
-    // Without context, name 'coder' resolves as relative path from pieceDir
-    expect(config.movements[0]!.persona).toBe('coder');
+    // Without context, name 'coder' resolves as a relative path from workflowDir
+    expect(config.steps[0]!.persona).toBe('coder');
   });
 
   it('should resolve knowledge by name from project layer', () => {
@@ -491,8 +502,8 @@ describe('normalizePieceConfig with layer resolution', () => {
     writeFileSync(join(knowledgeDir, 'domain-kb.md'), '# Domain Knowledge');
 
     const raw = {
-      name: 'test-piece',
-      movements: [
+      name: 'test-workflow',
+      steps: [
         {
           name: 'step1',
           persona: 'coder',
@@ -503,19 +514,19 @@ describe('normalizePieceConfig with layer resolution', () => {
     };
 
     const context: FacetResolutionContext = { projectDir, lang: 'ja' };
-    const config = normalizePieceConfig(raw, pieceDir, context);
+    const config = normalizeWorkflowConfig(raw, workflowDir, context);
 
-    expect(config.movements[0]!.knowledgeContents).toBeDefined();
-    expect(config.movements[0]!.knowledgeContents![0]).toBe('# Domain Knowledge');
+    expect(config.steps[0]!.knowledgeContents).toBeDefined();
+    expect(config.steps[0]!.knowledgeContents![0]).toBe('# Domain Knowledge');
   });
 
   it('should resolve instruction from section map before layer resolution', () => {
     const raw = {
-      name: 'test-piece',
+      name: 'test-workflow',
       instructions: {
         implement: 'Mapped instruction template',
       },
-      movements: [
+      steps: [
         {
           name: 'step1',
           persona: 'coder',
@@ -525,9 +536,9 @@ describe('normalizePieceConfig with layer resolution', () => {
     };
 
     const context: FacetResolutionContext = { projectDir, lang: 'ja' };
-    const config = normalizePieceConfig(raw, pieceDir, context);
+    const config = normalizeWorkflowConfig(raw, workflowDir, context);
 
-    expect(config.movements[0]!.instruction).toBe('Mapped instruction template');
+    expect(config.steps[0]!.instruction).toBe('Mapped instruction template');
   });
 
   it('should resolve instruction by name via layer resolution', () => {
@@ -536,8 +547,8 @@ describe('normalizePieceConfig with layer resolution', () => {
     writeFileSync(join(instructionsDir, 'implement.md'), 'Project implement template');
 
     const raw = {
-      name: 'test-piece',
-      movements: [
+      name: 'test-workflow',
+      steps: [
         {
           name: 'step1',
           persona: 'coder',
@@ -547,17 +558,17 @@ describe('normalizePieceConfig with layer resolution', () => {
     };
 
     const context: FacetResolutionContext = { projectDir, lang: 'ja' };
-    const config = normalizePieceConfig(raw, pieceDir, context);
+    const config = normalizeWorkflowConfig(raw, workflowDir, context);
 
-    expect(config.movements[0]!.instruction).toBe('Project implement template');
+    expect(config.steps[0]!.instruction).toBe('Project implement template');
   });
 
   it('should keep inline instruction when no facet is found', () => {
     const inlineTemplate = `Use this inline template.
 Second line remains inline.`;
     const raw = {
-      name: 'test-piece',
-      movements: [
+      name: 'test-workflow',
+      steps: [
         {
           name: 'step1',
           persona: 'coder',
@@ -567,9 +578,9 @@ Second line remains inline.`;
     };
 
     const context: FacetResolutionContext = { projectDir, lang: 'ja' };
-    const config = normalizePieceConfig(raw, pieceDir, context);
+    const config = normalizeWorkflowConfig(raw, workflowDir, context);
 
-    expect(config.movements[0]!.instruction).toBe(inlineTemplate);
+    expect(config.steps[0]!.instruction).toBe(inlineTemplate);
   });
 
   it('should resolve loop monitor judge instruction via layer resolution', () => {
@@ -578,8 +589,8 @@ Second line remains inline.`;
     writeFileSync(join(instructionsDir, 'judge-template.md'), 'Project judge template');
 
     const raw = {
-      name: 'test-piece',
-      movements: [
+      name: 'test-workflow',
+      steps: [
         {
           name: 'step1',
           persona: 'coder',
@@ -607,7 +618,7 @@ Second line remains inline.`;
     };
 
     const context: FacetResolutionContext = { projectDir, lang: 'ja' };
-    const config = normalizePieceConfig(raw, pieceDir, context);
+    const config = normalizeWorkflowConfig(raw, workflowDir, context);
 
     expect(config.loopMonitors?.[0]?.judge.instruction).toBe('Project judge template');
   });

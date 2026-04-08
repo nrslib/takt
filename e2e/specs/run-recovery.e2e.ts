@@ -32,7 +32,7 @@ interface TaskRecord {
   name: string;
   status: 'pending' | 'running' | 'failed' | 'completed';
   owner_pid?: number | null;
-  piece?: string;
+  workflow?: string;
 }
 
 function createLocalRepo(): LocalRepo {
@@ -80,7 +80,7 @@ function waitFor(
 
 function createPendingTasksYaml(
   count: number,
-  piecePath: string,
+  workflowPath: string,
   prefix: string,
 ): string {
   const now = new Date().toISOString();
@@ -88,7 +88,7 @@ function createPendingTasksYaml(
     name: `${prefix}-${String(index + 1)}`,
     status: 'pending' as const,
     content: `${prefix} task ${String(index + 1)}`,
-    piece: piecePath,
+    workflow: workflowPath,
     created_at: now,
     started_at: null,
     completed_at: null,
@@ -150,12 +150,12 @@ describe('E2E: Run interrupted task recovery and high-priority run flows', () =>
       task_poll_interval_ms: 50,
     });
 
-    const piecePath = resolve(__dirname, '../fixtures/pieces/mock-slow-multi-step.yaml');
+    const workflowPath = resolve(__dirname, '../fixtures/workflows/mock-slow-multi-step.yaml');
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/run-sigint-parallel.json');
     const tasksFile = join(repo.path, '.takt', 'tasks.yaml');
 
     mkdirSync(join(repo.path, '.takt'), { recursive: true });
-    writeFileSync(tasksFile, createPendingTasksYaml(2, piecePath, 'recovery-target'), 'utf-8');
+    writeFileSync(tasksFile, createPendingTasksYaml(2, workflowPath, 'recovery-target'), 'utf-8');
 
     const binPath = resolve(__dirname, '../../bin/takt');
     const child = spawn('node', [binPath, 'run', '--provider', 'mock'], {
@@ -230,12 +230,12 @@ describe('E2E: Run interrupted task recovery and high-priority run flows', () =>
       task_poll_interval_ms: 50,
     });
 
-    const piecePath = resolve(__dirname, '../fixtures/pieces/mock-single-step.yaml');
+    const workflowPath = resolve(__dirname, '../fixtures/workflows/mock-single-step.yaml');
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/execute-done.json');
     const tasksFile = join(repo.path, '.takt', 'tasks.yaml');
 
     mkdirSync(join(repo.path, '.takt'), { recursive: true });
-    writeFileSync(tasksFile, createPendingTasksYaml(12, piecePath, 'parallel-load'), 'utf-8');
+    writeFileSync(tasksFile, createPendingTasksYaml(12, workflowPath, 'parallel-load'), 'utf-8');
 
     // When: run all tasks
     const result = runTakt({
@@ -260,13 +260,13 @@ describe('E2E: Run interrupted task recovery and high-priority run flows', () =>
     const envWithoutConfig = createEnvWithoutGlobalConfig();
 
     try {
-      // Given: global config.yaml is absent and project config points to a mock piece path
-      const piecePath = resolve(__dirname, '../fixtures/pieces/mock-single-step.yaml');
+      // Given: global config.yaml is absent and project config points to a mock workflow path
+      const workflowPath = resolve(__dirname, '../fixtures/workflows/mock-single-step.yaml');
       const scenarioPath = resolve(__dirname, '../fixtures/scenarios/execute-done.json');
       const projectConfigDir = join(repo.path, '.takt');
       const projectConfigPath = join(projectConfigDir, 'config.yaml');
       mkdirSync(projectConfigDir, { recursive: true });
-      writeFileSync(projectConfigPath, `piece: ${piecePath}\npermissionMode: default\n`, 'utf-8');
+      writeFileSync(projectConfigPath, `workflow: ${workflowPath}\npermissionMode: default\n`, 'utf-8');
 
       expect(existsSync(envWithoutConfig.globalConfigPath)).toBe(false);
 

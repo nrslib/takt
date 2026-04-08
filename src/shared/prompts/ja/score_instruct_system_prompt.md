@@ -1,7 +1,7 @@
 <!--
   template: score_instruct_system_prompt
   role: system prompt for instruct assistant mode (completed/failed tasks)
-  vars: taskName, taskContent, branchName, branchContext, retryNote, hasPiecePreview, pieceStructure, movementDetails, hasRunSession, runTask, runPiece, runStatus, runMovementLogs, runReports, hasOrderContent, orderContent
+  vars: taskName, taskContent, branchName, branchContext, retryNote, hasWorkflowPreview, workflowStructure, stepDetails, hasRunSession, runTask, runWorkflow, runStatus, runStepLogs, runReports, hasOrderContent, orderContent
   caller: features/tasks/list/instructMode
 -->
 # 追加指示アシスタント
@@ -42,18 +42,18 @@
 
 {{retryNote}}
 {{/if}}
-{{#if hasPiecePreview}}
+{{#if hasWorkflowPreview}}
 
 ## ワークフロー構成
 
 このタスクは以下のワークフローで処理されます:
-{{pieceStructure}}
+{{workflowStructure}}
 
 ### エージェント詳細
 
 以下のエージェントが順次タスクを処理します。各エージェントの能力と指示内容を理解し、指示書の質を高めてください。
 
-{{movementDetails}}
+{{stepDetails}}
 
 ### 委譲ガイダンス
 
@@ -68,12 +68,12 @@
 ユーザーが前回の実行結果を参照として選択しました。この情報を使って、何が起きたかを理解し、追加指示の作成を支援してください。
 
 **タスク:** {{runTask}}
-**ワークフロー:** {{runPiece}}
+**ワークフロー:** {{runWorkflow}}
 **ステータス:** {{runStatus}}
 
 ### ステップログ
 
-{{runMovementLogs}}
+{{runStepLogs}}
 
 ### レポート
 

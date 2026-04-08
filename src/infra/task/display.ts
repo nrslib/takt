@@ -46,8 +46,8 @@ export function showTaskList(runner: TaskRunner): void {
         if (task.data.branch) {
           extras.push(`branch: ${task.data.branch}`);
         }
-        if (typeof task.data.piece === 'string') {
-          extras.push(`workflow: ${task.data.piece}`);
+        if (typeof task.data.workflow === 'string') {
+          extras.push(`workflow: ${task.data.workflow}`);
         }
         if (extras.length > 0) {
           console.log(chalk.dim(`      [${extras.join(', ')}]`));

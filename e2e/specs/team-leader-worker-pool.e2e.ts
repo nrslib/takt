@@ -5,6 +5,7 @@ import { createIsolatedEnv, type IsolatedEnv } from '../helpers/isolated-env';
 import { createLocalRepo, type LocalRepo } from '../helpers/test-repo';
 import { runTakt } from '../helpers/takt-runner';
 import { readSessionRecords } from '../helpers/session-log';
+import { copyWorkflowFixtureToRepo } from '../helpers/local-workflow-fixture';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -39,15 +40,18 @@ describe('E2E: Team leader worker-pool dynamic scheduling', () => {
   });
 
   it('max_parts=2 でも 5ファイルを完了できる', () => {
-    const piecePath = resolve(__dirname, '../fixtures/pieces/team-leader-worker-pool.yaml');
+    const workflowPath = copyWorkflowFixtureToRepo(
+      repo.path,
+      resolve(__dirname, '../fixtures/workflows/team-leader-worker-pool.yaml'),
+    );
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/team-leader-worker-pool.json');
     const result = runTakt({
       args: [
         '--provider', 'mock',
         '--task',
         'Create exactly five files: wp-1.txt, wp-2.txt, wp-3.txt, wp-4.txt, wp-5.txt. Each file must contain its own filename as content. Each part must create exactly one file, and you must complete all five files.',
-        '--piece',
-        piecePath,
+        '--workflow',
+        workflowPath,
       ],
       cwd: repo.path,
       env: {

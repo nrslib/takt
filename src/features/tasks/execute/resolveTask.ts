@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { resolvePieceConfigValue } from '../../../infra/config/index.js';
+import { resolveWorkflowConfigValue } from '../../../infra/config/index.js';
 import {
   type TaskInfo,
   buildTaskInstruction,
@@ -10,11 +10,12 @@ import {
   branchExists,
   summarizeTaskName,
   resolveTaskWorkflowValue,
-  resolveTaskStartMovementValue,
+  resolveTaskStartStepValue,
+  TaskExecutionConfigSchema,
 } from '../../../infra/task/index.js';
 import { getGitProvider, type Issue } from '../../../infra/git/index.js';
 import { withProgress } from '../../../shared/ui/index.js';
-import { createLogger, getErrorMessage, isPathInside } from '../../../shared/utils/index.js';
+import { createLogger, getErrorMessage, isRealPathInside } from '../../../shared/utils/index.js';
 import { getTaskSlugFromTaskDir } from '../../../shared/utils/taskPaths.js';
 
 const log = createLogger('task');
@@ -26,7 +27,7 @@ function canReuseWorktreePath(projectDir: string, candidatePath: string): boolea
 
   const cloneBaseDir = resolveCloneBaseDir(projectDir);
   const fallbackCloneBaseDir = path.join(projectDir, '.takt', 'worktrees');
-  return isPathInside(cloneBaseDir, candidatePath) || isPathInside(fallbackCloneBaseDir, candidatePath);
+  return isRealPathInside(cloneBaseDir, candidatePath) || isRealPathInside(fallbackCloneBaseDir, candidatePath);
 }
 
 function resolveTaskDataBaseBranch(taskData: TaskInfo['data']): string | undefined {
@@ -40,20 +41,20 @@ function resolveTaskBaseBranch(projectDir: string, taskData: TaskInfo['data']): 
 
 export interface ResolvedTaskExecution {
   execCwd: string;
-  execPiece: string;
+  workflowIdentifier: string;
   isWorktree: boolean;
   taskPrompt?: string;
   reportDirName?: string;
   branch?: string;
   worktreePath?: string;
   baseBranch?: string;
-  startMovement?: string;
+  startStep?: string;
   retryNote?: string;
   autoPr: boolean;
   draftPr: boolean;
   shouldPublishBranchToOrigin: boolean;
   issueNumber?: number;
-  maxMovementsOverride?: number;
+  maxStepsOverride?: number;
   initialIterationOverride?: number;
 }
 
@@ -117,9 +118,12 @@ export async function resolveTaskExecution(
     throw new Error(`Task "${task.name}" is missing required data, including workflow.`);
   }
 
-  const normalizedData = data as Record<string, unknown>;
-  const execPiece = resolveTaskWorkflowValue(normalizedData);
-  if (!execPiece || execPiece.trim() === '') {
+  const validationData = { ...data } as Record<string, unknown>;
+  delete validationData.task;
+  delete validationData.baseBranch;
+  const normalizedData = TaskExecutionConfigSchema.parse(validationData) as Record<string, unknown>;
+  const workflowIdentifier = resolveTaskWorkflowValue(normalizedData);
+  if (!workflowIdentifier || workflowIdentifier.trim() === '') {
     throw new Error(`Task "${task.name}" is missing required workflow.`);
   }
 
@@ -183,19 +187,19 @@ export async function resolveTaskExecution(
     taskPrompt = stageTaskSpecForExecution(defaultCwd, execCwd, task.taskDir, reportDirName);
   }
 
-  const startMovement = resolveTaskStartMovementValue(normalizedData);
+  const startStep = resolveTaskStartStepValue(normalizedData);
   const retryNote = data.retry_note;
-  const maxMovementsOverride = data.exceeded_max_steps;
+  const maxStepsOverride = data.exceeded_max_steps;
   const initialIterationOverride = data.exceeded_current_iteration;
 
-  const autoPr = data.auto_pr ?? resolvePieceConfigValue(defaultCwd, 'autoPr') ?? false;
-  const draftPr = data.draft_pr ?? resolvePieceConfigValue(defaultCwd, 'draftPr') ?? false;
+  const autoPr = data.auto_pr ?? resolveWorkflowConfigValue(defaultCwd, 'autoPr') ?? false;
+  const draftPr = data.draft_pr ?? resolveWorkflowConfigValue(defaultCwd, 'draftPr') ?? false;
   const shouldPublishBranchToOrigin =
     normalizedData.should_publish_branch_to_origin === true || autoPr;
 
   return {
     execCwd,
-    execPiece,
+    workflowIdentifier,
     isWorktree,
     autoPr,
     draftPr,
@@ -205,10 +209,10 @@ export async function resolveTaskExecution(
     ...(branch ? { branch } : {}),
     ...(worktreePath ? { worktreePath } : {}),
     ...(baseBranch ? { baseBranch } : {}),
-    ...(startMovement ? { startMovement } : {}),
+    ...(startStep ? { startStep } : {}),
     ...(retryNote ? { retryNote } : {}),
     ...(data.issue !== undefined ? { issueNumber: data.issue } : {}),
-    ...(maxMovementsOverride !== undefined ? { maxMovementsOverride } : {}),
+    ...(maxStepsOverride !== undefined ? { maxStepsOverride } : {}),
     ...(initialIterationOverride !== undefined ? { initialIterationOverride } : {}),
   };
 }

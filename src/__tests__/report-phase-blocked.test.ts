@@ -1,10 +1,10 @@
 /**
- * PieceEngine integration tests: Report phase (Phase 2) blocked handling.
+ * WorkflowEngine integration tests: Report phase (Phase 2) blocked handling.
  *
  * Covers:
- * - Report phase blocked propagates to PieceEngine's handleBlocked flow
- * - User input triggers full movement retry (Phase 1 → 2 → 3)
- * - Null user input aborts the piece
+ * - Report phase blocked propagates to WorkflowEngine's handleBlocked flow
+ * - User input triggers full step retry (Phase 1 → 2 → 3)
+ * - Null user input aborts the workflow
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -17,11 +17,11 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/piece/evaluation/index.js', () => ({
+vi.mock('../core/workflow/evaluation/index.js', () => ({
   detectMatchedRule: vi.fn(),
 }));
 
-vi.mock('../core/piece/phase-runner.js', () => ({
+vi.mock('../core/workflow/phase-runner.js', () => ({
   needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
   runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
@@ -34,46 +34,46 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 // --- Imports (after mocks) ---
 
-import { PieceEngine } from '../core/piece/index.js';
-import { runReportPhase } from '../core/piece/phase-runner.js';
+import { WorkflowEngine } from '../core/workflow/index.js';
+import { runReportPhase } from '../core/workflow/phase-runner.js';
 import {
   makeResponse,
-  makeMovement,
-  buildDefaultPieceConfig,
+  makeStep,
+  buildDefaultWorkflowConfig,
   mockRunAgentSequence,
   mockDetectMatchedRuleSequence,
   createTestTmpDir,
   applyDefaultMocks,
 } from './engine-test-helpers.js';
-import type { PieceConfig, OutputContractItem } from '../core/models/index.js';
+import type { WorkflowConfig, OutputContractItem } from '../core/models/index.js';
 
 /**
- * Build a piece config where a movement has outputContracts (triggering report phase).
+ * Build a workflow config where a step has outputContracts (triggering report phase).
  * plan → implement (with report) → supervise
  */
-function buildConfigWithReport(): PieceConfig {
+function buildConfigWithReport(): WorkflowConfig {
   const reportContract: OutputContractItem = {
     name: '02-coder-scope.md',
     label: 'Scope',
     description: 'Scope report',
   };
 
-  return buildDefaultPieceConfig({
-    movements: [
-      makeMovement('plan', {
+  return buildDefaultWorkflowConfig({
+    steps: [
+      makeStep('plan', {
         rules: [
           { condition: 'Requirements are clear', next: 'implement' },
           { condition: 'Requirements unclear', next: 'ABORT' },
         ],
       }),
-      makeMovement('implement', {
+      makeStep('implement', {
         outputContracts: [reportContract],
         rules: [
           { condition: 'Implementation complete', next: 'supervise' },
           { condition: 'Cannot proceed', next: 'plan' },
         ],
       }),
-      makeMovement('supervise', {
+      makeStep('supervise', {
         rules: [
           { condition: 'All checks passed', next: 'COMPLETE' },
           { condition: 'Requirements unmet', next: 'plan' },
@@ -83,7 +83,7 @@ function buildConfigWithReport(): PieceConfig {
   });
 }
 
-describe('PieceEngine Integration: Report Phase Blocked Handling', () => {
+describe('WorkflowEngine Integration: Report Phase Blocked Handling', () => {
   let tmpDir: string;
 
   beforeEach(() => {
@@ -100,7 +100,7 @@ describe('PieceEngine Integration: Report Phase Blocked Handling', () => {
 
   it('should abort when report phase is blocked and no onUserInput callback', async () => {
     const config = buildConfigWithReport();
-    const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
     // Phase 1 succeeds for plan, then implement
     mockRunAgentSequence([
@@ -119,8 +119,8 @@ describe('PieceEngine Integration: Report Phase Blocked Handling', () => {
 
     const blockedFn = vi.fn();
     const abortFn = vi.fn();
-    engine.on('movement:blocked', blockedFn);
-    engine.on('piece:abort', abortFn);
+    engine.on('step:blocked', blockedFn);
+    engine.on('workflow:abort', abortFn);
 
     const state = await engine.run();
 
@@ -132,7 +132,7 @@ describe('PieceEngine Integration: Report Phase Blocked Handling', () => {
   it('should abort when report phase is blocked and onUserInput returns null', async () => {
     const config = buildConfigWithReport();
     const onUserInput = vi.fn().mockResolvedValue(null);
-    const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, onUserInput });
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, onUserInput });
 
     mockRunAgentSequence([
       makeResponse({ persona: 'plan', content: 'Plan done' }),
@@ -152,10 +152,10 @@ describe('PieceEngine Integration: Report Phase Blocked Handling', () => {
     expect(onUserInput).toHaveBeenCalledOnce();
   });
 
-  it('should retry full movement when report phase is blocked and user provides input', async () => {
+  it('should retry the full step when report phase is blocked and user provides input', async () => {
     const config = buildConfigWithReport();
     const onUserInput = vi.fn().mockResolvedValueOnce('User provided report clarification');
-    const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, onUserInput });
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, onUserInput });
 
     mockRunAgentSequence([
       // First: plan succeeds
@@ -184,7 +184,7 @@ describe('PieceEngine Integration: Report Phase Blocked Handling', () => {
     vi.mocked(runReportPhase).mockResolvedValueOnce(undefined); // implement (retry, succeeds)
 
     const userInputFn = vi.fn();
-    engine.on('movement:user_input', userInputFn);
+    engine.on('step:user_input', userInputFn);
 
     const state = await engine.run();
 
@@ -196,7 +196,7 @@ describe('PieceEngine Integration: Report Phase Blocked Handling', () => {
 
   it('should propagate blocked content from report phase to engine response', async () => {
     const config = buildConfigWithReport();
-    const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
     mockRunAgentSequence([
       makeResponse({ persona: 'plan', content: 'Plan done' }),
@@ -212,7 +212,7 @@ describe('PieceEngine Integration: Report Phase Blocked Handling', () => {
     vi.mocked(runReportPhase).mockResolvedValueOnce({ blocked: true, response: blockedResponse });
 
     const blockedFn = vi.fn();
-    engine.on('movement:blocked', blockedFn);
+    engine.on('step:blocked', blockedFn);
 
     const state = await engine.run();
 
@@ -225,7 +225,7 @@ describe('PieceEngine Integration: Report Phase Blocked Handling', () => {
 
   it('should skip report phase when phase 1 returns error', async () => {
     const config = buildConfigWithReport();
-    const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
     mockRunAgentSequence([
       makeResponse({ persona: 'plan', content: 'Plan done' }),
@@ -242,7 +242,7 @@ describe('PieceEngine Integration: Report Phase Blocked Handling', () => {
     ]);
 
     const abortFn = vi.fn();
-    engine.on('piece:abort', abortFn);
+    engine.on('workflow:abort', abortFn);
 
     const state = await engine.run();
 
@@ -250,14 +250,14 @@ describe('PieceEngine Integration: Report Phase Blocked Handling', () => {
     expect(runReportPhase).not.toHaveBeenCalled();
     expect(abortFn).toHaveBeenCalledOnce();
     const reason = abortFn.mock.calls[0]?.[1] as string;
-    expect(reason).toContain('Movement "implement" failed');
+    expect(reason).toContain('Step "implement" failed');
     expect(reason).toContain('Workspace Trust Required');
   });
 
   it('should skip report phase when phase 1 returns blocked and persist blocked snapshot', async () => {
     const config = buildConfigWithReport();
     const onUserInput = vi.fn().mockResolvedValueOnce(null);
-    const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, onUserInput });
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, onUserInput });
 
     mockRunAgentSequence([
       makeResponse({ persona: 'plan', content: 'Plan done' }),

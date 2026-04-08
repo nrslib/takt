@@ -1,17 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { RuleEvaluator } from '../core/piece/evaluation/RuleEvaluator.js';
-import type { PieceState } from '../core/models/types.js';
-import { makeMovement } from './test-helpers.js';
+import { RuleEvaluator } from '../core/workflow/evaluation/RuleEvaluator.js';
+import type { WorkflowState } from '../core/models/types.js';
+import { makeStep } from './test-helpers.js';
 
-function makeState(): PieceState {
+function makeState(): WorkflowState {
   return {
-    pieceName: 'test',
-    currentMovement: 'review',
+    workflowName: 'test',
+    currentStep: 'review',
     iteration: 1,
-    movementOutputs: new Map(),
+    stepOutputs: new Map(),
     userInputs: [],
     personaSessions: new Map(),
-    movementIterations: new Map(),
+    stepIterations: new Map(),
     status: 'running',
   };
 }
@@ -25,7 +25,7 @@ describe('RuleEvaluator with structuredCaller', () => {
     const structuredCaller = {
       evaluateCondition: vi.fn().mockResolvedValue(1),
     };
-    const step = makeMovement({
+    const step = makeStep({
       name: 'review',
       rules: [
         { condition: 'approved', next: 'COMPLETE', isAiCondition: true, aiConditionText: 'is it approved?' },
@@ -62,7 +62,7 @@ describe('RuleEvaluator with structuredCaller', () => {
     const structuredCaller = {
       evaluateCondition: vi.fn().mockResolvedValue(0),
     };
-    const step = makeMovement({
+    const step = makeStep({
       name: 'review',
       rules: [
         { condition: 'approved', next: 'COMPLETE', isAiCondition: true, aiConditionText: 'is it approved?' },
@@ -104,7 +104,7 @@ describe('RuleEvaluator with structuredCaller', () => {
     const structuredCaller = {
       evaluateCondition: vi.fn().mockResolvedValue(1),
     };
-    const step = makeMovement({
+    const step = makeStep({
       name: 'review',
       rules: [
         { condition: 'approved', next: 'COMPLETE' },
@@ -141,7 +141,7 @@ describe('RuleEvaluator with structuredCaller', () => {
     const structuredCaller = {
       evaluateCondition: vi.fn().mockResolvedValueOnce(99).mockResolvedValueOnce(1),
     };
-    const step = makeMovement({
+    const step = makeStep({
       name: 'review',
       rules: [
         { condition: 'approved', next: 'COMPLETE', isAiCondition: true, aiConditionText: 'is it approved?' },
@@ -187,7 +187,7 @@ describe('RuleEvaluator with structuredCaller', () => {
     const structuredCaller = {
       evaluateCondition: vi.fn().mockResolvedValue(1),
     };
-    const step = makeMovement({
+    const step = makeStep({
       name: 'review',
       rules: [
         { condition: 'approved', next: 'COMPLETE' },

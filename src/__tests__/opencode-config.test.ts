@@ -6,8 +6,8 @@ import { describe, it, expect } from 'vitest';
 import {
   GlobalConfigSchema,
   ProjectConfigSchema,
-  PieceMovementRawSchema,
-  ParallelSubMovementRawSchema,
+  WorkflowStepRawSchema,
+  ParallelSubStepRawSchema,
 } from '../core/models/index.js';
 
 describe('Schemas accept opencode provider', () => {
@@ -75,32 +75,32 @@ describe('Schemas accept opencode provider', () => {
     expect(() => ProjectConfigSchema.parse({ submodules: 'libs' })).toThrow();
   });
 
-  it('should accept opencode in PieceMovementRawSchema', () => {
-    const result = PieceMovementRawSchema.parse({
-      name: 'test-movement',
+  it('should accept opencode in WorkflowStepRawSchema', () => {
+    const result = WorkflowStepRawSchema.parse({
+      name: 'test-step',
       provider: 'opencode',
     });
     expect(result.provider).toBe('opencode');
   });
 
-  it('should accept cursor in PieceMovementRawSchema', () => {
-    const result = PieceMovementRawSchema.parse({
-      name: 'test-movement',
+  it('should accept cursor in WorkflowStepRawSchema', () => {
+    const result = WorkflowStepRawSchema.parse({
+      name: 'test-step',
       provider: 'cursor',
     });
     expect(result.provider).toBe('cursor');
   });
 
-  it('should accept opencode in ParallelSubMovementRawSchema', () => {
-    const result = ParallelSubMovementRawSchema.parse({
+  it('should accept opencode in ParallelSubStepRawSchema', () => {
+    const result = ParallelSubStepRawSchema.parse({
       name: 'sub-1',
       provider: 'opencode',
     });
     expect(result.provider).toBe('opencode');
   });
 
-  it('should accept cursor in ParallelSubMovementRawSchema', () => {
-    const result = ParallelSubMovementRawSchema.parse({
+  it('should accept cursor in ParallelSubStepRawSchema', () => {
+    const result = ParallelSubStepRawSchema.parse({
       name: 'sub-1',
       provider: 'cursor',
     });

@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { join, resolve, isAbsolute, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { isRuntimePreparePreset, type PieceRuntimeConfig, type RuntimePrepareEntry, type RuntimePreparePreset } from '../models/piece-types.js';
+import { isRuntimePreparePreset, type WorkflowRuntimeConfig, type RuntimePrepareEntry, type RuntimePreparePreset } from '../models/workflow-types.js';
 
 export interface RuntimeEnvironmentResult {
   runtimeRoot: string;
@@ -195,11 +195,11 @@ function dedupePrepare(entries: RuntimePrepareEntry[]): RuntimePrepareEntry[] {
 }
 
 export function resolveRuntimeConfig(
-  globalRuntime: PieceRuntimeConfig | undefined,
-  pieceRuntime: PieceRuntimeConfig | undefined,
-): PieceRuntimeConfig | undefined {
-  const prepare = pieceRuntime?.prepare?.length
-    ? pieceRuntime.prepare
+  globalRuntime: WorkflowRuntimeConfig | undefined,
+  workflowRuntime: WorkflowRuntimeConfig | undefined,
+): WorkflowRuntimeConfig | undefined {
+  const prepare = workflowRuntime?.prepare?.length
+    ? workflowRuntime.prepare
     : globalRuntime?.prepare;
   if (!prepare || prepare.length === 0) {
     return undefined;
@@ -209,7 +209,7 @@ export function resolveRuntimeConfig(
 
 export function prepareRuntimeEnvironment(
   cwd: string,
-  runtime: PieceRuntimeConfig | undefined,
+  runtime: WorkflowRuntimeConfig | undefined,
 ): RuntimeEnvironmentResult | undefined {
   const prepareEntries = runtime?.prepare;
   if (!prepareEntries || prepareEntries.length === 0) {

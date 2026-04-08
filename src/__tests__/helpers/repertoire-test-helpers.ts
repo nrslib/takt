@@ -9,7 +9,7 @@ import type { ScanConfig } from '../../features/repertoire/remove.js';
  */
 export function makeScanConfig(tempDir: string): ScanConfig {
   return {
-    piecesDirs: [join(tempDir, 'pieces'), join(tempDir, '.takt', 'pieces')],
-    categoriesFiles: [join(tempDir, 'preferences', 'piece-categories.yaml')],
+    workflowDirs: [join(tempDir, 'workflows'), join(tempDir, '.takt', 'workflows')],
+    categoriesFiles: [join(tempDir, 'preferences', 'workflow-categories.yaml')],
   };
 }

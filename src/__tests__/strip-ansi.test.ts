@@ -39,7 +39,7 @@ describe('stripAnsi', () => {
     expect(stripAnsi('\x1b[38;5;196mRed256\x1b[0m')).toBe('Red256');
   });
 
-  it('should strip cursor movement sequences', () => {
+  it('should strip cursor motion sequences', () => {
     // Cursor up: ESC[1A, Cursor right: ESC[5C
     expect(stripAnsi('\x1b[1AUp\x1b[5CRight')).toBe('UpRight');
   });

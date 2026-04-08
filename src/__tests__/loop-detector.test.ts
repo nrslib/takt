@@ -1,11 +1,11 @@
 /**
  * Unit tests for LoopDetector
  *
- * Tests consecutive same-movement detection and configurable actions.
+ * Tests consecutive same-step detection and configurable actions.
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { LoopDetector } from '../core/piece/engine/loop-detector.js';
+import { LoopDetector } from '../core/workflow/engine/loop-detector.js';
 
 describe('LoopDetector', () => {
   describe('with default config', () => {
@@ -15,7 +15,7 @@ describe('LoopDetector', () => {
       detector = new LoopDetector();
     });
 
-    it('should not detect loop for different movements', () => {
+    it('should not detect loop for different steps', () => {
       const result1 = detector.check('step-a');
       const result2 = detector.check('step-b');
       const result3 = detector.check('step-a');
@@ -42,7 +42,7 @@ describe('LoopDetector', () => {
       expect(result.shouldAbort).toBe(false);
     });
 
-    it('should reset consecutive count when movement changes', () => {
+    it('should reset consecutive count when step changes', () => {
       for (let i = 0; i < 8; i++) {
         detector.check('step-a');
       }

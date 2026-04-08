@@ -6,14 +6,14 @@ import { generateRunId } from '../tasks/execute/slackSummaryAdapter.js';
 import type { PipelineExecutionOptions } from '../tasks/index.js';
 import {
   EXIT_ISSUE_FETCH_FAILED,
-  EXIT_PIECE_FAILED,
+  EXIT_WORKFLOW_FAILED,
   EXIT_GIT_OPERATION_FAILED,
   EXIT_PR_CREATION_FAILED,
 } from '../../shared/exitCodes.js';
 import {
   resolveTaskContent,
   resolveExecutionContext,
-  runPiece,
+  runWorkflow,
   commitAndPush,
   submitPullRequest,
   buildCommitMessage,
@@ -31,11 +31,11 @@ interface PipelineOutcome {
 }
 
 async function runPipeline(options: PipelineExecutionOptions): Promise<PipelineOutcome> {
-  const { cwd, piece, autoPr, skipGit } = options;
+  const { cwd, workflow, autoPr, skipGit } = options;
   const pipelineConfig = resolveConfigValues(cwd, ['pipeline']).pipeline;
 
   const buildResult = (overrides: Partial<PipelineResult> = {}): PipelineResult => ({
-    success: false, piece, issueNumber: options.issueNumber, ...overrides,
+    success: false, workflow, issueNumber: options.issueNumber, ...overrides,
   });
 
   const taskContent = resolveTaskContent(options);
@@ -56,9 +56,9 @@ async function runPipeline(options: PipelineExecutionOptions): Promise<PipelineO
     return { exitCode: EXIT_GIT_OPERATION_FAILED, result: buildResult() };
   }
 
-  log.info('Pipeline piece execution starting', { piece, branch: context.branch, skipGit, issueNumber: options.issueNumber });
-  const pieceOk = await runPiece(cwd, piece, taskContent.task, context.execCwd, options);
-  if (!pieceOk) return { exitCode: EXIT_PIECE_FAILED, result: buildResult({ branch: context.branch }) };
+  log.info('Pipeline workflow execution starting', { workflow, branch: context.branch, skipGit, issueNumber: options.issueNumber });
+  const workflowOk = await runWorkflow(cwd, workflow, taskContent.task, context.execCwd, options);
+  if (!workflowOk) return { exitCode: EXIT_WORKFLOW_FAILED, result: buildResult({ branch: context.branch }) };
 
   if (!skipGit && context.branch) {
     const commitMessage = buildCommitMessage(pipelineConfig, taskContent.issue, options.task);
@@ -69,21 +69,21 @@ async function runPipeline(options: PipelineExecutionOptions): Promise<PipelineO
 
   let prUrl: string | undefined;
   if (autoPr && !skipGit && context.branch) {
-    prUrl = submitPullRequest(cwd, context.branch, context.baseBranch, taskContent, piece, pipelineConfig, options);
+    prUrl = submitPullRequest(cwd, context.branch, context.baseBranch, taskContent, workflow, pipelineConfig, options);
     if (!prUrl) return { exitCode: EXIT_PR_CREATION_FAILED, result: buildResult({ branch: context.branch }) };
   } else if (autoPr && skipGit) {
     info('--auto-pr is ignored when --skip-git is specified (no push was performed)');
   }
 
   blankLine();
-  const safePiece = sanitizeTerminalText(piece);
+  const safeWorkflow = sanitizeTerminalText(workflow);
   const issueStatus = taskContent.issue
     ? `#${taskContent.issue.number} "${sanitizeTerminalText(taskContent.issue.title)}"`
     : 'N/A';
   const branchStatus = context.branch ? sanitizeTerminalText(context.branch) : '(current)';
   status('Issue', issueStatus);
   status('Branch', branchStatus);
-  status('Workflow', safePiece);
+  status('Workflow', safeWorkflow);
   status('Result', 'Success', 'green');
 
   return { exitCode: 0, result: buildResult({ success: true, branch: context.branch, prUrl }) };
@@ -91,7 +91,7 @@ async function runPipeline(options: PipelineExecutionOptions): Promise<PipelineO
 export async function executePipeline(options: PipelineExecutionOptions): Promise<number> {
   const startTime = Date.now();
   const runId = generateRunId();
-  let pipelineResult: PipelineResult = { success: false, piece: options.piece, issueNumber: options.issueNumber };
+  let pipelineResult: PipelineResult = { success: false, workflow: options.workflow, issueNumber: options.issueNumber };
 
   try {
     const outcome = await runPipeline(options);
@@ -104,7 +104,7 @@ export async function executePipeline(options: PipelineExecutionOptions): Promis
 
 interface PipelineResult {
   success: boolean;
-  piece: string;
+  workflow: string;
   issueNumber?: number;
   branch?: string;
   prUrl?: string;
@@ -118,7 +118,7 @@ async function notifySlack(runId: string, startTime: number, result: PipelineRes
   const task: SlackTaskDetail = {
     name: 'pipeline',
     success: result.success,
-    piece: result.piece,
+    workflow: result.workflow,
     issueNumber: result.issueNumber,
     durationSec,
     branch: result.branch,

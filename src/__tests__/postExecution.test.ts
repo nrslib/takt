@@ -77,7 +77,7 @@ const baseOptions = {
   baseBranch: 'main',
   shouldCreatePr: true,
   draftPr: false,
-  pieceIdentifier: 'default',
+  workflowIdentifier: 'default',
 };
 
 describe('postExecutionFlow', () => {

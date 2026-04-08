@@ -1,18 +1,18 @@
 /**
- * PieceEngine integration tests: loop_monitors (cycle detection + judge)
+ * WorkflowEngine integration tests: loop_monitors (cycle detection + judge)
  *
  * Covers:
  * - Loop monitor triggers judge when cycle threshold reached
- * - Judge decision overrides normal next movement
+ * - Judge decision overrides normal next step
  * - Cycle detector resets after judge intervention
  * - No trigger when threshold not reached
  * - Validation of loop_monitors config
- * - movement:cycle_detected event emission
+ * - step:cycle_detected event emission
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, rmSync } from 'node:fs';
-import type { PieceConfig, PieceMovement, LoopMonitorConfig } from '../core/models/index.js';
+import type { WorkflowConfig, WorkflowStep, LoopMonitorConfig } from '../core/models/index.js';
 
 // --- Mock setup (must be before imports that use these modules) ---
 
@@ -20,11 +20,11 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/piece/evaluation/index.js', () => ({
+vi.mock('../core/workflow/evaluation/index.js', () => ({
   detectMatchedRule: vi.fn(),
 }));
 
-vi.mock('../core/piece/phase-runner.js', () => ({
+vi.mock('../core/workflow/phase-runner.js', () => ({
   needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
   runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
@@ -37,32 +37,32 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 // --- Imports (after mocks) ---
 
-import { PieceEngine } from '../core/piece/index.js';
+import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
-import { runReportPhase } from '../core/piece/phase-runner.js';
+import { runReportPhase } from '../core/workflow/phase-runner.js';
 import {
   makeResponse,
-  makeMovement,
+  makeStep,
   makeRule,
   mockRunAgentSequence,
   mockDetectMatchedRuleSequence,
   createTestTmpDir,
   applyDefaultMocks,
-  cleanupPieceEngine,
+  cleanupWorkflowEngine,
 } from './engine-test-helpers.js';
 
 /**
- * Build a piece config with ai_review ↔ ai_fix loop and loop_monitors.
+ * Build a workflow config with ai_review ↔ ai_fix loop and loop_monitors.
  */
 function buildConfigWithLoopMonitor(
   threshold = 3,
   monitorOverrides: Partial<LoopMonitorConfig> = {},
-): PieceConfig {
+): WorkflowConfig {
   return {
     name: 'test-loop-monitor',
-    description: 'Test piece with loop monitors',
-    maxMovements: 30,
-    initialMovement: 'implement',
+    description: 'Test workflow with loop monitors',
+    maxSteps: 30,
+    initialStep: 'implement',
     loopMonitors: [
       {
         cycle: ['ai_review', 'ai_fix'],
@@ -76,32 +76,32 @@ function buildConfigWithLoopMonitor(
         ...monitorOverrides,
       },
     ],
-    movements: [
-      makeMovement('implement', {
+    steps: [
+      makeStep('implement', {
         rules: [makeRule('done', 'ai_review')],
       }),
-      makeMovement('ai_review', {
+      makeStep('ai_review', {
         rules: [
           makeRule('No issues', 'reviewers'),
           makeRule('Issues found', 'ai_fix'),
         ],
       }),
-      makeMovement('ai_fix', {
+      makeStep('ai_fix', {
         rules: [
           makeRule('Fixed', 'ai_review'),
           makeRule('No fix needed', 'reviewers'),
         ],
       }),
-      makeMovement('reviewers', {
+      makeStep('reviewers', {
         rules: [makeRule('All approved', 'COMPLETE')],
       }),
     ],
   };
 }
 
-describe('PieceEngine Integration: Loop Monitors', () => {
+describe('WorkflowEngine Integration: Loop Monitors', () => {
   let tmpDir: string;
-  let engine: PieceEngine | null = null;
+  let engine: WorkflowEngine | null = null;
 
   beforeEach(() => {
     vi.resetAllMocks();
@@ -111,7 +111,7 @@ describe('PieceEngine Integration: Loop Monitors', () => {
 
   afterEach(() => {
     if (engine) {
-      cleanupPieceEngine(engine);
+      cleanupWorkflowEngine(engine);
       engine = null;
     }
     if (existsSync(tmpDir)) {
@@ -125,7 +125,7 @@ describe('PieceEngine Integration: Loop Monitors', () => {
   describe('Judge triggered on cycle threshold', () => {
     it('should run judge and redirect to reviewers when cycle is unproductive', async () => {
       const config = buildConfigWithLoopMonitor(2);
-      engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         // implement
@@ -138,7 +138,7 @@ describe('PieceEngine Integration: Loop Monitors', () => {
         makeResponse({ persona: 'ai_review', content: 'Issues found: Y' }),
         // ai_fix → fixed → cycle threshold reached (2 cycles complete)
         makeResponse({ persona: 'ai_fix', content: 'Fixed Y' }),
-        // Judge runs (synthetic movement)
+        // Judge runs (synthetic step)
         makeResponse({ persona: 'supervisor', content: 'Unproductive loop detected' }),
         // reviewers (after judge redirects here)
         makeResponse({ persona: 'reviewers', content: 'All approved' }),
@@ -157,7 +157,7 @@ describe('PieceEngine Integration: Loop Monitors', () => {
       ]);
 
       const cycleDetectedFn = vi.fn();
-      engine.on('movement:cycle_detected', cycleDetectedFn);
+      engine.on('step:cycle_detected', cycleDetectedFn);
 
       const state = await engine.run();
 
@@ -170,7 +170,7 @@ describe('PieceEngine Integration: Loop Monitors', () => {
 
     it('should run judge and continue loop when cycle is healthy', async () => {
       const config = buildConfigWithLoopMonitor(2);
-      engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         // implement
@@ -212,7 +212,7 @@ describe('PieceEngine Integration: Loop Monitors', () => {
 
     it('should abort when judge returns non-done status', async () => {
       const config = buildConfigWithLoopMonitor(1);
-      engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({ persona: 'implement', content: 'Implementation done' }),
@@ -233,7 +233,7 @@ describe('PieceEngine Integration: Loop Monitors', () => {
       ]);
 
       const abortFn = vi.fn();
-      engine.on('piece:abort', abortFn);
+      engine.on('workflow:abort', abortFn);
 
       const state = await engine.run();
 
@@ -251,7 +251,7 @@ describe('PieceEngine Integration: Loop Monitors', () => {
   describe('No trigger before threshold', () => {
     it('should not trigger judge when fewer cycles than threshold', async () => {
       const config = buildConfigWithLoopMonitor(3); // threshold = 3, only do 1 cycle
-      engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({ persona: 'implement', content: 'Implementation done' }),
@@ -270,7 +270,7 @@ describe('PieceEngine Integration: Loop Monitors', () => {
       ]);
 
       const cycleDetectedFn = vi.fn();
-      engine.on('movement:cycle_detected', cycleDetectedFn);
+      engine.on('step:cycle_detected', cycleDetectedFn);
 
       const state = await engine.run();
 
@@ -286,7 +286,7 @@ describe('PieceEngine Integration: Loop Monitors', () => {
   // 3. Validation errors
   // =====================================================
   describe('Config validation', () => {
-    it('should throw when loop_monitor cycle references nonexistent movement', () => {
+    it('should throw when loop_monitor cycle references nonexistent step', () => {
       const config = buildConfigWithLoopMonitor(3);
       config.loopMonitors = [
         {
@@ -299,11 +299,11 @@ describe('PieceEngine Integration: Loop Monitors', () => {
       ];
 
       expect(() => {
-        new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+        new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
       }).toThrow('nonexistent');
     });
 
-    it('should throw when loop_monitor judge rule references nonexistent movement', () => {
+    it('should throw when loop_monitor judge rule references nonexistent step', () => {
       const config = buildConfigWithLoopMonitor(3);
       config.loopMonitors = [
         {
@@ -316,7 +316,7 @@ describe('PieceEngine Integration: Loop Monitors', () => {
       ];
 
       expect(() => {
-        new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+        new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
       }).toThrow('nonexistent_target');
     });
   });
@@ -328,7 +328,7 @@ describe('PieceEngine Integration: Loop Monitors', () => {
     it('should work normally without loop_monitors configured', async () => {
       const config = buildConfigWithLoopMonitor(3);
       config.loopMonitors = undefined;
-      engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({ persona: 'implement', content: 'Done' }),

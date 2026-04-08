@@ -1,5 +1,5 @@
 import type { TracedValue } from 'traced-config';
-import { setNestedConfigValue, type EnvSpec, type LegacyEnvSpec } from '../env/config-env-overrides.js';
+import type { EnvSpec, LegacyEnvSpec } from '../env/config-env-overrides.js';
 
 function coerceLegacyEnvValue(rawValue: string, type: EnvSpec['type'], envKey: string): unknown {
   if (type === 'string') {
@@ -35,18 +35,14 @@ export function applyLegacyEnvSpecs(
       continue;
     }
 
-    const blocked = spec.blockedBy.some((envKey) => process.env[envKey] !== undefined);
-    if (blocked) {
-      continue;
-    }
-
-    console.warn(spec.warning);
-    const parsed = coerceLegacyEnvValue(rawValue, spec.type, spec.env);
-    setNestedConfigValue(rawConfig, spec.path, parsed);
-    legacyTraceEntries.set(spec.path, {
-      value: parsed,
-      source: spec.env,
-      origin: 'env',
-    });
+    coerceLegacyEnvValue(rawValue, spec.type, spec.env);
+    const canonicalPath = spec.blockedBy[0]
+      ?.replace(/^TAKT_/, '')
+      .toLowerCase();
+    throw new Error(
+      canonicalPath
+        ? `Configuration error: "${spec.path}" has been removed. Use "${canonicalPath}" instead.`
+        : `Configuration error: "${spec.path}" has been removed.`,
+    );
   }
 }

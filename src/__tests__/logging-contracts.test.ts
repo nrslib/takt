@@ -30,7 +30,7 @@ describe('logging contracts', () => {
       sessionId: 'session-a',
       runId: 'run-a',
       provider: 'claude',
-      movement: 'plan',
+      step: 'plan',
       enabled: false,
     });
     const usageLogger = createUsageEventLogger({
@@ -39,8 +39,8 @@ describe('logging contracts', () => {
       runId: 'run-b',
       provider: 'codex',
       providerModel: 'gpt-5-codex',
-      movement: 'implement',
-      movementType: 'normal',
+      step: 'implement',
+      stepType: 'normal',
       enabled: false,
     });
 
@@ -65,8 +65,8 @@ describe('logging contracts', () => {
         sessionId: 'session-1',
         provider: 'claude',
         providerModel: 'sonnet',
-        movement: 'implement',
-        movementType: 'normal',
+        step: 'implement',
+        stepType: 'normal',
       },
       { success: true, usage, timestamp: new Date('2026-03-04T12:00:00.000Z') },
     );
@@ -82,8 +82,8 @@ describe('logging contracts', () => {
           sessionId: 'session-2',
           provider: 'opencode',
           providerModel: 'openai/gpt-4.1',
-          movement: 'implement',
-          movementType: 'normal',
+          step: 'implement',
+          stepType: 'normal',
         },
         {
           success: true,
@@ -102,8 +102,8 @@ describe('logging contracts', () => {
           sessionId: 'session-3',
           provider: 'opencode',
           providerModel: 'openai/gpt-4.1',
-          movement: 'implement',
-          movementType: 'normal',
+          step: 'implement',
+          stepType: 'normal',
         },
         {
           success: true,

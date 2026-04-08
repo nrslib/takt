@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MockInstance } from 'vitest';
 
 const {
-  mockLoadPieceByIdentifier,
-  mockResolvePieceConfigValue,
+  mockLoadWorkflowByIdentifier,
+  mockResolveWorkflowConfigValue,
   mockHeader,
   mockInfo,
   mockError,
@@ -12,8 +12,8 @@ const {
   mockReportBuild,
   mockJudgmentBuild,
 } = vi.hoisted(() => ({
-  mockLoadPieceByIdentifier: vi.fn(),
-  mockResolvePieceConfigValue: vi.fn(),
+  mockLoadWorkflowByIdentifier: vi.fn(),
+  mockResolveWorkflowConfigValue: vi.fn(),
   mockHeader: vi.fn(),
   mockInfo: vi.fn(),
   mockError: vi.fn(),
@@ -24,29 +24,29 @@ const {
 }));
 
 vi.mock('../infra/config/index.js', () => ({
-  loadPieceByIdentifier: mockLoadPieceByIdentifier,
-  resolvePieceConfigValue: mockResolvePieceConfigValue,
+  loadWorkflowByIdentifier: mockLoadWorkflowByIdentifier,
+  resolveWorkflowConfigValue: mockResolveWorkflowConfigValue,
 }));
 
-vi.mock('../core/piece/instruction/InstructionBuilder.js', () => ({
+vi.mock('../core/workflow/instruction/InstructionBuilder.js', () => ({
   InstructionBuilder: vi.fn().mockImplementation(() => ({
     build: mockInstructionBuild,
   })),
 }));
 
-vi.mock('../core/piece/instruction/ReportInstructionBuilder.js', () => ({
+vi.mock('../core/workflow/instruction/ReportInstructionBuilder.js', () => ({
   ReportInstructionBuilder: vi.fn().mockImplementation(() => ({
     build: mockReportBuild,
   })),
 }));
 
-vi.mock('../core/piece/instruction/StatusJudgmentBuilder.js', () => ({
+vi.mock('../core/workflow/instruction/StatusJudgmentBuilder.js', () => ({
   StatusJudgmentBuilder: vi.fn().mockImplementation(() => ({
     build: mockJudgmentBuild,
   })),
 }));
 
-vi.mock('../core/piece/index.js', () => ({
+vi.mock('../core/workflow/index.js', () => ({
   needsStatusJudgmentPhase: vi.fn(() => false),
 }));
 
@@ -67,15 +67,15 @@ describe('previewPrompts', () => {
     mockInstructionBuild.mockReturnValue('phase1');
     mockReportBuild.mockReturnValue('phase2');
     mockJudgmentBuild.mockReturnValue('phase3');
-    mockResolvePieceConfigValue.mockImplementation((_: string, key: string) => {
-      if (key === 'piece') return undefined;
+    mockResolveWorkflowConfigValue.mockImplementation((_: string, key: string) => {
+      if (key === 'workflow') return undefined;
       if (key === 'language') return 'en';
       return undefined;
     });
-    mockLoadPieceByIdentifier.mockReturnValue({
+    mockLoadWorkflowByIdentifier.mockReturnValue({
       name: 'default',
-      maxMovements: 1,
-      movements: [
+      maxSteps: 1,
+      steps: [
         {
           name: 'implement',
           personaDisplayName: 'coder',
@@ -90,10 +90,10 @@ describe('previewPrompts', () => {
     consoleLogSpy.mockRestore();
   });
 
-  it('piece未設定時はDEFAULT_PIECE_NAMEでロードする', async () => {
+  it('workflow未設定時はDEFAULT_WORKFLOW_NAMEでロードする', async () => {
     await previewPrompts('/project');
 
-    expect(mockLoadPieceByIdentifier).toHaveBeenCalledWith('default', '/project');
+    expect(mockLoadWorkflowByIdentifier).toHaveBeenCalledWith('default', '/project');
   });
 
   it('step番号の見出しを表示する', async () => {
@@ -115,7 +115,7 @@ describe('previewPrompts', () => {
   });
 
   it('未存在ワークフローでは workflow 用語のエラーを表示し他の UI を出さない', async () => {
-    mockLoadPieceByIdentifier.mockReturnValueOnce(undefined);
+    mockLoadWorkflowByIdentifier.mockReturnValueOnce(undefined);
 
     await previewPrompts('/project', 'missing-workflow');
 
@@ -125,10 +125,10 @@ describe('previewPrompts', () => {
   });
 
   it('ワークフロー名とステップ表示の制御文字をサニタイズする', async () => {
-    mockLoadPieceByIdentifier.mockReturnValueOnce({
+    mockLoadWorkflowByIdentifier.mockReturnValueOnce({
       name: 'bad\x1b[31m-workflow\n',
-      maxMovements: 1,
-      movements: [
+      maxSteps: 1,
+      steps: [
         {
           name: 'impl\tstep',
           personaDisplayName: 'coder\rname',

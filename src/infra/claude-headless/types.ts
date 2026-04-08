@@ -1,5 +1,5 @@
 import type { McpServerConfig, PermissionMode } from '../../core/models/index.js';
-import type { ClaudeEffort, ClaudeSandboxSettings } from '../../core/models/piece-types.js';
+import type { ClaudeEffort, ClaudeSandboxSettings } from '../../core/models/workflow-types.js';
 import type { StreamCallback } from '../../shared/types/provider.js';
 
 export interface ClaudeHeadlessCallOptions {

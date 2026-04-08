@@ -18,7 +18,7 @@ Phase 3（ステータス判定）において、エージェントの出力を 
 
 ```
 Stage 1: structured_output  — outputSchema 付き LLM 呼び出し → structuredOutput.step（1-based integer）
-Stage 2: phase3_tag         — outputSchema なし LLM 呼び出し → content 内の [MOVEMENT:N] タグ検出
+Stage 2: phase3_tag         — outputSchema なし LLM 呼び出し → content 内の [STEP:N] タグ検出
 Stage 3: ai_judge           — evaluateCondition() による AI 条件評価
 ```
 
@@ -60,7 +60,7 @@ runStatusJudgmentPhase()
   └─ judgeStatus() → JudgeStatusResult { ruleIndex, method }
       └─ StatusJudgmentPhaseResult { tag, ruleIndex, method }
 
-MovementExecutor
+StepExecutor
   ├─ Phase 3 あり → judgeStatus の結果を直接使用（method 伝搬）
   └─ Phase 3 なし → detectMatchedRule() で Phase 1 コンテンツから検出
 ```

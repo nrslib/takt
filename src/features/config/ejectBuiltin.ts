@@ -82,26 +82,26 @@ export async function ejectBuiltin(name: string | undefined, options: EjectOptio
     return;
   }
 
-  const targetPiecesDir = options.global ? getGlobalWorkflowsDir() : getProjectWorkflowsDir(options.projectDir);
+  const targetWorkflowsDir = options.global ? getGlobalWorkflowsDir() : getProjectWorkflowsDir(options.projectDir);
   const targetLabel = options.global ? 'global (~/.takt/)' : 'project (.takt/)';
 
   info(`Ejecting workflow YAML to ${targetLabel}`);
   blankLine();
 
-  const pieceDest = resolveEjectPath(targetPiecesDir, name, '.yaml');
-  if (!pieceDest) {
+  const workflowDest = resolveEjectPath(targetWorkflowsDir, name, '.yaml');
+  if (!workflowDest) {
     error(`Invalid workflow name: ${safeName}`);
     return;
   }
-  const safePieceDest = sanitizeTerminalText(pieceDest);
-  if (existsSync(pieceDest)) {
-    warn(`User workflow already exists: ${safePieceDest}`);
+  const safeWorkflowDest = sanitizeTerminalText(workflowDest);
+  if (existsSync(workflowDest)) {
+    warn(`User workflow already exists: ${safeWorkflowDest}`);
     warn('Skipping workflow copy (user version takes priority).');
   } else {
-    mkdirSync(dirname(pieceDest), { recursive: true });
+    mkdirSync(dirname(workflowDest), { recursive: true });
     const content = readFileSync(builtinPath, 'utf-8');
-    writeFileSync(pieceDest, content, 'utf-8');
-    success(`Ejected workflow: ${safePieceDest}`);
+    writeFileSync(workflowDest, content, 'utf-8');
+    success(`Ejected workflow: ${safeWorkflowDest}`);
   }
 }
 

@@ -55,8 +55,8 @@ describe('TaskRunner - exceedTask', () => {
     const taskName = runningTask.name as string;
 
     runner.exceedTask(taskName, {
-      currentMovement: 'implement',
-      newMaxMovements: 60,
+      currentStep: 'implement',
+      newMaxSteps: 60,
       currentIteration: 30,
     });
 
@@ -75,8 +75,8 @@ describe('TaskRunner - exceedTask', () => {
     const originalStartedAt = runningTask.started_at as string;
 
     runner.exceedTask(taskName, {
-      currentMovement: 'plan',
-      newMaxMovements: 60,
+      currentStep: 'plan',
+      newMaxSteps: 60,
       currentIteration: 30,
     });
 
@@ -91,8 +91,8 @@ describe('TaskRunner - exceedTask', () => {
     const taskName = (loadTasksFile(testDir).tasks[0] as Record<string, unknown>).name as string;
 
     runner.exceedTask(taskName, {
-      currentMovement: 'plan',
-      newMaxMovements: 60,
+      currentStep: 'plan',
+      newMaxSteps: 60,
       currentIteration: 30,
     });
 
@@ -108,8 +108,8 @@ describe('TaskRunner - exceedTask', () => {
     const taskName = (loadTasksFile(testDir).tasks[0] as Record<string, unknown>).name as string;
 
     runner.exceedTask(taskName, {
-      currentMovement: 'plan',
-      newMaxMovements: 60,
+      currentStep: 'plan',
+      newMaxSteps: 60,
       currentIteration: 30,
     });
 
@@ -118,14 +118,14 @@ describe('TaskRunner - exceedTask', () => {
     expect(exceededTask.owner_pid).toBeNull();
   });
 
-  it('should record the current movement as start_step', () => {
+  it('should record the current step as start_step', () => {
     runner.addTask('Task A');
     runner.claimNextTasks(1);
     const taskName = (loadTasksFile(testDir).tasks[0] as Record<string, unknown>).name as string;
 
     runner.exceedTask(taskName, {
-      currentMovement: 'reviewers',
-      newMaxMovements: 60,
+      currentStep: 'reviewers',
+      newMaxSteps: 60,
       currentIteration: 30,
     });
 
@@ -140,8 +140,8 @@ describe('TaskRunner - exceedTask', () => {
     const taskName = (loadTasksFile(testDir).tasks[0] as Record<string, unknown>).name as string;
 
     runner.exceedTask(taskName, {
-      currentMovement: 'plan',
-      newMaxMovements: 60,
+      currentStep: 'plan',
+      newMaxSteps: 60,
       currentIteration: 30,
     });
 
@@ -156,8 +156,8 @@ describe('TaskRunner - exceedTask', () => {
     const taskName = (loadTasksFile(testDir).tasks[0] as Record<string, unknown>).name as string;
 
     runner.exceedTask(taskName, {
-      currentMovement: 'plan',
-      newMaxMovements: 60,
+      currentStep: 'plan',
+      newMaxSteps: 60,
       currentIteration: 30,
     });
 
@@ -168,8 +168,8 @@ describe('TaskRunner - exceedTask', () => {
 
   it('should throw when task is not found', () => {
     expect(() => runner.exceedTask('nonexistent-task', {
-      currentMovement: 'plan',
-      newMaxMovements: 60,
+      currentStep: 'plan',
+      newMaxSteps: 60,
       currentIteration: 30,
     })).toThrow(/not found/i);
   });
@@ -179,8 +179,8 @@ describe('TaskRunner - exceedTask', () => {
     const taskName = (loadTasksFile(testDir).tasks[0] as Record<string, unknown>).name as string;
 
     expect(() => runner.exceedTask(taskName, {
-      currentMovement: 'plan',
-      newMaxMovements: 60,
+      currentStep: 'plan',
+      newMaxSteps: 60,
       currentIteration: 0,
     })).toThrow(/not found/i);
   });
@@ -192,8 +192,8 @@ describe('TaskRunner - exceedTask', () => {
     const wt = '/tmp/takt-wt-persist-test';
 
     runner.exceedTask(taskName, {
-      currentMovement: 'plan',
-      newMaxMovements: 60,
+      currentStep: 'plan',
+      newMaxSteps: 60,
       currentIteration: 30,
       worktreePath: wt,
     });
@@ -209,8 +209,8 @@ describe('TaskRunner - exceedTask', () => {
     const taskName = (loadTasksFile(testDir).tasks[0] as Record<string, unknown>).name as string;
 
     runner.exceedTask(taskName, {
-      currentMovement: 'plan',
-      newMaxMovements: 60,
+      currentStep: 'plan',
+      newMaxSteps: 60,
       currentIteration: 30,
       branch: 'takt/issue-562',
     });
@@ -227,8 +227,8 @@ describe('TaskRunner - exceedTask', () => {
     const wt = '/tmp/takt-wt-both';
 
     runner.exceedTask(taskName, {
-      currentMovement: 'implement',
-      newMaxMovements: 55,
+      currentStep: 'implement',
+      newMaxSteps: 55,
       currentIteration: 20,
       worktreePath: wt,
       branch: 'takt/both',
@@ -246,8 +246,8 @@ describe('TaskRunner - exceedTask', () => {
     const taskName = (loadTasksFile(testDir).tasks[0] as Record<string, unknown>).name as string;
 
     runner.exceedTask(taskName, {
-      currentMovement: 'plan',
-      newMaxMovements: 60,
+      currentStep: 'plan',
+      newMaxSteps: 60,
       currentIteration: 30,
     });
 
@@ -312,7 +312,7 @@ describe('TaskRunner - requeueExceededTask', () => {
   it('should preserve exceeded_max_steps for continuation after requeue', () => {
     writeExceededRecord(testDir, {
       name: 'task-a',
-      exceeded_max_movements: 60,
+      exceeded_max_steps: 60,
       exceeded_current_iteration: 30,
     });
 
@@ -470,7 +470,7 @@ describe('TaskRunner - listExceededTasks', () => {
   it('should expose exceeded metadata in data field', () => {
     writeExceededRecord(testDir, {
       name: 'task-a',
-      exceeded_max_movements: 60,
+      exceeded_max_steps: 60,
       exceeded_current_iteration: 30,
     });
 

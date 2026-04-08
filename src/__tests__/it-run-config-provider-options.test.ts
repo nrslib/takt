@@ -8,7 +8,7 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/piece/phase-runner.js', () => ({
+vi.mock('../core/workflow/phase-runner.js', () => ({
   needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
   runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
@@ -28,7 +28,7 @@ import { TaskRunner } from '../infra/task/index.js';
 import { runAgent } from '../agents/runner.js';
 import { invalidateGlobalConfigCache } from '../infra/config/index.js';
 
-const runAllTasksNoPiece = runAllTasks as (projectCwd: string) => ReturnType<typeof runAllTasks>;
+const runAllTasksNoWorkflow = runAllTasks as (projectCwd: string) => ReturnType<typeof runAllTasks>;
 
 interface TestEnv {
   root: string;
@@ -41,17 +41,17 @@ function createEnv(): TestEnv {
   const projectDir = join(root, 'project');
   const globalDir = join(root, 'global');
 
-  mkdirSync(join(projectDir, '.takt', 'pieces', 'personas'), { recursive: true });
+  mkdirSync(join(projectDir, '.takt', 'workflows', 'personas'), { recursive: true });
   mkdirSync(globalDir, { recursive: true });
 
   writeFileSync(
-    join(projectDir, '.takt', 'pieces', 'run-config-it.yaml'),
+    join(projectDir, '.takt', 'workflows', 'run-config-it.yaml'),
     [
       'name: run-config-it',
       'description: run config provider options integration test',
-      'max_movements: 3',
-      'initial_movement: plan',
-      'movements:',
+      'max_steps: 3',
+      'initial_step: plan',
+      'steps:',
       '  - name: plan',
       '    persona: ./personas/planner.md',
       '    instruction: "{task}"',
@@ -61,7 +61,7 @@ function createEnv(): TestEnv {
     ].join('\n'),
     'utf-8',
   );
-  writeFileSync(join(projectDir, '.takt', 'pieces', 'personas', 'planner.md'), 'You are planner.', 'utf-8');
+  writeFileSync(join(projectDir, '.takt', 'workflows', 'personas', 'planner.md'), 'You are planner.', 'utf-8');
 
   return { root, projectDir, globalDir };
 }
@@ -101,7 +101,7 @@ describe('IT: runAllTasks provider_options reflection', () => {
     vi.mocked(runAgent).mockResolvedValue(mockDoneResponse());
 
     const runner = new TaskRunner(env.projectDir);
-    runner.addTask('test task', { piece: 'run-config-it' });
+    runner.addTask('test task', { workflow: 'run-config-it' });
   });
 
   afterEach(() => {
@@ -131,7 +131,7 @@ describe('IT: runAllTasks provider_options reflection', () => {
       '    network_access: false',
     ].join('\n'));
 
-    await runAllTasksNoPiece(env.projectDir);
+    await runAllTasksNoWorkflow(env.projectDir);
 
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
     expect(options?.providerOptions).toEqual({
@@ -153,7 +153,7 @@ describe('IT: runAllTasks provider_options reflection', () => {
     process.env.TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS = 'true';
     invalidateGlobalConfigCache();
 
-    await runAllTasksNoPiece(env.projectDir);
+    await runAllTasksNoWorkflow(env.projectDir);
 
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
     expect(options?.providerOptions).toEqual({

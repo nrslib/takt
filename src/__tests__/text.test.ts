@@ -76,7 +76,7 @@ describe('stripAnsi', () => {
     expect(stripAnsi('\x1b[1m\x1b[32mbold green\x1b[0m')).toBe('bold green');
   });
 
-  it('should strip cursor movement sequences', () => {
+  it('should strip cursor motion sequences', () => {
     expect(stripAnsi('\x1b[2Amove up')).toBe('move up');
   });
 

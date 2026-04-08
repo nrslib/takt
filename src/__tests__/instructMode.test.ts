@@ -7,7 +7,7 @@ import { setupRawStdin, restoreStdin, toRawInputs, createMockProvider } from './
 
 vi.mock('../infra/config/global/globalConfig.js', () => ({
   loadGlobalConfig: vi.fn(() => ({ provider: 'mock', language: 'en' })),
-  getBuiltinPiecesEnabled: vi.fn().mockReturnValue(true),
+  getBuiltinWorkflowsEnabled: vi.fn().mockReturnValue(true),
 }));
 
 vi.mock('../infra/providers/index.js', () => ({
@@ -193,9 +193,9 @@ describe('runInstructMode', () => {
 
     const runSessionContext = {
       task: 'Previous run task',
-      piece: 'default',
+      workflow: 'default',
       status: 'completed',
-      movementLogs: [
+      stepLogs: [
         { step: 'implement', persona: 'coder', status: 'completed', content: 'done' },
       ],
       reports: [
@@ -211,7 +211,7 @@ describe('runInstructMode', () => {
       expect.objectContaining({
         hasRunSession: true,
         runTask: 'Previous run task',
-        runPiece: 'default',
+        runWorkflow: 'default',
         runStatus: 'completed',
       }),
     );

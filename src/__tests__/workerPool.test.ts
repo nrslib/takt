@@ -55,7 +55,7 @@ function createTask(name: string, options?: { issue?: number }): TaskInfo {
     status: 'pending',
     data: {
       task: `Task: ${name}`,
-      piece: 'default',
+      workflow: 'default',
       ...(options?.issue !== undefined ? { issue: options.issue } : {}),
     },
   };

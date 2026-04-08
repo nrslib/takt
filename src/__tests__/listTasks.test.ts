@@ -40,8 +40,8 @@ function writeTasksFile(projectDir: string): void {
         name: 'pending-one',
         status: 'pending',
         content: 'Pending task',
-        piece: 'default-workflow',
-        start_movement: 'implement',
+        workflow: 'default-workflow',
+        start_step: 'implement',
         created_at: '2026-02-09T00:00:00.000Z',
         started_at: null,
         completed_at: null,
@@ -53,7 +53,7 @@ function writeTasksFile(projectDir: string): void {
         created_at: '2026-02-09T00:00:00.000Z',
         started_at: '2026-02-09T00:01:00.000Z',
         completed_at: '2026-02-09T00:02:00.000Z',
-        failure: { movement: 'review', error: 'boom' },
+        failure: { step: 'review', error: 'boom' },
       },
     ],
   }), 'utf-8');
@@ -74,9 +74,9 @@ describe('TaskRunner list APIs', () => {
     expect(failed[0]?.failure?.error).toBe('boom');
   });
 
-  it('should display workflow from canonical piece field only', () => {
+  it('should display workflow from canonical workflow field only', () => {
     const runner = new TaskRunner(tmpDir);
-    runner.addTask('Pending task', { piece: 'default' });
+    runner.addTask('Pending task', { workflow: 'default' });
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
 
     showTaskList(runner);
@@ -101,8 +101,8 @@ describe('listTasks non-interactive JSON output', () => {
       tasks: Array<{
         name: string;
         kind: string;
-        data?: { workflow?: string; start_step?: string; piece?: string; start_movement?: string };
-        failure?: { step?: string; movement?: string; error: string };
+        data?: { workflow?: string; start_step?: string };
+        failure?: { step?: string; error: string };
       }>;
     };
     expect(Array.isArray(payload.tasks)).toBe(true);
@@ -110,13 +110,10 @@ describe('listTasks non-interactive JSON output', () => {
     expect(payload.tasks[0]?.kind).toBe('pending');
     expect(payload.tasks[0]?.data?.workflow).toBe('default-workflow');
     expect(payload.tasks[0]?.data?.start_step).toBe('implement');
-    expect(payload.tasks[0]?.data).not.toHaveProperty('piece');
-    expect(payload.tasks[0]?.data).not.toHaveProperty('start_movement');
     expect(payload.tasks[1]?.name).toBe('failed-one');
     expect(payload.tasks[1]?.kind).toBe('failed');
     expect(payload.tasks[1]?.failure?.step).toBe('review');
     expect(payload.tasks[1]?.failure?.error).toBe('boom');
-    expect(payload.tasks[1]?.failure).not.toHaveProperty('movement');
 
     logSpy.mockRestore();
   });

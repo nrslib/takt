@@ -1,0 +1,78 @@
+name: e2e-mock-slow-multi-step
+description: Multi-step mock workflow to keep tasks in-flight long enough for SIGINT E2E
+workflow_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+personas:
+  test-coder: |
+    You are the E2E test coder.
+max_steps: 20
+initial_step: step-1
+steps:
+  - name: step-1
+    edit: true
+    persona: test-coder
+    instruction: |
+      {task}
+    rules:
+      - condition: Done
+        next: step-2
+  - name: step-2
+    edit: true
+    persona: test-coder
+    instruction: |
+      Continue task execution.
+    rules:
+      - condition: Done
+        next: step-3
+  - name: step-3
+    edit: true
+    persona: test-coder
+    instruction: |
+      Continue task execution.
+    rules:
+      - condition: Done
+        next: step-4
+  - name: step-4
+    edit: true
+    persona: test-coder
+    instruction: |
+      Continue task execution.
+    rules:
+      - condition: Done
+        next: step-5
+  - name: step-5
+    edit: true
+    persona: test-coder
+    instruction: |
+      Continue task execution.
+    rules:
+      - condition: Done
+        next: step-6
+  - name: step-6
+    edit: true
+    persona: test-coder
+    instruction: |
+      Continue task execution.
+    rules:
+      - condition: Done
+        next: step-7
+  - name: step-7
+    edit: true
+    persona: test-coder
+    instruction: |
+      Continue task execution.
+    rules:
+      - condition: Done
+        next: step-8
+  - name: step-8
+    edit: true
+    persona: test-coder
+    instruction: |
+      Finalize task execution.
+    rules:
+      - condition: Done
+        next: COMPLETE

@@ -12,7 +12,6 @@ This document provides a complete reference for all TAKT CLI commands and option
 | `-t, --task <text>` | Task content (alternative to GitHub Issue) |
 | `-i, --issue <N>` | GitHub issue number (same as `#N` in interactive mode) |
 | `-w, --workflow <name or path>` | Workflow name or path to workflow YAML file |
-| `--piece <name or path>` | Deprecated alias for `--workflow` |
 | `-b, --branch <name>` | Specify branch name (auto-generated if omitted) |
 | `--pr <number>` | PR number to fetch review comments and fix |
 | `--auto-pr` | Create PR after execution (pipeline mode only) |
@@ -24,7 +23,7 @@ This document provides a complete reference for all TAKT CLI commands and option
 | `--model <name>` | Override agent model |
 | `--config <path>` | Path to global config file (default: `~/.takt/config.yaml`) |
 
-`--workflow` is the canonical option. `--piece` remains available only as a compatibility alias, and internal implementation names still use `piece` / `movement`.
+`--workflow` is the canonical option.
 
 ## Interactive Mode
 
@@ -238,7 +237,7 @@ takt eject persona coder
 takt eject instruction plan --global
 ```
 
-Builtin and custom workflow lookup uses `workflows/` as the canonical directory name. Legacy `pieces/` directories are still supported for compatibility.
+Builtin and custom workflow lookup uses `workflows/`.
 
 ### takt clear
 
@@ -259,7 +258,7 @@ takt export-cc
 ### takt export-codex
 
 Deploy TAKT skill files as a Codex Skill (`~/.agents/skills/takt/`).
-This command deploys `SKILL.md`, `references/`, `agents/`, `pieces/`, and `facets/`. The deployed `pieces/` directory is a legacy/internal compatibility path.
+This command deploys `SKILL.md`, `references/`, `agents/`, `workflows/`, and `facets/`.
 
 ```bash
 takt export-codex
@@ -326,7 +325,7 @@ takt repertoire remove @{owner}/{repo}
 
 Installed packages are stored in `~/.takt/repertoire/` and their workflows/facets become available in workflow selection and facet resolution.
 
-When the same workflow name exists in multiple locations, TAKT resolves in this order: `.takt/workflows/` → `.takt/pieces/` → `~/.takt/workflows/` → `~/.takt/pieces/` → builtins.
+When the same workflow name exists in multiple locations, TAKT resolves in this order: `.takt/workflows/` → `~/.takt/workflows/` → builtins.
 
 ### takt purge
 

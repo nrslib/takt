@@ -14,15 +14,15 @@ import {
 import { initializeSession } from '../../interactive/sessionInitialization.js';
 import {
   resolveLanguage,
-  formatMovementPreviews,
-  type PieceContext,
+  formatStepPreviews,
+  type WorkflowContext,
 } from '../../interactive/interactive.js';
 import { buildInteractivePolicyPrompt } from '../../interactive/policyPrompt.js';
 import { createSelectActionWithoutExecute, buildReplayHint } from '../../interactive/interactive-summary.js';
 import { type RunSessionContext, formatRunSessionForPrompt } from '../../interactive/runSessionReader.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import { getLabelObject } from '../../../shared/i18n/index.js';
-import { resolvePieceConfigValues } from '../../../infra/config/index.js';
+import { resolveWorkflowConfigValues } from '../../../infra/config/index.js';
 
 export type InstructModeAction = 'execute' | 'save_task' | 'cancel';
 
@@ -56,19 +56,19 @@ function buildInstructTemplateVars(
   taskContent: string,
   retryNote: string,
   lang: 'en' | 'ja',
-  pieceContext?: PieceContext,
+  workflowContext?: WorkflowContext,
   runSessionContext?: RunSessionContext,
   previousOrderContent?: string | null,
 ): Record<string, string | boolean> {
-  const hasPiecePreview = !!pieceContext?.movementPreviews?.length;
-  const movementDetails = hasPiecePreview
-    ? formatMovementPreviews(pieceContext!.movementPreviews!, lang)
+  const hasWorkflowPreview = !!workflowContext?.stepPreviews?.length;
+  const stepDetails = hasWorkflowPreview
+    ? formatStepPreviews(workflowContext!.stepPreviews!, lang)
     : '';
 
   const hasRunSession = !!runSessionContext;
   const runPromptVars = hasRunSession
     ? formatRunSessionForPrompt(runSessionContext)
-    : { runTask: '', runPiece: '', runStatus: '', runMovementLogs: '', runReports: '' };
+    : { runTask: '', runWorkflow: '', runStatus: '', runStepLogs: '', runReports: '' };
 
   return {
     taskName,
@@ -76,9 +76,9 @@ function buildInstructTemplateVars(
     branchName,
     branchContext,
     retryNote,
-    hasPiecePreview,
-    pieceStructure: pieceContext?.pieceStructure ?? '',
-    movementDetails,
+    hasWorkflowPreview,
+    workflowStructure: workflowContext?.workflowStructure ?? '',
+    stepDetails,
     hasRunSession,
     ...runPromptVars,
     hasOrderContent: !!previousOrderContent,
@@ -93,11 +93,11 @@ export async function runInstructMode(
   taskName: string,
   taskContent: string,
   retryNote: string,
-  pieceContext?: PieceContext,
+  workflowContext?: WorkflowContext,
   runSessionContext?: RunSessionContext,
   previousOrderContent?: string | null,
 ): Promise<InstructModeResult> {
-  const globalConfig = resolvePieceConfigValues(cwd, ['language', 'provider']);
+  const globalConfig = resolveWorkflowConfigValues(cwd, ['language', 'provider']);
   const lang = resolveLanguage(globalConfig.language);
 
   if (!globalConfig.provider) {
@@ -113,7 +113,7 @@ export async function runInstructMode(
 
   const templateVars = buildInstructTemplateVars(
     branchContext, branchName, taskName, taskContent, retryNote, lang,
-    pieceContext, runSessionContext, previousOrderContent,
+    workflowContext, runSessionContext, previousOrderContent,
   );
   const systemPrompt = loadTemplate('score_instruct_system_prompt', ctx.lang, templateVars);
 
@@ -128,7 +128,7 @@ export async function runInstructMode(
     previousOrderContent: previousOrderContent ?? undefined,
   };
 
-  const result = await runConversationLoop(cwd, ctx, strategy, pieceContext, undefined);
+  const result = await runConversationLoop(cwd, ctx, strategy, workflowContext, undefined);
 
   if (result.action === 'cancel') {
     return { action: 'cancel', task: '' };

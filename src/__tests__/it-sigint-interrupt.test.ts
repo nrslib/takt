@@ -1,10 +1,10 @@
 /**
- * Integration test: SIGINT handler in executePiece().
+ * Integration test: SIGINT handler in executeWorkflow().
  *
  * Verifies that:
  * - First Ctrl+C calls interruptAllQueries() AND engine.abort()
  * - EPIPE errors from SDK are suppressed during interrupt
- * - The piece execution terminates with abort status
+ * - The workflow execution terminates with abort status
  * - QueryRegistry correctly interrupts active queries
  */
 
@@ -17,14 +17,14 @@ import { QueryRegistry } from '../infra/claude/query-manager.js';
 
 // --- Hoisted mocks (must be before vi.mock calls) ---
 
-const { mockInterruptAllQueries, MockPieceEngine } = vi.hoisted(() => {
+const { mockInterruptAllQueries, MockWorkflowEngine } = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { EventEmitter: EE } = require('node:events') as typeof import('node:events');
 
   const mockInterruptAllQueries = vi.fn().mockReturnValue(0);
 
-  // Create a mock PieceEngine class that simulates long-running execution
-  class MockPieceEngine extends EE {
+  // Create a mock WorkflowEngine class that simulates long-running execution
+  class MockWorkflowEngine extends EE {
     private abortRequested = false;
     private runResolve: ((value: { status: string; iteration: number }) => void) | null = null;
     static lastOptions: { abortSignal?: AbortSignal } | null = null;
@@ -37,15 +37,15 @@ const { mockInterruptAllQueries, MockPieceEngine } = vi.hoisted(() => {
     ) {
       super();
       if (options && typeof options === 'object') {
-        MockPieceEngine.lastOptions = options as { abortSignal?: AbortSignal };
+        MockWorkflowEngine.lastOptions = options as { abortSignal?: AbortSignal };
       }
     }
 
     abort(): void {
       this.abortRequested = true;
-      // When abort is called, emit piece:abort and resolve run()
+      // When abort is called, emit workflow:abort and resolve run()
       const state = { status: 'aborted', iteration: 1 };
-      this.emit('piece:abort', state, 'user_interrupted');
+      this.emit('workflow:abort', state, 'user_interrupted');
       if (this.runResolve) {
         this.runResolve(state);
         this.runResolve = null;
@@ -59,21 +59,21 @@ const { mockInterruptAllQueries, MockPieceEngine } = vi.hoisted(() => {
     async run(): Promise<{ status: string; iteration: number }> {
       return new Promise((resolve) => {
         this.runResolve = resolve;
-        // Simulate starting first movement
+        // Simulate starting the first step
         // The engine stays "running" until abort() is called
       });
     }
   }
 
-  return { mockInterruptAllQueries, MockPieceEngine };
+  return { mockInterruptAllQueries, MockWorkflowEngine };
 });
 
 // --- Module mocks ---
 
-vi.mock('../core/piece/index.js', async () => {
-  const errorModule = await import('../core/piece/ask-user-question-error.js');
+vi.mock('../core/workflow/index.js', async () => {
+  const errorModule = await import('../core/workflow/ask-user-question-error.js');
   return {
-    PieceEngine: MockPieceEngine,
+    WorkflowEngine: MockWorkflowEngine,
     createDenyAskUserQuestionHandler: errorModule.createDenyAskUserQuestionHandler,
   };
 });
@@ -93,8 +93,8 @@ vi.mock('../infra/config/index.js', () => ({
     global: { provider: 'claude' },
     project: {},
   }),
-  resolvePieceConfigValues: (_projectDir: string, keys: readonly string[]) => {
-    const config: Record<string, unknown> = { provider: 'claude', piece: 'default', verbose: false };
+  resolveWorkflowConfigValues: (_projectDir: string, keys: readonly string[]) => {
+    const config: Record<string, unknown> = { provider: 'claude', workflow: 'default', verbose: false };
     const result: Record<string, unknown> = {};
     for (const key of keys) {
       result[key] = config[key];
@@ -175,18 +175,18 @@ vi.mock('../shared/exitCodes.js', () => ({
 
 // --- Import under test (after mocks) ---
 
-import { executePiece } from '../features/tasks/execute/pieceExecution.js';
-import type { PieceConfig } from '../core/models/index.js';
+import { executeWorkflow } from '../features/tasks/execute/workflowExecution.js';
+import type { WorkflowConfig } from '../core/models/index.js';
 
 // --- Tests ---
 
-describe('executePiece: SIGINT handler integration', () => {
+describe('executeWorkflow: SIGINT handler integration', () => {
   let tmpDir: string;
   let savedSigintListeners: ((...args: unknown[]) => void)[];
 
   beforeEach(() => {
     vi.clearAllMocks();
-    MockPieceEngine.lastOptions = null;
+    MockWorkflowEngine.lastOptions = null;
     tmpDir = join(tmpdir(), `takt-sigint-it-${randomUUID()}`);
     mkdirSync(tmpDir, { recursive: true });
     mkdirSync(join(tmpDir, '.takt', 'reports'), { recursive: true });
@@ -210,12 +210,12 @@ describe('executePiece: SIGINT handler integration', () => {
     process.removeAllListeners('uncaughtException');
   });
 
-  function makeConfig(): PieceConfig {
+  function makeConfig(): WorkflowConfig {
     return {
       name: 'test-sigint',
-      maxMovements: 10,
-      initialMovement: 'step1',
-      movements: [
+      maxSteps: 10,
+      initialStep: 'step1',
+      steps: [
         {
           name: 'step1',
           persona: '../agents/coder.md',
@@ -234,15 +234,15 @@ describe('executePiece: SIGINT handler integration', () => {
   it('should call interruptAllQueries() on first SIGINT', async () => {
     const config = makeConfig();
 
-    // Start piece execution (engine.run() will block until abort() is called)
-    const resultPromise = executePiece(config, 'test task', tmpDir, {
+    // Start workflow execution (engine.run() will block until abort() is called)
+    const resultPromise = executeWorkflow(config, 'test task', tmpDir, {
       projectCwd: tmpDir,
     });
 
     // Wait for SIGINT handler to be registered
     await new Promise((resolve) => setTimeout(resolve, 10));
 
-    // Find the SIGINT handler added by executePiece
+    // Find the SIGINT handler added by executeWorkflow
     const allListeners = process.rawListeners('SIGINT') as ((...args: unknown[]) => void)[];
     const newListener = allListeners.find((l) => !savedSigintListeners.includes(l));
     expect(newListener).toBeDefined();
@@ -250,10 +250,10 @@ describe('executePiece: SIGINT handler integration', () => {
     // Simulate SIGINT
     newListener!();
 
-    // Wait for piece to complete
+    // Wait for workflow to complete
     const result = await resultPromise;
 
-    // Verify interruptAllQueries was called (twice: SIGINT handler + piece:abort handler)
+    // Verify interruptAllQueries was called (twice: SIGINT handler + workflow:abort handler)
     expect(mockInterruptAllQueries).toHaveBeenCalledTimes(2);
 
     // Verify abort result
@@ -263,13 +263,13 @@ describe('executePiece: SIGINT handler integration', () => {
   it('should abort provider signal on first SIGINT', async () => {
     const config = makeConfig();
 
-    const resultPromise = executePiece(config, 'test task', tmpDir, {
+    const resultPromise = executeWorkflow(config, 'test task', tmpDir, {
       projectCwd: tmpDir,
     });
 
     await new Promise((resolve) => setTimeout(resolve, 10));
 
-    const signal = MockPieceEngine.lastOptions?.abortSignal;
+    const signal = MockWorkflowEngine.lastOptions?.abortSignal;
     expect(signal).toBeDefined();
     expect(signal!.aborted).toBe(false);
 
@@ -298,7 +298,7 @@ describe('executePiece: SIGINT handler integration', () => {
       return 0;
     });
 
-    const resultPromise = executePiece(config, 'test task', tmpDir, {
+    const resultPromise = executeWorkflow(config, 'test task', tmpDir, {
       projectCwd: tmpDir,
     });
 
@@ -317,7 +317,7 @@ describe('executePiece: SIGINT handler integration', () => {
   it('should clean up EPIPE handler after execution completes', async () => {
     const config = makeConfig();
 
-    const resultPromise = executePiece(config, 'test task', tmpDir, {
+    const resultPromise = executeWorkflow(config, 'test task', tmpDir, {
       projectCwd: tmpDir,
     });
 
@@ -329,7 +329,7 @@ describe('executePiece: SIGINT handler integration', () => {
 
     await resultPromise;
 
-    // After executePiece completes, the EPIPE handler should be removed
+    // After executeWorkflow completes, the EPIPE handler should be removed
     // (The finally block calls process.removeListener('uncaughtException', onEpipe))
     // Note: we remove all in afterEach, so check before cleanup
     const uncaughtListeners = process.rawListeners('uncaughtException');
@@ -340,7 +340,7 @@ describe('executePiece: SIGINT handler integration', () => {
   it('should suppress EPIPE errors during interrupt', async () => {
     const config = makeConfig();
 
-    const resultPromise = executePiece(config, 'test task', tmpDir, {
+    const resultPromise = executeWorkflow(config, 'test task', tmpDir, {
       projectCwd: tmpDir,
     });
 

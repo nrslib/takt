@@ -1,7 +1,7 @@
 /**
  * Analytics event type definitions for metrics collection.
  *
- * Three event types capture review findings, fix actions, and movement results
+ * Three event types capture review findings, fix actions, and step results
  * for local-only analysis when analytics.enabled = true.
  */
 
@@ -17,7 +17,7 @@ export type FindingDecision = 'reject' | 'approve';
 /** Action taken to address a finding */
 export type FixActionType = 'fixed' | 'rebutted' | 'not_applicable';
 
-/** Review finding event — emitted per finding during review movements */
+/** Review finding event — emitted per finding during review steps */
 export interface ReviewFindingEvent {
   type: 'review_finding';
   findingId: string;
@@ -32,7 +32,7 @@ export interface ReviewFindingEvent {
   timestamp: string;
 }
 
-/** Fix action event — emitted per finding addressed during fix movements */
+/** Fix action event — emitted per finding addressed during fix steps */
 export interface FixActionEvent {
   type: 'fix_action';
   findingId: string;
@@ -45,10 +45,10 @@ export interface FixActionEvent {
   timestamp: string;
 }
 
-/** Movement result event — emitted after each movement completes */
-export interface MovementResultEvent {
-  type: 'movement_result';
-  movement: string;
+/** Step result event — emitted after each step completes */
+export interface StepResultEvent {
+  type: 'step_result';
+  step: string;
   provider: string;
   model: string;
   decisionTag: string;
@@ -61,4 +61,4 @@ export interface MovementResultEvent {
 export type AnalyticsEvent =
   | ReviewFindingEvent
   | FixActionEvent
-  | MovementResultEvent;
+  | StepResultEvent;

@@ -139,7 +139,7 @@ describe('buildSlackRunSummary', () => {
   function makeTask(overrides: Partial<SlackTaskDetail> & { name: string }): SlackTaskDetail {
     return {
       success: true,
-      piece: 'default',
+      workflow: 'default',
       durationSec: 30,
       ...overrides,
     };
@@ -178,7 +178,7 @@ describe('buildSlackRunSummary', () => {
     // Given
     const task = makeTask({
       name: 'task-a',
-      piece: 'default',
+      workflow: 'default',
       issueNumber: 42,
       durationSec: 30,
       branch: 'feat/task-a',
@@ -202,10 +202,10 @@ describe('buildSlackRunSummary', () => {
     const task = makeTask({
       name: 'task-b',
       success: false,
-      piece: 'review',
+      workflow: 'review',
       durationSec: 45,
       branch: 'feat/task-b',
-      failureMovement: 'ai_review',
+      failureStep: 'ai_review',
       failureError: 'Lint failed',
       failureLastMessage: 'Fix attempt timed out',
     });
@@ -224,7 +224,7 @@ describe('buildSlackRunSummary', () => {
 
   it('should omit issue when issueNumber is undefined', () => {
     // Given
-    const task = makeTask({ name: 'task-no-issue', piece: 'default', durationSec: 10 });
+    const task = makeTask({ name: 'task-no-issue', workflow: 'default', durationSec: 10 });
     const params = makeParams({ total: 1, success: 1, failed: 0, tasks: [task] });
 
     // When
@@ -236,7 +236,7 @@ describe('buildSlackRunSummary', () => {
 
   it('should omit second line when no detail fields exist for success task', () => {
     // Given
-    const task = makeTask({ name: 'task-minimal', piece: 'default', durationSec: 5 });
+    const task = makeTask({ name: 'task-minimal', workflow: 'default', durationSec: 5 });
     const params = makeParams({ total: 1, success: 1, failed: 0, tasks: [task] });
 
     // When
@@ -273,7 +273,7 @@ describe('buildSlackRunSummary', () => {
     for (let i = 0; i < 50; i++) {
       tasks.push(makeTask({
         name: `long-task-name-number-${String(i).padStart(3, '0')}`,
-        piece: 'default',
+        workflow: 'default',
         durationSec: 60,
         branch: `feat/long-branch-name-for-testing-purposes-${String(i)}`,
         worktreePath: `.worktrees/long-task-name-number-${String(i).padStart(3, '0')}`,

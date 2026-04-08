@@ -1,5 +1,5 @@
 Focus on reviewing **Terraform convention compliance**.
-Do not review AI-specific issues (already covered by the ai_review movement).
+Do not review AI-specific issues (already covered by the ai_review step).
 
 **Review criteria:**
 - Variable declaration compliance (type, description, sensitive)

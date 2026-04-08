@@ -29,7 +29,7 @@ import { resolveRef } from '../../features/repertoire/github-ref-resolver.js';
 import { atomicReplace, cleanupResiduals } from '../../features/repertoire/atomic-update.js';
 import { generateLockFile, extractCommitSha } from '../../features/repertoire/lock-file.js';
 import { TAKT_REPERTOIRE_MANIFEST_FILENAME, TAKT_REPERTOIRE_LOCK_FILENAME } from '../../features/repertoire/constants.js';
-import { summarizeFacetsByType, detectEditPieces, formatEditPieceWarnings } from '../../features/repertoire/pack-summary.js';
+import { summarizeFacetsByType, detectEditWorkflows, formatEditWorkflowWarnings } from '../../features/repertoire/pack-summary.js';
 import { confirm } from '../../shared/prompt/index.js';
 import { info, success } from '../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
@@ -128,33 +128,33 @@ export async function repertoireAddCommand(spec: string): Promise<void> {
 
     const targets = collectCopyTargets(packageRoot);
     const facetFiles = targets.filter(t => t.relativePath.startsWith('facets/'));
-    const pieceFiles = targets.filter(t => t.relativePath.startsWith('pieces/'));
+    const workflowFiles = targets.filter(t => t.relativePath.startsWith('workflows/'));
 
     const facetSummary = summarizeFacetsByType(facetFiles.map(t => t.relativePath));
 
-    const pieceYamls: Array<{ name: string; content: string }> = [];
-    for (const pf of pieceFiles) {
+    const workflowYamls: Array<{ name: string; content: string }> = [];
+    for (const workflowFile of workflowFiles) {
       try {
-        const content = readFileSync(pf.absolutePath, 'utf-8');
-        pieceYamls.push({ name: pf.relativePath.replace(/^pieces\//, ''), content });
+        const content = readFileSync(workflowFile.absolutePath, 'utf-8');
+        workflowYamls.push({ name: workflowFile.relativePath.replace(/^workflows\//, ''), content });
       } catch (err) {
-        log.debug('Failed to parse piece YAML for edit check', { path: pf.absolutePath, error: getErrorMessage(err) });
+        log.debug('Failed to parse workflow YAML for edit check', { path: workflowFile.absolutePath, error: getErrorMessage(err) });
       }
     }
-    const editPieces = detectEditPieces(pieceYamls);
+    const editWorkflows = detectEditWorkflows(workflowYamls);
 
     info(`\n📦 ${owner}/${repo} @${ref}`);
     info(`   facets:  ${facetSummary}`);
-    if (pieceFiles.length > 0) {
-      const pieceNames = pieceFiles.map(t =>
-        t.relativePath.replace(/^pieces\//, '').replace(/\.yaml$/, ''),
+    if (workflowFiles.length > 0) {
+      const workflowNames = workflowFiles.map(t =>
+        t.relativePath.replace(/^workflows\//, '').replace(/\.yaml$/, ''),
       );
-      info(`   pieces:  ${pieceFiles.length} (${pieceNames.join(', ')})`);
+      info(`   workflows:  ${workflowFiles.length} (${workflowNames.join(', ')})`);
     } else {
-      info('   pieces:  0');
+      info('   workflows:  0');
     }
-    for (const ep of editPieces) {
-      for (const warning of formatEditPieceWarnings(ep)) {
+    for (const workflow of editWorkflows) {
+      for (const warning of formatEditWorkflowWarnings(workflow)) {
         info(warning);
       }
     }

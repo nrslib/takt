@@ -8,13 +8,13 @@ import type { Status } from './status.js';
 type SessionAgentStatus = 'pending' | Status;
 
 /**
- * Session state for piece execution
+ * Session state for workflow execution
  */
 export interface SessionState {
   task: string;
   projectDir: string;
   iteration: number;
-  maxMovements: number;
+  maxSteps: number;
   coderStatus: SessionAgentStatus;
   architectStatus: SessionAgentStatus;
   supervisorStatus: SessionAgentStatus;
@@ -34,7 +34,7 @@ export function createSessionState(
     task,
     projectDir,
     iteration: 0,
-    maxMovements: 10,
+    maxSteps: 10,
     coderStatus: 'pending',
     architectStatus: 'pending',
     supervisorStatus: 'pending',
@@ -76,7 +76,7 @@ export interface InteractiveSession {
   sessionId: string | null;
   messages: ConversationMessage[];
   userApprovedTools: string[];
-  currentPiece: string;
+  currentWorkflow: string;
 }
 
 /**
@@ -92,7 +92,7 @@ export function createInteractiveSession(
     sessionId: null,
     messages: [],
     userApprovedTools: [],
-    currentPiece: 'default',
+    currentWorkflow: 'default',
     ...options,
   };
 }

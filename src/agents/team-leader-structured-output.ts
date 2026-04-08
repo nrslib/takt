@@ -1,5 +1,5 @@
 import type { Language, PartDefinition } from '../core/models/types.js';
-import { ensureUniquePartIds, parsePartDefinitionEntry } from '../core/piece/part-definition-validator.js';
+import { ensureUniquePartIds, parsePartDefinitionEntry } from '../core/workflow/part-definition-validator.js';
 import type { MorePartsResponse } from './decompose-task-usecase.js';
 
 function summarizePartContent(content: string): string {

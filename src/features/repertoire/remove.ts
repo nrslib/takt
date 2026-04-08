@@ -62,8 +62,8 @@ function scanYamlFilesInDir(dir: string, scope: string, results: ScopeReference[
  */
 export interface ScanConfig {
   /** Directories to recursively scan for YAML files containing the scope substring. */
-  piecesDirs: string[];
-  /** Individual YAML files to check for the scope substring (e.g. piece-categories.yaml). */
+  workflowDirs: string[];
+  /** Individual YAML files to check for the scope substring (e.g. workflow-categories.yaml). */
   categoriesFiles: string[];
 }
 
@@ -71,17 +71,21 @@ export interface ScanConfig {
  * Find all files that reference a given @scope package.
  *
  * Scans the 3 spec-defined locations:
- * 1. piecesDirs entries recursively (e.g. ~/.takt/pieces, .takt/pieces)
- * 2. categoriesFiles entries individually (e.g. ~/.takt/preferences/piece-categories.yaml)
+ * 1. workflowDirs entries recursively (e.g. ~/.takt/workflows, .takt/workflows)
+ * 2. categoriesFiles entries individually (e.g. ~/.takt/preferences/workflow-categories.yaml)
  *
  * @param scope  - e.g. "@nrslib/takt-fullstack"
- * @param config - explicit scan targets (piecesDirs + categoriesFiles)
+ * @param config - explicit scan targets (workflowDirs + categoriesFiles)
  */
 export function findScopeReferences(scope: string, config: ScanConfig): ScopeReference[] {
   const results: ScopeReference[] = [];
+  const scannedDirs = new Set<string>();
 
-  for (const dir of config.piecesDirs) {
-    scanYamlFilesInDir(dir, scope, results);
+  for (const dir of config.workflowDirs) {
+    if (!scannedDirs.has(dir)) {
+      scanYamlFilesInDir(dir, scope, results);
+      scannedDirs.add(dir);
+    }
   }
 
   for (const filePath of config.categoriesFiles) {

@@ -2,34 +2,34 @@
 
 ## Core Structure
 
-PieceEngine is a state machine. It manages movement transitions via EventEmitter.
+WorkflowEngine is a state machine. It manages step transitions via EventEmitter.
 
 ```
-CLI → PieceEngine → Runner (4 types) → RuleEvaluator → next movement
+CLI → WorkflowEngine → Runner (4 types) → RuleEvaluator → next step
 ```
 
 | Runner | Purpose | When to Use |
 |--------|---------|-------------|
-| MovementExecutor | Standard 3-phase execution | Default |
-| ParallelRunner | Concurrent sub-movements | parallel block |
+| StepExecutor | Standard 3-phase execution | Default |
+| ParallelRunner | Concurrent sub-steps | parallel block |
 | ArpeggioRunner | Data-driven batch processing | arpeggio block |
 | TeamLeaderRunner | Task decomposition → parallel sub-agents | team_leader block |
 
-Runners are mutually exclusive. Do not specify multiple runner types on a single movement.
+Runners are mutually exclusive. Do not specify multiple runner types on a single step.
 
 ### 3-Phase Execution Model
 
-Normal movements execute in up to 3 phases. Sessions persist across phases.
+Normal steps execute in up to 3 phases. Sessions persist across phases.
 
 | Phase | Purpose | Tools | Condition |
 |-------|---------|-------|-----------|
-| Phase 1 | Main work | Movement's allowed_tools | Always |
+| Phase 1 | Main work | Step's allowed_tools | Always |
 | Phase 2 | Report output | Write only | When output_contracts defined |
 | Phase 3 | Status judgment | None (judgment only) | When tag-based rules exist |
 
 ## Rule Evaluation
 
-RuleEvaluator determines the next movement via 5-stage fallback. Earlier match takes priority.
+RuleEvaluator determines the next step via 5-stage fallback. Earlier match takes priority.
 
 | Priority | Method | Target |
 |----------|--------|--------|
@@ -49,7 +49,7 @@ When multiple tags appear in output, the **last match** wins.
 | `all("...")` / `any("...")` | Aggregate condition | `AGGREGATE_CONDITION_REGEX` |
 | Plain string | Tag or AI fallback | — |
 
-Adding new special syntax requires updating both pieceParser.ts regex and RuleEvaluator.
+Adding new special syntax requires updating both workflowParser.ts regex and RuleEvaluator.
 
 ## Provider Integration
 
@@ -72,7 +72,7 @@ ProviderAgent.call(prompt, options) → AgentResponse
 Models resolve through 5-level priority. Higher takes precedence.
 
 1. persona_providers model specification
-2. Movement model field
+2. Step model field
 3. CLI `--model` override
 4. config.yaml (when resolved provider matches)
 5. Provider default
@@ -104,8 +104,8 @@ Uses vitest. Test file naming conventions distinguish test types.
 | Prefix | Type | Content |
 |--------|------|---------|
 | None | Unit test | Individual function/class verification |
-| `it-` | Integration test | Piece execution simulation |
-| `engine-` | Engine test | PieceEngine scenario verification |
+| `it-` | Integration test | Workflow execution simulation |
+| `engine-` | Engine test | WorkflowEngine scenario verification |
 
 ### Mock Provider
 

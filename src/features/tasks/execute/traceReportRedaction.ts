@@ -1,5 +1,5 @@
 import type {
-  TraceMovement,
+  TraceStep,
   TraceReportMode,
   TraceReportParams,
 } from './traceReportTypes.js';
@@ -26,21 +26,21 @@ function transformText(text: string, mode: TraceReportMode): string {
   return sanitizeSensitiveText(text);
 }
 
-export function cloneMovementsForMode(
-  movements: TraceMovement[],
+export function cloneStepsForMode(
+  steps: TraceStep[],
   mode: TraceReportMode,
-): TraceMovement[] {
-  return movements.map((movement) => ({
-    ...movement,
-    instruction: movement.instruction == null ? undefined : transformText(movement.instruction, mode),
-    result: movement.result
+): TraceStep[] {
+  return steps.map((step) => ({
+    ...step,
+    instruction: step.instruction == null ? undefined : transformText(step.instruction, mode),
+    result: step.result
       ? {
-          ...movement.result,
-          content: transformText(movement.result.content, mode),
-          ...(movement.result.error ? { error: transformText(movement.result.error, mode) } : {}),
+          ...step.result,
+          content: transformText(step.result.content, mode),
+          ...(step.result.error ? { error: transformText(step.result.error, mode) } : {}),
         }
       : undefined,
-    phases: movement.phases.map((phase) => ({
+    phases: step.phases.map((phase) => ({
       ...phase,
       instruction: transformText(phase.instruction, mode),
       systemPrompt: transformText(phase.systemPrompt, mode),

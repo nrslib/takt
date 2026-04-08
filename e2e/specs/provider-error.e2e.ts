@@ -33,14 +33,14 @@ describe('E2E: Provider error handling (mock)', () => {
       provider: 'claude',
     });
 
-    const piecePath = resolve(__dirname, '../fixtures/pieces/mock-single-step.yaml');
+    const workflowPath = resolve(__dirname, '../fixtures/workflows/mock-single-step.yaml');
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/execute-done.json');
 
     // When: running with --provider mock
     const result = runTakt({
       args: [
         '--task', 'Test provider override',
-        '--piece', piecePath,
+        '--workflow', workflowPath,
         '--provider', 'mock',
       ],
       cwd: repo.path,
@@ -57,15 +57,15 @@ describe('E2E: Provider error handling (mock)', () => {
   }, 240_000);
 
   it('should use default mock response when scenario entries are exhausted', () => {
-    // Given: a two-step piece with only 1 scenario entry
-    const piecePath = resolve(__dirname, '../fixtures/pieces/mock-two-step.yaml');
+    // Given: a two-step workflow with only 1 scenario entry
+    const workflowPath = resolve(__dirname, '../fixtures/workflows/mock-two-step.yaml');
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/one-entry-only.json');
 
-    // When: executing the piece (step-2 will have no scenario entry)
+    // When: executing the workflow (step-2 will have no scenario entry)
     const result = runTakt({
       args: [
         '--task', 'Test scenario exhaustion',
-        '--piece', piecePath,
+        '--workflow', workflowPath,
         '--provider', 'mock',
       ],
       cwd: repo.path,
@@ -84,13 +84,13 @@ describe('E2E: Provider error handling (mock)', () => {
 
   it('should error when scenario file does not exist', () => {
     // Given: TAKT_MOCK_SCENARIO pointing to a non-existent file
-    const piecePath = resolve(__dirname, '../fixtures/pieces/mock-single-step.yaml');
+    const workflowPath = resolve(__dirname, '../fixtures/workflows/mock-single-step.yaml');
 
     // When: executing with a bad scenario path
     const result = runTakt({
       args: [
         '--task', 'Test bad scenario',
-        '--piece', piecePath,
+        '--workflow', workflowPath,
         '--provider', 'mock',
       ],
       cwd: repo.path,

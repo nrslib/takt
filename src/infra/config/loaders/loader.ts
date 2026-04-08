@@ -4,15 +4,15 @@
  * Re-exports from specialized loaders.
  */
 
-// Piece loading
+// Workflow loading
 export {
-  getBuiltinPiece,
-  loadPiece,
-  loadPieceByIdentifier,
-  isPiecePath,
-  loadAllPieces,
-  listPieces,
-} from './pieceLoader.js';
+  getBuiltinWorkflow,
+  loadWorkflow,
+  loadWorkflowByIdentifier,
+  isWorkflowPath,
+  loadAllWorkflows,
+  listWorkflows,
+} from './workflowLoader.js';
 
 // Agent loading
 export {

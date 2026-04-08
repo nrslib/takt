@@ -1,7 +1,7 @@
 {
   "name": "takt",
   "version": "0.34.0",
-  "description": "TAKT: TAKT Agent Koordination Topology - AI Agent Piece Orchestration",
+  "description": "TAKT: TAKT Agent Koordination Topology - AI Agent Workflow Orchestration",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
@@ -38,7 +38,7 @@
     "ai",
     "agent",
     "orchestration",
-    "piece",
+    "workflow",
     "automation",
     "llm",
     "anthropic"

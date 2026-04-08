@@ -16,10 +16,10 @@ export type ProviderProfileName =
 
 /** Permission profile for a single provider. */
 export interface ProviderPermissionProfile {
-  /** Default permission mode for movements that do not have an explicit override. */
+  /** Default permission mode for steps that do not have an explicit override. */
   defaultPermissionMode: PermissionMode;
-  /** Per-movement permission overrides keyed by movement name. */
-  movementPermissionOverrides?: Record<string, PermissionMode>;
+  /** Per-step permission overrides keyed by step name. */
+  stepPermissionOverrides?: Record<string, PermissionMode>;
 }
 
 /** Provider -> permission profile map. */

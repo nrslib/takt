@@ -19,7 +19,7 @@ describe('E2E: Task content_file reference (mock)', () => {
   let isolatedEnv: IsolatedEnv;
   let repo: LocalRepo;
 
-  const piecePath = resolve(__dirname, '../fixtures/pieces/mock-single-step.yaml');
+  const workflowPath = resolve(__dirname, '../fixtures/workflows/mock-single-step.yaml');
 
   beforeEach(() => {
     isolatedEnv = createIsolatedEnv();
@@ -56,7 +56,7 @@ describe('E2E: Task content_file reference (mock)', () => {
         '  - name: content-file-task',
         '    status: pending',
         '    content_file: "./task-content.txt"',
-        `    piece: "${piecePath}"`,
+        `    workflow: "${workflowPath}"`,
         `    created_at: "${now}"`,
         '    started_at: null',
         '    completed_at: null',
@@ -94,7 +94,7 @@ describe('E2E: Task content_file reference (mock)', () => {
         '  - name: bad-content-file-task',
         '    status: pending',
         '    content_file: "./nonexistent-content.txt"',
-        `    piece: "${piecePath}"`,
+        `    workflow: "${workflowPath}"`,
         `    created_at: "${now}"`,
         '    started_at: null',
         '    completed_at: null',

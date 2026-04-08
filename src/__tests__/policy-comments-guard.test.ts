@@ -24,11 +24,11 @@ describe('policy-comments (review guard)', () => {
     expect(raw).not.toMatch(/\*\* Executable path;/);
   });
 
-  it('piece-types omits restored explainer JSDoc phrases', () => {
-    const path = join(here, '../core/models/piece-types.ts');
+  it('workflow-types omits restored explainer JSDoc phrases', () => {
+    const path = join(here, '../core/models/workflow-types.ts');
     const raw = readFileSync(path, 'utf-8');
     expect(raw).not.toContain('Output contract item configuration');
-    expect(raw).not.toContain('Piece-level default provider options');
+    expect(raw).not.toContain('Workflow-level default provider options');
     expect(raw).not.toContain('Loop monitor configuration for detecting');
   });
 
@@ -64,7 +64,7 @@ describe('policy-comments (review guard)', () => {
       'builtin-workflow-resources.test.ts',
       '../shared/types/provider.ts',
       '../infra/providers/claude-headless.ts',
-      '../core/piece/permission-profile-resolution.ts',
+      '../core/workflow/permission-profile-resolution.ts',
       '../infra/claude/options-builder.ts',
     ]) {
       const path = join(here, rel);

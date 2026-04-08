@@ -4,7 +4,7 @@
  * Covers:
  * - Allowed extensions (.md, .yaml, .yml)
  * - Disallowed extensions (.sh, .js, .env, .ts, etc.)
- * - collectCopyTargets: only facets/ and pieces/ directories copied
+ * - collectCopyTargets: only facets/ and workflows/ directories copied
  * - collectCopyTargets: symbolic links skipped
  * - collectCopyTargets: file count limit (error if exceeds MAX_FILE_COUNT)
  * - collectCopyTargets: path subdirectory scenario
@@ -86,21 +86,21 @@ describe('collectCopyTargets', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('should only include files under facets/ and pieces/ directories', () => {
-    // Given: package root with facets/, pieces/, and a README.md at root
+  it('should only include files under facets/ and workflows/ directories', () => {
+    // Given: package root with facets/, workflows/, and a README.md at root
     mkdirSync(join(tempDir, 'facets', 'personas'), { recursive: true });
-    mkdirSync(join(tempDir, 'pieces'), { recursive: true });
+    mkdirSync(join(tempDir, 'workflows'), { recursive: true });
     writeFileSync(join(tempDir, 'facets', 'personas', 'coder.md'), 'Coder persona');
-    writeFileSync(join(tempDir, 'pieces', 'expert.yaml'), 'name: expert');
+    writeFileSync(join(tempDir, 'workflows', 'expert.yaml'), 'name: expert');
     writeFileSync(join(tempDir, 'README.md'), 'Readme'); // should be excluded
 
     // When: collectCopyTargets scans the package root
     const targets = collectCopyTargets(tempDir);
     const paths = targets.map((t) => t.relativePath);
 
-    // Then: only facets/ and pieces/ files are included
+    // Then: only facets/ and workflows/ files are included
     expect(paths).toContain(join('facets', 'personas', 'coder.md'));
-    expect(paths).toContain(join('pieces', 'expert.yaml'));
+    expect(paths).toContain(join('workflows', 'expert.yaml'));
     expect(paths.some((p) => p === 'README.md')).toBe(false);
   });
 
@@ -176,9 +176,9 @@ describe('constants', () => {
     expect(ALLOWED_EXTENSIONS).toContain('.yml');
   });
 
-  it('ALLOWED_DIRS should include faceted and pieces', () => {
+  it('ALLOWED_DIRS should include facets and workflows', () => {
     expect(ALLOWED_DIRS).toContain('facets');
-    expect(ALLOWED_DIRS).toContain('pieces');
+    expect(ALLOWED_DIRS).toContain('workflows');
   });
 
   it('MAX_FILE_SIZE should be defined as a positive number', () => {

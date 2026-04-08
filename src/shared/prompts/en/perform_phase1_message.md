@@ -1,8 +1,8 @@
 <!--
   template: perform_phase1_message
   phase: 1 (main execution)
-  vars: workingDirectory, editRule, pieceName, pieceDescription, hasPieceDescription,
-        pieceStructure, iteration, movementIteration, movement, hasReport, reportInfo,
+  vars: workingDirectory, editRule, workflowName, workflowDescription, hasWorkflowDescription,
+        workflowStructure, iteration, stepIteration, stepName, hasReport, reportInfo,
         phaseNote, hasTaskSection, userRequest, hasPreviousResponse, previousResponse,
         hasUserInputs, userInputs, hasRetryNote, retryNote, hasPolicy, policyContent,
         hasKnowledge, knowledgeContent, hasQualityGates, qualityGatesContent, instructions
@@ -28,14 +28,14 @@ Knowledge may be truncated. Always follow Source paths and read original files b
 {{/if}}
 
 ## Workflow Context
-{{#if pieceName}}- Workflow: {{pieceName}}
-{{/if}}{{#if hasPieceDescription}}- Description: {{pieceDescription}}
+{{#if workflowName}}- Workflow: {{workflowName}}
+{{/if}}{{#if hasWorkflowDescription}}- Description: {{workflowDescription}}
 
-{{/if}}{{#if pieceStructure}}{{pieceStructure}}
+{{/if}}{{#if workflowStructure}}{{workflowStructure}}
 
 {{/if}}- Iteration: {{iteration}}(workflow-wide)
-- Step Iteration: {{movementIteration}}(times this step has run)
-- Step: {{movement}}
+- Step Iteration: {{stepIteration}}(times this step has run)
+- Step: {{stepName}}
 {{#if hasReport}}{{reportInfo}}
 
 {{phaseNote}}{{/if}}

@@ -1,7 +1,7 @@
 import type { Language, PartDefinition } from '../core/models/types.js';
-import type { ProviderType } from '../core/piece/types.js';
+import type { ProviderType } from '../core/workflow/types.js';
 import { runAgent, type StreamCallback } from './runner.js';
-import { parseParts } from '../core/piece/engine/task-decomposer.js';
+import { parseParts } from '../core/workflow/engine/task-decomposer.js';
 import { loadDecompositionSchema, loadMorePartsSchema } from '../infra/resources/schema-loader.js';
 import {
   buildDecomposePrompt,

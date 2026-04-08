@@ -9,6 +9,7 @@ import {
 } from '../helpers/isolated-env';
 import { runTakt } from '../helpers/takt-runner';
 import { createLocalRepo, type LocalRepo } from '../helpers/test-repo';
+import { copyWorkflowFixtureToRepo } from '../helpers/local-workflow-fixture';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -32,13 +33,16 @@ describe('E2E: Report file output (mock)', () => {
   });
 
   it('should write report file to .takt/runs/*/reports with expected content', () => {
-    const piecePath = resolve(__dirname, '../fixtures/pieces/report-judge.yaml');
+    const workflowPath = copyWorkflowFixtureToRepo(
+      repo.path,
+      resolve(__dirname, '../fixtures/workflows/report-judge.yaml'),
+    );
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/report-judge.json');
 
     const result = runTakt({
       args: [
         '--task', 'Test report output',
-        '--piece', piecePath,
+        '--workflow', workflowPath,
         '--provider', 'mock',
       ],
       cwd: repo.path,

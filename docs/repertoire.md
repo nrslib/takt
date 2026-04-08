@@ -38,11 +38,11 @@ my-takt-repertoire/
       domain.md
     instructions/
       plan.md
-  pieces/
+  workflows/
     expert.yaml
 ```
 
-Only `facets/` and `pieces/` directories are imported. In repertoire packages, workflow definitions are currently stored under `pieces/`. Other files are ignored.
+Only `facets/` and `workflows/` directories are imported. Other files are ignored.
 
 ### takt-repertoire.yaml
 
@@ -65,7 +65,7 @@ The manifest can be placed at the repository root (`takt-repertoire.yaml`) or in
 | Field | Required | Default | Description |
 |-------|----------|---------|-------------|
 | `description` | No | - | Package description |
-| `path` | No | `.` | Path to the directory containing `facets/` and workflow definitions in `pieces/` |
+| `path` | No | `.` | Path to the directory containing `facets/` and workflow definitions in `workflows/` |
 | `takt.min_version` | No | - | Minimum TAKT version required (X.Y.Z format) |
 
 ## Installation
@@ -81,7 +81,7 @@ Before installing, TAKT displays a summary of the package contents (facet counts
 ### What happens during install
 
 1. Downloads the tarball from GitHub via `gh api`
-2. Extracts only `facets/` and workflow files from `pieces/` (`.md`, `.yaml`, `.yml`)
+2. Extracts only `facets/` and workflow files from `workflows/` (`.md`, `.yaml`, `.yml`)
 3. Validates the `takt-repertoire.yaml` manifest
 4. Checks TAKT version compatibility
 5. Copies files to `~/.takt/repertoire/@{owner}/{repo}/`
@@ -163,6 +163,6 @@ Installed packages are stored under `~/.takt/repertoire/`:
         personas/
         policies/
         ...
-      pieces/                 # Workflow definitions in repertoire packages
+      workflows/              # Workflow definitions in repertoire packages
         expert.yaml
 ```

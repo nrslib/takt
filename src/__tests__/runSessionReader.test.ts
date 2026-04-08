@@ -62,7 +62,7 @@ describe('listRecentRuns', () => {
   it('should return runs sorted by startTime descending', () => {
     createRunDir(tmpDir, 'run-old', {
       task: 'Old task',
-      piece: 'default',
+      workflow: 'default',
       status: 'completed',
       startTime: '2026-01-01T00:00:00.000Z',
       logsDirectory: '.takt/runs/run-old/logs',
@@ -71,7 +71,7 @@ describe('listRecentRuns', () => {
     });
     createRunDir(tmpDir, 'run-new', {
       task: 'New task',
-      piece: 'custom',
+      workflow: 'custom',
       status: 'running',
       startTime: '2026-02-01T00:00:00.000Z',
       logsDirectory: '.takt/runs/run-new/logs',
@@ -90,7 +90,7 @@ describe('listRecentRuns', () => {
       const slug = `run-${String(i).padStart(2, '0')}`;
       createRunDir(tmpDir, slug, {
         task: `Task ${i}`,
-        piece: 'default',
+        workflow: 'default',
         status: 'completed',
         startTime: `2026-01-${String(i + 1).padStart(2, '0')}T00:00:00.000Z`,
         logsDirectory: `.takt/runs/${slug}/logs`,
@@ -128,7 +128,7 @@ describe('findRunForTask', () => {
   it('should return null when no runs match the task content', () => {
     createRunDir(tmpDir, 'run-other', {
       task: 'Different task',
-      piece: 'default',
+      workflow: 'default',
       status: 'completed',
       startTime: '2026-02-01T00:00:00.000Z',
       logsDirectory: '.takt/runs/run-other/logs',
@@ -143,7 +143,7 @@ describe('findRunForTask', () => {
   it('should return the matching run slug', () => {
     createRunDir(tmpDir, 'run-match', {
       task: 'Build login page',
-      piece: 'default',
+      workflow: 'default',
       status: 'failed',
       startTime: '2026-02-01T00:00:00.000Z',
       logsDirectory: '.takt/runs/run-match/logs',
@@ -158,7 +158,7 @@ describe('findRunForTask', () => {
   it('should return the most recent matching run when multiple exist', () => {
     createRunDir(tmpDir, 'run-old', {
       task: 'Build login page',
-      piece: 'default',
+      workflow: 'default',
       status: 'failed',
       startTime: '2026-01-01T00:00:00.000Z',
       logsDirectory: '.takt/runs/run-old/logs',
@@ -167,7 +167,7 @@ describe('findRunForTask', () => {
     });
     createRunDir(tmpDir, 'run-new', {
       task: 'Build login page',
-      piece: 'default',
+      workflow: 'default',
       status: 'failed',
       startTime: '2026-02-01T00:00:00.000Z',
       logsDirectory: '.takt/runs/run-new/logs',
@@ -192,11 +192,11 @@ describe('loadRunSessionContext', () => {
     expect(() => loadRunSessionContext(tmpDir, 'nonexistent')).toThrow('Run not found: nonexistent');
   });
 
-  it('should load context with movement logs and reports', () => {
+  it('should load context with step logs and reports', () => {
     const slug = 'test-run';
     const runDir = createRunDir(tmpDir, slug, {
       task: 'Test task',
-      piece: 'default',
+      workflow: 'default',
       status: 'completed',
       startTime: '2026-02-01T00:00:00.000Z',
       logsDirectory: `.takt/runs/${slug}/logs`,
@@ -213,7 +213,7 @@ describe('loadRunSessionContext', () => {
     mockLoadNdjsonLog.mockReturnValue({
       task: 'Test task',
       projectDir: '',
-      pieceName: 'default',
+      workflowName: 'default',
       iterations: 1,
       startTime: '2026-02-01T00:00:00.000Z',
       status: 'completed',
@@ -232,20 +232,20 @@ describe('loadRunSessionContext', () => {
     const context = loadRunSessionContext(tmpDir, slug);
 
     expect(context.task).toBe('Test task');
-    expect(context.piece).toBe('default');
+    expect(context.workflow).toBe('default');
     expect(context.status).toBe('completed');
-    expect(context.movementLogs).toHaveLength(1);
-    expect(context.movementLogs[0].step).toBe('implement');
-    expect(context.movementLogs[0].content).toBe('Implementation done');
+    expect(context.stepLogs).toHaveLength(1);
+    expect(context.stepLogs[0].step).toBe('implement');
+    expect(context.stepLogs[0].content).toBe('Implementation done');
     expect(context.reports).toHaveLength(1);
     expect(context.reports[0].filename).toBe('00-plan.md');
   });
 
-  it('should truncate movement content to 500 characters', () => {
+  it('should truncate step content to 500 characters', () => {
     const slug = 'truncate-run';
     const runDir = createRunDir(tmpDir, slug, {
       task: 'Truncate test',
-      piece: 'default',
+      workflow: 'default',
       status: 'completed',
       startTime: '2026-02-01T00:00:00.000Z',
       logsDirectory: `.takt/runs/${slug}/logs`,
@@ -259,7 +259,7 @@ describe('loadRunSessionContext', () => {
     mockLoadNdjsonLog.mockReturnValue({
       task: 'Truncate test',
       projectDir: '',
-      pieceName: 'default',
+      workflowName: 'default',
       iterations: 1,
       startTime: '2026-02-01T00:00:00.000Z',
       status: 'completed',
@@ -277,15 +277,15 @@ describe('loadRunSessionContext', () => {
 
     const context = loadRunSessionContext(tmpDir, slug);
 
-    expect(context.movementLogs[0].content.length).toBe(501); // 500 + '…'
-    expect(context.movementLogs[0].content.endsWith('…')).toBe(true);
+    expect(context.stepLogs[0].content.length).toBe(501); // 500 + '…'
+    expect(context.stepLogs[0].content.endsWith('…')).toBe(true);
   });
 
   it('should handle missing log files gracefully', () => {
     const slug = 'no-logs-run';
     createRunDir(tmpDir, slug, {
       task: 'No logs',
-      piece: 'default',
+      workflow: 'default',
       status: 'completed',
       startTime: '2026-02-01T00:00:00.000Z',
       logsDirectory: `.takt/runs/${slug}/logs`,
@@ -294,7 +294,7 @@ describe('loadRunSessionContext', () => {
     });
 
     const context = loadRunSessionContext(tmpDir, slug);
-    expect(context.movementLogs).toEqual([]);
+    expect(context.stepLogs).toEqual([]);
     expect(context.reports).toEqual([]);
   });
 
@@ -302,7 +302,7 @@ describe('loadRunSessionContext', () => {
     const slug = 'provider-events-run';
     const runDir = createRunDir(tmpDir, slug, {
       task: 'Provider events test',
-      piece: 'default',
+      workflow: 'default',
       status: 'completed',
       startTime: '2026-02-01T00:00:00.000Z',
       logsDirectory: `.takt/runs/${slug}/logs`,
@@ -315,14 +315,14 @@ describe('loadRunSessionContext', () => {
 
     const context = loadRunSessionContext(tmpDir, slug);
     expect(mockLoadNdjsonLog).not.toHaveBeenCalled();
-    expect(context.movementLogs).toEqual([]);
+    expect(context.stepLogs).toEqual([]);
   });
 
   it('should exclude usage-events log files', () => {
     const slug = 'usage-events-run';
     const runDir = createRunDir(tmpDir, slug, {
       task: 'Usage events test',
-      piece: 'default',
+      workflow: 'default',
       status: 'completed',
       startTime: '2026-02-01T00:00:00.000Z',
       logsDirectory: `.takt/runs/${slug}/logs`,
@@ -335,7 +335,7 @@ describe('loadRunSessionContext', () => {
 
     const context = loadRunSessionContext(tmpDir, slug);
     expect(mockLoadNdjsonLog).not.toHaveBeenCalled();
-    expect(context.movementLogs).toEqual([]);
+    expect(context.stepLogs).toEqual([]);
   });
 
   afterEach(() => {
@@ -347,9 +347,9 @@ describe('formatRunSessionForPrompt', () => {
   it('should format context into prompt variables', () => {
     const ctx: RunSessionContext = {
       task: 'Implement feature X',
-      piece: 'default',
+      workflow: 'default',
       status: 'completed',
-      movementLogs: [
+      stepLogs: [
         { step: 'plan', persona: 'architect', status: 'completed', content: 'Plan content' },
         { step: 'implement', persona: 'coder', status: 'completed', content: 'Code content' },
       ],
@@ -361,13 +361,13 @@ describe('formatRunSessionForPrompt', () => {
     const result = formatRunSessionForPrompt(ctx);
 
     expect(result.runTask).toBe('Implement feature X');
-    expect(result.runPiece).toBe('default');
+    expect(result.runWorkflow).toBe('default');
     expect(result.runStatus).toBe('completed');
-    expect(result.runMovementLogs).toContain('plan');
-    expect(result.runMovementLogs).toContain('architect');
-    expect(result.runMovementLogs).toContain('Plan content');
-    expect(result.runMovementLogs).toContain('implement');
-    expect(result.runMovementLogs).toContain('Code content');
+    expect(result.runStepLogs).toContain('plan');
+    expect(result.runStepLogs).toContain('architect');
+    expect(result.runStepLogs).toContain('Plan content');
+    expect(result.runStepLogs).toContain('implement');
+    expect(result.runStepLogs).toContain('Code content');
     expect(result.runReports).toContain('00-plan.md');
     expect(result.runReports).toContain('# Plan\nDetails');
   });
@@ -375,16 +375,16 @@ describe('formatRunSessionForPrompt', () => {
   it('should handle empty logs and reports', () => {
     const ctx: RunSessionContext = {
       task: 'Empty task',
-      piece: 'default',
+      workflow: 'default',
       status: 'aborted',
-      movementLogs: [],
+      stepLogs: [],
       reports: [],
     };
 
     const result = formatRunSessionForPrompt(ctx);
 
     expect(result.runTask).toBe('Empty task');
-    expect(result.runMovementLogs).toBe('');
+    expect(result.runStepLogs).toBe('');
     expect(result.runReports).toBe('');
   });
 });

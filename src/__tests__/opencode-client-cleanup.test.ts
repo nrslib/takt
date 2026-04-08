@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { AskUserQuestionDeniedError } from '../core/piece/ask-user-question-error.js';
+import { AskUserQuestionDeniedError } from '../core/workflow/ask-user-question-error.js';
 
 class MockEventStream implements AsyncGenerator<unknown, void, unknown> {
   private index = 0;

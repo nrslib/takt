@@ -33,7 +33,7 @@ export async function selectRun(
   const options: SelectOptionItem<string>[] = runs.map((run: RunSummary) => {
     const label = truncateForLabel(run.task, MAX_TASK_LABEL_LENGTH);
     const dateStr = formatDateForSelector(run.startTime, lang);
-    const description = `${dateStr} | ${run.piece} | ${run.status}`;
+    const description = `${dateStr} | ${run.workflow} | ${run.status}`;
 
     return {
       label,

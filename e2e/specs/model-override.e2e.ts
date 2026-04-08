@@ -24,13 +24,13 @@ describe('E2E: --model option override (mock)', () => {
   });
 
   it('should complete direct task execution with --model', () => {
-    const piecePath = resolve(__dirname, '../fixtures/pieces/mock-single-step.yaml');
+    const workflowPath = resolve(__dirname, '../fixtures/workflows/mock-single-step.yaml');
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/execute-done.json');
 
     const result = runTakt({
       args: [
         '--task', 'Test model override direct',
-        '--piece', piecePath,
+        '--workflow', workflowPath,
         '--provider', 'mock',
         '--model', 'mock-model-override',
       ],
@@ -47,14 +47,14 @@ describe('E2E: --model option override (mock)', () => {
   }, 240_000);
 
   it('should complete pipeline --skip-git execution with --model', () => {
-    const piecePath = resolve(__dirname, '../fixtures/pieces/mock-single-step.yaml');
+    const workflowPath = resolve(__dirname, '../fixtures/workflows/mock-single-step.yaml');
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/execute-done.json');
 
     const result = runTakt({
       args: [
         '--pipeline',
         '--task', 'Test model override pipeline',
-        '--piece', piecePath,
+        '--workflow', workflowPath,
         '--skip-git',
         '--provider', 'mock',
         '--model', 'mock-model-override',

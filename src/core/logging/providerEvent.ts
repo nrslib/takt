@@ -2,14 +2,14 @@ import type { ProviderType, StreamEvent } from '../../shared/types/provider.js';
 import type { ProviderUsageSnapshot } from '../models/response.js';
 import { USAGE_MISSING_REASONS, type UsageMissingReason } from './contracts.js';
 
-export type MovementType = 'normal' | 'parallel' | 'arpeggio' | 'team_leader';
+export type StepType = 'normal' | 'parallel' | 'arpeggio' | 'team_leader';
 
 export interface ProviderEventLogRecord {
   timestamp: string;
   provider: ProviderType;
   event_type: string;
   run_id: string;
-  movement: string;
+  step: string;
   session_id?: string;
   message_id?: string;
   call_id?: string;
@@ -22,8 +22,8 @@ export interface UsageEventLogRecord {
   session_id: string;
   provider: ProviderType;
   provider_model: string;
-  movement: string;
-  movement_type: MovementType;
+  step: string;
+  step_type: StepType;
   timestamp: string;
   success: boolean;
   usage_missing: boolean;
@@ -41,8 +41,8 @@ interface UsageEventMeta {
   sessionId: string;
   provider: ProviderType;
   providerModel: string;
-  movement: string;
-  movementType: MovementType;
+  step: string;
+  stepType: StepType;
 }
 
 interface BuildUsageRecordParams {
@@ -102,7 +102,7 @@ function assertUsageMissingReason(value: string): UsageMissingReason {
 export function normalizeProviderEvent(
   event: StreamEvent,
   provider: ProviderType,
-  movement: string,
+  step: string,
   runId: string
 ): ProviderEventLogRecord {
   const data = sanitizeData(event.data as unknown as Record<string, unknown>);
@@ -116,7 +116,7 @@ export function normalizeProviderEvent(
     provider,
     event_type: event.type,
     run_id: runId,
-    movement,
+    step,
     ...(sessionId ? { session_id: sessionId } : {}),
     ...(messageId ? { message_id: messageId } : {}),
     ...(callId ? { call_id: callId } : {}),
@@ -138,8 +138,8 @@ export function buildUsageEventRecord(
       session_id: meta.sessionId,
       provider: meta.provider,
       provider_model: meta.providerModel,
-      movement: meta.movement,
-      movement_type: meta.movementType,
+      step: meta.step,
+      step_type: meta.stepType,
       timestamp: (params.timestamp ?? new Date()).toISOString(),
       success: params.success,
       usage_missing: true,
@@ -166,8 +166,8 @@ export function buildUsageEventRecord(
     session_id: meta.sessionId,
     provider: meta.provider,
     provider_model: meta.providerModel,
-    movement: meta.movement,
-    movement_type: meta.movementType,
+    step: meta.step,
+    step_type: meta.stepType,
     timestamp: (params.timestamp ?? new Date()).toISOString(),
     success: params.success,
     usage_missing: false,

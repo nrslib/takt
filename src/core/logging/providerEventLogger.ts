@@ -9,13 +9,13 @@ export interface ProviderEventLoggerConfig {
   sessionId: string;
   runId: string;
   provider: ProviderType;
-  movement: string;
+  step: string;
   enabled: boolean;
 }
 
 export interface ProviderEventLogger {
   readonly filepath: string;
-  setMovement(movement: string): void;
+  setStep(step: string): void;
   setProvider(provider: ProviderType): void;
   wrapCallback(original?: StreamCallback): StreamCallback;
 }
@@ -31,16 +31,16 @@ export function createProviderEventLogger(config: ProviderEventLoggerConfig): Pr
     assertNonEmpty(config.logsDir, 'logsDir');
     assertNonEmpty(config.sessionId, 'sessionId');
     assertNonEmpty(config.runId, 'runId');
-    assertNonEmpty(config.movement, 'movement');
+    assertNonEmpty(config.step, 'step');
   }
 
   const filepath = join(config.logsDir, `${config.sessionId}${PROVIDER_EVENTS_LOG_FILE_SUFFIX}`);
-  let movement = config.movement;
+  let step = config.step;
   let provider = config.provider;
   let hasReportedWriteFailure = false;
 
   const write = (event: StreamEvent): void => {
-    const record = normalizeProviderEvent(event, provider, movement, config.runId);
+    const record = normalizeProviderEvent(event, provider, step, config.runId);
     try {
       appendFileSync(filepath, JSON.stringify(record) + '\n', 'utf-8');
     } catch (error) {
@@ -55,9 +55,9 @@ export function createProviderEventLogger(config: ProviderEventLoggerConfig): Pr
 
   return {
     filepath,
-    setMovement(nextMovement: string): void {
-      assertNonEmpty(nextMovement, 'movement');
-      movement = nextMovement;
+    setStep(nextStep: string): void {
+      assertNonEmpty(nextStep, 'step');
+      step = nextStep;
     },
     setProvider(nextProvider: ProviderType): void {
       provider = nextProvider;

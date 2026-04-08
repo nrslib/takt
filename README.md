@@ -92,14 +92,14 @@ takt list
 
 ## How It Works
 
-TAKT uses a music metaphor — the name itself comes from the German word for "beat" or "baton stroke," used in conducting to keep an orchestra in time. User-facing terminology uses **workflow** and **step**, while the internal canonical names remain **piece** and **movement** for backward compatibility.
+TAKT uses a music metaphor — the name itself comes from the German word for "beat" or "baton stroke," used in conducting to keep an orchestra in time. TAKT uses **workflow** and **step** consistently in both user-facing and implementation-facing terminology.
 
-A workflow is defined by a sequence of steps. Public YAML examples use `steps` and `initial_step`, while legacy `movements` and `initial_movement` are still accepted as compatibility aliases. Each step specifies a persona (who), permissions (what's allowed), and rules (what happens next). Here's a minimal example:
+A workflow is defined by a sequence of steps. Use `steps`, `initial_step`, and `max_steps`. Each step specifies a persona (who), permissions (what's allowed), and rules (what happens next). Here's a minimal example:
 
 ```yaml
 name: plan-implement-review
 initial_step: plan
-max_movements: 10
+max_steps: 10
 
 steps:
   - name: plan
@@ -127,11 +127,11 @@ steps:
         next: implement    # ← fix loop
 ```
 
-Rules determine the next step. `COMPLETE` ends the workflow successfully, `ABORT` ends with failure. See the [Workflow Guide](./docs/pieces.md) for the full schema, parallel steps, and rule condition types.
+Rules determine the next step. `COMPLETE` ends the workflow successfully, `ABORT` ends with failure. See the [Workflow Guide](./docs/workflows.md) for the full schema, parallel steps, and rule condition types.
 
-Workflow files live in `workflows/` as the official directory name. TAKT still accepts legacy `pieces/` directories and `--piece` / legacy YAML keys as compatibility input, but normal docs and UI use `workflow` / `step`.
+Workflow files live in `workflows/` as the official directory name.
 
-When the same workflow name exists in multiple locations, TAKT resolves in this order: `.takt/workflows/` → `.takt/pieces/` → `~/.takt/workflows/` → `~/.takt/pieces/` → builtins.
+When the same workflow name exists in multiple locations, TAKT resolves in this order: `.takt/workflows/` → `~/.takt/workflows/` → builtins.
 
 ## Recommended Workflows
 
@@ -198,7 +198,7 @@ You are a code reviewer specialized in security.
 
 Reference it in your workflow: `persona: my-reviewer`
 
-See the [Workflow Guide](./docs/pieces.md) and [Agent Guide](./docs/agents.md) for details.
+See the [Workflow Guide](./docs/workflows.md) and [Agent Guide](./docs/agents.md) for details.
 
 ## CI/CD
 
@@ -237,21 +237,17 @@ See the [CI/CD Guide](./docs/ci-cd.md) for full setup instructions.
 └── runs/                   # Execution reports, logs, context
 ```
 
-Legacy `pieces/` directories are still read for compatibility, but `workflows/` is the canonical name in current docs and CLI output.
+Workflow definitions are stored under `workflows/`.
 
 ## API Usage
 
 ```typescript
-import { PieceEngine, loadPiece } from 'takt';
+import { WorkflowEngine, loadWorkflow } from 'takt';
 
-const config = loadPiece('default');
+const config = loadWorkflow('default', process.cwd());
 if (!config) throw new Error('Workflow not found');
 
-const engine = new PieceEngine(config, process.cwd(), 'My task');
-engine.on('movement:complete', (movement, response) => {
-  console.log(`${movement.name}: ${response.status}`);
-});
-
+const engine = new WorkflowEngine(config, process.cwd(), 'My task');
 await engine.run();
 ```
 
@@ -261,7 +257,7 @@ await engine.run();
 |----------|-------------|
 | [CLI Reference](./docs/cli-reference.md) | All commands and options |
 | [Configuration](./docs/configuration.md) | Global and project settings |
-| [Workflow Guide](./docs/pieces.md) | Creating and customizing workflows |
+| [Workflow Guide](./docs/workflows.md) | Creating and customizing workflows |
 | [Agent Guide](./docs/agents.md) | Custom agent configuration |
 | [Builtin Catalog](./docs/builtin-catalog.md) | All builtin workflows and personas |
 | [Faceted Prompting](./docs/faceted-prompting.md) | Prompt design methodology |

@@ -162,9 +162,11 @@ describe('debug logging', () => {
         const promptsLogFile = resolvePromptsLogFilePath();
 
         writePromptLog({
-          movement: 'plan',
+          step: 'plan',
           phase: 1,
           iteration: 2,
+          systemPrompt: 'system prompt',
+          userInstruction: 'prompt text',
           prompt: 'prompt text',
           response: 'response text',
           timestamp: '2026-02-07T00:00:00.000Z',
@@ -173,16 +175,20 @@ describe('debug logging', () => {
         const content = readFileSync(promptsLogFile, 'utf-8').trim();
         expect(content).not.toBe('');
         const parsed = JSON.parse(content) as {
-          movement: string;
+          step: string;
           phase: number;
           iteration: number;
+          systemPrompt: string;
+          userInstruction: string;
           prompt: string;
           response: string;
           timestamp: string;
         };
-        expect(parsed.movement).toBe('plan');
+        expect(parsed.step).toBe('plan');
         expect(parsed.phase).toBe(1);
         expect(parsed.iteration).toBe(2);
+        expect(parsed.systemPrompt).toBe('system prompt');
+        expect(parsed.userInstruction).toBe('prompt text');
         expect(parsed.prompt).toBe('prompt text');
         expect(parsed.response).toBe('response text');
         expect(parsed.timestamp).toBe('2026-02-07T00:00:00.000Z');
@@ -193,9 +199,11 @@ describe('debug logging', () => {
 
     it('should do nothing when debug is disabled', () => {
       writePromptLog({
-        movement: 'plan',
+        step: 'plan',
         phase: 1,
         iteration: 1,
+        systemPrompt: 'system prompt',
+        userInstruction: 'ignored prompt',
         prompt: 'ignored prompt',
         response: 'ignored response',
         timestamp: '2026-02-07T00:00:00.000Z',

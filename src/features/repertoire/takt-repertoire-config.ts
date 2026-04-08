@@ -6,7 +6,7 @@
  * - path field validation (no absolute paths, no directory traversal)
  * - min_version format validation (strict semver X.Y.Z)
  * - Numeric semver comparison
- * - Package content presence check (facets/ or pieces/ must exist)
+ * - Package content presence check (facets/ or workflows/ must exist)
  * - Realpath validation to prevent symlink-based traversal outside root
  */
 
@@ -105,15 +105,15 @@ export function isVersionCompatible(minVersion: string, currentVersion: string):
 }
 
 /**
- * Check that the package root contains at least one of facets/ or pieces/.
+ * Check that the package root contains at least one of facets/ or workflows/.
  * Throws if neither exists (empty package).
  */
 export function checkPackageHasContent(packageRoot: string): void {
   const hasFacets = existsSync(join(packageRoot, 'facets'));
-  const hasPieces = existsSync(join(packageRoot, 'pieces'));
-  if (!hasFacets && !hasPieces) {
+  const hasWorkflows = existsSync(join(packageRoot, 'workflows'));
+  if (!hasFacets && !hasWorkflows) {
     throw new Error(
-      `Package at "${packageRoot}" has neither facets/ nor pieces/ directory — empty package rejected`,
+      `Package at "${packageRoot}" has neither facets/ nor workflows/ directory — empty package rejected`,
     );
   }
 }
@@ -129,16 +129,16 @@ export function checkPackageHasContentWithContext(
   context: PackageContentCheckContext,
 ): void {
   const hasFacets = existsSync(join(packageRoot, 'facets'));
-  const hasPieces = existsSync(join(packageRoot, 'pieces'));
-  if (hasFacets || hasPieces) return;
+  const hasWorkflows = existsSync(join(packageRoot, 'workflows'));
+  if (hasFacets || hasWorkflows) return;
 
   const checkedFacets = join(packageRoot, 'facets');
-  const checkedPieces = join(packageRoot, 'pieces');
+  const checkedWorkflows = join(packageRoot, 'workflows');
   const configuredPath = context.configuredPath ?? '.';
   const manifestPath = context.manifestPath ?? '(unknown)';
   const hint = configuredPath === '.'
     ? `hint: If your package content is under ".takt/", set "path: .takt" in ${TAKT_REPERTOIRE_MANIFEST_FILENAME}.`
-    : `hint: Verify "path: ${configuredPath}" points to a directory containing facets/ or pieces/.`;
+    : `hint: Verify "path: ${configuredPath}" points to a directory containing facets/ or workflows/.`;
 
   throw new Error(
     [
@@ -147,7 +147,7 @@ export function checkPackageHasContentWithContext(
       `configured path: ${configuredPath}`,
       `resolved package root: ${packageRoot}`,
       `checked: ${checkedFacets}`,
-      `checked: ${checkedPieces}`,
+      `checked: ${checkedWorkflows}`,
       hint,
     ].join('\n'),
   );

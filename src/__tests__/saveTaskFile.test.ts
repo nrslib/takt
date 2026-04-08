@@ -99,7 +99,7 @@ describe('saveTaskFile', () => {
 
   it('should include optional fields', async () => {
     await saveTaskFile(testDir, 'Task', {
-      piece: 'review',
+      workflow: 'review',
       issue: 42,
       worktree: true,
       branch: 'feat/my-branch',
@@ -108,7 +108,6 @@ describe('saveTaskFile', () => {
 
     const task = loadTasks(testDir).tasks[0]!;
     expect(task.workflow).toBe('review');
-    expect(task.piece).toBeUndefined();
     expect(task.issue).toBe(42);
     expect(task.worktree).toBe(true);
     expect(task.branch).toBe('feat/my-branch');
@@ -116,14 +115,13 @@ describe('saveTaskFile', () => {
     expect(task.task_dir).toBeTypeOf('string');
   });
 
-  it('should persist canonical workflow key instead of legacy piece key', async () => {
+  it('should persist workflow key', async () => {
     await saveTaskFile(testDir, 'Task', {
-      piece: 'review',
+      workflow: 'review',
     });
 
     const task = loadTasks(testDir).tasks[0]!;
     expect(task.workflow).toBe('review');
-    expect(task.piece).toBeUndefined();
   });
 
   it('should accept canonical workflow option and persist workflow key', async () => {
@@ -133,12 +131,11 @@ describe('saveTaskFile', () => {
 
     const task = loadTasks(testDir).tasks[0]!;
     expect(task.workflow).toBe('review');
-    expect(task.piece).toBeUndefined();
   });
 
   it('should persist base_branch when it is provided', async () => {
     await saveTaskFile(testDir, 'Task', {
-      piece: 'review',
+      workflow: 'review',
       issue: 42,
       worktree: true,
       branch: 'feature/bugfix',
@@ -219,7 +216,7 @@ describe('saveTaskFromInteractive', () => {
     expect(task.auto_pr).toBe(false);
   });
 
-  it('should display piece info when specified', async () => {
+  it('should display workflow info when specified', async () => {
     mockPromptInput.mockResolvedValueOnce('');
     mockPromptInput.mockResolvedValueOnce('');
     mockConfirm.mockResolvedValueOnce(false);

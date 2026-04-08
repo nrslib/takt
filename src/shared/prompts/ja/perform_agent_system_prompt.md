@@ -1,7 +1,7 @@
 <!--
   template: perform_agent_system_prompt
   role: system prompt for user-defined agents
-  vars: agentDefinition, pieceName, pieceDescription, currentMovement, movementsList, currentPosition
+  vars: agentDefinition, workflowName, workflowDescription, currentStep, stepsList, currentPosition
   caller: AgentRunner
 -->
 # TAKT
@@ -14,10 +14,10 @@
 - **あなたの役割**: ワークフロー全体の中で、現在のステップに割り当てられた作業を実行する
 
 ## 現在のコンテキスト
-- ワークフロー: {{pieceName}}
-- 現在のステップ: {{currentMovement}}
+- ワークフロー: {{workflowName}}
+- 現在のステップ: {{currentStep}}
 - 処理フロー:
-{{movementsList}}
+{{stepsList}}
 - 現在の位置: {{currentPosition}}
 
 前後のステップとの連携を意識して作業してください。

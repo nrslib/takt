@@ -3,34 +3,35 @@
  */
 
 export {
-  getBuiltinPiece,
-  loadPiece,
-  loadPieceByIdentifier,
-  isPiecePath,
-  getPieceDescription,
-  loadAllPieces,
-  loadAllPiecesWithSources,
-  listPieces,
-  listPieceEntries,
-  type MovementPreview,
-  type FirstMovementInfo,
-  type PieceDirEntry,
-  type PieceSource,
-  type PieceWithSource,
-} from './pieceLoader.js';
+  getBuiltinWorkflow,
+  loadWorkflow,
+  loadWorkflowByIdentifier,
+  isWorkflowPath,
+  getWorkflowDescription,
+  loadAllWorkflows,
+  loadAllWorkflowsWithSources,
+  listBuiltinWorkflowNames,
+  listWorkflows,
+  listWorkflowEntries,
+  type StepPreview,
+  type FirstStepInfo,
+  type WorkflowDirEntry,
+  type WorkflowSource,
+  type WorkflowWithSource,
+} from './workflowLoader.js';
 
 export {
   BUILTIN_CATEGORY_NAME,
   loadDefaultCategories,
   getDefaultCategoriesPath,
-  getPieceCategories,
-  buildCategorizedPieces,
-  findPieceCategories,
+  getWorkflowCategories,
+  buildCategorizedWorkflows,
+  findWorkflowCategories,
   type CategoryConfig,
-  type CategorizedPieces,
-  type MissingPiece,
-  type PieceCategoryNode,
-} from './pieceCategories.js';
+  type CategorizedWorkflows,
+  type MissingWorkflow,
+  type WorkflowCategoryNode,
+} from './workflowCategories.js';
 
 export {
   loadAgentsFromDir,

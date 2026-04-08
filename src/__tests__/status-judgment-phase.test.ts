@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { PieceMovement } from '../core/models/types.js';
-import { runStatusJudgmentPhase } from '../core/piece/status-judgment-phase.js';
+import type { WorkflowStep } from '../core/models/types.js';
+import { runStatusJudgmentPhase } from '../core/workflow/status-judgment-phase.js';
 
 describe('runStatusJudgmentPhase', () => {
   beforeEach(() => {
@@ -33,7 +33,7 @@ describe('runStatusJudgmentPhase', () => {
       ),
     };
 
-    const step: PieceMovement = {
+    const step: WorkflowStep = {
       name: 'review',
       persona: 'reviewer',
       personaDisplayName: 'reviewer',
@@ -97,7 +97,7 @@ describe('runStatusJudgmentPhase', () => {
       judgeStatus: vi.fn().mockResolvedValue({ ruleIndex: 0, method: 'structured_output' }),
     };
 
-    const step: PieceMovement = {
+    const step: WorkflowStep = {
       name: 'review',
       persona: 'reviewer',
       personaDisplayName: 'reviewer',
@@ -119,6 +119,6 @@ describe('runStatusJudgmentPhase', () => {
       updatePersonaSession: vi.fn(),
       resolveProvider: vi.fn().mockReturnValue('cursor'),
       structuredCaller,
-    })).rejects.toThrow('Status judgment requires iteration for movement "review"');
+    })).rejects.toThrow('Status judgment requires iteration for step "review"');
   });
 });

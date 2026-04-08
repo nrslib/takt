@@ -30,7 +30,7 @@ export interface PostExecutionOptions {
   shouldCreatePr: boolean;
   shouldPublishBranchToOrigin?: boolean;
   draftPr: boolean;
-  pieceIdentifier?: string;
+  workflowIdentifier?: string;
   issues?: Issue[];
   repo?: string;
 }
@@ -47,7 +47,7 @@ export interface PostExecutionResult {
  * Auto-commit, push, and optionally create a PR after successful task execution.
  */
 export async function postExecutionFlow(options: PostExecutionOptions): Promise<PostExecutionResult> {
-  const { execCwd, projectCwd, task, branch, baseBranch, shouldCreatePr, shouldPublishBranchToOrigin, draftPr, pieceIdentifier, issues, repo } = options;
+  const { execCwd, projectCwd, task, branch, baseBranch, shouldCreatePr, shouldPublishBranchToOrigin, draftPr, workflowIdentifier, issues, repo } = options;
 
   const commitResult = autoCommitAndPush(execCwd, task, projectCwd, branch);
   if (commitResult.commitHash) {
@@ -96,7 +96,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
 
   if (commitResult.commitHash && branch && shouldCreatePr) {
     const gitProvider = getGitProvider();
-    const report = pieceIdentifier ? `Workflow \`${pieceIdentifier}\` completed successfully.` : 'Task completed successfully.';
+    const report = workflowIdentifier ? `Workflow \`${workflowIdentifier}\` completed successfully.` : 'Task completed successfully.';
     const existingPr = gitProvider.findExistingPr(branch, projectCwd);
     if (existingPr) {
       const commentBody = buildPrBody(issues, report);

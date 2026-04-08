@@ -19,12 +19,12 @@ export interface SessionState {
   errorMessage?: string;
   /** Execution timestamp (ISO8601) */
   timestamp: string;
-  /** Piece name used */
-  pieceName: string;
+  /** Workflow name used */
+  workflowName: string;
   /** Task content (max 200 chars) */
   taskContent?: string;
-  /** Last movement name */
-  lastMovement?: string;
+  /** Last step name */
+  lastStep?: string;
 }
 
 /**

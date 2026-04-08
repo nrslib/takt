@@ -54,17 +54,17 @@ interactive:
     success: "✅ 前回のタスクは正常に完了しました"
     error: "❌ 前回のタスクはエラーで終了しました: {error}"
     userStopped: "⚠️ 前回のタスクはユーザーによって中断されました"
-    piece: "使用ワークフロー: {pieceName}"
+    workflow: "使用ワークフロー: {workflowName}"
     timestamp: "実行時刻: {timestamp}"
 
-# ===== Piece Execution UI =====
-piece:
+# ===== Workflow Execution UI =====
+workflow:
   teamLeader:
     decomposeWait: "チームリーダーがタスクを分解中です。しばらくお待ちください..."
     feedbackWait: "チームリーダーが結果を評価して次のタスクを計画中です..."
   iterationLimit:
-    maxReached: "最大イテレーションに到達しました ({currentIteration}/{maxMovements})"
-    currentMovement: "現在のステップ: {currentMovement}"
+    maxReached: "最大イテレーションに到達しました ({currentIteration}/{maxSteps})"
+    currentStep: "現在のステップ: {currentStep}"
     continueQuestion: "続行しますか？"
     continueLabel: "続行する（追加イテレーション数を入力）"
     continueDescription: "入力した回数だけ上限を増やします"
@@ -99,7 +99,7 @@ instruct:
 retry:
   ui:
     intro: "リトライモード - 追加指示を入力してください。コマンド: /go（指示書作成・実行）, /retry（前回の指示書で再実行）, /cancel（終了）"
-  usePreviousPieceConfirm: "前回のワークフロー \"{piece}\" を使用しますか？"
+  usePreviousWorkflowConfirm: "前回のワークフロー \"{workflow}\" を使用しますか？"
 
 run:
   notifyComplete: "run完了 ({total} tasks)"

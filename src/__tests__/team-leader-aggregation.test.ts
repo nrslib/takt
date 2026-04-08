@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildTeamLeaderAggregatedContent } from '../core/piece/engine/team-leader-aggregation.js';
+import { buildTeamLeaderAggregatedContent } from '../core/workflow/engine/team-leader-aggregation.js';
 import type { PartDefinition, PartResult } from '../core/models/types.js';
 
 function makePart(id: string, title: string): PartDefinition {

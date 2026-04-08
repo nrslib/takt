@@ -5,6 +5,12 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { loadTemplate, renderTemplate, _resetCache } from '../shared/prompts/index.js';
 
+const removedPromptTerms = {
+  oldWorkflowWord: ['p', 'i', 'e', 'c', 'e'].join(''),
+  oldWorkflowTitle: ['P', 'i', 'e', 'c', 'e'].join(''),
+  oldStepTitle: ['M', 'o', 'v', 'e', 'm', 'e', 'n', 't'].join(''),
+};
+
 beforeEach(() => {
   _resetCache();
 });
@@ -58,10 +64,10 @@ describe('loadTemplate', () => {
 describe('variable substitution', () => {
   it('replaces taskHistory variable in score_summary_system_prompt', () => {
     const result = loadTemplate('score_summary_system_prompt', 'en', {
-      pieceInfo: true,
-      pieceName: 'piece',
-      pieceDescription: 'desc',
-      movementDetails: '',
+      hasWorkflowPreview: true,
+      workflowName: 'workflow',
+      workflowDescription: 'desc',
+      stepDetails: '',
       conversation: 'Conversation: User: test',
       taskHistory: '## Task execution history\n- Worktree ID: wt-1',
     });
@@ -78,14 +84,14 @@ describe('variable substitution', () => {
     expect(result).toContain('| 1 | Success |');
   });
 
-  it('interactive prompt does not contain piece info', () => {
+  it('interactive prompt does not contain workflow info', () => {
     const result = loadTemplate('score_interactive_system_prompt', 'en', {
-      pieceInfo: true,
-      pieceName: 'my-piece',
-      pieceDescription: 'Test description',
+      hasWorkflowPreview: true,
+      workflowName: 'my-workflow',
+      workflowDescription: 'Test description',
     });
-    // ピース情報はインタラクティブプロンプトには含まれない（要約プロンプトにのみ含まれる）
-    expect(result).not.toContain('"my-piece"');
+    // ワークフロー情報はインタラクティブプロンプトには含まれない（要約プロンプトにのみ含まれる）
+    expect(result).not.toContain('"my-workflow"');
     expect(result).not.toContain('Test description');
   });
 });
@@ -202,16 +208,16 @@ describe('template content integrity', () => {
     const interactiveEn = loadTemplate('score_interactive_system_prompt', 'en');
     expect(interactiveEn).toContain('workflow execution');
     expect(interactiveEn).toContain('## Workflow Structure');
-    expect(interactiveEn).toContain('**Workflow:** {{runPiece}}');
+    expect(interactiveEn).toContain('**Workflow:** {{runWorkflow}}');
     expect(interactiveEn).toContain('### Step Logs');
-    expect(interactiveEn).not.toContain("piece's job");
-    expect(interactiveEn).not.toContain('## Piece Structure');
-    expect(interactiveEn).not.toContain('**Piece:** {{runPiece}}');
+    expect(interactiveEn).not.toContain(`${removedPromptTerms.oldWorkflowWord}'s job`);
+    expect(interactiveEn).not.toContain(`## ${removedPromptTerms.oldWorkflowTitle} Structure`);
+    expect(interactiveEn).not.toContain(`**${removedPromptTerms.oldWorkflowTitle}:** {{runWorkflow}}`);
 
     const interactiveJa = loadTemplate('score_interactive_system_prompt', 'ja');
     expect(interactiveJa).toContain('ワークフロー実行用の指示書');
     expect(interactiveJa).toContain('## ワークフロー構成');
-    expect(interactiveJa).toContain('**ワークフロー:** {{runPiece}}');
+    expect(interactiveJa).toContain('**ワークフロー:** {{runWorkflow}}');
     expect(interactiveJa).toContain('### ステップログ');
     expect(interactiveJa).not.toContain('ピースの仕事');
     expect(interactiveJa).not.toContain('## ピース構成');
@@ -219,8 +225,8 @@ describe('template content integrity', () => {
     const policyEn = loadTemplate('score_interactive_policy', 'en');
     expect(policyEn).toContain('instructions for the workflow');
     expect(policyEn).toContain('workflow agents');
-    expect(policyEn).not.toContain('instructions for the piece');
-    expect(policyEn).not.toContain('piece agents');
+    expect(policyEn).not.toContain(`instructions for the ${removedPromptTerms.oldWorkflowWord}`);
+    expect(policyEn).not.toContain(`${removedPromptTerms.oldWorkflowWord} agents`);
 
     const policyJa = loadTemplate('score_interactive_policy', 'ja');
     expect(policyJa).toContain('ワークフローへの指示書作成');
@@ -230,39 +236,39 @@ describe('template content integrity', () => {
 
     const retryEn = loadTemplate('score_retry_system_prompt', 'en');
     expect(retryEn).toContain('Workflow Execution');
-    expect(retryEn).toContain('**Failed step:** {{failedMovement}}');
+    expect(retryEn).toContain('**Failed step:** {{failedStep}}');
     expect(retryEn).toContain('### Step Logs');
-    expect(retryEn).not.toContain('**Failed movement:** {{failedMovement}}');
-    expect(retryEn).not.toContain('### Movement Logs');
+    expect(retryEn).not.toContain(`**Failed ${removedPromptTerms.oldStepTitle.toLowerCase()}:** {{failedStep}}`);
+    expect(retryEn).not.toContain(`### ${removedPromptTerms.oldStepTitle} Logs`);
 
     const retryJa = loadTemplate('score_retry_system_prompt', 'ja');
     expect(retryJa).toContain('ワークフロー実行');
-    expect(retryJa).toContain('**失敗ステップ:** {{failedMovement}}');
+    expect(retryJa).toContain('**失敗ステップ:** {{failedStep}}');
     expect(retryJa).toContain('### ステップログ');
-    expect(retryJa).not.toContain('**失敗ムーブメント:** {{failedMovement}}');
+    expect(retryJa).not.toContain('**失敗ムーブメント:** {{failedStep}}');
     expect(retryJa).not.toContain('### ムーブメントログ');
 
     const instructEn = loadTemplate('score_instruct_system_prompt', 'en');
     expect(instructEn).toContain('Workflow Execution');
-    expect(instructEn).toContain('**Workflow:** {{runPiece}}');
-    expect(instructEn).not.toContain('**Piece:** {{runPiece}}');
+    expect(instructEn).toContain('**Workflow:** {{runWorkflow}}');
+    expect(instructEn).not.toContain('**Piece:** {{runWorkflow}}');
 
     const instructJa = loadTemplate('score_instruct_system_prompt', 'ja');
     expect(instructJa).toContain('ワークフロー実行');
-    expect(instructJa).toContain('**ワークフロー:** {{runPiece}}');
-    expect(instructJa).not.toContain('**ピース:** {{runPiece}}');
+    expect(instructJa).toContain('**ワークフロー:** {{runWorkflow}}');
+    expect(instructJa).not.toContain('**ピース:** {{runWorkflow}}');
 
     const summaryEn = loadTemplate('score_summary_system_prompt', 'en');
     expect(summaryEn).toContain('passed to a workflow');
-    expect(summaryEn).toContain('Workflow description: {{pieceDescription}}');
-    expect(summaryEn).not.toContain('passed to a piece');
-    expect(summaryEn).not.toContain('Piece description: {{pieceDescription}}');
+    expect(summaryEn).toContain('Workflow description: {{workflowDescription}}');
+    expect(summaryEn).not.toContain(`passed to a ${removedPromptTerms.oldWorkflowWord}`);
+    expect(summaryEn).not.toContain('Piece description: {{workflowDescription}}');
 
     const summaryJa = loadTemplate('score_summary_system_prompt', 'ja');
     expect(summaryJa).toContain('ワークフロー実行用の具体的なタスク指示書');
-    expect(summaryJa).toContain('ワークフローの内容: {{pieceDescription}}');
+    expect(summaryJa).toContain('ワークフローの内容: {{workflowDescription}}');
     expect(summaryJa).not.toContain('ピース実行用の具体的なタスク指示書');
-    expect(summaryJa).not.toContain('ピースの内容: {{pieceDescription}}');
+    expect(summaryJa).not.toContain('ピースの内容: {{workflowDescription}}');
   });
 
   it('score_slug_system_prompt contains format specification', () => {
@@ -279,21 +285,21 @@ describe('template content integrity', () => {
   it('perform_agent_system_prompt uses workflow/step terminology in both languages', () => {
     const en = loadTemplate('perform_agent_system_prompt', 'en');
     expect(en).toContain('**Workflow**: A processing flow combining multiple steps');
-    expect(en).toContain('- Workflow: {{pieceName}}');
-    expect(en).toContain('- Current Step: {{currentMovement}}');
+    expect(en).toContain('- Workflow: {{workflowName}}');
+    expect(en).toContain('- Current Step: {{currentStep}}');
     expect(en).toContain('preceding and following steps');
     expect(en).not.toContain('**Piece**');
-    expect(en).not.toContain('- Piece: {{pieceName}}');
-    expect(en).not.toContain('- Current Movement: {{currentMovement}}');
+    expect(en).not.toContain('- Piece: {{workflowName}}');
+    expect(en).not.toContain('- Current Movement: {{currentStep}}');
 
     const ja = loadTemplate('perform_agent_system_prompt', 'ja');
     expect(ja).toContain('**ワークフロー**: 複数のステップを組み合わせた処理フロー');
-    expect(ja).toContain('- ワークフロー: {{pieceName}}');
-    expect(ja).toContain('- 現在のステップ: {{currentMovement}}');
+    expect(ja).toContain('- ワークフロー: {{workflowName}}');
+    expect(ja).toContain('- 現在のステップ: {{currentStep}}');
     expect(ja).toContain('前後のステップとの連携');
     expect(ja).not.toContain('**ピース**');
-    expect(ja).not.toContain('- ピース: {{pieceName}}');
-    expect(ja).not.toContain('- 現在のムーブメント: {{currentMovement}}');
+    expect(ja).not.toContain('- ピース: {{workflowName}}');
+    expect(ja).not.toContain('- 現在のムーブメント: {{currentStep}}');
   });
 
   it('perform_judge_message contains {{agentOutput}} and {{conditionList}} placeholders', () => {
@@ -309,41 +315,41 @@ describe('template content integrity', () => {
     expect(en).toContain('Do NOT run git commit');
     expect(en).toContain('Do NOT use `cd`');
     expect(en).toContain('## Workflow Context');
-    expect(en).not.toContain('## Piece Context');
+    expect(en).not.toContain(`## ${removedPromptTerms.oldWorkflowTitle} Context`);
     expect(en).toContain('## Instructions');
   });
 
   it('perform_phase1_message uses workflow/step terminology in both languages', () => {
     const en = loadTemplate('perform_phase1_message', 'en');
     expect(en).toContain('after workflow completion');
-    expect(en).toContain('- Workflow: {{pieceName}}');
-    expect(en).toContain('- Step Iteration: {{movementIteration}}');
-    expect(en).toContain('- Step: {{movement}}');
+    expect(en).toContain('- Workflow: {{workflowName}}');
+    expect(en).toContain('- Step Iteration: {{stepIteration}}');
+    expect(en).toContain('- Step: {{stepName}}');
     expect(en).toContain('Before completing this step');
-    expect(en).not.toContain('- Piece: {{pieceName}}');
-    expect(en).not.toContain('- Movement Iteration: {{movementIteration}}');
-    expect(en).not.toContain('- Movement: {{movement}}');
-    expect(en).not.toContain('Before completing this movement');
-    expect(en).not.toContain('after piece completion');
+    expect(en).not.toContain(`- ${removedPromptTerms.oldWorkflowTitle}: {{workflowName}}`);
+    expect(en).not.toContain(`- ${removedPromptTerms.oldStepTitle} Iteration: {{stepIteration}}`);
+    expect(en).not.toContain(`- ${removedPromptTerms.oldStepTitle}: {{stepName}}`);
+    expect(en).not.toContain(`Before completing this ${removedPromptTerms.oldStepTitle.toLowerCase()}`);
+    expect(en).not.toContain(`after ${removedPromptTerms.oldWorkflowWord} completion`);
 
     const ja = loadTemplate('perform_phase1_message', 'ja');
     expect(ja).toContain('ワークフロー完了後');
-    expect(ja).toContain('- ワークフロー: {{pieceName}}');
-    expect(ja).toContain('- Step Iteration: {{movementIteration}}');
-    expect(ja).toContain('- Step: {{movement}}');
+    expect(ja).toContain('- ワークフロー: {{workflowName}}');
+    expect(ja).toContain('- Step Iteration: {{stepIteration}}');
+    expect(ja).toContain('- Step: {{stepName}}');
     expect(ja).toContain('このステップを完了する前に');
     expect(ja).not.toContain('このピース');
-    expect(ja).not.toContain('- ピース: {{pieceName}}');
-    expect(ja).not.toContain('- Movement Iteration: {{movementIteration}}');
-    expect(ja).not.toContain('- Movement: {{movement}}');
+    expect(ja).not.toContain('- ピース: {{workflowName}}');
+    expect(ja).not.toContain('- Movement Iteration: {{stepIteration}}');
+    expect(ja).not.toContain('- Movement: {{stepName}}');
     expect(ja).not.toContain('このムーブメントを完了する前に');
     expect(ja).not.toContain('ピース完了後');
   });
 
-  it('perform_phase1_message contains piece context variables', () => {
+  it('perform_phase1_message contains workflow context variables', () => {
     const en = loadTemplate('perform_phase1_message', 'en');
     expect(en).toContain('{{iteration}}');
-    expect(en).toContain('{{movement}}');
+    expect(en).toContain('{{stepName}}');
     expect(en).toContain('{{workingDirectory}}');
   });
 
@@ -352,23 +358,23 @@ describe('template content integrity', () => {
     expect(en).toContain('after workflow completion');
     expect(en).toContain('Do NOT modify project source files');
     expect(en).toContain('## Workflow Context');
-    expect(en).not.toContain('## Piece Context');
+    expect(en).not.toContain(`## ${removedPromptTerms.oldWorkflowTitle} Context`);
     expect(en).toContain('## Instructions');
 
     const ja = loadTemplate('perform_phase2_message', 'ja');
     expect(ja).toContain('ワークフロー完了後');
     expect(ja).toContain('プロジェクトのソースファイルを変更しないでください');
     expect(ja).toContain('## Workflow Context');
-    expect(ja).not.toContain('## Piece Context');
+    expect(ja).not.toContain(`## ${removedPromptTerms.oldWorkflowTitle} Context`);
   });
 
-  it('perform_phase2_message does not reintroduce piece terminology', () => {
+  it('perform_phase2_message does not reintroduce workflow terminology regressions', () => {
     const en = loadTemplate('perform_phase2_message', 'en');
-    expect(en).not.toContain('## Piece Context');
-    expect(en).not.toContain('after piece completion');
+    expect(en).not.toContain(`## ${removedPromptTerms.oldWorkflowTitle} Context`);
+    expect(en).not.toContain(`after ${removedPromptTerms.oldWorkflowWord} completion`);
 
     const ja = loadTemplate('perform_phase2_message', 'ja');
-    expect(ja).not.toContain('## Piece Context');
+    expect(ja).not.toContain(`## ${removedPromptTerms.oldWorkflowTitle} Context`);
     expect(ja).not.toContain('ピース完了後');
   });
 

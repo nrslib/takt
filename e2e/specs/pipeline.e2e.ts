@@ -41,14 +41,14 @@ describe.skipIf(!isGitHubAvailable())('E2E: Pipeline mode (--pipeline --auto-pr)
     }
   });
 
-  it('should execute full CI pipeline: branch → piece → commit → push → PR', () => {
-    const piecePath = resolve(__dirname, '../fixtures/pieces/simple.yaml');
+  it('should execute full CI pipeline: branch → workflow → commit → push → PR', () => {
+    const workflowPath = resolve(__dirname, '../fixtures/workflows/simple.yaml');
 
     const result = runTakt({
       args: [
         '--pipeline',
         '--task', 'Create a file called hello.txt with the content "Hello World"',
-        '--piece', piecePath,
+        '--workflow', workflowPath,
         '--auto-pr',
         '--repo', testRepo.repoName,
       ],
@@ -60,7 +60,7 @@ describe.skipIf(!isGitHubAvailable())('E2E: Pipeline mode (--pipeline --auto-pr)
     // Pipeline should succeed
     expect(result.exitCode).toBe(0);
 
-    // Verify piece completion message
+    // Verify workflow completion message
     expect(result.stdout).toContain('completed');
 
     // Verify PR was created

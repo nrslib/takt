@@ -7,10 +7,10 @@
 // Models
 export type {
   Status,
-  PieceRule,
-  PieceMovement,
-  PieceConfig,
-  PieceState,
+  WorkflowRule,
+  WorkflowStep,
+  WorkflowConfig,
+  WorkflowState,
   Language,
   PartDefinition,
   PartResult,
@@ -18,16 +18,16 @@ export type {
 
 // Configuration
 export {
-  loadPiece,
-  loadPieceByIdentifier,
-  listPieces,
-  loadAllPieces,
-  loadAllPiecesWithSources,
-  getPieceDescription,
-  getBuiltinPiece,
-  isPiecePath,
+  loadWorkflow,
+  loadWorkflowByIdentifier,
+  listWorkflows,
+  loadAllWorkflows,
+  loadAllWorkflowsWithSources,
+  getWorkflowDescription,
+  getBuiltinWorkflow,
+  isWorkflowPath,
 } from './infra/config/loaders/index.js';
-export type { PieceSource, PieceWithSource } from './infra/config/loaders/index.js';
+export type { WorkflowSource as WorkflowSource, WorkflowWithSource as WorkflowWithSource } from './infra/config/loaders/workflowLoader.js';
 export {
   saveProjectConfig,
   updateProjectConfig,
@@ -35,20 +35,20 @@ export {
   type ProjectLocalConfig,
 } from './infra/config/project/index.js';
 
-// Piece engine
+// Workflow engine
 export {
-  PieceEngine,
+  WorkflowEngine,
   isOutputContractItem,
-} from './core/piece/index.js';
+} from './core/workflow/index.js';
 export type {
-  PieceEvents,
+  WorkflowEvents,
   UserInputRequest,
   IterationLimitRequest,
   SessionUpdateCallback,
   IterationLimitCallback,
-  PieceEngineOptions,
+  WorkflowEngineOptions,
   ProviderType,
-} from './core/piece/index.js';
+} from './core/workflow/index.js';
 
 // Agent usecases
 export {

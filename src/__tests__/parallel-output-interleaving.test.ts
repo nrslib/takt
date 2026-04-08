@@ -3,8 +3,8 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { ParallelLogger } from '../core/piece/index.js';
-import type { StreamEvent } from '../core/piece/index.js';
+import { ParallelLogger } from '../core/workflow/index.js';
+import type { StreamEvent } from '../core/workflow/index.js';
 
 describe('stream output interleaving', () => {
   let output: string[];
@@ -18,7 +18,7 @@ describe('stream output interleaving', () => {
     vi.useFakeTimers();
 
     const logger = new ParallelLogger({
-      subMovementNames: ['testing-review'],
+      subStepNames: ['testing-review'],
       writeFn: (text) => output.push(`STDOUT:${text}`),
       flushIntervalMs: 10,
       minTimedFlushChars: 24,

@@ -331,7 +331,7 @@ Key properties:
 
 ```yaml
 name: my-workflow
-max_movements: 10
+max_steps: 10
 initial_step: plan
 
 steps:
@@ -362,7 +362,7 @@ steps:
         next: implement
 ```
 
-Legacy `movements` / `initial_movement` keys remain accepted as compatibility aliases, but public examples use `steps` / `initial_step`. The engine resolves each key to its file, reads the content, and assembles the final prompt at runtime. The workflow author never writes a monolithic prompt — only selects which facets to combine.
+The engine resolves each key to its file, reads the content, and assembles the final prompt at runtime. The workflow author never writes a monolithic prompt — only selects which facets to combine.
 
 ## How It Differs from Existing Approaches
 

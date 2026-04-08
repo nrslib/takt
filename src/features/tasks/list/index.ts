@@ -90,7 +90,7 @@ async function showFailedTaskAndPromptAction(task: TaskListItem): Promise<Failed
   return await selectOption<FailedTaskAction>(
     `Action for ${task.name}:`,
     [
-      { label: 'Retry', value: 'retry', description: 'Requeue task and select start movement' },
+      { label: 'Retry', value: 'retry', description: 'Requeue task and select start step' },
       { label: 'Delete', value: 'delete', description: 'Remove this task permanently' },
     ],
   );

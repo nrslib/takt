@@ -24,15 +24,15 @@ Store task metadata in `.takt/tasks.yaml`, and point to the task directory with 
     - name: add-auth-feature
       status: pending
       task_dir: .takt/tasks/20260201-015714-foptng
-      piece: default
+      workflow: default
       created_at: "2026-02-01T01:57:14.000Z"
       started_at: null
       completed_at: null
 
 Fields:
   task_dir   (recommended)  Path to task directory that contains `order.md`
-  content    (legacy)       Inline task text (kept for compatibility)
-  content_file (legacy)     Path to task text file (kept for compatibility)
+  content    Inline task text
+  content_file Path to task text file
 
 ## Command Behavior
 

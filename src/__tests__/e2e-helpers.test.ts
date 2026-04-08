@@ -88,8 +88,8 @@ describe('createIsolatedEnv', () => {
     expect(config.notification_sound).toBe(false);
     expect(config.notification_sound_events).toEqual({
       iteration_limit: false,
-      piece_complete: false,
-      piece_abort: false,
+      workflow_complete: false,
+      workflow_abort: false,
       run_complete: true,
       run_abort: false,
     });
@@ -126,8 +126,8 @@ describe('createIsolatedEnv', () => {
     expect(config.notification_sound).toBe(false);
     expect(config.notification_sound_events).toEqual({
       iteration_limit: false,
-      piece_complete: false,
-      piece_abort: false,
+      workflow_complete: false,
+      workflow_abort: false,
       run_complete: true,
       run_abort: false,
     });
@@ -149,8 +149,8 @@ describe('createIsolatedEnv', () => {
 
     expect(config.notification_sound_events).toEqual({
       iteration_limit: false,
-      piece_complete: false,
-      piece_abort: false,
+      workflow_complete: false,
+      workflow_abort: false,
       run_complete: false,
       run_abort: false,
     });

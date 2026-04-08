@@ -1,5 +1,5 @@
 Implement according to the plan, making existing tests pass.
-Refer only to files within the Report Directory shown in the Piece Context. Do not search or reference other report directories.
+Refer only to files within the Report Directory shown in the Workflow Context. Do not search or reference other report directories.
 Use reports in the Report Directory as the primary source of truth. If additional context is needed, you may consult Previous Response and conversation history as secondary sources (Previous Response may be unavailable). If information conflicts, prioritize reports in the Report Directory and actual file contents.
 
 **Important**: Tests have already been written. Implement production code to make existing tests pass.

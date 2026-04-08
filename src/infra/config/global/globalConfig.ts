@@ -12,7 +12,7 @@ export {
 
 export {
   getDisabledBuiltins,
-  getBuiltinPiecesEnabled,
+  getBuiltinWorkflowsEnabled,
   getLanguage,
   setLanguage,
   setProvider,

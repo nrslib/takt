@@ -11,23 +11,23 @@ import {
   hasOnlyOneBranch,
   getAutoSelectedTag,
   getReportFiles,
-} from '../core/piece/evaluation/rule-utils.js';
+} from '../core/workflow/evaluation/rule-utils.js';
 import type { OutputContractEntry } from '../core/models/types.js';
-import { makeMovement } from './test-helpers.js';
+import { makeStep } from './test-helpers.js';
 
 describe('hasTagBasedRules', () => {
-  it('should return false when movement has no rules', () => {
-    const step = makeMovement({ rules: undefined });
+  it('should return false when step has no rules', () => {
+    const step = makeStep({ rules: undefined });
     expect(hasTagBasedRules(step)).toBe(false);
   });
 
   it('should return false when rules array is empty', () => {
-    const step = makeMovement({ rules: [] });
+    const step = makeStep({ rules: [] });
     expect(hasTagBasedRules(step)).toBe(false);
   });
 
   it('should return true when rules contain tag-based conditions', () => {
-    const step = makeMovement({
+    const step = makeStep({
       rules: [
         { condition: 'approved' },
         { condition: 'rejected' },
@@ -37,7 +37,7 @@ describe('hasTagBasedRules', () => {
   });
 
   it('should return false when all rules are ai() conditions', () => {
-    const step = makeMovement({
+    const step = makeStep({
       rules: [
         { condition: 'approved', isAiCondition: true, aiConditionText: 'is it approved?' },
         { condition: 'rejected', isAiCondition: true, aiConditionText: 'is it rejected?' },
@@ -47,7 +47,7 @@ describe('hasTagBasedRules', () => {
   });
 
   it('should return false when all rules are aggregate conditions', () => {
-    const step = makeMovement({
+    const step = makeStep({
       rules: [
         { condition: 'all approved', isAggregateCondition: true, aggregateType: 'all', aggregateConditionText: 'approved' },
       ],
@@ -56,7 +56,7 @@ describe('hasTagBasedRules', () => {
   });
 
   it('should return true when mixed rules include tag-based ones', () => {
-    const step = makeMovement({
+    const step = makeStep({
       rules: [
         { condition: 'approved', isAiCondition: true, aiConditionText: 'approved?' },
         { condition: 'manual check' },
@@ -68,24 +68,24 @@ describe('hasTagBasedRules', () => {
 
 describe('hasOnlyOneBranch', () => {
   it('should return false when rules is undefined', () => {
-    const step = makeMovement({ rules: undefined });
+    const step = makeStep({ rules: undefined });
     expect(hasOnlyOneBranch(step)).toBe(false);
   });
 
   it('should return false when rules array is empty', () => {
-    const step = makeMovement({ rules: [] });
+    const step = makeStep({ rules: [] });
     expect(hasOnlyOneBranch(step)).toBe(false);
   });
 
   it('should return true when exactly one rule exists', () => {
-    const step = makeMovement({
+    const step = makeStep({
       rules: [{ condition: 'done', next: 'COMPLETE' }],
     });
     expect(hasOnlyOneBranch(step)).toBe(true);
   });
 
   it('should return false when multiple rules exist', () => {
-    const step = makeMovement({
+    const step = makeStep({
       rules: [
         { condition: 'approved', next: 'implement' },
         { condition: 'rejected', next: 'review' },
@@ -96,8 +96,8 @@ describe('hasOnlyOneBranch', () => {
 });
 
 describe('getAutoSelectedTag', () => {
-  it('should return uppercase tag for single-branch movement', () => {
-    const step = makeMovement({
+  it('should return uppercase tag for single-branch step', () => {
+    const step = makeStep({
       name: 'ai-review',
       rules: [{ condition: 'done', next: 'COMPLETE' }],
     });
@@ -105,7 +105,7 @@ describe('getAutoSelectedTag', () => {
   });
 
   it('should throw when multiple branches exist', () => {
-    const step = makeMovement({
+    const step = makeStep({
       rules: [
         { condition: 'approved', next: 'implement' },
         { condition: 'rejected', next: 'review' },
@@ -115,7 +115,7 @@ describe('getAutoSelectedTag', () => {
   });
 
   it('should throw when no rules exist', () => {
-    const step = makeMovement({ rules: undefined });
+    const step = makeStep({ rules: undefined });
     expect(() => getAutoSelectedTag(step)).toThrow('Cannot auto-select tag when multiple branches exist');
   });
 });

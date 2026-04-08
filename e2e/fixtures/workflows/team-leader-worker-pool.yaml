@@ -1,0 +1,32 @@
+name: e2e-team-leader-worker-pool
+description: E2E test workflow for dynamic team_leader worker-pool behavior
+workflow_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+personas:
+  test-team-leader-worker-pool: |
+    You are the E2E team leader worker-pool coordinator.
+  test-coder: |
+    You are the E2E test coder.
+max_steps: 5
+steps:
+  - name: execute
+    edit: true
+    persona: ./agents/test-team-leader-worker-pool.md
+    required_permission_mode: edit
+    team_leader:
+      max_parts: 2
+      part_persona: ./agents/test-coder.md
+      part_edit: true
+      part_allowed_tools:
+        - Read
+        - Write
+        - Edit
+    instruction: |
+      {task}
+    rules:
+      - condition: Task completed
+        next: COMPLETE

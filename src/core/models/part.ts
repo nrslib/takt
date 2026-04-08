@@ -1,9 +1,9 @@
 import type { PermissionMode } from './status.js';
 import type { AgentResponse } from './response.js';
 
-/** Part definition produced by movement team leader agent */
+/** Part definition produced by step team leader agent */
 export interface PartDefinition {
-  /** Unique ID inside the parent movement */
+  /** Unique ID inside the parent step */
   id: string;
   /** Human-readable title */
   title: string;
@@ -17,7 +17,7 @@ export interface PartResult {
   response: AgentResponse;
 }
 
-/** team_leader config on a movement */
+/** team_leader config on a step */
 export interface TeamLeaderConfig {
   /** Persona reference for the team leader agent */
   persona?: string;

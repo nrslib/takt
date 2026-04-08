@@ -32,12 +32,12 @@ describe('E2E: Removed --create-worktree option', () => {
   });
 
   it('should fail fast with migration guidance', () => {
-    const piecePath = resolve(__dirname, '../fixtures/pieces/simple.yaml');
+    const workflowPath = resolve(__dirname, '../fixtures/workflows/simple.yaml');
 
     const result = runTakt({
       args: [
         '--task', 'Add a line "worktree test" to README.md',
-        '--piece', piecePath,
+        '--workflow', workflowPath,
         '--create-worktree', 'yes',
       ],
       cwd: testRepo.path,

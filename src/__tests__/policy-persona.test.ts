@@ -2,9 +2,9 @@
  * Tests for policy and persona features.
  *
  * Covers:
- * - persona/persona_name fields in piece YAML (with agent/agent_name backward compat)
- * - Piece-level policies definition and resolution
- * - Movement-level policy references
+ * - persona/persona_name fields in workflow YAML
+ * - Workflow-level policies definition and resolution
+ * - Step-level policy references
  * - Policy injection in InstructionBuilder
  * - File-based policy content loading via resolveContentPath
  */
@@ -13,9 +13,9 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { normalizePieceConfig } from '../infra/config/loaders/pieceParser.js';
-import { InstructionBuilder } from '../core/piece/instruction/InstructionBuilder.js';
-import type { InstructionContext } from '../core/piece/instruction/instruction-context.js';
+import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
+import { InstructionBuilder } from '../core/workflow/instruction/InstructionBuilder.js';
+import type { InstructionContext } from '../core/workflow/instruction/instruction-context.js';
 
 // --- Test helpers ---
 
@@ -27,8 +27,8 @@ function makeContext(overrides: Partial<InstructionContext> = {}): InstructionCo
   return {
     task: 'Test task',
     iteration: 1,
-    maxMovements: 10,
-    movementIteration: 1,
+    maxSteps: 10,
+    stepIteration: 1,
     cwd: '/tmp/test',
     projectCwd: '/tmp/test',
     userInputs: [],
@@ -52,8 +52,8 @@ describe('persona alias', () => {
 
   it('should treat persona as alias for agent', () => {
     const raw = {
-      name: 'test-piece',
-      movements: [
+      name: 'test-workflow',
+      steps: [
         {
           name: 'step1',
           persona: 'inline-prompt-text',
@@ -62,14 +62,14 @@ describe('persona alias', () => {
       ],
     };
 
-    const config = normalizePieceConfig(raw, testDir);
-    expect(config.movements[0]!.persona).toBe('inline-prompt-text');
+    const config = normalizeWorkflowConfig(raw, testDir);
+    expect(config.steps[0]!.persona).toBe('inline-prompt-text');
   });
 
   it('should prefer persona over agent when both specified', () => {
     const raw = {
-      name: 'test-piece',
-      movements: [
+      name: 'test-workflow',
+      steps: [
         {
           name: 'step1',
           persona: 'new-persona',
@@ -78,14 +78,14 @@ describe('persona alias', () => {
       ],
     };
 
-    const config = normalizePieceConfig(raw, testDir);
-    expect(config.movements[0]!.persona).toBe('new-persona');
+    const config = normalizeWorkflowConfig(raw, testDir);
+    expect(config.steps[0]!.persona).toBe('new-persona');
   });
 
   it('should have undefined persona when persona not specified', () => {
     const raw = {
-      name: 'test-piece',
-      movements: [
+      name: 'test-workflow',
+      steps: [
         {
           name: 'step1',
           instruction: '{task}',
@@ -93,14 +93,14 @@ describe('persona alias', () => {
       ],
     };
 
-    const config = normalizePieceConfig(raw, testDir);
-    expect(config.movements[0]!.persona).toBeUndefined();
+    const config = normalizeWorkflowConfig(raw, testDir);
+    expect(config.steps[0]!.persona).toBeUndefined();
   });
 
   it('should treat persona_name as display name', () => {
     const raw = {
-      name: 'test-piece',
-      movements: [
+      name: 'test-workflow',
+      steps: [
         {
           name: 'step1',
           persona: 'some-prompt',
@@ -110,14 +110,14 @@ describe('persona alias', () => {
       ],
     };
 
-    const config = normalizePieceConfig(raw, testDir);
-    expect(config.movements[0]!.personaDisplayName).toBe('My Persona');
+    const config = normalizeWorkflowConfig(raw, testDir);
+    expect(config.steps[0]!.personaDisplayName).toBe('My Persona');
   });
 
   it('should use persona_name as display name', () => {
     const raw = {
-      name: 'test-piece',
-      movements: [
+      name: 'test-workflow',
+      steps: [
         {
           name: 'step1',
           persona: 'some-persona',
@@ -127,8 +127,8 @@ describe('persona alias', () => {
       ],
     };
 
-    const config = normalizePieceConfig(raw, testDir);
-    expect(config.movements[0]!.personaDisplayName).toBe('New Name');
+    const config = normalizeWorkflowConfig(raw, testDir);
+    expect(config.steps[0]!.personaDisplayName).toBe('New Name');
   });
 
   it('should resolve persona .md file path like agent', () => {
@@ -136,8 +136,8 @@ describe('persona alias', () => {
     writeFileSync(agentFile, '# Test Persona\nYou are a test persona.');
 
     const raw = {
-      name: 'test-piece',
-      movements: [
+      name: 'test-workflow',
+      steps: [
         {
           name: 'step1',
           persona: './my-persona.md',
@@ -146,15 +146,15 @@ describe('persona alias', () => {
       ],
     };
 
-    const config = normalizePieceConfig(raw, testDir);
-    expect(config.movements[0]!.persona).toBe('./my-persona.md');
-    expect(config.movements[0]!.personaPath).toBe(agentFile);
+    const config = normalizeWorkflowConfig(raw, testDir);
+    expect(config.steps[0]!.persona).toBe('./my-persona.md');
+    expect(config.steps[0]!.personaPath).toBe(agentFile);
   });
 
-  it('should work with persona in parallel sub-movements', () => {
+  it('should work with persona in parallel sub-steps', () => {
     const raw = {
-      name: 'test-piece',
-      movements: [
+      name: 'test-workflow',
+      steps: [
         {
           name: 'parallel-step',
           parallel: [
@@ -175,8 +175,8 @@ describe('persona alias', () => {
       ],
     };
 
-    const config = normalizePieceConfig(raw, testDir);
-    const parallel = config.movements[0]!.parallel!;
+    const config = normalizeWorkflowConfig(raw, testDir);
+    const parallel = config.steps[0]!.parallel!;
     expect(parallel[0]!.persona).toBe('sub-persona-1');
     expect(parallel[1]!.persona).toBe('sub-persona-2');
     expect(parallel[1]!.personaDisplayName).toBe('Sub Persona 2');
@@ -196,14 +196,14 @@ describe('policies', () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  it('should resolve piece-level policies from inline content', () => {
+  it('should resolve workflow-level policies from inline content', () => {
     const raw = {
-      name: 'test-piece',
+      name: 'test-workflow',
       policies: {
         coding: 'Always write clean code.',
         review: 'Be thorough in reviews.',
       },
-      movements: [
+      steps: [
         {
           name: 'step1',
           persona: 'coder',
@@ -213,12 +213,12 @@ describe('policies', () => {
       ],
     };
 
-    const config = normalizePieceConfig(raw, testDir);
+    const config = normalizeWorkflowConfig(raw, testDir);
     expect(config.policies).toEqual({
       coding: 'Always write clean code.',
       review: 'Be thorough in reviews.',
     });
-    expect(config.movements[0]!.policyContents).toEqual(['Always write clean code.']);
+    expect(config.steps[0]!.policyContents).toEqual(['Always write clean code.']);
   });
 
   it('should resolve policies from .md file paths', () => {
@@ -228,12 +228,12 @@ describe('policies', () => {
     writeFileSync(join(policiesDir, 'review.md'), '# Review Policy\n\nBe thorough.');
 
     const raw = {
-      name: 'test-piece',
+      name: 'test-workflow',
       policies: {
         coding: './policies/coding.md',
         review: './policies/review.md',
       },
-      movements: [
+      steps: [
         {
           name: 'step1',
           persona: 'coder',
@@ -243,20 +243,20 @@ describe('policies', () => {
       ],
     };
 
-    const config = normalizePieceConfig(raw, testDir);
+    const config = normalizeWorkflowConfig(raw, testDir);
     expect(config.policies!['coding']).toBe('# Coding Policy\n\nWrite clean code.');
     expect(config.policies!['review']).toBe('# Review Policy\n\nBe thorough.');
-    expect(config.movements[0]!.policyContents).toEqual(['# Coding Policy\n\nWrite clean code.']);
+    expect(config.steps[0]!.policyContents).toEqual(['# Coding Policy\n\nWrite clean code.']);
   });
 
   it('should support multiple policy references (array)', () => {
     const raw = {
-      name: 'test-piece',
+      name: 'test-workflow',
       policies: {
         coding: 'Clean code rules.',
         testing: 'Test everything.',
       },
-      movements: [
+      steps: [
         {
           name: 'step1',
           persona: 'coder',
@@ -266,8 +266,8 @@ describe('policies', () => {
       ],
     };
 
-    const config = normalizePieceConfig(raw, testDir);
-    expect(config.movements[0]!.policyContents).toEqual([
+    const config = normalizeWorkflowConfig(raw, testDir);
+    expect(config.steps[0]!.policyContents).toEqual([
       'Clean code rules.',
       'Test everything.',
     ]);
@@ -275,11 +275,11 @@ describe('policies', () => {
 
   it('should leave policyContents undefined when no policy specified', () => {
     const raw = {
-      name: 'test-piece',
+      name: 'test-workflow',
       policies: {
         coding: 'Clean code rules.',
       },
-      movements: [
+      steps: [
         {
           name: 'step1',
           persona: 'coder',
@@ -288,17 +288,17 @@ describe('policies', () => {
       ],
     };
 
-    const config = normalizePieceConfig(raw, testDir);
-    expect(config.movements[0]!.policyContents).toBeUndefined();
+    const config = normalizeWorkflowConfig(raw, testDir);
+    expect(config.steps[0]!.policyContents).toBeUndefined();
   });
 
   it('should treat unknown policy names as inline content', () => {
     const raw = {
-      name: 'test-piece',
+      name: 'test-workflow',
       policies: {
         coding: 'Clean code rules.',
       },
-      movements: [
+      steps: [
         {
           name: 'step1',
           persona: 'coder',
@@ -308,18 +308,18 @@ describe('policies', () => {
       ],
     };
 
-    const config = normalizePieceConfig(raw, testDir);
-    expect(config.movements[0]!.policyContents).toEqual(['nonexistent']);
+    const config = normalizeWorkflowConfig(raw, testDir);
+    expect(config.steps[0]!.policyContents).toEqual(['nonexistent']);
   });
 
-  it('should resolve policies in parallel sub-movements', () => {
+  it('should resolve policies in parallel sub-steps', () => {
     const raw = {
-      name: 'test-piece',
+      name: 'test-workflow',
       policies: {
         review: 'Be thorough.',
         coding: 'Write clean code.',
       },
-      movements: [
+      steps: [
         {
           name: 'reviewers',
           parallel: [
@@ -341,16 +341,16 @@ describe('policies', () => {
       ],
     };
 
-    const config = normalizePieceConfig(raw, testDir);
-    const parallel = config.movements[0]!.parallel!;
+    const config = normalizeWorkflowConfig(raw, testDir);
+    const parallel = config.steps[0]!.parallel!;
     expect(parallel[0]!.policyContents).toEqual(['Be thorough.']);
     expect(parallel[1]!.policyContents).toEqual(['Write clean code.', 'Be thorough.']);
   });
 
   it('should leave config.policies undefined when no policies defined', () => {
     const raw = {
-      name: 'test-piece',
-      movements: [
+      name: 'test-workflow',
+      steps: [
         {
           name: 'step1',
           persona: 'coder',
@@ -359,7 +359,7 @@ describe('policies', () => {
       ],
     };
 
-    const config = normalizePieceConfig(raw, testDir);
+    const config = normalizeWorkflowConfig(raw, testDir);
     expect(config.policies).toBeUndefined();
   });
 });
@@ -484,25 +484,25 @@ describe('section reference resolution', () => {
 
   it('should resolve persona from personas section by name', () => {
     const raw = {
-      name: 'test-piece',
+      name: 'test-workflow',
       personas: { coder: './personas/coder.md' },
-      movements: [{
+      steps: [{
         name: 'impl',
         persona: 'coder',
         instruction: '{task}',
       }],
     };
 
-    const config = normalizePieceConfig(raw, testDir);
-    expect(config.movements[0]!.persona).toBe('./personas/coder.md');
-    expect(config.movements[0]!.personaPath).toBe(join(testDir, 'personas', 'coder.md'));
+    const config = normalizeWorkflowConfig(raw, testDir);
+    expect(config.steps[0]!.persona).toBe('./personas/coder.md');
+    expect(config.steps[0]!.personaPath).toBe(join(testDir, 'personas', 'coder.md'));
   });
 
   it('should resolve policy from policies section by name', () => {
     const raw = {
-      name: 'test-piece',
+      name: 'test-workflow',
       policies: { coding: './policies/coding.md' },
-      movements: [{
+      steps: [{
         name: 'impl',
         persona: 'coder',
         policy: 'coding',
@@ -510,15 +510,15 @@ describe('section reference resolution', () => {
       }],
     };
 
-    const config = normalizePieceConfig(raw, testDir);
-    expect(config.movements[0]!.policyContents).toEqual(['# Coding Policy\nWrite clean code.']);
+    const config = normalizeWorkflowConfig(raw, testDir);
+    expect(config.steps[0]!.policyContents).toEqual(['# Coding Policy\nWrite clean code.']);
   });
 
   it('should resolve mixed policy array: [section-name, ./path]', () => {
     const raw = {
-      name: 'test-piece',
+      name: 'test-workflow',
       policies: { coding: './policies/coding.md' },
-      movements: [{
+      steps: [{
         name: 'impl',
         persona: 'coder',
         policy: ['coding', './policies/testing.md'],
@@ -526,8 +526,8 @@ describe('section reference resolution', () => {
       }],
     };
 
-    const config = normalizePieceConfig(raw, testDir);
-    expect(config.movements[0]!.policyContents).toEqual([
+    const config = normalizeWorkflowConfig(raw, testDir);
+    expect(config.steps[0]!.policyContents).toEqual([
       '# Coding Policy\nWrite clean code.',
       '# Testing Policy\nTest everything.',
     ]);
@@ -535,39 +535,39 @@ describe('section reference resolution', () => {
 
   it('should resolve instruction from instructions section by name', () => {
     const raw = {
-      name: 'test-piece',
+      name: 'test-workflow',
       instructions: { implement: './instructions/implement.md' },
-      movements: [{
+      steps: [{
         name: 'impl',
         persona: 'coder',
         instruction: 'implement',
       }],
     };
 
-    const config = normalizePieceConfig(raw, testDir);
-    expect(config.movements[0]!.instruction).toBe('Implement the feature.');
+    const config = normalizeWorkflowConfig(raw, testDir);
+    expect(config.steps[0]!.instruction).toBe('Implement the feature.');
   });
 
-  it('should expose normalized movement instruction on instruction field', () => {
+  it('should expose normalized step instruction on instruction field', () => {
     const raw = {
-      name: 'test-piece',
-      movements: [{
+      name: 'test-workflow',
+      steps: [{
         name: 'impl',
         persona: 'coder',
-        instruction: 'Canonical movement instruction',
+        instruction: 'Canonical step instruction',
       }],
     };
 
-    const config = normalizePieceConfig(raw, testDir);
-    const movement = config.movements[0] as unknown as Record<string, unknown>;
-    expect(movement.instruction).toBe('Canonical movement instruction');
+    const config = normalizeWorkflowConfig(raw, testDir);
+    const step = config.steps[0] as unknown as Record<string, unknown>;
+    expect(step.instruction).toBe('Canonical step instruction');
   });
 
   it('should resolve output contract from report_formats section by name', () => {
     const raw = {
-      name: 'test-piece',
+      name: 'test-workflow',
       report_formats: { plan: './output-contracts/plan.md' },
-      movements: [{
+      steps: [{
         name: 'plan',
         persona: 'planner',
         instruction: '{task}',
@@ -581,58 +581,58 @@ describe('section reference resolution', () => {
       }],
     };
 
-    const config = normalizePieceConfig(raw, testDir);
-    const outputContract = config.movements[0]!.outputContracts![0] as { name: string; format?: string };
+    const config = normalizeWorkflowConfig(raw, testDir);
+    const outputContract = config.steps[0]!.outputContracts![0] as { name: string; format?: string };
     expect(outputContract.format).toBe('# Plan Report\n## Goal\n{goal}');
   });
 
   it('should treat unresolved name as inline value (no section match)', () => {
     const raw = {
-      name: 'test-piece',
-      movements: [{
+      name: 'test-workflow',
+      steps: [{
         name: 'impl',
         persona: 'nonexistent',
         instruction: '{task}',
       }],
     };
 
-    const config = normalizePieceConfig(raw, testDir);
+    const config = normalizeWorkflowConfig(raw, testDir);
     // No matching section key → treated as inline persona spec
-    expect(config.movements[0]!.persona).toBe('nonexistent');
+    expect(config.steps[0]!.persona).toBe('nonexistent');
   });
 
   it('should resolve instruction field from instructions section', () => {
     const raw = {
-      name: 'test-piece',
+      name: 'test-workflow',
       instructions: { implement: './instructions/implement.md' },
-      movements: [{
+      steps: [{
         name: 'impl',
         persona: 'coder',
         instruction: 'implement',
       }],
     };
 
-    const config = normalizePieceConfig(raw, testDir);
-    expect(config.movements[0]!.instruction).toBe('Implement the feature.');
+    const config = normalizeWorkflowConfig(raw, testDir);
+    expect(config.steps[0]!.instruction).toBe('Implement the feature.');
   });
 
-  it('should fail fast when movement uses instruction_template', () => {
+  it('should fail fast when step uses instruction_template', () => {
     const raw = {
-      name: 'test-piece',
-      movements: [{
+      name: 'test-workflow',
+      steps: [{
         name: 'impl',
         persona: 'coder',
-        instruction_template: 'Legacy movement instruction',
+        instruction_template: 'Legacy step instruction',
       }],
     };
 
-    expect(() => normalizePieceConfig(raw, testDir)).toThrow();
+    expect(() => normalizeWorkflowConfig(raw, testDir)).toThrow();
   });
 
   it('should fail fast when loop monitor judge uses instruction_template', () => {
     const raw = {
-      name: 'test-piece',
-      movements: [
+      name: 'test-workflow',
+      steps: [
         {
           name: 'step1',
           persona: 'coder',
@@ -659,14 +659,14 @@ describe('section reference resolution', () => {
       ],
     };
 
-    expect(() => normalizePieceConfig(raw, testDir)).toThrow();
+    expect(() => normalizeWorkflowConfig(raw, testDir)).toThrow();
   });
 
   it('should resolve loop monitor judge instruction from instructions section', () => {
     const raw = {
-      name: 'test-piece',
+      name: 'test-workflow',
       instructions: { judge_template: './instructions/implement.md' },
-      movements: [
+      steps: [
         {
           name: 'step1',
           persona: 'coder',
@@ -693,14 +693,14 @@ describe('section reference resolution', () => {
       ],
     };
 
-    const config = normalizePieceConfig(raw, testDir);
+    const config = normalizeWorkflowConfig(raw, testDir);
     expect(config.loopMonitors?.[0]?.judge.instruction).toBe('Implement the feature.');
   });
 
   it('should expose normalized loop monitor judge instruction on instruction field', () => {
     const raw = {
-      name: 'test-piece',
-      movements: [
+      name: 'test-workflow',
+      steps: [
         {
           name: 'step1',
           persona: 'coder',
@@ -727,39 +727,39 @@ describe('section reference resolution', () => {
       ],
     };
 
-    const config = normalizePieceConfig(raw, testDir);
+    const config = normalizeWorkflowConfig(raw, testDir);
     const judge = config.loopMonitors?.[0]?.judge as unknown as Record<string, unknown>;
     expect(judge.instruction).toBe('Canonical judge instruction');
   });
 
-  it('should store resolved sections on PieceConfig', () => {
+  it('should store resolved sections on WorkflowConfig', () => {
     const raw = {
-      name: 'test-piece',
+      name: 'test-workflow',
       personas: { coder: './personas/coder.md' },
       policies: { coding: './policies/coding.md' },
       instructions: { implement: './instructions/implement.md' },
       report_formats: { plan: './output-contracts/plan.md' },
-      movements: [{
+      steps: [{
         name: 'impl',
         persona: 'coder',
         instruction: '{task}',
       }],
     };
 
-    const config = normalizePieceConfig(raw, testDir);
+    const config = normalizeWorkflowConfig(raw, testDir);
     expect(config.personas).toEqual({ coder: './personas/coder.md' });
     expect(config.policies).toEqual({ coding: '# Coding Policy\nWrite clean code.' });
     expect(config.instructions).toEqual({ implement: 'Implement the feature.' });
     expect(config.reportFormats).toEqual({ plan: '# Plan Report\n## Goal\n{goal}' });
   });
 
-  it('should work with section references in parallel sub-movements', () => {
+  it('should work with section references in parallel sub-steps', () => {
     const raw = {
-      name: 'test-piece',
+      name: 'test-workflow',
       personas: { coder: './personas/coder.md' },
       policies: { coding: './policies/coding.md', testing: './policies/testing.md' },
       instructions: { implement: './instructions/implement.md' },
-      movements: [{
+      steps: [{
         name: 'parallel-step',
         parallel: [
           {
@@ -779,8 +779,8 @@ describe('section reference resolution', () => {
       }],
     };
 
-    const config = normalizePieceConfig(raw, testDir);
-    const parallel = config.movements[0]!.parallel!;
+    const config = normalizeWorkflowConfig(raw, testDir);
+    const parallel = config.steps[0]!.parallel!;
     expect(parallel[0]!.persona).toBe('./personas/coder.md');
     expect(parallel[0]!.policyContents).toEqual(['# Coding Policy\nWrite clean code.']);
     expect(parallel[0]!.instruction).toBe('Implement the feature.');
@@ -792,9 +792,9 @@ describe('section reference resolution', () => {
 
   it('should resolve policy by plain name (primary mechanism)', () => {
     const raw = {
-      name: 'test-piece',
+      name: 'test-workflow',
       policies: { coding: './policies/coding.md' },
-      movements: [{
+      steps: [{
         name: 'impl',
         persona: 'coder',
         policy: 'coding',
@@ -802,7 +802,7 @@ describe('section reference resolution', () => {
       }],
     };
 
-    const config = normalizePieceConfig(raw, testDir);
-    expect(config.movements[0]!.policyContents).toEqual(['# Coding Policy\nWrite clean code.']);
+    const config = normalizeWorkflowConfig(raw, testDir);
+    expect(config.steps[0]!.policyContents).toEqual(['# Coding Policy\nWrite clean code.']);
   });
 });

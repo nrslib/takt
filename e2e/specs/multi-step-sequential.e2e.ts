@@ -25,13 +25,13 @@ describe('E2E: Sequential multi-step session log transitions (mock)', () => {
   });
 
   it('should record step_complete for both step-1 and step-2', () => {
-    const piecePath = resolve(__dirname, '../fixtures/pieces/mock-two-step.yaml');
+    const workflowPath = resolve(__dirname, '../fixtures/workflows/mock-two-step.yaml');
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/two-step-done.json');
 
     const result = runTakt({
       args: [
         '--task', 'Test sequential transitions',
-        '--piece', piecePath,
+        '--workflow', workflowPath,
         '--provider', 'mock',
       ],
       cwd: repo.path,
@@ -51,6 +51,6 @@ describe('E2E: Sequential multi-step session log transitions (mock)', () => {
 
     expect(completedSteps).toContain('step-1');
     expect(completedSteps).toContain('step-2');
-    expect(records.some((r) => r.type === 'piece_complete')).toBe(true);
+    expect(records.some((r) => r.type === 'workflow_complete')).toBe(true);
   }, 240_000);
 });

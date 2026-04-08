@@ -3,14 +3,14 @@
  */
 
 import { loadTemplate } from '../../shared/prompts/index.js';
-import { type MovementPreview } from '../../infra/config/index.js';
+import { type StepPreview } from '../../infra/config/index.js';
 import { selectOption } from '../../shared/prompt/index.js';
 import { blankLine, info } from '../../shared/ui/index.js';
 import {
   type TaskHistoryLocale,
   type ConversationMessage,
   type TaskHistorySummaryItem,
-  type PieceContext,
+  type WorkflowContext,
   type PostSummaryAction,
   type SummaryActionValue,
   type SummaryActionOption,
@@ -23,7 +23,7 @@ import {
 export type {
   ConversationMessage,
   TaskHistorySummaryItem,
-  PieceContext,
+  WorkflowContext,
   PostSummaryAction,
   SummaryActionValue,
   SummaryActionOption,
@@ -34,7 +34,7 @@ export type {
 } from './interactive-summary-types.js';
 export { BASE_SUMMARY_ACTIONS } from './interactive-summary-types.js';
 
-export function formatMovementPreviews(previews: MovementPreview[], lang: TaskHistoryLocale): string {
+export function formatStepPreviews(previews: StepPreview[], lang: TaskHistoryLocale): string {
   return previews.map((p, i) => {
     const toolsStr = p.allowedTools.length > 0
       ? p.allowedTools.join(', ')
@@ -126,7 +126,7 @@ export function buildSummaryPrompt(
   lang: 'en' | 'ja',
   noTranscriptNote: string,
   conversationLabel: string,
-  pieceContext?: PieceContext,
+  workflowContext?: WorkflowContext,
 ): string {
   let conversation = '';
   if (history.length > 0) {
@@ -138,21 +138,21 @@ export function buildSummaryPrompt(
     return '';
   }
 
-  const hasPiece = !!pieceContext;
-  const hasPreview = !!pieceContext?.movementPreviews?.length;
-  const summaryMovementDetails =
-    hasPreview && pieceContext?.movementPreviews
-      ? `\n### ${lang === 'ja' ? '処理するエージェント' : 'Processing Agents'}\n${formatMovementPreviews(pieceContext.movementPreviews, lang)}`
+  const hasWorkflow = !!workflowContext;
+  const hasPreview = !!workflowContext?.stepPreviews?.length;
+  const summaryStepDetails =
+    hasPreview && workflowContext?.stepPreviews
+      ? `\n### ${lang === 'ja' ? '処理するエージェント' : 'Processing Agents'}\n${formatStepPreviews(workflowContext.stepPreviews, lang)}`
       : '';
-  const summaryTaskHistory = pieceContext?.taskHistory?.length
-    ? formatTaskHistorySummary(pieceContext.taskHistory, lang)
+  const summaryTaskHistory = workflowContext?.taskHistory?.length
+    ? formatTaskHistorySummary(workflowContext.taskHistory, lang)
     : '';
 
   return loadTemplate('score_summary_system_prompt', lang, {
-    pieceInfo: hasPiece,
-    pieceName: pieceContext?.name ?? '',
-    pieceDescription: pieceContext?.description ?? '',
-    movementDetails: summaryMovementDetails,
+    hasWorkflowPreview: hasWorkflow,
+    workflowName: workflowContext?.name ?? '',
+    workflowDescription: workflowContext?.description ?? '',
+    stepDetails: summaryStepDetails,
     taskHistory: summaryTaskHistory,
     conversation,
   });

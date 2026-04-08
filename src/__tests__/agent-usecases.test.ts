@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { runAgent } from '../agents/runner.js';
-import { parseParts } from '../core/piece/engine/task-decomposer.js';
+import { parseParts } from '../core/workflow/engine/task-decomposer.js';
 import { detectJudgeIndex } from '../agents/judge-utils.js';
 import {
   executeAgent,
@@ -25,7 +25,7 @@ vi.mock('../infra/resources/schema-loader.js', () => ({
   loadMorePartsSchema: vi.fn((maxAdditionalParts: number) => ({ type: 'more-parts', maxAdditionalParts })),
 }));
 
-vi.mock('../core/piece/engine/task-decomposer.js', () => ({
+vi.mock('../core/workflow/engine/task-decomposer.js', () => ({
   parseParts: vi.fn(),
 }));
 
@@ -48,7 +48,7 @@ function doneResponse(content: string, structuredOutput?: Record<string, unknown
   };
 }
 
-const judgeOptions = { cwd: '/repo', movementName: 'review' };
+const judgeOptions = { cwd: '/repo', stepName: 'review' };
 type JudgeStageLog = {
   stage: 1 | 2 | 3;
   method: 'structured_output' | 'phase3_tag' | 'ai_judge';
@@ -246,7 +246,7 @@ describe('agent-usecases', () => {
           onJudgeStage,
         } as typeof judgeOptions & { onJudgeStage: (entry: JudgeStageLog) => void },
       ),
-    ).rejects.toThrow('Status not found for movement "review"');
+    ).rejects.toThrow('Status not found for step "review"');
 
     expect(onJudgeStage).toHaveBeenCalledTimes(3);
     expect(onJudgeStage).toHaveBeenLastCalledWith(expect.objectContaining({
@@ -292,7 +292,7 @@ describe('agent-usecases', () => {
     await expect(judgeStatus('structured', 'tag', [
       { condition: 'a', next: 'one' },
       { condition: 'b', next: 'two' },
-    ], judgeOptions)).rejects.toThrow('Status not found for movement "review"');
+    ], judgeOptions)).rejects.toThrow('Status not found for step "review"');
   });
 
   it('judgeStatus Stage 3 では onJudgeStage は evaluateCondition の応答状態が error でも必ず呼ばれる（dead code なし）', async () => {
@@ -320,7 +320,7 @@ describe('agent-usecases', () => {
         ...judgeOptions,
         onJudgeStage,
       } as typeof judgeOptions & { onJudgeStage: (entry: JudgeStageLog) => void }),
-    ).rejects.toThrow('Status not found for movement "review"');
+    ).rejects.toThrow('Status not found for step "review"');
 
     // Stage 3 の onJudgeStage は必ず呼ばれる（'skipped' での早期 throw はない）
     expect(onJudgeStage).toHaveBeenCalledTimes(3);
@@ -459,7 +459,7 @@ describe('agent-usecases', () => {
       'tag instruction',
       [{ condition: 'done', next: 'COMPLETE' }, { condition: 'fix', next: 'fix' }],
       false,
-      { cwd: '/repo', movementName: 'review', provider: 'cursor' },
+      { cwd: '/repo', stepName: 'review', provider: 'cursor' },
     );
 
     expect(result).toEqual({ ruleIndex: 0, method: 'phase3_tag' });
@@ -478,7 +478,7 @@ describe('agent-usecases', () => {
       'tag instruction',
       [{ condition: 'done', next: 'COMPLETE' }],
       false,
-      { cwd: '/repo', movementName: 'review' },
+      { cwd: '/repo', stepName: 'review' },
     );
 
     expect(result).toBeUndefined();
@@ -495,7 +495,7 @@ describe('agent-usecases', () => {
         { condition: 'blocked', next: 'ABORT', interactiveOnly: true },
       ],
       false,
-      { cwd: '/repo', movementName: 'review' },
+      { cwd: '/repo', stepName: 'review' },
     );
 
     expect(result).toBeUndefined();

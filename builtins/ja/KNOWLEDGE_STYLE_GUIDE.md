@@ -30,7 +30,7 @@
 ```
 User Message (Phase 1):
   [実行コンテキスト]
-  [Piece Context]
+  [Workflow Context]
   [User Request]
   [Previous Response]
   [Instructions]
@@ -197,7 +197,7 @@ const ChildGood = ({ value, onChange }) => {
 
 1. **横断的な行動規範**: DRY、Fail Fast 等の全エージェント共通ルール → ポリシー
 2. **実行手順**: どのファイルを読め、何を実行しろ等 → インストラクション
-3. **ピース固有の概念**: ムーブメント名、レポートファイル名
+3. **workflow固有の概念**: step名、レポートファイル名
 4. **ツール固有のパス**: `.takt/runs/` 等の具体的なディレクトリパス
 
 ### 例外: ドメイン固有の評価基準

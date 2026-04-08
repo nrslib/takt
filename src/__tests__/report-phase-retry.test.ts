@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { runReportPhase, type PhaseRunnerContext } from '../core/piece/phase-runner.js';
-import type { PieceMovement } from '../core/models/types.js';
+import { runReportPhase, type PhaseRunnerContext } from '../core/workflow/phase-runner.js';
+import type { WorkflowStep } from '../core/models/types.js';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -12,7 +12,7 @@ vi.mock('../agents/runner.js', () => ({
 import { runAgent } from '../agents/runner.js';
 import type { AgentResponse } from '../core/models/types.js';
 
-function createStep(fileName: string): PieceMovement {
+function createStep(fileName: string): WorkflowStep {
   return {
     name: 'implement',
     persona: 'coder',

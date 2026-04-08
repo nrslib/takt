@@ -1,10 +1,10 @@
 /**
- * Tests for piece bookmark functionality
+ * Tests for workflow bookmark functionality
  */
 
 import { describe, it, expect } from 'vitest';
 import { handleKeyInput } from '../shared/prompt/index.js';
-import { applyBookmarks, type SelectionOption } from '../features/pieceSelection/index.js';
+import { applyBookmarks, type SelectionOption } from '../features/workflowSelection/index.js';
 
 describe('handleKeyInput - bookmark action', () => {
   const totalItems = 4;
@@ -88,7 +88,7 @@ describe('applyBookmarks', () => {
       { label: '📁 frontend/', value: '__category__:frontend' },
       { label: '📁 backend/', value: '__category__:backend' },
     ];
-    // Only piece values should match; categories are not bookmarkable
+    // Only workflow values should match; categories are not bookmarkable
     const result = applyBookmarks(categoryOptions, ['simple']);
     expect(result[0]!.label).toBe('simple [*]');
     expect(result.map((o) => o.value)).toEqual(['simple', '__category__:frontend', '__category__:backend']);

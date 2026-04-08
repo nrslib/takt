@@ -1,4 +1,4 @@
-import type { MovementProviderOptions } from '../../core/models/piece-types.js';
+import type { StepProviderOptions } from '../../core/models/workflow-types.js';
 import { mergeProviderOptions, normalizeProviderOptions } from './providerOptions.js';
 import { normalizeProviderBlockOptions } from './providerBlockOptions.js';
 
@@ -20,7 +20,7 @@ export type ConfigProviderReference<ProviderType extends string> =
 export type NormalizedConfigProviderReference<ProviderType extends string> = {
   provider: ProviderType | undefined;
   model: string | undefined;
-  providerOptions: MovementProviderOptions | undefined;
+  providerOptions: StepProviderOptions | undefined;
   providerSpecified: boolean;
 };
 
@@ -56,7 +56,7 @@ export function normalizeConfigProviderReference<ProviderType extends string>(
 ): {
   provider: ProviderType | undefined;
   model: string | undefined;
-  providerOptions: MovementProviderOptions | undefined;
+  providerOptions: StepProviderOptions | undefined;
 } {
   const normalized = normalizeConfigProviderReferenceDetailed(provider, model, providerOptions);
   return {

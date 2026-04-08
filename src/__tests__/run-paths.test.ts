@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildRunPaths } from '../core/piece/run/run-paths.js';
+import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 
 describe('buildRunPaths', () => {
   it('should build run-scoped relative and absolute paths', () => {

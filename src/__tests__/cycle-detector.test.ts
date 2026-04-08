@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { CycleDetector } from '../core/piece/engine/cycle-detector.js';
+import { CycleDetector } from '../core/workflow/engine/cycle-detector.js';
 import type { LoopMonitorConfig } from '../core/models/index.js';
 
 function makeMonitor(
@@ -33,7 +33,7 @@ describe('CycleDetector', () => {
     });
 
     it('should not trigger before threshold is reached', () => {
-      // 2 complete cycles (4 movements)
+      // 2 complete cycles (4 steps)
       expect(detector.recordAndCheck('ai_review').triggered).toBe(false);
       expect(detector.recordAndCheck('ai_fix').triggered).toBe(false);
       expect(detector.recordAndCheck('ai_review').triggered).toBe(false);
@@ -41,7 +41,7 @@ describe('CycleDetector', () => {
     });
 
     it('should trigger when threshold (3 cycles) is reached', () => {
-      // 3 complete cycles (6 movements)
+      // 3 complete cycles (6 steps)
       detector.recordAndCheck('ai_review');
       detector.recordAndCheck('ai_fix');
       detector.recordAndCheck('ai_review');
@@ -54,12 +54,12 @@ describe('CycleDetector', () => {
       expect(result.monitor).toBe(monitor);
     });
 
-    it('should not trigger when cycle is interrupted by another movement', () => {
+    it('should not trigger when cycle is interrupted by another step', () => {
       detector.recordAndCheck('ai_review');
       detector.recordAndCheck('ai_fix');
       detector.recordAndCheck('ai_review');
       detector.recordAndCheck('ai_fix');
-      // Interrupt the cycle with a different movement
+      // Interrupt the cycle with a different step
       detector.recordAndCheck('plan');
       detector.recordAndCheck('ai_review');
       const result = detector.recordAndCheck('ai_fix');
@@ -161,7 +161,7 @@ describe('CycleDetector', () => {
   });
 
   describe('getHistory', () => {
-    it('should return the full movement history', () => {
+    it('should return the full step history', () => {
       const detector = new CycleDetector([]);
       detector.recordAndCheck('plan');
       detector.recordAndCheck('implement');

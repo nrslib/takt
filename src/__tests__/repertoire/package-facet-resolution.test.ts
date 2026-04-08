@@ -2,10 +2,10 @@
  * Tests for package-local facet resolution chain.
  *
  * Covers:
- * - isPackagePiece(): detects if pieceDir is under ~/.takt/repertoire/@owner/repo/pieces/
- * - getPackageFromPieceDir(): extracts @owner/repo from pieceDir path
- * - Package pieces use 4-layer chain: package-local → project → user → builtin
- * - Non-package pieces use 3-layer chain: project → user → builtin
+ * - isPackageWorkflow(): detects if workflowDir is under ~/.takt/repertoire/@owner/repo/workflows/
+ * - getPackageFromWorkflowDir(): extracts @owner/repo from workflowDir path
+ * - Package workflows use 4-layer chain: package-local → project → user → builtin
+ * - Non-package workflows use 3-layer chain: project → user → builtin
  * - Package-local resolution hits before project-level
  */
 
@@ -14,16 +14,16 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
-  isPackagePiece,
-  getPackageFromPieceDir,
+  isPackageWorkflow,
+  getPackageFromWorkflowDir,
   buildCandidateDirsWithPackage,
-} from '../../infra/config/loaders/resource-resolver.js';
+} from '../../infra/config/loaders/workflowPackageScope.js';
 
 // ---------------------------------------------------------------------------
-// isPackagePiece
+// isPackageWorkflow
 // ---------------------------------------------------------------------------
 
-describe('isPackagePiece', () => {
+describe('isPackageWorkflow', () => {
   let tempDir: string;
 
   beforeEach(() => {
@@ -34,47 +34,47 @@ describe('isPackagePiece', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('should return true when pieceDir is under repertoire/@owner/repo/pieces/', () => {
-    // Given: pieceDir under the repertoire directory structure
+  it('should return true when workflowDir is under repertoire/@owner/repo/workflows/', () => {
+    // Given: workflowDir under the repertoire directory structure
     const repertoireDir = join(tempDir, 'repertoire');
-    const pieceDir = join(repertoireDir, '@nrslib', 'takt-fullstack', 'pieces');
+    const workflowDir = join(repertoireDir, '@nrslib', 'takt-fullstack', 'workflows');
 
-    // When: checking if it is a package piece
-    const result = isPackagePiece(pieceDir, repertoireDir);
+    // When: checking if it is a package workflow
+    const result = isPackageWorkflow(workflowDir, repertoireDir);
 
-    // Then: it is recognized as a package piece
+    // Then: it is recognized as a package workflow
     expect(result).toBe(true);
   });
 
-  it('should return false when pieceDir is under user global pieces directory', () => {
-    // Given: pieceDir in ~/.takt/pieces/ (not repertoire)
-    const globalPiecesDir = join(tempDir, 'pieces');
-    mkdirSync(globalPiecesDir, { recursive: true });
+  it('should return false when workflowDir is under user global workflows directory', () => {
+    // Given: workflowDir in ~/.takt/workflows/ (not repertoire)
+    const globalWorkflowsDir = join(tempDir, 'workflows');
+    mkdirSync(globalWorkflowsDir, { recursive: true });
 
     const repertoireDir = join(tempDir, 'repertoire');
 
     // When: checking
-    const result = isPackagePiece(globalPiecesDir, repertoireDir);
+    const result = isPackageWorkflow(globalWorkflowsDir, repertoireDir);
 
-    // Then: not a package piece
+    // Then: not a package workflow
     expect(result).toBe(false);
   });
 
-  it('should return false when pieceDir is in project .takt/pieces/', () => {
-    // Given: project-level pieces directory
-    const projectPiecesDir = join(tempDir, '.takt', 'pieces');
-    mkdirSync(projectPiecesDir, { recursive: true });
+  it('should return false when workflowDir is in project .takt/workflows/', () => {
+    // Given: project-level workflows directory
+    const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
+    mkdirSync(projectWorkflowsDir, { recursive: true });
 
     const repertoireDir = join(tempDir, 'repertoire');
 
     // When: checking
-    const result = isPackagePiece(projectPiecesDir, repertoireDir);
+    const result = isPackageWorkflow(projectWorkflowsDir, repertoireDir);
 
-    // Then: not a package piece
+    // Then: not a package workflow
     expect(result).toBe(false);
   });
 
-  it('should return false when pieceDir is in builtin directory', () => {
+  it('should return false when workflowDir is in builtin directory', () => {
     // Given: builtin workflows directory
     const builtinWorkflowsDir = join(tempDir, 'builtins', 'ja', 'workflows');
     mkdirSync(builtinWorkflowsDir, { recursive: true });
@@ -82,18 +82,18 @@ describe('isPackagePiece', () => {
     const repertoireDir = join(tempDir, 'repertoire');
 
     // When: checking
-    const result = isPackagePiece(builtinWorkflowsDir, repertoireDir);
+    const result = isPackageWorkflow(builtinWorkflowsDir, repertoireDir);
 
-    // Then: not a package piece
+    // Then: not a package workflow
     expect(result).toBe(false);
   });
 });
 
 // ---------------------------------------------------------------------------
-// getPackageFromPieceDir
+// getPackageFromWorkflowDir
 // ---------------------------------------------------------------------------
 
-describe('getPackageFromPieceDir', () => {
+describe('getPackageFromWorkflowDir', () => {
   let tempDir: string;
 
   beforeEach(() => {
@@ -104,13 +104,13 @@ describe('getPackageFromPieceDir', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('should extract owner and repo from repertoire pieceDir', () => {
-    // Given: pieceDir under repertoire
+  it('should extract owner and repo from repertoire workflowDir', () => {
+    // Given: workflowDir under repertoire
     const repertoireDir = join(tempDir, 'repertoire');
-    const pieceDir = join(repertoireDir, '@nrslib', 'takt-fullstack', 'pieces');
+    const workflowDir = join(repertoireDir, '@nrslib', 'takt-fullstack', 'workflows');
 
     // When: package is extracted
-    const pkg = getPackageFromPieceDir(pieceDir, repertoireDir);
+    const pkg = getPackageFromWorkflowDir(workflowDir, repertoireDir);
 
     // Then: owner and repo are correct
     expect(pkg).not.toBeUndefined();
@@ -118,15 +118,15 @@ describe('getPackageFromPieceDir', () => {
     expect(pkg!.repo).toBe('takt-fullstack');
   });
 
-  it('should return undefined for non-package pieceDir', () => {
-    // Given: pieceDir not under repertoire
-    const pieceDir = join(tempDir, 'pieces');
+  it('should return undefined for non-package workflowDir', () => {
+    // Given: workflowDir not under repertoire
+    const workflowDir = join(tempDir, 'workflows');
     const repertoireDir = join(tempDir, 'repertoire');
 
     // When: package is extracted
-    const pkg = getPackageFromPieceDir(pieceDir, repertoireDir);
+    const pkg = getPackageFromWorkflowDir(workflowDir, repertoireDir);
 
-    // Then: undefined (not a package piece)
+    // Then: undefined (not a package workflow)
     expect(pkg).toBeUndefined();
   });
 });
@@ -146,12 +146,12 @@ describe('buildCandidateDirsWithPackage', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('should include package-local dir as first candidate for package piece', () => {
-    // Given: a package piece context
+  it('should include package-local dir as first candidate for package workflow', () => {
+    // Given: a package workflow context
     const repertoireDir = join(tempDir, 'repertoire');
-    const pieceDir = join(repertoireDir, '@nrslib', 'takt-fullstack', 'pieces');
+    const workflowDir = join(repertoireDir, '@nrslib', 'takt-fullstack', 'workflows');
     const projectDir = join(tempDir, 'project');
-    const context = { projectDir, lang: 'ja' as const, pieceDir, repertoireDir };
+    const context = { projectDir, lang: 'ja' as const, workflowDir, repertoireDir };
 
     // When: candidate directories are built
     const dirs = buildCandidateDirsWithPackage('personas', context);
@@ -161,12 +161,12 @@ describe('buildCandidateDirsWithPackage', () => {
     expect(dirs[0]).toBe(expectedPackageLocal);
   });
 
-  it('should have 4 candidate dirs for package piece: package-local, project, user, builtin', () => {
-    // Given: package piece context
+  it('should have 4 candidate dirs for package workflow: package-local, project, user, builtin', () => {
+    // Given: package workflow context
     const repertoireDir = join(tempDir, 'repertoire');
-    const pieceDir = join(repertoireDir, '@nrslib', 'takt-fullstack', 'pieces');
+    const workflowDir = join(repertoireDir, '@nrslib', 'takt-fullstack', 'workflows');
     const projectDir = join(tempDir, 'project');
-    const context = { projectDir, lang: 'ja' as const, pieceDir, repertoireDir };
+    const context = { projectDir, lang: 'ja' as const, workflowDir, repertoireDir };
 
     // When: candidate directories are built
     const dirs = buildCandidateDirsWithPackage('personas', context);
@@ -175,14 +175,14 @@ describe('buildCandidateDirsWithPackage', () => {
     expect(dirs).toHaveLength(4);
   });
 
-  it('should have 3 candidate dirs for non-package piece: project, user, builtin', () => {
-    // Given: non-package piece context (no repertoire path)
+  it('should have 3 candidate dirs for non-package workflow: project, user, builtin', () => {
+    // Given: non-package workflow context (no repertoire path)
     const projectDir = join(tempDir, 'project');
-    const userPiecesDir = join(tempDir, 'pieces');
+    const userWorkflowsDir = join(tempDir, 'workflows');
     const context = {
       projectDir,
       lang: 'ja' as const,
-      pieceDir: userPiecesDir,
+      workflowDir: userWorkflowsDir,
       repertoireDir: join(tempDir, 'repertoire'),
     };
 
@@ -193,7 +193,7 @@ describe('buildCandidateDirsWithPackage', () => {
     expect(dirs).toHaveLength(3);
   });
 
-  it('should resolve package-local facet before project-level for package piece', () => {
+  it('should resolve package-local facet before project-level for package workflow', () => {
     // Given: both package-local and project-level facet files exist
     const repertoireDir = join(tempDir, 'repertoire');
     const pkgFacetDir = join(repertoireDir, '@nrslib', 'takt-fullstack', 'facets', 'personas');
@@ -205,8 +205,8 @@ describe('buildCandidateDirsWithPackage', () => {
     mkdirSync(projectFacetDir, { recursive: true });
     writeFileSync(join(projectFacetDir, 'expert-coder.md'), 'Project persona');
 
-    const pieceDir = join(repertoireDir, '@nrslib', 'takt-fullstack', 'pieces');
-    const context = { projectDir, lang: 'ja' as const, pieceDir, repertoireDir };
+    const workflowDir = join(repertoireDir, '@nrslib', 'takt-fullstack', 'workflows');
+    const context = { projectDir, lang: 'ja' as const, workflowDir, repertoireDir };
 
     // When: candidate directories are built
     const dirs = buildCandidateDirsWithPackage('personas', context);

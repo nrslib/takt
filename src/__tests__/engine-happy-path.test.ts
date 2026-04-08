@@ -1,5 +1,5 @@
 /**
- * PieceEngine integration tests: happy path and normal flow scenarios.
+ * WorkflowEngine integration tests: happy path and normal flow scenarios.
  *
  * Covers:
  * - Full happy path (plan → implement → ai_review → reviewers → supervise → COMPLETE)
@@ -7,13 +7,13 @@
  * - AI review reject and fix
  * - ABORT transition
  * - Event emissions
- * - Movement output tracking
+ * - Step output tracking
  * - Config validation
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, rmSync } from 'node:fs';
-import type { PieceConfig, PieceMovement } from '../core/models/index.js';
+import type { WorkflowConfig, WorkflowStep } from '../core/models/index.js';
 
 // --- Mock setup (must be before imports that use these modules) ---
 
@@ -21,11 +21,11 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/piece/evaluation/index.js', () => ({
+vi.mock('../core/workflow/evaluation/index.js', () => ({
   detectMatchedRule: vi.fn(),
 }));
 
-vi.mock('../core/piece/phase-runner.js', () => ({
+vi.mock('../core/workflow/phase-runner.js', () => ({
   needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
   runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
@@ -38,23 +38,23 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 // --- Imports (after mocks) ---
 
-import { PieceEngine } from '../core/piece/index.js';
+import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
 import {
   makeResponse,
-  makeMovement,
+  makeStep,
   makeRule,
-  buildDefaultPieceConfig,
+  buildDefaultWorkflowConfig,
   mockRunAgentSequence,
   mockDetectMatchedRuleSequence,
   createTestTmpDir,
   applyDefaultMocks,
-  cleanupPieceEngine,
+  cleanupWorkflowEngine,
 } from './engine-test-helpers.js';
 
-describe('PieceEngine Integration: Happy Path', () => {
+describe('WorkflowEngine Integration: Happy Path', () => {
   let tmpDir: string;
-  let engine: PieceEngine | null = null;
+  let engine: WorkflowEngine | null = null;
 
   beforeEach(() => {
     vi.resetAllMocks();
@@ -64,7 +64,7 @@ describe('PieceEngine Integration: Happy Path', () => {
 
   afterEach(() => {
     if (engine) {
-      cleanupPieceEngine(engine);
+      cleanupWorkflowEngine(engine);
       engine = null;
     }
     if (existsSync(tmpDir)) {
@@ -77,8 +77,8 @@ describe('PieceEngine Integration: Happy Path', () => {
   // =====================================================
   describe('Happy path', () => {
     it('should complete: plan → implement → ai_review → reviewers(all approved) → supervise → COMPLETE', async () => {
-      const config = buildDefaultPieceConfig();
-      engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      const config = buildDefaultWorkflowConfig();
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({ persona: 'plan', content: 'Plan complete' }),
@@ -100,14 +100,14 @@ describe('PieceEngine Integration: Happy Path', () => {
       ]);
 
       const completeFn = vi.fn();
-      engine.on('piece:complete', completeFn);
+      engine.on('workflow:complete', completeFn);
 
       const state = await engine.run();
 
       expect(state.status).toBe('completed');
       expect(state.iteration).toBe(5); // plan, implement, ai_review, reviewers, supervise
       expect(completeFn).toHaveBeenCalledOnce();
-      expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(6); // 4 normal + 2 parallel sub-movements
+      expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(6); // 4 normal + 2 parallel sub-steps
     });
   });
 
@@ -116,8 +116,8 @@ describe('PieceEngine Integration: Happy Path', () => {
   // =====================================================
   describe('Review reject and fix loop', () => {
     it('should handle: reviewers(needs_fix) → fix → reviewers(all approved) → supervise → COMPLETE', async () => {
-      const config = buildDefaultPieceConfig();
-      engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      const config = buildDefaultWorkflowConfig();
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({ persona: 'plan', content: 'Plan done' }),
@@ -157,8 +157,8 @@ describe('PieceEngine Integration: Happy Path', () => {
     });
 
     it('should inject latest reviewers output as Previous Response for repeated fix steps', async () => {
-      const config = buildDefaultPieceConfig();
-      engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      const config = buildDefaultWorkflowConfig();
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({ persona: 'plan', content: 'Plan done' }),
@@ -200,7 +200,7 @@ describe('PieceEngine Integration: Happy Path', () => {
       ]);
 
       const fixInstructions: string[] = [];
-      engine.on('movement:start', (step, _iteration, instruction) => {
+      engine.on('step:start', (step, _iteration, instruction) => {
         if (step.name === 'fix') {
           fixInstructions.push(instruction);
         }
@@ -225,9 +225,9 @@ describe('PieceEngine Integration: Happy Path', () => {
       expect(fix2).not.toContain('Sec R1 needs fix');
     });
 
-    it('should use the latest movement output across different steps for Previous Response', async () => {
-      const config = buildDefaultPieceConfig();
-      engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+    it('should use the latest step output across different steps for Previous Response', async () => {
+      const config = buildDefaultWorkflowConfig();
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({ persona: 'plan', content: 'Plan done' }),
@@ -255,7 +255,7 @@ describe('PieceEngine Integration: Happy Path', () => {
 
       const aiFixInstructions: string[] = [];
       const superviseInstructions: string[] = [];
-      engine.on('movement:start', (step, _iteration, instruction) => {
+      engine.on('step:start', (step, _iteration, instruction) => {
         if (step.name === 'ai_fix') {
           aiFixInstructions.push(instruction);
         } else if (step.name === 'supervise') {
@@ -284,8 +284,8 @@ describe('PieceEngine Integration: Happy Path', () => {
   // =====================================================
   describe('AI review reject and fix', () => {
     it('should handle: ai_review(issues) → ai_fix → reviewers → supervise → COMPLETE', async () => {
-      const config = buildDefaultPieceConfig();
-      engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      const config = buildDefaultWorkflowConfig();
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({ persona: 'plan', content: 'Plan done' }),
@@ -320,9 +320,9 @@ describe('PieceEngine Integration: Happy Path', () => {
   // 4. ABORT transition
   // =====================================================
   describe('ABORT transition', () => {
-    it('should abort when movement transitions to ABORT', async () => {
-      const config = buildDefaultPieceConfig();
-      engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+    it('should abort when a step transitions to ABORT', async () => {
+      const config = buildDefaultWorkflowConfig();
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({ persona: 'plan', content: 'Requirements unclear' }),
@@ -334,7 +334,7 @@ describe('PieceEngine Integration: Happy Path', () => {
       ]);
 
       const abortFn = vi.fn();
-      engine.on('piece:abort', abortFn);
+      engine.on('workflow:abort', abortFn);
 
       const state = await engine.run();
 
@@ -347,9 +347,9 @@ describe('PieceEngine Integration: Happy Path', () => {
   // 5. Event emissions
   // =====================================================
   describe('Event emissions', () => {
-    it('should emit movement:start and movement:complete for each movement', async () => {
-      const config = buildDefaultPieceConfig();
-      engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+    it('should emit step:start and step:complete for each step', async () => {
+      const config = buildDefaultWorkflowConfig();
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({ persona: 'plan', content: 'Plan' }),
@@ -372,31 +372,31 @@ describe('PieceEngine Integration: Happy Path', () => {
 
       const startFn = vi.fn();
       const completeFn = vi.fn();
-      engine.on('movement:start', startFn);
-      engine.on('movement:complete', completeFn);
+      engine.on('step:start', startFn);
+      engine.on('step:complete', completeFn);
 
       await engine.run();
 
-      // 5 movements: plan, implement, ai_review, reviewers, supervise
+      // 5 steps: plan, implement, ai_review, reviewers, supervise
       expect(startFn).toHaveBeenCalledTimes(5);
       expect(completeFn).toHaveBeenCalledTimes(5);
 
-      const startedMovements = startFn.mock.calls.map(call => (call[0] as PieceMovement).name);
-      expect(startedMovements).toEqual(['plan', 'implement', 'ai_review', 'reviewers', 'supervise']);
+      const startedSteps = startFn.mock.calls.map(call => (call[0] as WorkflowStep).name);
+      expect(startedSteps).toEqual(['plan', 'implement', 'ai_review', 'reviewers', 'supervise']);
     });
 
-    it('should pass instruction to movement:start for normal movements', async () => {
-      const simpleConfig: PieceConfig = {
+    it('should pass instruction to step:start for normal steps', async () => {
+      const simpleConfig: WorkflowConfig = {
         name: 'test',
-        maxMovements: 10,
-        initialMovement: 'plan',
-        movements: [
-          makeMovement('plan', {
+        maxSteps: 10,
+        initialStep: 'plan',
+        steps: [
+          makeStep('plan', {
             rules: [makeRule('done', 'COMPLETE')],
           }),
         ],
       };
-      engine = new PieceEngine(simpleConfig, tmpDir, 'test task', { projectCwd: tmpDir });
+      engine = new WorkflowEngine(simpleConfig, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({ persona: 'plan', content: 'Plan done' }),
@@ -406,20 +406,20 @@ describe('PieceEngine Integration: Happy Path', () => {
       ]);
 
       const startFn = vi.fn();
-      engine.on('movement:start', startFn);
+      engine.on('step:start', startFn);
 
       await engine.run();
 
       expect(startFn).toHaveBeenCalledTimes(1);
-      // movement:start should receive (movement, iteration, instruction)
-      const [_movement, _iteration, instruction] = startFn.mock.calls[0];
+      // step:start should receive (step, iteration, instruction)
+      const [_step, _iteration, instruction] = startFn.mock.calls[0];
       expect(typeof instruction).toBe('string');
       expect(instruction.length).toBeGreaterThan(0);
     });
 
-    it('should pass empty instruction to movement:start for parallel movements', async () => {
-      const config = buildDefaultPieceConfig();
-      engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+    it('should pass empty instruction to step:start for parallel steps', async () => {
+      const config = buildDefaultWorkflowConfig();
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({ persona: 'plan', content: 'Plan' }),
@@ -441,23 +441,23 @@ describe('PieceEngine Integration: Happy Path', () => {
       ]);
 
       const startFn = vi.fn();
-      engine.on('movement:start', startFn);
+      engine.on('step:start', startFn);
 
       await engine.run();
 
-      // Find the "reviewers" movement:start call (parallel movement)
+      // Find the "reviewers" step:start call (parallel step)
       const reviewersCall = startFn.mock.calls.find(
-        (call) => (call[0] as PieceMovement).name === 'reviewers'
+        (call) => (call[0] as WorkflowStep).name === 'reviewers'
       );
       expect(reviewersCall).toBeDefined();
-      // Parallel movements emit empty string for instruction
+      // Parallel steps emit empty string for instruction
       const [, , instruction] = reviewersCall!;
       expect(instruction).toBe('');
     });
 
     it('should emit iteration:limit when max iterations reached', async () => {
-      const config = buildDefaultPieceConfig({ maxMovements: 1 });
-      engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      const config = buildDefaultWorkflowConfig({ maxSteps: 1 });
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({ persona: 'plan', content: 'Plan' }),
@@ -476,12 +476,12 @@ describe('PieceEngine Integration: Happy Path', () => {
   });
 
   // =====================================================
-  // 6. Movement output tracking
+  // 6. Step output tracking
   // =====================================================
-  describe('Movement output tracking', () => {
-    it('should store outputs for all executed movements', async () => {
-      const config = buildDefaultPieceConfig();
-      engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+  describe('Step output tracking', () => {
+    it('should store outputs for all executed steps', async () => {
+      const config = buildDefaultWorkflowConfig();
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({ persona: 'plan', content: 'Plan output' }),
@@ -504,10 +504,10 @@ describe('PieceEngine Integration: Happy Path', () => {
 
       const state = await engine.run();
 
-      expect(state.movementOutputs.get('plan')!.content).toBe('Plan output');
-      expect(state.movementOutputs.get('implement')!.content).toBe('Implement output');
-      expect(state.movementOutputs.get('ai_review')!.content).toBe('AI review output');
-      expect(state.movementOutputs.get('supervise')!.content).toBe('Supervise output');
+      expect(state.stepOutputs.get('plan')!.content).toBe('Plan output');
+      expect(state.stepOutputs.get('implement')!.content).toBe('Implement output');
+      expect(state.stepOutputs.get('ai_review')!.content).toBe('AI review output');
+      expect(state.stepOutputs.get('supervise')!.content).toBe('Supervise output');
     });
   });
 
@@ -516,17 +516,17 @@ describe('PieceEngine Integration: Happy Path', () => {
   // =====================================================
   describe('Phase events', () => {
     it('should emit phase:start and phase:complete events for Phase 1', async () => {
-      const simpleConfig: PieceConfig = {
+      const simpleConfig: WorkflowConfig = {
         name: 'test',
-        maxMovements: 10,
-        initialMovement: 'plan',
-        movements: [
-          makeMovement('plan', {
+        maxSteps: 10,
+        initialStep: 'plan',
+        steps: [
+          makeStep('plan', {
             rules: [makeRule('done', 'COMPLETE')],
           }),
         ],
       };
-      engine = new PieceEngine(simpleConfig, tmpDir, 'test task', { projectCwd: tmpDir });
+      engine = new WorkflowEngine(simpleConfig, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({ persona: 'plan', content: 'Plan done' }),
@@ -557,9 +557,9 @@ describe('PieceEngine Integration: Happy Path', () => {
       );
     });
 
-    it('should emit phase events for all movements in happy path', async () => {
-      const config = buildDefaultPieceConfig();
-      engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+    it('should emit phase events for all steps in happy path', async () => {
+      const config = buildDefaultWorkflowConfig();
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({ persona: 'plan', content: 'Plan' }),
@@ -587,7 +587,7 @@ describe('PieceEngine Integration: Happy Path', () => {
 
       await engine.run();
 
-      // 4 normal movements + 2 parallel sub-movements = 6 Phase 1 invocations
+      // 4 normal steps + 2 parallel sub-steps = 6 Phase 1 invocations
       expect(phaseStartFn).toHaveBeenCalledTimes(6);
       expect(phaseCompleteFn).toHaveBeenCalledTimes(6);
 
@@ -603,53 +603,53 @@ describe('PieceEngine Integration: Happy Path', () => {
   // 8. Config validation
   // =====================================================
   describe('Config validation', () => {
-    it('should throw when initial movement does not exist', () => {
-      const config = buildDefaultPieceConfig({ initialMovement: 'nonexistent' });
+    it('should throw when the initial step does not exist', () => {
+      const config = buildDefaultWorkflowConfig({ initialStep: 'nonexistent' });
 
       expect(() => {
-        new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
-      }).toThrow('Unknown movement: nonexistent');
+        new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      }).toThrow('Unknown step: nonexistent');
     });
 
-    it('should throw when rule references nonexistent movement', () => {
-      const config: PieceConfig = {
+    it('should throw when a rule references a nonexistent step', () => {
+      const config: WorkflowConfig = {
         name: 'test',
-        maxMovements: 10,
-        initialMovement: 'step1',
-        movements: [
-          makeMovement('step1', {
+        maxSteps: 10,
+        initialStep: 'step1',
+        steps: [
+          makeStep('step1', {
             rules: [makeRule('done', 'nonexistent_step')],
           }),
         ],
       };
 
       expect(() => {
-        new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+        new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
       }).toThrow('nonexistent_step');
     });
 
-    it('should throw when startMovement option references nonexistent movement', () => {
-      const config = buildDefaultPieceConfig();
+    it('should throw when startStep option references nonexistent step', () => {
+      const config = buildDefaultWorkflowConfig();
 
       expect(() => {
-        new PieceEngine(config, tmpDir, 'test task', {
+        new WorkflowEngine(config, tmpDir, 'test task', {
           projectCwd: tmpDir,
-          startMovement: 'nonexistent',
+          startStep: 'nonexistent',
         });
-      }).toThrow('Unknown movement: nonexistent');
+      }).toThrow('Unknown step: nonexistent');
     });
   });
 
   // =====================================================
-  // 9. startMovement option
+  // 9. startStep option
   // =====================================================
-  describe('startMovement option', () => {
-    it('should start from specified movement instead of initialMovement', async () => {
-      const config = buildDefaultPieceConfig();
+  describe('startStep option', () => {
+    it('should start from specified step instead of initialStep', async () => {
+      const config = buildDefaultWorkflowConfig();
       // Start from ai_review, skipping plan and implement
-      engine = new PieceEngine(config, tmpDir, 'test task', {
+      engine = new WorkflowEngine(config, tmpDir, 'test task', {
         projectCwd: tmpDir,
-        startMovement: 'ai_review',
+        startStep: 'ai_review',
       });
 
       mockRunAgentSequence([
@@ -668,24 +668,24 @@ describe('PieceEngine Integration: Happy Path', () => {
       ]);
 
       const startFn = vi.fn();
-      engine.on('movement:start', startFn);
+      engine.on('step:start', startFn);
 
       const state = await engine.run();
 
       expect(state.status).toBe('completed');
-      // Should only run 3 movements: ai_review, reviewers, supervise
+      // Should only run 3 steps: ai_review, reviewers, supervise
       expect(state.iteration).toBe(3);
 
-      // First movement should be ai_review, not plan
-      const startedMovements = startFn.mock.calls.map(call => (call[0] as PieceMovement).name);
-      expect(startedMovements[0]).toBe('ai_review');
-      expect(startedMovements).not.toContain('plan');
-      expect(startedMovements).not.toContain('implement');
+      // First step should be ai_review, not plan
+      const startedSteps = startFn.mock.calls.map(call => (call[0] as WorkflowStep).name);
+      expect(startedSteps[0]).toBe('ai_review');
+      expect(startedSteps).not.toContain('plan');
+      expect(startedSteps).not.toContain('implement');
     });
 
-    it('should use initialMovement when startMovement is not specified', async () => {
-      const config = buildDefaultPieceConfig();
-      engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+    it('should use initialStep when startStep is not specified', async () => {
+      const config = buildDefaultWorkflowConfig();
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({ persona: 'plan', content: 'Plan complete' }),
@@ -707,13 +707,13 @@ describe('PieceEngine Integration: Happy Path', () => {
       ]);
 
       const startFn = vi.fn();
-      engine.on('movement:start', startFn);
+      engine.on('step:start', startFn);
 
       await engine.run();
 
-      // First movement should be plan (the initialMovement)
-      const startedMovements = startFn.mock.calls.map(call => (call[0] as PieceMovement).name);
-      expect(startedMovements[0]).toBe('plan');
+      // First step should be plan (the initialStep)
+      const startedSteps = startFn.mock.calls.map(call => (call[0] as WorkflowStep).name);
+      expect(startedSteps[0]).toBe('plan');
     });
   });
 });

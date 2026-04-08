@@ -1,5 +1,5 @@
 import { TaskRunner } from '../../../infra/task/index.js';
-import { resolvePieceConfigValues } from '../../../infra/config/index.js';
+import { resolveWorkflowConfigValues } from '../../../infra/config/index.js';
 import { header, info, status, blankLine } from '../../../shared/ui/index.js';
 import {
   getErrorMessage,
@@ -19,7 +19,7 @@ export async function runAllTasks(
   options?: TaskExecutionOptions,
 ): Promise<void> {
   const taskRunner = new TaskRunner(cwd);
-  const globalConfig = resolvePieceConfigValues(
+  const globalConfig = resolveWorkflowConfigValues(
     cwd,
     ['notificationSound', 'notificationSoundEvents', 'concurrency', 'taskPollIntervalMs'],
   );

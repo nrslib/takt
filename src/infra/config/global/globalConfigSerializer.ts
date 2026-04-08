@@ -1,7 +1,7 @@
 import type { GlobalConfig } from '../../../core/models/config-types.js';
 import {
   denormalizeProviderProfiles,
-  denormalizePieceOverrides,
+  denormalizeWorkflowOverrides,
   denormalizeProviderOptions,
 } from '../configNormalizers.js';
 
@@ -58,8 +58,8 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
   if (config.disabledBuiltins && config.disabledBuiltins.length > 0) {
     raw.disabled_builtins = config.disabledBuiltins;
   }
-  if (config.enableBuiltinPieces !== undefined) {
-    raw.enable_builtin_workflows = config.enableBuiltinPieces;
+  if (config.enableBuiltinWorkflows !== undefined) {
+    raw.enable_builtin_workflows = config.enableBuiltinWorkflows;
   }
   if (config.anthropicApiKey) {
     raw.anthropic_api_key = config.anthropicApiKey;
@@ -103,8 +103,8 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
   if (config.bookmarksFile) {
     raw.bookmarks_file = config.bookmarksFile;
   }
-  if (config.pieceCategoriesFile) {
-    raw.workflow_categories_file = config.pieceCategoriesFile;
+  if (config.workflowCategoriesFile) {
+    raw.workflow_categories_file = config.workflowCategoriesFile;
   }
   const rawProviderOptions = denormalizeProviderOptions(config.providerOptions);
   if (rawProviderOptions) {
@@ -119,16 +119,16 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
       prepare: [...new Set(config.runtime.prepare)],
     };
   }
-  if (config.pieceRuntimePrepare) {
+  if (config.workflowRuntimePrepare) {
     raw.workflow_runtime_prepare = {
-      custom_scripts: config.pieceRuntimePrepare.customScripts,
+      custom_scripts: config.workflowRuntimePrepare.customScripts,
     };
   }
-  if (config.pieceArpeggio) {
+  if (config.workflowArpeggio) {
     raw.workflow_arpeggio = {
-      custom_data_source_modules: config.pieceArpeggio.customDataSourceModules,
-      custom_merge_inline_js: config.pieceArpeggio.customMergeInlineJs,
-      custom_merge_files: config.pieceArpeggio.customMergeFiles,
+      custom_data_source_modules: config.workflowArpeggio.customDataSourceModules,
+      custom_merge_inline_js: config.workflowArpeggio.customMergeInlineJs,
+      custom_merge_files: config.workflowArpeggio.customMergeFiles,
     };
   }
   if (config.syncConflictResolver) {
@@ -136,8 +136,8 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
       auto_approve_tools: config.syncConflictResolver.autoApproveTools,
     };
   }
-  if (config.pieceMcpServers && Object.keys(config.pieceMcpServers).length > 0) {
-    raw.workflow_mcp_servers = config.pieceMcpServers;
+  if (config.workflowMcpServers && Object.keys(config.workflowMcpServers).length > 0) {
+    raw.workflow_mcp_servers = config.workflowMcpServers;
   }
   if (config.preventSleep !== undefined) {
     raw.prevent_sleep = config.preventSleep;
@@ -150,11 +150,11 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
     if (config.notificationSoundEvents.iterationLimit !== undefined) {
       eventRaw.iteration_limit = config.notificationSoundEvents.iterationLimit;
     }
-    if (config.notificationSoundEvents.pieceComplete !== undefined) {
-      eventRaw.workflow_complete = config.notificationSoundEvents.pieceComplete;
+    if (config.notificationSoundEvents.workflowComplete !== undefined) {
+      eventRaw.workflow_complete = config.notificationSoundEvents.workflowComplete;
     }
-    if (config.notificationSoundEvents.pieceAbort !== undefined) {
-      eventRaw.workflow_abort = config.notificationSoundEvents.pieceAbort;
+    if (config.notificationSoundEvents.workflowAbort !== undefined) {
+      eventRaw.workflow_abort = config.notificationSoundEvents.workflowAbort;
     }
     if (config.notificationSoundEvents.runComplete !== undefined) {
       eventRaw.run_complete = config.notificationSoundEvents.runComplete;
@@ -172,9 +172,9 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
   if (config.baseBranch) {
     raw.base_branch = config.baseBranch;
   }
-  const denormalizedPieceOverrides = denormalizePieceOverrides(config.pieceOverrides);
-  if (denormalizedPieceOverrides) {
-    raw.workflow_overrides = denormalizedPieceOverrides;
+  const denormalizedWorkflowOverrides = denormalizeWorkflowOverrides(config.workflowOverrides);
+  if (denormalizedWorkflowOverrides) {
+    raw.workflow_overrides = denormalizedWorkflowOverrides;
   }
   // Project-local keys (also accepted in global config)
   if (config.pipeline) {
@@ -205,8 +205,8 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
   if (config.taskPollIntervalMs !== undefined) {
     raw.task_poll_interval_ms = config.taskPollIntervalMs;
   }
-  if (config.interactivePreviewMovements !== undefined) {
-    raw.interactive_preview_steps = config.interactivePreviewMovements;
+  if (config.interactivePreviewSteps !== undefined) {
+    raw.interactive_preview_steps = config.interactivePreviewSteps;
   }
   return raw;
 }

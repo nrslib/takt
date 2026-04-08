@@ -35,8 +35,8 @@ describe('E2E: Reset categories command (takt reset categories)', () => {
     const output = result.stdout;
     expect(output).toMatch(/reset/i);
 
-    // Then: piece-categories.yaml exists with initial content
-    const categoriesPath = join(isolatedEnv.taktDir, 'preferences', 'piece-categories.yaml');
+    // Then: workflow-categories.yaml exists with initial content
+    const categoriesPath = join(isolatedEnv.taktDir, 'preferences', 'workflow-categories.yaml');
     expect(existsSync(categoriesPath)).toBe(true);
     const content = readFileSync(categoriesPath, 'utf-8');
     expect(content).toContain('workflow_categories: {}');

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 describe('public API exports', () => {
-  it('should expose piece usecases, engine, and piece loader APIs', async () => {
+  it('should expose workflow-centric usecases, engine, and loader APIs', async () => {
     const api = await import('../index.js');
     expect(typeof api.executeAgent).toBe('function');
     expect(typeof api.generateReport).toBe('function');
@@ -10,11 +10,14 @@ describe('public API exports', () => {
     expect(typeof api.evaluateCondition).toBe('function');
     expect(typeof api.decomposeTask).toBe('function');
 
-    expect(typeof api.PieceEngine).toBe('function');
-
-    expect(typeof api.loadPiece).toBe('function');
-    expect(typeof api.loadPieceByIdentifier).toBe('function');
-    expect(typeof api.listPieces).toBe('function');
+    expect(typeof api.WorkflowEngine).toBe('function');
+    expect(typeof api.loadWorkflow).toBe('function');
+    expect(typeof api.loadWorkflowByIdentifier).toBe('function');
+    expect(typeof api.listWorkflows).toBe('function');
+    expect('WorkflowEngine' in api).toBe(true);
+    expect('loadWorkflow' in api).toBe(true);
+    expect('loadWorkflowByIdentifier' in api).toBe(true);
+    expect('listWorkflows' in api).toBe(true);
   });
 
   it('should not expose internal engine implementation details', async () => {
@@ -30,10 +33,10 @@ describe('public API exports', () => {
     expect('ParallelLogger' in api).toBe(false);
     expect('InstructionBuilder' in api).toBe(false);
     expect('ReportInstructionBuilder' in api).toBe(false);
-    expect('COMPLETE_MOVEMENT' in api).toBe(false);
-    expect('ABORT_MOVEMENT' in api).toBe(false);
+    expect('COMPLETE_STEP' in api).toBe(false);
+    expect('ABORT_STEP' in api).toBe(false);
     expect('ERROR_MESSAGES' in api).toBe(false);
-    expect('determineNextMovementByRules' in api).toBe(false);
+    expect('determineNextStepByRules' in api).toBe(false);
     expect('extractBlockedPrompt' in api).toBe(false);
     expect('LoopDetector' in api).toBe(false);
     expect('createInitialState' in api).toBe(false);
@@ -49,7 +52,7 @@ describe('public API exports', () => {
     expect('CodexClient' in api).toBe(false);
     expect('mapToCodexSandboxMode' in api).toBe(false);
     expect('getResourcesDir' in api).toBe(false);
-    expect('DEFAULT_PIECE_NAME' in api).toBe(false);
+    expect('DEFAULT_WORKFLOW_NAME' in api).toBe(false);
     expect('buildPrompt' in api).toBe(false);
     expect('writeFileAtomic' in api).toBe(false);
     expect('getInputHistoryPath' in api).toBe(false);
@@ -67,7 +70,7 @@ describe('public API exports', () => {
     expect('getWorktreeSessionPath' in api).toBe(false);
     expect('loadWorktreeSessions' in api).toBe(false);
     expect('updateWorktreeSession' in api).toBe(false);
-    expect('listPieceEntries' in api).toBe(false);
-    expect('PieceDirEntry' in api).toBe(false);
+    expect('listWorkflowEntries' in api).toBe(false);
+    expect('WorkflowDirEntry' in api).toBe(false);
   });
 });

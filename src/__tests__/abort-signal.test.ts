@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { buildAbortSignal } from '../core/piece/engine/abort-signal.js';
+import { buildAbortSignal } from '../core/workflow/engine/abort-signal.js';
 
 describe('buildAbortSignal', () => {
   beforeEach(() => {

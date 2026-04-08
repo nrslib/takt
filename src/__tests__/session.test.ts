@@ -15,8 +15,8 @@ import {
   type SessionLog,
   type NdjsonRecord,
   type NdjsonStepComplete,
-  type NdjsonPieceComplete,
-  type NdjsonPieceAbort,
+  type NdjsonWorkflowComplete,
+  type NdjsonWorkflowAbort,
   type NdjsonPhaseStart,
   type NdjsonPhaseComplete,
   type NdjsonInteractiveStart,
@@ -30,10 +30,10 @@ function createTempProject(): string {
   return dir;
 }
 
-function initTestNdjsonLog(sessionId: string, task: string, pieceName: string, projectDir: string): string {
+function initTestNdjsonLog(sessionId: string, task: string, workflowName: string, projectDir: string): string {
   const logsDir = join(projectDir, '.takt', 'runs', 'test-run', 'logs');
   mkdirSync(logsDir, { recursive: true });
-  return initNdjsonLog(sessionId, task, pieceName, { logsDir });
+  return initNdjsonLog(sessionId, task, workflowName, { logsDir });
 }
 
 describe('NDJSON log', () => {
@@ -48,7 +48,7 @@ describe('NDJSON log', () => {
   });
 
   describe('initNdjsonLog', () => {
-    it('should create a .jsonl file with piece_start record', () => {
+    it('should create a .jsonl file with workflow start record', () => {
       const filepath = initTestNdjsonLog('sess-001', 'my task', 'default', projectDir);
 
       expect(filepath).toContain('sess-001.jsonl');
@@ -59,10 +59,10 @@ describe('NDJSON log', () => {
       expect(lines).toHaveLength(1);
 
       const record = JSON.parse(lines[0]!) as NdjsonRecord;
-      expect(record.type).toBe('piece_start');
-      if (record.type === 'piece_start') {
+      expect(record.type).toBe('workflow_start');
+      if (record.type === 'workflow_start') {
         expect(record.task).toBe('my task');
-        expect(record.pieceName).toBe('default');
+        expect(record.workflowName).toBe('default');
         expect(record.startTime).toBeDefined();
       }
     });
@@ -94,10 +94,10 @@ describe('NDJSON log', () => {
 
       const content = readFileSync(filepath, 'utf-8');
       const lines = content.trim().split('\n');
-      expect(lines).toHaveLength(3); // piece_start + step_start + step_complete
+      expect(lines).toHaveLength(3); // workflow_start + step_start + step_complete
 
       const parsed0 = JSON.parse(lines[0]!) as NdjsonRecord;
-      expect(parsed0.type).toBe('piece_start');
+      expect(parsed0.type).toBe('workflow_start');
 
       const parsed1 = JSON.parse(lines[1]!) as NdjsonRecord;
       expect(parsed1.type).toBe('step_start');
@@ -142,8 +142,8 @@ describe('NDJSON log', () => {
       };
       appendNdjsonLine(filepath, stepComplete);
 
-      const complete: NdjsonPieceComplete = {
-        type: 'piece_complete',
+      const complete: NdjsonWorkflowComplete = {
+        type: 'workflow_complete',
         iterations: 1,
         endTime: '2025-01-01T00:00:03.000Z',
       };
@@ -152,7 +152,7 @@ describe('NDJSON log', () => {
       const log = loadNdjsonLog(filepath);
       expect(log).not.toBeNull();
       expect(log!.task).toBe('build app');
-      expect(log!.pieceName).toBe('default');
+      expect(log!.workflowName).toBe('default');
       expect(log!.status).toBe('completed');
       expect(log!.iterations).toBe(1);
       expect(log!.endTime).toBe('2025-01-01T00:00:03.000Z');
@@ -163,7 +163,7 @@ describe('NDJSON log', () => {
       expect(log!.history[0]!.matchedRuleMethod).toBe('phase3_tag');
     });
 
-    it('should handle aborted piece', () => {
+    it('should handle aborted workflow', () => {
       const filepath = initTestNdjsonLog('sess-004', 'failing task', 'wf', projectDir);
 
       appendNdjsonLine(filepath, {
@@ -185,10 +185,10 @@ describe('NDJSON log', () => {
         timestamp: '2025-01-01T00:00:02.000Z',
       } satisfies NdjsonStepComplete);
 
-      const abort: NdjsonPieceAbort = {
-        type: 'piece_abort',
+      const abort: NdjsonWorkflowAbort = {
+        type: 'workflow_abort',
         iterations: 1,
-        reason: 'Max movements reached',
+        reason: 'Max steps reached',
         endTime: '2025-01-01T00:00:03.000Z',
       };
       appendNdjsonLine(filepath, abort);
@@ -237,7 +237,7 @@ describe('NDJSON log', () => {
       } satisfies NdjsonStepComplete);
 
       appendNdjsonLine(filepath, {
-        type: 'piece_complete',
+        type: 'workflow_complete',
         iterations: 1,
         endTime: '2025-01-01T00:00:03.000Z',
       });
@@ -265,7 +265,7 @@ describe('NDJSON log', () => {
       } satisfies NdjsonStepComplete);
 
       appendNdjsonLine(filepath, {
-        type: 'piece_complete',
+        type: 'workflow_complete',
         iterations: 1,
         endTime: '2025-01-01T00:00:03.000Z',
       });
@@ -298,8 +298,8 @@ describe('NDJSON log', () => {
 
       const after2 = readFileSync(filepath, 'utf-8').trim().split('\n');
       expect(after2).toHaveLength(2);
-      // First line should still be piece_start
-      expect(JSON.parse(after2[0]!).type).toBe('piece_start');
+      // First line should still be the workflow start record
+      expect(JSON.parse(after2[0]!).type).toBe('workflow_start');
     });
 
     it('should produce valid JSON on each line', () => {
@@ -342,7 +342,7 @@ describe('NDJSON log', () => {
 
       const content = readFileSync(filepath, 'utf-8');
       const lines = content.trim().split('\n');
-      expect(lines).toHaveLength(2); // piece_start + phase_start
+      expect(lines).toHaveLength(2); // workflow_start + phase_start
 
       const parsed = JSON.parse(lines[1]!) as NdjsonRecord;
       expect(parsed.type).toBe('phase_start');
@@ -521,7 +521,7 @@ describe('NDJSON log', () => {
       expect(result).toBeNull();
     });
 
-    it('should extract failure info from aborted piece log', () => {
+    it('should extract failure info from aborted workflow log', () => {
       const filepath = initTestNdjsonLog('20260205-120000-abc123', 'failing task', 'wf', projectDir);
 
       // Add step_start for plan
@@ -553,24 +553,24 @@ describe('NDJSON log', () => {
         timestamp: '2025-01-01T00:00:03.000Z',
       });
 
-      // Add piece_abort
+      // Add workflow_abort
       appendNdjsonLine(filepath, {
-        type: 'piece_abort',
+        type: 'workflow_abort',
         iterations: 1,
         reason: 'spawn node ENOENT',
         endTime: '2025-01-01T00:00:04.000Z',
-      } satisfies NdjsonPieceAbort);
+      } satisfies NdjsonWorkflowAbort);
 
       const result = extractFailureInfo(filepath);
       expect(result).not.toBeNull();
-      expect(result!.lastCompletedMovement).toBe('plan');
-      expect(result!.failedMovement).toBe('implement');
+      expect(result!.lastCompletedStep).toBe('plan');
+      expect(result!.failedStep).toBe('implement');
       expect(result!.iterations).toBe(1);
       expect(result!.errorMessage).toBe('spawn node ENOENT');
       expect(result!.sessionId).toBe('20260205-120000-abc123');
     });
 
-    it('should handle log with only completed movements (no abort)', () => {
+    it('should handle log with only completed steps (no abort)', () => {
       const filepath = initTestNdjsonLog('sess-success-001', 'task', 'wf', projectDir);
 
       appendNdjsonLine(filepath, {
@@ -592,15 +592,15 @@ describe('NDJSON log', () => {
       } satisfies NdjsonStepComplete);
 
       appendNdjsonLine(filepath, {
-        type: 'piece_complete',
+        type: 'workflow_complete',
         iterations: 1,
         endTime: '2025-01-01T00:00:03.000Z',
       });
 
       const result = extractFailureInfo(filepath);
       expect(result).not.toBeNull();
-      expect(result!.lastCompletedMovement).toBe('plan');
-      expect(result!.failedMovement).toBeNull();
+      expect(result!.lastCompletedStep).toBe('plan');
+      expect(result!.failedStep).toBeNull();
       expect(result!.iterations).toBe(1);
       expect(result!.errorMessage).toBeNull();
     });
@@ -617,16 +617,16 @@ describe('NDJSON log', () => {
       });
 
       appendNdjsonLine(filepath, {
-        type: 'piece_abort',
+        type: 'workflow_abort',
         iterations: 0,
         reason: 'API error',
         endTime: '2025-01-01T00:00:02.000Z',
-      } satisfies NdjsonPieceAbort);
+      } satisfies NdjsonWorkflowAbort);
 
       const result = extractFailureInfo(filepath);
       expect(result).not.toBeNull();
-      expect(result!.lastCompletedMovement).toBeNull();
-      expect(result!.failedMovement).toBe('plan');
+      expect(result!.lastCompletedStep).toBeNull();
+      expect(result!.failedStep).toBe('plan');
       expect(result!.iterations).toBe(0);
       expect(result!.errorMessage).toBe('API error');
     });

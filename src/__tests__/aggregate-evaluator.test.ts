@@ -1,17 +1,17 @@
 /**
  * Unit tests for AggregateEvaluator
  *
- * Tests all()/any() aggregate condition evaluation against sub-movement results.
+ * Tests all()/any() aggregate condition evaluation against sub-step results.
  */
 
 import { describe, it, expect } from 'vitest';
-import { AggregateEvaluator } from '../core/piece/evaluation/AggregateEvaluator.js';
-import type { PieceMovement, PieceState, AgentResponse } from '../core/models/types.js';
+import { AggregateEvaluator } from '../core/workflow/evaluation/AggregateEvaluator.js';
+import type { WorkflowStep, WorkflowState, AgentResponse } from '../core/models/types.js';
 
-function makeState(outputs: Record<string, { matchedRuleIndex?: number }>): PieceState {
-  const movementOutputs = new Map<string, AgentResponse>();
+function makeState(outputs: Record<string, { matchedRuleIndex?: number }>): WorkflowState {
+  const stepOutputs = new Map<string, AgentResponse>();
   for (const [name, data] of Object.entries(outputs)) {
-    movementOutputs.set(name, {
+    stepOutputs.set(name, {
       persona: name,
       status: 'done',
       content: '',
@@ -20,18 +20,18 @@ function makeState(outputs: Record<string, { matchedRuleIndex?: number }>): Piec
     });
   }
   return {
-    pieceName: 'test',
-    currentMovement: 'parent',
+    workflowName: 'test',
+    currentStep: 'parent',
     iteration: 1,
-    movementOutputs,
+    stepOutputs,
     userInputs: [],
     personaSessions: new Map(),
-    movementIterations: new Map(),
+    stepIterations: new Map(),
     status: 'running',
   };
 }
 
-function makeSubMovement(name: string, conditions: string[]): PieceMovement {
+function makeSubStep(name: string, conditions: string[]): WorkflowStep {
   return {
     name,
     personaDisplayName: name,
@@ -41,10 +41,10 @@ function makeSubMovement(name: string, conditions: string[]): PieceMovement {
   };
 }
 
-function makeParentMovement(
-  parallel: PieceMovement[],
-  rules: PieceMovement['rules'],
-): PieceMovement {
+function makeParentStep(
+  parallel: WorkflowStep[],
+  rules: WorkflowStep['rules'],
+): WorkflowStep {
   return {
     name: 'parent',
     personaDisplayName: 'parent',
@@ -57,11 +57,11 @@ function makeParentMovement(
 
 describe('AggregateEvaluator', () => {
   describe('all() with single condition', () => {
-    it('should match when all sub-movements have matching condition', () => {
-      const sub1 = makeSubMovement('review-a', ['approved', 'rejected']);
-      const sub2 = makeSubMovement('review-b', ['approved', 'rejected']);
+    it('should match when all sub-steps have matching condition', () => {
+      const sub1 = makeSubStep('review-a', ['approved', 'rejected']);
+      const sub2 = makeSubStep('review-b', ['approved', 'rejected']);
 
-      const step = makeParentMovement([sub1, sub2], [
+      const step = makeParentStep([sub1, sub2], [
         {
           condition: 'all approved',
           isAggregateCondition: true,
@@ -71,7 +71,7 @@ describe('AggregateEvaluator', () => {
         },
       ]);
 
-      // Both sub-movements matched rule index 0 ("approved")
+      // Both sub-steps matched rule index 0 ("approved")
       const state = makeState({
         'review-a': { matchedRuleIndex: 0 },
         'review-b': { matchedRuleIndex: 0 },
@@ -81,11 +81,11 @@ describe('AggregateEvaluator', () => {
       expect(evaluator.evaluate()).toBe(0);
     });
 
-    it('should not match when one sub-movement has different condition', () => {
-      const sub1 = makeSubMovement('review-a', ['approved', 'rejected']);
-      const sub2 = makeSubMovement('review-b', ['approved', 'rejected']);
+    it('should not match when one sub-step has different condition', () => {
+      const sub1 = makeSubStep('review-a', ['approved', 'rejected']);
+      const sub2 = makeSubStep('review-b', ['approved', 'rejected']);
 
-      const step = makeParentMovement([sub1, sub2], [
+      const step = makeParentStep([sub1, sub2], [
         {
           condition: 'all approved',
           isAggregateCondition: true,
@@ -105,11 +105,11 @@ describe('AggregateEvaluator', () => {
       expect(evaluator.evaluate()).toBe(-1);
     });
 
-    it('should not match when sub-movement has no matched rule', () => {
-      const sub1 = makeSubMovement('review-a', ['approved', 'rejected']);
-      const sub2 = makeSubMovement('review-b', ['approved', 'rejected']);
+    it('should not match when sub-step has no matched rule', () => {
+      const sub1 = makeSubStep('review-a', ['approved', 'rejected']);
+      const sub2 = makeSubStep('review-b', ['approved', 'rejected']);
 
-      const step = makeParentMovement([sub1, sub2], [
+      const step = makeParentStep([sub1, sub2], [
         {
           condition: 'all approved',
           isAggregateCondition: true,
@@ -131,11 +131,11 @@ describe('AggregateEvaluator', () => {
   });
 
   describe('all() with multiple conditions (order-based)', () => {
-    it('should match when each sub-movement matches its corresponding condition', () => {
-      const sub1 = makeSubMovement('review-a', ['approved', 'rejected']);
-      const sub2 = makeSubMovement('review-b', ['approved', 'rejected']);
+    it('should match when each sub-step matches its corresponding condition', () => {
+      const sub1 = makeSubStep('review-a', ['approved', 'rejected']);
+      const sub2 = makeSubStep('review-b', ['approved', 'rejected']);
 
-      const step = makeParentMovement([sub1, sub2], [
+      const step = makeParentStep([sub1, sub2], [
         {
           condition: 'A approved, B rejected',
           isAggregateCondition: true,
@@ -154,10 +154,10 @@ describe('AggregateEvaluator', () => {
       expect(evaluator.evaluate()).toBe(0);
     });
 
-    it('should not match when condition count differs from sub-movement count', () => {
-      const sub1 = makeSubMovement('review-a', ['approved']);
+    it('should not match when condition count differs from sub-step count', () => {
+      const sub1 = makeSubStep('review-a', ['approved']);
 
-      const step = makeParentMovement([sub1], [
+      const step = makeParentStep([sub1], [
         {
           condition: 'mismatch',
           isAggregateCondition: true,
@@ -177,11 +177,11 @@ describe('AggregateEvaluator', () => {
   });
 
   describe('any() with single condition', () => {
-    it('should match when at least one sub-movement has matching condition', () => {
-      const sub1 = makeSubMovement('review-a', ['approved', 'rejected']);
-      const sub2 = makeSubMovement('review-b', ['approved', 'rejected']);
+    it('should match when at least one sub-step has matching condition', () => {
+      const sub1 = makeSubStep('review-a', ['approved', 'rejected']);
+      const sub2 = makeSubStep('review-b', ['approved', 'rejected']);
 
-      const step = makeParentMovement([sub1, sub2], [
+      const step = makeParentStep([sub1, sub2], [
         {
           condition: 'any approved',
           isAggregateCondition: true,
@@ -201,11 +201,11 @@ describe('AggregateEvaluator', () => {
       expect(evaluator.evaluate()).toBe(0);
     });
 
-    it('should not match when no sub-movement has matching condition', () => {
-      const sub1 = makeSubMovement('review-a', ['approved', 'rejected']);
-      const sub2 = makeSubMovement('review-b', ['approved', 'rejected']);
+    it('should not match when no sub-step has matching condition', () => {
+      const sub1 = makeSubStep('review-a', ['approved', 'rejected']);
+      const sub2 = makeSubStep('review-b', ['approved', 'rejected']);
 
-      const step = makeParentMovement([sub1, sub2], [
+      const step = makeParentStep([sub1, sub2], [
         {
           condition: 'any approved',
           isAggregateCondition: true,
@@ -227,11 +227,11 @@ describe('AggregateEvaluator', () => {
   });
 
   describe('any() with multiple conditions', () => {
-    it('should match when any sub-movement matches any of the conditions', () => {
-      const sub1 = makeSubMovement('review-a', ['approved', 'rejected', 'needs-work']);
-      const sub2 = makeSubMovement('review-b', ['approved', 'rejected', 'needs-work']);
+    it('should match when any sub-step matches any of the conditions', () => {
+      const sub1 = makeSubStep('review-a', ['approved', 'rejected', 'needs-work']);
+      const sub2 = makeSubStep('review-b', ['approved', 'rejected', 'needs-work']);
 
-      const step = makeParentMovement([sub1, sub2], [
+      const step = makeParentStep([sub1, sub2], [
         {
           condition: 'any approved or needs-work',
           isAggregateCondition: true,
@@ -254,15 +254,15 @@ describe('AggregateEvaluator', () => {
 
   describe('edge cases', () => {
     it('should return -1 when step has no rules', () => {
-      const step = makeParentMovement([], undefined);
+      const step = makeParentStep([], undefined);
       const state = makeState({});
       const evaluator = new AggregateEvaluator(step, state);
       expect(evaluator.evaluate()).toBe(-1);
     });
 
-    it('should return -1 when step has no parallel sub-movements', () => {
-      const step: PieceMovement = {
-        name: 'test-movement',
+    it('should return -1 when step has no parallel sub-steps', () => {
+      const step: WorkflowStep = {
+        name: 'test-step',
         personaDisplayName: 'tester',
         instruction: '',
         passPreviousResponse: false,
@@ -281,8 +281,8 @@ describe('AggregateEvaluator', () => {
     });
 
     it('should return -1 when rules exist but none are aggregate conditions', () => {
-      const sub1 = makeSubMovement('review-a', ['approved']);
-      const step = makeParentMovement([sub1], [
+      const sub1 = makeSubStep('review-a', ['approved']);
+      const step = makeParentStep([sub1], [
         { condition: 'approved', next: 'COMPLETE' },
       ]);
       const state = makeState({ 'review-a': { matchedRuleIndex: 0 } });
@@ -291,10 +291,10 @@ describe('AggregateEvaluator', () => {
     });
 
     it('should evaluate multiple rules and return first matching index', () => {
-      const sub1 = makeSubMovement('review-a', ['approved', 'rejected']);
-      const sub2 = makeSubMovement('review-b', ['approved', 'rejected']);
+      const sub1 = makeSubStep('review-a', ['approved', 'rejected']);
+      const sub2 = makeSubStep('review-b', ['approved', 'rejected']);
 
-      const step = makeParentMovement([sub1, sub2], [
+      const step = makeParentStep([sub1, sub2], [
         {
           condition: 'all approved',
           isAggregateCondition: true,
@@ -321,11 +321,11 @@ describe('AggregateEvaluator', () => {
       expect(evaluator.evaluate()).toBe(1);
     });
 
-    it('should skip sub-movements missing from state outputs', () => {
-      const sub1 = makeSubMovement('review-a', ['approved']);
-      const sub2 = makeSubMovement('review-b', ['approved']);
+    it('should skip sub-steps missing from state outputs', () => {
+      const sub1 = makeSubStep('review-a', ['approved']);
+      const sub2 = makeSubStep('review-b', ['approved']);
 
-      const step = makeParentMovement([sub1, sub2], [
+      const step = makeParentStep([sub1, sub2], [
         {
           condition: 'all approved',
           isAggregateCondition: true,

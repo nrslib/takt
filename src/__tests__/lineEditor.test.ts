@@ -533,7 +533,7 @@ describe('readMultilineInput cursor navigation', () => {
     });
   });
 
-  describe('word movement (option+arrow)', () => {
+  describe('word navigation (option+arrow)', () => {
     it('should move left by one word with ESC b', async () => {
       // Given: "hello world", cursor at end, press Option+Left → cursor before "world", insert "X"
       // Result: "hello Xworld"

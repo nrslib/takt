@@ -11,18 +11,18 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 /**
- * E2E: Team leader movement (task decomposition + parallel part execution).
+ * E2E: Team leader step (task decomposition + parallel part execution).
  *
- * Verifies that real providers can execute a piece with a `team_leader`
- * movement that decomposes a task into subtasks and executes them in parallel.
+ * Verifies that real providers can execute a workflow with a `team_leader`
+ * step that decomposes a task into subtasks and executes them in parallel.
  *
- * The piece uses `max_parts: 2` to decompose a simple file creation task
+ * The workflow uses `max_parts: 2` to decompose a simple file creation task
  * into 2 independent parts, each writing a separate file.
  *
  * Run with:
  *   TAKT_E2E_PROVIDER=claude npx vitest run e2e/specs/team-leader.e2e.ts --config vitest.config.e2e.provider.ts
  */
-describe('E2E: Team leader movement', () => {
+describe('E2E: Team leader step', () => {
   let isolatedEnv: IsolatedEnv;
   let repo: LocalRepo;
 
@@ -39,12 +39,12 @@ describe('E2E: Team leader movement', () => {
   });
 
   it('should decompose task into parts and execute them in parallel', () => {
-    const piecePath = resolve(__dirname, '../fixtures/pieces/team-leader.yaml');
+    const workflowPath = resolve(__dirname, '../fixtures/workflows/team-leader.yaml');
 
     const result = runTakt({
       args: [
         '--task', 'Create two files: hello-en.txt containing "Hello World" and hello-ja.txt containing "こんにちは世界"',
-        '--piece', piecePath,
+        '--workflow', workflowPath,
       ],
       cwd: repo.path,
       env: isolatedEnv.env,
@@ -62,8 +62,8 @@ describe('E2E: Team leader movement', () => {
     // Verify session log has proper records
     const records = readSessionRecords(repo.path);
 
-    const pieceComplete = records.find((r) => r.type === 'piece_complete');
-    expect(pieceComplete).toBeDefined();
+    const workflowComplete = records.find((r) => r.type === 'workflow_complete');
+    expect(workflowComplete).toBeDefined();
 
     const stepComplete = records.find((r) => r.type === 'step_complete' && r.step === 'execute');
     expect(stepComplete).toBeDefined();

@@ -1,6 +1,6 @@
 [
   {
-    "persona": "agents/test-coder",
+    "persona": "test-coder",
     "status": "done",
     "content": "Task completed successfully."
   },

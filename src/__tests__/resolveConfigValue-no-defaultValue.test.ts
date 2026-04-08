@@ -72,8 +72,8 @@ describe('config resolution defaults and project-local priority', () => {
         expected: 1200,
       },
       {
-        key: 'interactivePreviewMovements',
-        projectYaml: 'interactive_preview_movements: 1\n',
+        key: 'interactivePreviewSteps',
+        projectYaml: 'interactive_preview_steps: 1\n',
         expected: 1,
       },
       {
@@ -171,7 +171,7 @@ describe('config resolution defaults and project-local priority', () => {
       expect(resolveConfigValueWithSource(projectDir, 'minimalOutput')).toEqual({ value: false, source: 'default' });
       expect(resolveConfigValueWithSource(projectDir, 'concurrency')).toEqual({ value: 1, source: 'default' });
       expect(resolveConfigValueWithSource(projectDir, 'taskPollIntervalMs')).toEqual({ value: 500, source: 'default' });
-      expect(resolveConfigValueWithSource(projectDir, 'interactivePreviewMovements')).toEqual({ value: 3, source: 'default' });
+      expect(resolveConfigValueWithSource(projectDir, 'interactivePreviewSteps')).toEqual({ value: 3, source: 'default' });
     });
 
     it('should resolve keys from global config when project keys are unset', () => {
@@ -189,7 +189,7 @@ describe('config resolution defaults and project-local priority', () => {
           'minimal_output: true',
           'concurrency: 3',
           'task_poll_interval_ms: 1200',
-          'interactive_preview_movements: 2',
+          'interactive_preview_steps: 2',
         ].join('\n'),
         'utf-8',
       );
@@ -210,7 +210,7 @@ describe('config resolution defaults and project-local priority', () => {
       expect(resolveConfigValueWithSource(projectDir, 'minimalOutput')).toEqual({ value: true, source: 'global' });
       expect(resolveConfigValueWithSource(projectDir, 'concurrency')).toEqual({ value: 3, source: 'global' });
       expect(resolveConfigValueWithSource(projectDir, 'taskPollIntervalMs')).toEqual({ value: 1200, source: 'global' });
-      expect(resolveConfigValueWithSource(projectDir, 'interactivePreviewMovements')).toEqual({
+      expect(resolveConfigValueWithSource(projectDir, 'interactivePreviewSteps')).toEqual({
         value: 2,
         source: 'global',
       });

@@ -47,8 +47,8 @@ describe('persistExceededTaskResult', () => {
     }
 
     persistExceededTaskResult(runner, task, {
-      currentMovement: 'reviewers',
-      newMaxMovements: 60,
+      currentStep: 'reviewers',
+      newMaxSteps: 60,
       currentIteration: 30,
     });
 
@@ -74,8 +74,8 @@ describe('persistExceededTaskResult', () => {
       runner,
       task,
       {
-        currentMovement: 'implement',
-        newMaxMovements: 60,
+        currentStep: 'implement',
+        newMaxSteps: 60,
         currentIteration: 30,
       },
       { worktreePath: '/clone/path', branch: 'takt/feature' },
@@ -98,8 +98,8 @@ describe('persistExceededTaskResult', () => {
       runner,
       task,
       {
-        currentMovement: 'plan',
-        newMaxMovements: 40,
+        currentStep: 'plan',
+        newMaxSteps: 40,
         currentIteration: 5,
       },
       { worktreePath: '/wt-only' },
@@ -122,8 +122,8 @@ describe('persistExceededTaskResult', () => {
       runner,
       task,
       {
-        currentMovement: 'fix',
-        newMaxMovements: 50,
+        currentStep: 'fix',
+        newMaxSteps: 50,
         currentIteration: 12,
       },
       { branch: 'takt/branch-only' },

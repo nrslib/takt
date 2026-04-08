@@ -22,7 +22,7 @@ vi.mock('../infra/config/global/globalConfig.js', async (importOriginal) => {
       minimalOutput: false,
       concurrency: 2,
       taskPollIntervalMs: 2000,
-      interactivePreviewMovements: 4,
+      interactivePreviewSteps: 4,
     }),
     invalidateGlobalConfigCache: () => undefined,
   };
@@ -53,7 +53,7 @@ describe('IT: project-local config keys should prefer project over global', () =
         'minimal_output: true',
         'concurrency: 5',
         'task_poll_interval_ms: 1300',
-        'interactive_preview_movements: 1',
+        'interactive_preview_steps: 1',
       ].join('\n'),
       'utf-8',
     );
@@ -78,7 +78,7 @@ describe('IT: project-local config keys should prefer project over global', () =
       'minimalOutput',
       'concurrency',
       'taskPollIntervalMs',
-      'interactivePreviewMovements',
+      'interactivePreviewSteps',
     ]);
 
     expect(resolved.pipeline).toEqual({
@@ -91,7 +91,7 @@ describe('IT: project-local config keys should prefer project over global', () =
     expect(resolved.minimalOutput).toBe(true);
     expect(resolved.concurrency).toBe(5);
     expect(resolved.taskPollIntervalMs).toBe(1300);
-    expect(resolved.interactivePreviewMovements).toBe(1);
+    expect(resolved.interactivePreviewSteps).toBe(1);
   });
 
   it('should resolve keys from global when project config does not set them', () => {
@@ -110,7 +110,7 @@ describe('IT: project-local config keys should prefer project over global', () =
       'minimalOutput',
       'concurrency',
       'taskPollIntervalMs',
-      'interactivePreviewMovements',
+      'interactivePreviewSteps',
     ]);
 
     expect(resolved.pipeline).toEqual({ defaultBranchPrefix: 'global/' });
@@ -121,7 +121,7 @@ describe('IT: project-local config keys should prefer project over global', () =
     expect(resolved.minimalOutput).toBe(false);
     expect(resolved.concurrency).toBe(2);
     expect(resolved.taskPollIntervalMs).toBe(2000);
-    expect(resolved.interactivePreviewMovements).toBe(4);
+    expect(resolved.interactivePreviewSteps).toBe(4);
   });
 
   it('should mark key source as global when only global defines the key', () => {

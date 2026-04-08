@@ -9,7 +9,7 @@ import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 
 const log = createLogger('pack-summary');
 
-export interface EditPieceInfo {
+export interface EditWorkflowInfo {
   name: string;
   allowedTools: string[];
   hasEdit: boolean;
@@ -37,23 +37,23 @@ export function summarizeFacetsByType(facetRelativePaths: string[]): string {
 }
 
 /**
- * Detect pieces that require permissions in any movement.
+ * Detect workflows that require permissions in any step.
  *
- * A movement is considered permission-relevant when any of:
+ * A step is considered permission-relevant when any of:
  * - `edit: true` is set
  * - `provider_options.claude.allowed_tools` has at least one entry
  * - `required_permission_mode` is set
  *
- * @param pieceYamls - Pre-read YAML content pairs. Invalid YAML is skipped (debug-logged).
+ * @param workflowYamls - Pre-read YAML content pairs. Invalid YAML is skipped (debug-logged).
  */
-export function detectEditPieces(pieceYamls: Array<{ name: string; content: string }>): EditPieceInfo[] {
-  const result: EditPieceInfo[] = [];
-  for (const { name, content } of pieceYamls) {
+export function detectEditWorkflows(workflowYamls: Array<{ name: string; content: string }>): EditWorkflowInfo[] {
+  const result: EditWorkflowInfo[] = [];
+  for (const { name, content } of workflowYamls) {
     let raw: {
-      piece_config?: {
+      workflow_config?: {
         provider_options?: { claude?: { allowed_tools?: string[] } };
       };
-      movements?: {
+      steps?: {
         edit?: boolean;
         provider_options?: { claude?: { allowed_tools?: string[] } };
         required_permission_mode?: string;
@@ -62,29 +62,29 @@ export function detectEditPieces(pieceYamls: Array<{ name: string; content: stri
     try {
       raw = parseYaml(content) as typeof raw;
     } catch (e) {
-      log.debug(`YAML parse failed for piece ${name}: ${getErrorMessage(e)}`);
+      log.debug(`YAML parse failed for workflow ${name}: ${getErrorMessage(e)}`);
       continue;
     }
-    const movements = raw?.movements ?? [];
-    const pieceAllowedTools = raw?.piece_config?.provider_options?.claude?.allowed_tools;
-    const resolveAllowedTools = (movement: typeof movements[number]): string[] =>
-      movement.provider_options?.claude?.allowed_tools ?? pieceAllowedTools ?? [];
+    const steps = raw?.steps ?? [];
+    const workflowAllowedTools = raw?.workflow_config?.provider_options?.claude?.allowed_tools;
+    const resolveAllowedTools = (step: typeof steps[number]): string[] =>
+      step.provider_options?.claude?.allowed_tools ?? workflowAllowedTools ?? [];
 
-    const hasEditMovement = movements.some(m => m.edit === true);
-    const hasToolMovements = movements.some(m => resolveAllowedTools(m).length > 0);
-    const hasPermissionMovements = movements.some(m => m.required_permission_mode != null);
-    if (!hasEditMovement && !hasToolMovements && !hasPermissionMovements) continue;
+    const hasEditableStep = steps.some(step => step.edit === true);
+    const hasToolUsingStep = steps.some(step => resolveAllowedTools(step).length > 0);
+    const hasPermissionControlledStep = steps.some(step => step.required_permission_mode != null);
+    if (!hasEditableStep && !hasToolUsingStep && !hasPermissionControlledStep) continue;
 
     const allTools = new Set<string>();
-    for (const m of movements) {
-      for (const t of resolveAllowedTools(m)) {
-        allTools.add(t);
+    for (const step of steps) {
+      for (const tool of resolveAllowedTools(step)) {
+        allTools.add(tool);
       }
     }
     const requiredPermissionModes: string[] = [];
-    for (const m of movements) {
-      if (m.required_permission_mode != null) {
-        const mode = m.required_permission_mode;
+    for (const step of steps) {
+      if (step.required_permission_mode != null) {
+        const mode = step.required_permission_mode;
         if (!requiredPermissionModes.includes(mode)) {
           requiredPermissionModes.push(mode);
         }
@@ -93,7 +93,7 @@ export function detectEditPieces(pieceYamls: Array<{ name: string; content: stri
     result.push({
       name,
       allowedTools: Array.from(allTools),
-      hasEdit: hasEditMovement,
+      hasEdit: hasEditableStep,
       requiredPermissionModes,
     });
   }
@@ -101,21 +101,21 @@ export function detectEditPieces(pieceYamls: Array<{ name: string; content: stri
 }
 
 /**
- * Format warning lines for a single permission-relevant piece.
+ * Format warning lines for a single permission-relevant workflow.
  * Returns one line per warning (edit, provider_options.claude.allowed_tools, required_permission_mode).
  */
-export function formatEditPieceWarnings(ep: EditPieceInfo): string[] {
+export function formatEditWorkflowWarnings(workflow: EditWorkflowInfo): string[] {
   const warnings: string[] = [];
-  if (ep.hasEdit) {
-    const toolStr = ep.allowedTools.length > 0
-      ? `, provider_options.claude.allowed_tools: [${ep.allowedTools.join(', ')}]`
+  if (workflow.hasEdit) {
+    const toolStr = workflow.allowedTools.length > 0
+      ? `, provider_options.claude.allowed_tools: [${workflow.allowedTools.join(', ')}]`
       : '';
-    warnings.push(`\n   ⚠ ${ep.name}: edit: true${toolStr}`);
-  } else if (ep.allowedTools.length > 0) {
-    warnings.push(`\n   ⚠ ${ep.name}: provider_options.claude.allowed_tools: [${ep.allowedTools.join(', ')}]`);
+    warnings.push(`\n   ⚠ ${workflow.name}: edit: true${toolStr}`);
+  } else if (workflow.allowedTools.length > 0) {
+    warnings.push(`\n   ⚠ ${workflow.name}: provider_options.claude.allowed_tools: [${workflow.allowedTools.join(', ')}]`);
   }
-  for (const mode of ep.requiredPermissionModes) {
-    warnings.push(`\n   ⚠ ${ep.name}: required_permission_mode: ${mode}`);
+  for (const mode of workflow.requiredPermissionModes) {
+    warnings.push(`\n   ⚠ ${workflow.name}: required_permission_mode: ${mode}`);
   }
   return warnings;
 }

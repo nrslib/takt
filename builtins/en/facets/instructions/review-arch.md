@@ -1,5 +1,5 @@
 Focus on reviewing **architecture and design**.
-Do not review AI-specific issues (already covered by the ai_review movement).
+Do not review AI-specific issues (already covered by the ai_review step).
 
 **Review criteria:**
 - Structural and design validity

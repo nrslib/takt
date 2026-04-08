@@ -36,7 +36,7 @@ describe('E2E: Watch tasks (takt watch)', () => {
   it('should execute a task added during watch', async () => {
     const binPath = resolve(__dirname, '../../bin/takt');
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/execute-done.json');
-    const piecePath = resolve(__dirname, '../fixtures/pieces/mock-single-step.yaml');
+    const workflowPath = resolve(__dirname, '../fixtures/workflows/mock-single-step.yaml');
 
     const child = spawn('node', [binPath, 'watch', '--provider', 'mock'], {
       cwd: testRepo.path,
@@ -61,7 +61,7 @@ describe('E2E: Watch tasks (takt watch)', () => {
       '  - name: watch-task',
       '    status: pending',
       '    content: "Add a single line \\"watch test\\" to README.md"',
-      `    piece: "${piecePath}"`,
+      `    workflow: "${workflowPath}"`,
       `    created_at: "${createdAt}"`,
       '    started_at: null',
       '    completed_at: null',

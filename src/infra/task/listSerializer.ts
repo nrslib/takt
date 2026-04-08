@@ -53,9 +53,9 @@ function serializeTaskData(data: TaskFileData | undefined): JsonTaskData | undef
     worktree: data.worktree,
     branch: data.branch,
     base_branch: data.base_branch,
-    workflow: data.piece,
+    workflow: data.workflow,
     issue: data.issue,
-    start_step: data.start_movement,
+    start_step: data.start_step,
     retry_note: data.retry_note,
     auto_pr: data.auto_pr,
     draft_pr: data.draft_pr,
@@ -71,7 +71,7 @@ function serializeTaskFailure(failure: TaskFailure | undefined): JsonTaskFailure
   }
 
   return {
-    step: failure.movement,
+    step: failure.step,
     error: failure.error,
     last_message: failure.last_message,
   };

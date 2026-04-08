@@ -2,7 +2,7 @@
  * Integration test for dotgitignore
  *
  * Verifies that .takt/.gitignore patterns correctly track facet directories
- * (pieces, personas, policies, knowledge, instructions, output-contracts)
+ * (workflows, personas, policies, knowledge, instructions, output-contracts)
  * while ignoring runtime directories (tasks, logs, runs, completed).
  */
 
@@ -11,7 +11,7 @@ import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { getProjectPiecesDir, getProjectFacetDir } from '../infra/config/paths.js';
+import { getProjectWorkflowsDir, getProjectFacetDir } from '../infra/config/paths.js';
 import { VALID_FACET_TYPES, parseFacetType } from '../features/config/ejectBuiltin.js';
 
 function gitTrackedFiles(cwd: string): string[] {
@@ -58,10 +58,10 @@ describe('dotgitignore patterns', () => {
   });
 
   it('should track facet directories', () => {
-    // pieces directory
-    const piecesDir = getProjectPiecesDir(testDir);
-    mkdirSync(piecesDir, { recursive: true });
-    writeFileSync(join(piecesDir, 'test.md'), '# pieces');
+    // workflows directory
+    const workflowsDir = getProjectWorkflowsDir(testDir);
+    mkdirSync(workflowsDir, { recursive: true });
+    writeFileSync(join(workflowsDir, 'test.md'), '# workflows');
 
     // facet type directories — derived from VALID_FACET_TYPES
     for (const singular of VALID_FACET_TYPES) {
@@ -74,8 +74,8 @@ describe('dotgitignore patterns', () => {
     execFileSync('git', ['add', '.takt/'], { cwd: testDir });
     const tracked = gitTrackedFiles(testDir);
 
-    // Assert pieces tracked
-    expect(tracked).toContain('.takt/pieces/test.md');
+    // Assert workflows tracked
+    expect(tracked).toContain('.takt/workflows/test.md');
 
     // Assert all facet types tracked
     for (const singular of VALID_FACET_TYPES) {
@@ -85,14 +85,14 @@ describe('dotgitignore patterns', () => {
   });
 
   it('should track nested files in facet directories', () => {
-    const subDir = join(getProjectPiecesDir(testDir), 'sub');
+    const subDir = join(getProjectWorkflowsDir(testDir), 'sub');
     mkdirSync(subDir, { recursive: true });
     writeFileSync(join(subDir, 'nested.yaml'), 'name: test');
 
     execFileSync('git', ['add', '.takt/'], { cwd: testDir });
     const tracked = gitTrackedFiles(testDir);
 
-    expect(tracked).toContain('.takt/pieces/sub/nested.yaml');
+    expect(tracked).toContain('.takt/workflows/sub/nested.yaml');
   });
 
   it('should ignore runtime directories', () => {

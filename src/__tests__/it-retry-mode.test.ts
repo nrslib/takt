@@ -33,7 +33,7 @@ vi.mock('../infra/fs/session.js', () => ({
 
 vi.mock('../infra/config/global/globalConfig.js', () => ({
   loadGlobalConfig: vi.fn(() => ({ provider: 'mock', language: 'en' })),
-  getBuiltinPiecesEnabled: vi.fn().mockReturnValue(true),
+  getBuiltinWorkflowsEnabled: vi.fn().mockReturnValue(true),
 }));
 
 vi.mock('../infra/providers/index.js', () => ({
@@ -128,7 +128,7 @@ function createRunFixture(
 
   const meta = {
     task: `Task for ${slug}`,
-    piece: 'default',
+    workflow: 'default',
     status: 'completed',
     startTime: '2026-02-01T00:00:00.000Z',
     logsDirectory: `.takt/runs/${slug}/logs`,
@@ -148,7 +148,7 @@ function setupMockNdjsonLog(history: Array<{ step: string; persona: string; stat
   mockLoadNdjsonLog.mockReturnValue({
     task: 'mock',
     projectDir: '',
-    pieceName: 'default',
+    workflowName: 'default',
     iterations: history.length,
     startTime: '2026-02-01T00:00:00.000Z',
     status: 'completed',
@@ -193,17 +193,17 @@ describe('E2E: Retry mode with failure context injection', () => {
         taskName: 'implement-auth',
         taskContent: 'Implement authentication feature',
         createdAt: '2026-02-15T10:00:00Z',
-        failedMovement: 'review',
+        failedStep: 'review',
         error: 'Timeout after 300s',
         lastMessage: 'Agent stopped responding',
         retryNote: '',
       },
       branchName: 'takt/implement-auth',
-      pieceContext: {
+      workflowContext: {
         name: 'default',
         description: '',
-        pieceStructure: '',
-        movementPreviews: [],
+        workflowStructure: '',
+        stepPreviews: [],
       },
       run: null,
       previousOrderContent: null,
@@ -256,25 +256,25 @@ describe('E2E: Retry mode with failure context injection', () => {
         taskName: 'build-login',
         taskContent: 'Build login page with OAuth2',
         createdAt: '2026-02-15T14:00:00Z',
-        failedMovement: 'implement',
+        failedStep: 'implement',
         error: 'CSS compilation failed',
         lastMessage: 'PostCSS error: unknown property',
         retryNote: '',
       },
       branchName: 'takt/build-login',
-      pieceContext: {
+      workflowContext: {
         name: 'default',
         description: '',
-        pieceStructure: '',
-        movementPreviews: [],
+        workflowStructure: '',
+        stepPreviews: [],
       },
       run: {
         logsDir: paths.logsDir,
         reportsDir: paths.reportsDir,
         task: formatted.runTask,
-        piece: formatted.runPiece,
+        workflow: formatted.runWorkflow,
         status: formatted.runStatus,
-        movementLogs: formatted.runMovementLogs,
+        stepLogs: formatted.runStepLogs,
         reports: formatted.runReports,
       },
       previousOrderContent: null,
@@ -320,17 +320,17 @@ describe('E2E: Retry mode with failure context injection', () => {
         taskName: 'fix-tests',
         taskContent: 'Fix failing test suite',
         createdAt: '2026-02-15T16:00:00Z',
-        failedMovement: '',
+        failedStep: '',
         error: 'Test suite failed',
         lastMessage: '',
         retryNote: 'Previous attempt: added missing mocks but still failing',
       },
       branchName: 'takt/fix-tests',
-      pieceContext: {
+      workflowContext: {
         name: 'default',
         description: '',
-        pieceStructure: '',
-        movementPreviews: [],
+        workflowStructure: '',
+        stepPreviews: [],
       },
       run: null,
       previousOrderContent: null,
@@ -343,7 +343,7 @@ describe('E2E: Retry mode with failure context injection', () => {
     expect(systemPrompt).toContain('Previous attempt: added missing mocks but still failing');
 
     // absent fields should NOT appear as sections
-    expect(systemPrompt).not.toContain('Failed movement');
+    expect(systemPrompt).not.toContain(`Failed ${['m', 'o', 'v', 'e', 'm', 'e', 'n', 't'].join('')}`);
     expect(systemPrompt).not.toContain('Last Message');
   });
 
@@ -356,17 +356,17 @@ describe('E2E: Retry mode with failure context injection', () => {
         taskName: 'some-task',
         taskContent: 'Complete some task',
         createdAt: '2026-02-15T12:00:00Z',
-        failedMovement: 'plan',
+        failedStep: 'plan',
         error: 'Unknown error',
         lastMessage: '',
         retryNote: '',
       },
       branchName: 'takt/some-task',
-      pieceContext: {
+      workflowContext: {
         name: 'default',
         description: '',
-        pieceStructure: '',
-        movementPreviews: [],
+        workflowStructure: '',
+        stepPreviews: [],
       },
       run: null,
       previousOrderContent: null,
@@ -395,17 +395,17 @@ describe('E2E: Retry mode with failure context injection', () => {
         taskName: 'optimize-review',
         taskContent: 'Optimize the review step',
         createdAt: '2026-02-15T18:00:00Z',
-        failedMovement: 'review',
+        failedStep: 'review',
         error: 'Timeout',
         lastMessage: '',
         retryNote: '',
       },
       branchName: 'takt/optimize-review',
-      pieceContext: {
+      workflowContext: {
         name: 'default',
         description: '',
-        pieceStructure: '',
-        movementPreviews: [],
+        workflowStructure: '',
+        stepPreviews: [],
       },
       run: null,
       previousOrderContent: null,

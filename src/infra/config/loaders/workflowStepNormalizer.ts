@@ -1,0 +1,153 @@
+import type { z } from 'zod';
+import type {
+  WorkflowStep,
+  WorkflowStepRawSchema,
+} from '../../../core/models/index.js';
+import type { WorkflowArpeggioConfig, WorkflowMcpServersConfig, WorkflowOverrides } from '../../../core/models/config-types.js';
+import type { StepProviderOptions } from '../../../core/models/workflow-types.js';
+import { applyQualityGateOverrides } from './qualityGateOverrides.js';
+import {
+  type FacetResolutionContext,
+  type WorkflowSections,
+  extractPersonaDisplayName,
+  isResourcePath,
+  resolvePersona,
+  resolveRefList,
+  resolveRefToContent,
+} from './resource-resolver.js';
+import { mergeProviderOptions } from '../providerOptions.js';
+import { normalizeConfigProviderReferenceDetailed, type ConfigProviderReference } from '../providerReference.js';
+import { validateWorkflowArpeggio, validateWorkflowMcpServers } from './workflowNormalizationPolicies.js';
+import { normalizeRule } from './workflowRuleNormalizer.js';
+import { normalizeArpeggio, normalizeOutputContracts, normalizeTeamLeader } from './workflowStepFeaturesNormalizer.js';
+
+type RawStep = z.output<typeof WorkflowStepRawSchema>;
+type RawProviderReference = RawStep['provider'];
+
+export function normalizeProviderReference(
+  provider: RawProviderReference,
+  model: RawStep['model'],
+  providerOptions: RawStep['provider_options'],
+): {
+  provider: WorkflowStep['provider'];
+  model: WorkflowStep['model'];
+  providerOptions: StepProviderOptions | undefined;
+  providerSpecified: boolean;
+} {
+  return normalizeConfigProviderReferenceDetailed(
+    provider as ConfigProviderReference<NonNullable<WorkflowStep['provider']>>,
+    model,
+    providerOptions as Record<string, unknown> | undefined,
+  );
+}
+
+export function normalizeStepFromRaw(
+  step: RawStep,
+  workflowDir: string,
+  sections: WorkflowSections,
+  inheritedProvider?: WorkflowStep['provider'],
+  inheritedModel?: WorkflowStep['model'],
+  inheritedProviderOptions?: WorkflowStep['providerOptions'],
+  context?: FacetResolutionContext,
+  projectOverrides?: WorkflowOverrides,
+  globalOverrides?: WorkflowOverrides,
+  workflowArpeggioPolicy?: WorkflowArpeggioConfig,
+  workflowMcpServersPolicy?: WorkflowMcpServersConfig,
+): WorkflowStep {
+  const rules = step.rules?.map(normalizeRule);
+  const rawPersona = (step as Record<string, unknown>).persona as string | undefined;
+  if (rawPersona !== undefined && rawPersona.trim().length === 0) {
+    throw new Error(`Step "${step.name}" has an empty persona value`);
+  }
+  const { personaSpec, personaPath } = resolvePersona(rawPersona, sections, workflowDir, context);
+  const displayNameRaw = (step as Record<string, unknown>).persona_name as string | undefined;
+  if (displayNameRaw !== undefined && displayNameRaw.trim().length === 0) {
+    throw new Error(`Step "${step.name}" has an empty persona_name value`);
+  }
+  const derivedPersonaName = personaSpec ? extractPersonaDisplayName(personaSpec) : undefined;
+  const resolvedPersonaDisplayName = displayNameRaw || derivedPersonaName || step.name;
+  const normalizedRawPersona = rawPersona?.trim();
+  const personaOverrideKey = normalizedRawPersona
+    ? (isResourcePath(normalizedRawPersona) ? extractPersonaDisplayName(normalizedRawPersona) : normalizedRawPersona)
+    : undefined;
+
+  const policyContents = resolveRefList(
+    (step as Record<string, unknown>).policy as string | string[] | undefined,
+    sections.resolvedPolicies,
+    workflowDir,
+    'policies',
+    context,
+  );
+  const knowledgeContents = resolveRefList(
+    (step as Record<string, unknown>).knowledge as string | string[] | undefined,
+    sections.resolvedKnowledge,
+    workflowDir,
+    'knowledge',
+    context,
+  );
+  const normalizedProvider = normalizeProviderReference(step.provider, step.model, step.provider_options);
+  const instruction = step.instruction
+    ? resolveRefToContent(step.instruction, sections.resolvedInstructions, workflowDir, 'instructions', context)
+    : undefined;
+
+  validateWorkflowArpeggio(step.name, step.arpeggio, workflowArpeggioPolicy);
+  validateWorkflowMcpServers(step.name, step.mcp_servers, workflowMcpServersPolicy);
+
+  const normalizedStep: WorkflowStep = {
+    name: step.name,
+    description: step.description,
+    persona: personaSpec,
+    session: step.session,
+    personaDisplayName: resolvedPersonaDisplayName,
+    personaPath,
+    mcpServers: step.mcp_servers,
+    provider: normalizedProvider.provider ?? inheritedProvider,
+    model: normalizedProvider.model ?? (normalizedProvider.providerSpecified ? undefined : inheritedModel),
+    requiredPermissionMode: step.required_permission_mode,
+    providerOptions: mergeProviderOptions(inheritedProviderOptions, normalizedProvider.providerOptions),
+    edit: step.edit,
+    instruction: instruction || '{task}',
+    rules,
+    outputContracts: normalizeOutputContracts(step.output_contracts, workflowDir, sections.resolvedReportFormats, context),
+    qualityGates: applyQualityGateOverrides(
+      step.name,
+      step.quality_gates,
+      step.edit,
+      personaOverrideKey,
+      projectOverrides,
+      globalOverrides,
+    ),
+    passPreviousResponse: step.pass_previous_response ?? true,
+    policyContents,
+    knowledgeContents,
+  };
+
+  if (step.parallel && step.parallel.length > 0) {
+    normalizedStep.parallel = step.parallel.map((sub) =>
+      normalizeStepFromRaw(
+        sub,
+        workflowDir,
+        sections,
+        normalizedStep.provider,
+        normalizedStep.model,
+        normalizedStep.providerOptions,
+        context,
+        projectOverrides,
+        globalOverrides,
+        workflowArpeggioPolicy,
+        workflowMcpServersPolicy,
+      ),
+    );
+    if (step.concurrency != null) {
+      normalizedStep.concurrency = step.concurrency;
+    }
+  }
+
+  const arpeggio = normalizeArpeggio(step.arpeggio, workflowDir);
+  if (arpeggio) normalizedStep.arpeggio = arpeggio;
+
+  const teamLeader = normalizeTeamLeader(step.team_leader, workflowDir, sections, context);
+  if (teamLeader) normalizedStep.teamLeader = teamLeader;
+
+  return normalizedStep;
+}

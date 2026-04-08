@@ -50,13 +50,13 @@ describe('E2E: takt repertoire add (正常系)', () => {
 
   it.todo('should install subdir-type package and copy only path-specified files');
 
-  it.todo('should install facets-only package without creating pieces/ directory');
+  it.todo('should install facets-only package without creating workflows/ directory');
 
   it.todo('should populate lock file commit field with the specified commit SHA when installing by SHA');
 
-  it.todo('should display pre-install summary with package name, faceted count, and pieces list');
+  it.todo('should display pre-install summary with package name, faceted count, and workflows list');
 
-  it.todo('should display warning symbol when package contains piece with edit: true');
+  it.todo('should display warning symbol when package contains workflow with edit: true');
 
   it.todo('should abort installation when user answers N to confirmation prompt');
 });
@@ -88,7 +88,7 @@ describe('E2E: takt repertoire add (バリデーション・エラー系)', () =
 
   it.todo('should reject takt-repertoire.yaml with path traversal via ".." segments');
 
-  it.todo('should reject package with neither facets/ nor pieces/ directory');
+  it.todo('should reject package with neither facets/ nor workflows/ directory');
 
   it.todo('should reject takt-repertoire.yaml with min_version "1.0" (missing patch segment)');
 
@@ -162,9 +162,9 @@ describe('E2E: takt repertoire remove (mock)', () => {
     const scope = '@testowner/ref-fixture';
     createFakePackage({ taktDir: isolatedEnv.taktDir, owner: 'testowner', repo: 'ref-fixture' });
 
-    const piecesDir = join(isolatedEnv.taktDir, 'pieces');
-    mkdirSync(piecesDir, { recursive: true });
-    writeFileSync(join(piecesDir, 'ref-piece.yaml'), `from: ${scope}\nname: example\n`);
+    const workflowsDir = join(isolatedEnv.taktDir, 'workflows');
+    mkdirSync(workflowsDir, { recursive: true });
+    writeFileSync(join(workflowsDir, 'ref-workflow.yaml'), `from: ${scope}\nname: example\n`);
 
     const result = runTakt({
       args: ['repertoire', 'remove', scope],
@@ -185,9 +185,9 @@ describe('E2E: takt repertoire remove (mock)', () => {
     const scope = '@testowner/ref-fixture2';
     createFakePackage({ taktDir: isolatedEnv.taktDir, owner: 'testowner', repo: 'ref-fixture2' });
 
-    const piecesDir = join(isolatedEnv.taktDir, 'pieces');
-    mkdirSync(piecesDir, { recursive: true });
-    const refFilePath = join(piecesDir, 'ref-piece2.yaml');
+    const workflowsDir = join(isolatedEnv.taktDir, 'workflows');
+    mkdirSync(workflowsDir, { recursive: true });
+    const refFilePath = join(workflowsDir, 'ref-workflow2.yaml');
     const originalContent = `from: ${scope}\nname: example\n`;
     writeFileSync(refFilePath, originalContent);
 

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { LineTimeSliceBuffer } from '../core/piece/engine/stream-buffer.js';
+import { LineTimeSliceBuffer } from '../core/workflow/engine/stream-buffer.js';
 
 describe('LineTimeSliceBuffer', () => {
   beforeEach(() => {

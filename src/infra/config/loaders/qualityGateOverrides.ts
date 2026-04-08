@@ -2,47 +2,57 @@
  * Quality gate override application logic
  *
  * Resolves quality gates from config overrides with 3-layer priority:
- * 1. Project .takt/config.yaml piece_overrides
- * 2. Global ~/.takt/config.yaml piece_overrides
- * 3. Piece YAML quality_gates
+ * 1. Project .takt/config.yaml workflow_overrides
+ * 2. Global ~/.takt/config.yaml workflow_overrides
+ * 3. Workflow YAML quality_gates
  *
  * Merge strategy: Additive (config gates + YAML gates)
  */
 
-import type { PieceOverrides } from '../../../core/models/config-types.js';
+import type { WorkflowOverrides } from '../../../core/models/config-types.js';
+
+function getStepQualityGates(
+  overrides: WorkflowOverrides | undefined,
+  stepName: string,
+): string[] | undefined {
+  const withSteps = overrides as (WorkflowOverrides & {
+    steps?: Record<string, { qualityGates?: string[] }>;
+  }) | undefined;
+  return withSteps?.steps?.[stepName]?.qualityGates ?? overrides?.steps?.[stepName]?.qualityGates;
+}
 
 /**
- * Apply quality gate overrides to a movement.
+ * Apply quality gate overrides to a step.
  *
  * Merge order (gates are added in this sequence):
  * 1. Global override in global config (filtered by edit flag if qualityGatesEditOnly=true)
- * 2. Movement-specific override in global config
+ * 2. Step-specific override in global config
  * 3. Persona-specific override in global config
  * 4. Global override in project config (filtered by edit flag if qualityGatesEditOnly=true)
- * 5. Movement-specific override in project config
+ * 5. Step-specific override in project config
  * 6. Persona-specific override in project config
- * 7. Piece YAML quality_gates
+ * 7. Workflow YAML quality_gates
  *
  * Merge strategy: Additive merge (all gates are combined, no overriding)
  *
- * @param movementName - Name of the movement
- * @param yamlGates - Quality gates from piece YAML
- * @param editFlag - Whether the movement has edit: true
- * @param personaName - Persona name used by the movement
- * @param projectOverrides - Project-level piece_overrides (from .takt/config.yaml)
- * @param globalOverrides - Global-level piece_overrides (from ~/.takt/config.yaml)
+ * @param stepName - Name of the step
+ * @param yamlGates - Quality gates from workflow YAML
+ * @param editFlag - Whether the step has edit: true
+ * @param personaName - Persona name used by the step
+ * @param projectOverrides - Project-level workflow_overrides (from .takt/config.yaml)
+ * @param globalOverrides - Global-level workflow_overrides (from ~/.takt/config.yaml)
  * @returns Merged quality gates array
  */
 export function applyQualityGateOverrides(
-  movementName: string,
+  stepName: string,
   yamlGates: string[] | undefined,
   editFlag: boolean | undefined,
   personaName: string | undefined,
-  projectOverrides: PieceOverrides | undefined,
-  globalOverrides: PieceOverrides | undefined,
+  projectOverrides: WorkflowOverrides | undefined,
+  globalOverrides: WorkflowOverrides | undefined,
 ): string[] | undefined {
   if (personaName !== undefined && personaName.trim().length === 0) {
-    throw new Error(`Invalid persona name for movement "${movementName}": empty value`);
+    throw new Error(`Invalid persona name for step "${stepName}": empty value`);
   }
   const normalizedPersonaName = personaName?.trim();
 
@@ -57,10 +67,10 @@ export function applyQualityGateOverrides(
     gates.push(...globalGlobalGates);
   }
 
-  // Collect movement-specific gates from global config
-  const globalMovementGates = globalOverrides?.movements?.[movementName]?.qualityGates;
-  if (globalMovementGates) {
-    gates.push(...globalMovementGates);
+  // Collect step-specific gates from global config
+  const globalStepGates = getStepQualityGates(globalOverrides, stepName);
+  if (globalStepGates) {
+    gates.push(...globalStepGates);
   }
 
   // Collect persona-specific gates from global config
@@ -78,10 +88,10 @@ export function applyQualityGateOverrides(
     gates.push(...projectGlobalGates);
   }
 
-  // Collect movement-specific gates from project config
-  const projectMovementGates = projectOverrides?.movements?.[movementName]?.qualityGates;
-  if (projectMovementGates) {
-    gates.push(...projectMovementGates);
+  // Collect step-specific gates from project config
+  const projectStepGates = getStepQualityGates(projectOverrides, stepName);
+  if (projectStepGates) {
+    gates.push(...projectStepGates);
   }
 
   // Collect persona-specific gates from project config

@@ -1,5 +1,5 @@
 /**
- * PieceEngine integration tests: error handling scenarios.
+ * WorkflowEngine integration tests: error handling scenarios.
  *
  * Covers:
  * - No rule matched (abort)
@@ -17,11 +17,11 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/piece/evaluation/index.js', () => ({
+vi.mock('../core/workflow/evaluation/index.js', () => ({
   detectMatchedRule: vi.fn(),
 }));
 
-vi.mock('../core/piece/phase-runner.js', () => ({
+vi.mock('../core/workflow/phase-runner.js', () => ({
   needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
   runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
@@ -34,22 +34,22 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 // --- Imports (after mocks) ---
 
-import { PieceEngine } from '../core/piece/index.js';
+import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
-import { detectMatchedRule } from '../core/piece/evaluation/index.js';
-import { needsStatusJudgmentPhase, runReportPhase, runStatusJudgmentPhase } from '../core/piece/phase-runner.js';
+import { detectMatchedRule } from '../core/workflow/evaluation/index.js';
+import { needsStatusJudgmentPhase, runReportPhase, runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
 import {
   makeResponse,
-  makeMovement,
+  makeStep,
   makeRule,
-  buildDefaultPieceConfig,
+  buildDefaultWorkflowConfig,
   mockRunAgentSequence,
   mockDetectMatchedRuleSequence,
   createTestTmpDir,
   applyDefaultMocks,
 } from './engine-test-helpers.js';
 
-describe('PieceEngine Integration: Error Handling', () => {
+describe('WorkflowEngine Integration: Error Handling', () => {
   let tmpDir: string;
 
   beforeEach(() => {
@@ -69,8 +69,8 @@ describe('PieceEngine Integration: Error Handling', () => {
   // =====================================================
   describe('No rule matched', () => {
     it('should abort when detectMatchedRule returns undefined', async () => {
-      const config = buildDefaultPieceConfig();
-      const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      const config = buildDefaultWorkflowConfig();
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({ persona: 'plan', content: 'Unclear output' }),
@@ -79,7 +79,7 @@ describe('PieceEngine Integration: Error Handling', () => {
       mockDetectMatchedRuleSequence([undefined]);
 
       const abortFn = vi.fn();
-      engine.on('piece:abort', abortFn);
+      engine.on('workflow:abort', abortFn);
 
       const state = await engine.run();
 
@@ -95,13 +95,13 @@ describe('PieceEngine Integration: Error Handling', () => {
   // =====================================================
   describe('runAgent throws', () => {
     it('should abort when runAgent throws an error', async () => {
-      const config = buildDefaultPieceConfig();
-      const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      const config = buildDefaultWorkflowConfig();
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       vi.mocked(runAgent).mockRejectedValueOnce(new Error('API connection failed'));
 
       const abortFn = vi.fn();
-      engine.on('piece:abort', abortFn);
+      engine.on('workflow:abort', abortFn);
 
       const state = await engine.run();
 
@@ -118,15 +118,15 @@ describe('PieceEngine Integration: Error Handling', () => {
   // =====================================================
   describe('Phase 3 fallback', () => {
     it('should continue with phase1 rule evaluation when status judgment throws', async () => {
-      const config = buildDefaultPieceConfig({
-        initialMovement: 'plan',
-        movements: [
-          makeMovement('plan', {
+      const config = buildDefaultWorkflowConfig({
+        initialStep: 'plan',
+        steps: [
+          makeStep('plan', {
             rules: [makeRule('continue', 'COMPLETE')],
           }),
         ],
       });
-      const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       vi.mocked(needsStatusJudgmentPhase).mockReturnValue(true);
       vi.mocked(runStatusJudgmentPhase).mockRejectedValueOnce(new Error('Phase 3 failed'));
@@ -148,7 +148,7 @@ describe('PieceEngine Integration: Error Handling', () => {
         '',
         expect.any(Object),
       );
-      expect(state.movementOutputs.get('plan')?.matchedRuleMethod).toBe('phase1_tag');
+      expect(state.stepOutputs.get('plan')?.matchedRuleMethod).toBe('phase1_tag');
     });
   });
 
@@ -156,17 +156,17 @@ describe('PieceEngine Integration: Error Handling', () => {
   // 3. Interrupted status routing
   // =====================================================
   describe('Error status', () => {
-    it('should abort immediately and skip report phase when movement returns error', async () => {
-      const config = buildDefaultPieceConfig({
-        initialMovement: 'plan',
-        movements: [
-          makeMovement('plan', {
+    it('should abort immediately and skip report phase when step returns error', async () => {
+      const config = buildDefaultWorkflowConfig({
+        initialStep: 'plan',
+        steps: [
+          makeStep('plan', {
             outputContracts: [{ name: '01-plan.md', format: '# Plan' }],
             rules: [makeRule('continue', 'COMPLETE')],
           }),
         ],
       });
-      const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({
@@ -178,7 +178,7 @@ describe('PieceEngine Integration: Error Handling', () => {
       ]);
 
       const abortFn = vi.fn();
-      engine.on('piece:abort', abortFn);
+      engine.on('workflow:abort', abortFn);
 
       const state = await engine.run();
 
@@ -187,17 +187,17 @@ describe('PieceEngine Integration: Error Handling', () => {
       expect(runReportPhase).not.toHaveBeenCalled();
     });
 
-    it('should abort when movement returns an unhandled status and skip report phase', async () => {
-      const config = buildDefaultPieceConfig({
-        initialMovement: 'plan',
-        movements: [
-          makeMovement('plan', {
+    it('should abort when a step returns an unhandled status and skip report phase', async () => {
+      const config = buildDefaultWorkflowConfig({
+        initialStep: 'plan',
+        steps: [
+          makeStep('plan', {
             outputContracts: [{ name: '01-plan.md', format: '# Plan' }],
             rules: [makeRule('continue', 'COMPLETE')],
           }),
         ],
       });
-      const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({
@@ -208,7 +208,7 @@ describe('PieceEngine Integration: Error Handling', () => {
       ]);
 
       const abortFn = vi.fn();
-      engine.on('piece:abort', abortFn);
+      engine.on('workflow:abort', abortFn);
 
       const state = await engine.run();
 
@@ -221,16 +221,16 @@ describe('PieceEngine Integration: Error Handling', () => {
   });
 
   describe('runSingleIteration status routing', () => {
-    it('should abort without rule resolution when movement returns blocked', async () => {
-      const config = buildDefaultPieceConfig({
-        initialMovement: 'plan',
-        movements: [
-          makeMovement('plan', {
+    it('should abort without rule resolution when a step returns blocked', async () => {
+      const config = buildDefaultWorkflowConfig({
+        initialStep: 'plan',
+        steps: [
+          makeStep('plan', {
             rules: [makeRule('continue', 'COMPLETE')],
           }),
         ],
       });
-      const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({
@@ -241,26 +241,26 @@ describe('PieceEngine Integration: Error Handling', () => {
       ]);
 
       const abortFn = vi.fn();
-      engine.on('piece:abort', abortFn);
+      engine.on('workflow:abort', abortFn);
 
       const result = await engine.runSingleIteration();
 
-      expect(result.nextMovement).toBe('ABORT');
+      expect(result.nextStep).toBe('ABORT');
       expect(result.isComplete).toBe(true);
       expect(engine.getState().status).toBe('aborted');
       expect(abortFn).toHaveBeenCalledOnce();
     });
 
-    it('should abort without rule resolution when movement returns error', async () => {
-      const config = buildDefaultPieceConfig({
-        initialMovement: 'plan',
-        movements: [
-          makeMovement('plan', {
+    it('should abort without rule resolution when a step returns error', async () => {
+      const config = buildDefaultWorkflowConfig({
+        initialStep: 'plan',
+        steps: [
+          makeStep('plan', {
             rules: [makeRule('continue', 'COMPLETE')],
           }),
         ],
       });
-      const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({
@@ -272,16 +272,16 @@ describe('PieceEngine Integration: Error Handling', () => {
       ]);
 
       const abortFn = vi.fn();
-      engine.on('piece:abort', abortFn);
+      engine.on('workflow:abort', abortFn);
 
       const result = await engine.runSingleIteration();
 
-      expect(result.nextMovement).toBe('ABORT');
+      expect(result.nextStep).toBe('ABORT');
       expect(result.isComplete).toBe(true);
       expect(engine.getState().status).toBe('aborted');
       expect(abortFn).toHaveBeenCalledOnce();
       const reason = abortFn.mock.calls[0]![1] as string;
-      expect(reason).toContain('Movement "plan" failed: request failed');
+      expect(reason).toContain('Step "plan" failed: request failed');
     });
   });
 
@@ -290,18 +290,18 @@ describe('PieceEngine Integration: Error Handling', () => {
   // =====================================================
   describe('Loop detection', () => {
     it('should abort when loop detected with action: abort', async () => {
-      const config = buildDefaultPieceConfig({
-        maxMovements: 100,
+      const config = buildDefaultWorkflowConfig({
+        maxSteps: 100,
         loopDetection: { maxConsecutiveSameStep: 3, action: 'abort' },
-        initialMovement: 'loop-step',
-        movements: [
-          makeMovement('loop-step', {
+        initialStep: 'loop-step',
+        steps: [
+          makeStep('loop-step', {
             rules: [makeRule('continue', 'loop-step')],
           }),
         ],
       });
 
-      const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       for (let i = 0; i < 5; i++) {
         vi.mocked(runAgent).mockImplementationOnce(async (persona, task, options) => {
@@ -317,7 +317,7 @@ describe('PieceEngine Integration: Error Handling', () => {
       }
 
       const abortFn = vi.fn();
-      engine.on('piece:abort', abortFn);
+      engine.on('workflow:abort', abortFn);
 
       const state = await engine.run();
 
@@ -334,8 +334,8 @@ describe('PieceEngine Integration: Error Handling', () => {
   // =====================================================
   describe('Iteration limit', () => {
     it('should abort when max iterations reached without onIterationLimit callback', async () => {
-      const config = buildDefaultPieceConfig({ maxMovements: 2 });
-      const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      const config = buildDefaultWorkflowConfig({ maxSteps: 2 });
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({ persona: 'plan', content: 'Plan done' }),
@@ -352,7 +352,7 @@ describe('PieceEngine Integration: Error Handling', () => {
       const limitFn = vi.fn();
       const abortFn = vi.fn();
       engine.on('iteration:limit', limitFn);
-      engine.on('piece:abort', abortFn);
+      engine.on('workflow:abort', abortFn);
 
       const state = await engine.run();
 
@@ -360,15 +360,15 @@ describe('PieceEngine Integration: Error Handling', () => {
       expect(limitFn).toHaveBeenCalledWith(2, 2);
       expect(abortFn).toHaveBeenCalledOnce();
       const reason = abortFn.mock.calls[0]![1] as string;
-      expect(reason).toContain('Max movements');
+      expect(reason).toContain('Max steps');
     });
 
     it('should extend iterations when onIterationLimit provides additional iterations', async () => {
-      const config = buildDefaultPieceConfig({ maxMovements: 2 });
+      const config = buildDefaultWorkflowConfig({ maxSteps: 2 });
 
       const onIterationLimit = vi.fn().mockResolvedValueOnce(10);
 
-      const engine = new PieceEngine(config, tmpDir, 'test task', {
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', {
         projectCwd: tmpDir,
         onIterationLimit,
       });

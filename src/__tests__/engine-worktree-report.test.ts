@@ -17,11 +17,11 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/piece/evaluation/index.js', () => ({
+vi.mock('../core/workflow/evaluation/index.js', () => ({
   detectMatchedRule: vi.fn(),
 }));
 
-vi.mock('../core/piece/phase-runner.js', () => ({
+vi.mock('../core/workflow/phase-runner.js', () => ({
   needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
   runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
@@ -34,17 +34,17 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 // --- Imports (after mocks) ---
 
-import { PieceEngine } from '../core/piece/index.js';
-import { runReportPhase } from '../core/piece/phase-runner.js';
+import { WorkflowEngine } from '../core/workflow/index.js';
+import { runReportPhase } from '../core/workflow/phase-runner.js';
 import {
   makeResponse,
-  makeMovement,
+  makeStep,
   makeRule,
   mockRunAgentSequence,
   mockDetectMatchedRuleSequence,
   applyDefaultMocks,
 } from './engine-test-helpers.js';
-import type { PieceConfig } from '../core/models/index.js';
+import type { WorkflowConfig } from '../core/models/index.js';
 
 function createWorktreeDirs(): { projectCwd: string; cloneCwd: string } {
   const base = join(tmpdir(), `takt-worktree-test-${randomUUID()}`);
@@ -60,14 +60,14 @@ function createWorktreeDirs(): { projectCwd: string; cloneCwd: string } {
   return { projectCwd, cloneCwd };
 }
 
-function buildSimpleConfig(): PieceConfig {
+function buildSimpleConfig(): WorkflowConfig {
   return {
     name: 'worktree-test',
-    description: 'Test piece for worktree',
-    maxMovements: 10,
-    initialMovement: 'review',
-    movements: [
-      makeMovement('review', {
+    description: 'Test workflow for worktree',
+    maxSteps: 10,
+    initialStep: 'review',
+    steps: [
+      makeStep('review', {
         outputContracts: [{ name: '00-review.md', format: '00-review', useJudge: true }],
         rules: [
           makeRule('approved', 'COMPLETE'),
@@ -77,7 +77,7 @@ function buildSimpleConfig(): PieceConfig {
   };
 }
 
-describe('PieceEngine: worktree reportDir resolution', () => {
+describe('WorkflowEngine: worktree reportDir resolution', () => {
   let projectCwd: string;
   let cloneCwd: string;
   let baseDir: string;
@@ -100,7 +100,7 @@ describe('PieceEngine: worktree reportDir resolution', () => {
   it('should pass cloneCwd-based reportDir to phase runner context in worktree mode', async () => {
     // Given: worktree environment where cwd !== projectCwd
     const config = buildSimpleConfig();
-    const engine = new PieceEngine(config, cloneCwd, 'test task', {
+    const engine = new WorkflowEngine(config, cloneCwd, 'test task', {
       projectCwd,
     });
 
@@ -111,7 +111,7 @@ describe('PieceEngine: worktree reportDir resolution', () => {
       { index: 0, method: 'tag' as const },
     ]);
 
-    // When: run the piece
+    // When: run the workflow
     await engine.run();
 
     // Then: runReportPhase was called with context containing cloneCwd-based reportDir
@@ -129,14 +129,14 @@ describe('PieceEngine: worktree reportDir resolution', () => {
   });
 
   it('should pass cloneCwd-based reportDir to buildInstruction (used by {report_dir} placeholder)', async () => {
-    // Given: worktree environment with a movement that uses {report_dir} in template
-    const config: PieceConfig = {
+    // Given: worktree environment with a step that uses {report_dir} in template
+    const config: WorkflowConfig = {
       name: 'worktree-test',
       description: 'Test',
-      maxMovements: 10,
-      initialMovement: 'review',
-      movements: [
-        makeMovement('review', {
+      maxSteps: 10,
+      initialStep: 'review',
+      steps: [
+        makeStep('review', {
           instruction: 'Write report to {report_dir}',
           outputContracts: [{ name: '00-review.md', format: '00-review', useJudge: true }],
           rules: [
@@ -145,7 +145,7 @@ describe('PieceEngine: worktree reportDir resolution', () => {
         }),
       ],
     };
-    const engine = new PieceEngine(config, cloneCwd, 'test task', {
+    const engine = new WorkflowEngine(config, cloneCwd, 'test task', {
       projectCwd,
     });
 
@@ -157,7 +157,7 @@ describe('PieceEngine: worktree reportDir resolution', () => {
       { index: 0, method: 'tag' as const },
     ]);
 
-    // When: run the piece
+    // When: run the workflow
     await engine.run();
 
     // Then: the instruction should contain cloneCwd-based reportDir
@@ -176,7 +176,7 @@ describe('PieceEngine: worktree reportDir resolution', () => {
     // Given: normal environment where cwd === projectCwd
     const normalDir = projectCwd;
     const config = buildSimpleConfig();
-    const engine = new PieceEngine(config, normalDir, 'test task', {
+    const engine = new WorkflowEngine(config, normalDir, 'test task', {
       projectCwd: normalDir,
     });
 
@@ -187,7 +187,7 @@ describe('PieceEngine: worktree reportDir resolution', () => {
       { index: 0, method: 'tag' as const },
     ]);
 
-    // When: run the piece
+    // When: run the workflow
     await engine.run();
 
     // Then: reportDir should be the same (cwd === projectCwd)
@@ -202,7 +202,7 @@ describe('PieceEngine: worktree reportDir resolution', () => {
   it('should use explicit reportDirName when provided', async () => {
     const normalDir = projectCwd;
     const config = buildSimpleConfig();
-    const engine = new PieceEngine(config, normalDir, 'test task', {
+    const engine = new WorkflowEngine(config, normalDir, 'test task', {
       projectCwd: normalDir,
       reportDirName: '20260201-015714-foptng',
     });
@@ -226,17 +226,17 @@ describe('PieceEngine: worktree reportDir resolution', () => {
     const normalDir = projectCwd;
     const config = buildSimpleConfig();
 
-    expect(() => new PieceEngine(config, normalDir, 'test task', {
+    expect(() => new WorkflowEngine(config, normalDir, 'test task', {
       projectCwd: normalDir,
       reportDirName: '..',
     })).toThrow('Invalid reportDirName: ..');
 
-    expect(() => new PieceEngine(config, normalDir, 'test task', {
+    expect(() => new WorkflowEngine(config, normalDir, 'test task', {
       projectCwd: normalDir,
       reportDirName: '.',
     })).toThrow('Invalid reportDirName: .');
 
-    expect(() => new PieceEngine(config, normalDir, 'test task', {
+    expect(() => new WorkflowEngine(config, normalDir, 'test task', {
       projectCwd: normalDir,
       reportDirName: '',
     })).toThrow('Invalid reportDirName: ');
@@ -244,23 +244,23 @@ describe('PieceEngine: worktree reportDir resolution', () => {
 
   it('should persist context snapshots and update latest previous response', async () => {
     const normalDir = projectCwd;
-    const config: PieceConfig = {
+    const config: WorkflowConfig = {
       name: 'snapshot-test',
       description: 'Test',
-      maxMovements: 10,
-      initialMovement: 'implement',
-      movements: [
-        makeMovement('implement', {
+      maxSteps: 10,
+      initialStep: 'implement',
+      steps: [
+        makeStep('implement', {
           policyContents: ['Policy content'],
           knowledgeContents: ['Knowledge content'],
           rules: [makeRule('go-review', 'review')],
         }),
-        makeMovement('review', {
+        makeStep('review', {
           rules: [makeRule('approved', 'COMPLETE')],
         }),
       ],
     };
-    const engine = new PieceEngine(config, normalDir, 'test task', {
+    const engine = new WorkflowEngine(config, normalDir, 'test task', {
       projectCwd: normalDir,
       reportDirName: 'test-report-dir',
     });

@@ -33,7 +33,7 @@ vi.mock('../infra/fs/session.js', () => ({
 
 vi.mock('../infra/config/global/globalConfig.js', () => ({
   loadGlobalConfig: vi.fn(() => ({ provider: 'mock', language: 'en' })),
-  getBuiltinPiecesEnabled: vi.fn().mockReturnValue(true),
+  getBuiltinWorkflowsEnabled: vi.fn().mockReturnValue(true),
 }));
 
 vi.mock('../infra/providers/index.js', () => ({
@@ -134,7 +134,7 @@ function createRunFixture(
   } else {
     const meta = {
       task: `Task for ${slug}`,
-      piece: 'default',
+      workflow: 'default',
       status: 'completed',
       startTime: '2026-02-01T00:00:00.000Z',
       logsDirectory: `.takt/runs/${slug}/logs`,
@@ -156,7 +156,7 @@ function setupMockNdjsonLog(history: Array<{ step: string; persona: string; stat
   mockLoadNdjsonLog.mockReturnValue({
     task: 'mock',
     projectDir: '',
-    pieceName: 'default',
+    workflowName: 'default',
     iterations: history.length,
     startTime: '2026-02-01T00:00:00.000Z',
     status: 'completed',
@@ -190,7 +190,7 @@ describe('E2E: Run session → instruct mode with interactive flow', () => {
   });
 
   it('should inject run session data into system prompt during interactive conversation', async () => {
-    // Fixture: run with movement logs and reports
+    // Fixture: run with step logs and reports
     createRunFixture(tmpDir, 'run-auth', {
       meta: { task: 'Implement JWT auth' },
       reports: [
@@ -216,7 +216,7 @@ describe('E2E: Run session → instruct mode with interactive flow', () => {
       'fix-auth',
       'Implement JWT auth',
       '',
-      { name: 'default', description: '', pieceStructure: '', movementPreviews: [] },
+      { name: 'default', description: '', workflowStructure: '', stepPreviews: [] },
       context,
     );
 
@@ -284,14 +284,14 @@ describe('E2E: Run session → instruct mode with interactive flow', () => {
     expect(runs[1]!.slug).toBe('old');
   });
 
-  it('should truncate long movement content to 500 chars', () => {
+  it('should truncate long step content to 500 chars', () => {
     createRunFixture(tmpDir, 'long');
     setupMockNdjsonLog([
       { step: 'implement', persona: 'coder', status: 'completed', content: 'X'.repeat(800) },
     ]);
 
     const context = loadRunSessionContext(tmpDir, 'long');
-    expect(context.movementLogs[0]!.content.length).toBe(501);
-    expect(context.movementLogs[0]!.content.endsWith('…')).toBe(true);
+    expect(context.stepLogs[0]!.content.length).toBe(501);
+    expect(context.stepLogs[0]!.content.endsWith('…')).toBe(true);
   });
 });

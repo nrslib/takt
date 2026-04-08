@@ -1,16 +1,16 @@
 /**
- * Reset user piece categories overlay.
+ * Reset user workflow categories overlay.
  */
 
-import { resetPieceCategories, getPieceCategoriesPath } from '../../infra/config/global/pieceCategories.js';
+import { resetWorkflowCategories, getWorkflowCategoriesPath } from '../../infra/config/global/workflowCategories.js';
 import { header, success, info } from '../../shared/ui/index.js';
 
 export async function resetCategoriesToDefault(cwd: string): Promise<void> {
   header('Reset Categories');
 
-  resetPieceCategories(cwd);
+  resetWorkflowCategories(cwd);
 
-  const userPath = getPieceCategoriesPath(cwd);
+  const userPath = getWorkflowCategoriesPath(cwd);
   success('User category overlay reset.');
   info(`  ${userPath}`);
 }

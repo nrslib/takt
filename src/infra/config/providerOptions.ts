@@ -1,13 +1,13 @@
 import type {
   ClaudeEffort,
   CodexReasoningEffort,
-  MovementProviderOptions,
-} from '../../core/models/piece-types.js';
+  StepProviderOptions,
+} from '../../core/models/workflow-types.js';
 import type {
   ProviderOptionsOriginResolver,
   ProviderOptionsSource,
   ProviderOptionsTraceOrigin,
-} from '../../core/piece/types.js';
+} from '../../core/workflow/types.js';
 
 type RawProviderOptions = {
   codex?: {
@@ -30,13 +30,13 @@ type RawProviderOptions = {
 /** Convert raw YAML provider_options (snake_case) to internal format (camelCase). */
 export function normalizeProviderOptions(
   raw: RawProviderOptions | Record<string, unknown> | undefined,
-): MovementProviderOptions | undefined {
+): StepProviderOptions | undefined {
   if (!raw || typeof raw !== 'object') {
     return undefined;
   }
 
   const options = raw as RawProviderOptions;
-  const result: MovementProviderOptions = {};
+  const result: StepProviderOptions = {};
   if (options.codex?.network_access !== undefined || options.codex?.reasoning_effort !== undefined) {
     result.codex = {
       ...(options.codex.network_access !== undefined
@@ -55,7 +55,7 @@ export function normalizeProviderOptions(
     || options.claude?.effort !== undefined
     || options.claude?.sandbox
   ) {
-    const claude: NonNullable<MovementProviderOptions['claude']> = {};
+    const claude: NonNullable<StepProviderOptions['claude']> = {};
     if (options.claude.allowed_tools !== undefined) {
       claude.allowedTools = options.claude.allowed_tools;
     }
@@ -84,9 +84,9 @@ export function normalizeProviderOptions(
 
 /** Deep merge provider options. Later sources override earlier ones. */
 export function mergeProviderOptions(
-  ...layers: (MovementProviderOptions | undefined)[]
-): MovementProviderOptions | undefined {
-  const result: MovementProviderOptions = {};
+  ...layers: (StepProviderOptions | undefined)[]
+): StepProviderOptions | undefined {
+  const result: StepProviderOptions = {};
 
   for (const layer of layers) {
     if (!layer) continue;
@@ -151,37 +151,37 @@ export function resolveProviderOptionOrigin(
 
 function selectProviderValue<T>(
   configValue: T | undefined,
-  movementValue: T | undefined,
+  stepValue: T | undefined,
   origin: ProviderOptionsTraceOrigin,
 ): T | undefined {
   if (origin === 'env' || origin === 'cli') {
-    return configValue ?? movementValue;
+    return configValue ?? stepValue;
   }
-  return movementValue ?? configValue;
+  return stepValue ?? configValue;
 }
 
 export function resolveEffectiveProviderOptions(
   source: ProviderOptionsSource | undefined,
   originResolver: ProviderOptionsOriginResolver | undefined,
-  resolvedConfigOptions: MovementProviderOptions | undefined,
-  movementOptions: MovementProviderOptions | undefined,
-): MovementProviderOptions | undefined {
+  resolvedConfigOptions: StepProviderOptions | undefined,
+  stepOptions: StepProviderOptions | undefined,
+): StepProviderOptions | undefined {
   if (!resolvedConfigOptions) {
-    return movementOptions;
+    return stepOptions;
   }
-  if (!movementOptions) {
+  if (!stepOptions) {
     return resolvedConfigOptions;
   }
 
   const claudeSandbox = {
     allowUnsandboxedCommands: selectProviderValue(
       resolvedConfigOptions.claude?.sandbox?.allowUnsandboxedCommands,
-      movementOptions.claude?.sandbox?.allowUnsandboxedCommands,
+      stepOptions.claude?.sandbox?.allowUnsandboxedCommands,
       resolveProviderOptionOrigin(originResolver, 'claude.sandbox.allowUnsandboxedCommands', source),
     ),
     excludedCommands: selectProviderValue(
       resolvedConfigOptions.claude?.sandbox?.excludedCommands,
-      movementOptions.claude?.sandbox?.excludedCommands,
+      stepOptions.claude?.sandbox?.excludedCommands,
       resolveProviderOptionOrigin(originResolver, 'claude.sandbox.excludedCommands', source),
     ),
   };
@@ -192,33 +192,33 @@ export function resolveEffectiveProviderOptions(
       : undefined,
     allowedTools: selectProviderValue(
       resolvedConfigOptions.claude?.allowedTools,
-      movementOptions.claude?.allowedTools,
+      stepOptions.claude?.allowedTools,
       resolveProviderOptionOrigin(originResolver, 'claude.allowedTools', source),
     ),
     effort: selectProviderValue(
       resolvedConfigOptions.claude?.effort,
-      movementOptions.claude?.effort,
+      stepOptions.claude?.effort,
       resolveProviderOptionOrigin(originResolver, 'claude.effort', source),
     ),
   };
 
   const codexNetworkAccess = selectProviderValue(
     resolvedConfigOptions.codex?.networkAccess,
-    movementOptions.codex?.networkAccess,
+    stepOptions.codex?.networkAccess,
     resolveProviderOptionOrigin(originResolver, 'codex.networkAccess', source),
   );
   const codexReasoningEffort = selectProviderValue(
     resolvedConfigOptions.codex?.reasoningEffort,
-    movementOptions.codex?.reasoningEffort,
+    stepOptions.codex?.reasoningEffort,
     resolveProviderOptionOrigin(originResolver, 'codex.reasoningEffort', source),
   );
   const opencodeNetworkAccess = selectProviderValue(
     resolvedConfigOptions.opencode?.networkAccess,
-    movementOptions.opencode?.networkAccess,
+    stepOptions.opencode?.networkAccess,
     resolveProviderOptionOrigin(originResolver, 'opencode.networkAccess', source),
   );
 
-  const result: MovementProviderOptions = {
+  const result: StepProviderOptions = {
     codex:
       codexNetworkAccess !== undefined || codexReasoningEffort !== undefined
         ? {

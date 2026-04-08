@@ -65,7 +65,7 @@ describe('createSessionLog', () => {
 
     expect(log.task).toBe('test task');
     expect(log.projectDir).toBe('/project');
-    expect(log.pieceName).toBe('default');
+    expect(log.workflowName).toBe('default');
     expect(log.iterations).toBe(0);
     expect(log.status).toBe('running');
     expect(log.history).toEqual([]);

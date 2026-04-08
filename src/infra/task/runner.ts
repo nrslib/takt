@@ -87,26 +87,26 @@ export class TaskRunner {
     return this.query.listExceededTasks();
   }
 
-  requeueFailedTask(taskRef: string, startMovement?: string, retryNote?: string): string {
-    return this.lifecycle.requeueFailedTask(taskRef, startMovement, retryNote);
+  requeueFailedTask(taskRef: string, startStep?: string, retryNote?: string): string {
+    return this.lifecycle.requeueFailedTask(taskRef, startStep, retryNote);
   }
 
   requeueTask(
     taskRef: string,
     allowedStatuses: readonly TaskStatus[],
-    startMovement?: string,
+    startStep?: string,
     retryNote?: string,
   ): string {
-    return this.lifecycle.requeueTask(taskRef, allowedStatuses, startMovement, retryNote);
+    return this.lifecycle.requeueTask(taskRef, allowedStatuses, startStep, retryNote);
   }
 
   startReExecution(
     taskRef: string,
     allowedStatuses: readonly TaskStatus[],
-    startMovement?: string,
+    startStep?: string,
     retryNote?: string,
   ): TaskInfo {
-    return this.lifecycle.startReExecution(taskRef, allowedStatuses, startMovement, retryNote);
+    return this.lifecycle.startReExecution(taskRef, allowedStatuses, startStep, retryNote);
   }
 
   deleteTask(name: string, kind: 'pending' | 'failed' | 'completed' | 'exceeded' | 'pr_failed'): void {

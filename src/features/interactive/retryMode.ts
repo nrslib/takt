@@ -2,7 +2,7 @@
  * Retry mode for failed tasks.
  *
  * Provides a dedicated conversation loop with failure context,
- * run session data, and piece structure injected into the system prompt.
+ * run session data, and workflow structure injected into the system prompt.
  */
 
 import {
@@ -14,8 +14,8 @@ import {
 import { initializeSession } from './sessionInitialization.js';
 import {
   createSelectActionWithoutExecute,
-  formatMovementPreviews,
-  type PieceContext,
+  formatStepPreviews,
+  type WorkflowContext,
 } from './interactive-summary.js';
 import { resolveLanguage } from './interactive.js';
 import { buildInteractivePolicyPrompt } from './policyPrompt.js';
@@ -29,7 +29,7 @@ export interface RetryFailureInfo {
   readonly taskName: string;
   readonly taskContent: string;
   readonly createdAt: string;
-  readonly failedMovement: string;
+  readonly failedStep: string;
   readonly error: string;
   readonly lastMessage: string;
   readonly retryNote: string;
@@ -40,9 +40,9 @@ export interface RetryRunInfo {
   readonly logsDir: string;
   readonly reportsDir: string;
   readonly task: string;
-  readonly piece: string;
+  readonly workflow: string;
   readonly status: string;
-  readonly movementLogs: string;
+  readonly stepLogs: string;
   readonly reports: string;
 }
 
@@ -50,7 +50,7 @@ export interface RetryRunInfo {
 export interface RetryContext {
   readonly failure: RetryFailureInfo;
   readonly branchName: string;
-  readonly pieceContext: PieceContext;
+  readonly workflowContext: WorkflowContext;
   readonly run: RetryRunInfo | null;
   readonly previousOrderContent: string | null;
 }
@@ -61,10 +61,10 @@ const RETRY_TOOLS = ['Read', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch'];
  * Convert RetryContext into template variable map.
  */
 export function buildRetryTemplateVars(ctx: RetryContext, lang: 'en' | 'ja', previousOrderContent: string | null = null): Record<string, string | boolean> {
-  const hasPiecePreview = !!ctx.pieceContext.movementPreviews?.length;
-  const movementDetails =
-    hasPiecePreview && ctx.pieceContext.movementPreviews
-      ? formatMovementPreviews(ctx.pieceContext.movementPreviews, lang)
+  const hasWorkflowPreview = !!ctx.workflowContext.stepPreviews?.length;
+  const stepDetails =
+    hasWorkflowPreview && ctx.workflowContext.stepPreviews
+      ? formatStepPreviews(ctx.workflowContext.stepPreviews, lang)
       : '';
 
   const run = ctx.run;
@@ -74,20 +74,20 @@ export function buildRetryTemplateVars(ctx: RetryContext, lang: 'en' | 'ja', pre
     taskContent: ctx.failure.taskContent,
     branchName: ctx.branchName,
     createdAt: ctx.failure.createdAt,
-    failedMovement: ctx.failure.failedMovement,
+    failedStep: ctx.failure.failedStep,
     failureError: ctx.failure.error,
     failureLastMessage: ctx.failure.lastMessage,
     retryNote: ctx.failure.retryNote,
-    hasPiecePreview,
-    pieceStructure: ctx.pieceContext.pieceStructure,
-    movementDetails,
+    hasWorkflowPreview: hasWorkflowPreview,
+    workflowStructure: ctx.workflowContext.workflowStructure,
+    stepDetails,
     hasRun,
     runLogsDir: run !== null ? run.logsDir : '',
     runReportsDir: run !== null ? run.reportsDir : '',
     runTask: run !== null ? run.task : '',
-    runPiece: run !== null ? run.piece : '',
+    runWorkflow: run !== null ? run.workflow : '',
     runStatus: run !== null ? run.status : '',
-    runMovementLogs: run !== null ? run.movementLogs : '',
+    runStepLogs: run !== null ? run.stepLogs : '',
     runReports: run !== null ? run.reports : '',
     hasOrderContent: previousOrderContent !== null,
     orderContent: previousOrderContent ?? '',
@@ -98,7 +98,7 @@ export function buildRetryTemplateVars(ctx: RetryContext, lang: 'en' | 'ja', pre
  * Run retry mode conversation loop.
  *
  * Uses a dedicated system prompt with failure context, run session data,
- * and piece structure injected for the AI assistant.
+ * and workflow structure injected for the AI assistant.
  */
 export async function runRetryMode(
   cwd: string,
@@ -137,7 +137,7 @@ export async function runRetryMode(
     enableRetryCommand: true,
   };
 
-  const result = await runConversationLoop(cwd, ctx, strategy, retryContext.pieceContext, undefined);
+  const result = await runConversationLoop(cwd, ctx, strategy, retryContext.workflowContext, undefined);
 
   if (result.action === 'cancel') {
     return { action: 'cancel', task: '' };

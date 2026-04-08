@@ -22,7 +22,7 @@ describe('resolveEffectiveProviderOptions', () => {
     });
   });
 
-  it('falls back to movement precedence for local/global sources', () => {
+  it('falls back to step precedence for local/global sources', () => {
     const result = resolveEffectiveProviderOptions(
       'global',
       undefined,
@@ -65,7 +65,7 @@ describe('resolveEffectiveProviderOptions', () => {
     });
   });
 
-  it('空 sandbox object は movement の leaf を潰さない', () => {
+  it('空 sandbox object は step の leaf を潰さない', () => {
     const result = resolveEffectiveProviderOptions(
       'project',
       (path: string) => (path === 'claude.sandbox' ? 'env' : 'local'),

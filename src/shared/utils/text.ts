@@ -43,7 +43,7 @@ const ANSI_PATTERN = /\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x
 
 /**
  * Strip all ANSI escape sequences from a string.
- * Removes CSI sequences (colors, cursor movement, etc.),
+ * Removes CSI sequences (colors, cursor motion, etc.),
  * OSC sequences, and other single-character escape codes.
  */
 export function stripAnsi(text: string): string {

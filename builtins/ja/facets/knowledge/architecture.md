@@ -118,8 +118,8 @@ Vertical Slice の判定基準:
 
 ```typescript
 // REJECT - 実行層が設定ソースを直接知っている
-async function executePiece(options) {
-  const engine = new PieceEngine({
+async function executeWorkflow(options) {
+  const engine = new WorkflowEngine({
     provider: options.provider ?? globalConfig.provider,
   });
 }
@@ -132,9 +132,9 @@ class AgentRunner {
 }
 
 // OK - 境界で解決し、内部は解決済み値を使う
-async function executePiece(options) {
+async function executeWorkflow(options) {
   const context = resolveExecutionContext(options);
-  const engine = new PieceEngine(context);
+  const engine = new WorkflowEngine(context);
 }
 
 class AgentRunner {
@@ -228,7 +228,7 @@ for (const transition of step.transitions) {
 export function matchesCondition(status: Status, condition: TransitionCondition): boolean {
 
 // OK - 設計判断の理由（Why）
-// ユーザー中断はピース定義のトランジションより優先する
+// ユーザー中断はワークフロー定義のトランジションより優先する
 if (status === 'interrupted') {
   return ABORT_STEP;
 }
@@ -475,13 +475,13 @@ DRY にしないケース:
 
 ```typescript
 // 配線漏れ: projectCwd を受け取る口がない
-export async function executePiece(config, cwd, task) {
-  const engine = new PieceEngine(config, cwd, task);  // options なし
+export async function executeWorkflow(config, cwd, task) {
+  const engine = new WorkflowEngine(config, cwd, task);  // options なし
 }
 
 // 配線済み: projectCwd を渡せる
-export async function executePiece(config, cwd, task, options?) {
-  const engine = new PieceEngine(config, cwd, task, options);
+export async function executeWorkflow(config, cwd, task, options?) {
+  const engine = new WorkflowEngine(config, cwd, task, options);
 }
 ```
 

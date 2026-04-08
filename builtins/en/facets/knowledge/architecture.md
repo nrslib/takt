@@ -118,8 +118,8 @@ Values such as config, options, providers, permissions, and paths should be reso
 
 ```typescript
 // REJECT - Execution layer knows config sources directly
-async function executePiece(options) {
-  const engine = new PieceEngine({
+async function executeWorkflow(options) {
+  const engine = new WorkflowEngine({
     provider: options.provider ?? globalConfig.provider,
   });
 }
@@ -132,9 +132,9 @@ class AgentRunner {
 }
 
 // OK - Resolve at the boundary, use resolved values internally
-async function executePiece(options) {
+async function executeWorkflow(options) {
   const context = resolveExecutionContext(options);
-  const engine = new PieceEngine(context);
+  const engine = new WorkflowEngine(context);
 }
 
 class AgentRunner {
@@ -228,7 +228,7 @@ for (const transition of step.transitions) {
 export function matchesCondition(status: Status, condition: TransitionCondition): boolean {
 
 // OK - Design decision (Why)
-// User interruption takes priority over piece-defined transitions
+// User interruption takes priority over workflow-defined transitions
 if (status === 'interrupted') {
   return ABORT_STEP;
 }
@@ -475,13 +475,13 @@ Danger patterns:
 
 ```typescript
 // Missing wiring: No route to receive projectCwd
-export async function executePiece(config, cwd, task) {
-  const engine = new PieceEngine(config, cwd, task);  // No options
+export async function executeWorkflow(config, cwd, task) {
+  const engine = new WorkflowEngine(config, cwd, task);  // No options
 }
 
 // Wired: Can pass projectCwd
-export async function executePiece(config, cwd, task, options?) {
-  const engine = new PieceEngine(config, cwd, task, options);
+export async function executeWorkflow(config, cwd, task, options?) {
+  const engine = new WorkflowEngine(config, cwd, task, options);
 }
 ```
 

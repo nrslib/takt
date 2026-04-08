@@ -1,4 +1,4 @@
-import type { PieceRule, PartDefinition } from '../../core/models/types.js';
+import type { WorkflowRule, PartDefinition } from '../../core/models/types.js';
 import {
   buildPromptBasedDecomposePrompt,
   buildPromptBasedMorePartsPrompt,
@@ -21,13 +21,13 @@ import {
   parseLastJsonBlock,
   resolveStructuredStep,
 } from './shared.js';
-import { parseParts } from '../../core/piece/engine/task-decomposer.js';
+import { parseParts } from '../../core/workflow/engine/task-decomposer.js';
 
 export class PromptBasedStructuredCaller implements StructuredCaller {
   async judgeStatus(
     structuredInstruction: string,
     tagInstruction: string,
-    rules: PieceRule[],
+    rules: WorkflowRule[],
     options: JudgeStatusOptions,
   ): Promise<JudgeStatusResult> {
     if (rules.length === 0) {
@@ -82,7 +82,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
         resolvedModel: options.resolvedModel,
         language: options.language,
         onStream: options.onStream,
-        movementName: options.movementName,
+        stepName: options.stepName,
       },
       options.onJudgeStage,
     );
@@ -124,7 +124,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
     const detail = structuredParseError == null
       ? ''
       : ` Structured response parsing failed: ${structuredParseError}`;
-    throw new Error(`Status not found for movement "${options.movementName}".${detail}`);
+    throw new Error(`Status not found for step "${options.stepName}".${detail}`);
   }
 
   async evaluateCondition(

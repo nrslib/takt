@@ -1,5 +1,5 @@
 import type { StreamCallback, PermissionHandler, AskUserQuestionHandler } from '../claude/index.js';
-import type { AgentResponse, PermissionMode, McpServerConfig, MovementProviderOptions } from '../../core/models/index.js';
+import type { AgentResponse, PermissionMode, McpServerConfig, StepProviderOptions } from '../../core/models/index.js';
 import type { ProviderType as SharedProviderType } from '../../shared/types/provider.js';
 
 export interface AgentSetup {
@@ -16,7 +16,7 @@ export interface ProviderCallOptions {
   mcpServers?: Record<string, McpServerConfig>;
   maxTurns?: number;
   permissionMode?: PermissionMode;
-  providerOptions?: MovementProviderOptions;
+  providerOptions?: StepProviderOptions;
   onStream?: StreamCallback;
   onPermissionRequest?: PermissionHandler;
   onAskUserQuestion?: AskUserQuestionHandler;

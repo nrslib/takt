@@ -6,7 +6,7 @@ export type {
   AnalyticsEvent,
   ReviewFindingEvent,
   FixActionEvent,
-  MovementResultEvent,
+  StepResultEvent,
 } from './events.js';
 
 export {

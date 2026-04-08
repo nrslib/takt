@@ -1,8 +1,8 @@
 <!--
   template: perform_phase1_message
   phase: 1 (main execution)
-  vars: workingDirectory, editRule, pieceName, pieceDescription, hasPieceDescription,
-        pieceStructure, iteration, movementIteration, movement, hasReport, reportInfo,
+  vars: workingDirectory, editRule, workflowName, workflowDescription, hasWorkflowDescription,
+        workflowStructure, iteration, stepIteration, stepName, hasReport, reportInfo,
         phaseNote, hasTaskSection, userRequest, hasPreviousResponse, previousResponse,
         hasUserInputs, userInputs, hasRetryNote, retryNote, hasPolicy, policyContent,
         hasKnowledge, knowledgeContent, hasQualityGates, qualityGatesContent, instructions
@@ -27,14 +27,14 @@ Knowledge はトリミングされる場合があります。Source Path に従�
 {{/if}}
 
 ## Workflow Context
-{{#if pieceName}}- ワークフロー: {{pieceName}}
-{{/if}}{{#if hasPieceDescription}}- 説明: {{pieceDescription}}
+{{#if workflowName}}- ワークフロー: {{workflowName}}
+{{/if}}{{#if hasWorkflowDescription}}- 説明: {{workflowDescription}}
 
-{{/if}}{{#if pieceStructure}}{{pieceStructure}}
+{{/if}}{{#if workflowStructure}}{{workflowStructure}}
 
 {{/if}}- Iteration: {{iteration}}（ワークフロー全体）
-- Step Iteration: {{movementIteration}}（このステップの実行回数）
-- Step: {{movement}}
+- Step Iteration: {{stepIteration}}（このステップの実行回数）
+- Step: {{stepName}}
 {{#if hasReport}}{{reportInfo}}
 
 {{phaseNote}}{{/if}}

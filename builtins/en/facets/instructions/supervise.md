@@ -1,9 +1,9 @@
 Verify existing evidence for tests, builds, and functional checks, then perform final approval.
 
-**Overall piece verification:**
-1. Check all reports in the report directory and verify overall piece consistency
+**Overall workflow verification:**
+1. Check all reports in the report directory and verify overall workflow consistency
    - Does implementation match the plan?
-   - Were all review movement findings properly addressed?
+   - Were all review step findings properly addressed?
    - Was the original task objective achieved?
    - Are prior review findings themselves valid against the task spec, plan, and actual code?
 2. Verify the task spec, plan, and decision history as primary sources
@@ -29,7 +29,7 @@ Verify existing evidence for tests, builds, and functional checks, then perform 
    - If a finding holds technically but pushes work beyond the task objective or justified scope, classify it as `overreach`
    - Do not leave `false_positive` / `overreach` reasoning implicit
 5. Handling tests, builds, and functional checks
-   - Do not assume this movement will rerun commands
+   - Do not assume this step will rerun commands
    - Use only evidence available in this run, such as execution logs, reports, or CI results
    - If evidence is missing, mark the item as unverified rather than successful
    - If report text conflicts with execution evidence, call out the inconsistency explicitly

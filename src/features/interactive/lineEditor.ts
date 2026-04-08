@@ -201,7 +201,7 @@ export function parseInputData(data: string, callbacks: InputCallbacks): void {
  * Supports:
  * - Enter to submit, Shift+Enter to insert newline
  * - Paste bracket mode for pasted text with newlines
- * - Left/Right arrows, Home/End for cursor movement
+ * - Left/Right arrows, Home/End for cursor navigation
  * - Ctrl+A/E (line start/end), Ctrl+K/U (kill line), Ctrl+W (delete word)
  * - Backspace / Ctrl+H, Ctrl+C / Ctrl+D (cancel)
  *
@@ -399,7 +399,7 @@ export function readMultilineInput(prompt: string): Promise<string | null> {
       process.stdin.pause();
     }
 
-    // --- Cursor movement ---
+    // --- Cursor navigation ---
 
     function moveCursorToDisplayRowStart(): void {
       const displayRowStart = getDisplayRowStart(cursorPos);

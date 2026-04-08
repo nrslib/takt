@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { runTeamLeaderExecution } from '../core/piece/engine/team-leader-execution.js';
+import { runTeamLeaderExecution } from '../core/workflow/engine/team-leader-execution.js';
 import type { PartDefinition, PartResult } from '../core/models/types.js';
 
 function makePart(id: string): PartDefinition {

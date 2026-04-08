@@ -8,9 +8,9 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import chalk from 'chalk';
-import type { PieceSource } from '../../infra/config/loaders/pieceResolver.js';
+import type { WorkflowSource } from '../../infra/config/loaders/workflowResolver.js';
 import { getBuiltinFacetDir, getGlobalFacetDir, getProjectFacetDir } from '../../infra/config/paths.js';
-import { resolvePieceConfigValues } from '../../infra/config/index.js';
+import { resolveWorkflowConfigValues } from '../../infra/config/index.js';
 import { section, error as logError, info } from '../../shared/ui/index.js';
 
 const FACET_TYPES = [
@@ -26,8 +26,8 @@ export type FacetType = (typeof FACET_TYPES)[number];
 export interface FacetEntry {
   name: string;
   description: string;
-  source: PieceSource;
-  overriddenBy?: PieceSource;
+  source: WorkflowSource;
+  overriddenBy?: WorkflowSource;
 }
 
 /** Validate a string as a FacetType. Returns the type or null. */
@@ -60,11 +60,11 @@ export function extractDescription(filePath: string): string {
 function getFacetDirs(
   facetType: FacetType,
   cwd: string,
-): { dir: string; source: PieceSource }[] {
-  const config = resolvePieceConfigValues(cwd, ['enableBuiltinPieces', 'language']);
-  const dirs: { dir: string; source: PieceSource }[] = [];
+): { dir: string; source: WorkflowSource }[] {
+  const config = resolveWorkflowConfigValues(cwd, ['enableBuiltinWorkflows', 'language']);
+  const dirs: { dir: string; source: WorkflowSource }[] = [];
 
-  if (config.enableBuiltinPieces !== false) {
+  if (config.enableBuiltinWorkflows !== false) {
     const lang = config.language;
     dirs.push({ dir: getBuiltinFacetDir(lang, facetType), source: 'builtin' });
   }
@@ -114,7 +114,7 @@ export function scanFacets(facetType: FacetType, cwd: string): FacetEntry[] {
 }
 
 /** Color a source tag for terminal display. */
-function colorSourceTag(source: PieceSource): string {
+function colorSourceTag(source: WorkflowSource): string {
   switch (source) {
     case 'builtin':
       return chalk.gray(`[${source}]`);

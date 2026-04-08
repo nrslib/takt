@@ -275,16 +275,11 @@ describe('cwd propagation: addTask wiring', () => {
         if (!data) {
           return undefined;
         }
-        const workflow = typeof data.workflow === 'string' ? data.workflow : undefined;
-        const piece = typeof data.piece === 'string' ? data.piece : undefined;
-        if (workflow !== undefined && piece !== undefined && workflow !== piece) {
-          throw new Error("Task configuration conflict: 'workflow' and 'piece' must match when both are set.");
-        }
-        return workflow ?? piece;
+        return typeof data.workflow === 'string' ? data.workflow : undefined;
       }),
     }));
     vi.mock('../features/tasks/execute/selectAndExecute.js', () => ({
-      determinePiece: vi.fn(async () => 'default'),
+      determineWorkflow: vi.fn(async () => 'default'),
     }));
     vi.mock('../infra/task/naming.js', () => ({
       firstLine: vi.fn(() => 'line'),

@@ -75,15 +75,15 @@ vi.mock('../infra/config/paths.js', () => ({
   isVerboseMode: vi.fn(() => false),
 }));
 
-vi.mock('../infra/config/loaders/pieceLoader.js', () => ({
-  listPieces: vi.fn(() => []),
+vi.mock('../infra/config/loaders/workflowLoader.js', () => ({
+  listWorkflows: vi.fn(() => []),
 }));
 
 vi.mock('../shared/constants.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../shared/constants.js')>();
   return {
     ...actual,
-    DEFAULT_PIECE_NAME: 'default',
+    DEFAULT_WORKFLOW_NAME: 'default',
   };
 });
 

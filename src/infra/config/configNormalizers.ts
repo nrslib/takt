@@ -1,21 +1,17 @@
-import type { MovementProviderOptions, PieceRuntimeConfig } from '../../core/models/piece-types.js';
+import type { StepProviderOptions, WorkflowRuntimeConfig } from '../../core/models/workflow-types.js';
 import type { ProviderPermissionProfiles } from '../../core/models/provider-profiles.js';
 import type {
-  PieceOverrides,
+  WorkflowOverrides,
   PersonaProviderEntry,
   PipelineConfig,
   TaktProviderConfigEntry,
   TaktProvidersConfig,
 } from '../../core/models/config-types.js';
-import {
-  resolvePermissionOverrideAliases,
-  type RawProviderPermissionProfile,
-} from './configKeyAliases.js';
 import { validateProviderModelCompatibility } from './providerModelCompatibility.js';
 
 export function normalizeRuntime(
   runtime: { prepare?: string[] } | undefined,
-): PieceRuntimeConfig | undefined {
+): WorkflowRuntimeConfig | undefined {
   if (!runtime?.prepare || runtime.prepare.length === 0) {
     return undefined;
   }
@@ -23,17 +19,21 @@ export function normalizeRuntime(
 }
 
 export function normalizeProviderProfiles(
-  raw: Record<string, RawProviderPermissionProfile> | undefined,
+  raw: Record<string, {
+    default_permission_mode: string;
+    step_permission_overrides?: Record<string, string>;
+    movement_permission_overrides?: Record<string, string>;
+  }> | undefined,
 ): ProviderPermissionProfiles | undefined {
   if (!raw) return undefined;
 
   const entries = Object.entries(raw).map(([provider, profile]) => {
+    if (Object.prototype.hasOwnProperty.call(profile, 'movement_permission_overrides')) {
+      throw new Error('"movement_permission_overrides" has been removed. Use "step_permission_overrides" instead.');
+    }
     return [provider, {
       defaultPermissionMode: profile.default_permission_mode,
-      movementPermissionOverrides: resolvePermissionOverrideAliases(
-        `provider_profiles.${provider}`,
-        profile,
-      ),
+      stepPermissionOverrides: profile.step_permission_overrides,
     }];
   });
 
@@ -49,29 +49,27 @@ export function denormalizeProviderProfiles(
 
   return Object.fromEntries(entries.map(([provider, profile]) => [provider, {
     default_permission_mode: profile.defaultPermissionMode,
-    ...(profile.movementPermissionOverrides
-      ? { step_permission_overrides: profile.movementPermissionOverrides }
+    ...(profile.stepPermissionOverrides
+      ? { step_permission_overrides: profile.stepPermissionOverrides }
       : {}),
   }])) as Record<string, { default_permission_mode: string; step_permission_overrides?: Record<string, string> }>;
 }
 
-export function normalizePieceOverrides(
+export function normalizeWorkflowOverrides(
   raw: {
     quality_gates?: string[];
     quality_gates_edit_only?: boolean;
-    movements?: Record<string, { quality_gates?: string[] }>;
     steps?: Record<string, { quality_gates?: string[] }>;
     personas?: Record<string, { quality_gates?: string[] }>;
   } | undefined,
-): PieceOverrides | undefined {
+): WorkflowOverrides | undefined {
   if (!raw) return undefined;
-  const movements = raw.steps ?? raw.movements;
   return {
     qualityGates: raw.quality_gates,
     qualityGatesEditOnly: raw.quality_gates_edit_only,
-    movements: movements
+    steps: raw.steps
       ? Object.fromEntries(
-        Object.entries(movements).map(([name, override]) => [
+        Object.entries(raw.steps).map(([name, override]) => [
           name,
           { qualityGates: override.quality_gates },
         ])
@@ -88,8 +86,8 @@ export function normalizePieceOverrides(
   };
 }
 
-export function denormalizePieceOverrides(
-  overrides: PieceOverrides | undefined,
+export function denormalizeWorkflowOverrides(
+  overrides: WorkflowOverrides | undefined,
 ): {
   quality_gates?: string[];
   quality_gates_edit_only?: boolean;
@@ -109,14 +107,14 @@ export function denormalizePieceOverrides(
   if (overrides.qualityGatesEditOnly !== undefined) {
     result.quality_gates_edit_only = overrides.qualityGatesEditOnly;
   }
-  if (overrides.movements) {
+  if (overrides.steps) {
     result.steps = Object.fromEntries(
-      Object.entries(overrides.movements).map(([name, override]) => {
-        const movementOverride: { quality_gates?: string[] } = {};
+      Object.entries(overrides.steps).map(([name, override]) => {
+        const stepOverride: { quality_gates?: string[] } = {};
         if (override.qualityGates !== undefined) {
-          movementOverride.quality_gates = override.qualityGates;
+          stepOverride.quality_gates = override.qualityGates;
         }
-        return [name, movementOverride];
+        return [name, stepOverride];
       })
     );
   }
@@ -246,7 +244,7 @@ export function buildRawTaktProvidersOrThrow(
 }
 
 export function denormalizeProviderOptions(
-  providerOptions: MovementProviderOptions | undefined,
+  providerOptions: StepProviderOptions | undefined,
 ): Record<string, unknown> | undefined {
   if (!providerOptions) {
     return undefined;

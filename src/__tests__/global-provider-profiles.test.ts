@@ -39,7 +39,7 @@ describe('global provider_profiles', () => {
         'provider_profiles:',
         '  codex:',
         '    default_permission_mode: full',
-        '    movement_permission_overrides:',
+        '    step_permission_overrides:',
         '      ai_fix: edit',
       ].join('\n'),
       'utf-8',
@@ -48,7 +48,7 @@ describe('global provider_profiles', () => {
     const config = loadGlobalConfig();
 
     expect(config.providerProfiles?.codex?.defaultPermissionMode).toBe('full');
-    expect(config.providerProfiles?.codex?.movementPermissionOverrides?.ai_fix).toBe('edit');
+    expect(config.providerProfiles?.codex?.stepPermissionOverrides?.ai_fix).toBe('edit');
   });
 
   it('loads step_permission_overrides from yaml', () => {
@@ -69,10 +69,10 @@ describe('global provider_profiles', () => {
 
     const config = loadGlobalConfig();
 
-    expect(config.providerProfiles?.codex?.movementPermissionOverrides?.ai_fix).toBe('edit');
+    expect(config.providerProfiles?.codex?.stepPermissionOverrides?.ai_fix).toBe('edit');
   });
 
-  it('prefers step_permission_overrides when both keys match', () => {
+  it('rejects the removed provider profile override key', () => {
     const taktDir = join(testHomeDir, '.takt');
     mkdirSync(taktDir, { recursive: true });
     writeFileSync(
@@ -83,21 +83,15 @@ describe('global provider_profiles', () => {
         '  codex:',
         '    default_permission_mode: full',
         '    movement_permission_overrides:',
-        '      ai_fix: edit',
-        '    step_permission_overrides:',
         '      ai_fix: edit',
       ].join('\n'),
       'utf-8',
     );
 
-    const config = loadGlobalConfig();
-
-    expect(config.providerProfiles?.codex?.movementPermissionOverrides).toEqual({
-      ai_fix: 'edit',
-    });
+    expect(() => loadGlobalConfig()).toThrow(/movement_permission_overrides/i);
   });
 
-  it('accepts matching permission override aliases regardless of key order', () => {
+  it('rejects duplicate step_permission_overrides keys at YAML parse time', () => {
     const taktDir = join(testHomeDir, '.takt');
     mkdirSync(taktDir, { recursive: true });
     writeFileSync(
@@ -107,25 +101,18 @@ describe('global provider_profiles', () => {
         'provider_profiles:',
         '  codex:',
         '    default_permission_mode: full',
-        '    movement_permission_overrides:',
+        '    step_permission_overrides:',
         '      ai_fix: edit',
-        '      supervise: full',
         '    step_permission_overrides:',
         '      supervise: full',
-        '      ai_fix: edit',
       ].join('\n'),
       'utf-8',
     );
 
-    const config = loadGlobalConfig();
-
-    expect(config.providerProfiles?.codex?.movementPermissionOverrides).toEqual({
-      ai_fix: 'edit',
-      supervise: 'full',
-    });
+    expect(() => loadGlobalConfig()).toThrow(/Map keys must be unique/i);
   });
 
-  it('fails fast when movement_permission_overrides and step_permission_overrides differ', () => {
+  it('rejects duplicate step_permission_overrides keys before custom validation', () => {
     const taktDir = join(testHomeDir, '.takt');
     mkdirSync(taktDir, { recursive: true });
     writeFileSync(
@@ -135,7 +122,7 @@ describe('global provider_profiles', () => {
         'provider_profiles:',
         '  codex:',
         '    default_permission_mode: full',
-        '    movement_permission_overrides:',
+        '    step_permission_overrides:',
         '      ai_fix: edit',
         '    step_permission_overrides:',
         '      ai_fix: full',
@@ -143,9 +130,7 @@ describe('global provider_profiles', () => {
       'utf-8',
     );
 
-    expect(() => loadGlobalConfig()).toThrow(
-      'Configuration error: provider_profiles.codex step_permission_overrides must match movement_permission_overrides when both are set.',
-    );
+    expect(() => loadGlobalConfig()).toThrow(/Map keys must be unique/i);
   });
 
   it('saves provider_profiles to yaml', () => {
@@ -157,7 +142,7 @@ describe('global provider_profiles', () => {
     config.providerProfiles = {
       codex: {
         defaultPermissionMode: 'full',
-        movementPermissionOverrides: {
+        stepPermissionOverrides: {
           supervise: 'full',
         },
       },
@@ -167,7 +152,7 @@ describe('global provider_profiles', () => {
 
     const reloaded = loadGlobalConfig();
     expect(reloaded.providerProfiles?.codex?.defaultPermissionMode).toBe('full');
-    expect(reloaded.providerProfiles?.codex?.movementPermissionOverrides?.supervise).toBe('full');
+    expect(reloaded.providerProfiles?.codex?.stepPermissionOverrides?.supervise).toBe('full');
   });
 
   it('saves provider_profiles with canonical step_permission_overrides key', () => {
@@ -179,7 +164,7 @@ describe('global provider_profiles', () => {
     config.providerProfiles = {
       codex: {
         defaultPermissionMode: 'full',
-        movementPermissionOverrides: {
+        stepPermissionOverrides: {
           supervise: 'full',
         },
       },

@@ -197,7 +197,7 @@ describe('option resolution order', () => {
     );
   });
 
-  it('should use providerOptions from piece/step only', async () => {
+  it('should use providerOptions from workflow step only', async () => {
     const stepProviderOptions = {
       claude: {
         sandbox: {
@@ -283,7 +283,7 @@ describe('option resolution order', () => {
     await runAgent(undefined, 'task', {
       cwd: '/repo',
       permissionResolution: {
-        movementName: 'supervise',
+        stepName: 'supervise',
       },
     });
 

@@ -2,11 +2,11 @@
  * Three-phase execution integration tests.
  *
  * Tests Phase 1 (main) → Phase 2 (report) → Phase 3 (status judgment) lifecycle.
- * Verifies that the correct combination of phases fires based on movement config.
+ * Verifies that the correct combination of phases fires based on step config.
  *
  * Mocked: UI, session, config
  * Selectively mocked: phase-runner (to inspect call patterns)
- * Not mocked: PieceEngine, runAgent, detectMatchedRule, rule-evaluator
+ * Not mocked: WorkflowEngine, runAgent, detectMatchedRule, rule-evaluator
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -15,7 +15,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setMockScenario, resetScenario } from '../infra/mock/index.js';
 import { DefaultStructuredCaller } from '../agents/structured-caller.js';
-import type { PieceConfig, PieceMovement, PieceRule } from '../core/models/index.js';
+import type { WorkflowConfig, WorkflowStep, WorkflowRule } from '../core/models/index.js';
 import { detectRuleIndex } from '../shared/utils/ruleIndex.js';
 import { makeRule } from './test-helpers.js';
 
@@ -25,7 +25,7 @@ const mockNeedsStatusJudgmentPhase = vi.fn();
 const mockRunReportPhase = vi.fn();
 const mockRunStatusJudgmentPhase = vi.fn();
 
-vi.mock('../core/piece/phase-runner.js', () => ({
+vi.mock('../core/workflow/phase-runner.js', () => ({
   needsStatusJudgmentPhase: (...args: unknown[]) => mockNeedsStatusJudgmentPhase(...args),
   runReportPhase: (...args: unknown[]) => mockRunReportPhase(...args),
   runStatusJudgmentPhase: (...args: unknown[]) => mockRunStatusJudgmentPhase(...args),
@@ -41,7 +41,7 @@ vi.mock('../infra/config/global/globalConfig.js', () => ({
   loadGlobalConfig: vi.fn().mockReturnValue({}),
   getLanguage: vi.fn().mockReturnValue('en'),
   getDisabledBuiltins: vi.fn().mockReturnValue([]),
-  getBuiltinPiecesEnabled: vi.fn().mockReturnValue(true),
+  getBuiltinWorkflowsEnabled: vi.fn().mockReturnValue(true),
 }));
 
 vi.mock('../infra/config/project/projectConfig.js', () => ({
@@ -50,7 +50,7 @@ vi.mock('../infra/config/project/projectConfig.js', () => ({
 
 // --- Imports (after mocks) ---
 
-import { PieceEngine } from '../core/piece/index.js';
+import { WorkflowEngine } from '../core/workflow/index.js';
 
 // --- Test helpers ---
 
@@ -58,7 +58,7 @@ function createTestEnv(): { dir: string; agentPath: string } {
   const dir = mkdtempSync(join(tmpdir(), 'takt-it-3ph-'));
   mkdirSync(join(dir, '.takt', 'reports', 'test-report-dir'), { recursive: true });
 
-  const agentsDir = join(dir, 'agents');
+  const agentsDir = join(dir, '.takt', 'agents');
   mkdirSync(agentsDir, { recursive: true });
   const agentPath = join(agentsDir, 'agent.md');
   writeFileSync(agentPath, 'You are an agent.');
@@ -74,15 +74,15 @@ function buildEngineOptions(projectCwd: string) {
   };
 }
 
-function makeMovement(
+function makeStep(
   name: string,
   agentPath: string,
-  rules: PieceRule[],
+  rules: WorkflowRule[],
   options: { outputContracts?: { label: string; path: string }[]; edit?: boolean } = {},
-): PieceMovement {
+): WorkflowStep {
   return {
     name,
-    persona: './agents/agent.md',
+    persona: './.takt/agents/agent.md',
     personaDisplayName: name,
     personaPath: agentPath,
     instruction: '{task}',
@@ -114,25 +114,25 @@ describe('Three-Phase Execution IT: phase1 only (no report, no tag rules)', () =
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  it('should only run Phase 1 when movement has no report and no tag rules', async () => {
+  it('should only run Phase 1 when step has no report and no tag rules', async () => {
     setMockScenario([
       { status: 'done', content: '[STEP:1]\n\nDone.' },
     ]);
 
-    const config: PieceConfig = {
+    const config: WorkflowConfig = {
       name: 'it-phase1-only',
       description: 'Test',
-      maxMovements: 5,
-      initialMovement: 'step',
-      movements: [
-        makeMovement('step', agentPath, [
+      maxSteps: 5,
+      initialStep: 'step',
+      steps: [
+        makeStep('step', agentPath, [
           makeRule('Done', 'COMPLETE'),
           makeRule('Not done', 'ABORT'),
         ]),
       ],
     };
 
-    const engine = new PieceEngine(config, testDir, 'Test task', {
+    const engine = new WorkflowEngine(config, testDir, 'Test task', {
       ...buildEngineOptions(testDir),
       provider: 'mock',
     });
@@ -166,25 +166,25 @@ describe('Three-Phase Execution IT: phase1 + phase2 (report defined)', () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  it('should run Phase 1 + Phase 2 when movement has report', async () => {
+  it('should run Phase 1 + Phase 2 when step has report', async () => {
     setMockScenario([
       { status: 'done', content: '[STEP:1]\n\nDone.' },
     ]);
 
-    const config: PieceConfig = {
+    const config: WorkflowConfig = {
       name: 'it-phase1-2',
       description: 'Test',
-      maxMovements: 5,
-      initialMovement: 'step',
-      movements: [
-        makeMovement('step', agentPath, [
+      maxSteps: 5,
+      initialStep: 'step',
+      steps: [
+        makeStep('step', agentPath, [
           makeRule('Done', 'COMPLETE'),
           makeRule('Not done', 'ABORT'),
         ], { outputContracts: [{ name: 'test-report.md', format: 'test-report', useJudge: true }] }),
       ],
     };
 
-    const engine = new PieceEngine(config, testDir, 'Test task', {
+    const engine = new WorkflowEngine(config, testDir, 'Test task', {
       ...buildEngineOptions(testDir),
       provider: 'mock',
     });
@@ -196,24 +196,24 @@ describe('Three-Phase Execution IT: phase1 + phase2 (report defined)', () => {
     expect(mockRunStatusJudgmentPhase).not.toHaveBeenCalled();
   });
 
-  it('should run Phase 2 for multi-report movement', async () => {
+  it('should run Phase 2 for multi-report step', async () => {
     setMockScenario([
       { status: 'done', content: '[STEP:1]\n\nDone.' },
     ]);
 
-    const config: PieceConfig = {
+    const config: WorkflowConfig = {
       name: 'it-phase1-2-multi',
       description: 'Test',
-      maxMovements: 5,
-      initialMovement: 'step',
-      movements: [
-        makeMovement('step', agentPath, [
+      maxSteps: 5,
+      initialStep: 'step',
+      steps: [
+        makeStep('step', agentPath, [
           makeRule('Done', 'COMPLETE'),
         ], { outputContracts: [{ name: 'scope.md', format: 'scope', useJudge: true }, { name: 'decisions.md', format: 'decisions', useJudge: true }] }),
       ],
     };
 
-    const engine = new PieceEngine(config, testDir, 'Test task', {
+    const engine = new WorkflowEngine(config, testDir, 'Test task', {
       ...buildEngineOptions(testDir),
       provider: 'mock',
     });
@@ -246,26 +246,26 @@ describe('Three-Phase Execution IT: phase1 + phase3 (tag rules defined)', () => 
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  it('should run Phase 1 + Phase 3 when movement has tag-based rules but no report', async () => {
+  it('should run Phase 1 + Phase 3 when step has tag-based rules but no report', async () => {
     setMockScenario([
       // Phase 1: main content (no tag — Phase 3 will provide it)
       { status: 'done', content: 'Agent completed the work.' },
     ]);
 
-    const config: PieceConfig = {
+    const config: WorkflowConfig = {
       name: 'it-phase1-3',
       description: 'Test',
-      maxMovements: 5,
-      initialMovement: 'step',
-      movements: [
-        makeMovement('step', agentPath, [
+      maxSteps: 5,
+      initialStep: 'step',
+      steps: [
+        makeStep('step', agentPath, [
           makeRule('Done', 'COMPLETE'),
           makeRule('Not done', 'ABORT'),
         ]),
       ],
     };
 
-    const engine = new PieceEngine(config, testDir, 'Test task', {
+    const engine = new WorkflowEngine(config, testDir, 'Test task', {
       ...buildEngineOptions(testDir),
       provider: 'mock',
     });
@@ -298,25 +298,25 @@ describe('Three-Phase Execution IT: all three phases', () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  it('should run Phase 1 → Phase 2 → Phase 3 when movement has report and tag rules', async () => {
+  it('should run Phase 1 → Phase 2 → Phase 3 when step has report and tag rules', async () => {
     setMockScenario([
       { status: 'done', content: 'Agent completed the work.' },
     ]);
 
-    const config: PieceConfig = {
+    const config: WorkflowConfig = {
       name: 'it-all-phases',
       description: 'Test',
-      maxMovements: 5,
-      initialMovement: 'step',
-      movements: [
-        makeMovement('step', agentPath, [
+      maxSteps: 5,
+      initialStep: 'step',
+      steps: [
+        makeStep('step', agentPath, [
           makeRule('Done', 'COMPLETE'),
           makeRule('Not done', 'ABORT'),
         ], { outputContracts: [{ name: 'test-report.md', format: 'test-report', useJudge: true }] }),
       ],
     };
 
-    const engine = new PieceEngine(config, testDir, 'Test task', {
+    const engine = new WorkflowEngine(config, testDir, 'Test task', {
       ...buildEngineOptions(testDir),
       provider: 'mock',
     });
@@ -363,23 +363,23 @@ describe('Three-Phase Execution IT: phase3 tag → rule match', () => {
     // Phase 3 returns rule 2 (ABORT)
     mockRunStatusJudgmentPhase.mockResolvedValue({ tag: '[STEP1:2]', ruleIndex: 1, method: 'structured_output' });
 
-    const config: PieceConfig = {
+    const config: WorkflowConfig = {
       name: 'it-phase3-tag',
       description: 'Test',
-      maxMovements: 5,
-      initialMovement: 'step1',
-      movements: [
-        makeMovement('step1', agentPath, [
+      maxSteps: 5,
+      initialStep: 'step1',
+      steps: [
+        makeStep('step1', agentPath, [
           makeRule('Done', 'step2'),
           makeRule('Not done', 'ABORT'),
         ]),
-        makeMovement('step2', agentPath, [
+        makeStep('step2', agentPath, [
           makeRule('Checked', 'COMPLETE'),
         ]),
       ],
     };
 
-    const engine = new PieceEngine(config, testDir, 'Test task', {
+    const engine = new WorkflowEngine(config, testDir, 'Test task', {
       ...buildEngineOptions(testDir),
       provider: 'mock',
     });

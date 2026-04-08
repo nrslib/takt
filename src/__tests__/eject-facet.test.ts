@@ -18,8 +18,8 @@ const mocks = vi.hoisted(() => {
   let builtinDir = '';
   let projectFacetDir = '';
   let globalFacetDir = '';
-  let projectPiecesDir = '';
-  let globalPiecesDir = '';
+  let projectWorkflowsDir = '';
+  let globalWorkflowsDir = '';
 
   return {
     get builtinDir() { return builtinDir; },
@@ -28,10 +28,10 @@ const mocks = vi.hoisted(() => {
     set projectFacetDir(v: string) { projectFacetDir = v; },
     get globalFacetDir() { return globalFacetDir; },
     set globalFacetDir(v: string) { globalFacetDir = v; },
-    get projectPiecesDir() { return projectPiecesDir; },
-    set projectPiecesDir(v: string) { projectPiecesDir = v; },
-    get globalPiecesDir() { return globalPiecesDir; },
-    set globalPiecesDir(v: string) { globalPiecesDir = v; },
+    get projectWorkflowsDir() { return projectWorkflowsDir; },
+    set projectWorkflowsDir(v: string) { projectWorkflowsDir = v; },
+    get globalWorkflowsDir() { return globalWorkflowsDir; },
+    set globalWorkflowsDir(v: string) { globalWorkflowsDir = v; },
     ui: {
       header: vi.fn(),
       success: vi.fn(),
@@ -48,8 +48,8 @@ vi.mock('../infra/config/index.js', () => ({
   getBuiltinFacetDir: () => mocks.builtinDir,
   getProjectFacetDir: () => mocks.projectFacetDir,
   getGlobalFacetDir: () => mocks.globalFacetDir,
-  getGlobalWorkflowsDir: () => mocks.globalPiecesDir,
-  getProjectWorkflowsDir: () => mocks.projectPiecesDir,
+  getGlobalWorkflowsDir: () => mocks.globalWorkflowsDir,
+  getProjectWorkflowsDir: () => mocks.projectWorkflowsDir,
   getBuiltinWorkflowsDir: () => mocks.builtinDir,
   isPathSafe: (basePath: string, targetPath: string) => {
     const rel = relative(resolve(basePath), resolve(targetPath));
@@ -91,8 +91,8 @@ describe('ejectFacet', () => {
     mocks.builtinDir = dirs.builtinDir;
     mocks.projectFacetDir = join(dirs.projectDir, '.takt', 'personas');
     mocks.globalFacetDir = join(dirs.globalDir, 'personas');
-    mocks.projectPiecesDir = join(dirs.projectDir, '.takt', 'workflows');
-    mocks.globalPiecesDir = join(dirs.globalDir, 'workflows');
+    mocks.projectWorkflowsDir = join(dirs.projectDir, '.takt', 'workflows');
+    mocks.globalWorkflowsDir = join(dirs.globalDir, 'workflows');
 
     Object.values(mocks.ui).forEach((fn) => fn.mockClear());
   });
@@ -154,8 +154,8 @@ describe('ejectBuiltin', () => {
     mocks.builtinDir = join(dirs.baseDir, 'builtins', 'workflows');
     mocks.projectFacetDir = join(dirs.projectDir, '.takt', 'personas');
     mocks.globalFacetDir = join(dirs.globalDir, 'personas');
-    mocks.projectPiecesDir = join(dirs.projectDir, '.takt', 'workflows');
-    mocks.globalPiecesDir = join(dirs.globalDir, 'workflows');
+    mocks.projectWorkflowsDir = join(dirs.projectDir, '.takt', 'workflows');
+    mocks.globalWorkflowsDir = join(dirs.globalDir, 'workflows');
     mkdirSync(mocks.builtinDir, { recursive: true });
     writeFileSync(join(mocks.builtinDir, 'default.yaml'), 'name: default\n');
     Object.values(mocks.ui).forEach((fn) => fn.mockClear());
@@ -172,7 +172,7 @@ describe('ejectBuiltin', () => {
   });
 
   it('should sanitize destination paths in success output', async () => {
-    mocks.projectPiecesDir = join(dirs.baseDir, 'project-with-control\nchars', '.takt', 'workflows');
+    mocks.projectWorkflowsDir = join(dirs.baseDir, 'project-with-control\nchars', '.takt', 'workflows');
 
     await ejectBuiltin('default', { projectDir: dirs.projectDir });
 

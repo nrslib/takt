@@ -48,9 +48,9 @@ describe('sessionState', () => {
         status: 'success',
         taskResult: 'Task completed successfully',
         timestamp: new Date().toISOString(),
-        pieceName: 'coding',
+        workflowName: 'coding',
         taskContent: 'Implement feature X',
-        lastMovement: 'implement',
+        lastStep: 'implement',
       };
 
       saveSessionState(testDir, savedState);
@@ -79,9 +79,9 @@ describe('sessionState', () => {
         status: 'success',
         taskResult: 'Task completed',
         timestamp: new Date().toISOString(),
-        pieceName: 'minimal',
+        workflowName: 'minimal',
         taskContent: 'Test task',
-        lastMovement: 'test-movement',
+        lastStep: 'test-step',
       };
 
       saveSessionState(testDir, state);
@@ -98,7 +98,7 @@ describe('sessionState', () => {
         status: 'error',
         errorMessage: 'Something went wrong',
         timestamp: new Date().toISOString(),
-        pieceName: 'coding',
+        workflowName: 'coding',
         taskContent: 'Failed task',
       };
 
@@ -112,7 +112,7 @@ describe('sessionState', () => {
       const state: SessionState = {
         status: 'user_stopped',
         timestamp: new Date().toISOString(),
-        pieceName: 'coding',
+        workflowName: 'coding',
         taskContent: 'Interrupted task',
       };
 
@@ -128,7 +128,7 @@ describe('sessionState', () => {
       const state: SessionState = {
         status: 'success',
         timestamp: new Date().toISOString(),
-        pieceName: 'coding',
+        workflowName: 'coding',
       };
 
       saveSessionState(testDir, state);
@@ -151,7 +151,7 @@ describe('sessionState', () => {
         status: 'success',
         taskResult: 'Done',
         timestamp: new Date().toISOString(),
-        pieceName: 'coding',
+        workflowName: 'coding',
       };
       saveSessionState(testDir, state);
 
@@ -173,7 +173,7 @@ describe('sessionState', () => {
         status: 'success',
         taskResult: longString,
         timestamp: new Date().toISOString(),
-        pieceName: 'coding',
+        workflowName: 'coding',
         taskContent: longString,
       };
 

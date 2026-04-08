@@ -22,9 +22,9 @@ describe('StreamDisplay', () => {
   describe('progress info display', () => {
     const progressInfo: ProgressInfo = {
       iteration: 3,
-      maxMovements: 10,
-      movementIndex: 1,
-      totalMovements: 4,
+      maxSteps: 10,
+      stepIndex: 1,
+      totalSteps: 4,
     };
 
     describe('showInit', () => {
@@ -340,9 +340,9 @@ describe('StreamDisplay', () => {
     it('should format progress as (iteration/max) step index/total', () => {
       const progressInfo: ProgressInfo = {
         iteration: 5,
-        maxMovements: 20,
-        movementIndex: 2,
-        totalMovements: 6,
+        maxSteps: 20,
+        stepIndex: 2,
+        totalSteps: 6,
       };
       const display = new StreamDisplay('agent', false, progressInfo);
       display.showText('test');
@@ -351,12 +351,12 @@ describe('StreamDisplay', () => {
       expect(headerCall).toContain('(5/20) step 3/6');
     });
 
-    it('should convert 0-indexed movementIndex to 1-indexed display', () => {
+    it('should convert 0-indexed stepIndex to 1-indexed display', () => {
       const progressInfo: ProgressInfo = {
         iteration: 1,
-        maxMovements: 10,
-        movementIndex: 0, // First movement (0-indexed)
-        totalMovements: 4,
+        maxSteps: 10,
+        stepIndex: 0,
+        totalSteps: 4,
       };
       const display = new StreamDisplay('agent', false, progressInfo);
       display.showText('test');

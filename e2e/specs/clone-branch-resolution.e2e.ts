@@ -10,7 +10,7 @@ import { runTakt } from '../helpers/takt-runner';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const MOCK_PIECE_PATH = resolve(__dirname, '../fixtures/pieces/mock-single-step.yaml');
+const MOCK_WORKFLOW_PATH = resolve(__dirname, '../fixtures/workflows/mock-single-step.yaml');
 const MOCK_SCENARIO_PATH = resolve(__dirname, '../fixtures/scenarios/execute-done.json');
 
 function writeTaskYaml(
@@ -27,7 +27,7 @@ function writeTaskYaml(
       `  - name: ${task.name}`,
       '    status: pending',
       `    content: "${task.content}"`,
-      `    piece: "${MOCK_PIECE_PATH}"`,
+      `    workflow: "${MOCK_WORKFLOW_PATH}"`,
       `    branch: "${task.branch}"`,
       `    base_branch: "${task.baseBranch}"`,
       '    worktree: true',

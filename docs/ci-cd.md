@@ -60,7 +60,7 @@ In pipeline mode, PRs are **not** created unless `--auto-pr` is explicitly speci
 | `--pipeline` | **Enable pipeline (non-interactive) mode** -- Required for CI/automation |
 | `-t, --task <text>` | Task content (alternative to GitHub Issue) |
 | `-i, --issue <N>` | GitHub issue number (same as `#N` in interactive mode) |
-| `-w, --workflow <name or path>` | Workflow name or path to workflow YAML file (`--piece` remains available as a compatibility alias) |
+| `-w, --workflow <name or path>` | Workflow name or path to workflow YAML file |
 | `-b, --branch <name>` | Specify branch name (auto-generated if omitted) |
 | `--auto-pr` | Create PR (interactive: skip confirmation, pipeline: enable PR) |
 | `--skip-git` | Skip branch creation, commit, and push (pipeline mode, workflow-only) |

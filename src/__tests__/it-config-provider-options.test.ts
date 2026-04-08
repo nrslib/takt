@@ -8,7 +8,7 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/piece/phase-runner.js', () => ({
+vi.mock('../core/workflow/phase-runner.js', () => ({
   needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
   runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
@@ -37,17 +37,17 @@ function createEnv(): TestEnv {
   const globalDir = join(root, 'global');
 
   mkdirSync(projectDir, { recursive: true });
-  mkdirSync(join(projectDir, '.takt', 'pieces', 'personas'), { recursive: true });
+  mkdirSync(join(projectDir, '.takt', 'workflows', 'personas'), { recursive: true });
   mkdirSync(globalDir, { recursive: true });
 
   writeFileSync(
-    join(projectDir, '.takt', 'pieces', 'config-it.yaml'),
+    join(projectDir, '.takt', 'workflows', 'config-it.yaml'),
     [
       'name: config-it',
       'description: config provider options integration test',
-      'max_movements: 3',
-      'initial_movement: plan',
-      'movements:',
+      'max_steps: 3',
+      'initial_step: plan',
+      'steps:',
       '  - name: plan',
       '    persona: ./personas/planner.md',
       '    instruction: "{task}"',
@@ -63,7 +63,7 @@ function createEnv(): TestEnv {
     ].join('\n'),
     'utf-8',
   );
-  writeFileSync(join(projectDir, '.takt', 'pieces', 'personas', 'planner.md'), 'You are planner.', 'utf-8');
+  writeFileSync(join(projectDir, '.takt', 'workflows', 'personas', 'planner.md'), 'You are planner.', 'utf-8');
 
   return { projectDir, globalDir };
 }
@@ -139,7 +139,7 @@ describe('IT: config provider_options reflection', () => {
       task: 'test task',
       cwd: env.projectDir,
       projectCwd: env.projectDir,
-      pieceIdentifier: 'config-it',
+      workflowIdentifier: 'config-it',
     });
 
     expect(ok).toBe(true);
@@ -174,7 +174,7 @@ describe('IT: config provider_options reflection', () => {
       task: 'test task',
       cwd: env.projectDir,
       projectCwd: env.projectDir,
-      pieceIdentifier: 'config-it',
+      workflowIdentifier: 'config-it',
     });
 
     expect(ok).toBe(true);
@@ -203,7 +203,7 @@ describe('IT: config provider_options reflection', () => {
       task: 'test task',
       cwd: env.projectDir,
       projectCwd: env.projectDir,
-      pieceIdentifier: 'config-it',
+      workflowIdentifier: 'config-it',
     });
 
     expect(ok).toBe(true);
@@ -216,7 +216,7 @@ describe('IT: config provider_options reflection', () => {
     });
   });
 
-  it('should preserve provider options origin precedence through executeTask to PieceEngine', async () => {
+  it('should preserve provider options origin precedence through executeTask to WorkflowEngine', async () => {
     setGlobalConfig(
       env.globalDir,
       [
@@ -235,7 +235,7 @@ describe('IT: config provider_options reflection', () => {
       task: 'test task',
       cwd: env.projectDir,
       projectCwd: env.projectDir,
-      pieceIdentifier: 'config-it',
+      workflowIdentifier: 'config-it',
     });
 
     expect(ok).toBe(true);

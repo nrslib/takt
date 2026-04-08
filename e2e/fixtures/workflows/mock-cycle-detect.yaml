@@ -1,0 +1,48 @@
+name: e2e-cycle-detect
+description: Workflow with loop_monitors for cycle detection E2E testing
+workflow_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+personas:
+  test-coder: |
+    You are the E2E test coder.
+  test-reviewer-a: |
+    You are reviewer A for E2E testing.
+  test-reviewer-b: |
+    You are reviewer B for E2E testing.
+max_steps: 20
+initial_step: review
+loop_monitors:
+  - cycle:
+      - review
+      - fix
+    threshold: 2
+    judge:
+      persona: ./agents/test-reviewer-b.md
+      rules:
+        - condition: continue
+          next: review
+        - condition: abort_loop
+          next: ABORT
+steps:
+  - name: review
+    persona: ./agents/test-reviewer-a.md
+    instruction: |
+      Review the code.
+    rules:
+      - condition: approved
+        next: COMPLETE
+      - condition: needs_fix
+        next: fix
+  - name: fix
+    persona: ./agents/test-coder.md
+    edit: true
+    required_permission_mode: edit
+    instruction: |
+      Fix the issues found in review.
+    rules:
+      - condition: fixed
+        next: review

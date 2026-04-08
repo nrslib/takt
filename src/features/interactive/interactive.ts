@@ -2,7 +2,7 @@
  * Interactive task input mode
  *
  * Allows users to refine task requirements through conversation with AI
- * before executing the task. Uses the same SDK call pattern as piece
+ * before executing the task. Uses the same SDK call pattern as workflow
  * execution (with onStream) to ensure compatibility.
  *
  * Commands:
@@ -24,8 +24,8 @@ import {
 import { buildInteractivePolicyPrompt } from './policyPrompt.js';
 import { initializeSession } from './sessionInitialization.js';
 import {
-  type PieceContext,
-  formatMovementPreviews,
+  type WorkflowContext,
+  formatStepPreviews,
   type InteractiveModeAction,
   type SummaryActionValue,
   type PostSummaryAction,
@@ -74,10 +74,10 @@ export function formatSessionStatus(state: SessionState, lang: 'en' | 'ja'): str
     lines.push(getLabel('interactive.previousTask.userStopped', lang));
   }
 
-  // Piece name
+  // Workflow name
   lines.push(
-    getLabel('interactive.previousTask.piece', lang, {
-      pieceName: state.pieceName,
+    getLabel('interactive.previousTask.workflow', lang, {
+      workflowName: state.workflowName,
     }),
   );
 
@@ -104,9 +104,9 @@ export const DEFAULT_INTERACTIVE_TOOLS = ['Read', 'Glob', 'Grep', 'Bash', 'WebSe
  */
 export {
   buildSummaryPrompt,
-  formatMovementPreviews,
+  formatStepPreviews,
   type ConversationMessage,
-  type PieceContext,
+  type WorkflowContext,
   type TaskHistorySummaryItem,
 } from './interactive-summary.js';
 
@@ -131,7 +131,7 @@ export interface InteractiveModeOptions {
 export async function interactiveMode(
   cwd: string,
   initialInput?: string,
-  pieceContext?: PieceContext,
+  workflowContext?: WorkflowContext,
   sessionId?: string,
   runSessionContext?: RunSessionContext,
   options?: InteractiveModeOptions,
@@ -144,16 +144,16 @@ export async function interactiveMode(
 
   displayAndClearSessionState(cwd, ctx.lang);
 
-  const hasPreview = !!pieceContext?.movementPreviews?.length;
+  const hasPreview = !!workflowContext?.stepPreviews?.length;
   const hasRunSession = !!runSessionContext;
   const runPromptVars = hasRunSession
     ? formatRunSessionForPrompt(runSessionContext)
-    : { runTask: '', runPiece: '', runStatus: '', runMovementLogs: '', runReports: '' };
+    : { runTask: '', runWorkflow: '', runStatus: '', runStepLogs: '', runReports: '' };
 
   const systemPrompt = loadTemplate('score_interactive_system_prompt', ctx.lang, {
-    hasPiecePreview: hasPreview,
-    pieceStructure: pieceContext?.pieceStructure ?? '',
-    movementDetails: hasPreview ? formatMovementPreviews(pieceContext!.movementPreviews!, ctx.lang) : '',
+    hasWorkflowPreview: hasPreview,
+    workflowStructure: workflowContext?.workflowStructure ?? '',
+    stepDetails: hasPreview ? formatStepPreviews(workflowContext!.stepPreviews!, ctx.lang) : '',
     hasRunSession,
     ...runPromptVars,
   });
@@ -185,7 +185,7 @@ export async function interactiveMode(
     transformPrompt: (userMessage: string) => buildInteractivePolicyPrompt(ctx.lang, userMessage),
     introMessage: ui.intro,
     selectAction,
-  }, pieceContext, initialInput);
+  }, workflowContext, initialInput);
 }
 
 export {

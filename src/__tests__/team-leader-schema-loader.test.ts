@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { join } from 'node:path';
-import { PieceMovementRawSchema } from '../core/models/schemas.js';
-import { normalizePieceConfig } from '../infra/config/loaders/pieceParser.js';
+import { WorkflowStepRawSchema } from '../core/models/schemas.js';
+import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 
 describe('team_leader schema', () => {
   it('max_parts <= 3 の設定を受け付ける', () => {
@@ -15,7 +15,7 @@ describe('team_leader schema', () => {
       instruction: 'decompose',
     };
 
-    const result = PieceMovementRawSchema.safeParse(raw);
+    const result = WorkflowStepRawSchema.safeParse(raw);
     expect(result.success).toBe(true);
   });
 
@@ -28,7 +28,7 @@ describe('team_leader schema', () => {
       instruction: 'decompose',
     };
 
-    const result = PieceMovementRawSchema.safeParse(raw);
+    const result = WorkflowStepRawSchema.safeParse(raw);
     expect(result.success).toBe(false);
   });
 
@@ -42,7 +42,7 @@ describe('team_leader schema', () => {
       instruction: 'decompose',
     };
 
-    const result = PieceMovementRawSchema.safeParse(raw);
+    const result = WorkflowStepRawSchema.safeParse(raw);
     expect(result.success).toBe(false);
   });
 
@@ -56,7 +56,7 @@ describe('team_leader schema', () => {
       instruction: 'decompose',
     };
 
-    const result = PieceMovementRawSchema.safeParse(raw);
+    const result = WorkflowStepRawSchema.safeParse(raw);
     expect(result.success).toBe(false);
   });
 
@@ -74,17 +74,17 @@ describe('team_leader schema', () => {
       instruction: 'decompose',
     };
 
-    const result = PieceMovementRawSchema.safeParse(raw);
+    const result = WorkflowStepRawSchema.safeParse(raw);
     expect(result.success).toBe(false);
   });
 });
 
-describe('normalizePieceConfig team_leader', () => {
+describe('normalizeWorkflowConfig team_leader', () => {
   it('team_leader を内部形式へ正規化する', () => {
-    const pieceDir = join(process.cwd(), 'src', '__tests__');
+    const workflowDir = join(process.cwd(), 'src', '__tests__');
     const raw = {
-      name: 'piece',
-      movements: [
+      name: 'workflow',
+      steps: [
         {
           name: 'implement',
           team_leader: {
@@ -101,10 +101,10 @@ describe('normalizePieceConfig team_leader', () => {
       ],
     };
 
-    const config = normalizePieceConfig(raw, pieceDir);
-    const movement = config.movements[0];
-    expect(movement).toBeDefined();
-    expect(movement!.teamLeader).toEqual({
+    const config = normalizeWorkflowConfig(raw, workflowDir);
+    const step = config.steps[0];
+    expect(step).toBeDefined();
+    expect(step!.teamLeader).toEqual({
       persona: 'team-leader',
       personaPath: undefined,
       maxParts: 2,

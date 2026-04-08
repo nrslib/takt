@@ -7,7 +7,7 @@ const {
   mockExecuteAndCompleteTask,
   mockRunInstructMode,
   mockDispatchConversationAction,
-  mockSelectPiece,
+  mockSelectWorkflow,
   mockConfirm,
   mockGetLabel,
   mockResolveLanguage,
@@ -17,8 +17,8 @@ const {
   mockFindRunForTask,
   mockFindPreviousOrderContent,
   mockWarn,
-  mockIsPiecePath,
-  mockLoadAllPiecesWithSources,
+  mockIsWorkflowPath,
+  mockLoadAllWorkflowsWithSources,
 } = vi.hoisted(() => ({
   mockExistsSync: vi.fn(() => true),
   mockStartReExecution: vi.fn(),
@@ -26,7 +26,7 @@ const {
   mockExecuteAndCompleteTask: vi.fn(),
   mockRunInstructMode: vi.fn(),
   mockDispatchConversationAction: vi.fn(),
-  mockSelectPiece: vi.fn(),
+  mockSelectWorkflow: vi.fn(),
   mockConfirm: vi.fn(),
   mockGetLabel: vi.fn(),
   mockResolveLanguage: vi.fn(() => 'en'),
@@ -36,10 +36,10 @@ const {
   mockFindRunForTask: vi.fn(() => null),
   mockFindPreviousOrderContent: vi.fn(() => null),
   mockWarn: vi.fn(),
-  mockIsPiecePath: vi.fn(() => false),
-  mockLoadAllPiecesWithSources: vi.fn(() => new Map<string, unknown>([
+  mockIsWorkflowPath: vi.fn(() => false),
+  mockLoadAllWorkflowsWithSources: vi.fn(() => new Map<string, unknown>([
     ['default', {}],
-    ['selected-piece', {}],
+    ['selected-workflow', {}],
   ])),
 }));
 
@@ -61,23 +61,23 @@ vi.mock('../infra/task/index.js', () => ({
 }));
 
 vi.mock('../infra/config/index.js', () => ({
-  resolvePieceConfigValues: vi.fn(() => ({ interactivePreviewMovements: 3, language: 'en' })),
-  getPieceDescription: vi.fn(() => ({
+  resolveWorkflowConfigValues: vi.fn(() => ({ interactivePreviewSteps: 3, language: 'en' })),
+  getWorkflowDescription: vi.fn(() => ({
     name: 'default',
     description: 'desc',
-    pieceStructure: [],
-    movementPreviews: [],
+    workflowStructure: [],
+    stepPreviews: [],
   })),
-  isPiecePath: (...args: unknown[]) => mockIsPiecePath(...args),
-  loadAllPiecesWithSources: (...args: unknown[]) => mockLoadAllPiecesWithSources(...args),
+  isWorkflowPath: (...args: unknown[]) => mockIsWorkflowPath(...args),
+  loadAllWorkflowsWithSources: (...args: unknown[]) => mockLoadAllWorkflowsWithSources(...args),
 }));
 
 vi.mock('../features/tasks/list/instructMode.js', () => ({
   runInstructMode: (...args: unknown[]) => mockRunInstructMode(...args),
 }));
 
-vi.mock('../features/pieceSelection/index.js', () => ({
-  selectPiece: (...args: unknown[]) => mockSelectPiece(...args),
+vi.mock('../features/workflowSelection/index.js', () => ({
+  selectWorkflow: (...args: unknown[]) => mockSelectWorkflow(...args),
 }));
 
 vi.mock('../features/interactive/actionDispatcher.js', () => ({
@@ -130,7 +130,7 @@ describe('instructBranch direct execution flow', () => {
     vi.clearAllMocks();
     mockExistsSync.mockReturnValue(true);
 
-    mockSelectPiece.mockResolvedValue('default');
+    mockSelectWorkflow.mockResolvedValue('default');
     mockRunInstructMode.mockResolvedValue({ action: 'execute', task: '追加指示A' });
     mockDispatchConversationAction.mockImplementation(async (_result, handlers) => handlers.execute({ task: '追加指示A' }));
     mockConfirm.mockResolvedValue(true);
@@ -138,8 +138,8 @@ describe('instructBranch direct execution flow', () => {
       if (key === 'interactive.runSelector.confirm') {
         return "Reference a previous run's results?";
       }
-      if (vars?.piece) {
-        return `Use previous piece "${vars.piece}"?`;
+      if (vars?.workflow) {
+        return `Use previous workflow "${vars.workflow}"?`;
       }
       return key;
     });
@@ -148,10 +148,10 @@ describe('instructBranch direct execution flow', () => {
     mockSelectRun.mockResolvedValue(null);
     mockFindRunForTask.mockReturnValue(null);
     mockFindPreviousOrderContent.mockReturnValue(null);
-    mockIsPiecePath.mockImplementation((piece: string) => piece.startsWith('/') || piece.startsWith('~') || piece.startsWith('./') || piece.startsWith('../') || piece.endsWith('.yaml') || piece.endsWith('.yml'));
-    mockLoadAllPiecesWithSources.mockReturnValue(new Map<string, unknown>([
+    mockIsWorkflowPath.mockImplementation((workflow: string) => workflow.startsWith('/') || workflow.startsWith('~') || workflow.startsWith('./') || workflow.startsWith('../') || workflow.endsWith('.yaml') || workflow.endsWith('.yml'));
+    mockLoadAllWorkflowsWithSources.mockReturnValue(new Map<string, unknown>([
       ['default', {}],
-      ['selected-piece', {}],
+      ['selected-workflow', {}],
     ]));
     mockStartReExecution.mockReturnValue({
       name: 'done-task',
@@ -183,12 +183,12 @@ describe('instructBranch direct execution flow', () => {
     expect(mockExecuteAndCompleteTask).toHaveBeenCalled();
   });
 
-  it('should execute with selected piece without mutating taskInfo', async () => {
-    mockSelectPiece.mockResolvedValue('selected-piece');
+  it('should execute with selected workflow without mutating taskInfo', async () => {
+    mockSelectWorkflow.mockResolvedValue('selected-workflow');
     const originalTaskInfo = {
       name: 'done-task',
       content: 'done',
-      data: { task: 'done', piece: 'original-piece' },
+      data: { task: 'done', workflow: 'original-workflow' },
     };
     mockStartReExecution.mockReturnValue(originalTaskInfo);
 
@@ -206,11 +206,11 @@ describe('instructBranch direct execution flow', () => {
     const executeArg = mockExecuteAndCompleteTask.mock.calls[0]?.[0];
     expect(executeArg).not.toBe(originalTaskInfo);
     expect(executeArg.data).not.toBe(originalTaskInfo.data);
-    expect(executeArg.data.piece).toBe('selected-piece');
-    expect(originalTaskInfo.data.piece).toBe('original-piece');
+    expect(executeArg.data.workflow).toBe('selected-workflow');
+    expect(originalTaskInfo.data.workflow).toBe('original-workflow');
   });
 
-  it('should reuse previous piece from task data when confirmed', async () => {
+  it('should reuse previous workflow from task data when confirmed', async () => {
     mockConfirm
       .mockResolvedValueOnce(true);
 
@@ -222,19 +222,19 @@ describe('instructBranch direct execution flow', () => {
       content: 'done',
       branch: 'takt/done-task',
       worktreePath: '/project/.takt/worktrees/done-task',
-      data: { task: 'done', piece: 'default' },
+      data: { task: 'done', workflow: 'default' },
     });
 
-    expect(mockSelectPiece).not.toHaveBeenCalled();
-    const [message, defaultYes] = mockConfirm.mock.calls[0] ?? [];
-    expect(message).toEqual(expect.stringContaining('"default"'));
-    expect(defaultYes ?? true).toBe(true);
+    expect(mockSelectWorkflow).not.toHaveBeenCalled();
+    expect(mockGetLabel).toHaveBeenCalledWith('retry.usePreviousWorkflowConfirm', 'en', { workflow: 'default' });
+    const reuseConfirmCall = mockConfirm.mock.calls.find(([message]) => message === 'retry.usePreviousWorkflowConfirm');
+    expect(reuseConfirmCall?.[1] ?? true).toBe(true);
   });
 
-  it('should call selectPiece when previous piece reuse is declined', async () => {
+  it('should call selectWorkflow when previous workflow reuse is declined', async () => {
     mockConfirm
       .mockResolvedValueOnce(false);
-    mockSelectPiece.mockResolvedValue('selected-piece');
+    mockSelectWorkflow.mockResolvedValue('selected-workflow');
 
     await instructBranch('/project', {
       kind: 'completed',
@@ -244,15 +244,15 @@ describe('instructBranch direct execution flow', () => {
       content: 'done',
       branch: 'takt/done-task',
       worktreePath: '/project/.takt/worktrees/done-task',
-      data: { task: 'done', piece: 'default' },
+      data: { task: 'done', workflow: 'default' },
     });
 
-    expect(mockSelectPiece).toHaveBeenCalledWith('/project');
+    expect(mockSelectWorkflow).toHaveBeenCalledWith('/project');
     expect(mockStartReExecution).toHaveBeenCalled();
   });
 
-  it('should skip reuse prompt when task data has no piece', async () => {
-    mockSelectPiece.mockResolvedValue('selected-piece');
+  it('should skip reuse prompt when task data has no workflow', async () => {
+    mockSelectWorkflow.mockResolvedValue('selected-workflow');
 
     await instructBranch('/project', {
       kind: 'completed',
@@ -266,12 +266,12 @@ describe('instructBranch direct execution flow', () => {
     });
 
     expect(mockConfirm).not.toHaveBeenCalled();
-    expect(mockSelectPiece).toHaveBeenCalledWith('/project');
+    expect(mockSelectWorkflow).toHaveBeenCalledWith('/project');
   });
 
-  it('should return false when replacement piece selection is cancelled after declining reuse', async () => {
+  it('should return false when replacement workflow selection is cancelled after declining reuse', async () => {
     mockConfirm.mockResolvedValueOnce(false);
-    mockSelectPiece.mockResolvedValue(null);
+    mockSelectWorkflow.mockResolvedValue(null);
 
     const result = await instructBranch('/project', {
       kind: 'completed',
@@ -281,7 +281,7 @@ describe('instructBranch direct execution flow', () => {
       content: 'done',
       branch: 'takt/done-task',
       worktreePath: '/project/.takt/worktrees/done-task',
-      data: { task: 'done', piece: 'default' },
+      data: { task: 'done', workflow: 'default' },
     });
 
     expect(result).toBe(false);
@@ -335,10 +335,10 @@ describe('instructBranch direct execution flow', () => {
 
   it('should search runs in worktree for run session context', async () => {
     mockListRecentRuns.mockReturnValue([
-      { slug: 'run-1', task: 'fix', piece: 'default', status: 'completed', startTime: '2026-02-18T00:00:00Z' },
+      { slug: 'run-1', task: 'fix', workflow: 'default', status: 'completed', startTime: '2026-02-18T00:00:00Z' },
     ]);
     mockSelectRun.mockResolvedValue('run-1');
-    const runContext = { task: 'fix', piece: 'default', status: 'completed', movementLogs: [], reports: [] };
+    const runContext = { task: 'fix', workflow: 'default', status: 'completed', stepLogs: [], reports: [] };
     mockLoadRunSessionContext.mockReturnValue(runContext);
 
     await instructBranch('/project', {
@@ -370,26 +370,25 @@ describe('instructBranch direct execution flow', () => {
     );
   });
 
-  it('should show deprecated config warning when selected run order uses legacy provider fields', async () => {
+  it('should not warn when selected run order uses canonical provider block fields', async () => {
     mockListRecentRuns.mockReturnValue([
-      { slug: 'run-1', task: 'fix', piece: 'default', status: 'completed', startTime: '2026-02-18T00:00:00Z' },
+      { slug: 'run-1', task: 'fix', workflow: 'default', status: 'completed', startTime: '2026-02-18T00:00:00Z' },
     ]);
     mockSelectRun.mockResolvedValue('run-1');
     mockLoadRunSessionContext.mockReturnValue({
       task: 'fix',
-      piece: 'default',
+      workflow: 'default',
       status: 'completed',
-      movementLogs: [],
+      stepLogs: [],
       reports: [],
     });
     mockFindPreviousOrderContent.mockReturnValue([
-      'movements:',
+      'steps:',
       '  - name: review',
-      '    provider: codex',
-      '    model: gpt-5.3',
-      '    provider_options:',
-      '      codex:',
-      '        network_access: true',
+      '    provider:',
+      '      type: codex',
+      '      model: gpt-5.3',
+      '      network_access: true',
     ].join('\n'));
 
     await instructBranch('/project', {
@@ -403,11 +402,10 @@ describe('instructBranch direct execution flow', () => {
       data: { task: 'done' },
     });
 
-    expect(mockWarn).toHaveBeenCalledTimes(1);
-    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('deprecated'));
+    expect(mockWarn).not.toHaveBeenCalled();
   });
 
-  it('should not warn for markdown explanatory snippets without piece config body', async () => {
+  it('should not warn for markdown explanatory snippets without workflow config body', async () => {
     mockFindPreviousOrderContent.mockReturnValue([
       '# Deprecated examples',
       '',
@@ -436,7 +434,7 @@ describe('instructBranch direct execution flow', () => {
 
   it('should not warn when selected run order uses provider block format', async () => {
     mockFindPreviousOrderContent.mockReturnValue([
-      'movements:',
+      'steps:',
       '  - name: review',
       '    provider:',
       '      type: codex',

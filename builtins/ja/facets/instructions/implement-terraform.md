@@ -1,5 +1,5 @@
 計画に従って Terraform コードを実装してください。
-Piece Contextに示されたReport Directory内のファイルのみ参照してください。他のレポートディレクトリは検索/参照しないでください。
+Workflow Contextに示されたReport Directory内のファイルのみ参照してください。他のレポートディレクトリは検索/参照しないでください。
 
 **重要**: 実装完了後、以下の検証を順番に実行してください。
 1. `terraform fmt -check` — フォーマット違反があれば `terraform fmt` で修正

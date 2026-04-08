@@ -4,14 +4,14 @@
  * Covers:
  * - ArpeggioMergeRawSchema cross-validation (.refine())
  * - ArpeggioConfigRawSchema required fields and defaults
- * - PieceMovementRawSchema with arpeggio field
+ * - WorkflowStepRawSchema with arpeggio field
  */
 
 import { describe, it, expect } from 'vitest';
 import {
   ArpeggioMergeRawSchema,
   ArpeggioConfigRawSchema,
-  PieceMovementRawSchema,
+  WorkflowStepRawSchema,
 } from '../core/models/index.js';
 
 describe('ArpeggioMergeRawSchema', () => {
@@ -249,8 +249,8 @@ describe('ArpeggioConfigRawSchema', () => {
   });
 });
 
-describe('PieceMovementRawSchema with arpeggio', () => {
-  it('should accept a movement with arpeggio config', () => {
+describe('WorkflowStepRawSchema with arpeggio', () => {
+  it('should accept a step with arpeggio config', () => {
     const raw = {
       name: 'batch-process',
       arpeggio: {
@@ -260,7 +260,7 @@ describe('PieceMovementRawSchema with arpeggio', () => {
       },
     };
 
-    const result = PieceMovementRawSchema.safeParse(raw);
+    const result = WorkflowStepRawSchema.safeParse(raw);
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.arpeggio).toBeDefined();
@@ -268,7 +268,7 @@ describe('PieceMovementRawSchema with arpeggio', () => {
     }
   });
 
-  it('should accept a movement with arpeggio and rules', () => {
+  it('should accept a step with arpeggio and rules', () => {
     const raw = {
       name: 'batch-process',
       arpeggio: {
@@ -284,7 +284,7 @@ describe('PieceMovementRawSchema with arpeggio', () => {
       ],
     };
 
-    const result = PieceMovementRawSchema.safeParse(raw);
+    const result = WorkflowStepRawSchema.safeParse(raw);
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.arpeggio!.batch_size).toBe(2);
@@ -293,21 +293,21 @@ describe('PieceMovementRawSchema with arpeggio', () => {
     }
   });
 
-  it('should accept a movement without arpeggio (normal movement)', () => {
+  it('should accept a step without arpeggio (normal step)', () => {
     const raw = {
       name: 'normal-step',
       persona: 'coder.md',
       instruction: 'Do work',
     };
 
-    const result = PieceMovementRawSchema.safeParse(raw);
+    const result = WorkflowStepRawSchema.safeParse(raw);
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.arpeggio).toBeUndefined();
     }
   });
 
-  it('should accept a movement with arpeggio including custom merge', () => {
+  it('should accept a step with arpeggio including custom merge', () => {
     const raw = {
       name: 'custom-merge-step',
       arpeggio: {
@@ -322,7 +322,7 @@ describe('PieceMovementRawSchema with arpeggio', () => {
       },
     };
 
-    const result = PieceMovementRawSchema.safeParse(raw);
+    const result = WorkflowStepRawSchema.safeParse(raw);
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.arpeggio!.merge).toBeDefined();

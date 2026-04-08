@@ -13,15 +13,15 @@
  * Name constraints:
  *   owner:  /^[a-z0-9][a-z0-9-]*$/  (lowercase only after normalization)
  *   repo:   /^[a-z0-9][a-z0-9._-]*$/  (dot and underscore allowed)
- *   facet/piece name: /^[a-z0-9][a-z0-9-]*$/
+ *   facet/workflow name: /^[a-z0-9][a-z0-9-]*$/
  *
- * Facet resolution order (package piece):
+ * Facet resolution order (package workflow):
  *   1. package-local: {repertoireDir}/@{owner}/{repo}/facets/{type}/{facet}.md
  *   2. project:       .takt/facets/{type}/{facet}.md
  *   3. user:          ~/.takt/facets/{type}/{facet}.md
  *   4. builtin:       builtins/{lang}/facets/{type}/{facet}.md
  *
- * Facet resolution order (non-package piece):
+ * Facet resolution order (non-package workflow):
  *   1. project → 2. user → 3. builtin  (package-local is NOT consulted)
  */
 
@@ -38,10 +38,12 @@ import {
   validateScopeFacetName,
 } from 'faceted-prompting';
 import {
-  isPackagePiece,
-  buildCandidateDirsWithPackage,
   resolveFacetPath,
 } from '../infra/config/loaders/resource-resolver.js';
+import {
+  isPackageWorkflow,
+  buildCandidateDirsWithPackage,
+} from '../infra/config/loaders/workflowPackageScope.js';
 
 describe('@scope reference resolution', () => {
   let tempDir: string;
@@ -174,24 +176,24 @@ describe('facet resolution chain: package-local layer', () => {
 
   // U43: パッケージローカルが最優先
   // Given: package-local, project, user, builtin の全層に同名ファセットが存在
-  // When:  パッケージ内ピースからファセット解決
+  // When:  パッケージ内ワークフローからファセット解決
   // Then:  package-local 層のファセットが返る
   it('should prefer package-local facet over project/user/builtin layers', () => {
     const repertoireDir = join(tempDir, 'repertoire');
-    const packagePiecesDir = join(repertoireDir, '@nrslib', 'takt-ensemble-fixture', 'pieces');
+    const packageWorkflowsDir = join(repertoireDir, '@nrslib', 'takt-ensemble-fixture', 'workflows');
     const packageFacetDir = join(repertoireDir, '@nrslib', 'takt-ensemble-fixture', 'facets', 'personas');
     const projectFacetDir = join(tempDir, 'project', '.takt', 'facets', 'personas');
 
     // Create both package-local and project facet files with the same name
     mkdirSync(packageFacetDir, { recursive: true });
-    mkdirSync(packagePiecesDir, { recursive: true });
+    mkdirSync(packageWorkflowsDir, { recursive: true });
     mkdirSync(projectFacetDir, { recursive: true });
     writeFileSync(join(packageFacetDir, 'expert-coder.md'), '# Package-local expert');
     writeFileSync(join(projectFacetDir, 'expert-coder.md'), '# Project expert');
 
     const candidateDirs = buildCandidateDirsWithPackage('personas', {
       lang: 'en',
-      pieceDir: packagePiecesDir,
+      workflowDir: packageWorkflowsDir,
       repertoireDir,
       projectDir: join(tempDir, 'project'),
     });
@@ -206,10 +208,10 @@ describe('facet resolution chain: package-local layer', () => {
   // Then:  project 層のファセットが返る
   it('should fall back to project facet when package-local does not have it', () => {
     const repertoireDir = join(tempDir, 'repertoire');
-    const packagePiecesDir = join(repertoireDir, '@nrslib', 'takt-ensemble-fixture', 'pieces');
+    const packageWorkflowsDir = join(repertoireDir, '@nrslib', 'takt-ensemble-fixture', 'workflows');
     const projectFacetDir = join(tempDir, 'project', '.takt', 'facets', 'personas');
 
-    mkdirSync(packagePiecesDir, { recursive: true });
+    mkdirSync(packageWorkflowsDir, { recursive: true });
     mkdirSync(projectFacetDir, { recursive: true });
     // Only create project facet (no package-local facet)
     const projectFacetFile = join(projectFacetDir, 'expert-coder.md');
@@ -217,7 +219,7 @@ describe('facet resolution chain: package-local layer', () => {
 
     const resolved = resolveFacetPath('expert-coder', 'personas', {
       lang: 'en',
-      pieceDir: packagePiecesDir,
+      workflowDir: packageWorkflowsDir,
       repertoireDir,
       projectDir: join(tempDir, 'project'),
     });
@@ -225,51 +227,51 @@ describe('facet resolution chain: package-local layer', () => {
     expect(resolved).toBe(projectFacetFile);
   });
 
-  // U45: 非パッケージピースは package-local を使わない
-  // Given: package-local にファセットあり、非パッケージピースから解決
+  // U45: 非パッケージワークフローは package-local を使わない
+  // Given: package-local にファセットあり、非パッケージワークフローから解決
   // When:  ファセット解決
   // Then:  package-local は無視。project → user → builtin の3層で解決
-  it('should not consult package-local layer for non-package pieces', () => {
+  it('should not consult package-local layer for non-package workflows', () => {
     const repertoireDir = join(tempDir, 'repertoire');
     const packageFacetDir = join(repertoireDir, '@nrslib', 'takt-ensemble-fixture', 'facets', 'personas');
-    // Non-package pieceDir (not under repertoireDir)
-    const globalPiecesDir = join(tempDir, 'global-pieces');
+    // Workflow outside repertoire package (not under repertoireDir)
+    const globalWorkflowsDir = join(tempDir, 'global-workflows');
 
     mkdirSync(packageFacetDir, { recursive: true });
-    mkdirSync(globalPiecesDir, { recursive: true });
+    mkdirSync(globalWorkflowsDir, { recursive: true });
     writeFileSync(join(packageFacetDir, 'expert-coder.md'), '# Package-local expert');
 
     const candidateDirs = buildCandidateDirsWithPackage('personas', {
       lang: 'en',
-      pieceDir: globalPiecesDir,
+      workflowDir: globalWorkflowsDir,
       repertoireDir,
     });
 
-    // Package-local dir should NOT be in candidates for non-package pieces
+    // Package-local dir should NOT be in candidates for non-package workflows
     expect(candidateDirs.some((d) => d.includes('@nrslib'))).toBe(false);
   });
 });
 
-describe('package piece detection', () => {
-  // U46: パッケージ所属は pieceDir パスから判定
-  // Given: pieceDir が {repertoireDir}/@nrslib/repo/pieces/ 配下
-  // When:  isPackagePiece(pieceDir) 呼び出し
+describe('package workflow detection', () => {
+  // U46: パッケージ所属は workflowDir パスから判定
+  // Given: workflowDir が {repertoireDir}/@nrslib/repo/workflows/ 配下
+  // When:  isPackageWorkflow(workflowDir) 呼び出し
   // Then:  true が返る
-  it('should return true for pieceDir under repertoire/@scope/repo/pieces/', () => {
+  it('should return true for workflowDir under repertoire/@scope/repo/workflows/', () => {
     const repertoireDir = '/home/user/.takt/repertoire';
-    const pieceDir = '/home/user/.takt/repertoire/@nrslib/takt-ensemble-fixture/pieces';
+    const workflowDir = '/home/user/.takt/repertoire/@nrslib/takt-ensemble-fixture/workflows';
 
-    expect(isPackagePiece(pieceDir, repertoireDir)).toBe(true);
+    expect(isPackageWorkflow(workflowDir, repertoireDir)).toBe(true);
   });
 
-  // U47: 非パッケージ pieceDir は false
-  // Given: pieceDir が ~/.takt/pieces/ 配下
-  // When:  isPackagePiece(pieceDir) 呼び出し
+  // U47: 非パッケージ workflowDir は false
+  // Given: workflowDir が ~/.takt/workflows/ 配下
+  // When:  isPackageWorkflow(workflowDir) 呼び出し
   // Then:  false が返る
-  it('should return false for pieceDir under global pieces directory', () => {
+  it('should return false for workflowDir under global workflows directory', () => {
     const repertoireDir = '/home/user/.takt/repertoire';
-    const pieceDir = '/home/user/.takt/pieces';
+    const workflowDir = '/home/user/.takt/workflows';
 
-    expect(isPackagePiece(pieceDir, repertoireDir)).toBe(false);
+    expect(isPackageWorkflow(workflowDir, repertoireDir)).toBe(false);
   });
 });

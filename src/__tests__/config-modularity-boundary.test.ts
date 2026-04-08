@@ -22,8 +22,8 @@ describe('config module file-size boundary', () => {
     expect(lineCount).toBeLessThanOrEqual(300);
   });
 
-  it('keeps pieceExecution.ts under 300 lines', () => {
-    const lineCount = getLineCount('../features/tasks/execute/pieceExecution.ts');
+  it('keeps workflowExecution.ts under 300 lines', () => {
+    const lineCount = getLineCount('../features/tasks/execute/workflowExecution.ts');
     expect(lineCount).toBeLessThanOrEqual(300);
   });
 
@@ -59,5 +59,23 @@ describe('config module file-size boundary', () => {
     const decomposeLineCount = getLineCount('../agents/decompose-task-usecase.ts');
     expect(judgeLineCount).toBeLessThanOrEqual(300);
     expect(decomposeLineCount).toBeLessThanOrEqual(300);
+  });
+
+  it('keeps task schema facade thin and split modules under 300 lines', () => {
+    const facadeLineCount = getLineCount('../infra/task/schema.ts');
+    const executionLineCount = getLineCount('../infra/task/taskExecutionSchemas.ts');
+    const recordLineCount = getLineCount('../infra/task/taskRecordSchemas.ts');
+    expect(facadeLineCount).toBeLessThanOrEqual(120);
+    expect(executionLineCount).toBeLessThanOrEqual(300);
+    expect(recordLineCount).toBeLessThanOrEqual(300);
+  });
+
+  it('keeps resource resolver facade thin and split helpers under 300 lines', () => {
+    const facadeLineCount = getLineCount('../infra/config/loaders/resource-resolver.ts');
+    const scopeLineCount = getLineCount('../infra/config/loaders/workflowPackageScope.ts');
+    const personaPolicyLineCount = getLineCount('../infra/config/loaders/workflowPersonaPathPolicy.ts');
+    expect(facadeLineCount).toBeLessThanOrEqual(300);
+    expect(scopeLineCount).toBeLessThanOrEqual(300);
+    expect(personaPolicyLineCount).toBeLessThanOrEqual(300);
   });
 });

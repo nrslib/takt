@@ -2,8 +2,8 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
- * Read session NDJSON log records from a piece execution run.
- * Finds the first .jsonl file whose first record is `piece_start`.
+ * Read session NDJSON log records from a workflow execution run.
+ * Finds the first .jsonl file whose first record is `workflow_start`.
  */
 export function readSessionRecords(repoPath: string): Array<Record<string, unknown>> {
   const runsDir = join(repoPath, '.takt', 'runs');
@@ -16,7 +16,7 @@ export function readSessionRecords(repoPath: string): Array<Record<string, unkno
       const content = readFileSync(join(logsDir, file), 'utf-8').trim();
       if (!content) continue;
       const records = content.split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
-      if (records[0]?.type === 'piece_start') {
+      if (records[0]?.type === 'workflow_start') {
         return records;
       }
     }

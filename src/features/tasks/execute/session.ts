@@ -2,7 +2,7 @@
  * Session management helpers for agent execution
  */
 
-import { loadPersonaSessions, updatePersonaSession, resolvePieceConfigValue } from '../../../infra/config/index.js';
+import { loadPersonaSessions, updatePersonaSession, resolveWorkflowConfigValue } from '../../../infra/config/index.js';
 import type { AgentResponse } from '../../../core/models/index.js';
 
 /**
@@ -15,7 +15,7 @@ export async function withPersonaSession(
   fn: (sessionId?: string) => Promise<AgentResponse>,
   provider?: string
 ): Promise<AgentResponse> {
-  const resolvedProvider = provider ?? resolvePieceConfigValue(cwd, 'provider');
+  const resolvedProvider = provider ?? resolveWorkflowConfigValue(cwd, 'provider');
   const sessions = loadPersonaSessions(cwd, resolvedProvider);
   const sessionId = sessions[personaName];
 

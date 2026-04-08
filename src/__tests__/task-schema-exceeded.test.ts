@@ -58,8 +58,8 @@ describe('TaskExecutionConfigSchema - exceeded fields', () => {
     vi.restoreAllMocks();
   });
 
-  it('should accept exceeded_max_movements as a positive integer', () => {
-    expect(() => TaskExecutionConfigSchema.parse({ exceeded_max_movements: 60 })).not.toThrow();
+  it('should accept exceeded_max_steps as a positive integer', () => {
+    expect(() => TaskExecutionConfigSchema.parse({ exceeded_max_steps: 60 })).not.toThrow();
   });
 
   it('should accept exceeded_current_iteration as a non-negative integer', () => {
@@ -72,7 +72,7 @@ describe('TaskExecutionConfigSchema - exceeded fields', () => {
 
   it('should accept both fields together', () => {
     expect(() => TaskExecutionConfigSchema.parse({
-      exceeded_max_movements: 60,
+      exceeded_max_steps: 60,
       exceeded_current_iteration: 30,
     })).not.toThrow();
   });
@@ -81,37 +81,28 @@ describe('TaskExecutionConfigSchema - exceeded fields', () => {
     expect(() => TaskExecutionConfigSchema.parse({})).not.toThrow();
   });
 
-  it('should reject exceeded_max_movements as zero', () => {
-    expect(() => TaskExecutionConfigSchema.parse({ exceeded_max_movements: 0 })).toThrow();
+  it('should reject exceeded_max_steps as zero', () => {
+    expect(() => TaskExecutionConfigSchema.parse({ exceeded_max_steps: 0 })).toThrow();
   });
 
-  it('should reject exceeded_max_movements as negative', () => {
-    expect(() => TaskExecutionConfigSchema.parse({ exceeded_max_movements: -1 })).toThrow();
+  it('should reject exceeded_max_steps as negative', () => {
+    expect(() => TaskExecutionConfigSchema.parse({ exceeded_max_steps: -1 })).toThrow();
   });
 
-  it('should reject exceeded_max_movements as non-integer', () => {
-    expect(() => TaskExecutionConfigSchema.parse({ exceeded_max_movements: 1.5 })).toThrow();
+  it('should reject exceeded_max_steps as non-integer', () => {
+    expect(() => TaskExecutionConfigSchema.parse({ exceeded_max_steps: 1.5 })).toThrow();
   });
 
   it('should accept exceeded_max_steps and keep canonical exceed key on parsed output (PR #582)', () => {
     const parsed = TaskExecutionConfigSchema.parse({ exceeded_max_steps: 60 });
     expect(parsed.exceeded_max_steps).toBe(60);
-    expect('exceeded_max_movements' in parsed).toBe(false);
+    expect('exceeded_max_steps' in parsed).toBe(true);
   });
 
-  it('should accept legacy exceeded_max_movements and normalize to canonical on parsed output (PR #582)', () => {
-    const parsed = TaskExecutionConfigSchema.parse({ exceeded_max_movements: 60 });
+  it('should preserve exceeded_max_steps on parsed output (PR #582)', () => {
+    const parsed = TaskExecutionConfigSchema.parse({ exceeded_max_steps: 60 });
     expect(parsed.exceeded_max_steps).toBe(60);
-    expect('exceeded_max_movements' in parsed).toBe(false);
-  });
-
-  it('should reject when exceeded_max_steps and exceeded_max_movements disagree (#581)', () => {
-    expect(() =>
-      TaskExecutionConfigSchema.parse({
-        exceeded_max_steps: 10,
-        exceeded_max_movements: 20,
-      }),
-    ).toThrow(/exceeded_max_steps.*exceeded_max_movements/);
+    expect('exceeded_max_steps' in parsed).toBe(true);
   });
 
   it('should reject exceeded_current_iteration as negative', () => {
@@ -197,16 +188,14 @@ describe('TaskRecordSchema - exceeded status', () => {
       const out = serializeTaskRecord(parsed);
 
       expect(out.exceeded_max_steps).toBe(60);
-      expect(out).not.toHaveProperty('exceeded_max_movements');
     });
 
-    it('Given tasks file state, When serializing for write, Then each task omits exceeded_max_movements', () => {
+    it('Given tasks file state, When serializing for write, Then each task omits exceeded_max_steps', () => {
       const state = TasksFileSchema.parse({ tasks: [makeExceededRecord()] });
       const out = serializeTasksFileData(state);
 
       expect(out.tasks).toHaveLength(1);
       expect(out.tasks[0]?.exceeded_max_steps).toBe(60);
-      expect(out.tasks[0]).not.toHaveProperty('exceeded_max_movements');
     });
   });
 

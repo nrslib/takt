@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { OptionsBuilder } from '../core/piece/engine/OptionsBuilder.js';
-import type { PieceMovement } from '../core/models/types.js';
-import type { PieceEngineOptions } from '../core/piece/types.js';
+import { OptionsBuilder } from '../core/workflow/engine/OptionsBuilder.js';
+import type { WorkflowStep } from '../core/models/types.js';
+import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 
-function createMovement(overrides: Partial<PieceMovement> = {}): PieceMovement {
+function createStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
   return {
     name: 'reviewers',
     personaDisplayName: 'Reviewers',
@@ -13,8 +13,8 @@ function createMovement(overrides: Partial<PieceMovement> = {}): PieceMovement {
   };
 }
 
-function createBuilder(step: PieceMovement, engineOverrides: Partial<PieceEngineOptions> = {}): OptionsBuilder {
-  const engineOptions: PieceEngineOptions = {
+function createBuilder(step: WorkflowStep, engineOverrides: Partial<WorkflowEngineOptions> = {}): OptionsBuilder {
+  const engineOptions: WorkflowEngineOptions = {
     projectCwd: '/project',
     provider: 'codex',
     providerProfiles: {
@@ -34,20 +34,20 @@ function createBuilder(step: PieceMovement, engineOverrides: Partial<PieceEngine
     () => 'ja',
     () => [{ name: step.name }],
     () => 'default',
-    () => 'test piece',
+    () => 'test workflow',
   );
 }
 
 describe('OptionsBuilder.buildBaseOptions', () => {
   it('passes permission resolution context for provider profile resolution', () => {
-    const step = createMovement();
+    const step = createStep();
     const builder = createBuilder(step);
 
     const options = builder.buildBaseOptions(step);
 
     expect(options.permissionMode).toBeUndefined();
     expect(options.permissionResolution).toEqual({
-      movementName: 'reviewers',
+      stepName: 'reviewers',
       requiredPermissionMode: undefined,
       providerProfiles: {
         codex: { defaultPermissionMode: 'full' },
@@ -56,13 +56,13 @@ describe('OptionsBuilder.buildBaseOptions', () => {
   });
 
   it('includes requiredPermissionMode in permission resolution context', () => {
-    const step = createMovement({ requiredPermissionMode: 'full' });
+    const step = createStep({ requiredPermissionMode: 'full' });
     const builder = createBuilder(step);
 
     const options = builder.buildBaseOptions(step);
 
     expect(options.permissionResolution).toEqual({
-      movementName: 'reviewers',
+      stepName: 'reviewers',
       requiredPermissionMode: 'full',
       providerProfiles: {
         codex: { defaultPermissionMode: 'full' },
@@ -71,7 +71,7 @@ describe('OptionsBuilder.buildBaseOptions', () => {
   });
 
   it('still passes permission resolution context when provider is not configured', () => {
-    const step = createMovement();
+    const step = createStep();
     const builder = createBuilder(step, {
       provider: undefined,
       providerProfiles: undefined,
@@ -79,14 +79,14 @@ describe('OptionsBuilder.buildBaseOptions', () => {
 
     const options = builder.buildBaseOptions(step);
     expect(options.permissionResolution).toEqual({
-      movementName: 'reviewers',
+      stepName: 'reviewers',
       requiredPermissionMode: undefined,
       providerProfiles: undefined,
     });
   });
 
-  it('lets movement override project provider options when origin resolver is absent', () => {
-    const step = createMovement({
+  it('lets step override project provider options when origin resolver is absent', () => {
+    const step = createStep({
       providerOptions: {
         codex: { networkAccess: false },
         claude: {
@@ -120,8 +120,8 @@ describe('OptionsBuilder.buildBaseOptions', () => {
   });
 
 
-  it('lets movement override when provider options source is global', () => {
-    const step = createMovement({
+  it('lets step override when provider options source is global', () => {
+    const step = createStep({
       providerOptions: {
         codex: { networkAccess: false },
       },
@@ -140,8 +140,8 @@ describe('OptionsBuilder.buildBaseOptions', () => {
     });
   });
 
-  it('falls back to global/project provider options when movement has none', () => {
-    const step = createMovement();
+  it('falls back to global/project provider options when step has none', () => {
+    const step = createStep();
     const builder = createBuilder(step, {
       providerOptions: {
         codex: { networkAccess: false },
@@ -156,7 +156,7 @@ describe('OptionsBuilder.buildBaseOptions', () => {
   });
 
   it('uses nested env origin to keep config value only for the overridden leaf', () => {
-    const step = createMovement({
+    const step = createStep({
       providerOptions: {
         codex: { networkAccess: false },
         claude: { allowedTools: ['Read', 'Edit'] },
@@ -186,7 +186,7 @@ describe('OptionsBuilder.buildBaseOptions', () => {
 
 describe('OptionsBuilder.resolveStepProviderModel', () => {
   it('should return engine-level provider and model when step has no overrides', () => {
-    const step = createMovement();
+    const step = createStep();
     const builder = createBuilder(step, { provider: 'claude', model: 'sonnet' });
 
     const result = builder.resolveStepProviderModel(step);
@@ -196,7 +196,7 @@ describe('OptionsBuilder.resolveStepProviderModel', () => {
   });
 
   it('should prioritize persona providers over engine-level provider', () => {
-    const step = createMovement({ personaDisplayName: 'coder' });
+    const step = createStep({ personaDisplayName: 'coder' });
     const builder = createBuilder(step, {
       provider: 'claude',
       model: 'sonnet',
@@ -210,7 +210,7 @@ describe('OptionsBuilder.resolveStepProviderModel', () => {
   });
 
   it('should prioritize step-level provider over engine-level provider', () => {
-    const step = createMovement({ provider: 'opencode' as 'opencode' });
+    const step = createStep({ provider: 'opencode' as 'opencode' });
     const builder = createBuilder(step, { provider: 'claude' });
 
     const result = builder.resolveStepProviderModel(step);
@@ -219,7 +219,7 @@ describe('OptionsBuilder.resolveStepProviderModel', () => {
   });
 
   it('should prioritize persona providers over step-level provider', () => {
-    const step = createMovement({ personaDisplayName: 'coder', provider: 'claude' as 'claude' });
+    const step = createStep({ personaDisplayName: 'coder', provider: 'claude' as 'claude' });
     const builder = createBuilder(step, {
       provider: 'mock',
       personaProviders: { coder: { provider: 'codex' } },
@@ -231,7 +231,7 @@ describe('OptionsBuilder.resolveStepProviderModel', () => {
   });
 
   it('should return undefined model when no model is configured', () => {
-    const step = createMovement();
+    const step = createStep();
     const builder = createBuilder(step, { provider: 'claude', model: undefined });
 
     const result = builder.resolveStepProviderModel(step);
@@ -240,7 +240,7 @@ describe('OptionsBuilder.resolveStepProviderModel', () => {
   });
 
   it('should return undefined provider when no provider is configured', () => {
-    const step = createMovement();
+    const step = createStep();
     const builder = createBuilder(step, { provider: undefined });
 
     const result = builder.resolveStepProviderModel(step);
@@ -249,7 +249,7 @@ describe('OptionsBuilder.resolveStepProviderModel', () => {
   });
 
   it('should match buildBaseOptions resolvedProvider and resolvedModel', () => {
-    const step = createMovement({ personaDisplayName: 'coder' });
+    const step = createStep({ personaDisplayName: 'coder' });
     const builder = createBuilder(step, {
       provider: 'claude',
       model: 'sonnet',
@@ -267,7 +267,7 @@ describe('OptionsBuilder.resolveStepProviderModel', () => {
 describe('OptionsBuilder.buildResumeOptions', () => {
   it('should enforce readonly permission and empty allowedTools for report/status phases', () => {
     // Given
-    const step = createMovement({ requiredPermissionMode: 'full' });
+    const step = createStep({ requiredPermissionMode: 'full' });
     const builder = createBuilder(step);
 
     // When
@@ -282,9 +282,9 @@ describe('OptionsBuilder.buildResumeOptions', () => {
 });
 
 describe('OptionsBuilder.buildAgentOptions', () => {
-  it('uses merged providerOptions.claude.allowedTools when movement.allowedTools is absent', () => {
+  it('uses merged providerOptions.claude.allowedTools when step.allowedTools is absent', () => {
     // Given
-    const step = createMovement({
+    const step = createStep({
       providerOptions: {
         claude: { allowedTools: ['Read', 'Edit', 'Bash'] },
       },
@@ -304,7 +304,7 @@ describe('OptionsBuilder.buildAgentOptions', () => {
 
   it('removes Write when output contracts exist and edit is not enabled', () => {
     // Given
-    const step = createMovement({
+    const step = createStep({
       outputContracts: [{ name: 'report.md', format: 'markdown', useJudge: true }],
       providerOptions: {
         claude: { allowedTools: ['Read', 'Write', 'Bash'] },

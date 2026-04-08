@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { createIsolatedEnv, type IsolatedEnv } from '../helpers/isolated-env';
 import { createTestRepo, type TestRepo } from '../helpers/test-repo';
 import { runTakt } from '../helpers/takt-runner';
+import { copyWorkflowFixtureToRepo } from '../helpers/local-workflow-fixture';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -32,13 +33,16 @@ describe('E2E: Report + Judge phases (mock)', () => {
   });
 
   it('should complete with report and judge phases using mock scenario', () => {
-    const piecePath = resolve(__dirname, '../fixtures/pieces/report-judge.yaml');
+    const workflowPath = copyWorkflowFixtureToRepo(
+      testRepo.path,
+      resolve(__dirname, '../fixtures/workflows/report-judge.yaml'),
+    );
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/report-judge.json');
 
     const result = runTakt({
       args: [
         '--task', 'Create a short report and finish',
-        '--piece', piecePath,
+        '--workflow', workflowPath,
         '--provider', 'mock',
       ],
       cwd: testRepo.path,

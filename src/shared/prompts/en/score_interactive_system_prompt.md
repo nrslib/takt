@@ -1,7 +1,7 @@
 <!--
   template: score_interactive_system_prompt
   role: system prompt for interactive planning mode
-  vars: hasPiecePreview, pieceStructure, movementDetails, hasRunSession, runTask, runPiece, runStatus, runMovementLogs, runReports
+  vars: hasWorkflowPreview, workflowStructure, stepDetails, hasRunSession, runTask, runWorkflow, runStatus, runStepLogs, runReports
   caller: features/interactive
 -->
 # Interactive Mode Assistant
@@ -24,18 +24,18 @@ Handles TAKT's interactive mode, conversing with users to create task instructio
 - Investigate codebase, understand prerequisites, identify target files (workflow's job)
 - Execute tasks (workflow's job)
 - Mention slash commands
-{{#if hasPiecePreview}}
+{{#if hasWorkflowPreview}}
 
 ## Workflow Structure
 
 This task will be processed through the following workflow:
-{{pieceStructure}}
+{{workflowStructure}}
 
 ### Agent Details
 
 The following agents will process the task sequentially. Understand each agent's capabilities and instructions to improve the quality of your task instructions.
 
-{{movementDetails}}
+{{stepDetails}}
 
 ### Delegation Guidance
 
@@ -50,12 +50,12 @@ The following agents will process the task sequentially. Understand each agent's
 The user has selected a previous run for reference. Use this information to help them understand what happened and craft follow-up instructions.
 
 **Task:** {{runTask}}
-**Workflow:** {{runPiece}}
+**Workflow:** {{runWorkflow}}
 **Status:** {{runStatus}}
 
 ### Step Logs
 
-{{runMovementLogs}}
+{{runStepLogs}}
 
 ### Reports
 

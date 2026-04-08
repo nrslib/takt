@@ -8,7 +8,7 @@ import type { TaskInfo } from '../infra/task/index.js';
 const { mockLoadConfigRaw } = vi.hoisted(() => ({
   mockLoadConfigRaw: vi.fn(() => ({
     language: 'en',
-    defaultPiece: 'default',
+    defaultWorkflow: 'default',
     logLevel: 'info',
     concurrency: 1,
     taskPollIntervalMs: 500,
@@ -17,8 +17,8 @@ const { mockLoadConfigRaw } = vi.hoisted(() => ({
 
 // Mock dependencies before importing the module under test
 vi.mock('../infra/config/index.js', () => ({
-  loadPieceByIdentifier: vi.fn(),
-  isPiecePath: vi.fn(() => false),
+  loadWorkflowByIdentifier: vi.fn(),
+  isWorkflowPath: vi.fn(() => false),
   loadConfig: (...args: unknown[]) => {
     const raw = mockLoadConfigRaw(...args) as Record<string, unknown>;
     if ('global' in raw && 'project' in raw) {
@@ -26,21 +26,21 @@ vi.mock('../infra/config/index.js', () => ({
     }
     return {
       global: raw,
-      project: { piece: 'default' },
+      project: { workflow: 'default' },
     };
   },
-  resolvePieceConfigValues: (_projectDir: string, keys: readonly string[]) => {
+  resolveWorkflowConfigValues: (_projectDir: string, keys: readonly string[]) => {
     const raw = mockLoadConfigRaw() as Record<string, unknown>;
     const config = ('global' in raw && 'project' in raw)
       ? { ...raw.global as Record<string, unknown>, ...raw.project as Record<string, unknown> }
-      : { ...raw, piece: 'default', provider: 'claude', verbose: false };
+      : { ...raw, workflow: 'default', provider: 'claude', verbose: false };
     const result: Record<string, unknown> = {};
     for (const key of keys) {
       result[key] = config[key];
     }
     return result;
   },
-  resolvePieceConfigValue: (_projectDir: string, key: string) => {
+  resolveWorkflowConfigValue: (_projectDir: string, key: string) => {
     const raw = mockLoadConfigRaw() as Record<string, unknown>;
     const config = ('global' in raw && 'project' in raw)
       ? { ...raw.global as Record<string, unknown>, ...raw.project as Record<string, unknown> }
@@ -51,7 +51,7 @@ vi.mock('../infra/config/index.js', () => ({
     const raw = mockLoadConfigRaw() as Record<string, unknown>;
     const config = ('global' in raw && 'project' in raw)
       ? { ...raw.global as Record<string, unknown>, ...raw.project as Record<string, unknown> }
-      : { ...raw, piece: 'default', provider: 'claude', verbose: false };
+      : { ...raw, workflow: 'default', provider: 'claude', verbose: false };
     return { value: config[key], source: 'project' };
   },
 }));
@@ -142,8 +142,8 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   getSlackWebhookUrl: mockGetSlackWebhookUrl,
 }));
 
-vi.mock('../features/tasks/execute/pieceExecution.js', () => ({
-  executePiece: vi.fn(() => Promise.resolve({ success: true })),
+vi.mock('../features/tasks/execute/workflowExecution.js', () => ({
+  executeWorkflow: vi.fn(() => Promise.resolve({ success: true })),
 }));
 
 vi.mock('../shared/context.js', () => ({
@@ -152,7 +152,7 @@ vi.mock('../shared/context.js', () => ({
 
 vi.mock('../shared/constants.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  DEFAULT_PIECE_NAME: 'default',
+  DEFAULT_WORKFLOW_NAME: 'default',
   DEFAULT_LANGUAGE: 'en',
 }));
 
@@ -174,16 +174,16 @@ vi.mock('../shared/i18n/index.js', () => ({
 
 import { info, header, status, success, error as errorFn } from '../shared/ui/index.js';
 import { runAllTasks } from '../features/tasks/index.js';
-import { executePiece } from '../features/tasks/execute/pieceExecution.js';
-import { loadPieceByIdentifier } from '../infra/config/index.js';
+import { executeWorkflow } from '../features/tasks/execute/workflowExecution.js';
+import { loadWorkflowByIdentifier } from '../infra/config/index.js';
 
 const mockInfo = vi.mocked(info);
 const mockHeader = vi.mocked(header);
 const mockStatus = vi.mocked(status);
 const mockSuccess = vi.mocked(success);
 const mockError = vi.mocked(errorFn);
-const mockExecutePiece = vi.mocked(executePiece);
-const mockLoadPieceByIdentifier = vi.mocked(loadPieceByIdentifier);
+const mockExecuteWorkflow = vi.mocked(executeWorkflow);
+const mockLoadWorkflowByIdentifier = vi.mocked(loadWorkflowByIdentifier);
 
 function createTask(name: string): TaskInfo {
   return {
@@ -194,7 +194,7 @@ function createTask(name: string): TaskInfo {
     status: 'pending',
     data: {
       task: `Task: ${name}`,
-      piece: 'default',
+      workflow: 'default',
     },
   };
 }
@@ -209,7 +209,7 @@ describe('runAllTasks concurrency', () => {
     beforeEach(() => {
       mockLoadConfig.mockReturnValue({
         language: 'en',
-        defaultPiece: 'default',
+        defaultWorkflow: 'default',
         logLevel: 'info',
         notificationSound: true,
         notificationSoundEvents: { runComplete: true, runAbort: true },
@@ -252,7 +252,7 @@ describe('runAllTasks concurrency', () => {
     beforeEach(() => {
       mockLoadConfig.mockReturnValue({
         language: 'en',
-        defaultPiece: 'default',
+        defaultWorkflow: 'default',
         logLevel: 'info',
         notificationSound: true,
         notificationSoundEvents: { runComplete: true, runAbort: true },
@@ -330,7 +330,7 @@ describe('runAllTasks concurrency', () => {
       // Given: Config without explicit concurrency (defaults to 1)
       mockLoadConfig.mockReturnValue({
         language: 'en',
-        defaultPiece: 'default',
+        defaultWorkflow: 'default',
         logLevel: 'info',
         notificationSound: false,
         concurrency: 1,
@@ -356,23 +356,23 @@ describe('runAllTasks concurrency', () => {
   });
 
   describe('parallel execution behavior', () => {
-    const fakePieceConfig = {
+    const fakeWorkflowConfig = {
       name: 'default',
-      movements: [{ name: 'implement', personaDisplayName: 'coder' }],
-      initialMovement: 'implement',
-      maxMovements: 10,
+      steps: [{ name: 'implement', personaDisplayName: 'coder' }],
+      initialStep: 'implement',
+      maxSteps: 10,
     };
 
     beforeEach(() => {
       mockLoadConfig.mockReturnValue({
         language: 'en',
-        defaultPiece: 'default',
+        defaultWorkflow: 'default',
         logLevel: 'info',
         concurrency: 3,
         taskPollIntervalMs: 500,
       });
-      // Return a valid piece config so executeTask reaches executePiece
-      mockLoadPieceByIdentifier.mockReturnValue(fakePieceConfig as never);
+      // Return a valid workflow config so executeTask reaches executeWorkflow
+      mockLoadWorkflowByIdentifier.mockReturnValue(fakeWorkflowConfig as never);
     });
 
     it('should run tasks concurrently, not sequentially', async () => {
@@ -383,7 +383,7 @@ describe('runAllTasks concurrency', () => {
       const executionOrder: string[] = [];
 
       // Each task takes about 300ms. Sequential execution exceeds 600ms, while parallel execution stays around 300ms.
-      mockExecutePiece.mockImplementation((_config, task) => {
+      mockExecuteWorkflow.mockImplementation((_config, task) => {
         executionOrder.push(`start:${task}`);
         return new Promise((resolve) => {
           setTimeout(() => {
@@ -417,7 +417,7 @@ describe('runAllTasks concurrency', () => {
       // Given: 3 tasks, concurrency=2, task1 finishes quickly, task2 takes longer
       mockLoadConfig.mockReturnValue({
         language: 'en',
-        defaultPiece: 'default',
+        defaultWorkflow: 'default',
         logLevel: 'info',
         concurrency: 2,
         taskPollIntervalMs: 500,
@@ -429,7 +429,7 @@ describe('runAllTasks concurrency', () => {
 
       const executionOrder: string[] = [];
 
-      mockExecutePiece.mockImplementation((_config, task) => {
+      mockExecuteWorkflow.mockImplementation((_config, task) => {
         executionOrder.push(`start:${task}`);
         const delay = (task as string).includes('slow') ? 80 : 20;
         return new Promise((resolve) => {
@@ -459,7 +459,7 @@ describe('runAllTasks concurrency', () => {
       // Given: 3 tasks, 1 fails, 2 succeed
       mockLoadConfig.mockReturnValue({
         language: 'en',
-        defaultPiece: 'default',
+        defaultWorkflow: 'default',
         logLevel: 'info',
         notificationSound: true,
         notificationSoundEvents: { runAbort: true },
@@ -472,7 +472,7 @@ describe('runAllTasks concurrency', () => {
       const task3 = createTask('pass-2');
 
       let callIndex = 0;
-      mockExecutePiece.mockImplementation(() => {
+      mockExecuteWorkflow.mockImplementation(() => {
         callIndex++;
         // Second call fails
         return Promise.resolve({ success: callIndex !== 2 });
@@ -493,13 +493,13 @@ describe('runAllTasks concurrency', () => {
       expect(mockNotifyError).toHaveBeenCalledTimes(1);
     });
 
-    it('should persist failure reason and movement when piece aborts', async () => {
+    it('should persist failure reason and step when workflow aborts', async () => {
       const task1 = createTask('fail-with-detail');
 
-      mockExecutePiece.mockResolvedValue({
+      mockExecuteWorkflow.mockResolvedValue({
         success: false,
         reason: 'blocked_by_review',
-        lastMovement: 'review',
+        lastStep: 'review',
         lastMessage: 'security check failed',
       });
       mockClaimNextTasks
@@ -510,16 +510,16 @@ describe('runAllTasks concurrency', () => {
 
       expect(mockFailTask).toHaveBeenCalledWith(expect.objectContaining({
         response: 'blocked_by_review',
-        failureMovement: 'review',
+        failureStep: 'review',
         failureLastMessage: 'security check failed',
       }));
     });
 
-    it('should pass abortSignal and taskPrefix to executePiece in parallel mode', async () => {
+    it('should pass abortSignal and taskPrefix to executeWorkflow in parallel mode', async () => {
       // Given: One task in parallel mode
       const task1 = createTask('parallel-task');
 
-      mockExecutePiece.mockResolvedValue({ success: true });
+      mockExecuteWorkflow.mockResolvedValue({ success: true });
 
       mockClaimNextTasks
         .mockReturnValueOnce([task1])
@@ -528,20 +528,20 @@ describe('runAllTasks concurrency', () => {
       // When
       await runAllTasks('/project');
 
-      // Then: executePiece received abortSignal and taskPrefix options
-      expect(mockExecutePiece).toHaveBeenCalledTimes(1);
-      const callArgs = mockExecutePiece.mock.calls[0];
-      const pieceOptions = callArgs?.[3]; // 4th argument is options
-      expect(pieceOptions).toHaveProperty('abortSignal');
-      expect(pieceOptions?.abortSignal).toBeInstanceOf(AbortSignal);
-      expect(pieceOptions).toHaveProperty('taskPrefix', 'parallel-task');
+      // Then: executeWorkflow received abortSignal and taskPrefix options
+      expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+      const callArgs = mockExecuteWorkflow.mock.calls[0];
+      const workflowOptions = callArgs?.[3]; // 4th argument is options
+      expect(workflowOptions).toHaveProperty('abortSignal');
+      expect(workflowOptions?.abortSignal).toBeInstanceOf(AbortSignal);
+      expect(workflowOptions).toHaveProperty('taskPrefix', 'parallel-task');
     });
 
     it('should pass abortSignal but not taskPrefix in sequential mode', async () => {
       // Given: Sequential mode
       mockLoadConfig.mockReturnValue({
         language: 'en',
-        defaultPiece: 'default',
+        defaultWorkflow: 'default',
         logLevel: 'info',
         notificationSound: true,
         notificationSoundEvents: { runComplete: true, runAbort: true },
@@ -550,8 +550,8 @@ describe('runAllTasks concurrency', () => {
       });
 
       const task1 = createTask('sequential-task');
-      mockExecutePiece.mockResolvedValue({ success: true });
-      mockLoadPieceByIdentifier.mockReturnValue(fakePieceConfig as never);
+      mockExecuteWorkflow.mockResolvedValue({ success: true });
+      mockLoadWorkflowByIdentifier.mockReturnValue(fakeWorkflowConfig as never);
 
       mockClaimNextTasks
         .mockReturnValueOnce([task1])
@@ -560,18 +560,18 @@ describe('runAllTasks concurrency', () => {
       // When
       await runAllTasks('/project');
 
-      // Then: executePiece should have abortSignal but not taskPrefix
-      expect(mockExecutePiece).toHaveBeenCalledTimes(1);
-      const callArgs = mockExecutePiece.mock.calls[0];
-      const pieceOptions = callArgs?.[3];
-      expect(pieceOptions?.abortSignal).toBeInstanceOf(AbortSignal);
-      expect(pieceOptions?.taskPrefix).toBeUndefined();
+      // Then: executeWorkflow should have abortSignal but not taskPrefix
+      expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+      const callArgs = mockExecuteWorkflow.mock.calls[0];
+      const workflowOptions = callArgs?.[3];
+      expect(workflowOptions?.abortSignal).toBeInstanceOf(AbortSignal);
+      expect(workflowOptions?.taskPrefix).toBeUndefined();
     });
 
     it('should only notify once at run completion when multiple tasks succeed', async () => {
       mockLoadConfig.mockReturnValue({
         language: 'en',
-        defaultPiece: 'default',
+        defaultWorkflow: 'default',
         logLevel: 'info',
         notificationSound: true,
         notificationSoundEvents: { runComplete: true },
@@ -596,7 +596,7 @@ describe('runAllTasks concurrency', () => {
     it('should not notify run completion when runComplete is explicitly false', async () => {
       mockLoadConfig.mockReturnValue({
         language: 'en',
-        defaultPiece: 'default',
+        defaultWorkflow: 'default',
         logLevel: 'info',
         notificationSound: true,
         notificationSoundEvents: { runComplete: false },
@@ -618,7 +618,7 @@ describe('runAllTasks concurrency', () => {
     it('should notify run completion by default when notification_sound_events is not set', async () => {
       mockLoadConfig.mockReturnValue({
         language: 'en',
-        defaultPiece: 'default',
+        defaultWorkflow: 'default',
         logLevel: 'info',
         notificationSound: true,
         concurrency: 1,
@@ -640,7 +640,7 @@ describe('runAllTasks concurrency', () => {
     it('should notify run abort by default when notification_sound_events is not set', async () => {
       mockLoadConfig.mockReturnValue({
         language: 'en',
-        defaultPiece: 'default',
+        defaultWorkflow: 'default',
         logLevel: 'info',
         notificationSound: true,
         concurrency: 1,
@@ -648,7 +648,7 @@ describe('runAllTasks concurrency', () => {
       });
 
       const task1 = createTask('task-1');
-      mockExecutePiece.mockResolvedValueOnce({ success: false, reason: 'failed' });
+      mockExecuteWorkflow.mockResolvedValueOnce({ success: false, reason: 'failed' });
       mockClaimNextTasks
         .mockReturnValueOnce([task1])
         .mockReturnValueOnce([]);
@@ -663,7 +663,7 @@ describe('runAllTasks concurrency', () => {
     it('should not notify run abort when runAbort is explicitly false', async () => {
       mockLoadConfig.mockReturnValue({
         language: 'en',
-        defaultPiece: 'default',
+        defaultWorkflow: 'default',
         logLevel: 'info',
         notificationSound: true,
         notificationSoundEvents: { runAbort: false },
@@ -672,7 +672,7 @@ describe('runAllTasks concurrency', () => {
       });
 
       const task1 = createTask('task-1');
-      mockExecutePiece.mockResolvedValueOnce({ success: false, reason: 'failed' });
+      mockExecuteWorkflow.mockResolvedValueOnce({ success: false, reason: 'failed' });
       mockClaimNextTasks
         .mockReturnValueOnce([task1])
         .mockReturnValueOnce([]);
@@ -686,7 +686,7 @@ describe('runAllTasks concurrency', () => {
     it('should notify run abort and rethrow when worker pool throws', async () => {
       mockLoadConfig.mockReturnValue({
         language: 'en',
-        defaultPiece: 'default',
+        defaultWorkflow: 'default',
         logLevel: 'info',
         notificationSound: true,
         notificationSoundEvents: { runAbort: true },
@@ -711,22 +711,22 @@ describe('runAllTasks concurrency', () => {
 
   describe('Slack webhook notification', () => {
     const webhookUrl = 'https://hooks.slack.com/services/T00/B00/xxx';
-    const fakePieceConfig = {
+    const fakeWorkflowConfig = {
       name: 'default',
-      movements: [{ name: 'implement', personaDisplayName: 'coder' }],
-      initialMovement: 'implement',
-      maxMovements: 10,
+      steps: [{ name: 'implement', personaDisplayName: 'coder' }],
+      initialStep: 'implement',
+      maxSteps: 10,
     };
 
     beforeEach(() => {
       mockLoadConfig.mockReturnValue({
         language: 'en',
-        defaultPiece: 'default',
+        defaultWorkflow: 'default',
         logLevel: 'info',
         concurrency: 1,
         taskPollIntervalMs: 500,
       });
-      mockLoadPieceByIdentifier.mockReturnValue(fakePieceConfig as never);
+      mockLoadWorkflowByIdentifier.mockReturnValue(fakeWorkflowConfig as never);
     });
 
     it('should send Slack notification on success when webhook URL is set', async () => {
@@ -747,7 +747,7 @@ describe('runAllTasks concurrency', () => {
           completedAt: '2026-02-19T00:00:30.000Z',
           branch: 'feat/task-1',
           prUrl: 'https://github.com/org/repo/pull/10',
-          data: { task: 'task-1', piece: 'default', issue: 42 },
+          data: { task: 'task-1', workflow: 'default', issue: 42 },
         },
       ]);
 
@@ -773,7 +773,7 @@ describe('runAllTasks concurrency', () => {
       // Given
       mockGetSlackWebhookUrl.mockReturnValue(webhookUrl);
       const task1 = createTask('task-1');
-      mockExecutePiece.mockResolvedValueOnce({ success: false, reason: 'failed' });
+      mockExecuteWorkflow.mockResolvedValueOnce({ success: false, reason: 'failed' });
       mockClaimNextTasks
         .mockReturnValueOnce([task1])
         .mockReturnValueOnce([]);
@@ -787,8 +787,8 @@ describe('runAllTasks concurrency', () => {
           startedAt: '2026-02-19T00:00:00.000Z',
           completedAt: '2026-02-19T00:00:45.000Z',
           branch: 'feat/task-1',
-          data: { task: 'task-1', piece: 'review' },
-          failure: { movement: 'ai_review', error: 'Lint failed', last_message: 'Fix attempt timed out' },
+          data: { task: 'task-1', workflow: 'review' },
+          failure: { step: 'ai_review', error: 'Lint failed', last_message: 'Fix attempt timed out' },
         },
       ]);
 
@@ -828,7 +828,7 @@ describe('runAllTasks concurrency', () => {
           content: 'Task: task-1',
           startedAt: '2026-02-19T00:00:00.000Z',
           completedAt: '2026-02-19T00:00:15.000Z',
-          data: { task: 'task-1', piece: 'default' },
+          data: { task: 'task-1', workflow: 'default' },
         },
       ]);
 
@@ -859,7 +859,7 @@ describe('runAllTasks concurrency', () => {
           content: 'Task: task-1',
           startedAt: '2026-02-18T00:00:00.000Z',
           completedAt: '2026-02-18T00:00:30.000Z',
-          data: { task: 'task-1', piece: 'default' },
+          data: { task: 'task-1', workflow: 'default' },
         },
         {
           kind: 'completed',
@@ -869,7 +869,7 @@ describe('runAllTasks concurrency', () => {
           content: 'Task: task-2',
           startedAt: '2026-02-19T00:00:00.000Z',
           completedAt: '2026-02-19T00:00:20.000Z',
-          data: { task: 'task-2', piece: 'default' },
+          data: { task: 'task-2', workflow: 'default' },
         },
       ]);
 
@@ -902,7 +902,7 @@ describe('runAllTasks concurrency', () => {
           content: 'Task: task-1',
           startedAt: '2026-02-19T00:00:00.000Z',
           completedAt: '2026-02-19T00:00:30.000Z',
-          data: { task: 'task-1', piece: 'default' },
+          data: { task: 'task-1', workflow: 'default' },
         },
         {
           kind: 'pending',
@@ -910,7 +910,7 @@ describe('runAllTasks concurrency', () => {
           createdAt: '2026-02-19T00:00:00.000Z',
           filePath: '/tasks/task-pending.yaml',
           content: 'Task: task-pending',
-          data: { task: 'task-pending', piece: 'default' },
+          data: { task: 'task-pending', workflow: 'default' },
         },
       ]);
 

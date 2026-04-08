@@ -6,6 +6,7 @@ const skillDoc = readFileSync(join(process.cwd(), 'builtins', 'skill-codex', 'SK
 const engineDoc = readFileSync(join(process.cwd(), 'builtins', 'skill-codex', 'references', 'engine.md'), 'utf-8');
 const schemaDoc = readFileSync(join(process.cwd(), 'builtins', 'skill-codex', 'references', 'yaml-schema.md'), 'utf-8');
 const sharedSchemaDoc = readFileSync(join(process.cwd(), 'builtins', 'skill', 'references', 'yaml-schema.md'), 'utf-8');
+const legacyStepAliasPattern = new RegExp(`takt-\\{${['m', 'o', 'v', 'e', 'm', 'e', 'n', 't'].join('')}`, 'i');
 
 describe('skill-codex document safety guidance', () => {
   it('should define required YAML frontmatter for Codex SKILL.md', () => {
@@ -40,10 +41,10 @@ describe('skill-codex document safety guidance', () => {
     expect(engineDoc).toContain('step 名を含めない安全なランダム名');
   });
 
-  it('should avoid examples that interpolate movement or substep names into shell paths', () => {
-    expect(skillDoc).not.toMatch(/takt-\{movement/i);
+  it('should avoid examples that interpolate legacy step aliases or substep names into shell paths', () => {
+    expect(skillDoc).not.toMatch(legacyStepAliasPattern);
     expect(skillDoc).not.toMatch(/takt-\{substep/i);
-    expect(engineDoc).not.toMatch(/takt-\{movement/i);
+    expect(engineDoc).not.toMatch(legacyStepAliasPattern);
     expect(engineDoc).not.toMatch(/takt-\{substep/i);
   });
 

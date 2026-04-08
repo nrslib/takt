@@ -11,17 +11,17 @@ function createRetryContext(overrides?: Partial<RetryContext>): RetryContext {
       taskName: 'my-task',
       taskContent: 'Do something',
       createdAt: '2026-02-15T10:00:00Z',
-      failedMovement: 'review',
+      failedStep: 'review',
       error: 'Timeout',
       lastMessage: 'Agent stopped',
       retryNote: '',
     },
     branchName: 'takt/my-task',
-    pieceContext: {
+    workflowContext: {
       name: 'default',
       description: '',
-      pieceStructure: '1. plan → 2. implement → 3. review',
-      movementPreviews: [],
+      workflowStructure: '1. plan → 2. implement → 3. review',
+      stepPreviews: [],
     },
     run: null,
     previousOrderContent: null,
@@ -37,7 +37,7 @@ describe('buildRetryTemplateVars', () => {
     expect(vars.taskName).toBe('my-task');
     expect(vars.branchName).toBe('takt/my-task');
     expect(vars.createdAt).toBe('2026-02-15T10:00:00Z');
-    expect(vars.failedMovement).toBe('review');
+    expect(vars.failedStep).toBe('review');
     expect(vars.failureError).toBe('Timeout');
     expect(vars.failureLastMessage).toBe('Agent stopped');
   });
@@ -48,7 +48,7 @@ describe('buildRetryTemplateVars', () => {
         taskName: 'task',
         taskContent: 'Do something',
         createdAt: '2026-01-01T00:00:00Z',
-        failedMovement: '',
+        failedStep: '',
         error: 'Error',
         lastMessage: '',
         retryNote: '',
@@ -56,7 +56,7 @@ describe('buildRetryTemplateVars', () => {
     });
     const vars = buildRetryTemplateVars(ctx, 'en');
 
-    expect(vars.failedMovement).toBe('');
+    expect(vars.failedStep).toBe('');
     expect(vars.failureLastMessage).toBe('');
     expect(vars.retryNote).toBe('');
   });
@@ -69,9 +69,9 @@ describe('buildRetryTemplateVars', () => {
     expect(vars.runLogsDir).toBe('');
     expect(vars.runReportsDir).toBe('');
     expect(vars.runTask).toBe('');
-    expect(vars.runPiece).toBe('');
+    expect(vars.runWorkflow).toBe('');
     expect(vars.runStatus).toBe('');
-    expect(vars.runMovementLogs).toBe('');
+    expect(vars.runStepLogs).toBe('');
     expect(vars.runReports).toBe('');
   });
 
@@ -81,9 +81,9 @@ describe('buildRetryTemplateVars', () => {
         logsDir: '/project/.takt/runs/slug/logs',
         reportsDir: '/project/.takt/runs/slug/reports',
         task: 'Build feature',
-        piece: 'default',
+        workflow: 'default',
         status: 'failed',
-        movementLogs: '### plan\nPlanned.',
+        stepLogs: '### plan\nPlanned.',
         reports: '### 00-plan.md\n# Plan',
       },
     });
@@ -93,27 +93,27 @@ describe('buildRetryTemplateVars', () => {
     expect(vars.runLogsDir).toBe('/project/.takt/runs/slug/logs');
     expect(vars.runReportsDir).toBe('/project/.takt/runs/slug/reports');
     expect(vars.runTask).toBe('Build feature');
-    expect(vars.runPiece).toBe('default');
+    expect(vars.runWorkflow).toBe('default');
     expect(vars.runStatus).toBe('failed');
-    expect(vars.runMovementLogs).toBe('### plan\nPlanned.');
+    expect(vars.runStepLogs).toBe('### plan\nPlanned.');
     expect(vars.runReports).toBe('### 00-plan.md\n# Plan');
   });
 
-  it('should set hasPiecePreview=false when no movement previews', () => {
+  it('should set hasWorkflowPreview=false when no step previews', () => {
     const ctx = createRetryContext();
     const vars = buildRetryTemplateVars(ctx, 'en');
 
-    expect(vars.hasPiecePreview).toBe(false);
-    expect(vars.movementDetails).toBe('');
+    expect(vars.hasWorkflowPreview).toBe(false);
+    expect(vars.stepDetails).toBe('');
   });
 
-  it('should set hasPiecePreview=true and format movement details when previews exist', () => {
+  it('should set hasWorkflowPreview=true and format step details when previews exist', () => {
     const ctx = createRetryContext({
-      pieceContext: {
+      workflowContext: {
         name: 'default',
         description: '',
-        pieceStructure: '1. plan',
-        movementPreviews: [
+        workflowStructure: '1. plan',
+        stepPreviews: [
           {
             name: 'plan',
             personaDisplayName: 'Architect',
@@ -127,9 +127,9 @@ describe('buildRetryTemplateVars', () => {
     });
     const vars = buildRetryTemplateVars(ctx, 'en');
 
-    expect(vars.hasPiecePreview).toBe(true);
-    expect(vars.movementDetails).toContain('plan');
-    expect(vars.movementDetails).toContain('Architect');
+    expect(vars.hasWorkflowPreview).toBe(true);
+    expect(vars.stepDetails).toContain('plan');
+    expect(vars.stepDetails).toContain('Architect');
   });
 
   it('should set hasOrderContent=false and empty orderContent when previousOrderContent is null (via ctx)', () => {
@@ -154,7 +154,7 @@ describe('buildRetryTemplateVars', () => {
         taskName: 'task',
         taskContent: 'Do something',
         createdAt: '2026-01-01T00:00:00Z',
-        failedMovement: '',
+        failedStep: '',
         error: 'Error',
         lastMessage: '',
         retryNote: 'Added more specific error handling',

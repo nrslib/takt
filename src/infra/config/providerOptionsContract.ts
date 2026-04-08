@@ -1,4 +1,4 @@
-import type { MovementProviderOptions } from '../../core/models/piece-types.js';
+import type { StepProviderOptions } from '../../core/models/workflow-types.js';
 import type { EnvSpec } from './env/config-env-overrides.js';
 
 const PROVIDER_OPTIONS_ENV_SPEC_ENTRIES = [
@@ -52,7 +52,7 @@ export const PROVIDER_OPTIONS_TRACKED_KEYS = [
 ] as const;
 
 export function hasProviderOptionsPath(
-  providerOptions: MovementProviderOptions | undefined,
+  providerOptions: StepProviderOptions | undefined,
   path: string,
 ): boolean {
   if (!providerOptions) {
@@ -73,7 +73,7 @@ export function hasProviderOptionsPath(
 }
 
 export function getPresentProviderOptionPaths(
-  providerOptions: MovementProviderOptions | undefined,
+  providerOptions: StepProviderOptions | undefined,
 ): readonly ProviderOptionsInternalPath[] {
   return PROVIDER_OPTIONS_INTERNAL_PATH_ENTRIES.filter((path) => hasProviderOptionsPath(providerOptions, path));
 }

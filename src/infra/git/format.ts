@@ -8,7 +8,7 @@
 import type { Issue, PrReviewData } from './types.js';
 
 /**
- * Format an issue into task text for piece execution.
+ * Format an issue into task text for workflow execution.
  *
  * Output format:
  * ```
@@ -85,7 +85,7 @@ export function isIssueReference(task: string): boolean {
 }
 
 /**
- * Format PR review data into task text for piece execution.
+ * Format PR review data into task text for workflow execution.
  */
 export function formatPrReviewAsTask(prReview: PrReviewData): string {
   const parts: string[] = [];
@@ -153,4 +153,3 @@ export function buildPrBody(issues: Issue[] | undefined, report: string): string
 
   return parts.join('\n');
 }
-

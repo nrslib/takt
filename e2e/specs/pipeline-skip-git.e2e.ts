@@ -32,14 +32,14 @@ describe('E2E: Pipeline mode with --skip-git', () => {
   });
 
   it('should execute pipeline without git operations', () => {
-    const piecePath = resolve(__dirname, '../fixtures/pieces/mock-single-step.yaml');
+    const workflowPath = resolve(__dirname, '../fixtures/workflows/mock-single-step.yaml');
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/execute-done.json');
 
     const result = runTakt({
       args: [
         '--pipeline',
         '--task', 'Create a file called noop.txt',
-        '--piece', piecePath,
+        '--workflow', workflowPath,
         '--skip-git',
         '--provider', 'mock',
       ],

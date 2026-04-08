@@ -2,8 +2,8 @@ import { confirm } from '../../../shared/prompt/index.js';
 import { getLabel } from '../../../shared/i18n/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { warn } from '../../../shared/ui/index.js';
-import { isPiecePath, loadAllPiecesWithSources } from '../../../infra/config/index.js';
-import { selectPiece } from '../../pieceSelection/index.js';
+import { isWorkflowPath, loadAllWorkflowsWithSources } from '../../../infra/config/index.js';
+import { selectWorkflow } from '../../workflowSelection/index.js';
 import { parse as parseYaml } from 'yaml';
 import {
   selectRun,
@@ -27,40 +27,40 @@ export function appendRetryNote(existing: string | undefined, additional: string
   return `${existing}\n\n${trimmedAdditional}`;
 }
 
-function resolveReusablePieceName(
-  previousPiece: string | undefined,
+function resolveReusableWorkflowName(
+  previousWorkflow: string | undefined,
   projectDir: string,
 ): string | null {
-  if (!previousPiece || previousPiece.trim() === '') {
+  if (!previousWorkflow || previousWorkflow.trim() === '') {
     return null;
   }
-  if (isPiecePath(previousPiece)) {
+  if (isWorkflowPath(previousWorkflow)) {
     return null;
   }
-  const availablePieces = loadAllPiecesWithSources(projectDir, { onWarning: warn });
-  if (!availablePieces.has(previousPiece)) {
+  const availableWorkflows = loadAllWorkflowsWithSources(projectDir, { onWarning: warn });
+  if (!availableWorkflows.has(previousWorkflow)) {
     return null;
   }
-  return previousPiece;
+  return previousWorkflow;
 }
 
-export async function selectPieceWithOptionalReuse(
+export async function selectWorkflowWithOptionalReuse(
   projectDir: string,
-  previousPiece: string | undefined,
+  previousWorkflow: string | undefined,
   lang?: 'en' | 'ja',
 ): Promise<string | null> {
-  const reusablePiece = resolveReusablePieceName(previousPiece, projectDir);
-  if (reusablePiece) {
-    const shouldReusePreviousPiece = await confirm(
-      getLabel('retry.usePreviousPieceConfirm', lang, { piece: reusablePiece }),
+  const reusableWorkflow = resolveReusableWorkflowName(previousWorkflow, projectDir);
+  if (reusableWorkflow) {
+    const shouldReusePreviousWorkflow = await confirm(
+      getLabel('retry.usePreviousWorkflowConfirm', lang, { workflow: reusableWorkflow }),
       true,
     );
-    if (shouldReusePreviousPiece) {
-      return reusablePiece;
+    if (shouldReusePreviousWorkflow) {
+      return reusableWorkflow;
     }
   }
 
-  return selectPiece(projectDir);
+  return selectWorkflow(projectDir);
 }
 
 function extractYamlCandidates(content: string): string[] {
@@ -82,8 +82,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function isPieceConfigLike(value: unknown): value is Record<string, unknown> {
-  return isRecord(value) && Array.isArray(value.movements);
+function isWorkflowConfigLike(value: unknown): value is Record<string, unknown> {
+  return isRecord(value) && Array.isArray(value.steps);
 }
 
 const MAX_PROVIDER_SCAN_NODES = 10000;
@@ -120,7 +120,7 @@ function hasDeprecatedProviderConfigInObject(
   if ('provider_options' in value) {
     return true;
   }
-  if ('provider' in value && typeof value.model === 'string') {
+  if (isRecord(value.provider) && typeof value.model === 'string') {
     return true;
   }
 
@@ -150,7 +150,7 @@ export function hasDeprecatedProviderConfig(orderContent: string | null): boolea
       continue;
     }
     if (
-      isPieceConfigLike(parsed)
+      isWorkflowConfigLike(parsed)
       && hasDeprecatedProviderConfigInObject(parsed, new WeakSet<object>(), { visitedNodes: 0 })
     ) {
       return true;

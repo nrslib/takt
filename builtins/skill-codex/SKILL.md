@@ -12,7 +12,7 @@ description: >
 $ARGUMENTS を以下のように解析する:
 
 ```
-$takt {piece} [permission] {task...}
+$takt {workflow} [permission] {task...}
 ```
 
 - **第1トークン**: ワークフロー名または YAML ファイルパス（必須）
@@ -44,7 +44,7 @@ $takt {piece} [permission] {task...}
 
 - **自分で作業するな** - コーディング、レビュー、設計、テスト等は全てサブエージェントに委任する
 - **タスクを自分で分析して1つの実装にまとめるな** - step を1つずつ順番に実行せよ
-- **step をスキップするな** - 必ず `initial_step`（または互換の `initial_movement`）から開始し、Rule 評価で決まった次の step に進む
+- **step をスキップするな** - 必ず `initial_step` から開始し、Rule 評価で決まった次の step に進む
 - **"yolo" をワークフロー名と誤解するな** - "yolo" は YOLO（You Only Live Once）の俗語で「無謀・適当・いい加減」という意味。「yolo ではレビューして」= 「適当にやらずにちゃんとレビューして」という意味であり、ワークフロー作成の指示ではない
 
 ### あなたの仕事は4つだけ
@@ -76,13 +76,12 @@ $takt {piece} [permission] {task...}
 1. `.yaml` / `.yml` で終わる、または `/` を含む → ファイルパスとして直接 Read
 2. 名前解決:
    - `~/.takt/workflows/{name}.yaml` （ユーザーカスタム、優先）
-   - 互換: `~/.takt/pieces/{name}.yaml`
    - `~/.agents/skills/takt/workflows/{name}.yaml` （Skill 同梱ビルトイン）
 3. 見つからない場合: 上記ディレクトリを Glob で列挙し、AskUserQuestion で選択させる
 
 YAML から以下を抽出する（→ references/yaml-schema.md 参照）:
-- `name`, `max_movements`, `initial_step`, `steps` 配列（互換: `initial_movement`, `movements`）
-- `workflow_config`（ワークフロー全体の provider / runtime 等。`piece_config` も後方互換で受理）
+- `name`, `max_steps`, `initial_step`, `steps` 配列
+- `workflow_config`（ワークフロー全体の provider / runtime 等）
 - セクションマップ: `personas`, `policies`, `instructions`, `output_contracts`, `knowledge`
 
 ### 手順 2: セクションリソースの事前読み込み
@@ -97,7 +96,7 @@ YAML から以下を抽出する（→ references/yaml-schema.md 参照）:
 
 ### 手順 3: 初期化
 
-`initial_step`（なければ `initial_movement`、どちらもなければ `steps` の先頭）の名前を確認し、`steps`（互換: `movements`）から該当する step 定義を取得する。
+`initial_step` の名前を確認し、`steps` から該当する step 定義を取得する。
 **以下の変数を初期化する:**
 - `iteration = 1`
 - `current_step = 上記 initial の step 定義`
@@ -119,7 +118,7 @@ YAML から以下を抽出する（→ references/yaml-schema.md 参照）:
 
 ### 手順 4: サブエージェント起動
 
-**iteration が max_movements を超えていたら → 手順 7（ABORT: イテレーション上限）に進む。**
+**iteration が max_steps を超えていたら → 手順 7（ABORT: イテレーション上限）に進む。**
 
 current_step のプロンプトを構築する（→ references/engine.md のプロンプト構築を参照）。
 
@@ -186,7 +185,7 @@ codex exec --full-auto - < "$tmp_prompt_file_2"
 matched_rule が決まったら次に進む。
 - `next = COMPLETE` → **手順 7（COMPLETE）**
 - `next = ABORT` → **手順 7（ABORT）**
-- `next = step 名` → `previous_response` 更新、`iteration += 1`、次 step を `steps`（互換: `movements`）から取得して **手順 4** に戻る
+- `next = step 名` → `previous_response` 更新、`iteration += 1`、次 step を `steps` から取得して **手順 4** に戻る
 
 どの rule にもマッチしなかったら → **手順 7（ABORT: ルール不一致）** に進む。
 

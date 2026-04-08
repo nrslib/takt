@@ -5,10 +5,10 @@
 /** Built-in agent types */
 export type AgentType = 'coder' | 'architect' | 'supervisor' | 'custom';
 
-/** Execution status for agents and pieces */
+/** Execution status for agents and workflows */
 export const STATUS_VALUES = ['done', 'blocked', 'error'] as const;
 
-/** Execution status for agents and pieces */
+/** Execution status for agents and workflows */
 export type Status = typeof STATUS_VALUES[number];
 
 /** How a rule match was detected */

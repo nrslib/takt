@@ -10,7 +10,7 @@ import { createLocalRepo, type LocalRepo } from '../helpers/test-repo';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-function writeSinglePendingTask(repoPath: string, piecePath: string): void {
+function writeSinglePendingTask(repoPath: string, workflowPath: string): void {
   const now = new Date().toISOString();
   mkdirSync(join(repoPath, '.takt'), { recursive: true });
   writeFileSync(
@@ -20,7 +20,7 @@ function writeSinglePendingTask(repoPath: string, piecePath: string): void {
       '  - name: task-1',
       '    status: pending',
       '    content: "Task 1"',
-      `    piece: "${piecePath}"`,
+      `    workflow: "${workflowPath}"`,
       `    created_at: "${now}"`,
       '    started_at: null',
       '    completed_at: null',
@@ -49,10 +49,10 @@ describe('E2E: Task status persistence in tasks.yaml (mock)', () => {
   });
 
   it('should remove task record after successful completion', () => {
-    const piecePath = resolve(__dirname, '../fixtures/pieces/mock-single-step.yaml');
+    const workflowPath = resolve(__dirname, '../fixtures/workflows/mock-single-step.yaml');
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/execute-done.json');
 
-    writeSinglePendingTask(repo.path, piecePath);
+    writeSinglePendingTask(repo.path, workflowPath);
 
     const result = runTakt({
       args: ['run', '--provider', 'mock'],
@@ -74,10 +74,10 @@ describe('E2E: Task status persistence in tasks.yaml (mock)', () => {
   }, 240_000);
 
   it('should persist failed status and failure details on failure', () => {
-    const piecePath = resolve(__dirname, '../fixtures/pieces/mock-no-match.yaml');
+    const workflowPath = resolve(__dirname, '../fixtures/workflows/mock-no-match.yaml');
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/no-match.json');
 
-    writeSinglePendingTask(repo.path, piecePath);
+    writeSinglePendingTask(repo.path, workflowPath);
 
     const result = runTakt({
       args: ['run', '--provider', 'mock'],
