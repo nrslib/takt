@@ -85,10 +85,7 @@ function normalizeOutputContracts(
 
     let resolvedOrder: string | undefined;
     if (entry.order) {
-      resolvedOrder = resolveRefToContent(entry.order, resolvedReportFormats, pieceDir, 'output-contracts', context);
-      if (!resolvedOrder) {
-        throw new Error(`Failed to resolve output contract order "${entry.order}" for report "${entry.name}"`);
-      }
+      resolvedOrder = entry.order;
     }
 
     return {

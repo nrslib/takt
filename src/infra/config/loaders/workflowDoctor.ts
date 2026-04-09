@@ -200,9 +200,6 @@ function collectUsedLocalKeys(raw: RawWorkflow): Record<'personas' | 'policies' 
       if (isNamedRef(report.format)) {
         used.report_formats.add(report.format);
       }
-      if (report.order && isNamedRef(report.order)) {
-        used.report_formats.add(report.order);
-      }
     }
 
     for (const sub of movement.parallel ?? []) {
@@ -322,19 +319,6 @@ function validateMovementRefs(
         report.format,
         () => canResolveNamedFacetRef(
           report.format,
-          sections.resolvedReportFormats,
-          'output-contracts',
-          context,
-        ),
-      );
-    }
-    if (report.order && isNamedRef(report.order)) {
-      appendMissingRef(
-        diagnostics,
-        `${label} output_contract order`,
-        report.order,
-        () => canResolveNamedFacetRef(
-          report.order!,
           sections.resolvedReportFormats,
           'output-contracts',
           context,

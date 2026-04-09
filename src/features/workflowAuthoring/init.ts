@@ -73,15 +73,23 @@ export async function initWorkflowCommand(
   const instructionDir = options.global
     ? getGlobalFacetDir('instructions')
     : getProjectFacetDir(options.projectDir, 'instructions');
-  const files = createWorkflowScaffold({
-    description: options.description,
-    instructionDir,
-    name: workflowName,
-    personaDir,
-    stepCount,
-    template,
-    workflowPath,
-  });
+  const files = template === 'faceted'
+    ? createWorkflowScaffold({
+      description: options.description,
+      instructionDir,
+      name: workflowName,
+      personaDir,
+      stepCount,
+      template,
+      workflowPath,
+    })
+    : createWorkflowScaffold({
+      description: options.description,
+      name: workflowName,
+      stepCount,
+      template,
+      workflowPath,
+    });
 
   for (const file of files) {
     if (existsSync(file.path)) {

@@ -116,6 +116,13 @@ describe('initWorkflowCommand', () => {
     })).rejects.toThrow(/Invalid workflow name/);
   });
 
+  it('rejects unsupported template names', async () => {
+    await expect(initWorkflowCommand('bad-template', {
+      projectDir,
+      template: 'custom' as 'minimal',
+    })).rejects.toThrow('Unsupported workflow template: custom');
+  });
+
   it('emits next-step guidance after scaffold creation', async () => {
     await initWorkflowCommand('guided-flow', { projectDir });
 

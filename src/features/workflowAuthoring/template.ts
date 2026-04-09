@@ -5,15 +5,24 @@ type WorkflowScaffoldFile = {
   content: string;
 };
 
-type WorkflowScaffoldOptions = {
+type WorkflowScaffoldBaseOptions = {
   description?: string;
-  instructionDir?: string;
   name: string;
-  personaDir?: string;
   stepCount: number;
-  template: 'minimal' | 'faceted';
   workflowPath: string;
 };
+
+type MinimalWorkflowScaffoldOptions = WorkflowScaffoldBaseOptions & {
+  template: 'minimal';
+};
+
+type FacetedWorkflowScaffoldOptions = WorkflowScaffoldBaseOptions & {
+  instructionDir: string;
+  personaDir: string;
+  template: 'faceted';
+};
+
+type WorkflowScaffoldOptions = MinimalWorkflowScaffoldOptions | FacetedWorkflowScaffoldOptions;
 
 function toPosixPath(path: string): string {
   return path.replaceAll('\\', '/');
@@ -100,13 +109,13 @@ export function createWorkflowScaffold(options: WorkflowScaffoldOptions): Workfl
 
   if (options.template === 'faceted') {
     files.push({
-      path: `${options.personaDir!}/default.md`,
+      path: `${options.personaDir}/default.md`,
       content: buildPersonaContent(options.name),
     });
     for (let index = 1; index <= options.stepCount; index++) {
       const stepName = `step${index}`;
       files.push({
-        path: `${options.instructionDir!}/${stepName}.md`,
+        path: `${options.instructionDir}/${stepName}.md`,
         content: buildInstructionContent(stepName),
       });
     }

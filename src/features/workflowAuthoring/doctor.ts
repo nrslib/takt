@@ -104,11 +104,12 @@ export async function doctorWorkflowCommand(
     }
 
     for (const diagnostic of report.diagnostics) {
+      const message = sanitizeTerminalText(diagnostic.message);
       if (diagnostic.level === 'error') {
         hasErrors = true;
-        error(`${sanitizeTerminalText(filePath)}: ${diagnostic.message}`);
+        error(`${sanitizeTerminalText(filePath)}: ${message}`);
       } else {
-        warn(`${sanitizeTerminalText(filePath)}: ${diagnostic.message}`);
+        warn(`${sanitizeTerminalText(filePath)}: ${message}`);
       }
     }
   }

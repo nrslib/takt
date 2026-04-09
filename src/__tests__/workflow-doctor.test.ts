@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { inspectWorkflowFile } from '../infra/config/loaders/workflowDoctor.js';
+import { loadPieceFromFile } from '../infra/config/loaders/pieceParser.js';
 import { doctorWorkflowCommand } from '../features/workflowAuthoring/doctor.js';
 
 const mockSuccess = vi.fn();
@@ -105,6 +106,57 @@ steps:
 
     expect(messages).toContain('step "step1" team_leader persona references missing resource "missing-team-leader"');
     expect(messages).toContain('step "step1" team_leader part_persona references missing resource "missing-worker"');
+  });
+
+  it('reports missing loop monitor judge references', () => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/missing-loop-monitor-refs.yaml', `name: missing-loop-monitor-refs
+max_steps: 10
+initial_step: step1
+loop_monitors:
+  - cycle: [step1, step2]
+    threshold: 2
+    judge:
+      persona: missing-judge
+      instruction: missing-judge-instruction
+      rules:
+        - condition: retry
+          next: step1
+steps:
+  - name: step1
+    rules:
+      - condition: continue
+        next: step2
+  - name: step2
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const messages = inspectWorkflowFile(filePath, projectDir).diagnostics.map((item) => item.message);
+
+    expect(messages).toContain('loop monitor (step1 -> step2) persona references missing resource "missing-judge"');
+    expect(messages).toContain('loop monitor (step1 -> step2) instruction references missing resource "missing-judge-instruction"');
+  });
+
+  it('reports missing refs for parallel sub-movements', () => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/missing-parallel-refs.yaml', `name: missing-parallel-refs
+max_steps: 10
+initial_step: step1
+steps:
+  - name: step1
+    parallel:
+      - name: part1
+        persona: missing-part-persona
+        instruction: missing-part-instruction
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const messages = inspectWorkflowFile(filePath, projectDir).diagnostics.map((item) => item.message);
+
+    expect(messages).toContain('step "step1"/part1 persona references missing resource "missing-part-persona"');
+    expect(messages).toContain('step "step1"/part1 instruction references missing resource "missing-part-instruction"');
   });
 
   it('reports unknown next steps and unreachable steps', () => {
@@ -235,6 +287,59 @@ steps:
 
     expect(messages).not.toContain('Unused personas entry "lead"');
     expect(messages).not.toContain('Unused personas entry "worker"');
+  });
+
+  it('does not treat report.order as a missing output-contract ref', () => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/report-order-inline.yaml', `name: report-order-inline
+max_steps: 10
+initial_step: step1
+report_formats:
+  plan: ./facets/output-contracts/plan.md
+steps:
+  - name: step1
+    output_contracts:
+      report:
+        - name: 00-plan.md
+          format: plan
+          order: Output to {report:00-plan.md} and overwrite if it already exists.
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    mkdirSync(join(projectDir, '.takt/facets/output-contracts'), { recursive: true });
+    writeFileSync(join(projectDir, '.takt/facets/output-contracts/plan.md'), '# Plan', 'utf-8');
+
+    const messages = inspectWorkflowFile(filePath, projectDir).diagnostics.map((item) => item.message);
+
+    expect(messages).not.toContain(expect.stringContaining('output_contract order references missing resource'));
+  });
+
+  it('loads report.order inline templates without resolving them as facet refs', () => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/report-order-loader.yaml', `name: report-order-loader
+max_steps: 10
+initial_step: step1
+report_formats:
+  plan: ./facets/output-contracts/plan.md
+steps:
+  - name: step1
+    output_contracts:
+      report:
+        - name: 00-plan.md
+          format: plan
+          order: Output to {report:00-plan.md} file.
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    mkdirSync(join(projectDir, '.takt/facets/output-contracts'), { recursive: true });
+    writeFileSync(join(projectDir, '.takt/facets/output-contracts/plan.md'), '# Plan', 'utf-8');
+
+    const config = loadPieceFromFile(filePath, projectDir);
+
+    expect(config.movements[0]?.outputContracts?.[0]).toMatchObject({
+      name: '00-plan.md',
+      order: 'Output to {report:00-plan.md} file.',
+    });
   });
 
   it('validates all project workflow files when no targets are given', async () => {
