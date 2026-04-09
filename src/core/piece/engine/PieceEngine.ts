@@ -16,7 +16,7 @@ import type {
   LoopMonitorConfig,
 } from '../../models/types.js';
 import { COMPLETE_MOVEMENT, ABORT_MOVEMENT, ERROR_MESSAGES } from '../constants.js';
-import type { PieceEngineOptions } from '../types.js';
+import type { PieceEngineOptions, MovementProviderInfo } from '../types.js';
 import { determineNextMovementByRules } from './transitions.js';
 import { LoopDetector } from './loop-detector.js';
 import { CycleDetector } from './cycle-detector.js';
@@ -27,6 +27,7 @@ import {
   incrementMovementIteration,
 } from './state-manager.js';
 import { generateReportDir, getErrorMessage, createLogger, isValidReportDirName } from '../../../shared/utils/index.js';
+import { mergeProviderOptions } from '../../../infra/config/providerOptions.js';
 import { OptionsBuilder } from './OptionsBuilder.js';
 import { MovementExecutor } from './MovementExecutor.js';
 import { ParallelRunner } from './ParallelRunner.js';
@@ -35,6 +36,8 @@ import { TeamLeaderRunner } from './TeamLeaderRunner.js';
 import { buildRunPaths, type RunPaths } from '../run/run-paths.js';
 import { prepareRuntimeEnvironment } from '../../runtime/runtime-environment.js';
 import { DefaultStructuredCaller, type StructuredCaller } from '../../../agents/structured-caller.js';
+import { resolveLoopMonitorJudgeProviderModel } from '../provider-resolution.js';
+import { validateProviderModelCompatibility } from '../provider-model-compatibility.js';
 
 const log = createLogger('engine');
 
@@ -323,6 +326,33 @@ export class PieceEngine extends EventEmitter {
             );
           }
         }
+
+        const triggeringMovementName = monitor.cycle[monitor.cycle.length - 1];
+        if (!triggeringMovementName) {
+          throw new Error('Invalid loop_monitor: cycle must contain at least one movement');
+        }
+        const triggeringMovement = this.config.movements.find((movement) => movement.name === triggeringMovementName);
+        if (!triggeringMovement) {
+          throw new Error(
+            `Invalid loop_monitor: cycle references unknown movement "${triggeringMovementName}"`
+          );
+        }
+
+        const resolvedJudgeProviderModel = resolveLoopMonitorJudgeProviderModel({
+          judge: monitor.judge,
+          triggeringStep: triggeringMovement,
+          provider: this.options.provider,
+          model: this.options.model,
+          personaProviders: this.options.personaProviders,
+        });
+
+        validateProviderModelCompatibility(
+          resolvedJudgeProviderModel.provider,
+          resolvedJudgeProviderModel.model,
+          {
+            modelFieldName: 'Configuration error: loop_monitors.judge.model',
+          },
+        );
       }
     }
   }
@@ -508,6 +538,7 @@ export class PieceEngine extends EventEmitter {
   private async runLoopMonitorJudge(
     monitor: LoopMonitorConfig,
     cycleCount: number,
+    triggeringProviderInfo: MovementProviderInfo,
   ): Promise<string> {
     const language = this.options.language ?? 'en';
     const instruction = monitor.judge.instruction
@@ -515,6 +546,14 @@ export class PieceEngine extends EventEmitter {
 
     // Replace {cycle_count} in custom instructions
     const processedInstruction = instruction.replace(/\{cycle_count\}/g, String(cycleCount));
+    const resolvedProviderModel = resolveLoopMonitorJudgeProviderModel({
+      judge: monitor.judge,
+      triggeringStep: {
+        provider: triggeringProviderInfo.provider,
+        model: triggeringProviderInfo.model,
+        personaDisplayName: 'loop-judge-trigger',
+      },
+    });
 
     // Build a synthetic PieceMovement for the judge
     const judgeMovement: PieceMovement = {
@@ -523,11 +562,14 @@ export class PieceEngine extends EventEmitter {
       personaPath: monitor.judge.personaPath,
       personaDisplayName: 'loop-judge',
       edit: false,
-      providerOptions: {
-        claude: {
-          allowedTools: ['Read', 'Glob', 'Grep'],
+      providerOptions: mergeProviderOptions(
+        monitor.judge.providerOptions,
+        {
+          claude: {
+            allowedTools: ['Read', 'Glob', 'Grep'],
+          },
         },
-      },
+      ),
       instruction: processedInstruction,
       rules: monitor.judge.rules.map((r) => ({
         condition: r.condition,
@@ -544,11 +586,12 @@ export class PieceEngine extends EventEmitter {
 
     this.state.iteration++;
     const movementIteration = incrementMovementIteration(this.state, judgeMovement.name);
+    const runtimeResolution = { providerInfo: resolvedProviderModel };
     const prebuiltInstruction = this.movementExecutor.buildInstruction(
       judgeMovement, movementIteration, this.state, this.task, this.config.maxMovements,
     );
 
-    this.emit('movement:start', judgeMovement, this.state.iteration, prebuiltInstruction, this.optionsBuilder.resolveStepProviderModel(judgeMovement));
+    this.emit('movement:start', judgeMovement, this.state.iteration, prebuiltInstruction, resolvedProviderModel);
 
     const { response, instruction: executedInstruction } = await this.movementExecutor.runNormalMovement(
       judgeMovement,
@@ -557,6 +600,7 @@ export class PieceEngine extends EventEmitter {
       this.config.maxMovements,
       this.updatePersonaSession.bind(this),
       prebuiltInstruction,
+      runtimeResolution,
     );
     this.emitCollectedReports();
     this.emit('movement:complete', judgeMovement, response, executedInstruction);
@@ -710,6 +754,7 @@ export class PieceEngine extends EventEmitter {
           nextMovement = await this.runLoopMonitorJudge(
             cycleCheck.monitor,
             cycleCheck.cycleCount,
+            this.optionsBuilder.resolveStepProviderModel(movement),
           );
         }
 

@@ -14,7 +14,7 @@ import type {
   AgentResponse,
   Language,
 } from '../../models/types.js';
-import type { PhaseName, PhasePromptParts, JudgeStageEntry } from '../types.js';
+import type { PhaseName, PhasePromptParts, JudgeStageEntry, RuntimeMovementResolution } from '../types.js';
 import { executeAgent } from '../../../agents/agent-usecases.js';
 import { InstructionBuilder } from '../instruction/InstructionBuilder.js';
 import { needsStatusJudgmentPhase, runReportPhase, runStatusJudgmentPhase } from '../phase-runner.js';
@@ -216,6 +216,7 @@ export class MovementExecutor {
     movementIteration: number,
     response: AgentResponse,
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
+    runtime?: RuntimeMovementResolution,
   ): Promise<AgentResponse> {
     let nextResponse = response;
 
@@ -231,6 +232,7 @@ export class MovementExecutor {
       this.deps.onPhaseComplete,
       this.deps.onJudgeStage,
       state.iteration,
+      runtime,
     );
 
     // Phase 2: report output (resume same session, Write only)
@@ -271,7 +273,7 @@ export class MovementExecutor {
     }
 
     // No Phase 3 — use rule evaluator with Phase 1 content
-    const movementPm = this.deps.optionsBuilder.resolveStepProviderModel(step);
+    const movementPm = this.deps.optionsBuilder.resolveStepProviderModel(step, runtime);
     const match = await detectMatchedRule(step, nextResponse.content, '', {
       state,
       cwd: this.deps.getCwd(),
@@ -307,12 +309,13 @@ export class MovementExecutor {
     maxMovements: number,
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
     prebuiltInstruction?: string,
+    runtime?: RuntimeMovementResolution,
   ): Promise<{ response: AgentResponse; instruction: string }> {
     const movementIteration = prebuiltInstruction
       ? state.movementIterations.get(step.name) ?? 1
       : incrementMovementIteration(state, step.name);
     const instruction = prebuiltInstruction ?? this.buildInstruction(step, movementIteration, state, task, maxMovements);
-    const sessionKey = buildSessionKey(step);
+    const sessionKey = buildSessionKey(step, runtime?.providerInfo?.provider);
     log.debug('Running movement', {
       movement: step.name,
       persona: step.persona ?? '(none)',
@@ -323,7 +326,7 @@ export class MovementExecutor {
 
     // Phase 1: main execution (Write excluded if movement has report)
     let didEmitPhaseStart = false;
-    const baseAgentOptions = this.deps.optionsBuilder.buildAgentOptions(step);
+    const baseAgentOptions = this.deps.optionsBuilder.buildAgentOptions(step, runtime);
     const agentOptions = {
       ...baseAgentOptions,
       onPromptResolved: (promptParts: PhasePromptParts) => {
@@ -360,6 +363,7 @@ export class MovementExecutor {
       movementIteration,
       response,
       updatePersonaSession,
+      runtime,
     );
 
     state.movementOutputs.set(step.name, response);

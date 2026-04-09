@@ -196,6 +196,221 @@ loop_monitors:
     expect(step1.instruction).toBe('Step 1 instruction');
     expect(judge.instruction).toBe('Judge instruction');
   });
+
+  it('should load loop monitor judge provider and model overrides', () => {
+    const piecesDir = join(testDir, '.takt', 'pieces');
+    mkdirSync(piecesDir, { recursive: true });
+
+    writeFileSync(join(piecesDir, 'loop-monitor-judge-provider-model.yaml'), `
+name: loop-monitor-judge-provider-model
+max_movements: 8
+initial_movement: step1
+
+movements:
+  - name: step1
+    instruction: "Step 1 instruction"
+    rules:
+      - condition: next
+        next: step2
+  - name: step2
+    instruction: "Step 2 instruction"
+    rules:
+      - condition: done
+        next: COMPLETE
+
+loop_monitors:
+  - cycle: [step1, step2]
+    threshold: 2
+    judge:
+      persona: supervisor
+      provider: opencode
+      model: opencode/big-pickle
+      instruction: "Judge instruction"
+      rules:
+        - condition: continue
+          next: step2
+`);
+
+    const config = loadPiece('loop-monitor-judge-provider-model', testDir);
+
+    expect(config).not.toBeNull();
+    expect(config!.loopMonitors).toHaveLength(1);
+    expect(config!.loopMonitors?.[0]?.judge).toMatchObject({
+      persona: 'supervisor',
+      provider: 'opencode',
+      model: 'opencode/big-pickle',
+      instruction: 'Judge instruction',
+    });
+  });
+
+  it('should load loop monitor judge provider block overrides', () => {
+    const piecesDir = join(testDir, '.takt', 'pieces');
+    mkdirSync(piecesDir, { recursive: true });
+
+    writeFileSync(join(piecesDir, 'loop-monitor-judge-provider-block.yaml'), `
+name: loop-monitor-judge-provider-block
+max_movements: 8
+initial_movement: step1
+
+movements:
+  - name: step1
+    instruction: "Step 1 instruction"
+    rules:
+      - condition: next
+        next: step2
+  - name: step2
+    instruction: "Step 2 instruction"
+    rules:
+      - condition: done
+        next: COMPLETE
+
+loop_monitors:
+  - cycle: [step1, step2]
+    threshold: 2
+    judge:
+      provider:
+        type: codex
+        model: gpt-5.2-codex
+        network_access: true
+      instruction: "Judge instruction"
+      rules:
+        - condition: continue
+          next: step2
+`);
+
+    const config = loadPiece('loop-monitor-judge-provider-block', testDir);
+
+    expect(config).not.toBeNull();
+    expect(config!.loopMonitors).toHaveLength(1);
+    expect(config!.loopMonitors?.[0]?.judge).toMatchObject({
+      provider: 'codex',
+      model: 'gpt-5.2-codex',
+      providerOptions: {
+        codex: {
+          networkAccess: true,
+        },
+      },
+      instruction: 'Judge instruction',
+    });
+  });
+
+  it('should load loop monitor judge model-only override without changing provider', () => {
+    const piecesDir = join(testDir, '.takt', 'pieces');
+    mkdirSync(piecesDir, { recursive: true });
+
+    writeFileSync(join(piecesDir, 'loop-monitor-judge-model-only.yaml'), `
+name: loop-monitor-judge-model-only
+max_movements: 8
+initial_movement: step1
+
+movements:
+  - name: step1
+    provider: opencode
+    model: opencode/big-pickle
+    instruction: "Step 1 instruction"
+    rules:
+      - condition: next
+        next: step2
+  - name: step2
+    instruction: "Step 2 instruction"
+    rules:
+      - condition: done
+        next: COMPLETE
+
+loop_monitors:
+  - cycle: [step1, step2]
+    threshold: 2
+    judge:
+      model: opencode/model-b
+      instruction: "Judge instruction"
+      rules:
+        - condition: continue
+          next: step2
+`);
+
+    const config = loadPiece('loop-monitor-judge-model-only', testDir);
+
+    expect(config).not.toBeNull();
+    expect(config!.loopMonitors?.[0]?.judge).toMatchObject({
+      model: 'opencode/model-b',
+      instruction: 'Judge instruction',
+    });
+  });
+
+  it('should reject bare OpenCode models in loop monitor judge config', () => {
+    const piecesDir = join(testDir, '.takt', 'pieces');
+    mkdirSync(piecesDir, { recursive: true });
+
+    writeFileSync(join(piecesDir, 'loop-monitor-judge-opencode-bare-model.yaml'), `
+name: loop-monitor-judge-opencode-bare-model
+max_movements: 8
+initial_movement: step1
+
+movements:
+  - name: step1
+    instruction: "Step 1 instruction"
+    rules:
+      - condition: next
+        next: step2
+  - name: step2
+    instruction: "Step 2 instruction"
+    rules:
+      - condition: done
+        next: COMPLETE
+
+loop_monitors:
+  - cycle: [step1, step2]
+    threshold: 2
+    judge:
+      provider: opencode
+      model: big-pickle
+      instruction: "Judge instruction"
+      rules:
+        - condition: continue
+          next: step2
+`);
+
+    expect(() => loadPiece('loop-monitor-judge-opencode-bare-model', testDir))
+      .toThrow("Configuration error: loop_monitors.judge.model");
+  });
+
+  it('should reject bare OpenCode judge models inherited from the triggering movement provider', () => {
+    const piecesDir = join(testDir, '.takt', 'pieces');
+    mkdirSync(piecesDir, { recursive: true });
+
+    writeFileSync(join(piecesDir, 'loop-monitor-judge-inherited-opencode-bare-model.yaml'), `
+name: loop-monitor-judge-inherited-opencode-bare-model
+max_movements: 8
+initial_movement: step1
+
+movements:
+  - name: step1
+    instruction: "Step 1 instruction"
+    rules:
+      - condition: next
+        next: step2
+  - name: step2
+    provider: opencode
+    model: opencode/big-pickle
+    instruction: "Step 2 instruction"
+    rules:
+      - condition: done
+        next: COMPLETE
+
+loop_monitors:
+  - cycle: [step1, step2]
+    threshold: 2
+    judge:
+      model: big-pickle
+      instruction: "Judge instruction"
+      rules:
+        - condition: continue
+          next: step2
+`);
+
+    expect(() => loadPiece('loop-monitor-judge-inherited-opencode-bare-model', testDir))
+      .toThrow("Configuration error: loop_monitors.judge.model");
+  });
 });
 
 describe('Piece Loader IT: agent path resolution', () => {

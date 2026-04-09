@@ -136,6 +136,8 @@ export const LoopMonitorRuleSchema = z.object({
 /** Loop monitor judge schema */
 export const LoopMonitorJudgeSchema = z.object({
   persona: z.string().optional(),
+  provider: ProviderReferenceSchema.optional(),
+  model: z.string().min(1).optional(),
   instruction: z.string().optional(),
   instruction_template: z.never().optional(),
   rules: z.array(LoopMonitorRuleSchema).min(1),

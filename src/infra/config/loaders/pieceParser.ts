@@ -33,7 +33,9 @@ import { applyQualityGateOverrides } from './qualityGateOverrides.js';
 import { loadProjectConfig } from '../project/projectConfig.js';
 import { loadGlobalConfig } from '../global/globalConfig.js';
 import { normalizeConfigProviderReferenceDetailed, type ConfigProviderReference } from '../providerReference.js';
+import { validateProviderModelCompatibility } from '../providerModelCompatibility.js';
 import { mergeProviderOptions } from '../providerOptions.js';
+import { resolveLoopMonitorJudgeProviderModel } from '../../../core/piece/provider-resolution.js';
 import {
   warnLegacyWorkflowYamlKeysOncePerProcess,
 } from '../legacy-workflow-key-deprecation.js';
@@ -346,12 +348,19 @@ function normalizeStepFromRaw(
 
 /** Normalize a raw loop monitor judge from YAML into internal format. */
 function normalizeLoopMonitorJudge(
-  raw: { persona?: string; instruction?: string; rules: Array<{ condition: string; next: string }> },
+  raw: {
+    persona?: string;
+    provider?: RawProviderReference;
+    model?: string;
+    instruction?: string;
+    rules: Array<{ condition: string; next: string }>;
+  },
   pieceDir: string,
   sections: PieceSections,
   context?: FacetResolutionContext,
 ): LoopMonitorJudge {
   const { personaSpec, personaPath } = resolvePersona(raw.persona, sections, pieceDir, context);
+  const normalizedProvider = normalizeProviderReference(raw.provider, raw.model, undefined);
   const resolvedInstruction = raw.instruction
     ? resolveRefToContent(raw.instruction, sections.resolvedInstructions, pieceDir, 'instructions', context)
     : undefined;
@@ -359,26 +368,74 @@ function normalizeLoopMonitorJudge(
   return {
     persona: personaSpec,
     personaPath,
+    provider: normalizedProvider.provider,
+    model: normalizedProvider.model,
+    providerOptions: normalizedProvider.providerOptions,
     instruction: resolvedInstruction,
     rules: raw.rules.map((r) => ({ condition: r.condition, next: r.next })),
   };
+}
+
+function validateLoopMonitorJudgeResolvedProviderModel(
+  monitor: LoopMonitorConfig,
+  movements: PieceMovement[],
+): void {
+  const triggeringMovementName = monitor.cycle[monitor.cycle.length - 1];
+  if (!triggeringMovementName) {
+    throw new Error('Invalid loop_monitor: cycle must contain at least one movement');
+  }
+
+  const triggeringMovement = movements.find((movement) => movement.name === triggeringMovementName);
+  if (!triggeringMovement) {
+    throw new Error(`Invalid loop_monitor: cycle references unknown movement "${triggeringMovementName}"`);
+  }
+
+  const { provider: resolvedProvider, model: resolvedModel } = resolveLoopMonitorJudgeProviderModel({
+    judge: monitor.judge,
+    triggeringStep: triggeringMovement,
+  });
+
+  validateProviderModelCompatibility(
+    resolvedProvider,
+    resolvedModel,
+    {
+      modelFieldName: 'Configuration error: loop_monitors.judge.model',
+    },
+  );
 }
 
 /**
  * Normalize raw loop monitors from YAML into internal format.
  */
 function normalizeLoopMonitors(
-  raw: Array<{ cycle: string[]; threshold: number; judge: { persona?: string; instruction?: string; rules: Array<{ condition: string; next: string }> } }> | undefined,
+  raw: Array<{
+    cycle: string[];
+    threshold: number;
+    judge: {
+      persona?: string;
+      provider?: RawProviderReference;
+      model?: string;
+      instruction?: string;
+      rules: Array<{ condition: string; next: string }>;
+    };
+  }> | undefined,
+  movements: PieceMovement[],
   pieceDir: string,
   sections: PieceSections,
   context?: FacetResolutionContext,
 ): LoopMonitorConfig[] | undefined {
   if (!raw || raw.length === 0) return undefined;
-  return raw.map((monitor) => ({
+  const monitors = raw.map((monitor) => ({
     cycle: monitor.cycle,
     threshold: monitor.threshold,
     judge: normalizeLoopMonitorJudge(monitor.judge, pieceDir, sections, context),
   }));
+
+  for (const monitor of monitors) {
+    validateLoopMonitorJudgeResolvedProviderModel(monitor, movements);
+  }
+
+  return monitors;
 }
 
 /** Convert raw YAML piece config to internal format. */
@@ -451,7 +508,7 @@ export function normalizePieceConfig(
     movements,
     initialMovement,
     maxMovements: parsed.max_movements,
-    loopMonitors: normalizeLoopMonitors(parsed.loop_monitors, pieceDir, sections, context),
+    loopMonitors: normalizeLoopMonitors(parsed.loop_monitors, movements, pieceDir, sections, context),
     interactiveMode: parsed.interactive_mode,
   };
 }

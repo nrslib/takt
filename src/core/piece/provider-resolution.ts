@@ -1,4 +1,4 @@
-import type { PieceMovement } from '../models/types.js';
+import type { LoopMonitorJudge, PieceMovement } from '../models/types.js';
 import type { PersonaProviderEntry } from '../models/config-types.js';
 import {
   resolveProviderModelCandidates,
@@ -14,8 +14,21 @@ export interface MovementProviderModelInput {
 }
 
 export interface MovementProviderModelOutput {
+  provider: ProviderType | undefined;
+  model: string | undefined;
+}
+
+export interface LoopMonitorJudgeProviderModelInput {
+  judge: Pick<LoopMonitorJudge, 'provider' | 'model'>;
+  triggeringStep: Pick<PieceMovement, 'provider' | 'model' | 'personaDisplayName'>;
   provider?: ProviderType;
   model?: string;
+  personaProviders?: Record<string, PersonaProviderEntry>;
+}
+
+export interface LoopMonitorJudgeProviderModelOutput {
+  provider: ProviderType | undefined;
+  model: string | undefined;
 }
 
 export interface AgentProviderModelInput {
@@ -64,4 +77,21 @@ export function resolveMovementProviderModel(input: MovementProviderModelInput):
     { model: input.model },
   ]).model;
   return { provider, model };
+}
+
+export function resolveLoopMonitorJudgeProviderModel(
+  input: LoopMonitorJudgeProviderModelInput,
+): LoopMonitorJudgeProviderModelOutput {
+  const triggeringMovement = resolveMovementProviderModel({
+    step: input.triggeringStep,
+    provider: input.provider,
+    model: input.model,
+    personaProviders: input.personaProviders,
+  });
+
+  return {
+    provider: input.judge.provider ?? triggeringMovement.provider,
+    model: input.judge.model
+      ?? (input.judge.provider !== undefined ? undefined : triggeringMovement.model),
+  };
 }

@@ -10,7 +10,7 @@ export function parseProviderModel(value: string, fieldName: string): { provider
   }
 
   const slashIndex = trimmed.indexOf('/');
-  if (slashIndex <= 0 || slashIndex === trimmed.length - 1 || trimmed.indexOf('/', slashIndex + 1) !== -1) {
+  if (slashIndex <= 0 || slashIndex === trimmed.length - 1) {
     throw new Error(`${fieldName} must be in 'provider/model' format: received '${value}'`);
   }
 

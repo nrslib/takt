@@ -10,6 +10,7 @@
  */
 
 import type { PieceMovement } from '../models/types.js';
+import type { ProviderType } from '../../shared/types/provider.js';
 
 /**
  * Build a unique session key for a movement.
@@ -23,7 +24,8 @@ import type { PieceMovement } from '../models/types.js';
  *   - persona="coder", provider="codex"    → "coder:codex"
  *   - persona=undefined, name="plan"       → "plan"
  */
-export function buildSessionKey(step: PieceMovement): string {
+export function buildSessionKey(step: PieceMovement, providerOverride?: ProviderType): string {
   const base = step.persona ?? step.name;
-  return step.provider ? `${base}:${step.provider}` : base;
+  const provider = providerOverride ?? step.provider;
+  return provider ? `${base}:${provider}` : base;
 }

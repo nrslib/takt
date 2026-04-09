@@ -89,6 +89,10 @@ export interface MovementProviderInfo {
   model: string | undefined;
 }
 
+export interface RuntimeMovementResolution {
+  providerInfo?: MovementProviderInfo;
+}
+
 /** Events emitted by piece engine */
 export interface PieceEvents {
   'movement:start': (step: PieceMovement, iteration: number, instruction: string, providerInfo: MovementProviderInfo) => void;

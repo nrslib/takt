@@ -238,6 +238,21 @@ describe('LoopMonitorJudgeSchema', () => {
     }
   });
 
+  it('should accept judge configuration with provider block', () => {
+    const raw = {
+      provider: {
+        type: 'codex',
+        model: 'gpt-5.2-codex',
+        network_access: true,
+      },
+      rules: [{ condition: 'continue', next: 'ai_fix' }],
+    };
+
+    const result = LoopMonitorJudgeSchema.safeParse(raw);
+
+    expect(result.success).toBe(true);
+  });
+
   it('should reject judge configuration when instruction_template exists', () => {
     const raw = {
       persona: 'reviewer',

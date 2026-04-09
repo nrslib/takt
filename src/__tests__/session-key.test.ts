@@ -59,4 +59,9 @@ describe('buildSessionKey', () => {
     const step = createMovement({ persona: 'coder', provider: undefined });
     expect(buildSessionKey(step)).toBe('coder');
   });
+
+  it('should prefer runtime provider override over step provider', () => {
+    const step = createMovement({ persona: 'coder', provider: 'opencode' });
+    expect(buildSessionKey(step, 'codex')).toBe('coder:codex');
+  });
 });

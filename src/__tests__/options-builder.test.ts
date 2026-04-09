@@ -262,6 +262,24 @@ describe('OptionsBuilder.resolveStepProviderModel', () => {
     expect(providerInfo.provider).toBe(baseOptions.resolvedProvider);
     expect(providerInfo.model).toBe(baseOptions.resolvedModel);
   });
+
+  it('should prefer runtime provider info over persona and engine resolution', () => {
+    const step = createMovement({ personaDisplayName: 'loop-judge', provider: 'opencode', model: 'opencode/model-a' });
+    const builder = createBuilder(step, {
+      provider: 'claude',
+      model: 'sonnet',
+      personaProviders: { 'loop-judge': { provider: 'opencode', model: 'opencode/model-b' } },
+    });
+
+    const result = builder.resolveStepProviderModel(step, {
+      providerInfo: { provider: 'codex', model: 'gpt-5.2-codex' },
+    });
+
+    expect(result).toEqual({
+      provider: 'codex',
+      model: 'gpt-5.2-codex',
+    });
+  });
 });
 
 describe('OptionsBuilder.buildResumeOptions', () => {

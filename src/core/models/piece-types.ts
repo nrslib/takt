@@ -147,6 +147,9 @@ export interface LoopMonitorRule {
 export interface LoopMonitorJudge {
   persona?: string;
   personaPath?: string;
+  provider?: ProviderType;
+  model?: string;
+  providerOptions?: MovementProviderOptions;
   instruction?: string;
   rules: LoopMonitorRule[];
 }
