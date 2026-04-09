@@ -1,6 +1,8 @@
 ---
 name: takt
-description: /takt スラッシュコマンド専用。ユーザーが /takt を入力したときのみ使用する。
+description: >
+  TAKT ワークフローエンジン。codex exec でサブエージェントを起動し、ワークフロー YAML（steps / initial_step）に従って
+  マルチエージェントオーケストレーションを実行する。
 ---
 
 # TAKT Workflow Engine

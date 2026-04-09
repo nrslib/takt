@@ -1,6 +1,6 @@
 ---
 name: takt
-description: /takt スラッシュコマンド専用。ユーザーが /takt を入力したときのみ使用する。
+description: TAKT ワークフローエンジン。Agent Team を使ったマルチエージェントオーケストレーション。ワークフロー YAML（steps / initial_step）に従ってマルチエージェントを実行する。
 user-invocable: true
 ---
 

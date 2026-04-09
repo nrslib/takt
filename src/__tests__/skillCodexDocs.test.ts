@@ -10,7 +10,7 @@ const sharedSchemaDoc = readFileSync(join(process.cwd(), 'builtins', 'skill', 'r
 describe('skill-codex document safety guidance', () => {
   it('should define required YAML frontmatter for Codex SKILL.md', () => {
     expect(skillDoc).toMatch(/^---\nname: takt\n/);
-    expect(skillDoc).toContain('description:');
+    expect(skillDoc).toContain('description: >');
     expect(skillDoc).toContain('\n---\n');
   });
 
