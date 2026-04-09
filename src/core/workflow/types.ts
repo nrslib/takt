@@ -89,6 +89,10 @@ export interface StepProviderInfo {
   model: string | undefined;
 }
 
+export interface RuntimeStepResolution {
+  providerInfo?: StepProviderInfo;
+}
+
 /** Events emitted by workflow engine */
 export interface WorkflowEvents {
   'step:start': (step: WorkflowStep, iteration: number, instruction: string, providerInfo: StepProviderInfo) => void;

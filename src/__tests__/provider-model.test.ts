@@ -17,7 +17,10 @@ describe('parseProviderModel', () => {
     expect(() => parseProviderModel('big-pickle', 'model')).toThrow(/provider\/model/i);
   });
 
-  it('should reject multiple slashes', () => {
-    expect(() => parseProviderModel('a/b/c', 'model')).toThrow(/provider\/model/i);
+  it('should keep everything after the first slash as modelID', () => {
+    expect(parseProviderModel('a/b/c', 'model')).toEqual({
+      providerID: 'a',
+      modelID: 'b/c',
+    });
   });
 });

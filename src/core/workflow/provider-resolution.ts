@@ -1,4 +1,4 @@
-import type { WorkflowStep } from '../models/types.js';
+import type { LoopMonitorJudge, WorkflowStep } from '../models/types.js';
 import type { PersonaProviderEntry } from '../models/config-types.js';
 import {
   resolveProviderModelCandidates,
@@ -14,8 +14,21 @@ export interface StepProviderModelInput {
 }
 
 export interface StepProviderModelOutput {
+  provider: ProviderType | undefined;
+  model: string | undefined;
+}
+
+export interface LoopMonitorJudgeProviderModelInput {
+  judge: Pick<LoopMonitorJudge, 'provider' | 'model'>;
+  triggeringStep: Pick<WorkflowStep, 'provider' | 'model' | 'personaDisplayName'>;
   provider?: ProviderType;
   model?: string;
+  personaProviders?: Record<string, PersonaProviderEntry>;
+}
+
+export interface LoopMonitorJudgeProviderModelOutput {
+  provider: ProviderType | undefined;
+  model: string | undefined;
 }
 
 export interface AgentProviderModelInput {
@@ -64,4 +77,21 @@ export function resolveStepProviderModel(input: StepProviderModelInput): StepPro
     { model: input.model },
   ]).model;
   return { provider, model };
+}
+
+export function resolveLoopMonitorJudgeProviderModel(
+  input: LoopMonitorJudgeProviderModelInput,
+): LoopMonitorJudgeProviderModelOutput {
+  const triggeringStep = resolveStepProviderModel({
+    step: input.triggeringStep,
+    provider: input.provider,
+    model: input.model,
+    personaProviders: input.personaProviders,
+  });
+
+  return {
+    provider: input.judge.provider ?? triggeringStep.provider,
+    model: input.judge.model
+      ?? (input.judge.provider !== undefined ? undefined : triggeringStep.model),
+  };
 }

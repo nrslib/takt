@@ -1,17 +1,32 @@
 import type { LoopMonitorConfig, LoopMonitorJudge } from '../../../core/models/index.js';
 import type { FacetResolutionContext, WorkflowSections } from './resource-resolver.js';
 import { resolvePersona, resolveRefToContent } from './resource-resolver.js';
+import { normalizeProviderReference } from './workflowStepNormalizer.js';
 
 function normalizeLoopMonitorJudge(
-  raw: { persona?: string; instruction?: string; rules: Array<{ condition: string; next: string }> },
+  raw: {
+    persona?: string;
+    provider?: unknown;
+    model?: string;
+    instruction?: string;
+    rules: Array<{ condition: string; next: string }>;
+  },
   workflowDir: string,
   sections: WorkflowSections,
   context?: FacetResolutionContext,
 ): LoopMonitorJudge {
   const { personaSpec, personaPath } = resolvePersona(raw.persona, sections, workflowDir, context);
+  const normalizedProvider = normalizeProviderReference(
+    raw.provider as Parameters<typeof normalizeProviderReference>[0],
+    raw.model,
+    undefined,
+  );
   return {
     persona: personaSpec,
     personaPath,
+    provider: normalizedProvider.provider,
+    model: normalizedProvider.model,
+    providerOptions: normalizedProvider.providerOptions,
     instruction: raw.instruction
       ? resolveRefToContent(raw.instruction, sections.resolvedInstructions, workflowDir, 'instructions', context)
       : undefined,
@@ -20,7 +35,17 @@ function normalizeLoopMonitorJudge(
 }
 
 export function normalizeLoopMonitors(
-  raw: Array<{ cycle: string[]; threshold: number; judge: { persona?: string; instruction?: string; rules: Array<{ condition: string; next: string }> } }> | undefined,
+  raw: Array<{
+    cycle: string[];
+    threshold: number;
+    judge: {
+      persona?: string;
+      provider?: unknown;
+      model?: string;
+      instruction?: string;
+      rules: Array<{ condition: string; next: string }>;
+    };
+  }> | undefined,
   workflowDir: string,
   sections: WorkflowSections,
   context?: FacetResolutionContext,

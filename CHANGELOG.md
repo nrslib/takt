@@ -6,6 +6,22 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.35.2] - 2026-04-09
+
+### Added
+
+- `takt list` でスタックした実行中タスクを強制失敗にできる「Mark as failed」アクションを追加 (#604)
+- タスクレコードに `run_slug` を追加し、実行中タスクの現在のステップ情報を `meta.json` から取得可能に
+
+### Changed
+
+- `write_tests` ムーブメントの出力契約を `test-scope.md` + `test-decisions.md` の2ファイルから `test-report.md` の1ファイルに簡素化
+
+### Internal
+
+- CI auto-tag ワークフローから冗長な build・test ステップを削除
+- `RunMeta` 型を `src/core/piece/run/run-meta.ts` に抽出し、`currentStep`/`currentIteration` トラッキングを追加
+
 ## [0.35.1] - 2026-04-09
 
 ### Added

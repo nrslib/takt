@@ -3,6 +3,7 @@ import {
   resolveAgentProviderModel,
   resolveStepProviderModel,
 } from '../core/workflow/provider-resolution.js';
+import { resolveLoopMonitorJudgeProviderModel } from '../core/workflow/provider-resolution.js';
 import {
   resolveModelFromCandidates,
   resolveProviderModelCandidates,
@@ -133,6 +134,7 @@ describe('resolveStepProviderModel', () => {
 
     expect(result.provider).toBe('cursor');
   });
+
 });
 
 describe('resolveAgentProviderModel', () => {
@@ -457,6 +459,47 @@ describe('resolveAgentProviderModel', () => {
 
     expect(result.provider).toBe('codex');
     expect(result.model).toBe('persona-model');
+  });
+});
+
+describe('resolveLoopMonitorJudgeProviderModel', () => {
+  it('should inherit provider and model resolved from personaProviders on the triggering movement', () => {
+    const result = resolveLoopMonitorJudgeProviderModel({
+      judge: { provider: undefined, model: 'opencode/model-b' },
+      triggeringStep: {
+        provider: undefined,
+        model: undefined,
+        personaDisplayName: 'reviewer',
+      },
+      provider: 'claude',
+      personaProviders: {
+        reviewer: {
+          provider: 'opencode',
+          model: 'opencode/model-a',
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      provider: 'opencode',
+      model: 'opencode/model-b',
+    });
+  });
+
+  it('should clear inherited model when judge overrides only the provider', () => {
+    const result = resolveLoopMonitorJudgeProviderModel({
+      judge: { provider: 'codex', model: undefined },
+      triggeringStep: {
+        provider: 'opencode',
+        model: 'opencode/model-a',
+        personaDisplayName: 'reviewer',
+      },
+    });
+
+    expect(result).toEqual({
+      provider: 'codex',
+      model: undefined,
+    });
   });
 });
 

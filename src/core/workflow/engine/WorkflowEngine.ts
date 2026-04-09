@@ -19,7 +19,7 @@ import type {
 } from '../../models/types.js';
 import { prepareRuntimeEnvironment } from '../../runtime/runtime-environment.js';
 import { buildRunPaths, type RunPaths } from '../run/run-paths.js';
-import type { WorkflowEngineOptions } from '../types.js';
+import type { RuntimeStepResolution, WorkflowEngineOptions } from '../types.js';
 import { ArpeggioRunner } from './ArpeggioRunner.js';
 import { LoopMonitorJudgeRunner } from './LoopMonitorJudgeRunner.js';
 import { LoopDetector } from './loop-detector.js';
@@ -328,8 +328,13 @@ export class WorkflowEngine extends EventEmitter {
     return this.stepExecutor.buildInstruction(step, stepIteration, this.state, this.task, this.config.maxSteps);
   }
 
-  private async runLoopMonitorJudge(monitor: LoopMonitorConfig, cycleCount: number): Promise<string> {
-    return this.loopMonitorJudgeRunner.run(monitor, cycleCount);
+  private async runLoopMonitorJudge(
+    monitor: LoopMonitorConfig,
+    cycleCount: number,
+    triggeringStep: WorkflowStep,
+    triggeringRuntime?: RuntimeStepResolution,
+  ): Promise<string> {
+    return this.loopMonitorJudgeRunner.run(monitor, cycleCount, triggeringStep, triggeringRuntime);
   }
 
   async run(): Promise<WorkflowState> {
@@ -354,7 +359,7 @@ export class WorkflowEngine extends EventEmitter {
       runLoopMonitorJudge: this.runLoopMonitorJudge.bind(this),
       runStep: this.runStep.bind(this),
       buildInstruction: this.buildInstruction.bind(this),
-      resolveStepProviderModel: (step) => this.optionsBuilder.resolveStepProviderModel(step),
+      resolveStepProviderModel: (step, runtime) => this.optionsBuilder.resolveStepProviderModel(step, runtime),
       addUserInput: this.addUserInput.bind(this),
       emit: (event, ...args) => this.emit(event as never, ...args as []),
       updateMaxSteps: (maxSteps) => {
@@ -390,7 +395,7 @@ export class WorkflowEngine extends EventEmitter {
       runLoopMonitorJudge: this.runLoopMonitorJudge.bind(this),
       runStep: this.runStep.bind(this),
       buildInstruction: this.buildInstruction.bind(this),
-      resolveStepProviderModel: (step) => this.optionsBuilder.resolveStepProviderModel(step),
+      resolveStepProviderModel: (step, runtime) => this.optionsBuilder.resolveStepProviderModel(step, runtime),
       addUserInput: this.addUserInput.bind(this),
       emit: (event, ...args) => this.emit(event as never, ...args as []),
       updateMaxSteps: () => {},

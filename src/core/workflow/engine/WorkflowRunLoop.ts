@@ -1,7 +1,7 @@
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import type { AgentResponse, LoopMonitorConfig, WorkflowState, WorkflowStep } from '../../models/types.js';
 import { ABORT_STEP, COMPLETE_STEP, ERROR_MESSAGES } from '../constants.js';
-import type { WorkflowEngineOptions } from '../types.js';
+import type { RuntimeStepResolution, StepProviderInfo, WorkflowEngineOptions } from '../types.js';
 import { incrementStepIteration } from './state-manager.js';
 import { handleBlocked } from './blocked-handler.js';
 
@@ -17,10 +17,15 @@ interface WorkflowRunLoopDeps {
   loopDetectorCheck: (stepName: string) => { shouldWarn?: boolean; shouldAbort?: boolean; count: number; isLoop: boolean };
   cycleDetectorRecordAndCheck: (stepName: string) => { triggered: boolean; monitor?: LoopMonitorConfig; cycleCount: number };
   resolveNextStepFromDone: (step: WorkflowStep, response: AgentResponse) => string;
-  runLoopMonitorJudge: (monitor: LoopMonitorConfig, cycleCount: number) => Promise<string>;
+  runLoopMonitorJudge: (
+    monitor: LoopMonitorConfig,
+    cycleCount: number,
+    triggeringStep: WorkflowStep,
+    triggeringRuntime?: RuntimeStepResolution,
+  ) => Promise<string>;
   runStep: (step: WorkflowStep, prebuiltInstruction?: string) => Promise<{ response: AgentResponse; instruction: string }>;
   buildInstruction: (step: WorkflowStep, stepIteration: number) => string;
-  resolveStepProviderModel: (step: WorkflowStep) => unknown;
+  resolveStepProviderModel: (step: WorkflowStep, runtime?: RuntimeStepResolution) => StepProviderInfo;
   addUserInput: (input: string) => void;
   emit: (event: string, ...args: unknown[]) => void;
   updateMaxSteps: (maxSteps: number) => void;
@@ -137,7 +142,9 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
           threshold: cycleCheck.monitor.threshold,
         });
         deps.emit('step:cycle_detected', cycleCheck.monitor, cycleCheck.cycleCount);
-        nextStep = await deps.runLoopMonitorJudge(cycleCheck.monitor, cycleCheck.cycleCount);
+        nextStep = await deps.runLoopMonitorJudge(cycleCheck.monitor, cycleCheck.cycleCount, step, {
+          providerInfo: deps.resolveStepProviderModel(step),
+        });
       }
 
       if (nextStep === COMPLETE_STEP) {

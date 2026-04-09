@@ -11,6 +11,7 @@ import type {
   StepProviderInfo,
   PhasePromptParts,
   JudgeStageEntry,
+  RuntimeStepResolution,
 } from '../types.js';
 import { buildSessionKey } from '../session-key.js';
 import { resolveStepProviderModel } from '../provider-resolution.js';
@@ -28,7 +29,11 @@ export class OptionsBuilder {
     private readonly getWorkflowDescription: () => string | undefined,
   ) {}
 
-  resolveStepProviderModel(step: WorkflowStep): StepProviderInfo {
+  resolveStepProviderModel(step: WorkflowStep, runtime?: RuntimeStepResolution): StepProviderInfo {
+    if (runtime?.providerInfo) {
+      return runtime.providerInfo;
+    }
+
     const resolved = resolveStepProviderModel({
       step,
       provider: this.engineOptions.provider,
@@ -42,11 +47,15 @@ export class OptionsBuilder {
   }
 
   /** Build common RunAgentOptions shared by all phases */
-  buildBaseOptions(step: WorkflowStep, mergedProviderOptions?: StepProviderOptions): RunAgentOptions {
+  buildBaseOptions(
+    step: WorkflowStep,
+    mergedProviderOptions?: StepProviderOptions,
+    runtime?: RuntimeStepResolution,
+  ): RunAgentOptions {
     const steps = this.getWorkflowSteps();
-    const currentIndex = steps.findIndex((m) => m.name === step.name);
+    const currentIndex = steps.findIndex((currentStep) => currentStep.name === step.name);
     const currentPosition = currentIndex >= 0 ? `${currentIndex + 1}/${steps.length}` : '?/?';
-    const { provider: resolvedProvider, model: resolvedModel } = this.resolveStepProviderModel(step);
+    const { provider: resolvedProvider, model: resolvedModel } = this.resolveStepProviderModel(step, runtime);
 
     return {
       cwd: this.getCwd(),
@@ -82,7 +91,7 @@ export class OptionsBuilder {
   }
 
   /** Build RunAgentOptions for Phase 1 (main execution) */
-  buildAgentOptions(step: WorkflowStep): RunAgentOptions {
+  buildAgentOptions(step: WorkflowStep, runtime?: RuntimeStepResolution): RunAgentOptions {
     const mergedProviderOptions = resolveEffectiveProviderOptions(
       this.engineOptions.providerOptionsSource,
       this.engineOptions.providerOptionsOriginResolver,
@@ -103,8 +112,8 @@ export class OptionsBuilder {
     const shouldResumeSession = step.session !== 'refresh' && this.getCwd() === this.getProjectCwd();
 
     return {
-      ...this.buildBaseOptions(step, mergedProviderOptions),
-      sessionId: shouldResumeSession ? this.getSessionId(buildSessionKey(step)) : undefined,
+      ...this.buildBaseOptions(step, mergedProviderOptions, runtime),
+      sessionId: shouldResumeSession ? this.getSessionId(buildSessionKey(step, runtime?.providerInfo?.provider)) : undefined,
       allowedTools,
       mcpServers: step.mcpServers,
     };
@@ -115,9 +124,10 @@ export class OptionsBuilder {
     step: WorkflowStep,
     sessionId: string,
     overrides: Pick<RunAgentOptions, 'maxTurns'>,
+    runtime?: RuntimeStepResolution,
   ): RunAgentOptions {
     return {
-      ...this.buildBaseOptions(step),
+      ...this.buildBaseOptions(step, undefined, runtime),
       // Report/status phases are read-only regardless of step settings.
       permissionMode: 'readonly',
       sessionId,
@@ -130,9 +140,10 @@ export class OptionsBuilder {
   buildNewSessionReportOptions(
     step: WorkflowStep,
     overrides: Pick<RunAgentOptions, 'allowedTools' | 'maxTurns'>,
+    runtime?: RuntimeStepResolution,
   ): RunAgentOptions {
     return {
-      ...this.buildBaseOptions(step),
+      ...this.buildBaseOptions(step, undefined, runtime),
       permissionMode: 'readonly',
       allowedTools: overrides.allowedTools,
       maxTurns: overrides.maxTurns,
@@ -172,6 +183,7 @@ export class OptionsBuilder {
       iteration?: number,
     ) => void,
     iteration?: number,
+    runtime?: RuntimeStepResolution,
   ): PhaseRunnerContext {
     return {
       cwd: this.getCwd(),
@@ -181,11 +193,11 @@ export class OptionsBuilder {
       lastResponse,
       onStream: this.engineOptions.onStream,
       structuredCaller: this.requireStructuredCaller(),
-      resolveProvider: (step) => this.resolveStepProviderModel(step).provider,
-      resolveStepProviderModel: this.resolveStepProviderModel.bind(this),
+      resolveProvider: (step) => this.resolveStepProviderModel(step, runtime).provider,
+      resolveStepProviderModel: (step) => this.resolveStepProviderModel(step, runtime),
       getSessionId: (persona: string) => state.personaSessions.get(persona),
-      buildResumeOptions: this.buildResumeOptions.bind(this),
-      buildNewSessionReportOptions: this.buildNewSessionReportOptions.bind(this),
+      buildResumeOptions: (step, sessionId, overrides) => this.buildResumeOptions(step, sessionId, overrides, runtime),
+      buildNewSessionReportOptions: (step, overrides) => this.buildNewSessionReportOptions(step, overrides, runtime),
       updatePersonaSession,
       onPhaseStart,
       onPhaseComplete,

@@ -86,7 +86,7 @@ takt run
 ### Manage results
 
 ```bash
-# List completed/failed task branches — merge, retry, or delete
+# List task branches — merge, retry, force-fail, or delete
 takt list
 ```
 
@@ -150,7 +150,7 @@ See the [Builtin Catalog](./docs/builtin-catalog.md) for all workflows and perso
 |---------|-------------|
 | `takt` | Talk to AI, refine requirements, execute or queue tasks |
 | `takt run` | Execute all pending tasks |
-| `takt list` | Manage task branches (merge, retry, instruct, delete) |
+| `takt list` | Manage task branches (merge, retry, force-fail, instruct, delete) |
 | `takt #N` | Execute GitHub Issue as task |
 | `takt eject` | Copy builtin workflows/facets for customization |
 | `takt repertoire add` | Install a repertoire package from GitHub |

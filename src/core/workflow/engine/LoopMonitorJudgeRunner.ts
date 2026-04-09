@@ -1,5 +1,8 @@
 import { createLogger } from '../../../shared/utils/index.js';
 import type { AgentResponse, LoopMonitorConfig, WorkflowState, WorkflowStep } from '../../models/types.js';
+import { mergeProviderOptions } from '../../../infra/config/providerOptions.js';
+import { resolveLoopMonitorJudgeProviderModel } from '../provider-resolution.js';
+import type { RuntimeStepResolution } from '../types.js';
 import { incrementStepIteration } from './state-manager.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { StepExecutor } from './StepExecutor.js';
@@ -24,7 +27,13 @@ interface LoopMonitorJudgeRunnerDeps {
 export class LoopMonitorJudgeRunner {
   constructor(private readonly deps: LoopMonitorJudgeRunnerDeps) {}
 
-  async run(monitor: LoopMonitorConfig, cycleCount: number): Promise<string> {
+  async run(
+    monitor: LoopMonitorConfig,
+    cycleCount: number,
+    triggeringStep: WorkflowStep,
+    triggeringRuntime?: RuntimeStepResolution,
+  ): Promise<string> {
+    const runtime = this.resolveJudgeRuntime(monitor, triggeringStep, triggeringRuntime);
     const judgeStep = this.createJudgeStep(monitor, cycleCount);
     log.info('Running loop monitor judge', {
       cycle: monitor.cycle,
@@ -51,6 +60,7 @@ export class LoopMonitorJudgeRunner {
       this.deps.maxSteps,
       this.deps.updatePersonaSession,
       prebuiltInstruction,
+      runtime,
     );
 
     this.deps.emitCollectedReports();
@@ -75,12 +85,17 @@ export class LoopMonitorJudgeRunner {
       persona: monitor.judge.persona,
       personaPath: monitor.judge.personaPath,
       personaDisplayName: 'loop-judge',
+      provider: monitor.judge.provider,
+      model: monitor.judge.model,
       edit: false,
-      providerOptions: {
-        claude: {
-          allowedTools: ['Read', 'Glob', 'Grep'],
+      providerOptions: mergeProviderOptions(
+        {
+          claude: {
+            allowedTools: ['Read', 'Glob', 'Grep'],
+          },
         },
-      },
+        monitor.judge.providerOptions,
+      ),
       instruction,
       rules: monitor.judge.rules.map((rule) => ({
         condition: rule.condition,
@@ -88,6 +103,24 @@ export class LoopMonitorJudgeRunner {
       })),
       passPreviousResponse: true,
     };
+  }
+
+  private resolveJudgeRuntime(
+    monitor: LoopMonitorConfig,
+    triggeringStep: WorkflowStep,
+    triggeringRuntime?: RuntimeStepResolution,
+  ): RuntimeStepResolution {
+    const triggeringProviderInfo = this.deps.optionsBuilder.resolveStepProviderModel(
+      triggeringStep,
+      triggeringRuntime,
+    );
+    const providerInfo = resolveLoopMonitorJudgeProviderModel({
+      judge: monitor.judge,
+      triggeringStep,
+      provider: triggeringProviderInfo.provider,
+      model: triggeringProviderInfo.model,
+    });
+    return { providerInfo };
   }
 
   private buildDefaultInstruction(monitor: LoopMonitorConfig, cycleCount: number): string {

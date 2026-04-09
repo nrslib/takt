@@ -5,6 +5,8 @@
 import type { WorkflowArpeggioConfig, WorkflowMcpServersConfig, WorkflowOverrides, WorkflowRuntimePrepareConfig } from '../../../core/models/config-types.js';
 import { WorkflowConfigRawSchema } from '../../../core/models/index.js';
 import type { WorkflowConfig, WorkflowStep } from '../../../core/models/index.js';
+import { resolveLoopMonitorJudgeProviderModel, resolveStepProviderModel } from '../../../core/workflow/provider-resolution.js';
+import { validateProviderModelCompatibility } from '../../../core/workflow/provider-model-compatibility.js';
 import { normalizeRuntime } from '../configNormalizers.js';
 import type { FacetResolutionContext, WorkflowSections } from './resource-resolver.js';
 import { resolveSectionMap } from './resource-resolver.js';
@@ -57,6 +59,32 @@ export function normalizeWorkflowConfig(
     ),
   );
 
+  const loopMonitors = normalizeLoopMonitors(parsed.loop_monitors, workflowDir, sections, context);
+  for (const monitor of loopMonitors ?? []) {
+    const triggeringStep = steps.find((step) => step.name === monitor.cycle[monitor.cycle.length - 1]);
+    if (!triggeringStep) {
+      continue;
+    }
+    const triggeringProviderInfo = resolveStepProviderModel({
+      step: triggeringStep,
+      provider: normalizedWorkflowProvider.provider,
+      model: normalizedWorkflowProvider.model,
+    });
+    const judgeProviderInfo = resolveLoopMonitorJudgeProviderModel({
+      judge: monitor.judge,
+      triggeringStep,
+      provider: triggeringProviderInfo.provider,
+      model: triggeringProviderInfo.model,
+    });
+    validateProviderModelCompatibility(
+      judgeProviderInfo.provider,
+      judgeProviderInfo.model,
+      {
+        modelFieldName: 'Configuration error: loop_monitors.judge.model',
+      },
+    );
+  }
+
   return {
     name: parsed.name,
     description: parsed.description,
@@ -70,7 +98,7 @@ export function normalizeWorkflowConfig(
     steps,
     initialStep: parsed.initial_step ?? steps[0]!.name,
     maxSteps: parsed.max_steps,
-    loopMonitors: normalizeLoopMonitors(parsed.loop_monitors, workflowDir, sections, context),
+    loopMonitors,
     interactiveMode: parsed.interactive_mode,
   };
 }
