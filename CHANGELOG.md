@@ -6,6 +6,62 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.35.1] - 2026-04-09
+
+### Added
+
+- タスク実行中に常時スピナーを表示: TTY 環境でタスク実行中にアニメーションスピナーを表示し、処理中であることを可視化
+- Claude Headless の thinking ストリーム表示: ヘッドレスモードで thinking トークンをリアルタイム表示。parallel モードでは色分け表示に対応
+
+### Changed
+
+- SIGINT（Ctrl+C）でクローン作成中でも即座にプロセスを終了できるよう改善: `run`/`watch` コマンドで raw mode による即時検知を導入し、git サブプロセスを AbortSignal で中断可能に
+
+### Fixed
+
+- Codex プロバイダが Git リポジトリ外での実行を拒否する問題を修正
+
+### Internal
+
+- StatusLine の wrapWrite をアロー関数にリファクタリング
+- StreamDisplay のハンドラーをムーブメントごとにキャッシュするよう最適化
+- クローン作成関連のテスト追加・更新
+
+## [0.35.0] - 2026-04-07
+
+### Added
+
+- Claude Headless プロバイダを追加: Claude CLI のヘッドレスモード（`claude --print`）をサブプロセスとして実行する新プロバイダ。`claude` プロバイダ名で利用可能 (#584)
+- trace ログレベルを追加: `poll_tick`/`no_new_tasks` などの高頻度ログを抑制し、デバッグログの可読性を向上。`logging.trace: true` で有効化
+- レガシー設定キーの非推奨警告: `piece_*`/`movement*` 系の旧キー使用時に deprecation warning を表示し、新しい `workflow_*`/`step*` キーへの移行を促進 (#581, #594)
+- Mock プロバイダで `delayMs` と AbortSignal をサポート: SIGINT テスト等で利用可能に (#595)
+
+### Changed
+
+- **BREAKING:** `claude` プロバイダがヘッドレス CLI モードをデフォルトに変更。従来の SDK ベースプロバイダは `claude-sdk` として引き続き利用可能 (#584)
+- クローン環境からのプッシュに relay push パターンを導入: 一時 ref 経由でプッシュすることで、チェックアウト中のブランチへの直接プッシュによるデータ損失を防止 (#592)
+- PR 由来タスクのメタデータ伝搬を改善: `shouldPublishBranchToOrigin` フラグにより、ローカルプッシュ失敗時にクローンから直接 origin へプッシュするフォールバックを追加 (#592)
+- dual/backend ワークフローの `max_steps` を 60 に増加
+
+### Fixed
+
+- `pr_body_template` が `--task` オプション実行時に無視される問題を修正 (#538)
+- 既存 PR ブランチ更新時にリモートを正として worktree を作成するよう修正 (#557)
+- SIGINT（Ctrl+C）が AI レスポンス待機中に正しくアボートされない問題を修正 (#595)
+- mise 等のバージョン管理ツール環境下で Claude SDK サブプロセスの PATH が安定しない問題を修正 (#591)
+- ジャッジムーブメントのプロバイダフォールバック解決が正しく機能しない問題を修正 (#577)
+- exceeded 時のワークツリーパスが正しく解決されない問題を修正 (#575)
+- PR 作成時のエラー詳細が失われる問題を修正
+- non-fast-forward プッシュ拒否時にヒントメッセージを表示するよう改善
+
+### Internal
+
+- `.takt/config.yaml` の非推奨キーをリネーム
+- レガシーワークフローキー非推奨警告の重複排除 (#594)
+- `AgentSetup` から `claudeAgent`/`claudeSkill` フィールドを削除（Headless プロバイダ移行に伴い不要に）
+- 型定義ファイルから冗長な JSDoc コメントを整理
+- review-fix-takt-default ワークフローの max_steps を増加
+
 ## [0.34.0] - 2026-04-03
 
 ### Added

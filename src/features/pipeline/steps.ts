@@ -5,6 +5,7 @@ import { resolveConfigValue } from '../../infra/config/index.js';
 import { stageAndCommit, resolveBaseBranch, pushBranch, checkoutBranch } from '../../infra/task/index.js';
 import { executeTask, confirmAndCreateWorktree, type TaskExecutionOptions, type PipelineExecutionOptions } from '../tasks/index.js';
 import { info, error, success } from '../../shared/ui/index.js';
+import { statusLine } from '../../shared/ui/StatusLine.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
 import type { PipelineConfig } from '../../core/models/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';
@@ -218,13 +219,19 @@ export async function runWorkflow(
     ? { provider: options.provider, model: options.model }
     : undefined;
 
-  const taskSuccess = await executeTask({
-    task,
-    cwd: execCwd,
-    workflowIdentifier: workflow,
-    projectCwd,
-    agentOverrides,
-  });
+  statusLine.start('Running...');
+  let taskSuccess: boolean;
+  try {
+    taskSuccess = await executeTask({
+      task,
+      cwd: execCwd,
+      workflowIdentifier: workflow,
+      projectCwd,
+      agentOverrides,
+    });
+  } finally {
+    statusLine.stop();
+  }
 
   if (!taskSuccess) {
     error(`Workflow '${safeWorkflow}' failed`);

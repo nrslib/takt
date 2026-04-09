@@ -5,7 +5,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { TaskInfo } from '../infra/task/index.js';
 
-const { mockResolveTaskExecution, mockResolveTaskIssue, mockExecuteWorkflow, mockLoadWorkflowByIdentifier, mockIsWorkflowPath, mockResolveWorkflowConfigValues, mockResolveProviderOptionsWithTrace, mockBuildBooleanTaskResult, mockBuildTaskResult, mockPersistTaskResult, mockPersistPrFailedTaskResult, mockPersistTaskError, mockPostExecutionFlow } =
+const { mockResolveTaskExecution, mockResolveTaskIssue, mockExecuteWorkflow, mockLoadWorkflowByIdentifier, mockIsWorkflowPath, mockResolveWorkflowConfigValues, mockResolveProviderOptionsWithTrace, mockBuildBooleanTaskResult, mockBuildTaskResult, mockPersistTaskResult, mockPersistPrFailedTaskResult, mockPersistTaskError, mockPostExecutionFlow, mockUpdateRunningTaskExecution } =
   vi.hoisted(() => ({
     mockResolveTaskExecution: vi.fn(),
     mockResolveTaskIssue: vi.fn(),
@@ -20,6 +20,7 @@ const { mockResolveTaskExecution, mockResolveTaskIssue, mockExecuteWorkflow, moc
     mockPersistPrFailedTaskResult: vi.fn(),
     mockPersistTaskError: vi.fn(),
     mockPostExecutionFlow: vi.fn(),
+    mockUpdateRunningTaskExecution: vi.fn(),
   }));
 
 vi.mock('../features/tasks/execute/resolveTask.js', () => ({
@@ -89,6 +90,12 @@ const createTask = (name: string): TaskInfo => ({
   data: { task: `Task: ${name}`, workflow: 'default' },
 });
 
+function createTaskRunnerMock() {
+  return {
+    updateRunningTaskExecution: mockUpdateRunningTaskExecution,
+  };
+}
+
 const executeAndCompleteTaskWithoutWorkflow = executeAndCompleteTask as (
   task: TaskInfo,
   taskRunner: unknown,
@@ -136,7 +143,7 @@ describe('executeAndCompleteTask', () => {
       draftPr: false,
       shouldPublishBranchToOrigin: false,
       taskPrompt: undefined,
-      reportDirName: undefined,
+      reportDirName: '20260216-task',
       branch: undefined,
       worktreePath: undefined,
       baseBranch: undefined,
@@ -146,6 +153,17 @@ describe('executeAndCompleteTask', () => {
     });
     mockExecuteWorkflow.mockResolvedValue({ success: true });
     mockResolveTaskIssue.mockReturnValue(undefined);
+    mockUpdateRunningTaskExecution.mockImplementation((taskName: string, execution: { runSlug: string; worktreePath?: string; branch?: string }) => ({
+      ...createTask(taskName),
+      status: 'running',
+      runSlug: execution.runSlug,
+      worktreePath: execution.worktreePath,
+      data: {
+        task: `Task: ${taskName}`,
+        workflow: 'default',
+        ...(execution.branch ? { branch: execution.branch } : {}),
+      },
+    }));
   });
 
   it('should pass taskDisplayLabel from parallel options into executeWorkflow', async () => {
@@ -155,7 +173,7 @@ describe('executeAndCompleteTask', () => {
 
     await executeAndCompleteTaskWithoutWorkflow(
       task,
-      {} as never,
+      createTaskRunnerMock() as never,
       '/project',
       undefined,
       {
@@ -182,6 +200,9 @@ describe('executeAndCompleteTask', () => {
     expect(workflowExecutionOptions?.providerOptionsSource).toBe('project');
     expect(workflowExecutionOptions?.providerOptionsOriginResolver?.('claude.sandbox.allowUnsandboxedCommands'))
       .toBe('local');
+    expect(mockUpdateRunningTaskExecution).toHaveBeenCalledWith('task-with-issue', {
+      runSlug: '20260216-task',
+    });
   });
 
   it('should not pass config provider/model to executeWorkflow when agent overrides are absent', async () => {
@@ -283,7 +304,7 @@ describe('executeAndCompleteTask', () => {
       draftPr: false,
       shouldPublishBranchToOrigin: true,
       taskPrompt: undefined,
-      reportDirName: undefined,
+      reportDirName: '20260216-task-with-pr-failure',
       branch: 'takt/task-with-pr-failure',
       worktreePath: '/worktree/clone',
       baseBranch: 'main',
@@ -294,7 +315,7 @@ describe('executeAndCompleteTask', () => {
     mockExecuteWorkflow.mockResolvedValue({ success: true });
     mockPostExecutionFlow.mockResolvedValue({ prFailed: true, prError: 'Base ref must be a branch' });
 
-    const result = await executeAndCompleteTaskWithoutWorkflow(task, {} as never, '/project');
+    const result = await executeAndCompleteTaskWithoutWorkflow(task, createTaskRunnerMock() as never, '/project');
 
     expect(result).toBe(true);
     expect(mockBuildTaskResult).toHaveBeenCalledWith(
@@ -320,7 +341,7 @@ describe('executeAndCompleteTask', () => {
       draftPr: false,
       shouldPublishBranchToOrigin: false,
       taskPrompt: undefined,
-      reportDirName: undefined,
+      reportDirName: '20260216-task-projectdir-nff',
       branch: 'takt/task-projectdir-nff',
       worktreePath: '/worktree/clone',
       baseBranch: 'main',
@@ -335,7 +356,7 @@ describe('executeAndCompleteTask', () => {
       'Push rejected (non-fast-forward): remote is ahead; resync or recreate worktree; stale local branch may apply.';
     mockPostExecutionFlow.mockResolvedValue({ prFailed: true, prError });
 
-    const result = await executeAndCompleteTaskWithoutWorkflow(task, {} as never, '/project');
+    const result = await executeAndCompleteTaskWithoutWorkflow(task, createTaskRunnerMock() as never, '/project');
 
     expect(result).toBe(true);
     expect(mockPersistPrFailedTaskResult).toHaveBeenCalledWith(
@@ -356,7 +377,7 @@ describe('executeAndCompleteTask', () => {
       draftPr: false,
       shouldPublishBranchToOrigin: true,
       taskPrompt: undefined,
-      reportDirName: undefined,
+      reportDirName: '20260216-task-with-pr-success',
       branch: 'takt/task-with-pr-success',
       worktreePath: '/worktree/clone',
       baseBranch: 'main',
@@ -367,7 +388,7 @@ describe('executeAndCompleteTask', () => {
     mockExecuteWorkflow.mockResolvedValue({ success: true });
     mockPostExecutionFlow.mockResolvedValue({ prUrl: 'https://github.com/org/repo/pull/1' });
 
-    const result = await executeAndCompleteTaskWithoutWorkflow(task, {} as never, '/project');
+    const result = await executeAndCompleteTaskWithoutWorkflow(task, createTaskRunnerMock() as never, '/project');
 
     expect(result).toBe(true);
     expect(mockBuildTaskResult).toHaveBeenCalledWith(
@@ -390,7 +411,7 @@ describe('executeAndCompleteTask', () => {
       draftPr: false,
       shouldPublishBranchToOrigin: true,
       taskPrompt: undefined,
-      reportDirName: undefined,
+      reportDirName: '20260216-task-with-issue-pr',
       branch: 'takt/18/task-with-issue-pr',
       worktreePath: '/worktree/clone',
       baseBranch: 'main',
@@ -401,7 +422,7 @@ describe('executeAndCompleteTask', () => {
     mockResolveTaskIssue.mockReturnValue([issue]);
     mockPostExecutionFlow.mockResolvedValue({ prUrl: 'https://github.com/org/repo/pull/18' });
 
-    const result = await executeAndCompleteTaskWithoutWorkflow(task, {} as never, '/project');
+    const result = await executeAndCompleteTaskWithoutWorkflow(task, createTaskRunnerMock() as never, '/project');
 
     expect(result).toBe(true);
     expect(mockResolveTaskIssue).toHaveBeenCalledWith(18, '/project');
@@ -424,7 +445,7 @@ describe('executeAndCompleteTask', () => {
       draftPr: false,
       shouldPublishBranchToOrigin: true,
       taskPrompt: undefined,
-      reportDirName: undefined,
+      reportDirName: '20260216-task-publish-origin',
       branch: 'takt/task-publish-origin',
       worktreePath: '/worktree/clone',
       baseBranch: 'main',
@@ -435,7 +456,7 @@ describe('executeAndCompleteTask', () => {
     mockExecuteWorkflow.mockResolvedValue({ success: true });
     mockPostExecutionFlow.mockResolvedValue({});
 
-    const result = await executeAndCompleteTaskWithoutWorkflow(task, {} as never, '/project');
+    const result = await executeAndCompleteTaskWithoutWorkflow(task, createTaskRunnerMock() as never, '/project');
 
     expect(result).toBe(true);
     expect(mockPostExecutionFlow).toHaveBeenCalledWith(
@@ -458,7 +479,7 @@ describe('executeAndCompleteTask', () => {
       draftPr: false,
       shouldPublishBranchToOrigin: true,
       taskPrompt: undefined,
-      reportDirName: undefined,
+      reportDirName: '20260216-task-pr-style-push-failure',
       branch: 'takt/task-pr-style-push-failure',
       worktreePath: '/worktree/clone',
       baseBranch: 'main',
@@ -472,7 +493,7 @@ describe('executeAndCompleteTask', () => {
       prError: 'Failed to push branch to origin from clone. non-fast-forward',
     });
 
-    const result = await executeAndCompleteTaskWithoutWorkflow(task, {} as never, '/project');
+    const result = await executeAndCompleteTaskWithoutWorkflow(task, createTaskRunnerMock() as never, '/project');
 
     expect(result).toBe(true);
     expect(mockPersistPrFailedTaskResult).toHaveBeenCalledWith(
@@ -494,7 +515,7 @@ describe('executeAndCompleteTask', () => {
       draftPr: false,
       shouldPublishBranchToOrigin: false,
       taskPrompt: undefined,
-      reportDirName: undefined,
+      reportDirName: '20260216-task-with-autocommit-failure',
       branch: 'takt/task-with-autocommit-failure',
       worktreePath: '/worktree/clone',
       baseBranch: 'main',
@@ -508,12 +529,17 @@ describe('executeAndCompleteTask', () => {
       taskError: 'Auto-commit failed before PR creation.',
     });
 
-    const result = await executeAndCompleteTaskWithoutWorkflow(task, {} as never, '/project');
+    const result = await executeAndCompleteTaskWithoutWorkflow(task, createTaskRunnerMock() as never, '/project');
 
     expect(result).toBe(false);
     expect(mockBuildBooleanTaskResult).toHaveBeenCalledWith(
       expect.objectContaining({
-        task,
+        task: expect.objectContaining({
+          name: task.name,
+          runSlug: '20260216-task-with-autocommit-failure',
+          worktreePath: '/worktree/clone',
+          status: 'running',
+        }),
         taskSuccess: false,
         failureResponse: 'Auto-commit failed before PR creation.',
         branch: 'takt/task-with-autocommit-failure',
@@ -535,7 +561,7 @@ describe('executeAndCompleteTask', () => {
       draftPr: false,
       shouldPublishBranchToOrigin: false,
       taskPrompt: undefined,
-      reportDirName: undefined,
+      reportDirName: '20260216-task-with-local-push-failure',
       branch: 'takt/task-with-local-push-failure',
       worktreePath: '/worktree/clone',
       baseBranch: 'main',
@@ -549,12 +575,17 @@ describe('executeAndCompleteTask', () => {
       taskError: 'Push to main repo failed after commit creation.',
     });
 
-    const result = await executeAndCompleteTaskWithoutWorkflow(task, {} as never, '/project');
+    const result = await executeAndCompleteTaskWithoutWorkflow(task, createTaskRunnerMock() as never, '/project');
 
     expect(result).toBe(false);
     expect(mockBuildBooleanTaskResult).toHaveBeenCalledWith(
       expect.objectContaining({
-        task,
+        task: expect.objectContaining({
+          name: task.name,
+          runSlug: '20260216-task-with-local-push-failure',
+          worktreePath: '/worktree/clone',
+          status: 'running',
+        }),
         taskSuccess: false,
         failureResponse: 'Push to main repo failed after commit creation.',
         branch: 'takt/task-with-local-push-failure',

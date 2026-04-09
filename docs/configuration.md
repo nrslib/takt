@@ -119,7 +119,8 @@ interactive_preview_steps: 3      # Step previews in interactive mode (0-10, def
 |-------|------|---------|-------------|
 | `language` | `"en"` \| `"ja"` | `"en"` | UI language |
 | `logging.level` | `"debug"` \| `"info"` \| `"warn"` \| `"error"` | `"info"` | Log level |
-| `provider` | `"claude"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` | `"claude"` | Default AI provider |
+| `provider` | `"claude"` \| `"claude-sdk"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` | `"claude"` | Default AI provider (`claude` = headless CLI mode, `claude-sdk` = SDK/API mode) |
+| `logging.trace` | boolean | `false` | Enable trace-level logging (suppresses high-frequency debug noise) |
 | `model` | string | - | Default model name (passed to provider as-is) |
 | `branch_name_strategy` | `"romaji"` \| `"ai"` | `"romaji"` | Branch name generation strategy |
 | `prevent_sleep` | boolean | `false` | Prevent macOS idle sleep (caffeinate) |

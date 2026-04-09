@@ -47,6 +47,7 @@ export {
 } from './schema.js';
 export {
   createSharedClone,
+  createSharedCloneAbortable,
   removeClone,
   createTempCloneForBranch,
   saveCloneMeta,

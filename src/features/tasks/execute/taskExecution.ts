@@ -115,6 +115,7 @@ export async function executeAndCompleteTask(
   parallelOptions?: TaskExecutionParallelOptions,
 ): Promise<boolean> {
   const startedAt = new Date().toISOString();
+  let taskForPersistence = task;
   const taskAbortController = new AbortController();
   const externalAbortSignal = parallelOptions?.abortSignal;
   const taskAbortSignal = externalAbortSignal ? taskAbortController.signal : undefined;
@@ -151,6 +152,13 @@ export async function executeAndCompleteTask(
       initialIterationOverride,
     } = await resolveTaskExecution(task, cwd, taskAbortSignal);
 
+    const executionTask = taskRunner.updateRunningTaskExecution(task.name, {
+      runSlug: reportDirName,
+      ...(worktreePath ? { worktreePath } : {}),
+      ...(branch ? { branch } : {}),
+    });
+    taskForPersistence = executionTask;
+
     const projectRootCwd = cwd;
     const taskRunResult = await executeTaskWithResult({
       task: taskPrompt ?? task.content,
@@ -170,7 +178,7 @@ export async function executeAndCompleteTask(
     });
 
     if (taskRunResult.exceeded && taskRunResult.exceededInfo) {
-      persistExceededTaskResult(taskRunner, task, taskRunResult.exceededInfo, {
+      persistExceededTaskResult(taskRunner, executionTask, taskRunResult.exceededInfo, {
         worktreePath,
         branch,
       });
@@ -208,21 +216,21 @@ export async function executeAndCompleteTask(
 
     if (postExecutionTaskError !== undefined) {
       const taskResult = buildBooleanTaskResult({
-        task,
+        task: executionTask,
         taskSuccess: false,
         startedAt,
         completedAt,
         successResponse: 'Task completed successfully',
         failureResponse: postExecutionTaskError,
-        branch,
         worktreePath,
+        branch,
       });
       persistTaskResult(taskRunner, taskResult);
       return false;
     }
 
     const taskResult = buildTaskResult({
-      task,
+      task: executionTask,
       runResult: taskRunResult,
       startedAt,
       completedAt,
@@ -241,7 +249,7 @@ export async function executeAndCompleteTask(
     return taskRunResult.success;
   } catch (err) {
     const completedAt = new Date().toISOString();
-    persistTaskError(taskRunner, task, startedAt, completedAt, err);
+    persistTaskError(taskRunner, taskForPersistence, startedAt, completedAt, err);
     return false;
   } finally {
     if (externalAbortSignal) {

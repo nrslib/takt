@@ -5,6 +5,7 @@
  * 無効なとき（シングル実行モード）は shared/ui のモジュール関数に委譲する。
  */
 
+import chalk from 'chalk';
 import {
   header as rawHeader,
   info as rawInfo,
@@ -59,17 +60,34 @@ export function createOutputFns(prefixWriter: TaskPrefixWriter | undefined): Out
 export function createPrefixedStreamHandler(
   writer: TaskPrefixWriter,
 ): (event: Parameters<ReturnType<StreamDisplay['createHandler']>>[0]) => void {
+  let lastType: 'text' | 'thinking' | 'other' = 'other';
   return (event) => {
     switch (event.type) {
-      case 'text': writer.writeChunk(event.data.text); break;
-      case 'tool_use': writer.writeLine(`[tool] ${event.data.tool}`); break;
+      case 'text':
+        if (lastType === 'thinking') writer.flush();
+        writer.writeChunk(event.data.text);
+        lastType = 'text';
+        break;
+      case 'tool_use':
+        if (lastType === 'thinking' || lastType === 'text') writer.flush();
+        writer.writeLine(`[tool] ${event.data.tool}`);
+        lastType = 'other';
+        break;
       case 'tool_result': {
         const label = event.data.isError ? '✗' : '✓';
         writer.writeLine(`  ${label} ${event.data.content}`);
+        lastType = 'other';
         break;
       }
       case 'tool_output': writer.writeChunk(event.data.output); break;
-      case 'thinking': writer.writeChunk(event.data.thinking); break;
+      case 'thinking':
+        if (lastType !== 'thinking') {
+          if (lastType === 'text') writer.flush();
+          writer.writeLine('💭 thinking:', (s) => chalk.magenta(s));
+        }
+        writer.writeChunk(event.data.thinking, (s) => chalk.dim(s));
+        lastType = 'thinking';
+        break;
       default: break;
     }
   };

@@ -191,6 +191,11 @@ describe('TaskRecordSchema', () => {
       expect(() => TaskRecordSchema.parse(makeRunningRecord())).not.toThrow();
     });
 
+    it('should accept running record with run_slug', () => {
+      const record = { ...makeRunningRecord(), run_slug: '20260409-running-task' };
+      expect(() => TaskRecordSchema.parse(record)).not.toThrow();
+    });
+
     it('should reject running record without started_at', () => {
       const record = { ...makeRunningRecord(), started_at: null };
       expect(() => TaskRecordSchema.parse(record)).toThrow();
@@ -261,6 +266,17 @@ describe('TaskRecordSchema', () => {
     it('should reject pr_failed record with owner_pid', () => {
       const record = { ...makePrFailedRecord(), owner_pid: 1234 };
       expect(() => TaskRecordSchema.parse(record)).toThrow();
+    });
+  });
+
+  it('should serialize run_slug when present', () => {
+    const serialized = serializeTaskRecord({
+      ...makeRunningRecord(),
+      run_slug: '20260409-running-task',
+    });
+
+    expect(serialized).toMatchObject({
+      run_slug: '20260409-running-task',
     });
   });
 

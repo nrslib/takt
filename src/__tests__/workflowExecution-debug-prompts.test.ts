@@ -390,14 +390,31 @@ describe('executeWorkflow debug prompts logging', () => {
     const metaCalls = vi.mocked(writeFileAtomic).mock.calls.filter(
       (call) => String(call[0]).endsWith('/meta.json')
     );
-    expect(metaCalls).toHaveLength(2);
+    expect(metaCalls).toHaveLength(3);
 
     const firstMeta = JSON.parse(String(metaCalls[0]![1])) as { status: string; endTime?: string };
-    const secondMeta = JSON.parse(String(metaCalls[1]![1])) as { status: string; endTime?: string };
+    const secondMeta = JSON.parse(String(metaCalls[1]![1])) as {
+      status: string;
+      currentStep?: string;
+      currentIteration?: number;
+      endTime?: string;
+    };
+    const thirdMeta = JSON.parse(String(metaCalls[2]![1])) as {
+      status: string;
+      currentStep?: string;
+      currentIteration?: number;
+      endTime?: string;
+    };
     expect(firstMeta.status).toBe('running');
     expect(firstMeta.endTime).toBeUndefined();
-    expect(secondMeta.status).toBe('completed');
-    expect(secondMeta.endTime).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(secondMeta.status).toBe('running');
+    expect(secondMeta.currentStep).toBe('implement');
+    expect(secondMeta.currentIteration).toBe(1);
+    expect(secondMeta.endTime).toBeUndefined();
+    expect(thirdMeta.status).toBe('completed');
+    expect(thirdMeta.currentStep).toBe('implement');
+    expect(thirdMeta.currentIteration).toBe(1);
+    expect(thirdMeta.endTime).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
   it('should update meta status from running to aborted', async () => {
@@ -409,14 +426,31 @@ describe('executeWorkflow debug prompts logging', () => {
     const metaCalls = vi.mocked(writeFileAtomic).mock.calls.filter(
       (call) => String(call[0]).endsWith('/meta.json')
     );
-    expect(metaCalls).toHaveLength(2);
+    expect(metaCalls).toHaveLength(3);
 
     const firstMeta = JSON.parse(String(metaCalls[0]![1])) as { status: string; endTime?: string };
-    const secondMeta = JSON.parse(String(metaCalls[1]![1])) as { status: string; endTime?: string };
+    const secondMeta = JSON.parse(String(metaCalls[1]![1])) as {
+      status: string;
+      currentStep?: string;
+      currentIteration?: number;
+      endTime?: string;
+    };
+    const thirdMeta = JSON.parse(String(metaCalls[2]![1])) as {
+      status: string;
+      currentStep?: string;
+      currentIteration?: number;
+      endTime?: string;
+    };
     expect(firstMeta.status).toBe('running');
     expect(firstMeta.endTime).toBeUndefined();
-    expect(secondMeta.status).toBe('aborted');
-    expect(secondMeta.endTime).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(secondMeta.status).toBe('running');
+    expect(secondMeta.currentStep).toBe('implement');
+    expect(secondMeta.currentIteration).toBe(1);
+    expect(secondMeta.endTime).toBeUndefined();
+    expect(thirdMeta.status).toBe('aborted');
+    expect(thirdMeta.currentStep).toBe('implement');
+    expect(thirdMeta.currentIteration).toBe(1);
+    expect(thirdMeta.endTime).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
   it('should finalize meta as aborted when WorkflowEngine constructor throws', async () => {

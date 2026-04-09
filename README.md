@@ -22,8 +22,8 @@ TAKT is built with TAKT itself (dogfooding).
 
 Choose one:
 
-- **Provider CLIs**: [Codex](https://github.com/openai/codex), [OpenCode](https://opencode.ai), [Cursor Agent](https://docs.cursor.com/), or [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) installed
-- **Direct API**: Anthropic / OpenAI / OpenCode API Key (no CLI required)
+- **Provider CLIs**: [Claude Code](https://claude.ai/code) (default `claude` provider), [Codex](https://github.com/openai/codex), [OpenCode](https://opencode.ai), [Cursor Agent](https://docs.cursor.com/), or [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) installed
+- **Direct API**: OpenAI / OpenCode API Key (no CLI required)
 
 Optional:
 
@@ -162,7 +162,7 @@ See the [CLI Reference](./docs/cli-reference.md) for all commands and options.
 Minimal `~/.takt/config.yaml`:
 
 ```yaml
-provider: claude    # claude, codex, opencode, cursor, or copilot
+provider: claude    # claude, claude-sdk, codex, opencode, cursor, or copilot
 model: sonnet       # passed directly to provider
 language: en        # en or ja
 ```

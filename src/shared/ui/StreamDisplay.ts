@@ -66,6 +66,7 @@ export class StreamDisplay {
     console.log(chalk.gray(`[${this.agentName}]${progressPart} Model: ${model}`));
   }
 
+
   private startToolSpinner(tool: string, inputPreview: string): void {
     this.stopToolSpinner();
 

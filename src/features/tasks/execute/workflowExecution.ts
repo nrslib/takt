@@ -56,11 +56,15 @@ export async function executeWorkflow(
   const runMetaManager = new RunMetaManager(runPaths, task, workflowConfig.name);
   let sessionLog = createSessionLog(task, projectCwd, workflowConfig.name);
   const displayRef: { current: StreamDisplay | null } = { current: null };
+  const handlerRef: { current: ReturnType<StreamDisplay['createHandler']> | null } = { current: null };
   const streamHandler = prefixWriter
     ? createPrefixedStreamHandler(prefixWriter)
     : (event: Parameters<ReturnType<StreamDisplay['createHandler']>>[0]): void => {
         if (!displayRef.current || event.type === 'result') return;
-        displayRef.current.createHandler()(event);
+        if (!handlerRef.current) {
+          handlerRef.current = displayRef.current.createHandler();
+        }
+        handlerRef.current(event);
       };
   const isWorktree = cwd !== projectCwd;
   const globalConfig = resolveWorkflowConfigValues(projectCwd, ['notificationSound', 'notificationSoundEvents', 'provider', 'runtime', 'preventSleep', 'model', 'logging', 'analytics']);
@@ -193,6 +197,7 @@ export async function executeWorkflow(
     engine.on('step:start', (step, iteration, instruction, providerInfo) => {
       log.debug('Step starting', { step: step.name, persona: step.personaDisplayName, iteration });
       currentIteration = iteration;
+      runMetaManager.updateStep(step.name, iteration);
       const stepIteration = (stepIterations.get(step.name) ?? 0) + 1;
       stepIterations.set(step.name, stepIteration);
       const safeStepName = sanitizeTerminalText(step.name);
@@ -212,6 +217,7 @@ export async function executeWorkflow(
       if (!prefixWriter) {
         const stepIndex = workflowConfig.steps.findIndex((workflowStep) => workflowStep.name === step.name);
         displayRef.current = new StreamDisplay(safePersonaDisplayName, isQuietMode(), { iteration, maxSteps: effectiveWorkflowConfig.maxSteps, stepIndex: stepIndex >= 0 ? stepIndex : 0, totalSteps: workflowConfig.steps.length });
+        handlerRef.current = null;
       }
       sessionLogger.onStepStart(step, iteration, instruction);
     });

@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 
-import { tryExtractTextFromStreamJsonLine } from './stream-json-lines.js';
+import { tryExtractTextFromStreamJsonLine, tryExtractThinkingFromStreamJsonLine } from './stream-json-lines.js';
 import type { ClaudeHeadlessCallOptions } from './types.js';
 
 const HEADLESS_STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
@@ -161,10 +161,16 @@ export function runHeadlessCli(
     const flushLines = (final = false): void => {
       const parts = lineBuffer.split('\n');
       lineBuffer = final ? '' : (parts.pop() ?? '');
+      if (!options.onStream) return;
 
       for (const line of parts) {
+        const thinking = tryExtractThinkingFromStreamJsonLine(line);
+        if (thinking) {
+          options.onStream({ type: 'thinking', data: { thinking } });
+          continue;
+        }
         const text = tryExtractTextFromStreamJsonLine(line);
-        if (text && options.onStream) {
+        if (text) {
           options.onStream({ type: 'text', data: { text } });
         }
       }

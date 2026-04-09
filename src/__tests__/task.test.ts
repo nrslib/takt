@@ -70,6 +70,39 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(file.tasks.some((task) => task.status === 'running')).toBe(true);
   });
 
+  it('should persist run execution linkage and expose it through running task items', () => {
+    runner.addTask('Task A', { piece: 'default', worktree: true });
+    const claimed = runner.claimNextTasks(1);
+    const task = claimed[0];
+    expect(task).toBeDefined();
+
+    const updated = runner.updateRunningTaskExecution(task!.name, {
+      runSlug: '20260409-task-a',
+      worktreePath: join(testDir, '.takt', 'worktrees', 'task-a'),
+      branch: 'feature/task-a',
+    });
+
+    expect(updated.runSlug).toBe('20260409-task-a');
+    expect(updated.worktreePath).toBe(join(testDir, '.takt', 'worktrees', 'task-a'));
+    expect(updated.data?.branch).toBe('feature/task-a');
+
+    const file = loadTasksFile(testDir);
+    expect(file.tasks[0]).toMatchObject({
+      status: 'running',
+      run_slug: '20260409-task-a',
+      worktree_path: join(testDir, '.takt', 'worktrees', 'task-a'),
+      branch: 'feature/task-a',
+    });
+
+    const listed = runner.listAllTaskItems();
+    expect(listed[0]).toMatchObject({
+      kind: 'running',
+      runSlug: '20260409-task-a',
+      worktreePath: join(testDir, '.takt', 'worktrees', 'task-a'),
+      branch: 'feature/task-a',
+    });
+  });
+
   it('should recover interrupted running tasks to pending', () => {
     runner.addTask('Task A');
     runner.claimNextTasks(1);
@@ -284,6 +317,36 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(failed?.started_at).toBe(startedAt);
     expect(failed?.completed_at).toBe(completedAt);
     expect(failed?.branch).toBe('takt/task-c-updated');
+  });
+
+  it('should force fail running task with manual failure detail', () => {
+    runner.addTask('Task D');
+    const running = runner.claimNextTasks(1)[0]!;
+    const beforeForceFail = loadTasksFile(testDir).tasks[0]!;
+
+    runner.forceFailRunningTask(running.name, {
+      movement: 'implement',
+      error: 'Manually marked as failed',
+    });
+
+    const file = loadTasksFile(testDir);
+    const failed = file.tasks[0];
+    expect(failed?.status).toBe('failed');
+    expect(failed?.started_at).toBe(beforeForceFail.started_at);
+    expect(failed?.completed_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(failed?.owner_pid).toBeNull();
+    expect(failed?.failure).toEqual({
+      movement: 'implement',
+      error: 'Manually marked as failed',
+    });
+  });
+
+  it('should reject force-fail for non-running task', () => {
+    const task = runner.addTask('Task E');
+
+    expect(() => runner.forceFailRunningTask(task.name, {
+      error: 'Manually marked as failed',
+    })).toThrow(/running|force-fail|Task not found/);
   });
 
   it('should requeue failed task to pending with retry metadata', () => {

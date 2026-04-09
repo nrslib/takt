@@ -58,12 +58,33 @@ vi.mock('../infra/config/index.js', () => ({
 
 const mockLoadConfig = mockLoadConfigRaw;
 
+function buildUpdatedTaskInfo(
+  taskName: string,
+  execution: { runSlug: string; worktreePath?: string; branch?: string },
+): TaskInfo {
+  return {
+    name: taskName,
+    content: `Task: ${taskName}`,
+    filePath: `/tasks/${taskName}.yaml`,
+    createdAt: '2026-02-09T00:00:00.000Z',
+    status: 'running',
+    runSlug: execution.runSlug,
+    worktreePath: execution.worktreePath,
+    data: {
+      task: `Task: ${taskName}`,
+      piece: 'default',
+      ...(execution.branch ? { branch: execution.branch } : {}),
+    },
+  };
+}
+
 const {
   mockClaimNextTasks,
   mockCompleteTask,
   mockFailTask,
   mockRecoverInterruptedRunningTasks,
   mockListAllTaskItems,
+  mockUpdateRunningTaskExecution,
   mockNotifySuccess,
   mockNotifyError,
   mockSendSlackNotification,
@@ -74,6 +95,7 @@ const {
   mockFailTask: vi.fn(),
   mockRecoverInterruptedRunningTasks: vi.fn(),
   mockListAllTaskItems: vi.fn().mockReturnValue([]),
+  mockUpdateRunningTaskExecution: vi.fn(buildUpdatedTaskInfo),
   mockNotifySuccess: vi.fn(),
   mockNotifyError: vi.fn(),
   mockSendSlackNotification: vi.fn(),
@@ -88,6 +110,7 @@ vi.mock('../infra/task/index.js', async (importOriginal) => ({
     failTask: mockFailTask,
     recoverInterruptedRunningTasks: mockRecoverInterruptedRunningTasks,
     listAllTaskItems: mockListAllTaskItems,
+    updateRunningTaskExecution: mockUpdateRunningTaskExecution,
   })),
 }));
 
@@ -202,6 +225,7 @@ function createTask(name: string): TaskInfo {
 beforeEach(() => {
   vi.clearAllMocks();
   mockRecoverInterruptedRunningTasks.mockReturnValue(0);
+  mockUpdateRunningTaskExecution.mockImplementation(buildUpdatedTaskInfo);
 });
 
 describe('runAllTasks concurrency', () => {

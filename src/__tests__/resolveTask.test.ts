@@ -187,7 +187,7 @@ describe('resolveTaskExecution', () => {
     const mockResolveBaseBranch = vi.spyOn(infraTask, 'resolveBaseBranch').mockReturnValue({
       branch: 'release/main',
     });
-    const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedClone').mockReturnValue({
+    const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedCloneAbortable').mockResolvedValue({
       path: '/tmp/shared-clone',
       branch: 'feature/base-branch',
     });
@@ -202,8 +202,47 @@ describe('resolveTaskExecution', () => {
         branch: 'feature/base-branch',
         baseBranch: 'release/main',
       }),
+      undefined,
     );
     expect(result.baseBranch).toBe('release/main');
+
+    mockCreateSharedClone.mockRestore();
+    mockResolveBaseBranch.mockRestore();
+  });
+
+  it('should forward abortSignal to shared clone creation', async () => {
+    const root = createTempProjectDir();
+    const task = createTask({
+      slug: 'abortable-clone',
+      data: ({
+        task: 'Run abortable clone task',
+        worktree: true,
+        branch: 'feature/abortable-clone',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      worktreePath: undefined,
+      status: 'pending',
+    });
+    const abortController = new AbortController();
+
+    const mockResolveBaseBranch = vi.spyOn(infraTask, 'resolveBaseBranch').mockReturnValue({
+      branch: 'main',
+    });
+    const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedCloneAbortable').mockResolvedValue({
+      path: '/tmp/shared-clone',
+      branch: 'feature/abortable-clone',
+    });
+
+    await resolveTaskExecution(task, root, abortController.signal);
+
+    expect(mockCreateSharedClone).toHaveBeenCalledWith(
+      root,
+      expect.objectContaining({
+        worktree: true,
+        branch: 'feature/abortable-clone',
+        taskSlug: 'abortable-clone',
+      }),
+      abortController.signal,
+    );
 
     mockCreateSharedClone.mockRestore();
     mockResolveBaseBranch.mockRestore();
@@ -227,7 +266,7 @@ describe('resolveTaskExecution', () => {
     const mockResolveBaseBranch = vi.spyOn(infraTask, 'resolveBaseBranch').mockReturnValue({
       branch: 'release/main',
     });
-    const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedClone').mockReturnValue({
+    const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedCloneAbortable').mockResolvedValue({
       path: '/tmp/shared-clone',
       branch: 'feature/base-branch',
     });
@@ -267,7 +306,7 @@ describe('resolveTaskExecution', () => {
     const mockResolveBaseBranch = vi.spyOn(infraTask, 'resolveBaseBranch').mockReturnValue({
       branch: 'develop',
     });
-    const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedClone').mockReturnValue({
+    const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedCloneAbortable').mockResolvedValue({
       path: '/tmp/shared-clone',
       branch: 'feature/base-branch',
     });
@@ -308,7 +347,7 @@ describe('resolveTaskExecution', () => {
     const mockResolveBaseBranch = vi.spyOn(infraTask, 'resolveBaseBranch').mockReturnValue({
       branch: 'release/main',
     });
-    const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedClone').mockReturnValue({
+    const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedCloneAbortable').mockResolvedValue({
       path: worktreePath,
       branch: 'feature/base-branch',
     });
@@ -344,7 +383,7 @@ describe('resolveTaskExecution', () => {
     const mockResolveBaseBranch = vi.spyOn(infraTask, 'resolveBaseBranch').mockReturnValue({
       branch: 'release/main',
     });
-    const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedClone').mockReturnValue({
+    const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedCloneAbortable').mockResolvedValue({
       path: worktreePath,
       branch: 'feature/base-branch',
     });
@@ -380,7 +419,7 @@ describe('resolveTaskExecution', () => {
     const mockResolveBaseBranch = vi.spyOn(infraTask, 'resolveBaseBranch').mockReturnValue({
       branch: 'develop',
     });
-    const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedClone').mockReturnValue({
+    const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedCloneAbortable').mockResolvedValue({
       path: worktreePath,
       branch: 'feature/base-branch',
     });
@@ -416,7 +455,7 @@ describe('resolveTaskExecution', () => {
     const mockResolveBaseBranch = vi.spyOn(infraTask, 'resolveBaseBranch').mockReturnValue({
       branch: 'main',
     });
-    const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedClone').mockReturnValue({
+    const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedCloneAbortable').mockResolvedValue({
       path: safeClonePath,
       branch: 'feature/outside-worktree',
     });
@@ -488,7 +527,7 @@ describe('resolveTaskExecution', () => {
     const mockResolveBaseBranch = vi.spyOn(infraTask, 'resolveBaseBranch').mockReturnValue({
       branch: 'main',
     });
-    const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedClone').mockReturnValue({
+    const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedCloneAbortable').mockResolvedValue({
       path: worktreePath,
       branch: 'feature/safe-worktree',
     });

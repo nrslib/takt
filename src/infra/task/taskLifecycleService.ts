@@ -67,6 +67,7 @@ export class TaskLifecycleService {
             status: 'running',
             started_at: nowIso(),
             owner_pid: process.pid,
+            run_slug: undefined,
           };
           claimed.push(next);
           remaining--;
@@ -93,6 +94,7 @@ export class TaskLifecycleService {
           status: 'pending',
           started_at: null,
           owner_pid: null,
+          run_slug: undefined,
         } as TaskRecord;
       });
       return { tasks };
@@ -163,6 +165,62 @@ export class TaskLifecycleService {
     return this.tasksFile;
   }
 
+  forceFailRunningTask(taskName: string, failure: TaskFailure): string {
+    this.store.update((current) => {
+      const index = current.tasks.findIndex((task) => task.name === taskName && task.status === 'running');
+      if (index === -1) {
+        throw new Error(`Running task not found for force-fail: ${taskName}`);
+      }
+
+      const target = current.tasks[index]!;
+      const updated: TaskRecord = {
+        ...target,
+        status: 'failed',
+        completed_at: nowIso(),
+        owner_pid: null,
+        failure,
+      };
+      const tasks = [...current.tasks];
+      tasks[index] = updated;
+      return { tasks };
+    });
+
+    return this.tasksFile;
+  }
+
+  updateRunningTaskExecution(
+    taskName: string,
+    execution: {
+      runSlug: string;
+      worktreePath?: string;
+      branch?: string;
+    },
+  ): TaskInfo {
+    let found: TaskRecord | undefined;
+
+    this.store.update((current) => {
+      const index = current.tasks.findIndex((task) => task.name === taskName && task.status === 'running');
+      if (index === -1) {
+        throw new Error(`Running task not found for execution update: ${taskName}`);
+      }
+
+      const target = current.tasks[index]!;
+      const updated: TaskRecord = {
+        ...target,
+        run_slug: execution.runSlug,
+        worktree_path: execution.worktreePath ?? target.worktree_path,
+        branch: execution.branch ?? target.branch,
+      };
+
+      found = updated;
+      const tasks = [...current.tasks];
+      tasks[index] = updated;
+      return { tasks };
+    });
+
+    return toTaskInfo(this.projectDir, this.tasksFile, found!);
+  }
+
   prFailTask(result: TaskResult, prError: string): string {
     const failure: TaskFailure = {
       error: `PR creation failed: ${prError}`,
@@ -228,6 +286,7 @@ export class TaskLifecycleService {
         started_at: nowIso(),
         completed_at: null,
         owner_pid: process.pid,
+        run_slug: undefined,
         failure: undefined,
         start_step: startStep,
         retry_note: retryNote,
@@ -267,6 +326,7 @@ export class TaskLifecycleService {
         started_at: null,
         completed_at: null,
         owner_pid: null,
+        run_slug: undefined,
         failure: undefined,
         start_step: startStep,
         retry_note: retryNote,

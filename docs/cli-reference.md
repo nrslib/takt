@@ -19,7 +19,7 @@ This document provides a complete reference for all TAKT CLI commands and option
 | `--skip-git` | Skip branch creation, commit, and push (pipeline mode, workflow-only) |
 | `--repo <owner/repo>` | Specify repository (for PR creation) |
 | `-q, --quiet` | Minimal output mode: suppress AI output (for CI) |
-| `--provider <name>` | Override agent provider (claude\|codex\|opencode\|cursor\|copilot\|mock) |
+| `--provider <name>` | Override agent provider (claude-sdk\|claude\|codex\|opencode\|cursor\|copilot\|mock) |
 | `--model <name>` | Override agent model |
 | `--config <path>` | Path to global config file (default: `~/.takt/config.yaml`) |
 

@@ -19,7 +19,7 @@
 | `--skip-git` | ブランチ作成、コミット、プッシュをスキップ（pipeline モード、workflow のみ実行） |
 | `--repo <owner/repo>` | リポジトリを指定（PR 作成用） |
 | `-q, --quiet` | 最小出力モード: AI 出力を抑制（CI 向け） |
-| `--provider <name>` | エージェント provider を上書き（claude\|codex\|opencode\|cursor\|copilot\|mock） |
+| `--provider <name>` | エージェント provider を上書き（claude-sdk\|claude\|codex\|opencode\|cursor\|copilot\|mock） |
 | `--model <name>` | エージェントモデルを上書き |
 | `--config <path>` | グローバル設定ファイルのパス（デフォルト: `~/.takt/config.yaml`） |
 

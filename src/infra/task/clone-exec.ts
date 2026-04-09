@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { createLogger } from '../../shared/utils/index.js';
 import { loadProjectConfig } from '../config/index.js';
 
@@ -87,6 +87,169 @@ export function cloneAndIsolate(projectDir: string, clonePath: string, branch?: 
         cwd: projectDir,
         stdio: 'pipe',
       });
+    } else {
+      throw err;
+    }
+  }
+
+  execFileSync('git', ['remote', 'remove', 'origin'], {
+    cwd: clonePath,
+    stdio: 'pipe',
+  });
+
+  for (const key of ['user.name', 'user.email']) {
+    try {
+      const value = execFileSync('git', ['config', '--local', key], {
+        cwd: projectDir,
+        stdio: 'pipe',
+      }).toString().trim();
+      if (value) {
+        execFileSync('git', ['config', key, value], {
+          cwd: clonePath,
+          stdio: 'pipe',
+        });
+      }
+    } catch (err) {
+      log.debug('Local git config not found', { key, error: String(err) });
+    }
+  }
+}
+
+function terminateProcessGroup(child: ReturnType<typeof spawn>, signal: NodeJS.Signals): boolean {
+  if (child.pid != null) {
+    try {
+      return process.kill(-child.pid, signal);
+    } catch {
+      // Fall through to direct child signal.
+    }
+  }
+
+  return child.kill(signal);
+}
+
+export function runGitCommandAbortable(
+  gitCwd: string,
+  args: string[],
+  abortSignal?: AbortSignal,
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    if (abortSignal?.aborted) {
+      reject(new Error('Task execution aborted'));
+      return;
+    }
+
+    const child = spawn('git', args, {
+      cwd: gitCwd,
+      stdio: 'pipe',
+      detached: true,
+    });
+
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+
+    const cleanup = (): void => {
+      if (abortSignal) {
+        abortSignal.removeEventListener('abort', onAbort);
+      }
+    };
+
+    const resolveOnce = (): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      resolve({ stdout, stderr });
+    };
+
+    const rejectOnce = (error: Error): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+
+    const onAbort = (): void => {
+      terminateProcessGroup(child, 'SIGINT');
+      const killTimer = setTimeout(() => {
+        if (!settled) {
+          terminateProcessGroup(child, 'SIGKILL');
+        }
+      }, 500);
+      killTimer.unref?.();
+      rejectOnce(new Error('Task execution aborted'));
+    };
+
+    abortSignal?.addEventListener('abort', onAbort, { once: true });
+    child.stdout?.on('data', (chunk) => {
+      stdout += chunk.toString('utf-8');
+    });
+    child.stderr?.on('data', (chunk) => {
+      stderr += chunk.toString('utf-8');
+    });
+    child.on('error', (error) => {
+      rejectOnce(error);
+    });
+    child.on('close', (code) => {
+      if (abortSignal?.aborted) {
+        rejectOnce(new Error('Task execution aborted'));
+        return;
+      }
+      if (code === 0) {
+        resolveOnce();
+        return;
+      }
+      const message = stderr.trim() || `git ${args[0]} exited with code ${code}`;
+      rejectOnce(new Error(message));
+    });
+  });
+}
+
+function runGitCloneAbortable(
+  gitCwd: string,
+  args: string[],
+  abortSignal?: AbortSignal,
+): Promise<void> {
+  return runGitCommandAbortable(gitCwd, args, abortSignal).then(() => undefined);
+}
+
+export async function cloneAndIsolateAbortable(
+  projectDir: string,
+  clonePath: string,
+  branch?: string,
+  abortSignal?: AbortSignal,
+): Promise<void> {
+  const referenceRepo = resolveMainRepo(projectDir);
+  const cloneSubmoduleOptions = resolveCloneSubmoduleOptions(projectDir);
+
+  fs.mkdirSync(path.dirname(clonePath), { recursive: true });
+
+  const branchArgs = branch ? ['--branch', branch] : [];
+  const commonArgs: string[] = [
+    ...cloneSubmoduleOptions.args,
+    ...branchArgs,
+    projectDir,
+    clonePath,
+  ];
+
+  const referenceCloneArgs = ['clone', '--reference', referenceRepo, '--dissociate', ...commonArgs];
+  const fallbackCloneArgs = ['clone', ...commonArgs];
+
+  try {
+    await runGitCloneAbortable(projectDir, referenceCloneArgs, abortSignal);
+  } catch (err) {
+    const stderr = err instanceof Error ? err.message : String(err);
+    if (stderr.includes('reference repository is shallow')) {
+      log.info('Reference repository is shallow, retrying clone without --reference', { referenceRepo });
+      try {
+        fs.rmSync(clonePath, { recursive: true, force: true });
+      } catch (cleanupErr) {
+        log.debug('Failed to cleanup partial clone before retry', { clonePath, error: String(cleanupErr) });
+      }
+      await runGitCloneAbortable(projectDir, fallbackCloneArgs, abortSignal);
     } else {
       throw err;
     }

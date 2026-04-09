@@ -75,8 +75,9 @@ export class TaskPrefixWriter {
   /**
    * Write a complete line with prefix.
    * Multi-line text is split and each non-empty line gets the prefix.
+   * Optional style function is applied after ANSI stripping.
    */
-  writeLine(text: string): void {
+  writeLine(text: string, style?: (cleaned: string) => string): void {
     const cleaned = stripAnsi(text);
     const lines = cleaned.split('\n');
 
@@ -84,7 +85,8 @@ export class TaskPrefixWriter {
       if (line === '') {
         this.writeFn('\n');
       } else {
-        this.writeFn(`${this.buildPrefix()}${line}\n`);
+        const output = style ? style(line) : line;
+        this.writeFn(`${this.buildPrefix()}${output}\n`);
       }
     }
   }
@@ -92,8 +94,9 @@ export class TaskPrefixWriter {
   /**
    * Write a chunk of streaming text with line buffering.
    * Partial lines are buffered until a newline arrives, then output with prefix.
+   * Optional style function is applied after ANSI stripping.
    */
-  writeChunk(text: string): void {
+  writeChunk(text: string, style?: (cleaned: string) => string): void {
     const cleaned = stripAnsi(text);
     const combined = this.lineBuffer + cleaned;
     const parts = combined.split('\n');
@@ -105,7 +108,8 @@ export class TaskPrefixWriter {
       if (line === '') {
         this.writeFn('\n');
       } else {
-        this.writeFn(`${this.buildPrefix()}${line}\n`);
+        const output = style ? style(line) : line;
+        this.writeFn(`${this.buildPrefix()}${output}\n`);
       }
     }
   }

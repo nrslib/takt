@@ -1,6 +1,7 @@
 import { TaskRunner } from '../../../infra/task/index.js';
 import { resolveWorkflowConfigValues } from '../../../infra/config/index.js';
 import { header, info, status, blankLine } from '../../../shared/ui/index.js';
+import { statusLine } from '../../../shared/ui/StatusLine.js';
 import {
   getErrorMessage,
   getSlackWebhookUrl,
@@ -48,6 +49,7 @@ export async function runAllTasks(
   if (concurrency > 1) {
     info(`Concurrency: ${concurrency}`);
   }
+  statusLine.start('Running tasks...');
 
   const sendSlackSummary = async (executedTaskNames: string[]): Promise<void> => {
     if (!slackWebhookUrl) return;
@@ -103,5 +105,7 @@ export async function runAllTasks(
     }
     await sendSlackSummary([]);
     throw error;
+  } finally {
+    statusLine.stop();
   }
 }

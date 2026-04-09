@@ -24,37 +24,7 @@ Refer only to files within the Report Directory shown in the Workflow Context. D
 - Include tests that would catch implementations that incorrectly reuse a response envelope when reading requests
 - Write tests that are expected to pass after implementation is complete (build errors and test failures are expected at this stage)
 
-**Scope output contract (create at the start):**
-```markdown
-# Change Scope Declaration
-
-## Task
-{One-line task summary}
-
-## Planned changes
-| Type | File |
-|------|------|
-| Create | `src/__tests__/example.test.ts` |
-
-## Estimated size
-Small / Medium / Large
-
-## Impact area
-- {Affected modules or features}
-```
-
-**Decisions output contract (at completion, only if decisions were made):**
-```markdown
-# Decision Log
-
-## 1. {Decision}
-- **Context**: {Why the decision was needed}
-- **Options considered**: {List of options}
-- **Rationale**: {Reason for the choice}
-```
-
-**Required output (include headings)**
-## Work results
-- {Summary of actions taken}
-## Changes made
-- {List of test files created}
+**Test execution:**
+- Run tests after creating them to check results
+- Test failures and import errors are expected before implementation (including imports of not-yet-implemented modules)
+- Fix errors that will persist after implementation, such as wrong import paths for existing modules

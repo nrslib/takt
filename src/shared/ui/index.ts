@@ -33,3 +33,5 @@ export { StreamDisplay, type ProgressInfo } from './StreamDisplay.js';
 export { TaskPrefixWriter } from './TaskPrefixWriter.js';
 
 export { withProgress, type ProgressCompletionMessage } from './Progress.js';
+
+export { statusLine } from './StatusLine.js';

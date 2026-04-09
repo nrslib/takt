@@ -119,7 +119,8 @@ interactive_preview_steps: 3      # インタラクティブモードでの step
 |-----------|------|---------|------|
 | `language` | `"en"` \| `"ja"` | `"en"` | UI 言語 |
 | `logging.level` | `"debug"` \| `"info"` \| `"warn"` \| `"error"` | `"info"` | ログレベル |
-| `provider` | `"claude"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` | `"claude"` | デフォルト AI provider |
+| `provider` | `"claude"` \| `"claude-sdk"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` | `"claude"` | デフォルト AI provider（`claude` = ヘッドレス CLI モード、`claude-sdk` = SDK/API モード） |
+| `logging.trace` | boolean | `false` | trace レベルのログを有効化（高頻度のデバッグノイズを抑制） |
 | `model` | string | - | デフォルトモデル名（provider にそのまま渡される） |
 | `branch_name_strategy` | `"romaji"` \| `"ai"` | `"romaji"` | ブランチ名生成方式 |
 | `prevent_sleep` | boolean | `false` | macOS アイドルスリープ防止（caffeinate） |

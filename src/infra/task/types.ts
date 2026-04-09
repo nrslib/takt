@@ -5,6 +5,7 @@ export interface TaskInfo {
   filePath: string;
   name: string;
   slug?: string;
+  runSlug?: string;
   content: string;
   taskDir?: string;
   createdAt: string;
@@ -66,6 +67,8 @@ export interface TaskListItem {
   filePath: string;
   content: string;
   summary?: string;
+  taskDir?: string;
+  runSlug?: string;
   branch?: string;
   worktreePath?: string;
   prUrl?: string;

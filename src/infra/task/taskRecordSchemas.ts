@@ -18,6 +18,7 @@ export const TaskRecordSchema = buildTaskSchema(
     name: z.string().min(1),
     status: TaskStatusSchema,
     slug: z.string().optional(),
+    run_slug: z.string().min(1).optional(),
     summary: z.string().optional(),
     worktree_path: z.string().optional(),
     pr_url: z.string().optional(),

@@ -12,6 +12,7 @@ const {
   mockMergeBranch,
   mockDeleteCompletedTask,
   mockRequeueExceededTask,
+  mockForceFailRunningTask,
 } = vi.hoisted(() => ({
   mockSelectOption: vi.fn(),
   mockHeader: vi.fn(),
@@ -23,6 +24,7 @@ const {
   mockMergeBranch: vi.fn(),
   mockDeleteCompletedTask: vi.fn(),
   mockRequeueExceededTask: vi.fn(),
+  mockForceFailRunningTask: vi.fn(),
 }));
 
 vi.mock('../infra/task/index.js', () => ({
@@ -67,6 +69,10 @@ vi.mock('../features/tasks/list/taskRetryActions.js', () => ({
   retryFailedTask: vi.fn(),
 }));
 
+vi.mock('../features/tasks/list/taskForceFailActions.js', () => ({
+  forceFailRunningTask: mockForceFailRunningTask,
+}));
+
 import { listTasks } from '../features/tasks/list/index.js';
 
 const runningTask: TaskListItem = {
@@ -107,17 +113,43 @@ describe('listTasks interactive status actions', () => {
     vi.clearAllMocks();
   });
 
-  it('running タスク選択時は read-only メッセージを表示する', async () => {
+  it('running タスクで mark as failed 選択時は forceFailRunningTask を呼ぶ', async () => {
     mockListAllTaskItems.mockReturnValue([runningTask]);
     mockSelectOption
       .mockResolvedValueOnce('running:0')
+      .mockResolvedValueOnce('force_fail')
       .mockResolvedValueOnce(null);
 
     await listTasks('/project');
 
     expect(mockHeader).toHaveBeenCalledWith('[running] running-task');
-    expect(mockInfo).toHaveBeenCalledWith('Running task is read-only.');
-    expect(mockShowDiffAndPromptActionForTask).not.toHaveBeenCalled();
+    expect(mockSelectOption.mock.calls[1]?.[1]).toEqual([
+      {
+        label: 'Mark as failed',
+        value: 'force_fail',
+        description: 'Mark stuck running task as failed',
+      },
+    ]);
+    expect(mockForceFailRunningTask).toHaveBeenCalledWith(runningTask, '/project');
+  });
+
+  it('running タスクでキャンセル時は forceFailRunningTask を呼ばない', async () => {
+    mockListAllTaskItems.mockReturnValue([runningTask]);
+    mockSelectOption
+      .mockResolvedValueOnce('running:0')
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null);
+
+    await listTasks('/project');
+
+    expect(mockSelectOption.mock.calls[1]?.[1]).toEqual([
+      {
+        label: 'Mark as failed',
+        value: 'force_fail',
+        description: 'Mark stuck running task as failed',
+      },
+    ]);
+    expect(mockForceFailRunningTask).not.toHaveBeenCalled();
   });
 
   it('completed タスクで branch が無い場合はアクションに進まない', async () => {

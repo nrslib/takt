@@ -16,6 +16,7 @@ import {
   pullFromRemote,
 } from './taskActions.js';
 import { deleteTaskByKind, deleteAllTasks } from './taskDeleteActions.js';
+import { forceFailRunningTask } from './taskForceFailActions.js';
 import { retryFailedTask } from './taskRetryActions.js';
 import { listTasksNonInteractive, type ListNonInteractiveOptions } from './listNonInteractive.js';
 import { formatTaskStatusLabel, formatShortDate } from './taskStatusLabel.js';
@@ -40,7 +41,7 @@ export {
 
 type PendingTaskAction = 'delete';
 type ExceededTaskAction = 'requeue' | 'delete';
-
+type RunningTaskAction = 'force_fail';
 type FailedTaskAction = 'retry' | 'delete';
 type PrFailedTaskAction = ListAction;
 type CompletedTaskAction = ListAction;
@@ -76,6 +77,20 @@ async function showPendingTaskAndPromptAction(task: TaskListItem): Promise<Pendi
   return await selectOption<PendingTaskAction>(
     `Action for ${task.name}:`,
     [{ label: 'Delete', value: 'delete', description: 'Remove this task permanently' }],
+  );
+}
+
+async function showRunningTaskAndPromptAction(task: TaskListItem): Promise<RunningTaskAction | null> {
+  header(formatTaskStatusLabel(task));
+  info(`  Created: ${task.createdAt}`);
+  if (task.content) {
+    info(`  ${task.content}`);
+  }
+  blankLine();
+
+  return await selectOption<RunningTaskAction>(
+    `Action for ${task.name}:`,
+    [{ label: 'Mark as failed', value: 'force_fail', description: 'Mark stuck running task as failed' }],
   );
 }
 
@@ -180,14 +195,10 @@ export async function listTasks(
     } else if (type === 'running') {
       const task = tasks[idx];
       if (!task) continue;
-      header(formatTaskStatusLabel(task));
-      info(`  Created: ${task.createdAt}`);
-      if (task.content) {
-        info(`  ${task.content}`);
+      const taskAction = await showRunningTaskAndPromptAction(task);
+      if (taskAction === 'force_fail') {
+        await forceFailRunningTask(task, cwd);
       }
-      blankLine();
-      info('Running task is read-only.');
-      blankLine();
     } else if (type === 'completed') {
       const task = tasks[idx];
       if (!task) continue;

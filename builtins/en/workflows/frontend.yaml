@@ -100,10 +100,8 @@ steps:
         interactive_only: true
     output_contracts:
       report:
-        - name: test-scope.md
-          format: coder-scope
-        - name: test-decisions.md
-          format: coder-decisions
+        - name: test-report.md
+          format: test-report
   - name: implement
     edit: true
     persona: coder

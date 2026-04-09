@@ -4,6 +4,7 @@ import {
   aggregateContentFromStdout,
   aggregateResultFromStdout,
   tryExtractTextFromStreamJsonLine,
+  tryExtractThinkingFromStreamJsonLine,
 } from '../infra/claude-headless/stream-json-lines.js';
 
 describe('claude-headless stream-json line parsing', () => {
@@ -316,6 +317,65 @@ describe('claude-headless stream-json line parsing', () => {
       success: true,
       error: undefined,
       structuredOutput: undefined,
+    });
+  });
+
+  describe('thinking extraction', () => {
+    it('extracts thinking from stream_event with thinking_delta', () => {
+      const line = JSON.stringify({
+        type: 'stream_event',
+        event: {
+          type: 'content_block_delta',
+          delta: { type: 'thinking_delta', thinking: 'Let me consider...' },
+        },
+      });
+      expect(tryExtractThinkingFromStreamJsonLine(line)).toBe('Let me consider...');
+    });
+
+    it('extracts thinking from unwrapped content_block_delta (backward compat)', () => {
+      const line = JSON.stringify({
+        type: 'content_block_delta',
+        delta: { type: 'thinking_delta', thinking: 'Let me consider...' },
+      });
+      expect(tryExtractThinkingFromStreamJsonLine(line)).toBe('Let me consider...');
+    });
+
+    it('returns undefined for a text_delta', () => {
+      const line = JSON.stringify({
+        type: 'stream_event',
+        event: {
+          type: 'content_block_delta',
+          delta: { type: 'text_delta', text: 'hello' },
+        },
+      });
+      expect(tryExtractThinkingFromStreamJsonLine(line)).toBeUndefined();
+    });
+
+    it('returns undefined for non-delta event types', () => {
+      const line = JSON.stringify({ type: 'text', text: 'hello' });
+      expect(tryExtractThinkingFromStreamJsonLine(line)).toBeUndefined();
+    });
+
+    it('returns undefined for empty thinking', () => {
+      const line = JSON.stringify({
+        type: 'stream_event',
+        event: {
+          type: 'content_block_delta',
+          delta: { type: 'thinking_delta', thinking: '' },
+        },
+      });
+      expect(tryExtractThinkingFromStreamJsonLine(line)).toBeUndefined();
+    });
+
+    it('does not extract thinking as text', () => {
+      const line = JSON.stringify({
+        type: 'stream_event',
+        event: {
+          type: 'content_block_delta',
+          delta: { type: 'thinking_delta', thinking: 'internal reasoning' },
+        },
+      });
+      expect(tryExtractTextFromStreamJsonLine(line)).toBeUndefined();
     });
   });
 });

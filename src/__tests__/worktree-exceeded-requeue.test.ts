@@ -39,7 +39,7 @@ vi.mock('../infra/task/index.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../infra/task/index.js')>();
   return {
     ...actual,
-    createSharedClone: vi.fn(),
+    createSharedCloneAbortable: vi.fn(),
     detectDefaultBranch: vi.fn(),
     summarizeTaskName: vi.fn(),
   };
@@ -64,7 +64,7 @@ vi.mock('../shared/ui/index.js', async (importOriginal) => ({
 import { executeWorkflow } from '../features/tasks/execute/workflowExecution.js';
 import { postExecutionFlow } from '../features/tasks/execute/postExecution.js';
 import { loadWorkflowByIdentifier } from '../infra/config/index.js';
-import { createSharedClone, detectDefaultBranch, summarizeTaskName } from '../infra/task/index.js';
+import { createSharedCloneAbortable, detectDefaultBranch, summarizeTaskName } from '../infra/task/index.js';
 import { withProgress } from '../shared/ui/index.js';
 import { executeAndCompleteTask } from '../features/tasks/execute/taskExecution.js';
 import { TaskRunner } from '../infra/task/runner.js';
@@ -207,7 +207,7 @@ describe('シナリオ1・2: exceeded status transition via executeAndCompleteTa
     const cloneDir = join(testDir, '.takt', 'worktrees', `first-exceed-${randomUUID()}`);
     mkdirSync(cloneDir, { recursive: true });
     vi.mocked(summarizeTaskName).mockResolvedValueOnce('slug-562');
-    vi.mocked(createSharedClone).mockResolvedValueOnce({
+    vi.mocked(createSharedCloneAbortable).mockResolvedValueOnce({
       path: cloneDir,
       branch: 'takt/slug-562',
     });

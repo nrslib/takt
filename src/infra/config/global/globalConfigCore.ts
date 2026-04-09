@@ -89,7 +89,7 @@ export class GlobalConfigManager {
         return sanitized;
       },
     );
-    assertNoUnknownGlobalConfigKeys(parsedConfig);
+    assertNoUnknownGlobalConfigKeys(rawConfig);
     const parsed = GlobalConfigSchema.parse(rawConfig);
     const normalizedProvider = normalizeConfigProviderReference(
       parsed.provider as RawProviderReference,
@@ -137,7 +137,7 @@ export class GlobalConfigManager {
       workflowCategoriesFile: expandOptionalHomePath(parsed.workflow_categories_file),
       providerOptions: normalizedProvider.providerOptions,
       providerProfiles: normalizeProviderProfiles(
-        rawConfig.provider_profiles as Record<string, {
+        parsed.provider_profiles as Record<string, {
           default_permission_mode: string;
           step_permission_overrides?: Record<string, string>;
         }> | undefined,

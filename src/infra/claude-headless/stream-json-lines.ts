@@ -96,9 +96,42 @@ function extractSessionIdFromEvent(parsed: unknown): string | undefined {
   return pickString(result, ['session_id', 'sessionId', 'sessionID', 'thread_id', 'threadId']);
 }
 
+function unwrapStreamEvent(root: Record<string, unknown>): Record<string, unknown> | undefined {
+  if (root.type === 'stream_event') {
+    return toRecord(root.event);
+  }
+  return root;
+}
+
+function extractStreamingThinkingFromEvent(parsed: unknown): string | undefined {
+  const root = toRecord(parsed);
+  if (!root) {
+    return undefined;
+  }
+
+  const event = unwrapStreamEvent(root);
+  if (!event) {
+    return undefined;
+  }
+
+  if (event.type === 'content_block_delta') {
+    const delta = toRecord(event.delta);
+    if (delta?.type === 'thinking_delta' && typeof delta.thinking === 'string' && delta.thinking.length > 0) {
+      return delta.thinking;
+    }
+  }
+
+  return undefined;
+}
+
 export function tryExtractTextFromStreamJsonLine(line: string): string | undefined {
   const parsed = parseStreamJsonLine(line);
   return parsed ? extractStreamingTextFromEvent(parsed) : undefined;
+}
+
+export function tryExtractThinkingFromStreamJsonLine(line: string): string | undefined {
+  const parsed = parseStreamJsonLine(line);
+  return parsed ? extractStreamingThinkingFromEvent(parsed) : undefined;
 }
 
 export function tryExtractSessionIdFromStreamJsonLine(line: string): string | undefined {

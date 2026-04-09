@@ -5,6 +5,7 @@ import {
 import { confirm } from '../../../shared/prompt/index.js';
 import { createSharedClone, summarizeTaskName, resolveBaseBranch, TaskRunner } from '../../../infra/task/index.js';
 import { info, error, withProgress } from '../../../shared/ui/index.js';
+import { statusLine } from '../../../shared/ui/StatusLine.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import { executeTask } from './taskExecution.js';
@@ -93,6 +94,7 @@ export async function selectAndExecuteTask(
   }
   const startedAt = new Date().toISOString();
 
+  statusLine.start('Running...');
   let taskSuccess: boolean;
   try {
     taskSuccess = await executeTask({
@@ -112,6 +114,8 @@ export async function selectAndExecuteTask(
       });
     }
     throw err;
+  } finally {
+    statusLine.stop();
   }
 
   const completedAt = new Date().toISOString();

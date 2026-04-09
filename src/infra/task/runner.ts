@@ -1,4 +1,4 @@
-import type { TaskFileData } from './schema.js';
+import type { TaskFileData, TaskFailure } from './schema.js';
 import type { TaskInfo, TaskResult, TaskListItem } from './types.js';
 import type { TaskStatus } from './schema.js';
 import { TaskStore } from './store.js';
@@ -65,6 +65,21 @@ export class TaskRunner {
 
   failTask(result: TaskResult): string {
     return this.lifecycle.failTask(result);
+  }
+
+  forceFailRunningTask(taskName: string, failure: TaskFailure): string {
+    return this.lifecycle.forceFailRunningTask(taskName, failure);
+  }
+
+  updateRunningTaskExecution(
+    taskName: string,
+    execution: {
+      runSlug: string;
+      worktreePath?: string;
+      branch?: string;
+    },
+  ): TaskInfo {
+    return this.lifecycle.updateRunningTaskExecution(taskName, execution);
   }
 
   prFailTask(result: TaskResult, prError: string): string {

@@ -7,6 +7,7 @@
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { readRunMetaBySlug } from '../../core/workflow/run/run-meta.js';
 import {
   PROVIDER_EVENTS_LOG_FILE_SUFFIX,
   USAGE_EVENTS_LOG_FILE_SUFFIX,
@@ -58,36 +59,11 @@ export interface RunPaths {
   readonly reportsDir: string;
 }
 
-interface MetaJson {
-  readonly task: string;
-  readonly workflow: string;
-  readonly status: string;
-  readonly startTime: string;
-  readonly logsDirectory: string;
-  readonly reportDirectory: string;
-  readonly runSlug: string;
-}
-
 function truncateContent(content: string, maxLength: number): string {
   if (content.length <= maxLength) {
     return content;
   }
   return content.slice(0, maxLength) + '…';
-}
-
-function parseMetaJson(metaPath: string): MetaJson | null {
-  if (!existsSync(metaPath)) {
-    return null;
-  }
-  const raw = readFileSync(metaPath, 'utf-8').trim();
-  if (!raw) {
-    return null;
-  }
-  try {
-    return JSON.parse(raw) as MetaJson;
-  } catch {
-    return null;
-  }
 }
 
 function buildStepLogs(sessionLog: SessionLog): StepLogEntry[] {
@@ -147,8 +123,7 @@ export function listRecentRuns(cwd: string): RunSummary[] {
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
 
-    const metaPath = join(runsDir, entry.name, 'meta.json');
-    const meta = parseMetaJson(metaPath);
+    const meta = readRunMetaBySlug(cwd, entry.name);
     if (!meta) continue;
 
     summaries.push({
@@ -179,8 +154,7 @@ export function findRunForTask(cwd: string, taskContent: string): string | null 
  * Get absolute paths to a run's logs and reports directories.
  */
 export function getRunPaths(cwd: string, slug: string): RunPaths {
-  const metaPath = join(cwd, '.takt', 'runs', slug, 'meta.json');
-  const meta = parseMetaJson(metaPath);
+  const meta = readRunMetaBySlug(cwd, slug);
   if (!meta) {
     throw new Error(`Run not found: ${slug}`);
   }
@@ -195,8 +169,7 @@ export function getRunPaths(cwd: string, slug: string): RunPaths {
  * Load full run session context for prompt injection.
  */
 export function loadRunSessionContext(cwd: string, slug: string): RunSessionContext {
-  const metaPath = join(cwd, '.takt', 'runs', slug, 'meta.json');
-  const meta = parseMetaJson(metaPath);
+  const meta = readRunMetaBySlug(cwd, slug);
   if (!meta) {
     throw new Error(`Run not found: ${slug}`);
   }

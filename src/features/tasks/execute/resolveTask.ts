@@ -4,7 +4,7 @@ import { resolveWorkflowConfigValue } from '../../../infra/config/index.js';
 import {
   type TaskInfo,
   buildTaskInstruction,
-  createSharedClone,
+  createSharedCloneAbortable,
   resolveBaseBranch,
   resolveCloneBaseDir,
   branchExists,
@@ -16,6 +16,7 @@ import {
 import { getGitProvider, type Issue } from '../../../infra/git/index.js';
 import { withProgress } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage, isRealPathInside } from '../../../shared/utils/index.js';
+import { generateReportDir } from '../../../shared/utils/reportDir.js';
 import { getTaskSlugFromTaskDir } from '../../../shared/utils/taskPaths.js';
 
 const log = createLogger('task');
@@ -43,8 +44,8 @@ export interface ResolvedTaskExecution {
   execCwd: string;
   workflowIdentifier: string;
   isWorktree: boolean;
+  reportDirName: string;
   taskPrompt?: string;
-  reportDirName?: string;
   branch?: string;
   worktreePath?: string;
   baseBranch?: string;
@@ -167,13 +168,13 @@ export async function resolveTaskExecution(
       const result = await withProgress(
         'Creating clone...',
         (cloneResult) => `Clone created: ${cloneResult.path} (branch: ${cloneResult.branch})`,
-        async () => createSharedClone(defaultCwd, {
+        async () => createSharedCloneAbortable(defaultCwd, {
           worktree: data.worktree!,
           branch: data.branch,
           ...(preferredBaseBranch ? { baseBranch: preferredBaseBranch } : {}),
           taskSlug,
           issueNumber: data.issue,
-        }),
+        }, abortSignal),
       );
       throwIfAborted(abortSignal);
       execCwd = result.path;
@@ -187,6 +188,7 @@ export async function resolveTaskExecution(
     taskPrompt = stageTaskSpecForExecution(defaultCwd, execCwd, task.taskDir, reportDirName);
   }
 
+  const resolvedReportDirName = reportDirName ?? generateReportDir(taskPrompt ?? task.content);
   const startStep = resolveTaskStartStepValue(normalizedData);
   const retryNote = data.retry_note;
   const maxStepsOverride = data.exceeded_max_steps;
@@ -201,11 +203,11 @@ export async function resolveTaskExecution(
     execCwd,
     workflowIdentifier,
     isWorktree,
+    reportDirName: resolvedReportDirName,
     autoPr,
     draftPr,
     shouldPublishBranchToOrigin,
     ...(taskPrompt ? { taskPrompt } : {}),
-    ...(reportDirName ? { reportDirName } : {}),
     ...(branch ? { branch } : {}),
     ...(worktreePath ? { worktreePath } : {}),
     ...(baseBranch ? { baseBranch } : {}),
