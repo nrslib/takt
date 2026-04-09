@@ -258,7 +258,9 @@ async function runSingleReportAttempt(
     }
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
-    ctx.onPhaseComplete?.(step, 2, 'report', '', 'error', errorMsg, undefined, ctx.iteration);
+    if (didEmitPhaseStart) {
+      ctx.onPhaseComplete?.(step, 2, 'report', '', 'error', errorMsg, undefined, ctx.iteration);
+    }
     throw error;
   }
 
