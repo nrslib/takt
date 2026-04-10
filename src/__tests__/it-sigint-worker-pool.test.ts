@@ -67,6 +67,7 @@ function createMockTaskRunner() {
 }
 
 beforeEach(() => {
+  vi.useRealTimers();
   vi.clearAllMocks();
   mockExecuteAndCompleteTask.mockResolvedValue(true);
 });
