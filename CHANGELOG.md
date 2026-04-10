@@ -6,6 +6,30 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.35.3] - 2026-04-10
+
+### Added
+
+- `loop_monitors` の judge に `provider`/`model` フィールドを追加。ジャッジムーブメントのプロバイダーとモデルを明示的に指定可能に (#599)
+- `takt list --action sync` を非インタラクティブモードでサポート
+
+### Changed
+
+- Codex プロバイダーのリトライ戦略を強化: 最大リトライ回数を 3→9 に増加、ベース遅延を 250ms→1000ms に変更、"at capacity" エラーを自動リトライ対象に追加 (#614)
+
+### Fixed
+
+- ループモニタージャッジが常にデフォルトプロバイダーで実行される問題を修正。トリガー元ムーブメントのプロバイダー/モデル設定を継承するよう変更 (#599)
+- 完了済みタスクのブランチ操作（merge/try-merge/diff）でルートブランチが欠落している場合にエラーとなる問題を修正。クローンから自動復元するよう改善 (#616)
+- Phase 2 エラーイベント（`phase:complete`）が `phase:start` より先に発火されることがある問題を修正
+
+### Internal
+
+- テストを多数追加（codex-client-retry, engine-loop-monitors, it-completed-task-root-branch, it-piece-loader, provider-resolution, taskBranchLifecycleActions 等）
+- `providerModelCompatibility` をコアモジュール（`src/core/piece/`）に移動
+- タスク実行後のプッシュ処理を簡素化（clone 内フォールバック push を廃止し、ルートリポジトリ経由に一本化）
+- git コマンドのエラーメッセージに stderr 詳細を含めるよう改善
+
 ## [0.35.2] - 2026-04-09
 
 ### Added
