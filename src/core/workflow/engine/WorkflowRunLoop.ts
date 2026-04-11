@@ -74,7 +74,10 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
     }
 
     deps.state.iteration++;
-    const isDelegated = (step.parallel && step.parallel.length > 0) || !!step.arpeggio || !!step.teamLeader;
+    const isDelegated = step.mode === 'system'
+      || (step.parallel && step.parallel.length > 0)
+      || !!step.arpeggio
+      || !!step.teamLeader;
     let prebuiltInstruction: string | undefined;
     if (!isDelegated) {
       const stepIteration = incrementStepIteration(deps.state, step.name);

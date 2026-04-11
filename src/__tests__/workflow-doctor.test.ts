@@ -138,7 +138,7 @@ steps:
     expect(messages).toContain('loop monitor (step1 -> step2) instruction references missing resource "missing-judge-instruction"');
   });
 
-  it('reports missing refs for parallel sub-movements', () => {
+  it('reports missing refs for parallel substeps', () => {
     const filePath = writeWorkflow(projectDir, '.takt/workflows/missing-parallel-refs.yaml', `name: missing-parallel-refs
 max_steps: 10
 initial_step: step1
@@ -352,7 +352,7 @@ steps:
       - condition: done
         next: COMPLETE
 `);
-    writeWorkflow(projectDir, '.takt/pieces/broken.yaml', `name: broken
+    writeWorkflow(projectDir, '.takt/workflows/broken.yaml', `name: broken
 max_steps: 10
 initial_step: step1
 steps:

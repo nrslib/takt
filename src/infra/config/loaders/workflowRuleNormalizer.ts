@@ -19,17 +19,22 @@ function parseAggregateConditions(argsText: string): string[] {
 }
 
 export function normalizeRule(rule: {
-  condition: string;
+  condition?: string;
+  when?: string;
   next?: string;
   appendix?: string;
   requires_user_input?: boolean;
   interactive_only?: boolean;
 }): WorkflowRule {
+  const condition = rule.condition ?? rule.when;
+  if (!condition) {
+    throw new Error('Workflow rule requires condition or when');
+  }
   const next = rule.next ?? '';
-  const aiMatch = rule.condition.match(AI_CONDITION_REGEX);
+  const aiMatch = condition.match(AI_CONDITION_REGEX);
   if (aiMatch?.[1]) {
     return {
-      condition: rule.condition,
+      condition,
       next,
       appendix: rule.appendix,
       requiresUserInput: rule.requires_user_input,
@@ -39,11 +44,11 @@ export function normalizeRule(rule: {
     };
   }
 
-  const aggregateMatch = rule.condition.match(AGGREGATE_CONDITION_REGEX);
+  const aggregateMatch = condition.match(AGGREGATE_CONDITION_REGEX);
   if (aggregateMatch?.[1] && aggregateMatch[2]) {
     const conditions = parseAggregateConditions(aggregateMatch[2]);
     return {
-      condition: rule.condition,
+      condition,
       next,
       appendix: rule.appendix,
       requiresUserInput: rule.requires_user_input,
@@ -55,7 +60,7 @@ export function normalizeRule(rule: {
   }
 
   return {
-    condition: rule.condition,
+    condition,
     next,
     appendix: rule.appendix,
     requiresUserInput: rule.requires_user_input,

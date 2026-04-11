@@ -34,6 +34,13 @@ export type {
 // Workflow configuration and runtime state
 export type {
   WorkflowRule,
+  WorkflowStructuredOutput,
+  WorkflowSystemInput,
+  WorkflowEffect,
+  WorkflowEnqueueIssueConfig,
+  WorkflowEnqueueWorktreeConfig,
+  WorkflowTemplateReference,
+  WorkflowEffectScalarReference,
   OutputContractItem,
   OutputContractEntry,
   McpServerConfig,

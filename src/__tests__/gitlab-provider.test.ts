@@ -15,6 +15,7 @@ const {
   mockCommentOnMr,
   mockCreateMergeRequest,
   mockFetchMrReviewComments,
+  mockMergeMr,
 } = vi.hoisted(() => ({
   mockCheckGlabCli: vi.fn(),
   mockFetchIssue: vi.fn(),
@@ -23,6 +24,7 @@ const {
   mockCommentOnMr: vi.fn(),
   mockCreateMergeRequest: vi.fn(),
   mockFetchMrReviewComments: vi.fn(),
+  mockMergeMr: vi.fn(),
 }));
 
 vi.mock('../infra/gitlab/utils.js', () => ({
@@ -43,6 +45,7 @@ vi.mock('../infra/gitlab/pr.js', () => ({
   commentOnMr: (...args: unknown[]) => mockCommentOnMr(...args),
   createMergeRequest: (...args: unknown[]) => mockCreateMergeRequest(...args),
   fetchMrReviewComments: (...args: unknown[]) => mockFetchMrReviewComments(...args),
+  mergeMr: (...args: unknown[]) => mockMergeMr(...args),
 }));
 
 import { GitLabProvider } from '../infra/gitlab/GitLabProvider.js';
@@ -458,6 +461,36 @@ describe('GitLabProvider', () => {
 
       // Then
       expect(mockCommentOnMr).toHaveBeenCalledWith(10, 'body', process.cwd());
+    });
+  });
+
+  describe('mergePr', () => {
+    it('mergeMr(prNumber, cwd) に委譲し MergeResult を返す', () => {
+      mockMergeMr.mockReturnValue({ success: true });
+      const provider = new GitLabProvider();
+
+      const result = provider.mergePr(42, '/project');
+
+      expect(mockMergeMr).toHaveBeenCalledWith(42, '/project');
+      expect(result).toEqual({ success: true });
+    });
+
+    it('失敗時はエラー結果を委譲して返す', () => {
+      mockMergeMr.mockReturnValue({ success: false, error: 'merge blocked' });
+      const provider = new GitLabProvider();
+
+      const result = provider.mergePr(42, '/project');
+
+      expect(result).toEqual({ success: false, error: 'merge blocked' });
+    });
+
+    it('cwd 省略時は process.cwd() をフォールバックとして渡す', () => {
+      mockMergeMr.mockReturnValue({ success: true });
+      const provider = new GitLabProvider();
+
+      provider.mergePr(42);
+
+      expect(mockMergeMr).toHaveBeenCalledWith(42, process.cwd());
     });
   });
 });

@@ -77,6 +77,8 @@ export interface WorkflowExecutionOptions {
   taskDisplayLabel?: string;
   /** Color index for task prefix (cycled mod 4 across concurrent tasks) */
   taskColorIndex?: number;
+  /** Current task issue number for system-step context resolution */
+  currentTaskIssueNumber?: number;
 }
 
 export interface TaskExecutionOptions {
@@ -117,6 +119,8 @@ export interface ExecuteTaskOptions {
   taskDisplayLabel?: string;
   /** Color index for task prefix (cycled mod 4 across concurrent tasks) */
   taskColorIndex?: number;
+  /** Current task issue number for system-step context resolution */
+  currentTaskIssueNumber?: number;
 }
 
 export interface PipelineExecutionOptions {

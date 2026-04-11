@@ -93,6 +93,15 @@ function assertValidBranchRef(projectDir: string, ref: string): void {
   }
 }
 
+function assertNotRemoteTrackingRef(ref: string): void {
+  if (ref.startsWith('origin/')) {
+    throw new Error(`Base branch must be a branch name, not a remote-tracking ref: ${ref}`);
+  }
+  if (ref.startsWith('refs/remotes/')) {
+    throw new Error(`Base branch must be a branch name, not a remote-tracking ref: ${ref}`);
+  }
+}
+
 export function resolveBaseBranch(
   projectDir: string,
   explicitBaseBranch?: string,
@@ -103,6 +112,7 @@ export function resolveBaseBranch(
   const baseBranch = configBaseBranch ?? detectDefaultBranch(projectDir);
 
   if (explicitBaseBranch !== undefined) {
+    assertNotRemoteTrackingRef(baseBranch);
     assertValidBranchRef(projectDir, baseBranch);
   }
 
@@ -144,6 +154,7 @@ export async function resolveBaseBranchAbortable(
   const baseBranch = configBaseBranch ?? detectDefaultBranch(projectDir);
 
   if (explicitBaseBranch !== undefined) {
+    assertNotRemoteTrackingRef(baseBranch);
     assertValidBranchRef(projectDir, baseBranch);
   }
 

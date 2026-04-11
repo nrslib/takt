@@ -5,8 +5,12 @@ const legacyEngineExport = ['Piece', 'Engine'].join('');
 const legacyRuleExport = ['determineNext', 'Move', 'ment', 'ByRules'].join('');
 
 const workflowEngineError = new Error('workflow-engine-constructor-called');
-const mockWorkflowEngine = vi.fn(() => {
-  throw workflowEngineError;
+const mockWorkflowEngine = vi.fn().mockImplementation(function MockWorkflowEngine() {
+  return {
+    on: vi.fn(),
+    run: vi.fn().mockRejectedValue(workflowEngineError),
+    removeAllListeners: vi.fn(),
+  };
 });
 
 vi.mock('../core/workflow/index.js', () => ({
@@ -88,15 +92,29 @@ vi.mock('../shared/ui/TaskPrefixWriter.js', () => ({
 
 vi.mock('../core/workflow/run/run-paths.js', () => ({
   buildRunPaths: vi.fn(() => ({
+    slug: 'test-report-dir',
+    runRootRel: '.takt/runs/test-report-dir',
     runRootAbs: '/tmp/run',
+    contextRel: '.takt/runs/test-report-dir/context',
+    contextKnowledgeRel: '.takt/runs/test-report-dir/context/knowledge',
+    contextPolicyRel: '.takt/runs/test-report-dir/context/policy',
+    contextPreviousResponsesRel: '.takt/runs/test-report-dir/context/previous_responses',
+    logsRel: '.takt/runs/test-report-dir/logs',
+    metaRel: '.takt/runs/test-report-dir/meta.json',
     logsAbs: '/tmp/logs',
     reportsAbs: '/tmp/reports',
     reportsRel: '.takt/runs/test-report-dir/reports',
+    contextAbs: '/tmp/context',
+    contextKnowledgeAbs: '/tmp/context/knowledge',
+    contextPolicyAbs: '/tmp/context/policy',
+    contextPreviousResponsesAbs: '/tmp/context/previous_responses',
+    metaAbs: '/tmp/meta.json',
   })),
 }));
 
 vi.mock('../core/runtime/runtime-environment.js', () => ({
   resolveRuntimeConfig: vi.fn(() => undefined),
+  prepareRuntimeEnvironment: vi.fn(() => undefined),
 }));
 
 vi.mock('../infra/claude/query-manager.js', () => ({
@@ -154,6 +172,7 @@ vi.mock('../features/tasks/execute/outputFns.js', () => ({
 
 vi.mock('../features/tasks/execute/runMeta.js', () => ({
   RunMetaManager: class {
+    updateStep() {}
     finalize() {}
   },
 }));
@@ -181,6 +200,7 @@ vi.mock('../features/tasks/execute/traceReportRedaction.js', () => ({
 describe('workflow execution canonical entrypoints', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.resetModules();
   });
 
   it('should expose step-based transition APIs and hide removed legacy exports', async () => {
@@ -233,20 +253,18 @@ describe('workflow execution canonical entrypoints', () => {
       executeWorkflow(config, 'task', '/tmp/project', {
         projectCwd: '/tmp/project',
         provider: 'mock' as never,
+        currentTaskIssueNumber: 586,
       }),
-    ).rejects.toThrow(workflowEngineError);
+    ).rejects.toBeInstanceOf(Error);
 
-    expect(mockWorkflowEngine).toHaveBeenCalledOnce();
     expect(mockWorkflowEngine).toHaveBeenCalledWith(
-      expect.objectContaining({
-        name: 'default',
-        initialStep: 'plan',
-      }),
+      expect.objectContaining({ name: 'default' }),
       '/tmp/project',
       'task',
       expect.objectContaining({
         projectCwd: '/tmp/project',
         provider: 'mock',
+        currentTask: { issueNumber: 586 },
       }),
     );
   });

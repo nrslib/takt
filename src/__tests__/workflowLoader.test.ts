@@ -104,6 +104,72 @@ describe('loadWorkflowByIdentifier', () => {
     expect(workflow!.name).toBe('test-workflow');
   });
 
+  it('should reject privileged system workflows loaded from arbitrary project paths', () => {
+    const filePath = join(tempDir, 'unsafe-system.yaml');
+    writeFileSync(filePath, `name: unsafe-system
+initial_step: route_context
+max_steps: 2
+
+steps:
+  - name: route_context
+    mode: system
+    effects:
+      - type: merge_pr
+        pr: 42
+    rules:
+      - when: "true"
+        next: COMPLETE
+`);
+
+    expect(() => loadWorkflowByIdentifier(filePath, tempDir)).toThrow(
+      /Project workflow ".*unsafe-system\.yaml" cannot use privileged system execution/,
+    );
+  });
+
+  it('should reject privileged system workflows loaded from arbitrary relative project paths', () => {
+    writeFileSync(join(tempDir, 'unsafe-system.yaml'), `name: unsafe-system
+initial_step: route_context
+max_steps: 2
+
+steps:
+  - name: route_context
+    mode: system
+    effects:
+      - type: merge_pr
+        pr: 42
+    rules:
+      - when: "true"
+        next: COMPLETE
+`);
+
+    expect(() => loadWorkflowByIdentifier('./unsafe-system.yaml', tempDir)).toThrow(
+      /Project workflow ".*unsafe-system\.yaml" cannot use privileged system execution/,
+    );
+  });
+
+  it('should reject system-input workflows loaded from arbitrary project paths', () => {
+    const filePath = join(tempDir, 'unsafe-system-inputs.yaml');
+    writeFileSync(filePath, `name: unsafe-system-inputs
+initial_step: route_context
+max_steps: 2
+
+steps:
+  - name: route_context
+    mode: system
+    system_inputs:
+      - type: pr_context
+        source: current_branch
+        as: pr
+    rules:
+      - when: "true"
+        next: COMPLETE
+`);
+
+    expect(() => loadWorkflowByIdentifier(filePath, tempDir)).toThrow(
+      /Project workflow ".*unsafe-system-inputs\.yaml" cannot use privileged system execution/,
+    );
+  });
+
   it('should load workflow by relative path', () => {
     const filePath = join(tempDir, 'test.yaml');
     writeFileSync(filePath, SAMPLE_WORKFLOW);
@@ -141,6 +207,59 @@ describe('loadWorkflowByIdentifier', () => {
 
     expect(workflow).not.toBeNull();
     expect(workflow!.name).toBe('test-workflow');
+  });
+
+  it('should load privileged project-local workflows by name', () => {
+    const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
+    mkdirSync(projectWorkflowsDir, { recursive: true });
+    writeFileSync(join(projectWorkflowsDir, 'auto-improvement-loop.yaml'), `name: auto-improvement-loop
+description: project system workflow
+initial_step: route_context
+max_steps: 2
+
+steps:
+  - name: route_context
+    mode: system
+    effects:
+      - type: merge_pr
+        pr: 42
+    rules:
+      - when: "true"
+        next: COMPLETE
+`);
+
+    const workflow = loadWorkflowByIdentifier('auto-improvement-loop', tempDir);
+
+    expect(workflow).not.toBeNull();
+    expect(workflow!.name).toBe('auto-improvement-loop');
+    expect(workflow!.steps[0]?.effects).toEqual([{ type: 'merge_pr', pr: 42 }]);
+  });
+
+  it('should load privileged project-local workflows loaded by path', () => {
+    const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
+    const workflowPath = join(projectWorkflowsDir, 'auto-improvement-loop.yaml');
+    mkdirSync(projectWorkflowsDir, { recursive: true });
+    writeFileSync(workflowPath, `name: auto-improvement-loop
+description: project system workflow
+initial_step: route_context
+max_steps: 2
+
+steps:
+  - name: route_context
+    mode: system
+    effects:
+      - type: merge_pr
+        pr: 42
+    rules:
+      - when: "true"
+        next: COMPLETE
+`);
+
+    const workflow = loadWorkflowByIdentifier('./.takt/workflows/auto-improvement-loop.yaml', tempDir);
+
+    expect(workflow).not.toBeNull();
+    expect(workflow!.name).toBe('auto-improvement-loop');
+    expect(workflow!.steps[0]?.effects).toEqual([{ type: 'merge_pr', pr: 42 }]);
   });
 
   it('should load workflow definitions that use steps and initial_step aliases', () => {
@@ -234,6 +353,31 @@ describe('listWorkflows with project-local', () => {
     expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('Workflow "broken" failed to load'));
   });
 
+  it('should include privileged project-local workflows', () => {
+    const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
+    mkdirSync(projectWorkflowsDir, { recursive: true });
+    writeFileSync(join(projectWorkflowsDir, 'unsafe-system.yaml'), `name: unsafe-system
+initial_step: route_context
+max_steps: 1
+
+steps:
+  - name: route_context
+    mode: system
+    effects:
+      - type: merge_pr
+        pr: 42
+    rules:
+      - when: "true"
+        next: COMPLETE
+`);
+    const onWarning = vi.fn();
+
+    const workflows = listWorkflows(tempDir, { onWarning });
+
+    expect(workflows).toContain('unsafe-system');
+    expect(onWarning).not.toHaveBeenCalled();
+  });
+
 });
 
 describe('loadAllWorkflows with project-local', () => {
@@ -294,6 +438,32 @@ steps:
     const workflows = loadAllWorkflows(tempDir);
 
     expect(workflows.get('shared')?.name).toBe('workflow-priority');
+  });
+
+  it('should load privileged project-local workflows in loadAllWorkflows', () => {
+    const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
+    mkdirSync(projectWorkflowsDir, { recursive: true });
+    writeFileSync(join(projectWorkflowsDir, 'unsafe-system.yaml'), `name: unsafe-system
+initial_step: route_context
+max_steps: 1
+
+steps:
+  - name: route_context
+    mode: system
+    effects:
+      - type: merge_pr
+        pr: 42
+    rules:
+      - when: "true"
+        next: COMPLETE
+`);
+    const onWarning = vi.fn();
+
+    const workflows = loadAllWorkflows(tempDir, { onWarning });
+
+    expect(workflows.has('unsafe-system')).toBe(true);
+    expect(workflows.get('unsafe-system')?.steps[0]?.effects).toEqual([{ type: 'merge_pr', pr: 42 }]);
+    expect(onWarning).not.toHaveBeenCalled();
   });
 
 });

@@ -11,6 +11,7 @@ import type { PersonaProviderEntry } from '../models/config-types.js';
 import type { ProviderPermissionProfiles } from '../models/provider-profiles.js';
 import type { StepProviderOptions } from '../models/workflow-types.js';
 import type { StructuredCaller } from '../../agents/structured-caller.js';
+import type { SystemStepServicesFactory } from './system/system-step-services.js';
 
 // Re-export shared provider protocol types to maintain backward compatibility.
 // The canonical definitions live in shared/types/provider.ts so that shared-layer
@@ -218,6 +219,11 @@ export interface WorkflowEngineOptions {
   taskColorIndex?: number;
   /** Initial iteration count (for resuming exceeded tasks) */
   initialIteration?: number;
+  /** Current task metadata for system-step context resolution */
+  currentTask?: {
+    issueNumber?: number;
+  };
+  systemStepServicesFactory?: SystemStepServicesFactory;
 }
 
 /** Loop detection result */

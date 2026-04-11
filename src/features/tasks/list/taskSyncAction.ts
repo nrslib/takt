@@ -1,12 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { success, error as logError, StreamDisplay } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
-import { getProvider, type ProviderType } from '../../../infra/providers/index.js';
-import { resolveConfigValues } from '../../../infra/config/index.js';
-import { resolveAssistantProviderModelFromConfig } from '../../../core/config/provider-resolution.js';
-import { loadTemplate } from '../../../shared/prompts/index.js';
-import { getLanguage } from '../../../infra/config/index.js';
-import { resolveAssistantConfigLayers } from '../../interactive/assistantConfig.js';
+import { runSyncConflictResolver } from '../../../infra/service/runSyncConflictResolver.js';
 import {
   type BranchActionTarget,
   resolveTargetBranch,
@@ -84,28 +79,10 @@ export async function syncBranchWithRoot(
     return true;
   }
 
-  const lang = getLanguage();
-  const originalInstruction = resolveTargetInstruction(target);
-  const systemPrompt = loadTemplate('sync_conflict_resolver_system_prompt', lang);
-  const prompt = loadTemplate('sync_conflict_resolver_message', lang, { originalInstruction });
-
-  const config = resolveConfigValues(projectDir, ['syncConflictResolver']);
-  const resolvedProviderModel = resolveAssistantProviderModelFromConfig(
-    resolveAssistantConfigLayers(projectDir),
-  );
-  if (!resolvedProviderModel.provider) {
-    throw new Error('No provider configured. Set "provider" in ~/.takt/config.yaml');
-  }
-  const providerType = resolvedProviderModel.provider as ProviderType;
-  const provider = getProvider(providerType);
-  const agent = provider.setup({ name: 'conflict-resolver', systemPrompt });
-
-  const onPermissionRequest = config.syncConflictResolver?.autoApproveTools ? autoApproveBash : undefined;
-  const response = await agent.call(prompt, {
+  const response = await runSyncConflictResolver({
+    projectCwd: projectDir,
     cwd: worktreePath,
-    model: resolvedProviderModel.model,
-    permissionMode: 'edit',
-    onPermissionRequest,
+    originalInstruction: resolveTargetInstruction(target),
     onStream: new StreamDisplay('conflict-resolver', false).createHandler(),
   });
 
@@ -121,11 +98,6 @@ export async function syncBranchWithRoot(
   abortMerge(worktreePath);
   logError('Failed to resolve conflicts. Merge aborted.');
   return false;
-}
-
-/** Auto-approve all tool invocations (agent runs in isolated worktree) */
-async function autoApproveBash(request: { toolName: string; input: Record<string, unknown> }) {
-  return { behavior: 'allow' as const, updatedInput: request.input };
 }
 
 function pushSynced(worktreePath: string, projectDir: string, target: BranchActionTarget): boolean {

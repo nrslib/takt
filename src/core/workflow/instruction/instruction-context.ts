@@ -4,7 +4,7 @@
  * Defines the context structures used by instruction builders.
  */
 
-import type { AgentResponse, Language } from '../../models/types.js';
+import type { AgentResponse, Language, WorkflowState } from '../../models/types.js';
 
 /**
  * Context for building instruction from template.
@@ -54,6 +54,8 @@ export interface InstructionContext {
   knowledgeContents?: string[];
   /** Source path for knowledge snapshot */
   knowledgeSourcePath?: string;
+  /** Workflow state for context/structured/effect interpolation */
+  workflowState?: WorkflowState;
 }
 
 /**

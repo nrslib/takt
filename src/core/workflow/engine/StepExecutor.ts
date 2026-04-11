@@ -26,6 +26,7 @@ import { createLogger, getErrorMessage, slugify } from '../../../shared/utils/in
 import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { RunPaths } from '../run/run-paths.js';
 import type { StructuredCaller } from '../../../agents/structured-caller.js';
+import { waitForStepDelay } from './step-delay.js';
 
 const log = createLogger('step-executor');
 
@@ -201,6 +202,7 @@ export class StepExecutor {
       knowledgeContents: knowledgeSnapshot?.content ?? step.knowledgeContents,
       knowledgeSourcePath: knowledgeSnapshot?.sourcePath,
       previousResponseSourcePath: state.previousResponseSourcePath,
+      workflowState: state,
     }).build();
   }
 
@@ -243,6 +245,10 @@ export class StepExecutor {
         nextResponse = { ...nextResponse, status: 'blocked', content: reportResult.response.content };
         return nextResponse;
       }
+    }
+
+    if (nextResponse.structuredOutput) {
+      state.structuredOutputs.set(step.name, nextResponse.structuredOutput);
     }
 
     // Phase 3: status judgment (new session, no tools, determines matched rule)
@@ -311,6 +317,7 @@ export class StepExecutor {
     prebuiltInstruction?: string,
     runtime?: RuntimeStepResolution,
   ): Promise<{ response: AgentResponse; instruction: string }> {
+    await waitForStepDelay(step);
     const stepIteration = prebuiltInstruction
       ? state.stepIterations.get(step.name) ?? 1
       : incrementStepIteration(state, step.name);

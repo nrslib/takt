@@ -493,7 +493,7 @@ describe('resolveTaskExecution', () => {
     const mockResolveBaseBranch = vi.spyOn(infraTask, 'resolveBaseBranch').mockReturnValue({
       branch: 'main',
     });
-    const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedClone').mockReturnValue({
+    const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedCloneAbortable').mockResolvedValue({
       path: safeClonePath,
       branch: 'feature/symlink-worktree',
     });

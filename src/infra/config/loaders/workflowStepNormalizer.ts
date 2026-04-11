@@ -4,7 +4,9 @@ import type {
   WorkflowStepRawSchema,
 } from '../../../core/models/index.js';
 import type { WorkflowArpeggioConfig, WorkflowMcpServersConfig, WorkflowOverrides } from '../../../core/models/config-types.js';
-import type { StepProviderOptions } from '../../../core/models/workflow-types.js';
+import type {
+  StepProviderOptions,
+} from '../../../core/models/workflow-types.js';
 import { applyQualityGateOverrides } from './qualityGateOverrides.js';
 import {
   type FacetResolutionContext,
@@ -20,10 +22,11 @@ import { normalizeConfigProviderReferenceDetailed, type ConfigProviderReference 
 import { validateWorkflowArpeggio, validateWorkflowMcpServers } from './workflowNormalizationPolicies.js';
 import { normalizeRule } from './workflowRuleNormalizer.js';
 import { normalizeArpeggio, normalizeOutputContracts, normalizeTeamLeader } from './workflowStepFeaturesNormalizer.js';
+import { resolveStructuredOutput } from './workflowStructuredOutputResolver.js';
+import { normalizeWorkflowEffects } from './workflowSystemStepNormalizer.js';
 
 type RawStep = z.output<typeof WorkflowStepRawSchema>;
 type RawProviderReference = RawStep['provider'];
-
 export function normalizeProviderReference(
   provider: RawProviderReference,
   model: RawStep['model'],
@@ -45,6 +48,7 @@ export function normalizeStepFromRaw(
   step: RawStep,
   workflowDir: string,
   sections: WorkflowSections,
+  workflowSchemas: Record<string, string> | undefined,
   inheritedProvider?: WorkflowStep['provider'],
   inheritedModel?: WorkflowStep['model'],
   inheritedProviderOptions?: WorkflowStep['providerOptions'],
@@ -55,38 +59,49 @@ export function normalizeStepFromRaw(
   workflowMcpServersPolicy?: WorkflowMcpServersConfig,
 ): WorkflowStep {
   const rules = step.rules?.map(normalizeRule);
+  const isSystemStep = step.mode === 'system';
   const rawPersona = (step as Record<string, unknown>).persona as string | undefined;
   if (rawPersona !== undefined && rawPersona.trim().length === 0) {
     throw new Error(`Step "${step.name}" has an empty persona value`);
   }
-  const { personaSpec, personaPath } = resolvePersona(rawPersona, sections, workflowDir, context);
+  const { personaSpec, personaPath } = isSystemStep
+    ? { personaSpec: undefined, personaPath: undefined }
+    : resolvePersona(rawPersona, sections, workflowDir, context);
   const displayNameRaw = (step as Record<string, unknown>).persona_name as string | undefined;
   if (displayNameRaw !== undefined && displayNameRaw.trim().length === 0) {
     throw new Error(`Step "${step.name}" has an empty persona_name value`);
   }
   const derivedPersonaName = personaSpec ? extractPersonaDisplayName(personaSpec) : undefined;
-  const resolvedPersonaDisplayName = displayNameRaw || derivedPersonaName || step.name;
+  const resolvedPersonaDisplayName = isSystemStep
+    ? step.name
+    : displayNameRaw || derivedPersonaName || step.name;
   const normalizedRawPersona = rawPersona?.trim();
   const personaOverrideKey = normalizedRawPersona
     ? (isResourcePath(normalizedRawPersona) ? extractPersonaDisplayName(normalizedRawPersona) : normalizedRawPersona)
     : undefined;
 
-  const policyContents = resolveRefList(
-    (step as Record<string, unknown>).policy as string | string[] | undefined,
-    sections.resolvedPolicies,
-    workflowDir,
-    'policies',
-    context,
-  );
-  const knowledgeContents = resolveRefList(
-    (step as Record<string, unknown>).knowledge as string | string[] | undefined,
-    sections.resolvedKnowledge,
-    workflowDir,
-    'knowledge',
-    context,
-  );
+  const policyContents = isSystemStep
+    ? undefined
+    : resolveRefList(
+      (step as Record<string, unknown>).policy as string | string[] | undefined,
+      sections.resolvedPolicies,
+      workflowDir,
+      'policies',
+      context,
+    );
+  const knowledgeContents = isSystemStep
+    ? undefined
+    : resolveRefList(
+      (step as Record<string, unknown>).knowledge as string | string[] | undefined,
+      sections.resolvedKnowledge,
+      workflowDir,
+      'knowledge',
+      context,
+    );
   const normalizedProvider = normalizeProviderReference(step.provider, step.model, step.provider_options);
-  const instruction = step.instruction
+  const instruction = isSystemStep
+    ? undefined
+    : step.instruction
     ? resolveRefToContent(step.instruction, sections.resolvedInstructions, workflowDir, 'instructions', context)
     : undefined;
 
@@ -96,6 +111,7 @@ export function normalizeStepFromRaw(
   const normalizedStep: WorkflowStep = {
     name: step.name,
     description: step.description,
+    mode: step.mode,
     persona: personaSpec,
     session: step.session,
     personaDisplayName: resolvedPersonaDisplayName,
@@ -106,7 +122,13 @@ export function normalizeStepFromRaw(
     requiredPermissionMode: step.required_permission_mode,
     providerOptions: mergeProviderOptions(inheritedProviderOptions, normalizedProvider.providerOptions),
     edit: step.edit,
-    instruction: instruction || '{task}',
+    instruction: isSystemStep ? '' : instruction || '{task}',
+    delayBeforeMs: step.delay_before_ms,
+    structuredOutput: resolveStructuredOutput(step, workflowSchemas, {
+      projectDir: context?.projectDir ?? workflowDir,
+    }),
+    systemInputs: step.system_inputs,
+    effects: normalizeWorkflowEffects(step.effects),
     rules,
     outputContracts: normalizeOutputContracts(step.output_contracts, workflowDir, sections.resolvedReportFormats, context),
     qualityGates: applyQualityGateOverrides(
@@ -128,6 +150,7 @@ export function normalizeStepFromRaw(
         sub,
         workflowDir,
         sections,
+        workflowSchemas,
         normalizedStep.provider,
         normalizedStep.model,
         normalizedStep.providerOptions,

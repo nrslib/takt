@@ -13,15 +13,28 @@ import {
   ProviderReferenceSchema,
   QualityGatesSchema,
 } from './schema-base.js';
+import {
+  StructuredOutputRawSchema,
+  SystemInputRawSchema,
+  validateSystemStepFields,
+  WorkflowEffectRawSchema,
+} from './workflow-system-schemas.js';
 
 /** Rule-based transition schema (new unified format) */
 export const WorkflowRuleSchema = z.object({
-  condition: z.string().min(1),
+  condition: z.string().min(1).optional(),
+  when: z.string().min(1).optional(),
   next: z.string().min(1).optional(),
   appendix: z.string().optional(),
   requires_user_input: z.boolean().optional(),
   interactive_only: z.boolean().optional(),
-});
+}).refine(
+  (data) => (data.condition != null) !== (data.when != null),
+  {
+    message: "Rule requires exactly one of 'condition' or 'when'",
+    path: ['condition'],
+  },
+);
 
 /** Arpeggio merge configuration schema */
 export const ArpeggioMergeRawSchema = z.object({
@@ -95,6 +108,7 @@ export const ParallelSubStepRawSchema = z.object({
 export const WorkflowStepRawSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
+  mode: z.enum(['agent', 'system']).optional(),
   session: z.enum(['continue', 'refresh']).optional(),
   persona: z.string().optional(),
   persona_name: z.string().optional(),
@@ -110,6 +124,10 @@ export const WorkflowStepRawSchema = z.object({
   edit: z.boolean().optional(),
   instruction: z.string().optional(),
   instruction_template: z.never().optional(),
+  delay_before_ms: z.number().int().min(0).optional(),
+  structured_output: StructuredOutputRawSchema.optional(),
+  system_inputs: z.array(SystemInputRawSchema).optional(),
+  effects: z.array(WorkflowEffectRawSchema).optional(),
   rules: z.array(WorkflowRuleSchema).optional(),
   output_contracts: OutputContractsFieldSchema,
   quality_gates: QualityGatesSchema,
@@ -124,7 +142,9 @@ export const WorkflowStepRawSchema = z.object({
     message: "'parallel', 'arpeggio', and 'team_leader' are mutually exclusive",
     path: ['parallel'],
   },
-);
+).superRefine((data, ctx) => {
+  validateSystemStepFields(data, ctx);
+});
 
 /** Loop monitor rule schema */
 export const LoopMonitorRuleSchema = z.object({
@@ -157,6 +177,7 @@ export const WorkflowConfigRawSchema = z.object({
   description: z.string().optional(),
   workflow_config: WorkflowProviderOptionsSchema,
   permission_mode: z.never().optional(),
+  schemas: z.record(z.string(), z.string()).optional(),
   personas: z.record(z.string(), z.string()).optional(),
   policies: z.record(z.string(), z.string()).optional(),
   knowledge: z.record(z.string(), z.string()).optional(),

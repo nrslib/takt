@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { checkGhCli } from './issue.js';
 import { MAX_PAGES } from '../git/constants.js';
-import type { CreatePrOptions, CreatePrResult, ExistingPr, CommentResult, PrReviewData, PrReviewComment } from '../git/types.js';
+import type { CreatePrOptions, CreatePrResult, ExistingPr, CommentResult, MergeResult, PrReviewData, PrReviewComment } from '../git/types.js';
 
 const log = createLogger('github-pr');
 
@@ -235,6 +235,26 @@ export function createPullRequest(options: CreatePrOptions, cwd: string): Create
   } catch (err) {
     const errorMessage = getErrorMessage(err);
     log.error('PR creation failed', { error: errorMessage });
+    return { success: false, error: errorMessage };
+  }
+}
+
+export function mergePr(prNumber: number, cwd: string): MergeResult {
+  const ghStatus = checkGhCli(cwd);
+  if (!ghStatus.available) {
+    return { success: false, error: ghStatus.error };
+  }
+
+  try {
+    execFileSync('gh', ['pr', 'merge', String(prNumber), '--merge', '--delete-branch'], {
+      cwd,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    return { success: true };
+  } catch (err) {
+    const errorMessage = getErrorMessage(err);
+    log.error('PR merge failed', { error: errorMessage });
     return { success: false, error: errorMessage };
   }
 }

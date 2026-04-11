@@ -7,7 +7,7 @@
 import { execFileSync } from 'node:child_process';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { checkGlabCli, fetchAllPages, parseJson, ITEMS_PER_PAGE } from './utils.js';
-import type { CreatePrOptions, CreatePrResult, ExistingPr, CommentResult, PrReviewData, PrReviewComment } from '../git/types.js';
+import type { CreatePrOptions, CreatePrResult, ExistingPr, CommentResult, MergeResult, PrReviewData, PrReviewComment } from '../git/types.js';
 
 const log = createLogger('gitlab-mr');
 
@@ -207,4 +207,24 @@ export function fetchMrReviewComments(mrNumber: number, cwd: string): PrReviewDa
     reviews,
     files,
   };
+}
+
+export function mergeMr(mrNumber: number, cwd: string): MergeResult {
+  const glabStatus = checkGlabCli(cwd);
+  if (!glabStatus.available) {
+    return { success: false, error: glabStatus.error };
+  }
+
+  try {
+    execFileSync('glab', ['mr', 'merge', String(mrNumber), '--remove-source-branch', '--yes'], {
+      cwd,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    return { success: true };
+  } catch (err) {
+    const errorMessage = getErrorMessage(err);
+    log.error('MR merge failed', { error: errorMessage });
+    return { success: false, error: errorMessage };
+  }
 }

@@ -43,6 +43,7 @@ async function executeTaskWithResult(options: ExecuteTaskOptions): Promise<Workf
     taskDisplayLabel,
     maxStepsOverride,
     initialIterationOverride,
+    currentTaskIssueNumber,
   } = options;
   const workflowConfig = loadWorkflowByIdentifier(workflowIdentifier, projectCwd);
   const safeWorkflowIdentifier = sanitizeTerminalText(workflowIdentifier);
@@ -88,6 +89,7 @@ async function executeTaskWithResult(options: ExecuteTaskOptions): Promise<Workf
     taskDisplayLabel,
     maxStepsOverride,
     initialIterationOverride,
+    currentTaskIssueNumber,
   });
 }
 
@@ -175,6 +177,7 @@ export async function executeAndCompleteTask(
       taskDisplayLabel: parallelOptions?.taskDisplayLabel,
       maxStepsOverride,
       initialIterationOverride,
+      currentTaskIssueNumber: issueNumber,
     });
 
     if (taskRunResult.exceeded && taskRunResult.exceededInfo) {

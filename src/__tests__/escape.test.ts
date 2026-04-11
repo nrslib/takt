@@ -172,6 +172,39 @@ describe('replaceTemplatePlaceholders', () => {
     expect(result).toBe('test task - iter 2/5 - step 1 - dir /reports');
   });
 
+  it('should replace scalar effect placeholders from workflow state', () => {
+    const step = makeStep();
+    const ctx = makeInstructionContext({
+      workflowState: {
+        systemContexts: new Map(),
+        structuredOutputs: new Map(),
+        effectResults: new Map([
+          ['comment_pr', { success: true }],
+        ]),
+      } as never,
+    });
+
+    const result = replaceTemplatePlaceholders('Comment success: {effect:comment_pr.success}', step, ctx);
+    expect(result).toBe('Comment success: true');
+  });
+
+  it('should fail when effect placeholders resolve to non-scalar values', () => {
+    const step = makeStep();
+    const ctx = makeInstructionContext({
+      workflowState: {
+        systemContexts: new Map(),
+        structuredOutputs: new Map(),
+        effectResults: new Map([
+          ['comment_pr', { metadata: { failed: false } }],
+        ]),
+      } as never,
+    });
+
+    expect(() => replaceTemplatePlaceholders('{effect:comment_pr.metadata}', step, ctx)).toThrow(
+      'Instruction interpolation requires scalar value for "effect:comment_pr.metadata"',
+    );
+  });
+
   it('should leave unreplaced placeholders when reportDir is undefined', () => {
     const step = makeStep();
     const ctx = makeInstructionContext({ reportDir: undefined });

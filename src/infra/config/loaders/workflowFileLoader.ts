@@ -31,7 +31,7 @@ export function loadWorkflowFromFile(filePath: string, projectDir: string): Work
   const projectConfig = loadProjectConfig(projectDir);
   const globalConfig = loadGlobalConfig();
 
-  return normalizeWorkflowConfig(
+  const config = normalizeWorkflowConfig(
     raw,
     workflowDir,
     context,
@@ -40,5 +40,7 @@ export function loadWorkflowFromFile(filePath: string, projectDir: string): Work
     resolveWorkflowRuntimePreparePolicy(globalConfig.workflowRuntimePrepare, projectConfig.workflowRuntimePrepare),
     resolveWorkflowArpeggioPolicy(globalConfig.workflowArpeggio, projectConfig.workflowArpeggio),
     resolveWorkflowMcpServersPolicy(globalConfig.workflowMcpServers, projectConfig.workflowMcpServers),
+    filePath,
   );
+  return config;
 }

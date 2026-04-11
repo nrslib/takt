@@ -5,6 +5,7 @@ import { getRepertoireDir } from '../paths.js';
 import { formatWorkflowLoadWarning } from './workflowLoadWarning.js';
 import { loadWorkflowFromFile } from './workflowFileLoader.js';
 import type { WorkflowConfig } from '../../../core/models/index.js';
+import { validateProjectWorkflowTrustBoundary } from './workflowTrustBoundary.js';
 
 const log = createLogger('workflow-discovery');
 
@@ -150,7 +151,11 @@ export function collectValidatedWorkflowEntries(
   const validatedEntries = new Map<string, ValidatedWorkflowEntry>();
   for (const entry of entries) {
     try {
-      validatedEntries.set(entry.name, { entry, config: loadWorkflowFromFile(entry.path, cwd) });
+      const config = loadWorkflowFromFile(entry.path, cwd);
+      if (entry.source === 'project') {
+        validateProjectWorkflowTrustBoundary(config, entry.path, cwd);
+      }
+      validatedEntries.set(entry.name, { entry, config });
     } catch (error) {
       log.debug('Skipping invalid workflow file', { path: entry.path, error: getErrorMessage(error) });
       emitWorkflowLoadWarning(options, entry.name, error);

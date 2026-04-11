@@ -127,6 +127,18 @@ describe('resolveBaseBranch — assertValidBranchRef argument correctness', () =
     );
   });
 
+  it('should reject remote-tracking refs for explicit baseBranch', () => {
+    mockResolveConfigValue.mockReturnValue(undefined);
+
+    expect(() => resolveBaseBranch('/project', 'origin/improve')).toThrow(
+      'Base branch must be a branch name, not a remote-tracking ref: origin/improve',
+    );
+    expect(() => resolveBaseBranch('/project', 'refs/remotes/origin/improve')).toThrow(
+      'Base branch must be a branch name, not a remote-tracking ref: refs/remotes/origin/improve',
+    );
+    expect(mockExecFileSync).not.toHaveBeenCalled();
+  });
+
   it('should throw Base branch does not exist when branch does not exist', () => {
     // Given: check-ref-format succeeds but show-ref fails (branch not found)
     mockResolveConfigValue.mockReturnValue(undefined);
@@ -168,4 +180,3 @@ describe('resolveBaseBranch — assertValidBranchRef argument correctness', () =
     expect(checkRefFormatCalls).toHaveLength(0);
   });
 });
-

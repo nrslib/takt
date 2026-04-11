@@ -8,8 +8,8 @@
 
 import { checkGlabCli } from './utils.js';
 import { fetchIssue, createIssue } from './issue.js';
-import { findExistingMr, commentOnMr, createMergeRequest, fetchMrReviewComments } from './pr.js';
-import type { GitProvider, CliStatus, Issue, ExistingPr, CreateIssueOptions, CreateIssueResult, CreatePrOptions, CreatePrResult, CommentResult, PrReviewData } from '../git/types.js';
+import { findExistingMr, commentOnMr, createMergeRequest, fetchMrReviewComments, mergeMr } from './pr.js';
+import type { GitProvider, CliStatus, Issue, ExistingPr, CreateIssueOptions, CreateIssueResult, CreatePrOptions, CreatePrResult, CommentResult, MergeResult, PrReviewData } from '../git/types.js';
 
 export class GitLabProvider implements GitProvider {
   checkCliStatus(cwd?: string): CliStatus {
@@ -38,5 +38,9 @@ export class GitLabProvider implements GitProvider {
 
   commentOnPr(prNumber: number, body: string, cwd?: string): CommentResult {
     return commentOnMr(prNumber, body, cwd ?? process.cwd());
+  }
+
+  mergePr(prNumber: number, cwd?: string): MergeResult {
+    return mergeMr(prNumber, cwd ?? process.cwd());
   }
 }

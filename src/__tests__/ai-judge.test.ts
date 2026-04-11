@@ -101,4 +101,10 @@ describe('buildJudgeConditions', () => {
   it('should return empty array for empty rules', () => {
     expect(buildJudgeConditions([], false)).toEqual([]);
   });
+
+  it('should preserve provided original indexes', () => {
+    expect(buildJudgeConditions([rules[0]], true, [2])).toEqual([
+      { index: 2, text: 'approved' },
+    ]);
+  });
 });

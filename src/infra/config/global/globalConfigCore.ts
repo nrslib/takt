@@ -46,6 +46,25 @@ function assertNoUnknownGlobalConfigKeys(rawConfig: Record<string, unknown>): vo
   throw new Error(issue.message);
 }
 
+function assertValidGlobalConfig(
+  rawConfig: Record<string, unknown>,
+  configPath: string,
+  onlyUnrecognizedKeys = false,
+): void {
+  const parsedResult = GlobalConfigSchema.safeParse(rawConfig);
+  if (!parsedResult.success) {
+    const firstIssue = onlyUnrecognizedKeys
+      ? parsedResult.error.issues.find((issue) => issue.code === 'unrecognized_keys')
+      : parsedResult.error.issues[0];
+    if (!firstIssue) {
+      return;
+    }
+    throw new Error(
+      `Configuration error: invalid ${firstIssue.path.join('.')} in ${configPath}: ${firstIssue.message ?? 'Invalid configuration value'}`,
+    );
+  }
+}
+
 type ProviderType = NonNullable<GlobalConfig['provider']>;
 type RawProviderReference = ConfigProviderReference<ProviderType>;
 export class GlobalConfigManager {
@@ -76,7 +95,7 @@ export class GlobalConfigManager {
     }
     const configPath = getGlobalConfigPath();
 
-    const { rawConfig, trace } = loadGlobalConfigTrace(
+    const { parsedConfig, rawConfig, trace } = loadGlobalConfigTrace(
       configPath,
       (value: unknown) => {
         if (value == null) {
@@ -89,6 +108,7 @@ export class GlobalConfigManager {
         return sanitized;
       },
     );
+    assertValidGlobalConfig(parsedConfig, configPath, true);
     assertNoUnknownGlobalConfigKeys(rawConfig);
     const parsed = GlobalConfigSchema.parse(rawConfig);
     const normalizedProvider = normalizeConfigProviderReference(

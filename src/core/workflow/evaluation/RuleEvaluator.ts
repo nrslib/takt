@@ -16,6 +16,8 @@ import type { ProviderType, RuleIndexDetector } from '../types.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import { buildJudgeConditions } from '../../../agents/judge-utils.js';
 import { AggregateEvaluator } from './AggregateEvaluator.js';
+import { evaluateWhenExpression } from './when-evaluator.js';
+import { isDeterministicCondition } from './rule-utils.js';
 
 const log = createLogger('rule-evaluator');
 
@@ -83,6 +85,11 @@ export class RuleEvaluator {
       return { index: aggIndex, method: 'aggregate' };
     }
 
+    const deterministicIndex = this.evaluateDeterministicConditions();
+    if (deterministicIndex >= 0) {
+      return { index: deterministicIndex, method: 'auto_select' };
+    }
+
     // 2. Tag detection from Phase 3 output
     if (tagContent) {
       const ruleIndex = this.ctx.detectRuleIndex(tagContent, this.step.name);
@@ -122,6 +129,29 @@ export class RuleEvaluator {
     }
 
     throw new Error(`Status not found for step "${this.step.name}": no rule matched after all detection phases`);
+  }
+
+  private evaluateDeterministicConditions(): number {
+    if (!this.step.rules) return -1;
+
+    for (let i = 0; i < this.step.rules.length; i++) {
+      const rule = this.step.rules[i];
+      if (!rule) continue;
+      if (rule.interactiveOnly && this.ctx.interactive !== true) {
+        continue;
+      }
+      if (rule.isAiCondition || rule.isAggregateCondition) {
+        continue;
+      }
+      if (!isDeterministicCondition(rule.condition)) {
+        continue;
+      }
+      if (evaluateWhenExpression(rule.condition, this.ctx.state)) {
+        return i;
+      }
+    }
+
+    return -1;
   }
 
   /**
@@ -177,7 +207,18 @@ export class RuleEvaluator {
   private async evaluateAllConditionsViaAiJudge(agentOutput: string): Promise<number> {
     if (!this.step.rules || this.step.rules.length === 0) return -1;
 
-    const conditions = buildJudgeConditions(this.step.rules, this.ctx.interactive === true);
+    const judgeableRules = this.step.rules
+      .map((rule, index) => ({ rule, index }))
+      .filter(({ rule }) => !rule.isAggregateCondition && !isDeterministicCondition(rule.condition))
+      .filter(({ rule }) => this.ctx.interactive === true || !rule.interactiveOnly);
+    const conditions = buildJudgeConditions(
+      judgeableRules.map(({ rule }) => rule),
+      true,
+      judgeableRules.map(({ index }) => index),
+    );
+    if (conditions.length === 0) {
+      return -1;
+    }
 
     log.debug('Evaluating all conditions via AI judge (final fallback)', {
       step: this.step.name,

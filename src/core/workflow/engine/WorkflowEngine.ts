@@ -27,6 +27,7 @@ import { OptionsBuilder } from './OptionsBuilder.js';
 import { ParallelRunner } from './ParallelRunner.js';
 import { createInitialState, addUserInput as addUserInputToState } from './state-manager.js';
 import { StepExecutor } from './StepExecutor.js';
+import { SystemStepExecutor } from './SystemStepExecutor.js';
 import { TeamLeaderRunner } from './TeamLeaderRunner.js';
 import { determineNextStepByRules } from './transitions.js';
 import { CycleDetector } from './cycle-detector.js';
@@ -65,6 +66,7 @@ export class WorkflowEngine extends EventEmitter {
   private readonly parallelRunner: ParallelRunner;
   private readonly arpeggioRunner: ArpeggioRunner;
   private readonly teamLeaderRunner: TeamLeaderRunner;
+  private readonly systemStepExecutor: SystemStepExecutor;
   private readonly loopMonitorJudgeRunner: LoopMonitorJudgeRunner;
   private readonly detectRuleIndex: (content: string, stepName: string) => number;
   private readonly structuredCaller: StructuredCaller;
@@ -162,6 +164,22 @@ export class WorkflowEngine extends EventEmitter {
       getInteractive: () => this.options.interactive === true,
       onPhaseStart: phaseRelay.onPhaseStart,
       onPhaseComplete: phaseRelay.onPhaseComplete,
+    });
+
+    this.systemStepExecutor = new SystemStepExecutor({
+      task: this.task,
+      projectCwd: this.options.projectCwd,
+      taskContext: this.options.currentTask,
+      ruleContext: {
+        cwd: this.cwd,
+        provider: this.options.provider,
+        resolvedProvider: this.options.provider,
+        resolvedModel: this.options.model,
+        interactive: this.options.interactive === true,
+        detectRuleIndex: this.detectRuleIndex,
+        structuredCaller: this.structuredCaller,
+      },
+      systemStepServicesFactory: this.options.systemStepServicesFactory,
     });
 
     this.loopMonitorJudgeRunner = new LoopMonitorJudgeRunner({
@@ -292,6 +310,11 @@ export class WorkflowEngine extends EventEmitter {
       result = await this.arpeggioRunner.runArpeggioStep(step, this.state);
     } else if (step.teamLeader) {
       result = await this.teamLeaderRunner.runTeamLeaderStep(step, this.state, this.task, this.config.maxSteps, updateSession);
+    } else if (step.mode === 'system') {
+      result = {
+        response: await this.systemStepExecutor.run(step, this.state),
+        instruction: '',
+      };
     } else {
       result = await this.stepExecutor.runNormalStep(
         step,

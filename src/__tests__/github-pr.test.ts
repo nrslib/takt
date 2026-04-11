@@ -19,7 +19,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   getErrorMessage: (e: unknown) => String(e),
 }));
 
-import { findExistingPr, createPullRequest, fetchPrReviewComments } from '../infra/github/pr.js';
+import { findExistingPr, createPullRequest, fetchPrReviewComments, mergePr } from '../infra/github/pr.js';
 import { buildPrBody, formatPrReviewAsTask } from '../infra/git/format.js';
 import type { Issue, PrReviewData } from '../infra/git/types.js';
 
@@ -97,6 +97,44 @@ describe('createPullRequest', () => {
 
     const call = mockExecFileSync.mock.calls[0];
     expect(call[1]).not.toContain('--draft');
+  });
+});
+
+describe('mergePr', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('gh pr merge を --merge --delete-branch 付きで呼び出す', () => {
+    mockExecFileSync.mockReturnValue('');
+
+    const result = mergePr(42, '/project');
+
+    expect(result).toEqual({ success: true });
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      'gh',
+      ['pr', 'merge', '42', '--merge', '--delete-branch'],
+      expect.objectContaining({ cwd: '/project', encoding: 'utf-8' }),
+    );
+  });
+
+  it('gh CLI が利用不可なら失敗結果を返す', async () => {
+    const { checkGhCli } = await import('../infra/github/issue.js');
+    vi.mocked(checkGhCli).mockReturnValueOnce({ available: false, error: 'gh unavailable' });
+
+    const result = mergePr(42, '/project');
+
+    expect(result).toEqual({ success: false, error: 'gh unavailable' });
+    expect(mockExecFileSync).not.toHaveBeenCalled();
+  });
+
+  it('gh pr merge が失敗した場合は success: false を返す', () => {
+    mockExecFileSync.mockImplementation(() => { throw new Error('merge failed'); });
+
+    const result = mergePr(42, '/project');
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('merge failed');
   });
 });
 

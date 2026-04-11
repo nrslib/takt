@@ -16,6 +16,7 @@ const {
   mockCommentOnPr,
   mockCreatePullRequest,
   mockFetchPrReviewComments,
+  mockMergePr,
 } = vi.hoisted(() => ({
   mockCheckGhCli: vi.fn(),
   mockFetchIssue: vi.fn(),
@@ -24,6 +25,7 @@ const {
   mockCommentOnPr: vi.fn(),
   mockCreatePullRequest: vi.fn(),
   mockFetchPrReviewComments: vi.fn(),
+  mockMergePr: vi.fn(),
 }));
 
 vi.mock('../infra/github/issue.js', () => ({
@@ -37,6 +39,7 @@ vi.mock('../infra/github/pr.js', () => ({
   commentOnPr: (...args: unknown[]) => mockCommentOnPr(...args),
   createPullRequest: (...args: unknown[]) => mockCreatePullRequest(...args),
   fetchPrReviewComments: (...args: unknown[]) => mockFetchPrReviewComments(...args),
+  mergePr: (...args: unknown[]) => mockMergePr(...args),
 }));
 
 import { GitHubProvider } from '../infra/github/GitHubProvider.js';
@@ -437,6 +440,36 @@ describe('GitHubProvider', () => {
       expect(mockFetchPrReviewComments).toHaveBeenCalledWith(200, process.cwd());
     });
   });
+
+  describe('mergePr', () => {
+    it('mergePr(prNumber, cwd) に委譲し MergeResult を返す', () => {
+      mockMergePr.mockReturnValue({ success: true });
+      const provider = new GitHubProvider();
+
+      const result = provider.mergePr(42, '/project');
+
+      expect(mockMergePr).toHaveBeenCalledWith(42, '/project');
+      expect(result).toEqual({ success: true });
+    });
+
+    it('失敗時はエラー結果を委譲して返す', () => {
+      mockMergePr.mockReturnValue({ success: false, error: 'merge blocked' });
+      const provider = new GitHubProvider();
+
+      const result = provider.mergePr(42, '/project');
+
+      expect(result).toEqual({ success: false, error: 'merge blocked' });
+    });
+
+    it('cwd 省略時は process.cwd() をフォールバックとして渡す', () => {
+      mockMergePr.mockReturnValue({ success: true });
+      const provider = new GitHubProvider();
+
+      provider.mergePr(42);
+
+      expect(mockMergePr).toHaveBeenCalledWith(42, process.cwd());
+    });
+  });
 });
 
 describe('getGitProvider', () => {
@@ -452,6 +485,7 @@ describe('getGitProvider', () => {
     expect(typeof provider.findExistingPr).toBe('function');
     expect(typeof provider.createPullRequest).toBe('function');
     expect(typeof provider.commentOnPr).toBe('function');
+    expect(typeof provider.mergePr).toBe('function');
   });
 
   it('呼び出しのたびに同じインスタンスを返す（シングルトン）', () => {

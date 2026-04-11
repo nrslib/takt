@@ -35,6 +35,11 @@ export interface CommentResult {
   error?: string;
 }
 
+export interface MergeResult {
+  success: boolean;
+  error?: string;
+}
+
 export interface CreateIssueOptions {
   title: string;
   body: string;
@@ -80,4 +85,6 @@ export interface GitProvider {
   createPullRequest(options: CreatePrOptions, cwd?: string): CreatePrResult;
 
   commentOnPr(prNumber: number, body: string, cwd?: string): CommentResult;
+
+  mergePr(prNumber: number, cwd?: string): MergeResult;
 }

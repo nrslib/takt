@@ -20,6 +20,7 @@ import { getLabel } from '../../../shared/i18n/index.js';
 import { buildRunPaths } from '../../../core/workflow/run/run-paths.js';
 import { resolveRuntimeConfig } from '../../../core/runtime/runtime-environment.js';
 import { getGlobalConfigDir } from '../../../infra/config/paths.js';
+import { createDefaultSystemStepServices } from '../../../infra/workflow/system/DefaultSystemStepServices.js';
 import { initAnalyticsWriter } from '../../analytics/index.js';
 import { SessionLogger } from './sessionLogger.js';
 import { AbortHandler } from './abortHandler.js';
@@ -180,6 +181,10 @@ export async function executeWorkflow(
       taskPrefix: options.taskPrefix,
       taskColorIndex: options.taskColorIndex,
       initialIteration: options.initialIterationOverride,
+      currentTask: options.currentTaskIssueNumber !== undefined
+        ? { issueNumber: options.currentTaskIssueNumber }
+        : undefined,
+      systemStepServicesFactory: createDefaultSystemStepServices,
     });
     abortHandler.install();
     engine.on('phase:start', (step, phase, phaseName, instruction, promptParts, phaseExecutionId, iteration) => {

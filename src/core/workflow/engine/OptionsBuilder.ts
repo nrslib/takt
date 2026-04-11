@@ -116,6 +116,7 @@ export class OptionsBuilder {
       sessionId: shouldResumeSession ? this.getSessionId(buildSessionKey(step, runtime?.providerInfo?.provider)) : undefined,
       allowedTools,
       mcpServers: step.mcpServers,
+      outputSchema: step.structuredOutput?.schema,
     };
   }
 

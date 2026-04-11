@@ -9,6 +9,7 @@
 
 import type { WorkflowStep } from '../../models/types.js';
 import type { InstructionContext } from './instruction-context.js';
+import { resolveWorkflowStateReference } from '../state/workflow-state-access.js';
 import { escapeTemplateChars } from 'faceted-prompting';
 
 export { escapeTemplateChars } from 'faceted-prompting';
@@ -22,6 +23,17 @@ export function replaceTemplatePlaceholders(
   context: InstructionContext,
 ): string {
   let result = template;
+
+  result = result.replace(/\{(context|structured|effect):([^}]+)\}/g, (_match, root: string, ref: string) => {
+    if (!context.workflowState) {
+      throw new Error(`Workflow state is required for "{${root}:${ref}}" interpolation`);
+    }
+    const value = resolveWorkflowStateReference(`${root}.${ref.replace(/:/g, '.')}`, context.workflowState);
+    if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
+      throw new Error(`Instruction interpolation requires scalar value for "${root}:${ref}"`);
+    }
+    return escapeTemplateChars(String(value));
+  });
 
   // Replace {task}
   result = result.replace(/\{task\}/g, escapeTemplateChars(context.task));

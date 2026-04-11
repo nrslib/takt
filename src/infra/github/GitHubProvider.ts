@@ -7,8 +7,8 @@
  */
 
 import { checkGhCli, fetchIssue, createIssue } from './issue.js';
-import { findExistingPr, commentOnPr, createPullRequest, fetchPrReviewComments } from './pr.js';
-import type { GitProvider, CliStatus, Issue, ExistingPr, CreateIssueOptions, CreateIssueResult, CreatePrOptions, CreatePrResult, CommentResult, PrReviewData } from '../git/types.js';
+import { findExistingPr, commentOnPr, createPullRequest, fetchPrReviewComments, mergePr } from './pr.js';
+import type { GitProvider, CliStatus, Issue, ExistingPr, CreateIssueOptions, CreateIssueResult, CreatePrOptions, CreatePrResult, CommentResult, MergeResult, PrReviewData } from '../git/types.js';
 
 export class GitHubProvider implements GitProvider {
   checkCliStatus(cwd?: string): CliStatus {
@@ -37,5 +37,9 @@ export class GitHubProvider implements GitProvider {
 
   commentOnPr(prNumber: number, body: string, cwd?: string): CommentResult {
     return commentOnPr(prNumber, body, cwd ?? process.cwd());
+  }
+
+  mergePr(prNumber: number, cwd?: string): MergeResult {
+    return mergePr(prNumber, cwd ?? process.cwd());
   }
 }

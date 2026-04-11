@@ -34,7 +34,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   getErrorMessage: (e: unknown) => String(e),
 }));
 
-import { findExistingMr, createMergeRequest, commentOnMr, fetchMrReviewComments } from '../infra/gitlab/pr.js';
+import { findExistingMr, createMergeRequest, commentOnMr, fetchMrReviewComments, mergeMr } from '../infra/gitlab/pr.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -307,6 +307,54 @@ describe('commentOnMr', () => {
     commentOnMr(42, 'LGTM', '/my/project');
 
     // Then
+    expect(mockCheckGlabCli).toHaveBeenCalledWith('/my/project');
+  });
+});
+
+describe('mergeMr', () => {
+  it('成功時は success: true を返す', () => {
+    mockExecFileSync.mockReturnValue('');
+
+    const result = mergeMr(42, '/project');
+
+    expect(result).toEqual({ success: true });
+  });
+
+  it('glab mr merge を --remove-source-branch --yes 付きで呼び出す', () => {
+    mockExecFileSync.mockReturnValue('');
+
+    mergeMr(42, '/project');
+
+    const call = mockExecFileSync.mock.calls[0];
+    expect(call[0]).toBe('glab');
+    expect(call[1]).toEqual(['mr', 'merge', '42', '--remove-source-branch', '--yes']);
+    expect(call[2]).toEqual(expect.objectContaining({ cwd: '/project', encoding: 'utf-8' }));
+  });
+
+  it('失敗時は success: false とエラーメッセージを返す', () => {
+    mockExecFileSync.mockImplementation(() => { throw new Error('merge denied'); });
+
+    const result = mergeMr(42, '/project');
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('merge denied');
+  });
+
+  it('glab CLI が利用できない場合は execFileSync を呼ばず失敗を返す', () => {
+    mockCheckGlabCli.mockReturnValueOnce({ available: false, error: 'glab unavailable' });
+
+    const result = mergeMr(42, '/project');
+
+    expect(result).toEqual({ success: false, error: 'glab unavailable' });
+    expect(mockExecFileSync).not.toHaveBeenCalled();
+  });
+
+  it('checkGlabCli に cwd を渡す', () => {
+    mockCheckGlabCli.mockReturnValue({ available: true });
+    mockExecFileSync.mockReturnValue('');
+
+    mergeMr(42, '/my/project');
+
     expect(mockCheckGlabCli).toHaveBeenCalledWith('/my/project');
   });
 });

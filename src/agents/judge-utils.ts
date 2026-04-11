@@ -10,11 +10,12 @@ export function isValidRuleIndex(index: number, rules: WorkflowRule[], interacti
 export function buildJudgeConditions(
   rules: WorkflowRule[],
   interactive: boolean,
+  indexes?: number[],
 ): Array<{ index: number; text: string }> {
   return rules
     .map((rule, index) => ({ rule, index }))
     .filter(({ rule }) => interactive || !rule.interactiveOnly)
-    .map(({ index, rule }) => ({ index, text: rule.condition }));
+    .map(({ index, rule }) => ({ index: indexes?.[index] ?? index, text: rule.condition }));
 }
 
 export function detectJudgeIndex(content: string): number {

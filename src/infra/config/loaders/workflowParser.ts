@@ -7,6 +7,7 @@ import { WorkflowConfigRawSchema } from '../../../core/models/index.js';
 import type { WorkflowConfig, WorkflowStep } from '../../../core/models/index.js';
 import { resolveLoopMonitorJudgeProviderModel, resolveStepProviderModel } from '../../../core/workflow/provider-resolution.js';
 import { validateProviderModelCompatibility } from '../../../core/workflow/provider-model-compatibility.js';
+import { isPathSafe } from '../paths.js';
 import { normalizeRuntime } from '../configNormalizers.js';
 import type { FacetResolutionContext, WorkflowSections } from './resource-resolver.js';
 import { resolveSectionMap } from './resource-resolver.js';
@@ -15,6 +16,7 @@ import {
 } from './workflowNormalizationPolicies.js';
 import { normalizeLoopMonitors } from './workflowLoopMonitorNormalizer.js';
 import { normalizeProviderReference, normalizeStepFromRaw } from './workflowStepNormalizer.js';
+import { validateProjectWorkflowTrustBoundaryForSteps } from './workflowTrustBoundary.js';
 
 export function normalizeWorkflowConfig(
   raw: unknown,
@@ -25,6 +27,7 @@ export function normalizeWorkflowConfig(
   workflowRuntimePreparePolicy?: WorkflowRuntimePrepareConfig,
   workflowArpeggioPolicy?: WorkflowArpeggioConfig,
   workflowMcpServersPolicy?: WorkflowMcpServersConfig,
+  workflowPath = workflowDir,
 ): WorkflowConfig {
   const parsed = WorkflowConfigRawSchema.parse(raw);
   const sections: WorkflowSections = {
@@ -42,12 +45,16 @@ export function normalizeWorkflowConfig(
     undefined,
     parsed.workflow_config?.provider_options,
   );
+  if (context?.projectDir && isPathSafe(context.projectDir, workflowDir)) {
+    validateProjectWorkflowTrustBoundaryForSteps(parsed.steps, workflowPath, context.projectDir);
+  }
 
   const steps: WorkflowStep[] = parsed.steps.map((step) =>
     normalizeStepFromRaw(
       step,
       workflowDir,
       sections,
+      parsed.schemas,
       normalizedWorkflowProvider.provider,
       normalizedWorkflowProvider.model,
       normalizedWorkflowProvider.providerOptions,
@@ -88,6 +95,7 @@ export function normalizeWorkflowConfig(
   return {
     name: parsed.name,
     description: parsed.description,
+    schemas: parsed.schemas,
     providerOptions: normalizedWorkflowProvider.providerOptions,
     runtime: workflowRuntime,
     personas: parsed.personas,

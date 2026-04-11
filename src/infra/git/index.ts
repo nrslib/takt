@@ -17,7 +17,7 @@ import { getErrorMessage } from '../../shared/utils/index.js';
 import type { GitProvider, CreatePrOptions, CreatePrResult } from './types.js';
 import type { VcsProviderType } from './detect.js';
 
-export type { GitProvider, Issue, CliStatus, ExistingPr, CreatePrOptions, CreatePrResult, CommentResult, CreateIssueOptions, CreateIssueResult, PrReviewComment, PrReviewData } from './types.js';
+export type { GitProvider, Issue, CliStatus, ExistingPr, CreatePrOptions, CreatePrResult, CommentResult, MergeResult, CreateIssueOptions, CreateIssueResult, PrReviewComment, PrReviewData } from './types.js';
 export { formatIssueAsTask, parseIssueNumbers, isIssueReference, formatPrReviewAsTask, buildPrBody } from './format.js';
 
 let provider: GitProvider | undefined;

@@ -10,6 +10,7 @@ import type { WorkflowConfig } from '../../../core/models/index.js';
 import { getBuiltinWorkflowsDir, getGlobalWorkflowsDir, getProjectWorkflowsDir, getRepertoireDir } from '../paths.js';
 import { resolveWorkflowConfigValues } from '../resolveWorkflowConfigValue.js';
 import { loadWorkflowFromFile } from './workflowFileLoader.js';
+import { validateProjectWorkflowTrustBoundary } from './workflowTrustBoundary.js';
 import {
   collectValidatedWorkflowEntries,
   iterateWorkflowDir,
@@ -80,14 +81,24 @@ export function getBuiltinWorkflow(name: string, projectCwd: string): WorkflowCo
 
 function loadWorkflowFromPath(filePath: string, basePath: string, projectCwd: string): WorkflowConfig | null {
   const resolvedPath = resolvePath(filePath, basePath);
-  return existsSync(resolvedPath) ? loadWorkflowFromFile(resolvedPath, projectCwd) : null;
+  if (!existsSync(resolvedPath)) {
+    return null;
+  }
+
+  const workflow = loadWorkflowFromFile(resolvedPath, projectCwd);
+  validateProjectWorkflowTrustBoundary(workflow, resolvedPath, projectCwd);
+  return workflow;
 }
 
 export function loadWorkflow(name: string, projectCwd: string): WorkflowConfig | null {
   for (const dir of [getProjectWorkflowsDir(projectCwd), getGlobalWorkflowsDir()]) {
     const match = resolveWorkflowFile(dir, name);
     if (match) {
-      return loadWorkflowFromFile(match, projectCwd);
+      const workflow = loadWorkflowFromFile(match, projectCwd);
+      if (dir === getProjectWorkflowsDir(projectCwd)) {
+        validateProjectWorkflowTrustBoundary(workflow, match, projectCwd);
+      }
+      return workflow;
     }
   }
   return getBuiltinWorkflow(name, projectCwd);

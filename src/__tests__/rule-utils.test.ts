@@ -11,6 +11,7 @@ import {
   hasOnlyOneBranch,
   getAutoSelectedTag,
   getReportFiles,
+  isDeterministicCondition,
 } from '../core/workflow/evaluation/rule-utils.js';
 import type { OutputContractEntry } from '../core/models/types.js';
 import { makeStep } from './test-helpers.js';
@@ -63,6 +64,26 @@ describe('hasTagBasedRules', () => {
       ],
     });
     expect(hasTagBasedRules(step)).toBe(true);
+  });
+
+  it('should return false when all rules are deterministic when expressions', () => {
+    const step = makeStep({
+      rules: [
+        { condition: 'structured.plan.action == "noop"', next: 'COMPLETE' },
+        { condition: 'context.route.task.exists == true', next: 'ABORT' },
+      ],
+    });
+    expect(hasTagBasedRules(step)).toBe(false);
+  });
+});
+
+describe('isDeterministicCondition', () => {
+  it('should return true for structured when expressions', () => {
+    expect(isDeterministicCondition('structured.plan_followup.action == "noop"')).toBe(true);
+  });
+
+  it('should return false for plain tag conditions', () => {
+    expect(isDeterministicCondition('approved')).toBe(false);
   });
 });
 
