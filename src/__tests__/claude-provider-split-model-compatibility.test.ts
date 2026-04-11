@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { validateProviderModelCompatibility } from '../core/piece/provider-model-compatibility.js';
+import { validateProviderModelCompatibility } from '../core/workflow/provider-model-compatibility.js';
 
 describe('validateProviderModelCompatibility (Claude split)', () => {
   it('Given codex provider and Claude model alias, When validate, Then error mentions claude-sdk', () => {

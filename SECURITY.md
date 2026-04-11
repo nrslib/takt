@@ -39,12 +39,12 @@ TAKT orchestrates AI agents that can execute code and access files. Users should
 
 - **Trusted Directories**: TAKT requires explicit configuration of trusted directories in `~/.takt/config.yaml`
 - **Agent Permissions**: Agents have access to tools like Bash, Edit, Write based on their configuration
-- **Piece Definitions**: Only use piece files from trusted sources
+- **Workflow Definitions**: Only use workflow files from trusted sources
 - **Session Logs**: Session logs in `.takt/logs/` may contain sensitive information
 
 ### Best Practices
 
-1. Review piece YAML files before using them
+1. Review workflow YAML files before using them
 2. Keep TAKT updated to the latest version
 3. Limit trusted directories to necessary paths only
 4. Be cautious when using custom agents from untrusted sources

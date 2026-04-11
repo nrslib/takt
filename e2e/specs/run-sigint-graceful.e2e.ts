@@ -228,7 +228,7 @@ describe('E2E: Run tasks graceful shutdown on SIGINT (parallel)', () => {
 
   it('should exit promptly when external SIGINT arrives during clone creation', async () => {
     const binPath = resolve(__dirname, '../../bin/takt');
-    const piecePath = resolve(__dirname, '../fixtures/pieces/mock-slow-multi-step.yaml');
+    const workflowPath = resolve(__dirname, '../fixtures/workflows/mock-slow-multi-step.yaml');
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/run-sigint-parallel.json');
 
     const tasksFile = join(testRepo.path, '.takt', 'tasks.yaml');
@@ -242,7 +242,7 @@ describe('E2E: Run tasks graceful shutdown on SIGINT (parallel)', () => {
         '  - name: sigint-a',
         '    status: pending',
         '    content: "E2E SIGINT clone task A"',
-        `    piece: "${piecePath}"`,
+        `    workflow: "${workflowPath}"`,
         '    worktree: true',
         `    created_at: "${now}"`,
         '    started_at: null',
@@ -251,7 +251,7 @@ describe('E2E: Run tasks graceful shutdown on SIGINT (parallel)', () => {
         '  - name: sigint-b',
         '    status: pending',
         '    content: "E2E SIGINT clone task B"',
-        `    piece: "${piecePath}"`,
+        `    workflow: "${workflowPath}"`,
         '    worktree: true',
         `    created_at: "${now}"`,
         '    started_at: null',

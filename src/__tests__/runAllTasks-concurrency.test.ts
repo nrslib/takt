@@ -72,7 +72,7 @@ function buildUpdatedTaskInfo(
     worktreePath: execution.worktreePath,
     data: {
       task: `Task: ${taskName}`,
-      piece: 'default',
+      workflow: 'default',
       ...(execution.branch ? { branch: execution.branch } : {}),
     },
   };

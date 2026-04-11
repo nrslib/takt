@@ -10,7 +10,7 @@ import { runTakt } from '../helpers/takt-runner';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const MOCK_PIECE_PATH = resolve(__dirname, '../fixtures/pieces/mock-single-step.yaml');
+const MOCK_WORKFLOW_PATH = resolve(__dirname, '../fixtures/workflows/mock-single-step.yaml');
 const MOCK_SCENARIO_PATH = resolve(__dirname, '../fixtures/scenarios/execute-done.json');
 
 interface CompletedTaskMeta {
@@ -50,7 +50,7 @@ function writePendingWorktreeTask(repoPath: string, name: string, content: strin
       `  - name: ${name}`,
       '    status: pending',
       `    content: "${content.replaceAll('"', '\\"')}"`,
-      `    piece: "${MOCK_PIECE_PATH}"`,
+      `    workflow: "${MOCK_WORKFLOW_PATH}"`,
       '    worktree: true',
       `    created_at: "${now}"`,
       '    started_at: null',

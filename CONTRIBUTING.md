@@ -2,7 +2,7 @@
 
 🇯🇵 [日本語版](./docs/CONTRIBUTING.ja.md)
 
-Thank you for your interest in contributing to TAKT! This project uses TAKT's review piece to verify PR quality before merging.
+Thank you for your interest in contributing to TAKT! This project uses TAKT's review workflow to verify PR quality before merging.
 
 ## Development Setup
 
@@ -38,7 +38,7 @@ npm test
 
 ### 2. Run TAKT review
 
-The review piece auto-detects the review mode based on the input:
+The review workflow auto-detects the review mode based on the input:
 
 ```bash
 # PR mode — review a pull request by number

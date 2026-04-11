@@ -341,7 +341,7 @@ describe('forceFailRunningTask', () => {
     expect(mockLogError).not.toHaveBeenCalled();
   });
 
-  it('should allow force-fail with undefined movement when only unrelated corrupt meta.json exists', async () => {
+  it('should allow force-fail with undefined step when only unrelated corrupt meta.json exists', async () => {
     mockConfirm.mockResolvedValue(true);
     fs.mkdirSync(path.join(projectDir, '.takt', 'runs', '20260409-run-z'), { recursive: true });
     fs.writeFileSync(path.join(projectDir, '.takt', 'runs', '20260409-run-z', 'meta.json'), '{ broken json', 'utf-8');
@@ -356,7 +356,7 @@ describe('forceFailRunningTask', () => {
     expect(mockLogError).not.toHaveBeenCalled();
   });
 
-  it('should allow force-fail with undefined movement when run slug is missing', async () => {
+  it('should allow force-fail with undefined step when run slug is missing', async () => {
     mockConfirm.mockResolvedValue(true);
     writeMeta(projectDir, '20260409-run-a', {
       task: 'Force fail me\nwith full prompt',
@@ -417,7 +417,7 @@ describe('forceFailRunningTask', () => {
     });
   });
 
-  it('should ignore invalid run slug values and continue with undefined movement', async () => {
+  it('should ignore invalid run slug values and continue with undefined step', async () => {
     mockConfirm.mockResolvedValue(true);
 
     const result = await forceFailRunningTask(

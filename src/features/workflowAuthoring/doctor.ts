@@ -3,9 +3,7 @@ import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import {
   getBuiltinWorkflowsDir,
-  getGlobalConfigDir,
   getGlobalWorkflowsDir,
-  getProjectConfigDir,
   getProjectWorkflowsDir,
   isWorkflowPath,
   resolveWorkflowConfigValue,
@@ -28,9 +26,7 @@ function resolveNamedWorkflowPath(name: string, projectDir: string): string | un
   const lang = resolveWorkflowConfigValue(projectDir, 'language');
   const candidateDirs = [
     getProjectWorkflowsDir(projectDir),
-    join(getProjectConfigDir(projectDir), 'pieces'),
     getGlobalWorkflowsDir(),
-    join(getGlobalConfigDir(), 'pieces'),
     getBuiltinWorkflowsDir(lang),
   ];
 
@@ -69,7 +65,6 @@ function resolveWorkflowTargets(targets: string[], projectDir: string): string[]
   if (targets.length === 0) {
     return [
       ...collectWorkflowFiles(getProjectWorkflowsDir(projectDir)),
-      ...collectWorkflowFiles(join(getProjectConfigDir(projectDir), 'pieces')),
     ];
   }
 

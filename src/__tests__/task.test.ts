@@ -71,7 +71,7 @@ describe('TaskRunner (tasks.yaml)', () => {
   });
 
   it('should persist run execution linkage and expose it through running task items', () => {
-    runner.addTask('Task A', { piece: 'default', worktree: true });
+    runner.addTask('Task A', { workflow: 'default', worktree: true });
     const claimed = runner.claimNextTasks(1);
     const task = claimed[0];
     expect(task).toBeDefined();
@@ -325,7 +325,7 @@ describe('TaskRunner (tasks.yaml)', () => {
     const beforeForceFail = loadTasksFile(testDir).tasks[0]!;
 
     runner.forceFailRunningTask(running.name, {
-      movement: 'implement',
+      step: 'implement',
       error: 'Manually marked as failed',
     });
 
@@ -336,7 +336,7 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(failed?.completed_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(failed?.owner_pid).toBeNull();
     expect(failed?.failure).toEqual({
-      movement: 'implement',
+      step: 'implement',
       error: 'Manually marked as failed',
     });
   });

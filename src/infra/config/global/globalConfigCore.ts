@@ -76,7 +76,7 @@ export class GlobalConfigManager {
     }
     const configPath = getGlobalConfigPath();
 
-    const { parsedConfig, rawConfig, trace } = loadGlobalConfigTrace(
+    const { rawConfig, trace } = loadGlobalConfigTrace(
       configPath,
       (value: unknown) => {
         if (value == null) {

@@ -2,7 +2,7 @@
 
 [English](../CONTRIBUTING.md)
 
-TAKT への貢献に興味を持っていただきありがとうございます。このプロジェクトでは TAKT のレビューピースを使って PR の品質を確認しています。
+TAKT への貢献に興味を持っていただきありがとうございます。このプロジェクトでは TAKT のレビュー用ワークフローを使って PR の品質を確認しています。
 
 ## 開発環境のセットアップ
 
@@ -38,17 +38,17 @@ npm test
 
 ### 2. TAKT レビューを実行する
 
-レビューピースは入力内容からレビューモードを自動判定します:
+レビュー用ワークフローは入力内容からレビューモードを自動判定します:
 
 ```bash
 # PR モード — PR番号を指定してレビュー
-takt -t "#<PR番号>" -w review-default
+takt -t "#<PR番号>" -w review
 
 # ブランチモード — ブランチのmainとの差分をレビュー
-takt -t "<ブランチ名>" -w review-default
+takt -t "<ブランチ名>" -w review
 
 # 現在の差分モード — 未コミットや直近の変更をレビュー
-takt -t "review current changes" -w review-default
+takt -t "review current changes" -w review
 ```
 
 ### 3. APPROVE を確認する

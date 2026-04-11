@@ -463,7 +463,7 @@ describe('resolveAgentProviderModel', () => {
 });
 
 describe('resolveLoopMonitorJudgeProviderModel', () => {
-  it('should inherit provider and model resolved from personaProviders on the triggering movement', () => {
+  it('should inherit provider and model resolved from personaProviders on the triggering step', () => {
     const result = resolveLoopMonitorJudgeProviderModel({
       judge: { provider: undefined, model: 'opencode/model-b' },
       triggeringStep: {

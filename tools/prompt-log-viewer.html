@@ -192,7 +192,7 @@
       border-bottom: 1px solid #3e3e42;
     }
 
-    .movement-name {
+    .step-name {
       font-weight: 700;
       font-size: 15px;
       color: #4ec9b0;
@@ -401,8 +401,8 @@
 
     <div class="controls" id="controls">
       <div class="filter-group">
-        <label class="filter-label">Movement</label>
-        <div class="filter-buttons" id="movementFilters"></div>
+        <label class="filter-label">Step</label>
+        <div class="filter-buttons" id="stepFilters"></div>
       </div>
       <div class="filter-group">
         <label class="filter-label">Phase</label>
@@ -432,13 +432,13 @@
     const fileInfo = document.getElementById('fileInfo');
     const statsDiv = document.getElementById('stats');
     const recordsDiv = document.getElementById('records');
-    const movementFiltersDiv = document.getElementById('movementFilters');
+    const stepFiltersDiv = document.getElementById('stepFilters');
     const phaseFiltersDiv = document.getElementById('phaseFilters');
 
     let promptFiles = [];
     let currentFileIndex = -1;
     let allRecords = [];
-    let activeMovements = new Set();
+    let activeSteps = new Set();
     let activePhases = new Set([1, 2, 3]);
 
     // --- IndexedDB ---
@@ -619,13 +619,13 @@
 
     // --- Filters ---
     function buildFilters() {
-      const movements = [...new Set(allRecords.map(r => r.movement))];
+      const steps = [...new Set(allRecords.map(r => r.step))];
       const phases = [...new Set(allRecords.map(r => r.phase))].sort();
-      activeMovements = new Set(movements);
+      activeSteps = new Set(steps);
       activePhases = new Set(phases);
 
-      movementFiltersDiv.innerHTML = movements.map(m =>
-        `<button class="filter-btn active" data-movement="${m}" onclick="toggleMovement('${m}')">${m}</button>`
+      stepFiltersDiv.innerHTML = steps.map(step =>
+        `<button class="filter-btn active" data-step="${step}" onclick="toggleStep('${step}')">${step}</button>`
       ).join('');
 
       const phaseLabels = { 1: 'Phase 1 (Execute)', 2: 'Phase 2 (Report)', 3: 'Phase 3 (Judge)' };
@@ -641,7 +641,7 @@
       const p3 = allRecords.filter(r => r.phase === 3).length;
       statsDiv.innerHTML = `
         <div class="stat"><span class="stat-label">Total Records</span><span class="stat-value">${allRecords.length}</span></div>
-        <div class="stat"><span class="stat-label">Movements</span><span class="stat-value">${movements.length}</span></div>
+        <div class="stat"><span class="stat-label">Steps</span><span class="stat-value">${steps.length}</span></div>
         <div class="stat"><span class="stat-label">Phase 1</span><span class="stat-value">${p1}</span></div>
         <div class="stat"><span class="stat-label">Phase 2</span><span class="stat-value">${p2}</span></div>
         <div class="stat"><span class="stat-label">Phase 3</span><span class="stat-value">${p3}</span></div>
@@ -649,9 +649,9 @@
       fileInfo.classList.add('active');
     }
 
-    function toggleMovement(name) {
-      if (activeMovements.has(name)) activeMovements.delete(name); else activeMovements.add(name);
-      document.querySelector(`[data-movement="${name}"]`).classList.toggle('active');
+    function toggleStep(name) {
+      if (activeSteps.has(name)) activeSteps.delete(name); else activeSteps.add(name);
+      document.querySelector(`[data-step="${name}"]`).classList.toggle('active');
       applyFilters();
     }
 
@@ -664,7 +664,7 @@
     function applyFilters() {
       document.querySelectorAll('.record').forEach((el, i) => {
         const r = allRecords[i];
-        if (activeMovements.has(r.movement) && activePhases.has(r.phase)) {
+        if (activeSteps.has(r.step) && activePhases.has(r.phase)) {
           el.classList.remove('hidden');
         } else {
           el.classList.add('hidden');
@@ -684,7 +684,7 @@
         return `
           <div class="record" data-index="${i}">
             <div class="record-header">
-              <span class="movement-name">${escapeHtml(r.movement)}</span>
+              <span class="step-name">${escapeHtml(r.step)}</span>
               <span class="phase-badge ${phaseClass}">${phaseLabel}</span>
               <span class="iteration-badge">iter: ${r.iteration}</span>
               <span class="timestamp">${ts}</span>

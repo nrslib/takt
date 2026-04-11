@@ -157,7 +157,7 @@
       border-left: 4px solid #007acc;
     }
 
-    .record.piece_start {
+    .record.workflow_start {
       border-left-color: #4ec9b0;
     }
 
@@ -169,11 +169,11 @@
       border-left-color: #608b4e;
     }
 
-    .record.piece_complete {
+    .record.workflow_complete {
       border-left-color: #4ec9b0;
     }
 
-    .record.piece_abort {
+    .record.workflow_abort {
       border-left-color: #f48771;
     }
 
@@ -611,8 +611,9 @@
     function formatRecordContent(record) {
       const fields = [];
 
-      if (record.piece) {
-        fields.push(`<div class="record-field"><span class="field-label">Piece:</span><span class="field-value">${escapeHtml(record.piece)}</span></div>`);
+      const workflowName = typeof record.workflowName === 'string' ? record.workflowName : record.workflow;
+      if (workflowName) {
+        fields.push(`<div class="record-field"><span class="field-label">Workflow:</span><span class="field-value">${escapeHtml(workflowName)}</span></div>`);
       }
       if (record.step) {
         fields.push(`<div class="record-field"><span class="field-label">Step:</span><span class="field-value">${escapeHtml(record.step)}</span></div>`);
