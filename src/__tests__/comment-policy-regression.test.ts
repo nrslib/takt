@@ -14,6 +14,13 @@ const ISSUE_562_TASK_TEST_FILES = [
 
 const ISSUE_562_POLICY_COMMENT_SOURCES = ['../features/tasks/execute/taskExecution.ts'] as const;
 
+const ISSUE_606_INTERACTIVE_OPT_IN_TEST_FILES = [
+  'piece-interactive-opt-in.test.ts',
+  'cli-routing-interactive-opt-in.test.ts',
+  'interactive-mode-none.test.ts',
+  'interactive-mode-doc-policy-contract.test.ts',
+] as const;
+
 const gwtLineComment = /^\s*\/\/\s*(Given|When|Then)(:|\/)/;
 
 describe('test comment policy regression', () => {
@@ -75,6 +82,13 @@ describe('test comment policy regression', () => {
       for (const pattern of forbidden) {
         expect(content, `${rel}: ${String(pattern)}`).not.toMatch(pattern);
       }
+    }
+  });
+
+  it('should not start with file-level block doc comments in interactive opt-in tests (#606 policy-comment)', () => {
+    for (const file of ISSUE_606_INTERACTIVE_OPT_IN_TEST_FILES) {
+      const content = readFileSync(new URL(file, import.meta.url), 'utf-8');
+      expect(content.trimStart().startsWith('/**'), file).toBe(false);
     }
   });
 });

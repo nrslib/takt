@@ -37,6 +37,8 @@ interactive:
     quietDescription: "質問なしでベストエフォートの指示書を生成"
     passthrough: "パススルー"
     passthroughDescription: "入力をそのままタスクとして渡す"
+    none: "なし（即実行）"
+    noneDescription: "対話をスキップして先頭ムーブメントを実行（タスクは入力またはワークフロー名）"
   runSelector:
     confirm: "前回の実行結果を参照しますか？"
     prompt: "参照するrunを選択してください:"

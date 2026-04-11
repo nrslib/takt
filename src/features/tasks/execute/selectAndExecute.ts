@@ -104,6 +104,7 @@ export async function selectAndExecuteTask(
       projectCwd: cwd,
       agentOverrides,
       interactiveUserInput: options?.interactiveUserInput === true,
+      pieceUserInputHandler: options?.pieceUserInputHandler === true,
       interactiveMetadata: options?.interactiveMetadata,
     });
   } catch (err) {

@@ -38,7 +38,9 @@ export async function executePiece(
   cwd: string,
   options: PieceExecutionOptions,
 ): Promise<PieceExecutionResult> {
-  const { headerPrefix = 'Running Workflow:', interactiveUserInput = false } = options;
+  const { headerPrefix = 'Running Workflow:', interactiveUserInput = false, pieceUserInputHandler } = options;
+  const enableMovementUserInput =
+    interactiveUserInput === true || pieceUserInputHandler === true;
   const projectCwd = options.projectCwd;
   const safeWorkflowName = sanitizeTerminalText(pieceConfig.name);
   assertTaskPrefixPair(options.taskPrefix, options.taskColorIndex);
@@ -132,7 +134,7 @@ export async function executePiece(
       };
     },
   );
-  const onUserInput = interactiveUserInput ? createUserInputHandler(out, displayRef) : undefined;
+  const onUserInput = enableMovementUserInput ? createUserInputHandler(out, displayRef) : undefined;
   let abortReason: string | undefined;
   let exceededInfo: ExceededInfo | undefined;
   let lastMovementContent: string | undefined;

@@ -325,6 +325,7 @@ export function getPieceDescription(
   pieceStructure: string;
   movementPreviews: MovementPreview[];
   interactiveMode?: InteractiveMode;
+  skipInteractiveModeSelection?: boolean;
   firstMovement?: FirstMovementInfo;
 } {
   const piece = loadPieceByIdentifier(identifier, projectCwd);
@@ -344,6 +345,7 @@ export function getPieceDescription(
     pieceStructure: buildWorkflowString(piece.movements),
     movementPreviews: previews,
     interactiveMode: piece.interactiveMode,
+    skipInteractiveModeSelection: piece.skipInteractiveModeSelection,
     firstMovement,
   };
 }

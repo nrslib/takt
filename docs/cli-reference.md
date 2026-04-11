@@ -30,6 +30,8 @@ This document provides a complete reference for all TAKT CLI commands and option
 
 A mode where you refine task content through conversation with AI before execution. Useful when task requirements are ambiguous or when you want to clarify content while consulting with AI.
 
+The `none` interactive mode skips this conversational path and starts the workflow at the first movement (see [Flow](#flow) below).
+
 ```bash
 # Start interactive mode (no arguments)
 takt
@@ -43,10 +45,12 @@ takt hello
 ### Flow
 
 1. Select workflow
-2. Select interactive mode (assistant / persona / quiet / passthrough)
+2. Select interactive mode (assistant / persona / quiet / passthrough / none)
 3. Refine task content through conversation with AI
 4. Finalize task instructions with `/go` (you can also add additional instructions like `/go additional instructions`), or use `/play <task>` to execute a task immediately
 5. Execute (run workflow, create PR)
+
+When the effective interactive mode is `none`, steps 3–4 are skipped: there is no TAKT dialogue or `/go` step, and the workflow starts at the first movement (task = CLI argument if any, else workflow name).
 
 ### Interactive Mode Variants
 
@@ -56,8 +60,9 @@ takt hello
 | `persona` | Conversation with the first step's persona (uses its system prompt and tools). |
 | `quiet` | Generates task instructions without asking questions (best-effort). |
 | `passthrough` | Passes user input directly as task text without AI processing. |
+| `none` | Skips TAKT dialogue and runs the first movement immediately (task = CLI argument if any, else workflow name). |
 
-Workflows can set a default mode via the `interactive_mode` field in YAML.
+Workflows can set a default mode via the `interactive_mode` field in YAML. `skip_interactive_mode_selection: true` skips the mode picker; choosing `none` does not turn that flag on implicitly—set it in YAML when you need it.
 
 ### Execution Example
 

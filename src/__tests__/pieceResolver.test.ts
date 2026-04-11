@@ -619,7 +619,7 @@ movements:
   });
 
   it('should return interactiveMode for each valid mode value', () => {
-    for (const mode of ['assistant', 'persona', 'quiet', 'passthrough'] as const) {
+    for (const mode of ['assistant', 'persona', 'quiet', 'passthrough', 'none'] as const) {
       const pieceYaml = `name: test-${mode}
 initial_movement: step1
 max_movements: 1

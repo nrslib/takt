@@ -53,7 +53,7 @@ export function createIterationLimitHandler(
 }
 
 /**
- * ユーザー入力ハンドラを作成する（interactiveUserInput が有効な場合のみ使用）。
+ * ユーザー入力ハンドラを作成する（interactiveUserInput または pieceUserInputHandler が有効な場合に使用）。
  */
 export function createUserInputHandler(
   out: OutputFns,
