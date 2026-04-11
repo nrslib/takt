@@ -1,5 +1,13 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
+const {
+  mockResolveAssistantConfigLayers,
+  mockResolveAssistantProviderModelFromConfig,
+} = vi.hoisted(() => ({
+  mockResolveAssistantConfigLayers: vi.fn(),
+  mockResolveAssistantProviderModelFromConfig: vi.fn(),
+}));
+
 vi.mock('node:fs', () => ({
   existsSync: vi.fn(),
 }));
@@ -35,7 +43,16 @@ vi.mock('../infra/providers/index.js', () => ({
 
 vi.mock('../infra/config/index.js', () => ({
   getLanguage: vi.fn(() => 'en'),
-  resolveConfigValues: vi.fn(() => ({ provider: 'claude', model: 'sonnet' })),
+  resolveConfigValues: vi.fn(() => ({ syncConflictResolver: undefined })),
+}));
+
+vi.mock('../features/interactive/assistantConfig.js', () => ({
+  resolveAssistantConfigLayers: (...args: unknown[]) => mockResolveAssistantConfigLayers(...args),
+}));
+
+vi.mock('../core/config/provider-resolution.js', () => ({
+  resolveAssistantProviderModelFromConfig: (...args: unknown[]) =>
+    mockResolveAssistantProviderModelFromConfig(...args),
 }));
 
 const mockRelayPushCloneToOrigin = vi.fn();
@@ -98,7 +115,9 @@ describe('syncBranchWithRoot', () => {
     vi.clearAllMocks();
     mockExistsSync.mockReturnValue(true);
     mockAgentCall.mockResolvedValue(makeAgentResponse());
-    mockResolveConfigValues.mockReturnValue({ provider: 'claude', model: 'sonnet' } as never);
+    mockResolveConfigValues.mockReturnValue({ syncConflictResolver: undefined } as never);
+    mockResolveAssistantConfigLayers.mockReturnValue({ local: {}, global: {} });
+    mockResolveAssistantProviderModelFromConfig.mockReturnValue({ provider: 'claude', model: 'sonnet' });
     mockRelayPushCloneToOrigin.mockReturnValue(undefined);
   });
 
@@ -148,6 +167,20 @@ describe('syncBranchWithRoot', () => {
     expect(mockAgentCall).not.toHaveBeenCalled();
   });
 
+  it('surfaces git stderr when fetch from root fails', async () => {
+    const task = makeTask();
+    const err = new Error('Command failed: git fetch');
+    Object.assign(err, {
+      stderr: Buffer.from('fatal: cannot fetch from root\n'),
+    });
+    mockExecFileSync.mockImplementationOnce(() => { throw err; });
+
+    const result = await syncBranchWithRoot(PROJECT_DIR, task);
+
+    expect(result).toBe(false);
+    expect(mockLogError).toHaveBeenCalledWith('Failed to fetch from root: fatal: cannot fetch from root');
+  });
+
   it('returns true and pushes when merge succeeds without conflicts', async () => {
     const task = makeTask();
     mockExecFileSync.mockReturnValue('' as never);
@@ -175,6 +208,7 @@ describe('syncBranchWithRoot', () => {
 
     expect(result).toBe(true);
     expect(mockSuccess).toHaveBeenCalledWith('Conflicts resolved & pushed.');
+    expect(mockResolveAssistantConfigLayers).toHaveBeenCalledWith(PROJECT_DIR);
     expect(mockGetProvider).toHaveBeenCalledWith('claude');
     expect(mockAgentCall).toHaveBeenCalledWith(
       expect.stringContaining('Implement feature X'),
@@ -187,11 +221,29 @@ describe('syncBranchWithRoot', () => {
     );
   });
 
+  it('uses assistant provider/model resolution for conflict resolver', async () => {
+    const task = makeTask();
+    mockResolveAssistantProviderModelFromConfig.mockReturnValue({ provider: 'codex', model: 'gpt-5.4' });
+    mockExecFileSync
+      .mockReturnValueOnce('' as never)
+      .mockImplementationOnce(() => { throw new Error('CONFLICT'); });
+
+    const result = await syncBranchWithRoot(PROJECT_DIR, task);
+
+    expect(result).toBe(true);
+    expect(mockGetProvider).toHaveBeenCalledWith('codex');
+    expect(mockAgentCall).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        model: 'gpt-5.4',
+      }),
+    );
+  });
+
   it('does not pass auto-approve handler when sync_conflict_resolver is not configured', async () => {
     const task = makeTask();
     mockResolveConfigValues.mockReturnValue({
-      provider: 'claude',
-      model: 'sonnet',
+      syncConflictResolver: undefined,
     } as never);
     mockExecFileSync
       .mockReturnValueOnce('' as never)
@@ -211,8 +263,6 @@ describe('syncBranchWithRoot', () => {
   it('does not pass auto-approve handler when autoApproveTools is false', async () => {
     const task = makeTask();
     mockResolveConfigValues.mockReturnValue({
-      provider: 'claude',
-      model: 'sonnet',
       syncConflictResolver: { autoApproveTools: false },
     } as never);
     mockExecFileSync
@@ -233,8 +283,6 @@ describe('syncBranchWithRoot', () => {
   it('passes auto-approve handler when sync_conflict_resolver config enables it', async () => {
     const task = makeTask();
     mockResolveConfigValues.mockReturnValue({
-      provider: 'claude',
-      model: 'sonnet',
       syncConflictResolver: { autoApproveTools: true },
     } as never);
     mockExecFileSync

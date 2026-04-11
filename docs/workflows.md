@@ -20,6 +20,15 @@ A workflow is a YAML file that defines a sequence of steps executed by AI agents
 To organize the workflow selection UI into categories, configure `workflow_categories`.
 See the [Configuration Guide](./configuration.md#workflow-categories) for details.
 
+## Authoring Workflow Files
+
+Use `takt workflow init <name>` to create a new custom workflow scaffold in `.takt/workflows/` (or `~/.takt/workflows/` with `--global`).
+
+- `--template minimal`: generates a self-contained scaffold with generic step routing
+- `--template faceted`: generates a workflow plus local persona/instruction facet files
+
+After editing the generated files, run `takt workflow doctor <name or path>` to validate references, routing targets, and unreachable steps before executing the workflow.
+
 ## Workflow Schema
 
 ```yaml

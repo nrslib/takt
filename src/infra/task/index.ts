@@ -56,6 +56,8 @@ export {
   resolveBaseBranch,
   resolveCloneBaseDir,
   branchExists,
+  localBranchExists,
+  remoteBranchExists,
 } from './clone.js';
 export {
   detectDefaultBranch,
@@ -66,7 +68,7 @@ export {
   getOriginalInstruction,
   buildListItems,
 } from './branchList.js';
-export { stageAndCommit, getCurrentBranch, pushBranch, checkoutBranch, relayPushCloneToOrigin } from './git.js';
+export { stageAndCommit, getCurrentBranch, pushBranch, checkoutBranch, relayPushCloneToOrigin, materializeCloneHeadToRootBranch } from './git.js';
 export { buildTaskInstruction } from './instruction.js';
 export { autoCommitAndPush, type AutoCommitResult } from './autoCommit.js';
 export { summarizeTaskName } from './summarize.js';

@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
-import { error as logError } from '../../../shared/ui/index.js';
+import { localBranchExists, materializeCloneHeadToRootBranch, relayPushCloneToOrigin } from '../../../infra/task/index.js';
+import { error as logError, info } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
-import { relayPushCloneToOrigin } from '../../../infra/task/index.js';
 import type { BranchListItem, TaskListItem } from '../../../infra/task/index.js';
 
 const log = createLogger('list-tasks');
@@ -54,8 +54,55 @@ export function validateWorktreeTarget(
   return true;
 }
 
+export function ensureRootBranchReady(
+  projectDir: string,
+  target: BranchActionTarget,
+  actionName: string,
+): boolean {
+  const branch = resolveTargetBranch(target);
+  if (localBranchExists(projectDir, branch)) {
+    return true;
+  }
+
+  const worktreePath = resolveTargetWorktreePath(target);
+  if (!worktreePath || !fs.existsSync(worktreePath)) {
+    logError(`Branch ${branch} is missing in root, and no worktree is available to restore it.`);
+    log.error('Root branch missing and worktree unavailable', {
+      projectDir,
+      branch,
+      actionName,
+      worktreePath,
+    });
+    return false;
+  }
+
+  try {
+    materializeCloneHeadToRootBranch(worktreePath, projectDir, branch);
+    info(`Restored missing root branch ${branch} from worktree.`);
+    log.info('Restored missing root branch from worktree', {
+      projectDir,
+      branch,
+      actionName,
+      worktreePath,
+    });
+    return true;
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    logError(`Failed to restore missing root branch ${branch}: ${error}`);
+    log.error('Failed to restore missing root branch from worktree', {
+      projectDir,
+      branch,
+      actionName,
+      worktreePath,
+      error,
+    });
+    return false;
+  }
+}
+
 /** Relay push: clone HEAD を root repo 経由で origin へ転送する（checked-out branch を変更しない） */
 export function pushWorktreeToOrigin(worktreePath: string, projectDir: string, branch: string): void {
+  materializeCloneHeadToRootBranch(worktreePath, projectDir, branch);
   relayPushCloneToOrigin(worktreePath, projectDir, branch);
   log.info('Relay pushed to origin', { worktreePath, projectDir, branch });
 }

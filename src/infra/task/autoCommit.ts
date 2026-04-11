@@ -10,7 +10,7 @@
 import { execFileSync } from 'node:child_process';
 import { resolveConfigValue } from '../config/index.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
-import { stageAndCommit, relayPushCloneToOrigin } from './git.js';
+import { materializeCloneHeadToRootBranch, stageAndCommit } from './git.js';
 
 const log = createLogger('autoCommit');
 const AUTO_COMMIT_PUSH_FAILURE_MESSAGE = 'Push to main repo failed after commit creation.';
@@ -59,8 +59,8 @@ export class AutoCommitter {
 
       try {
         if (branch !== undefined) {
-          relayPushCloneToOrigin(cloneCwd, projectDir, branch);
-          log.info('Relay pushed to origin', { projectDir, branch });
+          materializeCloneHeadToRootBranch(cloneCwd, projectDir, branch);
+          log.info('Materialized clone HEAD to root branch', { projectDir, branch });
         } else {
           execFileSync('git', ['push', projectDir, 'HEAD'], {
             cwd: cloneCwd,

@@ -239,6 +239,22 @@ takt eject instruction plan --global
 
 Builtin and custom workflow lookup uses `workflows/`.
 
+### takt workflow
+
+Initialize and validate custom workflow definitions.
+
+```bash
+# Create a minimal workflow scaffold in project .takt/workflows/
+takt workflow init sample-flow
+
+# Create a faceted scaffold in ~/.takt/workflows/
+takt workflow init review-flow --template faceted --global
+
+# Validate workflows by name or path
+takt workflow doctor sample-flow
+takt workflow doctor .takt/workflows/sample-flow.yaml
+```
+
 ### takt clear
 
 Clear agent conversation sessions (reset state).

@@ -76,6 +76,18 @@ Always verify facts before raising an issue.
 | Search for call sites and usages with grep | Raise issues based on memory |
 | Cross-reference type definitions and schemas | Guess that code is dead |
 | Distinguish generated files (reports, etc.) from source | Review generated files as if they were source code |
+| Verify tool output is readable and uncorrupted | Raise issues based on garbled or abnormal output |
+| When claiming code is absent, read the target lines directly | Conclude "code doesn't exist" based on search results alone |
+
+### Tool Output Reliability
+
+If tool output is unreadable, re-read using a reliable method before making any judgment.
+
+| Situation | Action |
+|-----------|--------|
+| Output contains garbled text or encoding anomalies | Recognize the corruption, then re-read using an alternative method (open the file directly, specify line numbers for the target section) before judging |
+| Search command did not find the target code | Read the specific lines of the file directly to confirm absence before raising an issue. Search failure does not equal code absence |
+| Re-raising a prior finding without re-checking actual code | Must read current code before marking as persists. Do not re-raise from memory of the prior review |
 
 ## Writing Specific Feedback
 

@@ -211,7 +211,7 @@ export async function listTasks(
 
       switch (taskAction) {
         case 'diff':
-          showFullDiff(cwd, task.branch);
+          showFullDiff(cwd, task);
           break;
         case 'instruct':
           await instructBranch(cwd, task);
@@ -264,7 +264,7 @@ export async function listTasks(
 
       switch (taskAction) {
         case 'diff':
-          showFullDiff(cwd, task.branch);
+          showFullDiff(cwd, task);
           break;
         case 'instruct':
           await instructBranch(cwd, task);

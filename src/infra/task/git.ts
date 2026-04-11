@@ -141,6 +141,14 @@ export function pushBranch(cwd: string, branch: string): void {
   }
 }
 
+export function materializeCloneHeadToRootBranch(cloneCwd: string, rootCwd: string, branch: string): void {
+  log.info('Materializing clone HEAD to root branch', { cloneCwd, rootCwd, branch });
+  execFileSync('git', ['fetch', cloneCwd, `HEAD:refs/heads/${branch}`], {
+    cwd: rootCwd,
+    stdio: 'pipe',
+  });
+}
+
 /**
  * Relay push: fetches clone HEAD into a temporary ref in the root repo,
  * pushes that ref to origin, then cleans up the temp ref (always, even on failure).

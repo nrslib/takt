@@ -26,8 +26,9 @@ export type { CodexCallOptions } from './types.js';
 const log = createLogger('codex-sdk');
 const CODEX_STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const CODEX_STREAM_ABORTED_MESSAGE = 'Codex execution aborted';
-const CODEX_RETRY_MAX_ATTEMPTS = 3;
-const CODEX_RETRY_BASE_DELAY_MS = 250;
+const CODEX_RETRY_MAX_RETRIES = 8;
+const CODEX_RETRY_TOTAL_ATTEMPTS = CODEX_RETRY_MAX_RETRIES + 1;
+const CODEX_RETRY_BASE_DELAY_MS = 1000;
 const CODEX_RETRYABLE_ERROR_PATTERNS = [
   'stream disconnected before completion',
   'transport error',
@@ -37,6 +38,7 @@ const CODEX_RETRYABLE_ERROR_PATTERNS = [
   'etimedout',
   'eai_again',
   'fetch failed',
+  'at capacity',
 ];
 
 function toNumber(value: unknown): number | undefined {
@@ -148,7 +150,7 @@ export class CodexClient {
       ? `${options.systemPrompt}\n\n${prompt}`
       : prompt;
 
-    for (let attempt = 1; attempt <= CODEX_RETRY_MAX_ATTEMPTS; attempt++) {
+    for (let attempt = 1; attempt <= CODEX_RETRY_TOTAL_ATTEMPTS; attempt++) {
       const codexClientOptions = {
         ...(options.openaiApiKey ? { apiKey: options.openaiApiKey } : {}),
         ...(options.codexPathOverride ? { codexPathOverride: options.codexPathOverride } : {}),
@@ -310,7 +312,7 @@ export class CodexClient {
         if (!success) {
           const message = failureMessage || 'Codex execution failed';
           const retriable = this.isRetriableError(message, streamAbortController.signal.aborted, abortCause);
-          if (retriable && attempt < CODEX_RETRY_MAX_ATTEMPTS) {
+          if (retriable && attempt <= CODEX_RETRY_MAX_RETRIES) {
             log.info('Retrying Codex call after transient failure', { agentType, attempt, message });
             threadId = currentThreadId;
             await this.waitForRetryDelay(attempt, options.abortSignal);
@@ -358,7 +360,7 @@ export class CodexClient {
         );
 
         const retriable = this.isRetriableError(errorMessage, streamAbortController.signal.aborted, abortCause);
-        if (retriable && attempt < CODEX_RETRY_MAX_ATTEMPTS) {
+        if (retriable && attempt <= CODEX_RETRY_MAX_RETRIES) {
           log.info('Retrying Codex call after transient exception', { agentType, attempt, errorMessage });
           threadId = currentThreadId;
           await this.waitForRetryDelay(attempt, options.abortSignal);

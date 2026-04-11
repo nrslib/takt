@@ -6,6 +6,7 @@ export type { ListAction } from './taskActionTarget.js';
 
 export {
   showFullDiff,
+  showDiffStatForTask,
   showDiffAndPromptActionForTask,
 } from './taskDiffActions.js';
 

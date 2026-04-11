@@ -20,7 +20,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 import { execFileSync } from 'node:child_process';
 const mockExecFileSync = vi.mocked(execFileSync);
 
-import { pushBranch, pushHeadToOriginBranch } from '../infra/task/git.js';
+import { materializeCloneHeadToRootBranch, pushBranch, pushHeadToOriginBranch } from '../infra/task/git.js';
 
 function stderrForRejectedPush(): Buffer {
   return Buffer.from(
@@ -141,5 +141,19 @@ describe('pushHeadToOriginBranch', () => {
     }
     expect(thrown).toBe(err);
     expect((thrown as Error).message).not.toContain('stale local branch');
+  });
+});
+
+describe('materializeCloneHeadToRootBranch', () => {
+  it('should fetch clone HEAD into refs/heads/<branch> in the root repo', () => {
+    mockExecFileSync.mockReturnValue(Buffer.from(''));
+
+    materializeCloneHeadToRootBranch('/clone', '/project', 'feature/my-branch');
+
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      'git',
+      ['fetch', '/clone', 'HEAD:refs/heads/feature/my-branch'],
+      { cwd: '/project', stdio: 'pipe' },
+    );
   });
 });

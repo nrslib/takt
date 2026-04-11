@@ -1,10 +1,10 @@
 /**
- * Tests for autoCommitAndPush with branch parameter (relay push behavior)
+ * Tests for autoCommitAndPush with branch parameter (root branch materialization behavior)
  *
  * Verifies that:
- * - When branch is provided, relay push (relayPushCloneToOrigin) is used
+ * - When branch is provided, root branch materialization is used
  * - When branch is omitted, old behavior (git push <projectDir> HEAD) is used
- * - Relay push failure sets localPushFailed: true without losing commitHash
+ * - Root branch materialization failure sets localPushFailed: true without losing commitHash
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -18,10 +18,10 @@ vi.mock('../infra/config/index.js', () => ({
   resolveConfigValue: (...args: unknown[]) => mockResolveConfigValue(...args),
 }));
 
-const mockRelayPushCloneToOrigin = vi.fn();
+const mockMaterializeCloneHeadToRootBranch = vi.fn();
 vi.mock('../infra/task/git.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  relayPushCloneToOrigin: (...args: unknown[]) => mockRelayPushCloneToOrigin(...args),
+  materializeCloneHeadToRootBranch: (...args: unknown[]) => mockMaterializeCloneHeadToRootBranch(...args),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -51,11 +51,11 @@ function setupSuccessfulCommit(): void {
 beforeEach(() => {
   vi.clearAllMocks();
   mockResolveConfigValue.mockReturnValue(undefined);
-  mockRelayPushCloneToOrigin.mockReturnValue(undefined);
+  mockMaterializeCloneHeadToRootBranch.mockReturnValue(undefined);
 });
 
 describe('autoCommitAndPush — branch parameter', () => {
-  it('uses relayPushCloneToOrigin when branch is provided', () => {
+  it('uses materializeCloneHeadToRootBranch when branch is provided', () => {
     // Given: changes exist
     setupSuccessfulCommit();
 
@@ -63,7 +63,7 @@ describe('autoCommitAndPush — branch parameter', () => {
     const result = autoCommitAndPush('/tmp/clone', 'my-task', '/project', 'feat/my-branch');
 
     // Then: relay push is used
-    expect(mockRelayPushCloneToOrigin).toHaveBeenCalledWith(
+    expect(mockMaterializeCloneHeadToRootBranch).toHaveBeenCalledWith(
       '/tmp/clone',
       '/project',
       'feat/my-branch',
@@ -96,7 +96,7 @@ describe('autoCommitAndPush — branch parameter', () => {
     const result = autoCommitAndPush('/tmp/clone', 'my-task', '/project');
 
     // Then: relay is NOT used
-    expect(mockRelayPushCloneToOrigin).not.toHaveBeenCalled();
+    expect(mockMaterializeCloneHeadToRootBranch).not.toHaveBeenCalled();
 
     // Then: old direct push is used
     expect(mockExecFileSync).toHaveBeenCalledWith(
@@ -107,10 +107,10 @@ describe('autoCommitAndPush — branch parameter', () => {
     expect(result.success).toBe(true);
   });
 
-  it('returns localPushFailed: true when relay push fails after commit creation', () => {
-    // Given: commit succeeds but relay throws
+  it('returns localPushFailed: true when root branch materialization fails after commit creation', () => {
+    // Given: commit succeeds but materialization throws
     setupSuccessfulCommit();
-    mockRelayPushCloneToOrigin.mockImplementation(() => {
+    mockMaterializeCloneHeadToRootBranch.mockImplementation(() => {
       throw new Error('remote: refusing to update checked out branch');
     });
 
@@ -136,10 +136,10 @@ describe('autoCommitAndPush — branch parameter', () => {
 
     // Then: failure is reported, relay is never attempted
     expect(result.success).toBe(false);
-    expect(mockRelayPushCloneToOrigin).not.toHaveBeenCalled();
+    expect(mockMaterializeCloneHeadToRootBranch).not.toHaveBeenCalled();
   });
 
-  it('skips relay push when there are no changes to commit', () => {
+  it('skips root branch materialization when there are no changes to commit', () => {
     // Given: no staged changes
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
@@ -152,7 +152,7 @@ describe('autoCommitAndPush — branch parameter', () => {
     const result = autoCommitAndPush('/tmp/clone', 'my-task', '/project', 'feat/my-branch');
 
     // Then: no push attempted
-    expect(mockRelayPushCloneToOrigin).not.toHaveBeenCalled();
+    expect(mockMaterializeCloneHeadToRootBranch).not.toHaveBeenCalled();
     expect(result.success).toBe(true);
     expect(result.commitHash).toBeUndefined();
   });

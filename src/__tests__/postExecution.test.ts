@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const {
   mockAutoCommitAndPush,
-  mockPushHeadToOriginBranch,
+  mockPushBranch,
   mockFindExistingPr,
   mockCommentOnPr,
   mockCreatePullRequest,
@@ -17,7 +17,7 @@ const {
 } =
   vi.hoisted(() => ({
     mockAutoCommitAndPush: vi.fn(),
-    mockPushHeadToOriginBranch: vi.fn(),
+    mockPushBranch: vi.fn(),
     mockFindExistingPr: vi.fn(),
     mockCommentOnPr: vi.fn(),
     mockCreatePullRequest: vi.fn(),
@@ -33,7 +33,7 @@ vi.mock('../infra/task/git.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../infra/task/git.js')>();
   return {
     ...actual,
-    pushHeadToOriginBranch: (...args: unknown[]) => mockPushHeadToOriginBranch(...args),
+    pushBranch: (...args: unknown[]) => mockPushBranch(...args),
   };
 });
 vi.mock('../infra/git/index.js', () => ({
@@ -84,7 +84,7 @@ describe('postExecutionFlow', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockAutoCommitAndPush.mockReturnValue({ success: true, commitHash: 'abc123' });
-    mockPushHeadToOriginBranch.mockReturnValue(undefined);
+    mockPushBranch.mockReturnValue(undefined);
     mockCommentOnPr.mockReturnValue({ success: true });
     mockCreatePullRequest.mockReturnValue({ success: true, url: 'https://github.com/org/repo/pull/1' });
     mockCreatePullRequestSafely.mockImplementation((provider, options, cwd) => {
@@ -276,11 +276,10 @@ describe('postExecutionFlow', () => {
     expect(result.taskError).toBe('Push to main repo failed after commit creation.');
   });
 
-  it('auto_pr かつ shouldPublishBranchToOrigin でローカル push 失敗時は clone から origin へ送り projectDir の push は省略する', async () => {
+  it('auto_pr かつ shouldPublishBranchToOrigin では root branch を origin へ push して PR 作成へ進む', async () => {
     mockAutoCommitAndPush.mockReturnValue({
       success: true,
       commitHash: 'abc123',
-      localPushFailed: true,
       message: 'Committed: abc123 - takt: Fix the bug',
     });
     mockFindExistingPr.mockReturnValue(undefined);
@@ -290,17 +289,16 @@ describe('postExecutionFlow', () => {
       shouldPublishBranchToOrigin: true,
     });
 
-    expect(mockPushHeadToOriginBranch).toHaveBeenCalledWith('/clone', 'task/fix-the-bug');
+    expect(mockPushBranch).toHaveBeenCalledWith('/project', 'task/fix-the-bug');
     expect(mockCreatePullRequest).toHaveBeenCalled();
     expect(result.prUrl).toBe('https://github.com/org/repo/pull/1');
     expect(result.prFailed).toBeUndefined();
   });
 
-  it('shouldPublishBranchToOrigin が true のときローカル push 失敗でも execCwd から origin へ push して完了できる', async () => {
+  it('shouldPublishBranchToOrigin が true のとき root branch を origin へ push して完了できる', async () => {
     mockAutoCommitAndPush.mockReturnValue({
       success: true,
       commitHash: 'abc123',
-      localPushFailed: true,
       message: 'Committed: abc123 - takt: Fix the bug',
     });
 
@@ -312,7 +310,7 @@ describe('postExecutionFlow', () => {
 
     const result = await postExecutionFlow(options);
 
-    expect(mockPushHeadToOriginBranch).toHaveBeenCalledWith('/clone', 'task/fix-the-bug');
+    expect(mockPushBranch).toHaveBeenCalledWith('/project', 'task/fix-the-bug');
     expect(mockFindExistingPr).not.toHaveBeenCalled();
     expect(mockCreatePullRequest).not.toHaveBeenCalled();
     expect(result.taskFailed).toBeUndefined();
@@ -320,7 +318,7 @@ describe('postExecutionFlow', () => {
     expect(result.prFailed).toBeUndefined();
   });
 
-  it('shouldPublishBranchToOrigin が true でローカル push 成功時も execCwd から origin へ push する（--pr 系の remote 本線）', async () => {
+  it('shouldPublishBranchToOrigin が true でローカル push 成功時も root branch を origin へ push する', async () => {
     mockAutoCommitAndPush.mockReturnValue({
       success: true,
       commitHash: 'abc123',
@@ -335,7 +333,7 @@ describe('postExecutionFlow', () => {
 
     const result = await postExecutionFlow(options);
 
-    expect(mockPushHeadToOriginBranch).not.toHaveBeenCalled();
+    expect(mockPushBranch).toHaveBeenCalledWith('/project', 'task/fix-the-bug');
     expect(result.taskFailed).toBeUndefined();
     expect(result.prFailed).toBeUndefined();
   });
@@ -351,17 +349,16 @@ describe('postExecutionFlow', () => {
 
     await postExecutionFlow(options);
 
-    expect(mockPushHeadToOriginBranch).not.toHaveBeenCalled();
+    expect(mockPushBranch).not.toHaveBeenCalled();
   });
 
   it('shouldPublishBranchToOrigin が true のとき origin push が失敗したら prFailed で prError に伝播する', async () => {
     mockAutoCommitAndPush.mockReturnValue({
       success: true,
       commitHash: 'abc123',
-      localPushFailed: true,
       message: 'Committed: abc123 - takt: Fix the bug',
     });
-    mockPushHeadToOriginBranch.mockImplementation(() => {
+    mockPushBranch.mockImplementation(() => {
       throw new Error('! [rejected] task/fix-the-bug -> task/fix-the-bug (non-fast-forward)');
     });
 
@@ -373,22 +370,21 @@ describe('postExecutionFlow', () => {
 
     const result = await postExecutionFlow(options);
 
-    expect(mockPushHeadToOriginBranch).toHaveBeenCalledWith('/clone', 'task/fix-the-bug');
+    expect(mockPushBranch).toHaveBeenCalledWith('/project', 'task/fix-the-bug');
     expect(result.prFailed).toBe(true);
-    expect(result.prError).toContain('Failed to push branch to origin from clone.');
+    expect(result.prError).toContain('Failed to push branch to origin.');
     expect(result.prError).toContain('non-fast-forward');
     expect(result.prError).not.toContain('stale local branch');
     expect(result.taskFailed).toBeUndefined();
   });
 
-  it('shouldCreatePr が true かつ shouldPublishBranchToOrigin で clone からの origin push が失敗したら prFailed を返す', async () => {
+  it('shouldCreatePr が true かつ shouldPublishBranchToOrigin で origin push が失敗したら prFailed を返す', async () => {
     mockAutoCommitAndPush.mockReturnValue({
       success: true,
       commitHash: 'abc123',
-      localPushFailed: true,
       message: 'Committed: abc123 - takt: Fix the bug',
     });
-    mockPushHeadToOriginBranch.mockImplementation(() => {
+    mockPushBranch.mockImplementation(() => {
       throw new Error('! [rejected] task/fix-the-bug -> task/fix-the-bug (non-fast-forward)');
     });
 
@@ -398,17 +394,17 @@ describe('postExecutionFlow', () => {
       shouldPublishBranchToOrigin: true,
     });
 
-    expect(mockPushHeadToOriginBranch).toHaveBeenCalledWith('/clone', 'task/fix-the-bug');
+    expect(mockPushBranch).toHaveBeenCalledWith('/project', 'task/fix-the-bug');
     expect(mockFindExistingPr).not.toHaveBeenCalled();
     expect(mockCreatePullRequest).not.toHaveBeenCalled();
     expect(result.prFailed).toBe(true);
-    expect(result.prError).toContain('Failed to push branch to origin from clone.');
+    expect(result.prError).toContain('Failed to push branch to origin.');
     expect(result.prError).toContain('non-fast-forward');
     expect(result.prError).not.toContain('stale local branch');
     expect(result.taskFailed).toBeUndefined();
   });
 
-  it('clone からの origin push が git 整形済み non-fast-forward エラーのとき prError に診断ヒントまで伝播する', async () => {
+  it('root からの origin push が git 整形済み non-fast-forward エラーのとき prError に診断ヒントまで伝播する', async () => {
     const stderr =
       '! [rejected] task/fix-the-bug -> task/fix-the-bug (non-fast-forward)\n' +
       'hint: Updates were rejected because the tip of your current branch is behind its remote counterpart.\n';
@@ -418,10 +414,9 @@ describe('postExecutionFlow', () => {
     mockAutoCommitAndPush.mockReturnValue({
       success: true,
       commitHash: 'abc123',
-      localPushFailed: true,
       message: 'Committed: abc123 - takt: Fix the bug',
     });
-    mockPushHeadToOriginBranch.mockImplementation(() => {
+    mockPushBranch.mockImplementation(() => {
       throw new Error(formatted);
     });
 
@@ -432,9 +427,28 @@ describe('postExecutionFlow', () => {
     });
 
     expect(result.prFailed).toBe(true);
-    expect(result.prError).toContain('Failed to push branch to origin from clone.');
+    expect(result.prError).toContain('Failed to push branch to origin.');
     expect(result.prError).toMatch(/non-fast-forward/i);
     expect(result.prError).toContain('stale local branch');
+  });
+
+  it('shouldPublishBranchToOrigin が true でもローカル push 失敗時は origin push に進まず taskFailed を返す', async () => {
+    mockAutoCommitAndPush.mockReturnValue({
+      success: true,
+      commitHash: 'abc123',
+      localPushFailed: true,
+      message: 'Committed: abc123 - takt: Fix the bug',
+    });
+
+    const result = await postExecutionFlow({
+      ...baseOptions,
+      shouldCreatePr: false,
+      shouldPublishBranchToOrigin: true,
+    });
+
+    expect(mockPushBranch).not.toHaveBeenCalled();
+    expect(result.taskFailed).toBe(true);
+    expect(result.taskError).toBe('Push to main repo failed after commit creation.');
   });
 
   it('createPullRequest が例外を投げた場合も prFailed: true を返す', async () => {

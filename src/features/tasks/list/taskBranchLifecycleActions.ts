@@ -5,9 +5,31 @@ import { cleanupOrphanedClone } from '../../../infra/task/index.js';
 import { encodeWorktreePath } from '../../../infra/config/project/sessionStore.js';
 import { info, success, error as logError, warn } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
-import { type BranchActionTarget, resolveTargetBranch, resolveTargetWorktreePath } from './taskActionTarget.js';
+import {
+  type BranchActionTarget,
+  ensureRootBranchReady,
+  resolveTargetBranch,
+  resolveTargetWorktreePath,
+} from './taskActionTarget.js';
 
 const log = createLogger('list-tasks');
+
+function getGitCommandErrorDetail(err: unknown): string {
+  if (typeof err === 'object' && err !== null && 'stderr' in err) {
+    const stderr = (err as { stderr?: string | Buffer }).stderr;
+    if (typeof stderr === 'string' && stderr.trim()) {
+      return stderr.trim();
+    }
+    if (Buffer.isBuffer(stderr)) {
+      const text = stderr.toString('utf-8').trim();
+      if (text) {
+        return text;
+      }
+    }
+  }
+
+  return getErrorMessage(err);
+}
 
 export function isBranchMerged(projectDir: string, branch: string): boolean {
   const result = spawnSync('git', ['merge-base', '--is-ancestor', branch, 'HEAD'], {
@@ -28,6 +50,10 @@ export function isBranchMerged(projectDir: string, branch: string): boolean {
 }
 
 export function tryMergeBranch(projectDir: string, target: BranchActionTarget): boolean {
+  if (!ensureRootBranchReady(projectDir, target, 'try merge')) {
+    return false;
+  }
+
   const branch = resolveTargetBranch(target);
 
   try {
@@ -42,7 +68,7 @@ export function tryMergeBranch(projectDir: string, target: BranchActionTarget): 
     log.info('Try-merge (squash) completed', { branch });
     return true;
   } catch (err) {
-    const msg = getErrorMessage(err);
+    const msg = getGitCommandErrorDetail(err);
     logError(`Squash merge failed: ${msg}`);
     logError('You may need to resolve conflicts manually.');
     log.error('Try-merge (squash) failed', { branch, error: msg });
@@ -51,6 +77,10 @@ export function tryMergeBranch(projectDir: string, target: BranchActionTarget): 
 }
 
 export function mergeBranch(projectDir: string, target: BranchActionTarget): boolean {
+  if (!ensureRootBranchReady(projectDir, target, 'merge')) {
+    return false;
+  }
+
   const branch = resolveTargetBranch(target);
   const alreadyMerged = isBranchMerged(projectDir, branch);
 
@@ -90,7 +120,7 @@ export function mergeBranch(projectDir: string, target: BranchActionTarget): boo
     log.info('Branch merged & cleaned up', { branch, alreadyMerged });
     return true;
   } catch (err) {
-    const msg = getErrorMessage(err);
+    const msg = getGitCommandErrorDetail(err);
     logError(`Merge failed: ${msg}`);
     logError('You may need to resolve conflicts manually.');
     log.error('Merge & cleanup failed', { branch, error: msg });

@@ -1,5 +1,4 @@
-import { spawn } from 'node:child_process';
-
+import { crossSpawn } from '../../shared/utils/index.js';
 import { tryExtractTextFromStreamJsonLine, tryExtractThinkingFromStreamJsonLine } from './stream-json-lines.js';
 import type { ClaudeHeadlessCallOptions } from './types.js';
 
@@ -50,7 +49,7 @@ export function runHeadlessCli(
 ): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const executable = options.claudeCliPath ?? CLAUDE_COMMAND;
-    const child = spawn(executable, args, {
+    const child = crossSpawn(executable, args, {
       cwd: options.cwd,
       env: buildHeadlessEnv(options),
       stdio: ['ignore', 'pipe', 'pipe'],

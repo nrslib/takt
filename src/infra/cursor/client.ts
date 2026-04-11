@@ -2,9 +2,8 @@
  * Cursor Agent CLI integration for agent interactions
  */
 
-import { spawn } from 'node:child_process';
 import type { AgentResponse } from '../../core/models/index.js';
-import { getErrorMessage } from '../../shared/utils/index.js';
+import { crossSpawn, getErrorMessage } from '../../shared/utils/index.js';
 import type { CursorCallOptions } from './types.js';
 
 export type { CursorCallOptions } from './types.js';
@@ -101,7 +100,7 @@ function createExecError(
 
 function execCursor(args: string[], options: CursorCallOptions): Promise<CursorExecResult> {
   return new Promise<CursorExecResult>((resolve, reject) => {
-    const child = spawn(options.cursorCliPath ?? CURSOR_COMMAND, args, {
+    const child = crossSpawn(options.cursorCliPath ?? CURSOR_COMMAND, args, {
       cwd: options.cwd,
       env: buildEnv(options.cursorApiKey),
       stdio: ['ignore', 'pipe', 'pipe'],

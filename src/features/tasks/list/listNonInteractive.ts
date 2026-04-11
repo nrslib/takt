@@ -5,9 +5,7 @@
  * non-interactive branch actions (--action, --branch).
  */
 
-import { execFileSync } from 'node:child_process';
 import {
-  detectDefaultBranch,
   TaskRunner,
   serializeTaskListItemForJson,
   type TaskListItem,
@@ -18,6 +16,8 @@ import {
   tryMergeBranch,
   mergeBranch,
   deleteBranch,
+  showDiffStatForTask,
+  syncBranchWithRoot,
 } from './taskActions.js';
 import { formatTaskStatusLabel, formatShortDate } from './taskStatusLabel.js';
 
@@ -30,7 +30,7 @@ export interface ListNonInteractiveOptions {
 }
 
 function isValidAction(action: string): action is ListAction {
-  return action === 'diff' || action === 'try' || action === 'merge' || action === 'delete';
+  return action === 'diff' || action === 'sync' || action === 'try' || action === 'merge' || action === 'delete';
 }
 
 function printNonInteractiveList(tasks: TaskListItem[], format?: string): void {
@@ -48,18 +48,6 @@ function printNonInteractiveList(tasks: TaskListItem[], format?: string): void {
   }
 }
 
-function showDiffStat(projectDir: string, defaultBranch: string, branch: string): void {
-  try {
-    const stat = execFileSync(
-      'git', ['diff', '--stat', `${defaultBranch}...${branch}`],
-      { cwd: projectDir, encoding: 'utf-8', stdio: 'pipe' },
-    );
-    info(stat);
-  } catch {
-    info('Could not generate diff stat');
-  }
-}
-
 /**
  * Run list-tasks in non-interactive mode.
  */
@@ -67,7 +55,6 @@ export async function listTasksNonInteractive(
   cwd: string,
   nonInteractive: ListNonInteractiveOptions,
 ): Promise<void> {
-  const defaultBranch = detectDefaultBranch(cwd);
   const runner = new TaskRunner(cwd);
   const tasks = runner.listAllTaskItems();
 
@@ -92,7 +79,7 @@ export async function listTasksNonInteractive(
   }
 
   if (!isValidAction(nonInteractive.action)) {
-    info('Invalid --action. Use one of: diff, try, merge, delete.');
+    info('Invalid --action. Use one of: diff, sync, try, merge, delete.');
     process.exit(1);
   }
 
@@ -104,10 +91,13 @@ export async function listTasksNonInteractive(
 
   switch (nonInteractive.action) {
     case 'diff':
-      showDiffStat(cwd, defaultBranch, nonInteractive.branch);
+      showDiffStatForTask(cwd, task);
       return;
     case 'try':
       tryMergeBranch(cwd, task);
+      return;
+    case 'sync':
+      await syncBranchWithRoot(cwd, task);
       return;
     case 'merge':
       if (mergeBranch(cwd, task)) {

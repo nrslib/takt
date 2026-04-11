@@ -4,21 +4,30 @@ import { detectDefaultBranch } from '../../../infra/task/index.js';
 import { selectOption } from '../../../shared/prompt/index.js';
 import { info, warn, header, blankLine } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
-import { type BranchActionTarget, type ListAction, resolveTargetBranch, resolveTargetInstruction } from './taskActionTarget.js';
+import {
+  type BranchActionTarget,
+  type ListAction,
+  ensureRootBranchReady,
+  resolveTargetBranch,
+  resolveTargetInstruction,
+} from './taskActionTarget.js';
 
 const log = createLogger('list-tasks');
 
-export function showFullDiff(cwd: string, branch: string): void {
+export function showFullDiff(cwd: string, target: BranchActionTarget): void {
+  if (!ensureRootBranchReady(cwd, target, 'full diff')) {
+    warn('Could not display diff');
+    return;
+  }
+
+  const branch = resolveTargetBranch(target);
   const defaultBranch = detectDefaultBranch(cwd);
   try {
-    const result = spawnSync(
-      'git', ['diff', '--color=always', `${defaultBranch}...${branch}`],
-      {
-        cwd,
-        stdio: 'inherit',
-        env: { ...process.env, GIT_PAGER: 'less -R' },
-      },
-    );
+    const result = spawnSync('git', ['diff', '--color=always', `${defaultBranch}...${branch}`], {
+      cwd,
+      stdio: 'inherit',
+      env: { ...process.env, GIT_PAGER: 'less -R' },
+    });
     if (result.status !== 0) {
       warn('Could not display diff');
     }
@@ -32,19 +41,14 @@ export function showFullDiff(cwd: string, branch: string): void {
   }
 }
 
-export async function showDiffAndPromptActionForTask(
-  cwd: string,
-  target: BranchActionTarget,
-): Promise<ListAction | null> {
-  const branch = resolveTargetBranch(target);
-  const instruction = resolveTargetInstruction(target);
-  const defaultBranch = detectDefaultBranch(cwd);
-
-  header(branch);
-  if (instruction) {
-    info(chalk.dim(`  ${instruction}`));
+export function showDiffStatForTask(cwd: string, target: BranchActionTarget): void {
+  if (!ensureRootBranchReady(cwd, target, 'diff stat')) {
+    warn('Could not generate diff stat');
+    return;
   }
-  blankLine();
+
+  const branch = resolveTargetBranch(target);
+  const defaultBranch = detectDefaultBranch(cwd);
 
   try {
     const stat = execFileSync(
@@ -60,6 +64,22 @@ export async function showDiffAndPromptActionForTask(
       error: getErrorMessage(err),
     });
   }
+}
+
+export async function showDiffAndPromptActionForTask(
+  cwd: string,
+  target: BranchActionTarget,
+): Promise<ListAction | null> {
+  const branch = resolveTargetBranch(target);
+  const instruction = resolveTargetInstruction(target);
+
+  header(branch);
+  if (instruction) {
+    info(chalk.dim(`  ${instruction}`));
+  }
+  blankLine();
+
+  showDiffStatForTask(cwd, target);
 
   return await selectOption<ListAction>(
     `Action for ${branch}:`,

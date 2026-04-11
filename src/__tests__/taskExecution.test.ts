@@ -469,7 +469,7 @@ describe('executeAndCompleteTask', () => {
     );
   });
 
-  it('should mark task as pr_failed when clone origin push fails for shouldPublishBranchToOrigin without auto_pr', async () => {
+  it('should mark task as pr_failed when origin push fails for shouldPublishBranchToOrigin without auto_pr', async () => {
     const task = createTask('task-pr-style-push-failure');
     mockResolveTaskExecution.mockResolvedValue({
       execCwd: '/worktree/clone',
@@ -490,7 +490,7 @@ describe('executeAndCompleteTask', () => {
     mockExecuteWorkflow.mockResolvedValue({ success: true });
     mockPostExecutionFlow.mockResolvedValue({
       prFailed: true,
-      prError: 'Failed to push branch to origin from clone. non-fast-forward',
+      prError: 'Failed to push branch to origin. non-fast-forward',
     });
 
     const result = await executeAndCompleteTaskWithoutWorkflow(task, createTaskRunnerMock() as never, '/project');
@@ -499,7 +499,7 @@ describe('executeAndCompleteTask', () => {
     expect(mockPersistPrFailedTaskResult).toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),
-      'Failed to push branch to origin from clone. non-fast-forward',
+      'Failed to push branch to origin. non-fast-forward',
     );
     expect(mockBuildBooleanTaskResult).not.toHaveBeenCalled();
     expect(mockPersistTaskResult).not.toHaveBeenCalled();
