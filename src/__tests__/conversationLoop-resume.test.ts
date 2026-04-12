@@ -255,6 +255,40 @@ describe('/resume command', () => {
     expect(mockLogInfo).toHaveBeenCalledWith('/retry is not available in this mode.');
     expect(result.action).toBe('cancel');
   });
+
+  it('should complete /r to /resume when retry and replay are unavailable', async () => {
+    // Given: /r → Tab → Enter completes to /resume, then /cancel exits
+    setupRawStdin(toRawInputs(['/r\t', '/cancel']));
+    setupProvider([]);
+
+    const ctx = createSessionContext();
+
+    // When
+    const result = await runConversationLoop('/test', ctx, defaultStrategy, undefined, undefined);
+
+    // Then
+    expect(mockSelectRecentSession).toHaveBeenCalledWith('/test', 'en');
+    expect(result.action).toBe('cancel');
+  });
+
+  it('should complete /r to /retry when retry is available', async () => {
+    // Given: /r → Tab → Enter completes to /retry, then /cancel exits
+    setupRawStdin(toRawInputs(['/r\t', '/cancel']));
+    setupProvider([]);
+
+    const ctx = createSessionContext();
+
+    // When
+    const result = await runConversationLoop('/test', ctx, {
+      ...defaultStrategy,
+      enableRetryCommand: true,
+    }, undefined, undefined);
+
+    // Then
+    expect(mockLogInfo).toHaveBeenCalledWith('No previous order found.');
+    expect(mockSelectRecentSession).not.toHaveBeenCalled();
+    expect(result.action).toBe('cancel');
+  });
 });
 
 // =================================================================

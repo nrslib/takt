@@ -56,6 +56,13 @@ interactive:
     userStopped: "⚠️ 前回のタスクはユーザーによって中断されました"
     workflow: "使用ワークフロー: {workflowName}"
     timestamp: "実行時刻: {timestamp}"
+  commands:
+    play: "タスクを即実行する"
+    go: "指示書を作成して実行"
+    retry: "前回の指示書を確認して再実行"
+    replay: "前回の指示書で即再実行"
+    cancel: "対話モードを終了"
+    resume: "セッションを読み込む"
 
 # ===== Workflow Execution UI =====
 workflow:
