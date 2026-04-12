@@ -13,6 +13,7 @@ import {
   renderCompletionMenu,
   writeCompletionMenu,
   clearCompletionMenu,
+  type CompletionCandidate,
 } from './completionMenu.js';
 
 /**
@@ -25,6 +26,7 @@ export const createCompletionController = (
     getTermWidth: () => number;
     getTerminalColumn: (pos: number) => number;
     countRowsBelowCursor: () => number;
+    getCursorRow: () => number;
   },
   mutators: {
     setBuffer: (value: string) => void;
@@ -33,18 +35,10 @@ export const createCompletionController = (
   promptWidth: number,
   completionProvider?: (
     context: { buffer: string },
-  ) => readonly {
-    readonly value: string;
-    readonly description?: string;
-    readonly applyValue?: string;
-  }[],
+  ) => readonly CompletionCandidate[],
 ): {
   readonly getState: () => {
-    readonly candidates: readonly {
-      readonly value: string;
-      readonly description?: string;
-      readonly applyValue?: string;
-    }[];
+    readonly candidates: readonly CompletionCandidate[];
     selectedIndex: number;
   } | null;
   readonly update: () => void;
@@ -53,11 +47,7 @@ export const createCompletionController = (
   readonly apply: () => void;
 } => {
   let completionState: {
-    readonly candidates: readonly {
-      readonly value: string;
-      readonly description?: string;
-      readonly applyValue?: string;
-    }[];
+    readonly candidates: readonly CompletionCandidate[];
     selectedIndex: number;
   } | null = null;
 
@@ -103,12 +93,10 @@ export const createCompletionController = (
       return;
     }
 
-    if (completionState) {
-      const clampedIndex = Math.min(completionState.selectedIndex, candidates.length - 1);
-      completionState = { candidates, selectedIndex: clampedIndex };
-    } else {
-      completionState = { candidates, selectedIndex: 0 };
-    }
+    const clampedIndex = completionState
+      ? Math.min(completionState.selectedIndex, candidates.length - 1)
+      : 0;
+    completionState = { candidates, selectedIndex: clampedIndex };
 
     redraw();
   };
@@ -133,15 +121,24 @@ export const createCompletionController = (
 
     const newBuffer = selected.applyValue ?? selected.value;
     const rowsBelow = accessors.countRowsBelowCursor();
+    const cursorRow = accessors.getCursorRow();
 
-    clearCompletionMenu(rowsBelow);
+    if (rowsBelow > 0) {
+      process.stdout.write(`\x1B[${rowsBelow}B`);
+    }
+    process.stdout.write('\r\n');
+    process.stdout.write('\x1B[J');
 
+    const moveUp = 1 + cursorRow + rowsBelow;
+    if (moveUp > 0) {
+      process.stdout.write(`\x1B[${moveUp}A`);
+    }
     process.stdout.write(`\x1B[${promptWidth + 1}G`);
 
     mutators.setBuffer(newBuffer);
     mutators.setCursorPos(newBuffer.length);
     process.stdout.write(newBuffer);
-    process.stdout.write('\x1B[K');
+    process.stdout.write('\x1B[J');
 
     completionState = null;
   };

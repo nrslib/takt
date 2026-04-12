@@ -11,6 +11,7 @@ import * as readline from 'node:readline';
 import { StringDecoder } from 'node:string_decoder';
 import { stripAnsi, getDisplayWidth } from '../../shared/utils/text.js';
 import { createCompletionController } from './completionController.js';
+import type { CompletionCandidate } from './completionMenu.js';
 
 /** Escape sequences for terminal protocol control */
 const PASTE_BRACKET_ENABLE = '\x1B[?2004h';
@@ -275,11 +276,7 @@ export function readMultilineInput(
   options?: {
     completionProvider?: (
       context: { buffer: string },
-    ) => readonly {
-      readonly value: string;
-      readonly description?: string;
-      readonly applyValue?: string;
-    }[];
+    ) => readonly CompletionCandidate[];
   },
 ): Promise<string | null> {
   if (!process.stdin.isTTY) {
@@ -377,7 +374,7 @@ export function readMultilineInput(
     /**
      * Count display rows between two arbitrary buffer positions.
      */
-    function countDisplayRowsBetweenPositions(from: number, to: number): number {
+    function countDisplayRowsAcrossLines(from: number, to: number): number {
       if (from >= to) return 0;
       let rows = 0;
       let pos = from;
@@ -400,8 +397,8 @@ export function readMultilineInput(
      * Count display rows from cursor position to end of buffer.
      */
     function countRowsBelowCursor(): number {
-      const cursorRow = countDisplayRowsBetweenPositions(0, cursorPos);
-      const totalRows = countDisplayRowsBetweenPositions(0, buffer.length);
+      const cursorRow = countDisplayRowsAcrossLines(0, cursorPos);
+      const totalRows = countDisplayRowsAcrossLines(0, buffer.length);
       return totalRows - cursorRow;
     }
 
@@ -412,6 +409,7 @@ export function readMultilineInput(
         getTermWidth,
         getTerminalColumn,
         countRowsBelowCursor,
+        getCursorRow: () => countDisplayRowsAcrossLines(0, cursorPos),
       },
       {
         setBuffer: (v) => { buffer = v; },
@@ -557,26 +555,10 @@ export function readMultilineInput(
       process.stdout.write(`\x1B[${termCol}G`);
     }
 
-    /** Count how many display rows lie between two buffer positions in the same logical line */
-    function countDisplayRowsBetween(from: number, to: number): number {
-      if (from === to) return 0;
-      const start = Math.min(from, to);
-      const end = Math.max(from, to);
-      let count = 0;
-      let pos = start;
-      while (pos < end) {
-        const nextRowStart = getDisplayRowEnd(pos);
-        if (nextRowStart >= end) break;
-        pos = nextRowStart;
-        count++;
-      }
-      return count;
-    }
-
     function moveCursorToLogicalLineStart(): void {
       const lineStart = getLineStart();
       if (cursorPos === lineStart) return;
-      const rowDiff = countDisplayRowsBetween(lineStart, cursorPos);
+      const rowDiff = countDisplayRowsAcrossLines(lineStart, cursorPos);
       cursorPos = lineStart;
       if (rowDiff > 0) {
         process.stdout.write(`\x1B[${rowDiff}A`);
@@ -588,7 +570,7 @@ export function readMultilineInput(
     function moveCursorToLogicalLineEnd(): void {
       const lineEnd = getLineEnd();
       if (cursorPos === lineEnd) return;
-      const rowDiff = countDisplayRowsBetween(cursorPos, lineEnd);
+      const rowDiff = countDisplayRowsAcrossLines(cursorPos, lineEnd);
       cursorPos = lineEnd;
       if (rowDiff > 0) {
         process.stdout.write(`\x1B[${rowDiff}B`);
@@ -811,7 +793,6 @@ export function readMultilineInput(
               return;
             }
 
-            // Tab: apply completion
             if (ch === '\t') {
               if (completion.getState()) {
                 completion.apply();
@@ -822,7 +803,7 @@ export function readMultilineInput(
             // Submit
             if (ch === '\r') {
               const compState = completion.getState();
-              if (compState && compState.candidates.length > 0) {
+              if (compState) {
                 const selected = compState.candidates[compState.selectedIndex];
                 if (selected) {
                   buffer = selected.value;

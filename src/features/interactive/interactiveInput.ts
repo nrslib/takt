@@ -2,6 +2,7 @@ import type { Language } from '../../core/models/config-types.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { readMultilineInput } from './lineEditor.js';
 import { filterSlashCommands, type CommandAvailability } from './slashCommandRegistry.js';
+import type { CompletionCandidate } from './completionMenu.js';
 
 /**
  * Build localized slash-command completion candidates for the current input.
@@ -10,11 +11,7 @@ export const getSlashCommandCompletions = (
   prefix: string,
   lang: Language,
   availability?: CommandAvailability,
-): readonly {
-  readonly value: string;
-  readonly description?: string;
-  readonly applyValue?: string;
-}[] =>
+): readonly CompletionCandidate[] =>
   filterSlashCommands(prefix, availability).map((entry) => ({
     value: entry.command,
     applyValue: `${entry.command} `,
@@ -47,11 +44,7 @@ const extractSlashToken = (buffer: string): { token: string; start: number } | n
 export const createSlashCommandCompletionProvider = (
   lang: Language,
   availability?: CommandAvailability,
-): ((context: { buffer: string }) => readonly {
-  readonly value: string;
-  readonly description?: string;
-  readonly applyValue?: string;
-}[]) =>
+): ((context: { buffer: string }) => readonly CompletionCandidate[]) =>
   ({ buffer }) => {
     const match = extractSlashToken(buffer);
     if (!match) return [];
