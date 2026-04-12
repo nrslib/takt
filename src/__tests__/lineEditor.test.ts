@@ -4,6 +4,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { parseInputData, createEscapeParser, type InputCallbacks } from '../features/interactive/lineEditor.js';
+import type { CompletionCandidate } from '../features/interactive/completionMenu.js';
 
 function createCallbacks(): InputCallbacks & { calls: string[] } {
   const calls: string[] = [];
@@ -29,11 +30,7 @@ const TEST_COMPLETION_VALUES = ['/play', '/go', '/retry', '/replay', '/cancel', 
 
 const testCompletionProvider = (
   { buffer }: { buffer: string },
-): readonly {
-  readonly value: string;
-  readonly description?: string;
-  readonly applyValue?: string;
-}[] => {
+): readonly CompletionCandidate[] => {
   if (!buffer.startsWith('/') || buffer.includes('\n')) {
     return [];
   }
@@ -163,6 +160,15 @@ describe('parseInputData', () => {
       // Then
       expect(cb.calls).toEqual(['esc', 'char:x']);
     });
+
+    it('should fire onEsc then char:[ for incomplete CSI at end of input', () => {
+      // Given
+      const cb = createCallbacks();
+      // When
+      parseInputData('\x1B[', cb);
+      // Then
+      expect(cb.calls).toEqual(['esc', 'char:[']);
+    });
   });
 
   describe('Ctrl+J key detection', () => {
@@ -290,11 +296,7 @@ describe('readMultilineInput cursor navigation', () => {
     options?: {
       completionProvider?: (
         context: { buffer: string },
-      ) => readonly {
-        readonly value: string;
-        readonly description?: string;
-        readonly applyValue?: string;
-      }[];
+      ) => readonly CompletionCandidate[];
     },
   ): Promise<string | null> {
     const { readMultilineInput } = await import('../features/interactive/lineEditor.js');

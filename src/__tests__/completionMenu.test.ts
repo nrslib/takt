@@ -3,28 +3,22 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import chalk from 'chalk';
 import {
   renderCompletionMenu,
   writeCompletionMenu,
   clearCompletionMenu,
+  type CompletionCandidate,
 } from '../features/interactive/completionMenu.js';
 import { stripAnsi, getDisplayWidth } from '../shared/utils/text.js';
 
-const ENGLISH_CANDIDATES: readonly {
-  readonly value: string;
-  readonly description?: string;
-  readonly applyValue?: string;
-}[] = [
+const ENGLISH_CANDIDATES: readonly CompletionCandidate[] = [
   { value: '/play', description: 'Run a task immediately', applyValue: '/play ' },
   { value: '/go', description: 'Create instruction & run', applyValue: '/go ' },
   { value: '/retry', description: 'Review & rerun with previous instructions', applyValue: '/retry ' },
 ];
 
-const JAPANESE_CANDIDATES: readonly {
-  readonly value: string;
-  readonly description?: string;
-  readonly applyValue?: string;
-}[] = [
+const JAPANESE_CANDIDATES: readonly CompletionCandidate[] = [
   { value: '/play', description: 'タスクを即実行する', applyValue: '/play ' },
 ];
 
@@ -99,6 +93,19 @@ describe('renderCompletionMenu', () => {
     for (const line of lines) {
       const width = getDisplayWidth(stripAnsi(line));
       expect(width).toBeLessThanOrEqual(termWidth);
+    }
+  });
+
+  it('should apply different styles for selected vs unselected candidates', () => {
+    const prevLevel = chalk.level;
+    chalk.level = 1;
+    try {
+      const lines0 = renderCompletionMenu(ENGLISH_CANDIDATES, 0, 80);
+      const lines1 = renderCompletionMenu(ENGLISH_CANDIDATES, 1, 80);
+      expect(lines0[1]).not.toBe(lines1[1]);
+      expect(lines0[2]).not.toBe(lines1[2]);
+    } finally {
+      chalk.level = prevLevel;
     }
   });
 });

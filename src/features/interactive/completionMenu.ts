@@ -16,11 +16,11 @@ const MIN_COMMAND_WIDTH = 8;
 /**
  * A single completion candidate entry.
  */
-export type CompletionCandidate = {
+export interface CompletionCandidate {
   readonly value: string;
   readonly description?: string;
   readonly applyValue?: string;
-};
+}
 
 /**
  * Render completion menu lines (pure function).
