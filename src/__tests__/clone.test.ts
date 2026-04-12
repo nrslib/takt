@@ -49,24 +49,25 @@ vi.mock('../infra/config/global/globalConfig.js', () => ({
   getBuiltinWorkflowsEnabled: vi.fn().mockReturnValue(true),
 }));
 
-vi.mock('../infra/config/project/projectConfig.js', async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
+vi.mock('../infra/config/index.js', () => ({
   loadProjectConfig: vi.fn(() => ({})),
+  resolveConfigValue: vi.fn(() => undefined),
 }));
 
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { loadGlobalConfig } from '../infra/config/global/globalConfig.js';
-import { loadProjectConfig } from '../infra/config/project/projectConfig.js';
+import { loadProjectConfig, resolveConfigValue } from '../infra/config/index.js';
 import { CloneManager, createSharedClone, createTempCloneForBranch, cleanupOrphanedClone } from '../infra/task/clone.js';
 
 const mockExecFileSync = vi.mocked(execFileSync);
 const mockLoadProjectConfig = vi.mocked(loadProjectConfig);
+const mockResolveConfigValue = vi.mocked(resolveConfigValue);
 
 beforeEach(() => {
   vi.clearAllMocks();
   mockLoadProjectConfig.mockReturnValue({});
+  mockResolveConfigValue.mockReturnValue(undefined);
 });
 
 describe('cloneAndIsolate git config propagation', () => {
@@ -977,10 +978,12 @@ describe('prefetch existing branch on origin before clone (#557)', () => {
 
 describe('autoFetch: true — fetch, rev-parse origin/<branch>, reset --hard', () => {
   it('should run git fetch, resolve origin/<branch> commit hash, and reset --hard in the clone', () => {
-    vi.mocked(loadGlobalConfig)
-      .mockReturnValueOnce({ autoFetch: true } as ReturnType<typeof loadGlobalConfig>)
-      .mockReturnValueOnce({ autoFetch: true } as ReturnType<typeof loadGlobalConfig>)
-      .mockReturnValueOnce({ autoFetch: true } as ReturnType<typeof loadGlobalConfig>);
+    mockResolveConfigValue.mockImplementation((_projectDir, key) => {
+      if (key === 'autoFetch') {
+        return true;
+      }
+      return undefined;
+    });
 
     const fetchCalls: string[][] = [];
     const revParseOriginCalls: string[][] = [];

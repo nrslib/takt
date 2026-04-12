@@ -97,6 +97,7 @@ describe('vcsProvider global config wiring', () => {
   let GlobalConfigManager: typeof import('../infra/config/global/globalConfigCore.js').GlobalConfigManager;
 
   beforeEach(async () => {
+    vi.resetModules();
     testDir = mkdtempSync(join(tmpdir(), 'takt-test-vcs-global-'));
     mkdirSync(testDir, { recursive: true });
     testConfigPath = join(testDir, 'config.yaml');
@@ -116,6 +117,7 @@ describe('vcsProvider global config wiring', () => {
   afterEach(() => {
     GlobalConfigManager.resetInstance();
     vi.doUnmock('../infra/config/paths.js');
+    vi.resetModules();
     if (testDir) {
       rmSync(testDir, { recursive: true, force: true });
     }

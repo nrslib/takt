@@ -3,7 +3,7 @@ import type { PartDefinition, WorkflowStep } from '../core/models/types.js';
 import { createPartStep } from '../core/workflow/engine/team-leader-common.js';
 
 describe('createPartStep', () => {
-  it('uses step.providerOptions.claude.allowedTools when part_allowed_tools is omitted', () => {
+  it('keeps parent providerOptions intact so part option resolution stays in OptionsBuilder', () => {
     // Given
     const step: WorkflowStep = {
       name: 'implement',
@@ -12,8 +12,19 @@ describe('createPartStep', () => {
       instruction: 'do work',
       passPreviousResponse: false,
       providerOptions: {
+        codex: {
+          networkAccess: false,
+        },
+        opencode: {
+          networkAccess: true,
+        },
         claude: {
           allowedTools: ['Read', 'Edit', 'Bash'],
+          effort: 'medium',
+          sandbox: {
+            allowUnsandboxedCommands: true,
+            excludedCommands: ['./gradlew'],
+          },
         },
       },
       teamLeader: {
@@ -33,7 +44,7 @@ describe('createPartStep', () => {
     const partStep = createPartStep(step, part);
 
     // Then
-    expect(partStep.providerOptions?.claude?.allowedTools).toEqual(['Read', 'Edit', 'Bash']);
+    expect(partStep.providerOptions).toEqual(step.providerOptions);
   });
 
   it('keeps part personaDisplayName aligned with the part persona for personaProviders lookup', () => {

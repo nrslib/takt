@@ -455,6 +455,42 @@ describe('OptionsBuilder.buildAgentOptions', () => {
     );
   });
 
+  it('fails fast when team leader part_allowed_tools are used without a resolved provider', () => {
+    const step = createStep();
+    const builder = createBuilder(step, {
+      provider: undefined,
+      model: undefined,
+    });
+
+    expect(() => builder.buildAgentOptions(step, {
+      providerInfo: {
+        provider: undefined,
+        model: undefined,
+      },
+      teamLeaderPart: {
+        partAllowedTools: ['Read', 'Edit'],
+      },
+    })).toThrow(/team_leader\.part_allowed_tools.*provider is not resolved/i);
+  });
+
+  it('fails fast when team leader part_allowed_tools are used with an unsupported provider', () => {
+    const step = createStep();
+    const builder = createBuilder(step, {
+      provider: 'cursor',
+      model: 'cursor-fast',
+    });
+
+    expect(() => builder.buildAgentOptions(step, {
+      providerInfo: {
+        provider: 'cursor',
+        model: 'cursor-fast',
+      },
+      teamLeaderPart: {
+        partAllowedTools: ['Read', 'Edit'],
+      },
+    })).toThrow(/team_leader\.part_allowed_tools.*cursor/i);
+  });
+
   it('uses already resolved provider and model for capability checks', () => {
     const step = createStep({
       structuredOutput: {
@@ -487,5 +523,78 @@ describe('OptionsBuilder.buildAgentOptions', () => {
       provider: undefined,
       model: undefined,
     });
+  });
+
+  it('centralizes team leader part providerOptions resolution for non-Claude providers', () => {
+    const step = createStep({
+      providerOptions: {
+        opencode: { networkAccess: false },
+        claude: {
+          allowedTools: ['Read', 'Edit', 'Bash'],
+          sandbox: { excludedCommands: ['./gradlew'] },
+        },
+      },
+    });
+    const builder = createBuilder(step, {
+      providerOptions: {
+        opencode: { networkAccess: true },
+        claude: {
+          sandbox: { allowUnsandboxedCommands: true },
+        },
+      },
+    });
+
+    const options = builder.buildAgentOptions(step, {
+      providerInfo: {
+        provider: 'opencode',
+        model: 'opencode/zai-coding-plan/glm-5.1',
+      },
+      teamLeaderPart: {},
+    });
+
+    expect(options.providerOptions).toEqual({
+      opencode: { networkAccess: false },
+      claude: {
+        sandbox: {
+          allowUnsandboxedCommands: true,
+          excludedCommands: ['./gradlew'],
+        },
+      },
+    });
+    expect(options.allowedTools).toBeUndefined();
+  });
+
+  it('keeps merged claude allowedTools for Claude team leader parts when part_allowed_tools is omitted', () => {
+    const step = createStep({
+      providerOptions: {
+        claude: {
+          allowedTools: ['Read', 'Edit', 'Bash'],
+        },
+      },
+    });
+    const builder = createBuilder(step, {
+      provider: 'claude',
+      providerOptions: {
+        claude: {
+          sandbox: { allowUnsandboxedCommands: true },
+        },
+      },
+    });
+
+    const options = builder.buildAgentOptions(step, {
+      providerInfo: {
+        provider: 'claude',
+        model: 'sonnet',
+      },
+      teamLeaderPart: {},
+    });
+
+    expect(options.providerOptions).toEqual({
+      claude: {
+        allowedTools: ['Read', 'Edit', 'Bash'],
+        sandbox: { allowUnsandboxedCommands: true },
+      },
+    });
+    expect(options.allowedTools).toEqual(['Read', 'Edit', 'Bash']);
   });
 });

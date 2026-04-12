@@ -6,6 +6,13 @@ const MCP_SERVER_PROVIDERS = new Set<ProviderType>([
   'claude-sdk',
 ]);
 
+const ALLOWED_TOOLS_PROVIDERS = new Set<ProviderType>([
+  'claude',
+  'claude-sdk',
+  'opencode',
+  'mock',
+]);
+
 const CLAUDE_ALLOWED_TOOLS_PROVIDERS = new Set<ProviderType>([
   'claude',
   'claude-sdk',
@@ -15,6 +22,7 @@ const CLAUDE_ALLOWED_TOOLS_PROVIDERS = new Set<ProviderType>([
 interface ProviderCapabilities {
   supportsStructuredOutput: boolean;
   supportsMcpServers: boolean;
+  supportsAllowedTools: boolean;
   supportsClaudeAllowedTools: boolean;
 }
 
@@ -28,6 +36,7 @@ function resolveProviderCapabilities(
   return {
     supportsStructuredOutput: getProvider(provider).supportsStructuredOutput,
     supportsMcpServers: MCP_SERVER_PROVIDERS.has(provider),
+    supportsAllowedTools: ALLOWED_TOOLS_PROVIDERS.has(provider),
     supportsClaudeAllowedTools: CLAUDE_ALLOWED_TOOLS_PROVIDERS.has(provider),
   };
 }
@@ -42,6 +51,12 @@ export function providerSupportsMcpServers(
   provider: ProviderType | undefined,
 ): boolean | undefined {
   return resolveProviderCapabilities(provider)?.supportsMcpServers;
+}
+
+export function providerSupportsAllowedTools(
+  provider: ProviderType | undefined,
+): boolean | undefined {
+  return resolveProviderCapabilities(provider)?.supportsAllowedTools;
 }
 
 export function providerSupportsClaudeAllowedTools(

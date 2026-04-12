@@ -132,6 +132,31 @@ describe('RuleEvaluator with when conditions', () => {
     );
   });
 
+  it('同じ effect type でも step 修飾で意図した結果だけを参照できる', async () => {
+    const state = makeState() as WorkflowState & {
+      effectResults: Map<string, unknown>;
+    };
+    state.effectResults = new Map([
+      ['comment_first', { comment_pr: { success: false } }],
+      ['comment_second', { comment_pr: { success: true } }],
+    ]);
+
+    const step = makeStep({
+      name: 'route_context',
+      rules: [
+        {
+          condition: 'effect.comment_second.comment_pr.success == true && effect.comment_first.comment_pr.success == false',
+          next: 'COMPLETE',
+        },
+      ],
+    });
+
+    const evaluator = new RuleEvaluator(step, makeContext(state));
+    const result = await evaluator.evaluate('', '');
+
+    expect(result?.index).toBe(0);
+  });
+
   it('deterministic rule を含む mixed rules でも AI judge fallback の元 rule index を返す', async () => {
     const state = makeState() as WorkflowState & {
       systemContexts: Map<string, unknown>;

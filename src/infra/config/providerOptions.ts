@@ -8,6 +8,8 @@ import type {
   ProviderOptionsSource,
   ProviderOptionsTraceOrigin,
 } from '../../core/workflow/types.js';
+import type { ProviderType } from '../../shared/types/provider.js';
+import { providerSupportsClaudeAllowedTools } from '../providers/provider-capabilities.js';
 
 type RawProviderOptions = {
   codex?: {
@@ -234,4 +236,65 @@ export function resolveEffectiveProviderOptions(
   };
 
   return result.codex || result.opencode || result.claude ? result : undefined;
+}
+
+function stripClaudeAllowedTools(
+  providerOptions: StepProviderOptions | undefined,
+): StepProviderOptions | undefined {
+  if (!providerOptions) {
+    return undefined;
+  }
+
+  const sanitizedClaude = providerOptions.claude
+    ? {
+        ...(providerOptions.claude.effort !== undefined
+          ? { effort: providerOptions.claude.effort }
+          : {}),
+        ...(providerOptions.claude.sandbox !== undefined
+          ? { sandbox: { ...providerOptions.claude.sandbox } }
+          : {}),
+      }
+    : undefined;
+
+  const sanitizedProviderOptions: StepProviderOptions = {
+    ...(providerOptions.codex !== undefined
+      ? { codex: { ...providerOptions.codex } }
+      : {}),
+    ...(providerOptions.opencode !== undefined
+      ? { opencode: { ...providerOptions.opencode } }
+      : {}),
+    ...(sanitizedClaude !== undefined && Object.keys(sanitizedClaude).length > 0
+      ? { claude: sanitizedClaude }
+      : {}),
+  };
+
+  return Object.keys(sanitizedProviderOptions).length > 0
+    ? sanitizedProviderOptions
+    : undefined;
+}
+
+export function resolveEffectiveTeamLeaderPartProviderOptions(
+  source: ProviderOptionsSource | undefined,
+  originResolver: ProviderOptionsOriginResolver | undefined,
+  resolvedConfigOptions: StepProviderOptions | undefined,
+  stepOptions: StepProviderOptions | undefined,
+  resolvedProvider: ProviderType | undefined,
+  partAllowedTools: string[] | undefined,
+): StepProviderOptions | undefined {
+  const mergedProviderOptions = resolveEffectiveProviderOptions(
+    source,
+    originResolver,
+    resolvedConfigOptions,
+    stepOptions,
+  );
+
+  const shouldStripClaudeTools = partAllowedTools !== undefined
+    || (
+      resolvedProvider !== undefined
+      && providerSupportsClaudeAllowedTools(resolvedProvider) === false
+    );
+
+  return shouldStripClaudeTools
+    ? stripClaudeAllowedTools(mergedProviderOptions)
+    : mergedProviderOptions;
 }

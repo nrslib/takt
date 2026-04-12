@@ -774,6 +774,51 @@ describe('DefaultSystemStepServices', () => {
     );
   });
 
+  it('fails sync_with_root before touching the base branch when PR head fast-forward fails', async () => {
+    mockFetchPrReviewComments.mockReturnValue({
+      number: 42,
+      title: 'Follow-up PR',
+      body: 'Body',
+      url: 'https://example.test/pr/42',
+      headRefName: 'task/test-branch',
+      baseRefName: 'improve',
+      comments: [],
+      reviews: [],
+      files: [],
+    });
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'fetch' && argsArr[2] === 'refs/heads/task/test-branch:refs/remotes/origin/task/test-branch') {
+        return '';
+      }
+      if (argsArr[0] === 'merge' && argsArr[1] === '--ff-only') {
+        throw createCommandError('fast-forward failed', 'fatal: Not possible to fast-forward, aborting.');
+      }
+      return '';
+    });
+
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Sync branch',
+    });
+
+    const result = await services.executeEffect({ type: 'sync_with_root', pr: 42 }, { pr: 42 }, {} as never);
+
+    expect(result).toEqual({
+      success: false,
+      failed: true,
+      conflicted: false,
+      error: 'fatal: Not possible to fast-forward, aborting.',
+    });
+    expect(mockExecFileSync).toHaveBeenCalledTimes(2);
+    expect(mockExecFileSync).not.toHaveBeenCalledWith(
+      'git',
+      ['fetch', 'origin', 'refs/heads/improve:refs/remotes/origin/improve'],
+      expect.any(Object),
+    );
+  });
+
   it('returns success for comment_pr effect', async () => {
     const services = new DefaultSystemStepServices({
       cwd: '/repo/worktree',

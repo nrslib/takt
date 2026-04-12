@@ -200,6 +200,44 @@ describe('WorkflowEngine provider_options resolution', () => {
     expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
   });
 
+  it('should fail fast when claude allowedTools are configured on a step resolved to opencode via personaProviders', async () => {
+    const step = makeStep('implement', {
+      personaDisplayName: 'coder',
+      providerOptions: {
+        claude: { allowedTools: ['Read', 'Edit'] },
+      },
+      rules: [makeRule('done', 'COMPLETE')],
+    });
+
+    const config: WorkflowConfig = {
+      name: 'provider-options-persona-opencode-tools',
+      steps: [step],
+      initialStep: 'implement',
+      maxSteps: 1,
+    };
+
+    mockRunAgentSequence([
+      makeResponse({ persona: step.persona, content: 'done' }),
+    ]);
+    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+
+    engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      provider: 'claude',
+      personaProviders: {
+        coder: {
+          provider: 'opencode',
+          model: 'opencode/zai-coding-plan/glm-5.1',
+        },
+      },
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
+  });
+
   it('should keep claude allowedTools when the provider is mock', async () => {
     const step = makeStep('implement', {
       provider: 'mock',

@@ -1,5 +1,5 @@
-import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -30,6 +30,23 @@ type RuntimeLoadInput = {
 type RuntimeLoadOutput = {
   traceEntries: Array<[string, TracedValue<unknown>]>;
 };
+
+const require = createRequire(import.meta.url);
+const { execFileSync: execFileSyncRuntime } = require('node:child_process') as typeof import('node:child_process');
+
+function executeRuntimeLoader(input: RuntimeLoadInput): RuntimeLoadOutput {
+  const stdout = execFileSyncRuntime(
+    process.execPath,
+    ['--input-type=module', '-e', TRACED_CONFIG_RUNTIME_SCRIPT],
+    {
+      cwd: TAKT_PACKAGE_ROOT,
+      env: process.env,
+      input: JSON.stringify(input),
+      encoding: 'utf-8',
+    },
+  );
+  return JSON.parse(stdout.trim()) as RuntimeLoadOutput;
+}
 
 function serializeSchema(schema: SchemaShape): Record<string, SerializedSchemaEntry> {
   const serialized: Record<string, SerializedSchemaEntry> = {};
@@ -152,17 +169,7 @@ export function loadTraceEntriesViaRuntime(
       fileOrigin,
       tempConfigPath,
     };
-    const stdout = execFileSync(
-      process.execPath,
-      ['--input-type=module', '-e', TRACED_CONFIG_RUNTIME_SCRIPT],
-      {
-        cwd: TAKT_PACKAGE_ROOT,
-        env: process.env,
-        input: JSON.stringify(input),
-        encoding: 'utf-8',
-      },
-    );
-    const result = JSON.parse(stdout) as RuntimeLoadOutput;
+    const result = executeRuntimeLoader(input);
     const traceEntries = new Map<string, TracedValue<unknown>>();
     for (const [key, traced] of result.traceEntries) {
       const entry = input.schemaGroups.find((group) => key in group)?.[key];

@@ -257,6 +257,212 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     expect(output!.content).toContain('Docs done');
   });
 
+  it('persona_providers で opencode に解決される part でも part_allowed_tools を runtime allowedTools として渡す', async () => {
+    const config = buildTeamLeaderConfig();
+    const step = config.steps[0];
+    if (!step?.teamLeader) {
+      throw new Error('teamLeader configuration is required');
+    }
+    step.teamLeader.partPersona = 'coder';
+    step.providerOptions = {
+      opencode: {
+        networkAccess: true,
+      },
+      claude: {
+        allowedTools: ['Read', 'Edit', 'Bash', 'WebSearch'],
+        sandbox: {
+          allowUnsandboxedCommands: true,
+        },
+      },
+    };
+
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
+      projectCwd: tmpDir,
+      provider: 'claude',
+      personaProviders: {
+        coder: {
+          provider: 'opencode',
+          model: 'opencode/zai-coding-plan/glm-5.1',
+        },
+      },
+    });
+
+    mockRunAgentWithPrompt(
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: {
+          parts: [
+            { id: 'part-1', title: 'API', instruction: 'Implement API' },
+          ],
+        },
+      }),
+      makeResponse({ persona: 'coder', content: 'API done' }),
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: { done: true, reasoning: 'enough', parts: [] },
+      }),
+    );
+
+    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+
+    const partCall = vi.mocked(runAgent).mock.calls.find(([, , options]) => options?.resolvedProvider === 'opencode');
+    expect(partCall).toBeDefined();
+    expect(partCall?.[2]).toEqual(expect.objectContaining({
+      allowedTools: ['Read', 'Edit', 'Write'],
+      resolvedProvider: 'opencode',
+      resolvedModel: 'opencode/zai-coding-plan/glm-5.1',
+      providerOptions: {
+        opencode: {
+          networkAccess: true,
+        },
+        claude: {
+          sandbox: {
+            allowUnsandboxedCommands: true,
+          },
+        },
+      },
+    }));
+    expect(partCall?.[2]?.providerOptions?.claude?.allowedTools).toBeUndefined();
+  });
+
+  it('config 層の claude.allowed_tools は opencode part 実行時に再注入されない', async () => {
+    const config = buildTeamLeaderConfig();
+    const step = config.steps[0];
+    if (!step?.teamLeader) {
+      throw new Error('teamLeader configuration is required');
+    }
+    step.teamLeader.partPersona = 'coder';
+
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
+      projectCwd: tmpDir,
+      provider: 'claude',
+      providerOptions: {
+        opencode: {
+          networkAccess: true,
+        },
+        claude: {
+          allowedTools: ['Read', 'Edit', 'Bash', 'WebSearch'],
+          sandbox: {
+            allowUnsandboxedCommands: true,
+          },
+        },
+      },
+      personaProviders: {
+        coder: {
+          provider: 'opencode',
+          model: 'opencode/zai-coding-plan/glm-5.1',
+        },
+      },
+    });
+
+    mockRunAgentWithPrompt(
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: {
+          parts: [
+            { id: 'part-1', title: 'API', instruction: 'Implement API' },
+          ],
+        },
+      }),
+      makeResponse({ persona: 'coder', content: 'API done' }),
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: { done: true, reasoning: 'enough', parts: [] },
+      }),
+    );
+
+    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+
+    const partCall = vi.mocked(runAgent).mock.calls.find(([, , options]) => options?.resolvedProvider === 'opencode');
+    expect(partCall).toBeDefined();
+    expect(partCall?.[2]).toEqual(expect.objectContaining({
+      allowedTools: ['Read', 'Edit', 'Write'],
+      resolvedProvider: 'opencode',
+      resolvedModel: 'opencode/zai-coding-plan/glm-5.1',
+      providerOptions: {
+        opencode: {
+          networkAccess: true,
+        },
+        claude: {
+          sandbox: {
+            allowUnsandboxedCommands: true,
+          },
+        },
+      },
+    }));
+    expect(partCall?.[2]?.providerOptions?.claude?.allowedTools).toBeUndefined();
+  });
+
+  it('Claude part で part_allowed_tools 未指定なら provider_options.claude.allowed_tools を継承する', async () => {
+    const config = buildTeamLeaderConfig();
+    const step = config.steps[0];
+    if (!step?.teamLeader) {
+      throw new Error('teamLeader configuration is required');
+    }
+    step.teamLeader.partPersona = 'coder';
+    step.teamLeader.partAllowedTools = undefined;
+
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
+      projectCwd: tmpDir,
+      provider: 'claude',
+      providerOptions: {
+        claude: {
+          allowedTools: ['Read', 'Edit', 'Bash'],
+          sandbox: {
+            allowUnsandboxedCommands: true,
+          },
+        },
+      },
+    });
+
+    mockRunAgentWithPrompt(
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: {
+          parts: [
+            { id: 'part-1', title: 'API', instruction: 'Implement API' },
+          ],
+        },
+      }),
+      makeResponse({ persona: 'coder', content: 'API done' }),
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: { done: true, reasoning: 'enough', parts: [] },
+      }),
+    );
+
+    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+
+    const partCall = vi.mocked(runAgent).mock.calls.find(([persona, , options]) => (
+      persona === 'coder' && options?.resolvedProvider === 'claude'
+    ));
+    expect(partCall).toBeDefined();
+    expect(partCall?.[2]).toEqual(expect.objectContaining({
+      allowedTools: ['Read', 'Edit', 'Bash'],
+      providerOptions: {
+        claude: {
+          allowedTools: ['Read', 'Edit', 'Bash'],
+          sandbox: {
+            allowUnsandboxedCommands: true,
+          },
+        },
+      },
+      resolvedProvider: 'claude',
+    }));
+  });
+
   it('team leader の phase:start には分解実行時の実 instruction を記録する', async () => {
     const config = buildTeamLeaderConfig();
     const engine = new WorkflowEngine(config, tmpDir, 'implement feature', { projectCwd: tmpDir, provider: 'claude' });

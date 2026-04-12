@@ -6,8 +6,8 @@ import {
   getGlobalWorkflowsDir,
   getProjectWorkflowsDir,
   isWorkflowPath,
-  resolveWorkflowConfigValue,
 } from '../../infra/config/index.js';
+import { resolveWorkflowConfigValue } from '../../infra/config/resolveWorkflowConfigValue.js';
 import { error, success, warn } from '../../shared/ui/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';
 import { inspectWorkflowFile } from '../../infra/config/loaders/workflowDoctor.js';

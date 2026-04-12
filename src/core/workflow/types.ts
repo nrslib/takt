@@ -90,8 +90,13 @@ export interface StepProviderInfo {
   model: string | undefined;
 }
 
+export interface TeamLeaderPartRuntimeResolution {
+  partAllowedTools?: string[];
+}
+
 export interface RuntimeStepResolution {
   providerInfo?: StepProviderInfo;
+  teamLeaderPart?: TeamLeaderPartRuntimeResolution;
 }
 
 /** Events emitted by workflow engine */

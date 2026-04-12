@@ -4,9 +4,13 @@ import type { StepProviderOptions } from '../../models/workflow-types.js';
 import type { RunAgentOptions } from '../../../agents/runner.js';
 import type { StructuredCaller } from '../../../agents/structured-caller.js';
 import type { PhaseRunnerContext } from '../phase-runner.js';
-import { resolveEffectiveProviderOptions } from '../../../infra/config/providerOptions.js';
+import {
+  resolveEffectiveProviderOptions,
+  resolveEffectiveTeamLeaderPartProviderOptions,
+} from '../../../infra/config/providerOptions.js';
 import {
   assertProviderResolvedForCapabilitySensitiveOptions,
+  assertProviderSupportsAllowedTools,
   assertProviderSupportsClaudeAllowedTools,
   assertProviderSupportsMcpServers,
   resolveAllowedToolsForProvider,
@@ -61,6 +65,29 @@ export class OptionsBuilder {
     };
   }
 
+  private resolveMergedProviderOptions(
+    step: WorkflowStep,
+    runtime?: RuntimeStepResolution,
+  ): StepProviderOptions | undefined {
+    if (runtime?.teamLeaderPart) {
+      return resolveEffectiveTeamLeaderPartProviderOptions(
+        this.engineOptions.providerOptionsSource,
+        this.engineOptions.providerOptionsOriginResolver,
+        this.engineOptions.providerOptions,
+        step.providerOptions,
+        this.resolveStepProviderModel(step, runtime).provider,
+        runtime.teamLeaderPart.partAllowedTools,
+      );
+    }
+
+    return resolveEffectiveProviderOptions(
+      this.engineOptions.providerOptionsSource,
+      this.engineOptions.providerOptionsOriginResolver,
+      this.engineOptions.providerOptions,
+      step.providerOptions,
+    );
+  }
+
   /** Build common RunAgentOptions shared by all phases */
   buildBaseOptions(
     step: WorkflowStep,
@@ -84,12 +111,7 @@ export class OptionsBuilder {
         requiredPermissionMode: step.requiredPermissionMode,
         providerProfiles: this.engineOptions.providerProfiles,
       },
-      providerOptions: mergedProviderOptions ?? resolveEffectiveProviderOptions(
-        this.engineOptions.providerOptionsSource,
-        this.engineOptions.providerOptionsOriginResolver,
-        this.engineOptions.providerOptions,
-        step.providerOptions,
-      ),
+      providerOptions: mergedProviderOptions ?? this.resolveMergedProviderOptions(step, runtime),
       language: this.getLanguage(),
       onStream: this.engineOptions.onStream,
       onPermissionRequest: this.engineOptions.onPermissionRequest,
@@ -107,27 +129,30 @@ export class OptionsBuilder {
 
   /** Build RunAgentOptions for Phase 1 (main execution) */
   buildAgentOptions(step: WorkflowStep, runtime?: RuntimeStepResolution): RunAgentOptions {
-    const mergedProviderOptions = resolveEffectiveProviderOptions(
-      this.engineOptions.providerOptionsSource,
-      this.engineOptions.providerOptionsOriginResolver,
-      this.engineOptions.providerOptions,
-      step.providerOptions,
-    );
+    const mergedProviderOptions = this.resolveMergedProviderOptions(step, runtime);
     const { provider: resolvedProvider } = this.resolveStepProviderModel(step, runtime);
     const usesClaudeAllowedTools = (mergedProviderOptions?.claude?.allowedTools?.length ?? 0) > 0;
+    const usesTeamLeaderPartAllowedTools = (runtime?.teamLeaderPart?.partAllowedTools?.length ?? 0) > 0;
 
     assertProviderResolvedForCapabilitySensitiveOptions(resolvedProvider, {
       stepName: step.name,
       usesStructuredOutput: step.structuredOutput !== undefined,
       usesMcpServers: step.mcpServers !== undefined && Object.keys(step.mcpServers).length > 0,
       usesClaudeAllowedTools,
+      usesAllowedTools: usesTeamLeaderPartAllowedTools ? 'team_leader.part_allowed_tools' : undefined,
     });
 
     const hasOutputContracts = step.outputContracts !== undefined && step.outputContracts.length > 0;
-    const allowedTools = resolveAllowedToolsForProvider(
-      mergedProviderOptions,
-      hasOutputContracts,
-      step.edit,
+    const allowedTools = runtime?.teamLeaderPart?.partAllowedTools
+      ?? resolveAllowedToolsForProvider(
+        mergedProviderOptions,
+        hasOutputContracts,
+        step.edit,
+      );
+    assertProviderSupportsAllowedTools(
+      resolvedProvider,
+      runtime?.teamLeaderPart?.partAllowedTools,
+      'team_leader.part_allowed_tools',
     );
     assertProviderSupportsClaudeAllowedTools(resolvedProvider, mergedProviderOptions);
     assertProviderSupportsMcpServers(resolvedProvider, step.mcpServers);

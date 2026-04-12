@@ -221,6 +221,25 @@ describe('RuleEvaluator', () => {
       expect(structuredCaller.evaluateCondition).toHaveBeenCalledOnce();
     });
 
+    it('should keep ai() reachable in mixed rules when Phase 3 is absent and a trailing when:true fallback exists', async () => {
+      const step = makeStep({
+        rules: [
+          { condition: 'tag-like-status', next: 'tag-path' },
+          { condition: 'needs follow-up', next: 'fix', isAiCondition: true, aiConditionText: 'does it need follow-up?' },
+          { condition: 'true', next: 'fallback' },
+        ],
+      });
+      const structuredCaller = { evaluateCondition: vi.fn().mockResolvedValue(1) };
+      const detectRuleIndex = vi.fn().mockReturnValue(-1);
+      const ctx = makeContext({ structuredCaller, detectRuleIndex });
+      const evaluator = new RuleEvaluator(step, ctx);
+
+      const result = await evaluator.evaluate('agent output', '');
+
+      expect(result).toEqual({ index: 1, method: 'ai_judge' });
+      expect(structuredCaller.evaluateCondition).toHaveBeenCalledOnce();
+    });
+
     it('should prefer a middle deterministic rule over a later ai() rule when an earlier tag rule does not match', async () => {
       const state = makeState();
       state.systemContexts.set('route_context', { task: { exists: true } });

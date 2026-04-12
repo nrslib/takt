@@ -1,6 +1,7 @@
 import type { ProviderType } from '../../../shared/types/provider.js';
 import type { McpServerConfig, StepProviderOptions } from '../../models/types.js';
 import {
+  providerSupportsAllowedTools,
   providerSupportsClaudeAllowedTools,
   providerSupportsMcpServers,
 } from '../../../infra/providers/provider-capabilities.js';
@@ -10,6 +11,7 @@ interface CapabilitySensitiveStepOptions {
   usesStructuredOutput: boolean;
   usesMcpServers: boolean;
   usesClaudeAllowedTools: boolean;
+  usesAllowedTools?: string;
 }
 
 export function resolveAllowedToolsForProvider(
@@ -43,6 +45,9 @@ export function assertProviderResolvedForCapabilitySensitiveOptions(
   if (options.usesClaudeAllowedTools) {
     enabledFeatures.push('provider_options.claude.allowed_tools');
   }
+  if (options.usesAllowedTools) {
+    enabledFeatures.push(options.usesAllowedTools);
+  }
   if (enabledFeatures.length === 0) {
     return;
   }
@@ -64,6 +69,22 @@ export function assertProviderSupportsClaudeAllowedTools(
   if (provider !== undefined && providerSupportsClaudeAllowedTools(provider) === false) {
     throw new Error(
       `provider_options.claude.allowed_tools is not supported for provider "${provider}"`,
+    );
+  }
+}
+
+export function assertProviderSupportsAllowedTools(
+  provider: ProviderType | undefined,
+  allowedTools: string[] | undefined,
+  optionName = 'allowed_tools',
+): void {
+  if (!allowedTools || allowedTools.length === 0) {
+    return;
+  }
+
+  if (provider !== undefined && providerSupportsAllowedTools(provider) === false) {
+    throw new Error(
+      `${optionName} is not supported for provider "${provider}"`,
     );
   }
 }
