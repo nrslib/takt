@@ -67,8 +67,11 @@ export async function callMock(
 
   const status = scenarioEntry?.status ?? options.mockStatus ?? 'done';
   const statusMarker = `[MOCK:${status.toUpperCase()}]`;
+  const allowedToolsSuffix = options.allowedTools && options.allowedTools.length > 0
+    ? `\nAllowed tools: ${options.allowedTools.join(', ')}`
+    : '';
   const content = scenarioEntry?.content ?? options.mockResponse ??
-    `${statusMarker}\n\nMock response for persona "${personaName}".\nPrompt: ${prompt.slice(0, 100)}${prompt.length > 100 ? '...' : ''}`;
+    `${statusMarker}\n\nMock response for persona "${personaName}".\nPrompt: ${prompt.slice(0, 100)}${prompt.length > 100 ? '...' : ''}${allowedToolsSuffix}`;
 
   // Emit stream events if callback is provided
   if (options.onStream) {

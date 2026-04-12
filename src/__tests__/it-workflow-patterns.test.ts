@@ -73,6 +73,29 @@ function createTestDir(): string {
   return dir;
 }
 
+function stripClaudeAllowedTools(config: WorkflowConfig): WorkflowConfig {
+  return {
+    ...config,
+    steps: config.steps.map((step) => {
+      const claudeOptions = step.providerOptions?.claude;
+      if (!claudeOptions?.allowedTools) {
+        return step;
+      }
+
+      return {
+        ...step,
+        providerOptions: {
+          ...step.providerOptions,
+          claude: {
+            ...claudeOptions,
+            allowedTools: undefined,
+          },
+        },
+      };
+    }),
+  };
+}
+
 function createEngine(config: WorkflowConfig, dir: string, task: string): WorkflowEngine {
   const defaultStructuredCaller = new DefaultStructuredCaller();
   const structuredCaller: StructuredCaller = {
@@ -88,7 +111,7 @@ function createEngine(config: WorkflowConfig, dir: string, task: string): Workfl
     decomposeTask: defaultStructuredCaller.decomposeTask.bind(defaultStructuredCaller),
     requestMoreParts: defaultStructuredCaller.requestMoreParts.bind(defaultStructuredCaller),
   };
-  return new WorkflowEngine(config, dir, task, {
+  return new WorkflowEngine(stripClaudeAllowedTools(config), dir, task, {
     projectCwd: dir,
     provider: 'mock',
     detectRuleIndex,

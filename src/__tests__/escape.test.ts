@@ -179,12 +179,28 @@ describe('replaceTemplatePlaceholders', () => {
         systemContexts: new Map(),
         structuredOutputs: new Map(),
         effectResults: new Map([
-          ['comment_pr', { success: true }],
+          ['comment_on_pr', { comment_pr: { success: true } }],
         ]),
       } as never,
     });
 
-    const result = replaceTemplatePlaceholders('Comment success: {effect:comment_pr.success}', step, ctx);
+    const result = replaceTemplatePlaceholders('Comment success: {effect:comment_on_pr.comment_pr.success}', step, ctx);
+    expect(result).toBe('Comment success: true');
+  });
+
+  it('should replace step-qualified effect placeholders from workflow state', () => {
+    const step = makeStep();
+    const ctx = makeInstructionContext({
+      workflowState: {
+        systemContexts: new Map(),
+        structuredOutputs: new Map(),
+        effectResults: new Map([
+          ['comment_on_pr', { comment_pr: { success: true } }],
+        ]),
+      } as never,
+    });
+
+    const result = replaceTemplatePlaceholders('Comment success: {effect:comment_on_pr.comment_pr.success}', step, ctx);
     expect(result).toBe('Comment success: true');
   });
 
@@ -195,13 +211,30 @@ describe('replaceTemplatePlaceholders', () => {
         systemContexts: new Map(),
         structuredOutputs: new Map(),
         effectResults: new Map([
-          ['comment_pr', { metadata: { failed: false } }],
+          ['comment_on_pr', { comment_pr: { metadata: { failed: false } } }],
         ]),
       } as never,
     });
 
-    expect(() => replaceTemplatePlaceholders('{effect:comment_pr.metadata}', step, ctx)).toThrow(
-      'Instruction interpolation requires scalar value for "effect:comment_pr.metadata"',
+    expect(() => replaceTemplatePlaceholders('{effect:comment_on_pr.comment_pr.metadata}', step, ctx)).toThrow(
+      'Instruction interpolation requires scalar value for "effect:comment_on_pr.comment_pr.metadata"',
+    );
+  });
+
+  it('should reject unqualified effect placeholders', () => {
+    const step = makeStep();
+    const ctx = makeInstructionContext({
+      workflowState: {
+        systemContexts: new Map(),
+        structuredOutputs: new Map(),
+        effectResults: new Map([
+          ['comment_on_pr', { comment_pr: { success: true } }],
+        ]),
+      } as never,
+    });
+
+    expect(() => replaceTemplatePlaceholders('{effect:comment_pr.success}', step, ctx)).toThrow(
+      'Effect references must use "effect.<step>.<type>.<field>" format: "effect.comment_pr.success"',
     );
   });
 

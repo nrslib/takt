@@ -6,18 +6,50 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import {
+  invalidateAllResolvedConfigCache,
+  invalidateGlobalConfigCache,
+} from '../infra/config/index.js';
 import { getWorkflowDescription } from '../infra/config/loaders/workflowResolver.js';
 
 const getWorkflowSummary = getWorkflowDescription;
+const originalTaktConfigDir = process.env.TAKT_CONFIG_DIR;
+
+function isolateConfig(configDir: string): void {
+  mkdirSync(configDir, { recursive: true });
+  process.env.TAKT_CONFIG_DIR = configDir;
+  invalidateGlobalConfigCache();
+  invalidateAllResolvedConfigCache();
+}
+
+function restoreConfig(): void {
+  if (originalTaktConfigDir === undefined) {
+    delete process.env.TAKT_CONFIG_DIR;
+  } else {
+    process.env.TAKT_CONFIG_DIR = originalTaktConfigDir;
+  }
+  invalidateGlobalConfigCache();
+  invalidateAllResolvedConfigCache();
+}
+
+function writeProjectConfig(projectDir: string, body: string): void {
+  const configDir = join(projectDir, '.takt');
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, 'config.yaml'), body, 'utf-8');
+  invalidateGlobalConfigCache();
+  invalidateAllResolvedConfigCache();
+}
 
 describe('getWorkflowDescription', () => {
   let tempDir: string;
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'takt-test-workflow-resolver-'));
+    isolateConfig(join(tempDir, '.global-takt'));
   });
 
   afterEach(() => {
+    restoreConfig();
     rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -166,9 +198,11 @@ describe('getWorkflowDescription with stepPreviews', () => {
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'takt-test-previews-'));
+    isolateConfig(join(tempDir, '.global-takt'));
   });
 
   afterEach(() => {
+    restoreConfig();
     rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -177,6 +211,8 @@ describe('getWorkflowDescription with stepPreviews', () => {
 description: Test workflow
 initial_step: plan
 max_steps: 5
+workflow_config:
+  provider: claude
 
 steps:
   - name: plan
@@ -238,6 +274,64 @@ steps:
     expect(result.stepPreviews[2].name).toBe('review');
     expect(result.stepPreviews[2].personaContent).toBe('Review the code');
     expect(result.stepPreviews[2].canEdit).toBe(false);
+  });
+
+  it('should resolve preview tools from project config and apply readonly filtering', () => {
+    writeProjectConfig(tempDir, `provider: claude
+provider_options:
+  claude:
+    allowed_tools:
+      - Read
+      - Write
+      - Bash
+`);
+
+    const workflowYaml = `name: preview-config-tools
+initial_step: plan
+max_steps: 1
+workflow_config:
+  provider: claude
+
+steps:
+  - name: plan
+    persona: planner
+    instruction: "Plan the task"
+    output_contracts:
+      report:
+        - name: report
+          format: markdown
+`;
+
+    const workflowPath = join(tempDir, 'preview-config-tools.yaml');
+    writeFileSync(workflowPath, workflowYaml);
+
+    const result = getWorkflowSummary(workflowPath, tempDir, 1);
+
+    expect(result.stepPreviews[0]?.allowedTools).toEqual(['Read', 'Bash']);
+  });
+
+  it('should fail fast when preview tools are configured for a non-Claude provider', () => {
+    const workflowYaml = `name: preview-invalid-tools
+initial_step: plan
+max_steps: 1
+workflow_config:
+  provider: cursor
+
+steps:
+  - name: plan
+    persona: planner
+    instruction: "Plan the task"
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+`;
+
+    const workflowPath = join(tempDir, 'preview-invalid-tools.yaml');
+    writeFileSync(workflowPath, workflowYaml);
+
+    expect(() => getWorkflowSummary(workflowPath, tempDir, 1))
+      .toThrow('provider_options.claude.allowed_tools is not supported for provider "cursor"');
   });
 
   it('should return empty previews when previewCount is 0', () => {
@@ -579,9 +673,11 @@ describe('getWorkflowDescription interactiveMode field', () => {
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'takt-test-interactive-mode-'));
+    isolateConfig(join(tempDir, '.global-takt'));
   });
 
   afterEach(() => {
+    restoreConfig();
     rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -652,9 +748,11 @@ describe('getWorkflowDescription firstStep field', () => {
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'takt-test-first-step-'));
+    isolateConfig(join(tempDir, '.global-takt'));
   });
 
   afterEach(() => {
+    restoreConfig();
     rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -662,6 +760,8 @@ describe('getWorkflowDescription firstStep field', () => {
     const workflowYaml = `name: test-first
 initial_step: plan
 max_steps: 1
+workflow_config:
+  provider: claude
 
 steps:
   - name: plan
@@ -684,6 +784,42 @@ steps:
     expect(result.firstStep!.personaContent).toBe('You are a planner.');
     expect(result.firstStep!.personaDisplayName).toBe('Planner');
     expect(result.firstStep!.allowedTools).toEqual(['Read', 'Glob']);
+  });
+
+  it('should resolve firstStep tools from project config with the same rules as execution', () => {
+    writeProjectConfig(tempDir, `provider: claude
+provider_options:
+  claude:
+    allowed_tools:
+      - Read
+      - Write
+      - Bash
+`);
+
+    const workflowYaml = `name: test-first-config-tools
+initial_step: plan
+max_steps: 1
+workflow_config:
+  provider: claude
+
+steps:
+  - name: plan
+    persona: You are a planner.
+    persona_name: Planner
+    instruction: "Plan the task"
+    output_contracts:
+      report:
+        - name: report
+          format: markdown
+`;
+
+    const workflowPath = join(tempDir, 'test-first-config-tools.yaml');
+    writeFileSync(workflowPath, workflowYaml);
+
+    const result = getWorkflowSummary(workflowPath, tempDir);
+
+    expect(result.firstStep).toBeDefined();
+    expect(result.firstStep!.allowedTools).toEqual(['Read', 'Bash']);
   });
 
   it('should return firstStep with persona file content', () => {

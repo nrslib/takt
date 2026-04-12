@@ -120,6 +120,43 @@ describe('PromptBasedStructuredCaller', () => {
     expect(runOptions).not.toHaveProperty('outputSchema');
   });
 
+  it('should pass resolvedProvider and resolvedModel through decomposeTask to runAgent', async () => {
+    mockRunAgent.mockResolvedValue({
+      persona: 'leader',
+      status: 'done',
+      content: [
+        '```json',
+        JSON.stringify([
+          { id: 'p1', title: 'First task', instruction: 'Do the first thing' },
+        ]),
+        '```',
+      ].join('\n'),
+      timestamp: new Date(),
+    });
+
+    const caller = new PromptBasedStructuredCaller();
+    await caller.decomposeTask('break down the work', 3, {
+      cwd: '/tmp/project',
+      provider: 'claude',
+      resolvedProvider: 'cursor',
+      model: 'sonnet',
+      resolvedModel: 'cursor-fast',
+      persona: 'team-leader',
+    });
+
+    expect(mockRunAgent).toHaveBeenCalledWith(
+      'team-leader',
+      expect.stringContaining('```json'),
+      expect.objectContaining({
+        cwd: '/tmp/project',
+        provider: 'claude',
+        resolvedProvider: 'cursor',
+        model: 'sonnet',
+        resolvedModel: 'cursor-fast',
+      }),
+    );
+  });
+
   it('should parse additional parts from fenced JSON without outputSchema', async () => {
     mockRunAgent.mockResolvedValue({
       persona: 'leader',
@@ -160,6 +197,46 @@ describe('PromptBasedStructuredCaller', () => {
       expect.objectContaining({
         cwd: '/tmp/project',
         provider: 'cursor',
+      }),
+    );
+  });
+
+  it('should pass resolvedProvider and resolvedModel through requestMoreParts to runAgent', async () => {
+    mockRunAgent.mockResolvedValue({
+      persona: 'leader',
+      status: 'done',
+      content: [
+        '```json',
+        JSON.stringify({ done: true, reasoning: 'enough', parts: [] }),
+        '```',
+      ].join('\n'),
+      timestamp: new Date(),
+    });
+
+    const caller = new PromptBasedStructuredCaller();
+    await caller.requestMoreParts(
+      'original task',
+      [{ id: 'p1', title: 'First', status: 'done', content: 'done' }],
+      ['p1'],
+      2,
+      {
+        cwd: '/tmp/project',
+        provider: 'claude',
+        resolvedProvider: 'cursor',
+        model: 'sonnet',
+        resolvedModel: 'cursor-fast',
+      },
+    );
+
+    expect(mockRunAgent).toHaveBeenCalledWith(
+      undefined,
+      expect.stringContaining('```json ... ```'),
+      expect.objectContaining({
+        cwd: '/tmp/project',
+        provider: 'claude',
+        resolvedProvider: 'cursor',
+        model: 'sonnet',
+        resolvedModel: 'cursor-fast',
       }),
     );
   });

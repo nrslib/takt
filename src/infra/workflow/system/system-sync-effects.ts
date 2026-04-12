@@ -16,6 +16,12 @@ import {
   isMergeConflictError,
 } from './system-git-context.js';
 
+function updatePrHeadBranch(cwd: string, headRefName: string): void {
+  requirePrBranchTarget(cwd, headRefName);
+  fetchRemoteBranch(cwd, headRefName);
+  fastForwardPrBranch(cwd, headRefName);
+}
+
 export function syncWithRootEffect(
   options: SystemStepServicesOptions,
   payload: { pr: number },
@@ -26,7 +32,7 @@ export function syncWithRootEffect(
   }
 
   try {
-    requirePrBranchTarget(options.cwd, pr.headRefName);
+    updatePrHeadBranch(options.cwd, pr.headRefName);
     fetchRemoteBranch(options.cwd, pr.baseRefName);
     mergeBaseBranch(options.cwd, pr.baseRefName);
   } catch (error) {
@@ -67,9 +73,7 @@ export async function resolveConflictsWithAiEffect(
   let retriedAfterAbort = false;
   while (true) {
     try {
-      requirePrBranchTarget(options.cwd, pr.headRefName);
-      fetchRemoteBranch(options.cwd, pr.headRefName);
-      fastForwardPrBranch(options.cwd, pr.headRefName);
+      updatePrHeadBranch(options.cwd, pr.headRefName);
       fetchRemoteBranch(options.cwd, pr.baseRefName);
       mergeBaseBranch(options.cwd, pr.baseRefName);
       break;

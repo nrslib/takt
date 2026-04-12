@@ -94,6 +94,8 @@ export class TeamLeaderRunner {
       personaPath: leaderStep.personaPath,
       model: leaderModel,
       provider: leaderProvider,
+      resolvedModel: leaderModel,
+      resolvedProvider: leaderProvider,
       onStream: this.deps.engineOptions.onStream,
       onPromptResolved: (promptParts) => {
         this.deps.onPhaseStart?.(leaderStep, 1, 'execute', promptParts.userInstruction, promptParts, undefined, parentIteration);
@@ -195,6 +197,8 @@ export class TeamLeaderRunner {
             language: this.deps.engineOptions.language,
             model: leaderModel,
             provider: leaderProvider,
+            resolvedModel: leaderModel,
+            resolvedProvider: leaderProvider,
             onStream: this.deps.engineOptions.onStream,
           },
         );
@@ -261,7 +265,14 @@ export class TeamLeaderRunner {
     parallelLogger: ParallelLogger | undefined,
   ): Promise<PartResult> {
     const partStep = createPartStep(step, part);
-    const baseOptions = this.deps.optionsBuilder.buildAgentOptions(partStep);
+    const partProviderInfo = this.deps.optionsBuilder.resolveStepProviderModel(partStep);
+    const executablePartStep = this.applyPartAllowedTools(
+      partStep,
+      step.teamLeader?.partAllowedTools,
+    );
+    const baseOptions = this.deps.optionsBuilder.buildAgentOptions(executablePartStep, {
+      providerInfo: partProviderInfo,
+    });
     const timeoutMs = defaultTimeoutMs;
     const { signal, dispose } = buildAbortSignal(timeoutMs, baseOptions.abortSignal);
     const options = parallelLogger
@@ -297,6 +308,26 @@ export class TeamLeaderRunner {
       error: errorMsg,
     };
     return { part, response: errorResponse };
+  }
+
+  private applyPartAllowedTools(
+    partStep: WorkflowStep,
+    partAllowedTools: string[] | undefined,
+  ): WorkflowStep {
+    if (!partAllowedTools) {
+      return partStep;
+    }
+
+    return {
+      ...partStep,
+      providerOptions: {
+        ...partStep.providerOptions,
+        claude: {
+          ...partStep.providerOptions?.claude,
+          allowedTools: partAllowedTools,
+        },
+      },
+    };
   }
 
 }

@@ -6,6 +6,20 @@ import {
 } from '../../task/index.js';
 import { getCommandErrorDetail } from './system-git-context.js';
 
+function assertFetchableBranchName(branch: string): void {
+  if (branch.startsWith('-')) {
+    throw new Error(`Refusing to fetch branch "${branch}" because it starts with "-"`);
+  }
+}
+
+function buildRemoteTrackingRef(branch: string): string {
+  return `refs/remotes/origin/${branch}`;
+}
+
+function buildRemoteHeadRef(branch: string): string {
+  return `refs/heads/${branch}`;
+}
+
 export function abortMerge(worktreePath: string): string | undefined {
   try {
     execFileSync('git', ['merge', '--abort'], {
@@ -25,7 +39,8 @@ export function pushSynced(worktreePath: string, projectCwd: string, branch: str
 }
 
 export function fetchRemoteBranch(cwd: string, branch: string): void {
-  execFileSync('git', ['fetch', 'origin', branch], {
+  assertFetchableBranchName(branch);
+  execFileSync('git', ['fetch', 'origin', `${buildRemoteHeadRef(branch)}:${buildRemoteTrackingRef(branch)}`], {
     cwd,
     encoding: 'utf-8',
     stdio: 'pipe',
@@ -33,7 +48,7 @@ export function fetchRemoteBranch(cwd: string, branch: string): void {
 }
 
 export function fastForwardPrBranch(cwd: string, branch: string): void {
-  execFileSync('git', ['merge', '--ff-only', `origin/${branch}`], {
+  execFileSync('git', ['merge', '--ff-only', buildRemoteTrackingRef(branch)], {
     cwd,
     encoding: 'utf-8',
     stdio: 'pipe',
@@ -41,7 +56,7 @@ export function fastForwardPrBranch(cwd: string, branch: string): void {
 }
 
 export function mergeBaseBranch(cwd: string, branch: string): void {
-  execFileSync('git', ['merge', `origin/${branch}`], {
+  execFileSync('git', ['merge', buildRemoteTrackingRef(branch)], {
     cwd,
     encoding: 'utf-8',
     stdio: 'pipe',

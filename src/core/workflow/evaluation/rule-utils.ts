@@ -10,6 +10,10 @@ export function isDeterministicCondition(condition: string): boolean {
   return DETERMINISTIC_CONDITION_PATTERN.test(condition.trim());
 }
 
+export function isDeferredDeterministicCondition(condition: string): boolean {
+  return condition.trim() === 'true';
+}
+
 /**
  * Check whether a step has tag-based rules (i.e., rules that require
  * [STEP:N] tag output for detection).

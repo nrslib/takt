@@ -64,14 +64,14 @@ describe('RuleEvaluator with when conditions', () => {
       ['plan_from_issue', { action: 'enqueue_new_task' }],
     ]);
     state.effectResults = new Map([
-      ['enqueue_task', { success: true }],
+      ['enqueue_from_issue', { enqueue_task: { success: true } }],
     ]);
 
     const step = makeStep({
       name: 'enqueue_from_issue',
       rules: [
         {
-          condition: 'structured.plan_from_issue.action == "enqueue_new_task" && effect.enqueue_task.success == true',
+          condition: 'structured.plan_from_issue.action == "enqueue_new_task" && effect.enqueue_from_issue.enqueue_task.success == true',
           next: 'COMPLETE',
         },
       ],
@@ -105,6 +105,31 @@ describe('RuleEvaluator with when conditions', () => {
     const result = await evaluator.evaluate('', '');
 
     expect(result?.index).toBe(0);
+  });
+
+  it('step 修飾のない effect 参照を reject する', async () => {
+    const state = makeState() as WorkflowState & {
+      effectResults: Map<string, unknown>;
+    };
+    state.effectResults = new Map([
+      ['comment_on_pr', { comment_pr: { success: true } }],
+    ]);
+
+    const step = makeStep({
+      name: 'route_context',
+      rules: [
+        {
+          condition: 'effect.comment_pr.success == true',
+          next: 'COMPLETE',
+        },
+      ],
+    });
+
+    const evaluator = new RuleEvaluator(step, makeContext(state));
+
+    await expect(evaluator.evaluate('', '')).rejects.toThrow(
+      'Effect references must use "effect.<step>.<type>.<field>" format: "effect.comment_pr.success"',
+    );
   });
 
   it('deterministic rule を含む mixed rules でも AI judge fallback の元 rule index を返す', async () => {

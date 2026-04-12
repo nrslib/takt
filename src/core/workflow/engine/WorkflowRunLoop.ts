@@ -25,6 +25,7 @@ interface WorkflowRunLoopDeps {
   ) => Promise<string>;
   runStep: (step: WorkflowStep, prebuiltInstruction?: string) => Promise<{ response: AgentResponse; instruction: string }>;
   buildInstruction: (step: WorkflowStep, stepIteration: number) => string;
+  buildPhase1Instruction: (step: WorkflowStep, instruction: string) => string;
   resolveStepProviderModel: (step: WorkflowStep, runtime?: RuntimeStepResolution) => StepProviderInfo;
   addUserInput: (input: string) => void;
   emit: (event: string, ...args: unknown[]) => void;
@@ -83,7 +84,10 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
       const stepIteration = incrementStepIteration(deps.state, step.name);
       prebuiltInstruction = deps.buildInstruction(step, stepIteration);
     }
-    deps.emit('step:start', step, deps.state.iteration, prebuiltInstruction ?? '', deps.resolveStepProviderModel(step));
+    const stepInstruction = prebuiltInstruction
+      ? deps.buildPhase1Instruction(step, prebuiltInstruction)
+      : '';
+    deps.emit('step:start', step, deps.state.iteration, stepInstruction, deps.resolveStepProviderModel(step));
 
     try {
       const { response, instruction } = await deps.runStep(step, prebuiltInstruction);

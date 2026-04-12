@@ -334,7 +334,7 @@ describe('system workflow execution integration', () => {
               },
             ],
             rules: [
-              { when: 'effect.comment_pr.success == true', next: 'COMPLETE' },
+              { when: 'effect.comment_on_pr.comment_pr.success == true', next: 'COMPLETE' },
             ],
           },
         ],
@@ -365,9 +365,11 @@ describe('system workflow execution integration', () => {
       'Task: Current task body\nPlease check the follow-up.',
       projectDir,
     );
-    expect((stateRecord.effectResults as Map<string, unknown>).get('comment_pr')).toEqual({
-      success: true,
-      failed: false,
+    expect((stateRecord.effectResults as Map<string, unknown>).get('comment_on_pr')).toEqual({
+      comment_pr: {
+        success: true,
+        failed: false,
+      },
     });
   });
 
@@ -401,7 +403,7 @@ describe('system workflow execution integration', () => {
               },
             ],
             rules: [
-              { when: 'effect.comment_pr.success == true', next: 'COMPLETE' },
+              { when: 'effect.comment_on_pr.comment_pr.success == true', next: 'COMPLETE' },
             ],
           },
         ],
@@ -426,6 +428,102 @@ describe('system workflow execution integration', () => {
     const state = await engine.run();
     expect(state.status).toBe('completed');
     expect(mockCommentOnPr).toHaveBeenCalledWith(42, 'Queued', projectDir);
+  });
+
+  it('step 修飾付き effect 参照で同一 effect type を安全に保持できる', async () => {
+    setMockScenario([
+      {
+        persona: 'planner',
+        status: 'done',
+        content: 'done',
+      },
+    ]);
+    mockCommentOnPr.mockReturnValue({ success: true });
+
+    const config = normalizeWorkflowConfig(
+      {
+        name: 'step-qualified-effects',
+        initial_step: 'route_context',
+        max_steps: 4,
+        steps: [
+          {
+            name: 'route_context',
+            mode: 'system',
+            system_inputs: [
+              { type: 'task_context', source: 'current_task', as: 'task' },
+            ],
+            rules: [
+              { when: 'context.route_context.task.exists == true', next: 'comment_first' },
+            ],
+          },
+          {
+            name: 'comment_first',
+            mode: 'system',
+            effects: [
+              { type: 'comment_pr', pr: 42, body: 'First comment' },
+            ],
+            rules: [
+              { when: 'effect.comment_first.comment_pr.success == true', next: 'comment_second' },
+            ],
+          },
+          {
+            name: 'comment_second',
+            mode: 'system',
+            effects: [
+              { type: 'comment_pr', pr: 42, body: 'Second comment' },
+            ],
+            rules: [
+              {
+                when: 'effect.comment_first.comment_pr.success == true && effect.comment_second.comment_pr.success == true',
+                next: 'summarize',
+              },
+            ],
+          },
+          {
+            name: 'summarize',
+            persona: 'planner',
+            instruction: 'Summarize follow-up state.',
+            rules: [
+              { when: 'true', next: 'COMPLETE' },
+            ],
+          },
+        ],
+      },
+      projectDir,
+    );
+
+    const engine = new WorkflowEngine(config, projectDir, 'Current task body', {
+      projectCwd: projectDir,
+      provider: 'mock',
+      detectRuleIndex,
+      structuredCaller: {
+        judgeStatus: vi.fn(),
+        evaluateCondition: vi.fn().mockResolvedValue(-1),
+        decomposeTask: vi.fn(),
+        requestMoreParts: vi.fn(),
+      },
+      reportDirName: 'test-report-dir',
+      systemStepServicesFactory: createDefaultSystemStepServices,
+    });
+
+    const state = await engine.run();
+    const stateRecord = state as Record<string, unknown>;
+
+    expect(state.status).toBe('completed');
+    expect(mockCommentOnPr).toHaveBeenNthCalledWith(1, 42, 'First comment', projectDir);
+    expect(mockCommentOnPr).toHaveBeenNthCalledWith(2, 42, 'Second comment', projectDir);
+    expect((stateRecord.effectResults as Map<string, unknown>).get('comment_first')).toEqual({
+      comment_pr: {
+        success: true,
+        failed: false,
+      },
+    });
+    expect((stateRecord.effectResults as Map<string, unknown>).get('comment_second')).toEqual({
+      comment_pr: {
+        success: true,
+        failed: false,
+      },
+    });
   });
 
   it('enqueue_task.issue の full template を structured object へ解決できる', async () => {
@@ -478,7 +576,7 @@ describe('system workflow execution integration', () => {
               },
             ],
             rules: [
-              { when: 'effect.enqueue_task.success == true', next: 'COMPLETE' },
+              { when: 'effect.enqueue_followup.enqueue_task.success == true', next: 'COMPLETE' },
             ],
           },
         ],
@@ -622,13 +720,13 @@ describe('system workflow execution integration', () => {
               },
             ],
             rules: [
-              { when: 'effect.comment_pr.success == true', next: 'draft_review' },
+              { when: 'effect.comment_on_pr.comment_pr.success == true', next: 'draft_review' },
             ],
           },
           {
             name: 'draft_review',
             persona: 'reviewer',
-            instruction: 'Comment success: {effect:comment_pr.success}',
+            instruction: 'Comment success: {effect:comment_on_pr.comment_pr.success}',
             rules: [
               { when: 'true', next: 'COMPLETE' },
             ],
@@ -786,7 +884,7 @@ describe('system workflow execution integration', () => {
               },
             ],
             rules: [
-              { when: 'effect.merge_pr.success == true', next: 'COMPLETE' },
+              { when: 'effect.merge_ready_pr.merge_pr.success == true', next: 'COMPLETE' },
               { when: 'true', next: 'ABORT' },
             ],
           },
@@ -801,9 +899,11 @@ describe('system workflow execution integration', () => {
 
     expect(state.status).toBe('completed');
     expect(mockMergePr).toHaveBeenCalledWith(42, projectDir);
-    expect((stateRecord.effectResults as Map<string, unknown>).get('merge_pr')).toEqual({
-      success: true,
-      failed: false,
+    expect((stateRecord.effectResults as Map<string, unknown>).get('merge_ready_pr')).toEqual({
+      merge_pr: {
+        success: true,
+        failed: false,
+      },
     });
   });
 });

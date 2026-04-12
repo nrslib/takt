@@ -8,7 +8,7 @@
 
 import { EventEmitter } from 'node:events';
 import { existsSync, mkdirSync } from 'node:fs';
-import { DefaultStructuredCaller, type StructuredCaller } from '../../../agents/structured-caller.js';
+import { CapabilityAwareStructuredCaller, type StructuredCaller } from '../../../agents/structured-caller.js';
 import { createLogger, generateReportDir, isValidReportDirName } from '../../../shared/utils/index.js';
 import type {
   AgentResponse,
@@ -96,7 +96,7 @@ export class WorkflowEngine extends EventEmitter {
     this.detectRuleIndex = options.detectRuleIndex ?? (() => {
       throw new Error('detectRuleIndex is required for rule evaluation');
     });
-    this.structuredCaller = options.structuredCaller ?? new DefaultStructuredCaller();
+    this.structuredCaller = options.structuredCaller ?? new CapabilityAwareStructuredCaller();
     this.options = {
       ...options,
       structuredCaller: this.structuredCaller,
@@ -169,15 +169,19 @@ export class WorkflowEngine extends EventEmitter {
     this.systemStepExecutor = new SystemStepExecutor({
       task: this.task,
       projectCwd: this.options.projectCwd,
+      getCwd: () => this.cwd,
       taskContext: this.options.currentTask,
-      ruleContext: {
-        cwd: this.cwd,
-        provider: this.options.provider,
-        resolvedProvider: this.options.provider,
-        resolvedModel: this.options.model,
-        interactive: this.options.interactive === true,
-        detectRuleIndex: this.detectRuleIndex,
-        structuredCaller: this.structuredCaller,
+      getRuleContext: (step) => {
+        const providerInfo = this.optionsBuilder.resolveStepProviderModel(step);
+        return {
+          cwd: this.cwd,
+          provider: step.provider ?? this.options.provider,
+          resolvedProvider: providerInfo.provider,
+          resolvedModel: providerInfo.model,
+          interactive: this.options.interactive === true,
+          detectRuleIndex: this.detectRuleIndex,
+          structuredCaller: this.structuredCaller,
+        };
       },
       systemStepServicesFactory: this.options.systemStepServicesFactory,
     });
@@ -351,6 +355,10 @@ export class WorkflowEngine extends EventEmitter {
     return this.stepExecutor.buildInstruction(step, stepIteration, this.state, this.task, this.config.maxSteps);
   }
 
+  buildPhase1Instruction(step: WorkflowStep, instruction: string): string {
+    return this.stepExecutor.buildPhase1Instruction(instruction, step);
+  }
+
   private async runLoopMonitorJudge(
     monitor: LoopMonitorConfig,
     cycleCount: number,
@@ -382,6 +390,7 @@ export class WorkflowEngine extends EventEmitter {
       runLoopMonitorJudge: this.runLoopMonitorJudge.bind(this),
       runStep: this.runStep.bind(this),
       buildInstruction: this.buildInstruction.bind(this),
+      buildPhase1Instruction: this.buildPhase1Instruction.bind(this),
       resolveStepProviderModel: (step, runtime) => this.optionsBuilder.resolveStepProviderModel(step, runtime),
       addUserInput: this.addUserInput.bind(this),
       emit: (event, ...args) => this.emit(event as never, ...args as []),
@@ -418,6 +427,7 @@ export class WorkflowEngine extends EventEmitter {
       runLoopMonitorJudge: this.runLoopMonitorJudge.bind(this),
       runStep: this.runStep.bind(this),
       buildInstruction: this.buildInstruction.bind(this),
+      buildPhase1Instruction: this.buildPhase1Instruction.bind(this),
       resolveStepProviderModel: (step, runtime) => this.optionsBuilder.resolveStepProviderModel(step, runtime),
       addUserInput: this.addUserInput.bind(this),
       emit: (event, ...args) => this.emit(event as never, ...args as []),

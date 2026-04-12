@@ -4,10 +4,20 @@ export const StructuredOutputRawSchema = z.object({
   schema_ref: z.string().min(1),
 });
 
-const TemplateReferenceSchema = z.string().regex(
-  /^\{(?:context|structured|effect):[^}]+\}$/,
+const ScopedTemplateReferenceSchema = z.string().regex(
+  /^\{(?:context|structured):[^.}]+(?:\.[^}]+)+\}$/,
   'Expected full template reference like "{context:step.value}"',
 );
+
+const EffectTemplateReferenceSchema = z.string().regex(
+  /^\{effect:[^.}]+(?:\.[^}]+){2,}\}$/,
+  'Effect references must use "{effect:step.type.field}"',
+);
+
+const TemplateReferenceSchema = z.union([
+  ScopedTemplateReferenceSchema,
+  EffectTemplateReferenceSchema,
+]);
 
 const SystemInputBindingSchema = z.object({
   as: z.string().min(1),

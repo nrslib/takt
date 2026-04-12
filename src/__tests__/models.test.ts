@@ -15,6 +15,7 @@ import {
   ProjectConfigSchema,
 } from '../core/models/index.js';
 import { STATUS_VALUES } from '../core/models/status.js';
+import type { WorkflowTemplateReference } from '../core/models/index.js';
 
 describe('AgentTypeSchema', () => {
   it('should accept valid agent types', () => {
@@ -70,6 +71,14 @@ describe('PermissionModeSchema', () => {
 });
 
 describe('WorkflowConfigRawSchema', () => {
+  it('should allow nested workflow template references at the public type level', () => {
+    const structuredReference: WorkflowTemplateReference = '{structured:plan.payload.action}';
+    const effectReference: WorkflowTemplateReference = '{effect:comment_on_pr.comment_pr.result.id}';
+
+    expect(structuredReference).toBe('{structured:plan.payload.action}');
+    expect(effectReference).toBe('{effect:comment_on_pr.comment_pr.result.id}');
+  });
+
   it('should parse valid workflow config', () => {
     const config = {
       name: 'test-workflow',

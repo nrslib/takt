@@ -1,6 +1,11 @@
 import type { WorkflowState } from '../../models/types.js';
 
 type WorkflowStateRoot = 'context' | 'structured' | 'effect';
+interface ParsedWorkflowStateReference {
+  root: WorkflowStateRoot;
+  scope: string;
+  path: string[];
+}
 
 export function resolveWorkflowStateRoot(
   state: WorkflowState,
@@ -15,7 +20,7 @@ export function resolveWorkflowStateRoot(
   return state.effectResults;
 }
 
-export function resolveWorkflowStateReference(reference: string, state: WorkflowState): unknown {
+function parseWorkflowStateReference(reference: string): ParsedWorkflowStateReference {
   const segments = reference.split('.');
   if (segments.length < 2) {
     throw new Error(`Invalid workflow state reference "${reference}"`);
@@ -28,6 +33,18 @@ export function resolveWorkflowStateReference(reference: string, state: Workflow
   if (!scope) {
     throw new Error(`Invalid workflow state reference "${reference}"`);
   }
+
+  if (root === 'effect' && path.length < 2) {
+    throw new Error(
+      `Effect references must use "effect.<step>.<type>.<field>" format: "${reference}"`,
+    );
+  }
+
+  return { root, scope, path };
+}
+
+export function resolveWorkflowStateReference(reference: string, state: WorkflowState): unknown {
+  const { root, scope, path } = parseWorkflowStateReference(reference);
 
   let current: unknown = resolveWorkflowStateRoot(state, root).get(scope);
   if (current == null) {

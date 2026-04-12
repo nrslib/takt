@@ -8,10 +8,11 @@ import { waitForStepDelay } from './step-delay.js';
 interface SystemStepExecutorDeps {
   readonly task: string;
   readonly projectCwd: string;
+  readonly getCwd: () => string;
   readonly taskContext?: {
     readonly issueNumber?: number;
   };
-  readonly ruleContext: Omit<RuleEvaluatorContext, 'state'>;
+  readonly getRuleContext: (step: WorkflowStep) => Omit<RuleEvaluatorContext, 'state'>;
   readonly systemStepServicesFactory?: SystemStepServicesFactory;
 }
 
@@ -52,12 +53,12 @@ function resolveEffectPayload(effect: WorkflowEffect, state: WorkflowState): Rec
 export class SystemStepExecutor {
   constructor(private readonly deps: SystemStepExecutorDeps) {}
 
-  private requireServices() {
+  private requireServices(cwd: string) {
     if (!this.deps.systemStepServicesFactory) {
       throw new Error('System step services are not configured');
     }
     return this.deps.systemStepServicesFactory({
-      cwd: this.deps.ruleContext.cwd,
+      cwd,
       projectCwd: this.deps.projectCwd,
       task: this.deps.task,
       taskContext: this.deps.taskContext,
@@ -65,18 +66,23 @@ export class SystemStepExecutor {
   }
 
   private resolveSystemInput(input: NonNullable<WorkflowStep['systemInputs']>[number]): Record<string, unknown> {
-    const services = this.requireServices();
+    const services = this.requireServices(this.deps.getCwd());
     return services.resolveSystemInput(input);
   }
 
-  private async executeEffect(effect: WorkflowEffect, state: WorkflowState): Promise<Record<string, unknown>> {
+  private async executeEffect(
+    effect: WorkflowEffect,
+    state: WorkflowState,
+    cwd: string,
+  ): Promise<Record<string, unknown>> {
     const payload = resolveEffectPayload(effect, state);
-    const services = this.requireServices();
+    const services = this.requireServices(cwd);
     return services.executeEffect(effect, payload, state);
   }
 
   async run(step: WorkflowStep, state: WorkflowState): Promise<AgentResponse> {
     await waitForStepDelay(step);
+    const ruleContext = this.deps.getRuleContext(step);
 
     const contextEntries = (step.systemInputs ?? []).map((input) => [
       input.as,
@@ -84,12 +90,16 @@ export class SystemStepExecutor {
     ] as const);
     state.systemContexts.set(step.name, Object.fromEntries(contextEntries));
 
-    for (const effect of step.effects ?? []) {
-      state.effectResults.set(effect.type, await this.executeEffect(effect, state));
+    if (step.effects && step.effects.length > 0) {
+      const stepEffectResults: Record<string, unknown> = {};
+      for (const effect of step.effects) {
+        stepEffectResults[effect.type] = await this.executeEffect(effect, state, ruleContext.cwd);
+        state.effectResults.set(step.name, { ...stepEffectResults });
+      }
     }
 
     const match = await detectMatchedRule(step, '', '', {
-      ...this.deps.ruleContext,
+      ...ruleContext,
       state,
     });
 

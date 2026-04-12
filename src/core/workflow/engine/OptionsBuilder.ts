@@ -5,6 +5,13 @@ import type { RunAgentOptions } from '../../../agents/runner.js';
 import type { StructuredCaller } from '../../../agents/structured-caller.js';
 import type { PhaseRunnerContext } from '../phase-runner.js';
 import { resolveEffectiveProviderOptions } from '../../../infra/config/providerOptions.js';
+import {
+  assertProviderResolvedForCapabilitySensitiveOptions,
+  assertProviderSupportsClaudeAllowedTools,
+  assertProviderSupportsMcpServers,
+  resolveAllowedToolsForProvider,
+} from './engine-provider-options.js';
+import { providerSupportsStructuredOutput } from '../../../infra/providers/provider-capabilities.js';
 import type {
   WorkflowEngineOptions,
   PhaseName,
@@ -29,20 +36,28 @@ export class OptionsBuilder {
     private readonly getWorkflowDescription: () => string | undefined,
   ) {}
 
+  private resolveEngineProviderModel(): StepProviderInfo {
+    return {
+      provider: this.engineOptions.provider,
+      model: this.engineOptions.model,
+    };
+  }
+
   resolveStepProviderModel(step: WorkflowStep, runtime?: RuntimeStepResolution): StepProviderInfo {
     if (runtime?.providerInfo) {
       return runtime.providerInfo;
     }
 
+    const engineProviderInfo = this.resolveEngineProviderModel();
     const resolved = resolveStepProviderModel({
       step,
-      provider: this.engineOptions.provider,
-      model: this.engineOptions.model,
+      provider: engineProviderInfo.provider,
+      model: engineProviderInfo.model,
       personaProviders: this.engineOptions.personaProviders,
     });
     return {
-      provider: resolved.provider ?? this.engineOptions.provider,
-      model: resolved.model ?? this.engineOptions.model,
+      provider: resolved.provider ?? engineProviderInfo.provider,
+      model: resolved.model ?? engineProviderInfo.model,
     };
   }
 
@@ -98,25 +113,36 @@ export class OptionsBuilder {
       this.engineOptions.providerOptions,
       step.providerOptions,
     );
+    const { provider: resolvedProvider } = this.resolveStepProviderModel(step, runtime);
+    const usesClaudeAllowedTools = (mergedProviderOptions?.claude?.allowedTools?.length ?? 0) > 0;
 
-    // Phase 1: exclude Write from allowedTools when the step has output contracts AND edit is NOT enabled
-    // (If edit is enabled, Write is needed for code implementation even if output contracts exist)
-    // Note: edit defaults to undefined, so check !== true to catch both false and undefined
-    const hasOutputContracts = step.outputContracts && step.outputContracts.length > 0;
-    const resolvedAllowedTools = mergedProviderOptions?.claude?.allowedTools;
-    const allowedTools = hasOutputContracts && step.edit !== true
-      ? resolvedAllowedTools?.filter((t) => t !== 'Write')
-      : resolvedAllowedTools;
+    assertProviderResolvedForCapabilitySensitiveOptions(resolvedProvider, {
+      stepName: step.name,
+      usesStructuredOutput: step.structuredOutput !== undefined,
+      usesMcpServers: step.mcpServers !== undefined && Object.keys(step.mcpServers).length > 0,
+      usesClaudeAllowedTools,
+    });
+
+    const hasOutputContracts = step.outputContracts !== undefined && step.outputContracts.length > 0;
+    const allowedTools = resolveAllowedToolsForProvider(
+      mergedProviderOptions,
+      hasOutputContracts,
+      step.edit,
+    );
+    assertProviderSupportsClaudeAllowedTools(resolvedProvider, mergedProviderOptions);
+    assertProviderSupportsMcpServers(resolvedProvider, step.mcpServers);
 
     // Skip session resume when cwd !== projectCwd (worktree execution) to avoid cross-directory contamination
     const shouldResumeSession = step.session !== 'refresh' && this.getCwd() === this.getProjectCwd();
+
+    const supportsStructuredOutput = providerSupportsStructuredOutput(resolvedProvider);
 
     return {
       ...this.buildBaseOptions(step, mergedProviderOptions, runtime),
       sessionId: shouldResumeSession ? this.getSessionId(buildSessionKey(step, runtime?.providerInfo?.provider)) : undefined,
       allowedTools,
       mcpServers: step.mcpServers,
-      outputSchema: step.structuredOutput?.schema,
+      outputSchema: supportsStructuredOutput === false ? undefined : step.structuredOutput?.schema,
     };
   }
 

@@ -17,7 +17,7 @@ import { createLogger } from '../../../shared/utils/index.js';
 import { buildJudgeConditions } from '../../../agents/judge-utils.js';
 import { AggregateEvaluator } from './AggregateEvaluator.js';
 import { evaluateWhenExpression } from './when-evaluator.js';
-import { isDeterministicCondition } from './rule-utils.js';
+import { isDeferredDeterministicCondition, isDeterministicCondition } from './rule-utils.js';
 
 const log = createLogger('rule-evaluator');
 
@@ -47,11 +47,16 @@ export interface RuleEvaluatorContext {
  * Evaluates rules for a workflow step to determine the next transition.
  *
  * Evaluation order (first match wins):
-   * 1. Aggregate conditions: all()/any() — evaluate sub-step results
- * 2. Tag detection from Phase 3 output
- * 3. Tag detection from Phase 1 output (fallback)
- * 4. ai() condition evaluation via AI judge
- * 5. All-conditions AI judge (final fallback)
+ * 1. Aggregate conditions: all()/any() — evaluate sub-step results
+ * 2. Immediate deterministic when conditions that appear before the matched Phase 3 tag
+ * 3. Tag detection from Phase 3 output
+ * 4. Immediate deterministic when conditions that appear before the matched Phase 1 tag
+ * 5. Tag detection from Phase 1 output (fallback)
+ * 6. Immediate deterministic when conditions that appear before the matched ai() rule
+ * 7. ai() condition evaluation via AI judge
+ * 8. Remaining immediate deterministic when conditions
+ * 9. All-conditions AI judge (final fallback)
+ * 10. Deferred deterministic fallbacks (for example when: true)
  *
  * Returns undefined for steps without rules.
  * Throws if rules exist but no rule matched (Fail Fast).
@@ -85,56 +90,112 @@ export class RuleEvaluator {
       return { index: aggIndex, method: 'aggregate' };
     }
 
-    const deterministicIndex = this.evaluateDeterministicConditions();
-    if (deterministicIndex >= 0) {
-      return { index: deterministicIndex, method: 'auto_select' };
+    const firstNonDeterministicIndex = this.findFirstNonDeterministicRuleIndex();
+    const leadingDeterministicIndex = this.evaluateImmediateDeterministicConditions(
+      0,
+      firstNonDeterministicIndex >= 0 ? firstNonDeterministicIndex : undefined,
+    );
+    if (leadingDeterministicIndex >= 0) {
+      return { index: leadingDeterministicIndex, method: 'auto_select' };
     }
 
-    // 2. Tag detection from Phase 3 output
-    if (tagContent) {
-      const ruleIndex = this.ctx.detectRuleIndex(tagContent, this.step.name);
-      if (ruleIndex >= 0 && ruleIndex < this.step.rules.length) {
-        const rule = this.step.rules[ruleIndex];
-        if (rule?.interactiveOnly && !interactiveEnabled) {
-          // Skip interactive-only rule in non-interactive mode
-        } else {
-          return { index: ruleIndex, method: 'phase3_tag' };
-        }
+    const phase3TagIndex = this.resolveTaggedRuleIndex(tagContent, interactiveEnabled);
+    if (phase3TagIndex >= 0) {
+      const immediateDeterministicIndex = this.evaluateImmediateDeterministicConditions(
+        firstNonDeterministicIndex + 1,
+        phase3TagIndex,
+      );
+      if (immediateDeterministicIndex >= 0) {
+        return { index: immediateDeterministicIndex, method: 'auto_select' };
       }
+      return { index: phase3TagIndex, method: 'phase3_tag' };
     }
 
-    // 3. Tag detection from Phase 1 output (fallback)
-    if (agentContent) {
-      const ruleIndex = this.ctx.detectRuleIndex(agentContent, this.step.name);
-      if (ruleIndex >= 0 && ruleIndex < this.step.rules.length) {
-        const rule = this.step.rules[ruleIndex];
-        if (rule?.interactiveOnly && !interactiveEnabled) {
-          // Skip interactive-only rule in non-interactive mode
-        } else {
-          return { index: ruleIndex, method: 'phase1_tag' };
-        }
+    const phase1TagIndex = this.resolveTaggedRuleIndex(agentContent, interactiveEnabled);
+    if (phase1TagIndex >= 0) {
+      const immediateDeterministicIndex = this.evaluateImmediateDeterministicConditions(
+        firstNonDeterministicIndex + 1,
+        phase1TagIndex,
+      );
+      if (immediateDeterministicIndex >= 0) {
+        return { index: immediateDeterministicIndex, method: 'auto_select' };
       }
+      return { index: phase1TagIndex, method: 'phase1_tag' };
     }
 
-    // 4. AI judge for ai() conditions only
     const aiRuleIndex = await this.evaluateAiConditions(agentContent);
     if (aiRuleIndex >= 0) {
+      const immediateDeterministicIndex = this.evaluateImmediateDeterministicConditions(
+        firstNonDeterministicIndex + 1,
+        aiRuleIndex,
+      );
+      if (immediateDeterministicIndex >= 0) {
+        return { index: immediateDeterministicIndex, method: 'auto_select' };
+      }
       return { index: aiRuleIndex, method: 'ai_judge' };
     }
 
-    // 5. AI judge for all conditions (final fallback)
+    const immediateDeterministicIndex = this.evaluateImmediateDeterministicConditions(
+      firstNonDeterministicIndex + 1,
+    );
+    if (immediateDeterministicIndex >= 0) {
+      return { index: immediateDeterministicIndex, method: 'auto_select' };
+    }
+
     const fallbackIndex = await this.evaluateAllConditionsViaAiJudge(agentContent);
     if (fallbackIndex >= 0) {
       return { index: fallbackIndex, method: 'ai_judge_fallback' };
     }
 
+    const deferredDeterministicIndex = this.evaluateDeferredDeterministicConditions();
+    if (deferredDeterministicIndex >= 0) {
+      return { index: deferredDeterministicIndex, method: 'auto_select' };
+    }
+
     throw new Error(`Status not found for step "${this.step.name}": no rule matched after all detection phases`);
   }
 
-  private evaluateDeterministicConditions(): number {
+  private resolveTaggedRuleIndex(content: string, interactiveEnabled: boolean): number {
+    if (!content || !this.step.rules) return -1;
+
+    const ruleIndex = this.ctx.detectRuleIndex(content, this.step.name);
+    if (ruleIndex < 0 || ruleIndex >= this.step.rules.length) {
+      return -1;
+    }
+
+    const rule = this.step.rules[ruleIndex];
+    if (rule?.interactiveOnly && !interactiveEnabled) {
+      return -1;
+    }
+
+    return ruleIndex;
+  }
+
+  private findFirstNonDeterministicRuleIndex(): number {
     if (!this.step.rules) return -1;
 
     for (let i = 0; i < this.step.rules.length; i++) {
+      const rule = this.step.rules[i];
+      if (!rule) continue;
+      if (rule.interactiveOnly && this.ctx.interactive !== true) {
+        continue;
+      }
+      if (rule.isAggregateCondition) {
+        continue;
+      }
+      if (!isDeterministicCondition(rule.condition)) {
+        return i;
+      }
+    }
+
+    return -1;
+  }
+
+  private evaluateImmediateDeterministicConditions(startIndex = 0, endExclusive?: number): number {
+    if (!this.step.rules) return -1;
+
+    const upperBound = endExclusive ?? this.step.rules.length;
+    for (let i = Math.max(startIndex, 0); i < upperBound; i++) {
       const rule = this.step.rules[i];
       if (!rule) continue;
       if (rule.interactiveOnly && this.ctx.interactive !== true) {
@@ -146,6 +207,9 @@ export class RuleEvaluator {
       if (!isDeterministicCondition(rule.condition)) {
         continue;
       }
+      if (isDeferredDeterministicCondition(rule.condition)) {
+        continue;
+      }
       if (evaluateWhenExpression(rule.condition, this.ctx.state)) {
         return i;
       }
@@ -154,6 +218,28 @@ export class RuleEvaluator {
     return -1;
   }
 
+  private evaluateDeferredDeterministicConditions(): number {
+    if (!this.step.rules) return -1;
+
+    for (let i = 0; i < this.step.rules.length; i++) {
+      const rule = this.step.rules[i];
+      if (!rule) continue;
+      if (rule.interactiveOnly && this.ctx.interactive !== true) {
+        continue;
+      }
+      if (rule.isAiCondition || rule.isAggregateCondition) {
+        continue;
+      }
+      if (!isDeterministicCondition(rule.condition) || !isDeferredDeterministicCondition(rule.condition)) {
+        continue;
+      }
+      if (evaluateWhenExpression(rule.condition, this.ctx.state)) {
+        return i;
+      }
+    }
+
+    return -1;
+  }
   /**
    * Evaluate ai() conditions via AI judge.
    * Returns the 0-based rule index, or -1 if no match.
@@ -243,5 +329,4 @@ export class RuleEvaluator {
     log.debug('AI judge (fallback) did not match any condition', { step: this.step.name });
     return -1;
   }
-
 }

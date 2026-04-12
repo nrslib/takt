@@ -551,7 +551,6 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
             networkAccess: true,
           },
           claude: {
-            allowedTools: ['Read', 'Glob', 'Grep'],
             sandbox: {
               allowUnsandboxedCommands: true,
             },

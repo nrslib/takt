@@ -417,6 +417,54 @@ describe('WorkflowEngine Integration: Happy Path', () => {
       expect(instruction.length).toBeGreaterThan(0);
     });
 
+    it('should pass Phase 1 instruction to step:start and step:complete when structured_output uses prompt fallback', async () => {
+      const simpleConfig: WorkflowConfig = {
+        name: 'test',
+        maxSteps: 10,
+        initialStep: 'plan',
+        steps: [
+          makeStep('plan', {
+            provider: 'cursor',
+            structuredOutput: {
+              schema: {
+                type: 'object',
+                properties: {
+                  result: { type: 'string' },
+                },
+                required: ['result'],
+                additionalProperties: false,
+              },
+            },
+            rules: [makeRule('done', 'COMPLETE')],
+          }),
+        ],
+      };
+      engine = new WorkflowEngine(simpleConfig, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'claude' });
+
+      mockRunAgentSequence([
+        makeResponse({
+          persona: 'plan',
+          content: '```json\n{"result":"ok"}\n```',
+        }),
+      ]);
+      mockDetectMatchedRuleSequence([
+        { index: 0, method: 'phase1_tag' },
+      ]);
+
+      const startFn = vi.fn();
+      const completeFn = vi.fn();
+      engine.on('step:start', startFn);
+      engine.on('step:complete', completeFn);
+
+      await engine.run();
+
+      const [, , startInstruction] = startFn.mock.calls[0] ?? [];
+      const [, , completeInstruction] = completeFn.mock.calls[0] ?? [];
+      expect(startInstruction).toContain('Return exactly one fenced JSON block');
+      expect(completeInstruction).toContain('Return exactly one fenced JSON block');
+      expect(startInstruction).toBe(completeInstruction);
+    });
+
     it('should pass empty instruction to step:start for parallel steps', async () => {
       const config = buildDefaultWorkflowConfig();
       engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });

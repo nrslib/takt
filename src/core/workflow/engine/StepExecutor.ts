@@ -27,6 +27,12 @@ import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { RunPaths } from '../run/run-paths.js';
 import type { StructuredCaller } from '../../../agents/structured-caller.js';
 import { waitForStepDelay } from './step-delay.js';
+import { parseLastJsonBlock } from '../../../agents/structured-caller/shared.js';
+import {
+  assertProviderResolvedForCapabilitySensitiveOptions,
+} from './engine-provider-options.js';
+import { validateStructuredOutputAgainstSchema } from './structured-output-schema-validator.js';
+import { providerSupportsStructuredOutput } from '../../../infra/providers/provider-capabilities.js';
 
 const log = createLogger('step-executor');
 
@@ -156,6 +162,83 @@ export class StepExecutor {
     const sourcePath = this.writeSnapshot(content, runPaths.contextPreviousResponsesRel, fileName);
     this.writeSnapshot(content, runPaths.contextPreviousResponsesRel, 'latest.md');
     state.previousResponseSourcePath = sourcePath;
+  }
+
+  buildPhase1Instruction(
+    instruction: string,
+    step: WorkflowStep,
+    runtime?: RuntimeStepResolution,
+  ): string {
+    const provider = this.deps.optionsBuilder.resolveStepProviderModel(step, runtime).provider;
+    assertProviderResolvedForCapabilitySensitiveOptions(provider, {
+      stepName: step.name,
+      usesStructuredOutput: step.structuredOutput !== undefined,
+      usesMcpServers: false,
+      usesClaudeAllowedTools: false,
+    });
+    const supportsStructuredOutput = providerSupportsStructuredOutput(provider);
+    if (!step.structuredOutput || supportsStructuredOutput !== false) {
+      return instruction;
+    }
+
+    return [
+      instruction,
+      '',
+      'Return exactly one fenced JSON block that matches this JSON schema:',
+      '```json',
+      JSON.stringify(step.structuredOutput.schema, null, 2),
+      '```',
+      'Do not include any text before or after the JSON block.',
+    ].join('\n');
+  }
+
+  private normalizeStructuredOutput(
+    step: WorkflowStep,
+    response: AgentResponse,
+    runtime?: RuntimeStepResolution,
+  ): AgentResponse {
+    if (!step.structuredOutput || response.status !== 'done') {
+      return response;
+    }
+
+    const provider = this.deps.optionsBuilder.resolveStepProviderModel(step, runtime).provider;
+    assertProviderResolvedForCapabilitySensitiveOptions(provider, {
+      stepName: step.name,
+      usesStructuredOutput: true,
+      usesMcpServers: false,
+      usesClaudeAllowedTools: false,
+    });
+
+    try {
+      let structuredOutput = response.structuredOutput;
+
+      if (structuredOutput === undefined) {
+        if (providerSupportsStructuredOutput(provider) !== false) {
+          throw new Error('Structured output response is missing');
+        }
+
+        const parsed = parseLastJsonBlock(response.content);
+        if (typeof parsed !== 'object' || parsed == null || Array.isArray(parsed)) {
+          throw new Error('Structured output JSON must be an object');
+        }
+        structuredOutput = parsed as Record<string, unknown>;
+      }
+
+      validateStructuredOutputAgainstSchema(structuredOutput, step.structuredOutput.schema);
+      if (structuredOutput === response.structuredOutput) {
+        return response;
+      }
+
+      return {
+        ...response,
+        structuredOutput,
+      };
+    } catch (error) {
+      const detail = getErrorMessage(error);
+      throw new Error(
+        `Step "${step.name}" requires structured_output for provider "${provider ?? 'unknown'}": ${detail}`,
+      );
+    }
   }
 
   /** Build Phase 1 instruction from template */
@@ -322,6 +405,7 @@ export class StepExecutor {
       ? state.stepIterations.get(step.name) ?? 1
       : incrementStepIteration(state, step.name);
     const instruction = prebuiltInstruction ?? this.buildInstruction(step, stepIteration, state, task, maxSteps);
+    const phase1Instruction = this.buildPhase1Instruction(instruction, step, runtime);
     const sessionKey = buildSessionKey(step, runtime?.providerInfo?.provider);
     log.debug('Running step', {
       step: step.name,
@@ -337,11 +421,12 @@ export class StepExecutor {
     const agentOptions = {
       ...baseAgentOptions,
       onPromptResolved: (promptParts: PhasePromptParts) => {
-        this.deps.onPhaseStart?.(step, 1, 'execute', instruction, promptParts, undefined, state.iteration);
+        this.deps.onPhaseStart?.(step, 1, 'execute', phase1Instruction, promptParts, undefined, state.iteration);
         didEmitPhaseStart = true;
       },
     };
-    let response = await executeAgent(step.persona, instruction, agentOptions);
+    let response = await executeAgent(step.persona, phase1Instruction, agentOptions);
+    response = this.normalizeStructuredOutput(step, response, runtime);
     if (!didEmitPhaseStart) {
       throw new Error(`Missing prompt parts for phase start: ${step.name}:1`);
     }
@@ -352,7 +437,7 @@ export class StepExecutor {
     if (response.status === 'error') {
       state.stepOutputs.set(step.name, response);
       state.lastOutput = response;
-      return { response, instruction };
+      return { response, instruction: phase1Instruction };
     }
 
     // Blocked responses should be handled by WorkflowEngine's blocked flow.
@@ -361,7 +446,7 @@ export class StepExecutor {
       state.stepOutputs.set(step.name, response);
       state.lastOutput = response;
       this.persistPreviousResponseSnapshot(state, step.name, stepIteration, response.content);
-      return { response, instruction };
+      return { response, instruction: phase1Instruction };
     }
 
     response = await this.applyPostExecutionPhases(
@@ -377,7 +462,7 @@ export class StepExecutor {
     state.lastOutput = response;
     this.persistPreviousResponseSnapshot(state, step.name, stepIteration, response.content);
     this.emitStepReports(step);
-    return { response, instruction };
+    return { response, instruction: phase1Instruction };
   }
 
   /** Collect step:report events for each report file that exists */

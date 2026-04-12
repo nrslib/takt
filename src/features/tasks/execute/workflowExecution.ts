@@ -3,11 +3,9 @@ import { join } from 'node:path';
 import { WorkflowEngine, createDenyAskUserQuestionHandler } from '../../../core/workflow/index.js';
 import type { WorkflowConfig } from '../../../core/models/index.js';
 import type { WorkflowExecutionResult, WorkflowExecutionOptions, ExceededInfo } from './types.js';
-import { DefaultStructuredCaller, PromptBasedStructuredCaller } from '../../../agents/structured-caller.js';
 import { detectRuleIndex } from '../../../shared/utils/ruleIndex.js';
 import { interruptAllQueries } from '../../../infra/claude/query-manager.js';
 import { loadPersonaSessions, updatePersonaSession, loadWorktreeSessions, updateWorktreeSession, resolveWorkflowConfigValues, saveSessionState, type SessionState } from '../../../infra/config/index.js';
-import { getProvider } from '../../../infra/providers/index.js';
 import { isQuietMode } from '../../../shared/context.js';
 import { StreamDisplay } from '../../../shared/ui/index.js';
 import { TaskPrefixWriter } from '../../../shared/ui/TaskPrefixWriter.js';
@@ -32,6 +30,7 @@ import { assertTaskPrefixPair, truncate, formatElapsedTime, detectStepType } fro
 import { createTraceReportWriter } from './traceReportWriter.js';
 import { sanitizeTextForStorage } from './traceReportRedaction.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
+import { CapabilityAwareStructuredCaller } from '../../../agents/structured-caller.js';
 export type { WorkflowExecutionResult, WorkflowExecutionOptions }; const log = createLogger('workflow');
 export async function executeWorkflow(
   workflowConfig: WorkflowConfig,
@@ -112,9 +111,7 @@ export async function executeWorkflow(
   initAnalyticsWriter(globalConfig.analytics?.enabled === true, globalConfig.analytics?.eventsPath ?? join(getGlobalConfigDir(), 'analytics', 'events'));
   if (globalConfig.preventSleep) preventSleep();
   const analyticsEmitter = new AnalyticsEmitter(runSlug, currentProvider, configuredModel ?? '(default)');
-  const structuredCaller = getProvider(currentProvider).supportsStructuredOutput
-    ? new DefaultStructuredCaller()
-    : new PromptBasedStructuredCaller();
+  const structuredCaller = new CapabilityAwareStructuredCaller();
   const savedSessions = isRetry ? (isWorktree
     ? loadWorktreeSessions(projectCwd, cwd, currentProvider)
     : loadPersonaSessions(projectCwd, currentProvider)) : {};

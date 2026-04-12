@@ -544,8 +544,18 @@ describe('DefaultSystemStepServices', () => {
       conflicted: false,
       error: 'fatal: refusing to merge unrelated histories',
     });
-    expect(mockExecFileSync).toHaveBeenNthCalledWith(1, 'git', ['fetch', 'origin', 'improve'], expect.any(Object));
-    expect(mockExecFileSync).toHaveBeenNthCalledWith(2, 'git', ['merge', 'origin/improve'], expect.any(Object));
+    expect(mockExecFileSync).toHaveBeenNthCalledWith(
+      1,
+      'git',
+      ['fetch', 'origin', 'refs/heads/task/test-branch:refs/remotes/origin/task/test-branch'],
+      expect.any(Object),
+    );
+    expect(mockExecFileSync).toHaveBeenNthCalledWith(
+      2,
+      'git',
+      ['merge', '--ff-only', 'refs/remotes/origin/task/test-branch'],
+      expect.any(Object),
+    );
   });
 
   it('fails sync_with_root when cwd is not on the PR head branch', async () => {
@@ -575,6 +585,37 @@ describe('DefaultSystemStepServices', () => {
       failed: true,
       conflicted: false,
       error: 'Error: System effect requires cwd to be on PR branch "task/test-branch", but current branch is "main"',
+    });
+    expect(mockExecFileSync).not.toHaveBeenCalled();
+  });
+
+  it('rejects option-like PR head branch names before git fetch', async () => {
+    mockFetchPrReviewComments.mockReturnValue({
+      number: 42,
+      title: 'Follow-up PR',
+      body: 'Body',
+      url: 'https://example.test/pr/42',
+      headRefName: '--help',
+      baseRefName: 'improve',
+      comments: [],
+      reviews: [],
+      files: [],
+    });
+    mockGetCurrentBranch.mockReturnValue('--help');
+
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Investigate failure',
+    });
+
+    const result = await services.executeEffect({ type: 'sync_with_root', pr: 42 }, { pr: 42 }, {} as never);
+
+    expect(result).toEqual({
+      success: false,
+      failed: true,
+      conflicted: false,
+      error: 'Error: Refusing to fetch branch "--help" because it starts with "-"',
     });
     expect(mockExecFileSync).not.toHaveBeenCalled();
   });
@@ -678,6 +719,59 @@ describe('DefaultSystemStepServices', () => {
       failed: false,
       conflicted: false,
     });
+  });
+
+  it('updates the PR head branch before merging the base branch in sync_with_root', async () => {
+    mockFetchPrReviewComments.mockReturnValue({
+      number: 42,
+      title: 'Follow-up PR',
+      body: 'Body',
+      url: 'https://example.test/pr/42',
+      headRefName: 'task/test-branch',
+      baseRefName: 'improve',
+      comments: [],
+      reviews: [],
+      files: [],
+    });
+    mockExecFileSync.mockReturnValue('');
+
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Sync branch',
+    });
+
+    const result = await services.executeEffect({ type: 'sync_with_root', pr: 42 }, { pr: 42 }, {} as never);
+
+    expect(result).toEqual({
+      success: true,
+      failed: false,
+      conflicted: false,
+    });
+    expect(mockExecFileSync).toHaveBeenNthCalledWith(
+      1,
+      'git',
+      ['fetch', 'origin', 'refs/heads/task/test-branch:refs/remotes/origin/task/test-branch'],
+      expect.any(Object),
+    );
+    expect(mockExecFileSync).toHaveBeenNthCalledWith(
+      2,
+      'git',
+      ['merge', '--ff-only', 'refs/remotes/origin/task/test-branch'],
+      expect.any(Object),
+    );
+    expect(mockExecFileSync).toHaveBeenNthCalledWith(
+      3,
+      'git',
+      ['fetch', 'origin', 'refs/heads/improve:refs/remotes/origin/improve'],
+      expect.any(Object),
+    );
+    expect(mockExecFileSync).toHaveBeenNthCalledWith(
+      4,
+      'git',
+      ['merge', 'refs/remotes/origin/improve'],
+      expect.any(Object),
+    );
   });
 
   it('returns success for comment_pr effect', async () => {
@@ -793,10 +887,30 @@ describe('DefaultSystemStepServices', () => {
       conflicted: false,
     });
     expect(mockAgentCall).not.toHaveBeenCalled();
-    expect(mockExecFileSync).toHaveBeenNthCalledWith(1, 'git', ['fetch', 'origin', 'task/test-branch'], expect.any(Object));
-    expect(mockExecFileSync).toHaveBeenNthCalledWith(2, 'git', ['merge', '--ff-only', 'origin/task/test-branch'], expect.any(Object));
-    expect(mockExecFileSync).toHaveBeenNthCalledWith(3, 'git', ['fetch', 'origin', 'improve'], expect.any(Object));
-    expect(mockExecFileSync).toHaveBeenNthCalledWith(4, 'git', ['merge', 'origin/improve'], expect.any(Object));
+    expect(mockExecFileSync).toHaveBeenNthCalledWith(
+      1,
+      'git',
+      ['fetch', 'origin', 'refs/heads/task/test-branch:refs/remotes/origin/task/test-branch'],
+      expect.any(Object),
+    );
+    expect(mockExecFileSync).toHaveBeenNthCalledWith(
+      2,
+      'git',
+      ['merge', '--ff-only', 'refs/remotes/origin/task/test-branch'],
+      expect.any(Object),
+    );
+    expect(mockExecFileSync).toHaveBeenNthCalledWith(
+      3,
+      'git',
+      ['fetch', 'origin', 'refs/heads/improve:refs/remotes/origin/improve'],
+      expect.any(Object),
+    );
+    expect(mockExecFileSync).toHaveBeenNthCalledWith(
+      4,
+      'git',
+      ['merge', 'refs/remotes/origin/improve'],
+      expect.any(Object),
+    );
   });
 
   it('fails resolve_conflicts_with_ai when cwd is not on the PR head branch', async () => {
@@ -883,8 +997,18 @@ describe('DefaultSystemStepServices', () => {
       conflicted: false,
     });
     expect(mockExecFileSync).toHaveBeenNthCalledWith(3, 'git', ['merge', '--abort'], expect.any(Object));
-    expect(mockExecFileSync).toHaveBeenNthCalledWith(4, 'git', ['fetch', 'origin', 'task/test-branch'], expect.any(Object));
-    expect(mockExecFileSync).toHaveBeenNthCalledWith(5, 'git', ['merge', '--ff-only', 'origin/task/test-branch'], expect.any(Object));
+    expect(mockExecFileSync).toHaveBeenNthCalledWith(
+      4,
+      'git',
+      ['fetch', 'origin', 'refs/heads/task/test-branch:refs/remotes/origin/task/test-branch'],
+      expect.any(Object),
+    );
+    expect(mockExecFileSync).toHaveBeenNthCalledWith(
+      5,
+      'git',
+      ['merge', '--ff-only', 'refs/remotes/origin/task/test-branch'],
+      expect.any(Object),
+    );
     expect(mockAgentCall).toHaveBeenCalled();
   });
 

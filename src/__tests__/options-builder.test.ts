@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { OptionsBuilder } from '../core/workflow/engine/OptionsBuilder.js';
 import type { WorkflowStep } from '../core/models/types.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
@@ -39,6 +39,10 @@ function createBuilder(step: WorkflowStep, engineOverrides: Partial<WorkflowEngi
 }
 
 describe('OptionsBuilder.buildBaseOptions', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it('passes permission resolution context for provider profile resolution', () => {
     const step = createStep();
     const builder = createBuilder(step);
@@ -185,6 +189,10 @@ describe('OptionsBuilder.buildBaseOptions', () => {
 });
 
 describe('OptionsBuilder.resolveStepProviderModel', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it('should return engine-level provider and model when step has no overrides', () => {
     const step = createStep();
     const builder = createBuilder(step, { provider: 'claude', model: 'sonnet' });
@@ -283,6 +291,10 @@ describe('OptionsBuilder.resolveStepProviderModel', () => {
 });
 
 describe('OptionsBuilder.buildResumeOptions', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it('should enforce readonly permission and empty allowedTools for report/status phases', () => {
     // Given
     const step = createStep({ requiredPermissionMode: 'full' });
@@ -300,6 +312,10 @@ describe('OptionsBuilder.buildResumeOptions', () => {
 });
 
 describe('OptionsBuilder.buildAgentOptions', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it('uses merged providerOptions.claude.allowedTools when step.allowedTools is absent', () => {
     // Given
     const step = createStep({
@@ -308,6 +324,7 @@ describe('OptionsBuilder.buildAgentOptions', () => {
       },
     });
     const builder = createBuilder(step, {
+      provider: 'claude',
       providerOptions: {
         claude: { allowedTools: ['Read', 'Glob'] },
       },
@@ -329,12 +346,146 @@ describe('OptionsBuilder.buildAgentOptions', () => {
       },
       edit: false,
     });
-    const builder = createBuilder(step);
+    const builder = createBuilder(step, { provider: 'claude' });
 
     // When
     const options = builder.buildAgentOptions(step);
 
     // Then
     expect(options.allowedTools).toEqual(['Read', 'Bash']);
+  });
+
+  it('fails fast when claude allowedTools are configured for a non-claude provider', () => {
+    const step = createStep({
+      provider: 'codex',
+      providerOptions: {
+        claude: { allowedTools: ['Read', 'Edit', 'Bash'] },
+      },
+    });
+    const builder = createBuilder(step, {
+      provider: 'claude',
+    });
+
+    expect(() => builder.buildAgentOptions(step)).toThrow(
+      /provider_options\.claude\.allowed_tools.*codex/i,
+    );
+  });
+
+  it('keeps claude allowedTools when the provider is mock', () => {
+    const step = createStep({
+      provider: 'mock',
+      providerOptions: {
+        claude: { allowedTools: ['Read', 'Edit'] },
+      },
+    });
+    const builder = createBuilder(step, {
+      provider: 'mock',
+    });
+
+    expect(builder.buildAgentOptions(step).allowedTools).toEqual(['Read', 'Edit']);
+  });
+
+  it('fails fast when mcpServers are configured for a provider without MCP support', () => {
+    const step = createStep({
+      provider: 'cursor',
+      mcpServers: {
+        playwright: {
+          type: 'sse',
+          url: 'https://example.test/mcp',
+        },
+      },
+    });
+    const builder = createBuilder(step, {
+      provider: 'cursor',
+    });
+
+    expect(() => builder.buildAgentOptions(step)).toThrow(/mcp_servers|mcpServers/i);
+  });
+
+  it('keeps mcpServers when provider supports MCP', () => {
+    const step = createStep({
+      provider: 'claude',
+      mcpServers: {
+        playwright: {
+          type: 'sse',
+          url: 'https://example.test/mcp',
+        },
+      },
+    });
+    const builder = createBuilder(step, {
+      provider: 'claude',
+    });
+
+    const options = builder.buildAgentOptions(step);
+
+    expect(options.mcpServers).toEqual({
+      playwright: {
+        type: 'sse',
+        url: 'https://example.test/mcp',
+      },
+    });
+  });
+
+  it('fails fast when capability-dependent options are used without a resolved provider', () => {
+    const step = createStep({
+      structuredOutput: {
+        schema: {
+          type: 'object',
+          properties: {
+            result: { type: 'string' },
+          },
+          required: ['result'],
+          additionalProperties: false,
+        },
+      },
+      mcpServers: {
+        docs: {
+          type: 'stdio',
+          command: 'docs-mcp',
+        },
+      },
+      providerOptions: {
+        claude: { allowedTools: ['Read', 'Edit'] },
+      },
+    });
+    const builder = createBuilder(step, { provider: undefined });
+
+    expect(() => builder.buildAgentOptions(step)).toThrow(
+      /structured_output.*mcp_servers.*provider_options\.claude\.allowed_tools.*provider is not resolved/i,
+    );
+  });
+
+  it('uses already resolved provider and model for capability checks', () => {
+    const step = createStep({
+      structuredOutput: {
+        schema: {
+          type: 'object',
+          properties: {
+            result: { type: 'string' },
+          },
+          required: ['result'],
+          additionalProperties: false,
+        },
+      },
+    });
+    const builder = createBuilder(step, { provider: 'cursor', model: 'cursor-fast' });
+
+    const options = builder.buildAgentOptions(step);
+
+    expect(options.resolvedProvider).toBe('cursor');
+    expect(options.resolvedModel).toBe('cursor-fast');
+    expect(options.outputSchema).toBeUndefined();
+  });
+
+  it('keeps provider unresolved instead of re-reading config sources', () => {
+    const step = createStep();
+    const builder = createBuilder(step, { provider: undefined, model: undefined });
+
+    const providerInfo = builder.resolveStepProviderModel(step);
+
+    expect(providerInfo).toEqual({
+      provider: undefined,
+      model: undefined,
+    });
   });
 });

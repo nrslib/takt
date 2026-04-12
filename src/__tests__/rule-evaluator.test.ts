@@ -147,6 +147,196 @@ describe('RuleEvaluator', () => {
       );
     });
 
+    it('should prefer ai() conditions over a later when:true fallback', async () => {
+      const step = makeStep({
+        rules: [
+          { condition: 'approved', next: 'implement', isAiCondition: true, aiConditionText: 'is it approved?' },
+          { condition: 'true', next: 'fallback' },
+        ],
+      });
+      const structuredCaller = { evaluateCondition: vi.fn().mockResolvedValue(0) };
+      const ctx = makeContext({ structuredCaller });
+      const evaluator = new RuleEvaluator(step, ctx);
+
+      const result = await evaluator.evaluate('agent output', '');
+
+      expect(result).toEqual({ index: 0, method: 'ai_judge' });
+      expect(structuredCaller.evaluateCondition).toHaveBeenCalledOnce();
+    });
+
+    it('should prefer an earlier deterministic rule over a later ai() rule', async () => {
+      const state = makeState();
+      state.systemContexts.set('route_context', { task: { exists: true } });
+      const step = makeStep({
+        name: 'route_context',
+        rules: [
+          { condition: 'context.route_context.task.exists == true', next: 'skip' },
+          { condition: 'approved', next: 'implement', isAiCondition: true, aiConditionText: 'is it approved?' },
+        ],
+      });
+      const structuredCaller = { evaluateCondition: vi.fn().mockResolvedValue(1) };
+      const ctx = makeContext({ state, structuredCaller });
+      const evaluator = new RuleEvaluator(step, ctx);
+
+      const result = await evaluator.evaluate('agent output', '');
+
+      expect(result).toEqual({ index: 0, method: 'auto_select' });
+      expect(structuredCaller.evaluateCondition).not.toHaveBeenCalled();
+    });
+
+    it('should prefer an earlier ai() rule over a later deterministic rule', async () => {
+      const state = makeState();
+      state.systemContexts.set('route_context', { task: { exists: true } });
+      const step = makeStep({
+        name: 'route_context',
+        rules: [
+          { condition: 'approved', next: 'implement', isAiCondition: true, aiConditionText: 'is it approved?' },
+          { condition: 'context.route_context.task.exists == true', next: 'skip' },
+        ],
+      });
+      const structuredCaller = { evaluateCondition: vi.fn().mockResolvedValue(0) };
+      const ctx = makeContext({ state, structuredCaller });
+      const evaluator = new RuleEvaluator(step, ctx);
+
+      const result = await evaluator.evaluate('agent output', '');
+
+      expect(result).toEqual({ index: 0, method: 'ai_judge' });
+      expect(structuredCaller.evaluateCondition).toHaveBeenCalledOnce();
+    });
+
+    it('should prefer ai() conditions over an earlier when:true rule', async () => {
+      const step = makeStep({
+        rules: [
+          { condition: 'true', next: 'fallback' },
+          { condition: 'approved', next: 'implement', isAiCondition: true, aiConditionText: 'is it approved?' },
+        ],
+      });
+      const structuredCaller = { evaluateCondition: vi.fn().mockResolvedValue(1) };
+      const ctx = makeContext({ structuredCaller });
+      const evaluator = new RuleEvaluator(step, ctx);
+
+      const result = await evaluator.evaluate('agent output', '');
+
+      expect(result).toEqual({ index: 1, method: 'ai_judge' });
+      expect(structuredCaller.evaluateCondition).toHaveBeenCalledOnce();
+    });
+
+    it('should prefer a middle deterministic rule over a later ai() rule when an earlier tag rule does not match', async () => {
+      const state = makeState();
+      state.systemContexts.set('route_context', { task: { exists: true } });
+      const step = makeStep({
+        name: 'route_context',
+        rules: [
+          { condition: 'approved', next: 'implement' },
+          { condition: 'context.route_context.task.exists == true', next: 'skip' },
+          { condition: 'rejected', next: 'review', isAiCondition: true, aiConditionText: 'is it rejected?' },
+        ],
+      });
+      const structuredCaller = { evaluateCondition: vi.fn().mockResolvedValue(2) };
+      const detectRuleIndex = vi.fn().mockReturnValue(-1);
+      const ctx = makeContext({ state, structuredCaller, detectRuleIndex });
+      const evaluator = new RuleEvaluator(step, ctx);
+
+      const result = await evaluator.evaluate('agent output', '');
+
+      expect(result).toEqual({ index: 1, method: 'auto_select' });
+      expect(detectRuleIndex).toHaveBeenCalledTimes(1);
+      expect(structuredCaller.evaluateCondition).toHaveBeenCalledOnce();
+    });
+
+    it('should prefer phase3 tags over a later when:true fallback', async () => {
+      const step = makeStep({
+        rules: [
+          { condition: 'approved', next: 'implement' },
+          { condition: 'true', next: 'fallback' },
+        ],
+      });
+      const detectRuleIndex = vi.fn().mockReturnValue(0);
+      const ctx = makeContext({ detectRuleIndex });
+      const evaluator = new RuleEvaluator(step, ctx);
+
+      const result = await evaluator.evaluate('agent output', '[TEST-STEP:1]');
+
+      expect(result).toEqual({ index: 0, method: 'phase3_tag' });
+    });
+
+    it('should prefer phase3 tags over an earlier when:true rule', async () => {
+      const step = makeStep({
+        rules: [
+          { condition: 'true', next: 'fallback' },
+          { condition: 'approved', next: 'implement' },
+        ],
+      });
+      const detectRuleIndex = vi.fn().mockReturnValue(1);
+      const ctx = makeContext({ detectRuleIndex });
+      const evaluator = new RuleEvaluator(step, ctx);
+
+      const result = await evaluator.evaluate('agent output', '[TEST-STEP:2]');
+
+      expect(result).toEqual({ index: 1, method: 'phase3_tag' });
+    });
+
+    it('should prefer an earlier phase3 tag over a later deterministic rule', async () => {
+      const state = makeState();
+      state.systemContexts.set('route_context', { task: { exists: true } });
+      const step = makeStep({
+        name: 'route_context',
+        rules: [
+          { condition: 'approved', next: 'implement' },
+          { condition: 'context.route_context.task.exists == true', next: 'skip' },
+        ],
+      });
+      const detectRuleIndex = vi.fn().mockReturnValue(0);
+      const ctx = makeContext({ state, detectRuleIndex });
+      const evaluator = new RuleEvaluator(step, ctx);
+
+      const result = await evaluator.evaluate('agent output', '[ROUTE_CONTEXT:1]');
+
+      expect(result).toEqual({ index: 0, method: 'phase3_tag' });
+      expect(detectRuleIndex).toHaveBeenCalledOnce();
+    });
+
+    it('should prefer an earlier deterministic rule over a later phase3 tag', async () => {
+      const state = makeState();
+      state.systemContexts.set('route_context', { task: { exists: true } });
+      const step = makeStep({
+        name: 'route_context',
+        rules: [
+          { condition: 'context.route_context.task.exists == true', next: 'skip' },
+          { condition: 'approved', next: 'implement' },
+        ],
+      });
+      const detectRuleIndex = vi.fn().mockReturnValue(1);
+      const ctx = makeContext({ state, detectRuleIndex });
+      const evaluator = new RuleEvaluator(step, ctx);
+
+      const result = await evaluator.evaluate('agent output', '[ROUTE_CONTEXT:2]');
+
+      expect(result).toEqual({ index: 0, method: 'auto_select' });
+      expect(detectRuleIndex).not.toHaveBeenCalled();
+    });
+
+    it('should prefer a later deterministic rule over ai_judge_fallback when earlier ai() rules do not match', async () => {
+      const state = makeState();
+      state.systemContexts.set('route_context', { task: { exists: true } });
+      const step = makeStep({
+        name: 'route_context',
+        rules: [
+          { condition: 'approved', next: 'implement', isAiCondition: true, aiConditionText: 'is it approved?' },
+          { condition: 'context.route_context.task.exists == true', next: 'skip' },
+          { condition: 'rejected', next: 'review' },
+        ],
+      });
+      const structuredCaller = { evaluateCondition: vi.fn().mockResolvedValueOnce(-1).mockResolvedValueOnce(2) };
+      const ctx = makeContext({ state, structuredCaller });
+      const evaluator = new RuleEvaluator(step, ctx);
+
+      const result = await evaluator.evaluate('agent output', '');
+
+      expect(result).toEqual({ index: 1, method: 'auto_select' });
+      expect(structuredCaller.evaluateCondition).toHaveBeenCalledOnce();
+    });
+
     it('should use ai_judge_fallback when no other method matches', async () => {
       const step = makeStep({
         rules: [
@@ -160,6 +350,23 @@ describe('RuleEvaluator', () => {
 
       const result = await evaluator.evaluate('agent output', '');
       expect(result).toEqual({ index: 1, method: 'ai_judge_fallback' });
+    });
+
+    it('should prefer ai_judge_fallback over an earlier when:true rule', async () => {
+      const step = makeStep({
+        rules: [
+          { condition: 'true', next: 'fallback' },
+          { condition: 'approved', next: 'implement' },
+          { condition: 'rejected', next: 'review' },
+        ],
+      });
+      const structuredCaller = { evaluateCondition: vi.fn().mockResolvedValue(2) };
+      const ctx = makeContext({ structuredCaller });
+      const evaluator = new RuleEvaluator(step, ctx);
+
+      const result = await evaluator.evaluate('agent output', '');
+
+      expect(result).toEqual({ index: 2, method: 'ai_judge_fallback' });
     });
 
     it('should throw when no rule matches after all detection phases', async () => {

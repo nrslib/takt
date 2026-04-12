@@ -167,4 +167,157 @@ describe('WorkflowEngine provider_options resolution', () => {
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
     expect(options?.allowedTools).toEqual(['Read', 'Edit', 'Bash']);
   });
+
+  it('should fail fast when claude allowedTools are configured for a non-claude provider', async () => {
+    const step = makeStep('implement', {
+      provider: 'codex',
+      providerOptions: {
+        claude: { allowedTools: ['Read', 'Edit', 'Bash'] },
+      },
+      rules: [makeRule('done', 'COMPLETE')],
+    });
+
+    const config: WorkflowConfig = {
+      name: 'provider-options-non-claude-tools',
+      steps: [step],
+      initialStep: 'implement',
+      maxSteps: 1,
+    };
+
+    mockRunAgentSequence([
+      makeResponse({ persona: step.persona, content: 'done' }),
+    ]);
+    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+
+    engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      provider: 'claude',
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
+  });
+
+  it('should keep claude allowedTools when the provider is mock', async () => {
+    const step = makeStep('implement', {
+      provider: 'mock',
+      providerOptions: {
+        claude: { allowedTools: ['Read', 'Edit'] },
+      },
+      rules: [makeRule('done', 'COMPLETE')],
+    });
+
+    const config: WorkflowConfig = {
+      name: 'provider-options-mock-tools',
+      steps: [step],
+      initialStep: 'implement',
+      maxSteps: 1,
+    };
+
+    mockRunAgentSequence([
+      makeResponse({ persona: step.persona, content: 'done' }),
+    ]);
+    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+
+    engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      provider: 'claude',
+    });
+
+    await engine.run();
+
+    const options = vi.mocked(runAgent).mock.calls[0]?.[2];
+    expect(options?.allowedTools).toEqual(['Read', 'Edit']);
+  });
+
+  it('should use already resolved capability-dependent options from engine inputs', async () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        result: { type: 'string' },
+      },
+      required: ['result'],
+      additionalProperties: false,
+    } as const;
+    const step = makeStep('implement', {
+      providerOptions: {
+        claude: { allowedTools: ['Read', 'Edit', 'Bash'] },
+      },
+      mcpServers: {
+        docs: { type: 'stdio', command: 'docs-mcp' },
+      },
+      structuredOutput: { schema },
+      rules: [makeRule('done', 'COMPLETE')],
+    });
+
+    const config: WorkflowConfig = {
+      name: 'provider-options-unresolved-provider',
+      steps: [step],
+      initialStep: 'implement',
+      maxSteps: 1,
+    };
+
+    mockRunAgentSequence([
+      makeResponse({ persona: step.persona, content: 'done' }),
+    ]);
+    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+
+    engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      provider: 'claude',
+      model: 'sonnet',
+    });
+
+    await engine.run();
+
+    const options = vi.mocked(runAgent).mock.calls[0]?.[2];
+    expect(options?.resolvedProvider).toBe('claude');
+    expect(options?.resolvedModel).toBe('sonnet');
+    expect(options?.allowedTools).toEqual(['Read', 'Edit', 'Bash']);
+    expect(options?.outputSchema).toEqual(schema);
+  });
+
+  it('should switch structured_output to prompt fallback when the resolved provider is cursor', async () => {
+    const step = makeStep('implement', {
+      structuredOutput: {
+        schema: {
+          type: 'object',
+          properties: {
+            result: { type: 'string' },
+          },
+          required: ['result'],
+          additionalProperties: false,
+        },
+      },
+      rules: [makeRule('done', 'COMPLETE')],
+    });
+
+    const config: WorkflowConfig = {
+      name: 'provider-options-cursor-structured-output',
+      steps: [step],
+      initialStep: 'implement',
+      maxSteps: 1,
+    };
+
+    mockRunAgentSequence([
+      makeResponse({ persona: step.persona, content: '```json\n{"result":"done"}\n```' }),
+    ]);
+    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+
+    engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      provider: 'cursor',
+      model: 'cursor-fast',
+    });
+
+    await engine.run();
+
+    const [, instruction, options] = vi.mocked(runAgent).mock.calls[0] ?? [];
+    expect(instruction).toContain('Return exactly one fenced JSON block');
+    expect(options?.resolvedProvider).toBe('cursor');
+    expect(options?.resolvedModel).toBe('cursor-fast');
+    expect(options?.outputSchema).toBeUndefined();
+  });
 });

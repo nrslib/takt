@@ -12,6 +12,7 @@ function toMockOptions(options: ProviderCallOptions): MockCallOptions {
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
     onStream: options.onStream,
+    allowedTools: options.allowedTools,
   };
 }
 

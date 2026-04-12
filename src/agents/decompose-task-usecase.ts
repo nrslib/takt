@@ -17,6 +17,8 @@ export interface DecomposeTaskOptions {
   language?: Language;
   model?: string;
   provider?: ProviderType;
+  resolvedModel?: string;
+  resolvedProvider?: ProviderType;
   onStream?: StreamCallback;
   onPromptResolved?: (promptParts: {
     systemPrompt: string;
@@ -43,6 +45,8 @@ export async function decomposeTask(
     language: options.language,
     model: options.model,
     provider: options.provider,
+    resolvedModel: options.resolvedModel,
+    resolvedProvider: options.resolvedProvider,
     allowedTools: [],
     permissionMode: 'readonly',
     maxTurns: TEAM_LEADER_MAX_TURNS,
@@ -85,6 +89,8 @@ export async function requestMoreParts(
     language: options.language,
     model: options.model,
     provider: options.provider,
+    resolvedModel: options.resolvedModel,
+    resolvedProvider: options.resolvedProvider,
     allowedTools: [],
     permissionMode: 'readonly',
     maxTurns: TEAM_LEADER_MAX_TURNS,

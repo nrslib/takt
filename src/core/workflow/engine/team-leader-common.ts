@@ -24,16 +24,6 @@ export function createPartStep(step: WorkflowStep, part: PartDefinition): Workfl
   const partPersona = step.teamLeader.partPersona ?? step.persona;
   const partPersonaPath = step.teamLeader.partPersonaPath ?? step.personaPath;
   const partPersonaDisplayName = partPersona ?? step.personaDisplayName ?? `${step.name}:${part.id}`;
-  const partAllowedTools = step.teamLeader.partAllowedTools ?? step.providerOptions?.claude?.allowedTools;
-  const partProviderOptions = partAllowedTools
-    ? {
-        ...step.providerOptions,
-        claude: {
-          ...step.providerOptions?.claude,
-          allowedTools: partAllowedTools,
-        },
-      }
-    : step.providerOptions;
 
   return {
     name: `${step.name}.${part.id}`,
@@ -42,7 +32,7 @@ export function createPartStep(step: WorkflowStep, part: PartDefinition): Workfl
     personaPath: partPersonaPath,
     personaDisplayName: partPersonaDisplayName,
     session: 'refresh',
-    providerOptions: partProviderOptions,
+    providerOptions: step.providerOptions,
     mcpServers: step.mcpServers,
     provider: step.provider,
     model: step.model,

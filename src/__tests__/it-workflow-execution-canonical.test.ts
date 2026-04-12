@@ -19,6 +19,7 @@ vi.mock('../core/workflow/index.js', () => ({
 }));
 
 vi.mock('../agents/structured-caller.js', () => ({
+  CapabilityAwareStructuredCaller: class {},
   DefaultStructuredCaller: class {},
   PromptBasedStructuredCaller: class {},
 }));

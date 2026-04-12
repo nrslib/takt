@@ -79,16 +79,17 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
 
   it('team leaderが分解したパートを並列実行し集約する', async () => {
     const config = buildTeamLeaderConfig();
-    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', { projectCwd: tmpDir });
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', { projectCwd: tmpDir, provider: 'claude' });
 
     mockRunAgentWithPrompt(
       makeResponse({
         persona: 'team-leader',
-        content: [
-          '```json',
-          '[{"id":"part-1","title":"API","instruction":"Implement API"},{"id":"part-2","title":"Test","instruction":"Add tests"}]',
-          '```',
-        ].join('\n'),
+        structuredOutput: {
+          parts: [
+            { id: 'part-1', title: 'API', instruction: 'Implement API' },
+            { id: 'part-2', title: 'Test', instruction: 'Add tests' },
+          ],
+        },
       }),
       makeResponse({ persona: 'coder', content: 'API done' }),
       makeResponse({ persona: 'coder', content: 'Tests done' }),
@@ -115,16 +116,17 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
 
   it('全パートが失敗した場合はstep失敗として中断する', async () => {
     const config = buildTeamLeaderConfig();
-    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', { projectCwd: tmpDir });
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', { projectCwd: tmpDir, provider: 'claude' });
 
     mockRunAgentWithPrompt(
       makeResponse({
         persona: 'team-leader',
-        content: [
-          '```json',
-          '[{"id":"part-1","title":"API","instruction":"Implement API"},{"id":"part-2","title":"Test","instruction":"Add tests"}]',
-          '```',
-        ].join('\n'),
+        structuredOutput: {
+          parts: [
+            { id: 'part-1', title: 'API', instruction: 'Implement API' },
+            { id: 'part-2', title: 'Test', instruction: 'Add tests' },
+          ],
+        },
       }),
       makeResponse({ persona: 'coder', status: 'error', error: 'api failed' }),
       makeResponse({ persona: 'coder', status: 'error', error: 'test failed' }),
@@ -141,16 +143,17 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
 
   it('一部パートが失敗しても成功パートがあれば集約結果は完了する', async () => {
     const config = buildTeamLeaderConfig();
-    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', { projectCwd: tmpDir });
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', { projectCwd: tmpDir, provider: 'claude' });
 
     mockRunAgentWithPrompt(
       makeResponse({
         persona: 'team-leader',
-        content: [
-          '```json',
-          '[{"id":"part-1","title":"API","instruction":"Implement API"},{"id":"part-2","title":"Test","instruction":"Add tests"}]',
-          '```',
-        ].join('\n'),
+        structuredOutput: {
+          parts: [
+            { id: 'part-1', title: 'API', instruction: 'Implement API' },
+            { id: 'part-2', title: 'Test', instruction: 'Add tests' },
+          ],
+        },
       }),
       makeResponse({ persona: 'coder', content: 'API done' }),
       makeResponse({ persona: 'coder', status: 'error', error: 'test failed' }),
@@ -175,16 +178,17 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
 
   it('パート失敗時にerrorがなくてもcontentの詳細をエラー表示に使う', async () => {
     const config = buildTeamLeaderConfig();
-    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', { projectCwd: tmpDir });
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', { projectCwd: tmpDir, provider: 'claude' });
 
     mockRunAgentWithPrompt(
       makeResponse({
         persona: 'team-leader',
-        content: [
-          '```json',
-          '[{"id":"part-1","title":"API","instruction":"Implement API"},{"id":"part-2","title":"Test","instruction":"Add tests"}]',
-          '```',
-        ].join('\n'),
+        structuredOutput: {
+          parts: [
+            { id: 'part-1', title: 'API', instruction: 'Implement API' },
+            { id: 'part-2', title: 'Test', instruction: 'Add tests' },
+          ],
+        },
       }),
       makeResponse({ persona: 'coder', status: 'error', content: 'api failed from content' }),
       makeResponse({ persona: 'coder', content: 'Tests done' }),
@@ -206,7 +210,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
 
   it('結果に応じて追加パートを生成して実行する', async () => {
     const config = buildTeamLeaderConfig();
-    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', { projectCwd: tmpDir });
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', { projectCwd: tmpDir, provider: 'claude' });
 
     mockRunAgentWithPrompt(
       makeResponse({
@@ -255,7 +259,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
 
   it('team leader の phase:start には分解実行時の実 instruction を記録する', async () => {
     const config = buildTeamLeaderConfig();
-    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', { projectCwd: tmpDir });
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', { projectCwd: tmpDir, provider: 'claude' });
     const phaseStarts: string[] = [];
     engine.on('phase:start', (step, phase, phaseName, instruction) => {
       if (step.name !== 'implement' || phase !== 1 || phaseName !== 'execute') return;

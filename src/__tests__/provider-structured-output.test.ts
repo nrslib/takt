@@ -50,6 +50,20 @@ vi.mock('../infra/opencode/index.js', () => ({
   callOpenCodeCustom: mockCallOpenCodeCustom,
 }));
 
+// ===== Mock =====
+const {
+  mockCallMock,
+  mockCallMockCustom,
+} = vi.hoisted(() => ({
+  mockCallMock: vi.fn(),
+  mockCallMockCustom: vi.fn(),
+}));
+
+vi.mock('../infra/mock/index.js', () => ({
+  callMock: mockCallMock,
+  callMockCustom: mockCallMockCustom,
+}));
+
 // ===== Config (API key resolvers + CLI path resolvers) =====
 vi.mock('../infra/config/index.js', () => ({
   resolveAnthropicApiKey: vi.fn(() => undefined),
@@ -290,8 +304,28 @@ describe('OpenCodeProvider — structured output', () => {
 // ---------- Mock ----------
 
 describe('MockProvider — structured output', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it('supportsStructuredOutput is true', () => {
     const provider = new MockProvider() as { supportsStructuredOutput?: boolean };
     expect(provider.supportsStructuredOutput).toBe(true);
+  });
+
+  it('passes allowedTools through to the mock client', async () => {
+    mockCallMock.mockResolvedValue(doneResponse('coder'));
+
+    const agent = new MockProvider().setup({ name: 'coder' });
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      allowedTools: ['Read', 'Edit'],
+      outputSchema: SCHEMA,
+    });
+
+    const opts = mockCallMock.mock.calls[0]?.[2];
+    expect(opts).toMatchObject({
+      allowedTools: ['Read', 'Edit'],
+    });
   });
 });

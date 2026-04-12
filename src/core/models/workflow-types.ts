@@ -59,7 +59,16 @@ export interface WorkflowEnqueueWorktreeConfig {
   draft_pr?: boolean;
 }
 
-export type WorkflowTemplateReference = `{${'context' | 'structured' | 'effect'}:${string}}`;
+type WorkflowContextTemplateReference = `{context:${string}}`;
+type WorkflowStructuredTemplateReference = `{structured:${string}}`;
+type WorkflowEffectTemplateReference = `{effect:${string}}`;
+
+// The parser/schema enforce the exact DSL shape. Keep the public type broad enough
+// that valid nested template paths are not rejected at compile time.
+export type WorkflowTemplateReference =
+  | WorkflowContextTemplateReference
+  | WorkflowStructuredTemplateReference
+  | WorkflowEffectTemplateReference;
 
 export type WorkflowEffectScalarReference = WorkflowTemplateReference | number;
 

@@ -11,6 +11,7 @@ export interface MockCallOptions {
   abortSignal?: AbortSignal;
   sessionId?: string;
   onStream?: StreamCallback;
+  allowedTools?: string[];
   /** Fixed response content (optional, defaults to generic mock response) */
   mockResponse?: string;
   /** Fixed status to return (optional, defaults to 'done') */

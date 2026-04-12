@@ -312,6 +312,52 @@ describe('system workflow schema', () => {
     expect(result.success).toBe(false);
   });
 
+  it('step 修飾のない effect scalar template を reject する', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'comment_on_existing_pr',
+      mode: 'system',
+      effects: [
+        {
+          type: 'comment_pr',
+          pr: '{effect:comment_pr.success}',
+          body: 'Looks good',
+        },
+      ],
+      rules: [
+        {
+          when: 'true',
+          next: 'COMPLETE',
+        },
+      ],
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.path).toEqual(['effects', 0, 'pr']);
+    expect(JSON.stringify(result.error?.issues)).toContain('Effect references must use');
+  });
+
+  it('深い structured/effect テンプレート参照を受け付ける', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'comment_on_existing_pr',
+      mode: 'system',
+      effects: [
+        {
+          type: 'comment_pr',
+          pr: '{effect:lookup_pr.comment_pr.result.id}',
+          body: '{structured:plan.payload.pr.comment}',
+        },
+      ],
+      rules: [
+        {
+          when: 'true',
+          next: 'COMPLETE',
+        },
+      ],
+    });
+
+    expect(result.success).toBe(true);
+  });
+
   it('enqueue_task issue の bare string payload を reject する', () => {
     const result = WorkflowStepRawSchema.safeParse({
       name: 'enqueue_from_issue',

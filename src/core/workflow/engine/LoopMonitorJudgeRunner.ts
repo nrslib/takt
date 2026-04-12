@@ -1,8 +1,9 @@
 import { createLogger } from '../../../shared/utils/index.js';
 import type { AgentResponse, LoopMonitorConfig, WorkflowState, WorkflowStep } from '../../models/types.js';
 import { mergeProviderOptions } from '../../../infra/config/providerOptions.js';
+import { providerSupportsClaudeAllowedTools } from '../../../infra/providers/provider-capabilities.js';
 import { resolveLoopMonitorJudgeProviderModel } from '../provider-resolution.js';
-import type { RuntimeStepResolution } from '../types.js';
+import type { RuntimeStepResolution, StepProviderInfo } from '../types.js';
 import { incrementStepIteration } from './state-manager.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { StepExecutor } from './StepExecutor.js';
@@ -34,7 +35,7 @@ export class LoopMonitorJudgeRunner {
     triggeringRuntime?: RuntimeStepResolution,
   ): Promise<string> {
     const runtime = this.resolveJudgeRuntime(monitor, triggeringStep, triggeringRuntime);
-    const judgeStep = this.createJudgeStep(monitor, cycleCount);
+    const judgeStep = this.createJudgeStep(monitor, cycleCount, runtime.providerInfo);
     log.info('Running loop monitor judge', {
       cycle: monitor.cycle,
       cycleCount,
@@ -76,9 +77,14 @@ export class LoopMonitorJudgeRunner {
     return nextStep;
   }
 
-  private createJudgeStep(monitor: LoopMonitorConfig, cycleCount: number): WorkflowStep {
+  private createJudgeStep(
+    monitor: LoopMonitorConfig,
+    cycleCount: number,
+    providerInfo: StepProviderInfo | undefined,
+  ): WorkflowStep {
     const instruction = (monitor.judge.instruction ?? this.buildDefaultInstruction(monitor, cycleCount))
       .replace(/\{cycle_count\}/g, String(cycleCount));
+    const defaultProviderOptions = this.buildDefaultProviderOptions(providerInfo?.provider);
 
     return {
       name: `_loop_judge_${monitor.cycle.join('_')}`,
@@ -89,11 +95,7 @@ export class LoopMonitorJudgeRunner {
       model: monitor.judge.model,
       edit: false,
       providerOptions: mergeProviderOptions(
-        {
-          claude: {
-            allowedTools: ['Read', 'Glob', 'Grep'],
-          },
-        },
+        defaultProviderOptions,
         monitor.judge.providerOptions,
       ),
       instruction,
@@ -121,6 +123,18 @@ export class LoopMonitorJudgeRunner {
       model: triggeringProviderInfo.model,
     });
     return { providerInfo };
+  }
+
+  private buildDefaultProviderOptions(provider: StepProviderInfo['provider']) {
+    if (!providerSupportsClaudeAllowedTools(provider)) {
+      return undefined;
+    }
+
+    return {
+      claude: {
+        allowedTools: ['Read', 'Glob', 'Grep'],
+      },
+    };
   }
 
   private buildDefaultInstruction(monitor: LoopMonitorConfig, cycleCount: number): string {
