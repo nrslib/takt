@@ -23,6 +23,21 @@ export interface CompletionCandidate {
 }
 
 /**
+ * Context passed to completion providers.
+ */
+export interface CompletionContext {
+  readonly buffer: string;
+  readonly cursorPos: number;
+}
+
+/**
+ * Function that returns completion candidates for the current input state.
+ */
+export type CompletionProvider = (
+  context: CompletionContext,
+) => readonly CompletionCandidate[];
+
+/**
  * Render completion menu lines (pure function).
  *
  * Returns an array of styled strings: separator line + one line per candidate.

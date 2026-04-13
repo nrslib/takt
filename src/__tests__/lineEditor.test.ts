@@ -4,7 +4,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { parseInputData, createEscapeParser, type InputCallbacks } from '../features/interactive/lineEditor.js';
-import type { CompletionCandidate } from '../features/interactive/completionMenu.js';
+import type { CompletionCandidate, CompletionProvider } from '../features/interactive/completionMenu.js';
 
 function createCallbacks(): InputCallbacks & { calls: string[] } {
   const calls: string[] = [];
@@ -29,7 +29,7 @@ function createCallbacks(): InputCallbacks & { calls: string[] } {
 const TEST_COMPLETION_VALUES = ['/play', '/go', '/retry', '/replay', '/cancel', '/resume'] as const;
 
 const testCompletionProvider = (
-  { buffer }: { buffer: string },
+  { buffer }: Parameters<CompletionProvider>[0],
 ): readonly CompletionCandidate[] => {
   if (!buffer.startsWith('/') || buffer.includes('\n')) {
     return [];
@@ -294,9 +294,7 @@ describe('readMultilineInput cursor navigation', () => {
   async function callReadMultilineInput(
     prompt: string,
     options?: {
-      completionProvider?: (
-        context: { buffer: string },
-      ) => readonly CompletionCandidate[];
+      completionProvider?: CompletionProvider;
     },
   ): Promise<string | null> {
     const { readMultilineInput } = await import('../features/interactive/lineEditor.js');
@@ -1173,6 +1171,7 @@ describe('readMultilineInput cursor navigation', () => {
 
       // Then
       expect(result).toBe('/play');
+      expect(stdoutCalls).toContain('/play');
     });
 
     it('should submit command selected by arrow down on Enter', async () => {
@@ -1255,8 +1254,8 @@ describe('readMultilineInput cursor navigation', () => {
 
     it('should repaint wrapped suffix completion from the prompt row on Tab', async () => {
       // Given: narrow terminal width wraps "note /g" before Tab applies "note /go "
-      const suffixCompletionProvider = ({ buffer }: { buffer: string }) =>
-        buffer === 'note /g'
+      const suffixCompletionProvider: CompletionProvider = ({ buffer, cursorPos }) =>
+        buffer === 'note /g' && cursorPos === buffer.length
           ? [{
               value: 'note /go',
               applyValue: 'note /go ',
@@ -1278,6 +1277,63 @@ describe('readMultilineInput cursor navigation', () => {
         expect.stringMatching(/^\x1B\[\d+A$/),
         '\x1B[3G',
       ]);
+    });
+
+    it('should not submit a stale completion after moving to Home', async () => {
+      const suffixCompletionProvider: CompletionProvider = ({ buffer, cursorPos }) =>
+        buffer === 'note /g' && cursorPos === buffer.length
+          ? [{
+              value: 'note /go',
+              applyValue: 'note /go ',
+              description: 'Description for /go',
+            }]
+          : [];
+      setupRawStdin(['note /g\x1B[H\r']);
+
+      const result = await callReadMultilineInput('> ', { completionProvider: suffixCompletionProvider });
+
+      expect(result).toBe('note /g');
+      expect(stdoutCalls).not.toContain('note /go');
+    });
+
+    it('should repaint wrapped suffix completion from the prompt row on Enter', async () => {
+      const suffixCompletionProvider: CompletionProvider = ({ buffer, cursorPos }) =>
+        buffer === 'note /g' && cursorPos === buffer.length
+          ? [{
+              value: 'note /go',
+              applyValue: 'note /go ',
+              description: 'Description for /go',
+            }]
+          : [];
+      setupRawStdin(['note /g\r'], 8);
+
+      const result = await callReadMultilineInput('> ', { completionProvider: suffixCompletionProvider });
+
+      expect(result).toBe('note /go');
+      const acceptedBufferIndex = stdoutCalls.lastIndexOf('note /go');
+      expect(acceptedBufferIndex).toBeGreaterThan(3);
+      expect(stdoutCalls.slice(acceptedBufferIndex - 4, acceptedBufferIndex)).toEqual([
+        '\r\n',
+        '\x1B[J',
+        expect.stringMatching(/^\x1B\[\d+A$/),
+        '\x1B[3G',
+      ]);
+    });
+
+    it('should restore completion after moving Home and back to End', async () => {
+      const suffixCompletionProvider: CompletionProvider = ({ buffer, cursorPos }) =>
+        buffer === 'note /g' && cursorPos === buffer.length
+          ? [{
+              value: 'note /go',
+              applyValue: 'note /go ',
+              description: 'Description for /go',
+            }]
+          : [];
+      setupRawStdin(['note /g\x1B[H\x1B[F\r']);
+
+      const result = await callReadMultilineInput('> ', { completionProvider: suffixCompletionProvider });
+
+      expect(result).toBe('note /go');
     });
 
     it('should wrap selection on ArrowDown from last item', async () => {

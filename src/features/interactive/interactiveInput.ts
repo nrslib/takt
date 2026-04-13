@@ -2,7 +2,7 @@ import type { Language } from '../../core/models/config-types.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { readMultilineInput } from './lineEditor.js';
 import { filterSlashCommands, type CommandAvailability } from './slashCommandRegistry.js';
-import type { CompletionCandidate } from './completionMenu.js';
+import type { CompletionCandidate, CompletionContext, CompletionProvider } from './completionMenu.js';
 
 /**
  * Build localized slash-command completion candidates for the current input.
@@ -21,21 +21,24 @@ export const getSlashCommandCompletions = (
 /**
  * Extract the slash command token from the buffer for completion.
  *
- * Supports both prefix form ("/go") and suffix form ("some text /go").
- * Returns the slash token and its start position, or null if none found.
+ * Supports both prefix form ("/go") and suffix form ("some text /go"), but only
+ * when the cursor is currently inside the slash-command token being edited.
  */
-const extractSlashToken = (buffer: string): { token: string; start: number } | null => {
+const extractSlashToken = (
+  buffer: string,
+  cursorPos: number,
+): { token: string; start: number; end: number } | null => {
   if (buffer.includes('\n')) return null;
+  if (cursorPos <= 0 || cursorPos > buffer.length) return null;
 
-  if (buffer.startsWith('/')) return { token: buffer, start: 0 };
+  const tokenStart = buffer.lastIndexOf(' ', cursorPos - 1) + 1;
+  if (cursorPos <= tokenStart) return null;
+  const nextSpace = buffer.indexOf(' ', tokenStart);
+  const tokenEnd = nextSpace >= 0 ? nextSpace : buffer.length;
+  const token = buffer.slice(tokenStart, tokenEnd);
+  if (!token.startsWith('/')) return null;
 
-  const lastSlashIndex = buffer.lastIndexOf(' /');
-  if (lastSlashIndex >= 0) {
-    const token = buffer.slice(lastSlashIndex + 1);
-    if (!token.includes(' ')) return { token, start: lastSlashIndex + 1 };
-  }
-
-  return null;
+  return { token, start: tokenStart, end: tokenEnd };
 };
 
 /**
@@ -44,18 +47,19 @@ const extractSlashToken = (buffer: string): { token: string; start: number } | n
 export const createSlashCommandCompletionProvider = (
   lang: Language,
   availability?: CommandAvailability,
-): ((context: { buffer: string }) => readonly CompletionCandidate[]) =>
-  ({ buffer }) => {
-    const match = extractSlashToken(buffer);
+): CompletionProvider =>
+  ({ buffer, cursorPos }: CompletionContext) => {
+    const match = extractSlashToken(buffer, cursorPos);
     if (!match) return [];
 
     const prefix = buffer.slice(0, match.start);
-    return getSlashCommandCompletions(match.token, lang, availability).map((entry) => ({
+    const suffix = buffer.slice(match.end);
+    const typedPrefix = buffer.slice(match.start, cursorPos);
+
+    return getSlashCommandCompletions(typedPrefix, lang, availability).map((entry) => ({
       ...entry,
-      applyValue: entry.applyValue
-        ? `${prefix}${entry.applyValue}`
-        : undefined,
-      value: `${prefix}${entry.value}`,
+      applyValue: `${prefix}${suffix.length === 0 ? (entry.applyValue ?? entry.value) : entry.value}${suffix}`,
+      value: `${prefix}${entry.value}${suffix}`,
     }));
   };
 

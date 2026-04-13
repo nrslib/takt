@@ -14,6 +14,7 @@ import {
   writeCompletionMenu,
   clearCompletionMenu,
   type CompletionCandidate,
+  type CompletionProvider,
 } from './completionMenu.js';
 
 /**
@@ -33,22 +34,21 @@ export const createCompletionController = (
     setCursorPos: (value: number) => void;
   },
   promptWidth: number,
-  completionProvider?: (
-    context: { buffer: string },
-  ) => readonly CompletionCandidate[],
+  completionProvider?: CompletionProvider,
 ): {
   readonly getState: () => {
     readonly candidates: readonly CompletionCandidate[];
-    selectedIndex: number;
+    readonly selectedIndex: number;
   } | null;
   readonly update: () => void;
   readonly hide: () => void;
   readonly moveSelection: (delta: number) => void;
   readonly apply: () => void;
+  readonly acceptSelection: () => boolean;
 } => {
   let completionState: {
     readonly candidates: readonly CompletionCandidate[];
-    selectedIndex: number;
+    readonly selectedIndex: number;
   } | null = null;
 
   /**
@@ -86,7 +86,10 @@ export const createCompletionController = (
     }
 
     const buffer = accessors.getBuffer();
-    const candidates = completionProvider({ buffer });
+    const candidates = completionProvider({
+      buffer,
+      cursorPos: accessors.getCursorPos(),
+    });
 
     if (candidates.length === 0) {
       hide();
@@ -107,19 +110,18 @@ export const createCompletionController = (
   const moveSelection = (delta: number): void => {
     if (!completionState || completionState.candidates.length === 0) return;
     const len = completionState.candidates.length;
-    completionState.selectedIndex = ((completionState.selectedIndex + delta) % len + len) % len;
+    const nextIndex = ((completionState.selectedIndex + delta) % len + len) % len;
+    completionState = {
+      ...completionState,
+      selectedIndex: nextIndex,
+    };
     redraw();
   };
 
   /**
-   * Apply the selected completion value to the buffer.
+   * Replace the active buffer from the prompt row and clear the menu.
    */
-  const apply = (): void => {
-    if (!completionState) return;
-    const selected = completionState.candidates[completionState.selectedIndex];
-    if (!selected) return;
-
-    const newBuffer = selected.applyValue ?? selected.value;
+  const replaceBuffer = (newBuffer: string): void => {
     const rowsBelow = accessors.countRowsBelowCursor();
     const cursorRow = accessors.getCursorRow();
 
@@ -143,11 +145,33 @@ export const createCompletionController = (
     completionState = null;
   };
 
+  /**
+   * Apply the selected completion value to the buffer.
+   */
+  const apply = (): void => {
+    if (!completionState) return;
+    const selected = completionState.candidates[completionState.selectedIndex];
+    if (!selected) return;
+    replaceBuffer(selected.applyValue ?? selected.value);
+  };
+
+  /**
+   * Accept the currently selected completion without adding trailing editing space.
+   */
+  const acceptSelection = (): boolean => {
+    if (!completionState) return false;
+    const selected = completionState.candidates[completionState.selectedIndex];
+    if (!selected) return false;
+    replaceBuffer(selected.value);
+    return true;
+  };
+
   return {
     getState: () => completionState,
     update,
     hide,
     moveSelection,
     apply,
+    acceptSelection,
   };
 };

@@ -11,7 +11,7 @@ import * as readline from 'node:readline';
 import { StringDecoder } from 'node:string_decoder';
 import { stripAnsi, getDisplayWidth } from '../../shared/utils/text.js';
 import { createCompletionController } from './completionController.js';
-import type { CompletionCandidate } from './completionMenu.js';
+import type { CompletionProvider } from './completionMenu.js';
 
 /** Escape sequences for terminal protocol control */
 const PASTE_BRACKET_ENABLE = '\x1B[?2004h';
@@ -274,9 +274,7 @@ export const createEscapeParser = (
 export function readMultilineInput(
   prompt: string,
   options?: {
-    completionProvider?: (
-      context: { buffer: string },
-    ) => readonly CompletionCandidate[];
+    completionProvider?: CompletionProvider;
   },
 ): Promise<string | null> {
   if (!process.stdin.isTTY) {
@@ -671,6 +669,7 @@ export function readMultilineInput(
           onShiftEnter() { completion.hide(); insertNewline(); },
           onArrowLeft() {
             if (state !== 'normal') return;
+            const previousCursorPos = cursorPos;
             if (cursorPos > getLineStart()) {
               const len = charLengthBefore(cursorPos);
               const charWidth = getDisplayWidth(buffer.slice(cursorPos - len, cursorPos));
@@ -682,9 +681,11 @@ export function readMultilineInput(
               process.stdout.write('\x1B[A');
               process.stdout.write(`\x1B[${col}G`);
             }
+            if (cursorPos !== previousCursorPos) completion.update();
           },
           onArrowRight() {
             if (state !== 'normal') return;
+            const previousCursorPos = cursorPos;
             if (cursorPos < getLineEnd()) {
               const len = charLengthAt(cursorPos);
               const charWidth = getDisplayWidth(buffer.slice(cursorPos, cursorPos + len));
@@ -696,15 +697,17 @@ export function readMultilineInput(
               process.stdout.write('\x1B[B');
               process.stdout.write(`\x1B[${col}G`);
             }
+            if (cursorPos !== previousCursorPos) completion.update();
           },
           onArrowUp() {
             if (state !== 'normal') return;
-            
+
             if (completion.getState()) {
               completion.moveSelection(-1);
               return;
             }
 
+            const previousCursorPos = cursorPos;
             const logicalLineStart = getLineStart();
             const displayRowStart = getDisplayRowStart(cursorPos);
             const displayCol = getDisplayRowColumn(cursorPos);
@@ -721,6 +724,7 @@ export function readMultilineInput(
               const prevRowEnd = getDisplayRowEnd(prevLogicalLineEnd);
               moveCursorToDisplayRow(prevRowStart, prevRowEnd, displayCol, 'A');
             }
+            if (cursorPos !== previousCursorPos) completion.update();
           },
           onArrowDown() {
             if (state !== 'normal') return;
@@ -730,6 +734,7 @@ export function readMultilineInput(
               return;
             }
 
+            const previousCursorPos = cursorPos;
             const logicalLineEnd = getLineEnd();
             const displayRowEnd = getDisplayRowEnd(cursorPos);
             const displayCol = getDisplayRowColumn(cursorPos);
@@ -745,9 +750,11 @@ export function readMultilineInput(
               const nextRowEnd = getDisplayRowEnd(nextLineStart);
               moveCursorToDisplayRow(nextLineStart, nextRowEnd, displayCol, 'B');
             }
+            if (cursorPos !== previousCursorPos) completion.update();
           },
           onWordLeft() {
             if (state !== 'normal') return;
+            const previousCursorPos = cursorPos;
             const lineStart = getLineStart();
             if (cursorPos <= lineStart) return;
             let pos = cursorPos;
@@ -756,9 +763,11 @@ export function readMultilineInput(
             const moveWidth = getDisplayWidth(buffer.slice(pos, cursorPos));
             cursorPos = pos;
             process.stdout.write(`\x1B[${moveWidth}D`);
+            if (cursorPos !== previousCursorPos) completion.update();
           },
           onWordRight() {
             if (state !== 'normal') return;
+            const previousCursorPos = cursorPos;
             const lineEnd = getLineEnd();
             if (cursorPos >= lineEnd) return;
             let pos = cursorPos;
@@ -767,14 +776,19 @@ export function readMultilineInput(
             const moveWidth = getDisplayWidth(buffer.slice(cursorPos, pos));
             cursorPos = pos;
             process.stdout.write(`\x1B[${moveWidth}C`);
+            if (cursorPos !== previousCursorPos) completion.update();
           },
           onHome() {
             if (state !== 'normal') return;
+            const previousCursorPos = cursorPos;
             moveCursorToLogicalLineStart();
+            if (cursorPos !== previousCursorPos) completion.update();
           },
           onEnd() {
             if (state !== 'normal') return;
+            const previousCursorPos = cursorPos;
             moveCursorToLogicalLineEnd();
+            if (cursorPos !== previousCursorPos) completion.update();
           },
           onEsc() {
             completion.hide();
@@ -802,16 +816,7 @@ export function readMultilineInput(
 
             // Submit
             if (ch === '\r') {
-              const compState = completion.getState();
-              if (compState) {
-                const selected = compState.candidates[compState.selectedIndex];
-                if (selected) {
-                  buffer = selected.value;
-                  cursorPos = buffer.length;
-                }
-              }
-              
-              completion.hide();
+              completion.acceptSelection();
               process.stdout.write('\n');
               cleanup();
               resolve(buffer);
@@ -826,8 +831,18 @@ export function readMultilineInput(
             }
             // Editing
             if (ch === '\x7F' || ch === '\x08') { deleteCharBefore(); completion.update(); return; }
-            if (ch === '\x01') { moveCursorToDisplayRowStart(); return; }
-            if (ch === '\x05') { moveCursorToDisplayRowEnd(); return; }
+            if (ch === '\x01') {
+              const previousCursorPos = cursorPos;
+              moveCursorToDisplayRowStart();
+              if (cursorPos !== previousCursorPos) completion.update();
+              return;
+            }
+            if (ch === '\x05') {
+              const previousCursorPos = cursorPos;
+              moveCursorToDisplayRowEnd();
+              if (cursorPos !== previousCursorPos) completion.update();
+              return;
+            }
             if (ch === '\x0B') { deleteToLineEnd(); completion.update(); return; }
             if (ch === '\x15') { deleteToLineStart(); completion.update(); return; }
             if (ch === '\x17') { deleteWord(); completion.update(); return; }
