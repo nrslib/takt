@@ -4,7 +4,7 @@ import type { TaskListItem } from '../../../infra/task/index.js';
 import { resolveCloneBaseDir } from '../../../infra/task/clone.js';
 import { TaskRunner, isStaleRunningTask } from '../../../infra/task/index.js';
 import { confirm } from '../../../shared/prompt/index.js';
-import { success, error as logError } from '../../../shared/ui/index.js';
+import { success, warn, error as logError } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage, isPathInside } from '../../../shared/utils/index.js';
 
 const log = createLogger('list-tasks');
@@ -24,7 +24,11 @@ function resolveSafeWorktreePath(projectDir: string, worktreePath: string | unde
   return undefined;
 }
 
-function resolveCurrentStep(projectDir: string, task: TaskListItem): string | undefined {
+function resolveCurrentStep(
+  projectDir: string,
+  task: TaskListItem,
+  onWarning: (warning: string) => void,
+): string | undefined {
   const runSlug = task.runSlug;
   if (!runSlug) {
     return undefined;
@@ -32,13 +36,13 @@ function resolveCurrentStep(projectDir: string, task: TaskListItem): string | un
 
   const worktreePath = resolveSafeWorktreePath(projectDir, task.worktreePath);
   if (worktreePath) {
-    const worktreeStep = findRunningStepByRunSlug(worktreePath, runSlug);
+    const worktreeStep = findRunningStepByRunSlug(worktreePath, runSlug, onWarning);
     if (worktreeStep) {
       return worktreeStep;
     }
   }
 
-  return findRunningStepByRunSlug(projectDir, runSlug);
+  return findRunningStepByRunSlug(projectDir, runSlug, onWarning);
 }
 
 function buildConfirmationMessage(task: TaskListItem): string {
@@ -62,8 +66,8 @@ export async function forceFailRunningTask(
   }
 
   try {
-    const step = resolveCurrentStep(projectDir, task);
-    const runner = new TaskRunner(projectDir);
+    const step = resolveCurrentStep(projectDir, task, warn);
+    const runner = new TaskRunner(projectDir, { onWarning: warn });
     runner.forceFailRunningTask(task.name, {
       step,
       error: FORCE_FAIL_ERROR,

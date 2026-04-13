@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import type { NdjsonRecord, PromptLogRecord } from '../../../shared/utils/index.js';
+import type { NdjsonRecord, NdjsonWorkflowStackEntry, PromptLogRecord } from '../../../shared/utils/index.js';
 import {
   buildPhaseExecutionId,
   parsePhaseExecutionId,
@@ -8,6 +8,7 @@ import type {
   TraceStep,
   TracePhase,
 } from './traceReportTypes.js';
+import { buildWorkflowStepScopeKey } from './workflowStepScope.js';
 
 interface PromptRecord extends PromptLogRecord {
   timestamp: string;
@@ -29,8 +30,12 @@ export function parseJsonl<T>(path: string): T[] {
   return lines.map((line) => JSON.parse(line) as T);
 }
 
-function stepKey(step: string, iteration: number): string {
-  return `${step}:${iteration}`;
+function stepScopeKey(step: string, stack: NdjsonWorkflowStackEntry[] | undefined): string {
+  return buildWorkflowStepScopeKey(step, stack);
+}
+
+function stepKey(step: string, iteration: number, stack: NdjsonWorkflowStackEntry[] | undefined): string {
+  return `${stepScopeKey(step, stack)}:${iteration}`;
 }
 
 function createPhaseExecutionId(
@@ -67,8 +72,10 @@ function ensureStep(
   iteration: number,
   timestamp: string,
   fallbackPersona: string,
+  workflow?: string,
+  stack?: NdjsonWorkflowStackEntry[],
 ): TraceStep {
-  const key = stepKey(step, iteration);
+  const key = stepKey(step, iteration, stack);
   const existing = stepsByKey.get(key);
   if (existing) {
     return existing;
@@ -77,6 +84,8 @@ function ensureStep(
     step,
     persona: fallbackPersona,
     iteration,
+    workflow,
+    stack,
     startedAt: timestamp,
     phases: [],
   };
@@ -99,7 +108,7 @@ export function buildTraceFromRecords(
   const stepsByKey = new Map<string, TraceStep>();
   const phasesByExecutionId = new Map<string, { step: TraceStep; index: number }>();
   const phaseExecutionCounters = new Map<string, number>();
-  const latestIterationByStep = new Map<string, number>();
+  const latestIterationByStepScope = new Map<string, number>();
 
   let traceStartedAt = '';
 
@@ -110,32 +119,39 @@ export function buildTraceFromRecords(
     }
 
     if (record.type === 'step_start') {
-      latestIterationByStep.set(record.step, record.iteration);
+      latestIterationByStepScope.set(stepScopeKey(record.step, record.stack), record.iteration);
       const traceStep = ensureStep(
         stepsByKey,
         record.step,
         record.iteration,
         record.timestamp,
         record.persona,
+        record.workflow,
+        record.stack,
       );
       traceStep.persona = record.persona;
+      traceStep.workflow = record.workflow;
+      traceStep.stack = record.stack;
       traceStep.instruction = record.instruction;
       continue;
     }
 
     if (record.type === 'step_complete') {
-      const iteration = latestIterationByStep.get(record.step);
-      if (iteration == null) {
+      if (record.iteration == null) {
         throw new Error(`Missing iteration for step_complete: ${record.step}`);
       }
       const traceStep = ensureStep(
         stepsByKey,
         record.step,
-        iteration,
+        record.iteration,
         record.timestamp,
         record.persona,
+        record.workflow,
+        record.stack,
       );
       traceStep.completedAt = record.timestamp;
+      traceStep.workflow = record.workflow;
+      traceStep.stack = record.stack;
       traceStep.result = {
         status: record.status,
         content: record.content,
@@ -148,7 +164,7 @@ export function buildTraceFromRecords(
     }
 
     if (record.type === 'phase_start') {
-      const iteration = record.iteration ?? latestIterationByStep.get(record.step);
+      const iteration = record.iteration ?? latestIterationByStepScope.get(stepScopeKey(record.step, record.stack));
       if (iteration == null) {
         throw new Error(`Missing iteration for phase_start: ${record.step}:${record.phase}`);
       }
@@ -158,6 +174,8 @@ export function buildTraceFromRecords(
         iteration,
         record.timestamp,
         record.step,
+        record.workflow,
+        record.stack,
       );
       const resolvedExecutionId =
         record.phaseExecutionId
@@ -187,7 +205,7 @@ export function buildTraceFromRecords(
       const iteration =
         record.iteration
         ?? iterationFromId
-        ?? latestIterationByStep.get(record.step);
+        ?? latestIterationByStepScope.get(stepScopeKey(record.step, record.stack));
       if (iteration == null) {
         throw new Error(`Missing iteration for phase_complete: ${record.step}:${record.phase}`);
       }

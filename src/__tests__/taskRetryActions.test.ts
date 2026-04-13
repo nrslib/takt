@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { attachWorkflowSourcePath, attachWorkflowTrustInfo } from '../infra/config/loaders/workflowSourceMetadata.js';
 
 const {
   mockExistsSync,
@@ -13,6 +14,7 @@ const {
   mockFindPreviousOrderContent,
   mockLoadRunSessionContext,
   mockFormatRunSessionForPrompt,
+  mockReadRunMetaBySlug,
   mockStartReExecution,
   mockRequeueTask,
   mockExecuteAndCompleteTask,
@@ -46,6 +48,7 @@ const {
     runStepLogs: '',
     runReports: '',
   })),
+  mockReadRunMetaBySlug: vi.fn(() => null),
   mockStartReExecution: vi.fn(),
   mockRequeueTask: vi.fn(),
   mockExecuteAndCompleteTask: vi.fn(),
@@ -102,6 +105,10 @@ vi.mock('../features/interactive/index.js', () => ({
   formatRunSessionForPrompt: (...args: unknown[]) => mockFormatRunSessionForPrompt(...args),
   runRetryMode: (...args: unknown[]) => mockRunRetryMode(...args),
   findPreviousOrderContent: (...args: unknown[]) => mockFindPreviousOrderContent(...args),
+}));
+
+vi.mock('../core/workflow/run/run-meta.js', () => ({
+  readRunMetaBySlug: (...args: unknown[]) => mockReadRunMetaBySlug(...args),
 }));
 
 vi.mock('../infra/task/index.js', () => ({
@@ -185,6 +192,7 @@ beforeEach(() => {
     stepLogs: [],
     reports: [],
   });
+  mockReadRunMetaBySlug.mockReturnValue(null);
   mockStartReExecution.mockReturnValue({
     name: 'my-task',
     content: 'Do something',
@@ -249,6 +257,134 @@ describe('retryFailedTask', () => {
     );
   });
 
+  it('should prefer run meta resume_point root step as retry default', async () => {
+    mockFindRunForTask.mockReturnValue('run-1');
+    mockLoadWorkflowByIdentifier.mockReturnValue({
+      ...defaultWorkflowConfig,
+      initialStep: 'delegate',
+      steps: [
+        { name: 'delegate', kind: 'workflow_call', instruction: '', call: 'takt/coding', personaDisplayName: 'delegate', passPreviousResponse: true },
+        { name: 'final_review', persona: 'supervisor', instruction: '', personaDisplayName: 'supervisor', passPreviousResponse: true },
+      ],
+    });
+    mockReadRunMetaBySlug.mockReturnValue({
+      task: 'Do something',
+      workflow: 'default',
+      runSlug: 'run-1',
+      runRoot: '.takt/runs/run-1',
+      reportDirectory: '.takt/runs/run-1/reports',
+      contextDirectory: '.takt/runs/run-1/context',
+      logsDirectory: '.takt/runs/run-1/logs',
+      status: 'failed',
+      startTime: '2026-04-13T00:00:00.000Z',
+      resumePoint: {
+        version: 1,
+        stack: [
+          { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
+          { workflow: 'takt/coding', step: 'review', kind: 'agent' },
+        ],
+        iteration: 7,
+        elapsed_ms: 183245,
+      },
+    });
+    const task = makeFailedTask({
+      failure: { step: 'review', error: 'Boom' },
+    });
+
+    await retryFailedTask(task, '/project');
+
+    expect(mockSelectOptionWithDefault).toHaveBeenCalledWith(
+      'Start from step:',
+      expect.any(Array),
+      'delegate',
+    );
+    expect(mockReadRunMetaBySlug).toHaveBeenCalledWith(
+      '/project/.takt/worktrees/my-task',
+      'run-1',
+      expect.any(Function),
+    );
+  });
+
+  it('should keep root workflow_call step as retry default when child step was renamed', async () => {
+    mockFindRunForTask.mockReturnValue('run-1');
+    mockLoadWorkflowByIdentifier.mockReturnValue({
+      ...defaultWorkflowConfig,
+      initialStep: 'delegate',
+      steps: [
+        { name: 'delegate', kind: 'workflow_call', instruction: '', call: 'takt/coding', personaDisplayName: 'delegate', passPreviousResponse: true },
+        { name: 'final_review', persona: 'supervisor', instruction: '', personaDisplayName: 'supervisor', passPreviousResponse: true },
+      ],
+    });
+    mockReadRunMetaBySlug.mockReturnValue({
+      task: 'Do something',
+      workflow: 'default',
+      runSlug: 'run-1',
+      runRoot: '.takt/runs/run-1',
+      reportDirectory: '.takt/runs/run-1/reports',
+      contextDirectory: '.takt/runs/run-1/context',
+      logsDirectory: '.takt/runs/run-1/logs',
+      status: 'failed',
+      startTime: '2026-04-13T00:00:00.000Z',
+      resumePoint: {
+        version: 1,
+        stack: [
+          { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
+          { workflow: 'takt/coding', step: 'review', kind: 'agent' },
+        ],
+        iteration: 7,
+        elapsed_ms: 183245,
+      },
+    });
+
+    await retryFailedTask(makeFailedTask(), '/project');
+
+    expect(mockSelectOptionWithDefault).toHaveBeenCalledWith(
+      'Start from step:',
+      expect.any(Array),
+      'delegate',
+    );
+  });
+
+  it('should keep root workflow_call step as retry default when child workflow is gone', async () => {
+    mockFindRunForTask.mockReturnValue('run-1');
+    mockLoadWorkflowByIdentifier.mockReturnValue({
+      ...defaultWorkflowConfig,
+      initialStep: 'delegate',
+      steps: [
+        { name: 'delegate', kind: 'workflow_call', instruction: '', call: 'takt/coding', personaDisplayName: 'delegate', passPreviousResponse: true },
+        { name: 'final_review', persona: 'supervisor', instruction: '', personaDisplayName: 'supervisor', passPreviousResponse: true },
+      ],
+    });
+    mockReadRunMetaBySlug.mockReturnValue({
+      task: 'Do something',
+      workflow: 'default',
+      runSlug: 'run-1',
+      runRoot: '.takt/runs/run-1',
+      reportDirectory: '.takt/runs/run-1/reports',
+      contextDirectory: '.takt/runs/run-1/context',
+      logsDirectory: '.takt/runs/run-1/logs',
+      status: 'failed',
+      startTime: '2026-04-13T00:00:00.000Z',
+      resumePoint: {
+        version: 1,
+        stack: [
+          { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
+          { workflow: 'takt/coding', step: 'review', kind: 'agent' },
+        ],
+        iteration: 7,
+        elapsed_ms: 183245,
+      },
+    });
+
+    await retryFailedTask(makeFailedTask(), '/project');
+
+    expect(mockSelectOptionWithDefault).toHaveBeenCalledWith(
+      'Start from step:',
+      expect.any(Array),
+      'delegate',
+    );
+  });
+
   it('should pass non-initial step as startStep', async () => {
     const task = makeFailedTask();
     mockSelectOptionWithDefault.mockResolvedValue('implement');
@@ -256,6 +392,68 @@ describe('retryFailedTask', () => {
     await retryFailedTask(task, '/project');
 
     expect(mockStartReExecution).toHaveBeenCalledWith('my-task', ['failed'], 'implement', '追加指示A');
+  });
+
+  it('should pass run meta resume_point when selected step matches root workflow_call step', async () => {
+    mockFindRunForTask.mockReturnValue('run-1');
+    const resumePoint = {
+      version: 1 as const,
+      stack: [
+        { workflow: 'default', step: 'implement', kind: 'workflow_call' as const },
+        { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
+      ],
+      iteration: 7,
+      elapsed_ms: 183245,
+    };
+    mockReadRunMetaBySlug.mockReturnValue({
+      task: 'Do something',
+      workflow: 'default',
+      runSlug: 'run-1',
+      runRoot: '.takt/runs/run-1',
+      reportDirectory: '.takt/runs/run-1/reports',
+      contextDirectory: '.takt/runs/run-1/context',
+      logsDirectory: '.takt/runs/run-1/logs',
+      status: 'failed',
+      startTime: '2026-04-13T00:00:00.000Z',
+      resumePoint,
+    });
+    mockSelectOptionWithDefault.mockResolvedValue('implement');
+    const task = makeFailedTask();
+
+    await retryFailedTask(task, '/project');
+
+    expect(mockStartReExecution).toHaveBeenCalledWith('my-task', ['failed'], 'implement', '追加指示A', resumePoint);
+  });
+
+  it('should drop run meta resume_point when user selects a different parent step', async () => {
+    mockFindRunForTask.mockReturnValue('run-1');
+    const resumePoint = {
+      version: 1 as const,
+      stack: [
+        { workflow: 'default', step: 'implement', kind: 'workflow_call' as const },
+        { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
+      ],
+      iteration: 7,
+      elapsed_ms: 183245,
+    };
+    mockReadRunMetaBySlug.mockReturnValue({
+      task: 'Do something',
+      workflow: 'default',
+      runSlug: 'run-1',
+      runRoot: '.takt/runs/run-1',
+      reportDirectory: '.takt/runs/run-1/reports',
+      contextDirectory: '.takt/runs/run-1/context',
+      logsDirectory: '.takt/runs/run-1/logs',
+      status: 'failed',
+      startTime: '2026-04-13T00:00:00.000Z',
+      resumePoint,
+    });
+    mockSelectOptionWithDefault.mockResolvedValue('review');
+    const task = makeFailedTask();
+
+    await retryFailedTask(task, '/project');
+
+    expect(mockStartReExecution).toHaveBeenCalledWith('my-task', ['failed'], 'review', '追加指示A');
   });
 
   it('should not pass startStep when initial step is selected', async () => {
@@ -284,6 +482,67 @@ describe('retryFailedTask', () => {
     expect(mockFindRunForTask).toHaveBeenCalledWith('/project/.takt/worktrees/my-task', 'Do something');
   });
 
+  it('should load retry workflow metadata from the existing worktree lookup root', async () => {
+    mockConfirm.mockResolvedValue(false);
+    mockSelectWorkflow.mockResolvedValue('selected-workflow');
+
+    await retryFailedTask(makeFailedTask(), '/project');
+
+    expect(mockLoadWorkflowByIdentifier).toHaveBeenCalledWith(
+      'selected-workflow',
+      '/project',
+      { lookupCwd: '/project/.takt/worktrees/my-task' },
+    );
+    expect(mockGetWorkflowDescription).toHaveBeenCalledWith(
+      'selected-workflow',
+      '/project',
+      3,
+      '/project/.takt/worktrees/my-task',
+    );
+  });
+
+  it('should load retry workflow paths relative to the existing worktree lookup root', async () => {
+    mockConfirm.mockResolvedValue(false);
+    mockSelectWorkflow.mockResolvedValue('./.takt/workflows/selected-workflow.yaml');
+
+    await retryFailedTask(makeFailedTask(), '/project');
+
+    expect(mockLoadWorkflowByIdentifier).toHaveBeenCalledWith(
+      './.takt/workflows/selected-workflow.yaml',
+      '/project',
+      { lookupCwd: '/project/.takt/worktrees/my-task' },
+    );
+    expect(mockGetWorkflowDescription).toHaveBeenCalledWith(
+      './.takt/workflows/selected-workflow.yaml',
+      '/project',
+      3,
+      '/project/.takt/worktrees/my-task',
+    );
+  });
+
+  it('should reject privileged worktree workflows during retry before selecting a step', async () => {
+    const workflow = attachWorkflowTrustInfo(attachWorkflowSourcePath({
+      ...defaultWorkflowConfig,
+      name: 'selected-workflow',
+      runtime: {
+        prepare: ['node'],
+      },
+    }, '/project/.takt/worktrees/my-task/.takt/workflows/selected-workflow.yaml'), {
+      source: 'worktree',
+      sourcePath: '/project/.takt/worktrees/my-task/.takt/workflows/selected-workflow.yaml',
+      isProjectTrustRoot: false,
+      isProjectWorkflowRoot: false,
+    });
+    mockConfirm.mockResolvedValue(false);
+    mockSelectWorkflow.mockResolvedValue('./.takt/workflows/selected-workflow.yaml');
+    mockLoadWorkflowByIdentifier.mockReturnValue(workflow);
+
+    await expect(retryFailedTask(makeFailedTask(), '/project')).rejects.toThrow(
+      'cannot use workflow-level runtime.prepare outside the project workflows root',
+    );
+    expect(mockSelectOptionWithDefault).not.toHaveBeenCalled();
+  });
+
   it('should show deprecated config warning when selected run order uses legacy provider fields', async () => {
     const task = makeFailedTask();
     mockFindPreviousOrderContent.mockReturnValue([
@@ -300,6 +559,21 @@ describe('retryFailedTask', () => {
 
     expect(mockWarn).toHaveBeenCalledTimes(1);
     expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('deprecated'));
+  });
+
+  it('should warn when run meta parsing fails during retry resume resolution', async () => {
+    const task = makeFailedTask();
+    mockFindRunForTask.mockReturnValue('run-1');
+    mockReadRunMetaBySlug.mockImplementation((_cwd: string, _slug: string, onWarning?: (warning: string) => void) => {
+      onWarning?.('Failed to parse run metadata at /tmp/meta.json: broken json');
+      return null;
+    });
+
+    await retryFailedTask(task, '/project');
+
+    expect(mockWarn).toHaveBeenCalledWith(
+      'Failed to parse run metadata at /tmp/meta.json: broken json',
+    );
   });
 
   it('should sanitize failure details before printing to terminal', async () => {
@@ -382,6 +656,43 @@ describe('retryFailedTask', () => {
     expect(mockExecuteAndCompleteTask).not.toHaveBeenCalled();
   });
 
+  it('should requeue task with task.data.resume_point when save_task keeps the root workflow_call step', async () => {
+    const resumePoint = {
+      version: 1 as const,
+      stack: [
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
+      ],
+      iteration: 7,
+      elapsed_ms: 183245,
+    };
+    mockLoadWorkflowByIdentifier.mockReturnValue({
+      ...defaultWorkflowConfig,
+      initialStep: 'delegate',
+      steps: [
+        { name: 'delegate', kind: 'workflow_call', instruction: '', call: 'takt/coding', personaDisplayName: 'delegate', passPreviousResponse: true },
+        { name: 'final_review', persona: 'supervisor', instruction: '', personaDisplayName: 'supervisor', passPreviousResponse: true },
+      ],
+    });
+    mockSelectOptionWithDefault.mockResolvedValue('delegate');
+    mockRunRetryMode.mockResolvedValue({ action: 'save_task', task: '追加指示A' });
+
+    const task = makeFailedTask({
+      data: {
+        task: 'Do something',
+        workflow: 'default',
+        resume_point: resumePoint,
+      },
+      failure: { step: 'review', error: 'Boom' },
+    });
+
+    const result = await retryFailedTask(task, '/project');
+
+    expect(result).toBe(true);
+    expect(mockRequeueTask).toHaveBeenCalledWith('my-task', ['failed'], undefined, '追加指示A', resumePoint);
+    expect(mockStartReExecution).not.toHaveBeenCalled();
+  });
+
   it('should sanitize task name in requeue confirmation', async () => {
     const task = makeFailedTask({ name: 'bad\x1b[31m-task\n' });
     mockRunRetryMode.mockResolvedValue({ action: 'save_task', task: '追加指示A' });
@@ -422,7 +733,11 @@ describe('retryFailedTask', () => {
       await retryFailedTask(task, '/project');
 
       expect(mockSelectWorkflow).not.toHaveBeenCalled();
-      expect(mockLoadWorkflowByIdentifier).toHaveBeenCalledWith('default', '/project');
+      expect(mockLoadWorkflowByIdentifier).toHaveBeenCalledWith(
+        'default',
+        '/project',
+        { lookupCwd: '/project/.takt/worktrees/my-task' },
+      );
     });
 
     it('should reuse previous workflow when only workflow alias is stored', async () => {
@@ -436,7 +751,11 @@ describe('retryFailedTask', () => {
         undefined,
         { workflow: 'default' },
       );
-      expect(mockLoadWorkflowByIdentifier).toHaveBeenCalledWith('default', '/project');
+      expect(mockLoadWorkflowByIdentifier).toHaveBeenCalledWith(
+        'default',
+        '/project',
+        { lookupCwd: '/project/.takt/worktrees/my-task' },
+      );
     });
 
     it('should call selectWorkflow when reuse is declined', async () => {

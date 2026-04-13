@@ -43,4 +43,25 @@ describe('validateWorkflowConfig', () => {
 
     expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow('missing-step');
   });
+
+  it('fails fast when workflow_call is configured without workflowCallResolver', () => {
+    const workflow = createWorkflow({
+      initialStep: 'delegate',
+      steps: [
+        {
+          name: 'delegate',
+          kind: 'workflow_call',
+          call: 'takt/coding',
+          personaDisplayName: 'delegate',
+          instruction: '',
+          passPreviousResponse: true,
+          rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+        },
+      ],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow(
+      'Configuration error: workflowCallResolver is required when workflow contains workflow_call steps',
+    );
+  });
 });

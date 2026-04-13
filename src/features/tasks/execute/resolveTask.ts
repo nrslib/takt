@@ -1,6 +1,10 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { resolveWorkflowConfigValue } from '../../../infra/config/index.js';
+import {
+  loadWorkflowByIdentifier,
+  resolveWorkflowCallTarget,
+  resolveWorkflowConfigValue,
+} from '../../../infra/config/index.js';
 import {
   type TaskInfo,
   buildTaskInstruction,
@@ -13,6 +17,8 @@ import {
   resolveTaskStartStepValue,
   TaskExecutionConfigSchema,
 } from '../../../infra/task/index.js';
+import type { WorkflowResumePoint } from '../../../core/models/index.js';
+import { trimResumePointStackForWorkflow } from '../../../core/workflow/run/resume-point.js';
 import { getGitProvider, type Issue } from '../../../infra/git/index.js';
 import { withProgress } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage, isRealPathInside } from '../../../shared/utils/index.js';
@@ -51,12 +57,58 @@ export interface ResolvedTaskExecution {
   baseBranch?: string;
   startStep?: string;
   retryNote?: string;
+  resumePoint?: WorkflowResumePoint;
   autoPr: boolean;
   draftPr: boolean;
   shouldPublishBranchToOrigin: boolean;
   issueNumber?: number;
   maxStepsOverride?: number;
   initialIterationOverride?: number;
+}
+
+function resolveRetryResume(
+  workflowIdentifier: string,
+  projectCwd: string,
+  lookupCwd: string,
+  configuredStartStep: string | undefined,
+  resumePoint: WorkflowResumePoint | undefined,
+): {
+  startStep?: string;
+  resumePoint?: WorkflowResumePoint;
+} {
+  if (!resumePoint) {
+    return configuredStartStep ? { startStep: configuredStartStep } : {};
+  }
+
+  const workflowConfig = loadWorkflowByIdentifier(workflowIdentifier, projectCwd, { lookupCwd });
+  if (!workflowConfig) {
+    return {
+      ...(configuredStartStep ? { startStep: configuredStartStep } : {}),
+    };
+  }
+
+  const resolvedResumePoint = trimResumePointStackForWorkflow({
+    workflow: workflowConfig,
+    resumePoint,
+    resolveWorkflowCall: (parentWorkflow, step) => resolveWorkflowCallTarget(
+      parentWorkflow,
+      step.call,
+      step.name,
+      projectCwd,
+      lookupCwd,
+    ),
+  });
+  const rootEntry = resolvedResumePoint?.stack[0];
+  if (rootEntry) {
+    return {
+      startStep: rootEntry.step,
+      resumePoint: resolvedResumePoint,
+    };
+  }
+
+  return {
+    ...(configuredStartStep ? { startStep: configuredStartStep } : {}),
+  };
 }
 
 function stageTaskSpecForExecution(
@@ -189,10 +241,17 @@ export async function resolveTaskExecution(
   }
 
   const resolvedReportDirName = reportDirName ?? generateReportDir(taskPrompt ?? task.content);
-  const startStep = resolveTaskStartStepValue(normalizedData);
+  const configuredStartStep = resolveTaskStartStepValue(normalizedData);
+  const retryResume = resolveRetryResume(
+    workflowIdentifier,
+    defaultCwd,
+    execCwd,
+    configuredStartStep,
+    normalizedData.resume_point as WorkflowResumePoint | undefined,
+  );
   const retryNote = data.retry_note;
   const maxStepsOverride = data.exceeded_max_steps;
-  const initialIterationOverride = data.exceeded_current_iteration;
+  const initialIterationOverride = data.exceeded_current_iteration ?? retryResume.resumePoint?.iteration;
 
   const autoPr = data.auto_pr ?? resolveWorkflowConfigValue(defaultCwd, 'autoPr') ?? false;
   const draftPr = data.draft_pr ?? resolveWorkflowConfigValue(defaultCwd, 'draftPr') ?? false;
@@ -211,8 +270,9 @@ export async function resolveTaskExecution(
     ...(branch ? { branch } : {}),
     ...(worktreePath ? { worktreePath } : {}),
     ...(baseBranch ? { baseBranch } : {}),
-    ...(startStep ? { startStep } : {}),
+    ...(retryResume.startStep ? { startStep: retryResume.startStep } : {}),
     ...(retryNote ? { retryNote } : {}),
+    ...(retryResume.resumePoint ? { resumePoint: retryResume.resumePoint } : {}),
     ...(data.issue !== undefined ? { issueNumber: data.issue } : {}),
     ...(maxStepsOverride !== undefined ? { maxStepsOverride } : {}),
     ...(initialIterationOverride !== undefined ? { initialIterationOverride } : {}),

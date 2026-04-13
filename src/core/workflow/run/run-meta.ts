@@ -1,6 +1,9 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { isPathInside, isValidReportDirName } from '../../../shared/utils/index.js';
+import { getErrorMessage } from '../../../shared/utils/error.js';
+import type { WorkflowResumePoint } from '../../models/types.js';
+import { buildRunPaths } from './run-paths.js';
 
 export interface RunMeta {
   task: string;
@@ -16,9 +19,32 @@ export interface RunMeta {
   iterations?: number;
   currentStep?: string;
   currentIteration?: number;
+  resumePoint?: WorkflowResumePoint;
 }
 
-export function readRunMeta(metaPath: string): RunMeta | null {
+interface RawRunMeta extends RunMeta {
+  resume_point?: WorkflowResumePoint;
+}
+
+export type RunMetaWarningHandler = (warning: string) => void;
+
+function normalizeRunMeta(raw: RawRunMeta): RunMeta {
+  return {
+    ...raw,
+    resumePoint: raw.resumePoint ?? raw.resume_point,
+  };
+}
+
+function emitRunMetaWarning(
+  metaPath: string,
+  error: unknown,
+  onWarning?: RunMetaWarningHandler,
+): null {
+  onWarning?.(`Failed to parse run metadata at ${metaPath}: ${getErrorMessage(error)}`);
+  return null;
+}
+
+export function readRunMeta(metaPath: string, onWarning?: RunMetaWarningHandler): RunMeta | null {
   if (!existsSync(metaPath)) {
     return null;
   }
@@ -29,13 +55,13 @@ export function readRunMeta(metaPath: string): RunMeta | null {
   }
 
   try {
-    return JSON.parse(raw) as RunMeta;
-  } catch {
-    return null;
+    return normalizeRunMeta(JSON.parse(raw) as RawRunMeta);
+  } catch (error) {
+    return emitRunMetaWarning(metaPath, error, onWarning);
   }
 }
 
-export function readRunMetaBySlug(cwd: string, slug: string): RunMeta | null {
+export function readRunMetaBySlug(cwd: string, slug: string, onWarning?: RunMetaWarningHandler): RunMeta | null {
   if (!isValidReportDirName(slug)) {
     return null;
   }
@@ -46,7 +72,20 @@ export function readRunMetaBySlug(cwd: string, slug: string): RunMeta | null {
     return null;
   }
 
-  return readRunMeta(metaPath);
+  const meta = readRunMeta(metaPath, onWarning);
+  if (!meta) {
+    return null;
+  }
+
+  const runPaths = buildRunPaths(cwd, slug);
+  return {
+    ...meta,
+    runSlug: slug,
+    runRoot: runPaths.runRootRel,
+    reportDirectory: runPaths.reportsRel,
+    contextDirectory: runPaths.contextRel,
+    logsDirectory: runPaths.logsRel,
+  };
 }
 
 function resolveRunningStep(meta: RunMeta | null): string | undefined {
@@ -54,13 +93,20 @@ function resolveRunningStep(meta: RunMeta | null): string | undefined {
     return undefined;
   }
 
-  if (meta.status !== 'running' || !meta.currentStep) {
+  if (meta.status !== 'running') {
     return undefined;
   }
 
-  return meta.currentStep;
+  if (meta.currentStep) {
+    return meta.currentStep;
+  }
+  return undefined;
 }
 
-export function findRunningStepByRunSlug(cwd: string, runSlug: string): string | undefined {
-  return resolveRunningStep(readRunMetaBySlug(cwd, runSlug));
+export function findRunningStepByRunSlug(
+  cwd: string,
+  runSlug: string,
+  onWarning?: RunMetaWarningHandler,
+): string | undefined {
+  return resolveRunningStep(readRunMetaBySlug(cwd, runSlug, onWarning));
 }

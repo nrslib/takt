@@ -4,6 +4,7 @@ import { ABORT_STEP, COMPLETE_STEP, ERROR_MESSAGES } from '../constants.js';
 import type { RuntimeStepResolution, StepProviderInfo, WorkflowEngineOptions } from '../types.js';
 import { incrementStepIteration } from './state-manager.js';
 import { handleBlocked } from './blocked-handler.js';
+import { isDelegatedWorkflowStep } from '../step-kind.js';
 
 const log = createLogger('workflow-run-loop');
 
@@ -23,10 +24,16 @@ interface WorkflowRunLoopDeps {
     triggeringStep: WorkflowStep,
     triggeringRuntime?: RuntimeStepResolution,
   ) => Promise<string>;
-  runStep: (step: WorkflowStep, prebuiltInstruction?: string) => Promise<{ response: AgentResponse; instruction: string }>;
+  runStep: (
+    step: WorkflowStep,
+    prebuiltInstruction?: string,
+    runtime?: RuntimeStepResolution,
+  ) => Promise<{ response: AgentResponse; instruction: string }>;
   buildInstruction: (step: WorkflowStep, stepIteration: number) => string;
   buildPhase1Instruction: (step: WorkflowStep, instruction: string) => string;
   resolveStepProviderModel: (step: WorkflowStep, runtime?: RuntimeStepResolution) => StepProviderInfo;
+  resolveRuntimeForStep: (step: WorkflowStep) => RuntimeStepResolution | undefined;
+  setActiveStep: (step: WorkflowStep, iteration: number) => void;
   addUserInput: (input: string) => void;
   emit: (event: string, ...args: unknown[]) => void;
   updateMaxSteps: (maxSteps: number) => void;
@@ -75,10 +82,9 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
     }
 
     deps.state.iteration++;
-    const isDelegated = step.mode === 'system'
-      || (step.parallel && step.parallel.length > 0)
-      || !!step.arpeggio
-      || !!step.teamLeader;
+    const isDelegated = isDelegatedWorkflowStep(step);
+    const activeIteration = deps.state.iteration;
+    const stepRuntime = deps.resolveRuntimeForStep(step);
     let prebuiltInstruction: string | undefined;
     if (!isDelegated) {
       const stepIteration = incrementStepIteration(deps.state, step.name);
@@ -87,10 +93,11 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
     const stepInstruction = prebuiltInstruction
       ? deps.buildPhase1Instruction(step, prebuiltInstruction)
       : '';
-    deps.emit('step:start', step, deps.state.iteration, stepInstruction, deps.resolveStepProviderModel(step));
+    deps.setActiveStep(step, activeIteration);
+    deps.emit('step:start', step, activeIteration, stepInstruction, deps.resolveStepProviderModel(step, stepRuntime));
 
     try {
-      const { response, instruction } = await deps.runStep(step, prebuiltInstruction);
+      const { response, instruction } = await deps.runStep(step, prebuiltInstruction, stepRuntime);
       deps.emit('step:complete', step, response, instruction);
 
       if (response.status === 'blocked') {
@@ -149,9 +156,7 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
           threshold: cycleCheck.monitor.threshold,
         });
         deps.emit('step:cycle_detected', cycleCheck.monitor, cycleCheck.cycleCount);
-        nextStep = await deps.runLoopMonitorJudge(cycleCheck.monitor, cycleCheck.cycleCount, step, {
-          providerInfo: deps.resolveStepProviderModel(step),
-        });
+        nextStep = await deps.runLoopMonitorJudge(cycleCheck.monitor, cycleCheck.cycleCount, step, stepRuntime);
       }
 
       if (nextStep === COMPLETE_STEP) {
@@ -205,6 +210,7 @@ export async function runSingleWorkflowIteration(deps: WorkflowRunLoopDeps): Pro
   }
 
   deps.state.iteration++;
+  deps.setActiveStep(step, deps.state.iteration);
   const { response } = await deps.runStep(step);
 
   if (response.status === 'blocked') {

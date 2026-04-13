@@ -219,7 +219,7 @@ describe('system workflow schema', () => {
     );
   });
 
-  it('system_inputs または effects を持つ step では mode: system を必須にする', () => {
+  it('system_inputs または effects を持つ step では kind: system を必須にする', () => {
     const result = WorkflowStepRawSchema.safeParse({
       name: 'route_context',
       system_inputs: [
@@ -238,13 +238,13 @@ describe('system workflow schema', () => {
       expect.arrayContaining([
         expect.objectContaining({
           path: ['mode'],
-          message: 'Steps with "system_inputs" or "effects" must set mode to "system"',
+          message: 'Steps with "system_inputs" or "effects" must set kind to "system"',
         }),
       ]),
     );
   });
 
-  it('空の system_inputs でも mode: system を必須にする', () => {
+  it('空の system_inputs でも kind: system を必須にする', () => {
     const result = WorkflowStepRawSchema.safeParse({
       name: 'route_context',
       system_inputs: [],
@@ -261,13 +261,13 @@ describe('system workflow schema', () => {
       expect.arrayContaining([
         expect.objectContaining({
           path: ['mode'],
-          message: 'Steps with "system_inputs" or "effects" must set mode to "system"',
+          message: 'Steps with "system_inputs" or "effects" must set kind to "system"',
         }),
       ]),
     );
   });
 
-  it('空の effects でも mode: system を必須にする', () => {
+  it('空の effects でも kind: system を必須にする', () => {
     const result = WorkflowStepRawSchema.safeParse({
       name: 'route_context',
       effects: [],
@@ -284,7 +284,7 @@ describe('system workflow schema', () => {
       expect.arrayContaining([
         expect.objectContaining({
           path: ['mode'],
-          message: 'Steps with "system_inputs" or "effects" must set mode to "system"',
+          message: 'Steps with "system_inputs" or "effects" must set kind to "system"',
         }),
       ]),
     );
@@ -1061,7 +1061,7 @@ steps:
     try {
       const workflow = loadWorkflowFromFile(workflowPath, projectDir);
 
-      expect(workflow.steps[0]?.mode).toBe('system');
+      expect(workflow.steps[0]?.kind).toBe('system');
       expect(workflow.steps[0]?.systemInputs).toEqual([
         { type: 'task_context', source: 'current_task', as: 'task' },
       ]);

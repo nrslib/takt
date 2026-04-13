@@ -20,13 +20,19 @@ export interface RunPaths {
   readonly metaAbs: string;
 }
 
-export function buildRunPaths(cwd: string, slug: string): RunPaths {
+function joinRel(base: string, namespace: string[] | undefined): string {
+  return namespace && namespace.length > 0
+    ? join(base, ...namespace)
+    : base;
+}
+
+export function buildRunPaths(cwd: string, slug: string, namespace?: string[]): RunPaths {
   const runRootRel = `.takt/runs/${slug}`;
-  const reportsRel = `${runRootRel}/reports`;
-  const contextRel = `${runRootRel}/context`;
-  const contextKnowledgeRel = `${contextRel}/knowledge`;
-  const contextPolicyRel = `${contextRel}/policy`;
-  const contextPreviousResponsesRel = `${contextRel}/previous_responses`;
+  const reportsRel = joinRel(`${runRootRel}/reports`, namespace);
+  const contextRel = joinRel(`${runRootRel}/context`, namespace);
+  const contextKnowledgeRel = join(contextRel, 'knowledge');
+  const contextPolicyRel = join(contextRel, 'policy');
+  const contextPreviousResponsesRel = join(contextRel, 'previous_responses');
   const logsRel = `${runRootRel}/logs`;
   const metaRel = `${runRootRel}/meta.json`;
 

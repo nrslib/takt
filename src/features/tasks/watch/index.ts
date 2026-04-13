@@ -12,6 +12,7 @@ import {
   success,
   status,
   blankLine,
+  warn,
 } from '../../../shared/ui/index.js';
 import { executeAndCompleteTask } from '../execute/taskExecution.js';
 import { EXIT_SIGINT } from '../../../shared/exitCodes.js';
@@ -23,7 +24,7 @@ import type { TaskExecutionOptions } from '../execute/types.js';
  * Runs until Ctrl+C.
  */
 export async function watchTasks(cwd: string, options?: TaskExecutionOptions): Promise<void> {
-  const taskRunner = new TaskRunner(cwd);
+  const taskRunner = new TaskRunner(cwd, { onWarning: warn });
   const watcher = new TaskWatcher(cwd);
   const recovered = taskRunner.recoverInterruptedRunningTasks();
 

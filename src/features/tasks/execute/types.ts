@@ -6,6 +6,7 @@ import type { Language } from '../../../core/models/index.js';
 import type { PersonaProviderEntry } from '../../../core/models/config-types.js';
 import type { ProviderPermissionProfiles } from '../../../core/models/provider-profiles.js';
 import type { StepProviderOptions } from '../../../core/models/workflow-types.js';
+import type { WorkflowResumePoint } from '../../../core/models/index.js';
 import type { ProviderType } from '../../../infra/providers/index.js';
 import type { ProviderOptionsOriginResolver, ProviderOptionsSource } from '../../../core/workflow/types.js';
 
@@ -14,6 +15,7 @@ export interface ExceededInfo {
   currentStep: string;
   newMaxSteps: number;
   currentIteration: number;
+  resumePoint?: WorkflowResumePoint;
 }
 
 /** Result of workflow execution */
@@ -67,6 +69,8 @@ export interface WorkflowExecutionOptions {
   startStep?: string;
   /** Retry note explaining why task is being retried */
   retryNote?: string;
+  /** Resume point for workflow_call-aware retries */
+  resumePoint?: WorkflowResumePoint;
   /** Override report directory name (e.g. "20260201-015714-foptng") */
   reportDirName?: string;
   /** External abort signal for parallel execution — when provided, SIGINT handling is delegated to caller */
@@ -109,6 +113,8 @@ export interface ExecuteTaskOptions {
   startStep?: string;
   /** Retry note explaining why task is being retried */
   retryNote?: string;
+  /** Resume point for workflow_call-aware retries */
+  resumePoint?: WorkflowResumePoint;
   /** Override report directory name (e.g. "20260201-015714-foptng") */
   reportDirName?: string;
   /** External abort signal for parallel execution — when provided, SIGINT handling is delegated to caller */

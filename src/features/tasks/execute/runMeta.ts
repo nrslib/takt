@@ -8,6 +8,12 @@
 import { writeFileAtomic, ensureDir } from '../../../infra/config/index.js';
 import type { RunMeta } from '../../../core/workflow/run/run-meta.js';
 import type { RunPaths } from '../../../core/workflow/run/run-paths.js';
+import type { WorkflowResumePoint } from '../../../core/models/index.js';
+
+type PersistedRunMeta = Omit<RunMeta, 'resumePoint'> & {
+  resume_point?: WorkflowResumePoint;
+};
+
 export class RunMetaManager {
   private readonly runMeta: RunMeta;
   private readonly metaAbs: string;
@@ -27,26 +33,41 @@ export class RunMetaManager {
       startTime: new Date().toISOString(),
     };
     ensureDir(runPaths.runRootAbs);
-    writeFileAtomic(this.metaAbs, JSON.stringify(this.runMeta, null, 2));
+    this.writeRunMeta(this.runMeta);
   }
 
-  updateStep(stepName: string, iteration: number): void {
+  updateStep(stepName: string, iteration: number, resumePoint?: WorkflowResumePoint): void {
     this.runMeta.currentStep = stepName;
     this.runMeta.currentIteration = iteration;
-    writeFileAtomic(this.metaAbs, JSON.stringify(this.runMeta, null, 2));
+    this.runMeta.resumePoint = resumePoint;
+    this.writeRunMeta(this.runMeta);
+  }
+
+  updateResumePoint(resumePoint?: WorkflowResumePoint): void {
+    this.runMeta.resumePoint = resumePoint;
+    this.writeRunMeta(this.runMeta);
   }
 
   finalize(status: 'completed' | 'aborted', iterations?: number): void {
-    writeFileAtomic(this.metaAbs, JSON.stringify({
+    this.writeRunMeta({
       ...this.runMeta,
       status,
       endTime: new Date().toISOString(),
       ...(iterations != null ? { iterations } : {}),
-    } satisfies RunMeta, null, 2));
+    } satisfies RunMeta);
     this.finalized = true;
   }
 
   get isFinalized(): boolean {
     return this.finalized;
+  }
+
+  private writeRunMeta(meta: RunMeta): void {
+    const serialized: PersistedRunMeta = {
+      ...meta,
+      ...(meta.resumePoint ? { resume_point: meta.resumePoint } : {}),
+    };
+    delete (serialized as Partial<RunMeta>).resumePoint;
+    writeFileAtomic(this.metaAbs, JSON.stringify(serialized, null, 2));
   }
 }

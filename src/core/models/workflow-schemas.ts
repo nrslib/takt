@@ -4,6 +4,7 @@
 
 import { z } from 'zod/v4';
 import { INTERACTIVE_MODES } from './interactive-mode.js';
+import { getWorkflowStepKind } from './workflow-step-kind.js';
 import {
   McpServersSchema,
   StepProviderOptionsSchema,
@@ -101,14 +102,34 @@ export const ParallelSubStepRawSchema = z.object({
   rules: z.array(WorkflowRuleSchema).optional(),
   output_contracts: OutputContractsFieldSchema,
   quality_gates: QualityGatesSchema,
-  pass_previous_response: z.boolean().optional().default(true),
+  pass_previous_response: z.boolean().optional(),
 });
 
 /** Workflow step schema - raw YAML format */
+const WorkflowStepKindSchema = z.enum(['agent', 'system', 'workflow_call']);
+
+const WorkflowCallOverridesRawSchema = z.object({
+  provider: ProviderReferenceSchema.optional(),
+  model: z.string().optional(),
+  provider_options: StepProviderOptionsSchema,
+}).strict().refine(
+  (data) => data.provider !== undefined || data.model !== undefined || data.provider_options !== undefined,
+  {
+    message: "workflow_call overrides require at least one of 'provider', 'model', or 'provider_options'",
+  },
+);
+
+const WorkflowSubworkflowRawSchema = z.object({
+  callable: z.boolean().optional(),
+}).strict();
+
 export const WorkflowStepRawSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
-  mode: z.enum(['agent', 'system']).optional(),
+  kind: WorkflowStepKindSchema.optional(),
+  mode: z.literal('system').optional(),
+  call: z.string().min(1).optional(),
+  overrides: WorkflowCallOverridesRawSchema.optional(),
   session: z.enum(['continue', 'refresh']).optional(),
   persona: z.string().optional(),
   persona_name: z.string().optional(),
@@ -131,7 +152,7 @@ export const WorkflowStepRawSchema = z.object({
   rules: z.array(WorkflowRuleSchema).optional(),
   output_contracts: OutputContractsFieldSchema,
   quality_gates: QualityGatesSchema,
-  pass_previous_response: z.boolean().optional().default(true),
+  pass_previous_response: z.boolean().optional(),
   parallel: z.array(ParallelSubStepRawSchema).optional(),
   concurrency: z.number().int().min(1).optional(),
   arpeggio: ArpeggioConfigRawSchema.optional(),
@@ -143,6 +164,76 @@ export const WorkflowStepRawSchema = z.object({
     path: ['parallel'],
   },
 ).superRefine((data, ctx) => {
+  if (data.kind !== undefined && data.mode !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['kind'],
+      message: 'Step kind must be expressed with either "kind" or "mode", not both',
+    });
+  }
+
+  const stepKind = getWorkflowStepKind(data);
+
+  if (data.call !== undefined && stepKind !== 'workflow_call') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['call'],
+      message: 'Only workflow_call steps can declare "call"',
+    });
+  }
+
+  if (data.overrides !== undefined && stepKind !== 'workflow_call') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['overrides'],
+      message: 'Only workflow_call steps can declare "overrides"',
+    });
+  }
+
+  if (stepKind === 'workflow_call') {
+    if (data.call === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['call'],
+        message: 'workflow_call step requires "call"',
+      });
+    }
+
+    for (const field of [
+      'persona',
+      'persona_name',
+      'policy',
+      'knowledge',
+      'mcp_servers',
+      'provider',
+      'model',
+      'provider_options',
+      'required_permission_mode',
+      'edit',
+      'instruction',
+      'session',
+      'delay_before_ms',
+      'structured_output',
+      'system_inputs',
+      'effects',
+      'parallel',
+      'concurrency',
+      'arpeggio',
+      'team_leader',
+      'output_contracts',
+      'quality_gates',
+      'pass_previous_response',
+    ] as const) {
+      if (data[field] !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [field],
+          message: `workflow_call step does not allow "${field}"`,
+        });
+      }
+    }
+  }
+
   validateSystemStepFields(data, ctx);
 });
 
@@ -175,6 +266,7 @@ export const InteractiveModeSchema = z.enum(INTERACTIVE_MODES);
 export const WorkflowConfigRawSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
+  subworkflow: WorkflowSubworkflowRawSchema.optional(),
   workflow_config: WorkflowProviderOptionsSchema,
   permission_mode: z.never().optional(),
   schemas: z.record(z.string(), z.string()).optional(),

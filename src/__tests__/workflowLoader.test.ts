@@ -15,6 +15,7 @@ import {
   loadAllWorkflows,
   loadAllWorkflowsWithSources,
 } from '../infra/config/loaders/workflowLoader.js';
+import { getWorkflowTrustInfo } from '../infra/config/loaders/workflowTrustSource.js';
 
 const SAMPLE_WORKFLOW = `name: test-workflow
 description: Test workflow
@@ -207,6 +208,91 @@ steps:
 
     expect(workflow).not.toBeNull();
     expect(workflow!.name).toBe('test-workflow');
+  });
+
+  it('should prefer project workflows over worktree workflows for named lookup', () => {
+    const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
+    const worktreeDir = join(tempDir, '.takt', 'worktrees', 'feature-branch');
+    const worktreeWorkflowsDir = join(worktreeDir, '.takt', 'workflows');
+    mkdirSync(projectWorkflowsDir, { recursive: true });
+    mkdirSync(worktreeWorkflowsDir, { recursive: true });
+    writeFileSync(join(projectWorkflowsDir, 'shared.yaml'), SAMPLE_WORKFLOW);
+    writeFileSync(join(worktreeWorkflowsDir, 'shared.yaml'), `name: worktree-workflow
+description: Worktree workflow
+initial_step: step1
+max_steps: 1
+
+steps:
+  - name: step1
+    persona: reviewer
+    instruction: "{task}"
+`);
+
+    const workflow = loadWorkflowByIdentifier('shared', tempDir, { lookupCwd: worktreeDir });
+
+    expect(workflow).not.toBeNull();
+    expect(workflow!.name).toBe('test-workflow');
+    expect(getWorkflowTrustInfo(workflow!, tempDir)).toMatchObject({
+      source: 'project',
+      isProjectTrustRoot: true,
+      isProjectWorkflowRoot: true,
+    });
+  });
+
+  it('should mark worktree workflow paths as worktree trust when lookupCwd points to a worktree', () => {
+    const worktreeDir = join(tempDir, '.takt', 'worktrees', 'feature-branch');
+    const worktreeWorkflowsDir = join(worktreeDir, '.takt', 'workflows');
+    mkdirSync(worktreeWorkflowsDir, { recursive: true });
+    writeFileSync(join(worktreeWorkflowsDir, 'shared.yaml'), `name: worktree-workflow
+description: Worktree workflow
+initial_step: step1
+max_steps: 1
+
+steps:
+  - name: step1
+    persona: reviewer
+    instruction: "{task}"
+`);
+
+    const workflow = loadWorkflowByIdentifier('./.takt/workflows/shared.yaml', tempDir, { lookupCwd: worktreeDir });
+
+    expect(workflow).not.toBeNull();
+    expect(workflow!.name).toBe('worktree-workflow');
+    expect(getWorkflowTrustInfo(workflow!, tempDir)).toMatchObject({
+      source: 'worktree',
+      isProjectTrustRoot: false,
+      isProjectWorkflowRoot: false,
+    });
+  });
+
+  it('should classify privileged worktree-local workflow paths from the default external worktree root as worktree trust', () => {
+    const worktreeDir = join(tempDir, '..', 'takt-worktrees', 'feature-branch');
+    const worktreeWorkflowsDir = join(worktreeDir, '.takt', 'workflows');
+    mkdirSync(worktreeWorkflowsDir, { recursive: true });
+    writeFileSync(join(worktreeWorkflowsDir, 'auto-improvement-loop.yaml'), `name: auto-improvement-loop
+description: worktree system workflow
+initial_step: route_context
+max_steps: 2
+
+steps:
+  - name: route_context
+    mode: system
+    effects:
+      - type: merge_pr
+        pr: 42
+    rules:
+      - when: "true"
+        next: COMPLETE
+`);
+
+    const workflow = loadWorkflowByIdentifier('./.takt/workflows/auto-improvement-loop.yaml', tempDir, { lookupCwd: worktreeDir });
+
+    expect(workflow).not.toBeNull();
+    expect(getWorkflowTrustInfo(workflow!, tempDir)).toMatchObject({
+      source: 'worktree',
+      isProjectTrustRoot: false,
+      isProjectWorkflowRoot: false,
+    });
   });
 
   it('should load privileged project-local workflows by name', () => {

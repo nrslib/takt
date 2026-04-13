@@ -19,7 +19,8 @@ export function formatElapsedTime(startTime: string, endTime: string): string {
   return `${Math.floor(elapsedSec / 60)}m ${Math.floor(elapsedSec % 60)}s`;
 }
 
-export function detectStepType(step: { parallel?: unknown; arpeggio?: unknown; teamLeader?: unknown }): 'normal' | 'parallel' | 'arpeggio' | 'team_leader' {
+export function detectStepType(step: { kind?: string; parallel?: unknown; arpeggio?: unknown; teamLeader?: unknown }): 'normal' | 'parallel' | 'arpeggio' | 'team_leader' | 'workflow_call' {
+  if (step.kind === 'workflow_call') return 'workflow_call';
   if (step.parallel) return 'parallel';
   if (step.arpeggio) return 'arpeggio';
   if (step.teamLeader) return 'team_leader';

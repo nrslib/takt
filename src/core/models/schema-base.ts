@@ -168,6 +168,7 @@ export const RuntimeConfigSchema = z.object({
 /** Workflow-level provider options schema */
 export const WorkflowProviderOptionsSchema = z.object({
   provider: ProviderReferenceSchema.optional(),
+  model: z.string().optional(),
   provider_options: StepProviderOptionsSchema,
   runtime: RuntimeConfigSchema,
 }).optional();

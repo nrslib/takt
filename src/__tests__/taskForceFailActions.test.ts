@@ -8,12 +8,14 @@ import { isStaleRunningTask } from '../infra/task/index.js';
 const {
   mockConfirm,
   mockSuccess,
+  mockWarn,
   mockLogError,
   mockForceFailRunningTask,
   mockRunnerProjectDir,
 } = vi.hoisted(() => ({
   mockConfirm: vi.fn(),
   mockSuccess: vi.fn(),
+  mockWarn: vi.fn(),
   mockLogError: vi.fn(),
   mockForceFailRunningTask: vi.fn(),
   mockRunnerProjectDir: vi.fn(),
@@ -25,6 +27,7 @@ vi.mock('../shared/prompt/index.js', () => ({
 
 vi.mock('../shared/ui/index.js', () => ({
   success: mockSuccess,
+  warn: mockWarn,
   error: mockLogError,
 }));
 
@@ -239,6 +242,9 @@ describe('forceFailRunningTask', () => {
       step: undefined,
       error: 'Manually marked as failed',
     });
+    expect(mockWarn).toHaveBeenCalledWith(
+      expect.stringContaining(`Failed to parse run metadata at ${metaPath}`),
+    );
     expect(mockLogError).not.toHaveBeenCalled();
   });
 
@@ -267,12 +273,13 @@ describe('forceFailRunningTask', () => {
     expect(mockLogError).not.toHaveBeenCalled();
   });
 
-  it('should ignore corrupt worktree meta.json when matching project run exists', async () => {
+  it('should warn and fall back to project metadata when matching worktree meta.json is unreadable', async () => {
     mockConfirm.mockResolvedValue(true);
     const worktreePath = path.join(projectDir, '.takt', 'worktrees', 'running-task');
-    fs.mkdirSync(path.join(worktreePath, '.takt', 'runs', '20260409-run-z'), { recursive: true });
+    const metaPath = path.join(worktreePath, '.takt', 'runs', '20260409-run-a', 'meta.json');
+    fs.mkdirSync(path.dirname(metaPath), { recursive: true });
     fs.writeFileSync(
-      path.join(worktreePath, '.takt', 'runs', '20260409-run-z', 'meta.json'),
+      metaPath,
       '{ broken json',
       'utf-8',
     );
@@ -289,6 +296,9 @@ describe('forceFailRunningTask', () => {
       step: 'implement',
       error: 'Manually marked as failed',
     });
+    expect(mockWarn).toHaveBeenCalledWith(
+      expect.stringContaining(`Failed to parse run metadata at ${metaPath}`),
+    );
     expect(mockLogError).not.toHaveBeenCalled();
   });
 

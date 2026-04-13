@@ -15,6 +15,34 @@ function writeTasksFile(testDir: string, tasks: Array<Record<string, unknown>>):
   writeFileSync(join(testDir, '.takt', 'tasks.yaml'), stringifyYaml({ tasks }), 'utf-8');
 }
 
+function writeRunMeta(testDir: string, slug: string, meta: Record<string, unknown>): void {
+  const metaPath = join(testDir, '.takt', 'runs', slug, 'meta.json');
+  mkdirSync(join(testDir, '.takt', 'runs', slug), { recursive: true });
+  writeFileSync(metaPath, JSON.stringify(meta, null, 2), 'utf-8');
+}
+
+function writeBrokenRunMeta(testDir: string, slug: string): string {
+  const metaPath = join(testDir, '.takt', 'runs', slug, 'meta.json');
+  mkdirSync(join(testDir, '.takt', 'runs', slug), { recursive: true });
+  writeFileSync(metaPath, '{ broken json', 'utf-8');
+  return metaPath;
+}
+
+function expectRetryMetadataPreserved(
+  record: Record<string, unknown> | undefined,
+  expected: {
+    startStep: string;
+    currentIteration: number;
+    maxSteps: number;
+    resumePoint: Record<string, unknown>;
+  },
+): void {
+  expect(record?.start_step).toBe(expected.startStep);
+  expect(record?.exceeded_current_iteration).toBe(expected.currentIteration);
+  expect(record?.exceeded_max_steps).toBe(expected.maxSteps);
+  expect(record?.resume_point).toEqual(expected.resumePoint);
+}
+
 function createPendingRecord(overrides: Record<string, unknown>): Record<string, unknown> {
   return TaskRecordSchema.parse({
     name: 'task-a',
@@ -412,6 +440,404 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(file.tasks[0]?.workflow).toBe('default');
     expect(file.tasks[0]?.start_step).toBe('implement');
     expect(file.tasks[0]?.retry_note).toBe('retry note');
+  });
+
+  it('should persist resume_point when requeueing and starting re-execution', () => {
+    const resumePoint = {
+      version: 1 as const,
+      stack: [
+        { workflow: 'default', step: 'implement', kind: 'workflow_call' as const },
+        { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
+      ],
+      iteration: 7,
+      elapsed_ms: 183245,
+    };
+
+    runner.addTask('Task A', { workflow: 'default' });
+    const task = runner.claimNextTasks(1)[0]!;
+    runner.failTask({
+      task,
+      success: false,
+      response: 'Boom',
+      executionLog: [],
+      startedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+    });
+
+    runner.requeueTask(task.name, ['failed'], 'implement', 'retry note', resumePoint);
+    let file = loadTasksFile(testDir);
+    expect(file.tasks[0]?.resume_point).toEqual(resumePoint);
+
+    const restarted = runner.startReExecution(task.name, ['pending'], 'implement', 'retry note', resumePoint);
+    expect(restarted.data?.resume_point).toEqual(resumePoint);
+
+    file = loadTasksFile(testDir);
+    expect(file.tasks[0]?.resume_point).toEqual(resumePoint);
+  });
+
+  it('should refresh retry metadata from run meta when a re-executed task fails', () => {
+    const latestResumePoint = {
+      version: 1 as const,
+      stack: [
+        { workflow: 'default', step: 'final-review', kind: 'agent' as const },
+      ],
+      iteration: 9,
+      elapsed_ms: 200000,
+    };
+
+    runner.addTask('Task A', {
+      workflow: 'default',
+      start_step: 'delegate',
+      exceeded_max_steps: 30,
+      exceeded_current_iteration: 7,
+      resume_point: {
+        version: 1,
+        stack: [
+          { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
+        ],
+        iteration: 7,
+        elapsed_ms: 183245,
+      },
+    });
+    const task = runner.claimNextTasks(1)[0]!;
+    const running = runner.updateRunningTaskExecution(task.name, {
+      runSlug: '20260413-task-a',
+    });
+    writeRunMeta(testDir, '20260413-task-a', {
+      task: 'Task A',
+      workflow: 'default',
+      runSlug: '20260413-task-a',
+      runRoot: '.takt/runs/20260413-task-a',
+      reportDirectory: '.takt/runs/20260413-task-a/reports',
+      contextDirectory: '.takt/runs/20260413-task-a/context',
+      logsDirectory: '.takt/runs/20260413-task-a/logs',
+      status: 'aborted',
+      startTime: '2026-04-13T00:00:00.000Z',
+      currentStep: 'final-review',
+      currentIteration: 9,
+      resume_point: latestResumePoint,
+    });
+
+    runner.failTask({
+      task: running,
+      success: false,
+      response: 'Boom',
+      executionLog: [],
+      failureStep: 'final-review',
+      startedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+    });
+
+    const file = loadTasksFile(testDir);
+    expect(file.tasks[0]?.start_step).toBe('final-review');
+    expect(file.tasks[0]?.exceeded_current_iteration).toBe(9);
+    expect(file.tasks[0]?.resume_point).toEqual(latestResumePoint);
+    expect(file.tasks[0]?.exceeded_max_steps).toBeUndefined();
+  });
+
+  it('should persist parent workflow_call resume_point when terminal failure happens after the child completes', () => {
+    const workflowCallResumePoint = {
+      version: 1 as const,
+      stack: [
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+      ],
+      iteration: 7,
+      elapsed_ms: 183900,
+    };
+
+    runner.addTask('Task A', {
+      workflow: 'default',
+      start_step: 'delegate',
+      resume_point: {
+        version: 1,
+        stack: [
+          { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
+          { workflow: 'takt/coding', step: 'review', kind: 'agent' },
+        ],
+        iteration: 6,
+        elapsed_ms: 180000,
+      },
+    });
+    const task = runner.claimNextTasks(1)[0]!;
+    const running = runner.updateRunningTaskExecution(task.name, {
+      runSlug: '20260413-task-a',
+    });
+    writeRunMeta(testDir, '20260413-task-a', {
+      task: 'Task A',
+      workflow: 'default',
+      runSlug: '20260413-task-a',
+      runRoot: '.takt/runs/20260413-task-a',
+      reportDirectory: '.takt/runs/20260413-task-a/reports',
+      contextDirectory: '.takt/runs/20260413-task-a/context',
+      logsDirectory: '.takt/runs/20260413-task-a/logs',
+      status: 'aborted',
+      startTime: '2026-04-13T00:00:00.000Z',
+      currentStep: 'delegate',
+      currentIteration: 7,
+      resume_point: workflowCallResumePoint,
+    });
+
+    runner.failTask({
+      task: running,
+      success: false,
+      response: 'PR creation failed',
+      executionLog: [],
+      failureStep: 'delegate',
+      startedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+    });
+
+    const file = loadTasksFile(testDir);
+    expect(file.tasks[0]?.start_step).toBe('delegate');
+    expect(file.tasks[0]?.exceeded_current_iteration).toBe(7);
+    expect(file.tasks[0]?.resume_point).toEqual(workflowCallResumePoint);
+  });
+
+  it('should clear stale retry metadata when a re-executed task completes without run meta', () => {
+    const staleResumePoint = {
+      version: 1 as const,
+      stack: [
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+      ],
+      iteration: 7,
+      elapsed_ms: 183245,
+    };
+
+    runner.addTask('Task A', {
+      workflow: 'default',
+      start_step: 'delegate',
+      exceeded_max_steps: 30,
+      exceeded_current_iteration: 7,
+      resume_point: staleResumePoint,
+    });
+    const task = runner.claimNextTasks(1)[0]!;
+    const running = runner.updateRunningTaskExecution(task.name, {
+      runSlug: '20260413-task-a',
+    });
+
+    runner.completeTask({
+      task: running,
+      success: true,
+      response: 'Done',
+      executionLog: [],
+      startedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+    });
+
+    const file = loadTasksFile(testDir);
+    expect(file.tasks[0]?.start_step).toBeUndefined();
+    expect(file.tasks[0]?.exceeded_current_iteration).toBeUndefined();
+    expect(file.tasks[0]?.resume_point).toBeUndefined();
+    expect(file.tasks[0]?.exceeded_max_steps).toBeUndefined();
+  });
+
+  it('should preserve retry metadata and emit warning when failTask sees corrupt run meta', () => {
+    const warnings: string[] = [];
+    runner = new TaskRunner(testDir, {
+      onWarning: (warning) => {
+        warnings.push(warning);
+      },
+    });
+    const staleResumePoint = {
+      version: 1 as const,
+      stack: [
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+      ],
+      iteration: 7,
+      elapsed_ms: 183245,
+    };
+
+    runner.addTask('Task A', {
+      workflow: 'default',
+      start_step: 'delegate',
+      exceeded_max_steps: 30,
+      exceeded_current_iteration: 7,
+      resume_point: staleResumePoint,
+    });
+    const task = runner.claimNextTasks(1)[0]!;
+    const running = runner.updateRunningTaskExecution(task.name, {
+      runSlug: '20260413-task-a',
+    });
+    const metaPath = writeBrokenRunMeta(testDir, '20260413-task-a');
+
+    runner.failTask({
+      task: running,
+      success: false,
+      response: 'Boom',
+      executionLog: [],
+      failureStep: 'delegate',
+      startedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+    });
+
+    const file = loadTasksFile(testDir);
+    expect(file.tasks[0]?.status).toBe('failed');
+    expectRetryMetadataPreserved(file.tasks[0], {
+      startStep: 'delegate',
+      currentIteration: 7,
+      maxSteps: 30,
+      resumePoint: staleResumePoint,
+    });
+    expect(warnings).toEqual([
+      expect.stringContaining(`Failed to parse run metadata at ${metaPath}`),
+    ]);
+  });
+
+  it('should preserve retry metadata and emit warning when forceFailRunningTask sees corrupt run meta', () => {
+    const warnings: string[] = [];
+    runner = new TaskRunner(testDir, {
+      onWarning: (warning) => {
+        warnings.push(warning);
+      },
+    });
+    const staleResumePoint = {
+      version: 1 as const,
+      stack: [
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+      ],
+      iteration: 7,
+      elapsed_ms: 183245,
+    };
+
+    runner.addTask('Task A', {
+      workflow: 'default',
+      start_step: 'delegate',
+      exceeded_max_steps: 30,
+      exceeded_current_iteration: 7,
+      resume_point: staleResumePoint,
+    });
+    const task = runner.claimNextTasks(1)[0]!;
+    runner.updateRunningTaskExecution(task.name, {
+      runSlug: '20260413-task-a',
+    });
+    const metaPath = writeBrokenRunMeta(testDir, '20260413-task-a');
+
+    runner.forceFailRunningTask(task.name, {
+      step: 'delegate',
+      error: 'manual failure',
+    });
+
+    const file = loadTasksFile(testDir);
+    expect(file.tasks[0]?.status).toBe('failed');
+    expectRetryMetadataPreserved(file.tasks[0], {
+      startStep: 'delegate',
+      currentIteration: 7,
+      maxSteps: 30,
+      resumePoint: staleResumePoint,
+    });
+    expect(warnings).toEqual([
+      expect.stringContaining(`Failed to parse run metadata at ${metaPath}`),
+    ]);
+  });
+
+  it('should preserve retry metadata and emit warning when prFailTask sees corrupt run meta', () => {
+    const warnings: string[] = [];
+    runner = new TaskRunner(testDir, {
+      onWarning: (warning) => {
+        warnings.push(warning);
+      },
+    });
+    const staleResumePoint = {
+      version: 1 as const,
+      stack: [
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+      ],
+      iteration: 7,
+      elapsed_ms: 183245,
+    };
+
+    runner.addTask('Task A', {
+      workflow: 'default',
+      start_step: 'delegate',
+      exceeded_max_steps: 30,
+      exceeded_current_iteration: 7,
+      resume_point: staleResumePoint,
+    });
+    const task = runner.claimNextTasks(1)[0]!;
+    const running = runner.updateRunningTaskExecution(task.name, {
+      runSlug: '20260413-task-a',
+    });
+    const metaPath = writeBrokenRunMeta(testDir, '20260413-task-a');
+
+    runner.prFailTask({
+      task: running,
+      success: false,
+      response: 'Task completed but PR failed',
+      executionLog: [],
+      startedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+    }, 'gh pr create failed');
+
+    const file = loadTasksFile(testDir);
+    expect(file.tasks[0]?.status).toBe('pr_failed');
+    expectRetryMetadataPreserved(file.tasks[0], {
+      startStep: 'delegate',
+      currentIteration: 7,
+      maxSteps: 30,
+      resumePoint: staleResumePoint,
+    });
+    expect(warnings).toEqual([
+      expect.stringContaining(`Failed to parse run metadata at ${metaPath}`),
+    ]);
+  });
+
+  it('should clear retry metadata when a re-executed task completes with run meta', () => {
+    const staleResumePoint = {
+      version: 1 as const,
+      stack: [
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+      ],
+      iteration: 7,
+      elapsed_ms: 183245,
+    };
+
+    runner.addTask('Task A', {
+      workflow: 'default',
+      start_step: 'delegate',
+      exceeded_max_steps: 30,
+      exceeded_current_iteration: 7,
+      resume_point: staleResumePoint,
+    });
+    const task = runner.claimNextTasks(1)[0]!;
+    const running = runner.updateRunningTaskExecution(task.name, {
+      runSlug: '20260413-task-a',
+    });
+    writeRunMeta(testDir, '20260413-task-a', {
+      task: 'Task A',
+      workflow: 'default',
+      runSlug: '20260413-task-a',
+      runRoot: '.takt/runs/20260413-task-a',
+      reportDirectory: '.takt/runs/20260413-task-a/reports',
+      contextDirectory: '.takt/runs/20260413-task-a/context',
+      logsDirectory: '.takt/runs/20260413-task-a/logs',
+      status: 'completed',
+      startTime: '2026-04-13T00:00:00.000Z',
+      currentStep: 'final-review',
+      currentIteration: 9,
+      resume_point: {
+        version: 1,
+        stack: [
+          { workflow: 'default', step: 'final-review', kind: 'agent' },
+        ],
+        iteration: 9,
+        elapsed_ms: 200000,
+      },
+    });
+
+    runner.completeTask({
+      task: running,
+      success: true,
+      response: 'Done',
+      executionLog: [],
+      startedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+    });
+
+    const file = loadTasksFile(testDir);
+    expect(file.tasks[0]?.start_step).toBeUndefined();
+    expect(file.tasks[0]?.exceeded_current_iteration).toBeUndefined();
+    expect(file.tasks[0]?.resume_point).toBeUndefined();
+    expect(file.tasks[0]?.exceeded_max_steps).toBeUndefined();
   });
 
   it('should read workflow and start_step from tasks.yaml into task data', () => {

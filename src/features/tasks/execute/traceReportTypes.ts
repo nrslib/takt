@@ -1,3 +1,4 @@
+import type { NdjsonWorkflowStackEntry } from '../../../shared/utils/index.js';
 import type { PhaseName } from '../../../core/workflow/index.js';
 import type { JudgeStageEntry } from '../../../core/workflow/types.js';
 
@@ -33,6 +34,8 @@ export interface TraceStep {
   step: string;
   persona: string;
   iteration: number;
+  workflow?: string;
+  stack?: NdjsonWorkflowStackEntry[];
   instruction?: string;
   startedAt: string;
   completedAt?: string;

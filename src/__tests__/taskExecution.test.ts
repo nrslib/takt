@@ -4,6 +4,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { TaskInfo } from '../infra/task/index.js';
+import { attachWorkflowSourcePath, attachWorkflowTrustInfo } from '../infra/config/loaders/workflowSourceMetadata.js';
 
 const { mockResolveTaskExecution, mockResolveTaskIssue, mockExecuteWorkflow, mockLoadWorkflowByIdentifier, mockIsWorkflowPath, mockResolveWorkflowConfigValues, mockResolveProviderOptionsWithTrace, mockBuildBooleanTaskResult, mockBuildTaskResult, mockPersistTaskResult, mockPersistPrFailedTaskResult, mockPersistTaskError, mockPostExecutionFlow, mockUpdateRunningTaskExecution } =
   vi.hoisted(() => ({
@@ -245,6 +246,65 @@ describe('executeAndCompleteTask', () => {
     };
     expect(workflowExecutionOptions?.provider).toBe('codex');
     expect(workflowExecutionOptions?.model).toBe('gpt-5.3-codex');
+  });
+
+  it('should resolve workflow paths relative to execCwd when running inside a worktree', async () => {
+    mockLoadWorkflowByIdentifier.mockReturnValue({
+      name: 'worktree-default',
+      steps: [],
+    });
+    mockIsWorkflowPath.mockReturnValue(true);
+
+    await executeTask({
+      task: 'Task: worktree lookup',
+      cwd: '/project/.takt/worktrees/task-a',
+      projectCwd: '/project',
+      workflowIdentifier: './.takt/workflows/default.yaml',
+    });
+
+    expect(mockLoadWorkflowByIdentifier).toHaveBeenCalledWith(
+      './.takt/workflows/default.yaml',
+      '/project',
+      { lookupCwd: '/project/.takt/worktrees/task-a' },
+    );
+    expect(mockExecuteWorkflow.mock.calls[0]?.[0]).toMatchObject({
+      name: 'worktree-default',
+    });
+  });
+
+  it('should reject privileged worktree workflows before execution', async () => {
+    const workflow = attachWorkflowTrustInfo(attachWorkflowSourcePath({
+      name: 'worktree-privileged',
+      runtime: {
+        prepare: ['node'],
+      },
+      steps: [
+        {
+          name: 'review',
+          kind: 'agent',
+          persona: 'reviewer',
+          personaDisplayName: 'reviewer',
+          instruction: 'Review',
+          passPreviousResponse: true,
+        },
+      ],
+      initialStep: 'review',
+      maxSteps: 3,
+    }, '/project/.takt/worktrees/task-a/.takt/workflows/worktree-privileged.yaml'), {
+      source: 'worktree',
+      sourcePath: '/project/.takt/worktrees/task-a/.takt/workflows/worktree-privileged.yaml',
+      isProjectTrustRoot: false,
+      isProjectWorkflowRoot: false,
+    });
+    mockLoadWorkflowByIdentifier.mockReturnValue(workflow);
+
+    await expect(executeTask({
+      task: 'Task: worktree trust boundary',
+      cwd: '/project/.takt/worktrees/task-a',
+      projectCwd: '/project',
+      workflowIdentifier: './.takt/workflows/worktree-privileged.yaml',
+    })).rejects.toThrow('cannot use workflow-level runtime.prepare outside the project workflows root');
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
   it('should use workflow terminology when named workflow is missing', async () => {

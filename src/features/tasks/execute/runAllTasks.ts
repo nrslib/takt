@@ -1,6 +1,6 @@
 import { TaskRunner } from '../../../infra/task/index.js';
 import { resolveWorkflowConfigValues } from '../../../infra/config/index.js';
-import { header, info, status, blankLine } from '../../../shared/ui/index.js';
+import { header, info, status, blankLine, warn } from '../../../shared/ui/index.js';
 import { statusLine } from '../../../shared/ui/StatusLine.js';
 import {
   getErrorMessage,
@@ -19,7 +19,7 @@ export async function runAllTasks(
   cwd: string,
   options?: TaskExecutionOptions,
 ): Promise<void> {
-  const taskRunner = new TaskRunner(cwd);
+  const taskRunner = new TaskRunner(cwd, { onWarning: warn });
   const globalConfig = resolveWorkflowConfigValues(
     cwd,
     ['notificationSound', 'notificationSoundEvents', 'concurrency', 'taskPollIntervalMs'],

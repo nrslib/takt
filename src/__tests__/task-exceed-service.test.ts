@@ -166,6 +166,32 @@ describe('TaskRunner - exceedTask', () => {
     expect(exceededTask.exceeded_current_iteration).toBe(30);
   });
 
+  it('should record resume_point for workflow_call continuation', () => {
+    runner.addTask('Task A');
+    runner.claimNextTasks(1);
+    const taskName = (loadTasksFile(testDir).tasks[0] as Record<string, unknown>).name as string;
+    const resumePoint = {
+      version: 1,
+      stack: [
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
+        { workflow: 'takt/coding', step: 'review', kind: 'agent' },
+      ],
+      iteration: 30,
+      elapsed_ms: 183245,
+    };
+
+    runner.exceedTask(taskName, {
+      currentStep: 'delegate',
+      newMaxSteps: 60,
+      currentIteration: 30,
+      resumePoint,
+    });
+
+    const afterFile = loadTasksFile(testDir);
+    const exceededTask = afterFile.tasks[0]!;
+    expect(exceededTask.resume_point).toEqual(resumePoint);
+  });
+
   it('should throw when task is not found', () => {
     expect(() => runner.exceedTask('nonexistent-task', {
       currentStep: 'plan',
@@ -344,6 +370,27 @@ describe('TaskRunner - requeueExceededTask', () => {
 
     const file = loadTasksFile(testDir);
     expect(file.tasks[0]?.start_step).toBe('reviewers');
+  });
+
+  it('should preserve resume_point through requeue for workflow_call retry', () => {
+    const resumePoint = {
+      version: 1,
+      stack: [
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
+        { workflow: 'takt/coding', step: 'review', kind: 'agent' },
+      ],
+      iteration: 30,
+      elapsed_ms: 183245,
+    };
+    writeExceededRecord(testDir, {
+      name: 'task-a',
+      resume_point: resumePoint,
+    });
+
+    runner.requeueExceededTask('task-a');
+
+    const file = loadTasksFile(testDir);
+    expect(file.tasks[0]?.resume_point).toEqual(resumePoint);
   });
 
   it('should preserve worktree_path and branch through requeue when present on exceeded record', () => {

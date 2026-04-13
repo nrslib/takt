@@ -13,8 +13,19 @@ import {
   resolveWorkflowMcpServersPolicy,
   resolveWorkflowRuntimePreparePolicy,
 } from './workflowNormalizationPolicies.js';
+import {
+  attachWorkflowSourcePath,
+  attachWorkflowTrustInfo,
+  attachWorkflowOpaqueRef,
+  buildOpaqueWorkflowRef,
+} from './workflowSourceMetadata.js';
+import { resolveWorkflowTrustInfo, type WorkflowTrustInfo } from './workflowTrustSource.js';
 
-export function loadWorkflowFromFile(filePath: string, projectDir: string): WorkflowConfig {
+export function loadWorkflowFromFile(
+  filePath: string,
+  projectDir: string,
+  options?: { trustInfo?: WorkflowTrustInfo },
+): WorkflowConfig {
   if (!existsSync(filePath)) {
     throw new Error(`Workflow file not found: ${filePath}`);
   }
@@ -30,6 +41,10 @@ export function loadWorkflowFromFile(filePath: string, projectDir: string): Work
 
   const projectConfig = loadProjectConfig(projectDir);
   const globalConfig = loadGlobalConfig();
+  const trustInfo = options?.trustInfo ?? resolveWorkflowTrustInfo({
+    filePath,
+    projectCwd: projectDir,
+  });
 
   const config = normalizeWorkflowConfig(
     raw,
@@ -41,6 +56,10 @@ export function loadWorkflowFromFile(filePath: string, projectDir: string): Work
     resolveWorkflowArpeggioPolicy(globalConfig.workflowArpeggio, projectConfig.workflowArpeggio),
     resolveWorkflowMcpServersPolicy(globalConfig.workflowMcpServers, projectConfig.workflowMcpServers),
     filePath,
+    trustInfo,
   );
+  attachWorkflowOpaqueRef(config, buildOpaqueWorkflowRef(filePath, trustInfo));
+  attachWorkflowSourcePath(config, filePath);
+  attachWorkflowTrustInfo(config, trustInfo);
   return config;
 }

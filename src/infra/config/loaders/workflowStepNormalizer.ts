@@ -1,11 +1,16 @@
 import type { z } from 'zod';
 import type {
+  AgentWorkflowStep,
+  SystemWorkflowStep,
+  WorkflowCallStep,
   WorkflowStep,
   WorkflowStepRawSchema,
 } from '../../../core/models/index.js';
+import { getWorkflowStepKind } from '../../../core/models/workflow-step-kind.js';
 import type { WorkflowArpeggioConfig, WorkflowMcpServersConfig, WorkflowOverrides } from '../../../core/models/config-types.js';
 import type {
   StepProviderOptions,
+  WorkflowStepKind,
 } from '../../../core/models/workflow-types.js';
 import { applyQualityGateOverrides } from './qualityGateOverrides.js';
 import {
@@ -59,12 +64,14 @@ export function normalizeStepFromRaw(
   workflowMcpServersPolicy?: WorkflowMcpServersConfig,
 ): WorkflowStep {
   const rules = step.rules?.map(normalizeRule);
-  const isSystemStep = step.mode === 'system';
+  const kind: WorkflowStepKind = getWorkflowStepKind(step);
+  const isSystemStep = kind === 'system';
+  const isWorkflowCallStep = kind === 'workflow_call';
   const rawPersona = (step as Record<string, unknown>).persona as string | undefined;
   if (rawPersona !== undefined && rawPersona.trim().length === 0) {
     throw new Error(`Step "${step.name}" has an empty persona value`);
   }
-  const { personaSpec, personaPath } = isSystemStep
+  const { personaSpec, personaPath } = isSystemStep || isWorkflowCallStep
     ? { personaSpec: undefined, personaPath: undefined }
     : resolvePersona(rawPersona, sections, workflowDir, context);
   const displayNameRaw = (step as Record<string, unknown>).persona_name as string | undefined;
@@ -72,7 +79,7 @@ export function normalizeStepFromRaw(
     throw new Error(`Step "${step.name}" has an empty persona_name value`);
   }
   const derivedPersonaName = personaSpec ? extractPersonaDisplayName(personaSpec) : undefined;
-  const resolvedPersonaDisplayName = isSystemStep
+  const resolvedPersonaDisplayName = isSystemStep || isWorkflowCallStep
     ? step.name
     : displayNameRaw || derivedPersonaName || step.name;
   const normalizedRawPersona = rawPersona?.trim();
@@ -80,7 +87,7 @@ export function normalizeStepFromRaw(
     ? (isResourcePath(normalizedRawPersona) ? extractPersonaDisplayName(normalizedRawPersona) : normalizedRawPersona)
     : undefined;
 
-  const policyContents = isSystemStep
+  const policyContents = isSystemStep || isWorkflowCallStep
     ? undefined
     : resolveRefList(
       (step as Record<string, unknown>).policy as string | string[] | undefined,
@@ -89,7 +96,7 @@ export function normalizeStepFromRaw(
       'policies',
       context,
     );
-  const knowledgeContents = isSystemStep
+  const knowledgeContents = isSystemStep || isWorkflowCallStep
     ? undefined
     : resolveRefList(
       (step as Record<string, unknown>).knowledge as string | string[] | undefined,
@@ -97,9 +104,12 @@ export function normalizeStepFromRaw(
       workflowDir,
       'knowledge',
       context,
-    );
+  );
   const normalizedProvider = normalizeProviderReference(step.provider, step.model, step.provider_options);
-  const instruction = isSystemStep
+  const normalizedOverrides = step.overrides
+    ? normalizeProviderReference(step.overrides.provider, step.overrides.model, step.overrides.provider_options)
+    : undefined;
+  const instruction = isSystemStep || isWorkflowCallStep
     ? undefined
     : step.instruction
     ? resolveRefToContent(step.instruction, sections.resolvedInstructions, workflowDir, 'instructions', context)
@@ -108,10 +118,47 @@ export function normalizeStepFromRaw(
   validateWorkflowArpeggio(step.name, step.arpeggio, workflowArpeggioPolicy);
   validateWorkflowMcpServers(step.name, step.mcp_servers, workflowMcpServersPolicy);
 
-  const normalizedStep: WorkflowStep = {
+  if (isWorkflowCallStep) {
+    const normalizedStep: WorkflowCallStep = {
+      name: step.name,
+      description: step.description,
+      kind: 'workflow_call',
+      call: step.call!,
+      overrides: normalizedOverrides
+        ? {
+            provider: normalizedOverrides.provider,
+            model: normalizedOverrides.model,
+            providerOptions: normalizedOverrides.providerOptions,
+          }
+        : undefined,
+      personaDisplayName: resolvedPersonaDisplayName,
+      instruction: '',
+      rules,
+    };
+    return normalizedStep;
+  }
+
+  if (isSystemStep) {
+    const normalizedStep: SystemWorkflowStep = {
+      name: step.name,
+      description: step.description,
+      kind: 'system',
+      session: step.session,
+      personaDisplayName: resolvedPersonaDisplayName,
+      instruction: '',
+      delayBeforeMs: step.delay_before_ms,
+      systemInputs: step.system_inputs,
+      effects: normalizeWorkflowEffects(step.effects),
+      rules,
+      passPreviousResponse: step.pass_previous_response ?? true,
+    };
+    return normalizedStep;
+  }
+
+  const normalizedStep: AgentWorkflowStep = {
     name: step.name,
     description: step.description,
-    mode: step.mode,
+    kind: 'agent',
     persona: personaSpec,
     session: step.session,
     personaDisplayName: resolvedPersonaDisplayName,
@@ -122,13 +169,11 @@ export function normalizeStepFromRaw(
     requiredPermissionMode: step.required_permission_mode,
     providerOptions: mergeProviderOptions(inheritedProviderOptions, normalizedProvider.providerOptions),
     edit: step.edit,
-    instruction: isSystemStep ? '' : instruction || '{task}',
+    instruction: instruction || '{task}',
     delayBeforeMs: step.delay_before_ms,
     structuredOutput: resolveStructuredOutput(step, workflowSchemas, {
       projectDir: context?.projectDir ?? workflowDir,
     }),
-    systemInputs: step.system_inputs,
-    effects: normalizeWorkflowEffects(step.effects),
     rules,
     outputContracts: normalizeOutputContracts(step.output_contracts, workflowDir, sections.resolvedReportFormats, context),
     qualityGates: applyQualityGateOverrides(
@@ -159,7 +204,7 @@ export function normalizeStepFromRaw(
         globalOverrides,
         workflowArpeggioPolicy,
         workflowMcpServersPolicy,
-      ),
+      ) as AgentWorkflowStep,
     );
     if (step.concurrency != null) {
       normalizedStep.concurrency = step.concurrency;

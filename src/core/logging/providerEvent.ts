@@ -2,7 +2,7 @@ import type { ProviderType, StreamEvent } from '../../shared/types/provider.js';
 import type { ProviderUsageSnapshot } from '../models/response.js';
 import { USAGE_MISSING_REASONS, type UsageMissingReason } from './contracts.js';
 
-export type StepType = 'normal' | 'parallel' | 'arpeggio' | 'team_leader';
+export type StepType = 'normal' | 'parallel' | 'arpeggio' | 'team_leader' | 'workflow_call';
 
 export interface ProviderEventLogRecord {
   timestamp: string;

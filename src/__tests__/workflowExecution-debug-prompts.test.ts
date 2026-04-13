@@ -4,6 +4,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { WorkflowConfig } from '../core/models/index.js';
+import { buildPhaseExecutionId } from '../shared/utils/phaseExecutionId.js';
 
 const { mockIsDebugEnabled, mockWritePromptLog, MockWorkflowEngine } = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -37,50 +38,68 @@ const { mockIsDebugEnabled, mockWritePromptLog, MockWorkflowEngine } = vi.hoiste
       const shouldRepeatStep = this.task === 'repeat-step-task';
       const shouldReversePhaseCompletion = this.task === 'reverse-phase-complete-task';
       const providerInfo = { provider: undefined, model: undefined };
+      const executePhaseId = buildPhaseExecutionId({
+        step: step.name,
+        iteration: 1,
+        phase: 1,
+        sequence: 1,
+      });
+      const executePhaseSecondId = buildPhaseExecutionId({
+        step: step.name,
+        iteration: 1,
+        phase: 1,
+        sequence: 2,
+      });
+      const judgePhaseId = buildPhaseExecutionId({
+        step: step.name,
+        iteration: 1,
+        phase: 3,
+        sequence: 1,
+      });
       this.emit('step:start', step, 1, 'step instruction', providerInfo);
       if (shouldReversePhaseCompletion) {
         this.emit('phase:start', step, 1, 'execute', 'phase prompt first', {
           systemPrompt: '../agents/coder.md',
           userInstruction: 'phase prompt first',
-        }, 'implement:1:1:1', 1);
+        }, executePhaseId, 1);
         this.emit('phase:start', step, 1, 'execute', 'phase prompt second', {
           systemPrompt: '../agents/coder.md',
           userInstruction: 'phase prompt second',
-        }, 'implement:1:1:2', 1);
+        }, executePhaseSecondId, 1);
       } else {
         this.emit('phase:start', step, 1, 'execute', shouldEmitSensitive ? 'token=plain-secret' : 'phase prompt', {
           systemPrompt: shouldEmitSensitive ? 'Authorization: Bearer super-secret-token' : '../agents/coder.md',
           userInstruction: shouldEmitSensitive ? 'api_key=plain-secret' : 'phase prompt',
-        });
+        }, executePhaseId, 1);
       }
       this.emit('phase:start', step, 3, 'judge', 'phase3 prompt', {
         systemPrompt: 'conductor',
         userInstruction: 'phase3 prompt',
-      });
+      }, judgePhaseId, 1);
       this.emit('phase:judge_stage', step, 3, 'judge', {
         stage: 1,
         method: 'structured_output',
         status: 'done',
         instruction: 'judge stage prompt',
         response: 'judge stage response',
-      });
-      this.emit('phase:complete', step, 3, 'judge', '[IMPLEMENT:1]', 'done');
+      }, judgePhaseId, 1);
+      this.emit('phase:complete', step, 3, 'judge', '[IMPLEMENT:1]', 'done', undefined, judgePhaseId, 1);
       if (shouldAbortBeforeComplete) {
         this.emit('workflow:abort', { status: 'aborted', iteration: 1 }, 'user_interrupted');
         return { status: 'aborted', iteration: 1 };
       }
       if (shouldReversePhaseCompletion) {
-        this.emit('phase:complete', step, 1, 'execute', 'phase response second', 'done', undefined, 'implement:1:1:2', 1);
-        this.emit('phase:complete', step, 1, 'execute', 'phase response first', 'done', undefined, 'implement:1:1:1', 1);
+        this.emit('phase:complete', step, 1, 'execute', 'phase response second', 'done', undefined, executePhaseSecondId, 1);
+        this.emit('phase:complete', step, 1, 'execute', 'phase response first', 'done', undefined, executePhaseId, 1);
       } else {
-        this.emit('phase:complete', step, 1, 'execute', shouldEmitSensitive ? 'password=plain-secret' : 'phase response', 'done');
+        this.emit('phase:complete', step, 1, 'execute', shouldEmitSensitive ? 'password=plain-secret' : 'phase response', 'done', undefined, executePhaseId, 1);
       }
       if (shouldDuplicatePhase) {
         this.emit('phase:start', step, 1, 'execute', 'phase prompt second', {
           systemPrompt: '../agents/coder.md',
           userInstruction: 'phase prompt second',
-        });
-        this.emit('phase:complete', step, 1, 'execute', 'phase response second', 'done');
+        }, executePhaseSecondId, 1);
+        this.emit('phase:complete', step, 1, 'execute', 'phase response second', 'done', undefined, executePhaseSecondId, 1);
       }
       this.emit(
         'step:complete',

@@ -49,6 +49,7 @@ vi.mock('../infra/task/index.js', () => ({
 vi.mock('../shared/ui/index.js', () => ({
   info: vi.fn(),
   error: vi.fn(),
+  warn: vi.fn(),
   success: vi.fn(),
   withProgress: async <T>(
     _startMessage: string,

@@ -169,6 +169,7 @@ export function getWorkflowDescription(
   identifier: string,
   projectCwd: string,
   previewCount?: number,
+  lookupCwd = projectCwd,
 ): {
   name: string;
   description: string;
@@ -177,7 +178,7 @@ export function getWorkflowDescription(
   interactiveMode?: InteractiveMode;
   firstStep?: FirstStepInfo;
 } {
-  const workflow = loadWorkflowByIdentifier(identifier, projectCwd);
+  const workflow = loadWorkflowByIdentifier(identifier, projectCwd, { lookupCwd });
   if (!workflow) {
     return { name: identifier, description: '', workflowStructure: '', stepPreviews: [] };
   }

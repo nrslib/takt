@@ -4,7 +4,7 @@ import {
 } from '../../../infra/config/index.js';
 import { confirm } from '../../../shared/prompt/index.js';
 import { createSharedClone, summarizeTaskName, resolveBaseBranch, TaskRunner } from '../../../infra/task/index.js';
-import { info, error, withProgress } from '../../../shared/ui/index.js';
+import { info, error, warn, withProgress } from '../../../shared/ui/index.js';
 import { statusLine } from '../../../shared/ui/StatusLine.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
@@ -85,7 +85,7 @@ export async function selectAndExecuteTask(
 
   const execCwd = cwd;
   log.info('Starting task execution', { workflow: workflowIdentifier, worktree: false });
-  const taskRunner = new TaskRunner(cwd);
+  const taskRunner = new TaskRunner(cwd, { onWarning: warn });
   let taskRecord: Awaited<ReturnType<TaskRunner['addTask']>> | null = null;
   if (options?.skipTaskList !== true) {
     taskRecord = taskRunner.addTask(task, {

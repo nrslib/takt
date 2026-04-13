@@ -173,13 +173,49 @@ export interface StepProviderOptions {
   claude?: ClaudeProviderOptions;
 }
 
-export interface WorkflowStep {
+export type WorkflowStepKind = 'agent' | 'system' | 'workflow_call';
+
+export interface WorkflowCallOverrides {
+  provider?: ProviderType;
+  model?: string;
+  providerOptions?: StepProviderOptions;
+}
+
+export interface WorkflowSubworkflowConfig {
+  callable?: boolean;
+}
+
+export interface WorkflowResumePointEntry {
+  workflow: string;
+  workflow_ref?: string;
+  step: string;
+  kind: WorkflowStepKind;
+}
+
+export interface WorkflowResumePoint {
+  version: 1;
+  stack: WorkflowResumePointEntry[];
+  iteration: number;
+  elapsed_ms: number;
+}
+
+interface WorkflowStepBase {
   name: string;
   description?: string;
-  mode?: 'agent' | 'system';
+  personaDisplayName: string;
+  instruction: string;
+  delayBeforeMs?: number;
+  rules?: WorkflowRule[];
+  passPreviousResponse?: boolean;
+}
+
+export interface AgentWorkflowStep extends WorkflowStepBase {
+  kind?: 'agent';
+  mode?: never;
+  call?: never;
+  overrides?: never;
   persona?: string;
   session?: 'continue' | 'refresh';
-  personaDisplayName: string;
   mcpServers?: Record<string, McpServerConfig>;
   personaPath?: string;
   provider?: ProviderType;
@@ -187,22 +223,74 @@ export interface WorkflowStep {
   requiredPermissionMode?: PermissionMode;
   providerOptions?: StepProviderOptions;
   edit?: boolean;
-  instruction: string;
-  delayBeforeMs?: number;
   structuredOutput?: WorkflowStructuredOutput;
-  systemInputs?: WorkflowSystemInput[];
-  effects?: WorkflowEffect[];
-  rules?: WorkflowRule[];
+  systemInputs?: never;
+  effects?: never;
   outputContracts?: OutputContractEntry[];
   qualityGates?: string[];
-  passPreviousResponse: boolean;
-  parallel?: WorkflowStep[];
+  parallel?: AgentWorkflowStep[];
   concurrency?: number;
   arpeggio?: ArpeggioStepConfig;
   teamLeader?: TeamLeaderConfig;
   policyContents?: string[];
   knowledgeContents?: string[];
 }
+
+export interface SystemWorkflowStep extends WorkflowStepBase {
+  kind: 'system';
+  mode?: never;
+  call?: never;
+  overrides?: never;
+  persona?: never;
+  session?: 'continue' | 'refresh';
+  mcpServers?: never;
+  personaPath?: never;
+  provider?: never;
+  model?: never;
+  requiredPermissionMode?: never;
+  providerOptions?: never;
+  edit?: never;
+  structuredOutput?: never;
+  systemInputs?: WorkflowSystemInput[];
+  effects?: WorkflowEffect[];
+  outputContracts?: never;
+  qualityGates?: never;
+  parallel?: never;
+  concurrency?: never;
+  arpeggio?: never;
+  teamLeader?: never;
+  policyContents?: never;
+  knowledgeContents?: never;
+}
+
+export interface WorkflowCallStep extends WorkflowStepBase {
+  kind: 'workflow_call';
+  mode?: never;
+  call: string;
+  overrides?: WorkflowCallOverrides;
+  persona?: never;
+  session?: never;
+  mcpServers?: never;
+  personaPath?: never;
+  provider?: never;
+  model?: never;
+  requiredPermissionMode?: never;
+  providerOptions?: never;
+  edit?: never;
+  structuredOutput?: never;
+  systemInputs?: never;
+  effects?: never;
+  outputContracts?: never;
+  qualityGates?: never;
+  parallel?: never;
+  concurrency?: never;
+  arpeggio?: never;
+  teamLeader?: never;
+  policyContents?: never;
+  knowledgeContents?: never;
+}
+
+export type WorkflowStep = AgentWorkflowStep | SystemWorkflowStep | WorkflowCallStep;
 
 export interface ArpeggioMergeStepConfig {
   readonly strategy: 'concat' | 'custom';
@@ -252,7 +340,10 @@ export interface LoopMonitorConfig {
 export interface WorkflowConfig {
   name: string;
   description?: string;
+  subworkflow?: WorkflowSubworkflowConfig;
   schemas?: Record<string, string>;
+  provider?: ProviderType;
+  model?: string;
   providerOptions?: StepProviderOptions;
   runtime?: WorkflowRuntimeConfig;
   personas?: Record<string, string>;

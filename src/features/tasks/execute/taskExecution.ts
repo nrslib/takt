@@ -3,6 +3,7 @@
  */
 
 import { loadWorkflowByIdentifier, isWorkflowPath, resolveWorkflowConfigValues } from '../../../infra/config/index.js';
+import { validateWorkflowExecutionTrustBoundary } from '../../../infra/config/loaders/workflowTrustBoundary.js';
 import { resolveProviderOptionsWithTrace } from '../../../infra/config/resolveConfigValue.js';
 import { TaskRunner, type TaskInfo } from '../../../infra/task/index.js';
 import { info, error } from '../../../shared/ui/index.js';
@@ -36,6 +37,7 @@ async function executeTaskWithResult(options: ExecuteTaskOptions): Promise<Workf
     interactiveMetadata,
     startStep,
     retryNote,
+    resumePoint,
     reportDirName,
     abortSignal,
     taskPrefix,
@@ -45,7 +47,7 @@ async function executeTaskWithResult(options: ExecuteTaskOptions): Promise<Workf
     initialIterationOverride,
     currentTaskIssueNumber,
   } = options;
-  const workflowConfig = loadWorkflowByIdentifier(workflowIdentifier, projectCwd);
+  const workflowConfig = loadWorkflowByIdentifier(workflowIdentifier, projectCwd, { lookupCwd: cwd });
   const safeWorkflowIdentifier = sanitizeTerminalText(workflowIdentifier);
 
   if (!workflowConfig) {
@@ -60,6 +62,7 @@ async function executeTaskWithResult(options: ExecuteTaskOptions): Promise<Workf
       return { success: false, reason: `Workflow "${safeWorkflowIdentifier}" not found.` };
     }
   }
+  validateWorkflowExecutionTrustBoundary(workflowConfig, projectCwd);
 
   log.debug('Running workflow', {
     name: workflowConfig.name,
@@ -82,6 +85,7 @@ async function executeTaskWithResult(options: ExecuteTaskOptions): Promise<Workf
     interactiveMetadata,
     startStep,
     retryNote,
+    resumePoint,
     reportDirName,
     abortSignal,
     taskPrefix,
@@ -146,6 +150,7 @@ export async function executeAndCompleteTask(
       baseBranch,
       startStep,
       retryNote,
+      resumePoint,
       autoPr,
       draftPr,
       shouldPublishBranchToOrigin,
@@ -170,6 +175,7 @@ export async function executeAndCompleteTask(
       agentOverrides: taskExecutionOptions,
       startStep,
       retryNote,
+      resumePoint,
       reportDirName,
       abortSignal: taskAbortSignal,
       taskPrefix: parallelOptions?.taskPrefix,

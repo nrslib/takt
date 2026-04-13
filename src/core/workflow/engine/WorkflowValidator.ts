@@ -3,6 +3,7 @@ import { ABORT_STEP, COMPLETE_STEP, ERROR_MESSAGES } from '../constants.js';
 import type { WorkflowEngineOptions } from '../types.js';
 import { resolveLoopMonitorJudgeProviderModel, resolveStepProviderModel } from '../provider-resolution.js';
 import { validateProviderModelCompatibility } from '../provider-model-compatibility.js';
+import { isWorkflowCallStep } from '../step-kind.js';
 
 export function validateWorkflowConfig(config: WorkflowConfig, options: WorkflowEngineOptions): void {
   const initialStep = config.steps.find((step) => step.name === config.initialStep);
@@ -15,6 +16,10 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
     if (!startStep) {
       throw new Error(ERROR_MESSAGES.UNKNOWN_STEP(options.startStep));
     }
+  }
+
+  if (config.steps.some((step) => isWorkflowCallStep(step)) && !options.workflowCallResolver) {
+    throw new Error('Configuration error: workflowCallResolver is required when workflow contains workflow_call steps');
   }
 
   const stepNames = new Set(config.steps.map((step) => step.name));

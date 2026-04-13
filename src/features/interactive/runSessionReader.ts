@@ -5,8 +5,8 @@
  * and formats them for injection into the interactive system prompt.
  */
 
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { Dirent, existsSync, readdirSync, readFileSync } from 'node:fs';
+import { join, relative } from 'node:path';
 import { readRunMetaBySlug } from '../../core/workflow/run/run-meta.js';
 import {
   PROVIDER_EVENTS_LOG_FILE_SUFFIX,
@@ -31,11 +31,15 @@ export interface RunSummary {
 }
 
 /** A single step log entry for display */
+type SessionHistoryEntry = SessionLog['history'][number];
+
 interface StepLogEntry {
   readonly step: string;
   readonly persona: string;
   readonly status: string;
   readonly content: string;
+  readonly workflow?: SessionHistoryEntry['workflow'];
+  readonly stack?: SessionHistoryEntry['stack'];
 }
 
 /** A report file entry */
@@ -72,7 +76,57 @@ function buildStepLogs(sessionLog: SessionLog): StepLogEntry[] {
     persona: entry.persona,
     status: entry.status,
     content: truncateContent(entry.content, MAX_CONTENT_LENGTH),
+    workflow: entry.workflow,
+    stack: entry.stack,
   }));
+}
+
+function formatStepScopeEntry(
+  entry: NonNullable<StepLogEntry['stack']>[number],
+): string {
+  const kindSuffix = entry.kind === 'workflow_call' ? ' [workflow_call]' : '';
+  return `${entry.workflow}/${entry.step}${kindSuffix}`;
+}
+
+function formatStepScope(log: StepLogEntry): string {
+  if (log.stack && log.stack.length > 0) {
+    return log.stack.map((entry) => formatStepScopeEntry(entry)).join(' -> ');
+  }
+
+  if (log.workflow) {
+    return `${log.workflow}/${log.step}`;
+  }
+
+  return log.step;
+}
+
+function collectReportFiles(rootDir: string, currentDir: string): ReportEntry[] {
+  const entries = readdirSync(currentDir, { withFileTypes: true })
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  const reports: ReportEntry[] = [];
+  for (const entry of entries) {
+    const fullPath = join(currentDir, entry.name);
+    if (entry.isDirectory()) {
+      reports.push(...collectReportFiles(rootDir, fullPath));
+      continue;
+    }
+
+    if (!isMarkdownReport(entry)) {
+      continue;
+    }
+
+    reports.push({
+      filename: relative(rootDir, fullPath),
+      content: readFileSync(fullPath, 'utf-8'),
+    });
+  }
+
+  return reports;
+}
+
+function isMarkdownReport(entry: Dirent): boolean {
+  return entry.isFile() && entry.name.endsWith('.md');
 }
 
 function loadReports(reportsDir: string): ReportEntry[] {
@@ -80,11 +134,7 @@ function loadReports(reportsDir: string): ReportEntry[] {
     return [];
   }
 
-  const files = readdirSync(reportsDir).filter((f) => f.endsWith('.md')).sort();
-  return files.map((filename) => ({
-    filename,
-    content: readFileSync(join(reportsDir, filename), 'utf-8'),
-  }));
+  return collectReportFiles(reportsDir, reportsDir);
 }
 
 function findSessionLogFile(logsDir: string): string | null {
@@ -230,7 +280,7 @@ export function formatRunSessionForPrompt(ctx: RunSessionContext): {
   runReports: string;
 } {
   const logLines = ctx.stepLogs.map((log) => {
-    const header = `### ${log.step} (${log.persona}) — ${log.status}`;
+    const header = `### ${formatStepScope(log)} (${log.persona}) — ${log.status}`;
     return `${header}\n${log.content}`;
   });
 

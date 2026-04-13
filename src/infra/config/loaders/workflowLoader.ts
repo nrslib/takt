@@ -3,7 +3,7 @@
  *
  * Implementations have been split into:
  * - workflowParser.ts: YAML parsing, step/rule normalization
- * - workflowResolver.ts: 3-layer resolution (builtin → user → project-local)
+ * - workflowResolver.ts: 3-layer resolution (project-local → user → builtin)
  */
 
 // Parser exports
@@ -28,3 +28,4 @@ export {
   type WorkflowSource,
   type WorkflowWithSource,
 } from './workflowResolver.js';
+export { resolveWorkflowCallTarget } from './workflowCallResolver.js';

@@ -1,10 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import type { WorkflowConfig } from '../core/models/index.js';
 import {
   CapabilityAwareStructuredCaller,
   DefaultStructuredCaller,
   type StructuredCaller,
 } from '../agents/structured-caller.js';
+import { getWorkflowSourcePath } from '../infra/config/loaders/workflowSourceMetadata.js';
 
 const {
   MockWorkflowEngine,
@@ -16,20 +20,32 @@ const {
 
   class MockWorkflowEngine extends EE {
     static lastInstance: MockWorkflowEngine;
+    static nextRunImpl: ((instance: MockWorkflowEngine) => Promise<{ status: string; iteration: number }>) | undefined;
     readonly receivedOptions: Record<string, unknown>;
-    private readonly config: WorkflowConfig;
+    readonly receivedConfig: WorkflowConfig;
+    currentResumePoint: unknown;
 
     constructor(config: WorkflowConfig, _cwd: string, _task: string, options: Record<string, unknown>) {
       super();
-      this.config = config;
+      this.receivedConfig = config;
       this.receivedOptions = options;
       MockWorkflowEngine.lastInstance = this;
+      this.currentResumePoint = undefined;
     }
 
     abort(): void {}
 
+    getResumePoint(): unknown {
+      return this.currentResumePoint;
+    }
+
     async run(): Promise<{ status: string; iteration: number }> {
-      const step = this.config.steps[0];
+      if (MockWorkflowEngine.nextRunImpl) {
+        const runImpl = MockWorkflowEngine.nextRunImpl;
+        MockWorkflowEngine.nextRunImpl = undefined;
+        return await runImpl(this);
+      }
+      const step = this.receivedConfig.steps[0];
       if (step) {
         this.emit('step:start', step, 1, step.instruction, { provider: 'cursor', model: undefined });
         this.emit('step:complete', step, {
@@ -71,7 +87,8 @@ vi.mock('../infra/claude/query-manager.js', () => ({
   interruptAllQueries: vi.fn(),
 }));
 
-vi.mock('../infra/config/index.js', () => ({
+vi.mock('../infra/config/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   loadPersonaSessions: vi.fn().mockReturnValue({}),
   updatePersonaSession: vi.fn(),
   loadWorktreeSessions: vi.fn().mockReturnValue({}),
@@ -167,6 +184,9 @@ vi.mock('../shared/i18n/index.js', () => ({
 }));
 
 import { executeWorkflow } from '../features/tasks/execute/workflowExecution.js';
+import { loadWorkflowByIdentifier } from '../infra/config/loaders/workflowLoader.js';
+import { invalidateAllResolvedConfigCache } from '../infra/config/resolutionCache.js';
+import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
 
 function makeConfig(): WorkflowConfig {
   return {
@@ -184,6 +204,12 @@ function makeConfig(): WorkflowConfig {
       },
     ],
   };
+}
+
+function writeWorkflow(baseDir: string, relativePath: string, content: string): void {
+  const filePath = join(baseDir, relativePath);
+  mkdirSync(dirname(filePath), { recursive: true });
+  writeFileSync(filePath, content, 'utf-8');
 }
 
 function expectStructuredCallerShape(value: unknown): void {
@@ -204,9 +230,27 @@ function getInjectedStructuredCaller(): StructuredCaller {
 }
 
 describe('executeWorkflow structuredCaller injection', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockGetProvider.mockReturnValue({ supportsStructuredOutput: false });
+  const originalTaktConfigDir = process.env.TAKT_CONFIG_DIR;
+  let cleanupDirs: string[];
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockGetProvider.mockReturnValue({ supportsStructuredOutput: false });
+  MockWorkflowEngine.nextRunImpl = undefined;
+  cleanupDirs = [];
+});
+
+  afterEach(() => {
+    if (originalTaktConfigDir === undefined) {
+      delete process.env.TAKT_CONFIG_DIR;
+    } else {
+      process.env.TAKT_CONFIG_DIR = originalTaktConfigDir;
+    }
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+    for (const dir of cleanupDirs) {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('global provider が cursor のとき prompt-based judge へ委譲できること', async () => {
@@ -451,6 +495,325 @@ describe('executeWorkflow structuredCaller injection', () => {
 
     expect(MockWorkflowEngine.lastInstance.receivedOptions.provider).toBe('cursor');
     expect(MockWorkflowEngine.lastInstance.receivedOptions.model).toBe('cursor-fast');
+  });
+
+  it('should resolve workflow_call named lookup in project -> user -> builtin order when executeWorkflow wires it', async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-project-'));
+    const configDir = mkdtempSync(join(tmpdir(), 'takt-config-'));
+    const externalDir = mkdtempSync(join(tmpdir(), 'takt-external-'));
+    cleanupDirs.push(projectDir, configDir, externalDir);
+
+    process.env.TAKT_CONFIG_DIR = configDir;
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+
+    writeWorkflow(configDir, 'workflows/takt/coding.yaml', `name: takt/coding
+subworkflow:
+  callable: true
+initial_step: review
+max_steps: 2
+steps:
+  - name: review
+    persona: user-reviewer
+    instruction: "User child"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    writeWorkflow(projectDir, '.takt/workflows/takt/coding.yaml', `name: takt/coding
+subworkflow:
+  callable: true
+initial_step: review
+max_steps: 2
+steps:
+  - name: review
+    persona: project-reviewer
+    instruction: "Project child"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    const externalParentPath = join(externalDir, 'parent.yaml');
+    writeWorkflow(externalDir, 'parent.yaml', `name: external-parent
+initial_step: delegate
+max_steps: 2
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: takt/coding
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: ABORT
+        next: ABORT
+`);
+
+    const externalParent = loadWorkflowByIdentifier(externalParentPath, projectDir);
+    expect(externalParent).not.toBeNull();
+
+    await executeWorkflow(externalParent!, 'task', projectDir, {
+      projectCwd: projectDir,
+    });
+
+    const childWorkflow = (
+      MockWorkflowEngine.lastInstance.receivedOptions.workflowCallResolver as (args: {
+        parentWorkflow: WorkflowConfig;
+        identifier: string;
+        stepName: string;
+        projectCwd: string;
+        lookupCwd: string;
+      }) => WorkflowConfig | null
+    )({
+      parentWorkflow: MockWorkflowEngine.lastInstance.receivedConfig,
+      identifier: 'takt/coding',
+      stepName: 'delegate',
+      projectCwd: projectDir,
+      lookupCwd: projectDir,
+    });
+
+    expect(childWorkflow).not.toBeNull();
+    expect(childWorkflow?.steps[0]).toMatchObject({
+      kind: 'agent',
+      persona: 'project-reviewer',
+    });
+  });
+
+  it('should resolve workflow_call named lookup to builtin when project と user に child が無い', async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-project-'));
+    const configDir = mkdtempSync(join(tmpdir(), 'takt-config-'));
+    const externalDir = mkdtempSync(join(tmpdir(), 'takt-external-'));
+    cleanupDirs.push(projectDir, configDir, externalDir);
+
+    process.env.TAKT_CONFIG_DIR = configDir;
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+
+    const externalParentPath = join(externalDir, 'parent.yaml');
+    writeWorkflow(externalDir, 'parent.yaml', `name: external-parent
+initial_step: delegate
+max_steps: 2
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: default
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: ABORT
+        next: ABORT
+`);
+
+    const externalParent = loadWorkflowByIdentifier(externalParentPath, projectDir);
+    expect(externalParent).not.toBeNull();
+
+    await executeWorkflow(externalParent!, 'task', projectDir, {
+      projectCwd: projectDir,
+    });
+
+    const childWorkflow = (
+      MockWorkflowEngine.lastInstance.receivedOptions.workflowCallResolver as (args: {
+        parentWorkflow: WorkflowConfig;
+        identifier: string;
+        stepName: string;
+        projectCwd: string;
+        lookupCwd: string;
+      }) => WorkflowConfig | null
+    )({
+      parentWorkflow: MockWorkflowEngine.lastInstance.receivedConfig,
+      identifier: 'default',
+      stepName: 'delegate',
+      projectCwd: projectDir,
+      lookupCwd: projectDir,
+    });
+
+    expect(childWorkflow).not.toBeNull();
+    expect(childWorkflow?.name).toBe('default');
+  });
+
+  it('should resolve workflow_call relative path from explicit execution context even when spread config drops loader metadata', async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-project-'));
+    const externalDir = mkdtempSync(join(tmpdir(), 'takt-external-'));
+    cleanupDirs.push(projectDir, externalDir);
+
+    const externalParentPath = join(externalDir, 'parent.yaml');
+    writeWorkflow(externalDir, 'parent.yaml', `name: external-parent
+initial_step: delegate
+max_steps: 2
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: ./child.yaml
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: ABORT
+        next: ABORT
+`);
+    writeWorkflow(externalDir, 'child.yaml', `name: external-child
+subworkflow:
+  callable: true
+initial_step: review
+max_steps: 2
+steps:
+  - name: review
+    persona: external-reviewer
+    instruction: "External child"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const externalParent = loadWorkflowByIdentifier(externalParentPath, projectDir);
+    expect(externalParent).not.toBeNull();
+
+    await executeWorkflow(externalParent!, 'task', projectDir, {
+      projectCwd: projectDir,
+    });
+
+    expect(getWorkflowSourcePath(MockWorkflowEngine.lastInstance.receivedConfig)).toBeUndefined();
+
+    const childWorkflow = (
+      MockWorkflowEngine.lastInstance.receivedOptions.workflowCallResolver as (args: {
+        parentWorkflow: WorkflowConfig;
+        identifier: string;
+        stepName: string;
+        projectCwd: string;
+        lookupCwd: string;
+      }) => WorkflowConfig | null
+    )({
+      parentWorkflow: MockWorkflowEngine.lastInstance.receivedConfig,
+      identifier: './child.yaml',
+      stepName: 'delegate',
+      projectCwd: projectDir,
+      lookupCwd: projectDir,
+    });
+
+    expect(childWorkflow).not.toBeNull();
+    expect(childWorkflow?.steps[0]).toMatchObject({
+      kind: 'agent',
+      persona: 'external-reviewer',
+    });
+  });
+
+  it('should persist the latest parent resume_point when workflow aborts after a workflow_call step completes', async () => {
+    const { writeFileAtomic } = await import('../infra/config/index.js');
+    const workflowCallStep: WorkflowConfig['steps'][number] = {
+      name: 'delegate',
+      kind: 'workflow_call',
+      call: 'takt/coding',
+      instruction: '',
+      personaDisplayName: 'delegate',
+      passPreviousResponse: true,
+      rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+    };
+    const childResumePoint = {
+      version: 1 as const,
+      stack: [
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
+      ],
+      iteration: 7,
+      elapsed_ms: 183245,
+    };
+    const parentResumePoint = {
+      version: 1 as const,
+      stack: [
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+      ],
+      iteration: 7,
+      elapsed_ms: 183900,
+    };
+
+    MockWorkflowEngine.nextRunImpl = async (instance) => {
+      instance.currentResumePoint = childResumePoint;
+      instance.emit('step:start', workflowCallStep, 7, workflowCallStep.instruction, { provider: 'cursor', model: undefined });
+      instance.emit('step:complete', workflowCallStep, {
+        persona: 'delegate',
+        status: 'done',
+        content: 'COMPLETE',
+        timestamp: new Date('2026-04-01T00:00:00.000Z'),
+      }, workflowCallStep.instruction);
+      instance.currentResumePoint = parentResumePoint;
+      instance.emit('workflow:abort', { status: 'aborted', iteration: 7 }, 'post child failure');
+      return { status: 'aborted', iteration: 7 };
+    };
+
+    const result = await executeWorkflow({
+      name: 'default',
+      maxSteps: 10,
+      initialStep: 'delegate',
+      steps: [workflowCallStep],
+    }, 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+    });
+
+    expect(result.success).toBe(false);
+    const metaWrites = vi.mocked(writeFileAtomic).mock.calls.filter(([filePath]) =>
+      String(filePath).endsWith('/meta.json'));
+    const lastWrite = metaWrites.at(-1);
+    expect(lastWrite).toBeDefined();
+    const serialized = JSON.parse(String(lastWrite?.[1]));
+    expect(serialized.status).toBe('aborted');
+    expect(serialized.resume_point).toEqual(parentResumePoint);
+  });
+
+  it('should persist the latest parent resume_point when workflow engine throws after a workflow_call step completes', async () => {
+    const { writeFileAtomic } = await import('../infra/config/index.js');
+    const workflowCallStep: WorkflowConfig['steps'][number] = {
+      name: 'delegate',
+      kind: 'workflow_call',
+      call: 'takt/coding',
+      instruction: '',
+      personaDisplayName: 'delegate',
+      passPreviousResponse: true,
+      rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+    };
+    const childResumePoint = {
+      version: 1 as const,
+      stack: [
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
+      ],
+      iteration: 7,
+      elapsed_ms: 183245,
+    };
+    const parentResumePoint = {
+      version: 1 as const,
+      stack: [
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+      ],
+      iteration: 7,
+      elapsed_ms: 183900,
+    };
+
+    MockWorkflowEngine.nextRunImpl = async (instance) => {
+      instance.currentResumePoint = childResumePoint;
+      instance.emit('step:start', workflowCallStep, 7, workflowCallStep.instruction, { provider: 'cursor', model: undefined });
+      instance.emit('step:complete', workflowCallStep, {
+        persona: 'delegate',
+        status: 'done',
+        content: 'COMPLETE',
+        timestamp: new Date('2026-04-01T00:00:00.000Z'),
+      }, workflowCallStep.instruction);
+      instance.currentResumePoint = parentResumePoint;
+      throw new Error('engine crashed after child completion');
+    };
+
+    await expect(executeWorkflow({
+      name: 'default',
+      maxSteps: 10,
+      initialStep: 'delegate',
+      steps: [workflowCallStep],
+    }, 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+    })).rejects.toThrow('engine crashed after child completion');
+    const metaWrites = vi.mocked(writeFileAtomic).mock.calls.filter(([filePath]) =>
+      String(filePath).endsWith('/meta.json'));
+    const lastWrite = metaWrites.at(-1);
+    expect(lastWrite).toBeDefined();
+    const serialized = JSON.parse(String(lastWrite?.[1]));
+    expect(serialized.status).toBe('aborted');
+    expect(serialized.resume_point).toEqual(parentResumePoint);
   });
 
   it('should pass provider override through to WorkflowEngine', async () => {

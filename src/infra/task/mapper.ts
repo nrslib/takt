@@ -53,6 +53,7 @@ function buildTaskFileData(task: TaskRecord, content: string): TaskFileData {
     should_publish_branch_to_origin: task.should_publish_branch_to_origin,
     exceeded_max_steps: task.exceeded_max_steps,
     exceeded_current_iteration: task.exceeded_current_iteration,
+    resume_point: task.resume_point,
     source: task.source,
     pr_number: task.pr_number,
   });

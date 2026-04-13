@@ -7,10 +7,17 @@ import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { isScopeRef, parseScopeRef } from 'faceted-prompting';
 import type { WorkflowConfig } from '../../../core/models/index.js';
-import { getBuiltinWorkflowsDir, getGlobalWorkflowsDir, getProjectWorkflowsDir, getRepertoireDir } from '../paths.js';
+import {
+  getBuiltinWorkflowsDir,
+  getGlobalWorkflowsDir,
+  getProjectWorkflowsDir,
+  getRepertoireDir,
+  isPathSafe,
+} from '../paths.js';
 import { resolveWorkflowConfigValues } from '../resolveWorkflowConfigValue.js';
 import { loadWorkflowFromFile } from './workflowFileLoader.js';
 import { validateProjectWorkflowTrustBoundary } from './workflowTrustBoundary.js';
+import { resolveWorkflowTrustInfo, type WorkflowTrustSource } from './workflowTrustSource.js';
 import {
   collectValidatedWorkflowEntries,
   iterateWorkflowDir,
@@ -32,6 +39,17 @@ interface WorkflowLookupDir {
   disabled?: string[];
 }
 
+interface NamedWorkflowLookupDir {
+  dir: string;
+  source: WorkflowTrustSource;
+  disabled?: string[];
+}
+
+export interface WorkflowLookupOptions {
+  basePath?: string;
+  lookupCwd?: string;
+}
+
 export type { WorkflowDirEntry, WorkflowSource, WorkflowWithSource } from './workflowDiscovery.js';
 export { getWorkflowDescription, type FirstStepInfo, type StepPreview } from './workflowPreview.js';
 
@@ -46,10 +64,37 @@ function resolvePath(pathInput: string, basePath: string): string {
 }
 
 function resolveWorkflowFile(workflowsDir: string, name: string): string | null {
+  const resolvedWorkflowsDir = resolve(workflowsDir);
   for (const ext of ['.yaml', '.yml']) {
-    const filePath = join(workflowsDir, `${name}${ext}`);
+    const filePath = resolve(workflowsDir, `${name}${ext}`);
+    if (!isPathSafe(resolvedWorkflowsDir, filePath)) {
+      continue;
+    }
     if (existsSync(filePath)) return filePath;
   }
+  return null;
+}
+
+function findWorkflowInLookupDirs(
+  name: string,
+  lookupDirs: NamedWorkflowLookupDir[],
+): { filePath: string; source: WorkflowTrustSource } | null {
+  for (const { dir, source, disabled } of lookupDirs) {
+    if (source === 'builtin' && disabled?.includes(name)) {
+      continue;
+    }
+
+    const match = resolveWorkflowFile(dir, name);
+    if (!match) {
+      continue;
+    }
+
+    return {
+      filePath: match,
+      source,
+    };
+  }
+
   return null;
 }
 
@@ -61,6 +106,47 @@ function getWorkflowDirs(cwd: string): WorkflowLookupDir[] {
   }
   dirs.push({ dir: getGlobalWorkflowsDir(), source: 'user' });
   dirs.push({ dir: getProjectWorkflowsDir(cwd), source: 'project' });
+  return dirs;
+}
+
+function loadWorkflowFromLookupDirs(
+  name: string,
+  lookupDirs: NamedWorkflowLookupDir[],
+  projectCwd: string,
+  lookupCwd: string,
+): WorkflowConfig | null {
+  const match = findWorkflowInLookupDirs(name, lookupDirs);
+  if (!match) {
+    return null;
+  }
+
+  const trustInfo = resolveWorkflowTrustInfo({
+    filePath: match.filePath,
+    projectCwd,
+    lookupCwd,
+    source: match.source,
+  });
+  const workflow = loadWorkflowFromFile(match.filePath, projectCwd, { trustInfo });
+  if (match.source === 'project') {
+    validateProjectWorkflowTrustBoundary(workflow, match.filePath, projectCwd);
+  }
+  return workflow;
+}
+
+function getNamedWorkflowLookupDirs(projectCwd: string, _lookupCwd: string): NamedWorkflowLookupDir[] {
+  const config = resolveWorkflowConfigValues(projectCwd, ['enableBuiltinWorkflows', 'language', 'disabledBuiltins']);
+  const dirs: NamedWorkflowLookupDir[] = [];
+
+  dirs.push({
+    dir: resolve(getProjectWorkflowsDir(projectCwd)),
+    source: 'project',
+  });
+  dirs.push({ dir: getGlobalWorkflowsDir(), source: 'user' });
+
+  if (config.enableBuiltinWorkflows !== false) {
+    dirs.push({ dir: getBuiltinWorkflowsDir(config.language), disabled: config.disabledBuiltins ?? [], source: 'builtin' });
+  }
+
   return dirs;
 }
 
@@ -79,29 +165,33 @@ export function getBuiltinWorkflow(name: string, projectCwd: string): WorkflowCo
   return existsSync(yamlPath) ? loadWorkflowFromFile(yamlPath, projectCwd) : null;
 }
 
-function loadWorkflowFromPath(filePath: string, basePath: string, projectCwd: string): WorkflowConfig | null {
+function loadWorkflowFromPath(
+  filePath: string,
+  basePath: string,
+  projectCwd: string,
+  lookupCwd: string,
+): WorkflowConfig | null {
   const resolvedPath = resolvePath(filePath, basePath);
+  return loadWorkflowFromResolvedPath(resolvedPath, projectCwd, lookupCwd);
+}
+
+function loadWorkflowFromResolvedPath(resolvedPath: string, projectCwd: string, lookupCwd = projectCwd): WorkflowConfig | null {
   if (!existsSync(resolvedPath)) {
     return null;
   }
 
-  const workflow = loadWorkflowFromFile(resolvedPath, projectCwd);
+  const trustInfo = resolveWorkflowTrustInfo({
+    filePath: resolvedPath,
+    projectCwd,
+    lookupCwd,
+  });
+  const workflow = loadWorkflowFromFile(resolvedPath, projectCwd, { trustInfo });
   validateProjectWorkflowTrustBoundary(workflow, resolvedPath, projectCwd);
   return workflow;
 }
 
 export function loadWorkflow(name: string, projectCwd: string): WorkflowConfig | null {
-  for (const dir of [getProjectWorkflowsDir(projectCwd), getGlobalWorkflowsDir()]) {
-    const match = resolveWorkflowFile(dir, name);
-    if (match) {
-      const workflow = loadWorkflowFromFile(match, projectCwd);
-      if (dir === getProjectWorkflowsDir(projectCwd)) {
-        validateProjectWorkflowTrustBoundary(workflow, match, projectCwd);
-      }
-      return workflow;
-    }
-  }
-  return getBuiltinWorkflow(name, projectCwd);
+  return loadWorkflowFromLookupDirs(name, getNamedWorkflowLookupDirs(projectCwd, projectCwd), projectCwd, projectCwd);
 }
 
 export function isWorkflowPath(identifier: string): boolean {
@@ -122,14 +212,25 @@ function loadRepertoireWorkflowByRef(identifier: string, projectCwd: string): Wo
   return filePath ? loadWorkflowFromFile(filePath, projectCwd) : null;
 }
 
-export function loadWorkflowByIdentifier(identifier: string, projectCwd: string): WorkflowConfig | null {
+export function loadWorkflowByIdentifier(
+  identifier: string,
+  projectCwd: string,
+  options?: WorkflowLookupOptions,
+): WorkflowConfig | null {
+  const lookupCwd = options?.lookupCwd ?? projectCwd;
+  const basePath = options?.basePath ?? lookupCwd;
   if (isScopeRef(identifier)) {
     return loadRepertoireWorkflowByRef(identifier, projectCwd);
   }
   if (isWorkflowPath(identifier)) {
-    return loadWorkflowFromPath(identifier, projectCwd, projectCwd);
+    return loadWorkflowFromPath(identifier, basePath, projectCwd, lookupCwd);
   }
-  return loadWorkflow(identifier, projectCwd);
+  return loadWorkflowFromLookupDirs(
+    identifier,
+    getNamedWorkflowLookupDirs(projectCwd, lookupCwd),
+    projectCwd,
+    lookupCwd,
+  );
 }
 
 export function loadAllWorkflowsWithSources(

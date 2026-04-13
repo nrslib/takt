@@ -111,6 +111,8 @@ export class SessionManager {
               status: record.status,
               timestamp: record.timestamp,
               content: record.content,
+              ...(record.workflow ? { workflow: record.workflow } : {}),
+              ...(record.stack ? { stack: record.stack } : {}),
               ...(record.error ? { error: record.error } : {}),
               ...(record.matchedRuleIndex != null ? { matchedRuleIndex: record.matchedRuleIndex } : {}),
               ...(record.matchedRuleMethod ? { matchedRuleMethod: record.matchedRuleMethod } : {}),

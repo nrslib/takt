@@ -7,6 +7,7 @@ export {
   getBuiltinWorkflow,
   loadWorkflow,
   loadWorkflowByIdentifier,
+  resolveWorkflowCallTarget,
   isWorkflowPath,
   getWorkflowDescription,
   loadAllWorkflows,

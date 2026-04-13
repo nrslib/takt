@@ -119,6 +119,7 @@ export function persistExceededTaskResult(
     currentStep: exceeded.currentStep,
     newMaxSteps: exceeded.newMaxSteps,
     currentIteration: exceeded.currentIteration,
+    ...(exceeded.resumePoint ? { resumePoint: exceeded.resumePoint } : {}),
     ...(context?.worktreePath ? { worktreePath: context.worktreePath } : {}),
     ...(context?.branch ? { branch: context.branch } : {}),
   });

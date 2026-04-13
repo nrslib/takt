@@ -14,6 +14,14 @@ function resolveExceededMaxValue(record: Record<string, unknown>): number | unde
   return getPositiveIntField(record, 'exceeded_max_steps');
 }
 
+function resolveResumePointValue(record: Record<string, unknown>): Record<string, unknown> | undefined {
+  const value = record.resume_point;
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  return { ...value } as Record<string, unknown>;
+}
+
 function toTaskConfigRecord(input: unknown): Record<string, unknown> | null {
   if (typeof input !== 'object' || input === null || Array.isArray(input)) {
     return null;
@@ -38,6 +46,7 @@ export function normalizeTaskConfig(input: unknown): unknown {
   const workflow = resolveTaskWorkflowValue(record);
   const startStep = resolveTaskStartStepValue(record);
   const exceededMax = resolveExceededMaxValue(record);
+  const resumePoint = resolveResumePointValue(record);
 
   const next: Record<string, unknown> = { ...record };
   if (exceededMax !== undefined) {
@@ -49,6 +58,9 @@ export function normalizeTaskConfig(input: unknown): unknown {
   if (startStep !== undefined) {
     next.start_step = startStep;
   }
+  if (resumePoint !== undefined) {
+    next.resume_point = resumePoint;
+  }
 
   return next;
 }
@@ -58,10 +70,12 @@ export function serializeTaskConfig(record: Record<string, unknown>): Record<str
   const workflow = getStringField(serialized, 'workflow');
   const startStep = getStringField(serialized, 'start_step');
   const exceededMax = getPositiveIntField(serialized, 'exceeded_max_steps');
+  const resumePoint = resolveResumePointValue(serialized);
 
   delete serialized.workflow;
   delete serialized.start_step;
   delete serialized.exceeded_max_steps;
+  delete serialized.resume_point;
 
   if (workflow !== undefined) {
     serialized.workflow = workflow;
@@ -71,6 +85,9 @@ export function serializeTaskConfig(record: Record<string, unknown>): Record<str
   }
   if (exceededMax !== undefined) {
     serialized.exceeded_max_steps = exceededMax;
+  }
+  if (resumePoint !== undefined) {
+    serialized.resume_point = resumePoint;
   }
 
   return serialized;

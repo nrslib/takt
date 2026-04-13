@@ -179,6 +179,15 @@ describe('シナリオ1・2: exceeded status transition via executeAndCompleteTa
   });
 
   it('scenario 2: exceeded metadata is recorded in tasks.yaml for resumption', async () => {
+    const resumePoint = {
+      version: 1 as const,
+      stack: [
+        { workflow: 'test-workflow', step: 'delegate', kind: 'workflow_call' as const },
+        { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
+      ],
+      iteration: 30,
+      elapsed_ms: 183245,
+    };
     runner.addTask('Do work', { workflow: 'test-workflow' });
     const [task] = runner.claimNextTasks(1);
     if (!task) throw new Error('No task claimed');
@@ -190,6 +199,7 @@ describe('シナリオ1・2: exceeded status transition via executeAndCompleteTa
         currentStep: 'implement',
         newMaxSteps: 60,
         currentIteration: 30,
+        resumePoint,
       },
     });
 
@@ -201,6 +211,7 @@ describe('シナリオ1・2: exceeded status transition via executeAndCompleteTa
     expect(exceededRecord?.start_step).toBe('implement');
     expect(exceededRecord?.exceeded_max_steps).toBe(60);
     expect(exceededRecord?.exceeded_current_iteration).toBe(30);
+    expect(exceededRecord?.resume_point).toEqual(resumePoint);
   });
 
   it('scenario 5: first exceed on worktree task persists worktree_path and branch in tasks.yaml', async () => {
@@ -302,5 +313,58 @@ describe('シナリオ3・4: requeue → re-execution passes exceeded metadata t
     expect(vi.mocked(executeWorkflow)).toHaveBeenCalledOnce();
     const capturedOptions = vi.mocked(executeWorkflow).mock.calls[0]![3] as WorkflowExecutionOptions;
     expect(capturedOptions.startStep).toBe('implement');
+  });
+
+  it('scenario 6: re-execution trims workflow_call resume_point to the root step when the child no longer resolves', async () => {
+    vi.mocked(loadWorkflowByIdentifier).mockReturnValue({
+      name: 'test-workflow',
+      maxSteps: 30,
+      initialStep: 'delegate',
+      steps: [
+        {
+          name: 'delegate',
+          kind: 'workflow_call',
+          call: 'takt/coding',
+          instruction: '',
+          personaDisplayName: 'delegate',
+          passPreviousResponse: true,
+          rules: [],
+        },
+      ],
+    });
+    writeExceededRecord(testDir, {
+      worktree: true,
+      worktree_path: cloneDir,
+      start_step: 'delegate',
+      resume_point: {
+        version: 1,
+        stack: [
+          { workflow: 'test-workflow', step: 'delegate', kind: 'workflow_call' },
+          { workflow: 'takt/coding', step: 'review', kind: 'agent' },
+        ],
+        iteration: 30,
+        elapsed_ms: 183245,
+      },
+    });
+
+    runner.requeueExceededTask('task-a');
+
+    const [task] = runner.claimNextTasks(1);
+    if (!task) throw new Error('No task claimed');
+
+    vi.mocked(executeWorkflow).mockResolvedValueOnce({ success: true });
+
+    await executeAndCompleteTask(task, runner, testDir);
+
+    const capturedOptions = vi.mocked(executeWorkflow).mock.calls[0]![3] as WorkflowExecutionOptions;
+    expect(capturedOptions.startStep).toBe('delegate');
+    expect(capturedOptions.resumePoint).toEqual({
+      version: 1,
+      stack: [
+        { workflow: 'test-workflow', step: 'delegate', kind: 'workflow_call' },
+      ],
+      iteration: 30,
+      elapsed_ms: 183245,
+    });
   });
 });

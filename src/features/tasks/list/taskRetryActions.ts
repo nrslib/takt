@@ -9,10 +9,12 @@ import * as fs from 'node:fs';
 import type { TaskListItem } from '../../../infra/task/index.js';
 import { TaskRunner, resolveTaskWorkflowValue } from '../../../infra/task/index.js';
 import { loadWorkflowByIdentifier, resolveWorkflowConfigValue, getWorkflowDescription } from '../../../infra/config/index.js';
+import { validateWorkflowExecutionTrustBoundary } from '../../../infra/config/loaders/workflowTrustBoundary.js';
 import { selectOptionWithDefault } from '../../../shared/prompt/index.js';
 import { info, header, blankLine, status, warn } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
-import type { WorkflowConfig } from '../../../core/models/index.js';
+import type { WorkflowConfig, WorkflowResumePoint } from '../../../core/models/index.js';
+import { readRunMetaBySlug } from '../../../core/workflow/run/run-meta.js';
 import {
   findRunForTask,
   loadRunSessionContext,
@@ -33,6 +35,7 @@ import {
 } from './requeueHelpers.js';
 import { prepareTaskForExecution } from './prepareTaskForExecution.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
+import { workflowEntryMatchesWorkflow } from '../../../core/workflow/workflow-reference.js';
 
 const log = createLogger('list-tasks');
 
@@ -104,6 +107,56 @@ function buildRetryRunInfo(
   };
 }
 
+function resolveRetryResumePoint(
+  task: TaskListItem,
+  worktreePath: string,
+  matchedSlug: string | null,
+): WorkflowResumePoint | undefined {
+  if (matchedSlug) {
+    const runMeta = readRunMetaBySlug(worktreePath, matchedSlug, (warningMessage) => {
+      warn(warningMessage);
+    });
+    const metaResumePoint = runMeta?.resumePoint;
+    if (metaResumePoint) {
+      return metaResumePoint;
+    }
+  }
+
+  return task.data?.resume_point;
+}
+
+function resolveRetryDefaultStep(
+  workflowConfig: WorkflowConfig,
+  task: TaskListItem,
+  resumePoint: WorkflowResumePoint | undefined,
+): string | null {
+  const rootEntry = resumePoint?.stack[0];
+  if (
+    rootEntry
+    && workflowEntryMatchesWorkflow(rootEntry, workflowConfig)
+    && workflowConfig.steps.some((step) => step.name === rootEntry.step)
+  ) {
+    return rootEntry.step;
+  }
+
+  return task.failure?.step ?? null;
+}
+
+function shouldResumeFromSelectedStep(
+  workflowConfig: WorkflowConfig,
+  selectedStep: string,
+  resumePoint: WorkflowResumePoint | undefined,
+): resumePoint is WorkflowResumePoint {
+  const rootEntry = resumePoint?.stack[0];
+  if (!rootEntry) {
+    return false;
+  }
+
+  return workflowEntryMatchesWorkflow(rootEntry, workflowConfig)
+    && rootEntry.step === selectedStep
+    && workflowConfig.steps.some((step) => step.name === rootEntry.step);
+}
+
 function resolveWorktreePath(task: TaskListItem): string {
   if (!task.worktreePath) {
     throw new Error(`Worktree path is not set for task: ${task.name}`);
@@ -147,18 +200,26 @@ export async function retryFailedTask(
   }
 
   const previewCount = resolveWorkflowConfigValue(projectDir, 'interactivePreviewSteps');
-  const workflowConfig = loadWorkflowByIdentifier(selectedWorkflow, projectDir);
+  const workflowConfig = loadWorkflowByIdentifier(selectedWorkflow, projectDir, { lookupCwd: worktreePath });
 
   if (!workflowConfig) {
     throw new Error(`Workflow "${sanitizeTerminalText(selectedWorkflow)}" not found after selection.`);
   }
+  validateWorkflowExecutionTrustBoundary(workflowConfig, projectDir);
 
-  const selectedStep = await selectStartStep(workflowConfig, task.failure?.step ?? null);
+  const resumePoint = resolveRetryResumePoint(task, worktreePath, matchedSlug);
+  const selectedStep = await selectStartStep(
+    workflowConfig,
+    resolveRetryDefaultStep(workflowConfig, task, resumePoint),
+  );
   if (selectedStep === null) {
     return false;
   }
+  const selectedResumePoint = shouldResumeFromSelectedStep(workflowConfig, selectedStep, resumePoint)
+    ? resumePoint
+    : undefined;
 
-  const workflowDesc = getWorkflowDescription(selectedWorkflow, projectDir, previewCount);
+  const workflowDesc = getWorkflowDescription(selectedWorkflow, projectDir, previewCount, worktreePath);
   const workflowContext = {
     name: workflowDesc.name,
     description: workflowDesc.description,
@@ -194,12 +255,18 @@ export async function retryFailedTask(
   const runner = new TaskRunner(projectDir);
 
   if (retryResult.action === 'save_task') {
-    runner.requeueTask(task.name, ['failed'], startStep, retryNote);
+    if (selectedResumePoint) {
+      runner.requeueTask(task.name, ['failed'], startStep, retryNote, selectedResumePoint);
+    } else {
+      runner.requeueTask(task.name, ['failed'], startStep, retryNote);
+    }
     info(`Task "${sanitizeTerminalText(task.name)}" has been requeued.`);
     return true;
   }
 
-  const taskInfo = runner.startReExecution(task.name, ['failed'], startStep, retryNote);
+  const taskInfo = selectedResumePoint
+    ? runner.startReExecution(task.name, ['failed'], startStep, retryNote, selectedResumePoint)
+    : runner.startReExecution(task.name, ['failed'], startStep, retryNote);
   const taskForExecution = prepareTaskForExecution(taskInfo, selectedWorkflow);
 
   log.info('Starting re-execution of failed task', {

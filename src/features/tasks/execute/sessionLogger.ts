@@ -6,38 +6,32 @@
 
 import {
   appendNdjsonLine,
-  type NdjsonStepStart,
-  type NdjsonStepComplete,
-  type NdjsonWorkflowComplete,
-  type NdjsonWorkflowAbort,
-  type NdjsonPhaseStart,
-  type NdjsonPhaseComplete,
-  type NdjsonPhaseJudgeStage,
-  type NdjsonInteractiveStart,
-  type NdjsonInteractiveEnd,
 } from '../../../infra/fs/index.js';
 import type { InteractiveMetadata } from './types.js';
 import { isDebugEnabled, writePromptLog } from '../../../shared/utils/index.js';
 import type { PromptLogRecord, NdjsonRecord } from '../../../shared/utils/index.js';
-import type { WorkflowStep, AgentResponse, WorkflowState } from '../../../core/models/index.js';
+import type { WorkflowResumePointEntry, WorkflowStep, AgentResponse, WorkflowState } from '../../../core/models/index.js';
 import type { JudgeStageEntry, PhasePromptParts } from '../../../core/workflow/types.js';
 import { sanitizeTextForStorage } from './traceReportRedaction.js';
-
-function toJudgmentMatchMethod(
-  matchedRuleMethod: string | undefined,
-): string | undefined {
-  if (!matchedRuleMethod) return undefined;
-  if (matchedRuleMethod === 'structured_output') return 'structured_output';
-  if (matchedRuleMethod === 'ai_judge' || matchedRuleMethod === 'ai_judge_fallback') return 'ai_judge';
-  if (matchedRuleMethod === 'phase3_tag' || matchedRuleMethod === 'phase1_tag') return 'tag_fallback';
-  return undefined;
-}
+import { buildWorkflowStepScopeKey } from './workflowStepScope.js';
+import { SessionLoggerPhaseTracker } from './sessionLoggerPhaseTracker.js';
+import {
+  buildInteractiveRecords,
+  buildPhaseCompleteRecord,
+  buildPhaseJudgeStageRecord,
+  buildPhaseStartRecord,
+  buildPromptLogRecord,
+  buildStepCompleteRecord,
+  buildStepStartRecord,
+  buildWorkflowAbortRecord,
+  buildWorkflowCompleteRecord,
+} from './sessionLoggerRecordFactory.js';
 
 export class SessionLogger {
   private readonly ndjsonLogPath: string;
   private readonly allowSensitiveData: boolean;
-  private readonly phasePromptsByExecutionId = new Map<string, PhasePromptParts>();
-  private readonly phaseExecutionCounters = new Map<string, number>();
+  private readonly phaseTracker = new SessionLoggerPhaseTracker();
+  private readonly activeStepIterations = new Map<string, number>();
   private readonly ndjsonRecords: NdjsonRecord[] = [];
   private readonly promptRecords: PromptLogRecord[] = [];
   private currentIteration = 0;
@@ -48,14 +42,8 @@ export class SessionLogger {
   }
 
   writeInteractiveMetadata(meta: InteractiveMetadata): void {
-    const startRecord: NdjsonInteractiveStart = { type: 'interactive_start', timestamp: new Date().toISOString() };
+    const [startRecord, endRecord] = buildInteractiveRecords(meta, this.sanitizeText.bind(this));
     this.appendRecord(startRecord);
-    const endRecord: NdjsonInteractiveEnd = {
-      type: 'interactive_end',
-      confirmed: meta.confirmed,
-      ...(meta.task ? { task: this.sanitizeText(meta.task) } : {}),
-      timestamp: new Date().toISOString(),
-    };
     this.appendRecord(endRecord);
   }
 
@@ -69,30 +57,34 @@ export class SessionLogger {
     phaseName: 'execute' | 'report' | 'judge',
     instruction: string,
     promptParts: PhasePromptParts,
+    workflowStack: WorkflowResumePointEntry[] | undefined,
     phaseExecutionId?: string,
     iteration?: number,
   ): void {
     if (!instruction) {
       throw new Error(`Missing phase instruction for ${step.name}:${phase}`);
     }
-    const resolvedPhaseExecutionId = this.resolvePhaseExecutionId(step.name, phase, phaseExecutionId, iteration);
-    const record: NdjsonPhaseStart = {
-      type: 'phase_start',
-      step: step.name,
+    const debugEnabled = isDebugEnabled();
+    const resolvedPhaseExecutionId = this.phaseTracker.trackStart({
+      stepName: step.name,
+      phase,
+      phaseExecutionId,
+      iteration,
+      promptParts,
+      capturePrompt: debugEnabled,
+    });
+    const record = buildPhaseStartRecord(
+      step,
       phase,
       phaseName,
-      phaseExecutionId: resolvedPhaseExecutionId,
-      timestamp: new Date().toISOString(),
-      instruction: this.sanitizeText(instruction),
-      systemPrompt: this.sanitizeText(promptParts.systemPrompt),
-      userInstruction: this.sanitizeText(promptParts.userInstruction),
-      ...(iteration != null ? { iteration } : {}),
-    };
+      instruction,
+      promptParts,
+      workflowStack,
+      resolvedPhaseExecutionId,
+      iteration,
+      this.sanitizeText.bind(this),
+    );
     this.appendRecord(record);
-
-    if (isDebugEnabled()) {
-      this.phasePromptsByExecutionId.set(resolvedPhaseExecutionId, promptParts);
-    }
   }
 
   onPhaseComplete(
@@ -102,47 +94,50 @@ export class SessionLogger {
     content: string,
     phaseStatus: string,
     phaseError: string | undefined,
+    workflowStack: WorkflowResumePointEntry[] | undefined,
     phaseExecutionId?: string,
     iteration?: number,
   ): void {
     if (!phaseStatus) {
       throw new Error(`Missing phase status for ${step.name}:${phase}`);
     }
-    const resolvedPhaseExecutionId = this.resolveCompletionPhaseExecutionId(step.name, phase, phaseExecutionId, iteration);
+    const debugEnabled = isDebugEnabled();
+    const trackedPhase = this.phaseTracker.trackCompletion({
+      stepName: step.name,
+      phase,
+      phaseExecutionId,
+      iteration,
+      requirePrompt: debugEnabled,
+    });
     const completedAt = new Date().toISOString();
-    const record: NdjsonPhaseComplete = {
-      type: 'phase_complete',
-      step: step.name,
+    const record = buildPhaseCompleteRecord(
+      step,
       phase,
       phaseName,
-      phaseExecutionId: resolvedPhaseExecutionId,
-      status: phaseStatus,
-      content: this.sanitizeText(content),
-      timestamp: completedAt,
-      ...(phaseError ? { error: this.sanitizeText(phaseError) } : {}),
-      ...(iteration != null ? { iteration } : {}),
-    };
+      content,
+      phaseStatus,
+      phaseError,
+      workflowStack,
+      trackedPhase.phaseExecutionId,
+      iteration,
+      completedAt,
+      this.sanitizeText.bind(this),
+    );
     this.appendRecord(record);
 
-    const prompt = this.phasePromptsByExecutionId.get(resolvedPhaseExecutionId);
-    if (isDebugEnabled()) {
-      if (!prompt) {
-        throw new Error(`Missing debug prompt for ${step.name}:${phase}:${resolvedPhaseExecutionId}`);
-      }
-      const promptRecord: PromptLogRecord = {
-        step: step.name,
+    if (debugEnabled && trackedPhase.promptParts) {
+      const promptRecord = buildPromptLogRecord(
+        step,
         phase,
-        iteration: iteration ?? this.currentIteration,
-        phaseExecutionId: resolvedPhaseExecutionId,
-        prompt: this.sanitizeText(prompt.userInstruction),
-        systemPrompt: this.sanitizeText(prompt.systemPrompt),
-        userInstruction: this.sanitizeText(prompt.userInstruction),
-        response: this.sanitizeText(content),
-        timestamp: completedAt,
-      };
+        iteration ?? this.currentIteration,
+        trackedPhase.phaseExecutionId,
+        trackedPhase.promptParts,
+        content,
+        completedAt,
+        this.sanitizeText.bind(this),
+      );
       writePromptLog(promptRecord);
       this.promptRecords.push(promptRecord);
-      this.phasePromptsByExecutionId.delete(resolvedPhaseExecutionId);
     }
   }
 
@@ -151,24 +146,26 @@ export class SessionLogger {
     phase: 3,
     phaseName: 'judge',
     entry: JudgeStageEntry,
+    workflowStack: WorkflowResumePointEntry[] | undefined,
     phaseExecutionId?: string,
     iteration?: number,
   ): void {
-    const resolvedPhaseExecutionId = this.resolveCompletionPhaseExecutionId(step.name, phase, phaseExecutionId, iteration);
-    const record: NdjsonPhaseJudgeStage = {
-      type: 'phase_judge_stage',
-      step: step.name,
+    const resolvedPhaseExecutionId = this.phaseTracker.resolveExistingExecutionId({
+      stepName: step.name,
+      phase,
+      phaseExecutionId,
+      iteration,
+    });
+    const record = buildPhaseJudgeStageRecord(
+      step,
       phase,
       phaseName,
-      phaseExecutionId: resolvedPhaseExecutionId,
-      stage: entry.stage,
-      method: entry.method,
-      status: entry.status,
-      instruction: this.sanitizeText(entry.instruction),
-      response: this.sanitizeText(entry.response),
-      timestamp: new Date().toISOString(),
-      ...(iteration != null ? { iteration } : {}),
-    };
+      entry,
+      workflowStack,
+      resolvedPhaseExecutionId,
+      iteration,
+      this.sanitizeText.bind(this),
+    );
     this.appendRecord(record);
   }
 
@@ -176,16 +173,17 @@ export class SessionLogger {
     step: WorkflowStep,
     iteration: number,
     instruction: string | undefined,
+    workflowStack: WorkflowResumePointEntry[] | undefined,
   ): void {
     this.currentIteration = iteration;
-    const record: NdjsonStepStart = {
-      type: 'step_start',
-      step: step.name,
-      persona: step.personaDisplayName,
+    this.activeStepIterations.set(buildWorkflowStepScopeKey(step.name, workflowStack), iteration);
+    const record = buildStepStartRecord(
+      step,
       iteration,
-      timestamp: new Date().toISOString(),
-      ...(instruction ? { instruction: this.sanitizeText(instruction) } : {}),
-    };
+      instruction,
+      workflowStack,
+      this.sanitizeText.bind(this),
+    );
     this.appendRecord(record);
   }
 
@@ -193,41 +191,31 @@ export class SessionLogger {
     step: WorkflowStep,
     response: AgentResponse,
     instruction: string,
+    workflowStack: WorkflowResumePointEntry[] | undefined,
   ): void {
-    const matchMethod = toJudgmentMatchMethod(response.matchedRuleMethod);
-    const record: NdjsonStepComplete = {
-      type: 'step_complete',
-      step: step.name,
-      persona: response.persona,
-      status: response.status,
-      content: this.sanitizeText(response.content),
-      instruction: this.sanitizeText(instruction),
-      ...(response.matchedRuleIndex != null ? { matchedRuleIndex: response.matchedRuleIndex } : {}),
-      ...(response.matchedRuleMethod ? { matchedRuleMethod: response.matchedRuleMethod } : {}),
-      ...(matchMethod ? { matchMethod } : {}),
-      ...(response.error ? { error: this.sanitizeText(response.error) } : {}),
-      timestamp: response.timestamp.toISOString(),
-    };
+    const stepScopeKey = buildWorkflowStepScopeKey(step.name, workflowStack);
+    const iteration = this.activeStepIterations.get(stepScopeKey);
+    if (iteration == null) {
+      throw new Error(`Missing step iteration for completion: ${step.name}`);
+    }
+    this.activeStepIterations.delete(stepScopeKey);
+    const record = buildStepCompleteRecord(
+      step,
+      response,
+      instruction,
+      iteration,
+      workflowStack,
+      this.sanitizeText.bind(this),
+    );
     this.appendRecord(record);
   }
 
   onWorkflowComplete(state: WorkflowState): void {
-    const record: NdjsonWorkflowComplete = {
-      type: 'workflow_complete',
-      iterations: state.iteration,
-      endTime: new Date().toISOString(),
-    };
-    this.appendRecord(record);
+    this.appendRecord(buildWorkflowCompleteRecord(state));
   }
 
   onWorkflowAbort(state: WorkflowState, reason: string): void {
-    const record: NdjsonWorkflowAbort = {
-      type: 'workflow_abort',
-      iterations: state.iteration,
-      reason: this.sanitizeText(reason),
-      endTime: new Date().toISOString(),
-    };
-    this.appendRecord(record);
+    this.appendRecord(buildWorkflowAbortRecord(state, reason, this.sanitizeText.bind(this)));
   }
 
   getNdjsonRecords(): NdjsonRecord[] {
@@ -236,46 +224,6 @@ export class SessionLogger {
 
   getPromptRecords(): PromptLogRecord[] {
     return [...this.promptRecords];
-  }
-
-  private buildPhaseKey(stepName: string, phase: 1 | 2 | 3, iteration?: number): string {
-    if (iteration == null) {
-      return `${stepName}:${phase}`;
-    }
-    return `${stepName}:${iteration}:${phase}`;
-  }
-
-  private resolvePhaseExecutionId(
-    stepName: string,
-    phase: 1 | 2 | 3,
-    phaseExecutionId: string | undefined,
-    iteration?: number,
-  ): string {
-    if (phaseExecutionId) {
-      return phaseExecutionId;
-    }
-    const key = this.buildPhaseKey(stepName, phase, iteration);
-    const current = this.phaseExecutionCounters.get(key) ?? 0;
-    const next = current + 1;
-    this.phaseExecutionCounters.set(key, next);
-    return `${key}:${next}`;
-  }
-
-  private resolveCompletionPhaseExecutionId(
-    stepName: string,
-    phase: 1 | 2 | 3,
-    phaseExecutionId: string | undefined,
-    iteration?: number,
-  ): string {
-    if (phaseExecutionId) {
-      return phaseExecutionId;
-    }
-    const key = this.buildPhaseKey(stepName, phase, iteration);
-    const current = this.phaseExecutionCounters.get(key);
-    if (current == null) {
-      throw new Error(`Missing phase execution id on completion for ${stepName}:${phase}`);
-    }
-    return `${key}:${current}`;
   }
 
   private appendRecord(record: NdjsonRecord): void {

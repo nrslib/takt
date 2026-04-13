@@ -1,4 +1,5 @@
 import { z } from 'zod/v4';
+import { getWorkflowStepKind } from './workflow-step-kind.js';
 
 export const StructuredOutputRawSchema = z.object({
   schema_ref: z.string().min(1),
@@ -130,22 +131,25 @@ export const WorkflowEffectRawSchema = z.discriminatedUnion('type', [
 
 export function validateSystemStepFields(
   data: {
-    mode?: 'agent' | 'system';
+    kind?: 'agent' | 'system' | 'workflow_call';
+    mode?: 'system';
+    call?: string;
     system_inputs?: Array<{ as?: string }>;
     effects?: Array<{ type: string }>;
   } & Record<string, unknown>,
   ctx: z.core.$RefinementCtx,
 ): void {
+  const stepKind = getWorkflowStepKind(data);
   const hasSystemFields = data.system_inputs !== undefined || data.effects !== undefined;
-  if (hasSystemFields && data.mode !== 'system') {
+  if (hasSystemFields && stepKind !== 'system') {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['mode'],
-      message: 'Steps with "system_inputs" or "effects" must set mode to "system"',
+      message: 'Steps with "system_inputs" or "effects" must set kind to "system"',
     });
   }
 
-  if (data.mode === 'system') {
+  if (stepKind === 'system') {
     for (const field of ['parallel', 'arpeggio', 'team_leader'] as const) {
       if (data[field] !== undefined) {
         ctx.addIssue({

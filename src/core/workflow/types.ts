@@ -6,7 +6,16 @@
  */
 
 import type { PermissionResult, PermissionUpdate } from '@anthropic-ai/claude-agent-sdk';
-import type { WorkflowStep, AgentResponse, WorkflowState, Language, LoopMonitorConfig } from '../models/types.js';
+import type {
+  WorkflowStep,
+  AgentResponse,
+  WorkflowState,
+  Language,
+  LoopMonitorConfig,
+  WorkflowConfig,
+  WorkflowResumePoint,
+  WorkflowResumePointEntry,
+} from '../models/types.js';
 import type { PersonaProviderEntry } from '../models/config-types.js';
 import type { ProviderPermissionProfiles } from '../models/provider-profiles.js';
 import type { StepProviderOptions } from '../models/workflow-types.js';
@@ -98,6 +107,22 @@ export interface RuntimeStepResolution {
   providerInfo?: StepProviderInfo;
   teamLeaderPart?: TeamLeaderPartRuntimeResolution;
 }
+
+export interface WorkflowSharedRuntimeState {
+  startedAtMs: number;
+  activeResumePoint?: WorkflowResumePoint;
+  maxSteps?: number;
+}
+
+export interface WorkflowCallResolutionRequest {
+  parentWorkflow: WorkflowConfig;
+  identifier: string;
+  stepName: string;
+  projectCwd: string;
+  lookupCwd: string;
+}
+
+export type WorkflowCallResolver = (request: WorkflowCallResolutionRequest) => WorkflowConfig | null;
 
 /** Events emitted by workflow engine */
 export interface WorkflowEvents {
@@ -216,19 +241,28 @@ export interface WorkflowEngineOptions {
   startStep?: string;
   /** Retry note explaining why task is being retried */
   retryNote?: string;
+  /** Resume point for workflow_call-aware retries */
+  resumePoint?: WorkflowResumePoint;
   /** Override report directory name (without parent path). */
   reportDirName?: string;
+  /** Namespace appended under the shared run directories for nested workflow execution. */
+  runPathNamespace?: string[];
   /** Task name prefix for parallel task execution output */
   taskPrefix?: string;
   /** Color index for task prefix (cycled across tasks) */
   taskColorIndex?: number;
   /** Initial iteration count (for resuming exceeded tasks) */
   initialIteration?: number;
+  /** Override workflow maxSteps for the current engine instance. */
+  maxStepsOverride?: number;
   /** Current task metadata for system-step context resolution */
   currentTask?: {
     issueNumber?: number;
   };
   systemStepServicesFactory?: SystemStepServicesFactory;
+  sharedRuntime?: WorkflowSharedRuntimeState;
+  resumeStackPrefix?: WorkflowResumePointEntry[];
+  workflowCallResolver?: WorkflowCallResolver;
 }
 
 /** Loop detection result */

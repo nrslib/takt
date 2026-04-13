@@ -85,4 +85,80 @@ describe('RunMetaManager', () => {
     expect(finalizedMeta.iterations).toBe(3);
     expect(finalizedMeta.endTime).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
+
+  it('should persist and retain resume point metadata for workflow_call retries', () => {
+    const manager = new RunMetaManager(createRunPaths(), 'Force fail task', 'default');
+    const resumePoint = {
+      version: 1,
+      stack: [
+        { workflow: 'default', step: 'dev', kind: 'workflow_call' },
+        { workflow: 'takt/coding', step: 'review', kind: 'agent' },
+      ],
+      iteration: 7,
+      elapsed_ms: 183245,
+    };
+
+    (
+      manager as unknown as {
+        updateStep: (stepName: string, iteration: number, nextResumePoint: unknown) => void;
+      }
+    ).updateStep('review', 7, resumePoint);
+
+    manager.finalize('aborted', 7);
+
+    const updatedMeta = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls[1]![1])) as {
+      resume_point?: typeof resumePoint;
+    };
+    const finalizedMeta = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls[2]![1])) as {
+      resume_point?: typeof resumePoint;
+    };
+
+    expect(updatedMeta).not.toHaveProperty('resumePoint');
+    expect(finalizedMeta).not.toHaveProperty('resumePoint');
+    expect(updatedMeta.resume_point).toEqual(resumePoint);
+    expect(finalizedMeta.resume_point).toEqual(resumePoint);
+  });
+
+  it('should refresh resume point without rolling back current step metadata', () => {
+    const manager = new RunMetaManager(createRunPaths(), 'Force fail task', 'default');
+    const staleResumePoint = {
+      version: 1,
+      stack: [
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
+        { workflow: 'takt/coding', step: 'review', kind: 'agent' },
+      ],
+      iteration: 7,
+      elapsed_ms: 183245,
+    };
+    const refreshedResumePoint = {
+      version: 1,
+      stack: [
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
+      ],
+      iteration: 7,
+      elapsed_ms: 183900,
+    };
+
+    manager.updateStep('delegate', 7, staleResumePoint);
+    manager.updateResumePoint(refreshedResumePoint);
+    manager.finalize('aborted', 7);
+
+    const refreshedMeta = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls[2]![1])) as {
+      currentStep?: string;
+      currentIteration?: number;
+      resume_point?: typeof refreshedResumePoint;
+    };
+    const finalizedMeta = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls[3]![1])) as {
+      currentStep?: string;
+      currentIteration?: number;
+      resume_point?: typeof refreshedResumePoint;
+    };
+
+    expect(refreshedMeta.currentStep).toBe('delegate');
+    expect(refreshedMeta.currentIteration).toBe(7);
+    expect(refreshedMeta.resume_point).toEqual(refreshedResumePoint);
+    expect(finalizedMeta.currentStep).toBe('delegate');
+    expect(finalizedMeta.currentIteration).toBe(7);
+    expect(finalizedMeta.resume_point).toEqual(refreshedResumePoint);
+  });
 });

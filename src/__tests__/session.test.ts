@@ -85,6 +85,7 @@ describe('NDJSON log', () => {
         type: 'step_complete',
         step: 'plan',
         persona: 'planner',
+        iteration: 1,
         status: 'done',
         content: 'Plan completed',
         instruction: 'Create a plan',
@@ -133,6 +134,7 @@ describe('NDJSON log', () => {
         type: 'step_complete',
         step: 'plan',
         persona: 'planner',
+        iteration: 1,
         status: 'done',
         content: 'Plan completed',
         instruction: 'Create a plan',
@@ -178,6 +180,7 @@ describe('NDJSON log', () => {
         type: 'step_complete',
         step: 'impl',
         persona: 'coder',
+        iteration: 1,
         status: 'error',
         content: 'Failed',
         instruction: 'Do the thing',
@@ -197,6 +200,37 @@ describe('NDJSON log', () => {
       expect(log).not.toBeNull();
       expect(log!.status).toBe('aborted');
       expect(log!.history[0]!.error).toBe('compile error');
+    });
+
+    it('should preserve workflow and stack from step_complete records', () => {
+      const filepath = initTestNdjsonLog('sess-004b', 'nested task', 'parent', projectDir);
+
+      appendNdjsonLine(filepath, {
+        type: 'step_complete',
+        step: 'review',
+        persona: 'reviewer',
+        iteration: 2,
+        status: 'done',
+        content: 'Nested review complete',
+        instruction: 'Review child workflow',
+        workflow: 'takt/coding',
+        stack: [
+          { workflow: 'parent', step: 'delegate', kind: 'workflow_call' },
+          { workflow: 'takt/coding', step: 'review', kind: 'agent' },
+        ],
+        timestamp: '2025-01-01T00:00:04.000Z',
+      } satisfies NdjsonStepComplete);
+
+      const log = loadNdjsonLog(filepath);
+      expect(log).not.toBeNull();
+      expect(log!.history).toHaveLength(1);
+      expect(log!.history[0]).toMatchObject({
+        workflow: 'takt/coding',
+        stack: [
+          { workflow: 'parent', step: 'delegate', kind: 'workflow_call' },
+          { workflow: 'takt/coding', step: 'review', kind: 'agent' },
+        ],
+      });
     });
 
     it('should return null for non-existent file', () => {
@@ -230,6 +264,7 @@ describe('NDJSON log', () => {
         type: 'step_complete',
         step: 'plan',
         persona: 'planner',
+        iteration: 1,
         status: 'done',
         content: 'Done',
         instruction: 'Plan it',
@@ -258,6 +293,7 @@ describe('NDJSON log', () => {
         type: 'step_complete',
         step: 'plan',
         persona: 'planner',
+        iteration: 1,
         status: 'done',
         content: 'Plan done',
         instruction: 'Plan',
@@ -436,6 +472,7 @@ describe('NDJSON log', () => {
         type: 'step_complete',
         step: 'plan',
         persona: 'planner',
+        iteration: 1,
         status: 'done',
         content: 'Plan completed',
         instruction: 'Plan it',
@@ -538,6 +575,7 @@ describe('NDJSON log', () => {
         type: 'step_complete',
         step: 'plan',
         persona: 'planner',
+        iteration: 1,
         status: 'done',
         content: 'Plan done',
         instruction: 'Plan it',
@@ -585,6 +623,7 @@ describe('NDJSON log', () => {
         type: 'step_complete',
         step: 'plan',
         persona: 'planner',
+        iteration: 1,
         status: 'done',
         content: 'Plan done',
         instruction: 'Plan it',

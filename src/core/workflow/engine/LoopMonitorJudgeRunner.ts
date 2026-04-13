@@ -15,7 +15,7 @@ interface LoopMonitorJudgeRunnerDeps {
   stepExecutor: StepExecutor;
   state: WorkflowState;
   task: string;
-  maxSteps: number;
+  getMaxSteps: () => number;
   language?: string;
   updatePersonaSession: (persona: string, sessionId: string | undefined) => void;
   resolveNextStepFromDone: (step: WorkflowStep, response: AgentResponse) => string;
@@ -42,6 +42,7 @@ export class LoopMonitorJudgeRunner {
       threshold: monitor.threshold,
     });
 
+    const maxSteps = this.deps.getMaxSteps();
     this.deps.state.iteration++;
     const stepIteration = incrementStepIteration(this.deps.state, judgeStep.name);
     const prebuiltInstruction = this.deps.stepExecutor.buildInstruction(
@@ -49,7 +50,7 @@ export class LoopMonitorJudgeRunner {
       stepIteration,
       this.deps.state,
       this.deps.task,
-      this.deps.maxSteps,
+      maxSteps,
     );
 
     this.deps.onStepStart(judgeStep, this.deps.state.iteration, prebuiltInstruction);
@@ -58,7 +59,7 @@ export class LoopMonitorJudgeRunner {
       judgeStep,
       this.deps.state,
       this.deps.task,
-      this.deps.maxSteps,
+      maxSteps,
       this.deps.updatePersonaSession,
       prebuiltInstruction,
       runtime,

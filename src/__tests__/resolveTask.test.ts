@@ -117,6 +117,322 @@ describe('resolveTaskExecution', () => {
     expect(result.startStep).toBe('implement');
   });
 
+  it('should prefer resume_point root step over stored start_step on workflow_call retry', async () => {
+    const root = createTempProjectDir();
+    const workflowDir = path.join(root, '.takt', 'workflows');
+    fs.mkdirSync(workflowDir, { recursive: true });
+    fs.writeFileSync(path.join(workflowDir, 'default.yaml'), [
+      'name: default',
+      'initial_step: delegate',
+      'max_steps: 5',
+      'steps:',
+      '  - name: delegate',
+      '    kind: workflow_call',
+      '    call: takt/coding',
+      '    rules:',
+      '      - condition: COMPLETE',
+      '        next: COMPLETE',
+    ].join('\n'));
+
+    const task = createTask({
+      data: ({
+        task: 'Run task',
+        start_step: 'review',
+        resume_point: {
+          version: 1,
+          stack: [
+            { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
+            { workflow: 'takt/coding', step: 'review', kind: 'agent' },
+          ],
+          iteration: 7,
+          elapsed_ms: 183245,
+        },
+      } as unknown) as NonNullable<TaskInfo['data']>,
+    });
+
+    const result = await resolveTaskExecutionStrict(task, root);
+
+    expect(result.startStep).toBe('delegate');
+    expect(result.resumePoint).toEqual({
+      ...task.data?.resume_point,
+      stack: task.data?.resume_point?.stack.slice(0, 1),
+    });
+    expect(result.initialIterationOverride).toBe(7);
+  });
+
+  it('should preserve resume_point when child workflow step no longer resolves', async () => {
+    const root = createTempProjectDir();
+    const workflowDir = path.join(root, '.takt', 'workflows');
+    fs.mkdirSync(path.join(workflowDir, 'takt'), { recursive: true });
+    fs.writeFileSync(path.join(workflowDir, 'default.yaml'), [
+      'name: default',
+      'initial_step: delegate',
+      'max_steps: 5',
+      'steps:',
+      '  - name: delegate',
+      '    kind: workflow_call',
+      '    call: takt/coding',
+      '    rules:',
+      '      - condition: COMPLETE',
+      '        next: COMPLETE',
+    ].join('\n'));
+    fs.writeFileSync(path.join(workflowDir, 'takt', 'coding.yaml'), [
+      'name: takt/coding',
+      'subworkflow:',
+      '  callable: true',
+      'initial_step: fix',
+      'max_steps: 5',
+      'steps:',
+      '  - name: fix',
+      '    persona: fixer',
+      '    instruction: Fix',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
+    ].join('\n'));
+
+    const resumePoint = {
+      version: 1 as const,
+      stack: [
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
+      ],
+      iteration: 7,
+      elapsed_ms: 183245,
+    };
+    const task = createTask({
+      data: ({
+        task: 'Run task',
+        resume_point: resumePoint,
+      } as unknown) as NonNullable<TaskInfo['data']>,
+    });
+
+    const result = await resolveTaskExecutionStrict(task, root);
+
+    expect(result.startStep).toBe('delegate');
+    expect(result.resumePoint).toEqual({
+      ...resumePoint,
+      stack: resumePoint.stack.slice(0, 1),
+    });
+    expect(result.initialIterationOverride).toBe(7);
+  });
+
+  it('should preserve resume_point when child workflow no longer exists', async () => {
+    const root = createTempProjectDir();
+    const workflowDir = path.join(root, '.takt', 'workflows');
+    fs.mkdirSync(workflowDir, { recursive: true });
+    fs.writeFileSync(path.join(workflowDir, 'default.yaml'), [
+      'name: default',
+      'initial_step: delegate',
+      'max_steps: 5',
+      'steps:',
+      '  - name: delegate',
+      '    kind: workflow_call',
+      '    call: takt/coding',
+      '    rules:',
+      '      - condition: COMPLETE',
+      '        next: COMPLETE',
+    ].join('\n'));
+
+    const resumePoint = {
+      version: 1 as const,
+      stack: [
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
+      ],
+      iteration: 7,
+      elapsed_ms: 183245,
+    };
+    const task = createTask({
+      data: ({
+        task: 'Run task',
+        resume_point: resumePoint,
+      } as unknown) as NonNullable<TaskInfo['data']>,
+    });
+
+    const result = await resolveTaskExecutionStrict(task, root);
+
+    expect(result.startStep).toBe('delegate');
+    expect(result.resumePoint).toEqual({
+      ...resumePoint,
+      stack: resumePoint.stack.slice(0, 1),
+    });
+    expect(result.initialIterationOverride).toBe(7);
+  });
+
+  it('should preserve child resume_point entries when worktree workflow exists only under execCwd', async () => {
+    const root = createTempProjectDir();
+    const worktreePath = path.join(root, '.takt', 'worktrees', 'task-name');
+    const worktreeRootWorkflowDir = path.join(worktreePath, '.takt', 'workflows');
+    const worktreeWorkflowDir = path.join(worktreePath, '.takt', 'workflows', 'takt');
+    fs.mkdirSync(worktreeRootWorkflowDir, { recursive: true });
+    fs.mkdirSync(worktreeWorkflowDir, { recursive: true });
+    fs.writeFileSync(path.join(worktreeRootWorkflowDir, 'default.yaml'), [
+      'name: default',
+      'initial_step: delegate',
+      'max_steps: 5',
+      'steps:',
+      '  - name: delegate',
+      '    kind: workflow_call',
+      '    call: ./takt/coding.yaml',
+      '    rules:',
+      '      - condition: COMPLETE',
+      '        next: COMPLETE',
+    ].join('\n'));
+    fs.writeFileSync(path.join(worktreeWorkflowDir, 'coding.yaml'), [
+      'name: takt/coding',
+      'subworkflow:',
+      '  callable: true',
+      'initial_step: review',
+      'max_steps: 5',
+      'steps:',
+      '  - name: review',
+      '    persona: reviewer',
+      '    instruction: Review',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
+    ].join('\n'));
+
+    const resumePoint = {
+      version: 1 as const,
+      stack: [
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
+      ],
+      iteration: 7,
+      elapsed_ms: 183245,
+    };
+    const task = createTask({
+      worktreePath,
+      data: ({
+        task: 'Run task',
+        workflow: './.takt/workflows/default.yaml',
+        worktree: true,
+        resume_point: resumePoint,
+      } as unknown) as NonNullable<TaskInfo['data']>,
+    });
+
+    const result = await resolveTaskExecutionStrict(task, root);
+
+    expect(result.execCwd).toBe(worktreePath);
+    expect(result.startStep).toBe('delegate');
+    expect(result.resumePoint).toEqual(resumePoint);
+    expect(result.initialIterationOverride).toBe(7);
+  });
+
+  it('should trim resume_point to the nearest valid workflow_call when a deep child step no longer resolves', async () => {
+    const root = createTempProjectDir();
+    const workflowDir = path.join(root, '.takt', 'workflows');
+    fs.mkdirSync(path.join(workflowDir, 'takt'), { recursive: true });
+    fs.writeFileSync(path.join(workflowDir, 'default.yaml'), [
+      'name: default',
+      'initial_step: delegate',
+      'max_steps: 5',
+      'steps:',
+      '  - name: delegate',
+      '    kind: workflow_call',
+      '    call: takt/coding',
+      '    rules:',
+      '      - condition: COMPLETE',
+      '        next: COMPLETE',
+    ].join('\n'));
+    fs.writeFileSync(path.join(workflowDir, 'takt', 'coding.yaml'), [
+      'name: takt/coding',
+      'subworkflow:',
+      '  callable: true',
+      'initial_step: delegate_review',
+      'max_steps: 5',
+      'steps:',
+      '  - name: delegate_review',
+      '    kind: workflow_call',
+      '    call: takt/review-loop',
+      '    rules:',
+      '      - condition: COMPLETE',
+      '        next: COMPLETE',
+    ].join('\n'));
+    fs.writeFileSync(path.join(workflowDir, 'takt', 'review-loop.yaml'), [
+      'name: takt/review-loop',
+      'subworkflow:',
+      '  callable: true',
+      'initial_step: fix',
+      'max_steps: 5',
+      'steps:',
+      '  - name: fix',
+      '    persona: fixer',
+      '    instruction: Fix',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
+    ].join('\n'));
+
+    const resumePoint = {
+      version: 1 as const,
+      stack: [
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        { workflow: 'takt/coding', step: 'delegate_review', kind: 'workflow_call' as const },
+        { workflow: 'takt/review-loop', step: 'review', kind: 'agent' as const },
+      ],
+      iteration: 7,
+      elapsed_ms: 183245,
+    };
+    const task = createTask({
+      data: ({
+        task: 'Run task',
+        resume_point: resumePoint,
+      } as unknown) as NonNullable<TaskInfo['data']>,
+    });
+
+    const result = await resolveTaskExecutionStrict(task, root);
+
+    expect(result.startStep).toBe('delegate');
+    expect(result.resumePoint).toEqual({
+      ...resumePoint,
+      stack: resumePoint.stack.slice(0, 2),
+    });
+    expect(result.initialIterationOverride).toBe(7);
+  });
+
+  it('should drop resume_point when its root step no longer resolves', async () => {
+    const root = createTempProjectDir();
+    const workflowDir = path.join(root, '.takt', 'workflows');
+    fs.mkdirSync(workflowDir, { recursive: true });
+    fs.writeFileSync(path.join(workflowDir, 'default.yaml'), [
+      'name: default',
+      'initial_step: implement',
+      'max_steps: 5',
+      'steps:',
+      '  - name: implement',
+      '    persona: coder',
+      '    instruction: Implement',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
+    ].join('\n'));
+
+    const task = createTask({
+      data: ({
+        task: 'Run task',
+        start_step: 'implement',
+        resume_point: {
+          version: 1,
+          stack: [
+            { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
+            { workflow: 'takt/coding', step: 'review', kind: 'agent' },
+          ],
+          iteration: 7,
+          elapsed_ms: 183245,
+        },
+      } as unknown) as NonNullable<TaskInfo['data']>,
+    });
+
+    const result = await resolveTaskExecutionStrict(task, root);
+
+    expect(result.startStep).toBe('implement');
+    expect(result.resumePoint).toBeUndefined();
+    expect(result.initialIterationOverride).toBeUndefined();
+  });
+
   it('should fail fast when a removed legacy workflow key is present', async () => {
     const root = createTempProjectDir();
     const removedWorkflowKey = ['p', 'i', 'e', 'c', 'e'].join('');

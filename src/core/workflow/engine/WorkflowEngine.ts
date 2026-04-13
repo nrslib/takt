@@ -1,51 +1,35 @@
-/**
- * Workflow execution engine.
- *
- * Orchestrates the main execution loop: step transitions, abort handling,
- * loop detection, and iteration limits. Delegates step execution to
- * StepExecutor (normal steps) and ParallelRunner (parallel steps).
- */
-
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdirSync } from 'node:fs';
 import { CapabilityAwareStructuredCaller, type StructuredCaller } from '../../../agents/structured-caller.js';
 import { createLogger, generateReportDir, isValidReportDirName } from '../../../shared/utils/index.js';
 import type {
   AgentResponse,
-  LoopMonitorConfig,
   WorkflowConfig,
+  WorkflowResumePoint,
+  WorkflowResumePointEntry,
   WorkflowState,
   WorkflowStep,
 } from '../../models/types.js';
-import { prepareRuntimeEnvironment } from '../../runtime/runtime-environment.js';
 import { buildRunPaths, type RunPaths } from '../run/run-paths.js';
-import type { RuntimeStepResolution, WorkflowEngineOptions } from '../types.js';
-import { ArpeggioRunner } from './ArpeggioRunner.js';
-import { LoopMonitorJudgeRunner } from './LoopMonitorJudgeRunner.js';
+import type { WorkflowEngineOptions, WorkflowSharedRuntimeState } from '../types.js';
 import { LoopDetector } from './loop-detector.js';
-import { OptionsBuilder } from './OptionsBuilder.js';
-import { ParallelRunner } from './ParallelRunner.js';
 import { createInitialState, addUserInput as addUserInputToState } from './state-manager.js';
-import { StepExecutor } from './StepExecutor.js';
-import { SystemStepExecutor } from './SystemStepExecutor.js';
-import { TeamLeaderRunner } from './TeamLeaderRunner.js';
-import { determineNextStepByRules } from './transitions.js';
 import { CycleDetector } from './cycle-detector.js';
-import { createWorkflowPhaseRelay } from './WorkflowEnginePhaseRelay.js';
 import { runSingleWorkflowIteration, runWorkflowToCompletion } from './WorkflowRunLoop.js';
 import { validateWorkflowConfig } from './WorkflowValidator.js';
+import { getWorkflowStepKind } from '../step-kind.js';
+import { buildWorkflowResumePointEntry } from '../workflow-reference.js';
+import { WorkflowEngineStepCoordinator } from './WorkflowEngineStepCoordinator.js';
+import {
+  applyRuntimeEnvironment,
+  assertTaskPrefixPair,
+  createSharedRuntime,
+  createWorkflowEngineServices,
+  ensureRunDirsExist,
+  type WorkflowEngineServices,
+} from './WorkflowEngineSetup.js';
 
 const log = createLogger('workflow-engine');
-
-export type {
-  WorkflowEvents,
-  StepProviderInfo,
-  UserInputRequest,
-  IterationLimitRequest,
-  SessionUpdateCallback,
-  IterationLimitCallback,
-  WorkflowEngineOptions,
-} from '../types.js';
+export type { WorkflowEvents, StepProviderInfo, UserInputRequest, IterationLimitRequest, SessionUpdateCallback, IterationLimitCallback, WorkflowEngineOptions } from '../types.js';
 export { COMPLETE_STEP, ABORT_STEP } from '../constants.js';
 
 export class WorkflowEngine extends EventEmitter {
@@ -55,25 +39,30 @@ export class WorkflowEngine extends EventEmitter {
   private cwd: string;
   private task: string;
   private options: WorkflowEngineOptions;
+  private maxSteps: number;
   private loopDetector: LoopDetector;
   private cycleDetector: CycleDetector;
   private reportDir: string;
   private runPaths: RunPaths;
   private abortRequested = false;
+  private readonly sharedRuntime: WorkflowSharedRuntimeState;
+  private readonly resumeStackPrefix: WorkflowResumePointEntry[];
 
-  private readonly optionsBuilder: OptionsBuilder;
-  private readonly stepExecutor: StepExecutor;
-  private readonly parallelRunner: ParallelRunner;
-  private readonly arpeggioRunner: ArpeggioRunner;
-  private readonly teamLeaderRunner: TeamLeaderRunner;
-  private readonly systemStepExecutor: SystemStepExecutor;
-  private readonly loopMonitorJudgeRunner: LoopMonitorJudgeRunner;
+  private readonly optionsBuilder: WorkflowEngineServices['optionsBuilder'];
+  private readonly stepExecutor: WorkflowEngineServices['stepExecutor'];
+  private readonly parallelRunner: WorkflowEngineServices['parallelRunner'];
+  private readonly arpeggioRunner: WorkflowEngineServices['arpeggioRunner'];
+  private readonly teamLeaderRunner: WorkflowEngineServices['teamLeaderRunner'];
+  private readonly systemStepExecutor: WorkflowEngineServices['systemStepExecutor'];
+  private readonly loopMonitorJudgeRunner: WorkflowEngineServices['loopMonitorJudgeRunner'];
+  private readonly workflowCallRunner: WorkflowEngineServices['workflowCallRunner'];
+  private readonly stepCoordinator: WorkflowEngineStepCoordinator;
   private readonly detectRuleIndex: (content: string, stepName: string) => number;
   private readonly structuredCaller: StructuredCaller;
 
   constructor(config: WorkflowConfig, cwd: string, task: string, options: WorkflowEngineOptions) {
     super();
-    this.assertTaskPrefixPair(options.taskPrefix, options.taskColorIndex);
+    assertTaskPrefixPair(options.taskPrefix, options.taskColorIndex);
     this.config = config;
     this.projectCwd = options.projectCwd;
     this.cwd = cwd;
@@ -86,10 +75,15 @@ export class WorkflowEngine extends EventEmitter {
     }
 
     const reportDirName = options.reportDirName ?? generateReportDir(task);
-    this.runPaths = buildRunPaths(this.cwd, reportDirName);
+    const initialMaxSteps = options.maxStepsOverride ?? config.maxSteps;
+    this.sharedRuntime = options.sharedRuntime ?? createSharedRuntime(options.resumePoint, initialMaxSteps);
+    this.sharedRuntime.maxSteps ??= initialMaxSteps;
+    this.maxSteps = this.sharedRuntime.maxSteps;
+    this.resumeStackPrefix = options.resumeStackPrefix ?? [];
+    this.runPaths = buildRunPaths(this.cwd, reportDirName, options.runPathNamespace);
     this.reportDir = this.runPaths.reportsRel;
-    this.ensureRunDirsExist();
-    this.applyRuntimeEnvironment('init');
+    ensureRunDirsExist(this.runPaths);
+    applyRuntimeEnvironment(this.cwd, this.config, 'init');
     validateWorkflowConfig(this.config, this.options);
 
     this.state = createInitialState(config, options);
@@ -101,108 +95,56 @@ export class WorkflowEngine extends EventEmitter {
       ...options,
       structuredCaller: this.structuredCaller,
     };
-
-    const phaseRelay = createWorkflowPhaseRelay((event, ...args) => this.emit(event as never, ...args as []));
-
-    this.optionsBuilder = new OptionsBuilder(
-      this.options,
-      () => this.cwd,
-      () => this.projectCwd,
-      (persona) => this.state.personaSessions.get(persona),
-      () => this.reportDir,
-      () => this.options.language,
-      () => this.config.steps.map((step) => ({ name: step.name, description: step.description })),
-      () => this.config.name,
-      () => this.config.description,
-    );
-
-    this.stepExecutor = new StepExecutor({
-      optionsBuilder: this.optionsBuilder,
-      getCwd: () => this.cwd,
-      getProjectCwd: () => this.projectCwd,
-      getReportDir: () => this.reportDir,
-      getRunPaths: () => this.runPaths,
-      getLanguage: () => this.options.language,
-      getInteractive: () => this.options.interactive === true,
-      getWorkflowSteps: () => this.config.steps.map((step) => ({ name: step.name, description: step.description })),
-      getWorkflowName: () => this.config.name,
-      getWorkflowDescription: () => this.config.description,
-      getRetryNote: () => this.options.retryNote,
-      detectRuleIndex: this.detectRuleIndex,
-      structuredCaller: this.structuredCaller,
-      ...phaseRelay,
-    });
-
-    this.parallelRunner = new ParallelRunner({
-      optionsBuilder: this.optionsBuilder,
-      stepExecutor: this.stepExecutor,
-      engineOptions: this.options,
-      getCwd: () => this.cwd,
-      getReportDir: () => this.reportDir,
-      getInteractive: () => this.options.interactive === true,
-      detectRuleIndex: this.detectRuleIndex,
-      structuredCaller: this.structuredCaller,
-      ...phaseRelay,
-    });
-
-    this.arpeggioRunner = new ArpeggioRunner({
-      optionsBuilder: this.optionsBuilder,
-      stepExecutor: this.stepExecutor,
-      getCwd: () => this.cwd,
-      getInteractive: () => this.options.interactive === true,
-      detectRuleIndex: this.detectRuleIndex,
-      structuredCaller: this.structuredCaller,
-      onPhaseStart: phaseRelay.onPhaseStart,
-      onPhaseComplete: phaseRelay.onPhaseComplete,
-    });
-
-    this.teamLeaderRunner = new TeamLeaderRunner({
-      optionsBuilder: this.optionsBuilder,
-      stepExecutor: this.stepExecutor,
-      engineOptions: this.options,
-      getCwd: () => this.cwd,
-      getInteractive: () => this.options.interactive === true,
-      onPhaseStart: phaseRelay.onPhaseStart,
-      onPhaseComplete: phaseRelay.onPhaseComplete,
-    });
-
-    this.systemStepExecutor = new SystemStepExecutor({
-      task: this.task,
-      projectCwd: this.options.projectCwd,
-      getCwd: () => this.cwd,
-      taskContext: this.options.currentTask,
-      getRuleContext: (step) => {
-        const providerInfo = this.optionsBuilder.resolveStepProviderModel(step);
-        return {
-          cwd: this.cwd,
-          provider: step.provider ?? this.options.provider,
-          resolvedProvider: providerInfo.provider,
-          resolvedModel: providerInfo.model,
-          interactive: this.options.interactive === true,
-          detectRuleIndex: this.detectRuleIndex,
-          structuredCaller: this.structuredCaller,
-        };
-      },
-      systemStepServicesFactory: this.options.systemStepServicesFactory,
-    });
-
-    this.loopMonitorJudgeRunner = new LoopMonitorJudgeRunner({
-      optionsBuilder: this.optionsBuilder,
-      stepExecutor: this.stepExecutor,
+    const services = createWorkflowEngineServices({
+      config: this.config,
       state: this.state,
       task: this.task,
-      maxSteps: this.config.maxSteps,
-      language: this.options.language,
+      projectCwd: this.projectCwd,
+      getCwd: () => this.cwd,
+      getReportDir: () => this.reportDir,
+      getRunPaths: () => this.runPaths,
+      getMaxSteps: () => this.maxSteps,
+      options: this.options,
+      detectRuleIndex: this.detectRuleIndex,
+      structuredCaller: this.structuredCaller,
+      sharedRuntime: this.sharedRuntime,
+      resumeStackPrefix: this.resumeStackPrefix,
+      runPaths: this.runPaths,
+      updateMaxSteps: (maxSteps) => {
+        this.maxSteps = maxSteps;
+        this.sharedRuntime.maxSteps = maxSteps;
+      },
+      setActiveResumePoint: this.setActiveResumePoint.bind(this),
       updatePersonaSession: this.updatePersonaSession.bind(this),
       resolveNextStepFromDone: this.resolveNextStepFromDone.bind(this),
-      onStepStart: (step, iteration, instruction) => {
-        this.emit('step:start', step, iteration, instruction, this.optionsBuilder.resolveStepProviderModel(step));
-      },
-      onStepComplete: (step, response, instruction) => {
-        this.emit('step:complete', step, response, instruction);
-      },
-      emitCollectedReports: this.emitCollectedReports.bind(this),
       resetCycleDetector: () => this.cycleDetector.reset(),
+      emitEvent: (event, ...args) => this.emit(event as never, ...args as []),
+      createEngine: (nestedConfig, nestedCwd, nestedTask, nestedOptions) =>
+        new WorkflowEngine(nestedConfig, nestedCwd, nestedTask, nestedOptions),
+    });
+    this.optionsBuilder = services.optionsBuilder;
+    this.stepExecutor = services.stepExecutor;
+    this.parallelRunner = services.parallelRunner;
+    this.arpeggioRunner = services.arpeggioRunner;
+    this.teamLeaderRunner = services.teamLeaderRunner;
+    this.systemStepExecutor = services.systemStepExecutor;
+    this.loopMonitorJudgeRunner = services.loopMonitorJudgeRunner;
+    this.workflowCallRunner = services.workflowCallRunner;
+    this.stepCoordinator = new WorkflowEngineStepCoordinator({
+      config: this.config,
+      state: this.state,
+      task: this.task,
+      getMaxSteps: () => this.maxSteps,
+      getOptions: () => this.options,
+      stepExecutor: this.stepExecutor,
+      parallelRunner: this.parallelRunner,
+      arpeggioRunner: this.arpeggioRunner,
+      teamLeaderRunner: this.teamLeaderRunner,
+      systemStepExecutor: this.systemStepExecutor,
+      loopMonitorJudgeRunner: this.loopMonitorJudgeRunner,
+      workflowCallRunner: this.workflowCallRunner,
+      updatePersonaSession: this.updatePersonaSession.bind(this),
+      emitReport: (step, filePath, fileName) => this.emit('step:report', step, filePath, fileName),
     });
 
     log.debug('WorkflowEngine initialized', {
@@ -210,44 +152,7 @@ export class WorkflowEngine extends EventEmitter {
       steps: config.steps.map((step) => step.name),
       initialStep: config.initialStep,
       maxSteps: config.maxSteps,
-    });
-  }
-
-  private assertTaskPrefixPair(taskPrefix: string | undefined, taskColorIndex: number | undefined): void {
-    const hasTaskPrefix = taskPrefix != null;
-    const hasTaskColorIndex = taskColorIndex != null;
-    if (hasTaskPrefix !== hasTaskColorIndex) {
-      throw new Error('taskPrefix and taskColorIndex must be provided together');
-    }
-  }
-
-  private ensureRunDirsExist(): void {
-    for (const dir of [
-      this.runPaths.runRootAbs,
-      this.runPaths.reportsAbs,
-      this.runPaths.contextAbs,
-      this.runPaths.contextKnowledgeAbs,
-      this.runPaths.contextPolicyAbs,
-      this.runPaths.contextPreviousResponsesAbs,
-      this.runPaths.logsAbs,
-    ]) {
-      if (!existsSync(dir)) {
-        mkdirSync(dir, { recursive: true });
-      }
-    }
-  }
-
-  private applyRuntimeEnvironment(stage: 'init' | 'step'): void {
-    const prepared = prepareRuntimeEnvironment(this.cwd, this.config.runtime);
-    if (!prepared) return;
-    log.info('Runtime environment prepared', {
-      stage,
-      runtimeRoot: prepared.runtimeRoot,
-      envFile: prepared.envFile,
-      prepare: prepared.prepare,
-      tmpdir: prepared.injectedEnv.TMPDIR,
-      gradleUserHome: prepared.injectedEnv.GRADLE_USER_HOME,
-      npmCache: prepared.injectedEnv.npm_config_cache,
+      effectiveMaxSteps: this.maxSteps,
     });
   }
 
@@ -255,21 +160,35 @@ export class WorkflowEngine extends EventEmitter {
     return { ...this.state };
   }
 
+  private buildResumePoint(step: WorkflowStep, iteration: number): WorkflowResumePoint {
+    return {
+      version: 1,
+      stack: [...this.resumeStackPrefix, buildWorkflowResumePointEntry(this.config, step.name, getWorkflowStepKind(step))],
+      iteration,
+      elapsed_ms: Date.now() - this.sharedRuntime.startedAtMs,
+    };
+  }
+
+  private setActiveResumePoint(step: WorkflowStep, iteration: number): void {
+    this.sharedRuntime.activeResumePoint = this.buildResumePoint(step, iteration);
+  }
+
+  getResumePoint(): WorkflowResumePoint | undefined {
+    return this.sharedRuntime.activeResumePoint;
+  }
+
+  buildResumePointForStepName(stepName: string): WorkflowResumePoint | undefined {
+    const step = this.config.steps.find((candidate) => candidate.name === stepName);
+    return step ? this.buildResumePoint(step, this.state.iteration) : undefined;
+  }
+
   addUserInput(input: string): void {
     addUserInputToState(this.state, input);
   }
 
-  updateCwd(newCwd: string): void {
-    this.cwd = newCwd;
-  }
-
-  getCwd(): string {
-    return this.cwd;
-  }
-
-  getProjectCwd(): string {
-    return this.projectCwd;
-  }
+  updateCwd(newCwd: string): void { this.cwd = newCwd; }
+  getCwd(): string { return this.cwd; }
+  getProjectCwd(): string { return this.projectCwd; }
 
   abort(): void {
     if (this.abortRequested) return;
@@ -277,17 +196,7 @@ export class WorkflowEngine extends EventEmitter {
     log.info('Abort requested');
   }
 
-  isAbortRequested(): boolean {
-    return this.abortRequested;
-  }
-
-  private getStep(name: string): WorkflowStep {
-    const step = this.config.steps.find((candidate) => candidate.name === name);
-    if (!step) {
-      throw new Error(`Unknown step: ${name}`);
-    }
-    return step;
-  }
+  isAbortRequested(): boolean { return this.abortRequested; }
 
   private updatePersonaSession(persona: string, sessionId: string | undefined): void {
     if (!sessionId) return;
@@ -298,84 +207,18 @@ export class WorkflowEngine extends EventEmitter {
     }
   }
 
-  private emitCollectedReports(): void {
-    for (const { step, filePath, fileName } of this.stepExecutor.drainReportFiles()) {
-      this.emit('step:report', step, filePath, fileName);
-    }
-  }
-
-  private async runStep(step: WorkflowStep, prebuiltInstruction?: string): Promise<{ response: AgentResponse; instruction: string }> {
-    const updateSession = this.updatePersonaSession.bind(this);
-    let result: { response: AgentResponse; instruction: string };
-
-    if (step.parallel && step.parallel.length > 0) {
-      result = await this.parallelRunner.runParallelStep(step, this.state, this.task, this.config.maxSteps, updateSession);
-    } else if (step.arpeggio) {
-      result = await this.arpeggioRunner.runArpeggioStep(step, this.state);
-    } else if (step.teamLeader) {
-      result = await this.teamLeaderRunner.runTeamLeaderStep(step, this.state, this.task, this.config.maxSteps, updateSession);
-    } else if (step.mode === 'system') {
-      result = {
-        response: await this.systemStepExecutor.run(step, this.state),
-        instruction: '',
-      };
-    } else {
-      result = await this.stepExecutor.runNormalStep(
-        step,
-        this.state,
-        this.task,
-        this.config.maxSteps,
-        updateSession,
-        prebuiltInstruction,
-      );
-    }
-
-    this.emitCollectedReports();
-    return result;
-  }
-
-  private resolveNextStep(step: WorkflowStep, response: AgentResponse): string {
-    if (response.matchedRuleIndex != null && step.rules) {
-      const nextByRules = determineNextStepByRules(step, response.matchedRuleIndex);
-      if (nextByRules) {
-        return nextByRules;
-      }
-    }
-    throw new Error(`No matching rule found for step "${step.name}" (status: ${response.status})`);
-  }
-
   private resolveNextStepFromDone(step: WorkflowStep, response: AgentResponse): string {
-    if (response.status !== 'done') {
-      throw new Error(`Unhandled response status: ${response.status}`);
-    }
-    return this.resolveNextStep(step, response);
-  }
-
-  buildInstruction(step: WorkflowStep, stepIteration: number): string {
-    return this.stepExecutor.buildInstruction(step, stepIteration, this.state, this.task, this.config.maxSteps);
-  }
-
-  buildPhase1Instruction(step: WorkflowStep, instruction: string): string {
-    return this.stepExecutor.buildPhase1Instruction(instruction, step);
-  }
-
-  private async runLoopMonitorJudge(
-    monitor: LoopMonitorConfig,
-    cycleCount: number,
-    triggeringStep: WorkflowStep,
-    triggeringRuntime?: RuntimeStepResolution,
-  ): Promise<string> {
-    return this.loopMonitorJudgeRunner.run(monitor, cycleCount, triggeringStep, triggeringRuntime);
+    return this.stepCoordinator.resolveNextStepFromDone(step, response);
   }
 
   async run(): Promise<WorkflowState> {
     return runWorkflowToCompletion({
       state: this.state,
       options: this.options,
-      getMaxSteps: () => this.config.maxSteps,
+      getMaxSteps: () => this.maxSteps,
       abortRequested: () => this.abortRequested,
-      getStep: this.getStep.bind(this),
-      applyRuntimeEnvironment: this.applyRuntimeEnvironment.bind(this),
+      getStep: this.stepCoordinator.getStep.bind(this.stepCoordinator),
+      applyRuntimeEnvironment: (stage) => applyRuntimeEnvironment(this.cwd, this.config, stage),
       loopDetectorCheck: (stepName) => {
         const result = this.loopDetector.check(stepName);
         return {
@@ -386,16 +229,19 @@ export class WorkflowEngine extends EventEmitter {
         };
       },
       cycleDetectorRecordAndCheck: (stepName) => this.cycleDetector.recordAndCheck(stepName),
-      resolveNextStepFromDone: this.resolveNextStepFromDone.bind(this),
-      runLoopMonitorJudge: this.runLoopMonitorJudge.bind(this),
-      runStep: this.runStep.bind(this),
-      buildInstruction: this.buildInstruction.bind(this),
-      buildPhase1Instruction: this.buildPhase1Instruction.bind(this),
+      resolveNextStepFromDone: this.stepCoordinator.resolveNextStepFromDone.bind(this.stepCoordinator),
+      runLoopMonitorJudge: this.stepCoordinator.runLoopMonitorJudge.bind(this.stepCoordinator),
+      runStep: this.stepCoordinator.runStep.bind(this.stepCoordinator),
+      buildInstruction: this.stepCoordinator.buildInstruction.bind(this.stepCoordinator),
+      buildPhase1Instruction: this.stepCoordinator.buildPhase1Instruction.bind(this.stepCoordinator),
       resolveStepProviderModel: (step, runtime) => this.optionsBuilder.resolveStepProviderModel(step, runtime),
+      resolveRuntimeForStep: this.stepCoordinator.resolveRuntimeForStep.bind(this.stepCoordinator),
+      setActiveStep: this.setActiveResumePoint.bind(this),
       addUserInput: this.addUserInput.bind(this),
       emit: (event, ...args) => this.emit(event as never, ...args as []),
       updateMaxSteps: (maxSteps) => {
-        this.config = { ...this.config, maxSteps };
+        this.maxSteps = maxSteps;
+        this.sharedRuntime.maxSteps = maxSteps;
       },
     });
   }
@@ -409,10 +255,10 @@ export class WorkflowEngine extends EventEmitter {
     return runSingleWorkflowIteration({
       state: this.state,
       options: this.options,
-      getMaxSteps: () => this.config.maxSteps,
+      getMaxSteps: () => this.maxSteps,
       abortRequested: () => this.abortRequested,
-      getStep: this.getStep.bind(this),
-      applyRuntimeEnvironment: this.applyRuntimeEnvironment.bind(this),
+      getStep: this.stepCoordinator.getStep.bind(this.stepCoordinator),
+      applyRuntimeEnvironment: (stage) => applyRuntimeEnvironment(this.cwd, this.config, stage),
       loopDetectorCheck: (stepName) => {
         const result = this.loopDetector.check(stepName);
         return {
@@ -423,12 +269,14 @@ export class WorkflowEngine extends EventEmitter {
         };
       },
       cycleDetectorRecordAndCheck: (stepName) => this.cycleDetector.recordAndCheck(stepName),
-      resolveNextStepFromDone: this.resolveNextStepFromDone.bind(this),
-      runLoopMonitorJudge: this.runLoopMonitorJudge.bind(this),
-      runStep: this.runStep.bind(this),
-      buildInstruction: this.buildInstruction.bind(this),
-      buildPhase1Instruction: this.buildPhase1Instruction.bind(this),
+      resolveNextStepFromDone: this.stepCoordinator.resolveNextStepFromDone.bind(this.stepCoordinator),
+      runLoopMonitorJudge: this.stepCoordinator.runLoopMonitorJudge.bind(this.stepCoordinator),
+      runStep: this.stepCoordinator.runStep.bind(this.stepCoordinator),
+      buildInstruction: this.stepCoordinator.buildInstruction.bind(this.stepCoordinator),
+      buildPhase1Instruction: this.stepCoordinator.buildPhase1Instruction.bind(this.stepCoordinator),
       resolveStepProviderModel: (step, runtime) => this.optionsBuilder.resolveStepProviderModel(step, runtime),
+      resolveRuntimeForStep: this.stepCoordinator.resolveRuntimeForStep.bind(this.stepCoordinator),
+      setActiveStep: this.setActiveResumePoint.bind(this),
       addUserInput: this.addUserInput.bind(this),
       emit: (event, ...args) => this.emit(event as never, ...args as []),
       updateMaxSteps: () => {},
