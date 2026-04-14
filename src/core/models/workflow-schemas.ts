@@ -232,6 +232,33 @@ export const WorkflowStepRawSchema = z.object({
         });
       }
     }
+
+    data.rules?.forEach((rule, index) => {
+      if (rule.when !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['rules', index, 'when'],
+          message: 'workflow_call rules do not allow "when"; use condition: COMPLETE or ABORT',
+        });
+      }
+
+      if (rule.condition === undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['rules', index, 'condition'],
+          message: 'workflow_call rules require condition: COMPLETE or ABORT',
+        });
+        return;
+      }
+
+      if (rule.condition !== 'COMPLETE' && rule.condition !== 'ABORT') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['rules', index, 'condition'],
+          message: 'workflow_call rules only allow COMPLETE or ABORT conditions',
+        });
+      }
+    });
   }
 
   validateSystemStepFields(data, ctx);

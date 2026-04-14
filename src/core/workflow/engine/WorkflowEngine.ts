@@ -10,7 +10,12 @@ import type {
   WorkflowStep,
 } from '../../models/types.js';
 import { buildRunPaths, type RunPaths } from '../run/run-paths.js';
-import type { WorkflowEngineOptions, WorkflowSharedRuntimeState } from '../types.js';
+import type {
+  WorkflowCallChildEngine,
+  WorkflowEngineOptions,
+  WorkflowRunResult,
+  WorkflowSharedRuntimeState,
+} from '../types.js';
 import { LoopDetector } from './loop-detector.js';
 import { createInitialState, addUserInput as addUserInputToState } from './state-manager.js';
 import { CycleDetector } from './cycle-detector.js';
@@ -27,10 +32,27 @@ import {
   ensureRunDirsExist,
   type WorkflowEngineServices,
 } from './WorkflowEngineSetup.js';
-
 const log = createLogger('workflow-engine');
-export type { WorkflowEvents, StepProviderInfo, UserInputRequest, IterationLimitRequest, SessionUpdateCallback, IterationLimitCallback, WorkflowEngineOptions } from '../types.js';
+export type {
+  WorkflowEvents,
+  StepProviderInfo,
+  UserInputRequest,
+  IterationLimitRequest,
+  SessionUpdateCallback,
+  IterationLimitCallback,
+  WorkflowEngineOptions,
+} from '../types.js';
 export { COMPLETE_STEP, ABORT_STEP } from '../constants.js';
+
+const workflowRunExecutors = new WeakMap<WorkflowEngine, () => Promise<WorkflowRunResult>>();
+
+function getWorkflowRunExecutor(engine: WorkflowEngine): () => Promise<WorkflowRunResult> {
+  const executor = workflowRunExecutors.get(engine);
+  if (!executor) {
+    throw new Error('WorkflowEngine executor is not registered');
+  }
+  return executor;
+}
 
 export class WorkflowEngine extends EventEmitter {
   private state: WorkflowState;
@@ -119,8 +141,13 @@ export class WorkflowEngine extends EventEmitter {
       resolveNextStepFromDone: this.resolveNextStepFromDone.bind(this),
       resetCycleDetector: () => this.cycleDetector.reset(),
       emitEvent: (event, ...args) => this.emit(event as never, ...args as []),
-      createEngine: (nestedConfig, nestedCwd, nestedTask, nestedOptions) =>
-        new WorkflowEngine(nestedConfig, nestedCwd, nestedTask, nestedOptions),
+      createEngine: (nestedConfig, nestedCwd, nestedTask, nestedOptions): WorkflowCallChildEngine => {
+        const nestedEngine = new WorkflowEngine(nestedConfig, nestedCwd, nestedTask, nestedOptions);
+        return {
+          on: nestedEngine.on.bind(nestedEngine),
+          runWithResult: () => getWorkflowRunExecutor(nestedEngine)(),
+        };
+      },
     });
     this.optionsBuilder = services.optionsBuilder;
     this.stepExecutor = services.stepExecutor;
@@ -146,6 +173,38 @@ export class WorkflowEngine extends EventEmitter {
       updatePersonaSession: this.updatePersonaSession.bind(this),
       emitReport: (step, filePath, fileName) => this.emit('step:report', step, filePath, fileName),
     });
+    workflowRunExecutors.set(this, () => runWorkflowToCompletion({
+      state: this.state,
+      options: this.options,
+      getMaxSteps: () => this.maxSteps,
+      abortRequested: () => this.abortRequested,
+      getStep: this.stepCoordinator.getStep.bind(this.stepCoordinator),
+      applyRuntimeEnvironment: (stage) => applyRuntimeEnvironment(this.cwd, this.config, stage),
+      loopDetectorCheck: (stepName) => {
+        const result = this.loopDetector.check(stepName);
+        return {
+          shouldWarn: result.shouldWarn ?? false,
+          shouldAbort: result.shouldAbort ?? false,
+          count: result.count,
+          isLoop: result.isLoop,
+        };
+      },
+      cycleDetectorRecordAndCheck: (stepName) => this.cycleDetector.recordAndCheck(stepName),
+      resolveNextStepFromDone: this.stepCoordinator.resolveNextStepFromDone.bind(this.stepCoordinator),
+      runLoopMonitorJudge: this.stepCoordinator.runLoopMonitorJudge.bind(this.stepCoordinator),
+      runStep: this.stepCoordinator.runStep.bind(this.stepCoordinator),
+      buildInstruction: this.stepCoordinator.buildInstruction.bind(this.stepCoordinator),
+      buildPhase1Instruction: this.stepCoordinator.buildPhase1Instruction.bind(this.stepCoordinator),
+      resolveStepProviderModel: (step, runtime) => this.optionsBuilder.resolveStepProviderModel(step, runtime),
+      resolveRuntimeForStep: this.stepCoordinator.resolveRuntimeForStep.bind(this.stepCoordinator),
+      setActiveStep: this.setActiveResumePoint.bind(this),
+      addUserInput: this.addUserInput.bind(this),
+      emit: (event, ...args) => this.emit(event as never, ...args as []),
+      updateMaxSteps: (maxSteps) => {
+        this.maxSteps = maxSteps;
+        this.sharedRuntime.maxSteps = maxSteps;
+      },
+    }));
 
     log.debug('WorkflowEngine initialized', {
       workflow: config.name,
@@ -212,38 +271,8 @@ export class WorkflowEngine extends EventEmitter {
   }
 
   async run(): Promise<WorkflowState> {
-    return runWorkflowToCompletion({
-      state: this.state,
-      options: this.options,
-      getMaxSteps: () => this.maxSteps,
-      abortRequested: () => this.abortRequested,
-      getStep: this.stepCoordinator.getStep.bind(this.stepCoordinator),
-      applyRuntimeEnvironment: (stage) => applyRuntimeEnvironment(this.cwd, this.config, stage),
-      loopDetectorCheck: (stepName) => {
-        const result = this.loopDetector.check(stepName);
-        return {
-          shouldWarn: result.shouldWarn ?? false,
-          shouldAbort: result.shouldAbort ?? false,
-          count: result.count,
-          isLoop: result.isLoop,
-        };
-      },
-      cycleDetectorRecordAndCheck: (stepName) => this.cycleDetector.recordAndCheck(stepName),
-      resolveNextStepFromDone: this.stepCoordinator.resolveNextStepFromDone.bind(this.stepCoordinator),
-      runLoopMonitorJudge: this.stepCoordinator.runLoopMonitorJudge.bind(this.stepCoordinator),
-      runStep: this.stepCoordinator.runStep.bind(this.stepCoordinator),
-      buildInstruction: this.stepCoordinator.buildInstruction.bind(this.stepCoordinator),
-      buildPhase1Instruction: this.stepCoordinator.buildPhase1Instruction.bind(this.stepCoordinator),
-      resolveStepProviderModel: (step, runtime) => this.optionsBuilder.resolveStepProviderModel(step, runtime),
-      resolveRuntimeForStep: this.stepCoordinator.resolveRuntimeForStep.bind(this.stepCoordinator),
-      setActiveStep: this.setActiveResumePoint.bind(this),
-      addUserInput: this.addUserInput.bind(this),
-      emit: (event, ...args) => this.emit(event as never, ...args as []),
-      updateMaxSteps: (maxSteps) => {
-        this.maxSteps = maxSteps;
-        this.sharedRuntime.maxSteps = maxSteps;
-      },
-    });
+    const result = await getWorkflowRunExecutor(this)();
+    return result.state;
   }
 
   async runSingleIteration(): Promise<{

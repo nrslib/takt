@@ -114,6 +114,32 @@ export interface WorkflowSharedRuntimeState {
   maxSteps?: number;
 }
 
+export type WorkflowAbortKind =
+  | 'interrupt'
+  | 'iteration_limit'
+  | 'loop_detected'
+  | 'blocked'
+  | 'step_error'
+  | 'user_input_required'
+  | 'user_input_cancelled'
+  | 'step_transition'
+  | 'runtime_error';
+
+export interface WorkflowAbortResult {
+  kind: WorkflowAbortKind;
+  reason: string;
+}
+
+export interface WorkflowRunResult {
+  state: WorkflowState;
+  abort?: WorkflowAbortResult;
+}
+
+export interface WorkflowCallChildEngine {
+  on: (event: string, listener: (...args: unknown[]) => void) => void;
+  runWithResult: () => Promise<WorkflowRunResult>;
+}
+
 export interface WorkflowCallResolutionRequest {
   parentWorkflow: WorkflowConfig;
   identifier: string;

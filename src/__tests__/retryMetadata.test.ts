@@ -37,6 +37,38 @@ describe('resolveRetryMetadataFromRunMeta', () => {
     });
   });
 
+  it('deep child stack を含む resume_point でも root step と iteration を retry metadata の基準にする', () => {
+    const resumePoint = {
+      version: 1 as const,
+      stack: [
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        { workflow: 'takt/coding', step: 'fix', kind: 'agent' as const },
+      ],
+      iteration: 11,
+      elapsed_ms: 183245,
+    };
+    const runMeta: RunMeta = {
+      task: 'Task A',
+      workflow: 'default',
+      runSlug: 'run-1b',
+      runRoot: '.takt/runs/run-1b',
+      reportDirectory: '.takt/runs/run-1b/reports',
+      contextDirectory: '.takt/runs/run-1b/context',
+      logsDirectory: '.takt/runs/run-1b/logs',
+      status: 'aborted',
+      startTime: '2026-04-13T00:00:00.000Z',
+      currentStep: 'final-review',
+      currentIteration: 12,
+      resumePoint,
+    };
+
+    expect(resolveRetryMetadataFromRunMeta(runMeta)).toEqual({
+      startStep: 'delegate',
+      resumePoint,
+      currentIteration: 11,
+    });
+  });
+
   it('resume_point がなければ currentStep と currentIteration にフォールバックする', () => {
     const runMeta: RunMeta = {
       task: 'Task A',

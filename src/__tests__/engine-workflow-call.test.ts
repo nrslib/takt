@@ -937,6 +937,31 @@ steps:
     expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      label: 'when rule',
+      rule: 'when: "true"\n        next: COMPLETE',
+    },
+    {
+      label: 'ai() condition',
+      rule: 'condition: ai("route to plan")\n        next: COMPLETE',
+    },
+  ])('loadWorkflowOrThrow は workflow_call の不正な $label を実行前に reject する', ({ rule }) => {
+    writeWorkflow(tmpDir, 'invalid-parent.yaml', `name: invalid-parent
+initial_step: delegate
+max_steps: 5
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: child
+    rules:
+      - ${rule}
+`);
+
+    expect(() => loadWorkflowOrThrow('invalid-parent', tmpDir)).toThrow();
+    expect(runAgent).not.toHaveBeenCalled();
+  });
+
   it('project workflow から project 外の privileged subworkflow 呼び出しを拒否する', async () => {
     const externalDir = createTestTmpDir();
     cleanupDirs.push(externalDir);
@@ -1865,6 +1890,104 @@ steps:
     expect(plannerPrompt).toContain('child abort output');
   });
 
+  it('子 workflow が例外 abort したら親 previous_response に stale な成功出力を渡さない', async () => {
+    writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
+subworkflow:
+  callable: true
+initial_step: review
+max_steps: 5
+steps:
+  - name: review
+    persona: reviewer
+    instruction: "Review child workflow"
+    rules:
+      - condition: done
+        next: fix
+  - name: fix
+    persona: fixer
+    instruction: "Fix child workflow"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'delegate',
+      max_steps: 6,
+      steps: [
+        {
+          name: 'delegate',
+          kind: 'workflow_call',
+          call: 'takt/coding',
+          rules: [
+            {
+              condition: 'COMPLETE',
+              next: 'COMPLETE',
+            },
+            {
+              condition: 'ABORT',
+              next: 'plan',
+            },
+          ],
+        },
+        {
+          name: 'plan',
+          persona: 'planner',
+          instruction: 'Replan after child abort:\n{previous_response}',
+          rules: [
+            {
+              condition: 'done',
+              next: 'COMPLETE',
+            },
+          ],
+        },
+      ],
+    });
+
+    vi.mocked(runAgent)
+      .mockImplementationOnce(async (persona, prompt, options) => {
+        options?.onPromptResolved?.({
+          systemPrompt: typeof persona === 'string' ? persona : '',
+          userInstruction: prompt,
+        });
+        return makeResponse({
+          persona: 'reviewer',
+          content: 'Review done',
+        });
+      })
+      .mockImplementationOnce(async (persona, prompt, options) => {
+        options?.onPromptResolved?.({
+          systemPrompt: typeof persona === 'string' ? persona : '',
+          userInstruction: prompt,
+        });
+        throw new Error('child exploded');
+      })
+      .mockImplementationOnce(async (persona, prompt, options) => {
+        options?.onPromptResolved?.({
+          systemPrompt: typeof persona === 'string' ? persona : '',
+          userInstruction: prompt,
+        });
+        return makeResponse({
+          persona: 'planner',
+          content: 'done',
+        });
+      });
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+    ]);
+
+    engine = new WorkflowEngine(config, tmpDir, 'Abort branch with exception', createWorkflowCallOptions(tmpDir));
+
+    const state = await engine.run();
+    const plannerPrompt = vi.mocked(runAgent).mock.calls[2]?.[1];
+
+    expect(state.status).toBe('completed');
+    expect(plannerPrompt).toContain('Step execution failed: child exploded');
+    expect(plannerPrompt).not.toContain('Review done');
+  });
+
   it('子 workflow の step も親 run の max_steps 予算を消費する', async () => {
     writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
 subworkflow:
@@ -2040,6 +2163,87 @@ steps:
     ]);
   });
 
+  it('子 workflow で次 step 決定直後に max_steps へ達しても resume_point は最新 child step を指す', async () => {
+    writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
+subworkflow:
+  callable: true
+initial_step: review
+max_steps: 5
+steps:
+  - name: review
+    persona: reviewer
+    instruction: "Review child workflow"
+    rules:
+      - condition: done
+        next: fix
+  - name: fix
+    persona: fixer
+    instruction: "Fix child workflow"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'delegate',
+      max_steps: 2,
+      steps: [
+        {
+          name: 'delegate',
+          kind: 'workflow_call',
+          call: 'takt/coding',
+          rules: [
+            {
+              condition: 'COMPLETE',
+              next: 'COMPLETE',
+            },
+            {
+              condition: 'ABORT',
+              next: 'ABORT',
+            },
+          ],
+        },
+      ],
+    });
+
+    vi.mocked(runAgent).mockImplementationOnce(async (persona, prompt, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: prompt,
+      });
+      return makeResponse({
+        persona: 'reviewer',
+        content: 'Review done',
+      });
+    });
+    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+
+    let capturedResumePoint: ReturnType<WorkflowEngine['getResumePoint']>;
+    engine = new WorkflowEngine(config, tmpDir, 'Capture latest child resume point', createWorkflowCallOptions(tmpDir, {
+      onIterationLimit: vi.fn().mockImplementation(async () => {
+        capturedResumePoint = engine?.getResumePoint();
+        return null;
+      }),
+    }));
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(capturedResumePoint?.stack).toHaveLength(2);
+    expect(capturedResumePoint?.stack[0]).toEqual({
+      workflow: 'parent',
+      step: 'delegate',
+      kind: 'workflow_call',
+    });
+    expect(capturedResumePoint?.stack[1]).toEqual(expect.objectContaining({
+      workflow: 'takt/coding',
+      step: 'fix',
+      kind: 'agent',
+    }));
+    expect(capturedResumePoint?.iteration).toBe(2);
+  });
+
   it('resolveWorkflowCallTarget は child workflow の max_steps を書き換えない', () => {
     writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
 subworkflow:
@@ -2150,19 +2354,21 @@ steps:
     const childConfig = loadWorkflowOrThrow(join(tmpDir, '.takt', 'workflows', 'nested', 'child.yaml'), tmpDir);
     const createEngine = vi.fn().mockReturnValue({
       on: vi.fn(),
-      run: vi.fn().mockResolvedValue({
-        workflowName: childConfig.name,
-        currentStep: 'review',
-        iteration: 2,
-        stepOutputs: new Map(),
-        structuredOutputs: new Map(),
-        systemContexts: new Map(),
-        effectResults: new Map(),
-        lastOutput: makeResponse({ persona: 'child-reviewer', content: 'done' }),
-        userInputs: [],
-        personaSessions: new Map(),
-        stepIterations: new Map(),
-        status: 'completed',
+      runWithResult: vi.fn().mockResolvedValue({
+        state: {
+          workflowName: childConfig.name,
+          currentStep: 'review',
+          iteration: 2,
+          stepOutputs: new Map(),
+          structuredOutputs: new Map(),
+          systemContexts: new Map(),
+          effectResults: new Map(),
+          lastOutput: makeResponse({ persona: 'child-reviewer', content: 'done' }),
+          userInputs: [],
+          personaSessions: new Map(),
+          stepIterations: new Map(),
+          status: 'completed',
+        },
       }),
     });
     const runner = new WorkflowCallRunner({
@@ -2201,6 +2407,179 @@ steps:
 
     expect(result.response.matchedRuleIndex).toBe(0);
     expect(createEngine).toHaveBeenCalledTimes(1);
+  });
+
+  it('WorkflowCallRunner は step_transition abort では abortReason 文字列より child の最終出力を優先する', async () => {
+    const parentConfig = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'delegate',
+      max_steps: 5,
+      steps: [
+        {
+          name: 'delegate',
+          kind: 'workflow_call',
+          call: 'child',
+          rules: [
+            { condition: 'COMPLETE', next: 'COMPLETE' },
+            { condition: 'ABORT', next: 'ABORT' },
+          ],
+        },
+      ],
+    });
+    const childConfig = {
+      name: 'child',
+      initialStep: 'review',
+      maxSteps: 5,
+      subworkflow: {
+        callable: true,
+      },
+      steps: [{ name: 'review' }],
+    } as WorkflowConfig;
+    const childState = {
+      workflowName: childConfig.name,
+      currentStep: 'review',
+      iteration: 2,
+      stepOutputs: new Map(),
+      structuredOutputs: new Map(),
+      systemContexts: new Map(),
+      effectResults: new Map(),
+      lastOutput: makeResponse({ persona: 'child-reviewer', content: 'child abort output' }),
+      userInputs: [],
+      personaSessions: new Map(),
+      stepIterations: new Map(),
+      status: 'aborted',
+    } as WorkflowState;
+    const createEngine = vi.fn().mockReturnValue({
+      on: vi.fn(),
+      runWithResult: vi.fn().mockResolvedValue({
+        state: childState,
+        abort: {
+          kind: 'step_transition',
+          reason: 'Abort due to child ABORT rule',
+        },
+      }),
+    });
+    const runner = new WorkflowCallRunner({
+      getConfig: () => parentConfig,
+      state: {
+        workflowName: parentConfig.name,
+        currentStep: 'delegate',
+        iteration: 1,
+        stepOutputs: new Map(),
+        structuredOutputs: new Map(),
+        systemContexts: new Map(),
+        effectResults: new Map(),
+        userInputs: [],
+        personaSessions: new Map(),
+        stepIterations: new Map(),
+        status: 'running',
+      },
+      projectCwd: tmpDir,
+      getMaxSteps: () => parentConfig.maxSteps,
+      updateMaxSteps: vi.fn(),
+      getCwd: () => tmpDir,
+      task: 'Abort transition response',
+      getOptions: () => createWorkflowCallOptions(tmpDir),
+      sharedRuntime: { startedAtMs: Date.now() },
+      resumeStackPrefix: [],
+      runPaths: {
+        slug: 'test-report-dir',
+      } as never,
+      setActiveResumePoint: vi.fn(),
+      emit: vi.fn(),
+      resolveWorkflowCall: () => childConfig,
+      createEngine,
+    });
+
+    const result = await runner.run(parentConfig.steps[0] as never);
+
+    expect(result.response.content).toBe('child abort output');
+    expect(result.response.matchedRuleIndex).toBe(1);
+  });
+
+  it('WorkflowCallRunner は non-step_transition abort で reason と lastOutput がなくても ABORT を優先する', async () => {
+    const parentConfig = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'delegate',
+      max_steps: 5,
+      steps: [
+        {
+          name: 'delegate',
+          kind: 'workflow_call',
+          call: 'child',
+          rules: [
+            { condition: 'COMPLETE', next: 'COMPLETE' },
+            { condition: 'ABORT', next: 'ABORT' },
+          ],
+        },
+      ],
+    });
+    const childConfig = {
+      name: 'child',
+      initialStep: 'review',
+      maxSteps: 5,
+      subworkflow: {
+        callable: true,
+      },
+      steps: [{ name: 'review' }],
+    } as WorkflowConfig;
+    const parentState = {
+      workflowName: parentConfig.name,
+      currentStep: 'delegate',
+      iteration: 1,
+      stepOutputs: new Map(),
+      structuredOutputs: new Map(),
+      systemContexts: new Map(),
+      effectResults: new Map(),
+      userInputs: [],
+      personaSessions: new Map(),
+      stepIterations: new Map(),
+      status: 'running',
+    } as WorkflowState;
+    const childState = {
+      workflowName: childConfig.name,
+      currentStep: 'review',
+      iteration: 2,
+      stepOutputs: new Map(),
+      structuredOutputs: new Map(),
+      systemContexts: new Map(),
+      effectResults: new Map(),
+      userInputs: [],
+      personaSessions: new Map(),
+      stepIterations: new Map(),
+      status: 'aborted',
+    } as WorkflowState;
+    const createEngine = vi.fn().mockReturnValue({
+      on: vi.fn(),
+      runWithResult: vi.fn().mockResolvedValue({
+        state: childState,
+      }),
+    });
+    const runner = new WorkflowCallRunner({
+      getConfig: () => parentConfig,
+      state: parentState,
+      projectCwd: tmpDir,
+      getMaxSteps: () => parentConfig.maxSteps,
+      updateMaxSteps: vi.fn(),
+      getCwd: () => tmpDir,
+      task: 'Abort fallback response',
+      getOptions: () => createWorkflowCallOptions(tmpDir),
+      sharedRuntime: { startedAtMs: Date.now() },
+      resumeStackPrefix: [],
+      runPaths: {
+        slug: 'test-report-dir',
+      } as never,
+      setActiveResumePoint: vi.fn(),
+      emit: vi.fn(),
+      resolveWorkflowCall: () => childConfig,
+      createEngine,
+    });
+
+    const result = await runner.run(parentConfig.steps[0] as never);
+
+    expect(result.response.content).toBe('ABORT');
+    expect(result.response.matchedRuleIndex).toBe(1);
+    expect(parentState.lastOutput?.content).toBe('ABORT');
   });
 
   it('resume_point は workflow_ref が一致する child workflow にだけ適用する', async () => {
@@ -2258,19 +2637,21 @@ steps:
     const childConfig = loadWorkflowOrThrow(join(tmpDir, '.takt', 'workflows', 'child-b.yaml'), tmpDir);
     const createEngine = vi.fn().mockReturnValue({
       on: vi.fn(),
-      run: vi.fn().mockResolvedValue({
-        workflowName: childConfig.name,
-        currentStep: 'review',
-        iteration: 8,
-        stepOutputs: new Map(),
-        structuredOutputs: new Map(),
-        systemContexts: new Map(),
-        effectResults: new Map(),
-        lastOutput: makeResponse({ persona: 'child-b-reviewer', content: 'done' }),
-        userInputs: [],
-        personaSessions: new Map(),
-        stepIterations: new Map(),
-        status: 'completed',
+      runWithResult: vi.fn().mockResolvedValue({
+        state: {
+          workflowName: childConfig.name,
+          currentStep: 'review',
+          iteration: 8,
+          stepOutputs: new Map(),
+          structuredOutputs: new Map(),
+          systemContexts: new Map(),
+          effectResults: new Map(),
+          lastOutput: makeResponse({ persona: 'child-b-reviewer', content: 'done' }),
+          userInputs: [],
+          personaSessions: new Map(),
+          stepIterations: new Map(),
+          status: 'completed',
+        },
       }),
     });
     const runner = new WorkflowCallRunner({
@@ -2580,19 +2961,21 @@ steps:
 
     const createEngine = vi.fn().mockReturnValue({
       on: vi.fn(),
-      run: vi.fn().mockResolvedValue({
-        workflowName: childConfig.name,
-        currentStep: 'review',
-        iteration: 2,
-        stepOutputs: new Map(),
-        structuredOutputs: new Map(),
-        systemContexts: new Map(),
-        effectResults: new Map(),
-        lastOutput: makeResponse({ persona: 'reviewer', content: 'done' }),
-        userInputs: [],
-        personaSessions: new Map(),
-        stepIterations: new Map(),
-        status: 'completed',
+      runWithResult: vi.fn().mockResolvedValue({
+        state: {
+          workflowName: childConfig.name,
+          currentStep: 'review',
+          iteration: 2,
+          stepOutputs: new Map(),
+          structuredOutputs: new Map(),
+          systemContexts: new Map(),
+          effectResults: new Map(),
+          lastOutput: makeResponse({ persona: 'reviewer', content: 'done' }),
+          userInputs: [],
+          personaSessions: new Map(),
+          stepIterations: new Map(),
+          status: 'completed',
+        },
       }),
     });
     const runner = new WorkflowCallRunner({
@@ -2711,19 +3094,21 @@ steps:
     const rootWorkflow = loadWorkflowOrThrow(rootWorkflowPath, tmpDir);
     const createEngine = vi.fn().mockReturnValue({
       on: vi.fn(),
-      run: vi.fn().mockResolvedValue({
-        workflowName: 'external-child',
-        currentStep: 'delegate_nested',
-        iteration: 2,
-        stepOutputs: new Map(),
-        structuredOutputs: new Map(),
-        systemContexts: new Map(),
-        effectResults: new Map(),
-        lastOutput: makeResponse({ persona: 'delegate_nested', content: 'done' }),
-        userInputs: [],
-        personaSessions: new Map(),
-        stepIterations: new Map(),
-        status: 'completed',
+      runWithResult: vi.fn().mockResolvedValue({
+        state: {
+          workflowName: 'external-child',
+          currentStep: 'delegate_nested',
+          iteration: 2,
+          stepOutputs: new Map(),
+          structuredOutputs: new Map(),
+          systemContexts: new Map(),
+          effectResults: new Map(),
+          lastOutput: makeResponse({ persona: 'delegate_nested', content: 'done' }),
+          userInputs: [],
+          personaSessions: new Map(),
+          stepIterations: new Map(),
+          status: 'completed',
+        },
       }),
     });
     const runner = new WorkflowCallRunner({
@@ -2899,11 +3284,11 @@ steps:
 
     const createEngineA = vi.fn().mockReturnValue({
       on: vi.fn(),
-      run: vi.fn().mockResolvedValue(createChildState()),
+      runWithResult: vi.fn().mockResolvedValue({ state: createChildState() }),
     });
     const createEngineB = vi.fn().mockReturnValue({
       on: vi.fn(),
-      run: vi.fn().mockResolvedValue(createChildState()),
+      runWithResult: vi.fn().mockResolvedValue({ state: createChildState() }),
     });
     const runA = createNamespaceRunner('delegate/a', 'takt:review', createEngineA);
     const runB = createNamespaceRunner('delegate:a', 'takt/review', createEngineB);
@@ -2961,19 +3346,21 @@ steps:
     });
     const createEngine = vi.fn().mockReturnValue({
       on: vi.fn(),
-      run: vi.fn().mockResolvedValue({
-        workflowName: childConfig.name,
-        currentStep: 'review',
-        iteration: 4,
-        stepOutputs: new Map(),
-        structuredOutputs: new Map(),
-        systemContexts: new Map(),
-        effectResults: new Map(),
-        lastOutput: makeResponse({ persona: 'reviewer', content: 'done' }),
-        userInputs: [],
-        personaSessions: new Map(),
-        stepIterations: new Map(),
-        status: 'completed',
+      runWithResult: vi.fn().mockResolvedValue({
+        state: {
+          workflowName: childConfig.name,
+          currentStep: 'review',
+          iteration: 4,
+          stepOutputs: new Map(),
+          structuredOutputs: new Map(),
+          systemContexts: new Map(),
+          effectResults: new Map(),
+          lastOutput: makeResponse({ persona: 'reviewer', content: 'done' }),
+          userInputs: [],
+          personaSessions: new Map(),
+          stepIterations: new Map(),
+          status: 'completed',
+        },
       }),
     });
     const createRunner = (iteration: number) => new WorkflowCallRunner({

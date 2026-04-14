@@ -9,7 +9,13 @@ import type { PersonaProviderEntry } from '../../models/config-types.js';
 import type { RunPaths } from '../run/run-paths.js';
 import { trimResumePointStackForWorkflow } from '../run/resume-point.js';
 import { buildWorkflowResumePointEntry, workflowEntryMatchesWorkflow } from '../workflow-reference.js';
-import type { WorkflowCallResolver, WorkflowEngineOptions, WorkflowSharedRuntimeState } from '../types.js';
+import type {
+  WorkflowAbortKind,
+  WorkflowCallChildEngine,
+  WorkflowCallResolver,
+  WorkflowEngineOptions,
+  WorkflowSharedRuntimeState,
+} from '../types.js';
 
 function encodeWorkflowNamespaceValue(value: string): string {
   return encodeURIComponent(value).replace(/[!'()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
@@ -68,10 +74,7 @@ interface WorkflowCallExecutorDeps {
     cwd: string,
     task: string,
     options: WorkflowEngineOptions,
-  ) => {
-    on: (event: string, listener: (...args: unknown[]) => void) => void;
-    run: () => Promise<WorkflowState>;
-  };
+  ) => WorkflowCallChildEngine;
   emit: (event: string, ...args: unknown[]) => void;
   state: {
     iteration: number;
@@ -90,6 +93,11 @@ interface ExecuteWorkflowCallRequest {
   parentProviderOptions: WorkflowEngineOptions['providerOptions'];
   personaProviders: WorkflowEngineOptions['personaProviders'];
 }
+
+export type WorkflowCallExecutionResult = WorkflowState & {
+  abortKind?: WorkflowAbortKind;
+  abortReason?: string;
+};
 
 export class WorkflowCallExecutor {
   constructor(private readonly deps: WorkflowCallExecutorDeps) {}
@@ -148,7 +156,7 @@ export class WorkflowCallExecutor {
     });
   }
 
-  private relayChildEvents(childEngine: { on: (event: string, listener: (...args: unknown[]) => void) => void }): void {
+  private relayChildEvents(childEngine: WorkflowCallChildEngine): void {
     for (const eventName of [
       'step:start',
       'step:complete',
@@ -177,7 +185,7 @@ export class WorkflowCallExecutor {
     this.deps.setActiveResumePoint(step, this.deps.state.iteration);
   }
 
-  async execute(request: ExecuteWorkflowCallRequest): Promise<WorkflowState> {
+  async execute(request: ExecuteWorkflowCallRequest): Promise<WorkflowCallExecutionResult> {
     const options = this.deps.getOptions();
     const parentConfig = this.deps.getConfig();
     const childResumePoint = this.resolveChildResumePoint(request.step, request.childWorkflow);
@@ -205,8 +213,17 @@ export class WorkflowCallExecutor {
     });
 
     this.relayChildEvents(childEngine);
-    const childState = await childEngine.run();
+    const childResult = await childEngine.runWithResult();
+    const childState = childResult.state;
     this.syncStateFromChild(request.step, childState);
-    return childState;
+    return {
+      ...childState,
+      ...(childResult.abort
+        ? {
+            abortKind: childResult.abort.kind,
+            abortReason: childResult.abort.reason,
+          }
+        : {}),
+    };
   }
 }

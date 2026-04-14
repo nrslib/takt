@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import type { WorkflowConfig } from '../core/models/index.js';
+import type { WorkflowConfig, WorkflowResumePoint } from '../core/models/index.js';
 import { AskUserQuestionDeniedError } from '../core/workflow/ask-user-question-error.js';
 
 const { MockWorkflowEngine } = vi.hoisted(() => {
@@ -17,6 +17,10 @@ const { MockWorkflowEngine } = vi.hoisted(() => {
   class MockWorkflowEngine extends EE {
     static lastInstance: MockWorkflowEngine;
     static triggerIterationLimit = false;
+    static iterationLimitCurrentStep = 'implement';
+    static iterationLimitCurrentIteration = 1;
+    static activeResumePoint: WorkflowResumePoint | undefined;
+    static buildResumePointForCurrentStep: WorkflowResumePoint | undefined;
     readonly receivedOptions: Record<string, unknown>;
     private readonly config: WorkflowConfig;
 
@@ -29,6 +33,17 @@ const { MockWorkflowEngine } = vi.hoisted(() => {
 
     abort(): void {}
 
+    getResumePoint(): WorkflowResumePoint | undefined {
+      return MockWorkflowEngine.activeResumePoint;
+    }
+
+    buildResumePointForStepName(stepName: string): WorkflowResumePoint | undefined {
+      if (stepName === MockWorkflowEngine.iterationLimitCurrentStep) {
+        return MockWorkflowEngine.buildResumePointForCurrentStep;
+      }
+      return MockWorkflowEngine.activeResumePoint;
+    }
+
     async run(): Promise<{ status: string; iteration: number }> {
       const firstStep = this.config.steps[0];
       if (MockWorkflowEngine.triggerIterationLimit) {
@@ -40,13 +55,19 @@ const { MockWorkflowEngine } = vi.hoisted(() => {
           | undefined;
         if (onIterationLimit) {
           await onIterationLimit({
-            currentIteration: 1,
+            currentIteration: MockWorkflowEngine.iterationLimitCurrentIteration,
             maxSteps: this.config.maxSteps,
-            currentStep: firstStep.name,
+            currentStep: MockWorkflowEngine.iterationLimitCurrentStep,
           });
         }
-        this.emit('workflow:abort', { status: 'aborted', iteration: 1 }, 'Reached max steps');
-        return { status: 'aborted', iteration: 1 };
+        this.emit('workflow:abort', {
+          status: 'aborted',
+          iteration: MockWorkflowEngine.iterationLimitCurrentIteration,
+        }, 'Reached max steps');
+        return {
+          status: 'aborted',
+          iteration: MockWorkflowEngine.iterationLimitCurrentIteration,
+        };
       }
       if (firstStep) {
         this.emit('step:start', firstStep, 1, firstStep.instruction, { provider: undefined, model: undefined });
@@ -180,6 +201,10 @@ describe('executeWorkflow AskUserQuestion deny handler wiring', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     MockWorkflowEngine.triggerIterationLimit = false;
+    MockWorkflowEngine.iterationLimitCurrentStep = 'implement';
+    MockWorkflowEngine.iterationLimitCurrentIteration = 1;
+    MockWorkflowEngine.activeResumePoint = undefined;
+    MockWorkflowEngine.buildResumePointForCurrentStep = undefined;
   });
 
   it('should pass onAskUserQuestion handler to WorkflowEngine', async () => {
@@ -234,6 +259,71 @@ describe('executeWorkflow AskUserQuestion deny handler wiring', () => {
       currentStep: 'implement',
       newMaxSteps: 10,
       currentIteration: 1,
+    });
+  });
+
+  it('should use engine getResumePoint when currentStep cannot be rebuilt in exceeded handling', async () => {
+    MockWorkflowEngine.triggerIterationLimit = true;
+    MockWorkflowEngine.iterationLimitCurrentStep = 'fix';
+    MockWorkflowEngine.iterationLimitCurrentIteration = 2;
+    MockWorkflowEngine.activeResumePoint = {
+      version: 1,
+      stack: [
+        { workflow: 'parent', step: 'delegate', kind: 'workflow_call' },
+        { workflow: 'takt/coding', step: 'fix', kind: 'agent' },
+      ],
+      iteration: 2,
+      elapsed_ms: 183245,
+    };
+    MockWorkflowEngine.buildResumePointForCurrentStep = undefined;
+
+    const result = await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.exceeded).toBe(true);
+    expect(result.exceededInfo).toEqual({
+      currentStep: 'fix',
+      newMaxSteps: 10,
+      currentIteration: 2,
+      resumePoint: MockWorkflowEngine.activeResumePoint,
+    });
+  });
+
+  it('should prefer engine getResumePoint over rebuilding a colliding currentStep in exceeded handling', async () => {
+    MockWorkflowEngine.triggerIterationLimit = true;
+    MockWorkflowEngine.iterationLimitCurrentStep = 'implement';
+    MockWorkflowEngine.iterationLimitCurrentIteration = 3;
+    MockWorkflowEngine.activeResumePoint = {
+      version: 1,
+      stack: [
+        { workflow: 'parent', step: 'delegate', kind: 'workflow_call' },
+        { workflow: 'takt/coding', step: 'implement', kind: 'agent' },
+      ],
+      iteration: 3,
+      elapsed_ms: 183246,
+    };
+    MockWorkflowEngine.buildResumePointForCurrentStep = {
+      version: 1,
+      stack: [
+        { workflow: 'parent', step: 'implement', kind: 'agent' },
+      ],
+      iteration: 3,
+      elapsed_ms: 183247,
+    };
+
+    const result = await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.exceeded).toBe(true);
+    expect(result.exceededInfo).toEqual({
+      currentStep: 'implement',
+      newMaxSteps: 10,
+      currentIteration: 3,
+      resumePoint: MockWorkflowEngine.activeResumePoint,
     });
   });
 

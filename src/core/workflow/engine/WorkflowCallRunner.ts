@@ -14,11 +14,16 @@ import {
 } from '../workflow-reference.js';
 import type {
   RuntimeStepResolution,
+  WorkflowCallChildEngine,
   WorkflowCallResolver,
   WorkflowEngineOptions,
   WorkflowSharedRuntimeState,
 } from '../types.js';
-import { WorkflowCallExecutor, applyWorkflowCallOverridesToPersonaProviders } from './WorkflowCallExecutor.js';
+import {
+  WorkflowCallExecutor,
+  applyWorkflowCallOverridesToPersonaProviders,
+  type WorkflowCallExecutionResult,
+} from './WorkflowCallExecutor.js';
 
 interface WorkflowCallRunnerDeps {
   getConfig: () => WorkflowConfig;
@@ -40,10 +45,7 @@ interface WorkflowCallRunnerDeps {
     cwd: string,
     task: string,
     options: WorkflowEngineOptions,
-  ) => {
-    on: (event: string, listener: (...args: unknown[]) => void) => void;
-    run: () => Promise<WorkflowState>;
-  };
+  ) => WorkflowCallChildEngine;
 }
 
 export class WorkflowCallRunner {
@@ -109,9 +111,18 @@ export class WorkflowCallRunner {
     );
   }
 
-  private buildWorkflowCallResponse(step: WorkflowCallStep, childState: WorkflowState): AgentResponse {
+  private buildWorkflowCallResponse(
+    step: WorkflowCallStep,
+    childState: WorkflowState,
+    abortKind: WorkflowCallExecutionResult['abortKind'],
+    abortReason: string | undefined,
+  ): AgentResponse {
     const terminalStatus = childState.status === 'completed' ? 'COMPLETE' : 'ABORT';
-    const finalContent = childState.lastOutput?.content ?? terminalStatus;
+    const finalContent = terminalStatus === 'COMPLETE'
+      ? childState.lastOutput?.content ?? terminalStatus
+      : abortKind === 'step_transition'
+        ? childState.lastOutput?.content ?? abortReason ?? terminalStatus
+        : abortReason ?? terminalStatus;
     const matchedRuleIndex = step.rules?.findIndex((rule) => rule.condition === terminalStatus);
 
     return {
@@ -162,7 +173,7 @@ export class WorkflowCallRunner {
       throw new Error(`workflow_call step "${step.name}" could not resolve provider context`);
     }
     const parentProviderContext = this.resolveParentWorkflowProviderContext();
-    const childState = await this.executor.execute({
+    const childResult = await this.executor.execute({
       step,
       childWorkflow,
       childProviderInfo,
@@ -170,7 +181,12 @@ export class WorkflowCallRunner {
       personaProviders: this.buildChildPersonaProviders(step),
     });
 
-    const response = this.buildWorkflowCallResponse(step, childState);
+    const response = this.buildWorkflowCallResponse(
+      step,
+      childResult,
+      childResult.abortKind,
+      childResult.abortReason,
+    );
     this.deps.state.stepOutputs.set(step.name, response);
     this.deps.state.lastOutput = response;
     this.deps.state.previousResponseSourcePath = undefined;

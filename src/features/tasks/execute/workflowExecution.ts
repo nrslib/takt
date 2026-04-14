@@ -33,12 +33,20 @@ export async function executeWorkflow(
     }
     return engine.buildResumePointForStepName(stepName);
   };
+  const getLatestResumePoint = () => {
+    if (!engine || typeof engine.getResumePoint !== 'function') {
+      return undefined;
+    }
+    return engine.getResumePoint();
+  };
   const iterationLimitHandler = createIterationLimitHandler(
     bootstrap.out,
     bootstrap.displayRef,
     bootstrap.shouldNotifyIterationLimit,
     (request) => {
-      const resumePoint = buildResumePointForStep(request.currentStep) ?? eventBridge?.state.lastResumePoint;
+      const resumePoint = getLatestResumePoint()
+        ?? buildResumePointForStep(request.currentStep)
+        ?? eventBridge?.state.lastResumePoint;
       eventBridge!.state.exceededInfo = {
         currentStep: request.currentStep,
         newMaxSteps: request.maxSteps + workflowConfig.maxSteps,

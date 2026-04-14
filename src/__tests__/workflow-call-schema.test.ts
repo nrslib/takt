@@ -202,6 +202,117 @@ describe('workflow_call schema', () => {
     }
   });
 
+  it('workflow_call step で COMPLETE と ABORT の rules を許可する', () => {
+    const result = WorkflowStepRawSchema.safeParse(createWorkflowCallStep({
+      rules: [
+        {
+          condition: 'COMPLETE',
+          next: 'plan',
+        },
+        {
+          condition: 'ABORT',
+          next: 'ABORT',
+        },
+      ],
+    }));
+
+    expect(result.success).toBe(true);
+  });
+
+  it('workflow_call step で when rule を reject する', () => {
+    const result = WorkflowStepRawSchema.safeParse(createWorkflowCallStep({
+      rules: [
+        {
+          when: 'true',
+          next: 'COMPLETE',
+        },
+      ],
+    }));
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          path: ['rules', 0, 'when'],
+        }),
+      ]));
+    }
+  });
+
+  it('workflow_call step で ai() condition を reject する', () => {
+    const result = WorkflowStepRawSchema.safeParse(createWorkflowCallStep({
+      rules: [
+        {
+          condition: 'ai("route to plan")',
+          next: 'plan',
+        },
+      ],
+    }));
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          path: ['rules', 0, 'condition'],
+        }),
+      ]));
+    }
+  });
+
+  it('workflow_call step で COMPLETE と ABORT 以外の condition を reject する', () => {
+    const result = WorkflowStepRawSchema.safeParse(createWorkflowCallStep({
+      rules: [
+        {
+          condition: 'done',
+          next: 'COMPLETE',
+        },
+      ],
+    }));
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          path: ['rules', 0, 'condition'],
+        }),
+      ]));
+    }
+  });
+
+  it.each([
+    {
+      label: 'when rule',
+      rule: {
+        when: 'true',
+        next: 'COMPLETE',
+      },
+    },
+    {
+      label: 'ai() condition',
+      rule: {
+        condition: 'ai("route to plan")',
+        next: 'plan',
+      },
+    },
+  ])('workflow 全体の正規化で不正な workflow_call $label を reject する', ({ rule }) => {
+    expect(() => normalizeWorkflowConfig(
+      {
+        name: 'parent',
+        initial_step: 'delegate',
+        max_steps: 3,
+        steps: [
+          {
+            name: 'delegate',
+            kind: 'workflow_call',
+            call: 'takt/review-loop',
+            rules: [rule],
+          },
+        ],
+      },
+      process.cwd(),
+    )).toThrow();
+  });
+
   it.each(['agent', 'system'] as const)('%s step で call を reject する', (kind) => {
     const baseStep = kind === 'agent'
       ? {
@@ -464,7 +575,7 @@ describe('workflow_call schema', () => {
             instruction: 'Review the task',
             rules: [
               {
-                condition: 'done',
+                condition: 'COMPLETE',
                 next: 'COMPLETE',
               },
             ],
@@ -492,7 +603,7 @@ describe('workflow_call schema', () => {
             instruction: 'Review the task',
             rules: [
               {
-                condition: 'done',
+                condition: 'COMPLETE',
                 next: 'COMPLETE',
               },
             ],
@@ -524,7 +635,7 @@ describe('workflow_call schema', () => {
             instruction: 'Review the task',
             rules: [
               {
-                condition: 'done',
+                condition: 'COMPLETE',
                 next: 'COMPLETE',
               },
             ],
@@ -554,7 +665,7 @@ describe('workflow_call schema', () => {
             instruction: 'Review the task',
             rules: [
               {
-                condition: 'done',
+                condition: 'COMPLETE',
                 next: 'COMPLETE',
               },
             ],
@@ -584,7 +695,7 @@ describe('workflow_call schema', () => {
             instruction: 'Review the task',
             rules: [
               {
-                condition: 'done',
+                condition: 'COMPLETE',
                 next: 'COMPLETE',
               },
             ],
@@ -610,7 +721,7 @@ describe('workflow_call schema', () => {
             instruction: 'Review the task',
             rules: [
               {
-                condition: 'done',
+                condition: 'COMPLETE',
                 next: 'COMPLETE',
               },
             ],
@@ -640,7 +751,7 @@ describe('workflow_call schema', () => {
             instruction: 'Review the task',
             rules: [
               {
-                condition: 'done',
+                condition: 'COMPLETE',
                 next: 'COMPLETE',
               },
             ],
@@ -668,7 +779,7 @@ describe('workflow_call schema', () => {
             },
             rules: [
               {
-                condition: 'done',
+                condition: 'COMPLETE',
                 next: 'COMPLETE',
               },
             ],
@@ -696,7 +807,7 @@ describe('workflow_call schema', () => {
             },
             rules: [
               {
-                condition: 'done',
+                condition: 'COMPLETE',
                 next: 'COMPLETE',
               },
             ],
@@ -728,7 +839,7 @@ describe('workflow_call schema', () => {
             },
             rules: [
               {
-                condition: 'done',
+                condition: 'COMPLETE',
                 next: 'COMPLETE',
               },
             ],

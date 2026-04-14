@@ -5,7 +5,6 @@ import type {
   AgentResponse,
   WorkflowConfig,
   WorkflowResumePoint,
-  WorkflowState,
   WorkflowStep,
 } from '../../models/types.js';
 import { prepareRuntimeEnvironment } from '../../runtime/runtime-environment.js';
@@ -20,6 +19,7 @@ import { SystemStepExecutor } from './SystemStepExecutor.js';
 import { TeamLeaderRunner } from './TeamLeaderRunner.js';
 import { createWorkflowPhaseRelay } from './WorkflowEnginePhaseRelay.js';
 import { WorkflowCallRunner } from './WorkflowCallRunner.js';
+import type { WorkflowCallChildEngine } from '../types.js';
 
 const log = createLogger('workflow-engine');
 
@@ -51,10 +51,7 @@ interface WorkflowEngineSetupParams {
     cwd: string,
     task: string,
     options: WorkflowEngineOptions,
-  ) => {
-    on: (event: string, listener: (...args: unknown[]) => void) => void;
-    run: () => Promise<WorkflowState>;
-  };
+  ) => WorkflowCallChildEngine;
 }
 
 export interface WorkflowEngineServices {
