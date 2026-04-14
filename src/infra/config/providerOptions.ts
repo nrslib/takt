@@ -8,7 +8,7 @@ import type {
   ProviderOptionsOriginResolver,
   ProviderOptionsSource,
   ProviderOptionsTraceOrigin,
-} from '../../core/workflow/types.js';
+} from '../../core/workflow/provider-options-trace.js';
 import type { ProviderType } from '../../shared/types/provider.js';
 import { providerSupportsClaudeAllowedTools } from '../providers/provider-capabilities.js';
 

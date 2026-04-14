@@ -1,10 +1,3 @@
-/**
- * Workflow engine type definitions
- *
- * Contains types for workflow events, requests, and callbacks
- * used by the workflow execution engine.
- */
-
 import type { PermissionResult, PermissionUpdate } from '@anthropic-ai/claude-agent-sdk';
 import type {
   WorkflowStep,
@@ -21,6 +14,10 @@ import type { ProviderPermissionProfiles } from '../models/provider-profiles.js'
 import type { StepProviderOptions } from '../models/workflow-types.js';
 import type { StructuredCaller } from '../../agents/structured-caller.js';
 import type { SystemStepServicesFactory } from './system/system-step-services.js';
+import type {
+  ProviderOptionsOriginResolver,
+  ProviderOptionsSource,
+} from './provider-options-trace.js';
 
 // Re-export shared provider protocol types to maintain backward compatibility.
 // The canonical definitions live in shared/types/provider.ts so that shared-layer
@@ -43,10 +40,6 @@ export type {
   StreamResultEventData,
   StreamErrorEventData,
 } from '../../shared/types/provider.js';
-
-export type ProviderOptionsSource = 'env' | 'project' | 'global' | 'default';
-export type ProviderOptionsTraceOrigin = 'env' | 'cli' | 'local' | 'global' | 'default';
-export type ProviderOptionsOriginResolver = (path: string) => ProviderOptionsTraceOrigin;
 
 export interface PermissionRequest {
   toolName: string;
@@ -239,6 +232,8 @@ export interface WorkflowEngineOptions {
   onAskUserQuestion?: AskUserQuestionHandler;
   /** Callback when iteration limit is reached - returns additional iterations or null to stop */
   onIterationLimit?: IterationLimitCallback;
+  /** Ignore workflow maxSteps and keep running */
+  ignoreIterationLimit?: boolean;
   /** Bypass all permission checks */
   bypassPermissions?: boolean;
   /** Project root directory (where .takt/ lives). */

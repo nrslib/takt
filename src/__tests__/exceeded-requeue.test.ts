@@ -37,6 +37,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 // --- Imports (after mocks) ---
 
 import { WorkflowEngine } from '../core/workflow/index.js';
+import { runAgent } from '../agents/runner.js';
 import {
   makeResponse,
   makeStep,
@@ -149,6 +150,165 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
     // Then: engine completed because limit was extended (plan+limit check+implement → COMPLETE)
     expect(state.status).toBe('completed');
     expect(onIterationLimit).toHaveBeenCalledOnce();
+  });
+
+  it('should continue without calling onIterationLimit when iteration limit is ignored', async () => {
+    // Given: a workflow that would normally exceed maxSteps between plan and implement.
+    const config: WorkflowConfig = {
+      name: 'test',
+      maxSteps: 1,
+      initialStep: 'plan',
+      steps: [
+        makeStep('plan', {
+          rules: [makeRule('done', 'implement')],
+        }),
+        makeStep('implement', {
+          rules: [makeRule('done', 'COMPLETE')],
+        }),
+      ],
+    };
+
+    const onIterationLimit = vi.fn().mockResolvedValue(null);
+
+    mockRunAgentSequence([
+      makeResponse({ persona: 'plan', content: 'Plan complete' }),
+      makeResponse({ persona: 'implement', content: 'Impl done' }),
+    ]);
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' }, // plan → implement
+      { index: 0, method: 'phase1_tag' }, // implement → COMPLETE
+    ]);
+
+    engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      onIterationLimit,
+      ignoreIterationLimit: true,
+    } as never);
+
+    // When: engine runs with iteration-limit ignoring enabled
+    const state = await engine.run();
+
+    // Then: workflow completes and the limit callback is not used
+    expect(state.status).toBe('completed');
+    expect(onIterationLimit).not.toHaveBeenCalled();
+  });
+
+  it('should preserve non-iteration aborts when iteration limit is ignored', async () => {
+    const loopConfig: WorkflowConfig = {
+      name: 'loop-test',
+      maxSteps: 1,
+      loopDetection: { maxConsecutiveSameStep: 3, action: 'abort' },
+      initialStep: 'loop-step',
+      steps: [
+        makeStep('loop-step', {
+          rules: [makeRule('continue', 'loop-step')],
+        }),
+      ],
+    };
+
+    for (let i = 0; i < 5; i++) {
+      vi.mocked(runAgent).mockImplementationOnce(async (persona, prompt, options) => {
+        options?.onPromptResolved?.({
+          systemPrompt: typeof persona === 'string' ? persona : '',
+          userInstruction: prompt,
+        });
+        return makeResponse({ content: `iteration ${i}` });
+      });
+      mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    }
+
+    const loopEngine = new WorkflowEngine(loopConfig, tmpDir, 'loop task', {
+      projectCwd: tmpDir,
+      ignoreIterationLimit: true,
+    });
+    const loopAbort = vi.fn();
+    loopEngine.on('workflow:abort', loopAbort);
+
+    const loopState = await loopEngine.run();
+
+    expect(loopState.status).toBe('aborted');
+    expect(loopAbort).toHaveBeenCalledOnce();
+    expect(loopAbort.mock.calls[0]?.[1]).toContain('Loop detected');
+    cleanupWorkflowEngine(loopEngine);
+
+    const blockedConfig: WorkflowConfig = {
+      name: 'blocked-test',
+      maxSteps: 1,
+      initialStep: 'plan',
+      steps: [
+        makeStep('plan', {
+          rules: [makeRule('done', 'COMPLETE')],
+        }),
+      ],
+    };
+
+    vi.mocked(runAgent).mockReset();
+    mockRunAgentSequence([
+      makeResponse({ persona: 'plan', status: 'blocked', content: 'Need clarification' }),
+    ]);
+
+    const blockedEngine = new WorkflowEngine(blockedConfig, tmpDir, 'blocked task', {
+      projectCwd: tmpDir,
+      ignoreIterationLimit: true,
+    });
+    const blockedAbort = vi.fn();
+    blockedEngine.on('workflow:abort', blockedAbort);
+
+    const blockedState = await blockedEngine.run();
+
+    expect(blockedState.status).toBe('aborted');
+    expect(blockedAbort).toHaveBeenCalledOnce();
+    expect(blockedAbort.mock.calls[0]?.[1]).toContain('Workflow blocked');
+    cleanupWorkflowEngine(blockedEngine);
+
+    vi.mocked(runAgent).mockReset();
+    mockRunAgentSequence([
+      makeResponse({ persona: 'plan', status: 'error', content: 'Partial output', error: 'request failed' }),
+    ]);
+
+    const errorEngine = new WorkflowEngine(blockedConfig, tmpDir, 'error task', {
+      projectCwd: tmpDir,
+      ignoreIterationLimit: true,
+    });
+    const errorAbort = vi.fn();
+    errorEngine.on('workflow:abort', errorAbort);
+
+    const errorState = await errorEngine.run();
+
+    expect(errorState.status).toBe('aborted');
+    expect(errorAbort).toHaveBeenCalledOnce();
+    expect(errorAbort.mock.calls[0]?.[1]).toContain('Step "plan" failed: request failed');
+    cleanupWorkflowEngine(errorEngine);
+
+    vi.mocked(runAgent).mockReset();
+    vi.mocked(runAgent).mockRejectedValueOnce(new Error('runtime exploded'));
+    const runtimeEngine = new WorkflowEngine(blockedConfig, tmpDir, 'runtime task', {
+      projectCwd: tmpDir,
+      ignoreIterationLimit: true,
+    });
+    const runtimeAbort = vi.fn();
+    runtimeEngine.on('workflow:abort', runtimeAbort);
+
+    const runtimeState = await runtimeEngine.run();
+
+    expect(runtimeState.status).toBe('aborted');
+    expect(runtimeAbort).toHaveBeenCalledOnce();
+    expect(runtimeAbort.mock.calls[0]?.[1]).toContain('Step execution failed: runtime exploded');
+    cleanupWorkflowEngine(runtimeEngine);
+
+    const interruptEngine = new WorkflowEngine(blockedConfig, tmpDir, 'interrupt task', {
+      projectCwd: tmpDir,
+      ignoreIterationLimit: true,
+    });
+    const interruptAbort = vi.fn();
+    interruptEngine.on('workflow:abort', interruptAbort);
+    interruptEngine.abort();
+
+    const interruptState = await interruptEngine.run();
+
+    expect(interruptState.status).toBe('aborted');
+    expect(interruptAbort).toHaveBeenCalledOnce();
+    expect(interruptAbort.mock.calls[0]?.[1]).toContain('SIGINT');
   });
 
   it('should pass correct request data to onIterationLimit', async () => {

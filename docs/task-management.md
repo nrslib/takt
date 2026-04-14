@@ -64,7 +64,7 @@ Fields:
 | Field | Description |
 |-------|-------------|
 | `name` | AI-generated task slug |
-| `status` | `pending`, `running`, `completed`, or `failed` |
+| `status` | `pending`, `running`, `completed`, `failed`, or `exceeded` |
 | `task_dir` | Path to the task directory containing `order.md` |
 | `workflow` | Workflow name to use for execution |
 | `worktree` | `true` (auto), a path string, or omitted (run in current directory) |
@@ -101,6 +101,9 @@ Execute all pending tasks from `.takt/tasks.yaml`:
 
 ```bash
 takt run
+
+# Ignore workflow max_steps and continue until another stop condition occurs
+takt run --ignore-exceed
 ```
 
 The `run` command claims pending tasks and executes them through the configured workflow. Each task goes through:
@@ -109,7 +112,9 @@ The `run` command claims pending tasks and executes them through the configured 
 2. Workflow execution in the clone/project directory
 3. Auto-commit and push (if worktree execution)
 4. Post-execution flow (PR creation if `auto_pr` is set)
-5. Status update in `tasks.yaml` (`completed` or `failed`)
+5. Status update in `tasks.yaml` (`completed`, `failed`, or `exceeded`)
+
+When a workflow reaches `max_steps`, the default `takt run` behavior stops the task with `exceeded` status and saves retry metadata such as `exceeded_max_steps`, `exceeded_current_iteration`, and `resume_point`. Passing `--ignore-exceed` makes `takt run` ignore only that iteration limit, continue the workflow, and skip writing exceeded retry metadata.
 
 ### Parallel Execution (Concurrency)
 

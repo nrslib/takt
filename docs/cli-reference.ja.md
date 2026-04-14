@@ -145,7 +145,12 @@ takt add #28
 ```bash
 # .takt/tasks.yaml の pending タスクをすべて実行
 takt run
+
+# workflow の max_steps を無視して別の停止条件まで継続
+takt run --ignore-exceed
 ```
+
+`--ignore-exceed` を付けない場合、workflow の `max_steps` に到達したタスクは `exceeded` として停止し、再実行用メタデータが `.takt/tasks.yaml` に保存されます。`--ignore-exceed` を付けた `takt run` は iteration limit だけを無視して継続し、exceeded 用の再実行メタデータを保存しません。
 
 ### takt watch
 

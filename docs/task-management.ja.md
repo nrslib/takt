@@ -64,7 +64,7 @@ tasks:
 | フィールド | 説明 |
 |-----------|------|
 | `name` | AI が生成したタスクスラグ |
-| `status` | `pending`、`running`、`completed`、または `failed` |
+| `status` | `pending`、`running`、`completed`、`failed`、または `exceeded` |
 | `task_dir` | `order.md` を含むタスクディレクトリのパス |
 | `workflow` | 実行に使用する workflow 名 |
 | `worktree` | `true`（自動）、パス文字列、または省略（カレントディレクトリで実行） |
@@ -101,6 +101,9 @@ tasks:
 
 ```bash
 takt run
+
+# workflow の max_steps を無視して別の停止条件まで継続
+takt run --ignore-exceed
 ```
 
 `run` コマンドは pending タスクを取得して、設定された workflow を通じて実行します。各タスクは次の処理を経ます。
@@ -109,7 +112,9 @@ takt run
 2. クローン/プロジェクトディレクトリでの workflow 実行
 3. 自動コミットとプッシュ（worktree 実行の場合）
 4. 実行後フロー（`auto_pr` 設定時は PR 作成）
-5. `tasks.yaml` のステータス更新（`completed` または `failed`）
+5. `tasks.yaml` のステータス更新（`completed`、`failed`、または `exceeded`）
+
+workflow が `max_steps` に到達した場合、通常の `takt run` はタスクを `exceeded` として停止し、`exceeded_max_steps`、`exceeded_current_iteration`、`resume_point` などの再実行メタデータを保存します。`--ignore-exceed` を付けると、この iteration limit だけを無視して workflow を継続し、exceeded 用の再実行メタデータは保存しません。
 
 ### 並列実行（Concurrency）
 
