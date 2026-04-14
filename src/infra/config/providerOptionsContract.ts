@@ -9,6 +9,7 @@ const PROVIDER_OPTIONS_ENV_SPEC_ENTRIES = [
   { path: 'provider_options.claude.effort', type: 'string' },
   { path: 'provider_options.claude.sandbox.allow_unsandboxed_commands', type: 'boolean' },
   { path: 'provider_options.claude.sandbox.excluded_commands', type: 'json' },
+  { path: 'provider_options.copilot.effort', type: 'string' },
 ] as const satisfies readonly EnvSpec[];
 
 const PROVIDER_OPTIONS_TRACE_PATH_ENTRIES = [
@@ -24,6 +25,8 @@ const PROVIDER_OPTIONS_TRACE_PATH_ENTRIES = [
   'provider_options.claude.sandbox',
   'provider_options.claude.sandbox.allow_unsandboxed_commands',
   'provider_options.claude.sandbox.excluded_commands',
+  'provider_options.copilot',
+  'provider_options.copilot.effort',
 ] as const;
 
 const PROVIDER_OPTIONS_INTERNAL_PATH_ENTRIES = [
@@ -34,6 +37,7 @@ const PROVIDER_OPTIONS_INTERNAL_PATH_ENTRIES = [
   'claude.effort',
   'claude.sandbox.allowUnsandboxedCommands',
   'claude.sandbox.excludedCommands',
+  'copilot.effort',
 ] as const;
 
 export type ProviderOptionsTracePath = (typeof PROVIDER_OPTIONS_TRACE_PATH_ENTRIES)[number];
@@ -47,6 +51,7 @@ export const PROVIDER_OPTIONS_TRACKED_KEYS = [
   'provider_options.opencode',
   'provider_options.claude',
   'provider_options.claude.sandbox',
+  'provider_options.copilot',
   ...PROVIDER_OPTIONS_ENV_SPEC_ENTRIES.map((spec) => spec.path).filter((path) => path !== 'provider_options'),
   'provider_options.claude.allowed_tools',
 ] as const;

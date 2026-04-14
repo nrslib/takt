@@ -6,7 +6,7 @@
 
 import { z } from 'zod/v4';
 import { STATUS_VALUES } from './status.js';
-import { CLAUDE_EFFORT_VALUES, CODEX_REASONING_EFFORT_VALUES, RUNTIME_PREPARE_PRESETS } from './workflow-types.js';
+import { CLAUDE_EFFORT_VALUES, CODEX_REASONING_EFFORT_VALUES, COPILOT_EFFORT_VALUES, RUNTIME_PREPARE_PRESETS } from './workflow-types.js';
 
 export { McpServerConfigSchema, McpServersSchema } from './mcp-schemas.js';
 
@@ -67,6 +67,9 @@ export const StepProviderOptionsSchema = z.object({
     allowed_tools: z.array(z.string()).optional(),
     effort: z.enum(CLAUDE_EFFORT_VALUES).optional(),
     sandbox: ClaudeSandboxSchema,
+  }).optional(),
+  copilot: z.object({
+    effort: z.enum(COPILOT_EFFORT_VALUES).optional(),
   }).optional(),
 }).optional();
 

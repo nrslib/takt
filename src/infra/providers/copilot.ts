@@ -26,6 +26,7 @@ function toCopilotOptions(options: ProviderCallOptions): CopilotCallOptions {
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
     model: options.model,
+    effort: options.providerOptions?.copilot?.effort,
     permissionMode: options.permissionMode,
     onStream: options.onStream,
     copilotGithubToken: options.copilotGithubToken ?? resolveCopilotGithubToken(),

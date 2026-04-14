@@ -3,6 +3,7 @@
  */
 
 import type { StreamCallback } from '../claude/index.js';
+import type { CopilotEffort } from '../../core/models/workflow-types.js';
 import type { PermissionMode } from '../../core/models/index.js';
 
 /** Options for calling GitHub Copilot CLI */
@@ -11,6 +12,7 @@ export interface CopilotCallOptions {
   abortSignal?: AbortSignal;
   sessionId?: string;
   model?: string;
+  effort?: CopilotEffort;
   systemPrompt?: string;
   permissionMode?: PermissionMode;
   onStream?: StreamCallback;

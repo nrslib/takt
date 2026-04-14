@@ -68,6 +68,10 @@ function buildArgs(prompt: string, options: CopilotCallOptions & { shareFilePath
     args.push('--model', options.model);
   }
 
+  if (options.effort) {
+    args.push('--effort', options.effort);
+  }
+
   if (options.sessionId) {
     args.push('--resume', options.sessionId);
   }

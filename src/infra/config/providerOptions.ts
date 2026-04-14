@@ -1,6 +1,7 @@
 import type {
   ClaudeEffort,
   CodexReasoningEffort,
+  CopilotEffort,
   StepProviderOptions,
 } from '../../core/models/workflow-types.js';
 import type {
@@ -26,6 +27,9 @@ type RawProviderOptions = {
       allow_unsandboxed_commands?: boolean;
       excluded_commands?: string[];
     };
+  };
+  copilot?: {
+    effort?: CopilotEffort;
   };
 };
 
@@ -81,6 +85,9 @@ export function normalizeProviderOptions(
       result.claude = claude;
     }
   }
+  if (options.copilot?.effort !== undefined) {
+    result.copilot = { effort: options.copilot.effort };
+  }
   return Object.keys(result).length > 0 ? result : undefined;
 }
 
@@ -109,6 +116,14 @@ export function mergeProviderOptions(
           : {}),
         ...(layer.claude.sandbox
           ? { sandbox: { ...result.claude?.sandbox, ...layer.claude.sandbox } }
+          : {}),
+      };
+    }
+    if (layer.copilot) {
+      result.copilot = {
+        ...result.copilot,
+        ...(layer.copilot.effort !== undefined
+          ? { effort: layer.copilot.effort }
           : {}),
       };
     }
@@ -219,6 +234,11 @@ export function resolveEffectiveProviderOptions(
     stepOptions.opencode?.networkAccess,
     resolveProviderOptionOrigin(originResolver, 'opencode.networkAccess', source),
   );
+  const copilotEffort = selectProviderValue(
+    resolvedConfigOptions.copilot?.effort,
+    stepOptions.copilot?.effort,
+    resolveProviderOptionOrigin(originResolver, 'copilot.effort', source),
+  );
 
   const result: StepProviderOptions = {
     codex:
@@ -233,9 +253,10 @@ export function resolveEffectiveProviderOptions(
       claude.sandbox !== undefined || claude.allowedTools !== undefined || claude.effort !== undefined
         ? claude
         : undefined,
+    copilot: copilotEffort !== undefined ? { effort: copilotEffort } : undefined,
   };
 
-  return result.codex || result.opencode || result.claude ? result : undefined;
+  return result.codex || result.opencode || result.claude || result.copilot ? result : undefined;
 }
 
 function stripClaudeAllowedTools(
@@ -265,6 +286,9 @@ function stripClaudeAllowedTools(
       : {}),
     ...(sanitizedClaude !== undefined && Object.keys(sanitizedClaude).length > 0
       ? { claude: sanitizedClaude }
+      : {}),
+    ...(providerOptions.copilot !== undefined
+      ? { copilot: { ...providerOptions.copilot } }
       : {}),
   };
 

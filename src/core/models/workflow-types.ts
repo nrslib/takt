@@ -146,6 +146,8 @@ export const CODEX_REASONING_EFFORT_VALUES = ['minimal', 'low', 'medium', 'high'
 export type CodexReasoningEffort = (typeof CODEX_REASONING_EFFORT_VALUES)[number];
 export const CLAUDE_EFFORT_VALUES = ['low', 'medium', 'high', 'max'] as const;
 export type ClaudeEffort = (typeof CLAUDE_EFFORT_VALUES)[number];
+export const COPILOT_EFFORT_VALUES = ['low', 'medium', 'high', 'xhigh'] as const;
+export type CopilotEffort = (typeof COPILOT_EFFORT_VALUES)[number];
 const RUNTIME_PREPARE_PRESET_SET: ReadonlySet<string> = new Set(RUNTIME_PREPARE_PRESETS);
 export function isRuntimePreparePreset(entry: string): entry is RuntimePreparePreset {
   return RUNTIME_PREPARE_PRESET_SET.has(entry);
@@ -167,10 +169,15 @@ export interface ClaudeProviderOptions {
   sandbox?: ClaudeSandboxSettings;
 }
 
+export interface CopilotProviderOptions {
+  effort?: CopilotEffort;
+}
+
 export interface StepProviderOptions {
   codex?: CodexProviderOptions;
   opencode?: OpenCodeProviderOptions;
   claude?: ClaudeProviderOptions;
+  copilot?: CopilotProviderOptions;
 }
 
 export interface WorkflowStep {

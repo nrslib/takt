@@ -18,9 +18,11 @@ describe('providerOptionsContract', () => {
       'provider_options.claude.effort',
       'provider_options.claude.sandbox.allow_unsandboxed_commands',
       'provider_options.claude.sandbox.excluded_commands',
+      'provider_options.copilot.effort',
     ]));
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.claude.allowed_tools');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.reasoning_effort');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.copilot.effort');
   });
 
   it('maps internal provider option paths to traced-config paths', () => {
@@ -36,11 +38,13 @@ describe('providerOptionsContract', () => {
     expect(getPresentProviderOptionPaths({
       codex: { networkAccess: true, reasoningEffort: 'high' },
       claude: { effort: 'medium', sandbox: { excludedCommands: ['rm -rf'] } },
+      copilot: { effort: 'high' },
     })).toEqual([
       'codex.networkAccess',
       'codex.reasoningEffort',
       'claude.effort',
       'claude.sandbox.excludedCommands',
+      'copilot.effort',
     ]);
   });
 });
