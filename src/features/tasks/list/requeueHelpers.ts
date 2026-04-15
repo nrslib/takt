@@ -2,7 +2,7 @@ import { confirm } from '../../../shared/prompt/index.js';
 import { getLabel } from '../../../shared/i18n/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { warn } from '../../../shared/ui/index.js';
-import { isWorkflowPath, loadAllWorkflowsWithSources } from '../../../infra/config/index.js';
+import { isWorkflowPath, loadAllStandaloneWorkflowsWithSources } from '../../../infra/config/index.js';
 import { selectWorkflow } from '../../workflowSelection/index.js';
 import { parse as parseYaml } from 'yaml';
 import {
@@ -37,7 +37,7 @@ function resolveReusableWorkflowName(
   if (isWorkflowPath(previousWorkflow)) {
     return null;
   }
-  const availableWorkflows = loadAllWorkflowsWithSources(projectDir, { onWarning: warn });
+  const availableWorkflows = loadAllStandaloneWorkflowsWithSources(projectDir, { onWarning: warn });
   if (!availableWorkflows.has(previousWorkflow)) {
     return null;
   }

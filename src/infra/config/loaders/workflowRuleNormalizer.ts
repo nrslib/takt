@@ -22,6 +22,7 @@ export function normalizeRule(rule: {
   condition?: string;
   when?: string;
   next?: string;
+  return?: string;
   appendix?: string;
   requires_user_input?: boolean;
   interactive_only?: boolean;
@@ -36,6 +37,7 @@ export function normalizeRule(rule: {
     return {
       condition,
       next,
+      returnValue: rule.return,
       appendix: rule.appendix,
       requiresUserInput: rule.requires_user_input,
       interactiveOnly: rule.interactive_only,
@@ -50,6 +52,7 @@ export function normalizeRule(rule: {
     return {
       condition,
       next,
+      returnValue: rule.return,
       appendix: rule.appendix,
       requiresUserInput: rule.requires_user_input,
       interactiveOnly: rule.interactive_only,
@@ -62,6 +65,7 @@ export function normalizeRule(rule: {
   return {
     condition,
     next,
+    returnValue: rule.return,
     appendix: rule.appendix,
     requiresUserInput: rule.requires_user_input,
     interactiveOnly: rule.interactive_only,

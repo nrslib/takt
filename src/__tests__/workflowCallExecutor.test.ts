@@ -245,4 +245,66 @@ describe('WorkflowCallExecutor', () => {
     expect(result.status).toBe('completed');
     expect(childEngine.runWithResult).toHaveBeenCalledTimes(1);
   });
+
+  it('child workflow の論理 return 値を呼び出し元へ引き継ぐ', async () => {
+    const parentConfig = {
+      name: 'parent',
+      initialStep: 'delegate',
+      maxSteps: 10,
+      steps: [],
+    } as WorkflowConfig;
+    const childConfig = {
+      name: 'child',
+      initialStep: 'review',
+      maxSteps: 10,
+      steps: [{ name: 'review' }],
+    } as WorkflowConfig;
+    const step = {
+      name: 'delegate',
+      call: 'child',
+      personaDisplayName: 'delegate',
+      instruction: '',
+    } as WorkflowCallStep;
+    const state = makeState(parentConfig.name, 'running', 2);
+    const childState = makeState(childConfig.name, 'completed', 3);
+    childState.lastOutput = makeResponse({ content: 'child requested retry_plan' });
+
+    const childEngine = createChildEngine({
+      state: childState,
+      returnValue: 'retry_plan',
+    } as WorkflowRunResult);
+    const executor = new WorkflowCallExecutor({
+      getConfig: () => parentConfig,
+      getOptions: () => ({
+        projectCwd: '/tmp/project',
+        reportDirName: 'run',
+      }),
+      getMaxSteps: () => 10,
+      updateMaxSteps: vi.fn(),
+      getCwd: () => '/tmp/project',
+      projectCwd: '/tmp/project',
+      task: 'task',
+      sharedRuntime: { startedAtMs: Date.now(), maxSteps: 10 },
+      resumeStackPrefix: [],
+      runPaths: {
+        slug: 'run',
+      } as never,
+      resolveWorkflowCall: vi.fn(),
+      createEngine: vi.fn().mockReturnValue(childEngine),
+      emit: vi.fn(),
+      state,
+      setActiveResumePoint: vi.fn(),
+    });
+
+    const result = await executor.execute({
+      step,
+      childWorkflow: childConfig,
+      childProviderInfo: { provider: 'mock', model: 'test-model' },
+      parentProviderOptions: undefined,
+      personaProviders: undefined,
+    }) as WorkflowState & { returnValue?: string };
+
+    expect(result.status).toBe('completed');
+    expect(result.returnValue).toBe('retry_plan');
+  });
 });

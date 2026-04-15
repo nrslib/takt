@@ -283,6 +283,37 @@ describe('WorkflowEngine Integration: Error Handling', () => {
       const reason = abortFn.mock.calls[0]![1] as string;
       expect(reason).toContain('Step "plan" failed: request failed');
     });
+
+    it('should complete when a matched rule returns a logical result', async () => {
+      const config = buildDefaultWorkflowConfig({
+        initialStep: 'plan',
+        steps: [
+          makeStep('plan', {
+            rules: [
+              { condition: 'retry', returnValue: 'retry_plan' },
+            ],
+          }),
+        ],
+      });
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+
+      mockRunAgentSequence([
+        makeResponse({
+          persona: 'plan',
+          content: '[STEP:1] retry',
+        }),
+      ]);
+      mockDetectMatchedRuleSequence([
+        { index: 0, method: 'phase1_tag' },
+      ]);
+
+      const result = await engine.runSingleIteration();
+
+      expect(result.nextStep).toBe('COMPLETE');
+      expect(result.isComplete).toBe(true);
+      expect(engine.getState().status).toBe('completed');
+      expect(result.response.matchedRuleIndex).toBe(0);
+    });
   });
 
   // =====================================================

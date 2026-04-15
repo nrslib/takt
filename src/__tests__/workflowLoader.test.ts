@@ -9,7 +9,13 @@ import { tmpdir } from 'node:os';
 
 import {
   isWorkflowPath,
+  loadAllWorkflowDiscovery,
+  loadAllWorkflowDiscoveryWithSources,
+  loadAllStandaloneWorkflows,
+  loadAllStandaloneWorkflowsWithSources,
+  loadWorkflow,
   loadWorkflowByIdentifier,
+  listStandaloneWorkflowEntries,
   listWorkflows,
   listWorkflowEntries,
   loadAllWorkflows,
@@ -210,6 +216,225 @@ steps:
     expect(workflow!.name).toBe('test-workflow');
   });
 
+  it('should preserve callable subworkflow provider settings during load', () => {
+    const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
+    mkdirSync(projectWorkflowsDir, { recursive: true });
+    writeFileSync(join(projectWorkflowsDir, 'callable-provider.yaml'), `name: callable-provider
+subworkflow:
+  callable: true
+workflow_config:
+  provider: codex
+  model: gpt-5-codex
+  provider_options:
+    codex:
+      network_access: true
+initial_step: review
+max_steps: 2
+loop_monitors:
+  - cycle: [review, review]
+    threshold: 2
+    judge:
+      provider:
+        type: codex
+        network_access: true
+      model: gpt-5-codex
+      rules:
+        - condition: stop
+          next: ABORT
+steps:
+  - name: review
+    persona: reviewer
+    provider: codex
+    model: gpt-5-codex
+    provider_options:
+      codex:
+        network_access: true
+    instruction: Review
+    parallel:
+      - name: security
+        persona: security-reviewer
+        provider: codex
+        model: gpt-5-codex
+        provider_options:
+          codex:
+            network_access: true
+        instruction: Security review
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const workflow = loadWorkflowByIdentifier('callable-provider', tempDir);
+
+    expect(workflow).not.toBeNull();
+    expect(workflow).toMatchObject({
+      provider: 'codex',
+      model: 'gpt-5-codex',
+      providerOptions: {
+        codex: {
+          networkAccess: true,
+        },
+      },
+      loopMonitors: [
+        {
+          judge: {
+            provider: 'codex',
+            model: 'gpt-5-codex',
+            providerOptions: {
+              codex: {
+                networkAccess: true,
+              },
+            },
+          },
+        },
+      ],
+      steps: [
+        {
+          name: 'review',
+          provider: 'codex',
+          model: 'gpt-5-codex',
+          providerOptions: {
+            codex: {
+              networkAccess: true,
+            },
+          },
+          parallel: [
+            {
+              name: 'security',
+              provider: 'codex',
+              model: 'gpt-5-codex',
+              providerOptions: {
+                codex: {
+                  networkAccess: true,
+                },
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it('should reject unsupported workflow_call child return conditions during load', () => {
+    const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
+    mkdirSync(projectWorkflowsDir, { recursive: true });
+    writeFileSync(join(projectWorkflowsDir, 'child.yaml'), `name: child
+subworkflow:
+  callable: true
+  returns: [ok]
+initial_step: review
+max_steps: 3
+steps:
+  - name: review
+    persona: reviewer
+    instruction: "Review"
+    rules:
+      - condition: done
+        return: ok
+`);
+    writeFileSync(join(projectWorkflowsDir, 'parent.yaml'), `name: parent
+initial_step: delegate
+max_steps: 3
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: child
+    rules:
+      - condition: retry_plan
+        next: COMPLETE
+`);
+
+    expect(() => loadWorkflowByIdentifier('parent', tempDir)).toThrow(
+      'workflow_call step "delegate" cannot route on unsupported child result "retry_plan"',
+    );
+  });
+
+  it('should reject reserved callable return names during load', () => {
+    const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
+    mkdirSync(projectWorkflowsDir, { recursive: true });
+    writeFileSync(join(projectWorkflowsDir, 'child.yaml'), `name: child
+subworkflow:
+  callable: true
+  returns: [ABORT]
+initial_step: review
+max_steps: 3
+steps:
+  - name: review
+    persona: reviewer
+    instruction: "Review"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    writeFileSync(join(projectWorkflowsDir, 'parent.yaml'), `name: parent
+initial_step: delegate
+max_steps: 3
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: child
+    rules:
+      - condition: ABORT
+        next: ABORT
+`);
+
+    try {
+      loadWorkflowByIdentifier('parent', tempDir);
+      expect.unreachable('expected loadWorkflowByIdentifier to throw');
+    } catch (error) {
+      expect(String(error)).toContain('subworkflow.returns must not include reserved result');
+      expect(String(error)).toContain('ABORT');
+    }
+  });
+
+  it('should reject unsupported nested workflow_call child return conditions during load', () => {
+    const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
+    mkdirSync(projectWorkflowsDir, { recursive: true });
+    writeFileSync(join(projectWorkflowsDir, 'grandchild.yaml'), `name: grandchild
+subworkflow:
+  callable: true
+  returns: [ok]
+initial_step: review
+max_steps: 3
+steps:
+  - name: review
+    persona: reviewer
+    instruction: "Review"
+    rules:
+      - condition: done
+        return: ok
+`);
+    writeFileSync(join(projectWorkflowsDir, 'child.yaml'), `name: child
+subworkflow:
+  callable: true
+  returns: [ok]
+initial_step: delegate-grandchild
+max_steps: 3
+steps:
+  - name: delegate-grandchild
+    kind: workflow_call
+    call: grandchild
+    rules:
+      - condition: retry_plan
+        next: COMPLETE
+`);
+    writeFileSync(join(projectWorkflowsDir, 'parent.yaml'), `name: parent
+initial_step: delegate
+max_steps: 3
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: child
+    rules:
+      - condition: ok
+        next: COMPLETE
+`);
+
+    expect(() => loadWorkflowByIdentifier('parent', tempDir)).toThrow(
+      'workflow_call step "delegate-grandchild" cannot route on unsupported child result "retry_plan"',
+    );
+  });
+
   it('should prefer project workflows over worktree workflows for named lookup', () => {
     const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
     const worktreeDir = join(tempDir, '.takt', 'worktrees', 'feature-branch');
@@ -391,6 +616,106 @@ steps:
   });
 });
 
+describe('public workflow loaders validate workflow_call contracts', () => {
+  let tempDir: string;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'takt-test-'));
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('should reject unsupported workflow_call child return conditions through loadWorkflow', () => {
+    const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
+    mkdirSync(projectWorkflowsDir, { recursive: true });
+    writeFileSync(join(projectWorkflowsDir, 'child.yaml'), `name: child
+subworkflow:
+  callable: true
+  returns: [ok]
+initial_step: review
+max_steps: 3
+steps:
+  - name: review
+    persona: reviewer
+    instruction: "Review"
+    rules:
+      - condition: done
+        return: ok
+`);
+    writeFileSync(join(projectWorkflowsDir, 'parent.yaml'), `name: parent
+initial_step: delegate
+max_steps: 3
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: child
+    rules:
+      - condition: retry_plan
+        next: COMPLETE
+`);
+
+    expect(() => loadWorkflow('parent', tempDir)).toThrow(
+      'workflow_call step "delegate" cannot route on unsupported child result "retry_plan"',
+    );
+  });
+
+  it('should warn and skip invalid workflow_call contracts from discovery APIs', () => {
+    const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
+    mkdirSync(projectWorkflowsDir, { recursive: true });
+    writeFileSync(join(projectWorkflowsDir, 'child.yaml'), `name: child
+subworkflow:
+  callable: true
+  returns: [ok]
+initial_step: review
+max_steps: 3
+steps:
+  - name: review
+    persona: reviewer
+    instruction: "Review"
+    rules:
+      - condition: done
+        return: ok
+`);
+    writeFileSync(join(projectWorkflowsDir, 'parent.yaml'), `name: parent
+initial_step: delegate
+max_steps: 3
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: child
+    rules:
+      - condition: retry_plan
+        next: COMPLETE
+`);
+
+    const entriesWarning = vi.fn();
+    const workflowsWarning = vi.fn();
+    const loadAllWarning = vi.fn();
+
+    const entries = listWorkflowEntries(tempDir, { onWarning: entriesWarning });
+    const workflowsWithSources = loadAllWorkflowDiscoveryWithSources(tempDir, { onWarning: workflowsWarning });
+    const workflows = loadAllWorkflowDiscovery(tempDir, { onWarning: loadAllWarning });
+
+    expect(entries.find((entry) => entry.name === 'parent')).toBeUndefined();
+    expect(entries.find((entry) => entry.name === 'child')).toBeDefined();
+    expect(workflowsWithSources.has('parent')).toBe(false);
+    expect(workflowsWithSources.has('child')).toBe(true);
+    expect(workflows.has('parent')).toBe(false);
+    expect(workflows.has('child')).toBe(true);
+    expect(entriesWarning).toHaveBeenCalledWith(
+      expect.stringContaining('workflow_call step "delegate" cannot route on unsupported child result "retry_plan"'),
+    );
+    expect(workflowsWarning).toHaveBeenCalledWith(
+      expect.stringContaining('workflow_call step "delegate" cannot route on unsupported child result "retry_plan"'),
+    );
+    expect(loadAllWarning).toHaveBeenCalledWith(
+      expect.stringContaining('workflow_call step "delegate" cannot route on unsupported child result "retry_plan"'),
+    );
+  });
+});
+
 describe('listWorkflows with project-local', () => {
   let tempDir: string;
 
@@ -464,6 +789,282 @@ steps:
     expect(onWarning).not.toHaveBeenCalled();
   });
 
+});
+
+describe('internal callable workflow visibility', () => {
+  let tempDir: string;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'takt-test-'));
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('should hide visibility: internal workflows from discovery APIs', () => {
+    const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
+    mkdirSync(projectWorkflowsDir, { recursive: true });
+    writeFileSync(join(projectWorkflowsDir, 'public-parent.yaml'), `name: public-parent
+initial_step: review
+max_steps: 1
+
+steps:
+  - name: review
+    persona: reviewer
+    instruction: "Review publicly"
+    rules:
+      - condition: done
+        next: COMPLETE
+`, 'utf-8');
+    writeFileSync(join(projectWorkflowsDir, 'internal-review.yaml'), `name: internal-review
+subworkflow:
+  callable: true
+  visibility: internal
+  params:
+    review_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+initial_step: review
+max_steps: 1
+
+steps:
+  - name: review
+    knowledge:
+      $param: review_knowledge
+    rules:
+      - condition: done
+        next: COMPLETE
+`, 'utf-8');
+
+    const discoveryWarning = vi.fn();
+    const runtimeWithSourcesWarning = vi.fn();
+    const runtimeWarning = vi.fn();
+    const entries = listWorkflowEntries(tempDir, { onWarning: discoveryWarning });
+    const workflowNames = listWorkflows(tempDir, { onWarning: discoveryWarning });
+    const discoveryWithSources = loadAllWorkflowDiscoveryWithSources(tempDir, { onWarning: discoveryWarning });
+    const workflowsWithSources = loadAllWorkflowsWithSources(tempDir, { onWarning: runtimeWithSourcesWarning });
+    const workflows = loadAllWorkflows(tempDir, { onWarning: runtimeWarning });
+
+    expect(entries.map((entry) => entry.name)).toContain('public-parent');
+    expect(entries.map((entry) => entry.name)).not.toContain('internal-review');
+    expect(workflowNames).toContain('public-parent');
+    expect(workflowNames).not.toContain('internal-review');
+    expect(discoveryWithSources.has('public-parent')).toBe(true);
+    expect(discoveryWithSources.has('internal-review')).toBe(false);
+    expect(workflowsWithSources.has('public-parent')).toBe(true);
+    expect(workflowsWithSources.has('internal-review')).toBe(false);
+    expect(workflows.has('internal-review')).toBe(false);
+    expect(discoveryWarning).not.toHaveBeenCalled();
+    expect(runtimeWithSourcesWarning).not.toHaveBeenCalled();
+    expect(runtimeWarning).not.toHaveBeenCalled();
+  });
+
+  it('should keep public callable workflows with required params visible only in discovery APIs', () => {
+    const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
+    mkdirSync(projectWorkflowsDir, { recursive: true });
+    writeFileSync(join(projectWorkflowsDir, 'public-callable.yaml'), `name: public-callable
+subworkflow:
+  callable: true
+  params:
+    review_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+initial_step: review
+max_steps: 1
+steps:
+  - name: review
+    knowledge:
+      $param: review_knowledge
+    rules:
+      - condition: done
+        next: COMPLETE
+`, 'utf-8');
+
+    const discoveryWarning = vi.fn();
+    const standaloneWarning = vi.fn();
+    const runtimeWithSourcesWarning = vi.fn();
+    const runtimeWarning = vi.fn();
+    const entries = listWorkflowEntries(tempDir, { onWarning: discoveryWarning });
+    const standaloneEntries = listStandaloneWorkflowEntries(tempDir, { onWarning: standaloneWarning });
+    const workflowNames = listWorkflows(tempDir, { onWarning: discoveryWarning });
+    const discoveryWithSources = loadAllWorkflowDiscoveryWithSources(tempDir, { onWarning: discoveryWarning });
+    const discovery = loadAllWorkflowDiscovery(tempDir, { onWarning: discoveryWarning });
+    const standaloneWithSources = loadAllStandaloneWorkflowsWithSources(tempDir, { onWarning: standaloneWarning });
+    const standalone = loadAllStandaloneWorkflows(tempDir, { onWarning: standaloneWarning });
+    const workflowsWithSources = loadAllWorkflowsWithSources(tempDir, { onWarning: runtimeWithSourcesWarning });
+    const workflows = loadAllWorkflows(tempDir, { onWarning: runtimeWarning });
+
+    expect(entries.map((entry) => entry.name)).toContain('public-callable');
+    expect(standaloneEntries.map((entry) => entry.name)).not.toContain('public-callable');
+    expect(workflowNames).toContain('public-callable');
+    expect(discoveryWithSources.has('public-callable')).toBe(true);
+    expect(discovery.has('public-callable')).toBe(true);
+    expect(standaloneWithSources.has('public-callable')).toBe(false);
+    expect(standalone.has('public-callable')).toBe(false);
+    expect(workflowsWithSources.has('public-callable')).toBe(false);
+    expect(workflows.has('public-callable')).toBe(false);
+    expect(discoveryWithSources.get('public-callable')?.config).toEqual({
+      name: 'public-callable',
+      subworkflow: {
+        callable: true,
+        visibility: undefined,
+        returns: undefined,
+        params: {
+          review_knowledge: {
+            type: 'facet_ref[]',
+            facetKind: 'knowledge',
+            default: undefined,
+          },
+        },
+      },
+    });
+    expect(discovery.get('public-callable')).toEqual({
+      name: 'public-callable',
+      subworkflow: {
+        callable: true,
+        visibility: undefined,
+        returns: undefined,
+        params: {
+          review_knowledge: {
+            type: 'facet_ref[]',
+            facetKind: 'knowledge',
+            default: undefined,
+          },
+        },
+      },
+    });
+    expect(() => loadWorkflowByIdentifier('public-callable', tempDir)).toThrow(
+      /requires workflow_call arg "review_knowledge"/,
+    );
+    expect(discoveryWarning).not.toHaveBeenCalled();
+    expect(standaloneWarning).toHaveBeenCalledWith(
+      expect.stringContaining('requires workflow_call arg "review_knowledge"'),
+    );
+    expect(runtimeWithSourcesWarning).toHaveBeenCalledWith(
+      expect.stringContaining('requires workflow_call arg "review_knowledge"'),
+    );
+    expect(runtimeWarning).toHaveBeenCalledWith(
+      expect.stringContaining('requires workflow_call arg "review_knowledge"'),
+    );
+  });
+
+  it('should validate path-based workflow_call children only in runtime batch loaders', () => {
+    const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
+    mkdirSync(projectWorkflowsDir, { recursive: true });
+    writeFileSync(join(projectWorkflowsDir, 'child.yaml'), `name: child
+subworkflow:
+  callable: true
+  returns: [ok]
+initial_step: review
+max_steps: 3
+steps:
+  - name: review
+    persona: reviewer
+    instruction: "Review"
+    rules:
+      - condition: done
+        return: ok
+`, 'utf-8');
+    writeFileSync(join(projectWorkflowsDir, 'parent.yaml'), `name: parent
+initial_step: delegate
+max_steps: 3
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: ./child.yaml
+    rules:
+      - condition: retry_plan
+        next: COMPLETE
+`, 'utf-8');
+
+    const entriesWarning = vi.fn();
+    const discoveryWarning = vi.fn();
+    const runtimeWithSourcesWarning = vi.fn();
+    const runtimeWarning = vi.fn();
+
+    const entries = listWorkflowEntries(tempDir, { onWarning: entriesWarning });
+    const discoveryWithSources = loadAllWorkflowDiscoveryWithSources(tempDir, { onWarning: discoveryWarning });
+    const discovery = loadAllWorkflowDiscovery(tempDir, { onWarning: discoveryWarning });
+    const workflowsWithSources = loadAllWorkflowsWithSources(tempDir, { onWarning: runtimeWithSourcesWarning });
+    const workflows = loadAllWorkflows(tempDir, { onWarning: runtimeWarning });
+
+    expect(entries.map((entry) => entry.name)).toContain('parent');
+    expect(discoveryWithSources.get('parent')?.config).toEqual({
+      name: 'parent',
+      description: undefined,
+      subworkflow: undefined,
+    });
+    expect(discovery.get('parent')).toEqual({
+      name: 'parent',
+      description: undefined,
+      subworkflow: undefined,
+    });
+    expect(workflowsWithSources.has('parent')).toBe(false);
+    expect(workflows.has('parent')).toBe(false);
+    expect(entriesWarning).not.toHaveBeenCalled();
+    expect(discoveryWarning).not.toHaveBeenCalled();
+    expect(runtimeWithSourcesWarning).toHaveBeenCalledWith(
+      expect.stringContaining('workflow_call step "delegate" cannot route on unsupported child result "retry_plan"'),
+    );
+    expect(runtimeWarning).toHaveBeenCalledWith(
+      expect.stringContaining('workflow_call step "delegate" cannot route on unsupported child result "retry_plan"'),
+    );
+  });
+
+  it('should still load visibility: internal workflows by explicit identifier', () => {
+    const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
+    mkdirSync(projectWorkflowsDir, { recursive: true });
+    writeFileSync(join(projectWorkflowsDir, 'internal-review.yaml'), `name: internal-review
+subworkflow:
+  callable: true
+  visibility: internal
+initial_step: review
+max_steps: 1
+
+steps:
+  - name: review
+    persona: reviewer
+    instruction: "Review internally"
+    rules:
+      - condition: done
+        next: COMPLETE
+`, 'utf-8');
+
+    const workflow = loadWorkflowByIdentifier('internal-review', tempDir);
+
+    expect(workflow).not.toBeNull();
+    expect(workflow!.name).toBe('internal-review');
+    expect((workflow!.subworkflow as Record<string, unknown>)?.visibility).toBe('internal');
+  });
+
+  it('should warn when visibility: internal is declared without callable: true', () => {
+    const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
+    mkdirSync(projectWorkflowsDir, { recursive: true });
+    writeFileSync(join(projectWorkflowsDir, 'broken-internal.yaml'), `name: broken-internal
+subworkflow:
+  visibility: internal
+initial_step: review
+max_steps: 1
+
+steps:
+  - name: review
+    persona: reviewer
+    instruction: "Review internally"
+    rules:
+      - condition: done
+        next: COMPLETE
+`, 'utf-8');
+
+    const onWarning = vi.fn();
+    const workflowNames = listWorkflows(tempDir, { onWarning });
+
+    expect(workflowNames).not.toContain('broken-internal');
+    expect(onWarning).toHaveBeenCalledTimes(1);
+    expect(onWarning).toHaveBeenCalledWith(
+      expect.stringContaining('Workflow "broken-internal" failed to load: subworkflow.visibility: subworkflow.visibility requires callable: true'),
+    );
+  });
 });
 
 describe('loadAllWorkflows with project-local', () => {
@@ -548,7 +1149,23 @@ steps:
     const workflows = loadAllWorkflows(tempDir, { onWarning });
 
     expect(workflows.has('unsafe-system')).toBe(true);
-    expect(workflows.get('unsafe-system')?.steps[0]?.effects).toEqual([{ type: 'merge_pr', pr: 42 }]);
+    expect(workflows.get('unsafe-system')).toMatchObject({
+      name: 'unsafe-system',
+      initialStep: 'route_context',
+      maxSteps: 1,
+      steps: [
+        {
+          name: 'route_context',
+          kind: 'system',
+          effects: [
+            {
+              type: 'merge_pr',
+              pr: 42,
+            },
+          ],
+        },
+      ],
+    });
     expect(onWarning).not.toHaveBeenCalled();
   });
 

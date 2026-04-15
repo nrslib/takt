@@ -126,6 +126,7 @@ export interface WorkflowAbortResult {
 export interface WorkflowRunResult {
   state: WorkflowState;
   abort?: WorkflowAbortResult;
+  returnValue?: string;
 }
 
 export interface WorkflowCallChildEngine {

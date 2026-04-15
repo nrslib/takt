@@ -1,7 +1,7 @@
 import { info, warn } from '../../shared/ui/index.js';
 import {
-  loadAllWorkflowsWithSources,
-  listWorkflowEntries,
+  loadAllStandaloneWorkflowsWithSources,
+  listStandaloneWorkflowEntries,
   getWorkflowCategories,
   resolveIgnoredWorkflows,
   buildCategorizedWorkflows,
@@ -35,7 +35,7 @@ export async function selectWorkflow(
   const categoryConfig = getWorkflowCategories(cwd);
 
   if (categoryConfig) {
-    const allWorkflows = loadAllWorkflowsWithSources(cwd, { onWarning: warn });
+    const allWorkflows = loadAllStandaloneWorkflowsWithSources(cwd, { onWarning: warn });
     if (allWorkflows.size === 0) {
       if (fallbackToDefault) {
         info(`No workflows found. Using default workflow: ${DEFAULT_WORKFLOW_NAME}`);
@@ -49,7 +49,7 @@ export async function selectWorkflow(
     return selectWorkflowFromCategorizedWorkflows(categorized);
   }
 
-  const entries = listWorkflowEntries(cwd, { onWarning: warn });
+  const entries = listStandaloneWorkflowEntries(cwd, { onWarning: warn });
   if (entries.length === 0) {
     if (fallbackToDefault) {
       info(`No workflows found. Using default workflow: ${DEFAULT_WORKFLOW_NAME}`);

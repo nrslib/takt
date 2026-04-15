@@ -190,7 +190,7 @@ export class WorkflowEngine extends EventEmitter {
         };
       },
       cycleDetectorRecordAndCheck: (stepName) => this.cycleDetector.recordAndCheck(stepName),
-      resolveNextStepFromDone: this.stepCoordinator.resolveNextStepFromDone.bind(this.stepCoordinator),
+      resolveDoneTransition: this.stepCoordinator.resolveTransitionFromDone.bind(this.stepCoordinator),
       runLoopMonitorJudge: this.stepCoordinator.runLoopMonitorJudge.bind(this.stepCoordinator),
       runStep: this.stepCoordinator.runStep.bind(this.stepCoordinator),
       buildInstruction: this.stepCoordinator.buildInstruction.bind(this.stepCoordinator),
@@ -298,7 +298,7 @@ export class WorkflowEngine extends EventEmitter {
         };
       },
       cycleDetectorRecordAndCheck: (stepName) => this.cycleDetector.recordAndCheck(stepName),
-      resolveNextStepFromDone: this.stepCoordinator.resolveNextStepFromDone.bind(this.stepCoordinator),
+      resolveDoneTransition: this.stepCoordinator.resolveTransitionFromDone.bind(this.stepCoordinator),
       runLoopMonitorJudge: this.stepCoordinator.runLoopMonitorJudge.bind(this.stepCoordinator),
       runStep: this.stepCoordinator.runStep.bind(this.stepCoordinator),
       buildInstruction: this.stepCoordinator.buildInstruction.bind(this.stepCoordinator),

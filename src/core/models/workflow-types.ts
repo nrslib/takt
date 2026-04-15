@@ -7,6 +7,7 @@ import type { TeamLeaderConfig } from './part.js';
 export interface WorkflowRule {
   condition: string;
   next?: string;
+  returnValue?: string;
   appendix?: string;
   requiresUserInput?: boolean;
   interactiveOnly?: boolean;
@@ -188,8 +189,21 @@ export interface WorkflowCallOverrides {
   providerOptions?: StepProviderOptions;
 }
 
+export type WorkflowParamType = 'facet_ref' | 'facet_ref[]';
+export type WorkflowParamFacetKind = 'knowledge' | 'policy' | 'instruction' | 'report_format';
+export type WorkflowCallArgValue = string | string[];
+
+export interface WorkflowSubworkflowParamConfig {
+  type: WorkflowParamType;
+  facetKind: WorkflowParamFacetKind;
+  default?: WorkflowCallArgValue;
+}
+
 export interface WorkflowSubworkflowConfig {
   callable?: boolean;
+  visibility?: 'internal';
+  returns?: string[];
+  params?: Record<string, WorkflowSubworkflowParamConfig>;
 }
 
 export interface WorkflowResumePointEntry {
@@ -275,6 +289,7 @@ export interface WorkflowCallStep extends WorkflowStepBase {
   mode?: never;
   call: string;
   overrides?: WorkflowCallOverrides;
+  args?: Record<string, WorkflowCallArgValue>;
   persona?: never;
   session?: never;
   mcpServers?: never;

@@ -256,6 +256,123 @@ steps:
     expect(childPrompt).toContain(parentTask);
   });
 
+  it('親 workflow は child workflow の return 値で分岐できる', async () => {
+    writeWorkflow(tmpDir, 'shared/review-loop.yaml', `name: shared/review-loop
+subworkflow:
+  callable: true
+  returns: [ok, retry_plan]
+initial_step: review
+max_steps: 5
+steps:
+  - name: review
+    persona: reviewer
+    instruction: "Review child workflow"
+    rules:
+      - condition: retry
+        return: retry_plan
+      - condition: done
+        return: ok
+`);
+
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'delegate',
+      max_steps: 4,
+      steps: [
+        {
+          name: 'delegate',
+          kind: 'workflow_call',
+          call: 'shared/review-loop',
+          rules: [
+            {
+              condition: 'retry_plan',
+              next: 'plan',
+            },
+            {
+              condition: 'ok',
+              next: 'COMPLETE',
+            },
+            {
+              condition: 'ABORT',
+              next: 'ABORT',
+            },
+          ],
+        },
+        {
+          name: 'plan',
+          persona: 'planner',
+          instruction: 'Replan from child output:\n{previous_response}',
+          rules: [
+            {
+              condition: 'done',
+              next: 'COMPLETE',
+            },
+          ],
+        },
+      ],
+    });
+
+    mockPersonaResponses({
+      reviewer: 'Child requested replan',
+      planner: 'done',
+    });
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+    ]);
+
+    engine = new WorkflowEngine(config, tmpDir, 'Branch on child return', createWorkflowCallOptions(tmpDir));
+
+    const state = await engine.run();
+    const planPrompt = vi.mocked(runAgent).mock.calls[1]?.[1];
+
+    expect(state.status).toBe('completed');
+    expect(planPrompt).toContain('Child requested replan');
+  });
+
+  it('engine 実行時に予約語 callable return を持つ child workflow を reject する', async () => {
+    writeWorkflow(tmpDir, 'shared/review-loop.yaml', `name: shared/review-loop
+subworkflow:
+  callable: true
+  returns: [ABORT]
+initial_step: review
+max_steps: 5
+steps:
+  - name: review
+    persona: reviewer
+    instruction: "Review child workflow"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'delegate',
+      max_steps: 4,
+      steps: [
+        {
+          name: 'delegate',
+          kind: 'workflow_call',
+          call: 'shared/review-loop',
+          rules: [
+            {
+              condition: 'ABORT',
+              next: 'ABORT',
+            },
+          ],
+        },
+      ],
+    });
+
+    engine = new WorkflowEngine(config, tmpDir, 'Reject reserved child return names', createWorkflowCallOptions(tmpDir));
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
+  });
+
   it('workflow_call overrides を子 workflow の agent 実行へ伝搬する', async () => {
     writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
 subworkflow:

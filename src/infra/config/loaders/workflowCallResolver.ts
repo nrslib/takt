@@ -1,9 +1,11 @@
 import { dirname } from 'node:path';
 import { isScopeRef } from 'faceted-prompting';
-import type { WorkflowConfig } from '../../../core/models/index.js';
+import type { WorkflowCallStep, WorkflowConfig } from '../../../core/models/index.js';
+import { isWorkflowCallStep } from '../../../core/workflow/step-kind.js';
 import { getAttachedWorkflowTrustInfo, getWorkflowSourcePath } from './workflowSourceMetadata.js';
+import { validateWorkflowCallRulesAgainstChildReturns } from './workflowCallContracts.js';
 import { getWorkflowTrustInfo, type WorkflowTrustInfo } from './workflowTrustSource.js';
-import { loadWorkflowByIdentifier, isWorkflowPath } from './workflowResolver.js';
+import { loadWorkflowByIdentifierForWorkflowCall, isWorkflowPath } from './workflowResolver.js';
 import { validateWorkflowCallTrustBoundary } from './workflowTrustBoundary.js';
 
 export interface WorkflowCallParentContext {
@@ -21,6 +23,14 @@ function validateWorkflowCallNamedIdentifier(identifier: string, stepName: strin
   }
 }
 
+function getParentWorkflowCallStep(parentWorkflow: WorkflowConfig, stepName: string): WorkflowCallStep {
+  const step = parentWorkflow.steps.find((candidate) => candidate.name === stepName);
+  if (!step || !isWorkflowCallStep(step)) {
+    throw new Error(`workflow_call step "${stepName}" was not found in workflow "${parentWorkflow.name}"`);
+  }
+  return step;
+}
+
 export function resolveWorkflowCallTarget(
   parentWorkflow: WorkflowConfig,
   identifier: string,
@@ -33,14 +43,17 @@ export function resolveWorkflowCallTarget(
     validateWorkflowCallNamedIdentifier(identifier, stepName);
   }
 
+  const parentStep = getParentWorkflowCallStep(parentWorkflow, stepName);
   const parentSourcePath = getWorkflowSourcePath(parentWorkflow) ?? parentContext?.sourcePath;
   const basePath = parentSourcePath ? dirname(parentSourcePath) : lookupCwd;
   const parentTrustInfo = getAttachedWorkflowTrustInfo(parentWorkflow)
     ?? parentContext?.trustInfo
     ?? getWorkflowTrustInfo(parentWorkflow, projectCwd);
-  const childWorkflow = loadWorkflowByIdentifier(identifier, projectCwd, {
+  const childWorkflow = loadWorkflowByIdentifierForWorkflowCall(identifier, projectCwd, {
     basePath,
     lookupCwd,
+    callableArgs: parentStep.args,
+    parentTrustInfo,
   });
 
   if (!childWorkflow) {
@@ -53,5 +66,6 @@ export function resolveWorkflowCallTarget(
     stepName,
     projectCwd,
   );
+  validateWorkflowCallRulesAgainstChildReturns(parentStep, childWorkflow);
   return childWorkflow;
 }

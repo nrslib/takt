@@ -23,7 +23,7 @@ const {
   mockHeader,
   mockStatus,
   mockIsWorkflowPath,
-  mockLoadAllWorkflowsWithSources,
+  mockLoadAllStandaloneWorkflowsWithSources,
 } = vi.hoisted(() => ({
   mockExistsSync: vi.fn(() => true),
   mockSelectWorkflow: vi.fn(),
@@ -57,7 +57,7 @@ const {
   mockHeader: vi.fn(),
   mockStatus: vi.fn(),
   mockIsWorkflowPath: vi.fn(() => false),
-  mockLoadAllWorkflowsWithSources: vi.fn(() => new Map<string, unknown>([['default', {}]])),
+  mockLoadAllStandaloneWorkflowsWithSources: vi.fn(() => new Map<string, unknown>([['default', {}]])),
 }));
 
 vi.mock('node:fs', async (importOriginal) => ({
@@ -95,7 +95,7 @@ vi.mock('../infra/config/index.js', () => ({
   loadWorkflowByIdentifier: (...args: unknown[]) => mockLoadWorkflowByIdentifier(...args),
   getWorkflowDescription: (...args: unknown[]) => mockGetWorkflowDescription(...args),
   isWorkflowPath: (...args: unknown[]) => mockIsWorkflowPath(...args),
-  loadAllWorkflowsWithSources: (...args: unknown[]) => mockLoadAllWorkflowsWithSources(...args),
+  loadAllStandaloneWorkflowsWithSources: (...args: unknown[]) => mockLoadAllStandaloneWorkflowsWithSources(...args),
 }));
 
 vi.mock('../features/interactive/index.js', () => ({
@@ -181,7 +181,7 @@ beforeEach(() => {
   mockResolveWorkflowConfigValue.mockReturnValue(3);
   mockLoadWorkflowByIdentifier.mockReturnValue(defaultWorkflowConfig);
   mockIsWorkflowPath.mockImplementation((workflow: string) => workflow.startsWith('/') || workflow.startsWith('~') || workflow.startsWith('./') || workflow.startsWith('../') || workflow.endsWith('.yaml') || workflow.endsWith('.yml'));
-  mockLoadAllWorkflowsWithSources.mockReturnValue(new Map<string, unknown>([['default', {}], ['selected-workflow', {}]]));
+  mockLoadAllStandaloneWorkflowsWithSources.mockReturnValue(new Map<string, unknown>([['default', {}], ['selected-workflow', {}]]));
   mockSelectOptionWithDefault.mockResolvedValue('plan');
   mockRunRetryMode.mockResolvedValue({ action: 'execute', task: '追加指示A' });
   mockFindPreviousOrderContent.mockReturnValue(null);

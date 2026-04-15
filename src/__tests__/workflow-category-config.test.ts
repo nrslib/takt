@@ -102,9 +102,6 @@ function createWorkflowMap(entries: { name: string; source: 'builtin' | 'user' |
       source: entry.source,
       config: {
         name: entry.name,
-        steps: [],
-        initialStep: 'start',
-        maxSteps: 1,
       },
     });
   }

@@ -1,7 +1,7 @@
 import type { AgentResponse, LoopMonitorConfig, WorkflowState, WorkflowStep } from '../../models/types.js';
 import { getWorkflowStepKind, isSystemWorkflowStep, isWorkflowCallStep } from '../step-kind.js';
 import type { RuntimeStepResolution, WorkflowEngineOptions } from '../types.js';
-import { determineNextStepByRules } from './transitions.js';
+import { determineRuleTransition, type WorkflowRuleTransition } from './transitions.js';
 
 interface WorkflowEngineStepCoordinatorDeps {
   config: {
@@ -145,13 +145,21 @@ export class WorkflowEngineStepCoordinator {
   }
 
   resolveNextStepFromDone(step: WorkflowStep, response: AgentResponse): string {
+    const transition = this.resolveTransitionFromDone(step, response);
+    if (transition.nextStep) {
+      return transition.nextStep;
+    }
+    throw new Error(`Step "${step.name}" resolved to a return transition where a next step is required`);
+  }
+
+  resolveTransitionFromDone(step: WorkflowStep, response: AgentResponse): WorkflowRuleTransition {
     if (response.status !== 'done') {
       throw new Error(`Unhandled response status: ${response.status}`);
     }
     if (response.matchedRuleIndex != null && step.rules) {
-      const nextByRules = determineNextStepByRules(step, response.matchedRuleIndex);
-      if (nextByRules) {
-        return nextByRules;
+      const transition = determineRuleTransition(step, response.matchedRuleIndex);
+      if (transition && (transition.nextStep || transition.returnValue || transition.requiresUserInput)) {
+        return transition;
       }
     }
     throw new Error(`No matching rule found for step "${step.name}" (status: ${response.status}, kind: ${getWorkflowStepKind(step)})`);

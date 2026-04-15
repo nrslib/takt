@@ -262,6 +262,301 @@ steps:
     });
   });
 
+  it('accepts callable subworkflow defaults referenced via $param', () => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/callable-defaults.yaml', `name: callable-defaults
+subworkflow:
+  callable: true
+  params:
+    review_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default: [architecture]
+    review_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: delegated-review
+    review_report:
+      type: facet_ref
+      facet_kind: report_format
+      default: summary
+max_steps: 10
+initial_step: review
+knowledge:
+  architecture: ./facets/knowledge/architecture.md
+instructions:
+  delegated-review: ./facets/instructions/delegated-review.md
+report_formats:
+  summary: ./facets/output-contracts/summary.md
+steps:
+  - name: review
+    knowledge:
+      $param: review_knowledge
+    instruction:
+      $param: review_instruction
+    output_contracts:
+      report:
+        - name: summary.md
+          format:
+            $param: review_report
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    mkdirSync(join(projectDir, '.takt/facets/knowledge'), { recursive: true });
+    mkdirSync(join(projectDir, '.takt/facets/instructions'), { recursive: true });
+    mkdirSync(join(projectDir, '.takt/facets/output-contracts'), { recursive: true });
+    writeFileSync(join(projectDir, '.takt/facets/knowledge/architecture.md'), 'Architecture', 'utf-8');
+    writeFileSync(join(projectDir, '.takt/facets/instructions/delegated-review.md'), 'Review', 'utf-8');
+    writeFileSync(join(projectDir, '.takt/facets/output-contracts/summary.md'), '# Summary', 'utf-8');
+
+    const diagnostics = inspectWorkflowFile(filePath, projectDir).diagnostics;
+
+    expect(diagnostics).toEqual([]);
+  });
+
+  it('accepts scalar policy and knowledge defaults referenced via $param', () => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/callable-scalar-defaults.yaml', `name: callable-scalar-defaults
+subworkflow:
+  callable: true
+  params:
+    review_policy:
+      type: facet_ref
+      facet_kind: policy
+      default: strict-review
+    review_knowledge:
+      type: facet_ref
+      facet_kind: knowledge
+      default: architecture
+max_steps: 10
+initial_step: review
+policies:
+  strict-review: ./facets/policies/strict-review.md
+knowledge:
+  architecture: ./facets/knowledge/architecture.md
+steps:
+  - name: review
+    policy:
+      $param: review_policy
+    knowledge:
+      $param: review_knowledge
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    mkdirSync(join(projectDir, '.takt/facets/policies'), { recursive: true });
+    mkdirSync(join(projectDir, '.takt/facets/knowledge'), { recursive: true });
+    writeFileSync(join(projectDir, '.takt/facets/policies/strict-review.md'), 'Strict review', 'utf-8');
+    writeFileSync(join(projectDir, '.takt/facets/knowledge/architecture.md'), 'Architecture', 'utf-8');
+
+    const diagnostics = inspectWorkflowFile(filePath, projectDir).diagnostics;
+
+    expect(diagnostics).toEqual([]);
+  });
+
+  it('reports callable default facet refs whose values do not match facet_kind', () => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/callable-invalid-default.yaml', `name: callable-invalid-default
+subworkflow:
+  callable: true
+  params:
+    review_knowledge:
+      type: facet_ref
+      facet_kind: knowledge
+      default: strict-review
+max_steps: 10
+initial_step: review
+policies:
+  strict-review: ./facets/policies/strict-review.md
+steps:
+  - name: review
+    knowledge:
+      $param: review_knowledge
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    mkdirSync(join(projectDir, '.takt/facets/policies'), { recursive: true });
+    writeFileSync(join(projectDir, '.takt/facets/policies/strict-review.md'), 'Strict review', 'utf-8');
+
+    const messages = inspectWorkflowFile(filePath, projectDir).diagnostics.map((item) => item.message);
+
+    expect(messages).toContain(
+      'Workflow "callable-invalid-default.yaml" failed to load: workflow_call arg "review_knowledge" references unknown knowledge facet "strict-review"',
+    );
+  });
+
+  it('allows doctor inspection for callable subworkflows with required params', () => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/callable-required-param.yaml', `name: callable-required-param
+subworkflow:
+  callable: true
+  params:
+    review_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+max_steps: 10
+initial_step: review
+steps:
+  - name: review
+    knowledge:
+      $param: review_knowledge
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const diagnostics = inspectWorkflowFile(filePath, projectDir).diagnostics;
+
+    expect(diagnostics).toEqual([]);
+  });
+
+  it('reports unsupported nested workflow_call child return conditions for callable subworkflows with required params', () => {
+    writeWorkflow(projectDir, '.takt/workflows/grandchild.yaml', `name: grandchild
+subworkflow:
+  callable: true
+  returns: [ok]
+initial_step: review
+max_steps: 3
+steps:
+  - name: review
+    persona: reviewer
+    instruction: Review
+    rules:
+      - condition: done
+        return: ok
+`);
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/child.yaml', `name: child
+subworkflow:
+  callable: true
+  params:
+    review_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+  returns: [ok]
+initial_step: review
+max_steps: 3
+steps:
+  - name: review
+    knowledge:
+      $param: review_knowledge
+    rules:
+      - condition: continue
+        next: delegate-grandchild
+  - name: delegate-grandchild
+    kind: workflow_call
+    call: grandchild
+    rules:
+      - condition: retry_plan
+        next: COMPLETE
+`);
+
+    const messages = inspectWorkflowFile(filePath, projectDir).diagnostics.map((item) => item.message);
+
+    expect(messages).toContain(
+      'Workflow "child.yaml" failed to load: workflow_call step "delegate-grandchild" cannot route on unsupported child result "retry_plan"',
+    );
+  });
+
+  it('reports unsupported workflow_call child return conditions', () => {
+    writeWorkflow(projectDir, '.takt/workflows/child.yaml', `name: child
+subworkflow:
+  callable: true
+  returns: [ok]
+initial_step: review
+max_steps: 3
+steps:
+  - name: review
+    persona: reviewer
+    instruction: Review
+    rules:
+      - condition: done
+        return: ok
+`);
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/parent.yaml', `name: parent
+initial_step: delegate
+max_steps: 3
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: child
+    rules:
+      - condition: retry_plan
+        next: COMPLETE
+`);
+
+    const messages = inspectWorkflowFile(filePath, projectDir).diagnostics.map((item) => item.message);
+
+    expect(messages).toContain(
+      'Workflow "parent.yaml" failed to load: workflow_call step "delegate" cannot route on unsupported child result "retry_plan"',
+    );
+  });
+
+  it('reports unsupported nested workflow_call child return conditions', () => {
+    writeWorkflow(projectDir, '.takt/workflows/grandchild.yaml', `name: grandchild
+subworkflow:
+  callable: true
+  returns: [ok]
+initial_step: review
+max_steps: 3
+steps:
+  - name: review
+    persona: reviewer
+    instruction: Review
+    rules:
+      - condition: done
+        return: ok
+`);
+    writeWorkflow(projectDir, '.takt/workflows/child.yaml', `name: child
+subworkflow:
+  callable: true
+  returns: [ok]
+initial_step: delegate-grandchild
+max_steps: 3
+steps:
+  - name: delegate-grandchild
+    kind: workflow_call
+    call: grandchild
+    rules:
+      - condition: retry_plan
+        next: COMPLETE
+`);
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/parent.yaml', `name: parent
+initial_step: delegate
+max_steps: 3
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: child
+    rules:
+      - condition: ok
+        next: COMPLETE
+`);
+
+    const messages = inspectWorkflowFile(filePath, projectDir).diagnostics.map((item) => item.message);
+
+    expect(messages).toContain(
+      'Workflow "parent.yaml" failed to load: workflow_call step "delegate-grandchild" cannot route on unsupported child result "retry_plan"',
+    );
+  });
+
+  it('does not read path-based workflow_call children during doctor inspection', () => {
+    writeFileSync(join(projectDir, 'secret.txt'), 'SECRET_DOCTOR_MARKER: [not yaml', 'utf-8');
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/parent.yaml', `name: parent
+initial_step: delegate
+max_steps: 3
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: ../../secret.txt
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+
+    const messages = inspectWorkflowFile(filePath, projectDir).diagnostics.map((item) => item.message);
+
+    expect(messages).toEqual([]);
+    expect(messages.join('\n')).not.toContain('SECRET_DOCTOR_MARKER');
+  });
+
   it('does not warn for personas used by team_leader references', () => {
     const filePath = writeWorkflow(projectDir, '.takt/workflows/team-leader-used-personas.yaml', `name: team-leader-used-personas
 max_steps: 10

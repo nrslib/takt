@@ -7,25 +7,28 @@ import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { isScopeRef, parseScopeRef } from 'faceted-prompting';
 import type { WorkflowConfig } from '../../../core/models/index.js';
+import { validateWorkflowCallContracts as validateWorkflowCallContractsImpl } from './workflowCallContractValidator.js';
+import { buildWorkflowDiscoveryConfig, loadValidatedWorkflowDiscoveryEntry } from './workflowDiscoveryLoader.js';
 import {
-  getBuiltinWorkflowsDir,
-  getGlobalWorkflowsDir,
-  getProjectWorkflowsDir,
-  getRepertoireDir,
-  isPathSafe,
-} from '../paths.js';
-import { resolveWorkflowConfigValues } from '../resolveWorkflowConfigValue.js';
-import { loadWorkflowFromFile } from './workflowFileLoader.js';
-import { validateProjectWorkflowTrustBoundary } from './workflowTrustBoundary.js';
-import { resolveWorkflowTrustInfo, type WorkflowTrustSource } from './workflowTrustSource.js';
+  findWorkflowInLookupDirs,
+  getBuiltinWorkflowPath,
+  getNamedWorkflowLookupDirs,
+  getWorkflowDirs,
+  listBuiltinWorkflowNames as listBuiltinWorkflowNamesImpl,
+  resolveWorkflowFile,
+  type NamedWorkflowLookupDir,
+} from './workflowLookupDirectories.js';
+import { loadWorkflowFileWithResolutionOptions } from './workflowResolvedLoader.js';
+import { getRepertoireDir } from '../paths.js';
+import { type WorkflowTrustInfo } from './workflowTrustSource.js';
 import {
   collectValidatedWorkflowEntries,
   iterateWorkflowDir,
-  listBuiltinWorkflowNamesForDir,
   listRepertoireWorkflowEntries,
   loadAllWorkflowsWithSourcesFromDirs,
   type WorkflowDirEntry,
-  type WorkflowSource,
+  type WorkflowDiscoveryConfig,
+  type WorkflowDiscoveryWithSource,
   type WorkflowWithSource,
 } from './workflowDiscovery.js';
 
@@ -33,24 +36,24 @@ interface LoadWorkflowsOptions {
   onWarning?: (message: string) => void;
 }
 
-interface WorkflowLookupDir {
-  dir: string;
-  source: WorkflowSource;
-  disabled?: string[];
-}
-
-interface NamedWorkflowLookupDir {
-  dir: string;
-  source: WorkflowTrustSource;
-  disabled?: string[];
-}
-
 export interface WorkflowLookupOptions {
   basePath?: string;
   lookupCwd?: string;
 }
 
-export type { WorkflowDirEntry, WorkflowSource, WorkflowWithSource } from './workflowDiscovery.js';
+interface InternalWorkflowLookupOptions extends WorkflowLookupOptions {
+  callableArgs?: Record<string, string | string[]>;
+  parentTrustInfo?: WorkflowTrustInfo;
+  skipWorkflowCallContractValidation?: boolean;
+}
+
+export type {
+  WorkflowDirEntry,
+  WorkflowDiscoveryConfig,
+  WorkflowDiscoveryWithSource,
+  WorkflowSource,
+  WorkflowWithSource,
+} from './workflowDiscovery.js';
 export { getWorkflowDescription, type FirstStepInfo, type StepPreview } from './workflowPreview.js';
 
 function resolvePath(pathInput: string, basePath: string): string {
@@ -63,106 +66,41 @@ function resolvePath(pathInput: string, basePath: string): string {
   return resolve(basePath, pathInput);
 }
 
-function resolveWorkflowFile(workflowsDir: string, name: string): string | null {
-  const resolvedWorkflowsDir = resolve(workflowsDir);
-  for (const ext of ['.yaml', '.yml']) {
-    const filePath = resolve(workflowsDir, `${name}${ext}`);
-    if (!isPathSafe(resolvedWorkflowsDir, filePath)) {
-      continue;
-    }
-    if (existsSync(filePath)) return filePath;
-  }
-  return null;
-}
-
-function findWorkflowInLookupDirs(
-  name: string,
-  lookupDirs: NamedWorkflowLookupDir[],
-): { filePath: string; source: WorkflowTrustSource } | null {
-  for (const { dir, source, disabled } of lookupDirs) {
-    if (source === 'builtin' && disabled?.includes(name)) {
-      continue;
-    }
-
-    const match = resolveWorkflowFile(dir, name);
-    if (!match) {
-      continue;
-    }
-
-    return {
-      filePath: match,
-      source,
-    };
-  }
-
-  return null;
-}
-
-function getWorkflowDirs(cwd: string): WorkflowLookupDir[] {
-  const config = resolveWorkflowConfigValues(cwd, ['enableBuiltinWorkflows', 'language', 'disabledBuiltins']);
-  const dirs: WorkflowLookupDir[] = [];
-  if (config.enableBuiltinWorkflows !== false) {
-    dirs.push({ dir: getBuiltinWorkflowsDir(config.language), disabled: config.disabledBuiltins ?? [], source: 'builtin' });
-  }
-  dirs.push({ dir: getGlobalWorkflowsDir(), source: 'user' });
-  dirs.push({ dir: getProjectWorkflowsDir(cwd), source: 'project' });
-  return dirs;
-}
-
 function loadWorkflowFromLookupDirs(
   name: string,
   lookupDirs: NamedWorkflowLookupDir[],
   projectCwd: string,
   lookupCwd: string,
+  callableArgs?: Record<string, string | string[]>,
+  parentTrustInfo?: WorkflowTrustInfo,
 ): WorkflowConfig | null {
   const match = findWorkflowInLookupDirs(name, lookupDirs);
   if (!match) {
     return null;
   }
 
-  const trustInfo = resolveWorkflowTrustInfo({
-    filePath: match.filePath,
+  return loadWorkflowFileWithResolutionOptions(match.filePath, {
     projectCwd,
     lookupCwd,
     source: match.source,
+    callableArgs,
+    parentTrustInfo,
   });
-  const workflow = loadWorkflowFromFile(match.filePath, projectCwd, { trustInfo });
-  if (match.source === 'project') {
-    validateProjectWorkflowTrustBoundary(workflow, match.filePath, projectCwd);
-  }
-  return workflow;
-}
-
-function getNamedWorkflowLookupDirs(projectCwd: string, _lookupCwd: string): NamedWorkflowLookupDir[] {
-  const config = resolveWorkflowConfigValues(projectCwd, ['enableBuiltinWorkflows', 'language', 'disabledBuiltins']);
-  const dirs: NamedWorkflowLookupDir[] = [];
-
-  dirs.push({
-    dir: resolve(getProjectWorkflowsDir(projectCwd)),
-    source: 'project',
-  });
-  dirs.push({ dir: getGlobalWorkflowsDir(), source: 'user' });
-
-  if (config.enableBuiltinWorkflows !== false) {
-    dirs.push({ dir: getBuiltinWorkflowsDir(config.language), disabled: config.disabledBuiltins ?? [], source: 'builtin' });
-  }
-
-  return dirs;
 }
 
 export function listBuiltinWorkflowNames(cwd: string, options?: { includeDisabled?: boolean }): string[] {
-  const config = resolveWorkflowConfigValues(cwd, ['language', 'disabledBuiltins']);
-  const disabled = options?.includeDisabled ? undefined : (config.disabledBuiltins ?? []);
-  return listBuiltinWorkflowNamesForDir(getBuiltinWorkflowsDir(config.language), disabled);
+  return listBuiltinWorkflowNamesImpl(cwd, options);
 }
 
 export function getBuiltinWorkflow(name: string, projectCwd: string): WorkflowConfig | null {
-  const config = resolveWorkflowConfigValues(projectCwd, ['enableBuiltinWorkflows', 'language', 'disabledBuiltins']);
-  if (config.enableBuiltinWorkflows === false || (config.disabledBuiltins ?? []).includes(name)) {
+  const yamlPath = getBuiltinWorkflowPath(name, projectCwd);
+  if (!yamlPath) {
     return null;
   }
-  const yamlPath = join(getBuiltinWorkflowsDir(config.language), `${name}.yaml`);
-  return existsSync(yamlPath) ? loadWorkflowFromFile(yamlPath, projectCwd) : null;
+  const workflow = existsSync(yamlPath)
+    ? loadWorkflowFromResolvedPath(yamlPath, projectCwd, projectCwd)
+    : null;
+  return finalizeLoadedWorkflow(workflow, projectCwd, projectCwd);
 }
 
 function loadWorkflowFromPath(
@@ -170,28 +108,106 @@ function loadWorkflowFromPath(
   basePath: string,
   projectCwd: string,
   lookupCwd: string,
+  callableArgs?: Record<string, string | string[]>,
+  parentTrustInfo?: WorkflowTrustInfo,
 ): WorkflowConfig | null {
   const resolvedPath = resolvePath(filePath, basePath);
-  return loadWorkflowFromResolvedPath(resolvedPath, projectCwd, lookupCwd);
+  return loadWorkflowFromResolvedPath(resolvedPath, projectCwd, lookupCwd, callableArgs, parentTrustInfo);
 }
 
-function loadWorkflowFromResolvedPath(resolvedPath: string, projectCwd: string, lookupCwd = projectCwd): WorkflowConfig | null {
+function loadWorkflowFromResolvedPath(
+  resolvedPath: string,
+  projectCwd: string,
+  lookupCwd = projectCwd,
+  callableArgs?: Record<string, string | string[]>,
+  parentTrustInfo?: WorkflowTrustInfo,
+): WorkflowConfig | null {
   if (!existsSync(resolvedPath)) {
     return null;
   }
 
-  const trustInfo = resolveWorkflowTrustInfo({
-    filePath: resolvedPath,
+  return loadWorkflowFileWithResolutionOptions(resolvedPath, {
     projectCwd,
     lookupCwd,
+    callableArgs,
+    parentTrustInfo,
   });
-  const workflow = loadWorkflowFromFile(resolvedPath, projectCwd, { trustInfo });
-  validateProjectWorkflowTrustBoundary(workflow, resolvedPath, projectCwd);
+}
+
+function finalizeLoadedWorkflow(
+  workflow: WorkflowConfig | null,
+  projectCwd: string,
+  lookupCwd: string,
+  skipWorkflowCallContractValidation = false,
+  allowPathBasedCalls = true,
+): WorkflowConfig | null {
+  if (!workflow || skipWorkflowCallContractValidation) {
+    return workflow;
+  }
+
+  validateWorkflowCallContracts(workflow, projectCwd, lookupCwd, { allowPathBasedCalls });
   return workflow;
 }
 
+function loadWorkflowForDiscovery(entry: WorkflowDirEntry, cwd: string): WorkflowConfig {
+  return loadWorkflowFileWithResolutionOptions(entry.path, {
+    projectCwd: cwd,
+    lookupCwd: cwd,
+    source: entry.source,
+    loadMode: 'discovery',
+  });
+}
+
+function loadWorkflowForRuntime(entry: WorkflowDirEntry, cwd: string): WorkflowConfig {
+  return loadWorkflowFileWithResolutionOptions(entry.path, {
+    projectCwd: cwd,
+    lookupCwd: cwd,
+    source: entry.source,
+  });
+}
+
+function validateLoadedWorkflowEntryContracts(
+  workflow: WorkflowConfig,
+  cwd: string,
+  allowPathBasedCalls: boolean,
+): void {
+  validateWorkflowCallContracts(workflow, cwd, cwd, { allowPathBasedCalls });
+}
+
+function loadValidatedWorkflowEntry(entry: WorkflowDirEntry, cwd: string): WorkflowDiscoveryConfig {
+  return loadValidatedWorkflowDiscoveryEntry(entry, cwd, {
+    loadWorkflowForDiscovery,
+    validateWorkflowCallContracts: (workflow, projectCwd, options) => {
+      validateLoadedWorkflowEntryContracts(
+        workflow,
+        options?.lookupCwd ?? projectCwd,
+        options?.allowPathBasedCalls ?? true,
+      );
+    },
+  });
+}
+
+function loadValidatedWorkflowConfigEntry(entry: WorkflowDirEntry, cwd: string): WorkflowConfig {
+  const workflow = loadWorkflowForRuntime(entry, cwd);
+  validateLoadedWorkflowEntryContracts(workflow, cwd, true);
+  return workflow;
+}
+
+function loadValidatedStandaloneWorkflowEntry(
+  entry: WorkflowDirEntry,
+  cwd: string,
+): WorkflowDiscoveryConfig {
+  return buildWorkflowDiscoveryConfig(loadValidatedWorkflowConfigEntry(entry, cwd));
+}
+
 export function loadWorkflow(name: string, projectCwd: string): WorkflowConfig | null {
-  return loadWorkflowFromLookupDirs(name, getNamedWorkflowLookupDirs(projectCwd, projectCwd), projectCwd, projectCwd);
+  const workflow = loadWorkflowFromLookupDirs(
+    name,
+    getNamedWorkflowLookupDirs(projectCwd),
+    projectCwd,
+    projectCwd,
+  );
+  return finalizeLoadedWorkflow(workflow, projectCwd, projectCwd);
 }
 
 export function isWorkflowPath(identifier: string): boolean {
@@ -205,11 +221,74 @@ export function isWorkflowPath(identifier: string): boolean {
   );
 }
 
-function loadRepertoireWorkflowByRef(identifier: string, projectCwd: string): WorkflowConfig | null {
+function loadRepertoireWorkflowByRef(
+  identifier: string,
+  projectCwd: string,
+  callableArgs?: Record<string, string | string[]>,
+  parentTrustInfo?: WorkflowTrustInfo,
+): WorkflowConfig | null {
   const scopeRef = parseScopeRef(identifier);
   const workflowsDir = join(getRepertoireDir(), `@${scopeRef.owner}`, scopeRef.repo, 'workflows');
   const filePath = resolveWorkflowFile(workflowsDir, scopeRef.name);
-  return filePath ? loadWorkflowFromFile(filePath, projectCwd) : null;
+  return filePath
+    ? loadWorkflowFileWithResolutionOptions(filePath, {
+      projectCwd,
+      lookupCwd: projectCwd,
+      source: 'repertoire',
+      callableArgs,
+      parentTrustInfo,
+    })
+    : null;
+}
+
+export function validateWorkflowCallContracts(
+  workflow: WorkflowConfig,
+  projectCwd: string,
+  lookupCwd = projectCwd,
+  options?: { allowPathBasedCalls?: boolean },
+): void {
+  validateWorkflowCallContractsImpl(workflow, projectCwd, {
+    isWorkflowPath,
+    loadWorkflowByIdentifierForWorkflowCall,
+  }, {
+    lookupCwd,
+    allowPathBasedCalls: options?.allowPathBasedCalls,
+  });
+}
+
+function loadWorkflowByIdentifierInternal(
+  identifier: string,
+  projectCwd: string,
+  options?: InternalWorkflowLookupOptions,
+): WorkflowConfig | null {
+  const lookupCwd = options?.lookupCwd ?? projectCwd;
+  const basePath = options?.basePath ?? lookupCwd;
+  const workflow = isScopeRef(identifier)
+    ? loadRepertoireWorkflowByRef(identifier, projectCwd, options?.callableArgs, options?.parentTrustInfo)
+    : isWorkflowPath(identifier)
+      ? loadWorkflowFromPath(
+        identifier,
+        basePath,
+        projectCwd,
+        lookupCwd,
+        options?.callableArgs,
+        options?.parentTrustInfo,
+      )
+      : loadWorkflowFromLookupDirs(
+        identifier,
+        getNamedWorkflowLookupDirs(projectCwd),
+        projectCwd,
+        lookupCwd,
+        options?.callableArgs,
+        options?.parentTrustInfo,
+      );
+
+  return finalizeLoadedWorkflow(
+    workflow,
+    projectCwd,
+    lookupCwd,
+    options?.skipWorkflowCallContractValidation === true,
+  );
 }
 
 export function loadWorkflowByIdentifier(
@@ -217,39 +296,90 @@ export function loadWorkflowByIdentifier(
   projectCwd: string,
   options?: WorkflowLookupOptions,
 ): WorkflowConfig | null {
-  const lookupCwd = options?.lookupCwd ?? projectCwd;
-  const basePath = options?.basePath ?? lookupCwd;
-  if (isScopeRef(identifier)) {
-    return loadRepertoireWorkflowByRef(identifier, projectCwd);
-  }
-  if (isWorkflowPath(identifier)) {
-    return loadWorkflowFromPath(identifier, basePath, projectCwd, lookupCwd);
-  }
-  return loadWorkflowFromLookupDirs(
-    identifier,
-    getNamedWorkflowLookupDirs(projectCwd, lookupCwd),
-    projectCwd,
-    lookupCwd,
-  );
+  return loadWorkflowByIdentifierInternal(identifier, projectCwd, options);
+}
+
+export function loadWorkflowByIdentifierForWorkflowCall(
+  identifier: string,
+  projectCwd: string,
+  options: InternalWorkflowLookupOptions,
+): WorkflowConfig | null {
+  return loadWorkflowByIdentifierInternal(identifier, projectCwd, options);
 }
 
 export function loadAllWorkflowsWithSources(
   cwd: string,
   options?: LoadWorkflowsOptions,
-): Map<string, WorkflowWithSource> {
-  return loadAllWorkflowsWithSourcesFromDirs(cwd, getWorkflowDirs(cwd), options);
+): Map<string, WorkflowWithSource<WorkflowConfig>> {
+  return loadAllWorkflowsWithSourcesFromDirs(
+    cwd,
+    getWorkflowDirs(cwd),
+    options,
+    loadValidatedWorkflowConfigEntry,
+    true,
+  );
+}
+
+export function loadAllWorkflowDiscoveryWithSources(
+  cwd: string,
+  options?: LoadWorkflowsOptions,
+): Map<string, WorkflowDiscoveryWithSource> {
+  return loadAllWorkflowsWithSourcesFromDirs(
+    cwd,
+    getWorkflowDirs(cwd),
+    options,
+    loadValidatedWorkflowEntry,
+  );
+}
+
+export function loadAllStandaloneWorkflowsWithSources(
+  cwd: string,
+  options?: LoadWorkflowsOptions,
+): Map<string, WorkflowDiscoveryWithSource> {
+  return loadAllWorkflowsWithSourcesFromDirs(
+    cwd,
+    getWorkflowDirs(cwd),
+    options,
+    loadValidatedStandaloneWorkflowEntry,
+  );
 }
 
 export function listWorkflowEntries(cwd: string, options?: LoadWorkflowsOptions): WorkflowDirEntry[] {
   const dirs = getWorkflowDirs(cwd);
   const entries = dirs.flatMap(({ dir, source, disabled }) => Array.from(iterateWorkflowDir(dir, source, disabled)));
   entries.push(...listRepertoireWorkflowEntries());
-  return collectValidatedWorkflowEntries(entries, cwd, options).map(({ entry }) => entry);
+  return collectValidatedWorkflowEntries(entries, cwd, options, loadValidatedWorkflowEntry).map(({ entry }) => entry);
+}
+
+export function listStandaloneWorkflowEntries(cwd: string, options?: LoadWorkflowsOptions): WorkflowDirEntry[] {
+  const dirs = getWorkflowDirs(cwd);
+  const entries = dirs.flatMap(({ dir, source, disabled }) => Array.from(iterateWorkflowDir(dir, source, disabled)));
+  entries.push(...listRepertoireWorkflowEntries());
+  return collectValidatedWorkflowEntries(entries, cwd, options, loadValidatedStandaloneWorkflowEntry)
+    .map(({ entry }) => entry);
 }
 
 export function loadAllWorkflows(cwd: string, options?: LoadWorkflowsOptions): Map<string, WorkflowConfig> {
   return new Map(
     Array.from(loadAllWorkflowsWithSources(cwd, options).entries()).map(([name, entry]) => [name, entry.config]),
+  );
+}
+
+export function loadAllWorkflowDiscovery(
+  cwd: string,
+  options?: LoadWorkflowsOptions,
+): Map<string, WorkflowDiscoveryConfig> {
+  return new Map(
+    Array.from(loadAllWorkflowDiscoveryWithSources(cwd, options).entries()).map(([name, entry]) => [name, entry.config]),
+  );
+}
+
+export function loadAllStandaloneWorkflows(
+  cwd: string,
+  options?: LoadWorkflowsOptions,
+): Map<string, WorkflowDiscoveryConfig> {
+  return new Map(
+    Array.from(loadAllStandaloneWorkflowsWithSources(cwd, options).entries()).map(([name, entry]) => [name, entry.config]),
   );
 }
 

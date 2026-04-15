@@ -21,13 +21,20 @@ export {
   loadWorkflow,
   loadWorkflowByIdentifier,
   listWorkflows,
+  loadAllWorkflowDiscovery,
+  loadAllWorkflowDiscoveryWithSources,
   loadAllWorkflows,
   loadAllWorkflowsWithSources,
   getWorkflowDescription,
   getBuiltinWorkflow,
   isWorkflowPath,
 } from './infra/config/loaders/index.js';
-export type { WorkflowSource as WorkflowSource, WorkflowWithSource as WorkflowWithSource } from './infra/config/loaders/workflowLoader.js';
+export type {
+  WorkflowDiscoveryConfig as WorkflowDiscoveryConfig,
+  WorkflowDiscoveryWithSource as WorkflowDiscoveryWithSource,
+  WorkflowSource as WorkflowSource,
+  WorkflowWithSource as WorkflowWithSource,
+} from './infra/config/loaders/workflowLoader.js';
 export {
   saveProjectConfig,
   updateProjectConfig,

@@ -4,7 +4,7 @@
 
 import type { WorkflowArpeggioConfig, WorkflowMcpServersConfig, WorkflowOverrides, WorkflowRuntimePrepareConfig } from '../../../core/models/config-types.js';
 import { WorkflowConfigRawSchema } from '../../../core/models/index.js';
-import type { WorkflowConfig, WorkflowStep } from '../../../core/models/index.js';
+import type { WorkflowConfig, WorkflowStep, WorkflowSubworkflowConfig } from '../../../core/models/index.js';
 import { resolveLoopMonitorJudgeProviderModel, resolveStepProviderModel } from '../../../core/workflow/provider-resolution.js';
 import { validateProviderModelCompatibility } from '../../../core/workflow/provider-model-compatibility.js';
 import { isPathSafe } from '../paths.js';
@@ -16,50 +16,38 @@ import {
 } from './workflowNormalizationPolicies.js';
 import { normalizeLoopMonitors } from './workflowLoopMonitorNormalizer.js';
 import { normalizeProviderReference, normalizeStepFromRaw } from './workflowStepNormalizer.js';
+import {
+  expandCallableSubworkflowRaw,
+  type WorkflowCallArgResolutionPolicy,
+} from './workflowCallableArgResolver.js';
+import { prepareCallableSubworkflowDiscoveryArgs } from './workflowCallableDiscoveryArgs.js';
 import { validateProjectWorkflowTrustBoundaryForSteps } from './workflowTrustBoundary.js';
 import { getWorkflowPathTrustInfo, type WorkflowTrustInfo } from './workflowTrustSource.js';
 
-function validateCallableSubworkflowProviders(
-  parsed: ReturnType<typeof WorkflowConfigRawSchema.parse>,
-): void {
-  if (parsed.subworkflow?.callable !== true) {
-    return;
+function normalizeSubworkflowConfig(
+  raw: ReturnType<typeof WorkflowConfigRawSchema.parse>['subworkflow'],
+): WorkflowSubworkflowConfig | undefined {
+  if (!raw) {
+    return undefined;
   }
 
-  if (
-    parsed.workflow_config?.provider !== undefined
-    || parsed.workflow_config?.model !== undefined
-    || parsed.workflow_config?.provider_options !== undefined
-  ) {
-    throw new Error('Callable subworkflow must not declare workflow-level provider settings');
-  }
-
-  const stack = [...parsed.steps];
-  while (stack.length > 0) {
-    const step = stack.pop()!;
-    const hasStepProviderSettings = step.provider !== undefined
-      || step.model !== undefined
-      || step.provider_options !== undefined;
-    const hasWorkflowCallOverrides = step.overrides?.provider !== undefined
-      || step.overrides?.model !== undefined
-      || step.overrides?.provider_options !== undefined;
-    if (hasStepProviderSettings || hasWorkflowCallOverrides) {
-      throw new Error(`Callable subworkflow step "${step.name}" must not declare provider settings`);
-    }
-    for (const substep of step.parallel ?? []) {
-      stack.push(substep);
-    }
-  }
-
-  for (const monitor of parsed.loop_monitors ?? []) {
-    const hasJudgeProviderSettings = monitor.judge.provider !== undefined
-      || monitor.judge.model !== undefined;
-    if (hasJudgeProviderSettings) {
-      throw new Error(
-        `Callable subworkflow loop monitor judge for cycle "${monitor.cycle.join(' -> ')}" must not declare provider settings`,
-      );
-    }
-  }
+  return {
+    callable: raw.callable,
+    visibility: raw.visibility,
+    returns: raw.returns,
+    params: raw.params
+      ? Object.fromEntries(
+        Object.entries(raw.params).map(([name, param]) => [
+          name,
+          {
+            type: param.type,
+            facetKind: param.facet_kind,
+            default: param.default,
+          },
+        ]),
+      )
+      : undefined,
+  };
 }
 
 export function normalizeWorkflowConfig(
@@ -73,9 +61,23 @@ export function normalizeWorkflowConfig(
   workflowMcpServersPolicy?: WorkflowMcpServersConfig,
   workflowPath = workflowDir,
   trustInfo?: WorkflowTrustInfo,
+  callableArgs?: Record<string, string | string[]>,
+  callableArgPolicy?: WorkflowCallArgResolutionPolicy,
+  callableArgMode: 'runtime' | 'discovery' = 'runtime',
 ): WorkflowConfig {
-  const parsed = WorkflowConfigRawSchema.parse(raw);
-  validateCallableSubworkflowProviders(parsed);
+  const parsedRaw = WorkflowConfigRawSchema.parse(raw);
+  const callableDiscovery = callableArgMode === 'discovery'
+    ? prepareCallableSubworkflowDiscoveryArgs(parsedRaw)
+    : { raw: parsedRaw, callableArgs };
+  const parsed = expandCallableSubworkflowRaw(
+    callableDiscovery.raw,
+    {
+      args: callableDiscovery.callableArgs ?? callableArgs,
+      argPolicy: callableArgPolicy,
+      workflowDir,
+      context,
+    },
+  );
   const sections: WorkflowSections = {
     personas: parsed.personas,
     resolvedPolicies: resolveSectionMap(parsed.policies, workflowDir),
@@ -147,7 +149,7 @@ export function normalizeWorkflowConfig(
   return {
     name: parsed.name,
     description: parsed.description,
-    subworkflow: parsed.subworkflow,
+    subworkflow: normalizeSubworkflowConfig(parsed.subworkflow),
     schemas: parsed.schemas,
     provider: normalizedWorkflowProvider.provider,
     model: normalizedWorkflowProvider.model,

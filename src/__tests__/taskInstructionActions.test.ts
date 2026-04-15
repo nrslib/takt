@@ -18,7 +18,7 @@ const {
   mockFindPreviousOrderContent,
   mockWarn,
   mockIsWorkflowPath,
-  mockLoadAllWorkflowsWithSources,
+  mockLoadAllStandaloneWorkflowsWithSources,
 } = vi.hoisted(() => ({
   mockExistsSync: vi.fn(() => true),
   mockStartReExecution: vi.fn(),
@@ -37,7 +37,7 @@ const {
   mockFindPreviousOrderContent: vi.fn(() => null),
   mockWarn: vi.fn(),
   mockIsWorkflowPath: vi.fn(() => false),
-  mockLoadAllWorkflowsWithSources: vi.fn(() => new Map<string, unknown>([
+  mockLoadAllStandaloneWorkflowsWithSources: vi.fn(() => new Map<string, unknown>([
     ['default', {}],
     ['selected-workflow', {}],
   ])),
@@ -69,7 +69,7 @@ vi.mock('../infra/config/index.js', () => ({
     stepPreviews: [],
   })),
   isWorkflowPath: (...args: unknown[]) => mockIsWorkflowPath(...args),
-  loadAllWorkflowsWithSources: (...args: unknown[]) => mockLoadAllWorkflowsWithSources(...args),
+  loadAllStandaloneWorkflowsWithSources: (...args: unknown[]) => mockLoadAllStandaloneWorkflowsWithSources(...args),
 }));
 
 vi.mock('../features/tasks/list/instructMode.js', () => ({
@@ -149,7 +149,7 @@ describe('instructBranch direct execution flow', () => {
     mockFindRunForTask.mockReturnValue(null);
     mockFindPreviousOrderContent.mockReturnValue(null);
     mockIsWorkflowPath.mockImplementation((workflow: string) => workflow.startsWith('/') || workflow.startsWith('~') || workflow.startsWith('./') || workflow.startsWith('../') || workflow.endsWith('.yaml') || workflow.endsWith('.yml'));
-    mockLoadAllWorkflowsWithSources.mockReturnValue(new Map<string, unknown>([
+    mockLoadAllStandaloneWorkflowsWithSources.mockReturnValue(new Map<string, unknown>([
       ['default', {}],
       ['selected-workflow', {}],
     ]));

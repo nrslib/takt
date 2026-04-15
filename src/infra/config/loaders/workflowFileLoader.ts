@@ -19,12 +19,22 @@ import {
   attachWorkflowOpaqueRef,
   buildOpaqueWorkflowRef,
 } from './workflowSourceMetadata.js';
+import type { WorkflowCallArgResolutionPolicy } from './workflowCallableArgResolver.js';
 import { resolveWorkflowTrustInfo, type WorkflowTrustInfo } from './workflowTrustSource.js';
 
-export function loadWorkflowFromFile(
+interface LoadWorkflowFromFileOptions {
+  trustInfo?: WorkflowTrustInfo;
+  callableArgs?: Record<string, string | string[]>;
+  callableArgPolicy?: WorkflowCallArgResolutionPolicy;
+}
+
+type WorkflowLoadMode = 'runtime' | 'discovery';
+
+function loadWorkflowFromFileInternal(
   filePath: string,
   projectDir: string,
-  options?: { trustInfo?: WorkflowTrustInfo },
+  options: LoadWorkflowFromFileOptions | undefined,
+  loadMode: WorkflowLoadMode,
 ): WorkflowConfig {
   if (!existsSync(filePath)) {
     throw new Error(`Workflow file not found: ${filePath}`);
@@ -57,9 +67,28 @@ export function loadWorkflowFromFile(
     resolveWorkflowMcpServersPolicy(globalConfig.workflowMcpServers, projectConfig.workflowMcpServers),
     filePath,
     trustInfo,
+    options?.callableArgs,
+    options?.callableArgPolicy,
+    loadMode,
   );
   attachWorkflowOpaqueRef(config, buildOpaqueWorkflowRef(filePath, trustInfo));
   attachWorkflowSourcePath(config, filePath);
   attachWorkflowTrustInfo(config, trustInfo);
   return config;
+}
+
+export function loadWorkflowFromFile(
+  filePath: string,
+  projectDir: string,
+  options?: LoadWorkflowFromFileOptions,
+): WorkflowConfig {
+  return loadWorkflowFromFileInternal(filePath, projectDir, options, 'runtime');
+}
+
+export function loadWorkflowFromFileForDiscovery(
+  filePath: string,
+  projectDir: string,
+  options?: LoadWorkflowFromFileOptions,
+): WorkflowConfig {
+  return loadWorkflowFromFileInternal(filePath, projectDir, options, 'discovery');
 }

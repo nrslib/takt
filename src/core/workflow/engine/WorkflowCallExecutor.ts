@@ -97,6 +97,7 @@ interface ExecuteWorkflowCallRequest {
 export type WorkflowCallExecutionResult = WorkflowState & {
   abortKind?: WorkflowAbortKind;
   abortReason?: string;
+  returnValue?: string;
 };
 
 export class WorkflowCallExecutor {
@@ -218,6 +219,7 @@ export class WorkflowCallExecutor {
     this.syncStateFromChild(request.step, childState);
     return {
       ...childState,
+      ...(childResult.returnValue !== undefined ? { returnValue: childResult.returnValue } : {}),
       ...(childResult.abort
         ? {
             abortKind: childResult.abort.kind,

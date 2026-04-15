@@ -35,8 +35,8 @@ vi.mock('../infra/config/index.js', async (importOriginal) => {
 });
 
 const configMock = vi.hoisted(() => ({
-  loadAllWorkflowsWithSources: vi.fn(),
-  listWorkflowEntries: vi.fn(),
+  loadAllStandaloneWorkflowsWithSources: vi.fn(),
+  listStandaloneWorkflowEntries: vi.fn(),
   getWorkflowCategories: vi.fn(),
   resolveIgnoredWorkflows: vi.fn(),
   buildCategorizedWorkflows: vi.fn(),
@@ -87,9 +87,6 @@ function createWorkflowMap(entries: { name: string; source: 'user' | 'builtin' }
       source: e.source,
       config: {
         name: e.name,
-        steps: [],
-        initialStep: 'start',
-        maxSteps: 1,
       },
     });
   }
@@ -424,8 +421,8 @@ describe('selectWorkflow', () => {
   beforeEach(() => {
     selectOptionMock.mockReset();
     bookmarkState.bookmarks = [];
-    configMock.loadAllWorkflowsWithSources.mockReset();
-    configMock.listWorkflowEntries.mockReset();
+    configMock.loadAllStandaloneWorkflowsWithSources.mockReset();
+    configMock.listStandaloneWorkflowEntries.mockReset();
     configMock.getWorkflowCategories.mockReset();
     configMock.resolveIgnoredWorkflows.mockReset();
     configMock.buildCategorizedWorkflows.mockReset();
@@ -435,7 +432,7 @@ describe('selectWorkflow', () => {
 
   it('should return default workflow when no workflows found and fallbackToDefault is true', async () => {
     configMock.getWorkflowCategories.mockReturnValue(null);
-    configMock.listWorkflowEntries.mockReturnValue([]);
+    configMock.listStandaloneWorkflowEntries.mockReturnValue([]);
 
     const result = await selectWorkflow('/cwd');
 
@@ -444,7 +441,7 @@ describe('selectWorkflow', () => {
 
   it('should return null when no workflows found and fallbackToDefault is false', async () => {
     configMock.getWorkflowCategories.mockReturnValue(null);
-    configMock.listWorkflowEntries.mockReturnValue([]);
+    configMock.listStandaloneWorkflowEntries.mockReturnValue([]);
 
     const result = await selectWorkflow('/cwd', { fallbackToDefault: false });
 
@@ -453,7 +450,7 @@ describe('selectWorkflow', () => {
 
   it('should prompt selection even when only one workflow exists', async () => {
     configMock.getWorkflowCategories.mockReturnValue(null);
-    configMock.listWorkflowEntries.mockReturnValue([
+    configMock.listStandaloneWorkflowEntries.mockReturnValue([
       { name: 'only-workflow', path: '/tmp/only-workflow.yaml', source: 'user' },
     ]);
     selectOptionMock.mockResolvedValueOnce('only-workflow');
@@ -473,7 +470,7 @@ describe('selectWorkflow', () => {
     };
 
     configMock.getWorkflowCategories.mockReturnValue({ categories: ['Dev'] });
-    configMock.loadAllWorkflowsWithSources.mockReturnValue(workflowMap);
+    configMock.loadAllStandaloneWorkflowsWithSources.mockReturnValue(workflowMap);
     configMock.buildCategorizedWorkflows.mockReturnValue(categorized);
 
     selectOptionMock
@@ -484,7 +481,7 @@ describe('selectWorkflow', () => {
 
     expect(result).toBe('my-workflow');
     expect(configMock.buildCategorizedWorkflows).toHaveBeenCalled();
-    expect(configMock.loadAllWorkflowsWithSources).toHaveBeenCalledWith('/cwd', {
+    expect(configMock.loadAllStandaloneWorkflowsWithSources).toHaveBeenCalledWith('/cwd', {
       onWarning: uiMock.warn,
     });
   });
@@ -498,7 +495,7 @@ describe('selectWorkflow', () => {
     };
 
     configMock.getWorkflowCategories.mockReturnValue({ categories: ['Dev'] });
-    configMock.loadAllWorkflowsWithSources.mockImplementation(
+    configMock.loadAllStandaloneWorkflowsWithSources.mockImplementation(
       (_cwd: string, options?: { onWarning?: (message: string) => void }) => {
         options?.onWarning?.('Workflow "broken" failed to load: steps.0.allowed_tools: Invalid input');
         return workflowMap;
@@ -520,7 +517,7 @@ describe('selectWorkflow', () => {
 
   it('should use directory-based selection when no category config', async () => {
     configMock.getWorkflowCategories.mockReturnValue(null);
-    configMock.listWorkflowEntries.mockReturnValue([
+    configMock.listStandaloneWorkflowEntries.mockReturnValue([
       { name: 'custom-flow', path: '/tmp/custom-flow.yaml', source: 'user' },
       { name: 'builtin-flow', path: '/tmp/builtin-flow.yaml', source: 'builtin' },
     ]);
@@ -532,14 +529,14 @@ describe('selectWorkflow', () => {
     const result = await selectWorkflow('/cwd');
 
     expect(result).toBe('custom-flow');
-    expect(configMock.listWorkflowEntries).toHaveBeenCalledWith('/cwd', {
+    expect(configMock.listStandaloneWorkflowEntries).toHaveBeenCalledWith('/cwd', {
       onWarning: uiMock.warn,
     });
   });
 
   it('should exclude invalid workflows from normal selection path and forward warnings to UI', async () => {
     configMock.getWorkflowCategories.mockReturnValue(null);
-    configMock.listWorkflowEntries.mockImplementation(
+    configMock.listStandaloneWorkflowEntries.mockImplementation(
       (_cwd: string, options?: { onWarning?: (message: string) => void }) => {
         options?.onWarning?.('Workflow "broken" failed to load: steps.0: Invalid input');
         return [
@@ -567,7 +564,7 @@ describe('selectWorkflow', () => {
 
   it('should use workflow terminology in directory-based selection prompts', async () => {
     configMock.getWorkflowCategories.mockReturnValue(null);
-    configMock.listWorkflowEntries.mockReturnValue([
+    configMock.listStandaloneWorkflowEntries.mockReturnValue([
       { name: 'custom-flow', path: '/tmp/custom-flow.yaml', source: 'user' },
       { name: 'builtin-flow', path: '/tmp/builtin-flow.yaml', source: 'builtin' },
     ]);
@@ -593,7 +590,7 @@ describe('selectWorkflow', () => {
 
   it('should label workflow sources and categories with workflow terminology', async () => {
     configMock.getWorkflowCategories.mockReturnValue(null);
-    configMock.listWorkflowEntries.mockReturnValue([
+    configMock.listStandaloneWorkflowEntries.mockReturnValue([
       { name: 'custom-flow', path: '/tmp/custom-flow.yaml', source: 'user' },
       { name: 'builtin-flow', path: '/tmp/builtin-flow.yaml', source: 'builtin' },
     ]);
@@ -616,7 +613,7 @@ describe('selectWorkflow', () => {
 
   it('should preserve repertoire package-qualified names in normal selection path', async () => {
     configMock.getWorkflowCategories.mockReturnValue(null);
-    configMock.listWorkflowEntries.mockReturnValue([
+    configMock.listStandaloneWorkflowEntries.mockReturnValue([
       { name: '@owner/repo-a/build', path: '/tmp/repo-a.yaml', source: 'repertoire' },
       { name: '@owner/repo-b/build', path: '/tmp/repo-b.yaml', source: 'repertoire' },
     ]);
@@ -637,7 +634,7 @@ describe('selectWorkflow', () => {
 
   it('should sanitize terminal control characters in normal selection labels and warnings', async () => {
     configMock.getWorkflowCategories.mockReturnValue(null);
-    configMock.listWorkflowEntries.mockImplementation(
+    configMock.listStandaloneWorkflowEntries.mockImplementation(
       (_cwd: string, options?: { onWarning?: (message: string) => void }) => {
         options?.onWarning?.('Workflow "bad\\nname" failed to load: invalid\\tfield');
         return [
@@ -660,7 +657,7 @@ describe('selectWorkflow', () => {
 
   it('should show workflow empty-state messages when no workflows are available', async () => {
     configMock.getWorkflowCategories.mockReturnValue(null);
-    configMock.listWorkflowEntries.mockReturnValue([]);
+    configMock.listStandaloneWorkflowEntries.mockReturnValue([]);
 
     const result = await selectWorkflow('/cwd', { fallbackToDefault: false });
 
@@ -683,7 +680,7 @@ describe('selectWorkflow', () => {
     };
 
     configMock.getWorkflowCategories.mockReturnValue({ categories: ['Dev'] });
-    configMock.loadAllWorkflowsWithSources.mockReturnValue(workflowMap);
+    configMock.loadAllStandaloneWorkflowsWithSources.mockReturnValue(workflowMap);
     configMock.buildCategorizedWorkflows.mockReturnValue(categorized);
     selectOptionMock
       .mockResolvedValueOnce('__custom_category__:Dev')

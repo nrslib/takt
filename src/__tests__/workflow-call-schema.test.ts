@@ -112,6 +112,107 @@ const workflowCallForbiddenFieldCases = [
 ] as const;
 
 describe('workflow_call schema', () => {
+  it('workflow_call v2 DSL を保持できる', () => {
+    const callableResult = WorkflowConfigRawSchema.safeParse({
+      name: 'shared/review-loop',
+      subworkflow: {
+        callable: true,
+        visibility: 'internal',
+        returns: ['ok', 'retry_plan'],
+        params: {
+          review_policy: {
+            type: 'facet_ref[]',
+            facet_kind: 'policy',
+            default: ['strict-review'],
+          },
+          review_knowledge: {
+            type: 'facet_ref[]',
+            facet_kind: 'knowledge',
+            default: ['architecture'],
+          },
+          fix_instruction: {
+            type: 'facet_ref',
+            facet_kind: 'instruction',
+          },
+          review_report_format: {
+            type: 'facet_ref',
+            facet_kind: 'report_format',
+          },
+        },
+      },
+      initial_step: 'review',
+      max_steps: 3,
+      steps: [
+        {
+          name: 'review',
+          persona: 'reviewer',
+          policy: {
+            $param: 'review_policy',
+          },
+          knowledge: {
+            $param: 'review_knowledge',
+          },
+          instruction: {
+            $param: 'fix_instruction',
+          },
+          output_contracts: {
+            report: [
+              {
+                name: 'summary',
+                format: {
+                  $param: 'review_report_format',
+                },
+              },
+            ],
+          },
+          rules: [
+            {
+              condition: 'done',
+              return: 'ok',
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(callableResult.success).toBe(true);
+    if (!callableResult.success) {
+      return;
+    }
+
+    const parentResult = WorkflowConfigRawSchema.safeParse({
+      name: 'parent',
+      initial_step: 'delegate',
+      max_steps: 3,
+      steps: [
+        {
+          name: 'delegate',
+          kind: 'workflow_call',
+          call: 'shared/review-loop',
+          args: {
+            fix_instruction: 'fix-child',
+          },
+          rules: [
+            {
+              condition: 'ok',
+              next: 'COMPLETE',
+            },
+            {
+              condition: 'retry_plan',
+              next: 'plan',
+            },
+            {
+              condition: 'ABORT',
+              next: 'ABORT',
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(parentResult.success).toBe(true);
+  });
+
   it('subworkflow callable と workflow_call step の DSL を保持できる', () => {
     const result = WorkflowConfigRawSchema.safeParse({
       name: 'takt/coding',
@@ -166,6 +267,40 @@ describe('workflow_call schema', () => {
         },
       },
     });
+  });
+
+  it.each(['COMPLETE', 'ABORT'])('subworkflow.returns で予約語 %s を reject する', (reservedResult) => {
+    const result = WorkflowConfigRawSchema.safeParse({
+      name: 'shared/review-loop',
+      subworkflow: {
+        callable: true,
+        returns: [reservedResult],
+      },
+      initial_step: 'review',
+      max_steps: 3,
+      steps: [
+        {
+          name: 'review',
+          persona: 'reviewer',
+          instruction: 'Review child workflow',
+          rules: [
+            {
+              condition: 'done',
+              next: 'COMPLETE',
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          path: ['subworkflow', 'returns', 0],
+        }),
+      ]));
+    }
   });
 
   it.each(workflowCallForbiddenFieldCases)(
@@ -277,6 +412,165 @@ describe('workflow_call schema', () => {
         }),
       ]));
     }
+  });
+
+  it('output_contracts.report.order で $param を reject する', () => {
+    const result = WorkflowConfigRawSchema.safeParse({
+      name: 'shared/review-loop',
+      subworkflow: {
+        callable: true,
+        params: {
+          review_report_format: {
+            type: 'facet_ref',
+            facet_kind: 'report_format',
+          },
+        },
+      },
+      initial_step: 'review',
+      max_steps: 3,
+      steps: [
+        {
+          name: 'review',
+          persona: 'reviewer',
+          instruction: 'Review the child workflow',
+          output_contracts: {
+            report: [
+              {
+                name: 'summary',
+                format: 'summary',
+                order: {
+                  $param: 'review_report_format',
+                },
+              },
+            ],
+          },
+          rules: [
+            {
+              condition: 'done',
+              return: 'ok',
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          path: ['steps', 0, 'output_contracts', 'report', 0, 'order'],
+        }),
+      ]));
+    }
+  });
+
+  it('return と next の同時指定を reject する', () => {
+    expect(() => normalizeWorkflowConfig(
+      {
+        name: 'shared/review-loop',
+        subworkflow: {
+          callable: true,
+          returns: ['ok'],
+        },
+        initial_step: 'review',
+        max_steps: 3,
+        steps: [
+          {
+            name: 'review',
+            persona: 'reviewer',
+            instruction: 'Review the child workflow',
+            rules: [
+              {
+                condition: 'done',
+                next: 'COMPLETE',
+                return: 'ok',
+              },
+            ],
+          },
+        ],
+      },
+      process.cwd(),
+    )).toThrow(/return/i);
+  });
+
+  it('callable subworkflow 外の return を reject する', () => {
+    expect(() => normalizeWorkflowConfig(
+      {
+        name: 'parent',
+        initial_step: 'review',
+        max_steps: 3,
+        steps: [
+          {
+            name: 'review',
+            persona: 'reviewer',
+            instruction: 'Review the parent workflow',
+            rules: [
+              {
+                condition: 'done',
+                return: 'ok',
+              },
+            ],
+          },
+        ],
+      },
+      process.cwd(),
+    )).toThrow(/return/i);
+  });
+
+  it('callable subworkflow で未宣言の return を reject する', () => {
+    expect(() => normalizeWorkflowConfig(
+      {
+        name: 'shared/review-loop',
+        subworkflow: {
+          callable: true,
+          returns: ['ok'],
+        },
+        initial_step: 'review',
+        max_steps: 3,
+        steps: [
+          {
+            name: 'review',
+            persona: 'reviewer',
+            instruction: 'Review child workflow',
+            rules: [
+              {
+                condition: 'done',
+                return: 'retry_plan',
+              },
+            ],
+          },
+        ],
+      },
+      process.cwd(),
+    )).toThrow(/undeclared value/i);
+  });
+
+  it.each(['COMPLETE', 'ABORT'])('callable subworkflow で予約語 return %s を reject する', (reservedResult) => {
+    expect(() => normalizeWorkflowConfig(
+      {
+        name: 'shared/review-loop',
+        subworkflow: {
+          callable: true,
+          returns: ['ok'],
+        },
+        initial_step: 'review',
+        max_steps: 3,
+        steps: [
+          {
+            name: 'review',
+            persona: 'reviewer',
+            instruction: 'Review child workflow',
+            rules: [
+              {
+                condition: 'done',
+                return: reservedResult,
+              },
+            ],
+          },
+        ],
+      },
+      process.cwd(),
+    )).toThrow(/reserved value/i);
   });
 
   it.each([
@@ -558,8 +852,8 @@ describe('workflow_call schema', () => {
     }
   });
 
-  it('callable subworkflow で workflow-level provider を reject する', () => {
-    expect(() => normalizeWorkflowConfig(
+  it('callable subworkflow で workflow-level provider 設定を保持する', () => {
+    const workflow = normalizeWorkflowConfig(
       {
         name: 'takt/coding',
         subworkflow: {
@@ -567,61 +861,7 @@ describe('workflow_call schema', () => {
         },
         workflow_config: {
           provider: 'codex',
-        },
-        steps: [
-          {
-            name: 'review',
-            persona: 'reviewer',
-            instruction: 'Review the task',
-            rules: [
-              {
-                condition: 'COMPLETE',
-                next: 'COMPLETE',
-              },
-            ],
-          },
-        ],
-      },
-      process.cwd(),
-    )).toThrow();
-  });
-
-  it('callable subworkflow で workflow-level model を reject する', () => {
-    expect(() => normalizeWorkflowConfig(
-      {
-        name: 'takt/coding',
-        subworkflow: {
-          callable: true,
-        },
-        workflow_config: {
           model: 'gpt-5-codex',
-        },
-        steps: [
-          {
-            name: 'review',
-            persona: 'reviewer',
-            instruction: 'Review the task',
-            rules: [
-              {
-                condition: 'COMPLETE',
-                next: 'COMPLETE',
-              },
-            ],
-          },
-        ],
-      },
-      process.cwd(),
-    )).toThrow();
-  });
-
-  it('callable subworkflow で workflow-level provider_options を reject する', () => {
-    expect(() => normalizeWorkflowConfig(
-      {
-        name: 'takt/coding',
-        subworkflow: {
-          callable: true,
-        },
-        workflow_config: {
           provider_options: {
             codex: {
               network_access: true,
@@ -643,7 +883,15 @@ describe('workflow_call schema', () => {
         ],
       },
       process.cwd(),
-    )).toThrow();
+    );
+
+    expect(workflow.provider).toBe('codex');
+    expect(workflow.model).toBe('gpt-5-codex');
+    expect(workflow.providerOptions).toEqual({
+      codex: {
+        networkAccess: true,
+      },
+    });
   });
 
   it('callable subworkflow で workflow-level runtime を保持する', () => {
@@ -680,8 +928,8 @@ describe('workflow_call schema', () => {
     });
   });
 
-  it('callable subworkflow で step-level provider を reject する', () => {
-    expect(() => normalizeWorkflowConfig(
+  it('callable subworkflow で step-level provider 設定と overrides を保持する', () => {
+    const workflow = normalizeWorkflowConfig(
       {
         name: 'takt/coding',
         subworkflow: {
@@ -692,57 +940,7 @@ describe('workflow_call schema', () => {
             name: 'review',
             persona: 'reviewer',
             provider: 'codex',
-            instruction: 'Review the task',
-            rules: [
-              {
-                condition: 'COMPLETE',
-                next: 'COMPLETE',
-              },
-            ],
-          },
-        ],
-      },
-      process.cwd(),
-    )).toThrow();
-  });
-
-  it('callable subworkflow で step-level model を reject する', () => {
-    expect(() => normalizeWorkflowConfig(
-      {
-        name: 'takt/coding',
-        subworkflow: {
-          callable: true,
-        },
-        steps: [
-          {
-            name: 'review',
-            persona: 'reviewer',
             model: 'gpt-5-codex',
-            instruction: 'Review the task',
-            rules: [
-              {
-                condition: 'COMPLETE',
-                next: 'COMPLETE',
-              },
-            ],
-          },
-        ],
-      },
-      process.cwd(),
-    )).toThrow();
-  });
-
-  it('callable subworkflow で step-level provider_options を reject する', () => {
-    expect(() => normalizeWorkflowConfig(
-      {
-        name: 'takt/coding',
-        subworkflow: {
-          callable: true,
-        },
-        steps: [
-          {
-            name: 'review',
-            persona: 'reviewer',
             provider_options: {
               codex: {
                 network_access: true,
@@ -752,85 +950,17 @@ describe('workflow_call schema', () => {
             rules: [
               {
                 condition: 'COMPLETE',
-                next: 'COMPLETE',
+                next: 'delegate',
               },
             ],
           },
-        ],
-      },
-      process.cwd(),
-    )).toThrow();
-  });
-
-  it('callable subworkflow で workflow_call overrides を reject する', () => {
-    expect(() => normalizeWorkflowConfig(
-      {
-        name: 'takt/coding',
-        subworkflow: {
-          callable: true,
-        },
-        steps: [
           {
             name: 'delegate',
             kind: 'workflow_call',
             call: 'takt/review-loop',
             overrides: {
               provider: 'codex',
-            },
-            rules: [
-              {
-                condition: 'COMPLETE',
-                next: 'COMPLETE',
-              },
-            ],
-          },
-        ],
-      },
-      process.cwd(),
-    )).toThrow(/delegate/);
-  });
-
-  it('callable subworkflow で workflow_call overrides.model を reject する', () => {
-    expect(() => normalizeWorkflowConfig(
-      {
-        name: 'takt/coding',
-        subworkflow: {
-          callable: true,
-        },
-        steps: [
-          {
-            name: 'delegate',
-            kind: 'workflow_call',
-            call: 'takt/review-loop',
-            overrides: {
               model: 'gpt-5-codex',
-            },
-            rules: [
-              {
-                condition: 'COMPLETE',
-                next: 'COMPLETE',
-              },
-            ],
-          },
-        ],
-      },
-      process.cwd(),
-    )).toThrow(/delegate/);
-  });
-
-  it('callable subworkflow で workflow_call overrides.provider_options を reject する', () => {
-    expect(() => normalizeWorkflowConfig(
-      {
-        name: 'takt/coding',
-        subworkflow: {
-          callable: true,
-        },
-        steps: [
-          {
-            name: 'delegate',
-            kind: 'workflow_call',
-            call: 'takt/review-loop',
-            overrides: {
               provider_options: {
                 codex: {
                   network_access: true,
@@ -847,11 +977,73 @@ describe('workflow_call schema', () => {
         ],
       },
       process.cwd(),
-    )).toThrow(/delegate/);
+    );
+
+    expect(workflow.steps[0]).toMatchObject({
+      name: 'review',
+      provider: 'codex',
+      model: 'gpt-5-codex',
+      providerOptions: {
+        codex: {
+          networkAccess: true,
+        },
+      },
+    });
+    expect(workflow.steps[1]).toMatchObject({
+      name: 'delegate',
+      overrides: {
+        provider: 'codex',
+        model: 'gpt-5-codex',
+        providerOptions: {
+          codex: {
+            networkAccess: true,
+          },
+        },
+      },
+    });
   });
 
-  it('callable subworkflow で parallel substep の provider を reject する', () => {
+  it('callable subworkflow で parallel substep の return を reject する', () => {
     expect(() => normalizeWorkflowConfig(
+      {
+        name: 'takt/coding',
+        subworkflow: {
+          callable: true,
+          returns: ['ok'],
+        },
+        steps: [
+          {
+            name: 'review',
+            persona: 'reviewer',
+            instruction: 'Review the task',
+            parallel: [
+              {
+                name: 'security',
+                persona: 'security-reviewer',
+                instruction: 'Security review',
+                rules: [
+                  {
+                    condition: 'done',
+                    return: 'ok',
+                  },
+                ],
+              },
+            ],
+            rules: [
+              {
+                condition: 'done',
+                next: 'COMPLETE',
+              },
+            ],
+          },
+        ],
+      },
+      process.cwd(),
+    )).toThrow(/parallel sub-step rules do not allow/);
+  });
+
+  it('callable subworkflow で parallel substep と loop monitor judge の provider 設定を保持する', () => {
+    const workflow = normalizeWorkflowConfig(
       {
         name: 'takt/coding',
         subworkflow: {
@@ -867,73 +1059,15 @@ describe('workflow_call schema', () => {
                 name: 'security',
                 persona: 'security-reviewer',
                 provider: 'codex',
+                model: 'gpt-5-codex',
+                provider_options: {
+                  codex: {
+                    network_access: true,
+                  },
+                },
                 instruction: 'Security review',
               },
             ],
-            rules: [
-              {
-                condition: 'done',
-                next: 'COMPLETE',
-              },
-            ],
-          },
-        ],
-      },
-      process.cwd(),
-    )).toThrow(/security/);
-  });
-
-  it('callable subworkflow で loop monitor judge の provider を reject する', () => {
-    expect(() => normalizeWorkflowConfig(
-      {
-        name: 'takt/coding',
-        subworkflow: {
-          callable: true,
-        },
-        steps: [
-          {
-            name: 'review',
-            persona: 'reviewer',
-            instruction: 'Review the task',
-            rules: [
-              {
-                condition: 'done',
-                next: 'COMPLETE',
-              },
-            ],
-          },
-        ],
-        loop_monitors: [
-          {
-            cycle: ['review', 'review'],
-            judge: {
-              provider: 'codex',
-              rules: [
-                {
-                  condition: 'stop',
-                  next: 'ABORT',
-                },
-              ],
-            },
-          },
-        ],
-      },
-      process.cwd(),
-    )).toThrow(/review -> review/);
-  });
-
-  it('callable subworkflow で loop monitor judge の provider block option を reject する', () => {
-    expect(() => normalizeWorkflowConfig(
-      {
-        name: 'takt/coding',
-        subworkflow: {
-          callable: true,
-        },
-        steps: [
-          {
-            name: 'review',
-            persona: 'reviewer',
-            instruction: 'Review the task',
             rules: [
               {
                 condition: 'done',
@@ -950,44 +1084,6 @@ describe('workflow_call schema', () => {
                 type: 'codex',
                 network_access: true,
               },
-              rules: [
-                {
-                  condition: 'stop',
-                  next: 'ABORT',
-                },
-              ],
-            },
-          },
-        ],
-      },
-      process.cwd(),
-    )).toThrow(/review -> review/);
-  });
-
-  it('callable subworkflow で loop monitor judge の model を reject する', () => {
-    expect(() => normalizeWorkflowConfig(
-      {
-        name: 'takt/coding',
-        subworkflow: {
-          callable: true,
-        },
-        steps: [
-          {
-            name: 'review',
-            persona: 'reviewer',
-            instruction: 'Review the task',
-            rules: [
-              {
-                condition: 'done',
-                next: 'COMPLETE',
-              },
-            ],
-          },
-        ],
-        loop_monitors: [
-          {
-            cycle: ['review', 'review'],
-            judge: {
               model: 'gpt-5-codex',
               rules: [
                 {
@@ -1000,6 +1096,26 @@ describe('workflow_call schema', () => {
         ],
       },
       process.cwd(),
-    )).toThrow(/review -> review/);
+    );
+
+    expect(workflow.steps[0]?.parallel?.[0]).toMatchObject({
+      name: 'security',
+      provider: 'codex',
+      model: 'gpt-5-codex',
+      providerOptions: {
+        codex: {
+          networkAccess: true,
+        },
+      },
+    });
+    expect(workflow.loopMonitors?.[0]?.judge).toMatchObject({
+      provider: 'codex',
+      model: 'gpt-5-codex',
+      providerOptions: {
+        codex: {
+          networkAccess: true,
+        },
+      },
+    });
   });
 });

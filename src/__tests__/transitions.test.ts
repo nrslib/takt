@@ -3,11 +3,13 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { determineRuleTransition, extractBlockedPrompt } from '../core/workflow/engine/transitions.js';
 import { determineNextStepByRules } from '../core/workflow/index.js';
-import { extractBlockedPrompt } from '../core/workflow/engine/transitions.js';
 import type { WorkflowStep } from '../core/models/index.js';
 
-function createStepWithRules(rules: { condition: string; next: string }[]): WorkflowStep {
+function createStepWithRules(
+  rules: Array<{ condition: string; next?: string; returnValue?: string; requiresUserInput?: boolean }>,
+): WorkflowStep {
   return {
     name: 'test-step',
     persona: 'test-agent',
@@ -16,7 +18,9 @@ function createStepWithRules(rules: { condition: string; next: string }[]): Work
     passPreviousResponse: false,
     rules: rules.map((r) => ({
       condition: r.condition,
-      next: r.next,
+      ...(r.next !== undefined ? { next: r.next } : {}),
+      ...(r.returnValue !== undefined ? { returnValue: r.returnValue } : {}),
+      ...(r.requiresUserInput === true ? { requiresUserInput: true } : {}),
     })),
   };
 }
@@ -78,6 +82,31 @@ describe('determineNextStepByRules', () => {
 
     expect(determineNextStepByRules(step, 0)).toBeNull();
     expect(determineNextStepByRules(step, 1)).toBeNull();
+  });
+
+  it('should return logical result for return rules', () => {
+    const step: WorkflowStep = {
+      name: 'return-step',
+      persona: 'test-agent',
+      personaDisplayName: 'Test Agent',
+      instruction: '{task}',
+      passPreviousResponse: false,
+      rules: [
+        { condition: 'retry', returnValue: 'retry_plan' },
+      ],
+    };
+
+    expect(determineRuleTransition(step, 0)).toEqual({ returnValue: 'retry_plan' });
+    expect(determineNextStepByRules(step, 0)).toBeNull();
+  });
+
+  it('should include user input requirement in resolved transition', () => {
+    const step = createStepWithRules([
+      { condition: 'ask_user', requiresUserInput: true },
+    ]);
+
+    expect(determineRuleTransition(step, 0)).toEqual({ requiresUserInput: true });
+    expect(determineNextStepByRules(step, 0)).toBeNull();
   });
 });
 

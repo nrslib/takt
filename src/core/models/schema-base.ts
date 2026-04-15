@@ -181,7 +181,12 @@ export const WorkflowProviderOptionsSchema = z.object({
  */
 export const OutputContractItemSchema = z.object({
   name: z.string().min(1),
-  format: z.string().min(1),
+  format: z.union([
+    z.string().min(1),
+    z.object({
+      $param: z.string().min(1),
+    }).strict(),
+  ]),
   use_judge: z.boolean().optional().default(true),
   order: z.string().optional(),
 });

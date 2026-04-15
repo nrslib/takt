@@ -14,7 +14,7 @@ import { resolvePersona, resolveRefToContent } from './resource-resolver.js';
 type RawStep = z.output<typeof WorkflowStepRawSchema>;
 
 export function normalizeOutputContracts(
-  raw: { report?: Array<{ name: string; format: string; use_judge?: boolean; order?: string }> } | undefined,
+  raw: { report?: Array<{ name: string; format: string | { $param: string }; use_judge?: boolean; order?: string }> } | undefined,
   workflowDir: string,
   resolvedReportFormats: Record<string, string> | undefined,
   context?: FacetResolutionContext,
@@ -24,6 +24,10 @@ export function normalizeOutputContracts(
   }
 
   const result: OutputContractItem[] = raw.report.map((entry) => {
+    if (typeof entry.format !== 'string') {
+      throw new Error(`Unresolved output contract format param for report "${entry.name}"`);
+    }
+
     const format = resolveRefToContent(entry.format, resolvedReportFormats, workflowDir, 'output-contracts', context);
     if (!format) {
       throw new Error(`Failed to resolve output contract format "${entry.format}" for report "${entry.name}"`);

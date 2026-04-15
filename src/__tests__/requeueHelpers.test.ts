@@ -6,7 +6,7 @@ const {
   mockGetLabel,
   mockSelectWorkflow,
   mockIsWorkflowPath,
-  mockLoadAllWorkflowsWithSources,
+  mockLoadAllStandaloneWorkflowsWithSources,
   mockWarn,
 } = vi.hoisted(() => ({
   mockDebug: vi.fn(),
@@ -14,7 +14,7 @@ const {
   mockGetLabel: vi.fn((_key: string, _lang?: string, vars?: Record<string, string>) => `Use previous workflow "${vars?.workflow ?? ''}"?`),
   mockSelectWorkflow: vi.fn(),
   mockIsWorkflowPath: vi.fn(() => false),
-  mockLoadAllWorkflowsWithSources: vi.fn(() => new Map<string, unknown>([['default', {}], ['selected-workflow', {}]])),
+  mockLoadAllStandaloneWorkflowsWithSources: vi.fn(() => new Map<string, unknown>([['default', {}], ['selected-workflow', {}]])),
   mockWarn: vi.fn(),
 }));
 
@@ -48,7 +48,7 @@ vi.mock('../features/workflowSelection/index.js', () => ({
 vi.mock('../infra/config/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   isWorkflowPath: (...args: unknown[]) => mockIsWorkflowPath(...args),
-  loadAllWorkflowsWithSources: (...args: unknown[]) => mockLoadAllWorkflowsWithSources(...args),
+  loadAllStandaloneWorkflowsWithSources: (...args: unknown[]) => mockLoadAllStandaloneWorkflowsWithSources(...args),
 }));
 
 import { hasDeprecatedProviderConfig, selectWorkflowWithOptionalReuse } from '../features/tasks/list/requeueHelpers.js';
@@ -127,7 +127,7 @@ describe('selectWorkflowWithOptionalReuse', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockIsWorkflowPath.mockReturnValue(false);
-    mockLoadAllWorkflowsWithSources.mockReturnValue(new Map<string, unknown>([['default', {}], ['selected-workflow', {}]]));
+    mockLoadAllStandaloneWorkflowsWithSources.mockReturnValue(new Map<string, unknown>([['default', {}], ['selected-workflow', {}]]));
     mockSelectWorkflow.mockResolvedValue('selected-workflow');
   });
 
@@ -158,7 +158,7 @@ describe('selectWorkflowWithOptionalReuse', () => {
   });
 
   it('未登録の前回 workflow 名は確認せず拒否して workflow 選択にフォールバックする', async () => {
-    mockLoadAllWorkflowsWithSources.mockReturnValue(new Map<string, unknown>([['default', {}]]));
+    mockLoadAllStandaloneWorkflowsWithSources.mockReturnValue(new Map<string, unknown>([['default', {}]]));
 
     const selected = await selectWorkflowWithOptionalReuse('/project', 'tampered-workflow', 'en');
 
@@ -168,7 +168,7 @@ describe('selectWorkflowWithOptionalReuse', () => {
   });
 
   it('再利用候補の解決で warning callback を UI warn に配線する', async () => {
-    mockLoadAllWorkflowsWithSources.mockImplementation(
+    mockLoadAllStandaloneWorkflowsWithSources.mockImplementation(
       (_projectDir: string, options?: { onWarning?: (message: string) => void }) => {
         options?.onWarning?.('Workflow "broken" failed to load');
         return new Map<string, unknown>([['selected-workflow', {}]]);
@@ -178,7 +178,7 @@ describe('selectWorkflowWithOptionalReuse', () => {
 
     await selectWorkflowWithOptionalReuse('/project', 'selected-workflow', 'en');
 
-    expect(mockLoadAllWorkflowsWithSources).toHaveBeenCalledWith(
+    expect(mockLoadAllStandaloneWorkflowsWithSources).toHaveBeenCalledWith(
       '/project',
       expect.objectContaining({ onWarning: expect.any(Function) }),
     );

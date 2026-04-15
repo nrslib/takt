@@ -1,8 +1,10 @@
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { parse as parseYaml } from 'yaml';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { getRepertoireDir } from '../paths.js';
 import { formatWorkflowLoadWarning } from './workflowLoadWarning.js';
+import { isMissingWorkflowCallArgError } from './workflowCallableArgResolver.js';
 import { loadWorkflowFromFile } from './workflowFileLoader.js';
 import type { WorkflowConfig } from '../../../core/models/index.js';
 import { validateProjectWorkflowTrustBoundary } from './workflowTrustBoundary.js';
@@ -18,10 +20,18 @@ export interface WorkflowDirEntry {
   source: WorkflowSource;
 }
 
-export interface WorkflowWithSource {
-  config: WorkflowConfig;
+export interface WorkflowDiscoveryConfig {
+  name: string;
+  description?: string;
+  subworkflow?: WorkflowConfig['subworkflow'];
+}
+
+export interface WorkflowWithSource<Config extends WorkflowConfig | WorkflowDiscoveryConfig = WorkflowDiscoveryConfig> {
+  config: Config;
   source: WorkflowSource;
 }
+
+export type WorkflowDiscoveryWithSource = WorkflowWithSource<WorkflowDiscoveryConfig>;
 
 interface LoadWorkflowsOptions {
   onWarning?: (message: string) => void;
@@ -33,15 +43,55 @@ interface WorkflowLookupDir {
   disabled?: string[];
 }
 
-interface ValidatedWorkflowEntry {
+interface ValidatedWorkflowEntry<Config extends WorkflowConfig | WorkflowDiscoveryConfig> {
   entry: WorkflowDirEntry;
-  config: WorkflowConfig;
+  config: Config;
+}
+
+type WorkflowEntryLoader<Config extends WorkflowConfig | WorkflowDiscoveryConfig> = (
+  entry: WorkflowDirEntry,
+  cwd: string,
+) => Config;
+
+function isHiddenInternalWorkflow(config: Pick<WorkflowConfig, 'subworkflow'>): boolean {
+  return config.subworkflow?.visibility === 'internal';
+}
+
+function isHiddenInternalCallableWorkflowMetadata(filePath: string): boolean {
+  try {
+    const raw = parseYaml(readFileSync(filePath, 'utf-8'));
+    if (typeof raw !== 'object' || raw === null) {
+      return false;
+    }
+
+    const subworkflow = (raw as {
+      subworkflow?: {
+        callable?: unknown;
+        visibility?: unknown;
+      };
+    }).subworkflow;
+    return subworkflow?.callable === true && subworkflow.visibility === 'internal';
+  } catch {
+    return false;
+  }
+}
+
+function shouldSuppressHiddenInternalWorkflowWarning(filePath: string, error: unknown): boolean {
+  return isHiddenInternalCallableWorkflowMetadata(filePath) && isMissingWorkflowCallArgError(error);
 }
 
 function emitWorkflowLoadWarning(options: LoadWorkflowsOptions | undefined, workflowName: string, error: unknown): void {
   if (options?.onWarning) {
     options.onWarning(formatWorkflowLoadWarning(workflowName, error));
   }
+}
+
+function loadWorkflowEntry(entry: WorkflowDirEntry, cwd: string): WorkflowConfig {
+  const config = loadWorkflowFromFile(entry.path, cwd);
+  if (entry.source === 'project') {
+    validateProjectWorkflowTrustBoundary(config, entry.path, cwd);
+  }
+  return config;
 }
 
 export function* iterateWorkflowDir(
@@ -143,36 +193,49 @@ export function listRepertoireWorkflowEntries(): WorkflowDirEntry[] {
   return Array.from(iterateRepertoireWorkflows());
 }
 
-export function collectValidatedWorkflowEntries(
+export function collectValidatedWorkflowEntries<Config extends WorkflowConfig | WorkflowDiscoveryConfig>(
   entries: Iterable<WorkflowDirEntry>,
   cwd: string,
   options?: LoadWorkflowsOptions,
-): ValidatedWorkflowEntry[] {
-  const validatedEntries = new Map<string, ValidatedWorkflowEntry>();
+  workflowEntryLoader: WorkflowEntryLoader<Config> = loadWorkflowEntry as WorkflowEntryLoader<Config>,
+  includeInternalWorkflows = false,
+): ValidatedWorkflowEntry<Config>[] {
+  const validatedEntries = new Map<string, ValidatedWorkflowEntry<Config>>();
   for (const entry of entries) {
     try {
-      const config = loadWorkflowFromFile(entry.path, cwd);
-      if (entry.source === 'project') {
-        validateProjectWorkflowTrustBoundary(config, entry.path, cwd);
+      const config = workflowEntryLoader(entry, cwd);
+      if (!includeInternalWorkflows && isHiddenInternalWorkflow(config)) {
+        continue;
       }
       validatedEntries.set(entry.name, { entry, config });
     } catch (error) {
       log.debug('Skipping invalid workflow file', { path: entry.path, error: getErrorMessage(error) });
+      if (shouldSuppressHiddenInternalWorkflowWarning(entry.path, error)) {
+        continue;
+      }
       emitWorkflowLoadWarning(options, entry.name, error);
     }
   }
   return Array.from(validatedEntries.values());
 }
 
-export function loadAllWorkflowsWithSourcesFromDirs(
+export function loadAllWorkflowsWithSourcesFromDirs<Config extends WorkflowConfig | WorkflowDiscoveryConfig>(
   cwd: string,
   dirs: WorkflowLookupDir[],
   options?: LoadWorkflowsOptions,
-): Map<string, WorkflowWithSource> {
-  const workflows = new Map<string, WorkflowWithSource>();
+  workflowEntryLoader: WorkflowEntryLoader<Config> = loadWorkflowEntry as WorkflowEntryLoader<Config>,
+  includeInternalWorkflows = false,
+): Map<string, WorkflowWithSource<Config>> {
+  const workflows = new Map<string, WorkflowWithSource<Config>>();
   const entries = dirs.flatMap(({ dir, source, disabled }) => Array.from(iterateWorkflowDir(dir, source, disabled)));
   entries.push(...Array.from(iterateRepertoireWorkflows()));
-  for (const { entry, config } of collectValidatedWorkflowEntries(entries, cwd, options)) {
+  for (const { entry, config } of collectValidatedWorkflowEntries(
+    entries,
+    cwd,
+    options,
+    workflowEntryLoader,
+    includeInternalWorkflows,
+  )) {
     workflows.set(entry.name, { config, source: entry.source });
   }
   return workflows;

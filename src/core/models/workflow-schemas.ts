@@ -21,11 +21,50 @@ import {
   WorkflowEffectRawSchema,
 } from './workflow-system-schemas.js';
 
+const AI_CONDITION_REGEX = /^ai\("(.+)"\)$/;
+const AGGREGATE_CONDITION_REGEX = /^(all|any)\((.+)\)$/;
+const RESERVED_WORKFLOW_CALL_RESULTS = ['COMPLETE', 'ABORT'] as const;
+
+export const WorkflowParamReferenceRawSchema = z.object({
+  $param: z.string().min(1),
+}).strict();
+
+const WorkflowFacetRefScalarSchema = z.string().min(1);
+const WorkflowFacetRefListSchema = z.array(z.string().min(1)).min(1);
+const WorkflowFacetRefValueSchema = z.union([WorkflowFacetRefScalarSchema, WorkflowFacetRefListSchema]);
+const WorkflowFacetRefOrParamSchema = z.union([WorkflowFacetRefScalarSchema, WorkflowParamReferenceRawSchema]);
+const WorkflowFacetRefListOrParamSchema = z.union([WorkflowFacetRefScalarSchema, WorkflowFacetRefListSchema, WorkflowParamReferenceRawSchema]);
+
+const WorkflowCallArgsRawSchema = z.record(z.string().min(1), WorkflowFacetRefValueSchema);
+
+const WorkflowParamDeclarationRawSchema = z.object({
+  type: z.enum(['facet_ref', 'facet_ref[]']),
+  facet_kind: z.enum(['knowledge', 'policy', 'instruction', 'report_format']),
+  default: WorkflowFacetRefValueSchema.optional(),
+}).strict().superRefine((data, ctx) => {
+  const isArrayDefault = Array.isArray(data.default);
+  if (data.type === 'facet_ref' && isArrayDefault) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['default'],
+      message: 'facet_ref params require a scalar default',
+    });
+  }
+  if (data.type === 'facet_ref[]' && data.default !== undefined && !isArrayDefault) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['default'],
+      message: 'facet_ref[] params require an array default',
+    });
+  }
+});
+
 /** Rule-based transition schema (new unified format) */
 export const WorkflowRuleSchema = z.object({
   condition: z.string().min(1).optional(),
   when: z.string().min(1).optional(),
   next: z.string().min(1).optional(),
+  return: z.string().min(1).optional(),
   appendix: z.string().optional(),
   requires_user_input: z.boolean().optional(),
   interactive_only: z.boolean().optional(),
@@ -87,8 +126,8 @@ export const ParallelSubStepRawSchema = z.object({
   name: z.string().min(1),
   persona: z.string().optional(),
   persona_name: z.string().optional(),
-  policy: z.union([z.string(), z.array(z.string())]).optional(),
-  knowledge: z.union([z.string(), z.array(z.string())]).optional(),
+  policy: WorkflowFacetRefListOrParamSchema.optional(),
+  knowledge: WorkflowFacetRefListOrParamSchema.optional(),
   allowed_tools: z.never().optional(),
   mcp_servers: McpServersSchema,
   provider: ProviderReferenceSchema.optional(),
@@ -97,12 +136,22 @@ export const ParallelSubStepRawSchema = z.object({
   required_permission_mode: PermissionModeSchema.optional(),
   provider_options: StepProviderOptionsSchema,
   edit: z.boolean().optional(),
-  instruction: z.string().optional(),
+  instruction: WorkflowFacetRefOrParamSchema.optional(),
   instruction_template: z.never().optional(),
   rules: z.array(WorkflowRuleSchema).optional(),
   output_contracts: OutputContractsFieldSchema,
   quality_gates: QualityGatesSchema,
   pass_previous_response: z.boolean().optional(),
+}).superRefine((data, ctx) => {
+  data.rules?.forEach((rule, index) => {
+    if (rule.return !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['rules', index, 'return'],
+        message: 'parallel sub-step rules do not allow "return"',
+      });
+    }
+  });
 });
 
 /** Workflow step schema - raw YAML format */
@@ -121,20 +170,48 @@ const WorkflowCallOverridesRawSchema = z.object({
 
 const WorkflowSubworkflowRawSchema = z.object({
   callable: z.boolean().optional(),
-}).strict();
+  visibility: z.enum(['internal']).optional(),
+  returns: z.array(z.string().min(1)).optional(),
+  params: z.record(z.string().min(1), WorkflowParamDeclarationRawSchema).optional(),
+}).strict().superRefine((data, ctx) => {
+  if (data.callable === true) {
+    data.returns?.forEach((value, index) => {
+      if (RESERVED_WORKFLOW_CALL_RESULTS.includes(value as typeof RESERVED_WORKFLOW_CALL_RESULTS[number])) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['returns', index],
+          message: `subworkflow.returns must not include reserved result "${value}"`,
+        });
+      }
+    });
+    return;
+  }
 
-export const WorkflowStepRawSchema = z.object({
+  for (const field of ['visibility', 'returns', 'params'] as const) {
+    if (data[field] !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [field],
+        message: `subworkflow.${field} requires callable: true`,
+      });
+    }
+  }
+});
+
+function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: boolean }) {
+  return z.object({
   name: z.string().min(1),
   description: z.string().optional(),
   kind: WorkflowStepKindSchema.optional(),
   mode: z.literal('system').optional(),
   call: z.string().min(1).optional(),
   overrides: WorkflowCallOverridesRawSchema.optional(),
+  args: WorkflowCallArgsRawSchema.optional(),
   session: z.enum(['continue', 'refresh']).optional(),
   persona: z.string().optional(),
   persona_name: z.string().optional(),
-  policy: z.union([z.string(), z.array(z.string())]).optional(),
-  knowledge: z.union([z.string(), z.array(z.string())]).optional(),
+  policy: WorkflowFacetRefListOrParamSchema.optional(),
+  knowledge: WorkflowFacetRefListOrParamSchema.optional(),
   allowed_tools: z.never().optional(),
   mcp_servers: McpServersSchema,
   provider: ProviderReferenceSchema.optional(),
@@ -143,7 +220,7 @@ export const WorkflowStepRawSchema = z.object({
   required_permission_mode: PermissionModeSchema.optional(),
   provider_options: StepProviderOptionsSchema,
   edit: z.boolean().optional(),
-  instruction: z.string().optional(),
+  instruction: WorkflowFacetRefOrParamSchema.optional(),
   instruction_template: z.never().optional(),
   delay_before_ms: z.number().int().min(0).optional(),
   structured_output: StructuredOutputRawSchema.optional(),
@@ -187,6 +264,14 @@ export const WorkflowStepRawSchema = z.object({
       code: z.ZodIssueCode.custom,
       path: ['overrides'],
       message: 'Only workflow_call steps can declare "overrides"',
+    });
+  }
+
+  if (data.args !== undefined && stepKind !== 'workflow_call') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['args'],
+      message: 'Only workflow_call steps can declare "args"',
     });
   }
 
@@ -251,11 +336,19 @@ export const WorkflowStepRawSchema = z.object({
         return;
       }
 
-      if (rule.condition !== 'COMPLETE' && rule.condition !== 'ABORT') {
+      const allowExtendedConditions = options?.relaxWorkflowCallConditions === true;
+      const isBuiltInCondition = rule.condition === 'COMPLETE' || rule.condition === 'ABORT';
+      const isExtendedCondition = allowExtendedConditions
+        && !AI_CONDITION_REGEX.test(rule.condition)
+        && !AGGREGATE_CONDITION_REGEX.test(rule.condition);
+
+      if (!isBuiltInCondition && !isExtendedCondition) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['rules', index, 'condition'],
-          message: 'workflow_call rules only allow COMPLETE or ABORT conditions',
+          message: allowExtendedConditions
+            ? 'workflow_call rules only allow COMPLETE, ABORT, or callable return conditions'
+            : 'workflow_call rules only allow COMPLETE or ABORT conditions',
         });
       }
     });
@@ -263,6 +356,10 @@ export const WorkflowStepRawSchema = z.object({
 
   validateSystemStepFields(data, ctx);
 });
+}
+
+export const WorkflowStepRawSchema = createWorkflowStepRawSchema();
+const WorkflowConfigStepRawSchema = createWorkflowStepRawSchema({ relaxWorkflowCallConditions: true });
 
 /** Loop monitor rule schema */
 export const LoopMonitorRuleSchema = z.object({
@@ -302,7 +399,7 @@ export const WorkflowConfigRawSchema = z.object({
   knowledge: z.record(z.string(), z.string()).optional(),
   instructions: z.record(z.string(), z.string()).optional(),
   report_formats: z.record(z.string(), z.string()).optional(),
-  steps: z.array(WorkflowStepRawSchema).min(1),
+  steps: z.array(WorkflowConfigStepRawSchema).min(1),
   initial_step: z.string().optional(),
   max_steps: z.number().int().positive().optional().default(10),
   loop_monitors: z.array(LoopMonitorSchema).optional(),

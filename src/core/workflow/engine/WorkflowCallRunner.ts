@@ -116,14 +116,18 @@ export class WorkflowCallRunner {
     childState: WorkflowState,
     abortKind: WorkflowCallExecutionResult['abortKind'],
     abortReason: string | undefined,
+    returnValue: string | undefined,
   ): AgentResponse {
     const terminalStatus = childState.status === 'completed' ? 'COMPLETE' : 'ABORT';
-    const finalContent = terminalStatus === 'COMPLETE'
+    const matchedCondition = returnValue ?? terminalStatus;
+    const finalContent = returnValue !== undefined
+      ? childState.lastOutput?.content ?? returnValue
+      : terminalStatus === 'COMPLETE'
       ? childState.lastOutput?.content ?? terminalStatus
       : abortKind === 'step_transition'
         ? childState.lastOutput?.content ?? abortReason ?? terminalStatus
         : abortReason ?? terminalStatus;
-    const matchedRuleIndex = step.rules?.findIndex((rule) => rule.condition === terminalStatus);
+    const matchedRuleIndex = step.rules?.findIndex((rule) => rule.condition === matchedCondition);
 
     return {
       persona: step.name,
@@ -186,6 +190,7 @@ export class WorkflowCallRunner {
       childResult,
       childResult.abortKind,
       childResult.abortReason,
+      childResult.returnValue,
     );
     this.deps.state.stepOutputs.set(step.name, response);
     this.deps.state.lastOutput = response;

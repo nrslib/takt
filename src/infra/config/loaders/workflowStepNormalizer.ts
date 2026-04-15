@@ -112,7 +112,7 @@ export function normalizeStepFromRaw(
   const instruction = isSystemStep || isWorkflowCallStep
     ? undefined
     : step.instruction
-    ? resolveRefToContent(step.instruction, sections.resolvedInstructions, workflowDir, 'instructions', context)
+    ? resolveRefToContent(step.instruction as string, sections.resolvedInstructions, workflowDir, 'instructions', context)
     : undefined;
 
   validateWorkflowArpeggio(step.name, step.arpeggio, workflowArpeggioPolicy);
@@ -131,6 +131,7 @@ export function normalizeStepFromRaw(
             providerOptions: normalizedOverrides.providerOptions,
           }
         : undefined,
+      args: step.args,
       personaDisplayName: resolvedPersonaDisplayName,
       instruction: '',
       rules,

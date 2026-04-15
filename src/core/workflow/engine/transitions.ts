@@ -8,6 +8,28 @@ import type {
   WorkflowStep,
 } from '../../models/types.js';
 
+export interface WorkflowRuleTransition {
+  nextStep?: string;
+  returnValue?: string;
+  requiresUserInput?: boolean;
+}
+
+export function determineRuleTransition(
+  step: WorkflowStep,
+  ruleIndex: number,
+): WorkflowRuleTransition | null {
+  const rule = step.rules?.[ruleIndex];
+  if (!rule) {
+    return null;
+  }
+
+  return {
+    ...(rule.next !== undefined ? { nextStep: rule.next } : {}),
+    ...(rule.returnValue !== undefined ? { returnValue: rule.returnValue } : {}),
+    ...(rule.requiresUserInput === true ? { requiresUserInput: true } : {}),
+  };
+}
+
 /**
  * Determine next step using rules-based detection.
  * Returns the next step name from the matched rule, or null if no rule matched.
@@ -16,11 +38,11 @@ export function determineNextStepByRules(
   step: WorkflowStep,
   ruleIndex: number,
 ): string | null {
-  const rule = step.rules?.[ruleIndex];
-  if (!rule) {
+  const transition = determineRuleTransition(step, ruleIndex);
+  if (!transition) {
     return null;
   }
-  return rule.next ?? null;
+  return transition.nextStep ?? null;
 }
 
 /**
