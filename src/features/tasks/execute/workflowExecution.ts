@@ -11,11 +11,35 @@ import { bindWorkflowExecutionEvents, type WorkflowExecutionEventBridge } from '
 
 export type { WorkflowExecutionResult, WorkflowExecutionOptions };
 
+type WorkflowRunContext = {
+  ignoreIterationLimit?: boolean;
+};
+
 export async function executeWorkflow(
   workflowConfig: WorkflowConfig,
   task: string,
   cwd: string,
   options: WorkflowExecutionOptions,
+): Promise<WorkflowExecutionResult> {
+  return executeWorkflowInternal(workflowConfig, task, cwd, options);
+}
+
+export async function executeWorkflowForRun(
+  workflowConfig: WorkflowConfig,
+  task: string,
+  cwd: string,
+  options: WorkflowExecutionOptions,
+  runContext?: WorkflowRunContext,
+): Promise<WorkflowExecutionResult> {
+  return executeWorkflowInternal(workflowConfig, task, cwd, options, runContext);
+}
+
+async function executeWorkflowInternal(
+  workflowConfig: WorkflowConfig,
+  task: string,
+  cwd: string,
+  options: WorkflowExecutionOptions,
+  runContext?: WorkflowRunContext,
 ): Promise<WorkflowExecutionResult> {
   const bootstrap = createWorkflowExecutionBootstrap(workflowConfig, task, cwd, options);
   const workflowExecutionContext = createWorkflowExecutionContext(workflowConfig, options.projectCwd);
@@ -55,6 +79,9 @@ export async function executeWorkflow(
       };
     },
   );
+  const onIterationLimit = runContext?.ignoreIterationLimit === true
+    ? undefined
+    : iterationLimitHandler;
   const onUserInput = bootstrap.interactiveUserInput
     ? createUserInputHandler(bootstrap.out, bootstrap.displayRef)
     : undefined;
@@ -72,8 +99,9 @@ export async function executeWorkflow(
       onUserInput,
       initialSessions: bootstrap.savedSessions,
       onSessionUpdate: bootstrap.sessionUpdateHandler,
-      onIterationLimit: iterationLimitHandler,
+      onIterationLimit,
       onAskUserQuestion: createDenyAskUserQuestionHandler(),
+      ignoreIterationLimit: runContext?.ignoreIterationLimit === true,
       projectCwd: options.projectCwd,
       language: options.language,
       provider: bootstrap.currentProvider,

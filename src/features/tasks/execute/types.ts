@@ -8,7 +8,10 @@ import type { ProviderPermissionProfiles } from '../../../core/models/provider-p
 import type { StepProviderOptions } from '../../../core/models/workflow-types.js';
 import type { WorkflowResumePoint } from '../../../core/models/index.js';
 import type { ProviderType } from '../../../infra/providers/index.js';
-import type { ProviderOptionsOriginResolver, ProviderOptionsSource } from '../../../core/workflow/types.js';
+import type {
+  ProviderOptionsOriginResolver,
+  ProviderOptionsSource,
+} from '../../../core/workflow/provider-options-trace.js';
 
 /** Info captured when iteration limit is hit in non-interactive mode */
 export interface ExceededInfo {
@@ -88,6 +91,17 @@ export interface WorkflowExecutionOptions {
 export interface TaskExecutionOptions {
   provider?: ProviderType;
   model?: string;
+}
+
+export interface RunAllTasksOptions extends TaskExecutionOptions {
+  ignoreExceed?: boolean;
+}
+
+export interface TaskExecutionParallelOptions {
+  abortSignal?: AbortSignal;
+  taskPrefix?: string;
+  taskColorIndex?: number;
+  taskDisplayLabel?: string;
 }
 
 export interface ExecuteTaskOptions {

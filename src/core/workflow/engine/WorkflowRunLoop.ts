@@ -76,7 +76,7 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
     }
 
     const maxSteps = deps.getMaxSteps();
-    if (deps.state.iteration >= maxSteps) {
+    if (deps.options.ignoreIterationLimit !== true && deps.state.iteration >= maxSteps) {
       deps.emit('iteration:limit', deps.state.iteration, maxSteps);
 
       if (deps.options.onIterationLimit) {

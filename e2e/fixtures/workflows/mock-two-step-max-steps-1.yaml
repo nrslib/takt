@@ -1,0 +1,32 @@
+name: e2e-mock-two-step-max-steps-1
+description: Two-step workflow that exceeds max_steps before the final step
+workflow_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+personas:
+  test-coder: |
+    You are the E2E test coder.
+max_steps: 1
+initial_step: step-1
+steps:
+  - name: step-1
+    edit: true
+    persona: test-coder
+    required_permission_mode: edit
+    instruction: |
+      {task}
+    rules:
+      - condition: Done
+        next: step-2
+  - name: step-2
+    edit: true
+    persona: test-coder
+    required_permission_mode: edit
+    instruction: |
+      Continue the task.
+    rules:
+      - condition: Done
+        next: COMPLETE

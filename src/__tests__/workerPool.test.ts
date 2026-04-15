@@ -33,10 +33,14 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   }),
 }));
 
-const mockExecuteAndCompleteTask = vi.fn();
+const mockExecuteRunTaskAndComplete = vi.fn();
 
 vi.mock('../features/tasks/execute/taskExecution.js', () => ({
-  executeAndCompleteTask: (...args: unknown[]) => mockExecuteAndCompleteTask(...args),
+  executeAndCompleteTask: vi.fn(),
+}));
+
+vi.mock('../features/tasks/execute/runTaskExecution.js', () => ({
+  executeRunTaskAndComplete: (...args: unknown[]) => mockExecuteRunTaskAndComplete(...args),
 }));
 
 import { runWithWorkerPool } from '../features/tasks/execute/parallelExecution.js';
@@ -77,7 +81,7 @@ function createMockTaskRunner(taskBatches: TaskInfo[][]) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockExecuteAndCompleteTask.mockResolvedValue(true);
+  mockExecuteRunTaskAndComplete.mockResolvedValue(true);
 });
 
 describe('runWithWorkerPool', () => {
@@ -87,7 +91,7 @@ describe('runWithWorkerPool', () => {
     const runner = createMockTaskRunner([]);
 
     // When
-    const result = await runWithWorkerPool(runner as never, tasks, 2, '/cwd', undefined, TEST_POLL_INTERVAL_MS);
+    const result = await runWithWorkerPool(runner as never, tasks, 2, '/cwd', undefined, undefined, TEST_POLL_INTERVAL_MS);
 
     // Then
     expect(result).toEqual({ success: 2, fail: 0, executedTaskNames: ['a', 'b'] });
@@ -97,14 +101,14 @@ describe('runWithWorkerPool', () => {
     // Given
     const tasks = [createTask('pass'), createTask('fail'), createTask('pass2')];
     let callIdx = 0;
-    mockExecuteAndCompleteTask.mockImplementation(() => {
+    mockExecuteRunTaskAndComplete.mockImplementation(() => {
       callIdx++;
       return Promise.resolve(callIdx !== 2);
     });
     const runner = createMockTaskRunner([]);
 
     // When
-    const result = await runWithWorkerPool(runner as never, tasks, 3, '/cwd', undefined, TEST_POLL_INTERVAL_MS);
+    const result = await runWithWorkerPool(runner as never, tasks, 3, '/cwd', undefined, undefined, TEST_POLL_INTERVAL_MS);
 
     // Then
     expect(result).toEqual({ success: 2, fail: 1, executedTaskNames: ['pass', 'fail', 'pass2'] });
@@ -121,7 +125,7 @@ describe('runWithWorkerPool', () => {
     });
 
     // When
-    await runWithWorkerPool(runner as never, tasks, 2, '/cwd', undefined, TEST_POLL_INTERVAL_MS);
+    await runWithWorkerPool(runner as never, tasks, 2, '/cwd', undefined, undefined, TEST_POLL_INTERVAL_MS);
 
     // Then: Task names appear in prefixed stdout output
     writeSpy.mockRestore();
@@ -138,11 +142,11 @@ describe('runWithWorkerPool', () => {
     const runner = createMockTaskRunner([]);
 
     // When
-    await runWithWorkerPool(runner as never, tasks, 2, '/cwd', undefined, TEST_POLL_INTERVAL_MS);
+    await runWithWorkerPool(runner as never, tasks, 2, '/cwd', undefined, undefined, TEST_POLL_INTERVAL_MS);
 
     // Then
-    expect(mockExecuteAndCompleteTask).toHaveBeenCalledTimes(1);
-    const parallelOpts = mockExecuteAndCompleteTask.mock.calls[0]?.[4];
+    expect(mockExecuteRunTaskAndComplete).toHaveBeenCalledTimes(1);
+    const parallelOpts = mockExecuteRunTaskAndComplete.mock.calls[0]?.[4];
     expect(parallelOpts).toMatchObject({
       abortSignal: expect.any(AbortSignal),
       taskPrefix: 'my-task',
@@ -163,7 +167,7 @@ describe('runWithWorkerPool', () => {
     });
 
     // When
-    await runWithWorkerPool(runner as never, tasks, 2, '/cwd', undefined, TEST_POLL_INTERVAL_MS);
+    await runWithWorkerPool(runner as never, tasks, 2, '/cwd', undefined, undefined, TEST_POLL_INTERVAL_MS);
 
     // Then: Issue label is used instead of truncated task name
     writeSpy.mockRestore();
@@ -171,8 +175,8 @@ describe('runWithWorkerPool', () => {
     expect(allOutput).toContain('[#12345]');
     expect(allOutput).not.toContain('[#123]');
 
-    expect(mockExecuteAndCompleteTask).toHaveBeenCalledTimes(1);
-    const parallelOpts = mockExecuteAndCompleteTask.mock.calls[0]?.[4];
+    expect(mockExecuteRunTaskAndComplete).toHaveBeenCalledTimes(1);
+    const parallelOpts = mockExecuteRunTaskAndComplete.mock.calls[0]?.[4];
     expect(parallelOpts).toEqual({
       abortSignal: expect.any(AbortSignal),
       taskPrefix: `#${issueNumber}`,
@@ -187,11 +191,11 @@ describe('runWithWorkerPool', () => {
     const runner = createMockTaskRunner([]);
 
     // When
-    await runWithWorkerPool(runner as never, tasks, 1, '/cwd', undefined, TEST_POLL_INTERVAL_MS);
+    await runWithWorkerPool(runner as never, tasks, 1, '/cwd', undefined, undefined, TEST_POLL_INTERVAL_MS);
 
     // Then
-    expect(mockExecuteAndCompleteTask).toHaveBeenCalledTimes(1);
-    const parallelOpts = mockExecuteAndCompleteTask.mock.calls[0]?.[4];
+    expect(mockExecuteRunTaskAndComplete).toHaveBeenCalledTimes(1);
+    const parallelOpts = mockExecuteRunTaskAndComplete.mock.calls[0]?.[4];
     expect(parallelOpts).toMatchObject({
       abortSignal: expect.any(AbortSignal),
       taskPrefix: undefined,
@@ -207,11 +211,31 @@ describe('runWithWorkerPool', () => {
     const runner = createMockTaskRunner([[task2]]);
 
     // When
-    await runWithWorkerPool(runner as never, [task1], 2, '/cwd', undefined, TEST_POLL_INTERVAL_MS);
+    await runWithWorkerPool(runner as never, [task1], 2, '/cwd', undefined, undefined, TEST_POLL_INTERVAL_MS);
 
     // Then
-    expect(mockExecuteAndCompleteTask).toHaveBeenCalledTimes(2);
+    expect(mockExecuteRunTaskAndComplete).toHaveBeenCalledTimes(2);
     expect(runner.claimNextTasks).toHaveBeenCalled();
+  });
+
+  it('should route ignoreIterationLimit only through the run-specific execution helper', async () => {
+    const tasks = [createTask('ignore-limit-task')];
+    const runner = createMockTaskRunner([]);
+
+    await runWithWorkerPool(
+      runner as never,
+      tasks,
+      1,
+      '/cwd',
+      undefined,
+      { ignoreIterationLimit: true },
+      TEST_POLL_INTERVAL_MS,
+    );
+
+    expect(mockExecuteRunTaskAndComplete).toHaveBeenCalledTimes(1);
+    expect(mockExecuteRunTaskAndComplete.mock.calls[0]?.[5]).toEqual({
+      ignoreIterationLimit: true,
+    });
   });
 
   it('should respect concurrency limit', async () => {
@@ -221,7 +245,7 @@ describe('runWithWorkerPool', () => {
     let activeCount = 0;
     let maxActive = 0;
 
-    mockExecuteAndCompleteTask.mockImplementation(() => {
+    mockExecuteRunTaskAndComplete.mockImplementation(() => {
       activeCount++;
       maxActive = Math.max(maxActive, activeCount);
       return new Promise((resolve) => {
@@ -235,11 +259,11 @@ describe('runWithWorkerPool', () => {
     const runner = createMockTaskRunner([]);
 
     // When
-    await runWithWorkerPool(runner as never, tasks, 2, '/cwd', undefined, TEST_POLL_INTERVAL_MS);
+    await runWithWorkerPool(runner as never, tasks, 2, '/cwd', undefined, undefined, TEST_POLL_INTERVAL_MS);
 
     // Then: Never exceeded concurrency of 2
     expect(maxActive).toBeLessThanOrEqual(2);
-    expect(mockExecuteAndCompleteTask).toHaveBeenCalledTimes(4);
+    expect(mockExecuteRunTaskAndComplete).toHaveBeenCalledTimes(4);
   });
 
   it('should pass abortSignal to all parallel tasks', async () => {
@@ -248,13 +272,13 @@ describe('runWithWorkerPool', () => {
     const runner = createMockTaskRunner([]);
 
     const receivedSignals: (AbortSignal | undefined)[] = [];
-    mockExecuteAndCompleteTask.mockImplementation((_task, _runner, _cwd, _opts, parallelOpts) => {
+    mockExecuteRunTaskAndComplete.mockImplementation((_task, _runner, _cwd, _opts, parallelOpts) => {
       receivedSignals.push(parallelOpts?.abortSignal);
       return Promise.resolve(true);
     });
 
     // When
-    await runWithWorkerPool(runner as never, tasks, 3, '/cwd', undefined, TEST_POLL_INTERVAL_MS);
+    await runWithWorkerPool(runner as never, tasks, 3, '/cwd', undefined, undefined, TEST_POLL_INTERVAL_MS);
 
     // Then: All tasks received the same AbortSignal
     expect(receivedSignals).toHaveLength(3);
@@ -270,21 +294,21 @@ describe('runWithWorkerPool', () => {
     const runner = createMockTaskRunner([]);
 
     // When
-    const result = await runWithWorkerPool(runner as never, [], 2, '/cwd', undefined, TEST_POLL_INTERVAL_MS);
+    const result = await runWithWorkerPool(runner as never, [], 2, '/cwd', undefined, undefined, TEST_POLL_INTERVAL_MS);
 
     // Then
     expect(result).toEqual({ success: 0, fail: 0, executedTaskNames: [] });
-    expect(mockExecuteAndCompleteTask).not.toHaveBeenCalled();
+    expect(mockExecuteRunTaskAndComplete).not.toHaveBeenCalled();
   });
 
   it('should handle task promise rejection gracefully', async () => {
     // Given: Task that throws
     const tasks = [createTask('throws')];
-    mockExecuteAndCompleteTask.mockRejectedValue(new Error('boom'));
+    mockExecuteRunTaskAndComplete.mockRejectedValue(new Error('boom'));
     const runner = createMockTaskRunner([]);
 
     // When
-    const result = await runWithWorkerPool(runner as never, tasks, 1, '/cwd', undefined, TEST_POLL_INTERVAL_MS);
+    const result = await runWithWorkerPool(runner as never, tasks, 1, '/cwd', undefined, undefined, TEST_POLL_INTERVAL_MS);
 
     // Then: Treated as failure
     expect(result).toEqual({ success: 0, fail: 1, executedTaskNames: ['throws'] });
@@ -297,7 +321,7 @@ describe('runWithWorkerPool', () => {
     const deferred: Array<() => void> = [];
     const startedSignals: AbortSignal[] = [];
 
-    mockExecuteAndCompleteTask.mockImplementation((_task, _runner, _cwd, _opts, parallelOpts) => {
+    mockExecuteRunTaskAndComplete.mockImplementation((_task, _runner, _cwd, _opts, parallelOpts) => {
       const signal = parallelOpts?.abortSignal;
       if (signal) startedSignals.push(signal);
       return new Promise<boolean>((resolve) => {
@@ -310,7 +334,7 @@ describe('runWithWorkerPool', () => {
     });
 
     const resultPromise = runWithWorkerPool(
-      runner as never, tasks, 2, '/cwd', undefined, TEST_POLL_INTERVAL_MS,
+      runner as never, tasks, 2, '/cwd', undefined, undefined, TEST_POLL_INTERVAL_MS,
     );
 
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -343,7 +367,7 @@ describe('runWithWorkerPool', () => {
 
       const executionOrder: string[] = [];
 
-      mockExecuteAndCompleteTask.mockImplementation((task: TaskInfo) => {
+      mockExecuteRunTaskAndComplete.mockImplementation((task: TaskInfo) => {
         executionOrder.push(`start:${task.name}`);
         return new Promise((resolve) => {
           setTimeout(() => {
@@ -368,7 +392,7 @@ describe('runWithWorkerPool', () => {
 
       // When: pollIntervalMs=30 so polling fires before task1 completes (80ms)
       const result = await runWithWorkerPool(
-        runner as never, [task1], 2, '/cwd', undefined, 30,
+        runner as never, [task1], 2, '/cwd', undefined, undefined, 30,
       );
 
       // Then: Both tasks were executed
@@ -387,7 +411,7 @@ describe('runWithWorkerPool', () => {
       const task2 = createTask('seq-2');
 
       const executionOrder: string[] = [];
-      mockExecuteAndCompleteTask.mockImplementation((task: TaskInfo) => {
+      mockExecuteRunTaskAndComplete.mockImplementation((task: TaskInfo) => {
         executionOrder.push(`start:${task.name}`);
         return new Promise((resolve) => {
           setTimeout(() => {
@@ -401,7 +425,7 @@ describe('runWithWorkerPool', () => {
 
       // When
       const result = await runWithWorkerPool(
-        runner as never, [task1], 1, '/cwd', undefined, TEST_POLL_INTERVAL_MS,
+        runner as never, [task1], 1, '/cwd', undefined, undefined, TEST_POLL_INTERVAL_MS,
       );
 
       // Then: Tasks executed sequentially — task2 starts after task1 ends
@@ -415,7 +439,7 @@ describe('runWithWorkerPool', () => {
       // Given: A task that completes in 200ms, poll interval is 5000ms
       const task1 = createTask('fast-task');
 
-      mockExecuteAndCompleteTask.mockImplementation(() => {
+      mockExecuteRunTaskAndComplete.mockImplementation(() => {
         return new Promise((resolve) => {
           setTimeout(() => resolve(true), 200);
         });
@@ -425,7 +449,7 @@ describe('runWithWorkerPool', () => {
 
       // When: Task completes before poll timer fires; cancel() cleans up timer
       const result = await runWithWorkerPool(
-        runner as never, [task1], 1, '/cwd', undefined, 5000,
+        runner as never, [task1], 1, '/cwd', undefined, undefined, 5000,
       );
 
       // Then: Result is returned without hanging (timer was cleaned up by cancel())

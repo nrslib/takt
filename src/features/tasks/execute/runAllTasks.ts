@@ -11,14 +11,23 @@ import {
   buildSlackRunSummary,
 } from '../../../shared/utils/index.js';
 import { getLabel } from '../../../shared/i18n/index.js';
-import type { TaskExecutionOptions } from './types.js';
+import type { RunAllTasksOptions, TaskExecutionOptions } from './types.js';
 import { runWithWorkerPool } from './parallelExecution.js';
 import { generateRunId, toSlackTaskDetail } from './slackSummaryAdapter.js';
 
 export async function runAllTasks(
   cwd: string,
-  options?: TaskExecutionOptions,
+  options?: RunAllTasksOptions,
 ): Promise<void> {
+  const agentOverrides: TaskExecutionOptions | undefined = options
+    ? {
+        ...(options.provider !== undefined ? { provider: options.provider } : {}),
+        ...(options.model !== undefined ? { model: options.model } : {}),
+      }
+    : undefined;
+  const runOptions = options?.ignoreExceed === true
+    ? { ignoreIterationLimit: true }
+    : undefined;
   const taskRunner = new TaskRunner(cwd, { onWarning: warn });
   const globalConfig = resolveWorkflowConfigValues(
     cwd,
@@ -77,7 +86,8 @@ export async function runAllTasks(
       initialTasks,
       concurrency,
       cwd,
-      options,
+      agentOverrides,
+      runOptions,
       globalConfig.taskPollIntervalMs,
     );
 

@@ -167,6 +167,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 vi.mock('../features/tasks/execute/workflowExecution.js', () => ({
   executeWorkflow: vi.fn(() => Promise.resolve({ success: true })),
+  executeWorkflowForRun: vi.fn(() => Promise.resolve({ success: true })),
 }));
 
 vi.mock('../shared/context.js', () => ({
@@ -197,7 +198,7 @@ vi.mock('../shared/i18n/index.js', () => ({
 
 import { info, header, status, success, error as errorFn } from '../shared/ui/index.js';
 import { runAllTasks } from '../features/tasks/index.js';
-import { executeWorkflow } from '../features/tasks/execute/workflowExecution.js';
+import { executeWorkflow, executeWorkflowForRun } from '../features/tasks/execute/workflowExecution.js';
 import { loadWorkflowByIdentifier } from '../infra/config/index.js';
 
 const mockInfo = vi.mocked(info);
@@ -206,6 +207,7 @@ const mockStatus = vi.mocked(status);
 const mockSuccess = vi.mocked(success);
 const mockError = vi.mocked(errorFn);
 const mockExecuteWorkflow = vi.mocked(executeWorkflow);
+const mockExecuteWorkflowForRun = vi.mocked(executeWorkflowForRun);
 const mockLoadWorkflowByIdentifier = vi.mocked(loadWorkflowByIdentifier);
 
 function createTask(name: string): TaskInfo {
@@ -559,6 +561,26 @@ describe('runAllTasks concurrency', () => {
       expect(workflowOptions).toHaveProperty('abortSignal');
       expect(workflowOptions?.abortSignal).toBeInstanceOf(AbortSignal);
       expect(workflowOptions).toHaveProperty('taskPrefix', 'parallel-task');
+    });
+
+    it('should pass ignoreIterationLimit to executeWorkflow when runAllTasks receives ignoreExceed', async () => {
+      const task1 = createTask('ignore-exceed-task');
+
+      mockExecuteWorkflowForRun.mockResolvedValue({ success: true });
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1])
+        .mockReturnValueOnce([]);
+
+      await runAllTasks('/project', {
+        ignoreExceed: true,
+      } as never);
+
+      expect(mockExecuteWorkflowForRun).toHaveBeenCalledTimes(1);
+      expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+      const runContext = mockExecuteWorkflowForRun.mock.calls[0]?.[4] as {
+        ignoreIterationLimit?: boolean;
+      };
+      expect(runContext?.ignoreIterationLimit).toBe(true);
     });
 
     it('should pass abortSignal but not taskPrefix in sequential mode', async () => {

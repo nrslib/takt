@@ -2163,6 +2163,96 @@ steps:
     ]);
   });
 
+  it('ignoreIterationLimit は workflow_call 配下の child workflow にも伝搬して完走できる', async () => {
+    writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
+subworkflow:
+  callable: true
+initial_step: review
+max_steps: 5
+steps:
+  - name: review
+    persona: reviewer
+    instruction: "Review child workflow"
+    rules:
+      - condition: done
+        next: fix
+  - name: fix
+    persona: fixer
+    instruction: "Fix child workflow"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'delegate',
+      max_steps: 2,
+      steps: [
+        {
+          name: 'delegate',
+          kind: 'workflow_call',
+          call: 'takt/coding',
+          rules: [
+            {
+              condition: 'COMPLETE',
+              next: 'final_review',
+            },
+            {
+              condition: 'ABORT',
+              next: 'ABORT',
+            },
+          ],
+        },
+        {
+          name: 'final_review',
+          persona: 'supervisor',
+          instruction: 'Review child output:\n{previous_response}',
+          rules: [
+            {
+              condition: 'approved',
+              next: 'COMPLETE',
+            },
+          ],
+        },
+      ],
+    });
+
+    mockPersonaResponses({
+      reviewer: 'Review done',
+      fixer: 'Fix done',
+      supervisor: 'approved',
+    });
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+    ]);
+
+    const onIterationLimit = vi.fn().mockResolvedValue(null);
+    const startedIterations: Array<{ step: string; iteration: number }> = [];
+
+    engine = new WorkflowEngine(config, tmpDir, 'Ignore nested iteration limit', createWorkflowCallOptions(tmpDir, {
+      ignoreIterationLimit: true,
+      onIterationLimit,
+    }));
+    engine.on('step:start', (step, iteration) => {
+      startedIterations.push({ step: step.name, iteration });
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(state.iteration).toBe(4);
+    expect(onIterationLimit).not.toHaveBeenCalled();
+    expect(startedIterations).toEqual([
+      { step: 'delegate', iteration: 1 },
+      { step: 'review', iteration: 2 },
+      { step: 'fix', iteration: 3 },
+      { step: 'final_review', iteration: 4 },
+    ]);
+  });
+
   it('子 workflow で次 step 決定直後に max_steps へ達しても resume_point は最新 child step を指す', async () => {
     writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
 subworkflow:

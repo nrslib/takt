@@ -6,17 +6,19 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { TaskInfo } from '../infra/task/index.js';
 import { attachWorkflowSourcePath, attachWorkflowTrustInfo } from '../infra/config/loaders/workflowSourceMetadata.js';
 
-const { mockResolveTaskExecution, mockResolveTaskIssue, mockExecuteWorkflow, mockLoadWorkflowByIdentifier, mockIsWorkflowPath, mockResolveWorkflowConfigValues, mockResolveProviderOptionsWithTrace, mockBuildBooleanTaskResult, mockBuildTaskResult, mockPersistTaskResult, mockPersistPrFailedTaskResult, mockPersistTaskError, mockPostExecutionFlow, mockUpdateRunningTaskExecution } =
+const { mockResolveTaskExecution, mockResolveTaskIssue, mockExecuteWorkflow, mockExecuteWorkflowForRun, mockLoadWorkflowByIdentifier, mockIsWorkflowPath, mockResolveWorkflowConfigValues, mockResolveProviderOptionsWithTrace, mockBuildBooleanTaskResult, mockBuildTaskResult, mockPersistExceededTaskResult, mockPersistTaskResult, mockPersistPrFailedTaskResult, mockPersistTaskError, mockPostExecutionFlow, mockUpdateRunningTaskExecution } =
   vi.hoisted(() => ({
     mockResolveTaskExecution: vi.fn(),
     mockResolveTaskIssue: vi.fn(),
     mockExecuteWorkflow: vi.fn(),
+    mockExecuteWorkflowForRun: vi.fn(),
     mockLoadWorkflowByIdentifier: vi.fn(),
     mockIsWorkflowPath: vi.fn(() => false),
     mockResolveWorkflowConfigValues: vi.fn(),
     mockResolveProviderOptionsWithTrace: vi.fn(),
     mockBuildBooleanTaskResult: vi.fn(),
     mockBuildTaskResult: vi.fn(),
+    mockPersistExceededTaskResult: vi.fn(),
     mockPersistTaskResult: vi.fn(),
     mockPersistPrFailedTaskResult: vi.fn(),
     mockPersistTaskError: vi.fn(),
@@ -31,11 +33,13 @@ vi.mock('../features/tasks/execute/resolveTask.js', () => ({
 
 vi.mock('../features/tasks/execute/workflowExecution.js', () => ({
   executeWorkflow: (...args: unknown[]) => mockExecuteWorkflow(...args),
+  executeWorkflowForRun: (...args: unknown[]) => mockExecuteWorkflowForRun(...args),
 }));
 
 vi.mock('../features/tasks/execute/taskResultHandler.js', () => ({
   buildBooleanTaskResult: (...args: unknown[]) => mockBuildBooleanTaskResult(...args),
   buildTaskResult: (...args: unknown[]) => mockBuildTaskResult(...args),
+  persistExceededTaskResult: (...args: unknown[]) => mockPersistExceededTaskResult(...args),
   persistTaskResult: (...args: unknown[]) => mockPersistTaskResult(...args),
   persistPrFailedTaskResult: (...args: unknown[]) => mockPersistPrFailedTaskResult(...args),
   persistTaskError: (...args: unknown[]) => mockPersistTaskError(...args),
@@ -80,6 +84,7 @@ vi.mock('../shared/i18n/index.js', () => ({
 }));
 
 import { executeAndCompleteTask, executeTask } from '../features/tasks/execute/taskExecution.js';
+import { executeRunTaskAndComplete } from '../features/tasks/execute/runTaskExecution.js';
 import { error, info } from '../shared/ui/index.js';
 
 const createTask = (name: string): TaskInfo => ({
@@ -103,6 +108,14 @@ const executeAndCompleteTaskWithoutWorkflow = executeAndCompleteTask as (
   projectCwd: string,
   executeOptions?: unknown,
   parallelOptions?: unknown,
+) => Promise<boolean>;
+const executeRunTaskAndCompleteWithRunOptions = executeRunTaskAndComplete as unknown as (
+  task: TaskInfo,
+  taskRunner: unknown,
+  projectCwd: string,
+  executeOptions?: unknown,
+  parallelOptions?: unknown,
+  runOptions?: unknown,
 ) => Promise<boolean>;
 const mockError = vi.mocked(error);
 const mockInfo = vi.mocked(info);
@@ -153,6 +166,7 @@ describe('executeAndCompleteTask', () => {
       issueNumber: undefined,
     });
     mockExecuteWorkflow.mockResolvedValue({ success: true });
+    mockExecuteWorkflowForRun.mockResolvedValue({ success: true });
     mockResolveTaskIssue.mockReturnValue(undefined);
     mockUpdateRunningTaskExecution.mockImplementation((taskName: string, execution: { runSlug: string; worktreePath?: string; branch?: string }) => ({
       ...createTask(taskName),
@@ -204,6 +218,30 @@ describe('executeAndCompleteTask', () => {
     expect(mockUpdateRunningTaskExecution).toHaveBeenCalledWith('task-with-issue', {
       runSlug: '20260216-task',
     });
+  });
+
+  it('should pass ignoreIterationLimit from run execution context into executeWorkflow', async () => {
+    const task = createTask('task-ignore-exceed');
+
+    await executeRunTaskAndCompleteWithRunOptions(
+      task,
+      createTaskRunnerMock() as never,
+      '/project',
+      undefined,
+      undefined,
+      { ignoreIterationLimit: true },
+    );
+
+    expect(mockExecuteWorkflowForRun).toHaveBeenCalledTimes(1);
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    const workflowExecutionOptions = mockExecuteWorkflowForRun.mock.calls[0]?.[3] as {
+      projectCwd?: string;
+    };
+    const runContext = mockExecuteWorkflowForRun.mock.calls[0]?.[4] as {
+      ignoreIterationLimit?: boolean;
+    };
+    expect(workflowExecutionOptions?.projectCwd).toBe('/project');
+    expect(runContext?.ignoreIterationLimit).toBe(true);
   });
 
   it('should not pass config provider/model to executeWorkflow when agent overrides are absent', async () => {

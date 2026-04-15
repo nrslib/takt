@@ -145,7 +145,12 @@ Execute all pending tasks from `.takt/tasks.yaml`.
 ```bash
 # Execute all pending tasks in .takt/tasks.yaml
 takt run
+
+# Ignore workflow max_steps and continue until another stop condition occurs
+takt run --ignore-exceed
 ```
+
+Without `--ignore-exceed`, a task that reaches workflow `max_steps` stops with `exceeded` status and persists retry metadata in `.takt/tasks.yaml`. With `--ignore-exceed`, `takt run` ignores only that iteration limit, continues execution, and does not write exceeded retry metadata.
 
 ### takt watch
 

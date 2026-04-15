@@ -16,7 +16,7 @@ import { info, blankLine } from '../../../shared/ui/index.js';
 import { TaskPrefixWriter } from '../../../shared/ui/TaskPrefixWriter.js';
 import { EXIT_SIGINT } from '../../../shared/exitCodes.js';
 import { createLogger } from '../../../shared/utils/index.js';
-import { executeAndCompleteTask } from './taskExecution.js';
+import { executeRunTaskAndComplete } from './runTaskExecution.js';
 import { ShutdownManager } from './shutdownManager.js';
 import { isInputWaiting } from './inputWait.js';
 import type { TaskExecutionOptions } from './types.js';
@@ -27,6 +27,10 @@ export interface WorkerPoolResult {
   success: number;
   fail: number;
   executedTaskNames: string[];
+}
+
+interface RunWorkerOptions {
+  ignoreIterationLimit?: boolean;
 }
 
 type RaceResult =
@@ -94,7 +98,8 @@ export async function runWithWorkerPool(
   initialTasks: TaskInfo[],
   concurrency: number,
   cwd: string,
-  options: TaskExecutionOptions | undefined,
+  taskExecutionOptions: TaskExecutionOptions | undefined,
+  runOptions: RunWorkerOptions | undefined,
   pollIntervalMs: number,
 ): Promise<WorkerPoolResult> {
   const abortController = new AbortController();
@@ -120,7 +125,7 @@ export async function runWithWorkerPool(
   try {
     while (queue.length > 0 || active.size > 0) {
       if (!abortController.signal.aborted) {
-        fillSlots(queue, active, concurrency, taskRunner, cwd, options, abortController, colorCounter);
+        fillSlots(queue, active, concurrency, taskRunner, cwd, taskExecutionOptions, runOptions, abortController, colorCounter);
         if ((selfSigintOnce || selfSigintTwice) && !selfSigintInjected && active.size > 0) {
           selfSigintInjected = true;
           process.emit('SIGINT');
@@ -199,7 +204,8 @@ function fillSlots(
   concurrency: number,
   taskRunner: TaskRunner,
   cwd: string,
-  options: TaskExecutionOptions | undefined,
+  taskExecutionOptions: TaskExecutionOptions | undefined,
+  runOptions: RunWorkerOptions | undefined,
   abortController: AbortController,
   colorCounter: { value: number },
 ): void {
@@ -224,12 +230,12 @@ function fillSlots(
       info(`=== Task: ${task.name} ===`);
     }
 
-    const promise = executeAndCompleteTask(task, taskRunner, cwd, options, {
+    const promise = executeRunTaskAndComplete(task, taskRunner, cwd, taskExecutionOptions, {
       abortSignal: abortController.signal,
       taskPrefix: isParallel ? taskPrefix : undefined,
       taskColorIndex: isParallel ? colorIndex : undefined,
       taskDisplayLabel: isParallel ? taskDisplayLabel : undefined,
-    });
+    }, runOptions);
     active.set(promise, task);
   }
 }

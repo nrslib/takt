@@ -21,7 +21,7 @@ import type {
   ProviderOptionsOriginResolver,
   ProviderOptionsSource,
   ProviderOptionsTraceOrigin,
-} from '../../core/workflow/types.js';
+} from '../../core/workflow/provider-options-trace.js';
 import type { StepProviderOptions } from '../../core/models/workflow-types.js';
 
 export type { ConfigParameterKey } from './resolvedConfig.js';

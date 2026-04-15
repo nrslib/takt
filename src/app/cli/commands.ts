@@ -33,8 +33,13 @@ import { repertoireListCommand } from '../../commands/repertoire/list.js';
 program
   .command('run')
   .description('Run all pending tasks from .takt/tasks.yaml')
-  .action(async () => {
-    await runAllTasks(resolvedCwd, resolveAgentOverrides(program));
+  .option('--ignore-exceed', 'Ignore workflow max_steps and continue running tasks')
+  .action(async (_opts, command) => {
+    const opts = command.optsWithGlobals();
+    await runAllTasks(resolvedCwd, {
+      ...resolveAgentOverrides(program),
+      ignoreExceed: opts.ignoreExceed === true,
+    });
   });
 
 program
