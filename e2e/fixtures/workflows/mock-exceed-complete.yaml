@@ -1,0 +1,32 @@
+name: e2e-mock-exceed-complete
+description: Two-step workflow with max_steps=1 (exceeds without --ignore-exceed, completes with it)
+workflow_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+personas:
+  test-coder: |
+    You are the E2E test coder.
+max_steps: 1
+initial_step: step-a
+steps:
+  - name: step-a
+    edit: true
+    persona: test-coder
+    required_permission_mode: edit
+    instruction: |
+      {task}
+    rules:
+      - condition: Done
+        next: step-b
+  - name: step-b
+    edit: true
+    persona: test-coder
+    required_permission_mode: edit
+    instruction: |
+      Continue the task.
+    rules:
+      - condition: Done
+        next: COMPLETE

@@ -611,6 +611,39 @@ describe('executeAndCompleteTask', () => {
     expect(mockBuildTaskResult).not.toHaveBeenCalled();
   });
 
+  it('should pass ignoreExceed to executeWorkflow when provided in task execution options', async () => {
+    const task = createTask('task-with-ignore-exceed');
+
+    await executeAndCompleteTaskWithoutWorkflow(
+      task,
+      createTaskRunnerMock() as never,
+      '/project',
+      { ignoreExceed: true },
+    );
+
+    expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+    const workflowExecutionOptions = mockExecuteWorkflow.mock.calls[0]?.[3] as {
+      ignoreExceed?: boolean;
+    };
+    expect(workflowExecutionOptions?.ignoreExceed).toBe(true);
+  });
+
+  it('should not include ignoreExceed in executeWorkflow options when not provided', async () => {
+    const task = createTask('task-without-ignore-exceed');
+
+    await executeAndCompleteTaskWithoutWorkflow(
+      task,
+      createTaskRunnerMock() as never,
+      '/project',
+    );
+
+    expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+    const workflowExecutionOptions = mockExecuteWorkflow.mock.calls[0]?.[3] as {
+      ignoreExceed?: boolean;
+    };
+    expect(workflowExecutionOptions?.ignoreExceed).toBeUndefined();
+  });
+
   it('should mark task as failed when local push fails for a worktree task without PR creation', async () => {
     const task = createTask('task-with-local-push-failure');
     mockResolveTaskExecution.mockResolvedValue({

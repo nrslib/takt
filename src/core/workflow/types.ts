@@ -281,6 +281,8 @@ export interface WorkflowEngineOptions {
   initialIteration?: number;
   /** Override workflow maxSteps for the current engine instance. */
   maxStepsOverride?: number;
+  /** When true, skip the iteration-limit check entirely (max_steps is ignored). */
+  ignoreIterationLimit?: boolean;
   /** Current task metadata for system-step context resolution */
   currentTask?: {
     issueNumber?: number;

@@ -73,6 +73,62 @@ describe('E2E: Task status persistence in tasks.yaml (mock)', () => {
     expect(tasks.tasks[0]?.status).toBe('completed');
   }, 240_000);
 
+  it('should complete task when --ignore-exceed is used with max_steps exceeded workflow', () => {
+    // Given: a workflow with max_steps=1 but requires 2 steps to complete
+    const workflowPath = resolve(__dirname, '../fixtures/workflows/mock-exceed-complete.yaml');
+    const scenarioPath = resolve(__dirname, '../fixtures/scenarios/exceed-complete.json');
+
+    writeSinglePendingTask(repo.path, workflowPath);
+
+    // When: running with --ignore-exceed flag
+    const result = runTakt({
+      args: ['run', '--ignore-exceed', '--provider', 'mock'],
+      cwd: repo.path,
+      env: {
+        ...isolatedEnv.env,
+        TAKT_MOCK_SCENARIO: scenarioPath,
+      },
+      timeout: 240_000,
+    });
+
+    // Then: task completes successfully (max_steps ignored)
+    expect(result.exitCode).toBe(0);
+
+    const tasksContent = readFileSync(join(repo.path, '.takt', 'tasks.yaml'), 'utf-8');
+    const tasks = parseYaml(tasksContent) as { tasks: Array<Record<string, unknown>> };
+    expect(Array.isArray(tasks.tasks)).toBe(true);
+    expect(tasks.tasks.length).toBe(1);
+    expect(tasks.tasks[0]?.status).toBe('completed');
+  }, 240_000);
+
+  it('should mark task as exceeded when max_steps is reached without --ignore-exceed', () => {
+    // Given: a workflow with max_steps=1 but requires 2 steps (will exceed)
+    const workflowPath = resolve(__dirname, '../fixtures/workflows/mock-exceed-complete.yaml');
+    const scenarioPath = resolve(__dirname, '../fixtures/scenarios/exceed-complete.json');
+
+    writeSinglePendingTask(repo.path, workflowPath);
+
+    // When: running without --ignore-exceed flag
+    const result = runTakt({
+      args: ['run', '--provider', 'mock'],
+      cwd: repo.path,
+      env: {
+        ...isolatedEnv.env,
+        TAKT_MOCK_SCENARIO: scenarioPath,
+      },
+      timeout: 240_000,
+    });
+
+    // Then: task is marked as exceeded (iteration limit hit)
+    expect(result.exitCode).toBe(0);
+
+    const tasksContent = readFileSync(join(repo.path, '.takt', 'tasks.yaml'), 'utf-8');
+    const tasks = parseYaml(tasksContent) as { tasks: Array<Record<string, unknown>> };
+    expect(Array.isArray(tasks.tasks)).toBe(true);
+    expect(tasks.tasks.length).toBe(1);
+    expect(tasks.tasks[0]?.status).toBe('exceeded');
+  }, 240_000);
+
   it('should persist failed status and failure details on failure', () => {
     const workflowPath = resolve(__dirname, '../fixtures/workflows/mock-no-match.yaml');
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/no-match.json');

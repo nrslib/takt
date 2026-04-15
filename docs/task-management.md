@@ -111,6 +111,20 @@ The `run` command claims pending tasks and executes them through the configured 
 4. Post-execution flow (PR creation if `auto_pr` is set)
 5. Status update in `tasks.yaml` (`completed` or `failed`)
 
+### Ignoring `max_steps` Limit (`--ignore-exceed`)
+
+By default, when a workflow reaches its `max_steps` limit during `takt run`, the task is marked as `exceeded` and execution stops. Use `--ignore-exceed` to override this behavior and continue execution until the workflow completes naturally.
+
+```bash
+takt run --ignore-exceed
+```
+
+When `--ignore-exceed` is specified:
+
+- The `max_steps` check is completely skipped, allowing the workflow to run to completion regardless of the step count.
+- Other stop conditions are **not affected**: `loop_detected`, `blocked`, `step_error`, `runtime_error`, and `SIGINT` still halt execution as normal.
+- No `exceeded` metadata is recorded for the task.
+
 ### Parallel Execution (Concurrency)
 
 By default, tasks run sequentially (`concurrency: 1`). Configure parallel execution in `~/.takt/config.yaml`:

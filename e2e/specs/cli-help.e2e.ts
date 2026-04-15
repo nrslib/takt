@@ -68,6 +68,21 @@ describe('E2E: Help command (takt --help)', () => {
     expect(result.stdout).not.toMatch(/defaults to current/i);
   });
 
+  it('should display --ignore-exceed option in takt run --help', () => {
+    // Given: a local repo with isolated env
+
+    // When: running takt run --help
+    const result = runTakt({
+      args: ['run', '--help'],
+      cwd: repo.path,
+      env: isolatedEnv.env,
+    });
+
+    // Then: output contains --ignore-exceed option
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toMatch(/--ignore-exceed/);
+  });
+
   it('should fail with unknown command for removed switch subcommand', () => {
     // Given: a local repo with isolated env
 

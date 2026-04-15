@@ -83,11 +83,15 @@ export interface WorkflowExecutionOptions {
   taskColorIndex?: number;
   /** Current task issue number for system-step context resolution */
   currentTaskIssueNumber?: number;
+  /** When true, skip the iteration-limit check (max_steps is ignored) */
+  ignoreExceed?: boolean;
 }
 
 export interface TaskExecutionOptions {
   provider?: ProviderType;
   model?: string;
+  /** When true, skip the iteration-limit check (max_steps is ignored) */
+  ignoreExceed?: boolean;
 }
 
 export interface ExecuteTaskOptions {
@@ -127,6 +131,8 @@ export interface ExecuteTaskOptions {
   taskColorIndex?: number;
   /** Current task issue number for system-step context resolution */
   currentTaskIssueNumber?: number;
+  /** When true, skip the iteration-limit check (max_steps is ignored) */
+  ignoreExceed?: boolean;
 }
 
 export interface PipelineExecutionOptions {

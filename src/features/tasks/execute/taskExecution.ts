@@ -46,6 +46,7 @@ async function executeTaskWithResult(options: ExecuteTaskOptions): Promise<Workf
     maxStepsOverride,
     initialIterationOverride,
     currentTaskIssueNumber,
+    ignoreExceed,
   } = options;
   const workflowConfig = loadWorkflowByIdentifier(workflowIdentifier, projectCwd, { lookupCwd: cwd });
   const safeWorkflowIdentifier = sanitizeTerminalText(workflowIdentifier);
@@ -94,6 +95,7 @@ async function executeTaskWithResult(options: ExecuteTaskOptions): Promise<Workf
     maxStepsOverride,
     initialIterationOverride,
     currentTaskIssueNumber,
+    ignoreExceed,
   });
 }
 
@@ -184,6 +186,7 @@ export async function executeAndCompleteTask(
       maxStepsOverride,
       initialIterationOverride,
       currentTaskIssueNumber: issueNumber,
+      ignoreExceed: taskExecutionOptions?.ignoreExceed,
     });
 
     if (taskRunResult.exceeded && taskRunResult.exceededInfo) {

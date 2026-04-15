@@ -111,6 +111,20 @@ takt run
 4. 実行後フロー（`auto_pr` 設定時は PR 作成）
 5. `tasks.yaml` のステータス更新（`completed` または `failed`）
 
+### `max_steps` 制限の無視（`--ignore-exceed`）
+
+デフォルトでは、`takt run` の実行中に workflow が `max_steps` 制限に到達すると、タスクは `exceeded` としてマークされ実行が停止します。`--ignore-exceed` を指定すると、この挙動を上書きし、workflow が自然に完了するまで実行を継続します。
+
+```bash
+takt run --ignore-exceed
+```
+
+`--ignore-exceed` を指定した場合の動作は次の通りです。
+
+- `max_steps` チェックが完全にスキップされ、ステップ数に関係なく workflow が完了するまで実行を継続する。
+- 他の停止条件には**影響しない**。`loop_detected`、`blocked`、`step_error`、`runtime_error`、`SIGINT` は通常通り実行を停止する。
+- タスクに `exceeded` メタデータは記録されない。
+
 ### 並列実行（Concurrency）
 
 デフォルトではタスクは逐次実行されます（`concurrency: 1`）。`~/.takt/config.yaml` で並列実行を設定できます。

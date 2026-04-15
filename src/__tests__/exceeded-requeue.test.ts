@@ -451,3 +451,237 @@ describe('WorkflowEngine: initialIteration option', () => {
     expect(limitEvents[0]!.maxSteps).toBe(31);
   });
 });
+
+describe('WorkflowEngine: ignoreIterationLimit option', () => {
+  let tmpDir: string;
+  let engine: WorkflowEngine | null = null;
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    applyDefaultMocks();
+    tmpDir = createTestTmpDir();
+  });
+
+  afterEach(() => {
+    if (engine) {
+      cleanupWorkflowEngine(engine);
+      engine = null;
+    }
+    if (existsSync(tmpDir)) {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should continue past maxSteps and complete when ignoreIterationLimit is true', async () => {
+    // Given: a workflow with maxSteps=1 but 2 steps needed, ignoreIterationLimit=true
+    const config: WorkflowConfig = {
+      name: 'test',
+      maxSteps: 1,
+      initialStep: 'plan',
+      steps: [
+        makeStep('plan', {
+          rules: [makeRule('done', 'implement')],
+        }),
+        makeStep('implement', {
+          rules: [makeRule('done', 'COMPLETE')],
+        }),
+      ],
+    };
+
+    mockRunAgentSequence([
+      makeResponse({ persona: 'plan', content: 'Plan complete' }),
+      makeResponse({ persona: 'implement', content: 'Impl done' }),
+    ]);
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' }, // plan → implement
+      { index: 0, method: 'phase1_tag' }, // implement → COMPLETE
+    ]);
+
+    engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      ignoreIterationLimit: true,
+    });
+
+    // When: engine runs (would normally abort at iteration=1 >= maxSteps=1)
+    const state = await engine.run();
+
+    // Then: engine completes because iteration limit is ignored
+    expect(state.status).toBe('completed');
+    expect(state.iteration).toBe(2);
+  });
+
+  it('should not emit iteration:limit event when ignoreIterationLimit is true', async () => {
+    // Given: workflow with maxSteps=1, ignoreIterationLimit=true
+    const config: WorkflowConfig = {
+      name: 'test',
+      maxSteps: 1,
+      initialStep: 'plan',
+      steps: [
+        makeStep('plan', {
+          rules: [makeRule('done', 'implement')],
+        }),
+        makeStep('implement', {
+          rules: [makeRule('done', 'COMPLETE')],
+        }),
+      ],
+    };
+
+    mockRunAgentSequence([
+      makeResponse({ persona: 'plan', content: 'Plan complete' }),
+      makeResponse({ persona: 'implement', content: 'Impl done' }),
+    ]);
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+    ]);
+
+    const limitEvents: unknown[] = [];
+
+    engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      ignoreIterationLimit: true,
+    });
+    engine.on('iteration:limit', (...args: unknown[]) => {
+      limitEvents.push(args);
+    });
+
+    // When: engine runs
+    await engine.run();
+
+    // Then: no iteration:limit event emitted
+    expect(limitEvents).toHaveLength(0);
+  });
+
+  it('should not call onIterationLimit callback when ignoreIterationLimit is true', async () => {
+    // Given: workflow with maxSteps=1, ignoreIterationLimit=true, onIterationLimit callback
+    const config: WorkflowConfig = {
+      name: 'test',
+      maxSteps: 1,
+      initialStep: 'plan',
+      steps: [
+        makeStep('plan', {
+          rules: [makeRule('done', 'implement')],
+        }),
+        makeStep('implement', {
+          rules: [makeRule('done', 'COMPLETE')],
+        }),
+      ],
+    };
+
+    const onIterationLimit = vi.fn().mockResolvedValue(null);
+
+    mockRunAgentSequence([
+      makeResponse({ persona: 'plan', content: 'Plan complete' }),
+      makeResponse({ persona: 'implement', content: 'Impl done' }),
+    ]);
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+    ]);
+
+    engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      ignoreIterationLimit: true,
+      onIterationLimit,
+    });
+
+    // When: engine runs
+    const state = await engine.run();
+
+    // Then: onIterationLimit not called, engine completed
+    expect(onIterationLimit).not.toHaveBeenCalled();
+    expect(state.status).toBe('completed');
+  });
+
+  it('should continue when ignoreIterationLimit is true even with initialIteration >= maxSteps', async () => {
+    // Given: initialIteration=5, maxSteps=5, ignoreIterationLimit=true
+    const config: WorkflowConfig = {
+      name: 'test',
+      maxSteps: 5,
+      initialStep: 'plan',
+      steps: [
+        makeStep('plan', {
+          rules: [makeRule('done', 'COMPLETE')],
+        }),
+      ],
+    };
+
+    mockRunAgentSequence([
+      makeResponse({ persona: 'plan', content: 'Plan complete' }),
+    ]);
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' },
+    ]);
+
+    engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      initialIteration: 5,
+      ignoreIterationLimit: true,
+    });
+
+    // When: engine runs (initialIteration=5 >= maxSteps=5, would normally abort immediately)
+    const state = await engine.run();
+
+    // Then: completes because iteration limit is ignored
+    expect(state.status).toBe('completed');
+    expect(state.iteration).toBe(6);
+  });
+
+  it('should still abort on blocked status when ignoreIterationLimit is true', async () => {
+    // Given: workflow where agent returns blocked, ignoreIterationLimit=true
+    const config: WorkflowConfig = {
+      name: 'test',
+      maxSteps: 1,
+      initialStep: 'plan',
+      steps: [
+        makeStep('plan', {
+          rules: [makeRule('done', 'COMPLETE')],
+        }),
+      ],
+    };
+
+    mockRunAgentSequence([
+      makeResponse({ persona: 'plan', status: 'blocked', content: 'Permission denied' }),
+    ]);
+
+    engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      ignoreIterationLimit: true,
+    });
+
+    // When: engine runs
+    const state = await engine.run();
+
+    // Then: engine aborts due to blocked (iteration limit does not suppress other stop conditions)
+    expect(state.status).toBe('aborted');
+  });
+
+  it('should still abort on error status when ignoreIterationLimit is true', async () => {
+    // Given: workflow where agent returns error, ignoreIterationLimit=true
+    const config: WorkflowConfig = {
+      name: 'test',
+      maxSteps: 1,
+      initialStep: 'plan',
+      steps: [
+        makeStep('plan', {
+          rules: [makeRule('done', 'COMPLETE')],
+        }),
+      ],
+    };
+
+    mockRunAgentSequence([
+      makeResponse({ persona: 'plan', status: 'error', content: 'Agent error' }),
+    ]);
+
+    engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      ignoreIterationLimit: true,
+    });
+
+    // When: engine runs
+    const state = await engine.run();
+
+    // Then: engine aborts due to error (iteration limit does not suppress other stop conditions)
+    expect(state.status).toBe('aborted');
+  });
+});

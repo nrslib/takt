@@ -964,4 +964,56 @@ describe('runAllTasks concurrency', () => {
       expect(mockSendSlackNotification).not.toHaveBeenCalled();
     });
   });
+
+  describe('ignoreExceed option propagation', () => {
+    const fakeWorkflowConfig = {
+      name: 'default',
+      steps: [{ name: 'implement', personaDisplayName: 'coder' }],
+      initialStep: 'implement',
+      maxSteps: 10,
+    };
+
+    beforeEach(() => {
+      mockLoadConfig.mockReturnValue({
+        language: 'en',
+        defaultWorkflow: 'default',
+        logLevel: 'info',
+        concurrency: 1,
+        taskPollIntervalMs: 500,
+      });
+      mockLoadWorkflowByIdentifier.mockReturnValue(fakeWorkflowConfig as never);
+    });
+
+    it('should propagate ignoreExceed option to executeWorkflow', async () => {
+      // Given: one pending task
+      const task = createTask('task-1');
+      mockClaimNextTasks.mockReturnValueOnce([task]).mockReturnValueOnce([]);
+
+      // When: running with ignoreExceed option
+      await runAllTasks('/project', { ignoreExceed: true });
+
+      // Then: executeWorkflow receives ignoreExceed in its options
+      expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+      const workflowOptions = mockExecuteWorkflow.mock.calls[0]?.[3] as {
+        ignoreExceed?: boolean;
+      };
+      expect(workflowOptions?.ignoreExceed).toBe(true);
+    });
+
+    it('should not include ignoreExceed in executeWorkflow options when not provided', async () => {
+      // Given: one pending task
+      const task = createTask('task-1');
+      mockClaimNextTasks.mockReturnValueOnce([task]).mockReturnValueOnce([]);
+
+      // When: running without ignoreExceed option
+      await runAllTasks('/project');
+
+      // Then: executeWorkflow does not receive ignoreExceed
+      expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+      const workflowOptions = mockExecuteWorkflow.mock.calls[0]?.[3] as {
+        ignoreExceed?: boolean;
+      };
+      expect(workflowOptions?.ignoreExceed).toBeUndefined();
+    });
+  });
 });

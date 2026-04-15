@@ -93,6 +93,7 @@ export async function executeWorkflow(
       taskPrefix: options.taskPrefix,
       taskColorIndex: options.taskColorIndex,
       initialIteration: options.initialIterationOverride,
+      ignoreIterationLimit: options.ignoreExceed,
       currentTask: options.currentTaskIssueNumber !== undefined
         ? { issueNumber: options.currentTaskIssueNumber }
         : undefined,
