@@ -23,7 +23,7 @@
 
 ### Changed
 
-- **BREAKING:** 用語を `workflow` / `step` に統一し、旧用語を完全に廃止 (#602, #609)。ワークフロー YAML は `workflow_config:`、`steps:`、`initial_step:`、`max_steps:` のみ受け付けるよう変更（旧キーはパースエラー）。ディレクトリは `~/.takt/workflows/`、`.takt/workflows/` に統一。レガシー環境変数は引き続きマッピングされる
+- **BREAKING:** 旧用語 `piece` / `movement` を完全に廃止し、`workflow` / `step` に統一 (#602, #609)。ワークフロー YAML の `piece_config:` → `workflow_config:`、`movements:` → `steps:`、`initial_movement:` → `initial_step:`、`max_movements:` → `max_steps:` への移行が必須。ディレクトリも `~/.takt/pieces/` → `~/.takt/workflows/`、`.takt/pieces/` → `.takt/workflows/` に変更。レガシー環境変数（`TAKT_PIECE_*`）は引き続きマッピングされる
 - 非対応プロバイダ向けの provider-specific オプション（`claude.allowed_tools`、`mcp_servers`、`team_leader.part_allowed_tools`）をサイレントドロップするよう変更。ワークフローをプロバイダ非依存に保てるように改善
 - 全レビュー系インストラクションのエビデンスガイダンスを統一: `reopened` ステータスの追加、検証ターゲット・確認内容・観測結果の記録を必須化、オープン指摘事項の脱落防止ルールを追加
 
