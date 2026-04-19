@@ -4,6 +4,7 @@ import type { WorkflowEngine } from '../../../core/workflow/index.js';
 import type { SessionLog } from '../../../infra/fs/index.js';
 import { StreamDisplay } from '../../../shared/ui/index.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
+import { isDebugEnabled, isVerboseConsole } from '../../../shared/utils/debug.js';
 import type { ExceededInfo, WorkflowExecutionOptions } from './types.js';
 import { detectStepType, isQuietMode } from './workflowExecutionBootstrap.js';
 import {
@@ -147,8 +148,15 @@ export function bindWorkflowExecutionEvents(
     deps.providerEventLogger.setProvider(stepProvider);
     deps.usageEventLogger.setStep(step.name, detectStepType(step));
     deps.usageEventLogger.setProvider(stepProvider, stepModel);
-    deps.out.info(`Provider: ${stepProvider}`);
-    deps.out.info(`Model: ${stepModel}`);
+    const showSource = isDebugEnabled() || isVerboseConsole();
+    const providerSourceSuffix = showSource && providerInfo.providerSource
+      ? ` (source: ${providerInfo.providerSource})`
+      : '';
+    const modelSourceSuffix = showSource && providerInfo.modelSource
+      ? ` (source: ${providerInfo.modelSource})`
+      : '';
+    deps.out.info(`Provider: ${stepProvider}${providerSourceSuffix}`);
+    deps.out.info(`Model: ${stepModel}${modelSourceSuffix}`);
     deps.analyticsEmitter.updateProviderInfo(iteration, stepProvider, stepModel);
 
     if (!deps.prefixWriter) {
@@ -162,7 +170,7 @@ export function bindWorkflowExecutionEvents(
       deps.handlerRef.current = null;
     }
 
-    deps.sessionLogger.onStepStart(step, iteration, instruction, state.lastResumePoint?.stack);
+    deps.sessionLogger.onStepStart(step, iteration, instruction, state.lastResumePoint?.stack, providerInfo);
   });
 
   deps.engine.on('step:complete', (step, response, instruction) => {

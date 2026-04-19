@@ -16,7 +16,7 @@ import type {
   WorkflowState,
   WorkflowStep,
 } from '../../../core/models/index.js';
-import type { JudgeStageEntry, PhasePromptParts } from '../../../core/workflow/types.js';
+import type { JudgeStageEntry, PhasePromptParts, StepProviderInfo } from '../../../core/workflow/types.js';
 import type { InteractiveMetadata } from './types.js';
 
 type SanitizeText = (text: string) => string;
@@ -188,6 +188,7 @@ export function buildStepStartRecord(
   instruction: string | undefined,
   workflowStack: WorkflowResumePointEntry[] | undefined,
   sanitizeText: SanitizeText,
+  providerInfo?: StepProviderInfo,
 ): NdjsonStepStart {
   return {
     type: 'step_start',
@@ -197,6 +198,10 @@ export function buildStepStartRecord(
     timestamp: new Date().toISOString(),
     ...serializeWorkflowStack(workflowStack),
     ...(instruction ? { instruction: sanitizeText(instruction) } : {}),
+    ...(providerInfo?.provider !== undefined ? { provider: providerInfo.provider } : {}),
+    ...(providerInfo?.providerSource !== undefined ? { providerSource: providerInfo.providerSource } : {}),
+    ...(providerInfo?.model !== undefined ? { model: providerInfo.model } : {}),
+    ...(providerInfo?.modelSource !== undefined ? { modelSource: providerInfo.modelSource } : {}),
   };
 }
 

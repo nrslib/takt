@@ -196,4 +196,61 @@ describe('SessionLogger', () => {
 
     expect(buildWorkflowStepScopeKey('review', firstStack)).not.toBe(buildWorkflowStepScopeKey('review', secondStack));
   });
+
+  it('step_start record includes provider/model/source when providerInfo is given (#370)', () => {
+    const logsDir = createTempLogsDir();
+    const ndjsonPath = initNdjsonLog('session-source', 'task', 'wf', { logsDir });
+    const logger = new SessionLogger(ndjsonPath, true);
+    const step = {
+      name: 'plan',
+      kind: 'agent' as const,
+      persona: 'planner',
+      personaDisplayName: 'planner',
+      instruction: 'Plan it',
+      passPreviousResponse: true,
+    };
+
+    logger.onStepStart(step, 1, 'Plan it', undefined, {
+      provider: 'claude',
+      providerSource: 'cli',
+      model: 'claude-opus-4-7',
+      modelSource: 'step',
+    });
+
+    const records = readFileSync(ndjsonPath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const stepStart = records.find((record) => record.type === 'step_start');
+    expect(stepStart?.provider).toBe('claude');
+    expect(stepStart?.providerSource).toBe('cli');
+    expect(stepStart?.model).toBe('claude-opus-4-7');
+    expect(stepStart?.modelSource).toBe('step');
+  });
+
+  it('step_start record omits provider/model fields when providerInfo is absent', () => {
+    const logsDir = createTempLogsDir();
+    const ndjsonPath = initNdjsonLog('session-no-source', 'task', 'wf', { logsDir });
+    const logger = new SessionLogger(ndjsonPath, true);
+    const step = {
+      name: 'plan',
+      kind: 'agent' as const,
+      persona: 'planner',
+      personaDisplayName: 'planner',
+      instruction: 'Plan it',
+      passPreviousResponse: true,
+    };
+
+    logger.onStepStart(step, 1, 'Plan it', undefined);
+
+    const records = readFileSync(ndjsonPath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const stepStart = records.find((record) => record.type === 'step_start');
+    expect(stepStart).not.toHaveProperty('provider');
+    expect(stepStart).not.toHaveProperty('providerSource');
+    expect(stepStart).not.toHaveProperty('model');
+    expect(stepStart).not.toHaveProperty('modelSource');
+  });
 });

@@ -42,7 +42,9 @@ export class OptionsBuilder {
   private resolveEngineProviderModel(): StepProviderInfo {
     return {
       provider: this.engineOptions.provider,
+      providerSource: this.engineOptions.providerSource,
       model: this.engineOptions.model,
+      modelSource: this.engineOptions.modelSource,
     };
   }
 
@@ -55,12 +57,16 @@ export class OptionsBuilder {
     const resolved = resolveStepProviderModel({
       step,
       provider: engineProviderInfo.provider,
+      providerSource: engineProviderInfo.providerSource,
       model: engineProviderInfo.model,
+      modelSource: engineProviderInfo.modelSource,
       personaProviders: this.engineOptions.personaProviders,
     });
     return {
       provider: resolved.provider ?? engineProviderInfo.provider,
+      providerSource: resolved.providerSource ?? engineProviderInfo.providerSource,
       model: resolved.model ?? engineProviderInfo.model,
+      modelSource: resolved.modelSource ?? engineProviderInfo.modelSource,
     };
   }
 

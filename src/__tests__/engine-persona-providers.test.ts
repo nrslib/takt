@@ -338,7 +338,7 @@ describe('WorkflowEngine persona_providers override', () => {
 
     expect(startFn).toHaveBeenCalledTimes(1);
     const [, , , providerInfo] = startFn.mock.calls[0];
-    expect(providerInfo).toEqual({ provider: 'codex', model: 'o3-mini' });
+    expect(providerInfo).toMatchObject({ provider: 'codex', model: 'o3-mini' });
   });
 
   it('should emit engine-level provider in providerInfo when persona has no override', async () => {
@@ -371,6 +371,6 @@ describe('WorkflowEngine persona_providers override', () => {
 
     expect(startFn).toHaveBeenCalledTimes(1);
     const [, , , providerInfo] = startFn.mock.calls[0];
-    expect(providerInfo).toEqual({ provider: 'claude', model: 'sonnet' });
+    expect(providerInfo).toMatchObject({ provider: 'claude', model: 'sonnet' });
   });
 });

@@ -11,6 +11,7 @@ import type { ProviderType } from '../../../infra/providers/index.js';
 import type {
   ProviderOptionsOriginResolver,
   ProviderOptionsSource,
+  ProviderResolutionSource,
 } from '../../../core/workflow/provider-options-trace.js';
 
 /** Info captured when iteration limit is hit in non-interactive mode */
@@ -53,7 +54,11 @@ export interface WorkflowExecutionOptions {
   /** Language for instruction metadata */
   language?: Language;
   provider?: ProviderType;
+  /** Source layer of `provider`. */
+  providerSource?: ProviderResolutionSource;
   model?: string;
+  /** Source layer of `model`. */
+  modelSource?: ProviderResolutionSource;
   /** Resolved provider options */
   providerOptions?: StepProviderOptions;
   /** Source layer for resolved provider options */
@@ -90,7 +95,11 @@ export interface WorkflowExecutionOptions {
 
 export interface TaskExecutionOptions {
   provider?: ProviderType;
+  /** Source layer of `provider` (defaults to 'cli' when set via --provider). */
+  providerSource?: ProviderResolutionSource;
   model?: string;
+  /** Source layer of `model` (defaults to 'cli' when set via --model). */
+  modelSource?: ProviderResolutionSource;
 }
 
 export interface RunAllTasksOptions extends TaskExecutionOptions {

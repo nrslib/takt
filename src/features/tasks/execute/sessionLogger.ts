@@ -11,7 +11,7 @@ import type { InteractiveMetadata } from './types.js';
 import { isDebugEnabled, writePromptLog } from '../../../shared/utils/index.js';
 import type { PromptLogRecord, NdjsonRecord } from '../../../shared/utils/index.js';
 import type { WorkflowResumePointEntry, WorkflowStep, AgentResponse, WorkflowState } from '../../../core/models/index.js';
-import type { JudgeStageEntry, PhasePromptParts } from '../../../core/workflow/types.js';
+import type { JudgeStageEntry, PhasePromptParts, StepProviderInfo } from '../../../core/workflow/types.js';
 import { sanitizeTextForStorage } from './traceReportRedaction.js';
 import { buildWorkflowStepScopeKey } from './workflowStepScope.js';
 import { SessionLoggerPhaseTracker } from './sessionLoggerPhaseTracker.js';
@@ -174,6 +174,7 @@ export class SessionLogger {
     iteration: number,
     instruction: string | undefined,
     workflowStack: WorkflowResumePointEntry[] | undefined,
+    providerInfo?: StepProviderInfo,
   ): void {
     this.currentIteration = iteration;
     this.activeStepIterations.set(buildWorkflowStepScopeKey(step.name, workflowStack), iteration);
@@ -183,6 +184,7 @@ export class SessionLogger {
       instruction,
       workflowStack,
       this.sanitizeText.bind(this),
+      providerInfo,
     );
     this.appendRecord(record);
   }

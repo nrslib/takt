@@ -24,7 +24,10 @@ export function resolveAgentOverrides(program: Command): TaskExecutionOptions | 
     return undefined;
   }
 
-  return { provider, model };
+  return {
+    ...(provider !== undefined ? { provider, providerSource: 'cli' as const } : {}),
+    ...(model !== undefined ? { model, modelSource: 'cli' as const } : {}),
+  };
 }
 
 /**

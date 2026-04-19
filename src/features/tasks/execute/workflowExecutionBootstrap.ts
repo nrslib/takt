@@ -10,6 +10,11 @@ import {
   updatePersonaSession,
   updateWorktreeSession,
 } from '../../../infra/config/index.js';
+import {
+  resolveConfigValueWithSource,
+  type ConfigValueSource,
+} from '../../../infra/config/resolveConfigValue.js';
+import type { ProviderResolutionSource } from '../../../core/workflow/provider-options-trace.js';
 import { getGlobalConfigDir } from '../../../infra/config/paths.js';
 import { createSessionLog, generateSessionId, initNdjsonLog, type SessionLog } from '../../../infra/fs/index.js';
 import { isQuietMode } from '../../../shared/context.js';
@@ -52,7 +57,9 @@ export interface WorkflowExecutionBootstrap {
   shouldNotifyWorkflowComplete: boolean;
   shouldNotifyWorkflowAbort: boolean;
   currentProvider: WorkflowExecutionOptions['provider'];
+  currentProviderSource: ProviderResolutionSource;
   configuredModel: string | undefined;
+  configuredModelSource: ProviderResolutionSource;
   effectiveWorkflowConfig: WorkflowConfig;
   providerEventLogger: ReturnType<typeof createProviderEventLogger>;
   usageEventLogger: ReturnType<typeof createUsageEventLogger>;
@@ -143,8 +150,20 @@ export function createWorkflowExecutionBootstrap(
   if (!currentProvider) {
     throw new Error('No provider configured. Set "provider" in ~/.takt/config.yaml');
   }
+  const currentProviderSource = resolveProviderFieldSource(
+    projectCwd,
+    'provider',
+    options.provider,
+    options.providerSource,
+  );
 
   const configuredModel = options.model ?? globalConfig.model;
+  const configuredModelSource = resolveProviderFieldSource(
+    projectCwd,
+    'model',
+    options.model,
+    options.modelSource,
+  );
   const effectiveWorkflowConfig: WorkflowConfig = {
     ...workflowConfig,
     runtime: resolveRuntimeConfig(globalConfig.runtime, workflowConfig.runtime),
@@ -220,7 +239,9 @@ export function createWorkflowExecutionBootstrap(
     shouldNotifyWorkflowComplete,
     shouldNotifyWorkflowAbort,
     currentProvider,
+    currentProviderSource,
     configuredModel,
+    configuredModelSource,
     effectiveWorkflowConfig,
     providerEventLogger,
     usageEventLogger,
@@ -230,6 +251,42 @@ export function createWorkflowExecutionBootstrap(
     sessionUpdateHandler,
     writeTraceReportOnce,
   };
+}
+
+function mapConfigSourceToResolutionSource(source: ConfigValueSource): ProviderResolutionSource {
+  switch (source) {
+    case 'project':
+      return 'project';
+    case 'global':
+      return 'global';
+    case 'default':
+      return 'default';
+    default:
+      // 'env' / 'workflow' do not occur for provider/model in bootstrap context.
+      return 'default';
+  }
+}
+
+function resolveProviderFieldSource(
+  projectCwd: string,
+  key: 'provider' | 'model',
+  cliValue: string | undefined,
+  cliSource: ProviderResolutionSource | undefined,
+): ProviderResolutionSource {
+  if (cliValue !== undefined) {
+    return cliSource ?? 'cli';
+  }
+  try {
+    const resolved = resolveConfigValueWithSource(projectCwd, key);
+    if (resolved.value !== undefined) {
+      return mapConfigSourceToResolutionSource(resolved.source);
+    }
+  } catch {
+    // Config resolution may fail in test contexts where paths are synthetic;
+    // fall back to 'global' as a reasonable default since the value itself
+    // was loaded successfully via resolveWorkflowConfigValues.
+  }
+  return 'global';
 }
 
 export { detectStepType, isQuietMode };

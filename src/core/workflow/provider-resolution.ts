@@ -5,17 +5,24 @@ import {
   resolveModelFromCandidates,
 } from '../provider-resolution.js';
 import type { ProviderType } from './types.js';
+import type { ProviderResolutionSource } from './provider-options-trace.js';
 
 export interface StepProviderModelInput {
   step: Pick<WorkflowStep, 'provider' | 'model' | 'personaDisplayName'>;
   provider?: ProviderType;
   model?: string;
   personaProviders?: Record<string, PersonaProviderEntry>;
+  /** Source layer of `provider` argument (engine-level fallback). */
+  providerSource?: ProviderResolutionSource;
+  /** Source layer of `model` argument (engine-level fallback). */
+  modelSource?: ProviderResolutionSource;
 }
 
 export interface StepProviderModelOutput {
   provider: ProviderType | undefined;
   model: string | undefined;
+  providerSource?: ProviderResolutionSource;
+  modelSource?: ProviderResolutionSource;
 }
 
 export interface WorkflowCallProviderModelInput {
@@ -77,17 +84,34 @@ export function resolveAgentProviderModel(input: AgentProviderModelInput): Agent
 }
 export function resolveStepProviderModel(input: StepProviderModelInput): StepProviderModelOutput {
   const personaEntry = input.personaProviders?.[input.step.personaDisplayName];
-  const provider = resolveProviderModelCandidates([
-    { provider: personaEntry?.provider },
-    { provider: input.step.provider },
-    { provider: input.provider },
-  ]).provider;
-  const model = resolveProviderModelCandidates([
-    { model: personaEntry?.model },
-    { model: input.step.model },
-    { model: input.model },
-  ]).model;
-  return { provider, model };
+
+  let provider: ProviderType | undefined;
+  let providerSource: ProviderResolutionSource | undefined;
+  if (personaEntry?.provider !== undefined) {
+    provider = personaEntry.provider;
+    providerSource = 'persona_providers';
+  } else if (input.step.provider !== undefined) {
+    provider = input.step.provider;
+    providerSource = 'step';
+  } else if (input.provider !== undefined) {
+    provider = input.provider;
+    providerSource = input.providerSource;
+  }
+
+  let model: string | undefined;
+  let modelSource: ProviderResolutionSource | undefined;
+  if (personaEntry?.model !== undefined) {
+    model = personaEntry.model;
+    modelSource = 'persona_providers';
+  } else if (input.step.model !== undefined) {
+    model = input.step.model;
+    modelSource = 'step';
+  } else if (input.model !== undefined) {
+    model = input.model;
+    modelSource = input.modelSource;
+  }
+
+  return { provider, model, providerSource, modelSource };
 }
 
 export function resolveWorkflowCallProviderModel(

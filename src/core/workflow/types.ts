@@ -14,10 +14,7 @@ import type { ProviderPermissionProfiles } from '../models/provider-profiles.js'
 import type { StepProviderOptions } from '../models/workflow-types.js';
 import type { StructuredCaller } from '../../agents/structured-caller.js';
 import type { SystemStepServicesFactory } from './system/system-step-services.js';
-import type {
-  ProviderOptionsOriginResolver,
-  ProviderOptionsSource,
-} from './provider-options-trace.js';
+import type { ProviderOptionsOriginResolver, ProviderOptionsSource, ProviderResolutionSource } from './provider-options-trace.js';
 
 // Re-export shared provider protocol types to maintain backward compatibility.
 // The canonical definitions live in shared/types/provider.ts so that shared-layer
@@ -86,10 +83,11 @@ export interface JudgeStageEntry {
   response: string;
 }
 
-/** Provider and model info resolved for a step */
 export interface StepProviderInfo {
   provider: ProviderType | undefined;
   model: string | undefined;
+  providerSource?: ProviderResolutionSource;
+  modelSource?: ProviderResolutionSource;
 }
 
 export interface TeamLeaderPartRuntimeResolution {
@@ -242,7 +240,9 @@ export interface WorkflowEngineOptions {
   /** Language for instruction metadata. Defaults to 'en'. */
   language?: Language;
   provider?: ProviderType;
+  providerSource?: ProviderResolutionSource;
   model?: string;
+  modelSource?: ProviderResolutionSource;
   /** Resolved provider options */
   providerOptions?: StepProviderOptions;
   /** Source layer for resolved provider options */

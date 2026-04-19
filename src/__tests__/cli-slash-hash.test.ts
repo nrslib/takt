@@ -152,7 +152,9 @@ describe('resolveAgentOverrides', () => {
 
     expect(resolveAgentOverrides(program)).toEqual({
       provider: 'codex',
+      providerSource: 'cli',
       model: 'gpt-5',
+      modelSource: 'cli',
     });
   });
 });
