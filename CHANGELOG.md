@@ -6,6 +6,23 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.37.0] - 2026-04-20
+
+### Added
+
+- callable subworkflow に `params` / `returns` / `visibility: internal` を追加 (#635)。親 `workflow_call.args` から子 workflow に引数を渡し、子は `return` で論理結果を親に返せるようになった。param の対応型は `facet_ref` / `facet_ref[]`、`facet_kind` は `knowledge` / `policy` / `instruction` / `report_format`。子 workflow 内では `$param:` で facet field を差し替え可能。`visibility: internal` で内部用 subworkflow をワークフロー選択 UI から隠せる
+- provider / model の解決ソースを log に表示 (#370)。`cli` / `persona_providers` / `step` / `project` / `global` / `default` のどの層で確定したかを debug または verbose 時にコンソール表示し、NDJSON `step_start` イベントの `providerSource` / `modelSource` フィールドには常時記録。期待と異なる provider / model が選ばれたときの原因特定が容易になる
+- `provider_options.claude.effort` に `xhigh` を追加。Opus 4.7 のみサポートされる reasoning level（`high` と `max` の中間）。Claude Agent SDK を 0.2.114 へバンプ。モデル能力テーブルで早期検証し、`claude-opus-4-6` + `xhigh` のような非互換組み合わせは具体的なエラーメッセージで弾く。alias (`opus` / `sonnet` / `haiku`) と未知モデルは permissive に SDK 側へ委ねる
+- `takt run` に `--ignore-exceed` オプションを追加 (#629)。指定時は workflow の `max_steps` 超過を無視して最後まで実行継続する。未指定時は従来通り `exceeded` 扱いで requeue される
+
+### Changed
+
+- **BREAKING:** 旧用語 `piece` / `movement` のレガシー環境変数サポートを完全に削除 (#637)。`TAKT_PIECE_*` / `TAKT_MOVEMENT_*` 形式の環境変数はマッピングされなくなる。`TAKT_WORKFLOW_*` / `TAKT_STEP_*` など新名称の環境変数への移行が必須
+
+### Fixed
+
+- Codex プロバイダーでタイムアウト（`abortCause === 'timeout'`）発生時に workflow が停止していた問題を修正 (#640)。タイムアウトをリトライ対象に追加し、最大 2 回までリトライする。外部からの明示的な中止（`abortCause === 'external'`）はリトライ不可のまま維持
+
 ## [0.36.0] - 2026-04-15
 
 ### Added
