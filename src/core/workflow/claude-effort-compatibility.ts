@@ -1,24 +1,19 @@
 import type { ClaudeEffort } from '../models/workflow-types.js';
 
-const CLAUDE_MODEL_ALIASES: ReadonlySet<string> = new Set(['opus', 'sonnet', 'haiku']);
+const CLAUDE_MODEL_ALIASES: ReadonlySet<string> = new Set([
+  'opus',
+  'sonnet',
+  'haiku',
+  'opusplan',
+  'default',
+]);
 
-const ALL_EFFORTS: readonly ClaudeEffort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
-const NO_XHIGH_EFFORTS: readonly ClaudeEffort[] = ['low', 'medium', 'high', 'max'];
+const CLAUDE_MODEL_ID_PREFIX = 'claude-';
 
-const CLAUDE_EFFORT_BY_MODEL: Readonly<Record<string, readonly ClaudeEffort[]>> = {
-  'claude-opus-4-7': ALL_EFFORTS,
-  'claude-opus-4-6': NO_XHIGH_EFFORTS,
-  'claude-sonnet-4-6': NO_XHIGH_EFFORTS,
-  'claude-haiku-4-5': NO_XHIGH_EFFORTS,
-};
+const XHIGH_SUPPORTED_MODEL_PREFIXES: readonly string[] = ['claude-opus-4-7'];
 
-function getAllowedEfforts(model: string): readonly ClaudeEffort[] | undefined {
-  const exact = CLAUDE_EFFORT_BY_MODEL[model];
-  if (exact) return exact;
-  for (const [prefix, efforts] of Object.entries(CLAUDE_EFFORT_BY_MODEL)) {
-    if (model.startsWith(`${prefix}-`)) return efforts;
-  }
-  return undefined;
+function modelMatchesPrefix(model: string, prefix: string): boolean {
+  return model === prefix || model.startsWith(`${prefix}-`);
 }
 
 export function validateClaudeEffortCompatibility(
@@ -27,17 +22,17 @@ export function validateClaudeEffortCompatibility(
 ): void {
   if (!model || !effort) return;
   if (CLAUDE_MODEL_ALIASES.has(model)) return;
+  if (!model.startsWith(CLAUDE_MODEL_ID_PREFIX)) return;
 
-  const allowed = getAllowedEfforts(model);
-  if (!allowed) return;
-
-  if (!allowed.includes(effort)) {
-    const xhighHint = effort === 'xhigh'
-      ? " 'xhigh' is supported only by Opus 4.7 (claude-opus-4-7)."
-      : '';
-    throw new Error(
-      `Configuration error: provider_options.claude.effort '${effort}' is not supported by model '${model}'. `
-      + `Allowed values for this model: ${allowed.join(', ')}.${xhighHint}`,
+  if (effort === 'xhigh') {
+    const supported = XHIGH_SUPPORTED_MODEL_PREFIXES.some((prefix) =>
+      modelMatchesPrefix(model, prefix),
     );
+    if (!supported) {
+      throw new Error(
+        `Configuration error: provider_options.claude.effort 'xhigh' is not supported by model '${model}'. `
+        + "'xhigh' is supported only by Opus 4.7 (claude-opus-4-7).",
+      );
+    }
   }
 }
