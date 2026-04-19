@@ -2,10 +2,12 @@ import { callClaudeHeadless } from '../claude-headless/client.js';
 import type { ClaudeHeadlessCallOptions } from '../claude-headless/types.js';
 import { resolveAnthropicApiKey, resolveClaudeCliPath } from '../config/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
+import { validateClaudeEffortCompatibility } from '../../core/workflow/claude-effort-compatibility.js';
 import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from './types.js';
 
 function toHeadlessOptions(options: ProviderCallOptions): ClaudeHeadlessCallOptions {
   const claudeOptions = options.providerOptions?.claude;
+  validateClaudeEffortCompatibility(options.model, claudeOptions?.effort);
   return {
     cwd: options.cwd,
     abortSignal: options.abortSignal,

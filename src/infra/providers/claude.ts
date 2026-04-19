@@ -2,10 +2,13 @@ import { callClaude, callClaudeCustom } from '../claude/client.js';
 import type { ClaudeCallOptions } from '../claude/types.js';
 import { resolveAnthropicApiKey, resolveClaudeCliPath } from '../config/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
+import { validateClaudeEffortCompatibility } from '../../core/workflow/claude-effort-compatibility.js';
 import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from './types.js';
 
 function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
   const claudeSandbox = options.providerOptions?.claude?.sandbox;
+  const effort = options.providerOptions?.claude?.effort;
+  validateClaudeEffortCompatibility(options.model, effort);
   return {
     cwd: options.cwd,
     abortSignal: options.abortSignal,
@@ -13,7 +16,7 @@ function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
     allowedTools: options.allowedTools,
     mcpServers: options.mcpServers,
     model: options.model,
-    effort: options.providerOptions?.claude?.effort,
+    effort,
     maxTurns: options.maxTurns,
     permissionMode: options.permissionMode,
     onStream: options.onStream,
