@@ -88,6 +88,8 @@ export interface StepProviderInfo {
   model: string | undefined;
   providerSource?: ProviderResolutionSource;
   modelSource?: ProviderResolutionSource;
+  providerOptions?: StepProviderOptions;
+  providerOptionsSources?: Readonly<Record<string, ProviderResolutionSource>>;
 }
 
 export interface TeamLeaderPartRuntimeResolution {
