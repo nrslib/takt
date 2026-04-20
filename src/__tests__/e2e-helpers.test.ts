@@ -1,7 +1,9 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { spawn } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { parse as parseYaml } from 'yaml';
 import { injectProviderArgs } from '../../e2e/helpers/takt-runner.js';
+import { cleanupChildProcess, cleanupTestResource, waitForClose } from '../../e2e/helpers/wait.js';
 import {
   createIsolatedEnv,
   updateIsolatedConfig,
@@ -185,5 +187,53 @@ describe('createIsolatedEnv', () => {
     expect(() => {
       updateIsolatedConfig(isolated.taktDir, { provider: 'mock' });
     }).toThrow('Invalid notification_sound_events in current config: expected object');
+  });
+});
+
+describe('wait helper child process cleanup', () => {
+  it('should resolve immediately when waitForClose is called after the child already exited', async () => {
+    const child = spawn(process.execPath, ['-e', 'process.exit(0)'], {
+      stdio: 'ignore',
+    });
+
+    await new Promise<void>((resolvePromise) => {
+      child.once('close', () => resolvePromise());
+    });
+
+    const startedAt = Date.now();
+    const result = await waitForClose(child, 1_000);
+
+    expect(result).toEqual({ code: 0, signal: null });
+    expect(Date.now() - startedAt).toBeLessThan(250);
+  });
+
+  it('should terminate a running child in cleanupChildProcess', async () => {
+    const child = spawn(process.execPath, ['-e', 'process.on("SIGINT", () => process.exit(0)); setInterval(() => {}, 1_000);'], {
+      stdio: 'ignore',
+    });
+
+    await cleanupChildProcess(child, 1_000);
+
+    expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+  });
+
+  it('should reject when cleanupChildProcess cannot signal a running child', async () => {
+    const child = {
+      exitCode: null,
+      signalCode: null,
+      kill: vi.fn(() => {
+        throw new Error('kill failed');
+      }),
+    } as unknown as ReturnType<typeof spawn>;
+
+    await expect(cleanupChildProcess(child, 1_000)).rejects.toThrow('kill failed');
+  });
+
+  it('should rethrow cleanup errors with the resource label', () => {
+    expect(() => {
+      cleanupTestResource('testRepo', () => {
+        throw new Error('boom');
+      });
+    }).toThrow('testRepo cleanup failed: boom');
   });
 });

@@ -11,11 +11,13 @@ import { truncate } from './LogManager.js';
 import { stripAnsi } from '../utils/text.js';
 
 /** Progress information for stream display */
+type ProgressMaxSteps = number | 'infinite';
+
 export interface ProgressInfo {
   /** Current iteration (1-indexed) */
   iteration: number;
   /** Maximum steps allowed */
-  maxSteps: number;
+  maxSteps: ProgressMaxSteps;
   /** Current step index within the workflow (0-indexed) */
   stepIndex: number;
   /** Total number of steps in the workflow */

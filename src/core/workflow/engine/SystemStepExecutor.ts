@@ -65,7 +65,7 @@ export class SystemStepExecutor {
     });
   }
 
-  private resolveSystemInput(input: NonNullable<WorkflowStep['systemInputs']>[number]): Record<string, unknown> {
+  private resolveSystemInput(input: NonNullable<WorkflowStep['systemInputs']>[number]): unknown {
     const services = this.requireServices(this.deps.getCwd());
     return services.resolveSystemInput(input);
   }

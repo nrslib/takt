@@ -9,6 +9,7 @@
 import type { StreamCallback, StreamEvent } from '../types.js';
 import { stripAnsi } from '../../../shared/utils/text.js';
 import { LineTimeSliceBuffer } from './stream-buffer.js';
+import type { WorkflowMaxSteps } from '../../models/types.js';
 
 /** ANSI color codes for sub-step prefixes (cycled in order) */
 const COLORS = ['\x1b[36m', '\x1b[33m', '\x1b[35m', '\x1b[32m'] as const; // cyan, yellow, magenta, green
@@ -19,7 +20,7 @@ export interface ParallelProgressInfo {
   /** Current iteration (1-indexed) */
   iteration: number;
   /** Maximum steps allowed */
-  maxSteps: number;
+  maxSteps: WorkflowMaxSteps;
 }
 
 export interface ParallelLoggerOptions {

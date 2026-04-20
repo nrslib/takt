@@ -4,7 +4,7 @@
 
 import type { WorkflowStep, OutputContractEntry } from '../../models/types.js';
 
-const DETERMINISTIC_CONDITION_PATTERN = /^(true|false|(?:context|structured|effect)\..*|.*(?:==|!=|>=|<=|>|<).*)$/;
+const DETERMINISTIC_CONDITION_PATTERN = /^(true|false|exists\(.*\)|(?:context|structured|effect)\..*|.*(?:==|!=|>=|<=|>|<).*)$/;
 
 export function isDeterministicCondition(condition: string): boolean {
   return DETERMINISTIC_CONDITION_PATTERN.test(condition.trim());

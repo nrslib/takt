@@ -20,6 +20,20 @@ vi.mock('../infra/git/detect.js', () => ({
 
 import { parseJson, checkGlabCli, fetchAllPages } from '../infra/gitlab/utils.js';
 
+function withGlabApiResponse(body: unknown, nextPath?: string): string {
+  const headers = [
+    'HTTP/2 200 OK',
+    'content-type: application/json',
+    ...(nextPath ? [`link: <https://gitlab.example.com/api/v4/${nextPath}>; rel="next"`] : []),
+  ];
+  return `${headers.join('\n')}\n\n${JSON.stringify(body)}`;
+}
+
+function getApiPath(call: unknown[]): string {
+  const args = call[1] as string[];
+  return args[2] as string;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
@@ -218,8 +232,8 @@ describe('fetchAllPages', () => {
     const page1 = Array.from({ length: 100 }, (_, i) => ({ id: i }));
     const page2 = [{ id: 100 }, { id: 101 }];
     mockExecFileSync
-      .mockReturnValueOnce(JSON.stringify(page1))
-      .mockReturnValueOnce(JSON.stringify(page2));
+      .mockReturnValueOnce(withGlabApiResponse(page1, 'projects/1/issues/1/notes?per_page=100&page=2'))
+      .mockReturnValueOnce(withGlabApiResponse(page2));
 
     const result = fetchAllPages<{ id: number }>('projects/:id/issues/1/notes', 100, 'test', '/project');
 
@@ -231,27 +245,26 @@ describe('fetchAllPages', () => {
     const page1 = Array.from({ length: 10 }, (_, i) => ({ id: i }));
     const page2 = [{ id: 10 }];
     mockExecFileSync
-      .mockReturnValueOnce(JSON.stringify(page1))
-      .mockReturnValueOnce(JSON.stringify(page2));
+      .mockReturnValueOnce(withGlabApiResponse(page1, 'projects/1/test?per_page=10&page=2'))
+      .mockReturnValueOnce(withGlabApiResponse(page2));
 
     fetchAllPages<{ id: number }>('projects/:id/test', 10, 'test', '/project');
 
     const call1 = mockExecFileSync.mock.calls[0];
-    expect((call1[1] as string[])[1]).toContain('page=1');
+    expect(getApiPath(call1)).toContain('page=1');
     const call2 = mockExecFileSync.mock.calls[1];
-    expect((call2[1] as string[])[1]).toContain('page=2');
+    expect(getApiPath(call2)).toContain('page=2');
   });
 
-  it('MAX_PAGES(100) に達するとループを終了する', () => {
-    // Every page returns exactly perPage items (would loop forever without MAX_PAGES)
-    const fullPage = Array.from({ length: 5 }, (_, i) => ({ id: i }));
-    mockExecFileSync.mockReturnValue(JSON.stringify(fullPage));
+  it('pagination link が無ければ件数に関係なく終了する', () => {
+    const fullPage = Array.from({ length: 5 }, (_, index) => ({ id: index }));
+    mockExecFileSync
+      .mockReturnValueOnce(withGlabApiResponse(fullPage));
 
     const result = fetchAllPages<{ id: number }>('projects/:id/test', 5, 'test', '/project');
 
-    // Should stop at 100 pages
-    expect(mockExecFileSync).toHaveBeenCalledTimes(100);
-    expect(result).toHaveLength(500); // 5 items * 100 pages
+    expect(mockExecFileSync).toHaveBeenCalledTimes(1);
+    expect(result).toEqual(fullPage);
   });
 
   it('endpoint に既にクエリパラメータがある場合は & で結合する', () => {
@@ -260,7 +273,7 @@ describe('fetchAllPages', () => {
     fetchAllPages<unknown>('projects/:id/test?sort=asc', 50, 'test', '/project');
 
     const call = mockExecFileSync.mock.calls[0];
-    const apiPath = (call[1] as string[])[1];
+    const apiPath = getApiPath(call);
     expect(apiPath).toContain('?sort=asc&per_page=50&page=1');
   });
 
@@ -270,7 +283,7 @@ describe('fetchAllPages', () => {
     fetchAllPages<unknown>('projects/:id/test', 50, 'test', '/project');
 
     const call = mockExecFileSync.mock.calls[0];
-    const apiPath = (call[1] as string[])[1];
+    const apiPath = getApiPath(call);
     expect(apiPath).toContain('projects/:id/test?per_page=50&page=1');
   });
 
@@ -299,8 +312,8 @@ describe('fetchAllPages', () => {
     const page1 = Array.from({ length: 10 }, (_, i) => ({ id: i }));
     const page2 = [{ id: 10 }];
     mockExecFileSync
-      .mockReturnValueOnce(JSON.stringify(page1))
-      .mockReturnValueOnce(JSON.stringify(page2));
+      .mockReturnValueOnce(withGlabApiResponse(page1, 'projects/1/test?per_page=10&page=2'))
+      .mockReturnValueOnce(withGlabApiResponse(page2));
 
     // When
     fetchAllPages<{ id: number }>('projects/:id/test', 10, 'test', '/worktree/clone');
@@ -309,6 +322,22 @@ describe('fetchAllPages', () => {
     for (const call of mockExecFileSync.mock.calls) {
       expect(call[2]).toHaveProperty('cwd', '/worktree/clone');
     }
+  });
+
+  it('pagination link が上限を超えて続く場合は明示エラーにする', () => {
+    let page = 1;
+    mockExecFileSync.mockImplementation(() => {
+      const response = withGlabApiResponse(
+        [{ id: page }],
+        `projects/1/test?per_page=1&page=${page + 1}`,
+      );
+      page += 1;
+      return response;
+    });
+
+    expect(() => fetchAllPages<{ id: number }>('projects/:id/test', 1, 'test', '/project')).toThrow(
+      'Pagination limit exceeded while fetching test (>100 pages)',
+    );
   });
 });
 

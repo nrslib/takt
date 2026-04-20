@@ -234,6 +234,38 @@ describe('replaceTemplatePlaceholders', () => {
     expect(result).toBe('Comment success: true');
   });
 
+  it('should replace array-based context placeholders from workflow state', () => {
+    const step = makeStep();
+    const ctx = makeInstructionContext({
+      workflowState: {
+        systemContexts: new Map([
+          ['route_context', { prs: [{ number: 42, author: 'nrslib' }] }],
+        ]),
+        structuredOutputs: new Map(),
+        effectResults: new Map(),
+      } as never,
+    });
+
+    const result = replaceTemplatePlaceholders('First PR: {context:route_context.prs[0].number}', step, ctx);
+    expect(result).toBe('First PR: 42');
+  });
+
+  it('should replace array field projection placeholders from workflow state', () => {
+    const step = makeStep();
+    const ctx = makeInstructionContext({
+      workflowState: {
+        systemContexts: new Map([
+          ['route_context', { prs: [{ number: 42, author: 'nrslib' }] }],
+        ]),
+        structuredOutputs: new Map(),
+        effectResults: new Map(),
+      } as never,
+    });
+
+    const result = replaceTemplatePlaceholders('First author: {context:route_context.prs.author[0]}', step, ctx);
+    expect(result).toBe('First author: nrslib');
+  });
+
   it('should replace step-qualified effect placeholders from workflow state', () => {
     const step = makeStep();
     const ctx = makeInstructionContext({

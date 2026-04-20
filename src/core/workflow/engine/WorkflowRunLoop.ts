@@ -1,5 +1,5 @@
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
-import type { AgentResponse, LoopMonitorConfig, WorkflowState, WorkflowStep } from '../../models/types.js';
+import type { AgentResponse, LoopMonitorConfig, WorkflowMaxSteps, WorkflowState, WorkflowStep } from '../../models/types.js';
 import { ABORT_STEP, COMPLETE_STEP, ERROR_MESSAGES } from '../constants.js';
 import type {
   RuntimeStepResolution,
@@ -19,7 +19,7 @@ const log = createLogger('workflow-run-loop');
 interface WorkflowRunLoopDeps {
   state: WorkflowState;
   options: WorkflowEngineOptions;
-  getMaxSteps: () => number;
+  getMaxSteps: () => WorkflowMaxSteps;
   abortRequested: () => boolean;
   getStep: (name: string) => WorkflowStep;
   applyRuntimeEnvironment: (stage: 'step') => void;
@@ -85,7 +85,11 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
     }
 
     const maxSteps = deps.getMaxSteps();
-    if (deps.options.ignoreIterationLimit !== true && deps.state.iteration >= maxSteps) {
+    if (
+      deps.options.ignoreIterationLimit !== true
+      && typeof maxSteps === 'number'
+      && deps.state.iteration >= maxSteps
+    ) {
       deps.emit('iteration:limit', deps.state.iteration, maxSteps);
 
       if (deps.options.onIterationLimit) {

@@ -24,6 +24,13 @@ const SystemInputBindingSchema = z.object({
   as: z.string().min(1),
 });
 
+const PrListWhereRawSchema = z.object({
+  author: z.string().min(1).optional(),
+  base_branch: z.string().min(1).optional(),
+  head_branch: z.string().min(1).optional(),
+  draft: z.boolean().optional(),
+}).strict();
+
 export const SystemInputRawSchema = z.discriminatedUnion('type', [
   SystemInputBindingSchema.extend({
     type: z.literal('task_context'),
@@ -44,6 +51,12 @@ export const SystemInputRawSchema = z.discriminatedUnion('type', [
   SystemInputBindingSchema.extend({
     type: z.literal('task_queue_context'),
     source: z.literal('current_project'),
+    exclude_current_task: z.boolean().optional(),
+  }),
+  SystemInputBindingSchema.extend({
+    type: z.literal('pr_list'),
+    source: z.literal('current_project'),
+    where: PrListWhereRawSchema.optional(),
   }),
 ]);
 

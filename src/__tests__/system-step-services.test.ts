@@ -6,6 +6,7 @@ const {
   mockAgentCall,
   mockFetchIssue,
   mockFetchPrReviewComments,
+  mockListOpenPrs,
   mockFindExistingPr,
   mockCommentOnPr,
   mockMergePr,
@@ -19,6 +20,7 @@ const {
   mockAgentCall: vi.fn(),
   mockFetchIssue: vi.fn(),
   mockFetchPrReviewComments: vi.fn(),
+  mockListOpenPrs: vi.fn(),
   mockFindExistingPr: vi.fn(),
   mockCommentOnPr: vi.fn(),
   mockMergePr: vi.fn(),
@@ -66,6 +68,7 @@ vi.mock('../infra/git/index.js', () => ({
     checkCliStatus: vi.fn(() => ({ available: true })),
     fetchIssue: (...args: unknown[]) => mockFetchIssue(...args),
     fetchPrReviewComments: (...args: unknown[]) => mockFetchPrReviewComments(...args),
+    listOpenPrs: (...args: unknown[]) => mockListOpenPrs(...args),
     findExistingPr: (...args: unknown[]) => mockFindExistingPr(...args),
     commentOnPr: (...args: unknown[]) => mockCommentOnPr(...args),
     mergePr: (...args: unknown[]) => mockMergePr(...args),
@@ -92,6 +95,7 @@ vi.mock('../features/interactive/assistantConfig.js', () => ({
 }));
 
 import { DefaultSystemStepServices } from '../infra/workflow/system/DefaultSystemStepServices.js';
+import { getGitProvider } from '../infra/git/index.js';
 
 function createCommandError(message: string, stderr?: string): Error {
   const error = new Error(message);
@@ -106,6 +110,7 @@ describe('DefaultSystemStepServices', () => {
     vi.clearAllMocks();
     mockGetCurrentBranch.mockReturnValue('task/test-branch');
     mockFindExistingPr.mockReturnValue(undefined);
+    mockListOpenPrs.mockReturnValue([]);
     mockAgentCall.mockResolvedValue({
       status: 'done',
       content: 'resolved',
@@ -210,6 +215,79 @@ describe('DefaultSystemStepServices', () => {
     expect(mockFetchPrReviewComments).not.toHaveBeenCalled();
   });
 
+  it('resolves pr_list with where filters and updated_at desc ordering', () => {
+    mockListOpenPrs.mockReturnValue([
+      {
+        number: 41,
+        author: 'someone-else',
+        base_branch: 'improve',
+        head_branch: 'task/41',
+        draft: false,
+        updated_at: '2026-04-20T11:00:00Z',
+      },
+      {
+        number: 42,
+        author: 'nrslib',
+        base_branch: 'improve',
+        head_branch: 'task/42',
+        draft: false,
+        updated_at: '2026-04-20T12:00:00Z',
+      },
+      {
+        number: 43,
+        author: 'nrslib',
+        base_branch: 'improve',
+        head_branch: 'task/43',
+        draft: false,
+        updated_at: '2026-04-20T14:00:00Z',
+      },
+      {
+        number: 40,
+        author: 'nrslib',
+        base_branch: 'improve',
+        head_branch: 'task/40',
+        draft: true,
+        updated_at: '2026-04-20T13:00:00Z',
+      },
+    ]);
+
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Inspect PR list',
+    });
+
+    const result = services.resolveSystemInput({
+      type: 'pr_list',
+      source: 'current_project',
+      as: 'prs',
+      where: {
+        author: 'nrslib',
+        base_branch: 'improve',
+        head_branch: 'task/*',
+        draft: false,
+      },
+    });
+
+    expect(mockListOpenPrs).toHaveBeenCalledWith('/repo');
+    expect(result).toEqual([
+      {
+        number: 43,
+        author: 'nrslib',
+        base_branch: 'improve',
+        head_branch: 'task/43',
+        draft: false,
+      },
+      {
+        number: 42,
+        author: 'nrslib',
+        base_branch: 'improve',
+        head_branch: 'task/42',
+        draft: false,
+      },
+    ]);
+  });
+
   it('resolves branch_context from the current branch', () => {
     const services = new DefaultSystemStepServices({
       cwd: '/repo/worktree',
@@ -251,7 +329,153 @@ describe('DefaultSystemStepServices', () => {
       failed_count: 1,
       exceeded_count: 1,
       pr_failed_count: 1,
+      items: [
+        { task_name: undefined, kind: 'running', issue: undefined, pr: undefined },
+        { task_name: undefined, kind: 'running', issue: undefined, pr: undefined },
+        { task_name: undefined, kind: 'pending', issue: undefined, pr: undefined },
+        { task_name: undefined, kind: 'completed', issue: undefined, pr: undefined },
+        { task_name: undefined, kind: 'failed', issue: undefined, pr: undefined },
+        { task_name: undefined, kind: 'exceeded', issue: undefined, pr: undefined },
+        { task_name: undefined, kind: 'pr_failed', issue: undefined, pr: undefined },
+      ],
     });
+  });
+
+  it('task_queue_context に items 配列を含める', () => {
+    mockTaskRunnerListAllTaskItems.mockReturnValue([
+      { name: 'task-1', kind: 'running', issueNumber: 586, prNumber: 42 },
+      { name: 'task-2', kind: 'pending' },
+    ]);
+
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Inspect queue',
+    });
+
+    const result = services.resolveSystemInput({ type: 'task_queue_context', source: 'current_project', as: 'queue' });
+
+    expect(result).toEqual(expect.objectContaining({
+      exists: true,
+      total_count: 2,
+      pending_count: 1,
+      running_count: 1,
+      completed_count: 0,
+      failed_count: 0,
+      exceeded_count: 0,
+      pr_failed_count: 0,
+      items: [
+        { task_name: 'task-1', kind: 'running', issue: 586, pr: 42 },
+        { task_name: 'task-2', kind: 'pending', issue: undefined, pr: undefined },
+      ],
+    }));
+  });
+
+  it('task_queue_context は items と count 系で同じ queue 集合を返す', () => {
+    mockTaskRunnerListAllTaskItems.mockReturnValue([
+      { name: 'orchestration-loop', kind: 'running', issueNumber: 586, prNumber: 42 },
+      { name: 'task-2', kind: 'pending' },
+    ]);
+
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Inspect queue',
+    });
+
+    const result = services.resolveSystemInput({ type: 'task_queue_context', source: 'current_project', as: 'queue' });
+
+    expect(result).toEqual({
+      exists: true,
+      total_count: 2,
+      pending_count: 1,
+      running_count: 1,
+      completed_count: 0,
+      failed_count: 0,
+      exceeded_count: 0,
+      pr_failed_count: 0,
+      items: [
+        { task_name: 'orchestration-loop', kind: 'running', issue: 586, pr: 42 },
+        { task_name: 'task-2', kind: 'pending', issue: undefined, pr: undefined },
+      ],
+    });
+  });
+
+  it('task_queue_context で exclude_current_task を指定すると current task を除外した queue を返す', () => {
+    mockTaskRunnerListAllTaskItems.mockReturnValue([
+      { name: 'orchestration-loop', runSlug: 'run-self', kind: 'running', issueNumber: 586, prNumber: 42 },
+      { name: 'task-2', runSlug: 'run-other', kind: 'running', issueNumber: 587, prNumber: 43 },
+      { name: 'task-3', kind: 'pending' },
+    ]);
+
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Inspect queue',
+      taskContext: { runSlug: 'run-self' },
+    });
+
+    const result = services.resolveSystemInput({
+      type: 'task_queue_context',
+      source: 'current_project',
+      as: 'queue',
+      exclude_current_task: true,
+    });
+
+    expect(result).toEqual({
+      exists: true,
+      total_count: 2,
+      pending_count: 1,
+      running_count: 1,
+      completed_count: 0,
+      failed_count: 0,
+      exceeded_count: 0,
+      pr_failed_count: 0,
+      items: [
+        { task_name: 'task-2', kind: 'running', issue: 587, pr: 43 },
+        { task_name: 'task-3', kind: 'pending', issue: undefined, pr: undefined },
+      ],
+    });
+  });
+
+  it('task_queue_context で exclude_current_task を指定した場合、run slug がなければ失敗する', () => {
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Inspect queue',
+    });
+
+    expect(() => services.resolveSystemInput({
+      type: 'task_queue_context',
+      source: 'current_project',
+      as: 'queue',
+      exclude_current_task: true,
+    })).toThrow('task_queue_context.exclude_current_task requires current task run slug');
+  });
+
+  it('pr_list は CLI が利用不可なら listOpenPrs を呼ばずに失敗する', () => {
+    vi.mocked(getGitProvider).mockReturnValueOnce({
+      checkCliStatus: vi.fn(() => ({ available: false, error: 'gh unavailable' })),
+      fetchIssue: (...args: unknown[]) => mockFetchIssue(...args),
+      fetchPrReviewComments: (...args: unknown[]) => mockFetchPrReviewComments(...args),
+      listOpenPrs: (...args: unknown[]) => mockListOpenPrs(...args),
+      findExistingPr: (...args: unknown[]) => mockFindExistingPr(...args),
+      commentOnPr: (...args: unknown[]) => mockCommentOnPr(...args),
+      mergePr: (...args: unknown[]) => mockMergePr(...args),
+    });
+
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Inspect PR list',
+    });
+
+    expect(() => services.resolveSystemInput({
+      type: 'pr_list',
+      source: 'current_project',
+      as: 'prs',
+    })).toThrow('gh unavailable');
+    expect(mockListOpenPrs).not.toHaveBeenCalled();
   });
 
   it('creates a new follow-up task and forwards worktree options', async () => {

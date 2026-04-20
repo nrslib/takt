@@ -1,4 +1,4 @@
-import type { AgentResponse, LoopMonitorConfig, WorkflowState, WorkflowStep } from '../../models/types.js';
+import type { AgentResponse, LoopMonitorConfig, WorkflowMaxSteps, WorkflowState, WorkflowStep } from '../../models/types.js';
 import { getWorkflowStepKind, isSystemWorkflowStep, isWorkflowCallStep } from '../step-kind.js';
 import type { RuntimeStepResolution, WorkflowEngineOptions } from '../types.js';
 import { determineRuleTransition, type WorkflowRuleTransition } from './transitions.js';
@@ -9,14 +9,14 @@ interface WorkflowEngineStepCoordinatorDeps {
   };
   state: WorkflowState;
   task: string;
-  getMaxSteps: () => number;
+  getMaxSteps: () => WorkflowMaxSteps;
   getOptions: () => WorkflowEngineOptions;
   stepExecutor: {
     runNormalStep: (
       step: WorkflowStep,
       state: WorkflowState,
       task: string,
-      maxSteps: number,
+      maxSteps: WorkflowMaxSteps,
       updateSession: (persona: string, sessionId: string | undefined) => void,
       prebuiltInstruction?: string,
     ) => Promise<{ response: AgentResponse; instruction: string }>;
@@ -25,7 +25,7 @@ interface WorkflowEngineStepCoordinatorDeps {
       stepIteration: number,
       state: WorkflowState,
       task: string,
-      maxSteps: number,
+      maxSteps: WorkflowMaxSteps,
     ) => string;
     buildPhase1Instruction: (instruction: string, step: WorkflowStep) => string;
     drainReportFiles: () => Array<{ step: WorkflowStep; filePath: string; fileName: string }>;
@@ -35,7 +35,7 @@ interface WorkflowEngineStepCoordinatorDeps {
       step: WorkflowStep,
       state: WorkflowState,
       task: string,
-      maxSteps: number,
+      maxSteps: WorkflowMaxSteps,
       updateSession: (persona: string, sessionId: string | undefined) => void,
     ) => Promise<{ response: AgentResponse; instruction: string }>;
   };
@@ -50,7 +50,7 @@ interface WorkflowEngineStepCoordinatorDeps {
       step: WorkflowStep,
       state: WorkflowState,
       task: string,
-      maxSteps: number,
+      maxSteps: WorkflowMaxSteps,
       updateSession: (persona: string, sessionId: string | undefined) => void,
     ) => Promise<{ response: AgentResponse; instruction: string }>;
   };

@@ -193,6 +193,102 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
     expect(onIterationLimit).not.toHaveBeenCalled();
   });
 
+  it('should not emit iteration limit for infinite maxSteps even after exceeding a finite threshold', async () => {
+    const config: WorkflowConfig = {
+      name: 'infinite-complete',
+      maxSteps: 'infinite',
+      initialStep: 'plan',
+      steps: [
+        makeStep('plan', {
+          rules: [makeRule('done', 'review')],
+        }),
+        makeStep('review', {
+          rules: [makeRule('done', 'fix')],
+        }),
+        makeStep('fix', {
+          rules: [makeRule('done', 'verify')],
+        }),
+        makeStep('verify', {
+          rules: [makeRule('done', 'COMPLETE')],
+        }),
+      ],
+    };
+
+    const onIterationLimit = vi.fn().mockResolvedValue(null);
+    const limitEvents: Array<{ iteration: number; maxSteps: number }> = [];
+
+    mockRunAgentSequence([
+      makeResponse({ persona: 'plan', content: 'Plan complete' }),
+      makeResponse({ persona: 'review', content: 'Review complete' }),
+      makeResponse({ persona: 'fix', content: 'Fix complete' }),
+      makeResponse({ persona: 'verify', content: 'Verify complete' }),
+    ]);
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+    ]);
+
+    engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      onIterationLimit,
+    });
+    engine.on('iteration:limit', (iteration, maxSteps) => {
+      limitEvents.push({ iteration, maxSteps });
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(state.iteration).toBe(4);
+    expect(onIterationLimit).not.toHaveBeenCalled();
+    expect(limitEvents).toEqual([]);
+  });
+
+  it('should abort infinite maxSteps workflows only via workflow transition, not iteration limit', async () => {
+    const config: WorkflowConfig = {
+      name: 'infinite-abort',
+      maxSteps: 'infinite',
+      initialStep: 'plan',
+      steps: [
+        makeStep('plan', {
+          rules: [makeRule('done', 'review')],
+        }),
+        makeStep('review', {
+          rules: [makeRule('done', 'stop')],
+        }),
+        makeStep('stop', {
+          rules: [makeRule('done', 'ABORT')],
+        }),
+      ],
+    };
+
+    const onIterationLimit = vi.fn().mockResolvedValue(null);
+
+    mockRunAgentSequence([
+      makeResponse({ persona: 'plan', content: 'Plan complete' }),
+      makeResponse({ persona: 'review', content: 'Review complete' }),
+      makeResponse({ persona: 'stop', content: 'Abort now' }),
+    ]);
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+    ]);
+
+    engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      onIterationLimit,
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(state.iteration).toBe(3);
+    expect(onIterationLimit).not.toHaveBeenCalled();
+  });
+
   it('should preserve non-iteration aborts when iteration limit is ignored', async () => {
     const loopConfig: WorkflowConfig = {
       name: 'loop-test',

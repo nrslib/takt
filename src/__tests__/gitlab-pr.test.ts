@@ -34,10 +34,27 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   getErrorMessage: (e: unknown) => String(e),
 }));
 
-import { findExistingMr, createMergeRequest, commentOnMr, fetchMrReviewComments, mergeMr } from '../infra/gitlab/pr.js';
+import { findExistingMr, listOpenMrs, createMergeRequest, commentOnMr, fetchMrReviewComments, mergeMr } from '../infra/gitlab/pr.js';
+
+function withGlabApiResponse(body: unknown, nextPath?: string): string {
+  const headers = [
+    'HTTP/2 200 OK',
+    'content-type: application/json',
+    ...(nextPath ? [`link: <https://gitlab.example.com/api/v4/${nextPath}>; rel="next"`] : []),
+  ];
+  return `${headers.join('\n')}\n\n${JSON.stringify(body)}`;
+}
+
+function getApiPath(call: unknown[]): string {
+  const args = call[1] as string[];
+  return args[2] as string;
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockExecFileSync.mockReset();
+  mockCheckGlabCli.mockReset();
+  mockCheckGlabCli.mockReturnValue({ available: true });
 });
 
 describe('findExistingMr', () => {
@@ -102,6 +119,116 @@ describe('findExistingMr', () => {
 
     // Then
     expect(mockCheckGlabCli).toHaveBeenCalledWith('/my/project');
+  });
+});
+
+describe('listOpenMrs', () => {
+  it('open MR list を取得して workflow 用の項目へマッピングする', () => {
+    mockExecFileSync.mockReturnValue(withGlabApiResponse([
+      {
+        iid: 42,
+        author: { username: 'nrslib' },
+        target_branch: 'improve',
+        source_branch: 'task/42',
+        draft: false,
+        updated_at: '2026-04-20T12:00:00Z',
+      },
+    ]));
+
+    const result = listOpenMrs('/project');
+
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      'glab',
+      ['api', '--include', 'projects/:id/merge_requests?state=opened&per_page=100&page=1'],
+      expect.objectContaining({ cwd: '/project', encoding: 'utf-8' }),
+    );
+    expect(result).toEqual([
+      {
+        number: 42,
+        author: 'nrslib',
+        base_branch: 'improve',
+        head_branch: 'task/42',
+        draft: false,
+        updated_at: '2026-04-20T12:00:00Z',
+      },
+    ]);
+  });
+
+  it('glab CLI 利用不可時の判定を持たず、呼び出し失敗をそのまま伝播する', () => {
+    mockCheckGlabCli.mockReturnValueOnce({ available: false, error: 'glab unavailable' });
+    mockExecFileSync.mockImplementationOnce(() => {
+      throw new Error('glab unavailable');
+    });
+
+    expect(() => listOpenMrs('/project')).toThrow('glab unavailable');
+    expect(mockExecFileSync).toHaveBeenCalled();
+  });
+
+  it('100件を超える open MR を後続ページまで取得する', () => {
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({
+      iid: index + 1,
+      author: { username: `user-${index + 1}` },
+      target_branch: 'improve',
+      source_branch: `task/${index + 1}`,
+      draft: false,
+      updated_at: `2026-04-20T12:${String(index % 60).padStart(2, '0')}:00Z`,
+    }));
+
+    mockExecFileSync
+      .mockReturnValueOnce(withGlabApiResponse(
+        firstPage,
+        'projects/1/merge_requests?state=opened&per_page=100&page=2',
+      ))
+      .mockReturnValueOnce(withGlabApiResponse([
+        {
+          iid: 101,
+          author: { username: 'nrslib' },
+          target_branch: 'improve',
+          source_branch: 'task/101',
+          draft: false,
+          updated_at: '2026-04-21T00:00:00Z',
+        },
+      ]));
+
+    const result = listOpenMrs('/project');
+
+    expect(mockExecFileSync).toHaveBeenNthCalledWith(
+      1,
+      'glab',
+      ['api', '--include', 'projects/:id/merge_requests?state=opened&per_page=100&page=1'],
+      expect.objectContaining({ cwd: '/project', encoding: 'utf-8' }),
+    );
+    expect(mockExecFileSync).toHaveBeenNthCalledWith(
+      2,
+      'glab',
+      ['api', '--include', 'projects/1/merge_requests?state=opened&per_page=100&page=2'],
+      expect.objectContaining({ cwd: '/project', encoding: 'utf-8' }),
+    );
+    expect(result).toHaveLength(101);
+    expect(result[100]).toEqual({
+      number: 101,
+      author: 'nrslib',
+      base_branch: 'improve',
+      head_branch: 'task/101',
+      draft: false,
+      updated_at: '2026-04-21T00:00:00Z',
+    });
+  });
+
+  it('pagination link が上限を超えて続く場合は明示エラーにする', () => {
+    let page = 1;
+    mockExecFileSync.mockImplementation(() => {
+      const response = withGlabApiResponse(
+        [{ iid: page, author: { username: 'nrslib' }, target_branch: 'improve', source_branch: `task/${page}`, draft: false, updated_at: '2026-04-21T00:00:00Z' }],
+        `projects/1/merge_requests?state=opened&per_page=100&page=${page + 1}`,
+      );
+      page += 1;
+      return response;
+    });
+
+    expect(() => listOpenMrs('/project')).toThrow(
+      'Pagination limit exceeded while fetching open merge request list (>100 pages)',
+    );
   });
 });
 
@@ -577,18 +704,18 @@ describe('fetchMrReviewComments', () => {
 
     // Then: verify diffs API call has per_page (call index 1, after mr view)
     const diffsCall = mockExecFileSync.mock.calls[1];
-    const diffsApiPath = diffsCall[1][1] as string;
+    const diffsApiPath = getApiPath(diffsCall);
     expect(diffsApiPath).toContain('per_page=100');
     expect(diffsApiPath).toContain('diffs');
 
     // Then: verify notes API call has per_page (call index 2)
     const notesCall = mockExecFileSync.mock.calls[2];
-    const notesApiPath = notesCall[1][1] as string;
+    const notesApiPath = getApiPath(notesCall);
     expect(notesApiPath).toContain('per_page=100');
 
     // Then: verify discussions API call has per_page (call index 3)
     const discussionsCall = mockExecFileSync.mock.calls[3];
-    const discussionsApiPath = discussionsCall[1][1] as string;
+    const discussionsApiPath = getApiPath(discussionsCall);
     expect(discussionsApiPath).toContain('per_page=100');
   });
 
@@ -606,8 +733,11 @@ describe('fetchMrReviewComments', () => {
     mockExecFileSync
       .mockReturnValueOnce(JSON.stringify(mrViewResponse))
       .mockReturnValueOnce(JSON.stringify([])) // diffs API
-      .mockReturnValueOnce(JSON.stringify(firstPageNotes))
-      .mockReturnValueOnce(JSON.stringify(secondPageNotes))
+      .mockReturnValueOnce(withGlabApiResponse(
+        firstPageNotes,
+        'projects/1/merge_requests/300/notes?per_page=100&page=2',
+      ))
+      .mockReturnValueOnce(withGlabApiResponse(secondPageNotes))
       .mockReturnValueOnce(JSON.stringify([])); // discussions (single page)
 
     // When
@@ -632,8 +762,11 @@ describe('fetchMrReviewComments', () => {
     mockExecFileSync
       .mockReturnValueOnce(JSON.stringify(mrViewResponse))
       .mockReturnValueOnce(JSON.stringify([])) // diffs API
-      .mockReturnValueOnce(JSON.stringify(firstPage))
-      .mockReturnValueOnce(JSON.stringify(secondPage))
+      .mockReturnValueOnce(withGlabApiResponse(
+        firstPage,
+        'projects/1/merge_requests/301/notes?per_page=100&page=2',
+      ))
+      .mockReturnValueOnce(withGlabApiResponse(secondPage))
       .mockReturnValueOnce(JSON.stringify([])); // discussions
 
     // When
@@ -641,13 +774,13 @@ describe('fetchMrReviewComments', () => {
 
     // Then: verify page=1 for notes (call index 2, after mr view + diffs API)
     const notesCall1 = mockExecFileSync.mock.calls[2];
-    const apiPath1 = notesCall1[1][1] as string;
+    const apiPath1 = getApiPath(notesCall1);
     expect(apiPath1).toContain('page=1');
     expect(apiPath1).toContain('notes');
 
     // Then: verify page=2 for notes
     const notesCall2 = mockExecFileSync.mock.calls[3];
-    const apiPath2 = notesCall2[1][1] as string;
+    const apiPath2 = getApiPath(notesCall2);
     expect(apiPath2).toContain('page=2');
     expect(apiPath2).toContain('notes');
   });
@@ -675,8 +808,11 @@ describe('fetchMrReviewComments', () => {
       .mockReturnValueOnce(JSON.stringify(mrViewResponse))
       .mockReturnValueOnce(JSON.stringify([])) // diffs API
       .mockReturnValueOnce(JSON.stringify([])) // notes (empty, single page)
-      .mockReturnValueOnce(JSON.stringify(firstPageDiscussions))
-      .mockReturnValueOnce(JSON.stringify(secondPageDiscussions));
+      .mockReturnValueOnce(withGlabApiResponse(
+        firstPageDiscussions,
+        'projects/1/merge_requests/302/discussions?per_page=100&page=2',
+      ))
+      .mockReturnValueOnce(withGlabApiResponse(secondPageDiscussions));
 
     // When
     const result = fetchMrReviewComments(302, '/project');
@@ -714,21 +850,24 @@ describe('fetchMrReviewComments', () => {
       .mockReturnValueOnce(JSON.stringify(mrViewResponse))
       .mockReturnValueOnce(JSON.stringify([])) // diffs API
       .mockReturnValueOnce(JSON.stringify([])) // notes
-      .mockReturnValueOnce(JSON.stringify(firstPage))
-      .mockReturnValueOnce(JSON.stringify(secondPage));
+      .mockReturnValueOnce(withGlabApiResponse(
+        firstPage,
+        'projects/1/merge_requests/303/discussions?per_page=100&page=2',
+      ))
+      .mockReturnValueOnce(withGlabApiResponse(secondPage));
 
     // When
     fetchMrReviewComments(303, '/project');
 
     // Then: discussions page=1 (call index 3, after mr view + diffs API + notes)
     const discCall1 = mockExecFileSync.mock.calls[3];
-    const discPath1 = discCall1[1][1] as string;
+    const discPath1 = getApiPath(discCall1);
     expect(discPath1).toContain('page=1');
     expect(discPath1).toContain('discussions');
 
     // Then: discussions page=2
     const discCall2 = mockExecFileSync.mock.calls[4];
-    const discPath2 = discCall2[1][1] as string;
+    const discPath2 = getApiPath(discCall2);
     expect(discPath2).toContain('page=2');
     expect(discPath2).toContain('discussions');
   });
@@ -805,7 +944,7 @@ describe('fetchMrReviewComments', () => {
     const diffsCall = mockExecFileSync.mock.calls[1];
     expect(diffsCall[0]).toBe('glab');
     expect(diffsCall[1][0]).toBe('api');
-    const diffsApiPath = diffsCall[1][1] as string;
+    const diffsApiPath = getApiPath(diffsCall);
     expect(diffsApiPath).toContain('merge_requests/500/diffs');
   });
 

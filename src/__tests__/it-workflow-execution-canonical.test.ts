@@ -258,7 +258,10 @@ describe('workflow execution canonical entrypoints', () => {
       expect.objectContaining({
         projectCwd: '/tmp/project',
         provider: 'mock',
-        currentTask: { issueNumber: 586 },
+        currentTask: {
+          issueNumber: 586,
+          runSlug: 'test-report-dir',
+        },
       }),
     );
   });

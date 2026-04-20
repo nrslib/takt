@@ -43,6 +43,55 @@ function parseWorkflowStateReference(reference: string): ParsedWorkflowStateRefe
   return { root, scope, path };
 }
 
+function expandPathToken(token: string, reference: string): string[] {
+  const parts: string[] = [];
+  let remaining = token;
+
+  while (remaining.length > 0) {
+    const bracketIndex = remaining.indexOf('[');
+    if (bracketIndex < 0) {
+      parts.push(remaining);
+      break;
+    }
+
+    const field = remaining.slice(0, bracketIndex);
+    if (field.length > 0) {
+      parts.push(field);
+    }
+
+    const closingIndex = remaining.indexOf(']', bracketIndex);
+    if (closingIndex < 0) {
+      throw new Error(`Invalid workflow state reference "${reference}"`);
+    }
+
+    parts.push(remaining.slice(bracketIndex + 1, closingIndex));
+    remaining = remaining.slice(closingIndex + 1);
+  }
+
+  return parts;
+}
+
+function resolveArrayAccess(current: unknown[], key: string, reference: string): unknown {
+  if (key === 'length') {
+    return current.length;
+  }
+
+  if (/^\d+$/.test(key)) {
+    const index = Number(key);
+    if (index < 0 || index >= current.length) {
+      throw new Error(`Missing workflow state value "${reference}"`);
+    }
+    return current[index];
+  }
+
+  return current.map((item: unknown) => {
+    if (item == null || typeof item !== 'object' || !(key in item)) {
+      throw new Error(`Missing workflow state value "${reference}"`);
+    }
+    return (item as Record<string, unknown>)[key];
+  });
+}
+
 export function resolveWorkflowStateReference(reference: string, state: WorkflowState): unknown {
   const { root, scope, path } = parseWorkflowStateReference(reference);
 
@@ -51,11 +100,18 @@ export function resolveWorkflowStateReference(reference: string, state: Workflow
     throw new Error(`Missing workflow state scope "${scope}" in ${root}`);
   }
 
-  for (const key of path) {
+  const tokens = path.flatMap((token) => expandPathToken(token, reference));
+  for (const key of tokens) {
     if (!key) {
       throw new Error(`Invalid workflow state reference "${reference}"`);
     }
-    if (typeof current !== 'object' || current == null || Array.isArray(current) || !(key in current)) {
+
+    if (Array.isArray(current)) {
+      current = resolveArrayAccess(current, key, reference);
+      continue;
+    }
+
+    if (typeof current !== 'object' || current == null || !(key in current)) {
       throw new Error(`Missing workflow state value "${reference}"`);
     }
     current = (current as Record<string, unknown>)[key];

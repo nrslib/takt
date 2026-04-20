@@ -1,6 +1,7 @@
 import { getLabel } from '../../../shared/i18n/index.js';
 import type { WorkflowEngineOptions } from '../types.js';
 import type { ParallelLoggerOptions } from './parallel-logger.js';
+import type { WorkflowMaxSteps } from '../../models/types.js';
 
 export function buildTeamLeaderParallelLoggerOptions(
   engineOptions: WorkflowEngineOptions,
@@ -8,7 +9,7 @@ export function buildTeamLeaderParallelLoggerOptions(
   stepIteration: number,
   subStepNames: string[],
   iteration: number,
-  maxSteps: number,
+  maxSteps: WorkflowMaxSteps,
 ): ParallelLoggerOptions {
   const options: ParallelLoggerOptions = {
     subStepNames,

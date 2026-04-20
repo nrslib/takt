@@ -19,13 +19,26 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   getErrorMessage: (e: unknown) => String(e),
 }));
 
-import { findExistingPr, createPullRequest, fetchPrReviewComments, mergePr } from '../infra/github/pr.js';
+import { findExistingPr, listOpenPrs, createPullRequest, fetchPrReviewComments, mergePr } from '../infra/github/pr.js';
+import { checkGhCli } from '../infra/github/issue.js';
 import { buildPrBody, formatPrReviewAsTask } from '../infra/git/format.js';
 import type { Issue, PrReviewData } from '../infra/git/types.js';
+
+function withGhApiResponse(body: unknown, nextPath?: string): string {
+  const headers = [
+    'HTTP/2 200 OK',
+    'content-type: application/json',
+    ...(nextPath ? [`link: <https://api.github.com${nextPath}>; rel="next"`] : []),
+  ];
+  return `${headers.join('\n')}\n\n${JSON.stringify(body)}`;
+}
 
 describe('findExistingPr', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockExecFileSync.mockReset();
+    vi.mocked(checkGhCli).mockReset();
+    vi.mocked(checkGhCli).mockReturnValue({ available: true });
   });
 
   it('オープンな PR がある場合はその PR を返す', () => {
@@ -53,9 +66,140 @@ describe('findExistingPr', () => {
   });
 });
 
+describe('listOpenPrs', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockExecFileSync.mockReset();
+    vi.mocked(checkGhCli).mockReset();
+    vi.mocked(checkGhCli).mockReturnValue({ available: true });
+  });
+
+  it('open PR list を取得して workflow 用の項目へマッピングする', () => {
+    mockExecFileSync
+      .mockReturnValueOnce(JSON.stringify({ nameWithOwner: 'org/repo' }))
+      .mockReturnValueOnce(withGhApiResponse([
+        {
+          number: 42,
+          user: { login: 'nrslib' },
+          base: { ref: 'improve' },
+          head: { ref: 'task/42' },
+          draft: false,
+          updated_at: '2026-04-20T12:00:00Z',
+        },
+      ]));
+
+    const result = listOpenPrs('/project');
+
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      'gh',
+      ['repo', 'view', '--json', 'nameWithOwner'],
+      expect.objectContaining({ cwd: '/project', encoding: 'utf-8' }),
+    );
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      'gh',
+      ['api', '--include', 'repos/org/repo/pulls?state=open&per_page=100&page=1'],
+      expect.objectContaining({ cwd: '/project', encoding: 'utf-8' }),
+    );
+    expect(result).toEqual([
+      {
+        number: 42,
+        author: 'nrslib',
+        base_branch: 'improve',
+        head_branch: 'task/42',
+        draft: false,
+        updated_at: '2026-04-20T12:00:00Z',
+      },
+    ]);
+  });
+
+  it('100件を超える open PR を後続ページまで取得する', () => {
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({
+      number: index + 1,
+      user: { login: `user-${index + 1}` },
+      base: { ref: 'improve' },
+      head: { ref: `task/${index + 1}` },
+      draft: false,
+      updated_at: `2026-04-20T12:${String(index % 60).padStart(2, '0')}:00Z`,
+    }));
+
+    mockExecFileSync
+      .mockReturnValueOnce(JSON.stringify({ nameWithOwner: 'org/repo' }))
+      .mockReturnValueOnce(withGhApiResponse(
+        firstPage,
+        '/repos/org/repo/pulls?state=open&per_page=100&page=2',
+      ))
+      .mockReturnValueOnce(withGhApiResponse([
+        {
+          number: 101,
+          user: { login: 'nrslib' },
+          base: { ref: 'improve' },
+          head: { ref: 'task/101' },
+          draft: false,
+          updated_at: '2026-04-21T00:00:00Z',
+        },
+      ]));
+
+    const result = listOpenPrs('/project');
+
+    expect(mockExecFileSync).toHaveBeenNthCalledWith(
+      2,
+      'gh',
+      ['api', '--include', 'repos/org/repo/pulls?state=open&per_page=100&page=1'],
+      expect.objectContaining({ cwd: '/project', encoding: 'utf-8' }),
+    );
+    expect(mockExecFileSync).toHaveBeenNthCalledWith(
+      3,
+      'gh',
+      ['api', '--include', '/repos/org/repo/pulls?state=open&per_page=100&page=2'],
+      expect.objectContaining({ cwd: '/project', encoding: 'utf-8' }),
+    );
+    expect(result).toHaveLength(101);
+    expect(result[100]).toEqual({
+      number: 101,
+      author: 'nrslib',
+      base_branch: 'improve',
+      head_branch: 'task/101',
+      draft: false,
+      updated_at: '2026-04-21T00:00:00Z',
+    });
+  });
+
+  it('gh CLI 利用不可時の判定を持たず、呼び出し失敗をそのまま伝播する', async () => {
+    const { checkGhCli } = await import('../infra/github/issue.js');
+    vi.mocked(checkGhCli).mockReturnValueOnce({ available: false, error: 'gh unavailable' });
+    mockExecFileSync.mockImplementationOnce(() => {
+      throw new Error('gh unavailable');
+    });
+
+    expect(() => listOpenPrs('/project')).toThrow('gh unavailable');
+    expect(mockExecFileSync).toHaveBeenCalled();
+  });
+
+  it('pagination link が上限を超えて続く場合は明示エラーにする', () => {
+    let page = 1;
+    mockExecFileSync
+      .mockReturnValueOnce(JSON.stringify({ nameWithOwner: 'org/repo' }))
+      .mockImplementation(() => {
+        const response = withGhApiResponse(
+          [{ number: page, user: { login: 'nrslib' }, base: { ref: 'improve' }, head: { ref: `task/${page}` }, draft: false, updated_at: '2026-04-21T00:00:00Z' }],
+          `/repos/org/repo/pulls?state=open&per_page=100&page=${page + 1}`,
+        );
+        page += 1;
+        return response;
+      });
+
+    expect(() => listOpenPrs('/project')).toThrow(
+      'Pagination limit exceeded while fetching open pull request list (>100 pages)',
+    );
+  });
+});
+
 describe('createPullRequest', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockExecFileSync.mockReset();
+    vi.mocked(checkGhCli).mockReset();
+    vi.mocked(checkGhCli).mockReturnValue({ available: true });
   });
 
   it('draft: true の場合、args に --draft が含まれる', () => {
@@ -103,6 +247,9 @@ describe('createPullRequest', () => {
 describe('mergePr', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockExecFileSync.mockReset();
+    vi.mocked(checkGhCli).mockReset();
+    vi.mocked(checkGhCli).mockReturnValue({ available: true });
   });
 
   it('gh pr merge を --merge --delete-branch 付きで呼び出す', () => {
@@ -259,7 +406,7 @@ describe('fetchPrReviewComments', () => {
     );
     expect(mockExecFileSync).toHaveBeenCalledWith(
       'gh',
-      ['api', '/repos/org/repo/pulls/456/comments?per_page=100&page=1'],
+      ['api', '--include', '/repos/org/repo/pulls/456/comments?per_page=100&page=1'],
       expect.objectContaining({ encoding: 'utf-8' }),
     );
     expect(result.number).toBe(456);
@@ -357,7 +504,7 @@ describe('fetchPrReviewComments', () => {
     // Then
     expect(mockExecFileSync).toHaveBeenCalledWith(
       'gh',
-      ['api', '/repos/org/repo/pulls/12/comments?per_page=100&page=1'],
+      ['api', '--include', '/repos/org/repo/pulls/12/comments?per_page=100&page=1'],
       expect.objectContaining({ encoding: 'utf-8' }),
     );
     expect(result.reviews).toHaveLength(31);
@@ -398,8 +545,11 @@ describe('fetchPrReviewComments', () => {
     ];
     mockExecFileSync
       .mockReturnValueOnce(JSON.stringify(ghResponse))
-      .mockReturnValueOnce(JSON.stringify(firstPageInlineComments))
-      .mockReturnValueOnce(JSON.stringify(secondPageInlineComments));
+      .mockReturnValueOnce(withGhApiResponse(
+        firstPageInlineComments,
+        '/repos/org/repo/pulls/13/comments?per_page=100&page=2',
+      ))
+      .mockReturnValueOnce(withGhApiResponse(secondPageInlineComments));
 
     // When
     const result = fetchPrReviewComments(13, '/project');
@@ -407,12 +557,12 @@ describe('fetchPrReviewComments', () => {
     // Then
     expect(mockExecFileSync).toHaveBeenCalledWith(
       'gh',
-      ['api', '/repos/org/repo/pulls/13/comments?per_page=100&page=1'],
+      ['api', '--include', '/repos/org/repo/pulls/13/comments?per_page=100&page=1'],
       expect.objectContaining({ encoding: 'utf-8' }),
     );
     expect(mockExecFileSync).toHaveBeenCalledWith(
       'gh',
-      ['api', '/repos/org/repo/pulls/13/comments?per_page=100&page=2'],
+      ['api', '--include', '/repos/org/repo/pulls/13/comments?per_page=100&page=2'],
       expect.objectContaining({ encoding: 'utf-8' }),
     );
     expect(result.reviews).toHaveLength(101);
@@ -463,39 +613,45 @@ describe('fetchPrReviewComments', () => {
     ]);
   });
 
-  it('should return collected comments when MAX_PAGES limit is reached', () => {
+  it('should request one more page when inline comments fill the page exactly and stop on empty page', () => {
     // Given
     const ghResponse = {
       number: 15,
-      title: 'Max pages hit',
+      title: 'Exact page boundary',
       body: '',
       url: 'https://github.com/org/repo/pull/15',
-      headRefName: 'fix/max-pages',
+      headRefName: 'fix/page-boundary',
       comments: [],
       reviews: [],
       files: [],
     };
-    // Every page returns exactly per_page (100) items, simulating a never-ending API
     const fullPage = Array.from({ length: 100 }, (_, i) => ({
       body: `Comment ${i + 1}`,
       path: 'src/index.ts',
       line: i + 1,
-      user: { login: 'reviewer-max-pages' },
+      user: { login: 'reviewer-page-boundary' },
     }));
 
-    mockExecFileSync.mockReturnValueOnce(JSON.stringify(ghResponse));
-    // Return full pages for all 100 pages
-    for (let i = 0; i < 100; i++) {
-      mockExecFileSync.mockReturnValueOnce(JSON.stringify(fullPage));
-    }
+    mockExecFileSync
+      .mockReturnValueOnce(JSON.stringify(ghResponse))
+      .mockReturnValueOnce(withGhApiResponse(
+        fullPage,
+        '/repos/org/repo/pulls/15/comments?per_page=100&page=2',
+      ))
+      .mockReturnValueOnce(withGhApiResponse([]));
 
     // When
     const result = fetchPrReviewComments(15, '/project');
 
-    // Then — should have called gh api exactly 101 times (1 for pr view + 100 pages)
-    expect(mockExecFileSync).toHaveBeenCalledTimes(101);
-    // Should have collected 100 pages × 100 comments = 10000 comments
-    expect(result.reviews).toHaveLength(10000);
+    // Then
+    expect(mockExecFileSync).toHaveBeenCalledTimes(3);
+    expect(mockExecFileSync).toHaveBeenNthCalledWith(
+      3,
+      'gh',
+      ['api', '--include', '/repos/org/repo/pulls/15/comments?per_page=100&page=2'],
+      expect.objectContaining({ encoding: 'utf-8' }),
+    );
+    expect(result.reviews).toHaveLength(100);
   });
 
   it('should pass cwd to all execFileSync calls', () => {

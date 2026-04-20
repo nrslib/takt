@@ -245,7 +245,7 @@ export class StepExecutor {
     stepIteration: number,
     state: WorkflowState,
     task: string,
-    maxSteps: number,
+    maxSteps: number | 'infinite',
   ): string {
     this.ensurePreviousResponseSnapshot(state, step.name, stepIteration);
     const policySnapshot = this.writeFacetSnapshot(
@@ -404,7 +404,7 @@ export class StepExecutor {
     step: WorkflowStep,
     state: WorkflowState,
     task: string,
-    maxSteps: number,
+    maxSteps: number | 'infinite',
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
     prebuiltInstruction?: string,
     runtime?: RuntimeStepResolution,

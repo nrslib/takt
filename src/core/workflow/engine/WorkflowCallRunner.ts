@@ -3,6 +3,7 @@ import type {
   AgentResponse,
   WorkflowConfig,
   WorkflowCallStep,
+  WorkflowMaxSteps,
   WorkflowResumePointEntry,
   WorkflowState,
 } from '../../models/types.js';
@@ -27,8 +28,8 @@ import {
 
 interface WorkflowCallRunnerDeps {
   getConfig: () => WorkflowConfig;
-  getMaxSteps: () => number;
-  updateMaxSteps: (maxSteps: number) => void;
+  getMaxSteps: () => WorkflowMaxSteps;
+  updateMaxSteps: (maxSteps: WorkflowMaxSteps) => void;
   state: WorkflowState;
   projectCwd: string;
   getCwd: () => string;

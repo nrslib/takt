@@ -262,6 +262,26 @@ describe('executeWorkflow AskUserQuestion deny handler wiring', () => {
     });
   });
 
+  it('should use maxStepsOverride when exceeded handling runs for an infinite workflow', async () => {
+    MockWorkflowEngine.triggerIterationLimit = true;
+
+    const result = await executeWorkflow({
+      ...makeConfig(),
+      maxSteps: 'infinite',
+    }, 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+      maxStepsOverride: 3,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.exceeded).toBe(true);
+    expect(result.exceededInfo).toEqual({
+      currentStep: 'implement',
+      newMaxSteps: 6,
+      currentIteration: 1,
+    });
+  });
+
   it('should use engine getResumePoint when currentStep cannot be rebuilt in exceeded handling', async () => {
     MockWorkflowEngine.triggerIterationLimit = true;
     MockWorkflowEngine.iterationLimitCurrentStep = 'fix';

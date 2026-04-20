@@ -1,0 +1,268 @@
+name: auto-improvement-loop
+description: >
+  Infinite orchestration loop that routes between open PR handling,
+  issue-driven planning, and fresh improvement planning.
+max_steps: infinite
+initial_step: route_context
+schemas:
+  followup-task: followup-task
+steps:
+  - name: route_context
+    mode: system
+    system_inputs:
+      - type: task_context
+        source: current_task
+        as: task
+      - type: branch_context
+        source: current_task
+        as: branch
+      - type: pr_list
+        source: current_project
+        as: prs
+        where:
+          draft: false
+      - type: issue_context
+        source: current_task
+        as: issue
+    rules:
+      - when: context.route_context.prs.length > 0
+        next: plan_from_existing_pr
+      - when: context.route_context.prs.length == 0 && context.route_context.issue.exists == true
+        next: plan_from_issue
+      - when: context.route_context.prs.length == 0 && context.route_context.issue.exists == false
+        next: plan_fresh_improvement
+
+  - name: plan_from_issue
+    persona: supervisor
+    knowledge:
+      - architecture
+      - takt
+    delay_before_ms: 60000
+    instruction: |
+      Inspect the current issue and code state,
+      and plan exactly one next improvement task.
+
+      Current issue:
+      - exists: {context:route_context.issue.exists}
+      - number: {context:route_context.issue.number}
+      - title: {context:route_context.issue.title}
+      - task_exists: {context:route_context.task.exists}
+      - branch_exists: {context:route_context.branch.exists}
+
+      Do not implement anything. Output only the next task instruction in task_markdown.
+      Output the next action in action.
+      If needed, output the issue creation plan in issue.
+      Current execution context:
+      - task_exists: {context:route_context.task.exists}
+      - branch_exists: {context:route_context.branch.exists}
+
+      Allowed action values:
+      - enqueue_new_task
+      - noop
+    structured_output:
+      schema_ref: followup-task
+    rules:
+      - when: structured.plan_from_issue.action == "enqueue_new_task"
+        next: enqueue_from_issue
+      - when: structured.plan_from_issue.action == "noop"
+        next: wait_before_next_scan
+      - when: "true"
+        next: ABORT
+
+  - name: enqueue_from_issue
+    mode: system
+    effects:
+      - type: enqueue_task
+        mode: new
+        workflow: takt-default
+        base_branch: improve
+        task: "{structured:plan_from_issue.task_markdown}"
+        issue: "{structured:plan_from_issue.issue}"
+        worktree:
+          enabled: true
+          auto_pr: true
+          draft_pr: true
+    rules:
+      - when: effect.enqueue_from_issue.enqueue_task.success == true
+        next: wait_before_next_scan
+      - when: "true"
+        next: ABORT
+
+  - name: plan_fresh_improvement
+    persona: supervisor
+    knowledge:
+      - architecture
+      - takt
+    delay_before_ms: 60000
+    instruction: |
+      Inspect the current codebase,
+      and plan exactly one next improvement task.
+
+      Do not implement anything. Output only the next task instruction in task_markdown.
+      Output the next action in action.
+      If needed, output the issue creation plan in issue.
+
+      Allowed action values:
+      - enqueue_new_task
+      - noop
+    structured_output:
+      schema_ref: followup-task
+    rules:
+      - when: structured.plan_fresh_improvement.action == "enqueue_new_task"
+        next: enqueue_fresh
+      - when: structured.plan_fresh_improvement.action == "noop"
+        next: wait_before_next_scan
+      - when: "true"
+        next: ABORT
+
+  - name: enqueue_fresh
+    mode: system
+    effects:
+      - type: enqueue_task
+        mode: new
+        workflow: takt-default
+        base_branch: improve
+        task: "{structured:plan_fresh_improvement.task_markdown}"
+        issue: "{structured:plan_fresh_improvement.issue}"
+        worktree:
+          enabled: true
+          auto_pr: true
+          draft_pr: true
+    rules:
+      - when: effect.enqueue_fresh.enqueue_task.success == true
+        next: wait_before_next_scan
+      - when: "true"
+        next: ABORT
+
+  - name: plan_from_existing_pr
+    persona: supervisor
+    knowledge:
+      - architecture
+      - takt
+    instruction: |
+      Inspect the current PR and choose the next action.
+
+      Current PR:
+      - count: {context:route_context.prs.length}
+      - number: {context:route_context.prs[0].number}
+      - author: {context:route_context.prs[0].author}
+      - base_branch: {context:route_context.prs[0].base_branch}
+      - head_branch: {context:route_context.prs[0].head_branch}
+
+      Output the next action in action.
+      If a follow-up implementation task is needed, output it in task_markdown.
+      If content should be left on the PR, output it in pr_comment_markdown.
+
+      Allowed action values:
+      - comment_on_pr
+      - enqueue_from_pr
+      - prepare_merge
+      - noop
+    structured_output:
+      schema_ref: followup-task
+    rules:
+      - when: structured.plan_from_existing_pr.action == "comment_on_pr"
+        next: comment_on_existing_pr
+      - when: structured.plan_from_existing_pr.action == "enqueue_from_pr"
+        next: enqueue_from_pr
+      - when: structured.plan_from_existing_pr.action == "prepare_merge"
+        next: prepare_merge
+      - when: structured.plan_from_existing_pr.action == "noop"
+        next: wait_before_next_scan
+      - when: "true"
+        next: ABORT
+
+  - name: comment_on_existing_pr
+    mode: system
+    effects:
+      - type: comment_pr
+        pr: "{context:route_context.prs[0].number}"
+        body: "{structured:plan_from_existing_pr.pr_comment_markdown}"
+    rules:
+      - when: effect.comment_on_existing_pr.comment_pr.success == true
+        next: wait_before_next_scan
+      - when: "true"
+        next: ABORT
+
+  - name: enqueue_from_pr
+    mode: system
+    effects:
+      - type: enqueue_task
+        mode: from_pr
+        pr: "{context:route_context.prs[0].number}"
+        workflow: takt-default
+        base_branch: improve
+        task: "{structured:plan_from_existing_pr.task_markdown}"
+    rules:
+      - when: effect.enqueue_from_pr.enqueue_task.success == true
+        next: wait_before_next_scan
+      - when: "true"
+        next: ABORT
+
+  - name: prepare_merge
+    mode: system
+    effects:
+      - type: sync_with_root
+        pr: "{context:route_context.prs[0].number}"
+    rules:
+      - when: effect.prepare_merge.sync_with_root.success == true
+        next: merge_pr
+      - when: effect.prepare_merge.sync_with_root.conflicted == true
+        next: resolve_conflicts
+      - when: "true"
+        next: ABORT
+
+  - name: resolve_conflicts
+    mode: system
+    effects:
+      - type: resolve_conflicts_with_ai
+        pr: "{context:route_context.prs[0].number}"
+    rules:
+      - when: effect.resolve_conflicts.resolve_conflicts_with_ai.success == true
+        next: merge_pr
+      - when: effect.resolve_conflicts.resolve_conflicts_with_ai.failed == true
+        next: enqueue_conflict_resolution_task
+      - when: "true"
+        next: ABORT
+
+  - name: enqueue_conflict_resolution_task
+    mode: system
+    effects:
+      - type: enqueue_task
+        mode: from_pr
+        pr: "{context:route_context.prs[0].number}"
+        workflow: takt-default
+        base_branch: improve
+        task: |
+          Resolve the conflicts raised while syncing the PR with its base branch.
+          Target PR: {context:route_context.prs[0].number}
+    rules:
+      - when: effect.enqueue_conflict_resolution_task.enqueue_task.success == true
+        next: wait_before_next_scan
+      - when: "true"
+        next: ABORT
+
+  - name: merge_pr
+    mode: system
+    effects:
+      - type: merge_pr
+        pr: "{context:route_context.prs[0].number}"
+    rules:
+      - when: effect.merge_pr.merge_pr.success == true
+        next: wait_before_next_scan
+      - when: "true"
+        next: ABORT
+
+  - name: wait_before_next_scan
+    mode: system
+    delay_before_ms: 60000
+    system_inputs:
+      - type: task_queue_context
+        source: current_project
+        as: queue
+        exclude_current_task: true
+    rules:
+      - when: exists(context.wait_before_next_scan.queue.items, item.kind == "running")
+        next: wait_before_next_scan
+      - when: "true"
+        next: route_context

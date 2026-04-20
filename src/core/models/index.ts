@@ -5,6 +5,7 @@ export type {
   RuleMatchMethod,
   PermissionMode,
   WorkflowStructuredOutput,
+  WorkflowMaxSteps,
   WorkflowSystemInput,
   WorkflowEffect,
   WorkflowEnqueueIssueConfig,

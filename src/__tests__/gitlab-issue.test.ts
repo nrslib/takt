@@ -27,6 +27,20 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 import { fetchIssue, createIssue } from '../infra/gitlab/issue.js';
 
+function withGlabApiResponse(body: unknown, nextPath?: string): string {
+  const headers = [
+    'HTTP/2 200 OK',
+    'content-type: application/json',
+    ...(nextPath ? [`link: <https://gitlab.example.com/api/v4/${nextPath}>; rel="next"`] : []),
+  ];
+  return `${headers.join('\n')}\n\n${JSON.stringify(body)}`;
+}
+
+function getApiPath(call: unknown[]): string {
+  const args = call[1] as string[];
+  return args[2] as string;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
@@ -107,7 +121,7 @@ describe('fetchIssue', () => {
     const notesCall = mockExecFileSync.mock.calls[1];
     expect(notesCall[0]).toBe('glab');
     expect(notesCall[1][0]).toBe('api');
-    const apiPath = notesCall[1][1] as string;
+    const apiPath = getApiPath(notesCall);
     expect(apiPath).toContain('issues/10/notes');
     expect(apiPath).toContain('per_page=100');
   });
@@ -226,8 +240,11 @@ describe('fetchIssue', () => {
     ];
     mockExecFileSync
       .mockReturnValueOnce(JSON.stringify(glabIssueResponse))
-      .mockReturnValueOnce(JSON.stringify(firstPageNotes))
-      .mockReturnValueOnce(JSON.stringify(secondPageNotes));
+      .mockReturnValueOnce(withGlabApiResponse(
+        firstPageNotes,
+        'projects/1/issues/50/notes?per_page=100&page=2',
+      ))
+      .mockReturnValueOnce(withGlabApiResponse(secondPageNotes));
 
     // When
     const result = fetchIssue(50, '/project');
@@ -256,19 +273,22 @@ describe('fetchIssue', () => {
     ];
     mockExecFileSync
       .mockReturnValueOnce(JSON.stringify(glabIssueResponse))
-      .mockReturnValueOnce(JSON.stringify(firstPage))
-      .mockReturnValueOnce(JSON.stringify(secondPage));
+      .mockReturnValueOnce(withGlabApiResponse(
+        firstPage,
+        'projects/1/issues/50/notes?per_page=100&page=2',
+      ))
+      .mockReturnValueOnce(withGlabApiResponse(secondPage));
 
     // When
     fetchIssue(50, '/project');
 
     // Then: verify page=1 and page=2
     const notesCall1 = mockExecFileSync.mock.calls[1];
-    const apiPath1 = notesCall1[1][1] as string;
+    const apiPath1 = getApiPath(notesCall1);
     expect(apiPath1).toContain('page=1');
 
     const notesCall2 = mockExecFileSync.mock.calls[2];
-    const apiPath2 = notesCall2[1][1] as string;
+    const apiPath2 = getApiPath(notesCall2);
     expect(apiPath2).toContain('page=2');
   });
 

@@ -1,4 +1,4 @@
-import { getGitProvider, type ExistingPr, type Issue, type PrReviewData } from '../../git/index.js';
+import { getGitProvider, type ExistingPr, type Issue, type PrListItem, type PrReviewData } from '../../git/index.js';
 import { getCurrentBranch } from '../../task/index.js';
 
 export interface CurrentBranchResolution {
@@ -61,4 +61,8 @@ export function fetchPrContext(cwd: string, prNumber: number): PrReviewData {
 
 export function fetchIssueContext(cwd: string, issueNumber: number): Issue {
   return requireAvailableProvider(cwd).fetchIssue(issueNumber, cwd);
+}
+
+export function fetchOpenPrList(cwd: string): PrListItem[] {
+  return requireAvailableProvider(cwd).listOpenPrs(cwd);
 }

@@ -2,6 +2,7 @@ import { mergeProviderOptions } from '../../../infra/config/providerOptions.js';
 import type {
   WorkflowConfig,
   WorkflowCallStep,
+  WorkflowMaxSteps,
   WorkflowResumePointEntry,
   WorkflowState,
 } from '../../models/types.js';
@@ -63,8 +64,8 @@ export function applyWorkflowCallOverridesToPersonaProviders(
 interface WorkflowCallExecutorDeps {
   getConfig: () => WorkflowConfig;
   getOptions: () => WorkflowEngineOptions;
-  getMaxSteps: () => number;
-  updateMaxSteps: (maxSteps: number) => void;
+  getMaxSteps: () => WorkflowMaxSteps;
+  updateMaxSteps: (maxSteps: WorkflowMaxSteps) => void;
   getCwd: () => string;
   projectCwd: string;
   task: string;

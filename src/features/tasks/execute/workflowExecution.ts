@@ -15,6 +15,20 @@ type WorkflowRunContext = {
   ignoreIterationLimit?: boolean;
 };
 
+function resolveCurrentTaskContext(options: WorkflowExecutionOptions, runSlug: string) {
+  return {
+    issueNumber: options.currentTaskIssueNumber,
+    runSlug,
+  };
+}
+
+function requireFiniteWorkflowMaxSteps(workflowConfig: WorkflowConfig): number {
+  if (typeof workflowConfig.maxSteps !== 'number') {
+    throw new Error('Iteration limit handling requires finite workflow maxSteps');
+  }
+  return workflowConfig.maxSteps;
+}
+
 export async function executeWorkflow(
   workflowConfig: WorkflowConfig,
   task: string,
@@ -68,12 +82,13 @@ async function executeWorkflowInternal(
     bootstrap.displayRef,
     bootstrap.shouldNotifyIterationLimit,
     (request) => {
+      const workflowMaxSteps = requireFiniteWorkflowMaxSteps(bootstrap.effectiveWorkflowConfig);
       const resumePoint = getLatestResumePoint()
         ?? buildResumePointForStep(request.currentStep)
         ?? eventBridge?.state.lastResumePoint;
       eventBridge!.state.exceededInfo = {
         currentStep: request.currentStep,
-        newMaxSteps: request.maxSteps + workflowConfig.maxSteps,
+        newMaxSteps: request.maxSteps + workflowMaxSteps,
         currentIteration: request.currentIteration,
         ...(resumePoint ? { resumePoint } : {}),
       };
@@ -123,9 +138,7 @@ async function executeWorkflowInternal(
       taskPrefix: options.taskPrefix,
       taskColorIndex: options.taskColorIndex,
       initialIteration: options.initialIterationOverride,
-      currentTask: options.currentTaskIssueNumber !== undefined
-        ? { issueNumber: options.currentTaskIssueNumber }
-        : undefined,
+      currentTask: resolveCurrentTaskContext(options, bootstrap.runSlug),
       systemStepServicesFactory: createDefaultSystemStepServices,
       workflowCallResolver: createWorkflowCallResolver(workflowExecutionContext),
     });

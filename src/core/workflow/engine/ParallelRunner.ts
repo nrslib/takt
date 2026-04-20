@@ -9,6 +9,7 @@ import type {
   WorkflowStep,
   WorkflowState,
   AgentResponse,
+  WorkflowMaxSteps,
 } from '../../models/types.js';
 import { executeAgent } from '../../../agents/agent-usecases.js';
 import { ParallelLogger } from './parallel-logger.js';
@@ -108,7 +109,7 @@ export class ParallelRunner {
     step: WorkflowStep,
     state: WorkflowState,
     task: string,
-    maxSteps: number,
+    maxSteps: WorkflowMaxSteps,
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
   ): Promise<{ response: AgentResponse; instruction: string }> {
     if (!step.parallel) {
@@ -317,7 +318,7 @@ export class ParallelRunner {
     stepIteration: number,
     subStepNames: string[],
     iteration: number,
-    maxSteps: number,
+    maxSteps: WorkflowMaxSteps,
   ): ParallelLoggerOptions {
     const options: ParallelLoggerOptions = {
       subStepNames,

@@ -1,5 +1,5 @@
 import { createLogger } from '../../../shared/utils/index.js';
-import type { AgentResponse, LoopMonitorConfig, WorkflowState, WorkflowStep } from '../../models/types.js';
+import type { AgentResponse, LoopMonitorConfig, WorkflowMaxSteps, WorkflowState, WorkflowStep } from '../../models/types.js';
 import { mergeProviderOptions } from '../../../infra/config/providerOptions.js';
 import { providerSupportsClaudeAllowedTools } from '../../../infra/providers/provider-capabilities.js';
 import { resolveLoopMonitorJudgeProviderModel } from '../provider-resolution.js';
@@ -15,7 +15,7 @@ interface LoopMonitorJudgeRunnerDeps {
   stepExecutor: StepExecutor;
   state: WorkflowState;
   task: string;
-  getMaxSteps: () => number;
+  getMaxSteps: () => WorkflowMaxSteps;
   language?: string;
   updatePersonaSession: (persona: string, sessionId: string | undefined) => void;
   resolveNextStepFromDone: (step: WorkflowStep, response: AgentResponse) => string;

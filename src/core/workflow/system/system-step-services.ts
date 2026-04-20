@@ -2,6 +2,7 @@ import type { WorkflowEffect, WorkflowState, WorkflowStep } from '../../models/t
 
 export interface SystemStepTaskContext {
   readonly issueNumber?: number;
+  readonly runSlug?: string;
 }
 
 export interface SystemStepServicesOptions {
@@ -12,7 +13,7 @@ export interface SystemStepServicesOptions {
 }
 
 export interface SystemStepServices {
-  resolveSystemInput(input: NonNullable<WorkflowStep['systemInputs']>[number]): Record<string, unknown>;
+  resolveSystemInput(input: NonNullable<WorkflowStep['systemInputs']>[number]): unknown;
   executeEffect(
     effect: WorkflowEffect,
     payload: Record<string, unknown>,

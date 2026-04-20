@@ -9,7 +9,7 @@ import {
   type IsolatedEnv,
 } from '../helpers/isolated-env';
 import { createTestRepo, type TestRepo } from '../helpers/test-repo';
-import { waitFor, waitForClose } from '../helpers/wait.js';
+import { cleanupChildProcess, cleanupTestResource, waitFor, waitForClose } from '../helpers/wait.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -18,6 +18,7 @@ const __dirname = dirname(__filename);
 describe('E2E: Run tasks graceful shutdown on SIGINT (parallel)', () => {
   let isolatedEnv: IsolatedEnv;
   let testRepo: TestRepo;
+  let child: ReturnType<typeof spawn> | undefined;
 
   beforeEach(() => {
     isolatedEnv = createIsolatedEnv();
@@ -31,17 +32,11 @@ describe('E2E: Run tasks graceful shutdown on SIGINT (parallel)', () => {
     });
   });
 
-  afterEach(() => {
-    try {
-      testRepo.cleanup();
-    } catch {
-      // best-effort
-    }
-    try {
-      isolatedEnv.cleanup();
-    } catch {
-      // best-effort
-    }
+  afterEach(async () => {
+    await cleanupChildProcess(child);
+    child = undefined;
+    cleanupTestResource('testRepo', () => testRepo.cleanup());
+    cleanupTestResource('isolatedEnv', () => isolatedEnv.cleanup());
   });
 
   it('should stop scheduling new clone work after SIGINT and exit cleanly', async () => {
@@ -88,7 +83,7 @@ describe('E2E: Run tasks graceful shutdown on SIGINT (parallel)', () => {
       'utf-8',
     );
 
-    const child = spawn('node', [binPath, 'run', '--provider', 'mock'], {
+    child = spawn('node', [binPath, 'run', '--provider', 'mock'], {
       cwd: testRepo.path,
       env: {
         ...isolatedEnv.env,
@@ -184,7 +179,7 @@ describe('E2E: Run tasks graceful shutdown on SIGINT (parallel)', () => {
       'utf-8',
     );
 
-    const child = spawn('node', [binPath, 'run', '--provider', 'mock'], {
+    child = spawn('node', [binPath, 'run', '--provider', 'mock'], {
       cwd: testRepo.path,
       env: {
         ...isolatedEnv.env,
@@ -260,7 +255,7 @@ describe('E2E: Run tasks graceful shutdown on SIGINT (parallel)', () => {
       'utf-8',
     );
 
-    const child = spawn('node', [binPath, 'run', '--provider', 'mock'], {
+    child = spawn('node', [binPath, 'run', '--provider', 'mock'], {
       cwd: testRepo.path,
       env: {
         ...isolatedEnv.env,

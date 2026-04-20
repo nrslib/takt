@@ -5,6 +5,7 @@ import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
 import { createIsolatedEnv, type IsolatedEnv } from '../helpers/isolated-env';
+import { cleanupChildProcess, cleanupTestResource } from '../helpers/wait.js';
 import { createTestRepo, type TestRepo } from '../helpers/test-repo';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -14,23 +15,18 @@ const __dirname = dirname(__filename);
 describe('E2E: Watch tasks (takt watch)', () => {
   let isolatedEnv: IsolatedEnv;
   let testRepo: TestRepo;
+  let child: ReturnType<typeof spawn> | undefined;
 
   beforeEach(() => {
     isolatedEnv = createIsolatedEnv();
     testRepo = createTestRepo();
   });
 
-  afterEach(() => {
-    try {
-      testRepo.cleanup();
-    } catch {
-      // best-effort
-    }
-    try {
-      isolatedEnv.cleanup();
-    } catch {
-      // best-effort
-    }
+  afterEach(async () => {
+    await cleanupChildProcess(child);
+    child = undefined;
+    cleanupTestResource('testRepo', () => testRepo.cleanup());
+    cleanupTestResource('isolatedEnv', () => isolatedEnv.cleanup());
   });
 
   it('should execute a task added during watch', async () => {
@@ -38,7 +34,7 @@ describe('E2E: Watch tasks (takt watch)', () => {
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/execute-done.json');
     const workflowPath = resolve(__dirname, '../fixtures/workflows/mock-single-step.yaml');
 
-    const child = spawn('node', [binPath, 'watch', '--provider', 'mock'], {
+    child = spawn('node', [binPath, 'watch', '--provider', 'mock'], {
       cwd: testRepo.path,
       env: {
         ...isolatedEnv.env,

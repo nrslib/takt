@@ -4,7 +4,7 @@
  * Defines the context structures used by instruction builders.
  */
 
-import type { AgentResponse, Language, WorkflowState } from '../../models/types.js';
+import type { AgentResponse, Language, WorkflowMaxSteps, WorkflowState } from '../../models/types.js';
 
 /**
  * Context for building instruction from template.
@@ -15,7 +15,7 @@ export interface InstructionContext {
   /** Current iteration number (workflow-wide turn count) */
   iteration: number;
   /** Maximum steps allowed */
-  maxSteps: number;
+  maxSteps: WorkflowMaxSteps;
   /** Current step's iteration number (how many times this step has been executed) */
   stepIteration: number;
   /** Working directory (agent work dir, may be a clone) */

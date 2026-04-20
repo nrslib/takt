@@ -401,7 +401,7 @@ export const WorkflowConfigRawSchema = z.object({
   report_formats: z.record(z.string(), z.string()).optional(),
   steps: z.array(WorkflowConfigStepRawSchema).min(1),
   initial_step: z.string().optional(),
-  max_steps: z.number().int().positive().optional().default(10),
+  max_steps: z.union([z.number().int().positive(), z.literal('infinite')]).optional().default(10),
   loop_monitors: z.array(LoopMonitorSchema).optional(),
   interactive_mode: InteractiveModeSchema.optional(),
 }).strict();

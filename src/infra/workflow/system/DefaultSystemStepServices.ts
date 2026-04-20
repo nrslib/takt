@@ -12,6 +12,7 @@ import { validateSystemEffectPayload } from '../../../core/workflow/system/syste
 import {
   fetchExistingPr,
   fetchIssueContext,
+  fetchOpenPrList,
   fetchPrContext,
   resolveCurrentBranch,
 } from './system-git-context.js';
@@ -22,10 +23,94 @@ import {
 import { enqueueTaskEffect } from './system-enqueue-effect.js';
 import { resolveConflictsWithAiEffect, syncWithRootEffect } from './system-sync-effects.js';
 
+function matchesSimpleWildcard(value: string, pattern: string): boolean {
+  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
+  return new RegExp(`^${escaped}$`).test(value);
+}
+
+function resolvePrListInput(input: Extract<WorkflowSystemInput, { type: 'pr_list' }>, projectCwd: string) {
+  const openPrs = fetchOpenPrList(projectCwd);
+  const filtered = openPrs.filter((pr) => {
+    if (input.where?.author !== undefined && pr.author !== input.where.author) {
+      return false;
+    }
+    if (input.where?.base_branch !== undefined && pr.base_branch !== input.where.base_branch) {
+      return false;
+    }
+    if (input.where?.head_branch !== undefined && !matchesSimpleWildcard(pr.head_branch, input.where.head_branch)) {
+      return false;
+    }
+    if (input.where?.draft !== undefined && pr.draft !== input.where.draft) {
+      return false;
+    }
+    return true;
+  });
+
+  filtered.sort((left, right) => right.updated_at.localeCompare(left.updated_at));
+  return filtered.map(({ number, author, base_branch, head_branch, draft }) => ({
+    number,
+    author,
+    base_branch,
+    head_branch,
+    draft,
+  }));
+}
+
+function listQueueTasks(projectCwd: string) {
+  return new TaskRunner(projectCwd).listAllTaskItems();
+}
+
+function buildTaskQueueContext(tasks: ReturnType<typeof listQueueTasks>) {
+  const counts = {
+    pending_count: 0,
+    running_count: 0,
+    completed_count: 0,
+    failed_count: 0,
+    exceeded_count: 0,
+    pr_failed_count: 0,
+  };
+
+  for (const task of tasks) {
+    const key = `${task.kind}_count` as keyof typeof counts;
+    if (key in counts) {
+      counts[key] += 1;
+    }
+  }
+
+  return {
+    exists: tasks.length > 0,
+    total_count: tasks.length,
+    ...counts,
+    items: tasks.map((task) => ({
+      task_name: task.name,
+      kind: task.kind,
+      issue: task.issueNumber,
+      pr: task.prNumber,
+    })),
+  };
+}
+
+function resolveTaskQueueInput(
+  input: Extract<WorkflowSystemInput, { type: 'task_queue_context' }>,
+  options: SystemStepServicesOptions,
+) {
+  const tasks = listQueueTasks(options.projectCwd);
+  if (input.exclude_current_task !== true) {
+    return buildTaskQueueContext(tasks);
+  }
+
+  const runSlug = options.taskContext?.runSlug;
+  if (!runSlug) {
+    throw new Error('task_queue_context.exclude_current_task requires current task run slug');
+  }
+
+  return buildTaskQueueContext(tasks.filter((task) => task.runSlug !== runSlug));
+}
+
 function resolveInput(
   options: SystemStepServicesOptions,
   input: WorkflowSystemInput,
-): Record<string, unknown> {
+): unknown {
   switch (input.type) {
     case 'task_context':
       return options.task.length > 0
@@ -77,27 +162,10 @@ function resolveInput(
       };
     }
     case 'task_queue_context': {
-      const tasks = new TaskRunner(options.projectCwd).listAllTaskItems();
-      const counts = {
-        pending_count: 0,
-        running_count: 0,
-        completed_count: 0,
-        failed_count: 0,
-        exceeded_count: 0,
-        pr_failed_count: 0,
-      };
-      for (const task of tasks) {
-        const key = `${task.kind}_count` as keyof typeof counts;
-        if (key in counts) {
-          counts[key] += 1;
-        }
-      }
-      return {
-        exists: tasks.length > 0,
-        total_count: tasks.length,
-        ...counts,
-      };
+      return resolveTaskQueueInput(input, options);
     }
+    case 'pr_list':
+      return resolvePrListInput(input, options.projectCwd);
   }
 }
 
@@ -123,7 +191,7 @@ async function runEffect(
 export class DefaultSystemStepServices implements SystemStepServices {
   constructor(private readonly options: SystemStepServicesOptions) {}
 
-  resolveSystemInput(input: WorkflowSystemInput): Record<string, unknown> {
+  resolveSystemInput(input: WorkflowSystemInput): unknown {
     return resolveInput(this.options, input);
   }
 

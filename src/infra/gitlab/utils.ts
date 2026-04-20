@@ -5,8 +5,8 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { MAX_PAGES } from '../git/constants.js';
 import { getRemoteHostname } from '../git/detect.js';
+import { fetchPaginatedApi } from '../git/paginated-api.js';
 import type { CliStatus } from '../git/types.js';
 
 export const ITEMS_PER_PAGE = 100;
@@ -54,29 +54,15 @@ export function checkGlabCli(cwd: string): CliStatus {
 /**
  * Fetch all pages from a GitLab API endpoint via `glab api`.
  *
- * Paginates through results until a page returns fewer than `perPage` items
- * or `MAX_PAGES` is reached (whichever comes first).
+ * Follows the API pagination link header until no next page remains.
  */
 export function fetchAllPages<T>(endpoint: string, perPage: number, context: string, cwd: string): T[] {
-  const all: T[] = [];
-  let page = 1;
-
-  while (page <= MAX_PAGES) {
-    const raw = execFileSync(
-      'glab',
-      ['api', `${endpoint}${endpoint.includes('?') ? '&' : '?'}per_page=${perPage}&page=${page}`],
-      { cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
-    );
-    const items = parseJson<T[]>(raw, context);
-
-    all.push(...items);
-
-    if (items.length < perPage) {
-      break;
-    }
-
-    page += 1;
-  }
-
-  return all;
+  return fetchPaginatedApi<T>({
+    command: 'glab',
+    cwd,
+    context,
+    initialEndpoint: `${endpoint}${endpoint.includes('?') ? '&' : '?'}per_page=${perPage}&page=1`,
+    apiPrefix: '/api/v4/',
+    parsePage: (body, pageContext) => parseJson<T[]>(body, pageContext),
+  });
 }

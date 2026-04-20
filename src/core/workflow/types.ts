@@ -6,6 +6,7 @@ import type {
   Language,
   LoopMonitorConfig,
   WorkflowConfig,
+  WorkflowMaxSteps,
   WorkflowResumePoint,
   WorkflowResumePointEntry,
 } from '../models/types.js';
@@ -102,7 +103,7 @@ export interface RuntimeStepResolution {
 export interface WorkflowSharedRuntimeState {
   startedAtMs: number;
   activeResumePoint?: WorkflowResumePoint;
-  maxSteps?: number;
+  maxSteps?: WorkflowMaxSteps;
 }
 
 export type WorkflowAbortKind =
@@ -276,10 +277,11 @@ export interface WorkflowEngineOptions {
   /** Initial iteration count (for resuming exceeded tasks) */
   initialIteration?: number;
   /** Override workflow maxSteps for the current engine instance. */
-  maxStepsOverride?: number;
+  maxStepsOverride?: WorkflowMaxSteps;
   /** Current task metadata for system-step context resolution */
   currentTask?: {
     issueNumber?: number;
+    runSlug?: string;
   };
   systemStepServicesFactory?: SystemStepServicesFactory;
   sharedRuntime?: WorkflowSharedRuntimeState;

@@ -34,7 +34,7 @@ export interface TaskPrefixWriterOptions {
 export interface StepPrefixContext {
   stepName: string;
   iteration: number;
-  maxSteps: number;
+  maxSteps: number | 'infinite';
   stepIteration: number;
 }
 

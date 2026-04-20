@@ -76,7 +76,11 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
       expect(config!.name).toBe(name);
       expect(config!.steps.length).toBeGreaterThan(0);
       expect(config!.initialStep).toBeDefined();
-      expect(config!.maxSteps).toBeGreaterThan(0);
+      const maxSteps = (config as Record<string, unknown>).maxSteps;
+      expect(maxSteps === 'infinite' || typeof maxSteps === 'number').toBe(true);
+      if (typeof maxSteps === 'number') {
+        expect(maxSteps).toBeGreaterThan(0);
+      }
     });
   }
 
@@ -98,6 +102,99 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
     expect(auditStep).toBeDefined();
   });
 
+  it('should include and load auto-improvement-loop as a builtin workflow', () => {
+    expect(builtinNames).toContain('auto-improvement-loop');
+
+    const config = loadWorkflowConfig('auto-improvement-loop', testDir);
+    expect(config).not.toBeNull();
+    expect((config as Record<string, unknown>).maxSteps).toBe('infinite');
+    expect(config!.schemas).toEqual(expect.objectContaining({
+      'followup-task': 'followup-task',
+    }));
+
+    const routeContext = config!.steps.find((step) => step.name === 'route_context');
+    expect(routeContext?.kind).toBe('system');
+    expect(routeContext?.systemInputs).toHaveLength(4);
+    expect(routeContext?.systemInputs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'task_context', as: 'task' }),
+      expect.objectContaining({ type: 'branch_context', as: 'branch' }),
+      expect.objectContaining({ type: 'pr_list', as: 'prs' }),
+      expect.objectContaining({ type: 'issue_context', as: 'issue' }),
+    ]));
+  });
+
+  it('should preserve the north-star orchestration contract in the builtin workflow', () => {
+    const config = loadWorkflowConfig('auto-improvement-loop', testDir);
+    expect(config).not.toBeNull();
+
+    const planFromIssue = config!.steps.find((step) => step.name === 'plan_from_issue') as Record<string, unknown> | undefined;
+    const enqueueFromIssue = config!.steps.find((step) => step.name === 'enqueue_from_issue') as Record<string, unknown> | undefined;
+    const planFromExistingPr = config!.steps.find((step) => step.name === 'plan_from_existing_pr') as Record<string, unknown> | undefined;
+    const enqueueFromPr = config!.steps.find((step) => step.name === 'enqueue_from_pr') as Record<string, unknown> | undefined;
+    const prepareMerge = config!.steps.find((step) => step.name === 'prepare_merge') as Record<string, unknown> | undefined;
+    const resolveConflicts = config!.steps.find((step) => step.name === 'resolve_conflicts') as Record<string, unknown> | undefined;
+    const enqueueConflictResolutionTask = config!.steps.find((step) => step.name === 'enqueue_conflict_resolution_task') as Record<string, unknown> | undefined;
+    const mergePr = config!.steps.find((step) => step.name === 'merge_pr') as Record<string, unknown> | undefined;
+    const waitBeforeNextScan = config!.steps.find((step) => step.name === 'wait_before_next_scan') as Record<string, unknown> | undefined;
+
+    expect(planFromIssue?.delayBeforeMs).toBe(60000);
+    expect(planFromIssue?.rules).toEqual(expect.arrayContaining([
+      expect.objectContaining({ condition: 'structured.plan_from_issue.action == "noop"', next: 'wait_before_next_scan' }),
+      expect.objectContaining({ condition: 'true', next: 'ABORT' }),
+    ]));
+    expect(enqueueFromIssue?.effects).toEqual([
+      expect.objectContaining({
+        type: 'enqueue_task',
+        mode: 'new',
+        workflow: 'takt-default',
+        base_branch: 'improve',
+        issue: '{structured:plan_from_issue.issue}',
+      }),
+    ]);
+    expect(planFromExistingPr?.rules).toEqual(expect.arrayContaining([
+      expect.objectContaining({ condition: 'structured.plan_from_existing_pr.action == "noop"', next: 'wait_before_next_scan' }),
+      expect.objectContaining({ condition: 'true', next: 'ABORT' }),
+    ]));
+    expect(enqueueFromPr?.effects).toEqual([
+      expect.objectContaining({
+        type: 'enqueue_task',
+        mode: 'from_pr',
+        workflow: 'takt-default',
+        base_branch: 'improve',
+      }),
+    ]);
+    expect(prepareMerge?.rules).toEqual(expect.arrayContaining([
+      expect.objectContaining({ condition: 'effect.prepare_merge.sync_with_root.success == true', next: 'merge_pr' }),
+      expect.objectContaining({ condition: 'effect.prepare_merge.sync_with_root.conflicted == true', next: 'resolve_conflicts' }),
+    ]));
+    expect(resolveConflicts?.rules).toEqual(expect.arrayContaining([
+      expect.objectContaining({ condition: 'effect.resolve_conflicts.resolve_conflicts_with_ai.success == true', next: 'merge_pr' }),
+      expect.objectContaining({ condition: 'effect.resolve_conflicts.resolve_conflicts_with_ai.failed == true', next: 'enqueue_conflict_resolution_task' }),
+    ]));
+    expect(enqueueConflictResolutionTask?.effects).toEqual([
+      expect.objectContaining({
+        type: 'enqueue_task',
+        mode: 'from_pr',
+        workflow: 'takt-default',
+        base_branch: 'improve',
+      }),
+    ]);
+    expect(mergePr).toBeDefined();
+    expect(waitBeforeNextScan?.systemInputs).toEqual([
+      expect.objectContaining({
+        type: 'task_queue_context',
+        as: 'queue',
+        exclude_current_task: true,
+      }),
+    ]);
+    expect(waitBeforeNextScan?.rules).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        condition: 'exists(context.wait_before_next_scan.queue.items, item.kind == "running")',
+        next: 'wait_before_next_scan',
+      }),
+    ]));
+  });
+
   it('should load audit-e2e as a builtin workflow in ja locale', () => {
     languageState.value = 'ja';
 
@@ -112,6 +209,17 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
 
     expect(planStep).toBeDefined();
     expect(auditStep).toBeDefined();
+  });
+
+  it('should load auto-improvement-loop as a builtin workflow in ja locale', () => {
+    languageState.value = 'ja';
+
+    const jaBuiltinNames = listBuiltinWorkflowNames(testDir, { includeDisabled: true });
+    expect(jaBuiltinNames).toContain('auto-improvement-loop');
+
+    const config = loadWorkflowConfig('auto-improvement-loop', testDir);
+    expect(config).not.toBeNull();
+    expect((config as Record<string, unknown>).maxSteps).toBe('infinite');
   });
 });
 
@@ -531,6 +639,10 @@ describe('Workflow Loader IT: workflow config validation', () => {
     expect(config).not.toBeNull();
     expect(typeof config!.maxSteps).toBe('number');
     expect(config!.maxSteps).toBeGreaterThan(0);
+
+    const infiniteConfig = loadWorkflowConfig('auto-improvement-loop', testDir);
+    expect(infiniteConfig).not.toBeNull();
+    expect((infiniteConfig as Record<string, unknown>).maxSteps).toBe('infinite');
   });
 
   it('should set initial_step from YAML', () => {

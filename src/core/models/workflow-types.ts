@@ -18,6 +18,8 @@ export interface WorkflowRule {
   aggregateConditionText?: string | string[];
 }
 
+export type WorkflowMaxSteps = number | 'infinite';
+
 export interface WorkflowStructuredOutput {
   schemaRef: string;
   schema: Record<string, unknown>;
@@ -25,6 +27,13 @@ export interface WorkflowStructuredOutput {
 
 interface WorkflowSystemBinding {
   as: string;
+}
+
+export interface WorkflowPrListWhere {
+  author?: string;
+  base_branch?: string;
+  head_branch?: string;
+  draft?: boolean;
 }
 
 export type WorkflowSystemInput =
@@ -47,6 +56,12 @@ export type WorkflowSystemInput =
   | (WorkflowSystemBinding & {
     type: 'task_queue_context';
     source: 'current_project';
+    exclude_current_task?: boolean;
+  })
+  | (WorkflowSystemBinding & {
+    type: 'pr_list';
+    source: 'current_project';
+    where?: WorkflowPrListWhere;
   });
 
 export interface WorkflowEnqueueIssueConfig {
@@ -375,7 +390,7 @@ export interface WorkflowConfig {
   reportFormats?: Record<string, string>;
   steps: WorkflowStep[];
   initialStep: string;
-  maxSteps: number;
+  maxSteps: WorkflowMaxSteps;
   loopDetection?: LoopDetectionConfig;
   loopMonitors?: LoopMonitorConfig[];
   interactiveMode?: InteractiveMode;

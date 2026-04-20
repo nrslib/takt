@@ -15,6 +15,7 @@ const {
   mockResolveBaseBranch,
   mockFindExistingPr,
   mockFetchPrReviewComments,
+  mockTaskRunnerListAllTaskItems,
 } = vi.hoisted(() => ({
   mockCommentOnPr: vi.fn(),
   mockMergePr: vi.fn(),
@@ -23,6 +24,7 @@ const {
   mockResolveBaseBranch: vi.fn(),
   mockFindExistingPr: vi.fn(),
   mockFetchPrReviewComments: vi.fn(),
+  mockTaskRunnerListAllTaskItems: vi.fn(),
 }));
 
 vi.mock('../infra/config/global/globalConfig.js', () => ({
@@ -57,7 +59,7 @@ vi.mock('../infra/task/index.js', () => ({
   resolveBaseBranch: (...args: unknown[]) => mockResolveBaseBranch(...args),
   TaskRunner: class {
     listAllTaskItems() {
-      return [];
+      return mockTaskRunnerListAllTaskItems();
     }
   },
 }));
@@ -76,6 +78,9 @@ function createSystemEngineOptions(projectDir: string) {
       requestMoreParts: vi.fn(),
     },
     reportDirName: 'test-report-dir',
+    currentTask: {
+      runSlug: 'test-report-dir',
+    },
     systemStepServicesFactory: createDefaultSystemStepServices,
   };
 }
@@ -91,6 +96,7 @@ describe('system workflow execution integration', () => {
     mockCreateIssueFromTask.mockReturnValue(586);
     mockResolveBaseBranch.mockImplementation((_cwd: string, branch?: string) => ({ branch: branch ?? 'main' }));
     mockMergePr.mockReturnValue({ success: true });
+    mockTaskRunnerListAllTaskItems.mockReturnValue([]);
     mockFindExistingPr.mockReturnValue({ number: 42, url: 'https://example.test/pr/42' });
     mockFetchPrReviewComments.mockReturnValue({
       number: 42,
@@ -369,6 +375,73 @@ describe('system workflow execution integration', () => {
       comment_pr: {
         success: true,
         failed: false,
+      },
+    });
+  });
+
+  it('wait_before_next_scan は exclude_current_task 指定時に他の running task がなければ route_context に戻る', async () => {
+    mockTaskRunnerListAllTaskItems.mockReturnValue([
+      {
+        name: 'orchestration-loop',
+        kind: 'running',
+        runSlug: 'test-report-dir',
+        issueNumber: 586,
+        prNumber: 42,
+      },
+    ]);
+
+    const config = normalizeWorkflowConfig(
+      {
+        name: 'wait-loop-self-filter',
+        initial_step: 'wait_before_next_scan',
+        max_steps: 3,
+        steps: [
+          {
+            name: 'wait_before_next_scan',
+            mode: 'system',
+            system_inputs: [
+              { type: 'task_queue_context', source: 'current_project', as: 'queue', exclude_current_task: true },
+            ],
+            rules: [
+              { when: 'exists(context.wait_before_next_scan.queue.items, item.kind == "running")', next: 'ABORT' },
+              { when: 'true', next: 'route_context' },
+            ],
+          },
+          {
+            name: 'route_context',
+            mode: 'system',
+            system_inputs: [
+              { type: 'task_queue_context', source: 'current_project', as: 'queue' },
+            ],
+            rules: [
+              { when: 'context.route_context.queue.total_count == 1', next: 'COMPLETE' },
+              { when: 'true', next: 'ABORT' },
+            ],
+          },
+        ],
+      },
+      projectDir,
+    );
+
+    const engine = new WorkflowEngine(config, projectDir, 'Current task body', {
+      ...createSystemEngineOptions(projectDir),
+    });
+
+    const state = await engine.run();
+    const stateRecord = state as Record<string, unknown>;
+
+    expect(state.status).toBe('completed');
+    expect((stateRecord.systemContexts as Map<string, unknown>).get('wait_before_next_scan')).toEqual({
+      queue: {
+        exists: false,
+        total_count: 0,
+        pending_count: 0,
+        running_count: 0,
+        completed_count: 0,
+        failed_count: 0,
+        exceeded_count: 0,
+        pr_failed_count: 0,
+        items: [],
       },
     });
   });
@@ -903,6 +976,130 @@ describe('system workflow execution integration', () => {
       merge_pr: {
         success: true,
         failed: false,
+      },
+    });
+  });
+
+  it('pr_list と queue.items を when の配列参照と exists で評価して遷移できる', async () => {
+    const createServices = vi.fn(() => ({
+      resolveSystemInput(input: { type: string }) {
+        if (input.type === 'pr_list') {
+          return [
+            {
+              number: 42,
+              author: 'nrslib',
+              base_branch: 'improve',
+              head_branch: 'task/42',
+              draft: false,
+            },
+          ];
+        }
+        if (input.type === 'task_queue_context') {
+          return {
+            exists: true,
+            total_count: 1,
+            pending_count: 0,
+            running_count: 1,
+            completed_count: 0,
+            failed_count: 0,
+            exceeded_count: 0,
+            pr_failed_count: 0,
+            items: [
+              {
+                task_name: 'task-42',
+                kind: 'running',
+                issue: 586,
+                pr: 42,
+              },
+            ],
+          };
+        }
+        throw new Error(`Unexpected system input: ${input.type}`);
+      },
+      async executeEffect() {
+        throw new Error('No effects expected in this workflow');
+      },
+    }));
+
+    const config = normalizeWorkflowConfig(
+      {
+        name: 'route-with-pr-list',
+        initial_step: 'route_context',
+        max_steps: 2,
+        steps: [
+          {
+            name: 'route_context',
+            mode: 'system',
+            system_inputs: [
+              { type: 'pr_list', source: 'current_project', as: 'prs', where: { draft: false } },
+              { type: 'task_queue_context', source: 'current_project', as: 'queue' },
+            ],
+            rules: [
+              {
+                when: 'context.route_context.prs.length > 0 && context.route_context.prs[0].head_branch == "task/42" && exists(context.route_context.queue.items, item.kind == "running" && item.pr == 42)',
+                next: 'wait_before_next_scan',
+              },
+              { when: 'true', next: 'ABORT' },
+            ],
+          },
+          {
+            name: 'wait_before_next_scan',
+            mode: 'system',
+            rules: [
+              { when: 'true', next: 'COMPLETE' },
+            ],
+          },
+        ],
+      },
+      projectDir,
+    );
+
+    const engine = new WorkflowEngine(config, projectDir, 'Current task body', {
+      projectCwd: projectDir,
+      provider: 'mock',
+      detectRuleIndex,
+      structuredCaller: {
+        judgeStatus: vi.fn(),
+        evaluateCondition: vi.fn().mockResolvedValue(-1),
+        decomposeTask: vi.fn(),
+        requestMoreParts: vi.fn(),
+      },
+      reportDirName: 'test-report-dir',
+      systemStepServicesFactory: createServices as never,
+    });
+
+    const state = await engine.run();
+    const stateRecord = state as Record<string, unknown>;
+
+    expect(state.status).toBe('completed');
+    expect(createServices).toHaveBeenCalledTimes(2);
+    expect((stateRecord.systemContexts as Map<string, unknown>).get('route_context')).toEqual({
+      prs: [
+        {
+          number: 42,
+          author: 'nrslib',
+          base_branch: 'improve',
+          head_branch: 'task/42',
+          draft: false,
+        },
+      ],
+      queue: {
+        exists: true,
+        total_count: 1,
+        pending_count: 0,
+        running_count: 1,
+        completed_count: 0,
+        failed_count: 0,
+        exceeded_count: 0,
+        pr_failed_count: 0,
+        items: [
+          {
+            task_name: 'task-42',
+            kind: 'running',
+            issue: 586,
+            pr: 42,
+          },
+        ],
       },
     });
   });

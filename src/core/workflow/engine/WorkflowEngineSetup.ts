@@ -4,6 +4,7 @@ import { createLogger } from '../../../shared/utils/index.js';
 import type {
   AgentResponse,
   WorkflowConfig,
+  WorkflowMaxSteps,
   WorkflowResumePoint,
   WorkflowStep,
 } from '../../models/types.js';
@@ -33,14 +34,14 @@ interface WorkflowEngineSetupParams {
   getCwd: () => string;
   getReportDir: () => string;
   getRunPaths: () => RunPaths;
-  getMaxSteps: () => number;
+  getMaxSteps: () => WorkflowMaxSteps;
   options: WorkflowEngineOptions;
   detectRuleIndex: (content: string, stepName: string) => number;
   structuredCaller: StructuredCaller;
   sharedRuntime: WorkflowSharedRuntimeState;
   resumeStackPrefix: WorkflowEngineOptions['resumeStackPrefix'];
   runPaths: RunPaths;
-  updateMaxSteps: (maxSteps: number) => void;
+  updateMaxSteps: (maxSteps: WorkflowMaxSteps) => void;
   setActiveResumePoint: (step: WorkflowStep, iteration: number) => void;
   updatePersonaSession: (persona: string, sessionId: string | undefined) => void;
   resolveNextStepFromDone: (step: WorkflowStep, response: AgentResponse) => string;
@@ -75,7 +76,7 @@ export function assertTaskPrefixPair(taskPrefix: string | undefined, taskColorIn
 
 export function createSharedRuntime(
   resumePoint: WorkflowResumePoint | undefined,
-  maxSteps: number,
+  maxSteps: WorkflowMaxSteps,
 ): WorkflowSharedRuntimeState {
   const now = Date.now();
   return {

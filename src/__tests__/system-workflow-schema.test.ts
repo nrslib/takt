@@ -72,6 +72,84 @@ describe('system workflow schema', () => {
     expect(result.success).toBe(false);
   });
 
+  it('pr_list system input の where filter を受け付ける', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'route_context',
+      mode: 'system',
+      system_inputs: [
+        {
+          type: 'pr_list',
+          source: 'current_project',
+          as: 'prs',
+          where: {
+            author: 'nrslib',
+            base_branch: 'improve',
+            head_branch: 'task/*',
+            draft: false,
+          },
+        },
+      ],
+      rules: [
+        {
+          when: 'context.route_context.prs.length > 0',
+          next: 'plan_from_existing_pr',
+        },
+      ],
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const step = result.data as Record<string, unknown>;
+      expect(step.system_inputs).toEqual([
+        {
+          type: 'pr_list',
+          source: 'current_project',
+          as: 'prs',
+          where: {
+            author: 'nrslib',
+            base_branch: 'improve',
+            head_branch: 'task/*',
+            draft: false,
+          },
+        },
+      ]);
+    }
+  });
+
+  it('task_queue_context system input で exclude_current_task を受け付ける', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'wait_before_next_scan',
+      mode: 'system',
+      system_inputs: [
+        {
+          type: 'task_queue_context',
+          source: 'current_project',
+          as: 'queue',
+          exclude_current_task: true,
+        },
+      ],
+      rules: [
+        {
+          when: 'exists(context.wait_before_next_scan.queue.items, item.kind == "running")',
+          next: 'wait_before_next_scan',
+        },
+      ],
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const step = result.data as Record<string, unknown>;
+      expect(step.system_inputs).toEqual([
+        {
+          type: 'task_queue_context',
+          source: 'current_project',
+          as: 'queue',
+          exclude_current_task: true,
+        },
+      ]);
+    }
+  });
+
   it('同じ as の system_inputs 重複を reject する', () => {
     const result = WorkflowStepRawSchema.safeParse({
       name: 'route_context',
@@ -585,6 +663,102 @@ describe('system workflow schema', () => {
           type: 'object',
         }),
       });
+    } finally {
+      rmSync(workflowDir, { recursive: true, force: true });
+    }
+  });
+
+  it('builtin followup-task schema fallback を解決できる', () => {
+    const workflowDir = mkdtempSync(join(tmpdir(), 'takt-system-schema-followup-builtins-'));
+
+    try {
+      const raw = WorkflowConfigRawSchema.parse({
+        name: 'auto-improvement-loop',
+        max_steps: 3,
+        initial_step: 'plan_followup',
+        steps: [
+          {
+            name: 'plan_followup',
+            persona: 'supervisor',
+            instruction: 'Plan follow-up task',
+            structured_output: {
+              schema_ref: 'followup-task',
+            },
+            rules: [
+              {
+                when: 'true',
+                next: 'COMPLETE',
+              },
+            ],
+          },
+        ],
+      });
+
+      const normalized = normalizeWorkflowConfig(raw, workflowDir);
+      const step = normalized.steps[0] as Record<string, unknown>;
+      const structuredOutput = step.structuredOutput as { schemaRef: string; schema: Record<string, unknown> };
+
+      expect(structuredOutput.schemaRef).toBe('followup-task');
+      expect(structuredOutput.schema).toEqual(expect.objectContaining({
+        type: 'object',
+        required: ['action'],
+        additionalProperties: false,
+        properties: expect.objectContaining({
+          action: {
+            type: 'string',
+            enum: [
+              'enqueue_new_task',
+              'comment_on_pr',
+              'enqueue_from_pr',
+              'prepare_merge',
+              'noop',
+            ],
+          },
+          issue: {
+            type: 'object',
+            properties: {
+              create: { type: 'boolean' },
+              labels: {
+                type: 'array',
+                items: { type: 'string' },
+              },
+            },
+            additionalProperties: false,
+          },
+        }),
+      }));
+    } finally {
+      rmSync(workflowDir, { recursive: true, force: true });
+    }
+  });
+
+  it('max_steps: infinite を受け付けて正規化後も保持する', () => {
+    const workflowDir = mkdtempSync(join(tmpdir(), 'takt-system-schema-infinite-'));
+
+    try {
+      const result = WorkflowConfigRawSchema.safeParse({
+        name: 'auto-improvement-loop',
+        max_steps: 'infinite',
+        initial_step: 'route_context',
+        steps: [
+          {
+            name: 'route_context',
+            mode: 'system',
+            rules: [
+              {
+                when: 'true',
+                next: 'COMPLETE',
+              },
+            ],
+          },
+        ],
+      });
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        const normalized = normalizeWorkflowConfig(result.data, workflowDir);
+        expect((normalized as Record<string, unknown>).maxSteps).toBe('infinite');
+      }
     } finally {
       rmSync(workflowDir, { recursive: true, force: true });
     }

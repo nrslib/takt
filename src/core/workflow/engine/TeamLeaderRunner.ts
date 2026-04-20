@@ -4,6 +4,7 @@ import type {
   AgentResponse,
   PartDefinition,
   PartResult,
+  WorkflowMaxSteps,
 } from '../../models/types.js';
 import { executeAgent } from '../../../agents/agent-usecases.js';
 import { buildSessionKey } from '../session-key.js';
@@ -58,7 +59,7 @@ export class TeamLeaderRunner {
     step: WorkflowStep,
     state: WorkflowState,
     task: string,
-    maxSteps: number,
+    maxSteps: WorkflowMaxSteps,
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
   ): Promise<{ response: AgentResponse; instruction: string }> {
     if (!step.teamLeader) {

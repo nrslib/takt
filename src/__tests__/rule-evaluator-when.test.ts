@@ -107,6 +107,95 @@ describe('RuleEvaluator with when conditions', () => {
     expect(result?.index).toBe(0);
   });
 
+  it('配列の length と index 参照を deterministic に評価できる', async () => {
+    const state = makeState() as WorkflowState & {
+      systemContexts: Map<string, unknown>;
+    };
+    state.systemContexts = new Map([
+      ['route_context', {
+        prs: [
+          { number: 42, draft: false, author: 'nrslib' },
+          { number: 41, draft: true, author: 'octocat' },
+        ],
+      }],
+    ]);
+
+    const step = makeStep({
+      name: 'route_context',
+      rules: [
+        {
+          condition: 'context.route_context.prs.length > 1 && context.route_context.prs[0].number == 42 && context.route_context.prs[1].draft == true',
+          next: 'plan_from_existing_pr',
+        },
+      ],
+    });
+
+    const evaluator = new RuleEvaluator(step, makeContext(state));
+    const result = await evaluator.evaluate('', '');
+
+    expect(result?.index).toBe(0);
+  });
+
+  it('配列の field 射影参照を deterministic に評価できる', async () => {
+    const state = makeState() as WorkflowState & {
+      systemContexts: Map<string, unknown>;
+    };
+    state.systemContexts = new Map([
+      ['route_context', {
+        prs: [
+          { number: 42, draft: false, author: 'nrslib' },
+          { number: 41, draft: true, author: 'octocat' },
+        ],
+      }],
+    ]);
+
+    const step = makeStep({
+      name: 'route_context',
+      rules: [
+        {
+          condition: 'context.route_context.prs.author.length == 2 && context.route_context.prs.author[0] == "nrslib" && context.route_context.prs.number[1] == 41',
+          next: 'plan_from_existing_pr',
+        },
+      ],
+    });
+
+    const evaluator = new RuleEvaluator(step, makeContext(state));
+    const result = await evaluator.evaluate('', '');
+
+    expect(result?.index).toBe(0);
+  });
+
+  it('exists(...) で配列要素条件を deterministic に評価できる', async () => {
+    const state = makeState() as WorkflowState & {
+      systemContexts: Map<string, unknown>;
+    };
+    state.systemContexts = new Map([
+      ['wait_before_next_scan', {
+        queue: {
+          items: [
+            { kind: 'running', pr: 42 },
+            { kind: 'pending', pr: null },
+          ],
+        },
+      }],
+    ]);
+
+    const step = makeStep({
+      name: 'wait_before_next_scan',
+      rules: [
+        {
+          condition: 'exists(context.wait_before_next_scan.queue.items, item.kind == "running" && item.pr == 42)',
+          next: 'wait_before_next_scan',
+        },
+      ],
+    });
+
+    const evaluator = new RuleEvaluator(step, makeContext(state));
+    const result = await evaluator.evaluate('', '');
+
+    expect(result?.index).toBe(0);
+  });
+
   it('step 修飾のない effect 参照を reject する', async () => {
     const state = makeState() as WorkflowState & {
       effectResults: Map<string, unknown>;

@@ -60,6 +60,7 @@ workflow_categories:
       - takt-default
       - takt-default-refresh-all
       - takt-default-refresh-fast
+      - auto-improvement-loop
       - review-takt-default
       - review-fix-takt-default
   その他:

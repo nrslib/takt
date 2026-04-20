@@ -286,6 +286,39 @@ describe('executeAndCompleteTask', () => {
     expect(workflowExecutionOptions?.model).toBe('gpt-5.3-codex');
   });
 
+  it('should pass only currentTaskIssueNumber to executeWorkflow for system-step context', async () => {
+    mockResolveTaskExecution.mockResolvedValue({
+      execCwd: '/project',
+      workflowIdentifier: 'default',
+      isWorktree: false,
+      autoPr: false,
+      draftPr: false,
+      shouldPublishBranchToOrigin: false,
+      taskPrompt: undefined,
+      reportDirName: '20260216-task',
+      branch: undefined,
+      worktreePath: undefined,
+      baseBranch: undefined,
+      startStep: undefined,
+      retryNote: undefined,
+      issueNumber: 586,
+    });
+
+    await executeAndCompleteTaskWithoutWorkflow(
+      createTask('task-with-issue-context'),
+      createTaskRunnerMock() as never,
+      '/project',
+    );
+
+    expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+    const workflowExecutionOptions = mockExecuteWorkflow.mock.calls[0]?.[3] as {
+      currentTaskIssueNumber?: number;
+      currentTaskName?: string;
+    };
+    expect(workflowExecutionOptions?.currentTaskIssueNumber).toBe(586);
+    expect('currentTaskName' in (workflowExecutionOptions ?? {})).toBe(false);
+  });
+
   it('should resolve workflow paths relative to execCwd when running inside a worktree', async () => {
     mockLoadWorkflowByIdentifier.mockReturnValue({
       name: 'worktree-default',

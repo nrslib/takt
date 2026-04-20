@@ -4,6 +4,7 @@ import { createLogger, generateReportDir, isValidReportDirName } from '../../../
 import type {
   AgentResponse,
   WorkflowConfig,
+  WorkflowMaxSteps,
   WorkflowResumePoint,
   WorkflowResumePointEntry,
   WorkflowState,
@@ -61,7 +62,7 @@ export class WorkflowEngine extends EventEmitter {
   private cwd: string;
   private task: string;
   private options: WorkflowEngineOptions;
-  private maxSteps: number;
+  private maxSteps: WorkflowMaxSteps;
   private loopDetector: LoopDetector;
   private cycleDetector: CycleDetector;
   private reportDir: string;

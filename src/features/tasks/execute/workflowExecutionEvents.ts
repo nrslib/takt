@@ -31,7 +31,7 @@ interface WorkflowExecutionEventBridgeDeps {
   workflowConfig: {
     name: string;
     steps: Array<{ name: string }>;
-    maxSteps: number;
+    maxSteps: number | 'infinite';
   };
   task: string;
   projectCwd: string;
