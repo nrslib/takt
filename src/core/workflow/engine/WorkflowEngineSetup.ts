@@ -145,6 +145,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getLanguage: () => params.options.language,
     getInteractive: () => params.options.interactive === true,
     getWorkflowSteps: () => params.config.steps.map((step) => ({ name: step.name, description: step.description })),
+    getWorkflowDefinitionSteps: () => params.config.steps,
     getWorkflowName: () => params.config.name,
     getWorkflowDescription: () => params.config.description,
     getRetryNote: () => params.options.retryNote,

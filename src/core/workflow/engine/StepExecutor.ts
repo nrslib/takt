@@ -33,6 +33,7 @@ import {
 } from './engine-provider-options.js';
 import { validateStructuredOutputAgainstSchema } from './structured-output-schema-validator.js';
 import { providerSupportsStructuredOutput } from '../../../infra/providers/provider-capabilities.js';
+import { resolveReportHandles } from '../instruction/report-handles.js';
 
 const log = createLogger('step-executor');
 
@@ -45,6 +46,7 @@ export interface StepExecutorDeps {
   readonly getLanguage: () => Language | undefined;
   readonly getInteractive: () => boolean;
   readonly getWorkflowSteps: () => ReadonlyArray<{ name: string; description?: string }>;
+  readonly getWorkflowDefinitionSteps: () => ReadonlyArray<WorkflowStep>;
   readonly getWorkflowName: () => string;
   readonly getWorkflowDescription: () => string | undefined;
   readonly getRetryNote: () => string | undefined;
@@ -259,6 +261,13 @@ export class StepExecutor {
       step.knowledgeContents,
     );
     const workflowSteps = this.deps.getWorkflowSteps();
+    const workflowDefinitionSteps = this.deps.getWorkflowDefinitionSteps();
+    const reportDir = join(this.deps.getCwd(), this.deps.getReportDir());
+    const reportHandles = resolveReportHandles({
+      step,
+      reportDir,
+      workflowSteps: workflowDefinitionSteps,
+    });
     return new InstructionBuilder(step, {
       task,
       iteration: state.iteration,
@@ -268,7 +277,11 @@ export class StepExecutor {
       projectCwd: this.deps.getProjectCwd(),
       userInputs: state.userInputs,
       previousOutput: getPreviousOutput(state),
-      reportDir: join(this.deps.getCwd(), this.deps.getReportDir()),
+      reportDir,
+      currentReport: reportHandles.currentReport,
+      previousReport: reportHandles.previousReport,
+      reportHistory: reportHandles.reportHistory,
+      peerReports: reportHandles.peerReports,
       language: this.deps.getLanguage(),
       interactive: this.deps.getInteractive(),
       workflowSteps,

@@ -526,6 +526,23 @@ describe('instruction-builder', () => {
       expect(result).toContain('Phase 1');
     });
 
+    it('should keep report file metadata for peer_reports instructions', () => {
+      const step = createMinimalStep('Peer reports:\n{peer_reports}');
+      step.outputContracts = [{ name: '05-arch-review.md', format: '05-arch-review', useJudge: true }];
+      const context = createMinimalContext({
+        reportDir: '/project/.takt/runs/20260129-test/reports',
+        peerReports: '/project/.takt/runs/20260129-test/reports/06-security-review.md',
+        language: 'en',
+      });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('Report Directory');
+      expect(result).toContain('Report File');
+      expect(result).toContain('/project/.takt/runs/20260129-test/reports/05-arch-review.md');
+      expect(result).toContain('/project/.takt/runs/20260129-test/reports/06-security-review.md');
+    });
+
     it('should render Japanese step iteration suffix', () => {
       const step = createMinimalStep('Do work');
       const context = createMinimalContext({

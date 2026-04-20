@@ -32,6 +32,14 @@ export interface InstructionContext {
   previousResponseText?: string;
   /** Report directory path */
   reportDir?: string;
+  /** Latest report paths for the current step */
+  currentReport?: string;
+  /** Most recent versioned report paths for the current step */
+  previousReport?: string;
+  /** Versioned report history paths for the current step */
+  reportHistory?: string;
+  /** Latest report paths for peer steps */
+  peerReports?: string;
   /** Language for metadata rendering. Defaults to 'en'. */
   language?: Language;
   /** Whether interactive-only rules are enabled */

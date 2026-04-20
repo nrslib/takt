@@ -9,6 +9,7 @@ import {
   escapeTemplateChars,
   replaceTemplatePlaceholders,
 } from '../core/workflow/instruction/escape.js';
+import type { InstructionContext } from '../core/workflow/instruction/instruction-context.js';
 import { makeStep, makeInstructionContext } from './test-helpers.js';
 
 describe('escapeTemplateChars', () => {
@@ -155,6 +156,51 @@ describe('replaceTemplatePlaceholders', () => {
 
     const result = replaceTemplatePlaceholders(template, step, ctx);
     expect(result).toBe('Read /tmp/reports/review.md and /tmp/reports/plan.md');
+  });
+
+  it('should replace report handle placeholders with resolved paths', () => {
+    const step = makeStep();
+    const ctx = {
+      ...makeInstructionContext(),
+      currentReport: '/tmp/reports/07-fix.md',
+      previousReport: '/tmp/reports/07-fix.md.20260420T010000Z',
+      reportHistory: [
+        '/tmp/reports/07-fix.md.20260420T010000Z',
+        '/tmp/reports/07-fix.md.20260419T230000Z',
+      ].join('\n'),
+      peerReports: [
+        '/tmp/reports/05-arch-review.md',
+        '/tmp/reports/06-security-review.md',
+      ].join('\n'),
+    } as InstructionContext;
+    const template = [
+      'Current: {current_report}',
+      'Previous: {previous_report}',
+      'History: {report_history}',
+      'Peers: {peer_reports}',
+    ].join('\n');
+
+    const result = replaceTemplatePlaceholders(template, step, ctx);
+
+    expect(result).toContain('Current: /tmp/reports/07-fix.md');
+    expect(result).toContain('Previous: /tmp/reports/07-fix.md.20260420T010000Z');
+    expect(result).toContain('/tmp/reports/07-fix.md.20260419T230000Z');
+    expect(result).toContain('/tmp/reports/05-arch-review.md');
+    expect(result).toContain('/tmp/reports/06-security-review.md');
+    expect(result).not.toContain('{current_report}');
+    expect(result).not.toContain('{previous_report}');
+    expect(result).not.toContain('{report_history}');
+    expect(result).not.toContain('{peer_reports}');
+  });
+
+  it('should replace missing report handle placeholders with empty strings', () => {
+    const step = makeStep();
+    const ctx = makeInstructionContext() as InstructionContext;
+    const template = 'Current:{current_report}|Previous:{previous_report}|History:{report_history}|Peers:{peer_reports}';
+
+    const result = replaceTemplatePlaceholders(template, step, ctx);
+
+    expect(result).toBe('Current:|Previous:|History:|Peers:');
   });
 
   it('should handle template with multiple different placeholders', () => {
