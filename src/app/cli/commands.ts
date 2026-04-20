@@ -45,8 +45,13 @@ program
 program
   .command('watch')
   .description('Watch for tasks and auto-execute')
-  .action(async () => {
-    await watchTasks(resolvedCwd, resolveAgentOverrides(program));
+  .option('--ignore-exceed', 'Ignore workflow max_steps and continue running tasks')
+  .action(async (_opts, command) => {
+    const opts = command.optsWithGlobals();
+    await watchTasks(resolvedCwd, {
+      ...resolveAgentOverrides(program),
+      ignoreExceed: opts.ignoreExceed === true,
+    });
   });
 
 program

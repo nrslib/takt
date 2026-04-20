@@ -86,7 +86,7 @@ describe('E2E: Help command (takt --help)', () => {
     expect(result.stdout).toContain('--ignore-exceed');
   });
 
-  it('should not display --ignore-exceed in takt watch --help', () => {
+  it('should display --ignore-exceed in takt watch --help', () => {
     const result = runTakt({
       args: ['watch', '--help'],
       cwd: repo.path,
@@ -94,7 +94,7 @@ describe('E2E: Help command (takt --help)', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).not.toContain('--ignore-exceed');
+    expect(result.stdout).toContain('--ignore-exceed');
   });
 
   it('should show prompt argument help without current-workflow wording', () => {

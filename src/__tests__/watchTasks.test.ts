@@ -7,6 +7,7 @@ const {
   mockWatch,
   mockStop,
   mockExecuteAndCompleteTask,
+  mockExecuteRunTaskAndComplete,
   mockInfo,
   mockHeader,
   mockBlankLine,
@@ -20,6 +21,7 @@ const {
   mockWatch: vi.fn(),
   mockStop: vi.fn(),
   mockExecuteAndCompleteTask: vi.fn(),
+  mockExecuteRunTaskAndComplete: vi.fn(),
   mockInfo: vi.fn(),
   mockHeader: vi.fn(),
   mockBlankLine: vi.fn(),
@@ -44,6 +46,10 @@ vi.mock('../features/tasks/execute/taskExecution.js', () => ({
   executeAndCompleteTask: mockExecuteAndCompleteTask,
 }));
 
+vi.mock('../features/tasks/execute/runTaskExecution.js', () => ({
+  executeRunTaskAndComplete: mockExecuteRunTaskAndComplete,
+}));
+
 vi.mock('../shared/ui/index.js', () => ({
   header: mockHeader,
   info: mockInfo,
@@ -65,7 +71,7 @@ describe('watchTasks', () => {
     vi.clearAllMocks();
     mockRecoverInterruptedRunningTasks.mockReturnValue(0);
     mockGetTasksFilePath.mockReturnValue('/project/.takt/tasks.yaml');
-    mockExecuteAndCompleteTask.mockResolvedValue(true);
+    mockExecuteRunTaskAndComplete.mockResolvedValue(true);
 
     mockWatch.mockImplementation(async (onTask: (task: TaskInfo) => Promise<void>) => {
       await onTask({
@@ -87,17 +93,45 @@ describe('watchTasks', () => {
     expect(mockRecoverInterruptedRunningTasks).toHaveBeenCalledTimes(1);
     expect(mockInfo).toHaveBeenCalledWith('Recovered 1 interrupted running task(s) to pending.');
     expect(mockWatch).toHaveBeenCalledTimes(1);
-    expect(mockExecuteAndCompleteTask).toHaveBeenCalledTimes(1);
+    expect(mockExecuteRunTaskAndComplete).toHaveBeenCalledTimes(1);
   });
 
-  it('executeAndCompleteTask を watch ループで呼び出す', async () => {
+  it('watch ループで executeRunTaskAndComplete を呼び出す', async () => {
     await watchTasks('/project');
 
-    expect(mockExecuteAndCompleteTask).toHaveBeenCalledWith(
+    expect(mockExecuteRunTaskAndComplete).toHaveBeenCalledWith(
       expect.any(Object),
       expect.any(Object),
       '/project',
       undefined,
+      undefined,
+      undefined,
     );
+    expect(mockExecuteAndCompleteTask).not.toHaveBeenCalled();
+  });
+
+  it('ignoreExceed を runContext に変換しつつ agentOverrides を維持する', async () => {
+    await watchTasks('/project', {
+      provider: 'openai',
+      providerSource: 'cli',
+      model: 'gpt-5',
+      modelSource: 'cli',
+      ignoreExceed: true,
+    } as never);
+
+    expect(mockExecuteRunTaskAndComplete).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.any(Object),
+      '/project',
+      {
+        provider: 'openai',
+        providerSource: 'cli',
+        model: 'gpt-5',
+        modelSource: 'cli',
+      },
+      undefined,
+      { ignoreIterationLimit: true },
+    );
+    expect(mockExecuteAndCompleteTask).not.toHaveBeenCalled();
   });
 });

@@ -14,19 +14,41 @@ import {
   blankLine,
   warn,
 } from '../../../shared/ui/index.js';
-import { executeAndCompleteTask } from '../execute/taskExecution.js';
+import { executeRunTaskAndComplete, type RunTaskExecutionContext } from '../execute/runTaskExecution.js';
 import { EXIT_SIGINT } from '../../../shared/exitCodes.js';
 import { ShutdownManager } from '../execute/shutdownManager.js';
-import type { TaskExecutionOptions } from '../execute/types.js';
+import type { RunAllTasksOptions, TaskExecutionOptions } from '../execute/types.js';
+
+function resolveWatchExecutionOptions(options?: RunAllTasksOptions): {
+  agentOverrides?: TaskExecutionOptions;
+  runContext?: RunTaskExecutionContext;
+} {
+  const agentOverrides: TaskExecutionOptions | undefined = options
+    ? {
+        ...(options.provider !== undefined ? { provider: options.provider } : {}),
+        ...(options.providerSource !== undefined ? { providerSource: options.providerSource } : {}),
+        ...(options.model !== undefined ? { model: options.model } : {}),
+        ...(options.modelSource !== undefined ? { modelSource: options.modelSource } : {}),
+      }
+    : undefined;
+
+  return {
+    agentOverrides,
+    runContext: options?.ignoreExceed === true
+      ? { ignoreIterationLimit: true }
+      : undefined,
+  };
+}
 
 /**
  * Watch for tasks and execute them as they appear.
  * Runs until Ctrl+C.
  */
-export async function watchTasks(cwd: string, options?: TaskExecutionOptions): Promise<void> {
+export async function watchTasks(cwd: string, options?: RunAllTasksOptions): Promise<void> {
   const taskRunner = new TaskRunner(cwd, { onWarning: warn });
   const watcher = new TaskWatcher(cwd);
   const recovered = taskRunner.recoverInterruptedRunningTasks();
+  const { agentOverrides, runContext } = resolveWatchExecutionOptions(options);
 
   let taskCount = 0;
   let successCount = 0;
@@ -62,7 +84,14 @@ export async function watchTasks(cwd: string, options?: TaskExecutionOptions): P
       info(`=== Task ${taskCount}: ${task.name} ===`);
       blankLine();
 
-      const taskSuccess = await executeAndCompleteTask(task, taskRunner, cwd, options);
+      const taskSuccess = await executeRunTaskAndComplete(
+        task,
+        taskRunner,
+        cwd,
+        agentOverrides,
+        undefined,
+        runContext,
+      );
 
       if (taskSuccess) {
         successCount++;
