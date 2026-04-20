@@ -16,6 +16,7 @@ export type ProviderOptionsOriginResolver = (path: string) => ProviderOptionsTra
  * - `default`: provider's built-in default (no explicit configuration)
  */
 export type ProviderResolutionSource =
+  | 'env'
   | 'cli'
   | 'persona_providers'
   | 'step'

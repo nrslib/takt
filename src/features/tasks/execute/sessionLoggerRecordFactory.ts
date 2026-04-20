@@ -202,6 +202,8 @@ export function buildStepStartRecord(
     ...(providerInfo?.providerSource !== undefined ? { providerSource: providerInfo.providerSource } : {}),
     ...(providerInfo?.model !== undefined ? { model: providerInfo.model } : {}),
     ...(providerInfo?.modelSource !== undefined ? { modelSource: providerInfo.modelSource } : {}),
+    ...(providerInfo?.providerOptions !== undefined ? { providerOptions: providerInfo.providerOptions } : {}),
+    ...(providerInfo?.providerOptionsSources !== undefined ? { providerOptionsSources: providerInfo.providerOptionsSources } : {}),
   };
 }
 

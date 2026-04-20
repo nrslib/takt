@@ -8,6 +8,7 @@ import {
   resolveEffectiveProviderOptions,
   resolveEffectiveTeamLeaderPartProviderOptions,
   resolvePersonaProviderOptions,
+  resolveProviderOptionsSources,
 } from '../../../infra/config/providerOptions.js';
 import {
   assertProviderResolvedForCapabilitySensitiveOptions,
@@ -63,11 +64,23 @@ export class OptionsBuilder {
       modelSource: engineProviderInfo.modelSource,
       personaProviders: this.engineOptions.personaProviders,
     });
+    const providerOptions = this.resolveMergedProviderOptions(step, runtime);
+    const providerOptionsSources = resolveProviderOptionsSources(
+      step.providerOptions,
+      resolvePersonaProviderOptions(this.engineOptions.personaProviders, step.personaDisplayName),
+      this.engineOptions.providerOptions,
+      this.engineOptions.providerOptionsOriginResolver,
+      this.engineOptions.providerOptionsSource,
+    );
     return {
       provider: resolved.provider ?? engineProviderInfo.provider,
       providerSource: resolved.providerSource ?? engineProviderInfo.providerSource,
       model: resolved.model ?? engineProviderInfo.model,
       modelSource: resolved.modelSource ?? engineProviderInfo.modelSource,
+      providerOptions,
+      providerOptionsSources: Object.keys(providerOptionsSources).length > 0
+        ? providerOptionsSources
+        : undefined,
     };
   }
 

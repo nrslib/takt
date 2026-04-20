@@ -9,6 +9,7 @@ import type {
   ProviderOptionsOriginResolver,
   ProviderOptionsSource,
   ProviderOptionsTraceOrigin,
+  ProviderResolutionSource,
 } from '../../core/workflow/provider-options-trace.js';
 import type { ProviderType } from '../../shared/types/provider.js';
 import { providerSupportsClaudeAllowedTools } from '../providers/provider-capabilities.js';
@@ -344,4 +345,93 @@ export function resolveEffectiveTeamLeaderPartProviderOptions(
   return shouldStripClaudeTools
     ? stripClaudeAllowedTools(mergedProviderOptions)
     : mergedProviderOptions;
+}
+
+/** All paths we expose for per-option source attribution. */
+export const PROVIDER_OPTION_PATHS = [
+  'claude.effort',
+  'claude.allowedTools',
+  'claude.sandbox.allowUnsandboxedCommands',
+  'claude.sandbox.excludedCommands',
+  'codex.networkAccess',
+  'codex.reasoningEffort',
+  'opencode.networkAccess',
+  'copilot.effort',
+] as const;
+
+export type ProviderOptionPath = (typeof PROVIDER_OPTION_PATHS)[number];
+
+function getValueAtPath(
+  options: StepProviderOptions | undefined,
+  path: string,
+): unknown {
+  if (!options) return undefined;
+  return path.split('.').reduce<unknown>((acc, part) => {
+    if (acc === undefined || acc === null || typeof acc !== 'object') {
+      return undefined;
+    }
+    return (acc as Record<string, unknown>)[part];
+  }, options);
+}
+
+function originToResolutionSource(origin: ProviderOptionsTraceOrigin): ProviderResolutionSource {
+  switch (origin) {
+    case 'env': return 'env';
+    case 'cli': return 'cli';
+    case 'local': return 'project';
+    case 'global': return 'global';
+    case 'default': return 'default';
+  }
+}
+
+/**
+ * Resolve the source layer of a single provider_options path, mirroring
+ * `selectProviderValue` precedence (env/cli config beats step/persona,
+ * otherwise step > persona > config).
+ */
+export function resolveProviderOptionSource(
+  path: string,
+  stepOptions: StepProviderOptions | undefined,
+  personaOptions: StepProviderOptions | undefined,
+  configOptions: StepProviderOptions | undefined,
+  originResolver: ProviderOptionsOriginResolver | undefined,
+  configSource: ProviderOptionsSource | undefined,
+): ProviderResolutionSource | undefined {
+  const configValue = getValueAtPath(configOptions, path);
+  const personaValue = getValueAtPath(personaOptions, path);
+  const stepValue = getValueAtPath(stepOptions, path);
+  const origin = resolveProviderOptionOrigin(originResolver, path, configSource);
+
+  if ((origin === 'env' || origin === 'cli') && configValue !== undefined) {
+    return originToResolutionSource(origin);
+  }
+  if (stepValue !== undefined) return 'step';
+  if (personaValue !== undefined) return 'persona_providers';
+  if (configValue !== undefined) return originToResolutionSource(origin);
+  return undefined;
+}
+
+/** Compute source per known provider_options path. Returns only paths with values. */
+export function resolveProviderOptionsSources(
+  stepOptions: StepProviderOptions | undefined,
+  personaOptions: StepProviderOptions | undefined,
+  configOptions: StepProviderOptions | undefined,
+  originResolver: ProviderOptionsOriginResolver | undefined,
+  configSource: ProviderOptionsSource | undefined,
+): Record<string, ProviderResolutionSource> {
+  const result: Record<string, ProviderResolutionSource> = {};
+  for (const path of PROVIDER_OPTION_PATHS) {
+    const source = resolveProviderOptionSource(
+      path,
+      stepOptions,
+      personaOptions,
+      configOptions,
+      originResolver,
+      configSource,
+    );
+    if (source !== undefined) {
+      result[path] = source;
+    }
+  }
+  return result;
 }

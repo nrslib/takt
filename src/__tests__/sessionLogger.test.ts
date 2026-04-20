@@ -197,6 +197,37 @@ describe('SessionLogger', () => {
     expect(buildWorkflowStepScopeKey('review', firstStack)).not.toBe(buildWorkflowStepScopeKey('review', secondStack));
   });
 
+  it('step_start record includes providerOptions and providerOptionsSources when providerInfo carries them', () => {
+    const logsDir = createTempLogsDir();
+    const ndjsonPath = initNdjsonLog('session-opts', 'task', 'wf', { logsDir });
+    const logger = new SessionLogger(ndjsonPath, true);
+    const step = {
+      name: 'plan',
+      kind: 'agent' as const,
+      persona: 'planner',
+      personaDisplayName: 'planner',
+      instruction: 'Plan it',
+      passPreviousResponse: true,
+    };
+
+    logger.onStepStart(step, 1, 'Plan it', undefined, {
+      provider: 'claude',
+      providerSource: 'global',
+      model: 'claude-opus-4-7',
+      modelSource: 'global',
+      providerOptions: { claude: { effort: 'xhigh' } },
+      providerOptionsSources: { 'claude.effort': 'step' },
+    });
+
+    const records = readFileSync(ndjsonPath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const stepStart = records.find((record) => record.type === 'step_start');
+    expect(stepStart?.providerOptions).toEqual({ claude: { effort: 'xhigh' } });
+    expect(stepStart?.providerOptionsSources).toEqual({ 'claude.effort': 'step' });
+  });
+
   it('step_start record includes provider/model/source when providerInfo is given (#370)', () => {
     const logsDir = createTempLogsDir();
     const ndjsonPath = initNdjsonLog('session-source', 'task', 'wf', { logsDir });
