@@ -36,6 +36,8 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 import { findExistingMr, listOpenMrs, createMergeRequest, commentOnMr, fetchMrReviewComments, mergeMr } from '../infra/gitlab/pr.js';
 
+const taktManagedLabel = 'takt-managed';
+
 function withGlabApiResponse(body: unknown, nextPath?: string): string {
   const headers = [
     'HTTP/2 200 OK',
@@ -130,6 +132,10 @@ describe('listOpenMrs', () => {
         author: { username: 'nrslib' },
         target_branch: 'improve',
         source_branch: 'task/42',
+        description: '## Summary\n\nTask summary\n\n## Execution Report\n\nWorkflow `default` completed successfully.\n\n<!-- takt:managed -->',
+        labels: [taktManagedLabel],
+        source_project_id: 1,
+        target_project_id: 1,
         draft: false,
         updated_at: '2026-04-20T12:00:00Z',
       },
@@ -148,6 +154,9 @@ describe('listOpenMrs', () => {
         author: 'nrslib',
         base_branch: 'improve',
         head_branch: 'task/42',
+        managed_by_takt: true,
+        labels: [taktManagedLabel],
+        same_repository: true,
         draft: false,
         updated_at: '2026-04-20T12:00:00Z',
       },
@@ -170,6 +179,10 @@ describe('listOpenMrs', () => {
       author: { username: `user-${index + 1}` },
       target_branch: 'improve',
       source_branch: `task/${index + 1}`,
+      description: 'Human-managed body',
+      labels: [],
+      source_project_id: 1,
+      target_project_id: 1,
       draft: false,
       updated_at: `2026-04-20T12:${String(index % 60).padStart(2, '0')}:00Z`,
     }));
@@ -185,6 +198,10 @@ describe('listOpenMrs', () => {
           author: { username: 'nrslib' },
           target_branch: 'improve',
           source_branch: 'task/101',
+          description: '## Summary\n\nTask summary\n\n## Execution Report\n\nTask completed successfully.\n\n<!-- takt:managed -->',
+          labels: [taktManagedLabel],
+          source_project_id: 1,
+          target_project_id: 1,
           draft: false,
           updated_at: '2026-04-21T00:00:00Z',
         },
@@ -210,16 +227,63 @@ describe('listOpenMrs', () => {
       author: 'nrslib',
       base_branch: 'improve',
       head_branch: 'task/101',
+      managed_by_takt: true,
+      labels: [taktManagedLabel],
+      same_repository: true,
       draft: false,
       updated_at: '2026-04-21T00:00:00Z',
     });
+  });
+
+  it('fork MR は same_repository: false にマッピングする', () => {
+    mockExecFileSync.mockReturnValue(withGlabApiResponse([
+      {
+        iid: 52,
+        author: { username: 'fork-user' },
+        target_branch: 'improve',
+        source_branch: 'takt/52/forked-branch',
+        description: 'Human-managed body',
+        labels: [taktManagedLabel],
+        source_project_id: 2,
+        target_project_id: 1,
+        draft: false,
+        updated_at: '2026-04-21T01:00:00Z',
+      },
+    ]));
+
+    const result = listOpenMrs('/project');
+
+    expect(result).toEqual([
+      {
+        number: 52,
+        author: 'fork-user',
+        base_branch: 'improve',
+        head_branch: 'takt/52/forked-branch',
+        managed_by_takt: false,
+        labels: [taktManagedLabel],
+        same_repository: false,
+        draft: false,
+        updated_at: '2026-04-21T01:00:00Z',
+      },
+    ]);
   });
 
   it('pagination link が上限を超えて続く場合は明示エラーにする', () => {
     let page = 1;
     mockExecFileSync.mockImplementation(() => {
       const response = withGlabApiResponse(
-        [{ iid: page, author: { username: 'nrslib' }, target_branch: 'improve', source_branch: `task/${page}`, draft: false, updated_at: '2026-04-21T00:00:00Z' }],
+        [{
+          iid: page,
+          author: { username: 'nrslib' },
+          target_branch: 'improve',
+          source_branch: `task/${page}`,
+          description: 'Human-managed body',
+          labels: [],
+          source_project_id: 1,
+          target_project_id: 1,
+          draft: false,
+          updated_at: '2026-04-21T00:00:00Z',
+        }],
         `projects/1/merge_requests?state=opened&per_page=100&page=${page + 1}`,
       );
       page += 1;
@@ -230,13 +294,44 @@ describe('listOpenMrs', () => {
       'Pagination limit exceeded while fetching open merge request list (>100 pages)',
     );
   });
+
+  it('legacy な TAKT MR 本文でも managed_by_takt: true にマッピングする', () => {
+    mockExecFileSync.mockReturnValue(withGlabApiResponse([
+      {
+        iid: 77,
+        author: { username: 'nrslib' },
+        target_branch: 'improve',
+        source_branch: 'takt/77/legacy-task',
+        description: '## Summary\n\nTask summary\n\n## Execution Report\n\nWorkflow `default` completed successfully.',
+        labels: [],
+        source_project_id: 1,
+        target_project_id: 1,
+        draft: false,
+        updated_at: '2026-04-21T02:00:00Z',
+      },
+    ]));
+
+    expect(listOpenMrs('/project')).toEqual([
+      expect.objectContaining({
+        number: 77,
+        managed_by_takt: true,
+      }),
+    ]);
+  });
 });
 
 describe('createMergeRequest', () => {
-  it('成功時は success: true と URL を返す', () => {
-    // Given
-    mockExecFileSync.mockReturnValue('https://gitlab.com/org/repo/-/merge_requests/1\n');
+  beforeEach(() => {
+    mockExecFileSync.mockImplementation((_command: unknown, args: unknown[]) => {
+      const argv = args as string[];
+      if (argv[0] === 'mr' && argv[1] === 'create') {
+        return 'https://gitlab.com/org/repo/-/merge_requests/1\n';
+      }
+      return '';
+    });
+  });
 
+  it('成功時は success: true と URL を返す', () => {
     // When
     const result = createMergeRequest({
       branch: 'feat/my-branch',
@@ -251,8 +346,6 @@ describe('createMergeRequest', () => {
 
   it('--source-branch オプションで branch を渡す（--head ではない）', () => {
     // Given
-    mockExecFileSync.mockReturnValue('https://gitlab.com/org/repo/-/merge_requests/2\n');
-
     // When
     createMergeRequest({
       branch: 'feat/my-branch',
@@ -261,15 +354,13 @@ describe('createMergeRequest', () => {
     }, '/project');
 
     // Then
-    const call = mockExecFileSync.mock.calls[0];
+    const call = mockExecFileSync.mock.calls.find((args) => (args[1] as string[])[0] === 'mr' && (args[1] as string[])[1] === 'create');
     expect(call[1]).toContain('--source-branch');
     expect(call[1]).not.toContain('--head');
   });
 
   it('--description オプションで body を渡す（--body ではない）', () => {
     // Given
-    mockExecFileSync.mockReturnValue('https://gitlab.com/org/repo/-/merge_requests/3\n');
-
     // When
     createMergeRequest({
       branch: 'feat/my-branch',
@@ -278,15 +369,13 @@ describe('createMergeRequest', () => {
     }, '/project');
 
     // Then
-    const call = mockExecFileSync.mock.calls[0];
+    const call = mockExecFileSync.mock.calls.find((args) => (args[1] as string[])[0] === 'mr' && (args[1] as string[])[1] === 'create');
     expect(call[1]).toContain('--description');
     expect(call[1]).not.toContain('--body');
   });
 
   it('draft: true の場合、args に --draft が含まれる', () => {
     // Given
-    mockExecFileSync.mockReturnValue('https://gitlab.com/org/repo/-/merge_requests/4\n');
-
     // When
     createMergeRequest({
       branch: 'feat/my-branch',
@@ -296,14 +385,12 @@ describe('createMergeRequest', () => {
     }, '/project');
 
     // Then
-    const call = mockExecFileSync.mock.calls[0];
+    const call = mockExecFileSync.mock.calls.find((args) => (args[1] as string[])[0] === 'mr' && (args[1] as string[])[1] === 'create');
     expect(call[1]).toContain('--draft');
   });
 
   it('draft: false の場合、args に --draft が含まれない', () => {
     // Given
-    mockExecFileSync.mockReturnValue('https://gitlab.com/org/repo/-/merge_requests/5\n');
-
     // When
     createMergeRequest({
       branch: 'feat/my-branch',
@@ -313,14 +400,12 @@ describe('createMergeRequest', () => {
     }, '/project');
 
     // Then
-    const call = mockExecFileSync.mock.calls[0];
+    const call = mockExecFileSync.mock.calls.find((args) => (args[1] as string[])[0] === 'mr' && (args[1] as string[])[1] === 'create');
     expect(call[1]).not.toContain('--draft');
   });
 
   it('base が指定された場合、--target-branch で渡す', () => {
     // Given
-    mockExecFileSync.mockReturnValue('https://gitlab.com/org/repo/-/merge_requests/6\n');
-
     // When
     createMergeRequest({
       branch: 'feat/my-branch',
@@ -330,9 +415,42 @@ describe('createMergeRequest', () => {
     }, '/project');
 
     // Then
-    const call = mockExecFileSync.mock.calls[0];
+    const call = mockExecFileSync.mock.calls.find((args) => (args[1] as string[])[0] === 'mr' && (args[1] as string[])[1] === 'create');
     expect(call[1]).toContain('--target-branch');
     expect(call[1]).toContain('develop');
+  });
+
+  it('labels が指定された場合だけ --label をそのまま渡す', () => {
+    createMergeRequest({
+      branch: 'feat/my-branch',
+      title: 'My MR',
+      body: 'MR body',
+      labels: ['release-blocker', 'automation'],
+    }, '/project');
+
+    const createCall = mockExecFileSync.mock.calls.find(
+      (args) => (args[1] as string[])[0] === 'mr' && (args[1] as string[])[1] === 'create',
+    );
+    expect(createCall?.[1]).toEqual(expect.arrayContaining([
+      '--label',
+      'release-blocker',
+      '--label',
+      'automation',
+    ]));
+  });
+
+  it('labels 未指定時は label 関連の副作用を追加しない', () => {
+    createMergeRequest({
+      branch: 'feat/my-branch',
+      title: 'My MR',
+      body: 'MR body',
+    }, '/project');
+
+    const createCall = mockExecFileSync.mock.calls.find(
+      (args) => (args[1] as string[])[0] === 'mr' && (args[1] as string[])[1] === 'create',
+    );
+    expect(createCall?.[1]).not.toContain('--label');
+    expect(mockExecFileSync).toHaveBeenCalledTimes(1);
   });
 
   it('glab mr create が失敗した場合は success: false を返す', () => {

@@ -36,6 +36,7 @@ export type {
   WorkflowRule,
   WorkflowMaxSteps,
   WorkflowStructuredOutput,
+  WorkflowPrListWhere,
   WorkflowSystemInput,
   WorkflowEffect,
   WorkflowEnqueueIssueConfig,

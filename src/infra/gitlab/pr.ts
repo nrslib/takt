@@ -6,6 +6,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
+import { isTaktManagedPrBody } from '../git/format.js';
 import { checkGlabCli, fetchAllPages, parseJson, ITEMS_PER_PAGE } from './utils.js';
 import type { CreatePrOptions, CreatePrResult, ExistingPr, CommentResult, MergeResult, PrListItem, PrReviewData, PrReviewComment } from '../git/types.js';
 
@@ -40,6 +41,10 @@ interface GlabOpenMrItem {
   author: { username: string };
   target_branch: string;
   source_branch: string;
+  description: string | null;
+  labels: string[];
+  source_project_id: number;
+  target_project_id: number;
   draft: boolean;
   updated_at: string;
 }
@@ -57,6 +62,9 @@ export function listOpenMrs(cwd: string): PrListItem[] {
     author: mr.author.username,
     base_branch: mr.target_branch,
     head_branch: mr.source_branch,
+    managed_by_takt: isTaktManagedPrBody(mr.description),
+    labels: mr.labels,
+    same_repository: mr.source_project_id === mr.target_project_id,
     draft: mr.draft,
     updated_at: mr.updated_at,
   }));
@@ -88,6 +96,10 @@ export function createMergeRequest(options: CreatePrOptions, cwd: string): Creat
 
   if (options.draft) {
     args.push('--draft');
+  }
+
+  for (const label of options.labels ?? []) {
+    args.push('--label', label);
   }
 
   log.info('Creating MR', { branch: options.branch, title: options.title, draft: options.draft });

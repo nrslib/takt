@@ -12,8 +12,17 @@ export interface SystemStepServicesOptions {
   readonly taskContext?: SystemStepTaskContext;
 }
 
+export interface SystemStepInputResolutionContext {
+  readonly cache: Map<string, unknown>;
+}
+
 export interface SystemStepServices {
-  resolveSystemInput(input: NonNullable<WorkflowStep['systemInputs']>[number]): unknown;
+  resolveSystemInput(
+    input: NonNullable<WorkflowStep['systemInputs']>[number],
+    state?: WorkflowState,
+    stepName?: string,
+    resolutionContext?: SystemStepInputResolutionContext,
+  ): unknown;
   executeEffect(
     effect: WorkflowEffect,
     payload: Record<string, unknown>,

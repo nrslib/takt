@@ -15,6 +15,7 @@ const {
   mockResolveBaseBranch,
   mockFindExistingPr,
   mockFetchPrReviewComments,
+  mockListOpenPrs,
   mockTaskRunnerListAllTaskItems,
 } = vi.hoisted(() => ({
   mockCommentOnPr: vi.fn(),
@@ -24,6 +25,7 @@ const {
   mockResolveBaseBranch: vi.fn(),
   mockFindExistingPr: vi.fn(),
   mockFetchPrReviewComments: vi.fn(),
+  mockListOpenPrs: vi.fn(),
   mockTaskRunnerListAllTaskItems: vi.fn(),
 }));
 
@@ -43,6 +45,7 @@ vi.mock('../infra/git/index.js', () => ({
     mergePr: (...args: unknown[]) => mockMergePr(...args),
     findExistingPr: (...args: unknown[]) => mockFindExistingPr(...args),
     fetchPrReviewComments: (...args: unknown[]) => mockFetchPrReviewComments(...args),
+    listOpenPrs: (...args: unknown[]) => mockListOpenPrs(...args),
     checkCliStatus: vi.fn(() => ({ available: true })),
   })),
 }));
@@ -96,6 +99,8 @@ describe('system workflow execution integration', () => {
     mockCreateIssueFromTask.mockReturnValue(586);
     mockResolveBaseBranch.mockImplementation((_cwd: string, branch?: string) => ({ branch: branch ?? 'main' }));
     mockMergePr.mockReturnValue({ success: true });
+    mockListOpenPrs.mockReset();
+    mockListOpenPrs.mockReturnValue([]);
     mockTaskRunnerListAllTaskItems.mockReturnValue([]);
     mockFindExistingPr.mockReturnValue({ number: 42, url: 'https://example.test/pr/42' });
     mockFetchPrReviewComments.mockReturnValue({
@@ -1072,7 +1077,7 @@ describe('system workflow execution integration', () => {
     const stateRecord = state as Record<string, unknown>;
 
     expect(state.status).toBe('completed');
-    expect(createServices).toHaveBeenCalledTimes(2);
+    expect(createServices).toHaveBeenCalledTimes(1);
     expect((stateRecord.systemContexts as Map<string, unknown>).get('route_context')).toEqual({
       prs: [
         {
@@ -1102,5 +1107,571 @@ describe('system workflow execution integration', () => {
         ],
       },
     });
+  });
+
+  it('selected_pr が存在しない場合は comment_on_pr に進まない', async () => {
+    const expectedFilter = {
+      head_branch: 'takt/*',
+      managed_by_takt: true,
+      same_repository: true,
+      draft: false,
+    };
+    const executeEffect = vi.fn();
+    const createServices = vi.fn(() => ({
+      resolveSystemInput(input: { type: string; where?: unknown }) {
+        if (input.type === 'pr_selection') {
+          expect(input.where).toEqual(expectedFilter);
+          return { exists: false };
+        }
+        throw new Error(`Unexpected system input: ${input.type}`);
+      },
+      async executeEffect(...args: unknown[]) {
+        return executeEffect(...args);
+      },
+    }));
+
+    const config = normalizeWorkflowConfig(
+      {
+        name: 'route-skips-human-pr',
+        initial_step: 'route_context',
+        max_steps: 2,
+        steps: [
+          {
+            name: 'route_context',
+            mode: 'system',
+            system_inputs: [
+              { type: 'pr_selection', source: 'current_project', as: 'selected_pr', where: expectedFilter },
+            ],
+            rules: [
+              { when: 'context.route_context.selected_pr.exists == true', next: 'comment_on_pr' },
+              { when: 'true', next: 'COMPLETE' },
+            ],
+          },
+          {
+            name: 'comment_on_pr',
+            mode: 'system',
+            effects: [
+              {
+                type: 'comment_pr',
+                pr: '{context:route_context.selected_pr.number}',
+                body: 'should not comment on human PRs',
+              },
+            ],
+            rules: [
+              { when: 'true', next: 'ABORT' },
+            ],
+          },
+        ],
+      },
+      projectDir,
+    );
+
+    const engine = new WorkflowEngine(config, projectDir, 'Current task body', {
+      projectCwd: projectDir,
+      provider: 'mock',
+      detectRuleIndex,
+      structuredCaller: {
+        judgeStatus: vi.fn(),
+        evaluateCondition: vi.fn().mockResolvedValue(-1),
+        decomposeTask: vi.fn(),
+        requestMoreParts: vi.fn(),
+      },
+      reportDirName: 'test-report-dir',
+      systemStepServicesFactory: createServices as never,
+    });
+
+    const state = await engine.run();
+    const stateRecord = state as Record<string, unknown>;
+
+    expect(state.status).toBe('completed');
+    expect(executeEffect).not.toHaveBeenCalled();
+    expect((stateRecord.systemContexts as Map<string, unknown>).get('route_context')).toEqual({
+      selected_pr: { exists: false },
+    });
+  });
+
+  it('route_context の selected_pr は loop 間で次の takt PR に巡回できる', async () => {
+    const selectionHistory: number[] = [];
+    const taktPrs = [
+      {
+        number: 43,
+        author: 'nrslib',
+        base_branch: 'improve',
+        head_branch: 'takt/654/fix-pr-loop-selection',
+        managed_by_takt: true,
+        labels: ['takt-managed'],
+        same_repository: true,
+        draft: false,
+      },
+      {
+        number: 42,
+        author: 'nrslib',
+        base_branch: 'improve',
+        head_branch: 'takt/20260420-fix-pr-loop-selection',
+        managed_by_takt: true,
+        labels: ['takt-managed'],
+        same_repository: true,
+        draft: false,
+      },
+    ];
+    const createServices = vi.fn(() => ({
+      resolveSystemInput(
+        input: { type: string },
+        state?: { systemContexts?: Map<string, unknown> },
+        stepName?: string,
+      ) {
+        if (input.type === 'pr_list') {
+          return taktPrs;
+        }
+        if (input.type === 'pr_selection') {
+          if (!state?.systemContexts) {
+            throw new Error('resolveSystemInput requires workflow state for pr_selection');
+          }
+          if (stepName !== 'route_context') {
+            throw new Error(`resolveSystemInput requires step name, got ${String(stepName)}`);
+          }
+          const previous = state.systemContexts.get('route_context') as { selected_pr?: { number?: number } } | undefined;
+          const selected = previous?.selected_pr?.number === 43 ? taktPrs[1] : taktPrs[0];
+          selectionHistory.push(selected.number);
+          return { exists: true, ...selected };
+        }
+        throw new Error(`Unexpected system input: ${input.type}`);
+      },
+      async executeEffect() {
+        throw new Error('No effects expected in this workflow');
+      },
+    }));
+
+    const config = normalizeWorkflowConfig(
+      {
+        name: 'route-rotates-pr-selection',
+        initial_step: 'route_context',
+        max_steps: 4,
+        steps: [
+          {
+            name: 'route_context',
+            mode: 'system',
+            system_inputs: [
+              { type: 'pr_list', source: 'current_project', as: 'prs', where: { head_branch: 'takt/*', managed_by_takt: true, same_repository: true, draft: false } },
+              { type: 'pr_selection', source: 'current_project', as: 'selected_pr', where: { head_branch: 'takt/*', managed_by_takt: true, same_repository: true, draft: false } },
+            ],
+            rules: [
+              { when: 'context.route_context.selected_pr.number == 43', next: 'wait_before_next_scan' },
+              { when: 'context.route_context.selected_pr.number == 42', next: 'COMPLETE' },
+              { when: 'true', next: 'ABORT' },
+            ],
+          },
+          {
+            name: 'wait_before_next_scan',
+            mode: 'system',
+            rules: [
+              { when: 'true', next: 'route_context' },
+            ],
+          },
+        ],
+      },
+      projectDir,
+    );
+
+    const engine = new WorkflowEngine(config, projectDir, 'Current task body', {
+      projectCwd: projectDir,
+      provider: 'mock',
+      detectRuleIndex,
+      structuredCaller: {
+        judgeStatus: vi.fn(),
+        evaluateCondition: vi.fn().mockResolvedValue(-1),
+        decomposeTask: vi.fn(),
+        requestMoreParts: vi.fn(),
+      },
+      reportDirName: 'test-report-dir',
+      systemStepServicesFactory: createServices as never,
+    });
+
+    const state = await engine.run();
+    const stateRecord = state as Record<string, unknown>;
+
+    expect(state.status).toBe('completed');
+    expect(selectionHistory).toEqual([43, 42]);
+    expect((stateRecord.systemContexts as Map<string, unknown>).get('route_context')).toEqual({
+      prs: taktPrs,
+      selected_pr: {
+        exists: true,
+        number: 42,
+        author: 'nrslib',
+        base_branch: 'improve',
+        head_branch: 'takt/20260420-fix-pr-loop-selection',
+        managed_by_takt: true,
+        labels: ['takt-managed'],
+        same_repository: true,
+        draft: false,
+      },
+    });
+  });
+
+  it('selected_pr が存在しない場合は downstream の PR step 群を一切実行しない', async () => {
+    const executeEffect = vi.fn();
+    const createServices = vi.fn(() => ({
+      resolveSystemInput(input: { type: string; where?: unknown }) {
+        if (input.type === 'pr_selection') {
+          expect(input.where).toEqual({
+            head_branch: 'takt/*',
+            managed_by_takt: true,
+            same_repository: true,
+            draft: false,
+          });
+          return { exists: false };
+        }
+        throw new Error(`Unexpected system input: ${input.type}`);
+      },
+      async executeEffect(...args: unknown[]) {
+        return executeEffect(...args);
+      },
+    }));
+
+    const config = normalizeWorkflowConfig(
+      {
+        name: 'route-skips-all-pr-effects',
+        initial_step: 'route_context',
+        max_steps: 2,
+        steps: [
+          {
+            name: 'route_context',
+            mode: 'system',
+            system_inputs: [
+              {
+                type: 'pr_selection',
+                source: 'current_project',
+                as: 'selected_pr',
+                where: { head_branch: 'takt/*', managed_by_takt: true, same_repository: true, draft: false },
+              },
+            ],
+            rules: [
+              { when: 'context.route_context.selected_pr.exists == true', next: 'comment_on_pr' },
+              { when: 'true', next: 'COMPLETE' },
+            ],
+          },
+          {
+            name: 'comment_on_pr',
+            mode: 'system',
+            effects: [
+              { type: 'comment_pr', pr: '{context:route_context.selected_pr.number}', body: 'noop' },
+            ],
+            rules: [{ when: 'true', next: 'enqueue_from_pr' }],
+          },
+          {
+            name: 'enqueue_from_pr',
+            mode: 'system',
+            effects: [
+              {
+                type: 'enqueue_task',
+                mode: 'from_pr',
+                pr: '{context:route_context.selected_pr.number}',
+                workflow: 'takt-default',
+                task: 'noop',
+              },
+            ],
+            rules: [{ when: 'true', next: 'prepare_merge' }],
+          },
+          {
+            name: 'prepare_merge',
+            mode: 'system',
+            effects: [
+              { type: 'sync_with_root', pr: '{context:route_context.selected_pr.number}' },
+            ],
+            rules: [{ when: 'true', next: 'merge_pr' }],
+          },
+          {
+            name: 'merge_pr',
+            mode: 'system',
+            effects: [
+              { type: 'merge_pr', pr: '{context:route_context.selected_pr.number}' },
+            ],
+            rules: [{ when: 'true', next: 'ABORT' }],
+          },
+        ],
+      },
+      projectDir,
+    );
+
+    const engine = new WorkflowEngine(config, projectDir, 'Current task body', {
+      projectCwd: projectDir,
+      provider: 'mock',
+      detectRuleIndex,
+      structuredCaller: {
+        judgeStatus: vi.fn(),
+        evaluateCondition: vi.fn().mockResolvedValue(-1),
+        decomposeTask: vi.fn(),
+        requestMoreParts: vi.fn(),
+      },
+      reportDirName: 'test-report-dir',
+      systemStepServicesFactory: createServices as never,
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(executeEffect).not.toHaveBeenCalled();
+  });
+
+  it('executor 実経路でも pr_list と pr_selection は同一スナップショットを共有する', async () => {
+    mockListOpenPrs
+      .mockReturnValueOnce([
+        {
+          number: 43,
+          author: 'nrslib',
+          base_branch: 'improve',
+          head_branch: 'takt/654/fix-pr-loop-selection',
+          managed_by_takt: true,
+          labels: ['takt-managed'],
+          same_repository: true,
+          draft: false,
+          updated_at: '2026-04-20T14:00:00Z',
+        },
+        {
+          number: 42,
+          author: 'nrslib',
+          base_branch: 'improve',
+          head_branch: 'takt/20260420-fix-pr-loop-selection',
+          managed_by_takt: true,
+          labels: [],
+          same_repository: true,
+          draft: false,
+          updated_at: '2026-04-20T12:00:00Z',
+        },
+      ])
+      .mockReturnValueOnce([
+        {
+          number: 99,
+          author: 'spoof',
+          base_branch: 'improve',
+          head_branch: 'takt/999/second-fetch',
+          managed_by_takt: false,
+          labels: ['takt-managed'],
+          same_repository: true,
+          draft: false,
+          updated_at: '2026-04-20T16:00:00Z',
+        },
+      ]);
+
+    const config = normalizeWorkflowConfig(
+      {
+        name: 'route-shares-pr-snapshot',
+        initial_step: 'route_context',
+        max_steps: 1,
+        steps: [
+          {
+            name: 'route_context',
+            mode: 'system',
+            system_inputs: [
+              {
+                type: 'pr_list',
+                source: 'current_project',
+                as: 'prs',
+                where: {
+                  head_branch: 'takt/*',
+                  managed_by_takt: true,
+                  labels: ['takt-managed'],
+                  same_repository: true,
+                  draft: false,
+                },
+              },
+              {
+                type: 'pr_selection',
+                source: 'current_project',
+                as: 'selected_pr',
+                where: {
+                  draft: false,
+                  managed_by_takt: true,
+                  labels: ['takt-managed', 'takt-managed'],
+                  same_repository: true,
+                  head_branch: 'takt/*',
+                },
+              },
+            ],
+            rules: [
+              { when: 'context.route_context.selected_pr.exists == true', next: 'COMPLETE' },
+              { when: 'true', next: 'ABORT' },
+            ],
+          },
+        ],
+      },
+      projectDir,
+    );
+
+    const engine = new WorkflowEngine(config, projectDir, 'Current task body', createSystemEngineOptions(projectDir));
+
+    const state = await engine.run();
+    const systemContexts = (state as Record<string, unknown>).systemContexts as Map<string, unknown>;
+    const routeContext = systemContexts.get('route_context') as {
+      prs: Array<{ number: number }>;
+      selected_pr: { exists: boolean; number: number };
+    };
+
+    expect(state.status).toBe('completed');
+    expect(mockListOpenPrs).toHaveBeenCalledTimes(1);
+    expect(routeContext.prs.map((pr) => pr.number)).toEqual([43]);
+    expect(routeContext.selected_pr).toEqual(expect.objectContaining({ exists: true, number: 43 }));
+    expect(routeContext.prs.some((pr) => pr.number === routeContext.selected_pr.number)).toBe(true);
+  });
+
+  it('executor 実経路でも auto-improvement-loop 既定フィルタは TAKT provenance のない same-repo takt PR を除外する', async () => {
+    mockListOpenPrs.mockReturnValue([
+      {
+        number: 41,
+        author: 'human-reviewer',
+        base_branch: 'improve',
+        head_branch: 'takt/20260420-human-spoof',
+        managed_by_takt: false,
+        labels: [],
+        same_repository: true,
+        draft: false,
+        updated_at: '2026-04-20T15:00:00Z',
+      },
+      {
+        number: 42,
+        author: 'nrslib',
+        base_branch: 'improve',
+        head_branch: 'takt/20260420-existing-task-pr',
+        managed_by_takt: true,
+        labels: [],
+        same_repository: true,
+        draft: false,
+        updated_at: '2026-04-20T12:00:00Z',
+      },
+      {
+        number: 43,
+        author: 'fork-user',
+        base_branch: 'improve',
+        head_branch: 'takt/654/spoofed-fork',
+        managed_by_takt: true,
+        labels: ['takt-managed'],
+        same_repository: false,
+        draft: false,
+        updated_at: '2026-04-20T16:00:00Z',
+      },
+    ]);
+
+    const config = normalizeWorkflowConfig(
+      {
+        name: 'route-includes-unlabeled-existing-takt-pr',
+        initial_step: 'route_context',
+        max_steps: 1,
+        steps: [
+          {
+            name: 'route_context',
+            mode: 'system',
+            system_inputs: [
+              {
+                type: 'pr_list',
+                source: 'current_project',
+                as: 'prs',
+                where: {
+                  head_branch: 'takt/*',
+                  managed_by_takt: true,
+                  same_repository: true,
+                  draft: false,
+                },
+              },
+              {
+                type: 'pr_selection',
+                source: 'current_project',
+                as: 'selected_pr',
+                where: {
+                  head_branch: 'takt/*',
+                  managed_by_takt: true,
+                  same_repository: true,
+                  draft: false,
+                },
+              },
+            ],
+            rules: [
+              { when: 'context.route_context.selected_pr.exists == true', next: 'COMPLETE' },
+              { when: 'true', next: 'ABORT' },
+            ],
+          },
+        ],
+      },
+      projectDir,
+    );
+
+    const engine = new WorkflowEngine(config, projectDir, 'Current task body', createSystemEngineOptions(projectDir));
+
+    const state = await engine.run();
+    const systemContexts = (state as Record<string, unknown>).systemContexts as Map<string, unknown>;
+    const routeContext = systemContexts.get('route_context') as {
+      prs: Array<{ number: number }>;
+      selected_pr: { exists: boolean; number: number };
+    };
+
+    expect(state.status).toBe('completed');
+    expect(routeContext.prs.map((pr) => pr.number)).toEqual([42]);
+    expect(routeContext.selected_pr).toEqual(expect.objectContaining({ exists: true, number: 42 }));
+  });
+
+  it('executor 実経路でも same-repo の human takt PR だけでは downstream PR step 群に進まない', async () => {
+    mockListOpenPrs.mockReturnValue([
+      {
+        number: 55,
+        author: 'human-reviewer',
+        base_branch: 'improve',
+        head_branch: 'takt/55/manual-spoof',
+        managed_by_takt: false,
+        labels: [],
+        same_repository: true,
+        draft: false,
+        updated_at: '2026-04-20T19:00:00Z',
+      },
+    ]);
+
+    const config = normalizeWorkflowConfig(
+      {
+        name: 'route-skips-unmanaged-takt-pr',
+        initial_step: 'route_context',
+        max_steps: 2,
+        steps: [
+          {
+            name: 'route_context',
+            mode: 'system',
+            system_inputs: [
+              {
+                type: 'pr_selection',
+                source: 'current_project',
+                as: 'selected_pr',
+                where: {
+                  head_branch: 'takt/*',
+                  managed_by_takt: true,
+                  same_repository: true,
+                  draft: false,
+                },
+              },
+            ],
+            rules: [
+              { when: 'context.route_context.selected_pr.exists == true', next: 'comment_on_pr' },
+              { when: 'true', next: 'COMPLETE' },
+            ],
+          },
+          {
+            name: 'comment_on_pr',
+            mode: 'system',
+            effects: [
+              { type: 'comment_pr', pr: '{context:route_context.selected_pr.number}', body: 'should not run' },
+            ],
+            rules: [{ when: 'true', next: 'ABORT' }],
+          },
+        ],
+      },
+      projectDir,
+    );
+
+    const state = await new WorkflowEngine(
+      config,
+      projectDir,
+      'Current task body',
+      createSystemEngineOptions(projectDir),
+    ).run();
+
+    const routeContext = ((state as Record<string, unknown>).systemContexts as Map<string, unknown>).get('route_context');
+    expect(state.status).toBe('completed');
+    expect(routeContext).toEqual({ selected_pr: { exists: false } });
   });
 });

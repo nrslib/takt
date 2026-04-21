@@ -1,5 +1,7 @@
 import { z } from 'zod/v4';
 import { getWorkflowStepKind } from './workflow-step-kind.js';
+import { workflowPrListWhereEquals } from './workflow-types.js';
+import type { WorkflowPrListWhere } from './workflow-types.js';
 
 export const StructuredOutputRawSchema = z.object({
   schema_ref: z.string().min(1),
@@ -28,6 +30,9 @@ const PrListWhereRawSchema = z.object({
   author: z.string().min(1).optional(),
   base_branch: z.string().min(1).optional(),
   head_branch: z.string().min(1).optional(),
+  managed_by_takt: z.boolean().optional(),
+  labels: z.array(z.string().min(1)).min(1).optional(),
+  same_repository: z.boolean().optional(),
   draft: z.boolean().optional(),
 }).strict();
 
@@ -55,6 +60,11 @@ export const SystemInputRawSchema = z.discriminatedUnion('type', [
   }),
   SystemInputBindingSchema.extend({
     type: z.literal('pr_list'),
+    source: z.literal('current_project'),
+    where: PrListWhereRawSchema.optional(),
+  }),
+  SystemInputBindingSchema.extend({
+    type: z.literal('pr_selection'),
     source: z.literal('current_project'),
     where: PrListWhereRawSchema.optional(),
   }),
@@ -147,7 +157,11 @@ export function validateSystemStepFields(
     kind?: 'agent' | 'system' | 'workflow_call';
     mode?: 'system';
     call?: string;
-    system_inputs?: Array<{ as?: string }>;
+    system_inputs?: Array<{
+      as?: string;
+      type?: string;
+      where?: WorkflowPrListWhere;
+    }>;
     effects?: Array<{ type: string }>;
   } & Record<string, unknown>,
   ctx: z.core.$RefinementCtx,
@@ -213,6 +227,26 @@ export function validateSystemStepFields(
       continue;
     }
     systemInputBindings.add(input.as);
+  }
+
+  const prListInputs = (data.system_inputs ?? []).filter((input) => input.type === 'pr_list');
+  if (prListInputs.length > 0) {
+    for (const [index, input] of (data.system_inputs ?? []).entries()) {
+      if (input.type !== 'pr_selection') {
+        continue;
+      }
+      const matchesCandidateSet = prListInputs.some((prListInput) => workflowPrListWhereEquals(
+        prListInput.where,
+        input.where,
+      ));
+      if (!matchesCandidateSet) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['system_inputs', index, 'where'],
+          message: 'pr_selection.where must match a pr_list.where in the same step',
+        });
+      }
+    }
   }
 
   const effectTypes = new Set<string>();

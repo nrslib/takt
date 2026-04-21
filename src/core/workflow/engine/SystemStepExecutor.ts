@@ -1,7 +1,11 @@
 import type { AgentResponse, WorkflowEffect, WorkflowState, WorkflowStep } from '../../models/types.js';
 import { detectMatchedRule } from '../evaluation/index.js';
 import type { RuleEvaluatorContext } from '../evaluation/RuleEvaluator.js';
-import type { SystemStepServicesFactory } from '../system/system-step-services.js';
+import type {
+  SystemStepInputResolutionContext,
+  SystemStepServices,
+  SystemStepServicesFactory,
+} from '../system/system-step-services.js';
 import { resolveWorkflowStateReference } from '../state/workflow-state-access.js';
 import { waitForStepDelay } from './step-delay.js';
 
@@ -11,6 +15,7 @@ interface SystemStepExecutorDeps {
   readonly getCwd: () => string;
   readonly taskContext?: {
     readonly issueNumber?: number;
+    readonly runSlug?: string;
   };
   readonly getRuleContext: (step: WorkflowStep) => Omit<RuleEvaluatorContext, 'state'>;
   readonly systemStepServicesFactory?: SystemStepServicesFactory;
@@ -65,9 +70,14 @@ export class SystemStepExecutor {
     });
   }
 
-  private resolveSystemInput(input: NonNullable<WorkflowStep['systemInputs']>[number]): unknown {
-    const services = this.requireServices(this.deps.getCwd());
-    return services.resolveSystemInput(input);
+  private resolveSystemInput(
+    services: SystemStepServices,
+    input: NonNullable<WorkflowStep['systemInputs']>[number],
+    state: WorkflowState,
+    stepName: string,
+    resolutionContext: SystemStepInputResolutionContext,
+  ): unknown {
+    return services.resolveSystemInput(input, state, stepName, resolutionContext);
   }
 
   private async executeEffect(
@@ -84,11 +94,23 @@ export class SystemStepExecutor {
     await waitForStepDelay(step);
     const ruleContext = this.deps.getRuleContext(step);
 
-    const contextEntries = (step.systemInputs ?? []).map((input) => [
-      input.as,
-      this.resolveSystemInput(input),
-    ] as const);
-    state.systemContexts.set(step.name, Object.fromEntries(contextEntries));
+    const resolvedContext: Record<string, unknown> = {};
+    if ((step.systemInputs?.length ?? 0) > 0) {
+      const services = this.requireServices(this.deps.getCwd());
+      const resolutionContext: SystemStepInputResolutionContext = {
+        cache: new Map(),
+      };
+      for (const input of step.systemInputs ?? []) {
+        resolvedContext[input.as] = this.resolveSystemInput(
+          services,
+          input,
+          state,
+          step.name,
+          resolutionContext,
+        );
+      }
+    }
+    state.systemContexts.set(step.name, resolvedContext);
 
     if (step.effects && step.effects.length > 0) {
       const stepEffectResults: Record<string, unknown> = {};

@@ -20,6 +20,9 @@ export interface PrListItem {
   author: string;
   base_branch: string;
   head_branch: string;
+  managed_by_takt: boolean;
+  labels: string[];
+  same_repository: boolean;
   draft: boolean;
   updated_at: string;
 }
@@ -28,6 +31,7 @@ export interface CreatePrOptions {
   branch: string;
   title: string;
   body: string;
+  labels?: string[];
   base?: string;
   repo?: string;
   draft?: boolean;

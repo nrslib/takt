@@ -20,16 +20,27 @@ steps:
         source: current_project
         as: prs
         where:
+          head_branch: takt/*
+          managed_by_takt: true
+          same_repository: true
+          draft: false
+      - type: pr_selection
+        source: current_project
+        as: selected_pr
+        where:
+          head_branch: takt/*
+          managed_by_takt: true
+          same_repository: true
           draft: false
       - type: issue_context
         source: current_task
         as: issue
     rules:
-      - when: context.route_context.prs.length > 0
+      - when: context.route_context.selected_pr.exists == true
         next: plan_from_existing_pr
-      - when: context.route_context.prs.length == 0 && context.route_context.issue.exists == true
+      - when: context.route_context.selected_pr.exists == false && context.route_context.issue.exists == true
         next: plan_from_issue
-      - when: context.route_context.prs.length == 0 && context.route_context.issue.exists == false
+      - when: context.route_context.selected_pr.exists == false && context.route_context.issue.exists == false
         next: plan_fresh_improvement
 
   - name: plan_from_issue
@@ -144,10 +155,10 @@ steps:
 
       Current PR:
       - count: {context:route_context.prs.length}
-      - number: {context:route_context.prs[0].number}
-      - author: {context:route_context.prs[0].author}
-      - base_branch: {context:route_context.prs[0].base_branch}
-      - head_branch: {context:route_context.prs[0].head_branch}
+      - number: {context:route_context.selected_pr.number}
+      - author: {context:route_context.selected_pr.author}
+      - base_branch: {context:route_context.selected_pr.base_branch}
+      - head_branch: {context:route_context.selected_pr.head_branch}
 
       Output the next action in action.
       If a follow-up implementation task is needed, output it in task_markdown.
@@ -176,7 +187,7 @@ steps:
     mode: system
     effects:
       - type: comment_pr
-        pr: "{context:route_context.prs[0].number}"
+        pr: "{context:route_context.selected_pr.number}"
         body: "{structured:plan_from_existing_pr.pr_comment_markdown}"
     rules:
       - when: effect.comment_on_existing_pr.comment_pr.success == true
@@ -189,7 +200,7 @@ steps:
     effects:
       - type: enqueue_task
         mode: from_pr
-        pr: "{context:route_context.prs[0].number}"
+        pr: "{context:route_context.selected_pr.number}"
         workflow: takt-default
         base_branch: improve
         task: "{structured:plan_from_existing_pr.task_markdown}"
@@ -203,7 +214,7 @@ steps:
     mode: system
     effects:
       - type: sync_with_root
-        pr: "{context:route_context.prs[0].number}"
+        pr: "{context:route_context.selected_pr.number}"
     rules:
       - when: effect.prepare_merge.sync_with_root.success == true
         next: merge_pr
@@ -216,7 +227,7 @@ steps:
     mode: system
     effects:
       - type: resolve_conflicts_with_ai
-        pr: "{context:route_context.prs[0].number}"
+        pr: "{context:route_context.selected_pr.number}"
     rules:
       - when: effect.resolve_conflicts.resolve_conflicts_with_ai.success == true
         next: merge_pr
@@ -230,12 +241,12 @@ steps:
     effects:
       - type: enqueue_task
         mode: from_pr
-        pr: "{context:route_context.prs[0].number}"
+        pr: "{context:route_context.selected_pr.number}"
         workflow: takt-default
         base_branch: improve
         task: |
           Resolve the conflicts raised while syncing the PR with its base branch.
-          Target PR: {context:route_context.prs[0].number}
+          Target PR: {context:route_context.selected_pr.number}
     rules:
       - when: effect.enqueue_conflict_resolution_task.enqueue_task.success == true
         next: wait_before_next_scan
@@ -246,7 +257,7 @@ steps:
     mode: system
     effects:
       - type: merge_pr
-        pr: "{context:route_context.prs[0].number}"
+        pr: "{context:route_context.selected_pr.number}"
     rules:
       - when: effect.merge_pr.merge_pr.success == true
         next: wait_before_next_scan

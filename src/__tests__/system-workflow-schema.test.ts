@@ -85,6 +85,8 @@ describe('system workflow schema', () => {
             author: 'nrslib',
             base_branch: 'improve',
             head_branch: 'task/*',
+            managed_by_takt: true,
+            same_repository: true,
             draft: false,
           },
         },
@@ -109,11 +111,143 @@ describe('system workflow schema', () => {
             author: 'nrslib',
             base_branch: 'improve',
             head_branch: 'task/*',
+            managed_by_takt: true,
+            same_repository: true,
             draft: false,
           },
         },
       ]);
     }
+  });
+
+  it('pr_selection system input の where filter を受け付ける', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'route_context',
+      mode: 'system',
+      system_inputs: [
+        {
+          type: 'pr_selection',
+          source: 'current_project',
+          as: 'selected_pr',
+          where: {
+            head_branch: 'takt/*',
+            managed_by_takt: true,
+            same_repository: true,
+            draft: false,
+          },
+        },
+      ],
+      rules: [
+        {
+          when: 'context.route_context.selected_pr.exists == true',
+          next: 'plan_from_existing_pr',
+        },
+      ],
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const step = result.data as Record<string, unknown>;
+      expect(step.system_inputs).toEqual([
+        {
+          type: 'pr_selection',
+          source: 'current_project',
+          as: 'selected_pr',
+          where: {
+            head_branch: 'takt/*',
+            managed_by_takt: true,
+            same_repository: true,
+            draft: false,
+          },
+        },
+      ]);
+    }
+  });
+
+  it('pr_selection の where がキー順だけ異なっても同じ step の pr_list と一致として扱う', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'route_context',
+      mode: 'system',
+      system_inputs: [
+        {
+          type: 'pr_list',
+          source: 'current_project',
+          as: 'prs',
+          where: {
+            head_branch: 'takt/*',
+            managed_by_takt: true,
+            same_repository: true,
+            draft: false,
+          },
+        },
+        {
+          type: 'pr_selection',
+          source: 'current_project',
+          as: 'selected_pr',
+          where: {
+            draft: false,
+            managed_by_takt: true,
+            same_repository: true,
+            head_branch: 'takt/*',
+          },
+        },
+      ],
+      rules: [
+        {
+          when: 'context.route_context.selected_pr.exists == true',
+          next: 'plan_from_existing_pr',
+        },
+      ],
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('pr_selection の where が同じ step の pr_list と一致しない場合は reject する', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'route_context',
+      mode: 'system',
+      system_inputs: [
+        {
+          type: 'pr_list',
+          source: 'current_project',
+          as: 'prs',
+          where: {
+            head_branch: 'takt/*',
+            managed_by_takt: true,
+            same_repository: true,
+            draft: false,
+          },
+        },
+        {
+          type: 'pr_selection',
+          source: 'current_project',
+          as: 'selected_pr',
+          where: {
+            head_branch: 'feature/*',
+            managed_by_takt: true,
+            same_repository: true,
+            draft: false,
+          },
+        },
+      ],
+      rules: [
+        {
+          when: 'context.route_context.selected_pr.exists == true',
+          next: 'plan_from_existing_pr',
+        },
+      ],
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: ['system_inputs', 1, 'where'],
+          message: 'pr_selection.where must match a pr_list.where in the same step',
+        }),
+      ]),
+    );
   });
 
   it('task_queue_context system input で exclude_current_task を受け付ける', () => {

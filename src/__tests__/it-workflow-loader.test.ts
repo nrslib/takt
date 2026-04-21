@@ -41,6 +41,7 @@ vi.mock('../infra/config/resolveConfigValue.js', () => ({
 // --- Imports (after mocks) ---
 
 import { loadWorkflow } from '../infra/config/loaders/index.js';
+import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
 import { listBuiltinWorkflowNames } from '../infra/config/loaders/workflowResolver.js';
 import { loadGlobalConfig } from '../infra/config/global/globalConfig.js';
 
@@ -53,6 +54,95 @@ function createTestDir(): string {
   const dir = mkdtempSync(join(tmpdir(), 'takt-it-wfl-'));
   mkdirSync(join(dir, '.takt'), { recursive: true });
   return dir;
+}
+
+function expectAutoImprovementLoopRouteContext(config: NonNullable<ReturnType<typeof loadWorkflowConfig>>) {
+  const routeContext = config.steps.find((step) => step.name === 'route_context');
+  expect(routeContext?.kind).toBe('system');
+  expect(routeContext?.systemInputs).toHaveLength(5);
+  expect(routeContext?.systemInputs).toEqual(expect.arrayContaining([
+    expect.objectContaining({ type: 'task_context', as: 'task' }),
+    expect.objectContaining({ type: 'branch_context', as: 'branch' }),
+    expect.objectContaining({
+      type: 'pr_list',
+      as: 'prs',
+      where: {
+        head_branch: 'takt/*',
+        managed_by_takt: true,
+        same_repository: true,
+        draft: false,
+      },
+    }),
+    expect.objectContaining({
+      type: 'pr_selection',
+      as: 'selected_pr',
+      where: {
+        head_branch: 'takt/*',
+        managed_by_takt: true,
+        same_repository: true,
+        draft: false,
+      },
+    }),
+    expect.objectContaining({ type: 'issue_context', as: 'issue' }),
+  ]));
+  expect(routeContext?.rules).toEqual(expect.arrayContaining([
+    expect.objectContaining({ condition: 'context.route_context.selected_pr.exists == true', next: 'plan_from_existing_pr' }),
+    expect.objectContaining({ condition: 'context.route_context.selected_pr.exists == false && context.route_context.issue.exists == true', next: 'plan_from_issue' }),
+  ]));
+}
+
+function expectAutoImprovementLoopDownstreamContract(config: NonNullable<ReturnType<typeof loadWorkflowConfig>>) {
+  const planFromExistingPr = config.steps.find((step) => step.name === 'plan_from_existing_pr') as Record<string, unknown> | undefined;
+  const enqueueFromPr = config.steps.find((step) => step.name === 'enqueue_from_pr') as Record<string, unknown> | undefined;
+  const prepareMerge = config.steps.find((step) => step.name === 'prepare_merge') as Record<string, unknown> | undefined;
+  const resolveConflicts = config.steps.find((step) => step.name === 'resolve_conflicts') as Record<string, unknown> | undefined;
+  const enqueueConflictResolutionTask = config.steps.find((step) => step.name === 'enqueue_conflict_resolution_task') as Record<string, unknown> | undefined;
+  const mergePr = config.steps.find((step) => step.name === 'merge_pr') as Record<string, unknown> | undefined;
+  const commentOnExistingPr = config.steps.find((step) => step.name === 'comment_on_existing_pr') as Record<string, unknown> | undefined;
+
+  expect(String(planFromExistingPr?.instruction)).toContain('{context:route_context.selected_pr.number}');
+  expect(commentOnExistingPr?.effects).toEqual([
+    expect.objectContaining({
+      type: 'comment_pr',
+      pr: '{context:route_context.selected_pr.number}',
+    }),
+  ]);
+  expect(enqueueFromPr?.effects).toEqual([
+    expect.objectContaining({
+      type: 'enqueue_task',
+      mode: 'from_pr',
+      pr: '{context:route_context.selected_pr.number}',
+      workflow: 'takt-default',
+      base_branch: 'improve',
+    }),
+  ]);
+  expect(prepareMerge?.effects).toEqual([
+    expect.objectContaining({
+      type: 'sync_with_root',
+      pr: '{context:route_context.selected_pr.number}',
+    }),
+  ]);
+  expect(resolveConflicts?.effects).toEqual([
+    expect.objectContaining({
+      type: 'resolve_conflicts_with_ai',
+      pr: '{context:route_context.selected_pr.number}',
+    }),
+  ]);
+  expect(enqueueConflictResolutionTask?.effects).toEqual([
+    expect.objectContaining({
+      type: 'enqueue_task',
+      mode: 'from_pr',
+      pr: '{context:route_context.selected_pr.number}',
+      workflow: 'takt-default',
+      base_branch: 'improve',
+    }),
+  ]);
+  expect(mergePr?.effects).toEqual([
+    expect.objectContaining({
+      type: 'merge_pr',
+      pr: '{context:route_context.selected_pr.number}',
+    }),
+  ]);
 }
 
 describe('Workflow Loader IT: builtin workflow loading', () => {
@@ -111,16 +201,8 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
     expect(config!.schemas).toEqual(expect.objectContaining({
       'followup-task': 'followup-task',
     }));
-
-    const routeContext = config!.steps.find((step) => step.name === 'route_context');
-    expect(routeContext?.kind).toBe('system');
-    expect(routeContext?.systemInputs).toHaveLength(4);
-    expect(routeContext?.systemInputs).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: 'task_context', as: 'task' }),
-      expect.objectContaining({ type: 'branch_context', as: 'branch' }),
-      expect.objectContaining({ type: 'pr_list', as: 'prs' }),
-      expect.objectContaining({ type: 'issue_context', as: 'issue' }),
-    ]));
+    expectAutoImprovementLoopRouteContext(config!);
+    expectAutoImprovementLoopDownstreamContract(config!);
   });
 
   it('should preserve the north-star orchestration contract in the builtin workflow', () => {
@@ -135,6 +217,7 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
     const resolveConflicts = config!.steps.find((step) => step.name === 'resolve_conflicts') as Record<string, unknown> | undefined;
     const enqueueConflictResolutionTask = config!.steps.find((step) => step.name === 'enqueue_conflict_resolution_task') as Record<string, unknown> | undefined;
     const mergePr = config!.steps.find((step) => step.name === 'merge_pr') as Record<string, unknown> | undefined;
+    const commentOnExistingPr = config!.steps.find((step) => step.name === 'comment_on_existing_pr') as Record<string, unknown> | undefined;
     const waitBeforeNextScan = config!.steps.find((step) => step.name === 'wait_before_next_scan') as Record<string, unknown> | undefined;
 
     expect(planFromIssue?.delayBeforeMs).toBe(60000);
@@ -155,14 +238,7 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
       expect.objectContaining({ condition: 'structured.plan_from_existing_pr.action == "noop"', next: 'wait_before_next_scan' }),
       expect.objectContaining({ condition: 'true', next: 'ABORT' }),
     ]));
-    expect(enqueueFromPr?.effects).toEqual([
-      expect.objectContaining({
-        type: 'enqueue_task',
-        mode: 'from_pr',
-        workflow: 'takt-default',
-        base_branch: 'improve',
-      }),
-    ]);
+    expectAutoImprovementLoopDownstreamContract(config!);
     expect(prepareMerge?.rules).toEqual(expect.arrayContaining([
       expect.objectContaining({ condition: 'effect.prepare_merge.sync_with_root.success == true', next: 'merge_pr' }),
       expect.objectContaining({ condition: 'effect.prepare_merge.sync_with_root.conflicted == true', next: 'resolve_conflicts' }),
@@ -171,15 +247,6 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
       expect.objectContaining({ condition: 'effect.resolve_conflicts.resolve_conflicts_with_ai.success == true', next: 'merge_pr' }),
       expect.objectContaining({ condition: 'effect.resolve_conflicts.resolve_conflicts_with_ai.failed == true', next: 'enqueue_conflict_resolution_task' }),
     ]));
-    expect(enqueueConflictResolutionTask?.effects).toEqual([
-      expect.objectContaining({
-        type: 'enqueue_task',
-        mode: 'from_pr',
-        workflow: 'takt-default',
-        base_branch: 'improve',
-      }),
-    ]);
-    expect(mergePr).toBeDefined();
     expect(waitBeforeNextScan?.systemInputs).toEqual([
       expect.objectContaining({
         type: 'task_queue_context',
@@ -220,6 +287,43 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
     const config = loadWorkflowConfig('auto-improvement-loop', testDir);
     expect(config).not.toBeNull();
     expect((config as Record<string, unknown>).maxSteps).toBe('infinite');
+    expectAutoImprovementLoopRouteContext(config!);
+    expectAutoImprovementLoopDownstreamContract(config!);
+  });
+
+  it('should reject workflow files when pr_selection.where does not match pr_list.where', () => {
+    const workflowsDir = join(testDir, '.takt', 'workflows');
+    const workflowPath = join(workflowsDir, 'invalid-pr-selection.yaml');
+
+    mkdirSync(workflowsDir, { recursive: true });
+    writeFileSync(workflowPath, `
+name: invalid-pr-selection
+initial_step: route_context
+max_steps: 2
+steps:
+  - name: route_context
+    mode: system
+    system_inputs:
+      - type: pr_list
+        source: current_project
+        as: prs
+        where:
+          head_branch: takt/*
+          draft: false
+      - type: pr_selection
+        source: current_project
+        as: selected_pr
+        where:
+          head_branch: feature/*
+          draft: false
+    rules:
+      - when: "true"
+        next: COMPLETE
+`, 'utf-8');
+
+    expect(() => loadWorkflowFromFile(workflowPath, testDir)).toThrow(
+      'pr_selection.where must match a pr_list.where in the same step',
+    );
   });
 });
 

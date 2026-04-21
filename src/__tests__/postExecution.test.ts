@@ -105,6 +105,9 @@ describe('postExecutionFlow', () => {
     await postExecutionFlow(baseOptions);
 
     expect(mockCreatePullRequest).toHaveBeenCalledTimes(1);
+    const [createOptions, createCwd] = mockCreatePullRequest.mock.calls[0] as [Record<string, unknown>, string];
+    expect(createCwd).toBe('/project');
+    expect(createOptions).not.toHaveProperty('labels');
     expect(mockCommentOnPr).not.toHaveBeenCalled();
     expect(mockBuildPrBody).toHaveBeenCalledWith(undefined, 'Workflow `default` completed successfully.');
   });

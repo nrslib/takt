@@ -16,6 +16,7 @@ import {
   isIssueReference,
   formatPrReviewAsTask,
   buildPrBody,
+  TAKT_MANAGED_PR_MARKER,
 } from '../infra/git/format.js';
 import type { Issue, PrReviewData } from '../infra/git/types.js';
 
@@ -98,6 +99,7 @@ describe('buildPrBody', () => {
     expect(result).toContain('## Execution Report');
     expect(result).toContain('Report text');
     expect(result).toContain('Closes #5');
+    expect(result).toContain(TAKT_MANAGED_PR_MARKER);
   });
 
   it('should build PR body without issues', () => {
@@ -107,6 +109,7 @@ describe('buildPrBody', () => {
     expect(result).toContain('## Execution Report');
     expect(result).toContain('Report text');
     expect(result).not.toContain('Closes');
+    expect(result).toContain(TAKT_MANAGED_PR_MARKER);
   });
 });
 

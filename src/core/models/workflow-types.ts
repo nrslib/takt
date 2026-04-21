@@ -33,7 +33,65 @@ export interface WorkflowPrListWhere {
   author?: string;
   base_branch?: string;
   head_branch?: string;
+  managed_by_takt?: boolean;
+  labels?: string[];
+  same_repository?: boolean;
   draft?: boolean;
+}
+
+function normalizeWorkflowPrListWhereLabels(labels: string[] | undefined): string[] | undefined {
+  if (labels === undefined) {
+    return undefined;
+  }
+  return [...new Set(labels)].sort();
+}
+
+export function normalizeWorkflowPrListWhere(
+  where: WorkflowPrListWhere | undefined,
+): WorkflowPrListWhere | undefined {
+  if (where === undefined) {
+    return undefined;
+  }
+
+  const normalized: WorkflowPrListWhere = {};
+
+  if (where.author !== undefined) {
+    normalized.author = where.author;
+  }
+  if (where.base_branch !== undefined) {
+    normalized.base_branch = where.base_branch;
+  }
+  if (where.head_branch !== undefined) {
+    normalized.head_branch = where.head_branch;
+  }
+  if (where.managed_by_takt !== undefined) {
+    normalized.managed_by_takt = where.managed_by_takt;
+  }
+
+  const labels = normalizeWorkflowPrListWhereLabels(where.labels);
+  if (labels !== undefined) {
+    normalized.labels = labels;
+  }
+  if (where.same_repository !== undefined) {
+    normalized.same_repository = where.same_repository;
+  }
+  if (where.draft !== undefined) {
+    normalized.draft = where.draft;
+  }
+
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+export function workflowPrListWhereEquals(
+  left: WorkflowPrListWhere | undefined,
+  right: WorkflowPrListWhere | undefined,
+): boolean {
+  return JSON.stringify(normalizeWorkflowPrListWhere(left) ?? {})
+    === JSON.stringify(normalizeWorkflowPrListWhere(right) ?? {});
+}
+
+export function stringifyWorkflowPrListWhere(where: WorkflowPrListWhere | undefined): string {
+  return JSON.stringify(normalizeWorkflowPrListWhere(where) ?? {});
 }
 
 export type WorkflowSystemInput =
@@ -60,6 +118,11 @@ export type WorkflowSystemInput =
   })
   | (WorkflowSystemBinding & {
     type: 'pr_list';
+    source: 'current_project';
+    where?: WorkflowPrListWhere;
+  })
+  | (WorkflowSystemBinding & {
+    type: 'pr_selection';
     source: 'current_project';
     where?: WorkflowPrListWhere;
   });

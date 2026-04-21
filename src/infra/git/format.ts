@@ -7,6 +7,24 @@
 
 import type { Issue, PrReviewData } from './types.js';
 
+export const TAKT_MANAGED_PR_MARKER = '<!-- takt:managed -->';
+
+function hasLegacyTaktManagedPrSignature(body: string): boolean {
+  return body.includes('## Summary')
+    && body.includes('## Execution Report')
+    && (
+      body.includes('Workflow `')
+      || body.includes('Task completed successfully.')
+    );
+}
+
+export function isTaktManagedPrBody(body: string | null | undefined): boolean {
+  if (!body) {
+    return false;
+  }
+  return body.includes(TAKT_MANAGED_PR_MARKER) || hasLegacyTaktManagedPrSignature(body);
+}
+
 /**
  * Format an issue into task text for workflow execution.
  *
@@ -150,6 +168,9 @@ export function buildPrBody(issues: Issue[] | undefined, report: string): string
     parts.push('');
     parts.push(issues.map((issue) => `Closes #${issue.number}`).join('\n'));
   }
+
+  parts.push('');
+  parts.push(TAKT_MANAGED_PR_MARKER);
 
   return parts.join('\n');
 }

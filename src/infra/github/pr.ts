@@ -7,6 +7,7 @@
 import { execFileSync } from 'node:child_process';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { fetchPaginatedApi } from '../git/paginated-api.js';
+import { isTaktManagedPrBody } from '../git/format.js';
 import { checkGhCli } from './issue.js';
 import type { CreatePrOptions, CreatePrResult, ExistingPr, CommentResult, MergeResult, PrListItem, PrReviewData, PrReviewComment } from '../git/types.js';
 
@@ -36,8 +37,10 @@ export function findExistingPr(branch: string, cwd: string): ExistingPr | undefi
 interface GhPrListResponseItem {
   number: number;
   user: { login: string };
-  base: { ref: string };
-  head: { ref: string };
+  base: { ref: string; repo: { full_name: string } | null };
+  head: { ref: string; repo: { full_name: string } | null };
+  body: string | null;
+  labels: Array<{ name: string }>;
   draft: boolean;
   updated_at: string;
 }
@@ -77,6 +80,9 @@ export function listOpenPrs(cwd: string): PrListItem[] {
     author: pr.user.login,
     base_branch: pr.base.ref,
     head_branch: pr.head.ref,
+    managed_by_takt: isTaktManagedPrBody(pr.body),
+    labels: pr.labels.map((label) => label.name),
+    same_repository: pr.head.repo?.full_name === pr.base.repo?.full_name,
     draft: pr.draft,
     updated_at: pr.updated_at,
   }));
@@ -252,6 +258,10 @@ export function createPullRequest(options: CreatePrOptions, cwd: string): Create
 
   if (options.draft) {
     args.push('--draft');
+  }
+
+  for (const label of options.labels ?? []) {
+    args.push('--label', label);
   }
 
   log.info('Creating PR', { branch: options.branch, title: options.title, draft: options.draft });
