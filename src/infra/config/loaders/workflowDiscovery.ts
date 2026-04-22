@@ -5,9 +5,8 @@ import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { getRepertoireDir } from '../paths.js';
 import { formatWorkflowLoadWarning } from './workflowLoadWarning.js';
 import { isMissingWorkflowCallArgError } from './workflowCallableArgResolver.js';
-import { loadWorkflowFromFile } from './workflowFileLoader.js';
+import { loadWorkflowFileWithResolutionOptions } from './workflowResolvedLoader.js';
 import type { WorkflowConfig } from '../../../core/models/index.js';
-import { validateProjectWorkflowTrustBoundary } from './workflowTrustBoundary.js';
 
 const log = createLogger('workflow-discovery');
 
@@ -87,11 +86,11 @@ function emitWorkflowLoadWarning(options: LoadWorkflowsOptions | undefined, work
 }
 
 function loadWorkflowEntry(entry: WorkflowDirEntry, cwd: string): WorkflowConfig {
-  const config = loadWorkflowFromFile(entry.path, cwd);
-  if (entry.source === 'project') {
-    validateProjectWorkflowTrustBoundary(config, entry.path, cwd);
-  }
-  return config;
+  return loadWorkflowFileWithResolutionOptions(entry.path, {
+    projectCwd: cwd,
+    lookupCwd: cwd,
+    source: entry.source,
+  });
 }
 
 export function* iterateWorkflowDir(

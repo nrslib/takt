@@ -95,7 +95,7 @@ export function normalizeWorkflowConfig(
   );
   if (trustInfo?.isProjectTrustRoot) {
     validateProjectWorkflowTrustBoundaryForSteps(parsed.steps, workflowPath, trustInfo);
-  } else if (context?.projectDir && isPathSafe(context.projectDir, workflowDir)) {
+  } else if (!trustInfo && context?.projectDir && isPathSafe(context.projectDir, workflowDir)) {
     validateProjectWorkflowTrustBoundaryForSteps(
       parsed.steps,
       workflowPath,
