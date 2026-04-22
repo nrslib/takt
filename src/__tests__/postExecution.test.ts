@@ -26,7 +26,6 @@ const {
     mockBuildPrBody: vi.fn(() => 'pr-body'),
     mockBuildTaktManagedPrOptions: vi.fn((body: string) => ({
       body: `${body}\n\n<!-- takt:managed -->`,
-      labels: ['takt-managed'],
     })),
     mockCreatePullRequestSafely: vi.fn(),
   }));
@@ -96,7 +95,6 @@ describe('postExecutionFlow', () => {
     mockCreatePullRequest.mockReturnValue({ success: true, url: 'https://github.com/org/repo/pull/1' });
     mockBuildTaktManagedPrOptions.mockImplementation((body: string) => ({
       body: `${body}\n\n<!-- takt:managed -->`,
-      labels: ['takt-managed'],
     }));
     mockCreatePullRequestSafely.mockImplementation((provider, options, cwd) => {
       try {
@@ -120,7 +118,6 @@ describe('postExecutionFlow', () => {
     expect(createCwd).toBe('/project');
     expect(createOptions).toEqual(expect.objectContaining({
       body: 'pr-body\n\n<!-- takt:managed -->',
-      labels: ['takt-managed'],
     }));
     expect(mockCommentOnPr).not.toHaveBeenCalled();
     expect(mockBuildPrBody).toHaveBeenCalledWith(undefined, 'Workflow `default` completed successfully.');

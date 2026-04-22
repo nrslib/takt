@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mockBuildPrBody = vi.fn(() => 'Default PR body');
 const mockBuildTaktManagedPrOptions = vi.fn((body: string) => ({
   body: `${body}\n\n<!-- takt:managed -->`,
-  labels: ['takt-managed'],
 }));
 const mockCreatePullRequest = vi.fn();
 const mockExpandPipelineTemplate = vi.fn();
@@ -52,7 +51,6 @@ describe('submitPullRequest', () => {
     );
     mockBuildTaktManagedPrOptions.mockImplementation((body: string) => ({
       body: `${body}\n\n<!-- takt:managed -->`,
-      labels: ['takt-managed'],
     }));
     mockCreatePullRequestSafely.mockImplementation((
       provider: { createPullRequest: (options: unknown, cwd: string) => unknown },
@@ -106,7 +104,6 @@ describe('submitPullRequest', () => {
       body: 'Title: Fix pipeline\nIssue: 42\nBody: Issue body\nReport: Workflow `auto-improvement-loop` completed successfully.\n\n<!-- takt:managed -->',
       branch: 'takt/issue-42',
       draft: true,
-      labels: ['takt-managed'],
       repo: 'owner/repo',
       title: '[#42] Fix pipeline',
     }, '/repo');

@@ -251,7 +251,6 @@ describe('DefaultSystemStepServices', () => {
         base_branch: 'improve',
         head_branch: 'task/42',
         managed_by_takt: true,
-        labels: ['takt-managed'],
         same_repository: true,
         draft: false,
         updated_at: '2026-04-20T12:00:00Z',
@@ -262,7 +261,6 @@ describe('DefaultSystemStepServices', () => {
         base_branch: 'improve',
         head_branch: 'task/43',
         managed_by_takt: true,
-        labels: ['takt-managed'],
         same_repository: true,
         draft: false,
         updated_at: '2026-04-20T14:00:00Z',
@@ -273,7 +271,6 @@ describe('DefaultSystemStepServices', () => {
         base_branch: 'improve',
         head_branch: 'task/40',
         managed_by_takt: true,
-        labels: ['takt-managed'],
         same_repository: true,
         draft: true,
         updated_at: '2026-04-20T13:00:00Z',
@@ -306,7 +303,6 @@ describe('DefaultSystemStepServices', () => {
         base_branch: 'improve',
         head_branch: 'task/43',
         managed_by_takt: true,
-        labels: ['takt-managed'],
         same_repository: true,
         draft: false,
       },
@@ -316,14 +312,13 @@ describe('DefaultSystemStepServices', () => {
         base_branch: 'improve',
         head_branch: 'task/42',
         managed_by_takt: true,
-        labels: ['takt-managed'],
         same_repository: true,
         draft: false,
       },
     ]);
   });
 
-  it('resolves pr_list with auto-improvement-loop filters and excludes unlabeled same-repo takt PRs', () => {
+  it('resolves pr_list with auto-improvement-loop filters and excludes marker-less same-repo takt PRs', () => {
     mockListOpenPrs.mockReturnValue([
       {
         number: 41,
@@ -341,7 +336,7 @@ describe('DefaultSystemStepServices', () => {
         author: 'nrslib',
         base_branch: 'improve',
         head_branch: 'takt/20260420-fix-pr-loop-selection',
-        managed_by_takt: true,
+        managed_by_takt: false,
         labels: [],
         same_repository: true,
         draft: false,
@@ -353,7 +348,6 @@ describe('DefaultSystemStepServices', () => {
         base_branch: 'improve',
         head_branch: 'takt/654/fix-pr-loop-selection',
         managed_by_takt: true,
-        labels: ['takt-managed'],
         same_repository: true,
         draft: false,
         updated_at: '2026-04-20T14:00:00Z',
@@ -364,7 +358,6 @@ describe('DefaultSystemStepServices', () => {
         base_branch: 'improve',
         head_branch: 'takt/654/spoofed-fork',
         managed_by_takt: true,
-        labels: ['takt-managed'],
         same_repository: false,
         draft: false,
         updated_at: '2026-04-20T16:00:00Z',
@@ -384,7 +377,6 @@ describe('DefaultSystemStepServices', () => {
       where: {
         head_branch: 'takt/*',
         managed_by_takt: true,
-        labels: ['takt-managed'],
         same_repository: true,
         draft: false,
       },
@@ -397,7 +389,6 @@ describe('DefaultSystemStepServices', () => {
         base_branch: 'improve',
         head_branch: 'takt/654/fix-pr-loop-selection',
         managed_by_takt: true,
-        labels: ['takt-managed'],
         same_repository: true,
         draft: false,
       },
@@ -423,7 +414,6 @@ describe('DefaultSystemStepServices', () => {
         base_branch: 'improve',
         head_branch: 'takt/654/fix-pr-loop-selection',
         managed_by_takt: true,
-        labels: ['takt-managed'],
         same_repository: true,
         draft: false,
         updated_at: '2026-04-20T14:00:00Z',
@@ -443,7 +433,6 @@ describe('DefaultSystemStepServices', () => {
       where: {
         head_branch: 'takt/*',
         managed_by_takt: true,
-        labels: ['takt-managed'],
         same_repository: true,
         draft: false,
       },
@@ -456,7 +445,6 @@ describe('DefaultSystemStepServices', () => {
         base_branch: 'improve',
         head_branch: 'takt/654/fix-pr-loop-selection',
         managed_by_takt: true,
-        labels: ['takt-managed'],
         same_repository: true,
         draft: false,
       },
@@ -538,7 +526,6 @@ describe('DefaultSystemStepServices', () => {
         base_branch: 'improve',
         head_branch: 'takt/20260420-fix-pr-loop-selection',
         managed_by_takt: true,
-        labels: ['takt-managed'],
         same_repository: true,
         draft: false,
         updated_at: '2026-04-20T12:00:00Z',
@@ -549,7 +536,6 @@ describe('DefaultSystemStepServices', () => {
         base_branch: 'improve',
         head_branch: 'takt/654/fix-pr-loop-selection',
         managed_by_takt: true,
-        labels: ['takt-managed'],
         same_repository: true,
         draft: false,
         updated_at: '2026-04-20T14:00:00Z',
@@ -593,7 +579,6 @@ describe('DefaultSystemStepServices', () => {
       where: {
         head_branch: 'takt/*',
         managed_by_takt: true,
-        labels: ['takt-managed'],
         same_repository: true,
         draft: false,
       },
@@ -606,7 +591,6 @@ describe('DefaultSystemStepServices', () => {
       base_branch: 'improve',
       head_branch: 'takt/20260420-fix-pr-loop-selection',
       managed_by_takt: true,
-      labels: ['takt-managed'],
       same_repository: true,
       draft: false,
     });
@@ -620,7 +604,6 @@ describe('DefaultSystemStepServices', () => {
         base_branch: 'improve',
         head_branch: 'takt/20260420-fix-pr-loop-selection',
         managed_by_takt: true,
-        labels: ['takt-managed'],
         same_repository: true,
         draft: false,
         updated_at: '2026-04-20T12:00:00Z',
@@ -631,7 +614,6 @@ describe('DefaultSystemStepServices', () => {
         base_branch: 'improve',
         head_branch: 'takt/654/fix-pr-loop-selection',
         managed_by_takt: true,
-        labels: ['takt-managed'],
         same_repository: true,
         draft: false,
         updated_at: '2026-04-20T14:00:00Z',
@@ -659,7 +641,6 @@ describe('DefaultSystemStepServices', () => {
         where: {
           head_branch: string;
           managed_by_takt: boolean;
-          labels: string[];
           same_repository: boolean;
           draft: boolean;
         };
@@ -675,7 +656,6 @@ describe('DefaultSystemStepServices', () => {
       where: {
         head_branch: 'takt/*',
         managed_by_takt: true,
-        labels: ['takt-managed'],
         same_repository: true,
         draft: false,
       },
@@ -688,7 +668,6 @@ describe('DefaultSystemStepServices', () => {
       base_branch: 'improve',
       head_branch: 'takt/654/fix-pr-loop-selection',
       managed_by_takt: true,
-      labels: ['takt-managed'],
       same_repository: true,
       draft: false,
     });
@@ -702,7 +681,6 @@ describe('DefaultSystemStepServices', () => {
         base_branch: 'improve',
         head_branch: 'takt/20260420-fix-pr-loop-selection',
         managed_by_takt: true,
-        labels: ['takt-managed'],
         same_repository: true,
         draft: false,
         updated_at: '2026-04-20T12:00:00Z',
@@ -713,7 +691,6 @@ describe('DefaultSystemStepServices', () => {
         base_branch: 'improve',
         head_branch: 'takt/654/fix-pr-loop-selection',
         managed_by_takt: true,
-        labels: ['takt-managed'],
         same_repository: true,
         draft: false,
         updated_at: '2026-04-20T14:00:00Z',
@@ -741,7 +718,6 @@ describe('DefaultSystemStepServices', () => {
         where: {
           head_branch: string;
           managed_by_takt: boolean;
-          labels: string[];
           same_repository: boolean;
           draft: boolean;
         };
@@ -757,7 +733,6 @@ describe('DefaultSystemStepServices', () => {
       where: {
         head_branch: 'takt/*',
         managed_by_takt: true,
-        labels: ['takt-managed'],
         same_repository: true,
         draft: false,
       },
@@ -770,7 +745,6 @@ describe('DefaultSystemStepServices', () => {
       base_branch: 'improve',
       head_branch: 'takt/20260420-fix-pr-loop-selection',
       managed_by_takt: true,
-      labels: ['takt-managed'],
       same_repository: true,
       draft: false,
     });
@@ -785,7 +759,6 @@ describe('DefaultSystemStepServices', () => {
           base_branch: 'improve',
           head_branch: 'takt/654/fix-pr-loop-selection',
           managed_by_takt: true,
-          labels: ['takt-managed'],
           same_repository: true,
           draft: false,
           updated_at: '2026-04-20T14:00:00Z',
@@ -796,7 +769,6 @@ describe('DefaultSystemStepServices', () => {
           base_branch: 'improve',
           head_branch: 'takt/20260420-fix-pr-loop-selection',
           managed_by_takt: true,
-          labels: ['takt-managed'],
           same_repository: true,
           draft: false,
           updated_at: '2026-04-20T12:00:00Z',
@@ -832,14 +804,12 @@ describe('DefaultSystemStepServices', () => {
     const prListWhere = {
       head_branch: 'takt/*',
       managed_by_takt: true,
-      labels: ['takt-managed'],
       same_repository: true,
       draft: false,
     };
     const prSelectionWhere = {
       draft: false,
       managed_by_takt: true,
-      labels: ['takt-managed', 'takt-managed'],
       same_repository: true,
       head_branch: 'takt/*',
     };
@@ -864,7 +834,7 @@ describe('DefaultSystemStepServices', () => {
     expect(prs.some((pr) => pr.number === selectedPr.number)).toBe(true);
   });
 
-  it('resolves pr_selection with explicit labels filter and returns exists: false for unlabeled TAKT PRs', () => {
+  it('resolves pr_selection with managed_by_takt filter and returns exists: false for marker-less TAKT PRs', () => {
     mockListOpenPrs.mockReturnValue([
       {
         number: 42,
@@ -894,7 +864,6 @@ describe('DefaultSystemStepServices', () => {
         where: {
           head_branch: 'takt/*',
           managed_by_takt: true,
-          labels: ['takt-managed'],
           same_repository: true,
           draft: false,
         },
@@ -906,7 +875,7 @@ describe('DefaultSystemStepServices', () => {
     expect(result).toEqual({ exists: false });
   });
 
-  it('resolves pr_selection with explicit labels filter and returns exists: false for label-only manual takt PRs', () => {
+  it('resolves pr_selection with managed_by_takt filter and returns exists: false for marker-less manual takt PRs', () => {
     mockListOpenPrs.mockReturnValue([
       {
         number: 42,
@@ -914,7 +883,6 @@ describe('DefaultSystemStepServices', () => {
         base_branch: 'improve',
         head_branch: 'takt/20260420-manual-pr',
         managed_by_takt: false,
-        labels: ['takt-managed'],
         same_repository: true,
         draft: false,
         updated_at: '2026-04-20T12:00:00Z',
@@ -936,7 +904,6 @@ describe('DefaultSystemStepServices', () => {
         where: {
           head_branch: 'takt/*',
           managed_by_takt: true,
-          labels: ['takt-managed'],
           same_repository: true,
           draft: false,
         },

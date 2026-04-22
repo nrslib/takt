@@ -32,7 +32,6 @@ const {
   mockCreatePullRequest: vi.fn(),
   mockBuildTaktManagedPrOptions: vi.fn((body: string) => ({
     body: `${body}\n\n<!-- takt:managed -->`,
-    labels: ['takt-managed'],
   })),
   mockCreatePullRequestSafely: vi.fn(),
   mockPushBranch: vi.fn(),
@@ -218,7 +217,6 @@ describe('Pipeline Modes IT: --task + --workflow path', () => {
     vi.clearAllMocks();
     mockBuildTaktManagedPrOptions.mockImplementation((body: string) => ({
       body: `${body}\n\n<!-- takt:managed -->`,
-      labels: ['takt-managed'],
     }));
     mockCreatePullRequestSafely.mockImplementation((provider, options, cwd) => {
       try {
