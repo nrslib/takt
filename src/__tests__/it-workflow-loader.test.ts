@@ -44,14 +44,12 @@ import { loadWorkflow } from '../infra/config/loaders/index.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
 import { listBuiltinWorkflowNames } from '../infra/config/loaders/workflowResolver.js';
 import { loadGlobalConfig } from '../infra/config/global/globalConfig.js';
-import { TAKT_MANAGED_PR_LABEL } from '../infra/git/format.js';
 
 const loadWorkflowConfig = loadWorkflow;
 const listBuiltinWorkflowLabels = listBuiltinWorkflowNames;
 const taktManagedPrRouteFilter = {
   head_branch: 'takt/*',
   managed_by_takt: true,
-  labels: [TAKT_MANAGED_PR_LABEL],
   same_repository: true,
   draft: false,
 };
@@ -212,7 +210,7 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
     expectAutoImprovementLoopDownstreamContract(config!);
   });
 
-  it('should keep repo-wide issue routing aligned across builtin auto-improvement-loop workflows', () => {
+  it('should keep repo-wide issue routing and managed PR contract aligned across builtin auto-improvement-loop workflows', () => {
     for (const language of ['en', 'ja'] as const) {
       const config = loadWorkflowFromFile(
         join(process.cwd(), 'builtins', language, 'workflows', 'auto-improvement-loop.yaml'),

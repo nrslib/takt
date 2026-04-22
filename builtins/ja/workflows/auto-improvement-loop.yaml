@@ -22,7 +22,6 @@ steps:
         where:
           head_branch: takt/*
           managed_by_takt: true
-          labels: ['takt-managed']
           same_repository: true
           draft: false
       - type: pr_selection
@@ -31,7 +30,6 @@ steps:
         where:
           head_branch: takt/*
           managed_by_takt: true
-          labels: ['takt-managed']
           same_repository: true
           draft: false
       # 旧仕様では current task に紐づく issue_context を見ていたが、

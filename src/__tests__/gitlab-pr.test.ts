@@ -36,7 +36,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 import { findExistingMr, listOpenMrs, createMergeRequest, commentOnMr, fetchMrReviewComments, mergeMr } from '../infra/gitlab/pr.js';
 
-const taktManagedLabel = 'takt-managed';
+const automationLabel = 'automation';
 
 function withGlabApiResponse(body: unknown, nextPath?: string): string {
   const headers = [
@@ -133,7 +133,7 @@ describe('listOpenMrs', () => {
         target_branch: 'improve',
         source_branch: 'task/42',
         description: '## Summary\n\nTask summary\n\n## Execution Report\n\nWorkflow `default` completed successfully.\n\n<!-- takt:managed -->',
-        labels: [taktManagedLabel],
+        labels: [automationLabel],
         source_project_id: 1,
         target_project_id: 1,
         draft: false,
@@ -155,7 +155,7 @@ describe('listOpenMrs', () => {
         base_branch: 'improve',
         head_branch: 'task/42',
         managed_by_takt: true,
-        labels: [taktManagedLabel],
+        labels: [automationLabel],
         same_repository: true,
         draft: false,
         updated_at: '2026-04-20T12:00:00Z',
@@ -199,7 +199,7 @@ describe('listOpenMrs', () => {
           target_branch: 'improve',
           source_branch: 'task/101',
           description: '## Summary\n\nTask summary\n\n## Execution Report\n\nTask completed successfully.\n\n<!-- takt:managed -->',
-          labels: [taktManagedLabel],
+          labels: [automationLabel],
           source_project_id: 1,
           target_project_id: 1,
           draft: false,
@@ -228,7 +228,7 @@ describe('listOpenMrs', () => {
       base_branch: 'improve',
       head_branch: 'task/101',
       managed_by_takt: true,
-      labels: [taktManagedLabel],
+      labels: [automationLabel],
       same_repository: true,
       draft: false,
       updated_at: '2026-04-21T00:00:00Z',
@@ -243,7 +243,7 @@ describe('listOpenMrs', () => {
         target_branch: 'improve',
         source_branch: 'takt/52/forked-branch',
         description: 'Human-managed body',
-        labels: [taktManagedLabel],
+        labels: [automationLabel],
         source_project_id: 2,
         target_project_id: 1,
         draft: false,
@@ -260,7 +260,7 @@ describe('listOpenMrs', () => {
         base_branch: 'improve',
         head_branch: 'takt/52/forked-branch',
         managed_by_takt: false,
-        labels: [taktManagedLabel],
+        labels: [automationLabel],
         same_repository: false,
         draft: false,
         updated_at: '2026-04-21T01:00:00Z',

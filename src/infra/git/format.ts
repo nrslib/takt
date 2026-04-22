@@ -8,7 +8,6 @@
 import type { CreatePrOptions, Issue, PrReviewData } from './types.js';
 
 export const TAKT_MANAGED_PR_MARKER = '<!-- takt:managed -->';
-export const TAKT_MANAGED_PR_LABEL = 'takt-managed';
 
 export function isTaktManagedPrBody(body: string | null | undefined): boolean {
   if (!body) {
@@ -24,10 +23,9 @@ function appendTaktManagedPrMarker(body: string): string {
   return `${body}\n\n${TAKT_MANAGED_PR_MARKER}`;
 }
 
-export function buildTaktManagedPrOptions(body: string): Pick<CreatePrOptions, 'body' | 'labels'> {
+export function buildTaktManagedPrOptions(body: string): Pick<CreatePrOptions, 'body'> {
   return {
     body: appendTaktManagedPrMarker(body),
-    labels: [TAKT_MANAGED_PR_LABEL],
   };
 }
 

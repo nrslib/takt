@@ -18,7 +18,6 @@ import {
   buildPrBody,
   buildTaktManagedPrOptions,
   isTaktManagedPrBody,
-  TAKT_MANAGED_PR_LABEL,
   TAKT_MANAGED_PR_MARKER,
 } from '../infra/git/format.js';
 import type { Issue, PrReviewData } from '../infra/git/types.js';
@@ -117,12 +116,11 @@ describe('buildPrBody', () => {
 });
 
 describe('buildTaktManagedPrOptions', () => {
-  it('managed PR 契約を body marker と labels の両方で返す', () => {
+  it('managed PR 契約を body marker だけで返す', () => {
     const result = buildTaktManagedPrOptions('## Summary\n\nReport text');
 
     expect(result).toEqual({
       body: '## Summary\n\nReport text\n\n<!-- takt:managed -->',
-      labels: [TAKT_MANAGED_PR_LABEL],
     });
   });
 
@@ -133,7 +131,6 @@ describe('buildTaktManagedPrOptions', () => {
 
     expect(result).toEqual({
       body,
-      labels: [TAKT_MANAGED_PR_LABEL],
     });
   });
 });

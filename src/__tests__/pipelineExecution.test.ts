@@ -9,7 +9,6 @@ const mockPushBranch = vi.fn();
 const mockBuildPrBody = vi.fn(() => 'Default PR body');
 const mockBuildTaktManagedPrOptions = vi.fn((body: string) => ({
   body: `${body}\n\n<!-- takt:managed -->`,
-  labels: ['takt-managed'],
 }));
 const mockFetchPrReviewComments = vi.fn();
 const mockFormatPrReviewAsTask = vi.fn((pr: { number: number; title: string }) =>
@@ -100,7 +99,6 @@ describe('executePipeline', () => {
     vi.clearAllMocks();
     mockBuildTaktManagedPrOptions.mockImplementation((body: string) => ({
       body: `${body}\n\n<!-- takt:managed -->`,
-      labels: ['takt-managed'],
     }));
     mockCreatePullRequestSafely.mockImplementation((provider, options, cwd) => {
       try {
@@ -368,7 +366,6 @@ describe('executePipeline', () => {
     expect(mockCreatePullRequest).toHaveBeenCalledWith(
       expect.objectContaining({
         branch: 'fix/my-branch',
-        labels: ['takt-managed'],
         repo: 'owner/repo',
       }),
       '/tmp/test',
@@ -560,7 +557,6 @@ describe('executePipeline', () => {
       expect(mockCreatePullRequest).toHaveBeenCalledWith(
         expect.objectContaining({
           body: '## Summary\nAuth is broken.\n\nCloses #50\n\n<!-- takt:managed -->',
-          labels: ['takt-managed'],
         }),
         '/tmp/test',
       );
@@ -588,7 +584,6 @@ describe('executePipeline', () => {
       expect(mockCreatePullRequest).toHaveBeenCalledWith(
         expect.objectContaining({
           body: '## Summary\nWorkflow `default` completed successfully.\n\nIssue:\nDetails:\n\n<!-- takt:managed -->',
-          labels: ['takt-managed'],
         }),
         '/tmp/test',
       );
@@ -615,7 +610,6 @@ describe('executePipeline', () => {
       expect(mockCreatePullRequest).toHaveBeenCalledWith(
         expect.objectContaining({
           body: 'Default PR body\n\n<!-- takt:managed -->',
-          labels: ['takt-managed'],
         }),
         '/tmp/test',
       );

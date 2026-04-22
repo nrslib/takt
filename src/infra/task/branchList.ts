@@ -1,7 +1,7 @@
 /**
  * Branch list helpers
  *
- * Listing, parsing, and enriching takt-managed branches
+ * Listing, parsing, and enriching takt branches
  * with metadata (diff stats, original instruction, task slug).
  * Used by the /list command.
  */
@@ -59,7 +59,7 @@ export class BranchManager {
     }
   }
 
-  /** List all takt-managed branches (local + remote) */
+  /** List all takt branches (local + remote) */
   listTaktBranches(projectDir: string): BranchInfo[] {
     try {
       // Get local branches

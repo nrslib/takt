@@ -28,7 +28,7 @@ import {
 } from '../infra/git/format.js';
 import type { Issue, PrReviewData } from '../infra/git/types.js';
 
-const taktManagedLabel = 'takt-managed';
+const automationLabel = 'automation';
 
 function withGhApiResponse(body: unknown, nextPath?: string): string {
   const headers = [
@@ -90,7 +90,7 @@ describe('listOpenPrs', () => {
           base: { ref: 'improve', repo: { full_name: 'org/repo' } },
           head: { ref: 'task/42', repo: { full_name: 'org/repo' } },
           body: `## Summary\n\nTask summary\n\n## Execution Report\n\nWorkflow \`default\` completed successfully.\n\n${TAKT_MANAGED_PR_MARKER}`,
-          labels: [{ name: taktManagedLabel }],
+          labels: [{ name: automationLabel }],
           draft: false,
           updated_at: '2026-04-20T12:00:00Z',
         },
@@ -115,7 +115,7 @@ describe('listOpenPrs', () => {
         base_branch: 'improve',
         head_branch: 'task/42',
         managed_by_takt: true,
-        labels: [taktManagedLabel],
+        labels: [automationLabel],
         same_repository: true,
         draft: false,
         updated_at: '2026-04-20T12:00:00Z',
@@ -148,7 +148,7 @@ describe('listOpenPrs', () => {
           base: { ref: 'improve', repo: { full_name: 'org/repo' } },
           head: { ref: 'task/101', repo: { full_name: 'org/repo' } },
           body: `## Summary\n\nTask summary\n\n## Execution Report\n\nTask completed successfully.\n\n${TAKT_MANAGED_PR_MARKER}`,
-          labels: [{ name: taktManagedLabel }],
+          labels: [{ name: automationLabel }],
           draft: false,
           updated_at: '2026-04-21T00:00:00Z',
         },
@@ -175,7 +175,7 @@ describe('listOpenPrs', () => {
       base_branch: 'improve',
       head_branch: 'task/101',
       managed_by_takt: true,
-      labels: [taktManagedLabel],
+      labels: [automationLabel],
       same_repository: true,
       draft: false,
       updated_at: '2026-04-21T00:00:00Z',
@@ -192,7 +192,7 @@ describe('listOpenPrs', () => {
           base: { ref: 'improve', repo: { full_name: 'org/repo' } },
           head: { ref: 'takt/52/forked-branch', repo: { full_name: 'fork/repo' } },
           body: 'Human-managed body',
-          labels: [{ name: taktManagedLabel }],
+          labels: [{ name: automationLabel }],
           draft: false,
           updated_at: '2026-04-21T01:00:00Z',
         },
@@ -207,7 +207,7 @@ describe('listOpenPrs', () => {
         base_branch: 'improve',
         head_branch: 'takt/52/forked-branch',
         managed_by_takt: false,
-        labels: [taktManagedLabel],
+        labels: [automationLabel],
         same_repository: false,
         draft: false,
         updated_at: '2026-04-21T01:00:00Z',

@@ -1699,7 +1699,6 @@ describe('system workflow execution integration', () => {
         base_branch: 'improve',
         head_branch: 'takt/654/fix-pr-loop-selection',
         managed_by_takt: true,
-        labels: ['takt-managed'],
         same_repository: true,
         draft: false,
       },
@@ -1709,7 +1708,6 @@ describe('system workflow execution integration', () => {
         base_branch: 'improve',
         head_branch: 'takt/20260420-fix-pr-loop-selection',
         managed_by_takt: true,
-        labels: ['takt-managed'],
         same_repository: true,
         draft: false,
       },
@@ -1752,8 +1750,8 @@ describe('system workflow execution integration', () => {
             name: 'route_context',
             mode: 'system',
             system_inputs: [
-              { type: 'pr_list', source: 'current_project', as: 'prs', where: { head_branch: 'takt/*', managed_by_takt: true, labels: ['takt-managed'], same_repository: true, draft: false } },
-              { type: 'pr_selection', source: 'current_project', as: 'selected_pr', where: { head_branch: 'takt/*', managed_by_takt: true, labels: ['takt-managed'], same_repository: true, draft: false } },
+              { type: 'pr_list', source: 'current_project', as: 'prs', where: { head_branch: 'takt/*', managed_by_takt: true, same_repository: true, draft: false } },
+              { type: 'pr_selection', source: 'current_project', as: 'selected_pr', where: { head_branch: 'takt/*', managed_by_takt: true, same_repository: true, draft: false } },
             ],
             rules: [
               { when: 'context.route_context.selected_pr.number == 43', next: 'wait_before_next_scan' },
@@ -1801,7 +1799,6 @@ describe('system workflow execution integration', () => {
         base_branch: 'improve',
         head_branch: 'takt/20260420-fix-pr-loop-selection',
         managed_by_takt: true,
-        labels: ['takt-managed'],
         same_repository: true,
         draft: false,
       },
@@ -1816,7 +1813,6 @@ describe('system workflow execution integration', () => {
           expect(input.where).toEqual({
             head_branch: 'takt/*',
             managed_by_takt: true,
-            labels: ['takt-managed'],
             same_repository: true,
             draft: false,
           });
@@ -1843,8 +1839,8 @@ describe('system workflow execution integration', () => {
                 type: 'pr_selection',
                 source: 'current_project',
                 as: 'selected_pr',
-                where: { head_branch: 'takt/*', managed_by_takt: true, labels: ['takt-managed'], same_repository: true, draft: false },
-              },
+                where: { head_branch: 'takt/*', managed_by_takt: true, same_repository: true, draft: false },
+                },
             ],
             rules: [
               { when: 'context.route_context.selected_pr.exists == true', next: 'comment_on_pr' },
@@ -1923,7 +1919,7 @@ describe('system workflow execution integration', () => {
           base_branch: 'improve',
           head_branch: 'takt/654/fix-pr-loop-selection',
           managed_by_takt: true,
-          labels: ['takt-managed'],
+          labels: ['automation'],
           same_repository: true,
           draft: false,
           updated_at: '2026-04-20T14:00:00Z',
@@ -1947,7 +1943,7 @@ describe('system workflow execution integration', () => {
           base_branch: 'improve',
           head_branch: 'takt/999/second-fetch',
           managed_by_takt: false,
-          labels: ['takt-managed'],
+          labels: ['automation'],
           same_repository: true,
           draft: false,
           updated_at: '2026-04-20T16:00:00Z',
@@ -1971,7 +1967,6 @@ describe('system workflow execution integration', () => {
                 where: {
                   head_branch: 'takt/*',
                   managed_by_takt: true,
-                  labels: ['takt-managed'],
                   same_repository: true,
                   draft: false,
                 },
@@ -1983,7 +1978,6 @@ describe('system workflow execution integration', () => {
                 where: {
                   draft: false,
                   managed_by_takt: true,
-                  labels: ['takt-managed', 'takt-managed'],
                   same_repository: true,
                   head_branch: 'takt/*',
                 },
@@ -2010,12 +2004,12 @@ describe('system workflow execution integration', () => {
 
     expect(state.status).toBe('completed');
     expect(mockListOpenPrs).toHaveBeenCalledTimes(1);
-    expect(routeContext.prs.map((pr) => pr.number)).toEqual([43]);
+    expect(routeContext.prs.map((pr) => pr.number)).toEqual([43, 42]);
     expect(routeContext.selected_pr).toEqual(expect.objectContaining({ exists: true, number: 43 }));
     expect(routeContext.prs.some((pr) => pr.number === routeContext.selected_pr.number)).toBe(true);
   });
 
-  it('executor 実経路でも auto-improvement-loop 既定フィルタは unlabeled な same-repo takt PR を除外する', async () => {
+  it('executor 実経路でも auto-improvement-loop 既定フィルタは marker のない same-repo takt PR を除外する', async () => {
     mockListOpenPrs.mockReturnValue([
       {
         number: 41,
@@ -2033,7 +2027,7 @@ describe('system workflow execution integration', () => {
         author: 'nrslib',
         base_branch: 'improve',
         head_branch: 'takt/20260420-existing-task-pr',
-        managed_by_takt: true,
+        managed_by_takt: false,
         labels: [],
         same_repository: true,
         draft: false,
@@ -2045,7 +2039,6 @@ describe('system workflow execution integration', () => {
         base_branch: 'improve',
         head_branch: 'takt/654/spoofed-fork',
         managed_by_takt: true,
-        labels: ['takt-managed'],
         same_repository: false,
         draft: false,
         updated_at: '2026-04-20T16:00:00Z',
@@ -2054,7 +2047,7 @@ describe('system workflow execution integration', () => {
 
     const config = normalizeWorkflowConfig(
       {
-        name: 'route-excludes-unlabeled-existing-takt-pr',
+        name: 'route-excludes-markerless-existing-takt-pr',
         initial_step: 'route_context',
         max_steps: 1,
         steps: [
@@ -2069,7 +2062,6 @@ describe('system workflow execution integration', () => {
                 where: {
                   head_branch: 'takt/*',
                   managed_by_takt: true,
-                  labels: ['takt-managed'],
                   same_repository: true,
                   draft: false,
                 },
@@ -2081,7 +2073,6 @@ describe('system workflow execution integration', () => {
                 where: {
                   head_branch: 'takt/*',
                   managed_by_takt: true,
-                  labels: ['takt-managed'],
                   same_repository: true,
                   draft: false,
                 },
@@ -2143,7 +2134,6 @@ describe('system workflow execution integration', () => {
                 where: {
                   head_branch: 'takt/*',
                   managed_by_takt: true,
-                  labels: ['takt-managed'],
                   same_repository: true,
                   draft: false,
                 },
