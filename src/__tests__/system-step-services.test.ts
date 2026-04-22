@@ -15,6 +15,11 @@ const {
   mockCreateIssueFromTask,
   mockTaskRunnerListAllTaskItems,
   mockResolveBaseBranch,
+  mockResolveCloneBaseDir,
+  mockCloneAndIsolate,
+  mockRemoveClone,
+  mockMaterializeCloneHeadToRootBranch,
+  mockRelayPushCloneToOrigin,
 } = vi.hoisted(() => ({
   mockGetCurrentBranch: vi.fn(),
   mockExecFileSync: vi.fn(),
@@ -29,6 +34,11 @@ const {
   mockCreateIssueFromTask: vi.fn(),
   mockTaskRunnerListAllTaskItems: vi.fn(),
   mockResolveBaseBranch: vi.fn(),
+  mockResolveCloneBaseDir: vi.fn(),
+  mockCloneAndIsolate: vi.fn(),
+  mockRemoveClone: vi.fn(),
+  mockMaterializeCloneHeadToRootBranch: vi.fn(),
+  mockRelayPushCloneToOrigin: vi.fn(),
 }));
 
 vi.mock('node:child_process', () => ({
@@ -42,9 +52,15 @@ vi.mock('../infra/task/index.js', () => ({
     }
   },
   getCurrentBranch: (...args: unknown[]) => mockGetCurrentBranch(...args),
-  materializeCloneHeadToRootBranch: vi.fn(),
-  relayPushCloneToOrigin: vi.fn(),
+  materializeCloneHeadToRootBranch: (...args: unknown[]) => mockMaterializeCloneHeadToRootBranch(...args),
+  relayPushCloneToOrigin: (...args: unknown[]) => mockRelayPushCloneToOrigin(...args),
   resolveBaseBranch: (...args: unknown[]) => mockResolveBaseBranch(...args),
+  resolveCloneBaseDir: (...args: unknown[]) => mockResolveCloneBaseDir(...args),
+  removeClone: (...args: unknown[]) => mockRemoveClone(...args),
+}));
+
+vi.mock('../infra/task/clone-exec.js', () => ({
+  cloneAndIsolate: (...args: unknown[]) => mockCloneAndIsolate(...args),
 }));
 
 vi.mock('../features/tasks/add/index.js', () => ({
@@ -122,6 +138,12 @@ function createWorkflowState(currentStep = 'route_context'): WorkflowState {
   };
 }
 
+function findGitCallIndex(
+  predicate: (args: string[]) => boolean,
+): number {
+  return mockExecFileSync.mock.calls.findIndex((call) => predicate(call[1] as string[]));
+}
+
 describe('DefaultSystemStepServices', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -140,6 +162,7 @@ describe('DefaultSystemStepServices', () => {
     mockCreateIssueFromTask.mockReturnValue(undefined);
     mockTaskRunnerListAllTaskItems.mockReturnValue([]);
     mockResolveBaseBranch.mockImplementation((_cwd: string, branch?: string) => ({ branch: branch ?? 'main' }));
+    mockResolveCloneBaseDir.mockReturnValue('/repo/.takt');
   });
 
   it('resolves issue_context from current task issue number', () => {
@@ -1408,11 +1431,13 @@ describe('DefaultSystemStepServices', () => {
       reviews: [],
       files: [],
     });
-    mockExecFileSync
-      .mockReturnValueOnce('')
-      .mockImplementationOnce(() => {
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'merge' && argsArr[1] === 'refs/remotes/origin/improve') {
         throw createCommandError('merge failed', 'fatal: refusing to merge unrelated histories');
-      });
+      }
+      return '';
+    });
 
     const services = new DefaultSystemStepServices({
       cwd: '/repo/worktree',
@@ -1428,21 +1453,19 @@ describe('DefaultSystemStepServices', () => {
       conflicted: false,
       error: 'fatal: refusing to merge unrelated histories',
     });
-    expect(mockExecFileSync).toHaveBeenNthCalledWith(
-      1,
+    expect(mockExecFileSync).toHaveBeenCalledWith(
       'git',
       ['fetch', 'origin', 'refs/heads/task/test-branch:refs/remotes/origin/task/test-branch'],
-      expect.any(Object),
+      expect.objectContaining({ cwd: '/repo' }),
     );
-    expect(mockExecFileSync).toHaveBeenNthCalledWith(
-      2,
+    expect(mockExecFileSync).toHaveBeenCalledWith(
       'git',
-      ['merge', '--ff-only', 'refs/remotes/origin/task/test-branch'],
+      ['merge', 'refs/remotes/origin/improve'],
       expect.any(Object),
     );
   });
 
-  it('fails sync_with_root when cwd is not on the PR head branch', async () => {
+  it('syncs sync_with_root from a PR-scoped clone when cwd is not on the PR head branch', async () => {
     mockGetCurrentBranch.mockReturnValue('main');
     mockFetchPrReviewComments.mockReturnValue({
       number: 42,
@@ -1455,6 +1478,7 @@ describe('DefaultSystemStepServices', () => {
       reviews: [],
       files: [],
     });
+    mockExecFileSync.mockReturnValue('');
 
     const services = new DefaultSystemStepServices({
       cwd: '/repo/worktree',
@@ -1463,14 +1487,128 @@ describe('DefaultSystemStepServices', () => {
     });
 
     const result = await services.executeEffect({ type: 'sync_with_root', pr: 42 }, { pr: 42 }, {} as never);
+    const worktreePath = mockRemoveClone.mock.calls[0]?.[0] as string;
+
+    expect(result).toEqual({
+      success: true,
+      failed: false,
+      conflicted: false,
+    });
+    expect(mockResolveCloneBaseDir).toHaveBeenCalledWith('/repo');
+    expect(mockCloneAndIsolate).toHaveBeenCalledWith('/repo', worktreePath);
+    expect(worktreePath).toMatch(/^\/repo\/\.takt\/pr-sync-/);
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      'git',
+      ['fetch', '/repo', 'refs/remotes/origin/task/test-branch:refs/takt/pr-sync/task/test-branch'],
+      expect.objectContaining({ cwd: worktreePath }),
+    );
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      'git',
+      ['checkout', '-B', 'task/test-branch', 'refs/takt/pr-sync/task/test-branch'],
+      expect.objectContaining({ cwd: worktreePath }),
+    );
+    expect(mockMaterializeCloneHeadToRootBranch).toHaveBeenCalledWith(
+      worktreePath,
+      '/repo',
+      'task/test-branch',
+    );
+    expect(mockRelayPushCloneToOrigin).toHaveBeenCalledWith(
+      worktreePath,
+      '/repo',
+      'task/test-branch',
+    );
+  });
+
+  it('syncs sync_with_root when the project repo is already on the PR head branch', async () => {
+    mockGetCurrentBranch.mockReturnValue('task/test-branch');
+    mockFetchPrReviewComments.mockReturnValue({
+      number: 42,
+      title: 'Follow-up PR',
+      body: 'Body',
+      url: 'https://example.test/pr/42',
+      headRefName: 'task/test-branch',
+      baseRefName: 'improve',
+      comments: [],
+      reviews: [],
+      files: [],
+    });
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (
+        argsArr[0] === 'fetch'
+        && argsArr[1] === '/repo'
+        && argsArr[2] === 'refs/remotes/origin/task/test-branch:refs/heads/task/test-branch'
+      ) {
+        throw createCommandError(
+          'checked out branch fetch',
+          'fatal: refusing to fetch into branch refs/heads/task/test-branch checked out at /repo/.takt/pr-sync-1',
+        );
+      }
+      return '';
+    });
+
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo',
+      projectCwd: '/repo',
+      task: 'Investigate failure',
+    });
+
+    const result = await services.executeEffect({ type: 'sync_with_root', pr: 42 }, { pr: 42 }, {} as never);
+
+    expect(result).toEqual({
+      success: true,
+      failed: false,
+      conflicted: false,
+    });
+    expect(findGitCallIndex(
+      (args) => args[0] === 'fetch'
+        && args[1] === '/repo'
+        && args[2] === 'refs/remotes/origin/task/test-branch:refs/heads/task/test-branch',
+    )).toBe(-1);
+    expect(findGitCallIndex(
+      (args) => args[0] === 'fetch'
+        && args[1] === '/repo'
+        && args[2] === 'refs/remotes/origin/task/test-branch:refs/takt/pr-sync/task/test-branch',
+    )).toBeGreaterThanOrEqual(0);
+  });
+
+  it('cleans up the PR-scoped clone when sync_with_root setup fails', async () => {
+    mockFetchPrReviewComments.mockReturnValue({
+      number: 42,
+      title: 'Follow-up PR',
+      body: 'Body',
+      url: 'https://example.test/pr/42',
+      headRefName: 'task/test-branch',
+      baseRefName: 'improve',
+      comments: [],
+      reviews: [],
+      files: [],
+    });
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'checkout' && argsArr[1] === '-B') {
+        throw createCommandError('checkout failed', 'fatal: cannot switch branch');
+      }
+      return '';
+    });
+
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Investigate failure',
+    });
+
+    const result = await services.executeEffect({ type: 'sync_with_root', pr: 42 }, { pr: 42 }, {} as never);
+    const worktreePath = mockRemoveClone.mock.calls[0]?.[0] as string;
 
     expect(result).toEqual({
       success: false,
       failed: true,
       conflicted: false,
-      error: 'Error: System effect requires cwd to be on PR branch "task/test-branch", but current branch is "main"',
+      error: 'fatal: cannot switch branch',
     });
-    expect(mockExecFileSync).not.toHaveBeenCalled();
+    expect(mockCloneAndIsolate).toHaveBeenCalledWith('/repo', worktreePath);
+    expect(mockRemoveClone).toHaveBeenCalledWith(worktreePath);
   });
 
   it('rejects option-like PR head branch names before git fetch', async () => {
@@ -1516,11 +1654,13 @@ describe('DefaultSystemStepServices', () => {
       reviews: [],
       files: [],
     });
-    mockExecFileSync
-      .mockReturnValueOnce('')
-      .mockImplementationOnce(() => {
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'merge' && argsArr[1] === 'refs/remotes/origin/improve') {
         throw createCommandError('merge conflict', 'CONFLICT (content): Merge conflict in src/file.ts');
-      });
+      }
+      return '';
+    });
 
     const services = new DefaultSystemStepServices({
       cwd: '/repo/worktree',
@@ -1536,7 +1676,46 @@ describe('DefaultSystemStepServices', () => {
       conflicted: true,
       error: 'CONFLICT (content): Merge conflict in src/file.ts',
     });
-    expect(mockExecFileSync).toHaveBeenNthCalledWith(3, 'git', ['merge', '--abort'], expect.any(Object));
+    expect(mockExecFileSync).toHaveBeenCalledWith('git', ['merge', '--abort'], expect.any(Object));
+  });
+
+  it('cleans up the PR-scoped clone when sync_with_root conflicts without runtime state', async () => {
+    mockFetchPrReviewComments.mockReturnValue({
+      number: 42,
+      title: 'Follow-up PR',
+      body: 'Body',
+      url: 'https://example.test/pr/42',
+      headRefName: 'task/test-branch',
+      baseRefName: 'improve',
+      comments: [],
+      reviews: [],
+      files: [],
+    });
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'merge' && argsArr[1] === 'refs/remotes/origin/improve') {
+        throw createCommandError('merge conflict', 'CONFLICT (content): Merge conflict in src/file.ts');
+      }
+      return '';
+    });
+
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Investigate conflict',
+    });
+
+    const result = await services.executeEffect({ type: 'sync_with_root', pr: 42 }, { pr: 42 }, {} as never);
+    const worktreePath = mockCloneAndIsolate.mock.calls[0]?.[1] as string;
+
+    expect(result).toEqual({
+      success: false,
+      failed: false,
+      conflicted: true,
+      error: 'CONFLICT (content): Merge conflict in src/file.ts',
+    });
+    expect(mockRemoveClone).toHaveBeenCalledTimes(1);
+    expect(mockRemoveClone).toHaveBeenCalledWith(worktreePath);
   });
 
   it('fails sync_with_root when conflict cleanup cannot abort the merge', async () => {
@@ -1551,14 +1730,16 @@ describe('DefaultSystemStepServices', () => {
       reviews: [],
       files: [],
     });
-    mockExecFileSync
-      .mockReturnValueOnce('')
-      .mockImplementationOnce(() => {
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'merge' && argsArr[1] === 'refs/remotes/origin/improve') {
         throw createCommandError('merge conflict', 'CONFLICT (content): Merge conflict in src/file.ts');
-      })
-      .mockImplementationOnce(() => {
+      }
+      if (argsArr[0] === 'merge' && argsArr[1] === '--abort') {
         throw createCommandError('abort failed', 'fatal: no merge to abort');
-      });
+      }
+      return '';
+    });
 
     const services = new DefaultSystemStepServices({
       cwd: '/repo/worktree',
@@ -1632,30 +1813,30 @@ describe('DefaultSystemStepServices', () => {
       failed: false,
       conflicted: false,
     });
-    expect(mockExecFileSync).toHaveBeenNthCalledWith(
-      1,
-      'git',
-      ['fetch', 'origin', 'refs/heads/task/test-branch:refs/remotes/origin/task/test-branch'],
-      expect.any(Object),
+    const headFetchProject = findGitCallIndex(
+      (args) => args[0] === 'fetch' && args[1] === 'origin' && args[2] === 'refs/heads/task/test-branch:refs/remotes/origin/task/test-branch',
     );
-    expect(mockExecFileSync).toHaveBeenNthCalledWith(
-      2,
-      'git',
-      ['merge', '--ff-only', 'refs/remotes/origin/task/test-branch'],
-      expect.any(Object),
+    const headFetchWorktree = findGitCallIndex(
+      (args) => args[0] === 'fetch' && args[1] === '/repo' && args[2] === 'refs/remotes/origin/task/test-branch:refs/remotes/origin/task/test-branch',
     );
-    expect(mockExecFileSync).toHaveBeenNthCalledWith(
-      3,
-      'git',
-      ['fetch', 'origin', 'refs/heads/improve:refs/remotes/origin/improve'],
-      expect.any(Object),
+    const headMerge = findGitCallIndex(
+      (args) => args[0] === 'merge' && args[1] === '--ff-only',
     );
-    expect(mockExecFileSync).toHaveBeenNthCalledWith(
-      4,
-      'git',
-      ['merge', 'refs/remotes/origin/improve'],
-      expect.any(Object),
+    const baseFetchProject = findGitCallIndex(
+      (args) => args[0] === 'fetch' && args[1] === 'origin' && args[2] === 'refs/heads/improve:refs/remotes/origin/improve',
     );
+    const baseFetchWorktree = findGitCallIndex(
+      (args) => args[0] === 'fetch' && args[1] === '/repo' && args[2] === 'refs/remotes/origin/improve:refs/remotes/origin/improve',
+    );
+    const baseMerge = findGitCallIndex(
+      (args) => args[0] === 'merge' && args[1] === 'refs/remotes/origin/improve',
+    );
+    expect(headFetchProject).toBeGreaterThanOrEqual(0);
+    expect(headFetchProject).toBeLessThan(headFetchWorktree);
+    expect(headFetchWorktree).toBeLessThan(headMerge);
+    expect(headMerge).toBeLessThan(baseFetchProject);
+    expect(baseFetchProject).toBeLessThan(baseFetchWorktree);
+    expect(baseFetchWorktree).toBeLessThan(baseMerge);
   });
 
   it('fails sync_with_root before touching the base branch when PR head fast-forward fails', async () => {
@@ -1695,7 +1876,6 @@ describe('DefaultSystemStepServices', () => {
       conflicted: false,
       error: 'fatal: Not possible to fast-forward, aborting.',
     });
-    expect(mockExecFileSync).toHaveBeenCalledTimes(2);
     expect(mockExecFileSync).not.toHaveBeenCalledWith(
       'git',
       ['fetch', 'origin', 'refs/heads/improve:refs/remotes/origin/improve'],
@@ -1765,12 +1945,13 @@ describe('DefaultSystemStepServices', () => {
       reviews: [],
       files: [],
     });
-    mockExecFileSync
-      .mockReturnValueOnce('')
-      .mockReturnValueOnce('')
-      .mockImplementationOnce(() => {
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'merge' && argsArr[1] === 'refs/remotes/origin/improve') {
         throw createCommandError('merge conflict', 'CONFLICT (content): Merge conflict in src/file.ts');
-      });
+      }
+      return '';
+    });
 
     const services = new DefaultSystemStepServices({
       cwd: '/repo/worktree',
@@ -1816,33 +1997,11 @@ describe('DefaultSystemStepServices', () => {
       conflicted: false,
     });
     expect(mockAgentCall).not.toHaveBeenCalled();
-    expect(mockExecFileSync).toHaveBeenNthCalledWith(
-      1,
-      'git',
-      ['fetch', 'origin', 'refs/heads/task/test-branch:refs/remotes/origin/task/test-branch'],
-      expect.any(Object),
-    );
-    expect(mockExecFileSync).toHaveBeenNthCalledWith(
-      2,
-      'git',
-      ['merge', '--ff-only', 'refs/remotes/origin/task/test-branch'],
-      expect.any(Object),
-    );
-    expect(mockExecFileSync).toHaveBeenNthCalledWith(
-      3,
-      'git',
-      ['fetch', 'origin', 'refs/heads/improve:refs/remotes/origin/improve'],
-      expect.any(Object),
-    );
-    expect(mockExecFileSync).toHaveBeenNthCalledWith(
-      4,
-      'git',
-      ['merge', 'refs/remotes/origin/improve'],
-      expect.any(Object),
-    );
+    expect(findGitCallIndex((args) => args[0] === 'merge' && args[1] === '--ff-only')).toBeGreaterThanOrEqual(0);
+    expect(findGitCallIndex((args) => args[0] === 'merge' && args[1] === 'refs/remotes/origin/improve')).toBeGreaterThanOrEqual(0);
   });
 
-  it('fails resolve_conflicts_with_ai when cwd is not on the PR head branch', async () => {
+  it('runs resolve_conflicts_with_ai on a PR-scoped clone when cwd is not on the PR head branch', async () => {
     mockGetCurrentBranch.mockReturnValue('main');
     mockFetchPrReviewComments.mockReturnValue({
       number: 42,
@@ -1854,6 +2013,13 @@ describe('DefaultSystemStepServices', () => {
       comments: [],
       reviews: [],
       files: [],
+    });
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'merge' && argsArr[1] === 'refs/remotes/origin/improve') {
+        throw createCommandError('merge conflict', 'CONFLICT (content): Merge conflict in src/file.ts');
+      }
+      return '';
     });
 
     const services = new DefaultSystemStepServices({
@@ -1867,14 +2033,30 @@ describe('DefaultSystemStepServices', () => {
       { pr: 42 },
       {} as never,
     );
+    const worktreePath = mockRemoveClone.mock.calls[0]?.[0] as string;
 
     expect(result).toEqual({
-      success: false,
-      failed: true,
+      success: true,
+      failed: false,
       conflicted: false,
-      error: 'Error: System effect requires cwd to be on PR branch "task/test-branch", but current branch is "main"',
     });
-    expect(mockExecFileSync).not.toHaveBeenCalled();
+    expect(mockResolveCloneBaseDir).toHaveBeenCalledWith('/repo');
+    expect(mockCloneAndIsolate).toHaveBeenCalledWith('/repo', worktreePath);
+    expect(worktreePath).toMatch(/^\/repo\/\.takt\/pr-sync-/);
+    expect(mockAgentCall).toHaveBeenCalledWith(
+      'message:Resolve conflicts',
+      expect.objectContaining({ cwd: worktreePath }),
+    );
+    expect(mockMaterializeCloneHeadToRootBranch).toHaveBeenCalledWith(
+      worktreePath,
+      '/repo',
+      'task/test-branch',
+    );
+    expect(mockRelayPushCloneToOrigin).toHaveBeenCalledWith(
+      worktreePath,
+      '/repo',
+      'task/test-branch',
+    );
   });
 
   it('hands off sync_with_root conflicts to resolve_conflicts_with_ai on the same worktree', async () => {
@@ -1889,17 +2071,15 @@ describe('DefaultSystemStepServices', () => {
       reviews: [],
       files: [],
     });
-    mockExecFileSync
-      .mockReturnValueOnce('')
-      .mockImplementationOnce(() => {
+    let baseMergeCalls = 0;
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'merge' && argsArr[1] === 'refs/remotes/origin/improve') {
+        baseMergeCalls += 1;
         throw createCommandError('merge conflict', 'CONFLICT (content): Merge conflict in src/file.ts');
-      })
-      .mockReturnValueOnce('')
-      .mockReturnValueOnce('')
-      .mockReturnValueOnce('')
-      .mockImplementationOnce(() => {
-        throw createCommandError('merge conflict', 'CONFLICT (content): Merge conflict in src/file.ts');
-      });
+      }
+      return '';
+    });
 
     const services = new DefaultSystemStepServices({
       cwd: '/repo/worktree',
@@ -1925,20 +2105,77 @@ describe('DefaultSystemStepServices', () => {
       failed: false,
       conflicted: false,
     });
-    expect(mockExecFileSync).toHaveBeenNthCalledWith(3, 'git', ['merge', '--abort'], expect.any(Object));
-    expect(mockExecFileSync).toHaveBeenNthCalledWith(
-      4,
-      'git',
-      ['fetch', 'origin', 'refs/heads/task/test-branch:refs/remotes/origin/task/test-branch'],
-      expect.any(Object),
-    );
-    expect(mockExecFileSync).toHaveBeenNthCalledWith(
-      5,
-      'git',
-      ['merge', '--ff-only', 'refs/remotes/origin/task/test-branch'],
-      expect.any(Object),
-    );
+    expect(baseMergeCalls).toBe(2);
+    expect(mockExecFileSync).toHaveBeenCalledWith('git', ['merge', '--abort'], expect.any(Object));
     expect(mockAgentCall).toHaveBeenCalled();
+  });
+
+  it('reuses the same PR-scoped worktree across system service instances after sync_with_root conflict', async () => {
+    mockFetchPrReviewComments.mockReturnValue({
+      number: 42,
+      title: 'Follow-up PR',
+      body: 'Body',
+      url: 'https://example.test/pr/42',
+      headRefName: 'task/test-branch',
+      baseRefName: 'improve',
+      comments: [],
+      reviews: [],
+      files: [],
+    });
+    let baseMergeCalls = 0;
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'merge' && argsArr[1] === 'refs/remotes/origin/improve') {
+        baseMergeCalls += 1;
+        throw createCommandError('merge conflict', 'CONFLICT (content): Merge conflict in src/file.ts');
+      }
+      return '';
+    });
+
+    const runtimeState = {
+      cache: new Map<string, unknown>(),
+      cleanupHandlers: new Set<() => void>(),
+    };
+    const prepareServices = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Resolve conflicts',
+      runtimeState,
+    });
+    const resolveServices = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Resolve conflicts',
+      runtimeState,
+    });
+
+    const syncResult = await prepareServices.executeEffect({ type: 'sync_with_root', pr: 42 }, { pr: 42 }, {} as never);
+    const resolveResult = await resolveServices.executeEffect(
+      { type: 'resolve_conflicts_with_ai', pr: 42 },
+      { pr: 42 },
+      {} as never,
+    );
+    const worktreePath = mockCloneAndIsolate.mock.calls[0]?.[1] as string;
+
+    expect(syncResult).toEqual({
+      success: false,
+      failed: false,
+      conflicted: true,
+      error: 'CONFLICT (content): Merge conflict in src/file.ts',
+    });
+    expect(resolveResult).toEqual({
+      success: true,
+      failed: false,
+      conflicted: false,
+    });
+    expect(mockCloneAndIsolate).toHaveBeenCalledTimes(1);
+    expect(mockRemoveClone).toHaveBeenCalledTimes(1);
+    expect(mockRemoveClone).toHaveBeenCalledWith(worktreePath);
+    expect(baseMergeCalls).toBe(2);
+    expect(mockAgentCall).toHaveBeenCalledWith(
+      'message:Resolve conflicts',
+      expect.objectContaining({ cwd: worktreePath }),
+    );
   });
 
   it('includes merge abort failure details when AI conflict resolution fails', async () => {
@@ -1960,15 +2197,16 @@ describe('DefaultSystemStepServices', () => {
       persona: 'conflict-resolver',
       timestamp: new Date(),
     });
-    mockExecFileSync
-      .mockReturnValueOnce('')
-      .mockReturnValueOnce('')
-      .mockImplementationOnce(() => {
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'merge' && argsArr[1] === 'refs/remotes/origin/improve') {
         throw createCommandError('merge conflict', 'CONFLICT (content): Merge conflict in src/file.ts');
-      })
-      .mockImplementationOnce(() => {
+      }
+      if (argsArr[0] === 'merge' && argsArr[1] === '--abort') {
         throw createCommandError('abort failed', 'fatal: no merge to abort');
-      });
+      }
+      return '';
+    });
 
     const services = new DefaultSystemStepServices({
       cwd: '/repo/worktree',
@@ -2005,18 +2243,15 @@ describe('DefaultSystemStepServices', () => {
       persona: 'conflict-resolver',
       timestamp: new Date(),
     });
-    mockExecFileSync
-      .mockReturnValueOnce('')
-      .mockImplementationOnce(() => {
+    let conflictMergeCalls = 0;
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'merge' && argsArr[1] === 'refs/remotes/origin/improve') {
+        conflictMergeCalls += 1;
         throw createCommandError('merge conflict', 'CONFLICT (content): Merge conflict in src/file.ts');
-      })
-      .mockReturnValueOnce('')
-      .mockReturnValueOnce('')
-      .mockReturnValueOnce('')
-      .mockImplementationOnce(() => {
-        throw createCommandError('merge conflict', 'CONFLICT (content): Merge conflict in src/file.ts');
-      })
-      .mockReturnValueOnce('');
+      }
+      return '';
+    });
 
     const services = new DefaultSystemStepServices({
       cwd: '/repo/worktree',
@@ -2043,7 +2278,8 @@ describe('DefaultSystemStepServices', () => {
       conflicted: true,
       error: 'AI conflict resolution failed',
     });
-    expect(mockExecFileSync).toHaveBeenNthCalledWith(7, 'git', ['merge', '--abort'], expect.any(Object));
+    expect(conflictMergeCalls).toBe(2);
+    expect(mockExecFileSync).toHaveBeenCalledWith('git', ['merge', '--abort'], expect.any(Object));
   });
 
   it('aborts stale merge state before retrying resolve_conflicts_with_ai', async () => {
@@ -2058,17 +2294,18 @@ describe('DefaultSystemStepServices', () => {
       reviews: [],
       files: [],
     });
-    mockExecFileSync
-      .mockReturnValueOnce('')
-      .mockImplementationOnce(() => {
-        throw createCommandError('merge in progress', 'fatal: You have not concluded your merge (MERGE_HEAD exists)');
-      })
-      .mockReturnValueOnce('')
-      .mockReturnValueOnce('')
-      .mockReturnValueOnce('')
-      .mockImplementationOnce(() => {
+    let mergeBaseCalls = 0;
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'merge' && argsArr[1] === 'refs/remotes/origin/improve') {
+        mergeBaseCalls += 1;
+        if (mergeBaseCalls === 1) {
+          throw createCommandError('merge in progress', 'fatal: You have not concluded your merge (MERGE_HEAD exists)');
+        }
         throw createCommandError('merge conflict', 'CONFLICT (content): Merge conflict in src/file.ts');
-      });
+      }
+      return '';
+    });
 
     const services = new DefaultSystemStepServices({
       cwd: '/repo/worktree',
@@ -2087,7 +2324,7 @@ describe('DefaultSystemStepServices', () => {
       failed: false,
       conflicted: false,
     });
-    expect(mockExecFileSync).toHaveBeenNthCalledWith(3, 'git', ['merge', '--abort'], expect.any(Object));
+    expect(mockExecFileSync).toHaveBeenCalledWith('git', ['merge', '--abort'], expect.any(Object));
     expect(mockAgentCall).toHaveBeenCalled();
   });
 

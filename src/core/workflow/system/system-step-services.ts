@@ -5,11 +5,17 @@ export interface SystemStepTaskContext {
   readonly runSlug?: string;
 }
 
+export interface SystemStepRuntimeState {
+  readonly cache: Map<string, unknown>;
+  readonly cleanupHandlers: Set<() => void>;
+}
+
 export interface SystemStepServicesOptions {
   readonly cwd: string;
   readonly projectCwd: string;
   readonly task: string;
   readonly taskContext?: SystemStepTaskContext;
+  readonly runtimeState?: SystemStepRuntimeState;
 }
 
 export interface SystemStepInputResolutionContext {

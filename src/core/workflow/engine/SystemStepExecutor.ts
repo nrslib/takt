@@ -2,6 +2,7 @@ import type { AgentResponse, WorkflowEffect, WorkflowState, WorkflowStep } from 
 import { detectMatchedRule } from '../evaluation/index.js';
 import type { RuleEvaluatorContext } from '../evaluation/RuleEvaluator.js';
 import type {
+  SystemStepRuntimeState,
   SystemStepInputResolutionContext,
   SystemStepServices,
   SystemStepServicesFactory,
@@ -56,6 +57,11 @@ function resolveEffectPayload(effect: WorkflowEffect, state: WorkflowState): Rec
 }
 
 export class SystemStepExecutor {
+  private readonly runtimeState: SystemStepRuntimeState = {
+    cache: new Map(),
+    cleanupHandlers: new Set(),
+  };
+
   constructor(private readonly deps: SystemStepExecutorDeps) {}
 
   private requireServices(cwd: string) {
@@ -67,7 +73,16 @@ export class SystemStepExecutor {
       projectCwd: this.deps.projectCwd,
       task: this.deps.task,
       taskContext: this.deps.taskContext,
+      runtimeState: this.runtimeState,
     });
+  }
+
+  cleanup(): void {
+    for (const cleanup of this.runtimeState.cleanupHandlers) {
+      cleanup();
+    }
+    this.runtimeState.cleanupHandlers.clear();
+    this.runtimeState.cache.clear();
   }
 
   private resolveSystemInput(
