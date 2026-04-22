@@ -9,6 +9,7 @@ import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { fetchPaginatedApi } from '../git/paginated-api.js';
 import { isTaktManagedPrBody } from '../git/format.js';
 import { checkGhCli } from './issue.js';
+import { resolveRepositoryNameWithOwner } from './repository.js';
 import type { CreatePrOptions, CreatePrResult, ExistingPr, CommentResult, MergeResult, PrListItem, PrReviewData, PrReviewComment } from '../git/types.js';
 
 const log = createLogger('github-pr');
@@ -45,25 +46,8 @@ interface GhPrListResponseItem {
   updated_at: string;
 }
 
-interface GhRepoViewResponse {
-  nameWithOwner: string;
-}
-
 const OPEN_PRS_PER_PAGE = 100;
 const INLINE_REVIEW_COMMENTS_PER_PAGE = 100;
-
-function resolveRepositoryNameWithOwner(cwd: string): string {
-  const output = execFileSync(
-    'gh',
-    ['repo', 'view', '--json', 'nameWithOwner'],
-    { cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
-  );
-  const repo = JSON.parse(output) as GhRepoViewResponse;
-  if (!repo.nameWithOwner) {
-    throw new Error('gh repo view did not return nameWithOwner');
-  }
-  return repo.nameWithOwner;
-}
 
 export function listOpenPrs(cwd: string): PrListItem[] {
   const repo = resolveRepositoryNameWithOwner(cwd);

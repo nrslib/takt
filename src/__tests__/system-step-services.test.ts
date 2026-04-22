@@ -6,6 +6,7 @@ const {
   mockExecFileSync,
   mockAgentCall,
   mockFetchIssue,
+  mockListOpenIssues,
   mockFetchPrReviewComments,
   mockListOpenPrs,
   mockFindExistingPr,
@@ -20,6 +21,7 @@ const {
   mockExecFileSync: vi.fn(),
   mockAgentCall: vi.fn(),
   mockFetchIssue: vi.fn(),
+  mockListOpenIssues: vi.fn(),
   mockFetchPrReviewComments: vi.fn(),
   mockListOpenPrs: vi.fn(),
   mockFindExistingPr: vi.fn(),
@@ -68,6 +70,7 @@ vi.mock('../infra/git/index.js', () => ({
   getGitProvider: vi.fn(() => ({
     checkCliStatus: vi.fn(() => ({ available: true })),
     fetchIssue: (...args: unknown[]) => mockFetchIssue(...args),
+    listOpenIssues: (...args: unknown[]) => mockListOpenIssues(...args),
     fetchPrReviewComments: (...args: unknown[]) => mockFetchPrReviewComments(...args),
     listOpenPrs: (...args: unknown[]) => mockListOpenPrs(...args),
     findExistingPr: (...args: unknown[]) => mockFindExistingPr(...args),
@@ -124,9 +127,23 @@ function createWorkflowState(currentStep = 'route_context'): WorkflowState {
 
 describe('DefaultSystemStepServices', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    mockGetCurrentBranch.mockReset();
+    mockExecFileSync.mockReset();
+    mockAgentCall.mockReset();
+    mockFetchIssue.mockReset();
+    mockListOpenIssues.mockReset();
+    mockFetchPrReviewComments.mockReset();
+    mockListOpenPrs.mockReset();
+    mockFindExistingPr.mockReset();
+    mockCommentOnPr.mockReset();
+    mockMergePr.mockReset();
+    mockSaveTaskFile.mockReset();
+    mockCreateIssueFromTask.mockReset();
+    mockTaskRunnerListAllTaskItems.mockReset();
+    mockResolveBaseBranch.mockReset();
     mockGetCurrentBranch.mockReturnValue('task/test-branch');
     mockFindExistingPr.mockReturnValue(undefined);
+    mockListOpenIssues.mockReturnValue([]);
     mockListOpenPrs.mockReturnValue([]);
     mockAgentCall.mockResolvedValue({
       status: 'done',
@@ -182,6 +199,304 @@ describe('DefaultSystemStepServices', () => {
 
     expect(mockFetchIssue).not.toHaveBeenCalled();
     expect(result).toEqual({ exists: false });
+  });
+
+  it('resolves issue_list with updated_at desc ordering', () => {
+    mockListOpenIssues.mockReturnValue([
+      {
+        number: 586,
+        title: 'Oldest issue',
+        labels: ['bug'],
+        updated_at: '2026-04-20T10:00:00Z',
+      },
+      {
+        number: 588,
+        title: 'Newest issue',
+        labels: ['takt-managed'],
+        updated_at: '2026-04-20T14:00:00Z',
+      },
+      {
+        number: 587,
+        title: 'Middle issue',
+        labels: ['automation'],
+        updated_at: '2026-04-20T12:00:00Z',
+      },
+    ]);
+
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Inspect issue list',
+    });
+
+    const result = services.resolveSystemInput({
+      type: 'issue_list',
+      source: 'current_project',
+      as: 'issues',
+    });
+
+    expect(mockListOpenIssues).toHaveBeenCalledWith('/repo');
+    expect(result).toEqual([
+      { number: 588, title: 'Newest issue' },
+      { number: 587, title: 'Middle issue' },
+      { number: 586, title: 'Oldest issue' },
+    ]);
+  });
+
+  it('does not mutate the provider issue list when ordering issues', () => {
+    const providerIssues = [
+      {
+        number: 586,
+        title: 'Oldest issue',
+        labels: ['bug'],
+        updated_at: '2026-04-20T10:00:00Z',
+      },
+      {
+        number: 588,
+        title: 'Newest issue',
+        labels: ['takt-managed'],
+        updated_at: '2026-04-20T14:00:00Z',
+      },
+      {
+        number: 587,
+        title: 'Middle issue',
+        labels: ['automation'],
+        updated_at: '2026-04-20T12:00:00Z',
+      },
+    ];
+    mockListOpenIssues.mockReturnValue(providerIssues);
+
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Inspect issue list without mutation',
+    });
+
+    services.resolveSystemInput({
+      type: 'issue_list',
+      source: 'current_project',
+      as: 'issues',
+    });
+
+    expect(providerIssues.map((issue) => issue.number)).toEqual([586, 588, 587]);
+  });
+
+  it('resolves issue_list deterministically when updated_at is tied', () => {
+    mockListOpenIssues.mockReturnValue([
+      {
+        number: 586,
+        title: 'Earlier number',
+        labels: ['bug'],
+        updated_at: '2026-04-20T14:00:00Z',
+      },
+      {
+        number: 587,
+        title: 'Later number',
+        labels: ['automation'],
+        updated_at: '2026-04-20T14:00:00Z',
+      },
+    ]);
+
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Inspect deterministic issue ordering',
+    });
+
+    const result = services.resolveSystemInput({
+      type: 'issue_list',
+      source: 'current_project',
+      as: 'issues',
+    });
+
+    expect(result).toEqual([
+      { number: 587, title: 'Later number' },
+      { number: 586, title: 'Earlier number' },
+    ]);
+  });
+
+  it('resolves issue_selection deterministically when updated_at is tied', () => {
+    mockListOpenIssues.mockReturnValue([
+      {
+        number: 586,
+        title: 'Earlier number',
+        labels: ['bug'],
+        updated_at: '2026-04-20T14:00:00Z',
+      },
+      {
+        number: 587,
+        title: 'Later number',
+        labels: ['automation'],
+        updated_at: '2026-04-20T14:00:00Z',
+      },
+    ]);
+
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Inspect deterministic issue selection',
+    });
+
+    const result = services.resolveSystemInput({
+      type: 'issue_selection',
+      source: 'current_project',
+      as: 'selected_issue',
+    }, createWorkflowState(), 'route_context');
+
+    expect(result).toEqual({
+      exists: true,
+      number: 587,
+      title: 'Later number',
+    });
+  });
+
+  it('resolves issue_selection by rotating after the previously selected issue', () => {
+    mockListOpenIssues.mockReturnValue([
+      {
+        number: 586,
+        title: 'Older issue',
+        labels: ['bug'],
+        updated_at: '2026-04-20T10:00:00Z',
+      },
+      {
+        number: 587,
+        title: 'Newest issue',
+        labels: ['takt-managed'],
+        updated_at: '2026-04-20T14:00:00Z',
+      },
+    ]);
+
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Inspect issue selection',
+    });
+    const state = createWorkflowState();
+    state.systemContexts.set('route_context', {
+      selected_issue: {
+        exists: true,
+        number: 587,
+      },
+    });
+
+    const resolveSystemInput = services.resolveSystemInput as unknown as (
+      input: {
+        type: 'issue_selection';
+        source: 'current_project';
+        as: 'selected_issue';
+      },
+      workflowState: WorkflowState,
+      stepName: string,
+    ) => unknown;
+
+    const result = resolveSystemInput({
+      type: 'issue_selection',
+      source: 'current_project',
+      as: 'selected_issue',
+    }, state, 'route_context');
+
+    expect(result).toEqual({
+      exists: true,
+      number: 586,
+      title: 'Older issue',
+    });
+  });
+
+  it('reuses the same issue candidate snapshot when issue_list and issue_selection share a resolution context', () => {
+    mockListOpenIssues
+      .mockReturnValueOnce([
+        {
+          number: 586,
+          title: 'Older issue',
+          labels: ['bug'],
+          updated_at: '2026-04-20T10:00:00Z',
+        },
+        {
+          number: 587,
+          title: 'Newest issue',
+          labels: ['takt-managed'],
+          updated_at: '2026-04-20T14:00:00Z',
+        },
+      ])
+      .mockReturnValueOnce([
+        {
+          number: 999,
+          title: 'Unexpected second fetch',
+          labels: ['unexpected'],
+          updated_at: '2026-04-20T16:00:00Z',
+        },
+      ]);
+
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Inspect issue snapshot consistency',
+    });
+    const state = createWorkflowState();
+    state.systemContexts.set('route_context', {
+      selected_issue: {
+        exists: true,
+        number: 587,
+      },
+    });
+    const resolutionContext = { cache: new Map<string, unknown>() };
+
+    const issues = services.resolveSystemInput(
+      { type: 'issue_list', source: 'current_project', as: 'issues' },
+      state,
+      'route_context',
+      resolutionContext,
+    ) as Array<{ number: number }>;
+    const selectedIssue = services.resolveSystemInput(
+      { type: 'issue_selection', source: 'current_project', as: 'selected_issue' },
+      state,
+      'route_context',
+      resolutionContext,
+    ) as { exists: boolean; number: number };
+
+    expect(mockListOpenIssues).toHaveBeenCalledTimes(1);
+    expect(issues.map((issue) => issue.number)).toEqual([587, 586]);
+    expect(selectedIssue).toEqual({
+      exists: true,
+      number: 586,
+      title: 'Older issue',
+    });
+    expect(issues.some((issue) => issue.number === selectedIssue.number)).toBe(true);
+  });
+
+  it('keeps repo-wide issue_selection behavior for unlabeled issues without a filter', () => {
+    mockListOpenIssues.mockReturnValue([
+      {
+        number: 586,
+        title: 'Newest unlabeled issue',
+        labels: [],
+        updated_at: '2026-04-20T14:00:00Z',
+      },
+      {
+        number: 587,
+        title: 'Older labeled issue',
+        labels: ['takt-managed'],
+        updated_at: '2026-04-20T12:00:00Z',
+      },
+    ]);
+
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Inspect repo-wide issue selection',
+    });
+
+    const result = services.resolveSystemInput({
+      type: 'issue_selection',
+      source: 'current_project',
+      as: 'selected_issue',
+    }, createWorkflowState(), 'route_context');
+
+    expect(result).toEqual({
+      exists: true,
+      number: 586,
+      title: 'Newest unlabeled issue',
+    });
   });
 
   it('resolves pr_context when the current branch has an open PR', () => {
@@ -1117,6 +1432,7 @@ describe('DefaultSystemStepServices', () => {
     vi.mocked(getGitProvider).mockReturnValueOnce({
       checkCliStatus: vi.fn(() => ({ available: false, error: 'gh unavailable' })),
       fetchIssue: (...args: unknown[]) => mockFetchIssue(...args),
+      listOpenIssues: (...args: unknown[]) => mockListOpenIssues(...args),
       fetchPrReviewComments: (...args: unknown[]) => mockFetchPrReviewComments(...args),
       listOpenPrs: (...args: unknown[]) => mockListOpenPrs(...args),
       findExistingPr: (...args: unknown[]) => mockFindExistingPr(...args),
@@ -1136,6 +1452,32 @@ describe('DefaultSystemStepServices', () => {
       as: 'prs',
     })).toThrow('gh unavailable');
     expect(mockListOpenPrs).not.toHaveBeenCalled();
+  });
+
+  it('issue_list は CLI が利用不可なら listOpenIssues を呼ばずに失敗する', () => {
+    vi.mocked(getGitProvider).mockReturnValueOnce({
+      checkCliStatus: vi.fn(() => ({ available: false, error: 'gh unavailable' })),
+      fetchIssue: (...args: unknown[]) => mockFetchIssue(...args),
+      listOpenIssues: (...args: unknown[]) => mockListOpenIssues(...args),
+      fetchPrReviewComments: (...args: unknown[]) => mockFetchPrReviewComments(...args),
+      listOpenPrs: (...args: unknown[]) => mockListOpenPrs(...args),
+      findExistingPr: (...args: unknown[]) => mockFindExistingPr(...args),
+      commentOnPr: (...args: unknown[]) => mockCommentOnPr(...args),
+      mergePr: (...args: unknown[]) => mockMergePr(...args),
+    });
+
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Inspect issue list',
+    });
+
+    expect(() => services.resolveSystemInput({
+      type: 'issue_list',
+      source: 'current_project',
+      as: 'issues',
+    })).toThrow('gh unavailable');
+    expect(mockListOpenIssues).not.toHaveBeenCalled();
   });
 
   it('creates a new follow-up task and forwards worktree options', async () => {

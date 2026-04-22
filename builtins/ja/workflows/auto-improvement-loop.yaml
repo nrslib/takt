@@ -34,15 +34,17 @@ steps:
           labels: ['takt-managed']
           same_repository: true
           draft: false
-      - type: issue_context
-        source: current_task
-        as: issue
+      # 旧仕様では current task に紐づく issue_context を見ていたが、
+      # orchestration loop では repo 全体の open Issue 観測を優先する。
+      - type: issue_selection
+        source: current_project
+        as: selected_issue
     rules:
       - when: context.route_context.selected_pr.exists == true
         next: plan_from_existing_pr
-      - when: context.route_context.selected_pr.exists == false && context.route_context.issue.exists == true
+      - when: context.route_context.selected_pr.exists == false && context.route_context.selected_issue.exists == true
         next: plan_from_issue
-      - when: context.route_context.selected_pr.exists == false && context.route_context.issue.exists == false
+      - when: context.route_context.selected_pr.exists == false && context.route_context.selected_issue.exists == false
         next: plan_fresh_improvement
 
   - name: plan_from_issue
@@ -56,9 +58,9 @@ steps:
       次に実行すべき改善 task を 1 件だけ計画してください。
 
       現在の Issue:
-      - exists: {context:route_context.issue.exists}
-      - number: {context:route_context.issue.number}
-      - title: {context:route_context.issue.title}
+      - exists: {context:route_context.selected_issue.exists}
+      - number: {context:route_context.selected_issue.number}
+      - title: {context:route_context.selected_issue.title}
       - task_exists: {context:route_context.task.exists}
       - branch_exists: {context:route_context.branch.exists}
 

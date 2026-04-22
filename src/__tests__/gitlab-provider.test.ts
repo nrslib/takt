@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const {
   mockCheckGlabCli,
   mockFetchIssue,
+  mockListOpenIssues,
   mockCreateIssue,
   mockFindExistingMr,
   mockCommentOnMr,
@@ -19,6 +20,7 @@ const {
 } = vi.hoisted(() => ({
   mockCheckGlabCli: vi.fn(),
   mockFetchIssue: vi.fn(),
+  mockListOpenIssues: vi.fn(),
   mockCreateIssue: vi.fn(),
   mockFindExistingMr: vi.fn(),
   mockCommentOnMr: vi.fn(),
@@ -37,6 +39,7 @@ vi.mock('../infra/gitlab/utils.js', () => ({
 
 vi.mock('../infra/gitlab/issue.js', () => ({
   fetchIssue: (...args: unknown[]) => mockFetchIssue(...args),
+  listOpenIssues: (...args: unknown[]) => mockListOpenIssues(...args),
   createIssue: (...args: unknown[]) => mockCreateIssue(...args),
 }));
 
@@ -169,6 +172,34 @@ describe('GitLabProvider', () => {
 
       // Then
       expect(mockFetchIssue).toHaveBeenCalledWith(20, process.cwd());
+    });
+  });
+
+  describe('listOpenIssues', () => {
+    it('listOpenIssues() に委譲し結果を返す', () => {
+      const issues = [
+        { number: 586, title: 'Repo issue', labels: ['takt-managed'], updated_at: '2026-04-20T12:00:00Z' },
+      ];
+      mockListOpenIssues.mockReturnValue(issues);
+      const provider = new GitLabProvider();
+
+      const result = provider.listOpenIssues();
+
+      expect(mockListOpenIssues).toHaveBeenCalledWith(process.cwd());
+      expect(result).toBe(issues);
+    });
+
+    it('cwd を指定した場合は listOpenIssues にそのまま転送する', () => {
+      const issues = [
+        { number: 586, title: 'Repo issue', labels: ['takt-managed'], updated_at: '2026-04-20T12:00:00Z' },
+      ];
+      mockListOpenIssues.mockReturnValue(issues);
+      const provider = new GitLabProvider();
+
+      const result = provider.listOpenIssues('/my/project');
+
+      expect(mockListOpenIssues).toHaveBeenCalledWith('/my/project');
+      expect(result).toBe(issues);
     });
   });
 

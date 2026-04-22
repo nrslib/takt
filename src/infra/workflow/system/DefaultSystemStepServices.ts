@@ -22,6 +22,7 @@ import {
 } from './system-pr-effects.js';
 import { enqueueTaskEffect } from './system-enqueue-effect.js';
 import { resolveConflictsWithAiEffect, syncWithRootEffect } from './system-sync-effects.js';
+import { resolveIssueListInput, resolveIssueSelectionInput } from './system-issue-input-resolver.js';
 import { resolvePrListInput, resolvePrSelectionInput } from './system-pr-input-resolver.js';
 
 function listQueueTasks(projectCwd: string) {
@@ -135,6 +136,10 @@ function resolveInput(
     case 'task_queue_context': {
       return resolveTaskQueueInput(input, options);
     }
+    case 'issue_list':
+      return resolveIssueListInput(input, options.projectCwd, resolutionContext);
+    case 'issue_selection':
+      return resolveIssueSelectionInput(input, options.projectCwd, state, stepName, resolutionContext);
     case 'pr_list':
       return resolvePrListInput(input, options.projectCwd, resolutionContext);
     case 'pr_selection':

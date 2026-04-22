@@ -15,6 +15,13 @@ export interface ExistingPr {
   url: string;
 }
 
+export interface IssueListItem {
+  number: number;
+  title: string;
+  labels: string[];
+  updated_at: string;
+}
+
 export interface PrListItem {
   number: number;
   author: string;
@@ -92,6 +99,8 @@ export interface GitProvider {
   createIssue(options: CreateIssueOptions, cwd?: string): CreateIssueResult;
 
   fetchPrReviewComments(prNumber: number, cwd?: string): PrReviewData;
+
+  listOpenIssues(cwd?: string): IssueListItem[];
 
   listOpenPrs(cwd?: string): PrListItem[];
 

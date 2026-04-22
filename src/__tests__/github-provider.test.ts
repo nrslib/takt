@@ -11,6 +11,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const {
   mockCheckGhCli,
   mockFetchIssue,
+  mockListOpenIssues,
   mockCreateIssue,
   mockFindExistingPr,
   mockCommentOnPr,
@@ -20,6 +21,7 @@ const {
 } = vi.hoisted(() => ({
   mockCheckGhCli: vi.fn(),
   mockFetchIssue: vi.fn(),
+  mockListOpenIssues: vi.fn(),
   mockCreateIssue: vi.fn(),
   mockFindExistingPr: vi.fn(),
   mockCommentOnPr: vi.fn(),
@@ -31,6 +33,7 @@ const {
 vi.mock('../infra/github/issue.js', () => ({
   checkGhCli: (...args: unknown[]) => mockCheckGhCli(...args),
   fetchIssue: (...args: unknown[]) => mockFetchIssue(...args),
+  listOpenIssues: (...args: unknown[]) => mockListOpenIssues(...args),
   createIssue: (...args: unknown[]) => mockCreateIssue(...args),
 }));
 
@@ -147,6 +150,34 @@ describe('GitHubProvider', () => {
 
       // Then
       expect(mockFetchIssue).toHaveBeenCalledWith(20, process.cwd());
+    });
+  });
+
+  describe('listOpenIssues', () => {
+    it('listOpenIssues() に委譲し結果を返す', () => {
+      const issues = [
+        { number: 586, title: 'Repo issue', labels: ['takt-managed'], updated_at: '2026-04-20T12:00:00Z' },
+      ];
+      mockListOpenIssues.mockReturnValue(issues);
+      const provider = new GitHubProvider();
+
+      const result = provider.listOpenIssues();
+
+      expect(mockListOpenIssues).toHaveBeenCalledWith(process.cwd());
+      expect(result).toBe(issues);
+    });
+
+    it('cwd を指定した場合は listOpenIssues にそのまま転送する', () => {
+      const issues = [
+        { number: 586, title: 'Repo issue', labels: ['takt-managed'], updated_at: '2026-04-20T12:00:00Z' },
+      ];
+      mockListOpenIssues.mockReturnValue(issues);
+      const provider = new GitHubProvider();
+
+      const result = provider.listOpenIssues('/worktree/clone');
+
+      expect(mockListOpenIssues).toHaveBeenCalledWith('/worktree/clone');
+      expect(result).toBe(issues);
     });
   });
 
@@ -480,6 +511,7 @@ describe('getGitProvider', () => {
     // Then
     expect(typeof provider.checkCliStatus).toBe('function');
     expect(typeof provider.fetchIssue).toBe('function');
+    expect(typeof provider.listOpenIssues).toBe('function');
     expect(typeof provider.createIssue).toBe('function');
     expect(typeof provider.fetchPrReviewComments).toBe('function');
     expect(typeof provider.findExistingPr).toBe('function');

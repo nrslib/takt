@@ -25,7 +25,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   getErrorMessage: (e: unknown) => String(e),
 }));
 
-import { fetchIssue, createIssue } from '../infra/gitlab/issue.js';
+import { fetchIssue, listOpenIssues, createIssue } from '../infra/gitlab/issue.js';
 
 function withGlabApiResponse(body: unknown, nextPath?: string): string {
   const headers = [
@@ -354,6 +354,55 @@ describe('fetchIssue', () => {
     // Then: glab api（notes）にも cwd が渡される
     const notesCall = mockExecFileSync.mock.calls[1];
     expect(notesCall[2]).toHaveProperty('cwd', '/worktree/clone');
+  });
+});
+
+describe('listOpenIssues', () => {
+  it('open issue list エンドポイントを複数ページ取得し iid と updated_at をマッピングする', () => {
+    mockExecFileSync
+      .mockReturnValueOnce(withGlabApiResponse(
+        [
+          { iid: 586, title: 'Repo issue', labels: ['takt-managed'], updated_at: '2026-04-20T12:00:00Z' },
+          { iid: 587, title: 'Second issue', labels: ['bug'], updated_at: '2026-04-21T08:00:00Z' },
+        ],
+        'projects/1/issues?state=opened&per_page=100&page=2',
+      ))
+      .mockReturnValueOnce(withGlabApiResponse([
+        { iid: 588, title: 'Last issue', labels: ['automation'], updated_at: '2026-04-22T09:30:00Z' },
+      ]));
+
+    const result = listOpenIssues('/project');
+
+    expect(mockExecFileSync).toHaveBeenNthCalledWith(
+      1,
+      'glab',
+      ['api', '--include', 'projects/:id/issues?state=opened&per_page=100&page=1'],
+      expect.objectContaining({ cwd: '/project', encoding: 'utf-8' }),
+    );
+    expect(mockExecFileSync).toHaveBeenNthCalledWith(
+      2,
+      'glab',
+      ['api', '--include', 'projects/1/issues?state=opened&per_page=100&page=2'],
+      expect.objectContaining({ cwd: '/project', encoding: 'utf-8' }),
+    );
+    expect(result).toEqual([
+      { number: 586, title: 'Repo issue', labels: ['takt-managed'], updated_at: '2026-04-20T12:00:00Z' },
+      { number: 587, title: 'Second issue', labels: ['bug'], updated_at: '2026-04-21T08:00:00Z' },
+      { number: 588, title: 'Last issue', labels: ['automation'], updated_at: '2026-04-22T09:30:00Z' },
+    ]);
+  });
+
+  it('open issue が1ページ未満なら追加ページを取得しない', () => {
+    mockExecFileSync.mockReturnValueOnce(withGlabApiResponse([
+      { iid: 586, title: 'Repo issue', labels: ['takt-managed'], updated_at: '2026-04-20T12:00:00Z' },
+    ]));
+
+    const result = listOpenIssues('/project');
+
+    expect(mockExecFileSync).toHaveBeenCalledTimes(1);
+    expect(result).toEqual([
+      { number: 586, title: 'Repo issue', labels: ['takt-managed'], updated_at: '2026-04-20T12:00:00Z' },
+    ]);
   });
 });
 

@@ -4,9 +4,20 @@
 
 import { execFileSync } from 'node:child_process';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
-import type { CliStatus, Issue, CreateIssueOptions, CreateIssueResult } from '../git/types.js';
+import { fetchPaginatedApi } from '../git/paginated-api.js';
+import { resolveRepositoryNameWithOwner } from './repository.js';
+import type { CliStatus, Issue, IssueListItem, CreateIssueOptions, CreateIssueResult } from '../git/types.js';
 
 const log = createLogger('github');
+const OPEN_ISSUES_PER_PAGE = 100;
+
+interface GhIssueListResponseItem {
+  number: number;
+  title: string;
+  labels: Array<{ name: string }>;
+  updated_at: string;
+  pull_request?: object;
+}
 
 /**
  * Check if `gh` CLI is available and authenticated.
@@ -62,6 +73,29 @@ export function fetchIssue(issueNumber: number, cwd: string): Issue {
       body: c.body,
     })),
   };
+}
+
+export function listOpenIssues(cwd: string): IssueListItem[] {
+  log.debug('Listing open issues');
+
+  const repo = resolveRepositoryNameWithOwner(cwd);
+  const data = fetchPaginatedApi<GhIssueListResponseItem>({
+    command: 'gh',
+    cwd,
+    context: 'open issue list',
+    initialEndpoint: `repos/${repo}/issues?state=open&per_page=${OPEN_ISSUES_PER_PAGE}&page=1`,
+    parsePage: (body) => {
+      const page = JSON.parse(body) as GhIssueListResponseItem[];
+      return page.filter((item) => item.pull_request === undefined);
+    },
+  });
+
+  return data.map((issue) => ({
+    number: issue.number,
+    title: issue.title,
+    labels: issue.labels.map((label) => label.name),
+    updated_at: issue.updated_at,
+  }));
 }
 
 /**

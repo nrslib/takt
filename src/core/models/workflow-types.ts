@@ -3,6 +3,56 @@ import type { PermissionMode } from './status.js';
 import type { AgentResponse } from './response.js';
 import type { InteractiveMode } from './interactive-mode.js';
 import type { TeamLeaderConfig } from './part.js';
+import type {
+  McpServerConfig,
+  StepProviderOptions,
+  WorkflowCallOverrides,
+  WorkflowRuntimeConfig,
+  WorkflowStepKind,
+} from './workflow-provider-options.js';
+import type {
+  WorkflowEffect,
+  WorkflowSystemInput,
+} from './workflow-system-input-types.js';
+
+export type {
+  WorkflowPrListWhere,
+  WorkflowSystemInput,
+  WorkflowEffect,
+  WorkflowEnqueueIssueConfig,
+  WorkflowEnqueueWorktreeConfig,
+  WorkflowTemplateReference,
+  WorkflowEffectScalarReference,
+} from './workflow-system-input-types.js';
+export {
+  normalizeWorkflowPrListWhere,
+  workflowPrListWhereEquals,
+  stringifyWorkflowPrListWhere,
+} from './workflow-system-input-types.js';
+export type {
+  McpServerConfig,
+  RuntimePreparePreset,
+  RuntimePrepareEntry,
+  WorkflowRuntimeConfig,
+  CodexReasoningEffort,
+  ClaudeEffort,
+  CopilotEffort,
+  ClaudeSandboxSettings,
+  CodexProviderOptions,
+  OpenCodeProviderOptions,
+  ClaudeProviderOptions,
+  CopilotProviderOptions,
+  StepProviderOptions,
+  WorkflowStepKind,
+  WorkflowCallOverrides,
+} from './workflow-provider-options.js';
+export {
+  RUNTIME_PREPARE_PRESETS,
+  CODEX_REASONING_EFFORT_VALUES,
+  CLAUDE_EFFORT_VALUES,
+  COPILOT_EFFORT_VALUES,
+  isRuntimePreparePreset,
+} from './workflow-provider-options.js';
 
 export interface WorkflowRule {
   condition: string;
@@ -25,161 +75,6 @@ export interface WorkflowStructuredOutput {
   schema: Record<string, unknown>;
 }
 
-interface WorkflowSystemBinding {
-  as: string;
-}
-
-export interface WorkflowPrListWhere {
-  author?: string;
-  base_branch?: string;
-  head_branch?: string;
-  managed_by_takt?: boolean;
-  labels?: string[];
-  same_repository?: boolean;
-  draft?: boolean;
-}
-
-function normalizeWorkflowPrListWhereLabels(labels: string[] | undefined): string[] | undefined {
-  if (labels === undefined) {
-    return undefined;
-  }
-  return [...new Set(labels)].sort();
-}
-
-export function normalizeWorkflowPrListWhere(
-  where: WorkflowPrListWhere | undefined,
-): WorkflowPrListWhere | undefined {
-  if (where === undefined) {
-    return undefined;
-  }
-
-  const normalized: WorkflowPrListWhere = {};
-
-  if (where.author !== undefined) {
-    normalized.author = where.author;
-  }
-  if (where.base_branch !== undefined) {
-    normalized.base_branch = where.base_branch;
-  }
-  if (where.head_branch !== undefined) {
-    normalized.head_branch = where.head_branch;
-  }
-  if (where.managed_by_takt !== undefined) {
-    normalized.managed_by_takt = where.managed_by_takt;
-  }
-
-  const labels = normalizeWorkflowPrListWhereLabels(where.labels);
-  if (labels !== undefined) {
-    normalized.labels = labels;
-  }
-  if (where.same_repository !== undefined) {
-    normalized.same_repository = where.same_repository;
-  }
-  if (where.draft !== undefined) {
-    normalized.draft = where.draft;
-  }
-
-  return Object.keys(normalized).length > 0 ? normalized : undefined;
-}
-
-export function workflowPrListWhereEquals(
-  left: WorkflowPrListWhere | undefined,
-  right: WorkflowPrListWhere | undefined,
-): boolean {
-  return JSON.stringify(normalizeWorkflowPrListWhere(left) ?? {})
-    === JSON.stringify(normalizeWorkflowPrListWhere(right) ?? {});
-}
-
-export function stringifyWorkflowPrListWhere(where: WorkflowPrListWhere | undefined): string {
-  return JSON.stringify(normalizeWorkflowPrListWhere(where) ?? {});
-}
-
-export type WorkflowSystemInput =
-  | (WorkflowSystemBinding & {
-    type: 'task_context';
-    source: 'current_task';
-  })
-  | (WorkflowSystemBinding & {
-    type: 'branch_context';
-    source: 'current_task';
-  })
-  | (WorkflowSystemBinding & {
-    type: 'pr_context';
-    source: 'current_branch';
-  })
-  | (WorkflowSystemBinding & {
-    type: 'issue_context';
-    source: 'current_task';
-  })
-  | (WorkflowSystemBinding & {
-    type: 'task_queue_context';
-    source: 'current_project';
-    exclude_current_task?: boolean;
-  })
-  | (WorkflowSystemBinding & {
-    type: 'pr_list';
-    source: 'current_project';
-    where?: WorkflowPrListWhere;
-  })
-  | (WorkflowSystemBinding & {
-    type: 'pr_selection';
-    source: 'current_project';
-    where?: WorkflowPrListWhere;
-  });
-
-export interface WorkflowEnqueueIssueConfig {
-  create?: boolean;
-  labels?: string[];
-}
-
-export interface WorkflowEnqueueWorktreeConfig {
-  enabled?: boolean;
-  auto_pr?: boolean;
-  draft_pr?: boolean;
-}
-
-type WorkflowContextTemplateReference = `{context:${string}}`;
-type WorkflowStructuredTemplateReference = `{structured:${string}}`;
-type WorkflowEffectTemplateReference = `{effect:${string}}`;
-
-// The parser/schema enforce the exact DSL shape. Keep the public type broad enough
-// that valid nested template paths are not rejected at compile time.
-export type WorkflowTemplateReference =
-  | WorkflowContextTemplateReference
-  | WorkflowStructuredTemplateReference
-  | WorkflowEffectTemplateReference;
-
-export type WorkflowEffectScalarReference = WorkflowTemplateReference | number;
-
-export type WorkflowEffect =
-  | {
-    type: 'enqueue_task';
-    mode: 'new' | 'from_pr';
-    workflow: string;
-    task: string;
-    pr?: WorkflowEffectScalarReference;
-    issue?: WorkflowEnqueueIssueConfig | WorkflowTemplateReference;
-    base_branch?: string;
-    worktree?: WorkflowEnqueueWorktreeConfig;
-  }
-  | {
-    type: 'comment_pr';
-    pr: WorkflowEffectScalarReference;
-    body: string;
-  }
-  | {
-    type: 'sync_with_root';
-    pr: WorkflowEffectScalarReference;
-  }
-  | {
-    type: 'resolve_conflicts_with_ai';
-    pr: WorkflowEffectScalarReference;
-  }
-  | {
-    type: 'merge_pr';
-    pr: WorkflowEffectScalarReference;
-  };
-
 export interface OutputContractItem {
   name: string;
   format: string;
@@ -188,84 +83,6 @@ export interface OutputContractItem {
 }
 
 export type OutputContractEntry = OutputContractItem;
-
-export interface McpStdioServerConfig {
-  type?: 'stdio';
-  command: string;
-  args?: string[];
-  env?: Record<string, string>;
-}
-
-export interface McpSseServerConfig {
-  type: 'sse';
-  url: string;
-  headers?: Record<string, string>;
-}
-
-export interface McpHttpServerConfig {
-  type: 'http';
-  url: string;
-  headers?: Record<string, string>;
-}
-
-export type McpServerConfig = McpStdioServerConfig | McpSseServerConfig | McpHttpServerConfig;
-
-export interface CodexProviderOptions {
-  networkAccess?: boolean;
-  reasoningEffort?: CodexReasoningEffort;
-}
-
-export interface OpenCodeProviderOptions {
-  networkAccess?: boolean;
-}
-
-export const RUNTIME_PREPARE_PRESETS = ['gradle', 'node'] as const;
-export type RuntimePreparePreset = (typeof RUNTIME_PREPARE_PRESETS)[number];
-export const CODEX_REASONING_EFFORT_VALUES = ['minimal', 'low', 'medium', 'high', 'xhigh'] as const;
-export type CodexReasoningEffort = (typeof CODEX_REASONING_EFFORT_VALUES)[number];
-export const CLAUDE_EFFORT_VALUES = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
-export type ClaudeEffort = (typeof CLAUDE_EFFORT_VALUES)[number];
-export const COPILOT_EFFORT_VALUES = ['low', 'medium', 'high', 'xhigh'] as const;
-export type CopilotEffort = (typeof COPILOT_EFFORT_VALUES)[number];
-const RUNTIME_PREPARE_PRESET_SET: ReadonlySet<string> = new Set(RUNTIME_PREPARE_PRESETS);
-export function isRuntimePreparePreset(entry: string): entry is RuntimePreparePreset {
-  return RUNTIME_PREPARE_PRESET_SET.has(entry);
-}
-export type RuntimePrepareEntry = RuntimePreparePreset | string;
-
-export interface WorkflowRuntimeConfig {
-  prepare?: RuntimePrepareEntry[];
-}
-
-export interface ClaudeSandboxSettings {
-  allowUnsandboxedCommands?: boolean;
-  excludedCommands?: string[];
-}
-
-export interface ClaudeProviderOptions {
-  allowedTools?: string[];
-  effort?: ClaudeEffort;
-  sandbox?: ClaudeSandboxSettings;
-}
-
-export interface CopilotProviderOptions {
-  effort?: CopilotEffort;
-}
-
-export interface StepProviderOptions {
-  codex?: CodexProviderOptions;
-  opencode?: OpenCodeProviderOptions;
-  claude?: ClaudeProviderOptions;
-  copilot?: CopilotProviderOptions;
-}
-
-export type WorkflowStepKind = 'agent' | 'system' | 'workflow_call';
-
-export interface WorkflowCallOverrides {
-  provider?: ProviderType;
-  model?: string;
-  providerOptions?: StepProviderOptions;
-}
 
 export type WorkflowParamType = 'facet_ref' | 'facet_ref[]';
 export type WorkflowParamFacetKind = 'knowledge' | 'policy' | 'instruction' | 'report_format';

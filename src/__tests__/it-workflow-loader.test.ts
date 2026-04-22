@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -81,16 +81,20 @@ function expectAutoImprovementLoopRouteContext(config: NonNullable<ReturnType<ty
       as: 'selected_pr',
       where: taktManagedPrRouteFilter,
     }),
-    expect.objectContaining({ type: 'issue_context', as: 'issue' }),
+    expect.objectContaining({
+      type: 'issue_selection',
+      as: 'selected_issue',
+    }),
   ]));
   expect(routeContext?.rules).toEqual(expect.arrayContaining([
     expect.objectContaining({ condition: 'context.route_context.selected_pr.exists == true', next: 'plan_from_existing_pr' }),
-    expect.objectContaining({ condition: 'context.route_context.selected_pr.exists == false && context.route_context.issue.exists == true', next: 'plan_from_issue' }),
+    expect.objectContaining({ condition: 'context.route_context.selected_pr.exists == false && context.route_context.selected_issue.exists == true', next: 'plan_from_issue' }),
   ]));
 }
 
 function expectAutoImprovementLoopDownstreamContract(config: NonNullable<ReturnType<typeof loadWorkflowConfig>>) {
   const planFromExistingPr = config.steps.find((step) => step.name === 'plan_from_existing_pr') as Record<string, unknown> | undefined;
+  const planFromIssue = config.steps.find((step) => step.name === 'plan_from_issue') as Record<string, unknown> | undefined;
   const enqueueFromPr = config.steps.find((step) => step.name === 'enqueue_from_pr') as Record<string, unknown> | undefined;
   const prepareMerge = config.steps.find((step) => step.name === 'prepare_merge') as Record<string, unknown> | undefined;
   const resolveConflicts = config.steps.find((step) => step.name === 'resolve_conflicts') as Record<string, unknown> | undefined;
@@ -141,6 +145,11 @@ function expectAutoImprovementLoopDownstreamContract(config: NonNullable<ReturnT
       pr: '{context:route_context.selected_pr.number}',
     }),
   ]);
+  expect(planFromIssue?.rules).toEqual(expect.arrayContaining([
+    expect.objectContaining({ condition: 'structured.plan_from_issue.action == "enqueue_new_task"', next: 'enqueue_from_issue' }),
+    expect.objectContaining({ condition: 'structured.plan_from_issue.action == "noop"', next: 'wait_before_next_scan' }),
+  ]));
+  expect(config.steps.find((step) => step.name === 'confirm_issue_enqueue')).toBeUndefined();
 }
 
 describe('Workflow Loader IT: builtin workflow loading', () => {
@@ -203,13 +212,29 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
     expectAutoImprovementLoopDownstreamContract(config!);
   });
 
-  it('should keep takt-managed label contract aligned across builtin auto-improvement-loop workflows', () => {
+  it('should keep repo-wide issue routing aligned across builtin auto-improvement-loop workflows', () => {
     for (const language of ['en', 'ja'] as const) {
       const config = loadWorkflowFromFile(
         join(process.cwd(), 'builtins', language, 'workflows', 'auto-improvement-loop.yaml'),
         testDir,
       );
       expectAutoImprovementLoopRouteContext(config);
+      expectAutoImprovementLoopDownstreamContract(config);
+    }
+  });
+
+  it('should preserve the legacy issue_context comment in both builtin auto-improvement-loop YAML files', () => {
+    for (const language of ['en', 'ja'] as const) {
+      const workflowSource = readFileSync(
+        join(process.cwd(), 'builtins', language, 'workflows', 'auto-improvement-loop.yaml'),
+        'utf-8',
+      );
+      expect(workflowSource).toContain('issue_context');
+      expect(workflowSource).toContain(
+        language === 'en'
+          ? 'repo-wide open Issue observation'
+          : 'repo 全体の open Issue 観測',
+      );
     }
   });
 
@@ -229,7 +254,10 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
     const waitBeforeNextScan = config!.steps.find((step) => step.name === 'wait_before_next_scan') as Record<string, unknown> | undefined;
 
     expect(planFromIssue?.delayBeforeMs).toBe(60000);
+    expect(String(planFromIssue?.instruction)).toContain('{context:route_context.selected_issue.number}');
+    expect(String(planFromIssue?.instruction)).toContain('{context:route_context.selected_issue.title}');
     expect(planFromIssue?.rules).toEqual(expect.arrayContaining([
+      expect.objectContaining({ condition: 'structured.plan_from_issue.action == "enqueue_new_task"', next: 'enqueue_from_issue' }),
       expect.objectContaining({ condition: 'structured.plan_from_issue.action == "noop"', next: 'wait_before_next_scan' }),
       expect.objectContaining({ condition: 'true', next: 'ABORT' }),
     ]));

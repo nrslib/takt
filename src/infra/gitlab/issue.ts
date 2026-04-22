@@ -6,7 +6,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
-import type { Issue, CreateIssueOptions, CreateIssueResult } from '../git/types.js';
+import type { Issue, IssueListItem, CreateIssueOptions, CreateIssueResult } from '../git/types.js';
 import { checkGlabCli, fetchAllPages, parseJson, ITEMS_PER_PAGE } from './utils.js';
 
 const log = createLogger('gitlab');
@@ -61,6 +61,29 @@ export function fetchIssue(issueNumber: number, cwd: string): Issue {
         body: n.body,
       })),
   };
+}
+
+interface GlabOpenIssueItem {
+  iid: number;
+  title: string;
+  labels: string[];
+  updated_at: string;
+}
+
+export function listOpenIssues(cwd: string): IssueListItem[] {
+  const issues = fetchAllPages<GlabOpenIssueItem>(
+    'projects/:id/issues?state=opened',
+    ITEMS_PER_PAGE,
+    'open issue list',
+    cwd,
+  );
+
+  return issues.map((issue) => ({
+    number: issue.iid,
+    title: issue.title,
+    labels: issue.labels,
+    updated_at: issue.updated_at,
+  }));
 }
 
 /**

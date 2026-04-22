@@ -7,6 +7,11 @@ import { stringifyWorkflowPrListWhere } from '../../../core/models/workflow-type
 import type { SystemStepInputResolutionContext } from '../../../core/workflow/system/system-step-services.js';
 import type { PrListItem } from '../../git/types.js';
 import { fetchOpenPrList } from './system-git-context.js';
+import {
+  getCachedCandidateSnapshot,
+  readPreviousSelectedNumber,
+  selectNextCandidate,
+} from './system-selection-helpers.js';
 
 function matchesSimpleWildcard(value: string, pattern: string): boolean {
   const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
@@ -50,19 +55,12 @@ function getPrCandidateSnapshot(
   where: WorkflowPrListWhere | undefined,
   resolutionContext?: SystemStepInputResolutionContext,
 ): PrListItem[] {
-  if (!resolutionContext) {
-    return listMatchingPrs(projectCwd, where);
-  }
-
   const cacheKey = `pr_candidates:${stringifyWorkflowPrListWhere(where)}`;
-  const cached = resolutionContext.cache.get(cacheKey);
-  if (cached) {
-    return cached as PrListItem[];
-  }
-
-  const candidates = listMatchingPrs(projectCwd, where);
-  resolutionContext.cache.set(cacheKey, candidates);
-  return candidates;
+  return getCachedCandidateSnapshot(
+    cacheKey,
+    () => listMatchingPrs(projectCwd, where),
+    resolutionContext,
+  );
 }
 
 function toPrSummary({
@@ -85,41 +83,6 @@ function toPrSummary({
     same_repository,
     draft,
   };
-}
-
-function readPreviousSelectedPrNumber(
-  state: WorkflowState,
-  stepName: string,
-  bindingName: string,
-): number | undefined {
-  const context = state.systemContexts.get(stepName);
-  if (!context || typeof context !== 'object') {
-    return undefined;
-  }
-
-  const selectedPr = (context as Record<string, unknown>)[bindingName];
-  if (!selectedPr || typeof selectedPr !== 'object') {
-    return undefined;
-  }
-
-  const number = (selectedPr as Record<string, unknown>).number;
-  return typeof number === 'number' ? number : undefined;
-}
-
-function selectNextPr(candidates: PrListItem[], previousNumber: number | undefined): PrListItem | undefined {
-  if (candidates.length === 0) {
-    return undefined;
-  }
-  if (previousNumber === undefined) {
-    return candidates[0];
-  }
-
-  const previousIndex = candidates.findIndex((candidate) => candidate.number === previousNumber);
-  if (previousIndex === -1) {
-    return candidates[0];
-  }
-
-  return candidates[(previousIndex + 1) % candidates.length];
 }
 
 export function resolvePrListInput(
@@ -145,9 +108,9 @@ export function resolvePrSelectionInput(
   }
 
   const candidates = getPrCandidateSnapshot(projectCwd, input.where, resolutionContext);
-  const selectedPr = selectNextPr(
+  const selectedPr = selectNextCandidate(
     candidates,
-    readPreviousSelectedPrNumber(state, stepName, input.as),
+    readPreviousSelectedNumber(state, stepName, input.as),
   );
   if (!selectedPr) {
     return { exists: false };

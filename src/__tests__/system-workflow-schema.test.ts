@@ -169,6 +169,122 @@ describe('system workflow schema', () => {
     }
   });
 
+  it('issue_list system input を受け付ける', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'route_context',
+      mode: 'system',
+      system_inputs: [
+        {
+          type: 'issue_list',
+          source: 'current_project',
+          as: 'issues',
+        },
+      ],
+      rules: [
+        {
+          when: 'context.route_context.issues.length > 0',
+          next: 'plan_from_issue',
+        },
+      ],
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const step = result.data as Record<string, unknown>;
+      expect(step.system_inputs).toEqual([
+        {
+          type: 'issue_list',
+          source: 'current_project',
+          as: 'issues',
+        },
+      ]);
+    }
+  });
+
+  it('issue_selection system input を受け付ける', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'route_context',
+      mode: 'system',
+      system_inputs: [
+        {
+          type: 'issue_selection',
+          source: 'current_project',
+          as: 'selected_issue',
+        },
+      ],
+      rules: [
+        {
+          when: 'context.route_context.selected_issue.exists == true',
+          next: 'plan_from_issue',
+        },
+      ],
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const step = result.data as Record<string, unknown>;
+      expect(step.system_inputs).toEqual([
+        {
+          type: 'issue_selection',
+          source: 'current_project',
+          as: 'selected_issue',
+        },
+      ]);
+    }
+  });
+
+  it('user_input_context system input を reject する', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'confirm_issue_enqueue',
+      mode: 'system',
+      instruction: 'Enter approve or reject.',
+      system_inputs: [
+        {
+          type: 'user_input_context',
+          source: 'current_workflow',
+          as: 'approval',
+        },
+      ],
+      rules: [
+        {
+          when: 'context.confirm_issue_enqueue.approval.exists == false',
+          requires_user_input: true,
+        },
+        {
+          when: 'context.confirm_issue_enqueue.approval.value == "approve"',
+          next: 'enqueue_from_issue',
+        },
+      ],
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('issue_list system input では where filter を reject する', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'route_context',
+      mode: 'system',
+      system_inputs: [
+        {
+          type: 'issue_list',
+          source: 'current_project',
+          as: 'issues',
+          where: {
+            labels: [TAKT_MANAGED_PR_LABEL],
+          },
+        },
+      ],
+      rules: [
+        {
+          when: 'context.route_context.issues.length > 0',
+          next: 'plan_from_issue',
+        },
+      ],
+    });
+
+    expect(result.success).toBe(false);
+  });
+
   it('pr_selection の where がキー順だけ異なっても同じ step の pr_list と一致として扱う', () => {
     const result = WorkflowStepRawSchema.safeParse({
       name: 'route_context',
@@ -257,6 +373,31 @@ describe('system workflow schema', () => {
         }),
       ]),
     );
+  });
+
+  it('issue_selection system input では where filter を reject する', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'route_context',
+      mode: 'system',
+      system_inputs: [
+        {
+          type: 'issue_selection',
+          source: 'current_project',
+          as: 'selected_issue',
+          where: {
+            labels: [TAKT_MANAGED_PR_LABEL],
+          },
+        },
+      ],
+      rules: [
+        {
+          when: 'context.route_context.selected_issue.exists == true',
+          next: 'plan_from_issue',
+        },
+      ],
+    });
+
+    expect(result.success).toBe(false);
   });
 
   it('task_queue_context system input で exclude_current_task を受け付ける', () => {
@@ -699,6 +840,10 @@ describe('system workflow schema', () => {
         expect.objectContaining({
           path: ['required_permission_mode'],
           message: 'System step does not allow "required_permission_mode"',
+        }),
+        expect.objectContaining({
+          path: ['instruction'],
+          message: 'System step does not allow "instruction"',
         }),
         expect.objectContaining({
           path: ['structured_output'],

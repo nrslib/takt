@@ -1,18 +1,122 @@
-/**
- * Tests for issue parsing and formatting functions.
- *
- * These functions live in git/format.ts (provider-neutral).
- * checkGhCli/fetchIssue are integration functions
- * that call `gh` CLI, so they are not unit-tested here.
- */
-
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { listOpenIssues } from '../infra/github/issue.js';
 import {
   parseIssueNumbers,
   isIssueReference,
   formatIssueAsTask,
 } from '../infra/git/format.js';
 import type { Issue } from '../infra/git/types.js';
+
+const mockExecFileSync = vi.fn();
+
+vi.mock('node:child_process', () => ({
+  execFileSync: (...args: unknown[]) => mockExecFileSync(...args),
+}));
+
+vi.mock('../shared/utils/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  createLogger: () => ({
+    info: vi.fn(),
+    debug: vi.fn(),
+    error: vi.fn(),
+  }),
+  getErrorMessage: (error: unknown) => String(error),
+}));
+
+function withGhApiResponse(body: unknown, nextPath?: string): string {
+  const headers = [
+    'HTTP/2 200 OK',
+    'content-type: application/json',
+    ...(nextPath ? [`link: <https://api.github.com${nextPath}>; rel="next"`] : []),
+  ];
+  return `${headers.join('\n')}\n\n${JSON.stringify(body)}`;
+}
+
+describe('listOpenIssues', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockExecFileSync.mockReset();
+  });
+
+  it('repo 全体の open issue を後続ページまで取得して PR を除外する', () => {
+    mockExecFileSync
+      .mockReturnValueOnce(JSON.stringify({ nameWithOwner: 'org/repo' }))
+      .mockReturnValueOnce(withGhApiResponse(
+        [
+          {
+            number: 586,
+            title: 'First issue',
+            labels: [{ name: 'takt-managed' }],
+            updated_at: '2026-04-20T12:00:00Z',
+          },
+          {
+            number: 900,
+            title: 'Open pull request masquerading as issue',
+            labels: [{ name: 'takt-managed' }],
+            updated_at: '2026-04-20T12:30:00Z',
+            pull_request: { url: 'https://api.github.com/repos/org/repo/pulls/900' },
+          },
+        ],
+        '/repos/org/repo/issues?state=open&per_page=100&page=2',
+      ))
+      .mockReturnValueOnce(withGhApiResponse([
+        {
+          number: 587,
+          title: 'Second issue',
+          labels: [{ name: 'bug' }],
+          updated_at: '2026-04-21T08:00:00Z',
+        },
+      ]));
+
+    const result = listOpenIssues('/project');
+
+    expect(mockExecFileSync).toHaveBeenNthCalledWith(
+      1,
+      'gh',
+      ['repo', 'view', '--json', 'nameWithOwner'],
+      expect.objectContaining({ cwd: '/project', encoding: 'utf-8' }),
+    );
+    expect(mockExecFileSync).toHaveBeenNthCalledWith(
+      2,
+      'gh',
+      ['api', '--include', 'repos/org/repo/issues?state=open&per_page=100&page=1'],
+      expect.objectContaining({ cwd: '/project', encoding: 'utf-8' }),
+    );
+    expect(mockExecFileSync).toHaveBeenNthCalledWith(
+      3,
+      'gh',
+      ['api', '--include', '/repos/org/repo/issues?state=open&per_page=100&page=2'],
+      expect.objectContaining({ cwd: '/project', encoding: 'utf-8' }),
+    );
+    expect(result).toEqual([
+      { number: 586, title: 'First issue', labels: ['takt-managed'], updated_at: '2026-04-20T12:00:00Z' },
+      { number: 587, title: 'Second issue', labels: ['bug'], updated_at: '2026-04-21T08:00:00Z' },
+    ]);
+  });
+
+  it('pagination link が上限を超えて続く場合は明示エラーにする', () => {
+    let page = 1;
+    mockExecFileSync
+      .mockReturnValueOnce(JSON.stringify({ nameWithOwner: 'org/repo' }))
+      .mockImplementation(() => {
+        const response = withGhApiResponse(
+          [{
+            number: page,
+            title: `Issue ${page}`,
+            labels: [{ name: 'takt-managed' }],
+            updated_at: '2026-04-21T00:00:00Z',
+          }],
+          `/repos/org/repo/issues?state=open&per_page=100&page=${page + 1}`,
+        );
+        page += 1;
+        return response;
+      });
+
+    expect(() => listOpenIssues('/project')).toThrow(
+      'Pagination limit exceeded while fetching open issue list (>100 pages)',
+    );
+  });
+});
 
 describe('parseIssueNumbers', () => {
   it('should parse single issue reference', () => {

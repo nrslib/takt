@@ -1,7 +1,13 @@
 import { z } from 'zod/v4';
 import { getWorkflowStepKind } from './workflow-step-kind.js';
-import { workflowPrListWhereEquals } from './workflow-types.js';
+import {
+  workflowPrListWhereEquals,
+} from './workflow-types.js';
 import type { WorkflowPrListWhere } from './workflow-types.js';
+import {
+  IssueListSystemInputRawSchema,
+  IssueSelectionSystemInputRawSchema,
+} from './workflow-issue-system-schemas.js';
 
 export const StructuredOutputRawSchema = z.object({
   schema_ref: z.string().min(1),
@@ -63,11 +69,13 @@ export const SystemInputRawSchema = z.discriminatedUnion('type', [
     source: z.literal('current_project'),
     where: PrListWhereRawSchema.optional(),
   }),
+  IssueListSystemInputRawSchema,
   SystemInputBindingSchema.extend({
     type: z.literal('pr_selection'),
     source: z.literal('current_project'),
     where: PrListWhereRawSchema.optional(),
   }),
+  IssueSelectionSystemInputRawSchema,
 ]);
 
 const EffectReferenceScalarSchema = z.union([TemplateReferenceSchema, z.number().int().positive()]);
@@ -248,7 +256,6 @@ export function validateSystemStepFields(
       }
     }
   }
-
   const effectTypes = new Set<string>();
   for (const [index, effect] of (data.effects ?? []).entries()) {
     if (effectTypes.has(effect.type)) {
