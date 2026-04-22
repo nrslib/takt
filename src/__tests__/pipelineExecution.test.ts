@@ -7,6 +7,10 @@ const mockCreatePullRequest = vi.fn();
 const mockCreatePullRequestSafely = vi.fn();
 const mockPushBranch = vi.fn();
 const mockBuildPrBody = vi.fn(() => 'Default PR body');
+const mockBuildTaktManagedPrOptions = vi.fn((body: string) => ({
+  body: `${body}\n\n<!-- takt:managed -->`,
+  labels: ['takt-managed'],
+}));
 const mockFetchPrReviewComments = vi.fn();
 const mockFormatPrReviewAsTask = vi.fn((pr: { number: number; title: string }) =>
   `## PR #${pr.number} Review Comments: ${pr.title}`
@@ -23,6 +27,7 @@ vi.mock('../infra/git/index.js', () => ({
     `## Issue #${issue.number}: ${issue.title}\n\n${issue.body}`
   ),
   buildPrBody: (...args: unknown[]) => mockBuildPrBody(...args),
+  buildTaktManagedPrOptions: (...args: unknown[]) => mockBuildTaktManagedPrOptions(...args as [string]),
   formatPrReviewAsTask: (...args: unknown[]) => mockFormatPrReviewAsTask(...args),
   createPullRequestSafely: (...args: unknown[]) => mockCreatePullRequestSafely(...args),
 }));
@@ -93,6 +98,10 @@ const mockStatus = vi.mocked(status);
 describe('executePipeline', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockBuildTaktManagedPrOptions.mockImplementation((body: string) => ({
+      body: `${body}\n\n<!-- takt:managed -->`,
+      labels: ['takt-managed'],
+    }));
     mockCreatePullRequestSafely.mockImplementation((provider, options, cwd) => {
       try {
         return provider.createPullRequest(options, cwd);
@@ -359,6 +368,7 @@ describe('executePipeline', () => {
     expect(mockCreatePullRequest).toHaveBeenCalledWith(
       expect.objectContaining({
         branch: 'fix/my-branch',
+        labels: ['takt-managed'],
         repo: 'owner/repo',
       }),
       '/tmp/test',
@@ -549,10 +559,12 @@ describe('executePipeline', () => {
       // Instead, the template is expanded directly
       expect(mockCreatePullRequest).toHaveBeenCalledWith(
         expect.objectContaining({
-          body: '## Summary\nAuth is broken.\n\nCloses #50',
+          body: '## Summary\nAuth is broken.\n\nCloses #50\n\n<!-- takt:managed -->',
+          labels: ['takt-managed'],
         }),
         '/tmp/test',
       );
+      expect(mockBuildTaktManagedPrOptions).toHaveBeenCalledWith('## Summary\nAuth is broken.\n\nCloses #50');
     });
 
     it('should use pr_body_template for task-based PR creation when issue is unavailable', async () => {
@@ -575,9 +587,13 @@ describe('executePipeline', () => {
       expect(mockBuildPrBody).not.toHaveBeenCalled();
       expect(mockCreatePullRequest).toHaveBeenCalledWith(
         expect.objectContaining({
-          body: '## Summary\nWorkflow `default` completed successfully.\n\nIssue:\nDetails:',
+          body: '## Summary\nWorkflow `default` completed successfully.\n\nIssue:\nDetails:\n\n<!-- takt:managed -->',
+          labels: ['takt-managed'],
         }),
         '/tmp/test',
+      );
+      expect(mockBuildTaktManagedPrOptions).toHaveBeenCalledWith(
+        '## Summary\nWorkflow `default` completed successfully.\n\nIssue:\nDetails:',
       );
     });
 
@@ -598,10 +614,12 @@ describe('executePipeline', () => {
       expect(mockBuildPrBody).toHaveBeenCalledWith(undefined, 'Workflow `default` completed successfully.');
       expect(mockCreatePullRequest).toHaveBeenCalledWith(
         expect.objectContaining({
-          body: 'Default PR body',
+          body: 'Default PR body\n\n<!-- takt:managed -->',
+          labels: ['takt-managed'],
         }),
         '/tmp/test',
       );
+      expect(mockBuildTaktManagedPrOptions).toHaveBeenCalledWith('Default PR body');
     });
   });
 

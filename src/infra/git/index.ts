@@ -18,7 +18,14 @@ import type { GitProvider, CreatePrOptions, CreatePrResult } from './types.js';
 import type { VcsProviderType } from './detect.js';
 
 export type { GitProvider, Issue, CliStatus, ExistingPr, PrListItem, CreatePrOptions, CreatePrResult, CommentResult, MergeResult, CreateIssueOptions, CreateIssueResult, PrReviewComment, PrReviewData } from './types.js';
-export { formatIssueAsTask, parseIssueNumbers, isIssueReference, formatPrReviewAsTask, buildPrBody } from './format.js';
+export {
+  formatIssueAsTask,
+  parseIssueNumbers,
+  isIssueReference,
+  formatPrReviewAsTask,
+  buildPrBody,
+  buildTaktManagedPrOptions,
+} from './format.js';
 
 let provider: GitProvider | undefined;
 let currentProviderType: VcsProviderType | undefined;

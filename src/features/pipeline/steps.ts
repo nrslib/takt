@@ -1,6 +1,10 @@
 import { execFileSync } from 'node:child_process';
-import { formatIssueAsTask, buildPrBody, createPullRequestSafely, formatPrReviewAsTask, getGitProvider } from '../../infra/git/index.js';
-import type { Issue, CreatePrResult } from '../../infra/git/index.js';
+import {
+  formatIssueAsTask,
+  formatPrReviewAsTask,
+  getGitProvider,
+} from '../../infra/git/index.js';
+import type { Issue } from '../../infra/git/index.js';
 import { resolveConfigValue } from '../../infra/config/index.js';
 import { stageAndCommit, resolveBaseBranch, pushBranch, checkoutBranch } from '../../infra/task/index.js';
 import { executeTask, confirmAndCreateWorktree, type TaskExecutionOptions, type PipelineExecutionOptions } from '../tasks/index.js';
@@ -9,6 +13,7 @@ import { statusLine } from '../../shared/ui/StatusLine.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
 import type { PipelineConfig } from '../../core/models/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';
+import { expandPipelineTemplate } from './templateExpander.js';
 
 export interface TaskContent {
   task: string;
@@ -47,10 +52,6 @@ function requireBranch(branch: string | undefined, context: string): string {
   return branch;
 }
 
-function expandTemplate(template: string, vars: Record<string, string>): string {
-  return template.replace(/\{(\w+)\}/g, (match, key: string) => vars[key] ?? match);
-}
-
 function generatePipelineBranchName(pipelineConfig: PipelineConfig | undefined, issueNumber?: number): string {
   const prefix = pipelineConfig?.defaultBranchPrefix ?? 'takt/';
   const timestamp = Math.floor(Date.now() / 1000);
@@ -66,7 +67,7 @@ export function buildCommitMessage(
 ): string {
   const template = pipelineConfig?.commitMessageTemplate;
   if (template && issue) {
-    return expandTemplate(template, {
+    return expandPipelineTemplate(template, {
       title: issue.title,
       issue: String(issue.number),
     });
@@ -79,23 +80,6 @@ export function buildCommitMessage(
 function resolveExecutionBaseBranch(cwd: string, preferredBaseBranch?: string): string {
   const { branch } = resolveBaseBranch(cwd, preferredBaseBranch);
   return requireBaseBranch(branch, 'execution context');
-}
-
-function buildPipelinePrBody(
-  pipelineConfig: PipelineConfig | undefined,
-  issue: Issue | undefined,
-  report: string,
-): string {
-  const template = pipelineConfig?.prBodyTemplate;
-  if (template) {
-    return expandTemplate(template, {
-      title: issue?.title ?? '',
-      issue: issue ? String(issue.number) : '',
-      issue_body: issue?.body || issue?.title || '',
-      report,
-    });
-  }
-  return buildPrBody(issue ? [issue] : undefined, report);
 }
 
 function fetchVcsResource<T>(
@@ -273,36 +257,4 @@ export function commitAndPush(
     error(`Git operation failed: ${getErrorMessage(err)}`);
     return false;
   }
-}
-
-export function submitPullRequest(
-  projectCwd: string,
-  branch: string,
-  baseBranch: string,
-  taskContent: TaskContent,
-  workflow: string,
-  pipelineConfig: PipelineConfig | undefined,
-  options: Pick<PipelineExecutionOptions, 'task' | 'repo' | 'draftPr'>,
-): string | undefined {
-  info('Creating pull request...');
-  const resolvedBaseBranch = requireBaseBranch(baseBranch, 'pull request creation');
-  const prTitle = taskContent.issue ? `[#${taskContent.issue.number}] ${taskContent.issue.title}` : (options.task ?? 'Pipeline task');
-  const report = `Workflow \`${workflow}\` completed successfully.`;
-  const prBody = buildPipelinePrBody(pipelineConfig, taskContent.issue, report);
-
-  const prResult: CreatePrResult = createPullRequestSafely(getGitProvider(), {
-    branch,
-    title: prTitle,
-    body: prBody,
-    base: resolvedBaseBranch,
-    repo: options.repo,
-    draft: options.draftPr,
-  }, projectCwd);
-
-  if (prResult.success) {
-    success(`PR created: ${prResult.url}`);
-    return prResult.url;
-  }
-  error(`PR creation failed: ${prResult.error}`);
-  return undefined;
 }

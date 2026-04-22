@@ -16,6 +16,9 @@ import {
   isIssueReference,
   formatPrReviewAsTask,
   buildPrBody,
+  buildTaktManagedPrOptions,
+  isTaktManagedPrBody,
+  TAKT_MANAGED_PR_LABEL,
   TAKT_MANAGED_PR_MARKER,
 } from '../infra/git/format.js';
 import type { Issue, PrReviewData } from '../infra/git/types.js';
@@ -99,7 +102,7 @@ describe('buildPrBody', () => {
     expect(result).toContain('## Execution Report');
     expect(result).toContain('Report text');
     expect(result).toContain('Closes #5');
-    expect(result).toContain(TAKT_MANAGED_PR_MARKER);
+    expect(result).not.toContain(TAKT_MANAGED_PR_MARKER);
   });
 
   it('should build PR body without issues', () => {
@@ -109,7 +112,69 @@ describe('buildPrBody', () => {
     expect(result).toContain('## Execution Report');
     expect(result).toContain('Report text');
     expect(result).not.toContain('Closes');
-    expect(result).toContain(TAKT_MANAGED_PR_MARKER);
+    expect(result).not.toContain(TAKT_MANAGED_PR_MARKER);
+  });
+});
+
+describe('buildTaktManagedPrOptions', () => {
+  it('managed PR 契約を body marker と labels の両方で返す', () => {
+    const result = buildTaktManagedPrOptions('## Summary\n\nReport text');
+
+    expect(result).toEqual({
+      body: '## Summary\n\nReport text\n\n<!-- takt:managed -->',
+      labels: [TAKT_MANAGED_PR_LABEL],
+    });
+  });
+
+  it('body に marker が含まれていても重複させない', () => {
+    const body = `## Summary\n\nReport text\n\n${TAKT_MANAGED_PR_MARKER}`;
+
+    const result = buildTaktManagedPrOptions(body);
+
+    expect(result).toEqual({
+      body,
+      labels: [TAKT_MANAGED_PR_LABEL],
+    });
+  });
+});
+
+describe('isTaktManagedPrBody', () => {
+  it('marker がある本文だけを TAKT 管理 PR と判定する', () => {
+    const body = `## Summary
+
+Task summary
+
+## Execution Report
+
+Workflow \`default\` completed successfully.
+
+${TAKT_MANAGED_PR_MARKER}`;
+
+    expect(isTaktManagedPrBody(body)).toBe(true);
+  });
+
+  it('legacy な本文テンプレート流用だけでは TAKT 管理 PR と判定しない', () => {
+    const body = `## Summary
+
+Task summary
+
+## Execution Report
+
+Workflow \`default\` completed successfully.`;
+
+    expect(isTaktManagedPrBody(body)).toBe(false);
+  });
+
+  it('same-repo の手動 takt PR を模した本文でも marker なしなら false を返す', () => {
+    const body = `## Summary
+
+Manual follow-up
+
+## Execution Report
+
+Task completed successfully.`;
+
+    expect(isTaktManagedPrBody(body)).toBe(false);
   });
 });
 

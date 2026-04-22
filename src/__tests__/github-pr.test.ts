@@ -253,7 +253,33 @@ describe('listOpenPrs', () => {
     );
   });
 
-  it('legacy な TAKT PR 本文でも managed_by_takt: true にマッピングする', () => {
+  it('marker 付き same-repo takt PR は label がなくても managed_by_takt: true にマッピングする', () => {
+    mockExecFileSync
+      .mockReturnValueOnce(JSON.stringify({ nameWithOwner: 'org/repo' }))
+      .mockReturnValueOnce(withGhApiResponse([
+        {
+          number: 78,
+          user: { login: 'nrslib' },
+          base: { ref: 'improve', repo: { full_name: 'org/repo' } },
+          head: { ref: 'takt/78/managed-without-label', repo: { full_name: 'org/repo' } },
+          body: `## Summary\n\nTask summary\n\n## Execution Report\n\nTask completed successfully.\n\n${TAKT_MANAGED_PR_MARKER}`,
+          labels: [],
+          draft: false,
+          updated_at: '2026-04-21T02:30:00Z',
+        },
+      ]));
+
+    expect(listOpenPrs('/project')).toEqual([
+      expect.objectContaining({
+        number: 78,
+        managed_by_takt: true,
+        labels: [],
+        same_repository: true,
+      }),
+    ]);
+  });
+
+  it('legacy な TAKT PR 本文だけでは managed_by_takt: false にマッピングする', () => {
     mockExecFileSync
       .mockReturnValueOnce(JSON.stringify({ nameWithOwner: 'org/repo' }))
       .mockReturnValueOnce(withGhApiResponse([
@@ -272,7 +298,7 @@ describe('listOpenPrs', () => {
     expect(listOpenPrs('/project')).toEqual([
       expect.objectContaining({
         number: 77,
-        managed_by_takt: true,
+        managed_by_takt: false,
       }),
     ]);
   });
@@ -440,7 +466,7 @@ describe('buildPrBody', () => {
     expect(result).toContain('## Execution Report');
     expect(result).toContain('Workflow `default` completed.');
     expect(result).toContain('Closes #99');
-    expect(result).toContain(TAKT_MANAGED_PR_MARKER);
+    expect(result).not.toContain(TAKT_MANAGED_PR_MARKER);
   });
 
   it('should use title when body is empty', () => {
@@ -456,7 +482,7 @@ describe('buildPrBody', () => {
 
     expect(result).toContain('Fix bug');
     expect(result).toContain('Closes #10');
-    expect(result).toContain(TAKT_MANAGED_PR_MARKER);
+    expect(result).not.toContain(TAKT_MANAGED_PR_MARKER);
   });
 
   it('should build body without issue', () => {
@@ -466,7 +492,7 @@ describe('buildPrBody', () => {
     expect(result).toContain('## Execution Report');
     expect(result).toContain('Task completed.');
     expect(result).not.toContain('Closes');
-    expect(result).toContain(TAKT_MANAGED_PR_MARKER);
+    expect(result).not.toContain(TAKT_MANAGED_PR_MARKER);
   });
 
   it('should support multiple issues', () => {
@@ -493,7 +519,7 @@ describe('buildPrBody', () => {
     expect(result).toContain('First issue body.');
     expect(result).toContain('Closes #1');
     expect(result).toContain('Closes #2');
-    expect(result).toContain(TAKT_MANAGED_PR_MARKER);
+    expect(result).not.toContain(TAKT_MANAGED_PR_MARKER);
   });
 
 });

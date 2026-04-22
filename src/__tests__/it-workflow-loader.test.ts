@@ -44,9 +44,17 @@ import { loadWorkflow } from '../infra/config/loaders/index.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
 import { listBuiltinWorkflowNames } from '../infra/config/loaders/workflowResolver.js';
 import { loadGlobalConfig } from '../infra/config/global/globalConfig.js';
+import { TAKT_MANAGED_PR_LABEL } from '../infra/git/format.js';
 
 const loadWorkflowConfig = loadWorkflow;
 const listBuiltinWorkflowLabels = listBuiltinWorkflowNames;
+const taktManagedPrRouteFilter = {
+  head_branch: 'takt/*',
+  managed_by_takt: true,
+  labels: [TAKT_MANAGED_PR_LABEL],
+  same_repository: true,
+  draft: false,
+};
 
 // --- Test helpers ---
 
@@ -66,22 +74,12 @@ function expectAutoImprovementLoopRouteContext(config: NonNullable<ReturnType<ty
     expect.objectContaining({
       type: 'pr_list',
       as: 'prs',
-      where: {
-        head_branch: 'takt/*',
-        managed_by_takt: true,
-        same_repository: true,
-        draft: false,
-      },
+      where: taktManagedPrRouteFilter,
     }),
     expect.objectContaining({
       type: 'pr_selection',
       as: 'selected_pr',
-      where: {
-        head_branch: 'takt/*',
-        managed_by_takt: true,
-        same_repository: true,
-        draft: false,
-      },
+      where: taktManagedPrRouteFilter,
     }),
     expect.objectContaining({ type: 'issue_context', as: 'issue' }),
   ]));
@@ -203,6 +201,16 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
     }));
     expectAutoImprovementLoopRouteContext(config!);
     expectAutoImprovementLoopDownstreamContract(config!);
+  });
+
+  it('should keep takt-managed label contract aligned across builtin auto-improvement-loop workflows', () => {
+    for (const language of ['en', 'ja'] as const) {
+      const config = loadWorkflowFromFile(
+        join(process.cwd(), 'builtins', language, 'workflows', 'auto-improvement-loop.yaml'),
+        testDir,
+      );
+      expectAutoImprovementLoopRouteContext(config);
+    }
   });
 
   it('should preserve the north-star orchestration contract in the builtin workflow', () => {

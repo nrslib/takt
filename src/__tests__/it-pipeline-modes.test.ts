@@ -22,6 +22,7 @@ const {
   mockFormatIssueAsTask,
   mockCheckGhCli,
   mockCreatePullRequest,
+  mockBuildTaktManagedPrOptions,
   mockCreatePullRequestSafely,
   mockPushBranch,
 } = vi.hoisted(() => ({
@@ -29,6 +30,10 @@ const {
   mockFormatIssueAsTask: vi.fn(),
   mockCheckGhCli: vi.fn(),
   mockCreatePullRequest: vi.fn(),
+  mockBuildTaktManagedPrOptions: vi.fn((body: string) => ({
+    body: `${body}\n\n<!-- takt:managed -->`,
+    labels: ['takt-managed'],
+  })),
   mockCreatePullRequestSafely: vi.fn(),
   mockPushBranch: vi.fn(),
 }));
@@ -45,6 +50,7 @@ vi.mock('../infra/git/index.js', () => ({
   }),
   formatIssueAsTask: (...args: unknown[]) => mockFormatIssueAsTask(...args),
   buildPrBody: vi.fn().mockReturnValue('PR body'),
+  buildTaktManagedPrOptions: (...args: unknown[]) => mockBuildTaktManagedPrOptions(...args as [string]),
   formatPrReviewAsTask: vi.fn(),
   createPullRequestSafely: (...args: unknown[]) => mockCreatePullRequestSafely(...args),
 }));
@@ -210,6 +216,10 @@ describe('Pipeline Modes IT: --task + --workflow path', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockBuildTaktManagedPrOptions.mockImplementation((body: string) => ({
+      body: `${body}\n\n<!-- takt:managed -->`,
+      labels: ['takt-managed'],
+    }));
     mockCreatePullRequestSafely.mockImplementation((provider, options, cwd) => {
       try {
         return provider.createPullRequest(options, cwd);
@@ -430,6 +440,7 @@ describe('Pipeline Modes IT: --auto-pr', () => {
 
     expect(exitCode).toBe(0);
     expect(mockCreatePullRequest).toHaveBeenCalled();
+    expect(mockBuildTaktManagedPrOptions).toHaveBeenCalledWith('PR body');
   });
 
   it('should return EXIT_PR_CREATION_FAILED when PR creation fails', async () => {

@@ -15,10 +15,10 @@ import {
   resolveExecutionContext,
   runWorkflow,
   commitAndPush,
-  submitPullRequest,
   buildCommitMessage,
   type ExecutionContext,
 } from './steps.js';
+import { submitPullRequest } from './prSubmission.js';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';
 
 export type { PipelineExecutionOptions };

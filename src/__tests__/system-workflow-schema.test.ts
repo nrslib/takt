@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { WorkflowConfigRawSchema, WorkflowStepRawSchema } from '../core/models/index.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
+import { TAKT_MANAGED_PR_LABEL } from '../infra/git/format.js';
 
 describe('system workflow schema', () => {
   it('system step で mode/system_inputs/effects/when を保持できる', () => {
@@ -86,6 +87,7 @@ describe('system workflow schema', () => {
             base_branch: 'improve',
             head_branch: 'task/*',
             managed_by_takt: true,
+            labels: [TAKT_MANAGED_PR_LABEL],
             same_repository: true,
             draft: false,
           },
@@ -112,6 +114,7 @@ describe('system workflow schema', () => {
             base_branch: 'improve',
             head_branch: 'task/*',
             managed_by_takt: true,
+            labels: [TAKT_MANAGED_PR_LABEL],
             same_repository: true,
             draft: false,
           },
@@ -132,6 +135,7 @@ describe('system workflow schema', () => {
           where: {
             head_branch: 'takt/*',
             managed_by_takt: true,
+            labels: [TAKT_MANAGED_PR_LABEL],
             same_repository: true,
             draft: false,
           },
@@ -156,6 +160,7 @@ describe('system workflow schema', () => {
           where: {
             head_branch: 'takt/*',
             managed_by_takt: true,
+            labels: [TAKT_MANAGED_PR_LABEL],
             same_repository: true,
             draft: false,
           },
@@ -176,6 +181,7 @@ describe('system workflow schema', () => {
           where: {
             head_branch: 'takt/*',
             managed_by_takt: true,
+            labels: [TAKT_MANAGED_PR_LABEL],
             same_repository: true,
             draft: false,
           },
@@ -187,6 +193,7 @@ describe('system workflow schema', () => {
           where: {
             draft: false,
             managed_by_takt: true,
+            labels: [TAKT_MANAGED_PR_LABEL, TAKT_MANAGED_PR_LABEL],
             same_repository: true,
             head_branch: 'takt/*',
           },
@@ -215,6 +222,7 @@ describe('system workflow schema', () => {
           where: {
             head_branch: 'takt/*',
             managed_by_takt: true,
+            labels: [TAKT_MANAGED_PR_LABEL],
             same_repository: true,
             draft: false,
           },
@@ -226,6 +234,7 @@ describe('system workflow schema', () => {
           where: {
             head_branch: 'feature/*',
             managed_by_takt: true,
+            labels: [TAKT_MANAGED_PR_LABEL],
             same_repository: true,
             draft: false,
           },

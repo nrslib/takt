@@ -5,24 +5,30 @@
  * from git/types.ts and contain no provider-specific logic.
  */
 
-import type { Issue, PrReviewData } from './types.js';
+import type { CreatePrOptions, Issue, PrReviewData } from './types.js';
 
 export const TAKT_MANAGED_PR_MARKER = '<!-- takt:managed -->';
-
-function hasLegacyTaktManagedPrSignature(body: string): boolean {
-  return body.includes('## Summary')
-    && body.includes('## Execution Report')
-    && (
-      body.includes('Workflow `')
-      || body.includes('Task completed successfully.')
-    );
-}
+export const TAKT_MANAGED_PR_LABEL = 'takt-managed';
 
 export function isTaktManagedPrBody(body: string | null | undefined): boolean {
   if (!body) {
     return false;
   }
-  return body.includes(TAKT_MANAGED_PR_MARKER) || hasLegacyTaktManagedPrSignature(body);
+  return body.includes(TAKT_MANAGED_PR_MARKER);
+}
+
+function appendTaktManagedPrMarker(body: string): string {
+  if (body.includes(TAKT_MANAGED_PR_MARKER)) {
+    return body;
+  }
+  return `${body}\n\n${TAKT_MANAGED_PR_MARKER}`;
+}
+
+export function buildTaktManagedPrOptions(body: string): Pick<CreatePrOptions, 'body' | 'labels'> {
+  return {
+    body: appendTaktManagedPrMarker(body),
+    labels: [TAKT_MANAGED_PR_LABEL],
+  };
 }
 
 /**
@@ -168,9 +174,6 @@ export function buildPrBody(issues: Issue[] | undefined, report: string): string
     parts.push('');
     parts.push(issues.map((issue) => `Closes #${issue.number}`).join('\n'));
   }
-
-  parts.push('');
-  parts.push(TAKT_MANAGED_PR_MARKER);
 
   return parts.join('\n');
 }

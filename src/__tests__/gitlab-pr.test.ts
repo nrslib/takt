@@ -295,7 +295,33 @@ describe('listOpenMrs', () => {
     );
   });
 
-  it('legacy な TAKT MR 本文でも managed_by_takt: true にマッピングする', () => {
+  it('marker 付き same-repo takt MR は label がなくても managed_by_takt: true にマッピングする', () => {
+    mockExecFileSync.mockReturnValue(withGlabApiResponse([
+      {
+        iid: 78,
+        author: { username: 'nrslib' },
+        target_branch: 'improve',
+        source_branch: 'takt/78/managed-without-label',
+        description: '## Summary\n\nTask summary\n\n## Execution Report\n\nTask completed successfully.\n\n<!-- takt:managed -->',
+        labels: [],
+        source_project_id: 1,
+        target_project_id: 1,
+        draft: false,
+        updated_at: '2026-04-21T02:30:00Z',
+      },
+    ]));
+
+    expect(listOpenMrs('/project')).toEqual([
+      expect.objectContaining({
+        number: 78,
+        managed_by_takt: true,
+        labels: [],
+        same_repository: true,
+      }),
+    ]);
+  });
+
+  it('legacy な TAKT MR 本文だけでは managed_by_takt: false にマッピングする', () => {
     mockExecFileSync.mockReturnValue(withGlabApiResponse([
       {
         iid: 77,
@@ -314,7 +340,7 @@ describe('listOpenMrs', () => {
     expect(listOpenMrs('/project')).toEqual([
       expect.objectContaining({
         number: 77,
-        managed_by_takt: true,
+        managed_by_takt: false,
       }),
     ]);
   });
