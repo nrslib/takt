@@ -97,9 +97,11 @@ export function getBuiltinWorkflow(name: string, projectCwd: string): WorkflowCo
   if (!yamlPath) {
     return null;
   }
-  const workflow = existsSync(yamlPath)
-    ? loadWorkflowFromResolvedPath(yamlPath, projectCwd, projectCwd)
-    : null;
+  const workflow = loadWorkflowFileWithResolutionOptions(yamlPath, {
+    projectCwd,
+    lookupCwd: projectCwd,
+    source: 'builtin',
+  });
   return finalizeLoadedWorkflow(workflow, projectCwd, projectCwd);
 }
 

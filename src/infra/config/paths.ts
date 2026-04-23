@@ -9,6 +9,7 @@ import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import type { Language } from '../../core/models/index.js';
+import { LanguageSchema } from '../../core/models/schema-base.js';
 import { getLanguageResourcesDir } from '../resources/index.js';
 
 import type { FacetKind } from 'faceted-prompting';
@@ -56,6 +57,11 @@ export function getGlobalConfigPath(): string {
 /** Get builtin workflows directory (builtins/{lang}/workflows) */
 export function getBuiltinWorkflowsDir(lang: Language): string {
   return join(getLanguageResourcesDir(lang), 'workflows');
+}
+
+export function isBuiltinWorkflowPath(filePath: string): boolean {
+  const resolvedFilePath = resolve(filePath);
+  return LanguageSchema.options.some((lang) => isPathSafe(getBuiltinWorkflowsDir(lang), resolvedFilePath));
 }
 
 /** Get builtin personas directory (builtins/{lang}/facets/personas) */

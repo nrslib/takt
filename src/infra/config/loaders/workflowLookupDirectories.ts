@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { resolveWorkflowConfigValues } from '../resolveWorkflowConfigValue.js';
 import {
   getBuiltinWorkflowsDir,
@@ -99,7 +99,7 @@ export function getBuiltinWorkflowPath(name: string, projectCwd: string): string
   if (config.enableBuiltinWorkflows === false || (config.disabledBuiltins ?? []).includes(name)) {
     return null;
   }
-  return join(getBuiltinWorkflowsDir(config.language), `${name}.yaml`);
+  return resolveWorkflowFile(getBuiltinWorkflowsDir(config.language), name);
 }
 
 export function listBuiltinWorkflowNames(

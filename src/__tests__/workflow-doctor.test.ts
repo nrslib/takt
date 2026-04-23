@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
-import { inspectWorkflowFile } from '../infra/config/loaders/workflowDoctor.js';
+import { invalidateAllResolvedConfigCache, invalidateGlobalConfigCache } from '../infra/config/index.js';
+import { inspectWorkflowFile, resolveWorkflowDoctorTargets } from '../infra/config/loaders/workflowDoctor.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
+import * as workflowResolver from '../infra/config/loaders/workflowResolver.js';
 import { doctorWorkflowCommand } from '../features/workflowAuthoring/doctor.js';
 
 const mockSuccess = vi.fn();
@@ -23,6 +25,38 @@ function writeWorkflow(projectDir: string, relativePath: string, content: string
   return filePath;
 }
 
+interface WorktreeRootCase {
+  name: string;
+  rootDirRelativePath: string;
+  configContent?: string;
+}
+
+const worktreeRootCases: WorktreeRootCase[] = [
+  {
+    name: 'project .takt/worktrees root',
+    rootDirRelativePath: '.takt/worktrees',
+  },
+  {
+    name: 'sibling takt-worktrees root',
+    rootDirRelativePath: '../takt-worktrees',
+  },
+  {
+    name: 'configured global worktree_dir root',
+    rootDirRelativePath: 'custom-worktrees',
+    configContent: 'worktree_dir: custom-worktrees\n',
+  },
+];
+
+function writeConfigForCase(rootCase: WorktreeRootCase): void {
+  if (!rootCase.configContent) {
+    return;
+  }
+
+  writeWorkflow(process.env.TAKT_CONFIG_DIR!, 'config.yaml', rootCase.configContent);
+  invalidateGlobalConfigCache();
+  invalidateAllResolvedConfigCache();
+}
+
 describe('workflow doctor', () => {
   let projectDir: string;
   const previousConfigDir = process.env.TAKT_CONFIG_DIR;
@@ -30,6 +64,8 @@ describe('workflow doctor', () => {
   beforeEach(() => {
     projectDir = mkdtempSync(join(tmpdir(), 'takt-workflow-doctor-'));
     process.env.TAKT_CONFIG_DIR = mkdtempSync(join(tmpdir(), 'takt-workflow-doctor-global-'));
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
     mockSuccess.mockClear();
     mockWarn.mockClear();
     mockError.mockClear();
@@ -42,9 +78,13 @@ describe('workflow doctor', () => {
     }
     if (previousConfigDir === undefined) {
       delete process.env.TAKT_CONFIG_DIR;
+      invalidateGlobalConfigCache();
+      invalidateAllResolvedConfigCache();
       return;
     }
     process.env.TAKT_CONFIG_DIR = previousConfigDir;
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
   });
 
   it('reports no diagnostics for a valid workflow file', () => {
@@ -661,6 +701,225 @@ steps:
 
     expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining('valid.yaml'));
     expect(mockError).toHaveBeenCalledWith(expect.stringContaining('missing'));
+  });
+
+  it('inspects privileged builtin workflows without downgrading them to project trust', () => {
+    const builtinPath = join(process.cwd(), 'builtins', 'ja', 'workflows', 'auto-improvement-loop.yaml');
+
+    const report = inspectWorkflowFile(builtinPath, process.cwd());
+
+    expect(report.diagnostics).toEqual([]);
+  });
+
+  it('resolves named builtin workflow targets without downgrading privileged builtin trust', async () => {
+    await expect(doctorWorkflowCommand(['auto-improvement-loop'], process.cwd())).resolves.toBeUndefined();
+
+    expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining('auto-improvement-loop.yaml'));
+    expect(mockError).not.toHaveBeenCalled();
+  });
+
+  it('rejects named builtin workflow targets when builtin workflows are disabled', async () => {
+    writeFileSync(join(process.env.TAKT_CONFIG_DIR!, 'config.yaml'), 'enable_builtin_workflows: false\n', 'utf-8');
+    invalidateGlobalConfigCache();
+
+    await expect(doctorWorkflowCommand(['auto-improvement-loop'], process.cwd())).rejects.toThrow(
+      'Workflow not found: auto-improvement-loop',
+    );
+
+    expect(mockSuccess).not.toHaveBeenCalled();
+    expect(mockError).not.toHaveBeenCalled();
+  });
+
+  it('rejects named builtin workflow targets when the builtin is individually disabled', async () => {
+    writeFileSync(
+      join(process.env.TAKT_CONFIG_DIR!, 'config.yaml'),
+      'disabled_builtins:\n  - auto-improvement-loop\n',
+      'utf-8',
+    );
+    invalidateGlobalConfigCache();
+
+    await expect(doctorWorkflowCommand(['auto-improvement-loop'], process.cwd())).rejects.toThrow(
+      'Workflow not found: auto-improvement-loop',
+    );
+
+    expect(mockSuccess).not.toHaveBeenCalled();
+    expect(mockError).not.toHaveBeenCalled();
+  });
+
+  it('resolves named builtin workflow targets from loader-side target resolution', () => {
+    const [target] = resolveWorkflowDoctorTargets(['auto-improvement-loop'], process.cwd());
+
+    expect(target).toMatchObject({
+      filePath: expect.stringContaining('auto-improvement-loop.yaml'),
+      source: 'builtin',
+    });
+  });
+
+  it.each(worktreeRootCases)(
+    'validates runtime.prepare trust for worktree workflow path targets in $name',
+    async (rootCase) => {
+      writeConfigForCase(rootCase);
+      const { rootDirRelativePath } = rootCase;
+      const rootDir = join(projectDir, rootDirRelativePath);
+      const worktreeDir = join(rootDir, 'feature-branch');
+      const worktreeWorkflowPath = join(worktreeDir, '.takt', 'workflows', 'prepare.yaml');
+      mkdirSync(dirname(worktreeWorkflowPath), { recursive: true });
+      writeFileSync(worktreeWorkflowPath, `name: prepare
+max_steps: 10
+initial_step: review
+workflow_config:
+  runtime:
+    prepare:
+      - node
+steps:
+  - name: review
+    rules:
+      - condition: done
+        next: COMPLETE
+`, 'utf-8');
+
+      await expect(
+        doctorWorkflowCommand([relative(projectDir, worktreeWorkflowPath)], projectDir),
+      ).rejects.toThrow('Workflow validation failed');
+
+      expect(mockError).toHaveBeenCalledWith(
+        expect.stringContaining('cannot use workflow-level runtime.prepare outside the project workflows root'),
+      );
+    },
+  );
+
+  it.each(worktreeRootCases)(
+    'passes derived worktree lookupCwd into workflow_call contract validation for path targets in $name',
+    async (rootCase) => {
+      writeConfigForCase(rootCase);
+      const validateContractsSpy = vi.spyOn(workflowResolver, 'validateWorkflowCallContracts');
+      const { rootDirRelativePath } = rootCase;
+      const rootDir = join(projectDir, rootDirRelativePath);
+      const worktreeDir = join(rootDir, 'feature-branch');
+      const worktreeWorkflowPath = join(worktreeDir, '.takt', 'workflows', 'parent.yaml');
+
+      writeWorkflow(projectDir, '.takt/workflows/child.yaml', `name: child
+subworkflow:
+  callable: true
+initial_step: review
+max_steps: 3
+steps:
+  - name: review
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+      mkdirSync(dirname(worktreeWorkflowPath), { recursive: true });
+      writeFileSync(worktreeWorkflowPath, `name: parent
+initial_step: delegate
+max_steps: 3
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: child
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`, 'utf-8');
+
+      try {
+        await expect(
+          doctorWorkflowCommand([relative(projectDir, worktreeWorkflowPath)], projectDir),
+        ).resolves.toBeUndefined();
+
+        expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining('parent.yaml'));
+        expect(validateContractsSpy).toHaveBeenCalledWith(
+          expect.objectContaining({ name: 'parent' }),
+          projectDir,
+          worktreeDir,
+          { allowPathBasedCalls: false },
+        );
+      } finally {
+        validateContractsSpy.mockRestore();
+      }
+    },
+  );
+
+  it.each(worktreeRootCases)(
+    'derives worktree lookupCwd from loader-side target resolution for path targets in $name',
+    (rootCase) => {
+      writeConfigForCase(rootCase);
+      const { rootDirRelativePath } = rootCase;
+      const rootDir = join(projectDir, rootDirRelativePath);
+      const worktreeDir = join(rootDir, 'feature-branch');
+      const worktreeWorkflowPath = join(worktreeDir, '.takt', 'workflows', 'parent.yaml');
+
+      mkdirSync(dirname(worktreeWorkflowPath), { recursive: true });
+      writeFileSync(worktreeWorkflowPath, `name: parent
+initial_step: delegate
+max_steps: 3
+steps:
+  - name: delegate
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`, 'utf-8');
+
+      const [target] = resolveWorkflowDoctorTargets([relative(projectDir, worktreeWorkflowPath)], projectDir);
+
+      expect(target).toEqual({
+        filePath: worktreeWorkflowPath,
+        lookupCwd: worktreeDir,
+      });
+    },
+  );
+
+  it('passes absolute configured worktree_dir into workflow_call contract validation for path targets', async () => {
+    const configuredRoot = mkdtempSync(join(tmpdir(), 'takt-doctor-worktrees-'));
+    const validateContractsSpy = vi.spyOn(workflowResolver, 'validateWorkflowCallContracts');
+
+    writeWorkflow(process.env.TAKT_CONFIG_DIR!, 'config.yaml', `worktree_dir: ${configuredRoot}\n`);
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+
+    const worktreeDir = join(configuredRoot, 'feature-branch');
+    const worktreeWorkflowPath = join(worktreeDir, '.takt', 'workflows', 'parent.yaml');
+
+    writeWorkflow(projectDir, '.takt/workflows/child.yaml', `name: child
+subworkflow:
+  callable: true
+initial_step: review
+max_steps: 3
+steps:
+  - name: review
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    mkdirSync(dirname(worktreeWorkflowPath), { recursive: true });
+    writeFileSync(worktreeWorkflowPath, `name: parent
+initial_step: delegate
+max_steps: 3
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: child
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`, 'utf-8');
+
+    try {
+      await expect(
+        doctorWorkflowCommand([relative(projectDir, worktreeWorkflowPath)], projectDir),
+      ).resolves.toBeUndefined();
+
+      expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining('parent.yaml'));
+      expect(validateContractsSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'parent' }),
+        projectDir,
+        worktreeDir,
+        { allowPathBasedCalls: false },
+      );
+    } finally {
+      validateContractsSpy.mockRestore();
+      rmSync(configuredRoot, { recursive: true, force: true });
+    }
   });
 
   it('resolves named workflow targets and validates them', async () => {
