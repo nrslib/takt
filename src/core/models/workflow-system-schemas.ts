@@ -89,12 +89,20 @@ const EnqueueWorktreeRawSchema = z.object({
   enabled: z.boolean().optional(),
   auto_pr: z.boolean().optional(),
   draft_pr: z.boolean().optional(),
+  managed_pr: z.boolean().optional(),
 }).strict().superRefine((data, ctx) => {
-  if ((data.auto_pr === true || data.draft_pr === true) && data.enabled !== true) {
+  if ((data.auto_pr === true || data.draft_pr === true || data.managed_pr === true) && data.enabled !== true) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['enabled'],
-      message: 'worktree.auto_pr and worktree.draft_pr require worktree.enabled to be true',
+      message: 'worktree.auto_pr, worktree.draft_pr, and worktree.managed_pr require worktree.enabled to be true',
+    });
+  }
+  if (data.managed_pr === true && data.auto_pr !== true) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['auto_pr'],
+      message: 'worktree.managed_pr requires worktree.auto_pr to be true',
     });
   }
 });

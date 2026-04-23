@@ -87,6 +87,27 @@ describe('serializeTaskListItemForJson', () => {
     });
   });
 
+  it('maps managed_pr true into json data', () => {
+    const task = {
+      kind: 'pending',
+      name: 'managed-pr-task',
+      createdAt: '2026-04-03T00:00:00.000Z',
+      filePath: '/tmp/.takt/tasks/managed.yaml',
+      content: 'body',
+      data: {
+        task: 'managed work',
+        managed_pr: true,
+      },
+    } as unknown as TaskListItem;
+
+    const serialized = serializeTaskListItemForJson(task);
+
+    expect(serialized.data).toMatchObject({
+      task: 'managed work',
+      managed_pr: true,
+    });
+  });
+
   it('maps should_publish_branch_to_origin false into json data', () => {
     const task: TaskListItem = {
       kind: 'pending',

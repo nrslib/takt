@@ -117,6 +117,7 @@ export interface WorkflowEnqueueWorktreeConfig {
   enabled?: boolean;
   auto_pr?: boolean;
   draft_pr?: boolean;
+  managed_pr?: boolean;
 }
 
 type WorkflowContextTemplateReference = `{context:${string}}`;

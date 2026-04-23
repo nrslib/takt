@@ -10,6 +10,11 @@ const mockBuildPrBody = vi.fn(() => 'Default PR body');
 const mockBuildTaktManagedPrOptions = vi.fn((body: string) => ({
   body: `${body}\n\n<!-- takt:managed -->`,
 }));
+const mockStripTaktManagedPrMarker = vi.fn((body: string) => body
+  .split('<!-- takt:managed -->')
+  .join('')
+  .replace(/\n{3,}/g, '\n\n')
+  .trimEnd());
 const mockFetchPrReviewComments = vi.fn();
 const mockFormatPrReviewAsTask = vi.fn((pr: { number: number; title: string }) =>
   `## PR #${pr.number} Review Comments: ${pr.title}`
@@ -27,6 +32,7 @@ vi.mock('../infra/git/index.js', () => ({
   ),
   buildPrBody: (...args: unknown[]) => mockBuildPrBody(...args),
   buildTaktManagedPrOptions: (...args: unknown[]) => mockBuildTaktManagedPrOptions(...args as [string]),
+  stripTaktManagedPrMarker: (...args: unknown[]) => mockStripTaktManagedPrMarker(...args as [string]),
   formatPrReviewAsTask: (...args: unknown[]) => mockFormatPrReviewAsTask(...args),
   createPullRequestSafely: (...args: unknown[]) => mockCreatePullRequestSafely(...args),
 }));
@@ -556,11 +562,11 @@ describe('executePipeline', () => {
       // Instead, the template is expanded directly
       expect(mockCreatePullRequest).toHaveBeenCalledWith(
         expect.objectContaining({
-          body: '## Summary\nAuth is broken.\n\nCloses #50\n\n<!-- takt:managed -->',
+          body: '## Summary\nAuth is broken.\n\nCloses #50',
         }),
         '/tmp/test',
       );
-      expect(mockBuildTaktManagedPrOptions).toHaveBeenCalledWith('## Summary\nAuth is broken.\n\nCloses #50');
+      expect(mockBuildTaktManagedPrOptions).not.toHaveBeenCalled();
     });
 
     it('should use pr_body_template for task-based PR creation when issue is unavailable', async () => {
@@ -583,13 +589,11 @@ describe('executePipeline', () => {
       expect(mockBuildPrBody).not.toHaveBeenCalled();
       expect(mockCreatePullRequest).toHaveBeenCalledWith(
         expect.objectContaining({
-          body: '## Summary\nWorkflow `default` completed successfully.\n\nIssue:\nDetails:\n\n<!-- takt:managed -->',
+          body: '## Summary\nWorkflow `default` completed successfully.\n\nIssue:\nDetails:',
         }),
         '/tmp/test',
       );
-      expect(mockBuildTaktManagedPrOptions).toHaveBeenCalledWith(
-        '## Summary\nWorkflow `default` completed successfully.\n\nIssue:\nDetails:',
-      );
+      expect(mockBuildTaktManagedPrOptions).not.toHaveBeenCalled();
     });
 
     it('should fall back to buildPrBody when no template is configured', async () => {
@@ -609,11 +613,11 @@ describe('executePipeline', () => {
       expect(mockBuildPrBody).toHaveBeenCalledWith(undefined, 'Workflow `default` completed successfully.');
       expect(mockCreatePullRequest).toHaveBeenCalledWith(
         expect.objectContaining({
-          body: 'Default PR body\n\n<!-- takt:managed -->',
+          body: 'Default PR body',
         }),
         '/tmp/test',
       );
-      expect(mockBuildTaktManagedPrOptions).toHaveBeenCalledWith('Default PR body');
+      expect(mockBuildTaktManagedPrOptions).not.toHaveBeenCalled();
     });
   });
 

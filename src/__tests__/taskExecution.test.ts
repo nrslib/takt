@@ -600,6 +600,40 @@ describe('executeAndCompleteTask', () => {
     );
   });
 
+  it('should pass managedPr from resolveTaskExecution into postExecutionFlow', async () => {
+    const task = createTask('task-managed-pr');
+    mockResolveTaskExecution.mockResolvedValue({
+      execCwd: '/worktree/clone',
+      workflowIdentifier: 'default',
+      isWorktree: true,
+      autoPr: true,
+      managedPr: true,
+      draftPr: false,
+      shouldPublishBranchToOrigin: true,
+      taskPrompt: undefined,
+      reportDirName: '20260216-task-managed-pr',
+      branch: 'takt/task-managed-pr',
+      worktreePath: '/worktree/clone',
+      baseBranch: 'main',
+      startStep: undefined,
+      retryNote: undefined,
+      issueNumber: undefined,
+    });
+    mockExecuteWorkflow.mockResolvedValue({ success: true });
+    mockPostExecutionFlow.mockResolvedValue({});
+
+    const result = await executeAndCompleteTaskWithoutWorkflow(task, createTaskRunnerMock() as never, '/project');
+
+    expect(result).toBe(true);
+    expect(mockPostExecutionFlow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        shouldCreatePr: true,
+        managedPr: true,
+        branch: 'takt/task-managed-pr',
+      }),
+    );
+  });
+
   it('should mark task as pr_failed when origin push fails for shouldPublishBranchToOrigin without auto_pr', async () => {
     const task = createTask('task-pr-style-push-failure');
     mockResolveTaskExecution.mockResolvedValue({

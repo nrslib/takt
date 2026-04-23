@@ -6,6 +6,8 @@ import { WorkflowConfigRawSchema, WorkflowStepRawSchema } from '../core/models/i
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 
+const TAKT_MANAGED_LABEL = 'takt-managed';
+
 describe('system workflow schema', () => {
   it('system step で mode/system_inputs/effects/when を保持できる', () => {
     const result = WorkflowStepRawSchema.safeParse({
@@ -269,7 +271,7 @@ describe('system workflow schema', () => {
           source: 'current_project',
           as: 'issues',
           where: {
-            labels: [TAKT_MANAGED_PR_LABEL],
+            labels: [TAKT_MANAGED_LABEL],
           },
         },
       ],
@@ -384,7 +386,7 @@ describe('system workflow schema', () => {
           source: 'current_project',
           as: 'selected_issue',
           where: {
-            labels: [TAKT_MANAGED_PR_LABEL],
+            labels: [TAKT_MANAGED_LABEL],
           },
         },
       ],
@@ -1393,7 +1395,7 @@ steps:
     expect(result.success).toBe(false);
   });
 
-  it('enqueue_task worktree.auto_pr と draft_pr には enabled: true を必須にする', () => {
+  it('enqueue_task worktree.auto_pr と draft_pr と managed_pr には enabled: true を必須にする', () => {
     const result = WorkflowStepRawSchema.safeParse({
       name: 'enqueue_from_issue',
       mode: 'system',
@@ -1406,6 +1408,7 @@ steps:
           worktree: {
             auto_pr: true,
             draft_pr: true,
+            managed_pr: true,
           },
         },
       ],
@@ -1422,7 +1425,42 @@ steps:
       expect.arrayContaining([
         expect.objectContaining({
           path: ['effects', 0, 'worktree', 'enabled'],
-          message: 'worktree.auto_pr and worktree.draft_pr require worktree.enabled to be true',
+          message: 'worktree.auto_pr, worktree.draft_pr, and worktree.managed_pr require worktree.enabled to be true',
+        }),
+      ]),
+    );
+  });
+
+  it('enqueue_task worktree.managed_pr には auto_pr: true を必須にする', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'enqueue_from_issue',
+      mode: 'system',
+      effects: [
+        {
+          type: 'enqueue_task',
+          mode: 'new',
+          workflow: 'takt-default',
+          task: '{structured:plan.task_markdown}',
+          worktree: {
+            enabled: true,
+            managed_pr: true,
+          },
+        },
+      ],
+      rules: [
+        {
+          when: 'true',
+          next: 'COMPLETE',
+        },
+      ],
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: ['effects', 0, 'worktree', 'auto_pr'],
+          message: 'worktree.managed_pr requires worktree.auto_pr to be true',
         }),
       ]),
     );

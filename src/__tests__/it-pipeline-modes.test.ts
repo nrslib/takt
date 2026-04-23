@@ -25,6 +25,7 @@ const {
   mockBuildTaktManagedPrOptions,
   mockCreatePullRequestSafely,
   mockPushBranch,
+  mockStripTaktManagedPrMarker,
 } = vi.hoisted(() => ({
   mockFetchIssue: vi.fn(),
   mockFormatIssueAsTask: vi.fn(),
@@ -35,6 +36,11 @@ const {
   })),
   mockCreatePullRequestSafely: vi.fn(),
   mockPushBranch: vi.fn(),
+  mockStripTaktManagedPrMarker: vi.fn((body: string) => body
+    .split('<!-- takt:managed -->')
+    .join('')
+    .replace(/\n{3,}/g, '\n\n')
+    .trimEnd()),
 }));
 
 vi.mock('node:child_process', () => ({
@@ -50,6 +56,7 @@ vi.mock('../infra/git/index.js', () => ({
   formatIssueAsTask: (...args: unknown[]) => mockFormatIssueAsTask(...args),
   buildPrBody: vi.fn().mockReturnValue('PR body'),
   buildTaktManagedPrOptions: (...args: unknown[]) => mockBuildTaktManagedPrOptions(...args as [string]),
+  stripTaktManagedPrMarker: (...args: unknown[]) => mockStripTaktManagedPrMarker(...args as [string]),
   formatPrReviewAsTask: vi.fn(),
   createPullRequestSafely: (...args: unknown[]) => mockCreatePullRequestSafely(...args),
 }));
@@ -438,7 +445,7 @@ describe('Pipeline Modes IT: --auto-pr', () => {
 
     expect(exitCode).toBe(0);
     expect(mockCreatePullRequest).toHaveBeenCalled();
-    expect(mockBuildTaktManagedPrOptions).toHaveBeenCalledWith('PR body');
+    expect(mockBuildTaktManagedPrOptions).not.toHaveBeenCalled();
   });
 
   it('should return EXIT_PR_CREATION_FAILED when PR creation fails', async () => {

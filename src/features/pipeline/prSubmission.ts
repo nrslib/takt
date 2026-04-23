@@ -1,8 +1,8 @@
 import {
   buildPrBody,
-  buildTaktManagedPrOptions,
   createPullRequestSafely,
   getGitProvider,
+  stripTaktManagedPrMarker,
 } from '../../infra/git/index.js';
 import type { CreatePrResult, Issue } from '../../infra/git/index.js';
 import type { PipelineConfig } from '../../core/models/index.js';
@@ -50,13 +50,12 @@ export function submitPullRequest(
   info('Creating pull request...');
   const prTitle = taskContent.issue ? `[#${taskContent.issue.number}] ${taskContent.issue.title}` : (options.task ?? 'Pipeline task');
   const report = `Workflow \`${workflow}\` completed successfully.`;
-  const prBody = buildPipelinePrBody(pipelineConfig, taskContent.issue, report);
-  const managedPrOptions = buildTaktManagedPrOptions(prBody);
+  const prBody = stripTaktManagedPrMarker(buildPipelinePrBody(pipelineConfig, taskContent.issue, report));
 
   const prResult: CreatePrResult = createPullRequestSafely(getGitProvider(), {
     branch,
     title: prTitle,
-    ...managedPrOptions,
+    body: prBody,
     base: requireBaseBranch(baseBranch),
     repo: options.repo,
     draft: options.draftPr,

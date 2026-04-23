@@ -12,6 +12,7 @@ export interface JsonTaskData {
   retry_note?: string;
   auto_pr?: boolean;
   draft_pr?: boolean;
+  managed_pr?: boolean;
   should_publish_branch_to_origin?: boolean;
   exceeded_max_steps?: number;
   exceeded_current_iteration?: number;
@@ -59,6 +60,7 @@ function serializeTaskData(data: TaskFileData | undefined): JsonTaskData | undef
     retry_note: data.retry_note,
     auto_pr: data.auto_pr,
     draft_pr: data.draft_pr,
+    managed_pr: data.managed_pr,
     should_publish_branch_to_origin: data.should_publish_branch_to_origin,
     exceeded_max_steps: data.exceeded_max_steps,
     exceeded_current_iteration: data.exceeded_current_iteration,

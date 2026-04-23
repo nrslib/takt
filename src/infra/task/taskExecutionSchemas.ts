@@ -25,6 +25,7 @@ export const TaskExecutionConfigObjectSchema = z.object({
   retry_note: z.string().optional(),
   auto_pr: z.boolean().optional(),
   draft_pr: z.boolean().optional(),
+  managed_pr: z.boolean().optional(),
   should_publish_branch_to_origin: z.boolean().optional(),
   exceeded_max_steps: z.number().int().positive().optional(),
   exceeded_current_iteration: z.number().int().min(0).optional(),
@@ -37,6 +38,20 @@ export const TaskExecutionConfigObjectSchema = z.object({
       code: z.ZodIssueCode.custom,
       message: 'pr_number is required when source is "pr_review"',
       path: ['pr_number'],
+    });
+  }
+  if (data.managed_pr === true && data.auto_pr !== true) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'managed_pr requires auto_pr to be true',
+      path: ['auto_pr'],
+    });
+  }
+  if (data.managed_pr === true && !data.worktree) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'managed_pr requires worktree to be enabled',
+      path: ['worktree'],
     });
   }
 }).strict();
