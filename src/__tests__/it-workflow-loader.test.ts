@@ -221,6 +221,46 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
     }
   });
 
+  it('should opt in managed_pr only for new auto-pr tasks in builtin auto-improvement-loop workflows', () => {
+    for (const language of ['en', 'ja'] as const) {
+      const config = loadWorkflowFromFile(
+        join(process.cwd(), 'builtins', language, 'workflows', 'auto-improvement-loop.yaml'),
+        testDir,
+      );
+      const enqueueFromIssue = config.steps.find((step) => step.name === 'enqueue_from_issue') as Record<string, unknown> | undefined;
+      const enqueueFresh = config.steps.find((step) => step.name === 'enqueue_fresh') as Record<string, unknown> | undefined;
+      const enqueueFromPr = config.steps.find((step) => step.name === 'enqueue_from_pr') as Record<string, unknown> | undefined;
+
+      expect(enqueueFromIssue?.effects).toEqual([
+        expect.objectContaining({
+          type: 'enqueue_task',
+          worktree: expect.objectContaining({
+            enabled: true,
+            auto_pr: true,
+            draft_pr: true,
+            managed_pr: true,
+          }),
+        }),
+      ]);
+      expect(enqueueFresh?.effects).toEqual([
+        expect.objectContaining({
+          type: 'enqueue_task',
+          worktree: expect.objectContaining({
+            enabled: true,
+            auto_pr: true,
+            draft_pr: true,
+            managed_pr: true,
+          }),
+        }),
+      ]);
+      expect(enqueueFromPr?.effects).toEqual([
+        expect.not.objectContaining({
+          worktree: expect.anything(),
+        }),
+      ]);
+    }
+  });
+
   it('should preserve the legacy issue_context comment in both builtin auto-improvement-loop YAML files', () => {
     for (const language of ['en', 'ja'] as const) {
       const workflowSource = readFileSync(

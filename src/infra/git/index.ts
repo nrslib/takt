@@ -25,6 +25,7 @@ export {
   formatPrReviewAsTask,
   buildPrBody,
   buildTaktManagedPrOptions,
+  stripTaktManagedPrMarker,
 } from './format.js';
 
 let provider: GitProvider | undefined;

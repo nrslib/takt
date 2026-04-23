@@ -60,6 +60,7 @@ export interface ResolvedTaskExecution {
   resumePoint?: WorkflowResumePoint;
   autoPr: boolean;
   draftPr: boolean;
+  managedPr: boolean;
   shouldPublishBranchToOrigin: boolean;
   issueNumber?: number;
   maxStepsOverride?: number;
@@ -255,6 +256,7 @@ export async function resolveTaskExecution(
 
   const autoPr = data.auto_pr ?? resolveWorkflowConfigValue(defaultCwd, 'autoPr') ?? false;
   const draftPr = data.draft_pr ?? resolveWorkflowConfigValue(defaultCwd, 'draftPr') ?? false;
+  const managedPr = data.managed_pr === true;
   const shouldPublishBranchToOrigin =
     normalizedData.should_publish_branch_to_origin === true || autoPr;
 
@@ -265,6 +267,7 @@ export async function resolveTaskExecution(
     reportDirName: resolvedReportDirName,
     autoPr,
     draftPr,
+    managedPr,
     shouldPublishBranchToOrigin,
     ...(taskPrompt ? { taskPrompt } : {}),
     ...(branch ? { branch } : {}),

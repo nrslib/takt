@@ -876,6 +876,29 @@ describe('resolveTaskExecution', () => {
     expect(result.shouldPublishBranchToOrigin).toBe(true);
   });
 
+  it('managed_pr: true が managedPr: true として解決される', async () => {
+    const root = createTempProjectDir();
+    const worktreePath = path.join(root, '.takt', 'worktrees', 'managed-pr-worktree');
+    fs.mkdirSync(worktreePath, { recursive: true });
+    const task = createTask({
+      data: ({
+        task: 'Run managed PR task',
+        worktree: true,
+        branch: 'feature/managed-pr',
+        auto_pr: true,
+        managed_pr: true,
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      worktreePath,
+    });
+
+    const result = await resolveTaskExecutionStrict(task, root);
+
+    expect(result).toMatchObject({
+      managedPr: true,
+      autoPr: true,
+    });
+  });
+
   it('should_publish_branch_to_origin: true が shouldPublishBranchToOrigin: true として解決される', async () => {
     const root = createTempProjectDir();
     const task = createTask({

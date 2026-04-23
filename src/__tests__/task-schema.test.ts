@@ -79,8 +79,23 @@ describe('TaskExecutionConfigSchema', () => {
       start_step: 'plan',
       retry_note: 'retry after fix',
       auto_pr: true,
+      managed_pr: true,
     };
     expect(() => TaskExecutionConfigSchema.parse(config)).not.toThrow();
+  });
+
+  it('should reject managed_pr without auto_pr', () => {
+    expect(() => TaskExecutionConfigSchema.parse({
+      worktree: true,
+      managed_pr: true,
+    })).toThrow('managed_pr requires auto_pr to be true');
+  });
+
+  it('should reject managed_pr without worktree', () => {
+    expect(() => TaskExecutionConfigSchema.parse({
+      auto_pr: true,
+      managed_pr: true,
+    })).toThrow('managed_pr requires worktree to be enabled');
   });
 
   it('should accept empty config (all fields optional)', () => {
@@ -140,6 +155,17 @@ describe('TaskExecutionConfigSchema', () => {
     expect(serialized).toMatchObject({
       workflow: 'unit-test',
       start_step: 'plan',
+    });
+  });
+
+  it('should preserve managed_pr in task config serialization', () => {
+    const serialized = serializeTaskRecord({
+      ...makePendingRecord(),
+      managed_pr: true,
+    } as ReturnType<typeof makePendingRecord> & { managed_pr: boolean });
+
+    expect(serialized).toMatchObject({
+      managed_pr: true,
     });
   });
 });

@@ -12,6 +12,7 @@ import { getLabel } from '../../../shared/i18n/index.js';
 import type { Language } from '../../../core/models/types.js';
 import {
   TaskRunner,
+  TaskExecutionConfigSchema,
   type TaskFileData,
   summarizeTaskName,
   resolveTaskWorkflowValue,
@@ -27,6 +28,19 @@ export { extractTitle, createIssueFromTask };
 
 const log = createLogger('add-task');
 
+type SaveTaskOptions = {
+  workflow?: string;
+  issue?: number;
+  worktree?: boolean | string;
+  branch?: string;
+  baseBranch?: string;
+  autoPr?: boolean;
+  draftPr?: boolean;
+  managedPr?: boolean;
+  shouldPublishBranchToOrigin?: boolean;
+  prNumber?: number;
+};
+
 function resolveUniqueTaskSlug(cwd: string, baseSlug: string): string {
   let sequence = 1;
   let slug = baseSlug;
@@ -39,6 +53,35 @@ function resolveUniqueTaskSlug(cwd: string, baseSlug: string): string {
   return slug;
 }
 
+function buildValidatedTaskConfig(options?: SaveTaskOptions): Omit<TaskFileData, 'task'> {
+  const resolvedWorkflow = options ? resolveTaskWorkflowValue(options) : undefined;
+  return TaskExecutionConfigSchema.parse({
+    ...(options?.worktree !== undefined && { worktree: options.worktree }),
+    ...(options?.branch && { branch: options.branch }),
+    ...(options?.baseBranch && { base_branch: options.baseBranch }),
+    ...(resolvedWorkflow && { workflow: resolvedWorkflow }),
+    ...(options?.issue !== undefined && { issue: options.issue }),
+    ...(options?.autoPr !== undefined && { auto_pr: options.autoPr }),
+    ...(options?.draftPr !== undefined && { draft_pr: options.draftPr }),
+    ...(options?.managedPr !== undefined && { managed_pr: options.managedPr }),
+    ...(options?.shouldPublishBranchToOrigin !== undefined && {
+      should_publish_branch_to_origin: options.shouldPublishBranchToOrigin,
+    }),
+    ...(options?.prNumber !== undefined && {
+      source: 'pr_review' as const,
+      pr_number: options.prNumber,
+    }),
+  });
+}
+
+function cleanupFailedTaskDir(taskDir: string): void {
+  fs.rmSync(taskDir, { recursive: true, force: true });
+  const tasksDir = path.dirname(taskDir);
+  if (fs.existsSync(tasksDir) && fs.readdirSync(tasksDir).length === 0) {
+    fs.rmdirSync(tasksDir);
+  }
+}
+
 /**
  * Save a task entry to .takt/tasks.yaml.
  *
@@ -48,19 +91,10 @@ function resolveUniqueTaskSlug(cwd: string, baseSlug: string): string {
 export async function saveTaskFile(
   cwd: string,
   taskContent: string,
-  options?: {
-    workflow?: string;
-    issue?: number;
-    worktree?: boolean | string;
-    branch?: string;
-    baseBranch?: string;
-    autoPr?: boolean;
-    draftPr?: boolean;
-    shouldPublishBranchToOrigin?: boolean;
-    prNumber?: number;
-  },
+  options?: SaveTaskOptions,
 ): Promise<{ taskName: string; tasksFile: string }> {
   const runner = new TaskRunner(cwd);
+  const config = buildValidatedTaskConfig(options);
   const slug = await summarizeTaskName(taskContent, { cwd });
   const summary = firstLine(taskContent);
   const taskDirSlug = resolveUniqueTaskSlug(cwd, generateReportDir(taskContent));
@@ -69,29 +103,18 @@ export async function saveTaskFile(
   const orderPath = path.join(taskDir, 'order.md');
   fs.mkdirSync(taskDir, { recursive: true });
   fs.writeFileSync(orderPath, taskContent, 'utf-8');
-  const resolvedWorkflow = options ? resolveTaskWorkflowValue(options) : undefined;
-  const config: Omit<TaskFileData, 'task'> = {
-    ...(options?.worktree !== undefined && { worktree: options.worktree }),
-    ...(options?.branch && { branch: options.branch }),
-    ...(options?.baseBranch && { base_branch: options.baseBranch }),
-    ...(resolvedWorkflow && { workflow: resolvedWorkflow }),
-    ...(options?.issue !== undefined && { issue: options.issue }),
-    ...(options?.autoPr !== undefined && { auto_pr: options.autoPr }),
-    ...(options?.draftPr !== undefined && { draft_pr: options.draftPr }),
-    ...(options?.shouldPublishBranchToOrigin !== undefined && {
-      should_publish_branch_to_origin: options.shouldPublishBranchToOrigin,
-    }),
-    ...(options?.prNumber !== undefined && {
-      source: 'pr_review' as const,
-      pr_number: options.prNumber,
-    }),
-  };
-  const created = runner.addTask(taskContent, {
-    ...config,
-    task_dir: taskDirRelative,
-    slug,
-    summary,
-  });
+  let created;
+  try {
+    created = runner.addTask(taskContent, {
+      ...config,
+      task_dir: taskDirRelative,
+      slug,
+      summary,
+    });
+  } catch (error) {
+    cleanupFailedTaskDir(taskDir);
+    throw error;
+  }
   const tasksFile = path.join(cwd, '.takt', 'tasks.yaml');
   log.info('Task created', { taskName: created.name, tasksFile, config });
   return { taskName: created.name, tasksFile };
