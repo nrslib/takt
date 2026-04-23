@@ -1,13 +1,12 @@
 import { resolve } from 'node:path';
 import type { WorkflowConfig } from '../../../core/models/index.js';
 import {
-  getBuiltinWorkflowsDir,
   getGlobalWorkflowsDir,
   getProjectWorkflowsDir,
   getRepertoireDir,
+  isBuiltinWorkflowPath,
   isPathSafe,
 } from '../paths.js';
-import { resolveWorkflowConfigValue } from '../resolveWorkflowConfigValue.js';
 import { getAttachedWorkflowTrustInfo, getWorkflowSourcePath } from './workflowSourceMetadata.js';
 
 export type WorkflowTrustSource = 'project' | 'worktree' | 'user' | 'builtin' | 'repertoire' | 'external' | 'inline';
@@ -92,15 +91,6 @@ export function resolveWorkflowTrustInfo(options: WorkflowTrustResolutionOptions
     };
   }
 
-  if (isPathWithin(projectCwd, filePath)) {
-    return {
-      source: 'project',
-      sourcePath: resolve(filePath),
-      isProjectTrustRoot: true,
-      isProjectWorkflowRoot: false,
-    };
-  }
-
   if (isPathWithin(getGlobalWorkflowsDir(), filePath)) {
     return {
       source: 'user',
@@ -110,8 +100,7 @@ export function resolveWorkflowTrustInfo(options: WorkflowTrustResolutionOptions
     };
   }
 
-  const language = resolveWorkflowConfigValue(projectCwd, 'language');
-  if (isPathWithin(getBuiltinWorkflowsDir(language), filePath)) {
+  if (isBuiltinWorkflowPath(filePath)) {
     return {
       source: 'builtin',
       sourcePath: resolve(filePath),
@@ -125,6 +114,15 @@ export function resolveWorkflowTrustInfo(options: WorkflowTrustResolutionOptions
       source: 'repertoire',
       sourcePath: resolve(filePath),
       isProjectTrustRoot: false,
+      isProjectWorkflowRoot: false,
+    };
+  }
+
+  if (isPathWithin(projectCwd, filePath)) {
+    return {
+      source: 'project',
+      sourcePath: resolve(filePath),
+      isProjectTrustRoot: true,
       isProjectWorkflowRoot: false,
     };
   }

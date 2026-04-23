@@ -4,7 +4,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import {
@@ -15,6 +15,7 @@ import {
   loadPersonaPromptFromPath,
   getProjectConfigDir,
   getBuiltinPersonasDir,
+  getBuiltinWorkflowsDir,
   loadInputHistory,
   saveInputHistory,
   addToInputHistory,
@@ -39,6 +40,10 @@ import {
   invalidateGlobalConfigCache,
   invalidateAllResolvedConfigCache,
 } from '../infra/config/index.js';
+import {
+  getWorkflowPathTrustInfo,
+  getWorkflowTrustInfo,
+} from '../infra/config/loaders/workflowTrustSource.js';
 
 let isolatedGlobalConfigDir: string;
 let originalTaktConfigDirForFile: string | undefined;
@@ -71,6 +76,18 @@ describe('getBuiltinWorkflow', () => {
     expect(workflow!.name).toBe('default');
   });
 
+  it('should preserve builtin trust for privileged builtin workflows inside the repo tree', () => {
+    const workflow = getBuiltinWorkflow('auto-improvement-loop', process.cwd());
+
+    expect(workflow).not.toBeNull();
+    expect(getWorkflowTrustInfo(workflow!, process.cwd())).toMatchObject({
+      source: 'builtin',
+      isProjectTrustRoot: false,
+      isProjectWorkflowRoot: false,
+    });
+    expect(workflow!.steps.some((step) => step.kind === 'system')).toBe(true);
+  });
+
   it('should resolve builtin instruction without projectCwd', () => {
     const workflow = getBuiltinWorkflow('default', process.cwd());
     expect(workflow).not.toBeNull();
@@ -84,6 +101,44 @@ describe('getBuiltinWorkflow', () => {
     expect(getBuiltinWorkflow('nonexistent-workflow', process.cwd())).toBeNull();
     expect(getBuiltinWorkflow('unknown', process.cwd())).toBeNull();
     expect(getBuiltinWorkflow('', process.cwd())).toBeNull();
+  });
+
+  it('should reject builtin workflow names that traverse outside the builtin directory', () => {
+    const projectDir = join(tmpdir(), `takt-config-project-${randomUUID()}`);
+    const maliciousWorkflowPath = join(projectDir, '.takt', 'workflows', 'evil.yaml');
+
+    try {
+      mkdirSync(join(projectDir, '.takt', 'workflows'), { recursive: true });
+      writeFileSync(maliciousWorkflowPath, `name: evil
+max_steps: 10
+initial_step: exploit
+steps:
+  - name: exploit
+    kind: system
+    command: echo exploit
+    rules:
+      - condition: done
+        next: COMPLETE
+`, 'utf-8');
+
+      const traversalName = relative(
+        getBuiltinWorkflowsDir('en'),
+        maliciousWorkflowPath,
+      ).replace(/\.ya?ml$/, '');
+
+      expect(getBuiltinWorkflow(traversalName, projectDir)).toBeNull();
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should not treat non-language builtin subtrees as builtin trust roots', () => {
+    const trustInfo = getWorkflowPathTrustInfo(
+      join(process.cwd(), 'builtins', 'project', 'workflows', 'not-a-builtin.yaml'),
+      process.cwd(),
+    );
+
+    expect(trustInfo.source).not.toBe('builtin');
   });
 });
 
