@@ -9,7 +9,13 @@ import { autoCommitAndPush } from '../../../infra/task/index.js';
 import { pushBranch } from '../../../infra/task/git.js';
 import { info, error, success } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
-import { buildPrBody, buildTaktManagedPrOptions, createPullRequestSafely, getGitProvider } from '../../../infra/git/index.js';
+import {
+  buildPrBody,
+  buildTaktManagedPrOptions,
+  createPullRequestSafely,
+  getGitProvider,
+  stripTaktManagedPrMarker,
+} from '../../../infra/git/index.js';
 import type { Issue, CreatePrResult } from '../../../infra/git/index.js';
 
 const log = createLogger('postExecution');
@@ -28,6 +34,7 @@ export interface PostExecutionOptions {
   branch?: string;
   baseBranch?: string;
   shouldCreatePr: boolean;
+  managedPr?: boolean;
   shouldPublishBranchToOrigin?: boolean;
   draftPr: boolean;
   workflowIdentifier?: string;
@@ -47,7 +54,20 @@ export interface PostExecutionResult {
  * Auto-commit, push, and optionally create a PR after successful task execution.
  */
 export async function postExecutionFlow(options: PostExecutionOptions): Promise<PostExecutionResult> {
-  const { execCwd, projectCwd, task, branch, baseBranch, shouldCreatePr, shouldPublishBranchToOrigin, draftPr, workflowIdentifier, issues, repo } = options;
+  const {
+    execCwd,
+    projectCwd,
+    task,
+    branch,
+    baseBranch,
+    shouldCreatePr,
+    managedPr,
+    shouldPublishBranchToOrigin,
+    draftPr,
+    workflowIdentifier,
+    issues,
+    repo,
+  } = options;
 
   const commitResult = autoCommitAndPush(execCwd, task, projectCwd, branch);
   if (commitResult.commitHash) {
@@ -88,9 +108,9 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
     const gitProvider = getGitProvider();
     const report = workflowIdentifier ? `Workflow \`${workflowIdentifier}\` completed successfully.` : 'Task completed successfully.';
     const existingPr = gitProvider.findExistingPr(branch, projectCwd);
+    const prBody = stripTaktManagedPrMarker(buildPrBody(issues, report));
     if (existingPr) {
-      const commentBody = buildPrBody(issues, report);
-      const commentResult = gitProvider.commentOnPr(existingPr.number, commentBody, projectCwd);
+      const commentResult = gitProvider.commentOnPr(existingPr.number, prBody, projectCwd);
       if (commentResult.success) {
         success(`PR updated with comment: ${existingPr.url}`);
         return { prUrl: existingPr.url };
@@ -104,8 +124,6 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
       }
     } else {
       info('Creating pull request...');
-      const prBody = buildPrBody(issues, report);
-      const managedPrOptions = buildTaktManagedPrOptions(prBody);
       const firstIssue = issues?.[0];
       const issuePrefix = firstIssue ? `[#${firstIssue.number}] ` : '';
       const truncatedTask = task.length > 100 - issuePrefix.length ? `${task.slice(0, 100 - issuePrefix.length - 3)}...` : task;
@@ -113,7 +131,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
       const prResult: CreatePrResult = createPullRequestSafely(gitProvider, {
         branch,
         title: prTitle,
-        ...managedPrOptions,
+        ...(managedPr === true ? buildTaktManagedPrOptions(prBody) : { body: prBody }),
         base: baseBranch,
         repo,
         draft: draftPr,

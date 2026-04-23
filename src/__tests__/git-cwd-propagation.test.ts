@@ -268,7 +268,8 @@ describe('cwd propagation: addTask wiring', () => {
     };
     mockFetchPrReviewComments.mockReturnValue(prReview);
 
-    vi.mock('../infra/task/index.js', () => ({
+    vi.mock('../infra/task/index.js', async (importOriginal) => ({
+      ...(await importOriginal<Record<string, unknown>>()),
       TaskRunner: vi.fn().mockImplementation(() => ({ addTask: vi.fn(() => ({ name: 'task-1' })) })),
       summarizeTaskName: vi.fn(async () => 'slug'),
       resolveTaskWorkflowValue: vi.fn((data?: Record<string, unknown>) => {

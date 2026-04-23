@@ -47,6 +47,7 @@ import { success, info } from '../shared/ui/index.js';
 import { confirm, promptInput } from '../shared/prompt/index.js';
 import { saveTaskFile, saveTaskFromInteractive } from '../features/tasks/add/index.js';
 import { getCurrentBranch, branchExists } from '../infra/task/index.js';
+import { summarizeTaskName } from '../infra/task/summarize.js';
 
 const mockSuccess = vi.mocked(success);
 const mockInfo = vi.mocked(info);
@@ -54,12 +55,18 @@ const mockConfirm = vi.mocked(confirm);
 const mockPromptInput = vi.mocked(promptInput);
 const mockGetCurrentBranch = vi.mocked(getCurrentBranch);
 const mockBranchExists = vi.mocked(branchExists);
+const mockSummarizeTaskName = vi.mocked(summarizeTaskName);
 
 let testDir: string;
 
 function loadTasks(testDir: string): { tasks: Array<Record<string, unknown>> } {
   const raw = fs.readFileSync(path.join(testDir, '.takt', 'tasks.yaml'), 'utf-8');
   return parseYaml(raw) as { tasks: Array<Record<string, unknown>> };
+}
+
+function expectNoTaskArtifacts(testDir: string): void {
+  expect(fs.existsSync(path.join(testDir, '.takt', 'tasks.yaml'))).toBe(false);
+  expect(fs.existsSync(path.join(testDir, '.takt', 'tasks'))).toBe(false);
 }
 
 beforeEach(() => {
@@ -155,6 +162,48 @@ describe('saveTaskFile', () => {
     const task = loadTasks(testDir).tasks[0]!;
     expect(task.auto_pr).toBe(true);
     expect(task.draft_pr).toBe(true);
+  });
+
+  it('should persist managed_pr when managedPr is true', async () => {
+    const options = {
+      worktree: true,
+      autoPr: true,
+      managedPr: true,
+    };
+
+    await saveTaskFile(testDir, 'Managed PR task', options);
+
+    const task = loadTasks(testDir).tasks[0]!;
+    expect(task.auto_pr).toBe(true);
+    expect(task.managed_pr).toBe(true);
+  });
+
+  it('should reject managed_pr when autoPr is false', async () => {
+    await expect(saveTaskFile(testDir, 'Managed PR task', {
+      worktree: true,
+      managedPr: true,
+    })).rejects.toThrow('managed_pr requires auto_pr to be true');
+    expect(mockSummarizeTaskName).not.toHaveBeenCalled();
+    expectNoTaskArtifacts(testDir);
+  });
+
+  it('should reject managed_pr when worktree is disabled', async () => {
+    await expect(saveTaskFile(testDir, 'Managed PR task', {
+      autoPr: true,
+      managedPr: true,
+    })).rejects.toThrow('managed_pr requires worktree to be enabled');
+    expect(mockSummarizeTaskName).not.toHaveBeenCalled();
+    expectNoTaskArtifacts(testDir);
+  });
+
+  it('should remove created task dir when runner.addTask fails after writing order.md', async () => {
+    fs.mkdirSync(path.join(testDir, '.takt'), { recursive: true });
+    fs.writeFileSync(path.join(testDir, '.takt', 'tasks.yaml'), 'tasks: [broken', 'utf-8');
+
+    await expect(saveTaskFile(testDir, 'Broken task config')).rejects.toThrow('Invalid tasks.yaml');
+
+    expect(fs.readFileSync(path.join(testDir, '.takt', 'tasks.yaml'), 'utf-8')).toBe('tasks: [broken');
+    expect(fs.existsSync(path.join(testDir, '.takt', 'tasks'))).toBe(false);
   });
 
   it('should persist should_publish_branch_to_origin when shouldPublishBranchToOrigin is true', async () => {

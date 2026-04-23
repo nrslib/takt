@@ -95,6 +95,7 @@ steps:
           enabled: true
           auto_pr: true
           draft_pr: true
+          managed_pr: true
     rules:
       - when: effect.enqueue_from_issue.enqueue_task.success == true
         next: wait_before_next_scan
@@ -141,6 +142,7 @@ steps:
           enabled: true
           auto_pr: true
           draft_pr: true
+          managed_pr: true
     rules:
       - when: effect.enqueue_fresh.enqueue_task.success == true
         next: wait_before_next_scan

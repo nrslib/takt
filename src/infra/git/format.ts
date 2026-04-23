@@ -9,18 +9,25 @@ import type { CreatePrOptions, Issue, PrReviewData } from './types.js';
 
 export const TAKT_MANAGED_PR_MARKER = '<!-- takt:managed -->';
 
+export function stripTaktManagedPrMarker(body: string): string {
+  return body
+    .split(TAKT_MANAGED_PR_MARKER)
+    .join('')
+    .replace(/\n{3,}/g, '\n\n')
+    .trimEnd();
+}
+
 export function isTaktManagedPrBody(body: string | null | undefined): boolean {
   if (!body) {
     return false;
   }
-  return body.includes(TAKT_MANAGED_PR_MARKER);
+  const normalizedBody = body.trimEnd();
+  return /(?:^|\n\n)<!-- takt:managed -->$/.test(normalizedBody);
 }
 
 function appendTaktManagedPrMarker(body: string): string {
-  if (body.includes(TAKT_MANAGED_PR_MARKER)) {
-    return body;
-  }
-  return `${body}\n\n${TAKT_MANAGED_PR_MARKER}`;
+  const strippedBody = stripTaktManagedPrMarker(body);
+  return `${strippedBody}\n\n${TAKT_MANAGED_PR_MARKER}`;
 }
 
 export function buildTaktManagedPrOptions(body: string): Pick<CreatePrOptions, 'body'> {

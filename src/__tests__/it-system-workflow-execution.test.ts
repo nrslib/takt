@@ -1520,6 +1520,7 @@ describe('system workflow execution integration', () => {
       baseBranch: 'improve',
       autoPr: true,
       draftPr: true,
+      managedPr: true,
     });
   });
 
@@ -1595,6 +1596,7 @@ describe('system workflow execution integration', () => {
       baseBranch: 'improve',
       autoPr: true,
       draftPr: true,
+      managedPr: true,
     });
   });
 

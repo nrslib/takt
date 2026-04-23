@@ -51,14 +51,20 @@ function validateIssuePayload(value: unknown): void {
 
 function validateWorktreePayload(value: unknown): void {
   const worktree = requireObject(value, 'worktree');
-  validateAllowedKeys(worktree, 'worktree', ['enabled', 'auto_pr', 'draft_pr']);
-  for (const key of ['enabled', 'auto_pr', 'draft_pr'] as const) {
+  validateAllowedKeys(worktree, 'worktree', ['enabled', 'auto_pr', 'draft_pr', 'managed_pr']);
+  for (const key of ['enabled', 'auto_pr', 'draft_pr', 'managed_pr'] as const) {
     if (worktree[key] !== undefined && typeof worktree[key] !== 'boolean') {
       throw new Error(`System effect requires boolean field "worktree.${key}"`);
     }
   }
-  if ((worktree.auto_pr === true || worktree.draft_pr === true) && worktree.enabled !== true) {
+  if ((worktree.auto_pr === true || worktree.draft_pr === true || worktree.managed_pr === true) && worktree.enabled !== true) {
+    if (worktree.managed_pr === true) {
+      throw new Error('System effect requires "worktree.enabled" when auto_pr, draft_pr, or managed_pr is true');
+    }
     throw new Error('System effect requires "worktree.enabled" when auto_pr or draft_pr is true');
+  }
+  if (worktree.managed_pr === true && worktree.auto_pr !== true) {
+    throw new Error('System effect requires "worktree.auto_pr" when "worktree.managed_pr" is true');
   }
 }
 

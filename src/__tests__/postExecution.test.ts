@@ -6,6 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { buildPrBody as buildActualPrBody, TAKT_MANAGED_PR_MARKER } from '../infra/git/format.js';
+import type { Issue } from '../infra/git/index.js';
 
 const {
   mockAutoCommitAndPush,
@@ -16,6 +17,7 @@ const {
   mockBuildPrBody,
   mockBuildTaktManagedPrOptions,
   mockCreatePullRequestSafely,
+  mockStripTaktManagedPrMarker,
 } =
   vi.hoisted(() => ({
     mockAutoCommitAndPush: vi.fn(),
@@ -28,6 +30,11 @@ const {
       body: `${body}\n\n<!-- takt:managed -->`,
     })),
     mockCreatePullRequestSafely: vi.fn(),
+    mockStripTaktManagedPrMarker: vi.fn((body: string) => body
+      .split('<!-- takt:managed -->')
+      .join('')
+      .replace(/\n{3,}/g, '\n\n')
+      .trimEnd()),
   }));
 
 vi.mock('../infra/task/index.js', () => ({
@@ -49,6 +56,7 @@ vi.mock('../infra/git/index.js', () => ({
   }),
   buildPrBody: (...args: unknown[]) => mockBuildPrBody(...args),
   buildTaktManagedPrOptions: (...args: unknown[]) => mockBuildTaktManagedPrOptions(...args as [string]),
+  stripTaktManagedPrMarker: (...args: unknown[]) => mockStripTaktManagedPrMarker(...args as [string]),
   createPullRequestSafely: (...args: unknown[]) => mockCreatePullRequestSafely(...args),
 }));
 
@@ -117,11 +125,48 @@ describe('postExecutionFlow', () => {
     const [createOptions, createCwd] = mockCreatePullRequest.mock.calls[0] as [Record<string, unknown>, string];
     expect(createCwd).toBe('/project');
     expect(createOptions).toEqual(expect.objectContaining({
-      body: 'pr-body\n\n<!-- takt:managed -->',
+      body: 'pr-body',
     }));
     expect(mockCommentOnPr).not.toHaveBeenCalled();
     expect(mockBuildPrBody).toHaveBeenCalledWith(undefined, 'Workflow `default` completed successfully.');
+    expect(mockBuildTaktManagedPrOptions).not.toHaveBeenCalled();
+  });
+
+  it('managedPr: true の場合だけ hidden marker 付きで新規PRを作成する', async () => {
+    mockFindExistingPr.mockReturnValue(undefined);
+    const options = { ...baseOptions, managedPr: true };
+
+    await postExecutionFlow(options);
+
+    expect(mockCreatePullRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: 'pr-body\n\n<!-- takt:managed -->',
+      }),
+      '/project',
+    );
     expect(mockBuildTaktManagedPrOptions).toHaveBeenCalledWith('pr-body');
+  });
+
+  it('managedPr ではない新規PRは issue 本文に marker があっても本文から除去する', async () => {
+    mockBuildPrBody.mockImplementation(buildActualPrBody);
+    mockFindExistingPr.mockReturnValue(undefined);
+    const issues: Issue[] = [{
+      number: 12,
+      title: 'Issue title',
+      body: `Issue body\n\n${TAKT_MANAGED_PR_MARKER}`,
+      labels: [],
+      comments: [],
+    }];
+
+    await postExecutionFlow({ ...baseOptions, issues });
+
+    const [createOptions, createCwd] = mockCreatePullRequest.mock.calls[0] as [Record<string, unknown>, string];
+    expect(createCwd).toBe('/project');
+    expect(createOptions).toEqual(expect.objectContaining({
+      body: '## Summary\n\nIssue body\n\n## Execution Report\n\nWorkflow `default` completed successfully.\n\nCloses #12',
+    }));
+    expect(String(createOptions.body)).not.toContain(TAKT_MANAGED_PR_MARKER);
+    expect(mockBuildTaktManagedPrOptions).not.toHaveBeenCalled();
   });
 
   it('autoCommitAndPush に branch パラメータが渡される', async () => {
@@ -148,6 +193,39 @@ describe('postExecutionFlow', () => {
     expect(commentBody).not.toContain(TAKT_MANAGED_PR_MARKER);
     expect(mockCreatePullRequest).not.toHaveBeenCalled();
     expect(mockBuildTaktManagedPrOptions).not.toHaveBeenCalled();
+  });
+
+  it('managedPr: true でも既存PR更新は hidden marker なしのコメントを使う', async () => {
+    mockBuildPrBody.mockImplementation(buildActualPrBody);
+    mockFindExistingPr.mockReturnValue({ number: 42, url: 'https://github.com/org/repo/pull/42' });
+
+    await postExecutionFlow({ ...baseOptions, managedPr: true });
+
+    const [commentPrNumber, commentBody, commentCwd] = mockCommentOnPr.mock.calls[0] as [number, string, string];
+    expect(commentPrNumber).toBe(42);
+    expect(commentCwd).toBe('/project');
+    expect(commentBody).toBe(buildActualPrBody(undefined, 'Workflow `default` completed successfully.'));
+    expect(commentBody).not.toContain(TAKT_MANAGED_PR_MARKER);
+    expect(mockCreatePullRequest).not.toHaveBeenCalled();
+    expect(mockBuildTaktManagedPrOptions).not.toHaveBeenCalled();
+  });
+
+  it('既存PR更新コメントも issue 本文に marker があれば除去する', async () => {
+    mockBuildPrBody.mockImplementation(buildActualPrBody);
+    mockFindExistingPr.mockReturnValue({ number: 42, url: 'https://github.com/org/repo/pull/42' });
+    const issues: Issue[] = [{
+      number: 34,
+      title: 'Issue title',
+      body: `Issue body\n\n${TAKT_MANAGED_PR_MARKER}`,
+      labels: [],
+      comments: [],
+    }];
+
+    await postExecutionFlow({ ...baseOptions, issues });
+
+    const [, commentBody] = mockCommentOnPr.mock.calls[0] as [number, string, string];
+    expect(commentBody).toBe('## Summary\n\nIssue body\n\n## Execution Report\n\nWorkflow `default` completed successfully.\n\nCloses #34');
+    expect(commentBody).not.toContain(TAKT_MANAGED_PR_MARKER);
   });
 
   it('shouldCreatePr が false の場合は PR 関連処理をスキップする', async () => {

@@ -163,6 +163,11 @@ describe('DefaultSystemStepServices', () => {
     mockCreateIssueFromTask.mockReset();
     mockTaskRunnerListAllTaskItems.mockReset();
     mockResolveBaseBranch.mockReset();
+    mockResolveCloneBaseDir.mockReset();
+    mockCloneAndIsolate.mockReset();
+    mockRemoveClone.mockReset();
+    mockMaterializeCloneHeadToRootBranch.mockReset();
+    mockRelayPushCloneToOrigin.mockReset();
     mockGetCurrentBranch.mockReturnValue('task/test-branch');
     mockFindExistingPr.mockReturnValue(undefined);
     mockListOpenIssues.mockReturnValue([]);
@@ -1479,7 +1484,7 @@ describe('DefaultSystemStepServices', () => {
       task: 'Plan follow-up',
     });
 
-    const result = await services.executeEffect({
+    const rawPayload = {
       type: 'enqueue_task',
       mode: 'new',
       workflow: 'takt-default',
@@ -1493,8 +1498,10 @@ describe('DefaultSystemStepServices', () => {
         enabled: true,
         auto_pr: true,
         draft_pr: true,
+        managed_pr: true,
       },
-    }, {
+    } as never;
+    const resolvedPayload = {
       mode: 'new',
       workflow: 'takt-default',
       task: 'Implement follow-up effect',
@@ -1507,8 +1514,11 @@ describe('DefaultSystemStepServices', () => {
         enabled: true,
         auto_pr: true,
         draft_pr: true,
+        managed_pr: true,
       },
-    }, {} as never);
+    } as never;
+
+    const result = await services.executeEffect(rawPayload, resolvedPayload, {} as never);
 
     expect(mockCreateIssueFromTask).toHaveBeenCalledWith('Implement follow-up effect', {
       cwd: '/repo',
@@ -1521,6 +1531,7 @@ describe('DefaultSystemStepServices', () => {
       baseBranch: 'improve',
       autoPr: true,
       draftPr: true,
+      managedPr: true,
     });
     expect(mockResolveBaseBranch).toHaveBeenCalledWith('/repo', 'improve');
     expect(result).toEqual({
@@ -1675,6 +1686,63 @@ describe('DefaultSystemStepServices', () => {
       worktree: { auto_pr: true },
     }, {} as never)).rejects.toThrow(
       'System effect requires "worktree.enabled" when auto_pr or draft_pr is true',
+    );
+  });
+
+  it('rejects enqueue_task managed_pr without auto_pr at the effect boundary', async () => {
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Plan follow-up',
+    });
+
+    await expect(services.executeEffect({
+      type: 'enqueue_task',
+      mode: 'new',
+      workflow: 'takt-default',
+      task: '{structured:plan.task_markdown}',
+      worktree: {
+        enabled: true,
+      },
+    }, {
+      mode: 'new',
+      workflow: 'takt-default',
+      task: 'Implement follow-up effect',
+      worktree: {
+        enabled: true,
+        managed_pr: true,
+      },
+    }, {} as never)).rejects.toThrow(
+      'System effect requires "worktree.auto_pr" when "worktree.managed_pr" is true',
+    );
+  });
+
+  it('rejects enqueue_task managed_pr without enabled at the effect boundary', async () => {
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Plan follow-up',
+    });
+
+    await expect(services.executeEffect({
+      type: 'enqueue_task',
+      mode: 'new',
+      workflow: 'takt-default',
+      task: '{structured:plan.task_markdown}',
+      worktree: {
+        auto_pr: true,
+        managed_pr: true,
+      },
+    }, {
+      mode: 'new',
+      workflow: 'takt-default',
+      task: 'Implement follow-up effect',
+      worktree: {
+        auto_pr: true,
+        managed_pr: true,
+      },
+    }, {} as never)).rejects.toThrow(
+      'System effect requires "worktree.enabled" when auto_pr, draft_pr, or managed_pr is true',
     );
   });
 

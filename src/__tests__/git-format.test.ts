@@ -18,6 +18,7 @@ import {
   buildPrBody,
   buildTaktManagedPrOptions,
   isTaktManagedPrBody,
+  stripTaktManagedPrMarker,
   TAKT_MANAGED_PR_MARKER,
 } from '../infra/git/format.js';
 import type { Issue, PrReviewData } from '../infra/git/types.js';
@@ -133,6 +134,14 @@ describe('buildTaktManagedPrOptions', () => {
       body,
     });
   });
+
+  it('body 内に混入した marker を除去して末尾 marker だけに正規化する', () => {
+    const result = buildTaktManagedPrOptions(`## Summary\n\nReport text\n\n${TAKT_MANAGED_PR_MARKER}\n\n## Execution Report`);
+
+    expect(result).toEqual({
+      body: '## Summary\n\nReport text\n\n## Execution Report\n\n<!-- takt:managed -->',
+    });
+  });
 });
 
 describe('isTaktManagedPrBody', () => {
@@ -172,6 +181,42 @@ Manual follow-up
 Task completed successfully.`;
 
     expect(isTaktManagedPrBody(body)).toBe(false);
+  });
+
+  it('本文途中の marker 混入だけでは TAKT 管理 PR と判定しない', () => {
+    const body = `## Summary
+
+Issue body
+
+${TAKT_MANAGED_PR_MARKER}
+
+## Execution Report
+
+Workflow \`default\` completed successfully.`;
+
+    expect(isTaktManagedPrBody(body)).toBe(false);
+  });
+});
+
+describe('stripTaktManagedPrMarker', () => {
+  it('本文中の marker を除去して空行を詰める', () => {
+    const body = `## Summary
+
+Issue body
+
+${TAKT_MANAGED_PR_MARKER}
+
+## Execution Report
+
+Workflow \`default\` completed successfully.`;
+
+    expect(stripTaktManagedPrMarker(body)).toBe(`## Summary
+
+Issue body
+
+## Execution Report
+
+Workflow \`default\` completed successfully.`);
   });
 });
 
