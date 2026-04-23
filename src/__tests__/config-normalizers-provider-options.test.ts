@@ -3,6 +3,7 @@ import {
   buildRawTaktProvidersOrThrow,
   denormalizeProviderOptions,
 } from '../infra/config/configNormalizers.js';
+import { normalizeProviderOptions } from '../infra/config/providerOptions.js';
 
 describe('denormalizeProviderOptions', () => {
   it('should convert camelCase provider options into persisted snake_case format', () => {
@@ -79,6 +80,24 @@ describe('denormalizeProviderOptions', () => {
         effort: 'medium',
       },
     });
+  });
+
+  it('should round-trip copilot effort through normalize and denormalize', () => {
+    const rawProviderOptions = {
+      copilot: {
+        effort: 'high',
+      },
+    };
+
+    const normalizedProviderOptions = normalizeProviderOptions(rawProviderOptions);
+    const denormalizedProviderOptions = denormalizeProviderOptions(normalizedProviderOptions);
+
+    expect(normalizedProviderOptions).toEqual({
+      copilot: {
+        effort: 'high',
+      },
+    });
+    expect(denormalizedProviderOptions).toEqual(rawProviderOptions);
   });
 });
 
