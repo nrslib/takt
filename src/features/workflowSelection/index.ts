@@ -17,9 +17,7 @@ export {
   type WorkflowSelectionItem,
   type SelectionOption,
 } from './options.js';
-export { selectWorkflowFromCategorizedWorkflows } from './categorizedSelection.js';
-export { selectWorkflowFromEntries } from './entrySelection.js';
-import { selectWorkflowFromCategorizedWorkflows } from './categorizedSelection.js';
+import { selectWorkflowFromCategorizedWorkflowSources } from './categorizedSelection.js';
 import { selectWorkflowFromEntries } from './entrySelection.js';
 import { warnMissingWorkflows } from './options.js';
 
@@ -46,7 +44,7 @@ export async function selectWorkflow(
     }
     const categorized = buildCategorizedWorkflows(allWorkflows, categoryConfig, resolveIgnoredWorkflows(cwd));
     warnMissingWorkflows(categorized.missingWorkflows.filter((missing) => missing.source === 'user'));
-    return selectWorkflowFromCategorizedWorkflows(categorized);
+    return selectWorkflowFromCategorizedWorkflowSources(categorized);
   }
 
   const entries = listStandaloneWorkflowEntries(cwd, { onWarning: warn });

@@ -1,15 +1,21 @@
 import { selectOption } from '../../shared/prompt/index.js';
 import type { SelectOptionItem } from '../../shared/prompt/index.js';
-import { getBookmarkedWorkflows, addBookmark, removeBookmark } from '../../infra/config/global/index.js';
-import type { CategorizedWorkflows, WorkflowCategoryNode } from '../../infra/config/index.js';
+import { addBookmark, getBookmarkedWorkflows, removeBookmark } from '../../infra/config/global/index.js';
+import type { CategorizedWorkflows, WorkflowCategoryNode, WorkflowWithSource } from '../../infra/config/index.js';
 import { info } from '../../shared/ui/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/index.js';
 import {
   applyBookmarks,
+  buildWorkflowOptionLabel,
+  buildUserDefinedWorkflowOptions,
+  buildWorkflowSourceOptions,
   type SelectionOption,
   parseCategorySelection,
   CATEGORY_VALUE_PREFIX,
+  splitWorkflowMapBySource,
+  type WorkflowSourceSelection,
 } from './options.js';
+import { selectFlatWorkflowOptions } from './flatSelection.js';
 
 const CUSTOM_CATEGORY_PREFIX = '__custom_category__:';
 
@@ -25,6 +31,7 @@ function getSelectableBookmarkedWorkflows(categorized: CategorizedWorkflows): st
 function buildCategoryLevelOptions(
   categories: WorkflowCategoryNode[],
   workflows: string[],
+  workflowMap: ReadonlyMap<string, WorkflowWithSource>,
 ): {
   options: SelectionOption[];
   categoryMap: Map<string, WorkflowCategoryNode>;
@@ -42,7 +49,7 @@ function buildCategoryLevelOptions(
 
   for (const workflowName of workflows) {
     options.push({
-      label: `🎼 ${sanitizeTerminalText(workflowName)}`,
+      label: buildWorkflowOptionLabel(workflowName, workflowMap.get(workflowName)?.source),
       value: workflowName,
     });
   }
@@ -52,6 +59,7 @@ function buildCategoryLevelOptions(
 
 async function selectWorkflowFromCategoryTree(
   categories: WorkflowCategoryNode[],
+  workflowMap: ReadonlyMap<string, WorkflowWithSource>,
   hasSourceSelection: boolean,
   rootWorkflows: string[] = [],
 ): Promise<string | null> {
@@ -67,7 +75,11 @@ async function selectWorkflowFromCategoryTree(
     const currentCategories = currentNode ? currentNode.children : categories;
     const currentWorkflows = currentNode ? currentNode.workflows : rootWorkflows;
     const currentPathLabel = sanitizeTerminalText(stack.map((node) => node.name).join(' / '));
-    const { options, categoryMap } = buildCategoryLevelOptions(currentCategories, currentWorkflows);
+    const { options, categoryMap } = buildCategoryLevelOptions(
+      currentCategories,
+      currentWorkflows,
+      workflowMap,
+    );
 
     if (options.length === 0) {
       if (stack.length === 0) {
@@ -130,7 +142,10 @@ async function selectTopLevelWorkflowOption(
 
     for (const workflowName of getSelectableBookmarkedWorkflows(categorized)) {
       options.push({
-        label: `🎼 ${sanitizeTerminalText(workflowName)} [*]`,
+        label: `${buildWorkflowOptionLabel(
+          workflowName,
+          categorized.allWorkflows.get(workflowName)?.source,
+        )} [*]`,
         value: workflowName,
       });
     }
@@ -178,6 +193,81 @@ async function selectTopLevelWorkflowOption(
   return node ? { type: 'category', node } : null;
 }
 
+function filterCategoryTreeBySources(
+  categories: WorkflowCategoryNode[],
+  workflows: ReadonlyMap<string, WorkflowWithSource>,
+  allowedSources: ReadonlySet<WorkflowWithSource['source']>,
+): WorkflowCategoryNode[] {
+  const filtered: WorkflowCategoryNode[] = [];
+
+  for (const category of categories) {
+    const categoryWorkflows = category.workflows.filter(
+      (workflowName) => {
+        const workflow = workflows.get(workflowName);
+        return workflow ? allowedSources.has(workflow.source) : false;
+      },
+    );
+    const children = filterCategoryTreeBySources(category.children, workflows, allowedSources);
+    if (categoryWorkflows.length === 0 && children.length === 0) {
+      continue;
+    }
+    filtered.push({
+      name: category.name,
+      workflows: categoryWorkflows,
+      children,
+    });
+  }
+
+  return filtered;
+}
+
+function buildBuiltinCategorizedWorkflows(
+  categorized: CategorizedWorkflows,
+  builtinWorkflows: Map<string, WorkflowWithSource>,
+): CategorizedWorkflows {
+  const builtinSources = new Set<WorkflowWithSource['source']>(['builtin', 'repertoire']);
+  return {
+    categories: filterCategoryTreeBySources(categorized.categories, categorized.allWorkflows, builtinSources),
+    allWorkflows: builtinWorkflows,
+    missingWorkflows: categorized.missingWorkflows.filter((workflow) => workflow.source === 'builtin'),
+  };
+}
+
+export async function selectWorkflowFromCategorizedWorkflowSources(
+  categorized: CategorizedWorkflows,
+): Promise<string | null> {
+  const { builtinWorkflows, userDefinedWorkflows } = splitWorkflowMapBySource(categorized.allWorkflows);
+  while (true) {
+    const selectedSource = await selectOption<WorkflowSourceSelection>(
+      'Select workflow source:',
+      buildWorkflowSourceOptions(builtinWorkflows.size, userDefinedWorkflows.length),
+    );
+    if (!selectedSource) {
+      return null;
+    }
+
+    if (selectedSource === 'builtin') {
+      if (builtinWorkflows.size === 0) {
+        info('No builtin workflows available.');
+        continue;
+      }
+      return selectWorkflowFromCategorizedWorkflows(
+        buildBuiltinCategorizedWorkflows(categorized, builtinWorkflows),
+      );
+    }
+
+    if (userDefinedWorkflows.length === 0) {
+      info('No user-defined workflows available.');
+      continue;
+    }
+
+    return selectFlatWorkflowOptions(
+      buildUserDefinedWorkflowOptions(userDefinedWorkflows),
+      'No user-defined workflows available.',
+    );
+  }
+}
+
 export async function selectWorkflowFromCategorizedWorkflows(
   categorized: CategorizedWorkflows,
 ): Promise<string | null> {
@@ -192,6 +282,7 @@ export async function selectWorkflowFromCategorizedWorkflows(
 
     const workflow = await selectWorkflowFromCategoryTree(
       selection.node.children,
+      categorized.allWorkflows,
       true,
       selection.node.workflows,
     );

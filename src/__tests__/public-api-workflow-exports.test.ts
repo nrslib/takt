@@ -18,4 +18,12 @@ describe('public API workflow exports', () => {
     expect('listWorkflows' in api).toBe(true);
     expect('isWorkflowPath' in api).toBe(true);
   });
+
+  it('should not expose internal workflow selectors from the feature barrel', async () => {
+    const api = await import('../features/workflowSelection/index.js');
+
+    expect('selectWorkflow' in api).toBe(true);
+    expect('selectWorkflowFromEntries' in api).toBe(false);
+    expect('selectWorkflowFromCategorizedWorkflows' in api).toBe(false);
+  });
 });
