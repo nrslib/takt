@@ -1,8 +1,3 @@
-/**
- * Agent execution runners
- */
-
-import { basename, dirname } from 'node:path';
 import {
   loadCustomAgents,
   loadAgentPrompt,
@@ -23,8 +18,9 @@ import type { AgentResponse, CustomAgentConfig } from '../core/models/index.js';
 import { resolveAgentProviderModel } from '../core/workflow/provider-resolution.js';
 import { DEFAULT_PROVIDER_PERMISSION_PROFILES, resolveStepPermissionMode } from '../core/workflow/permission-profile-resolution.js';
 import { createLogger } from '../shared/utils/index.js';
-import { loadTemplate } from '../shared/prompts/index.js';
 import type { RunAgentOptions } from './types.js';
+import { buildWrappedSystemPrompt } from './runner-prompt.js';
+import { extractPersonaName } from './persona-spec.js';
 
 export type { RunAgentOptions, StreamCallback } from './types.js';
 
@@ -35,12 +31,6 @@ type ResolvedProviderOptionsHandoff = {
 
 type RunnerHandoffOptions = RunAgentOptions & ResolvedProviderOptionsHandoff;
 
-/**
- * Agent execution runner.
- *
- * Resolves agent configuration (provider, model, prompt) and
- * delegates execution to the appropriate provider.
- */
 export class AgentRunner {
   private static resolvePersonaProviders(cwd: string) {
     return resolveConfigValue(cwd, 'personaProviders');
@@ -92,25 +82,6 @@ export class AgentRunner {
     };
   }
 
-  /**
-   * Get persona name from path or spec.
-   * For personas in subdirectories, includes parent dir for pattern matching.
-   */
-  private static extractPersonaName(personaSpec: string): string {
-    if (!personaSpec.endsWith('.md')) {
-      return personaSpec;
-    }
-
-    const name = basename(personaSpec, '.md');
-    const dir = basename(dirname(personaSpec));
-
-    if (dir === 'personas' || dir === '.') {
-      return name;
-    }
-
-    return `${dir}/${name}`;
-  }
-
   private static resolveProviderOptions(
     cwd: string,
     personaDisplayName: string | undefined,
@@ -140,7 +111,6 @@ export class AgentRunner {
     );
   }
 
-  /** Build ProviderCallOptions from RunAgentOptions */
   private static buildCallOptions(
     resolvedModel: string | undefined,
     resolvedProvider: ProviderType,
@@ -194,7 +164,6 @@ export class AgentRunner {
     return options.permissionMode;
   }
 
-  /** Run a custom agent */
   async runCustom(
     agentConfig: CustomAgentConfig,
     task: string,
@@ -204,6 +173,7 @@ export class AgentRunner {
     const providerType = resolved.provider;
     const provider = getProvider(providerType);
     const resolvedSystemPrompt = loadAgentPrompt(agentConfig, options.cwd);
+    const systemPrompt = buildWrappedSystemPrompt(resolvedSystemPrompt, options);
     const customOptions: RunnerHandoffOptions = {
       ...options,
       allowedTools: options.allowedTools ?? agentConfig.allowedTools,
@@ -216,13 +186,13 @@ export class AgentRunner {
     );
 
     options.onPromptResolved?.({
-      systemPrompt: resolvedSystemPrompt,
+      systemPrompt,
       userInstruction: task,
     });
 
     const agent = provider.setup({
       name: agentConfig.name,
-      systemPrompt: resolvedSystemPrompt,
+      systemPrompt,
     });
 
     return agent.call(task, AgentRunner.buildCallOptions(
@@ -235,13 +205,12 @@ export class AgentRunner {
     ));
   }
 
-  /** Run an agent by name, path, inline prompt string, or no agent at all */
   async run(
     personaSpec: string | undefined,
     task: string,
     options: RunAgentOptions,
   ): Promise<AgentResponse> {
-    const personaName = personaSpec ? AgentRunner.extractPersonaName(personaSpec) : 'default';
+    const personaName = personaSpec ? extractPersonaName(personaSpec) : 'default';
     log.debug('Running agent', {
       personaSpec: personaSpec ?? '(none)',
       personaName,
@@ -272,27 +241,12 @@ export class AgentRunner {
       resolved.globalConfig,
     );
 
-    // 1. If personaPath is provided (resolved file exists), load prompt from file
-    //    and wrap it through the perform_agent_system_prompt template
     if (options.personaPath) {
       const agentDefinition = loadPersonaPromptFromPath(
         options.personaPath,
         options.projectCwd ?? options.cwd,
       );
-      const language = options.language ?? 'en';
-      const templateVars: Record<string, string> = { agentDefinition };
-
-      if (options.workflowMeta) {
-        templateVars.workflowName = options.workflowMeta.workflowName;
-        templateVars.workflowDescription = options.workflowMeta.workflowDescription ?? '';
-        templateVars.currentStep = options.workflowMeta.currentStep;
-        templateVars.stepsList = options.workflowMeta.stepsList
-          .map((m, i) => `${i + 1}. ${m.name}${m.description ? ` - ${m.description}` : ''}`)
-          .join('\n');
-        templateVars.currentPosition = options.workflowMeta.currentPosition;
-      }
-
-      const systemPrompt = loadTemplate('perform_agent_system_prompt', language, templateVars);
+      const systemPrompt = buildWrappedSystemPrompt(agentDefinition, options);
       options.onPromptResolved?.({
         systemPrompt,
         userInstruction: task,
@@ -301,8 +255,6 @@ export class AgentRunner {
       return agent.call(task, callOptions);
     }
 
-    // 2. If personaSpec is provided but no personaPath (file not found), try custom agent first,
-    //    then use the string as inline system prompt
     if (personaSpec) {
       const customAgents = loadCustomAgents();
       const agentConfig = customAgents.get(personaName);
@@ -310,15 +262,16 @@ export class AgentRunner {
         return this.runCustom(agentConfig, task, options);
       }
 
+      const systemPrompt = buildWrappedSystemPrompt(personaSpec, options);
+
       options.onPromptResolved?.({
-        systemPrompt: personaSpec,
+        systemPrompt,
         userInstruction: task,
       });
-      const agent = provider.setup({ name: personaName, systemPrompt: personaSpec });
+      const agent = provider.setup({ name: personaName, systemPrompt });
       return agent.call(task, callOptions);
     }
 
-    // 3. No persona specified — run with the resolved instruction only (no system prompt)
     options.onPromptResolved?.({
       systemPrompt: '',
       userInstruction: task,
@@ -327,8 +280,6 @@ export class AgentRunner {
     return agent.call(task, callOptions);
   }
 }
-
-// ---- Module-level function facade ----
 
 const defaultRunner = new AgentRunner();
 

@@ -14,6 +14,19 @@ import type { ProviderType } from '../shared/types/provider.js';
 
 export type { StreamCallback };
 
+export interface WorkflowProcessSafetyMeta {
+  protectedParentRunPid: number;
+}
+
+export interface WorkflowMeta {
+  workflowName: string;
+  workflowDescription?: string;
+  currentStep: string;
+  stepsList: ReadonlyArray<{ name: string; description?: string }>;
+  currentPosition: string;
+  processSafety?: WorkflowProcessSafetyMeta;
+}
+
 /** Common options for running agents */
 export interface RunAgentOptions {
   cwd: string;
@@ -40,13 +53,7 @@ export interface RunAgentOptions {
   onAskUserQuestion?: AskUserQuestionHandler;
   bypassPermissions?: boolean;
   language?: Language;
-  workflowMeta?: {
-    workflowName: string;
-    workflowDescription?: string;
-    currentStep: string;
-    stepsList: ReadonlyArray<{ name: string; description?: string }>;
-    currentPosition: string;
-  };
+  workflowMeta?: WorkflowMeta;
   outputSchema?: Record<string, unknown>;
   onPromptResolved?: (promptParts: {
     systemPrompt: string;
