@@ -16,14 +16,7 @@ import type { StructuredCaller } from '../../agents/structured-caller.js';
 import type { SystemStepServicesFactory } from './system/system-step-services.js';
 import type { ProviderOptionsOriginResolver, ProviderOptionsSource, ProviderResolutionSource } from './provider-options-trace.js';
 
-// Re-export shared provider protocol types to maintain backward compatibility.
-// The canonical definitions live in shared/types/provider.ts so that shared-layer
-// modules (StreamDisplay, providerEventLogger) can import them without creating
-// an upward shared → core dependency.
-import type {
-  ProviderType,
-  StreamCallback,
-} from '../../shared/types/provider.js';
+import type { ProviderType, StreamCallback } from '../../shared/types/provider.js';
 export type {
   ProviderType,
   StreamEvent,
