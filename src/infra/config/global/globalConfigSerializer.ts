@@ -210,5 +210,8 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
   if (config.interactivePreviewSteps !== undefined) {
     raw.interactive_preview_steps = config.interactivePreviewSteps;
   }
+  if (config.syncProjectLocalTaktOnRetry !== undefined) {
+    raw.sync_project_local_takt_on_retry = config.syncProjectLocalTaktOnRetry;
+  }
   return raw;
 }

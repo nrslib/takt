@@ -1093,6 +1093,39 @@ unexpected_overrides:
     });
   });
 
+  describe('sync_project_local_takt_on_retry round-trip', () => {
+    it('should load sync_project_local_takt_on_retry config key', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(configPath, 'sync_project_local_takt_on_retry: false\n', 'utf-8');
+
+      const loaded = loadProjectConfig(testDir) as Record<string, unknown>;
+
+      expect(loaded.syncProjectLocalTaktOnRetry).toBe(false);
+    });
+
+    it('should round-trip sync_project_local_takt_on_retry config key', () => {
+      const config = {
+        syncProjectLocalTaktOnRetry: false,
+      } as ProjectLocalConfig;
+
+      saveProjectConfig(testDir, config);
+      const reloaded = loadProjectConfig(testDir) as Record<string, unknown>;
+
+      expect(reloaded.syncProjectLocalTaktOnRetry).toBe(false);
+    });
+
+    it('should save syncProjectLocalTaktOnRetry using sync_project_local_takt_on_retry key', () => {
+      const config = {
+        syncProjectLocalTaktOnRetry: false,
+      } as ProjectLocalConfig;
+
+      saveProjectConfig(testDir, config);
+
+      const saved = readFileSync(join(testDir, '.takt', 'config.yaml'), 'utf-8');
+      expect(saved).toContain('sync_project_local_takt_on_retry: false');
+    });
+  });
+
   describe('workflow_mcp_servers round-trip', () => {
     it('should load workflow_mcp_servers config block', () => {
       const configPath = join(testDir, '.takt', 'config.yaml');
