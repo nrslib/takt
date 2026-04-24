@@ -100,7 +100,7 @@ describe('quietMode: summary AI session isolation', () => {
     mockSelectPostSummaryAction.mockResolvedValue('execute');
 
     // When
-    const result = await quietMode('/test/cwd', 'fix the bug');
+    const result = await quietMode('/test/cwd', { userMessage: 'fix the bug' });
 
     // Then: callAIWithRetry was called exactly once
     expect(mockCallAIWithRetry).toHaveBeenCalledOnce();
@@ -126,7 +126,7 @@ describe('quietMode: summary AI session isolation', () => {
     mockSelectPostSummaryAction.mockResolvedValue('execute');
 
     // When
-    await quietMode('/test/cwd', 'バグを修正する');
+    await quietMode('/test/cwd', { userMessage: 'バグを修正する' });
 
     // Then: sessionId is cleared but other fields are preserved
     const calledCtx = mockCallAIWithRetry.mock.calls[0]![4] as SessionContext;
@@ -142,7 +142,7 @@ describe('quietMode: summary AI session isolation', () => {
     mockCallAIWithRetry.mockResolvedValue({ result: null, sessionId: undefined });
 
     // When
-    const result = await quietMode('/test/cwd', 'some input');
+    const result = await quietMode('/test/cwd', { userMessage: 'some input' });
 
     // Then
     expect(result.action).toBe('cancel');
@@ -155,7 +155,7 @@ describe('quietMode: summary AI session isolation', () => {
     mockBuildSummaryPrompt.mockReturnValue(null);
 
     // When
-    const result = await quietMode('/test/cwd', 'some input');
+    const result = await quietMode('/test/cwd', { userMessage: 'some input' });
 
     // Then: short-circuits before callAIWithRetry
     expect(mockCallAIWithRetry).not.toHaveBeenCalled();

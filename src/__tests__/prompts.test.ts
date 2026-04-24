@@ -70,6 +70,20 @@ describe('variable substitution', () => {
     expect(result).toContain('Worktree ID: wt-1');
   });
 
+  it('replaces sourceContext variable in score_summary_system_prompt', () => {
+    const result = loadTemplate('score_summary_system_prompt', 'en', {
+      hasWorkflowPreview: false,
+      workflowName: '',
+      workflowDescription: '',
+      stepDetails: '',
+      conversation: 'Conversation: User: test',
+      taskHistory: '',
+      sourceContext: '## Source Context\nPR context',
+    });
+    expect(result).toContain('## Source Context');
+    expect(result).toContain('PR context');
+  });
+
   it('replaces multiple different variables', () => {
     const result = loadTemplate('perform_judge_message', 'en', {
       agentOutput: 'test output',
@@ -191,11 +205,13 @@ describe('template content integrity', () => {
     const en = loadTemplate('score_interactive_policy', 'en');
     expect(en).toContain('Interactive Mode Policy');
     expect(en).toContain('Principles');
+    expect(en).toContain('Source Context Handling');
     expect(en).toContain('Strict Requirements');
 
     const ja = loadTemplate('score_interactive_policy', 'ja');
     expect(ja).toContain('対話モードポリシー');
     expect(ja).toContain('原則');
+    expect(ja).toContain('Source Context の扱い');
     expect(ja).toContain('厳守事項');
   });
 
@@ -203,6 +219,7 @@ describe('template content integrity', () => {
     const interactiveEn = loadTemplate('score_interactive_system_prompt', 'en');
     expect(interactiveEn).toContain('workflow execution');
     expect(interactiveEn).toContain('## Workflow Structure');
+    expect(interactiveEn).toContain('## Source Context Handling');
     expect(interactiveEn).toContain('**Workflow:** {{runWorkflow}}');
     expect(interactiveEn).toContain('### Step Logs');
     expect(findDeprecatedTerms(interactiveEn)).toEqual([]);
@@ -210,6 +227,7 @@ describe('template content integrity', () => {
     const interactiveJa = loadTemplate('score_interactive_system_prompt', 'ja');
     expect(interactiveJa).toContain('ワークフロー実行用の指示書');
     expect(interactiveJa).toContain('## ワークフロー構成');
+    expect(interactiveJa).toContain('## Source Context の扱い');
     expect(interactiveJa).toContain('**ワークフロー:** {{runWorkflow}}');
     expect(interactiveJa).toContain('### ステップログ');
     expect(findDeprecatedTerms(interactiveJa)).toEqual([]);

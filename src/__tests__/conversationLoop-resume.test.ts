@@ -338,7 +338,7 @@ describe('conversation logging', () => {
       ctx,
       defaultStrategy,
       undefined,
-      'secret prefilled input',
+      { sourceContext: 'secret prefilled input' },
     );
 
     expect(result).toEqual({
@@ -346,7 +346,7 @@ describe('conversation logging', () => {
       task: 'secret implementation details',
     });
     expect(mockLogger.debug).toHaveBeenCalledWith(
-      'Loaded initial input into local history without auto-submitting to AI',
+      'Loaded initial input as source context without auto-submitting to AI',
       {
         hasInitialInput: true,
         initialInputLength: 'secret prefilled input'.length,
@@ -358,7 +358,7 @@ describe('conversation logging', () => {
       taskLength: 'secret implementation details'.length,
     });
     expect(mockLogger.debug).not.toHaveBeenCalledWith(
-      'Loaded initial input into local history without auto-submitting to AI',
+      'Loaded initial input as source context without auto-submitting to AI',
       expect.objectContaining({
         initialInput: 'secret prefilled input',
       }),

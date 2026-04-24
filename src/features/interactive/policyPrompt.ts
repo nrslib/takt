@@ -1,4 +1,5 @@
 import { loadTemplate } from '../../shared/prompts/index.js';
+import { prependSourceContext } from './promptSections.js';
 
 function getPolicyIntro(lang: 'en' | 'ja'): string {
   return lang === 'ja'
@@ -12,8 +13,13 @@ function getPolicyReminder(lang: 'en' | 'ja'): string {
     : 'Please follow the policy guidelines defined in the Policy section above.';
 }
 
-export function buildInteractivePolicyPrompt(lang: 'en' | 'ja', userMessage: string): string {
+export function buildInteractivePolicyPrompt(
+  lang: 'en' | 'ja',
+  userMessage: string,
+  sourceContext?: string,
+): string {
   const policyContent = loadTemplate('score_interactive_policy', lang, {});
+  const promptBody = prependSourceContext(lang, userMessage, sourceContext);
 
-  return `## Policy\n${getPolicyIntro(lang)}\n\n${policyContent}\n\n---\n\n${userMessage}\n\n---\n**Policy Reminder:** ${getPolicyReminder(lang)}`;
+  return `## Policy\n${getPolicyIntro(lang)}\n\n${policyContent}\n\n---\n\n${promptBody}\n\n---\n**Policy Reminder:** ${getPolicyReminder(lang)}`;
 }

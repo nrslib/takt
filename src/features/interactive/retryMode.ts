@@ -130,7 +130,8 @@ export async function runRetryMode(
   const strategy: ConversationStrategy = {
     systemPrompt,
     allowedTools: RETRY_TOOLS,
-    transformPrompt: (userMessage: string) => buildInteractivePolicyPrompt(ctx.lang, userMessage),
+    transformPrompt: (userMessage: string, sourceContext?: string) =>
+      buildInteractivePolicyPrompt(ctx.lang, userMessage, sourceContext),
     introMessage: introLabel,
     selectAction: createSelectActionWithoutExecute(ui),
     previousOrderContent: previousOrderContent ?? undefined,

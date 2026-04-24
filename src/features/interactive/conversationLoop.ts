@@ -25,6 +25,7 @@ import {
   type InteractiveModeResult,
   type InteractiveUIText,
   type ConversationMessage,
+  type InteractiveSeedInput,
   type PostSummaryAction,
   buildSummaryPrompt,
   selectPostSummaryAction,
@@ -63,7 +64,7 @@ export interface ConversationStrategy {
   /** Allowed tools for AI calls */
   allowedTools: string[];
   /** Transform user message before sending to AI (e.g., policy injection) */
-  transformPrompt: (userMessage: string) => string;
+  transformPrompt: (userMessage: string, sourceContext?: string) => string;
   /** Intro message displayed at start */
   introMessage: string;
   /** Custom action selector (optional). If not provided, uses default selectPostSummaryAction. */
@@ -85,9 +86,12 @@ export async function runConversationLoop(
   ctx: SessionContext,
   strategy: ConversationStrategy,
   workflowContext: WorkflowContext | undefined,
-  initialInput: string | undefined,
+  initialInput: InteractiveSeedInput | undefined,
 ): Promise<InteractiveModeResult> {
-  const history: ConversationMessage[] = [];
+  const history: ConversationMessage[] = initialInput?.userMessage
+    ? [{ role: 'user', content: initialInput.userMessage }]
+    : [];
+  const sourceContext = initialInput?.sourceContext;
   let sessionId = ctx.sessionId;
   const ui = getLabelObject<InteractiveUIText>('interactive.ui', ctx.lang);
   const conversationLabel = getLabel('interactive.conversationLabel', ctx.lang);
@@ -108,10 +112,9 @@ export async function runConversationLoop(
     return result;
   }
 
-  if (initialInput) {
-    history.push({ role: 'user', content: initialInput });
-    log.debug('Loaded initial input into local history without auto-submitting to AI', {
-      ...createInputLogMeta(initialInput, sessionId),
+  if (sourceContext) {
+    log.debug('Loaded initial input as source context without auto-submitting to AI', {
+      ...createInputLogMeta(sourceContext, sessionId),
     });
   }
 
@@ -158,7 +161,7 @@ export async function runConversationLoop(
       });
       process.stdin.pause();
 
-      const promptWithTransform = strategy.transformPrompt(trimmed);
+      const promptWithTransform = strategy.transformPrompt(trimmed, sourceContext);
       const result = await doCallAI(promptWithTransform, strategy.systemPrompt, strategy.allowedTools);
       if (result) {
         if (!result.success) {
@@ -205,7 +208,7 @@ export async function runConversationLoop(
       case SlashCommand.Go: {
         const userNote = match.text;
         let summaryPrompt = buildSummaryPrompt(
-          history, !!sessionId, ctx.lang, noTranscript, conversationLabel, workflowContext,
+          history, !!sessionId, ctx.lang, noTranscript, conversationLabel, workflowContext, sourceContext,
         );
         if (!summaryPrompt) {
           info(ui.noConversation);

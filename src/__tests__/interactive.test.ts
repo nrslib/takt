@@ -206,20 +206,23 @@ describe('interactiveMode', () => {
     expect(prompt).toContain('test message');
   });
 
-  it('should not auto-submit initialInput before user interaction', async () => {
+  it('should keep initialInput as source context before user interaction', async () => {
     // Given: initialInput provided, then user types /go
     setupRawStdin(toRawInputs(['/go']));
     setupMockProvider(['Clarify task for "a".']);
 
     // When
-    const result = await interactiveMode('/project', 'a');
+    const result = await interactiveMode('/project', { sourceContext: 'a' });
 
-    // Then: initial input is kept in local history and only /go summary call reaches AI
+    // Then: initial input is kept as source context and only /go summary call reaches AI
     const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
     expect(mockProvider._call).toHaveBeenCalledTimes(1);
     const firstPrompt = mockProvider._call.mock.calls[0]?.[0] as string;
-    expect(firstPrompt).toContain('Conversation:');
-    expect(firstPrompt).toContain('User: a');
+    expect(firstPrompt).toContain('Source Context');
+    expect(firstPrompt).toContain('a');
+    expect(firstPrompt).toContain('untrusted external reference data');
+    expect(firstPrompt).toContain('```text');
+    expect(firstPrompt).not.toContain('User: a');
 
     expect(result.action).toBe('execute');
     expect(result.task).toBe('Clarify task for "a".');
@@ -231,20 +234,43 @@ describe('interactiveMode', () => {
     setupMockProvider(['Got it, fixing login page.', 'Fix login page with clarified scope.']);
 
     // When
-    const result = await interactiveMode('/project', 'a');
+    const result = await interactiveMode('/project', { sourceContext: 'a' });
 
     // Then: first AI call is from explicit follow-up input, second is /go summary
     const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
     expect(mockProvider._call).toHaveBeenCalledTimes(2);
     const firstPrompt = mockProvider._call.mock.calls[0]?.[0] as string;
     const secondPrompt = mockProvider._call.mock.calls[1]?.[0] as string;
+    expect(firstPrompt).toContain('Source Context');
+    expect(firstPrompt).toContain('a');
+    expect(firstPrompt).toContain('untrusted external reference data');
+    expect(firstPrompt).toContain('```text');
     expect(firstPrompt).toContain('fix the login page');
-    expect(secondPrompt).toContain('User: a');
+    expect(secondPrompt).toContain('Source Context');
+    expect(secondPrompt).toContain('a');
+    expect(secondPrompt).toContain('untrusted external reference data');
+    expect(secondPrompt).toContain('```text');
+    expect(secondPrompt).not.toContain('User: a');
     expect(secondPrompt).toContain('User: fix the login page');
 
     // Task still contains all history for downstream use
     expect(result.action).toBe('execute');
     expect(result.task).toBe('Fix login page with clarified scope.');
+  });
+
+  it('should keep direct task as conversation input instead of source context', async () => {
+    setupRawStdin(toRawInputs(['/go']));
+    setupMockProvider(['Clarify direct task.']);
+
+    const result = await interactiveMode('/project', { userMessage: 'fix login' });
+
+    const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
+    expect(mockProvider._call).toHaveBeenCalledTimes(1);
+    const summaryPrompt = mockProvider._call.mock.calls[0]?.[0] as string;
+    expect(summaryPrompt).toContain('User: fix login');
+    expect(summaryPrompt).not.toContain('## Source Context\n');
+    expect(summaryPrompt).not.toContain('```text\nfix login\n```');
+    expect(result).toEqual({ action: 'execute', task: 'Clarify direct task.' });
   });
 
   it('should pass sessionId to provider when sessionId parameter is given', async () => {
@@ -331,7 +357,7 @@ describe('interactiveMode', () => {
     } as unknown as ReturnType<typeof getProvider>);
 
     setupRawStdin(toRawInputs(['/cancel']));
-    const result = await interactiveMode('/project', 'trigger');
+    const result = await interactiveMode('/project', { userMessage: 'trigger' });
     expect(result.action).toBe('cancel');
     expect(mockCall).not.toHaveBeenCalled();
   });

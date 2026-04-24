@@ -12,12 +12,17 @@ import { getLabel } from '../../shared/i18n/index.js';
 import {
   type WorkflowContext,
   type InteractiveModeResult,
+  type InteractiveSeedInput,
   DEFAULT_INTERACTIVE_TOOLS,
 } from './interactive.js';
 import {
   displayAndClearSessionState,
   runConversationLoop,
 } from './conversationLoop.js';
+import {
+  prependSourceContext,
+  prependSourceContextGuardToSystemPrompt,
+} from './promptSections.js';
 import { initializeSession } from './sessionInitialization.js';
 
 /**
@@ -36,7 +41,7 @@ import { initializeSession } from './sessionInitialization.js';
 export async function personaMode(
   cwd: string,
   firstStep: FirstStepInfo,
-  initialInput?: string,
+  initialInput?: InteractiveSeedInput,
   workflowContext?: WorkflowContext,
 ): Promise<InteractiveModeResult> {
   const ctx = initializeSession(cwd, 'persona-interactive');
@@ -50,9 +55,9 @@ export async function personaMode(
   const introMessage = `${getLabel('interactive.ui.intro', ctx.lang)} [${firstStep.personaDisplayName}]`;
 
   return runConversationLoop(cwd, ctx, {
-    systemPrompt: firstStep.personaContent,
+    systemPrompt: prependSourceContextGuardToSystemPrompt(ctx.lang, firstStep.personaContent),
     allowedTools,
-    transformPrompt: (msg) => msg,
+    transformPrompt: (msg, sourceContext) => prependSourceContext(ctx.lang, msg, sourceContext),
     introMessage,
   }, workflowContext, initialInput);
 }

@@ -23,6 +23,7 @@ const {
   mockCheckCliStatus,
   mockFetchIssue,
   mockFetchPrReviewComments,
+  mockGetWorkflowDescription,
   mockResolveConfigValues,
   mockResolveAssistantConfigLayers,
   mockLoadPersonaSessions,
@@ -31,6 +32,7 @@ const {
   mockCheckCliStatus: vi.fn(),
   mockFetchIssue: vi.fn(),
   mockFetchPrReviewComments: vi.fn(),
+  mockGetWorkflowDescription: vi.fn(() => ({ name: 'default', description: 'test workflow', workflowStructure: '', stepPreviews: [] })),
   mockResolveConfigValues: vi.fn(() => ({ language: 'en', interactivePreviewSteps: 3, provider: 'claude' })),
   mockResolveAssistantConfigLayers: vi.fn(() => ({ local: {}, global: {} })),
   mockLoadPersonaSessions: vi.fn(() => ({})),
@@ -91,7 +93,7 @@ vi.mock('../infra/task/index.js', () => ({
 }));
 
 vi.mock('../infra/config/index.js', () => ({
-  getWorkflowDescription: vi.fn(() => ({ name: 'default', description: 'test workflow', workflowStructure: '', stepPreviews: [] })),
+  getWorkflowDescription: (...args: unknown[]) => mockGetWorkflowDescription(...args),
   resolveConfigValues: (...args: unknown[]) => mockResolveConfigValues(...args),
   resolveConfigValue: vi.fn(() => undefined),
   loadPersonaSessions: (...args: unknown[]) => mockLoadPersonaSessions(...args),
@@ -123,7 +125,13 @@ vi.mock('../app/cli/helpers.js', () => ({
 }));
 
 import { selectAndExecuteTask, determineWorkflow, saveTaskFromInteractive } from '../features/tasks/index.js';
-import { interactiveMode } from '../features/interactive/index.js';
+import {
+  interactiveMode,
+  passthroughMode,
+  quietMode,
+  personaMode,
+  selectInteractiveMode,
+} from '../features/interactive/index.js';
 import { executePipeline } from '../features/pipeline/index.js';
 import { executeDefaultAction } from '../app/cli/routing.js';
 import { error as logError } from '../shared/ui/index.js';
@@ -133,6 +141,10 @@ import type { PrReviewData } from '../infra/git/index.js';
 const mockSelectAndExecuteTask = vi.mocked(selectAndExecuteTask);
 const mockDetermineWorkflow = vi.mocked(determineWorkflow);
 const mockInteractiveMode = vi.mocked(interactiveMode);
+const mockPassthroughMode = vi.mocked(passthroughMode);
+const mockQuietMode = vi.mocked(quietMode);
+const mockPersonaMode = vi.mocked(personaMode);
+const mockSelectInteractiveMode = vi.mocked(selectInteractiveMode);
 const mockExecutePipeline = vi.mocked(executePipeline);
 const mockLogError = vi.mocked(logError);
 const mockSaveTaskFromInteractive = vi.mocked(saveTaskFromInteractive);
@@ -159,7 +171,12 @@ beforeEach(() => {
     delete mockOpts[key];
   }
   mockDetermineWorkflow.mockResolvedValue('default');
+  mockGetWorkflowDescription.mockReturnValue({ name: 'default', description: 'test workflow', workflowStructure: '', stepPreviews: [] });
   mockInteractiveMode.mockResolvedValue({ action: 'execute', task: 'summarized task' });
+  mockPassthroughMode.mockResolvedValue({ action: 'execute', task: 'passthrough task' });
+  mockQuietMode.mockResolvedValue({ action: 'execute', task: 'summarized task' });
+  mockPersonaMode.mockResolvedValue({ action: 'execute', task: 'summarized task' });
+  mockSelectInteractiveMode.mockResolvedValue('assistant');
   mockListAllTaskItems.mockReturnValue([]);
   mockIsStaleRunningTask.mockReturnValue(false);
   mockResolveConfigValuesFn.mockReturnValue({ language: 'en', interactivePreviewSteps: 3, provider: 'claude' });
@@ -184,7 +201,9 @@ describe('PR resolution in routing', () => {
       expect(mockFetchPrReviewComments).toHaveBeenCalledWith(456, undefined);
       expect(mockInteractiveMode).toHaveBeenCalledWith(
         '/test/cwd',
-        expect.stringContaining('## PR #456 Review Comments:'),
+        {
+          sourceContext: expect.stringContaining('## PR #456 Review Comments:'),
+        },
         expect.anything(),
         undefined,
         undefined,
@@ -289,12 +308,90 @@ describe('PR resolution in routing', () => {
       // Then: PR title/description/files are still passed to interactive mode
       expect(mockInteractiveMode).toHaveBeenCalledWith(
         '/test/cwd',
-        expect.stringContaining('## PR #456 Review Comments:'),
+        {
+          sourceContext: expect.stringContaining('## PR #456 Review Comments:'),
+        },
         expect.anything(),
         undefined,
         undefined,
         { excludeActions: ['create_issue'] },
       );
+    });
+
+    it('should pass PR context only to quiet mode', async () => {
+      mockOpts.pr = 456;
+      mockSelectInteractiveMode.mockResolvedValueOnce('quiet');
+      const prReview = createMockPrReview();
+      mockCheckCliStatus.mockReturnValue({ available: true });
+      mockFetchPrReviewComments.mockReturnValue(prReview);
+
+      await executeDefaultAction();
+
+      expect(mockQuietMode).toHaveBeenCalledWith(
+        '/test/cwd',
+        {
+          sourceContext: expect.stringContaining('## PR #456 Review Comments:'),
+        },
+        expect.anything(),
+      );
+      expect(mockInteractiveMode).not.toHaveBeenCalled();
+    });
+
+    it('should pass PR context only to persona mode', async () => {
+      mockOpts.pr = 456;
+      mockSelectInteractiveMode.mockResolvedValueOnce('persona');
+      mockGetWorkflowDescription.mockReturnValueOnce({
+        name: 'default',
+        description: 'test workflow',
+        workflowStructure: '',
+        stepPreviews: [],
+        firstStep: {
+          personaContent: 'You are a coder.',
+          personaDisplayName: 'Coder',
+          allowedTools: ['Read'],
+        },
+      });
+      const prReview = createMockPrReview();
+      mockCheckCliStatus.mockReturnValue({ available: true });
+      mockFetchPrReviewComments.mockReturnValue(prReview);
+
+      await executeDefaultAction();
+
+      expect(mockPersonaMode).toHaveBeenCalledWith(
+        '/test/cwd',
+        expect.anything(),
+        {
+          sourceContext: expect.stringContaining('## PR #456 Review Comments:'),
+        },
+        expect.anything(),
+      );
+      expect(mockInteractiveMode).not.toHaveBeenCalled();
+    });
+
+    it('should not offer passthrough mode when only PR source context is available', async () => {
+      mockOpts.pr = 456;
+      const prReview = createMockPrReview();
+      mockCheckCliStatus.mockReturnValue({ available: true });
+      mockFetchPrReviewComments.mockReturnValue(prReview);
+
+      await executeDefaultAction();
+
+      expect(mockSelectInteractiveMode).toHaveBeenCalledWith(
+        'en',
+        undefined,
+        ['assistant', 'persona', 'quiet'],
+      );
+      expect(mockInteractiveMode).toHaveBeenCalledWith(
+        '/test/cwd',
+        {
+          sourceContext: expect.stringContaining('## PR #456 Review Comments:'),
+        },
+        expect.anything(),
+        undefined,
+        undefined,
+        { excludeActions: ['create_issue'] },
+      );
+      expect(mockPassthroughMode).not.toHaveBeenCalled();
     });
 
     it('should not resolve issues when --pr is specified', async () => {

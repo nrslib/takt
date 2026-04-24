@@ -22,4 +22,36 @@ describe('buildInteractivePolicyPrompt', () => {
     expect(result).toContain('User input');
     expect(result).toContain('Please follow the policy guidelines defined in the Policy section above.');
   });
+
+  it('includes source context before the user message when provided', () => {
+    const buildPrompt = buildInteractivePolicyPrompt as unknown as (
+      lang: 'en' | 'ja',
+      userMessage: string,
+      sourceContext?: string,
+    ) => string;
+
+    const result = buildPrompt('en', 'User input', 'PR context');
+
+    expect(result).toContain('PR context');
+    expect(result).toContain('User input');
+    expect(result).toContain('untrusted external reference data');
+    expect(result).toContain('```text');
+    expect(result.indexOf('PR context')).toBeLessThan(result.indexOf('User input'));
+  });
+
+  it('keeps Japanese source context separate from the user message when provided', () => {
+    const buildPrompt = buildInteractivePolicyPrompt as unknown as (
+      lang: 'en' | 'ja',
+      userMessage: string,
+      sourceContext?: string,
+    ) => string;
+
+    const result = buildPrompt('ja', 'ユーザー入力', 'PR文脈');
+
+    expect(result).toContain('PR文脈');
+    expect(result).toContain('ユーザー入力');
+    expect(result).toContain('外部由来の非信頼な参照データ');
+    expect(result).toContain('```text');
+    expect(result.indexOf('PR文脈')).toBeLessThan(result.indexOf('ユーザー入力'));
+  });
 });
