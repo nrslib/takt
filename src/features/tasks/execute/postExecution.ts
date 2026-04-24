@@ -39,6 +39,7 @@ export interface PostExecutionOptions {
   draftPr: boolean;
   workflowIdentifier?: string;
   issues?: Issue[];
+  orderContent?: string;
   repo?: string;
 }
 
@@ -66,6 +67,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
     draftPr,
     workflowIdentifier,
     issues,
+    orderContent,
     repo,
   } = options;
 
@@ -108,7 +110,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
     const gitProvider = getGitProvider();
     const report = workflowIdentifier ? `Workflow \`${workflowIdentifier}\` completed successfully.` : 'Task completed successfully.';
     const existingPr = gitProvider.findExistingPr(branch, projectCwd);
-    const prBody = stripTaktManagedPrMarker(buildPrBody(issues, report));
+    const prBody = stripTaktManagedPrMarker(buildPrBody(issues, report, orderContent));
     if (existingPr) {
       const commentResult = gitProvider.commentOnPr(existingPr.number, prBody, projectCwd);
       if (commentResult.success) {

@@ -634,6 +634,39 @@ describe('executeAndCompleteTask', () => {
     );
   });
 
+  it('should pass order content from task spec into postExecutionFlow', async () => {
+    const task = createTask('task-order-content');
+    task.taskDir = '.takt/tasks/task-order-content';
+    mockResolveTaskExecution.mockResolvedValue({
+      execCwd: '/worktree/clone',
+      workflowIdentifier: 'default',
+      isWorktree: true,
+      autoPr: true,
+      draftPr: false,
+      shouldPublishBranchToOrigin: true,
+      taskPrompt: undefined,
+      reportDirName: '20260216-task-order-content',
+      branch: 'takt/task-order-content',
+      worktreePath: '/worktree/clone',
+      baseBranch: 'main',
+      startStep: undefined,
+      retryNote: undefined,
+      issueNumber: undefined,
+      orderContent: '## Task\n\nUse the full order.md content.',
+    });
+    mockExecuteWorkflow.mockResolvedValue({ success: true });
+    mockPostExecutionFlow.mockResolvedValue({});
+
+    const result = await executeAndCompleteTaskWithoutWorkflow(task, createTaskRunnerMock() as never, '/project');
+
+    expect(result).toBe(true);
+    expect(mockPostExecutionFlow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orderContent: '## Task\n\nUse the full order.md content.',
+      }),
+    );
+  });
+
   it('should mark task as pr_failed when origin push fails for shouldPublishBranchToOrigin without auto_pr', async () => {
     const task = createTask('task-pr-style-push-failure');
     mockResolveTaskExecution.mockResolvedValue({

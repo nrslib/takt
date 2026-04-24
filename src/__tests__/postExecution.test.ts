@@ -128,8 +128,24 @@ describe('postExecutionFlow', () => {
       body: 'pr-body',
     }));
     expect(mockCommentOnPr).not.toHaveBeenCalled();
-    expect(mockBuildPrBody).toHaveBeenCalledWith(undefined, 'Workflow `default` completed successfully.');
+    expect(mockBuildPrBody).toHaveBeenCalledWith(undefined, 'Workflow `default` completed successfully.', undefined);
     expect(mockBuildTaktManagedPrOptions).not.toHaveBeenCalled();
+  });
+
+  it('orderContent がある場合は buildPrBody に渡して新規PR本文を構築する', async () => {
+    mockFindExistingPr.mockReturnValue(undefined);
+
+    await postExecutionFlow({
+      ...baseOptions,
+      orderContent: '## Task\n\nUse order.md as the PR summary.',
+    });
+
+    expect(mockBuildPrBody).toHaveBeenCalledWith(
+      undefined,
+      'Workflow `default` completed successfully.',
+      '## Task\n\nUse order.md as the PR summary.',
+    );
+    expect(mockCreatePullRequest).toHaveBeenCalledTimes(1);
   });
 
   it('managedPr: true の場合だけ hidden marker 付きで新規PRを作成する', async () => {
@@ -193,6 +209,19 @@ describe('postExecutionFlow', () => {
     expect(commentBody).not.toContain(TAKT_MANAGED_PR_MARKER);
     expect(mockCreatePullRequest).not.toHaveBeenCalled();
     expect(mockBuildTaktManagedPrOptions).not.toHaveBeenCalled();
+  });
+
+  it('既存PR更新でも orderContent を使った Summary をコメント本文に含める', async () => {
+    mockBuildPrBody.mockImplementation(buildActualPrBody);
+    mockFindExistingPr.mockReturnValue({ number: 42, url: 'https://github.com/org/repo/pull/42' });
+    const orderContent = '## Task\n\nUse order.md as the PR summary.';
+
+    await postExecutionFlow({ ...baseOptions, orderContent });
+
+    const [, commentBody] = mockCommentOnPr.mock.calls[0] as [number, string, string];
+    expect(commentBody).toContain(orderContent);
+    expect(commentBody).toContain('## Execution Report');
+    expect(mockCreatePullRequest).not.toHaveBeenCalled();
   });
 
   it('managedPr: true でも既存PR更新は hidden marker なしのコメントを使う', async () => {

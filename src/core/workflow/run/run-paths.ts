@@ -5,6 +5,8 @@ export interface RunPaths {
   readonly runRootRel: string;
   readonly reportsRel: string;
   readonly contextRel: string;
+  readonly contextTaskRel: string;
+  readonly contextTaskOrderRel: string;
   readonly contextKnowledgeRel: string;
   readonly contextPolicyRel: string;
   readonly contextPreviousResponsesRel: string;
@@ -13,6 +15,8 @@ export interface RunPaths {
   readonly runRootAbs: string;
   readonly reportsAbs: string;
   readonly contextAbs: string;
+  readonly contextTaskAbs: string;
+  readonly contextTaskOrderAbs: string;
   readonly contextKnowledgeAbs: string;
   readonly contextPolicyAbs: string;
   readonly contextPreviousResponsesAbs: string;
@@ -30,6 +34,8 @@ export function buildRunPaths(cwd: string, slug: string, namespace?: string[]): 
   const runRootRel = `.takt/runs/${slug}`;
   const reportsRel = joinRel(`${runRootRel}/reports`, namespace);
   const contextRel = joinRel(`${runRootRel}/context`, namespace);
+  const contextTaskRel = join(contextRel, 'task');
+  const contextTaskOrderRel = join(contextTaskRel, 'order.md');
   const contextKnowledgeRel = join(contextRel, 'knowledge');
   const contextPolicyRel = join(contextRel, 'policy');
   const contextPreviousResponsesRel = join(contextRel, 'previous_responses');
@@ -41,6 +47,8 @@ export function buildRunPaths(cwd: string, slug: string, namespace?: string[]): 
     runRootRel,
     reportsRel,
     contextRel,
+    contextTaskRel,
+    contextTaskOrderRel,
     contextKnowledgeRel,
     contextPolicyRel,
     contextPreviousResponsesRel,
@@ -49,6 +57,8 @@ export function buildRunPaths(cwd: string, slug: string, namespace?: string[]): 
     runRootAbs: join(cwd, runRootRel),
     reportsAbs: join(cwd, reportsRel),
     contextAbs: join(cwd, contextRel),
+    contextTaskAbs: join(cwd, contextTaskRel),
+    contextTaskOrderAbs: join(cwd, contextTaskOrderRel),
     contextKnowledgeAbs: join(cwd, contextKnowledgeRel),
     contextPolicyAbs: join(cwd, contextPolicyRel),
     contextPreviousResponsesAbs: join(cwd, contextPreviousResponsesRel),

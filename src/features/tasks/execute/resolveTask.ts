@@ -7,7 +7,6 @@ import {
 } from '../../../infra/config/index.js';
 import {
   type TaskInfo,
-  buildTaskInstruction,
   createSharedCloneAbortable,
   resolveBaseBranch,
   resolveCloneBaseDir,
@@ -24,6 +23,7 @@ import { withProgress } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage, isRealPathInside } from '../../../shared/utils/index.js';
 import { generateReportDir } from '../../../shared/utils/reportDir.js';
 import { getTaskSlugFromTaskDir } from '../../../shared/utils/taskPaths.js';
+import { stageTaskSpecForExecution } from './taskSpecContext.js';
 
 const log = createLogger('task');
 
@@ -52,6 +52,7 @@ export interface ResolvedTaskExecution {
   isWorktree: boolean;
   reportDirName: string;
   taskPrompt?: string;
+  orderContent?: string;
   branch?: string;
   worktreePath?: string;
   baseBranch?: string;
@@ -112,27 +113,6 @@ function resolveRetryResume(
   };
 }
 
-function stageTaskSpecForExecution(
-  projectCwd: string,
-  execCwd: string,
-  taskDir: string,
-  reportDirName: string,
-): string {
-  const sourceOrderPath = path.join(projectCwd, taskDir, 'order.md');
-  if (!fs.existsSync(sourceOrderPath)) {
-    throw new Error(`Task spec file is missing: ${sourceOrderPath}`);
-  }
-
-  const targetTaskDir = path.join(execCwd, '.takt', 'runs', reportDirName, 'context', 'task');
-  const targetOrderPath = path.join(targetTaskDir, 'order.md');
-  fs.mkdirSync(targetTaskDir, { recursive: true });
-  fs.copyFileSync(sourceOrderPath, targetOrderPath);
-
-  const runTaskDir = `.takt/runs/${reportDirName}/context/task`;
-  const orderFile = `${runTaskDir}/order.md`;
-  return buildTaskInstruction(runTaskDir, orderFile);
-}
-
 function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw new Error('Task execution aborted');
@@ -185,6 +165,7 @@ export async function resolveTaskExecution(
   let isWorktree = false;
   let reportDirName: string | undefined;
   let taskPrompt: string | undefined;
+  let orderContent: string | undefined;
   let branch: string | undefined;
   let worktreePath: string | undefined;
   let baseBranch: string | undefined;
@@ -238,7 +219,9 @@ export async function resolveTaskExecution(
   }
 
   if (task.taskDir && reportDirName) {
-    taskPrompt = stageTaskSpecForExecution(defaultCwd, execCwd, task.taskDir, reportDirName);
+    const stagedTaskSpec = stageTaskSpecForExecution(defaultCwd, execCwd, task.taskDir, reportDirName);
+    taskPrompt = stagedTaskSpec.taskPrompt;
+    orderContent = stagedTaskSpec.orderContent;
   }
 
   const resolvedReportDirName = reportDirName ?? generateReportDir(taskPrompt ?? task.content);
@@ -270,6 +253,7 @@ export async function resolveTaskExecution(
     managedPr,
     shouldPublishBranchToOrigin,
     ...(taskPrompt ? { taskPrompt } : {}),
+    ...(orderContent !== undefined ? { orderContent } : {}),
     ...(branch ? { branch } : {}),
     ...(worktreePath ? { worktreePath } : {}),
     ...(baseBranch ? { baseBranch } : {}),

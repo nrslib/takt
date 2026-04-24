@@ -5,8 +5,9 @@
  * to inject into conversation system prompts.
  */
 
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { readRunContextOrderContent } from '../../core/workflow/run/order-content.js';
 
 /**
  * Find and read the previous order.md content from a run directory.
@@ -26,12 +27,12 @@ export function findPreviousOrderContent(worktreeCwd: string, runSlug: string | 
 }
 
 function readOrderFromRun(worktreeCwd: string, slug: string): string | null {
-  const orderPath = join(worktreeCwd, '.takt', 'runs', slug, 'context', 'task', 'order.md');
-  if (!existsSync(orderPath)) {
+  const content = readRunContextOrderContent(worktreeCwd, slug);
+  if (content === undefined) {
     return null;
   }
-  const content = readFileSync(orderPath, 'utf-8').trim();
-  return content || null;
+  const trimmedContent = content.trim();
+  return trimmedContent || null;
 }
 
 function findOrderFromLatestRun(worktreeCwd: string): string | null {

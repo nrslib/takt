@@ -114,6 +114,43 @@ describe('buildPrBody', () => {
     expect(result).not.toContain('Closes');
     expect(result).not.toContain(TAKT_MANAGED_PR_MARKER);
   });
+
+  it('should use order content as summary when issues are absent', () => {
+    const orderContent = '## Task\n\nImplement the requested change as written.';
+
+    const result = buildPrBody(undefined, 'Report text', orderContent);
+
+    expect(result).toContain('## Summary');
+    expect(result).toContain(orderContent);
+    expect(result).toContain('## Execution Report');
+    expect(result).toContain('Report text');
+    expect(result).not.toContain('Closes');
+  });
+
+  it('should prefer issue content over order content when both are provided', () => {
+    const issues: Issue[] = [{
+      number: 5,
+      title: 'Fix bug',
+      body: 'Bug description',
+      labels: [],
+      comments: [],
+    }];
+    const orderContent = 'Task instructions that should not be used.';
+
+    const result = buildPrBody(issues, 'Report text', orderContent);
+
+    expect(result).toContain('Bug description');
+    expect(result).not.toContain(orderContent);
+    expect(result).toContain('Closes #5');
+  });
+
+  it('should keep summary empty when order content is blank and issues are absent', () => {
+    const result = buildPrBody(undefined, 'Report text', '   \n\n');
+
+    expect(result).toContain('## Summary\n\n## Execution Report');
+    expect(result).toContain('Report text');
+    expect(result).not.toContain('Closes');
+  });
 });
 
 describe('buildTaktManagedPrOptions', () => {

@@ -7,6 +7,7 @@
 
 import { Dirent, existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
+import { readRunContextOrderContent } from '../../core/workflow/run/order-content.js';
 import { readRunMetaBySlug } from '../../core/workflow/run/run-meta.js';
 import {
   PROVIDER_EVENTS_LOG_FILE_SUFFIX,
@@ -261,12 +262,7 @@ export function loadPreviousOrderContent(cwd: string, taskContent: string): stri
     return null;
   }
 
-  const orderPath = join(cwd, '.takt', 'runs', slug, 'context', 'task', 'order.md');
-  if (!existsSync(orderPath)) {
-    return null;
-  }
-
-  return readFileSync(orderPath, 'utf-8');
+  return readRunContextOrderContent(cwd, slug) ?? null;
 }
 
 /**

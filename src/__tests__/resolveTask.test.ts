@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { TaskInfo } from '../infra/task/index.js';
 import * as infraTask from '../infra/task/index.js';
+import * as runOrderContent from '../core/workflow/run/order-content.js';
 import { unexpectedWorkflowKey } from '../../test/helpers/unknown-contract-test-keys.js';
 
 const mockGetGitProvider = vi.hoisted(() => vi.fn());
@@ -475,6 +476,7 @@ describe('resolveTaskExecution', () => {
       isWorktree: false,
       autoPr: true,
       draftPr: false,
+      orderContent: '# task instruction',
       shouldPublishBranchToOrigin: true,
       reportDirName: 'issue-task-123',
       issueNumber: 12345,
@@ -482,6 +484,104 @@ describe('resolveTaskExecution', () => {
     });
     expect(fs.existsSync(expectedReportOrderPath)).toBe(true);
     expect(fs.readFileSync(expectedReportOrderPath, 'utf-8')).toBe('# task instruction');
+  });
+
+  it('should stage order.md into the worktree run context and return order content', async () => {
+    const root = createTempProjectDir();
+    const worktreePath = createTempProjectDir();
+    const taskDir = '.takt/tasks/worktree-task-123';
+    const sourceTaskDir = path.join(root, taskDir);
+    const sourceOrderPath = path.join(sourceTaskDir, 'order.md');
+    const orderContent = '# worktree task instruction';
+    fs.mkdirSync(sourceTaskDir, { recursive: true });
+    fs.writeFileSync(sourceOrderPath, orderContent);
+
+    const task = createTask({
+      slug: 'worktree-task-123',
+      taskDir,
+      data: ({
+        task: 'Run worktree task',
+        workflow: 'default',
+        worktree: true,
+        branch: 'feature/worktree-task-123',
+        auto_pr: true,
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      worktreePath: undefined,
+      status: 'pending',
+    });
+
+    const mockResolveBaseBranch = vi.spyOn(infraTask, 'resolveBaseBranch').mockReturnValue({
+      branch: 'main',
+    });
+    const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedCloneAbortable').mockResolvedValue({
+      path: worktreePath,
+      branch: 'feature/worktree-task-123',
+    });
+
+    const result = await resolveTaskExecutionStrict(task, root);
+    const stagedOrderPath = path.join(worktreePath, '.takt', 'runs', 'worktree-task-123', 'context', 'task', 'order.md');
+
+    expect(result).toMatchObject({
+      execCwd: worktreePath,
+      workflowIdentifier: 'default',
+      isWorktree: true,
+      autoPr: true,
+      draftPr: false,
+      shouldPublishBranchToOrigin: true,
+      reportDirName: 'worktree-task-123',
+      branch: 'feature/worktree-task-123',
+      worktreePath,
+      orderContent,
+      taskPrompt: expect.stringContaining('Primary spec: `.takt/runs/worktree-task-123/context/task/order.md`'),
+    });
+    expect(fs.readFileSync(stagedOrderPath, 'utf-8')).toBe(orderContent);
+
+    mockCreateSharedClone.mockRestore();
+    mockResolveBaseBranch.mockRestore();
+  });
+
+  it('should reject symlinked order.md before staging task context', async () => {
+    const root = createTempProjectDir();
+    const taskDir = '.takt/tasks/symlink-task-123';
+    const sourceTaskDir = path.join(root, taskDir);
+    const linkedOrderPath = path.join(root, 'shared-order.md');
+    const orderContent = '# symlink task instruction';
+    fs.mkdirSync(sourceTaskDir, { recursive: true });
+    fs.writeFileSync(linkedOrderPath, orderContent);
+    fs.symlinkSync(linkedOrderPath, path.join(sourceTaskDir, 'order.md'));
+
+    const task = createTask({
+      taskDir,
+      data: ({
+        task: 'Run symlink task',
+        workflow: 'default',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+    });
+
+    const stagedOrderPath = path.join(root, '.takt', 'runs', 'symlink-task-123', 'context', 'task', 'order.md');
+
+    await expect(resolveTaskExecutionStrict(task, root)).rejects.toThrow(
+      `Task spec file must be a regular file: ${path.join(sourceTaskDir, 'order.md')}`,
+    );
+    expect(fs.existsSync(stagedOrderPath)).toBe(false);
+  });
+
+  it('should not read run context order content when task_dir is absent', async () => {
+    const root = createTempProjectDir();
+    const readRunContextOrderContentSpy = vi.spyOn(runOrderContent, 'readRunContextOrderContent');
+    const task = createTask({
+      content: 'Run task without task_dir',
+      data: ({
+        task: 'Run task without task_dir',
+        workflow: 'default',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+    });
+
+    const result = await resolveTaskExecutionStrict(task, root);
+
+    expect(result.orderContent).toBeUndefined();
+    expect(readRunContextOrderContentSpy).not.toHaveBeenCalled();
+    readRunContextOrderContentSpy.mockRestore();
   });
 
   it('should pass base_branch to shared clone options when worktree task has base_branch', async () => {

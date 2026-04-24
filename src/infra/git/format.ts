@@ -161,13 +161,18 @@ export function formatPrReviewAsTask(prReview: PrReviewData): string {
  * Build PR body from issues and execution report.
  * Supports multiple issues (adds "Closes #N" for each).
  */
-export function buildPrBody(issues: Issue[] | undefined, report: string): string {
+export function buildPrBody(issues: Issue[] | undefined, report: string, orderContent?: string): string {
   const parts: string[] = [];
+  const summary = issues && issues.length > 0
+    ? issues[0]!.body || issues[0]!.title
+    : orderContent?.trim()
+      ? orderContent
+      : undefined;
 
   parts.push('## Summary');
-  if (issues && issues.length > 0) {
+  if (summary) {
     parts.push('');
-    parts.push(issues[0]!.body || issues[0]!.title);
+    parts.push(summary);
   }
 
   parts.push('');

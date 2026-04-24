@@ -105,6 +105,7 @@ export async function executeTaskAndCompleteWithResult(
       managedPr,
       shouldPublishBranchToOrigin,
       issueNumber,
+      orderContent,
       maxStepsOverride,
       initialIterationOverride,
     } = await resolveTaskExecution(task, cwd, taskAbortSignal);
@@ -164,6 +165,7 @@ export async function executeTaskAndCompleteWithResult(
         draftPr,
         workflowIdentifier,
         issues,
+        orderContent,
       });
       prUrl = postResult.prUrl;
       if (postResult.prFailed) {
