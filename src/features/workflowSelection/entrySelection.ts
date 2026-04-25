@@ -6,30 +6,44 @@ import { sanitizeTerminalText } from '../../shared/utils/index.js';
 import {
   applyBookmarks,
   buildCategoryWorkflowOptions,
-  buildUserDefinedWorkflowOptions,
-  buildWorkflowOptionLabel,
-  buildWorkflowSourceOptions,
   buildTopLevelSelectOptions,
   buildWorkflowSelectionItems,
   parseCategorySelection,
-  splitEntriesBySource,
   type SelectionOption,
-  type WorkflowSourceSelection,
 } from './options.js';
-import { selectFlatWorkflowOptions } from './flatSelection.js';
 
-async function selectBuiltinWorkflowFromEntries(
+async function selectWorkflowFromEntriesWithCategories(
   entries: WorkflowDirEntry[],
 ): Promise<string | null> {
+  if (entries.length === 0) {
+    return null;
+  }
+
   const items = buildWorkflowSelectionItems(entries);
+  const availableWorkflows = entries.map((entry) => entry.name);
   const hasCategories = items.some((item) => item.type === 'category');
 
   if (!hasCategories) {
-    const baseOptions: SelectionOption[] = entries.map((entry) => ({
-      label: buildWorkflowOptionLabel(entry.name, entry.source),
-      value: entry.name,
+    const baseOptions: SelectionOption[] = availableWorkflows.map((name) => ({
+      label: `🎼 ${sanitizeTerminalText(name)}`,
+      value: name,
     }));
-    return selectFlatWorkflowOptions(baseOptions, 'No builtin workflows available.');
+    const buildFlatOptions = (): SelectionOption[] =>
+      applyBookmarks(baseOptions, getBookmarkedWorkflows());
+
+    return selectOption<string>('Select workflow:', buildFlatOptions(), {
+      onKeyPress: (key: string, value: string): SelectOptionItem<string>[] | null => {
+        if (key === 'b') {
+          addBookmark(value);
+          return buildFlatOptions();
+        }
+        if (key === 'r') {
+          removeBookmark(value);
+          return buildFlatOptions();
+        }
+        return null;
+      },
+    });
   }
 
   while (true) {
@@ -94,46 +108,29 @@ async function selectBuiltinWorkflowFromEntries(
   }
 }
 
-async function selectUserDefinedWorkflowEntries(
-  entries: WorkflowDirEntry[],
-): Promise<string | null> {
-  return selectFlatWorkflowOptions(
-    buildUserDefinedWorkflowOptions(entries),
-    'No user-defined workflows available.',
-  );
-}
-
 export async function selectWorkflowFromEntries(
   entries: WorkflowDirEntry[],
 ): Promise<string | null> {
-  if (entries.length === 0) {
-    return null;
-  }
+  const builtinEntries = entries.filter((entry) => entry.source === 'builtin');
+  const customEntries = entries.filter((entry) => entry.source !== 'builtin');
 
-  const { builtinEntries, userDefinedEntries } = splitEntriesBySource(entries);
-
-  while (true) {
-    const selectedSource = await selectOption<WorkflowSourceSelection>(
+  if (builtinEntries.length > 0 && customEntries.length > 0) {
+    const selectedSource = await selectOption<'custom' | 'builtin'>(
       'Select workflow source:',
-      buildWorkflowSourceOptions(builtinEntries.length, userDefinedEntries.length),
+      [
+        { label: `Custom workflows (${customEntries.length})`, value: 'custom' },
+        { label: `Builtin workflows (${builtinEntries.length})`, value: 'builtin' },
+      ],
     );
     if (!selectedSource) {
       return null;
     }
-
-    if (selectedSource === 'builtin') {
-      if (builtinEntries.length === 0) {
-        await selectBuiltinWorkflowFromEntries(builtinEntries);
-        continue;
-      }
-      return selectBuiltinWorkflowFromEntries(builtinEntries);
-    }
-
-    if (userDefinedEntries.length === 0) {
-      await selectUserDefinedWorkflowEntries(userDefinedEntries);
-      continue;
-    }
-
-    return selectUserDefinedWorkflowEntries(userDefinedEntries);
+    return selectWorkflowFromEntriesWithCategories(
+      selectedSource === 'custom' ? customEntries : builtinEntries,
+    );
   }
+
+  return selectWorkflowFromEntriesWithCategories(
+    customEntries.length > 0 ? customEntries : builtinEntries,
+  );
 }
