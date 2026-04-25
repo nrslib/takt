@@ -17,6 +17,7 @@ language: en        # UI language: en | ja
 # base_branch: main                # Base branch to clone from (default: current branch)
 # concurrency: 1                   # Number of tasks to run concurrently in takt run (1-10)
 # task_poll_interval_ms: 500       # Polling interval in ms for picking up new tasks (100-5000)
+# sync_project_local_takt_on_retry: true # Sync root project-local .takt before retry / re-execution. Set false to keep the worktree copy
 
 # PR / branch
 # auto_pr: false                   # Auto-create PR after worktree execution

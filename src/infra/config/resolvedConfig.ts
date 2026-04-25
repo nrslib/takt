@@ -9,6 +9,7 @@ export interface LoadedConfig
   concurrency: NonNullable<ProjectConfig['concurrency']>;
   taskPollIntervalMs: NonNullable<ProjectConfig['taskPollIntervalMs']>;
   interactivePreviewSteps: NonNullable<ProjectConfig['interactivePreviewSteps']>;
+  syncProjectLocalTaktOnRetry: NonNullable<ProjectConfig['syncProjectLocalTaktOnRetry']>;
 }
 
 export type ConfigParameterKey = keyof LoadedConfig;

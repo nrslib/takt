@@ -57,6 +57,7 @@ const PROJECT_LOCAL_DEFAULTS: Partial<Record<ConfigParameterKey, unknown>> = {
   concurrency: 1,
   taskPollIntervalMs: 500,
   interactivePreviewSteps: 3,
+  syncProjectLocalTaktOnRetry: true,
 };
 
 function loadProjectConfigCached(projectDir: string) {

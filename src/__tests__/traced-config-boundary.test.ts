@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { loadProjectConfigTrace } from '../infra/config/traced/tracedConfigLoader.js';
+import { loadGlobalConfigTrace, loadProjectConfigTrace } from '../infra/config/traced/tracedConfigLoader.js';
 import { getGlobalTracedSchema, getProjectTracedSchema } from '../infra/config/traced/tracedConfigSchema.js';
 import { loadTraceEntriesViaRuntime } from '../infra/config/traced/tracedConfigRuntimeBridge.js';
 
@@ -77,6 +77,8 @@ describe('traced config boundaries', () => {
     expect(Object.values(getGlobalTracedSchema()).every((entry) => entry.sources?.cli === false)).toBe(true);
     expect(Object.values(getProjectTracedSchema()).every((entry) => entry.sources?.cli === false)).toBe(true);
     expect(getProjectTracedSchema()['provider_options.claude.allowed_tools']?.sources?.env).toBe(false);
+    expect(getProjectTracedSchema().sync_project_local_takt_on_retry?.sources?.env).toBe(true);
+    expect(getGlobalTracedSchema().sync_project_local_takt_on_retry?.sources?.env).toBe(true);
   });
 
   it('project traced schema は非許可 env を runtime bridge でも無視する', () => {
@@ -182,6 +184,31 @@ describe('traced config boundaries', () => {
       });
       expect(trace.getOrigin('persona_providers.coder.provider_options')).toBe('env');
       expect(trace.getOrigin('persona_providers.coder.provider_options.codex.reasoning_effort')).toBe('env');
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('project/global config loader は sync_project_local_takt_on_retry の origin を env として記録する', () => {
+    const tempDir = join(tmpdir(), `takt-traced-sync-retry-${randomUUID()}`);
+    const projectConfigDir = join(tempDir, 'project', '.takt');
+    const globalConfigDir = join(tempDir, 'global');
+    const projectConfigPath = join(projectConfigDir, 'config.yaml');
+    const globalConfigPath = join(globalConfigDir, 'config.yaml');
+    mkdirSync(projectConfigDir, { recursive: true });
+    mkdirSync(globalConfigDir, { recursive: true });
+    writeFileSync(projectConfigPath, 'sync_project_local_takt_on_retry: false\n', 'utf-8');
+    writeFileSync(globalConfigPath, ['language: ja', 'sync_project_local_takt_on_retry: true'].join('\n'), 'utf-8');
+    process.env.TAKT_SYNC_PROJECT_LOCAL_TAKT_ON_RETRY = 'true';
+
+    try {
+      const projectTraceResult = loadProjectConfigTrace(projectConfigPath);
+      const globalTraceResult = loadGlobalConfigTrace(globalConfigPath, (value) => value);
+
+      expect(projectTraceResult.rawConfig.sync_project_local_takt_on_retry).toBe(true);
+      expect(projectTraceResult.trace.getOrigin('sync_project_local_takt_on_retry')).toBe('env');
+      expect(globalTraceResult.rawConfig.sync_project_local_takt_on_retry).toBe(true);
+      expect(globalTraceResult.trace.getOrigin('sync_project_local_takt_on_retry')).toBe('env');
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }

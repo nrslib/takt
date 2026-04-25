@@ -221,6 +221,7 @@ export class GlobalConfigManager {
       concurrency: parsed.concurrency as number | undefined,
       taskPollIntervalMs: parsed.task_poll_interval_ms as number | undefined,
       interactivePreviewSteps: resolveAliasedPreviewCount(parsed as Record<string, unknown>),
+      syncProjectLocalTaktOnRetry: parsed.sync_project_local_takt_on_retry as boolean | undefined,
     };
     validateProviderModelCompatibility(config.provider, config.model);
     this.cachedConfig = config;

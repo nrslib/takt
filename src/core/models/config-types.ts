@@ -188,6 +188,8 @@ export interface ProjectConfig {
   taskPollIntervalMs?: number;
   /** Number of step previews in interactive mode */
   interactivePreviewSteps?: number;
+  /** Sync project-local .takt resources from root when retry reuses a worktree */
+  syncProjectLocalTaktOnRetry?: boolean;
   /** Project-level analytics overrides */
   analytics?: AnalyticsConfig;
   /** Provider-specific options (overrides global, overridden by workflow/step) */

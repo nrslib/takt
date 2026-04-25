@@ -4,9 +4,12 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { TaskInfo } from '../infra/task/index.js';
 import * as infraTask from '../infra/task/index.js';
+import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
+import { invalidateAllResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
 import { unexpectedWorkflowKey } from '../../test/helpers/unknown-contract-test-keys.js';
 
 const mockGetGitProvider = vi.hoisted(() => vi.fn());
+let originalTaktConfigDir: string | undefined;
 
 vi.mock('../infra/git/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -22,6 +25,20 @@ afterEach(() => {
     fs.rmSync(root, { recursive: true, force: true });
   }
   tempRoots.clear();
+  if (originalTaktConfigDir === undefined) {
+    delete process.env.TAKT_CONFIG_DIR;
+  } else {
+    process.env.TAKT_CONFIG_DIR = originalTaktConfigDir;
+  }
+  invalidateGlobalConfigCache();
+  invalidateAllResolvedConfigCache();
+  vi.restoreAllMocks();
+});
+
+beforeEach(() => {
+  originalTaktConfigDir = process.env.TAKT_CONFIG_DIR;
+  invalidateGlobalConfigCache();
+  invalidateAllResolvedConfigCache();
 });
 
 function createTempProjectDir(): string {
@@ -50,6 +67,26 @@ function createTask(overrides: Partial<TaskInfo> = {}): TaskInfo {
     ...overrides,
     data,
   };
+}
+
+function configureIsolatedGlobalConfig(projectRoot: string, yaml = 'language: en\n'): void {
+  const globalConfigDir = path.join(projectRoot, '.test-global-takt');
+  fs.mkdirSync(globalConfigDir, { recursive: true });
+  process.env.TAKT_CONFIG_DIR = globalConfigDir;
+  fs.writeFileSync(path.join(globalConfigDir, 'config.yaml'), yaml, 'utf-8');
+  invalidateGlobalConfigCache();
+  invalidateAllResolvedConfigCache();
+}
+
+function writeTaktFile(baseDir: string, relativePath: string, content: string): string {
+  const filePath = path.join(baseDir, '.takt', relativePath);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, content, 'utf-8');
+  return filePath;
+}
+
+function readTaktFile(baseDir: string, relativePath: string): string {
+  return fs.readFileSync(path.join(baseDir, '.takt', relativePath), 'utf-8');
 }
 
 const resolveTaskExecutionStrict = resolveTaskExecution as (task: TaskInfo, projectCwd: string) => ReturnType<typeof resolveTaskExecution>;
@@ -266,6 +303,7 @@ describe('resolveTaskExecution', () => {
     const worktreePath = path.join(root, '.takt', 'worktrees', 'task-name');
     const worktreeRootWorkflowDir = path.join(worktreePath, '.takt', 'workflows');
     const worktreeWorkflowDir = path.join(worktreePath, '.takt', 'workflows', 'takt');
+    writeTaktFile(root, 'config.yaml', 'sync_project_local_takt_on_retry: false\n');
     fs.mkdirSync(worktreeRootWorkflowDir, { recursive: true });
     fs.mkdirSync(worktreeWorkflowDir, { recursive: true });
     fs.writeFileSync(path.join(worktreeRootWorkflowDir, 'default.yaml'), [
@@ -857,6 +895,387 @@ describe('resolveTaskExecution', () => {
 
     mockCreateSharedClone.mockRestore();
     mockResolveBaseBranch.mockRestore();
+  });
+
+  it('should sync project-local .takt resources into a reused worktree by default', async () => {
+    const root = createTempProjectDir();
+    configureIsolatedGlobalConfig(root);
+    const worktreePath = path.join(root, '.takt', 'worktrees', 'existing-safe-worktree');
+    fs.mkdirSync(worktreePath, { recursive: true });
+
+    writeTaktFile(root, 'config.yaml', 'language: ja\n');
+    writeTaktFile(root, 'workflows/default.yaml', 'name: root-default\n');
+    writeTaktFile(root, 'facets/output-contracts/summary.md', '# root summary\n');
+    writeTaktFile(worktreePath, 'config.yaml', 'language: en\n');
+    writeTaktFile(worktreePath, 'workflows/default.yaml', 'name: stale-default\n');
+    writeTaktFile(worktreePath, 'facets/output-contracts/summary.md', '# stale summary\n');
+    writeTaktFile(worktreePath, 'runs/keep/log.md', 'keep runtime log\n');
+
+    const branchExistsSpy = vi.spyOn(infraTask, 'branchExists').mockReturnValue(true);
+    const task = createTask({
+      data: ({
+        task: 'Run task with synced worktree',
+        worktree: true,
+        branch: 'feature/retry-sync',
+        retry_note: 'retry with latest takt',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      worktreePath,
+    });
+
+    const result = await resolveTaskExecutionStrict(task, root);
+
+    expect(result.execCwd).toBe(worktreePath);
+    expect(result.worktreePath).toBe(worktreePath);
+    expect(result.isWorktree).toBe(true);
+    expect(readTaktFile(worktreePath, 'config.yaml')).toBe('language: ja\n');
+    expect(readTaktFile(worktreePath, 'workflows/default.yaml')).toBe('name: root-default\n');
+    expect(readTaktFile(worktreePath, 'facets/output-contracts/summary.md')).toBe('# root summary\n');
+    expect(readTaktFile(worktreePath, 'runs/keep/log.md')).toBe('keep runtime log\n');
+
+    branchExistsSpy.mockRestore();
+  });
+
+  it('should remove deleted project-local .takt resources from a reused worktree without deleting runtime data', async () => {
+    const root = createTempProjectDir();
+    configureIsolatedGlobalConfig(root);
+    const worktreePath = path.join(root, '.takt', 'worktrees', 'existing-safe-worktree');
+    fs.mkdirSync(worktreePath, { recursive: true });
+
+    writeTaktFile(root, 'config.yaml', 'language: ja\n');
+    writeTaktFile(root, 'facets/personas/coder.md', 'You are root coder.\n');
+    writeTaktFile(worktreePath, 'workflows/stale.yaml', 'name: stale\n');
+    writeTaktFile(worktreePath, 'facets/personas/legacy.md', 'legacy persona\n');
+    writeTaktFile(worktreePath, 'runs/existing/log.md', 'keep run history\n');
+    writeTaktFile(worktreePath, 'tasks/existing.yaml', 'keep queued task\n');
+    writeTaktFile(worktreePath, 'worktree-sessions/existing.json', '{"session":"keep"}\n');
+
+    const branchExistsSpy = vi.spyOn(infraTask, 'branchExists').mockReturnValue(true);
+    const task = createTask({
+      data: ({
+        task: 'Run task with synced worktree',
+        worktree: true,
+        branch: 'feature/retry-sync',
+        retry_note: 'retry with latest takt',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      worktreePath,
+    });
+
+    await resolveTaskExecutionStrict(task, root);
+
+    expect(fs.existsSync(path.join(worktreePath, '.takt', 'workflows', 'stale.yaml'))).toBe(false);
+    expect(fs.existsSync(path.join(worktreePath, '.takt', 'facets', 'personas', 'legacy.md'))).toBe(false);
+    expect(readTaktFile(worktreePath, 'facets/personas/coder.md')).toBe('You are root coder.\n');
+    expect(readTaktFile(worktreePath, 'runs/existing/log.md')).toBe('keep run history\n');
+    expect(readTaktFile(worktreePath, 'tasks/existing.yaml')).toBe('keep queued task\n');
+    expect(readTaktFile(worktreePath, 'worktree-sessions/existing.json')).toBe('{"session":"keep"}\n');
+
+    branchExistsSpy.mockRestore();
+  });
+
+  it('should remove synced .takt resources from a reused worktree when the project-local .takt has no syncable resources', async () => {
+    const root = createTempProjectDir();
+    configureIsolatedGlobalConfig(root);
+    const worktreePath = path.join(root, '.takt', 'worktrees', 'existing-safe-worktree');
+    fs.mkdirSync(worktreePath, { recursive: true });
+
+    writeTaktFile(worktreePath, 'config.yaml', 'language: en\n');
+    writeTaktFile(worktreePath, 'workflows/stale.yaml', 'name: stale\n');
+    writeTaktFile(worktreePath, 'facets/personas/legacy.md', 'legacy persona\n');
+    writeTaktFile(worktreePath, 'runs/existing/log.md', 'keep run history\n');
+    writeTaktFile(worktreePath, 'tasks/existing.yaml', 'keep queued task\n');
+    writeTaktFile(worktreePath, 'worktree-sessions/existing.json', '{"session":"keep"}\n');
+
+    const branchExistsSpy = vi.spyOn(infraTask, 'branchExists').mockReturnValue(true);
+    const task = createTask({
+      data: ({
+        task: 'Run task with synced worktree',
+        worktree: true,
+        branch: 'feature/retry-sync',
+        retry_note: 'retry with latest takt',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      worktreePath,
+    });
+
+    await resolveTaskExecutionStrict(task, root);
+
+    expect(fs.existsSync(path.join(worktreePath, '.takt', 'config.yaml'))).toBe(false);
+    expect(fs.existsSync(path.join(worktreePath, '.takt', 'workflows', 'stale.yaml'))).toBe(false);
+    expect(fs.existsSync(path.join(worktreePath, '.takt', 'facets', 'personas', 'legacy.md'))).toBe(false);
+    expect(readTaktFile(worktreePath, 'runs/existing/log.md')).toBe('keep run history\n');
+    expect(readTaktFile(worktreePath, 'tasks/existing.yaml')).toBe('keep queued task\n');
+    expect(readTaktFile(worktreePath, 'worktree-sessions/existing.json')).toBe('{"session":"keep"}\n');
+
+    branchExistsSpy.mockRestore();
+  });
+
+  it('should sync project-local .takt resources for a reused worktree re-execution started from start_step', async () => {
+    const root = createTempProjectDir();
+    configureIsolatedGlobalConfig(root);
+    const worktreePath = path.join(root, '.takt', 'worktrees', 'existing-safe-worktree');
+    fs.mkdirSync(worktreePath, { recursive: true });
+
+    writeTaktFile(root, 'config.yaml', 'language: ja\n');
+    writeTaktFile(root, 'workflows/default.yaml', 'name: root-default\n');
+    writeTaktFile(worktreePath, 'config.yaml', 'language: en\n');
+    writeTaktFile(worktreePath, 'workflows/default.yaml', 'name: stale-default\n');
+    writeTaktFile(worktreePath, 'runs/existing/log.md', 'keep run history\n');
+    writeTaktFile(worktreePath, 'tasks/existing.yaml', 'keep queued task\n');
+    writeTaktFile(worktreePath, 'worktree-sessions/existing.json', '{"session":"keep"}\n');
+
+    const branchExistsSpy = vi.spyOn(infraTask, 'branchExists').mockReturnValue(true);
+    const task = createTask({
+      data: ({
+        task: 'Run task with start_step retry',
+        worktree: true,
+        branch: 'feature/retry-sync',
+        start_step: 'implement',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      worktreePath,
+      status: 'pending',
+    });
+
+    await resolveTaskExecutionStrict(task, root);
+
+    expect(readTaktFile(worktreePath, 'config.yaml')).toBe('language: ja\n');
+    expect(readTaktFile(worktreePath, 'workflows/default.yaml')).toBe('name: root-default\n');
+    expect(readTaktFile(worktreePath, 'runs/existing/log.md')).toBe('keep run history\n');
+    expect(readTaktFile(worktreePath, 'tasks/existing.yaml')).toBe('keep queued task\n');
+    expect(readTaktFile(worktreePath, 'worktree-sessions/existing.json')).toBe('{"session":"keep"}\n');
+
+    branchExistsSpy.mockRestore();
+  });
+
+  it('should sync project-local .takt resources for a reused worktree re-execution resumed from resume_point', async () => {
+    const root = createTempProjectDir();
+    configureIsolatedGlobalConfig(root);
+    const worktreePath = path.join(root, '.takt', 'worktrees', 'existing-safe-worktree');
+    fs.mkdirSync(worktreePath, { recursive: true });
+
+    writeTaktFile(root, 'config.yaml', 'language: ja\n');
+    writeTaktFile(root, 'facets/personas/coder.md', 'You are root coder.\n');
+    writeTaktFile(worktreePath, 'config.yaml', 'language: en\n');
+    writeTaktFile(worktreePath, 'facets/personas/coder.md', 'You are stale coder.\n');
+    writeTaktFile(worktreePath, 'runs/existing/log.md', 'keep run history\n');
+    writeTaktFile(worktreePath, 'tasks/existing.yaml', 'keep queued task\n');
+    writeTaktFile(worktreePath, 'worktree-sessions/existing.json', '{"session":"keep"}\n');
+
+    const branchExistsSpy = vi.spyOn(infraTask, 'branchExists').mockReturnValue(true);
+    const task = createTask({
+      data: ({
+        task: 'Run task with resume_point retry',
+        worktree: true,
+        branch: 'feature/retry-sync',
+        resume_point: {
+          version: 1,
+          stack: [
+            { workflow: 'default', step: 'fix', kind: 'agent' },
+          ],
+          iteration: 3,
+          elapsed_ms: 1200,
+        },
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      worktreePath,
+      status: 'pending',
+    });
+
+    await resolveTaskExecutionStrict(task, root);
+
+    expect(readTaktFile(worktreePath, 'config.yaml')).toBe('language: ja\n');
+    expect(readTaktFile(worktreePath, 'facets/personas/coder.md')).toBe('You are root coder.\n');
+    expect(readTaktFile(worktreePath, 'runs/existing/log.md')).toBe('keep run history\n');
+    expect(readTaktFile(worktreePath, 'tasks/existing.yaml')).toBe('keep queued task\n');
+    expect(readTaktFile(worktreePath, 'worktree-sessions/existing.json')).toBe('{"session":"keep"}\n');
+
+    branchExistsSpy.mockRestore();
+  });
+
+  it('should fail fast when syncing project-local .takt into a reused worktree fails', async () => {
+    const root = createTempProjectDir();
+    configureIsolatedGlobalConfig(root);
+    const outsideRoot = createTempProjectDir();
+    const worktreePath = path.join(root, '.takt', 'worktrees', 'existing-safe-worktree');
+    const outsideWorkflowsDir = path.join(outsideRoot, 'outside-workflows');
+    fs.mkdirSync(worktreePath, { recursive: true });
+
+    writeTaktFile(root, 'config.yaml', 'language: ja\n');
+    fs.mkdirSync(outsideWorkflowsDir, { recursive: true });
+    fs.writeFileSync(path.join(outsideWorkflowsDir, 'outside.yaml'), 'outside workflow\n', 'utf-8');
+    fs.symlinkSync(outsideWorkflowsDir, path.join(root, '.takt', 'workflows'));
+    writeTaktFile(worktreePath, 'config.yaml', 'language: en\n');
+
+    vi.spyOn(infraTask, 'branchExists').mockReturnValue(true);
+    const task = createTask({
+      data: ({
+        task: 'Run task with sync failure',
+        worktree: true,
+        branch: 'feature/retry-sync',
+        retry_note: 'retry with latest takt',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      worktreePath,
+      status: 'pending',
+    });
+
+    await expect(resolveTaskExecutionStrict(task, root)).rejects.toThrow('Refusing to sync symbolic link');
+  });
+
+  it('should fail fast when a project-local .takt sync source is a dangling symlink', async () => {
+    const root = createTempProjectDir();
+    configureIsolatedGlobalConfig(root);
+    const worktreePath = path.join(root, '.takt', 'worktrees', 'existing-safe-worktree');
+    const missingConfigTarget = path.join(root, 'missing-config.yaml');
+    fs.mkdirSync(worktreePath, { recursive: true });
+
+    fs.mkdirSync(path.join(root, '.takt'), { recursive: true });
+    fs.symlinkSync(missingConfigTarget, path.join(root, '.takt', 'config.yaml'));
+    writeTaktFile(worktreePath, 'config.yaml', 'language: en\n');
+
+    const branchExistsSpy = vi.spyOn(infraTask, 'branchExists').mockReturnValue(true);
+    const task = createTask({
+      data: ({
+        task: 'Run task with dangling source symlink',
+        worktree: true,
+        branch: 'feature/retry-sync',
+        retry_note: 'retry with latest takt',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      worktreePath,
+      status: 'pending',
+    });
+
+    await expect(resolveTaskExecutionStrict(task, root)).rejects.toThrow('Refusing to sync symbolic link');
+    expect(readTaktFile(worktreePath, 'config.yaml')).toBe('language: en\n');
+
+    branchExistsSpy.mockRestore();
+  });
+
+  it('should replace a symlinked config.yaml in a reused worktree without touching the linked file', async () => {
+    const root = createTempProjectDir();
+    configureIsolatedGlobalConfig(root);
+    const outsideRoot = createTempProjectDir();
+    const worktreePath = path.join(root, '.takt', 'worktrees', 'existing-safe-worktree');
+    const outsideConfigPath = path.join(outsideRoot, 'outside-config.yaml');
+    fs.mkdirSync(path.join(worktreePath, '.takt'), { recursive: true });
+    fs.writeFileSync(outsideConfigPath, 'outside config\n', 'utf-8');
+
+    writeTaktFile(root, 'config.yaml', 'language: ja\n');
+    fs.symlinkSync(outsideConfigPath, path.join(worktreePath, '.takt', 'config.yaml'));
+
+    const branchExistsSpy = vi.spyOn(infraTask, 'branchExists').mockReturnValue(true);
+    const task = createTask({
+      data: ({
+        task: 'Run task with symlinked config',
+        worktree: true,
+        branch: 'feature/retry-sync',
+        retry_note: 'retry with latest takt',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      worktreePath,
+      status: 'pending',
+    });
+
+    await resolveTaskExecutionStrict(task, root);
+
+    expect(fs.readFileSync(outsideConfigPath, 'utf-8')).toBe('outside config\n');
+    expect(readTaktFile(worktreePath, 'config.yaml')).toBe('language: ja\n');
+    expect(fs.lstatSync(path.join(worktreePath, '.takt', 'config.yaml')).isSymbolicLink()).toBe(false);
+
+    branchExistsSpy.mockRestore();
+  });
+
+  it('should replace a symlinked workflows directory in a reused worktree without touching the linked directory', async () => {
+    const root = createTempProjectDir();
+    configureIsolatedGlobalConfig(root);
+    const outsideRoot = createTempProjectDir();
+    const worktreePath = path.join(root, '.takt', 'worktrees', 'existing-safe-worktree');
+    const outsideWorkflowsDir = path.join(outsideRoot, 'outside-workflows');
+    fs.mkdirSync(path.join(worktreePath, '.takt'), { recursive: true });
+    fs.mkdirSync(outsideWorkflowsDir, { recursive: true });
+    fs.writeFileSync(path.join(outsideWorkflowsDir, 'outside.yaml'), 'outside workflow\n', 'utf-8');
+
+    writeTaktFile(root, 'workflows/default.yaml', 'name: root-default\n');
+    fs.symlinkSync(outsideWorkflowsDir, path.join(worktreePath, '.takt', 'workflows'));
+
+    const branchExistsSpy = vi.spyOn(infraTask, 'branchExists').mockReturnValue(true);
+    const task = createTask({
+      data: ({
+        task: 'Run task with symlinked workflows',
+        worktree: true,
+        branch: 'feature/retry-sync',
+        retry_note: 'retry with latest takt',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      worktreePath,
+      status: 'pending',
+    });
+
+    await resolveTaskExecutionStrict(task, root);
+
+    expect(fs.readFileSync(path.join(outsideWorkflowsDir, 'outside.yaml'), 'utf-8')).toBe('outside workflow\n');
+    expect(readTaktFile(worktreePath, 'workflows/default.yaml')).toBe('name: root-default\n');
+    expect(fs.lstatSync(path.join(worktreePath, '.takt', 'workflows')).isSymbolicLink()).toBe(false);
+
+    branchExistsSpy.mockRestore();
+  });
+
+  it('should replace a symlinked .takt directory in a reused worktree without touching the linked directory', async () => {
+    const root = createTempProjectDir();
+    configureIsolatedGlobalConfig(root);
+    const outsideRoot = createTempProjectDir();
+    const worktreePath = path.join(root, '.takt', 'worktrees', 'existing-safe-worktree');
+    const outsideTaktDir = path.join(outsideRoot, 'outside-takt');
+    fs.mkdirSync(worktreePath, { recursive: true });
+    fs.mkdirSync(outsideTaktDir, { recursive: true });
+    fs.writeFileSync(path.join(outsideTaktDir, 'outside.txt'), 'outside takt\n', 'utf-8');
+
+    writeTaktFile(root, 'config.yaml', 'language: ja\n');
+    fs.symlinkSync(outsideTaktDir, path.join(worktreePath, '.takt'));
+
+    const branchExistsSpy = vi.spyOn(infraTask, 'branchExists').mockReturnValue(true);
+    const task = createTask({
+      data: ({
+        task: 'Run task with symlinked takt dir',
+        worktree: true,
+        branch: 'feature/retry-sync',
+        retry_note: 'retry with latest takt',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      worktreePath,
+      status: 'pending',
+    });
+
+    await resolveTaskExecutionStrict(task, root);
+
+    expect(fs.readFileSync(path.join(outsideTaktDir, 'outside.txt'), 'utf-8')).toBe('outside takt\n');
+    expect(readTaktFile(worktreePath, 'config.yaml')).toBe('language: ja\n');
+    expect(fs.lstatSync(path.join(worktreePath, '.takt')).isSymbolicLink()).toBe(false);
+
+    branchExistsSpy.mockRestore();
+  });
+
+  it('should skip syncing a reused worktree when sync_project_local_takt_on_retry is disabled in project config', async () => {
+    const root = createTempProjectDir();
+    configureIsolatedGlobalConfig(root);
+    const worktreePath = path.join(root, '.takt', 'worktrees', 'existing-safe-worktree');
+    fs.mkdirSync(worktreePath, { recursive: true });
+
+    writeTaktFile(root, 'config.yaml', ['language: ja', 'sync_project_local_takt_on_retry: false'].join('\n'));
+    writeTaktFile(root, 'workflows/default.yaml', 'name: root-default\n');
+    writeTaktFile(worktreePath, 'config.yaml', 'language: en\n');
+    writeTaktFile(worktreePath, 'workflows/default.yaml', 'name: stale-default\n');
+
+    const branchExistsSpy = vi.spyOn(infraTask, 'branchExists').mockReturnValue(true);
+    const task = createTask({
+      data: ({
+        task: 'Run task with synced worktree',
+        worktree: true,
+        branch: 'feature/retry-sync',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      worktreePath,
+      status: 'failed',
+    });
+
+    await resolveTaskExecutionStrict(task, root);
+
+    expect(readTaktFile(worktreePath, 'config.yaml')).toBe('language: en\n');
+    expect(readTaktFile(worktreePath, 'workflows/default.yaml')).toBe('name: stale-default\n');
+
+    branchExistsSpy.mockRestore();
   });
 
   it('draft_pr: true が draftPr: true として解決される', async () => {

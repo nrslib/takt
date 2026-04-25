@@ -17,6 +17,7 @@ language: ja         # 表示言語: ja | en
 # base_branch: main                # cloneのベースブランチ（デフォルト: カレントブランチ）
 # concurrency: 1                   # takt run の同時実行タスク数 (1-10)
 # task_poll_interval_ms: 500       # 新規タスク検出のポーリング間隔（ms, 100-5000）
+# sync_project_local_takt_on_retry: true # Retry / re-execution 前に root の project-local .takt を同期。保持したい場合は false
 
 # PR / ブランチ
 # auto_pr: false                   # worktree実行後にPR自動作成
