@@ -142,12 +142,12 @@ describe('resolveTaskExecution', () => {
     expect(result.workflowIdentifier).toBe('workflow-only');
   });
 
-  it('should resolve startStep from start_step alias', async () => {
+  it('should resolve startStep from start_movement', async () => {
     const root = createTempProjectDir();
     const task = createTask({
       data: ({
         task: 'Run task',
-        start_step: 'implement',
+        start_movement: 'implement',
       } as unknown) as NonNullable<TaskInfo['data']>,
     });
 
@@ -156,7 +156,7 @@ describe('resolveTaskExecution', () => {
     expect(result.startStep).toBe('implement');
   });
 
-  it('should prefer resume_point root step over stored start_step on workflow_call retry', async () => {
+  it('should prefer resume_point root step over stored start_movement on workflow_call retry', async () => {
     const root = createTempProjectDir();
     const workflowDir = path.join(root, '.takt', 'workflows');
     fs.mkdirSync(workflowDir, { recursive: true });
@@ -176,7 +176,7 @@ describe('resolveTaskExecution', () => {
     const task = createTask({
       data: ({
         task: 'Run task',
-        start_step: 'review',
+        start_movement: 'review',
         resume_point: {
           version: 1,
           stack: [

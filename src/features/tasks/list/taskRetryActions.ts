@@ -14,7 +14,7 @@ import { selectOptionWithDefault } from '../../../shared/prompt/index.js';
 import { info, header, blankLine, status, warn } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import type { WorkflowConfig, WorkflowResumePoint } from '../../../core/models/index.js';
-import { readRunMetaBySlug } from '../../../core/workflow/run/run-meta.js';
+import { readRunMetaBySlug, type RunMeta } from '../../../core/workflow/run/run-meta.js';
 import {
   findRunForTask,
   loadRunSessionContext,
@@ -107,19 +107,27 @@ function buildRetryRunInfo(
   };
 }
 
+function resolveRetryRunSlug(task: TaskListItem, worktreePath: string): string | null {
+  return task.runSlug ?? findRunForTask(worktreePath, task.content);
+}
+
+function readRetryRunMeta(worktreePath: string, runSlug: string | null): RunMeta | null {
+  if (!runSlug) {
+    return null;
+  }
+
+  return readRunMetaBySlug(worktreePath, runSlug, (warningMessage) => {
+    warn(warningMessage);
+  });
+}
+
 function resolveRetryResumePoint(
   task: TaskListItem,
-  worktreePath: string,
-  matchedSlug: string | null,
+  runMeta: RunMeta | null,
 ): WorkflowResumePoint | undefined {
-  if (matchedSlug) {
-    const runMeta = readRunMetaBySlug(worktreePath, matchedSlug, (warningMessage) => {
-      warn(warningMessage);
-    });
-    const metaResumePoint = runMeta?.resumePoint;
-    if (metaResumePoint) {
-      return metaResumePoint;
-    }
+  const metaResumePoint = runMeta?.resumePoint;
+  if (metaResumePoint) {
+    return metaResumePoint;
   }
 
   return task.data?.resume_point;
@@ -187,8 +195,9 @@ export async function retryFailedTask(
 
   displayFailureInfo(task);
 
-  const matchedSlug = findRunForTask(worktreePath, task.content);
-  const runInfo = matchedSlug ? buildRetryRunInfo(worktreePath, matchedSlug) : null;
+  const matchedSlug = resolveRetryRunSlug(task, worktreePath);
+  const runMeta = readRetryRunMeta(worktreePath, matchedSlug);
+  const runInfo = matchedSlug && runMeta ? buildRetryRunInfo(worktreePath, matchedSlug) : null;
 
   const selectedWorkflow = await selectWorkflowWithOptionalReuse(
     projectDir,
@@ -207,7 +216,7 @@ export async function retryFailedTask(
   }
   validateWorkflowExecutionTrustBoundary(workflowConfig, projectDir);
 
-  const resumePoint = resolveRetryResumePoint(task, worktreePath, matchedSlug);
+  const resumePoint = resolveRetryResumePoint(task, runMeta);
   const selectedStep = await selectStartStep(
     workflowConfig,
     resolveRetryDefaultStep(workflowConfig, task, resumePoint),

@@ -19,6 +19,8 @@ export interface RunMeta {
   iterations?: number;
   currentStep?: string;
   currentIteration?: number;
+  phase?: 1 | 2 | 3;
+  updatedAt?: string;
   resumePoint?: WorkflowResumePoint;
 }
 

@@ -127,6 +127,7 @@ export function bindWorkflowExecutionEvents(
   };
 
   deps.engine.on('phase:start', (step, phase, phaseName, instruction, promptParts, phaseExecutionId, iteration) => {
+    deps.runMetaManager.updatePhase(step.name, iteration, phase);
     deps.sessionLogger.onPhaseStart(
       step,
       phase,
@@ -140,6 +141,7 @@ export function bindWorkflowExecutionEvents(
   });
 
   deps.engine.on('phase:complete', (step, phase, phaseName, content, phaseStatus, phaseError, phaseExecutionId, iteration) => {
+    deps.runMetaManager.updatePhase(step.name, iteration, phase);
     deps.sessionLogger.setIteration(state.currentIteration);
     deps.sessionLogger.onPhaseComplete(
       step,

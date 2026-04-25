@@ -39,7 +39,15 @@ export class RunMetaManager {
   updateStep(stepName: string, iteration: number, resumePoint?: WorkflowResumePoint): void {
     this.runMeta.currentStep = stepName;
     this.runMeta.currentIteration = iteration;
+    delete this.runMeta.phase;
     this.runMeta.resumePoint = resumePoint;
+    this.writeRunMeta(this.runMeta);
+  }
+
+  updatePhase(stepName: string, iteration: number, phase: 1 | 2 | 3): void {
+    this.runMeta.currentStep = stepName;
+    this.runMeta.currentIteration = iteration;
+    this.runMeta.phase = phase;
     this.writeRunMeta(this.runMeta);
   }
 
@@ -63,11 +71,14 @@ export class RunMetaManager {
   }
 
   private writeRunMeta(meta: RunMeta): void {
+    const updatedAt = new Date().toISOString();
     const serialized: PersistedRunMeta = {
       ...meta,
+      updatedAt,
       ...(meta.resumePoint ? { resume_point: meta.resumePoint } : {}),
     };
     delete (serialized as Partial<RunMeta>).resumePoint;
+    this.runMeta.updatedAt = updatedAt;
     writeFileAtomic(this.metaAbs, JSON.stringify(serialized, null, 2));
   }
 }

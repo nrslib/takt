@@ -208,7 +208,8 @@ describe('シナリオ1・2: exceeded status transition via executeAndCompleteTa
     const file = loadTasksFile(testDir);
     const exceededRecord = file.tasks[0];
     expect(exceededRecord?.status).toBe('exceeded');
-    expect(exceededRecord?.start_step).toBe('implement');
+    expect(exceededRecord?.start_movement).toBe('implement');
+    expect(exceededRecord?.start_step).toBeUndefined();
     expect(exceededRecord?.exceeded_max_steps).toBe(60);
     expect(exceededRecord?.exceeded_current_iteration).toBe(30);
     expect(exceededRecord?.resume_point).toEqual(resumePoint);

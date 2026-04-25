@@ -55,7 +55,8 @@ describe('persistExceededTaskResult', () => {
     const { tasks } = loadTasksFile(testDir);
     const row = tasks[0]!;
     expect(row.status).toBe('exceeded');
-    expect(row.start_step).toBe('reviewers');
+    expect(row.start_movement).toBe('reviewers');
+    expect(row.start_step).toBeUndefined();
     expect(row.exceeded_max_steps).toBe(60);
     expect(row.exceeded_current_iteration).toBe(30);
     expect(mockInfo).toHaveBeenCalledWith(
