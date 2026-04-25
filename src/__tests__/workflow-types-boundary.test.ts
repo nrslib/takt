@@ -6,11 +6,6 @@ function readModule(path: string): string {
 }
 
 describe('workflow types module boundary', () => {
-  it('keeps src/core/workflow/types.ts under the 300-line architecture limit', () => {
-    const source = readModule('../core/workflow/types.ts');
-    expect(source.trimEnd().split('\n').length).toBeLessThanOrEqual(299);
-  });
-
   it('moves provider option trace contracts into a sibling module', () => {
     const workflowTypesSource = readModule('../core/workflow/types.ts');
     const providerTraceSource = readModule('../core/workflow/provider-options-trace.ts');

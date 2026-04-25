@@ -66,7 +66,8 @@ export class OptionsBuilder {
       modelSource: engineProviderInfo.modelSource,
       personaProviders: this.engineOptions.personaProviders,
     });
-    const providerOptions = this.resolveMergedProviderOptions(step, runtime);
+    const provider = resolved.provider ?? engineProviderInfo.provider;
+    const providerOptions = this.resolveMergedProviderOptions(step, provider, runtime);
     const providerOptionsSources = resolveProviderOptionsSources(
       step.providerOptions,
       resolvePersonaProviderOptions(this.engineOptions.personaProviders, step.personaDisplayName),
@@ -75,7 +76,7 @@ export class OptionsBuilder {
       this.engineOptions.providerOptionsSource,
     );
     return {
-      provider: resolved.provider ?? engineProviderInfo.provider,
+      provider,
       providerSource: resolved.providerSource ?? engineProviderInfo.providerSource,
       model: resolved.model ?? engineProviderInfo.model,
       modelSource: resolved.modelSource ?? engineProviderInfo.modelSource,
@@ -88,6 +89,7 @@ export class OptionsBuilder {
 
   private resolveMergedProviderOptions(
     step: WorkflowStep,
+    resolvedProvider: StepProviderInfo['provider'],
     runtime?: RuntimeStepResolution,
   ): StepProviderOptions | undefined {
     const personaProviderOptions = resolvePersonaProviderOptions(
@@ -101,7 +103,7 @@ export class OptionsBuilder {
         this.engineOptions.providerOptionsOriginResolver,
         this.engineOptions.providerOptions,
         step.providerOptions,
-        this.resolveStepProviderModel(step, runtime).provider,
+        resolvedProvider,
         runtime.teamLeaderPart.partAllowedTools,
         personaProviderOptions,
       );
@@ -127,7 +129,8 @@ export class OptionsBuilder {
     const currentPosition = currentIndex >= 0 ? `${currentIndex + 1}/${steps.length}` : '?/?';
     const { provider: resolvedProvider, model: resolvedModel } = this.resolveStepProviderModel(step, runtime);
 
-    const providerOptions = mergedProviderOptions ?? this.resolveMergedProviderOptions(step, runtime);
+    const providerOptions = mergedProviderOptions
+      ?? this.resolveMergedProviderOptions(step, resolvedProvider, runtime);
     const workflowMeta: WorkflowMeta = {
       workflowName: this.getWorkflowName(),
       workflowDescription: this.getWorkflowDescription(),
@@ -174,8 +177,8 @@ export class OptionsBuilder {
 
   /** Build RunAgentOptions for Phase 1 (main execution) */
   buildAgentOptions(step: WorkflowStep, runtime?: RuntimeStepResolution): RunAgentOptions {
-    const mergedProviderOptions = this.resolveMergedProviderOptions(step, runtime);
     const { provider: resolvedProvider } = this.resolveStepProviderModel(step, runtime);
+    const mergedProviderOptions = this.resolveMergedProviderOptions(step, resolvedProvider, runtime);
 
     assertProviderResolvedForCapabilitySensitiveOptions(resolvedProvider, {
       stepName: step.name,
