@@ -6,6 +6,7 @@ max_steps: infinite
 initial_step: route_context
 schemas:
   followup-task: followup-task
+  pr-followup-task: pr-followup-task
 steps:
   - name: route_context
     mode: system
@@ -166,35 +167,30 @@ steps:
 
       Output the next action in action.
       If a follow-up implementation task is needed, output it in task_markdown.
-      If content should be left on the PR, output it in pr_comment_markdown.
 
       Allowed action values:
-      - comment_on_pr
       - enqueue_from_pr
       - prepare_merge
-      - noop
+      - reject_pr
     structured_output:
-      schema_ref: followup-task
+      schema_ref: pr-followup-task
     rules:
-      - when: structured.plan_from_existing_pr.action == "comment_on_pr"
-        next: comment_on_existing_pr
       - when: structured.plan_from_existing_pr.action == "enqueue_from_pr"
         next: enqueue_from_pr
       - when: structured.plan_from_existing_pr.action == "prepare_merge"
         next: prepare_merge
-      - when: structured.plan_from_existing_pr.action == "noop"
-        next: wait_before_next_scan
+      - when: structured.plan_from_existing_pr.action == "reject_pr"
+        next: reject_pr
       - when: "true"
         next: ABORT
 
-  - name: comment_on_existing_pr
+  - name: reject_pr
     mode: system
     effects:
-      - type: comment_pr
+      - type: close_pr
         pr: "{context:route_context.selected_pr.number}"
-        body: "{structured:plan_from_existing_pr.pr_comment_markdown}"
     rules:
-      - when: effect.comment_on_existing_pr.comment_pr.success == true
+      - when: effect.reject_pr.close_pr.success == true
         next: wait_before_next_scan
       - when: "true"
         next: ABORT

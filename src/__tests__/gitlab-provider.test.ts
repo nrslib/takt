@@ -14,6 +14,7 @@ const {
   mockCreateIssue,
   mockFindExistingMr,
   mockCommentOnMr,
+  mockCloseMr,
   mockCreateMergeRequest,
   mockFetchMrReviewComments,
   mockMergeMr,
@@ -24,6 +25,7 @@ const {
   mockCreateIssue: vi.fn(),
   mockFindExistingMr: vi.fn(),
   mockCommentOnMr: vi.fn(),
+  mockCloseMr: vi.fn(),
   mockCreateMergeRequest: vi.fn(),
   mockFetchMrReviewComments: vi.fn(),
   mockMergeMr: vi.fn(),
@@ -46,6 +48,7 @@ vi.mock('../infra/gitlab/issue.js', () => ({
 vi.mock('../infra/gitlab/pr.js', () => ({
   findExistingMr: (...args: unknown[]) => mockFindExistingMr(...args),
   commentOnMr: (...args: unknown[]) => mockCommentOnMr(...args),
+  closeMr: (...args: unknown[]) => mockCloseMr(...args),
   createMergeRequest: (...args: unknown[]) => mockCreateMergeRequest(...args),
   fetchMrReviewComments: (...args: unknown[]) => mockFetchMrReviewComments(...args),
   mergeMr: (...args: unknown[]) => mockMergeMr(...args),
@@ -522,6 +525,42 @@ describe('GitLabProvider', () => {
       provider.mergePr(42);
 
       expect(mockMergeMr).toHaveBeenCalledWith(42, process.cwd());
+    });
+  });
+
+  describe('closePr', () => {
+    it('closeMr(prNumber, cwd) に委譲し結果を返す', () => {
+      mockCloseMr.mockReturnValue({ success: true });
+      const provider = new GitLabProvider() as unknown as {
+        closePr(prNumber: number, cwd?: string): { success: boolean; error?: string };
+      };
+
+      const result = provider.closePr(42, '/project');
+
+      expect(mockCloseMr).toHaveBeenCalledWith(42, '/project');
+      expect(result).toEqual({ success: true });
+    });
+
+    it('失敗時はエラー結果を委譲して返す', () => {
+      mockCloseMr.mockReturnValue({ success: false, error: 'close blocked' });
+      const provider = new GitLabProvider() as unknown as {
+        closePr(prNumber: number, cwd?: string): { success: boolean; error?: string };
+      };
+
+      const result = provider.closePr(42, '/project');
+
+      expect(result).toEqual({ success: false, error: 'close blocked' });
+    });
+
+    it('cwd 省略時は process.cwd() をフォールバックとして渡す', () => {
+      mockCloseMr.mockReturnValue({ success: true });
+      const provider = new GitLabProvider() as unknown as {
+        closePr(prNumber: number, cwd?: string): { success: boolean; error?: string };
+      };
+
+      provider.closePr(42);
+
+      expect(mockCloseMr).toHaveBeenCalledWith(42, process.cwd());
     });
   });
 });

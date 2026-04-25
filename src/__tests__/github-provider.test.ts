@@ -15,6 +15,7 @@ const {
   mockCreateIssue,
   mockFindExistingPr,
   mockCommentOnPr,
+  mockClosePr,
   mockCreatePullRequest,
   mockFetchPrReviewComments,
   mockMergePr,
@@ -25,6 +26,7 @@ const {
   mockCreateIssue: vi.fn(),
   mockFindExistingPr: vi.fn(),
   mockCommentOnPr: vi.fn(),
+  mockClosePr: vi.fn(),
   mockCreatePullRequest: vi.fn(),
   mockFetchPrReviewComments: vi.fn(),
   mockMergePr: vi.fn(),
@@ -40,6 +42,7 @@ vi.mock('../infra/github/issue.js', () => ({
 vi.mock('../infra/github/pr.js', () => ({
   findExistingPr: (...args: unknown[]) => mockFindExistingPr(...args),
   commentOnPr: (...args: unknown[]) => mockCommentOnPr(...args),
+  closePr: (...args: unknown[]) => mockClosePr(...args),
   createPullRequest: (...args: unknown[]) => mockCreatePullRequest(...args),
   fetchPrReviewComments: (...args: unknown[]) => mockFetchPrReviewComments(...args),
   mergePr: (...args: unknown[]) => mockMergePr(...args),
@@ -501,6 +504,42 @@ describe('GitHubProvider', () => {
       expect(mockMergePr).toHaveBeenCalledWith(42, process.cwd());
     });
   });
+
+  describe('closePr', () => {
+    it('closePr(prNumber, cwd) に委譲し MergeResult 互換の結果を返す', () => {
+      mockClosePr.mockReturnValue({ success: true });
+      const provider = new GitHubProvider() as unknown as {
+        closePr(prNumber: number, cwd?: string): { success: boolean; error?: string };
+      };
+
+      const result = provider.closePr(42, '/project');
+
+      expect(mockClosePr).toHaveBeenCalledWith(42, '/project');
+      expect(result).toEqual({ success: true });
+    });
+
+    it('失敗時はエラー結果を委譲して返す', () => {
+      mockClosePr.mockReturnValue({ success: false, error: 'close blocked' });
+      const provider = new GitHubProvider() as unknown as {
+        closePr(prNumber: number, cwd?: string): { success: boolean; error?: string };
+      };
+
+      const result = provider.closePr(42, '/project');
+
+      expect(result).toEqual({ success: false, error: 'close blocked' });
+    });
+
+    it('cwd 省略時は process.cwd() をフォールバックとして渡す', () => {
+      mockClosePr.mockReturnValue({ success: true });
+      const provider = new GitHubProvider() as unknown as {
+        closePr(prNumber: number, cwd?: string): { success: boolean; error?: string };
+      };
+
+      provider.closePr(42);
+
+      expect(mockClosePr).toHaveBeenCalledWith(42, process.cwd());
+    });
+  });
 });
 
 describe('getGitProvider', () => {
@@ -517,6 +556,7 @@ describe('getGitProvider', () => {
     expect(typeof provider.findExistingPr).toBe('function');
     expect(typeof provider.createPullRequest).toBe('function');
     expect(typeof provider.commentOnPr).toBe('function');
+    expect(typeof (provider as Record<string, unknown>).closePr).toBe('function');
     expect(typeof provider.mergePr).toBe('function');
   });
 

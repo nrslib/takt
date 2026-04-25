@@ -5,16 +5,10 @@
       "type": "string",
       "enum": [
         "enqueue_new_task",
-        "comment_on_pr",
-        "enqueue_from_pr",
-        "prepare_merge",
         "noop"
       ]
     },
     "task_markdown": {
-      "type": "string"
-    },
-    "pr_comment_markdown": {
       "type": "string"
     },
     "issue": {

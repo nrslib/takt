@@ -158,4 +158,8 @@ export type WorkflowEffect =
   | {
     type: 'merge_pr';
     pr: WorkflowEffectScalarReference;
+  }
+  | {
+    type: 'close_pr';
+    pr: WorkflowEffectScalarReference;
   };

@@ -166,6 +166,10 @@ export const WorkflowEffectRawSchema = z.discriminatedUnion('type', [
     type: z.literal('merge_pr'),
     pr: EffectReferenceScalarSchema,
   }).strict(),
+  z.object({
+    type: z.literal('close_pr'),
+    pr: EffectReferenceScalarSchema,
+  }).strict(),
 ]);
 
 export function validateSystemStepFields(

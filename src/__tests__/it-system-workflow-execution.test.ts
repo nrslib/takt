@@ -10,6 +10,7 @@ import { createDefaultSystemStepServices } from '../infra/workflow/system/Defaul
 
 const {
   mockCommentOnPr,
+  mockClosePr,
   mockMergePr,
   mockSaveTaskFile,
   mockCreateIssueFromTask,
@@ -21,6 +22,7 @@ const {
   mockTaskRunnerListAllTaskItems,
 } = vi.hoisted(() => ({
   mockCommentOnPr: vi.fn(),
+  mockClosePr: vi.fn(),
   mockMergePr: vi.fn(),
   mockSaveTaskFile: vi.fn(),
   mockCreateIssueFromTask: vi.fn(),
@@ -45,6 +47,7 @@ vi.mock('../infra/config/project/projectConfig.js', () => ({
 vi.mock('../infra/git/index.js', () => ({
   getGitProvider: vi.fn(() => ({
     commentOnPr: (...args: unknown[]) => mockCommentOnPr(...args),
+    closePr: (...args: unknown[]) => mockClosePr(...args),
     mergePr: (...args: unknown[]) => mockMergePr(...args),
     findExistingPr: (...args: unknown[]) => mockFindExistingPr(...args),
     fetchPrReviewComments: (...args: unknown[]) => mockFetchPrReviewComments(...args),
@@ -124,6 +127,32 @@ function loadBuiltinAutoImprovementLoopForIssueExecution(projectDir: string) {
   };
 }
 
+function loadBuiltinAutoImprovementLoopForPrExecution(projectDir: string) {
+  const config = normalizeWorkflowConfig(
+    parse(readFileSync(
+      join(process.cwd(), 'builtins', 'en', 'workflows', 'auto-improvement-loop.yaml'),
+      'utf-8',
+    )),
+    projectDir,
+  );
+  return {
+    ...config,
+    maxSteps: 6,
+    steps: config.steps.map((step) => {
+      if (step.name === 'wait_before_next_scan') {
+        return {
+          ...step,
+          delayBeforeMs: 0,
+          rules: [
+            { condition: 'true', next: 'COMPLETE' },
+          ],
+        };
+      }
+      return step;
+    }),
+  };
+}
+
 describe('system workflow execution integration', () => {
   let projectDir: string;
 
@@ -134,6 +163,7 @@ describe('system workflow execution integration', () => {
     mockSaveTaskFile.mockResolvedValue({ taskName: 'task-1', tasksFile: join(projectDir, '.takt', 'tasks.yaml') });
     mockCreateIssueFromTask.mockReturnValue(586);
     mockResolveBaseBranch.mockImplementation((_cwd: string, branch?: string) => ({ branch: branch ?? 'main' }));
+    mockClosePr.mockReturnValue({ success: true });
     mockMergePr.mockReturnValue({ success: true });
     mockListOpenIssues.mockReset();
     mockListOpenIssues.mockReturnValue([]);
@@ -1030,6 +1060,46 @@ describe('system workflow execution integration', () => {
     });
   });
 
+  it('close_pr effect の成功結果で遷移できる', async () => {
+    const config = normalizeWorkflowConfig(
+      {
+        name: 'reject-pr-routing',
+        initial_step: 'reject_pr',
+        max_steps: 2,
+        steps: [
+          {
+            name: 'reject_pr',
+            mode: 'system',
+            effects: [
+              {
+                type: 'close_pr',
+                pr: 42,
+              },
+            ],
+            rules: [
+              { when: 'effect.reject_pr.close_pr.success == true', next: 'COMPLETE' },
+              { when: 'true', next: 'ABORT' },
+            ],
+          },
+        ],
+      },
+      projectDir,
+    );
+
+    const engine = new WorkflowEngine(config, projectDir, 'Current task body', createSystemEngineOptions(projectDir));
+    const state = await engine.run();
+    const stateRecord = state as Record<string, unknown>;
+
+    expect(state.status).toBe('completed');
+    expect(mockClosePr).toHaveBeenCalledWith(42, projectDir);
+    expect((stateRecord.effectResults as Map<string, unknown>).get('reject_pr')).toEqual({
+      close_pr: {
+        success: true,
+        failed: false,
+      },
+    });
+  });
+
   it('pr_list と queue.items を when の配列参照と exists で評価して遷移できる', async () => {
     const createServices = vi.fn(() => ({
       resolveSystemInput(input: { type: string }) {
@@ -1555,6 +1625,48 @@ describe('system workflow execution integration', () => {
     expect(mockSaveTaskFile).not.toHaveBeenCalled();
   });
 
+  it('builtin auto-improvement-loop の plan_from_issue は PR 専用 action を拒否する', async () => {
+    let abortReason = '';
+    setMockScenario([
+      {
+        persona: 'supervisor',
+        status: 'done',
+        content: 'Reject this issue as if it were a PR.',
+        structuredOutput: {
+          action: 'reject_pr',
+        },
+      },
+    ]);
+    mockListOpenIssues.mockReturnValue([
+      {
+        number: 586,
+        title: 'Repo issue',
+        labels: [],
+        updated_at: '2026-04-20T14:00:00Z',
+      },
+    ]);
+
+    const config = loadBuiltinAutoImprovementLoopForIssueExecution(projectDir);
+    const engine = new WorkflowEngine(
+      config,
+      projectDir,
+      'Current task body',
+      createSystemEngineOptions(projectDir),
+    );
+    engine.on('workflow:abort', (_state, reason) => {
+      abortReason = reason;
+    });
+
+    const state = await engine.run();
+    const stepNames = Array.from(state.stepOutputs.keys());
+
+    expect(state.status).toBe('aborted');
+    expect(stepNames).toEqual(['route_context', 'plan_from_issue']);
+    expect(abortReason).toContain('Workflow aborted by step transition');
+    expect(mockClosePr).not.toHaveBeenCalled();
+    expect(mockSaveTaskFile).not.toHaveBeenCalled();
+  });
+
   it('repo-wide issue からの enqueue は対話モードでも追加承認を要求しない', async () => {
     setMockScenario([
       {
@@ -1910,6 +2022,101 @@ describe('system workflow execution integration', () => {
 
     expect(state.status).toBe('completed');
     expect(executeEffect).not.toHaveBeenCalled();
+  });
+
+  it('builtin auto-improvement-loop の reject_pr は PR を close するだけで次の task を積まない', async () => {
+    setMockScenario([
+      {
+        persona: 'supervisor',
+        status: 'done',
+        content: 'Reject the current PR.',
+        structuredOutput: {
+          action: 'reject_pr',
+        },
+      },
+    ]);
+    mockListOpenPrs.mockReturnValue([
+      {
+        number: 42,
+        author: 'nrslib',
+        base_branch: 'improve',
+        head_branch: 'takt/20260425-reject-me',
+        managed_by_takt: true,
+        labels: ['takt-managed'],
+        same_repository: true,
+        draft: false,
+        updated_at: '2026-04-25T13:39:00Z',
+      },
+    ]);
+
+    const config = loadBuiltinAutoImprovementLoopForPrExecution(projectDir);
+    const state = await new WorkflowEngine(
+      config,
+      projectDir,
+      'Current task body',
+      createSystemEngineOptions(projectDir),
+    ).run();
+    const stepNames = Array.from(state.stepOutputs.keys());
+
+    expect(state.status).toBe('completed');
+    expect(stepNames).toEqual([
+      'route_context',
+      'plan_from_existing_pr',
+      'reject_pr',
+      'wait_before_next_scan',
+    ]);
+    expect(mockClosePr).toHaveBeenCalledWith(42, projectDir);
+    expect(mockCommentOnPr).not.toHaveBeenCalled();
+    expect(mockMergePr).not.toHaveBeenCalled();
+    expect(mockSaveTaskFile).not.toHaveBeenCalled();
+  });
+
+  it('builtin auto-improvement-loop の plan_from_existing_pr は noop を拒否する', async () => {
+    let abortReason = '';
+    setMockScenario([
+      {
+        persona: 'supervisor',
+        status: 'done',
+        content: 'Do nothing.',
+        structuredOutput: {
+          action: 'noop',
+        },
+      },
+    ]);
+    mockListOpenPrs.mockReturnValue([
+      {
+        number: 42,
+        author: 'nrslib',
+        base_branch: 'improve',
+        head_branch: 'takt/20260425-reject-noop',
+        managed_by_takt: true,
+        labels: ['takt-managed'],
+        same_repository: true,
+        draft: false,
+        updated_at: '2026-04-25T13:39:00Z',
+      },
+    ]);
+
+    const config = loadBuiltinAutoImprovementLoopForPrExecution(projectDir);
+    const engine = new WorkflowEngine(
+      config,
+      projectDir,
+      'Current task body',
+      createSystemEngineOptions(projectDir),
+    );
+    engine.on('workflow:abort', (_state, reason) => {
+      abortReason = reason;
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(abortReason).toContain('plan_from_existing_pr');
+    expect(abortReason).toContain('$.action must be equal to one of the allowed values');
+    expect(mockClosePr).not.toHaveBeenCalled();
+    expect(mockCommentOnPr).not.toHaveBeenCalled();
+    expect(mockMergePr).not.toHaveBeenCalled();
+    expect(mockSaveTaskFile).not.toHaveBeenCalled();
   });
 
   it('executor 実経路でも pr_list と pr_selection は同一スナップショットを共有する', async () => {

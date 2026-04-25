@@ -98,12 +98,42 @@ function expectAutoImprovementLoopDownstreamContract(config: NonNullable<ReturnT
   const resolveConflicts = config.steps.find((step) => step.name === 'resolve_conflicts') as Record<string, unknown> | undefined;
   const enqueueConflictResolutionTask = config.steps.find((step) => step.name === 'enqueue_conflict_resolution_task') as Record<string, unknown> | undefined;
   const mergePr = config.steps.find((step) => step.name === 'merge_pr') as Record<string, unknown> | undefined;
-  const commentOnExistingPr = config.steps.find((step) => step.name === 'comment_on_existing_pr') as Record<string, unknown> | undefined;
+  const rejectPr = config.steps.find((step) => step.name === 'reject_pr') as Record<string, unknown> | undefined;
+  const planFromExistingPrStructuredOutput = planFromExistingPr?.structuredOutput as
+    | { schemaRef: string; schema: { properties?: Record<string, unknown> } }
+    | undefined;
 
   expect(String(planFromExistingPr?.instruction)).toContain('{context:route_context.selected_pr.number}');
-  expect(commentOnExistingPr?.effects).toEqual([
+  expect(String(planFromExistingPr?.instruction)).toContain('reject_pr');
+  expect(String(planFromExistingPr?.instruction)).toContain('enqueue_from_pr');
+  expect(String(planFromExistingPr?.instruction)).toContain('prepare_merge');
+  expect(String(planFromExistingPr?.instruction)).not.toContain('comment_on_pr');
+  expect(String(planFromExistingPr?.instruction)).not.toContain('pr_comment_markdown');
+  expect(String(planFromExistingPr?.instruction)).not.toContain('- noop');
+  expect(planFromExistingPr?.rules).toEqual([
+    expect.objectContaining({ condition: 'structured.plan_from_existing_pr.action == "enqueue_from_pr"', next: 'enqueue_from_pr' }),
+    expect.objectContaining({ condition: 'structured.plan_from_existing_pr.action == "prepare_merge"', next: 'prepare_merge' }),
+    expect.objectContaining({ condition: 'structured.plan_from_existing_pr.action == "reject_pr"', next: 'reject_pr' }),
+    expect.objectContaining({ condition: 'true', next: 'ABORT' }),
+  ]);
+  expect(planFromExistingPrStructuredOutput?.schemaRef).toBe('pr-followup-task');
+  expect(planFromExistingPrStructuredOutput?.schema).toEqual(expect.objectContaining({
+    type: 'object',
+    required: ['action'],
+    additionalProperties: false,
+    properties: expect.objectContaining({
+      action: {
+        type: 'string',
+        enum: ['enqueue_from_pr', 'prepare_merge', 'reject_pr'],
+      },
+      task_markdown: {
+        type: 'string',
+      },
+    }),
+  }));
+  expect(rejectPr?.effects).toEqual([
     expect.objectContaining({
-      type: 'comment_pr',
+      type: 'close_pr',
       pr: '{context:route_context.selected_pr.number}',
     }),
   ]);
@@ -147,6 +177,7 @@ function expectAutoImprovementLoopDownstreamContract(config: NonNullable<ReturnT
     expect.objectContaining({ condition: 'structured.plan_from_issue.action == "enqueue_new_task"', next: 'enqueue_from_issue' }),
     expect.objectContaining({ condition: 'structured.plan_from_issue.action == "noop"', next: 'wait_before_next_scan' }),
   ]));
+  expect(config.steps.find((step) => step.name === 'comment_on_existing_pr')).toBeUndefined();
   expect(config.steps.find((step) => step.name === 'confirm_issue_enqueue')).toBeUndefined();
 }
 
@@ -205,6 +236,7 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
     expect((config as Record<string, unknown>).maxSteps).toBe('infinite');
     expect(config!.schemas).toEqual(expect.objectContaining({
       'followup-task': 'followup-task',
+      'pr-followup-task': 'pr-followup-task',
     }));
     expectAutoImprovementLoopRouteContext(config!);
     expectAutoImprovementLoopDownstreamContract(config!);
@@ -288,7 +320,7 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
     const resolveConflicts = config!.steps.find((step) => step.name === 'resolve_conflicts') as Record<string, unknown> | undefined;
     const enqueueConflictResolutionTask = config!.steps.find((step) => step.name === 'enqueue_conflict_resolution_task') as Record<string, unknown> | undefined;
     const mergePr = config!.steps.find((step) => step.name === 'merge_pr') as Record<string, unknown> | undefined;
-    const commentOnExistingPr = config!.steps.find((step) => step.name === 'comment_on_existing_pr') as Record<string, unknown> | undefined;
+    const rejectPr = config!.steps.find((step) => step.name === 'reject_pr') as Record<string, unknown> | undefined;
     const waitBeforeNextScan = config!.steps.find((step) => step.name === 'wait_before_next_scan') as Record<string, unknown> | undefined;
 
     expect(planFromIssue?.delayBeforeMs).toBe(60000);
@@ -309,9 +341,21 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
       }),
     ]);
     expect(planFromExistingPr?.rules).toEqual(expect.arrayContaining([
-      expect.objectContaining({ condition: 'structured.plan_from_existing_pr.action == "noop"', next: 'wait_before_next_scan' }),
+      expect.objectContaining({ condition: 'structured.plan_from_existing_pr.action == "enqueue_from_pr"', next: 'enqueue_from_pr' }),
+      expect.objectContaining({ condition: 'structured.plan_from_existing_pr.action == "prepare_merge"', next: 'prepare_merge' }),
+      expect.objectContaining({ condition: 'structured.plan_from_existing_pr.action == "reject_pr"', next: 'reject_pr' }),
       expect.objectContaining({ condition: 'true', next: 'ABORT' }),
     ]));
+    expect(planFromExistingPr?.rules).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ condition: 'structured.plan_from_existing_pr.action == "comment_on_pr"', next: 'comment_on_existing_pr' }),
+      expect.objectContaining({ condition: 'structured.plan_from_existing_pr.action == "noop"', next: 'wait_before_next_scan' }),
+    ]));
+    expect(rejectPr?.effects).toEqual([
+      expect.objectContaining({
+        type: 'close_pr',
+        pr: '{context:route_context.selected_pr.number}',
+      }),
+    ]);
     expectAutoImprovementLoopDownstreamContract(config!);
     expect(prepareMerge?.rules).toEqual(expect.arrayContaining([
       expect.objectContaining({ condition: 'effect.prepare_merge.sync_with_root.success == true', next: 'merge_pr' }),

@@ -110,5 +110,7 @@ export interface GitProvider {
 
   commentOnPr(prNumber: number, body: string, cwd?: string): CommentResult;
 
+  closePr(prNumber: number, cwd?: string): MergeResult;
+
   mergePr(prNumber: number, cwd?: string): MergeResult;
 }

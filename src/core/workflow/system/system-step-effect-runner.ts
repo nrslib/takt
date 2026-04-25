@@ -99,7 +99,12 @@ export function validateSystemEffectPayload(
     requireNumber(payload.pr, 'pr');
     requireString(payload.body, 'body');
   }
-  if (effect.type === 'sync_with_root' || effect.type === 'resolve_conflicts_with_ai' || effect.type === 'merge_pr') {
+  if (
+    effect.type === 'sync_with_root'
+    || effect.type === 'resolve_conflicts_with_ai'
+    || effect.type === 'merge_pr'
+    || effect.type === 'close_pr'
+  ) {
     requireNumber(payload.pr, 'pr');
   }
 }

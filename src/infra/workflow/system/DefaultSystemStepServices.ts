@@ -18,6 +18,7 @@ import {
 } from './system-git-context.js';
 import {
   commentPrEffect,
+  closePrEffect,
   mergePrEffect,
 } from './system-pr-effects.js';
 import { enqueueTaskEffect } from './system-enqueue-effect.js';
@@ -163,6 +164,8 @@ async function runEffect(
       return resolveConflictsWithAiEffect(options, payload as Parameters<typeof resolveConflictsWithAiEffect>[1]);
     case 'merge_pr':
       return mergePrEffect(options, payload as Parameters<typeof mergePrEffect>[1]);
+    case 'close_pr':
+      return closePrEffect(options, payload as Parameters<typeof closePrEffect>[1]);
   }
 }
 

@@ -721,6 +721,27 @@ describe('system workflow schema', () => {
     expect(result.success).toBe(true);
   });
 
+  it('close_pr effect を受け付ける', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'reject_pr',
+      mode: 'system',
+      effects: [
+        {
+          type: 'close_pr',
+          pr: '{context:route_context.selected_pr.number}',
+        },
+      ],
+      rules: [
+        {
+          when: 'true',
+          next: 'COMPLETE',
+        },
+      ],
+    });
+
+    expect(result.success).toBe(true);
+  });
+
   it('enqueue_task issue の bare string payload を reject する', () => {
     const result = WorkflowStepRawSchema.safeParse({
       name: 'enqueue_from_issue',
@@ -997,9 +1018,6 @@ describe('system workflow schema', () => {
             type: 'string',
             enum: [
               'enqueue_new_task',
-              'comment_on_pr',
-              'enqueue_from_pr',
-              'prepare_merge',
               'noop',
             ],
           },
@@ -1016,6 +1034,110 @@ describe('system workflow schema', () => {
           },
         }),
       }));
+      expect((structuredOutput.schema.properties as Record<string, unknown>).pr_comment_markdown).toBeUndefined();
+    } finally {
+      rmSync(workflowDir, { recursive: true, force: true });
+    }
+  });
+
+  it('builtin followup-task schema fallback は PR 専用 action を許可しない', () => {
+    const workflowDir = mkdtempSync(join(tmpdir(), 'takt-system-schema-followup-no-pr-actions-'));
+
+    try {
+      const raw = WorkflowConfigRawSchema.parse({
+        name: 'auto-improvement-loop',
+        max_steps: 3,
+        initial_step: 'plan_followup',
+        steps: [
+          {
+            name: 'plan_followup',
+            persona: 'supervisor',
+            instruction: 'Plan follow-up task',
+            structured_output: {
+              schema_ref: 'followup-task',
+            },
+            rules: [
+              {
+                when: 'true',
+                next: 'COMPLETE',
+              },
+            ],
+          },
+        ],
+      });
+
+      const normalized = normalizeWorkflowConfig(raw, workflowDir);
+      const step = normalized.steps[0] as Record<string, unknown>;
+      const structuredOutput = step.structuredOutput as {
+        schema: {
+          properties: {
+            action: {
+              enum: string[];
+            };
+          };
+        };
+      };
+      const allowedActions = structuredOutput.schema.properties.action.enum;
+
+      expect(allowedActions).toEqual(['enqueue_new_task', 'noop']);
+      expect(allowedActions).not.toContain('enqueue_from_pr');
+      expect(allowedActions).not.toContain('prepare_merge');
+      expect(allowedActions).not.toContain('reject_pr');
+    } finally {
+      rmSync(workflowDir, { recursive: true, force: true });
+    }
+  });
+
+  it('builtin pr-followup-task schema fallback を解決できる', () => {
+    const workflowDir = mkdtempSync(join(tmpdir(), 'takt-system-schema-pr-followup-builtins-'));
+
+    try {
+      const raw = WorkflowConfigRawSchema.parse({
+        name: 'auto-improvement-loop',
+        max_steps: 3,
+        initial_step: 'plan_from_existing_pr',
+        steps: [
+          {
+            name: 'plan_from_existing_pr',
+            persona: 'supervisor',
+            instruction: 'Plan next PR action',
+            structured_output: {
+              schema_ref: 'pr-followup-task',
+            },
+            rules: [
+              {
+                when: 'true',
+                next: 'COMPLETE',
+              },
+            ],
+          },
+        ],
+      });
+
+      const normalized = normalizeWorkflowConfig(raw, workflowDir);
+      const step = normalized.steps[0] as Record<string, unknown>;
+      const structuredOutput = step.structuredOutput as { schemaRef: string; schema: Record<string, unknown> };
+
+      expect(structuredOutput.schemaRef).toBe('pr-followup-task');
+      expect(structuredOutput.schema).toEqual(expect.objectContaining({
+        type: 'object',
+        required: ['action'],
+        additionalProperties: false,
+        properties: expect.objectContaining({
+          action: {
+            type: 'string',
+            enum: [
+              'enqueue_from_pr',
+              'prepare_merge',
+              'reject_pr',
+            ],
+          },
+          task_markdown: {
+            type: 'string',
+          },
+        }),
+      }));
+      expect((structuredOutput.schema.properties as Record<string, unknown>).issue).toBeUndefined();
     } finally {
       rmSync(workflowDir, { recursive: true, force: true });
     }
@@ -1516,7 +1638,7 @@ steps:
   - name: route_context
     mode: system
     effects:
-      - type: merge_pr
+      - type: close_pr
         pr: 42
     rules:
       - when: "true"
@@ -1528,7 +1650,7 @@ steps:
     try {
       const workflow = loadWorkflowFromFile(workflowPath, projectDir);
       expect(workflow.steps[0]?.effects).toEqual([
-        { type: 'merge_pr', pr: 42 },
+        { type: 'close_pr', pr: 42 },
       ]);
     } finally {
       rmSync(projectDir, { recursive: true, force: true });

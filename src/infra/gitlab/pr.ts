@@ -267,3 +267,23 @@ export function mergeMr(mrNumber: number, cwd: string): MergeResult {
     return { success: false, error: errorMessage };
   }
 }
+
+export function closeMr(mrNumber: number, cwd: string): MergeResult {
+  const glabStatus = checkGlabCli(cwd);
+  if (!glabStatus.available) {
+    return { success: false, error: glabStatus.error };
+  }
+
+  try {
+    execFileSync('glab', ['mr', 'close', String(mrNumber)], {
+      cwd,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    return { success: true };
+  } catch (err) {
+    const errorMessage = getErrorMessage(err);
+    log.error('MR close failed', { error: errorMessage });
+    return { success: false, error: errorMessage };
+  }
+}

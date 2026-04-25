@@ -24,3 +24,15 @@ export function mergePrEffect(
     ...(result.error ? { error: result.error } : {}),
   };
 }
+
+export function closePrEffect(
+  options: SystemStepServicesOptions,
+  payload: { pr: number },
+): Record<string, unknown> {
+  const result = getGitProvider().closePr(payload.pr, options.projectCwd);
+  return {
+    success: result.success,
+    failed: result.success !== true,
+    ...(result.error ? { error: result.error } : {}),
+  };
+}

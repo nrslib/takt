@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import * as gitlabPrModule from '../infra/gitlab/pr.js';
 
 const mockExecFileSync = vi.fn();
 const { mockCheckGlabCli } = vi.hoisted(() => ({
@@ -627,6 +628,58 @@ describe('mergeMr', () => {
     mergeMr(42, '/my/project');
 
     expect(mockCheckGlabCli).toHaveBeenCalledWith('/my/project');
+  });
+});
+
+describe('closeMr', () => {
+  it('glab mr close を branch 削除なしで呼び出す', () => {
+    const closeMr = (gitlabPrModule as Record<string, unknown>).closeMr as
+      | ((mrNumber: number, cwd: string) => { success: boolean; error?: string })
+      | undefined;
+
+    expect(closeMr).toBeTypeOf('function');
+    mockExecFileSync.mockReturnValue('');
+
+    const result = closeMr!(42, '/project');
+
+    expect(result).toEqual({ success: true });
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      'glab',
+      ['mr', 'close', '42'],
+      expect.objectContaining({ cwd: '/project', encoding: 'utf-8' }),
+    );
+    const args = mockExecFileSync.mock.calls[0]?.[1] as string[];
+    expect(args).not.toContain('--remove-source-branch');
+    expect(args).not.toContain('--comment');
+    expect(args).not.toContain('--body');
+  });
+
+  it('glab CLI が利用できない場合は execFileSync を呼ばず失敗を返す', () => {
+    const closeMr = (gitlabPrModule as Record<string, unknown>).closeMr as
+      | ((mrNumber: number, cwd: string) => { success: boolean; error?: string })
+      | undefined;
+
+    expect(closeMr).toBeTypeOf('function');
+    mockCheckGlabCli.mockReturnValueOnce({ available: false, error: 'glab unavailable' });
+
+    const result = closeMr!(42, '/project');
+
+    expect(result).toEqual({ success: false, error: 'glab unavailable' });
+    expect(mockExecFileSync).not.toHaveBeenCalled();
+  });
+
+  it('glab mr close が失敗した場合は success: false を返す', () => {
+    const closeMr = (gitlabPrModule as Record<string, unknown>).closeMr as
+      | ((mrNumber: number, cwd: string) => { success: boolean; error?: string })
+      | undefined;
+
+    expect(closeMr).toBeTypeOf('function');
+    mockExecFileSync.mockImplementation(() => { throw new Error('close denied'); });
+
+    const result = closeMr!(42, '/project');
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('close denied');
   });
 });
 

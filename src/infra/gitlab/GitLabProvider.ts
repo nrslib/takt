@@ -8,7 +8,7 @@
 
 import { checkGlabCli } from './utils.js';
 import { fetchIssue, listOpenIssues, createIssue } from './issue.js';
-import { findExistingMr, commentOnMr, createMergeRequest, fetchMrReviewComments, listOpenMrs, mergeMr } from './pr.js';
+import { findExistingMr, commentOnMr, closeMr, createMergeRequest, fetchMrReviewComments, listOpenMrs, mergeMr } from './pr.js';
 import type { GitProvider, CliStatus, Issue, ExistingPr, IssueListItem, PrListItem, CreateIssueOptions, CreateIssueResult, CreatePrOptions, CreatePrResult, CommentResult, MergeResult, PrReviewData } from '../git/types.js';
 
 export class GitLabProvider implements GitProvider {
@@ -46,6 +46,10 @@ export class GitLabProvider implements GitProvider {
 
   commentOnPr(prNumber: number, body: string, cwd?: string): CommentResult {
     return commentOnMr(prNumber, body, cwd ?? process.cwd());
+  }
+
+  closePr(prNumber: number, cwd?: string): MergeResult {
+    return closeMr(prNumber, cwd ?? process.cwd());
   }
 
   mergePr(prNumber: number, cwd?: string): MergeResult {

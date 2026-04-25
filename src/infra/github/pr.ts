@@ -287,3 +287,23 @@ export function mergePr(prNumber: number, cwd: string): MergeResult {
     return { success: false, error: errorMessage };
   }
 }
+
+export function closePr(prNumber: number, cwd: string): MergeResult {
+  const ghStatus = checkGhCli(cwd);
+  if (!ghStatus.available) {
+    return { success: false, error: ghStatus.error };
+  }
+
+  try {
+    execFileSync('gh', ['pr', 'close', String(prNumber)], {
+      cwd,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    return { success: true };
+  } catch (err) {
+    const errorMessage = getErrorMessage(err);
+    log.error('PR close failed', { error: errorMessage });
+    return { success: false, error: errorMessage };
+  }
+}

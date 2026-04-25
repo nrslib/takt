@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import * as githubPrModule from '../infra/github/pr.js';
 
 const mockExecFileSync = vi.fn();
 vi.mock('node:child_process', () => ({
@@ -446,6 +447,66 @@ describe('mergePr', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('merge failed');
+  });
+});
+
+describe('closePr', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockExecFileSync.mockReset();
+    vi.mocked(checkGhCli).mockReset();
+    vi.mocked(checkGhCli).mockReturnValue({ available: true });
+  });
+
+  it('gh pr close を branch 削除なしで呼び出す', () => {
+    const closePr = (githubPrModule as Record<string, unknown>).closePr as
+      | ((prNumber: number, cwd: string) => { success: boolean; error?: string })
+      | undefined;
+
+    expect(closePr).toBeTypeOf('function');
+    mockExecFileSync.mockReturnValue('');
+
+    const result = closePr!(42, '/project');
+
+    expect(result).toEqual({ success: true });
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      'gh',
+      ['pr', 'close', '42'],
+      expect.objectContaining({ cwd: '/project', encoding: 'utf-8' }),
+    );
+    const args = mockExecFileSync.mock.calls[0]?.[1] as string[];
+    expect(args).not.toContain('--delete-branch');
+    expect(args).not.toContain('--comment');
+    expect(args).not.toContain('--body');
+  });
+
+  it('gh CLI が利用不可なら失敗結果を返す', async () => {
+    const closePr = (githubPrModule as Record<string, unknown>).closePr as
+      | ((prNumber: number, cwd: string) => { success: boolean; error?: string })
+      | undefined;
+
+    expect(closePr).toBeTypeOf('function');
+    const { checkGhCli } = await import('../infra/github/issue.js');
+    vi.mocked(checkGhCli).mockReturnValueOnce({ available: false, error: 'gh unavailable' });
+
+    const result = closePr!(42, '/project');
+
+    expect(result).toEqual({ success: false, error: 'gh unavailable' });
+    expect(mockExecFileSync).not.toHaveBeenCalled();
+  });
+
+  it('gh pr close が失敗した場合は success: false を返す', () => {
+    const closePr = (githubPrModule as Record<string, unknown>).closePr as
+      | ((prNumber: number, cwd: string) => { success: boolean; error?: string })
+      | undefined;
+
+    expect(closePr).toBeTypeOf('function');
+    mockExecFileSync.mockImplementation(() => { throw new Error('close failed'); });
+
+    const result = closePr!(42, '/project');
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('close failed');
   });
 });
 
