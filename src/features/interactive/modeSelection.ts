@@ -20,10 +20,24 @@ import { getLabel } from '../../shared/i18n/index.js';
 export async function selectInteractiveMode(
   lang: 'en' | 'ja',
   workflowDefault?: InteractiveMode,
+  availableModes?: readonly InteractiveMode[],
 ): Promise<InteractiveMode | null> {
-  const defaultMode = workflowDefault ?? DEFAULT_INTERACTIVE_MODE;
+  const resolvedModes = availableModes ?? INTERACTIVE_MODES;
+  if (resolvedModes.length === 0) {
+    throw new Error('At least one interactive mode must be available.');
+  }
+  const [firstMode] = resolvedModes;
+  if (!firstMode) {
+    throw new Error('At least one interactive mode must be available.');
+  }
 
-  const options: { label: string; value: InteractiveMode; description: string }[] = INTERACTIVE_MODES.map((mode) => ({
+  const defaultMode = workflowDefault && resolvedModes.includes(workflowDefault)
+    ? workflowDefault
+    : (resolvedModes.includes(DEFAULT_INTERACTIVE_MODE)
+      ? DEFAULT_INTERACTIVE_MODE
+      : firstMode);
+
+  const options: { label: string; value: InteractiveMode; description: string }[] = resolvedModes.map((mode) => ({
     label: getLabel(`interactive.modeSelection.${mode}`, lang),
     value: mode,
     description: getLabel(`interactive.modeSelection.${mode}Description`, lang),

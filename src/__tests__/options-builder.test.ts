@@ -13,7 +13,17 @@ function createStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
   };
 }
 
-function createBuilder(step: WorkflowStep, engineOverrides: Partial<WorkflowEngineOptions> = {}): OptionsBuilder {
+type BuilderEngineOverrides = Partial<WorkflowEngineOptions> & {
+  workflowName?: string;
+};
+
+function createProcessSafetyByStep(parentRunPid: number): WorkflowEngineOptions['phase1ProcessSafetyByStep'] {
+  return {
+    implement: { protectedParentRunPid: parentRunPid },
+  };
+}
+
+function createBuilder(step: WorkflowStep, engineOverrides: BuilderEngineOverrides = {}): OptionsBuilder {
   const engineOptions: WorkflowEngineOptions = {
     projectCwd: '/project',
     provider: 'codex',
@@ -33,7 +43,7 @@ function createBuilder(step: WorkflowStep, engineOverrides: Partial<WorkflowEngi
     () => '.takt/runs/sample/reports',
     () => 'ja',
     () => [{ name: step.name }],
-    () => 'default',
+    () => engineOverrides.workflowName ?? 'default',
     () => 'test workflow',
   );
 }
@@ -244,6 +254,86 @@ describe('OptionsBuilder.buildBaseOptions', () => {
       codex: { reasoningEffort: 'low' },
     });
   });
+
+  it('buildBaseOptions は takt-default の implement でも process safety を workflowMeta に含めない', () => {
+    const step = createStep({ name: 'implement' });
+    const builder = createBuilder(step, {
+      workflowName: 'takt-default',
+      phase1ProcessSafetyByStep: createProcessSafetyByStep(4242),
+    });
+
+    const options = builder.buildBaseOptions(step);
+
+    expect(options.workflowMeta).toEqual(expect.objectContaining({
+      workflowName: 'takt-default',
+      currentStep: 'implement',
+    }));
+    expect(options.workflowMeta?.processSafety).toBeUndefined();
+  });
+
+  it('takt-default の implement では Phase 1 agent options に process safety を workflowMeta に含める', () => {
+    const step = createStep({ name: 'implement' });
+    const builder = createBuilder(step, {
+      workflowName: 'takt-default',
+      phase1ProcessSafetyByStep: createProcessSafetyByStep(4242),
+    });
+
+    const options = builder.buildAgentOptions(step);
+
+    expect(options.workflowMeta).toEqual(expect.objectContaining({
+      workflowName: 'takt-default',
+      currentStep: 'implement',
+      processSafety: { protectedParentRunPid: 4242 },
+    }));
+  });
+
+  it('takt-default の implement.part-* でも process safety を workflowMeta に含める', () => {
+    const step = createStep({
+      name: 'implement.part-1',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+    });
+    const builder = createBuilder(step, {
+      workflowName: 'takt-default',
+      phase1ProcessSafetyByStep: createProcessSafetyByStep(4242),
+    });
+
+    const options = builder.buildAgentOptions(step, {
+      teamLeaderPart: {
+        processSafety: { protectedParentRunPid: 4242 },
+      },
+    });
+
+    expect(options.workflowMeta).toEqual(expect.objectContaining({
+      workflowName: 'takt-default',
+      currentStep: 'implement.part-1',
+      processSafety: { protectedParentRunPid: 4242 },
+    }));
+  });
+
+  it('takt-default の非 implement step では process safety を workflowMeta に含めない', () => {
+    const step = createStep({ name: 'reviewers' });
+    const builder = createBuilder(step, {
+      workflowName: 'takt-default',
+      phase1ProcessSafetyByStep: createProcessSafetyByStep(4242),
+    });
+
+    const options = builder.buildAgentOptions(step);
+
+    expect(options.workflowMeta?.processSafety).toBeUndefined();
+  });
+
+  it('対象外の workflow/step では process safety を workflowMeta に含めない', () => {
+    const step = createStep({ name: 'reviewers' });
+    const builder = createBuilder(step, {
+      workflowName: 'custom-workflow',
+      phase1ProcessSafetyByStep: createProcessSafetyByStep(4242),
+    });
+
+    const options = builder.buildBaseOptions(step);
+
+    expect(options.workflowMeta?.processSafety).toBeUndefined();
+  });
 });
 
 describe('OptionsBuilder.resolveStepProviderModel', () => {
@@ -366,6 +456,39 @@ describe('OptionsBuilder.buildResumeOptions', () => {
     expect(options.allowedTools).toEqual([]);
     expect(options.maxTurns).toBe(3);
     expect(options.sessionId).toBe('session-123');
+  });
+
+  it('report/status phase では takt-default の implement でも process safety を付与しない', () => {
+    const step = createStep({ name: 'implement' });
+    const builder = createBuilder(step, {
+      workflowName: 'takt-default',
+      phase1ProcessSafetyByStep: createProcessSafetyByStep(4242),
+    });
+
+    const options = builder.buildResumeOptions(step, 'session-123', { maxTurns: 3 });
+
+    expect(options.workflowMeta?.processSafety).toBeUndefined();
+  });
+});
+
+describe('OptionsBuilder.buildNewSessionReportOptions', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('new session の report phase でも process safety を付与しない', () => {
+    const step = createStep({ name: 'implement' });
+    const builder = createBuilder(step, {
+      workflowName: 'takt-default',
+      phase1ProcessSafetyByStep: createProcessSafetyByStep(4242),
+    });
+
+    const options = builder.buildNewSessionReportOptions(step, {
+      allowedTools: ['Write'],
+      maxTurns: 3,
+    });
+
+    expect(options.workflowMeta?.processSafety).toBeUndefined();
   });
 });
 

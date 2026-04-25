@@ -81,6 +81,11 @@ describe('config resolution defaults and project-local priority', () => {
         projectYaml: 'concurrency: 3\n',
         expected: 3,
       },
+      {
+        key: 'syncProjectLocalTaktOnRetry',
+        projectYaml: 'sync_project_local_takt_on_retry: false\n',
+        expected: false,
+      },
     ])('should resolve $key from project config', ({ key, projectYaml, expected }) => {
       writeFileSync(globalConfigPath, 'language: en\n', 'utf-8');
       invalidateGlobalConfigCache();
@@ -172,6 +177,10 @@ describe('config resolution defaults and project-local priority', () => {
       expect(resolveConfigValueWithSource(projectDir, 'concurrency')).toEqual({ value: 1, source: 'default' });
       expect(resolveConfigValueWithSource(projectDir, 'taskPollIntervalMs')).toEqual({ value: 500, source: 'default' });
       expect(resolveConfigValueWithSource(projectDir, 'interactivePreviewSteps')).toEqual({ value: 3, source: 'default' });
+      expect(resolveConfigValueWithSource(projectDir, 'syncProjectLocalTaktOnRetry' as ConfigParameterKey)).toEqual({
+        value: true,
+        source: 'default',
+      });
     });
 
     it('should resolve keys from global config when project keys are unset', () => {
@@ -190,6 +199,7 @@ describe('config resolution defaults and project-local priority', () => {
           'concurrency: 3',
           'task_poll_interval_ms: 1200',
           'interactive_preview_steps: 2',
+          'sync_project_local_takt_on_retry: false',
         ].join('\n'),
         'utf-8',
       );
@@ -212,6 +222,10 @@ describe('config resolution defaults and project-local priority', () => {
       expect(resolveConfigValueWithSource(projectDir, 'taskPollIntervalMs')).toEqual({ value: 1200, source: 'global' });
       expect(resolveConfigValueWithSource(projectDir, 'interactivePreviewSteps')).toEqual({
         value: 2,
+        source: 'global',
+      });
+      expect(resolveConfigValueWithSource(projectDir, 'syncProjectLocalTaktOnRetry' as ConfigParameterKey)).toEqual({
+        value: false,
         source: 'global',
       });
     });

@@ -173,6 +173,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
       permissionMode: 'readonly',
       maxTurns: TEAM_LEADER_MAX_TURNS,
       onStream: options.onStream,
+      workflowMeta: options.workflowMeta,
       onPromptResolved: options.onPromptResolved,
     });
 
@@ -210,6 +211,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
       permissionMode: 'readonly',
       maxTurns: TEAM_LEADER_MAX_TURNS,
       onStream: options.onStream,
+      workflowMeta: options.workflowMeta,
     });
 
     if (response.status !== 'done') {

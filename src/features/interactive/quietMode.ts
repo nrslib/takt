@@ -16,6 +16,7 @@ import {
   type InteractiveModeResult,
   type InteractiveUIText,
   type ConversationMessage,
+  type InteractiveSeedInput,
   DEFAULT_INTERACTIVE_TOOLS,
   buildSummaryPrompt,
   selectPostSummaryAction,
@@ -43,14 +44,16 @@ const log = createLogger('quiet-mode');
  */
 export async function quietMode(
   cwd: string,
-  initialInput?: string,
+  initialInput?: InteractiveSeedInput,
   workflowContext?: WorkflowContext,
 ): Promise<InteractiveModeResult> {
   const ctx = initializeSession(cwd, 'interactive');
+  const sourceContext = initialInput?.sourceContext;
+  const history: ConversationMessage[] = initialInput?.userMessage
+    ? [{ role: 'user', content: initialInput.userMessage }]
+    : [];
 
-  let userInput = initialInput;
-
-  if (!userInput) {
+  if (history.length === 0 && !sourceContext) {
     info(getLabel('interactive.ui.intro', ctx.lang));
     blankLine();
 
@@ -65,18 +68,14 @@ export async function quietMode(
       info(getLabel('interactive.ui.cancelled', ctx.lang));
       return { action: 'cancel', task: '' };
     }
-    userInput = trimmed;
+    history.push({ role: 'user', content: trimmed });
   }
-
-  const history: ConversationMessage[] = [
-    { role: 'user', content: userInput },
-  ];
 
   const conversationLabel = getLabel('interactive.conversationLabel', ctx.lang);
   const noTranscript = getLabel('interactive.noTranscript', ctx.lang);
 
   const summaryPrompt = buildSummaryPrompt(
-    history, !!ctx.sessionId, ctx.lang, noTranscript, conversationLabel, workflowContext,
+    history, !!ctx.sessionId, ctx.lang, noTranscript, conversationLabel, workflowContext, sourceContext,
   );
 
   if (!summaryPrompt) {

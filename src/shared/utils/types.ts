@@ -62,6 +62,8 @@ export interface NdjsonStepStart {
   providerSource?: string;
   model?: string;
   modelSource?: string;
+  providerOptions?: unknown;
+  providerOptionsSources?: Record<string, string>;
 }
 
 export interface NdjsonStepComplete {

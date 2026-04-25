@@ -29,6 +29,24 @@ function requireFiniteWorkflowMaxSteps(workflowConfig: WorkflowConfig): number {
   return workflowConfig.maxSteps;
 }
 
+function resolvePhase1ProcessSafetyByStep(
+  workflowConfig: WorkflowConfig,
+  parentRunPid: number,
+): Record<string, { protectedParentRunPid: number }> | undefined {
+  if (
+    workflowConfig.name !== 'takt-default'
+    || !workflowConfig.steps.some((step) => step.name === 'implement')
+  ) {
+    return undefined;
+  }
+
+  return {
+    implement: {
+      protectedParentRunPid: parentRunPid,
+    },
+  };
+}
+
 export async function executeWorkflow(
   workflowConfig: WorkflowConfig,
   task: string,
@@ -55,8 +73,10 @@ async function executeWorkflowInternal(
   options: WorkflowExecutionOptions,
   runContext?: WorkflowRunContext,
 ): Promise<WorkflowExecutionResult> {
+  const parentRunPid = process.pid;
   const bootstrap = createWorkflowExecutionBootstrap(workflowConfig, task, cwd, options);
   const workflowExecutionContext = createWorkflowExecutionContext(workflowConfig, options.projectCwd);
+  const phase1ProcessSafetyByStep = resolvePhase1ProcessSafetyByStep(workflowConfig, parentRunPid);
   let engine: WorkflowEngine | null = null;
   let eventBridge: WorkflowExecutionEventBridge | undefined;
   const getCurrentWorkflowStack = (): WorkflowResumePointEntry[] | undefined => {
@@ -139,6 +159,7 @@ async function executeWorkflowInternal(
       taskColorIndex: options.taskColorIndex,
       initialIteration: options.initialIterationOverride,
       currentTask: resolveCurrentTaskContext(options, bootstrap.runSlug),
+      phase1ProcessSafetyByStep,
       systemStepServicesFactory: createDefaultSystemStepServices,
       workflowCallResolver: createWorkflowCallResolver(workflowExecutionContext),
     });

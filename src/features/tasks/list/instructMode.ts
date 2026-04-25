@@ -122,7 +122,8 @@ export async function runInstructMode(
   const strategy: ConversationStrategy = {
     systemPrompt,
     allowedTools: INSTRUCT_TOOLS,
-    transformPrompt: (userMessage: string) => buildInteractivePolicyPrompt(ctx.lang, userMessage),
+    transformPrompt: (userMessage: string, sourceContext?: string) =>
+      buildInteractivePolicyPrompt(ctx.lang, userMessage, sourceContext),
     introMessage: `${ui.intro}${replayHint}`,
     selectAction: createSelectActionWithoutExecute(ui),
     previousOrderContent: previousOrderContent ?? undefined,

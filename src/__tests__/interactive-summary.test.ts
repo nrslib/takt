@@ -101,6 +101,61 @@ describe('buildSummaryPrompt', () => {
     expect(summary).toContain('Conversation:');
     expect(summary).toContain('User: Improve parser');
   });
+
+  it('includes source context when conversation is present', () => {
+    const buildSummaryPromptWithSourceContext = buildSummaryPrompt as unknown as (
+      history: Array<{ role: 'user' | 'assistant'; content: string }>,
+      hasSession: boolean,
+      lang: 'en' | 'ja',
+      noTranscriptNote: string,
+      conversationLabel: string,
+      workflowContext?: WorkflowContext,
+      sourceContext?: string,
+    ) => string;
+
+    const summary = buildSummaryPromptWithSourceContext(
+      [{ role: 'user', content: 'Improve parser' }],
+      false,
+      'en',
+      'No transcript',
+      'Conversation:',
+      undefined,
+      'PR context',
+    );
+
+    expect(summary).toContain('Conversation:');
+    expect(summary).toContain('User: Improve parser');
+    expect(summary).toContain('PR context');
+    expect(summary).toContain('untrusted external reference data');
+    expect(summary).toContain('```text');
+  });
+
+  it('builds a summary from source context only', () => {
+    const buildSummaryPromptWithSourceContext = buildSummaryPrompt as unknown as (
+      history: Array<{ role: 'user' | 'assistant'; content: string }>,
+      hasSession: boolean,
+      lang: 'en' | 'ja',
+      noTranscriptNote: string,
+      conversationLabel: string,
+      workflowContext?: WorkflowContext,
+      sourceContext?: string,
+    ) => string;
+
+    const summary = buildSummaryPromptWithSourceContext(
+      [],
+      false,
+      'en',
+      'No transcript',
+      'Conversation:',
+      undefined,
+      'PR context',
+    );
+
+    expect(summary).toContain('PR context');
+    expect(summary).toContain('untrusted external reference data');
+    expect(summary).toContain('```text');
+    expect(summary).not.toContain('User: PR context');
+  });
 });
 
 describe('buildSummaryActionOptions', () => {

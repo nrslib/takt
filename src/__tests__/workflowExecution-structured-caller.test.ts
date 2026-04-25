@@ -497,6 +497,24 @@ beforeEach(() => {
     expect(MockWorkflowEngine.lastInstance.receivedOptions.model).toBe('cursor-fast');
   });
 
+  it('should pass resolved phase 1 process safety to WorkflowEngine', async () => {
+    await executeWorkflow({ ...makeConfig(), name: 'takt-default' }, 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+    });
+
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.phase1ProcessSafetyByStep).toEqual({
+      implement: { protectedParentRunPid: process.pid },
+    });
+  });
+
+  it('should not pass phase 1 process safety to WorkflowEngine for non target workflows', async () => {
+    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+    });
+
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.phase1ProcessSafetyByStep).toBeUndefined();
+  });
+
   it('should resolve workflow_call named lookup in project -> user -> builtin order when executeWorkflow wires it', async () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'takt-project-'));
     const configDir = mkdtempSync(join(tmpdir(), 'takt-config-'));

@@ -2,12 +2,14 @@ import { join } from 'node:path';
 import type { WorkflowStep, WorkflowState, Language } from '../../models/types.js';
 import type { StepProviderOptions } from '../../models/workflow-types.js';
 import type { RunAgentOptions } from '../../../agents/runner.js';
+import type { WorkflowMeta } from '../../../agents/types.js';
 import type { StructuredCaller } from '../../../agents/structured-caller.js';
 import type { PhaseRunnerContext } from '../phase-runner.js';
 import {
   resolveEffectiveProviderOptions,
   resolveEffectiveTeamLeaderPartProviderOptions,
   resolvePersonaProviderOptions,
+  resolveProviderOptionsSources,
 } from '../../../infra/config/providerOptions.js';
 import {
   assertProviderResolvedForCapabilitySensitiveOptions,
@@ -26,6 +28,7 @@ import type {
 } from '../types.js';
 import { buildSessionKey } from '../session-key.js';
 import { resolveStepProviderModel } from '../provider-resolution.js';
+import { buildPhase1WorkflowMeta } from './workflow-meta.js';
 
 export class OptionsBuilder {
   constructor(
@@ -63,11 +66,23 @@ export class OptionsBuilder {
       modelSource: engineProviderInfo.modelSource,
       personaProviders: this.engineOptions.personaProviders,
     });
+    const providerOptions = this.resolveMergedProviderOptions(step, runtime);
+    const providerOptionsSources = resolveProviderOptionsSources(
+      step.providerOptions,
+      resolvePersonaProviderOptions(this.engineOptions.personaProviders, step.personaDisplayName),
+      this.engineOptions.providerOptions,
+      this.engineOptions.providerOptionsOriginResolver,
+      this.engineOptions.providerOptionsSource,
+    );
     return {
       provider: resolved.provider ?? engineProviderInfo.provider,
       providerSource: resolved.providerSource ?? engineProviderInfo.providerSource,
       model: resolved.model ?? engineProviderInfo.model,
       modelSource: resolved.modelSource ?? engineProviderInfo.modelSource,
+      providerOptions,
+      providerOptionsSources: Object.keys(providerOptionsSources).length > 0
+        ? providerOptionsSources
+        : undefined,
     };
   }
 
@@ -113,6 +128,13 @@ export class OptionsBuilder {
     const { provider: resolvedProvider, model: resolvedModel } = this.resolveStepProviderModel(step, runtime);
 
     const providerOptions = mergedProviderOptions ?? this.resolveMergedProviderOptions(step, runtime);
+    const workflowMeta: WorkflowMeta = {
+      workflowName: this.getWorkflowName(),
+      workflowDescription: this.getWorkflowDescription(),
+      currentStep: step.name,
+      stepsList: steps,
+      currentPosition,
+    };
     const baseOptions: RunAgentOptions & { resolvedProviderOptions?: StepProviderOptions } = {
       cwd: this.getCwd(),
       projectCwd: this.getProjectCwd(),
@@ -132,15 +154,22 @@ export class OptionsBuilder {
       onPermissionRequest: this.engineOptions.onPermissionRequest,
       onAskUserQuestion: this.engineOptions.onAskUserQuestion,
       bypassPermissions: this.engineOptions.bypassPermissions,
-      workflowMeta: {
-        workflowName: this.getWorkflowName(),
-        workflowDescription: this.getWorkflowDescription(),
-        currentStep: step.name,
-        stepsList: steps,
-        currentPosition,
-      },
+      workflowMeta,
     };
     return baseOptions;
+  }
+
+  buildPhase1WorkflowMeta(
+    workflowMeta: WorkflowMeta | undefined,
+    runtime?: RuntimeStepResolution,
+  ): WorkflowMeta | undefined {
+    if (!workflowMeta) {
+      return undefined;
+    }
+
+    const processSafety = runtime?.teamLeaderPart?.processSafety
+      ?? this.engineOptions.phase1ProcessSafetyByStep?.[workflowMeta.currentStep];
+    return buildPhase1WorkflowMeta(workflowMeta, processSafety);
   }
 
   /** Build RunAgentOptions for Phase 1 (main execution) */
@@ -170,9 +199,11 @@ export class OptionsBuilder {
     const shouldResumeSession = step.session !== 'refresh' && this.getCwd() === this.getProjectCwd();
 
     const supportsStructuredOutput = providerSupportsStructuredOutput(resolvedProvider);
+    const baseOptions = this.buildBaseOptions(step, mergedProviderOptions, runtime);
 
     return {
-      ...this.buildBaseOptions(step, mergedProviderOptions, runtime),
+      ...baseOptions,
+      workflowMeta: this.buildPhase1WorkflowMeta(baseOptions.workflowMeta, runtime),
       sessionId: shouldResumeSession ? this.getSessionId(buildSessionKey(step, runtime?.providerInfo?.provider)) : undefined,
       allowedTools,
       mcpServers: resolveMcpServersForProvider(step.mcpServers, resolvedProvider),

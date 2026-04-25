@@ -15,6 +15,7 @@ export {
   type InteractiveModeResult,
   type InteractiveModeAction,
   type InteractiveModeOptions,
+  type InteractiveSeedInput,
 } from './interactive.js';
 
 export { selectInteractiveMode } from './modeSelection.js';

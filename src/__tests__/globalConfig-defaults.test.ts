@@ -1135,6 +1135,35 @@ describe('loadGlobalConfig', () => {
     });
   });
 
+  describe('sync_project_local_takt_on_retry global config', () => {
+    it('should load sync_project_local_takt_on_retry from config.yaml', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(
+        getGlobalConfigPath(),
+        ['language: en', 'sync_project_local_takt_on_retry: false'].join('\n'),
+        'utf-8',
+      );
+
+      const config = loadGlobalConfig() as Record<string, unknown>;
+      expect(config.syncProjectLocalTaktOnRetry).toBe(false);
+    });
+
+    it('should save and reload sync_project_local_takt_on_retry', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
+
+      const config = loadGlobalConfig() as Record<string, unknown>;
+      config.syncProjectLocalTaktOnRetry = false;
+      saveGlobalConfig(config);
+      invalidateGlobalConfigCache();
+
+      const reloaded = loadGlobalConfig() as Record<string, unknown>;
+      expect(reloaded.syncProjectLocalTaktOnRetry).toBe(false);
+    });
+  });
+
   describe('workflow_mcp_servers global config', () => {
     it('should load workflow_mcp_servers from config.yaml', () => {
       const taktDir = join(testHomeDir, '.takt');

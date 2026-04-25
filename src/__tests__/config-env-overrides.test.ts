@@ -343,6 +343,22 @@ describe('config traced env overrides', () => {
     });
   });
 
+  it('project config は sync_project_local_takt_on_retry の env override を反映する', () => {
+    const projectDir = join(testRoot, 'project-sync-project-local-takt-on-retry-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      'sync_project_local_takt_on_retry: false\n',
+      'utf-8',
+    );
+    process.env.TAKT_SYNC_PROJECT_LOCAL_TAKT_ON_RETRY = 'true';
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.syncProjectLocalTaktOnRetry).toBe(true);
+  });
+
   it('global config は enable_builtin_workflows の新 env 名を反映する', () => {
     mkdirSync(globalTaktDir, { recursive: true });
     writeFileSync(globalConfigPath, 'language: ja\n', 'utf-8');
@@ -424,6 +440,20 @@ describe('config traced env overrides', () => {
     expect(config.workflowRuntimePrepare).toEqual({
       customScripts: true,
     });
+  });
+
+  it('global config は sync_project_local_takt_on_retry の env override を反映する', () => {
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(
+      globalConfigPath,
+      ['language: ja', 'sync_project_local_takt_on_retry: true'].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_SYNC_PROJECT_LOCAL_TAKT_ON_RETRY = 'false';
+
+    const config = loadGlobalConfig();
+
+    expect(config.syncProjectLocalTaktOnRetry).toBe(false);
   });
 
   it('global config は workflow 系 leaf env を反映する', () => {

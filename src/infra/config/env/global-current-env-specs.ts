@@ -37,6 +37,7 @@ export const GLOBAL_ENV_SPECS: readonly EnvSpec[] = [
   ...PROVIDER_OPTIONS_ENV_SPECS,
   { path: 'provider_profiles', type: 'json' },
   { path: 'interactive_preview_steps', type: 'number' },
+  { path: 'sync_project_local_takt_on_retry', type: 'boolean' },
   { path: 'runtime', type: 'json' },
   { path: 'runtime.prepare', type: 'json' },
   { path: 'workflow_runtime_prepare', type: 'json' },

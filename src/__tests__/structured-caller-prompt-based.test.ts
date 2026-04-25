@@ -157,6 +157,47 @@ describe('PromptBasedStructuredCaller', () => {
     );
   });
 
+  it('should pass workflowMeta through decomposeTask to runAgent', async () => {
+    mockRunAgent.mockResolvedValue({
+      persona: 'leader',
+      status: 'done',
+      content: [
+        '```json',
+        JSON.stringify([
+          { id: 'p1', title: 'First task', instruction: 'Do the first thing' },
+        ]),
+        '```',
+      ].join('\n'),
+      timestamp: new Date(),
+    });
+    const workflowMeta = {
+      workflowName: 'takt-default',
+      currentStep: 'implement',
+      stepsList: [{ name: 'plan' }, { name: 'implement' }],
+      currentPosition: '2/2',
+      processSafety: {
+        protectedParentRunPid: 4242,
+      },
+    };
+
+    const caller = new PromptBasedStructuredCaller();
+    await caller.decomposeTask('break down the work', 3, {
+      cwd: '/tmp/project',
+      provider: 'claude',
+      persona: 'team-leader',
+      workflowMeta,
+    } as Parameters<PromptBasedStructuredCaller['decomposeTask']>[2] & { workflowMeta: typeof workflowMeta });
+
+    expect(mockRunAgent).toHaveBeenCalledWith(
+      'team-leader',
+      expect.stringContaining('```json'),
+      expect.objectContaining({
+        cwd: '/tmp/project',
+        workflowMeta,
+      }),
+    );
+  });
+
   it('should parse additional parts from fenced JSON without outputSchema', async () => {
     mockRunAgent.mockResolvedValue({
       persona: 'leader',
@@ -237,6 +278,50 @@ describe('PromptBasedStructuredCaller', () => {
         resolvedProvider: 'cursor',
         model: 'sonnet',
         resolvedModel: 'cursor-fast',
+      }),
+    );
+  });
+
+  it('should pass workflowMeta through requestMoreParts to runAgent', async () => {
+    mockRunAgent.mockResolvedValue({
+      persona: 'leader',
+      status: 'done',
+      content: [
+        '```json',
+        JSON.stringify({ done: true, reasoning: 'enough', parts: [] }),
+        '```',
+      ].join('\n'),
+      timestamp: new Date(),
+    });
+    const workflowMeta = {
+      workflowName: 'takt-default',
+      currentStep: 'implement',
+      stepsList: [{ name: 'plan' }, { name: 'implement' }],
+      currentPosition: '2/2',
+      processSafety: {
+        protectedParentRunPid: 4242,
+      },
+    };
+
+    const caller = new PromptBasedStructuredCaller();
+    await caller.requestMoreParts(
+      'original task',
+      [{ id: 'p1', title: 'First', status: 'done', content: 'done' }],
+      ['p1'],
+      2,
+      {
+        cwd: '/tmp/project',
+        persona: 'team-leader',
+        workflowMeta,
+      } as Parameters<PromptBasedStructuredCaller['requestMoreParts']>[4] & { workflowMeta: typeof workflowMeta },
+    );
+
+    expect(mockRunAgent).toHaveBeenCalledWith(
+      'team-leader',
+      expect.stringContaining('```json ... ```'),
+      expect.objectContaining({
+        cwd: '/tmp/project',
+        workflowMeta,
       }),
     );
   });

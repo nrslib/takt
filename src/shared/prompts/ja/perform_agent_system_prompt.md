@@ -1,7 +1,7 @@
 <!--
   template: perform_agent_system_prompt
   role: system prompt for user-defined agents
-  vars: agentDefinition, workflowName, workflowDescription, currentStep, stepsList, currentPosition
+  vars: agentDefinition, workflowName, workflowDescription, currentStep, stepsList, currentPosition, hasProcessSafety, protectedParentRunPid
   caller: AgentRunner
 -->
 # TAKT
@@ -19,6 +19,15 @@
 - 処理フロー:
 {{stepsList}}
 - 現在の位置: {{currentPosition}}
+
+{{#if hasProcessSafety}}
+## Process Safety
+- Protected Parent Run PID（protected PID）: {{protectedParentRunPid}}
+- 上記の protected PID は停止してはいけません。
+- `pkill` / `killall` / プロセス名ベースの kill を使ってはいけません。
+- 自分が所有していると明確に分かるプロセス以外は停止してはいけません。
+
+{{/if}}
 
 前後のステップとの連携を意識して作業してください。
 

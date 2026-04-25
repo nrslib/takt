@@ -4,6 +4,7 @@ const {
   getProviderMock,
   loadCustomAgentsMock,
   loadAgentPromptMock,
+  loadPersonaPromptFromPathMock,
   loadProjectConfigMock,
   loadGlobalConfigMock,
   resolveConfigValueMock,
@@ -19,6 +20,7 @@ const {
     getProviderMock: vi.fn(() => ({ setup: providerSetup })),
     loadCustomAgentsMock: vi.fn(),
     loadAgentPromptMock: vi.fn(),
+    loadPersonaPromptFromPathMock: vi.fn(),
     loadProjectConfigMock: vi.fn(),
     loadGlobalConfigMock: vi.fn(),
     resolveConfigValueMock: vi.fn(),
@@ -38,6 +40,7 @@ vi.mock('../infra/config/index.js', () => ({
   loadGlobalConfig: loadGlobalConfigMock,
   loadCustomAgents: loadCustomAgentsMock,
   loadAgentPrompt: loadAgentPromptMock,
+  loadPersonaPromptFromPath: loadPersonaPromptFromPathMock,
 }));
 
 vi.mock('../infra/config/resolveConfigValue.js', () => ({
@@ -71,6 +74,7 @@ describe('option resolution order', () => {
     });
     loadCustomAgentsMock.mockReturnValue(new Map());
     loadAgentPromptMock.mockReturnValue('prompt');
+    loadPersonaPromptFromPathMock.mockReturnValue('persona prompt from path');
     loadTemplateMock.mockReturnValue('template');
   });
 
@@ -666,6 +670,155 @@ describe('option resolution order', () => {
       'task',
       expect.objectContaining({ allowedTools: ['Write'] }),
     );
+  });
+
+  it('should wrap inline persona prompt when workflowMeta has process safety', async () => {
+    loadProjectConfigMock.mockReturnValue({ provider: 'claude' });
+
+    await runAgent('inline persona', 'task', {
+      cwd: '/repo',
+      language: 'en',
+      workflowMeta: {
+        workflowName: 'takt-default',
+        currentStep: 'implement',
+        stepsList: [{ name: 'plan' }, { name: 'implement' }],
+        currentPosition: '2/2',
+        processSafety: { protectedParentRunPid: 4242 },
+      },
+    });
+
+    expect(loadTemplateMock).toHaveBeenCalledWith(
+      'perform_agent_system_prompt',
+      'en',
+      expect.objectContaining({
+        agentDefinition: 'inline persona',
+        workflowName: 'takt-default',
+        currentStep: 'implement',
+        hasProcessSafety: true,
+        protectedParentRunPid: '4242',
+      }),
+    );
+    expect(providerSetupMock).toHaveBeenCalledWith(expect.objectContaining({
+      systemPrompt: 'template',
+    }));
+  });
+
+  it('should wrap personaPath prompt when workflowMeta has process safety', async () => {
+    loadProjectConfigMock.mockReturnValue({ provider: 'claude' });
+
+    await runAgent(undefined, 'task', {
+      cwd: '/repo',
+      projectCwd: '/project',
+      personaPath: '/project/.takt/personas/coder.md',
+      language: 'en',
+      workflowMeta: {
+        workflowName: 'takt-default',
+        currentStep: 'implement',
+        stepsList: [{ name: 'plan' }, { name: 'implement' }],
+        currentPosition: '2/2',
+        processSafety: { protectedParentRunPid: 4242 },
+      },
+    });
+
+    expect(loadPersonaPromptFromPathMock).toHaveBeenCalledWith(
+      '/project/.takt/personas/coder.md',
+      '/project',
+    );
+    expect(loadTemplateMock).toHaveBeenCalledWith(
+      'perform_agent_system_prompt',
+      'en',
+      expect.objectContaining({
+        agentDefinition: 'persona prompt from path',
+        workflowName: 'takt-default',
+        currentStep: 'implement',
+        hasProcessSafety: true,
+        protectedParentRunPid: '4242',
+      }),
+    );
+    expect(providerSetupMock).toHaveBeenCalledWith(expect.objectContaining({
+      systemPrompt: 'template',
+    }));
+  });
+
+  it('should not wrap inline persona prompt when workflowMeta has no process safety', async () => {
+    loadProjectConfigMock.mockReturnValue({ provider: 'claude' });
+
+    await runAgent('inline persona', 'task', {
+      cwd: '/repo',
+      language: 'en',
+      workflowMeta: {
+        workflowName: 'custom-workflow',
+        currentStep: 'review',
+        stepsList: [{ name: 'plan' }, { name: 'review' }],
+        currentPosition: '2/2',
+      },
+    });
+
+    expect(loadTemplateMock).not.toHaveBeenCalled();
+    expect(providerSetupMock).toHaveBeenCalledWith(expect.objectContaining({
+      systemPrompt: 'inline persona',
+    }));
+  });
+
+  it('should wrap custom agent prompt when workflowMeta has process safety', async () => {
+    loadProjectConfigMock.mockReturnValue({ provider: 'claude' });
+    loadCustomAgentsMock.mockReturnValue(new Map([
+      ['custom', { name: 'custom', prompt: 'agent prompt' }],
+    ]));
+    loadAgentPromptMock.mockReturnValue('custom prompt');
+
+    await runAgent('custom', 'task', {
+      cwd: '/repo',
+      language: 'en',
+      workflowMeta: {
+        workflowName: 'takt-default',
+        currentStep: 'implement',
+        stepsList: [{ name: 'plan' }, { name: 'implement' }],
+        currentPosition: '2/2',
+        processSafety: { protectedParentRunPid: 4242 },
+      },
+    });
+
+    expect(loadTemplateMock).toHaveBeenCalledWith(
+      'perform_agent_system_prompt',
+      'en',
+      expect.objectContaining({
+        agentDefinition: 'custom prompt',
+        workflowName: 'takt-default',
+        currentStep: 'implement',
+        hasProcessSafety: true,
+        protectedParentRunPid: '4242',
+      }),
+    );
+    expect(providerSetupMock).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'custom',
+      systemPrompt: 'template',
+    }));
+  });
+
+  it('should not wrap custom agent prompt when workflowMeta has no process safety', async () => {
+    loadProjectConfigMock.mockReturnValue({ provider: 'claude' });
+    loadCustomAgentsMock.mockReturnValue(new Map([
+      ['custom', { name: 'custom', prompt: 'agent prompt' }],
+    ]));
+    loadAgentPromptMock.mockReturnValue('custom prompt');
+
+    await runAgent('custom', 'task', {
+      cwd: '/repo',
+      language: 'en',
+      workflowMeta: {
+        workflowName: 'custom-workflow',
+        currentStep: 'review',
+        stepsList: [{ name: 'plan' }, { name: 'review' }],
+        currentPosition: '2/2',
+      },
+    });
+
+    expect(loadTemplateMock).not.toHaveBeenCalled();
+    expect(providerSetupMock).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'custom',
+      systemPrompt: 'custom prompt',
+    }));
   });
 
   it('should resolve permission mode after provider resolution using provider profiles', async () => {

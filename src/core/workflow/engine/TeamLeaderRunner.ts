@@ -6,19 +6,18 @@ import type {
   PartResult,
   WorkflowMaxSteps,
 } from '../../models/types.js';
-import { executeAgent } from '../../../agents/agent-usecases.js';
-import { buildSessionKey } from '../session-key.js';
 import { ParallelLogger } from './parallel-logger.js';
 import { incrementStepIteration } from './state-manager.js';
-import { buildAbortSignal } from './abort-signal.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { runTeamLeaderExecution } from './team-leader-execution.js';
 import { buildTeamLeaderAggregatedContent } from './team-leader-aggregation.js';
-import { createPartStep, resolvePartErrorDetail, summarizeParts } from './team-leader-common.js';
+import { resolvePartErrorDetail, summarizeParts } from './team-leader-common.js';
 import { buildTeamLeaderParallelLoggerOptions, emitTeamLeaderProgressHint } from './team-leader-streaming.js';
+import type { RunAgentOptions } from '../../../agents/types.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { StepExecutor } from './StepExecutor.js';
 import type { WorkflowEngineOptions, PhaseName, PhasePromptParts } from '../types.js';
+import { buildTeamLeaderErrorPartResult, runTeamLeaderPart } from './team-leader-part-runner.js';
 
 const log = createLogger('team-leader-runner');
 const MAX_TOTAL_PARTS = 20;
@@ -82,6 +81,10 @@ export class TeamLeaderRunner {
       task,
       maxSteps,
     );
+    const leaderBaseOptions = this.deps.optionsBuilder.buildBaseOptions(leaderStep);
+    const leaderWorkflowMeta = this.deps.optionsBuilder.buildPhase1WorkflowMeta(
+      leaderBaseOptions.workflowMeta,
+    );
 
     emitTeamLeaderProgressHint(this.deps.engineOptions, 'decompose');
     let didEmitPhaseStart = false;
@@ -97,6 +100,7 @@ export class TeamLeaderRunner {
       provider: leaderProvider,
       resolvedModel: leaderModel,
       resolvedProvider: leaderProvider,
+      workflowMeta: leaderWorkflowMeta,
       onStream: this.deps.engineOptions.onStream,
       onPromptResolved: (promptParts) => {
         this.deps.onPhaseStart?.(leaderStep, 1, 'execute', promptParts.userInstruction, promptParts, undefined, parentIteration);
@@ -200,18 +204,20 @@ export class TeamLeaderRunner {
             provider: leaderProvider,
             resolvedModel: leaderModel,
             resolvedProvider: leaderProvider,
+            workflowMeta: leaderWorkflowMeta,
             onStream: this.deps.engineOptions.onStream,
           },
         );
       },
       runPart: async (part, partIndex) => this.runSinglePart(
         step,
+        leaderWorkflowMeta,
         part,
         partIndex,
         teamLeaderConfig.timeoutMs,
         updatePersonaSession,
         parallelLogger,
-      ).catch((error) => this.buildErrorPartResult(step, part, error)),
+      ).catch((error) => buildTeamLeaderErrorPartResult(step, part, error)),
     });
 
     const allFailed = partResults.every((result) => result.response.status === 'error');
@@ -259,62 +265,22 @@ export class TeamLeaderRunner {
 
   private async runSinglePart(
     step: WorkflowStep,
+    leaderWorkflowMeta: RunAgentOptions['workflowMeta'] | undefined,
     part: PartDefinition,
     partIndex: number,
     defaultTimeoutMs: number,
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
     parallelLogger: ParallelLogger | undefined,
   ): Promise<PartResult> {
-    const partStep = createPartStep(step, part);
-    const partProviderInfo = this.deps.optionsBuilder.resolveStepProviderModel(partStep);
-    const partAllowedTools = step.teamLeader?.partAllowedTools;
-    const baseOptions = this.deps.optionsBuilder.buildAgentOptions(partStep, {
-      providerInfo: partProviderInfo,
-      teamLeaderPart: {
-        partAllowedTools,
-      },
-    });
-    const timeoutMs = defaultTimeoutMs;
-    const { signal, dispose } = buildAbortSignal(timeoutMs, baseOptions.abortSignal);
-    const options = parallelLogger
-      ? {
-        ...baseOptions,
-        abortSignal: signal,
-        onStream: parallelLogger.createStreamHandler(part.id, partIndex),
-      }
-      : {
-        ...baseOptions,
-        abortSignal: signal,
-      };
-
-    try {
-      const response = await executeAgent(partStep.persona, part.instruction, options);
-      updatePersonaSession(buildSessionKey(partStep, partProviderInfo.provider), response.sessionId);
-      return {
-        part,
-        response: {
-          ...response,
-          persona: partStep.name,
-        },
-      };
-    } finally {
-      dispose();
-    }
-  }
-
-  private buildErrorPartResult(
-    step: WorkflowStep,
-    part: PartDefinition,
-    error: unknown,
-  ): PartResult {
-    const errorMsg = getErrorMessage(error);
-    const errorResponse: AgentResponse = {
-      persona: `${step.name}.${part.id}`,
-      status: 'error',
-      content: '',
-      timestamp: new Date(),
-      error: errorMsg,
-    };
-    return { part, response: errorResponse };
+    return runTeamLeaderPart(
+      this.deps.optionsBuilder,
+      step,
+      leaderWorkflowMeta,
+      part,
+      partIndex,
+      defaultTimeoutMs,
+      updatePersonaSession,
+      parallelLogger,
+    );
   }
 }

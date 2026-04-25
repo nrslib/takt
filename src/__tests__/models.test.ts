@@ -986,4 +986,16 @@ describe('ProjectConfigSchema', () => {
       auto_approve_tools: true,
     });
   });
+
+  it('should parse sync_project_local_takt_on_retry in project and global config schemas', () => {
+    const project = ProjectConfigSchema.parse({
+      sync_project_local_takt_on_retry: false,
+    } as unknown) as Record<string, unknown>;
+    const global = GlobalConfigSchema.parse({
+      sync_project_local_takt_on_retry: true,
+    } as unknown) as Record<string, unknown>;
+
+    expect(project.sync_project_local_takt_on_retry).toBe(false);
+    expect(global.sync_project_local_takt_on_retry).toBe(true);
+  });
 });

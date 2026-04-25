@@ -2,6 +2,8 @@ import { interruptAllQueries } from '../../../infra/claude/query-manager.js';
 import type { WorkflowResumePointEntry } from '../../../core/models/index.js';
 import type { WorkflowEngine } from '../../../core/workflow/index.js';
 import type { SessionLog } from '../../../infra/fs/index.js';
+import type { StepProviderInfo } from '../../../core/workflow/types.js';
+import type { ProviderType } from '../../../shared/types/provider.js';
 import { StreamDisplay } from '../../../shared/ui/index.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import { isDebugEnabled, isVerboseConsole } from '../../../shared/utils/debug.js';
@@ -58,6 +60,46 @@ interface WorkflowExecutionEventBridgeDeps {
 export interface WorkflowExecutionEventBridge {
   state: WorkflowExecutionEventState;
   syncLatestResumePoint: () => void;
+}
+
+type OutInfo = { info: (line: string) => void };
+
+function sourceSuffix(
+  path: string,
+  sources: StepProviderInfo['providerOptionsSources'],
+  showSource: boolean,
+): string {
+  if (!showSource) return '';
+  const source = sources?.[path];
+  return source ? ` (source: ${source})` : '';
+}
+
+function emitEffortLines(
+  out: OutInfo,
+  stepProvider: ProviderType,
+  providerInfo: StepProviderInfo,
+  showSource: boolean,
+): void {
+  const options = providerInfo.providerOptions;
+  if (!options) return;
+  const sources = providerInfo.providerOptionsSources;
+
+  if (stepProvider === 'claude' || stepProvider === 'claude-sdk') {
+    const effort = options.claude?.effort;
+    if (effort !== undefined) {
+      out.info(`Effort: ${effort}${sourceSuffix('claude.effort', sources, showSource)}`);
+    }
+  } else if (stepProvider === 'codex') {
+    const effort = options.codex?.reasoningEffort;
+    if (effort !== undefined) {
+      out.info(`Reasoning effort: ${effort}${sourceSuffix('codex.reasoningEffort', sources, showSource)}`);
+    }
+  } else if (stepProvider === 'copilot') {
+    const effort = options.copilot?.effort;
+    if (effort !== undefined) {
+      out.info(`Effort: ${effort}${sourceSuffix('copilot.effort', sources, showSource)}`);
+    }
+  }
 }
 
 export function bindWorkflowExecutionEvents(
@@ -157,6 +199,7 @@ export function bindWorkflowExecutionEvents(
       : '';
     deps.out.info(`Provider: ${stepProvider}${providerSourceSuffix}`);
     deps.out.info(`Model: ${stepModel}${modelSourceSuffix}`);
+    emitEffortLines(deps.out, stepProvider, providerInfo, showSource);
     deps.analyticsEmitter.updateProviderInfo(iteration, stepProvider, stepModel);
 
     if (!deps.prefixWriter) {

@@ -1,6 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { OptionsBuilder } from '../core/workflow/engine/OptionsBuilder.js';
 import { TeamLeaderRunner } from '../core/workflow/engine/TeamLeaderRunner.js';
 import type { WorkflowStep, WorkflowState } from '../core/models/types.js';
+import type { WorkflowEngineOptions } from '../core/workflow/types.js';
+
+function createProcessSafetyByStep(parentRunPid: number): WorkflowEngineOptions['phase1ProcessSafetyByStep'] {
+  return {
+    implement: { protectedParentRunPid: parentRunPid },
+  };
+}
 
 const {
   mockExecuteAgent,
@@ -49,6 +57,8 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     const runner = new TeamLeaderRunner({
       optionsBuilder: {
         buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
+        buildBaseOptions: vi.fn().mockReturnValue({}),
+        buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
         resolveStepProviderModel,
       },
       stepExecutor: {
@@ -164,6 +174,237 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     );
   });
 
+  it('takt-default の implement では process safety を leader prompt に渡す', async () => {
+    mockExecuteAgent.mockResolvedValue({
+      persona: 'coder',
+      status: 'done',
+      content: 'API done',
+      timestamp: new Date('2026-04-01T00:00:00.000Z'),
+    });
+    const resolveStepProviderModel = vi.fn().mockReturnValue({
+      provider: 'opencode',
+      model: 'opencode/zai-coding-plan/glm-5.1',
+    });
+
+    const structuredCaller = {
+      decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxParts, options) => {
+        options.onPromptResolved?.({
+          systemPrompt: 'team-leader-system',
+          userInstruction: 'leader instruction',
+        });
+        return [
+          { id: 'part-1', title: 'API', instruction: 'Implement API' },
+        ];
+      }),
+      requestMoreParts: vi.fn().mockResolvedValue({
+        done: true,
+        reasoning: 'enough',
+        parts: [],
+      }),
+    };
+    const leaderWorkflowMeta = {
+      workflowName: 'takt-default',
+      currentStep: 'implement',
+      stepsList: [{ name: 'plan' }, { name: 'implement' }],
+      currentPosition: '2/2',
+      processSafety: { protectedParentRunPid: 4242 },
+    };
+
+    const runner = new TeamLeaderRunner({
+      optionsBuilder: {
+        buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
+        buildBaseOptions: vi.fn().mockReturnValue({
+          workflowMeta: {
+            workflowName: 'takt-default',
+            currentStep: 'implement',
+            stepsList: [{ name: 'plan' }, { name: 'implement' }],
+            currentPosition: '2/2',
+          },
+        }),
+        buildPhase1WorkflowMeta: vi.fn().mockReturnValue(leaderWorkflowMeta),
+        resolveStepProviderModel,
+      },
+      stepExecutor: {
+        buildInstruction: vi.fn().mockReturnValue('leader instruction'),
+        applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
+        persistPreviousResponseSnapshot: vi.fn(),
+        emitStepReports: vi.fn(),
+      },
+      engineOptions: {
+        projectCwd: '/tmp/project',
+        structuredCaller,
+      },
+      getCwd: () => '/tmp/project',
+      getInteractive: () => false,
+    } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+      engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller };
+    });
+
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      instruction: 'Task: {task}',
+      passPreviousResponse: true,
+      teamLeader: {
+        persona: 'team-leader',
+        maxParts: 2,
+        refillThreshold: 0,
+        timeoutMs: 1000,
+        partPersona: 'coder',
+      },
+      rules: [{ condition: 'done', next: 'COMPLETE' }],
+    };
+
+    const state: WorkflowState = {
+      workflowName: 'takt-default',
+      currentStep: 'implement',
+      iteration: 1,
+      stepOutputs: new Map(),
+      structuredOutputs: new Map(),
+      systemContexts: new Map(),
+      effectResults: new Map(),
+      lastOutput: undefined,
+      previousResponseSourcePath: undefined,
+      userInputs: [],
+      personaSessions: new Map(),
+      stepIterations: new Map(),
+      status: 'running',
+    };
+
+    await runner.runTeamLeaderStep(
+      step,
+      state,
+      'implement feature',
+      5,
+      vi.fn(),
+    );
+
+    const [, , decomposeOptions] = structuredCaller.decomposeTask.mock.calls[0] ?? [];
+    const [, , , , requestOptions] = structuredCaller.requestMoreParts.mock.calls[0] ?? [];
+    expect(decomposeOptions.workflowMeta).toBe(leaderWorkflowMeta);
+    expect(requestOptions.workflowMeta).toBe(leaderWorkflowMeta);
+  });
+
+  it('takt-default の非 implement step では leader prompt に process safety を渡さない', async () => {
+    mockExecuteAgent.mockResolvedValue({
+      persona: 'coder',
+      status: 'done',
+      content: 'API done',
+      timestamp: new Date('2026-04-01T00:00:00.000Z'),
+    });
+    const resolveStepProviderModel = vi.fn().mockReturnValue({
+      provider: 'opencode',
+      model: 'opencode/zai-coding-plan/glm-5.1',
+    });
+
+    const structuredCaller = {
+      decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxParts, options) => {
+        options.onPromptResolved?.({
+          systemPrompt: 'team-leader-system',
+          userInstruction: 'leader instruction',
+        });
+        return [
+          { id: 'part-1', title: 'API', instruction: 'Implement API' },
+        ];
+      }),
+      requestMoreParts: vi.fn().mockResolvedValue({
+        done: true,
+        reasoning: 'enough',
+        parts: [],
+      }),
+    };
+
+    const engineOptions: WorkflowEngineOptions = {
+      projectCwd: '/tmp/project',
+      provider: 'opencode',
+      providerProfiles: {
+        opencode: {
+          defaultPermissionMode: 'full',
+        },
+      },
+      structuredCaller,
+      phase1ProcessSafetyByStep: createProcessSafetyByStep(4242),
+    };
+    const optionsBuilder = new OptionsBuilder(
+      engineOptions,
+      () => '/tmp/project',
+      () => '/tmp/project',
+      () => undefined,
+      () => '.takt/runs/sample/reports',
+      () => 'ja',
+      () => [{ name: 'reviewers' }],
+      () => 'takt-default',
+      () => 'test workflow',
+    );
+
+    const runner = new TeamLeaderRunner({
+      optionsBuilder,
+      stepExecutor: {
+        buildInstruction: vi.fn().mockReturnValue('leader instruction'),
+        applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
+        persistPreviousResponseSnapshot: vi.fn(),
+        emitStepReports: vi.fn(),
+      },
+      engineOptions: {
+        projectCwd: '/tmp/project',
+        structuredCaller,
+        phase1ProcessSafetyByStep: createProcessSafetyByStep(4242),
+      },
+      getCwd: () => '/tmp/project',
+      getInteractive: () => false,
+    } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+      engineOptions: {
+        projectCwd: string;
+        structuredCaller: typeof structuredCaller;
+        phase1ProcessSafetyByStep: WorkflowEngineOptions['phase1ProcessSafetyByStep'];
+      };
+    });
+
+    const step: WorkflowStep = {
+      name: 'reviewers',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      instruction: 'Task: {task}',
+      passPreviousResponse: true,
+      teamLeader: {
+        persona: 'team-leader',
+        maxParts: 2,
+        refillThreshold: 0,
+        timeoutMs: 1000,
+        partPersona: 'coder',
+      },
+      rules: [{ condition: 'done', next: 'COMPLETE' }],
+    };
+
+    const state: WorkflowState = {
+      workflowName: 'takt-default',
+      currentStep: 'reviewers',
+      iteration: 1,
+      stepOutputs: new Map(),
+      structuredOutputs: new Map(),
+      systemContexts: new Map(),
+      effectResults: new Map(),
+      lastOutput: undefined,
+      previousResponseSourcePath: undefined,
+      userInputs: [],
+      personaSessions: new Map(),
+      stepIterations: new Map(),
+      status: 'running',
+    };
+
+    await runner.runTeamLeaderStep(
+      step,
+      state,
+      'implement feature',
+      5,
+      vi.fn(),
+    );
+
+    const [, , decomposeOptions] = structuredCaller.decomposeTask.mock.calls[0] ?? [];
+    expect(decomposeOptions.workflowMeta?.processSafety).toBeUndefined();
+  });
+
   it('Claude part execution では partAllowedTools を executeAgent options に反映する', async () => {
     mockExecuteAgent.mockResolvedValue({
       persona: 'coder',
@@ -198,10 +439,19 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       allowedTools: runtime?.teamLeaderPart?.partAllowedTools,
       providerOptions: undefined,
     }));
+    const leaderWorkflowMeta = {
+      workflowName: 'takt-default',
+      currentStep: 'implement',
+      stepsList: [{ name: 'plan' }, { name: 'implement' }],
+      currentPosition: '2/2',
+      processSafety: { protectedParentRunPid: 4242 },
+    };
 
     const runner = new TeamLeaderRunner({
       optionsBuilder: {
         buildAgentOptions,
+        buildBaseOptions: vi.fn().mockReturnValue({}),
+        buildPhase1WorkflowMeta: vi.fn().mockReturnValue(leaderWorkflowMeta),
         resolveStepProviderModel,
       },
       stepExecutor: {
@@ -290,10 +540,14 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         },
       },
     });
+    expect(runtimeArg?.teamLeaderPart?.processSafety).toEqual({
+      protectedParentRunPid: 4242,
+    });
     expect(runtimeArg).toEqual(expect.objectContaining({
       providerInfo: { provider: 'claude', model: 'sonnet' },
       teamLeaderPart: {
         partAllowedTools: ['Read', 'Edit'],
+        processSafety: { protectedParentRunPid: 4242 },
       },
     }));
     const [, , options] = mockExecuteAgent.mock.calls[0] ?? [];
@@ -337,6 +591,8 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     const runner = new TeamLeaderRunner({
       optionsBuilder: {
         buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
+        buildBaseOptions: vi.fn().mockReturnValue({}),
+        buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
         resolveStepProviderModel,
       },
       stepExecutor: {
@@ -436,6 +692,8 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     const runner = new TeamLeaderRunner({
       optionsBuilder: {
         buildAgentOptions,
+        buildBaseOptions: vi.fn().mockReturnValue({}),
+        buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
         resolveStepProviderModel,
       },
       stepExecutor: {

@@ -14,6 +14,7 @@ import {
   dispatchConversationAction,
   type InteractiveModeResult,
 } from '../../features/interactive/index.js';
+import { INTERACTIVE_MODES } from '../../core/models/index.js';
 import {
   getWorkflowDescription,
   resolveConfigValue,
@@ -98,14 +99,16 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     return;
   }
 
-  let initialInput: string | undefined = task;
+  let directTask: string | undefined = task;
+  let sourceContext: string | undefined;
   let prBranch: string | undefined;
   let prBaseBranch: string | undefined;
 
   if (prNumber) {
     try {
       const prResult = await resolvePrInput(prNumber);
-      initialInput = prResult.initialInput;
+      directTask = undefined;
+      sourceContext = prResult.initialInput;
       prBranch = prResult.prBranch;
       prBaseBranch = prResult.baseBranch;
     } catch (e) {
@@ -116,7 +119,8 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     try {
       const issueResult = await resolveIssueInput(issueNumber, task);
       if (issueResult) {
-        initialInput = issueResult.initialInput;
+        directTask = undefined;
+        sourceContext = issueResult.initialInput;
       }
     } catch (e) {
       logError(getErrorMessage(e));
@@ -139,7 +143,14 @@ export async function executeDefaultAction(task?: string): Promise<void> {
   const previewCount = globalConfig.interactivePreviewSteps;
   const workflowDesc = getWorkflowDescription(workflowId, resolvedCwd, previewCount);
 
-  const selectedMode = await selectInteractiveMode(lang, workflowDesc.interactiveMode);
+  const availableInteractiveModes = sourceContext && !directTask
+    ? INTERACTIVE_MODES.filter((mode) => mode !== 'passthrough')
+    : INTERACTIVE_MODES;
+  const selectedMode = await selectInteractiveMode(
+    lang,
+    workflowDesc.interactiveMode,
+    availableInteractiveModes,
+  );
   if (selectedMode === null) {
     info(getLabel('interactive.ui.cancelled', lang));
     return;
@@ -152,7 +163,12 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     stepPreviews: workflowDesc.stepPreviews,
     taskHistory: loadTaskHistory(resolvedCwd, lang),
   };
-
+  const interactiveSeed = directTask || sourceContext
+    ? {
+      ...(directTask ? { userMessage: directTask } : {}),
+      ...(sourceContext ? { sourceContext } : {}),
+    }
+    : undefined;
   let result: InteractiveModeResult;
 
   switch (selectedMode) {
@@ -185,7 +201,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       };
       result = await interactiveMode(
         resolvedCwd,
-        initialInput,
+        interactiveSeed,
         workflowContext,
         selectedSessionId,
         undefined,
@@ -195,19 +211,19 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     }
 
     case 'passthrough':
-      result = await passthroughMode(lang, initialInput);
+      result = await passthroughMode(lang, directTask);
       break;
 
     case 'quiet':
-      result = await quietMode(resolvedCwd, initialInput, workflowContext);
+      result = await quietMode(resolvedCwd, interactiveSeed, workflowContext);
       break;
 
     case 'persona': {
       if (!workflowDesc.firstStep) {
         info(getLabel('interactive.ui.personaFallback', lang));
-        result = await interactiveMode(resolvedCwd, initialInput, workflowContext);
+        result = await interactiveMode(resolvedCwd, interactiveSeed, workflowContext);
       } else {
-        result = await personaMode(resolvedCwd, workflowDesc.firstStep, initialInput, workflowContext);
+        result = await personaMode(resolvedCwd, workflowDesc.firstStep, interactiveSeed, workflowContext);
       }
       break;
     }

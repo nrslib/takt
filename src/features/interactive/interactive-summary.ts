@@ -6,6 +6,7 @@ import { loadTemplate } from '../../shared/prompts/index.js';
 import { type StepPreview } from '../../infra/config/index.js';
 import { selectOption } from '../../shared/prompt/index.js';
 import { blankLine, info } from '../../shared/ui/index.js';
+import { formatSourceContextSection } from './promptSections.js';
 import {
   type TaskHistoryLocale,
   type ConversationMessage,
@@ -127,6 +128,7 @@ export function buildSummaryPrompt(
   noTranscriptNote: string,
   conversationLabel: string,
   workflowContext?: WorkflowContext,
+  sourceContext?: string,
 ): string {
   let conversation = '';
   if (history.length > 0) {
@@ -134,7 +136,10 @@ export function buildSummaryPrompt(
     conversation = `${conversationLabel}\n${historyText}`;
   } else if (hasSession) {
     conversation = `${conversationLabel}\n${noTranscriptNote}`;
-  } else {
+  }
+
+  const formattedSourceContext = formatSourceContextSection(lang, sourceContext);
+  if (!conversation && !formattedSourceContext) {
     return '';
   }
 
@@ -154,6 +159,7 @@ export function buildSummaryPrompt(
     workflowDescription: workflowContext?.description ?? '',
     stepDetails: summaryStepDetails,
     taskHistory: summaryTaskHistory,
+    sourceContext: formattedSourceContext,
     conversation,
   });
 }

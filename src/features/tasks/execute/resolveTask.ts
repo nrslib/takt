@@ -9,7 +9,6 @@ import {
   type TaskInfo,
   createSharedCloneAbortable,
   resolveBaseBranch,
-  resolveCloneBaseDir,
   branchExists,
   summarizeTaskName,
   resolveTaskWorkflowValue,
@@ -20,22 +19,13 @@ import type { WorkflowResumePoint } from '../../../core/models/index.js';
 import { trimResumePointStackForWorkflow } from '../../../core/workflow/run/resume-point.js';
 import { getGitProvider, type Issue } from '../../../infra/git/index.js';
 import { withProgress } from '../../../shared/ui/index.js';
-import { createLogger, getErrorMessage, isRealPathInside } from '../../../shared/utils/index.js';
+import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { generateReportDir } from '../../../shared/utils/reportDir.js';
 import { getTaskSlugFromTaskDir } from '../../../shared/utils/taskPaths.js';
 import { stageTaskSpecForExecution } from './taskSpecContext.js';
+import { resolveReusedWorktreeExecution } from './reusedWorktree.js';
 
 const log = createLogger('task');
-
-function canReuseWorktreePath(projectDir: string, candidatePath: string): boolean {
-  if (!fs.existsSync(candidatePath)) {
-    return false;
-  }
-
-  const cloneBaseDir = resolveCloneBaseDir(projectDir);
-  const fallbackCloneBaseDir = path.join(projectDir, '.takt', 'worktrees');
-  return isRealPathInside(cloneBaseDir, candidatePath) || isRealPathInside(fallbackCloneBaseDir, candidatePath);
-}
 
 function resolveTaskDataBaseBranch(taskData: TaskInfo['data']): string | undefined {
   return taskData?.base_branch;
@@ -160,6 +150,9 @@ export async function resolveTaskExecution(
   if (!workflowIdentifier || workflowIdentifier.trim() === '') {
     throw new Error(`Task "${task.name}" is missing required workflow.`);
   }
+  const configuredStartStep = resolveTaskStartStepValue(normalizedData);
+  const resumePoint = normalizedData.resume_point as WorkflowResumePoint | undefined;
+  const retryNote = normalizedData.retry_note;
 
   let execCwd = defaultCwd;
   let isWorktree = false;
@@ -186,11 +179,18 @@ export async function resolveTaskExecution(
       ? resolveTaskBaseBranch(defaultCwd, data)
       : preferredBaseBranch;
 
-    if (task.worktreePath && canReuseWorktreePath(defaultCwd, task.worktreePath)) {
-      execCwd = task.worktreePath;
-      branch = data.branch;
-      worktreePath = task.worktreePath;
-      isWorktree = true;
+    const reusedWorktree = resolveReusedWorktreeExecution(
+      defaultCwd,
+      task,
+      configuredStartStep,
+      resumePoint,
+      retryNote,
+    );
+    if (reusedWorktree) {
+      execCwd = reusedWorktree.execCwd;
+      branch = reusedWorktree.branch;
+      worktreePath = reusedWorktree.worktreePath;
+      isWorktree = reusedWorktree.isWorktree;
     } else {
       const taskSlug = task.slug ?? await withProgress(
         'Generating branch name...',
@@ -225,15 +225,14 @@ export async function resolveTaskExecution(
   }
 
   const resolvedReportDirName = reportDirName ?? generateReportDir(taskPrompt ?? task.content);
-  const configuredStartStep = resolveTaskStartStepValue(normalizedData);
   const retryResume = resolveRetryResume(
     workflowIdentifier,
     defaultCwd,
     execCwd,
     configuredStartStep,
-    normalizedData.resume_point as WorkflowResumePoint | undefined,
+    resumePoint,
   );
-  const retryNote = data.retry_note;
+  const resolvedRetryNote = data.retry_note;
   const maxStepsOverride = data.exceeded_max_steps;
   const initialIterationOverride = data.exceeded_current_iteration ?? retryResume.resumePoint?.iteration;
 
@@ -258,7 +257,7 @@ export async function resolveTaskExecution(
     ...(worktreePath ? { worktreePath } : {}),
     ...(baseBranch ? { baseBranch } : {}),
     ...(retryResume.startStep ? { startStep: retryResume.startStep } : {}),
-    ...(retryNote ? { retryNote } : {}),
+    ...(resolvedRetryNote ? { retryNote: resolvedRetryNote } : {}),
     ...(retryResume.resumePoint ? { resumePoint: retryResume.resumePoint } : {}),
     ...(data.issue !== undefined ? { issueNumber: data.issue } : {}),
     ...(maxStepsOverride !== undefined ? { maxStepsOverride } : {}),

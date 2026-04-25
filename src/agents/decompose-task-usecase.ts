@@ -1,6 +1,6 @@
 import type { Language, PartDefinition } from '../core/models/types.js';
 import type { ProviderType } from '../core/workflow/types.js';
-import { runAgent, type StreamCallback } from './runner.js';
+import { runAgent, type RunAgentOptions, type StreamCallback } from './runner.js';
 import { parseParts } from '../core/workflow/engine/task-decomposer.js';
 import { loadDecompositionSchema, loadMorePartsSchema } from '../infra/resources/schema-loader.js';
 import {
@@ -20,6 +20,7 @@ export interface DecomposeTaskOptions {
   resolvedModel?: string;
   resolvedProvider?: ProviderType;
   onStream?: StreamCallback;
+  workflowMeta?: RunAgentOptions['workflowMeta'];
   onPromptResolved?: (promptParts: {
     systemPrompt: string;
     userInstruction: string;
@@ -52,6 +53,7 @@ export async function decomposeTask(
     maxTurns: TEAM_LEADER_MAX_TURNS,
     outputSchema: loadDecompositionSchema(maxParts),
     onStream: options.onStream,
+    workflowMeta: options.workflowMeta,
     onPromptResolved: options.onPromptResolved,
   });
 
@@ -96,6 +98,7 @@ export async function requestMoreParts(
     maxTurns: TEAM_LEADER_MAX_TURNS,
     outputSchema: loadMorePartsSchema(maxAdditionalParts),
     onStream: options.onStream,
+    workflowMeta: options.workflowMeta,
   });
 
   if (response.status !== 'done') {

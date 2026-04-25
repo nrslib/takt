@@ -128,9 +128,16 @@ export interface InteractiveModeOptions {
   model?: string;
 }
 
+export interface InteractiveSeedInput {
+  /** Initial user task text supplied directly from CLI input. */
+  userMessage?: string;
+  /** Untrusted reference context loaded from PR/Issue sources. */
+  sourceContext?: string;
+}
+
 export async function interactiveMode(
   cwd: string,
-  initialInput?: string,
+  initialInput?: InteractiveSeedInput,
   workflowContext?: WorkflowContext,
   sessionId?: string,
   runSessionContext?: RunSessionContext,
@@ -182,7 +189,8 @@ export async function interactiveMode(
   return runConversationLoop(cwd, ctx, {
     systemPrompt,
     allowedTools: DEFAULT_INTERACTIVE_TOOLS,
-    transformPrompt: (userMessage: string) => buildInteractivePolicyPrompt(ctx.lang, userMessage),
+    transformPrompt: (userMessage: string, sourceContext?: string) =>
+      buildInteractivePolicyPrompt(ctx.lang, userMessage, sourceContext),
     introMessage: ui.intro,
     selectAction,
   }, workflowContext, initialInput);

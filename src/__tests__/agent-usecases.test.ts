@@ -402,6 +402,35 @@ describe('agent-usecases', () => {
     );
   });
 
+  it('decomposeTask は workflowMeta を runAgent に伝搬する', async () => {
+    vi.mocked(runAgent).mockResolvedValue(doneResponse('x', {
+      parts: [
+        { id: 'p1', title: 'Part 1', instruction: 'Do 1' },
+      ],
+    }));
+    const workflowMeta = {
+      workflowName: 'takt-default',
+      currentStep: 'implement',
+      stepsList: [{ name: 'plan' }, { name: 'implement' }],
+      currentPosition: '2/2',
+      processSafety: {
+        protectedParentRunPid: 4242,
+      },
+    };
+
+    await decomposeTask('instruction', 2, {
+      cwd: '/repo',
+      persona: 'team-leader',
+      workflowMeta,
+    } as DecomposeTaskOptions & { workflowMeta: typeof workflowMeta });
+
+    expect(runAgent).toHaveBeenCalledWith(
+      'team-leader',
+      expect.any(String),
+      expect.objectContaining({ workflowMeta }),
+    );
+  });
+
   it('requestMoreParts は構造化出力をパースして返す', async () => {
     vi.mocked(runAgent).mockResolvedValue(doneResponse('x', {
       done: false,
@@ -448,6 +477,41 @@ describe('agent-usecases', () => {
       1,
       { cwd: '/repo', persona: 'team-leader' },
     )).rejects.toThrow('Team leader feedback failed: timeout');
+  });
+
+  it('requestMoreParts は workflowMeta を runAgent に伝搬する', async () => {
+    vi.mocked(runAgent).mockResolvedValue(doneResponse('x', {
+      done: true,
+      reasoning: 'enough',
+      parts: [],
+    }));
+    const workflowMeta = {
+      workflowName: 'takt-default',
+      currentStep: 'implement',
+      stepsList: [{ name: 'plan' }, { name: 'implement' }],
+      currentPosition: '2/2',
+      processSafety: {
+        protectedParentRunPid: 4242,
+      },
+    };
+
+    await requestMoreParts(
+      'instruction',
+      [{ id: 'p1', title: 'Part 1', status: 'done', content: 'ok' }],
+      ['p1'],
+      1,
+      {
+        cwd: '/repo',
+        persona: 'team-leader',
+        workflowMeta,
+      } as DecomposeTaskOptions & { workflowMeta: typeof workflowMeta },
+    );
+
+    expect(runAgent).toHaveBeenCalledWith(
+      'team-leader',
+      expect.any(String),
+      expect.objectContaining({ workflowMeta }),
+    );
   });
 
   // --- runTagJudgeStage (ARCH-NEW-DRY-Stage2-judgeStatus 再発防止) ---
