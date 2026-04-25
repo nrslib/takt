@@ -8,15 +8,13 @@ import { warn } from '../../shared/ui/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/index.js';
 
 export type WorkflowSelectionItem =
-  | { type: 'workflow'; name: string }
+  | { type: 'workflow'; name: string; source: WorkflowSource }
   | { type: 'category'; name: string; workflows: string[] };
 
 export interface SelectionOption {
   label: string;
   value: string;
 }
-
-export type WorkflowSourceSelection = 'user-defined' | 'builtin';
 
 export interface WorkflowListItem {
   name: string;
@@ -37,7 +35,7 @@ export function buildWorkflowSelectionItems(entries: WorkflowDirEntry[]): Workfl
       categories.set(entry.category, workflows);
       continue;
     }
-    items.push({ type: 'workflow', name: entry.name });
+    items.push({ type: 'workflow', name: entry.name, source: entry.source });
   }
 
   for (const [name, workflows] of categories) {
@@ -50,7 +48,12 @@ export function buildWorkflowSelectionItems(entries: WorkflowDirEntry[]): Workfl
 export function buildTopLevelSelectOptions(items: WorkflowSelectionItem[]): SelectionOption[] {
   return items.map((item) => {
     if (item.type === 'workflow') {
-      return { label: sanitizeTerminalText(item.name), value: item.name };
+      return {
+        label: item.source === 'builtin'
+          ? sanitizeTerminalText(item.name)
+          : buildWorkflowOptionLabel(item.name, item.source),
+        value: item.name,
+      };
     }
     return {
       label: `📁 ${sanitizeTerminalText(item.name)}/`,
@@ -83,6 +86,12 @@ export function buildCategoryWorkflowOptions(
   });
 }
 
+export function isUserDefinedWorkflowSource(
+  source: WorkflowSource,
+): source is 'user' | 'project' {
+  return source === 'user' || source === 'project';
+}
+
 export function applyBookmarks(
   options: SelectionOption[],
   bookmarkedWorkflows: string[],
@@ -101,16 +110,6 @@ export function warnMissingWorkflows(missing: MissingWorkflow[]): void {
       `Workflow "${sanitizeTerminalText(workflowName)}" in category "${sanitizeTerminalText(categoryPath.join(' / '))}" not found`,
     );
   }
-}
-
-export function buildWorkflowSourceOptions(
-  builtinCount: number,
-  userDefinedCount: number,
-): Array<{ label: string; value: WorkflowSourceSelection }> {
-  return [
-    { label: `User-defined workflows (${userDefinedCount})`, value: 'user-defined' },
-    { label: `Builtin workflows (${builtinCount})`, value: 'builtin' },
-  ];
 }
 
 export function buildWorkflowOptionLabel(name: string, source?: WorkflowSource): string {
@@ -141,15 +140,12 @@ export function splitEntriesBySource(
   const userDefinedEntries: WorkflowDirEntry[] = [];
 
   for (const entry of entries) {
-    if (entry.source === 'user' || entry.source === 'project') {
+    if (isUserDefinedWorkflowSource(entry.source)) {
       userDefinedEntries.push(entry);
       continue;
     }
 
-    if (entry.source === 'builtin' || entry.source === 'repertoire') {
-      builtinEntries.push(entry);
-      continue;
-    }
+    builtinEntries.push(entry);
   }
 
   return { builtinEntries, userDefinedEntries };
@@ -165,7 +161,7 @@ export function splitWorkflowMapBySource(
   const userDefinedWorkflows: WorkflowListItem[] = [];
 
   for (const [name, workflow] of workflows) {
-    if (workflow.source === 'user' || workflow.source === 'project') {
+    if (isUserDefinedWorkflowSource(workflow.source)) {
       userDefinedWorkflows.push({ name, source: workflow.source });
       continue;
     }

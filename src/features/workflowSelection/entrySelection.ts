@@ -7,34 +7,41 @@ import {
   applyBookmarks,
   buildCategoryWorkflowOptions,
   buildUserDefinedWorkflowOptions,
-  buildWorkflowOptionLabel,
-  buildWorkflowSourceOptions,
   buildTopLevelSelectOptions,
   buildWorkflowSelectionItems,
   parseCategorySelection,
   splitEntriesBySource,
   type SelectionOption,
-  type WorkflowSourceSelection,
 } from './options.js';
-import { selectFlatWorkflowOptions } from './flatSelection.js';
 
-async function selectBuiltinWorkflowFromEntries(
+function buildTopLevelOptions(entries: WorkflowDirEntry[]): {
+  items: ReturnType<typeof buildWorkflowSelectionItems>;
+  options: SelectionOption[];
+} {
+  const { builtinEntries, userDefinedEntries } = splitEntriesBySource(entries);
+  const items = buildWorkflowSelectionItems(builtinEntries);
+  const options = [
+    ...buildTopLevelSelectOptions(items),
+    ...buildUserDefinedWorkflowOptions(
+      userDefinedEntries.map(({ name, source }) => ({ name, source })),
+    ),
+  ];
+
+  return { items, options };
+}
+
+export async function selectWorkflowFromEntries(
   entries: WorkflowDirEntry[],
 ): Promise<string | null> {
-  const items = buildWorkflowSelectionItems(entries);
-  const hasCategories = items.some((item) => item.type === 'category');
-
-  if (!hasCategories) {
-    const baseOptions: SelectionOption[] = entries.map((entry) => ({
-      label: buildWorkflowOptionLabel(entry.name, entry.source),
-      value: entry.name,
-    }));
-    return selectFlatWorkflowOptions(baseOptions, 'No builtin workflows available.');
+  if (entries.length === 0) {
+    return null;
   }
+
+  const { items, options } = buildTopLevelOptions(entries);
 
   while (true) {
     const buildTopLevelOptions = (): SelectionOption[] =>
-      applyBookmarks(buildTopLevelSelectOptions(items), getBookmarkedWorkflows());
+      applyBookmarks(options, getBookmarkedWorkflows());
 
     const selected = await selectOption<string>('Select workflow:', buildTopLevelOptions(), {
       onKeyPress: (key: string, value: string): SelectOptionItem<string>[] | null => {
@@ -91,49 +98,5 @@ async function selectBuiltinWorkflowFromEntries(
     if (workflowSelection) {
       return workflowSelection;
     }
-  }
-}
-
-async function selectUserDefinedWorkflowEntries(
-  entries: WorkflowDirEntry[],
-): Promise<string | null> {
-  return selectFlatWorkflowOptions(
-    buildUserDefinedWorkflowOptions(entries),
-    'No user-defined workflows available.',
-  );
-}
-
-export async function selectWorkflowFromEntries(
-  entries: WorkflowDirEntry[],
-): Promise<string | null> {
-  if (entries.length === 0) {
-    return null;
-  }
-
-  const { builtinEntries, userDefinedEntries } = splitEntriesBySource(entries);
-
-  while (true) {
-    const selectedSource = await selectOption<WorkflowSourceSelection>(
-      'Select workflow source:',
-      buildWorkflowSourceOptions(builtinEntries.length, userDefinedEntries.length),
-    );
-    if (!selectedSource) {
-      return null;
-    }
-
-    if (selectedSource === 'builtin') {
-      if (builtinEntries.length === 0) {
-        await selectBuiltinWorkflowFromEntries(builtinEntries);
-        continue;
-      }
-      return selectBuiltinWorkflowFromEntries(builtinEntries);
-    }
-
-    if (userDefinedEntries.length === 0) {
-      await selectUserDefinedWorkflowEntries(userDefinedEntries);
-      continue;
-    }
-
-    return selectUserDefinedWorkflowEntries(userDefinedEntries);
   }
 }

@@ -246,7 +246,7 @@ describe('buildWorkflowSelectionItems', () => {
 
 describe('2-stage category selection helpers', () => {
 const items: WorkflowSelectionItem[] = [
-    { type: 'workflow', name: 'simple' },
+    { type: 'workflow', name: 'simple', source: 'builtin' },
     { type: 'category', name: 'frontend', workflows: ['frontend/react', 'frontend/vue'] },
     { type: 'category', name: 'backend', workflows: ['backend/api'] },
   ];

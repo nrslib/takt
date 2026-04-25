@@ -8,14 +8,11 @@ import {
   applyBookmarks,
   buildWorkflowOptionLabel,
   buildUserDefinedWorkflowOptions,
-  buildWorkflowSourceOptions,
+  splitWorkflowMapBySource,
   type SelectionOption,
   parseCategorySelection,
   CATEGORY_VALUE_PREFIX,
-  splitWorkflowMapBySource,
-  type WorkflowSourceSelection,
 } from './options.js';
-import { selectFlatWorkflowOptions } from './flatSelection.js';
 
 const CUSTOM_CATEGORY_PREFIX = '__custom_category__:';
 
@@ -136,16 +133,17 @@ async function selectWorkflowFromCategoryTree(
 
 async function selectTopLevelWorkflowOption(
   categorized: CategorizedWorkflows,
+  userDefinedWorkflows: ReturnType<typeof splitWorkflowMapBySource>['userDefinedWorkflows'],
 ): Promise<TopLevelSelection | null> {
   const buildOptions = (): SelectOptionItem<string>[] => {
-    const options: SelectOptionItem<string>[] = [];
+    const options: SelectionOption[] = [];
 
     for (const workflowName of getSelectableBookmarkedWorkflows(categorized)) {
       options.push({
-        label: `${buildWorkflowOptionLabel(
+        label: buildWorkflowOptionLabel(
           workflowName,
           categorized.allWorkflows.get(workflowName)?.source,
-        )} [*]`,
+        ),
         value: workflowName,
       });
     }
@@ -157,10 +155,13 @@ async function selectTopLevelWorkflowOption(
       });
     }
 
-    return options;
+    options.push(...buildUserDefinedWorkflowOptions(userDefinedWorkflows));
+
+    return applyBookmarks(options, getBookmarkedWorkflows());
   };
 
   if (buildOptions().length === 0) {
+    info('No workflows available for configured categories.');
     return null;
   }
 
@@ -233,46 +234,17 @@ function buildBuiltinCategorizedWorkflows(
   };
 }
 
-export async function selectWorkflowFromCategorizedWorkflowSources(
-  categorized: CategorizedWorkflows,
-): Promise<string | null> {
-  const { builtinWorkflows, userDefinedWorkflows } = splitWorkflowMapBySource(categorized.allWorkflows);
-  while (true) {
-    const selectedSource = await selectOption<WorkflowSourceSelection>(
-      'Select workflow source:',
-      buildWorkflowSourceOptions(builtinWorkflows.size, userDefinedWorkflows.length),
-    );
-    if (!selectedSource) {
-      return null;
-    }
-
-    if (selectedSource === 'builtin') {
-      if (builtinWorkflows.size === 0) {
-        info('No builtin workflows available.');
-        continue;
-      }
-      return selectWorkflowFromCategorizedWorkflows(
-        buildBuiltinCategorizedWorkflows(categorized, builtinWorkflows),
-      );
-    }
-
-    if (userDefinedWorkflows.length === 0) {
-      info('No user-defined workflows available.');
-      continue;
-    }
-
-    return selectFlatWorkflowOptions(
-      buildUserDefinedWorkflowOptions(userDefinedWorkflows),
-      'No user-defined workflows available.',
-    );
-  }
-}
-
 export async function selectWorkflowFromCategorizedWorkflows(
   categorized: CategorizedWorkflows,
 ): Promise<string | null> {
+  const { builtinWorkflows, userDefinedWorkflows } = splitWorkflowMapBySource(categorized.allWorkflows);
+  const builtinCategorized = buildBuiltinCategorizedWorkflows(
+    categorized,
+    builtinWorkflows,
+  );
+
   while (true) {
-    const selection = await selectTopLevelWorkflowOption(categorized);
+    const selection = await selectTopLevelWorkflowOption(builtinCategorized, userDefinedWorkflows);
     if (!selection) {
       return null;
     }
@@ -282,7 +254,7 @@ export async function selectWorkflowFromCategorizedWorkflows(
 
     const workflow = await selectWorkflowFromCategoryTree(
       selection.node.children,
-      categorized.allWorkflows,
+      builtinCategorized.allWorkflows,
       true,
       selection.node.workflows,
     );

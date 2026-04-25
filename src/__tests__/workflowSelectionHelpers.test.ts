@@ -10,12 +10,22 @@ describe('workflow selection helpers', () => {
     ]);
 
     expect(items).toEqual([
-      { type: 'workflow', name: 'default' },
+      { type: 'workflow', name: 'default', source: 'builtin' },
       { type: 'category', name: 'frontend', workflows: ['frontend/api', 'frontend/ui'] },
     ]);
     expect(buildTopLevelSelectOptions(items)).toEqual([
       { label: 'default', value: 'default' },
       { label: '📁 frontend/', value: '__category__:frontend' },
+    ]);
+  });
+
+  it('preserves repertoire source labels for top-level workflow items', () => {
+    const items = buildWorkflowSelectionItems([
+      { name: '@owner/repo/build', path: '/tmp/build.yaml', source: 'repertoire' },
+    ]);
+
+    expect(buildTopLevelSelectOptions(items)).toEqual([
+      { label: '🎼 @owner/repo/build (repertoire)', value: '@owner/repo/build' },
     ]);
   });
 });

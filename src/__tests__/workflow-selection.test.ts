@@ -1,8 +1,4 @@
-/**
- * Tests for workflow selection helpers
- */
-
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkflowDirEntry } from '../infra/config/loaders/workflowLoader.js';
 import type { CategorizedWorkflows } from '../infra/config/loaders/workflowCategories.js';
 import type { WorkflowWithSource } from '../infra/config/loaders/workflowResolver.js';
@@ -14,6 +10,13 @@ const bookmarkState = vi.hoisted(() => ({
 const uiMock = vi.hoisted(() => ({
   info: vi.fn(),
   warn: vi.fn(),
+}));
+const configMock = vi.hoisted(() => ({
+  loadAllStandaloneWorkflowsWithSources: vi.fn(),
+  listStandaloneWorkflowEntries: vi.fn(),
+  getWorkflowCategories: vi.fn(),
+  resolveIgnoredWorkflows: vi.fn(),
+  buildCategorizedWorkflows: vi.fn(),
 }));
 
 vi.mock('../shared/prompt/index.js', () => ({
@@ -29,54 +32,54 @@ vi.mock('../infra/config/global/index.js', () => ({
   toggleBookmark: vi.fn(),
 }));
 
-vi.mock('../infra/config/index.js', async (importOriginal) => {
-  const actual = await importOriginal() as Record<string, unknown>;
-  return actual;
-});
-
-const configMock = vi.hoisted(() => ({
-  loadAllStandaloneWorkflowsWithSources: vi.fn(),
-  listStandaloneWorkflowEntries: vi.fn(),
-  getWorkflowCategories: vi.fn(),
-  resolveIgnoredWorkflows: vi.fn(),
-  buildCategorizedWorkflows: vi.fn(),
-}));
-
 vi.mock('../infra/config/index.js', () => configMock);
 
 const { selectWorkflow } = await import('../features/workflowSelection/index.js');
 const { selectWorkflowFromEntries } = await import('../features/workflowSelection/entrySelection.js');
 const { selectWorkflowFromCategorizedWorkflows } = await import('../features/workflowSelection/categorizedSelection.js');
 
+function resetSelectionState(): void {
+  selectOptionMock.mockReset();
+  bookmarkState.bookmarks = [];
+  uiMock.info.mockReset();
+  uiMock.warn.mockReset();
+}
+
+function resetConfigState(): void {
+  configMock.loadAllStandaloneWorkflowsWithSources.mockReset();
+  configMock.listStandaloneWorkflowEntries.mockReset();
+  configMock.getWorkflowCategories.mockReset();
+  configMock.resolveIgnoredWorkflows.mockReset();
+  configMock.buildCategorizedWorkflows.mockReset();
+}
+
+function createWorkflowMap(entries: {
+  name: string;
+  source: 'user' | 'builtin' | 'project' | 'repertoire';
+}[]): Map<string, WorkflowWithSource> {
+  const map = new Map<string, WorkflowWithSource>();
+  for (const entry of entries) {
+    map.set(entry.name, {
+      source: entry.source,
+      config: {
+        name: entry.name,
+      },
+    });
+  }
+  return map;
+}
+
+function getPromptMessages(): string[] {
+  return selectOptionMock.mock.calls.map((call) => call[0] as string);
+}
+
+function expectNoSourceSelectionPrompt(): void {
+  expect(getPromptMessages()).not.toContain('Select workflow source:');
+}
+
 describe('selectWorkflowFromEntries', () => {
   beforeEach(() => {
-    selectOptionMock.mockReset();
-    bookmarkState.bookmarks = [];
-    uiMock.info.mockReset();
-    uiMock.warn.mockReset();
-  });
-
-  it('should show user-defined workflows as a flat list with source labels when source is chosen', async () => {
-    const entries: WorkflowDirEntry[] = [
-      { name: 'global-flow', path: '/tmp/global.yaml', source: 'user' },
-      { name: 'project-flow', path: '/tmp/project.yaml', source: 'project' },
-      { name: 'builtin-flow', path: '/tmp/builtin.yaml', source: 'builtin' },
-    ];
-
-    selectOptionMock
-      .mockImplementationOnce(async (_message: string, options: { label: string; value: string }[]) =>
-        findOptionValue(options, 'User-defined workflows'))
-      .mockResolvedValueOnce('project-flow');
-
-    const selected = await selectWorkflowFromEntries(entries);
-    expect(selected).toBe('project-flow');
-    expect(selectOptionMock).toHaveBeenCalledTimes(2);
-
-    const secondCallOptions = selectOptionMock.mock.calls[1]![1] as { label: string; value: string }[];
-    expect(secondCallOptions).toEqual([
-      { label: '🎼 global-flow (global)', value: 'global-flow' },
-      { label: '🎼 project-flow (project)', value: 'project-flow' },
-    ]);
+    resetSelectionState();
   });
 
   it('should return null without prompting when entries are empty', async () => {
@@ -86,199 +89,194 @@ describe('selectWorkflowFromEntries', () => {
     expect(selectOptionMock).not.toHaveBeenCalled();
   });
 
-  it('should show source selection even when only builtin workflows exist', async () => {
+  it('should show builtin options first and append user-defined workflows at the bottom of the main menu', async () => {
     const entries: WorkflowDirEntry[] = [
-      { name: 'builtin-flow', path: '/tmp/builtin.yaml', source: 'builtin' },
-    ];
-
-    selectOptionMock
-      .mockImplementationOnce(async (_message: string, options: { label: string; value: string }[]) =>
-        findOptionValue(options, 'Builtin workflows'))
-      .mockResolvedValueOnce('builtin-flow');
-
-    const selected = await selectWorkflowFromEntries(entries);
-    expect(selected).toBe('builtin-flow');
-    expect(selectOptionMock).toHaveBeenCalledTimes(2);
-
-    const sourceOptions = selectOptionMock.mock.calls[0]![1] as { label: string; value: string }[];
-    expect(sourceOptions.map((option) => option.label)).toEqual(
-      expect.arrayContaining([
-        'Builtin workflows (1)',
-        'User-defined workflows (0)',
-      ]),
-    );
-  });
-
-  it('should return to source selection after choosing an empty user-defined source', async () => {
-    const entries: WorkflowDirEntry[] = [
-      { name: 'builtin-flow', path: '/tmp/builtin.yaml', source: 'builtin' },
-    ];
-
-    selectOptionMock
-      .mockImplementationOnce(async (_message: string, options: { label: string; value: string }[]) =>
-        findOptionValue(options, 'User-defined workflows'))
-      .mockImplementationOnce(async (_message: string, options: { label: string; value: string }[]) =>
-        findOptionValue(options, 'Builtin workflows'))
-      .mockResolvedValueOnce('builtin-flow');
-
-    const selected = await selectWorkflowFromEntries(entries);
-
-    expect(selected).toBe('builtin-flow');
-    expect(uiMock.info).toHaveBeenCalledWith('No user-defined workflows available.');
-    expect(selectOptionMock).toHaveBeenCalledTimes(3);
-  });
-
-  it('should return to source selection after choosing an empty builtin source', async () => {
-    const entries: WorkflowDirEntry[] = [
+      { name: 'default', path: '/tmp/default.yaml', source: 'builtin' },
+      { name: 'frontend/api', path: '/tmp/api.yaml', source: 'builtin', category: 'frontend' },
+      { name: 'global-flow', path: '/tmp/global.yaml', source: 'user' },
       { name: 'project-flow', path: '/tmp/project.yaml', source: 'project' },
     ];
 
-    selectOptionMock
-      .mockImplementationOnce(async (_message: string, options: { label: string; value: string }[]) =>
-        findOptionValue(options, 'Builtin workflows'))
-      .mockImplementationOnce(async (_message: string, options: { label: string; value: string }[]) =>
-        findOptionValue(options, 'User-defined workflows'))
-      .mockResolvedValueOnce('project-flow');
+    selectOptionMock.mockResolvedValueOnce('project-flow');
 
     const selected = await selectWorkflowFromEntries(entries);
 
     expect(selected).toBe('project-flow');
-    expect(uiMock.info).toHaveBeenCalledWith('No builtin workflows available.');
-    expect(selectOptionMock).toHaveBeenCalledTimes(3);
+    expect(selectOptionMock).toHaveBeenCalledTimes(1);
+    expect(selectOptionMock).toHaveBeenNthCalledWith(
+      1,
+      'Select workflow:',
+      [
+        { label: 'default', value: 'default' },
+        { label: '📁 frontend/', value: '__category__:frontend' },
+        { label: '🎼 global-flow (global)', value: 'global-flow' },
+        { label: '🎼 project-flow (project)', value: 'project-flow' },
+      ],
+      expect.any(Object),
+    );
+    expectNoSourceSelectionPrompt();
+  });
+
+  it('should keep repertoire workflows in the main menu with source labels before user-defined workflows', async () => {
+    const entries: WorkflowDirEntry[] = [
+      { name: 'default', path: '/tmp/default.yaml', source: 'builtin' },
+      { name: '@owner/repo/build', path: '/tmp/build.yaml', source: 'repertoire' },
+      { name: 'global-flow', path: '/tmp/global.yaml', source: 'user' },
+    ];
+
+    selectOptionMock.mockResolvedValueOnce('@owner/repo/build');
+
+    const selected = await selectWorkflowFromEntries(entries);
+
+    expect(selected).toBe('@owner/repo/build');
+    expect(selectOptionMock).toHaveBeenNthCalledWith(
+      1,
+      'Select workflow:',
+      [
+        { label: '🎼 @owner/repo/build (repertoire)', value: '@owner/repo/build' },
+        { label: 'default', value: 'default' },
+        { label: '🎼 global-flow (global)', value: 'global-flow' },
+      ],
+      expect.any(Object),
+    );
+  });
+
+  it('should navigate into builtin categories without showing a source split first', async () => {
+    const entries: WorkflowDirEntry[] = [
+      { name: 'frontend/api', path: '/tmp/api.yaml', source: 'builtin', category: 'frontend' },
+      { name: 'frontend/ui', path: '/tmp/ui.yaml', source: 'builtin', category: 'frontend' },
+      { name: 'project-flow', path: '/tmp/project.yaml', source: 'project' },
+    ];
+
+    selectOptionMock
+      .mockResolvedValueOnce('__category__:frontend')
+      .mockResolvedValueOnce('frontend/ui');
+
+    const selected = await selectWorkflowFromEntries(entries);
+
+    expect(selected).toBe('frontend/ui');
+    expect(selectOptionMock).toHaveBeenCalledTimes(2);
+    expect(selectOptionMock).toHaveBeenNthCalledWith(
+      2,
+      'Select workflow in frontend:',
+      [
+        { label: 'api', value: 'frontend/api' },
+        { label: 'ui', value: 'frontend/ui' },
+      ],
+      expect.any(Object),
+    );
+    expectNoSourceSelectionPrompt();
   });
 });
 
-function createWorkflowMap(entries: {
-  name: string;
-  source: 'user' | 'builtin' | 'project' | 'repertoire';
-}[]): Map<string, WorkflowWithSource> {
-  const map = new Map<string, WorkflowWithSource>();
-  for (const e of entries) {
-    map.set(e.name, {
-      source: e.source,
-      config: {
-        name: e.name,
-      },
-    });
-  }
-  return map;
-}
-
-function findOptionValue(
-  options: { label: string; value: string }[],
-  labelFragment: string,
-): string {
-  const option = options.find((candidate) => candidate.label.includes(labelFragment));
-  expect(option).toBeDefined();
-  return option!.value;
-}
-
 describe('selectWorkflowFromCategorizedWorkflows', () => {
   beforeEach(() => {
-    selectOptionMock.mockReset();
-    bookmarkState.bookmarks = [];
-    uiMock.info.mockReset();
-    uiMock.warn.mockReset();
+    resetSelectionState();
   });
 
-  it('should show categories at top level', async () => {
+  it('should append user-defined workflows after builtin categories and hide Others when it only contains user-defined workflows', async () => {
     const categorized: CategorizedWorkflows = {
       categories: [
-        { name: 'Dev', workflows: ['my-workflow'], children: [] },
         { name: 'Quick Start', workflows: ['default'], children: [] },
+        { name: 'Others', workflows: ['global-flow', 'project-flow'], children: [] },
       ],
       allWorkflows: createWorkflowMap([
-        { name: 'my-workflow', source: 'builtin' },
         { name: 'default', source: 'builtin' },
+        { name: 'global-flow', source: 'user' },
+        { name: 'project-flow', source: 'project' },
+      ]),
+      missingWorkflows: [],
+    };
+
+    selectOptionMock.mockResolvedValueOnce('project-flow');
+
+    const selected = await selectWorkflowFromCategorizedWorkflows(categorized);
+
+    expect(selected).toBe('project-flow');
+    expect(selectOptionMock).toHaveBeenCalledTimes(1);
+    expect(selectOptionMock).toHaveBeenNthCalledWith(
+      1,
+      'Select workflow:',
+      [
+        { label: '📁 Quick Start/', value: '__custom_category__:Quick Start' },
+        { label: '🎼 global-flow (global)', value: 'global-flow' },
+        { label: '🎼 project-flow (project)', value: 'project-flow' },
+      ],
+      expect.any(Object),
+    );
+    expectNoSourceSelectionPrompt();
+  });
+
+  it('should keep repertoire workflows inside builtin categories ahead of user-defined workflows', async () => {
+    const categorized: CategorizedWorkflows = {
+      categories: [
+        { name: 'Quick Start', workflows: ['default'], children: [] },
+        { name: 'repertoire', workflows: ['@owner/repo/build'], children: [] },
+      ],
+      allWorkflows: createWorkflowMap([
+        { name: 'default', source: 'builtin' },
+        { name: '@owner/repo/build', source: 'repertoire' },
+        { name: 'global-flow', source: 'user' },
       ]),
       missingWorkflows: [],
     };
 
     selectOptionMock
-      .mockResolvedValueOnce('__custom_category__:Dev')
-      .mockResolvedValueOnce('my-workflow');
+      .mockResolvedValueOnce('__custom_category__:repertoire')
+      .mockResolvedValueOnce('@owner/repo/build');
 
-    await selectWorkflowFromCategorizedWorkflows(categorized);
+    const selected = await selectWorkflowFromCategorizedWorkflows(categorized);
 
-    const firstCallOptions = selectOptionMock.mock.calls[0]![1] as { label: string; value: string }[];
-    const labels = firstCallOptions.map((o) => o.label);
-    const values = firstCallOptions.map((o) => o.value);
-
-    expect(labels.some((l) => l.includes('Dev'))).toBe(true);
-    expect(labels.some((l) => l.includes('Quick Start'))).toBe(true);
-    expect(labels.some((l) => l.includes('(current)'))).toBe(false);
-    expect(values).not.toContain('__current__');
+    expect(selected).toBe('@owner/repo/build');
+    expect(selectOptionMock).toHaveBeenNthCalledWith(
+      1,
+      'Select workflow:',
+      [
+        { label: '📁 Quick Start/', value: '__custom_category__:Quick Start' },
+        { label: '📁 repertoire/', value: '__custom_category__:repertoire' },
+        { label: '🎼 global-flow (global)', value: 'global-flow' },
+      ],
+      expect.any(Object),
+    );
+    expect(selectOptionMock).toHaveBeenNthCalledWith(
+      2,
+      'Select workflow category:',
+      [{ label: '🎼 @owner/repo/build (repertoire)', value: '@owner/repo/build' }],
+      expect.any(Object),
+    );
+    expectNoSourceSelectionPrompt();
   });
 
-  it('should show bookmarked workflows', async () => {
-    bookmarkState.bookmarks = ['research'];
-
+  it('should show bookmark markers for bookmarked user-defined workflows in the categorized top-level menu', async () => {
     const categorized: CategorizedWorkflows = {
       categories: [
         { name: 'Quick Start', workflows: ['default'], children: [] },
       ],
       allWorkflows: createWorkflowMap([
         { name: 'default', source: 'builtin' },
-        { name: 'research', source: 'builtin' },
+        { name: 'project-flow', source: 'project' },
       ]),
       missingWorkflows: [],
     };
+    bookmarkState.bookmarks = ['default', 'project-flow'];
 
-    selectOptionMock.mockResolvedValueOnce('research');
+    selectOptionMock.mockResolvedValueOnce(null);
 
     const selected = await selectWorkflowFromCategorizedWorkflows(categorized);
-    expect(selected).toBe('research');
 
-    const firstCallOptions = selectOptionMock.mock.calls[0]![1] as { label: string; value: string }[];
-    const labels = firstCallOptions.map((o) => o.label);
-
-    expect(labels.some((l) => l.includes('research [*]'))).toBe(true);
-  });
-
-  it('should ignore stale bookmarked workflows at top level', async () => {
-    bookmarkState.bookmarks = ['stale-workflow', 'research'];
-
-    const categorized: CategorizedWorkflows = {
-      categories: [
-        { name: 'Quick Start', workflows: ['default'], children: [] },
+    expect(selected).toBeNull();
+    expect(selectOptionMock).toHaveBeenCalledTimes(1);
+    expect(selectOptionMock).toHaveBeenNthCalledWith(
+      1,
+      'Select workflow:',
+      [
+        { label: '🎼 default [*]', value: 'default' },
+        { label: '📁 Quick Start/', value: '__custom_category__:Quick Start' },
+        { label: '🎼 project-flow (project) [*]', value: 'project-flow' },
       ],
-      allWorkflows: createWorkflowMap([
-        { name: 'default', source: 'builtin' },
-        { name: 'research', source: 'builtin' },
-      ]),
-      missingWorkflows: [],
-    };
-
-    selectOptionMock.mockResolvedValueOnce('research');
-
-    const selected = await selectWorkflowFromCategorizedWorkflows(categorized);
-    expect(selected).toBe('research');
-
-    const firstCallOptions = selectOptionMock.mock.calls[0]![1] as { label: string; value: string }[];
-    expect(firstCallOptions.map((option) => option.value)).toEqual([
-      'research',
-      '__custom_category__:Quick Start',
-    ]);
-  });
-
-  it('should navigate into a category and select a workflow', async () => {
-    const categorized: CategorizedWorkflows = {
-      categories: [
-        { name: 'Dev', workflows: ['my-workflow'], children: [] },
-      ],
-      allWorkflows: createWorkflowMap([
-        { name: 'my-workflow', source: 'builtin' },
-      ]),
-      missingWorkflows: [],
-    };
-
-    // Select category, then select workflow inside it
-    selectOptionMock
-      .mockResolvedValueOnce('__custom_category__:Dev')
-      .mockResolvedValueOnce('my-workflow');
-
-    const selected = await selectWorkflowFromCategorizedWorkflows(categorized);
-    expect(selected).toBe('my-workflow');
+      expect.any(Object),
+    );
+    expectNoSourceSelectionPrompt();
   });
 
   it('should navigate into subcategories recursively', async () => {
@@ -300,13 +298,13 @@ describe('selectWorkflowFromCategorizedWorkflows', () => {
       missingWorkflows: [],
     };
 
-    // Select Hybrid category → Quick Start subcategory → workflow
     selectOptionMock
       .mockResolvedValueOnce('__custom_category__:Hybrid')
       .mockResolvedValueOnce('__category__:Quick Start')
       .mockResolvedValueOnce('hybrid-default');
 
     const selected = await selectWorkflowFromCategorizedWorkflows(categorized);
+
     expect(selected).toBe('hybrid-default');
     expect(selectOptionMock).toHaveBeenCalledTimes(3);
   });
@@ -329,35 +327,33 @@ describe('selectWorkflowFromCategorizedWorkflows', () => {
       missingWorkflows: [],
     };
 
-    // Select Dev category, then directly select the root-level workflow
     selectOptionMock
       .mockResolvedValueOnce('__custom_category__:Dev')
       .mockResolvedValueOnce('base-workflow');
 
     const selected = await selectWorkflowFromCategorizedWorkflows(categorized);
+
     expect(selected).toBe('base-workflow');
-
-    // Second call should show Advanced subcategory AND base-workflow at same level
-    const secondCallOptions = selectOptionMock.mock.calls[1]![1] as { label: string; value: string }[];
-    const labels = secondCallOptions.map((o) => o.label);
-
-    // Should contain the subcategory folder
-    expect(labels.some((l) => l.includes('Advanced'))).toBe(true);
-    // Should contain the workflow
-    expect(labels.some((l) => l.includes('base-workflow'))).toBe(true);
-    // Should NOT contain the parent category again
-    expect(labels.some((l) => l.includes('Dev'))).toBe(false);
+    expect(selectOptionMock).toHaveBeenNthCalledWith(
+      2,
+      'Select workflow category:',
+      [
+        { label: '📁 Advanced/', value: '__category__:Advanced' },
+        { label: '🎼 base-workflow', value: 'base-workflow' },
+      ],
+      expect.any(Object),
+    );
   });
 
   it('should sanitize category labels and bookmarked workflow labels in categorized selection', async () => {
     bookmarkState.bookmarks = ['bookmarked\nworkflow'];
-
     const categorized: CategorizedWorkflows = {
       categories: [
-        { name: 'Unsafe\nCategory', workflows: [], children: [] },
+        { name: 'Unsafe\nCategory', workflows: ['inside-workflow'], children: [] },
       ],
       allWorkflows: createWorkflowMap([
         { name: 'bookmarked\nworkflow', source: 'builtin' },
+        { name: 'inside-workflow', source: 'builtin' },
       ]),
       missingWorkflows: [],
     };
@@ -366,12 +362,14 @@ describe('selectWorkflowFromCategorizedWorkflows', () => {
 
     await selectWorkflowFromCategorizedWorkflows(categorized);
 
-    const firstCallOptions = selectOptionMock.mock.calls[0]![1] as { label: string; value: string }[];
-    expect(firstCallOptions).toEqual(
-      expect.arrayContaining([
+    expect(selectOptionMock).toHaveBeenNthCalledWith(
+      1,
+      'Select workflow:',
+      [
         { label: '🎼 bookmarked\\nworkflow [*]', value: 'bookmarked\nworkflow' },
         { label: '📁 Unsafe\\nCategory/', value: '__custom_category__:Unsafe\nCategory' },
-      ]),
+      ],
+      expect.any(Object),
     );
   });
 
@@ -430,231 +428,118 @@ describe('selectWorkflowFromCategorizedWorkflows', () => {
       missingWorkflows: [],
     };
 
-    selectOptionMock.mockResolvedValueOnce('__custom_category__:Empty');
+    const selected = await selectWorkflowFromCategorizedWorkflows(categorized);
 
-    const result = await selectWorkflowFromCategorizedWorkflows(categorized);
-
-    expect(result).toBeNull();
+    expect(selected).toBeNull();
+    expect(selectOptionMock).not.toHaveBeenCalled();
     expect(uiMock.info).toHaveBeenCalledWith('No workflows available for configured categories.');
   });
 });
 
 describe('selectWorkflow', () => {
   beforeEach(() => {
-    selectOptionMock.mockReset();
-    bookmarkState.bookmarks = [];
-    configMock.loadAllStandaloneWorkflowsWithSources.mockReset();
-    configMock.listStandaloneWorkflowEntries.mockReset();
-    configMock.getWorkflowCategories.mockReset();
-    configMock.resolveIgnoredWorkflows.mockReset();
-    configMock.buildCategorizedWorkflows.mockReset();
-    uiMock.info.mockReset();
-    uiMock.warn.mockReset();
+    resetSelectionState();
+    resetConfigState();
+    configMock.resolveIgnoredWorkflows.mockReturnValue(new Set());
   });
 
-  it('should return default workflow when no workflows found and fallbackToDefault is true', async () => {
+  it('should return default workflow when no workflows are found and fallbackToDefault is true', async () => {
     configMock.getWorkflowCategories.mockReturnValue(null);
     configMock.listStandaloneWorkflowEntries.mockReturnValue([]);
 
     const result = await selectWorkflow('/cwd');
 
     expect(result).toBe('default');
+    expect(uiMock.info).toHaveBeenCalledWith('No workflows found. Using default workflow: default');
   });
 
-  it('should return null when no workflows found and fallbackToDefault is false', async () => {
+  it('should return null when no workflows are found and fallbackToDefault is false', async () => {
     configMock.getWorkflowCategories.mockReturnValue(null);
     configMock.listStandaloneWorkflowEntries.mockReturnValue([]);
 
     const result = await selectWorkflow('/cwd', { fallbackToDefault: false });
 
     expect(result).toBeNull();
+    expect(uiMock.info).toHaveBeenCalledWith('No workflows found.');
   });
 
-  it('should prompt selection even when only one workflow exists', async () => {
+  it('should use a single directory-based menu when no category config exists', async () => {
     configMock.getWorkflowCategories.mockReturnValue(null);
     configMock.listStandaloneWorkflowEntries.mockReturnValue([
-      { name: 'only-workflow', path: '/tmp/only-workflow.yaml', source: 'user' },
+      { name: 'default', path: '/tmp/default.yaml', source: 'builtin' },
+      { name: 'frontend/api', path: '/tmp/api.yaml', source: 'builtin', category: 'frontend' },
+      { name: 'custom-flow', path: '/tmp/custom-flow.yaml', source: 'user' },
     ]);
-    selectOptionMock
-      .mockImplementationOnce(async (_message: string, options: { label: string; value: string }[]) =>
-        findOptionValue(options, 'User-defined workflows'))
-      .mockResolvedValueOnce('only-workflow');
+
+    selectOptionMock.mockResolvedValueOnce('custom-flow');
 
     const result = await selectWorkflow('/cwd');
 
-    expect(result).toBe('only-workflow');
-    expect(selectOptionMock).toHaveBeenCalledTimes(2);
-  });
-
-  it('should show source selection before builtin categories when category config exists', async () => {
-    const workflowMap = createWorkflowMap([
-      { name: 'default', source: 'builtin' },
-      { name: 'my-workflow', source: 'project' },
-    ]);
-    const categorized: CategorizedWorkflows = {
-      categories: [{ name: 'Quick Start', workflows: ['default'], children: [] }],
-      allWorkflows: workflowMap,
-      missingWorkflows: [],
-    };
-
-    configMock.getWorkflowCategories.mockReturnValue({ categories: ['Dev'] });
-    configMock.loadAllStandaloneWorkflowsWithSources.mockReturnValue(workflowMap);
-    configMock.buildCategorizedWorkflows.mockReturnValue(categorized);
-
-    selectOptionMock
-      .mockImplementationOnce(async (_message: string, options: { label: string; value: string }[]) =>
-        findOptionValue(options, 'Builtin workflows'))
-      .mockImplementationOnce(async (_message: string, options: { label: string; value: string }[]) =>
-        findOptionValue(options, 'Quick Start'))
-      .mockResolvedValueOnce('default');
-
-    const result = await selectWorkflow('/cwd');
-
-    expect(result).toBe('default');
-    expect(configMock.buildCategorizedWorkflows).toHaveBeenCalled();
-    expect(configMock.loadAllStandaloneWorkflowsWithSources).toHaveBeenCalledWith('/cwd', {
+    expect(result).toBe('custom-flow');
+    expect(configMock.listStandaloneWorkflowEntries).toHaveBeenCalledWith('/cwd', {
       onWarning: uiMock.warn,
     });
     expect(selectOptionMock).toHaveBeenNthCalledWith(
       1,
-      'Select workflow source:',
-      expect.any(Array),
-    );
-  });
-
-  it('should show user-defined workflows as a flat list with source labels when category config exists', async () => {
-    const workflowMap = createWorkflowMap([
-      { name: 'default', source: 'builtin' },
-      { name: 'global-flow', source: 'user' },
-      { name: 'project-flow', source: 'project' },
-      { name: '@owner/repo/build', source: 'repertoire' },
-    ]);
-    const categorized: CategorizedWorkflows = {
-      categories: [
-        { name: 'Quick Start', workflows: ['default'], children: [] },
-        { name: 'repertoire', workflows: ['@owner/repo/build'], children: [] },
+      'Select workflow:',
+      [
+        { label: 'default', value: 'default' },
+        { label: '📁 frontend/', value: '__category__:frontend' },
+        { label: '🎼 custom-flow (global)', value: 'custom-flow' },
       ],
-      allWorkflows: workflowMap,
-      missingWorkflows: [],
-    };
-
-    configMock.getWorkflowCategories.mockReturnValue({ categories: ['Dev'] });
-    configMock.loadAllStandaloneWorkflowsWithSources.mockReturnValue(workflowMap);
-    configMock.buildCategorizedWorkflows.mockReturnValue(categorized);
-
-    selectOptionMock
-      .mockImplementationOnce(async (_message: string, options: { label: string; value: string }[]) =>
-        findOptionValue(options, 'User-defined workflows'))
-      .mockResolvedValueOnce('project-flow');
-
-    const result = await selectWorkflow('/cwd');
-
-    expect(result).toBe('project-flow');
-    expect(selectOptionMock).toHaveBeenCalledTimes(2);
-
-    const secondCallOptions = selectOptionMock.mock.calls[1]![1] as { label: string; value: string }[];
-    expect(secondCallOptions).toEqual([
-      { label: '🎼 global-flow (global)', value: 'global-flow' },
-      { label: '🎼 project-flow (project)', value: 'project-flow' },
-    ]);
-  });
-
-  it('should keep repertoire workflows under builtin source when category config exists', async () => {
-    const workflowMap = createWorkflowMap([
-      { name: 'default', source: 'builtin' },
-      { name: '@owner/repo/build', source: 'repertoire' },
-    ]);
-    const categorized: CategorizedWorkflows = {
-      categories: [
-        { name: 'Quick Start', workflows: ['default'], children: [] },
-        { name: 'repertoire', workflows: ['@owner/repo/build'], children: [] },
-      ],
-      allWorkflows: workflowMap,
-      missingWorkflows: [],
-    };
-
-    configMock.getWorkflowCategories.mockReturnValue({ categories: ['Dev'] });
-    configMock.loadAllStandaloneWorkflowsWithSources.mockReturnValue(workflowMap);
-    configMock.buildCategorizedWorkflows.mockReturnValue(categorized);
-
-    selectOptionMock
-      .mockImplementationOnce(async (_message: string, options: { label: string; value: string }[]) =>
-        findOptionValue(options, 'Builtin workflows'))
-      .mockImplementationOnce(async (_message: string, options: { label: string; value: string }[]) =>
-        findOptionValue(options, 'repertoire'))
-      .mockResolvedValueOnce('@owner/repo/build');
-
-    const result = await selectWorkflow('/cwd');
-
-    expect(result).toBe('@owner/repo/build');
-    expect(selectOptionMock).toHaveBeenNthCalledWith(
-      3,
-      'Select workflow category:',
-      [{ label: '🎼 @owner/repo/build (repertoire)', value: '@owner/repo/build' }],
       expect.any(Object),
     );
+    expectNoSourceSelectionPrompt();
   });
 
-  it('should return to source selection after choosing an empty builtin source when category config exists', async () => {
+  it('should use a single categorized menu and append user-defined workflows at the bottom when category config exists', async () => {
     const workflowMap = createWorkflowMap([
+      { name: 'default', source: 'builtin' },
       { name: 'project-flow', source: 'project' },
     ]);
+    const categoryConfig = { categories: ['Quick Start'] };
     const categorized: CategorizedWorkflows = {
-      categories: [],
+      categories: [
+        { name: 'Quick Start', workflows: ['default'], children: [] },
+        { name: 'Others', workflows: ['project-flow'], children: [] },
+      ],
       allWorkflows: workflowMap,
       missingWorkflows: [],
     };
 
-    configMock.getWorkflowCategories.mockReturnValue({ categories: ['Dev'] });
+    configMock.getWorkflowCategories.mockReturnValue(categoryConfig);
     configMock.loadAllStandaloneWorkflowsWithSources.mockReturnValue(workflowMap);
     configMock.buildCategorizedWorkflows.mockReturnValue(categorized);
 
-    selectOptionMock
-      .mockImplementationOnce(async (_message: string, options: { label: string; value: string }[]) =>
-        findOptionValue(options, 'Builtin workflows'))
-      .mockImplementationOnce(async (_message: string, options: { label: string; value: string }[]) =>
-        findOptionValue(options, 'User-defined workflows'))
-      .mockResolvedValueOnce('project-flow');
+    selectOptionMock.mockResolvedValueOnce('project-flow');
 
     const result = await selectWorkflow('/cwd');
 
     expect(result).toBe('project-flow');
-    expect(uiMock.info).toHaveBeenCalledWith('No builtin workflows available.');
-    expect(selectOptionMock).toHaveBeenCalledTimes(3);
+    expect(configMock.loadAllStandaloneWorkflowsWithSources).toHaveBeenCalledWith('/cwd', {
+      onWarning: uiMock.warn,
+    });
+    expect(configMock.buildCategorizedWorkflows).toHaveBeenCalledWith(
+      workflowMap,
+      categoryConfig,
+      new Set(),
+    );
+    expect(selectOptionMock).toHaveBeenNthCalledWith(
+      1,
+      'Select workflow:',
+      [
+        { label: '📁 Quick Start/', value: '__custom_category__:Quick Start' },
+        { label: '🎼 project-flow (project)', value: 'project-flow' },
+      ],
+      expect.any(Object),
+    );
+    expectNoSourceSelectionPrompt();
   });
 
-  it('should return to source selection after choosing an empty user-defined source when category config exists', async () => {
+  it('should forward invalid workflow warnings to UI in the category-based selection path', async () => {
     const workflowMap = createWorkflowMap([
-      { name: 'default', source: 'builtin' },
+      { name: 'my-workflow', source: 'user' },
     ]);
-    const categorized: CategorizedWorkflows = {
-      categories: [{ name: 'Quick Start', workflows: ['default'], children: [] }],
-      allWorkflows: workflowMap,
-      missingWorkflows: [],
-    };
-
-    configMock.getWorkflowCategories.mockReturnValue({ categories: ['Dev'] });
-    configMock.loadAllStandaloneWorkflowsWithSources.mockReturnValue(workflowMap);
-    configMock.buildCategorizedWorkflows.mockReturnValue(categorized);
-
-    selectOptionMock
-      .mockImplementationOnce(async (_message: string, options: { label: string; value: string }[]) =>
-        findOptionValue(options, 'User-defined workflows'))
-      .mockImplementationOnce(async (_message: string, options: { label: string; value: string }[]) =>
-        findOptionValue(options, 'Builtin workflows'))
-      .mockImplementationOnce(async (_message: string, options: { label: string; value: string }[]) =>
-        findOptionValue(options, 'Quick Start'))
-      .mockResolvedValueOnce('default');
-
-    const result = await selectWorkflow('/cwd');
-
-    expect(result).toBe('default');
-    expect(uiMock.info).toHaveBeenCalledWith('No user-defined workflows available.');
-    expect(selectOptionMock).toHaveBeenCalledTimes(4);
-  });
-
-  it('should forward invalid workflow warnings to UI in category-based selection path', async () => {
-    const workflowMap = createWorkflowMap([{ name: 'my-workflow', source: 'user' }]);
     const categorized: CategorizedWorkflows = {
       categories: [{ name: 'Dev', workflows: ['my-workflow'], children: [] }],
       allWorkflows: workflowMap,
@@ -670,10 +555,7 @@ describe('selectWorkflow', () => {
     );
     configMock.buildCategorizedWorkflows.mockReturnValue(categorized);
 
-    selectOptionMock
-      .mockImplementationOnce(async (_message: string, options: { label: string; value: string }[]) =>
-        findOptionValue(options, 'User-defined workflows'))
-      .mockResolvedValueOnce('my-workflow');
+    selectOptionMock.mockResolvedValueOnce('my-workflow');
 
     const result = await selectWorkflow('/cwd');
 
@@ -681,199 +563,37 @@ describe('selectWorkflow', () => {
     expect(uiMock.warn).toHaveBeenCalledWith(
       'Workflow "broken" failed to load: steps.0.allowed_tools: Invalid input',
     );
+    expect(selectOptionMock).toHaveBeenNthCalledWith(
+      1,
+      'Select workflow:',
+      [{ label: '🎼 my-workflow (global)', value: 'my-workflow' }],
+      expect.any(Object),
+    );
   });
 
-  it('should use directory-based selection when no category config', async () => {
-    configMock.getWorkflowCategories.mockReturnValue(null);
-    configMock.listStandaloneWorkflowEntries.mockReturnValue([
-      { name: 'custom-flow', path: '/tmp/custom-flow.yaml', source: 'user' },
-      { name: 'builtin-flow', path: '/tmp/builtin-flow.yaml', source: 'builtin' },
-    ]);
-
-    selectOptionMock
-      .mockImplementationOnce(async (_message: string, options: { label: string; value: string }[]) =>
-        findOptionValue(options, 'User-defined workflows'))
-      .mockResolvedValueOnce('custom-flow');
-
-    const result = await selectWorkflow('/cwd');
-
-    expect(result).toBe('custom-flow');
-    expect(configMock.listStandaloneWorkflowEntries).toHaveBeenCalledWith('/cwd', {
-      onWarning: uiMock.warn,
-    });
-  });
-
-  it('should exclude invalid workflows from normal selection path and forward warnings to UI', async () => {
+  it('should forward invalid workflow warnings to UI in the directory-based selection path', async () => {
     configMock.getWorkflowCategories.mockReturnValue(null);
     configMock.listStandaloneWorkflowEntries.mockImplementation(
       (_cwd: string, options?: { onWarning?: (message: string) => void }) => {
         options?.onWarning?.('Workflow "broken" failed to load: steps.0: Invalid input');
         return [
-          { name: 'builtin-flow', path: '/tmp/builtin-flow.yaml', source: 'builtin' },
           { name: 'valid-flow', path: '/tmp/valid-flow.yaml', source: 'user' },
         ];
       },
     );
 
-    selectOptionMock
-      .mockImplementationOnce(async (_message: string, options: { label: string; value: string }[]) =>
-        findOptionValue(options, 'User-defined workflows'))
-      .mockResolvedValueOnce('valid-flow');
+    selectOptionMock.mockResolvedValueOnce('valid-flow');
 
     const result = await selectWorkflow('/cwd');
 
     expect(result).toBe('valid-flow');
     expect(uiMock.warn).toHaveBeenCalledWith('Workflow "broken" failed to load: steps.0: Invalid input');
     expect(selectOptionMock).toHaveBeenNthCalledWith(
-      2,
+      1,
       'Select workflow:',
       [{ label: '🎼 valid-flow (global)', value: 'valid-flow' }],
       expect.any(Object),
     );
-  });
-
-  it('should use workflow terminology in directory-based selection prompts', async () => {
-    configMock.getWorkflowCategories.mockReturnValue(null);
-    configMock.listStandaloneWorkflowEntries.mockReturnValue([
-      { name: 'custom-flow', path: '/tmp/custom-flow.yaml', source: 'user' },
-      { name: 'builtin-flow', path: '/tmp/builtin-flow.yaml', source: 'builtin' },
-    ]);
-
-    selectOptionMock
-      .mockImplementationOnce(async (_message: string, options: { label: string; value: string }[]) =>
-        findOptionValue(options, 'User-defined workflows'))
-      .mockResolvedValueOnce('custom-flow');
-
-    await selectWorkflow('/cwd');
-
-    expect(selectOptionMock).toHaveBeenNthCalledWith(
-      1,
-      'Select workflow source:',
-      expect.any(Array),
-    );
-    expect(selectOptionMock).toHaveBeenNthCalledWith(
-      2,
-      'Select workflow:',
-      expect.any(Array),
-      expect.any(Object),
-    );
-  });
-
-  it('should label workflow sources and categories with workflow terminology', async () => {
-    configMock.getWorkflowCategories.mockReturnValue(null);
-    configMock.listStandaloneWorkflowEntries.mockReturnValue([
-      { name: 'custom-flow', path: '/tmp/custom-flow.yaml', source: 'user' },
-      { name: 'builtin-flow', path: '/tmp/builtin-flow.yaml', source: 'builtin' },
-    ]);
-
-    selectOptionMock
-      .mockImplementationOnce(async (_message: string, options: { label: string; value: string }[]) =>
-        findOptionValue(options, 'User-defined workflows'))
-      .mockResolvedValueOnce('custom-flow');
-
-    await selectWorkflow('/cwd');
-
-    const sourceOptions = selectOptionMock.mock.calls[0]![1] as { label: string; value: string }[];
-    expect(sourceOptions.map((option) => option.label)).toEqual([
-      'User-defined workflows (1)',
-      'Builtin workflows (1)',
-    ]);
-  });
-
-  it('should preserve repertoire package-qualified names in normal selection path', async () => {
-    configMock.getWorkflowCategories.mockReturnValue(null);
-    configMock.listStandaloneWorkflowEntries.mockReturnValue([
-      { name: '@owner/repo-a/build', path: '/tmp/repo-a.yaml', source: 'repertoire' },
-      { name: '@owner/repo-b/build', path: '/tmp/repo-b.yaml', source: 'repertoire' },
-    ]);
-    selectOptionMock
-      .mockImplementationOnce(async (_message: string, options: { label: string; value: string }[]) =>
-        findOptionValue(options, 'Builtin workflows'))
-      .mockResolvedValueOnce('@owner/repo-a/build');
-
-    const result = await selectWorkflow('/cwd');
-
-    expect(result).toBe('@owner/repo-a/build');
-    expect(selectOptionMock).toHaveBeenNthCalledWith(
-      1,
-      'Select workflow source:',
-      expect.any(Array),
-    );
-    expect(selectOptionMock).toHaveBeenNthCalledWith(
-      2,
-      'Select workflow:',
-      [
-        { label: '🎼 @owner/repo-a/build (repertoire)', value: '@owner/repo-a/build' },
-        { label: '🎼 @owner/repo-b/build (repertoire)', value: '@owner/repo-b/build' },
-      ],
-      expect.any(Object),
-    );
-  });
-
-  it('should sanitize terminal control characters in normal selection labels and warnings', async () => {
-    configMock.getWorkflowCategories.mockReturnValue(null);
-    configMock.listStandaloneWorkflowEntries.mockImplementation(
-      (_cwd: string, options?: { onWarning?: (message: string) => void }) => {
-        options?.onWarning?.('Workflow "bad\\nname" failed to load: invalid\\tfield');
-        return [
-          { name: 'safe\nworkflow', path: '/tmp/safe-workflow.yaml', source: 'user' },
-        ];
-      },
-    );
-    selectOptionMock
-      .mockImplementationOnce(async (_message: string, options: { label: string; value: string }[]) =>
-        findOptionValue(options, 'User-defined workflows'))
-      .mockResolvedValueOnce('safe\nworkflow');
-
-    const result = await selectWorkflow('/cwd');
-
-    expect(result).toBe('safe\nworkflow');
-    expect(uiMock.warn).toHaveBeenCalledWith('Workflow "bad\\nname" failed to load: invalid\\tfield');
-    expect(selectOptionMock).toHaveBeenNthCalledWith(
-      2,
-      'Select workflow:',
-      [{ label: '🎼 safe\\nworkflow (global)', value: 'safe\nworkflow' }],
-      expect.any(Object),
-    );
-  });
-
-  it('should show workflow empty-state messages when no workflows are available', async () => {
-    configMock.getWorkflowCategories.mockReturnValue(null);
-    configMock.listStandaloneWorkflowEntries.mockReturnValue([]);
-
-    const result = await selectWorkflow('/cwd', { fallbackToDefault: false });
-
-    expect(result).toBeNull();
-    expect(uiMock.info).toHaveBeenCalledWith('No workflows found.');
-  });
-
-  it('should sanitize missing workflow warnings in category-based selection path', async () => {
-    const workflowMap = createWorkflowMap([{ name: 'safe-workflow', source: 'user' }]);
-    const categorized: CategorizedWorkflows = {
-      categories: [{ name: 'Dev', workflows: ['safe-workflow'], children: [] }],
-      allWorkflows: workflowMap,
-      missingWorkflows: [
-        {
-          categoryPath: ['Unsafe\nCategory', 'Inner\tLevel'],
-          workflowName: 'missing\rworkflow',
-          source: 'user',
-        },
-      ],
-    };
-
-    configMock.getWorkflowCategories.mockReturnValue({ categories: ['Dev'] });
-    configMock.loadAllStandaloneWorkflowsWithSources.mockReturnValue(workflowMap);
-    configMock.buildCategorizedWorkflows.mockReturnValue(categorized);
-    selectOptionMock
-      .mockImplementationOnce(async (_message: string, options: { label: string; value: string }[]) =>
-        findOptionValue(options, 'User-defined workflows'))
-      .mockResolvedValueOnce('safe-workflow');
-
-    const result = await selectWorkflow('/cwd');
-
-    expect(result).toBe('safe-workflow');
-    expect(uiMock.warn).toHaveBeenCalledWith(
-      'Workflow "missing\\rworkflow" in category "Unsafe\\nCategory / Inner\\tLevel" not found',
-    );
+    expectNoSourceSelectionPrompt();
   });
 });
