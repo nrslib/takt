@@ -129,6 +129,46 @@ describe('interactiveMode', () => {
     expect(result.task).toBe('Implement auth feature with chosen method.');
   });
 
+  it('should return action=execute with task on initial /go with inline task text', async () => {
+    // Given
+    setupRawStdin(toRawInputs(['/go add auth feature', '/cancel']));
+    setupMockProvider(['Implement auth feature from inline /go task.']);
+
+    // When
+    const result = await interactiveMode('/project');
+
+    // Then
+    expect(result).toEqual({
+      action: 'execute',
+      task: 'Implement auth feature from inline /go task.',
+    });
+    const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
+    expect(mockProvider._call).toHaveBeenCalledTimes(1);
+    const summaryPrompt = mockProvider._call.mock.calls[0]?.[0] as string;
+    expect(summaryPrompt).toContain('User: add auth feature');
+    expect(summaryPrompt).not.toContain('User Note:\nadd auth feature');
+  });
+
+  it('should return action=execute with task on initial suffix /go command text', async () => {
+    // Given
+    setupRawStdin(toRawInputs(['add auth feature /go', '/cancel']));
+    setupMockProvider(['Implement auth feature from suffix /go task.']);
+
+    // When
+    const result = await interactiveMode('/project');
+
+    // Then
+    expect(result).toEqual({
+      action: 'execute',
+      task: 'Implement auth feature from suffix /go task.',
+    });
+    const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
+    expect(mockProvider._call).toHaveBeenCalledTimes(1);
+    const summaryPrompt = mockProvider._call.mock.calls[0]?.[0] as string;
+    expect(summaryPrompt).toContain('User: add auth feature');
+    expect(summaryPrompt).not.toContain('User Note:\nadd auth feature');
+  });
+
   it('should reject /go with no prior conversation', async () => {
     // Given: /go immediately, then /cancel to exit
     setupRawStdin(toRawInputs(['/go', '/cancel']));
@@ -226,6 +266,25 @@ describe('interactiveMode', () => {
 
     expect(result.action).toBe('execute');
     expect(result.task).toBe('Clarify task for "a".');
+  });
+
+  it('should keep inline /go text as user note when source context exists before conversation', async () => {
+    setupRawStdin(toRawInputs(['/go add auth feature', '/cancel']));
+    setupMockProvider(['Clarify task for source context plus note.']);
+
+    const result = await interactiveMode('/project', { sourceContext: 'a' });
+
+    const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
+    expect(mockProvider._call).toHaveBeenCalledTimes(1);
+    const summaryPrompt = mockProvider._call.mock.calls[0]?.[0] as string;
+    expect(summaryPrompt).toContain('Source Context');
+    expect(summaryPrompt).toContain('a');
+    expect(summaryPrompt).toContain('User Note:\nadd auth feature');
+    expect(summaryPrompt).not.toContain('User: add auth feature');
+    expect(result).toEqual({
+      action: 'execute',
+      task: 'Clarify task for source context plus note.',
+    });
   });
 
   it('should send only explicit user turns and include initialInput in summary context', async () => {

@@ -196,6 +196,19 @@ describe('/go summary flow', () => {
     expect(capture.callCount).toBe(2);
   });
 
+  it('should summarize inline /go task without prior conversation', async () => {
+    setupRawStdin(toRawInputs(['/go add error handling', '/cancel']));
+    const capture = setupProvider(['Add error handling to all API calls.']);
+
+    const result = await runInstruct();
+
+    expect(result.action).toBe('execute');
+    expect(result.task).toBe('Add error handling to all API calls.');
+    expect(capture.callCount).toBe(1);
+    expect(capture.prompts[0]).toContain('User: add error handling');
+    expect(capture.prompts[0]).not.toContain('User Note:\nadd error handling');
+  });
+
   it('should reject /go without prior conversation', async () => {
     setupRawStdin(toRawInputs(['/go', '/cancel']));
     setupProvider([]);
@@ -392,13 +405,17 @@ describe('end-of-line /go command', () => {
     expect(capture.prompts[1]).toContain('also check security');
   });
 
-  it('should reject end-of-line /go without prior conversation', async () => {
+  it('should use preceding text as first task input without prior conversation', async () => {
     setupRawStdin(toRawInputs(['実行して /go', '/cancel']));
-    setupProvider([]);
+    const capture = setupProvider(['実行タスクを整理する。']);
 
     const result = await runInstruct();
 
-    expect(result.action).toBe('cancel');
+    expect(result.action).toBe('execute');
+    expect(result.task).toBe('実行タスクを整理する。');
+    expect(capture.callCount).toBe(1);
+    expect(capture.prompts[0]).toContain('User: 実行して');
+    expect(capture.prompts[0]).not.toContain('User Note:\n実行して');
   });
 });
 

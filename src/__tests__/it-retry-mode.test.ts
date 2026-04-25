@@ -227,6 +227,78 @@ describe('E2E: Retry mode with failure context injection', () => {
     expect(capture.callCount).toBe(2);
   });
 
+  it('should summarize inline /go task without prior conversation', async () => {
+    setupRawStdin(toRawInputs(['/go inspect the failing logs', '/cancel']));
+    const capture = setupProvider([
+      'Inspect the failing logs and summarize the timeout root cause.',
+    ]);
+
+    const retryContext: RetryContext = {
+      failure: {
+        taskName: 'implement-auth',
+        taskContent: 'Implement authentication feature',
+        createdAt: '2026-02-15T10:00:00Z',
+        failedStep: 'review',
+        error: 'Timeout after 300s',
+        lastMessage: 'Agent stopped responding',
+        retryNote: '',
+      },
+      branchName: 'takt/implement-auth',
+      workflowContext: {
+        name: 'default',
+        description: '',
+        workflowStructure: '',
+        stepPreviews: [],
+      },
+      run: null,
+      previousOrderContent: null,
+    };
+
+    const result = await runRetryMode(tmpDir, retryContext, null);
+
+    expect(result.action).toBe('execute');
+    expect(result.task).toBe('Inspect the failing logs and summarize the timeout root cause.');
+    expect(capture.callCount).toBe(1);
+    expect(capture.prompts[0]).toContain('User: inspect the failing logs');
+    expect(capture.prompts[0]).not.toContain('User Note:\ninspect the failing logs');
+  });
+
+  it('should summarize suffix /go task without prior conversation', async () => {
+    setupRawStdin(toRawInputs(['inspect the failing logs /go', '/cancel']));
+    const capture = setupProvider([
+      'Inspect the failing logs from the retry context and summarize the timeout root cause.',
+    ]);
+
+    const retryContext: RetryContext = {
+      failure: {
+        taskName: 'implement-auth',
+        taskContent: 'Implement authentication feature',
+        createdAt: '2026-02-15T10:00:00Z',
+        failedStep: 'review',
+        error: 'Timeout after 300s',
+        lastMessage: 'Agent stopped responding',
+        retryNote: '',
+      },
+      branchName: 'takt/implement-auth',
+      workflowContext: {
+        name: 'default',
+        description: '',
+        workflowStructure: '',
+        stepPreviews: [],
+      },
+      run: null,
+      previousOrderContent: null,
+    };
+
+    const result = await runRetryMode(tmpDir, retryContext, null);
+
+    expect(result.action).toBe('execute');
+    expect(result.task).toBe('Inspect the failing logs from the retry context and summarize the timeout root cause.');
+    expect(capture.callCount).toBe(1);
+    expect(capture.prompts[0]).toContain('User: inspect the failing logs');
+    expect(capture.prompts[0]).not.toContain('User Note:\ninspect the failing logs');
+  });
+
   it('should inject failure info AND run session data into system prompt', async () => {
     // Create run fixture with logs and reports
     createRunFixture(tmpDir, 'run-failed', {

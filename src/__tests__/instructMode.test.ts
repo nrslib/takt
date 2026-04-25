@@ -119,6 +119,26 @@ describe('runInstructMode', () => {
     expect(result.task).toBe('Add unit tests for the feature.');
   });
 
+  it('should return action=execute with task on initial /go with inline task text', async () => {
+    setupRawStdin(toRawInputs(['/go add more tests', '/cancel']));
+    setupMockProvider(['Add unit tests from inline /go task.']);
+
+    const result = await runInstructMode('/project', 'branch context', 'feature-branch', 'my-task', 'Do something', '');
+
+    expect(result.action).toBe('execute');
+    expect(result.task).toBe('Add unit tests from inline /go task.');
+  });
+
+  it('should return action=execute with task on initial suffix /go command text', async () => {
+    setupRawStdin(toRawInputs(['add more tests /go', '/cancel']));
+    setupMockProvider(['Add unit tests from suffix /go task.']);
+
+    const result = await runInstructMode('/project', 'branch context', 'feature-branch', 'my-task', 'Do something', '');
+
+    expect(result.action).toBe('execute');
+    expect(result.task).toBe('Add unit tests from suffix /go task.');
+  });
+
   it('should return action=save_task when user selects save task', async () => {
     setupRawStdin(toRawInputs(['describe task', '/go']));
     setupMockProvider(['response', 'Summarized task.']);
