@@ -494,6 +494,24 @@ describe('personaMode', () => {
     );
   });
 
+  it('should summarize initial /go task text without prior conversation', async () => {
+    setupRawStdin(toRawInputs(['/go add regression coverage', '/cancel']));
+    setupMockProvider(['Add regression coverage for the shared /go path.']);
+    mockSelectOption.mockResolvedValue('execute');
+
+    const result = await personaMode('/project', mockFirstStep);
+
+    expect(result).toEqual({
+      action: 'execute',
+      task: 'Add regression coverage for the shared /go path.',
+    });
+    const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
+    expect(mockProvider._call).toHaveBeenCalledTimes(1);
+    const summaryPrompt = mockProvider._call.mock.calls[0]?.[0] as string;
+    expect(summaryPrompt).toContain('User: add regression coverage');
+    expect(summaryPrompt).not.toContain('User Note:\nadd regression coverage');
+  });
+
   it('should keep initialInput as source context until the user acts', async () => {
     // Given
     setupRawStdin(toRawInputs(['/go']));
@@ -513,6 +531,26 @@ describe('personaMode', () => {
     expect(firstPrompt).toContain('untrusted external reference data');
     expect(firstPrompt).toContain('```text');
     expect(firstPrompt).not.toContain('User: fix the login');
+  });
+
+  it('should keep initial /go text as user note when only source context exists', async () => {
+    setupRawStdin(toRawInputs(['/go inspect latest feedback', '/cancel']));
+    setupMockProvider(['Task summary with source context and note.']);
+    mockSelectOption.mockResolvedValue('execute');
+
+    const result = await personaMode('/project', mockFirstStep, { sourceContext: 'PR context' });
+
+    expect(result).toEqual({
+      action: 'execute',
+      task: 'Task summary with source context and note.',
+    });
+    const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
+    expect(mockProvider._call).toHaveBeenCalledTimes(1);
+    const summaryPrompt = mockProvider._call.mock.calls[0]?.[0] as string;
+    expect(summaryPrompt).toContain('Source Context');
+    expect(summaryPrompt).toContain('PR context');
+    expect(summaryPrompt).toContain('User Note:\ninspect latest feedback');
+    expect(summaryPrompt).not.toContain('User: inspect latest feedback');
   });
 
   it('should include source context in the first persona prompt without turning it into a user turn', async () => {

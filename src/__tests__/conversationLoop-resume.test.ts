@@ -245,6 +245,34 @@ describe('/resume command', () => {
     expect(result.action).toBe('cancel');
   });
 
+  it('should keep inline /go text as user note after resuming a session', async () => {
+    setupRawStdin(toRawInputs(['/resume', '/go add rollback plan']));
+    mockSelectRecentSession.mockResolvedValue('resumed-session-xyz');
+
+    const { provider, capture } = createScenarioProvider([
+      { content: 'Summarized resumed task.' },
+    ]);
+
+    const ctx: SessionContext = {
+      provider: provider as SessionContext['provider'],
+      providerType: 'mock' as SessionContext['providerType'],
+      model: undefined,
+      lang: 'en',
+      personaName: 'interactive',
+      sessionId: undefined,
+    };
+
+    const result = await runConversationLoop('/test', ctx, defaultStrategy, undefined, undefined);
+
+    expect(capture.callCount).toBe(1);
+    expect(capture.prompts[0]).toContain('User Note:\nadd rollback plan');
+    expect(capture.prompts[0]).not.toContain('User: add rollback plan');
+    expect(result).toEqual({
+      action: 'execute',
+      task: 'Summarized resumed task.',
+    });
+  });
+
   it('should reject /retry in non-retry mode', async () => {
     setupRawStdin(toRawInputs(['/retry', '/cancel']));
     setupProvider([]);

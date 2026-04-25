@@ -42,6 +42,25 @@ export { type CallAIResult, type SessionContext, callAIWithRetry } from './aiCal
 
 const log = createLogger('conversation-loop');
 
+function resolveGoSummaryInput(
+  history: ConversationMessage[],
+  hasSessionContext: boolean,
+  hasSourceContext: boolean,
+  inlineTaskText: string,
+): { summaryHistory: ConversationMessage[]; userNote: string } {
+  if (history.length > 0 || hasSessionContext || hasSourceContext || !inlineTaskText) {
+    return {
+      summaryHistory: history,
+      userNote: inlineTaskText,
+    };
+  }
+
+  return {
+    summaryHistory: [{ role: 'user', content: inlineTaskText }],
+    userNote: '',
+  };
+}
+
 /**
  * Display and clear previous session state if present.
  */
@@ -206,9 +225,14 @@ export async function runConversationLoop(
       }
 
       case SlashCommand.Go: {
-        const userNote = match.text;
+        const { summaryHistory, userNote } = resolveGoSummaryInput(
+          history,
+          !!sessionId,
+          !!sourceContext,
+          match.text,
+        );
         let summaryPrompt = buildSummaryPrompt(
-          history, !!sessionId, ctx.lang, noTranscript, conversationLabel, workflowContext, sourceContext,
+          summaryHistory, !!sessionId, ctx.lang, noTranscript, conversationLabel, workflowContext, sourceContext,
         );
         if (!summaryPrompt) {
           info(ui.noConversation);
