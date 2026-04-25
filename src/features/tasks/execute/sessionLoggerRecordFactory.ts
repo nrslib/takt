@@ -229,6 +229,7 @@ export function buildStepCompleteRecord(
     ...(response.matchedRuleMethod ? { matchedRuleMethod: response.matchedRuleMethod } : {}),
     ...(matchMethod ? { matchMethod } : {}),
     ...(response.error ? { error: sanitizeText(response.error) } : {}),
+    ...(response.failureCategory ? { failureCategory: response.failureCategory } : {}),
     timestamp: response.timestamp.toISOString(),
   };
 }

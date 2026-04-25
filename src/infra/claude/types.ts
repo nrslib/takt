@@ -9,6 +9,20 @@ import type { PermissionUpdate, AgentDefinition, SandboxSettings } from '@anthro
 import type { PermissionMode, McpServerConfig } from '../../core/models/index.js';
 import type { ClaudeEffort } from '../../core/models/workflow-types.js';
 import type { AgentErrorKind, ProviderUsageSnapshot } from '../../core/models/response.js';
+import type {
+  StreamEvent as SharedStreamEvent,
+  StreamCallback as SharedStreamCallback,
+  StreamInitEventData as SharedInitEventData,
+  StreamToolUseEventData as SharedToolUseEventData,
+  StreamToolResultEventData as SharedToolResultEventData,
+  StreamToolOutputEventData as SharedToolOutputEventData,
+  StreamTextEventData as SharedTextEventData,
+  StreamThinkingEventData as SharedThinkingEventData,
+  StreamResultEventData as SharedResultEventData,
+  StreamErrorEventData as SharedErrorEventData,
+  StreamAssistantErrorEventData as SharedAssistantErrorEventData,
+  StreamRateLimitEventData as SharedRateLimitEventData,
+} from '../../shared/types/provider.js';
 
 export type { SandboxSettings };
 import type { PermissionResult } from '../../core/workflow/index.js';
@@ -16,79 +30,18 @@ import type { PermissionResult } from '../../core/workflow/index.js';
 // Re-export PermissionResult for convenience
 export type { PermissionResult, PermissionUpdate };
 
-/** Stream event data types */
-export interface InitEventData {
-  model: string;
-  sessionId: string;
-}
-
-export interface ToolUseEventData {
-  tool: string;
-  input: Record<string, unknown>;
-  id: string;
-}
-
-export interface ToolResultEventData {
-  content: string;
-  isError: boolean;
-}
-
-export interface ToolOutputEventData {
-  tool: string;
-  output: string;
-}
-
-export interface TextEventData {
-  text: string;
-}
-
-export interface ThinkingEventData {
-  thinking: string;
-}
-
-export interface ResultEventData {
-  result: string;
-  sessionId: string;
-  success: boolean;
-  error?: string;
-}
-
-export interface ErrorEventData {
-  message: string;
-  raw?: string;
-}
-
-export interface AssistantErrorEventData {
-  error: string;
-  sessionId: string;
-}
-
-export interface RateLimitEventData {
-  sessionId: string;
-  status: 'allowed' | 'allowed_warning' | 'rejected';
-  rateLimitType?: string;
-  overageStatus?: 'allowed' | 'allowed_warning' | 'rejected';
-  overageDisabledReason?: string;
-  resetsAt?: number;
-  overageResetsAt?: number;
-  isUsingOverage?: boolean;
-}
-
-/** Stream event (discriminated union) */
-export type StreamEvent =
-  | { type: 'init'; data: InitEventData }
-  | { type: 'tool_use'; data: ToolUseEventData }
-  | { type: 'tool_result'; data: ToolResultEventData }
-  | { type: 'tool_output'; data: ToolOutputEventData }
-  | { type: 'text'; data: TextEventData }
-  | { type: 'thinking'; data: ThinkingEventData }
-  | { type: 'result'; data: ResultEventData }
-  | { type: 'assistant_error'; data: AssistantErrorEventData }
-  | { type: 'rate_limit'; data: RateLimitEventData }
-  | { type: 'error'; data: ErrorEventData };
-
-/** Callback for streaming events */
-export type StreamCallback = (event: StreamEvent) => void;
+export type InitEventData = SharedInitEventData;
+export type ToolUseEventData = SharedToolUseEventData;
+export type ToolResultEventData = SharedToolResultEventData;
+export type ToolOutputEventData = SharedToolOutputEventData;
+export type TextEventData = SharedTextEventData;
+export type ThinkingEventData = SharedThinkingEventData;
+export type ResultEventData = SharedResultEventData;
+export type ErrorEventData = SharedErrorEventData;
+export type AssistantErrorEventData = SharedAssistantErrorEventData;
+export type RateLimitEventData = SharedRateLimitEventData;
+export type StreamEvent = SharedStreamEvent;
+export type StreamCallback = SharedStreamCallback;
 
 /** Permission request info passed to handler */
 export interface PermissionRequest {

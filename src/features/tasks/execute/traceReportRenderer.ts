@@ -171,6 +171,9 @@ function renderStepSection(
     if (step.result.matchMethod) {
       lines.push(`- Match Method: ${step.result.matchMethod}`);
     }
+    if (step.result.failureCategory) {
+      lines.push(`- Failure Category: ${step.result.failureCategory}`);
+    }
     if (step.result.matchedRuleIndex != null) {
       lines.push(`- Matched Rule Index: ${step.result.matchedRuleIndex}`);
     }

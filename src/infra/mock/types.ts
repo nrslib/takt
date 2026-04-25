@@ -2,8 +2,8 @@
  * Mock module type definitions
  */
 
-import type { StreamCallback } from '../claude/index.js';
 import type { Status } from '../../core/models/status.js';
+import type { StreamCallback } from '../../shared/types/provider.js';
 
 /** Options for mock calls */
 export interface MockCallOptions {

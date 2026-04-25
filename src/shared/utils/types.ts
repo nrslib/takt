@@ -1,3 +1,5 @@
+import type { AgentFailureCategory } from '../types/agent-failure.js';
+
 /**
  * Type definitions for utils module.
  *
@@ -30,6 +32,8 @@ export interface SessionLog {
     matchedRuleMethod?: string;
     /** Method used by status judgment phase */
     matchMethod?: string;
+    /** Machine-readable provider-normalized failure classification */
+    failureCategory?: AgentFailureCategory;
   }>;
 }
 
@@ -80,6 +84,7 @@ export interface NdjsonStepComplete {
   matchedRuleMethod?: string;
   matchMethod?: string;
   error?: string;
+  failureCategory?: AgentFailureCategory;
   timestamp: string;
 }
 

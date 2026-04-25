@@ -5,7 +5,7 @@
  * used throughout the takt codebase.
  */
 
-import type { StreamCallback } from '../claude/index.js';
+import type { StreamCallback } from '../../shared/types/provider.js';
 
 /** Subset of OpenCode Part types relevant for stream handling */
 export interface OpenCodeTextPart {

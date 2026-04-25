@@ -8,6 +8,15 @@ import { Codex, type TurnOptions } from '@openai/codex-sdk';
 import { USAGE_MISSING_REASONS } from '../../core/logging/contracts.js';
 import type { AgentResponse, ProviderUsageSnapshot } from '../../core/models/index.js';
 import { createLogger, getErrorMessage, createStreamDiagnostics, parseStructuredOutput, type StreamDiagnostics } from '../../shared/utils/index.js';
+import {
+  AGENT_FAILURE_CATEGORIES,
+  classifyAbortSignalReason,
+  createProviderErrorFailure,
+  createStreamIdleTimeoutFailure,
+  formatAgentFailure,
+  type AgentFailureCategory,
+  type AgentFailureDetail,
+} from '../../shared/types/agent-failure.js';
 import { mapToCodexSandboxMode, type CodexCallOptions } from './types.js';
 import {
   type CodexEvent,
@@ -91,15 +100,7 @@ function extractProviderUsageFromTurnCompleted(event: CodexEvent): ProviderUsage
  * and response processing.
  */
 export class CodexClient {
-  private isRetriableError(message: string, aborted: boolean, abortCause?: 'timeout' | 'external'): boolean {
-    if (abortCause === 'timeout') {
-      return true;
-    }
-
-    if (aborted || abortCause) {
-      return false;
-    }
-
+  private isRetriableError(message: string): boolean {
     const lower = message.toLowerCase();
     return CODEX_RETRYABLE_ERROR_PATTERNS.some((pattern) => lower.includes(pattern));
   }
@@ -119,7 +120,7 @@ export class CodexClient {
         if (signal) {
           signal.removeEventListener('abort', onAbort);
         }
-        reject(new Error(CODEX_STREAM_ABORTED_MESSAGE));
+        reject(signal?.reason ?? new Error(CODEX_STREAM_ABORTED_MESSAGE));
       };
 
       if (signal) {
@@ -130,6 +131,74 @@ export class CodexClient {
         signal.addEventListener('abort', onAbort, { once: true });
       }
     });
+  }
+
+  private resolveFailureDetail(
+    message: string,
+    streamSignal: AbortSignal,
+    externalSignal: AbortSignal | undefined,
+    abortCause: 'timeout' | 'external' | undefined,
+    timeoutMessage: string,
+  ): AgentFailureDetail {
+    if (abortCause === 'timeout') {
+      return createStreamIdleTimeoutFailure(timeoutMessage);
+    }
+    if (externalSignal?.aborted) {
+      return classifyAbortSignalReason(externalSignal.reason);
+    }
+    if (streamSignal.aborted) {
+      return classifyAbortSignalReason(streamSignal.reason);
+    }
+    return createProviderErrorFailure(message);
+  }
+
+  private shouldRetry(
+    failure: AgentFailureDetail,
+    standardRetryCount: number,
+    timeoutRetryCount: number,
+  ): boolean {
+    if (failure.category === AGENT_FAILURE_CATEGORIES.STREAM_IDLE_TIMEOUT) {
+      return timeoutRetryCount < CODEX_TIMEOUT_MAX_RETRIES;
+    }
+    if (failure.category !== AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR) {
+      return false;
+    }
+    return standardRetryCount < CODEX_RETRY_MAX_RETRIES && this.isRetriableError(failure.reason);
+  }
+
+  private recordRetry(
+    failureCategory: AgentFailureCategory,
+    standardRetryCount: number,
+    timeoutRetryCount: number,
+  ): { standardRetryCount: number; timeoutRetryCount: number; retryAttempt: number } {
+    const nextStandardRetryCount = failureCategory === AGENT_FAILURE_CATEGORIES.STREAM_IDLE_TIMEOUT
+      ? standardRetryCount
+      : standardRetryCount + 1;
+    const nextTimeoutRetryCount = failureCategory === AGENT_FAILURE_CATEGORIES.STREAM_IDLE_TIMEOUT
+      ? timeoutRetryCount + 1
+      : timeoutRetryCount;
+    return {
+      standardRetryCount: nextStandardRetryCount,
+      timeoutRetryCount: nextTimeoutRetryCount,
+      retryAttempt: nextStandardRetryCount + nextTimeoutRetryCount,
+    };
+  }
+
+  private buildErrorResponse(
+    agentType: string,
+    sessionId: string | undefined,
+    failure: AgentFailureDetail,
+  ): AgentResponse {
+    const message = formatAgentFailure(failure);
+    return {
+      persona: agentType,
+      status: 'error',
+      content: message,
+      error: message,
+      timestamp: new Date(),
+      sessionId,
+      failureCategory: failure.category,
+    };
   }
 
   /** Call Codex with an agent prompt */
@@ -173,23 +242,6 @@ export class CodexClient {
       const timeoutMessage = `Codex stream timed out after ${Math.floor(CODEX_STREAM_IDLE_TIMEOUT_MS / 60000)} minutes of inactivity`;
       let abortCause: 'timeout' | 'external' | undefined;
       let diagRef: StreamDiagnostics | undefined;
-      const shouldRetry = (message: string): boolean => {
-        if (!this.isRetriableError(message, streamAbortController.signal.aborted, abortCause)) {
-          return false;
-        }
-        if (abortCause === 'timeout') {
-          return timeoutRetryCount < CODEX_TIMEOUT_MAX_RETRIES;
-        }
-        return standardRetryCount < CODEX_RETRY_MAX_RETRIES;
-      };
-      const recordRetry = (): number => {
-        if (abortCause === 'timeout') {
-          timeoutRetryCount += 1;
-        } else {
-          standardRetryCount += 1;
-        }
-        return standardRetryCount + timeoutRetryCount;
-      };
 
       const resetIdleTimeout = (): void => {
         if (idleTimeoutId !== undefined) {
@@ -198,18 +250,19 @@ export class CodexClient {
         idleTimeoutId = setTimeout(() => {
           diagRef?.onIdleTimeoutFired();
           abortCause = 'timeout';
-          streamAbortController.abort();
+          streamAbortController.abort(new Error(timeoutMessage));
         }, CODEX_STREAM_IDLE_TIMEOUT_MS);
       };
 
       const onExternalAbort = (): void => {
         abortCause = 'external';
-        streamAbortController.abort();
+        streamAbortController.abort(options.abortSignal?.reason);
       };
 
       if (options.abortSignal) {
         if (options.abortSignal.aborted) {
-          streamAbortController.abort();
+          abortCause = 'external';
+          streamAbortController.abort(options.abortSignal.reason);
         } else {
           options.abortSignal.addEventListener('abort', onExternalAbort, { once: true });
         }
@@ -334,23 +387,32 @@ export class CodexClient {
         diag.onCompleted(success ? 'normal' : 'error', success ? undefined : failureMessage);
 
         if (!success) {
-          const message = failureMessage || 'Codex execution failed';
-          if (shouldRetry(message)) {
-            log.info('Retrying Codex call after transient failure', { agentType, attempt, message });
+          const failure = this.resolveFailureDetail(
+            failureMessage || 'Codex execution failed',
+            streamAbortController.signal,
+            options.abortSignal,
+            abortCause,
+            timeoutMessage,
+          );
+          if (this.shouldRetry(failure, standardRetryCount, timeoutRetryCount)) {
+            log.info('Retrying Codex call after transient failure', { agentType, attempt, message: failure.reason });
             threadId = currentThreadId;
-            const retryAttempt = recordRetry();
-            await this.waitForRetryDelay(retryAttempt, options.abortSignal);
+            const retryState = this.recordRetry(failure.category, standardRetryCount, timeoutRetryCount);
+            standardRetryCount = retryState.standardRetryCount;
+            timeoutRetryCount = retryState.timeoutRetryCount;
+            await this.waitForRetryDelay(retryState.retryAttempt, options.abortSignal);
             continue;
           }
 
-          emitResult(options.onStream, false, message, currentThreadId);
-          return {
-            persona: agentType,
-            status: 'error',
-            content: message,
-            timestamp: new Date(),
-            sessionId: currentThreadId,
-          };
+          const errorResponse = this.buildErrorResponse(agentType, currentThreadId, failure);
+          emitResult(
+            options.onStream,
+            false,
+            errorResponse.error ?? errorResponse.content,
+            currentThreadId,
+            failure.category,
+          );
+          return errorResponse;
         }
 
         const trimmed = content.trim();
@@ -371,35 +433,45 @@ export class CodexClient {
         };
         return response;
       } catch (error) {
-        const message = getErrorMessage(error);
-        const errorMessage = streamAbortController.signal.aborted
-          ? abortCause === 'timeout'
-            ? timeoutMessage
-            : CODEX_STREAM_ABORTED_MESSAGE
-          : message;
+        const failure = this.resolveFailureDetail(
+          getErrorMessage(error),
+          streamAbortController.signal,
+          options.abortSignal,
+          abortCause,
+          timeoutMessage,
+        );
+        const errorMessage = formatAgentFailure(failure);
 
         diagRef?.onCompleted(
-          abortCause === 'timeout' ? 'timeout' : streamAbortController.signal.aborted ? 'abort' : 'error',
+          failure.category === AGENT_FAILURE_CATEGORIES.STREAM_IDLE_TIMEOUT
+            ? 'timeout'
+            : failure.category === AGENT_FAILURE_CATEGORIES.EXTERNAL_ABORT
+              || failure.category === AGENT_FAILURE_CATEGORIES.PART_TIMEOUT
+              ? 'abort'
+              : 'error',
           errorMessage,
         );
 
-        if (shouldRetry(errorMessage)) {
+        if (this.shouldRetry(failure, standardRetryCount, timeoutRetryCount)) {
           log.info('Retrying Codex call after transient exception', { agentType, attempt, errorMessage });
           threadId = currentThreadId;
-          const retryAttempt = recordRetry();
-          await this.waitForRetryDelay(retryAttempt, options.abortSignal);
+          const retryState = this.recordRetry(failure.category, standardRetryCount, timeoutRetryCount);
+          standardRetryCount = retryState.standardRetryCount;
+          timeoutRetryCount = retryState.timeoutRetryCount;
+          await this.waitForRetryDelay(retryState.retryAttempt, options.abortSignal);
           continue;
         }
 
-        emitResult(options.onStream, false, errorMessage, currentThreadId);
+        const errorResponse = this.buildErrorResponse(agentType, currentThreadId, failure);
+        emitResult(
+          options.onStream,
+          false,
+          errorResponse.error ?? errorResponse.content,
+          currentThreadId,
+          failure.category,
+        );
 
-        return {
-          persona: agentType,
-          status: 'error',
-          content: errorMessage,
-          timestamp: new Date(),
-          sessionId: currentThreadId,
-        };
+        return errorResponse;
       } finally {
         if (idleTimeoutId !== undefined) {
           clearTimeout(idleTimeoutId);

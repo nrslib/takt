@@ -6,6 +6,7 @@ import { initNdjsonLog } from '../infra/fs/session.js';
 import { SessionLogger } from '../features/tasks/execute/sessionLogger.js';
 import { buildTraceFromRecords } from '../features/tasks/execute/traceReportParser.js';
 import { buildWorkflowStepScopeKey } from '../features/tasks/execute/workflowStepScope.js';
+import { AGENT_FAILURE_CATEGORIES } from '../shared/types/agent-failure.js';
 import { buildPhaseExecutionId } from '../shared/utils/phaseExecutionId.js';
 
 const tempDirs = new Set<string>();
@@ -283,5 +284,55 @@ describe('SessionLogger', () => {
     expect(stepStart).not.toHaveProperty('providerSource');
     expect(stepStart).not.toHaveProperty('model');
     expect(stepStart).not.toHaveProperty('modelSource');
+  });
+
+  it('step_complete の failureCategory を NDJSON と trace parser へ保持する', () => {
+    const logsDir = createTempLogsDir();
+    const ndjsonPath = initNdjsonLog('session-failure-category', 'task', 'workflow', { logsDir });
+    const logger = new SessionLogger(ndjsonPath, true);
+    const step = {
+      name: 'implement',
+      kind: 'agent' as const,
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      instruction: 'Implement it',
+      passPreviousResponse: true,
+    };
+
+    logger.onStepStart(step, 1, 'Implement it');
+    logger.onStepComplete(
+      step,
+      {
+        persona: 'coder',
+        status: 'error',
+        content: 'Gateway unavailable',
+        error: 'Gateway unavailable',
+        failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
+        timestamp: new Date('2026-04-13T00:00:00.000Z'),
+      },
+      'Implement it',
+      undefined,
+    );
+
+    const records = readFileSync(ndjsonPath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const stepComplete = records.find((record) => record.type === 'step_complete');
+    const trace = buildTraceFromRecords(
+      logger.getNdjsonRecords(),
+      [],
+      '2026-04-13T00:00:01.000Z',
+    );
+
+    expect(stepComplete?.failureCategory).toBe(AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR);
+    expect(trace.steps).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        step: 'implement',
+        result: expect.objectContaining({
+          failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
+        }),
+      }),
+    ]));
   });
 });

@@ -2,8 +2,8 @@
  * Type definitions for Cursor Agent CLI integration
  */
 
-import type { StreamCallback } from '../claude/index.js';
 import type { PermissionMode } from '../../core/models/index.js';
+import type { StreamCallback } from '../../shared/types/provider.js';
 
 /** Options for calling Cursor Agent CLI */
 export interface CursorCallOptions {

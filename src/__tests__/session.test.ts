@@ -233,6 +233,31 @@ describe('NDJSON log', () => {
       });
     });
 
+    it('should restore failureCategory from step_complete records', () => {
+      const filepath = initTestNdjsonLog('sess-004c', 'failed task', 'wf', projectDir);
+
+      appendNdjsonLine(filepath, {
+        type: 'step_complete',
+        step: 'implement',
+        persona: 'coder',
+        iteration: 1,
+        status: 'error',
+        content: 'team leader part failed',
+        instruction: 'Implement the change',
+        error: 'external abort: Workflow interrupted by user (SIGINT)',
+        failureCategory: 'external_abort',
+        timestamp: '2025-01-01T00:00:05.000Z',
+      } satisfies NdjsonStepComplete);
+
+      const ndjsonLog = loadNdjsonLog(filepath);
+      const sessionLog = loadSessionLog(filepath);
+
+      expect(ndjsonLog).not.toBeNull();
+      expect(ndjsonLog!.history[0]!.failureCategory).toBe('external_abort');
+      expect(sessionLog).not.toBeNull();
+      expect(sessionLog!.history[0]!.failureCategory).toBe('external_abort');
+    });
+
     it('should return null for non-existent file', () => {
       const result = loadNdjsonLog('/nonexistent/path.jsonl');
       expect(result).toBeNull();

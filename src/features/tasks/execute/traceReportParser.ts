@@ -156,6 +156,7 @@ export function buildTraceFromRecords(
         status: record.status,
         content: record.content,
         error: record.error,
+        failureCategory: record.failureCategory,
         matchedRuleIndex: record.matchedRuleIndex,
         matchedRuleMethod: record.matchedRuleMethod,
         matchMethod: record.matchMethod,

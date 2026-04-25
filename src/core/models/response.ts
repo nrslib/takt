@@ -3,6 +3,7 @@
  */
 
 import type { Status, RuleMatchMethod } from './status.js';
+import type { AgentFailureCategory } from '../../shared/types/agent-failure.js';
 
 export type AgentErrorKind = 'rate_limit';
 export const RATE_LIMIT_ERROR_MESSAGE = 'Rate limit exceeded. Please try again later.';
@@ -40,6 +41,8 @@ export interface AgentResponse {
   error?: string;
   /** Machine-readable error classification normalized at the provider boundary */
   errorKind?: AgentErrorKind;
+  /** Machine-readable failure classification normalized at the provider boundary */
+  failureCategory?: AgentFailureCategory;
   /** Matched rule index (0-based) when rules-based detection was used */
   matchedRuleIndex?: number;
   /** How the rule match was detected */

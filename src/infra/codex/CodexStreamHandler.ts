@@ -5,7 +5,8 @@
  * used throughout the takt codebase.
  */
 
-import type { StreamCallback } from '../claude/index.js';
+import type { AgentFailureCategory } from '../../shared/types/agent-failure.js';
+import type { StreamCallback } from '../../shared/types/provider.js';
 
 export type CodexEvent = {
   type: string;
@@ -102,6 +103,7 @@ export function emitResult(
   success: boolean,
   result: string,
   sessionId: string | undefined,
+  failureCategory?: AgentFailureCategory,
 ): void {
   if (!onStream) return;
   onStream({
@@ -111,6 +113,7 @@ export function emitResult(
       sessionId: sessionId || 'unknown',
       success,
       error: success ? undefined : result || undefined,
+      ...(failureCategory ? { failureCategory } : {}),
     },
   });
 }

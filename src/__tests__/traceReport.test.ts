@@ -103,6 +103,46 @@ describe('traceReport', () => {
     expect(reviewersIndex).toBeGreaterThan(planIndex);
   });
 
+  it('should render failure category from NDJSON step_complete records', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'trace-report-failure-category-'));
+    const sessionPath = join(dir, 'session.jsonl');
+    writeFileSync(sessionPath, [
+      JSON.stringify({ type: 'workflow_start', task: 'task', workflowName: 'workflow', startTime: '2026-03-04T11:59:00.000Z' }),
+      JSON.stringify({ type: 'step_start', step: 'implement', persona: 'coder', iteration: 1, timestamp: '2026-03-04T11:59:01.000Z' }),
+      JSON.stringify({
+        type: 'step_complete',
+        step: 'implement',
+        persona: 'coder',
+        iteration: 1,
+        status: 'error',
+        content: 'Gateway unavailable',
+        error: 'Gateway unavailable',
+        failureCategory: 'provider_error',
+        instruction: 'inst',
+        timestamp: '2026-03-04T11:59:02.000Z',
+      }),
+      JSON.stringify({ type: 'workflow_complete', iterations: 1, endTime: '2026-03-04T12:00:00.000Z' }),
+      '',
+    ].join('\n'));
+
+    const markdown = renderTraceReportFromLogs(
+      {
+        tracePath: join(dir, 'trace.md'),
+        workflowName: 'workflow',
+        task: 'task',
+        runSlug: 'run-1',
+        status: 'completed',
+        iterations: 1,
+        endTime: '2026-03-04T12:00:00.000Z',
+      },
+      sessionPath,
+      undefined,
+      'full',
+    );
+
+    expect(markdown).toContain('- Failure Category: provider_error');
+  });
+
   it('should preserve workflow_call and child steps with the same name across different iterations', () => {
     const dir = mkdtempSync(join(tmpdir(), 'trace-report-stack-'));
     const sessionPath = join(dir, 'session.jsonl');

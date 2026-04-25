@@ -223,7 +223,20 @@ export class TeamLeaderRunner {
     const allFailed = partResults.every((result) => result.response.status === 'error');
     if (allFailed) {
       const errors = partResults.map((result) => `${result.part.id}: ${resolvePartErrorDetail(result)}`).join('; ');
-      throw new Error(`All team leader parts failed: ${errors}`);
+      const errorMessage = `All team leader parts failed: ${errors}`;
+      const errorResponse: AgentResponse = {
+        persona: step.name,
+        status: 'error',
+        content: errorMessage,
+        error: errorMessage,
+        timestamp: new Date(),
+      };
+      state.stepOutputs.set(step.name, errorResponse);
+      state.lastOutput = errorResponse;
+      return {
+        response: errorResponse,
+        instruction,
+      };
     }
 
     if (parallelLogger) {

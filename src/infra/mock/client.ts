@@ -6,8 +6,8 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { StreamEvent } from '../claude/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
+import type { StreamEvent } from '../../shared/types/provider.js';
 import { getScenarioQueue } from './scenario.js';
 import type { MockCallOptions } from './types.js';
 

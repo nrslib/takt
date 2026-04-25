@@ -117,6 +117,7 @@ export class SessionManager {
               ...(record.matchedRuleIndex != null ? { matchedRuleIndex: record.matchedRuleIndex } : {}),
               ...(record.matchedRuleMethod ? { matchedRuleMethod: record.matchedRuleMethod } : {}),
               ...(record.matchMethod ? { matchMethod: record.matchMethod } : {}),
+              ...(record.failureCategory ? { failureCategory: record.failureCategory } : {}),
             });
             sessionLog.iterations++;
           }

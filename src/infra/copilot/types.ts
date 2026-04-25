@@ -2,9 +2,9 @@
  * Type definitions for GitHub Copilot CLI integration
  */
 
-import type { StreamCallback } from '../claude/index.js';
 import type { CopilotEffort } from '../../core/models/workflow-types.js';
 import type { PermissionMode } from '../../core/models/index.js';
+import type { StreamCallback } from '../../shared/types/provider.js';
 
 /** Options for calling GitHub Copilot CLI */
 export interface CopilotCallOptions {

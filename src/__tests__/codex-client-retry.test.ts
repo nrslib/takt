@@ -277,7 +277,8 @@ describe('CodexClient retry', () => {
     runPlans = Array.from({ length: 3 }, () => createIdleTimeoutPlan());
 
     const client = new CodexClient();
-    const resultPromise = client.call('coder', 'prompt', { cwd: '/tmp' });
+    const onStream = vi.fn();
+    const resultPromise = client.call('coder', 'prompt', { cwd: '/tmp', onStream });
 
     await vi.advanceTimersByTimeAsync(CODEX_STREAM_IDLE_TIMEOUT_MS + 1000);
     expect(resumeThreadCalls).toHaveLength(1);
@@ -291,7 +292,46 @@ describe('CodexClient retry', () => {
     expect(startThreadCalls).toHaveLength(1);
     expect(resumeThreadCalls).toHaveLength(2);
     expect(result.status).toBe('error');
+    expect(result.failureCategory).toBe('stream_idle_timeout');
     expect(result.content).toBe('Codex stream timed out after 10 minutes of inactivity');
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'result',
+      data: expect.objectContaining({
+        success: false,
+        error: 'Codex stream timed out after 10 minutes of inactivity',
+        failureCategory: 'stream_idle_timeout',
+      }),
+    });
+  });
+
+  it('non-retriable provider error は provider_error 分類を返す', async () => {
+    runPlans = [
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-1' },
+          { type: 'turn.failed', error: { message: 'Upstream model returned 500' } },
+        ],
+      },
+    ];
+
+    const client = new CodexClient();
+    const onStream = vi.fn();
+    const result = await client.call('coder', 'prompt', { cwd: '/tmp', onStream });
+
+    expect(startThreadCalls).toHaveLength(1);
+    expect(resumeThreadCalls).toHaveLength(0);
+    expect(result.status).toBe('error');
+    expect(result.failureCategory).toBe('provider_error');
+    expect(result.content).toBe('Upstream model returned 500');
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'result',
+      data: expect.objectContaining({
+        success: false,
+        error: 'Upstream model returned 500',
+        failureCategory: 'provider_error',
+      }),
+    });
   });
 
   it('通常 retry を 8 回使い切った後でも idle timeout を retry して成功を返す', async () => {
@@ -356,18 +396,144 @@ describe('CodexClient retry', () => {
 
     const controller = new AbortController();
     const client = new CodexClient();
+    const onStream = vi.fn();
     const resultPromise = client.call('coder', 'prompt', {
       cwd: '/tmp',
       abortSignal: controller.signal,
+      onStream,
     });
 
     await streamReady;
-    controller.abort();
+    controller.abort(new Error('Workflow interrupted by user (SIGINT)'));
     const result = await resultPromise;
 
     expect(startThreadCalls).toHaveLength(1);
     expect(resumeThreadCalls).toHaveLength(0);
     expect(result.status).toBe('error');
-    expect(result.content).toBe('Codex execution aborted');
+    expect(result.failureCategory).toBe('external_abort');
+    expect(result.content).toContain('external abort');
+    expect(result.content).toContain('Workflow interrupted by user (SIGINT)');
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'result',
+      data: expect.objectContaining({
+        success: false,
+        error: expect.stringContaining('external abort'),
+        failureCategory: 'external_abort',
+      }),
+    });
+  });
+
+  it('part timeout abort は retry せずに timeout分類を返す', async () => {
+    let notifyStreamReady!: () => void;
+    const streamReady = new Promise<void>((resolve) => {
+      notifyStreamReady = resolve;
+    });
+
+    runPlans = [
+      createIdleTimeoutPlan(() => {
+        notifyStreamReady();
+      }),
+    ];
+
+    const controller = new AbortController();
+    const client = new CodexClient();
+    const onStream = vi.fn();
+    const resultPromise = client.call('coder', 'prompt', {
+      cwd: '/tmp',
+      abortSignal: controller.signal,
+      onStream,
+    });
+
+    await streamReady;
+    controller.abort(new Error('Part timeout after 1000ms'));
+    const result = await resultPromise;
+
+    expect(startThreadCalls).toHaveLength(1);
+    expect(resumeThreadCalls).toHaveLength(0);
+    expect(result.status).toBe('error');
+    expect(result.failureCategory).toBe('part_timeout');
+    expect(result.content).toContain('part timeout');
+    expect(result.content).toContain('Part timeout after 1000ms');
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'result',
+      data: expect.objectContaining({
+        success: false,
+        error: expect.stringContaining('part timeout'),
+        failureCategory: 'part_timeout',
+      }),
+    });
+  });
+
+  it('call 前に aborted 済み signal でも part_timeout 分類を返す', async () => {
+    runPlans = [
+      { type: 'throw', error: new Error('stream aborted before run') },
+    ];
+
+    const controller = new AbortController();
+    controller.abort(new Error('Part timeout after 2000ms'));
+
+    const client = new CodexClient();
+    const onStream = vi.fn();
+    const result = await client.call('coder', 'prompt', {
+      cwd: '/tmp',
+      abortSignal: controller.signal,
+      onStream,
+    });
+
+    expect(startThreadCalls).toHaveLength(1);
+    expect(resumeThreadCalls).toHaveLength(0);
+    expect(result.status).toBe('error');
+    expect(result.failureCategory).toBe('part_timeout');
+    expect(result.content).toContain('part timeout');
+    expect(result.content).toContain('Part timeout after 2000ms');
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'result',
+      data: expect.objectContaining({
+        success: false,
+        error: expect.stringContaining('part timeout'),
+        failureCategory: 'part_timeout',
+      }),
+    });
+  });
+
+  it('retry delay 中の abort は external_abort 分類を返して retry しない', async () => {
+    vi.useFakeTimers();
+
+    runPlans = [
+      {
+        type: 'events',
+        events: [
+          { type: 'turn.failed', error: { message: 'Selected model is at capacity. Please try a different model.' } },
+        ],
+      },
+    ];
+
+    const controller = new AbortController();
+    const client = new CodexClient();
+    const onStream = vi.fn();
+    const resultPromise = client.call('coder', 'prompt', {
+      cwd: '/tmp',
+      abortSignal: controller.signal,
+      onStream,
+    });
+
+    await vi.advanceTimersByTimeAsync(500);
+    controller.abort(new Error('Workflow interrupted by user (SIGINT)'));
+    const result = await resultPromise;
+
+    expect(startThreadCalls).toHaveLength(1);
+    expect(resumeThreadCalls).toHaveLength(0);
+    expect(result.status).toBe('error');
+    expect(result.failureCategory).toBe('external_abort');
+    expect(result.content).toContain('external abort');
+    expect(result.content).toContain('Workflow interrupted by user (SIGINT)');
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'result',
+      data: expect.objectContaining({
+        success: false,
+        error: expect.stringContaining('external abort'),
+        failureCategory: 'external_abort',
+      }),
+    });
   });
 });

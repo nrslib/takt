@@ -1,3 +1,5 @@
+import type { AgentFailureCategory } from './agent-failure.js';
+
 export type ProviderType =
   | 'claude'
   | 'claude-sdk'
@@ -41,6 +43,7 @@ export interface StreamResultEventData {
   sessionId: string;
   success: boolean;
   error?: string;
+  failureCategory?: AgentFailureCategory;
 }
 
 export interface StreamErrorEventData {

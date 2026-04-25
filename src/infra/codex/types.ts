@@ -2,9 +2,9 @@
  * Type definitions for Codex SDK integration
  */
 
-import type { StreamCallback } from '../claude/index.js';
 import type { PermissionMode } from '../../core/models/index.js';
 import type { CodexReasoningEffort } from '../../core/models/workflow-types.js';
+import type { StreamCallback } from '../../shared/types/provider.js';
 
 /** Codex sandbox mode values */
 export type CodexSandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';

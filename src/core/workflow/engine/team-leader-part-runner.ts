@@ -7,6 +7,7 @@ import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { ParallelLogger } from './parallel-logger.js';
 import { createPartStep } from './team-leader-common.js';
 import { getErrorMessage } from '../../../shared/utils/index.js';
+import { classifyAbortSignalReason } from '../../../shared/types/agent-failure.js';
 
 export async function runTeamLeaderPart(
   optionsBuilder: OptionsBuilder,
@@ -49,6 +50,8 @@ export async function runTeamLeaderPart(
         persona: partStep.name,
       },
     };
+  } catch (error) {
+    return buildTeamLeaderErrorPartResult(step, part, error, signal);
   } finally {
     dispose();
   }
@@ -58,14 +61,18 @@ export function buildTeamLeaderErrorPartResult(
   step: WorkflowStep,
   part: PartDefinition,
   error: unknown,
+  abortSignal?: AbortSignal,
 ): PartResult {
-  const errorMsg = getErrorMessage(error);
+  const message = getErrorMessage(error);
+  const failure = abortSignal?.aborted ? classifyAbortSignalReason(abortSignal.reason) : undefined;
+  const errorMsg = failure ? failure.reason : message;
   const errorResponse: AgentResponse = {
     persona: `${step.name}.${part.id}`,
     status: 'error',
     content: '',
     timestamp: new Date(),
     error: errorMsg,
+    ...(failure ? { failureCategory: failure.category } : {}),
   };
   return { part, response: errorResponse };
 }

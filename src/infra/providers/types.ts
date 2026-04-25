@@ -1,6 +1,7 @@
-import type { StreamCallback, PermissionHandler, AskUserQuestionHandler } from '../claude/index.js';
 import type { AgentResponse, PermissionMode, McpServerConfig, StepProviderOptions } from '../../core/models/index.js';
 import type { ProviderType as SharedProviderType } from '../../shared/types/provider.js';
+import type { StreamCallback } from '../../shared/types/provider.js';
+import type { PermissionHandler, AskUserQuestionHandler } from '../../core/workflow/types.js';
 
 export interface AgentSetup {
   name: string;

@@ -1,10 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 import { runAgent } from '../agents/runner.js';
 import { detectMatchedRule } from '../core/workflow/evaluation/index.js';
 import { WorkflowEngine } from '../core/workflow/engine/WorkflowEngine.js';
 import { makeStep, makeRule, makeResponse, createTestTmpDir, applyDefaultMocks } from './engine-test-helpers.js';
 import type { WorkflowConfig } from '../core/models/index.js';
+import { initNdjsonLog } from '../infra/fs/session.js';
+import { SessionLogger } from '../features/tasks/execute/sessionLogger.js';
+import { renderTraceReportFromLogs } from '../features/tasks/execute/traceReport.js';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -139,6 +143,319 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     const state = await engine.run();
 
     expect(state.status).toBe('aborted');
+    expect(state.stepOutputs.get('implement')).toMatchObject({
+      persona: 'implement',
+      status: 'error',
+      error: 'All team leader parts failed: part-1: api failed; part-2: test failed',
+    });
+    expect(state.lastOutput).toMatchObject({
+      persona: 'implement',
+      status: 'error',
+      error: 'All team leader parts failed: part-1: api failed; part-2: test failed',
+    });
+  });
+
+  it('全パート失敗時でも team leader step_complete と trace に分類付き失敗理由を残す', async () => {
+    const config = buildTeamLeaderConfig();
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', { projectCwd: tmpDir, provider: 'claude' });
+    const logsDir = join(tmpDir, '.takt', 'runs', 'test-report-dir', 'logs');
+    const ndjsonPath = initNdjsonLog('session-team-leader-abort', 'implement feature', config.name, { logsDir });
+    const sessionLogger = new SessionLogger(ndjsonPath, true);
+
+    engine.on('step:start', (step, iteration, instruction, providerInfo) => {
+      sessionLogger.onStepStart(step, iteration, instruction, undefined, providerInfo);
+    });
+    engine.on('step:complete', (step, response, instruction) => {
+      sessionLogger.onStepComplete(step, response, instruction, undefined);
+    });
+    engine.on('workflow:abort', (workflowState, reason) => {
+      sessionLogger.onWorkflowAbort(workflowState, reason);
+    });
+
+    mockRunAgentWithPrompt(
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: {
+          parts: [
+            { id: 'part-1', title: 'API', instruction: 'Implement API' },
+            { id: 'part-2', title: 'Test', instruction: 'Add tests' },
+          ],
+        },
+      }),
+      makeResponse({
+        persona: 'coder',
+        status: 'error',
+        content: '',
+        error: 'external abort: Workflow interrupted by user (SIGINT)',
+        failureCategory: 'external_abort',
+      }),
+      makeResponse({
+        persona: 'coder',
+        status: 'error',
+        content: '',
+        error: 'part timeout: Part timeout after 10000ms',
+        failureCategory: 'part_timeout',
+      }),
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: { done: true, reasoning: 'stop', parts: [] },
+      }),
+    );
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+
+    const records = readFileSync(ndjsonPath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const stepComplete = records.find((record) => record.type === 'step_complete' && record.step === 'implement');
+    const workflowAbort = records.find((record) => record.type === 'workflow_abort');
+
+    expect(stepComplete).toMatchObject({
+      type: 'step_complete',
+      step: 'implement',
+      status: 'error',
+      error: 'All team leader parts failed: part-1: external abort: Workflow interrupted by user (SIGINT); part-2: part timeout: Part timeout after 10000ms',
+    });
+    expect(workflowAbort).toMatchObject({
+      type: 'workflow_abort',
+      reason: expect.stringContaining('All team leader parts failed: part-1: external abort: Workflow interrupted by user (SIGINT); part-2: part timeout: Part timeout after 10000ms'),
+    });
+
+    const trace = renderTraceReportFromLogs(
+      {
+        tracePath: join(tmpDir, '.takt', 'runs', 'test-report-dir', 'trace.md'),
+        workflowName: config.name,
+        task: 'implement feature',
+        runSlug: 'test-report-dir',
+        status: 'aborted',
+        iterations: 1,
+        endTime: '2026-04-25T00:00:00.000Z',
+        reason: String(workflowAbort?.reason ?? ''),
+      },
+      ndjsonPath,
+      undefined,
+      'full',
+    );
+
+    expect(trace).toContain('- Step Status: error');
+    expect(trace).toContain('All team leader parts failed: part-1: external abort: Workflow interrupted by user (SIGINT); part-2: part timeout: Part timeout after 10000ms');
+  });
+
+  it('全パート失敗時は stream idle timeout の分類を集約メッセージと trace に残す', async () => {
+    const config = buildTeamLeaderConfig();
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', { projectCwd: tmpDir, provider: 'claude' });
+    const logsDir = join(tmpDir, '.takt', 'runs', 'test-report-dir', 'logs');
+    const ndjsonPath = initNdjsonLog('session-team-leader-stream-idle-timeout', 'implement feature', config.name, { logsDir });
+    const sessionLogger = new SessionLogger(ndjsonPath, true);
+
+    engine.on('step:start', (step, iteration, instruction, providerInfo) => {
+      sessionLogger.onStepStart(step, iteration, instruction, undefined, providerInfo);
+    });
+    engine.on('step:complete', (step, response, instruction) => {
+      sessionLogger.onStepComplete(step, response, instruction, undefined);
+    });
+    engine.on('workflow:abort', (workflowState, reason) => {
+      sessionLogger.onWorkflowAbort(workflowState, reason);
+    });
+
+    mockRunAgentWithPrompt(
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: {
+          parts: [
+            { id: 'part-1', title: 'API', instruction: 'Implement API' },
+            { id: 'part-2', title: 'Test', instruction: 'Add tests' },
+          ],
+        },
+      }),
+      makeResponse({
+        persona: 'coder',
+        status: 'error',
+        content: '',
+        error: 'Codex stream timed out after 10 minutes of inactivity',
+        failureCategory: 'stream_idle_timeout',
+      }),
+      makeResponse({
+        persona: 'coder',
+        status: 'error',
+        content: '',
+        error: 'stream idle timeout: Secondary stream timed out after 2 minutes of inactivity',
+        failureCategory: 'stream_idle_timeout',
+      }),
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: { done: true, reasoning: 'stop', parts: [] },
+      }),
+    );
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+
+    const expectedError =
+      'All team leader parts failed: part-1: stream idle timeout: Codex stream timed out after 10 minutes of inactivity; part-2: stream idle timeout: Secondary stream timed out after 2 minutes of inactivity';
+
+    expect(state.stepOutputs.get('implement')).toMatchObject({
+      status: 'error',
+      error: expectedError,
+    });
+    expect(state.lastOutput).toMatchObject({
+      status: 'error',
+      error: expectedError,
+    });
+
+    const records = readFileSync(ndjsonPath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const stepComplete = records.find((record) => record.type === 'step_complete' && record.step === 'implement');
+    const workflowAbort = records.find((record) => record.type === 'workflow_abort');
+
+    expect(stepComplete).toMatchObject({
+      type: 'step_complete',
+      step: 'implement',
+      status: 'error',
+      error: expectedError,
+    });
+    expect(workflowAbort).toMatchObject({
+      type: 'workflow_abort',
+      reason: expect.stringContaining(expectedError),
+    });
+
+    const trace = renderTraceReportFromLogs(
+      {
+        tracePath: join(tmpDir, '.takt', 'runs', 'test-report-dir', 'trace.md'),
+        workflowName: config.name,
+        task: 'implement feature',
+        runSlug: 'test-report-dir',
+        status: 'aborted',
+        iterations: 1,
+        endTime: '2026-04-25T00:00:00.000Z',
+        reason: String(workflowAbort?.reason ?? ''),
+      },
+      ndjsonPath,
+      undefined,
+      'full',
+    );
+
+    expect(trace).toContain('- Step Status: error');
+    expect(trace).toContain(expectedError);
+  });
+
+  it('reason なしの親 abort でも external abort 分類を集約メッセージに残す', async () => {
+    const config = buildTeamLeaderConfig();
+    const abortController = new AbortController();
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
+      projectCwd: tmpDir,
+      provider: 'claude',
+      abortSignal: abortController.signal,
+    });
+    const mock = vi.mocked(runAgent);
+
+    mockRunAgentWithPrompt(
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: {
+          parts: [
+            { id: 'part-1', title: 'API', instruction: 'Implement API' },
+          ],
+        },
+      }),
+    );
+    mock.mockImplementationOnce(async (persona, instruction, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: instruction,
+      });
+
+      return new Promise((_, reject) => {
+        const abortSignal = options?.abortSignal;
+        if (!abortSignal) {
+          reject(new Error('abortSignal is required'));
+          return;
+        }
+
+        const rejectWithAbortReason = (): void => {
+          reject(abortSignal.reason);
+        };
+
+        if (abortSignal.aborted) {
+          rejectWithAbortReason();
+          return;
+        }
+
+        abortSignal.addEventListener('abort', rejectWithAbortReason, { once: true });
+        queueMicrotask(() => abortController.abort());
+      });
+    });
+    mockRunAgentWithPrompt(
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: { done: true, reasoning: 'stop', parts: [] },
+      }),
+    );
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(state.stepOutputs.get('implement')).toMatchObject({
+      status: 'error',
+      error: 'All team leader parts failed: part-1: external abort: This operation was aborted',
+    });
+    expect(state.lastOutput).toMatchObject({
+      status: 'error',
+      error: 'All team leader parts failed: part-1: external abort: This operation was aborted',
+    });
+  });
+
+  it('全パート失敗時は provider error の分類も集約メッセージに残す', async () => {
+    const config = buildTeamLeaderConfig();
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', { projectCwd: tmpDir, provider: 'claude' });
+
+    mockRunAgentWithPrompt(
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: {
+          parts: [
+            { id: 'part-1', title: 'API', instruction: 'Implement API' },
+            { id: 'part-2', title: 'Test', instruction: 'Add tests' },
+          ],
+        },
+      }),
+      makeResponse({
+        persona: 'coder',
+        status: 'error',
+        content: '',
+        error: 'Upstream model returned 500',
+        failureCategory: 'provider_error',
+      }),
+      makeResponse({
+        persona: 'coder',
+        status: 'error',
+        content: '',
+        error: 'Gateway unavailable',
+        failureCategory: 'provider_error',
+      }),
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: { done: true, reasoning: 'stop', parts: [] },
+      }),
+    );
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(state.stepOutputs.get('implement')).toMatchObject({
+      status: 'error',
+      error: 'All team leader parts failed: part-1: provider error: Upstream model returned 500; part-2: provider error: Gateway unavailable',
+    });
+    expect(state.lastOutput).toMatchObject({
+      status: 'error',
+      error: 'All team leader parts failed: part-1: provider error: Upstream model returned 500; part-2: provider error: Gateway unavailable',
+    });
   });
 
   it('一部パートが失敗しても成功パートがあれば集約結果は完了する', async () => {

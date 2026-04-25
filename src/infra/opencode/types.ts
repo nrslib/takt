@@ -2,9 +2,9 @@
  * Type definitions for OpenCode SDK integration
  */
 
-import type { StreamCallback } from '../claude/index.js';
 import type { AskUserQuestionHandler } from '../../core/workflow/types.js';
 import type { PermissionMode } from '../../core/models/index.js';
+import type { StreamCallback } from '../../shared/types/provider.js';
 
 /** OpenCode permission reply values */
 export type OpenCodePermissionReply = 'once' | 'always' | 'reject';

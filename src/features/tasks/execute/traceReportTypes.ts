@@ -1,3 +1,4 @@
+import type { AgentFailureCategory } from '../../../shared/types/agent-failure.js';
 import type { NdjsonWorkflowStackEntry } from '../../../shared/utils/index.js';
 import type { PhaseName } from '../../../core/workflow/index.js';
 import type { JudgeStageEntry } from '../../../core/workflow/types.js';
@@ -44,6 +45,7 @@ export interface TraceStep {
     status: string;
     content: string;
     error?: string;
+    failureCategory?: AgentFailureCategory;
     matchedRuleIndex?: number;
     matchedRuleMethod?: string;
     matchMethod?: string;
