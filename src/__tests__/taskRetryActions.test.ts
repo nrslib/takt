@@ -305,6 +305,52 @@ describe('retryFailedTask', () => {
     );
   });
 
+  it('should prefer task.runSlug over task content lookup when loading retry run context', async () => {
+    mockReadRunMetaBySlug.mockReturnValue({
+      task: 'Original task content',
+      workflow: 'default',
+      runSlug: 'run-1',
+      runRoot: '.takt/runs/run-1',
+      reportDirectory: '.takt/runs/run-1/reports',
+      contextDirectory: '.takt/runs/run-1/context',
+      logsDirectory: '.takt/runs/run-1/logs',
+      status: 'failed',
+      startTime: '2026-04-13T00:00:00.000Z',
+    });
+
+    await retryFailedTask(makeFailedTask({
+      content: 'Edited task content',
+      runSlug: 'run-1',
+    }), '/project');
+
+    expect(mockFindRunForTask).not.toHaveBeenCalled();
+    expect(mockReadRunMetaBySlug).toHaveBeenCalledWith(
+      '/project/.takt/worktrees/my-task',
+      'run-1',
+      expect.any(Function),
+    );
+    expect(mockFindPreviousOrderContent).toHaveBeenCalledWith(
+      '/project/.takt/worktrees/my-task',
+      'run-1',
+    );
+  });
+
+  it('should keep using task.runSlug for retry context when run meta is missing', async () => {
+    mockReadRunMetaBySlug.mockReturnValue(null);
+
+    await retryFailedTask(makeFailedTask({
+      content: 'Edited task content',
+      runSlug: 'run-1',
+    }), '/project');
+
+    expect(mockFindRunForTask).not.toHaveBeenCalled();
+    expect(mockLoadRunSessionContext).not.toHaveBeenCalled();
+    expect(mockFindPreviousOrderContent).toHaveBeenCalledWith(
+      '/project/.takt/worktrees/my-task',
+      'run-1',
+    );
+  });
+
   it('should keep root workflow_call step as retry default when child step was renamed', async () => {
     mockFindRunForTask.mockReturnValue('run-1');
     mockLoadWorkflowByIdentifier.mockReturnValue({

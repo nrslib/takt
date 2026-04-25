@@ -118,7 +118,7 @@ describe('TaskRunner - exceedTask', () => {
     expect(exceededTask.owner_pid).toBeNull();
   });
 
-  it('should record the current step as start_step', () => {
+  it('should record the current step as start_movement', () => {
     runner.addTask('Task A');
     runner.claimNextTasks(1);
     const taskName = (loadTasksFile(testDir).tasks[0] as Record<string, unknown>).name as string;
@@ -131,7 +131,8 @@ describe('TaskRunner - exceedTask', () => {
 
     const afterFile = loadTasksFile(testDir);
     const exceededTask = afterFile.tasks[0]!;
-    expect(exceededTask.start_step).toBe('reviewers');
+    expect(exceededTask.start_movement).toBe('reviewers');
+    expect(exceededTask.start_step).toBeUndefined();
   });
 
   it('should record exceeded_max_steps in tasks.yaml', () => {
@@ -360,7 +361,7 @@ describe('TaskRunner - requeueExceededTask', () => {
     expect(file.tasks[0]?.exceeded_current_iteration).toBe(30);
   });
 
-  it('should preserve start_step for re-entry point', () => {
+  it('should preserve start_movement for re-entry point', () => {
     writeExceededRecord(testDir, {
       name: 'task-a',
       start_step: 'reviewers',
@@ -369,7 +370,8 @@ describe('TaskRunner - requeueExceededTask', () => {
     runner.requeueExceededTask('task-a');
 
     const file = loadTasksFile(testDir);
-    expect(file.tasks[0]?.start_step).toBe('reviewers');
+    expect(file.tasks[0]?.start_movement).toBe('reviewers');
+    expect(file.tasks[0]?.start_step).toBeUndefined();
   });
 
   it('should preserve resume_point through requeue for workflow_call retry', () => {

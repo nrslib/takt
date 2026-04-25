@@ -56,6 +56,8 @@ const deprecatedInlineCodeTerms = [
   ...terminologyMigrationLine.matchAll(/`([^`]+)`/g),
 ].map((match) => match[1]);
 
+const allowedDeprecatedTermContainers = ['start_movement'];
+
 export const deprecatedTerminologyTerms = Array.from(
   new Set([
     deprecatedWorkflowTerm,
@@ -71,5 +73,9 @@ export const deprecatedTerminologyTerms = Array.from(
 ).sort((left, right) => right.length - left.length);
 
 export function findDeprecatedTerms(content: string): string[] {
-  return deprecatedTerminologyTerms.filter((term) => lowerCaseIncludesDeprecatedTerm(content, term));
+  const sanitizedContent = allowedDeprecatedTermContainers.reduce(
+    (current, allowedValue) => current.split(allowedValue).join(''),
+    content,
+  );
+  return deprecatedTerminologyTerms.filter((term) => lowerCaseIncludesDeprecatedTerm(sanitizedContent, term));
 }

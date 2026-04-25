@@ -8,7 +8,7 @@ import { isStaleRunningTask } from './process.js';
 import { readRetryMetadataByRunSlug } from '../../core/workflow/run/retry-metadata.js';
 import {
   buildClaimedTaskRecord,
-  buildRecoveredTaskRecord,
+  buildRecoveredTaskRecordWithRetryMetadata,
   type ResolvedTaskRetryMetadata,
   buildTerminalTaskRecord,
   generateTaskName,
@@ -90,11 +90,31 @@ export class TaskLifecycleService {
           return task;
         }
         recovered++;
-        return buildRecoveredTaskRecord(task);
+        return buildRecoveredTaskRecordWithRetryMetadata(
+          task,
+          this.readRecoveryRetryMetadata(task),
+        );
       });
       return { tasks };
     });
     return recovered;
+  }
+
+  private readRecoveryRetryMetadata(task: TaskRecord): ResolvedTaskRetryMetadata {
+    if (!task.run_slug) {
+      return { preserveExisting: true };
+    }
+
+    const retryMetadata = this.readTerminalRetryMetadata(task);
+    if (retryMetadata.preserveExisting) {
+      return retryMetadata;
+    }
+
+    if (!retryMetadata.startStep) {
+      return { preserveExisting: true };
+    }
+
+    return { startStep: retryMetadata.startStep };
   }
 
   private readTerminalRetryMetadata(task: TaskRecord): ResolvedTaskRetryMetadata {
@@ -102,11 +122,18 @@ export class TaskLifecycleService {
       return {};
     }
 
-    return readRetryMetadataByRunSlug(
+    const retryMetadata = readRetryMetadataByRunSlug(
       task.worktree_path ?? this.projectDir,
       task.run_slug,
       this.onWarning,
     );
+    if (retryMetadata.preserveExisting) {
+      return retryMetadata;
+    }
+
+    return retryMetadata.startStep
+      ? { startStep: retryMetadata.startStep }
+      : {};
   }
 
   completeTask(result: TaskResult): string {

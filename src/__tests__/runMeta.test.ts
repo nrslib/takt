@@ -46,21 +46,50 @@ describe('RunMetaManager', () => {
 
     const initialMeta = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls[0]![1])) as {
       status: string;
+      updatedAt?: string;
       currentStep?: string;
       currentIteration?: number;
     };
     const updatedMeta = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls[1]![1])) as {
       status: string;
+      updatedAt?: string;
       currentStep?: string;
       currentIteration?: number;
     };
 
     expect(initialMeta.status).toBe('running');
+    expect(initialMeta.updatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(initialMeta.currentStep).toBeUndefined();
     expect(initialMeta.currentIteration).toBeUndefined();
     expect(updatedMeta.status).toBe('running');
+    expect(updatedMeta.updatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(updatedMeta.currentStep).toBe('implement');
     expect(updatedMeta.currentIteration).toBe(2);
+  });
+
+  it('should persist the latest phase alongside step progress', () => {
+    const manager = new RunMetaManager(createRunPaths(), 'Force fail task', 'default');
+    manager.updateStep('review', 3);
+
+    (
+      manager as unknown as {
+        updatePhase: (stepName: string, iteration: number, phase: 1 | 2 | 3) => void;
+      }
+    ).updatePhase('review', 3, 2);
+
+    const phasedMeta = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls[2]![1])) as {
+      status: string;
+      updatedAt?: string;
+      currentStep?: string;
+      currentIteration?: number;
+      phase?: number;
+    };
+
+    expect(phasedMeta.status).toBe('running');
+    expect(phasedMeta.updatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(phasedMeta.currentStep).toBe('review');
+    expect(phasedMeta.currentIteration).toBe(3);
+    expect(phasedMeta.phase).toBe(2);
   });
 
   it('should keep currentStep and currentIteration when finalize is called', () => {
@@ -73,6 +102,7 @@ describe('RunMetaManager', () => {
 
     const finalizedMeta = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls[2]![1])) as {
       status: string;
+      updatedAt?: string;
       currentStep?: string;
       currentIteration?: number;
       iterations?: number;
@@ -80,6 +110,7 @@ describe('RunMetaManager', () => {
     };
 
     expect(finalizedMeta.status).toBe('completed');
+    expect(finalizedMeta.updatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(finalizedMeta.currentStep).toBe('review');
     expect(finalizedMeta.currentIteration).toBe(3);
     expect(finalizedMeta.iterations).toBe(3);

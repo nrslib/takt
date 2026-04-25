@@ -53,6 +53,16 @@ describe('findPreviousOrderContent', () => {
     expect(result).toBeNull();
   });
 
+  it('should return null for invalid slug with path traversal characters', () => {
+    const escapedOrderDir = join(TEST_DIR, '.takt', 'escaped-run', 'context', 'task');
+    mkdirSync(escapedOrderDir, { recursive: true });
+    writeFileSync(join(escapedOrderDir, 'order.md'), 'Escaped order', 'utf-8');
+
+    const result = findPreviousOrderContent(TEST_DIR, '../escaped-run');
+
+    expect(result).toBeNull();
+  });
+
   it('should return null for empty order.md content', () => {
     createRunWithOrder('20260218-run1', '');
 

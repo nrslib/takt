@@ -33,6 +33,17 @@ describe('readRunContextOrderContent', () => {
     expect(result).toBe('# Task\n\nImplement exactly this.');
   });
 
+  it('不正な slug では .takt/runs 配下の外を読まない', () => {
+    const root = createTempProjectDir();
+    const escapedOrderPath = path.join(root, '.takt', 'escaped-run', 'context', 'task', 'order.md');
+    fs.mkdirSync(path.dirname(escapedOrderPath), { recursive: true });
+    fs.writeFileSync(escapedOrderPath, '# Escaped Task\n\nShould not be readable.', 'utf-8');
+
+    const result = readRunContextOrderContent(root, '../escaped-run');
+
+    expect(result).toBeUndefined();
+  });
+
   it('読み込み失敗時は onError を呼んで undefined を返す', () => {
     const root = createTempProjectDir();
     const slug = '20260216-run-order-error';
@@ -47,5 +58,35 @@ describe('readRunContextOrderContent', () => {
     expect(onError).toHaveBeenCalledTimes(1);
     expect(onError.mock.calls[0]?.[0]).toBe(orderPath);
     expect(onError.mock.calls[0]?.[1]).toBeInstanceOf(Error);
+  });
+
+  it('symlink 化した run directory 経由の order.md を読まない', () => {
+    const root = createTempProjectDir();
+    const slug = '20260216-linked-run';
+    const escapedRunDir = path.join(root, '.takt', 'escaped-run');
+    const linkedRunDir = path.join(root, '.takt', 'runs', slug);
+    const escapedOrderPath = path.join(escapedRunDir, 'context', 'task', 'order.md');
+    fs.mkdirSync(path.dirname(escapedOrderPath), { recursive: true });
+    fs.writeFileSync(escapedOrderPath, '# Escaped Task\n\nShould not be readable.', 'utf-8');
+    fs.mkdirSync(path.dirname(linkedRunDir), { recursive: true });
+    fs.symlinkSync(escapedRunDir, linkedRunDir, 'dir');
+
+    const result = readRunContextOrderContent(root, slug);
+
+    expect(result).toBeUndefined();
+  });
+
+  it('symlink 化した order.md を読まない', () => {
+    const root = createTempProjectDir();
+    const slug = '20260216-linked-order';
+    const runTaskDir = path.join(root, '.takt', 'runs', slug, 'context', 'task');
+    const escapedOrderPath = path.join(root, '.takt', 'escaped-order.md');
+    fs.mkdirSync(runTaskDir, { recursive: true });
+    fs.writeFileSync(escapedOrderPath, '# Escaped Task\n\nShould not be readable.', 'utf-8');
+    fs.symlinkSync(escapedOrderPath, path.join(runTaskDir, 'order.md'), 'file');
+
+    const result = readRunContextOrderContent(root, slug);
+
+    expect(result).toBeUndefined();
   });
 });

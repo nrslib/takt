@@ -128,24 +128,57 @@ describe('TaskExecutionConfigSchema', () => {
     expect(config.start_step).toBe('plan');
   });
 
-  it('should reject unknown workflow keys', () => {
+  it('should reject unknown workflow keys and accept canonical start_movement', () => {
     expect(() => TaskExecutionConfigSchema.parse({
       [unexpectedWorkflowKey]: 'legacy-workflow',
     })).toThrow();
 
     expect(() => TaskExecutionConfigSchema.parse({
       [unexpectedStartStepKey]: 'plan',
+    })).not.toThrow();
+  });
+
+  it('should reject conflicting start_step and start_movement values', () => {
+    expect(() => TaskExecutionConfigSchema.parse({
+      start_step: 'plan',
+      start_movement: 'implement',
+    })).toThrow('start_step and start_movement must match when both are set');
+  });
+
+  it('should return safeParse failure instead of throwing for conflicting start_step and start_movement values', () => {
+    const input = {
+      start_step: 'plan',
+      start_movement: 'implement',
+    };
+
+    expect(() => TaskExecutionConfigSchema.safeParse(input)).not.toThrow();
+    const result = TaskExecutionConfigSchema.safeParse(input);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          message: 'start_step and start_movement must match when both are set',
+          path: ['start_movement'],
+        }),
+      ]));
+    }
+  });
+
+  it('should reject non-string start_movement values', () => {
+    expect(() => TaskExecutionConfigSchema.parse({
+      start_movement: 123,
     })).toThrow();
   });
 
   it('should resolve workflow and start step through shared helpers', () => {
     expect(resolveTaskWorkflowValue({ workflow: 'unit-test' })).toBe('unit-test');
     expect(resolveTaskStartStepValue({ start_step: 'plan' })).toBe('plan');
+    expect(resolveTaskStartStepValue({ [unexpectedStartStepKey]: 'plan' })).toBe('plan');
+    expect(resolveTaskStartStepValue({ start_step: 'plan', start_movement: 'plan' })).toBe('plan');
     expect(resolveTaskWorkflowValue({ [unexpectedWorkflowKey]: 'unit-test' })).toBeUndefined();
-    expect(resolveTaskStartStepValue({ [unexpectedStartStepKey]: 'plan' })).toBeUndefined();
   });
 
-  it('should serialize canonical task keys as workflow and start_step', () => {
+  it('should serialize canonical task keys as workflow and start_movement', () => {
     const serialized = serializeTaskRecord({
       ...makePendingRecord(),
       workflow: 'unit-test',
@@ -154,7 +187,7 @@ describe('TaskExecutionConfigSchema', () => {
 
     expect(serialized).toMatchObject({
       workflow: 'unit-test',
-      start_step: 'plan',
+      start_movement: 'plan',
     });
   });
 
@@ -175,6 +208,26 @@ describe('TaskFileSchema', () => {
     expect(() => TaskFileSchema.parse({ task: 'do something' })).not.toThrow();
   });
 
+  it('should return safeParse failure instead of throwing for conflicting start_step and start_movement values', () => {
+    const input = {
+      task: 'do something',
+      start_step: 'plan',
+      start_movement: 'implement',
+    };
+
+    expect(() => TaskFileSchema.safeParse(input)).not.toThrow();
+    const result = TaskFileSchema.safeParse(input);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          message: 'start_step and start_movement must match when both are set',
+          path: ['start_movement'],
+        }),
+      ]));
+    }
+  });
+
   it('should reject empty task string', () => {
     expect(() => TaskFileSchema.parse({ task: '' })).toThrow();
   });
@@ -188,6 +241,26 @@ describe('TaskRecordSchema', () => {
   describe('pending status', () => {
     it('should accept valid pending record', () => {
       expect(() => TaskRecordSchema.parse(makePendingRecord())).not.toThrow();
+    });
+
+    it('should return safeParse failure instead of throwing for conflicting start_step and start_movement values', () => {
+      const input = {
+        ...makePendingRecord(),
+        start_step: 'plan',
+        start_movement: 'implement',
+      };
+
+      expect(() => TaskRecordSchema.safeParse(input)).not.toThrow();
+      const result = TaskRecordSchema.safeParse(input);
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            message: 'start_step and start_movement must match when both are set',
+            path: ['start_movement'],
+          }),
+        ]));
+      }
     });
 
     it('should reject pending record with started_at', () => {

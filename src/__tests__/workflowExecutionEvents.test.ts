@@ -36,6 +36,7 @@ describe('bindWorkflowExecutionEvents', () => {
     };
     const runMetaManager = {
       updateStep: vi.fn(),
+      updatePhase: vi.fn(),
       updateResumePoint: vi.fn(),
       finalize: vi.fn(),
     };
@@ -111,10 +112,15 @@ describe('bindWorkflowExecutionEvents', () => {
     };
 
     engine.emit('step:start', step, 2, 'instruction', { provider: 'mock', model: 'gpt-test' });
+    engine.emit('phase:start', step, 1, 'main', 'instruction', [], 'phase-1', 2);
+    engine.emit('phase:complete', step, 1, 'main', 'approved', 'done', undefined, 'phase-1', 2);
     engine.emit('step:complete', step, response, 'instruction');
     engine.emit('workflow:complete', { iteration: 2 });
 
     expect(runMetaManager.updateStep).toHaveBeenCalledWith('review', 2, resumePoint);
+    expect(runMetaManager.updatePhase).toHaveBeenCalledTimes(2);
+    expect(runMetaManager.updatePhase.mock.calls[0]?.slice(0, 3)).toEqual(['review', 2, 1]);
+    expect(runMetaManager.updatePhase.mock.calls[1]?.slice(0, 3)).toEqual(['review', 2, 1]);
     expect(runMetaManager.updateResumePoint).toHaveBeenCalledWith(resumePoint);
     expect(runMetaManager.finalize).toHaveBeenCalledWith('completed', 2);
     expect(bridge.state.lastStepName).toBe('review');
