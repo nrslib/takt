@@ -8,7 +8,7 @@
 import type { PermissionUpdate, AgentDefinition, SandboxSettings } from '@anthropic-ai/claude-agent-sdk';
 import type { PermissionMode, McpServerConfig } from '../../core/models/index.js';
 import type { ClaudeEffort } from '../../core/models/workflow-types.js';
-import type { ProviderUsageSnapshot } from '../../core/models/response.js';
+import type { AgentErrorKind, ProviderUsageSnapshot } from '../../core/models/response.js';
 
 export type { SandboxSettings };
 import type { PermissionResult } from '../../core/workflow/index.js';
@@ -128,6 +128,7 @@ export interface ClaudeResult {
   content: string;
   sessionId?: string;
   error?: string;
+  errorKind?: AgentErrorKind;
   interrupted?: boolean;
   /** All assistant text accumulated during execution (for status detection) */
   fullContent?: string;

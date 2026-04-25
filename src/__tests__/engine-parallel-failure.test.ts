@@ -182,6 +182,26 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
     expect(reason).toContain('All parallel sub-steps failed');
   });
 
+  it('should preserve the rate limit message in workflow abort reason when all sub-steps fail with it', async () => {
+    const config = buildParallelOnlyConfig();
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+
+    const mock = vi.mocked(runAgent);
+    mock.mockRejectedValueOnce(new Error('Rate limit exceeded. Please try again later.'));
+    mock.mockRejectedValueOnce(new Error('Rate limit exceeded. Please try again later.'));
+
+    const abortFn = vi.fn();
+    engine.on('workflow:abort', abortFn);
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(abortFn).toHaveBeenCalledOnce();
+    const reason = abortFn.mock.calls[0]![1] as string;
+    expect(reason).toContain('All parallel sub-steps failed');
+    expect(reason).toContain('Rate limit exceeded. Please try again later.');
+  });
+
   it('should record failed sub-step error message in stepOutputs', async () => {
     const config = buildParallelOnlyConfig();
     const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });

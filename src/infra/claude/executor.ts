@@ -8,11 +8,16 @@
 import {
   query,
   AbortError,
+  type SDKMessage,
   type SDKResultMessage,
   type SDKAssistantMessage,
+  type SDKRateLimitEvent,
 } from '@anthropic-ai/claude-agent-sdk';
 import { USAGE_MISSING_REASONS } from '../../core/logging/contracts.js';
-import type { ProviderUsageSnapshot } from '../../core/models/response.js';
+import {
+  RATE_LIMIT_ERROR_MESSAGE,
+  type ProviderUsageSnapshot,
+} from '../../core/models/response.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import {
   generateQueryId,
@@ -27,9 +32,38 @@ import type {
 } from './types.js';
 
 const log = createLogger('claude-sdk');
+const RATE_LIMIT_RESPONSE_PATTERNS = [
+  'rate_limit',
+  'rate limit',
+  'out of extra usage',
+] as const;
 
 function toNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function isRejectedRateLimitEvent(message: SDKRateLimitEvent): boolean {
+  return (
+    message.rate_limit_info.status === 'rejected'
+    || message.rate_limit_info.overageStatus === 'rejected'
+  );
+}
+
+function isRateLimitSignal(message: SDKMessage): boolean {
+  if (message.type === 'rate_limit_event') {
+    return isRejectedRateLimitEvent(message as SDKRateLimitEvent);
+  }
+
+  return message.type === 'assistant' && message.error === 'rate_limit';
+}
+
+function containsRateLimitText(text: string | undefined): boolean {
+  if (!text) {
+    return false;
+  }
+
+  const normalized = text.toLowerCase();
+  return RATE_LIMIT_RESPONSE_PATTERNS.some((pattern) => normalized.includes(pattern));
 }
 
 function extractProviderUsage(resultMsg: SDKResultMessage): ProviderUsageSnapshot {
@@ -148,6 +182,7 @@ export class QueryExecutor {
     let structuredOutput: Record<string, unknown> | undefined;
     let providerUsage: ProviderUsageSnapshot | undefined;
     let onExternalAbort: (() => void) | undefined;
+    let observedRateLimit = false;
     const applyAssistantMessage = (assistantMsg: SDKAssistantMessage): void => {
       for (const block of assistantMsg.message.content) {
         if (block.type === 'text') {
@@ -158,19 +193,22 @@ export class QueryExecutor {
     const applyResultMessage = (resultMsg: SDKResultMessage): void => {
       hasResultMessage = true;
       providerUsage = extractProviderUsage(resultMsg);
+      const resultPayload = resultMsg as SDKResultMessage & { result?: unknown };
       const resultErrors = Array.isArray((resultMsg as { errors?: unknown }).errors)
         ? ((resultMsg as { errors?: unknown }).errors as string[]).filter((error): error is string => typeof error === 'string')
         : [];
+      const resultText = typeof resultPayload.result === 'string' ? resultPayload.result : undefined;
+      if (resultErrors.length > 0) {
+        resultContent = resultErrors.join('\n');
+      } else if (resultText) {
+        resultContent = resultText;
+      }
 
       if (resultMsg.subtype !== 'success') {
         success = false;
-        if (resultErrors.length > 0) {
-          resultContent = resultErrors.join('\n');
-        }
         return;
       }
 
-      resultContent = resultMsg.result;
       const rawStructuredOutput = (resultMsg as unknown as {
         structured_output?: unknown;
         structuredOutput?: unknown;
@@ -217,6 +255,10 @@ export class QueryExecutor {
       for await (const message of q) {
         if ('session_id' in message) {
           sessionId = message.session_id;
+        }
+
+        if (isRateLimitSignal(message)) {
+          observedRateLimit = true;
         }
 
         if (options.onStream) {
@@ -269,7 +311,17 @@ export class QueryExecutor {
         options.abortSignal.removeEventListener('abort', onExternalAbort);
       }
       unregisterQuery(queryId);
-      return QueryExecutor.handleQueryError(error, queryId, sessionId, hasResultMessage, success, resultContent, stderrChunks);
+      return QueryExecutor.handleQueryError(
+        error,
+        queryId,
+        sessionId,
+        hasResultMessage,
+        success,
+        resultContent,
+        accumulatedAssistantText,
+        stderrChunks,
+        observedRateLimit,
+      );
     }
   }
 
@@ -284,7 +336,9 @@ export class QueryExecutor {
     hasResultMessage: boolean,
     success: boolean,
     resultContent: string | undefined,
+    assistantText: string,
     stderrChunks: string[],
+    observedRateLimit: boolean,
   ): ClaudeResult {
     if (error instanceof AbortError) {
       log.info('Claude query was interrupted', { queryId });
@@ -314,8 +368,18 @@ export class QueryExecutor {
 
     log.error('Claude query failed', { queryId, error: errorMessage });
 
-    if (errorMessage.includes('rate_limit') || errorMessage.includes('rate limit')) {
-      return { success: false, content: '', error: 'Rate limit exceeded. Please try again later.' };
+    if (
+      observedRateLimit
+      || containsRateLimitText(errorMessage)
+      || containsRateLimitText(resultContent)
+      || containsRateLimitText(assistantText)
+    ) {
+      return {
+        success: false,
+        content: '',
+        error: RATE_LIMIT_ERROR_MESSAGE,
+        errorKind: 'rate_limit',
+      };
     }
 
     if (errorMessage.includes('authentication') || errorMessage.includes('unauthorized')) {

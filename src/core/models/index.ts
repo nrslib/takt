@@ -30,6 +30,7 @@ export type {
   AgentWorkflowStep,
   SystemWorkflowStep,
   WorkflowCallStep,
+  AgentErrorKind,
   AgentResponse,
   ProviderUsageSnapshot,
   SessionState,

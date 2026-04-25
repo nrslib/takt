@@ -68,4 +68,45 @@ describe('ClaudeClient status normalization', () => {
     expect(response.error).toBe('SIGINT');
     expect(response.content).toBe('Interrupted by signal');
   });
+
+  it('should preserve provider-normalized errorKind on error responses', async () => {
+    mockExecuteClaudeCli.mockResolvedValue({
+      success: false,
+      content: '',
+      error: 'Rate limit exceeded. Please try again later.',
+      errorKind: 'rate_limit',
+      sessionId: 'session-3',
+    });
+
+    const client = new ClaudeClient();
+
+    const response = await client.call('coder', 'Implement feature', options);
+
+    expect(response.status).toBe('error');
+    expect(response.errorKind).toBe('rate_limit');
+    expect(response.error).toBe('Rate limit exceeded. Please try again later.');
+  });
+
+  it('should preserve provider-normalized errorKind on callCustom() error responses', async () => {
+    mockExecuteClaudeCli.mockResolvedValue({
+      success: false,
+      content: 'Claude Code process exited with code 1',
+      error: 'Claude Code process exited with code 1',
+      errorKind: 'rate_limit',
+      sessionId: 'session-4',
+    });
+
+    const client = new ClaudeClient();
+
+    const response = await client.callCustom(
+      'custom-coder',
+      'Implement feature',
+      'system prompt',
+      options,
+    );
+
+    expect(response.status).toBe('error');
+    expect(response.errorKind).toBe('rate_limit');
+    expect(response.error).toBe('Claude Code process exited with code 1');
+  });
 });

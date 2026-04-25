@@ -4,6 +4,20 @@
 
 import type { Status, RuleMatchMethod } from './status.js';
 
+export type AgentErrorKind = 'rate_limit';
+export const RATE_LIMIT_ERROR_MESSAGE = 'Rate limit exceeded. Please try again later.';
+
+export function resolveAgentErrorMessage(
+  errorKind: AgentErrorKind | undefined,
+  fallbackMessage: string,
+): string {
+  if (errorKind === 'rate_limit') {
+    return RATE_LIMIT_ERROR_MESSAGE;
+  }
+
+  return fallbackMessage;
+}
+
 export interface ProviderUsageSnapshot {
   inputTokens?: number;
   outputTokens?: number;
@@ -24,6 +38,8 @@ export interface AgentResponse {
   sessionId?: string;
   /** Error message when the query failed (e.g., API error, rate limit) */
   error?: string;
+  /** Machine-readable error classification normalized at the provider boundary */
+  errorKind?: AgentErrorKind;
   /** Matched rule index (0-based) when rules-based detection was used */
   matchedRuleIndex?: number;
   /** How the rule match was detected */

@@ -15,6 +15,7 @@ export type {
 
 // Agent response
 export type {
+  AgentErrorKind,
   AgentResponse,
   ProviderUsageSnapshot,
 } from './response.js';

@@ -75,6 +75,7 @@ export class ClaudeClient {
       timestamp: new Date(),
       sessionId: result.sessionId,
       error: result.error,
+      errorKind: result.errorKind,
       structuredOutput: result.structuredOutput,
       providerUsage: result.providerUsage,
     };
@@ -105,6 +106,7 @@ export class ClaudeClient {
       timestamp: new Date(),
       sessionId: result.sessionId,
       error: result.error,
+      errorKind: result.errorKind,
       structuredOutput: result.structuredOutput,
       providerUsage: result.providerUsage,
     };

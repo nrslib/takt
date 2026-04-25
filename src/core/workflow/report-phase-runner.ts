@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve, sep } from 'node:path';
 import type { AgentResponse, WorkflowStep } from '../models/types.js';
+import { resolveAgentErrorMessage } from '../models/response.js';
 import type { RunAgentOptions } from '../../agents/runner.js';
 import { executeAgent } from '../../agents/agent-usecases.js';
 import { createLogger } from '../../shared/utils/index.js';
@@ -129,7 +130,7 @@ export async function runReportPhase(
       continue;
     }
 
-    if (!currentSessionId || !hasLastResponse) {
+    if (!currentSessionId || !hasLastResponse || firstAttempt.errorKind === 'rate_limit') {
       throw new Error(`Report phase failed for ${fileName}: ${firstAttempt.errorMessage}`);
     }
 
@@ -178,7 +179,7 @@ function buildNewSessionRetryOptions(step: WorkflowStep, ctx: PhaseRunnerContext
 type ReportAttemptResult =
   | { kind: 'success'; content: string; response: AgentResponse }
   | { kind: 'blocked'; response: AgentResponse }
-  | { kind: 'retryable_failure'; errorMessage: string };
+  | { kind: 'retryable_failure'; errorMessage: string; errorKind?: AgentResponse['errorKind'] };
 
 async function runSingleReportAttempt(
   step: WorkflowStep,
@@ -215,9 +216,10 @@ async function runSingleReportAttempt(
   }
 
   if (response.status !== 'done') {
-    const errorMessage = response.error || response.content || 'Unknown error';
+    const fallbackMessage = response.error || response.content || 'Unknown error';
+    const errorMessage = resolveAgentErrorMessage(response.errorKind, fallbackMessage);
     ctx.onPhaseComplete?.(step, 2, 'report', response.content, response.status, errorMessage, undefined, ctx.iteration);
-    return { kind: 'retryable_failure', errorMessage };
+    return { kind: 'retryable_failure', errorMessage, errorKind: response.errorKind };
   }
 
   const trimmedContent = response.content.trim();

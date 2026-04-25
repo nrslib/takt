@@ -12,6 +12,8 @@ vi.mock('../agents/runner.js', () => ({
 import { runAgent } from '../agents/runner.js';
 import type { AgentResponse } from '../core/models/types.js';
 
+const RATE_LIMIT_MESSAGE = 'Rate limit exceeded. Please try again later.';
+
 function createStep(fileName: string): WorkflowStep {
   return {
     name: 'implement',
@@ -225,6 +227,53 @@ describe('runReportPhase retry with new session', () => {
     // When / Then
     await expect(runReportPhase(step, 1, ctx)).rejects.toThrow(
       'Report phase failed for 04-qa.md: Tool use is not allowed in this phase',
+    );
+    expect(runAgentMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('should fail immediately without retry when resumed session hits the rate limit', async () => {
+    // Given
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('04-qa.md');
+    const ctx = createContext(reportDir, 'Aggregated reviewer output', 'session-resume-1');
+    queueRunAgentResponses([{
+      persona: 'coder',
+      status: 'error',
+      content: RATE_LIMIT_MESSAGE,
+      timestamp: new Date('2026-02-11T00:02:32Z'),
+      error: RATE_LIMIT_MESSAGE,
+      errorKind: 'rate_limit',
+    }]);
+    const runAgentMock = vi.mocked(runAgent);
+
+    // When / Then
+    await expect(runReportPhase(step, 1, ctx)).rejects.toThrow(
+      `Report phase failed for 04-qa.md: ${RATE_LIMIT_MESSAGE}`,
+    );
+    expect(runAgentMock).toHaveBeenCalledTimes(1);
+
+    const firstCallOptions = runAgentMock.mock.calls[0]?.[2] as { sessionId?: string };
+    expect(firstCallOptions.sessionId).toBe('session-resume-1');
+  });
+
+  it('should not depend on provider-specific error text when rate limit is classified', async () => {
+    // Given
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('04-qa.md');
+    const ctx = createContext(reportDir, 'Aggregated reviewer output', 'session-resume-1');
+    queueRunAgentResponses([{
+      persona: 'coder',
+      status: 'error',
+      content: 'Claude Code process exited with code 1',
+      timestamp: new Date('2026-02-11T00:02:33Z'),
+      error: 'Claude Code process exited with code 1',
+      errorKind: 'rate_limit',
+    }]);
+    const runAgentMock = vi.mocked(runAgent);
+
+    // When / Then
+    await expect(runReportPhase(step, 1, ctx)).rejects.toThrow(
+      `Report phase failed for 04-qa.md: ${RATE_LIMIT_MESSAGE}`,
     );
     expect(runAgentMock).toHaveBeenCalledTimes(1);
   });
