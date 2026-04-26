@@ -2,12 +2,14 @@ workflow_categories:
   🚀 クイックスタート:
     workflows:
       - default
+      - default-mini
       - default-high
       - frontend
       - backend
       - dual
   ⚡ Mini:
     workflows:
+      - default-mini
       - frontend-mini
       - backend-mini
       - backend-cqrs-mini

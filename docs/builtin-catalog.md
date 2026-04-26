@@ -9,6 +9,7 @@ A comprehensive catalog of all builtin workflows and personas included with TAKT
 | Workflow | Recommended Use |
 |----------|-----------------|
 | `default` | Standard development workflow. Test-first with AI antipattern review and parallel review (architecture + supervisor). plan → write_tests → implement → AI antipattern review → parallel review → complete. |
+| `default-mini` | Mini development workflow without tests. A lightweight variant of `default` with `write_tests` removed. plan → implement → AI antipattern review → parallel review → complete. |
 | `default-high` | Full-spec development workflow. Test-first with team-leader implementation, AI antipattern review with arbitration, 5-parallel review, and supervision. plan → write_tests → team-leader implement → AI review → 5-parallel review → fix → supervise → complete. |
 | `frontend` | Frontend-specialized development workflow with React/Next.js focused reviews and knowledge injection. |
 | `backend` | Backend-specialized development workflow with backend, security, and QA expert reviews. |
@@ -21,11 +22,13 @@ Organized by category.
 | Category | Workflow | Description |
 |----------|----------|-------------|
 | 🚀 Quick Start | `default` | Standard development workflow. Test-first with AI antipattern review and parallel review (architecture + supervisor). plan → write_tests → implement → AI antipattern review → parallel review → complete. |
+| | `default-mini` | Mini development workflow without tests. A lightweight variant of `default` with `write_tests` removed. plan → implement → AI antipattern review → parallel review → complete. |
 | | `default-high` | Full-spec development workflow. Test-first with team-leader implementation, AI antipattern review with arbitration, 5-parallel review, and supervision. plan → write_tests → team-leader implement → AI review → 5-parallel review → fix → supervise → complete. |
 | | `frontend` | Frontend-specialized development workflow with React/Next.js focused reviews and knowledge injection. |
 | | `backend` | Backend-specialized development workflow with backend, security, and QA expert reviews. |
 | | `dual` | Frontend + backend development workflow: architecture, frontend, security, QA reviews with fix loops. |
-| ⚡ Mini | `backend-cqrs-mini` | Mini CQRS+ES workflow: plan -> implement -> parallel review (AI antipattern + supervisor) with CQRS+ES knowledge injection. |
+| ⚡ Mini | `default-mini` | Mini development workflow without tests. A lightweight variant of `default` with `write_tests` removed. plan → implement → AI antipattern review → parallel review → complete. |
+| | `backend-cqrs-mini` | Mini CQRS+ES workflow: plan -> implement -> parallel review (AI antipattern + supervisor) with CQRS+ES knowledge injection. |
 | | `dual-mini` | Mini dual workflow: plan -> implement -> parallel review (AI antipattern + expert supervisor) with frontend + backend knowledge injection. |
 | | `dual-cqrs-mini` | Mini CQRS+ES dual workflow: plan -> implement -> parallel review (AI antipattern + expert supervisor) with CQRS+ES knowledge injection. |
 | 🎨 Frontend | `frontend` | Frontend-specialized development workflow with React/Next.js focused reviews and knowledge injection. |
