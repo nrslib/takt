@@ -5,10 +5,59 @@ import { getWorkflowTrustInfo, type WorkflowTrustInfo } from './workflowTrustSou
 
 type SystemStepLike = Parameters<typeof getWorkflowStepKind>[0] & {
   name: string;
+  allowGitCommit?: boolean;
+  parallel?: SystemStepLike[];
 };
+
+type PrivilegedCapability =
+  | { step: SystemStepLike; reason: 'system' }
+  | { step: SystemStepLike; reason: 'allow_git_commit' };
 
 function hasPrivilegedRuntimePrepare(workflow: WorkflowConfig): boolean {
   return (workflow.runtime?.prepare?.length ?? 0) > 0;
+}
+
+function findPrivilegedAllowGitCommitStep(steps: SystemStepLike[]): SystemStepLike | undefined {
+  for (const step of steps) {
+    if (step.allowGitCommit === true) {
+      return step;
+    }
+    const privilegedParallelStep = step.parallel
+      ? findPrivilegedAllowGitCommitStep(step.parallel)
+      : undefined;
+    if (privilegedParallelStep) {
+      return privilegedParallelStep;
+    }
+  }
+  return undefined;
+}
+
+function findPrivilegedCapability(steps: SystemStepLike[]): PrivilegedCapability | undefined {
+  const privilegedSystemStep = findPrivilegedSystemStep(steps);
+  if (privilegedSystemStep) {
+    return { step: privilegedSystemStep, reason: 'system' };
+  }
+
+  const privilegedAllowGitCommitStep = findPrivilegedAllowGitCommitStep(steps);
+  if (privilegedAllowGitCommitStep) {
+    return { step: privilegedAllowGitCommitStep, reason: 'allow_git_commit' };
+  }
+
+  return undefined;
+}
+
+function buildPrivilegedExecutionError(filePath: string, capability: PrivilegedCapability, scope: 'workflow' | 'project'): Error {
+  if (capability.reason === 'system') {
+    const subject = scope === 'project' ? 'Project workflow' : 'Workflow';
+    return new Error(
+      `${subject} "${filePath}" cannot use privileged system execution in step "${capability.step.name}" outside the project workflows root`,
+    );
+  }
+
+  const subject = scope === 'project' ? 'Project workflow' : 'Workflow';
+  return new Error(
+    `${subject} "${filePath}" cannot use allow_git_commit in step "${capability.step.name}" outside the project workflows root`,
+  );
 }
 
 function validateWorkflowExecutionTrustBoundaryInternal(
@@ -16,11 +65,9 @@ function validateWorkflowExecutionTrustBoundaryInternal(
   filePath: string,
   trustInfo: Pick<WorkflowTrustInfo, 'isProjectWorkflowRoot'>,
 ): void {
-  const privilegedStep = findPrivilegedSystemStep(workflow.steps);
-  if (privilegedStep && !trustInfo.isProjectWorkflowRoot) {
-    throw new Error(
-      `Workflow "${filePath}" cannot use privileged system execution in step "${privilegedStep.name}" outside the project workflows root`,
-    );
+  const privilegedCapability = findPrivilegedCapability(workflow.steps);
+  if (privilegedCapability && !trustInfo.isProjectWorkflowRoot) {
+    throw buildPrivilegedExecutionError(filePath, privilegedCapability, 'workflow');
   }
 
   if (hasPrivilegedRuntimePrepare(workflow) && !trustInfo.isProjectWorkflowRoot) {
@@ -39,8 +86,8 @@ export function validateProjectWorkflowTrustBoundaryForSteps(
   filePath: string,
   trustInfo: Pick<WorkflowTrustInfo, 'isProjectWorkflowRoot'>,
 ): void {
-  const privilegedStep = findPrivilegedSystemStep(steps);
-  if (!privilegedStep) {
+  const privilegedCapability = findPrivilegedCapability(steps);
+  if (!privilegedCapability) {
     return;
   }
 
@@ -48,8 +95,14 @@ export function validateProjectWorkflowTrustBoundaryForSteps(
     return;
   }
 
+  if (privilegedCapability.reason === 'system') {
+    throw new Error(
+      `Project workflow "${filePath}" cannot use privileged system execution in step "${privilegedCapability.step.name}"`,
+    );
+  }
+
   throw new Error(
-    `Project workflow "${filePath}" cannot use privileged system execution in step "${privilegedStep.name}"`,
+    `Project workflow "${filePath}" cannot use allow_git_commit in step "${privilegedCapability.step.name}"`,
   );
 }
 
@@ -82,9 +135,9 @@ export function validateWorkflowCallTrustBoundary(
   projectCwd: string,
 ): void {
   const childTrustInfo = getWorkflowTrustInfo(childWorkflow, projectCwd);
-  const privilegedStep = findPrivilegedSystemStep(childWorkflow.steps);
+  const privilegedCapability = findPrivilegedCapability(childWorkflow.steps);
   const hasPrivilegedRuntime = hasPrivilegedRuntimePrepare(childWorkflow);
-  if (!privilegedStep && !hasPrivilegedRuntime) {
+  if (!privilegedCapability && !hasPrivilegedRuntime) {
     return;
   }
 

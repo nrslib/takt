@@ -131,6 +131,7 @@ export interface AgentWorkflowStep extends WorkflowStepBase {
   call?: never;
   overrides?: never;
   persona?: string;
+  allowGitCommit?: boolean;
   session?: 'continue' | 'refresh';
   mcpServers?: Record<string, McpServerConfig>;
   personaPath?: string;
@@ -158,6 +159,7 @@ export interface SystemWorkflowStep extends WorkflowStepBase {
   call?: never;
   overrides?: never;
   persona?: never;
+  allowGitCommit?: never;
   session?: 'continue' | 'refresh';
   mcpServers?: never;
   personaPath?: never;
@@ -186,6 +188,7 @@ export interface WorkflowCallStep extends WorkflowStepBase {
   overrides?: WorkflowCallOverrides;
   args?: Record<string, WorkflowCallArgValue>;
   persona?: never;
+  allowGitCommit?: never;
   session?: never;
   mcpServers?: never;
   personaPath?: never;

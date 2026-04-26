@@ -1440,6 +1440,50 @@ steps:
     });
   });
 
+  it('project parent の named child は user workflow fallback 先の allow_git_commit を trust boundary で拒否する', () => {
+    const configDir = createTestTmpDir();
+    cleanupDirs.push(configDir);
+    process.env.TAKT_CONFIG_DIR = configDir;
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+
+    const userWorkflowDir = join(configDir, 'workflows', 'takt');
+    mkdirSync(userWorkflowDir, { recursive: true });
+    writeFileSync(join(userWorkflowDir, 'coding.yaml'), `name: takt/coding
+subworkflow:
+  callable: true
+initial_step: review
+max_steps: 5
+steps:
+  - name: review
+    persona: user-reviewer
+    allow_git_commit: true
+    instruction: "User child"
+    rules:
+      - condition: done
+        next: COMPLETE
+`, 'utf-8');
+    writeWorkflow(tmpDir, 'parent.yaml', `name: parent
+initial_step: delegate
+max_steps: 3
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: takt/coding
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: ABORT
+        next: ABORT
+`);
+
+    const parentWorkflow = loadWorkflowOrThrow('parent', tmpDir);
+
+    expect(() => resolveWorkflowCallTarget(parentWorkflow, 'takt/coding', 'delegate', tmpDir)).toThrow(
+      'Workflow step "delegate" cannot call privileged workflow "takt/coding" across trust boundary',
+    );
+  });
+
   it('source metadata を持たない project parent も user workflow fallback を解決できる', () => {
     const configDir = createTestTmpDir();
     cleanupDirs.push(configDir);
@@ -1906,6 +1950,45 @@ steps:
         pr: 42
     rules:
       - when: "true"
+        next: COMPLETE
+`, 'utf-8');
+    writeWorkflow(tmpDir, 'parent.yaml', `name: parent
+initial_step: delegate
+max_steps: 3
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: ${externalWorkflowPath}
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: ABORT
+        next: ABORT
+`);
+
+    const parentWorkflow = loadWorkflowOrThrow('parent', tmpDir);
+
+    expect(() => resolveWorkflowCallTarget(parentWorkflow, externalWorkflowPath, 'delegate', tmpDir)).toThrow(
+      'Workflow step "delegate" cannot call privileged workflow "external-child" across trust boundary',
+    );
+  });
+
+  it('project parent は allow_git_commit を持つ external child path を拒否する', () => {
+    const externalDir = createTestTmpDir();
+    cleanupDirs.push(externalDir);
+    const externalWorkflowPath = join(externalDir, 'child.yaml');
+    writeFileSync(externalWorkflowPath, `name: external-child
+subworkflow:
+  callable: true
+initial_step: review
+max_steps: 5
+steps:
+  - name: review
+    persona: external-reviewer
+    allow_git_commit: true
+    instruction: "External child"
+    rules:
+      - condition: done
         next: COMPLETE
 `, 'utf-8');
     writeWorkflow(tmpDir, 'parent.yaml', `name: parent

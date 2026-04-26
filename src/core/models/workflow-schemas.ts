@@ -128,6 +128,7 @@ export const ParallelSubStepRawSchema = z.object({
   persona_name: z.string().optional(),
   policy: WorkflowFacetRefListOrParamSchema.optional(),
   knowledge: WorkflowFacetRefListOrParamSchema.optional(),
+  allow_git_commit: z.boolean().optional(),
   allowed_tools: z.never().optional(),
   mcp_servers: McpServersSchema,
   provider: ProviderReferenceSchema.optional(),
@@ -200,162 +201,173 @@ const WorkflowSubworkflowRawSchema = z.object({
 
 function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: boolean }) {
   return z.object({
-  name: z.string().min(1),
-  description: z.string().optional(),
-  kind: WorkflowStepKindSchema.optional(),
-  mode: z.literal('system').optional(),
-  call: z.string().min(1).optional(),
-  overrides: WorkflowCallOverridesRawSchema.optional(),
-  args: WorkflowCallArgsRawSchema.optional(),
-  session: z.enum(['continue', 'refresh']).optional(),
-  persona: z.string().optional(),
-  persona_name: z.string().optional(),
-  policy: WorkflowFacetRefListOrParamSchema.optional(),
-  knowledge: WorkflowFacetRefListOrParamSchema.optional(),
-  allowed_tools: z.never().optional(),
-  mcp_servers: McpServersSchema,
-  provider: ProviderReferenceSchema.optional(),
-  model: z.string().optional(),
-  permission_mode: z.never().optional(),
-  required_permission_mode: PermissionModeSchema.optional(),
-  provider_options: StepProviderOptionsSchema,
-  edit: z.boolean().optional(),
-  instruction: WorkflowFacetRefOrParamSchema.optional(),
-  instruction_template: z.never().optional(),
-  delay_before_ms: z.number().int().min(0).optional(),
-  structured_output: StructuredOutputRawSchema.optional(),
-  system_inputs: z.array(SystemInputRawSchema).optional(),
-  effects: z.array(WorkflowEffectRawSchema).optional(),
-  rules: z.array(WorkflowRuleSchema).optional(),
-  output_contracts: OutputContractsFieldSchema,
-  quality_gates: QualityGatesSchema,
-  pass_previous_response: z.boolean().optional(),
-  parallel: z.array(ParallelSubStepRawSchema).optional(),
-  concurrency: z.number().int().min(1).optional(),
-  arpeggio: ArpeggioConfigRawSchema.optional(),
-  team_leader: TeamLeaderConfigRawSchema.optional(),
-}).refine(
-  (data) => [data.parallel, data.arpeggio, data.team_leader].filter((value) => value != null).length <= 1,
-  {
-    message: "'parallel', 'arpeggio', and 'team_leader' are mutually exclusive",
-    path: ['parallel'],
-  },
-).superRefine((data, ctx) => {
-  if (data.kind !== undefined && data.mode !== undefined) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['kind'],
-      message: 'Step kind must be expressed with either "kind" or "mode", not both',
-    });
-  }
-
-  const stepKind = getWorkflowStepKind(data);
-
-  if (data.call !== undefined && stepKind !== 'workflow_call') {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['call'],
-      message: 'Only workflow_call steps can declare "call"',
-    });
-  }
-
-  if (data.overrides !== undefined && stepKind !== 'workflow_call') {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['overrides'],
-      message: 'Only workflow_call steps can declare "overrides"',
-    });
-  }
-
-  if (data.args !== undefined && stepKind !== 'workflow_call') {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['args'],
-      message: 'Only workflow_call steps can declare "args"',
-    });
-  }
-
-  if (stepKind === 'workflow_call') {
-    if (data.call === undefined) {
+    name: z.string().min(1),
+    description: z.string().optional(),
+    kind: WorkflowStepKindSchema.optional(),
+    mode: z.literal('system').optional(),
+    call: z.string().min(1).optional(),
+    overrides: WorkflowCallOverridesRawSchema.optional(),
+    args: WorkflowCallArgsRawSchema.optional(),
+    session: z.enum(['continue', 'refresh']).optional(),
+    persona: z.string().optional(),
+    persona_name: z.string().optional(),
+    policy: WorkflowFacetRefListOrParamSchema.optional(),
+    knowledge: WorkflowFacetRefListOrParamSchema.optional(),
+    allow_git_commit: z.boolean().optional(),
+    allowed_tools: z.never().optional(),
+    mcp_servers: McpServersSchema,
+    provider: ProviderReferenceSchema.optional(),
+    model: z.string().optional(),
+    permission_mode: z.never().optional(),
+    required_permission_mode: PermissionModeSchema.optional(),
+    provider_options: StepProviderOptionsSchema,
+    edit: z.boolean().optional(),
+    instruction: WorkflowFacetRefOrParamSchema.optional(),
+    instruction_template: z.never().optional(),
+    delay_before_ms: z.number().int().min(0).optional(),
+    structured_output: StructuredOutputRawSchema.optional(),
+    system_inputs: z.array(SystemInputRawSchema).optional(),
+    effects: z.array(WorkflowEffectRawSchema).optional(),
+    rules: z.array(WorkflowRuleSchema).optional(),
+    output_contracts: OutputContractsFieldSchema,
+    quality_gates: QualityGatesSchema,
+    pass_previous_response: z.boolean().optional(),
+    parallel: z.array(ParallelSubStepRawSchema).optional(),
+    concurrency: z.number().int().min(1).optional(),
+    arpeggio: ArpeggioConfigRawSchema.optional(),
+    team_leader: TeamLeaderConfigRawSchema.optional(),
+  }).refine(
+    (data) => [data.parallel, data.arpeggio, data.team_leader].filter((value) => value != null).length <= 1,
+    {
+      message: "'parallel', 'arpeggio', and 'team_leader' are mutually exclusive",
+      path: ['parallel'],
+    },
+  ).superRefine((data, ctx) => {
+    if (data.kind !== undefined && data.mode !== undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        path: ['call'],
-        message: 'workflow_call step requires "call"',
+        path: ['kind'],
+        message: 'Step kind must be expressed with either "kind" or "mode", not both',
       });
     }
 
-    for (const field of [
-      'persona',
-      'persona_name',
-      'policy',
-      'knowledge',
-      'mcp_servers',
-      'provider',
-      'model',
-      'provider_options',
-      'required_permission_mode',
-      'edit',
-      'instruction',
-      'session',
-      'delay_before_ms',
-      'structured_output',
-      'system_inputs',
-      'effects',
-      'parallel',
-      'concurrency',
-      'arpeggio',
-      'team_leader',
-      'output_contracts',
-      'quality_gates',
-      'pass_previous_response',
-    ] as const) {
-      if (data[field] !== undefined) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: [field],
-          message: `workflow_call step does not allow "${field}"`,
-        });
-      }
+    const stepKind = getWorkflowStepKind(data);
+
+    if (data.call !== undefined && stepKind !== 'workflow_call') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['call'],
+        message: 'Only workflow_call steps can declare "call"',
+      });
     }
 
-    data.rules?.forEach((rule, index) => {
-      if (rule.when !== undefined) {
+    if (data.overrides !== undefined && stepKind !== 'workflow_call') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['overrides'],
+        message: 'Only workflow_call steps can declare "overrides"',
+      });
+    }
+
+    if (data.args !== undefined && stepKind !== 'workflow_call') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['args'],
+        message: 'Only workflow_call steps can declare "args"',
+      });
+    }
+
+    if (stepKind === 'workflow_call') {
+      if (data.call === undefined) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          path: ['rules', index, 'when'],
-          message: 'workflow_call rules do not allow "when"; use condition: COMPLETE or ABORT',
+          path: ['call'],
+          message: 'workflow_call step requires "call"',
         });
       }
 
-      if (rule.condition === undefined) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['rules', index, 'condition'],
-          message: 'workflow_call rules require condition: COMPLETE or ABORT',
-        });
-        return;
+      for (const field of [
+        'persona',
+        'persona_name',
+        'policy',
+        'knowledge',
+        'allow_git_commit',
+        'mcp_servers',
+        'provider',
+        'model',
+        'provider_options',
+        'required_permission_mode',
+        'edit',
+        'instruction',
+        'session',
+        'delay_before_ms',
+        'structured_output',
+        'system_inputs',
+        'effects',
+        'parallel',
+        'concurrency',
+        'arpeggio',
+        'team_leader',
+        'output_contracts',
+        'quality_gates',
+        'pass_previous_response',
+      ] as const) {
+        if (data[field] !== undefined) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [field],
+            message: `workflow_call step does not allow "${field}"`,
+          });
+        }
       }
 
-      const allowExtendedConditions = options?.relaxWorkflowCallConditions === true;
-      const isBuiltInCondition = rule.condition === 'COMPLETE' || rule.condition === 'ABORT';
-      const isExtendedCondition = allowExtendedConditions
-        && !AI_CONDITION_REGEX.test(rule.condition)
-        && !AGGREGATE_CONDITION_REGEX.test(rule.condition);
+      data.rules?.forEach((rule, index) => {
+        if (rule.when !== undefined) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['rules', index, 'when'],
+            message: 'workflow_call rules do not allow "when"; use condition: COMPLETE or ABORT',
+          });
+        }
 
-      if (!isBuiltInCondition && !isExtendedCondition) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['rules', index, 'condition'],
-          message: allowExtendedConditions
-            ? 'workflow_call rules only allow COMPLETE, ABORT, or callable return conditions'
-            : 'workflow_call rules only allow COMPLETE or ABORT conditions',
-        });
-      }
-    });
-  }
+        if (rule.condition === undefined) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['rules', index, 'condition'],
+            message: 'workflow_call rules require condition: COMPLETE or ABORT',
+          });
+          return;
+        }
 
-  validateSystemStepFields(data, ctx);
-});
+        const allowExtendedConditions = options?.relaxWorkflowCallConditions === true;
+        const isBuiltInCondition = rule.condition === 'COMPLETE' || rule.condition === 'ABORT';
+        const isExtendedCondition = allowExtendedConditions
+          && !AI_CONDITION_REGEX.test(rule.condition)
+          && !AGGREGATE_CONDITION_REGEX.test(rule.condition);
+
+        if (!isBuiltInCondition && !isExtendedCondition) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['rules', index, 'condition'],
+            message: allowExtendedConditions
+              ? 'workflow_call rules only allow COMPLETE, ABORT, or callable return conditions'
+              : 'workflow_call rules only allow COMPLETE or ABORT conditions',
+          });
+        }
+      });
+    }
+
+    validateSystemStepFields(data, ctx);
+  }).transform((data) => {
+    if (getWorkflowStepKind(data) !== 'agent') {
+      return data;
+    }
+
+    return {
+      ...data,
+      allow_git_commit: data.allow_git_commit ?? false,
+    };
+  });
 }
 
 export const WorkflowStepRawSchema = createWorkflowStepRawSchema();
