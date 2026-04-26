@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 type MockEvent = Record<string, unknown>;
 type RunPlan =
@@ -93,6 +93,10 @@ describe('CodexClient retry', () => {
     runPlanIndex = 0;
     startThreadCalls = [];
     resumeThreadCalls = [];
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('turn.failed の at capacity を 1 秒後に retry して成功を返す', async () => {
