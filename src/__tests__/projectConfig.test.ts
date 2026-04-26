@@ -5,11 +5,12 @@
  * including empty array round-trip behavior.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
-import { loadProjectConfig, saveProjectConfig } from '../infra/config/project/projectConfig.js';
+import { loadProjectConfig, saveProjectConfig, updateProjectConfig } from '../infra/config/project/projectConfig.js';
+import { isProjectConfigEnabled } from '../infra/config/project/projectConfigGuards.js';
 import type { ProjectLocalConfig } from '../infra/config/types.js';
 import {
   unexpectedInteractivePreviewConfigKey,
@@ -22,13 +23,34 @@ import {
 
 describe('projectConfig', () => {
   let testDir: string;
+  let originalTaktConfigDir: string | undefined;
+  let originalTaktProvider: string | undefined;
+  let originalTaktModel: string | undefined;
 
   beforeEach(() => {
+    originalTaktConfigDir = process.env.TAKT_CONFIG_DIR;
+    originalTaktProvider = process.env.TAKT_PROVIDER;
+    originalTaktModel = process.env.TAKT_MODEL;
     testDir = mkdtempSync(join(tmpdir(), 'takt-test-project-config-'));
     mkdirSync(join(testDir, '.takt'), { recursive: true });
   });
 
   afterEach(() => {
+    if (originalTaktConfigDir === undefined) {
+      delete process.env.TAKT_CONFIG_DIR;
+    } else {
+      process.env.TAKT_CONFIG_DIR = originalTaktConfigDir;
+    }
+    if (originalTaktProvider === undefined) {
+      delete process.env.TAKT_PROVIDER;
+    } else {
+      process.env.TAKT_PROVIDER = originalTaktProvider;
+    }
+    if (originalTaktModel === undefined) {
+      delete process.env.TAKT_MODEL;
+    } else {
+      process.env.TAKT_MODEL = originalTaktModel;
+    }
     if (testDir) {
       rmSync(testDir, { recursive: true, force: true });
     }
@@ -515,6 +537,21 @@ unexpected_overrides:
       expect(raw).toContain('model: haiku');
     });
 
+    it('should merge updates without dropping existing project config fields', () => {
+      saveProjectConfig(testDir, {
+        provider: 'claude',
+        concurrency: 2,
+      });
+
+      updateProjectConfig(testDir, 'model', 'gpt-5');
+
+      expect(loadProjectConfig(testDir)).toEqual({
+        provider: 'claude',
+        model: 'gpt-5',
+        concurrency: 2,
+      });
+    });
+
     it('should not persist empty pipeline object on save', () => {
       const config = {
         pipeline: {},
@@ -812,6 +849,151 @@ unexpected_overrides:
       } as unknown as ProjectLocalConfig;
 
       expect(() => saveProjectConfig(testDir, invalidConfig)).toThrow(/takt_providers\.assistant/);
+    });
+  });
+
+  describe('project/global config dir collision', () => {
+    it('should disable project config when directories collide directly', () => {
+      process.env.TAKT_CONFIG_DIR = join(testDir, '.takt');
+
+      expect(isProjectConfigEnabled(testDir)).toBe(false);
+    });
+
+    it('should disable project config when directories collide via symlink', () => {
+      const realGlobalDir = join(tmpdir(), `takt-global-real-${Date.now()}`);
+      const symlinkGlobalDir = join(tmpdir(), `takt-global-link-${Date.now()}`);
+      try {
+        mkdirSync(realGlobalDir, { recursive: true });
+        rmSync(join(testDir, '.takt'), { recursive: true, force: true });
+        symlinkSync(realGlobalDir, join(testDir, '.takt'));
+        symlinkSync(realGlobalDir, symlinkGlobalDir);
+        process.env.TAKT_CONFIG_DIR = symlinkGlobalDir;
+
+        expect(isProjectConfigEnabled(testDir)).toBe(false);
+      } finally {
+        rmSync(symlinkGlobalDir, { force: true });
+        rmSync(realGlobalDir, { recursive: true, force: true });
+      }
+    });
+
+    it('should disable project config when project dir resolves to home via parent symlink before .takt exists', async () => {
+      const symlinkProjectDir = join(tmpdir(), `takt-project-home-link-${Date.now()}`);
+
+      vi.resetModules();
+      vi.doMock('node:os', async () => {
+        const actual = await vi.importActual<typeof import('node:os')>('node:os');
+        return {
+          ...actual,
+          homedir: () => testDir,
+        };
+      });
+
+      try {
+        delete process.env.TAKT_CONFIG_DIR;
+        rmSync(join(testDir, '.takt'), { recursive: true, force: true });
+        symlinkSync(testDir, symlinkProjectDir);
+
+        const projectConfigGuardsModule = await import('../infra/config/project/projectConfigGuards.js');
+
+        expect(projectConfigGuardsModule.isProjectConfigEnabled(symlinkProjectDir)).toBe(false);
+      } finally {
+        vi.doUnmock('node:os');
+        vi.resetModules();
+        rmSync(symlinkProjectDir, { force: true });
+      }
+    });
+
+    it('should ignore colliding project config file during load', () => {
+      process.env.TAKT_CONFIG_DIR = join(testDir, '.takt');
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(
+        configPath,
+        [
+          'language: ja',
+          'provider: claude',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      const loaded = loadProjectConfig(testDir);
+
+      expect(loaded).toEqual({});
+    });
+
+    it('should apply env overrides even when colliding project config file is ignored', () => {
+      process.env.TAKT_CONFIG_DIR = join(testDir, '.takt');
+      process.env.TAKT_PROVIDER = 'codex';
+      process.env.TAKT_MODEL = 'gpt-5';
+
+      expect(loadProjectConfig(testDir)).toEqual({
+        provider: 'codex',
+        model: 'gpt-5',
+      });
+    });
+
+    it('should not overwrite colliding global config during save', () => {
+      process.env.TAKT_CONFIG_DIR = join(testDir, '.takt');
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      const originalContent = [
+        'language: ja',
+        'provider: claude',
+      ].join('\n');
+      writeFileSync(configPath, originalContent, 'utf-8');
+
+      saveProjectConfig(testDir, { model: 'gpt-5' });
+
+      expect(readFileSync(configPath, 'utf-8')).toBe(originalContent);
+    });
+
+    it('should not overwrite colliding global config during update', () => {
+      process.env.TAKT_CONFIG_DIR = join(testDir, '.takt');
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      const originalContent = [
+        'language: ja',
+        'provider: claude',
+      ].join('\n');
+      writeFileSync(configPath, originalContent, 'utf-8');
+
+      updateProjectConfig(testDir, 'model', 'gpt-5');
+
+      expect(readFileSync(configPath, 'utf-8')).toBe(originalContent);
+    });
+
+    it('should disable project config on the default home directory path', async () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      const originalContent = [
+        'language: ja',
+        'provider: claude',
+      ].join('\n');
+
+      writeFileSync(configPath, originalContent, 'utf-8');
+
+      vi.resetModules();
+      vi.doMock('node:os', async () => {
+        const actual = await vi.importActual<typeof import('node:os')>('node:os');
+        return {
+          ...actual,
+          homedir: () => testDir,
+        };
+      });
+
+      try {
+        delete process.env.TAKT_CONFIG_DIR;
+
+        const projectConfigModule = await import('../infra/config/project/projectConfig.js');
+        const projectConfigGuardsModule = await import('../infra/config/project/projectConfigGuards.js');
+
+        expect(projectConfigGuardsModule.isProjectConfigEnabled(testDir)).toBe(false);
+        expect(projectConfigModule.loadProjectConfig(testDir)).toEqual({});
+
+        projectConfigModule.saveProjectConfig(testDir, { model: 'gpt-5' });
+        projectConfigModule.updateProjectConfig(testDir, 'model', 'gpt-5');
+
+        expect(readFileSync(configPath, 'utf-8')).toBe(originalContent);
+      } finally {
+        vi.doUnmock('node:os');
+        vi.resetModules();
+      }
     });
   });
 

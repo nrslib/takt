@@ -9,6 +9,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import type { FacetType } from '../paths.js';
+
 import {
   resolveFacetPath as resolveFacetPathGeneric,
   resolveRefToContent as resolveRefToContentGeneric,
