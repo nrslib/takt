@@ -7,6 +7,7 @@ const SystemInputBindingSchema = z.object({
 export const IssueListSystemInputRawSchema = SystemInputBindingSchema.extend({
   type: z.literal('issue_list'),
   source: z.literal('current_project'),
+  exclude_selected_from: z.string().min(1).optional(),
 }).strict();
 
 export const IssueSelectionSystemInputRawSchema = SystemInputBindingSchema.extend({

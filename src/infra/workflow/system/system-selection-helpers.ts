@@ -24,6 +24,31 @@ export function getCachedCandidateSnapshot<T>(
   return candidates;
 }
 
+export function readResolvedBinding(
+  resolutionContext: SystemStepInputResolutionContext | undefined,
+  bindingName: string,
+): Record<string, unknown> | undefined {
+  const resolvedBinding = resolutionContext?.resolvedBindings.get(bindingName);
+  if (!resolvedBinding || typeof resolvedBinding !== 'object') {
+    return undefined;
+  }
+
+  return resolvedBinding as Record<string, unknown>;
+}
+
+export function readResolvedBindingNumber(
+  resolutionContext: SystemStepInputResolutionContext | undefined,
+  bindingName: string,
+): number | undefined {
+  const resolvedBinding = readResolvedBinding(resolutionContext, bindingName);
+  if (!resolvedBinding) {
+    return undefined;
+  }
+
+  const number = resolvedBinding.number;
+  return typeof number === 'number' ? number : undefined;
+}
+
 export function readPreviousSelectedNumber(
   state: WorkflowState,
   stepName: string,

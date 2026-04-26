@@ -268,6 +268,29 @@ export function validateSystemStepFields(
       }
     }
   }
+
+  const resolvedIssueSelectionBindings = new Set<string>();
+  for (const [index, input] of (data.system_inputs ?? []).entries()) {
+    if (input.type === 'issue_selection' && typeof input.as === 'string') {
+      resolvedIssueSelectionBindings.add(input.as);
+      continue;
+    }
+    if (
+      input.type !== 'issue_list'
+      || !('exclude_selected_from' in input)
+      || typeof input.exclude_selected_from !== 'string'
+    ) {
+      continue;
+    }
+    if (!resolvedIssueSelectionBindings.has(input.exclude_selected_from)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['system_inputs', index, 'exclude_selected_from'],
+        message: 'issue_list.exclude_selected_from must match an earlier issue_selection.as in the same step',
+      });
+    }
+  }
+
   const effectTypes = new Set<string>();
   for (const [index, effect] of (data.effects ?? []).entries()) {
     if (effectTypes.has(effect.type)) {

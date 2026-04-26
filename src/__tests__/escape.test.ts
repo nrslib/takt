@@ -266,6 +266,47 @@ describe('replaceTemplatePlaceholders', () => {
     expect(result).toBe('First author: nrslib');
   });
 
+  it('should stringify non-scalar context placeholders from workflow state', () => {
+    const step = makeStep();
+    const ctx = makeInstructionContext({
+      workflowState: {
+        systemContexts: new Map([
+          ['route_context', {
+            issues: [
+              { number: 586 },
+              { number: 587 },
+            ],
+          }],
+        ]),
+        structuredOutputs: new Map(),
+        effectResults: new Map(),
+      } as never,
+    });
+
+    const result = replaceTemplatePlaceholders('Issues:\n{context:route_context.issues}', step, ctx);
+
+    expect(result).toContain('Issues:\n[');
+    expect(result).toContain('"number": 586');
+    expect(result).toContain('"number": 587');
+  });
+
+  it('should fail when structured placeholders resolve to non-scalar values', () => {
+    const step = makeStep();
+    const ctx = makeInstructionContext({
+      workflowState: {
+        systemContexts: new Map(),
+        structuredOutputs: new Map([
+          ['plan_followup', { payload: { action: 'enqueue_new_task' } }],
+        ]),
+        effectResults: new Map(),
+      } as never,
+    });
+
+    expect(() => replaceTemplatePlaceholders('{structured:plan_followup.payload}', step, ctx)).toThrow(
+      'Instruction interpolation requires scalar value for "structured:plan_followup.payload"',
+    );
+  });
+
   it('should replace step-qualified effect placeholders from workflow state', () => {
     const step = makeStep();
     const ctx = makeInstructionContext({
