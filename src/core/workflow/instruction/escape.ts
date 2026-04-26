@@ -29,10 +29,13 @@ export function replaceTemplatePlaceholders(
       throw new Error(`Workflow state is required for "{${root}:${ref}}" interpolation`);
     }
     const value = resolveWorkflowStateReference(`${root}.${ref.replace(/:/g, '.')}`, context.workflowState);
-    if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+      return escapeTemplateChars(String(value));
+    }
+    if (root !== 'context') {
       throw new Error(`Instruction interpolation requires scalar value for "${root}:${ref}"`);
     }
-    return escapeTemplateChars(String(value));
+    return escapeTemplateChars(JSON.stringify(value, null, 2));
   });
 
   // Replace {task}

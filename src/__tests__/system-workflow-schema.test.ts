@@ -176,14 +176,20 @@ describe('system workflow schema', () => {
       mode: 'system',
       system_inputs: [
         {
+          type: 'issue_selection',
+          source: 'current_project',
+          as: 'selected_issue',
+        },
+        {
           type: 'issue_list',
           source: 'current_project',
-          as: 'issues',
+          as: 'tracked_issues',
+          exclude_selected_from: 'selected_issue',
         },
       ],
       rules: [
         {
-          when: 'context.route_context.issues.length > 0',
+          when: 'context.route_context.tracked_issues.length > 0',
           next: 'plan_from_issue',
         },
       ],
@@ -194,9 +200,15 @@ describe('system workflow schema', () => {
       const step = result.data as Record<string, unknown>;
       expect(step.system_inputs).toEqual([
         {
+          type: 'issue_selection',
+          source: 'current_project',
+          as: 'selected_issue',
+        },
+        {
           type: 'issue_list',
           source: 'current_project',
-          as: 'issues',
+          as: 'tracked_issues',
+          exclude_selected_from: 'selected_issue',
         },
       ]);
     }
@@ -232,6 +244,74 @@ describe('system workflow schema', () => {
         },
       ]);
     }
+  });
+
+  it('issue_list.exclude_selected_from が同じ step の先行 issue_selection.as と一致しない場合は reject する', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'route_context',
+      mode: 'system',
+      system_inputs: [
+        {
+          type: 'issue_selection',
+          source: 'current_project',
+          as: 'selected_issue',
+        },
+        {
+          type: 'issue_list',
+          source: 'current_project',
+          as: 'tracked_issues',
+          exclude_selected_from: 'missing_issue_selection',
+        },
+      ],
+      rules: [
+        {
+          when: 'context.route_context.tracked_issues.length > 0',
+          next: 'plan_from_issue',
+        },
+      ],
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        path: ['system_inputs', 1, 'exclude_selected_from'],
+        message: 'issue_list.exclude_selected_from must match an earlier issue_selection.as in the same step',
+      }),
+    ]));
+  });
+
+  it('issue_list.exclude_selected_from が後続 issue_selection.as を参照する場合は reject する', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'route_context',
+      mode: 'system',
+      system_inputs: [
+        {
+          type: 'issue_list',
+          source: 'current_project',
+          as: 'tracked_issues',
+          exclude_selected_from: 'selected_issue',
+        },
+        {
+          type: 'issue_selection',
+          source: 'current_project',
+          as: 'selected_issue',
+        },
+      ],
+      rules: [
+        {
+          when: 'context.route_context.tracked_issues.length > 0',
+          next: 'plan_from_issue',
+        },
+      ],
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        path: ['system_inputs', 0, 'exclude_selected_from'],
+        message: 'issue_list.exclude_selected_from must match an earlier issue_selection.as in the same step',
+      }),
+    ]));
   });
 
   it('user_input_context system input を reject する', () => {
@@ -1018,7 +1098,7 @@ describe('system workflow schema', () => {
             type: 'string',
             enum: [
               'enqueue_new_task',
-              'noop',
+              'wait_before_next_scan',
             ],
           },
           issue: {
@@ -1079,7 +1159,8 @@ describe('system workflow schema', () => {
       };
       const allowedActions = structuredOutput.schema.properties.action.enum;
 
-      expect(allowedActions).toEqual(['enqueue_new_task', 'noop']);
+      expect(allowedActions).toEqual(['enqueue_new_task', 'wait_before_next_scan']);
+      expect(allowedActions).not.toContain('noop');
       expect(allowedActions).not.toContain('enqueue_from_pr');
       expect(allowedActions).not.toContain('prepare_merge');
       expect(allowedActions).not.toContain('reject_pr');

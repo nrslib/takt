@@ -5,7 +5,7 @@
       "type": "string",
       "enum": [
         "enqueue_new_task",
-        "noop"
+        "wait_before_next_scan"
       ]
     },
     "task_markdown": {

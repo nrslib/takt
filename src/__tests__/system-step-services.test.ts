@@ -265,9 +265,9 @@ describe('DefaultSystemStepServices', () => {
 
     expect(mockListOpenIssues).toHaveBeenCalledWith('/repo');
     expect(result).toEqual([
-      { number: 588, title: 'Newest issue' },
-      { number: 587, title: 'Middle issue' },
-      { number: 586, title: 'Oldest issue' },
+      expect.objectContaining({ number: 588, category_codes: ['automation'] }),
+      expect.objectContaining({ number: 587, category_codes: ['automation'] }),
+      expect.objectContaining({ number: 586, category_codes: ['bug'] }),
     ]);
   });
 
@@ -338,9 +338,93 @@ describe('DefaultSystemStepServices', () => {
     });
 
     expect(result).toEqual([
-      { number: 587, title: 'Later number' },
-      { number: 586, title: 'Earlier number' },
+      expect.objectContaining({ number: 587 }),
+      expect.objectContaining({ number: 586 }),
     ]);
+  });
+
+  it('returns issue_list as safe overlap metadata without raw titles', () => {
+    mockListOpenIssues.mockReturnValue([
+      {
+        number: 586,
+        title: 'ワークフロー計画のガードレール改善',
+        labels: ['品質改善'],
+        updated_at: '2026-04-20T10:00:00Z',
+      },
+    ]);
+
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Inspect Japanese issue overlap keywords',
+    });
+
+    const result = services.resolveSystemInput({
+      type: 'issue_list',
+      source: 'current_project',
+      as: 'issues',
+    }) as Array<Record<string, unknown>>;
+
+    expect(result).toEqual([
+      {
+        number: 586,
+        category_codes: ['quality'],
+        related_open_issue_numbers: [],
+        related_open_issue_count: 0,
+        duplicate_candidate: false,
+        max_related_issue_overlap_score: 0,
+      },
+    ]);
+    expect(result[0]).not.toHaveProperty('title');
+    expect(result[0]).not.toHaveProperty('labels');
+  });
+
+  it('issue_selection does not reuse same-step resolved bindings as the current candidate', () => {
+    mockListOpenIssues.mockReturnValue([
+      {
+        number: 586,
+        title: 'Older backlog',
+        labels: ['bug'],
+        updated_at: '2026-04-20T10:00:00Z',
+      },
+      {
+        number: 587,
+        title: 'Newest queue',
+        labels: ['takt-managed'],
+        updated_at: '2026-04-20T14:00:00Z',
+      },
+    ]);
+
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Inspect issue selection contract',
+    });
+    const state = createWorkflowState();
+    state.systemContexts.set('route_context', {
+      selected_issue: {
+        exists: true,
+        number: 587,
+      },
+    });
+    const resolutionContext = {
+      cache: new Map<string, unknown>(),
+      resolvedBindings: new Map<string, unknown>([
+        ['selected_issue', { exists: true, number: 586 }],
+      ]),
+    };
+
+    const result = services.resolveSystemInput({
+      type: 'issue_selection',
+      source: 'current_project',
+      as: 'selected_issue',
+    }, state, 'route_context', resolutionContext);
+
+    expect(result).toEqual({
+      exists: true,
+      number: 586,
+      title: 'Older backlog',
+    });
   });
 
   it('resolves issue_selection deterministically when updated_at is tied', () => {
@@ -382,14 +466,14 @@ describe('DefaultSystemStepServices', () => {
     mockListOpenIssues.mockReturnValue([
       {
         number: 586,
-        title: 'Older issue',
+        title: 'Older backlog',
         labels: ['bug'],
         updated_at: '2026-04-20T10:00:00Z',
       },
       {
         number: 587,
-        title: 'Newest issue',
-        labels: ['takt-managed'],
+        title: 'Newest queue',
+        labels: ['planning'],
         updated_at: '2026-04-20T14:00:00Z',
       },
     ]);
@@ -426,23 +510,23 @@ describe('DefaultSystemStepServices', () => {
     expect(result).toEqual({
       exists: true,
       number: 586,
-      title: 'Older issue',
+      title: 'Older backlog',
     });
   });
 
-  it('reuses the same issue candidate snapshot when issue_list and issue_selection share a resolution context', () => {
+  it('issue_list can exclude the current selected issue while sharing the same candidate snapshot', () => {
     mockListOpenIssues
       .mockReturnValueOnce([
         {
           number: 586,
-          title: 'Older issue',
+          title: 'Older backlog',
           labels: ['bug'],
           updated_at: '2026-04-20T10:00:00Z',
         },
         {
           number: 587,
-          title: 'Newest issue',
-          labels: ['takt-managed'],
+          title: 'Newest queue',
+          labels: ['planning'],
           updated_at: '2026-04-20T14:00:00Z',
         },
       ])
@@ -467,29 +551,84 @@ describe('DefaultSystemStepServices', () => {
         number: 587,
       },
     });
-    const resolutionContext = { cache: new Map<string, unknown>() };
+    const resolutionContext = {
+      cache: new Map<string, unknown>(),
+      resolvedBindings: new Map<string, unknown>(),
+    };
 
-    const issues = services.resolveSystemInput(
-      { type: 'issue_list', source: 'current_project', as: 'issues' },
-      state,
-      'route_context',
-      resolutionContext,
-    ) as Array<{ number: number }>;
     const selectedIssue = services.resolveSystemInput(
       { type: 'issue_selection', source: 'current_project', as: 'selected_issue' },
       state,
       'route_context',
       resolutionContext,
     ) as { exists: boolean; number: number };
+    resolutionContext.resolvedBindings.set('selected_issue', selectedIssue);
+    const issues = services.resolveSystemInput(
+      {
+        type: 'issue_list',
+        source: 'current_project',
+        as: 'tracked_issues',
+        exclude_selected_from: 'selected_issue',
+      },
+      state,
+      'route_context',
+      resolutionContext,
+    ) as Array<{ number: number } & Record<string, unknown>>;
 
     expect(mockListOpenIssues).toHaveBeenCalledTimes(1);
-    expect(issues.map((issue) => issue.number)).toEqual([587, 586]);
+    expect(issues.map((issue) => issue.number)).toEqual([587]);
+    expect(issues).toEqual([
+      {
+        number: 587,
+        category_codes: ['planning'],
+        related_open_issue_numbers: [],
+        related_open_issue_count: 0,
+        duplicate_candidate: false,
+        max_related_issue_overlap_score: 0,
+        selected_issue_overlap_score: 0,
+        selected_issue_duplicate_candidate: false,
+      },
+    ]);
     expect(selectedIssue).toEqual({
       exists: true,
       number: 586,
-      title: 'Older issue',
+      title: 'Older backlog',
     });
-    expect(issues.some((issue) => issue.number === selectedIssue.number)).toBe(true);
+    expect(issues.some((issue) => issue.number === selectedIssue.number)).toBe(false);
+  });
+
+  it('issue_list with exclude_selected_from fails fast when the referenced issue_selection binding is not resolved yet', () => {
+    mockListOpenIssues.mockReturnValue([
+      {
+        number: 586,
+        title: 'Current issue candidate',
+        labels: ['bug'],
+        updated_at: '2026-04-20T10:00:00Z',
+      },
+    ]);
+
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Inspect issue exclusion contract',
+    });
+
+    expect(() => services.resolveSystemInput(
+      {
+        type: 'issue_list',
+        source: 'current_project',
+        as: 'tracked_issues',
+        exclude_selected_from: 'selected_issue',
+      },
+      createWorkflowState(),
+      'route_context',
+      {
+        cache: new Map<string, unknown>(),
+        resolvedBindings: new Map<string, unknown>(),
+      },
+    )).toThrow(
+      'issue_list.exclude_selected_from requires previously resolved issue_selection binding "selected_issue"',
+    );
   });
 
   it('keeps repo-wide issue_selection behavior for unlabeled issues without a filter', () => {
@@ -1143,7 +1282,10 @@ describe('DefaultSystemStepServices', () => {
         number: 43,
       },
     });
-    const resolutionContext = { cache: new Map<string, unknown>() };
+    const resolutionContext = {
+      cache: new Map<string, unknown>(),
+      resolvedBindings: new Map<string, unknown>(),
+    };
     const prListWhere = {
       head_branch: 'takt/*',
       managed_by_takt: true,
