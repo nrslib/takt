@@ -589,6 +589,36 @@ describe('retryFailedTask', () => {
     expect(mockSelectOptionWithDefault).not.toHaveBeenCalled();
   });
 
+  it('should reject allow_git_commit worktree workflows during retry before selecting a step', async () => {
+    const workflow = attachWorkflowTrustInfo(attachWorkflowSourcePath({
+      ...defaultWorkflowConfig,
+      name: 'selected-workflow',
+      steps: [
+        {
+          name: 'plan',
+          persona: 'planner',
+          instruction: '',
+          allowGitCommit: true,
+        },
+        { name: 'implement', persona: 'coder', instruction: '' },
+        { name: 'review', persona: 'reviewer', instruction: '' },
+      ],
+    }, '/project/.takt/worktrees/my-task/.takt/workflows/selected-workflow.yaml'), {
+      source: 'worktree',
+      sourcePath: '/project/.takt/worktrees/my-task/.takt/workflows/selected-workflow.yaml',
+      isProjectTrustRoot: false,
+      isProjectWorkflowRoot: false,
+    });
+    mockConfirm.mockResolvedValue(false);
+    mockSelectWorkflow.mockResolvedValue('./.takt/workflows/selected-workflow.yaml');
+    mockLoadWorkflowByIdentifier.mockReturnValue(workflow);
+
+    await expect(retryFailedTask(makeFailedTask(), '/project')).rejects.toThrow(
+      'cannot use allow_git_commit in step "plan" outside the project workflows root',
+    );
+    expect(mockSelectOptionWithDefault).not.toHaveBeenCalled();
+  });
+
   it('should show deprecated config warning when selected run order uses legacy provider fields', async () => {
     const task = makeFailedTask();
     mockFindPreviousOrderContent.mockReturnValue([

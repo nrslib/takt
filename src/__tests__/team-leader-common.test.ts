@@ -53,6 +53,7 @@ describe('createPartStep', () => {
       persona: 'coder',
       personaDisplayName: 'coder',
       instruction: 'do work',
+      allowGitCommit: true,
       passPreviousResponse: false,
       teamLeader: {
         persona: 'leader',
@@ -73,5 +74,6 @@ describe('createPartStep', () => {
     expect(partStep.name).toBe('implement.part-1');
     expect(partStep.persona).toBe('coder');
     expect(partStep.personaDisplayName).toBe('coder');
+    expect(partStep.allowGitCommit).toBe(true);
   });
 });

@@ -768,7 +768,7 @@ describe('instruction-builder', () => {
       expect(result).toContain('Do NOT modify project source files');
     });
 
-    it('should include no-commit and no-cd rules', () => {
+    it('should include no-commit, no-push, and no-cd rules', () => {
       const step = createMinimalStep('Do work');
       step.outputContracts = [{ name: '00-plan.md', format: '00-plan', useJudge: true }];
       const ctx = createReportContext();
@@ -776,6 +776,7 @@ describe('instruction-builder', () => {
       const result = buildReportInstruction(step, ctx);
 
       expect(result).toContain('Do NOT run git commit');
+      expect(result).toContain('Do NOT run git push');
       expect(result).toContain('Do NOT use `cd`');
     });
 

@@ -789,6 +789,36 @@ steps:
   );
 
   it.each(worktreeRootCases)(
+    'validates allow_git_commit trust for worktree workflow path targets in $name',
+    async (rootCase) => {
+      writeConfigForCase(rootCase);
+      const { rootDirRelativePath } = rootCase;
+      const rootDir = join(projectDir, rootDirRelativePath);
+      const worktreeDir = join(rootDir, 'feature-branch');
+      const worktreeWorkflowPath = join(worktreeDir, '.takt', 'workflows', 'commit.yaml');
+      mkdirSync(dirname(worktreeWorkflowPath), { recursive: true });
+      writeFileSync(worktreeWorkflowPath, `name: commit
+max_steps: 10
+initial_step: review
+steps:
+  - name: review
+    allow_git_commit: true
+    rules:
+      - condition: done
+        next: COMPLETE
+`, 'utf-8');
+
+      await expect(
+        doctorWorkflowCommand([relative(projectDir, worktreeWorkflowPath)], projectDir),
+      ).rejects.toThrow('Workflow validation failed');
+
+      expect(mockError).toHaveBeenCalledWith(
+        expect.stringContaining('cannot use allow_git_commit in step "review" outside the project workflows root'),
+      );
+    },
+  );
+
+  it.each(worktreeRootCases)(
     'passes derived worktree lookupCwd into workflow_call contract validation for path targets in $name',
     async (rootCase) => {
       writeConfigForCase(rootCase);

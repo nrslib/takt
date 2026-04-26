@@ -7,6 +7,7 @@
 
 import type { WorkflowStep, Language } from '../../models/types.js';
 import type { InstructionContext } from './instruction-context.js';
+import { buildGitRules } from './instruction-context.js';
 import { replaceTemplatePlaceholders } from './escape.js';
 import { isOutputContractItem, renderReportContext, renderReportOutputInstruction } from './InstructionBuilder.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
@@ -46,6 +47,8 @@ export class ReportInstructionBuilder {
     }
 
     const language = this.context.language ?? 'en';
+    const gitRules = buildGitRules(this.step.allowGitCommit, language, 'phase2');
+    const hasGitRules = gitRules.length > 0;
 
     let reportContext: string;
     if (this.context.targetFile) {
@@ -92,6 +95,8 @@ export class ReportInstructionBuilder {
 
     return loadTemplate('perform_phase2_message', language, {
       workingDirectory: this.context.cwd,
+      hasGitRules,
+      gitRules,
       reportContext,
       hasLastResponse: this.context.lastResponse != null && this.context.lastResponse.trim().length > 0,
       lastResponse: this.context.lastResponse ?? '',

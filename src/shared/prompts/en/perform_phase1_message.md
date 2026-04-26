@@ -1,19 +1,20 @@
 <!--
   template: perform_phase1_message
   phase: 1 (main execution)
-  vars: workingDirectory, editRule, workflowName, workflowDescription, hasWorkflowDescription,
-        workflowStructure, iteration, stepIteration, stepName, hasReport, reportInfo,
-        phaseNote, hasTaskSection, userRequest, hasPreviousResponse, previousResponse,
-        hasUserInputs, userInputs, hasRetryNote, retryNote, hasPolicy, policyContent,
-        hasKnowledge, knowledgeContent, hasQualityGates, qualityGatesContent, instructions
+  vars: workingDirectory, hasGitRules, gitRules, editRule, workflowName, workflowDescription,
+        hasWorkflowDescription, workflowStructure, iteration, stepIteration, stepName,
+        hasReport, reportInfo, phaseNote, hasTaskSection, userRequest, hasPreviousResponse,
+        previousResponse, hasUserInputs, userInputs, hasRetryNote, retryNote, hasPolicy,
+        policyContent, hasKnowledge, knowledgeContent, hasQualityGates, qualityGatesContent,
+        instructions
   builder: InstructionBuilder
 -->
 ## Execution Context
 - Working Directory: {{workingDirectory}}
 
 ## Execution Rules
-- **Do NOT run git commit.** Commits are handled automatically by the system after workflow completion.
-- **Do NOT run git add.** Staging is also handled automatically by the system. Untracked files (`??`) are normal.
+{{#if hasGitRules}}{{gitRules}}
+{{/if}}
 - **Do NOT use `cd` in Bash commands.** Your working directory is already set correctly. Run commands directly without changing directories.
 {{#if editRule}}- {{editRule}}
 {{/if}}

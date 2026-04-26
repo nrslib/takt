@@ -212,6 +212,7 @@ export function validateSystemStepFields(
       'persona_name',
       'policy',
       'knowledge',
+      'allow_git_commit',
       'mcp_servers',
       'provider',
       'model',

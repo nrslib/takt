@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 import * as workflowTrustBoundary from '../infra/config/loaders/workflowTrustBoundary.js';
 import { loadWorkflowByIdentifier } from '../infra/config/index.js';
-import { attachWorkflowTrustInfo } from '../infra/config/loaders/workflowSourceMetadata.js';
+import { attachWorkflowSourcePath, attachWorkflowTrustInfo } from '../infra/config/loaders/workflowSourceMetadata.js';
 
 describe('workflowTrustBoundary', () => {
   let projectDir: string;
@@ -35,6 +35,74 @@ describe('workflowTrustBoundary', () => {
       join(projectDir, 'outside.yaml'),
       { isProjectWorkflowRoot: false },
     )).toThrow('Project workflow');
+  });
+
+  it('should treat allow_git_commit steps as privileged when enforcing project trust boundary', () => {
+    expect(() => workflowTrustBoundary.validateProjectWorkflowTrustBoundaryForSteps(
+      [{ name: 'implement', allowGitCommit: true }],
+      join(projectDir, 'outside.yaml'),
+      { isProjectWorkflowRoot: false },
+    )).toThrow('cannot use allow_git_commit');
+  });
+
+  it('rejects allow_git_commit workflow execution outside the project workflows root', () => {
+    const workflow = attachWorkflowTrustInfo(attachWorkflowSourcePath({
+      name: 'external-committer',
+      steps: [
+        {
+          name: 'implement',
+          kind: 'agent',
+          persona: 'coder',
+          personaDisplayName: 'coder',
+          instruction: 'Implement the task',
+          allowGitCommit: true,
+          passPreviousResponse: true,
+        },
+      ],
+      initialStep: 'implement',
+      maxSteps: 3,
+    }, join(externalDir, 'external-committer.yaml')), {
+      source: 'external',
+      sourcePath: join(externalDir, 'external-committer.yaml'),
+      isProjectTrustRoot: false,
+      isProjectWorkflowRoot: false,
+    });
+
+    expect(() => workflowTrustBoundary.validateWorkflowExecutionTrustBoundary(
+      workflow,
+      projectDir,
+    )).toThrow(
+      `Workflow "${join(externalDir, 'external-committer.yaml')}" cannot use allow_git_commit in step "implement" outside the project workflows root`,
+    );
+  });
+
+  it('allows allow_git_commit workflow execution inside the project workflows root', () => {
+    const workflow = attachWorkflowTrustInfo(attachWorkflowSourcePath({
+      name: 'project-commit',
+      steps: [
+        {
+          name: 'implement',
+          kind: 'agent',
+          persona: 'coder',
+          personaDisplayName: 'coder',
+          instruction: 'Implement the task',
+          allowGitCommit: true,
+          passPreviousResponse: true,
+        },
+      ],
+      initialStep: 'implement',
+      maxSteps: 3,
+    }, join(projectDir, '.takt', 'workflows', 'project-commit.yaml')), {
+      source: 'project',
+      sourcePath: join(projectDir, '.takt', 'workflows', 'project-commit.yaml'),
+      isProjectTrustRoot: true,
+      isProjectWorkflowRoot: true,
+    });
+
+    expect(() => workflowTrustBoundary.validateWorkflowExecutionTrustBoundary(
+      workflow,
+      projectDir,
+    )).not.toThrow();
   });
 
   it('rejects privileged child when project parent is outside workflows root', () => {
@@ -170,6 +238,55 @@ steps:
           personaDisplayName: 'reviewer',
           instruction: 'Review the task',
           passPreviousResponse: true,
+        },
+      ],
+      initialStep: 'review',
+      maxSteps: 3,
+    }, {
+      source: 'external',
+      sourcePath: join(externalDir, 'external-child.yaml'),
+      isProjectTrustRoot: false,
+      isProjectWorkflowRoot: false,
+    });
+
+    expect(() => workflowTrustBoundary.validateWorkflowCallTrustBoundary(
+      {
+        source: 'project',
+        sourcePath: join(projectDir, '.takt', 'workflows', 'parent.yaml'),
+        isProjectTrustRoot: true,
+        isProjectWorkflowRoot: true,
+      },
+      childWorkflow,
+      'delegate',
+      projectDir,
+    )).toThrow(
+      'Workflow step "delegate" cannot call privileged workflow "external-child" across trust boundary',
+    );
+  });
+
+  it('rejects child workflow with allow_git_commit in parallel sub-step across trust boundary', () => {
+    const childWorkflow = attachWorkflowTrustInfo({
+      name: 'external-child',
+      subworkflow: { callable: true },
+      steps: [
+        {
+          name: 'review',
+          kind: 'agent',
+          persona: 'reviewer',
+          personaDisplayName: 'reviewer',
+          instruction: 'Review the task',
+          passPreviousResponse: true,
+          parallel: [
+            {
+              name: 'commit-worker',
+              kind: 'agent',
+              persona: 'reviewer',
+              personaDisplayName: 'reviewer',
+              instruction: 'Commit the result',
+              allowGitCommit: true,
+              passPreviousResponse: false,
+            },
+          ],
         },
       ],
       initialStep: 'review',

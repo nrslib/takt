@@ -154,6 +154,41 @@ steps:
     );
   });
 
+  it('should reject allow_git_commit workflows loaded from arbitrary project absolute paths', () => {
+    const filePath = join(tempDir, 'unsafe-commit.yaml');
+    writeFileSync(filePath, `name: unsafe-commit
+initial_step: implement
+max_steps: 2
+
+steps:
+  - name: implement
+    persona: coder
+    allow_git_commit: true
+    instruction: "{task}"
+`);
+
+    expect(() => loadWorkflowByIdentifier(filePath, tempDir)).toThrow(
+      /Project workflow ".*unsafe-commit\.yaml" cannot use allow_git_commit in step "implement"/,
+    );
+  });
+
+  it('should reject allow_git_commit workflows loaded from arbitrary project relative paths', () => {
+    writeFileSync(join(tempDir, 'unsafe-commit.yaml'), `name: unsafe-commit
+initial_step: implement
+max_steps: 2
+
+steps:
+  - name: implement
+    persona: coder
+    allow_git_commit: true
+    instruction: "{task}"
+`);
+
+    expect(() => loadWorkflowByIdentifier('./unsafe-commit.yaml', tempDir)).toThrow(
+      /Project workflow ".*unsafe-commit\.yaml" cannot use allow_git_commit in step "implement"/,
+    );
+  });
+
   it('should reject system-input workflows loaded from arbitrary project paths', () => {
     const filePath = join(tempDir, 'unsafe-system-inputs.yaml');
     writeFileSync(filePath, `name: unsafe-system-inputs
