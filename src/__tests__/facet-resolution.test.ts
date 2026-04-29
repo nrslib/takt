@@ -23,6 +23,7 @@ import {
   type FacetResolutionContext,
   type WorkflowSections,
 } from '../infra/config/loaders/resource-resolver.js';
+import { replaceTemplatePlaceholders } from '../core/workflow/instruction/escape.js';
 import {
   getProjectFacetDir,
   getGlobalFacetDir,
@@ -266,6 +267,186 @@ describe('resolveRefList with layer resolution', () => {
     );
 
     expect(result).toEqual(['Map content for coding']);
+  });
+});
+
+describe('facet inheritance', () => {
+  let tempDir: string;
+  let projectDir: string;
+  let workflowDir: string;
+  let globalConfigDir: string;
+  let previousTaktConfigDir: string | undefined;
+  let context: FacetResolutionContext;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'takt-facet-extends-test-'));
+    projectDir = join(tempDir, 'project');
+    workflowDir = join(tempDir, 'workflows');
+    globalConfigDir = join(tempDir, 'global');
+    mkdirSync(projectDir, { recursive: true });
+    mkdirSync(workflowDir, { recursive: true });
+    previousTaktConfigDir = process.env.TAKT_CONFIG_DIR;
+    process.env.TAKT_CONFIG_DIR = globalConfigDir;
+    context = { projectDir, lang: 'ja', workflowDir };
+  });
+
+  afterEach(() => {
+    if (previousTaktConfigDir === undefined) {
+      delete process.env.TAKT_CONFIG_DIR;
+    } else {
+      process.env.TAKT_CONFIG_DIR = previousTaktConfigDir;
+    }
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  function writeProjectFacet(type: FacetType, name: string, content: string): void {
+    const dir = getProjectFacetDir(projectDir, type);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `${name}.md`), content);
+  }
+
+  function writeGlobalFacet(type: FacetType, name: string, content: string): void {
+    const dir = getGlobalFacetDir(type);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `${name}.md`), content);
+  }
+
+  it('should append local content after an inherited instruction parent', () => {
+    writeProjectFacet('instructions', 'base', 'Base instruction');
+    writeProjectFacet('instructions', 'custom', '{extends:base}\n\nCustom instruction');
+
+    const content = resolveRefToContent('custom', undefined, workflowDir, 'instructions', context);
+
+    expect(content).toBe('Base instruction\n\nCustom instruction');
+  });
+
+  it('should preserve local content around an inherited instruction parent', () => {
+    writeProjectFacet('instructions', 'base', 'Base instruction');
+    writeProjectFacet('instructions', 'custom', 'Before\n{extends: base}\nAfter');
+
+    const content = resolveRefToContent('custom', undefined, workflowDir, 'instructions', context);
+
+    expect(content).toBe('Before\nBase instruction\nAfter');
+  });
+
+  it('should let same-name project overrides inherit from lower layers', () => {
+    writeGlobalFacet('instructions', 'fix', 'Global fix instruction');
+    writeProjectFacet('instructions', 'fix', '{extends:fix}\nProject fix addition');
+
+    const content = resolveRefToContent('fix', undefined, workflowDir, 'instructions', context);
+
+    expect(content).toBe('Global fix instruction\nProject fix addition');
+  });
+
+  it('should let differently named project facets inherit project siblings', () => {
+    writeProjectFacet('instructions', 'fix', 'Project fix instruction');
+    writeProjectFacet('instructions', 'my-fix', '{extends:fix}\nMy fix addition');
+
+    const content = resolveRefToContent('my-fix', undefined, workflowDir, 'instructions', context);
+
+    expect(content).toBe('Project fix instruction\nMy fix addition');
+  });
+
+  it('should resolve parents only within the same facet kind', () => {
+    writeProjectFacet('instructions', 'fix', 'Instruction fix');
+    writeProjectFacet('policies', 'custom', '{extends:fix}\nPolicy addition');
+
+    expect(() => resolveRefToContent('custom', undefined, workflowDir, 'policies', context)).toThrow(
+      /parent "fix" not found/,
+    );
+  });
+
+  it('should expand inheritance for policies, knowledge, and output contracts during workflow normalization', () => {
+    writeProjectFacet('policies', 'base-policy', 'Base policy');
+    writeProjectFacet('policies', 'custom-policy', '{extends:base-policy}\nCustom policy');
+    writeProjectFacet('knowledge', 'base-knowledge', 'Base knowledge');
+    writeProjectFacet('knowledge', 'custom-knowledge', '{extends:base-knowledge}\nCustom knowledge');
+    writeProjectFacet('output-contracts', 'base-report', 'Base report');
+    writeProjectFacet('output-contracts', 'custom-report', '{extends:base-report}\nCustom report');
+
+    const config = normalizeWorkflowConfig(
+      {
+        name: 'facet-extends-workflow',
+        steps: [
+          {
+            name: 'review',
+            persona: 'coder',
+            policy: 'custom-policy',
+            knowledge: 'custom-knowledge',
+            instruction: '{task}',
+            output_contracts: {
+              report: [{ name: 'review.md', format: 'custom-report' }],
+            },
+          },
+        ],
+      },
+      workflowDir,
+      context,
+    );
+
+    expect(config.steps[0]!.policyContents).toEqual(['Base policy\nCustom policy']);
+    expect(config.steps[0]!.knowledgeContents).toEqual(['Base knowledge\nCustom knowledge']);
+    expect(config.steps[0]!.outputContracts?.[0]?.format).toBe('Base report\nCustom report');
+  });
+
+  it('should keep runtime placeholders interpolated after inheritance expansion', () => {
+    writeProjectFacet('instructions', 'base', 'Parent task: {task}');
+    writeProjectFacet('instructions', 'custom', '{extends:base}\nChild instruction');
+
+    const config = normalizeWorkflowConfig(
+      {
+        name: 'placeholder-workflow',
+        steps: [
+          {
+            name: 'step1',
+            persona: 'coder',
+            instruction: 'custom',
+          },
+        ],
+      },
+      workflowDir,
+      context,
+    );
+    const step = config.steps[0]!;
+    const rendered = replaceTemplatePlaceholders(step.instruction, step, {
+      task: 'Runtime task',
+      iteration: 1,
+      maxSteps: 3,
+      stepIteration: 1,
+      cwd: projectDir,
+      projectCwd: projectDir,
+      userInputs: [],
+    });
+
+    expect(step.instruction).toBe('Parent task: {task}\nChild instruction');
+    expect(rendered).toContain('Parent task: Runtime task');
+  });
+
+  it('should reject missing parents, malformed directives, unsupported references, inline extends, and cycles', () => {
+    writeProjectFacet('instructions', 'missing-parent', '{extends:missing}\nChild');
+    expect(() => resolveRefToContent('missing-parent', undefined, workflowDir, 'instructions', context)).toThrow(
+      /parent "missing" not found/,
+    );
+
+    writeProjectFacet('instructions', 'multiple', '{extends:base}\n{extends:other}');
+    expect(() => resolveRefToContent('multiple', undefined, workflowDir, 'instructions', context)).toThrow(
+      /multiple extends directives/,
+    );
+
+    writeProjectFacet('instructions', 'path-parent', '{extends:../fix.md}');
+    expect(() => resolveRefToContent('path-parent', undefined, workflowDir, 'instructions', context)).toThrow(
+      /only bare facet names/,
+    );
+
+    expect(() => resolveRefToContent('{extends:fix}', undefined, workflowDir, 'instructions', context)).toThrow(
+      /requires a source file path/,
+    );
+
+    writeProjectFacet('instructions', 'a', '{extends:b}');
+    writeProjectFacet('instructions', 'b', '{extends:a}');
+    expect(() => resolveRefToContent('a', undefined, workflowDir, 'instructions', context)).toThrow(
+      /inheritance cycle/,
+    );
   });
 });
 

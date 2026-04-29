@@ -8,7 +8,7 @@ import type {
   TeamLeaderConfig,
   WorkflowStepRawSchema,
 } from '../../../core/models/index.js';
-import type { FacetResolutionContext, WorkflowSections } from './resource-resolver.js';
+import type { FacetResolutionContext, ResolvedSectionMap, WorkflowSections } from './resource-resolver.js';
 import { resolvePersona, resolveRefToContent } from './resource-resolver.js';
 
 type RawStep = z.output<typeof WorkflowStepRawSchema>;
@@ -16,7 +16,7 @@ type RawStep = z.output<typeof WorkflowStepRawSchema>;
 export function normalizeOutputContracts(
   raw: { report?: Array<{ name: string; format: string | { $param: string }; use_judge?: boolean; order?: string }> } | undefined,
   workflowDir: string,
-  resolvedReportFormats: Record<string, string> | undefined,
+  resolvedReportFormats: Record<string, string> | ResolvedSectionMap | undefined,
   context?: FacetResolutionContext,
 ): OutputContractEntry[] | undefined {
   if (raw?.report == null || raw.report.length === 0) {

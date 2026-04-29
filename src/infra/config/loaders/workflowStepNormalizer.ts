@@ -91,7 +91,7 @@ export function normalizeStepFromRaw(
     ? undefined
     : resolveRefList(
       (step as Record<string, unknown>).policy as string | string[] | undefined,
-      sections.resolvedPolicies,
+      sections.resolvedPoliciesWithSource ?? sections.resolvedPolicies,
       workflowDir,
       'policies',
       context,
@@ -100,7 +100,7 @@ export function normalizeStepFromRaw(
     ? undefined
     : resolveRefList(
       (step as Record<string, unknown>).knowledge as string | string[] | undefined,
-      sections.resolvedKnowledge,
+      sections.resolvedKnowledgeWithSource ?? sections.resolvedKnowledge,
       workflowDir,
       'knowledge',
       context,
@@ -112,7 +112,13 @@ export function normalizeStepFromRaw(
   const instruction = isSystemStep || isWorkflowCallStep
     ? undefined
     : step.instruction
-    ? resolveRefToContent(step.instruction as string, sections.resolvedInstructions, workflowDir, 'instructions', context)
+    ? resolveRefToContent(
+        step.instruction as string,
+        sections.resolvedInstructionsWithSource ?? sections.resolvedInstructions,
+        workflowDir,
+        'instructions',
+        context,
+      )
     : undefined;
 
   validateWorkflowArpeggio(step.name, step.arpeggio, workflowArpeggioPolicy);
@@ -176,7 +182,12 @@ export function normalizeStepFromRaw(
       projectDir: context?.projectDir ?? workflowDir,
     }),
     rules,
-    outputContracts: normalizeOutputContracts(step.output_contracts, workflowDir, sections.resolvedReportFormats, context),
+    outputContracts: normalizeOutputContracts(
+      step.output_contracts,
+      workflowDir,
+      sections.resolvedReportFormatsWithSource ?? sections.resolvedReportFormats,
+      context,
+    ),
     qualityGates: applyQualityGateOverrides(
       step.name,
       step.quality_gates,
