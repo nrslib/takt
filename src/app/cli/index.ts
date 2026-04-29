@@ -11,6 +11,7 @@ import { getErrorMessage } from '../../shared/utils/error.js';
 import { error as errorLog } from '../../shared/ui/index.js';
 import { resolveRemovedRootCommand, resolveSlashFallbackTask } from './helpers.js';
 import { installImmediateSigintExit } from './immediateSigintExit.js';
+import { installOpencodeExitCleanup } from './opencodeExitCleanup.js';
 
 checkForUpdates();
 
@@ -21,6 +22,7 @@ import { executeDefaultAction } from './routing.js';
 
 (async () => {
   const args = process.argv.slice(2);
+  installOpencodeExitCleanup();
   installImmediateSigintExit(args[0]);
   const { operands } = program.parseOptions(args);
   const removedRootCommand = resolveRemovedRootCommand(operands);
