@@ -38,6 +38,10 @@ steps:
       - type: issue_selection
         source: current_project
         as: selected_issue
+      - type: issue_list
+        source: current_project
+        as: tracked_issues
+        exclude_selected_from: selected_issue
     rules:
       - when: context.route_context.selected_pr.exists == true
         next: plan_from_existing_pr
@@ -63,22 +67,37 @@ steps:
       - task_exists: {context:route_context.task.exists}
       - branch_exists: {context:route_context.branch.exists}
 
-      Do not implement anything. Output only the next task instruction in task_markdown.
-      Output the next action in action.
-      If needed, output the issue creation plan in issue.
       Current execution context:
       - task_exists: {context:route_context.task.exists}
       - branch_exists: {context:route_context.branch.exists}
 
+      Open managed PR snapshot for overlap checks:
+      {context:route_context.prs}
+
+      Other open issue metadata for overlap checks:
+      {context:route_context.tracked_issues}
+      - other_open_issue_count: {context:route_context.tracked_issues.length}
+
+      Prioritize user value. Prefer bug fix > missing capability completion > UX/quality improvement > cosmetic.
+      Plan exactly one task.
+      Only propose a task when it has a concrete deliverable and explicit completion criteria.
+      Avoid cosmetic-only changes unless they clearly unlock meaningful user value.
+      Treat the current issue itself as in-scope, not as a duplicate.
+      Avoid tasks that materially duplicate or overlap with an open PR or the other open issues listed above.
+
+      Do not implement anything. Output only the next task instruction in task_markdown.
+      Output the next action in action.
+      If needed, output the issue creation plan in issue.
+
       Allowed action values:
       - enqueue_new_task
-      - noop
+      - wait_before_next_scan
     structured_output:
       schema_ref: followup-task
     rules:
       - when: structured.plan_from_issue.action == "enqueue_new_task"
         next: enqueue_from_issue
-      - when: structured.plan_from_issue.action == "noop"
+      - when: structured.plan_from_issue.action == "wait_before_next_scan"
         next: wait_before_next_scan
       - when: "true"
         next: ABORT
@@ -113,19 +132,33 @@ steps:
       Inspect the current codebase,
       and plan exactly one next improvement task.
 
+      Open managed PR snapshot for overlap checks:
+      {context:route_context.prs}
+
+      Open issue metadata already tracked:
+      {context:route_context.tracked_issues}
+      - open_issue_count: {context:route_context.tracked_issues.length}
+
+      Prioritize user value. Prefer bug fix > missing capability completion > UX/quality improvement > cosmetic.
+      Plan exactly one task.
+      Only propose a task when it has a concrete deliverable and explicit completion criteria.
+      Avoid cosmetic-only changes unless they clearly unlock meaningful user value.
+      Avoid tasks that materially duplicate or overlap with an open PR or tracked open issue.
+      If you cannot identify a clearly distinct, high-value task, choose wait_before_next_scan.
+
       Do not implement anything. Output only the next task instruction in task_markdown.
       Output the next action in action.
       If needed, output the issue creation plan in issue.
 
       Allowed action values:
       - enqueue_new_task
-      - noop
+      - wait_before_next_scan
     structured_output:
       schema_ref: followup-task
     rules:
       - when: structured.plan_fresh_improvement.action == "enqueue_new_task"
         next: enqueue_fresh
-      - when: structured.plan_fresh_improvement.action == "noop"
+      - when: structured.plan_fresh_improvement.action == "wait_before_next_scan"
         next: wait_before_next_scan
       - when: "true"
         next: ABORT

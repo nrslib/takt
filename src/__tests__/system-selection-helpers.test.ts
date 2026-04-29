@@ -3,6 +3,7 @@ import type { WorkflowState } from '../core/models/types.js';
 import {
   getCachedCandidateSnapshot,
   readPreviousSelectedNumber,
+  readResolvedBindingNumber,
   selectNextCandidate,
 } from '../infra/workflow/system/system-selection-helpers.js';
 
@@ -25,7 +26,10 @@ function createWorkflowState(): WorkflowState {
 describe('system-selection-helpers', () => {
   it('candidate snapshot を resolution context 内で一度だけ評価する', () => {
     const loadCandidates = vi.fn(() => [{ number: 587 }, { number: 586 }]);
-    const resolutionContext = { cache: new Map<string, unknown>() };
+    const resolutionContext = {
+      cache: new Map<string, unknown>(),
+      resolvedBindings: new Map<string, unknown>(),
+    };
 
     const first = getCachedCandidateSnapshot('issue_candidates:test', loadCandidates, resolutionContext);
     const second = getCachedCandidateSnapshot('issue_candidates:test', loadCandidates, resolutionContext);
@@ -48,5 +52,16 @@ describe('system-selection-helpers', () => {
     });
 
     expect(readPreviousSelectedNumber(state, 'route_context', 'selected_issue')).toBe(586);
+  });
+
+  it('resolution context から同一 step の解決済み番号を読む', () => {
+    const resolutionContext = {
+      cache: new Map<string, unknown>(),
+      resolvedBindings: new Map<string, unknown>([
+        ['selected_issue', { exists: true, number: 586 }],
+      ]),
+    };
+
+    expect(readResolvedBindingNumber(resolutionContext, 'selected_issue')).toBe(586);
   });
 });

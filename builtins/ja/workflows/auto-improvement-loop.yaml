@@ -38,6 +38,10 @@ steps:
       - type: issue_selection
         source: current_project
         as: selected_issue
+      - type: issue_list
+        source: current_project
+        as: tracked_issues
+        exclude_selected_from: selected_issue
     rules:
       - when: context.route_context.selected_pr.exists == true
         next: plan_from_existing_pr
@@ -63,22 +67,37 @@ steps:
       - task_exists: {context:route_context.task.exists}
       - branch_exists: {context:route_context.branch.exists}
 
-      実装は行わず、次タスクの指示書だけを task_markdown に出力してください。
-      action には次アクションを出力してください。
-      必要なら issue に Issue 作成方針を出力してください。
       現在の実行コンテキスト:
       - task_exists: {context:route_context.task.exists}
       - branch_exists: {context:route_context.branch.exists}
 
+      重複確認用の open PR 要約:
+      {context:route_context.prs}
+
+      重複確認用の他 open Issue メタデータ:
+      {context:route_context.tracked_issues}
+      - other_open_issue_count: {context:route_context.tracked_issues.length}
+
+      ユーザー価値を優先し、優先順位は バグ修正 > 機能欠落の補完 > UX / 品質改善 > cosmetic としてください。
+      task は 1 件だけ計画してください。
+      具体的な成果物と明示的な完了条件がある task だけを提案してください。
+      cosmetic-only な変更は、明確なユーザー価値がない限り避けてください。
+      現在の Issue 自身は重複対象に含めず、比較対象は上記の他 open Issue のみとしてください。
+      open PR / 他 open Issue と実質的に重複する task は避けてください。
+
+      実装は行わず、次タスクの指示書だけを task_markdown に出力してください。
+      action には次アクションを出力してください。
+      必要なら issue に Issue 作成方針を出力してください。
+
       action の候補:
       - enqueue_new_task
-      - noop
+      - wait_before_next_scan
     structured_output:
       schema_ref: followup-task
     rules:
       - when: structured.plan_from_issue.action == "enqueue_new_task"
         next: enqueue_from_issue
-      - when: structured.plan_from_issue.action == "noop"
+      - when: structured.plan_from_issue.action == "wait_before_next_scan"
         next: wait_before_next_scan
       - when: "true"
         next: ABORT
@@ -113,19 +132,33 @@ steps:
       現在のコードベースを確認し、
       次に実行すべき改善 task を 1 件だけ計画してください。
 
+      重複確認用の open PR 要約:
+      {context:route_context.prs}
+
+      重複確認用の open Issue メタデータ:
+      {context:route_context.tracked_issues}
+      - open_issue_count: {context:route_context.tracked_issues.length}
+
+      ユーザー価値を優先し、優先順位は バグ修正 > 機能欠落の補完 > UX / 品質改善 > cosmetic としてください。
+      task は 1 件だけ計画してください。
+      具体的な成果物と明示的な完了条件がある task だけを提案してください。
+      cosmetic-only な変更は、明確なユーザー価値がない限り避けてください。
+      open PR / 既存の open Issue と実質的に重複する task は避けてください。
+      明確に独立した高価値 task を特定できない場合は wait_before_next_scan を選んでください。
+
       実装は行わず、次タスクの指示書だけを task_markdown に出力してください。
       action には次アクションを出力してください。
       必要なら issue に Issue 作成方針を出力してください。
 
       action の候補:
       - enqueue_new_task
-      - noop
+      - wait_before_next_scan
     structured_output:
       schema_ref: followup-task
     rules:
       - when: structured.plan_fresh_improvement.action == "enqueue_new_task"
         next: enqueue_fresh
-      - when: structured.plan_fresh_improvement.action == "noop"
+      - when: structured.plan_fresh_improvement.action == "wait_before_next_scan"
         next: wait_before_next_scan
       - when: "true"
         next: ABORT

@@ -114,15 +114,18 @@ export class SystemStepExecutor {
       const services = this.requireServices(this.deps.getCwd());
       const resolutionContext: SystemStepInputResolutionContext = {
         cache: new Map(),
+        resolvedBindings: new Map(),
       };
       for (const input of step.systemInputs ?? []) {
-        resolvedContext[input.as] = this.resolveSystemInput(
+        const resolvedInput = this.resolveSystemInput(
           services,
           input,
           state,
           step.name,
           resolutionContext,
         );
+        resolvedContext[input.as] = resolvedInput;
+        resolutionContext.resolvedBindings.set(input.as, resolvedInput);
       }
     }
     state.systemContexts.set(step.name, resolvedContext);

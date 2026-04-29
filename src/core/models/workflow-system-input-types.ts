@@ -97,6 +97,7 @@ export type WorkflowSystemInput =
   | (WorkflowSystemBinding & {
     type: 'issue_list';
     source: 'current_project';
+    exclude_selected_from?: string;
   })
   | (WorkflowSystemBinding & {
     type: 'pr_selection';

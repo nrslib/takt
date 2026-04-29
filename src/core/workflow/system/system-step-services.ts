@@ -20,6 +20,7 @@ export interface SystemStepServicesOptions {
 
 export interface SystemStepInputResolutionContext {
   readonly cache: Map<string, unknown>;
+  readonly resolvedBindings: Map<string, unknown>;
 }
 
 export interface SystemStepServices {
