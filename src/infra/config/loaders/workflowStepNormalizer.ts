@@ -57,6 +57,7 @@ export function normalizeStepFromRaw(
   inheritedProvider?: WorkflowStep['provider'],
   inheritedModel?: WorkflowStep['model'],
   inheritedProviderOptions?: WorkflowStep['providerOptions'],
+  inheritedAllowGitCommit?: boolean,
   context?: FacetResolutionContext,
   projectOverrides?: WorkflowOverrides,
   globalOverrides?: WorkflowOverrides,
@@ -170,6 +171,7 @@ export function normalizeStepFromRaw(
     requiredPermissionMode: step.required_permission_mode,
     providerOptions: mergeProviderOptions(inheritedProviderOptions, normalizedProvider.providerOptions),
     edit: step.edit,
+    allowGitCommit: step.allow_git_commit ?? inheritedAllowGitCommit ?? false,
     instruction: instruction || '{task}',
     delayBeforeMs: step.delay_before_ms,
     structuredOutput: resolveStructuredOutput(step, workflowSchemas, {
@@ -200,6 +202,7 @@ export function normalizeStepFromRaw(
         normalizedStep.provider,
         normalizedStep.model,
         normalizedStep.providerOptions,
+        normalizedStep.allowGitCommit,
         context,
         projectOverrides,
         globalOverrides,

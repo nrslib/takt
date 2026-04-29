@@ -24,6 +24,7 @@ import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { StepExecutor } from './StepExecutor.js';
 import type { PhaseName, PhasePromptParts } from '../types.js';
 import type { StructuredCaller } from '../../../agents/structured-caller.js';
+import { buildGitRules } from '../instruction/instruction-context.js';
 
 const log = createLogger('arpeggio-runner');
 
@@ -89,12 +90,18 @@ class Semaphore {
 async function executeBatchWithRetry(
   batch: DataBatch,
   template: string,
+  allowGitCommit: boolean | undefined,
   persona: string | undefined,
   agentOptions: RunAgentOptions,
   maxRetries: number,
   retryDelayMs: number,
 ): Promise<BatchResult> {
-  const prompt = expandTemplate(template, batch);
+  const prompt = buildArpeggioPrompt(
+    template,
+    batch,
+    allowGitCommit,
+    agentOptions.language ?? 'en',
+  );
   let lastError: string | undefined;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -149,6 +156,20 @@ async function executeBatchWithRetry(
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function buildArpeggioPrompt(
+  template: string,
+  batch: DataBatch,
+  allowGitCommit: boolean | undefined,
+  language: NonNullable<RunAgentOptions['language']>,
+): string {
+  const prompt = expandTemplate(template, batch);
+  const gitRules = buildGitRules(allowGitCommit, language, 'phase1');
+  if (!gitRules) {
+    return prompt;
+  }
+  return `${gitRules}\n\n${prompt}`;
 }
 
 export class ArpeggioRunner {
@@ -286,6 +307,7 @@ export class ArpeggioRunner {
         const result = await executeBatchWithRetry(
           batch,
           template,
+          step.allowGitCommit,
           step.persona,
           batchAgentOptions,
           config.maxRetries,

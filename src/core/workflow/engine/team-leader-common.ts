@@ -45,6 +45,7 @@ export function createPartStep(step: WorkflowStep, part: PartDefinition): Workfl
     model: step.model,
     requiredPermissionMode: step.teamLeader.partPermissionMode ?? step.requiredPermissionMode,
     edit: step.teamLeader.partEdit ?? step.edit,
+    allowGitCommit: step.allowGitCommit,
     instruction: part.instruction,
     passPreviousResponse: false,
   };

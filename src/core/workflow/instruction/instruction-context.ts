@@ -87,3 +87,35 @@ export function buildEditRule(edit: boolean | undefined, language: Language): st
   }
   return '';
 }
+
+type GitRulePhase = 'phase1' | 'phase2';
+
+export function buildGitRules(
+  allowGitCommit: boolean | undefined,
+  language: Language,
+  phase: GitRulePhase,
+): string {
+  if (allowGitCommit === true) {
+    return '';
+  }
+
+  if (language === 'ja') {
+    const rules = [
+      '- **git commit を実行しないでください。** コミットはワークフロー完了後にシステムが自動で行います。',
+      '- **git push を実行しないでください。** プッシュもシステムが自動で行います。',
+    ];
+    if (phase === 'phase1') {
+      rules.push('- **git add を実行しないでください。** ステージングもシステムが自動で行います。新規ファイルが未追跡（`??`）でも正常です。');
+    }
+    return rules.join('\n');
+  }
+
+  const rules = [
+    '- **Do NOT run git commit.** Commits are handled automatically by the system after workflow completion.',
+    '- **Do NOT run git push.** Pushes are also handled automatically by the system.',
+  ];
+  if (phase === 'phase1') {
+    rules.push('- **Do NOT run git add.** Staging is also handled automatically by the system. Untracked files (`??`) are normal.');
+  }
+  return rules.join('\n');
+}

@@ -767,4 +767,108 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       allowedTools: ['Read', 'Edit'],
     }));
   });
+
+  it.each([
+    { allowGitCommit: false, expectsGitRules: true },
+    { allowGitCommit: true, expectsGitRules: false },
+  ])('team leader part prompt should respect allowGitCommit=$allowGitCommit', async ({ allowGitCommit, expectsGitRules }) => {
+    mockExecuteAgent.mockResolvedValue({
+      persona: 'coder',
+      status: 'done',
+      content: 'API done',
+      timestamp: new Date('2026-04-01T00:00:00.000Z'),
+    });
+    const structuredCaller = {
+      decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxParts, options) => {
+        options.onPromptResolved?.({
+          systemPrompt: 'team-leader-system',
+          userInstruction: 'leader instruction',
+        });
+        return [
+          { id: 'part-1', title: 'API', instruction: 'Implement API' },
+        ];
+      }),
+      requestMoreParts: vi.fn().mockResolvedValue({
+        done: true,
+        reasoning: 'enough',
+        parts: [],
+      }),
+    };
+
+    const runner = new TeamLeaderRunner({
+      optionsBuilder: {
+        buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project', language: 'en' }),
+        buildBaseOptions: vi.fn().mockReturnValue({}),
+        buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+        resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode', model: 'model' }),
+      },
+      stepExecutor: {
+        buildInstruction: vi.fn().mockReturnValue('leader instruction'),
+        applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
+        persistPreviousResponseSnapshot: vi.fn(),
+        emitStepReports: vi.fn(),
+      },
+      engineOptions: {
+        projectCwd: '/tmp/project',
+        structuredCaller,
+      },
+      getCwd: () => '/tmp/project',
+      getInteractive: () => false,
+    } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+      engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller };
+    });
+
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      instruction: 'Task: {task}',
+      allowGitCommit,
+      passPreviousResponse: true,
+      teamLeader: {
+        persona: 'team-leader',
+        maxParts: 2,
+        refillThreshold: 0,
+        timeoutMs: 1000,
+        partPersona: 'coder',
+      },
+      rules: [{ condition: 'done', next: 'COMPLETE' }],
+    };
+
+    const state: WorkflowState = {
+      workflowName: 'workflow',
+      currentStep: 'implement',
+      iteration: 1,
+      stepOutputs: new Map(),
+      structuredOutputs: new Map(),
+      systemContexts: new Map(),
+      effectResults: new Map(),
+      lastOutput: undefined,
+      previousResponseSourcePath: undefined,
+      userInputs: [],
+      personaSessions: new Map(),
+      stepIterations: new Map(),
+      status: 'running',
+    };
+
+    await runner.runTeamLeaderStep(
+      step,
+      state,
+      'implement feature',
+      5,
+      vi.fn(),
+    );
+
+    const [, executedInstruction] = mockExecuteAgent.mock.calls[0] ?? [];
+    expect(executedInstruction).toContain('Implement API');
+    if (expectsGitRules) {
+      expect(executedInstruction).toContain('Do NOT run git commit');
+      expect(executedInstruction).toContain('Do NOT run git push');
+      expect(executedInstruction).toContain('Do NOT run git add');
+    } else {
+      expect(executedInstruction).not.toContain('Do NOT run git commit');
+      expect(executedInstruction).not.toContain('Do NOT run git push');
+      expect(executedInstruction).not.toContain('Do NOT run git add');
+    }
+  });
 });

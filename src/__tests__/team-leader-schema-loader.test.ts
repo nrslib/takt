@@ -77,6 +77,21 @@ describe('team_leader schema', () => {
     const result = WorkflowStepRawSchema.safeParse(raw);
     expect(result.success).toBe(false);
   });
+
+  it('team_leader では allow_git_commit を受け付ける', () => {
+    const raw = {
+      name: 'implement',
+      allow_git_commit: true,
+      team_leader: {
+        max_parts: 2,
+      },
+      instruction: 'decompose',
+    };
+
+    const result = WorkflowStepRawSchema.safeParse(raw);
+
+    expect(result.success).toBe(true);
+  });
 });
 
 describe('normalizeWorkflowConfig team_leader', () => {
@@ -87,6 +102,7 @@ describe('normalizeWorkflowConfig team_leader', () => {
       steps: [
         {
           name: 'implement',
+          allow_git_commit: true,
           team_leader: {
             persona: 'team-leader',
             max_parts: 2,
@@ -104,6 +120,7 @@ describe('normalizeWorkflowConfig team_leader', () => {
     const config = normalizeWorkflowConfig(raw, workflowDir);
     const step = config.steps[0];
     expect(step).toBeDefined();
+    expect(step!.allowGitCommit).toBe(true);
     expect(step!.teamLeader).toEqual({
       persona: 'team-leader',
       personaPath: undefined,

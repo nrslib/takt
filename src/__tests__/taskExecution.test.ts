@@ -378,6 +378,39 @@ describe('executeAndCompleteTask', () => {
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
+  it('should reject allow_git_commit worktree workflows before execution', async () => {
+    const workflow = attachWorkflowTrustInfo(attachWorkflowSourcePath({
+      name: 'worktree-commit',
+      steps: [
+        {
+          name: 'review',
+          kind: 'agent',
+          persona: 'reviewer',
+          personaDisplayName: 'reviewer',
+          instruction: 'Review',
+          allowGitCommit: true,
+          passPreviousResponse: true,
+        },
+      ],
+      initialStep: 'review',
+      maxSteps: 3,
+    }, '/project/.takt/worktrees/task-a/.takt/workflows/worktree-commit.yaml'), {
+      source: 'worktree',
+      sourcePath: '/project/.takt/worktrees/task-a/.takt/workflows/worktree-commit.yaml',
+      isProjectTrustRoot: false,
+      isProjectWorkflowRoot: false,
+    });
+    mockLoadWorkflowByIdentifier.mockReturnValue(workflow);
+
+    await expect(executeTask({
+      task: 'Task: worktree trust boundary',
+      cwd: '/project/.takt/worktrees/task-a',
+      projectCwd: '/project',
+      workflowIdentifier: './.takt/workflows/worktree-commit.yaml',
+    })).rejects.toThrow('cannot use allow_git_commit in step "review" outside the project workflows root');
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
+
   it('should use workflow terminology when named workflow is missing', async () => {
     mockLoadWorkflowByIdentifier.mockReturnValueOnce(undefined);
 

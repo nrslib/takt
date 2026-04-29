@@ -1,19 +1,20 @@
 <!--
   template: perform_phase1_message
   phase: 1 (main execution)
-  vars: workingDirectory, editRule, workflowName, workflowDescription, hasWorkflowDescription,
-        workflowStructure, iteration, stepIteration, stepName, hasReport, reportInfo,
-        phaseNote, hasTaskSection, userRequest, hasPreviousResponse, previousResponse,
-        hasUserInputs, userInputs, hasRetryNote, retryNote, hasPolicy, policyContent,
-        hasKnowledge, knowledgeContent, hasQualityGates, qualityGatesContent, instructions
+  vars: workingDirectory, hasGitRules, gitRules, editRule, workflowName, workflowDescription,
+        hasWorkflowDescription, workflowStructure, iteration, stepIteration, stepName,
+        hasReport, reportInfo, phaseNote, hasTaskSection, userRequest, hasPreviousResponse,
+        previousResponse, hasUserInputs, userInputs, hasRetryNote, retryNote, hasPolicy,
+        policyContent, hasKnowledge, knowledgeContent, hasQualityGates, qualityGatesContent,
+        instructions
   builder: InstructionBuilder
 -->
 ## 実行コンテキスト
 - 作業ディレクトリ: {{workingDirectory}}
 
 ## 実行ルール
-- **git commit を実行しないでください。** コミットはワークフロー完了後にシステムが自動で行います。
-- **git add を実行しないでください。** ステージングもシステムが自動で行います。新規ファイルが未追跡（`??`）でも正常です。
+{{#if hasGitRules}}{{gitRules}}
+{{/if}}
 - **Bashコマンドで `cd` を使用しないでください。** 作業ディレクトリは既に正しく設定されています。ディレクトリを変更せずにコマンドを実行してください。
 {{#if editRule}}- {{editRule}}
 {{/if}}

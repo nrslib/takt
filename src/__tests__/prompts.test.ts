@@ -344,7 +344,7 @@ describe('template content integrity', () => {
     const en = loadTemplate('perform_phase1_message', 'en');
     expect(en).toContain('## Execution Context');
     expect(en).toContain('## Execution Rules');
-    expect(en).toContain('Do NOT run git commit');
+    expect(en).toContain('{{gitRules}}');
     expect(en).toContain('Do NOT use `cd`');
     expect(en).toContain('## Workflow Context');
     expect(findDeprecatedTerms(en)).toEqual([]);
@@ -353,7 +353,7 @@ describe('template content integrity', () => {
 
   it('perform_phase1_message uses workflow/step terminology in both languages', () => {
     const en = loadTemplate('perform_phase1_message', 'en');
-    expect(en).toContain('after workflow completion');
+    expect(en).toContain('{{#if hasGitRules}}{{gitRules}}');
     expect(en).toContain('- Workflow: {{workflowName}}');
     expect(en).toContain('- Step Iteration: {{stepIteration}}');
     expect(en).toContain('- Step: {{stepName}}');
@@ -361,7 +361,7 @@ describe('template content integrity', () => {
     expect(findDeprecatedTerms(en)).toEqual([]);
 
     const ja = loadTemplate('perform_phase1_message', 'ja');
-    expect(ja).toContain('ワークフロー完了後');
+    expect(ja).toContain('{{#if hasGitRules}}{{gitRules}}');
     expect(ja).toContain('- ワークフロー: {{workflowName}}');
     expect(ja).toContain('- Step Iteration: {{stepIteration}}');
     expect(ja).toContain('- Step: {{stepName}}');
@@ -378,14 +378,14 @@ describe('template content integrity', () => {
 
   it('perform_phase2_message contains report-specific rules', () => {
     const en = loadTemplate('perform_phase2_message', 'en');
-    expect(en).toContain('after workflow completion');
+    expect(en).toContain('{{#if hasGitRules}}{{gitRules}}');
     expect(en).toContain('Do NOT modify project source files');
     expect(en).toContain('## Workflow Context');
     expect(findDeprecatedTerms(en)).toEqual([]);
     expect(en).toContain('## Instructions');
 
     const ja = loadTemplate('perform_phase2_message', 'ja');
-    expect(ja).toContain('ワークフロー完了後');
+    expect(ja).toContain('{{#if hasGitRules}}{{gitRules}}');
     expect(ja).toContain('プロジェクトのソースファイルを変更しないでください');
     expect(ja).toContain('## Workflow Context');
     expect(findDeprecatedTerms(ja)).toEqual([]);

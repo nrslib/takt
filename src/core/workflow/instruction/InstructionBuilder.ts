@@ -10,7 +10,7 @@
 
 import type { WorkflowStep, Language, OutputContractItem, OutputContractEntry } from '../../models/types.js';
 import type { InstructionContext } from './instruction-context.js';
-import { buildEditRule } from './instruction-context.js';
+import { buildEditRule, buildGitRules } from './instruction-context.js';
 import { escapeTemplateChars, replaceTemplatePlaceholders } from './escape.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import {
@@ -73,6 +73,8 @@ export class InstructionBuilder {
 
     // Execution context variables
     const editRule = buildEditRule(this.step.edit, language);
+    const gitRules = buildGitRules(this.step.allowGitCommit, language, 'phase1');
+    const hasGitRules = gitRules.length > 0;
 
     // Workflow structure (loop expansion done in code)
     const workflowStructure = this.buildWorkflowStructure(language);
@@ -163,6 +165,8 @@ export class InstructionBuilder {
 
     return loadTemplate('perform_phase1_message', language, {
       workingDirectory: this.context.cwd,
+      hasGitRules,
+      gitRules,
       editRule,
       workflowName,
       workflowDescription,

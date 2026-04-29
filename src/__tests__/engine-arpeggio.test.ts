@@ -323,6 +323,52 @@ describe('ArpeggioRunner integration', () => {
     expect(phaseStarts.some((instruction) => instruction.includes('Process '))).toBe(true);
   });
 
+  it.each([
+    {
+      allowGitCommit: false,
+      expectedPrompts: ['Do NOT run git commit', 'Do NOT run git push', 'Do NOT run git add'],
+      unexpectedPrompts: [],
+    },
+    {
+      allowGitCommit: true,
+      expectedPrompts: [],
+      unexpectedPrompts: ['Do NOT run git commit', 'Do NOT run git push', 'Do NOT run git add'],
+    },
+  ])(
+    'should toggle git execution rules in arpeggio prompts when allowGitCommit is $allowGitCommit',
+    async ({ allowGitCommit, expectedPrompts, unexpectedPrompts }) => {
+      const { tmpDir, csvPath, templatePath } = createArpeggioTestDir();
+      const arpeggioConfig = createArpeggioConfig(csvPath, templatePath, { concurrency: 1 });
+      const config = buildArpeggioWorkflowConfig(arpeggioConfig, tmpDir);
+      config.steps[0]!.allowGitCommit = allowGitCommit;
+      const prompts: string[] = [];
+
+      vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+        prompts.push(instruction);
+        options?.onPromptResolved?.({
+          systemPrompt: typeof persona === 'string' ? persona : '',
+          userInstruction: instruction,
+        });
+        return makeResponse({ content: 'Processed' });
+      });
+      vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+
+      engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
+      const state = await engine.run();
+
+      expect(state.status).toBe('completed');
+      expect(prompts.length).toBe(3);
+      for (const prompt of prompts) {
+        for (const expectedPrompt of expectedPrompts) {
+          expect(prompt).toContain(expectedPrompt);
+        }
+        for (const unexpectedPrompt of unexpectedPrompts) {
+          expect(prompt).not.toContain(unexpectedPrompt);
+        }
+      }
+    },
+  );
+
   it('should keep phaseExecutionId bindings correct when completion order is reversed', async () => {
     const { tmpDir, csvPath, templatePath } = createArpeggioTestDir();
     const arpeggioConfig = createArpeggioConfig(csvPath, templatePath, { concurrency: 2 });

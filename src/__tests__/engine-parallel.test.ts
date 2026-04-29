@@ -37,6 +37,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
 import { detectMatchedRule } from '../core/workflow/evaluation/index.js';
+import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 import {
   makeResponse,
   buildDefaultWorkflowConfig,
@@ -129,6 +130,94 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     expect(state.stepOutputs.get('arch-review')!.content).toBe('Arch content');
     expect(state.stepOutputs.get('security-review')!.content).toBe('Sec content');
   });
+
+  it.each([
+    { allowGitCommit: undefined, expectsGitRules: true },
+    { allowGitCommit: false, expectsGitRules: true },
+    { allowGitCommit: true, expectsGitRules: false },
+  ])(
+    'should reflect parallel parent allowGitCommit=$allowGitCommit in sub-step prompts',
+    async ({ allowGitCommit, expectsGitRules }) => {
+      const config = normalizeWorkflowConfig({
+        name: 'parallel-allow-git-commit',
+        max_steps: 5,
+        initial_step: 'reviewers',
+        steps: [
+          {
+            name: 'reviewers',
+            persona: '../personas/reviewers.md',
+            instruction: 'Run parallel reviews',
+            ...(allowGitCommit === undefined ? {} : { allow_git_commit: allowGitCommit }),
+            parallel: [
+              {
+                name: 'arch-review',
+                persona: '../personas/arch-review.md',
+                instruction: 'Review architecture',
+                rules: [
+                  {
+                    condition: 'approved',
+                    next: 'COMPLETE',
+                  },
+                ],
+              },
+              {
+                name: 'security-review',
+                persona: '../personas/security-review.md',
+                instruction: 'Review security',
+                rules: [
+                  {
+                    condition: 'approved',
+                    next: 'COMPLETE',
+                  },
+                ],
+              },
+            ],
+            rules: [
+              {
+                condition: 'all("approved")',
+                next: 'COMPLETE',
+              },
+            ],
+          },
+        ],
+      }, tmpDir);
+      const prompts: string[] = [];
+      const gitCommitRule = 'Do NOT run git commit';
+      const gitPushRule = 'Do NOT run git push';
+      const gitAddRule = 'Do NOT run git add';
+
+      vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+        prompts.push(instruction);
+        options.onPromptResolved?.({
+          systemPrompt: typeof persona === 'string' ? persona : '',
+          userInstruction: instruction,
+        });
+        return makeResponse({ persona: String(persona), content: 'approved' });
+      });
+      mockDetectMatchedRuleSequence([
+        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'aggregate' },
+      ]);
+
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      const state = await engine.run();
+
+      expect(state.status).toBe('completed');
+      expect(prompts).toHaveLength(2);
+      for (const prompt of prompts) {
+        if (expectsGitRules) {
+          expect(prompt).toContain(gitCommitRule);
+          expect(prompt).toContain(gitPushRule);
+          expect(prompt).toContain(gitAddRule);
+        } else {
+          expect(prompt).not.toContain(gitCommitRule);
+          expect(prompt).not.toContain(gitPushRule);
+          expect(prompt).not.toContain(gitAddRule);
+        }
+      }
+    },
+  );
 
   it('should persist aggregated previous_response snapshot for parallel parent step', async () => {
     const config = buildDefaultWorkflowConfig();

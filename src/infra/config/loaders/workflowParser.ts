@@ -112,6 +112,7 @@ export function normalizeWorkflowConfig(
       normalizedWorkflowProvider.provider,
       normalizedWorkflowProvider.model,
       normalizedWorkflowProvider.providerOptions,
+      undefined,
       context,
       projectOverrides,
       globalOverrides,

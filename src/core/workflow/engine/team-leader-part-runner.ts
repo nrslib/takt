@@ -6,6 +6,7 @@ import { buildAbortSignal } from './abort-signal.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { ParallelLogger } from './parallel-logger.js';
 import { createPartStep } from './team-leader-common.js';
+import { buildGitRules } from '../instruction/instruction-context.js';
 import { getErrorMessage } from '../../../shared/utils/index.js';
 import { classifyAbortSignalReason } from '../../../shared/types/agent-failure.js';
 
@@ -41,7 +42,11 @@ export async function runTeamLeaderPart(
     };
 
   try {
-    const response = await executeAgent(partStep.persona, part.instruction, options);
+    const gitRules = buildGitRules(partStep.allowGitCommit, options.language ?? 'en', 'phase1');
+    const partInstruction = gitRules
+      ? `${gitRules}\n\n${part.instruction}`
+      : part.instruction;
+    const response = await executeAgent(partStep.persona, partInstruction, options);
     updatePersonaSession(buildSessionKey(partStep, partProviderInfo.provider), response.sessionId);
     return {
       part,
