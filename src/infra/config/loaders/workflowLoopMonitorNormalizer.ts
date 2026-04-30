@@ -28,7 +28,13 @@ function normalizeLoopMonitorJudge(
     model: normalizedProvider.model,
     providerOptions: normalizedProvider.providerOptions,
     instruction: raw.instruction
-      ? resolveRefToContent(raw.instruction, sections.resolvedInstructions, workflowDir, 'instructions', context)
+      ? resolveRefToContent(
+          raw.instruction,
+          sections.resolvedInstructionsWithSource ?? sections.resolvedInstructions,
+          workflowDir,
+          'instructions',
+          context,
+        )
       : undefined,
     rules: raw.rules.map((rule) => ({ condition: rule.condition, next: rule.next })),
   };

@@ -10,7 +10,10 @@ import { validateProviderModelCompatibility } from '../../../core/workflow/provi
 import { isPathSafe } from '../paths.js';
 import { normalizeRuntime } from '../configNormalizers.js';
 import type { FacetResolutionContext, WorkflowSections } from './resource-resolver.js';
-import { resolveSectionMap } from './resource-resolver.js';
+import {
+  resolveSectionMapWithSource,
+  unwrapResolvedSectionMap,
+} from './resource-resolver.js';
 import {
   validateWorkflowRuntimePrepare,
 } from './workflowNormalizationPolicies.js';
@@ -78,12 +81,20 @@ export function normalizeWorkflowConfig(
       context,
     },
   );
+  const resolvedPoliciesWithSource = resolveSectionMapWithSource(parsed.policies, workflowDir, 'policies');
+  const resolvedKnowledgeWithSource = resolveSectionMapWithSource(parsed.knowledge, workflowDir, 'knowledge');
+  const resolvedInstructionsWithSource = resolveSectionMapWithSource(parsed.instructions, workflowDir, 'instructions');
+  const resolvedReportFormatsWithSource = resolveSectionMapWithSource(parsed.report_formats, workflowDir, 'output-contracts');
   const sections: WorkflowSections = {
     personas: parsed.personas,
-    resolvedPolicies: resolveSectionMap(parsed.policies, workflowDir),
-    resolvedKnowledge: resolveSectionMap(parsed.knowledge, workflowDir),
-    resolvedInstructions: resolveSectionMap(parsed.instructions, workflowDir),
-    resolvedReportFormats: resolveSectionMap(parsed.report_formats, workflowDir),
+    resolvedPolicies: unwrapResolvedSectionMap(resolvedPoliciesWithSource),
+    resolvedPoliciesWithSource,
+    resolvedKnowledge: unwrapResolvedSectionMap(resolvedKnowledgeWithSource),
+    resolvedKnowledgeWithSource,
+    resolvedInstructions: unwrapResolvedSectionMap(resolvedInstructionsWithSource),
+    resolvedInstructionsWithSource,
+    resolvedReportFormats: unwrapResolvedSectionMap(resolvedReportFormatsWithSource),
+    resolvedReportFormatsWithSource,
   };
 
   const workflowRuntime = normalizeRuntime(parsed.workflow_config?.runtime);

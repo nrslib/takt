@@ -364,6 +364,16 @@ steps:
 
 エンジンは各キーをファイルに解決し、内容を読み込み、実行時に最終的なプロンプトを組み立てる。ワークフローの作者がモノリシックなプロンプトを書くことはない。どのファセットを組み合わせるかを選択するだけである。
 
+instructions、policies、knowledge、output contracts の facet ファイルは、standalone directive で同じ kind の別 facet を継承できる。
+
+```md
+{extends:fix}
+
+プロジェクト固有の追加指示。
+```
+
+canonical form はコロン後にスペースを入れない `{extends:fix}` だが、`{extends: fix}` も受理される。親名は bare facet name のみで、path reference や `@scope` reference による継承はサポートしない。親 lookup では現在の source file を候補から除外するため、project-level の `fix.md` は自身を再帰的に読むことなく lower-layer の `fix.md` を継承できる。persona facet は継承対象外である。
+
 ## 既存手法との違い
 
 | 手法 | 内容 | 本手法との違い |
