@@ -5,6 +5,7 @@ type StdinLike = EventEmitter & {
   isRaw?: boolean;
   setRawMode?: (mode: boolean) => void;
   resume: () => void;
+  pause: () => void;
   removeListener: (event: string, listener: (...args: unknown[]) => void) => StdinLike;
   on: (event: string, listener: (...args: unknown[]) => void) => StdinLike;
 };
@@ -22,17 +23,18 @@ function isRunLikeCommand(commandName: string | undefined): boolean {
 export function installImmediateSigintExit(
   commandName: string | undefined,
   runtime: ProcessLike = process as unknown as ProcessLike,
-): void {
+): () => void {
   if (!isRunLikeCommand(commandName)) {
-    return;
+    return () => {};
   }
 
   const stdin = runtime.stdin;
   const hadRawMode = stdin.isRaw === true;
   let enabledRawMode = false;
+  let cleanedUp = false;
 
   if (!stdin.isTTY) {
-    return;
+    return () => {};
   }
 
   if (typeof stdin.setRawMode === 'function' && !hadRawMode) {
@@ -50,10 +52,18 @@ export function installImmediateSigintExit(
   stdin.on('data', onData);
   stdin.resume();
 
-  runtime.once('exit', () => {
+  const cleanup = (): void => {
+    if (cleanedUp) {
+      return;
+    }
+    cleanedUp = true;
     stdin.removeListener('data', onData);
+    stdin.pause();
     if (enabledRawMode && typeof stdin.setRawMode === 'function') {
       stdin.setRawMode(false);
     }
-  });
+  };
+
+  runtime.once('exit', cleanup);
+  return cleanup;
 }

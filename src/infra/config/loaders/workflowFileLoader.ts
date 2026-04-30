@@ -65,8 +65,6 @@ function loadWorkflowFromFileInternal(
     resolveWorkflowRuntimePreparePolicy(globalConfig.workflowRuntimePrepare, projectConfig.workflowRuntimePrepare),
     resolveWorkflowArpeggioPolicy(globalConfig.workflowArpeggio, projectConfig.workflowArpeggio),
     resolveWorkflowMcpServersPolicy(globalConfig.workflowMcpServers, projectConfig.workflowMcpServers),
-    filePath,
-    trustInfo,
     options?.callableArgs,
     options?.callableArgPolicy,
     loadMode,

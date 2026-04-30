@@ -5,13 +5,18 @@ import { installImmediateSigintExit } from '../app/cli/immediateSigintExit.js';
 class FakeStdin extends EventEmitter {
   isTTY = true;
   isRaw = false;
+  paused = false;
 
   setRawMode(mode: boolean): void {
     this.isRaw = mode;
   }
 
   resume(): void {
-    // no-op
+    this.paused = false;
+  }
+
+  pause(): void {
+    this.paused = true;
   }
 }
 
@@ -76,6 +81,7 @@ describe('installImmediateSigintExit', () => {
     runtime.emit('exit');
 
     expect(runtime.stdin.isRaw).toBe(false);
+    expect(runtime.stdin.paused).toBe(true);
   });
 
   it('既に raw mode の場合は終了時に戻さない', () => {
@@ -101,5 +107,38 @@ describe('installImmediateSigintExit', () => {
 
     expect(runtime.stdin.isRaw).toBe(false);
     expect(sigintListener).not.toHaveBeenCalled();
+  });
+
+  it('返された cleanup で data listener と raw mode を片付ける', () => {
+    const runtime = new FakeProcess();
+    const sigintListener = vi.fn();
+    runtime.on('SIGINT', sigintListener);
+
+    const cleanup = installImmediateSigintExit(
+      'watch',
+      runtime as unknown as Parameters<typeof installImmediateSigintExit>[1],
+    );
+    expect(runtime.stdin.isRaw).toBe(true);
+
+    cleanup();
+    runtime.stdin.emit('data', Buffer.from('\u0003', 'utf-8'));
+
+    expect(sigintListener).not.toHaveBeenCalled();
+    expect(runtime.stdin.isRaw).toBe(false);
+    expect(runtime.stdin.paused).toBe(true);
+  });
+
+  it('cleanup は複数回呼んでも安全', () => {
+    const runtime = new FakeProcess();
+    const cleanup = installImmediateSigintExit(
+      'watch',
+      runtime as unknown as Parameters<typeof installImmediateSigintExit>[1],
+    );
+
+    cleanup();
+    cleanup();
+
+    expect(runtime.stdin.isRaw).toBe(false);
+    expect(runtime.stdin.paused).toBe(true);
   });
 });

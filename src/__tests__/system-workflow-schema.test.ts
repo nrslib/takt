@@ -1385,7 +1385,7 @@ steps:
     }
   });
 
-  it('privileged な project 任意 path workflow では normalize 時点で reject する', () => {
+  it('privileged な project 任意 path workflow でも normalize して project schema_ref を解決できる', () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'takt-system-schema-trust-project-'));
     const workflowDir = join(projectDir, 'adhoc-workflows');
     const globalConfigDir = mkdtempSync(join(tmpdir(), 'takt-global-config-trust-'));
@@ -1460,11 +1460,24 @@ steps:
         ],
       });
 
-      expect(() => normalizeWorkflowConfig(raw, workflowDir, {
+      const normalized = normalizeWorkflowConfig(raw, workflowDir, {
         lang: 'en',
         projectDir,
         workflowDir,
-      })).toThrow(/cannot use privileged system execution/);
+      });
+      const step = normalized.steps[0] as Record<string, unknown>;
+
+      expect(step.structuredOutput).toEqual({
+        schemaRef: 'followup-task',
+        schema: {
+          type: 'object',
+          properties: {
+            action: { type: 'string' },
+            source: { type: 'string', const: 'project' },
+          },
+          required: ['action', 'source'],
+        },
+      });
     } finally {
       if (previousConfigDir === undefined) {
         delete process.env.TAKT_CONFIG_DIR;

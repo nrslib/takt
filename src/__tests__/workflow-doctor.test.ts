@@ -756,7 +756,7 @@ steps:
   });
 
   it.each(worktreeRootCases)(
-    'validates runtime.prepare trust for worktree workflow path targets in $name',
+    'allows runtime.prepare for explicitly targeted worktree workflow paths in $name',
     async (rootCase) => {
       writeConfigForCase(rootCase);
       const { rootDirRelativePath } = rootCase;
@@ -780,16 +780,15 @@ steps:
 
       await expect(
         doctorWorkflowCommand([relative(projectDir, worktreeWorkflowPath)], projectDir),
-      ).rejects.toThrow('Workflow validation failed');
+      ).resolves.toBeUndefined();
 
-      expect(mockError).toHaveBeenCalledWith(
-        expect.stringContaining('cannot use workflow-level runtime.prepare outside the project workflows root'),
-      );
+      expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining('prepare.yaml'));
+      expect(mockError).not.toHaveBeenCalled();
     },
   );
 
   it.each(worktreeRootCases)(
-    'validates allow_git_commit trust for worktree workflow path targets in $name',
+    'allows allow_git_commit for explicitly targeted worktree workflow paths in $name',
     async (rootCase) => {
       writeConfigForCase(rootCase);
       const { rootDirRelativePath } = rootCase;
@@ -810,11 +809,10 @@ steps:
 
       await expect(
         doctorWorkflowCommand([relative(projectDir, worktreeWorkflowPath)], projectDir),
-      ).rejects.toThrow('Workflow validation failed');
+      ).resolves.toBeUndefined();
 
-      expect(mockError).toHaveBeenCalledWith(
-        expect.stringContaining('cannot use allow_git_commit in step "review" outside the project workflows root'),
-      );
+      expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining('commit.yaml'));
+      expect(mockError).not.toHaveBeenCalled();
     },
   );
 

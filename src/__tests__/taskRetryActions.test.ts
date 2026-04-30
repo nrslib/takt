@@ -566,7 +566,7 @@ describe('retryFailedTask', () => {
     );
   });
 
-  it('should reject privileged worktree workflows during retry before selecting a step', async () => {
+  it('should allow privileged worktree workflows during retry and continue to step selection', async () => {
     const workflow = attachWorkflowTrustInfo(attachWorkflowSourcePath({
       ...defaultWorkflowConfig,
       name: 'selected-workflow',
@@ -583,13 +583,19 @@ describe('retryFailedTask', () => {
     mockSelectWorkflow.mockResolvedValue('./.takt/workflows/selected-workflow.yaml');
     mockLoadWorkflowByIdentifier.mockReturnValue(workflow);
 
-    await expect(retryFailedTask(makeFailedTask(), '/project')).rejects.toThrow(
-      'cannot use workflow-level runtime.prepare outside the project workflows root',
+    await expect(retryFailedTask(makeFailedTask(), '/project')).resolves.toBe(true);
+    expect(mockSelectOptionWithDefault).toHaveBeenCalledWith(
+      'Start from step:',
+      expect.arrayContaining([
+        expect.objectContaining({ value: 'plan' }),
+        expect.objectContaining({ value: 'implement' }),
+        expect.objectContaining({ value: 'review' }),
+      ]),
+      'review',
     );
-    expect(mockSelectOptionWithDefault).not.toHaveBeenCalled();
   });
 
-  it('should reject allow_git_commit worktree workflows during retry before selecting a step', async () => {
+  it('should allow allow_git_commit worktree workflows during retry and continue to step selection', async () => {
     const workflow = attachWorkflowTrustInfo(attachWorkflowSourcePath({
       ...defaultWorkflowConfig,
       name: 'selected-workflow',
@@ -613,10 +619,16 @@ describe('retryFailedTask', () => {
     mockSelectWorkflow.mockResolvedValue('./.takt/workflows/selected-workflow.yaml');
     mockLoadWorkflowByIdentifier.mockReturnValue(workflow);
 
-    await expect(retryFailedTask(makeFailedTask(), '/project')).rejects.toThrow(
-      'cannot use allow_git_commit in step "plan" outside the project workflows root',
+    await expect(retryFailedTask(makeFailedTask(), '/project')).resolves.toBe(true);
+    expect(mockSelectOptionWithDefault).toHaveBeenCalledWith(
+      'Start from step:',
+      expect.arrayContaining([
+        expect.objectContaining({ value: 'plan' }),
+        expect.objectContaining({ value: 'implement' }),
+        expect.objectContaining({ value: 'review' }),
+      ]),
+      'review',
     );
-    expect(mockSelectOptionWithDefault).not.toHaveBeenCalled();
   });
 
   it('should show deprecated config warning when selected run order uses legacy provider fields', async () => {

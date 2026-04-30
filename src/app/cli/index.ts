@@ -23,10 +23,11 @@ import { executeDefaultAction } from './routing.js';
 (async () => {
   const args = process.argv.slice(2);
   installOpencodeExitCleanup();
-  installImmediateSigintExit(args[0]);
+  const cleanupImmediateSigintExit = installImmediateSigintExit(args[0]);
   const { operands } = program.parseOptions(args);
   const removedRootCommand = resolveRemovedRootCommand(operands);
   if (removedRootCommand !== null) {
+    cleanupImmediateSigintExit();
     errorLog(`error: unknown command '${removedRootCommand}'`);
     process.exit(1);
   }
@@ -35,13 +36,21 @@ import { executeDefaultAction } from './routing.js';
   const slashFallbackTask = resolveSlashFallbackTask(args, knownCommands);
 
   if (slashFallbackTask !== null) {
-    await runPreActionHook();
-    await executeDefaultAction(slashFallbackTask);
+    try {
+      await runPreActionHook();
+      await executeDefaultAction(slashFallbackTask);
+    } finally {
+      cleanupImmediateSigintExit();
+    }
     process.exit(0);
   }
 
   // Normal parsing for all other cases (including '#' prefixed inputs)
-  await program.parseAsync();
+  try {
+    await program.parseAsync();
+  } finally {
+    cleanupImmediateSigintExit();
+  }
 
   const rootArg = process.argv.slice(2)[0];
   if (rootArg !== 'watch') {

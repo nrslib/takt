@@ -78,6 +78,23 @@ describe('selectWorkflowFromEntries', () => {
     expect(selected).toBe('builtin-flow');
     expect(selectOptionMock).toHaveBeenCalledTimes(1);
   });
+
+  it('should return builtin workflow identity instead of its file path', async () => {
+    const entries: WorkflowDirEntry[] = [
+      {
+        name: 'auto-improvement-loop',
+        path: '/repo/builtins/en/workflows/auto-improvement-loop.yaml',
+        source: 'builtin',
+      },
+    ];
+
+    selectOptionMock.mockResolvedValueOnce('auto-improvement-loop');
+
+    const selected = await selectWorkflowFromEntries(entries);
+
+    expect(selected).toBe('auto-improvement-loop');
+    expect(selected).not.toBe(entries[0]!.path);
+  });
 });
 
 function createWorkflowMap(entries: { name: string; source: 'user' | 'builtin' }[]): Map<string, WorkflowWithSource> {

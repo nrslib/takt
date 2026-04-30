@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 import * as workflowTrustBoundary from '../infra/config/loaders/workflowTrustBoundary.js';
 import { loadWorkflowByIdentifier } from '../infra/config/index.js';
-import { attachWorkflowSourcePath, attachWorkflowTrustInfo } from '../infra/config/loaders/workflowSourceMetadata.js';
+import { attachWorkflowTrustInfo } from '../infra/config/loaders/workflowSourceMetadata.js';
 
 describe('workflowTrustBoundary', () => {
   let projectDir: string;
@@ -29,80 +29,9 @@ describe('workflowTrustBoundary', () => {
     expect(workflowTrustBoundary).not.toHaveProperty('getWorkflowCallNamedLookupSources');
   });
 
-  it('should treat kind system steps as privileged when enforcing project trust boundary', () => {
-    expect(() => workflowTrustBoundary.validateProjectWorkflowTrustBoundaryForSteps(
-      [{ name: 'route', kind: 'system' }],
-      join(projectDir, 'outside.yaml'),
-      { isProjectWorkflowRoot: false },
-    )).toThrow('Project workflow');
-  });
-
-  it('should treat allow_git_commit steps as privileged when enforcing project trust boundary', () => {
-    expect(() => workflowTrustBoundary.validateProjectWorkflowTrustBoundaryForSteps(
-      [{ name: 'implement', allowGitCommit: true }],
-      join(projectDir, 'outside.yaml'),
-      { isProjectWorkflowRoot: false },
-    )).toThrow('cannot use allow_git_commit');
-  });
-
-  it('rejects allow_git_commit workflow execution outside the project workflows root', () => {
-    const workflow = attachWorkflowTrustInfo(attachWorkflowSourcePath({
-      name: 'external-committer',
-      steps: [
-        {
-          name: 'implement',
-          kind: 'agent',
-          persona: 'coder',
-          personaDisplayName: 'coder',
-          instruction: 'Implement the task',
-          allowGitCommit: true,
-          passPreviousResponse: true,
-        },
-      ],
-      initialStep: 'implement',
-      maxSteps: 3,
-    }, join(externalDir, 'external-committer.yaml')), {
-      source: 'external',
-      sourcePath: join(externalDir, 'external-committer.yaml'),
-      isProjectTrustRoot: false,
-      isProjectWorkflowRoot: false,
-    });
-
-    expect(() => workflowTrustBoundary.validateWorkflowExecutionTrustBoundary(
-      workflow,
-      projectDir,
-    )).toThrow(
-      `Workflow "${join(externalDir, 'external-committer.yaml')}" cannot use allow_git_commit in step "implement" outside the project workflows root`,
-    );
-  });
-
-  it('allows allow_git_commit workflow execution inside the project workflows root', () => {
-    const workflow = attachWorkflowTrustInfo(attachWorkflowSourcePath({
-      name: 'project-commit',
-      steps: [
-        {
-          name: 'implement',
-          kind: 'agent',
-          persona: 'coder',
-          personaDisplayName: 'coder',
-          instruction: 'Implement the task',
-          allowGitCommit: true,
-          passPreviousResponse: true,
-        },
-      ],
-      initialStep: 'implement',
-      maxSteps: 3,
-    }, join(projectDir, '.takt', 'workflows', 'project-commit.yaml')), {
-      source: 'project',
-      sourcePath: join(projectDir, '.takt', 'workflows', 'project-commit.yaml'),
-      isProjectTrustRoot: true,
-      isProjectWorkflowRoot: true,
-    });
-
-    expect(() => workflowTrustBoundary.validateWorkflowExecutionTrustBoundary(
-      workflow,
-      projectDir,
-    )).not.toThrow();
+  it('should keep load-time project workflow trust boundary private', () => {
+    expect(workflowTrustBoundary).not.toHaveProperty('validateProjectWorkflowTrustBoundary');
+    expect(workflowTrustBoundary).not.toHaveProperty('validateProjectWorkflowTrustBoundaryForSteps');
   });
 
   it('rejects privileged child when project parent is outside workflows root', () => {

@@ -364,6 +364,16 @@ steps:
 
 The engine resolves each key to its file, reads the content, and assembles the final prompt at runtime. The workflow author never writes a monolithic prompt — only selects which facets to combine.
 
+Facet files for instructions, policies, knowledge, and output contracts can inherit another facet of the same kind with a standalone directive:
+
+```md
+{extends:fix}
+
+Additional project-specific instructions.
+```
+
+The canonical form has no space after the colon (`{extends:fix}`), but `{extends: fix}` is also accepted. The parent name must be a bare facet name; path references and `@scope` references are not supported for inheritance. The current source file is excluded from parent lookup, so a project-level `fix.md` can extend the lower-layer `fix.md` without recursively reading itself. Persona facets do not support inheritance.
+
 ## How It Differs from Existing Approaches
 
 | Approach | What it does | How this differs |
