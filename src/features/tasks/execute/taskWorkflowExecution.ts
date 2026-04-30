@@ -1,6 +1,5 @@
 import type { WorkflowConfig } from '../../../core/models/index.js';
 import { loadWorkflowByIdentifier, isWorkflowPath, resolveWorkflowConfigValues } from '../../../infra/config/index.js';
-import { validateWorkflowExecutionTrustBoundary } from '../../../infra/config/loaders/workflowTrustBoundary.js';
 import { resolveProviderOptionsWithTrace } from '../../../infra/config/resolveConfigValue.js';
 import { info, error } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
@@ -55,8 +54,6 @@ export async function executeTaskWorkflow(
     info('Specify a valid workflow when creating tasks (e.g., via "takt add").');
     return { success: false, reason: `Workflow "${safeWorkflowIdentifier}" not found.` };
   }
-  validateWorkflowExecutionTrustBoundary(workflowConfig, projectCwd);
-
   log.debug('Running workflow', {
     name: workflowConfig.name,
     steps: workflowConfig.steps.map((s: { name: string }) => s.name),

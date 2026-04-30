@@ -343,7 +343,7 @@ describe('executeAndCompleteTask', () => {
     });
   });
 
-  it('should reject privileged worktree workflows before execution', async () => {
+  it('should execute privileged worktree workflows when explicitly selected', async () => {
     const workflow = attachWorkflowTrustInfo(attachWorkflowSourcePath({
       name: 'worktree-privileged',
       runtime: {
@@ -374,11 +374,12 @@ describe('executeAndCompleteTask', () => {
       cwd: '/project/.takt/worktrees/task-a',
       projectCwd: '/project',
       workflowIdentifier: './.takt/workflows/worktree-privileged.yaml',
-    })).rejects.toThrow('cannot use workflow-level runtime.prepare outside the project workflows root');
-    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    })).resolves.toBe(true);
+    expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+    expect(mockExecuteWorkflow.mock.calls[0]?.[0]).toBe(workflow);
   });
 
-  it('should reject allow_git_commit worktree workflows before execution', async () => {
+  it('should execute allow_git_commit worktree workflows when explicitly selected', async () => {
     const workflow = attachWorkflowTrustInfo(attachWorkflowSourcePath({
       name: 'worktree-commit',
       steps: [
@@ -407,8 +408,9 @@ describe('executeAndCompleteTask', () => {
       cwd: '/project/.takt/worktrees/task-a',
       projectCwd: '/project',
       workflowIdentifier: './.takt/workflows/worktree-commit.yaml',
-    })).rejects.toThrow('cannot use allow_git_commit in step "review" outside the project workflows root');
-    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    })).resolves.toBe(true);
+    expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+    expect(mockExecuteWorkflow.mock.calls[0]?.[0]).toBe(workflow);
   });
 
   it('should use workflow terminology when named workflow is missing', async () => {

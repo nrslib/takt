@@ -1,7 +1,6 @@
 import type { WorkflowConfig } from '../../../core/models/index.js';
 import type { WorkflowCallArgResolutionPolicy } from './workflowCallableArgResolver.js';
 import { loadWorkflowFromFile, loadWorkflowFromFileForDiscovery } from './workflowFileLoader.js';
-import { validateProjectWorkflowTrustBoundary } from './workflowTrustBoundary.js';
 import {
   resolveWorkflowTrustInfo,
   type WorkflowTrustInfo,
@@ -50,10 +49,6 @@ export function loadWorkflowFileWithResolutionOptions(
     callableArgs: options.callableArgs,
     callableArgPolicy: buildWorkflowCallArgPolicy(options.parentTrustInfo, trustInfo),
   });
-
-  if (trustInfo.source === 'project') {
-    validateProjectWorkflowTrustBoundary(workflow, filePath, options.projectCwd);
-  }
 
   return workflow;
 }

@@ -7,7 +7,6 @@ import { WorkflowConfigRawSchema } from '../../../core/models/index.js';
 import type { WorkflowConfig, WorkflowStep, WorkflowSubworkflowConfig } from '../../../core/models/index.js';
 import { resolveLoopMonitorJudgeProviderModel, resolveStepProviderModel } from '../../../core/workflow/provider-resolution.js';
 import { validateProviderModelCompatibility } from '../../../core/workflow/provider-model-compatibility.js';
-import { isPathSafe } from '../paths.js';
 import { normalizeRuntime } from '../configNormalizers.js';
 import type { FacetResolutionContext, WorkflowSections } from './resource-resolver.js';
 import {
@@ -24,8 +23,6 @@ import {
   type WorkflowCallArgResolutionPolicy,
 } from './workflowCallableArgResolver.js';
 import { prepareCallableSubworkflowDiscoveryArgs } from './workflowCallableDiscoveryArgs.js';
-import { validateProjectWorkflowTrustBoundaryForSteps } from './workflowTrustBoundary.js';
-import { getWorkflowPathTrustInfo, type WorkflowTrustInfo } from './workflowTrustSource.js';
 
 function normalizeSubworkflowConfig(
   raw: ReturnType<typeof WorkflowConfigRawSchema.parse>['subworkflow'],
@@ -62,8 +59,6 @@ export function normalizeWorkflowConfig(
   workflowRuntimePreparePolicy?: WorkflowRuntimePrepareConfig,
   workflowArpeggioPolicy?: WorkflowArpeggioConfig,
   workflowMcpServersPolicy?: WorkflowMcpServersConfig,
-  workflowPath = workflowDir,
-  trustInfo?: WorkflowTrustInfo,
   callableArgs?: Record<string, string | string[]>,
   callableArgPolicy?: WorkflowCallArgResolutionPolicy,
   callableArgMode: 'runtime' | 'discovery' = 'runtime',
@@ -104,16 +99,6 @@ export function normalizeWorkflowConfig(
     parsed.workflow_config?.model,
     parsed.workflow_config?.provider_options,
   );
-  if (trustInfo?.isProjectTrustRoot) {
-    validateProjectWorkflowTrustBoundaryForSteps(parsed.steps, workflowPath, trustInfo);
-  } else if (!trustInfo && context?.projectDir && isPathSafe(context.projectDir, workflowDir)) {
-    validateProjectWorkflowTrustBoundaryForSteps(
-      parsed.steps,
-      workflowPath,
-      getWorkflowPathTrustInfo(workflowPath, context.projectDir),
-    );
-  }
-
   const steps: WorkflowStep[] = parsed.steps.map((step) =>
     normalizeStepFromRaw(
       step,

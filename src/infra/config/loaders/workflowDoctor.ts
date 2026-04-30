@@ -16,8 +16,7 @@ import {
 } from './workflowLookupDirectories.js';
 import { isWorkflowPath, validateWorkflowCallContracts } from './workflowResolver.js';
 import { loadWorkflowFileWithResolutionOptions } from './workflowResolvedLoader.js';
-import { getWorkflowTrustInfo, type WorkflowTrustSource } from './workflowTrustSource.js';
-import { validateWorkflowExecutionTrustBoundary } from './workflowTrustBoundary.js';
+import type { WorkflowTrustSource } from './workflowTrustSource.js';
 import {
   type FacetResolutionContext,
   type WorkflowSections,
@@ -203,9 +202,6 @@ export function inspectWorkflowFile(
     const lookupCwd = options?.lookupCwd ?? projectDir;
     try {
       const workflow = loadWorkflowForDoctorValidation(filePath, projectDir, raw, options);
-      if (getWorkflowTrustInfo(workflow, projectDir).source !== 'builtin') {
-        validateWorkflowExecutionTrustBoundary(workflow, projectDir);
-      }
       validateWorkflowCallContracts(workflow, projectDir, lookupCwd, { allowPathBasedCalls: false });
     } catch (error) {
       return {

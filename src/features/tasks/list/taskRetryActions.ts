@@ -9,7 +9,6 @@ import * as fs from 'node:fs';
 import type { TaskListItem } from '../../../infra/task/index.js';
 import { TaskRunner, resolveTaskWorkflowValue } from '../../../infra/task/index.js';
 import { loadWorkflowByIdentifier, resolveWorkflowConfigValue, getWorkflowDescription } from '../../../infra/config/index.js';
-import { validateWorkflowExecutionTrustBoundary } from '../../../infra/config/loaders/workflowTrustBoundary.js';
 import { selectOptionWithDefault } from '../../../shared/prompt/index.js';
 import { info, header, blankLine, status, warn } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
@@ -214,8 +213,6 @@ export async function retryFailedTask(
   if (!workflowConfig) {
     throw new Error(`Workflow "${sanitizeTerminalText(selectedWorkflow)}" not found after selection.`);
   }
-  validateWorkflowExecutionTrustBoundary(workflowConfig, projectDir);
-
   const resumePoint = resolveRetryResumePoint(task, runMeta);
   const selectedStep = await selectStartStep(
     workflowConfig,

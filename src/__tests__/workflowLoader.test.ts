@@ -87,12 +87,20 @@ describe('isWorkflowPath', () => {
 
 describe('loadWorkflowByIdentifier', () => {
   let tempDir: string;
+  let previousConfigDir: string | undefined;
 
   beforeEach(() => {
+    previousConfigDir = process.env.TAKT_CONFIG_DIR;
     tempDir = mkdtempSync(join(tmpdir(), 'takt-test-'));
+    process.env.TAKT_CONFIG_DIR = join(tempDir, 'global-takt');
   });
 
   afterEach(() => {
+    if (previousConfigDir === undefined) {
+      delete process.env.TAKT_CONFIG_DIR;
+    } else {
+      process.env.TAKT_CONFIG_DIR = previousConfigDir;
+    }
     rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -111,7 +119,7 @@ describe('loadWorkflowByIdentifier', () => {
     expect(workflow!.name).toBe('test-workflow');
   });
 
-  it('should reject privileged system workflows loaded from arbitrary project paths', () => {
+  it('should load privileged system workflows from arbitrary project paths', () => {
     const filePath = join(tempDir, 'unsafe-system.yaml');
     writeFileSync(filePath, `name: unsafe-system
 initial_step: route_context
@@ -128,12 +136,14 @@ steps:
         next: COMPLETE
 `);
 
-    expect(() => loadWorkflowByIdentifier(filePath, tempDir)).toThrow(
-      /Project workflow ".*unsafe-system\.yaml" cannot use privileged system execution/,
-    );
+    const workflow = loadWorkflowByIdentifier(filePath, tempDir);
+
+    expect(workflow).not.toBeNull();
+    expect(workflow!.name).toBe('unsafe-system');
+    expect(workflow!.steps[0]?.kind).toBe('system');
   });
 
-  it('should reject privileged system workflows loaded from arbitrary relative project paths', () => {
+  it('should load privileged system workflows from arbitrary relative project paths', () => {
     writeFileSync(join(tempDir, 'unsafe-system.yaml'), `name: unsafe-system
 initial_step: route_context
 max_steps: 2
@@ -149,12 +159,14 @@ steps:
         next: COMPLETE
 `);
 
-    expect(() => loadWorkflowByIdentifier('./unsafe-system.yaml', tempDir)).toThrow(
-      /Project workflow ".*unsafe-system\.yaml" cannot use privileged system execution/,
-    );
+    const workflow = loadWorkflowByIdentifier('./unsafe-system.yaml', tempDir);
+
+    expect(workflow).not.toBeNull();
+    expect(workflow!.name).toBe('unsafe-system');
+    expect(workflow!.steps[0]?.kind).toBe('system');
   });
 
-  it('should reject allow_git_commit workflows loaded from arbitrary project absolute paths', () => {
+  it('should load allow_git_commit workflows from arbitrary project absolute paths', () => {
     const filePath = join(tempDir, 'unsafe-commit.yaml');
     writeFileSync(filePath, `name: unsafe-commit
 initial_step: implement
@@ -167,12 +179,14 @@ steps:
     instruction: "{task}"
 `);
 
-    expect(() => loadWorkflowByIdentifier(filePath, tempDir)).toThrow(
-      /Project workflow ".*unsafe-commit\.yaml" cannot use allow_git_commit in step "implement"/,
-    );
+    const workflow = loadWorkflowByIdentifier(filePath, tempDir);
+
+    expect(workflow).not.toBeNull();
+    expect(workflow!.name).toBe('unsafe-commit');
+    expect(workflow!.steps[0]?.allowGitCommit).toBe(true);
   });
 
-  it('should reject allow_git_commit workflows loaded from arbitrary project relative paths', () => {
+  it('should load allow_git_commit workflows from arbitrary project relative paths', () => {
     writeFileSync(join(tempDir, 'unsafe-commit.yaml'), `name: unsafe-commit
 initial_step: implement
 max_steps: 2
@@ -184,12 +198,14 @@ steps:
     instruction: "{task}"
 `);
 
-    expect(() => loadWorkflowByIdentifier('./unsafe-commit.yaml', tempDir)).toThrow(
-      /Project workflow ".*unsafe-commit\.yaml" cannot use allow_git_commit in step "implement"/,
-    );
+    const workflow = loadWorkflowByIdentifier('./unsafe-commit.yaml', tempDir);
+
+    expect(workflow).not.toBeNull();
+    expect(workflow!.name).toBe('unsafe-commit');
+    expect(workflow!.steps[0]?.allowGitCommit).toBe(true);
   });
 
-  it('should reject system-input workflows loaded from arbitrary project paths', () => {
+  it('should load system-input workflows from arbitrary project paths', () => {
     const filePath = join(tempDir, 'unsafe-system-inputs.yaml');
     writeFileSync(filePath, `name: unsafe-system-inputs
 initial_step: route_context
@@ -207,9 +223,11 @@ steps:
         next: COMPLETE
 `);
 
-    expect(() => loadWorkflowByIdentifier(filePath, tempDir)).toThrow(
-      /Project workflow ".*unsafe-system-inputs\.yaml" cannot use privileged system execution/,
-    );
+    const workflow = loadWorkflowByIdentifier(filePath, tempDir);
+
+    expect(workflow).not.toBeNull();
+    expect(workflow!.name).toBe('unsafe-system-inputs');
+    expect(workflow!.steps[0]?.kind).toBe('system');
   });
 
   it('should load workflow by relative path', () => {
@@ -579,6 +597,49 @@ steps:
     expect(workflow).not.toBeNull();
     expect(workflow!.name).toBe('auto-improvement-loop');
     expect(workflow!.steps[0]?.effects).toEqual([{ type: 'merge_pr', pr: 42 }]);
+  });
+
+  it('should load privileged global workflows by name and preserve user source identity', () => {
+    const globalWorkflowsDir = join(process.env.TAKT_CONFIG_DIR!, 'workflows');
+    mkdirSync(globalWorkflowsDir, { recursive: true });
+    writeFileSync(join(globalWorkflowsDir, 'global-system.yaml'), `name: global-system
+description: global system workflow
+initial_step: route_context
+max_steps: 2
+
+steps:
+  - name: route_context
+    mode: system
+    effects:
+      - type: merge_pr
+        pr: 42
+    rules:
+      - when: "true"
+        next: COMPLETE
+`);
+
+    const workflow = loadWorkflowByIdentifier('global-system', tempDir);
+
+    expect(workflow).not.toBeNull();
+    expect(workflow!.name).toBe('global-system');
+    expect(workflow!.steps[0]?.kind).toBe('system');
+    expect(getWorkflowTrustInfo(workflow!, tempDir)).toMatchObject({
+      source: 'user',
+      isProjectTrustRoot: false,
+      isProjectWorkflowRoot: false,
+    });
+  });
+
+  it('should load builtin auto-improvement-loop by name and preserve builtin source identity', () => {
+    const workflow = loadWorkflowByIdentifier('auto-improvement-loop', tempDir);
+
+    expect(workflow).not.toBeNull();
+    expect(workflow!.name).toBe('auto-improvement-loop');
+    expect(getWorkflowTrustInfo(workflow!, tempDir)).toMatchObject({
+      source: 'builtin',
+      isProjectTrustRoot: false,
+      isProjectWorkflowRoot: false,
+    });
   });
 
   it('should load privileged project-local workflows loaded by path', () => {
