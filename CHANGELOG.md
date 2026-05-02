@@ -1321,7 +1321,7 @@ Formal release of 0.8.0-alpha.1 content. No functional changes.
 - Branch name generation strategy is now configurable (`branch_name_strategy` config)
 - Added auto-PR feature and unified PR creation logic (#98)
 - Piece selection now also applies for issue references (#97)
-- Sleep functionality added to movements
+- Optional macOS idle sleep prevention during piece execution (#100)
 
 ### Changed
 
