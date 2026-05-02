@@ -6,6 +6,30 @@
 
 フォーマットは [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) に基づいています。
 
+## [0.39.0] - 2026-05-02
+
+### Added
+
+- ファセット継承構文 `{extends:<parent>}` を追加 (#690)。ファイル由来のファセットが同じ種類の親ファセットを継承できるようになった。親はファセット種別とレイヤ順で解決し、自己参照除外と循環検知はソースパスベースで行う。instructions / policies / knowledge / output contracts / loop monitor の judge instructions に適用される。親名は bare なファセット名のみ（path 参照や `@scope` 参照は不可）、persona ファセットは継承非対応
+- step レベルの `allow_git_commit` フィールドを追加 (#587)。Phase 1 / Phase 2 のインストラクションに注入される「git add / commit / push を実行しない」制約を、step 単位でオプトイン解除できる（デフォルト `false`）。1 つのタスクで多数の issue を消化するワークフローなど、作業単位ごとに git commit したいユースケースに使う
+- ビルトイン workflow `default-mini` を追加。`default` から `write_tests` を抜いたミニ版（`plan -> implement -> AI antipattern review -> parallel review -> complete`）。Quick Start カテゴリと Mini カテゴリ、builtin カタログに登録
+- run チェックポイント再開を追加 (#568)。run 実行中の `currentStep` / `phase` / `iterations` / `resumePoint` を `.takt/runs/<slug>/meta.json` に継続的に保存するようになり、`tasks.yaml` が `start_step`（`start_movement` は後方互換のエイリアスとして保持）を受け付けることで中断 run の再開時に最後に動いていた step から続行できる
+- エージェント失敗のカテゴリ分類を追加 (#678)。team leader part の失敗を `external_abort` / `part_timeout` / `provider_error` / `stream_idle_timeout` に分類し、trace report / session log / 集約エラーメッセージに分類を残すようになった。これまで「execution aborted」に潰れていた原因が判別可能になる。Codex クライアントは abort cause（`timeout` / `external`）を保持し、failure detail に伝搬する
+
+### Changed
+
+- `mode: system` ワークフローを project workflows root の外でも実行できるように緩和 (#691)。`mode: system` / workflow-level `runtime.prepare` / step `allow_git_commit: true` は従来 `.takt/workflows/` 配下でないと拒否されていたが、ビルトイン workflow（`auto-improvement-loop` 等）と `~/.takt/workflows/` 配下の global workflow を許可するようになった。再利用可能な orchestration workflow を global に置いて名前指定で実行できる。path-based に workflow を再分類していた旧 trust boundary は撤去され、loader 確定済みの `WorkflowTrustInfo` を後段でも使うようにした
+- `auto-improvement-loop` の PR 分岐 action セットを整理 (#676)。`comment_on_pr` と `noop` を削除し、`reject_pr` を追加。PR 分岐の選択肢は `enqueue_from_pr` / `prepare_merge` / `reject_pr` の 3 種に固定。`reject_pr` は `close_pr` effect で PR を close するのみで、コメント追加・ブランチ削除・タスク再エンキューは行わない。`pr-followup-task` schema の enum も同期して更新
+- `auto-improvement-loop` の Issue 分岐 / fresh planning を強化 (#685)。`plan_from_issue` / `plan_fresh_improvement` から `noop` を削除し、planning instruction で低価値・cosmetic-only・曖昧・既存 PR / Issue と重複するタスクを明示的に拒否、具体的な成果物・完了条件を必須化。`followup-task` schema の action enum は `enqueue_new_task` / `wait_before_next_scan` の 2 種に縮小
+- レートリミット原因を workflow abort 経由でも保持 (#569)。Claude のレートリミットが provider events で観測された場合、後段の phase / parallel / workflow エラー表示が generic な `Claude Code process exited with code 1` ではなく `Rate limit exceeded. Please try again later.` として残るようになった。`AgentResponse.errorKind` を provider 境界で正規化することで、session resume / report phase retry 経路でも原因が潰れない
+
+### Fixed
+
+- OpenCode 共有サーバーが takt 終了後に残り続ける問題を修正 (#550)。OpenCode provider を使った takt の終了後、opencode サーバープロセスがバックグラウンドで残ってリソースを消費し続ける状態だった。takt 終了時に共有サーバーを deterministic にクリーンアップするようになった
+- 対話モードの `/go` が事前会話履歴なしでも動作するように修正 (#680)。会話履歴が空の状態で `/go` を実行すると失敗していたが、初回入力をそのままワークフロー実行に渡せるようになった。既存の対話ありフローは維持
+- `takt watch` 停止後の stdin ハンドラ未解放を修正。即時 SIGINT exit インストーラーが cleanup フックを返すように変更し、`parseAsync` / slash fallback いずれの経路でも cleanup を呼ぶようにしたため、watch が組み込んだ stdin ハンドラが解放されてプロセス終了がブロックされなくなった
+- 対話モードに AI 応答中の進捗表示を追加。ユーザー入力送信後は `Assistant is thinking...`、`/go` での会話要約中は `Creating instruction...` を表示するようになり、takt が固まっているように見える状態を解消した。AI 呼び出し中は stdin を pause する。多段入力エディタの送信キーが CR (`\r`) に加えて LF (`\n`) でも反応するようになり、貼り付けや `\n` 終端の入力もそのまま送信される。改行を入力したい場合は `Shift+Enter`（CSI `13;2u`）を使う
+
 ## [0.38.0] - 2026-04-25
 
 ### Added

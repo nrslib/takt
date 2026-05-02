@@ -6,6 +6,30 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.39.0] - 2026-05-02
+
+### Added
+
+- Facet inheritance with `{extends:<parent>}` syntax added (#690). File-based facets can extend a parent facet of the same kind; the parent is resolved through the facet kind and layer order, with self-reference exclusion and circular detection both done by source path. Applies to instructions, policies, knowledge, output contracts, and loop monitor judge instructions. The parent name must be a bare facet name (no path or `@scope` references); persona facets do not support inheritance
+- Step-level `allow_git_commit` field added (#587). Opt-in flag (default `false`) that removes the standard "do not run git add / commit / push" prohibition injected into Phase 1 / Phase 2 instructions. Useful for workflows that consume many issues per task and need to commit per work unit
+- `default-mini` builtin workflow added: a lightweight variant of `default` with `write_tests` removed (`plan -> implement -> AI antipattern review -> parallel review -> complete`). Registered to both Quick Start and Mini categories and the builtin catalog
+- Run checkpoint resume added (#568). `.takt/runs/<slug>/meta.json` now records `currentStep` / `phase` / `iterations` / `resumePoint` continuously during run execution, and `tasks.yaml` accepts `start_step` (with `start_movement` retained as a backward-compatible alias) so interrupted runs resume from the last known step on retry
+- Agent failure categorization added (#678). Team leader part failures now distinguish `external_abort` / `part_timeout` / `provider_error` / `stream_idle_timeout` and surface the category in the trace report, session log, and aggregated error message instead of a generic "execution aborted". Codex client preserves abort cause (`timeout` / `external`) and propagates it through the failure detail
+
+### Changed
+
+- System-mode workflow execution is no longer restricted to the project workflows root (#691). `mode: system`, workflow-level `runtime.prepare`, and step `allow_git_commit: true` were previously rejected unless the workflow lived under `.takt/workflows/`. Builtin workflows (e.g. `auto-improvement-loop`) and user workflows under `~/.takt/workflows/` are now accepted, so reusable orchestration workflows can be installed globally and invoked by name. The previous workflow trust boundary that re-classified workflows by file path is removed in favour of the loader-confirmed `WorkflowTrustInfo`
+- `auto-improvement-loop` PR-branch action set simplified (#676). Removed `comment_on_pr` and `noop`; added `reject_pr`. The PR branch now chooses among `enqueue_from_pr` / `prepare_merge` / `reject_pr`. `reject_pr` closes the PR via `close_pr` effect without leaving a comment, deleting the branch, or re-enqueueing the task. The `pr-followup-task` schema enum was updated accordingly
+- `auto-improvement-loop` issue and fresh-planning paths tightened (#685). Removed `noop` from `plan_from_issue` and `plan_fresh_improvement`; planning instructions now explicitly reject low-value, cosmetic-only, ambiguous, or duplicate tasks and require concrete deliverables and completion conditions. The `followup-task` schema action enum is reduced to `enqueue_new_task` / `wait_before_next_scan`
+- Rate-limit cause is preserved through workflow abort (#569). When a Claude rate limit is observed in provider events, downstream phase / parallel / workflow errors now surface as `Rate limit exceeded. Please try again later.` instead of the generic `Claude Code process exited with code 1`. `AgentResponse.errorKind` is normalized at the provider boundary so session resume / report-phase retry paths no longer flatten the cause
+
+### Fixed
+
+- OpenCode shared server processes no longer leak after takt exit (#550). The server kept running in the background after `takt` terminated, accumulating across runs. Cleanup now runs on takt exit so OpenCode provider sessions release their server processes deterministically
+- Interactive `/go` works without prior conversation history (#680). `/go` could fail when there was no preceding dialog; the first input now flows directly into workflow execution while existing dialog-driven flows are preserved
+- `takt watch` stdin handlers cleaned up after stop. The immediate-SIGINT-exit installer now returns a cleanup hook that runs after `parseAsync` and slash-fallback paths, so stdin handlers installed for watch are released and process termination is no longer blocked
+- Interactive mode now shows progress feedback while the AI is responding. `Assistant is thinking...` is displayed after each user input is sent, and `Creating instruction...` is displayed while `/go` summarizes the conversation, so the user is no longer left wondering whether takt is hung. Stdin is paused for the duration of these calls. LF (`\n`) now submits the line in the multiline input editor in addition to CR (`\r`), so pasted text and `\n`-terminated inputs commit cleanly; `Shift+Enter` (CSI `13;2u`) remains the way to insert a literal newline
+
 ## [0.38.0] - 2026-04-25
 
 ### Added
