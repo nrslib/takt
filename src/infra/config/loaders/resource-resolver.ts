@@ -10,6 +10,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import type { FacetType } from '../paths.js';
+
 import {
   resolveFacetPath as resolveFacetPathGeneric,
   resolvePersona as resolvePersonaGeneric,

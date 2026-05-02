@@ -26,6 +26,7 @@ import {
 import { invalidateResolvedConfigCache } from '../resolutionCache.js';
 import { expandOptionalHomePath } from '../pathExpansion.js';
 import { getProjectConfigDir, getProjectConfigPath } from './projectConfigPaths.js';
+import { isProjectConfigEnabled } from './projectConfigGuards.js';
 import {
   normalizeSubmodules,
   normalizeWithSubmodules,
@@ -50,7 +51,12 @@ type ProviderType = NonNullable<ProjectConfig['provider']>;
 type RawProviderReference = ConfigProviderReference<ProviderType>;
 
 export function loadProjectConfig(projectDir: string): ProjectConfig {
-  const configPath = getProjectConfigPath(projectDir);
+  // When project config dir collides with global config dir, skip the project
+  // config file so we don't accidentally read global config as project config.
+  // Still run the trace pipeline with a non-existent path so env overrides apply.
+  const configPath = isProjectConfigEnabled(projectDir)
+    ? getProjectConfigPath(projectDir)
+    : getProjectConfigPath(projectDir) + '.collision-disabled';
   const { parsedConfig, rawConfig, trace } = loadProjectConfigTrace(configPath);
   setCachedProjectConfigTrace(projectDir, trace);
   assertValidProjectConfig(parsedConfig, configPath, true);
@@ -171,6 +177,10 @@ export function loadProjectConfigTraceState(projectDir: string): ConfigTrace {
 }
 
 export function saveProjectConfig(projectDir: string, config: ProjectConfig): void {
+  if (!isProjectConfigEnabled(projectDir)) {
+    return;
+  }
+
   const configDir = getProjectConfigDir(projectDir);
   const configPath = getProjectConfigPath(projectDir);
   if (!existsSync(configDir)) {
@@ -259,8 +269,19 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
   invalidateResolvedConfigCache(projectDir);
 }
 
-export function updateProjectConfig<K extends keyof ProjectConfig>(projectDir: string, key: K, value: ProjectConfig[K]): void {
+export function updateProjectConfig<K extends keyof ProjectConfig>(
+  projectDir: string,
+  key: K,
+  value: ProjectConfig[K]
+): void {
+  if (!isProjectConfigEnabled(projectDir)) {
+    return;
+  }
+
   const config = loadProjectConfig(projectDir);
-  config[key] = value;
-  saveProjectConfig(projectDir, config);
+  const nextConfig: ProjectConfig = {
+    ...config,
+    [key]: value,
+  };
+  saveProjectConfig(projectDir, nextConfig);
 }
