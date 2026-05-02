@@ -63,7 +63,11 @@ vi.mock('../shared/prompt/index.js', () => ({
 }));
 
 vi.mock('../shared/i18n/index.js', () => ({
-  getLabel: vi.fn((_key: string, _lang: string) => 'Mock label'),
+  getLabel: vi.fn((key: string, _lang: string) => (
+    key === 'interactive.ui.creatingInstruction' ? 'Creating instruction...'
+      : key === 'interactive.ui.thinking' ? 'Assistant is thinking...'
+        : 'Mock label'
+  )),
   getLabelObject: vi.fn(() => ({
     intro: 'Intro',
     resume: 'Resume',
@@ -82,12 +86,13 @@ vi.mock('../shared/i18n/index.js', () => ({
 
 import { getProvider } from '../infra/providers/index.js';
 import { selectOption } from '../shared/prompt/index.js';
-import { error as logError } from '../shared/ui/index.js';
+import { error as logError, info as logInfo } from '../shared/ui/index.js';
 import { runInstructMode } from '../features/tasks/list/instructMode.js';
 
 const mockGetProvider = vi.mocked(getProvider);
 const mockSelectOption = vi.mocked(selectOption);
 const mockLogError = vi.mocked(logError);
+const mockLogInfo = vi.mocked(logInfo);
 
 // --- Helpers ---
 
@@ -138,6 +143,7 @@ describe('EOF handling', () => {
 
     expect(result.action).toBe('cancel');
     expect(capture.callCount).toBe(1);
+    expect(mockLogInfo).toHaveBeenCalledWith('Assistant is thinking...');
   });
 });
 
@@ -207,6 +213,7 @@ describe('/go summary flow', () => {
     expect(capture.callCount).toBe(1);
     expect(capture.prompts[0]).toContain('User: add error handling');
     expect(capture.prompts[0]).not.toContain('User Note:\nadd error handling');
+    expect(mockLogInfo).toHaveBeenCalledWith('Creating instruction...');
   });
 
   it('should reject /go without prior conversation', async () => {

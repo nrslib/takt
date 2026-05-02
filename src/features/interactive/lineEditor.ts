@@ -815,7 +815,7 @@ export function readMultilineInput(
             }
 
             // Submit
-            if (ch === '\r') {
+            if (ch === '\r' || ch === '\n') {
               completion.acceptSelection();
               process.stdout.write('\n');
               cleanup();
@@ -846,7 +846,6 @@ export function readMultilineInput(
             if (ch === '\x0B') { deleteToLineEnd(); completion.update(); return; }
             if (ch === '\x15') { deleteToLineStart(); completion.update(); return; }
             if (ch === '\x17') { deleteWord(); completion.update(); return; }
-            if (ch === '\x0A') { completion.hide(); insertNewline(); return; }
             // Ignore unknown control characters
             if (ch.charCodeAt(0) < 0x20) return;
             // Regular character

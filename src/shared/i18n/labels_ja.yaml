@@ -14,6 +14,8 @@ interactive:
     intro: "対話モード - タスク内容を入力してください。コマンド: /go（指示書作成・実行）, /play（即実行）, /resume（セッション読込）, /cancel（終了）"
     resume: "前回のセッションを再開します"
     noConversation: "まだ会話がありません。まずタスク内容を入力してください。"
+    thinking: "アシスタントが応答を作成中..."
+    creatingInstruction: "指示書を作成中..."
     summarizeFailed: "会話の要約に失敗しました。再度お試しください。"
     continuePrompt: "続けてタスク内容を入力してください。"
     proposed: "提案されたタスク指示:"

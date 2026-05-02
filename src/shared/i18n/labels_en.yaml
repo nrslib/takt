@@ -14,6 +14,8 @@ interactive:
     intro: "Interactive mode - describe your task. Commands: /go (create instruction & run), /play (run now), /resume (load session), /cancel (exit)"
     resume: "Resuming previous session"
     noConversation: "No conversation yet. Please describe your task first."
+    thinking: "Assistant is thinking..."
+    creatingInstruction: "Creating instruction..."
     summarizeFailed: "Failed to summarize conversation. Please try again."
     continuePrompt: "Okay, continue describing your task."
     proposed: "Proposed task instruction:"

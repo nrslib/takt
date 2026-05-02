@@ -179,6 +179,7 @@ export async function runConversationLoop(
         ...createSessionLogMeta(sessionId),
       });
       process.stdin.pause();
+      info(getLabel('interactive.ui.thinking', ctx.lang));
 
       const promptWithTransform = strategy.transformPrompt(trimmed, sourceContext);
       const result = await doCallAI(promptWithTransform, strategy.systemPrompt, strategy.allowedTools);
@@ -241,6 +242,8 @@ export async function runConversationLoop(
         if (userNote) {
           summaryPrompt = `${summaryPrompt}\n\nUser Note:\n${userNote}`;
         }
+        process.stdin.pause();
+        info(getLabel('interactive.ui.creatingInstruction', ctx.lang));
         // Summary AI must not inherit the conversation session to avoid chat-mode behavior.
         const { result: summaryResult } = await callAIWithRetry(
           summaryPrompt, summaryPrompt, strategy.allowedTools, cwd,

@@ -301,6 +301,28 @@ describe('readMultilineInput cursor navigation', () => {
     return readMultilineInput(prompt, options);
   }
 
+  describe('submit keys', () => {
+    it('should submit on LF as well as CR', async () => {
+      setupRawStdin([
+        '/go add coverage\n',
+      ]);
+
+      const result = await callReadMultilineInput('> ');
+
+      expect(result).toBe('/go add coverage');
+    });
+
+    it('should keep Shift+Enter as multiline input', async () => {
+      setupRawStdin([
+        'first\x1B[13;2usecond\r',
+      ]);
+
+      const result = await callReadMultilineInput('> ');
+
+      expect(result).toBe('first\nsecond');
+    });
+  });
+
   describe('left arrow line wrap', () => {
     it('should move to end of previous line when at line start', async () => {
       // Given: "abc\ndef" with cursor at start of "def", press left → cursor at end of "abc" (pos 3)
@@ -1091,27 +1113,21 @@ describe('readMultilineInput cursor navigation', () => {
     });
   });
 
-  describe('Ctrl+J inserts newline', () => {
-    it('should insert newline with Ctrl+J at end of line', async () => {
-      // Given
+  describe('LF submit behavior', () => {
+    it('should submit when LF is received at end of line', async () => {
       setupRawStdin(['abc\x0Adef\r']);
 
-      // When
       const result = await callReadMultilineInput('> ');
 
-      // Then
-      expect(result).toBe('abc\ndef');
+      expect(result).toBe('abc');
     });
 
-    it('should insert newline with Ctrl+J mid-line', async () => {
-      // Given
+    it('should submit when LF is received mid-line', async () => {
       setupRawStdin(['abcdef\x1B[H\x1B[C\x1B[C\x1B[C\x0A\r']);
 
-      // When
       const result = await callReadMultilineInput('> ');
 
-      // Then
-      expect(result).toBe('abc\ndef');
+      expect(result).toBe('abcdef');
     });
   });
 
