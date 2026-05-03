@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mockRunAgent } = vi.hoisted(() => ({
   mockRunAgent: vi.fn(),
@@ -14,6 +14,12 @@ import { resolveStructuredStep } from '../agents/structured-caller/shared.js';
 describe('PromptBasedStructuredCaller', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    mockRunAgent.mockReset();
   });
 
   it('should evaluate conditions from [JUDGE:N] tags without outputSchema', async () => {
@@ -196,6 +202,103 @@ describe('PromptBasedStructuredCaller', () => {
         workflowMeta,
       }),
     );
+  });
+
+  it('should retry decomposeTask when first response has no JSON block and succeed on second attempt', async () => {
+    mockRunAgent
+      .mockResolvedValueOnce({
+        persona: 'leader',
+        status: 'done',
+        content: 'no json here',
+        timestamp: new Date(),
+      })
+      .mockResolvedValueOnce({
+        persona: 'leader',
+        status: 'done',
+        content: [
+          '```json',
+          JSON.stringify([
+            { id: 'p1', title: 'First task', instruction: 'Do the first thing' },
+          ]),
+          '```',
+        ].join('\n'),
+        timestamp: new Date(),
+      });
+
+    const caller = new PromptBasedStructuredCaller();
+    const promise = caller.decomposeTask('break down the work', 3, {
+      cwd: '/tmp/project',
+      provider: 'cursor',
+      persona: 'team-leader',
+    });
+    await vi.advanceTimersByTimeAsync(1000);
+    const result = await promise;
+
+    expect(mockRunAgent).toHaveBeenCalledTimes(2);
+    expect(result).toEqual([
+      { id: 'p1', title: 'First task', instruction: 'Do the first thing' },
+    ]);
+  });
+
+  it('should retry decomposeTask when first response is an empty array and succeed on second attempt', async () => {
+    mockRunAgent
+      .mockResolvedValueOnce({
+        persona: 'leader',
+        status: 'done',
+        content: '```json\n[]\n```',
+        timestamp: new Date(),
+      })
+      .mockResolvedValueOnce({
+        persona: 'leader',
+        status: 'done',
+        content: [
+          '```json',
+          JSON.stringify([
+            { id: 'p1', title: 'Recovered', instruction: 'Do it' },
+          ]),
+          '```',
+        ].join('\n'),
+        timestamp: new Date(),
+      });
+
+    const caller = new PromptBasedStructuredCaller();
+    const promise = caller.decomposeTask('break down the work', 3, {
+      cwd: '/tmp/project',
+      provider: 'cursor',
+      persona: 'team-leader',
+    });
+    await vi.advanceTimersByTimeAsync(1000);
+    const result = await promise;
+
+    expect(mockRunAgent).toHaveBeenCalledTimes(2);
+    expect(result).toEqual([
+      { id: 'p1', title: 'Recovered', instruction: 'Do it' },
+    ]);
+  });
+
+  it('should throw decomposeTask after three consecutive failures', async () => {
+    const failingResponse = {
+      persona: 'leader',
+      status: 'done',
+      content: 'never any json',
+      timestamp: new Date(),
+    };
+    mockRunAgent
+      .mockResolvedValueOnce(failingResponse)
+      .mockResolvedValueOnce(failingResponse)
+      .mockResolvedValueOnce(failingResponse);
+
+    const caller = new PromptBasedStructuredCaller();
+    const promise = caller.decomposeTask('break down the work', 3, {
+      cwd: '/tmp/project',
+      provider: 'cursor',
+      persona: 'team-leader',
+    });
+    const assertion = expect(promise).rejects.toThrow();
+    await vi.advanceTimersByTimeAsync(2000);
+    await assertion;
+
+    expect(mockRunAgent).toHaveBeenCalledTimes(3);
   });
 
   it('should parse additional parts from fenced JSON without outputSchema', async () => {
