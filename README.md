@@ -255,6 +255,65 @@ const engine = new WorkflowEngine(config, process.cwd(), 'My task');
 await engine.run();
 ```
 
+
+## FAQ
+
+### 通用问题
+
+**Q: TAKT 是什么？**
+TAKT（TAKT Agent Koordination Topology）是一个 AI Agent 编排工具，通过 YAML 定义的工作流让 AI 编码 Agent（如 Claude Code、Codex、OpenCode 等）执行结构化的开发流程，包含规划、实现、审查和修复循环。
+
+**Q: TAKT 与其他 Agent 框架（如 LangChain、CrewAI）有什么区别？**
+TAKT 专注于 AI 编码 Agent 的工作流编排，提供内置的代码审查循环、工作树隔离、PR 自动创建等功能。它不是通用的 Agent 框架，而是为日常开发场景设计的实用工具。
+
+**Q: TAKT 支持哪些 AI 提供商？**
+支持 Claude Code（默认）、Codex、OpenCode、Cursor Agent 和 GitHub Copilot CLI。也支持直接使用 OpenAI/OpenCode API Key，无需 CLI。
+
+### 安装与配置
+
+**Q: 如何安装 TAKT？**
+```bash
+npm install -g takt
+```
+
+**Q: 需要哪些前置条件？**
+需要安装至少一个支持的 Provider CLI（Claude Code/Codex/OpenCode/Cursor/Copilot CLI），或使用 OpenAI/OpenCode API Key。可选安装 GitHub CLI (`gh`) 用于 GitHub Issue 集成。
+
+**Q: 配置文件在哪里？**
+全局配置在 `~/.takt/config.yaml`，项目配置在 `.takt/config.yaml`。
+
+### 使用指南
+
+**Q: 如何开始使用？**
+1. 安装后运行 `takt` 进入交互模式
+2. 选择工作流并与 AI 对话定义任务
+3. 选择 "Queue as task" 保存任务
+4. 运行 `takt run` 执行任务
+
+**Q: 什么是工作树隔离？**
+TAKT 在执行任务时会创建隔离的 Git worktree，确保任务执行不会影响主工作目录。任务完成后可以选择创建 PR。
+
+**Q: 如何从 GitHub Issue 创建任务？**
+使用 `takt add #N` 命令（N 为 Issue 编号），TAKT 会自动将 Issue 内容转换为任务。
+
+### 工作流与自定义
+
+**Q: 如何创建工作流？**
+工作流是 YAML 文件，定义了一系列步骤（steps），每个步骤包含 persona（角色）、permissions（权限）和 rules（规则）。详见 [Workflow Guide](./docs/workflows.md)。
+
+**Q: 可以自定义 Agent 角色吗？**
+可以。TAKT 使用 "Faceted Prompting" 方法论，将提示词分解为 persona、policy、knowledge、instruction 等独立面，可以自由组合。详见 [Faceted Prompting](./docs/faceted-prompting.md)。
+
+### 故障排查
+
+**Q: 任务执行失败怎么办？**
+TAKT 支持失败重试。使用 `takt list` 查看任务分支状态，可以选择 retry、force-fail 或删除。
+
+**Q: 如何查看执行日志？**
+执行日志存储在 `.takt/runs/` 目录下，格式为 NDJSON，支持从任务到 PR 的完整追溯。
+
+**Q: 遇到 OAuth 或 API Key 相关问题？**
+各 Provider 对 OAuth 和 API Key 的使用政策不同，请参考各 Provider 的服务条款。如遇到问题，可在 [TAKT Discord](https://discord.gg/R2Xz3uYWxD) 社区寻求帮助。
 ## Documentation
 
 | Document | Description |
