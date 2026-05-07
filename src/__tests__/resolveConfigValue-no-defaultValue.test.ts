@@ -34,6 +34,13 @@ const { invalidateGlobalConfigCache } = await import('../infra/config/global/glo
 const { getProjectConfigDir } = await import('../infra/config/paths.js');
 type ConfigParameterKey = import('../infra/config/resolveConfigValue.js').ConfigParameterKey;
 
+const disabledObservability = {
+  enabled: false,
+  monitor: false,
+  sessionLogExporter: false,
+  usageEventsPhase: false,
+};
+
 describe('config resolution defaults and project-local priority', () => {
   let projectDir: string;
 
@@ -180,6 +187,85 @@ describe('config resolution defaults and project-local priority', () => {
       expect(resolveConfigValueWithSource(projectDir, 'syncProjectLocalTaktOnRetry' as ConfigParameterKey)).toEqual({
         value: true,
         source: 'default',
+      });
+    });
+
+    it('should resolve observability to disabled defaults when unset', () => {
+      const configDir = getProjectConfigDir(projectDir);
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(join(configDir, 'config.yaml'), 'provider: claude\n', 'utf-8');
+      writeFileSync(globalConfigPath, 'language: en\n', 'utf-8');
+      invalidateGlobalConfigCache();
+
+      const result = resolveConfigValueWithSource(projectDir, 'observability' as ConfigParameterKey);
+
+      expect(result).toEqual({
+        value: disabledObservability,
+        source: 'default',
+      });
+    });
+
+    it('should merge observability fields from project over global config', () => {
+      writeFileSync(
+        globalConfigPath,
+        [
+          'language: en',
+          'observability:',
+          '  enabled: true',
+          '  monitor: false',
+          '  session_log_exporter: true',
+        ].join('\n'),
+        'utf-8',
+      );
+      invalidateGlobalConfigCache();
+
+      const configDir = getProjectConfigDir(projectDir);
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(
+        join(configDir, 'config.yaml'),
+        [
+          'observability:',
+          '  enabled: false',
+          '  monitor: true',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      const result = resolveConfigValueWithSource(projectDir, 'observability' as ConfigParameterKey);
+
+      expect(result).toEqual({
+        value: {
+          enabled: false,
+          monitor: true,
+          sessionLogExporter: true,
+          usageEventsPhase: false,
+        },
+        source: 'project',
+      });
+    });
+
+    it('should resolve global observability with unspecified fields disabled', () => {
+      writeFileSync(
+        globalConfigPath,
+        [
+          'language: en',
+          'observability:',
+          '  usage_events_phase: true',
+        ].join('\n'),
+        'utf-8',
+      );
+      invalidateGlobalConfigCache();
+
+      const result = resolveConfigValueWithSource(projectDir, 'observability' as ConfigParameterKey);
+
+      expect(result).toEqual({
+        value: {
+          enabled: false,
+          monitor: false,
+          sessionLogExporter: false,
+          usageEventsPhase: true,
+        },
+        source: 'global',
       });
     });
 

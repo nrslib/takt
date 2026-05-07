@@ -12,6 +12,7 @@ import { getWorkflowSourcePath } from '../infra/config/loaders/workflowSourceMet
 
 const {
   MockWorkflowEngine,
+  disabledObservability,
   mockGetProvider,
   mockRunAgent,
 } = vi.hoisted(() => {
@@ -62,6 +63,12 @@ const {
 
   return {
     MockWorkflowEngine,
+    disabledObservability: {
+      enabled: false,
+      monitor: false,
+      sessionLogExporter: false,
+      usageEventsPhase: false,
+    },
     mockGetProvider: vi.fn(),
     mockRunAgent: vi.fn(),
   };
@@ -102,6 +109,7 @@ vi.mock('../infra/config/index.js', async (importOriginal) => ({
     model: undefined,
     logging: undefined,
     analytics: undefined,
+    observability: disabledObservability,
   }),
   saveSessionState: vi.fn(),
   ensureDir: vi.fn(),
@@ -265,6 +273,7 @@ beforeEach(() => {
       model: undefined,
       logging: undefined,
       analytics: undefined,
+      observability: disabledObservability,
     });
     await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
       projectCwd: '/tmp/project',
@@ -313,6 +322,7 @@ beforeEach(() => {
       model: undefined,
       logging: undefined,
       analytics: undefined,
+      observability: disabledObservability,
     });
 
     await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
@@ -366,6 +376,7 @@ beforeEach(() => {
       model: undefined,
       logging: undefined,
       analytics: undefined,
+      observability: disabledObservability,
     });
 
     await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
@@ -432,6 +443,7 @@ beforeEach(() => {
       model: 'sonnet',
       logging: undefined,
       analytics: undefined,
+      observability: disabledObservability,
     });
 
     await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
@@ -487,6 +499,7 @@ beforeEach(() => {
       model: 'cursor-fast',
       logging: undefined,
       analytics: undefined,
+      observability: disabledObservability,
     });
 
     await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
@@ -848,6 +861,7 @@ steps:
       model: undefined,
       logging: undefined,
       analytics: undefined,
+      observability: disabledObservability,
     });
 
     await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
@@ -875,6 +889,7 @@ steps:
       model: undefined,
       logging: undefined,
       analytics: undefined,
+      observability: disabledObservability,
     });
 
     const config = makeConfig();
@@ -926,6 +941,7 @@ steps:
       model: undefined,
       logging: undefined,
       analytics: undefined,
+      observability: disabledObservability,
     });
 
     const config = makeConfig();
@@ -978,6 +994,7 @@ steps:
       model: undefined,
       logging: undefined,
       analytics: undefined,
+      observability: disabledObservability,
     });
 
     await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
@@ -1025,6 +1042,7 @@ steps:
       model: undefined,
       logging: undefined,
       analytics: undefined,
+      observability: disabledObservability,
     });
 
     await executeWorkflow(makeConfig(), 'task', '/tmp/project', {

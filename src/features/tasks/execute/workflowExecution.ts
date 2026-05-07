@@ -74,7 +74,7 @@ async function executeWorkflowInternal(
   runContext?: WorkflowRunContext,
 ): Promise<WorkflowExecutionResult> {
   const parentRunPid = process.pid;
-  const bootstrap = createWorkflowExecutionBootstrap(workflowConfig, task, cwd, options);
+  const bootstrap = await createWorkflowExecutionBootstrap(workflowConfig, task, cwd, options);
   const workflowExecutionContext = createWorkflowExecutionContext(workflowConfig, options.projectCwd);
   const phase1ProcessSafetyByStep = resolvePhase1ProcessSafetyByStep(workflowConfig, parentRunPid);
   let engine: WorkflowEngine | null = null;
@@ -208,5 +208,6 @@ async function executeWorkflowInternal(
   } finally {
     bootstrap.prefixWriter?.flush();
     abortHandler.cleanup();
+    await bootstrap.observabilityHandle.shutdown();
   }
 }

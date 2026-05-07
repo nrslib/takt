@@ -73,6 +73,20 @@ export interface LoggingConfig {
   usageEvents?: boolean;
 }
 
+/** OpenTelemetry observability opt-in configuration */
+export interface ObservabilityConfig {
+  /** Master switch for observability initialization (default: false when undefined) */
+  enabled?: boolean;
+  /** Reserved flag for monitor.json output in a later change */
+  monitor?: boolean;
+  /** Reserved flag for shadow session log exporter in a later change */
+  sessionLogExporter?: boolean;
+  /** Reserved flag for phase-aware usage events in a later change */
+  usageEventsPhase?: boolean;
+}
+
+export type ResolvedObservabilityConfig = Required<ObservabilityConfig>;
+
 /** Analytics configuration for local metrics collection */
 export interface AnalyticsConfig {
   /** Whether analytics collection is enabled */
@@ -192,6 +206,8 @@ export interface ProjectConfig {
   syncProjectLocalTaktOnRetry?: boolean;
   /** Project-level analytics overrides */
   analytics?: AnalyticsConfig;
+  /** Project-level observability opt-in overrides */
+  observability?: ObservabilityConfig;
   /** Provider-specific options (overrides global, overridden by workflow/step) */
   providerOptions?: StepProviderOptions;
   /** Provider-specific permission profiles (project-level override) */

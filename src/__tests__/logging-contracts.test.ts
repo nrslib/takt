@@ -8,8 +8,8 @@ import {
   USAGE_MISSING_REASONS,
 } from '../core/logging/contracts.js';
 import { buildUsageEventRecord } from '../core/logging/providerEvent.js';
-import { createProviderEventLogger } from '../core/logging/providerEventLogger.js';
-import { createUsageEventLogger } from '../core/logging/usageEventLogger.js';
+import { createProviderEventLogger, isProviderEventsEnabled } from '../core/logging/providerEventLogger.js';
+import { createUsageEventLogger, isUsageEventsEnabled } from '../core/logging/usageEventLogger.js';
 import type { ProviderUsageSnapshot } from '../core/models/response.js';
 
 describe('logging contracts', () => {
@@ -114,5 +114,23 @@ describe('logging contracts', () => {
         },
       ),
     ).not.toThrow();
+  });
+
+  it('should keep provider and usage event enablement tied to logging config only', () => {
+    const config = {
+      logging: {
+        providerEvents: false,
+        usageEvents: false,
+      },
+      observability: {
+        enabled: true,
+        monitor: true,
+        sessionLogExporter: true,
+        usageEventsPhase: true,
+      },
+    };
+
+    expect(isProviderEventsEnabled(config)).toBe(false);
+    expect(isUsageEventsEnabled(config)).toBe(false);
   });
 });

@@ -31,6 +31,13 @@ const {
 } = await import('../infra/config/global/globalConfig.js');
 const { getGlobalConfigPath } = await import('../infra/config/paths.js');
 
+type ObservabilityConfigForTest = {
+  enabled?: boolean;
+  monitor?: boolean;
+  sessionLogExporter?: boolean;
+  usageEventsPhase?: boolean;
+};
+
 describe('loadGlobalConfig', () => {
   beforeEach(() => {
     invalidateGlobalConfigCache();
@@ -734,6 +741,33 @@ describe('loadGlobalConfig', () => {
     });
   });
 
+  it('should load observability config from config.yaml', () => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(
+      getGlobalConfigPath(),
+      [
+        'language: en',
+        'observability:',
+        '  enabled: true',
+        '  monitor: false',
+        '  session_log_exporter: true',
+        '  usage_events_phase: false',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const config = loadGlobalConfig() as ReturnType<typeof loadGlobalConfig> & {
+      observability?: ObservabilityConfigForTest;
+    };
+    expect(config.observability).toEqual({
+      enabled: true,
+      monitor: false,
+      sessionLogExporter: true,
+      usageEventsPhase: false,
+    });
+  });
+
   it('should load full logging config with all fields', () => {
     const taktDir = join(testHomeDir, '.takt');
     mkdirSync(taktDir, { recursive: true });
@@ -820,6 +854,41 @@ describe('loadGlobalConfig', () => {
     const reloaded = loadGlobalConfig();
     expect(reloaded.logging).toEqual({
       usageEvents: true,
+    });
+  });
+
+  it('should save and reload observability config with explicit false values', () => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
+
+    const config = loadGlobalConfig() as ReturnType<typeof loadGlobalConfig> & {
+      observability?: ObservabilityConfigForTest;
+    };
+    config.observability = {
+      enabled: false,
+      monitor: false,
+      sessionLogExporter: false,
+      usageEventsPhase: false,
+    };
+    saveGlobalConfig(config);
+    invalidateGlobalConfigCache();
+
+    const saved = readFileSync(getGlobalConfigPath(), 'utf-8');
+    expect(saved).toContain('observability:');
+    expect(saved).toContain('enabled: false');
+    expect(saved).toContain('monitor: false');
+    expect(saved).toContain('session_log_exporter: false');
+    expect(saved).toContain('usage_events_phase: false');
+
+    const reloaded = loadGlobalConfig() as ReturnType<typeof loadGlobalConfig> & {
+      observability?: ObservabilityConfigForTest;
+    };
+    expect(reloaded.observability).toEqual({
+      enabled: false,
+      monitor: false,
+      sessionLogExporter: false,
+      usageEventsPhase: false,
     });
   });
 

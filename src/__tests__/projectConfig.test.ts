@@ -20,6 +20,13 @@ import {
   unexpectedWorkflowRuntimePrepareConfigKey,
 } from '../../test/helpers/unknown-contract-test-keys.js';
 
+type ObservabilityConfigForTest = {
+  enabled?: boolean;
+  monitor?: boolean;
+  sessionLogExporter?: boolean;
+  usageEventsPhase?: boolean;
+};
+
 describe('projectConfig', () => {
   let testDir: string;
 
@@ -1176,6 +1183,77 @@ unexpected_overrides:
     });
   });
 
+
+  describe('observability round-trip', () => {
+    it('should load observability config block', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(
+        configPath,
+        [
+          'observability:',
+          '  enabled: true',
+          '  monitor: false',
+          '  session_log_exporter: true',
+          '  usage_events_phase: false',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      const loaded = loadProjectConfig(testDir) as ProjectLocalConfig & {
+        observability?: ObservabilityConfigForTest;
+      };
+
+      expect(loaded.observability).toEqual({
+        enabled: true,
+        monitor: false,
+        sessionLogExporter: true,
+        usageEventsPhase: false,
+      });
+    });
+
+    it('should round-trip observability config with explicit false values', () => {
+      const config = {
+        observability: {
+          enabled: false,
+          monitor: false,
+          sessionLogExporter: false,
+          usageEventsPhase: false,
+        },
+      } as ProjectLocalConfig & { observability: ObservabilityConfigForTest };
+
+      saveProjectConfig(testDir, config);
+      const reloaded = loadProjectConfig(testDir) as ProjectLocalConfig & {
+        observability?: ObservabilityConfigForTest;
+      };
+
+      expect(reloaded.observability).toEqual({
+        enabled: false,
+        monitor: false,
+        sessionLogExporter: false,
+        usageEventsPhase: false,
+      });
+    });
+
+    it('should save observability using snake_case keys', () => {
+      const config = {
+        observability: {
+          enabled: true,
+          monitor: true,
+          sessionLogExporter: false,
+          usageEventsPhase: true,
+        },
+      } as ProjectLocalConfig & { observability: ObservabilityConfigForTest };
+
+      saveProjectConfig(testDir, config);
+
+      const saved = readFileSync(join(testDir, '.takt', 'config.yaml'), 'utf-8');
+      expect(saved).toContain('observability:');
+      expect(saved).toContain('session_log_exporter: false');
+      expect(saved).toContain('usage_events_phase: true');
+      expect(saved).not.toContain('sessionLogExporter:');
+      expect(saved).not.toContain('usageEventsPhase:');
+    });
+  });
 
   describe('tilde expansion for analytics path', () => {
     it('should expand "~/" in analytics.events_path on load', () => {

@@ -12,6 +12,15 @@ const testRoot = join(tmpdir(), `takt-config-env-${randomUUID()}`);
 const globalTaktDir = join(testRoot, 'global');
 const globalConfigPath = join(globalTaktDir, 'config.yaml');
 
+type ConfigWithObservability<T> = T & {
+  observability?: {
+    enabled?: boolean;
+    monitor?: boolean;
+    sessionLogExporter?: boolean;
+    usageEventsPhase?: boolean;
+  };
+};
+
 vi.mock('../infra/config/paths.js', async (importOriginal) => {
   const original = await importOriginal<Record<string, unknown>>();
   return {
@@ -181,6 +190,100 @@ describe('config traced env overrides', () => {
 
     expect(config.logging).toEqual({
       debug: true,
+    });
+  });
+
+  it('global config は observability の root JSON env を反映する', () => {
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(globalConfigPath, 'language: ja\n', 'utf-8');
+    process.env.TAKT_OBSERVABILITY = JSON.stringify({
+      enabled: true,
+      monitor: false,
+      session_log_exporter: true,
+      usage_events_phase: false,
+    });
+
+    const config = loadGlobalConfig() as ConfigWithObservability<ReturnType<typeof loadGlobalConfig>>;
+
+    expect(config.observability).toEqual({
+      enabled: true,
+      monitor: false,
+      sessionLogExporter: true,
+      usageEventsPhase: false,
+    });
+  });
+
+  it('global config は observability の root JSON env と leaf env 併用時に leaf を優先する', () => {
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(globalConfigPath, 'language: ja\n', 'utf-8');
+    process.env.TAKT_OBSERVABILITY = JSON.stringify({
+      enabled: false,
+      monitor: false,
+      session_log_exporter: false,
+      usage_events_phase: false,
+    });
+    process.env.TAKT_OBSERVABILITY_ENABLED = 'true';
+    process.env.TAKT_OBSERVABILITY_USAGE_EVENTS_PHASE = 'true';
+
+    const config = loadGlobalConfig() as ConfigWithObservability<ReturnType<typeof loadGlobalConfig>>;
+
+    expect(config.observability).toEqual({
+      enabled: true,
+      monitor: false,
+      sessionLogExporter: false,
+      usageEventsPhase: true,
+    });
+  });
+
+  it('project config は observability の leaf env override を反映する', () => {
+    const projectDir = join(testRoot, 'project-observability-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      [
+        'observability:',
+        '  enabled: false',
+        '  monitor: false',
+        '  session_log_exporter: false',
+        '  usage_events_phase: false',
+      ].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_OBSERVABILITY_ENABLED = 'true';
+    process.env.TAKT_OBSERVABILITY_MONITOR = 'true';
+    process.env.TAKT_OBSERVABILITY_SESSION_LOG_EXPORTER = 'true';
+
+    const config = loadProjectConfig(projectDir) as ConfigWithObservability<ReturnType<typeof loadProjectConfig>>;
+
+    expect(config.observability).toEqual({
+      enabled: true,
+      monitor: true,
+      sessionLogExporter: true,
+      usageEventsPhase: false,
+    });
+  });
+
+  it('project config は observability の root JSON env と leaf env 併用時に leaf を優先する', () => {
+    const projectDir = join(testRoot, 'project-observability-root-and-leaf');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), 'provider: codex\n', 'utf-8');
+    process.env.TAKT_OBSERVABILITY = JSON.stringify({
+      enabled: true,
+      monitor: false,
+      session_log_exporter: false,
+      usage_events_phase: false,
+    });
+    process.env.TAKT_OBSERVABILITY_MONITOR = 'true';
+
+    const config = loadProjectConfig(projectDir) as ConfigWithObservability<ReturnType<typeof loadProjectConfig>>;
+
+    expect(config.observability).toEqual({
+      enabled: true,
+      monitor: true,
+      sessionLogExporter: false,
+      usageEventsPhase: false,
     });
   });
 

@@ -302,6 +302,13 @@ export const LoggingConfigSchema = z.object({
   usage_events: z.boolean().optional(),
 });
 
+export const ObservabilityConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  monitor: z.boolean().optional(),
+  session_log_exporter: z.boolean().optional(),
+  usage_events_phase: z.boolean().optional(),
+}).strict();
+
 /** Analytics config schema */
 export const AnalyticsConfigSchema = z.object({
   enabled: z.boolean().optional(),

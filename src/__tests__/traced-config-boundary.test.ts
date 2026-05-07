@@ -77,6 +77,8 @@ describe('traced config boundaries', () => {
     expect(Object.values(getGlobalTracedSchema()).every((entry) => entry.sources?.cli === false)).toBe(true);
     expect(Object.values(getProjectTracedSchema()).every((entry) => entry.sources?.cli === false)).toBe(true);
     expect(getProjectTracedSchema()['provider_options.claude.allowed_tools']?.sources?.env).toBe(false);
+    expect(getProjectTracedSchema()['observability.enabled']?.sources?.env).toBe(true);
+    expect(getGlobalTracedSchema()['observability.usage_events_phase']?.sources?.env).toBe(true);
     expect(getProjectTracedSchema().sync_project_local_takt_on_retry?.sources?.env).toBe(true);
     expect(getGlobalTracedSchema().sync_project_local_takt_on_retry?.sources?.env).toBe(true);
   });

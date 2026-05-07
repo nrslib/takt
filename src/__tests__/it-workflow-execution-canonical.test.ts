@@ -30,6 +30,12 @@ vi.mock('../infra/config/index.js', () => ({
     provider: 'mock',
     logging: {},
     analytics: {},
+    observability: {
+      enabled: false,
+      monitor: false,
+      sessionLogExporter: false,
+      usageEventsPhase: false,
+    },
   })),
   saveSessionState: vi.fn(),
 }));

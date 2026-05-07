@@ -32,10 +32,41 @@ vi.mock('../infra/config/paths.js', () => ({
 
 import { GlobalConfigManager } from '../infra/config/global/globalConfigCore.js';
 
+const cliPathEnvKeys = ['TAKT_CODEX_CLI_PATH', 'TAKT_CLAUDE_CLI_PATH'] as const;
+
+type CliPathEnvKey = (typeof cliPathEnvKeys)[number];
+
+function snapshotCliPathEnv(): Record<CliPathEnvKey, string | undefined> {
+  return {
+    TAKT_CODEX_CLI_PATH: process.env.TAKT_CODEX_CLI_PATH,
+    TAKT_CLAUDE_CLI_PATH: process.env.TAKT_CLAUDE_CLI_PATH,
+  };
+}
+
+function clearCliPathEnv(): void {
+  for (const key of cliPathEnvKeys) {
+    delete process.env[key];
+  }
+}
+
+function restoreCliPathEnv(snapshot: Record<CliPathEnvKey, string | undefined>): void {
+  for (const key of cliPathEnvKeys) {
+    const value = snapshot[key];
+    if (value === undefined) {
+      delete process.env[key];
+      continue;
+    }
+    process.env[key] = value;
+  }
+}
+
 describe('globalConfig', () => {
   let testDir: string;
+  let cliPathEnvSnapshot: Record<CliPathEnvKey, string | undefined>;
 
   beforeEach(() => {
+    cliPathEnvSnapshot = snapshotCliPathEnv();
+    clearCliPathEnv();
     testDir = mkdtempSync(join(tmpdir(), 'takt-test-global-config-'));
     mkdirSync(testDir, { recursive: true });
     testConfigPath = join(testDir, 'config.yaml');
@@ -47,6 +78,7 @@ describe('globalConfig', () => {
     if (testDir) {
       rmSync(testDir, { recursive: true, force: true });
     }
+    restoreCliPathEnv(cliPathEnvSnapshot);
   });
 
   describe('workflow_overrides empty array round-trip', () => {

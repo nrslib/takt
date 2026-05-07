@@ -18,6 +18,7 @@ import {
 import {
   resolveAliasedPreviewCount,
 } from '../configKeyAliases.js';
+import { normalizeObservabilityConfig } from '../observabilityConfig.js';
 import { getGlobalConfigPath } from '../paths.js';
 import { invalidateAllResolvedConfigCache } from '../resolutionCache.js';
 import { validateProviderModelCompatibility } from '../providerModelCompatibility.js';
@@ -132,6 +133,7 @@ export class GlobalConfigManager {
         eventsPath: expandOptionalHomePath(parsed.analytics.events_path),
         retentionDays: parsed.analytics.retention_days,
       } : undefined,
+      observability: normalizeObservabilityConfig(parsed.observability),
       worktreeDir: expandOptionalHomePath(parsed.worktree_dir),
       allowGitHooks: parsed.allow_git_hooks,
       allowGitFilters: parsed.allow_git_filters,

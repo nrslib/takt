@@ -855,14 +855,23 @@ describe('GlobalConfigSchema', () => {
     expect(() => GlobalConfigSchema.parse(config)).toThrow();
   });
 
-  it('should reject observability key (strict schema rejects unknown keys)', () => {
+  it('should accept observability config', () => {
     const config = {
       observability: {
-        provider_events: false,
+        enabled: false,
+        monitor: true,
+        session_log_exporter: false,
+        usage_events_phase: true,
       },
     };
 
-    expect(() => GlobalConfigSchema.parse(config)).toThrow();
+    const result = GlobalConfigSchema.parse(config);
+    expect(result.observability).toEqual({
+      enabled: false,
+      monitor: true,
+      session_log_exporter: false,
+      usage_events_phase: true,
+    });
   });
 
   it('should parse global provider object block', () => {
@@ -972,6 +981,24 @@ describe('ProjectConfigSchema', () => {
         provider: 'claude',
         model: 'haiku',
       },
+    });
+  });
+
+  it('should parse observability config block', () => {
+    const result = ProjectConfigSchema.parse({
+      observability: {
+        enabled: true,
+        monitor: false,
+        session_log_exporter: true,
+        usage_events_phase: false,
+      },
+    } as unknown) as Record<string, unknown>;
+
+    expect(result.observability).toEqual({
+      enabled: true,
+      monitor: false,
+      session_log_exporter: true,
+      usage_events_phase: false,
     });
   });
 

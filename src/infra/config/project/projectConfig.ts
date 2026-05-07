@@ -40,6 +40,10 @@ import {
   normalizeWorkflowMcpServers,
   denormalizeWorkflowMcpServers,
 } from './projectConfigTransforms.js';
+import {
+  denormalizeObservabilityConfig,
+  normalizeObservabilityConfig,
+} from '../observabilityConfig.js';
 import { loadProjectConfigTrace, type ConfigTrace } from '../traced/tracedConfigLoader.js';
 import { getCachedProjectConfigTrace, setCachedProjectConfigTrace } from '../resolutionCache.js';
 import { assertValidProjectConfig } from './projectConfigValidation.js';
@@ -81,6 +85,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     runtime,
     sync_project_local_takt_on_retry,
     sync_conflict_resolver,
+    observability,
   } = parsedConfigResult;
   const normalizedProvider = normalizeConfigProviderReference(
     provider as RawProviderReference,
@@ -134,6 +139,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
       ...analyticsConfig,
       eventsPath: expandOptionalHomePath(analyticsConfig.eventsPath),
     } : undefined,
+    observability: normalizeObservabilityConfig(observability),
     provider: normalizedProvider.provider,
     model: normalizedProvider.model,
     providerOptions: normalizedProvider.providerOptions,
@@ -186,6 +192,13 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
     savePayload.analytics = rawAnalytics;
   } else {
     delete savePayload.analytics;
+  }
+
+  const rawObservability = denormalizeObservabilityConfig(config.observability);
+  if (rawObservability) {
+    savePayload.observability = rawObservability;
+  } else {
+    delete savePayload.observability;
   }
 
   const rawProfiles = denormalizeProviderProfiles(config.providerProfiles);

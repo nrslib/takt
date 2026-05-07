@@ -5,6 +5,7 @@ import {
   denormalizeWorkflowOverrides,
   denormalizeProviderOptions,
 } from '../configNormalizers.js';
+import { denormalizeObservabilityConfig } from '../observabilityConfig.js';
 
 export function serializeGlobalConfig(config: GlobalConfig): Record<string, unknown> {
   const raw: Record<string, unknown> = {
@@ -37,6 +38,10 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
     if (Object.keys(analyticsRaw).length > 0) {
       raw.analytics = analyticsRaw;
     }
+  }
+  const rawObservability = denormalizeObservabilityConfig(config.observability);
+  if (rawObservability) {
+    raw.observability = rawObservability;
   }
   if (config.worktreeDir) {
     raw.worktree_dir = config.worktreeDir;

@@ -3,6 +3,7 @@ import { loadGlobalConfigTraceState } from './global/globalConfigCore.js';
 import { mergeProviderOptions } from './providerOptions.js';
 import { loadProjectConfig, loadProjectConfigTraceState } from './project/projectConfig.js';
 import { expandOptionalHomePath } from './pathExpansion.js';
+import { resolveObservabilityConfig } from './observabilityConfig.js';
 import {
   PROVIDER_OPTIONS_TRACE_PATHS,
   getPresentProviderOptionPaths,
@@ -47,7 +48,7 @@ export interface ResolvedConfigValue<K extends ConfigParameterKey> {
 type ResolutionLayer = 'local' | 'workflow' | 'global';
 interface ResolutionRule<K extends ConfigParameterKey> {
   layers: readonly ResolutionLayer[];
-  mergeMode?: 'analytics';
+  mergeMode?: 'analytics' | 'observability';
   workflowValue?: (workflowContext: WorkflowContext | undefined) => LoadedConfig[K] | undefined;
 }
 
@@ -93,6 +94,7 @@ const RESOLUTION_REGISTRY: Partial<{ [K in ConfigParameterKey]: ResolutionRule<K
   autoPr: { layers: ['local', 'global'] },
   draftPr: { layers: ['local', 'global'] },
   analytics: { layers: ['local', 'global'], mergeMode: 'analytics' },
+  observability: { layers: ['local', 'global'], mergeMode: 'observability' },
   autoFetch: { layers: ['global'] },
   baseBranch: { layers: ['local', 'global'] },
   workflowOverrides: { layers: ['local', 'global'] },
@@ -124,6 +126,22 @@ function resolveAnalyticsSource(
   return 'default';
 }
 
+function resolveObservabilityMerged(
+  project: ReturnType<typeof loadProjectConfigCached>,
+  global: ReturnType<typeof globalConfigModule.loadGlobalConfig>,
+): LoadedConfig['observability'] {
+  return resolveObservabilityConfig(project.observability, global.observability);
+}
+
+function resolveObservabilitySource(
+  project: ReturnType<typeof loadProjectConfigCached>,
+  global: ReturnType<typeof globalConfigModule.loadGlobalConfig>,
+): ConfigValueSource {
+  if (project.observability !== undefined) return 'project';
+  if (global.observability !== undefined) return 'global';
+  return 'default';
+}
+
 function getLocalLayerValue<K extends ConfigParameterKey>(
   project: ReturnType<typeof loadProjectConfigCached>,
   key: K,
@@ -150,6 +168,12 @@ function resolveByRegistry<K extends ConfigParameterKey>(
     return {
       value: resolveAnalyticsMerged(project, global) as LoadedConfig[K],
       source: resolveAnalyticsSource(project, global),
+    };
+  }
+  if (rule.mergeMode === 'observability') {
+    return {
+      value: resolveObservabilityMerged(project, global) as LoadedConfig[K],
+      source: resolveObservabilitySource(project, global),
     };
   }
 
@@ -183,7 +207,6 @@ function resolveByRegistry<K extends ConfigParameterKey>(
   if (fallbackDefaultValue !== undefined) {
     return { value: fallbackDefaultValue as LoadedConfig[K], source: 'default' };
   }
-
   return { value: undefined as LoadedConfig[K], source: 'default' };
 }
 

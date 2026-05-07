@@ -6,7 +6,12 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { WorkflowConfig } from '../core/models/index.js';
 import { buildPhaseExecutionId } from '../shared/utils/phaseExecutionId.js';
 
-const { mockIsDebugEnabled, mockWritePromptLog, MockWorkflowEngine } = vi.hoisted(() => {
+const {
+  disabledObservability,
+  mockIsDebugEnabled,
+  mockWritePromptLog,
+  MockWorkflowEngine,
+} = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { EventEmitter: EE } = require('node:events') as typeof import('node:events');
 
@@ -135,7 +140,17 @@ const { mockIsDebugEnabled, mockWritePromptLog, MockWorkflowEngine } = vi.hoiste
     }
   }
 
-  return { mockIsDebugEnabled, mockWritePromptLog, MockWorkflowEngine };
+  return {
+    disabledObservability: {
+      enabled: false,
+      monitor: false,
+      sessionLogExporter: false,
+      usageEventsPhase: false,
+    },
+    mockIsDebugEnabled,
+    mockWritePromptLog,
+    MockWorkflowEngine,
+  };
 });
 
 vi.mock('../core/workflow/index.js', async () => {
@@ -163,6 +178,7 @@ vi.mock('../infra/config/index.js', () => ({
     preventSleep: false,
     model: undefined,
     logging: undefined,
+    observability: disabledObservability,
   }),
   saveSessionState: vi.fn(),
   ensureDir: vi.fn(),

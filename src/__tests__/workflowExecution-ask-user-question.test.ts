@@ -10,7 +10,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { WorkflowConfig, WorkflowResumePoint } from '../core/models/index.js';
 import { AskUserQuestionDeniedError } from '../core/workflow/ask-user-question-error.js';
 
-const { MockWorkflowEngine } = vi.hoisted(() => {
+const { disabledObservability, MockWorkflowEngine } = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { EventEmitter: EE } = require('node:events') as typeof import('node:events');
 
@@ -77,7 +77,15 @@ const { MockWorkflowEngine } = vi.hoisted(() => {
     }
   }
 
-  return { MockWorkflowEngine };
+  return {
+    disabledObservability: {
+      enabled: false,
+      monitor: false,
+      sessionLogExporter: false,
+      usageEventsPhase: false,
+    },
+    MockWorkflowEngine,
+  };
 });
 
 vi.mock('../core/workflow/index.js', async () => {
@@ -105,6 +113,7 @@ vi.mock('../infra/config/index.js', () => ({
     preventSleep: false,
     model: undefined,
     logging: undefined,
+    observability: disabledObservability,
   }),
   saveSessionState: vi.fn(),
   ensureDir: vi.fn(),

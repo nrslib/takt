@@ -17,7 +17,7 @@ import { QueryRegistry } from '../infra/claude/query-manager.js';
 
 // --- Hoisted mocks (must be before vi.mock calls) ---
 
-const { mockInterruptAllQueries, MockWorkflowEngine } = vi.hoisted(() => {
+const { disabledObservability, mockInterruptAllQueries, MockWorkflowEngine } = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { EventEmitter: EE } = require('node:events') as typeof import('node:events');
 
@@ -65,7 +65,16 @@ const { mockInterruptAllQueries, MockWorkflowEngine } = vi.hoisted(() => {
     }
   }
 
-  return { mockInterruptAllQueries, MockWorkflowEngine };
+  return {
+    disabledObservability: {
+      enabled: false,
+      monitor: false,
+      sessionLogExporter: false,
+      usageEventsPhase: false,
+    },
+    mockInterruptAllQueries,
+    MockWorkflowEngine,
+  };
 });
 
 // --- Module mocks ---
@@ -94,7 +103,12 @@ vi.mock('../infra/config/index.js', () => ({
     project: {},
   }),
   resolveWorkflowConfigValues: (_projectDir: string, keys: readonly string[]) => {
-    const config: Record<string, unknown> = { provider: 'claude', workflow: 'default', verbose: false };
+    const config: Record<string, unknown> = {
+      provider: 'claude',
+      workflow: 'default',
+      verbose: false,
+      observability: disabledObservability,
+    };
     const result: Record<string, unknown> = {};
     for (const key of keys) {
       result[key] = config[key];

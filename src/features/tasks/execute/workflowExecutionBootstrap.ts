@@ -24,6 +24,7 @@ import { createLogger, generateReportDir, getDebugPromptsLogFile, isValidReportD
 import { createProviderEventLogger, isProviderEventsEnabled } from '../../../shared/utils/providerEventLogger.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import { createUsageEventLogger, isUsageEventsEnabled } from '../../../shared/utils/usageEventLogger.js';
+import { initializeOtelFoundation, type OtelFoundationHandle } from '../../../infra/observability/otelFoundation.js';
 import { initAnalyticsWriter } from '../../analytics/index.js';
 import { AnalyticsEmitter } from './analyticsEmitter.js';
 import { createOutputFns, createPrefixedStreamHandler } from './outputFns.js';
@@ -63,6 +64,7 @@ export interface WorkflowExecutionBootstrap {
   effectiveWorkflowConfig: WorkflowConfig;
   providerEventLogger: ReturnType<typeof createProviderEventLogger>;
   usageEventLogger: ReturnType<typeof createUsageEventLogger>;
+  observabilityHandle: OtelFoundationHandle;
   analyticsEmitter: AnalyticsEmitter;
   structuredCaller: CapabilityAwareStructuredCaller;
   savedSessions: Record<string, string>;
@@ -70,12 +72,12 @@ export interface WorkflowExecutionBootstrap {
   writeTraceReportOnce: ReturnType<typeof createTraceReportWriter>;
 }
 
-export function createWorkflowExecutionBootstrap(
+export async function createWorkflowExecutionBootstrap(
   workflowConfig: WorkflowConfig,
   task: string,
   cwd: string,
   options: WorkflowExecutionOptions,
-): WorkflowExecutionBootstrap {
+): Promise<WorkflowExecutionBootstrap> {
   const { headerPrefix = 'Running Workflow:', interactiveUserInput = false } = options;
   const projectCwd = options.projectCwd;
   const safeWorkflowName = sanitizeTerminalText(workflowConfig.name);
@@ -127,6 +129,7 @@ export function createWorkflowExecutionBootstrap(
     'model',
     'logging',
     'analytics',
+    'observability',
   ]);
   const traceReportMode = globalConfig.logging?.trace === true ? 'full' : 'redacted';
   const allowSensitiveData = traceReportMode === 'full';
@@ -219,6 +222,7 @@ export function createWorkflowExecutionBootstrap(
     mode: traceReportMode,
     logger: log,
   });
+  const observabilityHandle = await initializeOtelFoundation(globalConfig.observability);
 
   return {
     interactiveUserInput,
@@ -245,6 +249,7 @@ export function createWorkflowExecutionBootstrap(
     effectiveWorkflowConfig,
     providerEventLogger,
     usageEventLogger,
+    observabilityHandle,
     analyticsEmitter,
     structuredCaller,
     savedSessions,

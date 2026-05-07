@@ -16,6 +16,8 @@ const {
   mockCreateUsageEventLogger,
   mockUsageLogger,
   mockStepResponse,
+  mockInitializeOtelFoundation,
+  mockObservabilityShutdown,
 } = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { EventEmitter: EE } = require('node:events') as typeof import('node:events');
@@ -29,6 +31,10 @@ const {
     logUsage: vi.fn(),
   };
   const mockCreateUsageEventLogger = vi.fn().mockReturnValue(mockUsageLogger);
+  const mockObservabilityShutdown = vi.fn().mockResolvedValue(undefined);
+  const mockInitializeOtelFoundation = vi.fn().mockResolvedValue({
+    shutdown: mockObservabilityShutdown,
+  });
   const mockStepResponse: {
     providerUsage: {
       inputTokens?: number;
@@ -61,6 +67,7 @@ const {
 
   class MockWorkflowEngine extends EE {
     static lastInstance: MockWorkflowEngine;
+    static runError: Error | undefined;
     readonly receivedOptions: Record<string, unknown>;
     private readonly config: WorkflowConfig;
 
@@ -74,6 +81,10 @@ const {
     abort(): void {}
 
     async run(): Promise<{ status: string; iteration: number }> {
+      if (MockWorkflowEngine.runError) {
+        throw MockWorkflowEngine.runError;
+      }
+
       const firstStep = this.config.steps[0];
       if (firstStep) {
         const providerInfo = resolveProviderInfo(firstStep, this.receivedOptions);
@@ -99,6 +110,8 @@ const {
     mockCreateUsageEventLogger,
     mockUsageLogger,
     mockStepResponse,
+    mockInitializeOtelFoundation,
+    mockObservabilityShutdown,
   };
 });
 
@@ -127,6 +140,13 @@ vi.mock('../infra/config/index.js', () => ({
     preventSleep: false,
     model: undefined,
     logging: undefined,
+    analytics: undefined,
+    observability: {
+      enabled: false,
+      monitor: false,
+      sessionLogExporter: false,
+      usageEventsPhase: false,
+    },
   }),
   saveSessionState: vi.fn(),
   ensureDir: vi.fn(),
@@ -193,6 +213,10 @@ vi.mock('../shared/utils/usageEventLogger.js', () => ({
   isUsageEventsEnabled: vi.fn().mockReturnValue(true),
 }));
 
+vi.mock('../infra/observability/otelFoundation.js', () => ({
+  initializeOtelFoundation: mockInitializeOtelFoundation,
+}));
+
 vi.mock('../shared/i18n/index.js', () => ({
   getLabel: vi.fn().mockImplementation((key: string) => key),
 }));
@@ -214,6 +238,12 @@ const defaultResolvedConfigValues = {
   model: undefined,
   logging: undefined,
   analytics: undefined,
+  observability: {
+    enabled: false,
+    monitor: false,
+    sessionLogExporter: false,
+    usageEventsPhase: false,
+  },
 };
 
 function makeConfig(): WorkflowConfig {
@@ -249,9 +279,13 @@ describe('executeWorkflow session loading', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockCreateUsageEventLogger.mockReturnValue(mockUsageLogger);
+    mockInitializeOtelFoundation.mockResolvedValue({
+      shutdown: mockObservabilityShutdown,
+    });
     vi.mocked(resolveWorkflowConfigValues).mockReturnValue({ ...defaultResolvedConfigValues });
     mockLoadPersonaSessions.mockReturnValue({ coder: 'saved-session-id' });
     mockLoadWorktreeSessions.mockReturnValue({ coder: 'worktree-session-id' });
+    MockWorkflowEngine.runError = undefined;
     mockStepResponse.providerUsage = {
       inputTokens: 3,
       outputTokens: 2,
@@ -384,7 +418,50 @@ describe('executeWorkflow session loading', () => {
     const keys = calls[0]?.[1];
     expect(Array.isArray(keys)).toBe(true);
     expect(keys).toContain('logging');
-    expect(keys).not.toContain('observability');
+    expect(keys).toContain('observability');
+  });
+
+  it('should initialize and shutdown observability when enabled in resolved config', async () => {
+    const observability = {
+      enabled: true,
+      monitor: false,
+      sessionLogExporter: false,
+      usageEventsPhase: false,
+    };
+    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+      ...defaultResolvedConfigValues,
+      observability,
+    });
+
+    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+    });
+
+    expect(mockInitializeOtelFoundation).toHaveBeenCalledWith(observability);
+    expect(mockObservabilityShutdown).toHaveBeenCalledOnce();
+  });
+
+  it('should shutdown observability when workflow execution throws', async () => {
+    const observability = {
+      enabled: true,
+      monitor: false,
+      sessionLogExporter: false,
+      usageEventsPhase: false,
+    };
+    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+      ...defaultResolvedConfigValues,
+      observability,
+    });
+    MockWorkflowEngine.runError = new Error('workflow engine failed');
+
+    await expect(
+      executeWorkflow(makeConfig(), 'task', '/tmp/project', {
+        projectCwd: '/tmp/project',
+      }),
+    ).rejects.toThrow('workflow engine failed');
+
+    expect(mockInitializeOtelFoundation).toHaveBeenCalledWith(observability);
+    expect(mockObservabilityShutdown).toHaveBeenCalledOnce();
   });
 
   it('should log configured model from global/project settings when step model is unresolved', async () => {
