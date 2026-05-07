@@ -11,14 +11,17 @@ describe('core/models public type-name boundary', () => {
     expect(source).toMatch(/\bLoggingConfig\b/);
   });
 
-  it('should not expose legacy ObservabilityConfig from index barrel', () => {
+  it('should expose observability config types from index barrel', () => {
     const source = readModule('../core/models/index.ts');
-    expect(source).not.toMatch(/\bObservabilityConfig\b/);
+    expect(source).toMatch(/\bObservabilityConfig\b/);
+    expect(source).toMatch(/\bResolvedObservabilityConfig\b/);
   });
 
-  it('should expose LoggingConfig exactly once in index barrel exports', () => {
+  it('should expose public config types exactly once in index barrel exports', () => {
     const source = readModule('../core/models/index.ts');
-    const matches = source.match(/\bLoggingConfig\b/g) ?? [];
-    expect(matches).toHaveLength(1);
+    for (const typeName of ['LoggingConfig', 'ObservabilityConfig', 'ResolvedObservabilityConfig']) {
+      const matches = source.match(new RegExp(`\\b${typeName}\\b`, 'g')) ?? [];
+      expect(matches).toHaveLength(1);
+    }
   });
 });

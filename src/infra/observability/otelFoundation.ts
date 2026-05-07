@@ -28,8 +28,7 @@ export async function initializeOtelFoundation(
     return createNoopHandle();
   }
 
-  const shared = await getOrStartSdk();
-  shared.refCount += 1;
+  const shared = await acquireSdk();
 
   let released = false;
   return {
@@ -41,6 +40,17 @@ export async function initializeOtelFoundation(
       await releaseSdk(shared);
     },
   };
+}
+
+async function acquireSdk(): Promise<SharedOtelSdk> {
+  if (activeSdk) {
+    activeSdk.refCount += 1;
+    return activeSdk;
+  }
+
+  const shared = await getOrStartSdk();
+  shared.refCount += 1;
+  return shared;
 }
 
 function createNoopHandle(): OtelFoundationHandle {

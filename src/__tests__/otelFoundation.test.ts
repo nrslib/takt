@@ -137,4 +137,19 @@ describe('otel foundation', () => {
     await second.shutdown();
     expect(foundation.shutdownMock).toHaveBeenCalledOnce();
   });
+
+  it('should count an active SDK acquisition before the caller awaits the new handle', async () => {
+    const foundation = await loadFoundationWithMockedSdk();
+
+    const first = await foundation.initializeOtelFoundation(enabledObservability);
+    const secondPromise = foundation.initializeOtelFoundation(enabledObservability);
+
+    await first.shutdown();
+    expect(foundation.shutdownMock).not.toHaveBeenCalled();
+
+    const second = await secondPromise;
+    await second.shutdown();
+
+    expect(foundation.shutdownMock).toHaveBeenCalledOnce();
+  });
 });

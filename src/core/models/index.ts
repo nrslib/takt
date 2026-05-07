@@ -50,6 +50,8 @@ export type {
   WorkflowState,
   CustomAgentConfig,
   LoggingConfig,
+  ObservabilityConfig,
+  ResolvedObservabilityConfig,
   Language,
   PipelineConfig,
   ProjectConfig,
