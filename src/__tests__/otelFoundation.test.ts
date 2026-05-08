@@ -152,4 +152,35 @@ describe('otel foundation', () => {
 
     expect(foundation.shutdownMock).toHaveBeenCalledOnce();
   });
+
+  it('should wait for SDK shutdown before starting a replacement SDK', async () => {
+    const foundation = await loadFoundationWithMockedSdk();
+    let resolveShutdown!: () => void;
+    const pendingShutdown = new Promise<void>((resolve) => {
+      resolveShutdown = resolve;
+    });
+    foundation.shutdownMock.mockImplementationOnce(() => pendingShutdown);
+
+    const first = await foundation.initializeOtelFoundation(enabledObservability);
+    const firstShutdown = first.shutdown();
+    await Promise.resolve();
+
+    expect(foundation.shutdownMock).toHaveBeenCalledOnce();
+
+    const secondPromise = foundation.initializeOtelFoundation(enabledObservability);
+    await Promise.resolve();
+
+    expect(foundation.startMock).toHaveBeenCalledOnce();
+
+    resolveShutdown();
+    await firstShutdown;
+
+    const second = await secondPromise;
+
+    expect(foundation.startMock).toHaveBeenCalledTimes(2);
+
+    await second.shutdown();
+
+    expect(foundation.shutdownMock).toHaveBeenCalledTimes(2);
+  });
 });

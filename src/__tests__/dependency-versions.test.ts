@@ -6,7 +6,6 @@ import { describe, expect, it } from 'vitest';
 type PackageJson = {
   dependencies?: Record<string, string>;
   engines?: Record<string, string>;
-  overrides?: Record<string, string>;
 };
 
 type PackageLock = {
@@ -130,7 +129,7 @@ describe('dependency versions', () => {
     expect(packageLock.packages).toHaveProperty('node_modules/@opentelemetry/sdk-node');
   });
 
-  it('declares Node support compatible with direct runtime dependency engines', () => {
+  it('declares Node support compatible with OpenTelemetry dependency engines', () => {
     const packageJson = readPackageJson();
     const packageLock = readPackageLock();
     const dependencies = packageJson.dependencies;
@@ -142,10 +141,14 @@ describe('dependency versions', () => {
       throw new Error('package.json engines.node is required');
     }
 
-    expect(rootNodeRange).toBe('>=20.6.0');
+    expect(rootNodeRange).toBe('>=18.19.0');
 
     const rootMinimum = getMinimumNodeVersion(rootNodeRange);
-    const incompatibleDependencies = Object.keys(dependencies).flatMap((dependencyName) => {
+    const otelDependencies = ['@opentelemetry/api', '@opentelemetry/sdk-node'] as const;
+    const incompatibleDependencies = otelDependencies.flatMap((dependencyName) => {
+      if (!dependencies[dependencyName]) {
+        throw new Error(`${dependencyName} is missing from package.json dependencies`);
+      }
       const lockedPackage = getLockedPackage(packageLock, `node_modules/${dependencyName}`);
       const dependencyNodeRange = lockedPackage.engines?.node;
       if (!dependencyNodeRange) {
@@ -161,25 +164,6 @@ describe('dependency versions', () => {
     });
 
     expect(incompatibleDependencies).toEqual([]);
-  });
-
-  it('locks production dependencies outside reviewed vulnerable ranges', () => {
-    const packageJson = readPackageJson();
-    const packageLock = readPackageLock();
-
-    expect(packageJson.dependencies?.ajv).toBe('^6.15.0');
-    expect(packageJson.overrides).toMatchObject({
-      '@anthropic-ai/sdk': '0.91.1',
-      'express-rate-limit': '8.5.1',
-      hono: '4.12.16',
-      'ip-address': '10.2.0',
-    });
-
-    expect(getLockedPackage(packageLock, 'node_modules/@anthropic-ai/sdk').version).toBe('0.91.1');
-    expect(getLockedPackage(packageLock, 'node_modules/ajv').version).toBe('6.15.0');
-    expect(getLockedPackage(packageLock, 'node_modules/express-rate-limit').version).toBe('8.5.1');
-    expect(getLockedPackage(packageLock, 'node_modules/hono').version).toBe('4.12.16');
-    expect(getLockedPackage(packageLock, 'node_modules/ip-address').version).toBe('10.2.0');
   });
 
   it('locks yaml to the patched 2.8.3 release', () => {

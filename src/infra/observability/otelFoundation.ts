@@ -20,6 +20,7 @@ export type OtelFoundationHandle = {
 
 let activeSdk: SharedOtelSdk | undefined;
 let startingSdk: Promise<SharedOtelSdk> | undefined;
+let stoppingSdk: Promise<void> | undefined;
 
 export async function initializeOtelFoundation(
   config: ResolvedObservabilityConfig,
@@ -43,6 +44,10 @@ export async function initializeOtelFoundation(
 }
 
 async function acquireSdk(): Promise<SharedOtelSdk> {
+  if (stoppingSdk) {
+    await stoppingSdk;
+  }
+
   if (activeSdk) {
     activeSdk.refCount += 1;
     return activeSdk;
@@ -102,6 +107,15 @@ async function releaseSdk(shared: SharedOtelSdk): Promise<void> {
   if (shared.refCount > 0) {
     return;
   }
-  activeSdk = undefined;
-  await shared.sdk.shutdown();
+
+  const shutdownPromise = shared.sdk.shutdown().finally(() => {
+    if (activeSdk === shared) {
+      activeSdk = undefined;
+    }
+    if (stoppingSdk === shutdownPromise) {
+      stoppingSdk = undefined;
+    }
+  });
+  stoppingSdk = shutdownPromise;
+  await shutdownPromise;
 }
