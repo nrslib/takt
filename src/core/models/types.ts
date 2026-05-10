@@ -52,6 +52,7 @@ export type {
   WorkflowRuntimeConfig,
   WorkflowStepKind,
   WorkflowCallOverrides,
+  WorkflowPromotionEntry,
   WorkflowParamType,
   WorkflowParamFacetKind,
   WorkflowCallArgValue,

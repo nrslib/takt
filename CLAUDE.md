@@ -256,6 +256,17 @@ steps:
     provider_options:                   # Per-provider options (optional)
       codex: { network_access: true }
       claude: { sandbox: { excluded_commands: [rm] } }
+    promotion:                          # Per-step execution escalation (optional)
+      - at: 3                           # Matches from this step's 3rd execution onward
+        model: gpt-5.5
+      - condition: ai("Escalation is required")
+        provider: claude
+        model: opus
+      - at: 5
+        provider:
+          type: codex
+          model: gpt-5.5
+          network_access: true
     mcp_servers:                        # MCP server configuration (optional)
       my-server:
         command: npx
@@ -411,11 +422,12 @@ Key constraints:
 ## Important Implementation Notes
 
 **Model resolution priority order:**
-1. Persona-level `model` — `persona_providers.<persona>.model`
-2. Step `model` — workflow step field
-3. CLI/task override `model` — `--model`
-4. Local/Global config `model` — `.takt/config.yaml` / `~/.takt/config.yaml` when provider matches
-5. Provider default
+1. Step promotion — matching `promotion` entry for the current step execution
+2. Step `provider` / `model` — workflow step field
+3. Persona-level `provider` / `model` — `persona_providers.<persona>`
+4. CLI/task override `provider` / `model` — `--provider` / `--model`
+5. Local/Global config `provider` / `model` — `.takt/config.yaml` / `~/.takt/config.yaml` when provider matches
+6. Provider default
 
 **Permission modes** (provider-independent):
 - `readonly` — No file modifications

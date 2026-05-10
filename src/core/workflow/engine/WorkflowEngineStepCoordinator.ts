@@ -19,6 +19,7 @@ interface WorkflowEngineStepCoordinatorDeps {
       maxSteps: WorkflowMaxSteps,
       updateSession: (persona: string, sessionId: string | undefined) => void,
       prebuiltInstruction?: string,
+      runtime?: RuntimeStepResolution,
     ) => Promise<{ response: AgentResponse; instruction: string }>;
     buildInstruction: (
       step: WorkflowStep,
@@ -27,7 +28,7 @@ interface WorkflowEngineStepCoordinatorDeps {
       task: string,
       maxSteps: WorkflowMaxSteps,
     ) => string;
-    buildPhase1Instruction: (instruction: string, step: WorkflowStep) => string;
+    buildPhase1Instruction: (instruction: string, step: WorkflowStep, runtime?: RuntimeStepResolution) => string;
     drainReportFiles: () => Array<{ step: WorkflowStep; filePath: string; fileName: string }>;
   };
   parallelRunner: {
@@ -135,6 +136,7 @@ export class WorkflowEngineStepCoordinator {
         this.deps.getMaxSteps(),
         updateSession,
         prebuiltInstruction,
+        runtime,
       );
     }
 
@@ -175,8 +177,8 @@ export class WorkflowEngineStepCoordinator {
     );
   }
 
-  buildPhase1Instruction(step: WorkflowStep, instruction: string): string {
-    return this.deps.stepExecutor.buildPhase1Instruction(instruction, step);
+  buildPhase1Instruction(step: WorkflowStep, instruction: string, runtime?: RuntimeStepResolution): string {
+    return this.deps.stepExecutor.buildPhase1Instruction(instruction, step, runtime);
   }
 
   runLoopMonitorJudge(

@@ -374,7 +374,7 @@ describe('OptionsBuilder.resolveStepProviderModel', () => {
     expect(result.provider).toBe('opencode');
   });
 
-  it('should prioritize persona providers over step-level provider', () => {
+  it('should prioritize step-level provider over persona providers', () => {
     const step = createStep({ personaDisplayName: 'coder', provider: 'claude' as 'claude' });
     const builder = createBuilder(step, {
       provider: 'mock',
@@ -383,7 +383,7 @@ describe('OptionsBuilder.resolveStepProviderModel', () => {
 
     const result = builder.resolveStepProviderModel(step);
 
-    expect(result.provider).toBe('codex');
+    expect(result.provider).toBe('claude');
   });
 
   it('should return undefined model when no model is configured', () => {

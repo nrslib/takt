@@ -303,7 +303,7 @@ copilot_cli_path: /usr/local/bin/github-copilot-cli
 TAKT のモデル選択は 2 段階で解決されます。
 
 1. **入力 `model` の解決** - workflow 実行前に、入力 `model` が CLI `--model`、次に config `model`、最後に provider デフォルトの順で解決されます。
-2. **Workflow step の `model` 解決** - 各 step では、実効モデルが `persona_providers[persona].model`、次に step YAML の `model`、最後に解決済みの入力 `model` の順で決まります。
+2. **Workflow step の `model` 解決** - 各 step では、実効モデルが step YAML の `model`、次に `persona_providers[persona].model`、最後に解決済みの入力 `model` の順で決まります。
 
 ### Provider 固有のモデルに関する注意
 
@@ -399,7 +399,7 @@ persona_providers:
         effort: high
 ```
 
-`provider`、`model`、`provider_options` は個別に省略できますが、各 persona entry には少なくとも 1 つ必要です。空の `provider_options` オブジェクトは受理されません。workflow step での `model` 優先順位は `persona_providers[persona].model` > step YAML の `model` > 解決済みの入力 `model` です。この入力 `model` は workflow 実行前に CLI `--model`、次に config の `model`、最後に provider デフォルトの順で解決されます。
+`provider`、`model`、`provider_options` は個別に省略できますが、各 persona entry には少なくとも 1 つ必要です。空の `provider_options` オブジェクトは受理されません。workflow step での `provider` / `model` 優先順位は step YAML > `persona_providers[persona]` > 解決済みの入力です。この入力は workflow 実行前に CLI フラグ、次に config、最後に provider デフォルトの順で解決されます。
 
 `provider_options` の優先順位は leaf ごとに解決されます。env 起源の config leaf が他のすべてのソースより優先され、それ以外は step `provider_options` > workflow `workflow_config.provider_options` > `persona_providers[persona].provider_options` > project `.takt/config.yaml` > global `~/.takt/config.yaml` の順です。
 

@@ -115,6 +115,16 @@ export interface WorkflowResumePoint {
   elapsed_ms: number;
 }
 
+export interface WorkflowPromotionEntry {
+  at?: number;
+  condition?: string;
+  aiConditionText?: string;
+  provider?: ProviderType;
+  providerSpecified?: boolean;
+  model?: string;
+  providerOptions?: StepProviderOptions;
+}
+
 interface WorkflowStepBase {
   name: string;
   description?: string;
@@ -137,6 +147,7 @@ export interface AgentWorkflowStep extends WorkflowStepBase {
   personaPath?: string;
   provider?: ProviderType;
   model?: string;
+  promotion?: WorkflowPromotionEntry[];
   requiredPermissionMode?: PermissionMode;
   providerOptions?: StepProviderOptions;
   edit?: boolean;
@@ -165,6 +176,7 @@ export interface SystemWorkflowStep extends WorkflowStepBase {
   personaPath?: never;
   provider?: never;
   model?: never;
+  promotion?: never;
   requiredPermissionMode?: never;
   providerOptions?: never;
   edit?: never;
@@ -194,6 +206,7 @@ export interface WorkflowCallStep extends WorkflowStepBase {
   personaPath?: never;
   provider?: never;
   model?: never;
+  promotion?: never;
   requiredPermissionMode?: never;
   providerOptions?: never;
   edit?: never;

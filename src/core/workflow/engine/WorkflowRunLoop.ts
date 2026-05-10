@@ -13,12 +13,14 @@ import type { WorkflowRuleTransition } from './transitions.js';
 import { incrementStepIteration } from './state-manager.js';
 import { handleBlocked } from './blocked-handler.js';
 import { isDelegatedWorkflowStep } from '../step-kind.js';
+import { resolvePromotionRuntime } from '../promotion/promotion-runtime.js';
 
 const log = createLogger('workflow-run-loop');
 
 interface WorkflowRunLoopDeps {
   state: WorkflowState;
   options: WorkflowEngineOptions;
+  getCwd: () => string;
   getMaxSteps: () => WorkflowMaxSteps;
   abortRequested: () => boolean;
   getStep: (name: string) => WorkflowStep;
@@ -38,13 +40,27 @@ interface WorkflowRunLoopDeps {
     runtime?: RuntimeStepResolution,
   ) => Promise<{ response: AgentResponse; instruction: string }>;
   buildInstruction: (step: WorkflowStep, stepIteration: number) => string;
-  buildPhase1Instruction: (step: WorkflowStep, instruction: string) => string;
+  buildPhase1Instruction: (step: WorkflowStep, instruction: string, runtime?: RuntimeStepResolution) => string;
   resolveStepProviderModel: (step: WorkflowStep, runtime?: RuntimeStepResolution) => StepProviderInfo;
   resolveRuntimeForStep: (step: WorkflowStep) => RuntimeStepResolution | undefined;
   setActiveStep: (step: WorkflowStep, iteration: number) => void;
   addUserInput: (input: string) => void;
   emit: (event: string, ...args: unknown[]) => void;
   updateMaxSteps: (maxSteps: number) => void;
+}
+
+async function resolveStepPromotionRuntime(
+  deps: WorkflowRunLoopDeps,
+  step: WorkflowStep,
+  stepIteration: number | undefined,
+  runtime: RuntimeStepResolution | undefined,
+): Promise<RuntimeStepResolution | undefined> {
+  return resolvePromotionRuntime({
+    cwd: deps.getCwd(),
+    previousResponseContent: deps.state.lastOutput?.content ?? '',
+    structuredCaller: deps.options.structuredCaller,
+    resolveStepProviderModel: deps.resolveStepProviderModel,
+  }, step, stepIteration, runtime);
 }
 
 function advanceActiveStep(deps: WorkflowRunLoopDeps, nextStep: string, iteration: number): void {
@@ -123,14 +139,16 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
     deps.state.iteration++;
     const isDelegated = isDelegatedWorkflowStep(step);
     const activeIteration = deps.state.iteration;
-    const stepRuntime = deps.resolveRuntimeForStep(step);
+    const baseStepRuntime = deps.resolveRuntimeForStep(step);
     let prebuiltInstruction: string | undefined;
+    let stepIteration: number | undefined;
     if (!isDelegated) {
-      const stepIteration = incrementStepIteration(deps.state, step.name);
+      stepIteration = incrementStepIteration(deps.state, step.name);
       prebuiltInstruction = deps.buildInstruction(step, stepIteration);
     }
+    const stepRuntime = await resolveStepPromotionRuntime(deps, step, stepIteration, baseStepRuntime);
     const stepInstruction = prebuiltInstruction
-      ? deps.buildPhase1Instruction(step, prebuiltInstruction)
+      ? deps.buildPhase1Instruction(step, prebuiltInstruction, stepRuntime)
       : '';
     deps.setActiveStep(step, activeIteration);
     deps.emit('step:start', step, activeIteration, stepInstruction, deps.resolveStepProviderModel(step, stepRuntime));
@@ -262,7 +280,20 @@ export async function runSingleWorkflowIteration(deps: WorkflowRunLoopDeps): Pro
 
   deps.state.iteration++;
   deps.setActiveStep(step, deps.state.iteration);
-  const { response } = await deps.runStep(step);
+  const isDelegated = isDelegatedWorkflowStep(step);
+  let stepIteration: number | undefined;
+  let prebuiltInstruction: string | undefined;
+  if (!isDelegated) {
+    stepIteration = incrementStepIteration(deps.state, step.name);
+    prebuiltInstruction = deps.buildInstruction(step, stepIteration);
+  }
+  const stepRuntime = await resolveStepPromotionRuntime(
+    deps,
+    step,
+    stepIteration,
+    deps.resolveRuntimeForStep(step),
+  );
+  const { response } = await deps.runStep(step, prebuiltInstruction, stepRuntime);
 
   if (response.status === 'blocked') {
     deps.state.status = 'aborted';

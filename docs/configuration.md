@@ -303,7 +303,7 @@ Paths must be absolute paths to executable files. Environment variables take pre
 TAKT resolves model selection in two stages:
 
 1. **Base input model** - Before workflow execution starts, the input `model` is resolved from CLI `--model`, then config `model`, then the provider default.
-2. **Workflow step model** - For each workflow step, the effective model is resolved from `persona_providers[persona].model`, then step YAML `model`, then the already-resolved input `model`.
+2. **Workflow step model** - For each workflow step, the effective model is resolved from step YAML `model`, then `persona_providers[persona].model`, then the already-resolved input `model`.
 
 ### Provider-specific Model Notes
 
@@ -399,7 +399,7 @@ persona_providers:
         effort: high
 ```
 
-`provider`, `model`, and `provider_options` are individually optional, but each persona entry must include at least one of them. Empty `provider_options` objects are rejected. In workflow step resolution, `model` priority is `persona_providers[persona].model` > step YAML `model` > resolved input `model`. That input `model` is resolved before workflow execution from CLI `--model`, then config `model`, then the provider default.
+`provider`, `model`, and `provider_options` are individually optional, but each persona entry must include at least one of them. Empty `provider_options` objects are rejected. In workflow step resolution, `provider` / `model` priority is step YAML > `persona_providers[persona]` > resolved input. That input is resolved before workflow execution from CLI flags, then config, then the provider default.
 
 `provider_options` priority is resolved per leaf. An env-resolved config leaf overrides all other sources. Otherwise the order is: step `provider_options` > workflow `workflow_config.provider_options` > `persona_providers[persona].provider_options` > project `.takt/config.yaml` > global `~/.takt/config.yaml`.
 

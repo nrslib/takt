@@ -29,9 +29,11 @@ import { normalizeRule } from './workflowRuleNormalizer.js';
 import { normalizeArpeggio, normalizeOutputContracts, normalizeTeamLeader } from './workflowStepFeaturesNormalizer.js';
 import { resolveStructuredOutput } from './workflowStructuredOutputResolver.js';
 import { normalizeWorkflowEffects } from './workflowSystemStepNormalizer.js';
+import { parseAiConditionExpression } from '../../../core/models/workflow-condition-expression.js';
 
 type RawStep = z.output<typeof WorkflowStepRawSchema>;
 type RawProviderReference = RawStep['provider'];
+type RawPromotionEntry = NonNullable<RawStep['promotion']>[number];
 export function normalizeProviderReference(
   provider: RawProviderReference,
   model: RawStep['model'],
@@ -47,6 +49,32 @@ export function normalizeProviderReference(
     model,
     providerOptions as Record<string, unknown> | undefined,
   );
+}
+
+function normalizePromotionEntry(entry: RawPromotionEntry): NonNullable<AgentWorkflowStep['promotion']>[number] {
+  const normalizedProvider = normalizeProviderReference(
+    entry.provider,
+    entry.model,
+    entry.provider_options,
+  );
+  const aiExpression = entry.condition !== undefined
+    ? parseAiConditionExpression(entry.condition)
+    : undefined;
+  return {
+    at: entry.at,
+    condition: entry.condition,
+    aiConditionText: aiExpression?.text,
+    provider: normalizedProvider.provider,
+    providerSpecified: normalizedProvider.providerSpecified,
+    model: normalizedProvider.model,
+    providerOptions: normalizedProvider.providerOptions,
+  };
+}
+
+function normalizePromotionEntries(
+  entries: RawStep['promotion'],
+): AgentWorkflowStep['promotion'] {
+  return entries?.map(normalizePromotionEntry);
 }
 
 export function normalizeStepFromRaw(
@@ -107,6 +135,7 @@ export function normalizeStepFromRaw(
       context,
   );
   const normalizedProvider = normalizeProviderReference(step.provider, step.model, step.provider_options);
+  const promotion = normalizePromotionEntries(step.promotion);
   const normalizedOverrides = step.overrides
     ? normalizeProviderReference(step.overrides.provider, step.overrides.model, step.overrides.provider_options)
     : undefined;
@@ -174,6 +203,7 @@ export function normalizeStepFromRaw(
     mcpServers: step.mcp_servers,
     provider: normalizedProvider.provider ?? inheritedProvider,
     model: normalizedProvider.model ?? (normalizedProvider.providerSpecified ? undefined : inheritedModel),
+    promotion,
     requiredPermissionMode: step.required_permission_mode,
     providerOptions: mergeProviderOptions(inheritedProviderOptions, normalizedProvider.providerOptions),
     edit: step.edit,

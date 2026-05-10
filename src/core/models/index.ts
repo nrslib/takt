@@ -27,6 +27,7 @@ export type {
   WorkflowSubworkflowConfig,
   WorkflowResumePointEntry,
   WorkflowResumePoint,
+  WorkflowPromotionEntry,
   AgentWorkflowStep,
   SystemWorkflowStep,
   WorkflowCallStep,

@@ -92,6 +92,10 @@ export class OptionsBuilder {
     resolvedProvider: StepProviderInfo['provider'],
     runtime?: RuntimeStepResolution,
   ): StepProviderOptions | undefined {
+    if (runtime?.providerInfo?.providerOptions && !runtime.teamLeaderPart) {
+      return runtime.providerInfo.providerOptions;
+    }
+
     const personaProviderOptions = resolvePersonaProviderOptions(
       this.engineOptions.personaProviders,
       step.personaDisplayName,

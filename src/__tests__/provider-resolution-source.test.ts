@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { resolveStepProviderModel } from '../core/workflow/provider-resolution.js';
 
 describe('resolveStepProviderModel — source attribution (#370)', () => {
-  it('Given persona override, When resolve, Then source is persona_providers', () => {
+  it('Given step and persona overrides, When resolve, Then source is step', () => {
     const result = resolveStepProviderModel({
       step: { provider: 'codex', model: 'step-model', personaDisplayName: 'coder' },
       provider: 'claude',
@@ -12,10 +12,10 @@ describe('resolveStepProviderModel — source attribution (#370)', () => {
       personaProviders: { coder: { provider: 'opencode', model: 'persona-model' } },
     });
 
-    expect(result.provider).toBe('opencode');
-    expect(result.providerSource).toBe('persona_providers');
-    expect(result.model).toBe('persona-model');
-    expect(result.modelSource).toBe('persona_providers');
+    expect(result.provider).toBe('codex');
+    expect(result.providerSource).toBe('step');
+    expect(result.model).toBe('step-model');
+    expect(result.modelSource).toBe('step');
   });
 
   it('Given step override (no persona), When resolve, Then source is step', () => {

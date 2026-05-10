@@ -6,8 +6,9 @@ export type ProviderOptionsOriginResolver = (path: string) => ProviderOptionsTra
  * Source layer of a resolved provider/model value.
  *
  * Resolution priority (highest first):
- *   cli > persona_providers > step > project > global > default
+ *   promotion > step > persona_providers > cli > project > global > default
  *
+ * - `promotion`: step promotion override selected for the current execution
  * - `cli`: --provider / --model CLI flag
  * - `persona_providers`: workflow YAML's `persona_providers` map
  * - `step`: workflow YAML step's `provider` / `model` field
@@ -17,6 +18,7 @@ export type ProviderOptionsOriginResolver = (path: string) => ProviderOptionsTra
  */
 export type ProviderResolutionSource =
   | 'env'
+  | 'promotion'
   | 'cli'
   | 'persona_providers'
   | 'step'

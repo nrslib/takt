@@ -5,6 +5,10 @@ import {
   WorkflowStepRawSchema,
   LoopMonitorJudgeSchema,
 } from '../core/models/index.js';
+import {
+  parseAggregateConditionExpression,
+  parseAiConditionExpression,
+} from '../core/models/workflow-condition-expression.js';
 
 describe('ParallelSubStepRawSchema', () => {
   it('should validate a valid parallel sub-step', () => {
@@ -361,85 +365,86 @@ describe('ai() condition in WorkflowRuleSchema', () => {
   });
 });
 
-describe('ai() condition regex parsing', () => {
-  // Test the regex pattern used in workflowParser.ts
-  const AI_CONDITION_REGEX = /^ai\("(.+)"\)$/;
-
+describe('ai() condition expression parsing', () => {
   it('should match simple ai() condition', () => {
-    const match = 'ai("No issues found")'.match(AI_CONDITION_REGEX);
-    expect(match).not.toBeNull();
-    expect(match![1]).toBe('No issues found');
+    expect(parseAiConditionExpression('ai("No issues found")')).toEqual({
+      text: 'No issues found',
+    });
   });
 
   it('should match ai() with Japanese text', () => {
-    const match = 'ai("全てのレビューが承認している場合")'.match(AI_CONDITION_REGEX);
-    expect(match).not.toBeNull();
-    expect(match![1]).toBe('全てのレビューが承認している場合');
+    expect(parseAiConditionExpression('ai("全てのレビューが承認している場合")')).toEqual({
+      text: '全てのレビューが承認している場合',
+    });
   });
 
   it('should not match regular condition text', () => {
-    const match = 'No issues found'.match(AI_CONDITION_REGEX);
-    expect(match).toBeNull();
+    expect(parseAiConditionExpression('No issues found')).toBeUndefined();
   });
 
   it('should not match partial ai() pattern', () => {
-    expect('ai(missing quotes)'.match(AI_CONDITION_REGEX)).toBeNull();
-    expect('ai("")'.match(AI_CONDITION_REGEX)).toBeNull(); // .+ requires at least 1 char
-    expect('not ai("text")'.match(AI_CONDITION_REGEX)).toBeNull(); // must start with ai(
-    expect('ai("text") extra'.match(AI_CONDITION_REGEX)).toBeNull(); // must end with )
+    expect(parseAiConditionExpression('ai(missing quotes)')).toBeUndefined();
+    expect(parseAiConditionExpression('ai("")')).toBeUndefined();
+    expect(parseAiConditionExpression('not ai("text")')).toBeUndefined();
+    expect(parseAiConditionExpression('ai("text") extra')).toBeUndefined();
   });
 
   it('should match ai() with special characters in text', () => {
-    const match = 'ai("Issues found (critical/high severity)")'.match(AI_CONDITION_REGEX);
-    expect(match).not.toBeNull();
-    expect(match![1]).toBe('Issues found (critical/high severity)');
+    expect(parseAiConditionExpression('ai("Issues found (critical/high severity)")')).toEqual({
+      text: 'Issues found (critical/high severity)',
+    });
   });
 });
 
-describe('all()/any() aggregate condition regex parsing', () => {
-  const AGGREGATE_CONDITION_REGEX = /^(all|any)\("(.+)"\)$/;
-
+describe('all()/any() aggregate condition expression parsing', () => {
   it('should match all() condition', () => {
-    const match = 'all("approved")'.match(AGGREGATE_CONDITION_REGEX);
-    expect(match).not.toBeNull();
-    expect(match![1]).toBe('all');
-    expect(match![2]).toBe('approved');
+    expect(parseAggregateConditionExpression('all("approved")')).toEqual({
+      type: 'all',
+      argsText: '"approved"',
+    });
   });
 
   it('should match any() condition', () => {
-    const match = 'any("rejected")'.match(AGGREGATE_CONDITION_REGEX);
-    expect(match).not.toBeNull();
-    expect(match![1]).toBe('any');
-    expect(match![2]).toBe('rejected');
+    expect(parseAggregateConditionExpression('any("rejected")')).toEqual({
+      type: 'any',
+      argsText: '"rejected"',
+    });
   });
 
   it('should match with Japanese text', () => {
-    const match = 'all("承認済み")'.match(AGGREGATE_CONDITION_REGEX);
-    expect(match).not.toBeNull();
-    expect(match![1]).toBe('all');
-    expect(match![2]).toBe('承認済み');
+    expect(parseAggregateConditionExpression('all("承認済み")')).toEqual({
+      type: 'all',
+      argsText: '"承認済み"',
+    });
   });
 
   it('should not match regular condition text', () => {
-    expect('approved'.match(AGGREGATE_CONDITION_REGEX)).toBeNull();
+    expect(parseAggregateConditionExpression('approved')).toBeUndefined();
   });
 
   it('should not match ai() condition', () => {
-    expect('ai("something")'.match(AGGREGATE_CONDITION_REGEX)).toBeNull();
+    expect(parseAggregateConditionExpression('ai("something")')).toBeUndefined();
   });
 
-  it('should not match invalid patterns', () => {
-    expect('all(missing quotes)'.match(AGGREGATE_CONDITION_REGEX)).toBeNull();
-    expect('all("")'.match(AGGREGATE_CONDITION_REGEX)).toBeNull();
-    expect('not all("text")'.match(AGGREGATE_CONDITION_REGEX)).toBeNull();
-    expect('all("text") extra'.match(AGGREGATE_CONDITION_REGEX)).toBeNull();
-    expect('ALL("text")'.match(AGGREGATE_CONDITION_REGEX)).toBeNull();
+  it('should preserve aggregate argument text and reject malformed boundaries', () => {
+    expect(parseAggregateConditionExpression('all(missing quotes)')).toEqual({
+      type: 'all',
+      argsText: 'missing quotes',
+    });
+    expect(parseAggregateConditionExpression('all("")')).toEqual({
+      type: 'all',
+      argsText: '""',
+    });
+    expect(parseAggregateConditionExpression('not all("text")')).toBeUndefined();
+    expect(parseAggregateConditionExpression('all("text") extra')).toBeUndefined();
+    expect(parseAggregateConditionExpression('ALL("text")')).toBeUndefined();
   });
 
   it('should match with special characters in text', () => {
-    const match = 'any("issues found (critical)")'.match(AGGREGATE_CONDITION_REGEX);
-    expect(match).not.toBeNull();
-    expect(match![2]).toBe('issues found (critical)');
+    expect(parseAggregateConditionExpression('any("issues found (critical)")')).toEqual({
+      type: 'any',
+      argsText: '"issues found (critical)"',
+    });
   });
 });
 

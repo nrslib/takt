@@ -34,14 +34,14 @@ describe('resolveProviderModelCandidates', () => {
 });
 
 describe('resolveStepProviderModel', () => {
-  it('should prefer personaProviders.provider over step.provider when both are defined', () => {
+  it('should prefer step.provider over personaProviders.provider when both are defined', () => {
     const result = resolveStepProviderModel({
       step: { provider: 'codex', model: undefined, personaDisplayName: 'coder' },
       provider: 'claude',
       personaProviders: { coder: { provider: 'opencode' } },
     });
 
-    expect(result.provider).toBe('opencode');
+    expect(result.provider).toBe('codex');
   });
 
   it('should use personaProviders.provider when step.provider is undefined', () => {
@@ -74,14 +74,14 @@ describe('resolveStepProviderModel', () => {
     expect(result.provider).toBeUndefined();
   });
 
-  it('should prefer personaProviders.model over step.model and input.model', () => {
+  it('should prefer step.model over personaProviders.model and input.model', () => {
     const result = resolveStepProviderModel({
       step: { provider: undefined, model: 'step-model', personaDisplayName: 'coder' },
       model: 'input-model',
       personaProviders: { coder: { provider: 'codex', model: 'persona-model' } },
     });
 
-    expect(result.model).toBe('persona-model');
+    expect(result.model).toBe('step-model');
   });
 
   it('should use personaProviders.model when step.model is undefined', () => {

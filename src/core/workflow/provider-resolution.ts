@@ -87,12 +87,12 @@ export function resolveStepProviderModel(input: StepProviderModelInput): StepPro
 
   let provider: ProviderType | undefined;
   let providerSource: ProviderResolutionSource | undefined;
-  if (personaEntry?.provider !== undefined) {
-    provider = personaEntry.provider;
-    providerSource = 'persona_providers';
-  } else if (input.step.provider !== undefined) {
+  if (input.step.provider !== undefined) {
     provider = input.step.provider;
     providerSource = 'step';
+  } else if (personaEntry?.provider !== undefined) {
+    provider = personaEntry.provider;
+    providerSource = 'persona_providers';
   } else if (input.provider !== undefined) {
     provider = input.provider;
     providerSource = input.providerSource;
@@ -100,12 +100,12 @@ export function resolveStepProviderModel(input: StepProviderModelInput): StepPro
 
   let model: string | undefined;
   let modelSource: ProviderResolutionSource | undefined;
-  if (personaEntry?.model !== undefined) {
-    model = personaEntry.model;
-    modelSource = 'persona_providers';
-  } else if (input.step.model !== undefined) {
+  if (input.step.model !== undefined) {
     model = input.step.model;
     modelSource = 'step';
+  } else if (personaEntry?.model !== undefined) {
+    model = personaEntry.model;
+    modelSource = 'persona_providers';
   } else if (input.model !== undefined) {
     model = input.model;
     modelSource = input.modelSource;

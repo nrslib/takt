@@ -2,13 +2,13 @@
  * Tests for persona_providers config-level provider/model override.
  *
  * Verifies step-level provider/model resolution for resolvedProvider/resolvedModel:
- *   1. persona_providers[personaDisplayName].provider (highest)
- *   2. Step YAML provider
+ *   1. Step YAML provider
+ *   2. persona_providers[personaDisplayName].provider
  *   3. CLI/global provider (lowest in step resolution)
  *
- * Model resolution remains:
- *   1. persona_providers[personaDisplayName].model
- *   2. Step YAML model
+ * Model resolution:
+ *   1. Step YAML model
+ *   2. persona_providers[personaDisplayName].model
  *   3. CLI/global model
  */
 
@@ -111,7 +111,7 @@ describe('WorkflowEngine persona_providers override', () => {
     expect(options.resolvedProvider).toBe('claude');
   });
 
-  it('should prioritize persona_providers provider over step provider', async () => {
+  it('should prioritize step provider over persona_providers provider', async () => {
     const step = makeStep('implement', {
       personaDisplayName: 'coder',
       provider: 'claude',
@@ -139,7 +139,7 @@ describe('WorkflowEngine persona_providers override', () => {
 
     const options = vi.mocked(runAgent).mock.calls[0][2];
     expect(options.provider).toBeUndefined();
-    expect(options.resolvedProvider).toBe('codex');
+    expect(options.resolvedProvider).toBe('claude');
   });
 
   it('should work without persona_providers (undefined)', async () => {
@@ -275,7 +275,7 @@ describe('WorkflowEngine persona_providers override', () => {
     expect(options.resolvedModel).toBe('global-model');
   });
 
-  it('should prioritize persona_providers.model over step model', async () => {
+  it('should prioritize step model over persona_providers.model', async () => {
     const step = makeStep('implement', {
       personaDisplayName: 'coder',
       model: 'step-model',
@@ -304,7 +304,7 @@ describe('WorkflowEngine persona_providers override', () => {
 
     const options = vi.mocked(runAgent).mock.calls[0][2];
     expect(options.resolvedProvider).toBe('codex');
-    expect(options.resolvedModel).toBe('persona-model');
+    expect(options.resolvedModel).toBe('step-model');
   });
 
   it('should emit providerInfo in step:start matching resolved provider/model', async () => {

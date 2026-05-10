@@ -1,7 +1,8 @@
 import type { WorkflowRule } from '../../../core/models/index.js';
-
-const AI_CONDITION_REGEX = /^ai\("(.+)"\)$/;
-const AGGREGATE_CONDITION_REGEX = /^(all|any)\((.+)\)$/;
+import {
+  parseAggregateConditionExpression,
+  parseAiConditionExpression,
+} from '../../../core/models/workflow-condition-expression.js';
 
 function parseAggregateConditions(argsText: string): string[] {
   const conditions: string[] = [];
@@ -32,8 +33,8 @@ export function normalizeRule(rule: {
     throw new Error('Workflow rule requires condition or when');
   }
   const next = rule.next ?? '';
-  const aiMatch = condition.match(AI_CONDITION_REGEX);
-  if (aiMatch?.[1]) {
+  const aiExpression = parseAiConditionExpression(condition);
+  if (aiExpression) {
     return {
       condition,
       next,
@@ -42,13 +43,13 @@ export function normalizeRule(rule: {
       requiresUserInput: rule.requires_user_input,
       interactiveOnly: rule.interactive_only,
       isAiCondition: true,
-      aiConditionText: aiMatch[1],
+      aiConditionText: aiExpression.text,
     };
   }
 
-  const aggregateMatch = condition.match(AGGREGATE_CONDITION_REGEX);
-  if (aggregateMatch?.[1] && aggregateMatch[2]) {
-    const conditions = parseAggregateConditions(aggregateMatch[2]);
+  const aggregateExpression = parseAggregateConditionExpression(condition);
+  if (aggregateExpression) {
+    const conditions = parseAggregateConditions(aggregateExpression.argsText);
     return {
       condition,
       next,
@@ -57,7 +58,7 @@ export function normalizeRule(rule: {
       requiresUserInput: rule.requires_user_input,
       interactiveOnly: rule.interactive_only,
       isAggregateCondition: true,
-      aggregateType: aggregateMatch[1] as 'all' | 'any',
+      aggregateType: aggregateExpression.type,
       aggregateConditionText: conditions.length === 1 ? conditions[0]! : conditions,
     };
   }

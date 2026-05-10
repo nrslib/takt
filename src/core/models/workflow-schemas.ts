@@ -13,6 +13,7 @@ import {
   WorkflowProviderOptionsSchema,
   ProviderReferenceSchema,
   QualityGatesSchema,
+  hasProviderOptionsLeaf,
 } from './schema-base.js';
 import {
   StructuredOutputRawSchema,
@@ -20,9 +21,11 @@ import {
   validateSystemStepFields,
   WorkflowEffectRawSchema,
 } from './workflow-system-schemas.js';
+import {
+  isAggregateConditionExpression,
+  isAiConditionExpression,
+} from './workflow-condition-expression.js';
 
-const AI_CONDITION_REGEX = /^ai\("(.+)"\)$/;
-const AGGREGATE_CONDITION_REGEX = /^(all|any)\((.+)\)$/;
 const RESERVED_WORKFLOW_CALL_RESULTS = ['COMPLETE', 'ABORT'] as const;
 
 export const WorkflowParamReferenceRawSchema = z.object({
@@ -75,6 +78,47 @@ export const WorkflowRuleSchema = z.object({
     path: ['condition'],
   },
 );
+
+const WorkflowPromotionRawSchema = z.object({
+  at: z.number().int().positive().optional(),
+  condition: z.string().min(1).optional(),
+  provider: ProviderReferenceSchema.optional(),
+  model: z.string().optional(),
+  provider_options: StepProviderOptionsSchema,
+}).strict().superRefine((data, ctx) => {
+  if (data.at === undefined && data.condition === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'promotion entry requires at least one of "at" or "condition"',
+    });
+  }
+
+  if (data.condition !== undefined && !isAiConditionExpression(data.condition)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['condition'],
+      message: 'promotion condition must be an ai("...") expression',
+    });
+  }
+
+  const hasProviderOptionsTarget = data.provider_options !== undefined
+    && hasProviderOptionsLeaf(data.provider_options);
+
+  if (data.provider === undefined && data.model === undefined && !hasProviderOptionsTarget) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'promotion entry requires at least one of "provider", "model", or "provider_options"',
+    });
+  }
+
+  if (data.provider_options !== undefined && !hasProviderOptionsTarget) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['provider_options'],
+      message: 'promotion entry provider_options must include at least one provider-specific option',
+    });
+  }
+});
 
 /** Arpeggio merge configuration schema */
 export const ArpeggioMergeRawSchema = z.object({
@@ -133,6 +177,7 @@ export const ParallelSubStepRawSchema = z.object({
   mcp_servers: McpServersSchema,
   provider: ProviderReferenceSchema.optional(),
   model: z.string().optional(),
+  promotion: z.never().optional(),
   permission_mode: z.never().optional(),
   required_permission_mode: PermissionModeSchema.optional(),
   provider_options: StepProviderOptionsSchema,
@@ -218,6 +263,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     mcp_servers: McpServersSchema,
     provider: ProviderReferenceSchema.optional(),
     model: z.string().optional(),
+    promotion: z.array(WorkflowPromotionRawSchema).optional(),
     permission_mode: z.never().optional(),
     required_permission_mode: PermissionModeSchema.optional(),
     provider_options: StepProviderOptionsSchema,
@@ -277,6 +323,25 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
       });
     }
 
+    if (data.promotion !== undefined && stepKind !== 'agent') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['promotion'],
+        message: 'promotion is only allowed on agent steps',
+      });
+    }
+
+    if (
+      data.promotion !== undefined
+      && (data.parallel !== undefined || data.arpeggio !== undefined || data.team_leader !== undefined)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['promotion'],
+        message: 'promotion is only allowed on normal agent steps',
+      });
+    }
+
     if (stepKind === 'workflow_call') {
       if (data.call === undefined) {
         ctx.addIssue({
@@ -295,6 +360,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
         'mcp_servers',
         'provider',
         'model',
+        'promotion',
         'provider_options',
         'required_permission_mode',
         'edit',
@@ -342,8 +408,8 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
         const allowExtendedConditions = options?.relaxWorkflowCallConditions === true;
         const isBuiltInCondition = rule.condition === 'COMPLETE' || rule.condition === 'ABORT';
         const isExtendedCondition = allowExtendedConditions
-          && !AI_CONDITION_REGEX.test(rule.condition)
-          && !AGGREGATE_CONDITION_REGEX.test(rule.condition);
+          && !isAiConditionExpression(rule.condition)
+          && !isAggregateConditionExpression(rule.condition);
 
         if (!isBuiltInCondition && !isExtendedCondition) {
           ctx.addIssue({
