@@ -38,9 +38,12 @@ function validateAllowedKeys(
 
 function validateIssuePayload(value: unknown): void {
   const issue = requireObject(value, 'issue');
-  validateAllowedKeys(issue, 'issue', ['create', 'labels']);
+  validateAllowedKeys(issue, 'issue', ['create', 'title', 'labels']);
   if (issue.create !== undefined && typeof issue.create !== 'boolean') {
     throw new Error('System effect requires boolean field "issue.create"');
+  }
+  if (issue.title !== undefined && typeof issue.title !== 'string') {
+    throw new Error('System effect requires string field "issue.title"');
   }
   if (issue.labels !== undefined) {
     if (!Array.isArray(issue.labels) || issue.labels.some((label) => typeof label !== 'string')) {

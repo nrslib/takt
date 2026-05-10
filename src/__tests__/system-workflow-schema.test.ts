@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { WorkflowConfigRawSchema, WorkflowStepRawSchema } from '../core/models/index.js';
+import { validateStructuredOutputAgainstSchema } from '../core/workflow/engine/structured-output-schema-validator.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 
@@ -23,7 +24,9 @@ function expectNativeStructuredOutputCompatibleSchema(schema: unknown): void {
   if (objectSchema.type === 'object' && objectSchema.properties !== undefined) {
     expect(Array.isArray(objectSchema.required)).toBe(true);
     const propertyNames = Object.keys(objectSchema.properties as Record<string, unknown>).sort();
-    expect([...(objectSchema.required as string[])].sort()).toEqual(propertyNames);
+    const requiredNames = objectSchema.required as string[];
+    const allowedOptionalNames = propertyNames.filter((name) => name === 'labels' && !requiredNames.includes(name));
+    expect([...requiredNames, ...allowedOptionalNames].sort()).toEqual(propertyNames);
 
     for (const propertySchema of Object.values(objectSchema.properties as Record<string, unknown>)) {
       expectNativeStructuredOutputCompatibleSchema(propertySchema);
@@ -873,6 +876,34 @@ describe('system workflow schema', () => {
     expect(result.success).toBe(false);
   });
 
+  it('enqueue_task issue.title を受け付ける', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'enqueue_from_issue',
+      mode: 'system',
+      effects: [
+        {
+          type: 'enqueue_task',
+          mode: 'new',
+          workflow: 'takt-default',
+          task: '{structured:plan.task_markdown}',
+          issue: {
+            create: true,
+            title: 'Generate concise issue titles with AI',
+            labels: ['automation'],
+          },
+        },
+      ],
+      rules: [
+        {
+          when: 'true',
+          next: 'COMPLETE',
+        },
+      ],
+    });
+
+    expect(result.success).toBe(true);
+  });
+
   it('同じ type の effect 重複を reject する', () => {
     const result = WorkflowStepRawSchema.safeParse({
       name: 'prepare_merge',
@@ -1118,7 +1149,16 @@ describe('system workflow schema', () => {
       expect(structuredOutput.schemaRef).toBe('followup-task');
       expect(structuredOutput.schema).toEqual(expect.objectContaining({
         type: 'object',
-        required: ['action', 'task_markdown', 'issue'],
+        required: [
+          'action',
+          'title',
+          'type',
+          'scope',
+          'summary',
+          'goals',
+          'acceptance_criteria',
+          'issue',
+        ],
         additionalProperties: false,
         properties: expect.objectContaining({
           action: {
@@ -1128,19 +1168,61 @@ describe('system workflow schema', () => {
               'wait_before_next_scan',
             ],
           },
+          title: { type: 'string' },
+          type: {
+            type: 'string',
+            enum: [
+              'feature',
+              'bug',
+              'chore',
+              'docs',
+            ],
+          },
+          scope: { type: 'string' },
+          summary: { type: 'string' },
+          goals: {
+            type: 'array',
+            items: { type: 'string' },
+          },
+          acceptance_criteria: {
+            type: 'array',
+            items: { type: 'string' },
+          },
+          labels: {
+            type: 'array',
+            items: { type: 'string' },
+          },
           issue: {
             type: 'object',
             properties: {
               create: { type: 'boolean' },
-              labels: {
-                type: 'array',
-                items: { type: 'string' },
-              },
             },
-            required: ['create', 'labels'],
+            required: ['create'],
             additionalProperties: false,
           },
         }),
+        allOf: [
+          {
+            if: {
+              properties: {
+                action: {
+                  const: 'enqueue_new_task',
+                },
+              },
+              required: ['action'],
+            },
+            then: {
+              properties: {
+                goals: {
+                  minItems: 1,
+                },
+                acceptance_criteria: {
+                  minItems: 2,
+                },
+              },
+            },
+          },
+        ],
       }));
       expectNativeStructuredOutputCompatibleSchema(structuredOutput.schema);
       expect((structuredOutput.schema.properties as Record<string, unknown>).pr_comment_markdown).toBeUndefined();
@@ -1193,6 +1275,148 @@ describe('system workflow schema', () => {
       expect(allowedActions).not.toContain('enqueue_from_pr');
       expect(allowedActions).not.toContain('prepare_merge');
       expect(allowedActions).not.toContain('reject_pr');
+    } finally {
+      rmSync(workflowDir, { recursive: true, force: true });
+    }
+  });
+
+  it('builtin followup-task schema は enqueue_new_task の空 goals を拒否する', () => {
+    const workflowDir = mkdtempSync(join(tmpdir(), 'takt-system-schema-followup-min-items-'));
+
+    try {
+      const raw = WorkflowConfigRawSchema.parse({
+        name: 'auto-improvement-loop',
+        max_steps: 3,
+        initial_step: 'plan_followup',
+        steps: [
+          {
+            name: 'plan_followup',
+            persona: 'supervisor',
+            instruction: 'Plan follow-up task',
+            structured_output: {
+              schema_ref: 'followup-task',
+            },
+            rules: [
+              {
+                when: 'true',
+                next: 'COMPLETE',
+              },
+            ],
+          },
+        ],
+      });
+
+      const normalized = normalizeWorkflowConfig(raw, workflowDir);
+      const step = normalized.steps[0] as Record<string, unknown>;
+      const structuredOutput = step.structuredOutput as { schema: Record<string, unknown> };
+
+      expect(() => validateStructuredOutputAgainstSchema({
+        action: 'enqueue_new_task',
+        title: 'Implement a task',
+        type: 'feature',
+        scope: 'workflow',
+        summary: 'Implement a task',
+        goals: [],
+        acceptance_criteria: ['One', 'Two'],
+        labels: [],
+        issue: {
+          create: true,
+        },
+      }, structuredOutput.schema)).toThrow('must NOT have fewer than 1 items');
+    } finally {
+      rmSync(workflowDir, { recursive: true, force: true });
+    }
+  });
+
+  it('builtin followup-task schema は root title を必須にする', () => {
+    const workflowDir = mkdtempSync(join(tmpdir(), 'takt-system-schema-followup-title-required-'));
+
+    try {
+      const raw = WorkflowConfigRawSchema.parse({
+        name: 'auto-improvement-loop',
+        max_steps: 3,
+        initial_step: 'plan_followup',
+        steps: [
+          {
+            name: 'plan_followup',
+            persona: 'supervisor',
+            instruction: 'Plan follow-up task',
+            structured_output: {
+              schema_ref: 'followup-task',
+            },
+            rules: [
+              {
+                when: 'true',
+                next: 'COMPLETE',
+              },
+            ],
+          },
+        ],
+      });
+
+      const normalized = normalizeWorkflowConfig(raw, workflowDir);
+      const step = normalized.steps[0] as Record<string, unknown>;
+      const structuredOutput = step.structuredOutput as { schema: Record<string, unknown> };
+
+      expect(() => validateStructuredOutputAgainstSchema({
+        action: 'enqueue_new_task',
+        type: 'feature',
+        scope: 'workflow',
+        summary: 'Implement a task',
+        goals: ['Implement the task'],
+        acceptance_criteria: ['One', 'Two'],
+        issue: {
+          create: true,
+        },
+      }, structuredOutput.schema)).toThrow('$.title is required');
+    } finally {
+      rmSync(workflowDir, { recursive: true, force: true });
+    }
+  });
+
+  it('builtin followup-task schema は wait_before_next_scan の空配列を許可する', () => {
+    const workflowDir = mkdtempSync(join(tmpdir(), 'takt-system-schema-followup-wait-empty-'));
+
+    try {
+      const raw = WorkflowConfigRawSchema.parse({
+        name: 'auto-improvement-loop',
+        max_steps: 3,
+        initial_step: 'plan_followup',
+        steps: [
+          {
+            name: 'plan_followup',
+            persona: 'supervisor',
+            instruction: 'Plan follow-up task',
+            structured_output: {
+              schema_ref: 'followup-task',
+            },
+            rules: [
+              {
+                when: 'true',
+                next: 'COMPLETE',
+              },
+            ],
+          },
+        ],
+      });
+
+      const normalized = normalizeWorkflowConfig(raw, workflowDir);
+      const step = normalized.steps[0] as Record<string, unknown>;
+      const structuredOutput = step.structuredOutput as { schema: Record<string, unknown> };
+
+      expect(() => validateStructuredOutputAgainstSchema({
+        action: 'wait_before_next_scan',
+        title: '',
+        type: 'chore',
+        scope: '',
+        summary: '',
+        goals: [],
+        acceptance_criteria: [],
+        labels: [],
+        issue: {
+          create: false,
+        },
+      }, structuredOutput.schema)).not.toThrow();
     } finally {
       rmSync(workflowDir, { recursive: true, force: true });
     }

@@ -85,10 +85,17 @@ steps:
       現在の Issue 自身は重複対象に含めず、比較対象は上記の他 open Issue のみとしてください。
       open PR / 他 open Issue と実質的に重複する task は避けてください。
 
-      実装は行わず、次タスクの指示書だけを task_markdown に出力してください。
+      実装は行わず、次タスクのメタデータだけを structured output に出力してください。
       action には次アクションを出力してください。
-      task_markdown と issue は必ず出力してください。
-      wait_before_next_scan の場合、task_markdown は空文字、issue は { create: false, labels: [] } にしてください。
+      title, type, scope, summary, goals, acceptance_criteria, issue は必ず出力してください。
+      labels は必要な場合のみ出力してください。
+      title には GitHub Issue に適した短い要約タイトルを出力してください。
+      title に「# タスク指示書」や「タスク指示書」のような汎用見出しを使わないでください。
+      type は feature / bug / chore / docs のいずれかにしてください。
+      TAKT が summary, goals, acceptance_criteria から次の Markdown テンプレートを生成します:
+      ## 概要 / ## 目的 / ## 受け入れ条件
+      enqueue_new_task の場合、goals は 1 件以上、acceptance_criteria は 2 件以上にしてください。
+      wait_before_next_scan の場合、title, scope, summary は空文字、type は "chore"、goals と acceptance_criteria は空配列、labels は空配列、issue は { create: false } にしてください。
       既存 Issue 起点の task では、新しい GitHub Issue が明示的に必要な場合以外は issue.create を false にしてください。
 
       action の候補:
@@ -148,10 +155,17 @@ steps:
       open PR / 既存の open Issue と実質的に重複する task は避けてください。
       明確に独立した高価値 task を特定できない場合は wait_before_next_scan を選んでください。
 
-      実装は行わず、次タスクの指示書だけを task_markdown に出力してください。
+      実装は行わず、次タスクのメタデータだけを structured output に出力してください。
       action には次アクションを出力してください。
-      task_markdown と issue は必ず出力してください。
-      wait_before_next_scan の場合、task_markdown は空文字、issue は { create: false, labels: [] } にしてください。
+      title, type, scope, summary, goals, acceptance_criteria, issue は必ず出力してください。
+      labels は必要な場合のみ出力してください。
+      title には GitHub Issue に適した短い要約タイトルを出力してください。
+      title に「# タスク指示書」や「タスク指示書」のような汎用見出しを使わないでください。
+      type は feature / bug / chore / docs のいずれかにしてください。
+      TAKT が summary, goals, acceptance_criteria から次の Markdown テンプレートを生成します:
+      ## 概要 / ## 目的 / ## 受け入れ条件
+      enqueue_new_task の場合、goals は 1 件以上、acceptance_criteria は 2 件以上にしてください。
+      wait_before_next_scan の場合、title, scope, summary は空文字、type は "chore"、goals と acceptance_criteria は空配列、labels は空配列、issue は { create: false } にしてください。
       fresh improvement task では、task が GitHub Issue に紐づくように issue.create を true にしてください。
 
       action の候補:

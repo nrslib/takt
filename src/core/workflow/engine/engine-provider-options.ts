@@ -60,7 +60,7 @@ export function resolvePartAllowedToolsForProvider(
 export function assertProviderResolvedForCapabilitySensitiveOptions(
   provider: ProviderType | undefined,
   options: CapabilitySensitiveStepOptions,
-): void {
+): asserts provider is ProviderType {
   if (provider !== undefined) {
     return;
   }

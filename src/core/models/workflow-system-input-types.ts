@@ -111,6 +111,7 @@ export type WorkflowSystemInput =
 
 export interface WorkflowEnqueueIssueConfig {
   create?: boolean;
+  title?: string;
   labels?: string[];
 }
 

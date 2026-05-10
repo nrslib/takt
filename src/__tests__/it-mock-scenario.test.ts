@@ -192,6 +192,41 @@ describe('loadScenarioFile', () => {
     expect(entries[0].delayMs).toBe(100);
   });
 
+  it('should map error and failure_category from scenario JSON', () => {
+    const filePath = join(tempDir, 'valid-failure-category.json');
+    writeFileSync(filePath, JSON.stringify([
+      {
+        status: 'error',
+        content: 'partial response',
+        error: 'provider failed',
+        failure_category: 'provider_error',
+      },
+    ]));
+
+    const entries = loadScenarioFile(filePath);
+
+    expect(entries[0]).toEqual(expect.objectContaining({
+      status: 'error',
+      content: 'partial response',
+      error: 'provider failed',
+      failureCategory: 'provider_error',
+    }));
+  });
+
+  it('should throw when error is not a string', () => {
+    const filePath = join(tempDir, 'bad-error.json');
+    writeFileSync(filePath, '[{"content": "test", "error": 123}]');
+
+    expect(() => loadScenarioFile(filePath)).toThrow('"error" must be a string');
+  });
+
+  it('should throw when failure_category is invalid', () => {
+    const filePath = join(tempDir, 'bad-failure-category.json');
+    writeFileSync(filePath, '[{"content": "test", "failure_category": "unknown_failure"}]');
+
+    expect(() => loadScenarioFile(filePath)).toThrow('"failure_category" is invalid');
+  });
+
   it('should throw for invalid status', () => {
     const filePath = join(tempDir, 'bad-status.json');
     writeFileSync(filePath, '[{"content": "test", "status": "approved"}]');

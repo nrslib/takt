@@ -7,8 +7,10 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockCreateIssue } = vi.hoisted(() => ({
+const { mockCreateIssue, mockLogInfo, mockLogError } = vi.hoisted(() => ({
   mockCreateIssue: vi.fn(),
+  mockLogInfo: vi.fn(),
+  mockLogError: vi.fn(),
 }));
 
 vi.mock('../infra/git/index.js', () => ({
@@ -26,9 +28,9 @@ vi.mock('../shared/ui/index.js', () => ({
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   createLogger: () => ({
-    info: vi.fn(),
+    info: mockLogInfo,
     debug: vi.fn(),
-    error: vi.fn(),
+    error: mockLogError,
   }),
 }));
 
@@ -257,6 +259,190 @@ describe('createIssueFromTask', () => {
       );
     });
   });
+
+  describe('structured output title', () => {
+    it('uses a valid structured output title as the issue title', () => {
+      // Given
+      const task = '## Generic task heading\nImplement AI issue title generation';
+      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/7' });
+
+      // When
+      createIssueFromTask(task, {
+        title: 'Generate concise issue titles with AI',
+        labels: ['enhancement'],
+      });
+
+      // Then
+      expect(mockCreateIssue).toHaveBeenCalledWith(
+        {
+          title: 'Generate concise issue titles with AI',
+          body: task,
+          labels: ['enhancement'],
+        },
+        undefined,
+      );
+      expect(mockLogInfo).toHaveBeenCalledWith('Issue created', expect.objectContaining({
+        url: 'https://github.com/owner/repo/issues/7',
+        issueNumber: 7,
+        used_structured_output: true,
+      }));
+    });
+
+    it('truncates a valid structured output title at the existing 100 character boundary', () => {
+      // Given
+      const longTitle = 'a'.repeat(101);
+      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/8' });
+
+      // When
+      createIssueFromTask('## Task body\nDetails', { title: longTitle });
+
+      // Then
+      const expectedTitle = `${'a'.repeat(97)}...`;
+      expect(expectedTitle).toHaveLength(100);
+      expect(mockCreateIssue).toHaveBeenCalledWith(
+        { title: expectedTitle, body: '## Task body\nDetails' },
+        undefined,
+      );
+    });
+
+    it('falls back to the task-derived title and logs missing when structured title is absent', () => {
+      // Given
+      const task = '## Implement fallback issue title\nDetails';
+      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/9' });
+
+      // When
+      createIssueFromTask(task);
+
+      // Then
+      expect(mockCreateIssue).toHaveBeenCalledWith(
+        { title: 'Implement fallback issue title', body: task },
+        undefined,
+      );
+      expect(mockLogInfo).toHaveBeenCalledWith('Issue created', expect.objectContaining({
+        used_structured_output: false,
+        fallback_reason: 'missing',
+      }));
+    });
+
+    it('falls back and logs prohibited_title when structured title is generic task order text', () => {
+      // Given
+      const task = '## Generate issue title from structured output\nDetails';
+      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/10' });
+
+      // When
+      createIssueFromTask(task, { title: '# タスク指示書' });
+
+      // Then
+      expect(mockCreateIssue).toHaveBeenCalledWith(
+        { title: 'Generate issue title from structured output', body: task },
+        undefined,
+      );
+      expect(mockLogInfo).toHaveBeenCalledWith('Issue created', expect.objectContaining({
+        used_structured_output: false,
+        fallback_reason: 'prohibited_title',
+      }));
+    });
+
+    it('falls back when structured title is a Markdown Summary heading', () => {
+      // Given
+      const task = '## Generate issue title from structured output\nDetails';
+      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/13' });
+
+      // When
+      createIssueFromTask(task, { title: '## Summary' });
+
+      // Then
+      expect(mockCreateIssue).toHaveBeenCalledWith(
+        { title: 'Generate issue title from structured output', body: task },
+        undefined,
+      );
+      expect(mockLogInfo).toHaveBeenCalledWith('Issue created', expect.objectContaining({
+        used_structured_output: false,
+        fallback_reason: 'prohibited_title',
+      }));
+    });
+
+    it('falls back when structured title is a Japanese Markdown summary heading', () => {
+      // Given
+      const task = '## AIでIssueタイトルを要約する\nDetails';
+      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/14' });
+
+      // When
+      createIssueFromTask(task, { title: '## 概要' });
+
+      // Then
+      expect(mockCreateIssue).toHaveBeenCalledWith(
+        { title: 'AIでIssueタイトルを要約する', body: task },
+        undefined,
+      );
+      expect(mockLogInfo).toHaveBeenCalledWith('Issue created', expect.objectContaining({
+        used_structured_output: false,
+        fallback_reason: 'prohibited_title',
+      }));
+    });
+
+    it('uses the generated summary line instead of template headings when structured title is invalid', () => {
+      // Given
+      const task = [
+        '## Summary',
+        'Generate issue title from structured summary',
+        '',
+        '## Goals',
+        '- Keep the issue title concise',
+        '',
+        '## Acceptance Criteria',
+        '- [ ] The title is not a template heading',
+        '- [ ] The summary line is used',
+      ].join('\n');
+      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/12' });
+
+      // When
+      createIssueFromTask(task, { title: '# Task Order' });
+
+      // Then
+      expect(mockCreateIssue).toHaveBeenCalledWith(
+        { title: 'Generate issue title from structured summary', body: task },
+        undefined,
+      );
+      expect(mockLogInfo).toHaveBeenCalledWith('Issue created', expect.objectContaining({
+        used_structured_output: false,
+        fallback_reason: 'prohibited_title',
+      }));
+    });
+
+    it('falls back and logs too_short when structured title is shorter than the minimum', () => {
+      // Given
+      const task = '## Generate issue title from task body\nDetails';
+      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/11' });
+
+      // When
+      createIssueFromTask(task, { title: 'abc' });
+
+      // Then
+      expect(mockCreateIssue).toHaveBeenCalledWith(
+        { title: 'Generate issue title from task body', body: task },
+        undefined,
+      );
+      expect(mockLogInfo).toHaveBeenCalledWith('Issue created', expect.objectContaining({
+        used_structured_output: false,
+        fallback_reason: 'too_short',
+      }));
+    });
+
+    it('logs structured output decision metadata when issue creation fails', () => {
+      // Given
+      mockCreateIssue.mockReturnValue({ success: false, error: 'repo not found' });
+
+      // When
+      createIssueFromTask('## Task body\nDetails', { title: 'AI generated issue title' });
+
+      // Then
+      expect(mockLogError).toHaveBeenCalledWith('Failed to create issue', expect.objectContaining({
+        error: 'repo not found',
+        used_structured_output: true,
+      }));
+    });
+  });
 });
 
 describe('extractTitle', () => {
@@ -347,8 +533,8 @@ describe('extractTitle', () => {
       // When
       const result = extractTitle(task);
 
-      // Then: falls back to first non-empty line as-is
-      expect(result).toBe('#### h4 heading');
+      // Then: falls back to first non-empty line and strips Markdown decoration
+      expect(result).toBe('h4 heading');
     });
 
     it('should not treat heading without space after hash as Markdown heading', () => {
@@ -360,6 +546,131 @@ describe('extractTitle', () => {
 
       // Then: falls back to first non-empty line
       expect(result).toBe('#NoSpace');
+    });
+
+    it('skips a prohibited task order heading and uses the next valid heading', () => {
+      // Given
+      const task = '# タスク指示書\n\n## Generate concise AI issue titles\nDetails here';
+
+      // When
+      const result = extractTitle(task);
+
+      // Then
+      expect(result).toBe('Generate concise AI issue titles');
+    });
+
+    it('skips a too-short heading and uses the next valid non-empty line', () => {
+      // Given
+      const task = '## abc\nGenerate concise AI issue titles\nDetails here';
+
+      // When
+      const result = extractTitle(task);
+
+      // Then
+      expect(result).toBe('Generate concise AI issue titles');
+    });
+
+    it('skips structured task template section headings and uses the summary line', () => {
+      // Given
+      const task = '## Summary\nGenerate concise AI issue titles\n## Goals\n- Keep titles short';
+
+      // When
+      const result = extractTitle(task);
+
+      // Then
+      expect(result).toBe('Generate concise AI issue titles');
+    });
+
+    it('skips prohibited Japanese bullet candidates and uses the next valid bullet title', () => {
+      // Given
+      const task = [
+        '## Summary',
+        'タスク指示書',
+        '',
+        '## Goals',
+        '- タスク指示書',
+        '- Generate concise AI issue titles',
+      ].join('\n');
+
+      // When
+      const result = extractTitle(task);
+
+      // Then
+      expect(result).toBe('Generate concise AI issue titles');
+    });
+
+    it('skips prohibited English bullet candidates and uses the next valid bullet title', () => {
+      // Given
+      const task = [
+        '## Summary',
+        'Task Order',
+        '',
+        '## Goals',
+        '- Task Order',
+        '- Generate concise AI issue titles',
+      ].join('\n');
+
+      // When
+      const result = extractTitle(task);
+
+      // Then
+      expect(result).toBe('Generate concise AI issue titles');
+    });
+
+    it('strips checklist prefixes before validating task-derived candidates', () => {
+      // Given
+      const task = [
+        '## Summary',
+        'Task Order',
+        '',
+        '## Goals',
+        '- [ ] Task Order',
+        '- [x] Generate concise AI issue titles',
+      ].join('\n');
+
+      // When
+      const result = extractTitle(task);
+
+      // Then
+      expect(result).toBe('Generate concise AI issue titles');
+    });
+
+    it('skips Japanese structured task template section headings and uses the summary line', () => {
+      // Given
+      const task = '## 概要\nAIでIssueタイトルを要約する\n## 目的\n- 短いタイトルにする';
+
+      // When
+      const result = extractTitle(task);
+
+      // Then
+      expect(result).toBe('AIでIssueタイトルを要約する');
+    });
+
+    it('rejects task content when every extracted title candidate is invalid', () => {
+      // Given
+      const task = '# タスク指示書\nabc';
+
+      // When / Then
+      expect(() => extractTitle(task)).toThrow('No valid issue title could be generated');
+    });
+
+    it('does not create an issue when fallback title extraction has no valid candidate', () => {
+      // Given
+      const task = '# タスク指示書\nabc';
+
+      // When
+      const result = createIssueFromTask(task);
+
+      // Then
+      expect(result).toBeUndefined();
+      expect(mockCreateIssue).not.toHaveBeenCalled();
+      expect(mockError).toHaveBeenCalledWith(
+        'Failed to create issue: No valid issue title could be generated from task content',
+      );
+      expect(mockLogError).toHaveBeenCalledWith('Failed to create issue', expect.objectContaining({
+        used_structured_output: false,
+        fallback_reason: 'missing',
+      }));
     });
   });
 

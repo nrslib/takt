@@ -15,6 +15,7 @@ import type { ProviderPermissionProfiles } from '../models/provider-profiles.js'
 import type { StepProviderOptions } from '../models/workflow-types.js';
 import type { StructuredCaller } from '../../agents/structured-caller.js';
 import type { SystemStepServicesFactory } from './system/system-step-services.js';
+import type { StructuredOutputNormalizerRegistry } from './engine/structured-output-normalizer.js';
 import type { ProviderOptionsOriginResolver, ProviderOptionsSource, ProviderResolutionSource } from './provider-options-trace.js';
 
 import type { ProviderType, StreamCallback } from '../../shared/types/provider.js';
@@ -255,6 +256,8 @@ export interface WorkflowEngineOptions {
   detectRuleIndex?: RuleIndexDetector;
   /** Structured caller (required for rule evaluation and status/decomposition flows) */
   structuredCaller?: StructuredCaller;
+  /** Structured output normalizers supplied by the composition root. */
+  structuredOutputNormalizers?: StructuredOutputNormalizerRegistry;
   /** Override initial step (default: workflow config's initialStep) */
   startStep?: string;
   /** Retry note explaining why task is being retried */

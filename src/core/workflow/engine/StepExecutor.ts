@@ -34,6 +34,11 @@ import {
 import { validateStructuredOutputAgainstSchema } from './structured-output-schema-validator.js';
 import { providerSupportsStructuredOutput } from '../../../infra/providers/provider-capabilities.js';
 import { resolveReportHandles } from '../instruction/report-handles.js';
+import { AGENT_FAILURE_CATEGORIES } from '../../../shared/types/agent-failure.js';
+import type {
+  StructuredOutputFailureReason,
+  StructuredOutputNormalizerRegistry,
+} from './structured-output-normalizer.js';
 
 const log = createLogger('step-executor');
 
@@ -52,6 +57,7 @@ export interface StepExecutorDeps {
   readonly getRetryNote: () => string | undefined;
   readonly detectRuleIndex: (content: string, stepName: string) => number;
   readonly structuredCaller: StructuredCaller;
+  readonly structuredOutputNormalizers: StructuredOutputNormalizerRegistry;
   readonly onPhaseStart?: (
     step: WorkflowStep,
     phase: 1 | 2 | 3,
@@ -82,9 +88,13 @@ export interface StepExecutorDeps {
 }
 
 export class StepExecutor {
+  private readonly structuredOutputNormalizers: StructuredOutputNormalizerRegistry;
+
   constructor(
     private readonly deps: StepExecutorDeps,
-  ) {}
+  ) {
+    this.structuredOutputNormalizers = deps.structuredOutputNormalizers;
+  }
 
   private static buildTimestamp(): string {
     return new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
@@ -197,7 +207,7 @@ export class StepExecutor {
     response: AgentResponse,
     runtime?: RuntimeStepResolution,
   ): AgentResponse {
-    if (!step.structuredOutput || response.status !== 'done') {
+    if (!step.structuredOutput) {
       return response;
     }
 
@@ -206,12 +216,29 @@ export class StepExecutor {
       stepName: step.name,
       usesStructuredOutput: true,
     });
+    const supportsStructuredOutput = providerSupportsStructuredOutput(provider);
+
+    if (response.status !== 'done') {
+      const detail = response.error ?? response.content;
+      const failureReason = this.resolveStructuredOutputFailureReason(response);
+      const fallback = this.buildStructuredOutputFailureFallback(
+        step,
+        response,
+        failureReason,
+        detail,
+      );
+      if (fallback) {
+        return fallback;
+      }
+      this.logStructuredOutputFailure(step, failureReason, detail);
+      return response;
+    }
 
     try {
       let structuredOutput = response.structuredOutput;
 
       if (structuredOutput === undefined) {
-        if (providerSupportsStructuredOutput(provider) !== false) {
+        if (supportsStructuredOutput !== false) {
           throw new Error('Structured output response is missing');
         }
 
@@ -223,6 +250,10 @@ export class StepExecutor {
       }
 
       validateStructuredOutputAgainstSchema(structuredOutput, step.structuredOutput.schema);
+      structuredOutput = this.structuredOutputNormalizers.normalize(structuredOutput, {
+        step,
+        language: this.deps.getLanguage(),
+      });
       if (structuredOutput === response.structuredOutput) {
         return response;
       }
@@ -233,10 +264,71 @@ export class StepExecutor {
       };
     } catch (error) {
       const detail = getErrorMessage(error);
+      const fallback = this.buildStructuredOutputFailureFallback(
+        step,
+        response,
+        supportsStructuredOutput !== false && response.structuredOutput === undefined ? 'missing' : 'schema_error',
+        detail,
+      );
+      if (fallback) {
+        return fallback;
+      }
+      this.logStructuredOutputFailure(
+        step,
+        supportsStructuredOutput !== false && response.structuredOutput === undefined ? 'missing' : 'schema_error',
+        detail,
+      );
       throw new Error(
-        `Step "${step.name}" requires structured_output for provider "${provider ?? 'unknown'}": ${detail}`,
+        `Step "${step.name}" requires structured_output for provider "${provider}": ${detail}`,
       );
     }
+  }
+
+  private buildStructuredOutputFailureFallback(
+    step: WorkflowStep,
+    response: AgentResponse,
+    failureReason: StructuredOutputFailureReason,
+    detail: string,
+  ): AgentResponse | undefined {
+    const structuredOutputConfig = step.structuredOutput;
+    if (structuredOutputConfig === undefined) {
+      return undefined;
+    }
+
+    return this.structuredOutputNormalizers.buildFailureFallback({
+      step,
+      response,
+      failureReason,
+      detail,
+      language: this.deps.getLanguage(),
+      validate: (value) => validateStructuredOutputAgainstSchema(value, structuredOutputConfig.schema),
+    });
+  }
+
+  private resolveStructuredOutputFailureReason(response: AgentResponse): StructuredOutputFailureReason {
+    if (
+      response.failureCategory === AGENT_FAILURE_CATEGORIES.STREAM_IDLE_TIMEOUT
+      || response.failureCategory === AGENT_FAILURE_CATEGORIES.PART_TIMEOUT
+    ) {
+      return 'timeout';
+    }
+    if (response.status === 'error') {
+      return 'provider_error';
+    }
+    return response.structuredOutput === undefined ? 'missing' : 'schema_error';
+  }
+
+  private logStructuredOutputFailure(
+    step: WorkflowStep,
+    failureReason: StructuredOutputFailureReason,
+    detail: string,
+  ): void {
+    log.info('Structured output failed', {
+      step: step.name,
+      used_structured_output: false,
+      structured_output_failure_reason: failureReason,
+      error: detail,
+    });
   }
 
   /** Build Phase 1 instruction from template */

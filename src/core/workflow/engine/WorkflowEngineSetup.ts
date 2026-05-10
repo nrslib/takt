@@ -21,6 +21,7 @@ import { TeamLeaderRunner } from './TeamLeaderRunner.js';
 import { createWorkflowPhaseRelay } from './WorkflowEnginePhaseRelay.js';
 import { WorkflowCallRunner } from './WorkflowCallRunner.js';
 import type { WorkflowCallChildEngine } from '../types.js';
+import type { StructuredOutputNormalizerRegistry } from './structured-output-normalizer.js';
 
 const log = createLogger('workflow-engine');
 
@@ -35,7 +36,7 @@ interface WorkflowEngineSetupParams {
   getReportDir: () => string;
   getRunPaths: () => RunPaths;
   getMaxSteps: () => WorkflowMaxSteps;
-  options: WorkflowEngineOptions;
+  options: WorkflowEngineOptions & { structuredOutputNormalizers: StructuredOutputNormalizerRegistry };
   detectRuleIndex: (content: string, stepName: string) => number;
   structuredCaller: StructuredCaller;
   sharedRuntime: WorkflowSharedRuntimeState;
@@ -152,6 +153,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getRetryNote: () => params.options.retryNote,
     detectRuleIndex: params.detectRuleIndex,
     structuredCaller: params.structuredCaller,
+    structuredOutputNormalizers: params.options.structuredOutputNormalizers,
     ...phaseRelay,
   });
 
