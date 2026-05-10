@@ -1,7 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockRunAgent } = vi.hoisted(() => ({
-  mockRunAgent: vi.fn(),
+const { mockRunAgent, infoMock, createLoggerMock } = vi.hoisted(() => {
+  const infoMock = vi.fn();
+  const createLoggerMock = vi.fn(() => ({
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: infoMock,
+    error: vi.fn(),
+    enter: vi.fn(),
+    exit: vi.fn(),
+  }));
+  return {
+    mockRunAgent: vi.fn(),
+    infoMock,
+    createLoggerMock,
+  };
+});
+
+vi.mock('../shared/utils/debug.js', () => ({
+  createLogger: createLoggerMock,
 }));
 
 vi.mock('../agents/runner.js', () => ({
@@ -401,6 +418,80 @@ describe('PromptBasedStructuredCaller', () => {
     expect(result).toEqual([
       { id: 'p1', title: 'Late success', instruction: 'Done' },
     ]);
+  });
+
+  it('should log one retry attempt when decomposeTask succeeds on second attempt', async () => {
+    mockRunAgent
+      .mockResolvedValueOnce({
+        persona: 'leader',
+        status: 'done',
+        content: 'no json here',
+        timestamp: new Date(),
+      })
+      .mockResolvedValueOnce({
+        persona: 'leader',
+        status: 'done',
+        content: [
+          '```json',
+          JSON.stringify([{ id: 'p1', title: 'Recovered', instruction: 'Do it' }]),
+          '```',
+        ].join('\n'),
+        timestamp: new Date(),
+      });
+
+    const caller = new PromptBasedStructuredCaller();
+    const promise = caller.decomposeTask('break down the work', 3, {
+      cwd: '/tmp/project',
+      provider: 'cursor',
+      persona: 'team-leader',
+    });
+    await vi.advanceTimersByTimeAsync(RETRY_DELAY_MS);
+    await promise;
+
+    expect(infoMock).toHaveBeenCalledTimes(1);
+    expect(infoMock).toHaveBeenCalledWith(
+      'Structured call failed, retrying',
+      expect.objectContaining({
+        attempt: 1,
+        maxAttempts: 3,
+        error: expect.stringContaining('```json ... ``` block'),
+      }),
+    );
+  });
+
+  it('should log two retry attempts when decomposeTask fails three times', async () => {
+    const failingResponse = {
+      persona: 'leader',
+      status: 'done',
+      content: 'never any json',
+      timestamp: new Date(),
+    };
+    mockRunAgent
+      .mockResolvedValueOnce(failingResponse)
+      .mockResolvedValueOnce(failingResponse)
+      .mockResolvedValueOnce(failingResponse);
+
+    const caller = new PromptBasedStructuredCaller();
+    const promise = caller.decomposeTask('break down the work', 3, {
+      cwd: '/tmp/project',
+      provider: 'cursor',
+      persona: 'team-leader',
+    });
+    const assertion = expect(promise).rejects.toThrow(/```json \.\.\. ``` block/);
+    await vi.advanceTimersByTimeAsync(RETRY_DELAY_MS * 2);
+    await assertion;
+
+    expect(infoMock).toHaveBeenCalledTimes(2);
+    expect(infoMock).toHaveBeenNthCalledWith(
+      1,
+      'Structured call failed, retrying',
+      expect.objectContaining({ attempt: 1, maxAttempts: 3 }),
+    );
+    expect(infoMock).toHaveBeenNthCalledWith(
+      2,
+      'Structured call failed, retrying',
+      expect.objectContaining({ attempt: 2, maxAttempts: 3 }),
+    );
   });
 
   it('should parse additional parts from fenced JSON without outputSchema', async () => {
