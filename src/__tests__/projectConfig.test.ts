@@ -37,6 +37,68 @@ describe('projectConfig', () => {
   });
 
   describe('workflow_overrides empty array round-trip', () => {
+    it('should preserve empty rate_limit_fallback switch_chain in save/load cycle', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(configPath, 'rate_limit_fallback:\n  switch_chain: []\n', 'utf-8');
+
+      const loaded = loadProjectConfig(testDir);
+      expect(loaded.rateLimitFallback?.switchChain).toEqual([]);
+
+      saveProjectConfig(testDir, loaded);
+
+      const raw = readFileSync(configPath, 'utf-8');
+      expect(raw).toContain('rate_limit_fallback:');
+      expect(raw).toContain('switch_chain: []');
+
+      const reloaded = loadProjectConfig(testDir);
+      expect(reloaded.rateLimitFallback?.switchChain).toEqual([]);
+    });
+
+    it('should normalize rate_limit_fallback without switch_chain as disabled fallback', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(configPath, 'rate_limit_fallback: {}\n', 'utf-8');
+
+      const loaded = loadProjectConfig(testDir);
+      expect(loaded.rateLimitFallback?.switchChain).toEqual([]);
+
+      saveProjectConfig(testDir, loaded);
+
+      const raw = readFileSync(configPath, 'utf-8');
+      expect(raw).toContain('rate_limit_fallback:');
+      expect(raw).toContain('switch_chain: []');
+    });
+
+    it('should reject rate_limit_fallback opencode entry without model', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(
+        configPath,
+        [
+          'rate_limit_fallback:',
+          '  switch_chain:',
+          '    - provider: opencode',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      expect(() => loadProjectConfig(testDir)).toThrow(/provider 'opencode' requires model/);
+    });
+
+    it('should reject rate_limit_fallback codex entry with Claude model alias', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(
+        configPath,
+        [
+          'rate_limit_fallback:',
+          '  switch_chain:',
+          '    - provider: codex',
+          '      model: sonnet',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      expect(() => loadProjectConfig(testDir)).toThrow(/Claude model alias/);
+    });
+
     it('should preserve empty quality_gates array in save/load cycle', () => {
       // Write config with empty quality_gates array
       const configPath = join(testDir, '.takt', 'config.yaml');

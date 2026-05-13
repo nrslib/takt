@@ -1,6 +1,6 @@
 import type { AgentResponse, LoopMonitorConfig, WorkflowMaxSteps, WorkflowState, WorkflowStep } from '../../models/types.js';
 import { getWorkflowStepKind, isSystemWorkflowStep, isWorkflowCallStep } from '../step-kind.js';
-import type { RuntimeStepResolution, WorkflowEngineOptions } from '../types.js';
+import type { RuntimeStepResolution, StepRunResult, WorkflowEngineOptions } from '../types.js';
 import { determineRuleTransition, type WorkflowRuleTransition } from './transitions.js';
 
 interface WorkflowEngineStepCoordinatorDeps {
@@ -19,7 +19,8 @@ interface WorkflowEngineStepCoordinatorDeps {
       maxSteps: WorkflowMaxSteps,
       updateSession: (persona: string, sessionId: string | undefined) => void,
       prebuiltInstruction?: string,
-    ) => Promise<{ response: AgentResponse; instruction: string }>;
+      runtime?: RuntimeStepResolution,
+    ) => Promise<StepRunResult>;
     buildInstruction: (
       step: WorkflowStep,
       stepIteration: number,
@@ -27,7 +28,7 @@ interface WorkflowEngineStepCoordinatorDeps {
       task: string,
       maxSteps: WorkflowMaxSteps,
     ) => string;
-    buildPhase1Instruction: (instruction: string, step: WorkflowStep) => string;
+    buildPhase1Instruction: (instruction: string, step: WorkflowStep, runtime?: RuntimeStepResolution) => string;
     drainReportFiles: () => Array<{ step: WorkflowStep; filePath: string; fileName: string }>;
   };
   parallelRunner: {
@@ -37,13 +38,15 @@ interface WorkflowEngineStepCoordinatorDeps {
       task: string,
       maxSteps: WorkflowMaxSteps,
       updateSession: (persona: string, sessionId: string | undefined) => void,
-    ) => Promise<{ response: AgentResponse; instruction: string }>;
+      runtime?: RuntimeStepResolution,
+    ) => Promise<StepRunResult>;
   };
   arpeggioRunner: {
     runArpeggioStep: (
       step: WorkflowStep,
       state: WorkflowState,
-    ) => Promise<{ response: AgentResponse; instruction: string }>;
+      runtime?: RuntimeStepResolution,
+    ) => Promise<StepRunResult>;
   };
   teamLeaderRunner: {
     runTeamLeaderStep: (
@@ -52,7 +55,8 @@ interface WorkflowEngineStepCoordinatorDeps {
       task: string,
       maxSteps: WorkflowMaxSteps,
       updateSession: (persona: string, sessionId: string | undefined) => void,
-    ) => Promise<{ response: AgentResponse; instruction: string }>;
+      runtime?: RuntimeStepResolution,
+    ) => Promise<StepRunResult>;
   };
   systemStepExecutor: {
     run: (step: WorkflowStep, state: WorkflowState) => Promise<AgentResponse>;
@@ -69,7 +73,7 @@ interface WorkflowEngineStepCoordinatorDeps {
     run: (
       step: WorkflowStep & { call: string },
       runtime?: RuntimeStepResolution,
-    ) => Promise<{ response: AgentResponse; instruction: string }>;
+    ) => Promise<StepRunResult>;
     resolveRuntime: (step: WorkflowStep & { call: string }) => RuntimeStepResolution;
   };
   updatePersonaSession: (persona: string, sessionId: string | undefined) => void;
@@ -98,9 +102,9 @@ export class WorkflowEngineStepCoordinator {
     step: WorkflowStep,
     prebuiltInstruction?: string,
     runtime?: RuntimeStepResolution,
-  ): Promise<{ response: AgentResponse; instruction: string }> {
+  ): Promise<StepRunResult> {
     const updateSession = this.deps.updatePersonaSession;
-    let result: { response: AgentResponse; instruction: string };
+    let result: StepRunResult;
 
     if (step.parallel && step.parallel.length > 0) {
       result = await this.deps.parallelRunner.runParallelStep(
@@ -109,9 +113,10 @@ export class WorkflowEngineStepCoordinator {
         this.deps.task,
         this.deps.getMaxSteps(),
         updateSession,
+        runtime,
       );
     } else if (step.arpeggio) {
-      result = await this.deps.arpeggioRunner.runArpeggioStep(step, this.deps.state);
+      result = await this.deps.arpeggioRunner.runArpeggioStep(step, this.deps.state, runtime);
     } else if (step.teamLeader) {
       result = await this.deps.teamLeaderRunner.runTeamLeaderStep(
         step,
@@ -119,6 +124,7 @@ export class WorkflowEngineStepCoordinator {
         this.deps.task,
         this.deps.getMaxSteps(),
         updateSession,
+        runtime,
       );
     } else if (isSystemWorkflowStep(step)) {
       result = {
@@ -135,6 +141,7 @@ export class WorkflowEngineStepCoordinator {
         this.deps.getMaxSteps(),
         updateSession,
         prebuiltInstruction,
+        runtime,
       );
     }
 
@@ -175,8 +182,8 @@ export class WorkflowEngineStepCoordinator {
     );
   }
 
-  buildPhase1Instruction(step: WorkflowStep, instruction: string): string {
-    return this.deps.stepExecutor.buildPhase1Instruction(instruction, step);
+  buildPhase1Instruction(step: WorkflowStep, instruction: string, runtime?: RuntimeStepResolution): string {
+    return this.deps.stepExecutor.buildPhase1Instruction(instruction, step, runtime);
   }
 
   runLoopMonitorJudge(

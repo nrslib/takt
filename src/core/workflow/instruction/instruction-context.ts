@@ -4,7 +4,7 @@
  * Defines the context structures used by instruction builders.
  */
 
-import type { AgentResponse, Language, WorkflowMaxSteps, WorkflowState } from '../../models/types.js';
+import type { AgentResponse, FallbackContext, Language, WorkflowMaxSteps, WorkflowState } from '../../models/types.js';
 
 /**
  * Context for building instruction from template.
@@ -28,6 +28,8 @@ export interface InstructionContext {
   previousOutput?: AgentResponse;
   /** Source path for previous response snapshot */
   previousResponseSourcePath?: string;
+  /** Fallback context to inject once after provider switching */
+  fallbackContext?: FallbackContext;
   /** Preprocessed previous response text for template placeholder replacement */
   previousResponseText?: string;
   /** Report directory path */

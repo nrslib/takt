@@ -29,6 +29,7 @@ import {
   emitCodexItemCompleted,
   emitCodexItemUpdate,
 } from './CodexStreamHandler.js';
+import { buildRateLimitedResponseFields, containsRateLimitError } from '../rate-limit/detection.js';
 
 export type { CodexCallOptions } from './types.js';
 
@@ -198,6 +199,19 @@ export class CodexClient {
       timestamp: new Date(),
       sessionId,
       failureCategory: failure.category,
+    };
+  }
+
+  private buildRateLimitedResponse(
+    agentType: string,
+    sessionId: string | undefined,
+    message: string,
+  ): AgentResponse {
+    return {
+      persona: agentType,
+      timestamp: new Date(),
+      sessionId,
+      ...buildRateLimitedResponseFields('codex', 'sdk_error', message),
     };
   }
 
@@ -389,6 +403,12 @@ export class CodexClient {
         diag.onCompleted(success ? 'normal' : 'error', success ? undefined : failureMessage);
 
         if (!success) {
+          if (containsRateLimitError(failureMessage)) {
+            const rateLimitedResponse = this.buildRateLimitedResponse(agentType, currentThreadId, failureMessage);
+            emitResult(options.onStream, false, rateLimitedResponse.error ?? rateLimitedResponse.content, currentThreadId);
+            return rateLimitedResponse;
+          }
+
           const failure = this.resolveFailureDetail(
             failureMessage || 'Codex execution failed',
             streamAbortController.signal,
@@ -435,8 +455,15 @@ export class CodexClient {
         };
         return response;
       } catch (error) {
+        const rawErrorMessage = getErrorMessage(error);
+        if (containsRateLimitError(rawErrorMessage)) {
+          const rateLimitedResponse = this.buildRateLimitedResponse(agentType, currentThreadId, rawErrorMessage);
+          emitResult(options.onStream, false, rateLimitedResponse.error ?? rateLimitedResponse.content, currentThreadId);
+          return rateLimitedResponse;
+        }
+
         const failure = this.resolveFailureDetail(
-          getErrorMessage(error),
+          rawErrorMessage,
           streamAbortController.signal,
           options.abortSignal,
           abortCause,

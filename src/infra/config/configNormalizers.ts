@@ -1,4 +1,4 @@
-import type { StepProviderOptions, WorkflowRuntimeConfig } from '../../core/models/workflow-types.js';
+import type { RateLimitFallbackConfig, StepProviderOptions, WorkflowRuntimeConfig } from '../../core/models/workflow-types.js';
 import type { ProviderPermissionProfiles } from '../../core/models/provider-profiles.js';
 import type {
   WorkflowOverrides,
@@ -33,6 +33,40 @@ export function normalizeRuntime(
     return undefined;
   }
   return { prepare: [...new Set(runtime.prepare)] };
+}
+
+export function normalizeRateLimitFallback(
+  raw: { switch_chain?: Array<{ provider: RateLimitFallbackConfig['switchChain'][number]['provider']; model?: string }> } | undefined,
+): RateLimitFallbackConfig | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const switchChain = raw.switch_chain ?? [];
+  return {
+    switchChain: switchChain.map((entry, index) => {
+      validateProviderModelCompatibility(entry.provider, entry.model, {
+        modelFieldName: `Configuration error: rate_limit_fallback.switch_chain[${index}].model`,
+      });
+      return {
+        provider: entry.provider,
+        ...(entry.model !== undefined ? { model: entry.model } : {}),
+      };
+    }),
+  };
+}
+
+export function denormalizeRateLimitFallback(
+  config: RateLimitFallbackConfig | undefined,
+): { switch_chain: Array<{ provider: RateLimitFallbackConfig['switchChain'][number]['provider']; model?: string }> } | undefined {
+  if (!config) {
+    return undefined;
+  }
+  return {
+    switch_chain: config.switchChain.map((entry) => ({
+      provider: entry.provider,
+      ...(entry.model !== undefined ? { model: entry.model } : {}),
+    })),
+  };
 }
 
 export function normalizeProviderProfiles(

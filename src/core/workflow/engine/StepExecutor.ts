@@ -13,8 +13,9 @@ import type {
   WorkflowState,
   AgentResponse,
   Language,
+  FallbackContext,
 } from '../../models/types.js';
-import type { PhaseName, PhasePromptParts, JudgeStageEntry, RuntimeStepResolution } from '../types.js';
+import type { PhaseName, PhasePromptParts, JudgeStageEntry, RuntimeStepResolution, StepRunResult } from '../types.js';
 import { executeAgent } from '../../../agents/agent-usecases.js';
 import { InstructionBuilder } from '../instruction/InstructionBuilder.js';
 import { needsStatusJudgmentPhase, runReportPhase, runStatusJudgmentPhase } from '../phase-runner.js';
@@ -246,6 +247,7 @@ export class StepExecutor {
     state: WorkflowState,
     task: string,
     maxSteps: number | 'infinite',
+    fallbackContext?: FallbackContext,
   ): string {
     this.ensurePreviousResponseSnapshot(state, step.name, stepIteration);
     const policySnapshot = this.writeFacetSnapshot(
@@ -268,7 +270,7 @@ export class StepExecutor {
       reportDir,
       workflowSteps: workflowDefinitionSteps,
     });
-    return new InstructionBuilder(step, {
+    const instruction = new InstructionBuilder(step, {
       task,
       iteration: state.iteration,
       maxSteps,
@@ -294,8 +296,13 @@ export class StepExecutor {
       knowledgeContents: knowledgeSnapshot?.content ?? step.knowledgeContents,
       knowledgeSourcePath: knowledgeSnapshot?.sourcePath,
       previousResponseSourcePath: state.previousResponseSourcePath,
+      fallbackContext: fallbackContext ?? state.pendingFallback,
       workflowState: state,
     }).build();
+    if (fallbackContext === undefined) {
+      state.pendingFallback = undefined;
+    }
+    return instruction;
   }
 
   /**
@@ -314,7 +321,7 @@ export class StepExecutor {
   ): Promise<AgentResponse> {
     let nextResponse = response;
 
-    if (nextResponse.status === 'error' || nextResponse.status === 'blocked') {
+    if (nextResponse.status === 'error' || nextResponse.status === 'blocked' || nextResponse.status === 'rate_limited') {
       return nextResponse;
     }
 
@@ -333,9 +340,15 @@ export class StepExecutor {
     // Report generation is only valid after a completed Phase 1 response.
     if (nextResponse.status === 'done' && step.outputContracts && step.outputContracts.length > 0) {
       const reportResult = await runReportPhase(step, stepIteration, phaseCtx);
-      if (reportResult?.blocked) {
+      if (reportResult && 'blocked' in reportResult) {
         nextResponse = { ...nextResponse, status: 'blocked', content: reportResult.response.content };
         return nextResponse;
+      }
+      if (reportResult && 'rateLimited' in reportResult) {
+        return {
+          ...reportResult.response,
+          persona: step.name,
+        };
       }
     }
 
@@ -408,7 +421,7 @@ export class StepExecutor {
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
     prebuiltInstruction?: string,
     runtime?: RuntimeStepResolution,
-  ): Promise<{ response: AgentResponse; instruction: string }> {
+  ): Promise<StepRunResult> {
     await waitForStepDelay(step);
     const stepIteration = prebuiltInstruction
       ? state.stepIterations.get(step.name) ?? 1
@@ -426,6 +439,7 @@ export class StepExecutor {
 
     // Phase 1: main execution (Write excluded if step has report)
     let didEmitPhaseStart = false;
+    const providerInfo = this.deps.optionsBuilder.resolveStepProviderModel(step, runtime);
     const baseAgentOptions = this.deps.optionsBuilder.buildAgentOptions(step, runtime);
     const agentOptions = {
       ...baseAgentOptions,
@@ -443,10 +457,10 @@ export class StepExecutor {
     this.deps.onPhaseComplete?.(step, 1, 'execute', response.content, response.status, response.error, undefined, state.iteration);
 
     // Provider failures should abort immediately.
-    if (response.status === 'error') {
+    if (response.status === 'error' || response.status === 'rate_limited') {
       state.stepOutputs.set(step.name, response);
       state.lastOutput = response;
-      return { response, instruction: phase1Instruction };
+      return { response, instruction: phase1Instruction, providerInfo };
     }
 
     // Blocked responses should be handled by WorkflowEngine's blocked flow.
@@ -455,7 +469,7 @@ export class StepExecutor {
       state.stepOutputs.set(step.name, response);
       state.lastOutput = response;
       this.persistPreviousResponseSnapshot(state, step.name, stepIteration, response.content);
-      return { response, instruction: phase1Instruction };
+      return { response, instruction: phase1Instruction, providerInfo };
     }
 
     response = await this.applyPostExecutionPhases(
@@ -469,9 +483,12 @@ export class StepExecutor {
 
     state.stepOutputs.set(step.name, response);
     state.lastOutput = response;
+    if (response.status === 'rate_limited') {
+      return { response, instruction: phase1Instruction, providerInfo };
+    }
     this.persistPreviousResponseSnapshot(state, step.name, stepIteration, response.content);
     this.emitStepReports(step);
-    return { response, instruction: phase1Instruction };
+    return { response, instruction: phase1Instruction, providerInfo };
   }
 
   /** Collect step:report events for each report file that exists */

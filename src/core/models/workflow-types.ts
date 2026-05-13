@@ -265,6 +265,7 @@ export interface WorkflowConfig {
   provider?: ProviderType;
   model?: string;
   providerOptions?: StepProviderOptions;
+  rateLimitFallback?: RateLimitFallbackConfig;
   runtime?: WorkflowRuntimeConfig;
   personas?: Record<string, string>;
   policies?: Record<string, string>;
@@ -277,6 +278,27 @@ export interface WorkflowConfig {
   loopDetection?: LoopDetectionConfig;
   loopMonitors?: LoopMonitorConfig[];
   interactiveMode?: InteractiveMode;
+}
+
+export interface RateLimitFallbackProvider {
+  provider: ProviderType;
+  model?: string;
+}
+
+export interface RateLimitFallbackConfig {
+  switchChain: RateLimitFallbackProvider[];
+}
+
+export interface FallbackContext {
+  reason: 'rate_limited';
+  reasonDetail: string;
+  originalIteration: number;
+  previousProvider: ProviderType;
+  previousModel?: string;
+  currentProvider: ProviderType;
+  currentModel?: string;
+  stepName: string;
+  reportDir: string;
 }
 
 export interface WorkflowState {
@@ -292,5 +314,7 @@ export interface WorkflowState {
   userInputs: string[];
   personaSessions: Map<string, string>;
   stepIterations: Map<string, number>;
+  pendingFallback?: FallbackContext;
+  rateLimitFallbackAttempts?: RateLimitFallbackProvider[];
   status: 'running' | 'completed' | 'aborted';
 }

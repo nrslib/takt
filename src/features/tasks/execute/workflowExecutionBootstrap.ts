@@ -122,6 +122,7 @@ export function createWorkflowExecutionBootstrap(
     'notificationSound',
     'notificationSoundEvents',
     'provider',
+    'rateLimitFallback',
     'runtime',
     'preventSleep',
     'model',
@@ -166,6 +167,7 @@ export function createWorkflowExecutionBootstrap(
   );
   const effectiveWorkflowConfig: WorkflowConfig = {
     ...workflowConfig,
+    rateLimitFallback: workflowConfig.rateLimitFallback ?? globalConfig.rateLimitFallback,
     runtime: resolveRuntimeConfig(globalConfig.runtime, workflowConfig.runtime),
     ...(options.maxStepsOverride !== undefined ? { maxSteps: options.maxStepsOverride } : {}),
   };

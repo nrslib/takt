@@ -16,6 +16,7 @@ import {
   ProviderPermissionProfilesSchema,
   ProviderReferenceSchema,
   QualityGatesSchema,
+  RateLimitFallbackSchema,
   RuntimeConfigSchema,
   TaktProvidersSchema,
 } from './schema-base.js';
@@ -84,6 +85,7 @@ const ProjectConfigObjectSchema = z.object({
   branch_name_strategy: z.enum(['romaji', 'ai']).optional(),
   minimal_output: z.boolean().optional(),
   provider_options: StepProviderOptionsSchema,
+  rate_limit_fallback: RateLimitFallbackSchema.optional(),
   provider_profiles: ProviderPermissionProfilesSchema,
   runtime: RuntimeConfigSchema,
   workflow_runtime_prepare: WorkflowRuntimePrepareConfigSchema.optional(),

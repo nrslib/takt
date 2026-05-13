@@ -99,6 +99,27 @@ describe('CodexClient retry', () => {
     vi.useRealTimers();
   });
 
+  it('turn.failed が rate limit を示す場合は retry せず rate_limited を返す', async () => {
+    runPlans = [
+      {
+        type: 'events',
+        events: [
+          { type: 'turn.failed', error: { message: 'HTTP 429: rate limit exceeded' } },
+        ],
+      },
+    ];
+
+    const client = new CodexClient();
+
+    const result = await client.call('coder', 'prompt', { cwd: '/tmp' });
+
+    expect(startThreadCalls).toHaveLength(1);
+    expect(resumeThreadCalls).toHaveLength(0);
+    expect(result.status).toBe('rate_limited');
+    expect(result.errorKind).toBe('rate_limit');
+    expect(result.content).toBe('');
+  });
+
   it('turn.failed の at capacity を 1 秒後に retry して成功を返す', async () => {
     vi.useFakeTimers();
 

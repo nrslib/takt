@@ -21,8 +21,11 @@ const log = createLogger('client');
 export class ClaudeClient {
   /** Determine status from execution result */
   private static determineStatus(
-    result: { success: boolean; interrupted?: boolean; content: string; fullContent?: string },
+    result: { success: boolean; interrupted?: boolean; content: string; fullContent?: string; errorKind?: string },
   ): Status {
+    if (result.errorKind === 'rate_limit') {
+      return 'rate_limited';
+    }
     if (!result.success) {
       return 'error';
     }
@@ -76,6 +79,7 @@ export class ClaudeClient {
       sessionId: result.sessionId,
       error: result.error,
       errorKind: result.errorKind,
+      rateLimitInfo: result.rateLimitInfo,
       structuredOutput: result.structuredOutput,
       providerUsage: result.providerUsage,
     };
@@ -107,6 +111,7 @@ export class ClaudeClient {
       sessionId: result.sessionId,
       error: result.error,
       errorKind: result.errorKind,
+      rateLimitInfo: result.rateLimitInfo,
       structuredOutput: result.structuredOutput,
       providerUsage: result.providerUsage,
     };

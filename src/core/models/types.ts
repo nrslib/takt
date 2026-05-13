@@ -18,6 +18,7 @@ export type {
   AgentErrorKind,
   AgentResponse,
   ProviderUsageSnapshot,
+  RateLimitInfo,
 } from './response.js';
 
 // Session state (authoritative definition with createSessionState)
@@ -70,6 +71,9 @@ export type {
   LoopMonitorConfig,
   LoopMonitorJudge,
   LoopMonitorRule,
+  RateLimitFallbackConfig,
+  RateLimitFallbackProvider,
+  FallbackContext,
   WorkflowConfig,
   WorkflowState,
 } from './workflow-types.js';

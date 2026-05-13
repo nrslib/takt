@@ -8,7 +8,7 @@
  */
 
 import type { ProviderType } from '../../shared/types/provider.js';
-import type { StepProviderOptions, WorkflowRuntimeConfig } from './workflow-types.js';
+import type { RateLimitFallbackConfig, StepProviderOptions, WorkflowRuntimeConfig } from './workflow-types.js';
 import type { ProviderPermissionProfiles } from './provider-profiles.js';
 import type { VcsProviderType } from './vcs-types.js';
 
@@ -194,6 +194,8 @@ export interface ProjectConfig {
   analytics?: AnalyticsConfig;
   /** Provider-specific options (overrides global, overridden by workflow/step) */
   providerOptions?: StepProviderOptions;
+  /** Rate limit fallback provider switch chain */
+  rateLimitFallback?: RateLimitFallbackConfig;
   /** Provider-specific permission profiles (project-level override) */
   providerProfiles?: ProviderPermissionProfiles;
   /** Workflow-level overrides (quality_gates, etc.) */

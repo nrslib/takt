@@ -58,6 +58,21 @@ function createMockQuery(
   };
 }
 
+function createMockQueryThatFailsAfterFirstMessage(
+  firstMessage: Record<string, unknown>,
+) {
+  const state = { afterMarkerPulled: false };
+  return {
+    state,
+    interrupt: vi.fn(async () => {}),
+    async *[Symbol.asyncIterator](): AsyncGenerator<Record<string, unknown>, void, unknown> {
+      yield firstMessage;
+      state.afterMarkerPulled = true;
+      throw new Error('stream should stop after rate limit detection');
+    },
+  };
+}
+
 function createAssistantRateLimitMessage(): Record<string, unknown> {
   return {
     type: 'assistant',
@@ -197,6 +212,25 @@ describe('QueryExecutor rate limit cause preservation', () => {
     expect(queryMock).toHaveBeenCalledTimes(1);
   });
 
+  it('Claude SDK の HTTP 429 エラーは sdk_error の rate_limited として返す', async () => {
+    // Given
+    queryMock.mockReturnValue(
+      createMockQuery([], new Error('HTTP 429: rate limit exceeded')),
+    );
+    const executor = new QueryExecutor();
+
+    // When
+    const result = await executor.execute('test prompt', { cwd: '/tmp/project' });
+
+    // Then
+    expect(result.success).toBe(false);
+    expect(result.content).toBe('');
+    expect(result.error).toBe(RATE_LIMIT_MESSAGE);
+    expect(result.errorKind).toBe('rate_limit');
+    expect(result.rateLimitInfo?.source).toBe('sdk_error');
+    expect(queryMock).toHaveBeenCalledTimes(1);
+  });
+
   it('assistant text のみで rate limit が示された場合も RateLimit 文言を返す', async () => {
     // Given
     queryMock.mockReturnValue(
@@ -213,6 +247,48 @@ describe('QueryExecutor rate limit cause preservation', () => {
     expect(result.success).toBe(false);
     expect(result.error).toBe(RATE_LIMIT_MESSAGE);
     expect(result.errorKind).toBe('rate_limit');
+    expect(queryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('assistant text の一般的な rate limit / 429 記述は rate_limited にしない', async () => {
+    // Given
+    queryMock.mockReturnValue(
+      createMockQuery([
+        createAssistantTextMessage('Documented rate limit fallback behavior for issue 429.'),
+        createResultMessage({
+          subtype: 'success',
+          result: 'Documented rate limit fallback behavior for issue 429.',
+        }),
+      ]),
+    );
+    const executor = new QueryExecutor();
+
+    // When
+    const result = await executor.execute('test prompt', { cwd: '/tmp/project' });
+
+    // Then
+    expect(result.success).toBe(true);
+    expect(result.content).toBe('Documented rate limit fallback behavior for issue 429.');
+    expect(result.errorKind).toBeUndefined();
+  });
+
+  it('stream 本文の rate limit マーカーを検出した時点で購読を打ち切り rate_limited として返す', async () => {
+    // Given
+    const query = createMockQueryThatFailsAfterFirstMessage(
+      createAssistantTextMessage("You're out of extra usage · resets 2:30pm (Asia/Tokyo)"),
+    );
+    queryMock.mockReturnValue(query);
+    const executor = new QueryExecutor();
+
+    // When
+    const result = await executor.execute('test prompt', { cwd: '/tmp/project' });
+
+    // Then
+    expect(result.success).toBe(false);
+    expect(result.content).toBe('');
+    expect(result.error).toBe(RATE_LIMIT_MESSAGE);
+    expect(result.errorKind).toBe('rate_limit');
+    expect(query.state.afterMarkerPulled).toBe(false);
     expect(queryMock).toHaveBeenCalledTimes(1);
   });
 

@@ -38,6 +38,7 @@ function createContext(
     reportDir,
     language: 'en',
     lastResponse: currentLastResponse,
+    resolveSessionKey: (step) => step.persona ?? step.name,
     getSessionId: (_persona: string) => currentSessionId,
     buildResumeOptions: (_step, sessionId, overrides) => ({
       cwd: reportDir,
@@ -231,7 +232,7 @@ describe('runReportPhase retry with new session', () => {
     expect(runAgentMock).toHaveBeenCalledTimes(1);
   });
 
-  it('should fail immediately without retry when resumed session hits the rate limit', async () => {
+  it('should return rate_limited without retry when resumed session hits the rate limit', async () => {
     // Given
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
     const step = createStep('04-qa.md');
@@ -246,10 +247,19 @@ describe('runReportPhase retry with new session', () => {
     }]);
     const runAgentMock = vi.mocked(runAgent);
 
-    // When / Then
-    await expect(runReportPhase(step, 1, ctx)).rejects.toThrow(
-      `Report phase failed for 04-qa.md: ${RATE_LIMIT_MESSAGE}`,
-    );
+    // When
+    const result = await runReportPhase(step, 1, ctx);
+
+    // Then
+    expect(result).toMatchObject({
+      rateLimited: true,
+      response: {
+        status: 'rate_limited',
+        content: '',
+        error: RATE_LIMIT_MESSAGE,
+        errorKind: 'rate_limit',
+      },
+    });
     expect(runAgentMock).toHaveBeenCalledTimes(1);
 
     const firstCallOptions = runAgentMock.mock.calls[0]?.[2] as { sessionId?: string };
@@ -271,10 +281,19 @@ describe('runReportPhase retry with new session', () => {
     }]);
     const runAgentMock = vi.mocked(runAgent);
 
-    // When / Then
-    await expect(runReportPhase(step, 1, ctx)).rejects.toThrow(
-      `Report phase failed for 04-qa.md: ${RATE_LIMIT_MESSAGE}`,
-    );
+    // When
+    const result = await runReportPhase(step, 1, ctx);
+
+    // Then
+    expect(result).toMatchObject({
+      rateLimited: true,
+      response: {
+        status: 'rate_limited',
+        content: '',
+        error: RATE_LIMIT_MESSAGE,
+        errorKind: 'rate_limit',
+      },
+    });
     expect(runAgentMock).toHaveBeenCalledTimes(1);
   });
 
@@ -451,5 +470,93 @@ describe('runReportPhase retry with new session', () => {
       },
     });
     expect(runAgentMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('should return rate_limited result without retry', async () => {
+    // Given
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('07-rate-limited.md');
+    const ctx = createContext(reportDir);
+    const response: AgentResponse = {
+      persona: 'coder',
+      status: 'rate_limited' as never,
+      content: '',
+      timestamp: new Date('2026-02-11T00:05:00Z'),
+      error: RATE_LIMIT_MESSAGE,
+      errorKind: 'rate_limit',
+      rateLimitInfo: {
+        provider: 'claude',
+        detectedAt: new Date('2026-02-11T00:05:00Z'),
+        source: 'sdk_error',
+      },
+    };
+    queueRunAgentResponses([response]);
+    const runAgentMock = vi.mocked(runAgent);
+
+    // When
+    const result = await runReportPhase(step, 1, ctx);
+
+    // Then
+    expect(result).toEqual({
+      rateLimited: true,
+      response,
+    });
+    expect(runAgentMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('should use the runtime-aware session key supplied by the engine context', async () => {
+    // Given
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('08-provider-aware.md');
+    const sessions = new Map<string, string>([
+      ['coder', 'claude-session'],
+      ['coder:codex', 'codex-session'],
+    ]);
+    const updates: Array<{ key: string; sessionId: string | undefined }> = [];
+    const resumedSessionIds: string[] = [];
+    const ctx: PhaseRunnerContext = {
+      cwd: reportDir,
+      reportDir,
+      language: 'en',
+      lastResponse: 'Fallback Phase 1 result',
+      resolveSessionKey: () => 'coder:codex',
+      getSessionId: (key) => sessions.get(key),
+      buildResumeOptions: (_step, sessionId, overrides) => {
+        resumedSessionIds.push(sessionId);
+        return {
+          cwd: reportDir,
+          sessionId,
+          allowedTools: [],
+          maxTurns: overrides.maxTurns,
+        };
+      },
+      buildNewSessionReportOptions: (_step, overrides) => ({
+        cwd: reportDir,
+        allowedTools: overrides.allowedTools,
+        maxTurns: overrides.maxTurns,
+      }),
+      updatePersonaSession: (key, sessionId) => {
+        updates.push({ key, sessionId });
+        if (sessionId) {
+          sessions.set(key, sessionId);
+        }
+      },
+    };
+    queueRunAgentResponses([{
+      persona: 'coder',
+      status: 'done',
+      content: 'fallback provider report',
+      timestamp: new Date('2026-02-11T00:05:30Z'),
+      sessionId: 'codex-report-session',
+    }]);
+
+    // When
+    await runReportPhase(step, 1, ctx);
+
+    // Then
+    expect(resumedSessionIds).toEqual(['codex-session']);
+    expect(updates).toEqual([{ key: 'coder:codex', sessionId: 'codex-report-session' }]);
+    expect(sessions.get('coder')).toBe('claude-session');
+    expect(readFileSync(join(reportDir, '08-provider-aware.md'), 'utf-8')).toBe('fallback provider report');
   });
 });

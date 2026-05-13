@@ -4,6 +4,7 @@
 
 import type { Status, RuleMatchMethod } from './status.js';
 import type { AgentFailureCategory } from '../../shared/types/agent-failure.js';
+import type { ProviderType } from '../../shared/types/provider.js';
 
 export type AgentErrorKind = 'rate_limit';
 export const RATE_LIMIT_ERROR_MESSAGE = 'Rate limit exceeded. Please try again later.';
@@ -30,6 +31,13 @@ export interface ProviderUsageSnapshot {
   reason?: string;
 }
 
+export interface RateLimitInfo {
+  provider: ProviderType;
+  detectedAt: Date;
+  resetAtRaw?: string;
+  source: 'sdk_error' | 'stream_marker';
+}
+
 /** Response from an agent execution */
 export interface AgentResponse {
   persona: string;
@@ -41,6 +49,8 @@ export interface AgentResponse {
   error?: string;
   /** Machine-readable error classification normalized at the provider boundary */
   errorKind?: AgentErrorKind;
+  /** Rate limit metadata normalized at the provider boundary */
+  rateLimitInfo?: RateLimitInfo;
   /** Machine-readable failure classification normalized at the provider boundary */
   failureCategory?: AgentFailureCategory;
   /** Matched rule index (0-based) when rules-based detection was used */

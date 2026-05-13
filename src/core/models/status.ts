@@ -6,7 +6,7 @@
 export type AgentType = 'coder' | 'architect' | 'supervisor' | 'custom';
 
 /** Execution status for agents and workflows */
-export const STATUS_VALUES = ['done', 'blocked', 'error'] as const;
+export const STATUS_VALUES = ['done', 'blocked', 'error', 'rate_limited'] as const;
 
 /** Execution status for agents and workflows */
 export type Status = typeof STATUS_VALUES[number];

@@ -7,6 +7,7 @@ import type { ProviderType } from '../../../shared/types/provider.js';
 import { StreamDisplay } from '../../../shared/ui/index.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import { isDebugEnabled, isVerboseConsole } from '../../../shared/utils/debug.js';
+import { notifyWarning, playWarningSound } from '../../../shared/utils/index.js';
 import type { ExceededInfo, WorkflowExecutionOptions } from './types.js';
 import { detectStepType, isQuietMode } from './workflowExecutionBootstrap.js';
 import {
@@ -249,6 +250,16 @@ export function bindWorkflowExecutionEvents(
     deps.sessionLogger.onStepComplete(step, response, instruction, deps.getCurrentWorkflowStack());
     deps.analyticsEmitter.onStepComplete(step, response);
     state.sessionLog = { ...state.sessionLog, iterations: state.sessionLog.iterations + 1 };
+  });
+
+  deps.engine.on('step:rate_limited', (step, response) => {
+    if (deps.displayRef.current) {
+      deps.displayRef.current.flush();
+    }
+    deps.prefixWriter?.flush();
+    const message = response.error ?? `Step "${step.name}" hit a rate limit`;
+    playWarningSound();
+    notifyWarning('TAKT', message);
   });
 
   deps.engine.on('step:report', (_step, filePath, fileName) => {

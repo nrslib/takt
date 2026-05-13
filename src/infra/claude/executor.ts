@@ -16,6 +16,7 @@ import {
 import { USAGE_MISSING_REASONS } from '../../core/logging/contracts.js';
 import {
   RATE_LIMIT_ERROR_MESSAGE,
+  type RateLimitInfo,
   type ProviderUsageSnapshot,
 } from '../../core/models/response.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
@@ -30,14 +31,9 @@ import type {
   ClaudeSpawnOptions,
   ClaudeResult,
 } from './types.js';
+import { buildRateLimitInfo, containsRateLimitError, containsRateLimitMarker } from '../rate-limit/detection.js';
 
 const log = createLogger('claude-sdk');
-const RATE_LIMIT_RESPONSE_PATTERNS = [
-  'rate_limit',
-  'rate limit',
-  'out of extra usage',
-] as const;
-
 function toNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
@@ -55,15 +51,6 @@ function isRateLimitSignal(message: SDKMessage): boolean {
   }
 
   return message.type === 'assistant' && message.error === 'rate_limit';
-}
-
-function containsRateLimitText(text: string | undefined): boolean {
-  if (!text) {
-    return false;
-  }
-
-  const normalized = text.toLowerCase();
-  return RATE_LIMIT_RESPONSE_PATTERNS.some((pattern) => normalized.includes(pattern));
 }
 
 function extractProviderUsage(resultMsg: SDKResultMessage): ProviderUsageSnapshot {
@@ -183,6 +170,7 @@ export class QueryExecutor {
     let providerUsage: ProviderUsageSnapshot | undefined;
     let onExternalAbort: (() => void) | undefined;
     let observedRateLimit = false;
+    let rateLimitInfo: RateLimitInfo | undefined;
     const applyAssistantMessage = (assistantMsg: SDKAssistantMessage): void => {
       for (const block of assistantMsg.message.content) {
         if (block.type === 'text') {
@@ -259,6 +247,7 @@ export class QueryExecutor {
 
         if (isRateLimitSignal(message)) {
           observedRateLimit = true;
+          rateLimitInfo = buildRateLimitInfo('claude-sdk', 'sdk_error');
         }
 
         if (options.onStream) {
@@ -268,6 +257,10 @@ export class QueryExecutor {
         switch (message.type) {
           case 'assistant': {
             applyAssistantMessage(message as SDKAssistantMessage);
+            if (containsRateLimitMarker(accumulatedAssistantText)) {
+              observedRateLimit = true;
+              rateLimitInfo = buildRateLimitInfo('claude-sdk', 'stream_marker', accumulatedAssistantText);
+            }
             break;
           }
           case 'result': {
@@ -277,6 +270,10 @@ export class QueryExecutor {
           default:
             break;
         }
+
+        if (observedRateLimit) {
+          break;
+        }
       }
 
       unregisterQuery(queryId);
@@ -285,6 +282,15 @@ export class QueryExecutor {
       }
 
       const finalContent = resultContent || accumulatedAssistantText;
+      if (observedRateLimit) {
+        return {
+          success: false,
+          content: '',
+          error: RATE_LIMIT_ERROR_MESSAGE,
+          errorKind: 'rate_limit',
+          rateLimitInfo: rateLimitInfo ?? buildRateLimitInfo('claude-sdk', 'stream_marker', finalContent),
+        };
+      }
 
       log.info('Claude query completed', {
         queryId,
@@ -321,6 +327,7 @@ export class QueryExecutor {
         accumulatedAssistantText,
         stderrChunks,
         observedRateLimit,
+        rateLimitInfo,
       );
     }
   }
@@ -339,6 +346,7 @@ export class QueryExecutor {
     assistantText: string,
     stderrChunks: string[],
     observedRateLimit: boolean,
+    rateLimitInfo: RateLimitInfo | undefined,
   ): ClaudeResult {
     if (error instanceof AbortError) {
       log.info('Claude query was interrupted', { queryId });
@@ -368,17 +376,18 @@ export class QueryExecutor {
 
     log.error('Claude query failed', { queryId, error: errorMessage });
 
+    const sdkRateLimitError = observedRateLimit || containsRateLimitError(errorMessage);
     if (
-      observedRateLimit
-      || containsRateLimitText(errorMessage)
-      || containsRateLimitText(resultContent)
-      || containsRateLimitText(assistantText)
+      sdkRateLimitError
+      || containsRateLimitMarker(resultContent)
+      || containsRateLimitMarker(assistantText)
     ) {
       return {
         success: false,
         content: '',
         error: RATE_LIMIT_ERROR_MESSAGE,
         errorKind: 'rate_limit',
+        rateLimitInfo: rateLimitInfo ?? buildRateLimitInfo('claude-sdk', sdkRateLimitError ? 'sdk_error' : 'stream_marker', errorMessage || resultContent || assistantText),
       };
     }
 

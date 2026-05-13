@@ -2,7 +2,7 @@
   template: perform_phase1_message
   phase: 1 (main execution)
   vars: workingDirectory, hasGitRules, gitRules, editRule, workflowName, workflowDescription,
-        hasWorkflowDescription, workflowStructure, iteration, stepIteration, stepName,
+        hasFallbackNotice, fallbackNotice, hasWorkflowDescription, workflowStructure, iteration, stepIteration, stepName,
         hasReport, reportInfo, phaseNote, hasTaskSection, userRequest, hasPreviousResponse,
         previousResponse, hasUserInputs, userInputs, hasRetryNote, retryNote, hasPolicy,
         policyContent, hasKnowledge, knowledgeContent, hasQualityGates, qualityGatesContent,
@@ -11,6 +11,10 @@
 -->
 ## 実行コンテキスト
 - 作業ディレクトリ: {{workingDirectory}}
+{{#if hasFallbackNotice}}
+
+{{fallbackNotice}}
+{{/if}}
 
 ## 実行ルール
 {{#if hasGitRules}}{{gitRules}}

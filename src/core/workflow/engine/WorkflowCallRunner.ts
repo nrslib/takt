@@ -15,6 +15,7 @@ import {
 } from '../workflow-reference.js';
 import type {
   RuntimeStepResolution,
+  StepRunResult,
   WorkflowCallChildEngine,
   WorkflowCallResolver,
   WorkflowEngineOptions,
@@ -142,7 +143,7 @@ export class WorkflowCallRunner {
   async run(
     step: WorkflowCallStep,
     runtime: RuntimeStepResolution = this.resolveRuntime(step),
-  ): Promise<{ response: AgentResponse; instruction: string }> {
+  ): Promise<StepRunResult> {
     const parentConfig = this.deps.getConfig();
     const childWorkflow = this.deps.resolveWorkflowCall({
       parentWorkflow: parentConfig,
@@ -196,6 +197,6 @@ export class WorkflowCallRunner {
     this.deps.state.stepOutputs.set(step.name, response);
     this.deps.state.lastOutput = response;
     this.deps.state.previousResponseSourcePath = undefined;
-    return { response, instruction: '' };
+    return { response, instruction: '', providerInfo: childProviderInfo };
   }
 }

@@ -27,6 +27,7 @@ import {
   emitResult,
   handlePartUpdated,
 } from './OpenCodeStreamHandler.js';
+import { buildRateLimitedResponseFields, containsRateLimitError } from '../rate-limit/detection.js';
 
 export type { OpenCodeCallOptions } from './types.js';
 
@@ -328,6 +329,19 @@ export class OpenCodeClient {
       JSON.stringify(schema, null, 2),
       '```',
     ].join('\n');
+  }
+
+  private buildRateLimitedResponse(
+    agentType: string,
+    sessionId: string | undefined,
+    message: string,
+  ): AgentResponse {
+    return {
+      persona: agentType,
+      timestamp: new Date(),
+      sessionId,
+      ...buildRateLimitedResponseFields('opencode', 'sdk_error', message),
+    };
   }
 
   /** Call OpenCode with an agent prompt */
@@ -686,6 +700,11 @@ export class OpenCodeClient {
 
         if (!success) {
           const message = failureMessage || 'OpenCode execution failed';
+          if (containsRateLimitError(message)) {
+            const rateLimitedResponse = this.buildRateLimitedResponse(agentType, sessionId, message);
+            emitResult(options.onStream, false, rateLimitedResponse.error ?? rateLimitedResponse.content, sessionId);
+            return rateLimitedResponse;
+          }
           const retriable = this.isRetriableError(message, streamAbortController.signal.aborted, abortCause);
           if (retriable && attempt < OPENCODE_RETRY_MAX_ATTEMPTS) {
             log.info('Retrying OpenCode call after transient failure', { agentType, attempt, message });
@@ -722,6 +741,14 @@ export class OpenCodeClient {
             ? timeoutMessage
             : OPENCODE_STREAM_ABORTED_MESSAGE
           : message;
+
+        if (containsRateLimitError(errorMessage)) {
+          const rateLimitedResponse = this.buildRateLimitedResponse(agentType, sessionId, errorMessage);
+          if (sessionId) {
+            emitResult(options.onStream, false, rateLimitedResponse.error ?? rateLimitedResponse.content, sessionId);
+          }
+          return rateLimitedResponse;
+        }
 
         diagRef?.onCompleted(
           abortCause === 'timeout' ? 'timeout' : streamAbortController.signal.aborted ? 'abort' : 'error',

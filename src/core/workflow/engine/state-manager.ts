@@ -101,6 +101,17 @@ export function incrementStepIteration(state: WorkflowState, stepName: string): 
   return next;
 }
 
+export function decrementStepIteration(state: WorkflowState, stepName: string): number {
+  const current = state.stepIterations.get(stepName) ?? 0;
+  const next = Math.max(0, current - 1);
+  if (next === 0) {
+    state.stepIterations.delete(stepName);
+  } else {
+    state.stepIterations.set(stepName, next);
+  }
+  return next;
+}
+
 /**
  * Add user input to state with truncation and limit handling.
  */

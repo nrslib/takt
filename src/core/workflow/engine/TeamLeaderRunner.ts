@@ -17,6 +17,7 @@ import type { RunAgentOptions } from '../../../agents/types.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { StepExecutor } from './StepExecutor.js';
 import type { WorkflowEngineOptions, PhaseName, PhasePromptParts } from '../types.js';
+import type { RuntimeStepResolution, StepRunResult } from '../types.js';
 import { buildTeamLeaderErrorPartResult, runTeamLeaderPart } from './team-leader-part-runner.js';
 
 const log = createLogger('team-leader-runner');
@@ -60,7 +61,8 @@ export class TeamLeaderRunner {
     task: string,
     maxSteps: WorkflowMaxSteps,
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
-  ): Promise<{ response: AgentResponse; instruction: string }> {
+    runtime?: RuntimeStepResolution,
+  ): Promise<StepRunResult> {
     if (!step.teamLeader) {
       throw new Error(`Step "${step.name}" has no teamLeader configuration`);
     }
@@ -73,7 +75,10 @@ export class TeamLeaderRunner {
       persona: teamLeaderConfig.persona ?? step.persona,
       personaPath: teamLeaderConfig.personaPath ?? step.personaPath,
     };
-    const { provider: leaderProvider, model: leaderModel } = this.deps.optionsBuilder.resolveStepProviderModel(leaderStep);
+    const leaderProviderInfo = runtime
+      ? this.deps.optionsBuilder.resolveStepProviderModel(leaderStep, runtime)
+      : this.deps.optionsBuilder.resolveStepProviderModel(leaderStep);
+    const { provider: leaderProvider, model: leaderModel } = leaderProviderInfo;
     const instruction = this.deps.stepExecutor.buildInstruction(
       leaderStep,
       stepIteration,
@@ -218,8 +223,25 @@ export class TeamLeaderRunner {
         teamLeaderConfig.timeoutMs,
         updatePersonaSession,
         parallelLogger,
+        runtime,
       ).catch((error) => buildTeamLeaderErrorPartResult(step, part, error)),
     });
+
+    const rateLimitedResult = partResults.find((result) => result.response.status === 'rate_limited');
+    if (rateLimitedResult) {
+      const rateLimitedResponse: AgentResponse = {
+        ...rateLimitedResult.response,
+        persona: step.name,
+      };
+      state.stepOutputs.set(step.name, rateLimitedResponse);
+      state.lastOutput = rateLimitedResponse;
+      return {
+        response: rateLimitedResponse,
+        instruction,
+        providerInfo: rateLimitedResult.providerInfo,
+        consumedStepIterations: [step.name],
+      };
+    }
 
     const allFailed = partResults.every((result) => result.response.status === 'error');
     if (allFailed) {
@@ -262,10 +284,14 @@ export class TeamLeaderRunner {
       stepIteration,
       aggregatedResponse,
       updatePersonaSession,
+      runtime,
     );
 
     state.stepOutputs.set(step.name, aggregatedResponse);
     state.lastOutput = aggregatedResponse;
+    if (aggregatedResponse.status === 'rate_limited') {
+      return { response: aggregatedResponse, instruction, providerInfo: leaderProviderInfo };
+    }
     this.deps.stepExecutor.persistPreviousResponseSnapshot(
       state,
       step.name,
@@ -274,7 +300,7 @@ export class TeamLeaderRunner {
     );
     this.deps.stepExecutor.emitStepReports(step);
 
-    return { response: aggregatedResponse, instruction };
+    return { response: aggregatedResponse, instruction, providerInfo: leaderProviderInfo };
   }
 
   private async runSinglePart(
@@ -285,6 +311,7 @@ export class TeamLeaderRunner {
     defaultTimeoutMs: number,
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
     parallelLogger: ParallelLogger | undefined,
+    runtime?: RuntimeStepResolution,
   ): Promise<PartResult> {
     return runTeamLeaderPart(
       this.deps.optionsBuilder,
@@ -295,6 +322,7 @@ export class TeamLeaderRunner {
       defaultTimeoutMs,
       updatePersonaSession,
       parallelLogger,
+      runtime,
     );
   }
 }

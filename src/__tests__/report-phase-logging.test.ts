@@ -35,6 +35,7 @@ function createContext(): PhaseRunnerContext {
     cwd: '/tmp/report-phase-logging',
     reportDir: '/tmp/report-phase-logging/reports',
     lastResponse: 'Phase 1 result',
+    resolveSessionKey: (step) => step.persona ?? step.name,
     getSessionId: () => 'sensitive-session-token',
     buildResumeOptions: () => ({ cwd: '/tmp/report-phase-logging' }),
     buildNewSessionReportOptions: () => ({ cwd: '/tmp/report-phase-logging' }),

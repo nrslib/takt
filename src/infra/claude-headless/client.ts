@@ -19,6 +19,7 @@ import {
 } from './stream-json-lines.js';
 import { buildClaudeHeadlessResponse } from './result-response.js';
 import type { ClaudeHeadlessCallOptions } from './types.js';
+import { buildRateLimitedResponseFields, containsRateLimitError, containsRateLimitMarker } from '../rate-limit/detection.js';
 
 const log = createLogger('claude-headless');
 
@@ -210,6 +211,8 @@ export async function callClaudeHeadless(
   } catch (raw) {
     const error = raw as ExecError;
     const message = classifyError(error, options);
+    const hasStreamMarker = containsRateLimitMarker(error.stdout) || containsRateLimitMarker(error.stderr);
+    const isRateLimited = containsRateLimitError(message) || containsRateLimitError(error.stderr) || hasStreamMarker;
     if (options.onStream) {
       options.onStream({
         type: 'result',
@@ -223,11 +226,15 @@ export async function callClaudeHeadless(
     }
     response = {
       persona: agentName,
-      status: 'error',
-      content: message,
       timestamp: new Date(),
       sessionId: options.sessionId,
-      error: message,
+      ...(isRateLimited
+        ? buildRateLimitedResponseFields('claude', hasStreamMarker ? 'stream_marker' : 'sdk_error', error.stdout ?? error.stderr ?? message)
+        : {
+          status: 'error' as const,
+          content: message,
+          error: message,
+        }),
     };
   }
 

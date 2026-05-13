@@ -10,6 +10,7 @@ export type {
   ArpeggioStepConfig,
   ArpeggioMergeStepConfig,
 } from '../../models/workflow-types.js';
+import type { AgentResponse } from '../../models/types.js';
 
 /** A single row of data from a data source (column name → value) */
 export type DataRow = Record<string, string>;
@@ -40,6 +41,8 @@ export interface BatchResult {
   readonly success: boolean;
   /** Error message if failed */
   readonly error?: string;
+  /** Rate limit response to propagate to the workflow run loop */
+  readonly rateLimitedResponse?: AgentResponse;
 }
 
 /** Merge function signature: takes all batch results, returns merged string */

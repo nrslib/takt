@@ -9,6 +9,8 @@ import type {
   WorkflowMaxSteps,
   WorkflowResumePoint,
   WorkflowResumePointEntry,
+  RateLimitFallbackConfig,
+  FallbackContext,
 } from '../models/types.js';
 import type { PersonaProviderEntry } from '../models/config-types.js';
 import type { ProviderPermissionProfiles } from '../models/provider-profiles.js';
@@ -85,6 +87,13 @@ export interface StepProviderInfo {
   providerOptionsSources?: Readonly<Record<string, ProviderResolutionSource>>;
 }
 
+export interface StepRunResult {
+  response: AgentResponse;
+  instruction: string;
+  providerInfo?: StepProviderInfo;
+  consumedStepIterations?: readonly string[];
+}
+
 export interface TeamLeaderPartRuntimeResolution {
   partAllowedTools?: string[];
   processSafety?: { protectedParentRunPid: number };
@@ -92,6 +101,7 @@ export interface TeamLeaderPartRuntimeResolution {
 
 export interface RuntimeStepResolution {
   providerInfo?: StepProviderInfo;
+  fallback?: FallbackContext;
   teamLeaderPart?: TeamLeaderPartRuntimeResolution;
 }
 
@@ -107,6 +117,7 @@ export type WorkflowAbortKind =
   | 'loop_detected'
   | 'blocked'
   | 'step_error'
+  | 'rate_limited'
   | 'user_input_required'
   | 'user_input_cancelled'
   | 'step_transition'
@@ -144,6 +155,7 @@ export interface WorkflowEvents {
   'step:complete': (step: WorkflowStep, response: AgentResponse, instruction: string) => void;
   'step:report': (step: WorkflowStep, filePath: string, fileName: string) => void;
   'step:blocked': (step: WorkflowStep, response: AgentResponse) => void;
+  'step:rate_limited': (step: WorkflowStep, response: AgentResponse, rateLimitInfo: AgentResponse['rateLimitInfo']) => void;
   'step:user_input': (step: WorkflowStep, userInput: string) => void;
   'phase:start': (
     step: WorkflowStep,
@@ -239,6 +251,8 @@ export interface WorkflowEngineOptions {
   providerSource?: ProviderResolutionSource;
   model?: string;
   modelSource?: ProviderResolutionSource;
+  /** Resolved rate limit fallback provider switch chain */
+  rateLimitFallback?: RateLimitFallbackConfig;
   /** Resolved provider options */
   providerOptions?: StepProviderOptions;
   /** Source layer for resolved provider options */

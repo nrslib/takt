@@ -7,7 +7,7 @@ import { WorkflowConfigRawSchema } from '../../../core/models/index.js';
 import type { WorkflowConfig, WorkflowStep, WorkflowSubworkflowConfig } from '../../../core/models/index.js';
 import { resolveLoopMonitorJudgeProviderModel, resolveStepProviderModel } from '../../../core/workflow/provider-resolution.js';
 import { validateProviderModelCompatibility } from '../../../core/workflow/provider-model-compatibility.js';
-import { normalizeRuntime } from '../configNormalizers.js';
+import { normalizeRateLimitFallback, normalizeRuntime } from '../configNormalizers.js';
 import type { FacetResolutionContext, WorkflowSections } from './resource-resolver.js';
 import {
   resolveSectionMapWithSource,
@@ -151,6 +151,7 @@ export function normalizeWorkflowConfig(
     provider: normalizedWorkflowProvider.provider,
     model: normalizedWorkflowProvider.model,
     providerOptions: normalizedWorkflowProvider.providerOptions,
+    rateLimitFallback: normalizeRateLimitFallback(parsed.rate_limit_fallback),
     runtime: workflowRuntime,
     personas: parsed.personas,
     policies: sections.resolvedPolicies,

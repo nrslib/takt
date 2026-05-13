@@ -1,10 +1,12 @@
 import { crossSpawn } from '../../shared/utils/index.js';
+import { containsRateLimitMarker } from '../rate-limit/detection.js';
 import { tryExtractTextFromStreamJsonLine, tryExtractThinkingFromStreamJsonLine } from './stream-json-lines.js';
 import type { ClaudeHeadlessCallOptions } from './types.js';
 
 const HEADLESS_STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const HEADLESS_MAX_BUFFER_BYTES = 10 * 1024 * 1024;
 export const HEADLESS_ABORTED_MESSAGE = 'Claude CLI execution aborted';
+export const HEADLESS_RATE_LIMIT_MESSAGE = 'Claude CLI stream reported a rate limit';
 const CLAUDE_COMMAND = 'claude';
 
 function buildHeadlessEnv(options: ClaudeHeadlessCallOptions): NodeJS.ProcessEnv {
@@ -137,6 +139,15 @@ export function runHeadlessCli(
         }
         stdout += text;
         scheduleIdle();
+        if (containsRateLimitMarker(stdout)) {
+          child.kill('SIGTERM');
+          rejectOnce(
+            createExecError(HEADLESS_RATE_LIMIT_MESSAGE, {
+              stdout,
+              stderr,
+            }),
+          );
+        }
         return;
       }
 
@@ -153,6 +164,15 @@ export function runHeadlessCli(
         return;
       }
       stderr += text;
+      if (containsRateLimitMarker(stderr)) {
+        child.kill('SIGTERM');
+        rejectOnce(
+          createExecError(HEADLESS_RATE_LIMIT_MESSAGE, {
+            stdout,
+            stderr,
+          }),
+        );
+      }
     };
 
     let lineBuffer = '';

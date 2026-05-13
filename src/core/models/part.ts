@@ -1,5 +1,6 @@
 import type { PermissionMode } from './status.js';
 import type { AgentResponse } from './response.js';
+import type { ProviderType } from '../../shared/types/provider.js';
 
 /** Part definition produced by step team leader agent */
 export interface PartDefinition {
@@ -15,6 +16,10 @@ export interface PartDefinition {
 export interface PartResult {
   part: PartDefinition;
   response: AgentResponse;
+  providerInfo?: {
+    provider: ProviderType | undefined;
+    model: string | undefined;
+  };
 }
 
 /** team_leader config on a step */

@@ -199,7 +199,7 @@ export class OptionsBuilder {
       );
 
     // Skip session resume when cwd !== projectCwd (worktree execution) to avoid cross-directory contamination
-    const shouldResumeSession = step.session !== 'refresh' && this.getCwd() === this.getProjectCwd();
+    const shouldResumeSession = !runtime?.fallback && step.session !== 'refresh' && this.getCwd() === this.getProjectCwd();
 
     const supportsStructuredOutput = providerSupportsStructuredOutput(resolvedProvider);
     const baseOptions = this.buildBaseOptions(step, mergedProviderOptions, runtime);
@@ -291,6 +291,7 @@ export class OptionsBuilder {
       resolveProvider: (step) => this.resolveStepProviderModel(step, runtime).provider,
       resolveStepProviderModel: (step) => this.resolveStepProviderModel(step, runtime),
       getSessionId: (persona: string) => state.personaSessions.get(persona),
+      resolveSessionKey: (step) => buildSessionKey(step, runtime?.providerInfo?.provider),
       buildResumeOptions: (step, sessionId, overrides) => this.buildResumeOptions(step, sessionId, overrides, runtime),
       buildNewSessionReportOptions: (step, overrides) => this.buildNewSessionReportOptions(step, overrides, runtime),
       updatePersonaSession,

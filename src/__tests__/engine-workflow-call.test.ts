@@ -40,6 +40,7 @@ import {
   createTestTmpDir,
   makeResponse,
   mockDetectMatchedRuleSequence,
+  mockRunAgentSequence,
 } from './engine-test-helpers.js';
 
 function writeWorkflow(projectDir: string, relativePath: string, content: string): void {
@@ -197,6 +198,201 @@ steps:
 
     expect(state.status).toBe('completed');
     expect(finalPrompt).toContain('Child review complete');
+  });
+
+  it('子 workflow の step:rate_limited イベントを親 engine に中継する', async () => {
+    writeWorkflow(tmpDir, 'child.yaml', `name: child
+subworkflow:
+  callable: true
+initial_step: limited
+max_steps: 2
+steps:
+  - name: limited
+    persona: reviewer
+    instruction: "Review child workflow"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'delegate',
+      max_steps: 3,
+      steps: [
+        {
+          name: 'delegate',
+          kind: 'workflow_call',
+          call: 'child',
+          rules: [
+            {
+              condition: 'ABORT',
+              next: 'COMPLETE',
+            },
+          ],
+        },
+      ],
+    });
+    engine = new WorkflowEngine(config, tmpDir, 'Relay rate limit', createWorkflowCallOptions(tmpDir));
+    const rateLimited = makeResponse({
+      persona: 'reviewer',
+      status: 'rate_limited' as never,
+      content: '',
+      error: 'Rate limit exceeded. Please try again later.',
+      errorKind: 'rate_limit',
+      rateLimitInfo: {
+        provider: 'mock',
+        detectedAt: new Date('2026-05-13T03:00:00.000Z'),
+        source: 'sdk_error',
+      },
+    } as Partial<ReturnType<typeof makeResponse>>);
+    mockRunAgentSequence([rateLimited]);
+    const onRateLimited = vi.fn();
+    engine.on('step:rate_limited', onRateLimited);
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(onRateLimited).toHaveBeenCalledOnce();
+    expect(onRateLimited.mock.calls[0]?.[0]).toMatchObject({ name: 'limited' });
+    expect(onRateLimited.mock.calls[0]?.[1]).toMatchObject({ status: 'rate_limited' });
+  });
+
+  it('workflow_call 子 workflow の空 switch_chain は親 fallback を継承しない', async () => {
+    writeWorkflow(tmpDir, 'child.yaml', `name: child
+subworkflow:
+  callable: true
+rate_limit_fallback:
+  switch_chain: []
+initial_step: limited
+max_steps: 2
+steps:
+  - name: limited
+    persona: reviewer
+    instruction: "Review child workflow"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'delegate',
+      max_steps: 3,
+      steps: [
+        {
+          name: 'delegate',
+          kind: 'workflow_call',
+          call: 'child',
+          rules: [
+            {
+              condition: 'ABORT',
+              next: 'COMPLETE',
+            },
+            {
+              condition: 'COMPLETE',
+              next: 'COMPLETE',
+            },
+          ],
+        },
+      ],
+    });
+    engine = new WorkflowEngine(config, tmpDir, 'Child disables fallback', createWorkflowCallOptions(tmpDir, {
+      provider: 'claude',
+      model: 'claude-sonnet',
+      rateLimitFallback: {
+        switchChain: [{ provider: 'codex', model: 'gpt-5' }],
+      },
+    }));
+    mockRunAgentSequence([
+      makeResponse({
+        persona: 'reviewer',
+        status: 'rate_limited' as never,
+        content: '',
+        error: 'Rate limit exceeded. Please try again later.',
+        errorKind: 'rate_limit',
+        rateLimitInfo: {
+          provider: 'claude',
+          detectedAt: new Date('2026-05-13T03:00:00.000Z'),
+          source: 'sdk_error',
+        },
+      } as Partial<ReturnType<typeof makeResponse>>),
+      makeResponse({ persona: 'reviewer', content: 'done' }),
+    ]);
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(vi.mocked(runAgent)).toHaveBeenCalledOnce();
+    expect(vi.mocked(runAgent).mock.calls[0]?.[2]?.resolvedProvider).toBe('claude');
+  });
+
+  it('workflow_call 子 workflow の rate_limit_fallback 空オブジェクトは親 fallback を継承しない', async () => {
+    writeWorkflow(tmpDir, 'child.yaml', `name: child
+subworkflow:
+  callable: true
+rate_limit_fallback: {}
+initial_step: limited
+max_steps: 2
+steps:
+  - name: limited
+    persona: reviewer
+    instruction: "Review child workflow"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'delegate',
+      max_steps: 3,
+      steps: [
+        {
+          name: 'delegate',
+          kind: 'workflow_call',
+          call: 'child',
+          rules: [
+            {
+              condition: 'ABORT',
+              next: 'COMPLETE',
+            },
+            {
+              condition: 'COMPLETE',
+              next: 'COMPLETE',
+            },
+          ],
+        },
+      ],
+    });
+    engine = new WorkflowEngine(config, tmpDir, 'Child disables fallback', createWorkflowCallOptions(tmpDir, {
+      provider: 'claude',
+      model: 'claude-sonnet',
+      rateLimitFallback: {
+        switchChain: [{ provider: 'codex', model: 'gpt-5' }],
+      },
+    }));
+    mockRunAgentSequence([
+      makeResponse({
+        persona: 'reviewer',
+        status: 'rate_limited' as never,
+        content: '',
+        error: 'Rate limit exceeded. Please try again later.',
+        errorKind: 'rate_limit',
+        rateLimitInfo: {
+          provider: 'claude',
+          detectedAt: new Date('2026-05-13T03:00:00.000Z'),
+          source: 'sdk_error',
+        },
+      } as Partial<ReturnType<typeof makeResponse>>),
+      makeResponse({ persona: 'reviewer', content: 'done' }),
+    ]);
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(vi.mocked(runAgent)).toHaveBeenCalledOnce();
+    expect(vi.mocked(runAgent).mock.calls[0]?.[2]?.resolvedProvider).toBe('claude');
   });
 
   it('親 task を child workflow の agent prompt へデフォルト伝搬する', async () => {

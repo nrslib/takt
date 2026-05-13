@@ -167,6 +167,7 @@ export class WorkflowCallExecutor {
       'step:complete',
       'step:report',
       'step:blocked',
+      'step:rate_limited',
       'step:user_input',
       'phase:start',
       'phase:complete',
