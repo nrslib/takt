@@ -17,7 +17,7 @@ const PROHIBITED_TITLE_PATTERNS: readonly RegExp[] = [
   /^(概要|目的|受け入れ条件)$/,
 ];
 
-type StructuredTitleFallbackReason = 'missing' | 'too_short' | 'prohibited_title';
+type StructuredTitleFallbackReason = 'missing' | 'too_short' | 'prohibited_title' | 'unknown';
 
 const log = createLogger('add-task');
 
@@ -44,6 +44,16 @@ function isValidGeneratedTitle(title: string): boolean {
   return normalized.length >= MIN_TITLE_LENGTH && !isProhibitedTitle(normalized);
 }
 
+/**
+ * 呼び出し前提: caller は `title === undefined` または `isValidGeneratedTitle(title) === false`
+ * のいずれかを保証する。前提を満たす入力に対し、最後の `return 'unknown'` には到達しない。
+ *
+ * `'unknown'` は前提違反検出用のセンチネル値。throw せず返す理由は、本関数の呼び出し元
+ * (resolveIssueTitle / createIssueFromTask の catch ブロック) がいずれもログ用途であり、
+ * 例外を上位伝播させると issue 作成失敗のログ出力という本来の責務が果たせなくなるため。
+ * `fallback_reason` メトリクスで `'unknown'` を観測したら、本関数の呼び出し前提が崩れた
+ * シグナルとして調査する。
+ */
 function getStructuredTitleFallbackReason(title: string | undefined): StructuredTitleFallbackReason {
   if (title === undefined) {
     return 'missing';
@@ -58,7 +68,7 @@ function getStructuredTitleFallbackReason(title: string | undefined): Structured
   if (normalized.length < MIN_TITLE_LENGTH) {
     return 'too_short';
   }
-  return 'prohibited_title';
+  return 'unknown';
 }
 
 function buildTitleCandidates(lines: string[]): string[] {

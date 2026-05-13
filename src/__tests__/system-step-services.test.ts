@@ -1630,7 +1630,7 @@ describe('DefaultSystemStepServices', () => {
       type: 'enqueue_task',
       mode: 'new',
       workflow: 'takt-default',
-      task: '{structured:plan.task_markdown}',
+      task: '{structured:plan.dummy_field}',
       issue: {
         create: true,
         title: 'Implement follow-up effect with issue title',
@@ -1699,7 +1699,7 @@ describe('DefaultSystemStepServices', () => {
       type: 'enqueue_task',
       mode: 'new',
       workflow: 'takt-default',
-      task: '{structured:plan.task_markdown}',
+      task: '{structured:plan.dummy_field}',
       issue: { create: true },
     }, {
       mode: 'new',
@@ -1739,7 +1739,7 @@ describe('DefaultSystemStepServices', () => {
       type: 'enqueue_task',
       mode: 'from_pr',
       workflow: 'takt-default',
-      task: '{structured:plan.task_markdown}',
+      task: '{structured:plan.dummy_field}',
       pr: '{context:route.pr.number}',
     }, {
       mode: 'from_pr',
@@ -1778,7 +1778,7 @@ describe('DefaultSystemStepServices', () => {
       type: 'enqueue_task',
       mode: 'from_pr',
       workflow: 'takt-default',
-      task: '{structured:plan.task_markdown}',
+      task: '{structured:plan.dummy_field}',
       pr: '{context:route.pr.number}',
     }, {
       mode: 'from_pr',
@@ -1799,7 +1799,7 @@ describe('DefaultSystemStepServices', () => {
       type: 'enqueue_task',
       mode: 'new',
       workflow: 'takt-default',
-      task: '{structured:plan.task_markdown}',
+      task: '{structured:plan.dummy_field}',
       issue: '{structured:plan.issue}',
     }, {
       mode: 'new',
@@ -1820,7 +1820,7 @@ describe('DefaultSystemStepServices', () => {
       type: 'enqueue_task',
       mode: 'new',
       workflow: 'takt-default',
-      task: '{structured:plan.task_markdown}',
+      task: '{structured:plan.dummy_field}',
       issue: '{structured:plan.issue}',
     }, {
       mode: 'new',
@@ -1841,7 +1841,7 @@ describe('DefaultSystemStepServices', () => {
       type: 'enqueue_task',
       mode: 'new',
       workflow: 'takt-default',
-      task: '{structured:plan.task_markdown}',
+      task: '{structured:plan.dummy_field}',
       worktree: {
         enabled: true,
       },
@@ -1866,7 +1866,7 @@ describe('DefaultSystemStepServices', () => {
       type: 'enqueue_task',
       mode: 'new',
       workflow: 'takt-default',
-      task: '{structured:plan.task_markdown}',
+      task: '{structured:plan.dummy_field}',
       worktree: {
         enabled: true,
       },
@@ -1894,7 +1894,7 @@ describe('DefaultSystemStepServices', () => {
       type: 'enqueue_task',
       mode: 'new',
       workflow: 'takt-default',
-      task: '{structured:plan.task_markdown}',
+      task: '{structured:plan.dummy_field}',
       worktree: {
         auto_pr: true,
         managed_pr: true,
@@ -1927,7 +1927,7 @@ describe('DefaultSystemStepServices', () => {
       type: 'enqueue_task',
       mode: 'new',
       workflow: 'takt-default',
-      task: '{structured:plan.task_markdown}',
+      task: '{structured:plan.dummy_field}',
       base_branch: 'origin/improve',
     }, {
       mode: 'new',
@@ -1950,7 +1950,7 @@ describe('DefaultSystemStepServices', () => {
       type: 'enqueue_task',
       mode: 'from_pr',
       workflow: 'takt-default',
-      task: '{structured:plan.task_markdown}',
+      task: '{structured:plan.dummy_field}',
       pr: '{context:route.pr.number}',
       issue: '{structured:plan.issue}',
     }, {
